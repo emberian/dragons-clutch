@@ -168,7 +168,7 @@ use dclutch_direct_codec::successor::{
 use dclutch_direct_hot_program_test_support::chain::install_direct_hot_chain_accounts_v5;
 use dclutch_direct_hot_program_test_support::fixture::{
     DirectRegisteredCreationChainFixtureV4, DirectTradeScenarioV1,
-    build_direct_registered_creation_chain_fixture_v4,
+    assert_registered_creation_hot_hints_v4, build_direct_registered_creation_chain_fixture_v4,
 };
 use dclutch_direct_hot_program_test_support::waist::{
     CLAIMS_PROGRAM_ID, COMPUTE_LIMIT, CUSTODY_PROGRAM_ID, Elves, RENT_PROGRAM_ID, RefusedExecution,
@@ -282,6 +282,14 @@ fn creation_case(test: &mut ProgramTest, releases: Releases, artifacts: &Elves) 
     assert_eq!(input.makers, [makers[0].pubkey(), makers[1].pubkey()]);
     let fixture = build_direct_registered_creation_chain_fixture_v4(input)
         .expect("canonical registered Sell->Buy creation chain fixture");
+    // The packet this campaign submits carries the two bumps the operator's
+    // registered path mines, and they reproduce from the bodies installed
+    // below. This is the only place the two producers meet: until 2026-09-03
+    // the fixture emitted `HotBumpHintsV1::ABSENT` while
+    // `build_direct_hot_request_v4` beside it mined `market` and `root`, and
+    // nothing compared them -- so every registered packet ever submitted to a
+    // real ELF paid for two searches the producer already knew the answer to.
+    assert_registered_creation_hot_hints_v4(&fixture);
     // The fixture hands the Rent program over as externally installed; if it
     // ever stopped doing so, the installer below would overwrite the real
     // deployment staged above with the fixture's own record and this campaign
@@ -859,7 +867,6 @@ async fn a_release_substitution_refuses_before_the_direct_action_wall() {
 /// whole chain campaign to observe one refusal -- and which can name the
 /// actions that still refuse, where this could only ever name the one it
 /// submitted.
-
 
 /// The chain is ordered, and the root prestate commitment is what orders it.
 ///

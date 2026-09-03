@@ -1,14 +1,16 @@
 //! Unsigned, chain-derived Hot instruction construction for lifecycle actions.
 
+use dclutch_capability_program_contract::hot_v3::{
+    HOT_CORE_PROGRAM_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
+    HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_LINKED_BASIS_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3,
+    HOT_RENT_SYSVAR_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
+    HotBumpHintsV1,
+};
 #[cfg(test)]
 use dclutch_capability_program_contract::hot_v3::{
     HOT_FAMILY_REQUEST_OFFSET_V3, HotExecutionEnvelopeV3,
 };
-use dclutch_capability_program_contract::hot_v3::{
-    HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
-    HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_LINKED_BASIS_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3,
-    HOT_RENT_SYSVAR_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
-};
+use dclutch_hot_bump_miner_v1::{HotBumpCorpusV1, mine_hot_bump_hints_v1};
 #[cfg(test)]
 use dclutch_rational_representation_v2_lifecycle_contract::{
     LifecycleRequestV2, hot_v3::RationalLifecycleHotRequestV3,
@@ -49,6 +51,15 @@ pub struct RationalLifecycleHotStateV3<'a> {
     pub strategy_accounts: &'a [AccountMeta],
     /// Current complete capability-root bytes used for optimistic concurrency.
     pub root_data: &'a [u8],
+    /// Current complete Core Market state bytes for the frame's Market.
+    ///
+    /// Coordinate `HOT_MARKET_ACCOUNT_V3` of the same fixed frame, so a caller
+    /// that assembled `fixed_accounts` has already fetched it. It is here for
+    /// one reason: the Market's immutable identity is the preimage of its own
+    /// PDA, and mining that bump is what stops the route searching for it. A
+    /// caller that cannot supply the body may pass an empty slice and the
+    /// route searches, exactly as it did before hints existed.
+    pub market_data: &'a [u8],
     /// Immutable execution release set selected by Market.
     pub release_set: [u8; 32],
     /// Logical Core Market selected by the fixed frame.
@@ -135,7 +146,8 @@ pub fn build_rational_lifecycle_hot_instruction_v3(
         state.generation,
         hash(state.root_data).to_bytes(),
     )
-    .map_err(|_| Error::Operator)?;
+    .map_err(|_| Error::Operator)?
+    .with_bump_hints(lifecycle_hot_bump_hints_v3(state, checked)?);
     let mut data = Vec::with_capacity(
         HOT_FAMILY_REQUEST_OFFSET_V3
             .checked_add(family_bytes.len())
@@ -219,6 +231,58 @@ pub(crate) fn validate_child_frame(
         }
     }
     Ok(())
+}
+
+/// Mine the bumps every lifecycle Hot route would otherwise search for.
+///
+/// The DERIVATION is `dclutch_hot_bump_miner_v1`'s, shared with the Direct and
+/// Dealer LP builders, the Rational public outer builders and the campaign's
+/// bundle builder. What this function owns is the CORPUS: which coordinate of
+/// the lifecycle Hot frame is the Market, which is the root, and which program
+/// key each is derived under. All four lifecycle builders -- common, compact
+/// V4, selected V5, selected V6 -- share one fixed frame and therefore one
+/// corpus, which is why this is a crate function rather than four.
+///
+/// # Why the Custody transfer authority is deliberately left searching
+///
+/// Every lifecycle action executes a ONE-ROUTE `FixedRole::Claims`
+/// EffectProgram (`effect::encode_lifecycle_effect_program_v3`, and
+/// `compact_artifacts_v4` refuses any route whose role is not `Claims`), so no
+/// lifecycle route ever reaches `execute_custody_route_v3` and there is no
+/// Custody leg to spend `child_relay[1]` on. Supplying the Market activation
+/// cache to mine a byte no reader reads would be a state field with no
+/// consumer. `lifecycle` and `child_caller` stay zero for the reasons
+/// `HotBumpHintsV1` gives: their seeds end in a digest over a request projected
+/// ON chain, which no off-chain producer holds.
+///
+/// Total, like the miner: an unsupplied or undecodable body yields a zero and
+/// the reader searches, which is the block's whole contract.
+pub(crate) fn lifecycle_hot_bump_hints_v3(
+    state: &RationalLifecycleHotStateV3<'_>,
+    checked: CheckedRationalLifecycleHotOuterV3,
+) -> Result<HotBumpHintsV1> {
+    Ok(mine_hot_bump_hints_v1(&HotBumpCorpusV1 {
+        market_key: state.market,
+        market_data: state.market_data,
+        root_data: state.root_data,
+        core_program: fixed_key(state, HOT_CORE_PROGRAM_ACCOUNT_V3)?,
+        trading_program: checked.trading_program,
+        custody_program: None,
+        release_set: state.release_set,
+    }))
+}
+
+/// One fixed-frame coordinate's key, named rather than indexed.
+///
+/// `validate_fixed_frame` has already required the frame's exact width, so this
+/// cannot be absent on any path that reaches it; it returns a `Result` so that
+/// a future caller placed BEFORE that check cannot silently read a default key.
+fn fixed_key(state: &RationalLifecycleHotStateV3<'_>, coordinate: usize) -> Result<Pubkey> {
+    Ok(state
+        .fixed_accounts
+        .get(coordinate)
+        .ok_or(Error::Operator)?
+        .pubkey)
 }
 
 pub(crate) fn validate_fixed_frame(
@@ -440,6 +504,11 @@ mod tests {
             fixed_accounts: fixed,
             strategy_accounts: &[],
             root_data: &[7; 64],
+            // No Market body, so the `market` hint degrades to zero and the
+            // route searches. These cases pin the frame geometry, not the hint
+            // block; the derivation has its own tests in
+            // `dclutch-hot-bump-miner-v1`.
+            market_data: &[],
             release_set: key(1).to_bytes(),
             market: key(2),
             generation: 14,
@@ -514,5 +583,125 @@ mod tests {
                 Err(Error::ActionGeometry)
             );
         }
+    }
+
+    /// The lifecycle corpus reads THIS frame's Market, root and Core program.
+    ///
+    /// All four lifecycle builders -- common, compact V4, selected V5 and
+    /// selected V6 -- mine through `lifecycle_hot_bump_hints_v3`, so this is
+    /// one control for four producers. It is here because every other fixture
+    /// in this crate leaves `market_data` empty and `root_data` a constant
+    /// fill, which makes both decodes fail and every slot degrade to zero: a
+    /// corpus reading the wrong coordinate would emit the same all-zero block
+    /// as one reading the right one, and "nothing fired" would be
+    /// indistinguishable from "my instrument was disconnected".
+    ///
+    /// Two authors. This side builds a Core Market state and a capability-root
+    /// header and keeps the bumps its own `find_program_address` calls
+    /// returned; `lifecycle_hot_bump_hints_v3` decodes those same bodies and
+    /// re-derives.
+    #[test]
+    fn the_lifecycle_corpus_mines_this_frames_market_and_root() {
+        use dclutch_capability_program_contract::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
+        use dclutch_core_contract::ContentId;
+        use dclutch_market_core_codec::{
+            CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
+            StateBumpsV1,
+        };
+        use dclutch_release_set_contract::CapabilityExecutionSelectionV1;
+
+        let identity = |byte: u8| Identity::new([byte; 32]).expect("distinct nonzero fill");
+        let market_state = CoreState {
+            phase: Phase::Open,
+            readiness: Readiness::Consumed,
+            terminal_winner: 0,
+            identity: MarketIdentity {
+                market_id: identity(0x21),
+                realm_id: identity(0x22),
+                product_record: identity(0x23),
+                product_id: identity(0x24),
+                resolution_policy: identity(0x25),
+                capability_manifest: identity(0x26),
+                selected_release_set: identity(1),
+                registry_program: identity(0x27),
+                generation: 14,
+            },
+            outstanding_capabilities: 1,
+            principal_cap_sets: u64::MAX,
+            rent_beneficiary: identity(0x28),
+            terminal_receipt: None,
+            // UNRECORDED on purpose: a Market that records its own bump makes
+            // the hint inert, because the reader takes the record and never the
+            // wire. This is the shape the slot still buys something on.
+            bumps: StateBumpsV1::UNRECORDED,
+        }
+        .encode()
+        .expect("canonical open Core Market state");
+        let root_header = CapabilityRootHeaderV1::new(
+            ContentId::new(key(1).to_bytes()).expect("release set"),
+            key(2).to_bytes(),
+            14,
+            CapabilityExecutionSelectionV1::new(
+                3,
+                ContentId::new([0x26; 32]).expect("manifest"),
+                ContentId::new([0x29; 32]).expect("kind"),
+                ContentId::new([0x2a; 32]).expect("capability release"),
+                ContentId::new([0x2b; 32]).expect("config"),
+            )
+            .expect("execution selection")
+            .with_capability_release_record_bumps(0xfd, 0xfc),
+            SelectedRecordBumpsV1::new(0xff, 0xfe, 0xfb, 0xfa),
+        )
+        .expect("capability root header")
+        .to_bytes();
+
+        let fixed = fixed();
+        let checked = CheckedRationalLifecycleHotOuterV3 {
+            trading_program: key(60),
+            artifact_release: key(61).to_bytes(),
+            checked_manifest_digest: key(62).to_bytes(),
+        };
+        let state = RationalLifecycleHotStateV3 {
+            root_data: &root_header,
+            market_data: &market_state,
+            ..state(&fixed)
+        };
+        let mined = lifecycle_hot_bump_hints_v3(&state, checked).expect("staged corpus mines");
+
+        let expected_market = Pubkey::find_program_address(
+            &MarketCoreStateSeedsV2::new(
+                CoreState::decode(&market_state)
+                    .expect("staged Market decodes")
+                    .identity,
+            )
+            .as_slices(),
+            &fixed_key(&state, HOT_CORE_PROGRAM_ACCOUNT_V3).expect("Core program coordinate"),
+        )
+        .1;
+        let expected_root = Pubkey::find_program_address(
+            &CapabilityRootHeaderV1::decode(&root_header)
+                .expect("staged root header decodes")
+                .seeds()
+                .as_slices(),
+            &checked.trading_program,
+        )
+        .1;
+        assert_eq!(
+            mined,
+            HotBumpHintsV1 {
+                market: expected_market,
+                root: expected_root,
+                ..HotBumpHintsV1::ABSENT
+            }
+        );
+        // The control on the control: two searches comparing equal would prove
+        // nothing at all.
+        assert_ne!(mined, HotBumpHintsV1::ABSENT);
+        assert_ne!(mined.market, 0);
+        assert_ne!(mined.root, 0);
+        // And the Custody transfer authority stays absent, because a lifecycle
+        // action is a ONE-ROUTE Claims EffectProgram with no Custody leg to
+        // spend it on. A producer that started filling it would go red here.
+        assert_eq!(mined.child_relay, [0, 0]);
     }
 }

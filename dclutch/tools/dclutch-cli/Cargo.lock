@@ -875,6 +875,7 @@ dependencies = [
  "dclutch-core-contract",
  "dclutch-effect-kernel",
  "dclutch-execution-strategy-contract",
+ "dclutch-hot-bump-miner-v1",
  "dclutch-product-payoff-v2-codec",
  "dclutch-rational-representation-v2-contract",
  "dclutch-rational-representation-v2-kernel",

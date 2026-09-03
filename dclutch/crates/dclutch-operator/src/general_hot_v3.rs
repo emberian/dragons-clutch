@@ -15,14 +15,16 @@ use dclutch_account_profile_contract::v2::{
     DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE, PhysicalAccountDataGeometryV2,
 };
 use dclutch_capability_program_contract::hot_v3::{
-    DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3,
+    DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
+    HOT_ACTIVATION_CACHE_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CORE_PROGRAM_ACCOUNT_V3,
     HOT_DESCRIPTOR_RAW_ACCOUNT_V3, HOT_EFFECT_RAW_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3,
     HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3, HOT_LIFECYCLE_RAW_ACCOUNT_V3,
     HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3, HOT_PORTFOLIO_RAW_ACCOUNT_V3,
     HOT_PRODUCT_RAW_ACCOUNT_V3, HOT_PROGRAM_SET_RAW_ACCOUNT_V3, HOT_REGISTRY_PROGRAM_ACCOUNT_V3,
     HOT_RENT_SYSVAR_ACCOUNT_V3, HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3,
     HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3, HOT_STRATEGY_RAW_ACCOUNT_V3,
-    HOT_TRADING_PROGRAM_ACCOUNT_V3, HOT_TRANSITION_RAW_ACCOUNT_V3, HotExecutionEnvelopeV3,
+    HOT_TRADING_PROGRAM_ACCOUNT_V3, HOT_TRANSITION_RAW_ACCOUNT_V3, HotBumpHintsV1,
+    HotExecutionEnvelopeV3,
 };
 use dclutch_capability_program_contract::v4::{CapabilityProgramV4, CapabilityRootAccountV4};
 use dclutch_effect_kernel::v2::FixedRole;
@@ -84,6 +86,9 @@ use dclutch_general_codec::{
 use dclutch_general_config_contract::{
     root::{GeneralLifecycleV2, GeneralRootV2},
     v3::GeneralConfigV3,
+};
+use dclutch_hot_bump_miner_v1::{
+    HotBumpCorpusV1, activated_custody_program_v1, mine_hot_bump_hints_v1,
 };
 use solana_address_lookup_table_interface::{
     program as lookup_table_program, state::AddressLookupTable,
@@ -187,6 +192,52 @@ pub struct GeneralHotStateV3 {
     pub minimum_finalized_slot: u64,
     /// Checked current Hot release, absent for unknown deployments.
     pub checked_release: Option<CheckedGeneralHotReleaseV3>,
+}
+
+/// Mine the bumps this family's readers would otherwise search for on chain.
+///
+/// The DERIVATION is `dclutch_hot_bump_miner_v1`'s, shared with the Direct
+/// builder, the Dealer LP builder, the Rational public outer builders and the
+/// campaign's bundle builder. This function owns only the CORPUS -- which
+/// coordinate of the General Hot frame is the Market, which is the root, and which account
+/// names the Custody deployment.
+///
+/// Every hint is reproduced by the reader with `create_program_address` against
+/// the account the frame supplied, so a wrong byte names a different address
+/// and refuses at an equality that was already there. No conjunct moves.
+///
+/// # Which slots this corpus reaches, and which it deliberately leaves
+///
+/// `market`, `root` and Custody's transfer authority are derivable from the
+/// frame this builder already authenticated. `child_relay[0]` is Custody's
+/// replay cursor, whose seeds end in the projected child request's replay
+/// context; `child_caller`'s seeds end in a digest over a request projected ON
+/// chain; `lifecycle` is this family's created accounts in materialization
+/// order. None of the three is projected here, so all three stay zero and
+/// search, which is correct and merely slower.
+fn general_hot_bump_hints_v3(
+    state: &GeneralHotStateV3,
+    trading_program: &Pubkey,
+) -> Result<HotBumpHintsV1, GeneralHotOperatorErrorV3> {
+    let fixed = |coordinate: usize| {
+        state
+            .fixed_accounts
+            .get(coordinate)
+            .ok_or(GeneralHotOperatorErrorV3::FixedFrame)
+    };
+    let market = &fixed(HOT_MARKET_ACCOUNT_V3)?.account;
+    // Custody is not in the hot fixed frame; the Market's activation cache is,
+    // and it names the release set's Custody deployment.
+    let activation = &fixed(HOT_ACTIVATION_CACHE_ACCOUNT_V3)?.account;
+    Ok(mine_hot_bump_hints_v1(&HotBumpCorpusV1 {
+        market_key: market.key,
+        market_data: &market.data,
+        root_data: &fixed(HOT_ROOT_ACCOUNT_V3)?.account.data,
+        core_program: fixed(HOT_CORE_PROGRAM_ACCOUNT_V3)?.account.key,
+        trading_program: *trading_program,
+        custody_program: activated_custody_program_v1(&activation.data),
+        release_set: state.release_set,
+    }))
 }
 
 /// Borrow the exact General artifact carriers from one canonical Hot frame.
@@ -666,7 +717,8 @@ pub fn build_general_hot_instruction_decoded_v3(
         state.generation,
         hash(&root.account.data).to_bytes(),
     )
-    .map_err(|_| GeneralHotOperatorErrorV3::FixedFrame)?;
+    .map_err(|_| GeneralHotOperatorErrorV3::FixedFrame)?
+    .with_bump_hints(general_hot_bump_hints_v3(state, &checked.trading_program)?);
     let mut data = Vec::with_capacity(
         HOT_FAMILY_REQUEST_OFFSET_V3
             .checked_add(request_bytes.len())
@@ -5076,6 +5128,46 @@ mod tests {
             refused_by_the_stale_form,
             GENERAL_ACTIONS_V3.len() - 1,
             "only an action with no readonly evidence could ever have passed the stale check",
+        );
+    }
+
+    /// The corpus this builder mines from reaches this frame's Market, root and
+    /// Custody deployment, and not some other coordinate.
+    ///
+    /// The DERIVATION is `dclutch-hot-bump-miner-v1`'s and has its own tests;
+    /// what is per-family, and what nothing tested before 2026-09-03, is which
+    /// coordinate of THIS frame each fact is read from. Every other fixture in
+    /// this file fills its Market and root accounts with constant bytes, so
+    /// both decodes fail, every slot degrades to zero, and a corpus reading the
+    /// wrong coordinate would emit exactly the same all-zero block as one
+    /// reading the right one -- a disconnected instrument logging as silence.
+    ///
+    /// `hot_bump_corpus_fixture_v1` stages bodies that DO decode, and derives
+    /// the three bumps from the seeds it built them from. Two authors: this
+    /// side decodes those bodies and re-derives.
+    #[test]
+    fn the_mined_corpus_reads_this_frames_market_root_and_custody_deployment() {
+        use crate::hot_bump_corpus_fixture_v1 as corpus;
+        let state = GeneralHotStateV3 {
+            fixed_accounts: corpus::fixed_frame()
+                .into_iter()
+                .map(|value| GeneralObservedAccountMetaV3 {
+                    account: value.account,
+                    is_signer: value.is_signer,
+                    is_writable: value.is_writable,
+                })
+                .collect(),
+            strategy_accounts: Vec::new(),
+            runtime_suffix_accounts: Vec::new(),
+            release_set: corpus::release_set_id(),
+            generation: corpus::GENERATION,
+            minimum_finalized_slot: 0,
+            checked_release: None,
+        };
+        assert_eq!(
+            general_hot_bump_hints_v3(&state, &corpus::trading_program())
+                .expect("staged corpus mines"),
+            corpus::expected_hints()
         );
     }
 }

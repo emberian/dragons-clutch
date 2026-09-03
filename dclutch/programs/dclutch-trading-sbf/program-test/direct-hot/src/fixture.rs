@@ -16,16 +16,16 @@ use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
     hot_v3::{
         HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
-        HOT_ACTIVATION_CACHE_ACCOUNT_V3, HOT_CAPABILITY_SEAL_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3,
-        HOT_CONFIG_STAGING_ACCOUNT_V3, HOT_CORE_PROGRAM_ACCOUNT_V3,
-        HOT_CORE_PROGRAMDATA_ACCOUNT_V3, HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
-        HOT_DESCRIPTOR_STAGING_ACCOUNT_V3, HOT_EFFECT_RAW_ACCOUNT_V3,
-        HOT_EFFECT_STAGING_ACCOUNT_V3, HOT_EXECUTION_ENVELOPE_BYTES_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
-        HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3, HOT_LIFECYCLE_RAW_ACCOUNT_V3,
-        HOT_LIFECYCLE_STAGING_ACCOUNT_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
-        HOT_LINKED_BASIS_STAGING_ACCOUNT_V3, HOT_MANIFEST_RAW_ACCOUNT_V3,
-        HOT_MANIFEST_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3, HOT_PORTFOLIO_RAW_ACCOUNT_V3,
-        HOT_PORTFOLIO_STAGING_ACCOUNT_V3, HOT_PRODUCT_RAW_ACCOUNT_V3,
+        HOT_ACTIVATION_CACHE_ACCOUNT_V3, HOT_BUMP_HINT_COUNT_V1, HOT_BUMP_HINTS_OFFSET_V1,
+        HOT_CAPABILITY_SEAL_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CONFIG_STAGING_ACCOUNT_V3,
+        HOT_CORE_PROGRAM_ACCOUNT_V3, HOT_CORE_PROGRAMDATA_ACCOUNT_V3,
+        HOT_DESCRIPTOR_RAW_ACCOUNT_V3, HOT_DESCRIPTOR_STAGING_ACCOUNT_V3,
+        HOT_EFFECT_RAW_ACCOUNT_V3, HOT_EFFECT_STAGING_ACCOUNT_V3, HOT_EXECUTION_ENVELOPE_BYTES_V3,
+        HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
+        HOT_LIFECYCLE_RAW_ACCOUNT_V3, HOT_LIFECYCLE_STAGING_ACCOUNT_V3,
+        HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_LINKED_BASIS_STAGING_ACCOUNT_V3,
+        HOT_MANIFEST_RAW_ACCOUNT_V3, HOT_MANIFEST_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3,
+        HOT_PORTFOLIO_RAW_ACCOUNT_V3, HOT_PORTFOLIO_STAGING_ACCOUNT_V3, HOT_PRODUCT_RAW_ACCOUNT_V3,
         HOT_PRODUCT_STAGING_ACCOUNT_V3, HOT_PROGRAM_SET_RAW_ACCOUNT_V3,
         HOT_PROGRAM_SET_STAGING_ACCOUNT_V3, HOT_REGISTRY_PROGRAM_ACCOUNT_V3,
         HOT_RENT_SYSVAR_ACCOUNT_V3, HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3,
@@ -98,6 +98,9 @@ use dclutch_direct_codec::{
         MakerReplayObservationV1, MakerReplaySeedsV1, MakerReplayVacancyV1,
         RegisteredIntentSeedsV2, RegisteredRecordFirstUseV2, register_intent_v2,
     },
+};
+use dclutch_hot_bump_miner_v1::{
+    HotBumpCorpusV1, hot_bump_hint_slot_name_v1, mine_hot_bump_hints_v1,
 };
 use dclutch_market_core_codec::{
     CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity,
@@ -494,6 +497,34 @@ fn hand_mined_bump_hints_v1(
     }
 }
 
+/// The two slots the REGISTERED creation route's producer mines, derived here,
+/// from this fixture's own seeds.
+///
+/// The operator's registered path -- `build_direct_hot_request_v4`, which
+/// `build_direct_registration_hot_v4` and both registered terminal builders
+/// enter through -- fills exactly `market` and `root` and leaves everything
+/// else searching, because that function serves every Direct action including
+/// the ones with no Custody leg to spend a transfer-authority hint on. This
+/// side must therefore fill exactly those two, and
+/// `assert_registered_creation_hot_hints_v4` is what says so: it re-derives
+/// both by DECODING the bodies this fixture installed, which is the walk the
+/// operator's corpus makes, and names the slot when a byte disagrees.
+///
+/// Two preimages, two walks, one answer. This side keeps the bump that fell out
+/// of the `find_program_address` which PRODUCED each address; the assertion's
+/// side decodes `CoreState` and `CapabilityRootHeaderV1` out of the installed
+/// account and re-derives from what it read.
+fn registered_hand_mined_bump_hints_v4(
+    state: &StateFixture,
+    capability: &CapabilityFixture,
+) -> HotBumpHintsV1 {
+    HotBumpHintsV1 {
+        market: state.market_bump,
+        root: capability.root_bump,
+        ..HotBumpHintsV1::ABSENT
+    }
+}
+
 pub fn build_direct_hot_chain_fixture_v5(
     input: DirectHotChainInputV5,
 ) -> Result<DirectHotChainFixtureV5, DirectHotChainFixtureErrorV5> {
@@ -718,7 +749,8 @@ pub fn build_direct_registered_creation_chain_fixture_v4(
     let (sell_hot_instruction, sell_capability_seal_accounts) =
         registered_creation_hot_instruction_v4(
             input,
-            state.market,
+            &state,
+            &capability,
             &capability.root_bytes,
             &requests.requests[0],
             &sell_fixed.accounts,
@@ -727,7 +759,8 @@ pub fn build_direct_registered_creation_chain_fixture_v4(
     let (buy_hot_instruction, buy_capability_seal_accounts) =
         registered_creation_hot_instruction_v4(
             input,
-            state.market,
+            &state,
+            &capability,
             &root_poststates[0],
             &requests.requests[1],
             &buy_fixed.accounts,
@@ -856,9 +889,112 @@ pub fn build_direct_registered_creation_chain_fixture_v4(
     })
 }
 
+/// The registered creation fixture's mined block reproduces from the bodies it
+/// installed, and when it does not, WHICH SLOT.
+///
+/// # Why this assertion exists
+///
+/// The operator's registered path -- `build_direct_hot_request_v4` -- mines
+/// `market` and `root` through `dclutch_hot_bump_miner_v1` from the account
+/// BODIES its fixed frame supplies. This fixture, which is what the registered
+/// campaign actually submits to a real ELF, wrote the all-zero block until
+/// today: the same class `8a691ee57` and `e503d5e2a` each repaired one file
+/// over, and nothing anywhere compared the two sides. So every registered
+/// packet a chain has ever seen carried the pre-hint route while the operator
+/// beside it mined two bytes -- and the first thing to notice would have been a
+/// CU difference nobody was measuring.
+///
+/// # Why it is evidence rather than a copy
+///
+/// Two AUTHORS, one answer. The fixture keeps the bump that fell out of the
+/// `find_program_address` which PRODUCED each address, from seeds it built
+/// itself. This side decodes `CoreState` and `CapabilityRootHeaderV1` out of
+/// the account bodies the fixture installed and re-derives from what it read,
+/// under the Core and Trading programs the frame itself names -- which is the
+/// operator's corpus exactly. Writing the fixture's two bytes across would turn
+/// this green and prove nothing.
+///
+/// The whole eight-slot block is compared, not two fields, because the two
+/// authors must agree about the ABSENCES too: a fixture that started filling
+/// `lifecycle` without the operator following would go red here, which is the
+/// point. A disagreement is reported at its HOT ENVELOPE offset with the slot
+/// named through `HOT_BUMP_HINT_SLOT_NAMES_V1`, so the reader is handed a
+/// derivation rather than a byte.
+///
+/// # Panics
+///
+/// When either side's Hot instruction is not a canonical Hot envelope, when the
+/// frame's Market or root body is not among the installed accounts, or when the
+/// two derivations disagree in any of the eight slots.
+pub fn assert_registered_creation_hot_hints_v4(fixture: &DirectRegisteredCreationChainFixtureV4) {
+    for (side, instruction) in [
+        ("RegisterSell", &fixture.sell_hot_instruction),
+        ("RegisterBuy", &fixture.buy_hot_instruction),
+    ] {
+        let (envelope, _) = HotExecutionEnvelopeV3::split_instruction(&instruction.data)
+            .expect("canonical registered Hot instruction");
+        let key = |coordinate: usize| {
+            instruction
+                .accounts
+                .get(coordinate)
+                .unwrap_or_else(|| panic!("{side} fixed frame coordinate {coordinate}"))
+                .pubkey
+        };
+        let body = |coordinate: usize| {
+            let wanted = key(coordinate);
+            fixture
+                .accounts
+                .iter()
+                .find(|account| account.key == wanted)
+                .map(|account| account.account.data.as_slice())
+                .unwrap_or_else(|| panic!("{side} installed account for coordinate {coordinate}"))
+        };
+        let mined = mine_hot_bump_hints_v1(&HotBumpCorpusV1 {
+            market_key: key(HOT_MARKET_ACCOUNT_V3),
+            market_data: body(HOT_MARKET_ACCOUNT_V3),
+            root_data: body(HOT_ROOT_ACCOUNT_V3),
+            core_program: key(HOT_CORE_PROGRAM_ACCOUNT_V3),
+            trading_program: key(HOT_TRADING_PROGRAM_ACCOUNT_V3),
+            // The operator's registered path leaves this searching for every
+            // Direct action, so a fixture that filled it would disagree with
+            // the producer it stands beside. See
+            // `registered_hand_mined_bump_hints_v4`.
+            custody_program: None,
+            release_set: envelope.release_set(),
+        });
+        let differing = envelope
+            .bump_hints()
+            .to_bytes()
+            .into_iter()
+            .zip(mined.to_bytes())
+            .enumerate()
+            .filter(|(_, (fixture_byte, operator_byte))| fixture_byte != operator_byte)
+            .map(|(slot, (fixture_byte, operator_byte))| {
+                let offset = HOT_BUMP_HINTS_OFFSET_V1 + slot;
+                let name = hot_bump_hint_slot_name_v1(offset).unwrap_or("out of block");
+                format!("{offset} (HotBumpHintsV1::{name}) fixture {fixture_byte} operator {operator_byte}")
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            differing.is_empty(),
+            "{side} hand fixture and operator corpus disagree in {} of {} mined bump hints: {}",
+            differing.len(),
+            HOT_BUMP_HINT_COUNT_V1,
+            differing.join("; ")
+        );
+        assert_ne!(
+            envelope.bump_hints(),
+            HotBumpHintsV1::ABSENT,
+            "{side} mined nothing at all, so both sides agree on an all-zero block \
+             and this assertion proves only that neither producer ran",
+        );
+    }
+}
+
 fn registered_creation_hot_instruction_v4(
     input: DirectHotChainInputV5,
-    market: Pubkey,
+    state: &StateFixture,
+    capability: &CapabilityFixture,
     root_prestate: &[u8],
     request: &[u8; DIRECT_REGISTRATION_REQUEST_BYTES_V3],
     fixed: &[ChainAccount],
@@ -867,11 +1003,12 @@ fn registered_creation_hot_instruction_v4(
     let envelope = HotExecutionEnvelopeV3::new(
         u32::try_from(request.len()).map_err(|_| DirectHotChainFixtureErrorV5::Input)?,
         input.release_set,
-        market.to_bytes(),
+        state.market.to_bytes(),
         GENERATION,
         hash(root_prestate).to_bytes(),
     )
-    .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
+    .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?
+    .with_bump_hints(registered_hand_mined_bump_hints_v4(state, capability));
     let mut data = Vec::with_capacity(HOT_EXECUTION_ENVELOPE_BYTES_V3 + request.len());
     data.extend_from_slice(&envelope.to_bytes());
     data.extend_from_slice(request);
@@ -4239,6 +4376,7 @@ mod tests {
         let input = input();
         let fixture =
             build_direct_registered_creation_chain_fixture_v4(input).expect("registered chain");
+        assert_registered_creation_hot_hints_v4(&fixture);
         assert_eq!(
             fixture.sell_hot_instruction.program_id,
             input.trading_program

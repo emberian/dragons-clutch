@@ -15,6 +15,7 @@ dclutch-claims-svm = { path = "../../../../crates/dclutch-claims-svm" }
 dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
 dclutch-custody-contract = { path = "../../../../crates/dclutch-custody-contract" }
 dclutch-direct-codec = { path = "../../../../crates/dclutch-direct-codec" }
+dclutch-hot-bump-miner-v1 = { path = "../../../../crates/dclutch-hot-bump-miner-v1" }
 dclutch-operator = { path = "../../../../crates/dclutch-operator" }
 dclutch-program-test-evidence = { path = "../../../../tools/gauntlet/program-test-evidence" }
 dclutch-market-core-codec = { path = "../../../../crates/dclutch-market-core-codec" }

@@ -25,14 +25,14 @@ use crate::{
     },
 };
 use dclutch_capability_program_contract::hot_v3::{
-    DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_BUMP_HINT_COUNT_V1, HOT_BUMP_HINTS_OFFSET_V1,
-    HOT_FIXED_ACCOUNT_COUNT_V3, SEALED_EXECUTION_FIXED_ALIASES_V3,
+    DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_FIXED_ACCOUNT_COUNT_V3, SEALED_EXECUTION_FIXED_ALIASES_V3,
 };
 use dclutch_core_contract::ContentId;
 use dclutch_direct_codec::native_evidence_v3::{
     DIRECT_NATIVE_EVIDENCE_BYTES_V3, encode_direct_headerless_registry_native_evidence_v4_atomic,
 };
 use dclutch_direct_codec::ordinary_geometry_v3::DirectOrdinaryGeometryV3;
+use dclutch_hot_bump_miner_v1::hot_bump_hint_slot_name_v1;
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
@@ -997,18 +997,18 @@ fn assert_hot_instructions_agree(built: &Instruction, hand: &Instruction) {
 /// fills and a fixture can silently leave zero -- which is exactly how 52 rows
 /// came to fail on three bytes -- and an offset inside them points at a
 /// derivation rather than at a digest.
-fn envelope_field(offset: usize) -> &'static str {
-    let slot = match offset.checked_sub(HOT_BUMP_HINTS_OFFSET_V1) {
-        Some(slot) if slot < HOT_BUMP_HINT_COUNT_V1 => slot,
-        _ => return "",
-    };
-    match slot {
-        0 => " (HotBumpHintsV1::market)",
-        1 => " (HotBumpHintsV1::root)",
-        2 | 3 => " (HotBumpHintsV1::lifecycle)",
-        4 | 5 => " (HotBumpHintsV1::child_caller)",
-        _ => " (HotBumpHintsV1::child_relay)",
-    }
+///
+/// The names are READ from `HOT_BUMP_HINT_SLOT_NAMES_V1`, which the producer
+/// owns, rather than spelled here. This function used to spell them, and its
+/// copy had already drifted from the producer's in a way that cost the reader
+/// the part that mattered: it merged `lifecycle[0]` with `lifecycle[1]` and
+/// both `child_caller` and both `child_relay` slots into one name each, so a
+/// disagreement at exactly one of a pair reported the pair. A value duplicated
+/// instead of read agrees right up until it does not.
+fn envelope_field(offset: usize) -> String {
+    hot_bump_hint_slot_name_v1(offset)
+        .map(|name| format!(" (HotBumpHintsV1::{name})"))
+        .unwrap_or_default()
 }
 
 pub fn registry_hot_instruction(releases: Releases, mut hot: Instruction) -> (Instruction, Pubkey) {

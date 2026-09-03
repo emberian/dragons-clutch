@@ -4084,3 +4084,14 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   Owed: decision 0011 §3b and the docket's D7 line "K=3 with the packet wall gone" are WRONG — the packet wall bounds K at 3
   on the shipping route (amendment to 0011 owed); the wrong-authority shard hostile needs a fixture knob.
 - Cuts: `ed9d07a03`, `2ad588366`, `ced32f083`.
+- STATISTIC closed (`485f5cb9f` the layout Lean-owned — `SourceStatisticSpecV1Abi.lean` → `generated_statistic_spec_v1.rs`,
+  the theorem `the_factor_fills_the_span_that_was_reserved`, census 95 → 96, 0 unguarded; `0b5e862ea` + rows `63dbd8e69`
+  the relayed route's statistic slot (frame 28 → 30) — **and a second, larger fault: the route compared the SOURCE spec's
+  unit against the Product's RESULT unit, so a market declaring a conversion consumed at the identity**; proven red on a
+  rebuilt ELF (it consumed and wrote a certificate), green after (`ProductDomain` / `ProviderScale 0x801C` by name);
+  `require_admitted_scale` is the one author for both provider families; a relayed founding that MOVES a cell cannot exist on
+  this release (both decoding-rules rows publish exponent 0) — named, not invented; `fca070a90` the browser walks
+  SourceMaterialV3 → StatisticSpecV1 at their derived addresses, withholds the join when unread (five named reasons), and on
+  markets B and C names cell 1 beside the chain's cell 2). Owed: four `abi:*:verify` red at HEAD (capability-surface,
+  user-position-admission, wallet-terminal-input/-payout — other lanes' Rust moved their inputs).
+- Cuts: `51e07b0b8`, `a90adbec9`.

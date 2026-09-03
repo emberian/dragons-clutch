@@ -833,6 +833,9 @@ fn k3_n258_composition_admission_builds_packet_safe_selected_hot() {
         fixed_accounts: &fixed,
         strategy_accounts: &[],
         root_data: &root_data,
+        // No Market body, so the `market` hint degrades to zero and the route
+        // searches. These cases pin the composition join, not the hint block.
+        market_data: &[],
         release_set: id(41),
         market: Pubkey::new_from_array(id(40)),
         generation: 1,
@@ -960,6 +963,9 @@ fn k3_n258_v6_keeps_capability_market_neutral_and_binds_runtime_descriptor() {
         fixed_accounts: &fixed,
         strategy_accounts: &[],
         root_data: &root_data,
+        // No Market body, so the `market` hint degrades to zero and the route
+        // searches. These cases pin the composition join, not the hint block.
+        market_data: &[],
         release_set: id(41),
         market: Pubkey::new_from_array(id(40)),
         generation: 1,

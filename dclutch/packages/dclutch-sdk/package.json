@@ -40,6 +40,8 @@
     "abi:generic-founding:verify": "node scripts/generate-generic-founding.mjs --check",
     "abi:principal-capacity": "node scripts/generate-principal-capacity.mjs",
     "abi:principal-capacity:verify": "node scripts/generate-principal-capacity.mjs --check",
+    "abi:hot-bump-hint-slots": "node scripts/generate-hot-bump-hint-slots.mjs",
+    "abi:hot-bump-hint-slots:verify": "node scripts/generate-hot-bump-hint-slots.mjs --check",
     "abi:direct-v3": "node scripts/generate-direct-inline-v3.mjs",
     "abi:direct-v3:verify": "node scripts/generate-direct-inline-v3.mjs --check",
     "abi:direct-participant": "node scripts/generate-direct-participant-v1.mjs",

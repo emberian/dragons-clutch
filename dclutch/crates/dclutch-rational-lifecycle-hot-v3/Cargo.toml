@@ -12,6 +12,7 @@ dclutch-capability-program-contract = { path = "../dclutch-capability-program-co
 dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-effect-kernel = { path = "../dclutch-effect-kernel" }
 dclutch-execution-strategy-contract = { path = "../dclutch-execution-strategy-contract" }
+dclutch-hot-bump-miner-v1 = { path = "../dclutch-hot-bump-miner-v1" }
 dclutch-product-payoff-v2-codec = { path = "../dclutch-product-payoff-v2-codec" }
 dclutch-rational-representation-v2-kernel = { path = "../dclutch-rational-representation-v2-kernel" }
 dclutch-rational-representation-v2-contract = { path = "../dclutch-rational-representation-v2-contract" }
@@ -21,6 +22,14 @@ dclutch-token-svm = { path = "../dclutch-token-svm" }
 dclutch-transition-vm = { path = "../dclutch-transition-vm" }
 solana-program = { version = "=3.0.0", default-features = false }
 solana-sdk-ids = "=3.1.0"
+
+[dev-dependencies]
+# The lifecycle bump-hint positive control stages a decodable Core Market state
+# so `lifecycle_hot_bump_hints_v3` has something to mine; without it every slot
+# degrades to zero and a corpus reading the wrong coordinate would look
+# identical to one reading the right one.
+dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
+dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
 
 [lints]
 workspace = true

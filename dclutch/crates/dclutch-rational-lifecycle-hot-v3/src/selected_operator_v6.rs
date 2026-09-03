@@ -14,7 +14,10 @@ use solana_program::{hash::hash, instruction::Instruction};
 use crate::{
     Error, RationalLifecycleHotInstructionV3, RationalLifecycleHotStateV3,
     RationalLifecycleSelectedBundleV6, Result, lifecycle_claims_account_count_v3,
-    operator::{MAX_SOLANA_PACKET_BYTES, validate_child_frame, validate_fixed_frame},
+    operator::{
+        MAX_SOLANA_PACKET_BYTES, lifecycle_hot_bump_hints_v3, validate_child_frame,
+        validate_fixed_frame,
+    },
     selected_operator_v5::compact_profile13_claims_accounts_v5,
     validate_rational_lifecycle_selected_bundle_v6,
 };
@@ -100,7 +103,8 @@ pub fn build_rational_lifecycle_selected_hot_instruction_v6(
         state.generation,
         hash(state.root_data).to_bytes(),
     )
-    .map_err(|_| Error::Operator)?;
+    .map_err(|_| Error::Operator)?
+    .with_bump_hints(lifecycle_hot_bump_hints_v3(state, checked)?);
     let mut data = Vec::with_capacity(
         HOT_FAMILY_REQUEST_OFFSET_V3
             .checked_add(family_bytes.len())

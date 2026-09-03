@@ -1,6 +1,11 @@
 import { PublicKey } from '@solana/web3.js';
 
 import { slice, u16 } from './bytes';
+import {
+  HOT_BUMP_HINTS_OFFSET_V1,
+  HOT_BUMP_HINT_COUNT_V1,
+  HOT_BUMP_HINT_SLOT_NAMES_V1,
+} from './generated/hotBumpHintSlotsV1';
 import { DIRECT_MAKER_REPLAY_PDA_DOMAIN_V1 } from './directMakerReplay';
 import { activatedRoleProgramV1 } from './releaseRegistry';
 import {
@@ -80,27 +85,27 @@ import {
  * is correct and merely slower.
  */
 
-/** Offset of the caller-mined bump hints inside the hot envelope. */
-export const HOT_BUMP_HINTS_OFFSET_V1 = 120 as const;
-/** Number of bump-hint slots in the hot envelope. */
-export const HOT_BUMP_HINT_COUNT_V1 = 8 as const;
-
 /**
- * What each slot names, in canonical wire order.
+ * The block's geometry and its slot names, from the Rust that owns each.
  *
- * The slots are ROLES in any hot execution, never Direct accounts: the envelope
- * is family-neutral. A failure that names a slot names it from here.
+ * All three were spelled out here, in both twins, until 2026-09-03 -- and the
+ * names had drifted. This file glossed the family-neutral slots with Direct
+ * account names ("lifecycle 0 (seller maker replay)") three lines under a
+ * comment saying the slots are roles in any hot execution and never Direct
+ * accounts, so a Rational or Dealer reader shown one of those names was being
+ * told something false about the route in front of it. The producer,
+ * `dclutch-hot-bump-miner-v1`, names them `lifecycle[0]` and the rest, and it
+ * is the authority for every host-side and browser-side miner there is.
+ *
+ * Re-exported rather than imported-and-forwarded by hand so nothing that reads
+ * these from this module has to move.
  */
-export const HOT_BUMP_HINT_SLOT_NAMES_V1 = Object.freeze([
-  'market',
-  'root',
-  'lifecycle 0 (seller maker replay)',
-  'lifecycle 1 (buyer maker replay)',
-  'child caller 0 (Claims caller authority)',
-  'child caller 1 (Custody caller authority)',
-  'child relay 0 (Custody replay)',
-  'child relay 1 (Custody transfer authority)',
-] as const);
+export {
+  HOT_BUMP_HINTS_OFFSET_V1,
+  HOT_BUMP_HINT_COUNT_V1,
+  HOT_BUMP_HINT_SLOT_NAMES_V1,
+  hotBumpHintSlotNameV1,
+} from './generated/hotBumpHintSlotsV1';
 
 export type HotBumpHintsV1 = Readonly<{
   /** Core Market state PDA bump. Relayed to every child that reads the Market. */

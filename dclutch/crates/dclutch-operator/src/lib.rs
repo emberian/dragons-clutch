@@ -115,3 +115,8 @@ pub mod versioned {
 pub mod user_position_admission_v1;
 /// Finalized devnet planning for wallet-authorized Claims Position close.
 pub mod user_position_close_v1;
+
+/// Shared decodable Market/root/activation corpus for the family bump-hint
+/// positive controls. Test-only; see the module's own documentation.
+#[cfg(test)]
+mod hot_bump_corpus_fixture_v1;

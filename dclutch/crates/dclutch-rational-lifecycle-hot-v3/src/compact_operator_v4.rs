@@ -31,7 +31,10 @@ use solana_program::{
 use crate::{
     Error, RationalLifecycleCompactBundleV4, RationalLifecycleHotInstructionV3,
     RationalLifecycleHotStateV3, Result,
-    operator::{MAX_SOLANA_PACKET_BYTES, validate_child_frame, validate_fixed_frame},
+    operator::{
+        MAX_SOLANA_PACKET_BYTES, lifecycle_hot_bump_hints_v3, validate_child_frame,
+        validate_fixed_frame,
+    },
     validate_rational_lifecycle_compact_bundle_for_authenticated_selection_v4,
 };
 
@@ -169,7 +172,8 @@ pub fn build_rational_lifecycle_compact_hot_instruction_v4(
         state.generation,
         hash(state.root_data).to_bytes(),
     )
-    .map_err(|_| Error::Operator)?;
+    .map_err(|_| Error::Operator)?
+    .with_bump_hints(lifecycle_hot_bump_hints_v3(state, checked)?);
     let mut data = Vec::with_capacity(
         HOT_FAMILY_REQUEST_OFFSET_V3
             .checked_add(family.as_bytes().len())
@@ -376,11 +380,9 @@ fn validate_vacancy_group(
     .0;
     // The owning crate's seed constructor, not a hand-assembled tuple: the
     // domain AND the order come from the one place that declares them.
-    let owner_seeds = ProtocolPositionClaimsCapabilitySeedsV2::new(
-        descriptor_id,
-        u32::from_le_bytes(outcome),
-    )
-    .map_err(|_| Error::ContentIdentity)?;
+    let owner_seeds =
+        ProtocolPositionClaimsCapabilitySeedsV2::new(descriptor_id, u32::from_le_bytes(outcome))
+            .map_err(|_| Error::ContentIdentity)?;
     let expected_owner = Pubkey::find_program_address(&owner_seeds.as_slices(), &claims_program).0;
     if group.shard_mint.pubkey != expected_shard
         || group.structured_custody.pubkey != expected_structured
@@ -653,6 +655,11 @@ mod tests {
             fixed_accounts: fixed,
             strategy_accounts: &[],
             root_data: &[7; 64],
+            // No Market body, so the `market` hint degrades to zero and the
+            // route searches. These cases pin the frame geometry, not the hint
+            // block; the derivation has its own tests in
+            // `dclutch-hot-bump-miner-v1`.
+            market_data: &[],
             release_set: key(15).to_bytes(),
             market: key(14),
             generation: 14,
