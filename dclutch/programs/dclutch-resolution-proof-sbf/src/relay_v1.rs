@@ -317,6 +317,18 @@ pub fn plan_relayed_resolution_v1(
             evidence,
             observation.atoms(),
             1,
+            // The relayed family has no statistic slot (see the frame note
+            // above), so this route cannot read a declared factor and passes
+            // the identity. That is what the relayed founding writes -- its
+            // StatisticSpec names one unit identity on both sides, which
+            // `StatisticSpecV1::validate_scale` now refuses to pair with any
+            // nonzero shift -- but nothing on THIS route checks it, because
+            // the record is not in the frame. A relayed market founded with a
+            // declared conversion would be selected here at the identity and
+            // mis-paid exactly as cohort-14 market B was. Closing it needs the
+            // statistic in the account frame; that is owed, and it is a frame
+            // change, not a line change.
+            0,
             request.generation,
             request.current_unix_seconds,
             request.terminal_sequence,

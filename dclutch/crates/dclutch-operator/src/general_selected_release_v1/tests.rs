@@ -16,22 +16,53 @@ use dclutch_general_adapter_contract::release_v3::{
 
 /// Widths a release selects for the external accounts Profile13 names.
 ///
-/// The same values the accelerator campaign ran against, so this fixture is a
-/// release shape that has actually executed rather than a plausible one.
+/// THE PRODUCER'S, NOT A FIXTURE'S. This function used to spell eleven
+/// literals under a comment claiming they were "the same values the accelerator
+/// campaign ran against"; three of them were not, and the whole block was
+/// transcribed twice into the successor's General compilers, where it published
+/// `Exact(48)` for a RentCredit the protocol only makes at 128. A test fixture
+/// that spells a width its producer derives is a second author for it, and this
+/// is what a second author costs.
+///
+/// The two Product-derived widths are the four-outcome graded basis record and
+/// the two-cut result-domain record this fixture's Product graph would compile.
 fn external_widths() -> GeneralExternalAccountWidthsV3 {
-    GeneralExternalAccountWidthsV3 {
-        linked_basis_prefix: 256,
-        result_domain: 192,
-        rent_sysvar: 17,
-        core_market: 320,
-        activation_cache: 160,
-        upgradeable_program: 36,
-        trading_programdata_prefix: 45,
-        claims_programdata_prefix: 45,
-        core_programdata_prefix: 45,
-        realm_record: 112,
-        rent_credit: 48,
+    general_external_account_widths_v3(256, 192)
+}
+
+/// The eleven widths, named, so a contract that moves one goes red HERE.
+///
+/// Deriving from the contracts is what stops a transcription; asserting the
+/// values is what stops a silent re-founding. The three that were wrong in
+/// cohort-14 are the first three named.
+#[test]
+fn the_published_external_widths_are_the_protocol_constants() {
+    let widths = general_external_account_widths_v3(256, 192);
+    assert_eq!(widths.rent_credit, 128, "LIFECYCLE_RENT_CREDIT_BYTES_V2");
+    assert_eq!(
+        widths.activation_cache, 1_288,
+        "ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1"
+    );
+    assert_eq!(widths.core_market, 368, "market-core STATE_BYTES");
+    assert_eq!(widths.realm_record, 112, "REALM_BYTES");
+    assert_eq!(widths.rent_sysvar, 17);
+    assert_eq!(widths.upgradeable_program, 36, "LOADER_V3_PROGRAM_BYTES");
+    for prefix in [
+        widths.trading_programdata_prefix,
+        widths.claims_programdata_prefix,
+        widths.core_programdata_prefix,
+    ] {
+        assert_eq!(prefix, 45, "LOADER_V3_PROGRAMDATA_METADATA_BYTES");
     }
+    assert_eq!(
+        (widths.linked_basis_prefix, widths.result_domain),
+        (256, 192)
+    );
+    // The three cohort-14 published, kept here as the counterexample rather
+    // than as a comment: none of them is what the protocol produces.
+    assert_ne!(widths.rent_credit, 48);
+    assert_ne!(widths.activation_cache, 160);
+    assert_ne!(widths.core_market, 320);
 }
 
 fn deployment() -> GeneralDeploymentFactsV1 {

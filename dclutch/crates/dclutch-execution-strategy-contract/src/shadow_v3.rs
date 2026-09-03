@@ -39,6 +39,15 @@ pub const SHADOW_REQUEST_HEADER_BYTES_V3: usize = 624;
 pub const SHADOW_ACK_BYTES_V3: usize = 528;
 /// Caller-authority PDA in the accelerator CPI frame.
 pub const SHADOW_CALLER_AUTHORITY_ACCOUNT_V3: usize = 0;
+
+/// The one caller-authority ordinal a Shadow comparison ever has.
+///
+/// The admitted route mints one authority per output invocation; a Shadow
+/// comparison is a single CPI whatever the bank costs, so the ordinal
+/// `accelerator_caller_authority_digest_v1` takes is constant. It is NAMED
+/// rather than written as a literal `0` at the three derivation sites, because
+/// the three have to agree and a bare zero is not a statement that they do.
+pub const SHADOW_CALLER_AUTHORITY_INDEX_V1: u32 = 0;
 /// Current activated release-set cache in the accelerator CPI frame.
 pub const SHADOW_ACTIVATION_ACCOUNT_V3: usize = 1;
 /// Current Registry program in the accelerator CPI frame.

@@ -195,3 +195,74 @@ dclutch-local-successor-bootstrap devnet-general-session \
 
 Read-only: it reads no keypair, signs nothing, submits nothing. It writes the
 frame report and exits non-zero naming every unsatisfiable conjunct it found.
+
+---
+
+## APPLIED — 2026-09-03, commit `3a8ac205d`
+
+The change above was made, under a ruling recorded in `GOAL.md`: **a caller
+authority's address must be a function of the signed instruction alone, never of
+the executing slot, and no trusted-environment scalar enters any address seed.**
+
+The seed is `accelerator_caller_authority_digest_v1`
+(`crates/dclutch-execution-strategy-contract/src/shadow_digest_v3.rs`):
+
+```
+role_request_digest := sha256(b"dclutch:accelerator-caller-authority:v1"
+                              ‖ [kind] ‖ family_request_digest ‖ index_le)
+```
+
+Two deviations from what this note proposed, both stated rather than assumed.
+The preimage is **domain-separated**, because every other digest in this tree is
+and a bare `32 ‖ 4` preimage collides with any other of that shape. And
+`parent_request_digest` is `family_request_digest_v3` — the domain-separated,
+length-prefixed form the invocation contexts already carry — rather than the bare
+`sha256` at `HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3`; `admitted_v3.rs`'s own doc
+warns that the distinction is load-bearing and that describing it as the bare
+form once made a bare recomputation look correct.
+
+### The note found one route and there were two
+
+`shadow_composition_v3.rs` had the same defect and nobody had looked at it. Its
+seed was `hash(ShadowRequestV3)`, and that request carries
+`digests.interpreted_candidate` = `candidate_digest_v3` over the whole
+post-transition register bank — the bank `require_trusted_environment_v3` pins
+`Clock::get().slot` into. It was **latent**: no shipped strategy pairs
+`ShadowAot` with a slot-declaring AccountProfile, because the only family on that
+disposition is Series and Series declares `TrustedEnvironmentV2::None`. Nothing
+enforces that pairing; the only `ShadowAot` gate in Trading checks the transport
+profile, not the trusted environment. It is fixed under the same author, at the
+same cost admitted's was: zero now, and not zero after the first family needs it.
+
+`crates/dclutch-general-adapter-contract/src/shadow_accelerator_v3.rs` is an
+in-tree General shadow evaluator waiting to be selected, which is what "not zero
+later" would have looked like.
+
+### The three seed sites that are clean, checked rather than assumed
+
+Claims, Custody and Core hash child requests that Trading projects in-instruction
+— structurally the suspect shape — and are clean because **no effect artifact in
+this tree emits a `write_request_*` whose source coordinate is a slot-derived
+scalar**. Dealer's disjointness is positional and accidental rather than
+declared: its scenario route puts the trusted slot at common scalar 3 while its
+custody request scalars start at `13 + slot_index*14`, and its equity route
+places the trusted slot past the whole custody block. Resolution seeds on the
+caller-signed family request digest already. Both `ProjectedCustodyCallerSeedsV1`
+sites hash caller-supplied bytes.
+
+**This is a property nothing checks.** A future effect artifact that projects
+`scalar::CURRENT_SLOT` into a child request would re-create the wall in a family
+that has no test for it, and the first symptom would be a `0x4001` nobody can
+explain. A refusal at strategy selection — a disposition that derives a caller
+authority may not pair with an AccountProfile declaring a trusted environment,
+alongside the transport-profile gate at `hot_v3.rs` — is the structural form and
+is **not** written. It is owed.
+
+### What the fix does not repair
+
+The General-hot suite is red, at `0x4003 Content`, after all four accelerator
+CPIs invoke and return. That is downstream of everything this note is about —
+the caller-authority conjunct precedes `invoke_signed`, so a wrong address is
+zero CPIs and `0x4001` — and `Content` is not a code the seed change raises on
+that route. It is an unowned regression somewhere in Trading's commit phase, and
+it stands between the change and any on-chain General execution.

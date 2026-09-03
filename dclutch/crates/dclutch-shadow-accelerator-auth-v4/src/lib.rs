@@ -26,13 +26,15 @@ use alloc::{boxed::Box, vec::Vec};
 use dclutch_core_contract::ContentId;
 use dclutch_execution_strategy_contract::{
     shadow_digest_v3::{
-        ShadowRuntimeObservationV3, family_request_digest_v3, runtime_observations_digest_v3,
+        AcceleratorCallerKindV1, ShadowRuntimeObservationV3,
+        accelerator_caller_authority_digest_v1, family_request_digest_v3,
+        runtime_observations_digest_v3,
     },
     shadow_v3::{
         SHADOW_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3, SHADOW_ACTIVATION_ACCOUNT_V3,
-        SHADOW_CALLER_AUTHORITY_ACCOUNT_V3, SHADOW_REGISTRY_PROGRAM_ACCOUNT_V3,
-        SHADOW_RUNTIME_ACCOUNTS_START_V3, SHADOW_TRADING_PROGRAM_ACCOUNT_V3,
-        SHADOW_TRADING_PROGRAMDATA_ACCOUNT_V3, ShadowRequestV3,
+        SHADOW_CALLER_AUTHORITY_ACCOUNT_V3, SHADOW_CALLER_AUTHORITY_INDEX_V1,
+        SHADOW_REGISTRY_PROGRAM_ACCOUNT_V3, SHADOW_RUNTIME_ACCOUNTS_START_V3,
+        SHADOW_TRADING_PROGRAM_ACCOUNT_V3, SHADOW_TRADING_PROGRAMDATA_ACCOUNT_V3, ShadowRequestV3,
     },
 };
 use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
@@ -287,27 +289,41 @@ pub fn authenticate_shadow_accelerator_invocation_v4<'request, 'accounts, 'info>
     authenticate_current_deployment(trading_release, trading_program, trading_programdata)
         .map_err(ProgramError::from)?;
 
+    // Kept: it is the digest the acknowledgement names, which is what stops a
+    // reply to one request being accepted for another. It is NOT the
+    // caller-authority seed any more -- a `ShadowRequestV3` carries a digest
+    // over the register bank, and a window-gated bank carries the executing
+    // slot, so an address seeded from it could not be named in a signed account
+    // list. See `accelerator_caller_authority_digest_v1`.
     let request_digest = ContentId::new(hash(request_bytes).to_bytes())
         .map_err(|_| ShadowAcceleratorAuthErrorV4::Content)?;
+    // AHEAD OF THE AUTHORITY, because the authority is now derived FROM it. The
+    // caller states `digests.family_request`; the family request bytes are the
+    // request's own tail, and a conjunct that rested on the caller's statement
+    // of a value it is meant to check would check nothing.
+    let family_request_digest = family_request_digest_v3(request.family_request)
+        .map_err(|_| ShadowAcceleratorAuthErrorV4::Content)?;
+    if family_request_digest != request.digests.family_request {
+        return Err(ShadowAcceleratorAuthErrorV4::Content.into());
+    }
     let authority_seeds = CallerAuthoritySeedsV1::new(
         request.release_set,
         request.market.to_bytes(),
         ExecutionRoleV1::Trading,
         request.root.to_bytes(),
-        request_digest.to_bytes(),
+        accelerator_caller_authority_digest_v1(
+            AcceleratorCallerKindV1::Shadow,
+            family_request_digest,
+            SHADOW_CALLER_AUTHORITY_INDEX_V1,
+        )
+        .map_err(|_| ShadowAcceleratorAuthErrorV4::Content)?
+        .to_bytes(),
     )
     .map_err(|_| ShadowAcceleratorAuthErrorV4::Release)?;
     let expected_authority =
         Pubkey::find_program_address(&authority_seeds.as_slices(), trading_program.key).0;
     if caller_authority.key != &expected_authority {
         return Err(ShadowAcceleratorAuthErrorV4::Release.into());
-    }
-
-    if family_request_digest_v3(request.family_request)
-        .map_err(|_| ShadowAcceleratorAuthErrorV4::Content)?
-        != request.digests.family_request
-    {
-        return Err(ShadowAcceleratorAuthErrorV4::Content.into());
     }
 
     Ok(Box::new(AuthenticatedShadowAcceleratorInvocationV4 {

@@ -11,9 +11,13 @@ use dclutch_capability_contract::{
 };
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
-    hot_v3::DIRECT_HOT_HEAP_FRAME_BYTES_V1, set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+    hot_v3::{
+        DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_CAPABILITY_SEAL_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
+    },
+    set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
     v4::CapabilityProgramV4,
 };
+use dclutch_capability_seal_contract::{CAPABILITY_SEAL_BYTES_V1, SealedDescriptorClosureV1};
 use dclutch_chain_bundle_builder::{
     WaistFactsV1,
     admitted::AdmittedAotInputV1,
@@ -43,11 +47,14 @@ use dclutch_general_codec::Action;
 use dclutch_general_config_contract::{GENERAL_ROOT_BYTES_V2, GeneralRootV2};
 use dclutch_market_core_codec::{
     CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
-    STATE_BYTES as CORE_STATE_BYTES, StateBumpsV1,
+    StateBumpsV1,
+};
+use dclutch_operator::capability_seal_v1::{
+    CapabilitySealInstructionInputV1, capability_seal_instruction_v1,
 };
 use dclutch_operator::general_selected_release_v1::{
     GeneralConfigWindowsV1, GeneralDeploymentFactsV1, GeneralSelectedReleaseInputV1,
-    GeneralSelectedReleaseV1, general_selected_release_v1,
+    GeneralSelectedReleaseV1, general_external_account_widths_v3, general_selected_release_v1,
 };
 use dclutch_product_payoff_v2_codec::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
@@ -66,13 +73,11 @@ use dclutch_product_runtime_v2_admission::{
 use dclutch_product_runtime_v2_operator::{ProductCompilationInputV2, compile_product_records_v2};
 use dclutch_realm_contract::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1};
 use dclutch_record_contract::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
-use dclutch_registry_contract::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
 use dclutch_release_set_contract::{ArtifactReleaseIdV1, CapabilityExecutionSelectionV1};
 use dclutch_rent_contract::{
     RefundAuthority,
     lifecycle_v2::{
-        LIFECYCLE_RENT_CREDIT_BYTES_V2, LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2,
-        LifecycleRentCreditV2,
+        LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
     },
 };
 use solana_account::Account;
@@ -244,20 +249,15 @@ fn selected_release(
             continuation_reward_lamports: 1,
         },
         outcome_count,
-        external_widths: GeneralExternalAccountWidthsV3 {
-            linked_basis_prefix: u32::try_from(product.basis.bytes.len()).expect("basis width"),
-            result_domain: u32::try_from(product.domain.bytes.len()).expect("domain width"),
-            rent_sysvar: 17,
-            core_market: u32::try_from(CORE_STATE_BYTES).expect("Core width"),
-            activation_cache: u32::try_from(ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1)
-                .expect("activation width"),
-            upgradeable_program: 36,
-            trading_programdata_prefix: 45,
-            claims_programdata_prefix: 45,
-            core_programdata_prefix: 45,
-            realm_record: u32::try_from(REALM_BYTES).expect("Realm width"),
-            rent_credit: u32::try_from(LIFECYCLE_RENT_CREDIT_BYTES_V2).expect("RentCredit width"),
-        },
+        // ONE AUTHOR, and this test used to be the only site that had it
+        // right: it read the contracts while `general_market.rs`, the devnet
+        // policy file and the operator's own fixture spelled the unit-test
+        // literals, which is how cohort-14 founded a General market whose
+        // `OpenBatch` names an `Exact(48)` RentCredit no producer can fill.
+        external_widths: general_external_account_widths_v3(
+            u32::try_from(product.basis.bytes.len()).expect("basis width"),
+            u32::try_from(product.domain.bytes.len()).expect("domain width"),
+        ),
         token_account_bytes: 165,
         deployment: GeneralDeploymentFactsV1 {
             accelerator_artifact_release: accelerator_release.to_bytes(),
@@ -452,6 +452,8 @@ struct HostCase {
     batch: Pubkey,
     root: Pubkey,
     rent_credit: Pubkey,
+    /// The Trading role's semantic release, a seed of this case's seal address.
+    trading_semantic_release: [u8; 32],
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -518,6 +520,7 @@ fn build_host_case(
         activation_cache: releases.activation,
         trading_semantic_release: trading_release.semantic_release_id().to_bytes(),
     };
+    let trading_semantic_release = waist_facts.trading_semantic_release;
     let accelerator_programdata = waist::programdata(ACCELERATOR_PROGRAM);
     let accelerator_program = program_with_view(ACCELERATOR_PROGRAM, accelerator_programdata);
     let accelerator_programdata_account = external_with_view(
@@ -612,6 +615,7 @@ fn build_host_case(
         batch: request.batch,
         root: state.root.key,
         rent_credit: state.rent_credit.key,
+        trading_semantic_release,
     }
 }
 
@@ -645,7 +649,23 @@ fn add_case_accounts(
     }
 }
 
+/// What one `OpenBatch` execution proved, for the callers that compare two.
+struct OpenBatchRunV1 {
+    invocations: u32,
+    accounts: usize,
+    compute_units: u64,
+    /// The complete top-level account list, in order, exactly as signed.
+    account_list: Vec<Pubkey>,
+    /// The bank slot this execution actually ran at.
+    executed_slot: u64,
+}
+
 async fn execute_open_batch(outcome_count: u32) -> (u32, usize, u64) {
+    let run = execute_open_batch_at(outcome_count, None).await;
+    (run.invocations, run.accounts, run.compute_units)
+}
+
+async fn execute_open_batch_at(outcome_count: u32, warp_to: Option<u64>) -> OpenBatchRunV1 {
     assert_eq!(DIRECT_HOT_HEAP_FRAME_BYTES_V1, 65_536);
     let substrate = waist::fixture_substrate();
     let elves = waist::elves();
@@ -722,6 +742,19 @@ async fn execute_open_batch(outcome_count: u32) -> (u32, usize, u64) {
     let lookup_addresses = waist::canonical_lookup_addresses(&instructions, fee_payer.pubkey());
     waist::add_lookup_table(&mut test, &lookup_addresses);
     let mut context = waist::start_with_substrate(test, substrate).await;
+    // THE ONLY DIFFERENCE BETWEEN THE TWO RUNS THIS FUNCTION SERVES. Everything
+    // above is byte-identical between them, including
+    // `case.built.bundle.hot_instruction`, because the host derives the frame
+    // from the founded Market and never from the clock.
+    if let Some(slot) = warp_to {
+        context.warp_to_slot(slot).expect("warp the bank");
+    }
+    let executed_slot = context
+        .banks_client
+        .get_sysvar::<solana_program::clock::Clock>()
+        .await
+        .expect("clock sysvar")
+        .slot;
     // THE FRAME CONTROL, and the reason it is an assertion rather than a
     // diagnostic. `runtime_observations_digest` is a field of
     // `AdmittedInvocationContextV3`, and the host computes it over
@@ -938,11 +971,249 @@ async fn execute_open_batch(outcome_count: u32) -> (u32, usize, u64) {
         before.revision(),
         after.revision(),
     );
-    (
-        u32::try_from(case.built.admitted_authorities.entries.len()).expect("invocation count"),
-        case.built.bundle.hot_instruction.accounts.len(),
-        execution.compute_units_consumed,
+    OpenBatchRunV1 {
+        invocations: u32::try_from(case.built.admitted_authorities.entries.len())
+            .expect("invocation count"),
+        accounts: case.built.bundle.hot_instruction.accounts.len(),
+        compute_units: execution.compute_units_consumed,
+        account_list: case
+            .built
+            .bundle
+            .hot_instruction
+            .accounts
+            .iter()
+            .map(|meta| meta.pubkey)
+            .collect(),
+        executed_slot,
+    }
+}
+
+/// THE GENERAL MARKET'S CAPABILITY SEAL GETS A PRODUCER, AND IT IS NOT
+/// DIRECT'S.
+///
+/// `devnet-general-session` reported cohort-14's seal at fixed coordinate 38 as
+/// **producible and unproduced**: `process_capability_seal_v1` is
+/// permissionless, anybody willing to pay the rent may call it, and the only
+/// host builder for its request was
+/// `direct_inline_route_v3::compile_direct_inline_capability_seal_plan_v3`,
+/// which hard-codes `DirectExecutionActionV3::InlineOrdinary` and reads its
+/// frame out of an authenticated Direct route. So the route had a reader, a
+/// schema and a refusal, and only its failure path was ever exercised.
+///
+/// This drives `capability_seal_instruction_v1` -- the family-neutral producer
+/// -- over a GENERAL descriptor, through the real Trading ELF, and requires the
+/// seal to materialize at the address the builder derived. It shares nothing
+/// with the admitted route but its fixed frame: the seal outer runs no hot
+/// action, reads no register bank, and is deliberately checked here rather than
+/// in a Direct suite, because "family-neutral" verified only against the one
+/// family it came from is a claim rather than a measurement.
+#[tokio::test]
+async fn a_general_descriptor_seals_through_the_family_neutral_producer() {
+    let substrate = waist::fixture_substrate();
+    let elves = waist::elves();
+    let accelerator_elf = load_accelerator_elf();
+    let rent = Rent::default();
+    let payer = Keypair::new();
+    let fee_payer = Keypair::new();
+    let seal_payer = Keypair::new();
+    let mut test = waist::program_test_without_forced_budget(&elves);
+    let releases = waist::add_release_waist_v2(&mut test, &elves, substrate);
+    waist::add_program_v2(
+        &mut test,
+        "dclutch_general_accelerator_sbf",
+        ACCELERATOR_PROGRAM,
+        &accelerator_elf,
+        substrate,
+    );
+    let case = build_host_case(
+        2,
+        payer.pubkey(),
+        &rent,
+        substrate,
+        &elves,
+        releases,
+        &accelerator_elf,
+    );
+    let fixed_frame = case
+        .built
+        .bundle
+        .hot_instruction
+        .accounts
+        .iter()
+        .take(HOT_FIXED_ACCOUNT_COUNT_V3)
+        .map(|meta| meta.pubkey)
+        .collect::<Vec<_>>();
+    // THE FRAME'S COORDINATE 38 AND THE BUILDER'S DERIVATION ARE TWO
+    // INDEPENDENT AUTHORS, and the builder refuses rather than trusting the
+    // frame -- which is the whole reason it is a builder. The host derived this
+    // frame from the founded Market; the builder derives the address from the
+    // descriptor, the action, the Trading semantic release and the Registry.
+    let composed = capability_seal_instruction_v1(CapabilitySealInstructionInputV1 {
+        trading_program: waist::TRADING_PROGRAM_ID,
+        registry_program: waist::REGISTRY_PROGRAM_ID,
+        trading_semantic_release: case.trading_semantic_release,
+        descriptor_digest: case.built.invocation_context.capability_program.to_bytes(),
+        action: case.built.invocation_context.selected_action,
+        fixed_frame: &fixed_frame,
+        payer: seal_payer.pubkey(),
+    })
+    .expect("the General frame names the seal this builder derives");
+    assert_eq!(
+        composed.seal, fixed_frame[HOT_CAPABILITY_SEAL_ACCOUNT_V3],
+        "the two authors must agree, and the builder must be the one that says so"
+    );
+    add_case_accounts(&mut test, &case, &payer, &fee_payer);
+    test.add_account(
+        seal_payer.pubkey(),
+        Account {
+            lamports: 10_000_000_000,
+            data: Vec::new(),
+            owner: system_program::ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+    // THE FIXTURE STAGES A MATERIALIZED SEAL, because the hot route reads one.
+    // Overriding it back to vacant is what makes this a test of the PRODUCER
+    // rather than of the fixture: a run that started from a sealed account would
+    // pass whether or not the instruction did anything, which is the shape this
+    // whole route was already in -- a reader, a schema and a refusal, with only
+    // the failure path exercised.
+    test.add_account(
+        composed.seal,
+        Account {
+            lamports: 0,
+            data: Vec::new(),
+            owner: system_program::ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+    // THE HEAP FRAME IS PART OF THE PRODUCT, not a harness detail. The seal
+    // outer declares the extended heap profile and `TradingSbfError::HeapFrame`
+    // 0x4008 refuses a transaction that did not request it -- which is what this
+    // test met on its first run, and the refusal names its own remedy, so it
+    // cost one line instead of a bisect.
+    let instructions = vec![
+        ComputeBudgetInstruction::request_heap_frame(DIRECT_HOT_HEAP_FRAME_BYTES_V1),
+        ComputeBudgetInstruction::set_compute_unit_limit(
+            u32::try_from(waist::COMPUTE_LIMIT).expect("compute limit"),
+        ),
+        composed.instruction.clone(),
+    ];
+    let lookup_addresses = waist::canonical_lookup_addresses(&instructions, fee_payer.pubkey());
+    waist::add_lookup_table(&mut test, &lookup_addresses);
+    let mut context = waist::start_with_substrate(test, substrate).await;
+    let before = context
+        .banks_client
+        .get_account(composed.seal)
+        .await
+        .expect("seal query");
+    assert!(
+        before
+            .as_ref()
+            .is_none_or(|account| account.owner == system_program::ID
+                && account.data.is_empty()
+                && account.lamports == 0),
+        "the seal must be VACANT before this, or the run proves nothing"
+    );
+    let execution = waist::submit_v0_observed(
+        &mut context,
+        &instructions,
+        lookup_addresses,
+        Some(&fee_payer),
+        &[&seal_payer],
     )
+    .await
+    .expect("the permissionless General seal");
+    let sealed = context
+        .banks_client
+        .get_account(composed.seal)
+        .await
+        .expect("seal query")
+        .expect("the seal materialized");
+    assert_eq!(sealed.owner, waist::TRADING_PROGRAM_ID);
+    assert_eq!(sealed.data.len(), CAPABILITY_SEAL_BYTES_V1);
+    let closure = SealedDescriptorClosureV1::decode(&sealed.data).expect("sealed closure");
+    // The verdict is the executing Program's, and the only thing checked here is
+    // that it is filed under the coordinates this producer asked for: a host
+    // that re-derived the closure body would be a second authority for a verdict
+    // it did not compute.
+    let key = closure.key().expect("sealed key");
+    assert_eq!(key.action(), case.built.invocation_context.selected_action);
+    assert_eq!(
+        key.descriptor_digest(),
+        case.built.invocation_context.capability_program.to_bytes()
+    );
+    assert_eq!(closure.bump().expect("sealed bump"), composed.bump);
+    eprintln!(
+        "general-capability-seal action={} seal={} bytes={} cu={}",
+        case.built.invocation_context.selected_action,
+        composed.seal,
+        sealed.data.len(),
+        execution.compute_units_consumed,
+    );
+}
+
+/// ONE SIGNED ACCOUNT LIST, TWO EXECUTION SLOTS, AND IT COMMITS AT BOTH.
+///
+/// This is the property the caller-authority seed violated, and the reason
+/// General could not be delivered on a real chain. Each of the four admitted
+/// caller authorities was `find_program_address` over
+/// `sha256(accelerator request header || inline register bank)`; `OpenBatch`'s
+/// AccountProfile declares `TrustedEnvironmentV2::CurrentSlot`, so Trading
+/// seeds `scalar::CURRENT_SLOT` from `Clock::get()` into that bank on every
+/// execution; so each address was a function of the slot the transaction
+/// executed in, while a signed transaction's account list is fixed when it is
+/// signed. Trading refused `TradingSbfError::Release` 0x4001 in
+/// `admitted_composition_v3.rs`, and there was no way to be right except to win
+/// a slot lottery, once per action, for the whole lifecycle. See
+/// `docs/design/GENERAL_CALLER_AUTHORITY_SLOT_BINDING_2026_09_03.md`.
+///
+/// The harness cannot sign a transaction at one slot and submit it at another
+/// -- a blockhash expires -- so this asserts the thing that made that
+/// impossible: the ACCOUNT LIST the host derives is byte-identical across two
+/// executions at different slots, and both commit. Under the old seed the two
+/// lists would differ in four of their fifty-five entries, and neither run
+/// would have accepted the other's.
+///
+/// THE SLOTS DIFFERING IS THE POSITIVE CONTROL. `warp_to_slot` is asserted
+/// through the executed `Clock`, not assumed: two runs that silently executed
+/// at the same slot would pass this vacuously, and "nothing moved" and "my
+/// instrument was disconnected" log identically.
+#[tokio::test]
+async fn one_signed_account_list_opens_the_same_batch_at_two_execution_slots() {
+    let substrate = waist::fixture_substrate();
+    // Far enough that the bank has demonstrably advanced, inside the manifest's
+    // own activation deadline, which `manifest_selection` sets at
+    // `clock_slot + 100`. A warp past it would refuse for activation reasons
+    // and prove nothing about an address.
+    let later = substrate.bank_slot() + 47;
+    let first = execute_open_batch_at(2, None).await;
+    let second = execute_open_batch_at(2, Some(later)).await;
+    assert_eq!(first.executed_slot, substrate.bank_slot());
+    assert_eq!(second.executed_slot, later);
+    assert_ne!(
+        first.executed_slot, second.executed_slot,
+        "the two executions must be at different slots, or this proves nothing"
+    );
+    assert_eq!(
+        first.account_list, second.account_list,
+        "the top-level account list moved with the executing slot; a signed \
+         transaction cannot name it"
+    );
+    assert_eq!(
+        (first.invocations, first.accounts),
+        (second.invocations, second.accounts)
+    );
+    eprintln!(
+        "general-open-batch two-slot slots={} and {} accounts={} identical=true cu={} and {}",
+        first.executed_slot,
+        second.executed_slot,
+        first.accounts,
+        first.compute_units,
+        second.compute_units,
+    );
 }
 
 #[tokio::test]

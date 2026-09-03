@@ -59,6 +59,8 @@ pub enum Error {
     OutputLength,
     /// Checked byte sizing or exact arithmetic overflowed its physical integer.
     ArithmeticOverflow,
+    /// A declared source-to-result decimal shift was outside the admitted range.
+    UnsupportedScale,
 }
 
 /// Product result for this physical refinement.
@@ -218,14 +220,54 @@ impl<'a> ResultDomainV2<'a> {
         }
     }
 
-    /// Map an exact signed-rational coordinate to one ordinary selector.
-    pub fn select_ordinary(self, numerator: i128, denominator: u64) -> Result<u32> {
+    /// Map an exact signed-rational coordinate to one ordinary selector, after
+    /// putting the coordinate and the cuts on one scale.
+    ///
+    /// `source_scale_exponent` is the declared source-to-result decimal shift:
+    /// the observation times ten to that power is the reading in the unit the
+    /// cuts are authored in. It is an *argument* rather than a default because
+    /// an observation alone does not name a cell. The same numerator names
+    /// different cells under different declared factors, so a route that omits
+    /// the number has not chosen the identity -- it has failed to state a
+    /// choice, and this function cannot tell the two apart. Cohort-14 market B
+    /// is what that costs: cuts in dollars, an observation in raw feed atoms at
+    /// exponent -8, and a comparison of the two ratios as they stood.
+    ///
+    /// The shift multiplies one side's denominator, chosen by its sign, and
+    /// never divides. So the comparison stays exact -- a division would round,
+    /// and rounding inside a partition test moves cells -- and every
+    /// intermediate stays inside the integer widths the unscaled comparison
+    /// already used.
+    ///
+    /// Refines `DClutch.ProductRuntimeV2.ResultDomain.selectOrdinaryScaled`.
+    pub fn select_ordinary(
+        self,
+        numerator: i128,
+        denominator: u64,
+        source_scale_exponent: i32,
+    ) -> Result<u32> {
         if denominator == 0 {
             return Err(Error::ZeroDenominator);
         }
+        let factor = power_of_ten(source_scale_exponent)?;
+        let (denominator, cut_denominator) = if source_scale_exponent < 0 {
+            (
+                denominator
+                    .checked_mul(factor)
+                    .ok_or(Error::ArithmeticOverflow)?,
+                self.cut_denominator,
+            )
+        } else {
+            (
+                denominator,
+                self.cut_denominator
+                    .checked_mul(factor)
+                    .ok_or(Error::ArithmeticOverflow)?,
+            )
+        };
         let mut selector = 0_u32;
         for cut in self.cuts() {
-            if compare_signed_rational(numerator, denominator, cut, self.cut_denominator)
+            if compare_signed_rational(numerator, denominator, cut, cut_denominator)
                 == Ordering::Less
             {
                 return Ok(selector);
@@ -710,6 +752,25 @@ pub fn compile_portfolio_v2(input: PortfolioInputV2<'_>, output: &mut [u8]) -> R
     }
     PortfolioV2::decode(output)?;
     Ok(())
+}
+
+/// Admit one declared source-to-result decimal shift.
+///
+/// Records that persist a factor call this rather than restating the bound, so
+/// a record and the selector that consumes it cannot disagree about which
+/// shifts exist. [`MAX_SOURCE_SCALE_EXPONENT`] is Lean-owned and emitted.
+pub fn validate_source_scale_exponent(exponent: i32) -> Result<()> {
+    power_of_ten(exponent).map(|_| ())
+}
+
+/// Exact power of ten for one admitted decimal shift.
+fn power_of_ten(exponent: i32) -> Result<u64> {
+    if exponent.unsigned_abs() > MAX_SOURCE_SCALE_EXPONENT.unsigned_abs() {
+        return Err(Error::UnsupportedScale);
+    }
+    10_u64
+        .checked_pow(exponent.unsigned_abs())
+        .ok_or(Error::ArithmeticOverflow)
 }
 
 fn compare_signed_rational(

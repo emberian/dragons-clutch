@@ -52,7 +52,12 @@ use dclutch_capability_program_contract::hot_v3::{
     HOT_RUNTIME_ROOT_COORDINATE_V3, HotExecutionEnvelopeV3,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_execution_strategy_contract::v2::AcceleratorRequestV2;
+use dclutch_execution_strategy_contract::{
+    shadow_digest_v3::{
+        AcceleratorCallerKindV1, accelerator_caller_authority_digest_v1, family_request_digest_v3,
+    },
+    v2::{AcceleratorRequestV2, AdmittedAcceleratorRequestV2},
+};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_trading_sbf::admitted_composition_v3::{
     ADMITTED_ACCELERATOR_RUNTIME_ACCOUNTS_START_V4, ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_START_V4,
@@ -60,7 +65,6 @@ use dclutch_trading_sbf::admitted_composition_v3::{
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,
-    hash::hash,
     instruction::{AccountMeta, Instruction},
     program::{get_return_data, invoke_signed, set_return_data},
     program_error::ProgramError,
@@ -361,21 +365,37 @@ fn runtime_accounts<'a, 'info>(
 }
 
 /// Derive the canonical Trading caller-authority PDA for one test invocation.
+///
+/// SEEDED BY THE SIGNED FAMILY REQUEST AND THE CHUNK ORDINAL, through the
+/// contract's own author, exactly as the real composer is. It hashed the
+/// accelerator request until 2026-09-03; a request carries the register bank
+/// and a window-gated bank carries the executing slot, so that address could
+/// not be named in the account list a caller signs.
 pub fn dealer_accelerator_test_caller_authority_v1(
     program_id: &Pubkey,
     hot_instruction: &[u8],
     root: &Pubkey,
     request: &[u8],
 ) -> Result<(Pubkey, CallerAuthoritySeedsV1, u8), ProgramError> {
-    let (envelope, _) = HotExecutionEnvelopeV3::split_instruction(hot_instruction)
+    let (envelope, family_request) = HotExecutionEnvelopeV3::split_instruction(hot_instruction)
         .map_err(|_| DealerAcceleratorTestCallerErrorV1::Frame)?;
+    let chunk_index = AdmittedAcceleratorRequestV2::decode(request)
+        .map_err(|_| DealerAcceleratorTestCallerErrorV1::Frame)?
+        .caller_authority_index();
     let seeds = CallerAuthoritySeedsV1::new(
         ContentId::new(envelope.release_set())
             .map_err(|_| DealerAcceleratorTestCallerErrorV1::Frame)?,
         envelope.market(),
         ExecutionRoleV1::Trading,
         root.to_bytes(),
-        hash(request).to_bytes(),
+        accelerator_caller_authority_digest_v1(
+            AcceleratorCallerKindV1::Admitted,
+            family_request_digest_v3(family_request)
+                .map_err(|_| DealerAcceleratorTestCallerErrorV1::Frame)?,
+            chunk_index,
+        )
+        .map_err(|_| DealerAcceleratorTestCallerErrorV1::Frame)?
+        .to_bytes(),
     )
     .map_err(|_| DealerAcceleratorTestCallerErrorV1::Frame)?;
     let (authority, bump) = Pubkey::find_program_address(&seeds.as_slices(), program_id);

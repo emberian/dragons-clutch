@@ -34,11 +34,11 @@ fn runtime_width_three_hundred_has_no_const_generic_or_byte_ceiling() {
     assert_eq!(domain.outcome_count(), Ok(302));
     assert_eq!(domain.failure_selector(), 301);
     assert_eq!(domain.cuts().count(), 300);
-    assert_eq!(domain.select_ordinary(-151, 3), Ok(0));
-    assert_eq!(domain.select_ordinary(-150, 3), Ok(1));
-    assert_eq!(domain.select_ordinary(149, 3), Ok(300));
-    assert_eq!(domain.select_ordinary(i128::MIN, u64::MAX), Ok(0));
-    assert_eq!(domain.select_ordinary(i128::MAX, 1), Ok(300));
+    assert_eq!(domain.select_ordinary(-151, 3, 0), Ok(0));
+    assert_eq!(domain.select_ordinary(-150, 3, 0), Ok(1));
+    assert_eq!(domain.select_ordinary(149, 3, 0), Ok(300));
+    assert_eq!(domain.select_ordinary(i128::MIN, u64::MAX, 0), Ok(0));
+    assert_eq!(domain.select_ordinary(i128::MAX, 1, 0), Ok(300));
 
     let coefficients: Vec<u64> = (1_u64..=302).map(|value| value * 2).collect();
     let mut portfolio_bytes =

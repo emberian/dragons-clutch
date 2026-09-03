@@ -1093,11 +1093,17 @@ fn frame_rows_v1(
         (
             "capability seal",
             format!(
-                "PRODUCIBLE, NOT PRODUCED: Trading's own permissionless `DCLTSEL1` \
-                 (`process_capability_seal_v1`) writes it, and the only host builder for that \
-                 request is Direct's `build_direct_inline_capability_seal_v3`. No General seal \
-                 exists on any chain. PDA under Trading {} over (descriptor schema, descriptor \
-                 digest, action, Trading semantic release, Registry)",
+                "PRODUCIBLE, AND THE PRODUCER EXISTS since 2026-09-03: \
+                 `dclutch_operator::capability_seal_v1::capability_seal_instruction_v1` \
+                 composes the permissionless `DCLTSEL1` outer for ANY family's descriptor \
+                 and action, and derives this address rather than taking it. It replaced \
+                 Direct's builder as the only one, which hard-coded \
+                 `DirectExecutionActionV3::InlineOrdinary`. A General OpenBatch descriptor \
+                 seals through it against the real Trading ELF in \
+                 `a_general_descriptor_seals_through_the_family_neutral_producer`. Still \
+                 unproduced ON THIS CHAIN, and it costs one transaction plus rent. PDA under \
+                 Trading {} over (descriptor schema, descriptor digest, action, Trading \
+                 semantic release, Registry)",
                 authors.trading
             ),
         ),

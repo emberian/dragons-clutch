@@ -10,9 +10,12 @@ extern crate alloc;
 
 use alloc::{vec, vec::Vec};
 
+use dclutch_execution_strategy_contract::shadow_digest_v3::{
+    AcceleratorCallerKindV1, accelerator_caller_authority_digest_v1, family_request_digest_v3,
+};
 use dclutch_execution_strategy_contract::shadow_v3::{
-    SHADOW_ACK_BYTES_V3, SHADOW_RUNTIME_ACCOUNTS_START_V3, ShadowAckV3, ShadowDispositionV3,
-    ShadowRequestV3,
+    SHADOW_ACK_BYTES_V3, SHADOW_CALLER_AUTHORITY_INDEX_V1, SHADOW_RUNTIME_ACCOUNTS_START_V3,
+    ShadowAckV3, ShadowDispositionV3, ShadowRequestV3,
 };
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
@@ -59,12 +62,31 @@ pub(crate) fn execute_shadow_aot_v3<'info>(
     let request_digest_bytes = hash(&request_bytes).to_bytes();
     let request_digest = dclutch_core_contract::ContentId::new(request_digest_bytes)
         .map_err(|_| TradingSbfError::Content)?;
+    // THE SAME LAW THE ADMITTED ROUTE WAS FIXED UNDER, applied here before a
+    // family needs it. This seed was `hash(request_bytes)`, and a
+    // `ShadowRequestV3` carries `digests.interpreted_candidate` --
+    // `candidate_digest_v3` over the whole post-transition register bank. An
+    // AccountProfile declaring `TrustedEnvironmentV2::CurrentSlot` puts
+    // `Clock::get().slot` in that bank, so this address moved every slot, and a
+    // caller-authority PDA has to be named in an account list fixed at signing.
+    //
+    // Nothing pairs `ShadowAot` with a slot-declaring profile today -- Series is
+    // the only family on this disposition and declares `None` -- so the change
+    // is free now and would not have been later. That is exactly the position
+    // the admitted route was in until General was founded.
     let authority_seeds = CallerAuthoritySeedsV1::new(
         request.release_set,
         request.market.to_bytes(),
         ExecutionRoleV1::Trading,
         request.root.to_bytes(),
-        request_digest_bytes,
+        accelerator_caller_authority_digest_v1(
+            AcceleratorCallerKindV1::Shadow,
+            family_request_digest_v3(request.family_request)
+                .map_err(|_| TradingSbfError::Content)?,
+            SHADOW_CALLER_AUTHORITY_INDEX_V1,
+        )
+        .map_err(|_| TradingSbfError::Content)?
+        .to_bytes(),
     )
     .map_err(|_| TradingSbfError::Content)?;
     let (expected_authority, bump) =
@@ -208,8 +230,17 @@ mod tests {
         ContentId::new([tag; 32]).expect("nonzero")
     }
 
+    /// The authority follows the SIGNED family request, and nothing else in
+    /// the request moves it.
+    ///
+    /// This test used to assert the opposite -- that appending one byte to the
+    /// encoded request named a different account -- and that property was the
+    /// wall: a `ShadowRequestV3` carries a digest over the whole register bank,
+    /// and a window-gated bank carries the executing slot, so "any request byte
+    /// moves the address" means "the address moves every slot" and no caller
+    /// can name it in a signed account list.
     #[test]
-    fn request_digest_selects_one_release_pinned_trading_authority() {
+    fn the_family_request_selects_one_release_pinned_trading_authority() {
         let family = [1_u8; 32];
         let request = ShadowRequestV3 {
             release_set: id(2),
@@ -242,32 +273,79 @@ mod tests {
             },
             family_request: &family,
         };
+        let program = Pubkey::new_from_array(request.trading_program.to_bytes());
+        let authority = |request: ShadowRequestV3<'_>| {
+            let seeds = CallerAuthoritySeedsV1::new(
+                request.release_set,
+                request.market.to_bytes(),
+                ExecutionRoleV1::Trading,
+                request.root.to_bytes(),
+                accelerator_caller_authority_digest_v1(
+                    AcceleratorCallerKindV1::Shadow,
+                    family_request_digest_v3(request.family_request).expect("family digest"),
+                    SHADOW_CALLER_AUTHORITY_INDEX_V1,
+                )
+                .expect("role request digest")
+                .to_bytes(),
+            )
+            .expect("authority seeds");
+            Pubkey::find_program_address(&seeds.as_slices(), &program).0
+        };
+        let first = authority(request);
+
+        // THE BANK MOVES AND THE ADDRESS DOES NOT. `interpreted_candidate` is
+        // `candidate_digest_v3` over the post-transition register bank, which
+        // is where a window-gated profile's `Clock::get().slot` lives, so this
+        // substitution stands for two executions of one action at two slots.
+        let warped = ShadowRequestV3 {
+            digests: ShadowExecutionDigestsV3 {
+                interpreted_candidate: id(0x5a),
+                ..request.digests
+            },
+            ..request
+        };
         let mut encoded = vec![0_u8; request.encoded_len().expect("width")];
         request.encode_into(&mut encoded).expect("request");
-        let digest = hash(&encoded).to_bytes();
-        let seeds = CallerAuthoritySeedsV1::new(
-            request.release_set,
-            request.market.to_bytes(),
-            ExecutionRoleV1::Trading,
-            request.root.to_bytes(),
-            digest,
-        )
-        .expect("authority seeds");
-        let program = Pubkey::new_from_array(request.trading_program.to_bytes());
-        let (first, _) = Pubkey::find_program_address(&seeds.as_slices(), &program);
+        let mut warped_encoded = vec![0_u8; warped.encoded_len().expect("width")];
+        warped.encode_into(&mut warped_encoded).expect("warped");
+        assert_ne!(
+            encoded, warped_encoded,
+            "the two requests must actually differ, or this proves nothing"
+        );
+        assert_eq!(authority(warped), first);
 
-        encoded.push(0);
-        let changed_digest = hash(&encoded).to_bytes();
-        let changed = CallerAuthoritySeedsV1::new(
-            request.release_set,
-            request.market.to_bytes(),
-            ExecutionRoleV1::Trading,
-            request.root.to_bytes(),
-            changed_digest,
-        )
-        .expect("changed seeds");
-        let (second, _) = Pubkey::find_program_address(&changed.as_slices(), &program);
-        assert_ne!(first, second);
+        // A DIFFERENT SIGNED FAMILY REQUEST, and a different market, each
+        // alone: the two bindings that survived.
+        let other_family = [2_u8; 32];
+        assert_ne!(
+            authority(ShadowRequestV3 {
+                family_request: &other_family,
+                ..request
+            }),
+            first
+        );
+        assert_ne!(
+            authority(ShadowRequestV3 {
+                market: id(0x33),
+                ..request
+            }),
+            first
+        );
+        // And the two dispositions do not mint one address for one request.
+        assert_ne!(
+            accelerator_caller_authority_digest_v1(
+                AcceleratorCallerKindV1::Admitted,
+                family_request_digest_v3(&family).expect("family digest"),
+                SHADOW_CALLER_AUTHORITY_INDEX_V1,
+            )
+            .expect("admitted digest"),
+            accelerator_caller_authority_digest_v1(
+                AcceleratorCallerKindV1::Shadow,
+                family_request_digest_v3(&family).expect("family digest"),
+                SHADOW_CALLER_AUTHORITY_INDEX_V1,
+            )
+            .expect("shadow digest")
+        );
     }
 
     #[test]

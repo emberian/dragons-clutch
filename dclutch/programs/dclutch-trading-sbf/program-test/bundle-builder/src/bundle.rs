@@ -689,6 +689,7 @@ fn finish_admitted_bundle(
         certificate_program: content(evidence.certificate.digest)?,
         capability_program: content(bundle.artifacts.descriptor.digest)?,
         invocation_context: invocation_context_digest,
+        family_request_digest: invocation_context.family_request_digest,
         transport: if bundle.transport_span.is_some() {
             dclutch_execution_strategy_contract::v2::RequestTransportV2::ScratchPages
         } else {

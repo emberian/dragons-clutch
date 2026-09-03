@@ -43,6 +43,9 @@ pub enum ProviderJoinErrorV3 {
     /// The observation's feed, exponent, or confidence is not the one the
     /// Market's adapter configuration admits.
     ProviderConfiguration,
+    /// The publication was admitted and this Market's own StatisticSpec and
+    /// adapter configuration disagree about the source-to-result scale.
+    ProviderScale,
     /// Source terminal transition or certificate construction refused.
     Transition,
     /// A checked integer conversion overflowed.
@@ -70,6 +73,7 @@ const fn map_normalization_error(error: dclutch_source_contract::Error) -> Provi
         dclutch_source_contract::Error::InvalidPythObservation => {
             ProviderJoinErrorV3::ProviderConfiguration
         }
+        dclutch_source_contract::Error::SourceScaleMismatch => ProviderJoinErrorV3::ProviderScale,
         _ => ProviderJoinErrorV3::Provider,
     }
 }
@@ -247,6 +251,11 @@ pub fn plan_provider_resolution_v3(
             SourceContentId::new(provider_evidence).map_err(|_| ProviderJoinErrorV3::Provider)?,
             normalized.atoms(),
             1,
+            // From the obligation, which read it from the market's own
+            // StatisticSpec and has already refused a publication whose feed
+            // exponent the declaration does not admit. Never from the adapter
+            // account this instruction was handed.
+            obligation.source_scale_exponent(),
             request.generation,
             observation.current_unix_seconds,
             request.terminal_sequence,
@@ -428,6 +437,15 @@ mod tests {
         /// The publication is timely and about the right period, and its
         /// exponent is not the one the Market's adapter configuration names.
         AdapterConfigurationDisagrees,
+        /// The publication is timely, about the right period, and exactly the
+        /// one the adapter configuration names -- and the Market's own
+        /// StatisticSpec declares a conversion between two unit identities
+        /// while leaving the factor at the identity.
+        ///
+        /// This is cohort-14 market B's founding. Before the factor existed
+        /// the join admitted it and the selector compared raw feed atoms
+        /// against cuts in dollars.
+        DeclaredScaleDisagrees,
     }
 
     fn source_id(tag: u8) -> SourceContentId {
@@ -607,9 +625,15 @@ mod tests {
             0,
         )
         .expect("capacity");
+        let declared_scale = if matches!(case, Case::DeclaredScaleDisagrees) {
+            0
+        } else {
+            update.exponent()
+        };
         let statistic = StatisticSpecV1::new(
             source_unit,
             result_unit,
+            declared_scale,
             StatisticKind::TerminalSample,
             RoundingBoundary::ExactRational,
             1,
@@ -797,12 +821,21 @@ mod tests {
         let freshness = plan(Case::PublicationTooStaleForThisCluster).expect_err("freshness");
         let configuration = plan(Case::AdapterConfigurationDisagrees).expect_err("configuration");
 
+        let scale = plan(Case::DeclaredScaleDisagrees).expect_err("scale");
+
         assert_eq!(window, ProviderJoinErrorV3::ProviderWindow);
         assert_eq!(freshness, ProviderJoinErrorV3::ProviderFreshness);
         assert_eq!(configuration, ProviderJoinErrorV3::ProviderConfiguration);
+        // A fourth question, and it is not one of the three: the publication
+        // was admitted and the Market's own two records disagree. Reported as
+        // `ProviderConfiguration` an operator would resubmit forever.
+        assert_eq!(scale, ProviderJoinErrorV3::ProviderScale);
         assert_ne!(window, freshness);
         assert_ne!(window, configuration);
         assert_ne!(freshness, configuration);
+        assert_ne!(scale, window);
+        assert_ne!(scale, freshness);
+        assert_ne!(scale, configuration);
 
         // And the same three, distinct, as the numbers an operator actually
         // reads off a validator log.
@@ -810,6 +843,7 @@ mod tests {
             crate::ResolutionError::ProviderWindow as u32,
             crate::ResolutionError::ProviderFreshness as u32,
             crate::ResolutionError::ProviderConfiguration as u32,
+            crate::ResolutionError::ProviderScale as u32,
             crate::ResolutionError::ProviderObservation as u32,
         ];
         for (left, first) in codes.iter().enumerate() {

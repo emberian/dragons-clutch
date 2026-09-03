@@ -1608,6 +1608,7 @@ dependencies = [
  "dclutch-general-adapter-contract",
  "dclutch-general-codec",
  "dclutch-general-config-contract",
+ "dclutch-market-core-codec",
  "dclutch-rational-representation-v2-contract",
  "dclutch-record-contract",
  "dclutch-registry-contract",
@@ -1831,6 +1832,7 @@ version = "0.1.0"
 dependencies = [
  "dclutch-capability-contract",
  "dclutch-capability-program-contract",
+ "dclutch-capability-seal-contract",
  "dclutch-chain-bundle-builder",
  "dclutch-core-contract",
  "dclutch-direct-codec",

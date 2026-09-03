@@ -24,6 +24,9 @@ pub const EFFECT_DIGEST_DOMAIN_V3: &[u8] = b"dclutch:shadow-effect:v4-ordered-re
 pub const RECEIPT_DEPENDENCIES_DIGEST_DOMAIN_V4: &[u8] = b"dclutch:shadow-receipt-dependencies:v4";
 /// Domain for one selected action invocation.
 pub const INVOCATION_DIGEST_DOMAIN_V3: &[u8] = b"dclutch:shadow-invocation:v3";
+/// Domain for one accelerator invocation's caller-authority seed.
+pub const ACCELERATOR_CALLER_AUTHORITY_DIGEST_DOMAIN_V1: &[u8] =
+    b"dclutch:accelerator-caller-authority:v1";
 
 /// Stable refusal from canonical transcript construction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -42,6 +45,78 @@ pub enum ShadowDigestErrorV3 {
 
 /// Result alias for canonical V3 transcript construction.
 pub type Result<T> = core::result::Result<T, ShadowDigestErrorV3>;
+
+/// Which accelerator disposition an authority is minted for.
+///
+/// Not data: each call site is one of the two dispositions and names its own,
+/// so the two families cannot derive one address. `resolve_execution_candidate_v2`
+/// selects exactly one disposition per action, so a shared address would not
+/// have been a shared authority either — this makes the separation structural
+/// rather than an argument that has to stay true.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum AcceleratorCallerKindV1 {
+    /// The admitted-AOT route: `AdmittedAcceleratorRequestV2`, one authority per
+    /// output invocation.
+    Admitted = 0,
+    /// The Shadow comparison route: `ShadowRequestV3`, exactly one authority.
+    Shadow = 1,
+}
+
+/// The `role_request_digest` seed of one accelerator invocation's caller authority.
+///
+/// # A caller authority's address is a function of the signed instruction alone
+///
+/// Both routes used to seed this with the digest of the request they were about
+/// to send, and a request carries the register bank. An AccountProfile
+/// declaring `TrustedEnvironmentV2::CurrentSlot` puts `Clock::get().slot` in
+/// that bank — General's seven window-gated actions do — so the digest, and
+/// every `find_program_address` over it, differed in every slot. A
+/// caller-authority PDA has to be NAMED in the top-level account list, which is
+/// fixed when the transaction is signed, so those addresses were valid for
+/// exactly one slot and no caller could deliver into them.
+///
+/// The tree already stated the law:
+/// `the_window_gated_actions_declare_the_current_slot_in_their_bank` says
+/// "Anything outside the executing instruction that has to STATE that bank is
+/// therefore valid for exactly one slot, which no caller can deliver into", and
+/// that sentence deleted the input scratch-page transport. These addresses
+/// survived the cut because it reasoned about page ACCOUNTS and this is a
+/// page-less ADDRESS. See
+/// `docs/design/GENERAL_CALLER_AUTHORITY_SLOT_BINDING_2026_09_03.md`.
+///
+/// The preimage is now the digest of the SIGNED top-level family request —
+/// [`family_request_digest_v3`] of the exact `DCLTHOT3` payload, which both
+/// invocation contexts already carry and every reader already re-derives — plus
+/// the disposition and the invocation ordinal, the only coordinate that varies
+/// between the invocations of one execution. All three are computable by any
+/// caller that can build the transaction at all, and none is a
+/// trusted-environment observation.
+///
+/// # What it gives up, and what still covers that
+///
+/// The authority is no longer bound to the exact request BYTES, only to the
+/// family request that determines them. Everything else in those bytes is
+/// derived by Trading from authenticated artifacts and chain state inside the
+/// same instruction, and the callee re-derives it: the accelerators' own frame
+/// checks and `require_admitted_bank_matches_frame_v3` cover the bank, and each
+/// acknowledgement still names the digest of the request it answered, so a
+/// reply to another request is still refused. The authority stops being a
+/// second, redundant statement of what Trading just computed and becomes a
+/// statement of what the caller asked for.
+pub fn accelerator_caller_authority_digest_v1(
+    kind: AcceleratorCallerKindV1,
+    parent_request_digest: ContentId,
+    invocation_index: u32,
+) -> Result<ContentId> {
+    ContentId::new(digestv(&[
+        ACCELERATOR_CALLER_AUTHORITY_DIGEST_DOMAIN_V1,
+        &[kind as u8],
+        parent_request_digest.as_bytes(),
+        &invocation_index.to_le_bytes(),
+    ]))
+    .map_err(|_| ShadowDigestErrorV3::ZeroDigest)
+}
 
 /// One exact read-only runtime observation in AccountProfile logical order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -708,6 +783,70 @@ pub fn invocation_context_digest_v3(context: ShadowInvocationContextV3) -> Resul
 
 #[cfg(test)]
 mod tests {
+    /// The caller-authority seed separates dispositions, requests and
+    /// invocations, and nothing else.
+    ///
+    /// Its whole purpose is that the coordinates it DOES vary with are ones a
+    /// caller holds before it signs, so the negative half — that it varies with
+    /// neither the request bytes nor the register bank, because it never sees
+    /// them — is a statement about the signature, not this function. What is
+    /// checkable here is the positive half plus the domain: an undomained
+    /// preimage would collide with any other 37-byte protocol preimage of that
+    /// shape.
+    #[test]
+    fn the_caller_authority_seed_separates_disposition_request_and_invocation() {
+        let parent = ContentId::new([41_u8; 32]).expect("parent");
+        let first =
+            accelerator_caller_authority_digest_v1(AcceleratorCallerKindV1::Admitted, parent, 0)
+                .expect("chunk 0");
+        let second =
+            accelerator_caller_authority_digest_v1(AcceleratorCallerKindV1::Admitted, parent, 1)
+                .expect("chunk 1");
+        assert_ne!(first, second);
+        assert_ne!(
+            accelerator_caller_authority_digest_v1(
+                AcceleratorCallerKindV1::Admitted,
+                ContentId::new([42_u8; 32]).expect("other parent"),
+                0,
+            )
+            .expect("other request"),
+            first
+        );
+        assert_ne!(
+            accelerator_caller_authority_digest_v1(AcceleratorCallerKindV1::Shadow, parent, 0)
+                .expect("shadow"),
+            first,
+            "the two dispositions must not mint one address"
+        );
+        // The little-endian ordinal, not the big-endian one: a mismatch there
+        // is an address neither side can name and a wall with no diagnostic.
+        assert_eq!(
+            first,
+            ContentId::new(digestv(&[
+                ACCELERATOR_CALLER_AUTHORITY_DIGEST_DOMAIN_V1,
+                &[0_u8],
+                &[41_u8; 32],
+                &0_u32.to_le_bytes(),
+            ]))
+            .expect("preimage")
+        );
+        assert_ne!(
+            second,
+            ContentId::new(digestv(&[
+                ACCELERATOR_CALLER_AUTHORITY_DIGEST_DOMAIN_V1,
+                &[0_u8],
+                &[41_u8; 32],
+                &1_u32.to_be_bytes(),
+            ]))
+            .expect("big-endian ordinal")
+        );
+        assert_ne!(
+            first,
+            ContentId::new(digestv(&[&[0_u8], &[41_u8; 32], &0_u32.to_le_bytes()]))
+                .expect("undomained")
+        );
+    }
+
     extern crate std;
 
     use super::*;

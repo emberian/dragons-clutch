@@ -3890,3 +3890,13 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   the factor in StatisticSpecV1 Lean-first, normalization at the one selection site, the adapter binding its exponent, the
   test the tree never had; RELAY-C told to record market C's selector as the defect's artifact.
 - Cuts: `93b625838`.
+- GENERAL closed (`3a8ac205d` **the caller-authority seed is slot-free**: `sha256("dclutch:accelerator-caller-authority:v1" ‖
+  kind ‖ family_request_digest ‖ index)` at shadow_digest_v3.rs:107, eight consumers, five hostiles each shown to name a
+  different address; **a second route (Shadow) had the same defect** — latent only because Series declares no trusted
+  environment and nothing enforces that pairing; `75215937f` the note; `bdce0dc8e` a family-neutral seal producer — a
+  General descriptor seals through the real Trading ELF at 220,497 CU; observed widths 128/1,288/368 with one author (the
+  fixture had been transcribed four times); tools/cohort15 as a four-row delta). Dealer 31/0 ×3 with 129,597 worst headroom.
+  Owed: **the General-hot suite is RED at 0x4003 Content inside Trading's commit phase, not the seed** (blocks the two-slot
+  proof and on-chain General); frame rows (ratchet red); the ShadowAot × trusted-environment selection refusal.
+  → GENERAL **`(spawned)`**.
+- Cuts: `ca0bd6366`.

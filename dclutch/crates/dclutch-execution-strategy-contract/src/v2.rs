@@ -2311,29 +2311,37 @@ impl<'a> AdmittedAcceleratorRequestV2<'a> {
             .ok_or(Error::ArithmeticOverflow)
     }
 
-    /// Bytes of this request that the caller-authority digest is taken over.
+    /// Bytes of this request that the ACKNOWLEDGEMENT digest is taken over.
     ///
-    /// # Why the witness sits OUTSIDE the digest, and what still binds it
+    /// # It is not the caller-authority seed, and the name used to say it was
     ///
-    /// `CallerAuthoritySeedsV1`'s last seed is the digest of the request, and a
-    /// caller-authority PDA is an ACCOUNT that has to be in the frame before
-    /// the transaction executes -- so its address is derived off-chain, by a
-    /// producer that reproduces these bytes exactly. The witness is composed
-    /// ON-CHAIN out of values only the executing program has, so a witness
-    /// inside the digest would be an address no off-chain producer could
-    /// derive. `dclutch-custody-sbf`'s `split_caller_authority_bump_v1` met the
-    /// same fixed point and resolved it the same way: the digest covers the
-    /// request, and a section after it rides outside.
+    /// This was `signed_prefix_len`, because `CallerAuthoritySeedsV1`'s last
+    /// seed was `hash` of exactly these bytes. It no longer is: the seed is
+    /// `admitted_caller_authority_digest_v1(family request digest, chunk
+    /// index)`, because a request carries the register bank and a window-gated
+    /// bank carries `Clock::get().slot`, so an address seeded off it was
+    /// unsignable. Nothing signs this prefix now, and a name saying otherwise
+    /// is how the next reader concludes the address moves with the request.
     ///
-    /// What binds the witness is therefore not this digest but the request's
-    /// own `invocation_context` field, which IS inside it: a reader requires
-    /// `admitted_invocation_context_digest_v3(witness.context())` to equal that
-    /// field, so the whole 756-byte preimage is committed by a value the caller
-    /// signed for. The witness's representative bank is committed one level
+    /// What it still is: the exact bytes an accelerator acknowledgement names
+    /// as the request it answered, computed identically on both sides. That is
+    /// what stops a reply to one request being accepted for another.
+    ///
+    /// # Why the witness sits OUTSIDE it, and what still binds the witness
+    ///
+    /// The witness is composed ON-CHAIN out of values only the executing
+    /// program has. It stayed outside the digest originally because an
+    /// off-chain producer had to reproduce the digest to name a PDA; it stays
+    /// outside now because both sides must agree on the acknowledged bytes
+    /// without either re-encoding a section the other appended. What binds it
+    /// is the request's own `invocation_context` field, which IS inside this
+    /// prefix: a reader requires `admitted_invocation_context_digest_v3(
+    /// witness.context())` to equal that field, so the whole 756-byte preimage
+    /// is committed. The witness's representative bank is committed one level
     /// further in, by the context's `runtime_observations_digest`. Its span
     /// bank is committed by neither, and the reader that consumes it owes a
     /// refusal rather than a belief.
-    pub fn signed_prefix_len(self) -> Result<usize> {
+    pub fn acknowledged_prefix_len(self) -> Result<usize> {
         let header = match self {
             Self::ChunkedBankV2(_) => ACCELERATOR_REQUEST_HEADER_BYTES_V2,
             Self::OutputPageV3(_) => ACCELERATOR_OUTPUT_PAGE_REQUEST_HEADER_BYTES_V3,

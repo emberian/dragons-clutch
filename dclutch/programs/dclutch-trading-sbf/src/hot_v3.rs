@@ -127,9 +127,10 @@ use dclutch_execution_strategy_contract::{
         admitted_invocation_context_digest_v3, admitted_prelude_witness_bytes_v1,
     },
     shadow_digest_v3::{
-        BorrowedRuntimeObservationV3, ShadowEffectProjectionV3, ShadowInvocationContextV3,
-        ShadowReceiptDependencyV3, ShadowResolvedRouteV3, ShadowRouteKindV3, ShadowRouteRoleV3,
-        ShadowRuntimeObservationV3, borrowed_runtime_observations_digest_in_v3,
+        AcceleratorCallerKindV1, BorrowedRuntimeObservationV3, ShadowEffectProjectionV3,
+        ShadowInvocationContextV3, ShadowReceiptDependencyV3, ShadowResolvedRouteV3,
+        ShadowRouteKindV3, ShadowRouteRoleV3, ShadowRuntimeObservationV3,
+        accelerator_caller_authority_digest_v1, borrowed_runtime_observations_digest_in_v3,
         candidate_digest_v3, effect_digest_v3, family_request_digest_v3,
         invocation_context_digest_v3, receipt_dependencies_digest_v4,
         runtime_observations_digest_v3, runtime_observations_scratch_bytes_v3,
@@ -807,7 +808,7 @@ pub(crate) struct AuthenticatedAcceleratorCallerV4 {
     release_set: [u8; 32],
     market: [u8; 32],
     root: [u8; 32],
-    request_digest: [u8; 32],
+    role_request_digest: [u8; 32],
     artifact_release: [u8; 32],
     accelerator_program: [u8; 32],
     accelerator_programdata: [u8; 32],
@@ -829,7 +830,7 @@ impl AuthenticatedAcceleratorCallerV4 {
         self.release_set == release_set
             && self.market == market
             && self.root == root
-            && self.request_digest != [0; 32]
+            && self.role_request_digest != [0; 32]
     }
 
     /// Rejoin the token to one immutable finalized release and live deployment.
@@ -1059,17 +1060,14 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         caller_authority,
         envelope,
         frame.root.key,
-        // The signed prefix, not the whole instruction: the prelude witness
-        // rides after the request and is bound by the request's own
-        // `invocation_context` field instead. See
-        // `AdmittedAcceleratorRequestV2::signed_prefix_len`.
-        request_bytes
-            .get(
-                ..request
-                    .signed_prefix_len()
-                    .map_err(|_| TradingSbfError::AcceleratorFrame)?,
-            )
-            .ok_or(TradingSbfError::AcceleratorFrame)?,
+        // The digest of the SIGNED top-level family request, taken here from
+        // the bytes the instructions sysvar just proved are the top-level
+        // instruction's -- not from the request's `invocation_context`, which
+        // is the caller's statement of it. The two are required equal later,
+        // by `require_admitted_bank_matches_frame_v3`; this conjunct must not
+        // rest on the value it is meant to check.
+        family_request_digest_v3(family_request).map_err(|_| TradingSbfError::AcceleratorFrame)?,
+        request.caller_authority_index(),
         artifact_release_digest,
         accelerator_program,
         accelerator_program_evidence,
@@ -1143,7 +1141,14 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     //
     // Every value in that chain is something TRADING COMPUTED, in the same
     // instruction, before it built this CPI, and the caller-authority PDA
-    // authenticated forty lines above already pins `hash(request_bytes)`. So
+    // authenticated forty lines above proves the composing program is the
+    // Trading at this release set, market and root, executing the family
+    // request the top level signed -- a program-derived address has no private
+    // key, so only that program could have signed it. What it does NOT pin, as
+    // of 2026-09-03, is `hash(request_bytes)`: the request carries the register
+    // bank and a window-gated bank carries the slot, so an address seeded off
+    // it was unsignable. The request bytes are therefore admitted because
+    // Trading composed them, not because an off-chain caller restated them. So
     // the request is a channel that costs nothing to widen, and the repair is a
     // MOVE: `admitted_composition_v3` writes the complete
     // `AdmittedInvocationContextV3` preimage and the two AccountProfile-derived
@@ -1405,9 +1410,12 @@ fn decode_accelerator_prelude_context_v4(
 ///
 /// The context digest is compared LAST-BUT-FIRST on purpose: it is checked at
 /// the top so a witness whose preimage does not reproduce the digest the
-/// request header carries -- and the header is inside `hash(request_bytes)`,
-/// which the caller signed -- is refused before any field of it is read as if
-/// it meant something.
+/// request header carries is refused before any field of it is read as if it
+/// meant something. The header itself is admitted because the caller authority
+/// at account 0 is a PDA of the composing Trading program and signed this CPI,
+/// not because an off-chain producer restated the request bytes: since
+/// 2026-09-03 the authority's seed is the SIGNED FAMILY REQUEST and the chunk
+/// ordinal, so that the address does not move with the executing slot.
 #[inline(never)]
 fn authenticate_accelerator_witness_v4(
     join: AcceleratorWitnessJoinV4<'_, '_, '_>,
@@ -2251,26 +2259,40 @@ fn accelerator_runtime_observations_digest_v4(
         .map_err(|_| TradingSbfError::AcceleratorRuntimeView.into())
 }
 
+/// Re-derive the caller-authority address the composing Trading signed with.
+///
+/// THE SEED IS THE SIGNED FAMILY REQUEST, NOT THE ACCELERATOR REQUEST. It was
+/// the latter until 2026-09-03, and an accelerator request carries the register
+/// bank, which for a window-gated action carries `Clock::get().slot`; a PDA
+/// whose address moves every slot cannot be named in an account list fixed at
+/// signing time. `admitted_caller_authority_digest_v1` is the one author for
+/// what replaced it, and this side and `admitted_composition_v3`'s side both
+/// read it rather than each spelling a preimage.
 fn authenticate_accelerator_caller_authority_v4(
     trading_program: &Pubkey,
     caller_authority: &AccountInfo<'_>,
     envelope: HotExecutionEnvelopeV3,
     root: &Pubkey,
-    request_bytes: &[u8],
+    parent_request_digest: ContentId,
+    chunk_index: u32,
     artifact_release: [u8; 32],
     expected_accelerator_program: &Pubkey,
     accelerator_program: &AccountInfo<'_>,
     accelerator_programdata: &AccountInfo<'_>,
     programdata_metadata: ProgramDataMetadataV3View,
 ) -> Result<AuthenticatedAcceleratorCallerV4, ProgramError> {
-    let request_digest =
-        ContentId::new(hash(request_bytes).to_bytes()).map_err(|_| TradingSbfError::Release)?;
+    let role_request_digest = accelerator_caller_authority_digest_v1(
+        AcceleratorCallerKindV1::Admitted,
+        parent_request_digest,
+        chunk_index,
+    )
+    .map_err(|_| TradingSbfError::Release)?;
     let seeds = CallerAuthoritySeedsV1::new(
         ContentId::new(envelope.release_set()).map_err(|_| TradingSbfError::Release)?,
         envelope.market(),
         ExecutionRoleV1::Trading,
         root.to_bytes(),
-        request_digest.to_bytes(),
+        role_request_digest.to_bytes(),
     )
     .map_err(|_| TradingSbfError::Release)?;
     let expected = Pubkey::find_program_address(&seeds.as_slices(), trading_program).0;
@@ -2286,7 +2308,7 @@ fn authenticate_accelerator_caller_authority_v4(
             release_set: envelope.release_set(),
             market: envelope.market(),
             root: root.to_bytes(),
-            request_digest: request_digest.to_bytes(),
+            role_request_digest: role_request_digest.to_bytes(),
             artifact_release,
             accelerator_program: accelerator_program.key.to_bytes(),
             accelerator_programdata: accelerator_programdata.key.to_bytes(),
@@ -7221,9 +7243,10 @@ fn execute_admitted_candidate_v3(
     // just derived -- the complete invocation-context preimage and the
     // representative coordinates -- is a value the callee's
     // own prelude would otherwise re-derive from twelve accounts, and the
-    // caller-authority PDA that authorizes the CPI already pins
-    // `hash(request_bytes)`. So the request is a channel that costs nothing to
-    // widen, and widening it is a MOVE rather than a deletion: the callee still
+    // caller-authority PDA that authorizes the CPI proves the composer is this
+    // Trading program executing this signed family request. So the request is a
+    // channel that costs nothing to widen, and widening it is a MOVE rather
+    // than a deletion: the callee still
     // re-derives every field it holds an independent source for and refuses on
     // the first disagreement. See `authenticate_accelerator_invocation_v4`.
     let mut witness = vec![0_u8; admitted_prelude_witness_bytes_v1(view.representatives.len())];
@@ -15480,16 +15503,26 @@ mod tests {
             [0x32; 32],
         )
         .expect("envelope");
-        let request_digest =
-            ContentId::new(hash(request).to_bytes()).expect("nonzero request digest");
-        let caller_seeds = CallerAuthoritySeedsV1::new(
-            ContentId::new(release_set).expect("release set"),
-            market.to_bytes(),
-            ExecutionRoleV1::Trading,
-            root.to_bytes(),
-            request_digest.to_bytes(),
-        )
-        .expect("caller seeds");
+        let family_request = b"the exact DCLTHOT3 family request the caller signed";
+        let parent_request_digest =
+            family_request_digest_v3(family_request).expect("family request digest");
+        let seeds_for = |parent: ContentId, chunk: u32, market: Pubkey, release: [u8; 32]| {
+            CallerAuthoritySeedsV1::new(
+                ContentId::new(release).expect("release set"),
+                market.to_bytes(),
+                ExecutionRoleV1::Trading,
+                root.to_bytes(),
+                accelerator_caller_authority_digest_v1(
+                    AcceleratorCallerKindV1::Admitted,
+                    parent,
+                    chunk,
+                )
+                .expect("role request digest")
+                .to_bytes(),
+            )
+            .expect("caller seeds")
+        };
+        let caller_seeds = seeds_for(parent_request_digest, 0, market, release_set);
         let caller_key =
             Pubkey::find_program_address(&caller_seeds.as_slices(), &trading_program).0;
         let mut caller = readonly_info(caller_key);
@@ -15529,7 +15562,8 @@ mod tests {
             &caller,
             envelope,
             &root,
-            request,
+            parent_request_digest,
+            0,
             artifact_release_digest,
             &accelerator_program,
             &program,
@@ -15553,7 +15587,44 @@ mod tests {
                 &nonsigner,
                 envelope,
                 &root,
-                request,
+                parent_request_digest,
+                0,
+                artifact_release_digest,
+                &accelerator_program,
+                &program,
+                &programdata,
+                metadata,
+            ),
+            Err(TradingSbfError::Release.into())
+        );
+        // A DIFFERENT SIGNED FAMILY REQUEST, which is the binding that
+        // survived the seed change and the only content binding left.
+        assert_eq!(
+            authenticate_accelerator_caller_authority_v4(
+                &trading_program,
+                &caller,
+                envelope,
+                &root,
+                family_request_digest_v3(b"a different family request").expect("other family"),
+                0,
+                artifact_release_digest,
+                &accelerator_program,
+                &program,
+                &programdata,
+                metadata,
+            ),
+            Err(TradingSbfError::Release.into())
+        );
+        // ANOTHER CHUNK OF THE SAME EXECUTION. The ordinal is what separates
+        // the span, and an authority admitted for chunk 0 must not sign for 1.
+        assert_eq!(
+            authenticate_accelerator_caller_authority_v4(
+                &trading_program,
+                &caller,
+                envelope,
+                &root,
+                parent_request_digest,
+                1,
                 artifact_release_digest,
                 &accelerator_program,
                 &program,
@@ -15568,22 +15639,8 @@ mod tests {
                 &caller,
                 envelope,
                 &root,
-                b"substituted request",
-                artifact_release_digest,
-                &accelerator_program,
-                &program,
-                &programdata,
-                metadata,
-            ),
-            Err(TradingSbfError::Release.into())
-        );
-        assert_eq!(
-            authenticate_accelerator_caller_authority_v4(
-                &trading_program,
-                &caller,
-                envelope,
-                &root,
-                request,
+                parent_request_digest,
+                0,
                 artifact_release_digest,
                 &Pubkey::new_unique(),
                 &program,
@@ -15592,6 +15649,67 @@ mod tests {
             ),
             Err(TradingSbfError::Release.into())
         );
+        // THE OLD SLOT-BOUND DERIVATION REFUSES BY NAME. `sha256(accelerator
+        // request)` was the seed until 2026-09-03, and a producer that still
+        // computes it -- or a stale off-chain builder -- states an account this
+        // conjunct must reject rather than silently admit. `request` here is
+        // that request's bytes; the address it yields is not this one.
+        let stale_seeds = CallerAuthoritySeedsV1::new(
+            ContentId::new(release_set).expect("release set"),
+            market.to_bytes(),
+            ExecutionRoleV1::Trading,
+            root.to_bytes(),
+            hash(request).to_bytes(),
+        )
+        .expect("stale seeds");
+        let mut stale = readonly_info(
+            Pubkey::find_program_address(&stale_seeds.as_slices(), &trading_program).0,
+        );
+        stale.is_signer = true;
+        assert_ne!(stale.key, caller.key);
+        assert_eq!(
+            authenticate_accelerator_caller_authority_v4(
+                &trading_program,
+                &stale,
+                envelope,
+                &root,
+                parent_request_digest,
+                0,
+                artifact_release_digest,
+                &accelerator_program,
+                &program,
+                &programdata,
+                metadata,
+            ),
+            Err(TradingSbfError::Release.into())
+        );
+        // ANOTHER MARKET AND ANOTHER RELEASE SET, each alone.
+        for hostile_seeds in [
+            seeds_for(parent_request_digest, 0, Pubkey::new_unique(), release_set),
+            seeds_for(parent_request_digest, 0, market, [0x71; 32]),
+        ] {
+            let mut hostile = readonly_info(
+                Pubkey::find_program_address(&hostile_seeds.as_slices(), &trading_program).0,
+            );
+            hostile.is_signer = true;
+            assert_ne!(hostile.key, caller.key);
+            assert_eq!(
+                authenticate_accelerator_caller_authority_v4(
+                    &trading_program,
+                    &hostile,
+                    envelope,
+                    &root,
+                    parent_request_digest,
+                    0,
+                    artifact_release_digest,
+                    &accelerator_program,
+                    &program,
+                    &programdata,
+                    metadata,
+                ),
+                Err(TradingSbfError::Release.into())
+            );
+        }
 
         for hostile in [
             AuthenticatedAcceleratorCallerV4 {
@@ -15636,7 +15754,7 @@ mod tests {
                 ..token
             },
             AuthenticatedAcceleratorCallerV4 {
-                request_digest: [0; 32],
+                role_request_digest: [0; 32],
                 ..token
             },
         ] {

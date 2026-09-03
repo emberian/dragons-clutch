@@ -3,14 +3,18 @@
 //! The eight strategy extras are not fixture choices. Their record addresses
 //! come from the Registry schemas and their content joins through the selected
 //! descriptor, strategy, certificate, admission and artifact release. Caller
-//! authorities similarly come from the exact accelerator request bytes, one
-//! per accelerator invocation -- which is one per candidate-bank chunk under
-//! the chunked transport, and exactly one under the output-page transport.
+//! authorities come from the SIGNED family request and the chunk ordinal --
+//! one per accelerator invocation, which is one per candidate-bank chunk under
+//! the chunked transport and exactly one under the output-page transport. They
+//! came from the accelerator request bytes until 2026-09-03; those bytes carry
+//! the register bank, a window-gated bank carries `Clock::get().slot`, and an
+//! address that moves every slot cannot be named in a signed account list.
 
 use dclutch_capability_program_contract::v4::CapabilityProgramV4;
 use dclutch_core_contract::ContentId;
 use dclutch_execution_strategy_contract::{
     encode_register_bank_into,
+    shadow_digest_v3::{AcceleratorCallerKindV1, accelerator_caller_authority_digest_v1},
     v2::{
         AcceleratorOutputPageRequestV3, AcceleratorRequestV2, AcceleratorTransportProfileV2,
         AdmittedAcceleratorRequestV2, AuthenticatedInterpreterArtifactsV2, BankTransportV2,
@@ -88,6 +92,13 @@ pub struct AdmittedAuthorityInputV1<'a> {
     pub capability_program: ContentId,
     /// Complete authenticated invocation-context digest.
     pub invocation_context: ContentId,
+    /// `family_request_digest_v3` of the exact signed top-level family request.
+    ///
+    /// THE CALLER-AUTHORITY SEED, and it is a separate field from
+    /// `invocation_context` on purpose even though the context commits to it:
+    /// the host has to STATE this address in an account list it signs, so it
+    /// must have the preimage, not a digest that contains it.
+    pub family_request_digest: ContentId,
     /// Artifact-derived input transport. Output transport is independent of it.
     pub transport: RequestTransportV2,
     /// Strategy-selected output transport.
@@ -109,8 +120,15 @@ pub struct DerivedAdmittedAuthorityV1 {
     pub chunk_index: u32,
     /// Exact encoded accelerator request bytes.
     pub request: Vec<u8>,
-    /// SHA-256 of `request`.
+    /// SHA-256 of `request`: the digest the accelerator's acknowledgement names.
+    ///
+    /// NOT the caller-authority seed. It was until 2026-09-03, and that is why
+    /// General could not be delivered on a real chain: the request carries the
+    /// register bank, a window-gated bank carries `Clock::get().slot`, and an
+    /// account list is fixed when it is signed.
     pub request_digest: [u8; 32],
+    /// Last seed of `authority`: `admitted_caller_authority_digest_v1`.
+    pub role_request_digest: [u8; 32],
     /// Release-pinned Trading caller authority.
     pub authority: Pubkey,
 }
@@ -308,18 +326,29 @@ pub fn derive_admitted_authorities_v1(
             .encode_into(&mut request_bytes)
             .map_err(|_| BuilderError::Artifact)?;
         let request_digest = hash(&request_bytes).to_bytes();
+        // THE HOST DERIVES WHAT THE PROGRAM DERIVES, from the program's own
+        // author. Seeding this with `request_digest` is what made every
+        // window-gated General action undeliverable, and a host that spelled
+        // the preimage itself would be free to reacquire that defect quietly.
+        let role_request_digest = accelerator_caller_authority_digest_v1(
+            AcceleratorCallerKindV1::Admitted,
+            input.family_request_digest,
+            chunk_index,
+        )
+        .map_err(|_| BuilderError::Artifact)?;
         let seeds = CallerAuthoritySeedsV1::new(
             input.release_set,
             input.market.to_bytes(),
             ExecutionRoleV1::Trading,
             input.root.to_bytes(),
-            request_digest,
+            role_request_digest.to_bytes(),
         )
         .map_err(|_| BuilderError::Artifact)?;
         entries.push(DerivedAdmittedAuthorityV1 {
             chunk_index,
             request: request_bytes,
             request_digest,
+            role_request_digest: role_request_digest.to_bytes(),
             authority: Pubkey::find_program_address(&seeds.as_slices(), &input.trading_program).0,
         });
         chunk_index = chunk_index.checked_add(1).ok_or(BuilderError::Arithmetic)?;
@@ -745,6 +774,7 @@ mod tests {
             certificate_program: id(0x56),
             capability_program: id(0x57),
             invocation_context: id(0x58),
+            family_request_digest: id(0x5a),
             transport: RequestTransportV2::ScratchPages,
             profile: AcceleratorTransportProfileV2::ChunkedBankV2,
             accelerator_program: Pubkey::new_from_array([0x59; 32]),
@@ -780,6 +810,105 @@ mod tests {
         assert!(validate_admitted_authority_keys_v1(&derived, &substituted).is_err());
     }
 
+    /// The authority does not move when the register bank does, and the bank
+    /// is where `scalar::CURRENT_SLOT` lives.
+    ///
+    /// This is the wall stated at the width a host can measure without a
+    /// validator: two derivations of the same signed family request whose
+    /// banks differ -- which is what two executions of one window-gated action
+    /// at two different slots look like from here -- must name the SAME
+    /// accounts. The request digests differing is the positive control: an
+    /// instrument that produced identical banks would pass this vacuously.
+    #[test]
+    fn one_family_request_names_one_authority_set_at_every_register_bank() {
+        let identities = vec![[8_u8; 32]; 45];
+        let family_request_digest = id(0x5a);
+        let derive = |slot: u64| {
+            let mut scalars = vec![7_u64; 151];
+            // `scalar::CURRENT_SLOT` = 90 in General's 151-scalar bank. The
+            // coordinate is spelled here rather than imported because this
+            // crate must not take a General dependency to state a fact about
+            // every admitted family; what matters is that ONE scalar moves.
+            scalars[90] = slot;
+            derive_admitted_authorities_v1(AdmittedAuthorityInputV1 {
+                trading_program: Pubkey::new_from_array([0x51; 32]),
+                release_set: id(0x52),
+                market: Pubkey::new_from_array([0x53; 32]),
+                root: Pubkey::new_from_array([0x54; 32]),
+                strategy_program: id(0x55),
+                certificate_program: id(0x56),
+                capability_program: id(0x57),
+                invocation_context: id(0x58),
+                family_request_digest,
+                transport: RequestTransportV2::Inline,
+                profile: AcceleratorTransportProfileV2::ChunkedBankV2,
+                accelerator_program: Pubkey::new_from_array([0x59; 32]),
+                tail_count: 258,
+                scalars: &scalars,
+                identities: &identities,
+            })
+            .expect("authorities")
+        };
+        let early = derive(492_454_423);
+        let late = derive(492_454_512);
+        assert!(early.entries.len() > 1, "the chunked span is the hard case");
+        assert_eq!(
+            early
+                .entries
+                .iter()
+                .map(|entry| entry.authority)
+                .collect::<Vec<_>>(),
+            late.entries
+                .iter()
+                .map(|entry| entry.authority)
+                .collect::<Vec<_>>(),
+            "an account list signed at one slot must be deliverable at another"
+        );
+        for (early_entry, late_entry) in early.entries.iter().zip(late.entries.iter()) {
+            assert_ne!(
+                early_entry.request_digest, late_entry.request_digest,
+                "the two banks must actually differ, or this proves nothing"
+            );
+            assert_eq!(
+                early_entry.role_request_digest,
+                late_entry.role_request_digest
+            );
+        }
+        // And the separation the chunk ordinal is there for.
+        let mut distinct = early
+            .entries
+            .iter()
+            .map(|entry| entry.role_request_digest)
+            .collect::<Vec<_>>();
+        distinct.sort_unstable();
+        distinct.dedup();
+        assert_eq!(distinct.len(), early.entries.len());
+        // A different signed family request names different accounts, which is
+        // the binding that survived the change.
+        let other = derive_admitted_authorities_v1(AdmittedAuthorityInputV1 {
+            trading_program: Pubkey::new_from_array([0x51; 32]),
+            release_set: id(0x52),
+            market: Pubkey::new_from_array([0x53; 32]),
+            root: Pubkey::new_from_array([0x54; 32]),
+            strategy_program: id(0x55),
+            certificate_program: id(0x56),
+            capability_program: id(0x57),
+            invocation_context: id(0x58),
+            family_request_digest: id(0x5b),
+            transport: RequestTransportV2::Inline,
+            profile: AcceleratorTransportProfileV2::ChunkedBankV2,
+            accelerator_program: Pubkey::new_from_array([0x59; 32]),
+            tail_count: 258,
+            scalars: &vec![7_u64; 151],
+            identities: &identities,
+        })
+        .expect("other family request");
+        assert_ne!(
+            other.entries.first().expect("entry").authority,
+            early.entries.first().expect("entry").authority
+        );
+    }
+
     /// The same bank, the same widths, the other transport: one authority, one
     /// page, and a request that carries no chunk coordinate to be wrong about.
     #[test]
@@ -797,6 +926,7 @@ mod tests {
             certificate_program: id(0x56),
             capability_program: id(0x57),
             invocation_context: id(0x58),
+            family_request_digest: id(0x5a),
             transport: RequestTransportV2::ScratchPages,
             profile: AcceleratorTransportProfileV2::OutputPageV3,
             accelerator_program,

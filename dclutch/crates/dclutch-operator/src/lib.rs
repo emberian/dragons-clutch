@@ -22,6 +22,9 @@ pub mod capability_program_set_v2;
 /// What a holder needs to find and redeem a claim-check.
 pub mod claim_check_v1;
 
+/// Canonical logical-to-physical routing and finalized poststate planning for Direct V3.
+/// The family-neutral producer for Trading's permissionless validated-artifact seal.
+pub mod capability_seal_v1;
 /// Conservative complete-set split and merge planning.
 pub mod claims_conservation_v1;
 /// Chain-derived unsigned Dealer junior-equity Hot execution construction.
@@ -42,7 +45,6 @@ pub mod delegated_custody;
 pub mod direct_begin_retiring_v1;
 /// Chain-derived unsigned Direct maker-replay close construction.
 pub mod direct_close_maker_v1;
-/// Canonical logical-to-physical routing and finalized poststate planning for Direct V3.
 pub mod direct_inline_route_v3;
 /// Chain-derived action-selected Direct V3 inline execution construction.
 pub mod direct_inline_v3;

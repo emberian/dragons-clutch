@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 dclutch-capability-contract = { path = "../../../../crates/dclutch-capability-contract" }
 dclutch-capability-program-contract = { path = "../../../../crates/dclutch-capability-program-contract" }
+dclutch-capability-seal-contract = { path = "../../../../crates/dclutch-capability-seal-contract" }
 dclutch-chain-bundle-builder = { path = "../bundle-builder" }
 dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
 dclutch-direct-codec = { path = "../../../../crates/dclutch-direct-codec" }

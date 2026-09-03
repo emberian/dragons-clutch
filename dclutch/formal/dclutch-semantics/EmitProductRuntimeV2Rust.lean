@@ -32,3 +32,4 @@ def main : IO Unit := do
   IO.println (line "PORTFOLIO_DENOMINATOR_OFFSET" portfolioDenominatorOffset)
   IO.println (line "PORTFOLIO_COEFFICIENT_BYTES" portfolioCoefficientBytes)
   IO.println "pub const REPRESENTATION_FLOOR_TAG: u8 = 1;"
+  IO.println s!"pub const MAX_SOURCE_SCALE_EXPONENT: i32 = {maxScaleExponent};"

@@ -32,6 +32,12 @@ def portfolioDenominatorOffset : Nat := 192
 def portfolioCoefficientBytes : Nat := 8
 def representationFloorTag : Nat := 1
 
+/-- Re-exported, not restated: the physical release must not be able to admit a
+shift the semantics refuse. -/
+def maxScaleExponent : Nat := DClutch.ProductRuntimeV2.maxScaleExponent
+
+example : maxScaleExponent = 18 := by decide
+
 def domainRecordBytes (cutCount : Nat) : Nat :=
   domainHeaderBytes + cutCount * domainCutBytes
 

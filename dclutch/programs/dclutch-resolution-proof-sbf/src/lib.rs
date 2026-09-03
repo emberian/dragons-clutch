@@ -192,6 +192,16 @@ pub enum ResolutionError {
     /// question: it is how a frame learns WHICH Registry to believe, so a
     /// failure here means the frame never got as far as a release set.
     InfrastructureProfile = 0x801B,
+    /// This market's own StatisticSpec and adapter configuration disagree
+    /// about the source-to-result decimal scale.
+    ///
+    /// Reached only after the publication itself was admitted, so it is never
+    /// a complaint about the provider: the feed published exactly what this
+    /// market pinned and the market's two records still do not agree about
+    /// what the number means. No publication can satisfy such a market, which
+    /// is why it is not `ProviderConfiguration` -- an operator seeing this
+    /// should stop resubmitting and read the founding.
+    ProviderScale = 0x801C,
 }
 
 impl ResolutionError {
@@ -201,7 +211,7 @@ impl ResolutionError {
     /// [`ResolutionError::ordinal`], whose match is exhaustive: a variant added to the
     /// enum does not compile until its author writes an arm here, and the only
     /// arm that satisfies the assertions is its own index in this array.
-    pub const ALL: [Self; 28] = [
+    pub const ALL: [Self; 29] = [
         Self::AccountFrame,
         Self::Instruction,
         Self::OutputState,
@@ -230,6 +240,7 @@ impl ResolutionError {
         Self::ActivatedRole,
         Self::CallerAuthority,
         Self::InfrastructureProfile,
+        Self::ProviderScale,
     ];
 
     /// This refusal's position in [`ResolutionError::ALL`].
@@ -267,6 +278,7 @@ impl ResolutionError {
             Self::ActivatedRole => 25,
             Self::CallerAuthority => 26,
             Self::InfrastructureProfile => 27,
+            Self::ProviderScale => 28,
         }
     }
 }

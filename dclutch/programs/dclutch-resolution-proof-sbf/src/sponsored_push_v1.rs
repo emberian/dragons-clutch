@@ -1235,6 +1235,7 @@ fn boxed_settlement_decision(
                 .map_err(|_| ResolutionError::ProviderObservation)?,
             normalized,
             1,
+            records.statistic.source_scale_exponent(),
             request.generation,
             clock.unix_timestamp,
             request.terminal_sequence,

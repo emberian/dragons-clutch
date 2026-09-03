@@ -435,9 +435,15 @@ pub(crate) fn relayed_market_input(
     let window_digest = record_identity(&window_bytes);
 
     // 7. StatisticSpecV1, TerminalSample, ExactRational.
+    // One unit identity on both sides: this family's observations are already
+    // counted in the unit its cuts are authored in, so it declares no
+    // conversion and the only admissible factor is the identity. The record
+    // now says so with a number rather than by the reader inferring it, and
+    // `StatisticSpecV1::validate_scale` refuses any other value here.
     let statistic = StatisticSpecV1::new(
         source_content(result_unit)?,
         source_content(result_unit)?,
+        0,
         StatisticKind::TerminalSample,
         RoundingBoundary::ExactRational,
         1,

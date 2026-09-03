@@ -726,6 +726,7 @@ fn fixture() -> Fixture {
     let statistic = StatisticSpecV1::new(
         source_id(unit_id),
         source_id(unit_id),
+        0,
         StatisticKind::TerminalSample,
         RoundingBoundary::ExactRational,
         1,

@@ -134,6 +134,8 @@ pub(crate) fn demo_general_market_input(
         outcome_count,
         price_scale,
         generation,
+        linked_basis_prefix,
+        result_domain,
     } = derived;
     let lab = |label: &str| -> [u8; 32] {
         let mut hasher = Sha256::new();
@@ -162,23 +164,18 @@ pub(crate) fn demo_general_market_input(
                 continuation_reward_lamports: 1,
             },
             outcome_count,
-            // The widths the accelerator campaign really executed against at this
-            // exact outcome width. Reconciling them against the live local
-            // deployment is the General-hot follow-up; founding does not read them.
+            // THE PROTOCOL'S OWN WIDTHS, from its own author. This block used
+            // to be eleven literals under a comment claiming they were "the
+            // widths the accelerator campaign really executed against"; they
+            // were the unit-test fixture in `account_rules_v3.rs`, and three of
+            // them are wrong against anything the protocol produces. Founding
+            // does not read them, which is exactly why a wrong one has no
+            // symptom until an action's account list cannot be filled.
             external_widths:
-                dclutch_general_adapter_contract::account_rules_v3::GeneralExternalAccountWidthsV3 {
-                    linked_basis_prefix: 256,
-                    result_domain: 192,
-                    rent_sysvar: 17,
-                    core_market: 320,
-                    activation_cache: 160,
-                    upgradeable_program: 36,
-                    trading_programdata_prefix: 45,
-                    claims_programdata_prefix: 45,
-                    core_programdata_prefix: 45,
-                    realm_record: 112,
-                    rent_credit: 48,
-                },
+                dclutch_operator::general_selected_release_v1::general_external_account_widths_v3(
+                    linked_basis_prefix,
+                    result_domain,
+                ),
             token_account_bytes: 165,
             deployment: GeneralDeploymentFactsV1 {
                 accelerator_artifact_release: lab("accelerator-artifact-release"),
@@ -213,6 +210,17 @@ pub(crate) struct GeneralMarketDerivationV1 {
     pub(crate) outcome_count: u32,
     pub(crate) price_scale: u64,
     pub(crate) generation: u64,
+    /// Width of the exact graded liability-basis record this Market links.
+    pub(crate) linked_basis_prefix: u32,
+    /// Width of the exact ResultDomain record this Market's Product compiles.
+    ///
+    /// The two Product-derived external widths are DERIVED here rather than
+    /// stated in a policy file, because both are functions of the run spec this
+    /// same struct already reads: the basis record is carried whole in
+    /// `linked_basis_hex`, and the result-domain record's width is a function
+    /// of the cut count. Everything else Profile13 pins is a protocol constant
+    /// and comes from `general_external_account_widths_v3`.
+    pub(crate) result_domain: u32,
 }
 
 pub(crate) fn general_market_derivation_v1(
@@ -242,6 +250,15 @@ pub(crate) fn general_market_derivation_v1(
             .generation
             .checked_add(1)
             .ok_or_else(|| Error::new("General market generation overflow"))?,
+        linked_basis_prefix: u32::try_from(
+            crate::runtime::decode_hex(&input.linked_basis_hex)?.len(),
+        )
+        .map_err(|_| Error::new("General linked basis record width overflow"))?,
+        result_domain: u32::try_from(
+            dclutch_product_runtime_v2::result_domain_record_bytes(input.cuts.len())
+                .map_err(|error| Error::new(format!("General result-domain width: {error:?}")))?,
+        )
+        .map_err(|_| Error::new("General result-domain record width overflow"))?,
     })
 }
 

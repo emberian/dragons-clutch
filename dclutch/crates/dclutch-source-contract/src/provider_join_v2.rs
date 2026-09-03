@@ -253,9 +253,13 @@ impl PythProviderAdapterObligationV2 {
         if publication_unix_seconds < oldest || publication_unix_seconds > newest {
             return Err(Error::InvalidPublicationTime);
         }
-        let atoms =
-            self.adapter_config
-                .validate_update(provider_feed_id, price, confidence, exponent)?;
+        let atoms = self.adapter_config.validate_update(
+            provider_feed_id,
+            price,
+            confidence,
+            exponent,
+            self.statistic,
+        )?;
         Ok(NormalizedProviderEvidenceV1::new(
             self.source_spec_id,
             self.provider_release_id,
@@ -277,6 +281,16 @@ impl PythProviderAdapterObligationV2 {
     /// Statistic result unit that must equal Product's result unit.
     pub const fn result_unit_id(self) -> ContentId {
         self.statistic.result_unit_id()
+    }
+
+    /// Declared source-to-result decimal shift for this market's observations.
+    ///
+    /// Routes read the factor from here rather than from the adapter config,
+    /// so the number that reaches the selector is the one the market's own
+    /// record declares. The adapter's exponent is a *check* against it inside
+    /// [`Self::normalize_authenticated_update`], never the source of it.
+    pub const fn source_scale_exponent(self) -> i32 {
+        self.statistic.source_scale_exponent()
     }
 
     /// Exact selected provider deployment-release content identity.
@@ -320,6 +334,11 @@ mod tests {
         failure: ContentId,
     }
 
+    fn capacity_profile() -> SourceCapacityProfileV1 {
+        SourceCapacityProfileV1::new(CapacityEnvelope::Measured, 1, 0, id(15), id(16), 208, 0)
+            .expect("capacity")
+    }
+
     fn fixture() -> Fixture {
         let product = id(1);
         let source_id = id(2);
@@ -346,12 +365,16 @@ mod tests {
         // could ever satisfy them.
         let window = WindowSpecV1::new(source_id, WindowKind::Terminal, 100, 400, 10, 2, id(14))
             .expect("terminal window");
-        let capacity =
-            SourceCapacityProfileV1::new(CapacityEnvelope::Measured, 1, 0, id(15), id(16), 208, 0)
-                .expect("capacity");
+        let capacity = capacity_profile();
+        // Two different unit identities, so the statistic declares a
+        // conversion and the only shift the Pyth adapter admits is the feed's
+        // own exponent. This fixture used to declare the conversion and leave
+        // the number at the identity, which is precisely the shape that paid
+        // cohort-14 market B the wrong cell.
         let statistic = StatisticSpecV1::new(
             source.unit_id(),
             id(17),
+            -8,
             StatisticKind::TerminalSample,
             RoundingBoundary::ExactRational,
             1,
@@ -809,5 +832,152 @@ mod tests {
                 Err(Error::InvalidObservationSchedule)
             );
         }
+    }
+
+    /// A statistic whose declared factor is not one this adapter admits is a
+    /// disagreement between the market's own two records, and it refuses by
+    /// its own name rather than as a bad observation.
+    #[test]
+    fn a_mismatched_declared_factor_refuses_by_name() {
+        let base = fixture();
+        let restate = |source_unit: ContentId, result_unit: ContentId, scale: i32| {
+            let mut next = fixture();
+            next.statistic = StatisticSpecV1::new(
+                source_unit,
+                result_unit,
+                scale,
+                StatisticKind::TerminalSample,
+                RoundingBoundary::ExactRational,
+                1,
+                0,
+                next.statistic.capacity_profile_id(),
+                next.statistic.evaluator_release_id(),
+                capacity_profile(),
+            )
+            .expect("statistic constructs");
+            next
+        };
+        let normalize = |fixture: &Fixture| {
+            obligation(fixture)
+                .expect("joined records")
+                .normalize_authenticated_update(id(30), [42; 32], 1_000_000, 5_000, -8, 250, 255)
+                .map(|evidence| evidence.atoms())
+        };
+
+        // The shape the fixture ships and the founding should write: two unit
+        // identities and the feed's own exponent between them.
+        assert_eq!(normalize(&base), Ok(1_000_000));
+
+        // Cohort-14 market B's founding, exactly: a declared conversion with
+        // the number left at the identity. It reached the selector before;
+        // now it never leaves the adapter.
+        assert_eq!(
+            normalize(&restate(base.source.unit_id(), id(17), 0)),
+            Err(Error::SourceScaleMismatch)
+        );
+
+        // A conversion declared at some other decade is equally refused. The
+        // adapter admits exactly one number, not merely a nonzero one.
+        assert_eq!(
+            normalize(&restate(base.source.unit_id(), id(17), -6)),
+            Err(Error::SourceScaleMismatch)
+        );
+
+        // The other convention: one identity on both sides declares no
+        // conversion, so cuts sit on the feed's atom scale and zero is the
+        // only shift admitted -- even though the feed still publishes -8.
+        assert_eq!(
+            normalize(&restate(base.source.unit_id(), base.source.unit_id(), 0)),
+            Ok(1_000_000)
+        );
+
+        // And a record cannot even be built claiming a conversion between one
+        // unit and itself, so that half of the rule is refused before any
+        // adapter is consulted.
+        assert_eq!(
+            StatisticSpecV1::new(
+                id(9),
+                id(9),
+                -8,
+                StatisticKind::TerminalSample,
+                RoundingBoundary::ExactRational,
+                1,
+                0,
+                base.statistic.capacity_profile_id(),
+                base.statistic.evaluator_release_id(),
+                capacity_profile(),
+            ),
+            Err(Error::NonCanonicalSourceScale)
+        );
+
+        // Nor one outside the shift range the emitted Lean bound admits.
+        assert_eq!(
+            StatisticSpecV1::new(
+                id(9),
+                id(17),
+                dclutch_product_runtime_v2::MAX_SOURCE_SCALE_EXPONENT + 1,
+                StatisticKind::TerminalSample,
+                RoundingBoundary::ExactRational,
+                1,
+                0,
+                base.statistic.capacity_profile_id(),
+                base.statistic.evaluator_release_id(),
+                capacity_profile(),
+            ),
+            Err(Error::NonCanonicalSourceScale)
+        );
+    }
+
+    /// The four bytes the factor occupies were reserved and enforced zero, so
+    /// every statistic written before it decodes at the identity and encodes
+    /// back to the same 176 bytes it always had.
+    #[test]
+    fn a_pre_factor_statistic_is_byte_identical_at_the_identity() {
+        let identity = StatisticSpecV1::new(
+            id(9),
+            id(17),
+            0,
+            StatisticKind::TerminalSample,
+            RoundingBoundary::ExactRational,
+            1,
+            0,
+            id(5),
+            id(18),
+            capacity_profile(),
+        )
+        .expect("statistic constructs");
+        let bytes = identity.to_bytes();
+        assert_eq!(bytes[12..16], [0, 0, 0, 0]);
+        assert_eq!(StatisticSpecV1::decode(&bytes), Ok(identity));
+        assert_eq!(identity.source_scale_exponent(), 0);
+
+        let declared = StatisticSpecV1::new(
+            id(9),
+            id(17),
+            -8,
+            StatisticKind::TerminalSample,
+            RoundingBoundary::ExactRational,
+            1,
+            0,
+            id(5),
+            id(18),
+            capacity_profile(),
+        )
+        .expect("statistic constructs");
+        let declared_bytes = declared.to_bytes();
+        assert_eq!(declared_bytes[12..16], (-8_i32).to_le_bytes());
+        assert_eq!(StatisticSpecV1::decode(&declared_bytes), Ok(declared));
+        // Only those four bytes move.
+        assert_eq!(declared_bytes[..12], bytes[..12]);
+        assert_eq!(declared_bytes[16..], bytes[16..]);
+
+        // A persisted shift outside the admitted range refuses on decode, not
+        // only on construction.
+        let mut hostile = bytes;
+        hostile[12..16].copy_from_slice(&i32::MIN.to_le_bytes());
+        assert_eq!(
+            StatisticSpecV1::decode(&hostile),
+            Err(Error::NonCanonicalSourceScale)
+        );
     }
 }

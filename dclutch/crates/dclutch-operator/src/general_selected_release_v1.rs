@@ -127,7 +127,12 @@ use dclutch_general_config_contract::{
     GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_ROOT_BYTES_V2, GENERAL_ROOT_SCHEMA_ID_V2,
     v3::{GENERAL_CONFIG_SCHEMA_ID_V3, GeneralConfigV3, GeneralConfigV3Input},
 };
+use dclutch_market_core_codec::STATE_BYTES as CORE_MARKET_STATE_BYTES;
+use dclutch_realm_contract::REALM_BYTES;
+use dclutch_registry_contract::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
+use dclutch_registry_svm::{LOADER_V3_PROGRAM_BYTES, LOADER_V3_PROGRAMDATA_METADATA_BYTES};
 use dclutch_release_set_contract::{ArtifactReleaseIdV1, ExecutionRoleV1};
+use dclutch_rent_contract::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
 use solana_program::hash::hash;
 
 /// Number of action bundles one selectable General release compiles.
@@ -216,6 +221,67 @@ pub struct GeneralConfigWindowsV1 {
     /// Exact prepaid continuation reward, never collateral or future fees.
     pub continuation_reward_lamports: u64,
 }
+
+/// Exact serialized width of the runtime Rent sysvar.
+///
+/// Eight bytes of `lamports_per_byte_year`, eight of `exemption_threshold` and
+/// one of `burn_percent`. The runtime owns this account and publishes no
+/// first-party constant for its width, so it is named ONCE here rather than
+/// spelled at each of the sites that needs it.
+pub const RENT_SYSVAR_ACCOUNT_BYTES_V1: u32 = 17;
+
+/// The eleven external account widths one General AccountProfile publishes.
+///
+/// # Why this exists, and what it cost not to have it
+///
+/// Nine of the eleven are protocol constants and two are Product-derived. Until
+/// 2026-09-03 the tree had FOUR authors for them: the unit-test fixture in
+/// `account_rules_v3.rs`, the General-hot program-test (which read the
+/// contracts and was right), `general_market.rs` and the devnet policy file --
+/// and the last two were the unit fixture transcribed. Cohort-14's founded
+/// General market `8ExdC1Rwby...` therefore published `Exact(48)` for a
+/// RentCredit the protocol only ever produces at
+/// [`LIFECYCLE_RENT_CREDIT_BYTES_V2`] = 128, so no producible account fit its
+/// own `OpenBatch` frame. Two more were wrong the same way and had not yet been
+/// reached: the activation cache at 160 against 1,288, and the Core Market at
+/// 320 against 368.
+///
+/// A width published in an `Exact` prestate is a REFUSAL if it disagrees with
+/// the account the chain holds, and nothing on the commit path reads most of
+/// these -- so a wrong one has no symptom except that the action cannot be
+/// delivered. That is precisely the shape a transcribed literal produces and a
+/// derivation cannot.
+///
+/// The two arguments are the ones no constant can answer: they are functions of
+/// the Product graph this market is founded on.
+#[must_use]
+pub fn general_external_account_widths_v3(
+    linked_basis_prefix: u32,
+    result_domain: u32,
+) -> GeneralExternalAccountWidthsV3 {
+    GeneralExternalAccountWidthsV3 {
+        linked_basis_prefix,
+        result_domain,
+        rent_sysvar: RENT_SYSVAR_ACCOUNT_BYTES_V1,
+        core_market: CORE_MARKET_STATE_BYTES as u32,
+        activation_cache: ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1 as u32,
+        upgradeable_program: LOADER_V3_PROGRAM_BYTES as u32,
+        trading_programdata_prefix: LOADER_V3_PROGRAMDATA_METADATA_BYTES as u32,
+        claims_programdata_prefix: LOADER_V3_PROGRAMDATA_METADATA_BYTES as u32,
+        core_programdata_prefix: LOADER_V3_PROGRAMDATA_METADATA_BYTES as u32,
+        realm_record: REALM_BYTES as u32,
+        rent_credit: LIFECYCLE_RENT_CREDIT_BYTES_V2 as u32,
+    }
+}
+
+// The nine protocol widths fit `u32` by construction, checked here so the casts
+// above need no runtime arm on a value that cannot move at run time.
+const _: () = assert!(CORE_MARKET_STATE_BYTES <= u32::MAX as usize);
+const _: () = assert!(ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1 <= u32::MAX as usize);
+const _: () = assert!(LOADER_V3_PROGRAM_BYTES <= u32::MAX as usize);
+const _: () = assert!(LOADER_V3_PROGRAMDATA_METADATA_BYTES <= u32::MAX as usize);
+const _: () = assert!(REALM_BYTES <= u32::MAX as usize);
+const _: () = assert!(LIFECYCLE_RENT_CREDIT_BYTES_V2 <= u32::MAX as usize);
 
 /// Complete input for one selectable General release.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

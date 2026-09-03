@@ -46,6 +46,7 @@ use dclutch_execution_strategy_contract::{
         ADMITTED_STRATEGY_EVIDENCE_START_V3, AdmittedInvocationContextV3,
         admitted_invocation_context_digest_v3, admitted_runtime_accounts_start_v3,
     },
+    shadow_digest_v3::{AcceleratorCallerKindV1, accelerator_caller_authority_digest_v1},
     v2::{
         ACCELERATOR_ACK_HEADER_BYTES_V2, ACCELERATOR_OUTPUT_PAGE_ACK_BYTES_V3, AcceleratorAckV2,
         AcceleratorDispositionV2, AcceleratorOutputPageAckV3, AcceleratorOutputPageRequestV3,
@@ -658,6 +659,10 @@ fn invoke_admitted_accelerator_v3<'info>(
     request: AdmittedAcceleratorRequestV2<'_>,
     minimum_ack_bytes: usize,
 ) -> Result<(Vec<u8>, ContentId), ProgramError> {
+    // The ordinal the authority span is indexed by, taken from the request the
+    // callee will decode rather than from the loop that built it -- the two
+    // must agree, and asking the request is how a disagreement refuses here.
+    let chunk_index = request.caller_authority_index();
     let request_len = request
         .encoded_len()
         .map_err(|_| TradingSbfError::AdmittedTransport)?;
@@ -671,27 +676,39 @@ fn invoke_admitted_accelerator_v3<'info>(
         .encode_into(&mut buffers.instruction.data)
         .map_err(|_| TradingSbfError::AdmittedTransport)?;
     // Over the REQUEST, not over the whole instruction: the prelude witness
-    // rides after it and is outside this digest by construction, because the
-    // caller-authority account whose address this seeds is derived off-chain by
-    // a producer that cannot compose it. See
-    // `AdmittedAcceleratorRequestV2::signed_prefix_len`.
+    // rides after it and is outside the ACKNOWLEDGED bytes by construction, so
+    // both sides digest the same prefix without either re-encoding a section
+    // the other appended. See
+    // `AdmittedAcceleratorRequestV2::acknowledged_prefix_len`.
     let request_digest = content(
         buffers
             .instruction
             .data
             .get(
                 ..request
-                    .signed_prefix_len()
+                    .acknowledged_prefix_len()
                     .map_err(|_| TradingSbfError::AdmittedTransport)?,
             )
             .ok_or(TradingSbfError::AdmittedTransport)?,
     )?;
+    // THE AUTHORITY'S ADDRESS IS A FUNCTION OF THE SIGNED INSTRUCTION ALONE.
+    // It used to be seeded by `request_digest` above, and that request carries
+    // the register bank; a window-gated action's bank carries
+    // `Clock::get().slot`, so the address moved every slot and the top-level
+    // account list that has to NAME it is fixed at signing. One author for the
+    // preimage, in the contract both sides read.
     let authority_seeds = CallerAuthoritySeedsV1::new(
         context.release_set,
         context.market.to_bytes(),
         ExecutionRoleV1::Trading,
         context.root.to_bytes(),
-        request_digest.to_bytes(),
+        accelerator_caller_authority_digest_v1(
+            AcceleratorCallerKindV1::Admitted,
+            context.family_request_digest,
+            chunk_index,
+        )
+        .map_err(|_| TradingSbfError::AdmittedContext)?
+        .to_bytes(),
     )
     .map_err(|_| TradingSbfError::AdmittedTransport)?;
     let (expected_authority, bump) =

@@ -13523,9 +13523,18 @@ fn pyth_market_input_base(
     let window_bytes = window.to_bytes();
     let window = record_identity(&window_bytes);
 
+    // The factor, written from the adapter configuration this same function
+    // built from the observed publication. This market's source unit is
+    // `source-unit/pyth-scaled-price` and its result unit is
+    // `result-unit/usd-cents`, so it declares a conversion, and the only
+    // conversion a Pyth-backed statistic may declare is the feed's own decimal
+    // exponent. Until this line the record declared the conversion and left
+    // the number out; cohort-14 market B was founded here, and its selector
+    // compared raw feed atoms against cuts in dollars.
     let statistic = StatisticSpecV1::new(
         source_content(source_unit)?,
         source_content(result_unit)?,
+        adapter_config.expected_exponent(),
         StatisticKind::TerminalSample,
         RoundingBoundary::ExactRational,
         1,

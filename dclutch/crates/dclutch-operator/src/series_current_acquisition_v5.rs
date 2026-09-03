@@ -21,7 +21,10 @@ use dclutch_capability_program_contract::{
 use dclutch_core_contract::ContentId;
 use dclutch_effect_kernel::v5::SCHEMA_RELEASE_ID_V5 as EFFECT_SCHEMA_ID_V5;
 use dclutch_execution_strategy_contract::{
-    shadow_v3::{ShadowArtifactTupleV3, ShadowRequestV3},
+    shadow_digest_v3::{
+        AcceleratorCallerKindV1, accelerator_caller_authority_digest_v1, family_request_digest_v3,
+    },
+    shadow_v3::{SHADOW_CALLER_AUTHORITY_INDEX_V1, ShadowArtifactTupleV3, ShadowRequestV3},
     v2::{
         AuthenticatedInterpreterArtifactsV2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
         EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyCertificateV2,
@@ -815,22 +818,25 @@ fn require_shadow_request(
     {
         return Err(SeriesCurrentAcquisitionErrorV5::Strategy);
     }
-    let mut bytes = vec![
-        0;
-        request
-            .encoded_len()
-            .map_err(|_| SeriesCurrentAcquisitionErrorV5::Strategy)?
-    ];
-    request
-        .encode_into(&mut bytes)
-        .map_err(|_| SeriesCurrentAcquisitionErrorV5::Strategy)?;
-    let digest = hash(&bytes).to_bytes();
+    // THE SIGNED FAMILY REQUEST, not the encoded `ShadowRequestV3`. This host
+    // used to encode the whole request and hash it, which meant it could only
+    // state this address for a request whose register bank it had already
+    // reproduced byte-for-byte -- and for a window-gated profile that bank
+    // carries `Clock::get().slot`, so the address it stated was valid for one
+    // slot. See `accelerator_caller_authority_digest_v1`.
     let seeds = CallerAuthoritySeedsV1::new(
         request.release_set,
         request.market.to_bytes(),
         ExecutionRoleV1::Trading,
         request.root.to_bytes(),
-        digest,
+        accelerator_caller_authority_digest_v1(
+            AcceleratorCallerKindV1::Shadow,
+            family_request_digest_v3(request.family_request)
+                .map_err(|_| SeriesCurrentAcquisitionErrorV5::Strategy)?,
+            SHADOW_CALLER_AUTHORITY_INDEX_V1,
+        )
+        .map_err(|_| SeriesCurrentAcquisitionErrorV5::Strategy)?
+        .to_bytes(),
     )
     .map_err(|_| SeriesCurrentAcquisitionErrorV5::Strategy)?;
     if Pubkey::find_program_address(&seeds.as_slices(), &fixed.trading_program.key).0

@@ -699,6 +699,7 @@ mod sponsored_campaign {
         let statistic_value = StatisticSpecV1::new(
             unit,
             unit,
+            0,
             StatisticKind::TerminalSample,
             RoundingBoundary::ExactRational,
             1,

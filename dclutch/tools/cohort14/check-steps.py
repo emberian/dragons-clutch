@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Gate the cohort-14 runbook against its own step table.
+"""Gate a cohort runbook against its own step table.
+
+Pass a runbook directory to check that one; with no argument it checks
+cohort-14's, which is where this file lives.
 
 A runbook is prose and prose drifts. This checks the three things that make
 this one usable when somebody is four hours into a deploy and tired:
@@ -23,7 +26,11 @@ import pathlib
 import re
 import sys
 
-HERE = pathlib.Path(__file__).resolve().parent
+# The runbook to check. Defaults to this file's own directory, which is
+# cohort-14's; a later cohort passes its own and reuses the checker rather than
+# forking it, because a forked checker is a checker that stops being run.
+HERE = pathlib.Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else pathlib.Path(__file__).resolve().parent
+LABEL = HERE.name
 STEPS = HERE / "steps.tsv"
 README = HERE / "README.md"
 
@@ -96,11 +103,11 @@ def main() -> int:
         problems.append(f"README documents step {extra}, which steps.tsv does not have")
 
     if problems:
-        print("cohort14 runbook: the README and the step table disagree.")
+        print(f"{LABEL} runbook: the README and the step table disagree.")
         for problem in problems:
             print(f"  {problem}")
         return 1
-    print(f"cohort14 runbook: {len(steps)} steps, each documented and each naming a verifier.")
+    print(f"{LABEL} runbook: {len(steps)} steps, each documented and each naming a verifier.")
     return 0
 
 

@@ -310,6 +310,7 @@ mod tests {
         let statistic = StatisticSpecV1::new(
             id(31),
             id(36),
+            0,
             StatisticKind::TerminalSample,
             RoundingBoundary::ExactRational,
             1,

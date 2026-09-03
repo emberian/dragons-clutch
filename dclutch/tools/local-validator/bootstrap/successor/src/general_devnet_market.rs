@@ -57,9 +57,9 @@
 
 use std::path::{Path, PathBuf};
 
-use dclutch_general_adapter_contract::account_rules_v3::GeneralExternalAccountWidthsV3;
 use dclutch_operator::general_selected_release_v1::{
     GeneralConfigWindowsV1, GeneralDeploymentFactsV1, GeneralSelectedReleaseInputV1,
+    general_external_account_widths_v3,
 };
 use dclutch_registry_contract::ArtifactReleaseV1;
 use dclutch_registry_svm::{LOADER_V3_PROGRAM_BYTES, ProgramDataV3View, ProgramV3View};
@@ -89,7 +89,12 @@ const TOOLCHAIN_HEADER_V1: &str = "dclutch-general-toolchain-v1";
 /// Header line one interpreted selection policy must begin with.
 const SELECTION_POLICY_HEADER_V1: &str = "dclutch-general-selection-policy-v1";
 /// Schema every General devnet policy file must state.
-const POLICY_SCHEMA_V1: &str = "dclutch-general-devnet-policy-v1";
+///
+/// v2 is v1 without the `external_widths` block. The bump is deliberate and the
+/// reader refuses v1 rather than ignoring the field: a v1 file states eleven
+/// widths, and a compiler that silently dropped them would leave the operator
+/// believing the file it wrote still decided something.
+const POLICY_SCHEMA_V1: &str = "dclutch-general-devnet-policy-v2";
 
 fn refusal(code: &str, reason: impl AsRef<str>) -> Error {
     Error::new(format!("REFUSED: [{code}] {}", reason.as_ref()))
@@ -138,22 +143,23 @@ pub(crate) struct GeneralDevnetWindowsFileV1 {
     pub(crate) continuation_reward_lamports: u64,
 }
 
-/// Exact external account widths a devnet General release selects.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct GeneralDevnetWidthsFileV1 {
-    pub(crate) linked_basis_prefix: u32,
-    pub(crate) result_domain: u32,
-    pub(crate) rent_sysvar: u32,
-    pub(crate) core_market: u32,
-    pub(crate) activation_cache: u32,
-    pub(crate) upgradeable_program: u32,
-    pub(crate) trading_programdata_prefix: u32,
-    pub(crate) claims_programdata_prefix: u32,
-    pub(crate) core_programdata_prefix: u32,
-    pub(crate) realm_record: u32,
-    pub(crate) rent_credit: u32,
-}
+// THE POLICY FILE NO LONGER STATES EXTERNAL WIDTHS, and the deleted block is
+// why the schema moved to v2.
+//
+// It carried eleven of them, transcribed from `account_rules_v3.rs`'s unit-test
+// fixture, and three were wrong against everything the protocol produces: the
+// RentCredit at 48 where `LIFECYCLE_RENT_CREDIT_BYTES_V2` is 128, the
+// activation cache at 160 where the Registry's is 1,288, and the Core Market at
+// 320 where the codec's is 368. Cohort-14 founded
+// `8ExdC1RwbyuJweEqT1F6Gk9rgN87uuVaLwtaY2wmr5x` with them, so its `OpenBatch`
+// AccountProfile names an `Exact(48)` RentCredit coordinate that no producible
+// account fits -- and nothing on the commit path reads it, so the only symptom
+// is that the action cannot be delivered.
+//
+// Nine of the eleven are protocol constants and two are functions of the run
+// spec's own Product graph, so none of them was ever a policy choice. They come
+// from `general_external_account_widths_v3` now, which is the operator's single
+// author for them and the same one the General-hot program-test reads.
 
 /// One authenticated General devnet policy document.
 ///
@@ -163,7 +169,6 @@ pub(crate) struct GeneralDevnetWidthsFileV1 {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct GeneralDevnetPolicyFileV1 {
     pub(crate) windows: GeneralDevnetWindowsFileV1,
-    pub(crate) external_widths: GeneralDevnetWidthsFileV1,
     pub(crate) token_account_bytes: u32,
 }
 
@@ -175,7 +180,6 @@ pub(crate) struct GeneralDevnetPolicyFileV1 {
 struct GeneralDevnetPolicyDocumentV1 {
     schema: String,
     windows: GeneralDevnetWindowsFileV1,
-    external_widths: GeneralDevnetWidthsFileV1,
     token_account_bytes: u32,
 }
 
@@ -530,7 +534,6 @@ pub(crate) fn read_general_devnet_policy_v1(path: &Path) -> Result<GeneralDevnet
     }
     Ok(GeneralDevnetPolicyFileV1 {
         windows: document.windows,
-        external_widths: document.external_widths,
         token_account_bytes: document.token_account_bytes,
     })
 }
@@ -624,6 +627,8 @@ pub(crate) fn attach_devnet_general_capability_v1(
         outcome_count,
         price_scale,
         generation,
+        linked_basis_prefix,
+        result_domain,
     } = general_market_derivation_v1(input)?;
 
     let release_input = GeneralSelectedReleaseInputV1 {
@@ -642,19 +647,7 @@ pub(crate) fn attach_devnet_general_capability_v1(
             continuation_reward_lamports: policy.windows.continuation_reward_lamports,
         },
         outcome_count,
-        external_widths: GeneralExternalAccountWidthsV3 {
-            linked_basis_prefix: policy.external_widths.linked_basis_prefix,
-            result_domain: policy.external_widths.result_domain,
-            rent_sysvar: policy.external_widths.rent_sysvar,
-            core_market: policy.external_widths.core_market,
-            activation_cache: policy.external_widths.activation_cache,
-            upgradeable_program: policy.external_widths.upgradeable_program,
-            trading_programdata_prefix: policy.external_widths.trading_programdata_prefix,
-            claims_programdata_prefix: policy.external_widths.claims_programdata_prefix,
-            core_programdata_prefix: policy.external_widths.core_programdata_prefix,
-            realm_record: policy.external_widths.realm_record,
-            rent_credit: policy.external_widths.rent_credit,
-        },
+        external_widths: general_external_account_widths_v3(linked_basis_prefix, result_domain),
         token_account_bytes: policy.token_account_bytes,
         deployment: GeneralDeploymentFactsV1 {
             accelerator_artifact_release,
@@ -761,7 +754,7 @@ mod tests {
     fn the_policy_document_refuses_an_unknown_field() {
         let path = evidence_file(
             "policy.json",
-            r#"{"schema":"dclutch-general-devnet-policy-v1","windows":{"collection_slots":16,"selection_slots":16,"settlement_slots":64,"max_orders_per_candidate":32,"max_pages_per_candidate":32,"continuation_reward_lamports":1},"external_widths":{"linked_basis_prefix":256,"result_domain":192,"rent_sysvar":17,"core_market":320,"activation_cache":160,"upgradeable_program":36,"trading_programdata_prefix":45,"claims_programdata_prefix":45,"core_programdata_prefix":45,"realm_record":112,"rent_credit":48},"token_account_bytes":165,"settlement_slots":64}"#,
+            r#"{"schema":"dclutch-general-devnet-policy-v2","windows":{"collection_slots":16,"selection_slots":16,"settlement_slots":64,"max_orders_per_candidate":32,"max_pages_per_candidate":32,"continuation_reward_lamports":1},"token_account_bytes":165,"settlement_slots":64}"#,
         );
         let error = read_general_devnet_policy_v1(&path).expect_err("an unknown field refuses");
         assert!(
@@ -772,36 +765,70 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// And a policy file that states the wrong schema refuses by that name,
-    /// which is the arm that catches a well-formed document meant for
-    /// something else entirely.
+    /// A stale policy document refuses, and the two arms say different things.
+    ///
+    /// THE FIRST FIXTURE IS THE REAL v1 DOCUMENT cohort-14 compiled with,
+    /// widths and all -- the file an operator still has on disk. It refuses on
+    /// the FIELD, not on the schema, because `read_exact_json_v1` deserializes
+    /// before the schema string is read; that ordering is worth keeping rather
+    /// than working around, because "unknown field `external_widths`" names the
+    /// thing that stopped being a policy question and "wrong schema" does not.
+    ///
+    /// The second arm is the schema check itself, which still has to exist: a
+    /// document that is well-formed for this reader and meant for another
+    /// compiler must not be read.
     #[test]
     fn the_policy_document_refuses_a_foreign_schema() {
-        let path = evidence_file(
+        let stale = evidence_file(
             "policy-foreign.json",
-            r#"{"schema":"dclutch-general-devnet-policy-v2","windows":{"collection_slots":16,"selection_slots":16,"settlement_slots":64,"max_orders_per_candidate":32,"max_pages_per_candidate":32,"continuation_reward_lamports":1},"external_widths":{"linked_basis_prefix":256,"result_domain":192,"rent_sysvar":17,"core_market":320,"activation_cache":160,"upgradeable_program":36,"trading_programdata_prefix":45,"claims_programdata_prefix":45,"core_programdata_prefix":45,"realm_record":112,"rent_credit":48},"token_account_bytes":165}"#,
+            r#"{"schema":"dclutch-general-devnet-policy-v1","windows":{"collection_slots":16,"selection_slots":16,"settlement_slots":64,"max_orders_per_candidate":32,"max_pages_per_candidate":32,"continuation_reward_lamports":1},"external_widths":{"linked_basis_prefix":256,"result_domain":192,"rent_sysvar":17,"core_market":320,"activation_cache":160,"upgradeable_program":36,"trading_programdata_prefix":45,"claims_programdata_prefix":45,"core_programdata_prefix":45,"realm_record":112,"rent_credit":48},"token_account_bytes":165}"#,
         );
-        let error = read_general_devnet_policy_v1(&path).expect_err("a foreign schema refuses");
+        let error = read_general_devnet_policy_v1(&stale).expect_err("the v1 document refuses");
+        assert!(
+            error.0.contains("unknown field `external_widths`"),
+            "{}",
+            error.0
+        );
+        let _ = std::fs::remove_file(&stale);
+
+        let foreign = evidence_file(
+            "policy-foreign-schema.json",
+            r#"{"schema":"dclutch-general-devnet-policy-v1","windows":{"collection_slots":16,"selection_slots":16,"settlement_slots":64,"max_orders_per_candidate":32,"max_pages_per_candidate":32,"continuation_reward_lamports":1},"token_account_bytes":165}"#,
+        );
+        let error = read_general_devnet_policy_v1(&foreign).expect_err("a foreign schema refuses");
         assert!(
             error.0.contains("general-devnet/policy-schema"),
             "{}",
             error.0
         );
-        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&foreign);
     }
 
-    /// And the canonical document reads back exactly what it states.
+    /// And the canonical document reads back exactly what it states -- which
+    /// no longer includes a single account width.
     #[test]
-    fn the_policy_document_reads_back_every_stated_width() {
+    fn the_policy_document_states_windows_and_no_external_width() {
         let path = evidence_file(
             "policy-ok.json",
-            r#"{"schema":"dclutch-general-devnet-policy-v1","windows":{"collection_slots":16,"selection_slots":16,"settlement_slots":64,"max_orders_per_candidate":32,"max_pages_per_candidate":32,"continuation_reward_lamports":1},"external_widths":{"linked_basis_prefix":256,"result_domain":192,"rent_sysvar":17,"core_market":320,"activation_cache":160,"upgradeable_program":36,"trading_programdata_prefix":45,"claims_programdata_prefix":45,"core_programdata_prefix":45,"realm_record":112,"rent_credit":48},"token_account_bytes":165}"#,
+            r#"{"schema":"dclutch-general-devnet-policy-v2","windows":{"collection_slots":16,"selection_slots":16,"settlement_slots":64,"max_orders_per_candidate":32,"max_pages_per_candidate":32,"continuation_reward_lamports":1},"token_account_bytes":165}"#,
         );
         let policy = read_general_devnet_policy_v1(&path).expect("canonical policy");
         assert_eq!(policy.windows.settlement_slots, 64);
-        assert_eq!(policy.external_widths.rent_sysvar, 17);
         assert_eq!(policy.token_account_bytes, 165);
         let _ = std::fs::remove_file(&path);
+        // A v2 document that still carries the block refuses: the widths did
+        // not become optional, they stopped being a policy question.
+        let stale = evidence_file(
+            "policy-stale-widths.json",
+            r#"{"schema":"dclutch-general-devnet-policy-v2","windows":{"collection_slots":16,"selection_slots":16,"settlement_slots":64,"max_orders_per_candidate":32,"max_pages_per_candidate":32,"continuation_reward_lamports":1},"external_widths":{"rent_credit":48},"token_account_bytes":165}"#,
+        );
+        let error = read_general_devnet_policy_v1(&stale).expect_err("a stated width refuses");
+        assert!(
+            error.0.contains("unknown field `external_widths`"),
+            "{}",
+            error.0
+        );
+        let _ = std::fs::remove_file(&stale);
     }
 
     fn write_evidence_fixtures() -> GeneralDevnetCompilerArgumentsV1 {
@@ -852,7 +879,7 @@ mod tests {
             },
             policy: evidence_file(
                 "policy-compile.json",
-                r#"{"schema":"dclutch-general-devnet-policy-v1","windows":{"collection_slots":16,"selection_slots":16,"settlement_slots":64,"max_orders_per_candidate":32,"max_pages_per_candidate":32,"continuation_reward_lamports":1},"external_widths":{"linked_basis_prefix":256,"result_domain":192,"rent_sysvar":17,"core_market":320,"activation_cache":160,"upgradeable_program":36,"trading_programdata_prefix":45,"claims_programdata_prefix":45,"core_programdata_prefix":45,"realm_record":112,"rent_credit":48},"token_account_bytes":165}"#,
+                r#"{"schema":"dclutch-general-devnet-policy-v2","windows":{"collection_slots":16,"selection_slots":16,"settlement_slots":64,"max_orders_per_candidate":32,"max_pages_per_candidate":32,"continuation_reward_lamports":1},"token_account_bytes":165}"#,
             ),
             quote_surplus_beneficiary: Pubkey::new_from_array([0x44; 32]),
         }

@@ -844,8 +844,22 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
     let liability_id = [0x84; 32];
     let representation_release = [0x85; 32];
     let mapping_release = [0x86; 32];
-    let cuts = [0_i128];
-    let coefficients = [1_u64, 1, 1];
+    // THE SHAPE NO END-TO-END TEST IN THIS TREE HAD until 2026-09-03: cuts
+    // authored on the RESULT's scale rather than the observation's.
+    //
+    // `50, 150` over a denominator of `100` is the band $0.50 to $1.50, and
+    // the captured Pyth publication this fixture resolves against carries the
+    // mantissa `100_000_000` at exponent `-8` -- one dollar, inside the band,
+    // cell 1. Read at the identity, which is what every route did before the
+    // statistic carried a factor, `100_000_000` is above every cut and the
+    // market pays cell 2.
+    //
+    // Every SVM resolution before this used `cut_denominator: 1` against a
+    // denominator-1 observation, where the missing factor is the identity and
+    // nothing can go wrong. That is why cohort-14 market B settled honestly
+    // into the wrong cell and no gate said a word.
+    let cuts = [50_i128, 150];
+    let coefficients = [1_u64, 1, 1, 1];
     let mut domain_bytes = vec![0; result_domain_record_bytes(cuts.len()).expect("domain width")];
     compile_result_domain_v2(
         ResultDomainInputV2 {
@@ -855,7 +869,7 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
             liability_basis_id: product_id(liability_id),
             representation_release_id: product_id(representation_release),
             mapping_release_id: product_id(mapping_release),
-            cut_denominator: 1,
+            cut_denominator: 100,
             cuts: &cuts,
         },
         &mut domain_bytes,
@@ -942,6 +956,9 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
             .expect("captured Pyth adapter configuration");
     let adapter_config_bytes = adapter_config_value.to_bytes();
     let adapter_config_id = hash(&adapter_config_bytes).to_bytes();
+    // Two unit identities: raw feed atoms in, the result unit out. The
+    // statistic therefore declares a conversion, and the only conversion a
+    // Pyth-backed statistic may declare is the feed's own decimal exponent.
     let source_unit = source_id([0x97; 32]);
     let source_spec_value = SourceSpecV1::new(
         source_id(coordinate_id),
@@ -972,6 +989,7 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
     let statistic_value = StatisticSpecV1::new(
         source_unit,
         source_id(unit_id),
+        adapter_config_value.expected_exponent(),
         StatisticKind::TerminalSample,
         RoundingBoundary::ExactRational,
         1,
@@ -1456,11 +1474,15 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
                     source_id([0xb3; 32]),
                     -1,
                     1,
+                    adapter_config_value.expected_exponent(),
                     GENERATION,
                     TERMINAL_TIME,
                     TERMINAL_SEQUENCE,
                 )
                 .expect("provider-authenticated terminal Source projection");
+            // Below the band on either scale: a negative observation is in
+            // cell 0 whether or not the factor is applied, so this seeded
+            // prestate says nothing about the scale and does not have to.
             assert_eq!(decision.selector(), 0);
             decision
         };
@@ -4708,6 +4730,64 @@ async fn an_atomically_founded_market_reaches_a_terminal_certificate() {
     assert_eq!(certificate.market, fixture.market.to_bytes());
     assert_eq!(certificate.generation, GENERATION);
     assert_eq!(certificate.selector, terminal.terminal_winner);
+
+    // THE ASSERTION THIS TREE HAD NO TEST FOR.
+    //
+    // Every SVM end-to-end resolution before 2026-09-03 founded its market
+    // with `cut_denominator: 1` against a denominator-1 observation
+    // (`resolution_successor.rs:883`, `sponsored_push_lifecycle.rs:298`,
+    // `pre_market_resolution_funding.rs:346`, this file's old `:858`,
+    // `relayed_mainnet_state.rs:811`). On that shape a missing source-to-result
+    // factor is the identity, so the whole class of defect was invisible: the
+    // program, the operator and the browser all agreed, and all three were
+    // comparing raw feed atoms against cuts that were not on that scale.
+    //
+    // This market's cuts are $0.50 and $1.50 as `50, 150` over `100`. The
+    // publication is the captured SOL/USD mantissa `100_000_000` at exponent
+    // `-8` -- one dollar, inside the band. The cell the reading falls in is 1.
+    //
+    // The control is the second selector below. Read at the identity, which is
+    // what the deployed program did because nothing carried a factor,
+    // `100_000_000` is above every cut and the answer is 2 -- the TOP cell.
+    // That is the same arithmetic, on the same market, that paid cohort-14
+    // market B `DUVcCGfjXzp1fBktTCjsAomgrn9S6sxSDziQHoyRiu8A` the outside cell
+    // of a band its price was inside. If this test ever passes with the two
+    // selectors equal, the fixture has stopped distinguishing the scales and
+    // proves nothing.
+    let domain_bytes = observed(&mut context, fixture.domain.raw)
+        .await
+        .expect("finalized result domain record")
+        .data;
+    let result_domain = ResultDomainV2::decode(&domain_bytes).expect("Product result domain");
+    let observation =
+        FullPriceUpdateV2::parse(pyth_provider::PRICE_UPDATE).expect("captured full Pyth update");
+    assert_eq!(observation.exponent(), -8);
+    assert_eq!(observation.price(), 100_000_000);
+    assert_eq!(
+        result_domain.select_ordinary(i128::from(observation.price()), 1, observation.exponent()),
+        Ok(1),
+        "one dollar is inside the fifty-cent-to-a-dollar-fifty band"
+    );
+    assert_eq!(
+        result_domain.select_ordinary(i128::from(observation.price()), 1, 0),
+        Ok(2),
+        "and read at the identity it is the top cell, which is the defect"
+    );
+    assert_eq!(
+        certificate.selector, 1,
+        "the committed selector is the cell the reading falls in on the cuts' scale, \
+         not the cell its raw atoms land in"
+    );
+    assert_eq!(
+        certificate.result_numerator,
+        i128::from(observation.price())
+    );
+    assert_eq!(
+        certificate.result_denominator, 1,
+        "the certificate still records the raw mantissa the feed published; the \
+         scale is declared by the market's StatisticSpec, not folded into the \
+         observation's own denominator"
+    );
 
     // Hostile 4 — the admission stops at the terminal receipt. A Market that
     // has resolved may not create a second Fund, which is the conjunct that

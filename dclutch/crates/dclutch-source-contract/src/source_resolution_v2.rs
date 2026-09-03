@@ -1,6 +1,6 @@
 //! Runtime-width mutable Source resolution state.
 
-use dclutch_product_runtime_v2::ResultDomainV2;
+use dclutch_product_runtime_v2::{Error as ProductRuntimeError, ResultDomainV2};
 
 use super::{
     ContentId, Error, MarketChildDeltaV1, Result, SourceMaterialV3, SourceResolutionPhaseV1,
@@ -382,6 +382,13 @@ impl SourceResolutionStateV2 {
     /// Map one exact normalized primary result through an independently
     /// authenticated Product Runtime V2 domain and commit the terminal state
     /// only after every check succeeds.
+    ///
+    /// `source_scale_exponent` is the source-to-result decimal shift the
+    /// market's `StatisticSpecV1` declares. Every caller reads it from that
+    /// record -- through the provider obligation where there is one -- and
+    /// never from an adapter account, so the observation reaches the selector
+    /// on the scale the founding declared rather than on whichever scale the
+    /// feed happened to publish.
     #[allow(clippy::too_many_arguments)]
     pub fn resolve_primary_from_authenticated_domain(
         &mut self,
@@ -392,6 +399,7 @@ impl SourceResolutionStateV2 {
         resolution_evidence_id: ContentId,
         numerator: i128,
         denominator: u64,
+        source_scale_exponent: i32,
         expected_generation: u64,
         current_unix_seconds: i64,
         terminal_sequence: u64,
@@ -405,8 +413,17 @@ impl SourceResolutionStateV2 {
             .outcome_count()
             .map_err(|_| Error::InvalidResultMap)?;
         let selector = domain
-            .select_ordinary(numerator, denominator)
-            .map_err(|_| Error::InvalidResultMap)?;
+            .select_ordinary(numerator, denominator, source_scale_exponent)
+            .map_err(|error| match error {
+                // The two scale refusals are the market's own records
+                // disagreeing about units, which is a different accusation
+                // from a malformed or unordered result map and must not be
+                // flattened into one: a reader who sees `InvalidResultMap`
+                // goes looking at the cuts, and the cuts are fine.
+                ProductRuntimeError::UnsupportedScale => Error::NonCanonicalSourceScale,
+                ProductRuntimeError::ArithmeticOverflow => Error::ArithmeticOverflow,
+                _ => Error::InvalidResultMap,
+            })?;
         let decision = SourceResolutionDecisionV2::new(
             SourceResolutionRouteV1::Primary,
             selector,
@@ -943,6 +960,7 @@ mod tests {
                 id(20),
                 0,
                 1,
+                0,
                 9,
                 999_999,
                 1,
@@ -997,6 +1015,7 @@ mod tests {
                 id(8),
                 257,
                 1,
+                0,
                 9,
                 100,
                 1,
@@ -1031,6 +1050,7 @@ mod tests {
                 id(8),
                 1,
                 1,
+                0,
                 9,
                 100,
                 1,
@@ -1046,6 +1066,7 @@ mod tests {
                 domain,
                 id(8),
                 1,
+                0,
                 0,
                 9,
                 100,

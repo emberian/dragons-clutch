@@ -22,7 +22,7 @@ use dclutch_resolution_codec::{
 };
 use dclutch_source_contract::{
     ContentId as SourceContentId, SourceMaterialV3, SourceResolutionPhaseV1,
-    SourceResolutionRouteV1, SourceResolutionStateV2,
+    SourceResolutionRouteV1, SourceResolutionStateV2, StatisticSpecV1,
 };
 use solana_program::{
     hash::{hash, hashv},
@@ -180,6 +180,16 @@ pub struct ProviderExecuteFinalizedInputV3<'a> {
     pub source_material: &'a ObservedAccount,
     /// Exact finalized ResultDomain content bytes selected by the request.
     pub result_domain: &'a ObservedAccount,
+    /// Exact finalized StatisticSpec content bytes named by the SourceMaterial.
+    ///
+    /// The projection replays the selection to check the selector the program
+    /// committed, and since 2026-09-03 that replay needs the market's declared
+    /// source-to-result decimal shift. It is authenticated against
+    /// `SourceMaterialV3::statistic_spec` by digest, exactly as the material
+    /// and result domain are authenticated against the request, so a caller
+    /// cannot present a statistic naming a different scale than the one the
+    /// executed program read.
+    pub statistic: &'a ObservedAccount,
     /// Exact unchanged provider update read by Resolution.
     pub update: &'a ObservedAccount,
     /// Exact mutated prestates plus the read-only Market observation and all
@@ -641,6 +651,11 @@ pub fn project_finalized_provider_execute_v3(
         .map_err(|_| ProviderFinalizedProjectionErrorV3::Prestate)?;
     let domain = ResultDomainV2::decode(&input.result_domain.data)
         .map_err(|_| ProviderFinalizedProjectionErrorV3::Prestate)?;
+    if hash(&input.statistic.data).to_bytes() != material.statistic_spec().to_bytes() {
+        return Err(ProviderFinalizedProjectionErrorV3::Prestate);
+    }
+    let statistic = StatisticSpecV1::decode(&input.statistic.data)
+        .map_err(|_| ProviderFinalizedProjectionErrorV3::Prestate)?;
     let source_seeds = source.pda_seeds();
     let source_bump = [source_seeds.bump()];
     let expected_source = Pubkey::create_program_address(
@@ -675,6 +690,7 @@ pub fn project_finalized_provider_execute_v3(
                 .map_err(|_| ProviderFinalizedProjectionErrorV3::Transition)?,
             receipt.result_numerator,
             1,
+            statistic.source_scale_exponent(),
             request.generation,
             input.execution_unix_timestamp,
             request.terminal_sequence,
@@ -1178,7 +1194,8 @@ mod tests {
         result_domain_record_bytes,
     };
     use dclutch_source_contract::{
-        SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
+        CapacityEnvelope, RoundingBoundary, SOURCE_FAILURE_POLICY_RELEASE_ID_V2,
+        SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SourceCapacityProfileV1, StatisticKind,
     };
     use solana_program::instruction::AccountMeta;
 
@@ -1735,6 +1752,7 @@ mod tests {
         return_data: Vec<u8>,
         source_material: ObservedAccount,
         result_domain: ObservedAccount,
+        statistic: ObservedAccount,
         update: ObservedAccount,
         source_before: ObservedAccount,
         certificate_before: ObservedAccount,
@@ -1759,6 +1777,7 @@ mod tests {
                 certificate_top_up_lamports: 0,
                 source_material: &self.source_material,
                 result_domain: &self.result_domain,
+                statistic: &self.statistic,
                 update: &self.update,
                 writable: ProviderExecuteWritableAccountsV3 {
                     source_before: &self.source_before,
@@ -1811,11 +1830,42 @@ mod tests {
         let domain = ResultDomainV2::decode(&domain_bytes).expect("result domain");
         let domain_digest = hash(&domain_bytes).to_bytes();
         let source_spec = source_id(145);
+        // A real statistic record, because the projection now replays the
+        // selection with the shift this record declares and authenticates the
+        // account against the material by digest. The fixture's cuts are on
+        // the observation's own scale -- one unit identity on both sides -- so
+        // the declared shift is the identity and the replayed selector is the
+        // one this file always asserted.
+        let statistic_value = StatisticSpecV1::new(
+            source_id(160),
+            source_id(160),
+            0,
+            StatisticKind::TerminalSample,
+            RoundingBoundary::ExactRational,
+            1,
+            0,
+            source_id(161),
+            source_id(162),
+            SourceCapacityProfileV1::new(
+                CapacityEnvelope::Measured,
+                1,
+                0,
+                source_id(163),
+                source_id(164),
+                208,
+                0,
+            )
+            .expect("capacity profile"),
+        )
+        .expect("terminal statistic");
+        let statistic_bytes = statistic_value.to_bytes().to_vec();
+        let statistic_spec =
+            SourceContentId::new(hash(&statistic_bytes).to_bytes()).expect("statistic identity");
         let material = SourceMaterialV3::explicitly_unbounded(
             product_record,
             source_spec,
             source_id(146),
-            source_id(147),
+            statistic_spec,
             None,
             SourceContentId::new(SOURCE_FAILURE_POLICY_RELEASE_ID_V2).expect("failure policy"),
         );
@@ -1973,7 +2023,9 @@ mod tests {
         ])
         .to_bytes();
         let numerator = 1_i128;
-        let selector = domain.select_ordinary(numerator, 1).expect("selector");
+        let selector = domain
+            .select_ordinary(numerator, 1, statistic_value.source_scale_exponent())
+            .expect("selector");
         let outcome_count = domain.outcome_count().expect("outcomes");
         let receipt = ProviderExecutionReceiptV3 {
             caller: ProviderCallerV3::Core,
@@ -2048,6 +2100,7 @@ mod tests {
                 SourceContentId::new(evidence).expect("evidence"),
                 numerator,
                 1,
+                statistic_value.source_scale_exponent(),
                 generation,
                 1_800_000_010,
                 terminal_sequence,
@@ -2086,6 +2139,7 @@ mod tests {
             return_data: receipt.to_bytes().expect("receipt").to_vec(),
             source_material: account(20, key(154), registry, 1, material_bytes),
             result_domain: account(20, key(155), registry, 1, domain_bytes),
+            statistic: account(20, key(156), registry, 1, statistic_bytes),
             update: account(
                 20,
                 update,

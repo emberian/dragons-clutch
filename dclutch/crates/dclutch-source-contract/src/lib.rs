@@ -442,6 +442,12 @@ pub enum Error {
     PrincipalExceedsCapacity,
     /// A cadence tolerance was not strictly below half the derived cadence.
     CadenceToleranceExceedsSchedule,
+    /// A declared source-to-result decimal shift was outside the admitted
+    /// range, or a statistic declared one between two identical units.
+    NonCanonicalSourceScale,
+    /// The adapter's required feed exponent was not the source-to-result shift
+    /// the statistic declares.
+    SourceScaleMismatch,
 }
 
 /// Result alias for source-contract operations.
@@ -624,12 +630,40 @@ impl PythAdapterConfigV1 {
         self.max_confidence_bps
     }
 
+    /// Admit one authenticated publication and return its raw mantissa.
+    ///
+    /// This is where the adapter's own required exponent stops being thrown
+    /// away. Until `statistic` was passed in, this function checked the feed's
+    /// exponent for equality against its config and then discarded both, so
+    /// the mantissa left here carrying no statement of its scale and the
+    /// selector compared it against cuts authored on a different one.
+    ///
+    /// Which shift this adapter admits is decided by what the statistic's two
+    /// unit identities say, because the tree founds markets both ways:
+    ///
+    /// * The same identity on both sides declares *no* conversion. The result
+    ///   domain's cuts are then on the feed's own atom scale, and the only
+    ///   admissible shift is zero. The relayed family and the operator's
+    ///   reference authoring found exactly this shape.
+    /// * Two different identities declare a conversion, and the only one this
+    ///   release knows how to perform is the feed's published decimal
+    ///   exponent. So that is the only admissible shift, and the cuts are in
+    ///   the feed's quote unit. The successor's Pyth founding is this shape --
+    ///   `source-unit/pyth-scaled-price` into `result-unit/usd-cents` -- and
+    ///   before this check it declared the conversion and left the number out.
+    ///
+    /// The mismatch has its own refusal because it is a different accusation
+    /// from the two beside it. `InvalidPythObservation` says the *publication*
+    /// disagreed with what this market pinned; `SourceScaleMismatch` says the
+    /// market's own two records disagree with each other, which no publication
+    /// can fix and which names the founding rather than the provider.
     fn validate_update(
         self,
         provider_feed_id: [u8; 32],
         price: i64,
         confidence: u64,
         exponent: i32,
+        statistic: StatisticSpecV1,
     ) -> Result<i128> {
         let absolute_price = price.unsigned_abs();
         let confidence_scaled = u128::from(confidence)
@@ -643,6 +677,21 @@ impl PythAdapterConfigV1 {
             || confidence_scaled > admitted_confidence
         {
             return Err(Error::InvalidPythObservation);
+        }
+        // The publication is admitted before the market's own two records are
+        // compared, and the order is the point: reaching this line means the
+        // feed published exactly what this market pinned, so a
+        // `SourceScaleMismatch` in a log can only mean the founding's
+        // statistic and its adapter config disagree with each other. Checked
+        // first, the same code would also fire for a lying feed and an
+        // operator could not tell the two apart.
+        let admitted_scale = if statistic.declares_conversion() {
+            self.expected_exponent
+        } else {
+            0
+        };
+        if statistic.source_scale_exponent() != admitted_scale {
+            return Err(Error::SourceScaleMismatch);
         }
         Ok(i128::from(price))
     }
@@ -1344,6 +1393,7 @@ impl RoundingBoundary {
 pub struct StatisticSpecV1 {
     source_unit_id: ContentId,
     result_unit_id: ContentId,
+    source_scale_exponent: i32,
     kind: StatisticKind,
     rounding: RoundingBoundary,
     required_samples: u16,
@@ -1358,6 +1408,7 @@ impl StatisticSpecV1 {
     pub fn new(
         source_unit_id: ContentId,
         result_unit_id: ContentId,
+        source_scale_exponent: i32,
         kind: StatisticKind,
         rounding: RoundingBoundary,
         required_samples: u16,
@@ -1385,26 +1436,29 @@ impl StatisticSpecV1 {
         if !kind.is_threshold() && threshold_atoms != 0 {
             return Err(Error::NonCanonicalStatistic);
         }
-        Ok(Self {
+        let value = Self {
             source_unit_id,
             result_unit_id,
+            source_scale_exponent,
             kind,
             rounding,
             required_samples,
             threshold_atoms,
             capacity_profile_id,
             evaluator_release_id,
-        })
+        };
+        value.validate_scale()?;
+        Ok(value)
     }
 
     /// Decode structurally canonical bytes. Call `validate_capacity` before use.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         header(bytes, STATISTIC_SPEC_BYTES, STATISTIC_SPEC_MAGIC)?;
-        zero(bytes, 12, 4)?;
         zero(bytes, 82, 14)?;
         let value = Self {
             source_unit_id: content(bytes, 16)?,
             result_unit_id: content(bytes, 48)?,
+            source_scale_exponent: i32::from_le_bytes(read_array(bytes, 12)?),
             kind: StatisticKind::decode(one(bytes, 10)?)?,
             rounding: RoundingBoundary::decode(one(bytes, 11)?)?,
             required_samples: u16::from_le_bytes(read_array(bytes, 80)?),
@@ -1412,6 +1466,7 @@ impl StatisticSpecV1 {
             capacity_profile_id: content(bytes, 112)?,
             evaluator_release_id: content(bytes, 144)?,
         };
+        value.validate_scale()?;
         value.validate_shape()?;
         Ok(value)
     }
@@ -1420,6 +1475,7 @@ impl StatisticSpecV1 {
     pub fn to_bytes(self) -> [u8; STATISTIC_SPEC_BYTES] {
         let mut out = base::<STATISTIC_SPEC_BYTES>(STATISTIC_SPEC_MAGIC);
         put(&mut out, 10, &[self.kind.byte(), self.rounding.byte()]);
+        put(&mut out, 12, &self.source_scale_exponent.to_le_bytes());
         put(&mut out, 16, self.source_unit_id.as_bytes());
         put(&mut out, 48, self.result_unit_id.as_bytes());
         put(&mut out, 80, &self.required_samples.to_le_bytes());
@@ -1435,6 +1491,7 @@ impl StatisticSpecV1 {
         capacity_profile_id: ContentId,
         profile: SourceCapacityProfileV1,
     ) -> Result<()> {
+        self.validate_scale()?;
         self.validate_shape()?;
         if self.capacity_profile_id != capacity_profile_id
             || self.required_samples > profile.max_samples
@@ -1452,6 +1509,53 @@ impl StatisticSpecV1 {
     /// Return the result-unit identity consumed by the mapping release.
     pub const fn result_unit_id(self) -> ContentId {
         self.result_unit_id
+    }
+
+    /// Return the declared source-to-result decimal shift.
+    ///
+    /// This record names a source unit and a result unit and is the only place
+    /// entitled to say how they relate. Before this field it named them and
+    /// said nothing, so an observation in raw feed atoms and cuts in dollars
+    /// were compared as though they were the same number -- which is what
+    /// cohort-14 market B was paid on. The number is the exponent: the
+    /// observation times ten to this power is the reading in the result unit.
+    ///
+    /// Zero is the identity, and it is what every record written before this
+    /// field declares, because the four bytes it now occupies were reserved
+    /// and enforced zero. A pre-factor record therefore decodes to exactly the
+    /// scale the deployed program acted on rather than to an undefined one.
+    pub const fn source_scale_exponent(self) -> i32 {
+        self.source_scale_exponent
+    }
+
+    /// Whether this statistic declares a unit conversion at all.
+    ///
+    /// Two different unit identities are the record saying the observation and
+    /// the result are counted in different things; the same identity twice is
+    /// it saying they are the same thing. That distinction decides which
+    /// source-to-result shift an adapter admits, so the two identities finally
+    /// carry a checkable consequence instead of standing beside each other
+    /// with nothing between them.
+    pub fn declares_conversion(self) -> bool {
+        self.source_unit_id != self.result_unit_id
+    }
+
+    /// Refuse a shift the selector cannot apply, or one between equal units.
+    ///
+    /// The range is [`dclutch_product_runtime_v2::MAX_SOURCE_SCALE_EXPONENT`]
+    /// rather than a second bound of this crate's own, so the record and the
+    /// selector that consumes it cannot disagree about which shifts exist.
+    ///
+    /// The equal-unit rule is the other half: a statistic whose source unit
+    /// *is* its result unit declares no conversion, so a nonzero factor there
+    /// is a contradiction in one record and not something a later route has to
+    /// discover. The relayed family founds exactly that shape.
+    fn validate_scale(self) -> Result<()> {
+        if self.source_unit_id == self.result_unit_id && self.source_scale_exponent != 0 {
+            return Err(Error::NonCanonicalSourceScale);
+        }
+        dclutch_product_runtime_v2::validate_source_scale_exponent(self.source_scale_exponent)
+            .map_err(|_| Error::NonCanonicalSourceScale)
     }
 
     /// Return the selected statistic family.
@@ -2255,6 +2359,7 @@ pub struct PythProviderAdapterObligationV1 {
     provider_release_id: ContentId,
     provider_release: ProviderReleaseV1,
     adapter_config: PythAdapterConfigV1,
+    statistic: StatisticSpecV1,
 }
 
 impl PythProviderAdapterObligationV1 {
@@ -2270,13 +2375,23 @@ impl PythProviderAdapterObligationV1 {
         {
             return Err(Error::UnsupportedProviderExtension);
         }
+        // The statistic is read from the material here, at the one place this
+        // obligation is built, so no caller of the normalizer below gets to
+        // supply a scale of its own.
+        let statistic = material.statistic()?;
         Ok(Self {
             source_spec_id,
             source,
             provider_release_id,
             provider_release,
             adapter_config,
+            statistic,
         })
+    }
+
+    /// Return the source-to-result shift this material's statistic declares.
+    pub const fn source_scale_exponent(self) -> i32 {
+        self.statistic.source_scale_exponent()
     }
 
     /// Normalize facts only after the SVM adapter discharged the documented
@@ -2293,9 +2408,13 @@ impl PythProviderAdapterObligationV1 {
         exponent: i32,
         publication_unix_seconds: i64,
     ) -> Result<NormalizedProviderEvidenceV1> {
-        let atoms =
-            self.adapter_config
-                .validate_update(provider_feed_id, price, confidence, exponent)?;
+        let atoms = self.adapter_config.validate_update(
+            provider_feed_id,
+            price,
+            confidence,
+            exponent,
+            self.statistic,
+        )?;
         Ok(NormalizedProviderEvidenceV1::new(
             self.source_spec_id,
             self.provider_release_id,
@@ -5886,6 +6005,7 @@ mod tests {
         StatisticSpecV1 {
             source_unit_id: id(3),
             result_unit_id: id(3),
+            source_scale_exponent: 0,
             kind: StatisticKind::ExactScheduledAverage,
             rounding,
             required_samples: 2,
@@ -6119,6 +6239,7 @@ mod tests {
         let stat = StatisticSpecV1 {
             source_unit_id: id(2),
             result_unit_id: id(2),
+            source_scale_exponent: 0,
             kind: StatisticKind::TerminalSample,
             rounding: RoundingBoundary::ExactRational,
             required_samples: 1,
@@ -6282,6 +6403,7 @@ mod tests {
         let statistic = StatisticSpecV1::new(
             id(10),
             id(10),
+            0,
             StatisticKind::TerminalSample,
             RoundingBoundary::ExactRational,
             1,
@@ -6397,6 +6519,7 @@ mod tests {
         let statistic = StatisticSpecV1::new(
             id(10),
             id(10),
+            0,
             StatisticKind::OddScheduledMedian,
             RoundingBoundary::ExactRational,
             3,
@@ -7046,6 +7169,7 @@ mod tests {
         let median = StatisticSpecV1::new(
             id(3),
             id(3),
+            0,
             StatisticKind::OddScheduledMedian,
             RoundingBoundary::ExactRational,
             5,
@@ -7092,6 +7216,7 @@ mod tests {
                 StatisticSpecV1::new(
                     id(3),
                     id(3),
+                    0,
                     StatisticKind::OddScheduledMedian,
                     RoundingBoundary::ExactRational,
                     count,

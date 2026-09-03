@@ -669,10 +669,15 @@ pub const fn admitted_prelude_witness_bytes_v1(accounts: usize) -> usize {
 /// It is the OUTPUT of the prelude chain the caller already ran: the complete
 /// [`AdmittedInvocationContextV3`] preimage whose digest the request header
 /// already carries, plus the two AccountProfile-derived geometry banks a callee
-/// would otherwise decode five sealed artifacts to reproduce. Every byte of it
-/// is inside `hash(request_bytes)`, which is the last seed of the
-/// `CallerAuthoritySeedsV1` PDA the caller must sign, so it is a signed
-/// statement by the program at the caller coordinate and not a hint.
+/// would otherwise decode five sealed artifacts to reproduce. It is a statement
+/// by the program at the caller coordinate rather than a hint, because that
+/// coordinate is a `CallerAuthoritySeedsV1` PDA of the composing program and a
+/// program-derived address has no private key -- so only that program, at that
+/// release set, market and root, executing that signed family request, could
+/// have signed the CPI carrying it. It is NOT covered by a digest the off-chain
+/// caller stated: since 2026-09-03 the PDA's last seed is
+/// [`crate::shadow_digest_v3::accelerator_caller_authority_digest_v1`], which
+/// deliberately does not digest the request.
 ///
 /// It is NOT a licence to skip the callee's own reading. A callee that consumes
 /// this is expected to re-derive every field it holds an independent source for

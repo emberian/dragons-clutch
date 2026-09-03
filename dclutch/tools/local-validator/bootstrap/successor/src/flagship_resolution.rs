@@ -6577,6 +6577,14 @@ fn authenticate_provider_finalized_projection(
             let after37 = post.observed_or_vacant(key(37)?)?;
             let source_material = durable_pre_account(plan, selected.account("source_material")?)?;
             let result_domain = durable_pre_account(plan, selected.account("result_domain")?)?;
+            // The projection replays the selection, and since 2026-09-03 that
+            // replay needs the source-to-result shift the market's own
+            // StatisticSpec declares. The account is already in this stage's
+            // frame -- Resolution reads it to build the provider obligation --
+            // and the projection authenticates it against SourceMaterial by
+            // digest, so presenting the wrong one refuses rather than
+            // rescaling the answer.
+            let statistic = durable_pre_account(plan, selected.account("statistic")?)?;
             let update = durable_pre_account(plan, selected.account("update_account")?)?;
             let certificate_top_up_lamports = plan
                 .transfers
@@ -6598,6 +6606,7 @@ fn authenticate_provider_finalized_projection(
                 certificate_top_up_lamports,
                 source_material: &source_material,
                 result_domain: &result_domain,
+                statistic: &statistic,
                 update: &update,
                 writable: ProviderExecuteWritableAccountsV3 {
                     source_before: &before2,
