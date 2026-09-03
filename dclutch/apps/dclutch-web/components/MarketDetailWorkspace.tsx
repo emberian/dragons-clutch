@@ -35,6 +35,7 @@ import {
   type MarketProvenanceV1,
 } from '@/lib/marketDiscovery';
 import { collateralDenominationV1 } from '@/lib/marketDenomination';
+import { ordinarySelectorJoinV1, type OrdinarySelectorJoinV1 } from '@/lib/ordinarySelectorV1';
 import { denominationUnitV1, formatQuantityV1, type DenominationV1 } from '@/lib/quantity';
 import CellStrip from '@/components/charts/CellStrip';
 import MarketIssuanceHistory from '@/components/charts/MarketIssuanceHistory';
@@ -188,41 +189,61 @@ type DecisionStatV1 = Readonly<{ label: string; value: string; detail: string }>
 /**
  * WHAT INDEX `terminal_winner` IS, and what this site may call it.
  *
- * The LAST cell is proved: `bindTerminalResolutionCertificateV2` refuses a
- * failure certificate whose selector is not `outcomeCount - 1` and refuses a
- * success certificate whose selector is, so "the source failed to report" is a
- * name the chain itself pins. **Every other cell is not.** The names beside
- * them are `derivedOutcomeLabelsV1`'s, built from the market's own cut list in
- * ascending index order -- a reasonable reading of the partition that NOTHING
- * in this tree has joined to the number the Resolution program commits.
+ * TWO CELLS ARE NOW NAMEABLE, on two different authorities, and the difference
+ * is the whole point of this function.
  *
- * It stopped being a theoretical gap on 2026-09-03. Cohort-14b resolved with a
- * success certificate carrying selector 2 and a result of 10062091764 over 1,
- * against cuts of 9900 and 10300 over a denominator of 100. Those are the
- * numbers, and THEY ARE NOT ON ONE SCALE: the certificate carries no exponent,
- * the Pyth quote behind it was about a hundred dollars, and reaching either
- * "index 2 is where a hundred dollars falls" or "index 2 is where ten billion
- * falls" requires a rescaling nothing here is entitled to perform. So the page
- * cannot check the index claim it was making, and a claim that cannot be
- * checked is not one this site gets to print.
- * `docs/evidence/COHORT14_SEALED_FOUNDED_FILLED_2026_09_03.md` reached the same
- * wall from the other side -- "which range of the partition index 2 labels was
- * not established here" -- and recorded both facts without a sentence joining
- * them. This is that refusal, on the reader's side of the same gap.
+ * The LAST cell is pinned by the certificate itself:
+ * `bindTerminalResolutionCertificateV2` refuses a failure certificate whose
+ * selector is not `outcomeCount - 1` and refuses a success certificate whose
+ * selector is, so "the source failed to report" needs no derivation at all.
  *
- * So an ordinary cell is named BY ITS INDEX, and `joined` is false to let the
- * caller say why. A page that prints a wrong name confidently is worse than
- * one that prints a number and admits what it does not know.
+ * An ORDINARY cell is pinned by ARITHMETIC THIS PAGE CAN NOW PERFORM.
+ * `ordinarySelectorJoinV1` mirrors `ResultDomainV2::select_ordinary`, the
+ * function the Resolution program runs, and hands it the market's own cuts and
+ * the certificate's own observation. When the cell it lands on is the cell the
+ * chain committed, the index-ordered label beside it is not a guess: the page
+ * reproduced the number rather than assuming its ordering.
+ *
+ * WHAT THAT REPLACED. Until 2026-09-03 this function named every ordinary cell
+ * by number, on the reasoning that the certificate carries `10062091764/1`
+ * against cuts of `9900, 10300` over `100` and no exponent joins them. That
+ * reasoning was right about the scales and wrong about the join: THE CHAIN
+ * APPLIES NO EXPONENT EITHER. It compares the two ratios directly, and every
+ * certificate producer pins the observation denominator to 1. So the ordering
+ * was checkable all along, and cohort-14b's selector 2 is reproduced from its
+ * own records by `ordinarySelector.live.test.ts`.
+ *
+ * WHAT IT DOES NOT REPLACE. Reproducing the chain's arithmetic says what the
+ * protocol DID, never that the cell is right about the world. Cohort-14b's cuts
+ * were authored in cents and its observation arrived as raw feed atoms, and the
+ * chain declares those as two unit identities with no factor between them —
+ * `docs/design/OBSERVATION_SCALE_AUTHORITY.md` names the record that should
+ * carry one. The caller says that beside the name; this function only reports
+ * which authority the name rests on.
+ *
+ * With no join supplied, or a join that DISAGREES, the old refusal stands: an
+ * ordinary cell is named by its index and `joined` is false. A page that prints
+ * a wrong name confidently is worse than one that prints a number and admits
+ * what it does not know.
  */
 export function terminalWinnerNameV1(
   narrative: MarketNarrativeV1,
   winner: number,
   outcomeCount: number,
-): Readonly<{ name: string; joined: boolean }> {
+  join: OrdinarySelectorJoinV1 | null = null,
+): Readonly<{ name: string; joined: boolean; basis: 'certificate-kind' | 'derived-selector' | 'unjoined' }> {
   if (outcomeCount > 0 && winner === outcomeCount - 1) {
-    return Object.freeze({ name: narrative.outcomes?.[winner] ?? 'the source-failure outcome', joined: true });
+    return Object.freeze({
+      name: narrative.outcomes?.[winner] ?? 'the source-failure outcome',
+      joined: true,
+      basis: 'certificate-kind' as const,
+    });
   }
-  return Object.freeze({ name: `claim ${winner}`, joined: false });
+  if (join !== null && join.agrees && join.derived === winner) {
+    const derived = narrative.outcomes?.[winner];
+    if (derived !== undefined) return Object.freeze({ name: derived, joined: true, basis: 'derived-selector' as const });
+  }
+  return Object.freeze({ name: `claim ${winner}`, joined: false, basis: 'unjoined' as const });
 }
 
 export function marketDecisionStatsV1(
@@ -233,6 +254,7 @@ export function marketDecisionStatsV1(
   phaseMeaning: string | null,
   derived: MarketQuestionV1 | null,
   nowMs: number | null,
+  join: OrdinarySelectorJoinV1 | null = null,
 ): readonly [DecisionStatV1, DecisionStatV1, DecisionStatV1, DecisionStatV1] {
   if (decoded === null) {
     const unread = (label: string): DecisionStatV1 => Object.freeze({ label, value: '—', detail: 'Not read yet.' });
@@ -240,7 +262,7 @@ export function marketDecisionStatsV1(
   }
 
   const winner = decoded.settlement.status === 'terminal'
-    ? terminalWinnerNameV1(narrative, decoded.settlement.winner, decoded.liability.status === 'bound' ? decoded.liability.supplyAtoms.length : 0).name
+    ? terminalWinnerNameV1(narrative, decoded.settlement.winner, decoded.liability.status === 'bound' ? decoded.liability.supplyAtoms.length : 0, join).name
     : null;
   const status: DecisionStatV1 = activation.status === 'never'
     ? Object.freeze({ label: 'Status', value: 'Never traded', detail: activation.reason })
@@ -499,22 +521,36 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
    * outcome width. Null until there is an answer to speak about.
    */
   const terminalOutcomeCount = decoded === null || decoded.liability.status !== 'bound' ? 0 : decoded.liability.supplyAtoms.length;
+  /**
+   * The certificate's committed cell, run back through the market's own cuts.
+   *
+   * Both halves are already on this page and were never brought together:
+   * `derived` carries the partition the operator wrote and `resolution` carries
+   * the observation the chain settled on. `ordinarySelectorJoinV1` performs the
+   * Resolution program's own comparison over them, so an ordinary cell is named
+   * only when this page has REPRODUCED the selector rather than assumed the
+   * cut list's order matches it.
+   */
+  const selectorJoin = derived === null || resolution === null || resolution.status !== 'authenticated'
+    ? null
+    : ordinarySelectorJoinV1(derived, resolution.observation, resolution.selector);
   const terminalWinner = decoded === null || decoded.settlement.status !== 'terminal'
     ? null
-    : terminalWinnerNameV1(narrative, decoded.settlement.winner, terminalOutcomeCount);
+    : terminalWinnerNameV1(narrative, decoded.settlement.winner, terminalOutcomeCount, selectorJoin);
   const terminalMeaning = decoded === null || decoded.settlement.status !== 'terminal'
     ? null
     : terminalOutcomeMeaningV1({
       winner: decoded.settlement.winner,
       outcomeCount: terminalOutcomeCount,
-      // ONLY A JOINED NAME. `terminalWinnerNameV1` explains why an ordinary
-      // cell's derived label may not be the cell the certificate selected;
-      // handing one to this sentence would put the unchecked join inside the
-      // page's most confident paragraph.
+      // ONLY A JOINED NAME, and `terminalWinnerNameV1` says on which authority:
+      // the certificate's own kind for the failure cell, a reproduced selector
+      // for an ordinary one. An unjoined cell hands this sentence nothing,
+      // because the page's most confident paragraph is the last place an
+      // unchecked join belongs.
       outcomeName: terminalWinner?.joined === true ? terminalWinner.name : undefined,
     });
   const redemption = decoded === null ? null : marketRedemptionStateV1(decoded);
-  const decisionStats = marketDecisionStatsV1(decoded, activation, denomination, narrative, detail?.phaseMeaning ?? null, derived, nowMs);
+  const decisionStats = marketDecisionStatsV1(decoded, activation, denomination, narrative, detail?.phaseMeaning ?? null, derived, nowMs, selectorJoin);
 
   return <PageShell className="product-shell trade-v3-shell" header={<Nav current="/markets" status={`${deployment.label} · read live`} />}>
 
@@ -584,9 +620,11 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
           </dl>}
           <p>
             The chain committed <strong>claim {resolution.selector}</strong>.{' '}
-            {terminalWinner?.joined === true
+            {terminalWinner?.basis === 'certificate-kind'
               ? 'That is the source-failure cell, which is the one index the certificate itself pins: a failure certificate may carry no other, and a success certificate may not carry this one.'
-              : 'This site names it by NUMBER and not by one of the cells listed above, and that is a gap rather than caution: the cell names on this page are derived from the market\u2019s own cut list in ascending order, and nothing in this tree has joined that order to the number the Resolution program commits \u2014 the value beside it is on the certificate\u2019s own scale, which this page cannot put on the cuts\u2019 scale. Naming the cell would be a sentence nobody checked.'}
+              : terminalWinner?.basis === 'derived-selector'
+                ? <>That is <strong>{terminalWinner.name}</strong>, and this page CHECKED it rather than counting on the list above being in the right order: running this market&rsquo;s own cuts over the certificate&rsquo;s own observation, with the same comparison the Resolution program performs, lands on the cell the chain committed. What the check settles is which cell the protocol chose. What it does not settle is whether that cell is right about the world &mdash; the observation and the cuts are declared on chain as two different unit identities with no factor published between them, so the boundary above is the market&rsquo;s own and the value beside it is on the certificate&rsquo;s own scale.</>
+                : 'This site names it by NUMBER and not by one of the cells listed above. The cell names on this page are derived from the market\u2019s own cut list in ascending order, and running that list over the certificate\u2019s observation does NOT land on the cell the chain committed \u2014 so one of the two readings is wrong and this page cannot say which. Naming the cell would be a sentence nobody checked.'}
           </p>
           {resolution.providerEvidenceId !== null && <details className="market-detail-drawer">
             <summary>The digests this answer is pinned to</summary>

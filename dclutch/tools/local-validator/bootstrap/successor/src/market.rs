@@ -135,6 +135,7 @@ use dclutch_versioned_message_operator::{
 
 use crate::{
     Error, Result,
+    core_bump_projection::{CoreProductGraphProjectionV1, core_product_graph_projection_v1},
     direct_market::{
         DirectMarketCompilerInputV1, attach_direct_market_capability_v1,
         validate_direct_market_capability_v1,
@@ -9659,7 +9660,13 @@ fn derive_founding_outer_v1(
         principal_cap_sets: coordinates.principal_cap_sets,
         rent_beneficiary: identity_of(coordinates.credit.to_bytes())?,
         terminal_receipt: None,
-        bumps: predicted_state_bumps_v1(core, registry, coordinates.identity, records)?,
+        bumps: predicted_state_bumps_v1(
+            core,
+            registry,
+            coordinates.identity,
+            records,
+            core_product_graph_projection_v1(&plan.core)?,
+        )?,
     };
     let market_state_bytes = market_state
         .encode()
@@ -9874,11 +9881,21 @@ fn derive_founding_outer_v1(
 /// A zero bump is `StateBumpsV1`'s unrecorded encoding and cannot be carried, so
 /// a search that lands on bump zero is a refusal here rather than a silently
 /// unrecorded tail that would disagree with Core's.
+///
+/// WHICH CORE IS AN ARGUMENT, NOT AN ASSUMPTION. The Product-graph half of the
+/// tail arrived in `b312ce3c4`, so a Core deployed before it writes zeros in
+/// those four reserved bytes and one deployed after writes eight nibbles. This
+/// function predicts for the build the caller names, because the thing being
+/// predicted is what the DEPLOYED program does; `crate::core_bump_projection`
+/// answers which build that is, and refuses at campaign start rather than here
+/// when it cannot. Assuming the answer is what cohort-14c paid 0.139 SOL and a
+/// live Found37 Market to disprove.
 fn predicted_state_bumps_v1(
     core: Pubkey,
     registry: Pubkey,
     identity: MarketIdentity,
     records: &MarketRecords,
+    projection: CoreProductGraphProjectionV1,
 ) -> Result<StateBumpsV1> {
     let market_bump =
         Pubkey::find_program_address(&MarketCoreStateSeedsV2::new(identity).as_slices(), &core).1;
@@ -9938,7 +9955,15 @@ fn predicted_state_bumps_v1(
         market: StateBumpsV1::record(market_bump),
         realm_raw_record: StateBumpsV1::record(raw_bump),
         realm_staging_record: StateBumpsV1::record(staging_bump),
-        product_graph: ProductGraphBumpsV1::record(product_graph),
+        // A Core from before `b312ce3c4` never wrote here, and `ABSENT` is the
+        // encoding of what it left: four zero bytes, eight unrecorded nibbles.
+        // The walk above still runs -- the derivation is what
+        // `require_predicted_bump_coordinates_v1` checks the founding's
+        // coordinates against -- and only the projection is withheld.
+        product_graph: match projection {
+            CoreProductGraphProjectionV1::Recorded => ProductGraphBumpsV1::record(product_graph),
+            CoreProductGraphProjectionV1::Unrecorded => ProductGraphBumpsV1::ABSENT,
+        },
     };
     if bumps.market.is_none()
         || bumps.realm_raw_record.is_none()
@@ -10028,6 +10053,7 @@ fn authenticate_core_state_encoding_v1(
     core: Pubkey,
     registry: Pubkey,
     records: &MarketRecords,
+    projection: CoreProductGraphProjectionV1,
 ) -> Result<()> {
     let account = rpc.required_account(market, "Found37 Market")?;
     let state = CoreState::decode(&account.data)
@@ -10040,7 +10066,7 @@ fn authenticate_core_state_encoding_v1(
             "CoreState re-encoding did not reproduce the Market bytes the chain holds",
         ));
     }
-    let predicted = predicted_state_bumps_v1(core, registry, state.identity, records)?;
+    let predicted = predicted_state_bumps_v1(core, registry, state.identity, records, projection)?;
     if predicted != state.bumps {
         return Err(Error::new(format!(
             "the Market the chain holds carries bump tail {:?}, and this driver predicts \
@@ -11665,7 +11691,14 @@ fn execute_generic_market_founding(
     let custody = pubkey(&plan.custody.program_id)?;
     let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
 
-    authenticate_core_state_encoding_v1(rpc, found31_market, core, registry, records)?;
+    authenticate_core_state_encoding_v1(
+        rpc,
+        found31_market,
+        core,
+        registry,
+        records,
+        core_product_graph_projection_v1(&plan.core)?,
+    )?;
     let outer = derive_founding_outer_v1(
         rpc,
         plan,
@@ -12080,7 +12113,14 @@ fn execute_split_market_founding(
     let custody = pubkey(&plan.custody.program_id)?;
     let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
 
-    authenticate_core_state_encoding_v1(rpc, found31_market, core, registry, records)?;
+    authenticate_core_state_encoding_v1(
+        rpc,
+        found31_market,
+        core,
+        registry,
+        records,
+        core_product_graph_projection_v1(&plan.core)?,
+    )?;
     let outer = derive_founding_outer_v1(
         rpc,
         plan,
@@ -15419,6 +15459,79 @@ mod tests {
             mint: Pubkey::new_unique(),
             payer: Pubkey::new_unique(),
         }
+    }
+
+    /// THE PREDICTION FOLLOWS THE DEPLOYED CORE, NOT THIS TREE.
+    ///
+    /// Cohort-14c founded against a Core built at `8e96ec3f8`, which predates
+    /// `b312ce3c4`, and the driver at HEAD predicted eight bumps for it. The
+    /// founding refused on the bump tail AFTER 0.139 SOL and AFTER the
+    /// canonical Found37 Market existed, naming a disagreement that was
+    /// computable before the first transaction:
+    ///
+    ///     product_graph: ProductGraphBumpsV1([0, 0, 0, 0, 0, 0, 0, 0])
+    ///     this driver predicts ProductGraphBumpsV1([254, 255, ...])
+    ///
+    /// So the same identity, the same records and the same registry must
+    /// produce the tail the NAMED Core writes: zeros for cohort-14's deployed
+    /// bytes and the walk's eight nibbles for the build this tree installs. The
+    /// three bumps that predate `b312ce3c4` are unmoved by either answer, which
+    /// is the half that proves the projection is narrowed and not disabled.
+    #[test]
+    fn the_predicted_bump_tail_is_the_one_the_named_core_writes() {
+        let fixture = split_founding_fixture_v1();
+        let core = pubkey(&fixture.plan.core.program_id).expect("core id");
+        let registry = pubkey(&fixture.plan.registry.program_id).expect("registry id");
+
+        let mut deployed = fixture.plan.core.clone();
+        deployed.checked_candidate_elf_sha256 =
+            "864394530f37c04e53d10f918c8fab0c265187549895bf5a9207ae91f2a7d02f".into();
+        deployed.elf_sha256 = deployed.checked_candidate_elf_sha256.clone();
+        deployed.deployment_source = "observed-programdata-account".into();
+
+        let mut installed = fixture.plan.core.clone();
+        installed.checked_candidate_elf_sha256 = "9e".repeat(32);
+        installed.elf_sha256 = installed.checked_candidate_elf_sha256.clone();
+        installed.deployment_source = "genesis-install".into();
+
+        let predict = |pin: &crate::model::ProgramPin| {
+            predicted_state_bumps_v1(
+                core,
+                registry,
+                fixture.coordinates.identity,
+                &fixture.records,
+                core_product_graph_projection_v1(pin).expect("a Core this driver can model"),
+            )
+            .expect("the fixture's derivations carry")
+        };
+
+        let cohort_14 = predict(&deployed);
+        let this_tree = predict(&installed);
+
+        assert_eq!(
+            cohort_14.product_graph,
+            ProductGraphBumpsV1::ABSENT,
+            "a Core deployed before b312ce3c4 writes zeros in the reserved nibbles",
+        );
+        assert_ne!(
+            this_tree.product_graph,
+            ProductGraphBumpsV1::ABSENT,
+            "the Core this tree installs records the walk it performed",
+        );
+        assert_eq!(
+            this_tree.product_graph.bumps().len(),
+            PRODUCT_GRAPH_BUMP_COUNT
+        );
+
+        // Everything Core recorded BEFORE b312ce3c4 is identical under both
+        // projections: the skew is exactly the Product graph and nothing else.
+        assert_eq!(cohort_14.market, this_tree.market);
+        assert_eq!(cohort_14.realm_raw_record, this_tree.realm_raw_record);
+        assert_eq!(
+            cohort_14.realm_staging_record,
+            this_tree.realm_staging_record
+        );
+        assert_ne!(cohort_14, this_tree);
     }
 
     #[test]

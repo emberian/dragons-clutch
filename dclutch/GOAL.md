@@ -3853,3 +3853,11 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   token parser refuses the 170-byte ATA (165 exactly) so the browser's payout path cannot read the destination cohort-14
   exists to pay. → WEB **`(spawned)`**.
 - Cuts: `735d4e993`.
+- HOST-SKEW closed (`211f68150` journey compiles — one #[path] line missing since d478c6a5c; `70222d0d1` the Direct publish
+  ran once per recursion frame on the way out — identical bytes are a no-op, a different file still refuses by path;
+  `075098e5f` **the founding predictor takes its bump projection from a table keyed on the deployed Core's checked-candidate
+  ELF digest and refuses at campaign start, before any transaction, for a digest it does not know** — the red proof was
+  cohort-14c's refusal in miniature). **Runbook step owed to the next redeploy: add the new Core's digest to
+  `RECORDED_PRODUCT_GRAPH_CORE_ELF_SHA256_V1`** (empty today) or the first founding refuses fail-closed; put it in
+  tools/cohort14's successor runbook and preflight.
+- Cuts: `c4255934e`.

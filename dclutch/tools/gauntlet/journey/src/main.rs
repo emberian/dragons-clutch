@@ -78,8 +78,10 @@ mod rpc;
 // files it DOES share have grown call sites into them: `market.rs` calls
 // `crate::selected_capability::` and imports `crate::funding_readiness`,
 // `local_mutable.rs` calls `crate::general_market::`, `crate::rational_market::`
-// and `crate::structured_market::`, and `campaign.rs` calls
-// `crate::release_identity::`.
+// and `crate::structured_market::`, `campaign.rs` calls
+// `crate::release_identity::`, both `market.rs` and `selected_capability.rs`
+// call `crate::collateral_release::`, and `market.rs` and `campaign.rs` both
+// call `crate::core_bump_projection::`.
 //
 // This is the `#[path]` tripwire in the header doing exactly what it says, and
 // it went off silently: nothing runs this tier in CI, so the subset fell six
@@ -96,9 +98,30 @@ mod rpc;
 // reading this because it went off a third time, that is the tripwire earning
 // its keep; extend the set, and resist the urge to make the journey its own
 // copy of the successor.
+//
+// IT WENT OFF A THIRD TIME on 2026-09-02, exactly as the paragraph above said
+// it would, and this time nothing caught it for a day: `d478c6a5c` gave the
+// founded-versus-admitted collateral release one author in
+// `crate::collateral_release`, and `market.rs` and `selected_capability.rs`
+// both call it. The journey stopped compiling at all -- two `E0433`s and no
+// binary -- while every gate that does not build this tier stayed green. The
+// remedy is the same one, for the third time: link it.
+//
+// AND A FOURTH TIME IN THE SAME HOUR, which is the useful part of the record:
+// the lane that linked `collateral_release` then added
+// `crate::core_bump_projection` to `market.rs` and `campaign.rs`, ran this
+// build, and watched the tripwire fire on its OWN change before it committed.
+// That is what it is for. The set below is not a list to be kept in sync by
+// memory; it is a list this build corrects you about, so run it.
 #[path = "../../../local-validator/bootstrap/successor/src/chaos_fault.rs"]
 #[allow(dead_code)]
 mod chaos_fault;
+#[path = "../../../local-validator/bootstrap/successor/src/collateral_release.rs"]
+#[allow(dead_code)]
+mod collateral_release;
+#[path = "../../../local-validator/bootstrap/successor/src/core_bump_projection.rs"]
+#[allow(dead_code)]
+mod core_bump_projection;
 #[path = "../../../local-validator/bootstrap/successor/src/funding_readiness.rs"]
 #[allow(dead_code)]
 mod funding_readiness;

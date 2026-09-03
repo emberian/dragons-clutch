@@ -293,6 +293,26 @@ impl ScheduledStepV1 {
     }
 }
 
+/// Whether `--wait` may proceed, from the two facts that decide it.
+///
+/// `replay` is the CALLER's argument shape; `connected` is whether this command
+/// kept the endpoint it read the window through. Both refusals are legitimate
+/// and they are not the same accusation, so they do not share a sentence.
+fn wait_admission_v1(replay: bool, connected: bool) -> Result<()> {
+    if replay {
+        return Err(Error::new(
+            "--wait needs a live endpoint: a replay's clock is an argument, not a chain",
+        ));
+    }
+    if !connected {
+        return Err(Error::new(
+            "--wait was asked for on a live schedule and no endpoint was kept: that is a defect \
+             in this command, not in the caller's arguments",
+        ));
+    }
+    Ok(())
+}
+
 /// The ceiling a `--wait` uses when the caller states none.
 ///
 /// One window width plus one primary deadline is the longest a legitimate wait
@@ -323,9 +343,8 @@ pub(crate) fn usage() -> String {
 /// Run the schedule planner.
 pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
     let parsed = parse_arguments(arguments)?;
-    let mut connected = None;
-    let (window, now) = match (parsed.replay_window, parsed.replay_now) {
-        (Some(window), Some(now)) => (window, now),
+    let (window, now, connected) = match (parsed.replay_window, parsed.replay_now) {
+        (Some(window), Some(now)) => (window, now, None),
         (Some(_), None) | (None, Some(_)) => {
             return Err(Error::new(
                 "--replay-window and --replay-now are supplied together or not at all: a replay \
@@ -365,10 +384,17 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
                 })?
                 .data
                 .clone();
-            (
-                RelayWindowV1::decode(&bytes)?,
-                rpc.block_time(observed_slot)?,
-            )
+            let window = RelayWindowV1::decode(&bytes)?;
+            let now = rpc.block_time(observed_slot)?;
+            // THE CONNECTION LEAVES THIS ARM IN THE TUPLE, and that is why it
+            // cannot be forgotten again. It used to be a `let mut connected =
+            // None` declared above the match which this arm never assigned, so
+            // `rpc` was dropped here and EVERY live `--wait` refused
+            // "a replay's clock is an argument" while holding a live endpoint.
+            // Measured 2026-09-03 by the RELAY-C lane against devnet. A local
+            // an arm may silently decline to write is not a contract; a tuple
+            // slot the arm must produce is.
+            (window, now, Some(rpc))
         }
     };
     let plan = plan_relay_schedule_v1(
@@ -395,11 +421,12 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
     };
     // A REPLAY NEVER WAITS. Its clock is a number the caller supplied, so
     // sleeping against it would be sleeping against nothing.
-    let Some(mut rpc) = connected else {
-        return Err(Error::new(
-            "--wait needs a live endpoint: a replay's clock is an argument, not a chain",
-        ));
-    };
+    // ONE REFUSAL OVER TWO CAUSES IS WHAT HID THE DEFECT. A replay that asks to
+    // wait is the CALLER's mistake; a live schedule reaching here with no
+    // connection is THIS COMMAND's. They shared a sentence, and the cause that
+    // actually happened was the one the sentence did not describe.
+    wait_admission_v1(parsed.replay_window.is_some(), connected.is_some())?;
+    let mut rpc = connected.expect("wait_admission_v1 admits only a kept connection");
     let (label, action) = match step {
         ScheduledStepV1::Capture => ("capture", plan.capture),
         ScheduledStepV1::Settle => ("settle", plan.settle),
@@ -613,6 +640,37 @@ mod tests {
             441,
             "seven minutes and twenty-one seconds after the window closed",
         );
+    }
+
+    /// THE LIVE FORM IS WAITABLE, which is the fact the shipped command denied.
+    ///
+    /// Measured 2026-09-03 by the RELAY-C lane: `--wait capture` against a live
+    /// devnet endpoint refused *"a replay's clock is an argument, not a chain"*
+    /// while holding that endpoint, because `connected` was initialised to
+    /// `None` above the match and the live arm never assigned it. The arm now
+    /// yields the connection in the tuple, so the compiler carries that half;
+    /// what a test can carry is that the two causes are SEPARATE accusations,
+    /// since sharing one sentence is what let the command blame the caller for
+    /// a mistake the command had made.
+    #[test]
+    fn a_live_schedule_may_wait_and_the_two_refusals_are_not_one_sentence() {
+        wait_admission_v1(false, true).expect("a live schedule that kept its endpoint may wait");
+
+        let replay = wait_admission_v1(true, false).expect_err("a replay has no chain to wait on");
+        assert!(
+            replay
+                .to_string()
+                .contains("a replay's clock is an argument"),
+            "the replay refusal names the caller's argument shape: {replay}",
+        );
+
+        let defect =
+            wait_admission_v1(false, false).expect_err("a live schedule that kept no endpoint");
+        assert!(
+            defect.to_string().contains("defect in this command"),
+            "a dropped connection is this command's fault, not a replay: {defect}",
+        );
+        assert_ne!(replay.to_string(), defect.to_string());
     }
 
     /// The three verdicts partition the timeline, checked at every boundary.

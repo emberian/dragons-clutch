@@ -18,6 +18,7 @@ import {
   CORE_VERSION,
 } from './generated/coreFound';
 import { SOLANA_PACKET_BYTES_V1 } from './solanaLimits';
+import { admitBaseOrImmutableOwnerTokenAccountV1 } from './tokenAccountAdmissionV1';
 import { deriveFinalizedRecordAddressesV1, SYSTEM_PROGRAM_ID } from './releaseRegistry';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
 
@@ -33,7 +34,6 @@ export const TOKEN_2022_BEHAVIOR_PROFILE_ID_V2 = Uint8Array.from([
 ]);
 
 const MAX_U64 = 18_446_744_073_709_551_615n;
-const TOKEN_ACCOUNT_BYTES = 165;
 const TOKEN_MINT_BASE_BYTES = 82;
 const TOKEN_MINT_TLV_OFFSET = 166;
 const TOKEN_MINT_ACCOUNT_TYPE_OFFSET = 165;
@@ -218,7 +218,7 @@ export function decodeToken2022BehaviorMintV2(address: string, account: RpcAccou
   const displayDecimals = bytes[44] ?? 0;
   if (bytes[45] !== 1) throw new Error('claim Mint is uninitialized');
   if (coptionAddress(bytes, 46, 'freeze authority') !== null) throw new Error('claim Mint has a freeze authority');
-  requireZero(bytes, TOKEN_MINT_BASE_BYTES, TOKEN_ACCOUNT_BYTES - TOKEN_MINT_BASE_BYTES, 'Mint base padding');
+  requireZero(bytes, TOKEN_MINT_BASE_BYTES, TOKEN_MINT_ACCOUNT_TYPE_OFFSET - TOKEN_MINT_BASE_BYTES, 'Mint base padding');
   if (bytes[TOKEN_MINT_ACCOUNT_TYPE_OFFSET] !== TOKEN_MINT_ACCOUNT_TYPE) throw new Error('claim Mint has the wrong Token-2022 account type');
 
   let offset = TOKEN_MINT_TLV_OFFSET;
@@ -260,10 +260,14 @@ export function decodeToken2022BehaviorMintV2(address: string, account: RpcAccou
 
 export function decodeToken2022BehaviorAccountV2(address: string, account: RpcAccount): TokenBehaviorAccountViewV2 {
   key(address, 'claim Token Account');
-  if (account.owner !== TOKEN_2022_PROGRAM_ID || account.executable || account.data.length !== TOKEN_ACCOUNT_BYTES) {
-    throw new Error('claim Token Account is not exact extension-free Token-2022 data');
+  if (account.owner !== TOKEN_2022_PROGRAM_ID || account.executable) {
+    throw new Error('claim Token Account is not Token-2022 data');
   }
-  const bytes = account.data;
+  // The ATA program's 170-byte `ImmutableOwner` account is admitted here for
+  // the same reason the chain admits it: it is the account an ordinary wallet
+  // already has, and every field read below comes from the base layout the
+  // admission returns.
+  const bytes = admitBaseOrImmutableOwnerTokenAccountV1(account.data, 'claim Token Account');
   const mint = new PublicKey(slice(bytes, 0, 32)).toBase58();
   const owner = new PublicKey(slice(bytes, 32, 32)).toBase58();
   requireNonzero(slice(bytes, 0, 32), 'claim Token Account Mint');

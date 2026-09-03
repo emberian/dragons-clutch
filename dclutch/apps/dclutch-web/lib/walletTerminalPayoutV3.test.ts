@@ -57,6 +57,7 @@ import {
   TERMINAL_SETTLEMENT_CERTIFICATE_ACCOUNT_V3,
   TERMINAL_SETTLEMENT_RESOLUTION_PROGRAM_ACCOUNT_V3,
   TERMINAL_SETTLEMENT_RESOLUTION_PROGRAMDATA_ACCOUNT_V3,
+  TOKEN_ACCOUNT_IMMUTABLE_OWNER_SUFFIX_V1,
 } from './generated/walletTerminalPayoutV3';
 import { deriveClaimsAggregateAddressV2, deriveClaimsPositionAddressV2 } from './marketCoreV2';
 import { acquireOperatorSurfaceV1, liveDevnetOperatorPresetV1 } from './operatorSurface';
@@ -339,6 +340,34 @@ describe('wallet terminal payout v3', () => {
     const reordered = new AddressLookupTableAccount({ key: table.key, state: { ...table.state, addresses: [table.state.addresses[1]!, table.state.addresses[0]!, ...table.state.addresses.slice(2)] } });
     expect(() => compileWalletTerminalPayoutV0(built, { payer, recentBlockhash: key(31), lookupTable: reordered, lookupObservedSlot: '99' })).toThrow('sole canonical');
     expect(() => compileWalletTerminalPayoutV0(built, { payer, recentBlockhash: key(31), lookupTable: table, lookupObservedSlot: '100' })).toThrow('payout prestate observation');
+  });
+
+  it('pays the 170-byte associated token account, and carries its suffix into the poststate', async () => {
+    // The destination cohort-14 exists to be able to pay. Under Token-2022 the
+    // ATA program ALWAYS appends `ImmutableOwner`, so a stranger's own token
+    // account is 170 bytes; this reader required exactly 165 and refused it,
+    // while the chain's `parse_base_or_immutable_owner` admitted it. The two
+    // now share one admission.
+    const input = fixture() as WalletTerminalPayoutBuildInputV3 & { __requestBytes: Uint8Array };
+    input.signedPacket.set(await sha256(input.__requestBytes), 80);
+    const ata = new Uint8Array(170);
+    ata.set(input.recipientTokenBytes);
+    ata.set(TOKEN_ACCOUNT_IMMUTABLE_OWNER_SUFFIX_V1, 165);
+    const built = await buildWalletTerminalPayoutV3({ ...input, recipientTokenBytes: ata });
+    // The FULL width is what the report keeps: the postcondition projects the
+    // poststate from these bytes, so a truncated prestate would demand a
+    // 165-byte poststate for an account that will still be 170.
+    expect(built.preRecipientTokenBytes).toHaveLength(170);
+    expect(Array.from(built.preRecipientTokenBytes.subarray(165))).toEqual(Array.from(TOKEN_ACCOUNT_IMMUTABLE_OWNER_SUFFIX_V1));
+
+    // Every other extension at the same width still refuses, so the widening
+    // is one entry and not a relaxation.
+    const hooked = new Uint8Array(ata); hooked[166] = 14;
+    await expect(buildWalletTerminalPayoutV3({ ...input, recipientTokenBytes: hooked }))
+      .rejects.toThrow('not the exact empty ImmutableOwner entry');
+    const wide = new Uint8Array(171); wide.set(ata);
+    await expect(buildWalletTerminalPayoutV3({ ...input, recipientTokenBytes: wide }))
+      .rejects.toThrow('recipient is 171 bytes, neither the 165-byte base token account nor the 170-byte ImmutableOwner account');
   });
 
   it('refuses SignedDelta and physical-route substitutions before a wallet sees a message', async () => {

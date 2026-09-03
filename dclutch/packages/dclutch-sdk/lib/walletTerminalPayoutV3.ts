@@ -167,7 +167,6 @@ import {
   TERMINAL_SETTLEMENT_TRANSFER_INDEX_OFFSET_V3,
   TERMINAL_SETTLEMENT_VERSION_V3,
   TOKEN_ACCOUNT_AMOUNT_OFFSET_V1,
-  TOKEN_ACCOUNT_BYTES_V1,
   TOKEN_ACCOUNT_MINT_OFFSET_V1,
   TOKEN_ACCOUNT_OWNER_OFFSET_V1,
   TOKEN_ACCOUNT_STATE_OFFSET_V1,
@@ -197,6 +196,7 @@ import {
   decodeResolutionCertificateV2,
 } from './resolutionCertificateV2';
 import { type RpcAccount, type SolanaRpcClient, type TransactionMetaObservation } from './rpc';
+import { admitBaseOrImmutableOwnerTokenAccountV1 } from './tokenAccountAdmissionV1';
 
 const U64_MAX = 0xffff_ffff_ffff_ffffn;
 const PACKET_BYTES = 1_232;
@@ -207,7 +207,6 @@ const RECEIPT_MAGIC = TERMINAL_SETTLEMENT_RECEIPT_MAGIC_V3;
 const SIGNED_MAGIC = SIGNED_DELTA_PLAN_MAGIC_V3;
 const VERSION = TERMINAL_SETTLEMENT_VERSION_V3;
 const ACCOUNT_COUNT = TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3;
-const TOKEN_ACCOUNT_BYTES = TOKEN_ACCOUNT_BYTES_V1;
 const TOKEN_AMOUNT_OFFSET = TOKEN_ACCOUNT_AMOUNT_OFFSET_V1;
 const TOKEN_STATE_OFFSET = TOKEN_ACCOUNT_STATE_OFFSET_V1;
 const LEGACY_TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
@@ -476,10 +475,18 @@ function inputClaimIndex(request: WalletTerminalPayoutRequestV3): number {
 }
 
 function validateToken(bytes: Uint8Array, mint: string, owner: string, field: string): bigint {
-  if (bytes.length !== TOKEN_ACCOUNT_BYTES || bytes[TOKEN_STATE_OFFSET] !== 1
-      || !same(slice(bytes, TOKEN_ACCOUNT_MINT_OFFSET_V1, 32), key(mint, `${field} Mint`).toBytes())
-      || !same(slice(bytes, TOKEN_ACCOUNT_OWNER_OFFSET_V1, 32), key(owner, `${field} owner`).toBytes())) throw new Error(`${field} is not the exact initialized token account`);
-  return u64(bytes, TOKEN_AMOUNT_OFFSET);
+  // The Hoard is a base 165-byte account and the recipient is whatever the
+  // wallet already had, which under Token-2022 is the ATA program's 170-byte
+  // `ImmutableOwner` account. One admission answers both, and everything below
+  // it reads the base layout it returns. The full width is what the caller
+  // keeps: `tokenAmount` projects the poststate from the ORIGINAL bytes, so an
+  // admitted suffix is carried into the postcondition rather than truncated
+  // out of it.
+  const base = admitBaseOrImmutableOwnerTokenAccountV1(bytes, field);
+  if (base[TOKEN_STATE_OFFSET] !== 1
+      || !same(slice(base, TOKEN_ACCOUNT_MINT_OFFSET_V1, 32), key(mint, `${field} Mint`).toBytes())
+      || !same(slice(base, TOKEN_ACCOUNT_OWNER_OFFSET_V1, 32), key(owner, `${field} owner`).toBytes())) throw new Error(`${field} is not the exact initialized token account`);
+  return u64(base, TOKEN_AMOUNT_OFFSET);
 }
 
 function validateReplay(bytes: Uint8Array, request: WalletTerminalPayoutRequestV3, context: Uint8Array): void {

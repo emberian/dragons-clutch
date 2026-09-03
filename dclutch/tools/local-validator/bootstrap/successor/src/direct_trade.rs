@@ -11,7 +11,7 @@
 use std::{
     collections::BTreeMap,
     fs::{self, OpenOptions},
-    io::Write as _,
+    io::{ErrorKind, Write as _},
     path::{Path, PathBuf},
     str::FromStr as _,
     thread,
@@ -3409,14 +3409,11 @@ fn adopted_capability_seal_journal_v1(
     next: &NextActionV1,
 ) -> Result<DirectTradeJournalV1> {
     authenticate_frozen_lookup_v1(planning)?;
-    let account = finalized_observed_accounts_v1(
-        rpc,
-        &[planning.seal.seal],
-        planning.seal.observation.slot,
-    )?
-    .into_iter()
-    .next()
-    .ok_or_else(|| refusal("Direct adopted capability seal disappeared"))?;
+    let account =
+        finalized_observed_accounts_v1(rpc, &[planning.seal.seal], planning.seal.observation.slot)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| refusal("Direct adopted capability seal disappeared"))?;
     verify_direct_inline_capability_seal_v3(&planning.seal, &account).map_err(|error| {
         refusal(format!(
             "Direct capability seal was materialized by another session but is not this session's exact sealed closure: {error:?}"
@@ -4931,7 +4928,7 @@ fn publish_direct_evidence_v1(
     };
     authenticate_direct_claim_schedule_v1(&evidence)?;
     evidence.evidence_sha256 = direct_evidence_digest_v1(&evidence)?;
-    write_create_only_json_v1(path, &evidence)
+    publish_immutable_json_v1(path, &evidence)
 }
 
 fn finalized_capability_seal_digest_v1(validated: &ValidatedManifestV1) -> Result<String> {
@@ -5026,7 +5023,33 @@ fn direct_evidence_digest_v1(evidence: &DirectTradeFinalizedEvidenceV1) -> Resul
     Ok(sha256_hex(&serde_json::to_vec(&projected)?))
 }
 
-fn write_create_only_json_v1(path: &Path, value: &impl Serialize) -> Result<()> {
+/// Publish one document at a path that may only ever hold that document.
+///
+/// The link is still create-only, which is what makes the publication atomic
+/// and what stops two writers interleaving a half-written evidence file. What
+/// changed is the answer when the link finds a file already there: the
+/// question a republish asks is *"is this the same document"*, not *"is this
+/// the first write"*, and those two have different answers exactly when a step
+/// is repeated.
+///
+/// One invocation repeats it, and the repetition is structural rather than
+/// accidental. `resume_direct_transaction_v1` RECURSES -- `Planned` prepares
+/// and calls itself, `Prepared` dispatches and calls itself -- and the
+/// publication sits in its tail, after the match. So a Hot carried from
+/// `Planned` to `Finalized` inside a single process runs that tail once per
+/// stack frame on the way out: the innermost publishes, the frames above it
+/// republish the identical document, and `create_new` answered `File exists`.
+/// The simulator is what surfaced it: `pulse_session` treats a nonzero child
+/// as a refusal, so a cycle whose Hot had ALREADY LANDED AND FINALIZED exited
+/// 2. A published document is a fact about a finished transaction, and
+/// restating a fact is not a conflict.
+///
+/// So: byte-identical content is a no-op, and a DIFFERENT document at the same
+/// path is still refused -- louder than before, because that refusal now names
+/// the path and says which of the two questions failed. Nothing about this
+/// weakens the create-only publication; it narrows the refusal to the case
+/// that was ever a defect.
+fn publish_immutable_json_v1(path: &Path, value: &impl Serialize) -> Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| refusal("Direct evidence omitted parent"))?;
@@ -5034,6 +5057,8 @@ fn write_create_only_json_v1(path: &Path, value: &impl Serialize) -> Result<()> 
         .file_name()
         .and_then(|value| value.to_str())
         .ok_or_else(|| refusal("Direct evidence omitted UTF-8 name"))?;
+    let mut published = serde_json::to_vec_pretty(value)?;
+    published.push(b'\n');
     let temporary = parent.join(format!(
         ".{name}.direct-evidence-{}.tmp",
         std::process::id()
@@ -5042,13 +5067,28 @@ fn write_create_only_json_v1(path: &Path, value: &impl Serialize) -> Result<()> 
         .write(true)
         .create_new(true)
         .open(&temporary)?;
-    file.write_all(&serde_json::to_vec_pretty(value)?)?;
-    file.write_all(b"\n")?;
+    file.write_all(&published)?;
     file.sync_all()?;
     drop(file);
-    fs::hard_link(&temporary, path)
-        .map_err(|error| Error::new(format!("publish Direct evidence: {error}")))?;
-    fs::remove_file(temporary)?;
+    let linked = fs::hard_link(&temporary, path);
+    let outcome = match linked {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => match fs::read(path) {
+            Ok(existing) if existing == published => Ok(()),
+            Ok(_) => Err(refusal(format!(
+                "publish Direct evidence: {} already holds a DIFFERENT document; \
+                     a republication of the same bytes is a no-op, and this is not that",
+                path.display()
+            ))),
+            Err(error) => Err(Error::new(format!(
+                "publish Direct evidence: {} exists and could not be read back: {error}",
+                path.display()
+            ))),
+        },
+        Err(error) => Err(Error::new(format!("publish Direct evidence: {error}"))),
+    };
+    fs::remove_file(&temporary)?;
+    outcome?;
     OpenOptions::new().read(true).open(parent)?.sync_all()?;
     Ok(())
 }
@@ -7147,11 +7187,11 @@ mod tests {
         authenticate_direct_claim_schedule_v1, authenticate_direct_history_v1,
         authenticate_embedded_direct_evidence_identity_v1,
         authenticate_lookup_activation_slot_order_v1, direct_chaos_mutation_v1,
-        refusing_adopted_seal_journal_clause_v1,
         direct_evidence_digest_v1, direct_evidence_schema_v1, direct_journal_schema_v1,
         direct_private_schema_v1, direct_public_schema_v1, expected_stage_v1, hex32,
         journal_intent_sha256_v1, journal_state_sha256, parse_direct_return_data_v1,
-        refresh_direct_journal_digest_v1, refusing_admitted_fee_rate_clause_v1,
+        publish_immutable_json_v1, refresh_direct_journal_digest_v1,
+        refusing_admitted_fee_rate_clause_v1, refusing_adopted_seal_journal_clause_v1,
         require_unique_json_v1, usage, verify_expected_direct_poststates_v1,
         write_direct_journal_v1,
     };
@@ -7984,6 +8024,92 @@ mod tests {
         assert_eq!(persisted, second);
         std::fs::remove_file(path)?;
         std::fs::remove_dir(root)?;
+        Ok(())
+    }
+
+    fn scoped_publication_root(tag: &str) -> std::path::PathBuf {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        std::env::temp_dir().join(format!(
+            "dclutch-direct-publish-{tag}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+
+    /// THE SIMULATOR'S GREEN RUN. `pulse_session` invokes the Direct driver
+    /// once per durable mutation, and the invocation that lands the Hot
+    /// publishes the finalized evidence and then reaches the same publication
+    /// again. Under `create_new` that second reach was `File exists`, the
+    /// child exited nonzero, and a run whose Hot had already landed was
+    /// reported as a refusal. Publishing the SAME bytes is a statement about a
+    /// transaction that is already final, so it is a no-op and the file is
+    /// left byte-for-byte alone.
+    #[test]
+    fn republishing_byte_identical_direct_evidence_is_a_no_op() -> crate::Result<()> {
+        let root = scoped_publication_root("same");
+        std::fs::create_dir(&root)?;
+        let path = root.join("direct-trade-finalized.json");
+        let document = json!({"schema": "fixture", "fill": 200});
+
+        publish_immutable_json_v1(&path, &document)?;
+        let first = std::fs::read(&path)?;
+        publish_immutable_json_v1(&path, &document)?;
+        publish_immutable_json_v1(&path, &document)?;
+        assert_eq!(
+            std::fs::read(&path)?,
+            first,
+            "a republication of the same document must not rewrite the published bytes"
+        );
+
+        // And it leaves no debris: the temporary the link was made from is
+        // removed on the no-op path as well as the publishing one.
+        let residue: Vec<_> = std::fs::read_dir(&root)?
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name())
+            .filter(|name| name != "direct-trade-finalized.json")
+            .collect();
+        assert!(residue.is_empty(), "{residue:?}");
+
+        std::fs::remove_file(&path)?;
+        std::fs::remove_dir(&root)?;
+        Ok(())
+    }
+
+    /// AND THE REFUSAL THE PATH IS FOR IS STILL THERE. Idempotence is for the
+    /// same document; a DIFFERENT one at a published coordinate is the case
+    /// `create_new` was chosen to catch, and it must still refuse, name the
+    /// path, and leave the published bytes untouched.
+    #[test]
+    fn a_different_document_at_a_published_path_is_still_refused() -> crate::Result<()> {
+        let root = scoped_publication_root("other");
+        std::fs::create_dir(&root)?;
+        let path = root.join("direct-trade-finalized.json");
+        let published = json!({"schema": "fixture", "fill": 200});
+        let other = json!({"schema": "fixture", "fill": 201});
+
+        publish_immutable_json_v1(&path, &published)?;
+        let bytes = std::fs::read(&path)?;
+        let error = publish_immutable_json_v1(&path, &other)
+            .expect_err("a different document at a published path is a refusal");
+        let text = error.to_string();
+        assert!(text.contains("REFUSED"), "{text}");
+        assert!(text.contains("DIFFERENT"), "{text}");
+        assert!(text.contains(&path.display().to_string()), "{text}");
+        assert_eq!(
+            std::fs::read(&path)?,
+            bytes,
+            "a refused publication must not have moved the published bytes"
+        );
+
+        let residue: Vec<_> = std::fs::read_dir(&root)?
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name())
+            .filter(|name| name != "direct-trade-finalized.json")
+            .collect();
+        assert!(residue.is_empty(), "{residue:?}");
+
+        std::fs::remove_file(&path)?;
+        std::fs::remove_dir(&root)?;
         Ok(())
     }
 }

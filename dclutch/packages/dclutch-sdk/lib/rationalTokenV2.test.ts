@@ -12,6 +12,7 @@ import {
   CORE_STATE_VERSION_OFFSET,
   CORE_VERSION,
 } from './generated/coreFound';
+import { TOKEN_ACCOUNT_IMMUTABLE_OWNER_SUFFIX_V1 } from './generated/walletTerminalPayoutV3';
 import {
   TOKEN_2022_BEHAVIOR_PROFILE_ID_V2,
   TOKEN_2022_PROGRAM_ID,
@@ -133,7 +134,28 @@ describe('TokenBehaviorSelectionV2 and ordinary Bearer transfer', () => {
     const delegated = tokenAccountFixture(mint, owner, 1n).data.slice(); putU32(delegated, 72, 1); delegated.set(new PublicKey(key(11)).toBytes(), 76);
     expect(() => decodeToken2022BehaviorAccountV2(key(10), account(TOKEN_2022_PROGRAM_ID, delegated))).toThrow('delegated');
     const extended = new Uint8Array(166); extended.set(tokenAccountFixture(mint, owner, 1n).data);
-    expect(() => decodeToken2022BehaviorAccountV2(key(10), account(TOKEN_2022_PROGRAM_ID, extended))).toThrow('extension-free');
+    expect(() => decodeToken2022BehaviorAccountV2(key(10), account(TOKEN_2022_PROGRAM_ID, extended)))
+      .toThrow('166 bytes, neither the 165-byte base token account nor the 170-byte ImmutableOwner account');
+    // A transfer hook at the ATA's own width: the one extension family this
+    // decoder must keep refusing, because it changes what a transfer means.
+    const hooked = new Uint8Array(170); hooked.set(tokenAccountFixture(mint, owner, 1n).data);
+    hooked.set(Uint8Array.of(2, 14, 0, 0, 0), 165);
+    expect(() => decodeToken2022BehaviorAccountV2(key(10), account(TOKEN_2022_PROGRAM_ID, hooked)))
+      .toThrow('not the exact empty ImmutableOwner entry');
+  });
+
+  it('reads the 170-byte associated token account an ordinary wallet already has', () => {
+    // The account the ATA program writes for every Token-2022 wallet, which
+    // this decoder refused outright until the admission was shared with the
+    // chain's own. Cohort-14 paid one of these on devnet.
+    const mint = key(21); const owner = key(22);
+    const ata = new Uint8Array(170);
+    ata.set(tokenAccountFixture(mint, owner, 500_000_000n).data);
+    ata.set(TOKEN_ACCOUNT_IMMUTABLE_OWNER_SUFFIX_V1, 165);
+    const view = decodeToken2022BehaviorAccountV2(key(23), account(TOKEN_2022_PROGRAM_ID, ata));
+    expect(view.mint).toBe(mint);
+    expect(view.owner).toBe(owner);
+    expect(view.rawAmount).toBe(500_000_000n);
   });
 
   it('compiles exact raw atoms into one unsigned v0 TransferChecked packet using the selected ALT', () => {

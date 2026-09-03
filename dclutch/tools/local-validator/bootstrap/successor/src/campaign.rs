@@ -3876,6 +3876,13 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
     // The activated release must be the one actually running. Costs no extra
     // RPC: substrate_state already read every role's live slot and ELF digest.
     crate::release_identity::authenticate_activated_release_is_live_v1(&plan, &observed_roles)?;
+    // And the host must be able to say what the DEPLOYED Core writes into the
+    // Market's reserved bump tail before it projects one. `b312ce3c4` started
+    // recording the Product graph's eight bumps there; a cohort deployed before
+    // it writes zeros, and a founding that guesses refuses only after the
+    // Market exists and the spending is done. Asked here, it is one sentence
+    // and no transaction, on readings already taken.
+    crate::core_bump_projection::authenticate_core_bump_projection_v1(&plan.core, &observed_roles)?;
     let publication = publication_state(&mut rpc, &plan)?;
     let initialize = initialize_state(&mut rpc, &plan)?;
     let succession = succession_state(&mut rpc, &plan)?;

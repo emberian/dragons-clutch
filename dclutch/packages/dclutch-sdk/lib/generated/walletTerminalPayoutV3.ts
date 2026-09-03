@@ -2,7 +2,7 @@
 // Authorities: dclutch-claims-svm/src/{terminal_settlement_v3,signed_delta_v3}.rs,
 // dclutch-custody-contract/src/generated.rs,
 // dclutch-claims-svm/src/{generated_liability_basis_state_v2,liability_basis_state_v2}.rs,
-// dclutch-token-svm/src/state.rs.
+// dclutch-token-svm/src/{state,tlv}.rs.
 
 export const WALLET_TERMINAL_MAGIC_OFFSET_V3 = 0 as const;
 export const WALLET_TERMINAL_VERSION_OFFSET_V3 = 8 as const;
@@ -124,3 +124,5 @@ export const TOKEN_ACCOUNT_MINT_OFFSET_V1 = 0 as const;
 export const TOKEN_ACCOUNT_OWNER_OFFSET_V1 = 32 as const;
 export const TOKEN_ACCOUNT_AMOUNT_OFFSET_V1 = 64 as const;
 export const TOKEN_ACCOUNT_STATE_OFFSET_V1 = 108 as const;
+export const TOKEN_ACCOUNT_IMMUTABLE_OWNER_BYTES_V1 = 170 as const;
+export const TOKEN_ACCOUNT_IMMUTABLE_OWNER_SUFFIX_V1 = Uint8Array.of(2, 7, 0, 0, 0);
