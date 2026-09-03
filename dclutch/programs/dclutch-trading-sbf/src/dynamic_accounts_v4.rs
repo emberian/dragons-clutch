@@ -83,7 +83,7 @@ pub(crate) fn expand_dynamic_physical_accounts_v4<'accounts, 'info>(
     let mut logical = Vec::new();
     logical
         .try_reserve_exact(logical_count)
-        .map_err(|_| TradingSbfError::Content)?;
+        .map_err(|_| TradingSbfError::HeapExhausted)?;
     let mut next = 0_usize;
     let mut coordinate = 0_usize;
     while coordinate < logical_count {

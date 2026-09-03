@@ -202,7 +202,7 @@ pub(crate) fn execute_claims_route_v3<'info>(
         buffers
             .data
             .try_reserve(1)
-            .map_err(|_| TradingSbfError::Content)?;
+            .map_err(|_| TradingSbfError::HeapExhausted)?;
         buffers.data.push(bump);
     }
     let fractional_root = fractional_root_signer(
@@ -1562,7 +1562,7 @@ pub(crate) fn signed_delta_post_resource_digest(
                 .checked_add(1)
                 .ok_or(TradingSbfError::Content)?,
         )
-        .map_err(|_| TradingSbfError::Content)?;
+        .map_err(|_| TradingSbfError::HeapExhausted)?;
     guards.push(
         child_accounts
             .get(1)
@@ -1585,7 +1585,7 @@ pub(crate) fn signed_delta_post_resource_digest(
                 .checked_add(1)
                 .ok_or(TradingSbfError::Content)?,
         )
-        .map_err(|_| TradingSbfError::Content)?;
+        .map_err(|_| TradingSbfError::HeapExhausted)?;
     parts.push(b"dclutch/claims/signed-delta-post-resources/v3");
     for guard in &guards {
         parts.push(guard);

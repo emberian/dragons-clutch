@@ -68,7 +68,7 @@ impl ChildReceiptBankV3 {
         }
         self.receipts
             .try_reserve_exact(invocations)
-            .map_err(|_| TradingSbfError::Content.into())
+            .map_err(|_| TradingSbfError::HeapExhausted.into())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -183,7 +183,7 @@ pub(crate) fn deliver_receipt_dependency_v3(
             }
             child_data
                 .try_reserve(receipt.len())
-                .map_err(|_| TradingSbfError::Content)?;
+                .map_err(|_| TradingSbfError::HeapExhausted)?;
             child_data.extend_from_slice(receipt);
             Ok(())
         }

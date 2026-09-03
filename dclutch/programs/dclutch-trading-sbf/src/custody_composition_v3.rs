@@ -153,7 +153,7 @@ pub fn execute_custody_route_v3<'info>(
     buffers
         .data
         .try_reserve(CUSTODY_BUMP_RELAY_BYTES_V1)
-        .map_err(|_| TradingSbfError::Content)?;
+        .map_err(|_| TradingSbfError::HeapExhausted)?;
     buffers.data.push(prepared.bump);
     buffers.data.extend_from_slice(&parent.child_relay);
     buffers.push_callee(custody_program)?;

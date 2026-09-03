@@ -1,6 +1,6 @@
 {
   "bound_bytes": 4096,
-  "commit": "4cd2b9cb5ebcd8c5e779ea4bacc6df7dfc07b9e0",
+  "commit": "0948b0224ecf842f6adc7b9082f2685c8e7c8630",
   "link_count": 12,
   "links": [
     {
@@ -6136,7 +6136,7 @@
       "package": "dclutch-series-shadow-sbf"
     },
     {
-      "frame_count": 911,
+      "frame_count": 912,
       "functions": [
         {
           "frames_bytes": [
@@ -6292,7 +6292,7 @@
         },
         {
           "frames_bytes": [
-            64
+            128
           ],
           "symbol": "_ZN19dclutch_trading_sbf16child_receipt_v329deliver_receipt_dependency_v317h<hash>E"
         },
@@ -6383,6 +6383,12 @@
             64
           ],
           "symbol": "_ZN19dclutch_trading_sbf18entrypoint_adapter22invoke_signed_owned_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            64
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf18entrypoint_adapter23get_return_data_into_v117h<hash>E"
         },
         {
           "frames_bytes": [
@@ -7004,7 +7010,7 @@
         },
         {
           "frames_bytes": [
-            320
+            384
           ],
           "symbol": "_ZN19dclutch_trading_sbf23admitted_composition_v320AdmittedCpiBuffersV43new17h<hash>E"
         },

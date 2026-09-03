@@ -337,7 +337,7 @@ fn prepare<'info>(
             .checked_add(post_body.len())
             .ok_or(TradingSbfError::Content)?,
     )
-    .map_err(|_| TradingSbfError::Content)?;
+    .map_err(|_| TradingSbfError::HeapExhausted)?;
     wire.extend_from_slice(request_bytes);
     wire.extend_from_slice(post_body);
     gather_invocation_accounts(frame, invocation, effect_accounts)?;

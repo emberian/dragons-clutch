@@ -671,8 +671,13 @@ async fn execute_open_batch_at(outcome_count: u32, warp_to: Option<u64>) -> Open
     let elves = waist::elves();
     let accelerator_elf = load_accelerator_elf();
     let rent = Rent::default();
-    let payer = Keypair::new();
-    let fee_payer = Keypair::new();
+    // FIXED, NOT FRESH, and the two-slot proof is the reason. Both roles are
+    // top-level account-list coordinates, so a `Keypair::new()` here makes
+    // every pair of runs differ in the two entries the caller chose -- which is
+    // not the property under test and would refute it whatever the seed did.
+    // Each case runs in its own bank, so nothing collides.
+    let payer = Keypair::new_from_array([0x11; 32]);
+    let fee_payer = Keypair::new_from_array([0x12; 32]);
     let mut test = waist::program_test_without_forced_budget(&elves);
     let releases = waist::add_release_waist_v2(&mut test, &elves, substrate);
     waist::add_program_v2(
@@ -1197,10 +1202,28 @@ async fn one_signed_account_list_opens_the_same_batch_at_two_execution_slots() {
         first.executed_slot, second.executed_slot,
         "the two executions must be at different slots, or this proves nothing"
     );
+    // NAMING THE COORDINATES, not only the fact. `assert_eq!` on two
+    // fifty-five-entry vectors prints both in full and leaves the reader to
+    // diff them, and this assertion's whole job is to say WHICH account is a
+    // function of the slot -- the caller-authority span is four consecutive
+    // entries and any other coordinate moving is a different defect entirely.
+    let moved: Vec<(usize, Pubkey, Pubkey)> = first
+        .account_list
+        .iter()
+        .zip(second.account_list.iter())
+        .enumerate()
+        .filter(|(_, (a, b))| a != b)
+        .map(|(index, (a, b))| (index, *a, *b))
+        .collect();
     assert_eq!(
-        first.account_list, second.account_list,
+        first.account_list.len(),
+        second.account_list.len(),
+        "the two executions did not present account lists of the same width"
+    );
+    assert!(
+        moved.is_empty(),
         "the top-level account list moved with the executing slot; a signed \
-         transaction cannot name it"
+         transaction cannot name it. Coordinates that moved: {moved:?}"
     );
     assert_eq!(
         (first.invocations, first.accounts),

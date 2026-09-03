@@ -332,7 +332,7 @@ impl<'effect, 'registers, 'request> BorrowedRouteRangesV4<'effect, 'registers, '
             .ok_or(TradingSbfError::Content)?;
         output
             .try_reserve_exact(additional)
-            .map_err(|_| TradingSbfError::Content)?;
+            .map_err(|_| TradingSbfError::HeapExhausted)?;
         let mut ordinal = 0_u16;
         while ordinal < count {
             output.extend_from_slice(self.range(ordinal)?);
@@ -507,7 +507,7 @@ pub fn child_request_digest_v5<'a>(
     let mut ranges = Vec::new();
     ranges
         .try_reserve_exact(usize::from(range_count))
-        .map_err(|_| TradingSbfError::Content)?;
+        .map_err(|_| TradingSbfError::HeapExhausted)?;
     let mut range_bytes = 0_usize;
     let mut ordinal = 0_u16;
     while ordinal < range_count {
@@ -534,7 +534,7 @@ pub fn child_request_digest_v5<'a>(
     let mut framed = Vec::new();
     framed
         .try_reserve_exact(capacity)
-        .map_err(|_| TradingSbfError::Content)?;
+        .map_err(|_| TradingSbfError::HeapExhausted)?;
     framed.extend_from_slice(CHILD_REQUEST_DIGEST_DOMAIN_V5);
     framed.extend_from_slice(&range_count.to_le_bytes());
     framed.extend_from_slice(&child_request_len);
@@ -3899,6 +3899,10 @@ fn execute_authenticated_hot_v3(
         return Err(TradingSbfError::Content.into());
     }
 
+    require_shadow_declares_no_trusted_slot_v1(
+        strategy.strategy().disposition(),
+        account_profile.trusted_environment(),
+    )?;
     let trusted_environment = observe_trusted_environment_v3(account_profile, program_id)?;
     let dynamic_spans = authenticate_dynamic_span_widths_v3(
         account_profile,
@@ -6043,7 +6047,7 @@ fn prepare_direct_registered_crosscheck_v3(
     let mut root_bytes = Vec::new();
     root_bytes
         .try_reserve_exact(CAPABILITY_ROOT_HEADER_BYTES_V1 + DIRECT_ROOT_STATE_BYTES_V1)
-        .map_err(|_| TradingSbfError::Content)?;
+        .map_err(|_| TradingSbfError::HeapExhausted)?;
     root_bytes.extend_from_slice(immutable_root_header);
     root_bytes.extend_from_slice(&created.root.encode());
     let maker_bytes = created
@@ -6183,7 +6187,7 @@ fn prepare_direct_inline_account_finalization_v3(
     let mut account_data = Vec::new();
     account_data
         .try_reserve_exact(DIRECT_INLINE_POSTSTATE_COUNT_V3)
-        .map_err(|_| TradingSbfError::Content)?;
+        .map_err(|_| TradingSbfError::HeapExhausted)?;
     for account in [
         root_account,
         seller_maker,
@@ -6632,7 +6636,7 @@ fn account_inputs_v3(
     let mut account_inputs: Vec<AccountInput> = Vec::new();
     account_inputs
         .try_reserve_exact(observations.len())
-        .map_err(|_| TradingSbfError::Content)?;
+        .map_err(|_| TradingSbfError::HeapExhausted)?;
     account_inputs.extend(observations.iter().map(|observation| AccountInput {
         lamports: observation.lamports(),
         data_len: observation.data().len(),
@@ -6733,7 +6737,7 @@ fn runtime_transcript_digest_v3(
 fn try_projection_bank_v3<T: Clone>(value: &T, len: usize) -> Result<Vec<T>, ProgramError> {
     let mut bank = Vec::new();
     bank.try_reserve_exact(len)
-        .map_err(|_| TradingSbfError::Content)?;
+        .map_err(|_| TradingSbfError::HeapExhausted)?;
     bank.resize(len, value.clone());
     Ok(bank)
 }
@@ -6823,7 +6827,7 @@ fn project_hot_effects_v3(
     let mut output_lamports: Vec<u64> = Vec::new();
     output_lamports
         .try_reserve_exact(account_inputs.len())
-        .map_err(|_| TradingSbfError::Content)?;
+        .map_err(|_| TradingSbfError::HeapExhausted)?;
     output_lamports.extend(account_inputs.iter().map(|account| account.lamports));
     hot_heap_mark!("effects-lamport-banks");
     // One bank, not two. The projection's second request bank was written once,
@@ -8117,7 +8121,7 @@ impl<'a, 'accounts, 'info> DowngradedEffectAccountsV3<'a, 'accounts, 'info> {
         output.clear();
         output
             .try_reserve_exact(exact)
-            .map_err(|_| TradingSbfError::Content)?;
+            .map_err(|_| TradingSbfError::HeapExhausted)?;
         Ok(())
     }
 
@@ -8138,7 +8142,7 @@ impl<'a, 'accounts, 'info> DowngradedEffectAccountsV3<'a, 'accounts, 'info> {
         }
         output
             .try_reserve(count)
-            .map_err(|_| TradingSbfError::Content)?;
+            .map_err(|_| TradingSbfError::HeapExhausted)?;
         let mut coordinate = start;
         while coordinate < end {
             output.push(self.view(coordinate)?);
@@ -8215,7 +8219,7 @@ impl<'info> ChildInvocationBuffersV3<'info> {
         }
         self.data
             .try_reserve_exact(capacity)
-            .map_err(|_| TradingSbfError::Content.into())
+            .map_err(|_| TradingSbfError::HeapExhausted.into())
     }
 
     /// Replace the child wire with `request`, reusing the buffer's capacity.
@@ -8223,7 +8227,7 @@ impl<'info> ChildInvocationBuffersV3<'info> {
         self.data.clear();
         self.data
             .try_reserve(request.len())
-            .map_err(|_| TradingSbfError::Content)?;
+            .map_err(|_| TradingSbfError::HeapExhausted)?;
         self.data.extend_from_slice(request);
         Ok(())
     }
@@ -8240,7 +8244,7 @@ impl<'info> ChildInvocationBuffersV3<'info> {
         self.metas.clear();
         self.metas
             .try_reserve(self.accounts.len())
-            .map_err(|_| TradingSbfError::Content)?;
+            .map_err(|_| TradingSbfError::HeapExhausted)?;
         for (index, account) in self.accounts.iter().enumerate() {
             let signer = index == 0 || account.is_signer;
             self.metas.push(if account.is_writable {
@@ -8256,7 +8260,7 @@ impl<'info> ChildInvocationBuffersV3<'info> {
     pub fn push_callee(&mut self, callee: &AccountInfo<'info>) -> Result<(), ProgramError> {
         self.accounts
             .try_reserve(1)
-            .map_err(|_| TradingSbfError::Content)?;
+            .map_err(|_| TradingSbfError::HeapExhausted)?;
         self.accounts.push(callee.clone());
         Ok(())
     }
@@ -8378,7 +8382,7 @@ pub(crate) fn child_route_privileges_v3(
     let mut declared = Vec::new();
     declared
         .try_reserve_exact(logical_count)
-        .map_err(|_| TradingSbfError::Content)?;
+        .map_err(|_| TradingSbfError::HeapExhausted)?;
     let mut coordinate = 0_usize;
     while coordinate < logical_count {
         let privileges = if dynamic {
@@ -8903,7 +8907,7 @@ impl<'a> LifecycleBatchSinkV4<'a> {
                 let mut output = Vec::new();
                 output
                     .try_reserve_exact(planned)
-                    .map_err(|_| TradingSbfError::Content)?;
+                    .map_err(|_| TradingSbfError::HeapExhausted)?;
                 Ok(Self::Collect(output))
             }
             Some(expected) => {
@@ -10549,7 +10553,7 @@ impl<T> HeapBoxV3<T> {
         let mut storage = Vec::new();
         storage
             .try_reserve_exact(1)
-            .map_err(|_| TradingSbfError::Content)?;
+            .map_err(|_| TradingSbfError::HeapExhausted)?;
         storage.push(value);
         Ok(Self(
             storage
@@ -11557,7 +11561,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                     // doubling slack would be permanent heap.
                     prior_receipt_bytes
                         .try_reserve_exact(receipt.len())
-                        .map_err(|_| TradingSbfError::Content)?;
+                        .map_err(|_| TradingSbfError::HeapExhausted)?;
                     prior_receipt_bytes.extend_from_slice(receipt);
                 }
                 dependency_index = dependency_index
@@ -14176,6 +14180,52 @@ struct TrustedEnvironmentObservationV3 {
     system_program: Option<(usize, [u8; 32])>,
 }
 
+/// A `ShadowAot` strategy may not be paired with a slot-declaring AccountProfile.
+///
+/// # What this forbids, and what it does NOT claim
+///
+/// It forbids a pairing NOTHING HAS EVER EXECUTED. Series is the only family on
+/// this disposition and declares `TrustedEnvironmentV2::None`, so the
+/// combination has no fixture, no campaign and no on-chain instruction
+/// anywhere in this tree -- and until `3a8ac205d` it was also unsound:
+/// `shadow_composition_v3`'s caller-authority seed was `hash(ShadowRequestV3)`,
+/// and that request carries `candidate_digest_v3` over the post-transition
+/// register bank, which is where a `CurrentSlot` profile's `Clock::get().slot`
+/// lands. The address moved every slot and a signed account list cannot name
+/// it.
+///
+/// **That seed is fixed, so this is not the thing standing between the pairing
+/// and the wall**, and the doc says so rather than implying otherwise. Both
+/// accelerator dispositions and the Shadow callback authenticator in
+/// `dclutch-shadow-accelerator-auth-v4` now derive from
+/// `family_request_digest_v3`, which is a function of the signed instruction
+/// alone. What this refusal buys is that the FIRST family to want the pairing
+/// arrives here, by name, instead of arriving at whatever the untested
+/// remainder of the Shadow route does with a bank that moves -- the runtime
+/// account projection above all, whose slot-independence is proved for the
+/// admitted route by `one_signed_account_list_opens_the_same_batch_at_two_execution_slots`
+/// and is proved for this one by nothing.
+///
+/// Lifting it is therefore a measurement, not an argument: give the Shadow
+/// route that two-slot proof and delete this.
+///
+/// It is a SELECTION conjunct and sits here rather than beside the disposition
+/// gate in `authenticate_strategy_from_sealed_boxed_v3` for one reason: the
+/// AccountProfile is not decoded there. This is the first point at which the
+/// two authenticated artifacts are both in hand, and it is still ahead of the
+/// register banks, the effect projection and every CPI.
+fn require_shadow_declares_no_trusted_slot_v1(
+    disposition: StrategyDispositionV2,
+    declared: TrustedEnvironmentV2,
+) -> Result<(), ProgramError> {
+    match (disposition, declared) {
+        (StrategyDispositionV2::ShadowAot, TrustedEnvironmentV2::CurrentSlot { .. }) => {
+            Err(TradingSbfError::ShadowTrustedEnvironment.into())
+        }
+        _ => Ok(()),
+    }
+}
+
 fn observe_trusted_environment_v3(
     profile: AccountProfileV2<'_>,
     program_id: &Pubkey,
@@ -14411,7 +14461,7 @@ impl RootCommitPlanV3 {
         let bytes = usize::try_from(ordinals.div_ceil(8)).map_err(|_| TradingSbfError::Commit)?;
         let mut bits = Vec::new();
         bits.try_reserve_exact(bytes)
-            .map_err(|_| TradingSbfError::Commit)?;
+            .map_err(|_| TradingSbfError::HeapExhausted)?;
         bits.resize(bytes, 0);
         Ok(Self { ordinals, bits })
     }
@@ -17765,6 +17815,49 @@ mod tests {
 
         assert_ne!(core::mem::size_of::<ClaimsRouteReceiptV3>(), 0);
         assert_ne!(core::mem::size_of::<CustodyCompositionParentV3>(), 0);
+    }
+
+    #[test]
+    fn only_the_shadow_disposition_refuses_a_slot_declaring_account_profile() {
+        // THE WHOLE MATRIX, because a conjunct written as one `match` arm is
+        // one typo away from refusing the disposition that ships. General's
+        // `OpenBatch` IS a slot-declaring profile on `AdmittedAot`, executes on
+        // this path in `general-hot`, and must pass through untouched.
+        let slot = TrustedEnvironmentV2::CurrentSlot { destination: 90 };
+        for disposition in [
+            StrategyDispositionV2::Interpreted,
+            StrategyDispositionV2::AdmittedAot,
+        ] {
+            require_shadow_declares_no_trusted_slot_v1(disposition, slot)
+                .expect("only ShadowAot is gated");
+            require_shadow_declares_no_trusted_slot_v1(disposition, TrustedEnvironmentV2::None)
+                .expect("a profile declaring nothing is admitted everywhere");
+        }
+        require_shadow_declares_no_trusted_slot_v1(
+            StrategyDispositionV2::ShadowAot,
+            TrustedEnvironmentV2::None,
+        )
+        .expect("Series' own pairing, which is what ships");
+
+        // NAMED, not `is_err()`. The sibling gate two hundred lines up refuses
+        // a `ShadowAot` naming the wrong transport with `UnsupportedContent`,
+        // and a hostile that accepted either code would pass on a defect in the
+        // other one.
+        assert_eq!(
+            require_shadow_declares_no_trusted_slot_v1(StrategyDispositionV2::ShadowAot, slot),
+            Err(TradingSbfError::ShadowTrustedEnvironment.into())
+        );
+        // The destination coordinate is not part of the accusation: ANY
+        // declaration refuses, so a family cannot move the slot to a scalar
+        // this conjunct happens not to name. That is the exact shape the note
+        // called "positional and accidental" about the child-request seeds.
+        assert_eq!(
+            require_shadow_declares_no_trusted_slot_v1(
+                StrategyDispositionV2::ShadowAot,
+                TrustedEnvironmentV2::CurrentSlot { destination: 0 },
+            ),
+            Err(TradingSbfError::ShadowTrustedEnvironment.into())
+        );
     }
 
     #[test]

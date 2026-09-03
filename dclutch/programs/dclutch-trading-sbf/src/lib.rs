@@ -486,6 +486,48 @@ pub enum TradingSbfError {
     /// request body where the witness is borrowed, and a sliced witness that
     /// is not the declared one.
     BorrowedWitnessBytes = 0x4026,
+    /// The upward end of the program heap could not serve an exactly-sized bank.
+    ///
+    /// The twin of [`Self::ScratchExhausted`] at the other end of the bump
+    /// allocator, and split out of [`Self::Content`] for the same reason: the
+    /// thirty-one fallible reservations in this program each asked for a width
+    /// they had already computed, and twenty-nine of them published "your bytes
+    /// are wrong" when the answer was "this execution is too wide for the heap
+    /// frame it paid for". Different reader, different remedy -- a wider
+    /// `RequestHeapFrame`, a narrower Product, or a route that stops
+    /// duplicating a buffer -- and a different author. (The other two said
+    /// `Commit` and `AdmittedTransport`, which are the same defect wearing two
+    /// more coats: neither names an allocator.)
+    ///
+    /// MEASURED, on General `OpenBatch` at width 2 on 2026-09-03: the route
+    /// refused `Content` at `account_inputs_v3` with the heap at 65,528 of
+    /// 65,536, EIGHT bytes short, and the code said nothing that separated it
+    /// from 1,830 other sites. The phase ladder put it inside a
+    /// thirty-eight-line window and the heap mark beside the checkpoint is what
+    /// actually named it; with this code the log names it alone.
+    ///
+    /// It is not [`Self::HeapFrame`], which is about a grant the transaction
+    /// never asked for. This is a grant that arrived and was not enough.
+    HeapExhausted = 0x4027,
+    /// A `ShadowAot` strategy was paired with a slot-declaring AccountProfile.
+    ///
+    /// A selection conjunct, refused before the register banks are seeded and
+    /// before any CPI. No family in this tree pairs the two -- Series is the
+    /// only `ShadowAot` disposition and declares `TrustedEnvironmentV2::None`
+    /// -- so this code has never fired and forbids nothing that has ever
+    /// executed.
+    ///
+    /// It is deliberately NOT [`Self::UnsupportedContent`], which the sibling
+    /// gate two hundred lines up uses for a `ShadowAot` naming the wrong
+    /// transport profile: a log that says only "this disposition does not admit
+    /// that" cannot tell a mis-declared transport from a mis-declared clock,
+    /// and the two have different authors and different remedies.
+    ///
+    /// The remedy is not "widen this refusal". It is to give the Shadow route
+    /// the two-slot proof the admitted route has -- one signed account list
+    /// executed in two banks, asserted identical -- and then delete the
+    /// conjunct. See `require_shadow_declares_no_trusted_slot_v1`.
+    ShadowTrustedEnvironment = 0x4028,
 }
 
 impl TradingSbfError {
@@ -495,7 +537,7 @@ impl TradingSbfError {
     /// [`TradingSbfError::ordinal`], whose match is exhaustive: a variant added
     /// to the enum does not compile until its author writes an arm there, and
     /// the only arm that satisfies the assertions is its own index here.
-    pub const ALL: [Self; 39] = [
+    pub const ALL: [Self; 41] = [
         Self::UnsupportedContent,
         Self::Release,
         Self::Root,
@@ -535,6 +577,8 @@ impl TradingSbfError {
         Self::SuccessorCoverage,
         Self::BorrowedWitnessRoute,
         Self::BorrowedWitnessBytes,
+        Self::HeapExhausted,
+        Self::ShadowTrustedEnvironment,
     ];
 
     /// This refusal's position in [`TradingSbfError::ALL`].
@@ -583,6 +627,8 @@ impl TradingSbfError {
             Self::SuccessorCoverage => 36,
             Self::BorrowedWitnessRoute => 37,
             Self::BorrowedWitnessBytes => 38,
+            Self::HeapExhausted => 39,
+            Self::ShadowTrustedEnvironment => 40,
         }
     }
 }

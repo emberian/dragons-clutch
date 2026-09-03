@@ -53,7 +53,7 @@ use dclutch_execution_strategy_contract::{
         AcceleratorRequestV2, AcceleratorTransportProfileV2, AdmittedAcceleratorRequestV2,
         AuthenticatedScratchPageV2, EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2,
         EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
-        ExecutionCandidateV2, RequestTransportV2, StrategyDispositionV2,
+        ExecutionCandidateV2, RequestTransportV2, SVM_RETURN_DATA_BYTES_V2, StrategyDispositionV2,
         accelerator_invocation_count_v2, register_bank_bytes_v2, resolve_execution_candidate_v2,
     },
 };
@@ -63,8 +63,7 @@ use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
-    instruction::{AccountMeta, Instruction},
-    program::{get_return_data, invoke_signed},
+    instruction::AccountMeta,
     program_error::ProgramError,
     pubkey::Pubkey,
 };
@@ -352,7 +351,7 @@ pub fn execute_admitted_aot_v3<'info>(
                     .caller_authorities
                     .get(chunk_index)
                     .ok_or(TradingSbfError::AdmittedTransport)?;
-                let (ack_bytes, request_digest) = invoke_admitted_accelerator_v3(
+                let request_digest = invoke_admitted_accelerator_v3(
                     program_id,
                     &mut buffers,
                     frame,
@@ -361,7 +360,8 @@ pub fn execute_admitted_aot_v3<'info>(
                     request,
                     ACCELERATOR_ACK_HEADER_BYTES_V2,
                 )?;
-                let ack = AcceleratorAckV2::decode(&ack_bytes)
+                let ack_bytes = &buffers.ack;
+                let ack = AcceleratorAckV2::decode(ack_bytes)
                     .map_err(|_| TradingSbfError::ChildReceipt)?;
                 ack.validate_request(chunked, request_digest)
                     .map_err(|_| TradingSbfError::ChildReceipt)?;
@@ -386,7 +386,7 @@ pub fn execute_admitted_aot_v3<'info>(
                     ADMITTED_ACK_TRANSCRIPT_DOMAIN_V3,
                     &transcript,
                     ack.request_digest().as_bytes(),
-                    &ack_bytes,
+                    ack_bytes,
                 ])
                 .to_bytes();
                 // ONE MARK PER INVOCATION, and it repeats on purpose: the
@@ -419,7 +419,7 @@ pub fn execute_admitted_aot_v3<'info>(
                 .caller_authorities
                 .first()
                 .ok_or(TradingSbfError::AdmittedTransport)?;
-            let (ack_bytes, request_digest) = invoke_admitted_accelerator_v3(
+            let request_digest = invoke_admitted_accelerator_v3(
                 program_id,
                 &mut buffers,
                 frame,
@@ -428,7 +428,8 @@ pub fn execute_admitted_aot_v3<'info>(
                 first_request,
                 ACCELERATOR_OUTPUT_PAGE_ACK_BYTES_V3,
             )?;
-            let ack = AcceleratorOutputPageAckV3::decode(&ack_bytes)
+            let ack_bytes = &buffers.ack;
+            let ack = AcceleratorOutputPageAckV3::decode(ack_bytes)
                 .map_err(|_| TradingSbfError::ChildReceipt)?;
             ack.validate_request(page_request, request_digest)
                 .map_err(|_| TradingSbfError::ChildReceipt)?;
@@ -456,7 +457,7 @@ pub fn execute_admitted_aot_v3<'info>(
                 ADMITTED_ACK_TRANSCRIPT_DOMAIN_V3,
                 &transcript,
                 ack.request_digest().as_bytes(),
-                &ack_bytes,
+                ack_bytes,
             ])
             .to_bytes();
             // Decoded straight out of the account, with no candidate buffer in
@@ -594,9 +595,36 @@ fn accelerator_request<'a>(
 /// the caller authority at index 0, and the request bytes. Their LENGTHS are
 /// identical, which is a conjunct rather than an assumption -- see the refusal
 /// in [`invoke_admitted_accelerator_v3`].
+///
+/// # The SDK's own copy is rented here too, and it was the larger half
+///
+/// `solana_cpi::invoke_signed` reaches the syscall through
+/// `StableInstruction::from(instruction.clone())`, so holding ONE `Instruction`
+/// across the chunks did not stop the metas and the request bytes being
+/// duplicated on every invocation -- it only moved who allocated the duplicate.
+/// `entrypoint_adapter::invoke_signed_owned_v1` is this executable's membrane
+/// for exactly that, and the child-route CPI has used it since it was written;
+/// this route never adopted it. MEASURED on General `OpenBatch` at width 2,
+/// four chunks, sixty accounts: **5,612 bytes per invocation**, of which 2,040
+/// are the meta vector and 3,512 the request, all of it standing for the rest
+/// of the instruction. `get_return_data` is the same shape one call later --
+/// a fresh 1,024-byte `Vec` per chunk against
+/// `entrypoint_adapter::get_return_data_into_v1`'s reused one.
+///
+/// So the buffers are held as the membrane's three arguments rather than as an
+/// `Instruction`: the type exists to be moved into the runtime's stable layout
+/// and handed back, and an `Instruction` is the one shape that cannot be.
 struct AdmittedCpiBuffersV4<'info> {
-    instruction: Instruction,
+    accelerator_program: Pubkey,
+    metas: Vec<AccountMeta>,
+    data: Vec<u8>,
     infos: Vec<AccountInfo<'info>>,
+    /// The acknowledgement buffer every invocation reads its return data into.
+    ///
+    /// One allocation at the contract's own return-data bound, refilled per
+    /// chunk. The bytes live only until the next invocation clears them, which
+    /// is why the transcript folds them in before the loop turns over.
+    ack: Vec<u8>,
 }
 
 impl<'info> AdmittedCpiBuffersV4<'info> {
@@ -637,13 +665,19 @@ impl<'info> AdmittedCpiBuffersV4<'info> {
             infos.push(page.clone());
         }
         infos.extend(runtime_accounts.iter().map(|account| (*account).clone()));
+        // Fallibly, and at the contract's bound rather than the runtime's: a
+        // return wider than this buffer is a refusal `get_return_data_into_v1`
+        // makes by name, and an infallible `with_capacity` on an exhausted heap
+        // aborts the whole invocation with nothing for a caller to read.
+        let mut ack = Vec::new();
+        ack.try_reserve_exact(SVM_RETURN_DATA_BYTES_V2)
+            .map_err(|_| TradingSbfError::HeapExhausted)?;
         Ok(Self {
-            instruction: Instruction {
-                program_id: *frame.accelerator_program.key,
-                accounts: metas,
-                data: vec![0_u8; request_len],
-            },
+            accelerator_program: *frame.accelerator_program.key,
+            metas,
+            data: vec![0_u8; request_len],
             infos,
+            ack,
         })
     }
 }
@@ -658,7 +692,7 @@ fn invoke_admitted_accelerator_v3<'info>(
     context: &AdmittedInvocationContextV3,
     request: AdmittedAcceleratorRequestV2<'_>,
     minimum_ack_bytes: usize,
-) -> Result<(Vec<u8>, ContentId), ProgramError> {
+) -> Result<ContentId, ProgramError> {
     // The ordinal the authority span is indexed by, taken from the request the
     // callee will decode rather than from the loop that built it -- the two
     // must agree, and asking the request is how a disagreement refuses here.
@@ -669,11 +703,11 @@ fn invoke_admitted_accelerator_v3<'info>(
     // The reuse rests on this being the same every invocation, so it is CHECKED
     // rather than assumed: a transport whose per-invocation request width
     // varied would otherwise be encoded into a buffer sized for a different one.
-    if request_len != buffers.instruction.data.len() {
+    if request_len != buffers.data.len() {
         return Err(TradingSbfError::AdmittedTransport.into());
     }
     request
-        .encode_into(&mut buffers.instruction.data)
+        .encode_into(&mut buffers.data)
         .map_err(|_| TradingSbfError::AdmittedTransport)?;
     // Over the REQUEST, not over the whole instruction: the prelude witness
     // rides after it and is outside the ACKNOWLEDGED bytes by construction, so
@@ -682,7 +716,6 @@ fn invoke_admitted_accelerator_v3<'info>(
     // `AdmittedAcceleratorRequestV2::acknowledged_prefix_len`.
     let request_digest = content(
         buffers
-            .instruction
             .data
             .get(
                 ..request
@@ -723,8 +756,7 @@ fn invoke_admitted_accelerator_v3<'info>(
     // The only two coordinates that move between chunks, overwritten in place.
     // Everything else in both vectors is the frame, which every chunk shares.
     buffers
-        .instruction
-        .accounts
+        .metas
         .first_mut()
         .ok_or(TradingSbfError::AdmittedTransport)?
         .pubkey = *caller_authority.key;
@@ -735,9 +767,23 @@ fn invoke_admitted_accelerator_v3<'info>(
     let bump_seed = [bump];
     let [domain, release, market, role, authority_context, digest] = authority_seeds.as_slices();
     hot_cu_checkpoint!("cx-accelerator-frame");
-    invoke_signed(
-        &buffers.instruction,
-        &buffers.infos,
+    // Through the membrane, not through `invoke_signed`: the buffers below are
+    // moved into the runtime's stable layout and handed back with their
+    // allocations intact, so a chunk pays for its metas and its request once
+    // for the whole loop instead of once per invocation. See
+    // [`AdmittedCpiBuffersV4`] for what that is worth on this route.
+    let AdmittedCpiBuffersV4 {
+        accelerator_program,
+        metas,
+        data,
+        infos,
+        ack,
+    } = buffers;
+    crate::entrypoint_adapter::invoke_signed_owned_v1(
+        accelerator_program,
+        metas,
+        data,
+        infos,
         &[&[
             domain,
             release,
@@ -750,11 +796,12 @@ fn invoke_admitted_accelerator_v3<'info>(
     )
     .map_err(|_| TradingSbfError::Transition)?;
     hot_cu_checkpoint!("cx-accelerator-returned");
-    let (producer, ack_bytes) = get_return_data().ok_or(TradingSbfError::Transition)?;
-    if producer != *frame.accelerator_program.key || ack_bytes.len() < minimum_ack_bytes {
+    let producer = crate::entrypoint_adapter::get_return_data_into_v1(ack)?
+        .ok_or(TradingSbfError::Transition)?;
+    if producer != *frame.accelerator_program.key || ack.len() < minimum_ack_bytes {
         return Err(TradingSbfError::Transition.into());
     }
-    Ok((ack_bytes, request_digest))
+    Ok(request_digest)
 }
 
 fn fixed_cpi_accounts<'a, 'info>(

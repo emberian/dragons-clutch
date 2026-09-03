@@ -504,7 +504,7 @@ fn prepare<'info>(
             .checked_add(borrowed_bytes)
             .ok_or(TradingSbfError::Content)?,
     )
-    .map_err(|_| TradingSbfError::Content)?;
+    .map_err(|_| TradingSbfError::HeapExhausted)?;
     wire.extend_from_slice(request_bytes);
     if range_count == 0 {
         wire.extend_from_slice(legacy_witness.unwrap_or(&[]));

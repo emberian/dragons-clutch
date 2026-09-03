@@ -1698,7 +1698,7 @@ fn execute_dealer_scenario_claims_v1(
     let mut metas = Vec::new();
     metas
         .try_reserve_exact(child.len())
-        .map_err(|_| TradingSbfError::Content)?;
+        .map_err(|_| TradingSbfError::HeapExhausted)?;
     for (index, current) in child.iter().enumerate() {
         let signer = index == 0 || current.is_signer;
         metas.push(if current.is_writable {
@@ -1715,7 +1715,7 @@ fn execute_dealer_scenario_claims_v1(
     let mut infos = Vec::new();
     infos
         .try_reserve_exact(child.len().saturating_add(1))
-        .map_err(|_| TradingSbfError::Content)?;
+        .map_err(|_| TradingSbfError::HeapExhausted)?;
     infos.extend(child.iter().cloned());
     infos.push(claims_program.clone());
     let bump = [prepared.authority_bump];
