@@ -13,6 +13,7 @@ const sources = Object.freeze({
   sourceJoin: readFileSync(new URL('crates/dclutch-source-contract/src/provider_join_v2.rs', root), 'utf8'),
   sourceContract: readFileSync(new URL('crates/dclutch-source-contract/src/lib.rs', root), 'utf8'),
   windowSpec: readFileSync(new URL('crates/dclutch-source-contract/src/generated_window_spec_v1.rs', root), 'utf8'),
+  statisticSpec: readFileSync(new URL('crates/dclutch-source-contract/src/generated_statistic_spec_v1.rs', root), 'utf8'),
   sourceCapacity: readFileSync(new URL('crates/dclutch-source-contract/src/generated_principal_capacity_v1.rs', root), 'utf8'),
   payoff: readFileSync(new URL('crates/dclutch-product-payoff-v2-codec/src/generated_admission_v3.rs', root), 'utf8'),
   capability: readFileSync(new URL('crates/dclutch-capability-contract/src/lib.rs', root), 'utf8'),
@@ -231,6 +232,7 @@ for (const [source, name] of [
   ['realmAbi', 'REALM_SCHEMA_RELEASE_ID_V1'], ['source', 'SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3'],
   ['sourceJoin', 'SOURCE_SPEC_SCHEMA_ID_V1'], ['sourceJoin', 'SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1'],
   ['sourceJoin', 'WINDOW_SPEC_SCHEMA_ID_V1'], ['windowSpec', 'WINDOW_SPEC_MAGIC'],
+  ['sourceJoin', 'STATISTIC_SPEC_SCHEMA_ID_V1'], ['statisticSpec', 'STATISTIC_SPEC_MAGIC'],
   ['sourceCapacity', 'MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1'], ['payoff', 'GRADED_BASIS_RECORD_SCHEMA_ID_V3'],
   ['payoff', 'PRICE_GATE_RECORD_SCHEMA_ID_V1'],
   ['capabilityAbi', 'CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1'],
@@ -261,6 +263,7 @@ output += `export const SOURCE_MATERIAL_PRIMARY_SOURCE_SPEC_OFFSET_V3 = ${scalar
 output += `export const SOURCE_MATERIAL_MANIPULATION_FLOOR_OFFSET_V3 = ${scalar('source', 'SOURCE_MATERIAL_V3_MANIPULATION_FLOOR_OFFSET')} as const;\n`;
 output += `export const SOURCE_MATERIAL_PRODUCT_RECORD_DIGEST_OFFSET_V3 = ${scalar('source', 'SOURCE_MATERIAL_V3_PRODUCT_RECORD_DIGEST_OFFSET')} as const;\n`;
 output += `export const SOURCE_MATERIAL_WINDOW_SPEC_OFFSET_V3 = ${scalar('source', 'SOURCE_MATERIAL_V3_WINDOW_SPEC_OFFSET')} as const;\n`;
+output += `export const SOURCE_MATERIAL_STATISTIC_SPEC_OFFSET_V3 = ${scalar('source', 'SOURCE_MATERIAL_V3_STATISTIC_SPEC_OFFSET')} as const;\n`;
 
 // ------------------------------------------ when the market settles, exactly
 // The window is the one founding parameter a reader asks for by name -- "when
@@ -273,6 +276,26 @@ output += `export const SOURCE_MATERIAL_WINDOW_SPEC_OFFSET_V3 = ${scalar('source
 output += `export const WINDOW_SPEC_BYTES_V1 = ${scalar('windowSpec', 'WINDOW_SPEC_BYTES')} as const;\n`;
 output += `export const WINDOW_SPEC_START_UNIX_SECONDS_OFFSET_V1 = ${scalar('windowSpec', 'WINDOW_SPEC_START_UNIX_SECONDS_OFFSET_V1')} as const;\n`;
 output += `export const WINDOW_SPEC_END_UNIX_SECONDS_OFFSET_V1 = ${scalar('windowSpec', 'WINDOW_SPEC_END_UNIX_SECONDS_OFFSET_V1')} as const;\n`;
+
+// ------------------------------------------- on what scale the market settles
+// The other founding parameter a reader needs and could not have. A market's
+// cuts and its observation can be authored on different scales, and
+// `StatisticSpecV1.source_scale_exponent` is the only record entitled to say
+// how the two relate -- so a browser that mirrors `select_ordinary` without it
+// is not reproducing the chain's arithmetic, it is guessing that the shift is
+// zero. Cohort-14b is the market that guess was right about and the reason it
+// is not right in general: it settled on a raw Pyth mantissa against cuts in
+// cents, and the difference between the two readings moved 500,000,000 atoms.
+//
+// Every coordinate below is Lean-owned (`DClutch.SourceStatisticSpecV1Abi`) and
+// read from the file that emitter writes, which is the whole point: the record
+// that decides which cell a market pays is not a shape a reader gets to restate.
+output += `export const STATISTIC_SPEC_BYTES_V1 = ${scalar('statisticSpec', 'STATISTIC_SPEC_BYTES')} as const;\n`;
+output += `export const STATISTIC_SPEC_MAGIC_OFFSET_V1 = ${scalar('statisticSpec', 'STATISTIC_SPEC_MAGIC_OFFSET_V1')} as const;\n`;
+output += `export const STATISTIC_SPEC_MAGIC_BYTES_V1 = ${scalar('statisticSpec', 'STATISTIC_SPEC_MAGIC_BYTES_V1')} as const;\n`;
+output += `export const STATISTIC_SPEC_SOURCE_SCALE_EXPONENT_OFFSET_V1 = ${scalar('statisticSpec', 'STATISTIC_SPEC_SOURCE_SCALE_EXPONENT_OFFSET_V1')} as const;\n`;
+output += `export const STATISTIC_SPEC_SOURCE_UNIT_ID_OFFSET_V1 = ${scalar('statisticSpec', 'STATISTIC_SPEC_SOURCE_UNIT_ID_OFFSET_V1')} as const;\n`;
+output += `export const STATISTIC_SPEC_RESULT_UNIT_ID_OFFSET_V1 = ${scalar('statisticSpec', 'STATISTIC_SPEC_RESULT_UNIT_ID_OFFSET_V1')} as const;\n`;
 
 output += `export const LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2 = new TextEncoder().encode('${byteString('lifecycleRent', 'LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2')}');\n`;
 output += array('LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2', bytes('lifecycleRent', 'LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2'));

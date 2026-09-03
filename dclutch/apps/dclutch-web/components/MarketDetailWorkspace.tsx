@@ -216,10 +216,15 @@ type DecisionStatV1 = Readonly<{ label: string; value: string; detail: string }>
  * WHAT IT DOES NOT REPLACE. Reproducing the chain's arithmetic says what the
  * protocol DID, never that the cell is right about the world. Cohort-14b's cuts
  * were authored in cents and its observation arrived as raw feed atoms, and the
- * chain declares those as two unit identities with no factor between them —
- * `docs/design/OBSERVATION_SCALE_AUTHORITY.md` names the record that should
- * carry one. The caller says that beside the name; this function only reports
- * which authority the name rests on.
+ * factor between those two units is `StatisticSpecV1.source_scale_exponent` —
+ * which that market DECLARES as zero, because it was founded into four bytes
+ * that were reserved and enforced zero before `4cd2b9cb5`. The caller now reads
+ * that record instead of supplying the number, so the join below is the
+ * market's own declared arithmetic rather than a reader's guess at it; what it
+ * still cannot say is whether the scale the founding declared is the scale the
+ * world uses. `docs/design/OBSERVATION_SCALE_AUTHORITY.md` is where cohort-14b's
+ * two readings are printed side by side. The caller says that beside the name;
+ * this function only reports which authority the name rests on.
  *
  * With no join supplied, or a join that DISAGREES, the old refusal stands: an
  * ordinary cell is named by its index and `joined` is false. A page that prints
@@ -459,6 +464,11 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
           resolutionProgramId: deployment.programs.resolution,
           floorSlot: next.floorSlot,
           question: question ?? null,
+          // The Registry is what turns the certificate's Source-material
+          // identity into two account reads, which is how this page learns the
+          // scale the market DECLARES rather than assuming the identity. Its
+          // absence would be reported by the reader, not silently be a zero.
+          registryProgramId: deployment.programs.registry,
         }));
       }
     } catch (error) {
@@ -531,22 +541,21 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
    * only when this page has REPRODUCED the selector rather than assumed the
    * cut list's order matches it.
    */
-  const selectorJoin = derived === null || resolution === null || resolution.status !== 'authenticated'
+  const selectorJoin = derived === null || resolution === null || resolution.status !== 'authenticated' || resolution.scale.status !== 'declared'
     ? null
     : ordinarySelectorJoinV1(
       derived,
       resolution.observation,
       resolution.selector,
-      // THE IDENTITY, STATED. `StatisticSpecV1.source_scale_exponent` is the
-      // market's declared source-to-result decimal shift, and this page does
-      // not read that record yet, so it passes the scale every cohort-14
-      // market actually declares: the four bytes the factor occupies were
-      // reserved and enforced zero before `4cd2b9cb5`, so an old market's
-      // declared scale IS the identity and this reproduces what the protocol
-      // did. It will be WRONG for the first market founded with a factor, and
-      // the fix is a `StatisticSpecV1` fetch in `marketResolution.ts` rather
-      // than a number here. See `docs/design/OBSERVATION_SCALE_AUTHORITY.md`.
-      0,
+      // THE MARKET'S OWN NUMBER, read from its own `StatisticSpecV1` by
+      // `inspectMarketDeclaredScaleV1` and passed through untouched. This was
+      // the literal `0` with a note saying what would make it wrong -- the
+      // first market founded WITH a factor -- and the note was right: a page
+      // that supplies a scale it did not read is reproducing an arithmetic
+      // nobody performed. The join is now withheld entirely when the record
+      // did not read, because there is no number a reader may substitute for
+      // the one the founding wrote.
+      resolution.scale.sourceScaleExponent,
     );
   const terminalWinner = decoded === null || decoded.settlement.status !== 'terminal'
     ? null
@@ -637,7 +646,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
             {terminalWinner?.basis === 'certificate-kind'
               ? 'That is the source-failure cell, which is the one index the certificate itself pins: a failure certificate may carry no other, and a success certificate may not carry this one.'
               : terminalWinner?.basis === 'derived-selector'
-                ? <>That is <strong>{terminalWinner.name}</strong>, and this page CHECKED it rather than counting on the list above being in the right order: running this market&rsquo;s own cuts over the certificate&rsquo;s own observation, with the same comparison the Resolution program performs, lands on the cell the chain committed. What the check settles is which cell the protocol chose. What it does not settle is whether that cell is right about the world &mdash; the observation and the cuts are declared on chain as two different unit identities with no factor published between them, so the boundary above is the market&rsquo;s own and the value beside it is on the certificate&rsquo;s own scale.</>
+                ? <>That is <strong>{terminalWinner.name}</strong>, and this page CHECKED it rather than counting on the list above being in the right order: running this market&rsquo;s own cuts over the certificate&rsquo;s own observation, with the same comparison the Resolution program performs, lands on the cell the chain committed. What the check settles is which cell the protocol chose. What it does not settle is whether that cell is right about the world &mdash; the comparison uses the decimal shift this market&rsquo;s own <code>StatisticSpecV1</code> declares between its observation&rsquo;s unit and its cuts&rsquo;, read from that record and never assumed, and a founding that declared the wrong shift is reproduced faithfully and is still wrong.</>
                 : 'This site names it by NUMBER and not by one of the cells listed above. The cell names on this page are derived from the market\u2019s own cut list in ascending order, and running that list over the certificate\u2019s observation does NOT land on the cell the chain committed \u2014 so one of the two readings is wrong and this page cannot say which. Naming the cell would be a sentence nobody checked.'}
           </p>
           {resolution.providerEvidenceId !== null && <details className="market-detail-drawer">

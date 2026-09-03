@@ -46,6 +46,10 @@ describe('live devnet market resolution', () => {
       resolutionProgramId: DEVNET_DEPLOYMENT_V1.programs.resolution,
       floorSlot: discovery.floorSlot,
       question,
+      // Supplied so the reader walks this market's own SourceMaterialV3 to its
+      // own StatisticSpecV1 and states the scale it DECLARES. Omitting it would
+      // leave the scale `unread`, which is a truthful status and a weaker test.
+      registryProgramId: DEVNET_DEPLOYMENT_V1.programs.registry,
     });
 
     if (card.phase !== 'Terminal') {
@@ -81,6 +85,21 @@ describe('live devnet market resolution', () => {
       expect(observation!.atUnixSeconds >= question.window!.startUnixSeconds).toBe(true);
       expect(observation!.atUnixSeconds <= question.window!.endUnixSeconds).toBe(true);
       expect(resolution.providerEvidenceId).toMatch(/^[0-9a-f]{64}$/);
+      // AND ON WHAT SCALE. The market's own `StatisticSpecV1`, reached through
+      // its own `SourceMaterialV3`, both authenticated at the Registry PDAs
+      // their content digests derive. An observation with no declared scale
+      // beside it is a number a reader cannot compare to anything -- which is
+      // the whole of `docs/design/OBSERVATION_SCALE_AUTHORITY.md` -- so a
+      // certificate that authenticates and a scale that does not read is a
+      // finding, and it is reported with its own reason rather than tolerated.
+      expect(resolution.scale.status, resolution.scale.status === 'unread' ? resolution.scale.reason : '').toBe('declared');
+      if (resolution.scale.status !== 'declared') return;
+      expect(Number.isInteger(resolution.scale.sourceScaleExponent)).toBe(true);
+      // A conversion declared with no factor is the cohort-14 shape exactly.
+      // It is not asserted absent -- these are real markets and one of them is
+      // that shape -- but the pair is read, so a later market that declares a
+      // factor changes this reading instead of going unnoticed.
+      expect(typeof resolution.scale.declaresConversion).toBe('boolean');
     } else {
       expect(resolution.observation).toBeNull();
       expect(resolution.providerEvidenceId).toBeNull();

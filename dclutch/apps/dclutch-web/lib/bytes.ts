@@ -26,6 +26,10 @@ export function i64(bytes: Uint8Array, offset: number): bigint {
   return new DataView(bytes.buffer, bytes.byteOffset + offset, 8).getBigInt64(0, true);
 }
 
+export function i32(bytes: Uint8Array, offset: number): number {
+  return new DataView(bytes.buffer, bytes.byteOffset + offset, 4).getInt32(0, true);
+}
+
 export function isZero(bytes: Uint8Array): boolean {
   return bytes.every((byte) => byte === 0);
 }

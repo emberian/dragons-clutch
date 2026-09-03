@@ -388,7 +388,49 @@ cannot prove is a cell moving.
 
 ## 3, the browser
 
-Below, with the live case.
+`inspectMarketDeclaredScaleV1` walks `SourceMaterialV3 -> StatisticSpecV1` in
+two account reads and returns the declared shift.
+`inspectMarketResolutionV1` calls it and carries a `scale` on every
+authenticated resolution; `MarketDetailWorkspace` passes
+`resolution.scale.sourceScaleExponent` where it passed the literal `0`, and
+**withholds the join entirely** when the record did not read, because there is
+no number a reader may substitute for the one the founding wrote.
+
+Every coordinate is Lean-owned. `generate-core-found.mjs` gained
+`generated_statistic_spec_v1.rs` as a source and emits
+`STATISTIC_SPEC_BYTES_V1`, the magic and its coordinate, the shift's offset and
+the two identity offsets, plus `SOURCE_MATERIAL_STATISTIC_SPEC_OFFSET_V3` and
+`STATISTIC_SPEC_SCHEMA_ID_V1`. `abi:coverage` counts **no new hand-mirror**:
+the one literal that did appear -- a `0` for the magic's offset -- was replaced
+by the emitted coordinate rather than admitted to the baseline.
+
+**`unread` is a status, never a zero.** The reader reports five distinct
+reasons it has no scale -- a failure certificate, a material the Market did not
+name, no Registry supplied, a record that did not read, a record not at its own
+content-derived address -- and none of them offers a number. That is the same
+finding one level up: a caller that omits a scale has not chosen the identity.
+
+Two checks came along with it, because reading a value out of a graph is what
+made them matter. The certificate's `source_material` must equal the Market's
+own `resolutionPolicyId` -- the terminal join had taken that identity on the
+certificate's word, harmlessly, while nothing was read out of the graph -- and
+the statistic must live at the Registry PDA its own digest derives.
+
+### The live case, both markets
+
+`ordinarySelector.live.test.ts` runs cohort-14 market B
+(`DUVcCGfjXzp1fBktTCjsAomgrn9S6sxSDziQHoyRiu8A`) **and market C**
+(`BL8zsFokbz7aEdo3wjtcNffd5P1D8a9wVxwKq3mcMsMN`), and asserts on each that the
+scale came off the chain (`declared`, exponent `0`), that the join at that scale
+reproduces the chain's committed selector, and that the two cells are the pair
+the evidence names: **the chain paid cell 2 and the reading at the feed's own
+exponent falls in cell 1**, which pays zero. Market C is the one that reached a
+stranger -- participant-2 bought 200 claims at index 1 -- so running both is
+what makes this an assertion about the defect rather than about one market.
+
+The unit tests hold the coordinate itself: a **negative** shift read back as
+`-8` and not as 4,294,967,288, a statistic substituted at its own address
+refused, and a reader with no Registry saying so in words.
 
 ## Wire cost
 

@@ -1,5 +1,20 @@
 import { PublicKey } from '@solana/web3.js';
 
+import { i32, slice } from './bytes';
+import { authenticateFinalizedRawRecordV2 } from './coreFound';
+import {
+  SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+  SOURCE_MATERIAL_STATISTIC_SPEC_OFFSET_V3,
+  STATISTIC_SPEC_BYTES_V1,
+  STATISTIC_SPEC_MAGIC,
+  STATISTIC_SPEC_MAGIC_BYTES_V1,
+  STATISTIC_SPEC_MAGIC_OFFSET_V1,
+  STATISTIC_SPEC_RESULT_UNIT_ID_OFFSET_V1,
+  STATISTIC_SPEC_SCHEMA_ID_V1,
+  STATISTIC_SPEC_SOURCE_SCALE_EXPONENT_OFFSET_V1,
+  STATISTIC_SPEC_SOURCE_UNIT_ID_OFFSET_V1,
+} from './generated/coreFound';
+import { deriveFinalizedRecordAddressesV1 } from './releaseRegistry';
 import {
   bindTerminalResolutionCertificateV2,
   decodeResolutionCertificateV2,
@@ -82,7 +97,116 @@ export type MarketResolutionV1 =
     sourceMaterialId: string;
     /** How many attempts the resolution took, from the certificate itself. */
     attemptIndex: number;
+    /**
+     * The scale this market DECLARES between its observation and its result.
+     *
+     * `unread` when no `registryProgramId` was supplied, or when the two-record
+     * walk refused. It is never silently the identity: a mirror handed a scale
+     * it did not read would reproduce an arithmetic nobody performed.
+     */
+    scale: MarketDeclaredScaleV1;
   }>;
+
+/**
+ * ON WHAT SCALE THE MARKET SETTLES, read rather than assumed.
+ *
+ * `ResultDomainV2::select_ordinary` compares the observation's ratio against
+ * each cut's ratio, and since `4cd2b9cb5` it takes a THIRD argument: the
+ * declared source-to-result decimal shift, from
+ * `StatisticSpecV1.source_scale_exponent`. A reader mirroring that comparison
+ * without the shift is not reproducing the chain's arithmetic; it is guessing
+ * that the shift is zero. The guess is right for every cohort-14 market -- those
+ * four bytes were reserved and enforced zero, so an old market's DECLARED scale
+ * really is the identity -- and it is wrong for the first market founded with a
+ * factor, which is exactly the market a reader most needs to be right about.
+ *
+ * `unread` is a status and not a zero. That distinction is the whole finding
+ * this module inherits: a caller that omits a scale has not chosen the identity,
+ * it has failed to state a choice, and cohort-14b was paid on the difference.
+ */
+export type MarketDeclaredScaleV1 =
+  | Readonly<{
+    status: 'declared';
+    /** The exponent: the observation times ten to this power is the result. */
+    sourceScaleExponent: number;
+    /** Whether the record names two different units at all. */
+    declaresConversion: boolean;
+    /** The `StatisticSpecV1` raw record this was read out of. */
+    statisticRecord: string;
+    /** The `SourceMaterialV3` raw record that named it. */
+    sourceMaterialRecord: string;
+  }>
+  | Readonly<{ status: 'unread'; reason: string }>;
+
+/**
+ * Walk `SourceMaterialV3 -> StatisticSpecV1` and read the declared shift.
+ *
+ * Two account reads, each authenticated the way every finalized record in this
+ * SDK is: Registry-owned, nonexecutable, and living at the PDA its own schema
+ * identity and content digest derive. A record that merely claims to be a
+ * statistic has to be at the address a statistic of exactly those bytes implies.
+ *
+ * Every coordinate comes from `generated/coreFound.ts`, which reads the
+ * Lean-emitted `generated_statistic_spec_v1.rs`. The record that decides which
+ * cell a market pays is not a shape a browser gets to restate.
+ */
+export async function inspectMarketDeclaredScaleV1(
+  client: Pick<SolanaRpcClient, 'accountInfo'>,
+  request: Readonly<{
+    registryProgramId: string;
+    /** The material the CERTIFICATE pins, which is the graph the program read. */
+    sourceMaterialId: Uint8Array;
+    floorSlot: string;
+  }>,
+): Promise<MarketDeclaredScaleV1> {
+  const unread = (reason: string): MarketDeclaredScaleV1 => Object.freeze({ status: 'unread' as const, reason });
+  let materialRecord: string;
+  try {
+    materialRecord = deriveFinalizedRecordAddressesV1(request.registryProgramId, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, request.sourceMaterialId).record;
+  } catch (error) {
+    return unread(`The certificate's Source material identity does not derive a record address: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  let statisticDigest: Uint8Array;
+  try {
+    const observed = await client.accountInfo(materialRecord, request.floorSlot);
+    const material = await authenticateFinalizedRawRecordV2(observed.account, materialRecord, request.registryProgramId, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, 'Source material record');
+    statisticDigest = slice(material.bytes, SOURCE_MATERIAL_STATISTIC_SPEC_OFFSET_V3, 32);
+  } catch (error) {
+    return unread(`The Source material the certificate names did not read: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  let statisticRecord: string;
+  try {
+    statisticRecord = deriveFinalizedRecordAddressesV1(request.registryProgramId, STATISTIC_SPEC_SCHEMA_ID_V1, statisticDigest).record;
+  } catch (error) {
+    return unread(`The Source material names a statistic identity this reader cannot derive an address from: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  try {
+    const observed = await client.accountInfo(statisticRecord, request.floorSlot);
+    const statistic = await authenticateFinalizedRawRecordV2(observed.account, statisticRecord, request.registryProgramId, STATISTIC_SPEC_SCHEMA_ID_V1, 'Statistic specification record');
+    // The width and the magic before any coordinate is read. A record of the
+    // wrong width at the right address cannot happen -- the digest derives the
+    // address -- but reading a field out of bytes whose shape was never checked
+    // is how a mirror starts believing its own arithmetic.
+    if (statistic.bytes.length !== STATISTIC_SPEC_BYTES_V1) {
+      return unread(`The statistic record is ${statistic.bytes.length} bytes, not the canonical ${STATISTIC_SPEC_BYTES_V1}.`);
+    }
+    const magic = slice(statistic.bytes, STATISTIC_SPEC_MAGIC_OFFSET_V1, STATISTIC_SPEC_MAGIC_BYTES_V1);
+    if (!magic.every((byte, index) => byte === STATISTIC_SPEC_MAGIC[index])) {
+      return unread('The statistic record does not carry the canonical statistic-specification magic.');
+    }
+    const sourceUnit = slice(statistic.bytes, STATISTIC_SPEC_SOURCE_UNIT_ID_OFFSET_V1, 32);
+    const resultUnit = slice(statistic.bytes, STATISTIC_SPEC_RESULT_UNIT_ID_OFFSET_V1, 32);
+    return Object.freeze({
+      status: 'declared' as const,
+      sourceScaleExponent: i32(statistic.bytes, STATISTIC_SPEC_SOURCE_SCALE_EXPONENT_OFFSET_V1),
+      declaresConversion: !sourceUnit.every((byte, index) => byte === resultUnit[index]),
+      statisticRecord,
+      sourceMaterialRecord: materialRecord,
+    });
+  } catch (error) {
+    return unread(`The statistic specification the Source material names did not read: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
 
 /** The 32 bytes at the Market's terminal-receipt slot, as an address. */
 export function terminalCertificateAddressV1(receiptId: string): string {
@@ -143,6 +267,15 @@ export async function inspectMarketResolutionV1(
     resolutionProgramId: string;
     floorSlot: string;
     question?: MarketQuestionV1 | null;
+    /**
+     * Optional, and its absence is reported rather than assumed away.
+     *
+     * Supplying it lets the reader walk `SourceMaterialV3 -> StatisticSpecV1`
+     * and state the market's declared source-to-result shift; without it the
+     * `scale` below is `unread`, which is the honest word for "this reader was
+     * not given the registry", never a claim that the shift is zero.
+     */
+    registryProgramId?: string | null;
   }>,
 ): Promise<MarketResolutionV1> {
   const { card, resolutionProgramId, floorSlot } = request;
@@ -198,6 +331,25 @@ export async function inspectMarketResolutionV1(
     return Object.freeze({ status: 'refused', certificate: address, reason: `The certificate does not join this Market's own terminal authority: ${error instanceof Error ? error.message : String(error)}` });
   }
   const sourceReported = certificate.kind === 'resolution-success';
+  // The Market must agree with the certificate about WHICH Source graph
+  // answered it, because the scale below is read out of that graph. The
+  // terminal join already binds the market, the generation, the selector and
+  // the receipt; the material was the one identity it took on the certificate's
+  // own word, and a scale read from a graph the Market never named would be a
+  // number with no authority behind it.
+  const namedMaterial = card.identity.resolutionPolicyId;
+  const certificateMaterial = hex(certificate.sourceMaterial);
+  const scale = !sourceReported
+    ? Object.freeze({ status: 'unread' as const, reason: 'A source-failure certificate carries no observation, so no scale relates one to this market\'s cuts.' })
+    : namedMaterial !== certificateMaterial
+      ? Object.freeze({ status: 'unread' as const, reason: `The certificate names Source material ${certificateMaterial} and the Market names ${namedMaterial}; no scale is read from a graph the Market did not select.` })
+      : request.registryProgramId == null
+        ? Object.freeze({ status: 'unread' as const, reason: 'No Registry program was supplied, so the StatisticSpecV1 this market declares was not read. This is not a claim that the declared shift is zero.' })
+        : await inspectMarketDeclaredScaleV1(client, {
+          registryProgramId: request.registryProgramId,
+          sourceMaterialId: certificate.sourceMaterial,
+          floorSlot,
+        });
   return Object.freeze({
     status: 'authenticated',
     observedSlot: observation.slot,
@@ -215,8 +367,9 @@ export async function inspectMarketResolutionV1(
       })
       : null,
     providerEvidenceId: sourceReported ? hex(certificate.providerEvidence) : null,
-    sourceMaterialId: hex(certificate.sourceMaterial),
+    sourceMaterialId: certificateMaterial,
     attemptIndex: certificate.attemptIndex,
+    scale,
   });
 }
 

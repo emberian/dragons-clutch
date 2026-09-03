@@ -2,13 +2,17 @@ import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
 import * as Abi from '@dclutch/sdk/generated/resolutionCertificateV2';
+import * as Generated from './generated/coreFound';
+import { sha256 } from './bytes';
 import { type DecodedMarketDiscoveryCardV1 } from './marketDiscovery';
 import {
   exactRatioDecimalV1,
+  inspectMarketDeclaredScaleV1,
   inspectMarketResolutionV1,
   marketRedemptionStateV1,
   terminalCertificateAddressV1,
 } from './marketResolution';
+import { deriveFinalizedRecordAddressesV1 } from './releaseRegistry';
 import { type RpcAccount } from './rpc';
 
 /**
@@ -76,7 +80,10 @@ function terminalCard(receiptId: string, winner: number, hoardAtoms: string): De
     identity: {
       schemaMagic: 'DCLTCOR3', schemaVersion: 3, accountBytes: 368,
       marketId: '00'.repeat(32), realmId: '01'.repeat(32), productRecordId: '33'.repeat(32),
-      productInstanceId: '03'.repeat(32), resolutionPolicyId: '04'.repeat(32),
+      // The Market's resolution policy IS the Source material the certificate
+      // pins; the fixture had them as two unrelated constants because nothing
+      // compared them, and the scale read is the first thing that does.
+      productInstanceId: '03'.repeat(32), resolutionPolicyId: '22'.repeat(32),
       capabilityManifestId: '05'.repeat(32), selectedReleaseSetId: '06'.repeat(32),
       registryProgram: MARKET, rentBeneficiary: MARKET,
     },
@@ -235,5 +242,162 @@ describe('what is left in the vault against what the winners are owed', () => {
   it('says nothing at all about a market that has no answer', () => {
     const open = { ...terminalCard(RECEIPT_ID, 1, '500000000'), settlement: { status: 'open', label: 'no terminal receipt' } } as DecodedMarketDiscoveryCardV1;
     expect(marketRedemptionStateV1(open)).toMatchObject({ status: 'unread' });
+  });
+});
+
+/**
+ * THE DECLARED SCALE, walked and read.
+ *
+ * `4cd2b9cb5` put `source_scale_exponent` at byte 12 of `StatisticSpecV1` and
+ * the browser kept passing a literal zero, because the record was two account
+ * reads away and nothing made the walk. This builds the two records the walk
+ * crosses -- a `SourceMaterialV3` naming a `StatisticSpecV1` -- and puts each at
+ * the Registry PDA its own schema identity and content digest derive, so the
+ * reader authenticates them exactly as it does on chain and cannot be satisfied
+ * by bytes at a convenient address.
+ *
+ * The exponent is NEGATIVE on purpose. Read as unsigned, `-8` at offset 12 is
+ * 4,294,967,288, and a mirror handed that number would multiply a denominator
+ * by a power of ten with four billion digits rather than divide by a hundred
+ * million. A test with a positive fixture cannot tell the two readings apart.
+ */
+describe('the source-to-result scale a market declares', () => {
+  const REGISTRY = 'Reg1stry11111111111111111111111111111111111';
+
+  /** A canonical 176-byte statistic declaring a conversion at `exponent`. */
+  function statisticRecordBytes(exponent: number): Uint8Array {
+    const bytes = new Uint8Array(Generated.STATISTIC_SPEC_BYTES_V1);
+    bytes.set(Generated.STATISTIC_SPEC_MAGIC, 0);
+    new DataView(bytes.buffer).setUint16(8, 1, true);
+    bytes[10] = 1; bytes[11] = 1;
+    new DataView(bytes.buffer).setInt32(Generated.STATISTIC_SPEC_SOURCE_SCALE_EXPONENT_OFFSET_V1, exponent, true);
+    fill(bytes, Generated.STATISTIC_SPEC_SOURCE_UNIT_ID_OFFSET_V1, 0x51);
+    fill(bytes, Generated.STATISTIC_SPEC_RESULT_UNIT_ID_OFFSET_V1, 0x52);
+    return bytes;
+  }
+
+  /** A material whose statistic coordinate names `digest`. */
+  function materialRecordBytes(digest: Uint8Array): Uint8Array {
+    const bytes = new Uint8Array(240);
+    bytes.set(new TextEncoder().encode('DCLTSMV3'), 0);
+    bytes.set(digest, Generated.SOURCE_MATERIAL_STATISTIC_SPEC_OFFSET_V3);
+    return bytes;
+  }
+
+  function registryAccount(data: Uint8Array): RpcAccount {
+    return { data, executable: false, lamports: '1', owner: REGISTRY, space: data.length };
+  }
+
+  async function graph(exponent: number) {
+    const statistic = statisticRecordBytes(exponent);
+    const statisticDigest = await sha256(statistic);
+    const material = materialRecordBytes(statisticDigest);
+    const materialDigest = await sha256(material);
+    const statisticRecord = deriveFinalizedRecordAddressesV1(REGISTRY, Generated.STATISTIC_SPEC_SCHEMA_ID_V1, statisticDigest).record;
+    const materialRecord = deriveFinalizedRecordAddressesV1(REGISTRY, Generated.SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, materialDigest).record;
+    const accounts = new Map<string, RpcAccount>([
+      [statisticRecord, registryAccount(statistic)],
+      [materialRecord, registryAccount(material)],
+    ]);
+    return {
+      materialDigest, statisticRecord, materialRecord,
+      client: { accountInfo: async (address: string) => ({ slot: '900', account: accounts.get(address) ?? null }) },
+    };
+  }
+
+  it('walks material to statistic and reads a negative shift as a negative number', async () => {
+    const world = await graph(-8);
+    const scale = await inspectMarketDeclaredScaleV1(world.client, {
+      registryProgramId: REGISTRY, sourceMaterialId: world.materialDigest, floorSlot: '900',
+    });
+    expect(scale.status, scale.status === 'unread' ? scale.reason : '').toBe('declared');
+    if (scale.status !== 'declared') return;
+    expect(scale.sourceScaleExponent).toBe(-8);
+    expect(scale.declaresConversion).toBe(true);
+    expect(scale.statisticRecord).toBe(world.statisticRecord);
+    expect(scale.sourceMaterialRecord).toBe(world.materialRecord);
+  });
+
+  it('reports the identity as a DECLARED zero, which is what a pre-factor record says', async () => {
+    const world = await graph(0);
+    const scale = await inspectMarketDeclaredScaleV1(world.client, {
+      registryProgramId: REGISTRY, sourceMaterialId: world.materialDigest, floorSlot: '900',
+    });
+    expect(scale.status).toBe('declared');
+    if (scale.status !== 'declared') return;
+    expect(scale.sourceScaleExponent).toBe(0);
+  });
+
+  /**
+   * A statistic at the wrong address is not a statistic.
+   *
+   * The digest derives the PDA, so a record whose bytes were swapped after
+   * founding no longer lives where its own content says it should. Reading it
+   * anyway would be authenticating a SHAPE rather than an authority, which is
+   * the same failure the certificate's owner check exists to refuse.
+   */
+  it('refuses a statistic that is not at its own content-derived address', async () => {
+    const world = await graph(-8);
+    const substituted = statisticRecordBytes(-6);
+    const scale = await inspectMarketDeclaredScaleV1(
+      { accountInfo: async (address: string) => ({ slot: '900', account: address === world.statisticRecord ? registryAccount(substituted) : (await world.client.accountInfo(address)).account }) },
+      { registryProgramId: REGISTRY, sourceMaterialId: world.materialDigest, floorSlot: '900' },
+    );
+    expect(scale.status).toBe('unread');
+    if (scale.status !== 'unread') return;
+    expect(scale.reason).toContain('schema/content-derived Registry raw PDA');
+  });
+
+  it('says the record was not read rather than assuming the identity, when it cannot be read', async () => {
+    const world = await graph(-8);
+    const scale = await inspectMarketDeclaredScaleV1(
+      { accountInfo: async () => ({ slot: '900', account: null }) },
+      { registryProgramId: REGISTRY, sourceMaterialId: world.materialDigest, floorSlot: '900' },
+    );
+    expect(scale.status).toBe('unread');
+    if (scale.status !== 'unread') return;
+    expect(scale.reason).toContain('does not exist');
+    // And the word that matters: nothing anywhere in a refusal offers a number.
+    expect(JSON.stringify(scale)).not.toContain('sourceScaleExponent');
+  });
+
+  /**
+   * The certificate and the Market must name ONE Source graph.
+   *
+   * `bindTerminalResolutionCertificateV2` binds the market, the generation, the
+   * selector and the receipt, and takes the Source material on the
+   * certificate's own word -- which was harmless while nothing was read out of
+   * that graph. The scale IS read out of it, so a certificate naming a material
+   * the Market never selected yields no scale rather than a number with no
+   * authority behind it.
+   */
+  it('reads no scale from a Source graph the Market did not select', async () => {
+    const card = terminalCard(RECEIPT_ID, 1, '0');
+    const resolution = await inspectMarketResolutionV1(
+      clientReturning(certificateAccount(successCertificate(RECEIPT, 1))),
+      {
+        card: { ...card, identity: { ...card.identity, resolutionPolicyId: '09'.repeat(32) } } as DecodedMarketDiscoveryCardV1,
+        resolutionProgramId: RESOLUTION,
+        floorSlot: '900',
+        registryProgramId: REGISTRY,
+      },
+    );
+    expect(resolution.status).toBe('authenticated');
+    if (resolution.status !== 'authenticated') return;
+    expect(resolution.scale.status).toBe('unread');
+    if (resolution.scale.status !== 'unread') return;
+    expect(resolution.scale.reason).toContain('a graph the Market did not select');
+  });
+
+  it('leaves the scale unread, with a reason, when the reader is given no Registry', async () => {
+    const resolution = await inspectMarketResolutionV1(
+      clientReturning(certificateAccount(successCertificate(RECEIPT, 1))),
+      { card: terminalCard(RECEIPT_ID, 1, '0'), resolutionProgramId: RESOLUTION, floorSlot: '900' },
+    );
+    expect(resolution.status).toBe('authenticated');
+    if (resolution.status !== 'authenticated') return;
+    expect(resolution.scale.status).toBe('unread');
+    if (resolution.scale.status !== 'unread') return;
+    expect(resolution.scale.reason).toContain('not a claim that the declared shift is zero');
   });
 });
