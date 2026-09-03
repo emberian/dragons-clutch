@@ -961,3 +961,216 @@ needs about 115,000 and the commit tail 61,352, against the ~12,000 the
 transaction has when Claims returns. **Still short by roughly 165,000 to
 210,000 depending on the draw** -- and of that, 92,515 is now a MEASURED
 re-authentication inside the merge itself, which was the estimated row.
+
+## Fourth addendum, 2026-09-03: the ruling's three applications, and the Remove reaches the commit tail
+
+*Measured at `036002288` (before), `9b5de611e` (Custody) and `742d7b7be`
+(accelerator), tree root `/Users/ember/dev/dclutch`, real SBF ELFs built in this
+lane's own worktree with its own target directory, zero SBF stack-frame-overwrite
+diagnostics on every link built for this addendum. Dealer accelerator campaign 30
+passed / 1 failed throughout, unchanged in count, the failure still this Remove.
+Every comparison below is between two ELFs and therefore two bump draws; the
+draw-free rows are named where they exist.*
+
+### The prelude's interior, which the last addendum could not see
+
+`30d02f5c0` could say the accelerator's prelude was 249,263 CU and that it is a
+CHAIN. It could not say what each link cost, and a chain nobody has priced link
+by link cannot be cut surgically. Eight `hot_cu_checkpoint!` sites, behind
+`hot-cu-profile` and absent from every shipped build, say it now:
+
+| link | CU | what it establishes |
+|---|---:|---|
+| `acc-toplevel` | 22,853 | the 48 fixed accounts and the evidence suffix ARE the top-level instruction's |
+| `acc-caller-authority` | 4,080 | the binding: account 0 is Trading's `CallerAuthoritySeedsV1` PDA over the request |
+| `acc-activation` | 30,743 | ONE activation-cache decode: which program holds Trading in this release set |
+| `acc-market` | 3,777 | the Core Market's persisted identity |
+| `acc-release-waist` | 2,801 | the root's family context and the Rent sysvar |
+| `acc-product-runtime` | 39,217 | the Product/domain/portfolio/linked-basis graph -- **draw-free** |
+| `acc-manifest` | 11,034 | the manifest record and its selected entry |
+| `acc-programset` | 7,189 | the program set, the selected action and the descriptor identity |
+| `acc-seal` | 3,878 | decision 0005's seal -- **draw-free** |
+| `acc-descriptor` | 3,072 | the descriptor body, read through the seal |
+| `acc-records` | 4,211 | the config record and the common projection bindings |
+| `acc-strategy` | 37,061 | the admitted-AOT strategy, certificate, admission and artifact-release chain |
+| `acc-input-bank` | 4,897 | the input register bank, out of the runtime accounts |
+| `acc-artifact-records` | 37,914 | the five sealed artifact records, borrowed and decoded |
+| `acc-artifacts` | 11,092 | geometry: span widths, logical count, `require_geometry`, representatives |
+| `acc-observations` | 30,344 | the observation digest over the runtime accounts |
+| `acc-context` | 2,547 | assemble the context and compare its digest to the request's |
+
+**The two spans that are identical to the digit across every ELF this lane built
+are `acc-product-runtime` (39,217) and `acc-seal` (3,878).** Everything else
+moves with the draw, in multiples of 1,500.
+
+### (i) Custody: the cache was decoded three times
+
+The third addendum measured Custody's caller re-authentication at 92,515 to
+94,015 per leg and said the reading it needed was its own. It is, and most of
+what it found needed no ruling at all: `authenticate_market`,
+`authenticate_calling_release` and `authenticate_realm` each borrowed the SAME
+immutable Registry-owned activation account and each ran
+`ActivatedExecutionReleaseSetViewV1::decode` -- the complete five-role
+projection, twenty-five `decode_role` calls -- to answer one question about one
+role.
+
+| span | before | after A | after B |
+|---|---:|---:|---:|
+| `cu-common-frame` | 58,750 | 35,980 | 40,470 |
+| `cu-realm` | 30,781 | 9,053 | 9,051 |
+| whole invocation | 121,289 | 78,301 | 73,789 |
+
+Three ELFs, three draws: `cu-realm` is 9,053 and 9,051 across the two
+after-runs and `cu-common-frame` differs by 4,490 -- three
+`create_program_address` iterations -- so the saving is a BAND of 40,000 to
+44,500 per leg and the noise it clears is 4,500.
+
+**The ruling's own contribution is one thing**, stated separately because a
+measurement that lets a ruling take credit for a redundancy is not evidence for
+the ruling: `authenticate_calling_release` no longer observes the caller role's
+live deployment, and takes the role's Program and ProgramData identities out of
+the decoded view instead. What that gives up is decision 0012's
+`ReleaseSuperseded` on this route, inherited from the caller, exactly as Claims
+gave it up.
+
+**What stays, and why each conjunct does.** The activation identity, because the
+seeds name a role and not a key. The Market, because a caller may pin its own
+request to whatever it likes but may not author the Market's persisted identity,
+and the realm reads both record bumps out of it. And **the replay cursor,
+entire**: its address is a PDA under CUSTODY'S OWN program id, so the caller
+pins the seeds but does not choose which cursor this program advances; its owner
+and exact width are a fact about the account, partitioned by operation; and the
+revision the route advances is read from that account and never from the
+request. Custody's `caller_authority.is_signer` conjunct lives in
+`require_account_count`'s frame-spec privilege scan rather than beside the
+derivation -- which is why grepping the file for it finds nothing and the
+signature the ruling rests on is nonetheless required.
+
+### (ii) The accelerator: the chain moved into the request
+
+Everything in the chain is something Trading computed before it built the CPI.
+`admitted_composition_v3` now writes the complete `AdmittedInvocationContextV3`
+preimage and the two AccountProfile-derived geometry banks into an
+`AdmittedPreludeWitnessV1` appended to the request.
+
+| | before | after |
+|---|---:|---:|
+| the whole prelude | 256,650 | 165,153 |
+| the whole accelerator invocation | 399,484 | 329,984 |
+
+with `acc-manifest`, `acc-programset`, `acc-strategy` and `acc-artifact-records`
+gone entirely, `acc-records` 4,211 to 516, `acc-artifacts` 11,092 to 9,001, and
+a new `acc-witness` at 1,947. Draw-corrected the saving is about 99,000;
+measured across the two ELFs it is 91,497, and both of the two rows that moved
+against the change (`acc-caller-authority` +4,571, `acc-market` +3,000) are
+whole numbers of `create_program_address` iterations.
+
+**THE WITNESS RIDES OUTSIDE `hash(request_bytes)`, AND THAT IS FORCED.** This
+note's design said "the caller-authority PDA already pins `hash(request_bytes)`,
+so the request is a channel that costs nothing to widen." That is true of the
+BYTES and false of the ADDRESS: a caller-authority PDA is an account that must
+be in the frame before the transaction executes, so its address is derived
+off-chain by a producer that reproduces the request exactly, and the witness is
+composed on-chain out of values only the executing program has. The campaign
+proved it in one run, refusing `0x4001` at `invoke_admitted_accelerator_v3`
+because every caller-authority account in the fixture was at the old address.
+`dclutch-custody-sbf`'s `split_caller_authority_bump_v1` met the same fixed
+point in 2026-08 and resolved it the same way.
+
+So the binding is the request's own `invocation_context` field, which IS inside
+the signed prefix: the reader requires
+`admitted_invocation_context_digest_v3(witness.context())` to equal it, and the
+whole 756-byte preimage is committed by a value the caller signed. The
+representative bank is committed one level in, by the context's
+`runtime_observations_digest`, which the accelerator recomputes over bytes it
+reads itself. **The span bank is committed by neither and the route refuses a
+nonempty one** -- every family it serves asserts `span_widths().is_empty()` in
+its own words, so the refusal costs no honest traffic; a dynamic-span profile on
+this path is owed a binding before it is admitted.
+
+**Twenty-three of the context's twenty-eight fields are rejoined against a
+source on the accelerator's side of the boundary**, and the five that are not
+are named rather than buried: `strategy` and `certificate` (also request header
+fields, and compared against them), `admission`, `artifact_release` and
+`lifecycle`. What is given up with them is the accelerator's own proof that the
+admitted strategy names THIS program. It is not lost from the transaction --
+Trading authenticates the strategy chain before composing the CPI -- it is lost
+from this program.
+
+**And the seal became the joint rather than a shortcut through one.** Its key is
+(descriptor schema, descriptor digest, action, Trading semantic release,
+Registry); the descriptor digest is the request's own `capability_program`, the
+action is the witness's, the release is the activation's. A request naming an
+action this Trading release never sealed for this descriptor has NO SEAL ACCOUNT
+AT ALL -- which is what retires the manifest and program-set walk, a walk to the
+same answer through twelve accounts.
+
+**What did NOT move, because the accelerator is a second opinion on the
+EVALUATION.** `acc-product-runtime` stays at 39,217: it supplies the payout
+scale, the outcome count and the semantic basis, and those decide the
+arithmetic. The input register bank is still read out of the runtime accounts.
+The root prestate is still hashed from the root. And the observation digest
+stays -- 30,285 of the new prelude -- because it is the ONLY thing binding the
+runtime slice: `acc-toplevel` binds the forty-eight fixed accounts and the
+evidence suffix to the top-level instruction, and the runtime slice is neither.
+
+**The frame nearly ate the change, and the note predicted it.** "A partial cut
+is not worth a trust change in a frame with 192 bytes of headroom." The first
+version inlined the geometry banks, the eight-argument observation digest and
+the rejoin: `authenticate_accelerator_invocation_v4` went from 3,904 to 5,248
+and the linker emitted thirty-four overwrite diagnostics. The second, with the
+rejoin in its own callee, was still 64 bytes over, because the join struct took
+`HotFrameV3` -- thirty-nine account references -- and `HotExecutionEnvelopeV3`
+by value. **The two callees this move deleted were load-bearing as FRAMES and
+not only as code.**
+
+### (iii) Claims, already spent at `0aa70478e`, and what the three have in common
+
+All three programs found the same two things in the same proportion: a
+redundant decode of one immutable Registry-owned account that a reading would
+have found with no ruling at all, and a per-role deployment observation that the
+ruling drops. In every case the activation identity itself STAYED, because the
+seeds name a role and not a key. The ruling is not "trust the caller"; it is
+"verify the signer's derivation, and stop re-deriving what the signer's seeds
+already pin" -- and in all three programs the largest single line was something
+else entirely.
+
+### Where the wall is now
+
+| | CU |
+|---|---:|
+| Trading entry through `before-commit` | 1,040,583 |
+| Custody route 0 (the cash leg), with its frame build | 108,030 |
+| **Claims route 1 -- COMPLETES** | 87,162 |
+| inter-child span and Custody route 2's frame build | 41,492 |
+| **Custody route 2, the MERGE -- COMPLETES** | 71,746 |
+| `commit-lifecycle-closes` | 7,274 |
+| remaining | **4,510** |
+
+**Every one of the Remove's three child routes now executes and commits.** The
+merge moved its tokens, wrote its poststate, advanced its replay cursor and
+returned its receipt. What is left is the commit tail: about 53,600 CU --
+48,536 `commit-non-root`, 2,498 `commit-root`, 2,387 `after-commit`, 226 --
+measured end to end on the equity Add. **The Remove is short by about 49,000
+CU**, down from 264,000 to 367,000 when this note opened.
+
+Tonight the wall moved four times: from inside the Claims child's product/basis
+join, to after the Claims child's commit, to inside the Custody merge, to inside
+the commit tail.
+
+And the neighbour that completes has room again. The two Add-shaped transactions
+in the last run consume 1,025,642 and 1,032,528 of 1,399,700 -- **367,000 to
+374,000 CU of headroom**, against 241,000 to 266,000 before tonight, on a family
+that was running at 83 per cent of the ceiling when this note was written.
+
+### What the next 49,000 costs, priced
+
+| candidate | CU | measured? |
+|---|---:|---|
+| the shared permission bank: `p7e-permissions` retired outright, plus part of `pf-composition`'s third walk | 15,000 - 25,000 | the 14,800 row is measured; the ceiling is not |
+| `acc-product-runtime`'s four record walks, bound by the digests the Market and the witness already pin instead of searched for | up to ~39,000, unknown split | not measured; the span is draw-free, so it is decode and not search |
+| the three inter-child frame builds, 25,247 + 41,492 + 41,492 | ~108,000 | measured, and it is Trading's CPI account-passing rather than anyone's authentication |
+| the commit tail itself | 53,600 | measured on the Add |
+
+The first is the one this note already owns an author for. The second is the
+largest single remaining number inside the accelerator and has never been read.

@@ -572,7 +572,22 @@ pub fn process_instruction(
     let input_page_start = runtime_start
         .checked_add(fixed_count)
         .ok_or(GeneralAcceleratorSbfErrorV3::InvalidScratchBank)?;
-    let request_digest = content(instruction_data)?;
+    // Over the REQUEST, not over the whole instruction data. Trading appends a
+    // prelude witness after every admitted request it composes, and the
+    // caller-authority digest it seeds -- and the digest it validates this
+    // acknowledgement against -- is taken over the request alone. See
+    // `AdmittedAcceleratorRequestV2::signed_prefix_len`. This program does not
+    // read the witness; it must not hash it either, or every OpenBatch
+    // acknowledgement would name a digest no caller can reproduce.
+    let request_digest = content(
+        instruction_data
+            .get(
+                ..request
+                    .signed_prefix_len()
+                    .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidRequest)?,
+            )
+            .ok_or(GeneralAcceleratorSbfErrorV3::InvalidRequest)?,
+    )?;
     if let AdmittedAcceleratorRequestV2::OutputPageV3(page_request) = request {
         // The page is admitted BEFORE anything is assembled into it, so a page
         // this program cannot write costs the caller the authentication it

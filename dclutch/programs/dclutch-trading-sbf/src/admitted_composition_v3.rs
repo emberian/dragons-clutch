@@ -237,6 +237,7 @@ pub fn execute_admitted_aot_v3<'info>(
     authenticated: AuthenticatedExecutionStrategyV2,
     input_scalars: &[u64],
     input_identities: &[[u8; 32]],
+    witness: &[u8],
 ) -> Result<AdmittedExecutionV3, ProgramError> {
     let invocation_context = admitted_invocation_context_digest_v3(*context)
         .map_err(|_| TradingSbfError::AdmittedContext)?;
@@ -287,6 +288,7 @@ pub fn execute_admitted_aot_v3<'info>(
         identity_count,
         0,
         &input_bank,
+        witness,
     )?;
     if transport == RequestTransportV2::ScratchPages {
         validate_input_scratch_pages(
@@ -334,6 +336,7 @@ pub fn execute_admitted_aot_v3<'info>(
                     identity_count,
                     chunk_index_u32,
                     &input_bank,
+                    witness,
                 )?;
                 let AdmittedAcceleratorRequestV2::ChunkedBankV2(chunked) = request else {
                     return Err(TradingSbfError::AdmittedTransport.into());
@@ -504,6 +507,7 @@ fn accelerator_request<'a>(
     identity_count: u32,
     chunk_index: u32,
     input_bank: &'a [u8],
+    witness: &'a [u8],
 ) -> Result<AdmittedAcceleratorRequestV2<'a>, ProgramError> {
     let certificate = authenticated
         .certificate_program_id()
@@ -526,6 +530,7 @@ fn accelerator_request<'a>(
             chunk_index,
             inline_bank,
         )
+        .map(|request| request.with_witness(witness))
         .map(AdmittedAcceleratorRequestV2::ChunkedBankV2)
         .map_err(|_| TradingSbfError::AdmittedTransport.into()),
         // A whole-bank request has no chunk index to carry, so a caller that
@@ -544,6 +549,7 @@ fn accelerator_request<'a>(
                 identity_count,
                 inline_bank,
             )
+            .map(|request| request.with_witness(witness))
             .map(AdmittedAcceleratorRequestV2::OutputPageV3)
             .map_err(|_| TradingSbfError::AdmittedTransport.into())
         }
@@ -655,7 +661,22 @@ fn invoke_admitted_accelerator_v3<'info>(
     request
         .encode_into(&mut buffers.instruction.data)
         .map_err(|_| TradingSbfError::AdmittedTransport)?;
-    let request_digest = content(&buffers.instruction.data)?;
+    // Over the REQUEST, not over the whole instruction: the prelude witness
+    // rides after it and is outside this digest by construction, because the
+    // caller-authority account whose address this seeds is derived off-chain by
+    // a producer that cannot compose it. See
+    // `AdmittedAcceleratorRequestV2::signed_prefix_len`.
+    let request_digest = content(
+        buffers
+            .instruction
+            .data
+            .get(
+                ..request
+                    .signed_prefix_len()
+                    .map_err(|_| TradingSbfError::AdmittedTransport)?,
+            )
+            .ok_or(TradingSbfError::AdmittedTransport)?,
+    )?;
     let authority_seeds = CallerAuthoritySeedsV1::new(
         context.release_set,
         context.market.to_bytes(),
@@ -1252,18 +1273,34 @@ mod tests {
         let two_seed =
             Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &digest], &registry).0;
         assert_ne!(raw, two_seed);
-        assert!(require_record_pair(&registry, &two_seed, &staging, schema, digest, false).is_err());
+        assert!(
+            require_record_pair(&registry, &two_seed, &staging, schema, digest, false).is_err()
+        );
 
         // Swapping schema and digest names a different record.
         assert!(require_record_pair(&registry, &raw, &staging, digest, schema, false).is_err());
         // A raw record paired with another identity's staging cursor refuses.
         assert!(
-            require_record_pair(&registry, &raw, &Pubkey::new_unique(), schema, digest, false)
-                .is_err()
+            require_record_pair(
+                &registry,
+                &raw,
+                &Pubkey::new_unique(),
+                schema,
+                digest,
+                false
+            )
+            .is_err()
         );
         assert!(
-            require_record_pair(&registry, &Pubkey::new_unique(), &staging, schema, digest, false)
-                .is_err()
+            require_record_pair(
+                &registry,
+                &Pubkey::new_unique(),
+                &staging,
+                schema,
+                digest,
+                false
+            )
+            .is_err()
         );
         // A zero schema or digest is not an identity at all.
         assert!(require_record_pair(&registry, &raw, &staging, [0; 32], digest, false).is_err());

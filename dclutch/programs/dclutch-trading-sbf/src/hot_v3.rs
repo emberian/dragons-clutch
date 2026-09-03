@@ -123,7 +123,10 @@ use dclutch_effect_kernel::{
     },
 };
 use dclutch_execution_strategy_contract::{
-    admitted_v3::{AdmittedInvocationContextV3, admitted_invocation_context_digest_v3},
+    admitted_v3::{
+        AdmittedInvocationContextV3, AdmittedPreludeWitnessV1,
+        admitted_invocation_context_digest_v3, admitted_prelude_witness_bytes_v1,
+    },
     shadow_digest_v3::{
         BorrowedRuntimeObservationV3, ShadowEffectProjectionV3, ShadowInvocationContextV3,
         ShadowReceiptDependencyV3, ShadowResolvedRouteV3, ShadowRouteKindV3, ShadowRouteRoleV3,
@@ -241,7 +244,6 @@ use crate::{
         ADMITTED_AOT_STRATEGY_ACCOUNT_COUNT_V2, AuthenticatedExecutionStrategyV2,
         INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2, SHADOW_AOT_STRATEGY_ACCOUNT_COUNT_V2,
         authenticate_activated_current_deployment,
-        authenticate_execution_strategy_from_attested_accelerator_v2,
         authenticate_execution_strategy_from_sealed_capability_v2,
     },
     native_signature::{
@@ -771,7 +773,7 @@ pub struct AuthenticatedAcceleratorInvocationV4<'request, 'accounts, 'info> {
     output_page: Option<&'accounts AccountInfo<'info>>,
     envelope: HotExecutionEnvelopeV3,
     hot_instruction: Vec<u8>,
-    strategy: Box<AuthenticatedExecutionStrategyV2>,
+    descriptor: Box<CapabilityProgramV4>,
     selected_action: u32,
     context: Box<AdmittedInvocationContextV3>,
     product_runtime: Box<AuthenticatedProductRuntimeV3<'accounts, 'info>>,
@@ -881,13 +883,14 @@ impl<'request, 'accounts, 'info> AuthenticatedAcceleratorInvocationV4<'request, 
     }
 
     /// Exact hostile-decoded CapabilityProgramV4 descriptor.
+    ///
+    /// Read through the seal rather than out of an authenticated strategy: the
+    /// strategy chain this view used to carry was 37,061 CU of re-derivation
+    /// whose only surviving outputs are four context identities the caller now
+    /// signs for, and the descriptor body is the one thing a family evaluator
+    /// still asks this view for.
     pub const fn descriptor(&self) -> CapabilityProgramV4 {
-        self.strategy.capability_program()
-    }
-
-    /// Exact admitted strategy/certificate/admission/deployment witness.
-    pub const fn strategy(&self) -> AuthenticatedExecutionStrategyV2 {
-        *self.strategy
+        *self.descriptor
     }
 
     /// Complete invocation-context preimage whose digest is in AcceleratorRequestV2.
@@ -1055,7 +1058,17 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         caller_authority,
         envelope,
         frame.root.key,
-        request_bytes,
+        // The signed prefix, not the whole instruction: the prelude witness
+        // rides after the request and is bound by the request's own
+        // `invocation_context` field instead. See
+        // `AdmittedAcceleratorRequestV2::signed_prefix_len`.
+        request_bytes
+            .get(
+                ..request
+                    .signed_prefix_len()
+                    .map_err(|_| TradingSbfError::AcceleratorFrame)?,
+            )
+            .ok_or(TradingSbfError::AcceleratorFrame)?,
         artifact_release_digest,
         accelerator_program,
         accelerator_program_evidence,
@@ -1106,75 +1119,77 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
     hot_cu_checkpoint!("acc-product-runtime");
 
-    // Same three Market-selected records as the canonical hot path, located the
-    // same way: from the bumps this Market's root recorded at activation.
-    let record_bumps = family_context.record_bumps();
-    let manifest_data = borrow_finalized_record_at(
-        frame,
-        frame.manifest_raw,
-        frame.manifest_staging,
-        &rent,
-        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
-        family_context.selection().manifest().to_bytes(),
-        record_bumps.manifest_raw(),
-        record_bumps.manifest_staging(),
-    )?;
-    let entry = authenticate_manifest_entry_boxed_v3(&manifest_data, &family_context)?;
-    drop(manifest_data);
-    hot_cu_checkpoint!("acc-manifest");
-    let program_set_data = borrow_finalized_record_at(
-        frame,
-        frame.program_set_raw,
-        frame.program_set_staging,
-        &rent,
-        CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
-        family_context.selection().capability_release().to_bytes(),
-        family_context.selection().capability_release_raw_bump(),
-        family_context.selection().capability_release_staging_bump(),
-    )?;
-    // Both arguments are the SAME PROVEN VALUE, so the second is passed as the
-    // first rather than recomputed: the borrow above refuses unless
-    // `hash(program_set_data)` is exactly this selected capability release, so
-    // hashing the record again could only ever agree with itself. The canonical
-    // path made this repair at `authenticate_and_execute_hot_v3`; the
-    // accelerator kept the recompute.
-    let program_set = CapabilityProgramSetV2::decode_selected(
-        family_context.selection().capability_release().to_bytes(),
-        family_context.selection().capability_release().to_bytes(),
-        &program_set_data,
-    )
-    .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
-    let selected_entry = program_set
-        .select_entry(family_request)
-        .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
-    let selected_action = selected_entry.selector();
-    let selected_descriptor = selected_entry.descriptor();
-    drop(program_set_data);
-    if selected_descriptor.schema().to_bytes() != PROGRAM_SCHEMA_ID_V4
-        || selected_descriptor.program() != request.capability_program()
-    {
-        return Err(TradingSbfError::AcceleratorArtifact.into());
-    }
-    hot_cu_checkpoint!("acc-programset");
-    // Decision 0005's seal, on the accelerator path for the same reason the
-    // canonical path has it: SIX RECORDS WERE BEING SEARCHED FOR RATHER THAN
-    // READ. `borrow_finalized_record` spends two `find_program_address` calls
-    // per record, and `borrow_finalized_record_at`'s own note prices one
-    // attempt at 1,500 CU with 5 to 19 attempts drawn per key. Measured against
-    // the shipped ELFs 2026-09-02: the descriptor plus the five artifacts cost
-    // this callback **135,785 CU in `acc-artifacts` and 26,782 in
-    // `acc-records`** for addresses a Trading-owned write-once verdict had
-    // already derived and persisted.
+    // THE PRELUDE'S CHAIN IS NOT WALKED HERE ANY MORE; ITS OUTPUTS ARRIVE IN
+    // THE REQUEST, AND EVERY ONE THIS PROGRAM CAN SOURCE INDEPENDENTLY IS
+    // REJOINED BELOW.
     //
-    // The note this replaces argued the seal "adds no authority this path is
-    // missing", and that is true in the direction it was written -- the seal is
-    // not a substitute for binding a record to its digest, and it is not being
-    // used as one. Every conjunct survives: `borrow_sealed_record` still
-    // requires Registry ownership, read-only privileges, rent exemption and
-    // `hash(bytes) == digest` before a byte is read, and it adds the row's
-    // `exact_data_length`, which the search form never checked. What the seal
-    // removes is only the SEARCH -- and a wrong coordinate still refuses,
-    // because the row's raw account must equal the account the frame supplied.
+    // What used to sit between here and `acc-context` was a CHAIN, not a list:
+    // the family context yielded the record bumps, which located the manifest
+    // and program set, which yielded the selected action and descriptor, which
+    // keyed the seal, which yielded the descriptor body and the five artifacts,
+    // which yielded the geometry, which the context digest closed over -- and
+    // the evaluator consumed the last of them. Measured on real ELFs
+    // 2026-09-03 with the eight checkpoints `9b5de611e` added: 11,034 for the
+    // manifest, 7,189 for the program set, 4,211 for the config record and the
+    // projection bindings, 37,061 for the strategy chain, 37,914 for the five
+    // sealed artifact records and 11,092 for the geometry over them.
+    //
+    // Every value in that chain is something TRADING COMPUTED, in the same
+    // instruction, before it built this CPI, and the caller-authority PDA
+    // authenticated forty lines above already pins `hash(request_bytes)`. So
+    // the request is a channel that costs nothing to widen, and the repair is a
+    // MOVE: `admitted_composition_v3` writes the complete
+    // `AdmittedInvocationContextV3` preimage and the two AccountProfile-derived
+    // geometry banks into the request tail, and this program reads them.
+    //
+    // WHAT IS NOT TAKEN ON THE CALLER'S WORD, because the accelerator exists to
+    // be a second opinion on the EVALUATION and a mirror of its caller would be
+    // worth nothing:
+    //
+    // - every EVALUATION INPUT still comes from an account this program reads.
+    //   The Product graph above (`acc-product-runtime`, 39,217) supplies the
+    //   payout scale, the outcome count and the semantic basis; the input
+    //   register bank below is read out of the runtime accounts and bound to
+    //   the request's own digest; the root prestate is hashed from the root.
+    // - the RUNTIME SLICE is bound by the observation digest this program
+    //   computes over those accounts' bytes, at `acc-observations`. That is the
+    //   one thing `acc-toplevel` does not cover -- it binds the forty-eight
+    //   fixed accounts and the evidence suffix to the top-level instruction,
+    //   and the runtime slice is neither.
+    // - the ACTIVATION stays unconditional, as it does in Claims: the seeds
+    //   name a role, not a key, and which program holds Trading in this release
+    //   set is the one fact a signature under that program cannot state.
+    // - the FIVE ARTIFACT IDENTITIES come from the SEAL, which is a
+    //   Trading-owned write-once persisted verdict, not a caller assertion.
+    //
+    // WHAT IS ESTABLISHED BY THE SIGNATURE ALONE, named so it can be argued
+    // with: `strategy`, `certificate`, `admission`, `artifact_release`,
+    // `lifecycle`, `tail_count`, the dynamic span widths and the representative
+    // coordinates. The first two are also request header fields and are
+    // compared against them; the rest have no second source on this side of the
+    // boundary, and the debt they carry is written in
+    // `docs/design/DEALER_PARTIAL_REMOVE_COMPUTE_2026_09_02.md`.
+    let context = decode_accelerator_prelude_context_v4(request.witness())?;
+    let selected_action = context.selected_action;
+    // The caller-authority token is spent here rather than in the strategy
+    // chain that used to hold it: it binds the release set, the Market and the
+    // root it was derived for to the family context this program read out of
+    // the root account.
+    if !accelerator_caller.binds_context(family_context) {
+        return Err(TradingSbfError::Release.into());
+    }
+    hot_cu_checkpoint!("acc-witness");
+
+    // Decision 0005's seal, and now it is the JOINT rather than a shortcut
+    // through one. Its key is (descriptor schema, descriptor digest, action,
+    // Trading semantic release, Registry), its account sits at the PDA that key
+    // derives, and its body names the six artifact rows with their exact
+    // widths. The descriptor digest is `request.capability_program()`, which
+    // the caller signed; the action is the witness's; the semantic release is
+    // the activation's. So a request naming an action this Trading release
+    // never sealed for this descriptor has NO SEAL ACCOUNT AT ALL, and the
+    // manifest and program-set walk that used to derive the pair is a walk to
+    // the same answer through twelve accounts.
     let seal_data = frame
         .capability_seal
         .try_borrow_data()
@@ -1183,8 +1198,8 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         frame.trading_program.key,
         frame,
         &rent,
-        selected_descriptor.schema().to_bytes(),
-        selected_descriptor.program().to_bytes(),
+        PROGRAM_SCHEMA_ID_V4,
+        request.capability_program().to_bytes(),
         selected_action,
         trading_semantic_release,
         &seal_data,
@@ -1198,72 +1213,21 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         frame.descriptor_raw,
         frame.descriptor_staging,
         &rent,
-        selected_descriptor.schema().to_bytes(),
-        selected_descriptor.program().to_bytes(),
+        PROGRAM_SCHEMA_ID_V4,
+        request.capability_program().to_bytes(),
     )
     .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
     let descriptor = decode_capability_program_boxed_v3(&descriptor_data)?;
     drop(descriptor_data);
-    authenticate_descriptor_root_selection(&descriptor, &family_context, &entry)?;
-    drop(entry);
     hot_cu_checkpoint!("acc-descriptor");
 
-    let config_data = borrow_finalized_record_at(
-        frame,
-        frame.config_raw,
-        frame.config_staging,
-        &rent,
-        descriptor.config_schema().to_bytes(),
+    require_accelerator_projection_bindings_v4(
         family_context.selection().config().to_bytes(),
-        record_bumps.config_raw(),
-        record_bumps.config_staging(),
+        &market,
+        &product_runtime,
     )?;
-    // As on the canonical path: `borrow_finalized_record` already refused
-    // unless `hash(config_data)` is the selected config identity.
-    drop(config_data);
-    require_common_projection_bindings_v3(CommonProjectionBindingsV3 {
-        selected_config: family_context.selection().config().to_bytes(),
-        selected_product_record: market.identity.product_record.to_bytes(),
-        authenticated_product_record: product_runtime
-            .runtime
-            .product_record
-            .content_digest
-            .to_bytes(),
-        market_product: market.identity.product_id.to_bytes(),
-        runtime_product: product_runtime.runtime.product_id.to_bytes(),
-        product_semantic_basis: product_runtime.runtime.liability_basis_id.to_bytes(),
-        authenticated_semantic_basis: product_runtime.semantic_basis_id.to_bytes(),
-        authenticated_linked_basis: product_runtime
-            .linked_basis_record
-            .content_digest
-            .to_bytes(),
-    })?;
     drop(market);
     hot_cu_checkpoint!("acc-records");
-    let (strategy, strategy_end) = authenticate_strategy_for_accelerator_boxed_v4(
-        &frame,
-        strategy_evidence,
-        family_context,
-        selected_descriptor.program(),
-        &descriptor,
-        accelerator_caller,
-        0,
-    )?;
-    if strategy_end != strategy_evidence.len()
-        || strategy.strategy().disposition() != StrategyDispositionV2::AdmittedAot
-        || strategy.strategy_program_id() != request.strategy_program()
-        || strategy.certificate_program_id() != Some(request.certificate_program())
-        || strategy
-            .artifact_release()
-            .ok_or(TradingSbfError::AcceleratorArtifact)?
-            .program()
-            .to_bytes()
-            != accelerator_program.to_bytes()
-    {
-        return Err(TradingSbfError::AcceleratorArtifact.into());
-    }
-
-    hot_cu_checkpoint!("acc-strategy");
     let input_bank = authenticate_accelerator_input_bank_v4(
         request,
         runtime_accounts,
@@ -1271,48 +1235,44 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     )?;
     let (scalars, identities) = decode_accelerator_register_bank_v4(request, &input_bank)?;
     hot_cu_checkpoint!("acc-input-bank");
-    let geometry = authenticate_accelerator_artifacts_v4(
-        frame,
-        seal,
-        &rent,
-        &descriptor,
-        &strategy,
-        request,
-        family_request,
-        runtime_accounts.len(),
-        &scalars,
-        product_runtime.runtime.outcome_count,
-    )?;
-
-    hot_cu_checkpoint!("acc-artifacts");
-    let context = authenticate_accelerator_context_v4(
+    // The two AccountProfile-derived banks are read rather than re-derived, and
+    // the whole rejoin runs in a callee's frame rather than this one.
+    // `authenticate_accelerator_invocation_v4` had 192 bytes of headroom at
+    // 3,904 of 4,096 before this change, and the first version of it inlined
+    // the banks, the eight-argument observation digest and the join here: the
+    // frame went to 5,248 and the SBF linker emitted thirty-four
+    // frame-overwrite diagnostics. The two boxed callees this move deleted were
+    // load-bearing as FRAMES, not only as code.
+    let span_widths = authenticate_accelerator_witness_v4(AcceleratorWitnessJoinV4 {
         accelerator_program,
-        frame,
-        envelope,
-        family_context,
-        selected_action,
-        &descriptor,
-        &strategy,
-        &product_runtime,
+        root: frame.root.key,
+        registry: frame.registry.key,
+        trading_program: frame.trading_program.key,
+        release_set: envelope.release_set(),
+        market: envelope.market(),
+        selected_config: family_context.selection().config(),
+        descriptor: &descriptor,
+        seal,
+        product_runtime: &product_runtime,
         request,
         family_request,
         runtime_accounts,
-        &geometry.representatives,
         root_prestate,
-    )?;
+        context: &context,
+    })?;
     hot_cu_checkpoint!("acc-context");
     Ok(Box::new(AuthenticatedAcceleratorInvocationV4 {
         request,
         output_page,
         envelope,
         hot_instruction,
-        strategy,
+        descriptor,
         selected_action,
         context,
         product_runtime,
         claims_program,
         custody_program,
-        span_widths: geometry.span_widths,
+        span_widths,
         input_bank,
         scalars,
         identities,
@@ -1328,362 +1288,233 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     }))
 }
 
-/// The request's tail must be the width the EXECUTOR carved the frame at.
+/// Everything one accelerator invocation rejoins its caller's witness against.
 ///
-/// This boundary used to demand `request.tail_count() ==
-/// product_runtime.runtime.outcome_count`, unconditionally, before any
-/// AccountProfile had been decoded. That is the SAME conjunct `bfc8383f`
-/// repaired on Trading's side and it was left standing here: a profile that
-/// declares no `OP_PROJECT_TAIL_COUNT_U32` has no per-outcome tail, so
-/// `project_tail_count` answers `None`, `execute_authenticated_hot_v3` carves
-/// at width zero and puts zero in the invocation context -- and a market has at
-/// least two outcomes, so `0 != 2` and the accelerator refused every honest
-/// invocation of every fixed-topology family. Measured on real ELFs 2026-09-02:
-/// with the transcript and the host tail repaired, the Dealer equity Add
-/// reached this line and refused, accelerator invoked, at 1,017,463 CU.
-///
-/// The law is the executor's, re-derived here from the same two inputs rather
-/// than restated as a different one: the request may carry the projected tail
-/// and nothing else. A profile that DOES project is held to exactly the
-/// equality it always was, because for it `project_tail_count` returns the
-/// product's own count.
-fn require_accelerator_tail_count_v4(
-    account_profile: AccountProfileV2<'_>,
-    product_outcome_count: u32,
-    request_tail_count: u32,
-) -> Result<(), ProgramError> {
-    let projected = project_tail_count(account_profile, product_outcome_count)
-        .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?;
-    require_tail_count_agreement_v3(product_outcome_count, projected)
-        .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?;
-    if request_tail_count != projected.unwrap_or(0) {
-        return Err(TradingSbfError::AcceleratorRuntimeView.into());
-    }
-    Ok(())
-}
-
-/// AccountProfile-derived geometry the accelerator must reproduce exactly.
-///
-/// `representatives` is here because the observation transcript needs it and
-/// this is the only place on the accelerator path that holds a decoded
-/// AccountProfile. See [`accelerator_runtime_observations_digest_v4`] for what
-/// went wrong while it was not carried.
-struct AcceleratorGeometryV4 {
-    span_widths: Vec<u32>,
-    representatives: Vec<usize>,
-}
-
-#[allow(clippy::too_many_arguments)]
-#[inline(never)]
-fn authenticate_accelerator_artifacts_v4(
-    frame: HotFrameV3<'_, '_>,
-    seal: SealedDescriptorClosureV1<'_>,
-    rent: &Rent,
-    descriptor: &CapabilityProgramV4,
-    strategy: &AuthenticatedExecutionStrategyV2,
-    request: AdmittedAcceleratorRequestV2<'_>,
-    family_request: &[u8],
-    runtime_account_count: usize,
-    scalars: &[u64],
-    product_outcome_count: u32,
-) -> Result<AcceleratorGeometryV4, ProgramError> {
-    let account_profile_data = borrow_sealed_record(
-        frame,
-        seal,
-        SealedRoleV1::AccountProfile,
-        frame.account_profile_raw,
-        frame.account_profile_staging,
-        rent,
-        descriptor.account_profile().schema().to_bytes(),
-        descriptor.account_profile().program().to_bytes(),
-    )
-    .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
-    if descriptor.account_profile().schema().to_bytes() != ACCOUNT_PROFILE_SCHEMA_ID_V2 {
-        return Err(TradingSbfError::UnsupportedContent.into());
-    }
-    let account_profile = AccountProfileV2::decode(&account_profile_data)
-        .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
-    require_accelerator_tail_count_v4(
-        account_profile,
-        product_outcome_count,
-        request.tail_count(),
-    )?;
-    let request_profile_data = borrow_sealed_record(
-        frame,
-        seal,
-        SealedRoleV1::RequestProfile,
-        frame.request_profile_raw,
-        frame.request_profile_staging,
-        rent,
-        descriptor.request_profile().schema().to_bytes(),
-        descriptor.request_profile().program().to_bytes(),
-    )
-    .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
-    let request_profile = decode_request_profile(*descriptor, &request_profile_data)?;
-    let transition_data = borrow_sealed_record(
-        frame,
-        seal,
-        SealedRoleV1::TransitionProgram,
-        frame.transition_raw,
-        frame.transition_staging,
-        rent,
-        descriptor.transition().schema().to_bytes(),
-        descriptor.transition().program().to_bytes(),
-    )
-    .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
-    if descriptor.transition().schema().to_bytes() != TRANSITION_SCHEMA_ID_V3
-        || strategy.strategy().transition_schema() != descriptor.transition().schema()
-        || strategy.strategy().transition_program() != descriptor.transition().program()
-    {
-        return Err(TradingSbfError::UnsupportedContent.into());
-    }
-    let transition = TransitionProgramV3::decode(&transition_data)
-        .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
-    let effect_data = borrow_sealed_record(
-        frame,
-        seal,
-        SealedRoleV1::EffectProgram,
-        frame.effect_raw,
-        frame.effect_staging,
-        rent,
-        descriptor.effect().schema().to_bytes(),
-        descriptor.effect().program().to_bytes(),
-    )
-    .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
-    // Decoded THROUGH THE SEAL, like the canonical path, and for a number:
-    // `decode_selected_effect_v4` re-runs the whole hostile Effect grammar and
-    // cost this callback **75,251 CU** measured 2026-09-02, against ~1,000 for
-    // `decode_sealed_effect_v4` at `authenticate_and_execute_hot_v3` over the
-    // same record. The seal minted its row from the bytes
-    // `borrow_finalized_record` had just authenticated, and the borrow above
-    // re-proves `hash(effect_data)` is still that digest, so the grammar is a
-    // fact about bytes this invocation has already pinned. Re-deriving it was
-    // the last thing on this path doing from scratch what a write-once verdict
-    // already committed to.
-    let effect_token = sealed_token(
-        seal,
-        SealedRoleV1::EffectProgram,
-        descriptor.effect().schema().to_bytes(),
-        descriptor.effect().program().to_bytes(),
-        &effect_data,
-    )?;
-    let effect = decode_sealed_effect_v4(
-        descriptor.effect().schema().to_bytes(),
-        &effect_data,
-        effect_token,
-    )?;
-    let lifecycle_data = borrow_sealed_record(
-        frame,
-        seal,
-        SealedRoleV1::LifecyclePolicy,
-        frame.lifecycle_raw,
-        frame.lifecycle_staging,
-        rent,
-        descriptor.lifecycle().schema().to_bytes(),
-        descriptor.lifecycle().program().to_bytes(),
-    )
-    .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
-    // R2 -- `derivation_policy == lifecycle().program()` -- is GONE, and what it
-    // restated was already authenticated more strongly two statements up.
-    //
-    // `lifecycle().program()` is the lifecycle record's CONTENT DIGEST. The
-    // `borrow_finalized_record` above refuses unless `hash(&data) == digest`
-    // (`hot_v3.rs:13437`) at the Registry PDA derived from
-    // `[RAW_RECORD_PDA_SEED_V1, schema, digest]`, and `sealed_token` below binds
-    // those exact bytes to the execution seal. R2 authenticated nothing on top of
-    // that; it only demanded that ONE field be a per-action digest and a per-root
-    // constant at the same time, which no descriptor can satisfy once a family
-    // has more than one action -- `derivation_policy` is per-root by
-    // construction and the lifecycle digest is per-action.
-    //
-    // What still binds the descriptor to its manifest entry is untouched:
-    // `validate_selection` compares `kind`, `release_id`, `config_id`,
-    // `capacity_profile` and `root_schema`. The lifecycle SCHEMA admission below
-    // is untouched too. This is a re-proof on the other side, not a weakening.
-    //
-    // The host half is `a153f08e`; this is the runtime half, and the two are one
-    // repair. R2 spans two ELFs -- dropping it in Trading alone leaves the dealer
-    // accelerator refusing `0xd001` here.
-    if descriptor.lifecycle().schema().to_bytes() != SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5 {
-        return Err(TradingSbfError::UnsupportedContent.into());
-    }
-    // Same identity twice, for the same reason as the program set above: the
-    // sealed borrow refuses unless `hash(lifecycle_data)` is exactly the
-    // lifecycle record's content digest, which IS `lifecycle().program()`.
-    StateLifecyclePolicyV5::decode_selected(
-        descriptor.lifecycle().program().to_bytes(),
-        descriptor.lifecycle().program().to_bytes(),
-        &lifecycle_data,
-    )
-    .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
-    hot_cu_checkpoint!("acc-artifact-records");
-    let mut span_widths = if account_profile.uses_dynamic_fixed_spans() {
-        vec![0_u32; usize::from(account_profile.dynamic_fixed_span_count())]
-    } else {
-        Vec::new()
-    };
-    if account_profile.uses_dynamic_fixed_spans() {
-        account_profile
-            .dynamic_span_widths_from_scalars(scalars, &mut span_widths)
-            .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?;
-    }
-    let logical_count = if account_profile.uses_dynamic_fixed_spans() {
-        account_profile
-            .logical_account_count_with_dynamic_spans(request.tail_count(), &span_widths)
-            .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?
-    } else {
-        account_profile
-            .logical_account_count(request.tail_count())
-            .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?
-    };
-    if logical_count != runtime_account_count {
-        return Err(TradingSbfError::AcceleratorRuntimeView.into());
-    }
-    let effect_span_extension = effect_span_extension_v3(effect, request.tail_count(), scalars)
-        .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?;
-    require_geometry(
-        account_profile,
-        request_profile,
-        transition,
-        effect,
-        request.tail_count(),
-        family_request,
-        runtime_account_count,
-        &span_widths,
-        effect_span_extension.as_ref(),
-    )
-    .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?;
-    // Resolved here and nowhere else on this path: the observation transcript
-    // keys an aliased coordinate by its REPRESENTATIVE, and this is the only
-    // scope holding the decoded AccountProfile that can say what that is.
-    let representatives = representative_coordinates_v3(
-        account_profile,
-        request.tail_count(),
-        &span_widths,
-        runtime_account_count,
-    )
-    .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?;
-    Ok(AcceleratorGeometryV4 {
-        span_widths,
-        representatives,
-    })
-}
-
-#[allow(clippy::too_many_arguments)]
-#[inline(never)]
-fn authenticate_accelerator_context_v4<'accounts, 'info>(
-    accelerator_program: &Pubkey,
-    frame: HotFrameV3<'accounts, 'info>,
-    envelope: HotExecutionEnvelopeV3,
-    family_context: TradingFamilyContextV1,
-    selected_action: u32,
-    descriptor: &CapabilityProgramV4,
-    strategy: &AuthenticatedExecutionStrategyV2,
-    product_runtime: &AuthenticatedProductRuntimeV3<'accounts, 'info>,
-    request: AdmittedAcceleratorRequestV2<'_>,
-    family_request: &[u8],
-    runtime_accounts: &[AccountInfo<'info>],
-    representatives: &[usize],
+/// A struct rather than fourteen positional arguments because the whole point
+/// of the function is that each field has an INDEPENDENT SOURCE on this side of
+/// the CPI boundary, and a positional list makes it possible to pass the
+/// witness's own copy of a value as the thing it is being checked against.
+struct AcceleratorWitnessJoinV4<'a, 'accounts, 'info> {
+    accelerator_program: &'a Pubkey,
+    // The three frame coordinates and the two envelope identities, passed as
+    // the values they are rather than as the two aggregates that hold them:
+    // `HotFrameV3` is thirty-nine account references and
+    // `HotExecutionEnvelopeV3` is another hundred-odd bytes, and staging both
+    // in `authenticate_accelerator_invocation_v4`'s frame to call this is what
+    // put it 64 bytes over its 4,096-byte allowance.
+    root: &'a Pubkey,
+    registry: &'a Pubkey,
+    trading_program: &'a Pubkey,
+    release_set: [u8; 32],
+    market: [u8; 32],
+    selected_config: ContentId,
+    descriptor: &'a CapabilityProgramV4,
+    seal: SealedDescriptorClosureV1<'a>,
+    product_runtime: &'a AuthenticatedProductRuntimeV3<'accounts, 'info>,
+    request: AdmittedAcceleratorRequestV2<'a>,
+    family_request: &'a [u8],
+    runtime_accounts: &'accounts [AccountInfo<'info>],
     root_prestate: [u8; 32],
-) -> Result<Box<AdmittedInvocationContextV3>, ProgramError> {
-    let runtime_observations_digest = accelerator_runtime_observations_digest_v4(
-        runtime_accounts,
-        representatives,
-        request,
-        frame.trading_program.key,
-        family_context.selection().config().to_bytes(),
-        product_runtime
+    context: &'a AdmittedInvocationContextV3,
+}
+
+/// Build and take the common projection bindings in a callee's frame.
+///
+/// `CommonProjectionBindingsV3` is eight thirty-two-byte identities, and
+/// building it in `authenticate_accelerator_invocation_v4` put 256 bytes of it
+/// in a frame with 192 bytes of headroom.
+#[inline(never)]
+fn require_accelerator_projection_bindings_v4(
+    selected_config: [u8; 32],
+    market: &CoreState,
+    product_runtime: &AuthenticatedProductRuntimeV3<'_, '_>,
+) -> Result<(), ProgramError> {
+    require_common_projection_bindings_v3(CommonProjectionBindingsV3 {
+        selected_config,
+        selected_product_record: market.identity.product_record.to_bytes(),
+        authenticated_product_record: product_runtime
             .runtime
             .product_record
             .content_digest
             .to_bytes(),
-        product_runtime
-            .runtime
-            .portfolio_record
-            .content_digest
-            .to_bytes(),
-        product_runtime
+        market_product: market.identity.product_id.to_bytes(),
+        runtime_product: product_runtime.runtime.product_id.to_bytes(),
+        product_semantic_basis: product_runtime.runtime.liability_basis_id.to_bytes(),
+        authenticated_semantic_basis: product_runtime.semantic_basis_id.to_bytes(),
+        authenticated_linked_basis: product_runtime
             .linked_basis_record
             .content_digest
             .to_bytes(),
-    )?;
-    hot_cu_checkpoint!("acc-observations");
-    let context = Box::new(AdmittedInvocationContextV3 {
-        release_set: family_context.release_set(),
-        market: ContentId::new(envelope.market())
-            .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?,
-        root: ContentId::new(frame.root.key.to_bytes())
-            .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?,
-        registry_program: ContentId::new(frame.registry.key.to_bytes())
-            .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?,
-        trading_program: ContentId::new(frame.trading_program.key.to_bytes())
-            .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?,
-        accelerator_program: ContentId::new(accelerator_program.to_bytes())
-            .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?,
-        capability_program: strategy.capability_program_id(),
-        account_profile: descriptor.account_profile().program(),
-        request_profile: descriptor.request_profile().program(),
-        transition: strategy.strategy().transition_program(),
-        effect: descriptor.effect().program(),
-        lifecycle: descriptor.derivation_policy(),
-        strategy: strategy.strategy_program_id(),
-        certificate: strategy
-            .certificate_program_id()
-            .ok_or(TradingSbfError::AcceleratorRuntimeView)?,
-        admission: strategy
-            .admission_program_id()
-            .ok_or(TradingSbfError::AcceleratorRuntimeView)?,
-        artifact_release: strategy
-            .artifact_release_id()
-            .ok_or(TradingSbfError::AcceleratorRuntimeView)?,
-        config: family_context.selection().config(),
-        product: ContentId::new(
-            product_runtime
-                .runtime
-                .product_record
-                .content_digest
-                .to_bytes(),
-        )
-        .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?,
-        portfolio: ContentId::new(
-            product_runtime
-                .runtime
-                .portfolio_record
-                .content_digest
-                .to_bytes(),
-        )
-        .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?,
-        linked_basis: ContentId::new(
-            product_runtime
-                .linked_basis_record
-                .content_digest
-                .to_bytes(),
-        )
-        .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?,
-        // The producer of this field is `execute_admitted_candidate_v3`, and it
-        // commits the domain-separated, length-prefixed digest. Hashing the
-        // request bare here recomputes a value the producer can never emit, so
-        // the equality below could never hold and the whole admitted lane
-        // refused every well-formed invocation.
-        family_request_digest: family_request_digest_v3(family_request)
-            .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?,
-        runtime_observations_digest,
-        root_prestate_digest: ContentId::new(root_prestate)
-            .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?,
-        selected_action,
-        tail_count: request.tail_count(),
-        account_count: u32::try_from(runtime_accounts.len())
-            .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?,
-        scalar_count: request.scalar_count(),
-        identity_count: request.identity_count(),
-    });
+    })
+}
+
+/// Decode the caller's prelude witness into its boxed context preimage.
+///
+/// Boxed and `#[inline(never)]` for the frame, not for the code: 756 bytes of
+/// context is a fifth of the caller's whole stack allowance.
+#[inline(never)]
+fn decode_accelerator_prelude_context_v4(
+    witness: &[u8],
+) -> Result<Box<AdmittedInvocationContextV3>, ProgramError> {
+    Ok(Box::new(
+        AdmittedPreludeWitnessV1::decode(witness)
+            .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?
+            .context(),
+    ))
+}
+
+/// Refuse unless every witness field with a second source agrees with it.
+///
+/// THIS IS THE HOSTILE'S TARGET, and it is why the widened request is a repair
+/// and not a relaxation: a tampered field in the witness must refuse by name
+/// rather than be believed. Five groups, each with its own accusation:
+///
+/// - `AcceleratorRuntimeView` for the request's own header and the three
+///   digests this program takes over bytes it read itself;
+/// - `AcceleratorRelease` for the six coordinates this frame names;
+/// - `AcceleratorArtifact` for the four artifact identities the seal fixes, the
+///   descriptor's derivation policy, and the Product graph this program
+///   authenticated.
+///
+/// The context digest is compared LAST-BUT-FIRST on purpose: it is checked at
+/// the top so a witness whose preimage does not reproduce the digest the
+/// request header carries -- and the header is inside `hash(request_bytes)`,
+/// which the caller signed -- is refused before any field of it is read as if
+/// it meant something.
+#[inline(never)]
+fn authenticate_accelerator_witness_v4(
+    join: AcceleratorWitnessJoinV4<'_, '_, '_>,
+) -> Result<Vec<u32>, ProgramError> {
+    let context = join.context;
+    let request = join.request;
     if admitted_invocation_context_digest_v3(*context)
         .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?
         != request.invocation_context()
+        || context.capability_program != request.capability_program()
+        || context.strategy != request.strategy_program()
+        || context.certificate != request.certificate_program()
+        || context.tail_count != request.tail_count()
+        || context.scalar_count != request.scalar_count()
+        || context.identity_count != request.identity_count()
+        || usize::try_from(context.account_count)
+            .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?
+            != join.runtime_accounts.len()
     {
         return Err(TradingSbfError::AcceleratorRuntimeView.into());
     }
-    Ok(context)
+    if context.release_set.to_bytes() != join.release_set
+        || context.market.to_bytes() != join.market
+        || context.root.to_bytes() != join.root.to_bytes()
+        || context.registry_program.to_bytes() != join.registry.to_bytes()
+        || context.trading_program.to_bytes() != join.trading_program.to_bytes()
+        || context.accelerator_program.to_bytes() != join.accelerator_program.to_bytes()
+        || context.config != join.selected_config
+    {
+        return Err(TradingSbfError::AcceleratorRelease.into());
+    }
+    for (role, identity) in [
+        (SealedRoleV1::AccountProfile, context.account_profile),
+        (SealedRoleV1::RequestProfile, context.request_profile),
+        (SealedRoleV1::TransitionProgram, context.transition),
+        (SealedRoleV1::EffectProgram, context.effect),
+    ] {
+        if join
+            .seal
+            .row(role)
+            .map_err(|_| TradingSbfError::AcceleratorArtifact)?
+            .content_digest()
+            != identity.to_bytes()
+        {
+            return Err(TradingSbfError::AcceleratorArtifact.into());
+        }
+    }
+    if context.lifecycle != join.descriptor.derivation_policy()
+        || context.product.to_bytes()
+            != join
+                .product_runtime
+                .runtime
+                .product_record
+                .content_digest
+                .to_bytes()
+        || context.portfolio.to_bytes()
+            != join
+                .product_runtime
+                .runtime
+                .portfolio_record
+                .content_digest
+                .to_bytes()
+        || context.linked_basis.to_bytes()
+            != join
+                .product_runtime
+                .linked_basis_record
+                .content_digest
+                .to_bytes()
+    {
+        return Err(TradingSbfError::AcceleratorArtifact.into());
+    }
+    if context.root_prestate_digest.to_bytes() != join.root_prestate
+        || context.family_request_digest
+            != family_request_digest_v3(join.family_request)
+                .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?
+    {
+        return Err(TradingSbfError::AcceleratorRuntimeView.into());
+    }
+    // The banks are read here, where the observation digest that consumes the
+    // representative map is also taken. A witness naming a coordinate outside
+    // this frame is refused by the decoder before it can be indexed with.
+    let witness = AdmittedPreludeWitnessV1::decode(request.witness())
+        .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?;
+    // THE SPAN BANK IS THE ONE WITNESS SECTION NOTHING BINDS, and this route
+    // refuses it rather than believing it. The context preimage is committed by
+    // the request's `invocation_context`; the representative bank is committed
+    // by the context's `runtime_observations_digest`, which the digest below is
+    // taken against; the span widths are committed by neither. Every family
+    // this accelerator serves requires an EMPTY bank in its own words -- the
+    // equity, LP and scenario evaluators all assert `span_widths().is_empty()`
+    // -- so refusing a nonempty one costs no honest traffic and closes the one
+    // section a caller could otherwise state freely. A dynamic-span profile on
+    // this path is owed a binding before it is admitted, and that is a design
+    // note's job, not a silent acceptance here.
+    if witness.span_count() != 0 {
+        return Err(TradingSbfError::AcceleratorRuntimeView.into());
+    }
+    let mut span_widths = Vec::with_capacity(witness.span_count());
+    for index in 0..witness.span_count() {
+        span_widths.push(
+            witness
+                .span_width(index)
+                .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?,
+        );
+    }
+    let mut representatives = Vec::with_capacity(join.runtime_accounts.len());
+    for index in 0..join.runtime_accounts.len() {
+        representatives.push(
+            witness
+                .representative(index)
+                .map_err(|_| TradingSbfError::AcceleratorRuntimeView)?,
+        );
+    }
+    hot_cu_checkpoint!("acc-artifacts");
+    // THE RUNTIME SLICE'S OWN BINDING, and the one thing `acc-toplevel` does
+    // not cover. It is taken over the bytes THIS program reads out of the
+    // accounts it was handed, and compared against the digest the caller
+    // signed for.
+    let runtime = join.product_runtime;
+    if context.runtime_observations_digest
+        != accelerator_runtime_observations_digest_v4(
+            join.runtime_accounts,
+            &representatives,
+            request,
+            join.trading_program,
+            join.selected_config.to_bytes(),
+            runtime.runtime.product_record.content_digest.to_bytes(),
+            runtime.runtime.portfolio_record.content_digest.to_bytes(),
+            runtime.linked_basis_record.content_digest.to_bytes(),
+        )?
+    {
+        return Err(TradingSbfError::AcceleratorRuntimeView.into());
+    }
+    Ok(span_widths)
 }
 
 /// Bind the accelerator's read-only frame to the top-level Hot instruction.
@@ -4378,6 +4209,8 @@ fn execute_authenticated_hot_v3(
             tail_count,
             scalars: &replan_output_scalars,
             identities: &replan_output_identities,
+            span_widths: &dynamic_spans.widths,
+            representatives: &aliases,
         })?
     } else {
         // The fold's OUTPUT pair is the one register bank of this execution
@@ -5516,90 +5349,6 @@ fn authenticate_manifest_entry_boxed_v3(
 }
 
 #[inline(never)]
-fn authenticate_strategy_for_accelerator_boxed_v4<'accounts, 'info>(
-    frame: &HotFrameV3<'accounts, 'info>,
-    accounts: &'accounts [AccountInfo<'info>],
-    context: TradingFamilyContextV1,
-    selected_program: ContentId,
-    descriptor: &CapabilityProgramV4,
-    accelerator_caller: AuthenticatedAcceleratorCallerV4,
-    strategy_extras_start: usize,
-) -> Result<(Box<AuthenticatedExecutionStrategyV2>, usize), ProgramError> {
-    let strategy_data = frame
-        .strategy_raw
-        .try_borrow_data()
-        .map_err(|_| TradingSbfError::Content)?;
-    if strategy_data.len() != EXECUTION_STRATEGY_PROGRAM_BYTES_V2 {
-        return Err(TradingSbfError::Content.into());
-    }
-    let preliminary_strategy =
-        ExecutionStrategyProgramV2::decode(&strategy_data).map_err(|_| TradingSbfError::Content)?;
-    drop(strategy_data);
-    let strategy_account_count = match preliminary_strategy.disposition() {
-        StrategyDispositionV2::Interpreted => INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2,
-        StrategyDispositionV2::ShadowAot => SHADOW_AOT_STRATEGY_ACCOUNT_COUNT_V2,
-        StrategyDispositionV2::AdmittedAot => ADMITTED_AOT_STRATEGY_ACCOUNT_COUNT_V2,
-    };
-    let strategy_extra_count = strategy_account_count
-        .checked_sub(INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2)
-        .ok_or(TradingSbfError::Content)?;
-    let strategy_extras_end = strategy_extras_start
-        .checked_add(strategy_extra_count)
-        .ok_or(TradingSbfError::Content)?;
-    let strategy_extras = accounts
-        .get(strategy_extras_start..strategy_extras_end)
-        .ok_or(TradingSbfError::Content)?;
-    let mut strategy_accounts = Vec::with_capacity(strategy_account_count);
-    strategy_accounts.extend_from_slice(&[
-        frame.descriptor_raw.clone(),
-        frame.descriptor_staging.clone(),
-        frame.strategy_raw.clone(),
-        frame.strategy_staging.clone(),
-    ]);
-    strategy_accounts.extend_from_slice(strategy_extras);
-    let strategy = authenticate_execution_strategy_from_attested_accelerator_v2(
-        context,
-        selected_program,
-        descriptor,
-        frame.registry,
-        frame.rent,
-        &strategy_accounts,
-        accelerator_caller,
-    )?;
-    if strategy.strategy().disposition() == StrategyDispositionV2::ShadowAot
-        && strategy
-            .strategy()
-            .transport_profile()
-            .map_err(|_| TradingSbfError::Content)?
-            != AcceleratorTransportProfileV2::ShadowTranscriptV3
-    {
-        return Err(TradingSbfError::UnsupportedContent.into());
-    }
-    // BOTH candidate-bank transports, and `UnsupportedContent` rather than
-    // `Content`. This gate cost a localization on 2026-09-02: an admitted route
-    // whose Strategy named the output-page pair died here at 574,606 CU with
-    // `Content` 0x4003, one of 2,126 sites, and the checkpoint trail said only
-    // "somewhere between root-product and artifacts-strategy-effect". The
-    // Shadow gate immediately above says the same thing about its own
-    // disposition and says it as `UnsupportedContent`, which is what this is:
-    // the pairing decoded fine and names a transport this disposition does not
-    // admit.
-    if strategy.strategy().disposition() == StrategyDispositionV2::AdmittedAot
-        && !matches!(
-            strategy
-                .strategy()
-                .transport_profile()
-                .map_err(|_| TradingSbfError::UnsupportedContent)?,
-            AcceleratorTransportProfileV2::ChunkedBankV2
-                | AcceleratorTransportProfileV2::OutputPageV3
-        )
-    {
-        return Err(TradingSbfError::UnsupportedContent.into());
-    }
-    Ok((Box::new(strategy), strategy_extras_end))
-}
-
-#[inline(never)]
 fn authenticate_strategy_from_sealed_boxed_v3<'accounts, 'info>(
     frame: &HotFrameV3<'accounts, 'info>,
     accounts: &'accounts [AccountInfo<'info>],
@@ -5703,6 +5452,10 @@ struct AdmittedCandidateViewV3<'a, 'data, 'accounts, 'info> {
     tail_count: u32,
     scalars: &'a [u64],
     identities: &'a [[u8; 32]],
+    /// Exact dynamic fixed-span widths this execution carved the frame at.
+    span_widths: &'a [u32],
+    /// Exact representative coordinate of every logical runtime coordinate.
+    representatives: &'a [usize],
 }
 
 struct CandidateExecutionV3 {
@@ -7378,6 +7131,27 @@ fn execute_admitted_candidate_v3(
         identity_count: u32::try_from(view.identities.len())
             .map_err(|_| TradingSbfError::AdmittedContext)?,
     };
+    // THE PRELUDE'S OUTPUTS TRAVEL IN THE REQUEST. Everything this program has
+    // just derived -- the complete invocation-context preimage, the dynamic
+    // span widths, the representative coordinates -- is a value the callee's
+    // own prelude would otherwise re-derive from twelve accounts, and the
+    // caller-authority PDA that authorizes the CPI already pins
+    // `hash(request_bytes)`. So the request is a channel that costs nothing to
+    // widen, and widening it is a MOVE rather than a deletion: the callee still
+    // re-derives every field it holds an independent source for and refuses on
+    // the first disagreement. See `authenticate_accelerator_invocation_v4`.
+    let mut witness =
+        vec![
+            0_u8;
+            admitted_prelude_witness_bytes_v1(view.representatives.len(), view.span_widths.len())
+        ];
+    AdmittedPreludeWitnessV1::encode_into(
+        admitted_context,
+        view.span_widths,
+        view.representatives,
+        &mut witness,
+    )
+    .map_err(|_| TradingSbfError::AdmittedContext)?;
     let execution = execute_admitted_aot_v3(
         view.program_id,
         AdmittedCpiFrameV3 {
@@ -7427,6 +7201,7 @@ fn execute_admitted_candidate_v3(
         *view.strategy,
         view.scalars,
         view.identities,
+        &witness,
     )?;
     Ok(CandidateExecutionV3 {
         scalars: execution.scalars,

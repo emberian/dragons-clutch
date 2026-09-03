@@ -184,6 +184,14 @@ const _: () = {
 pub enum AdmittedTranscriptErrorV3 {
     /// SHA-256 produced the reserved zero content identity.
     ZeroDigest,
+    /// A witness body is not the exact width its own header declares.
+    InvalidLength,
+    /// The leading eight bytes are not a prelude witness at all.
+    InvalidMagic,
+    /// The persisted schema version is not one this contract reads.
+    UnsupportedSchema,
+    /// A reserved field carried something other than zero.
+    NonCanonicalReserved,
 }
 
 /// Exact authenticated facts committed by one admitted invocation.
@@ -377,6 +385,114 @@ mod tests {
         }
     }
 
+    /// One witness body, encoded and read back, with its every hostile named.
+    ///
+    /// THE CONTEXT PREIMAGE IS THE POINT OF THE ROUND TRIP. The witness's whole
+    /// authority is that `admitted_invocation_context_digest_v3` of what comes
+    /// back out equals the `invocation_context` field of a request the caller
+    /// signed, so a decoder that reordered one identity or read one count at
+    /// the wrong offset would produce a body that could never be admitted --
+    /// and would look like a caller error rather than a codec defect. This
+    /// asserts the digest, not merely the fields.
+    #[test]
+    fn the_prelude_witness_round_trips_and_names_every_hostile() {
+        const WIDTH: usize = admitted_prelude_witness_bytes_v1(3, 1);
+        let canonical = AdmittedInvocationContextV3 {
+            account_count: 3,
+            ..context()
+        };
+        let representatives = [0_usize, 0, 2];
+        let mut bytes = [0_u8; WIDTH];
+        AdmittedPreludeWitnessV1::encode_into(canonical, &[7], &representatives, &mut bytes)
+            .expect("encode witness");
+
+        let witness = AdmittedPreludeWitnessV1::decode(&bytes).expect("decode witness");
+        assert_eq!(witness.context(), canonical);
+        assert_eq!(
+            admitted_invocation_context_digest_v3(witness.context()).expect("witness digest"),
+            admitted_invocation_context_digest_v3(canonical).expect("canonical digest"),
+        );
+        assert_eq!(witness.span_count(), 1);
+        assert_eq!(witness.span_width(0).expect("span width"), 7);
+        for (index, expected) in representatives.iter().enumerate() {
+            assert_eq!(
+                witness.representative(index).expect("representative"),
+                *expected
+            );
+        }
+
+        // Each hostile names its own accusation, and a body that is merely
+        // shorter or longer than its header declares is `InvalidLength` rather
+        // than a successful decode of a prefix.
+        let mut wrong_magic = bytes;
+        wrong_magic[0] ^= 0xff;
+        assert_eq!(
+            AdmittedPreludeWitnessV1::decode(&wrong_magic),
+            Err(AdmittedTranscriptErrorV3::InvalidMagic)
+        );
+        let mut wrong_schema = bytes;
+        wrong_schema[8] = 9;
+        assert_eq!(
+            AdmittedPreludeWitnessV1::decode(&wrong_schema),
+            Err(AdmittedTranscriptErrorV3::UnsupportedSchema)
+        );
+        let mut dirty_reserved = bytes;
+        dirty_reserved[10] = 1;
+        assert_eq!(
+            AdmittedPreludeWitnessV1::decode(&dirty_reserved),
+            Err(AdmittedTranscriptErrorV3::NonCanonicalReserved)
+        );
+        assert_eq!(
+            AdmittedPreludeWitnessV1::decode(&bytes[..WIDTH - 1]),
+            Err(AdmittedTranscriptErrorV3::InvalidLength)
+        );
+        let mut long = [0_u8; WIDTH + 1];
+        long.get_mut(..WIDTH)
+            .expect("wide enough")
+            .copy_from_slice(&bytes);
+        assert_eq!(
+            AdmittedPreludeWitnessV1::decode(&long),
+            Err(AdmittedTranscriptErrorV3::InvalidLength)
+        );
+
+        // The header's account count and the context's are ONE number, and a
+        // body that states them differently is refused before either bank is
+        // sliced. Without this a witness could declare a two-coordinate frame
+        // in its header and a three-coordinate one in the body its digest
+        // covers, and a reader would slice the shorter.
+        let mut disagreeing = bytes;
+        disagreeing[12] = 2;
+        assert_eq!(
+            AdmittedPreludeWitnessV1::decode(&disagreeing),
+            Err(AdmittedTranscriptErrorV3::InvalidLength)
+        );
+
+        // A representative names a coordinate of THIS frame. The encoder
+        // refuses one that does not, and a body hand-edited past the encoder is
+        // refused on the read rather than handed to a caller that would index
+        // with it.
+        let mut out_of_range = bytes;
+        out_of_range[WIDTH - 2] = 3;
+        assert_eq!(
+            AdmittedPreludeWitnessV1::decode(&out_of_range)
+                .expect("decode")
+                .representative(2),
+            Err(AdmittedTranscriptErrorV3::InvalidLength)
+        );
+        let mut narrow = [0_u8; admitted_prelude_witness_bytes_v1(3, 0)];
+        assert_eq!(
+            AdmittedPreludeWitnessV1::encode_into(canonical, &[], &[0, 0, 3], &mut narrow),
+            Err(AdmittedTranscriptErrorV3::InvalidLength)
+        );
+        // And the encoder refuses a context whose account count is not the
+        // width of the representative bank it is being asked to carry.
+        let mut mismatched = [0_u8; admitted_prelude_witness_bytes_v1(2, 0)];
+        assert_eq!(
+            AdmittedPreludeWitnessV1::encode_into(canonical, &[], &[0, 0], &mut mismatched),
+            Err(AdmittedTranscriptErrorV3::InvalidLength)
+        );
+    }
+
     /// The prefix is one authority, the whole Hot fixed frame, then a
     /// contiguous evidence suffix, then the runtime slice.
     ///
@@ -482,4 +598,327 @@ mod tests {
             ADMITTED_OUTPUT_PAGE_ACCOUNT_V3 + 1
         );
     }
+}
+
+/// Magic of one caller-composed admitted prelude witness.
+pub const ADMITTED_PRELUDE_WITNESS_MAGIC_V1: [u8; 8] = *b"dcAPWv1\0";
+
+/// Schema version of the only prelude-witness body this contract admits.
+pub const ADMITTED_PRELUDE_WITNESS_SCHEMA_V1: u16 = 1;
+
+/// Fixed header bytes before one witness's context preimage.
+pub const ADMITTED_PRELUDE_WITNESS_HEADER_BYTES_V1: usize = 20;
+
+/// Exact bytes of one `AdmittedInvocationContextV3` preimage.
+pub const ADMITTED_INVOCATION_CONTEXT_BYTES_V3: usize = 23 * 32 + 5 * 4;
+
+/// Exact bytes of one witness carrying `accounts` coordinates and `spans` widths.
+pub const fn admitted_prelude_witness_bytes_v1(accounts: usize, spans: usize) -> usize {
+    ADMITTED_PRELUDE_WITNESS_HEADER_BYTES_V1
+        + ADMITTED_INVOCATION_CONTEXT_BYTES_V3
+        + spans * 4
+        + accounts * 2
+}
+
+/// Borrowed exact caller-composed prelude witness.
+///
+/// # What this is, and what it is not
+///
+/// It is the OUTPUT of the prelude chain the caller already ran: the complete
+/// [`AdmittedInvocationContextV3`] preimage whose digest the request header
+/// already carries, plus the two AccountProfile-derived geometry banks a callee
+/// would otherwise decode five sealed artifacts to reproduce. Every byte of it
+/// is inside `hash(request_bytes)`, which is the last seed of the
+/// `CallerAuthoritySeedsV1` PDA the caller must sign, so it is a signed
+/// statement by the program at the caller coordinate and not a hint.
+///
+/// It is NOT a licence to skip the callee's own reading. A callee that consumes
+/// this is expected to re-derive every field it holds an independent source for
+/// -- the coordinates its frame names, the digests its own accounts hash to,
+/// the identities a persisted first-party verdict already fixes -- and to
+/// refuse on the first disagreement. What the witness buys is the SEARCH and
+/// the DECODE, not the conjunct.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AdmittedPreludeWitnessV1<'a> {
+    context: AdmittedInvocationContextV3,
+    span_widths: &'a [u8],
+    representatives: &'a [u8],
+}
+
+impl<'a> AdmittedPreludeWitnessV1<'a> {
+    /// Hostile-decode one exact witness body.
+    pub fn decode(bytes: &'a [u8]) -> Result<Self, AdmittedTranscriptErrorV3> {
+        if slice(bytes, 0, 8)? != ADMITTED_PRELUDE_WITNESS_MAGIC_V1 {
+            return Err(AdmittedTranscriptErrorV3::InvalidMagic);
+        }
+        if read_u16(bytes, 8)? != ADMITTED_PRELUDE_WITNESS_SCHEMA_V1 {
+            return Err(AdmittedTranscriptErrorV3::UnsupportedSchema);
+        }
+        if read_u16(bytes, 10)? != 0 {
+            return Err(AdmittedTranscriptErrorV3::NonCanonicalReserved);
+        }
+        let accounts = usize_from(read_u32(bytes, 12)?)?;
+        let spans = usize_from(read_u32(bytes, 16)?)?;
+        if bytes.len() != admitted_prelude_witness_bytes_v1(accounts, spans) {
+            return Err(AdmittedTranscriptErrorV3::InvalidLength);
+        }
+        let context = decode_invocation_context_v3(slice(
+            bytes,
+            ADMITTED_PRELUDE_WITNESS_HEADER_BYTES_V1,
+            ADMITTED_INVOCATION_CONTEXT_BYTES_V3,
+        )?)?;
+        // The context's own account count is the width the two banks are read
+        // at, so a header that disagrees with the body it introduces is refused
+        // before either bank is sliced: there is no second opinion about how
+        // wide a bank is.
+        if usize_from(context.account_count)? != accounts {
+            return Err(AdmittedTranscriptErrorV3::InvalidLength);
+        }
+        let spans_offset =
+            ADMITTED_PRELUDE_WITNESS_HEADER_BYTES_V1 + ADMITTED_INVOCATION_CONTEXT_BYTES_V3;
+        Ok(Self {
+            context,
+            span_widths: slice(bytes, spans_offset, spans * 4)?,
+            representatives: slice(bytes, spans_offset + spans * 4, accounts * 2)?,
+        })
+    }
+
+    /// Exact complete invocation-context preimage the caller committed.
+    pub const fn context(self) -> AdmittedInvocationContextV3 {
+        self.context
+    }
+
+    /// Number of dynamic fixed-span widths this witness carries.
+    pub const fn span_count(self) -> usize {
+        self.span_widths.len() / 4
+    }
+
+    /// One dynamic fixed-span width, in descriptor order.
+    pub fn span_width(self, index: usize) -> Result<u32, AdmittedTranscriptErrorV3> {
+        read_u32(self.span_widths, index * 4)
+    }
+
+    /// One logical coordinate's representative coordinate.
+    pub fn representative(self, index: usize) -> Result<usize, AdmittedTranscriptErrorV3> {
+        let value = usize::from(read_u16(self.representatives, index * 2)?);
+        // A representative names a coordinate of THIS frame, and the frame's
+        // width is a context field, so an out-of-range one is refused here
+        // rather than handed to a caller that would index with it.
+        if value >= self.representatives.len() / 2 {
+            return Err(AdmittedTranscriptErrorV3::InvalidLength);
+        }
+        Ok(value)
+    }
+
+    /// Encode one exact witness body for `context` and its two geometry banks.
+    pub fn encode_into(
+        context: AdmittedInvocationContextV3,
+        span_widths: &[u32],
+        representatives: &[usize],
+        output: &mut [u8],
+    ) -> Result<(), AdmittedTranscriptErrorV3> {
+        let accounts = representatives.len();
+        if usize_from(context.account_count)? != accounts
+            || output.len() != admitted_prelude_witness_bytes_v1(accounts, span_widths.len())
+        {
+            return Err(AdmittedTranscriptErrorV3::InvalidLength);
+        }
+        output.fill(0);
+        put(output, 0, &ADMITTED_PRELUDE_WITNESS_MAGIC_V1)?;
+        put(output, 8, &ADMITTED_PRELUDE_WITNESS_SCHEMA_V1.to_le_bytes())?;
+        put(
+            output,
+            12,
+            &u32::try_from(accounts)
+                .map_err(|_| AdmittedTranscriptErrorV3::InvalidLength)?
+                .to_le_bytes(),
+        )?;
+        put(
+            output,
+            16,
+            &u32::try_from(span_widths.len())
+                .map_err(|_| AdmittedTranscriptErrorV3::InvalidLength)?
+                .to_le_bytes(),
+        )?;
+        encode_invocation_context_v3(
+            context,
+            output
+                .get_mut(
+                    ADMITTED_PRELUDE_WITNESS_HEADER_BYTES_V1
+                        ..ADMITTED_PRELUDE_WITNESS_HEADER_BYTES_V1
+                            + ADMITTED_INVOCATION_CONTEXT_BYTES_V3,
+                )
+                .ok_or(AdmittedTranscriptErrorV3::InvalidLength)?,
+        )?;
+        let spans_offset =
+            ADMITTED_PRELUDE_WITNESS_HEADER_BYTES_V1 + ADMITTED_INVOCATION_CONTEXT_BYTES_V3;
+        for (index, width) in span_widths.iter().enumerate() {
+            put(output, spans_offset + index * 4, &width.to_le_bytes())?;
+        }
+        let representatives_offset = spans_offset + span_widths.len() * 4;
+        for (index, coordinate) in representatives.iter().enumerate() {
+            let value =
+                u16::try_from(*coordinate).map_err(|_| AdmittedTranscriptErrorV3::InvalidLength)?;
+            if usize::from(value) >= accounts {
+                return Err(AdmittedTranscriptErrorV3::InvalidLength);
+            }
+            put(
+                output,
+                representatives_offset + index * 2,
+                &value.to_le_bytes(),
+            )?;
+        }
+        Ok(())
+    }
+}
+
+fn usize_from(value: u32) -> Result<usize, AdmittedTranscriptErrorV3> {
+    usize::try_from(value).map_err(|_| AdmittedTranscriptErrorV3::InvalidLength)
+}
+
+fn slice(bytes: &[u8], offset: usize, len: usize) -> Result<&[u8], AdmittedTranscriptErrorV3> {
+    bytes
+        .get(
+            offset
+                ..offset
+                    .checked_add(len)
+                    .ok_or(AdmittedTranscriptErrorV3::InvalidLength)?,
+        )
+        .ok_or(AdmittedTranscriptErrorV3::InvalidLength)
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, AdmittedTranscriptErrorV3> {
+    let raw: [u8; 2] = slice(bytes, offset, 2)?
+        .try_into()
+        .map_err(|_| AdmittedTranscriptErrorV3::InvalidLength)?;
+    Ok(u16::from_le_bytes(raw))
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, AdmittedTranscriptErrorV3> {
+    let raw: [u8; 4] = slice(bytes, offset, 4)?
+        .try_into()
+        .map_err(|_| AdmittedTranscriptErrorV3::InvalidLength)?;
+    Ok(u32::from_le_bytes(raw))
+}
+
+fn read_identity(bytes: &[u8], offset: usize) -> Result<[u8; 32], AdmittedTranscriptErrorV3> {
+    slice(bytes, offset, 32)?
+        .try_into()
+        .map_err(|_| AdmittedTranscriptErrorV3::InvalidLength)
+}
+
+fn put(output: &mut [u8], offset: usize, value: &[u8]) -> Result<(), AdmittedTranscriptErrorV3> {
+    output
+        .get_mut(
+            offset
+                ..offset
+                    .checked_add(value.len())
+                    .ok_or(AdmittedTranscriptErrorV3::InvalidLength)?,
+        )
+        .ok_or(AdmittedTranscriptErrorV3::InvalidLength)?
+        .copy_from_slice(value);
+    Ok(())
+}
+
+/// Write one context preimage in the exact order its digest commits.
+///
+/// The order is [`admitted_invocation_context_digest_v3`]'s preimage minus its
+/// domain, so a reader that decodes this and re-digests reproduces the request
+/// header's `invocation_context` or refuses. One order, one file.
+pub fn encode_invocation_context_v3(
+    context: AdmittedInvocationContextV3,
+    output: &mut [u8],
+) -> Result<(), AdmittedTranscriptErrorV3> {
+    if output.len() != ADMITTED_INVOCATION_CONTEXT_BYTES_V3 {
+        return Err(AdmittedTranscriptErrorV3::InvalidLength);
+    }
+    let artifact_release = context.artifact_release.to_bytes();
+    for (index, identity) in [
+        context.release_set.as_bytes(),
+        context.market.as_bytes(),
+        context.root.as_bytes(),
+        context.registry_program.as_bytes(),
+        context.trading_program.as_bytes(),
+        context.accelerator_program.as_bytes(),
+        context.capability_program.as_bytes(),
+        context.account_profile.as_bytes(),
+        context.request_profile.as_bytes(),
+        context.transition.as_bytes(),
+        context.effect.as_bytes(),
+        context.lifecycle.as_bytes(),
+        context.strategy.as_bytes(),
+        context.certificate.as_bytes(),
+        context.admission.as_bytes(),
+        &artifact_release,
+        context.config.as_bytes(),
+        context.product.as_bytes(),
+        context.portfolio.as_bytes(),
+        context.linked_basis.as_bytes(),
+        context.family_request_digest.as_bytes(),
+        context.runtime_observations_digest.as_bytes(),
+        context.root_prestate_digest.as_bytes(),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        put(output, index * 32, identity)?;
+    }
+    for (index, value) in [
+        context.selected_action,
+        context.tail_count,
+        context.account_count,
+        context.scalar_count,
+        context.identity_count,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        put(output, 23 * 32 + index * 4, &value.to_le_bytes())?;
+    }
+    Ok(())
+}
+
+/// Hostile-decode one context preimage written by [`encode_invocation_context_v3`].
+pub fn decode_invocation_context_v3(
+    bytes: &[u8],
+) -> Result<AdmittedInvocationContextV3, AdmittedTranscriptErrorV3> {
+    if bytes.len() != ADMITTED_INVOCATION_CONTEXT_BYTES_V3 {
+        return Err(AdmittedTranscriptErrorV3::InvalidLength);
+    }
+    let identity = |index: usize| -> Result<ContentId, AdmittedTranscriptErrorV3> {
+        ContentId::new(read_identity(bytes, index * 32)?)
+            .map_err(|_| AdmittedTranscriptErrorV3::ZeroDigest)
+    };
+    let count = |index: usize| read_u32(bytes, 23 * 32 + index * 4);
+    Ok(AdmittedInvocationContextV3 {
+        release_set: identity(0)?,
+        market: identity(1)?,
+        root: identity(2)?,
+        registry_program: identity(3)?,
+        trading_program: identity(4)?,
+        accelerator_program: identity(5)?,
+        capability_program: identity(6)?,
+        account_profile: identity(7)?,
+        request_profile: identity(8)?,
+        transition: identity(9)?,
+        effect: identity(10)?,
+        lifecycle: identity(11)?,
+        strategy: identity(12)?,
+        certificate: identity(13)?,
+        admission: identity(14)?,
+        artifact_release: ArtifactReleaseIdV1::new(read_identity(bytes, 15 * 32)?)
+            .map_err(|_| AdmittedTranscriptErrorV3::ZeroDigest)?,
+        config: identity(16)?,
+        product: identity(17)?,
+        portfolio: identity(18)?,
+        linked_basis: identity(19)?,
+        family_request_digest: identity(20)?,
+        runtime_observations_digest: identity(21)?,
+        root_prestate_digest: identity(22)?,
+        selected_action: count(0)?,
+        tail_count: count(1)?,
+        account_count: count(2)?,
+        scalar_count: count(3)?,
+        identity_count: count(4)?,
+    })
 }

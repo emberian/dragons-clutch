@@ -983,6 +983,35 @@ pub enum BankTransportV2 {
     },
 }
 
+/// Split one request tail into its exact inline bank and the caller's witness.
+///
+/// The bank's width is a FUNCTION OF THE HEADER -- `register_bank_bytes_v2` of
+/// the declared scalar and identity counts -- so the boundary between the two
+/// sections is decided by bytes the digest already covers, and neither section
+/// can be resized by moving the other. Before the witness existed the inline
+/// arm took the whole tail and refused unless its length was exactly the bank
+/// width; now the excess is the witness, and a caller that supplies bytes no
+/// callee reads is refused by the callee that reads them, not here. The
+/// scratch-page arm has no bank at all, so its whole tail is witness.
+fn split_inline_bank<'a>(
+    bytes: &'a [u8],
+    header_bytes: usize,
+    transport: RequestTransportV2,
+    total_bank_bytes: u64,
+) -> Result<(&'a [u8], &'a [u8])> {
+    let tail = bytes.get(header_bytes..).ok_or(Error::InvalidLength)?;
+    match transport {
+        RequestTransportV2::Inline => {
+            let width = usize::try_from(total_bank_bytes).map_err(|_| Error::InvalidLength)?;
+            Ok((
+                tail.get(..width).ok_or(Error::InvalidLength)?,
+                tail.get(width..).ok_or(Error::InvalidLength)?,
+            ))
+        }
+        RequestTransportV2::ScratchPages => Ok((&[], tail)),
+    }
+}
+
 /// Return exact scalar-then-identity bank bytes without narrowing semantic counts.
 pub fn register_bank_bytes_v2(scalar_count: u32, identity_count: u32) -> Result<u64> {
     let scalars = match u64::from(scalar_count).checked_mul(8) {
@@ -1102,6 +1131,24 @@ pub struct AcceleratorRequestV2<'a> {
     chunk_offset: u64,
     total_bank_bytes: u64,
     inline_bank: &'a [u8],
+    /// Caller-composed prelude witness, empty unless the caller supplies one.
+    ///
+    /// # The request is a channel, and widening it costs nothing
+    ///
+    /// The whole request is committed by `hash(request_bytes)`, which is the
+    /// last seed of the `CallerAuthoritySeedsV1` PDA the caller must sign for
+    /// the callee to accept the invocation at all. So a byte written here is a
+    /// statement by the program at that caller coordinate, established by the
+    /// same signature the callee already checks -- and under the ruling in
+    /// `GOAL.md` a callee invoked by a PDA-signed CPI takes the facts the
+    /// signer's seeds pin as established.
+    ///
+    /// It is a raw slice at this layer on purpose. This module owns the
+    /// TRANSPORT -- that the bytes ride inside the digest -- and says nothing
+    /// about what they mean; `admitted_v3::AdmittedPreludeWitnessV1` owns the
+    /// grammar, and the accelerator that reads it owns which of its fields it
+    /// still re-derives from an account rather than believing.
+    witness: &'a [u8],
 }
 
 impl<'a> AcceleratorRequestV2<'a> {
@@ -1151,7 +1198,18 @@ impl<'a> AcceleratorRequestV2<'a> {
             chunk_offset,
             total_bank_bytes,
             inline_bank,
+            witness: &[],
         })
+    }
+
+    /// Carry one caller-composed prelude witness in this request's tail.
+    pub const fn with_witness(self, witness: &'a [u8]) -> Self {
+        Self { witness, ..self }
+    }
+
+    /// Borrow the caller-composed prelude witness, empty when none was carried.
+    pub const fn witness(self) -> &'a [u8] {
+        self.witness
     }
 
     /// Hostile-decode one exact request and optional inline bank.
@@ -1178,28 +1236,35 @@ impl<'a> AcceleratorRequestV2<'a> {
             scalar_count,
             identity_count,
             chunk_index,
-            match transport {
-                RequestTransportV2::Inline => bytes
-                    .get(ACCELERATOR_REQUEST_HEADER_BYTES_V2..)
-                    .ok_or(Error::InvalidLength)?,
-                RequestTransportV2::ScratchPages => &[],
-            },
+            split_inline_bank(
+                bytes,
+                ACCELERATOR_REQUEST_HEADER_BYTES_V2,
+                transport,
+                register_bank_bytes_v2(scalar_count, identity_count)?,
+            )?
+            .0,
         )?;
+        let witness = split_inline_bank(
+            bytes,
+            ACCELERATOR_REQUEST_HEADER_BYTES_V2,
+            transport,
+            value.total_bank_bytes,
+        )?
+        .1;
         if read_u32(bytes, REQUEST_CHUNK_COUNT_OFFSET_V2)? != value.chunk_count
             || read_u64(bytes, REQUEST_CHUNK_OFFSET_OFFSET_V2)? != value.chunk_offset
             || read_u64(bytes, REQUEST_TOTAL_BANK_BYTES_OFFSET_V2)? != value.total_bank_bytes
-            || (transport == RequestTransportV2::ScratchPages
-                && bytes.len() != ACCELERATOR_REQUEST_HEADER_BYTES_V2)
         {
             return Err(Error::BindingMismatch);
         }
-        Ok(value)
+        Ok(value.with_witness(witness))
     }
 
     /// Encode exact request header and optional inline input bank.
     pub fn encode_into(self, output: &mut [u8]) -> Result<()> {
         let expected = ACCELERATOR_REQUEST_HEADER_BYTES_V2
             .checked_add(self.inline_bank.len())
+            .and_then(|value| value.checked_add(self.witness.len()))
             .ok_or(Error::ArithmeticOverflow)?;
         if output.len() != expected {
             return Err(Error::InvalidLength);
@@ -1216,7 +1281,8 @@ impl<'a> AcceleratorRequestV2<'a> {
             self.identity_count,
             self.chunk_index,
             self.inline_bank,
-        )?;
+        )?
+        .with_witness(self.witness);
         if canonical != self {
             return Err(Error::BindingMismatch);
         }
@@ -1260,6 +1326,13 @@ impl<'a> AcceleratorRequestV2<'a> {
             output,
             ACCELERATOR_REQUEST_HEADER_BYTES_V2,
             self.inline_bank,
+        );
+        put(
+            output,
+            ACCELERATOR_REQUEST_HEADER_BYTES_V2
+                .checked_add(self.inline_bank.len())
+                .ok_or(Error::ArithmeticOverflow)?,
+            self.witness,
         );
         Ok(())
     }
@@ -1595,6 +1668,24 @@ pub struct AcceleratorOutputPageRequestV3<'a> {
     identity_count: u32,
     total_bank_bytes: u64,
     inline_bank: &'a [u8],
+    /// Caller-composed prelude witness, empty unless the caller supplies one.
+    ///
+    /// # The request is a channel, and widening it costs nothing
+    ///
+    /// The whole request is committed by `hash(request_bytes)`, which is the
+    /// last seed of the `CallerAuthoritySeedsV1` PDA the caller must sign for
+    /// the callee to accept the invocation at all. So a byte written here is a
+    /// statement by the program at that caller coordinate, established by the
+    /// same signature the callee already checks -- and under the ruling in
+    /// `GOAL.md` a callee invoked by a PDA-signed CPI takes the facts the
+    /// signer's seeds pin as established.
+    ///
+    /// It is a raw slice at this layer on purpose. This module owns the
+    /// TRANSPORT -- that the bytes ride inside the digest -- and says nothing
+    /// about what they mean; `admitted_v3::AdmittedPreludeWitnessV1` owns the
+    /// grammar, and the accelerator that reads it owns which of its fields it
+    /// still re-derives from an account rather than believing.
+    witness: &'a [u8],
 }
 
 impl<'a> AcceleratorOutputPageRequestV3<'a> {
@@ -1645,7 +1736,18 @@ impl<'a> AcceleratorOutputPageRequestV3<'a> {
             identity_count,
             total_bank_bytes,
             inline_bank,
+            witness: &[],
         })
+    }
+
+    /// Carry one caller-composed prelude witness in this request's tail.
+    pub const fn with_witness(self, witness: &'a [u8]) -> Self {
+        Self { witness, ..self }
+    }
+
+    /// Borrow the caller-composed prelude witness, empty when none was carried.
+    pub const fn witness(self) -> &'a [u8] {
+        self.witness
     }
 
     /// Hostile-decode one exact whole-bank request and optional inline bank.
@@ -1669,27 +1771,37 @@ impl<'a> AcceleratorOutputPageRequestV3<'a> {
             read_u32(bytes, OUTPUT_PAGE_REQUEST_TAIL_COUNT_OFFSET_V3)?,
             read_u32(bytes, OUTPUT_PAGE_REQUEST_SCALAR_COUNT_OFFSET_V3)?,
             read_u32(bytes, OUTPUT_PAGE_REQUEST_IDENTITY_COUNT_OFFSET_V3)?,
-            match transport {
-                RequestTransportV2::Inline => bytes
-                    .get(ACCELERATOR_OUTPUT_PAGE_REQUEST_HEADER_BYTES_V3..)
-                    .ok_or(Error::InvalidLength)?,
-                RequestTransportV2::ScratchPages => &[],
-            },
+            split_inline_bank(
+                bytes,
+                ACCELERATOR_OUTPUT_PAGE_REQUEST_HEADER_BYTES_V3,
+                transport,
+                register_bank_bytes_v2(
+                    read_u32(bytes, OUTPUT_PAGE_REQUEST_SCALAR_COUNT_OFFSET_V3)?,
+                    read_u32(bytes, OUTPUT_PAGE_REQUEST_IDENTITY_COUNT_OFFSET_V3)?,
+                )?,
+            )?
+            .0,
         )?;
+        let witness = split_inline_bank(
+            bytes,
+            ACCELERATOR_OUTPUT_PAGE_REQUEST_HEADER_BYTES_V3,
+            transport,
+            value.total_bank_bytes,
+        )?
+        .1;
         if read_u64(bytes, OUTPUT_PAGE_REQUEST_TOTAL_BANK_BYTES_OFFSET_V3)?
             != value.total_bank_bytes
-            || (transport == RequestTransportV2::ScratchPages
-                && bytes.len() != ACCELERATOR_OUTPUT_PAGE_REQUEST_HEADER_BYTES_V3)
         {
             return Err(Error::BindingMismatch);
         }
-        Ok(value)
+        Ok(value.with_witness(witness))
     }
 
     /// Encode exact request header and optional inline input bank.
     pub fn encode_into(self, output: &mut [u8]) -> Result<()> {
         let expected = ACCELERATOR_OUTPUT_PAGE_REQUEST_HEADER_BYTES_V3
             .checked_add(self.inline_bank.len())
+            .and_then(|value| value.checked_add(self.witness.len()))
             .ok_or(Error::ArithmeticOverflow)?;
         if output.len() != expected {
             return Err(Error::InvalidLength);
@@ -1705,7 +1817,8 @@ impl<'a> AcceleratorOutputPageRequestV3<'a> {
             self.scalar_count,
             self.identity_count,
             self.inline_bank,
-        )?;
+        )?
+        .with_witness(self.witness);
         if canonical != self {
             return Err(Error::BindingMismatch);
         }
@@ -1764,6 +1877,13 @@ impl<'a> AcceleratorOutputPageRequestV3<'a> {
             output,
             ACCELERATOR_OUTPUT_PAGE_REQUEST_HEADER_BYTES_V3,
             self.inline_bank,
+        );
+        put(
+            output,
+            ACCELERATOR_OUTPUT_PAGE_REQUEST_HEADER_BYTES_V3
+                .checked_add(self.inline_bank.len())
+                .ok_or(Error::ArithmeticOverflow)?,
+            self.witness,
         );
         Ok(())
     }
@@ -2120,6 +2240,14 @@ impl<'a> AdmittedAcceleratorRequestV2<'a> {
             Self::OutputPageV3(request) => request.total_bank_bytes(),
         }
     }
+    /// Borrow the caller-composed prelude witness, empty when none was carried.
+    pub const fn witness(self) -> &'a [u8] {
+        match self {
+            Self::ChunkedBankV2(request) => request.witness(),
+            Self::OutputPageV3(request) => request.witness(),
+        }
+    }
+
     /// Borrow exact inline input bank, empty for scratch input transport.
     pub const fn inline_bank(self) -> &'a [u8] {
         match self {
@@ -2173,6 +2301,39 @@ impl<'a> AdmittedAcceleratorRequestV2<'a> {
 
     /// Exact encoded width: the header for this transport, plus any inline bank.
     pub fn encoded_len(self) -> Result<usize> {
+        let header = match self {
+            Self::ChunkedBankV2(_) => ACCELERATOR_REQUEST_HEADER_BYTES_V2,
+            Self::OutputPageV3(_) => ACCELERATOR_OUTPUT_PAGE_REQUEST_HEADER_BYTES_V3,
+        };
+        header
+            .checked_add(self.inline_bank().len())
+            .and_then(|value| value.checked_add(self.witness().len()))
+            .ok_or(Error::ArithmeticOverflow)
+    }
+
+    /// Bytes of this request that the caller-authority digest is taken over.
+    ///
+    /// # Why the witness sits OUTSIDE the digest, and what still binds it
+    ///
+    /// `CallerAuthoritySeedsV1`'s last seed is the digest of the request, and a
+    /// caller-authority PDA is an ACCOUNT that has to be in the frame before
+    /// the transaction executes -- so its address is derived off-chain, by a
+    /// producer that reproduces these bytes exactly. The witness is composed
+    /// ON-CHAIN out of values only the executing program has, so a witness
+    /// inside the digest would be an address no off-chain producer could
+    /// derive. `dclutch-custody-sbf`'s `split_caller_authority_bump_v1` met the
+    /// same fixed point and resolved it the same way: the digest covers the
+    /// request, and a section after it rides outside.
+    ///
+    /// What binds the witness is therefore not this digest but the request's
+    /// own `invocation_context` field, which IS inside it: a reader requires
+    /// `admitted_invocation_context_digest_v3(witness.context())` to equal that
+    /// field, so the whole 756-byte preimage is committed by a value the caller
+    /// signed for. The witness's representative bank is committed one level
+    /// further in, by the context's `runtime_observations_digest`. Its span
+    /// bank is committed by neither, and the reader that consumes it owes a
+    /// refusal rather than a belief.
+    pub fn signed_prefix_len(self) -> Result<usize> {
         let header = match self {
             Self::ChunkedBankV2(_) => ACCELERATOR_REQUEST_HEADER_BYTES_V2,
             Self::OutputPageV3(_) => ACCELERATOR_OUTPUT_PAGE_REQUEST_HEADER_BYTES_V3,
@@ -3831,8 +3992,15 @@ mod tests {
             Err(Error::ZeroIdentity)
         );
 
-        // Scratch input transport carries no inline bank, and a bank appended
-        // to one is a binding mismatch rather than bytes nobody reads.
+        // Scratch input transport carries no inline bank, so its whole tail is
+        // the caller's prelude witness. THIS ROW USED TO SAY THE OPPOSITE --
+        // that a byte after the header is `BindingMismatch` -- and it was right
+        // for as long as nothing was allowed to ride there. What the witness
+        // changes is not the strictness but WHO enforces it: the tail is now a
+        // section this layer transports and does not interpret, and a caller
+        // that writes bytes no callee reads is refused by the callee that reads
+        // them. `hash(request_bytes)` covers the tail either way, so nothing
+        // rides here unsigned.
         let scratch = AcceleratorOutputPageRequestV3::new(
             RequestTransportV2::ScratchPages,
             id(1),
@@ -3854,11 +4022,20 @@ mod tests {
             AcceleratorOutputPageRequestV3::decode(&scratch_bytes),
             Ok(scratch)
         );
-        scratch_bytes.push(0);
+        scratch_bytes.push(7);
         assert_eq!(
             AcceleratorOutputPageRequestV3::decode(&scratch_bytes),
-            Err(Error::BindingMismatch)
+            Ok(scratch.with_witness(&[7]))
         );
+        // And the witness is exactly the tail, byte for byte: it round-trips
+        // through the encoder at the width the two sections sum to.
+        let carried = scratch.with_witness(&[7]);
+        let mut carried_bytes = vec![0_u8; ACCELERATOR_OUTPUT_PAGE_REQUEST_HEADER_BYTES_V3 + 1];
+        carried
+            .encode_into(&mut carried_bytes)
+            .expect("encode carried witness");
+        assert_eq!(carried_bytes, scratch_bytes);
+        assert_eq!(carried.witness(), &[7]);
 
         // A bank of no bytes has no page and no digest.
         assert_eq!(

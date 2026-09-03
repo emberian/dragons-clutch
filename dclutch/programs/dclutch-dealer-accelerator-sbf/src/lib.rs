@@ -250,7 +250,19 @@ pub fn process_instruction(
         .map_err(|_| DealerAcceleratorSbfErrorV4::InvalidRequest)?;
     let invocation = authenticate_accelerator_invocation_v4(program_id, accounts, instruction_data)
         .map_err(accelerator_invocation_refusal_v4)?;
-    let request_digest = content(instruction_data)?;
+    // Over the request, not over the whole instruction data: the prelude
+    // witness rides after it, outside the digest the caller-authority PDA
+    // seeds. Trading takes the same prefix on the other side, so an
+    // acknowledgement digest over anything else would simply not match.
+    let request_digest = content(
+        instruction_data
+            .get(
+                ..request
+                    .signed_prefix_len()
+                    .map_err(|_| DealerAcceleratorSbfErrorV4::InvalidRequest)?,
+            )
+            .ok_or(DealerAcceleratorSbfErrorV4::InvalidRequest)?,
+    )?;
     match request {
         AdmittedAcceleratorRequestV2::ChunkedBankV2(chunked) => {
             let mut candidate = vec![0_u8; bank_bytes];

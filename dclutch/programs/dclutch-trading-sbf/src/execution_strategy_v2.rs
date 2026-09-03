@@ -308,40 +308,6 @@ pub(crate) fn authenticate_execution_strategy_from_sealed_capability_v2(
     )
 }
 
-/// Authenticate an admitted accelerator after Trading authenticated its exact CPI caller.
-///
-/// This retains the sealed descriptor-pair, strategy, Certificate, Admission,
-/// and ArtifactRelease checks. Only the immutable current-deployment join may
-/// spend `accelerator_caller`; every public and non-attested route continues to
-/// hash the complete observed ELF.
-#[inline(never)]
-pub(crate) fn authenticate_execution_strategy_from_attested_accelerator_v2(
-    context: TradingFamilyContextV1,
-    capability_program_id: ContentId,
-    capability_program: &CapabilityProgramV4,
-    registry_program: &AccountInfo<'_>,
-    rent_sysvar: &AccountInfo<'_>,
-    accounts: &[AccountInfo<'_>],
-    accelerator_caller: AuthenticatedAcceleratorCallerV4,
-) -> Result<AuthenticatedExecutionStrategyV2, TradingSbfError> {
-    let rent = authenticate_common_frame_with_sealed_capability_pair(
-        registry_program,
-        rent_sysvar,
-        accounts,
-        capability_program_id,
-        capability_program,
-    )?;
-    authenticate_selected_execution_strategy_v2(
-        context,
-        capability_program_id,
-        capability_program,
-        registry_program.key,
-        &rent,
-        accounts,
-        CurrentDeploymentAuthenticationV2::AttestedAccelerator(accelerator_caller),
-    )
-}
-
 #[inline(never)]
 fn authenticate_selected_execution_strategy_v2(
     context: TradingFamilyContextV1,
