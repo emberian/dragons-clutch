@@ -23,9 +23,34 @@ pub(super) fn process(
     // already split off by `split_caller_authority_bump_v1`, so this digest is
     // still taken over exactly the request the parent hashed.
     let request_digest = hash(instruction_data).to_bytes();
-    let market =
-        authenticate_common_frame(program_id, accounts, custody, request_digest, None, relay)?;
-    let realm = authenticate_realm(program_id, accounts, custody, market)?;
+    // One borrow and one decode for this route too; see the note in
+    // `process_instruction`.
+    let registry = account(accounts, REGISTRY_PROGRAM)?;
+    let cache_account = account(accounts, ACTIVATION_CACHE)?;
+    require_cache_account(registry.key, cache_account).map_err(CustodySbfError::from)?;
+    let cache_data = cache_account
+        .try_borrow_data()
+        .map_err(|_| CustodySbfError::Release)?;
+    let activated = ActivatedExecutionReleaseSetViewV1::decode(&cache_data)
+        .map_err(|_| CustodySbfError::Release)?;
+    authenticate_activation_cache_identity_v1(
+        registry,
+        cache_account,
+        &custody.release_set,
+        activated,
+    )
+    .map_err(CustodySbfError::from)?;
+    let market = authenticate_common_frame(
+        program_id,
+        accounts,
+        custody,
+        request_digest,
+        None,
+        relay,
+        activated,
+    )?;
+    let realm = authenticate_realm(program_id, accounts, custody, market, activated)?;
+    drop(cache_data);
     execute_transfer(program_id, accounts, request, request_digest, realm, relay)
 }
 

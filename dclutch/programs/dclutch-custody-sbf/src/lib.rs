@@ -56,9 +56,7 @@ use dclutch_realm_contract::{
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_activation_auth_v1::{
-    AuthenticatedActivationCacheBumpV1, authenticate_activated_role_with_bump_v1,
-    authenticate_activation_cache_bump_v1, authenticate_activation_cache_identity_v1,
-    require_cache_account,
+    authenticate_activation_cache_identity_v1, require_cache_account, require_readonly_frame,
 };
 use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use dclutch_registry_svm::continuation_v1::{
@@ -370,6 +368,38 @@ pub fn process_instruction(
     require_account_count(accounts, request.operation, continuation.is_some())?;
     let request_digest = hash(request_bytes).to_bytes();
     custody_cu_checkpoint!("cu-decoded");
+    // ONE borrow and ONE decode of the activation cache, for the whole
+    // invocation. It used to be three: `authenticate_market`,
+    // `authenticate_calling_release` and `authenticate_realm` each borrowed the
+    // same immutable Registry-owned account and each ran
+    // `ActivatedExecutionReleaseSetViewV1::decode` -- the complete five-role
+    // projection and every aliasing pair, twenty-five `decode_role` calls -- to
+    // answer one question about one role. Measured on real ELFs 2026-09-03,
+    // one decode with its identity conjuncts is 25,000 to 31,000 CU, so the
+    // Remove was paying for two of them twice over per transaction and had
+    // never executed the merge leg that needed the budget.
+    //
+    // `dclutch-registry-activation-auth-v1`'s own doc names the pair that does
+    // this -- `authenticate_activation_cache_identity_v1` once, then the role
+    // reads out of the SAME view -- and Claims made exactly this repair at
+    // `0aa70478e`. The guard is held across the frame and the realm and dropped
+    // before dispatch, so nothing below reads a view whose bytes could have
+    // moved underneath it.
+    let registry = account(accounts, REGISTRY_PROGRAM)?;
+    let cache_account = account(accounts, ACTIVATION_CACHE)?;
+    require_cache_account(registry.key, cache_account).map_err(CustodySbfError::from)?;
+    let cache_data = cache_account
+        .try_borrow_data()
+        .map_err(|_| CustodySbfError::Release)?;
+    let activated = ActivatedExecutionReleaseSetViewV1::decode(&cache_data)
+        .map_err(|_| CustodySbfError::Release)?;
+    authenticate_activation_cache_identity_v1(
+        registry,
+        cache_account,
+        &request.release_set,
+        activated,
+    )
+    .map_err(CustodySbfError::from)?;
     let market = authenticate_series_aware_common_frame(
         program_id,
         accounts,
@@ -377,17 +407,19 @@ pub fn process_instruction(
         request_digest,
         continuation,
         relay,
+        activated,
     )?;
     custody_cu_checkpoint!("cu-common-frame");
     let realm = match market {
         AuthenticatedMarketAdmissionV1::Live(market) => {
-            authenticate_realm(program_id, accounts, request, market.state)?
+            authenticate_realm(program_id, accounts, request, market.state, activated)?
         }
         AuthenticatedMarketAdmissionV1::Premarket { .. } => {
-            authenticate_premarket_realm(program_id, accounts, request)?
+            authenticate_premarket_realm(program_id, accounts, request, activated)?
         }
     };
     custody_cu_checkpoint!("cu-realm");
+    drop(cache_data);
     let outcome = match request.operation {
         OperationV1::InitializeReplay => {
             initialize_replay(program_id, accounts, request, request_digest)
@@ -573,6 +605,7 @@ fn split_registry_continuation(
 }
 
 #[inline(never)]
+#[allow(clippy::too_many_arguments)]
 fn authenticate_common_frame(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -580,6 +613,7 @@ fn authenticate_common_frame(
     request_digest: [u8; 32],
     continuation: Option<RegistryContinuationRequestV1>,
     relay: CustodyBumpRelayV1,
+    activated: ActivatedExecutionReleaseSetViewV1<'_>,
 ) -> Result<CoreState, ProgramError> {
     let caller_authority = account(accounts, CALLER_AUTHORITY)?;
     let caller_program = account(accounts, CALLER_PROGRAM)?;
@@ -588,7 +622,7 @@ fn authenticate_common_frame(
     if caller_program.key.to_bytes() != request.caller_program {
         return Err(CustodySbfError::Release.into());
     }
-    let market = authenticate_market(accounts, request)?;
+    let market = authenticate_market(accounts, request, activated)?;
     authenticate_common_frame_tail(
         program_id,
         accounts,
@@ -596,7 +630,7 @@ fn authenticate_common_frame(
         request_digest,
         continuation,
         relay,
-        market.cache_bump,
+        activated,
         caller_authority,
         caller_program,
         replay,
@@ -605,6 +639,7 @@ fn authenticate_common_frame(
 }
 
 #[inline(never)]
+#[allow(clippy::too_many_arguments)]
 fn authenticate_series_aware_common_frame(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -612,6 +647,7 @@ fn authenticate_series_aware_common_frame(
     request_digest: [u8; 32],
     continuation: Option<RegistryContinuationRequestV1>,
     relay: CustodyBumpRelayV1,
+    activated: ActivatedExecutionReleaseSetViewV1<'_>,
 ) -> Result<AuthenticatedMarketAdmissionV1, ProgramError> {
     let caller_authority = account(accounts, CALLER_AUTHORITY)?;
     let caller_program = account(accounts, CALLER_PROGRAM)?;
@@ -620,9 +656,10 @@ fn authenticate_series_aware_common_frame(
     if caller_program.key.to_bytes() != request.caller_program {
         return Err(CustodySbfError::Release.into());
     }
-    let market = match try_authenticate_premarket_market(accounts, request)? {
-        Some(cache_bump) => AuthenticatedMarketAdmissionV1::Premarket { cache_bump },
-        None => AuthenticatedMarketAdmissionV1::Live(authenticate_market(accounts, request)?),
+    let market = if try_authenticate_premarket_market(accounts, request)? {
+        AuthenticatedMarketAdmissionV1::Premarket
+    } else {
+        AuthenticatedMarketAdmissionV1::Live(authenticate_market(accounts, request, activated)?)
     };
     authenticate_common_frame_tail(
         program_id,
@@ -631,7 +668,7 @@ fn authenticate_series_aware_common_frame(
         request_digest,
         continuation,
         relay,
-        market.cache_bump(),
+        activated,
         caller_authority,
         caller_program,
         replay,
@@ -648,7 +685,7 @@ fn authenticate_common_frame_tail(
     request_digest: [u8; 32],
     continuation: Option<RegistryContinuationRequestV1>,
     relay: CustodyBumpRelayV1,
-    cache_bump: AuthenticatedActivationCacheBumpV1,
+    activated: ActivatedExecutionReleaseSetViewV1<'_>,
     caller_authority: &AccountInfo<'_>,
     caller_program: &AccountInfo<'_>,
     replay: &AccountInfo<'_>,
@@ -679,7 +716,7 @@ fn authenticate_common_frame_tail(
     if caller_authority.key != &expected_caller {
         return Err(CustodySbfError::CallerAuthority.into());
     }
-    authenticate_calling_release(program_id, accounts, request, continuation, cache_bump)?;
+    authenticate_calling_release(program_id, accounts, request, continuation, activated)?;
     authenticate_replay_identity(program_id, replay, request, relay.replay)?;
     Ok(())
 }
@@ -687,24 +724,12 @@ fn authenticate_common_frame_tail(
 #[derive(Clone, Copy)]
 enum AuthenticatedMarketAdmissionV1 {
     Live(AuthenticatedMarketV1),
-    Premarket {
-        cache_bump: AuthenticatedActivationCacheBumpV1,
-    },
-}
-
-impl AuthenticatedMarketAdmissionV1 {
-    const fn cache_bump(self) -> AuthenticatedActivationCacheBumpV1 {
-        match self {
-            Self::Live(market) => market.cache_bump,
-            Self::Premarket { cache_bump } => cache_bump,
-        }
-    }
+    Premarket,
 }
 
 #[derive(Clone, Copy)]
 struct AuthenticatedMarketV1 {
     state: CoreState,
-    cache_bump: AuthenticatedActivationCacheBumpV1,
 }
 
 /// Select the deliberately vacant future-Market path before ordinary Market
@@ -717,17 +742,17 @@ struct AuthenticatedMarketV1 {
 fn try_authenticate_premarket_market(
     accounts: &[AccountInfo<'_>],
     request: CustodyRequestV1,
-) -> Result<Option<AuthenticatedActivationCacheBumpV1>, ProgramError> {
+) -> Result<bool, ProgramError> {
     let market = account(accounts, CORE_MARKET)?;
     if !is_premarket_series_vacancy(market, request) {
-        return Ok(None);
+        return Ok(false);
     }
     require_premarket_series_market(market, request)?;
-    let cache = account(accounts, ACTIVATION_CACHE)?;
-    let registry = account(accounts, REGISTRY_PROGRAM)?;
-    authenticate_activation_cache_bump_v1(registry, cache, &request.release_set)
-        .map(Some)
-        .map_err(|error| CustodySbfError::from(error).into())
+    // The cache's own identity -- Registry ownership, the exact width, the body
+    // naming this release set, and the address its carried bump reproduces --
+    // is established once by the caller, from the same decode this path used to
+    // make for itself, so nothing is left for this arm to authenticate.
+    Ok(true)
 }
 
 fn is_premarket_series_vacancy(market: &AccountInfo<'_>, request: CustodyRequestV1) -> bool {
@@ -756,9 +781,9 @@ fn require_premarket_series_market(
 fn authenticate_market(
     accounts: &[AccountInfo<'_>],
     request: CustodyRequestV1,
+    activated: ActivatedExecutionReleaseSetViewV1<'_>,
 ) -> Result<AuthenticatedMarketV1, ProgramError> {
     let market = account(accounts, CORE_MARKET)?;
-    let cache = account(accounts, ACTIVATION_CACHE)?;
     let registry = account(accounts, REGISTRY_PROGRAM)?;
     // ONE borrow, ONE decode. This used to call
     // `authenticate_activation_cache_bump_v1`, which borrows and decodes the
@@ -771,15 +796,6 @@ fn authenticate_market(
     // before the first byte is read, and
     // `authenticate_activation_cache_identity_v1` takes them again over the
     // decoded view along with the release-set equality and the address.
-    require_cache_account(registry.key, cache).map_err(CustodySbfError::from)?;
-    let bytes = cache
-        .try_borrow_data()
-        .map_err(|_| CustodySbfError::Release)?;
-    let activated =
-        ActivatedExecutionReleaseSetViewV1::decode(&bytes).map_err(|_| CustodySbfError::Release)?;
-    let cache_bump =
-        authenticate_activation_cache_identity_v1(registry, cache, &request.release_set, activated)
-            .map_err(CustodySbfError::from)?;
     if market.data_len() != STATE_BYTES {
         return Err(CustodySbfError::Release.into());
     }
@@ -791,7 +807,6 @@ fn authenticate_market(
             .program()
             .as_bytes(),
     );
-    drop(bytes);
     if market.owner != &core_program {
         return Err(CustodySbfError::Release.into());
     }
@@ -809,7 +824,7 @@ fn authenticate_market(
     {
         return Err(CustodySbfError::Release.into());
     }
-    Ok(AuthenticatedMarketV1 { state, cache_bump })
+    Ok(AuthenticatedMarketV1 { state })
 }
 
 /// Reproduce one Realm record address at a recorded bump, or search for it.
@@ -875,12 +890,11 @@ fn authenticate_calling_release(
     accounts: &[AccountInfo<'_>],
     request: CustodyRequestV1,
     continuation: Option<RegistryContinuationRequestV1>,
-    cache_bump: AuthenticatedActivationCacheBumpV1,
+    activated: ActivatedExecutionReleaseSetViewV1<'_>,
 ) -> ProgramResult {
     if let Some(continuation) = continuation {
         return authenticate_registry_continuation(program_id, accounts, request, continuation);
     }
-    let registry = account(accounts, REGISTRY_PROGRAM)?;
     let cache = account(accounts, ACTIVATION_CACHE)?;
     let caller_program = account(accounts, CALLER_PROGRAM)?;
     let caller_programdata = account(accounts, CALLER_PROGRAMDATA)?;
@@ -891,17 +905,16 @@ fn authenticate_calling_release(
     // here is reentrancy and the route could not execute at all. The cache
     // account is Registry-owned at a Registry-derived address and carries the
     // whole of what `Reauthenticate` would have returned.
-    let receipt = authenticate_activated_role_with_bump_v1(
-        registry,
-        cache,
-        &request.release_set,
-        cache_bump,
-        role,
-        caller_program,
-        caller_programdata,
-    )
-    .map_err(CustodySbfError::from)?;
-    if receipt.program().as_bytes() != &request.caller_program {
+    require_readonly_frame(cache, caller_program, caller_programdata)
+        .map_err(CustodySbfError::from)?;
+    let release = activated
+        .role(role)
+        .map_err(|_| CustodySbfError::Release)?
+        .release();
+    if release.program().to_bytes() != caller_program.key.to_bytes()
+        || release.programdata() != caller_programdata.key.to_bytes()
+        || release.program().to_bytes() != request.caller_program
+    {
         return Err(CustodySbfError::Release.into());
     }
     Ok(())
@@ -1004,22 +1017,84 @@ struct RealmFacts {
     profile: ExactTransferProfileV1,
 }
 
+/// Borrow and decode the activation cache for one Dealer reservation caller.
+///
+/// See [`authenticate_realm_from_cache`] for why the reservation routes keep
+/// the shape they had.
 #[inline(never)]
-fn authenticate_realm(
+fn authenticate_market_from_cache(
+    accounts: &[AccountInfo<'_>],
+    request: CustodyRequestV1,
+) -> Result<AuthenticatedMarketV1, ProgramError> {
+    let registry = account(accounts, REGISTRY_PROGRAM)?;
+    let cache_account = account(accounts, ACTIVATION_CACHE)?;
+    require_cache_account(registry.key, cache_account).map_err(CustodySbfError::from)?;
+    let cache_data = cache_account
+        .try_borrow_data()
+        .map_err(|_| CustodySbfError::Release)?;
+    let activated = ActivatedExecutionReleaseSetViewV1::decode(&cache_data)
+        .map_err(|_| CustodySbfError::Release)?;
+    authenticate_activation_cache_identity_v1(
+        registry,
+        cache_account,
+        &request.release_set,
+        activated,
+    )
+    .map_err(CustodySbfError::from)?;
+    authenticate_market(accounts, request, activated)
+}
+
+/// See [`authenticate_market_from_cache`].
+#[inline(never)]
+fn authenticate_calling_release_from_cache(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: CustodyRequestV1,
+    continuation: Option<RegistryContinuationRequestV1>,
+) -> ProgramResult {
+    let cache = account(accounts, ACTIVATION_CACHE)?;
+    let cache_data = cache
+        .try_borrow_data()
+        .map_err(|_| CustodySbfError::Release)?;
+    let activated = ActivatedExecutionReleaseSetViewV1::decode(&cache_data)
+        .map_err(|_| CustodySbfError::Release)?;
+    authenticate_calling_release(program_id, accounts, request, continuation, activated)
+}
+
+/// Borrow and decode the activation cache for one caller that holds no view.
+///
+/// The Dealer reservation routes each authenticate their own frame and reach
+/// the Realm without a decoded activation view in scope. They keep the shape
+/// they had; the repair above is the main `CustodyRequestV1` route, which is
+/// the one the Dealer partial equity Remove's two legs take and the one that
+/// was decoding the same immutable account three times.
+#[inline(never)]
+fn authenticate_realm_from_cache(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     request: CustodyRequestV1,
     market: CoreState,
 ) -> Result<RealmFacts, ProgramError> {
     let cache = account(accounts, ACTIVATION_CACHE)?;
-    let registry = account(accounts, REGISTRY_PROGRAM)?;
-    let realm_account = account(accounts, REALM)?;
-    let staging = account(accounts, REALM_STAGING)?;
     let cache_data = cache
         .try_borrow_data()
         .map_err(|_| CustodySbfError::Release)?;
     let activated = ActivatedExecutionReleaseSetViewV1::decode(&cache_data)
         .map_err(|_| CustodySbfError::Release)?;
+    authenticate_realm(program_id, accounts, request, market, activated)
+}
+
+#[inline(never)]
+fn authenticate_realm(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: CustodyRequestV1,
+    market: CoreState,
+    activated: ActivatedExecutionReleaseSetViewV1<'_>,
+) -> Result<RealmFacts, ProgramError> {
+    let registry = account(accounts, REGISTRY_PROGRAM)?;
+    let realm_account = account(accounts, REALM)?;
+    let staging = account(accounts, REALM_STAGING)?;
     if activated
         .execution_release_set_id()
         .map_err(|_| CustodySbfError::Release)?
@@ -1035,7 +1110,6 @@ fn authenticate_realm(
     {
         return Err(CustodySbfError::Release.into());
     }
-    drop(cache_data);
 
     if market.identity.realm_id.to_bytes() != request.realm
         || market.identity.registry_program.to_bytes() != registry.key.to_bytes()
@@ -1111,16 +1185,11 @@ fn authenticate_premarket_realm(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     request: CustodyRequestV1,
+    activated: ActivatedExecutionReleaseSetViewV1<'_>,
 ) -> Result<RealmFacts, ProgramError> {
-    let cache = account(accounts, ACTIVATION_CACHE)?;
     let registry = account(accounts, REGISTRY_PROGRAM)?;
     let realm_account = account(accounts, REALM)?;
     let staging = account(accounts, REALM_STAGING)?;
-    let cache_data = cache
-        .try_borrow_data()
-        .map_err(|_| CustodySbfError::Release)?;
-    let activated = ActivatedExecutionReleaseSetViewV1::decode(&cache_data)
-        .map_err(|_| CustodySbfError::Release)?;
     if activated
         .execution_release_set_id()
         .map_err(|_| CustodySbfError::Release)?
@@ -1136,7 +1205,6 @@ fn authenticate_premarket_realm(
     {
         return Err(CustodySbfError::Release.into());
     }
-    drop(cache_data);
 
     if realm_account.owner != registry.key
         || realm_account.data_len() != REALM_BYTES

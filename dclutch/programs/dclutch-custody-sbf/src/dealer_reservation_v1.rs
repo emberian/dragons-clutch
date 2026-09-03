@@ -62,11 +62,11 @@ use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::create_account;
 
 use crate::{
-    CustodySbfError, PoststateProjection, TransferAccounts, account, authenticate_calling_release,
-    authenticate_market, authenticate_realm, authenticate_replay_identity,
-    authenticate_transfer_accounts, create_vault, initialize_vault, invoke_close,
-    invoke_exact_transfer, poststate_commitment, read_replay, validate_custody_authority,
-    validate_token_program_and_mint, validate_vault_key,
+    CustodySbfError, PoststateProjection, TransferAccounts, account,
+    authenticate_calling_release_from_cache, authenticate_market_from_cache,
+    authenticate_realm_from_cache, authenticate_replay_identity, authenticate_transfer_accounts,
+    create_vault, initialize_vault, invoke_close, invoke_exact_transfer, poststate_commitment,
+    read_replay, validate_custody_authority, validate_token_program_and_mint, validate_vault_key,
 };
 
 /// Exact Reserve/Rollback account count; the outer transaction adds Custody.
@@ -348,11 +348,11 @@ fn authenticate_effect(
         account(accounts, REPLAY)?.clone(),
     ];
     crate::custody_cu_checkpoint!("dr-effect-joins");
-    let market = authenticate_market(&release_frame, custody)?;
+    let market = authenticate_market_from_cache(&release_frame, custody)?;
     crate::custody_cu_checkpoint!("dr-market");
-    authenticate_calling_release(program_id, &release_frame, custody, None, market.cache_bump)?;
+    authenticate_calling_release_from_cache(program_id, &release_frame, custody, None)?;
     crate::custody_cu_checkpoint!("dr-calling-release");
-    authenticate_realm(program_id, &release_frame, custody, market.state)?;
+    authenticate_realm_from_cache(program_id, &release_frame, custody, market.state)?;
     crate::custody_cu_checkpoint!("dr-realm");
     authenticate_replay_identity(program_id, account(accounts, REPLAY)?, custody, None)?;
     let replay = read_replay(account(accounts, REPLAY)?)?;
@@ -653,8 +653,8 @@ fn execute_reserve_token_effect(
         account(accounts, REALM_STAGING)?.clone(),
         account(accounts, REPLAY)?.clone(),
     ];
-    let market = authenticate_market(&realm_frame, original)?;
-    let realm = authenticate_realm(program_id, &realm_frame, original, market.state)?;
+    let market = authenticate_market_from_cache(&realm_frame, original)?;
+    let realm = authenticate_realm_from_cache(program_id, &realm_frame, original, market.state)?;
     let mint = account(accounts, MINT)?;
     let source = account(accounts, SOURCE)?;
     let destination = account(accounts, DESTINATION)?;
@@ -868,8 +868,8 @@ fn execute_rollback_token_effect(
         account(accounts, REALM_STAGING)?.clone(),
         account(accounts, REPLAY)?.clone(),
     ];
-    let market = authenticate_market(&realm_frame, original)?;
-    let realm = authenticate_realm(program_id, &realm_frame, original, market.state)?;
+    let market = authenticate_market_from_cache(&realm_frame, original)?;
+    let realm = authenticate_realm_from_cache(program_id, &realm_frame, original, market.state)?;
     let source = account(accounts, SOURCE)?;
     let escrow = account(accounts, ESCROW)?;
     let mint = account(accounts, MINT)?;
@@ -1214,9 +1214,9 @@ fn authenticate_activation_release(
         account(accounts, REALM_STAGING)?.clone(),
         account(accounts, ACT_REPLAY)?.clone(),
     ];
-    let market = authenticate_market(&release_frame, request)?;
-    authenticate_calling_release(program_id, &release_frame, request, None, market.cache_bump)?;
-    let realm = authenticate_realm(program_id, &release_frame, request, market.state)?;
+    let market = authenticate_market_from_cache(&release_frame, request)?;
+    authenticate_calling_release_from_cache(program_id, &release_frame, request, None)?;
+    let realm = authenticate_realm_from_cache(program_id, &release_frame, request, market.state)?;
     authenticate_replay_identity(program_id, account(accounts, ACT_REPLAY)?, request, None)?;
     validate_token_program_and_mint(
         account(accounts, ACT_MINT)?,
@@ -1370,8 +1370,8 @@ fn activate_one_effect(
         account(accounts, REALM_STAGING)?.clone(),
         account(accounts, ACT_REPLAY)?.clone(),
     ];
-    let market = authenticate_market(&realm_frame, original)?;
-    let realm = authenticate_realm(program_id, &realm_frame, original, market.state)?;
+    let market = authenticate_market_from_cache(&realm_frame, original)?;
+    let realm = authenticate_realm_from_cache(program_id, &realm_frame, original, market.state)?;
     let before = authenticate_transfer_accounts(transfer_accounts, request, realm.profile, true)?;
     if before.source != reservation.amount
         || before.destination != reservation.destination_before

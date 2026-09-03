@@ -1076,8 +1076,10 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     let (trading_receipt, claims_program, custody_program) =
         authenticate_accelerator_activation_v4(frame, envelope)?;
     let trading_semantic_release = trading_receipt.semantic_release_id().to_bytes();
+    hot_cu_checkpoint!("acc-activation");
     let market = authenticate_market_boxed_v3(&frame, envelope)
         .map_err(|_| TradingSbfError::AcceleratorRelease)?;
+    hot_cu_checkpoint!("acc-market");
     let root_data = frame
         .root
         .try_borrow_data()
@@ -1119,6 +1121,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     )?;
     let entry = authenticate_manifest_entry_boxed_v3(&manifest_data, &family_context)?;
     drop(manifest_data);
+    hot_cu_checkpoint!("acc-manifest");
     let program_set_data = borrow_finalized_record_at(
         frame,
         frame.program_set_raw,
@@ -1152,6 +1155,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     {
         return Err(TradingSbfError::AcceleratorArtifact.into());
     }
+    hot_cu_checkpoint!("acc-programset");
     // Decision 0005's seal, on the accelerator path for the same reason the
     // canonical path has it: SIX RECORDS WERE BEING SEARCHED FOR RATHER THAN
     // READ. `borrow_finalized_record` spends two `find_program_address` calls
@@ -1186,6 +1190,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         &seal_data,
     )
     .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
+    hot_cu_checkpoint!("acc-seal");
     let descriptor_data = borrow_sealed_record(
         frame,
         seal,
@@ -1201,6 +1206,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     drop(descriptor_data);
     authenticate_descriptor_root_selection(&descriptor, &family_context, &entry)?;
     drop(entry);
+    hot_cu_checkpoint!("acc-descriptor");
 
     let config_data = borrow_finalized_record_at(
         frame,
@@ -1510,6 +1516,7 @@ fn authenticate_accelerator_artifacts_v4(
         &lifecycle_data,
     )
     .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
+    hot_cu_checkpoint!("acc-artifact-records");
     let mut span_widths = if account_profile.uses_dynamic_fixed_spans() {
         vec![0_u32; usize::from(account_profile.dynamic_fixed_span_count())]
     } else {
@@ -1600,6 +1607,7 @@ fn authenticate_accelerator_context_v4<'accounts, 'info>(
             .content_digest
             .to_bytes(),
     )?;
+    hot_cu_checkpoint!("acc-observations");
     let context = Box::new(AdmittedInvocationContextV3 {
         release_set: family_context.release_set(),
         market: ContentId::new(envelope.market())
