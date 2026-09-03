@@ -894,3 +894,303 @@ running the action at a time when it was *guaranteed* to refuse and then reading
    reason the supersession was found tonight instead of at 06:12 UTC.
 
 Devnet evidence. Not mainnet evidence.
+
+---
+
+## Addendum: THE PROVIDER WALL IS BROKEN — a second Direct market, founded on a release re-minted from the live chain
+
+Written 2026-09-03 by the COHORT-14B lane. **Devnet evidence. Not mainnet
+evidence.** No program was redeployed: every deployed byte is still
+`8e96ec3f8cd4438040d9287d2489ea84587ebd5c`. Two host-tool commits carry the
+whole fix and change no deployed byte — `12a9b13a5` and `3ba991025` — and a
+third, `674a7873e`, closes a credential-at-rest defect this work exposed.
+
+### THE `0x8014` CODE HAS TWO CONJUNCTS AND THE FIRST ADDENDUM NAMED ONE
+
+The addendum above reads the Receiver's deployment slot off this market's own
+release record and off the chain, and stops there. Reading the *other* branch
+that returns the same code:
+
+```
+crates/dclutch-pyth-svm/src/sponsored_push.rs:500       receiver_config_digest
+programs/dclutch-resolution-proof-sbf/src/sponsored_push_v1.rs:526
+    if hash(&config_data).to_bytes() != release.receiver_config_digest() {
+        return Err(ResolutionError::ReleaseSuperseded.into());
+    }
+```
+
+| | pinned by market A | live on devnet |
+| --- | ---: | ---: |
+| `receiver_deployment_slot` @560 | 487,855,452 | **491,006,444** |
+| `receiver_config_digest` @528 | `bbbc324e70a436d70522595f477a3104488f2b02417e207483880337cd383592` | **`f8aca67e2ab8d31e9be38bb0434d6e59e06871c80b744e9e0668a16f254c83a4`** |
+| `push_oracle_deployment_slot` @568 | 293,898,740 | 293,898,740 — matches |
+
+The Receiver `Config` `DaWUKXCyXsnzcvLUyeJRWou8KTn7XtadgTsdhJ6RHS7b` is still a
+canonical 370-byte V2 body — discriminator `9b0caae01efacc82`, one Pythnet data
+source, `fee 0`, `minimum_signatures 3`, canonical zero tail — so
+`ProviderRelease` passes and the digest branch is reached. Its digest matches
+neither the pinned constant nor either fixture in the tree
+(`fixtures/pyth/upgraded-2026-08-26/devnet/receiver-config.account` hashes
+`23a7a19c…`). **A re-mint that fixed only the slot would have founded a market
+that refuses with the identical code**, which is the shape `AGENTS.md` names —
+one undifferentiated code over many conjuncts — met from the reader's side.
+
+### AND THE RECEIVER'S ELF DID NOT MOVE
+
+`sha256` of the live ProgramData tail, offset 45 to the end:
+
+| | live | pinned `abi_id` |
+| --- | --- | --- |
+| Receiver `96QrNCjmh32H9quY9DX4NEH81nECVsbkATBDZeoVbvLV` | `0d6bf9142c2eb1fdb8ead48054491369bed3a8d6846c5887e362844155599ab2` | **identical** |
+| push oracle `8xAeURaAWExxyHUXJSgjsg5r96Ydr3G4cek2if7imQmz` | `845d84603cdef688e927521eb05be70996a0432c21f40f4cdeb3b7a59f44c4ec` | **identical** |
+
+Pyth redeployed the **same bytes at a new slot**. That is exactly what
+`authenticate_provider_program_pin`'s own docstring promises — Loader-v3's
+monotonic slot is a *proxy*, and it fails closed on a supersession that changed
+no code. The push oracle's digest matching is the positive control that makes
+this a reading rather than an inference: the same convention, applied to a
+program that did not move, reproduces its pin.
+
+### THE FIX: THE RELEASE IS OBSERVED, AND THE CONSTANT IS THE DECLARATION
+
+`12a9b13a5` adds
+`tools/local-validator/bootstrap/successor/src/sponsored_release_observation.rs`.
+Five accounts in one finalized `getMultipleAccounts`; nine facts are chain-owned
+and re-minted, everything else comes from the constant because it says *which*
+accounts the release is about. A moved ProgramData address refuses — Loader-v3
+derives it from the program id, so a moved address is a different program.
+
+**It was not fixed by retyping the constant.** Every consumer of
+`devnet_sponsored_sol_usd_release_v1` is host-side, so editing it changes no
+deployed byte — but the deployed Resolution ELF would then hash differently from
+a build at its own revision, which is precisely the accelerator drift §5 records
+as debt. The constant is left alone and the chain is asked.
+
+Three consumers now ask the chain instead of the constant: the market compiler,
+`authenticate_release` on the capture path, and the terminal input producer. All
+three used to compare the Market's record to the constant, which agreed with the
+constant and with nothing else — both stayed green while the chain refused.
+
+**Supersession is not what this lane's brief believed.** There is no in-place
+supersession of a provider release and the chain does not admit forward slot
+movement: the pin is exact equality in both directions, and
+`ArtifactReleaseV1::slot_pin_refusal`
+(`crates/dclutch-registry-contract/src/artifact.rs:272`) turns a strictly later
+slot into `ReleaseSupersededByUpgrade`. The one "forward movement admits" rule in
+this tree is scoped to the Registry role under an infrastructure-succession plan.
+A sponsored release supersedes by being a DIFFERENT RECORD: the 592 bytes are the
+body, `sha256` of the body is its identity, and that identity flows through
+`ProviderReleaseV1`, `SourceSpecV1` and `SourceMaterialV2` into the Market PDA's
+own seeds. **Nor does the ladder publish it** — the publication stage covers
+`plan.records`, the nine infrastructure bodies, and the sponsored release record
+is published by `publish_market_records` during the FOUNDING. No ladder rerun and
+no `prepare` rerun were owed.
+
+### MARKET B, FOUNDED AND OPEN
+
+Staged with cuts re-centred on a spot measured three ways: Pyth `$101.016809`
+(conf ±`$0.008795`, EMA `$100.402605`, `publish_time` 50 s old), Coinbase
+`$100.96`, Kraken `$100.96`. So `--cuts 9900,10300 --cut-denominator 100
+--band-anchor 10102`.
+
+```
+the sponsored release is RE-MINTED against finalized slot 492293300; 2 chain-owned fact(s) moved:
+  receiver_deployment_slot: declared 487855452 -> observed 491006444
+  receiver_config_digest: declared bbbc324e… -> observed f8aca67e…
+```
+
+| | |
+| --- | --- |
+| Open Market | `DUVcCGfjXzp1fBktTCjsAomgrn9S6sxSDziQHoyRiu8A` — 368 B `DCLTCOR3`, Core-owned, phase `0x01` Open, readiness `0x02` Consumed |
+| `selected_release_set` @208, read off chain | `398e51c008cc5f592f3252f0c1f2246e019ace000b04b74766a41cb45a8a3e09` — the SEALED plan's, a third statement of one identity for the second time |
+| Found31 / abort Market | `Gd6hxzdA2BsWYscPzVrmGMKKnQuRJnEcudxMtG89694L` / `4sbU3jm6CKj8Mr3KWsPenFcadwk7mUGZDLd4KjePpDo6` |
+| realm record | `CbwTTfijYeu98JzGARcvWqgMm6hPNgr7pp1TZDUP8xfy` |
+| collateral mint / wallet | `3hgS9efP2BCoZUo8SY3UhHbS6RsKbtjzLeUywWukykyW` / `H3Ck3Nu35QzQxrUDtjQeif4su3xn5BXjxczUNXPZbtzH` |
+| **provider release record** | **`BruLs2Hd3nWfJvFaznBoDDugZwRtR1gTDbHjDmPVVwv`**, 592 B, Registry-owned, `sha256 394795f32d4ec31bcbc76b38ebddd97334f70b34796d92c43ef16e3ca982f203` |
+| its slot / config digest, read back | **491,006,444 / `f8aca67e…` — equal to the live chain** |
+| `market_sha256` / `plan_sha256` | `2b0f5ae30099ace3dd96773aa3ee74dda81a2db260a727e9ca7539142619348a` / `ef378b70…` (the sealed plan, same as market A) |
+| frozen tables | Found37 `2tzwxHBe…`, DCLTCFQ1 `5tvKBgfC…`, DCLTCF1A `41NK4qBR…`, DCLTPCB2 `3ojoxdL4…`, DCLTGMF3 `Hjav5EkU…` |
+
+**110 transactions against market A's 192, and the difference is entirely record
+reuse.** The non-record transaction count is **50 in both** — the founding ladder
+ran identically, hostile probes included: both refused exactly 7 times, at
+`Custom(4108)`, `Custom(12289)`, `Custom(12294)` and `Custom(16387)` twice.
+Market A published 41 record bodies because it was first; market B published 18,
+because **23 of A's records are content-addressed to the same bytes** and were
+already finalized. 41 − 23 = 18, exactly. 5,210,638 CU and 8,285,000 lamports of
+fee against A's 6,498,519 and 14,435,000.
+
+Activation: verdict `ACTIVATED`, root `G7K2vSxq4acoTyVN3xitH2aMgccn69hCqUA15dedLryj`
+registered in advance and read back `AccountNotFound` → **256 B `DCLTCRT1`**,
+Trading-owned, 2,431,872 lamports. Deadline slot 492,509,337.
+
+Certificate settle seat `6prkttkSfQG59MVUDKJ1VaAbdZiF2umYcCv2y5z1KQ37`, **2,786,520
+lamports** = `rent.minimum_balance(312)`, signature
+`3jmqg4758vVHvsh34TVF5xgES7iN1DHbnSDeBNRioEaGWBzySbmYHfbmXCTv91jN6wvZwQNq5i9Ce8kURysxU72B`,
+slot 492,304,619, 450 CU, 75,000 fee; payer −2,861,520 exactly. The prepay ran
+through `ab0322d50` and `3e5e0b0be` with no refusal — the second market is the
+first time those two fixes were exercised without a wall in front of them.
+
+### THE FOUNDING SOURCE FUNDER IS A PER-MARKET COORDINATE
+
+`3ba991025`. `KeyOriginV1::Persisted` returns the operator's file key verbatim at
+index 0, which is right for a role the operator FUNDS out of band and wrong for a
+role the campaign CREATES AN ACCOUNT AT. `founding-source-funder` and
+`founding-projection-witness` now derive from the secret AND the Open Market's own
+address, so one key file founds any number of markets and a resume of the same
+market lands on the same addresses.
+
+**Market B was founded with market A's own funder key files** — the exact
+collision the first addendum records — and the instruction that refused
+`Create Account: account G2dfBofa… already in use` succeeded:
+
+```
+campaign transaction: slot=492300176 fee=80000 compute_units=3979
+    fund the founding principal supplier and its rent-capacity witness
+```
+
+An unbound per-market draw is a hard stop rather than a fallback, because both
+obvious fallbacks are worse than the bug: falling back to the file's key IS the
+collision, and falling back to a fresh key SUCCEEDS — the campaign funds the
+funder itself — so the founding would complete at an address whose private key
+dies with the process and the market's principal supplier would be unrecoverable.
+
+**The test for it was vacuous once, and that is the finding.** Written against
+`PER_MARKET_ROLES`, emptying the constant makes every role "a campaign identity",
+every equality holds, and the pre-fix behaviour passes. It now asserts against an
+independent statement of which addresses cohort-14's founding was OBSERVED to
+create accounts at; with the constant emptied it fails `the founding creates an
+account at founding-projection-witness and two markets share its address`.
+
+### THE GENERAL MARKET IS FOUNDED AND ACTIVATED, and it cost a quarter of the stranded attempt
+
+Recompiled rather than reused: the stranded attempt's `market.json` pinned the
+stale provider release, so it would have founded a second uncapturable market.
+`231,095` bytes again, `accelerator-observation.txt` reporting `deployment_slot
+491959038` -- the runbook's verifier -- with `elf_digest 61b2d73d…` and
+`artifact_release_id dcce810097111f696e4888ef89385fc0e1e1c24d89818ca040d950d1daec5b94`,
+byte-identical to the `content_sha256` of the record the ladder finalized in §5.
+Two independent authors, one digest, for the second time.
+
+| | |
+| --- | --- |
+| General Open Market | **`8ExdC1RwbyuJweEqT1F6Gk9rgN87uuVaLwtaY2wmr5x`** -- 368 B `DCLTCOR3`, Core-owned, phase `0x01` Open, readiness `0x02` Consumed |
+| `selected_release_set` @208 | `398e51c0…` -- the sealed plan's |
+| Found31 / abort | `7o71Rsih9Vmk7z7f5WB43wLPWPuN3foJjkRhz584cCdx` / `H2YeZwfScZ8wLhri3CCGVcwKX1Y9oQE5pswKX9es22Kb` |
+| realm record | `3hfUWGP8B76eNe2dffLdEMMmYtvGmgMnjQzzHvZNN4s7` |
+| collateral mint / wallet | `Ha6ytM6o4zaHKKX8FnLjmj2GQ2L24uF57kXAx66Mbz1u` / `3AcLfkZh413ixoBbJyqWuC5ZcExJA1djz8VPwodPjvwb` |
+| activation | verdict **`ACTIVATED`**, schema `dclutch-devnet-general-capability-activation-report-v1`, entry index 3, root `JDsNG7Tdj55pq81AVbcgymuXY763tDy7mHWsPyePJy9j` `AccountNotFound` → **360 B `DCLTCRT1`**, Trading-owned, 3,090,504 lamports |
+| deadline slot | 492,513,869 |
+
+**Cost 0.198318983 SOL against the stranded attempt's 0.812936971**, and the
+ratio is the record-reuse arithmetic stated above rather than a cheaper founding:
+this run paid for no record body the stranded attempt had already finalized.
+
+**It was founded with the SAME `founding-source-funder.json` and
+`founding-projection-witness.json` files the Direct foundings used.** That is the
+whole proof of `3ba991025`: three markets, one key file, three funders.
+
+### OPENBATCH N=2 IS NOT REACHABLE FROM THIS TREE, and the reason is not the market
+
+The runbook's row 14 says "OpenBatch N=2 against the activated General root,
+through the successor". The successor has no such caller, and this is a
+producer-missing shape rather than a configuration problem:
+
+* The only General hot driver is
+  `local-private-validator-general-hot-campaign-v1`. Its flags are `--rpc-url
+  --accelerator --caller --payer-keypair --account-dir --journal-dir --evidence
+  --outcome-count`. **There is no `--market`.** Run against this devnet endpoint
+  with `--outcome-count 2` it does not refuse -- it plans 11 General steps and
+  writes a genesis ACCOUNT DIRECTORY, then says *"Start a validator with
+  --account-dir pointed at the account directory"*. It is a local-validator
+  harness that cannot address a founded Market at all.
+* Its own module docstring says so: the accelerator half it drives is the
+  read-only evaluation half, and *"the commit half -- Trading's
+  `process_hot_execution_v3` writing the capability root and returning a
+  `DCLTHAK3` ack -- additionally requires a founded Market whose capability
+  manifest selects General, and no driver in this tree founds one."*
+* `ASPIRATION_LEDGER.md` M-40 records `build_general_hot_instruction_v3` as
+  having zero callers; its only exercise is
+  `programs/dclutch-general-accelerator-sbf/program-test/tests/hot_instruction_v3.rs`.
+
+**One half of that sentence is now false**: a driver in this tree founds one, and
+`8ExdC1Rwb…` is Open and activated with a General capability root. What is owed
+is a devnet General hot caller that takes a `--market` and routes the `DCLTHOT3`
+envelope through a frozen table. That is a build, not a run, and this lane did
+not do it -- the budget went to the resolution chain, which had never been walked
+at all.
+
+### THE ADMISSIONS, AND THE FILL THIS LANE DID NOT RUN
+
+Two stranger admissions landed on market B, both authenticating the sealed plan's
+`plan_sha256 ef378b70…`:
+
+| | position | signature | slot | CU | fee |
+| --- | --- | --- | ---: | ---: | ---: |
+| participant-1 | `EXR2DrEE4BFtGuCMzWs8Ye446VWD2FRwubkaGxPPXQeW` | `2y4w3esS39SDi41DnUTyYKDtCBErT81uAnJes1fbrLoJW2P5jq7cuUJtjBXD8DzBrN6xXUfo3nkqkevEfjuyG1F1` | 492,315,744 | 206,486 | 80,000 |
+| participant-2 | `9Sv8LTYhUavEsx6A6UHxfTDEDhHKuxZypPAMkmTv2dG6` | see `$JOB/sim-b/admissions/participant-2.json` | | | |
+
+**The collateral delegation and the nine-transaction fill were NOT run**, and the
+reason is a judgement rather than a wall: the trade chain needs `trade-facts.py`,
+`author-tickets.sh` and a second simulator work dir re-pointed at market B, the
+window was ninety minutes away, and a half-landed session would have grown the
+census aperture across the capture boundary -- reproducing exactly the L7 defect
+§13 records. The fill's own number, 1,284,573 CU, is cohort-14's and is not
+re-measured here. It is owed.
+
+### THE CENSUS APERTURE IS FIXED BEFORE THE BOUNDARY, WHICH IS §13's LESSON APPLIED
+
+`census-b/cohort14b-pre-capture.json` is taken with the complete aperture already
+in place -- mint, Hoard `BrLJBohX4W6sLe3N9z21KqRuiDKdyG7XWnRuv4sVNQFr`, aggregate
+`7oUuHAVJsZtfwRwNLL8TLWBzQrve9tL4iay5k6iWNVbP`, the founder's collateral wallet,
+**all three** Positions, and both participant owners as watches:
+
+```
+HOLDS L1: tracked 1000000000 atoms across 2 accounts == Mint supply 1000000000
+HOLDS L3: 3 Positions sum to the aggregate supply vector [500000000 x4]
+HOLDS L4: Hoard 500000000 >= worst outcome 500000000 x unit 1
+INAPPLICABLE L2 / L5 / L6 / L7 / L8: the first census has no predecessor
+```
+
+Four INAPPLICABLE, every one of them because this is a FIRST boundary, each
+saying so in its own words. The second boundary is the capture, over the same
+bindings, with the capture's own fee declared -- which is where L7 becomes
+applicable for the first time in this cohort.
+
+### THE STAGING GENERATOR WROTE THE ENDPOINT CREDENTIAL TO DISK
+
+`674a7873e`. `market-open-staging.json` learned on 2026-08-30 to redact its
+origin. The executable the same function writes two blocks earlier baked
+`--rpc-url` as a literal, so `market-b/open-market.execute.sh` held the key at
+rest in a mode-700 job directory. Cohort-14 hand-edited its own copy afterwards,
+which is exactly how its `HOLD_STATE` came to state that the file never held it —
+true of the file, false of the generator, and nothing distinguished the two. A
+credential-bearing endpoint is now not written at all, and the generator greps
+its own output and deletes the file if it finds one. Both controls run.
+
+### ORPHANED RENT: cohort-14's stranded General founding
+
+The partial General founding is abandoned in place. Read back off chain, with the
+exact lamports:
+
+| account | bytes | lamports | state |
+| --- | ---: | ---: | --- |
+| Found31 Market `JEG8H7qSJGxiCSKpXr2pg6oSPrTofoiHjLjX7RCiDdWK` | 368 | 3,141,168 | `DCLTCOR3`, Core-owned |
+| projection witness `AkSjTgMKq94r6ssds2Fgj4rAsExgACxAa3uU6QPmqHzJ` | 0 | 3,141,168 | System |
+| collateral wallet `FuRBL5tx329YDuGxEKb3p1pFKnkfsUUaup6AmKKMYQZs` | 165 | 1,855,569 | Token-2022 |
+| source funder `G2dfBofaGFRtTSsWiwNeibD7niwoMS9XsLUAFC1c93uJ` | 165 | 1,855,569 | Token-2022 — created by the DIRECT founding, which IS the collision |
+| Realm record `Bji6ADSmRReUu8B9Fw6h7PdEZgSJB7AfXpcuvzD6B1Rg` | 112 | 1,519,920 | `DCLTRLM1`, Registry-owned |
+| collateral Mint `2si3RLx8qxJPfsw2kStZGQoxuAkKuw2nJwFASf5M96kS` | 82 | 1,329,930 | Token-2022 |
+| General Open Market `DL675bt1dmQQ87UeGBCnmV1zQTWsvd7jbwLmVqT2tsW9` | -- | 0 | **AccountNotFound -- never created** |
+| | | **12,843,324** | **= 0.012843324 SOL** |
+
+**Most of that founding's 0.812936971 SOL is NOT orphaned, and "the founding
+bought a finding rather than a market" is the easy sentence rather than the exact
+one.** Only 0.012843324 SOL sits in the six per-market accounts above. The
+remaining 0.800093647 went to transaction fees and to RECORD rent -- and records
+are content-addressed, so a re-founding of the same market graph pays for no
+record body whose bytes are unchanged. Market B demonstrated exactly that
+arithmetic on the Direct side: 23 of market A's 41 record bodies were already
+finalized and cost it nothing.
+
+Devnet evidence. Not mainnet evidence.

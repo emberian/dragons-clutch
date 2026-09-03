@@ -75,7 +75,7 @@ use dclutch_operator::{
         dealer_scenario_checkpoint_address_v1, dealer_scenario_evaluation_receipt_address_v1,
         dealer_scenario_membership_manifest_address_v1,
         dealer_scenario_reservation_batch_address_v1, derive_dealer_scenario_evaluation_receipt_v1,
-        encode_dealer_scenario_custody_effect_artifacts_v1,
+        encode_dealer_scenario_custody_effect_artifacts_v1, mine_dealer_scenario_page_bumps_v1,
         project_dealer_scenario_canonical_membership_pages_v1,
     },
     dealer_scenario_hot_v4::{
@@ -1584,6 +1584,10 @@ fn page_instruction(
         scenario.membership_manifest,
         page_index,
         page,
+        // The producer derived both of these addresses to name the accounts at
+        // all; relaying the bumps is what stops the page route searching for
+        // them again, six times per scenario.
+        mine_dealer_scenario_page_bumps_v1(TRADING, MANIFEST_PRODUCER, scenario.request_digest),
         Hash::default(),
         &[],
     )

@@ -13,7 +13,7 @@ use dclutch_claims_svm::frame_spec_v1::{ClaimsFrameRoleV1, SignedDeltaFrameSpecV
 use dclutch_dealer_codec::scenario_checkpoint_v1::{
     DEALER_SCENARIO_CHECKPOINT_PDA_DOMAIN_V1, DEALER_SCENARIO_CLAIMS_PRESTATE_DOMAIN_V1,
     DEALER_SCENARIO_CUSTODY_PRESTATE_DOMAIN_V1, DEALER_SCENARIO_PREPARATION_PAGES_V1,
-    DealerScenarioCheckpointV1,
+    DealerScenarioCheckpointV1, DealerScenarioPageBumpsV1,
 };
 use dclutch_dealer_codec::scenario_custody_reservation_v1::DEALER_SCENARIO_RESERVATION_BATCH_PDA_DOMAIN_V1;
 use dclutch_dealer_codec::scenario_custody_reservation_v1::{
@@ -717,15 +717,19 @@ pub fn project_dealer_scenario_canonical_membership_pages_v1(
     {
         return Err(DealerScenarioCheckpointOperatorErrorV1::Geometry);
     }
-    let mut keys = state
+    let mut observations = state
         .fixed_accounts
         .iter()
         .chain(state.strategy_accounts.iter())
         .chain(state.runtime_suffix_accounts.iter())
-        .map(|meta| meta.account.key)
+        .map(|meta| (meta.account.key, meta.account.data.len()))
         .collect::<Vec<_>>();
-    keys.sort_unstable_by_key(Pubkey::to_bytes);
-    keys.dedup();
+    observations.sort_unstable_by_key(|(key, _)| key.to_bytes());
+    observations.dedup_by_key(|(key, _)| *key);
+    let keys = observations
+        .iter()
+        .map(|(key, _)| *key)
+        .collect::<Vec<Pubkey>>();
     let maximum = DEALER_SCENARIO_MEMBERSHIP_PAGES_V1
         .checked_mul(usize::from(
             dclutch_dealer_codec::scenario_membership_manifest_v1::DEALER_SCENARIO_MEMBERSHIP_PAGE_MAX_ACCOUNTS_V1,
@@ -734,13 +738,20 @@ pub fn project_dealer_scenario_canonical_membership_pages_v1(
     if keys.len() < DEALER_SCENARIO_MEMBERSHIP_PAGES_V1 || keys.len() > maximum {
         return Err(DealerScenarioCheckpointOperatorErrorV1::Geometry);
     }
-    let base = keys.len() / DEALER_SCENARIO_MEMBERSHIP_PAGES_V1;
-    let extra = keys.len() % DEALER_SCENARIO_MEMBERSHIP_PAGES_V1;
+    let weights = observations
+        .iter()
+        .map(|(_, data_len)| {
+            u64::try_from(*data_len)
+                .ok()
+                .and_then(|len| len.checked_add(DEALER_SCENARIO_MEMBERSHIP_ACCOUNT_HEADER_BYTES_V1))
+                .ok_or(DealerScenarioCheckpointOperatorErrorV1::Arithmetic)
+        })
+        .collect::<Result<Vec<u64>, _>>()?;
+    let counts = balanced_membership_page_counts_v1(&weights)?;
     let mut cursor = 0_usize;
     let mut pages: [Vec<Pubkey>; DEALER_SCENARIO_MEMBERSHIP_PAGES_V1] =
         core::array::from_fn(|_| Vec::new());
-    for (page_index, page) in pages.iter_mut().enumerate() {
-        let count = base + usize::from(page_index < extra);
+    for (page, count) in pages.iter_mut().zip(counts) {
         let end = cursor
             .checked_add(count)
             .ok_or(DealerScenarioCheckpointOperatorErrorV1::Arithmetic)?;
@@ -785,6 +796,135 @@ pub fn project_dealer_scenario_canonical_membership_pages_v1(
         },
         pages,
     })
+}
+
+/// Bytes the on-chain page receipt hashes for one observation beside its data:
+/// key, owner, lamports, data length and the executable bit.
+///
+/// `page_receipt_digest` in `dclutch-trading-sbf` takes
+/// `hashv(&[key, owner, lamports, data_len, executable, data])` per account, so
+/// an account's cost to a page is its data plus exactly these 81 bytes.
+const DEALER_SCENARIO_MEMBERSHIP_ACCOUNT_HEADER_BYTES_V1: u64 = 32 + 32 + 8 + 8 + 1;
+
+/// Split the key-ordered membership into six pages of balanced HASHED BYTES.
+///
+/// # Why this is not an equal-count split
+///
+/// It was one until 2026-09-03, and the equal-count split is what made this
+/// test's outcome a coin toss. The page route's compute is dominated by hashing
+/// every observation's complete data, and the accounts differ in width by four
+/// orders of magnitude -- a loader ProgramData body against a 368-byte Market
+/// header. The partition must stay contiguous in key order, because the route
+/// requires `strictly_increasing_membership` across pages; the keys are drawn
+/// fresh by every run of the campaign; so which page a megabyte-wide account
+/// lands on is decided by a keypair.
+///
+/// Measured on the Dealer partial equity Remove, three runs on ONE ELF set with
+/// the page bump hints already landed: the six-page TOTAL was 2,883,290 /
+/// 2,883,296 / 2,883,290 compute units -- the same work every time -- while page
+/// 1 was 1,305,100 in two runs and 616,240 in the third, and page 2 took the
+/// difference. At 1,305,100 of a 1,399,850 ceiling one further account on the
+/// wrong side of a boundary is a failed page and a campaign that never reaches
+/// the action under test.
+///
+/// So the split minimizes the widest page instead of equalizing counts, which
+/// is the same total work distributed by the cost the reader actually pays. The
+/// floor is the widest single account: no partition can put less than one
+/// account on a page.
+///
+/// # What is unchanged
+///
+/// Nothing on chain. `page_account_counts` has always been per-page data in the
+/// producer-owned manifest, the route reads the count for the page it is given,
+/// and the only ordering conjunct is that membership strictly increases. An
+/// equal-count manifest is still a manifest this route accepts; it is simply no
+/// longer the one this producer emits.
+fn balanced_membership_page_counts_v1(
+    weights: &[u64],
+) -> Result<[usize; DEALER_SCENARIO_MEMBERSHIP_PAGES_V1], DealerScenarioCheckpointOperatorErrorV1> {
+    let total = weights
+        .iter()
+        .try_fold(0_u64, |sum, weight| sum.checked_add(*weight))
+        .ok_or(DealerScenarioCheckpointOperatorErrorV1::Arithmetic)?;
+    let mut low = weights.iter().copied().max().unwrap_or(0);
+    let mut high = total.max(low);
+    while low < high {
+        let middle = low
+            .checked_add(high.saturating_sub(low) / 2)
+            .ok_or(DealerScenarioCheckpointOperatorErrorV1::Arithmetic)?;
+        if greedy_membership_pages_v1(weights, middle).is_some() {
+            high = middle;
+        } else {
+            low = middle
+                .checked_add(1)
+                .ok_or(DealerScenarioCheckpointOperatorErrorV1::Arithmetic)?;
+        }
+    }
+    let mut counts = greedy_membership_pages_v1(weights, low)
+        .ok_or(DealerScenarioCheckpointOperatorErrorV1::Geometry)?;
+    // The greedy walk may close fewer than six pages. Splitting one page in two
+    // never raises the widest page, so the deficit is made up by halving the
+    // page with the most accounts -- which terminates because the caller has
+    // already required at least six accounts.
+    while counts.len() < DEALER_SCENARIO_MEMBERSHIP_PAGES_V1 {
+        let (index, count) = counts
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, count)| **count)
+            .map(|(index, count)| (index, *count))
+            .ok_or(DealerScenarioCheckpointOperatorErrorV1::Geometry)?;
+        if count < 2 {
+            return Err(DealerScenarioCheckpointOperatorErrorV1::Geometry);
+        }
+        counts[index] = count / 2;
+        counts.insert(
+            index
+                .checked_add(1)
+                .ok_or(DealerScenarioCheckpointOperatorErrorV1::Arithmetic)?,
+            count - count / 2,
+        );
+    }
+    <[usize; DEALER_SCENARIO_MEMBERSHIP_PAGES_V1]>::try_from(counts.as_slice())
+        .map_err(|_| DealerScenarioCheckpointOperatorErrorV1::Geometry)
+}
+
+/// Walk the weights left to right, closing a page when the next account would
+/// exceed `capacity` or the page is already at the manifest's account ceiling.
+/// `None` means the capacity cannot hold this sequence in six pages.
+fn greedy_membership_pages_v1(weights: &[u64], capacity: u64) -> Option<Vec<usize>> {
+    let ceiling = usize::from(
+        dclutch_dealer_codec::scenario_membership_manifest_v1::DEALER_SCENARIO_MEMBERSHIP_PAGE_MAX_ACCOUNTS_V1,
+    );
+    let mut counts: Vec<usize> = Vec::new();
+    let mut count = 0_usize;
+    let mut load = 0_u64;
+    for weight in weights {
+        if *weight > capacity {
+            return None;
+        }
+        let fits = count > 0
+            && count < ceiling
+            && load
+                .checked_add(*weight)
+                .is_some_and(|next| next <= capacity);
+        if fits {
+            count = count.checked_add(1)?;
+            load = load.checked_add(*weight)?;
+        } else {
+            if count > 0 {
+                counts.push(count);
+            }
+            count = 1;
+            load = *weight;
+        }
+    }
+    if count > 0 {
+        counts.push(count);
+    }
+    if counts.is_empty() || counts.len() > DEALER_SCENARIO_MEMBERSHIP_PAGES_V1 {
+        return None;
+    }
+    Some(counts)
 }
 
 /// Producer-owned manifest PDA for one checkpoint and request.
@@ -900,6 +1040,40 @@ pub fn dealer_scenario_checkpoint_address_v1(
     .0
 }
 
+/// Mine the two PDA bumps every page transaction's reader would otherwise
+/// search for.
+///
+/// The producer derives both of these addresses before it can name the
+/// accounts at all -- `dealer_scenario_checkpoint_address_v1` and
+/// `dealer_scenario_membership_manifest_address_v1` are the same two searches
+/// the page route repeats on chain, six times per scenario, at a depth that is
+/// a function of fixture data and therefore identical on every ELF. Mining is
+/// free here and 1,500 compute units per rejected candidate there.
+#[must_use]
+pub fn mine_dealer_scenario_page_bumps_v1(
+    trading_program: Pubkey,
+    manifest_producer: Pubkey,
+    request_digest: [u8; 32],
+) -> DealerScenarioPageBumpsV1 {
+    let (checkpoint, checkpoint_bump) = Pubkey::find_program_address(
+        &[DEALER_SCENARIO_CHECKPOINT_PDA_DOMAIN_V1, &request_digest],
+        &trading_program,
+    );
+    let manifest_bump = Pubkey::find_program_address(
+        &[
+            DEALER_SCENARIO_MEMBERSHIP_MANIFEST_PDA_DOMAIN_V1,
+            checkpoint.as_ref(),
+            &request_digest,
+        ],
+        &manifest_producer,
+    )
+    .1;
+    DealerScenarioPageBumpsV1 {
+        checkpoint: checkpoint_bump,
+        membership_manifest: manifest_bump,
+    }
+}
+
 /// Build and compile one checkpoint-create transaction.
 #[allow(clippy::too_many_arguments)]
 pub fn build_dealer_scenario_checkpoint_create_v1(
@@ -956,6 +1130,7 @@ pub fn build_dealer_scenario_checkpoint_page_v1(
     membership_manifest: Pubkey,
     page_index: u8,
     observations: &[Pubkey],
+    bumps: DealerScenarioPageBumpsV1,
     recent_blockhash: Hash,
     lookup_tables: &[AddressLookupTableAccount],
 ) -> Result<DealerScenarioCheckpointPacketV1, DealerScenarioCheckpointOperatorErrorV1> {
@@ -982,6 +1157,7 @@ pub fn build_dealer_scenario_checkpoint_page_v1(
     );
     let mut data = DEALER_SCENARIO_CHECKPOINT_PAGE_MAGIC_V1.to_vec();
     data.push(page_index);
+    data.extend_from_slice(&bumps.to_bytes());
     compile_checkpoint_packet(
         DealerScenarioCheckpointRouteV1::Page(page_index),
         payer,
@@ -2233,6 +2409,11 @@ pub fn build_dealer_accepted_transcript_v4(
         input.recent_blockhash,
         input.lookup_tables,
     )?);
+    let page_bumps = mine_dealer_scenario_page_bumps_v1(
+        input.trading_program,
+        input.manifest_producer,
+        input.request_digest,
+    );
     for (page_index, page) in input.pages.iter().enumerate() {
         packets.push(build_dealer_scenario_checkpoint_page_v1(
             input.trading_program,
@@ -2243,6 +2424,7 @@ pub fn build_dealer_accepted_transcript_v4(
             u8::try_from(page_index)
                 .map_err(|_| DealerScenarioCheckpointOperatorErrorV1::Arithmetic)?,
             page,
+            page_bumps,
             input.recent_blockhash,
             input.lookup_tables,
         )?);
@@ -2581,6 +2763,59 @@ mod tests {
     }
 
     #[test]
+    fn the_membership_split_balances_bytes_and_never_starves_a_page() {
+        let widest = |weights: &[u64], counts: &[usize; DEALER_SCENARIO_MEMBERSHIP_PAGES_V1]| {
+            let mut cursor = 0_usize;
+            let mut widest = 0_u64;
+            for count in counts {
+                let end = cursor + count;
+                widest = widest.max(weights[cursor..end].iter().sum::<u64>());
+                cursor = end;
+            }
+            assert_eq!(cursor, weights.len());
+            widest
+        };
+        let equal_count = |weights: &[u64]| {
+            let base = weights.len() / DEALER_SCENARIO_MEMBERSHIP_PAGES_V1;
+            let extra = weights.len() % DEALER_SCENARIO_MEMBERSHIP_PAGES_V1;
+            let mut counts = [0_usize; DEALER_SCENARIO_MEMBERSHIP_PAGES_V1];
+            for (index, count) in counts.iter_mut().enumerate() {
+                *count = base + usize::from(index < extra);
+            }
+            counts
+        };
+
+        // The shape this exists for: a handful of loader-sized bodies among many
+        // small ones, which is exactly the Dealer scenario's membership.
+        let mut weights = vec![81_u64; 68];
+        weights[3] = 1_200_000;
+        weights[4] = 690_000;
+        weights[40] = 620_000;
+        let counts = balanced_membership_page_counts_v1(&weights).expect("split");
+        assert_eq!(counts.iter().sum::<usize>(), weights.len());
+        assert!(counts.iter().all(|count| *count >= 1 && *count <= 48));
+        // The floor is the widest single account; the equal-count split puts two
+        // of the three wide bodies on one page and pays for both.
+        assert_eq!(widest(&weights, &counts), 1_200_000);
+        assert!(widest(&weights, &equal_count(&weights)) > widest(&weights, &counts));
+
+        // Uniform weights degrade to the equal-count split this replaced.
+        let uniform = vec![100_u64; 24];
+        assert_eq!(
+            balanced_membership_page_counts_v1(&uniform).expect("uniform"),
+            [4, 4, 4, 4, 4, 4]
+        );
+
+        // Exactly six accounts is the narrowest admissible membership, and every
+        // page must still be nonempty.
+        let sparse = vec![1_u64, 1, 1, 1, 1, 900_000];
+        assert_eq!(
+            balanced_membership_page_counts_v1(&sparse).expect("sparse"),
+            [1, 1, 1, 1, 1, 1]
+        );
+    }
+
+    #[test]
     fn maximum_page_uses_a_table_and_stays_below_64_locks() {
         let observations = (20_u8..68).map(key).collect::<Vec<_>>();
         let table = AddressLookupTableAccount {
@@ -2595,13 +2830,17 @@ mod tests {
             key(5),
             0,
             &observations,
+            DealerScenarioPageBumpsV1::ABSENT,
             blockhash(),
             core::slice::from_ref(&table),
         )
         .expect("paged packet");
         assert_eq!(packet.lock_census.unique_account_lock_count, 53);
         assert_eq!(packet.loaded_addresses, 48);
-        assert_eq!(packet.wire_bytes, 409);
+        // 409 before the mined bump tail; the tail is two bytes and this is the
+        // widest page this route can build, so it is also the exact wire cost
+        // of the hint against the packet ceiling.
+        assert_eq!(packet.wire_bytes, 411);
         assert!(packet.wire_bytes <= DEALER_SCENARIO_PACKET_BYTES_V1);
 
         let mut too_many = observations;
@@ -2615,6 +2854,7 @@ mod tests {
                 key(5),
                 0,
                 &too_many,
+                DealerScenarioPageBumpsV1::ABSENT,
                 blockhash(),
                 core::slice::from_ref(&table),
             ),

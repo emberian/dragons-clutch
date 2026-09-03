@@ -56,6 +56,59 @@ pub const DEALER_SCENARIO_EVALUATION_RECEIPT_DOMAIN_V1: &[u8] =
 /// Domain for the ordered active Custody effect commitment.
 pub const DEALER_SCENARIO_EFFECTS_DOMAIN_V1: &[u8] = b"dclutch:dealer-scenario-effects:v1";
 
+/// Exact width of the page instruction's mined bump tail.
+pub const DEALER_SCENARIO_PAGE_BUMPS_BYTES_V1: usize = 2;
+
+/// The two PDA bumps a page transaction's producer mined for its reader.
+///
+/// The page route reproduces two addresses it is handed: the checkpoint under
+/// Trading, and the producer-owned membership manifest. Both seed sets are
+/// fixture data -- a domain, the request digest, the checkpoint key -- so both
+/// searches run at a depth nothing in the release set moves, and every page of
+/// every run pays them again. The producer derived both addresses before it
+/// could name the accounts at all, so it already holds the answer.
+///
+/// A bump is never an authority. The reader feeds it to `create_program_address`
+/// over seeds it builds for itself and compares the result with the account it
+/// was handed, by the equality that was always there; a wrong bump reproduces a
+/// different address, or none, and refuses. Zero is the absent encoding and its
+/// reader searches exactly as it used to, so a producer that mines nothing is
+/// no worse off than before this tail existed.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DealerScenarioPageBumpsV1 {
+    /// Bump of the request-scoped checkpoint PDA under Trading.
+    pub checkpoint: u8,
+    /// Bump of the membership manifest PDA under its producer program.
+    pub membership_manifest: u8,
+}
+
+impl DealerScenarioPageBumpsV1 {
+    /// Nothing mined: both derivations search.
+    pub const ABSENT: Self = Self {
+        checkpoint: 0,
+        membership_manifest: 0,
+    };
+
+    /// Exact canonical tail bytes.
+    #[must_use]
+    pub const fn to_bytes(self) -> [u8; DEALER_SCENARIO_PAGE_BUMPS_BYTES_V1] {
+        [self.checkpoint, self.membership_manifest]
+    }
+
+    /// Read the tail. A short tail is absent rather than a refusal, because a
+    /// hint reader that can refuse reports a conjunct it does not own.
+    #[must_use]
+    pub fn from_tail(tail: &[u8]) -> Self {
+        match (tail.first(), tail.get(1)) {
+            (Some(checkpoint), Some(manifest)) => Self {
+                checkpoint: *checkpoint,
+                membership_manifest: *manifest,
+            },
+            _ => Self::ABSENT,
+        }
+    }
+}
+
 const VERSION_OFFSET: usize = 8;
 const PHASE_OFFSET: usize = 10;
 const PAGE_COUNT_OFFSET: usize = 11;
@@ -1207,5 +1260,27 @@ mod tests {
             checkpoint.admit_commit(41, evidence()),
             Err(DealerScenarioCheckpointErrorV1::Phase)
         );
+    }
+
+    #[test]
+    fn a_mined_page_bump_tail_round_trips_and_a_short_one_is_absent() {
+        let mined = DealerScenarioPageBumpsV1 {
+            checkpoint: 254,
+            membership_manifest: 251,
+        };
+        let tail = mined.to_bytes();
+        assert_eq!(tail.len(), DEALER_SCENARIO_PAGE_BUMPS_BYTES_V1);
+        assert_eq!(DealerScenarioPageBumpsV1::from_tail(&tail), mined);
+        // Reading a hint cannot refuse, so every tail this reader will not use
+        // degrades to the absent bank and its consumer searches.
+        for short in [[].as_slice(), [254].as_slice()] {
+            assert_eq!(
+                DealerScenarioPageBumpsV1::from_tail(short),
+                DealerScenarioPageBumpsV1::ABSENT
+            );
+        }
+        // A longer tail is read at its first two bytes rather than refused,
+        // for the same reason.
+        assert_eq!(DealerScenarioPageBumpsV1::from_tail(&[254, 251, 7]), mined);
     }
 }

@@ -31,9 +31,10 @@ use dclutch_dealer_codec::{
     scenario_checkpoint_v1::{
         DEALER_SCENARIO_CHECKPOINT_BYTES_V1, DEALER_SCENARIO_CHECKPOINT_PDA_DOMAIN_V1,
         DEALER_SCENARIO_CLAIMS_PRESTATE_DOMAIN_V1, DEALER_SCENARIO_CUSTODY_PRESTATE_DOMAIN_V1,
-        DEALER_SCENARIO_PAGE_RECEIPT_DOMAIN_V1, DEALER_SCENARIO_PREPARATION_PAGES_V1,
-        DealerScenarioCheckpointInputV1, DealerScenarioCheckpointV1,
-        DealerScenarioCommitEvidenceV1, DealerScenarioEvaluationV1,
+        DEALER_SCENARIO_PAGE_BUMPS_BYTES_V1, DEALER_SCENARIO_PAGE_RECEIPT_DOMAIN_V1,
+        DEALER_SCENARIO_PREPARATION_PAGES_V1, DealerScenarioCheckpointInputV1,
+        DealerScenarioCheckpointV1, DealerScenarioCommitEvidenceV1, DealerScenarioEvaluationV1,
+        DealerScenarioPageBumpsV1,
     },
     scenario_custody_reservation_v1::{
         DEALER_SCENARIO_CUSTODY_EFFECT_BYTES_V1, DEALER_SCENARIO_CUSTODY_EFFECT_MANIFEST_BYTES_V1,
@@ -112,8 +113,12 @@ pub const DEALER_SCENARIO_CHECKPOINT_COMMIT_MAGIC_V1: [u8; 8] = *b"DCLTDCM1";
 
 /// Exact create instruction width.
 pub const DEALER_SCENARIO_CHECKPOINT_CREATE_INSTRUCTION_BYTES_V1: usize = 8;
-/// Exact page instruction width: magic followed by the canonical page ordinal.
-pub const DEALER_SCENARIO_CHECKPOINT_PAGE_INSTRUCTION_BYTES_V1: usize = 9;
+/// Exact page instruction width: magic, the canonical page ordinal, and the
+/// producer's two mined PDA bumps.
+pub const DEALER_SCENARIO_CHECKPOINT_PAGE_INSTRUCTION_BYTES_V1: usize =
+    9 + DEALER_SCENARIO_PAGE_BUMPS_BYTES_V1;
+/// Offset of the mined bump tail inside the page instruction.
+const PAGE_BUMPS_OFFSET: usize = 9;
 /// Exact evaluate instruction width.
 pub const DEALER_SCENARIO_CHECKPOINT_EVALUATE_INSTRUCTION_BYTES_V1: usize = 8;
 /// Exact cleanup instruction width.
@@ -439,6 +444,13 @@ pub fn process_dealer_scenario_checkpoint_page_v1(
     let page_index = *instruction_data
         .get(8)
         .ok_or(TradingSbfError::UnsupportedContent)?;
+    // Reading a hint must not be able to refuse: a short or absent tail yields
+    // the absent bank and both derivations search exactly as they used to.
+    let bumps = DealerScenarioPageBumpsV1::from_tail(
+        instruction_data
+            .get(PAGE_BUMPS_OFFSET..)
+            .unwrap_or_default(),
+    );
     let checkpoint_account = account(accounts, PAGE_CHECKPOINT)?;
     let clock_account = account(accounts, PAGE_CLOCK)?;
     let manifest_account = account(accounts, PAGE_MANIFEST)?;
@@ -446,7 +458,7 @@ pub fn process_dealer_scenario_checkpoint_page_v1(
         .get(DEALER_SCENARIO_CHECKPOINT_PAGE_FIXED_ACCOUNTS_V1..)
         .ok_or(TradingSbfError::Content)?;
     let (checkpoint, prestate_digest) = read_checkpoint(program_id, checkpoint_account)?;
-    require_checkpoint_pda(program_id, checkpoint_account, checkpoint)?;
+    require_checkpoint_pda_hinted(program_id, checkpoint_account, checkpoint, bumps.checkpoint)?;
     let (receipt_digest, last_membership_key) = authenticate_membership_page_v1(
         checkpoint_account,
         clock_account,
@@ -455,6 +467,7 @@ pub fn process_dealer_scenario_checkpoint_page_v1(
         &checkpoint,
         prestate_digest,
         page_index,
+        bumps.membership_manifest,
     )?;
     let clock = Clock::from_account_info(clock_account).map_err(|_| TradingSbfError::Content)?;
     let next = checkpoint
@@ -480,6 +493,7 @@ fn authenticate_membership_page_v1(
     checkpoint: &DealerScenarioCheckpointV1,
     prestate_digest: [u8; 32],
     page_index: u8,
+    manifest_bump: u8,
 ) -> Result<([u8; 32], [u8; 32]), ProgramError> {
     let manifest_data = manifest_account
         .try_borrow_data()
@@ -488,15 +502,29 @@ fn authenticate_membership_page_v1(
         .map_err(|_| TradingSbfError::Content)?;
     let input = checkpoint.input();
     let manifest_producer = Pubkey::new_from_array(manifest.producer_program);
-    let expected_manifest = Pubkey::find_program_address(
-        &[
-            DEALER_SCENARIO_MEMBERSHIP_MANIFEST_PDA_DOMAIN_V1,
-            checkpoint_account.key.as_ref(),
-            &input.request_digest,
-        ],
-        &manifest_producer,
-    )
-    .0;
+    let manifest_seeds: [&[u8]; 3] = [
+        DEALER_SCENARIO_MEMBERSHIP_MANIFEST_PDA_DOMAIN_V1,
+        checkpoint_account.key.as_ref(),
+        input.request_digest.as_slice(),
+    ];
+    // The same derivation at a mined bump. The producer owns this account and
+    // derived its address before it could name it in a manifest, so it holds
+    // the bump already; the equality below is unchanged and still the check.
+    let expected_manifest = if manifest_bump == 0 {
+        Pubkey::find_program_address(&manifest_seeds, &manifest_producer).0
+    } else {
+        let bump = [manifest_bump];
+        Pubkey::create_program_address(
+            &[
+                manifest_seeds[0],
+                manifest_seeds[1],
+                manifest_seeds[2],
+                bump.as_slice(),
+            ],
+            &manifest_producer,
+        )
+        .map_err(|_| TradingSbfError::Content)?
+    };
     if manifest_account.is_signer
         || manifest_account.is_writable
         || manifest_account.executable
@@ -1819,14 +1847,36 @@ fn require_checkpoint_pda(
     account: &AccountInfo<'_>,
     checkpoint: DealerScenarioCheckpointV1,
 ) -> Result<(), ProgramError> {
-    let expected = Pubkey::find_program_address(
-        &[
-            DEALER_SCENARIO_CHECKPOINT_PDA_DOMAIN_V1,
-            &checkpoint.input().request_digest,
-        ],
-        program_id,
-    )
-    .0;
+    require_checkpoint_pda_hinted(program_id, account, checkpoint, 0)
+}
+
+/// The same join, reproducing the checkpoint address at a mined bump where the
+/// producer supplied one.
+///
+/// The derivation IS the check: the bump is fed to `create_program_address`
+/// over seeds this function builds for itself -- the checkpoint PDA domain and
+/// the request digest read out of the account's own body -- and the result is
+/// compared with the account the frame supplied, by the equality that was
+/// always here. A wrong bump derives a different address, or none, and
+/// refuses. Canonicality is enforced where the account is MADE:
+/// `process_dealer_scenario_checkpoint_create_v1` allocates only at the
+/// address `find_program_address` returns, so a non-canonical hint names an
+/// address at which no Trading-owned checkpoint of this width exists.
+fn require_checkpoint_pda_hinted(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    checkpoint: DealerScenarioCheckpointV1,
+    hint: u8,
+) -> Result<(), ProgramError> {
+    let digest = checkpoint.input().request_digest;
+    let seeds: [&[u8]; 2] = [DEALER_SCENARIO_CHECKPOINT_PDA_DOMAIN_V1, digest.as_slice()];
+    let expected = if hint == 0 {
+        Pubkey::find_program_address(&seeds, program_id).0
+    } else {
+        let bump = [hint];
+        Pubkey::create_program_address(&[seeds[0], seeds[1], bump.as_slice()], program_id)
+            .map_err(|_| TradingSbfError::Content)?
+    };
     if account.key == &expected {
         Ok(())
     } else {
