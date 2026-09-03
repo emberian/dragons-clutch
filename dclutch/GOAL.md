@@ -3834,3 +3834,12 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Started 06:25 EDT: RELAY-C **`a750957efed0be75b`** — market C's capture at 08:09 EDT inside its window, settle at 10:38 EDT,
   Terminal, the winning STRANGER paid into their associated token account (the first payout to a stranger on an honest
   resolution), the post-payout census with L4 retired at Terminal.
+- PHASE-CENSUS (4th) closed (ten commits; `e804ff731`, `62705be5e`, `f93f37d16`, `7ce42cfe9`, `9a7799a44`, `0cb949db4`,
+  `d72c97a7d`, `7baf1a204`, `bd0182fbd`, rows `ba3ce637b`): **63 → 72 of 162 routes gated** (169 → 162: the Direct plan layer's
+  deletion) across nine machines — DirectRoot, DealerRoot (the tree's third "Open"), SeriesTicket, FundingLedger named with
+  31 guards; a two-arm `match` unites like if/else; a destructuring `let` types what it binds; the SDK table generator was
+  unrunnable on a new routes.md table; live on market B (Terminal + Consumed) two newly gated acts refuse by the machine's
+  name, red-proven both directions. Census self-tests 73. Owed: **the 27 capability acts declare only 9 of 162 routes** — the
+  upstream gap that makes `other-machine → derive` unexercised today; the dealer-accelerator's `process_instruction` name
+  collision; a built-and-reverted nested-alternative resolver (zero rows moved). C-10's instrument rests here.
+- Cuts: `441ce5f30`, `0f1a331f7`.
