@@ -4049,3 +4049,14 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   register; `1258dd0a3` the founding route measurable; `354c201e8`; `7083a0bc2` the Core infrastructure test one account
   short). A dirty refusal-registry regeneration is being verified against a fresh converge at HEAD.
 - Cuts: `f65584df2`.
+- TIER-1 closed (seven commits; `837818bc1`, `da51cb3f6`, `9236eb5e5`, `e7a25b3b6`, `26f76935f`, `6b80385ca`, rows): the founding
+  refusal is **`0x518D PermitBody` — "intent digest is not the request's founding_intent_digest"**; the WITNESS lane's CU
+  reading refuted (the activation loop passes); the space closed by elimination — sixteen intent↔request joins pass,
+  thirteen intent↔realization-receipt joins pass, the digests differ; 1b4e5d310's eighteen names had run BEHIND the one join
+  that subsumes them; the two receipt joins are twenty-four accusations. Tier 1 measured 28m35s (24m16s of transactions)
+  inside its budget; does not complete; witness counts unchanged (29 local-validator, 12 on tier 1 alone). Rows paid: 19
+  attributed across SEAM/the founding split/this lane, `authenticate_permit_body` 2944 → 576 + 2368 exactly; HINTS's
+  path-based owed was a false positive. The Fractional exterior had two `finalized()` producers; the journey "discovery" was
+  a two-root list — root widened to `tools`, seven workspaces join. Owed: the intent byte-diff (one run) → TIER-1
+  **`(spawned)`**; bindings.json older than its campaign; 13 CU_BUDGETS rows stale.
+- Cuts: `f86c475fd`, `1d0f19079`, `c57b02459`, `33b4350f0`, `aa68b3796`, `236f49704`, `0545793f3`, `648dd0f41`.
