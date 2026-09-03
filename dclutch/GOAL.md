@@ -3772,3 +3772,13 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   every action of the Dealer family executes and commits on real ELFs. The lane's turn was cut by a transient API 403 after
   landing; resumed in place for its report.
 - Cuts: `4c6123e95`, `8607dc10b`, `53d24df8e`.
+- DEALER's final report (`f6199f47e` seven bare refusal codes derived): **31/0 on three consecutive full runs; the partial
+  Remove and both final Removes commit on eight consecutive filtered runs** — worst headroom 18,540 / 5,072 / 18,558. The
+  qualification: **the campaign's ArtifactRelease records hash the ELFs, so every rebuild redraws every Registry-record search
+  depth — ~45,000 of the improvement is the deployment's luck, not engineering** (a doubling probe on a walk whose seeds
+  include an ELF digest is not a probe; the note's 37,640 row is an order of magnitude). What the code bought, on one ELF
+  set: the accelerator-return spread 34,496 → 6,000, the candidate spread 10,501 → 1. Custody's common frame decomposed:
+  60% is the activation cache authenticated once per leg over a cache the PDA-signed caller already authenticated (~47,000
+  per Remove, unclaimed — the Claims repair's mirror). → DEALER **`(spawned)`**: Custody under the ruling, the chain fixture
+  seam (selector 9 through the admitted accelerator, the three rejoin hostiles), the ninth addendum.
+- Cuts: `a8726b748`, `41e96fa46`.
