@@ -14,6 +14,7 @@ import {
   campaignSpendLineV1,
   campaignStageLabelsV1,
   conservationLawRowsV1,
+  conservationPhaseRuleV1,
   conservationReadingV1,
   hoardCoverageLinesV1,
   everyLineFlatV1,
@@ -111,7 +112,7 @@ const LAW_GLOSSES: Readonly<Record<string, string>> = Object.freeze({
   L1: 'collateral closure — every collateral atom that exists is sitting in an account this census watches',
   L2: 'declared vault movement — the market’s vault moved by exactly what was declared, and by nothing else',
   L3: 'supply agreement — what the positions hold adds up, outcome by outcome, to what the market issued',
-  L4: 'full collateralisation — the vault holds at least what the worst outcome could be asked to pay',
+  L4: 'full collateralisation — the vault holds at least what the worst outcome could be asked to pay, which is a question about a market that still owes: settlement discharges that liability, so this law retires at a Terminal market rather than reading broken against one that paid',
   L5: 'stage delta — tracked collateral changed between two readings by exactly the declared amount',
   L6: 'rent conservation — lamports leaving a closed protocol account are accounted for',
   L7: 'lamport accounting — the fee payer’s balance moved by exactly the fees paid',
@@ -219,6 +220,11 @@ export function ConservationLaws({ series }: Readonly<{ series: SimulatorSeriesV
   const rows = conservationLawRowsV1(series);
   const cycles = lawBandCyclesV1(series);
   const reading = conservationReadingV1(series);
+  // THE RULE, PER PHASE, published rather than left in a test. The last
+  // boundary drawn is the state this page presents as where things stand, and
+  // which laws even APPLY there depends on the Market's phase — so a reader is
+  // told which ones retired at that boundary and which are still watching.
+  const phaseRule = conservationPhaseRuleV1(series);
   if (rows.length === 0) {
     return <p className="market-empty">
       This capture was taken before the laws were recorded by name, so it carries their counts and not their identities.
@@ -226,6 +232,7 @@ export function ConservationLaws({ series }: Readonly<{ series: SimulatorSeriesV
   }
   return <>
     {reading === null ? null : <p className="direct-status">{reading}</p>}
+    {phaseRule === null ? null : <p className="slot-clock-note">{phaseRule}</p>}
     {/* FE-CHART mount: a status band, not a line — a verdict is a state, and a
         line through states invents an ordering between them. */}
     <LawBand

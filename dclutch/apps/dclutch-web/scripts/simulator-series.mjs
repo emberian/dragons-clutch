@@ -231,6 +231,15 @@ function main() {
       // carried only one side of it.
       position_totals: (Array.isArray(observation.position_totals) ? observation.position_totals : [])
         .map((atoms, cell) => exact(atoms, `observation ${index} position_totals ${cell}`)),
+      // THE MARKET'S PHASE, which decides whether a law applies at all.
+      // `ledger-census --market` reads it off the chain and L4 retires at
+      // Terminal on it; the producer dropped it, so /pulse could not tell a
+      // paid market from a broken one and its whole rule for the last drawn
+      // point was written as if every law applied at every phase. Absent
+      // wherever no Market was bound, which is what a null means here.
+      market_phase: typeof observation.market_phase === 'string' && observation.market_phase !== ''
+        ? observation.market_phase
+        : null,
       hoard_atoms: exact(observation.hoard_atoms, `observation ${index} hoard_atoms`),
       tracked_collateral: exact(observation.tracked_collateral, `observation ${index} tracked_collateral`),
       // The Mint's whole supply, which is what L1 compares the tracked total

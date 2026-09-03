@@ -109,7 +109,15 @@ describe('the pulse surface, with a recorded run', () => {
     // The census writes its sentences with real comparison operators in them
     // ("Hoard ... >= worst outcome ..."), which is exactly the phrasing worth
     // showing and exactly what markup escaping touches. Escape, never soften.
-    const escaped = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    // React escapes five characters, not three. The quote pair was missing
+    // here and nothing noticed until a census sentence contained the word
+    // `B's` — the L7 detail at the post-payout boundary — at which point this
+    // assertion failed on a page that was rendering the sentence perfectly.
+    // An escaping helper that models less than the renderer does is an
+    // assertion about the helper.
+    const escaped = (text: string) => text
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#x27;');
     for (const law of series.laws) expect(html).toContain(escaped(law.detail));
   });
 

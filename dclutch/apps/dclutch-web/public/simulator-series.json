@@ -1,6 +1,6 @@
 {
   "schema": "dclutch-simulator-series-v2",
-  "captured_at": "2026-09-03T09:16:53+00:00",
+  "captured_at": "2026-09-03T10:18:20+00:00",
   "law_ids": [
     "L1",
     "L2",
@@ -15,27 +15,27 @@
     {
       "id": "L1",
       "status": "holds",
-      "detail": "tracked 1000000000 atoms across 5 accounts == Mint supply 1000000000"
+      "detail": "tracked 1000000000 atoms across 6 accounts == Mint supply 1000000000"
     },
     {
       "id": "L2",
       "status": "holds",
-      "detail": "the Hoard moved 0 atoms since `cohort14b-pre-fill`, exactly as declared; it holds 500000000"
+      "detail": "the Hoard moved 0 atoms since `cohort14c-post-payout-complete`, exactly as declared; it holds 0"
     },
     {
       "id": "L3",
       "status": "holds",
-      "detail": "3 Positions sum to the aggregate supply vector [500000000, 500000000, 500000000, 500000000]"
+      "detail": "3 Positions sum to the aggregate supply vector [500000000, 500000000, 0, 500000000]"
     },
     {
       "id": "L4",
-      "status": "holds",
-      "detail": "Hoard 500000000 >= worst outcome 500000000 x unit 1 = 500000000"
+      "status": "inapplicable",
+      "detail": "the Market is terminal: settlement DISCHARGED the liability this law is stated about, so `Hoard 0 >= worst outcome 500000000 x unit 1` is a question about a Market that still owes and this one does not. L4 is a PRE-TERMINAL invariant and retires by name here rather than reading VIOLATED against a protocol that did exactly what it should. L1, L3 and L7 go on watching this boundary unweakened."
     },
     {
       "id": "L5",
       "status": "holds",
-      "detail": "tracked collateral moved 0 atoms since `cohort14b-pre-fill`, exactly as declared"
+      "detail": "tracked collateral moved 0 atoms since `cohort14c-post-payout-complete`, exactly as declared"
     },
     {
       "id": "L6",
@@ -45,12 +45,12 @@
     {
       "id": "L8",
       "status": "holds",
-      "detail": "every compartment moved exactly as declared since `cohort14b-pre-fill`: unclassified +0"
+      "detail": "every compartment moved exactly as declared since `cohort14c-post-payout-complete`: unclassified +0"
     },
     {
       "id": "L7",
       "status": "holds",
-      "detail": "the payer moved -6495666 lamports since `cohort14b-pre-fill`, its transactions paid 150000 in fees, watched accounts gained 3711138, and 2634528 went to the 288-byte DCLCUSS1 maker custody replay HhD37zPCkqVR35np851L7AxmCzXLf2ngH6XcMNAXzCds the replay-setup step created, owned by Custody 8mWrLG2sjfzSKA3fEVBfY3RkGLTLuZZjKqDXWDuTpLbk; the two Direct token PDAs are watched and their 3711138 is already differenced; debit == credit + fee"
+      "detail": "the payer moved -31957691 lamports since `cohort14c-post-payout-complete`, its transactions paid 755000 in fees, watched accounts gained -11754048, and 42956739 went to market B's own economy did not move at this boundary and its LAMPORTS did, because the same campaign payer AND THE SAME TWO PARTICIPANT WALLETS founded, activated, admitted into and filled a THIRD Direct market. Measured from the payer's own finalized history over (492433732, 492437760]: eighteen successful transactions, 755000 in fees, 42956739 into accounts outside this aperture. The two watched participant owners each paid 5877024 of their own PDA rent into market C, which is the -11754048 L7 differences separately and correctly -- the first reading of this boundary declared 31202691, the NET of those two figures, and violated by exactly the 11754048 it had folded together; debit == credit + fee"
     }
   ],
   "positions": [
@@ -61,10 +61,10 @@
       "claims": [
         "500000000",
         "500000000",
-        "500000000",
+        "0",
         "500000000"
       ],
-      "total_claims": "2000000000"
+      "total_claims": "1500000000"
     },
     {
       "label": "participant-1",
@@ -93,8 +93,8 @@
   ],
   "collateral_holders": [
     {
-      "label": "hoard",
-      "address": "BrLJBohX4W6sLe3N9z21KqRuiDKdyG7XWnRuv4sVNQFr",
+      "label": "founder_associated_token",
+      "address": "DsQSGKPbmJcZ89xts1Jgs1P5fprmX64fomqGFsQM1kmU",
       "atoms": "500000000"
     },
     {
@@ -106,6 +106,11 @@
       "label": "participant-2_delegated_collateral",
       "address": "3aEyWH1BLSRwzf4ypqNKZsDcay8xWjmDvTdrhALvu67g",
       "atoms": "201"
+    },
+    {
+      "label": "hoard",
+      "address": "BrLJBohX4W6sLe3N9z21KqRuiDKdyG7XWnRuv4sVNQFr",
+      "atoms": "0"
     },
     {
       "label": "seller_direct_token",
@@ -122,9 +127,9 @@
   "market": "DUVcCGfjXzp1fBktTCjsAomgrn9S6sxSDziQHoyRiu8A",
   "mode": "finite",
   "outcome_count": 4,
-  "cycles_recorded": 4,
+  "cycles_recorded": 6,
   "points_omitted_before": 0,
-  "census_file": "cohort14b-post-token-setup.json",
+  "census_file": "cohort14c-terminal-rest.json",
   "points": [
     {
       "law_statuses": "hihhiiii",
@@ -143,6 +148,7 @@
         "500000000",
         "500000000"
       ],
+      "market_phase": null,
       "hoard_atoms": "500000000",
       "tracked_collateral": "1000000000",
       "mint_supply": "1000000000",
@@ -169,6 +175,7 @@
         "500000000",
         "500000000"
       ],
+      "market_phase": null,
       "hoard_atoms": "500000000",
       "tracked_collateral": "1000000000",
       "mint_supply": "1000000000",
@@ -195,6 +202,7 @@
         "500000000",
         "500000000"
       ],
+      "market_phase": null,
       "hoard_atoms": "500000000",
       "tracked_collateral": "1000000000",
       "mint_supply": "1000000000",
@@ -221,6 +229,7 @@
         "500000000",
         "500000000"
       ],
+      "market_phase": null,
       "hoard_atoms": "500000000",
       "tracked_collateral": "1000000000",
       "mint_supply": "1000000000",
@@ -229,6 +238,60 @@
       "checks_broken": 0,
       "checks_inapplicable": 0,
       "cycle": 4
+    },
+    {
+      "law_statuses": "hhhihhhi",
+      "stage": "cohort14c-post-payout-complete",
+      "slot": "492433732",
+      "recorded_at": null,
+      "supply": [
+        "500000000",
+        "500000000",
+        "0",
+        "500000000"
+      ],
+      "position_totals": [
+        "500000000",
+        "500000000",
+        "0",
+        "500000000"
+      ],
+      "market_phase": "terminal",
+      "hoard_atoms": "0",
+      "tracked_collateral": "1000000000",
+      "mint_supply": "1000000000",
+      "payer_lamports": "2961914481",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 2,
+      "cycle": 5
+    },
+    {
+      "law_statuses": "hhhihhhh",
+      "stage": "cohort14c-terminal-rest",
+      "slot": "492438081",
+      "recorded_at": null,
+      "supply": [
+        "500000000",
+        "500000000",
+        "0",
+        "500000000"
+      ],
+      "position_totals": [
+        "500000000",
+        "500000000",
+        "0",
+        "500000000"
+      ],
+      "market_phase": "terminal",
+      "hoard_atoms": "0",
+      "tracked_collateral": "1000000000",
+      "mint_supply": "1000000000",
+      "payer_lamports": "2929956790",
+      "checks_held": 7,
+      "checks_broken": 0,
+      "checks_inapplicable": 1,
+      "cycle": 6
     }
   ]
 }

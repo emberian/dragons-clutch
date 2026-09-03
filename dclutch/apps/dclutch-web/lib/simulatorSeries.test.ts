@@ -7,7 +7,9 @@ import {
   campaignSpendLineV1,
   campaignStageLabelsV1,
   campaignVolumeV1,
+  LAW_RETIRED_AT_PHASES_V1,
   conservationLawRowsV1,
+  conservationPhaseRuleV1,
   conservationReadingV1,
   everyLineFlatV1,
   hoardCoverageLinesV1,
@@ -137,32 +139,87 @@ describe('the published simulator series', () => {
     }
   });
 
-  it('publishes a broken check only where the record broke, and never at the end', () => {
-    // Renegotiated 2026-09-02. This used to demand `checksBroken === 0`, on
-    // the reasoning that a broken check halts the simulator so a published one
-    // must be a careless capture. Cohort-13's capture has two, they ARE the
-    // census's — it caught 201 delegated atoms in an account it had not been
-    // told to watch, halted, and the run was re-configured and re-run — and
-    // refusing to publish them would be refusing to publish the census doing
-    // its job.
+  it('publishes a broken check only where the record broke, and never at the end — per phase', () => {
+    // Renegotiated twice, and the second time is the interesting one.
     //
-    // What still guards against carelessness is stronger and is about the
-    // shape of the record, not its count: the LAST boundary drawn is the state
-    // the page presents as where things stand, and it may not be a broken one.
-    // A capture that ends broken is a run that halted and stayed halted, and
-    // publishing that as the pulse is a decision somebody has to make on
-    // purpose. The sibling case above already requires the page to LEAD on any
-    // violation it does carry.
+    // It first demanded `checksBroken === 0` everywhere, on the reasoning that
+    // a broken check halts the simulator so a published one must be a careless
+    // capture. Cohort-13's capture has two and they ARE the census doing its
+    // job — it caught 201 delegated atoms in an account nobody had told it to
+    // watch, halted, and the run was re-configured — so the rule moved to the
+    // shape of the record: the LAST boundary drawn is the state the page
+    // presents as where things stand, and it may not be a broken one.
+    //
+    // THEN COHORT-14B PAID A MARKET AND THE RULE WAS WRONG AGAIN, in the other
+    // direction. Its post-payout census returned four violations and none of
+    // them was the chain; one, L4, was the ledger reading a PAID market against
+    // `hoard >= worst outcome x unit`, which is a question about a market that
+    // still owes. Settlement discharges exactly that liability. A flat rule
+    // would call that halted, which would be this page blaming the protocol for
+    // doing the thing it exists to do.
+    //
+    // So the rule is stated per phase, and derived from the census's own
+    // partition (`LAW_RETIRED_AT_PHASES_V1`, itself
+    // `tools/gauntlet/journey/src/ledger.rs:860-880`), not from a list here:
+    //
+    //   * a law that APPLIES at the last boundary's phase may not read broken
+    //     there — that is still a run that halted and stayed halted;
+    //   * a law that RETIRES at that phase may not read `holds` either. The
+    //     ledger is explicit that it goes inapplicable by name rather than
+    //     passing, because a law that quietly passes where it does not apply is
+    //     a law nobody is watching.
     const span = simulatorSeriesSpanV1(series);
     expect(span).not.toBeNull();
     expect(span?.checksHeld).toBeGreaterThan(0);
     const last = series.points[series.points.length - 1];
-    expect(last.checksBroken).toBe(0);
-    expect(last.lawStatuses.filter((status) => status === 'violated')).toHaveLength(0);
+    const phase = last.marketPhase;
+    for (const [cell, id] of series.lawIds.entries()) {
+      const status = last.lawStatuses[cell];
+      if (status === undefined) continue;
+      const retires = phase !== null && (LAW_RETIRED_AT_PHASES_V1[id] ?? []).includes(phase);
+      if (retires) {
+        expect(status, `${id} retires at ${phase} and must say so by name, never by passing`).toBe('inapplicable');
+      } else {
+        expect(status, `${id} applies at the last boundary and reads broken there`).not.toBe('violated');
+      }
+    }
+    // The count and the statuses are two readings of one fact, so a boundary
+    // whose broken count disagrees with its own status row is a decode bug
+    // rather than a census finding.
+    expect(last.checksBroken).toBe(last.lawStatuses.filter((status) => status === 'violated').length);
     // And a broken count is never asserted without a boundary that carries it.
     if ((span?.checksBroken ?? 0) > 0) {
       expect(series.points.some((point) => point.checksBroken > 0)).toBe(true);
     }
+  });
+
+  it('publishes the post-payout boundary, and states the rule for the phase it is at', () => {
+    // The boundary this rule was renegotiated for has to actually be in the
+    // artifact, or the restatement above is a rule about a case nobody ships.
+    // Cohort-14b resolved, went Terminal and paid 500,000,000 atoms into a
+    // wallet's own associated token account; before this, /pulse stopped four
+    // boundaries earlier and its last point was a market that still owed.
+    const terminal = series.points.filter((point) => point.marketPhase === 'terminal');
+    expect(terminal.length, 'no boundary carries a Terminal phase, so the per-phase rule is untested by the artifact').toBeGreaterThan(0);
+    const paid = terminal[terminal.length - 1];
+    expect(BigInt(paid.hoardAtoms), 'a paid market has discharged its Hoard').toBe(0n);
+    // L1 is the law that must NOT weaken here: every atom is still in an
+    // account the census watches, including the 170-byte ATA the payout paid.
+    const l1 = series.lawIds.indexOf('L1');
+    expect(l1).toBeGreaterThanOrEqual(0);
+    expect(paid.lawStatuses[l1]).toBe('holds');
+    expect(BigInt(paid.trackedCollateral)).toBe(BigInt(paid.mintSupply ?? '0'));
+
+    // The sentence a reader gets, which must name the phase, the retired law
+    // and the laws still watching — never the flat "the run halts on this".
+    const rule = conservationPhaseRuleV1(series);
+    expect(rule).not.toBeNull();
+    expect(rule).toContain('terminal');
+    expect(rule).toContain('L4');
+    expect(rule).toContain('L1');
+    expect(rule).toContain('PRE-TERMINAL');
+    const reading = conservationReadingV1(series);
+    expect(reading).toContain('checks held and none broke');
   });
 });
 

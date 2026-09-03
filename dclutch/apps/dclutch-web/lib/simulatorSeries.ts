@@ -193,6 +193,17 @@ export type SimulatorSeriesPointV1 = Readonly<{
   feeLamports: string | null;
   /** The fee payer's lamports at this boundary, exact. */
   payerLamports: string | null;
+  /**
+   * The Market's phase at this boundary, read off the chain, or null.
+   *
+   * Null means ONE thing and it is not "unknown version": the census emits this
+   * only when a Market was bound (`ledger-census --market`), so a null is a
+   * boundary at which no Market was bound — which is true of every capture
+   * taken before the binding existed and of every poller cycle that does not
+   * use it. A boundary with no phase is one where no law may retire, and
+   * `conservationPhaseRuleV1` says so rather than guessing.
+   */
+  marketPhase: MarketCensusPhaseV1 | null;
 }>;
 
 /**
@@ -240,6 +251,38 @@ export type SettlementV1 = Readonly<{
  * number would make one of them a lie.
  */
 export type ConservationLawStatusV1 = 'holds' | 'violated' | 'inapplicable';
+
+/**
+ * The Market phase the census read OFF THE CHAIN at a boundary, lowercased.
+ *
+ * Exactly `tools/gauntlet/journey/src/ledger.rs`'s own vocabulary (`:722-726`),
+ * and it is read rather than declared for a reason the ledger states outright:
+ * a caller that could ASSERT a phase would be a caller that can switch a
+ * conservation law off by saying so.
+ */
+export type MarketCensusPhaseV1 = 'founding' | 'open' | 'terminal' | 'retiring' | 'retired';
+
+const MARKET_CENSUS_PHASES_V1: ReadonlyArray<MarketCensusPhaseV1> = Object.freeze([
+  'founding', 'open', 'terminal', 'retiring', 'retired',
+]);
+
+/**
+ * The phases at which L4 retires, and the sentence saying why.
+ *
+ * L4 is `hoard >= max_i supply(i) * unit` — a PRE-TERMINAL invariant. Terminal
+ * settlement is the act that DISCHARGES the liability the law is stated about,
+ * so a Terminal market that has paid its winner violates it BY CONSTRUCTION.
+ * Cohort-14b's post-payout boundary read `VIOLATED L4: Hoard 0 < worst outcome
+ * 500000000` about a market that did exactly what it should.
+ *
+ * The census retires the law rather than relaxing it (`ledger.rs:860-880`):
+ * `inapplicable`, by name, on a phase read off the chain, and `holds` never.
+ * This list is that partition, and it is the ONLY law here that retires — L1,
+ * L3 and L7 go on watching a paid market unweakened.
+ */
+export const LAW_RETIRED_AT_PHASES_V1: Readonly<Record<string, ReadonlyArray<MarketCensusPhaseV1>>> = Object.freeze({
+  L4: Object.freeze(['terminal', 'retiring', 'retired'] as ReadonlyArray<MarketCensusPhaseV1>),
+});
 
 /** The wire's one character per status. Compact because it is repeated per cycle. */
 const LAW_STATUS_CHARS: Readonly<Record<string, ConservationLawStatusV1>> = Object.freeze({
@@ -576,6 +619,19 @@ function optionalText(value: unknown, field: string): string | null {
   return value === null || value === undefined ? null : text(value, field);
 }
 
+function marketPhase(value: unknown, field: string): MarketCensusPhaseV1 | null {
+  if (value === null || value === undefined) return null;
+  const name = text(value, field);
+  // A phase this reader does not know is REFUSED rather than nulled: a null
+  // means "no Market was bound", and quietly turning an unrecognised phase into
+  // one would tell a reader the census watched nothing when it watched
+  // something this build cannot name.
+  if (!MARKET_CENSUS_PHASES_V1.includes(name as MarketCensusPhaseV1)) {
+    throw new Error(`${field} is not one of the census's own Market phases: ${name}`);
+  }
+  return name as MarketCensusPhaseV1;
+}
+
 function point(value: unknown, index: number, outcomeCount: number, lawCount: number): SimulatorSeriesPointV1 {
   const body = object(value, `point ${index}`);
   if (!Array.isArray(body.supply)) throw new Error(`point ${index} supply must be one list`);
@@ -597,6 +653,7 @@ function point(value: unknown, index: number, outcomeCount: number, lawCount: nu
     computeUnits: optionalAtoms(body.compute_units, `point ${index} compute_units`),
     feeLamports: optionalAtoms(body.fee_lamports, `point ${index} fee_lamports`),
     payerLamports: optionalAtoms(body.payer_lamports, `point ${index} payer_lamports`),
+    marketPhase: marketPhase(body.market_phase, `point ${index} market_phase`),
     lawStatuses: lawStatuses(body.law_statuses, `point ${index} law_statuses`, lawCount),
     cycle: count(body.cycle, `point ${index} cycle`),
     slot: atoms(body.slot, `point ${index} slot`),
@@ -1511,18 +1568,76 @@ export function conservationLawRowsV1(series: SimulatorSeriesV1): ReadonlyArray<
 }
 
 /**
+ * THE RULE FOR THE LAST BOUNDARY, stated per phase.
+ *
+ * `simulatorSeries.test.ts` used to hold one flat rule — the last point drawn
+ * carries no broken check — on the reasoning that a broken law halts the run,
+ * so a capture that ENDS broken is a halted run published as the present. That
+ * reasoning is right about a market that still owes and wrong about one that
+ * has paid.
+ *
+ * Cohort-14b's post-payout census returned FOUR violations and none of them was
+ * the chain. One of the four, L4, was the ledger reading a paid market against
+ * a pre-terminal invariant: `Hoard 0 < worst outcome 500000000` is not a market
+ * that broke, it is a market that discharged the liability the law is about.
+ * The census now retires L4 by name at Terminal (`ledger.rs:860-880`), on a
+ * phase it reads off the chain — `inapplicable`, never `holds`.
+ *
+ * So the rule has two halves, and this function is the half a page can state:
+ *
+ *   * at EVERY phase, a law that is not retired there and reads `violated` at
+ *     the last boundary is a run that halted and stayed halted;
+ *   * at `terminal`, `retiring` and `retired`, L4 is out of scope and must read
+ *     `inapplicable`. A `violated` L4 at those phases is a census that was
+ *     given no `--market` to read the phase from, not a protocol that failed.
+ *
+ * Returns null when no boundary carries a phase, because "no Market was bound"
+ * is the honest answer there and inventing a phase is exactly what the ledger
+ * refuses to let a caller do.
+ */
+export function conservationPhaseRuleV1(series: SimulatorSeriesV1): string | null {
+  const drawn = series.points.filter((entry) => entry.lawStatuses.length > 0);
+  const last = drawn[drawn.length - 1];
+  if (last === undefined || last.marketPhase === null) return null;
+  const phase = last.marketPhase;
+  const retired = series.lawIds.filter((id) => (LAW_RETIRED_AT_PHASES_V1[id] ?? []).includes(phase));
+  const watching = series.lawIds.filter((id) => !retired.includes(id));
+  const boundary = last.stage ?? `cycle ${last.cycle}`;
+  if (retired.length === 0) {
+    return `At ${boundary} the Market was ${phase}, and every one of these ${series.lawIds.length} laws applies at that phase: a broken check here would be a run that halted and stayed halted.`;
+  }
+  return `At ${boundary} the Market was ${phase}. ${retired.join(', ')} ${retired.length === 1 ? 'is a PRE-TERMINAL law and retires here' : 'are PRE-TERMINAL laws and retire here'}: settlement discharged the liability ${retired.length === 1 ? 'it is' : 'they are'} stated about, so ${retired.length === 1 ? 'it does' : 'they do'} not apply rather than failing. ${watching.join(', ')} go on watching a paid market unweakened, and a broken check among them would still be a run that halted.`;
+}
+
+/**
  * One plain sentence about the laws, or null when the capture recorded none.
  *
  * It leads with the violation when there is one. A run that broke a law halts
  * itself, so a reader arriving at a page that shows one is looking at the
  * single most important fact on it, and it must not be the third clause.
+ *
+ * "The run halts on this" is said only where it is TRUE. A law that retires at
+ * the boundary's own phase reading `violated` is a census that was not told
+ * which Market to read a phase off — the ledger's own reading, made against a
+ * market that had already paid — and calling that a halt would blame the
+ * protocol for an instrument's missing argument. `conservationPhaseRuleV1`
+ * carries the per-phase statement; this sentence only stops overclaiming.
  */
 export function conservationReadingV1(series: SimulatorSeriesV1): string | null {
   const rows = conservationLawRowsV1(series);
   if (rows.length === 0) return null;
+  const boundaries = series.points.filter((entry) => entry.lawStatuses.length > 0);
+  const phase = boundaries[boundaries.length - 1]?.marketPhase ?? null;
   const violated = rows.filter((row) => row.violated > 0);
-  if (violated.length > 0) {
-    return `${violated.map((row) => row.id).join(', ')} did not hold. The run halts on exactly this, and the market's collateral is the thing in question.`;
+  const retiredHere = phase === null
+    ? []
+    : violated.filter((row) => (LAW_RETIRED_AT_PHASES_V1[row.id] ?? []).includes(phase));
+  const halting = violated.filter((row) => !retiredHere.includes(row));
+  if (halting.length > 0) {
+    return `${halting.map((row) => row.id).join(', ')} did not hold. The run halts on exactly this, and the market's collateral is the thing in question.`;
+  }
+  if (retiredHere.length > 0) {
+    return `${retiredHere.map((row) => row.id).join(', ')} read broken at a boundary where ${retiredHere.length === 1 ? 'it does' : 'they do'} not apply: the Market is ${phase}, and settlement discharged the liability ${retiredHere.length === 1 ? 'that law is' : 'those laws are'} stated about. That is the census reading a paid market against a pre-terminal invariant, not a market that broke.`;
   }
   const held = rows.reduce((sum, row) => sum + row.held, 0);
   const skipped = rows.reduce((sum, row) => sum + row.inapplicable, 0);
