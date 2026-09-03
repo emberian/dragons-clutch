@@ -48,6 +48,9 @@ use crate::liability_basis_v2::{
     LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, MarketViewV2, PositionViewV2,
 };
 use crate::market_admission_v1::CLAIMS_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1;
+use dclutch_claims_svm::liability_basis_state_v2::{
+    LIABILITY_BASIS_MARKET_BUMP_OFFSET_V2, LIABILITY_BASIS_POSITION_BUMP_OFFSET_V2,
+};
 use dclutch_market_core_codec::MarketAdmissionV1;
 
 /// Exact fixed account count before the runtime Position tail.
@@ -405,7 +408,7 @@ fn execute_authenticated(
         .map_err(|_| SignedDeltaSbfErrorV3::Accounts)?;
     let market =
         MarketViewV2::decode(&market_before).map_err(|_| SignedDeltaSbfErrorV3::ClaimsState)?;
-    authenticate_market(program_id, accounts, plan, market)?;
+    authenticate_market(program_id, accounts, plan, market, &market_before)?;
     claims_cu_checkpoint!("sd-market");
     authenticate_product_and_basis_digests(accounts, plan)?;
     let principal_cap_sets = authenticate_core_market_v3(
@@ -814,15 +817,18 @@ fn authenticate_market(
     accounts: &SignedDeltaAccountsV3<'_, '_>,
     plan: SignedDeltaPlanV3<'_>,
     market: MarketViewV2,
+    market_before: &[u8],
 ) -> Result<(), ProgramError> {
-    let expected_market = Pubkey::find_program_address(
+    // Reproduced from the bump this program recorded when it founded the
+    // aggregate, not searched for.
+    let expected_market = derive_hinted(
         &[
             LIABILITY_BASIS_MARKET_SEED_V2,
             market.logical_market.as_slice(),
         ],
         program_id,
-    )
-    .0;
+        recorded_bump(market_before, LIABILITY_BASIS_MARKET_BUMP_OFFSET_V2),
+    );
     if accounts.market.owner != program_id
         || accounts.market.key != &expected_market
         || market.logical_market != plan.market()
@@ -920,6 +926,40 @@ fn authenticate_product_and_basis_digests(
     Ok(())
 }
 
+/// Widest hinted seed set on this route, plus the bump seed.
+const HINTED_SEED_CAPACITY_V3: usize = 4;
+
+/// One account body's own recorded bump. Zero is unrecorded and its reader
+/// searches, so a body written before the byte existed is no worse off.
+fn recorded_bump(body: &[u8], offset: usize) -> u8 {
+    body.get(offset).copied().unwrap_or(0)
+}
+
+/// Reproduce one address from a recorded bump, degrading to the search this
+/// route always ran.
+///
+/// Reading a hint must not be able to refuse: an unrecorded bump, or one whose
+/// derivation fails outright, falls back to `find_program_address`. Only the
+/// address equality the caller already had can refuse.
+fn derive_hinted(seeds: &[&[u8]], program_id: &Pubkey, hint: u8) -> Pubkey {
+    if hint != 0 && seeds.len() < HINTED_SEED_CAPACITY_V3 {
+        let bump = [hint];
+        let mut buffer: [&[u8]; HINTED_SEED_CAPACITY_V3] = [&[]; HINTED_SEED_CAPACITY_V3];
+        for (slot, seed) in buffer.iter_mut().zip(seeds) {
+            *slot = seed;
+        }
+        if let Some(slot) = buffer.get_mut(seeds.len()) {
+            *slot = &bump;
+        }
+        if let Some(all) = buffer.get(..=seeds.len()) {
+            if let Ok(address) = Pubkey::create_program_address(all, program_id) {
+                return address;
+            }
+        }
+    }
+    Pubkey::find_program_address(seeds, program_id).0
+}
+
 fn build_candidates(
     program_id: &Pubkey,
     accounts: &SignedDeltaAccountsV3<'_, '_>,
@@ -935,10 +975,16 @@ fn build_candidates(
             .map_err(|_| SignedDeltaSbfErrorV3::Instruction)?;
         let seeds = ProtocolPositionSeedsV2::new(accounts.market.key.to_bytes(), expected.owner())
             .map_err(|_| SignedDeltaSbfErrorV3::ClaimsState)?;
-        let expected_key = Pubkey::find_program_address(&seeds.as_slices(), program_id).0;
         let data = account
             .try_borrow_data()
             .map_err(|_| SignedDeltaSbfErrorV3::Accounts)?;
+        // Two Positions are authenticated per plan, so this is the same saving
+        // twice; `sparse_native_transfer_v1` already reads the byte this reads.
+        let expected_key = derive_hinted(
+            &seeds.as_slices(),
+            program_id,
+            recorded_bump(&data, LIABILITY_BASIS_POSITION_BUMP_OFFSET_V2),
+        );
         let position =
             PositionViewV2::decode(&data).map_err(|_| SignedDeltaSbfErrorV3::ClaimsState)?;
         if account.owner != program_id

@@ -226,12 +226,52 @@ pub struct DealerObligationProjectionV3<'a> {
     width: u32,
 }
 
+/// Reproduce the obligation PDA from a mined bump, or search for it.
+///
+/// The seeds are a domain and the immutable child root, so every reader of
+/// every action pays the same search again; the producer that named the
+/// account derived it once.
+#[must_use]
+pub fn obligation_address_hinted_v3(
+    trading_program: &Pubkey,
+    child_root: [u8; 32],
+    pda_bump: u8,
+) -> Pubkey {
+    if pda_bump != 0 {
+        if let Ok(address) = Pubkey::create_program_address(
+            &[DEALER_OBLIGATION_PDA_DOMAIN_V3, &child_root, &[pda_bump]],
+            trading_program,
+        ) {
+            return address;
+        }
+    }
+    Pubkey::find_program_address(
+        &[DEALER_OBLIGATION_PDA_DOMAIN_V3, &child_root],
+        trading_program,
+    )
+    .0
+}
+
 impl<'a> DealerObligationProjectionV3<'a> {
     /// Decode and authenticate the sole Trading-owned obligation account.
     pub fn authenticate(
         trading_program: [u8; 32],
         observation: ObligationAccountObservationV3<'a>,
         expected: ObligationExpectationV3,
+    ) -> ObligationResultV3<Self> {
+        Self::authenticate_hinted(trading_program, observation, expected, 0)
+    }
+
+    /// The same authentication, reproducing the address from a mined bump.
+    ///
+    /// Reading a hint must not be able to refuse: zero, or a bump whose
+    /// derivation fails, searches exactly as this route always did, and only
+    /// the address equality below can refuse.
+    pub fn authenticate_hinted(
+        trading_program: [u8; 32],
+        observation: ObligationAccountObservationV3<'a>,
+        expected: ObligationExpectationV3,
+        pda_bump: u8,
     ) -> ObligationResultV3<Self> {
         require_identity(trading_program)?;
         for identity in [
@@ -244,12 +284,9 @@ impl<'a> DealerObligationProjectionV3<'a> {
         ] {
             require_identity(identity)?;
         }
-        let expected_address = Pubkey::find_program_address(
-            &[DEALER_OBLIGATION_PDA_DOMAIN_V3, &expected.child_root],
-            &Pubkey::new_from_array(trading_program),
-        )
-        .0
-        .to_bytes();
+        let program = Pubkey::new_from_array(trading_program);
+        let expected_address =
+            obligation_address_hinted_v3(&program, expected.child_root, pda_bump).to_bytes();
         if observation.owner != trading_program || observation.address != expected_address {
             return Err(ObligationErrorV3::AccountMismatch);
         }

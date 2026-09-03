@@ -353,6 +353,15 @@ pub fn prepare_lp_close_v3(
 /// Exact common coordinates for one multi-LP operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MultiLpContextV3 {
+    /// PDA bumps the caller already derived for the three addresses this
+    /// planner reproduces.
+    ///
+    /// The planner runs a THIRD walk over addresses the evaluator that calls it
+    /// derived a few thousand instructions earlier, in the same invocation.
+    /// This is a process-local relay, not a wire field: nothing is taken on
+    /// anyone's word, because each bump is fed to a derivation this module
+    /// builds for itself and compared with the address the caller supplied.
+    pub bumps: MultiLpBumpHintsV3,
     /// Current Registry-selected Trading program.
     pub trading_program: [u8; 32],
     /// Current Registry-selected Custody program.
@@ -391,6 +400,59 @@ pub struct MultiLpContextV3 {
     /// scale from the same authenticated record). Zero is refused.
     pub basis_scale: u64,
 }
+
+/// The three PDA bumps this planner would otherwise search for.
+///
+/// Zero is unrecorded and its reader searches, so a caller that derived
+/// nothing is exactly as well off as it was before this field existed. The LP
+/// Position is absent from this bank on purpose: its account body carries its
+/// own `pda_bump`, which this module already required to be canonical.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MultiLpBumpHintsV3 {
+    /// Bump of the child-root obligation PDA under Trading.
+    pub obligation: u8,
+    /// Bump of the child-root Trading-principal Vault under Custody.
+    pub principal_vault: u8,
+    /// Bump of the Market-context hoard-principal Vault under Custody.
+    pub hoard_vault: u8,
+}
+
+impl MultiLpBumpHintsV3 {
+    /// Nothing derived: every one of the three searches.
+    pub const ABSENT: Self = Self {
+        obligation: 0,
+        principal_vault: 0,
+        hoard_vault: 0,
+    };
+}
+
+/// Reproduce one address from a mined bump, or search for it.
+///
+/// Reading a hint must not be able to refuse: an unrecorded bump, or one whose
+/// derivation fails, falls back to the search, and only the equality the caller
+/// already had can refuse.
+fn derive_hinted_v3(seeds: &[&[u8]], program: &Pubkey, hint: u8) -> Pubkey {
+    if hint != 0 && seeds.len() < MULTI_LP_HINTED_SEED_CAPACITY_V3 {
+        let bump = [hint];
+        let mut buffer: [&[u8]; MULTI_LP_HINTED_SEED_CAPACITY_V3] =
+            [&[]; MULTI_LP_HINTED_SEED_CAPACITY_V3];
+        for (slot, seed) in buffer.iter_mut().zip(seeds) {
+            *slot = seed;
+        }
+        if let Some(slot) = buffer.get_mut(seeds.len()) {
+            *slot = &bump;
+        }
+        if let Some(all) = buffer.get(..=seeds.len()) {
+            if let Ok(address) = Pubkey::create_program_address(all, program) {
+                return address;
+            }
+        }
+    }
+    Pubkey::find_program_address(seeds, program).0
+}
+
+/// Widest hinted seed set here (`CustodyVaultSeedsV1` is five), plus the bump.
+const MULTI_LP_HINTED_SEED_CAPACITY_V3: usize = 6;
 
 /// Exact collateral endpoints and authenticated pre-balances.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -994,7 +1056,8 @@ fn validate_context(
             return Err(MultiLpErrorV3::InvalidState);
         }
     }
-    let expected_vault = Pubkey::find_program_address(
+    let custody = Pubkey::new_from_array(context.custody_program);
+    let expected_vault = derive_hinted_v3(
         &CustodyVaultSeedsV1::new(
             context.market,
             context.release_set,
@@ -1002,21 +1065,18 @@ fn validate_context(
             CompartmentV1::TradingPrincipal,
         )
         .as_slices(),
-        &Pubkey::new_from_array(context.custody_program),
+        &custody,
+        context.bumps.principal_vault,
     )
-    .0
     .to_bytes();
-    let expected_obligation = Pubkey::find_program_address(
-        &[
-            super::v3_obligation::DEALER_OBLIGATION_PDA_DOMAIN_V3,
-            &context.child_root,
-        ],
+    let expected_obligation = super::v3_obligation::obligation_address_hinted_v3(
         &Pubkey::new_from_array(context.trading_program),
+        context.child_root,
+        context.bumps.obligation,
     )
-    .0
     .to_bytes();
     let descriptor = obligation.descriptor(context.locked_capital_floor);
-    let expected_hoard = Pubkey::find_program_address(
+    let expected_hoard = derive_hinted_v3(
         &CustodyVaultSeedsV1::new(
             context.market,
             context.release_set,
@@ -1024,9 +1084,9 @@ fn validate_context(
             CompartmentV1::HoardPrincipal,
         )
         .as_slices(),
-        &Pubkey::new_from_array(context.custody_program),
+        &custody,
+        context.bumps.hoard_vault,
     )
-    .0
     .to_bytes();
     if context.obligation_account != expected_obligation
         || collateral.principal_vault != expected_vault
@@ -1058,20 +1118,25 @@ fn authenticate_lp_position(
     lp_owner: [u8; 32],
     observation: DealerLpAccountObservationV3<'_>,
 ) -> MultiLpResultV3<DealerLpPositionV3> {
-    let expected_address = Pubkey::find_program_address(
+    if observation.owner != context.trading_program {
+        return Err(MultiLpErrorV3::PositionMismatch);
+    }
+    let lp = DealerLpPositionV3::decode(observation.data)?;
+    // Reproduced from the bump the Position's own body carries, which the
+    // equality below and `lp.pda_bump` together still pin to the canonical one.
+    let expected_address = derive_hinted_v3(
         &[
             DEALER_LP_POSITION_PDA_DOMAIN_V3,
             &context.child_root,
             &lp_owner,
         ],
         &Pubkey::new_from_array(context.trading_program),
+        u8::try_from(lp.pda_bump).unwrap_or(0),
     )
-    .0
     .to_bytes();
-    if observation.address != expected_address || observation.owner != context.trading_program {
+    if observation.address != expected_address {
         return Err(MultiLpErrorV3::PositionMismatch);
     }
-    let lp = DealerLpPositionV3::decode(observation.data)?;
     if lp.release_set != context.release_set
         || lp.market != context.market
         || lp.child_root != context.child_root
@@ -1474,6 +1539,7 @@ mod tests {
         .0
         .to_bytes();
         MultiLpContextV3 {
+            bumps: MultiLpBumpHintsV3::ABSENT,
             trading_program: trading,
             custody_program: custody,
             release_set: [6; 32],

@@ -50,8 +50,8 @@ use super::{
     v3_multi_lp::MultiLpActionV3,
 };
 
-const FIXED_PROFILE_OPERATIONS_V3: usize = 6;
-const P0_PROFILE_OPERATIONS_V3: usize = 7;
+const FIXED_PROFILE_OPERATIONS_V3: usize = 5;
+const P0_PROFILE_OPERATIONS_V3: usize = 6;
 const REQUEST_PROFILE_OPERATION_BYTES_V3: usize = dclutch_request_profile_contract::OPERATION_BYTES;
 const REQUEST_PROFILE_HEADER_BYTES_V3: usize = dclutch_request_profile_contract::HEADER_BYTES;
 const DEALER_EQUITY_V1_PROFILE_BYTES_V3: usize = REQUEST_PROFILE_HEADER_BYTES_V3
@@ -214,7 +214,6 @@ pub fn encode_dealer_equity_request_profile_v3(
             ),
             ScalarRegisterV1::common(DEALER_EQUITY_WITNESS_BYTES_SCALAR_V3),
         ),
-        RequestInstructionV1::require_zero(RequestCoordinateV1::fixed(476), 4),
     ];
     let mut embedded_scratch = [0_u8; DEALER_EQUITY_P0_PROFILE_BYTES_V3];
     let mut embedded_output = [0_u8; DEALER_EQUITY_P0_PROFILE_BYTES_V3];
@@ -241,7 +240,6 @@ pub fn encode_dealer_equity_request_profile_v3(
             ),
             shared[3],
             shared[4],
-            shared[5],
         ];
         encode_request_profile_v1_atomic(
             geometry,

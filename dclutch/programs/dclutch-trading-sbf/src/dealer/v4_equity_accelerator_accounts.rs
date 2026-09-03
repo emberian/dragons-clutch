@@ -14,7 +14,9 @@ use alloc::{boxed::Box, vec, vec::Vec};
 use dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1;
 use dclutch_claims_svm::{
     liability_basis_state_v2::{
-        LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
+        LIABILITY_BASIS_MARKET_BUMP_OFFSET_V2, LIABILITY_BASIS_MARKET_SEED_V2,
+        LIABILITY_BASIS_POSITION_BUMP_OFFSET_V2, LiabilityBasisMarketViewV2,
+        LiabilityBasisPositionViewV2,
     },
     protocol_position_v2::ProtocolPositionSeedsV2,
 };
@@ -39,8 +41,9 @@ use crate::hot_v3::AuthenticatedAcceleratorInvocationV4;
 
 use super::{
     v3_equity_operator::{
-        DealerEquityRequestV3, EquityPoolChainProjectionV3, EquityRequestActionV3,
-        claims_projection_digest_v3, collateral_projection_digest_v3, prepare_equity_request_v3,
+        DealerEquityBumpBankV3, DealerEquityRequestV3, EquityPoolChainProjectionV3,
+        EquityRequestActionV3, claims_projection_digest_v3, collateral_projection_digest_v3,
+        prepare_equity_request_v3,
     },
     v3_hot_artifact::{
         DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3, DEALER_EQUITY_LP_REVISION_SCALAR_V3,
@@ -58,9 +61,9 @@ use super::{
     },
     v3_multi_lp::{
         DEALER_LP_POSITION_BYTES_V3, DEALER_LP_POSITION_PDA_DOMAIN_V3, DealerLpPositionV3,
-        MAX_MULTI_LP_CUSTODY_EFFECTS_V3, MultiLpActionV3, MultiLpCollateralFrameV3,
-        MultiLpContextV3, MultiLpCustodyEffectV3, MultiLpCustodyRequestV3, MultiLpPlanV3,
-        multi_lp_custody_digest_v3,
+        MAX_MULTI_LP_CUSTODY_EFFECTS_V3, MultiLpActionV3, MultiLpBumpHintsV3,
+        MultiLpCollateralFrameV3, MultiLpContextV3, MultiLpCustodyEffectV3,
+        MultiLpCustodyRequestV3, MultiLpPlanV3, multi_lp_custody_digest_v3,
     },
     v3_obligation::{
         DealerObligationProjectionV3, ObligationAccountObservationV3, ObligationExpectationV3,
@@ -456,17 +459,20 @@ fn authenticate_claims(
         DealerEquityAcceleratorErrorV4::Claims,
     )?;
     authenticate_claims_fixed_joins(invocation, frame, runtime, core_market, core_program)?;
-    let expected_aggregate = Pubkey::find_program_address(
+    let aggregate_data = aggregate
+        .try_borrow_data()
+        .map_err(|_| DealerEquityAcceleratorErrorV4::Claims)?;
+    // The aggregate carries the bump Claims recorded when it founded the
+    // account, so this walk reproduces the address instead of searching for it.
+    let expected_aggregate = derive_hinted(
         &[LIABILITY_BASIS_MARKET_SEED_V2, &request.market],
         &Pubkey::new_from_array(claims_program),
+        recorded_bump(&aggregate_data, LIABILITY_BASIS_MARKET_BUMP_OFFSET_V2),
     )
     .0;
     if aggregate.key != &expected_aggregate || aggregate.owner.to_bytes() != claims_program {
         return Err(DealerEquityAcceleratorErrorV4::Claims);
     }
-    let aggregate_data = aggregate
-        .try_borrow_data()
-        .map_err(|_| DealerEquityAcceleratorErrorV4::Claims)?;
     let market = LiabilityBasisMarketViewV2::decode(&aggregate_data)
         .map_err(|_| DealerEquityAcceleratorErrorV4::Claims)?;
     if usize::try_from(market.claim_count).ok() != Some(width)
@@ -567,9 +573,10 @@ fn authenticate_claims(
         }
         let seeds = ProtocolPositionSeedsV2::new(aggregate.key.to_bytes(), position.owner)
             .map_err(|_| DealerEquityAcceleratorErrorV4::Claims)?;
-        let expected_key = Pubkey::find_program_address(
+        let expected_key = derive_hinted(
             &seeds.as_slices(),
             &Pubkey::new_from_array(claims_program),
+            recorded_bump(&data, LIABILITY_BASIS_POSITION_BUMP_OFFSET_V2),
         )
         .0;
         if evidence.key != &expected_key
@@ -725,9 +732,11 @@ fn authenticate_core_market(
         .try_borrow_data()
         .map_err(|_| DealerEquityAcceleratorErrorV4::Claims)?;
     let core = CoreState::decode(&data).map_err(|_| DealerEquityAcceleratorErrorV4::Claims)?;
-    let derived = Pubkey::find_program_address(
-        &MarketCoreStateSeedsV2::new(core.identity).as_slices(),
+    let core_seeds = MarketCoreStateSeedsV2::new(core.identity);
+    let derived = derive_hinted(
+        &core_seeds.as_slices(),
         core_program.key,
+        request.bumps().core_market(),
     )
     .0;
     if derived != *core_market.key
@@ -795,16 +804,7 @@ fn authenticate_pool_state(
         frame.lp_position,
         DealerEquityAcceleratorErrorV4::PoolState,
     )?;
-    let expected = Pubkey::find_program_address(
-        &[
-            DEALER_LP_POSITION_PDA_DOMAIN_V3,
-            &request.child_root,
-            &request.lp_owner,
-        ],
-        &Pubkey::new_from_array(trading),
-    );
-    if lp_account.key != &expected.0
-        || lp_account.key.to_bytes() != request.lp_position
+    if lp_account.key.to_bytes() != request.lp_position
         || lp_account.owner.to_bytes() != trading
         || lp_account.data_len() != DEALER_LP_POSITION_BYTES_V3
     {
@@ -818,6 +818,21 @@ fn authenticate_pool_state(
     }
     let lp = DealerLpPositionV3::decode(&lp_data)
         .map_err(|_| DealerEquityAcceleratorErrorV4::PoolState)?;
+    // The Position carries the bump Trading recorded when it created the
+    // account, and this route already required that byte to be canonical, so
+    // the search it fed is the one derivation the body could always replace.
+    let expected = derive_hinted(
+        &[
+            DEALER_LP_POSITION_PDA_DOMAIN_V3,
+            &request.child_root,
+            &request.lp_owner,
+        ],
+        &Pubkey::new_from_array(trading),
+        u8::try_from(lp.pda_bump).unwrap_or(0),
+    );
+    if lp_account.key != &expected.0 {
+        return Err(DealerEquityAcceleratorErrorV4::PoolState);
+    }
     if lp.revision != request.lp_revision
         || lp.release_set != request.release_set
         || lp.market != request.market
@@ -850,6 +865,7 @@ fn authenticate_collateral(
     let realm = authenticate_realm(
         invocation,
         config,
+        request.bumps(),
         first
             .get(CUSTODY_REALM_RAW_RELATIVE_V4)
             .ok_or(DealerEquityAcceleratorErrorV4::Custody)?,
@@ -858,13 +874,15 @@ fn authenticate_collateral(
             .ok_or(DealerEquityAcceleratorErrorV4::Custody)?,
     )?;
     let custody_program = invocation.custody_program().to_bytes();
-    let authority = Pubkey::find_program_address(
+    let bumps = request.bumps();
+    let authority = derive_hinted(
         &CustodyAuthoritySeedsV1::new(request.market, request.release_set).as_slices(),
         &Pubkey::new_from_array(custody_program),
+        bumps.custody_authority(),
     )
     .0
     .to_bytes();
-    let replay_key = Pubkey::find_program_address(
+    let replay_key = derive_hinted(
         &CustodyReplaySeedsV1::new(
             request.market,
             request.release_set,
@@ -873,6 +891,7 @@ fn authenticate_collateral(
         )
         .as_slices(),
         &Pubkey::new_from_array(custody_program),
+        bumps.custody_replay(),
     )
     .0;
     let replay_account = first
@@ -907,6 +926,7 @@ fn authenticate_collateral(
         request.release_set,
         request.child_root,
         CompartmentV1::TradingPrincipal,
+        bumps.principal_vault(),
     );
     let hoard_key = vault_key(
         custody_program,
@@ -914,6 +934,7 @@ fn authenticate_collateral(
         request.release_set,
         request.market,
         CompartmentV1::HoardPrincipal,
+        bumps.hoard_vault(),
     );
     let mint = *realm.collateral_mint();
     let token_program = *realm.token_program();
@@ -1027,6 +1048,9 @@ fn evaluate_equity_commit_last(
     let trading_program = invocation.context().trading_program.to_bytes();
     let chain = EquityPoolChainProjectionV3 {
         trading_program,
+        // The bank rides with the projection so a host that rebuilds this
+        // request from it reproduces the same signed header byte for byte.
+        bumps: request.bumps(),
         release_set: request.release_set,
         market: request.market,
         child_root: request.child_root,
@@ -1069,6 +1093,14 @@ fn evaluate_equity_commit_last(
         terminal: false,
     };
     let semantic_context = MultiLpContextV3 {
+        // The planner's own walk over three addresses this evaluator derived
+        // moments ago; the relay is process-local and every one is re-derived
+        // and re-compared there.
+        bumps: MultiLpBumpHintsV3 {
+            obligation: request.bumps().obligation(),
+            principal_vault: request.bumps().principal_vault(),
+            hoard_vault: request.bumps().hoard_vault(),
+        },
         trading_program,
         custody_program: invocation.custody_program().to_bytes(),
         release_set: request.release_set,
@@ -1450,26 +1482,29 @@ fn custody_slot(action: MultiLpActionV3, request: MultiLpCustodyRequestV3) -> Op
 fn authenticate_realm(
     invocation: &AuthenticatedAcceleratorInvocationV4<'_, '_, '_>,
     config: DealerConfigV4,
+    bumps: DealerEquityBumpBankV3,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
 ) -> Result<RealmV1, DealerEquityAcceleratorErrorV4> {
     let registry = invocation.context().registry_program.to_bytes();
-    let raw_key = Pubkey::find_program_address(
+    let raw_key = derive_hinted(
         &[
             RAW_RECORD_PDA_SEED_V1,
             &REALM_SCHEMA_RELEASE_ID_V1,
             &config.realm(),
         ],
         &Pubkey::new_from_array(registry),
+        bumps.realm_raw_record(),
     )
     .0;
-    let staging_key = Pubkey::find_program_address(
+    let staging_key = derive_hinted(
         &[
             STAGING_CURSOR_PDA_SEED_V1,
             &REALM_SCHEMA_RELEASE_ID_V1,
             &config.realm(),
         ],
         &Pubkey::new_from_array(registry),
+        bumps.realm_staging_record(),
     )
     .0;
     if raw.key != &raw_key
@@ -1582,13 +1617,51 @@ fn vault_key(
     release_set: [u8; 32],
     context: [u8; 32],
     compartment: CompartmentV1,
+    hint: u8,
 ) -> [u8; 32] {
-    Pubkey::find_program_address(
+    derive_hinted(
         &CustodyVaultSeedsV1::new(market, release_set, context, compartment).as_slices(),
         &Pubkey::new_from_array(custody_program),
+        hint,
     )
     .0
     .to_bytes()
+}
+
+/// One account body's own recorded bump. Zero is unrecorded and its reader
+/// searches, so a body written before the byte existed is no worse off.
+fn recorded_bump(body: &[u8], offset: usize) -> u8 {
+    body.get(offset).copied().unwrap_or(0)
+}
+
+/// Widest seed set any hinted derivation in this evaluator carries, plus the
+/// bump seed: `MarketCoreStateSeedsV2` is nine.
+const HINTED_SEED_CAPACITY_V4: usize = 10;
+
+/// Reproduce one address from a mined bump, degrading to the search this route
+/// always ran.
+///
+/// READING A HINT MUST NOT BE ABLE TO REFUSE. An unrecorded bump, or one whose
+/// derivation fails outright, falls back to `find_program_address`; only the
+/// address equality the caller already had can refuse. A bump is never an
+/// authority: canonicality is enforced where each of these accounts is MADE.
+fn derive_hinted(seeds: &[&[u8]], program: &Pubkey, hint: u8) -> (Pubkey, u8) {
+    if hint != 0 && seeds.len() < HINTED_SEED_CAPACITY_V4 {
+        let bump = [hint];
+        let mut buffer: [&[u8]; HINTED_SEED_CAPACITY_V4] = [&[]; HINTED_SEED_CAPACITY_V4];
+        for (slot, seed) in buffer.iter_mut().zip(seeds) {
+            *slot = seed;
+        }
+        if let Some(slot) = buffer.get_mut(seeds.len()) {
+            *slot = &bump;
+        }
+        if let Some(all) = buffer.get(..=seeds.len()) {
+            if let Ok(address) = Pubkey::create_program_address(all, program) {
+                return (address, hint);
+            }
+        }
+    }
+    Pubkey::find_program_address(seeds, program)
 }
 
 fn custody_frame<'accounts, 'info>(
@@ -1735,6 +1808,7 @@ mod tests {
     use dclutch_dealer_codec::scenario::ScenarioSolvencyReport;
 
     use super::*;
+    use super::{HINTED_SEED_CAPACITY_V4, derive_hinted};
 
     fn transfer(
         source_compartment: CompartmentV1,
@@ -2108,5 +2182,68 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The three arms a hint reader owes: reproduce, name something else, and
+    /// degrade. Only the third is the reader's own business; the second is the
+    /// caller's address equality, which is why this asserts a DIFFERENT address
+    /// rather than an error.
+    #[test]
+    fn a_hint_reproduces_misnames_or_degrades_but_never_refuses() {
+        let program = Pubkey::new_from_array([0x41; 32]);
+        let domain: &[u8] = b"dclutch/test/hinted/v4";
+        let context = [0x42; 32];
+        let seeds: [&[u8]; 2] = [domain, &context];
+        let (searched, canonical) = Pubkey::find_program_address(&seeds, &program);
+
+        assert_eq!(
+            derive_hinted(&seeds, &program, canonical),
+            (searched, canonical),
+            "the canonical bump reproduces the address the search found"
+        );
+
+        let mut below = canonical;
+        let mismatched = loop {
+            below = below
+                .checked_sub(1)
+                .expect("a derivable bump below canonical");
+            let bump = [below];
+            if let Ok(address) =
+                Pubkey::create_program_address(&[domain, &context, &bump], &program)
+            {
+                break address;
+            }
+        };
+        assert_ne!(
+            mismatched, searched,
+            "a wrong bump names a different address, and the equality refuses"
+        );
+        assert_eq!(derive_hinted(&seeds, &program, below), (mismatched, below));
+
+        assert_eq!(
+            derive_hinted(&seeds, &program, 0),
+            (searched, canonical),
+            "an unrecorded bump searches exactly as this route always did"
+        );
+        if canonical < u8::MAX {
+            // Every bump above canonical is on the curve by construction: the
+            // search descends from 255 and stopped at the first that was not.
+            assert_eq!(
+                derive_hinted(&seeds, &program, u8::MAX),
+                (searched, canonical),
+                "a bump whose derivation fails degrades to the search"
+            );
+        }
+    }
+
+    #[test]
+    fn a_seed_set_this_buffer_cannot_hold_degrades_to_the_search() {
+        let program = Pubkey::new_from_array([0x43; 32]);
+        let wide = [b"x".as_slice(); HINTED_SEED_CAPACITY_V4];
+        assert_eq!(
+            derive_hinted(&wide, &program, 255),
+            Pubkey::find_program_address(&wide, &program),
+            "the widest seed set leaves no room for a bump seed and searches"
+        );
     }
 }

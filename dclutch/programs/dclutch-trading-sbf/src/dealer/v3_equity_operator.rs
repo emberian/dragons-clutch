@@ -14,7 +14,17 @@ use alloc::{vec, vec::Vec};
 use dclutch_capability_program_contract::set_v1::{CapabilityProgramSetV1, SelectorWidthV1};
 use dclutch_claims_svm::signed_delta_v3::{DeltaDirectionV3, SignedDeltaPlanV3};
 use dclutch_core_contract::ContentId;
+#[cfg(not(target_os = "solana"))]
+use dclutch_custody_contract::{
+    CallerRoleV1, CompartmentV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1, CustodyVaultSeedsV1,
+};
 use dclutch_dealer_codec::scenario::ClaimsInventoryObservation;
+#[cfg(not(target_os = "solana"))]
+use dclutch_market_core_codec::{MarketCoreStateSeedsV2, MarketIdentity};
+#[cfg(not(target_os = "solana"))]
+use dclutch_realm_contract::REALM_SCHEMA_RELEASE_ID_V1;
+#[cfg(not(target_os = "solana"))]
+use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use solana_program::{hash::hash, hash::hashv, pubkey::Pubkey};
 
 use super::{
@@ -47,6 +57,153 @@ pub const DEALER_EQUITY_SELECTOR_OFFSET_V3: u32 = 10;
 pub const DEALER_EQUITY_HEADER_BYTES_V3: usize = 480;
 /// Header scalar containing the exact borrowed suffix width.
 pub const DEALER_EQUITY_CLAIMS_PACKET_BYTES_OFFSET_V3: usize = 472;
+/// Offset of the producer-mined PDA bump bank inside the signed header.
+pub const DEALER_EQUITY_BUMP_BANK_OFFSET_V3: usize = 476;
+/// Exact bump-bank width: the four bytes this header reserved.
+pub const DEALER_EQUITY_BUMP_BANK_BYTES_V3: usize = 4;
+/// Bumps the bank carries, in the order the evaluator derives them.
+pub const DEALER_EQUITY_BUMP_COUNT_V3: usize = 8;
+/// Lowest bump this nibble encoding can carry.
+pub const DEALER_EQUITY_LOWEST_CARRIED_BUMP_V3: u8 = 241;
+
+/// The eight fixed PDA bumps a request producer mined for the evaluator.
+///
+/// `evaluate_authenticated_dealer_equity_v4` reproduces eleven addresses it is
+/// handed. Nine have seeds that are fixture data -- a PDA domain, the logical
+/// Market, the release set, the child root, the LP owner, the realm digest --
+/// so every invocation of every run pays the same search again, and the
+/// producer derived every one of them before it could name the accounts at
+/// all. Two of the nine (the Claims aggregate and its Positions) already carry
+/// their own bump in the account body, so this bank carries the other eight.
+///
+/// A bump is never an authority. The reader feeds it to `create_program_address`
+/// over seeds it builds for itself and compares the result with the account the
+/// frame supplied, by the equality that was always there; a wrong bump derives a
+/// different address, or none, and refuses.
+///
+/// # Why nibbles
+///
+/// The header reserved exactly four bytes and eight bumps do not fit in four.
+/// Widening the header would move every artifact digest that names its width,
+/// so the eight ride as nibbles, which is `ProductGraphBumpsV1`'s encoding one
+/// family over. Zero is unrecorded and its reader searches. A recorded nibble
+/// `value` is the bump `256 - value`, carrying 255 down to
+/// [`DEALER_EQUITY_LOWEST_CARRIED_BUMP_V3`]; a bump below that is not
+/// representable, is recorded as unrecorded, and costs a search on about one
+/// derivation in 32,768 -- it can never cost a refusal, because a hint reader
+/// that can refuse reports a conjunct it does not own.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DealerEquityBumpBankV3([u8; DEALER_EQUITY_BUMP_COUNT_V3]);
+
+impl DealerEquityBumpBankV3 {
+    /// Nothing mined: every derivation on the evaluator searches.
+    pub const ABSENT: Self = Self([0; DEALER_EQUITY_BUMP_COUNT_V3]);
+
+    /// Carry the bumps a producer derived, dropping any this encoding cannot
+    /// hold.
+    #[must_use]
+    pub fn record(bumps: [u8; DEALER_EQUITY_BUMP_COUNT_V3]) -> Self {
+        let mut carried = [0_u8; DEALER_EQUITY_BUMP_COUNT_V3];
+        for (slot, bump) in carried.iter_mut().zip(bumps) {
+            *slot = if bump >= DEALER_EQUITY_LOWEST_CARRIED_BUMP_V3 {
+                bump
+            } else {
+                0
+            };
+        }
+        Self(carried)
+    }
+
+    /// Exact canonical bank bytes.
+    #[must_use]
+    pub fn to_bytes(self) -> [u8; DEALER_EQUITY_BUMP_BANK_BYTES_V3] {
+        let mut packed = [0_u8; DEALER_EQUITY_BUMP_BANK_BYTES_V3];
+        for (index, bump) in self.0.iter().enumerate() {
+            let nibble = if *bump >= DEALER_EQUITY_LOWEST_CARRIED_BUMP_V3 {
+                u8::try_from(256_u16 - u16::from(*bump)).unwrap_or(0)
+            } else {
+                0
+            };
+            if let Some(slot) = packed.get_mut(index / 2) {
+                *slot |= if index % 2 == 0 { nibble } else { nibble << 4 };
+            }
+        }
+        packed
+    }
+
+    /// Read the bank out of a signed header. A short header is absent rather
+    /// than a refusal, because a hint reader that can refuse reports a
+    /// conjunct it does not own.
+    #[must_use]
+    pub fn from_header(header: &[u8]) -> Self {
+        let mut bumps = [0_u8; DEALER_EQUITY_BUMP_COUNT_V3];
+        for (index, bump) in bumps.iter_mut().enumerate() {
+            let byte = header
+                .get(DEALER_EQUITY_BUMP_BANK_OFFSET_V3 + index / 2)
+                .copied()
+                .unwrap_or(0);
+            let nibble = if index % 2 == 0 {
+                byte & 0x0f
+            } else {
+                byte >> 4
+            };
+            *bump = if nibble == 0 {
+                0
+            } else {
+                u8::try_from(256_u16 - u16::from(nibble)).unwrap_or(0)
+            };
+        }
+        Self(bumps)
+    }
+
+    /// Bump of this Market's own Core state address.
+    #[must_use]
+    pub const fn core_market(self) -> u8 {
+        self.0[0]
+    }
+
+    /// Bump of the Trading-owned obligation.
+    #[must_use]
+    pub const fn obligation(self) -> u8 {
+        self.0[1]
+    }
+
+    /// Bump of the Custody transfer authority.
+    #[must_use]
+    pub const fn custody_authority(self) -> u8 {
+        self.0[2]
+    }
+
+    /// Bump of the Trading-role Custody replay compartment.
+    #[must_use]
+    pub const fn custody_replay(self) -> u8 {
+        self.0[3]
+    }
+
+    /// Bump of the Registry raw record naming the realm.
+    #[must_use]
+    pub const fn realm_raw_record(self) -> u8 {
+        self.0[4]
+    }
+
+    /// Bump of that record's Registry staging cursor.
+    #[must_use]
+    pub const fn realm_staging_record(self) -> u8 {
+        self.0[5]
+    }
+
+    /// Bump of the child-root Trading-principal Vault.
+    #[must_use]
+    pub const fn principal_vault(self) -> u8 {
+        self.0[6]
+    }
+
+    /// Bump of the Market-context hoard-principal Vault.
+    #[must_use]
+    pub const fn hoard_vault(self) -> u8 {
+        self.0[7]
+    }
+}
 
 /// Contribution with no Claims child route.
 pub const DEALER_EQUITY_CONTRIBUTE_P0_SELECTOR_V3: u16 = 1;
@@ -159,6 +316,8 @@ pub struct EquityPoolChainProjectionV3<'a> {
     pub expires_at: u64,
     /// Whether the Market has entered terminal settlement.
     pub terminal: bool,
+    /// PDA bumps this producer already derived, for the evaluator to reproduce.
+    pub bumps: DealerEquityBumpBankV3,
 }
 
 /// Borrowed hostile-decoded junior-equity request and signed Claims suffix.
@@ -214,6 +373,7 @@ pub struct DealerEquityRequestV3<'a> {
     pub shares: u64,
     /// Exact borrowed SignedDeltaV3 suffix width.
     pub claims_packet_bytes: u32,
+    bumps: DealerEquityBumpBankV3,
 }
 
 impl<'a> DealerEquityRequestV3<'a> {
@@ -222,7 +382,6 @@ impl<'a> DealerEquityRequestV3<'a> {
         if bytes.len() < DEALER_EQUITY_HEADER_BYTES_V3
             || bytes.get(..8) != Some(DEALER_EQUITY_REQUEST_MAGIC_V3.as_slice())
             || read_u16(bytes, 8)? != DEALER_EQUITY_REQUEST_VERSION_V3
-            || bytes.get(476..480) != Some([0_u8; 4].as_slice())
         {
             return Err(EquityOperatorErrorV3::InvalidRequest);
         }
@@ -262,6 +421,7 @@ impl<'a> DealerEquityRequestV3<'a> {
             collateral: read_u64(bytes, 456)?,
             shares: read_u64(bytes, 464)?,
             claims_packet_bytes,
+            bumps: DealerEquityBumpBankV3::from_header(bytes),
         };
         if value.obligation_revision == 0
             || value.lp_revision == 0
@@ -298,6 +458,11 @@ impl<'a> DealerEquityRequestV3<'a> {
         self.selector
     }
 
+    /// The producer-mined PDA bumps. Absent means every derivation searches.
+    pub const fn bumps(self) -> DealerEquityBumpBankV3 {
+        self.bumps
+    }
+
     /// Borrow the complete exact signed request.
     pub const fn bytes(self) -> &'a [u8] {
         self.bytes
@@ -326,6 +491,119 @@ impl<'a> DealerEquityRequestV3<'a> {
             .map(Some)
             .map_err(|_| EquityOperatorErrorV3::Claims)
     }
+}
+
+/// Chain coordinates a producer already holds, from which the eight bank
+/// bumps are derived.
+///
+/// Every one of these addresses is one the producer must name before it can
+/// build the account frame at all, so mining is free here and 1,500 compute
+/// units per rejected candidate in the evaluator.
+#[cfg(not(target_os = "solana"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DealerEquityBumpSeedsV3 {
+    /// Registry-selected Trading program.
+    pub trading_program: [u8; 32],
+    /// Market Core program owning the Core state.
+    pub core_program: [u8; 32],
+    /// Custody program owning the authority, replay and Vaults.
+    pub custody_program: [u8; 32],
+    /// Registry program owning the realm record pair.
+    pub registry_program: [u8; 32],
+    /// The Core state's own persisted identity.
+    pub core_identity: MarketIdentity,
+    /// Logical Core Market.
+    pub market: [u8; 32],
+    /// Immutable execution release set.
+    pub release_set: [u8; 32],
+    /// Immutable Trading child root.
+    pub child_root: [u8; 32],
+    /// Finalized Realm record digest.
+    pub realm: [u8; 32],
+}
+
+/// Derive the eight bank bumps the equity evaluator would otherwise search for.
+#[cfg(not(target_os = "solana"))]
+#[must_use]
+pub fn mine_dealer_equity_bumps_v3(seeds: DealerEquityBumpSeedsV3) -> DealerEquityBumpBankV3 {
+    let custody = Pubkey::new_from_array(seeds.custody_program);
+    let registry = Pubkey::new_from_array(seeds.registry_program);
+    let core_market = Pubkey::find_program_address(
+        &MarketCoreStateSeedsV2::new(seeds.core_identity).as_slices(),
+        &Pubkey::new_from_array(seeds.core_program),
+    )
+    .1;
+    let obligation = Pubkey::find_program_address(
+        &[DEALER_OBLIGATION_PDA_DOMAIN_V3, &seeds.child_root],
+        &Pubkey::new_from_array(seeds.trading_program),
+    )
+    .1;
+    let custody_authority = Pubkey::find_program_address(
+        &CustodyAuthoritySeedsV1::new(seeds.market, seeds.release_set).as_slices(),
+        &custody,
+    )
+    .1;
+    let custody_replay = Pubkey::find_program_address(
+        &CustodyReplaySeedsV1::new(
+            seeds.market,
+            seeds.release_set,
+            CallerRoleV1::Trading,
+            seeds.child_root,
+        )
+        .as_slices(),
+        &custody,
+    )
+    .1;
+    let realm_raw_record = Pubkey::find_program_address(
+        &[
+            RAW_RECORD_PDA_SEED_V1,
+            &REALM_SCHEMA_RELEASE_ID_V1,
+            &seeds.realm,
+        ],
+        &registry,
+    )
+    .1;
+    let realm_staging_record = Pubkey::find_program_address(
+        &[
+            STAGING_CURSOR_PDA_SEED_V1,
+            &REALM_SCHEMA_RELEASE_ID_V1,
+            &seeds.realm,
+        ],
+        &registry,
+    )
+    .1;
+    let principal_vault = Pubkey::find_program_address(
+        &CustodyVaultSeedsV1::new(
+            seeds.market,
+            seeds.release_set,
+            seeds.child_root,
+            CompartmentV1::TradingPrincipal,
+        )
+        .as_slices(),
+        &custody,
+    )
+    .1;
+    let hoard_vault = Pubkey::find_program_address(
+        &CustodyVaultSeedsV1::new(
+            seeds.market,
+            seeds.release_set,
+            seeds.market,
+            CompartmentV1::HoardPrincipal,
+        )
+        .as_slices(),
+        &custody,
+    )
+    .1;
+    DealerEquityBumpBankV3::record([
+        core_market,
+        obligation,
+        custody_authority,
+        custody_replay,
+        realm_raw_record,
+        realm_staging_record,
+        principal_vault,
+        hoard_vault,
+    ])
 }
 
 /// Metadata for one caller-buffer-backed unsigned request.
@@ -781,6 +1059,11 @@ fn encode_header(
         output,
         DEALER_EQUITY_CLAIMS_PACKET_BYTES_OFFSET_V3,
         &claims_packet_bytes.to_le_bytes(),
+    )?;
+    write_bytes(
+        output,
+        DEALER_EQUITY_BUMP_BANK_OFFSET_V3,
+        &chain.bumps.to_bytes(),
     )
 }
 
@@ -994,4 +1277,225 @@ fn write_bytes(bytes: &mut [u8], offset: usize, value: &[u8]) -> Result<(), Equi
         .ok_or(EquityOperatorErrorV3::InvalidRequest)?
         .copy_from_slice(value);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dclutch_market_core_codec::Identity;
+
+    fn header_with(bank: DealerEquityBumpBankV3) -> [u8; DEALER_EQUITY_HEADER_BYTES_V3] {
+        let mut header = [0_u8; DEALER_EQUITY_HEADER_BYTES_V3];
+        header[DEALER_EQUITY_BUMP_BANK_OFFSET_V3
+            ..DEALER_EQUITY_BUMP_BANK_OFFSET_V3 + DEALER_EQUITY_BUMP_BANK_BYTES_V3]
+            .copy_from_slice(&bank.to_bytes());
+        header
+    }
+
+    #[test]
+    fn the_bank_round_trips_through_the_four_reserved_bytes() {
+        let mined = [255, 254, 253, 252, 251, 250, 249, 241];
+        let bank = DealerEquityBumpBankV3::record(mined);
+        assert_eq!(
+            DealerEquityBumpBankV3::from_header(&header_with(bank)),
+            bank,
+            "eight nibbles survive four bytes"
+        );
+        assert_eq!(
+            [
+                bank.core_market(),
+                bank.obligation(),
+                bank.custody_authority(),
+                bank.custody_replay(),
+                bank.realm_raw_record(),
+                bank.realm_staging_record(),
+                bank.principal_vault(),
+                bank.hoard_vault(),
+            ],
+            mined,
+            "the accessors read the slots the miner wrote, in order"
+        );
+    }
+
+    #[test]
+    fn a_bump_this_encoding_cannot_carry_degrades_to_a_search() {
+        let bank = DealerEquityBumpBankV3::record([
+            255,
+            DEALER_EQUITY_LOWEST_CARRIED_BUMP_V3 - 1,
+            0,
+            255,
+            255,
+            255,
+            255,
+            255,
+        ]);
+        assert_eq!(bank.obligation(), 0, "240 is not representable");
+        assert_eq!(bank.custody_authority(), 0, "zero was never a bump");
+        assert_eq!(bank.core_market(), 255);
+        assert_eq!(
+            DealerEquityBumpBankV3::from_header(&header_with(bank)),
+            bank
+        );
+    }
+
+    #[test]
+    fn a_short_header_is_absent_rather_than_a_refusal() {
+        assert_eq!(
+            DealerEquityBumpBankV3::from_header(&[]),
+            DealerEquityBumpBankV3::ABSENT
+        );
+        assert_eq!(
+            DealerEquityBumpBankV3::from_header(&[0_u8; DEALER_EQUITY_BUMP_BANK_OFFSET_V3 + 2]),
+            DealerEquityBumpBankV3::ABSENT,
+            "a truncated bank reads as unrecorded, not as half a bank"
+        );
+    }
+
+    #[test]
+    fn the_miner_fills_every_slot_with_the_address_that_slot_names() {
+        // Bumps concentrate at 255, so one fixture cannot separate every pair
+        // of slots -- and a swap between two slots holding the same byte is a
+        // swap this bank cannot express. Sweeping the nonce makes each PAIR
+        // differ somewhere, which is the property a slot ordering needs.
+        let carried = |bump: u8| {
+            if bump >= DEALER_EQUITY_LOWEST_CARRIED_BUMP_V3 {
+                bump
+            } else {
+                0
+            }
+        };
+        // A slot swapped in the miner or in the accessors fails here rather
+        // than in a campaign, where a wrong hint only costs a search.
+        let mut separated = [[false; DEALER_EQUITY_BUMP_COUNT_V3]; DEALER_EQUITY_BUMP_COUNT_V3];
+        for nonce in 0..32_u8 {
+            let (bank, expected) = mined_and_searched(nonce);
+            assert_eq!(
+                [
+                    bank.core_market(),
+                    bank.obligation(),
+                    bank.custody_authority(),
+                    bank.custody_replay(),
+                    bank.realm_raw_record(),
+                    bank.realm_staging_record(),
+                    bank.principal_vault(),
+                    bank.hoard_vault(),
+                ],
+                expected.map(carried),
+                "nonce {nonce}"
+            );
+            for left in 0..DEALER_EQUITY_BUMP_COUNT_V3 {
+                for right in 0..DEALER_EQUITY_BUMP_COUNT_V3 {
+                    if expected[left] != expected[right] {
+                        separated[left][right] = true;
+                    }
+                }
+            }
+        }
+        for left in 0..DEALER_EQUITY_BUMP_COUNT_V3 {
+            for right in 0..DEALER_EQUITY_BUMP_COUNT_V3 {
+                assert!(
+                    left == right || separated[left][right],
+                    "slots {left} and {right} were never separated, so this test is blind to \
+                     exchanging them"
+                );
+            }
+        }
+    }
+
+    fn mined_and_searched(
+        nonce: u8,
+    ) -> (DealerEquityBumpBankV3, [u8; DEALER_EQUITY_BUMP_COUNT_V3]) {
+        let trading = Pubkey::new_from_array([0x11; 32]);
+        let core_program = Pubkey::new_from_array([0x12; 32]);
+        let custody = Pubkey::new_from_array([0x13; 32]);
+        let registry = Pubkey::new_from_array([0x14; 32]);
+        let mut market = [0x21; 32];
+        market[0] = nonce;
+        let mut release_set = [0x22; 32];
+        release_set[0] = nonce;
+        let mut child_root = [0x23; 32];
+        child_root[0] = nonce;
+        let mut realm = [0x25; 32];
+        realm[0] = nonce;
+        let identity = |bytes: [u8; 32]| Identity::new(bytes).expect("nonzero identity");
+        let core_identity = MarketIdentity {
+            market_id: identity([0x31; 32]),
+            realm_id: identity(realm),
+            product_record: identity([0x32; 32]),
+            product_id: identity([0x33; 32]),
+            resolution_policy: identity([0x34; 32]),
+            capability_manifest: identity([0x35; 32]),
+            selected_release_set: identity(release_set),
+            registry_program: identity(registry.to_bytes()),
+            generation: 3,
+        };
+        let bank = mine_dealer_equity_bumps_v3(DealerEquityBumpSeedsV3 {
+            trading_program: trading.to_bytes(),
+            core_program: core_program.to_bytes(),
+            custody_program: custody.to_bytes(),
+            registry_program: registry.to_bytes(),
+            core_identity,
+            market,
+            release_set,
+            child_root,
+            realm,
+        });
+        let expected = [
+            Pubkey::find_program_address(
+                &MarketCoreStateSeedsV2::new(core_identity).as_slices(),
+                &core_program,
+            )
+            .1,
+            Pubkey::find_program_address(&[DEALER_OBLIGATION_PDA_DOMAIN_V3, &child_root], &trading)
+                .1,
+            Pubkey::find_program_address(
+                &CustodyAuthoritySeedsV1::new(market, release_set).as_slices(),
+                &custody,
+            )
+            .1,
+            Pubkey::find_program_address(
+                &CustodyReplaySeedsV1::new(market, release_set, CallerRoleV1::Trading, child_root)
+                    .as_slices(),
+                &custody,
+            )
+            .1,
+            Pubkey::find_program_address(
+                &[RAW_RECORD_PDA_SEED_V1, &REALM_SCHEMA_RELEASE_ID_V1, &realm],
+                &registry,
+            )
+            .1,
+            Pubkey::find_program_address(
+                &[
+                    STAGING_CURSOR_PDA_SEED_V1,
+                    &REALM_SCHEMA_RELEASE_ID_V1,
+                    &realm,
+                ],
+                &registry,
+            )
+            .1,
+            Pubkey::find_program_address(
+                &CustodyVaultSeedsV1::new(
+                    market,
+                    release_set,
+                    child_root,
+                    CompartmentV1::TradingPrincipal,
+                )
+                .as_slices(),
+                &custody,
+            )
+            .1,
+            Pubkey::find_program_address(
+                &CustodyVaultSeedsV1::new(
+                    market,
+                    release_set,
+                    market,
+                    CompartmentV1::HoardPrincipal,
+                )
+                .as_slices(),
+                &custody,
+            )
+            .1,
+        ];
+        (bank, expected)
+    }
 }

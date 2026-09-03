@@ -740,9 +740,12 @@ mod tests {
         assert_eq!(super::super::v3_trade::DEALER_SCENARIO_TRADE_ACTION_V3, 9);
         assert_eq!(DEALER_GLOBAL_SELECTOR_MIN_V3, 1);
         assert_eq!(DEALER_GLOBAL_SELECTOR_MAX_V3, 9);
+        // 240 until the reserved-bytes operation was withdrawn: those four
+        // bytes now carry the producer-mined bump bank, so no RequestProfile
+        // conjunct owns them and the widest artifact is one operation shorter.
         assert_eq!(
             super::super::v3_artifacts::DEALER_EQUITY_REQUEST_PROFILE_MAX_BYTES_V3,
-            240
+            216
         );
     }
 }

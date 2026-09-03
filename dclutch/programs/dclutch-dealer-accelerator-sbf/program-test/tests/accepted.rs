@@ -27,9 +27,11 @@ use dclutch_capability_program_contract::hot_v3::{
 use dclutch_capability_program_contract::set_v1::CapabilityProgramSetV1;
 use dclutch_claims_svm::frame_spec_v1::{ClaimsFrameRoleV1, SignedDeltaFrameSpecV3};
 use dclutch_claims_svm::liability_basis_state_v2::{
-    LiabilityBasisMarketInputV2, LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
-    encode_liability_basis_market_into_v2,
+    LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketInputV2, LiabilityBasisMarketViewV2,
+    LiabilityBasisPositionViewV2, encode_liability_basis_market_into_v2,
+    put_liability_basis_market_bump_v2, put_liability_basis_position_bump_v2,
 };
+use dclutch_claims_svm::protocol_position_v2::ProtocolPositionSeedsV2;
 use dclutch_claims_svm::signed_delta_v3::SignedDeltaPlanV3;
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
@@ -645,7 +647,7 @@ fn scenario() -> Scenario {
         exposure_id: [0xba; 32],
     })
     .expect("canonical Claims graph");
-    let live = live_claims_graph(&fixture);
+    let live = live_claims_graph(&fixture, waist.claims_program);
     let claims_market_view =
         LiabilityBasisMarketViewV2::decode(&live.market).expect("claims aggregate decodes");
     let dealer_inventory = live.dealer_balances.clone();
@@ -966,7 +968,7 @@ struct LiveClaimsGraph {
 }
 
 /// Re-encode the compiled graph at a live revision through supported encoders.
-fn live_claims_graph(fixture: &NarrowFixtureV2) -> LiveClaimsGraph {
+fn live_claims_graph(fixture: &NarrowFixtureV2, claims_program: Pubkey) -> LiveClaimsGraph {
     let market_view = LiabilityBasisMarketViewV2::decode(&fixture.claims_market_bytes)
         .expect("aggregate decodes");
     let supplies = (0..fixture.outcome_count)
@@ -993,6 +995,20 @@ fn live_claims_graph(fixture: &NarrowFixtureV2) -> LiveClaimsGraph {
         &mut market,
     )
     .expect("live aggregate encodes");
+    // A founded aggregate carries its own PDA bump -- `founding_v5` records it
+    // -- and this fixture installs one rather than founding it. Leaving the
+    // byte zero measures the search on every reader of a graph no founding
+    // produces: the Claims signed-delta route and the Dealer equity evaluator
+    // both derive these three addresses on every invocation.
+    put_liability_basis_market_bump_v2(
+        &mut market,
+        Pubkey::find_program_address(
+            &[LIABILITY_BASIS_MARKET_SEED_V2, fixture.core_market.as_ref()],
+            &claims_program,
+        )
+        .1,
+    )
+    .expect("live aggregate carries its own bump");
     // The Positions are taken as the fixture planted them: it opens both at
     // `position_revision`, so the campaign only has to read their coordinates.
     let observe = |position: &NarrowPositionV2| {
@@ -1004,7 +1020,18 @@ fn live_claims_graph(fixture: &NarrowFixtureV2) -> LiveClaimsGraph {
         let balances = (0..fixture.outcome_count)
             .map(|claim| view.balance(&position.bytes, claim).expect("balance"))
             .collect::<Vec<_>>();
-        (position.bytes.clone(), balances)
+        let mut bytes = position.bytes.clone();
+        let seeds = ProtocolPositionSeedsV2::new(
+            fixture.claims_market.to_bytes(),
+            position.owner.to_bytes(),
+        )
+        .expect("Position seeds");
+        put_liability_basis_position_bump_v2(
+            &mut bytes,
+            Pubkey::find_program_address(&seeds.as_slices(), &claims_program).1,
+        )
+        .expect("Position carries its own bump");
+        (bytes, balances)
     };
     let (dealer_position, dealer_balances) = observe(&fixture.actor_position);
     let (counterparty_position, counterparty_balances) = observe(&fixture.reserve_position);
@@ -5369,8 +5396,9 @@ mod lp_lifecycle {
             DEALER_EQUITY_CONTRIBUTE_P0_SELECTOR_V3, DEALER_EQUITY_CONTRIBUTE_P1_SELECTOR_V3,
             DEALER_EQUITY_CONTRIBUTE_P2_SELECTOR_V3, DEALER_EQUITY_REDEEM_P0_SELECTOR_V3,
             DEALER_EQUITY_REDEEM_P1_SELECTOR_V3, DEALER_EQUITY_REDEEM_P2_SELECTOR_V3,
-            DealerEquityRequestV3, EquityPoolChainProjectionV3, EquityRequestIntentV3,
-            build_equity_request_v3, prepare_equity_request_v3,
+            DealerEquityBumpSeedsV3, DealerEquityRequestV3, EquityPoolChainProjectionV3,
+            EquityRequestIntentV3, build_equity_request_v3, mine_dealer_equity_bumps_v3,
+            prepare_equity_request_v3,
         },
         v3_hot_artifact::{
             dealer_equity_evidence_owner_identity_register_v3, dealer_equity_identity_count_v3,
@@ -5384,8 +5412,8 @@ mod lp_lifecycle {
         },
         v3_multi_lp::{
             DEALER_LP_POSITION_BYTES_V3, DEALER_LP_POSITION_PDA_DOMAIN_V3, DealerLpPositionV3,
-            MAX_MULTI_LP_CUSTODY_EFFECTS_V3, MultiLpActionV3, MultiLpCollateralFrameV3,
-            MultiLpContextV3, MultiLpCustodyRequestV3,
+            MAX_MULTI_LP_CUSTODY_EFFECTS_V3, MultiLpActionV3, MultiLpBumpHintsV3,
+            MultiLpCollateralFrameV3, MultiLpContextV3, MultiLpCustodyRequestV3,
         },
         v3_obligation::{
             DEALER_OBLIGATION_PDA_DOMAIN_V3, DealerObligationProjectionV3,
@@ -7133,8 +7161,25 @@ mod lp_lifecycle {
             basis_scale: 1,
         })
         .expect("canonical pool-equity preflight");
+        let request_bumps = mine_dealer_equity_bumps_v3(DealerEquityBumpSeedsV3 {
+            trading_program: TRADING.to_bytes(),
+            core_program: scenario.waist.core_program.to_bytes(),
+            custody_program: scenario.waist.custody_program.to_bytes(),
+            registry_program: scenario.waist.registry.to_bytes(),
+            core_identity: CoreState::decode(&scenario.fixture.core_state)
+                .expect("campaign Core state decodes")
+                .identity,
+            market: scenario.fixture.core_market.to_bytes(),
+            release_set: scenario.waist.release_set_id,
+            child_root: campaign.root.to_bytes(),
+            realm: scenario.realm.digest,
+        });
         let chain = EquityPoolChainProjectionV3 {
             trading_program: TRADING.to_bytes(),
+            // Every one of these eight addresses is one this producer already
+            // derived to name the account frame; the evaluator would otherwise
+            // search for all eight on every invocation.
+            bumps: request_bumps,
             release_set: scenario.waist.release_set_id,
             market: scenario.fixture.core_market.to_bytes(),
             child_root: campaign.root.to_bytes(),
@@ -7230,6 +7275,12 @@ mod lp_lifecycle {
         let replay_view = CustodyReplayV1::decode(&collateral.replay_bytes)
             .expect("equity Custody replay decodes");
         let physical_context = MultiLpContextV3 {
+            // The same three the on-chain evaluator relays into its own planner.
+            bumps: MultiLpBumpHintsV3 {
+                obligation: request_bumps.obligation(),
+                principal_vault: request_bumps.principal_vault(),
+                hoard_vault: request_bumps.hoard_vault(),
+            },
             trading_program: TRADING.to_bytes(),
             custody_program: scenario.waist.custody_program.to_bytes(),
             release_set: scenario.waist.release_set_id,
@@ -8478,7 +8529,7 @@ mod lp_lifecycle {
         let campaign = campaign(&scenario);
         let lp_owner = Keypair::new();
         let root_bound = equity_fixture(&scenario, &campaign, lp_owner.pubkey());
-        let root_bound_live = super::live_claims_graph(&root_bound);
+        let root_bound_live = super::live_claims_graph(&root_bound, scenario.waist.claims_program);
         let aggregate = LiabilityBasisMarketViewV2::decode(&root_bound_live.market)
             .expect("root-bound Claims aggregate");
         assert_eq!(aggregate.custody_context, campaign.root.to_bytes());
@@ -8524,7 +8575,7 @@ mod lp_lifecycle {
         let campaign = campaign(&scenario);
         let lp_owner = Keypair::new();
         let fixture = equity_fixture(&scenario, &campaign, lp_owner.pubkey());
-        let live = super::live_claims_graph(&fixture);
+        let live = super::live_claims_graph(&fixture, scenario.waist.claims_program);
         assert!(live.counterparty_balances.iter().all(|value| *value == 0));
         let obligation_bytes = super::obligation_bytes(
             scenario.fixture.core_market.to_bytes(),
@@ -8836,7 +8887,7 @@ mod lp_lifecycle {
             }),
         );
         let second_fixture = equity_fixture(&scenario, &campaign, second_lp.pubkey());
-        let second_live = super::live_claims_graph(&second_fixture);
+        let second_live = super::live_claims_graph(&second_fixture, scenario.waist.claims_program);
         assert_eq!(second_fixture.claims_market, fixture.claims_market);
         assert_eq!(
             second_fixture.actor_position.account,

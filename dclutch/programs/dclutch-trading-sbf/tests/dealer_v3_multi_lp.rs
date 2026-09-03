@@ -11,9 +11,10 @@ use dclutch_effect_kernel::v3::ProgramV3 as EffectProgramV3;
 use dclutch_trading_sbf::dealer::{
     v3_equity_operator::{
         DEALER_EQUITY_CONTRIBUTE_P2_SELECTOR_V3, DEALER_EQUITY_HEADER_BYTES_V3,
-        DEALER_EQUITY_SELECTOR_OFFSET_V3, DealerEquityRequestV3, EquityOperatorErrorV3,
-        EquityPoolChainProjectionV3, EquityRequestActionV3, EquityRequestIntentV3,
-        build_equity_request_v3, materialize_equity_intent_v3, prepare_equity_request_v3,
+        DEALER_EQUITY_SELECTOR_OFFSET_V3, DealerEquityBumpBankV3, DealerEquityRequestV3,
+        EquityOperatorErrorV3, EquityPoolChainProjectionV3, EquityRequestActionV3,
+        EquityRequestIntentV3, build_equity_request_v3, materialize_equity_intent_v3,
+        prepare_equity_request_v3,
     },
     v3_hot_artifact::{
         dealer_equity_effect_program_bytes_v3, dealer_equity_evidence_owner_identity_register_v3,
@@ -23,8 +24,8 @@ use dclutch_trading_sbf::dealer::{
     v3_multi_lp::{
         DEALER_LP_POSITION_BYTES_V3, DEALER_LP_POSITION_PDA_DOMAIN_V3,
         DealerLpAccountObservationV3, DealerLpPositionV3, MAX_MULTI_LP_CUSTODY_EFFECTS_V3,
-        MultiLpActionV3, MultiLpCollateralFrameV3, MultiLpContextV3, MultiLpCustodyRequestV3,
-        MultiLpIntentV3, prepare_multi_lp_v3,
+        MultiLpActionV3, MultiLpBumpHintsV3, MultiLpCollateralFrameV3, MultiLpContextV3,
+        MultiLpCustodyRequestV3, MultiLpIntentV3, prepare_multi_lp_v3,
     },
     v3_obligation::{
         DEALER_OBLIGATION_HEADER_BYTES_V3, DEALER_OBLIGATION_MAGIC_V3,
@@ -101,6 +102,9 @@ fn fixture() -> Fixture {
     .0
     .to_bytes();
     let context = MultiLpContextV3 {
+        // Literal addresses rather than derivations, so the absent bank is the
+        // honest one -- and it keeps this file exercising the pre-hint route.
+        bumps: MultiLpBumpHintsV3::ABSENT,
         trading_program: trading,
         custody_program: custody,
         release_set: [6; 32],
@@ -282,6 +286,10 @@ fn runtime_width_equity_request_is_chain_derived_and_rejoins_physical_intent() {
     };
     let chain = EquityPoolChainProjectionV3 {
         trading_program: f.trading,
+        // This fixture's addresses are literals rather than derivations, so the
+        // absent bank is the honest one: it is also the pre-hint route, which
+        // this file therefore keeps exercising.
+        bumps: DealerEquityBumpBankV3::ABSENT,
         release_set: f.context.release_set,
         market: f.context.market,
         child_root: f.context.child_root,
@@ -472,6 +480,10 @@ fn unsigned_equity_builder_refuses_dilution_before_emitting_request() {
     let lp_inventory = [10, 10, 10];
     let chain = EquityPoolChainProjectionV3 {
         trading_program: f.trading,
+        // This fixture's addresses are literals rather than derivations, so the
+        // absent bank is the honest one: it is also the pre-hint route, which
+        // this file therefore keeps exercising.
+        bumps: DealerEquityBumpBankV3::ABSENT,
         release_set: f.context.release_set,
         market: f.context.market,
         child_root: f.context.child_root,

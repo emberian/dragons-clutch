@@ -1,10 +1,10 @@
 {
   "bound_bytes": 4096,
-  "commit": "07184fa8244860f2f4fab90e57ce6eea05b6d3cf",
+  "commit": "3c42f0ece33d96419de611545cae336f4bf8f5ef",
   "link_count": 12,
   "links": [
     {
-      "frame_count": 270,
+      "frame_count": 271,
       "functions": [
         {
           "frames_bytes": [
@@ -269,6 +269,12 @@
             64
           ],
           "symbol": "_ZN18dclutch_claims_sbf15signed_delta_v312apply_deltas17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            128
+          ],
+          "symbol": "_ZN18dclutch_claims_sbf15signed_delta_v313derive_hinted17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -6130,7 +6136,7 @@
       "package": "dclutch-series-shadow-sbf"
     },
     {
-      "frame_count": 905,
+      "frame_count": 912,
       "functions": [
         {
           "frames_bytes": [
@@ -8282,6 +8288,12 @@
         },
         {
           "frames_bytes": [
+            192
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf6dealer11v3_multi_lp16derive_hinted_v317h<hash>E"
+        },
+        {
+          "frames_bytes": [
             448
           ],
           "symbol": "_ZN19dclutch_trading_sbf6dealer11v3_multi_lp18DealerLpPositionV311encode_into17h<hash>E"
@@ -8306,7 +8318,7 @@
         },
         {
           "frames_bytes": [
-            2048
+            1856
           ],
           "symbol": "_ZN19dclutch_trading_sbf6dealer11v3_multi_lp19prepare_multi_lp_v317h<hash>E"
         },
@@ -8318,7 +8330,7 @@
         },
         {
           "frames_bytes": [
-            512
+            576
           ],
           "symbol": "_ZN19dclutch_trading_sbf6dealer11v3_multi_lp24authenticate_lp_position17h<hash>E"
         },
@@ -8438,13 +8450,13 @@
         },
         {
           "frames_bytes": [
-            640
+            576
           ],
           "symbol": "_ZN19dclutch_trading_sbf6dealer12v3_artifacts39decode_dealer_equity_request_profile_v317h<hash>E"
         },
         {
           "frames_bytes": [
-            832
+            704
           ],
           "symbol": "_ZN19dclutch_trading_sbf6dealer12v3_artifacts39encode_dealer_equity_request_profile_v317h<hash>E"
         },
@@ -8510,7 +8522,7 @@
         },
         {
           "frames_bytes": [
-            512
+            0
           ],
           "symbol": "_ZN19dclutch_trading_sbf6dealer13v3_obligation28DealerObligationProjectionV312authenticate17h<hash>E"
         },
@@ -8522,9 +8534,21 @@
         },
         {
           "frames_bytes": [
+            448
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf6dealer13v3_obligation28DealerObligationProjectionV319authenticate_hinted17h<hash>E"
+        },
+        {
+          "frames_bytes": [
             192
           ],
           "symbol": "_ZN19dclutch_trading_sbf6dealer13v3_obligation28DealerObligationProjectionV36decode17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            128
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf6dealer13v3_obligation28obligation_address_hinted_v317h<hash>E"
         },
         {
           "frames_bytes": [
@@ -8657,6 +8681,24 @@
             1536
           ],
           "symbol": "_ZN19dclutch_trading_sbf6dealer18v3_equity_operator21DealerEquityRequestV36decode17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            0
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf6dealer18v3_equity_operator22DealerEquityBumpBankV311from_header17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            0
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf6dealer18v3_equity_operator22DealerEquityBumpBankV36record17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            0
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf6dealer18v3_equity_operator22DealerEquityBumpBankV38to_bytes17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -8990,6 +9032,12 @@
         },
         {
           "frames_bytes": [
+            256
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf6dealer30v4_equity_accelerator_accounts13derive_hinted17h<hash>E"
+        },
+        {
+          "frames_bytes": [
             384
           ],
           "symbol": "_ZN19dclutch_trading_sbf6dealer30v4_equity_accelerator_accounts13observe_token17h<hash>E"
@@ -9014,13 +9062,13 @@
         },
         {
           "frames_bytes": [
-            832
+            896
           ],
           "symbol": "_ZN19dclutch_trading_sbf6dealer30v4_equity_accelerator_accounts23authenticate_pool_state17h<hash>E"
         },
         {
           "frames_bytes": [
-            960
+            896
           ],
           "symbol": "_ZN19dclutch_trading_sbf6dealer30v4_equity_accelerator_accounts24authenticate_core_market17h<hash>E"
         },
@@ -9038,7 +9086,7 @@
         },
         {
           "frames_bytes": [
-            3584
+            3648
           ],
           "symbol": "_ZN19dclutch_trading_sbf6dealer30v4_equity_accelerator_accounts27evaluate_equity_commit_last17h<hash>E"
         },
@@ -9050,7 +9098,7 @@
         },
         {
           "frames_bytes": [
-            320
+            256
           ],
           "symbol": "_ZN19dclutch_trading_sbf6dealer30v4_equity_accelerator_accounts9vault_key17h<hash>E"
         },
