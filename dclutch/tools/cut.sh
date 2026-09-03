@@ -109,8 +109,28 @@ say "sweep     0 findings"
 # --- build the single-parent content-sync commit ---------------------------
 if [ -z "$MSGFILE" ]; then
   MSGFILE="$(mktemp)"
+  # The previous cut's message names the live commit it published ("live tree
+  # at <sha>"), so the range this cut carries is recoverable from the public
+  # history alone; the subject and body are the live commits' own subjects,
+  # so the public log reads like the work rather than like a counter.
+  PREV_LIVE="$(git -C "$PUB" log -1 --format=%B "$BASE" \
+    | sed -n 's/.*live tree at \([0-9a-f]\{40\}\).*/\1/p' | head -1)"
+  if [ -n "$PREV_LIVE" ] && git -C "$LIVE" cat-file -e "$PREV_LIVE^{commit}" 2>/dev/null; then
+    RANGE="$PREV_LIVE..$LIVE_COMMIT"
+  else
+    RANGE="$LIVE_COMMIT^..$LIVE_COMMIT"
+  fi
+  RANGE_COUNT="$(git -C "$LIVE" rev-list --count "$RANGE")"
+  SUBJECT="$(git -C "$LIVE" log -1 --format=%s "$LIVE_COMMIT")"
   {
-    printf 'Update dClutch successor subtree to %s\n\n' "$LIVE_SHORT"
+    if [ "$RANGE_COUNT" -gt 1 ]; then
+      printf 'dclutch %s (+%s): %s\n\n' "$LIVE_SHORT" "$((RANGE_COUNT - 1))" "$SUBJECT"
+      printf 'Carries %s live commits:\n\n' "$RANGE_COUNT"
+      git -C "$LIVE" log --reverse --format='  %h %s' "$RANGE"
+      printf '\n'
+    else
+      printf 'dclutch %s: %s\n\n' "$LIVE_SHORT" "$SUBJECT"
+    fi
     printf 'Content sync, single parent. The %s/ tree of this commit is\n' "$PREFIX"
     printf 'byte-identical to the live tree at %s.\n' "$LIVE_COMMIT"
   } >"$MSGFILE"
