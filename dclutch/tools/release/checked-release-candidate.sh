@@ -300,6 +300,34 @@ TOOLCHAIN_DIR="$WORK/toolchain"
 
 sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
 sha256_stdin() { shasum -a 256 | cut -d' ' -f1; }
+
+# A step whose whole output goes to a log ABORTS SILENTLY under `set -e`, and
+# the guard written underneath it -- "did not emit a regular executable" -- is
+# never reached, because the shell leaves at the failing command. Five steps of
+# the Product handoff gate have that shape, so a candidate that dies in any of
+# them prints its previous PASS line and then nothing at all, and the reason is
+# only in a log the caller has not been told the name of.
+#
+# It has cost two lanes. A cold machine met it on 2026-09-03 as
+# `CANDIDATE_EXIT=101` with no stdout, 427 s in, over four crates a `cargo
+# fetch` would have supplied (COLD_MACHINE_2026_09_03.md defect 3). Cohort-15
+# met it again the same night with a different cause -- `--locked` could not
+# resolve the successor workspace's lock, which `1c49ecac2` had left a row
+# short -- and lost a fifty-minute candidate to a one-line diagnosis sitting in
+# `product-handoff/build.log`.
+#
+# So: name the step, name the log, and show the log's tail. `|| step_refused`
+# is what makes it reachable; under a bare `set -e` this function is dead code.
+step_refused() {
+    local label="$1" log="$2" status="${3:-1}"
+    {
+        printf 'REFUSED: %s exited %s\n' "$label" "$status"
+        printf '  log: %s\n' "$log"
+        printf '  the log ends:\n'
+        tail -n 12 "$log" 2>/dev/null | sed 's/^/    /'
+    } >&2
+    exit "$status"
+}
 run_tool() { "$TOOL" "$@"; }
 write_lock_manifest() {
     local root="$1"
@@ -812,7 +840,8 @@ fi
 if [ -z "$TOOL" ]; then
     TOOL="$HOST_TARGET/release/dclutch-release-tool"
     ( cd "$SOURCE" && CARGO_TARGET_DIR="$HOST_TARGET" \
-        cargo build --release --locked --offline -p dclutch-release-tool ) >>"$BUILD_LOG" 2>&1
+        cargo build --release --locked --offline -p dclutch-release-tool ) >>"$BUILD_LOG" 2>&1 \
+        || step_refused "source-pinned dclutch-release-tool build" "$BUILD_LOG" $?
 fi
 [ -x "$TOOL" ] || { echo "release tool not executable: $TOOL" >&2; exit 1; }
 
@@ -835,12 +864,14 @@ PRODUCT_BUILD_LOG="$PRODUCT_HANDOFF_DIR/build.log"
 (
     cd "$PRODUCT_PACKAGES/dclutch-sdk"
     env PATH="$NODE_DIR:$PATH" "$NPM_BIN" ci --no-audit --no-fund
-) >>"$PRODUCT_BUILD_LOG" 2>&1
+) >>"$PRODUCT_BUILD_LOG" 2>&1 \
+    || step_refused "public SDK npm ci" "$PRODUCT_BUILD_LOG" $?
 (
     cd "$PRODUCT_PACKAGES/dclutch-cli"
     env PATH="$NODE_DIR:$PATH" "$NPM_BIN" ci --no-audit --no-fund
     env PATH="$NODE_DIR:$PATH" "$NPM_BIN" run build
-) >>"$PRODUCT_BUILD_LOG" 2>&1
+) >>"$PRODUCT_BUILD_LOG" 2>&1 \
+    || step_refused "public CLI npm ci and bundle" "$PRODUCT_BUILD_LOG" $?
 [ "$(sha256 "$SDK_LOCK")" = "$SDK_LOCK_BEFORE" ] \
     || { echo "source-pinned SDK package-lock.json changed during Product build" >&2; exit 1; }
 [ "$(sha256 "$CLI_LOCK")" = "$CLI_LOCK_BEFORE" ] \
@@ -855,7 +886,8 @@ PRODUCT_BOOTSTRAP_TARGET="$PRODUCT_BUILD_DIR/bootstrap-target"
     cargo build --release --locked --offline \
         --manifest-path "$SOURCE/tools/local-validator/bootstrap/successor/Cargo.toml" \
         --target-dir "$PRODUCT_BOOTSTRAP_TARGET"
-) >>"$PRODUCT_BUILD_LOG" 2>&1
+) >>"$PRODUCT_BUILD_LOG" 2>&1 \
+    || step_refused "source-pinned Product producer build" "$PRODUCT_BUILD_LOG" $?
 SUCCESSOR_BUILT="$PRODUCT_BOOTSTRAP_TARGET/release/dclutch-local-successor-bootstrap"
 SUCCESSOR_BIN="$PRODUCT_HANDOFF_DIR/dclutch-local-successor-bootstrap"
 [ -f "$SUCCESSOR_BUILT" ] && [ -x "$SUCCESSOR_BUILT" ] && [ ! -L "$SUCCESSOR_BUILT" ] \
@@ -867,7 +899,8 @@ PRODUCT_SMOKE="$PRODUCT_HANDOFF_DIR/smoke"
     --node "$NODE" \
     --cli "$CLI_BUNDLE" \
     --successor "$SUCCESSOR_BIN" \
-    --work "$PRODUCT_SMOKE" >>"$PRODUCT_BUILD_LOG" 2>&1
+    --work "$PRODUCT_SMOKE" >>"$PRODUCT_BUILD_LOG" 2>&1 \
+    || step_refused "public spline Product handoff smoke" "$PRODUCT_BUILD_LOG" $?
 PRODUCT_SMOKE_REPORT="$PRODUCT_SMOKE/smoke-report.json"
 [ -f "$PRODUCT_SMOKE_REPORT" ] && [ ! -L "$PRODUCT_SMOKE_REPORT" ] \
     || { echo "Product handoff gate did not emit its regular machine report" >&2; exit 1; }

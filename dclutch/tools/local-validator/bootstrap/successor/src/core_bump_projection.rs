@@ -77,12 +77,27 @@ const UNRECORDED_PRODUCT_GRAPH_CORE_ELF_SHA256_V1: [&str; 1] = [
 
 /// Core deployments whose `found` records all eight.
 ///
-/// Empty until a post-`b312ce3c4` Core is deployed and its digest is recorded
-/// here, and that emptiness is not a gap: a plan that INSTALLS this tree's own
-/// checked candidate needs no row, because those bytes are the ones beside this
-/// file. The list exists for the other case — a cohort deployed from a commit
-/// that is not the one you are standing on.
-const RECORDED_PRODUCT_GRAPH_CORE_ELF_SHA256_V1: [&str; 0] = [];
+/// A plan that INSTALLS this tree's own checked candidate needs no row, because
+/// those bytes are the ones beside this file. This list is the other case — a
+/// cohort deployed from a commit that is not the one you are standing on — and
+/// it is keyed by BYTES, which is why a row can be written the moment the
+/// candidate is built rather than after the deploy has been paid for. That
+/// ordering is the point: the refusal this list answers arrives at the FIRST
+/// founding, after the redeploy has spent, so a cohort whose row is written
+/// afterwards has already bought the discovery it was meant to avoid.
+const RECORDED_PRODUCT_GRAPH_CORE_ELF_SHA256_V1: [&str; 1] = [
+    // cohort-15, 1,193,400 bytes, deployed to devnet as
+    // 7hGerMC6Wj742FVTyiF9PhRnGSBzbee7TMZ6sUytsmFr. The deploy commit is
+    // 1cae26fd61defbefd20bcd52acc449b6e94e64ed; these exact bytes also build at
+    // its parent 8599cfc69, which is measured rather than assumed -- two
+    // detached worktrees, one per commit, produced all seven role ELFs
+    // byte-identically, so the lockfile row between them moved no shipped byte.
+    // The claim this row makes is a property of the bytes and is checkable with
+    // no chain at all: `git merge-base --is-ancestor b312ce3c4 1cae26fd6` is
+    // TRUE, so this Core fills all eight nibbles where cohort-14's writes
+    // zeros.
+    "a5385ba240b6eeae2cb3279d1014690cc44bf87e593dc9b0dc51b974142c73b6",
+];
 
 /// The projection recorded for one Core ELF digest, if this driver states one.
 fn declared_projection_v1(elf_sha256: &str) -> Option<CoreProductGraphProjectionV1> {
@@ -463,9 +478,19 @@ mod tests {
     /// record, and a duplicated row is how a list acquires that claim.
     #[test]
     fn no_core_digest_appears_in_both_lists() {
-        for digest in UNRECORDED_PRODUCT_GRAPH_CORE_ELF_SHA256_V1 {
+        // BOTH lists, not just the unrecorded one. Iterating one of them made
+        // the shape assertions below apply to whichever list happened to be
+        // non-empty, so the first row ever written to the other one would have
+        // been unchecked -- and it is the recorded list that grows every time a
+        // cohort is deployed.
+        for digest in UNRECORDED_PRODUCT_GRAPH_CORE_ELF_SHA256_V1
+            .iter()
+            .chain(RECORDED_PRODUCT_GRAPH_CORE_ELF_SHA256_V1.iter())
+            .copied()
+        {
             assert!(
-                !RECORDED_PRODUCT_GRAPH_CORE_ELF_SHA256_V1.contains(&digest),
+                !(UNRECORDED_PRODUCT_GRAPH_CORE_ELF_SHA256_V1.contains(&digest)
+                    && RECORDED_PRODUCT_GRAPH_CORE_ELF_SHA256_V1.contains(&digest)),
                 "{digest} claims both projections"
             );
             assert_eq!(digest.len(), 64, "{digest} is not a sha256");
