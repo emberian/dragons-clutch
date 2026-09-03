@@ -25,6 +25,7 @@ byte-checked against the Rust or Lean source that defines its layout, and
 | [directInlineV3](directInlineV3.md) | from canonical Rust/Lean-emitted Direct Hot V3 / Capability V4 ABIs; do not edit. | npm run abi:direct-v3 |
 | [generalSuccessorV5](generalSuccessorV5.md) | from canonical Rust General V5 successor ABIs; do not edit. | node scripts/generate-general-successor-v5.mjs |
 | [genericFoundingV1](genericFoundingV1.md) | by scripts/generate-generic-founding.mjs; do not edit. | npm run abi:generic-founding |
+| [hotBumpHintSlotsV1](hotBumpHintSlotsV1.md) | by scripts/generate-hot-bump-hint-slots.mjs; do not edit. |  |
 | [partitionQualityWasmV1](partitionQualityWasmV1.md) | from the authoritative Rust partition-quality gate and WASM artifact; do not edit. | npm run abi:partition-quality-wasm |
 | [principalCapacityV1](principalCapacityV1.md) | by scripts/generate-principal-capacity.mjs; do not edit. | npm run abi:principal-capacity |
 | [productPayoffV2WasmV1](productPayoffV2WasmV1.md) | from the authoritative Rust Product V2 payoff evaluator and WASM artifact; do not edit. | npm run abi:product-payoff-v2-wasm |

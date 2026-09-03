@@ -11,320 +11,365 @@
     "measured_at": "the `measured` value of every entry is the HIGHEST draw this lane observed, not a single run. Pinning the highest draw is what keeps ordinary noise from producing a red row.",
     "noise": "BOTH CAMPAIGNS ARE SEEDED NOW, and the residual is measured rather than assumed. The original cause was exact: every campaign drew fresh signing keypairs per run (Keypair::new() in the successor bootstrap; Keypair::new() and Pubkey::new_unique() in the ProgramTest fast lane), which changes how many iterations find_program_address needs for an off-curve bump, and each iteration is one sol_create_program_address syscall at 1,500 CU. Every delta measured between runs was an exact multiple of 1,500 (a handful of +-4 residuals aside), which is what made the diagnosis a measurement rather than a story. tier 4 is now band 0 on every row, proven over four runs of one compiled binary. tier 1 is NOT: 82 of its 101 transactions are byte-identical across two seeded runs at one revision and 19 are not, because A KEYPAIR SEED ONLY SEEDS KEYPAIRS -- the founding ladders carry expiry slots derived as finalized_slot + 500,000 and lookup tables derived from [authority, recent_slot], and those move with when the campaign happens to run. See CU_BUDGETS.md.",
     "measured_bands": "SEEDED, tier 1, two campaigns at 5465341 on 2026-08-27 with one seed digest and one set of ELFs: 14 of the 24 enforced rows are band 0, including every per-role activation, Found31 and its rollback case, the infrastructure profile init, the non-terminal DCLTPCB1 refusal, the second projected-Custody prestate and both DCLTPCA1 cases. The other 10 are the two founding ladders and their stages: dcltgmf1-whole 9,004; its stages 1,500 / 2 / 2 / 1,500; dcltpcb1-whole 24,000; its stages 6,000 / 4,500 / 1,500; the reordered-tail refusal 24,000. UNSEEDED, which is what this file's pins were written against and what a real founder still pays: DCLTGMF1 58,494, DCLTPCB1 51,005 across campaigns and 79,500 within ONE campaign, the reordered-tail refusal 55,503, per-role activation 1,500-9,000. tier 4 seeded: 0 on every row over four runs; unseeded it spanned 24,000 on the founding case and 6,000 on the substituted-ProgramData refusal, which six runs had not bounded.",
-    "what_this_buys_and_what_it_does_not": "A tolerance that exceeds the band cannot also catch a regression smaller than the band. On tier 1's founding transactions the band is 58,494-79,500, so a +30,000 regression to DCLTGMF1 is NOT reliably caught by its whole-transaction budget and this file will not pretend otherwise. What IS caught: any structural regression larger than the tolerance, on any draw; and \u2014 the thing W1f actually asked for \u2014 the moment the transaction gets close enough to the 1,400,000 ceiling that the budget can no longer be written down. The teeth at the 30,000 scale live on the entries whose measured band is zero or near it (Found31, the Found31 rollback case, the infrastructure profile init, the DCLTPCB1 non-terminal refusal) and on the tier-4 fast lane, which is also the one that runs pre-campaign.",
+    "what_this_buys_and_what_it_does_not": "A tolerance that exceeds the band cannot also catch a regression smaller than the band. On tier 1's founding transactions the band is 58,494-79,500, so a +30,000 regression to DCLTGMF1 is NOT reliably caught by its whole-transaction budget and this file will not pretend otherwise. What IS caught: any structural regression larger than the tolerance, on any draw; and — the thing W1f actually asked for — the moment the transaction gets close enough to the 1,400,000 ceiling that the budget can no longer be written down. The teeth at the 30,000 scale live on the entries whose measured band is zero or near it (Found31, the Found31 rollback case, the infrastructure profile init, the DCLTPCB1 non-terminal refusal) and on the tier-4 fast lane, which is also the one that runs pre-campaign.",
     "how_to_shrink_it": "TAKEN, 2026-08-27. dclutch-local-successor-bootstrap run takes --keypair-seed <64 hex> behind a loopback-only refusal, and programs/dclutch-core-sbf/tests/found_program_test.rs and programs/dclutch-custody-sbf/tests/program_test.rs derive their fixture keys from documented preimages. What remains is NOT a keypair: the tier-1 founding ladders hash slot- and clock-derived material into addresses, so shrinking those rows further means making the campaign's expiry and lookup-table inputs a function of the seed rather than of the wall clock. That is a change to what the campaign SUBMITS, not to how it draws keys, and it is not obviously worth it: the world is still as noisy as it ever was and a founding is exactly where a real founder pays that noise too."
   },
   "budgets": [
     {
-      "id": "dcltgmf1-whole",
+      "id": "dcltgmf3-whole",
       "campaign": "tier1",
       "scope": "transaction",
-      "transaction": "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF1)",
-      "measured": 1278747,
+      "transaction": "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF3)",
+      "measured": 829068,
       "tolerance": 70000,
-      "budget": 1348747,
+      "budget": 899068,
       "enforced": true,
-      "provenance": "THE transaction this lane exists for. Five stages in one rollback domain: Custody LockHoardAndCloseSource, Core Found-and-permit, Custody RealizeAndClose, Claims FoundingV5, Core Open LAST. Measured 1,184,132 at cd05331 (84.6% of the ceiling) and 1,278,747 at d9f79bb (91.3%) in ONE EVENING from other lanes' changes to Core, Claims and Trading, which is the growth W1f named as urgent and unowned. The pin is the higher of the two 2026-08-27 draws; the lower draw at 3b0c588 was 1,220,253. Remaining ceiling headroom from the pin is 121,253 CU, 8.7%, AND SHRINKING. The budget is 51,253 CU below the ceiling: when this transaction's measured value rises past 1,330,000 the budget can no longer be written at this tolerance and the evaluator refuses the file. That refusal is the point. This number's job is not to bless 1,278,747."
+      "provenance": "The founding is `DCLTGMF3` now, not `DCLTGMF1`: it was split into `DCLTCFQ1` + `DCLTCF1A` + `DCLTPCB2` + `DCLTGMF3` and the old rows named transactions the campaign stopped submitting. THE transaction this lane exists for, and the first time it has ever succeeded. Five stages in one rollback domain: Custody LockHoardAndCloseSource, Core Found-and-permit, Custody RealizeAndClose, Claims FoundingV5, Core Open LAST. The predecessor `dcltgmf1-whole` was pinned at 1,278,747 with 121,253 CU of ceiling headroom and the note said it was SHRINKING; at 829,068 the headroom is 570,932 (40.8%). That is not a regression repaired -- it is a different transaction, because the controller funding and its checkpoint moved out into DCLTCFQ1. one COMPLETING tier-1 run at 93a2793bd on 2026-09-03, the first this campaign has ever produced: the founding refused on its last transaction from 2026-08-27 until that commit. So `measured` here is ONE draw, not the highest of several, and the tolerance is the one the row it replaces carried -- the noise CAUSE is unchanged (expiry slots and lookup-table slots are still wall-clock derived under a keypair seed), so the recorded band still applies, and nothing about this run licenses tightening it."
     },
     {
-      "id": "dcltgmf1-stage-1-custody-lock",
+      "id": "dcltgmf3-stage-1-custody-lock",
       "campaign": "tier1",
       "scope": "stage",
-      "transaction": "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF1)",
+      "transaction": "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF3)",
       "stage": {
         "index": 1,
         "name": "Custody LockHoardAndCloseSource",
         "program_role": "custody"
       },
-      "measured": 144840,
+      "measured": 74034,
       "tolerance": 40000,
-      "budget": 184840,
+      "budget": 114034,
       "enforced": true,
-      "provenance": "The first inner stage's own `consumed` line from the chain's finalized logs, including its Registry reauthentication and both Token-2022 calls. A stage budget localises a regression to a program when the whole-transaction number is too noisy to attribute: this stage grew 105,722 -> 144,840 between cd05331 and d9f79bb, which is where most of the +94,615 on the whole transaction came from, and it is the same window in which Custody gained AbortSourceAndClose, an exhaustive RentCredit-writability match and a distinct Expiry refusal."
+      "provenance": "The first inner stage's own `consumed` line: Custody LockHoardAndCloseSource, including both Token-2022 calls. Its predecessor drew 144,840 with the Registry reauthentication inside it; DCLTGMF3 no longer invokes the Registry at all. one COMPLETING tier-1 run at 93a2793bd on 2026-09-03, the first this campaign has ever produced: the founding refused on its last transaction from 2026-08-27 until that commit. So `measured` here is ONE draw, not the highest of several, and the tolerance is the one the row it replaces carried -- the noise CAUSE is unchanged (expiry slots and lookup-table slots are still wall-clock derived under a keypair seed), so the recorded band still applies, and nothing about this run licenses tightening it."
     },
     {
-      "id": "dcltgmf1-stage-2-core-found-and-permit",
+      "id": "dcltgmf3-stage-2-core-found-and-permit",
       "campaign": "tier1",
       "scope": "stage",
-      "transaction": "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF1)",
+      "transaction": "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF3)",
       "stage": {
         "index": 2,
-        "name": "Core Found and one-shot permit",
+        "name": "Core Found and permit",
         "program_role": "core"
       },
-      "measured": 433129,
+      "measured": 299927,
       "tolerance": 30000,
-      "budget": 463129,
+      "budget": 329927,
       "enforced": true,
-      "provenance": "The Core Found-and-permit stage's own `consumed` line, including its Registry reauthentication and four System calls. This is the single most expensive stage of the founding and the one whose ELF-hashing cost c61376d removed; it is worth its own row so a return of full-ELF authentication is attributed to Core rather than to `the founding got bigger`."
+      "provenance": "Core's Found-and-permit: the Market creation plan, the Product-graph walk, and the one-shot permit whose intent this lane spent the day convicting. The largest of the five. one COMPLETING tier-1 run at 93a2793bd on 2026-09-03, the first this campaign has ever produced: the founding refused on its last transaction from 2026-08-27 until that commit. So `measured` here is ONE draw, not the highest of several, and the tolerance is the one the row it replaces carried -- the noise CAUSE is unchanged (expiry slots and lookup-table slots are still wall-clock derived under a keypair seed), so the recorded band still applies, and nothing about this run licenses tightening it."
     },
     {
-      "id": "dcltgmf1-stage-3-custody-realize",
+      "id": "dcltgmf3-stage-3-custody-realize",
       "campaign": "tier1",
       "scope": "stage",
-      "transaction": "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF1)",
+      "transaction": "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF3)",
       "stage": {
         "index": 3,
         "name": "Custody RealizeAndClose",
         "program_role": "custody"
       },
-      "measured": 103858,
+      "measured": 45921,
       "tolerance": 20000,
-      "budget": 123858,
+      "budget": 65921,
       "enforced": true,
-      "provenance": "The Realize stage's own `consumed` line, including its Registry reauthentication. It realizes the 808-byte projection in place into a 288-byte normal CustodyReplayV1."
+      "provenance": "Custody RealizeAndClose: the projection is realized against the candidate CoreState digest and the source compartment is closed. one COMPLETING tier-1 run at 93a2793bd on 2026-09-03, the first this campaign has ever produced: the founding refused on its last transaction from 2026-08-27 until that commit. So `measured` here is ONE draw, not the highest of several, and the tolerance is the one the row it replaces carried -- the noise CAUSE is unchanged (expiry slots and lookup-table slots are still wall-clock derived under a keypair seed), so the recorded band still applies, and nothing about this run licenses tightening it."
     },
     {
-      "id": "dcltgmf1-stage-4-claims-foundingv5",
+      "id": "dcltgmf3-stage-4-claims-foundingv5",
       "campaign": "tier1",
       "scope": "stage",
-      "transaction": "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF1)",
+      "transaction": "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF3)",
       "stage": {
         "index": 4,
         "name": "Claims FoundingV5",
         "program_role": "claims"
       },
-      "measured": 267951,
+      "measured": 155086,
       "tolerance": 20000,
-      "budget": 287951,
+      "budget": 175086,
       "enforced": true,
-      "provenance": "The Claims stage's own `consumed` line, including four Registry reauthentications and six System calls. It allocates the liability-basis aggregate, the founder Position and the admission record at runtime-derived widths."
+      "provenance": "Claims FoundingV5: the twenty-nine joins, the four-role activation loop, and the aggregate, Position and admission it allocates. This is the stage that refused 0x518D PermitBody on every run before 93a2793bd, at about 63,000 CU -- it now runs to completion for 155,086. one COMPLETING tier-1 run at 93a2793bd on 2026-09-03, the first this campaign has ever produced: the founding refused on its last transaction from 2026-08-27 until that commit. So `measured` here is ONE draw, not the highest of several, and the tolerance is the one the row it replaces carried -- the noise CAUSE is unchanged (expiry slots and lookup-table slots are still wall-clock derived under a keypair seed), so the recorded band still applies, and nothing about this run licenses tightening it."
     },
     {
-      "id": "dcltgmf1-stage-5-open-and-outer-joins",
-      "campaign": "tier1",
-      "scope": "derived",
-      "transaction": "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF1)",
-      "measured": 0,
-      "tolerance": 0,
-      "budget": 0,
-      "enforced": false,
-      "unenforced_reason": "There is no measurement to budget. The RPC truncates the finalized log before the commit-last Open stage's own accounting line, so the only figure available for `Core Open plus the outer's five cross-request joins` is ARITHMETIC: whole minus 300 for the two ComputeBudget instructions minus the four measured stages. It came to 328,669 at d9f79bb and 322,681 at 3b0c588. A subtraction inherits every other row's noise and would red-row on all of it at once, so it is recorded here and not asserted. It becomes budgetable the day a producer surfaces the untruncated log.",
-      "provenance": "Derived, not measured; see unenforced_reason. Recorded so a reader does not conclude the Open stage was forgotten."
-    },
-    {
-      "id": "dcltgmf1-hostile-rollback",
-      "campaign": "tier1",
-      "scope": "transaction",
-      "transaction": "DCLTGMF1 refuses a substituted Claims request and rolls the whole founding back",
-      "measured": 32686,
-      "tolerance": 20000,
-      "budget": 52686,
-      "enforced": true,
-      "provenance": "The founding outer's cross-request join, refusing a well-formed ClaimsFoundingRequestV5 that differs in exactly one coordinate. It refuses inside Trading before its first CPI, so this number is a floor on how cheaply the outer can detect a substituted readonly record. A LARGE increase here means the join moved later; that is a semantic change wearing a CU costume."
-    },
-    {
-      "id": "dcltpcb1-whole",
-      "campaign": "tier1",
-      "scope": "transaction",
-      "transaction": "create the projected-Custody founding prestate (DCLTPCB1)",
-      "measured": 845307,
-      "tolerance": 90000,
-      "budget": 935307,
-      "enforced": true,
-      "provenance": "The four-stage projected-Custody prestate ladder: Custody Initialize (with Core ProjectFound), OpenHoard (with Token-2022 InitializeAccount3), OpenSourceCompartment, and three FundingState stagings. Its tolerance is set from the 79,500 CU in-run band, not from the 51,005 cross-run one, because the in-run figure is the stronger measurement: the same campaign stages this ladder twice on one binary and the two differ by exactly 53 bump-search iterations."
-    },
-    {
-      "id": "dcltpcb1-stage-1-custody-initialize",
+      "id": "dcltgmf3-stage-5-core-open",
       "campaign": "tier1",
       "scope": "stage",
-      "transaction": "create the projected-Custody founding prestate (DCLTPCB1)",
+      "transaction": "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF3)",
+      "stage": {
+        "index": 5,
+        "name": "Core Open",
+        "program_role": "core"
+      },
+      "measured": 56265,
+      "tolerance": 20000,
+      "budget": 76265,
+      "enforced": true,
+      "provenance": "Core Open, LAST, so that any late refusal rolls the whole chain back. Its predecessor row was `dcltgmf1-stage-5-open-and-outer-joins`, scope `derived`, measured 0 and NOT enforced, because no run had ever reached it. It is a depth-2 stage on the chain's own accounting now, so it is an ordinary enforced stage budget. one COMPLETING tier-1 run at 93a2793bd on 2026-09-03, the first this campaign has ever produced: the founding refused on its last transaction from 2026-08-27 until that commit. So `measured` here is ONE draw, not the highest of several, and the tolerance is the one the row it replaces carried -- the noise CAUSE is unchanged (expiry slots and lookup-table slots are still wall-clock derived under a keypair seed), so the recorded band still applies, and nothing about this run licenses tightening it."
+    },
+    {
+      "id": "dcltgmf3-hostile-rollback",
+      "campaign": "tier1",
+      "scope": "transaction",
+      "transaction": "DCLTGMF3 refuses a substituted Claims request and rolls the whole founding back",
+      "measured": 30660,
+      "tolerance": 20000,
+      "budget": 50660,
+      "enforced": true,
+      "provenance": "HOSTILE. The outer's cross-request join refuses a substituted Claims record before its first CPI, and the refusal has to take Lock, Found, Realize and Claims with it. one COMPLETING tier-1 run at 93a2793bd on 2026-09-03, the first this campaign has ever produced: the founding refused on its last transaction from 2026-08-27 until that commit. So `measured` here is ONE draw, not the highest of several, and the tolerance is the one the row it replaces carried -- the noise CAUSE is unchanged (expiry slots and lookup-table slots are still wall-clock derived under a keypair seed), so the recorded band still applies, and nothing about this run licenses tightening it."
+    },
+    {
+      "id": "dcltcfq1-whole",
+      "campaign": "tier1",
+      "scope": "transaction",
+      "transaction": "prepare exact controller funding ledgers and checkpoint (DCLTCFQ1)",
+      "measured": 496732,
+      "tolerance": 90000,
+      "budget": 586732,
+      "enforced": true,
+      "provenance": "The controller-funding half of the old `DCLTPCB1`, now its own transaction: both FundingLedgerV2 accounts and the checkpoint DCLTCF1A and DCLTPCB2 read. Replaces `dcltpcb1-whole`. one COMPLETING tier-1 run at 93a2793bd on 2026-09-03, the first this campaign has ever produced: the founding refused on its last transaction from 2026-08-27 until that commit. So `measured` here is ONE draw, not the highest of several, and the tolerance is the one the row it replaces carried -- the noise CAUSE is unchanged (expiry slots and lookup-table slots are still wall-clock derived under a keypair seed), so the recorded band still applies, and nothing about this run licenses tightening it."
+    },
+    {
+      "id": "dcltcfq1-stage-1-resolution-pre-market-funding",
+      "campaign": "tier1",
+      "scope": "stage",
+      "transaction": "prepare exact controller funding ledgers and checkpoint (DCLTCFQ1)",
       "stage": {
         "index": 1,
-        "name": "Custody Initialize, including Core ProjectFound",
-        "program_role": "custody"
+        "name": "Resolution PreMarketFunding V2",
+        "program_role": "resolution"
       },
-      "measured": 354337,
+      "measured": 313180,
       "tolerance": 30000,
-      "budget": 384337,
+      "budget": 343180,
       "enforced": true,
-      "provenance": "The first inner stage's own `consumed` line. It is the ladder's dominant cost and the one that carries Core's authenticated projection."
+      "provenance": "The Resolution CPI that creates the 0b0111 controller ledger and projects Core's Found to authenticate the Market it is funding: the only depth-2 stage of this transaction, and 63% of it. one COMPLETING tier-1 run at 93a2793bd on 2026-09-03, the first this campaign has ever produced: the founding refused on its last transaction from 2026-08-27 until that commit. So `measured` here is ONE draw, not the highest of several, and the tolerance is the one the row it replaces carried -- the noise CAUSE is unchanged (expiry slots and lookup-table slots are still wall-clock derived under a keypair seed), so the recorded band still applies, and nothing about this run licenses tightening it."
     },
     {
-      "id": "dcltpcb1-stage-2-custody-openhoard",
+      "id": "dcltpcb2-whole",
+      "campaign": "tier1",
+      "scope": "transaction",
+      "transaction": "stage projected custody against prepared controller funding (DCLTPCB2)",
+      "measured": 619359,
+      "tolerance": 90000,
+      "budget": 709359,
+      "enforced": true,
+      "provenance": "Projected Custody staged against the ledgers DCLTCFQ1 prepared. Replaces `dcltpcb1-second-prestate-whole`, whose transaction the campaign no longer submits. one COMPLETING tier-1 run at 93a2793bd on 2026-09-03, the first this campaign has ever produced: the founding refused on its last transaction from 2026-08-27 until that commit. So `measured` here is ONE draw, not the highest of several, and the tolerance is the one the row it replaces carried -- the noise CAUSE is unchanged (expiry slots and lookup-table slots are still wall-clock derived under a keypair seed), so the recorded band still applies, and nothing about this run licenses tightening it."
+    },
+    {
+      "id": "dcltpcb2-stage-1-custody-initialize",
       "campaign": "tier1",
       "scope": "stage",
-      "transaction": "create the projected-Custody founding prestate (DCLTPCB1)",
+      "transaction": "stage projected custody against prepared controller funding (DCLTPCB2)",
+      "stage": {
+        "index": 1,
+        "name": "Custody Initialize, including the Core projection CPI",
+        "program_role": "custody"
+      },
+      "measured": 253115,
+      "tolerance": 30000,
+      "budget": 283115,
+      "enforced": true,
+      "provenance": "Custody Initialize, including Core's ProjectFound37 projection CPI. one COMPLETING tier-1 run at 93a2793bd on 2026-09-03, the first this campaign has ever produced: the founding refused on its last transaction from 2026-08-27 until that commit. So `measured` here is ONE draw, not the highest of several, and the tolerance is the one the row it replaces carried -- the noise CAUSE is unchanged (expiry slots and lookup-table slots are still wall-clock derived under a keypair seed), so the recorded band still applies, and nothing about this run licenses tightening it."
+    },
+    {
+      "id": "dcltpcb2-stage-2-custody-openhoard",
+      "campaign": "tier1",
+      "scope": "stage",
+      "transaction": "stage projected custody against prepared controller funding (DCLTPCB2)",
       "stage": {
         "index": 2,
-        "name": "Custody OpenHoard, including Token-2022 InitializeAccount3",
+        "name": "Custody OpenHoard",
         "program_role": "custody"
       },
-      "measured": 115594,
+      "measured": 56015,
       "tolerance": 20000,
-      "budget": 135594,
+      "budget": 76015,
       "enforced": true,
-      "provenance": "The second inner stage's own `consumed` line."
+      "provenance": "Custody OpenHoard, including its Token-2022 account creation. one COMPLETING tier-1 run at 93a2793bd on 2026-09-03, the first this campaign has ever produced: the founding refused on its last transaction from 2026-08-27 until that commit. So `measured` here is ONE draw, not the highest of several, and the tolerance is the one the row it replaces carried -- the noise CAUSE is unchanged (expiry slots and lookup-table slots are still wall-clock derived under a keypair seed), so the recorded band still applies, and nothing about this run licenses tightening it."
     },
     {
-      "id": "dcltpcb1-stage-3-custody-opensourcecompartment",
+      "id": "dcltpcb2-stage-3-custody-opensourcecompartment",
       "campaign": "tier1",
       "scope": "stage",
-      "transaction": "create the projected-Custody founding prestate (DCLTPCB1)",
+      "transaction": "stage projected custody against prepared controller funding (DCLTPCB2)",
       "stage": {
         "index": 3,
         "name": "Custody OpenSourceCompartment",
         "program_role": "custody"
       },
-      "measured": 159108,
+      "measured": 79976,
       "tolerance": 50000,
-      "budget": 209108,
+      "budget": 129976,
       "enforced": true,
-      "provenance": "The third inner stage's own `consumed` line. This is the stage that had never executed at all before run 4 \u2014 it died out-of-memory under the heap wall \u2014 so a budget on it is a regression floor on a route with barely any history."
+      "provenance": "Custody OpenSourceCompartment: the source vault and its replay authority. one COMPLETING tier-1 run at 93a2793bd on 2026-09-03, the first this campaign has ever produced: the founding refused on its last transaction from 2026-08-27 until that commit. So `measured` here is ONE draw, not the highest of several, and the tolerance is the one the row it replaces carried -- the noise CAUSE is unchanged (expiry slots and lookup-table slots are still wall-clock derived under a keypair seed), so the recorded band still applies, and nothing about this run licenses tightening it."
     },
     {
-      "id": "dcltpcb1-second-prestate-whole",
+      "id": "dcltpcb2-reordered-tail-refusal",
       "campaign": "tier1",
       "scope": "transaction",
-      "transaction": "stage a second projected-Custody prestate for the expiry abort (DCLTPCB1)",
-      "measured": 792807,
-      "tolerance": 90000,
-      "budget": 882807,
-      "enforced": true,
-      "provenance": "The identical four-stage ladder at a second generation, staged to be abandoned by DCLTPCA1. Budgeted separately from the first because the two are the campaign's own control on run-to-run noise: they run the same code on the same binary, and their difference IS the band."
-    },
-    {
-      "id": "dcltpcb1-reordered-tail-refusal",
-      "campaign": "tier1",
-      "scope": "transaction",
-      "transaction": "DCLTPCB1 refuses a reordered FundingState tail and rolls the transaction back",
-      "measured": 781102,
+      "transaction": "DCLTPCB2 refuses a reordered FundingLedgerV2 tail and rolls the transaction back",
+      "measured": 38746,
       "tolerance": 70000,
-      "budget": 851102,
+      "budget": 108746,
       "enforced": true,
-      "provenance": "The hostile case W1e refused to count until run 5 supplied a discriminator. It matters that it stays BELOW the honest transaction it shadows: when the two were within 300 CU of each other the refusal was indistinguishable from an out-of-memory death at the same point. This budget does not check that relation \u2014 it is a ceiling on one number \u2014 but a red row here is the first sign that the two have converged again."
+      "provenance": "HOSTILE. Swapping the two FundingLedgerV2 accounts breaks the canonical controller partition and the artifact's ordered `funding_list_id` join. It draws 38,746 now against its predecessor's 781,102, because the ledgers it refuses are PREPARED by an earlier transaction rather than created by this one -- the refusal is reached before the work is done. one COMPLETING tier-1 run at 93a2793bd on 2026-09-03, the first this campaign has ever produced: the founding refused on its last transaction from 2026-08-27 until that commit. So `measured` here is ONE draw, not the highest of several, and the tolerance is the one the row it replaces carried -- the noise CAUSE is unchanged (expiry slots and lookup-table slots are still wall-clock derived under a keypair seed), so the recorded band still applies, and nothing about this run licenses tightening it."
     },
     {
-      "id": "dcltpcb1-non-terminal-refusal",
+      "id": "dcltpcb2-non-terminal-refusal",
       "campaign": "tier1",
       "scope": "transaction",
-      "transaction": "DCLTPCB1 refuses a non-terminal projected-Custody request",
-      "measured": 22176,
+      "transaction": "DCLTPCB2 refuses a non-terminal projected-Custody request",
+      "measured": 24706,
       "tolerance": 15000,
-      "budget": 37176,
+      "budget": 39706,
       "enforced": true,
-      "provenance": "Refuses inside `decode_projected_request` before any CPI. Measured identically (22,176) in both 2026-08-27 campaigns, so its band is zero at n=2 and it gets the floor tolerance. This is one of the entries that DOES have 30,000-scale teeth: an early refusal that starts costing 37,000 CU is no longer early."
+      "provenance": "HOSTILE. A well-formed but NON-TERMINAL prestate request refuses in `decode_projected_request`, before any CPI. The label moved from DCLTPCB1 to DCLTPCB2; the draw is within 2,530 of its predecessor's 22,176. one COMPLETING tier-1 run at 93a2793bd on 2026-09-03, the first this campaign has ever produced: the founding refused on its last transaction from 2026-08-27 until that commit. So `measured` here is ONE draw, not the highest of several, and the tolerance is the one the row it replaces carried -- the noise CAUSE is unchanged (expiry slots and lookup-table slots are still wall-clock derived under a keypair seed), so the recorded band still applies, and nothing about this run licenses tightening it."
     },
     {
-      "id": "found31-whole",
+      "id": "dcltcf1a-pre-expiry-cleanup-refusal",
       "campaign": "tier1",
       "scope": "transaction",
-      "transaction": "create canonical Found31 Market",
-      "measured": 237041,
+      "transaction": "DCLTCF1A refuses to close the first controller ledger before checkpoint expiry",
+      "measured": 8453,
       "tolerance": 15000,
-      "budget": 252041,
+      "budget": 23453,
       "enforced": true,
-      "provenance": "Canonical Core Found31, the 31-account frame routed over a finalized ALT. This is the transaction that ALREADY died at the ceiling once: before c61376d it hashed Core's 1.0 MB ELF twice and exhausted 1,400,000 CU outright. Measured identically (237,041) in both 2026-08-27 campaigns, so it gets the floor tolerance and real teeth. A return of full-ELF authentication anywhere on this path is a six-figure jump and this row would be the first thing to say so."
+      "provenance": "HOSTILE, and NEW: this transaction did not exist when the founding was one ladder. While the checkpoint has not expired the founding is still satisfiable and the prepared ledgers may not be destroyed. 8,453 CU, before any CPI. one COMPLETING tier-1 run at 93a2793bd on 2026-09-03, the first this campaign has ever produced: the founding refused on its last transaction from 2026-08-27 until that commit. So `measured` here is ONE draw, not the highest of several, and the tolerance is the one the row it replaces carried -- the noise CAUSE is unchanged (expiry slots and lookup-table slots are still wall-clock derived under a keypair seed), so the recorded band still applies, and nothing about this run licenses tightening it."
     },
     {
-      "id": "found31-substituted-market-rollback",
+      "id": "found37-whole",
       "campaign": "tier1",
       "scope": "transaction",
-      "transaction": "Found31 refuses a substituted Market coordinate and rolls the transaction back",
-      "measured": 143399,
+      "transaction": "create canonical Found37 Market",
+      "measured": 196380,
       "tolerance": 15000,
-      "budget": 158399,
+      "budget": 211380,
       "enforced": true,
-      "provenance": "The attacker-chosen-routing case, whose whole multi-instruction transaction must roll back to a fee-only debit. Measured identically in both 2026-08-27 campaigns; floor tolerance."
+      "provenance": "Canonical Core Found37 over a finalized address lookup table. Replaces `found31-whole`, whose label the campaign stopped submitting; 196,380 against its 237,041. one COMPLETING tier-1 run at 93a2793bd on 2026-09-03, the first this campaign has ever produced: the founding refused on its last transaction from 2026-08-27 until that commit. So `measured` here is ONE draw, not the highest of several, and the tolerance is the one the row it replaces carried -- the noise CAUSE is unchanged (expiry slots and lookup-table slots are still wall-clock derived under a keypair seed), so the recorded band still applies, and nothing about this run licenses tightening it."
+    },
+    {
+      "id": "found37-substituted-market-rollback",
+      "campaign": "tier1",
+      "scope": "transaction",
+      "transaction": "Found37 refuses a substituted Market coordinate and rolls the transaction back",
+      "measured": 164293,
+      "tolerance": 15000,
+      "budget": 179293,
+      "enforced": true,
+      "provenance": "HOSTILE. A substituted Market coordinate under attacker-chosen lookup-table routing, refused by the rent-credit-to-Market PDA binding. Replaces `found31-substituted-market-rollback`. one COMPLETING tier-1 run at 93a2793bd on 2026-09-03, the first this campaign has ever produced: the founding refused on its last transaction from 2026-08-27 until that commit. So `measured` here is ONE draw, not the highest of several, and the tolerance is the one the row it replaces carried -- the noise CAUSE is unchanged (expiry slots and lookup-table slots are still wall-clock derived under a keypair seed), so the recorded band still applies, and nothing about this run licenses tightening it."
     },
     {
       "id": "core-infrastructure-profile-init",
       "campaign": "tier1",
       "scope": "transaction",
       "transaction": "initialize Core infrastructure profile",
-      "measured": 229835,
+      "measured": 243321,
       "tolerance": 15000,
-      "budget": 244835,
+      "budget": 258321,
       "enforced": true,
-      "provenance": "The one transaction Core must land under the plan-pinned ephemeral authority before it may revoke and be recognised as an immutable release. Measured identically in both 2026-08-27 campaigns; floor tolerance."
+      "provenance": "The sole Core-owned infrastructure profile. Re-pinned from 229,835: the observed draw is 243,321, which was 1,514 CU UNDER its old budget -- a row that was about to go red for growth nobody had attributed. one COMPLETING tier-1 run at 93a2793bd on 2026-09-03, the first this campaign has ever produced: the founding refused on its last transaction from 2026-08-27 until that commit. So `measured` here is ONE draw, not the highest of several, and the tolerance is the one the row it replaces carried -- the noise CAUSE is unchanged (expiry slots and lookup-table slots are still wall-clock derived under a keypair seed), so the recorded band still applies, and nothing about this run licenses tightening it."
     },
     {
       "id": "activation-role-core",
       "campaign": "tier1",
       "scope": "transaction",
       "transaction": "activate immutable release-set role: Core",
-      "measured": 546984,
+      "measured": 641772,
       "tolerance": 20000,
-      "budget": 566984,
+      "budget": 661772,
       "enforced": true,
-      "provenance": "Per-role activation of the immutable release set. Before the immutability-argument fast path this whole family hashed whole ELFs on chain \u2014 five-role activation with real artifacts exceeded 1,400,000 outright \u2014 so each role gets its own row and the worst role is the one that decides whether activation is reachable at all."
+      "provenance": "On-chain release admission hashes the whole ProgramData ELF at about one compute unit per two bytes, so this row is a measurement of the ARTIFACT and moves whenever the ELF does. Every one of the five was OVER its 2026-08-27 pin on this run -- Trading by 458,466 -- which is the ELFs having grown, not a regression in activation. Trading's 1,200,411 leaves 199,589 CU (14.3%) to the 1,400,000 ceiling and is the row to watch in this file. one COMPLETING tier-1 run at 93a2793bd on 2026-09-03, the first this campaign has ever produced: the founding refused on its last transaction from 2026-08-27 until that commit. So `measured` here is ONE draw, not the highest of several, and the tolerance is the one the row it replaces carried -- the noise CAUSE is unchanged (expiry slots and lookup-table slots are still wall-clock derived under a keypair seed), so the recorded band still applies, and nothing about this run licenses tightening it."
     },
     {
       "id": "activation-role-claims",
       "campaign": "tier1",
       "scope": "transaction",
       "transaction": "activate immutable release-set role: Claims",
-      "measured": 573441,
+      "measured": 729162,
       "tolerance": 20000,
-      "budget": 593441,
+      "budget": 749162,
       "enforced": true,
-      "provenance": "Per-role activation; see activation-role-core."
+      "provenance": "On-chain release admission hashes the whole ProgramData ELF at about one compute unit per two bytes, so this row is a measurement of the ARTIFACT and moves whenever the ELF does. Every one of the five was OVER its 2026-08-27 pin on this run -- Trading by 458,466 -- which is the ELFs having grown, not a regression in activation. Trading's 1,200,411 leaves 199,589 CU (14.3%) to the 1,400,000 ceiling and is the row to watch in this file. one COMPLETING tier-1 run at 93a2793bd on 2026-09-03, the first this campaign has ever produced: the founding refused on its last transaction from 2026-08-27 until that commit. So `measured` here is ONE draw, not the highest of several, and the tolerance is the one the row it replaces carried -- the noise CAUSE is unchanged (expiry slots and lookup-table slots are still wall-clock derived under a keypair seed), so the recorded band still applies, and nothing about this run licenses tightening it."
     },
     {
       "id": "activation-role-trading",
       "campaign": "tier1",
       "scope": "transaction",
       "transaction": "activate immutable release-set role: Trading",
-      "measured": 721945,
+      "measured": 1200411,
       "tolerance": 20000,
-      "budget": 741945,
+      "budget": 1220411,
       "enforced": true,
-      "provenance": "Per-role activation, and the WORST role: at 721,945 it is 51.6% of the ceiling on its own. Trading's ELF is the one other lanes grow most often, so this is the activation row most likely to move."
+      "provenance": "On-chain release admission hashes the whole ProgramData ELF at about one compute unit per two bytes, so this row is a measurement of the ARTIFACT and moves whenever the ELF does. Every one of the five was OVER its 2026-08-27 pin on this run -- Trading by 458,466 -- which is the ELFs having grown, not a regression in activation. Trading's 1,200,411 leaves 199,589 CU (14.3%) to the 1,400,000 ceiling and is the row to watch in this file. one COMPLETING tier-1 run at 93a2793bd on 2026-09-03, the first this campaign has ever produced: the founding refused on its last transaction from 2026-08-27 until that commit. So `measured` here is ONE draw, not the highest of several, and the tolerance is the one the row it replaces carried -- the noise CAUSE is unchanged (expiry slots and lookup-table slots are still wall-clock derived under a keypair seed), so the recorded band still applies, and nothing about this run licenses tightening it."
     },
     {
       "id": "activation-role-resolution",
       "campaign": "tier1",
       "scope": "transaction",
       "transaction": "activate immutable release-set role: Resolution",
-      "measured": 330385,
+      "measured": 446563,
       "tolerance": 20000,
-      "budget": 350385,
+      "budget": 466563,
       "enforced": true,
-      "provenance": "Per-role activation. Re-pinned 2026-08-27 after 87e4590 grew the Resolution artifact 18,944 B (the funded failure walk, load-bearing demo function) -> activation +16,672 CU at ~1.13 CU/byte. Accepted by the orchestrator; activation headroom remains ~75%. Band noise is 1,500-multiples; see tolerance_rule.measured_bands."
+      "provenance": "On-chain release admission hashes the whole ProgramData ELF at about one compute unit per two bytes, so this row is a measurement of the ARTIFACT and moves whenever the ELF does. Every one of the five was OVER its 2026-08-27 pin on this run -- Trading by 458,466 -- which is the ELFs having grown, not a regression in activation. Trading's 1,200,411 leaves 199,589 CU (14.3%) to the 1,400,000 ceiling and is the row to watch in this file. one COMPLETING tier-1 run at 93a2793bd on 2026-09-03, the first this campaign has ever produced: the founding refused on its last transaction from 2026-08-27 until that commit. So `measured` here is ONE draw, not the highest of several, and the tolerance is the one the row it replaces carried -- the noise CAUSE is unchanged (expiry slots and lookup-table slots are still wall-clock derived under a keypair seed), so the recorded band still applies, and nothing about this run licenses tightening it."
     },
     {
       "id": "activation-role-custody",
       "campaign": "tier1",
       "scope": "transaction",
       "transaction": "activate immutable release-set role: Custody",
-      "measured": 235103,
+      "measured": 328016,
       "tolerance": 20000,
-      "budget": 255103,
+      "budget": 348016,
       "enforced": true,
-      "provenance": "Per-role activation; see activation-role-core."
+      "provenance": "On-chain release admission hashes the whole ProgramData ELF at about one compute unit per two bytes, so this row is a measurement of the ARTIFACT and moves whenever the ELF does. Every one of the five was OVER its 2026-08-27 pin on this run -- Trading by 458,466 -- which is the ELFs having grown, not a regression in activation. Trading's 1,200,411 leaves 199,589 CU (14.3%) to the 1,400,000 ceiling and is the row to watch in this file. one COMPLETING tier-1 run at 93a2793bd on 2026-09-03, the first this campaign has ever produced: the founding refused on its last transaction from 2026-08-27 until that commit. So `measured` here is ONE draw, not the highest of several, and the tolerance is the one the row it replaces carried -- the noise CAUSE is unchanged (expiry slots and lookup-table slots are still wall-clock derived under a keypair seed), so the recorded band still applies, and nothing about this run licenses tightening it."
     },
     {
       "id": "activation-refuses-pre-revocation-core",
       "campaign": "tier1",
       "scope": "transaction",
       "transaction": "immutable release activation refuses pre-revocation Core",
-      "measured": 535927,
+      "measured": 630713,
       "tolerance": 20000,
-      "budget": 555927,
+      "budget": 650713,
       "enforced": true,
-      "provenance": "The hostile counterpart of activation: a Core whose Loader-v3 upgrade authority has not been revoked is refused. Budgeted because a refusal that costs as much as a success is the shape a CU regression takes on this path."
+      "provenance": "HOSTILE. Core still carries an upgrade authority, so activation must refuse -- after hashing the ELF, which is why this row tracks Core's activation row almost exactly (641,772 against 630,713). one COMPLETING tier-1 run at 93a2793bd on 2026-09-03, the first this campaign has ever produced: the founding refused on its last transaction from 2026-08-27 until that commit. So `measured` here is ONE draw, not the highest of several, and the tolerance is the one the row it replaces carried -- the noise CAUSE is unchanged (expiry slots and lookup-table slots are still wall-clock derived under a keypair seed), so the recorded band still applies, and nothing about this run licenses tightening it."
     },
     {
-      "id": "dcltpca1-unwind",
+      "id": "core-funding-create",
       "campaign": "tier1",
       "scope": "transaction",
-      "transaction": "unwind an expired founding's funded source compartment (DCLTPCA1)",
-      "measured": 159496,
-      "tolerance": 30000,
-      "budget": 189496,
-      "enforced": true,
-      "provenance": "AbortSourceAndClose: the terminal that stopped a funded source compartment from stranding real collateral permanently. Newly reachable, so its budget is a floor on a route with one campaign of history."
+      "transaction": "core-funding-create-v1",
+      "measured": 303613,
+      "tolerance": 0,
+      "budget": 0,
+      "enforced": false,
+      "provenance": "RECORDED, NOT ENFORCED. The post-founding readiness ladder -- CreateFund, activate, VerifyFundReady -- was reached for the first time on 2026-09-03, because it is the three transactions AFTER the founding. One draw is not a band and this file's rule is to pin the highest of several, so the number is written down and enforced by nothing until a second completing run exists. That second run is the whole of what this row is waiting for.",
+      "unenforced_reason": "one draw, no band; needs a second completing tier-1 run"
     },
     {
-      "id": "dcltpca1-pre-expiry-refusal",
+      "id": "resolution-funding-activate",
       "campaign": "tier1",
       "scope": "transaction",
-      "transaction": "DCLTPCA1 refuses to abort a funded source before expiry",
-      "measured": 142166,
-      "tolerance": 20000,
-      "budget": 162166,
-      "enforced": true,
-      "provenance": "The half that matters: while the founding is still satisfiable the authority over funded principal may not be destroyed. Refuses with custody/CustodySbfError::Expiry."
+      "transaction": "resolution-funding-activate-v1",
+      "measured": 278311,
+      "tolerance": 0,
+      "budget": 0,
+      "enforced": false,
+      "provenance": "RECORDED, NOT ENFORCED. The post-founding readiness ladder -- CreateFund, activate, VerifyFundReady -- was reached for the first time on 2026-09-03, because it is the three transactions AFTER the founding. One draw is not a band and this file's rule is to pin the highest of several, so the number is written down and enforced by nothing until a second completing run exists. That second run is the whole of what this row is waiting for.",
+      "unenforced_reason": "one draw, no band; needs a second completing tier-1 run"
+    },
+    {
+      "id": "core-funding-accept",
+      "campaign": "tier1",
+      "scope": "transaction",
+      "transaction": "core-funding-accept-v1",
+      "measured": 192371,
+      "tolerance": 0,
+      "budget": 0,
+      "enforced": false,
+      "provenance": "RECORDED, NOT ENFORCED. The post-founding readiness ladder -- CreateFund, activate, VerifyFundReady -- was reached for the first time on 2026-09-03, because it is the three transactions AFTER the founding. One draw is not a band and this file's rule is to pin the highest of several, so the number is written down and enforced by nothing until a second completing run exists. That second run is the whole of what this row is waiting for.",
+      "unenforced_reason": "one draw, no band; needs a second completing tier-1 run"
     },
     {
       "id": "series-consume-founds-with-permit",
@@ -335,7 +380,7 @@
       "tolerance": 15000,
       "budget": 737142,
       "enforced": true,
-      "provenance": "The ProgramTest FAST LANE for the Core founding path, and the reason this campaign is in the budgets file at all: it drives Core's `found` plus the one-shot permit \u2014 the same Core code that costs stage 2 of DCLTGMF1 \u2014 with no validator and no port, in under a minute. A Core founding regression surfaces here BEFORE the six-minute tier-1 campaign. Re-pinned by the SEED lane at bbfc53a, on a SEEDED fixture: programs/dclutch-core-sbf/tests/found_program_test.rs now derives its payer and its vault addresses from a fixed checked-in seed instead of Keypair::new() and Pubkey::new_unique(). FOUR runs of one compiled test binary against byte-identical ELFs (core d272bc7d669f0983, custody fe7ce5f80f4a08c8, registry 0033c6b55e8277dc, rent 3486a8197af49231, series-consume-caller ce1160b7035c4295) produced the SAME number every time, the fourth under --test-threads 1. Band 0, so tolerance is the 15,000 floor. The single-threaded run is the load-bearing one: Pubkey::new_unique() reads a process-global counter, so before the seed the value a test drew depended on how four concurrent tests interleaved, and a run that changes the thread count would have moved it. The previous pin was 744,795, the highest of six UNSEEDED runs with a 24,000 band; the drop is not a saving, it is the bump-search iterations leaving the measurement."
+      "provenance": "The ProgramTest FAST LANE for the Core founding path, and the reason this campaign is in the budgets file at all: it drives Core's `found` plus the one-shot permit — the same Core code that costs stage 2 of DCLTGMF1 — with no validator and no port, in under a minute. A Core founding regression surfaces here BEFORE the six-minute tier-1 campaign. Re-pinned by the SEED lane at bbfc53a, on a SEEDED fixture: programs/dclutch-core-sbf/tests/found_program_test.rs now derives its payer and its vault addresses from a fixed checked-in seed instead of Keypair::new() and Pubkey::new_unique(). FOUR runs of one compiled test binary against byte-identical ELFs (core d272bc7d669f0983, custody fe7ce5f80f4a08c8, registry 0033c6b55e8277dc, rent 3486a8197af49231, series-consume-caller ce1160b7035c4295) produced the SAME number every time, the fourth under --test-threads 1. Band 0, so tolerance is the 15,000 floor. The single-threaded run is the load-bearing one: Pubkey::new_unique() reads a process-global counter, so before the seed the value a test drew depended on how four concurrent tests interleaved, and a run that changes the thread count would have moved it. The previous pin was 744,795, the highest of six UNSEEDED runs with a 24,000 band; the drop is not a saving, it is the bump-search iterations leaving the measurement."
     },
     {
       "id": "series-consume-founds-with-permit-replay-campaign",

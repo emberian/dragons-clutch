@@ -264,7 +264,7 @@ The 22 campaigns contributing:
 | `0x6008` | `CustodySbfError::TokenCpi` | Exact token or close-account CPI refused. | -- | `programs/dclutch-custody-sbf/src/lib.rs:135` |
 | `0x6009` | `CustodySbfError::Postcondition` | Exact CPI postcondition or checked balance arithmetic refused. | -- | `programs/dclutch-custody-sbf/src/lib.rs:137` |
 | `0x600A` | `CustodySbfError::Commit` | Replay state could not be committed after all effects succeeded. | -- | `programs/dclutch-custody-sbf/src/lib.rs:139` |
-| `0x600B` | `CustodySbfError::Expiry` | An expiry-gated terminal was attempted at the wrong time. | dealer-checkpoint-programtest; tier1 | `programs/dclutch-custody-sbf/src/lib.rs:148` |
+| `0x600B` | `CustodySbfError::Expiry` | An expiry-gated terminal was attempted at the wrong time. | dealer-checkpoint-programtest | `programs/dclutch-custody-sbf/src/lib.rs:148` |
 | `0x600C` | `CustodySbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | -- | `programs/dclutch-custody-sbf/src/lib.rs:156` |
 | `0x600D` | `CustodySbfError::ReservationRecord` | The account at the reservation coordinate is not an activatable reservation. | -- | `programs/dclutch-custody-sbf/src/lib.rs:169` |
 | `0x600E` | `CustodySbfError::ReservationIdentity` | The reservation is a valid one, but not the one this effect names. | -- | `programs/dclutch-custody-sbf/src/lib.rs:178` |

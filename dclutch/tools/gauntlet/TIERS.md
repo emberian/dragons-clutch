@@ -35,20 +35,24 @@ supervisor compiles a fixture input from the plan it builds
 (`SuccessorRunSpec::market`). Named family runners still own their own build,
 evidence, witnesses, and validator lifecycle.
 
-**Budget, measured 2026-09-03**: 18m01s of campaign (195 transactions) after 7m
-of archive, build, tool and inventory against a warm `--work`; a cold `--work`
-adds about 6m of SBF builds. 25-31 minutes end to end.
+**IT COMPLETES.** First at `93a2793bd`, 2026-09-03: 201 transactions, an
+evidence document, 515 census observations, 21 witnesses green and every CU
+budget under. Before that the atomic founding `DCLTGMF3` refused its last
+transaction with Claims `0x518D ClaimsFoundingSbfErrorV5::PermitBody` -- one
+byte of a `CoreState` the supervisor predicted with the wrong one of Core's two
+Product-graph walks, three legs upstream of the code that could report it.
 
-**It does not complete yet, and that is now a printed fact rather than a
-discovery.** The last transaction -- the atomic founding, `DCLTGMF3` -- fails
-simulation with Claims `0x5182 ClaimsFoundingSbfErrorV5::Release`. The campaign
-writes its evidence document only on completion, so nothing folds, and the
-thirty routes tier 1 binds have no reproducible corroboration.
-`tools/gauntlet/substrates.json` states this per campaign and
-`docs/reference/route-witnesses.md` prints the twelve routes left standing on it
-alone. Unparking found two other stale things first (`c9eac1738`): five
-invented semantic release ids and a genesis-account pin four short, both
-invisible while nothing executed them.
+**Budget.** The completing run took 53m33s end to end against a warm `--work`,
+of which 39m was the campaign, on a laptop under heavy concurrent load (a
+one-minute load average of 137 while it started). That is NOT a clean budget
+measurement and it is quoted as an upper bound, not a figure: the two
+diagnostic runs that preceded it took 42m48s and shared the machine with each
+other. The last uncontended measurement is the 25-31 minutes below, taken when
+the campaign was 195 transactions and stopped at the founding; the completing
+campaign is six transactions longer and does strictly more. **A clean end-to-end
+timing on an idle machine is owed.** For reference, that earlier figure: 18m01s
+of campaign after 7m of archive, build, tool and inventory against a warm
+`--work`, and a cold `--work` adds about 6m of SBF builds.
 
 ## The three files a tier needs
 
@@ -205,7 +209,7 @@ reasoning as a stale binding.
 
 | tier | directory | backing | what it drives |
 |---|---|---|---|
-| 1 | `tier1/` | localhost validator | the infrastructure floor: seven-artifact bootstrap through Found31 |
+| 1 | `tier1/` | localhost validator | the infrastructure floor: seven-artifact bootstrap through Found37, the atomic founding, and the readiness ladder after it |
 | 4 | `tier4/` | `solana-program-test` | the Series occurrence waist (numbered before the rule below) |
 | Claims/Custody | `claims-custody/` | `solana-program-test` | the protocol Position lifecycle, the composed Admit -> SparseNativeTransfer -> Close chain, and ordinary plus delegated Custody against real SPL Token and Token-2022 |
 | Dealer | `dealer/` | `solana-program-test` | the Dealer equity pool's rounding boundary |

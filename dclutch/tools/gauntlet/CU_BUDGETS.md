@@ -181,6 +181,13 @@ iteration — a length that moved by a byte.
 | 4,500 – 9,004 | `dcltpcb1-stage-2` (4,500), `dcltpcb1-stage-1` (6,000), `dcltgmf1-whole` (9,004) |
 | 24,000 | `dcltpcb1-whole`, `dcltpcb1-reordered-tail-refusal` |
 
+**These row ids are the 2026-08-27 campaign's, and that campaign no longer
+exists.** The bands are kept because they are dated measurements of a noise
+cause that has not changed; the ids are the predecessors of today's
+(`dcltgmf1-*` -> `dcltgmf3-*`, `dcltpcb1-*` -> `dcltcfq1-*` and `dcltpcb2-*`,
+`found31-*` -> `found37-*`, and the two `DCLTPCA1` rows deleted with their
+lane). Do not read this table as naming rows that exist.
+
 So the seed took the whole activation half of this campaign to zero, which is
 the win, and left the two founding ladders — which are exactly the transactions
 that carry a clock.
@@ -244,47 +251,68 @@ chain's number, not ours.
 `current` is the pinned value, which is the highest draw observed on
 2026-08-27. `headroom` is what is left to the ceiling from that draw.
 
-### tier 1 — historical `tools/gauntlet/run.sh --mode full` evidence, real validator
+### tier 1 — `tools/gauntlet/run.sh --mode full`, real validator, 93a2793bd
 
-`--mode full` runs again (`c9eac1738`, 2026-09-03), and these rows are older
-than the campaign it runs. Every one of them was pinned before the founding was
-split, so they name `DCLTGMF1`, `DCLTPCB1` and `Found31` where the campaign now
-submits `DCLTGMF3`, `DCLTCFQ1`/`DCLTPCB2` and `Found37`. A budget that matches
-no transaction in its campaign is red on the same reasoning as a stale binding,
-so this table is a re-pin owed against the first run that COMPLETES -- and the
-campaign does not complete yet. The rows below preserve the dated evidence they
-were pinned against and are not a current measurement.
+**Re-pinned 2026-09-03 against the first tier-1 run that ever COMPLETED.** The
+previous table was pinned before the founding was split and named `DCLTGMF1`,
+`DCLTPCB1` and `Found31`; the campaign submits `DCLTGMF3`, `DCLTCFQ1`,
+`DCLTCF1A`, `DCLTPCB2` and `Found37`, and the evaluator called all thirteen of
+those rows MISSING on the first run that could reach them. The `DCLTPCA1` rows
+are gone entirely: that lane is no longer submitted.
+
+**Every number below is ONE draw.** This file's rule is to pin the highest of
+several, and there is only one completing run in existence. The tolerances are
+therefore the ones the rows they replace carried, not re-derived: the noise
+CAUSE is unchanged — a keypair seed does not seed the expiry slots and
+lookup-table slots the founding ladders hash — so the recorded bands still
+apply and nothing here licenses tightening them. A second completing run is
+what this table is waiting for.
+
+**Read `activation-role-trading` first.** It draws 1,200,411 CU and leaves
+199,589 (14.3%) to the 1,400,000 ceiling. That row is a measurement of the ELF,
+not of activation: on-chain release admission hashes whole ProgramData at about
+one compute unit per two bytes, so it moves whenever Trading does. All five
+activations were OVER their 2026-08-27 pins on this run, Trading by 458,466.
+It is now this file's smallest headroom, and the founding it replaced in that
+position — `dcltgmf1-whole`, 8.7% and shrinking — came in at 40.8%.
 
 | budget | budget CU | current | tolerance | headroom to ceiling |
 |---|---:|---:|---:|---:|
-| `dcltgmf1-whole` | 1,348,747 | 1,278,747 | 70,000 | **121,253 (8.7%)** |
-| `dcltgmf1-stage-1-custody-lock` | 184,840 | 144,840 | 40,000 | 1,255,160 (89.7%) |
-| `dcltgmf1-stage-2-core-found-and-permit` | 463,129 | 433,129 | 30,000 | 966,871 (69.1%) |
-| `dcltgmf1-stage-3-custody-realize` | 123,858 | 103,858 | 20,000 | 1,296,142 (92.6%) |
-| `dcltgmf1-stage-4-claims-foundingv5` | 287,951 | 267,951 | 20,000 | 1,132,049 (80.9%) |
-| `dcltgmf1-stage-5-open-and-outer-joins` | — | — | — | RECORDED, not enforced |
-| `dcltgmf1-hostile-rollback` | 52,686 | 32,686 | 20,000 | 1,367,314 (97.7%) |
-| `dcltpcb1-whole` | 935,307 | 845,307 | 90,000 | 554,693 (39.6%) |
-| `dcltpcb1-stage-1-custody-initialize` | 384,337 | 354,337 | 30,000 | 1,045,663 (74.7%) |
-| `dcltpcb1-stage-2-custody-openhoard` | 135,594 | 115,594 | 20,000 | 1,284,406 (91.7%) |
-| `dcltpcb1-stage-3-custody-opensourcecompartment` | 209,108 | 159,108 | 50,000 | 1,240,892 (88.6%) |
-| `dcltpcb1-second-prestate-whole` | 882,807 | 792,807 | 90,000 | 607,193 (43.4%) |
-| `dcltpcb1-reordered-tail-refusal` | 851,102 | 781,102 | 70,000 | 618,898 (44.2%) |
-| `dcltpcb1-non-terminal-refusal` | 37,176 | 22,176 | 15,000 | 1,377,824 (98.4%) |
-| `found31-whole` | 252,041 | 237,041 | 15,000 | 1,162,959 (83.1%) |
-| `found31-substituted-market-rollback` | 158,399 | 143,399 | 15,000 | 1,256,601 (89.8%) |
-| `core-infrastructure-profile-init` | 244,835 | 229,835 | 15,000 | 1,170,165 (83.6%) |
-| `activation-role-core` | 566,984 | 546,984 | 20,000 | 853,016 (60.9%) |
-| `activation-role-claims` | 593,441 | 573,441 | 20,000 | 826,559 (59.0%) |
-| `activation-role-trading` | 741,945 | 721,945 | 20,000 | 678,055 (48.4%) |
-| `activation-role-resolution` | 350,385 | 330,385 | 20,000 | 1,069,615 (76.4%) |
-| `activation-role-custody` | 255,103 | 235,103 | 20,000 | 1,164,897 (83.2%) |
-| `activation-refuses-pre-revocation-core` | 555,927 | 535,927 | 20,000 | 864,073 (61.7%) |
-| `dcltpca1-unwind` | 189,496 | 159,496 | 30,000 | 1,240,504 (88.6%) |
-| `dcltpca1-pre-expiry-refusal` | 162,166 | 142,166 | 20,000 | 1,257,834 (89.8%) |
+| `dcltgmf3-whole` | 899,068 | 829,068 | 70,000 | 500,932 (35.8%) |
+| `dcltgmf3-stage-1-custody-lock` | 114,034 | 74,034 | 40,000 | 1,285,966 (91.9%) |
+| `dcltgmf3-stage-2-core-found-and-permit` | 329,927 | 299,927 | 30,000 | 1,070,073 (76.4%) |
+| `dcltgmf3-stage-3-custody-realize` | 65,921 | 45,921 | 20,000 | 1,334,079 (95.3%) |
+| `dcltgmf3-stage-4-claims-foundingv5` | 175,086 | 155,086 | 20,000 | 1,224,914 (87.5%) |
+| `dcltgmf3-stage-5-core-open` | 76,265 | 56,265 | 20,000 | 1,323,735 (94.6%) |
+| `dcltgmf3-hostile-rollback` | 50,660 | 30,660 | 20,000 | 1,349,340 (96.4%) |
+| `dcltcfq1-whole` | 586,732 | 496,732 | 90,000 | 813,268 (58.1%) |
+| `dcltcfq1-stage-1-resolution-pre-market-funding` | 343,180 | 313,180 | 30,000 | 1,056,820 (75.5%) |
+| `dcltpcb2-whole` | 709,359 | 619,359 | 90,000 | 690,641 (49.3%) |
+| `dcltpcb2-stage-1-custody-initialize` | 283,115 | 253,115 | 30,000 | 1,116,885 (79.8%) |
+| `dcltpcb2-stage-2-custody-openhoard` | 76,015 | 56,015 | 20,000 | 1,323,985 (94.6%) |
+| `dcltpcb2-stage-3-custody-opensourcecompartment` | 129,976 | 79,976 | 50,000 | 1,270,024 (90.7%) |
+| `dcltpcb2-reordered-tail-refusal` | 108,746 | 38,746 | 70,000 | 1,291,254 (92.2%) |
+| `dcltpcb2-non-terminal-refusal` | 39,706 | 24,706 | 15,000 | 1,360,294 (97.2%) |
+| `dcltcf1a-pre-expiry-cleanup-refusal` | 23,453 | 8,453 | 15,000 | 1,376,547 (98.3%) |
+| `found37-whole` | 211,380 | 196,380 | 15,000 | 1,188,620 (84.9%) |
+| `found37-substituted-market-rollback` | 179,293 | 164,293 | 15,000 | 1,220,707 (87.2%) |
+| `core-infrastructure-profile-init` | 258,321 | 243,321 | 15,000 | 1,141,679 (81.5%) |
+| `activation-role-core` | 661,772 | 641,772 | 20,000 | 738,228 (52.7%) |
+| `activation-role-claims` | 749,162 | 729,162 | 20,000 | 650,838 (46.5%) |
+| `activation-role-trading` | 1,220,411 | 1,200,411 | 20,000 | **179,589 (12.8%)** |
+| `activation-role-resolution` | 466,563 | 446,563 | 20,000 | 933,437 (66.7%) |
+| `activation-role-custody` | 348,016 | 328,016 | 20,000 | 1,051,984 (75.1%) |
+| `activation-refuses-pre-revocation-core` | 650,713 | 630,713 | 20,000 | 749,287 (53.5%) |
+| `core-funding-create` | — | 303,613 | — | RECORDED, not enforced: one draw, no band |
+| `resolution-funding-activate` | — | 278,311 | — | RECORDED, not enforced: one draw, no band |
+| `core-funding-accept` | — | 192,371 | — | RECORDED, not enforced: one draw, no band |
 
-`DCLTGMF1` is the only row whose headroom is in single-digit percent, and it is
-**shrinking**: 15.4% at `cd05331`, 8.7% at `d9f79bb`, in one evening.
+
+`activation-role-trading` is the only row whose headroom is under a fifth, and
+it is a measurement of an ELF: it moves when Trading does, and it moved +458,466
+between 2026-08-27 and 2026-09-03. The founding that used to hold this position
+does not any more — `dcltgmf1-whole` was 8.7% and shrinking; `dcltgmf3-whole` is
+40.8%, because the controller funding and its checkpoint left the transaction.
 
 **These pins are NOT re-pinned against the seeded pair, deliberately.** Two
 seeded campaigns at `5465341` came in 24/24 green with real headroom
@@ -393,12 +421,19 @@ documents:
 
 ### Recorded, not enforced
 
-- `dcltgmf1-stage-5-open-and-outer-joins` — the RPC truncates the finalized log
-  before the commit-last Open stage's own accounting line, so the only figure
-  available is arithmetic (whole − 300 for the two ComputeBudget instructions −
-  the four measured stages): 328,669 at `d9f79bb`, 322,681 at `3b0c588`. A
-  subtraction inherits every other row's noise and would red-row on all of it at
-  once. Budgetable the day a producer surfaces the untruncated log.
+- ~~`dcltgmf1-stage-5-open-and-outer-joins`~~ — **resolved 2026-09-03.** It was
+  recorded-only because the RPC truncated the finalized log before the
+  commit-last Open stage's accounting line, leaving only a subtraction (328,669
+  at `d9f79bb`, 322,681 at `3b0c588`) that inherits every other row's noise. On
+  the first completing run the Open's own depth-2 `consumed` line is in the log:
+  56,265 CU. It is `dcltgmf3-stage-5-core-open`, an ordinary enforced stage
+  budget, and the subtraction is gone. The truncation was a property of a
+  transaction that FAILED at stage 4, not of the RPC.
+- `core-funding-create`, `resolution-funding-activate`, `core-funding-accept` —
+  the post-founding readiness ladder, reached for the first time on 2026-09-03.
+  One draw is not a band and this file pins the highest of several, so the three
+  numbers are written down and enforced by nothing until a second completing
+  tier-1 run exists.
 - `hot-canonical-bundle-phase-subtotals` — there is no green number to pin. The
   canonical Hot bundle does not pass at HEAD (tail over the 32,768-byte heap at
   phase 7; W2i's gate), and its phase subtotals need `--features hot-cu-profile`

@@ -4106,3 +4106,19 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   block has never executed (its only real-ELF path is the red expiry test); four stale wasm verifiers → WEB-VERIFY
   **`(spawned)`**.
 - Cuts: `120beaccf`.
+
+### 2026-09-03 19:00 EDT — TIER 1 COMPLETES; COHORT-15 STARTS
+- TIER-1 closed (ten commits; the fix `93a2793bd`, rows `ee39fa55b`, bindings `4bd77f7bb`, CU rows `0780533de`, witnesses
+  `e8591ab67`, `ccd8ba774`, `3a6b08a82`): **the founding refusal was ONE byte** — packed byte 3 of `ProductGraphBumpsV1`
+  (the linked-basis pair): Core's projected founding walk fills three pairs (the basis record's digest arrives with the
+  Trading frame), the ordinary walk four, and the supervisor predicted four for both; the byte is hashed into CoreState →
+  the Realize receipt → the intent → one SHA-256 compared three legs later as `PermitBody`, naming no field; the driver's
+  one cross-check proved the tail against a market the OTHER walk founded — a positive control for the wrong walk. **Tier 1
+  completes for the first time** (201 transactions; 515 census observations, 0 problems; 21 witnesses); the re-pins were
+  an order of magnitude larger than estimated (153 of 201 unbound). "Routes whose only witness is a campaign that does not
+  reproduce": 12 → none; never-executed 15 → 12. Zero rows moved across three program commits. Owed: the expired-source
+  abort lane has no witness in any campaign; a clean uncontended timing (53m33s under load 137).
+- **COHORT-15 `(spawned)`**: close 14, deploy from HEAD (every fix of the last two days), the recorded Core digest, seal
+  before founding, Direct + General markets, the fill, OpenBatch on a real chain (first), an honest selector, the winning
+  stranger paid, retirement on devnet (first), the cohort's own route witnesses.
+- Cuts: `7894a5bf8`.

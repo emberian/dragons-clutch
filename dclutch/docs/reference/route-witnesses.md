@@ -20,9 +20,9 @@ SHA-256, so a reviewer can verify a claim without re-running a gauntlet.
 | --- | ---: | --- |
 | **devnet** | **22** | a finalized transaction on Solana devnet, named by signature and slot, and corroborated against the chain's own logs |
 | **local validator** | 29 | `solana-test-validator`: a real Agave runtime, real slots, real finalization, on localhost |
-| **ProgramTest only** | 56 | an in-process `solana-program-test` bank. It runs the REAL SBF ELFs -- which is why it is evidence -- but it is not a validator: no packet limit, no leader schedule, no finalization, no fee market |
+| **ProgramTest only** | 54 | an in-process `solana-program-test` bank. It runs the REAL SBF ELFs -- which is why it is evidence -- but it is not a validator: no packet limit, no leader schedule, no finalization, no fee market |
 | **blocked** | 45 | no campaign; `tools/gauntlet/blocked.json` records a reason and an owner |
-| **never-executed** | 10 | no campaign and no reason recorded |
+| **never-executed** | 12 | no campaign and no reason recorded |
 
 **A real Agave runtime drives 51 of the
 162.** `docs/MASTER_COMPLETION_CONTRACT.md` item 5 asks for a local
@@ -93,7 +93,7 @@ all fails this generator rather than rendering as `unknown`.
 | `retirement-checkpoint-programtest` | program-test | yes | 7 | `tools/gauntlet/retirement-checkpoint/run-retirement-checkpoint.sh` | `516e9705ccd6aaff` |
 | `retirement-replay-handoff-programtest` | program-test | yes | 2 | `tools/gauntlet/retirement-replay-handoff/run-retirement-replay-handoff.sh` | `950b33db1915d0c0` |
 | `structured-v2-programtest` | program-test | yes | 2 | `tools/gauntlet/structured/run-structured.sh` | `98937647cc92d70f` |
-| `tier1` | local-validator | **NO** | 30 | `tools/gauntlet/run.sh` | `a69aaa5db4d64e94` |
+| `tier1` | local-validator | yes | 35 | `tools/gauntlet/run.sh` | `3747f7da57f94e9f` |
 | `tier4-series-occurrence-programtest` | program-test | yes | 1 | `tools/gauntlet/tier4/run-campaign.sh` | `eccd05c0e5ba3d38` |
 | cohort 13 (devnet) | devnet | yes | 10 | `tools/gauntlet/devnet-witness/corroborate.py` | `9f18f7c5d9e1a57e` |
 | cohort 13 (devnet) | devnet | yes | 19 | `tools/gauntlet/devnet-witness/corroborate.py` | `9909b0b59ab4e9b3` |
@@ -106,20 +106,7 @@ repeated is not corroboration, and `tools/gauntlet/substrates.json` now carries
 a `reproduces` field per campaign so a campaign that stops completing has
 somewhere to say so. These are the routes left standing on one.
 
-| route | class | the campaign(s) |
-| --- | --- | --- |
-| `core/found::process#Found` | local-validator | `tier1` |
-| `core/infrastructure::process_initialize` | local-validator | `tier1` |
-| `custody/abort_source_and_close#AbortSourceAndClose` | local-validator | `tier1` |
-| `registry/process_activate_role#ActivateRole` | local-validator | `tier1` |
-| `registry/process_append#2` | local-validator | `tier1` |
-| `registry/process_begin#5` | local-validator | `tier1` |
-| `registry/process_finalize#3` | local-validator | `tier1` |
-| `registry/process_instruction` | local-validator | `tier1` |
-| `registry/process_reauthenticate#Reauthenticate` | local-validator | `tier1` |
-| `registry/record_v1::dispatch` | local-validator | `tier1` |
-| `rent/process_create_v2#Create` | local-validator | `tier1` |
-| `trading/projected_custody_bootstrap_v1::process_projected_custody_abort_v1` | local-validator | `tier1` |
+*None: every witnessed route has at least one campaign that completes.*
 
 ## Blocks their own route has already falsified
 
@@ -201,9 +188,9 @@ route now executes.
 | `core/resolution::authenticate_recovery_policy#(recovery_id,policy)` | blocked | blocked by rule `core/resolution::authenticate_recovery_policy#(recovery_id,policy)` | `tools/gauntlet/blocked.json` |
 | `core/resolution::process#AdmitTerminal` | program-test | `resolution-core-v3-programtest` | `tools/gauntlet/resolution-core-v3/bindings.json` |
 | `core/resolution::process#CloseFund` | blocked | blocked by rule `core/resolution::process#CloseFund` | `tools/gauntlet/blocked.json` |
-| `core/resolution::process#CreateFund` | local-validator | `journey`, `resolution-core-v3-programtest` | `tools/gauntlet/journey/bindings.json` |
+| `core/resolution::process#CreateFund` | local-validator | `journey`, `resolution-core-v3-programtest`, `tier1` | `tools/gauntlet/journey/bindings.json`<br>`tools/gauntlet/tier1/bindings.json` |
 | `core/resolution::process#Retire` | program-test | `resolution-core-v3-programtest` | `tools/gauntlet/resolution-core-v3/bindings.json` |
-| `core/resolution::process#VerifyFundReady` | local-validator | `journey` | `tools/gauntlet/journey/bindings.json` |
+| `core/resolution::process#VerifyFundReady` | local-validator | `journey`, `tier1` | `tools/gauntlet/journey/bindings.json`<br>`tools/gauntlet/tier1/bindings.json` |
 | `core/retire_v1::process#Retire` | blocked | blocked by rule `core/retire_v1::process#Retire` | `tools/gauntlet/blocked.json` |
 | `core/retire_v1::process_checkpoint_prepare#Retire` | program-test | `retirement-checkpoint-programtest` | `tools/gauntlet/retirement-checkpoint/bindings.json` |
 | `core/retire_v1::process_checkpoint_suffix` | program-test | `retirement-checkpoint-programtest` | `tools/gauntlet/retirement-checkpoint/bindings.json` |
@@ -213,7 +200,7 @@ route now executes.
 | `core/series_permit_expiry::process` | blocked | blocked by rule `core/series_permit_expiry::process` | `tools/gauntlet/blocked.json` |
 | `core/series_permit_expiry_precommit_v1::process` | never-executed | no campaign, no reason recorded | -- |
 | `custody/abort_open_and_close#AbortOpenAndClose` | blocked | blocked by rule `custody/abort_open_and_close#AbortOpenAndClose` | `tools/gauntlet/blocked.json` |
-| `custody/abort_source_and_close#AbortSourceAndClose` | local-validator | `tier1` | `tools/gauntlet/tier1/bindings.json` |
+| `custody/abort_source_and_close#AbortSourceAndClose` | never-executed | no campaign, no reason recorded | -- |
 | `custody/dealer_reservation_v1::process` | program-test | `dealer-checkpoint-programtest` | `tools/gauntlet/dealer-checkpoint/bindings.json` |
 | `custody/delegated::process` | program-test | `custody-family-programtest` | `tools/gauntlet/claims-custody/custody-bindings.json` |
 | `custody/initialize#Initialize` | devnet | cohort 13 `DCLTPCB2` slot 491,962,044; also bound by `tier1` | `docs/evidence/witnesses/cohort-13-founding.json` |
@@ -241,7 +228,7 @@ route now executes.
 | `registry/process_begin#5` | local-validator | `tier1` | `tools/gauntlet/tier1/bindings.json` |
 | `registry/process_finalize#3` | local-validator | `tier1` | `tools/gauntlet/tier1/bindings.json` |
 | `registry/process_instruction` | local-validator | `tier1` | `tools/gauntlet/tier1/bindings.json` |
-| `registry/process_reauthenticate#Reauthenticate` | local-validator | `tier1` | `tools/gauntlet/tier1/bindings.json` |
+| `registry/process_reauthenticate#Reauthenticate` | never-executed | no campaign, no reason recorded | -- |
 | `registry/record_v1::dispatch` | local-validator | `tier1` | `tools/gauntlet/tier1/bindings.json` |
 | `rent/process_close_v2#Close` | blocked | blocked by rule `rent/process_close_v2#Close` | `tools/gauntlet/blocked.json` |
 | `rent/process_create_v2#Create` | local-validator | `tier1` | `tools/gauntlet/tier1/bindings.json` |
@@ -249,10 +236,10 @@ route now executes.
 | `rent/process_sweep_v2#Sweep` | local-validator | `journey` | `tools/gauntlet/journey/bindings.json` |
 | `resolution/core_effect::process_close#Retired` | blocked | blocked by rule `resolution/core_effect::process_close#Retired` | `tools/gauntlet/blocked.json` |
 | `resolution/core_effect::process_core_effect` | local-validator | `journey`, `resolution-core-v3-programtest` | `tools/gauntlet/journey/bindings.json` |
-| `resolution/core_effect::process_direct_funding_activation_v1` | program-test | `resolution-core-v3-programtest` | `tools/gauntlet/resolution-core-v3/bindings.json` |
+| `resolution/core_effect::process_direct_funding_activation_v1` | local-validator | `resolution-core-v3-programtest`, `tier1` | `tools/gauntlet/tier1/bindings.json` |
 | `resolution/core_effect::process_direct_funding_close_v1` | local-validator | `journey`, `resolution-core-v3-programtest` | `tools/gauntlet/journey/bindings.json` |
 | `resolution/pre_market_funding_abort_v1::process_pre_market_funding_abort_v1` | program-test | `resolution-pre-market-funding-programtest` | `tools/gauntlet/resolution-pre-market-funding/bindings.json` |
-| `resolution/pre_market_funding_v1::process_pre_market_funding_v2` | program-test | `resolution-pre-market-funding-programtest` | `tools/gauntlet/resolution-pre-market-funding/bindings.json` |
+| `resolution/pre_market_funding_v1::process_pre_market_funding_v2` | local-validator | `resolution-pre-market-funding-programtest`, `tier1` | `tools/gauntlet/tier1/bindings.json` |
 | `resolution/process_abandon#magic` | program-test | `resolution-core-v3-programtest` | `tools/gauntlet/resolution-core-v3/bindings.json` |
 | `resolution/process_admit#AdmitTerminal` | blocked | blocked by rule `resolution/process_admit#AdmitTerminal` | `tools/gauntlet/blocked.json` |
 | `resolution/process_append#AppendObservation` | program-test | `resolution-relayed-programtest` | `tools/gauntlet/resolution-relayed/bindings.json` |
@@ -263,9 +250,9 @@ route now executes.
 | `resolution/process_commit_deadline_failure#CommitDeadlineFailure` | local-validator | `relayed-vertical`, `resolution-relayed-programtest` | `tools/gauntlet/relayed-vertical/bindings.json` |
 | `resolution/process_commit_failure#CommitFailure` | program-test | `resolution-sponsored-programtest` | `tools/gauntlet/resolution-sponsored/bindings.json` |
 | `resolution/process_consume#ConsumeRecord` | local-validator | `relayed-vertical`, `resolution-relayed-programtest` | `tools/gauntlet/relayed-vertical/bindings.json` |
-| `resolution/process_create#CreateFund` | local-validator | `journey`, `resolution-core-v3-programtest` | `tools/gauntlet/journey/bindings.json` |
+| `resolution/process_create#CreateFund` | local-validator | `journey`, `resolution-core-v3-programtest`, `tier1` | `tools/gauntlet/journey/bindings.json`<br>`tools/gauntlet/tier1/bindings.json` |
 | `resolution/process_create_record#CreateRecord` | local-validator | `relayed-vertical`, `resolution-relayed-programtest` | `tools/gauntlet/relayed-vertical/bindings.json` |
-| `resolution/process_instruction` | devnet | cohort 13 `DCLTCFQ1` slot 491,961,396; also bound by `journey`, `relayed-vertical`, `resolution-core-v3-programtest`, `resolution-pre-market-funding-programtest`, `resolution-relayed-programtest`, `resolution-sponsored-programtest` | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-13-founding.json` |
+| `resolution/process_instruction` | devnet | cohort 13 `DCLTCFQ1` slot 491,961,396; also bound by `journey`, `relayed-vertical`, `resolution-core-v3-programtest`, `resolution-pre-market-funding-programtest`, `resolution-relayed-programtest`, `resolution-sponsored-programtest`, `tier1` | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-13-founding.json` |
 | `resolution/process_reclaim#magic` | blocked | blocked by rule `resolution/process_reclaim#magic` | `tools/gauntlet/blocked.json` |
 | `resolution/process_retire#RetireRecord` | program-test | `resolution-relayed-programtest` | `tools/gauntlet/resolution-relayed/bindings.json` |
 | `resolution/process_seal#SealRecord` | program-test | `resolution-relayed-programtest` | `tools/gauntlet/resolution-relayed/bindings.json` |
@@ -298,10 +285,10 @@ route now executes.
 | `trading/hot_v3::process_hot_execution_v3` | program-test | `claims-rational-representation-v2-programtest`, `direct-fee-pair-programtest` | `tools/gauntlet/claims-rational-representation-v2/bindings.json`<br>`tools/gauntlet/direct-fee-pair/bindings.json` |
 | `trading/outer::process_capability_lifecycle#else` | blocked | blocked by rule `trading/outer::process_capability_lifecycle#else` | `tools/gauntlet/blocked.json` |
 | `trading/process_instruction` | devnet | cohort 13 `DCLTCFQ1` slot 491,961,396; cohort 13 `DCLTGMF3` slot 491,963,072; cohort 13 `DCLTPCB2` slot 491,962,044; cohort 13 `DCLTSEL1` slot 492,092,785; also bound by `claims-rational-representation-v2-programtest`, `dealer-checkpoint-programtest`, `tier1` | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-13-founding.json` |
-| `trading/projected_custody_bootstrap_v1::process_controller_funding_cleanup_step1_v1` | never-executed | no campaign, no reason recorded | -- |
+| `trading/projected_custody_bootstrap_v1::process_controller_funding_cleanup_step1_v1` | local-validator | `tier1` | `tools/gauntlet/tier1/bindings.json` |
 | `trading/projected_custody_bootstrap_v1::process_controller_funding_cleanup_step2_v1` | never-executed | no campaign, no reason recorded | -- |
-| `trading/projected_custody_bootstrap_v1::process_controller_funding_prepare_v1` | devnet | cohort 13 `DCLTCFQ1` slot 491,961,396 | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-13-founding.json` |
-| `trading/projected_custody_bootstrap_v1::process_projected_custody_abort_v1` | local-validator | `tier1` | `tools/gauntlet/tier1/bindings.json` |
+| `trading/projected_custody_bootstrap_v1::process_controller_funding_prepare_v1` | devnet | cohort 13 `DCLTCFQ1` slot 491,961,396; also bound by `tier1` | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-13-founding.json` |
+| `trading/projected_custody_bootstrap_v1::process_projected_custody_abort_v1` | never-executed | no campaign, no reason recorded | -- |
 | `trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2` | devnet | cohort 13 `DCLTPCB2` slot 491,962,044; also bound by `tier1` | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-13-founding.json` |
 | `trading/user_position_admission_v1::process_user_position_admission_v1` | blocked | blocked by rule `trading/user_position_admission_v1::process_user_position_admission_v1` | `tools/gauntlet/blocked.json` |
 | `trading/user_position_admission_v1::process_user_position_admission_v1#Admit` | blocked | blocked by rule `trading/user_position_admission_v1::process_user_position_admission_v1#Admit` | `tools/gauntlet/blocked.json` |
