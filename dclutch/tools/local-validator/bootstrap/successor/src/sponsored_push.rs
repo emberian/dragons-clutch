@@ -208,6 +208,27 @@ impl ExteriorActionV1 {
         matches!(self, Self::Settle | Self::CommitFailure)
     }
 
+    /// Whether this action's frame has anything a routing table can resolve.
+    ///
+    /// Every protocol action here loads twenty-plus accounts and needs the
+    /// frozen table to fit its packet. `PrepayCertificate` is not a protocol
+    /// action: it is a bare System transfer whose frame is the signer, the
+    /// vacant seat, and the System program. A v0 message cannot look up any of
+    /// those -- a signer is never table-resolvable, the seat is a PDA minted
+    /// after the founding froze its tables, and a program id must sit in the
+    /// static keys -- so compiling it against a table resolves ZERO addresses
+    /// and `dclutch-versioned-message-operator` refuses `NoLookupUsed`.
+    ///
+    /// That refusal is right and is not this action's to satisfy: paying the
+    /// v0 lookup cost for nothing is exactly what it exists to catch. So the
+    /// prepay travels as a LEGACY packet. Measured on devnet 2026-09-03 by
+    /// cohort-14, which is the first cohort to EXECUTE this arm rather than
+    /// plan it: `62a0b7fb5` checked the arm's arithmetic against cohort-13's
+    /// numbers, and planning is where it stopped.
+    const fn uses_routing_table(self) -> bool {
+        !matches!(self, Self::PrepayCertificate)
+    }
+
     /// The certificate kind tag this walk's seat carries in its seeds.
     const fn certificate_kind(self) -> Option<u8> {
         match self {
@@ -665,12 +686,20 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
         report.observation_slot = prepared.snapshot.observation.slot;
         report.observation_unix_seconds = prepared.snapshot.observation.unix_timestamp;
         report.prestate = evidence_for(&prepared.snapshot, &writable);
-        report.signed_packet = Some(rpc.prepare_signed_v0_packet(
-            &label,
-            std::slice::from_ref(&prepared.instruction),
-            &keypair,
-            &prepared.lookup_table,
-        )?);
+        report.signed_packet = Some(if action.uses_routing_table() {
+            rpc.prepare_signed_v0_packet(
+                &label,
+                std::slice::from_ref(&prepared.instruction),
+                &keypair,
+                &prepared.lookup_table,
+            )?
+        } else {
+            rpc.prepare_signed_legacy_packet(
+                &label,
+                std::slice::from_ref(&prepared.instruction),
+                &keypair,
+            )?
+        });
         report.phase = ExteriorPhaseV1::Prepared;
         write_report_replace(&output_path, &report)?;
     }
@@ -686,13 +715,17 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
         .as_ref()
         .ok_or_else(|| Error::new("prepared report omitted its signed packet"))?;
     if report.phase == ExteriorPhaseV1::Prepared {
-        rpc.submit_signed_v0_packet(
-            &label,
-            std::slice::from_ref(&instruction),
-            signer,
-            &lookup_table,
-            packet,
-        )?;
+        if action.uses_routing_table() {
+            rpc.submit_signed_v0_packet(
+                &label,
+                std::slice::from_ref(&instruction),
+                signer,
+                &lookup_table,
+                packet,
+            )?;
+        } else {
+            rpc.submit_signed_legacy_packet(&label, packet)?;
+        }
         report.phase = ExteriorPhaseV1::Submitted;
         write_report_replace(&output_path, &report)?;
     }
@@ -703,13 +736,17 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
         .signed_packet
         .as_ref()
         .ok_or_else(|| Error::new("submitted report omitted its signed packet"))?;
-    report.transaction = Some(rpc.confirm_signed_v0_packet(
-        &label,
-        std::slice::from_ref(&instruction),
-        signer,
-        &lookup_table,
-        packet,
-    )?);
+    report.transaction = Some(if action.uses_routing_table() {
+        rpc.confirm_signed_v0_packet(
+            &label,
+            std::slice::from_ref(&instruction),
+            signer,
+            &lookup_table,
+            packet,
+        )?
+    } else {
+        rpc.confirm_signed_legacy_packet_evidence(&label, packet)?
+    });
     let writable = writable_keys(&instruction);
     let post = read_snapshot(&mut rpc, &writable, report.observation_slot)?;
     report.poststate = evidence_for(&post, &writable);
@@ -793,13 +830,22 @@ fn authenticate_report(
                 "existing sponsored report omitted packet expiry height",
             ));
         }
-        Rpc::authenticate_signed_v0_packet(
-            "sponsored report",
-            std::slice::from_ref(&instruction),
-            signer,
-            &table,
-            packet,
-        )?;
+        if action.uses_routing_table() {
+            Rpc::authenticate_signed_v0_packet(
+                "sponsored report",
+                std::slice::from_ref(&instruction),
+                signer,
+                &table,
+                packet,
+            )?;
+        } else {
+            Rpc::authenticate_signed_legacy_packet_against(
+                "sponsored report",
+                std::slice::from_ref(&instruction),
+                signer,
+                packet,
+            )?;
+        }
     }
     if report.phase == ExteriorPhaseV1::Finalized {
         let transaction = report
@@ -2449,6 +2495,56 @@ mod tests {
 
     fn key(tag: u8) -> Pubkey {
         Pubkey::new_from_array([tag; 32])
+    }
+
+    /// Every sponsored-push action, so the partition below cannot be stated
+    /// over a subset of them.
+    const EVERY_ACTION_V1: [ExteriorActionV1; 7] = [
+        ExteriorActionV1::Capture,
+        ExteriorActionV1::Settle,
+        ExteriorActionV1::CommitFailure,
+        ExteriorActionV1::AdmitTerminal,
+        ExteriorActionV1::PrepayCertificate,
+        ExteriorActionV1::CloseCandidate,
+        ExteriorActionV1::CloseHead,
+    ];
+
+    /// The send path has two halves and this asserts the PARTITION, not the fix.
+    ///
+    /// `uses_routing_table` is checked against an INDEPENDENT property -- does
+    /// this action invoke a dClutch program at all -- rather than against a
+    /// second copy of its own list, so an eighth action added anywhere goes red
+    /// naming the half whose membership it did not state. The count assertion
+    /// is the other direction: exactly one action is a bare System transfer,
+    /// and if a second ever is, the reason has to be written down.
+    ///
+    /// Red before green: with `uses_routing_table` returning `true` for every
+    /// action -- the state of this file before 2026-09-03 -- the first
+    /// assertion fails on `PrepayCertificate`. That is the state in which the
+    /// devnet prepay refuses `NoLookupUsed`, because a v0 message compiled
+    /// against a frozen table over a signer, a vacant PDA seat and the System
+    /// program resolves zero addresses through it.
+    #[test]
+    fn exactly_the_system_transfer_travels_without_a_routing_table() {
+        for action in EVERY_ACTION_V1 {
+            let invokes_a_dclutch_program =
+                action.wire().is_some() || action == ExteriorActionV1::AdmitTerminal;
+            assert_eq!(
+                action.uses_routing_table(),
+                invokes_a_dclutch_program,
+                "{action:?}: an action that invokes a dClutch program needs the frozen routing \
+                 table to fit its frame, and one that does not has nothing to look up"
+            );
+        }
+        let tableless: Vec<ExteriorActionV1> = EVERY_ACTION_V1
+            .into_iter()
+            .filter(|action| !action.uses_routing_table())
+            .collect();
+        assert_eq!(
+            tableless,
+            vec![ExteriorActionV1::PrepayCertificate],
+            "the prepay is the only sponsored-push action that is a System transfer"
+        );
     }
 
     fn frozen_table(tag: u8, addresses: Vec<Pubkey>) -> ObservedAccount {

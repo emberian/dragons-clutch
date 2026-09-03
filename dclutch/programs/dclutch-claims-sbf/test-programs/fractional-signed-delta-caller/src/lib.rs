@@ -150,7 +150,18 @@ impl From<FractionalSignedDeltaTestCallerError> for ProgramError {
 #[cfg(not(feature = "no-entrypoint"))]
 solana_program::entrypoint!(process_instruction);
 
-/// Lower one exact Fractional wrap through Claims; wrapper byte one refuses late.
+/// Lower one exact Fractional wrap through Claims under the wrapper's mode byte.
+///
+/// Byte zero is a two-bit mode, not a boolean:
+///
+/// * bit 0 -- refuse deliberately AFTER Claims has returned and its receipt has
+///   validated, which is the rollback evidence this program was written for;
+/// * bit 1 -- present the caller-authority coordinate WITHOUT signing for it:
+///   `invoke` where `invoke_signed` belongs, and a non-signer meta at
+///   coordinate zero. It exists so the release-authentication ruling has a
+///   negative control. Every fact that route now takes as established rests on
+///   a program-derived signature actually having been produced, and this is the
+///   arm that produces everything except that.
 pub fn process_instruction(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -159,12 +170,14 @@ pub fn process_instruction(
     if instruction_data.len() != FRACTIONAL_SIGNED_DELTA_TEST_WRAPPER_BYTES {
         return Err(FractionalSignedDeltaTestCallerError::Instruction.into());
     }
-    let fail_after = *instruction_data
+    let mode = *instruction_data
         .first()
         .ok_or(FractionalSignedDeltaTestCallerError::Instruction)?;
-    if fail_after > 1 {
+    if mode > 3 {
         return Err(FractionalSignedDeltaTestCallerError::Instruction.into());
     }
+    let fail_after = mode & 1;
+    let withhold_signature = mode & 2 != 0;
     let request_end = REQUEST_OFFSET
         .checked_add(FRACTIONAL_FAMILY_REQUEST_BYTES_V1)
         .ok_or(FractionalSignedDeltaTestCallerError::Instruction)?;
@@ -289,7 +302,7 @@ pub fn process_instruction(
 
     let mut metas = Vec::with_capacity(forwarded.len());
     for (index, account) in forwarded.iter().enumerate() {
-        let signer = index == 0;
+        let signer = index == 0 && !withhold_signature;
         metas.push(if account.is_writable {
             AccountMeta::new(*account.key, signer)
         } else {
@@ -315,12 +328,13 @@ pub fn process_instruction(
     let mut infos = Vec::with_capacity(accounts.len());
     infos.extend_from_slice(forwarded);
     infos.push(claims_program.clone());
-    invoke_signed(
-        &instruction,
-        &infos,
-        &[&[domain, release, market, role, context, digest, &bump]],
-    )
-    .map_err(|_| FractionalSignedDeltaTestCallerError::ClaimsCpi)?;
+    let signature: &[&[&[u8]]] = if withhold_signature {
+        &[]
+    } else {
+        &[&[domain, release, market, role, context, digest, &bump]]
+    };
+    invoke_signed(&instruction, &infos, signature)
+        .map_err(|_| FractionalSignedDeltaTestCallerError::ClaimsCpi)?;
 
     let (producer, receipt_bytes) =
         get_return_data().ok_or(FractionalSignedDeltaTestCallerError::ClaimsCpi)?;

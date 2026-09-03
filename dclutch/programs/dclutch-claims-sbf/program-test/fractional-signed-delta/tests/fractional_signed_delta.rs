@@ -6,6 +6,7 @@ use dclutch_claims_affine_batch_program_test::fixture::{
     FinalizedRecordFixtureV2, ProductLbv2FixtureInputV2, ProductLbv2FixtureV2,
     compile_product_lbv2_fixture_v2,
 };
+use dclutch_claims_sbf::signed_delta_v3::SignedDeltaSbfErrorV3;
 use dclutch_claims_svm::signed_delta_v3::{
     DeltaDirectionV3, PositionDeltaInputV3, PositionDeltaV3, SignedDeltaPlanV3, SignedDeltaV3,
 };
@@ -52,6 +53,13 @@ const CLAIMS_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xa1; 32]);
 const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xa2; 32]);
 const CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xa3; 32]);
 const TEST_CALLER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xa8; 32]);
+/// A second deployment of the SAME caller ELF at a different address.
+///
+/// It exists so the caller-coordinate hostile differs from the honest run in
+/// exactly one fact -- WHICH program the Registry activated as `Trading` -- and
+/// in nothing else. Byte-identical code, real Loader accounts, a real
+/// `CallerAuthoritySeedsV1` PDA derived under whoever is asked.
+const IMPOSTOR_TRADING_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xa9; 32]);
 const ACTOR_OWNER: Pubkey = Pubkey::new_from_array([0xa6; 32]);
 const RESERVE_OWNER: Pubkey = Pubkey::new_from_array([0xa7; 32]);
 const GENERATION: u64 = 37;
@@ -67,6 +75,10 @@ struct Artifacts {
 struct Fixture {
     shared: ProductLbv2FixtureV2,
     activation_cache: Pubkey,
+    /// A complete, Registry-owned, canonically-addressed activation cache for
+    /// a DIFFERENT release set. Nothing about it is malformed; it simply is not
+    /// this action's generation.
+    foreign_activation_cache: Pubkey,
     caller_authority: Pubkey,
     request: FractionalFamilyRequestV1,
     wrapper: Vec<u8>,
@@ -194,10 +206,29 @@ fn activation_input(release: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
     ArtifactActivationInputV1::new(artifact_id(release), release, observation)
 }
 
-fn activation_cache(artifacts: &Artifacts) -> ([u8; 32], Vec<u8>) {
-    let core = release(CORE_PROGRAM_ID, 0x31, &artifacts.core);
-    let claims = release(CLAIMS_PROGRAM_ID, 0x32, &artifacts.claims);
-    let trading = release(TEST_CALLER_PROGRAM_ID, 0x33, &artifacts.caller);
+/// Build one complete Registry activation cache.
+///
+/// `activated_trading` is the program the Registry has activated in the
+/// `Trading` role, and it is a parameter because the identity of that program
+/// is the entire content of the caller-coordinate pin. `generation` moves every
+/// semantic release id, and therefore the release-set id the cache is addressed
+/// under, so a second call with a different one produces a perfectly valid
+/// cache belonging to a DIFFERENT release set.
+fn activation_cache(
+    artifacts: &Artifacts,
+    activated_trading: Pubkey,
+    generation: u8,
+) -> ([u8; 32], Vec<u8>) {
+    let caller_elf = if activated_trading == CLAIMS_PROGRAM_ID {
+        artifacts.claims.as_slice()
+    } else if activated_trading == CORE_PROGRAM_ID {
+        artifacts.core.as_slice()
+    } else {
+        artifacts.caller.as_slice()
+    };
+    let core = release(CORE_PROGRAM_ID, 0x31 + generation, &artifacts.core);
+    let claims = release(CLAIMS_PROGRAM_ID, 0x32 + generation, &artifacts.claims);
+    let trading = release(activated_trading, 0x33 + generation, caller_elf);
     let release_set = ExecutionReleaseSetV1::new(
         binding(core),
         binding(claims),
@@ -343,6 +374,16 @@ fn wrapper_bytes(
 }
 
 fn fixture() -> (ProgramTest, Fixture) {
+    fixture_activating_trading(TEST_CALLER_PROGRAM_ID)
+}
+
+/// The whole campaign, with the Registry's `Trading` activation as a parameter.
+///
+/// Both deployments exist in every arm and both are real upgradeable programs
+/// carrying the same ELF, so an arm that refuses can only be refusing the
+/// IDENTITY the Registry activated -- not a missing account, not a shape, not a
+/// privilege.
+fn fixture_activating_trading(activated_trading: Pubkey) -> (ProgramTest, Fixture) {
     let artifacts = artifacts();
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
@@ -368,10 +409,17 @@ fn fixture() -> (ProgramTest, Fixture) {
             TEST_CALLER_PROGRAM_ID,
             artifacts.caller.as_slice(),
         ),
+        (
+            "dclutch_fractional_signed_delta_test_caller_sbf",
+            IMPOSTOR_TRADING_PROGRAM_ID,
+            artifacts.caller.as_slice(),
+        ),
     ] {
         add_upgradeable_program(&mut test, name, program, elf);
     }
-    let (release_set, cache_bytes) = activation_cache(&artifacts);
+    let (release_set, cache_bytes) = activation_cache(&artifacts, activated_trading, 0);
+    let (foreign_release_set, foreign_cache_bytes) =
+        activation_cache(&artifacts, activated_trading, 1);
     let activation_cache = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, &release_set],
         &REGISTRY_PROGRAM_ID,
@@ -382,6 +430,21 @@ fn fixture() -> (ProgramTest, Fixture) {
         activation_cache,
         REGISTRY_PROGRAM_ID,
         cache_bytes,
+    );
+    assert_ne!(
+        foreign_release_set, release_set,
+        "the foreign cache must belong to another release set"
+    );
+    let foreign_activation_cache = Pubkey::find_program_address(
+        &[ACTIVATION_PDA_DOMAIN_V1, &foreign_release_set],
+        &REGISTRY_PROGRAM_ID,
+    )
+    .0;
+    add_account(
+        &mut test,
+        foreign_activation_cache,
+        REGISTRY_PROGRAM_ID,
+        foreign_cache_bytes,
     );
     let shared = compile_product_lbv2_fixture_v2(ProductLbv2FixtureInputV2 {
         registry_program: REGISTRY_PROGRAM_ID,
@@ -446,6 +509,7 @@ fn fixture() -> (ProgramTest, Fixture) {
         Fixture {
             shared,
             activation_cache,
+            foreign_activation_cache,
             caller_authority,
             request,
             wrapper,
@@ -483,11 +547,16 @@ fn child_accounts(fixture: &Fixture) -> Vec<AccountMeta> {
 }
 
 fn instruction(fixture: &Fixture, fail_after: bool) -> Instruction {
+    instruction_in_mode(fixture, u8::from(fail_after))
+}
+
+/// The caller's wrapper under one exact mode byte; see its `process_instruction`.
+fn instruction_in_mode(fixture: &Fixture, mode: u8) -> Instruction {
     let mut accounts = Vec::with_capacity(23);
     accounts.push(AccountMeta::new_readonly(CLAIMS_PROGRAM_ID, false));
     accounts.extend(child_accounts(fixture));
     let mut data = fixture.wrapper.clone();
-    *data.first_mut().expect("failure flag") = u8::from(fail_after);
+    *data.first_mut().expect("mode byte") = mode;
     Instruction {
         program_id: TEST_CALLER_PROGRAM_ID,
         accounts,
@@ -697,6 +766,157 @@ async fn submit_v0(
     })
     .expect("campaign evidence must be writable when the gauntlet asked for it");
     Ok((accepted, compute, logs))
+}
+
+/// Assert the exact banded discriminant Claims refused with.
+///
+/// The whole log line is compared, not a substring of it: `contains("0x520")`
+/// would also accept `0x5201` where `0x5202` was meant, and a hostile that
+/// cannot tell its own refusal from its neighbour's is a test of nothing.
+fn assert_claims_refusal(logs: &[String], expected: SignedDeltaSbfErrorV3) {
+    let line = format!(
+        "Program {CLAIMS_PROGRAM_ID} failed: custom program error: {:#x}",
+        expected as u32
+    );
+    assert!(
+        logs.iter().any(|log| log == &line),
+        "expected `{line}` in:\n{logs:#?}"
+    );
+}
+
+/// A deployed, activated program that is not the one that signed refuses.
+///
+/// This is the hazard the caller-coordinate pin was written for, run rather
+/// than argued. `IMPOSTOR_TRADING_PROGRAM_ID` holds the Registry's `Trading`
+/// activation; `TEST_CALLER_PROGRAM_ID` carries the identical ELF, invokes the
+/// route, and signs a `CallerAuthoritySeedsV1` PDA **under itself** with the
+/// correct release set, market, role, context and packet digest. Every earlier
+/// conjunct therefore passes: the frame, the privileges, and
+/// `authenticate_authority`, which derives the authority under the caller
+/// coordinate and finds exactly the signer it was handed.
+///
+/// So the refusal can only come from `authenticate_releases`, and that matters
+/// now: the route no longer re-observes each role's deployment, and this is the
+/// test that its replacement -- binding each coordinate to the program the
+/// activation names -- still refuses an executable program demanding a PDA
+/// under itself.
+///
+/// **That it reaches its subject is measured, not argued.** `Release` is one
+/// discriminant over both the authority derivation and the release bind, so a
+/// hostile that refused early would assert the same code and prove nothing.
+/// Run against a `claims-cu-profile` build, this arm logs `sd-enter`,
+/// `sd-plan-decoded`, `sd-frame-parsed`, `sd-privileges`, `sd-packet-digest`
+/// and **`sd-authority`**, and then refuses `0x5202` without reaching
+/// `sd-releases` -- the authority passed and the coordinate bind is what said
+/// no. (Owed, and not this lane's to land: `Release` should be split so this
+/// test can name its own accusation instead of borrowing the instrument. The
+/// split makes `docs/reference/refusals.md` stale, and regenerating it is the
+/// convergence owner's act, not a lane's.)
+#[tokio::test]
+async fn a_caller_that_is_not_the_activated_trading_refuses_by_name() {
+    let (test, fixture) = fixture_activating_trading(IMPOSTOR_TRADING_PROGRAM_ID);
+    let mut context = test.start_with_context().await;
+    let direct = instruction(&fixture, false);
+    let addresses = lookup_addresses(context.payer.pubkey(), &[direct.clone()]);
+    let table = create_live_lookup_table(&mut context, &addresses).await;
+    let before = snapshot(&mut context, &fixture).await;
+
+    let (accepted, _, logs) = submit_v0(
+        &mut context,
+        direct,
+        table,
+        &addresses,
+        "claims fractional-signed-delta: a caller that is not the activated Trading",
+    )
+    .await
+    .expect("impostor-caller transaction");
+
+    assert!(!accepted, "an unactivated caller program must not execute");
+    assert_claims_refusal(&logs, SignedDeltaSbfErrorV3::Release);
+    assert_eq!(snapshot(&mut context, &fixture).await, before);
+}
+
+/// A valid activation cache for another release set refuses by name.
+///
+/// The substituted account is not malformed and not forged: it is
+/// Registry-owned, exactly the fixed width, complete over all five roles, and
+/// sitting at its OWN canonical address. It belongs to a different generation,
+/// and the release set the caller's seeds pin is what says so.
+///
+/// This is the conjunct that survives the ruling most literally. The seeds
+/// establish a release set; they cannot establish what the Registry activated
+/// under it, so the cache body must still name the very release set the
+/// signature pinned -- and it is checked before the address, so a cache that is
+/// canonical for its own generation gets no credit for it.
+#[tokio::test]
+async fn a_cache_for_another_release_set_refuses_by_name() {
+    let (test, fixture) = fixture();
+    let mut context = test.start_with_context().await;
+    let mut foreign = instruction(&fixture, false);
+    substitute_child(&mut foreign, 12, fixture.foreign_activation_cache);
+    let addresses = lookup_addresses(context.payer.pubkey(), &[foreign.clone()]);
+    let table = create_live_lookup_table(&mut context, &addresses).await;
+    let before = snapshot(&mut context, &fixture).await;
+
+    let (accepted, _, logs) = submit_v0(
+        &mut context,
+        foreign,
+        table,
+        &addresses,
+        "claims fractional-signed-delta: an activation cache for another release set",
+    )
+    .await
+    .expect("foreign-cache transaction");
+
+    assert!(
+        !accepted,
+        "another generation's activation must not execute"
+    );
+    assert_claims_refusal(&logs, SignedDeltaSbfErrorV3::Release);
+    assert_eq!(snapshot(&mut context, &fixture).await, before);
+}
+
+/// The caller-authority coordinate presented WITHOUT its signature refuses.
+///
+/// This is the negative control the whole ruling rests on. The activated
+/// Trading program invokes the route, hands over the identical frame, and puts
+/// the correct `CallerAuthoritySeedsV1` PDA at coordinate zero -- and simply
+/// does not sign for it: `invoke` where `invoke_signed` belongs.
+///
+/// Everything the route now takes as established is established BY that
+/// signature. If an unsigned coordinate could reach the release
+/// authentication, "the caller's seeds pin it" would be a statement about an
+/// account address rather than about a program, and any submitter could compute
+/// an address. So the refusal is `Accounts`, from the frame spec's readonly
+/// SIGNER pin at coordinate zero, and it lands before the authority is derived
+/// -- which is the correct order and is asserted rather than assumed.
+///
+/// It is also why there is no separate top-level-submission hostile: a
+/// program-derived address has no private key, so the case above is the same
+/// case, and at this fixture's N=258 width the child packet does not fit in a
+/// Solana transaction to submit directly in the first place.
+#[tokio::test]
+async fn an_unsigned_caller_authority_refuses_by_name() {
+    let (test, fixture) = fixture();
+    let mut context = test.start_with_context().await;
+    let unsigned = instruction_in_mode(&fixture, 2);
+    let addresses = lookup_addresses(context.payer.pubkey(), &[unsigned.clone()]);
+    let table = create_live_lookup_table(&mut context, &addresses).await;
+    let before = snapshot(&mut context, &fixture).await;
+
+    let (accepted, _, logs) = submit_v0(
+        &mut context,
+        unsigned,
+        table,
+        &addresses,
+        "claims fractional-signed-delta: the caller authority withholds its signature",
+    )
+    .await
+    .expect("unsigned-authority transaction");
+
+    assert!(!accepted, "an unsigned caller authority must not execute");
+    assert_claims_refusal(&logs, SignedDeltaSbfErrorV3::Accounts);
+    assert_eq!(snapshot(&mut context, &fixture).await, before);
 }
 
 #[tokio::test]

@@ -18,6 +18,7 @@ use sha2::{Digest, Sha256};
 use solana_sdk::{
     hash::Hash,
     instruction::Instruction,
+    message::Message,
     pubkey::Pubkey,
     signature::{Keypair, Signature, Signer},
     transaction::{Transaction, VersionedTransaction},
@@ -1214,6 +1215,45 @@ impl Rpc {
         Ok(signature)
     }
 
+    /// Authenticate a persisted LEGACY packet AGAINST the instruction it claims
+    /// to carry, which is what its v0 sibling does and what the plain
+    /// [`Self::authenticate_signed_legacy_packet`] does not.
+    ///
+    /// The plain form checks the packet's digest and its signature: enough for
+    /// a caller that only needs to know the bytes did not move between two of
+    /// its own steps. A REPORT authenticator needs the stronger statement --
+    /// that the transaction still encodes the instruction this report was
+    /// reviewed for -- because the report is the evidence, and evidence whose
+    /// packet is merely well-formed says nothing about what it does. So the
+    /// message is recompiled from the instruction and compared, exactly as
+    /// `authenticate_signed_v0_packet` recompiles its own.
+    pub(crate) fn authenticate_signed_legacy_packet_against(
+        label: &str,
+        instructions: &[Instruction],
+        payer: Pubkey,
+        packet: &SignedVersionedPacketV1,
+    ) -> Result<Signature> {
+        let signature = Self::authenticate_signed_legacy_packet(label, packet)?;
+        let bytes = BASE64
+            .decode(&packet.packet_base64)
+            .map_err(|error| Error::new(format!("{label}: persisted packet base64: {error}")))?;
+        let transaction: Transaction = bincode::deserialize(&bytes)
+            .map_err(|error| Error::new(format!("{label}: persisted transaction: {error}")))?;
+        let bounded = bounded_instructions(instructions, None)
+            .map_err(|error| Error::new(format!("{label}: {error}")))?;
+        let expected = Message::new_with_blockhash(
+            &bounded,
+            Some(&payer),
+            &transaction.message.recent_blockhash,
+        );
+        if transaction.message != expected {
+            return Err(Error::new(format!(
+                "{label}: persisted transaction no longer matches the authenticated instruction"
+            )));
+        }
+        Ok(signature)
+    }
+
     /// Sign one exact routed v0 packet without submitting it.
     ///
     /// The caller must durably persist the returned value before invoking
@@ -1363,6 +1403,35 @@ impl Rpc {
     /// This is deliberately poll-only. It neither sends the packet nor
     /// rebuilds it after blockhash expiry, so a `Submitted` journal can never
     /// fan out into a second transaction identity on restart.
+    /// Poll one submitted, persisted LEGACY signature and answer the same
+    /// evidence its v0 sibling does.
+    ///
+    /// `confirm_signed_legacy_packet` answers `FinalizedSignedPacketV1`, which
+    /// is what its own callers persist. The sponsored-push report persists
+    /// `TransactionEvidence`, and a caller that converted between the two
+    /// would be writing a second, quieter definition of what a confirmed
+    /// action is -- so both halves of that send path answer one type.
+    pub(crate) fn confirm_signed_legacy_packet_evidence(
+        &mut self,
+        label: &str,
+        packet: &SignedVersionedPacketV1,
+    ) -> Result<TransactionEvidence> {
+        let signature = Self::authenticate_signed_legacy_packet(label, packet)?;
+        match self.confirm_inner(
+            label,
+            signature,
+            None,
+            false,
+            packet.last_valid_block_height,
+        )? {
+            ConfirmOutcomeV1::Confirmed(evidence) => Ok(evidence),
+            ConfirmOutcomeV1::Dropped => Err(Error::new(format!(
+                "{label}: persisted signature {} expired without a finalized status; retain the journal as evidence and prepare a new action under a new output path",
+                packet.signature
+            ))),
+        }
+    }
+
     pub(crate) fn confirm_signed_v0_packet(
         &mut self,
         label: &str,

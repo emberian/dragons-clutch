@@ -29,7 +29,8 @@ use dclutch_claims_svm::{
     },
 };
 use dclutch_core_contract::ContentId;
-use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV3};
+use dclutch_registry_activation_auth_v1::authenticate_activation_cache_identity_v1;
+use dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1;
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_source_contract::MarketPrincipalCapSetsV1;
 use solana_program::{
@@ -41,9 +42,7 @@ use solana_program::{
 };
 use solana_sdk_ids::sysvar;
 
-use super::affine_batch_v2::{
-    authenticate_core_market_v3, authenticate_runtime_product_basis_core_v3,
-};
+use super::affine_batch_v2::authenticate_core_market_v3;
 use crate::liability_basis_v2::{
     LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
     LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, MarketViewV2, PositionViewV2,
@@ -245,13 +244,7 @@ struct SignedDeltaAccountsV3<'accounts, 'info> {
     authority: &'accounts AccountInfo<'info>,
     market: &'accounts AccountInfo<'info>,
     basis_record: &'accounts AccountInfo<'info>,
-    basis_staging: &'accounts AccountInfo<'info>,
     product_record: &'accounts AccountInfo<'info>,
-    product_staging: &'accounts AccountInfo<'info>,
-    result_domain_record: &'accounts AccountInfo<'info>,
-    result_domain_staging: &'accounts AccountInfo<'info>,
-    portfolio_record: &'accounts AccountInfo<'info>,
-    portfolio_staging: &'accounts AccountInfo<'info>,
     rent: &'accounts AccountInfo<'info>,
     core_market: &'accounts AccountInfo<'info>,
     cache: &'accounts AccountInfo<'info>,
@@ -266,6 +259,18 @@ struct SignedDeltaAccountsV3<'accounts, 'info> {
 }
 
 impl<'accounts, 'info> SignedDeltaAccountsV3<'accounts, 'info> {
+    /// Bind the coordinates this route reads.
+    ///
+    /// Six of the frame's fixed coordinates -- the Product, ResultDomain,
+    /// Portfolio and basis STAGING cursors, and the ResultDomain and Portfolio
+    /// raw records -- are deliberately not bound here. They were the input to
+    /// the eight-derivation Product runtime walk this route no longer makes,
+    /// and nothing reads them now. They remain in `SignedDeltaFrameSpecV3`,
+    /// because the frame is a wire contract this program shares with its
+    /// callers, and [`authenticate_privileges`] still takes every coordinate's
+    /// privileges by index -- so an unread account is still a refused writable
+    /// or signer, it is simply not named twice. Binding a coordinate costs a
+    /// full scan of the spec, which is why six unread names were 8,000 CU.
     fn parse(
         accounts: &'accounts [AccountInfo<'info>],
         position_count: u32,
@@ -284,25 +289,7 @@ impl<'accounts, 'info> SignedDeltaAccountsV3<'accounts, 'info> {
             authority: account_for_role(accounts, spec, ClaimsFrameRoleV1::CallerAuthority)?,
             market: account_for_role(accounts, spec, ClaimsFrameRoleV1::ClaimsMarket)?,
             basis_record: account_for_role(accounts, spec, ClaimsFrameRoleV1::BasisRecord)?,
-            basis_staging: account_for_role(accounts, spec, ClaimsFrameRoleV1::BasisStaging)?,
             product_record: account_for_role(accounts, spec, ClaimsFrameRoleV1::ProductRecord)?,
-            product_staging: account_for_role(accounts, spec, ClaimsFrameRoleV1::ProductStaging)?,
-            result_domain_record: account_for_role(
-                accounts,
-                spec,
-                ClaimsFrameRoleV1::ResultDomainRecord,
-            )?,
-            result_domain_staging: account_for_role(
-                accounts,
-                spec,
-                ClaimsFrameRoleV1::ResultDomainStaging,
-            )?,
-            portfolio_record: account_for_role(accounts, spec, ClaimsFrameRoleV1::PortfolioRecord)?,
-            portfolio_staging: account_for_role(
-                accounts,
-                spec,
-                ClaimsFrameRoleV1::PortfolioStaging,
-            )?,
             rent: account_for_role(accounts, spec, ClaimsFrameRoleV1::RentSysvar)?,
             core_market: account_for_role(accounts, spec, ClaimsFrameRoleV1::CoreMarket)?,
             cache: account_for_role(accounts, spec, ClaimsFrameRoleV1::ActivationCache)?,
@@ -404,10 +391,10 @@ fn execute_authenticated(
     accounts: &SignedDeltaAccountsV3<'_, '_>,
     plan: SignedDeltaPlanV3<'_>,
     packet_digest: [u8; 32],
-    parent_authenticated: bool,
+    releases_authenticated: bool,
     admission: MarketAdmissionV1,
 ) -> Result<SignedDeltaReceiptV3, ProgramError> {
-    if !parent_authenticated {
+    if !releases_authenticated {
         authenticate_releases(accounts, plan)?;
     }
     claims_cu_checkpoint!("sd-releases");
@@ -420,20 +407,16 @@ fn execute_authenticated(
         MarketViewV2::decode(&market_before).map_err(|_| SignedDeltaSbfErrorV3::ClaimsState)?;
     authenticate_market(program_id, accounts, plan, market)?;
     claims_cu_checkpoint!("sd-market");
-    let principal_cap_sets = if parent_authenticated {
-        authenticate_parent_product_digests(accounts, plan)?;
-        authenticate_core_market_v3(
-            accounts.core_market,
-            accounts.core_program,
-            accounts.registry,
-            market,
-            plan.product_record_digest(),
-            admission,
-        )
-        .map_err(|_| SignedDeltaSbfErrorV3::ProductBasis)?
-    } else {
-        authenticate_product_and_basis(accounts, plan, market, admission)?
-    };
+    authenticate_product_and_basis_digests(accounts, plan)?;
+    let principal_cap_sets = authenticate_core_market_v3(
+        accounts.core_market,
+        accounts.core_program,
+        accounts.registry,
+        market,
+        plan.product_record_digest(),
+        admission,
+    )
+    .map_err(|_| SignedDeltaSbfErrorV3::ProductBasis)?;
     claims_cu_checkpoint!("sd-product-basis");
     admit_principal_growth(plan, &market_before, principal_cap_sets)?;
     let (mut market_candidate, mut position_candidates) =
@@ -669,21 +652,68 @@ fn authenticate_parent_authority(
     Ok(())
 }
 
-/// Authenticate every role this action lends authority to, out of the cache.
+/// Bind every role coordinate this action lends authority to, against the
+/// activation its caller already authenticated.
 ///
-/// This route used to compose a `RoleBatchRequestV2` and CPI it into the
-/// Registry. That is the same reentrancy the per-role `Reauthenticate` was:
-/// under a Registry continuation the Registry is already at CPI depth one, so
-/// the batch route was unreachable from here for exactly the same reason, and
-/// it is retired with no fallback.
+/// ## What the caller's signature establishes
 ///
-/// Nothing is weakened by the removal. The batch receipt was compared against
-/// an `expected_role_batch` table that this program built by reading the very
-/// same cache; the only fact the Registry added was that each role's OBSERVED
-/// deployment still matches its activated release, and
-/// `authenticate_activated_role` makes exactly that check here -- program and
-/// ProgramData identity, Loader ownership and link, deployment slot, upgrade
-/// authority, and the ELF digest under the release's own upgrade policy.
+/// Nothing reaches this function without a `CallerAuthoritySeedsV1` PDA
+/// signature: [`authenticate_authority`] on the public entry, and
+/// [`authenticate_parent_authority`] on the in-process one. A program-derived
+/// address has no private key, so that signature is a statement made by the
+/// program sitting at `caller_program` that it is the one invoking this route,
+/// and the seed order pins the release set, the Market, the caller's execution
+/// role, the replay context, and the digest of these exact instruction bytes.
+///
+/// Under the standing ruling in `GOAL.md` -- a callee invoked by a PDA-signed
+/// CPI takes the facts that signer's seeds pin as established -- the release
+/// set is established, and with it the activation the Registry wrote for it,
+/// which the caller authenticated in this same instruction before it built the
+/// frame being read here. So this route no longer re-observes each role's
+/// current deployment. It used to, three times, through
+/// `authenticate_activated_role`, against the very activation cache account its
+/// caller had read: measured 2026-09-02 at 76,245 CU of a 173,680-CU
+/// invocation that spends 662 applying the deltas it exists to apply.
+///
+/// ## What the seeds do NOT establish, and is therefore still checked here
+///
+/// **Which program holds a role in that release set.** The seeds name a role,
+/// not a key, and a signature under `caller_program` proves only that
+/// `caller_program` signed -- any deployed program can sign a PDA under itself.
+/// That is the whole hazard the old comment on this function recorded, and it
+/// is not repaired by the ruling:
+///
+/// > Role `Core` used to assert in a comment that it was "already covered by
+/// > the first entry" and pin nothing: the first entry authenticates
+/// > `core_program`, a DIFFERENT coordinate. Any executable program could sit
+/// > at the caller coordinate and the authority the route demanded was a PDA
+/// > under it -- which is exactly the signature no external submitter is
+/// > supposed to be able to produce.
+///
+/// So every coordinate is still pinned, and the pin is now the strongest form
+/// this frame can state: each Program and ProgramData key must equal the one
+/// the Registry's own activation for this release set names. A caller that is
+/// not the activated Trading refuses at the Trading coordinate; a caller naming
+/// a release set whose cache it does not hold refuses at the cache address,
+/// which is derived from that release set; a submitter with no program behind
+/// it cannot produce the signature at all.
+///
+/// The activation cache is decoded ONCE. The three
+/// `authenticate_activated_role` calls each ran
+/// `ActivatedExecutionReleaseSetViewV1::decode` -- the complete five-role
+/// projection and every aliasing pair -- for one role, so the account was
+/// hostile-decoded three times to answer three questions about it.
+/// [`authenticate_activation_cache_identity_v1`] is the crate's own
+/// already-decoded entry point and exists for exactly this shape.
+///
+/// ## What is given up, named as debt rather than left to be discovered
+///
+/// The per-role deployment observation was also the slot pin: decision 0012's
+/// `ReleaseSuperseded`, raised when the substrate's upgrade authority ships new
+/// bytes under an open market. This route now inherits that refusal from its
+/// caller instead of raising it itself. It is not lost from the transaction --
+/// the caller observes all five roles before it composes this child -- but a
+/// future caller that does not would not be caught here.
 fn authenticate_releases(
     accounts: &SignedDeltaAccountsV3<'_, '_>,
     plan: SignedDeltaPlanV3<'_>,
@@ -742,16 +772,33 @@ fn authenticate_releases(
             accounts.caller_programdata,
         )),
     ];
-    for (role, program, programdata) in requested.into_iter().flatten() {
-        crate::authenticate_activated_role(
-            accounts.registry,
-            accounts.cache,
-            role,
-            program,
-            programdata,
-            &release_set,
-        )
+    let cache = accounts
+        .cache
+        .try_borrow_data()
         .map_err(|_| SignedDeltaSbfErrorV3::Release)?;
+    let activated = ActivatedExecutionReleaseSetViewV1::decode(&cache)
+        .map_err(|_| SignedDeltaSbfErrorV3::Release)?;
+    // Registry ownership and the one exact width before a byte is believed, the
+    // body naming the very release set the seeds pin, and the address the two
+    // seeds reproduce -- so no account the Registry did not open for exactly
+    // this release set can stand in.
+    authenticate_activation_cache_identity_v1(
+        accounts.registry,
+        accounts.cache,
+        &release_set,
+        activated,
+    )
+    .map_err(|_| SignedDeltaSbfErrorV3::Release)?;
+    for (role, program, programdata) in requested.into_iter().flatten() {
+        let release = activated
+            .role(role)
+            .map_err(|_| SignedDeltaSbfErrorV3::Release)?
+            .release();
+        if program.key.to_bytes() != release.program().to_bytes()
+            || programdata.key.to_bytes() != release.programdata()
+        {
+            return Err(SignedDeltaSbfErrorV3::Release.into());
+        }
     }
     Ok(())
 }
@@ -791,43 +838,6 @@ fn authenticate_market(
     Ok(())
 }
 
-fn authenticate_product_and_basis(
-    accounts: &SignedDeltaAccountsV3<'_, '_>,
-    plan: SignedDeltaPlanV3<'_>,
-    market: MarketViewV2,
-    admission: MarketAdmissionV1,
-) -> Result<u64, ProgramError> {
-    authenticate_runtime_product_basis_core_v3(
-        accounts.registry,
-        accounts.rent,
-        accounts.core_market,
-        accounts.core_program,
-        ProductRuntimeFrameV3 {
-            product: FinalizedRecordFrameV2 {
-                raw: accounts.product_record,
-                staging: accounts.product_staging,
-            },
-            result_domain: FinalizedRecordFrameV2 {
-                raw: accounts.result_domain_record,
-                staging: accounts.result_domain_staging,
-            },
-            portfolio: FinalizedRecordFrameV2 {
-                raw: accounts.portfolio_record,
-                staging: accounts.portfolio_staging,
-            },
-            linked_basis: FinalizedRecordFrameV2 {
-                raw: accounts.basis_record,
-                staging: accounts.basis_staging,
-            },
-        },
-        market,
-        plan.product_record_digest(),
-        plan.linked_basis_record_digest(),
-        admission,
-    )
-    .map_err(|_| SignedDeltaSbfErrorV3::ProductBasis.into())
-}
-
 /// Preflight every positive aggregate delta against Core's set-denominated
 /// principal cap before any candidate or account byte is changed.
 fn admit_principal_growth(
@@ -854,9 +864,40 @@ fn admit_principal_growth(
     Ok(())
 }
 
-/// Rejoin the exact Product and ProductBasisV3 raw digests already
-/// authenticated by the enclosing representation route.
-fn authenticate_parent_product_digests(
+/// Rejoin the exact Product and ProductBasisV3 raw record digests the caller
+/// has already authenticated and signed for.
+///
+/// ## Why this is the whole join, and what used to be here
+///
+/// This route used to derive the Product runtime graph and the linked
+/// `ProductBasisV3` record from the Registry on every invocation --
+/// `authenticate_runtime_product_basis_core_v3`, eight canonical record
+/// derivations over four `FinalizedRecordFrameV2` pairs, measured 2026-09-02 at
+/// **41,808 CU** on the SignedDelta child, which is 24.1% of a completing
+/// invocation. The enclosing in-process arm did not: it hashed the two raw
+/// records and compared them against the digests its parent had committed to,
+/// because its parent had already done the derivation.
+///
+/// A CPI caller has committed to them at least as hard. The
+/// `CallerAuthoritySeedsV1` PDA that authorizes this route carries
+/// `hash(instruction_data)` as its last seed, so the signature is over the
+/// EXACT plan bytes -- `product_record_digest` and `linked_basis_record_digest`
+/// included. Under the ruling in `GOAL.md` those are established for exactly
+/// what the seeds name, and what remains is to bind the frame's coordinates to
+/// them, which is what this does.
+///
+/// ## The two conjuncts a signature cannot carry, and which therefore stay
+///
+/// [`authenticate_core_market_v3`] runs unconditionally beside this, and it is
+/// not a formality: Core's persisted Market independently names the product
+/// record digest, the product id, the selected release set, the Registry and
+/// the generation, and carries the principal cap. A caller may pin its own plan
+/// to whatever it likes; it may not author the Market's persisted cap, and the
+/// Core join is where a plan that names a product the Market never selected
+/// refuses. [`authenticate_market`] is the other: the Claims-owned Market PDA
+/// pins the release set, the semantic basis id, the claim count and the
+/// revision against this same plan.
+fn authenticate_product_and_basis_digests(
     accounts: &SignedDeltaAccountsV3<'_, '_>,
     plan: SignedDeltaPlanV3<'_>,
 ) -> Result<(), ProgramError> {

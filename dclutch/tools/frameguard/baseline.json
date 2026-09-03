@@ -1,10 +1,10 @@
 {
   "bound_bytes": 4096,
-  "commit": "b97ef3e4a8891b241f3465acf460be39c8aaba1d",
+  "commit": "0aa70478e6e25902df11142d20cf5d406ea24846",
   "link_count": 12,
   "links": [
     {
-      "frame_count": 269,
+      "frame_count": 270,
       "functions": [
         {
           "frames_bytes": [
@@ -284,25 +284,31 @@
         },
         {
           "frames_bytes": [
+            704
+          ],
+          "symbol": "_ZN18dclutch_claims_sbf15signed_delta_v316build_candidates17h<hash>E"
+        },
+        {
+          "frames_bytes": [
             128
           ],
           "symbol": "_ZN18dclutch_claims_sbf15signed_delta_v317commit_candidates17h<hash>E"
         },
         {
           "frames_bytes": [
-            192
+            128
           ],
           "symbol": "_ZN18dclutch_claims_sbf15signed_delta_v321SignedDeltaAccountsV35parse17h<hash>E"
         },
         {
           "frames_bytes": [
-            320
+            512
           ],
           "symbol": "_ZN18dclutch_claims_sbf15signed_delta_v321authenticate_releases17h<hash>E"
         },
         {
           "frames_bytes": [
-            1600
+            1344
           ],
           "symbol": "_ZN18dclutch_claims_sbf15signed_delta_v321execute_authenticated17h<hash>E"
         },
@@ -320,7 +326,7 @@
         },
         {
           "frames_bytes": [
-            1920
+            1856
           ],
           "symbol": "_ZN18dclutch_claims_sbf15signed_delta_v37process17h<hash>E"
         },
