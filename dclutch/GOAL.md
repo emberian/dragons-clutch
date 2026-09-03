@@ -4095,3 +4095,14 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   markets B and C names cell 1 beside the chain's cell 2). Owed: four `abi:*:verify` red at HEAD (capability-surface,
   user-position-admission, wallet-terminal-input/-payout — other lanes' Rust moved their inputs).
 - Cuts: `51e07b0b8`, `a90adbec9`.
+- HINTS-2 closed (`1c49ecac2`): all nine builders mine through the one miner, each with its corpus named; the lifecycle
+  builders share one `lifecycle_hot_bump_hints_v3` (no cache — a one-route Claims effect never reaches Custody); **the
+  positive-control gap: every family fixture filled Market/root with constant bytes, so both decodes failed and a corpus
+  reading the WRONG coordinate emitted the same zero block as the right one** — a staged corpus fixture now proves the slots
+  (red-proven by swapping market/root); the registered hand fixture compared slot by slot; `envelope_field`'s copy of the
+  slot names had drifted, the TS copy further — one Rust owner, a generated twin with a verify. REGSELL/REGBUY −5,998 CU
+  draw-free; the Dealer campaign 31/0; the twelve SBF closures byte-identical (no rows). Owed: **three builders have no
+  caller anywhere** (Dealer equity hot; Series prepare/consume/expire) — parsimony material; the Series selected-v5 hint
+  block has never executed (its only real-ELF path is the red expiry test); four stale wasm verifiers → WEB-VERIFY
+  **`(spawned)`**.
+- Cuts: `120beaccf`.
