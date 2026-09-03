@@ -21,6 +21,7 @@ reaches `generate.mjs` -- which is what `test.sh` pins.
 |---|---|
 | `programs.md`, `routes.md`, `refusals.md` (code tables) | `dclutch-route-census inventory` (tools/gauntlet/census), run fresh from the tree with `--check-unique` |
 | `routes.md` (execution status) | `tools/gauntlet/*/bindings.json` (+ `*-bindings.json`) and `tools/gauntlet/blocked.json` |
+| `route-witnesses.md` | the same bindings, plus `tools/gauntlet/substrates.json` (which substrate each campaign ran on, CHECKED here against its runner) and `docs/evidence/witnesses/*.json` (devnet transactions, whose chain-derived fields are written by `tools/gauntlet/devnet-witness/corroborate.py`) |
 | `refusals.md` (band allocation) | `crates/dclutch-refusal-registry/src/lib.rs` |
 | `budgets.md` | `tools/gauntlet/CU_BUDGETS.json` |
 | `decisions.md` | `docs/decisions/*.md` |

@@ -9665,7 +9665,7 @@ fn derive_founding_outer_v1(
             registry,
             coordinates.identity,
             records,
-            core_product_graph_projection_v1(&plan.core)?,
+            core_product_graph_projection_v1(&plan.core, plan.checked_local_mutable_set.as_ref())?,
         )?,
     };
     let market_state_bytes = market_state
@@ -11697,7 +11697,7 @@ fn execute_generic_market_founding(
         core,
         registry,
         records,
-        core_product_graph_projection_v1(&plan.core)?,
+        core_product_graph_projection_v1(&plan.core, plan.checked_local_mutable_set.as_ref())?,
     )?;
     let outer = derive_founding_outer_v1(
         rpc,
@@ -12119,7 +12119,7 @@ fn execute_split_market_founding(
         core,
         registry,
         records,
-        core_product_graph_projection_v1(&plan.core)?,
+        core_product_graph_projection_v1(&plan.core, plan.checked_local_mutable_set.as_ref())?,
     )?;
     let outer = derive_founding_outer_v1(
         rpc,
@@ -15509,7 +15509,7 @@ mod tests {
                 registry,
                 fixture.coordinates.identity,
                 &fixture.records,
-                core_product_graph_projection_v1(pin).expect("a Core this driver can model"),
+                core_product_graph_projection_v1(pin, None).expect("a Core this driver can model"),
             )
             .expect("the fixture's derivations carry")
         };

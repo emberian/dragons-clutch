@@ -4,7 +4,7 @@
 standing and this document assumes it; every other act names its own condition.
 
 **Read `tools/cohort14/README.md` first and run it.** This file is not a second
-copy of it. Cohort-14's nineteen steps still describe the cohort; the four rows
+copy of it. Cohort-14's nineteen steps still describe the cohort; the five rows
 here are what cohort-15 carries that cohort-14 could not, and each names where
 it inserts into that ladder.
 
@@ -122,3 +122,33 @@ nothing, and exits non-zero naming every unsatisfiable conjunct it finds. It
 reported both walls in order on cohort-14 deliberately, because an ordering
 that prints only the earliest refusal is how a second real wall becomes
 invisible. It must now name none.
+
+### 04 route-witness
+
+Every earlier cohort executed real routes on a public chain and none of it
+reached the register: `docs/reference/routes.md` printed NEVER-EXECUTED beside
+`process_controller_funding_prepare_v1` while three cohorts running had driven
+it, because cohort evidence is prose and the register had no channel a devnet
+transaction could arrive through. It has one now, and this row is what fills
+it.
+
+```
+tools/gauntlet/run.sh --mode census                 # produces the inventory, seconds, no chain
+python3 tools/gauntlet/devnet-witness/corroborate.py --discover \
+  --source docs/evidence/COHORT15_*.md \
+  --inventory /private/tmp/dclutch-gauntlet/out/inventory.json \
+  --programs <this cohort's label -> program address map> \
+  --cohort 15 --out docs/evidence/witnesses/cohort-15-discovered.json
+```
+
+It authors nothing. It harvests the signatures out of the evidence document,
+asks devnet what each transaction sent, and resolves the outer instruction's
+own eight bytes to the census route that dispatches on them — keeping a
+resolution only when that route's program is the program the instruction went
+to. What it cannot resolve lands in the document's `skipped` list with the
+reason, so the gap is a row rather than an absence.
+
+Run it AFTER the evidence document is written, and commit the JSON it produces.
+Then regenerate `docs/reference/route-witnesses.md`: a witness document that is
+in the tree and not in the register is the same invisible as no document at
+all.

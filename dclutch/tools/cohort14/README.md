@@ -88,6 +88,18 @@ detached worktree at the same commit reproduces all seven ELFs byte-identically;
 and each live image is dumped back and compared to its ELF **before the next
 deploy starts**. Three instruments, one claim, exactly as cohort-13.
 
+**The reproduction is same-host, and that is not a formality.** Measured
+2026-09-03 at three commits: two candidates on ONE host at two different
+absolute `--work` roots give all ten ELFs byte-identically, and hbox (Linux)
+against the laptop (macOS) gives nine of ten DIFFERENT. The cause is not this
+tree: `platform-tools` ships a Rust standard library that embeds its own CI
+build path (`/home/runner/...` on linux-x64, `/Users/runner/...` on
+darwin-arm64) in the panic locations it puts in `.rodata`. Reproduce a deploy
+candidate on the same OS as the machine that built it, or the comparison is
+guaranteed to fail for a reason that has nothing to do with the deploy. See
+`tools/release/README.md`, "Cross-host reproduction is scoped to one
+platform-tools host OS".
+
 **Cost:** **−42.26 SOL**, projected from cohort-13's measured 42.123003619 over
 6,643,784 bytes (6,340.21 lamports/byte) against cohort-14's 6,665,200. The
 affine model `890,880 + 6,960·n` predicts 46.40 and over-predicts by ~9%; use it

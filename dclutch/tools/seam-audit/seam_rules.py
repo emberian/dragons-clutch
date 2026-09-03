@@ -86,6 +86,18 @@ _DERIVATION_PATTERNS: tuple[tuple[str, str], ...] = (
     ("create_program_address", "Pubkey::create_program_address(&[$$$SEEDS], $PROG)"),
     ("create_program_address", "create_program_address(&[$$$SEEDS], $PROG)"),
     ("invoke_signed", "invoke_signed($IX, $ACCS, &[&[$$$SEEDS]])"),
+    # A bump-hinted derivation is still a derivation.  `derive_hinted` is a
+    # LOCAL three-line wrapper -- `create_program_address` at the recorded bump,
+    # falling back to the search -- that Claims and the Dealer accelerator each
+    # grew while they were removing PDA searches, and the tuple moving inside a
+    # call this reader did not know took two restatement rows out of the
+    # register on 2026-09-02 as though someone had repaired them
+    # (`signed_delta_v3.rs` and `v4_equity_accelerator_accounts.rs`, both still
+    # spelling `[LIABILITY_BASIS_MARKET_SEED_V2, &request.market]` in full).
+    # A GONE that means "the reader stopped looking" is the one kind of GONE
+    # this ratchet must never produce.
+    ("derive_hinted", "derive_hinted(&[$$$SEEDS], $PROG, $HINT)"),
+    ("derive_hinted", "derive_hinted_v3(&[$$$SEEDS], $PROG, $HINT)"),
 )
 
 
@@ -324,6 +336,19 @@ def _read_seed_functions(binary: str, root: pathlib.Path) -> dict[str, set[str]]
 
 
 _FN_HEADER = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def _code_only(text: str) -> str:
+    """``text`` with every comment and string literal blanked to spaces.
+
+    Positions are preserved so a line number taken from the original still
+    lines up, and blanking to spaces cannot fuse two tokens together.
+    """
+
+    mask = _code_mask(text)
+    return "".join(
+        character if keep else " " for character, keep in zip(text, mask)
+    )
 
 
 def _code_mask(text: str) -> bytearray:
@@ -1061,9 +1086,36 @@ _FRAME_LOOP = re.compile(
     r"|\.iter\(\)\s*\.enumerate\(\)\s*\.any"
     r"|\.iter\(\)\s*\.any"
 )
+# An exemption written as an EQUALITY rather than as a guard, which is the same
+# fact spelled the other way round.
+#
+# The two arms above admit `if index != SOME_COORDINATE {` and
+# `if child_index != 3 {`.  The tree's canonical spelling for the same statement
+# is `account.is_writable != (index == SOME_COORDINATE)` -- one writable
+# coordinate, named, and every other coordinate readonly -- which is exactly
+# "an exemption, one coordinate wide and reasoned in place" and was reported as
+# *unexempted* purely because it puts the coordinate on the right-hand side of
+# the pin instead of in a guard above it.  Five sites carry it, and one line
+# each says which coordinate is writable:
+# `is_writable != (index == 0)`, `!= (index == HOT_ROOT_ACCOUNT_V3)`,
+# `!= (matches!(index, 2 | 3) || index == tail_start - 1)`,
+# `!= (writable == Some(index))`, `!= (pages == 1 && index == page_index)`.
+#
+# The second addition generalises `child_index != \d` from a literal digit to a
+# NAMED coordinate (`child_index != caller &&`).  A coordinate that has a name
+# is not less of an exemption than one written as `3`.
+#
+# NOT admitted, deliberately: `observed.is_writable != expected.writable()`,
+# where the required writability is read per coordinate out of a declared frame
+# spec.  Six on-chain sites carry that shape and it is a different argument --
+# the artifact declares the privilege, which is the `benign-declared-privilege-
+# census` family -- so retiring them is a reading of six frames rather than a
+# spelling fix, and it is not this run's change.
 _PRIVILEGE_EXEMPTION = re.compile(
     r"[a-z_]*_pinned\s*=|index\s*!=\s*[A-Z][A-Z0-9_]+|child_index\s*!=\s*\d"
     r"|writability_is_free|_writability_"
+    r"|is_writable\s*!=\s*\([^;{}]*\b[a-z_]*index\b"
+    r"|[a-z_]*index\s*[!=]=\s*[a-z_][a-z0-9_]*\s*&&"
 )
 
 # The signer half's exemption, and it is the *harm statement's own negation*.
@@ -1305,14 +1357,26 @@ def class_authority(survey: Survey) -> list[Finding]:
     # one call away.  Resolving by NAME within the same crate is deliberate:
     # a helper in another crate is a seam, and this tool's whole subject is
     # that seams are where each side's private beliefs stop agreeing.
+    # EVERY test in this class reads code with the comments and string literals
+    # blanked out, and the reason is not tidiness -- it is that this reader's
+    # patterns are the exact vocabulary this tree's comments quote.  It cuts
+    # both ways and the dangerous direction is silence: a body whose doc
+    # comment happens to write `authenticate_activation_cache_identity_v1(` or
+    # `.owner ==` reads as delegating or as owner-checking when it does
+    # neither, and the finding is never made.  The noisy direction was
+    # measured on 2026-09-03: Custody's `authenticate_market` takes an
+    # already-authenticated view as a PARAMETER and decodes no cache at all,
+    # and was reported because the comment above its market decode explains
+    # what `ActivatedExecutionReleaseSetViewV1::decode` costs.
+    bodies = [_code_only(candidate.text) for candidate in survey.functions]
     authenticators: dict[tuple[str, str], bool] = {}
-    for candidate in survey.functions:
+    for candidate, body in zip(survey.functions, bodies):
         authenticators[(candidate.crate, candidate.name)] = bool(
-            _AUTHORITY_DERIVES.search(candidate.text)
-        ) and bool(_AUTHORITY_OWNER_CHECK.search(candidate.text))
+            _AUTHORITY_DERIVES.search(body)
+        ) and bool(_AUTHORITY_OWNER_CHECK.search(body))
 
-    def delegates_to_authenticator(function: Function) -> bool:
-        for call in _CALL_SITE.finditer(function.text):
+    def delegates_to_authenticator(function: Function, body: str) -> bool:
+        for call in _CALL_SITE.finditer(body):
             name = call.group(1)
             if name == function.name:
                 continue
@@ -1321,10 +1385,9 @@ def class_authority(survey: Survey) -> list[Finding]:
         return False
 
     findings: list[Finding] = []
-    for function in survey.functions:
+    for function, body in zip(survey.functions, bodies):
         if function.is_test or not function.path.startswith("programs/"):
             continue
-        body = function.text
         if not _AUTHORITY_CACHE_READ.search(body):
             continue
         # An authority question needs an ACCOUNT to ask it about, and the honest
@@ -1347,7 +1410,7 @@ def class_authority(survey: Survey) -> list[Finding]:
         owns = bool(_AUTHORITY_OWNER_CHECK.search(body))
         if derives and owns:
             continue
-        if delegates_to_authenticator(function):
+        if delegates_to_authenticator(function, body):
             continue
         missing = []
         if not derives:

@@ -52,10 +52,17 @@ pub const PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1: [u8; 32] = [
 // Both PDA seed domains now derive from
 // `EmitProtocolInfrastructureProfileAbiRust`, re-exported through `lib.rs`
 // alongside every other coordinate of this profile. Lean's
-// `pda_domains_are_admissible_single_seeds` carries the 32-byte seed bound
-// that the hand-written `const _: () = assert!(..)` used to, and adds what the
-// bound alone never said: that the two domains differ, which is the whole
-// reason V2 is a separate profile rather than a mutation of V1.
+// `pda_domains_are_admissible_single_seeds` is the AUTHOR of the 32-byte seed
+// bound that the hand-written `const _: () = assert!(..)` used to carry, and
+// it adds what the bound alone never said: that the two domains differ, which
+// is the whole reason V2 is a separate profile rather than a mutation of V1.
+//
+// The emitter restates that bound as a `const _: () = assert!(..)` beside each
+// emitted domain, so it is also held where `cargo check` reads it. Proving it
+// in Lean and dropping it from the Rust left the guard visible only to
+// `check-generated.sh`, which needs `lake` and is the tier that skips on a
+// host without one -- and the seam register's own class 1 is a ratchet on
+// exactly this: an unguarded domain is the next over-length one.
 
 /// Immutable per-Core selection of exact Registry and Rent artifact releases.
 ///

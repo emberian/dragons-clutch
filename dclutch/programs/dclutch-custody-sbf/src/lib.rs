@@ -1023,15 +1023,38 @@ struct RealmFacts {
     profile: ExactTransferProfileV1,
 }
 
-/// Borrow and decode the activation cache for one Dealer reservation caller.
+/// Borrow, decode and identify the activation cache once for one Dealer
+/// reservation frame, and authenticate everything that reads it under that one
+/// view.
 ///
-/// See [`authenticate_realm_from_cache`] for why the reservation routes keep
-/// the shape they had.
+/// ONE borrow, ONE decode, ONE identity, for the whole route. This used to be
+/// three wrappers -- `authenticate_market_from_cache`,
+/// `authenticate_calling_release_from_cache` and
+/// `authenticate_realm_from_cache` -- each of which borrowed the same immutable
+/// Registry-owned account and each of which ran
+/// `ActivatedExecutionReleaseSetViewV1::decode`, the complete five-role
+/// projection and every aliasing pair, twenty-five `decode_role` calls, to
+/// answer one question about one role. `process_instruction` took exactly this
+/// repair at `5709672aa` and left these routes at the shape they had; this is
+/// the same repair, applied to them.
+///
+/// It is also what makes the cache's provenance legible to a reader of ONE
+/// function. Under three wrappers the identity was established in the first of
+/// them and the other two decoded an account whose owner and address nothing in
+/// their own bodies had checked -- true on every path, but true by CALL ORDER
+/// inside each caller, which is not a thing the type system or any static
+/// reader holds. `tools/seam-audit`'s `AUTHORITY_CACHE_UNDERIVED` named both.
+///
+/// `calling_release` is the one axis the five call sites differ on: the two
+/// release routes authenticate the calling program's activated release, the
+/// three realm-only routes do not name it.
 #[inline(never)]
-fn authenticate_market_from_cache(
+fn authenticate_reservation_frame_v1(
+    program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     request: CustodyRequestV1,
-) -> Result<AuthenticatedMarketV1, ProgramError> {
+    calling_release: bool,
+) -> Result<RealmFacts, ProgramError> {
     let registry = account(accounts, REGISTRY_PROGRAM)?;
     let cache_account = account(accounts, ACTIVATION_CACHE)?;
     require_cache_account(registry.key, cache_account).map_err(CustodySbfError::from)?;
@@ -1047,47 +1070,11 @@ fn authenticate_market_from_cache(
         activated,
     )
     .map_err(CustodySbfError::from)?;
-    authenticate_market(accounts, request, activated)
-}
-
-/// See [`authenticate_market_from_cache`].
-#[inline(never)]
-fn authenticate_calling_release_from_cache(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
-    request: CustodyRequestV1,
-    continuation: Option<RegistryContinuationRequestV1>,
-) -> ProgramResult {
-    let cache = account(accounts, ACTIVATION_CACHE)?;
-    let cache_data = cache
-        .try_borrow_data()
-        .map_err(|_| CustodySbfError::Release)?;
-    let activated = ActivatedExecutionReleaseSetViewV1::decode(&cache_data)
-        .map_err(|_| CustodySbfError::Release)?;
-    authenticate_calling_release(program_id, accounts, request, continuation, activated)
-}
-
-/// Borrow and decode the activation cache for one caller that holds no view.
-///
-/// The Dealer reservation routes each authenticate their own frame and reach
-/// the Realm without a decoded activation view in scope. They keep the shape
-/// they had; the repair above is the main `CustodyRequestV1` route, which is
-/// the one the Dealer partial equity Remove's two legs take and the one that
-/// was decoding the same immutable account three times.
-#[inline(never)]
-fn authenticate_realm_from_cache(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
-    request: CustodyRequestV1,
-    market: CoreState,
-) -> Result<RealmFacts, ProgramError> {
-    let cache = account(accounts, ACTIVATION_CACHE)?;
-    let cache_data = cache
-        .try_borrow_data()
-        .map_err(|_| CustodySbfError::Release)?;
-    let activated = ActivatedExecutionReleaseSetViewV1::decode(&cache_data)
-        .map_err(|_| CustodySbfError::Release)?;
-    authenticate_realm(program_id, accounts, request, market, activated)
+    let market = authenticate_market(accounts, request, activated)?;
+    if calling_release {
+        authenticate_calling_release(program_id, accounts, request, None, activated)?;
+    }
+    authenticate_realm(program_id, accounts, request, market.state, activated)
 }
 
 #[inline(never)]

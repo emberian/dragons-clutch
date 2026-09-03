@@ -3882,7 +3882,11 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
     // it writes zeros, and a founding that guesses refuses only after the
     // Market exists and the spending is done. Asked here, it is one sentence
     // and no transaction, on readings already taken.
-    crate::core_bump_projection::authenticate_core_bump_projection_v1(&plan.core, &observed_roles)?;
+    crate::core_bump_projection::authenticate_core_bump_projection_v1(
+        &plan.core,
+        &observed_roles,
+        plan.checked_local_mutable_set.as_ref(),
+    )?;
     let publication = publication_state(&mut rpc, &plan)?;
     let initialize = initialize_state(&mut rpc, &plan)?;
     let succession = succession_state(&mut rpc, &plan)?;

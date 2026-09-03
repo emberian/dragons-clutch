@@ -40,14 +40,14 @@ publishes anything.
 
 A strict checked-candidate run now also emits
 `SUCCESSOR_CAMPAIGN_PACK.json`. This is not another release format and does not
-rebuild an ELF. It is the campaign-facing join over the same all-thirteen-link
+rebuild an ELF. It is the campaign-facing join over the same all-shipped-link
 Upgrade gate:
 
 - the exact source revision/tree and immutable Cargo lock set;
 - pinned host, SBF, platform-tools, Solana and target toolchains;
 - the preserved official Node v26.4.0 distribution plus the exact Node/npm
   member digests used to build the public CLI;
-- all ten shipped ELF/checked-manifest identities and all thirteen frame
+- all ten shipped ELF/checked-manifest identities and all twelve frame
   reports;
 - the execution release set, the exact 144-byte predecessor profile input,
   and the successor infrastructure profile IDs and bytes;
@@ -203,7 +203,13 @@ python3 -m unittest tools.release.test_successor_campaign_pack
 Use a new absolute `--work` root for every candidate you intend to admit. The
 runner enumerates `programs/*/Cargo.toml`; that directory is the sole owner of
 the frame-gated link set. Ten current packages produce release artifacts and
-three are frame-gate-only, so the present summary reports thirteen links.
+two are frame-gate-only, so the present summary reports TWELVE links.
+**Do not restate that number anywhere.** `e6b7bf1a` deleted `dclutch-dealer-sbf`
+on 2026-09-02 and took the set from thirteen to twelve; the runner derives its
+count from `programs/` and stayed green, and four consumers that had written the
+literal 13 went silently red -- including `run.py`, which is the whole
+private-validator lifecycle. `artifact_provenance.SHIPPED_LINKS` is the one
+owner; count it from there.
 
 Each per-link log is truncated and stamped with a new run identifier and the
 exact build invocation before `cargo build-sbf` starts. The old deploy output
@@ -228,7 +234,7 @@ gate's v1 JSON shape is unchanged; its source-tree digest already binds every
 committed lock byte. The host tool itself builds `--locked --offline`.
 
 After the ordinary artifact build is clean, the runner performs a separate
-fresh measurement build for each of the same thirteen links with
+fresh measurement build for each of the same twelve links with
 `-Zemit-stack-sizes`. The measurement objects are never shipped. The runner
 refuses a missing top-package compile marker, an empty frame report, or any
 frame at or above the 4,096-byte SBPF v0 bound.
@@ -251,7 +257,8 @@ tools/release/plan-sbf-release-batch.py \
   --output /private/tmp/dclutch-sbf-batch-plan.json
 ```
 
-The static plan must enumerate exactly thirteen links. It computes each SBF
+The static plan enumerates exactly the shipped link set, whose size it derives
+from its own role tables. It computes each SBF
 package's local non-dev dependency-closure digest and names the changed inputs.
 It is scheduling evidence only: it predicts which content-addressed artifacts
 must be built once after the family freeze. The actual provenance descriptor is
@@ -266,6 +273,103 @@ Run the focused adversarial tests with:
 ```sh
 bash tools/release/test-checked-release-freshness.sh
 ```
+
+## A cold machine
+
+Replayed 2026-09-03 on hbox from an empty `CARGO_HOME`/`RUSTUP_HOME` and a fresh
+clone; every line below is one that campaign actually ran, and the whole setup
+took 51 seconds. Nothing in this tree said any of it before that replay, so a
+cold machine had to reconstruct the toolchain from `docs/board-archive-2026-08-27.md`.
+
+```sh
+# Isolate everything a cold run creates, so the host's own caches are not inputs.
+export COLD=/absolute/scratch/root
+export HOME="$COLD/home" CARGO_HOME="$COLD/toolchain/cargo" RUSTUP_HOME="$COLD/toolchain/rustup"
+
+# 1. Rust, at the channel rust-toolchain.toml pins (1.97.1 as of this writing).
+curl -sSfL https://sh.rustup.rs -o "$COLD/rustup-init.sh"
+sh "$COLD/rustup-init.sh" -y --no-modify-path --profile minimal --default-toolchain none
+export PATH="$CARGO_HOME/bin:$PATH"
+rustup toolchain install 1.97.1 --profile minimal --component clippy --component rustfmt
+
+# 2. Agave, at the EXACT tag, never the `stable` channel. This is also what
+#    installs cargo-build-sbf, and cargo-build-sbf is what downloads
+#    platform-tools v1.53 into $HOME/.cache/solana on its first invocation.
+sh -c "$(curl -sSfL https://release.anza.xyz/v4.0.2/install)" -- v4.0.2 --no-modify-path
+export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+
+# 3. The pinned Node distribution for THIS platform. Both --node and
+#    --node-archive are required on every builder, `local` included.
+#      linux-x64     node-v26.4.0-linux-x64.tar.xz
+#                    5c4286dcd5bbd5acb1ccc7eb0e088bd5eb1e3affad671ee9364004f8f6a4a431
+#      darwin-arm64  node-v26.4.0-darwin-arm64.tar.xz
+#                    bef4c7e75087c029835f519a7ba640eba52fa617fadb3a9049828ff3b45b57dd
+curl -sSfL -O "https://nodejs.org/dist/v26.4.0/node-v26.4.0-$PLATFORM.tar.xz"
+
+# 4. WARM THE CARGO CACHE FOR THE SUCCESSOR WORKSPACE. See below.
+cargo fetch --locked --manifest-path tools/local-validator/bootstrap/successor/Cargo.toml
+```
+
+**Step 4 is not optional and its absence is invisible.** The runner builds the
+successor host producer with `cargo build --release --locked --offline`, from a
+SEPARATE workspace whose lock resolves crates the SBF builds do not necessarily
+fetch. On a cold cache that build fails, and the failure is silent: the runner
+prints nothing after `SBF build freshness PASS`, exits **101**, and the only
+copy of the reason lives in `<work>/product-handoff/build.log`
+(`error: failed to download serde v1.0.228 ... --offline was specified`). Four
+crates and 1.1 seconds of `cargo fetch` is the whole fix, and 427 seconds of
+build is what skipping it costs. **When a candidate exits 101 with no message,
+read `product-handoff/build.log` first.**
+
+A cold machine can only build a **GENESIS** candidate, because a succession is
+not a function of the successor alone and its `--predecessor-profile` has to be
+read off the chain being succeeded. The genesis invocation, which nothing else
+in this file showed:
+
+```sh
+SWARM_MEM_MAX=32G CARGO_BUILD_JOBS=4 swarm-build \
+  "$COLD/src/tools/release/checked-release-candidate.sh" \
+    --repo "$COLD/src" \
+    --work "$COLD/work/candidate-1" \
+    --commit <exact commit> \
+    --genesis-cohort \
+    --node "$COLD/toolchain/node-v26.4.0-linux-x64/bin/node" \
+    --node-archive "$COLD/toolchain/node-v26.4.0-linux-x64.tar.xz" \
+    --builder hbox
+```
+
+Measured cost of one clean genesis candidate: **447-455 s on hbox** (24 cores,
+co-tenant, `CARGO_BUILD_JOBS=4`), **526-619 s on the laptop** (macOS arm64).
+
+## Cross-host reproduction is scoped to one platform-tools host OS
+
+Measured 2026-09-03 at three commits, hbox (Linux x86-64) against the laptop
+(macOS arm64), both on `cargo-build-sbf 4.0.0` / `platform-tools v1.53` /
+`rustc 1.89.0`:
+
+- **Same host, two different absolute `--work` roots: all ten ELFs
+  byte-identical.** The build path is NOT an input.
+- **Across the two hosts: nine of the ten differ, and `series-shadow.so` is
+  byte-identical.**
+
+The whole difference is one string. `platform-tools`' own Rust standard library
+was compiled on Anza's CI runner and carries that runner's absolute source paths
+in the panic locations it embeds in `.rodata`:
+`/home/runner/work/platform-tools/...` in the linux-x64 tarball and
+`/Users/runner/work/platform-tools/...` in the darwin-arm64 one. Nine roles
+embed one to three of those strings; `series-shadow` embeds none, which is
+exactly why it is the one that reproduces. The extra byte shifts `.rodata`, and
+every address in `.text`, `.data.rel.ro`, `.dynamic` and `.rel.dyn` shifts with
+it, so the divergence looks like a codegen difference and is not one.
+
+So `supported_builders` -- `local`, `persvati`, `hbox-through-swarm-build` --
+is a set whose members can only reproduce each other **within one
+platform-tools host OS**. `hbox` and `persvati` (both linux-x64) reproduce; a
+macOS `local` build can never be byte-identical to either, and
+`compare-packs` correctly refuses that pair. `excluded_nondeterminism` says it
+excludes "host OS, kernel, C toolchain, and libc identity" -- the shipped SBF
+ELFs are not excluded and they carry the host OS inside them, which is the
+distinction that sentence was missing.
 
 ## hbox
 
@@ -315,7 +419,7 @@ is excluded from the cross-builder projection because absolute build paths and
 the Linux distribution linker/libc are embedded in those helper bytes.
 
 The admitted summary must say `sbf_build_freshness=passed`,
-`sbf_build_freshness_links=13`, `sbf_build_diagnostics_total=0`, and
+`sbf_build_freshness_links=12`, `sbf_build_diagnostics_total=0`, and
 `sbf_build_diagnostics_accepted=false`. It must also say
 `cargo_lock_immutability=passed`. Preserve `build-links.tsv`,
 `build-run.txt`, `source-tree.txt`, every `build-*.log`, every
@@ -331,7 +435,7 @@ with the rest of the pack.
 A clean run also emits `CHECKED_UPGRADE_GATE.json` and prints its SHA-256. The
 gate is generated only after the fresh all-link build, static frame gate, and
 checked release manifests complete. It binds the source commit/tree, exact
-thirteen-link identities, run stamps and compile markers, build and frame logs,
+shipped-link identities, run stamps and compile markers, build and frame logs,
 frame counts, every release ELF, each per-link provenance descriptor, and each
 checked manifest.
 
@@ -358,7 +462,7 @@ tools/release/artifact_provenance.py select-gate-role \
   --role trading
 ```
 
-It refuses a noncanonical gate path, anything other than the exact all-thirteen
+It refuses a noncanonical gate path, anything other than the exact shipped
 set, a wrong role/package map, a stale source/run/log/object/report/ELF, and an
 adjacent or renamed file. Its JSON result names the only ELF path that a
 consumer may open.

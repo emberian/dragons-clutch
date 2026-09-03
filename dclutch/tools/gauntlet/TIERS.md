@@ -23,11 +23,16 @@ tools/gauntlet/
     check-witnesses.sh   evaluates them against the campaign evidence
 ```
 
-Tier 1's historical transaction producer lives in
-`tools/local-validator/bootstrap/successor/`. It is parked at the retired
-`demo-market` boundary, so `run.sh` does not build or invoke it at HEAD. The
-top-level script owns the static census/report only; named family runners own
-their own build, evidence, witnesses, and validator lifecycle.
+Tier 1's transaction producer lives in
+`tools/local-validator/bootstrap/successor/`, and `run.sh --mode full` builds
+and drives it. It was parked at the retired `demo-market` boundary from
+2026-08-31 to 2026-09-03; the repair was not to find it another Market planner
+but to stop needing one, because the successor's own loopback planner
+authenticates a checked-MUTABLE plan and refuses immutable-Core semantics --
+which is what the infrastructure floor is. The spec now omits `market` and the
+supervisor compiles a fixture input from the plan it builds
+(`SuccessorRunSpec::market`). Named family runners still own their own build,
+evidence, witnesses, and validator lifecycle.
 
 ## The three files a tier needs
 

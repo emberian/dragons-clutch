@@ -48,7 +48,11 @@ const POSITION_MAGIC_V2: [u8; 8] = *b"DCLLBP02";
 const ABI_VERSION_V2: u16 = 2;
 const LIABILITY_BASIS_MARKET_HEADER_BYTES_V2: usize = 256;
 const LIABILITY_BASIS_POSITION_HEADER_BYTES_V2: usize = 128;
-const LIABILITY_BASIS_MARKET_SEED_V2: &[u8] = b"dclutch:lbv2:market";
+// Taken from the crate that owns the domain rather than restated. The bytes
+// are one address's identity and a second declaration of them is a second
+// author: `dclutch:lbv2:market` stood under two names -- this one and the
+// owner's -- until the seam register's DOMAIN_BYTES_COLLIDE said so.
+use dclutch_claims_svm::liability_basis_state_v2::LIABILITY_BASIS_MARKET_SEED_V2;
 const MARKET_CLAIM_COUNT_OFFSET: usize = 12;
 const MARKET_REVISION_OFFSET: usize = 16;
 const MARKET_LOGICAL_ID_OFFSET: usize = 24;

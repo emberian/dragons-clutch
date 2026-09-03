@@ -56,7 +56,11 @@ const CLAIMS_POSITION_MAGIC_V2: [u8; 8] = *b"DCLLBP02";
 const CLAIMS_ABI_VERSION_V2: u16 = 2;
 const CLAIMS_MARKET_HEADER_BYTES_V2: usize = 256;
 const CLAIMS_POSITION_HEADER_BYTES_V2: usize = 128;
-const CLAIMS_MARKET_SEED_V2: &[u8] = b"dclutch:lbv2:market";
+// Taken from the crate that owns the domain rather than restated. The bytes
+// are one address's identity and a second declaration of them is a second
+// author: `dclutch:lbv2:market` stood under two names -- this one and the
+// owner's -- until the seam register's DOMAIN_BYTES_COLLIDE said so.
+use dclutch_claims_svm::liability_basis_state_v2::LIABILITY_BASIS_MARKET_SEED_V2;
 /// Product coordinate-domain identity this fixture compiles against.
 pub const COORDINATE_DOMAIN_ID: [u8; 32] = [0x43; 32];
 /// Product result-unit identity this fixture compiles against.
@@ -494,7 +498,7 @@ pub fn compile_narrow_fixture_v3(
     }
 
     let claims_market = Pubkey::find_program_address(
-        &[CLAIMS_MARKET_SEED_V2, core_market.as_ref()],
+        &[LIABILITY_BASIS_MARKET_SEED_V2, core_market.as_ref()],
         &input.claims_program,
     )
     .0;

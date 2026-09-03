@@ -2,7 +2,7 @@
 """Plan one exact all-link SBF batch before spending hbox build time.
 
 The plan compares the local dependency closure of every `programs/*` package
-between two committed source trees.  It predicts which of the exact thirteen
+between two committed source trees.  It predicts which of the exact shipped
 links need new content-addressed artifacts; it never builds an ELF and is not
 release evidence by itself.
 """
@@ -22,7 +22,14 @@ from typing import Any, Iterable
 
 
 SCHEMA = "dclutch-sbf-release-batch-plan-v1"
-EXPECTED_LINK_COUNT = 13
+# The shipped set is defined ONCE, in artifact_provenance, and this module used
+# to restate its SIZE as the literal 13. `e6b7bf1a` deleted `dclutch-dealer-sbf`
+# and took the set to twelve, and from that commit until this one the pre-freeze
+# forecast the release runbook tells an operator to run refused every tree with
+# "program manifest inventory is not exact 13-link set: 12". Count the set from
+# the set: this module already names every artifact-producing role, and the
+# frame-gate-only packages are named here rather than counted, so adding or
+# deleting a program changes one obvious line instead of going stale in silence.
 ARTIFACT_ROLES = {
     "core": ("dclutch-core-sbf", "dclutch_core_sbf"),
     "claims": ("dclutch-claims-sbf", "dclutch_claims_sbf"),
@@ -41,6 +48,11 @@ ARTIFACT_ROLES = {
     ),
     "series-shadow": ("dclutch-series-shadow-sbf", "dclutch_series_shadow_sbf"),
 }
+FRAME_GATE_ONLY_PACKAGES = (
+    "dclutch-direct-aot-sbf",
+    "dclutch-product-runtime-v2-sbf",
+)
+EXPECTED_LINK_COUNT = len(ARTIFACT_ROLES) + len(FRAME_GATE_ONLY_PACKAGES)
 GLOBAL_INPUTS = {
     "Cargo.toml",
     "Cargo.lock",
@@ -264,7 +276,7 @@ def plan(repo: Path, base: str, candidate: str) -> dict[str, Any]:
             (row[0], row[1]) for row in inventory
         ]:
             raise Refusal(
-                "base and candidate do not share one exact thirteen-link identity set"
+                "base and candidate do not share one exact shipped-link identity set"
             )
         links = []
         for label, package, artifact_stem in inventory:

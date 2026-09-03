@@ -14,6 +14,9 @@ these pages always match the source they describe. Regenerate with
   does.
 - [routes.md](routes.md) -- every instruction the programs accept, and
   whether the test campaigns have run it yet.
+- [route-witnesses.md](route-witnesses.md) -- and what actually ran it:
+  devnet, a local validator, or an in-process test bank, with the artifact
+  and digest for each.
 - [refusals.md](refusals.md) -- every error code the protocol can return,
   with its meaning.
 - [budgets.md](budgets.md) -- what the key transactions cost in compute,
@@ -24,7 +27,7 @@ these pages always match the source they describe. Regenerate with
   widths and offsets, account tables.
 
 Current totals: **12 programs**, **162 routes**
-(101 exercised by the test campaigns), **341 refusal
+(101 exercised by the test campaigns), **344 refusal
 codes**.
 
 If you'd rather start with prose, the [guides](../guides/README.md)

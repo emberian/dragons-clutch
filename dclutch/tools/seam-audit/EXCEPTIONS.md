@@ -28,8 +28,17 @@ is recorded so the set can be reproduced later, not to bind the gate to it.
 
 ### confirmed-defect
 
-**4 entries. Open defects, all reachable, none fixed here.** These are recorded
-so the gate does not report the tree as clean while they stand — not excused.
+**1 entry. An open defect, reachable, not fixed here.** It is recorded
+so the gate does not report the tree as clean while it stands — not excused.
+
+**Was four until 2026-09-03**, and the other three were the Claims founding
+byte collision and its two `DOMAIN_NAME_BYTES_DISAGREE` companions. See the
+2026-09-03 SEAM entry at the bottom of this file: `b209be565` gave
+`LiabilityBasisV2` a Lean owner and made
+`CLAIMS_FOUNDING_AGGREGATE_SEED_V4`/`_V5` **aliases** of
+`LIABILITY_BASIS_MARKET_SEED_V2` rather than second literals, which is the
+answer this section demanded — *someone who owns Claims founding has to say
+which it is* — written in the source.
 
 Was five. `PROTOCOL_POSITION_CLAIMS_CAPABILITY_SEED_V2` +
 `RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2` — the two-crates-one-byte-string
@@ -658,7 +667,7 @@ test-only — 92 insertions, no production line touched.
 
 ### inventory-nonzero-guard-not-pubkey
 
-**4 entries. Not findings.** `UNSET_GUARD_PRESENT` says *"this file refuses the unset pubkey somewhere in
+**5 entries. Not findings.** `UNSET_GUARD_PRESENT` says *"this file refuses the unset pubkey somewhere in
 it"*. For eleven of the wave's fifteen that is true and they are filed
 `inventory-guard-present`. For these four it is **false**, and filing them as
 that tag would put a false sentence in the register:
@@ -688,9 +697,12 @@ mass-`GONE` the register, which is a lane of its own.
 
 ### benign-sole-seed-no-helper
 
-**6 entries.** `PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1` ×2 and `_V2` ×4, across
-`successor/src/campaign.rs`, `market.rs`, `direct_market.rs` and
-`series_premarket_expiry_chain_v1.rs`.
+**9 entries.** `PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1` ×3 and `_V2` ×6, across
+`successor/src/campaign.rs`, `market.rs`, `direct_market.rs`,
+`series_premarket_expiry_chain_v1.rs`, `plan.rs`, `runtime.rs` and
+`crates/dclutch-release-tool/src/infrastructure.rs`. The last three arrived
+untriaged and were verdicted here on 2026-09-03; each imports the domain from
+its owner and spells `&[DOMAIN]`, arity one, exactly as the six before them.
 
 The reader reports these restate "the 1-seed tuple for a domain owned by
 `crates/dclutch-release-set-contract`, which exports `CallerAuthoritySeedsV1`
@@ -758,9 +770,13 @@ shaped, rather than to reach into four other lanes' files on a gate run.
 
 ### benign-declared-privilege-census
 
-**3 entries.** `crates/dclutch-general-successor-operator/src/lib.rs` · `parse_route_v1`
-(both classes — class 6 sees the same code twice), and
-`programs/dclutch-trading-sbf/src/core_composition_v3.rs` · `prepare`.
+**2 entries.** `crates/dclutch-general-successor-operator/src/lib.rs` · `parse_route_v1`
+and `programs/dclutch-trading-sbf/src/core_composition_v3.rs` · `prepare`.
+
+Was three: `parse_route_v1` used to draw **both** class-6 codes, and its
+`PRIVILEGE_PIN_UNEXEMPTED` half left on 2026-09-03 when the matcher learned to
+read `meta.is_writable != (index == HOT_ROOT_ACCOUNT_V3)` as the exemption it
+is. The signer half stands, on the argument below.
 
 Both hazard notes rest on one premise: `is_signer` and `is_writable` are
 **transaction-level** properties of a runtime account, so a frame-wide refusal
@@ -1033,3 +1049,253 @@ Worth keeping for the method rather than the outcome: the honest verdict at
 filing time was *hazard*, not *benign-same-pattern*, purely because the Custody
 chain had been read end to end and this one had not. Had it been waved through
 on the resemblance, the fix would not have been written.
+
+---
+
+## 2026-09-03 — SEAM: 45 gate failures, six repaired at the author, three reader gaps, twelve verdicts
+
+The gate stood at **45 failures against `e6b7bf1af`: 27 GONE, 17 NEW, 1
+UNREASONED**, four of the NEW already sitting `untriaged` in the register. 629
+commits had landed under the baseline. Every one of the 45 is dispositioned
+below and each disposition cites its site.
+
+Counts, before and after: **17 NEW → 0**, **27 GONE → 0** (the register shrank
+by them), **1 UNREASONED → 0**, register **706 → 683 entries**, `untriaged`
+**4 → 0**, `confirmed-defect` **4 → 1**, `AUTHORITY_CACHE_UNDERIVED` **2 → 0**.
+
+### Nine NEW were repaired, not verdicted (`d8a679168`)
+
+- **`AUTHORITY_CACHE_UNDERIVED` ×2** — `programs/dclutch-custody-sbf/src/lib.rs`
+  `authenticate_calling_release_from_cache:1055` and
+  `authenticate_realm_from_cache:1078`. Both decoded the Registry activation
+  cache and read a role out of an account neither body derived or owner-checked.
+  The provenance did hold: all five call sites in
+  `dealer_reservation_v1.rs` (`:351`, `:656`, `:871`, `:1217`, `:1373`) call
+  `authenticate_market_from_cache` first, on the same frame vector, and that one
+  does `require_cache_account` + `authenticate_activation_cache_identity_v1`.
+  But it held **by call order**, which no type and no reader enforces — and the
+  entry that used to cover this shape,
+  `benign-cache-authenticated-by-admission-token`, rested on a `cache_bump`
+  carried in `AuthenticatedMarketAdmissionV1`, and that field **no longer
+  exists**: `9b5de611e`/`5709672aa` reduced the variant to a bare `Premarket`.
+  Its own closing sentence said this day would come — *the day someone calls
+  these functions from a third path with no token, the tag is a claim that has
+  to be re-checked*.
+  Repaired by collapsing the three `*_from_cache` wrappers into one
+  `authenticate_reservation_frame_v1`: one borrow, one decode, one identity, one
+  view handed to market, calling release and realm. Each reservation route goes
+  from THREE full five-role decodes to one.
+- **`AUTHORITY_CACHE_UNDERIVED` ×1** — `authenticate_market:787`. A reader
+  defect, see below.
+- **`SEED_DOMAIN_UNASSERTED` ×2** —
+  `crates/dclutch-release-set-contract/src/generated_protocol_infrastructure.rs:44`
+  and `:48`. `a00fc7c9d` moved both infrastructure profile PDA domains into the
+  Lean emission and deleted their `const _: () = assert!(..)`, on the argument
+  that `pda_domains_are_admissible_single_seeds` carries the bound. It does —
+  over the Lean definition. The **checked-in Rust** was then guarded only by
+  `check-generated.sh`, which needs `lake` and lives in the `emission` tier that
+  records a missing prerequisite when a host has none. Repaired Lean-first: the
+  emitter emits the assert beside each domain, so one author states the bound
+  and `cargo check` also holds it. Regenerated through the emitter, `rustfmt`'d,
+  `cmp`-clean.
+- **`DOMAIN_BYTES_COLLIDE` ×1** — `dclutch:lbv2:market` under two names, the
+  owner's `LIABILITY_BASIS_MARKET_SEED_V2`
+  (`crates/dclutch-claims-svm/src/generated_liability_basis_state_v2.rs:17`) and
+  a fixture-local `CLAIMS_MARKET_SEED_V2` in
+  `program-test/affine-batch/src/fixture.rs:42`,
+  `program-test/fractional-atomic/src/narrow_fixture.rs:59` and
+  `tools/fractional-exterior/src/narrow_fixture.rs:66`. All three crates already
+  depend on the owner; they take the constant from it now, and
+  `program-test/affine-batch/src/lib.rs:51`, which restated the owner's own
+  name, does the same. Three `SEED_DOMAIN_UNASSERTED` rows leave with them —
+  the fixture copies were the things being asserted about.
+- **`PRIVILEGE_PIN_UNEXEMPTED` ×3** and **`TRANSACTION_LEVEL_SIGNER_CENSUS`
+  ×0** — reader gaps, below.
+
+### Three reader gaps, each fixed by name
+
+**`AUTHORITY` read prose as code.** Custody's `authenticate_market` takes an
+already-authenticated `ActivatedExecutionReleaseSetViewV1` as a **parameter**
+and decodes no cache at all; it was reported because the comment above its
+*market* decode explains what `ActivatedExecutionReleaseSetViewV1::decode`
+costs. Every test in the class now runs over `_code_only`, which reuses the
+`_code_mask` the survey already had. The noisy direction is the one that was
+measured; the **silent** one is why it matters — a body whose doc comment writes
+`authenticate_activation_cache_identity_v1(` or `.owner ==` read as delegating
+or owner-checking while doing neither, and that finding would never have been
+made.
+
+**`PRIVILEGE_PIN_UNEXEMPTED` called five sites unexempted for a spelling.** The
+matcher admitted `if index != COORDINATE {` and refused
+`is_writable != (index == COORDINATE)` — the same statement with the coordinate
+on the other side of the pin. One writable coordinate, named, every other
+readonly, is the class's own definition of the fix (*an exemption, one
+coordinate wide and reasoned in place*). Five sites carry it and one line each
+says which coordinate:
+
+- `crates/dclutch-operator/src/direct_begin_retiring_v1.rs:965` `!= (index == 0)`
+- `crates/dclutch-general-successor-operator/src/lib.rs:477` `!= (index == HOT_ROOT_ACCOUNT_V3)`
+- `programs/dclutch-resolution-proof-sbf/src/provider_instruction_v3.rs:462` `!= (matches!(index, 2 | 3) || index == tail_start - 1)`
+- `programs/dclutch-general-accelerator-sbf/src/lib.rs:751` `!= (writable == Some(index))`
+- `crates/dclutch-operator/src/dealer_equity_hot_v3.rs:328` `!= (pages == 1 && index == page_index)`
+
+A second arm generalises `child_index != \d` from a literal digit to a **named**
+coordinate, which retires the third NEW row,
+`crates/dclutch-bearer-v2-operator/src/hot_transaction_v3.rs:292`
+(`child_index != caller &&`). Two baselined `hazard-privilege-pin` rows and one
+`benign-declared-privilege-census` row leave with them; each was read.
+
+**Deliberately NOT admitted:** `observed.is_writable != expected.writable()`,
+where the required writability is read per coordinate out of a declared frame
+spec. Six on-chain sites carry it (`affine_batch_v2.rs:470`,
+`protocol_position_v2.rs:828`, `sparse_native_transfer_v1.rs:455`,
+`custody-sbf/lib.rs:1792`, `direct_replay_setup_v1.rs:379`,
+`user_position_admission_v1.rs:201`) and it is a *different* argument — the
+artifact declares the privilege, which is the `benign-declared-privilege-census`
+family. Retiring those six is a reading of six frames, not a spelling fix, and
+it is not this run's change. Named here so the next lane finds the list already
+made.
+
+**`DERIVATION` was blinded by a local wrapper.** `derive_hinted` is a
+three-line `create_program_address`-at-recorded-bump helper that Claims and the
+Dealer accelerator each grew while removing PDA searches, and moving the tuple
+inside it took two restatement rows out of the register on 2026-09-02 **as
+though someone had repaired them** — while both files still spell
+`[LIABILITY_BASIS_MARKET_SEED_V2, &request.market]` in full
+(`claims-sbf/src/signed_delta_v3.rs:826`,
+`trading-sbf/src/dealer/v4_equity_accelerator_accounts.rs:467`). A `GONE` that
+means *the reader stopped looking* is the one kind this ratchet must never
+produce. `derive_hinted` and `derive_hinted_v3` are derivation patterns now, and
+both rows come back — measured: exactly two, no collateral.
+
+### Twenty-seven GONE, and why each left
+
+- **10 `UNSET_GUARD_PRESENT` + 4 `DOMAIN_RAW_RESTATEMENT`** — whole files
+  deleted. `53d73d4ee` deleted the `dclutch-fractional-claim-operator` V1
+  generation (`artifacts.rs`, `claims.rs`, `records.rs`, `token2022.rs`,
+  `tests/claims.rs`, `tests/support/mod.rs`); `4d13fe2af` deleted
+  `trading-sbf/src/direct/` (`buy_escrow`, `complementary`, `inline`,
+  `lifecycle`, `sell_escrow`).
+- **1 `DOMAIN_RAW_RESTATEMENT`** `LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2` ·
+  `trading-sbf/src/series/terminal.rs` — `cbdecdb3e` deleted the projected Hot
+  V4 chain nothing dispatched.
+- **2 `DOMAIN_RAW_RESTATEMENT`** `signed_delta_v3.rs` and
+  `v4_equity_accelerator_accounts.rs` — these did **not** leave for a good
+  reason and are back, see `derive_hinted` above.
+- **1 `DOMAIN_BYTES_COLLIDE` + 2 `DOMAIN_NAME_BYTES_DISAGREE` + 2
+  `SEED_DOMAIN_UNASSERTED`**, all `CLAIMS_FOUNDING_AGGREGATE_SEED_V4`/`_V5` —
+  **the `confirmed-defect` was answered.** `b209be565` gave `LiabilityBasisV2` a
+  Lean owner and rewrote both constants as *aliases*:
+  `pub const CLAIMS_FOUNDING_AGGREGATE_SEED_V4: &[u8] =
+  crate::liability_basis_state_v2::LIABILITY_BASIS_MARKET_SEED_V2;`. The
+  register's question was *"V4 beside V5 are byte-identical, so the version bump
+  lives in the name and not in the address — someone who owns Claims founding
+  has to say which it is"*, and an alias is that answer said out loud: one
+  author for the bytes, and a reviewer following either name lands on the owner
+  in one hop. `PROTOCOL_POSITION_STATE_SEED_V2` became an alias of
+  `LIABILITY_BASIS_POSITION_SEED_V2` in the same commit.
+- **3 `SEED_DOMAIN_UNASSERTED`** on the fixture-local `CLAIMS_MARKET_SEED_V2` /
+  `LIABILITY_BASIS_MARKET_SEED_V2` — this lane's own fix, above.
+- **2 `AUTHORITY_CACHE_UNDERIVED`** `authenticate_realm` /
+  `authenticate_premarket_realm` — both now take the view as a parameter and
+  decode nothing. This is a **rename with the reason NOT carried**: their
+  successors are the `*_from_cache` wrappers, whose argument had changed, which
+  is why they were repaired rather than re-tagged.
+- **3 `PRIVILEGE_PIN_UNEXEMPTED`** — the spelling fix, above.
+
+### Twelve verdicts, and the tag that is new
+
+`debt-derivation-restatement` **×4**, all checked against the
+2026-08-31 bar — the constant is imported and not re-spelled, and the arity,
+order and operand meaning match the owner's helper:
+
+- `LIABILITY_BASIS_MARKET_SEED_V2` ·
+  `programs/dclutch-dealer-accelerator-sbf/program-test/tests/accepted.rs:1013`
+  — `[SEED, fixture.core_market]`, arity 2, against `LiabilityBasisMarketSeedsV2`.
+  Arrived with `3c42f0ece`'s bump-mining of the campaign.
+- `RAW_RECORD_PDA_SEED_V1` and `STAGING_CURSOR_PDA_SEED_V1` ·
+  `programs/dclutch-trading-sbf/src/dealer/v3_equity_operator.rs:559`/`:568`
+  (and again at `:1463`/`:1469` in its `#[cfg(test)]` module) —
+  `[domain, REALM_SCHEMA_RELEASE_ID_V1, realm]`, arity 3, against
+  `RecordPdaSeedsV1`. Arrived with `3c42f0ece`, which stopped that evaluator
+  searching for eleven addresses.
+- `STAGING_CURSOR_PDA_SEED_V1` ·
+  `programs/dclutch-trading-sbf/src/admitted_composition_v3.rs:1396`, in the
+  `#[cfg(test)]` module that pins the bump hint against the search.
+
+`benign-sole-seed-no-helper` **×3** — the three rows that arrived `untriaged`
+under the profile succession: `crates/dclutch-release-tool/src/infrastructure.rs:846`,
+`successor/src/plan.rs:1257` and `successor/src/runtime.rs:1545`. Each imports
+the domain from its owner and spells `&[DOMAIN]`; the owning crate still exports
+no seed helper for it, so the standing fix the debt tag promises does not exist
+here either. (Its length assert does exist again, as of this run.)
+
+`inventory-guard-present` **×2** —
+`crates/dclutch-operator/src/delegated_custody.rs:67`, which refuses
+`custody.realm == [0; 32]` **and** all-zero on eleven real `Pubkey`s one line
+later, and `crates/dclutch-wallet-terminal-payout-operator/src/wire.rs:1315`
+(`parsed == Pubkey::default()`), which had been sitting `untriaged`.
+
+`inventory-nonzero-guard-not-pubkey` **×1** —
+`crates/dclutch-wallet-terminal-input-operator/src/address_book.rs:212`. The
+guard is `evidence.linked_basis_record_digest == [0; 32]`, a **content digest**;
+`Pubkey::default()` does not appear in the file. Filing it as
+`inventory-guard-present` would put a false sentence in the register, which is
+the whole reason that tag exists.
+
+### benign-built-meta-census
+
+**2 entries.** `TRANSACTION_LEVEL_SIGNER_CENSUS` ·
+`tools/gauntlet/journey/src/resolution.rs` `retire:959` and
+`tools/local-validator/bootstrap/successor/src/sponsored_push.rs`
+`admit_terminal_instruction:1697`.
+
+Both refuse `.accounts.iter().any(|meta| meta.is_signer)` — and the subject is
+an `Instruction` an operator builder **just returned to this function**, so the
+`is_signer` being read is an `AccountMeta` flag the builder wrote, not an
+`AccountInfo` privilege the runtime assigned. The class's harm statement is
+about the second: *the fee payer reads true here whatever meta it was given*.
+It cannot occur over a `Vec<AccountMeta>` that has never been in a transaction;
+privileges merge at message assembly, which is downstream of both of these
+reads, and refusing here produces a driver error before a transaction exists —
+the same structure `benign-declared-privilege-census` records for
+`parse_route_v1`'s JSON document.
+
+The bar `checked-caller-excludes-payer` sets applies and lands on the other
+side of it: *if no builder can put a privileged account in the frame, the entry
+is a false positive and belongs in a `benign-` tag instead*. One named builder
+each (`build_resolution_direct_close_fund_v1`,
+`build_resolution_admit_terminal_v3`), both deterministic over a finalized
+snapshot, and in both drivers the payer is a separate value
+(`payer: &Keypair`, the sponsor's `signer`) that is never placed in the frame.
+The assertion these two make is the route's own permissionless claim — *"the
+direct Resolution close is supposed to be permissionless and unsigned"*, *"the
+fee payer is not an authority"* — and it is exactly the assertion that should
+be red if a builder ever starts requesting a signature.
+
+**Not admitted as a reader change.** The obvious generalisation — teach class 6
+that `AccountMeta` is a request and `AccountInfo` an observation — would also
+retire `crates/dclutch-operator/src/direct_close_maker_v1.rs` `assemble_plan`,
+whose census over `meta_closure.accounts` is `checked-caller-excludes-payer`
+precisely *because* someone asked whether a builder of that route places a
+signing account in the frame and the answer changed the code. A reader that
+cannot see the difference between "no builder can" and "the builder was
+fixed" should keep asking.
+
+### What was measured, and what was not
+
+`tools/ci/run.sh seam` PASS at `HEAD` from a detached worktree; the register
+carries **zero** `untriaged`. `cargo check` green for `dclutch-custody-sbf`,
+`dclutch-release-set-contract`, and the `affine-batch` and `fractional-atomic`
+program-test workspaces in their own target directories. The seam-audit's 32
+machinery tests pass and both register tests, which were failing on the four
+`untriaged` rows, now pass.
+
+**Two debts named and not paid.** `d8a679168` changes an SBF link and
+**leaves the frameguard ratchet red** — two `#[inline(never)]` functions leave
+Custody and one arrives, so frames move, and the double build that would capture
+the rows is longer than this tree's interval between program commits.
+And `tools/fractional-exterior` does not build at `HEAD` and did not before this
+run: `src/stage.rs:216` omits `raw_bump` and `staging_bump` from a
+`NarrowRecordV2` that `b312ce3c4` widened. Neither is this lane's, and neither
+is hidden by it.

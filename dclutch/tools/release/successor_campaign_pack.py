@@ -1303,11 +1303,19 @@ def verify_pack(pack_path: Path) -> tuple[Path, dict[str, Any]]:
     ):
         if release.get(release_key) != summary.get(summary_key):
             refuse("pack release/profile identities differ from checked summary")
-    if (
-        release["predecessor_infrastructure_profile"]["sha256"]
-        != release["predecessor_infrastructure_profile_sha256"]
-    ):
-        refuse("pack predecessor profile digest differs from its preserved bytes")
+    # A GENESIS pack succeeds nothing and carries no predecessor profile at all,
+    # which the field-set branch above already says. Reading the key
+    # unconditionally here raised KeyError rather than a refusal, so every
+    # `verify` and every `compare-packs` over a genesis pack CRASHED -- and a
+    # genesis candidate is the only one a cold machine with no network can
+    # build, so the supported-builder reproduction had never once been run on
+    # the shape a cold machine produces.
+    if release.get("infrastructure_lineage") != "genesis":
+        if (
+            release["predecessor_infrastructure_profile"]["sha256"]
+            != release["predecessor_infrastructure_profile_sha256"]
+        ):
+            refuse("pack predecessor profile digest differs from its preserved bytes")
 
     ceilings = pack["ceilings"]
     if not isinstance(ceilings, dict) or ceilings.get("compute_units") != compute or ceilings.get("packet_bytes") != packet or ceilings.get("frame_bytes") != 4096:
@@ -1315,8 +1323,8 @@ def verify_pack(pack_path: Path) -> tuple[Path, dict[str, Any]]:
     verify_evidence(root, ceilings.get("compute_authority"), "CU budget authority")
     verify_evidence(root, ceilings.get("packet_authority"), "packet bound authority")
     frames = ceilings.get("frames")
-    if not isinstance(frames, list) or len(frames) != 13:
-        refuse("pack does not carry all 13 frame measurements")
+    if not isinstance(frames, list) or len(frames) != SHIPPED_LINK_COUNT:
+        refuse(f"pack does not carry all {SHIPPED_LINK_COUNT} frame measurements")
     for frame, gate_link in zip(frames, gate["links"], strict=True):
         expected = {
             "label": gate_link["label"],

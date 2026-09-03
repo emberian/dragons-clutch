@@ -28,6 +28,7 @@
 // Determinism: no timestamps, no absolute paths, every collection sorted.
 // The check gate is the proof.
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -61,6 +62,8 @@ const OUT_DIR = path.join(REPO, "docs", "reference");
 
 const readJSON = (p) => JSON.parse(fs.readFileSync(p, "utf8"));
 const read = (p) => fs.readFileSync(p, "utf8");
+const sha256 = (p) =>
+  crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex");
 
 function mdCell(s) {
   return String(s).replaceAll("|", "\\|").replaceAll("\n", " ");
@@ -192,6 +195,133 @@ for (const file of bindingsFiles) {
         });
       } else if (b.unnamed_refusal) {
         uncreditedRefusals += 1;
+      }
+    }
+  }
+}
+
+// ------------------------------------------------ the substrate of a witness
+
+// `routes.md` says "witnessed" and means "a campaign binding names it". That
+// sentence hides three different evidence levels behind one word: the C-16
+// rehearsal sorted the same 101 witnessed rows and found 0 on devnet, 19 on a
+// validator and 57 on an in-process ProgramTest bank. The register could not
+// print the difference because nothing in the tree recorded which substrate a
+// campaign ran on. `tools/gauntlet/substrates.json` records it, one row per
+// campaign, and this is where it is CHECKED -- a declaration nobody verifies is
+// the mirror the census exists to refuse.
+const SUBSTRATE_RANK = {
+  none: 0,
+  "program-test": 1,
+  "local-validator": 2,
+  devnet: 3,
+};
+
+const substratesFile = path.join(gauntletDir, "substrates.json");
+const substrates = readJSON(substratesFile);
+const substrateFor = new Map();
+for (const row of substrates.campaigns) {
+  substrateFor.set(row.campaign, row);
+}
+
+{
+  const problems = [];
+  const declared = new Set(substrateFor.keys());
+  const bound = new Set();
+  for (const file of bindingsFiles) {
+    bound.add(readJSON(file).campaign ?? path.relative(REPO, file));
+  }
+  for (const campaign of [...bound].sort()) {
+    if (!declared.has(campaign)) {
+      problems.push(
+        `campaign \`${campaign}\` binds routes but has no row in tools/gauntlet/substrates.json. ` +
+          `Add one naming its substrate (${Object.keys(SUBSTRATE_RANK).join(" | ")}), its runner and its producer.`,
+      );
+    }
+  }
+  for (const campaign of [...declared].sort()) {
+    const row = substrateFor.get(campaign);
+    if (!bound.has(campaign)) {
+      problems.push(
+        `tools/gauntlet/substrates.json declares \`${campaign}\`, which binds no route in any bindings.json. ` +
+          `A stale row looks exactly like a live one from the register.`,
+      );
+    }
+    if (!(row.substrate in SUBSTRATE_RANK) || row.substrate === "none") {
+      problems.push(`\`${campaign}\`: substrate \`${row.substrate}\` is not one of the declared classes`);
+    }
+    for (const key of ["runner", "producer"]) {
+      const rel = row[key];
+      if (rel !== null && !fs.existsSync(path.join(REPO, rel))) {
+        problems.push(`\`${campaign}\`: ${key} \`${rel}\` does not exist`);
+      }
+    }
+    // The positive control. A campaign that says `local-validator` must start
+    // one; a campaign that says `program-test` must not. Without this the
+    // substrate column is one more authored sentence, and an authored sentence
+    // is the thing this page exists to stop being the only evidence.
+    if (row.runner) {
+      const runner = read(path.join(REPO, row.runner));
+      const launches = runner.includes("solana-test-validator");
+      if (row.substrate === "local-validator" && !launches) {
+        problems.push(
+          `\`${campaign}\`: declared local-validator, but ${row.runner} never names solana-test-validator`,
+        );
+      }
+      if (row.substrate === "program-test" && launches) {
+        problems.push(
+          `\`${campaign}\`: declared program-test, but ${row.runner} launches solana-test-validator`,
+        );
+      }
+    }
+  }
+  if (problems.length > 0) {
+    for (const problem of problems) console.error(`genref: ${problem}`);
+    console.error(
+      "genref: tools/gauntlet/substrates.json does not describe this tree's campaigns.",
+    );
+    process.exit(1);
+  }
+}
+
+// ------------------------------------------------------- devnet witnesses
+
+// The one evidence class the register had no channel for. A cohort's devnet
+// transactions live in prose evidence documents in five textual shapes, with
+// sixteen signatures elided to `X...Y` and no census route id anywhere, so a
+// route driven on a public chain for three cohorts running read as
+// NEVER-EXECUTED. `docs/evidence/witnesses/*.json` is the channel; every
+// chain-derived field in it is written by
+// tools/gauntlet/devnet-witness/corroborate.py from devnet's own reply, and a
+// claimed route whose program the chain does not show invoked is dropped there
+// rather than credited here.
+const witnessDir = path.join(REPO, "docs", "evidence", "witnesses");
+const devnetWitness = new Map(); // route id -> [{cohort, stage, magic, signature, slot, file}]
+const devnetDocuments = [];
+if (fs.existsSync(witnessDir)) {
+  for (const name of fs.readdirSync(witnessDir).sort()) {
+    if (!name.endsWith(".json")) continue;
+    const file = path.join(witnessDir, name);
+    const document = readJSON(file);
+    const rel = path.relative(REPO, file);
+    devnetDocuments.push({
+      file: rel,
+      sha256: sha256(file),
+      cohort: document.cohort,
+      cluster: document.cluster,
+      records: document.records,
+    });
+    for (const record of document.records ?? []) {
+      for (const route of record.routes_corroborated ?? []) {
+        if (!devnetWitness.has(route)) devnetWitness.set(route, []);
+        devnetWitness.get(route).push({
+          cohort: document.cohort,
+          stage: record.stage,
+          magic: record.magic,
+          signature: record.signature,
+          slot: record.slot,
+          file: rel,
+        });
       }
     }
   }
@@ -406,6 +536,9 @@ these pages always match the source they describe. Regenerate with
   does.
 - [routes.md](routes.md) -- every instruction the programs accept, and
   whether the test campaigns have run it yet.
+- [route-witnesses.md](route-witnesses.md) -- and what actually ran it:
+  devnet, a local validator, or an in-process test bank, with the artifact
+  and digest for each.
 - [refusals.md](refusals.md) -- every error code the protocol can return,
   with its meaning.
 - [budgets.md](budgets.md) -- what the key transactions cost in compute,
@@ -606,12 +739,23 @@ stands:
   claims this route, and names the campaign. Read that as *bound*, not as
   *corroborated*: this page is generated from the bindings alone, so it
   cannot tell a route whose evidence was folded from one whose campaign has
-  never been run. Corroboration against the chain's own logs -- signatures,
-  slots, refusal codes, \`Program <address> invoke\` lines -- is a separate
-  pipeline, \`dclutch-route-census observe\`, and its output is CENSUS.md.
-  Where the two disagree, CENSUS.md is the evidence and this page is the
-  claim. And even a corroborated row is test coverage, never a proof about
-  every input.
+  never been run. It also cannot tell you WHAT ran the route, and the three
+  answers are not interchangeable -- see
+  [route-witnesses.md](route-witnesses.md), which splits this column by
+  substrate, records the artifact and digest behind each row, and lists the
+  entries \`blocked.json\` holds against routes that now execute (a state this
+  page renders as \`witnessed\`, because it returns that before it consults
+  the blocked set).
+
+  Corroboration against the chain's own logs -- signatures, slots, refusal
+  codes, \`Program <address> invoke\` lines -- is a separate pipeline,
+  \`dclutch-route-census observe\`, whose output is a \`CENSUS.md\` **written to
+  a run directory and never committed**. This page said for months that
+  CENSUS.md was the evidence where the two disagree; a reader cannot open it,
+  and from inside the repository "corroborated" and "never generated" look the
+  same. The devnet half of that corroboration IS in the tree, under
+  \`docs/evidence/witnesses/\`, and route-witnesses.md counts it. And even a
+  corroborated row is test coverage, never a proof about every input.
 - **blocked** -- the route cannot be driven yet, and the reason is written
   down in \`tools/gauntlet/blocked.json\` (rows show the first sentence;
   the file has the rest). A campaign that exists and passes but emits no
@@ -671,6 +815,258 @@ ${noMachine}
 ` +
       sections.join("\n\n") +
       unknown +
+      "\n",
+  );
+}
+
+// ---- route-witnesses.md
+
+{
+  // One row per route: WHAT KIND of thing executed it, and where the artifact
+  // that says so lives. `routes.md` answers "did a campaign claim this route";
+  // this answers "and what ran, and can I check it without running anything".
+  const rows = [];
+  const falsifiedBlocks = [];
+  const klassOf = (substrate) =>
+    substrate === "program-test" ? "ProgramTest only" : substrate;
+  const counts = {
+    devnet: 0,
+    "local-validator": 0,
+    "program-test": 0,
+    "blocked": 0,
+    "never-executed": 0,
+  };
+  const perCampaign = new Map();
+
+  for (const program of programs) {
+    for (const route of program.routes) {
+      const evidence = routeEvidence.get(route.id) ?? [];
+      const campaigns = [...new Set(evidence.map((e) => e.campaign))].sort();
+      let best = "none";
+      let artifacts = [];
+      for (const entry of evidence) {
+        const row = substrateFor.get(entry.campaign);
+        const substrate = row ? row.substrate : "none";
+        if (SUBSTRATE_RANK[substrate] > SUBSTRATE_RANK[best]) {
+          best = substrate;
+          artifacts = [];
+        }
+        if (substrate === best && !artifacts.includes(entry.file)) {
+          artifacts.push(entry.file);
+        }
+        const held = perCampaign.get(entry.campaign) ?? new Set();
+        held.add(route.id);
+        perCampaign.set(entry.campaign, held);
+      }
+      const devnet = devnetWitness.get(route.id) ?? [];
+      if (devnet.length > 0) {
+        best = "devnet";
+        artifacts = [...new Set(devnet.map((w) => w.file))].sort();
+      }
+
+      // A route can be BOTH bound and blocked, and `routes.md` cannot show it:
+      // its status function returns `witnessed` before it consults
+      // `blockedRuleFor`, so a blocking entry whose route now executes renders
+      // as witnessed and its stale reason never surfaces. The C-16 rehearsal
+      // found six of them by joining the two files by hand. Here the join is
+      // free, so the register prints them.
+      const alsoBlocked = best !== "none" ? blockedRuleFor(route.id) : null;
+      if (alsoBlocked) {
+        falsifiedBlocks.push([
+          `\`${route.id}\``,
+          klassOf(best),
+          campaigns.map((c) => `\`${c}\``).join(", ") || "devnet",
+          `\`${alsoBlocked.route}\``,
+          firstSentence(alsoBlocked.reason),
+        ]);
+      }
+
+      let klass = best;
+      let detail;
+      if (best === "none") {
+        const rule = blockedRuleFor(route.id);
+        klass = rule ? "blocked" : "never-executed";
+        detail = rule ? `blocked by rule \`${rule.route}\`` : "no campaign, no reason recorded";
+        artifacts = rule ? ["tools/gauntlet/blocked.json"] : [];
+      } else if (best === "devnet") {
+        // The campaigns stay in the cell. A devnet witness is the STRONGEST
+        // evidence for a route, never the only evidence, and a register that
+        // dropped the binding when a stronger one arrived would make a route
+        // look less covered the moment it became more covered.
+        // One transaction can appear in two witness documents -- a hand-joined
+        // one and a discovered one both name the founding magics -- and the
+        // route is no better witnessed for being listed twice.
+        const chain = [
+          ...new Set(
+            devnet.map(
+              (w) => `cohort ${w.cohort} \`${w.magic ?? w.stage}\` slot ${num(w.slot)}`,
+            ),
+          ),
+        ]
+          .sort()
+          .join("; ");
+        detail =
+          campaigns.length > 0
+            ? `${chain}; also bound by ${campaigns.map((c) => `\`${c}\``).join(", ")}`
+            : chain;
+      } else {
+        detail = campaigns.map((c) => `\`${c}\``).join(", ");
+      }
+      counts[klass] += 1;
+      rows.push([
+        `\`${route.id}\``,
+        klass,
+        detail,
+        artifacts.map((a) => `\`${a}\``).join("<br>") || "--",
+      ]);
+    }
+  }
+
+  const witnessedByChain = counts.devnet + counts["local-validator"];
+  const artifactRows = [];
+  for (const file of bindingsFiles) {
+    const rel = path.relative(REPO, file);
+    const data = readJSON(file);
+    const campaign = data.campaign ?? rel;
+    const row = substrateFor.get(campaign);
+    artifactRows.push([
+      `\`${campaign}\``,
+      row.substrate,
+      num((perCampaign.get(campaign) ?? new Set()).size),
+      row.runner ? `\`${row.runner}\`` : "**none** -- driven by hand",
+      `\`${sha256(file).slice(0, 16)}\``,
+    ]);
+  }
+  for (const document of devnetDocuments) {
+    artifactRows.push([
+      `cohort ${document.cohort} (${document.cluster})`,
+      "devnet",
+      num(
+        new Set(
+          document.records.flatMap((r) => r.routes_corroborated ?? []),
+        ).size,
+      ),
+      "`tools/gauntlet/devnet-witness/corroborate.py`",
+      `\`${document.sha256.slice(0, 16)}\``,
+    ]);
+  }
+
+  const devnetRows = [];
+  for (const document of devnetDocuments) {
+    for (const record of document.records ?? []) {
+      devnetRows.push([
+        document.cohort,
+        record.stage,
+        record.magic ? `\`${record.magic}\`` : "--",
+        num(record.slot),
+        num((record.routes_corroborated ?? []).length),
+        num((record.not_corroborated ?? []).length),
+        `\`${record.signature.slice(0, 12)}...\``,
+      ]);
+    }
+  }
+
+  pages.set(
+    "route-witnesses.md",
+    generatedHeader([
+      "census inventory",
+      "tools/gauntlet/substrates.json",
+      "tools/gauntlet/*/bindings",
+      "tools/gauntlet/blocked.json",
+      "docs/evidence/witnesses/*.json",
+    ]) +
+      `# Route witnesses
+
+[routes.md](routes.md) prints **witnessed** when a campaign binding names a
+route. That one word covers three different evidence levels, and until this
+page existed the register could not tell them apart -- so a route exercised
+only by an in-process test bank and a route driven on a public chain rendered
+identically. This page is the split, and it is generated, so "corroborated"
+and "never generated" stop being indistinguishable from inside the repository.
+
+Every row names the artifact you would read to check it and that artifact's
+SHA-256, so a reviewer can verify a claim without re-running a gauntlet.
+
+| class | routes | what actually executed the route |
+| --- | ---: | --- |
+| **devnet** | **${num(counts.devnet)}** | a finalized transaction on Solana devnet, named by signature and slot, and corroborated against the chain's own logs |
+| **local validator** | ${num(counts["local-validator"])} | \`solana-test-validator\`: a real Agave runtime, real slots, real finalization, on localhost |
+| **ProgramTest only** | ${num(counts["program-test"])} | an in-process \`solana-program-test\` bank. It runs the REAL SBF ELFs -- which is why it is evidence -- but it is not a validator: no packet limit, no leader schedule, no finalization, no fee market |
+| **blocked** | ${num(counts.blocked)} | no campaign; \`tools/gauntlet/blocked.json\` records a reason and an owner |
+| **never-executed** | ${num(counts["never-executed"])} | no campaign and no reason recorded |
+
+**A real Agave runtime drives ${num(witnessedByChain)} of the
+${num(rows.length)}.** \`docs/MASTER_COMPLETION_CONTRACT.md\` item 5 asks for a local
+validator or devnet transaction where the route is chain-facing; those are the
+rows that meet it. The ProgramTest column is not a lesser version of the same
+thing -- \`tools/gauntlet/DESIGN.md\` admits that substrate only as a labelled
+fast lane, and a route witnessed there alone has never been refused for size
+or for time by a runtime that could.
+
+## What a devnet witness does and does not say
+
+It says: this signature is finalized on devnet, its outer instruction's first
+eight bytes are the declared magic sent to the declared program, and the
+transaction's own \`Program <address> invoke\` lines show every claimed route's
+program running. That is \`dclutch-route-census observe\`'s rule, applied
+unchanged to a public chain.
+
+It does **not** say which internal branch a program took, and it is not a
+proof about every input. A claimed route whose program the chain does not show
+invoked is recorded in the witness document's \`not_corroborated\` list and is
+counted nowhere.
+
+${
+  devnetRows.length > 0
+    ? table(
+        ["cohort", "stage", "magic", "slot", "routes", "dropped", "signature"],
+        devnetRows,
+        [null, null, null, "r", "r", "r", null],
+      )
+    : "*No devnet witness document exists yet, so the devnet count above is zero.*"
+}
+
+Refresh a document with \`tools/gauntlet/devnet-witness/corroborate.py --write
+FILE\`; \`--check\` re-reads every one of them from devnet and fails on any
+field the chain does not agree with.
+
+## Campaigns, and the substrate each one ran on
+
+Declared in \`tools/gauntlet/substrates.json\` and checked here: a campaign that
+says \`local-validator\` must have a runner that starts one, a campaign that
+says \`program-test\` must not, and a campaign that binds a route with no row at
+all fails this generator rather than rendering as \`unknown\`.
+
+` +
+      table(
+        ["campaign", "substrate", "routes", "runner", "artifact sha256"],
+        artifactRows,
+        [null, null, "r", null, null],
+      ) +
+      `
+
+## Blocks their own route has already falsified
+
+\`tools/gauntlet/blocked.json\`'s rule is "keep an entry only while it is true,
+and delete it the moment its route executes". [routes.md](routes.md) cannot
+enforce it: that page returns **witnessed** before it consults the blocked set,
+so a route that is both bound and blocked renders as witnessed and its stale
+reason never surfaces. The join is free here, so these are the entries whose
+route now executes.
+
+${
+  falsifiedBlocks.length > 0
+    ? table(
+        ["route", "class", "driven by", "blocking rule", "the reason, first sentence"],
+        falsifiedBlocks,
+      )
+    : "*None: every blocking entry names a route no campaign drives.*"
+}
+
+## Every route
+
+` +
+      table(["route", "class", "evidence", "artifact"], rows) +
       "\n",
   );
 }

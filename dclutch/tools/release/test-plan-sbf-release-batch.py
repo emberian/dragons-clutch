@@ -92,14 +92,22 @@ class BatchPlanTests(unittest.TestCase):
             MODULE.dependency_closure(packages, "program"), {"program", "runtime"}
         )
 
-    def test_inventory_refuses_anything_other_than_exact_thirteen(self) -> None:
+    def test_link_count_is_derived_from_the_role_tables(self) -> None:
+        self.assertEqual(
+            MODULE.EXPECTED_LINK_COUNT,
+            len(MODULE.ARTIFACT_ROLES) + len(MODULE.FRAME_GATE_ONLY_PACKAGES),
+        )
+
+    def test_inventory_refuses_anything_but_the_exact_shipped_set(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
             root = Path(root_text)
-            for index in range(12):
+            for index in range(MODULE.EXPECTED_LINK_COUNT - 1):
                 manifest = root / f"programs/program-{index}/Cargo.toml"
                 manifest.parent.mkdir(parents=True)
                 manifest.write_text("[package]\n")
-            with self.assertRaisesRegex(MODULE.Refusal, "exact 13-link"):
+            with self.assertRaisesRegex(
+                MODULE.Refusal, f"exact {MODULE.EXPECTED_LINK_COUNT}-link"
+            ):
                 MODULE.link_inventory(root)
 
 

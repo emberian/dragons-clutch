@@ -1952,10 +1952,23 @@ fn validate_plan(plan: &SuccessorPlan) -> Result<()> {
     // transaction publication the chain produces the record and the count does
     // not move. The numbers are pinned rather than derived on purpose: a record
     // silently dropping out of the plan is what this check exists to catch.
+    //
+    // NINE upgradeable programs are injected, not seven: `plan.rs` writes the
+    // seven roles and then, unconditionally, the local Pyth receiver and
+    // router, each as a program/programdata pair. So genesis is 18 loader
+    // accounts plus 9 records = 27, and transaction is the 18 alone. Both pins
+    // were four short and had been since the Pyth pair was added, invisible
+    // because the ONLY caller of this validation is `run`, and `run`'s only
+    // caller is the tier-1 gauntlet, which was parked at the retired
+    // demo-market boundary. A pin nothing executes is not a pin. Restated
+    // as arithmetic over the two populations rather than as one opaque
+    // constant, so the next program pair to arrive fails here readably.
+    const LOADER_ACCOUNTS: usize = 9 * 2;
+    const GENESIS_RECORDS: usize = 9;
     let accelerator_accounts = usize::from(plan.general_accelerator.is_some());
     let expected_accounts = match plan.record_publication.as_str() {
-        "genesis" => 23 + accelerator_accounts,
-        "transaction" => 14,
+        "genesis" => LOADER_ACCOUNTS + GENESIS_RECORDS + accelerator_accounts,
+        "transaction" => LOADER_ACCOUNTS,
         other => {
             return Err(Error::new(format!(
                 "unknown record publication mode {other}"

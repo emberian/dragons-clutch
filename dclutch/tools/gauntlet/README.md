@@ -2,9 +2,20 @@
 
 ```sh
 tools/gauntlet/run.sh --mode census      # seconds: static route census + report
-tools/gauntlet/run.sh --mode full        # unavailable; refuses before any build
+tools/gauntlet/run.sh --mode full        # ~25 min: build, launch, tier-1 campaign, census
 tools/gauntlet/hot-cu/run-hot-cu.sh      # the Hot tail's compute, swept over 20 seeds
+tools/gauntlet/devnet-witness/corroborate.py --check   # every devnet witness, re-read from devnet
 ```
+
+**The census report is not in the tree and the register no longer says it is.**
+`--mode census` writes `CENSUS.md` and `ledger.json` under `--work/out`, and a
+fresh `--work` produces a CENSUS.md reporting *162 never-executed* -- because
+the ledger it renders is empty until a campaign folds into it. That artifact was
+named in `docs/reference/routes.md` for months as "the evidence"; what is
+actually checkable from a checkout is `docs/reference/route-witnesses.md`, which
+is generated, tracked, and carries the artifact and digest behind every row.
+`devnet-witness/` is the only channel through which a public-chain transaction
+reaches it.
 
 **Start with `DESIGN.md`.** It states why this exists and what makes an
 assertion admissible here. `TIERS.md` is the mechanics of adding a tier.

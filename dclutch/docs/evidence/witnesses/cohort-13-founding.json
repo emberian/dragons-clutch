@@ -1,0 +1,153 @@
+{
+  "schema": "dclutch-devnet-route-witness-v1",
+  "cohort": "13",
+  "cluster": "devnet",
+  "note": "Devnet transactions from cohort 13's founding projection, corroborated against the chain by tools/gauntlet/devnet-witness/corroborate.py. Every field named `slot`, `compute_units`, `programs_invoked`, `routes_corroborated` and `not_corroborated` is written BY THAT TOOL from the chain's own reply, never by hand. The route lists in `routes` are not authored here either: for DCLTGMF3 and DCLTPCB2 they are the route sets tools/gauntlet/tier1/bindings.json already binds to the SAME eight-byte instruction magic, carried across so a devnet cohort and the localhost tier make the same claim about the same wire object; DCLTCFQ1 has no tier-1 binding at all and its route is derived from the dispatch predicate itself (programs/dclutch-trading-sbf/src/projected_custody_bootstrap_v1.rs:267-268, `instruction_data == CONTROLLER_FUNDING_PREPARE_MAGIC_V1`), which the chain shows was the outer instruction's exact eight bytes. WHAT THIS DOES NOT SAY: a devnet witness corroborates the PROGRAM and the OUTER MAGIC. It does not corroborate which internal branch a program took, and it is not a proof about every input. That is the same boundary `dclutch-route-census observe` draws for the localhost campaigns, drawn here rather than quietly widened.",
+  "evidence_document": "docs/evidence/COHORT13_SEALED_FOUNDED_2026_09_02.md",
+  "evidence_table": "docs/evidence/COHORT13_SEALED_FOUNDED_2026_09_02.md:876-883",
+  "programs": {
+    "registry": "8XsxVn35gtemD9PuWC9pHYX1rxBAC4T8xV4xdrkdfCBV",
+    "rent": "CUDLPLjjiLNAQ6hPczhL3AoDux3u77zaJyTERbAbs7Am",
+    "custody": "G7xAFLpJzdCnc7FXjj5uE3qWSk3ZgCgL684YCQEdCah4",
+    "resolution": "J33AaXnVDFGYJXYhDxFCPGk4MSM2Ssc69ZcU5PbkYfbb",
+    "claims": "3XHt6sRpdFxeAa1J23T8TKKFgA78ioJQAdeqJ3HZ5zMv",
+    "trading": "HkNhMJrERGko9mFXKq6UaL8qu2QnzqJx1hwJ5U8AVUHZ",
+    "core": "HZsbUHHwJLUqXdUhjDc4vhnmtgqr65VkU36G8hTijWiy"
+  },
+  "records": [
+    {
+      "stage": "controller-funding-prepare",
+      "magic": "DCLTCFQ1",
+      "program": "trading",
+      "outcome": "executed",
+      "signature": "31Cb2kwwKq6xTaJC7DiptWT8hPvon3efibC1RN3XNk7VUTSA1FLcqkjbmgvWQEb8M6iRTXsaz53amd92MMPZEW68",
+      "routes": [
+        "trading/projected_custody_bootstrap_v1::process_controller_funding_prepare_v1",
+        "trading/process_instruction",
+        "core/process_instruction",
+        "resolution/process_instruction"
+      ],
+      "route_provenance": "programs/dclutch-trading-sbf/src/projected_custody_bootstrap_v1.rs:267-268 dispatches this route on `instruction_data == CONTROLLER_FUNDING_PREPARE_MAGIC_V1` (= b\"DCLTCFQ1\"), and the chain shows the outer instruction to Trading is exactly those eight bytes. No gauntlet campaign binds this route; docs/reference/routes.md prints it NEVER-EXECUTED.",
+      "slot": 491961396,
+      "compute_units": 567525,
+      "programs_invoked": [
+        "core",
+        "resolution",
+        "trading"
+      ],
+      "routes_corroborated": [
+        "trading/projected_custody_bootstrap_v1::process_controller_funding_prepare_v1",
+        "trading/process_instruction",
+        "core/process_instruction",
+        "resolution/process_instruction"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "projected-custody-bootstrap",
+      "magic": "DCLTPCB2",
+      "program": "trading",
+      "outcome": "executed",
+      "signature": "2SLSaUPmp8VFG7fFmVST7ZifZoFgcnDdKDuGcGFeMPjoXm2jUSijHXaK1ZThBTjpSZimUHqY976p6nCXNQxCpppX",
+      "routes": [
+        "trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2",
+        "trading/process_instruction",
+        "custody/process_instruction",
+        "custody/projected::process",
+        "custody/initialize#Initialize",
+        "custody/open_hoard#OpenHoard",
+        "custody/open_source_compartment#OpenSourceCompartment",
+        "core/process_instruction",
+        "core/found::project",
+        "registry/process_instruction",
+        "registry/process_reauthenticate#Reauthenticate"
+      ],
+      "route_provenance": "tools/gauntlet/tier1/bindings.json, label 'create projected custody and controller funding (DCLTPCB2)'",
+      "slot": 491962044,
+      "compute_units": 788105,
+      "programs_invoked": [
+        "core",
+        "custody",
+        "trading"
+      ],
+      "routes_corroborated": [
+        "trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2",
+        "trading/process_instruction",
+        "custody/process_instruction",
+        "custody/projected::process",
+        "custody/initialize#Initialize",
+        "custody/open_hoard#OpenHoard",
+        "custody/open_source_compartment#OpenSourceCompartment",
+        "core/process_instruction",
+        "core/found::project"
+      ],
+      "not_corroborated": [
+        {
+          "route": "registry/process_instruction",
+          "reason": "the transaction's own logs show no invoke of the registry program"
+        },
+        {
+          "route": "registry/process_reauthenticate#Reauthenticate",
+          "reason": "the transaction's own logs show no invoke of the registry program"
+        }
+      ]
+    },
+    {
+      "stage": "generic-market-founding",
+      "magic": "DCLTGMF3",
+      "program": "trading",
+      "outcome": "executed",
+      "signature": "5Ji1babqGguizfSafscVnSpeXTjXE3GqpCteUF7PQJ1r6eAs2oizENwPoK3XooisHkgVgZTxeHHNk3qTcSM47jtj",
+      "routes": [
+        "trading/generic_market_founding_v1::process_generic_market_founding_v3",
+        "trading/process_instruction",
+        "custody/process_instruction",
+        "custody/projected::process",
+        "custody/lock_hoard_and_close_source#LockHoardAndCloseSource",
+        "custody/realize_and_close#RealizeAndClose",
+        "core/process_instruction",
+        "core/generic_founding_v1::process",
+        "core/process_found#FoundAndPermit",
+        "core/process_open#Open",
+        "claims/process_instruction",
+        "claims/founding_v5::process",
+        "registry/process_instruction",
+        "registry/process_reauthenticate#Reauthenticate"
+      ],
+      "route_provenance": "tools/gauntlet/tier1/bindings.json, label 'found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF3)'",
+      "slot": 491963072,
+      "compute_units": 1011455,
+      "programs_invoked": [
+        "claims",
+        "core",
+        "custody",
+        "trading"
+      ],
+      "routes_corroborated": [
+        "trading/generic_market_founding_v1::process_generic_market_founding_v3",
+        "trading/process_instruction",
+        "custody/process_instruction",
+        "custody/projected::process",
+        "custody/lock_hoard_and_close_source#LockHoardAndCloseSource",
+        "custody/realize_and_close#RealizeAndClose",
+        "core/process_instruction",
+        "core/generic_founding_v1::process",
+        "core/process_found#FoundAndPermit",
+        "core/process_open#Open",
+        "claims/process_instruction",
+        "claims/founding_v5::process"
+      ],
+      "not_corroborated": [
+        {
+          "route": "registry/process_instruction",
+          "reason": "the transaction's own logs show no invoke of the registry program"
+        },
+        {
+          "route": "registry/process_reauthenticate#Reauthenticate",
+          "reason": "the transaction's own logs show no invoke of the registry program"
+        }
+      ]
+    }
+  ],
+  "corroborated_route_count": 19
+}

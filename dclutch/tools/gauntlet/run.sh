@@ -602,21 +602,48 @@ PY
                 }' > "$RUN/attestation/$role.json"
         done
 
-        # The Resolution role's semantic release identity is a PROTOCOL FACT,
-        # not a gauntlet-local value: the bootstrap refuses any other. It is
-        # SHA-256 of the closed release preimage
-        #   dclutch/release/source-resolution-controller-core-effects-source-closure-v4
-        # (RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V4). The gauntlet HASHES THE
-        # PREIMAGE rather than copying the digest constant, so the check is
-        # against the semantic statement and not against the code under test.
-        RESOLUTION_RELEASE_PREIMAGE='dclutch/release/source-resolution-controller-core-effects-source-closure-v4'
+        # NO ROLE'S semantic release identity is a gauntlet-local value. Every
+        # one of them is a PROTOCOL FACT and the bootstrap refuses any other:
+        # `plan.rs` derives each id from that role's own shipped ELF digest and
+        # names both when they disagree, because a cohort founded under one
+        # release-set identity and sealed under another is what stranded
+        # cohort 12. This script used to invent an id from the commit for five
+        # of the seven roles and hash a RETIRED v4 preimage for Resolution, and
+        # was refused by name the first time the unparked tier submitted.
+        #
+        # The gauntlet HASHES THE PREIMAGE rather than copying a digest
+        # constant, so the check is against the semantic statement and not
+        # against the code under test:
+        #
+        #   registry|core|claims|custody|rent   ARTIFACT_SEMANTIC_RELEASE_DOMAIN_V2
+        #                                       || role label || NUL || ELF SHA-256 (hex ascii)
+        #   trading                             DIRECT_SEMANTIC_RELEASE_PREIMAGE_V1
+        #   resolution                          RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V7
+        #
+        # The two whole-string preimages are contracts rather than artifacts:
+        # Trading's and Resolution's semantics are owned by a codec, which is
+        # why `checked_semantic_release_preimage_v1` returns them before it
+        # looks at any digest.
+        ARTIFACT_SEMANTIC_RELEASE_DOMAIN_V2='dclutch/checked-semantic-release/artifact/v2'
+        DIRECT_SEMANTIC_RELEASE_PREIMAGE='dclutch/release/direct-compiled-controller-v1'
+        RESOLUTION_RELEASE_PREIMAGE='dclutch/release/source-resolution-controller-direct-activation-receipt-permissionless-close-v7'
         semantic_release_for() {
-            if [ "$1" = "resolution" ]; then
-                printf '%s' "$RESOLUTION_RELEASE_PREIMAGE" | sha256_stdin
-            else
-                printf 'dclutch/gauntlet/semantic-release/v1\nrole=%s\ncommit=%s\n' \
-                    "$1" "$SOURCE_REVISION" | sha256_stdin
-            fi
+            case "$1" in
+                trading)    printf '%s' "$DIRECT_SEMANTIC_RELEASE_PREIMAGE" | sha256_stdin ;;
+                resolution) printf '%s' "$RESOLUTION_RELEASE_PREIMAGE" | sha256_stdin ;;
+                *)
+                    # `rent` is spelled `rent-credit` in the protocol's own role
+                    # labels; the gauntlet's short role name is not the label.
+                    label="$1"
+                    [ "$label" = "rent" ] && label="rent-credit"
+                    # The domain constant ends in a newline and the label is
+                    # NUL-terminated, so the preimage is assembled byte-exactly
+                    # rather than through printf's own separators.
+                    printf '%s\n%s\000%s' \
+                        "$ARTIFACT_SEMANTIC_RELEASE_DOMAIN_V2" "$label" "$(sha256 "$ELF_DIR/$1.so")" \
+                        | sha256_stdin
+                    ;;
+            esac
         }
 
         # `demo-market` is retired and this script no longer calls it. The

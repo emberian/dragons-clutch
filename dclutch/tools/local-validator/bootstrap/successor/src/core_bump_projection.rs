@@ -34,7 +34,11 @@
 //!     deployment's own identity — its ELF digest — and never from what this
 //!     source file happens to do today.
 
-use crate::{Error, Result, campaign::ObservedRoleV1, model::ProgramPin};
+use crate::{
+    Error, Result,
+    campaign::ObservedRoleV1,
+    model::{CheckedLocalMutableSetPinV1, ProgramPin},
+};
 
 /// The Core role's name in a plan and in a substrate reading.
 const CORE_ROLE_NAME_V1: &str = "core";
@@ -108,6 +112,49 @@ fn pin_elf_sha256_v1(pin: &ProgramPin) -> &str {
     }
 }
 
+/// Did THIS RUN put those bytes on that chain.
+///
+/// The exemption above reads `deployment_source`, and its comment names
+/// `"genesis-install"` as "every loopback and local-validator run". That is not
+/// what the tree does. `local_mutable.rs` REQUIRES every local-mutable pin to
+/// spell its source `observed-programdata-account`, because the profile
+/// installs the seven checked ELFs into genesis and then authenticates them by
+/// reading the ProgramData accounts back -- so the label says "bytes the chain
+/// was already holding" about bytes this run put there thirty seconds ago, and
+/// the exemption never once fired for the only loopback lifecycle in this tree.
+/// Measured 2026-09-03 on a cold machine: `private-validator-lifecycle` refused
+/// at the founding stage on a Core whose live ProgramData hashed to the exact
+/// checked candidate named in its own plan, five stages after the validator
+/// started and with `RECORDED_PRODUCT_GRAPH_CORE_ELF_SHA256_V1` empty --- and
+/// the digest the refusal asks for is HOST-DEPENDENT (platform-tools embeds its
+/// own CI build path in the standard library, so a Linux and a macOS build of
+/// one commit have different Core digests), so hand-recording it would need one
+/// row per commit per builder OS forever.
+///
+/// The narrow question this answers instead: is the Core the chain is running
+/// the checked candidate THIS PLAN carries, installed by THIS run's own
+/// local-mutable genesis. Only the local-mutable profile emits that pin; a
+/// devnet plan carries none, so a deployed cohort the driver has no statement
+/// about still refuses exactly as before.
+fn installed_into_this_runs_genesis_v1(
+    core: &ProgramPin,
+    local_mutable: Option<&CheckedLocalMutableSetPinV1>,
+) -> bool {
+    let Some(set) = local_mutable else {
+        return false;
+    };
+    let digest = pin_elf_sha256_v1(core);
+    if digest.is_empty() {
+        return false;
+    }
+    set.roles.iter().any(|role| {
+        role.role == CORE_ROLE_NAME_V1
+            && role.program_id == core.program_id
+            && role.checked_candidate_elf_sha256 == digest
+            && role.live_elf_sha256 == digest
+    })
+}
+
 /// What the Core a plan names writes into the reserved bump tail.
 ///
 /// The founding calls this, not the campaign preflight, so a founding driven
@@ -123,12 +170,16 @@ fn pin_elf_sha256_v1(pin: &ProgramPin) -> &str {
 /// alternative is exactly the guess cohort-14c paid 0.139 SOL to disprove.
 pub(crate) fn core_product_graph_projection_v1(
     core: &ProgramPin,
+    local_mutable: Option<&CheckedLocalMutableSetPinV1>,
 ) -> Result<CoreProductGraphProjectionV1> {
     let digest = pin_elf_sha256_v1(core);
     if let Some(projection) = declared_projection_v1(digest) {
         return Ok(projection);
     }
     if core.deployment_source != OBSERVED_DEPLOYMENT_SOURCE_V1 {
+        return Ok(CoreProductGraphProjectionV1::Recorded);
+    }
+    if installed_into_this_runs_genesis_v1(core, local_mutable) {
         return Ok(CoreProductGraphProjectionV1::Recorded);
     }
     Err(Error::new(format!(
@@ -158,6 +209,7 @@ pub(crate) fn core_product_graph_projection_v1(
 pub(crate) fn authenticate_core_bump_projection_v1(
     core: &ProgramPin,
     observed: &[ObservedRoleV1],
+    local_mutable: Option<&CheckedLocalMutableSetPinV1>,
 ) -> Result<CoreProductGraphProjectionV1> {
     let Some(row) = observed.iter().find(|row| row.role == CORE_ROLE_NAME_V1) else {
         return Err(Error::new(
@@ -176,7 +228,7 @@ pub(crate) fn authenticate_core_bump_projection_v1(
             core.live_elf_sha256,
         )));
     }
-    core_product_graph_projection_v1(core)
+    core_product_graph_projection_v1(core, local_mutable)
 }
 
 #[cfg(test)]
@@ -214,10 +266,10 @@ mod tests {
     #[test]
     fn a_plan_naming_cohort_14s_core_projects_an_unrecorded_product_graph() {
         assert_eq!(
-            core_product_graph_projection_v1(&core_pin(
-                COHORT_14_CORE_ELF_SHA256,
-                OBSERVED_DEPLOYMENT_SOURCE_V1
-            ))
+            core_product_graph_projection_v1(
+                &core_pin(COHORT_14_CORE_ELF_SHA256, OBSERVED_DEPLOYMENT_SOURCE_V1),
+                None
+            )
             .expect("cohort-14's Core is a build this driver has a statement about"),
             CoreProductGraphProjectionV1::Unrecorded,
         );
@@ -229,10 +281,13 @@ mod tests {
     #[test]
     fn a_plan_installing_this_trees_core_projects_a_recorded_product_graph() {
         assert_eq!(
-            core_product_graph_projection_v1(&core_pin(
-                "3ba9910250000000000000000000000000000000000000000000000000000000",
-                "genesis-install",
-            ))
+            core_product_graph_projection_v1(
+                &core_pin(
+                    "3ba9910250000000000000000000000000000000000000000000000000000000",
+                    "genesis-install",
+                ),
+                None
+            )
             .expect("an installed checked candidate is this tree's Core"),
             CoreProductGraphProjectionV1::Recorded,
         );
@@ -244,13 +299,88 @@ mod tests {
     #[test]
     fn the_statement_follows_the_bytes_and_not_the_deployment_source() {
         assert_eq!(
-            core_product_graph_projection_v1(&core_pin(
-                COHORT_14_CORE_ELF_SHA256,
-                "genesis-install"
-            ))
+            core_product_graph_projection_v1(
+                &core_pin(COHORT_14_CORE_ELF_SHA256, "genesis-install"),
+                None
+            )
             .expect("a recorded digest is recorded however it was installed"),
             CoreProductGraphProjectionV1::Unrecorded,
         );
+    }
+
+    /// The local-mutable set pin, as the private-validator lifecycle emits it.
+    fn local_mutable_set(
+        program_id: &str,
+        digest: &str,
+    ) -> crate::model::CheckedLocalMutableSetPinV1 {
+        crate::model::CheckedLocalMutableSetPinV1 {
+            schema: "dclutch-checked-local-mutable-set-v1".into(),
+            checked_release_gate_path: String::new(),
+            checked_release_gate_sha256: String::new(),
+            source_revision: String::new(),
+            source_tree_sha256: String::new(),
+            solana_cli_version: String::new(),
+            retained_upgrade_authority: String::new(),
+            execution_release_set: crate::model::CheckedLocalExecutionReleaseSetPinV1 {
+                schema: String::new(),
+                checked_execution_release_set_id: String::new(),
+                execution_release_set_id: String::new(),
+                checked_execution_release_set_base64: String::new(),
+                roles: Vec::new(),
+            },
+            set_sha256: String::new(),
+            roles: vec![crate::model::CheckedLocalMutableRolePinV1 {
+                role: CORE_ROLE_NAME_V1.into(),
+                program_id: program_id.into(),
+                programdata_id: String::new(),
+                checked_candidate_elf_path: String::new(),
+                checked_candidate_elf_sha256: digest.into(),
+                live_elf_sha256: digest.into(),
+                programdata_account_sha256: String::new(),
+                deployment_slot: 1,
+                semantic_release_id: String::new(),
+            }],
+        }
+    }
+
+    /// THE LOOPBACK LIFECYCLE'S CORE IS THIS TREE'S CORE. It reaches here
+    /// labelled `observed-programdata-account` because the profile installs the
+    /// checked candidate into genesis and then reads it back, and the bytes the
+    /// chain runs are the exact candidate the plan carries.
+    #[test]
+    fn a_core_this_run_installed_into_its_own_genesis_projects_recorded() {
+        let digest = "22".repeat(32);
+        let pin = core_pin(&digest, OBSERVED_DEPLOYMENT_SOURCE_V1);
+        let set = local_mutable_set(&pin.program_id, &digest);
+        assert_eq!(
+            core_product_graph_projection_v1(&pin, Some(&set))
+                .expect("the candidate this run installed is this tree's Core"),
+            CoreProductGraphProjectionV1::Recorded,
+        );
+    }
+
+    /// AND THE EXEMPTION IS THE LOCAL-MUTABLE PROFILE'S ALONE. The same pin
+    /// with no local-mutable set -- which is every devnet plan -- still
+    /// refuses, so nothing about a deployed cohort got easier.
+    #[test]
+    fn the_same_core_without_a_local_mutable_set_still_refuses() {
+        let digest = "22".repeat(32);
+        let pin = core_pin(&digest, OBSERVED_DEPLOYMENT_SOURCE_V1);
+        core_product_graph_projection_v1(&pin, None)
+            .expect_err("a deployed Core with no statement and no local install must refuse");
+    }
+
+    /// A LOCAL-MUTABLE SET DESCRIBING DIFFERENT BYTES DOES NOT EXEMPT THEM.
+    /// The row has to be the Core the plan pins, at the same program id, with
+    /// its live ProgramData hashing to that same candidate.
+    #[test]
+    fn a_local_mutable_set_naming_other_bytes_does_not_exempt_the_pin() {
+        let digest = "22".repeat(32);
+        let other = "33".repeat(32);
+        let pin = core_pin(&digest, OBSERVED_DEPLOYMENT_SOURCE_V1);
+        let set = local_mutable_set(&pin.program_id, &other);
+        core_product_graph_projection_v1(&pin, Some(&set))
+            .expect_err("a set describing other bytes is not a statement about these");
     }
 
     /// AN UNKNOWN DEPLOYED CORE IS A REFUSAL, NOT A GUESS -- and it names the
@@ -258,9 +388,11 @@ mod tests {
     #[test]
     fn an_observed_core_this_driver_cannot_model_refuses_before_any_transaction() {
         let unknown = "11".repeat(32);
-        let error =
-            core_product_graph_projection_v1(&core_pin(&unknown, OBSERVED_DEPLOYMENT_SOURCE_V1))
-                .expect_err("a deployed Core with no recorded statement must refuse");
+        let error = core_product_graph_projection_v1(
+            &core_pin(&unknown, OBSERVED_DEPLOYMENT_SOURCE_V1),
+            None,
+        )
+        .expect_err("a deployed Core with no recorded statement must refuse");
         let text = error.to_string();
         assert!(text.contains(&unknown), "{text}");
         assert!(
@@ -298,7 +430,8 @@ mod tests {
         assert_eq!(
             authenticate_core_bump_projection_v1(
                 &pin,
-                &[observed_core_row(Some(&pin.live_elf_sha256))]
+                &[observed_core_row(Some(&pin.live_elf_sha256))],
+                None
             )
             .expect("the plan's Core is the live Core"),
             CoreProductGraphProjectionV1::Unrecorded,
@@ -307,6 +440,7 @@ mod tests {
         let error = authenticate_core_bump_projection_v1(
             &pin,
             &[observed_core_row(Some(&"bb".repeat(32)))],
+            None,
         )
         .expect_err("a live Core the plan does not describe cannot be modelled");
         let text = error.to_string();
@@ -321,8 +455,8 @@ mod tests {
         let pin = core_pin(COHORT_14_CORE_ELF_SHA256, OBSERVED_DEPLOYMENT_SOURCE_V1);
         let mut trading = observed_core_row(None);
         trading.role = "trading".into();
-        assert!(authenticate_core_bump_projection_v1(&pin, &[trading]).is_err());
-        assert!(authenticate_core_bump_projection_v1(&pin, &[]).is_err());
+        assert!(authenticate_core_bump_projection_v1(&pin, &[trading], None).is_err());
+        assert!(authenticate_core_bump_projection_v1(&pin, &[], None).is_err());
     }
 
     /// The two lists must stay disjoint. One digest cannot both record and not
