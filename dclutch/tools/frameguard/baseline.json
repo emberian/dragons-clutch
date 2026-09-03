@@ -1,6 +1,6 @@
 {
   "bound_bytes": 4096,
-  "commit": "7baf1a204143f3a0f8b509f0367bb66f427dd375",
+  "commit": "4cd2b9cb5ebcd8c5e779ea4bacc6df7dfc07b9e0",
   "link_count": 12,
   "links": [
     {
@@ -5316,7 +5316,7 @@
         },
         {
           "frames_bytes": [
-            3968
+            3904
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf17sponsored_push_v120boxed_source_records17h<hash>E"
         },
@@ -6872,7 +6872,7 @@
         },
         {
           "frames_bytes": [
-            2368
+            2432
           ],
           "symbol": "_ZN19dclutch_trading_sbf21shadow_composition_v321execute_shadow_aot_v317h<hash>E"
         },
@@ -7022,7 +7022,7 @@
         },
         {
           "frames_bytes": [
-            768
+            896
           ],
           "symbol": "_ZN19dclutch_trading_sbf23admitted_composition_v330invoke_admitted_accelerator_v317h<hash>E"
         },
@@ -10168,7 +10168,7 @@
         },
         {
           "frames_bytes": [
-            832
+            768
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v344authenticate_accelerator_caller_authority_v417h<hash>E"
         },

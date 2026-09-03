@@ -102,7 +102,7 @@ function sweep(
     for (let numerator = from; numerator <= to; numerator += 1n) {
       const honest = declaredOwners(cuts, cutDenominator, numerator, denominator, false);
       expect(honest.owners, `${numerator}/${denominator} is owned by ${honest.owners} declared regions, not exactly one`).toBe(1);
-      const selected = selectOrdinaryV1(numerator, denominator, cuts, cutDenominator, regionCount);
+      const selected = selectOrdinaryV1(numerator, denominator, cuts, cutDenominator, regionCount, 0);
       expect(selected, `selectOrdinaryV1 disagreed with the declared interval at ${numerator}/${denominator}`).toBe(honest.first);
       expect(selectQuotientFirstV1(numerator, denominator, cuts, cutDenominator),
         `the quotient-first comparison disagreed at ${numerator}/${denominator}`).toBe(selected);
@@ -125,7 +125,7 @@ describe('the ordinary selector, mirrored from the Resolution program', () => {
     // two are the extremes the Rust needs a quotient-first comparison to
     // survive at all.
     const cuts = WIDE_CUTS_V1;
-    const select = (numerator: bigint, denominator: bigint) => selectOrdinaryV1(numerator, denominator, cuts, 3n, cuts.length + 1);
+    const select = (numerator: bigint, denominator: bigint) => selectOrdinaryV1(numerator, denominator, cuts, 3n, cuts.length + 1, 0);
     expect(cuts).toHaveLength(300);
     expect(select(-151n, 3n)).toBe(0);
     expect(select(-150n, 3n)).toBe(1);
@@ -159,9 +159,11 @@ describe('the ordinary selector, mirrored from the Resolution program', () => {
   });
 
   it('refuses a zero denominator and a partition too narrow for its cuts', () => {
-    expect(() => selectOrdinaryV1(1n, 0n, RANGE_CUTS_V1, 10n, 4)).toThrow('observation denominator is zero');
-    expect(() => selectOrdinaryV1(1n, 1n, RANGE_CUTS_V1, 0n, 4)).toThrow('partition cut denominator is zero');
-    expect(() => selectOrdinaryV1(400n, 1n, RANGE_CUTS_V1, 10n, 3)).toThrow('fewer ordinary cells than it has cuts');
+    expect(() => selectOrdinaryV1(1n, 0n, RANGE_CUTS_V1, 10n, 4, 0)).toThrow('observation denominator is zero');
+    expect(() => selectOrdinaryV1(1n, 1n, RANGE_CUTS_V1, 0n, 4, 0)).toThrow('partition cut denominator is zero');
+    expect(() => selectOrdinaryV1(400n, 1n, RANGE_CUTS_V1, 10n, 3, 0)).toThrow('fewer ordinary cells than it has cuts');
+    expect(() => selectOrdinaryV1(1n, 1n, RANGE_CUTS_V1, 10n, 4, 19)).toThrow('outside the admitted range');
+    expect(() => selectOrdinaryV1(1n, 1n, RANGE_CUTS_V1, 10n, 4, -19)).toThrow('outside the admitted range');
   });
 });
 
@@ -178,14 +180,14 @@ describe('the certificate-to-partition join', () => {
     // Less than the observation on the chain's own arithmetic, so the loop
     // falls off the end at selector 2 -- which is byte for byte the selector
     // the live certificate carries and the `terminal_winner` Core wrote.
-    const join = ordinarySelectorJoinV1(COHORT14B_V1.partition, COHORT14B_V1.observation, COHORT14B_V1.committed);
+    const join = ordinarySelectorJoinV1(COHORT14B_V1.partition, COHORT14B_V1.observation, COHORT14B_V1.committed, 0);
     expect(join.derived).toBe(2);
     expect(join.agrees).toBe(true);
     expect(join.refusal).toBeNull();
   });
 
   it('reports a disagreement rather than throwing or printing the derived cell', () => {
-    const join = ordinarySelectorJoinV1(COHORT14B_V1.partition, COHORT14B_V1.observation, 0);
+    const join = ordinarySelectorJoinV1(COHORT14B_V1.partition, COHORT14B_V1.observation, 0, 0);
     expect(join.derived).toBe(2);
     expect(join.committed).toBe(0);
     expect(join.agrees).toBe(false);
@@ -193,26 +195,57 @@ describe('the certificate-to-partition join', () => {
   });
 
   it('refuses the failure cell and a certificate with no observation', () => {
-    const failure = ordinarySelectorJoinV1(COHORT14B_V1.partition, COHORT14B_V1.observation, 3);
+    const failure = ordinarySelectorJoinV1(COHORT14B_V1.partition, COHORT14B_V1.observation, 3, 0);
     expect(failure.derived).toBeNull();
     expect(failure.agrees).toBe(false);
     expect(failure.refusal).toContain('source-failure outcome');
-    const absent = ordinarySelectorJoinV1(COHORT14B_V1.partition, null, 1);
+    const absent = ordinarySelectorJoinV1(COHORT14B_V1.partition, null, 1, 0);
     expect(absent.derived).toBeNull();
     expect(absent.refusal).toContain('carries no observation');
   });
 
-  it('would have chosen another cell had the observation arrived on the partition’s scale', () => {
-    // NOT a claim about what the chain did -- a measurement of what the unit
-    // gap costs, kept beside the join so the two are never confused. The cuts
-    // are cents; the observation is raw Pyth atoms at exponent -8. Rescaled,
-    // $100.62 falls in cell 1, and cohort-14b paid cell 2.
-    const rescaled = ordinarySelectorJoinV1(
+  it('names the cell cohort-14b’s price was actually in, once the factor is declared', () => {
+    // The two readings side by side. The first is what the protocol DID: no
+    // record carried a factor, the declared scale was therefore the identity,
+    // and cell 2 is the honest output of the arithmetic the program was handed.
+    // The second is what the market MEANT: the cuts are dollars authored in
+    // cents, the observation is raw Pyth atoms at exponent -8, and $100.62 is
+    // inside the $99-$103 band, which is cell 1 and pays zero.
+    //
+    // Nothing here reinterprets the chain. Selector 2 is not a mistake in
+    // arithmetic; it is a mistake in units, made at founding, in a record that
+    // had nowhere to put the number. The same call with -8 is the reading the
+    // market's own StatisticSpec would have produced had it carried one.
+    const asPaid = ordinarySelectorJoinV1(
       COHORT14B_V1.partition,
-      { numerator: COHORT14B_V1.observation.numerator, denominator: 100_000_000n },
+      COHORT14B_V1.observation,
       COHORT14B_V1.committed,
+      0,
     );
-    expect(rescaled.derived).toBe(1);
-    expect(rescaled.agrees).toBe(false);
+    expect(asPaid.derived).toBe(2);
+    expect(asPaid.agrees).toBe(true);
+
+    const onTheCutsScale = ordinarySelectorJoinV1(
+      COHORT14B_V1.partition,
+      COHORT14B_V1.observation,
+      COHORT14B_V1.committed,
+      -8,
+    );
+    expect(onTheCutsScale.derived).toBe(1);
+    expect(onTheCutsScale.agrees).toBe(false);
+
+    // And the declared factor reaches the same cell as pre-dividing the
+    // observation by hand, which is how this file used to state it. Two
+    // arithmetic routes, one answer.
+    expect(
+      selectOrdinaryV1(
+        COHORT14B_V1.observation.numerator,
+        100_000_000n,
+        COHORT14B_V1.partition.cuts,
+        COHORT14B_V1.partition.cutDenominator,
+        COHORT14B_V1.partition.regionCount,
+        0,
+      ),
+    ).toBe(1);
   });
 });

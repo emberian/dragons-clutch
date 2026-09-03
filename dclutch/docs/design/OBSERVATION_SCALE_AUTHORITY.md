@@ -168,3 +168,152 @@ the rescaled reading appears only in
 `packages/dclutch-sdk/lib/ordinarySelectorV1.test.ts`, as a measurement of what
 the gap costs, kept out of any surface a reader could mistake for the chain's
 own answer.
+
+---
+
+# The factor, as landed — 2026-09-03
+
+**Devnet evidence. Not mainnet evidence.** Written by the RESOLUTION-SCALE lane
+at `4cd2b9cb5`, closing repair (1) above and the third repair it said was owed
+regardless.
+
+## Where the number lives
+
+`StatisticSpecV1.source_scale_exponent: i32`
+(`crates/dclutch-source-contract/src/lib.rs`, accessor
+`StatisticSpecV1::source_scale_exponent`), at **bytes 12..16 — four bytes that
+were already reserved and enforced zero**. `STATISTIC_SPEC_BYTES` stays 176.
+The observation times ten to this power is the reading in the result unit.
+
+That placement is what makes the migration statable rather than a silence:
+every statistic founded before today decodes with the factor at zero and
+re-encodes byte-for-byte, so **a pre-factor market's reading is now a
+*declared* identity scale rather than an undefined one**. Its content digest
+does not move, no account is rewritten, and cohort-14's records keep the
+meaning the deployed program acted on.
+
+## Why not `result_denominator`, which was the other candidate
+
+Folding the factor into the certificate's `result_denominator` would have been
+smaller — the browser reads that field already — and it is wrong. That
+denominator is the **statistic's own rational**: `RoundingBoundary::ExactRational`
+means "pass an exact numerator and a positive denominator to the mapping
+release", and `ExactScheduledAverage` and `OddScheduledMedian` legitimately
+produce denominators above one. A denominator carrying both a sample count and
+a unit conversion makes neither recoverable from the other. The scale is also
+founding-immutable while the observation is per-event; putting an immutable
+market property into every certificate duplicates it into a second place it
+can be wrong.
+
+So the cuts stay authored in the market's own quote unit — the founding writes
+`$99`, not `9900000000` atoms — and the shift is applied where the observation
+becomes a cell.
+
+## Which shift an adapter admits, and why it is not simply equality
+
+The tree founds markets **both ways**, and the two unit identities are what say
+which. This is the rule, and it is the first thing those two identities have
+ever been checked against:
+
+* **One identity on both sides declares no conversion.** The result domain's
+  cuts are on the feed's own atom scale and the only admissible shift is zero.
+  `tools/local-validator/bootstrap/successor/src/relayed.rs` and
+  `crates/dclutch-product-runtime-v2-operator/src/authoring.rs`
+  (`SOL_USD_ANCHOR = 100_000_000`, denominator 1) are this shape.
+* **Two identities declare a conversion**, and the only conversion this release
+  performs is the feed's published decimal exponent — so that is the only
+  admissible shift, and the cuts are in the feed's quote unit.
+  `tools/local-validator/bootstrap/successor/src/market.rs`
+  (`source-unit/pyth-scaled-price` into `result-unit/usd-cents`) is this shape,
+  and until `4cd2b9cb5` it declared the conversion and left the number out.
+
+A statistic cannot even be constructed claiming a conversion between one unit
+and itself (`StatisticSpecV1::validate_scale`), and
+`PythAdapterConfigV1::validate_update` refuses a shift its config does not
+admit with `Error::SourceScaleMismatch`, surfaced on chain as
+`ResolutionError::ProviderScale = 0x801C`.
+
+**That refusal is checked after the publication is admitted, deliberately.**
+Reaching it means the feed published exactly what this market pinned, so
+`ProviderScale` in a validator log can only mean the market's own two records
+disagree — a fault no resubmission can fix. Reported as
+`ProviderConfiguration`, an operator would resubmit forever.
+
+## One author, every consumer derives
+
+`ResultDomainV2::select_ordinary(numerator, denominator, source_scale_exponent)`
+takes the shift as an argument rather than defaulting, because an observation
+alone does not name a cell: the same numerator names different cells under
+different declared factors, and a route that omits the number has not chosen
+the identity — it has failed to state a choice. The shift multiplies one side's
+denominator, chosen by its sign, and never divides, so the comparison stays
+exact and stays inside the integer widths the unscaled one already used.
+
+Consumers, none of which reads an adapter account for it:
+
+| route | where the factor comes from |
+| --- | --- |
+| `programs/dclutch-resolution-proof-sbf/src/provider_v3.rs` | `obligation.source_scale_exponent()` |
+| `programs/dclutch-resolution-proof-sbf/src/sponsored_push_v1.rs` | `records.statistic.source_scale_exponent()` |
+| `crates/.../provider_finalized_projection_v3.rs` | a statistic account authenticated against `SourceMaterialV3::statistic_spec` by digest |
+| `programs/dclutch-resolution-proof-sbf/src/relay_v1.rs` | the identity — **see the debt below** |
+
+## Lean
+
+`formal/dclutch-semantics/DClutchSemantics/ProductRuntimeV2.lean` owns the
+semantics. `ResultDomain.scaled_selection_in_one_cell` is the law: once the
+declared factor has put the observation and the cuts on one scale, the
+observation falls in exactly one ordinary cell — the selector is below the
+region count, every cut beneath it is at or below the reading, and the next cut
+is strictly above. `ResultDomain.selectOrdinaryScaled_identity` is the
+migration statement as a theorem. `maxScaleExponent` is Lean-owned and emitted
+to `MAX_SOURCE_SCALE_EXPONENT` in
+`crates/dclutch-product-runtime-v2/src/generated.rs`. Market B is two
+kernel-checked twins in that module: the identity gives `2`, `-8` gives `1`.
+
+## The test the absence of which was the whole defect
+
+`crates/dclutch-svm-harness/tests/resolution_core_v3_lifecycle.rs` now founds
+its market with cuts `50, 150` over `100` against the captured Pyth mantissa
+`100_000_000` at exponent `-8` — one dollar, inside the $0.50–$1.50 band, cell
+1. Rebuilding the Resolution ELF with the route passing the identity, **the
+program commits selector 2, the top cell, and the assertion fails 2 against
+1**; with the factor it commits 1. The identity-scale selector is asserted
+beside it as a control, so the fixture cannot quietly stop distinguishing the
+two scales.
+
+## What this document said that reading disproved
+
+* *"the browser's `/create` through the source-provider wasm"* founds no
+  statistic. **Nothing outside Rust authors those 176 bytes** — no wasm crate,
+  no TypeScript, no generated module; `lib/founding/ladder.ts` declares the
+  record-graph rung `tooling-only` and says the honest browser path is an
+  emitter per encoder. The only 176-byte author in the repository is
+  `StatisticSpecV1::to_bytes`. There were exactly **two** non-test
+  `StatisticSpecV1::new` call sites, both in the successor bootstrap.
+* The certificate's layout is Lean-emitted
+  (`EmitSourceResolutionTerminalV2AbiRust.lean`); **`StatisticSpecV1`'s is
+  not**. There is no `StatisticSpecAbi.lean` and no
+  `generated_statistic_spec_v1.rs`, though `generated_window_spec_v1.rs` exists
+  for its sibling. The field landed in a hand-written layout.
+
+## Owed
+
+1. **The relayed route cannot see the factor.** `relay_v1.rs` has no statistic
+   slot by design ("A terminal window over a terminal sample has one
+   observation and one atom"), so it passes the identity. The relayed founding
+   now *declares* the identity — one unit identity on both sides, which
+   `validate_scale` refuses to pair with any nonzero shift — but **nothing on
+   the route checks it**, because the record is not in the frame. A relayed
+   market founded with a declared conversion would be selected at the identity
+   and mis-paid exactly as market B was. Closing it is an account-frame change,
+   not a line change.
+2. **`StatisticSpecV1` has no Lean-owned layout.** The field sits at an offset
+   nothing emits. A `StatisticSpecAbi.lean` plus `generated_statistic_spec_v1.rs`
+   would put it under the same authority as `WindowSpecV1`.
+3. **The browser's mirrored derivation still applies no factor.**
+   `packages/dclutch-sdk/lib/ordinarySelectorV1.ts` reproduces the chain's
+   committed selector from `(numerator, denominator, cuts, cutDenominator)`,
+   which is correct for every cohort-14 market and wrong for the first scaled
+   one it meets. It needs the market's `StatisticSpecV1` in its join and the
+   factor in its comparison. Owner: the WEB lane, whose file it is.

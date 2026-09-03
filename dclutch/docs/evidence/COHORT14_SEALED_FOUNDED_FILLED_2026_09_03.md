@@ -1910,3 +1910,55 @@ a 48-byte placeholder at the RentCredit coordinate, and a General capability
 seal — would both be stranded by the re-founding wall one requires.
 
 Devnet evidence. Not mainnet evidence.
+
+---
+
+## MARKET B PAID THE CELL THE PROGRAM CHOSE, NOT THE CELL THE READING FALLS IN
+
+Appended 2026-09-03 by the RESOLUTION-SCALE lane at `4cd2b9cb5`. Devnet
+evidence, not mainnet evidence.
+
+Market B `DUVcCGfjXzp1fBktTCjsAomgrn9S6sxSDziQHoyRiu8A` settled at slot
+492,412,657 and **the settlement is arithmetically honest and names the wrong
+cell**. This is not a claim that anything was tampered with, and nothing here
+is a rollback: the certificate on chain is exactly what the deployed program
+computed from the records it was given.
+
+| | |
+| --- | --- |
+| cuts / denominator | `9900, 10300` over `100` — dollars, authored in cents |
+| certificate observation | `10062091764 / 1` — raw Pyth SOL/USD mantissa at exponent **−8** |
+| committed selector | **2** |
+| coefficient vector | `[1,0,1,0]`, a `CentredRangeProtection` paying **outside** the $99–$103 band |
+| the same observation on the cuts' scale | `10062091764 / 100000000` = **$100.62**, **inside** the band |
+| the cell that reading falls in | **1**, which pays `0` |
+| atoms moved | **500,000,000** |
+
+The founding declared a conversion — source unit `source-unit/pyth-scaled-price`,
+result unit `result-unit/usd-cents` — and no record carried the number between
+them, so `ResultDomainV2::select_ordinary` compared a raw mantissa against
+cuts in dollars. Both readings are correct arithmetic on the numbers each was
+handed; the arithmetic was handed two different units. Full analysis and the
+repair: `docs/design/OBSERVATION_SCALE_AUTHORITY.md`.
+
+**Market C is the same shape and the same founding path.** Both markets were
+founded by `pyth_market_input_base`
+(`tools/local-validator/bootstrap/successor/src/market.rs`), which wrote a
+`StatisticSpecV1` declaring two unit identities and no factor. After market C
+settles, it will likewise have paid the cell the deployed program chose rather
+than the cell its reading falls in, and the same table can be filled in for it
+from its own certificate. That is a prediction stated before the fact, not a
+result.
+
+**Neither market's records change.** The factor landed in four bytes of
+`StatisticSpecV1` that were already reserved and enforced zero, so cohort-14's
+statistics decode at the identity, re-encode byte-for-byte, and keep their
+content digests. A reader of a cohort-14 market is reading a market whose
+declared source-to-result scale is the identity — which is the scale the
+program acted on. **Cohort-15's founding writes the factor**, and a market
+founded after `4cd2b9cb5` that declares a conversion without one cannot resolve
+at all: it refuses with `ResolutionError::ProviderScale = 0x801C`.
+
+What this evidence is: a record of two settlements whose outcome the protocol
+could not have noticed was mis-scaled, kept beside the repair that makes the
+next one impossible.

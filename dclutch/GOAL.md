@@ -3900,3 +3900,15 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   proof and on-chain General); frame rows (ratchet red); the ShadowAot × trusted-environment selection refusal.
   → GENERAL **`(spawned)`**.
 - Cuts: `ca0bd6366`.
+- RESOLUTION-SCALE closed (`4cd2b9cb5`, `90435d173`): **`StatisticSpecV1.source_scale_exponent` at bytes 12..16 — already
+  reserved-and-enforced zero, width 176 unchanged, every pre-factor statistic decodes at the identity** (the migration is the
+  theorem `selectOrdinaryScaled_identity`); the law `ResultDomain.scaled_selection_in_one_cell` in ProductRuntimeV2.lean,
+  market B as two kernel-checked twins (identity → 2, −8 → 1); the binding is not equality — one unit identity on both sides
+  declares no conversion, two declare the feed's exponent; `validate_update` binds it after admitting the publication;
+  **red-then-green on the SVM**: cuts 50,150/100 against a $1.00 mantissa at −8 — HEAD's Resolution committed selector 2,
+  the fix selects 1; `ProviderScale 0x801C`; census 409/26; ratchet clean. Corrections: no browser path authors a
+  StatisticSpecV1 (two successor sites only); its layout is NOT emitted (its sibling WindowSpecV1's is). Owed: relay_v1 has
+  no statistic slot; a Lean-owned StatisticSpecV1 layout; the browser's fetch in marketResolution.ts.
+- The four files that had kept `abi:route-census:verify` red were pinned-rustfmt passes over HEAD (proved by formatting
+  HEAD's blob and comparing) — landed as one fmt commit.
+- Cuts: `38b223136`.

@@ -533,7 +533,21 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
    */
   const selectorJoin = derived === null || resolution === null || resolution.status !== 'authenticated'
     ? null
-    : ordinarySelectorJoinV1(derived, resolution.observation, resolution.selector);
+    : ordinarySelectorJoinV1(
+      derived,
+      resolution.observation,
+      resolution.selector,
+      // THE IDENTITY, STATED. `StatisticSpecV1.source_scale_exponent` is the
+      // market's declared source-to-result decimal shift, and this page does
+      // not read that record yet, so it passes the scale every cohort-14
+      // market actually declares: the four bytes the factor occupies were
+      // reserved and enforced zero before `4cd2b9cb5`, so an old market's
+      // declared scale IS the identity and this reproduces what the protocol
+      // did. It will be WRONG for the first market founded with a factor, and
+      // the fix is a `StatisticSpecV1` fetch in `marketResolution.ts` rather
+      // than a number here. See `docs/design/OBSERVATION_SCALE_AUTHORITY.md`.
+      0,
+    );
   const terminalWinner = decoded === null || decoded.settlement.status !== 'terminal'
     ? null
     : terminalWinnerNameV1(narrative, decoded.settlement.winner, terminalOutcomeCount, selectorJoin);

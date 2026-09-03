@@ -60,10 +60,27 @@ describe('live devnet: the certificate-to-partition join', () => {
     if (resolution.status !== 'authenticated') return;
     expect(resolution.sourceReported, 'this case needs a success certificate, not a source failure').toBe(true);
 
-    const join = ordinarySelectorJoinV1(question, resolution.observation, resolution.selector);
+    const join = ordinarySelectorJoinV1(question, resolution.observation, resolution.selector, 0);
     expect(join.refusal).toBeNull();
     expect(join.derived).toBe(resolution.selector);
     expect(join.agrees).toBe(true);
+
+    // AND WHAT THAT AGREEMENT IS AND IS NOT. The identity above is the scale
+    // this market declares -- every cohort-14 statistic was written before
+    // `StatisticSpecV1.source_scale_exponent` existed, into four bytes that
+    // were reserved and enforced zero -- so the agreement is an exact
+    // statement of what the protocol DID, and no statement at all about
+    // whether the cell is right about the world.
+    //
+    // It is not. This market's cuts are dollars authored in cents and its
+    // observation is a raw Pyth mantissa at exponent -8, and read on the
+    // cuts' own scale the price is inside the band rather than outside it.
+    // Both cells below are honest arithmetic; they differ only in whether a
+    // factor was declared, and that difference moved 500,000,000 atoms.
+    const onTheCutsScale = ordinarySelectorJoinV1(question, resolution.observation, resolution.selector, -8);
+    expect(onTheCutsScale.refusal).toBeNull();
+    expect(onTheCutsScale.derived).not.toBe(join.derived);
+    expect(onTheCutsScale.agrees).toBe(false);
 
     // The chain's own agreement, read twice: Core's `terminal_winner` and the
     // certificate's selector are separate bytes in separate accounts, and the
