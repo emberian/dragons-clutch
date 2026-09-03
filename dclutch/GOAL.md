@@ -3809,3 +3809,8 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   never enters the accelerator ELF). Owed with carriers ruled out: the strategy walk (82,308, no carrier), Custody's two
   vault-key searches (a token account cannot hold its own bump), Claims' relay. **C-06 rests here.**
 - Cuts: `cc28fa7d5`, `5dc81980a`.
+- Started 05:30 EDT: WEB **`ad783e9e73aec7ee5`** (the site moves to cohort-14: deployments derived from the plan, market B
+  featured with its checked-release row ingested, the page telling the honest resolution and the ATA payout from chain;
+  market A's stale pin stated only if derivable) and PHASE-CENSUS (4th) **`a79c37de40747d3bc`** (DirectRoot / Ticket /
+  FundingLedger / the Dealer RootTail machines; two-arm `match` as a selection; derive instead of needs-chain where the
+  surface decodes the machine).
