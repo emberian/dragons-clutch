@@ -3831,3 +3831,6 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   #[path]; the simulator's File-exists exit) and GENERAL-SESSION **`(spawned)`** (the account table by author; a devnet
   General session driver; OpenBatch on 8ExdC1Rwb…).
 - Cuts: `722c8591c`, `ff2af5f93`, `d68224ad7`.
+- Started 06:25 EDT: RELAY-C **`a750957efed0be75b`** — market C's capture at 08:09 EDT inside its window, settle at 10:38 EDT,
+  Terminal, the winning STRANGER paid into their associated token account (the first payout to a stranger on an honest
+  resolution), the post-payout census with L4 retired at Terminal.
