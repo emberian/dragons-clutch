@@ -70,6 +70,7 @@ use solana_program::{
     pubkey::Pubkey,
 };
 
+use crate::hot_v3::hot_cu_checkpoint_macro as hot_cu_checkpoint;
 use crate::{
     TradingSbfError,
     child_authority_v4::{PreflightedCallerBumpV4, child_caller_authority_v4},
@@ -212,6 +213,7 @@ pub(crate) fn execute_claims_route_v3<'info>(
         &mut buffers.metas,
     )?;
     buffers.push_callee(claims_program)?;
+    hot_cu_checkpoint!("cx-claims-frame");
     let bump_seed = [bump];
     let [domain, release, market, role, context, digest] = authority_seeds.as_slices();
     let caller_signer = [domain, release, market, role, context, digest, &bump_seed];

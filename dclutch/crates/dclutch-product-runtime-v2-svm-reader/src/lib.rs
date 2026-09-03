@@ -246,6 +246,16 @@ pub struct AuthenticatedProductRuntimeV3<'accounts, 'info> {
     pub payout_scale: u64,
     /// Immutable evaluator semantic release.
     pub evaluator_release_id: ContentId,
+    /// The eight record PDA bumps this walk used, mined or searched.
+    ///
+    /// A COORDINATE CACHE, exactly like [`AuthenticatedRecordV2::coordinate`]:
+    /// it is a fact about addresses this walk already reproduced and compared,
+    /// and it is never a substitute for repeating the authentication. Its one
+    /// consumer relays it to a SECOND program that runs the same walk over the
+    /// same four records in the same instruction, so that program reproduces
+    /// each address instead of searching for it. See
+    /// [`authenticate_record_hinted`].
+    pub record_bumps: ProductRecordBumpsV3,
 }
 
 impl AuthenticatedProductRuntimeV2 {
@@ -294,37 +304,66 @@ pub fn authenticate_product_runtime_v2<'accounts, 'info>(
     expected_product_digest: ContentId,
     frame: ProductRuntimeFrameV2<'accounts, 'info>,
 ) -> Result<AuthenticatedProductRuntimeV2> {
+    authenticate_product_runtime_v2_hinted(
+        registry_program,
+        rent,
+        expected_product_digest,
+        frame,
+        ProductRecordBumpsV3::ABSENT,
+        &mut ProductRecordBumpsV3::ABSENT,
+    )
+}
+
+/// The same walk, reproducing each record PDA at a mined bump where `hints`
+/// supplies one and reporting into `derived` every bump it ended up using.
+///
+/// See [`authenticate_record_hinted`] for what a bump is and is not, and for
+/// the measurement that made this worth threading.
+pub fn authenticate_product_runtime_v2_hinted<'accounts, 'info>(
+    registry_program: &Pubkey,
+    rent: &Rent,
+    expected_product_digest: ContentId,
+    frame: ProductRuntimeFrameV2<'accounts, 'info>,
+    hints: ProductRecordBumpsV3,
+    derived: &mut ProductRecordBumpsV3,
+) -> Result<AuthenticatedProductRuntimeV2> {
     require_distinct(frame)?;
-    let product_record = authenticate_record(
+    let (product_record, product_bumps) = authenticate_record_hinted(
         registry_program,
         rent,
         frame.product,
         PRODUCT_RECORD_SCHEMA_ID_V2,
         expected_product_digest,
         Error::ProductRecord,
+        hints.at(0),
     )?;
+    derived.set(0, product_bumps.raw, product_bumps.staging);
     let product_data = frame
         .product
         .raw
         .try_borrow_data()
         .map_err(|_| Error::Borrow)?;
     let product = ProductRecordV2::decode(&product_data).map_err(|_| Error::Composition)?;
-    let result_domain_record = authenticate_record(
+    let (result_domain_record, domain_bumps) = authenticate_record_hinted(
         registry_program,
         rent,
         frame.result_domain,
         RESULT_DOMAIN_SCHEMA_ID_V2,
         product.result_domain_digest(),
         Error::ResultDomainRecord,
+        hints.at(1),
     )?;
-    let portfolio_record = authenticate_record(
+    derived.set(1, domain_bumps.raw, domain_bumps.staging);
+    let (portfolio_record, portfolio_bumps) = authenticate_record_hinted(
         registry_program,
         rent,
         frame.portfolio,
         PORTFOLIO_SCHEMA_ID_V2,
         product.portfolio_digest(),
         Error::PortfolioRecord,
+        hints.at(2),
     )?;
+    derived.set(2, portfolio_bumps.raw, portfolio_bumps.staging);
     let domain_data = frame
         .result_domain
         .raw
@@ -400,7 +439,33 @@ pub fn authenticate_product_runtime_v3<'accounts, 'info>(
     expected_product_digest: ContentId,
     frame: ProductRuntimeFrameV3<'accounts, 'info>,
 ) -> Result<AuthenticatedProductRuntimeV3<'accounts, 'info>> {
-    let runtime = authenticate_product_runtime_v2(
+    authenticate_product_runtime_v3_hinted(
+        registry_program,
+        rent,
+        expected_product_digest,
+        frame,
+        ProductRecordBumpsV3::ABSENT,
+    )
+}
+
+/// The same complete walk, at mined bumps where `hints` supplies them, writing
+/// into `derived` every bump it used so one caller can relay them to another.
+///
+/// The Dealer family runs this walk TWICE in one instruction -- Trading's own
+/// prelude and, independently, the accelerator's -- and the second one is the
+/// caller of this form: `admitted_composition_v3` relays what the first
+/// derived in the prelude witness, and the accelerator reproduces each address
+/// instead of searching for it a second time. See
+/// [`authenticate_record_hinted`].
+pub fn authenticate_product_runtime_v3_hinted<'accounts, 'info>(
+    registry_program: &Pubkey,
+    rent: &Rent,
+    expected_product_digest: ContentId,
+    frame: ProductRuntimeFrameV3<'accounts, 'info>,
+    hints: ProductRecordBumpsV3,
+) -> Result<AuthenticatedProductRuntimeV3<'accounts, 'info>> {
+    let derived = &mut ProductRecordBumpsV3::ABSENT;
+    let runtime = authenticate_product_runtime_v2_hinted(
         registry_program,
         rent,
         expected_product_digest,
@@ -409,11 +474,21 @@ pub fn authenticate_product_runtime_v3<'accounts, 'info>(
             result_domain: frame.result_domain,
             portfolio: frame.portfolio,
         },
+        hints,
+        derived,
     )?;
     // This is a continuation over a basis Core already admitted when it
     // committed the founding permit. Authentication remains per-use; the
     // founding-only no-arbitrage conjunct does not.
-    authenticate_product_basis_v3(registry_program, rent, runtime, frame.linked_basis)
+    authenticate_product_basis_v3_with_admission(
+        registry_program,
+        rent,
+        runtime,
+        frame.linked_basis,
+        PreviouslyAdmittedBasisV3,
+        hints,
+        derived,
+    )
 }
 
 /// Authenticate only the finalized ProductBasisV3 selected by an already
@@ -437,6 +512,8 @@ pub fn authenticate_product_basis_v3<'accounts, 'info>(
         runtime,
         linked_basis,
         PreviouslyAdmittedBasisV3,
+        ProductRecordBumpsV3::ABSENT,
+        &mut ProductRecordBumpsV3::ABSENT,
     )
 }
 
@@ -462,6 +539,8 @@ pub fn authenticate_founding_product_basis_v3<'accounts, 'info>(
         runtime,
         linked_basis,
         FoundingBasisAdmissionV3 { price_gate },
+        ProductRecordBumpsV3::ABSENT,
+        &mut ProductRecordBumpsV3::ABSENT,
     )
 }
 
@@ -550,12 +629,15 @@ impl BasisAdmissionBoundaryV3 for FoundingBasisAdmissionV3<'_, '_> {
 }
 
 #[inline(never)]
+#[allow(clippy::too_many_arguments)]
 fn authenticate_product_basis_v3_with_admission<'accounts, 'info, Admission>(
     registry_program: &Pubkey,
     rent: &Rent,
     runtime: AuthenticatedProductRuntimeV2,
     linked_basis: FinalizedRecordFrameV2<'accounts, 'info>,
     admission: Admission,
+    hints: ProductRecordBumpsV3,
+    derived: &mut ProductRecordBumpsV3,
 ) -> Result<AuthenticatedProductRuntimeV3<'accounts, 'info>>
 where
     Admission: BasisAdmissionBoundaryV3,
@@ -567,14 +649,16 @@ where
         .map_err(|_| Error::Borrow)?;
     let basis_digest = content(hash(&basis_data).to_bytes())?;
     drop(basis_data);
-    let linked_basis_record = authenticate_record(
+    let (linked_basis_record, basis_bumps) = authenticate_record_hinted(
         registry_program,
         rent,
         linked_basis,
         GRADED_BASIS_RECORD_SCHEMA_ID_V3,
         basis_digest,
         Error::LinkedBasisRecord,
+        hints.at(3),
     )?;
+    derived.set(3, basis_bumps.raw, basis_bumps.staging);
     let basis_data = linked_basis
         .raw
         .try_borrow_data()
@@ -612,6 +696,7 @@ where
         basis_width: basis.basis_width(),
         payout_scale: basis.payout_scale(),
         evaluator_release_id,
+        record_bumps: *derived,
     })
 }
 
@@ -624,21 +709,110 @@ fn authenticate_record(
     expected_digest: ContentId,
     refusal: Error,
 ) -> Result<AuthenticatedRecordV2> {
+    authenticate_record_hinted(
+        registry_program,
+        rent,
+        frame,
+        schema,
+        expected_digest,
+        refusal,
+        RecordBumpHintsV2::ABSENT,
+    )
+    .map(|(record, _)| record)
+}
+
+/// One record's raw and staging bumps: a search hint, never an authority.
+///
+/// Zero is absent and the reader searches exactly as it used to, which is what
+/// every caller that has not mined them passes.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RecordBumpHintsV2 {
+    /// Bump of the Registry raw-record PDA.
+    pub raw: u8,
+    /// Bump of that record's Registry staging cursor PDA.
+    pub staging: u8,
+}
+
+impl RecordBumpHintsV2 {
+    /// Nothing mined: both derivations search.
+    pub const ABSENT: Self = Self { raw: 0, staging: 0 };
+}
+
+/// The eight bumps one Product graph walk derives, in canonical record order.
+///
+/// Product raw, Product staging, ResultDomain raw, ResultDomain staging,
+/// Portfolio raw, Portfolio staging, linked basis raw, linked basis staging --
+/// the order the walk visits them and the order
+/// `AdmittedPreludeWitnessV1::record_bumps` carries them.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ProductRecordBumpsV3(pub [u8; 8]);
+
+impl ProductRecordBumpsV3 {
+    /// Nothing mined: every derivation on the walk searches.
+    pub const ABSENT: Self = Self([0; 8]);
+
+    /// One record's pair, by its position in the walk.
+    #[must_use]
+    pub const fn at(self, record: usize) -> RecordBumpHintsV2 {
+        RecordBumpHintsV2 {
+            raw: self.0[record * 2],
+            staging: self.0[record * 2 + 1],
+        }
+    }
+
+    fn set(&mut self, record: usize, raw: u8, staging: u8) {
+        self.0[record * 2] = raw;
+        self.0[record * 2 + 1] = staging;
+    }
+}
+
+/// Authenticate one finalized record, reproducing both PDAs at a mined bump
+/// where the caller supplied one and searching where it did not.
+///
+/// # The derivation IS the check
+///
+/// A hint is fed to `create_program_address` over seeds this function derives
+/// for itself -- the record PDA domain, the canonical schema id, and the
+/// content digest its caller established -- and the result is compared against
+/// the account the frame supplied by the same equality that was always here. A
+/// wrong bump derives a different address, or none, and refuses. Canonicality
+/// is enforced where the account is MADE: the Registry writes finalized records
+/// only at the canonical bump, so a non-canonical hint names an address at
+/// which no Registry-owned record exists.
+///
+/// Measured 2026-09-03 on the Dealer partial equity Remove: the two searches
+/// per record, over the four records of a Product graph walk, are **30,172 CU**
+/// of the 39,217-CU `acc-product-runtime` span, and the span is identical to
+/// the digit across every invocation and every ELF because these seeds are a
+/// schema and a content digest -- fixture data, not release-set data. It is
+/// draw-free AND it is a search; those are not the same property.
+#[allow(clippy::too_many_arguments)]
+fn authenticate_record_hinted(
+    registry_program: &Pubkey,
+    rent: &Rent,
+    frame: FinalizedRecordFrameV2<'_, '_>,
+    schema: [u8; 32],
+    expected_digest: ContentId,
+    refusal: Error,
+    hints: RecordBumpHintsV2,
+) -> Result<(AuthenticatedRecordV2, RecordBumpHintsV2)> {
     let digest = expected_digest.to_bytes();
-    let expected_raw = Pubkey::find_program_address(
-        &[RAW_RECORD_PDA_SEED_V1, schema.as_slice(), digest.as_slice()],
+    let (expected_raw, raw_bump) = record_address(
+        RAW_RECORD_PDA_SEED_V1,
+        schema,
+        digest,
         registry_program,
-    )
-    .0;
-    let expected_staging = Pubkey::find_program_address(
-        &[
-            STAGING_CURSOR_PDA_SEED_V1,
-            schema.as_slice(),
-            digest.as_slice(),
-        ],
+        hints.raw,
+        refusal,
+    )?;
+    let (expected_staging, staging_bump) = record_address(
+        STAGING_CURSOR_PDA_SEED_V1,
+        schema,
+        digest,
         registry_program,
-    )
-    .0;
+        hints.staging,
+        refusal,
+    )?;
     let raw_data = frame.raw.try_borrow_data().map_err(|_| Error::Borrow)?;
     if frame.raw.key != &expected_raw
         || frame.raw.owner != registry_program
@@ -656,12 +830,38 @@ fn authenticate_record(
     {
         return Err(refusal);
     }
-    Ok(AuthenticatedRecordV2 {
-        schema_id: content(schema)?,
-        content_digest: expected_digest,
-        raw_account: *frame.raw.key,
-        staging_account: *frame.staging.key,
-    })
+    Ok((
+        AuthenticatedRecordV2 {
+            schema_id: content(schema)?,
+            content_digest: expected_digest,
+            raw_account: *frame.raw.key,
+            staging_account: *frame.staging.key,
+        },
+        RecordBumpHintsV2 {
+            raw: raw_bump,
+            staging: staging_bump,
+        },
+    ))
+}
+
+/// Reproduce one record PDA at a mined bump, or search for it and report the
+/// bump the search found so a caller can relay it.
+fn record_address(
+    domain: &[u8],
+    schema: [u8; 32],
+    digest: [u8; 32],
+    registry_program: &Pubkey,
+    hint: u8,
+    refusal: Error,
+) -> Result<(Pubkey, u8)> {
+    let base: [&[u8]; 3] = [domain, schema.as_slice(), digest.as_slice()];
+    if hint == 0 {
+        return Ok(Pubkey::find_program_address(&base, registry_program));
+    }
+    let bump_seed = [hint];
+    Pubkey::create_program_address(&[base[0], base[1], base[2], &bump_seed], registry_program)
+        .map(|address| (address, hint))
+        .map_err(|_| refusal)
 }
 
 fn content(bytes: [u8; 32]) -> Result<ContentId> {

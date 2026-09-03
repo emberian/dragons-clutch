@@ -154,7 +154,8 @@ use dclutch_market_core_codec::{
 use dclutch_product_runtime_v2::ContentId as ProductContentId;
 use dclutch_product_runtime_v2_svm_reader::{
     AuthenticatedProductRuntimeV3, FinalizedRecordFrameV2 as ProductRecordFrameV2,
-    ProductRuntimeFrameV3, authenticate_product_runtime_v3,
+    ProductRecordBumpsV3, ProductRuntimeFrameV3, authenticate_product_runtime_v3,
+    authenticate_product_runtime_v3_hinted,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_activation_auth_v1::{
@@ -571,7 +572,7 @@ pub fn child_request_digest_v5<'a>(
 /// `upward + scratch`.
 #[cfg(feature = "hot-cu-profile")]
 #[inline(never)]
-fn hot_checkpoint(phase: &str) {
+pub(crate) fn hot_checkpoint(phase: &str) {
     solana_program::log::sol_log(phase);
     solana_program::log::sol_log_compute_units();
     let (position, scratch) = hot_heap_outstanding();
@@ -698,6 +699,12 @@ macro_rules! hot_heap_mark {
 // export the whole loop was ONE heap span in this module -- which is how
 // twelve kilobytes of it went unattributed when the input transport changed.
 pub(crate) use hot_heap_mark as hot_heap_mark_macro;
+// The child-route CPI legs live in the four `*_composition_v3` modules, and
+// until this export the whole span from one child's return to the next
+// child's entry was ONE unattributed number in this module -- 25,247,
+// 41,492 and 48,871 CU on the partial equity Remove, larger than any
+// authentication the note prices.
+pub(crate) use hot_cu_checkpoint as hot_cu_checkpoint_macro;
 
 /// Shadow caller-authority PDA after six authenticated strategy extras.
 pub const HOT_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3: usize = HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3 + 6;
@@ -1115,8 +1122,14 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     let rent =
         Rent::from_account_info(frame.rent).map_err(|_| TradingSbfError::AcceleratorRelease)?;
     hot_cu_checkpoint!("acc-release-waist");
-    let product_runtime = authenticate_product_runtime_boxed_v3(&frame, &rent, &market)
-        .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
+    // The caller's record bumps are read AHEAD of the witness's own decode,
+    // because the Product walk below is the first thing on this route that
+    // spends them -- and reading them cannot refuse. See
+    // `accelerator_record_bump_hints_v4`.
+    let record_bumps = accelerator_record_bump_hints_v4(request.witness());
+    let product_runtime =
+        authenticate_product_runtime_hinted_boxed_v3(&frame, &rent, &market, record_bumps)
+            .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
     hot_cu_checkpoint!("acc-product-runtime");
 
     // THE PRELUDE'S CHAIN IS NOT WALKED HERE ANY MORE; ITS OUTPUTS ARRIVE IN
@@ -1346,6 +1359,27 @@ fn require_accelerator_projection_bindings_v4(
             .content_digest
             .to_bytes(),
     })
+}
+
+/// Read the caller's eight Product graph record bumps, or none at all.
+///
+/// TOTAL, AND THAT IS THE POINT. These are search hints: each is fed to a
+/// `create_program_address` over seeds this program derives for itself, and
+/// the address it produces is compared against the account the frame supplied,
+/// by the equality that was always there. So an unreadable witness is not an
+/// accusation HERE -- it yields the absent bank, the walk searches exactly as
+/// it did before the bank existed, and the witness's own decode below still
+/// refuses by name for every field it owns.
+///
+/// Making it fallible instead moved the accelerator's frontier marker from
+/// `AcceleratorArtifact` back to `AcceleratorRuntimeView`, measured
+/// 2026-09-03: a hint reader had become the first thing on the route that
+/// could refuse, and it reported a conjunct it does not own.
+#[inline(never)]
+fn accelerator_record_bump_hints_v4(witness: &[u8]) -> ProductRecordBumpsV3 {
+    AdmittedPreludeWitnessV1::decode(witness)
+        .map(|witness| ProductRecordBumpsV3(witness.record_bumps()))
+        .unwrap_or(ProductRecordBumpsV3::ABSENT)
 }
 
 /// Decode the caller's prelude witness into its boxed context preimage.
@@ -5287,6 +5321,58 @@ fn authenticate_product_runtime_boxed_v3<'accounts, 'info>(
     )
 }
 
+/// The same walk over the same four records, at the bumps its CALLER derived.
+///
+/// This exists for exactly one route. The Dealer accelerator runs the Product
+/// graph walk a second time, independently, on the far side of a CPI, over the
+/// same four Registry records the caller authenticated a few thousand
+/// instructions earlier -- and `authenticate_record` runs two
+/// `find_program_address` calls per record. Measured 2026-09-03 by doubling
+/// those eight searches: they are 30,172 CU of the 39,217-CU
+/// `acc-product-runtime` span, identical to the digit on all nine invocations
+/// of one campaign run, because their seeds are a schema and a content digest
+/// and neither moves with the release set.
+///
+/// Nothing about the authentication moves. Each bump is fed to
+/// `create_program_address` over seeds this program derives for itself and the
+/// result is compared against the account the frame supplied, by the equality
+/// that was always there.
+#[inline(never)]
+fn authenticate_product_runtime_hinted_boxed_v3<'accounts, 'info>(
+    frame: &HotFrameV3<'accounts, 'info>,
+    rent: &Rent,
+    market: &CoreState,
+    hints: ProductRecordBumpsV3,
+) -> Result<Box<AuthenticatedProductRuntimeV3<'accounts, 'info>>, ProgramError> {
+    authenticate_product_runtime_v3_hinted(
+        frame.registry.key,
+        rent,
+        ProductContentId::new(market.identity.product_record.to_bytes())
+            .map_err(|_| TradingSbfError::Content)?,
+        ProductRuntimeFrameV3 {
+            product: ProductRecordFrameV2 {
+                raw: frame.product_raw,
+                staging: frame.product_staging,
+            },
+            result_domain: ProductRecordFrameV2 {
+                raw: frame.result_domain_raw,
+                staging: frame.result_domain_staging,
+            },
+            portfolio: ProductRecordFrameV2 {
+                raw: frame.portfolio_raw,
+                staging: frame.portfolio_staging,
+            },
+            linked_basis: ProductRecordFrameV2 {
+                raw: frame.linked_basis_raw,
+                staging: frame.linked_basis_staging,
+            },
+        },
+        hints,
+    )
+    .map(Box::new)
+    .map_err(|_| TradingSbfError::Content.into())
+}
+
 #[inline(never)]
 fn authenticate_product_runtime_for_record_boxed_v3<'accounts, 'info>(
     frame: &HotFrameV3<'accounts, 'info>,
@@ -7147,6 +7233,10 @@ fn execute_admitted_candidate_v3(
         ];
     AdmittedPreludeWitnessV1::encode_into(
         admitted_context,
+        // The eight Product graph record bumps THIS program's prelude already
+        // derived, relayed so the callee's independent walk over the same four
+        // records reproduces each address instead of searching for it.
+        view.product_runtime_v3.record_bumps.0,
         view.span_widths,
         view.representatives,
         &mut witness,
@@ -11456,6 +11546,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                     .ok_or(TradingSbfError::Content)?;
             }
             hot_heap_mark!("child-dependencies");
+            hot_cu_checkpoint!("cw-dependencies");
             let prior_receipt = if let Some(receipt) = single_receipt {
                 Some(receipt)
             } else if prior_receipt_bytes.is_empty() {
@@ -11626,6 +11717,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                     return Err(TradingSbfError::UnsupportedContent.into());
                 }
             };
+            hot_cu_checkpoint!("cw-child-returned");
             hot_heap_mark!("child-invoked");
             // The return-data syscall was read ONCE, by the composition that
             // verified the receipt against its own request. It used to be read
@@ -11722,6 +11814,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                 &child_digest,
             ])
             .to_bytes();
+            hot_cu_checkpoint!("cw-banked");
             hot_heap_mark!("child-banked");
             invocation = invocation.checked_add(1).ok_or(TradingSbfError::Content)?;
             child_ordinal = child_ordinal

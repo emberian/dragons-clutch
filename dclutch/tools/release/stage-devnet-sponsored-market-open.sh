@@ -291,12 +291,29 @@ cargo run --locked --manifest-path "$BOOT/Cargo.toml" -- devnet-sponsored-market
     $BAND_FLAGS \
     > "$WORK/market.json"
 
+# THE ENDPOINT IS NOT WRITTEN TO DISK WHEN IT CARRIES A CREDENTIAL. A keyed RPC
+# endpoint holds its credential in the query string (or in userinfo), and this
+# generator used to bake `--rpc-url` into the script it writes -- so a job
+# directory ended up holding the key at rest, and cohort-14 hand-edited its copy
+# afterwards, which is how its HOLD_STATE came to say the file never held it.
+# The staging manifest below learned this on 2026-08-30 and redacts its origin;
+# the executable did not. Same lesson, second file.
+case "$DEVNET_RPC" in
+    *\?*|*@*)
+        RPC_ORIGIN_LINE=': "${DCLUTCH_RPC_URL:?the staged endpoint carries a credential and was deliberately NOT written to this file; export DCLUTCH_RPC_URL}"'
+        ;;
+    *)
+        RPC_ORIGIN_LINE="DCLUTCH_RPC_URL=\"\${DCLUTCH_RPC_URL:-$DEVNET_RPC}\""
+        ;;
+esac
+
 # This only makes the remaining authority explicit. It invokes the existing
 # campaign driver after the operator supplies paths/public identities; staging
 # never opens a key file or invokes this wrapper.
 cat > "$WORK/open-market.execute.sh" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
+$RPC_ORIGIN_LINE
 : "\${DCLUTCH_AUTHORIZE_MARKET_OPEN:?set to YES under a separate authorization}"
 [ "\$DCLUTCH_AUTHORIZE_MARKET_OPEN" = YES ] || { echo 'authorization not granted' >&2; exit 2; }
 : "\${DCLUTCH_CAMPAIGN_PAYER_KEYPAIR:?absolute keypair path required}"
@@ -334,7 +351,7 @@ if [ "\$DCLUTCH_SUBSTITUTED_FOUNDER" = "\$DCLUTCH_FOUNDING_FOUNDER_DERIVED" ]; t
     exit 2
 fi
 cargo run --locked --manifest-path '$BOOT/Cargo.toml' -- campaign --founding-only \\
-  --rpc-url '$DEVNET_RPC' --i-mean-devnet '$DEVNET_GENESIS' \\
+  --rpc-url "\$DCLUTCH_RPC_URL" --i-mean-devnet '$DEVNET_GENESIS' \\
   --plan '$PLAN' --market '$WORK/market.json' --evidence '$WORK/campaign-open.json' \\
   --keypair-campaign-payer "\$DCLUTCH_CAMPAIGN_PAYER_KEYPAIR" \\
   --keypair-collateral-mint "\$DCLUTCH_COLLATERAL_MINT_KEYPAIR" \\
@@ -346,6 +363,19 @@ cargo run --locked --manifest-path '$BOOT/Cargo.toml' -- campaign --founding-onl
   --substituted-founder "\$DCLUTCH_SUBSTITUTED_FOUNDER" --execute
 EOF
 chmod 700 "$WORK/open-market.execute.sh"
+
+# The VALUE TEST, run every time rather than trusted: the emitted script must
+# not contain a credential-bearing endpoint. A generator that merely intends not
+# to write a secret and a generator that checks log identically.
+case "$DEVNET_RPC" in
+    *\?*|*@*)
+        if grep -qF -- "$DEVNET_RPC" "$WORK/open-market.execute.sh"; then
+            echo 'the generated open-market.execute.sh holds the endpoint credential; refusing to leave it on disk' >&2
+            rm -f "$WORK/open-market.execute.sh"
+            exit 2
+        fi
+        ;;
+esac
 
 python3 - "$WORK/market-open-staging.json" "$WORK/market.json" "$PLAN" "$REGISTRY" "$FEE_RECIPIENT" "$DEVNET_RPC" "$DEVNET_GENESIS" "$PRICE_ACCOUNT" "$FEE_BPS" <<'PY'
 import json, sys

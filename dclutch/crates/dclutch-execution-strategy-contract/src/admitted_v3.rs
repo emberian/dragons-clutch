@@ -402,9 +402,16 @@ mod tests {
             ..context()
         };
         let representatives = [0_usize, 0, 2];
+        let record_bumps = [255_u8, 254, 253, 252, 251, 250, 249, 248];
         let mut bytes = [0_u8; WIDTH];
-        AdmittedPreludeWitnessV1::encode_into(canonical, &[7], &representatives, &mut bytes)
-            .expect("encode witness");
+        AdmittedPreludeWitnessV1::encode_into(
+            canonical,
+            record_bumps,
+            &[7],
+            &representatives,
+            &mut bytes,
+        )
+        .expect("encode witness");
 
         let witness = AdmittedPreludeWitnessV1::decode(&bytes).expect("decode witness");
         assert_eq!(witness.context(), canonical);
@@ -412,6 +419,11 @@ mod tests {
             admitted_invocation_context_digest_v3(witness.context()).expect("witness digest"),
             admitted_invocation_context_digest_v3(canonical).expect("canonical digest"),
         );
+        // The record bumps are a HINT bank and nothing in the codec validates
+        // them: their whole check is the `create_program_address` the reader
+        // feeds them to. What the codec owes is that they round-trip in
+        // canonical order and are not confused with the banks around them.
+        assert_eq!(witness.record_bumps(), record_bumps);
         assert_eq!(witness.span_count(), 1);
         assert_eq!(witness.span_width(0).expect("span width"), 7);
         for (index, expected) in representatives.iter().enumerate() {
@@ -481,14 +493,26 @@ mod tests {
         );
         let mut narrow = [0_u8; admitted_prelude_witness_bytes_v1(3, 0)];
         assert_eq!(
-            AdmittedPreludeWitnessV1::encode_into(canonical, &[], &[0, 0, 3], &mut narrow),
+            AdmittedPreludeWitnessV1::encode_into(
+                canonical,
+                record_bumps,
+                &[],
+                &[0, 0, 3],
+                &mut narrow
+            ),
             Err(AdmittedTranscriptErrorV3::InvalidLength)
         );
         // And the encoder refuses a context whose account count is not the
         // width of the representative bank it is being asked to carry.
         let mut mismatched = [0_u8; admitted_prelude_witness_bytes_v1(2, 0)];
         assert_eq!(
-            AdmittedPreludeWitnessV1::encode_into(canonical, &[], &[0, 0], &mut mismatched),
+            AdmittedPreludeWitnessV1::encode_into(
+                canonical,
+                record_bumps,
+                &[],
+                &[0, 0],
+                &mut mismatched
+            ),
             Err(AdmittedTranscriptErrorV3::InvalidLength)
         );
     }
@@ -607,7 +631,22 @@ pub const ADMITTED_PRELUDE_WITNESS_MAGIC_V1: [u8; 8] = *b"dcAPWv1\0";
 pub const ADMITTED_PRELUDE_WITNESS_SCHEMA_V1: u16 = 1;
 
 /// Fixed header bytes before one witness's context preimage.
-pub const ADMITTED_PRELUDE_WITNESS_HEADER_BYTES_V1: usize = 20;
+///
+/// Twenty of these are the magic, schema, reserved word and the two bank
+/// counts; the last eight are [`ADMITTED_PRELUDE_RECORD_BUMP_COUNT_V1`] Product
+/// graph record bumps, in [`AdmittedPreludeWitnessV1::record_bump`] order.
+pub const ADMITTED_PRELUDE_WITNESS_HEADER_BYTES_V1: usize = 28;
+
+/// Offset of the Product graph record-bump bank inside the header.
+pub const ADMITTED_PRELUDE_RECORD_BUMP_OFFSET_V1: usize = 20;
+
+/// Product graph record bumps one witness carries.
+///
+/// Four finalized Registry records -- Product, ResultDomain, Portfolio and the
+/// linked ProductBasisV3 -- each with a raw body and a staging cursor, in that
+/// order. See [`AdmittedPreludeWitnessV1::record_bumps`] for what they are and
+/// what they are NOT.
+pub const ADMITTED_PRELUDE_RECORD_BUMP_COUNT_V1: usize = 8;
 
 /// Exact bytes of one `AdmittedInvocationContextV3` preimage.
 pub const ADMITTED_INVOCATION_CONTEXT_BYTES_V3: usize = 23 * 32 + 5 * 4;
@@ -641,6 +680,7 @@ pub const fn admitted_prelude_witness_bytes_v1(accounts: usize, spans: usize) ->
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AdmittedPreludeWitnessV1<'a> {
     context: AdmittedInvocationContextV3,
+    record_bumps: [u8; ADMITTED_PRELUDE_RECORD_BUMP_COUNT_V1],
     span_widths: &'a [u8],
     representatives: &'a [u8],
 }
@@ -676,8 +716,16 @@ impl<'a> AdmittedPreludeWitnessV1<'a> {
         }
         let spans_offset =
             ADMITTED_PRELUDE_WITNESS_HEADER_BYTES_V1 + ADMITTED_INVOCATION_CONTEXT_BYTES_V3;
+        let record_bumps: [u8; ADMITTED_PRELUDE_RECORD_BUMP_COUNT_V1] = slice(
+            bytes,
+            ADMITTED_PRELUDE_RECORD_BUMP_OFFSET_V1,
+            ADMITTED_PRELUDE_RECORD_BUMP_COUNT_V1,
+        )?
+        .try_into()
+        .map_err(|_| AdmittedTranscriptErrorV3::InvalidLength)?;
         Ok(Self {
             context,
+            record_bumps,
             span_widths: slice(bytes, spans_offset, spans * 4)?,
             representatives: slice(bytes, spans_offset + spans * 4, accounts * 2)?,
         })
@@ -686,6 +734,33 @@ impl<'a> AdmittedPreludeWitnessV1<'a> {
     /// Exact complete invocation-context preimage the caller committed.
     pub const fn context(self) -> AdmittedInvocationContextV3 {
         self.context
+    }
+
+    /// The four Product graph records' raw and staging bumps, in canonical
+    /// order: Product raw, Product staging, ResultDomain raw, ResultDomain
+    /// staging, Portfolio raw, Portfolio staging, linked basis raw, linked
+    /// basis staging.
+    ///
+    /// # These are SEARCH HINTS and none of them is an authority
+    ///
+    /// Every one is fed to a `create_program_address` over seeds the reader
+    /// derives for itself -- the record PDA domain, the canonical schema id,
+    /// and a content digest read out of an account on the reader's own side of
+    /// the boundary -- and the result is compared against the account the frame
+    /// supplied. A wrong byte reproduces a different address, or no address at
+    /// all, and refuses at an equality that was already there. Zero is absent
+    /// and the reader searches exactly as it used to, which is what every
+    /// witness emitted before this bank existed decodes to.
+    ///
+    /// What they buy is measured rather than asserted. `authenticate_record`
+    /// runs TWO `find_program_address` calls per record and the walk covers
+    /// four records; on the Dealer partial equity Remove, doubling those eight
+    /// searches moved the draw-free `acc-product-runtime` span from 39,217 to
+    /// 69,389 CU on every one of nine invocations in one run. **The searches
+    /// are 30,172 of that span and the four hashes, four decodes and the
+    /// identity join are the other 9,045.**
+    pub const fn record_bumps(self) -> [u8; ADMITTED_PRELUDE_RECORD_BUMP_COUNT_V1] {
+        self.record_bumps
     }
 
     /// Number of dynamic fixed-span widths this witness carries.
@@ -713,6 +788,7 @@ impl<'a> AdmittedPreludeWitnessV1<'a> {
     /// Encode one exact witness body for `context` and its two geometry banks.
     pub fn encode_into(
         context: AdmittedInvocationContextV3,
+        record_bumps: [u8; ADMITTED_PRELUDE_RECORD_BUMP_COUNT_V1],
         span_widths: &[u32],
         representatives: &[usize],
         output: &mut [u8],
@@ -726,6 +802,11 @@ impl<'a> AdmittedPreludeWitnessV1<'a> {
         output.fill(0);
         put(output, 0, &ADMITTED_PRELUDE_WITNESS_MAGIC_V1)?;
         put(output, 8, &ADMITTED_PRELUDE_WITNESS_SCHEMA_V1.to_le_bytes())?;
+        put(
+            output,
+            ADMITTED_PRELUDE_RECORD_BUMP_OFFSET_V1,
+            &record_bumps,
+        )?;
         put(
             output,
             12,

@@ -71,6 +71,7 @@ use solana_sdk_ids::sysvar;
 
 use crate::{
     TradingSbfError, execution_strategy_v2::AuthenticatedExecutionStrategyV2,
+    hot_v3::hot_cu_checkpoint_macro as hot_cu_checkpoint,
     hot_v3::hot_heap_mark_macro as hot_heap_mark,
 };
 
@@ -708,6 +709,7 @@ fn invoke_admitted_accelerator_v3<'info>(
         .ok_or(TradingSbfError::AdmittedTransport)? = caller_authority.clone();
     let bump_seed = [bump];
     let [domain, release, market, role, authority_context, digest] = authority_seeds.as_slices();
+    hot_cu_checkpoint!("cx-accelerator-frame");
     invoke_signed(
         &buffers.instruction,
         &buffers.infos,

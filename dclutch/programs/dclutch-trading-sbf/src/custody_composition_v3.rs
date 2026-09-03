@@ -20,6 +20,7 @@ use solana_program::{
 };
 
 use crate::child_authority_v4::{PreflightedCallerBumpV4, child_caller_authority_v4};
+use crate::hot_v3::hot_cu_checkpoint_macro as hot_cu_checkpoint;
 use crate::{
     TradingSbfError,
     child_receipt_v3::{ReceiptDeliveryV3, deliver_receipt_dependency_v3},
@@ -156,6 +157,7 @@ pub fn execute_custody_route_v3<'info>(
     buffers.data.push(prepared.bump);
     buffers.data.extend_from_slice(&parent.child_relay);
     buffers.push_callee(custody_program)?;
+    hot_cu_checkpoint!("cx-custody-frame");
     let bump_seed = [prepared.bump];
     let [domain, release, market, role, context, digest] = prepared.authority_seeds.as_slices();
     buffers

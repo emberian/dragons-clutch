@@ -14,14 +14,16 @@ use dclutch_account_profile_contract::v2::{
     AccountPrestateV2, AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2,
 };
 use dclutch_capability_program_contract::{
+    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
     hot_v3::{
-        HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3,
-        HOT_DESCRIPTOR_RAW_ACCOUNT_V3, HOT_EFFECT_RAW_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3,
-        HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
-        HOT_LIFECYCLE_RAW_ACCOUNT_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3,
-        HOT_PORTFOLIO_RAW_ACCOUNT_V3, HOT_PRODUCT_RAW_ACCOUNT_V3, HOT_PROGRAM_SET_RAW_ACCOUNT_V3,
-        HOT_RENT_SYSVAR_ACCOUNT_V3, HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3,
-        HOT_STRATEGY_RAW_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3, HOT_TRANSITION_RAW_ACCOUNT_V3,
+        HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACTIVATION_CACHE_ACCOUNT_V3,
+        HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CORE_PROGRAM_ACCOUNT_V3, HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
+        HOT_EFFECT_RAW_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
+        HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3, HOT_LIFECYCLE_RAW_ACCOUNT_V3,
+        HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3, HOT_PORTFOLIO_RAW_ACCOUNT_V3,
+        HOT_PRODUCT_RAW_ACCOUNT_V3, HOT_PROGRAM_SET_RAW_ACCOUNT_V3, HOT_RENT_SYSVAR_ACCOUNT_V3,
+        HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3, HOT_STRATEGY_RAW_ACCOUNT_V3,
+        HOT_TRADING_PROGRAM_ACCOUNT_V3, HOT_TRANSITION_RAW_ACCOUNT_V3, HotBumpHintsV1,
         HotExecutionEnvelopeV3,
     },
     set_v2::{CapabilityDescriptorReferenceV2, CapabilityProgramSetV2, SelectorWidthV2},
@@ -32,6 +34,7 @@ use dclutch_capability_program_contract::{
     },
 };
 use dclutch_core_contract::ContentId;
+use dclutch_custody_contract::CustodyAuthoritySeedsV1;
 use dclutch_effect_kernel::v4::SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4;
 use dclutch_execution_strategy_contract::admitted_v3::{
     ADMITTED_ACCELERATOR_PROGRAM_ACCOUNT_V3, ADMITTED_STRATEGY_EVIDENCE_COUNT_V3,
@@ -41,6 +44,9 @@ use dclutch_execution_strategy_contract::v2::{
     AcceleratorTransportProfileV2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
     ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
+use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2};
+use dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1;
+use dclutch_release_set_contract::ExecutionRoleV1;
 use dclutch_request_profile_contract::SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1;
 use dclutch_trading_sbf::{
     admitted_composition_v3::admitted_caller_authority_count_v3,
@@ -162,7 +168,8 @@ pub fn build_dealer_lp_hot_instruction_v4(
         state.generation,
         hash(&root.account.data).to_bytes(),
     )
-    .map_err(|_| DealerLpHotOperatorErrorV4::Arithmetic)?;
+    .map_err(|_| DealerLpHotOperatorErrorV4::Arithmetic)?
+    .with_bump_hints(dealer_lp_hot_bump_hints_v4(state, &outer.trading_program)?);
     let mut data = Vec::with_capacity(
         HOT_FAMILY_REQUEST_OFFSET_V3
             .checked_add(family_request.len())
@@ -191,6 +198,85 @@ pub fn build_dealer_lp_hot_instruction_v4(
         action: request.action,
         selected_descriptor: descriptor_reference,
         family_request_digest: hash(family_request).to_bytes(),
+    })
+}
+
+/// Mine the bumps this family's readers would otherwise search for on chain.
+///
+/// `HotBumpHintsV1` has been read by Trading, the Dealer accelerator and
+/// Custody since it was added, and until now the ONLY producer that filled it
+/// was `direct_inline_v3` -- so every Dealer packet this tree has ever emitted
+/// carried the all-zero block, and every reader on the route searched. Each
+/// search is a `find_program_address` at 1,500 CU per rejected candidate, on a
+/// depth drawn from the fixture keys, and the Dealer LP route is the one
+/// running within a few thousand CU of the ceiling.
+///
+/// Run here it costs the caller nothing anybody measures, and each hint is
+/// reproduced with `create_program_address` against the account the frame
+/// supplies: a wrong byte derives a different address and refuses at an
+/// equality that was already there. No conjunct moves.
+///
+/// # Which slots are filled, and which are deliberately left searching
+///
+/// * `market` and `root` are read out of the frame this builder already
+///   validated, so both are exact.
+/// * `child_relay[1]` is Custody's transfer authority, whose seeds are the
+///   Market and the release set -- the same pair for every Custody leg on the
+///   walk, which is what makes ONE slot correct for a route with two of them.
+/// * `child_relay[0]` is Custody's own replay cursor, whose seeds end in the
+///   projected child request's replay context. This builder is handed the
+///   family request and does not project the children, so the slot stays zero
+///   and Custody searches, exactly as `direct_inline_v3` leaves the two child
+///   caller-authority slots zero for the same reason.
+/// * `lifecycle` is the LP lifecycle's created accounts, in materialization
+///   order, and is likewise not projected here.
+///
+/// A slot left zero is correct and merely slower; that is the whole contract
+/// of the block.
+fn dealer_lp_hot_bump_hints_v4(
+    state: &DealerLpHotStateV4,
+    trading_program: &Pubkey,
+) -> Result<HotBumpHintsV1, DealerLpHotOperatorErrorV4> {
+    let market_account = &fixed(state, HOT_MARKET_ACCOUNT_V3)?.account;
+    let core_program = fixed(state, HOT_CORE_PROGRAM_ACCOUNT_V3)?.account.key;
+    let market = CoreState::decode(&market_account.data)
+        .map_err(|_| DealerLpHotOperatorErrorV4::Artifact)?;
+    let market_bump = Pubkey::find_program_address(
+        &MarketCoreStateSeedsV2::new(market.identity).as_slices(),
+        &core_program,
+    )
+    .1;
+    let root_account = &fixed(state, HOT_ROOT_ACCOUNT_V3)?.account;
+    let root = CapabilityRootHeaderV1::decode(
+        root_account
+            .data
+            .get(..CAPABILITY_ROOT_HEADER_BYTES_V1)
+            .ok_or(DealerLpHotOperatorErrorV4::Artifact)?,
+    )
+    .map_err(|_| DealerLpHotOperatorErrorV4::Artifact)?;
+    let root_bump = Pubkey::find_program_address(&root.seeds().as_slices(), trading_program).1;
+    // Custody is not in the hot fixed frame; the Market's activation cache is,
+    // and it names the release set's Custody deployment.
+    let activation = &fixed(state, HOT_ACTIVATION_CACHE_ACCOUNT_V3)?.account;
+    let custody_program = Pubkey::new_from_array(
+        ActivatedExecutionReleaseSetViewV1::decode(&activation.data)
+            .map_err(|_| DealerLpHotOperatorErrorV4::Artifact)?
+            .role(ExecutionRoleV1::Custody)
+            .map_err(|_| DealerLpHotOperatorErrorV4::Artifact)?
+            .release()
+            .program()
+            .to_bytes(),
+    );
+    let transfer_authority = Pubkey::find_program_address(
+        &CustodyAuthoritySeedsV1::new(market_account.key.to_bytes(), state.release_set).as_slices(),
+        &custody_program,
+    )
+    .1;
+    Ok(HotBumpHintsV1 {
+        market: market_bump,
+        root: root_bump,
+        child_relay: [0, transfer_authority],
+        ..HotBumpHintsV1::ABSENT
     })
 }
 
