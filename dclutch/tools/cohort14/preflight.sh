@@ -122,6 +122,56 @@ fi
 echo "  expected ELF digest                                        $accelerator_digest"
 echo
 
+# 3b. THE PROVIDER RELEASE THE MARKET WILL PIN.
+#
+# COHORT-14 PAID FOR THIS ONE. A sponsored market pins Pyth's Receiver and push
+# oracle by exact (ProgramData, deployment_slot, upgrade_authority) equality --
+# `authenticate_provider_program_pin` -- because rehashing 1.64 MiB on every
+# capture is not a transaction path, so Loader-v3's monotonic slot is the proxy
+# and any byte-changing upgrade fails closed as `ReleaseSuperseded`.
+#
+# Pyth redeployed their devnet Receiver at slot 491,006,444. Cohort-13 was
+# founded 4.36 days after that and cohort-14 5.64 days after it, both against a
+# release pinning 487,855,452, and BOTH markets are permanently uncapturable
+# because a market pins its provider release AT FOUNDING. Cohort-14 found it by
+# running a capture at a time it was guaranteed to refuse and reading WHICH
+# refusal came back: 0x8014, not ProviderWindow.
+#
+# This is two u64 comparisons and one RPC read. It would have refused cohort-13's
+# founding, cohort-14's founding, and cohort-14's capture.
+echo "the Pyth provider release a sponsored market would pin"
+pinned_receiver_slot="$(sed -n 's/.*receiver_deployment_slot: \([0-9_]*\),.*/\1/p' \
+    crates/dclutch-pyth-svm/src/sponsored_push.rs | tr -d '_' | head -1)"
+pinned_push_slot="$(sed -n 's/.*push_oracle_deployment_slot: \([0-9_]*\),.*/\1/p' \
+    crates/dclutch-pyth-svm/src/sponsored_push.rs | tr -d '_' | head -1)"
+say "release pins receiver slot" "${pinned_receiver_slot:-<not found>}"
+say "release pins push oracle slot" "${pinned_push_slot:-<not found>}"
+if [ -n "$rpc_url" ]; then
+    live_slot() {
+        curl -sS -X POST -H 'content-type: application/json' \
+            -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getAccountInfo\",\"params\":[\"$1\",{\"encoding\":\"base64\",\"commitment\":\"finalized\",\"dataSlice\":{\"offset\":4,\"length\":8}}]}" \
+            "$rpc_url" 2>/dev/null |
+            python3 -c 'import base64,json,struct,sys
+value=json.load(sys.stdin).get("result",{}).get("value")
+print(struct.unpack("<Q", base64.b64decode(value["data"][0]))[0] if value else "")' 2>/dev/null
+    }
+    for entry in "receiver 96QrNCjmh32H9quY9DX4NEH81nECVsbkATBDZeoVbvLV $pinned_receiver_slot" \
+                 "push-oracle 8xAeURaAWExxyHUXJSgjsg5r96Ydr3G4cek2if7imQmz $pinned_push_slot"; do
+        set -- $entry
+        observed="$(live_slot "$2")"
+        if [ -z "$observed" ]; then
+            fail "pyth $1 slot" "the endpoint did not answer; NOT CHECKED is not a pass"
+        elif [ "$observed" = "$3" ]; then
+            pass "pyth $1 deployment slot" "$observed"
+        else
+            fail "pyth $1" "SUPERSEDED -- pinned $3, live $observed; every capture refuses 0x8014 ReleaseSuperseded"
+        fi
+    done
+else
+    say "pyth deployment slots" "not checked (pass --rpc-url to make two reads)"
+fi
+echo
+
 # 4. THE ORDER, which is the one thing cohort-12 got wrong and cohort-13 fixed.
 echo "the ordering rule this runbook exists to hold"
 if grep -q "^04	seal" tools/cohort14/steps.tsv && grep -q "^05	found-direct" tools/cohort14/steps.tsv; then

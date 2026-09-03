@@ -636,3 +636,261 @@ byte, no release set and no plan; they are the prepay's send path and its report
 authenticator, and they are named wherever their output is used.
 
 Devnet evidence. Not mainnet evidence.
+
+---
+
+## Addendum: THE GENERAL MARKET IS STRANDED, and the cause is one shared keypair
+
+Written the same night, after §16 item 3 was attempted. **Devnet evidence. Not
+mainnet evidence.**
+
+### What worked
+
+The compiler is green and its output is checkable. All six inputs were built
+rather than borrowed:
+
+| input | bytes | sha256 |
+| --- | ---: | --- |
+| `policy.json` | 613 | `6b3b64118a017e32b63b89c12030d191e3f586fc7e6f46b12a7dc4a7acd67d88` |
+| `selection-policy.txt` | 621 | `397123cc49f5a2ca565886610a723d9afc5dcd13ec0c1faac1b4a23f9e4a3e71` |
+| `compiler-release.txt` | 1,214 | `e3797097f3fc3b8f801f3c13099038d0aa152054c4ff95a2ae4075f3e2f55a7a` |
+| `toolchain.txt` | 1,206 | `83c5b639c8c38437ca56f28642f2da82c0cdfec244fe6544685784d5a93f8437` |
+| `translation-validation.bin` | **688** | `aa97c0c10a98248f9ada4dccc96a5a4e969073cb57ded04340efe21b6996f4f8` |
+| `price-update.bin` | 134 | `0d39fbbb1d1d0556b0fb2ed08fdbe9305dca0b8e63cba09595a177ac17338edb` |
+
+The translation validation is a real one, not a placeholder: `lake build` (134
+jobs) then `tools/direct-translation-validator/check.sh` ran green, and
+`dclutch-release-tool create-translation` minted the canonical 688-byte
+`CheckedTranslationValidationV1` over its evidence directory. It remains
+**Direct-shaped** — there is no General translation-validation corpus — which is
+a claim about a different program and is named again here rather than quietly
+inherited.
+
+`devnet-general-market` compiled a 231,095-byte `market.json`, and
+`accelerator-observation.txt` reports **`deployment_slot 491959038`**, the
+runbook's verifier, with `elf_digest 61b2d73d…`. Its
+`artifact_release_id dcce810097111f696e4888ef89385fc0e1e1c24d89818ca040d950d1daec5b94`
+is **byte-identical to the `content_sha256` of the record the ladder finalized**
+in §5 — two independent authors, one digest, neither reading the other.
+
+### THE WALL: the founding source funder is a PER-MARKET identity, and nothing says so
+
+The founding ran 530 transactions over 68 minutes and refused:
+
+```
+fund the founding principal supplier and its rent-capacity witness:
+  Error processing Instruction 3: custom program error: 0x0
+  Create Account: account G2dfBofaGFRtTSsWiwNeibD7niwoMS9XsLUAFC1c93uJ already in use
+```
+
+`Custom(0)` is below `0x1000`, so by decision 0007 it is **not ours** — it is the
+System program refusing to create an account that exists. And
+`G2dfBofaGFRtTSsWiwNeibD7niwoMS9XsLUAFC1c93uJ` is this lane's
+`founding-source-funder`, read back off chain as a **165-byte Token-2022 account
+holding 1,855,569 lamports of rent — created by the DIRECT founding four hours
+earlier.**
+
+So the founding principal supplier's keypair is not a campaign credential that
+signs; it is an identity the founding **creates a token account at**. A second
+market founded with the same keypair collides on `CreateAccount` at the first
+funding instruction after every record has been published.
+
+**Nothing in this tree says so.** The runbook's step 3 reads *"Found through the
+ordinary founding campaign with `market.json` as the market input… nothing about
+the founding driver changes"*, which is true of the driver and false of the keys.
+The collateral mint and wallet are obviously per-market and were freshly
+generated; the source funder and the projection witness look like campaign
+identities and are not. The projection witness `AkSjTgMKq94r6ssds2Fgj4rAsExgACxAa3uU6QPmqHzJ`
+also carries 3,141,168 lamports from the Direct founding and would have been the
+next collision.
+
+### And the collision lands where NO resume exists
+
+This is the part worth keeping. The refusal is not merely expensive, it is
+terminal for that market, because of exactly where in the ladder it falls.
+
+A fresh evidence path refuses, correctly:
+
+```
+this founding has STARTED on this chain (the Open Market does not exist at
+DL675bt1dmQQ87UeGBCnmV1zQTWsvd7jbwLmVqT2tsW9 but this founding has started:
+collateral mint 2si3RLx8…, collateral wallet FuRBL5tx…,
+realm record Bji6ADSm…, Found31 Market JEG8H7qS…)
+```
+
+and resuming the original evidence path refuses, also correctly:
+
+```
+…but no compatible durable DCLTPCB2 checkpoint authenticates a safe suffix resume
+```
+
+**The collision falls after the collateral mint, the collateral wallet, the Realm
+record and the Found31 Market are on chain, and before the DCLTPCB2 checkpoint
+that would authenticate a suffix resume.** Both doors are shut and both are shut
+for good reasons. Read back off chain:
+
+| account | state |
+| --- | --- |
+| General Open Market `DL675bt1dmQQ87UeGBCnmV1zQTWsvd7jbwLmVqT2tsW9` | **AccountNotFound** — never created |
+| Found31 Market `JEG8H7qSJGxiCSKpXr2pg6oSPrTofoiHjLjX7RCiDdWK` | 368 B `DCLTCOR3`, Core-owned |
+| Realm record `Bji6ADSmRReUu8B9Fw6h7PdEZgSJB7AfXpcuvzD6B1Rg` | 112 B `DCLTRLM1`, Registry-owned |
+| collateral Mint `2si3RLx8qxJPfsw2kStZGQoxuAkKuw2nJwFASf5M96kS` | 82 B, Token-2022 |
+
+**No third attempt was made.** A third founding would need a fresh mint, wallet
+and realm against a Market PDA whose partial state is already on chain, and that
+is improvising past an irreversible boundary. This lane stops here and says so,
+which is the same call cohort-13 made at its own wall.
+
+### What it cost, and what it did not
+
+**Cost: 0.812936971 SOL**, all from the campaign payer, against a 2 SOL
+per-step bound. It is the most expensive step after the deploy and it bought a
+finding rather than a market.
+
+**One deliberate movement of the deployer, recorded rather than hidden.** §14's
+sentence *"the deployer moved for its own deploy and its own ladder and nothing
+else"* held until this step and no longer does. With the payer at 0.790 SOL and
+the founding still running, the payer was topped up by **1.000000000 SOL**
+(signature `1iN4spgqNpJJddLdMNajrrL5LhigpUEfg6CECZVcNqvHXFjYtMhf8qrt9LMFhT9duUzjP9Wb8zjCchcMkKvxtku`),
+deployer **30.271732270 → 29.271727270**. That was a judgement call: a founding
+that dies for want of lamports is the failure this project has paid for
+repeatedly, and 1 SOL is cheap against it. The §14 table is correct up to and
+including the fee settlement; this is the movement after it.
+
+**It cost the Direct market nothing.** Re-read after the wall: Market
+`FgzbVSWVp36R…` still `0x01` Open / `0x02` Consumed / generation 2 / release set
+`398e51c0…`; activation root `8hRZFfmR…` still a 256-byte `DCLTCRT1`; the
+certificate seat still holds 2,786,520 lamports. The relay is unaffected.
+
+### Owed, precisely
+
+1. **Per-market founding identities, stated where a caller reads.** The campaign
+   should either derive the source funder and the projection witness per market,
+   or refuse at plan time when the supplied keypair already holds an account —
+   a check it can make offline, for free, before publishing 530 transactions
+   worth of records. The refusal it earns today is a System `Custom(0)` seven
+   hundred lines from anything that names a market.
+2. **A resume for a founding that dies before DCLTPCB2.** Cohort-13's recovery
+   step closed the case where a founding dies *after* Open; this is the case
+   where it dies *before the first checkpoint*, and the same argument applies:
+   the journal records what landed, and re-reading live accounts a later stage
+   was going to create is not the check it looks like.
+3. The General market itself — compile inputs are built and verified and are
+   reusable as they stand; only the founding needs fresh per-market keys and a
+   Market PDA whose partial state has been dealt with.
+
+Devnet evidence. Not mainnet evidence.
+
+---
+
+## Addendum: THE CAPTURE CANNOT SUCCEED, and it never could have — Pyth's Receiver was redeployed before cohort-13 was founded
+
+**Devnet evidence. Not mainnet evidence.** This is the most important thing this
+lane found, and it retroactively corrects cohort-13's resolution narrative.
+
+### What happened
+
+The relay runner was armed to wait for the window and fire. Its bounded wait
+refused (see below), so the capture ran immediately — **three hours and
+forty-five minutes before the window opens** — and the deployed Resolution
+program refused it in simulation, spending nothing:
+
+```
+Program 5ML5pbUfCaDwokNtmLyTgDEb7eHrfDRrW4PmktXAmphs
+  consumed 101787 of 1399700 compute units
+  failed: custom program error: 0x8014
+```
+
+**`0x8014` is not a window refusal.** Band 8 is Resolution and `0x8014` is
+`ResolutionError::ReleaseSuperseded` (`lib.rs:120`) — read from the enum, not
+guessed from the number. An out-of-window capture would have been
+`ProviderWindow`, and a late one `ProviderFreshness`. This is neither.
+
+### Where it comes from, in one function
+
+`sponsored_push_v1.rs::authenticate_provider_program_pin` pins the Pyth
+**Receiver** and **push oracle** programs by exact
+`(ProgramData address, deployment_slot, upgrade_authority)` equality, and its own
+doc comment says why: rehashing 1.64 MiB of ProgramData on every capture is not a
+viable transaction path, so Loader-v3's monotonic deployment slot is used as the
+proxy and *"any byte-changing upgrade fail[s] closed as `ReleaseSuperseded`"*.
+
+Read off chain, and read off **this market's own release record** rather than
+out of a constant:
+
+| | pinned by the market | live on devnet |
+| --- | ---: | ---: |
+| Pyth **Receiver** deployment slot | **487,855,452** | **491,006,444** |
+| Pyth push oracle deployment slot | 293,898,740 | 293,898,740 — **matches** |
+
+The market's copy is `HnxCroTCtgkoaqA57kyyGrLmBxGM9ar3L6KidaRi7N8G`, 592 bytes,
+carrying `receiver_deployment_slot` at **offset 560** and
+`push_oracle_deployment_slot` at **offset 568**. Its source is the tree's
+`PythSponsoredPushReleaseV1` constant at
+`crates/dclutch-pyth-svm/src/sponsored_push.rs:500`.
+
+**Pyth redeployed their Receiver on devnet.** The push oracle did not move,
+which is what makes this a reading rather than an inference: one of the two pins
+is exact and the other is 3,150,992 slots stale. The protocol failed closed,
+correctly, and no timing could have avoided it.
+
+### AND IT WAS ALREADY STALE WHEN COHORT-13 WAS FOUNDED
+
+| | slot | relative to Pyth's redeploy |
+| --- | ---: | --- |
+| Pyth Receiver last deployed | 491,006,444 | — |
+| **cohort-13's registry deployed** | 491,947,648 | **4.36 days later** |
+| **cohort-14's registry deployed** | 492,225,646 | **5.64 days later** |
+
+Cohort-13's resolution addendum concluded that its window closed unobserved and
+that *"the honest observation for this window is permanently unavailable"*, and
+attributed the outcome to timing: *"No code was wrong. Nothing ran at the right
+time."* **That is true and it is not the whole cause.** Cohort-13's capture would
+have refused `ReleaseSuperseded` at any second of its window, because the release
+its market pinned was already four days out of date at founding. The lane that
+followed built `devnet-sponsored-relay-schedule-v1` to fix the timing — good work
+that this cohort used and that is still owed — and the wall in front of the
+timing was never reached, because nobody ran a capture inside a window to meet
+it. **Cohort-14 ran one outside the window, and met it early instead.**
+
+That is the useful shape: an instrument aimed at the wrong conjunct reported
+truthfully and left a nearer cause unmeasured. The thing that exposed it was
+running the action at a time when it was *guaranteed* to refuse and then reading
+**which** refusal came back.
+
+### What this costs, and the one thing it does not authorize
+
+- **The Direct market `FgzbVSWVp36R…` cannot be captured**, so it cannot reach
+  `Resolved`, so its only reachable terminal is the funded failure walk.
+- **The failure walk was NOT run.** It is reachable — cohort-13 proved that, and
+  this cohort's certificate seat is already prepaid, so it would commit. It is
+  not run because the runbook says so and the reason is a product reason, not a
+  technical one: kind 4 means the honest observation was never captured, the
+  founder keeps the pot, and *"shipping it twice would make an oracle outage into
+  founder revenue a second time."* This lane stops at the wall rather than
+  walking through the only door left open.
+- **Nothing was spent.** The refusal was a simulation failure; the campaign payer
+  is unmoved at 1.708618131 SOL across the whole attempt.
+- **The fill, the settlement and the census are unaffected.** They never touch
+  the provider pin.
+
+### Owed, and none of it is repairable inside this market
+
+1. **Re-mint `PythSponsoredPushReleaseV1` against the live Pyth deployment**, and
+   give the constant a check that fails at PLAN time rather than at capture time.
+   The staging tool reads the cluster already; comparing two `u64`s before
+   founding a market against a superseded provider costs one RPC read and would
+   have refused cohort-13's founding, cohort-14's founding, and this capture.
+2. **A market pins its provider release at founding**, so this is not fixable for
+   `FgzbVSWVp36R…` or for `6t3Znm…`. It is fixable for cohort-15, which should
+   not be founded until (1) lands.
+3. **A third-party deployment is an event this protocol has no watcher for.**
+   The pin is right and the fail-closed behaviour is right; what is missing is
+   anything that notices the supersession before a market is founded on top of it.
+4. `devnet-sponsored-relay-schedule-v1 --wait` refused with
+   `--max-wait-seconds 25000` and the runner then proceeded to act anyway. The
+   wrapper's fault is real and worth naming — a wait that refuses must stop the
+   sequence, not fall through it — and in this case falling through is the only
+   reason the supersession was found tonight instead of at 06:12 UTC.
+
+Devnet evidence. Not mainnet evidence.

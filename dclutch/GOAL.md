@@ -3691,3 +3691,20 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   prelude is a chain, so the repair is a MOVE (Trading passes the chain's outputs in the signed request, ~15k) — designed,
   priced, not built. → DEALER **`(spawned)`**: the move, Custody's rule, the Remove committing.
 - Cuts: `6aaac305c`, `cac7dee28`.
+
+### 2026-09-03 00:30 EDT — COHORT-14 DEPLOYED, SEALED, FILLED
+- COHORT-14 closed (~660k; `ab0322d50`, `3e5e0b0be`, `0925a5e81`, `4c8ff809e`, `6ba66dc7f`, `e615593fc`; evidence
+  docs/evidence/COHORT14_SEALED_FOUNDED_FILLED_2026_09_03.md): cohort-13 closed (42.08 reclaimed, exact); seven programs
+  from 8e96ec3f8 byte-identical three ways, 42.245 SOL against a 42.245 projection; ladder 36 tx, **ten record bodies incl.
+  the accelerator's ArtifactRelease** (slot 491,959,038 read off the account); **sealed at 0.000000000 SOL** before founding;
+  Direct market FgzbVSWV… founded (0.3366 SOL — cohort-13's to the lamport) with **the Realm carrying release 430369ce… — a
+  wallet's ATA can be paid**; activated; admissions; **fill 1,284,573 CU** (−1,614 vs cohort-13 on a larger ELF); fee
+  settled; **census L1–L6 + L8 HOLD**, L7 inapplicable by name. The prepay arm had only ever been planned — broke twice,
+  fixed. **Two walls:** the General founding collided with the Direct one on a shared `founding-source-funder` identity
+  (stranded, 0.81 SOL); and **no capture on this cohort can succeed — Pyth redeployed their devnet receiver at slot
+  491,006,444 and every market's release record pins 487,855,452** (0x8014 ReleaseSuperseded; 4.36 days before cohort-13's
+  founding — the true cause behind cohort-13's unobserved window); a plan-time preflight landed and is red today.
+  Deployer 29.271727270, payer 1.708618131. → COHORT-14B **`(spawned)`**: per-market funder, re-mint the sponsored-push release
+  against the live receiver, found a new Direct market and the General market, OpenBatch on chain, the in-window relay, an
+  honest resolution, the first ATA payout.
+- Cuts: `1397f512f`, `749e72a33`.
