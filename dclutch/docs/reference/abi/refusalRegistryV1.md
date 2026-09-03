@@ -191,7 +191,7 @@ export const REFUSAL_CODES_V1: ReadonlyArray<RefusalCodeV1> = [
   { code: 0x518D, name: "ClaimsFoundingSbfErrorV5::PermitBody", meaning: "The permit's authorization of this intent and request, or the intent's own agreement with the request it authorizes, refused.", band: "claims" },
   { code: 0x518E, name: "ClaimsFoundingSbfErrorV5::ActivationCache", meaning: "The account handed as the Registry activation cache is not the canonical cache for this request's release set, or its body did not decode.", band: "claims" },
   { code: 0x518F, name: "ClaimsFoundingSbfErrorV5::RoleDeployment", meaning: "An activated role's observed on-chain deployment is not the one its activation admitted.", band: "claims" },
-  { code: 0x5190, name: "ClaimsFoundingSbfErrorV5::ReleaseSuperseded", meaning: "The activated release generation was superseded: the observed program's pinned deployment slot moved, so the substrate was upgraded.", band: "claims" },
+  { code: 0x5190, name: "ClaimsFoundingSbfErrorV5::ReleaseSuperseded", meaning: "The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot.", band: "claims" },
   { code: 0x5200, name: "SignedDeltaSbfErrorV3::Instruction", meaning: "Instruction bytes did not decode as the canonical public ABI.", band: "claims" },
   { code: 0x5201, name: "SignedDeltaSbfErrorV3::Accounts", meaning: "Account count, order, privileges, owners, or aliases refused.", band: "claims" },
   { code: 0x5202, name: "SignedDeltaSbfErrorV3::Release", meaning: "Registry current-release authentication or caller authority refused.", band: "claims" },
