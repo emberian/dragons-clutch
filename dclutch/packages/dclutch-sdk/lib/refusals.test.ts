@@ -61,16 +61,18 @@ describe('refusal band arithmetic', () => {
 });
 
 describe('the supersession story decision 0012 registered', () => {
-  it('is one meaning carried by exactly the seven reader bands, so no client invents its own', () => {
+  it('is one meaning carried by exactly the eight reader entries, so no client invents its own', () => {
     const rows = REFUSAL_CODES_V1.filter((entry) => entry.name.endsWith('::ReleaseSuperseded'));
-    // Decision 0012 gave one discriminant per reader program. It was eight
-    // until `dclutch-dealer-sbf` was deleted on 2026-09-02 and band 7 retired,
-    // which took `dealer 0x700A` out of refusals.md and left this list — and
-    // the registry crate's own `BANDS.len()` assertion — naming a program that
-    // no longer exists. If a reader ever grows one, this number moves
-    // deliberately rather than by accident.
-    expect(rows.map((entry) => entry.code)).toEqual([0x100D, 0x200B, 0x3010, 0x4007, 0x500A, 0x600C, 0x8014]);
-    expect(rows.map((entry) => entry.band)).toEqual(['registry', 'rent', 'core', 'trading', 'claims', 'custody', 'resolution']);
+    // Decision 0012 gave one discriminant per reader. It was eight until
+    // `dclutch-dealer-sbf` was deleted on 2026-09-02 and band 7 retired (which
+    // took `dealer 0x700A` out of refusals.md), seven until 2026-09-03, when
+    // the Claims founding route's one coarse `Release` became named accusations
+    // (1b4e5d310) and gained its own `ReleaseSuperseded` at 0x5190 — a second
+    // entry in the claims band, because that program carries two entry
+    // families. If a reader ever grows one, this list moves deliberately rather
+    // than by accident.
+    expect(rows.map((entry) => entry.code)).toEqual([0x100D, 0x200B, 0x3010, 0x4007, 0x500A, 0x5190, 0x600C, 0x8014]);
+    expect(rows.map((entry) => entry.band)).toEqual(['registry', 'rent', 'core', 'trading', 'claims', 'claims', 'custody', 'resolution']);
     expect(new Set(rows.map((entry) => entry.meaning)).size).toBe(1);
   });
 
