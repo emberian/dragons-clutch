@@ -3719,3 +3719,19 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   uncommitted lines and a capture pair) — replayed from context, 1.5 h lost; rule recorded in memory.
   → DEALER **`(spawned)`**: the last 49,000; frontier's real-ELF hostiles; v2_generator_fresh on hbox.
 - Cuts: `a3a0222de`, `59d30010e`.
+
+### 2026-09-03 01:30 EDT — THE PARTIAL EQUITY REMOVE COMMITS
+- DEALER closed (`c81c94d91`, note `2e3595040`): **lp-hot, 1,397,966 of 1,399,700, success — all three child routes and the
+  whole commit tail, 1,970 spare** — on a draw; three re-runs on the identical ELF set put it back twice and once cleared it
+  AND the two LP final Removes behind it (never reached). Findings correcting the note: `acc-product-runtime` was 77% PDA
+  SEARCH (draw-free ≠ search-free — the seeds are fixture digests) — the prelude witness now carries the eight bumps Trading
+  derived (−17,467); **the Dealer family had never mined a bump hint** (only direct_inline did; −9,000 host-side); the
+  shortfall was ~82,000 not 49,000 (the note sized the tail on the Add). The inter-child block decomposed: ~133,000 is the
+  runtime's own CPI charge. A second wall reports the same 30/1 — a scenario-checkpoint page at 1,305,050 goes over on an
+  unlucky draw before the Remove is reached, decided by the test caller's two unhinted searches. Add headroom 386,000.
+  Owed: frame rows (ratchet RED at c81c94d91); v2_generator_fresh; the rejoin hostiles belong in accepted.rs not frontier.rs;
+  Trading's own Product-graph walk (~18,000) wants `StateBumpsV1` (Core, Lean layout, migration → cohort-15).
+  → DEALER **`(spawned)`**: rows first, the test caller hinted (a deterministic campaign), StateBumpsV1, the hostiles.
+- Credential check: the Helius key is absent from the repo, its history and the cut; two local job-dir files that captured
+  it (a founding log; cohort-13's sim-config) redacted in place; the staging generator now refuses to emit it (674a7873e).
+- Cuts: `1d3deeb80`, `29cd4639c`, `ac1e1b655`.

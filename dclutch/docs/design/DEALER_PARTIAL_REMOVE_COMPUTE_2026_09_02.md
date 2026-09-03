@@ -1174,3 +1174,226 @@ that was running at 83 per cent of the ceiling when this note was written.
 
 The first is the one this note already owns an author for. The second is the
 largest single remaining number inside the accelerator and has never been read.
+
+## Fifth addendum, 2026-09-03: the Remove COMMITS, the shortfall was a third larger than this note said, and one span was 77 per cent search
+
+*Measured at `4542a9e8a` (before) and `c81c94d91` (after), tree root
+`/Users/ember/dev/dclutch`, real SBF ELFs built in this lane's own worktree with
+its own target directory, **zero SBF stack-frame-overwrite diagnostics on every
+one of the six links built for every figure below**. Dealer accelerator campaign
+30 passed / 1 failed throughout.*
+
+### The action commits
+
+    census lp-hot legacy=3557 v0=1406 unique_locks=71 ... data=1048
+    Program F48Umd... consumed 1397966 of 1399700 compute units
+    Program F48Umd... success
+
+Every one of the three child routes executed, and so did the whole commit tail:
+`commit-lifecycle-closes` 1,524, **`commit-non-root` 80,216**, `commit-root`
+2,965, `after-commit` 2,387, finishing with **1,970 CU**.
+
+**And it does not do it on every draw.** Three re-runs on the IDENTICAL ELF set,
+which redraw only the fixture payer: two put the Remove back over the ceiling at
+1,399,692, and the third cleared it AND the two LP final Removes behind it
+(1,388,948 and 1,382,950) that no run of this test has ever reached. The margin
+is smaller than one `create_program_address` iteration. **"Commits" here means
+"is inside the ceiling on a favourable draw", not "is inside it."**
+
+### The shortfall this note has been quoting was a third too small
+
+`4bfe5394b` measured the commit tail END TO END ON THE EQUITY ADD -- 48,536
+`commit-non-root` + 2,498 + 2,387 + 226 = 53,647 -- and concluded the Remove was
+"short by about 49,000". The Remove's own `commit-non-root` is **80,216**,
+because it commits more accounts, so its tail is **86,332** and the true
+shortfall at `742d7b7be` was about **82,000**. Every "the next 49,000" figure in
+the fourth addendum is a third low. The lesson is the one this note keeps
+re-learning at a different joint: a span measured on the neighbour is an
+estimate, and it must be labelled one.
+
+### `acc-product-runtime` was 77 per cent PDA SEARCH, and this note reasoned the opposite
+
+The fourth addendum's table says of this row: *"not measured; the span is
+draw-free, so it is decode and not search."* **Draw-free and search-free are not
+the same property, and the inference is wrong.** `authenticate_record` runs TWO
+`find_program_address` calls per record -- raw body and staging cursor -- and the
+Product graph walk covers four records. Their seeds are a PDA domain, a
+canonical schema id and a **content digest**: fixture data, none of which moves
+with the release-set id. So the eight searches run at a FIXED depth that is
+identical across every ELF, which is exactly what "draw-free" observes.
+
+Priced by doubling them, on real ELFs:
+
+| | `acc-product-runtime` |
+|---|---:|
+| the span, on nine invocations of one run | 39,217 |
+| the same span with the eight searches doubled | **69,389** |
+| **so the searches are** | **30,172 (77%)** |
+| and the four hashes, four decodes and the identity join are | 9,045 |
+
+### What that bought, and what it costs to keep
+
+The Dealer accelerator runs this walk a SECOND time, independently, over the
+same four Registry records its caller authenticated a few thousand instructions
+earlier. `admitted_composition_v3` now relays the eight bumps its own prelude
+derived, in the prelude witness's header, and the accelerator reproduces each
+address with `create_program_address`:
+
+| | before | after |
+|---|---:|---:|
+| `acc-product-runtime` | 39,217 | **21,750** |
+
+**−17,467, draw-free on both sides.** The residual 12,000 is eight
+`create_program_address` calls at 1,500 each, which is that design's floor: a
+hint does not make a derivation free, it makes it O(1). That is why the probe's
+30,172 and the landed 17,467 are different numbers, and quoting the first as the
+saving would have been wrong by 12,000.
+
+**Nothing moves in what is authenticated.** Each bump is fed to a derivation
+over seeds the accelerator builds for itself, and the address is compared
+against the account the frame supplied by the equality that was always there.
+Canonicality is enforced where the record is MADE -- the Registry writes
+finalized records only at the canonical bump -- so a non-canonical hint names an
+address at which no Registry-owned record exists.
+
+**Reading a hint must not be able to refuse, and `frontier` said so.** The first
+version decoded the witness before the Product walk and propagated its error;
+`frontier`'s marker moved from `AcceleratorArtifact` back to
+`AcceleratorRuntimeView` -- a hint reader reporting a conjunct it does not own.
+`accelerator_record_bump_hints_v4` is total: an unreadable witness yields the
+absent bank and the walk searches exactly as it used to, while the witness's own
+decode still refuses by name for every field it owns.
+
+### The Dealer family had never mined a single bump hint
+
+`HotBumpHintsV1` has been read by Trading, the accelerator and Custody since it
+was added, and **the only producer that ever filled it is `direct_inline_v3`**.
+Every Dealer packet this tree has emitted carried the all-zero block and every
+reader on the route searched. This is the producer-missing shape: reader,
+schema and fallback all built, producer never written for this family, and
+nothing goes red because the fallback is correct and merely slower.
+
+`dealer_lp_hot_v4` now mines `market`, `root` and Custody's transfer authority.
+Being HOST-side, the ELFs stay byte-identical and the draw does not move, which
+makes the reading exact: **`cu-transfer-validated` falls by 4,500 on BOTH Custody
+legs**, and every other movement in that run is a whole number of iterations in
+both directions, because the request digest changed and the caller-authority
+depths redrew. **The hint is 9,000; the rest was the draw.**
+
+`child_relay[0]` (Custody's own replay) and `lifecycle` stay zero: this builder
+is handed the family request and does not project the children, which is where
+`direct_inline_v3` leaves its two child caller slots for the same reason.
+
+### The inter-child block, decomposed
+
+`4bfe5394b` priced it at 25,247 + 41,492 + 41,492 and called it "Trading's CPI
+account-passing rather than anyone's authentication". Six new checkpoints --
+`cw-dependencies`, `cw-child-returned`, `cw-banked`, `cx-custody-frame`,
+`cx-claims-frame` and `cx-accelerator-frame` -- say what it actually is:
+
+| | CU |
+|---|---:|
+| Trading builds the accelerator's frame and request | 44,862 |
+| the runtime's CPI charge + the accelerator's entry | 77,743 |
+| Custody leg 0: dependencies 4,364, frame 7,314 | 11,678 |
+| the runtime's CPI charge + Custody's entry | 14,263 |
+| Custody returns: 3,541 + banked 2,932 + next deps 2,176 | 8,649 |
+| Trading builds the Claims frame | 16,134 |
+| the runtime's CPI charge + Claims' entry | 26,986 |
+| Claims returns: 11,417 + banked 3,572 + next deps 6,148 | 21,137 |
+| Custody leg 2: frame 7,474 | 7,474 |
+| the runtime's CPI charge + Custody's entry | 14,263 |
+| Custody returns: 3,486 + banked 2,952 | 6,438 |
+
+**About 76,000 is Trading building four child frames, about 133,000 is the
+RUNTIME's own charge for passing seventy-four accounts four times, and about
+34,000 is the receipt bank and the provenance derivation between children.**
+Only the first of those three is anyone's to cut, and the row that called the
+whole block "Trading's CPI account-passing" was attributing the runtime's price
+to us.
+
+### A SECOND WALL IN THIS TEST, and it has been misreported as the first
+
+`accepted.rs:2407` -- *"every page must commit"* -- is a scenario-checkpoint page
+whose own comment already names itself as DEBT: pages 0 and 1 cost **1,192,550
+and 1,305,050** of a 1,399,850 ceiling. On an unlucky draw page 0 goes over and
+the test dies there, **having never reached the Remove at all**.
+
+That is what the predecessor lane's own `campaign-acc4` run did on 2026-09-03,
+and it was reported as "30 passed / 1 failed, the failure still this Remove"
+because the COUNT was unchanged. **Two different walls in one test produce the
+same 30/1**, and which one fires is decided by the deployed ELF set, because
+`release_set_id` hashes it -- including the test caller, whose only difference
+between two lanes was the absolute path of the worktree it was built in.
+
+The page's cost is dominated by hashing every observation account's complete
+data, on top of two unhinted `find_program_address` calls whose depth is drawn:
+`require_checkpoint_pda` and the membership manifest PDA. **Hinting those two is
+what would make this test's outcome reproducible at all**, and it is owed.
+
+### Where the wall is now
+
+| | CU |
+|---|---:|
+| entry through `before-commit` | 987,877 |
+| **Custody route 0**, its dependencies, frame build, CPI charge and receipt | 93,943 |
+| **Claims route 1**, the same four | 135,003 |
+| **Custody route 2, the merge**, the same four | 93,815 |
+| **the commit tail** -- 1,524 + 80,216 + 2,965 + 2,387 | 87,092 |
+| **remaining** | **1,970** |
+
+and the neighbours: the two Add-shaped transactions in that run consume
+1,012,702 and 1,013,314 of 1,399,700 -- **386,000 CU of headroom**, against
+367,000-374,000 at `742d7b7be`.
+
+### What remains, priced
+
+| candidate | CU | measured? |
+|---|---:|---|
+| **Trading's OWN Product graph walk**, the twin of the one just hinted, inside `root-product` | **~18,000** | the search is measured at 30,172 and a hinted walk keeps 12,000 |
+| the shared permission bank: `p7e-permissions` retired outright plus part of `pf-composition`'s third walk | 15,000 - 25,000 | the 14,800 row is measured; the ceiling is not |
+| the three child caller-authority searches in `pf-invocation-preflighted` | 26,820 in this run | measured, but `HotBumpHintsV1` has two `child_caller` slots and this route has three children |
+| Trading's four child frame builds | ~76,000 | measured, and now split from the runtime's charge |
+
+**The first row has an owner and no channel.** Trading's prelude cannot be
+hinted from the packet: `HotBumpHintsV1` is family-neutral, all eight slots are
+allocated, and its own doc records why the envelope cannot grow. The right
+carrier is the one this tree already built for exactly this shape -- the Market's
+`StateBumpsV1`, which carries `market`, `realm_raw_record` and
+`realm_staging_record`, three bumps of a Registry record pair, for precisely
+this reason. It is one record family short of covering the Product graph.
+Widening it is a Lean-emitted persisted layout and a migration, so it is Core's
+and not a lane's.
+
+**Author:** the Market's `StateBumpsV1` widening is Core's, jointly with
+`dclutch-product-runtime-v2-svm-reader`'s, which now has the hinted entry point
+waiting for it.
+
+### The witness's two caller-composed banks: one has a consumer, one does not
+
+Asked what remains for "the alias row", I could not find a row under that name
+in this note, so here is what the alias machinery actually does after this
+commit, verified rather than guessed:
+
+- **the representative bank HAS a consumer and it is load-bearing.** It is the
+  per-logical-coordinate route-alias table, and
+  `accelerator_runtime_observations_digest_v4` walks it to take the digest that
+  binds the runtime slice. It is committed one level in, by the context's
+  `runtime_observations_digest`, which this program recomputes over bytes it
+  read itself. The row stays.
+- **the span-width bank HAS NO CONSUMER, and the route refuses it nonempty.**
+  `admitted_composition_v3` writes it; `authenticate_accelerator_witness_v4`
+  requires `witness.span_count() == 0` and refuses otherwise, so the only value
+  the producer can legally emit is the empty one -- a producer whose output no
+  reader may read. Every family this accelerator serves asserts
+  `span_widths().is_empty()` in its own words, so the refusal costs no honest
+  traffic today. **Its consumer would be a dynamic-span profile on the admitted
+  accelerator path**, and what that consumer needs first is a BINDING: the span
+  bank is committed by neither the request digest nor the context's observation
+  digest, which is why the route refuses it rather than believing it. Until
+  that binding exists the producer side is dead weight and should be read as
+  such -- it is one `u32` per span in a bank that is always zero-length.
+
+The new record-bump bank is deliberately the third shape and neither of those
+two: it is a hint whose whole check is the derivation that consumes it, so it
+needs no binding at all, and reading it cannot refuse.
