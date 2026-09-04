@@ -5,8 +5,8 @@
 //! interpreter for one transaction and are never encoded here.
 
 use super::{
-    fee_due, is_zero, put, put_byte, put_u64, put_u64_array, require_zero, u16_at, u64_array_at,
-    u64_at, CandidateView, Error, Identity, Phase, Policy, Result, State, MAX_OUTCOMES,
+    CandidateView, Error, Identity, MAX_OUTCOMES, Phase, Policy, Result, State, fee_due, is_zero,
+    put, put_byte, put_u64, put_u64_array, require_zero, u16_at, u64_array_at, u64_at,
 };
 use crate::generated_dealer_trading_profile as generated;
 
@@ -320,7 +320,7 @@ fn tail_header(input: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{encode_candidate, CandidateInput, CurveBand, CurveInput};
+    use crate::{CandidateInput, CurveBand, CurveInput, encode_candidate};
 
     const MARKET: Identity = [1; 32];
     const RELEASE: Identity = [2; 32];

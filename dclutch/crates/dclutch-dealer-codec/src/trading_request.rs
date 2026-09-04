@@ -1,8 +1,8 @@
 //! Dealer hot request with an explicit canonical Claims Position revision.
 
 use super::{
-    array_at, byte_at, is_zero, put, put_byte, put_u64, require_zero, u16_at, u64_at, Action,
-    Error, Identity, Request, Result, Side,
+    Action, Error, Identity, Request, Result, Side, array_at, byte_at, is_zero, put, put_byte,
+    put_u64, require_zero, u16_at, u64_at,
 };
 use crate::generated_dealer_trading_profile as generated;
 

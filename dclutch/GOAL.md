@@ -4316,3 +4316,11 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   → COHORT-15D **`(spawned)`**: the settle, the winning stranger paid, retirement, the route document + the seal caller +
   OpenBatch.
 - Cuts: `9c1a0dce1`, `ce2e38227`.
+- LEAN-TAGS closed (`29cfeabdf`, `7ee656e2d`, `75176a32b`, `5f8a09971`, rows `9a0953162`): Lean owners for the series-ticket,
+  projected-custody, dealer-checkpoint and dealer-reservation tags; **emission census 96 → 100, 0 unguarded**; zero rows
+  moved (positive control at the lane base); each discriminant renumbered in Lean reds its guard. Caught in the SDK's scrape
+  arm: `agreedOffset` read the WRONG record (two encoders write the identical line; a first-match regex took the first) and
+  `declaredVariants` matched only numeric discriminants (named ones would have vanished silently) — both now resolve through
+  the emission. Owed: three machines still author tags in Rust (direct-root, funding-ledger, source); two named-debt asserts
+  in the custody family.
+- Cuts: `1548611a3`.

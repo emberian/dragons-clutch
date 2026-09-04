@@ -6,8 +6,8 @@
 //! a parallel reserve implementation.
 
 use dclutch_dealer_scenario_kernel::{
-    assess_scenario_solvency, plan_scenario_netting, ClaimsInventoryExpectation,
-    ScenarioSolvencySnapshot, ScenarioTransition,
+    ClaimsInventoryExpectation, ScenarioSolvencySnapshot, ScenarioTransition,
+    assess_scenario_solvency, plan_scenario_netting,
 };
 pub use dclutch_dealer_scenario_kernel::{
     ClaimsInventoryObservation, Error as ScenarioError, ScenarioNettingPlan as ScenarioPlan,
