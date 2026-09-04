@@ -1,0 +1,27 @@
+{
+  "campaign": "lineage-loopback",
+  "note": "Asserted witnesses for the successor-declaration campaign. The CONTEXT file this campaign passes for `expect_from` is its own programs.json, so a witness can ask the chain which programs ran and compare that against the program map rather than against the binding that claims it.",
+  "witnesses": [
+    {
+      "id": "the-successor-declaration-landed-with-no-error",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.label | startswith(\"declare one release set\")) | .error] | tostring",
+      "expect": "[null]",
+      "provenance": "Exactly one such transaction, and the chain reports no error on it. This is the only execution of `registry/lineage_v1::process` anywhere in this repository: the route has been dispatched in the deployed Registry since cohort-8 and until this campaign existed nothing recorded a single run of it, so a document with zero transactions -- which is what a preflight writes -- fails here rather than rendering as a witnessed route."
+    },
+    {
+      "id": "the-only-first-party-program-in-the-frame-is-the-registry",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | .logs[] | select(test(\"^Program [1-9A-HJ-NP-Za-km-z]+ invoke \\\\[[0-9]+\\\\]$\")) | split(\" \")[1]] | unique - [\"ComputeBudget111111111111111111111111111111\",\"11111111111111111111111111111111\"] | first",
+      "expect_from": ".registry",
+      "provenance": "A cross-check between two files that do not read each other: every `Program <address> invoke [n]` line the chain wrote, at every depth, and the program map this campaign hands the census. The two subtracted addresses are Solana's own native program ids -- ComputeBudget, which the caller prepends a unit limit and price through, and the System program, which the Registry CPIs at depth two to allocate the 248-byte record. Everything else is first-party, and for this route there is exactly one of it. WRITTEN FIRST AND IT EARNED ITS KEEP ON THE FIRST RUN: the version of this witness that shipped in the first draft asked for the top-level invoke and asserted the route drove no CPI at all. The chain came back naming ComputeBudget, and the depth-two line naming System showed the second half was wrong too. The frame is two ComputeBudget instructions, one Registry instruction, and one System CPI beneath it -- which is what a route that CREATES an account looks like, and is now what this campaign claims."
+    },
+    {
+      "id": "the-landed-lineage-record-is-the-contract-width",
+      "kind": "evidence-jq",
+      "query": "(.projected_record | length) | tostring",
+      "expect": "496",
+      "provenance": "`RELEASE_LINEAGE_BYTES_V1 = 248` in crates/dclutch-registry-contract, hex-encoded here, so 496 characters. This is not the code asserting its own constant: the caller read the account back off the chain after the send and refused to write this document unless the landed bytes were byte-equal to `projected_record` and its on-chain length equalled that constant. So the number checked here is the length of an account a validator wrote, arriving through a document that could not have been produced if the chain had disagreed."
+    }
+  ]
+}

@@ -17,31 +17,38 @@
 //! before that was known would have been a driver aimed at an unreachable
 //! route.
 //!
-//! # The wall, stated once
+//! # The caller-authority coordinate, and why this file no longer states a wall
 //!
 //! Trading's admitted-AOT CPI derives one caller-authority PDA per accelerator
 //! invocation (`admitted_composition_v3.rs`), seeded by
 //! `CallerAuthoritySeedsV1::new(release_set, market, Trading, root,
-//! role_request_digest)` where `role_request_digest` is
-//! `sha256(accelerator request header ‖ inline bank)`. It then REQUIRES the
-//! account it was handed at that top-level coordinate to equal the address it
-//! just derived, or refuses `TradingSbfError::Release` (`0x4001`).
+//! role_request_digest)`. It then REQUIRES the account it was handed at that
+//! top-level coordinate to equal the address it just derived, or refuses
+//! `TradingSbfError::Release` (`0x4001`).
 //!
-//! `OpenBatch` is one of the seven window-gated actions whose AccountProfile
-//! declares `TrustedEnvironmentV2::CurrentSlot`, so Trading seeds
+//! Until `3a8ac205d` the `role_request_digest` was
+//! `sha256(accelerator request header ‖ inline bank)`, and `OpenBatch` is one
+//! of the seven window-gated actions whose AccountProfile declares
+//! `TrustedEnvironmentV2::CurrentSlot` — so Trading seeded
 //! `scalar::CURRENT_SLOT` from `Clock::get()` into exactly that bank on every
-//! execution. The digest, and therefore the address, is different in every
-//! slot — and the address has to be in the transaction's account list, which
-//! is fixed when the transaction is signed.
+//! execution, the digest moved every slot, and the address had to be in an
+//! account list that is fixed when the transaction is signed. No caller could
+//! state it. That was a real wall and this command reported it.
 //!
-//! The tree already states the law that kills this; it just applied it
-//! somewhere else. `account_rules_v3.rs`'s
-//! `the_window_gated_actions_declare_the_current_slot_in_their_bank` says
-//! *"Anything outside the executing instruction that has to STATE that bank is
-//! therefore valid for exactly one slot, which no caller can deliver into"* —
-//! and used it to delete the input scratch-page transport (`1fee82fa`,
-//! `a517d27c`). The caller-authority address is the same kind of thing and
-//! survived the cut.
+//! `3a8ac205d` moved the preimage to
+//! `accelerator_caller_authority_digest_v1(kind, parent_request_digest, index)`
+//! over the digest of the SIGNED `DCLTHOT3` family request and the invocation
+//! ordinal. No trusted-environment scalar enters any seed, so the span is a
+//! function of the signed instruction alone and a caller can name it.
+//!
+//! **This file used to publish that wall as a hardcoded verdict**, pushed
+//! unconditionally with a `detail` describing the pre-`3a8ac205d` seed — so it
+//! kept reporting a wall the deployed bytes no longer had, and could not go
+//! red if the tree changed again. It now DERIVES the span through the same two
+//! authors the program calls, and the row appears only when a derivation
+//! actually fails. A hex constant typed into a checker agrees right up until
+//! the tree moves; a hardcoded verdict is worse, because nothing can disagree
+//! with it.
 //!
 //! # What this command is, and is not
 //!
@@ -96,6 +103,7 @@ use dclutch_execution_strategy_contract::{
         ADMITTED_RUNTIME_ACCOUNTS_START_V3, ADMITTED_STRATEGY_EVIDENCE_COUNT_V3,
         ADMITTED_STRATEGY_EVIDENCE_START_V3,
     },
+    shadow_digest_v3::{AcceleratorCallerKindV1, accelerator_caller_authority_digest_v1},
     v2::{
         BankTransportV2, ExecutionStrategyCertificateV2, ExecutionStrategyProgramV2,
         StrategyDispositionV2, classify_bank_transport_v2,
@@ -131,7 +139,7 @@ use dclutch_product_runtime_v2_admission::{
 use dclutch_record_contract::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
 use dclutch_registry_contract::ARTIFACT_RELEASE_SCHEMA_ID_V1;
 use dclutch_registry_contract::ActivatedExecutionReleaseSetV1;
-use dclutch_release_set_contract::ExecutionRoleV1;
+use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_rent_contract::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
@@ -153,6 +161,16 @@ const REPORT_SCHEMA_V1: &str = "dclutch-devnet-general-session-frame-report-v1";
 /// batch lifecycle, so it is the one whose reachability decides the family's.
 const SESSION_ACTION_V1: Action = Action::OpenBatch;
 
+/// The preimage of the stated probe family-request digest.
+///
+/// It is a fixed string rather than a random or chain-derived value so that two
+/// runs of this read-only command against one market report the same probe
+/// span, and so that a reader can tell a probe address from a real one by
+/// recomputing it. It is never presented as the caller's own digest: the frame
+/// row and the report both say which was used.
+const CALLER_AUTHORITY_PROBE_PREIMAGE_V1: &[u8] =
+    b"dclutch:devnet-general-session:caller-authority-probe:v1";
+
 fn refusal(code: &str, reason: impl AsRef<str>) -> Error {
     Error::new(format!("REFUSED: [{code}] {}", reason.as_ref()))
 }
@@ -171,10 +189,14 @@ pub(crate) fn usage() -> &'static str {
      --plan ABSOLUTE_JSON --market GENERAL_OPEN_MARKET \
      --result-domain-record ADDRESS --portfolio-record ADDRESS \
      --linked-basis-record ADDRESS \
-     --payer PUBKEY --output ABSOLUTE_NEW_JSON\n     \
+     --payer PUBKEY --output ABSOLUTE_NEW_JSON \
+     [--parent-request-digest HEX64]\n     \
      Read-only. Derives the complete General OpenBatch hot frame from the \
      Market's own records, recovers the published AccountProfile's external \
-     widths from the chain's bytes, and reports each account's producer."
+     widths from the chain's bytes, and reports each account's producer. \
+     --parent-request-digest is the digest of the signed DCLTHOT3 family \
+     request; supplied, the admitted caller-authority span is reported at the \
+     exact addresses Trading will require."
 }
 
 struct ArgumentsV1 {
@@ -187,6 +209,15 @@ struct ArgumentsV1 {
     linked_basis_record: Pubkey,
     payer: Pubkey,
     output: PathBuf,
+    /// The digest of the signed `DCLTHOT3` family request the caller intends,
+    /// when the caller has one. It is the only coordinate of the admitted
+    /// caller-authority span this read-only command cannot observe, because
+    /// the span is a function of the SIGNED instruction and this command signs
+    /// nothing. Supplied, the reported addresses are the exact ones Trading
+    /// will require; omitted, the span is still derived — against a stated
+    /// probe digest — so that a derivation that has stopped working is a
+    /// refusal rather than a silence.
+    parent_request_digest: Option<ContentId>,
 }
 
 fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
@@ -199,6 +230,7 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
     let mut linked_basis_record = None;
     let mut payer = None;
     let mut output = None;
+    let mut parent_request_digest = None;
     let mut iterator = arguments.into_iter();
     while let Some(flag) = iterator.next() {
         let value = iterator
@@ -214,6 +246,7 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
             "--linked-basis-record" => &mut linked_basis_record,
             "--payer" => &mut payer,
             "--output" => &mut output,
+            "--parent-request-digest" => &mut parent_request_digest,
             other => return Err(refusal("input/unknown-flag", other)),
         };
         if slot.replace(value).is_some() {
@@ -233,6 +266,40 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
         linked_basis_record: pubkey(&required(linked_basis_record, "--linked-basis-record")?)?,
         payer: pubkey(&required(payer, "--payer")?)?,
         output: PathBuf::from(required(output, "--output")?),
+        parent_request_digest: parent_request_digest
+            .map(|value| content_id_from_hex_v1(&value))
+            .transpose()?,
+    })
+}
+
+/// Accept one 64-character lowercase-hex content identity.
+///
+/// Lowercase and exact width are required rather than normalized: a digest a
+/// caller retyped in another case is a digest a caller may have retyped
+/// wrongly, and the span this seeds has no other check on it.
+fn content_id_from_hex_v1(value: &str) -> Result<ContentId> {
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(refusal(
+            "input/parent-request-digest",
+            "--parent-request-digest takes exactly 64 hexadecimal characters",
+        ));
+    }
+    if value.chars().any(|character| character.is_ascii_uppercase()) {
+        return Err(refusal(
+            "input/parent-request-digest",
+            "--parent-request-digest must be lowercase hexadecimal",
+        ));
+    }
+    let mut bytes = [0_u8; 32];
+    for (index, slot) in bytes.iter_mut().enumerate() {
+        *slot = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)
+            .map_err(|error| refusal("input/parent-request-digest", error.to_string()))?;
+    }
+    ContentId::new(bytes).map_err(|_| {
+        refusal(
+            "input/parent-request-digest",
+            "the reserved all-zero content identity is not a family request digest",
+        )
     })
 }
 
@@ -844,6 +911,40 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
     let top_level_count =
         HOT_FIXED_ACCOUNT_COUNT_V3 + strategy_account_count + runtime_suffix_count;
 
+    // THE CALLER-AUTHORITY SPAN, DERIVED BEFORE ANYTHING REPORTS ON IT.
+    //
+    // Attempted, not asserted. A derivation that fails becomes a wall row with
+    // the failure's own words below; a derivation that succeeds leaves no row
+    // at all. The predecessor of this code pushed the row unconditionally with
+    // a `detail` describing a preimage `3a8ac205d` had already replaced, so it
+    // reported a wall the deployed bytes did not have and no tree change could
+    // ever have made it disagree.
+    //
+    // When the caller has not stated its family request digest this command
+    // cannot know the exact addresses -- it signs nothing -- so it derives
+    // against a STATED probe. The probe proves the route is derivable and that
+    // both authors still accept these coordinates; it does not claim to be the
+    // caller's span, and the row says which it is.
+    let caller_authority_digest_is_probe = arguments.parent_request_digest.is_none();
+    let parent_request_digest = match arguments.parent_request_digest {
+        Some(digest) => digest,
+        None => ContentId::new(
+            Sha256::digest(CALLER_AUTHORITY_PROBE_PREIMAGE_V1)
+                .as_slice()
+                .try_into()
+                .map_err(|_| Error::new("probe digest width".to_string()))?,
+        )
+        .map_err(|_| Error::new("probe digest is the reserved zero identity".to_string()))?,
+    };
+    let caller_authority_span = admitted_caller_authority_span_v1(
+        trading,
+        release_set.to_bytes(),
+        arguments.market,
+        root,
+        parent_request_digest,
+        invocation_count,
+    );
+
     let mut report_addresses = fixed.clone();
     report_addresses.extend_from_slice(&[
         certificate_record.raw,
@@ -869,6 +970,11 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
             admission: admission_record,
             artifact: artifact_record_pair,
             invocation_count,
+            caller_authorities: caller_authority_span
+                .as_ref()
+                .cloned()
+                .unwrap_or_default(),
+            caller_authority_digest_is_probe,
         },
     );
 
@@ -902,34 +1008,31 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
                        unit-test fixture in account_rules_v3.rs",
         }));
     }
-    walls.push(json!({
-        "code": "session/caller-authority-slot-binding",
-        "kind": "protocol",
-        "coordinate": format!(
-            "top-level {}..{}",
-            HOT_FIXED_ACCOUNT_COUNT_V3 + ADMITTED_STRATEGY_EVIDENCE_COUNT_V3,
-            HOT_FIXED_ACCOUNT_COUNT_V3 + ADMITTED_STRATEGY_EVIDENCE_COUNT_V3 + invocation_count - 1
-        ),
-        "conjunct": "caller_authority.key != &expected_authority",
-        "refusal": "TradingSbfError::Release 0x4001 (admitted_composition_v3.rs)",
-        "detail": format!(
-            "each of the {invocation_count} admitted caller authorities is \
-             find_program_address([dclutch:role-authority:v1, release_set, market, Trading, root, \
-             role_request_digest], Trading), and role_request_digest is sha256(accelerator request \
-             header || inline bank). OpenBatch's AccountProfile declares \
-             TrustedEnvironmentV2::CurrentSlot, so Trading seeds scalar::CURRENT_SLOT from \
-             Clock::get() into that bank on every execution. Each address is therefore a function of \
-             the slot the transaction executes in, while a signed transaction's account list is fixed \
-             when it is signed. No caller can state these addresses."
-        ),
-        "windowGatedActions": [
-            "OpenBatch", "CloseBatch", "PlaceOrder", "CancelOrder", "ReleaseOrder",
-            "SubmitCandidate", "CloseCandidate",
-        ],
-        "remedy": "seed the caller authority with a digest the caller can state -- the family request \
-                   digest already carried at HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3, plus the chunk \
-                   index -- rather than with the trusted-environment bank",
-    }));
+    if let Err(error) = &caller_authority_span {
+        walls.push(json!({
+            "code": "session/caller-authority-derivation",
+            "kind": "protocol",
+            "coordinate": format!(
+                "top-level {}..{}",
+                HOT_FIXED_ACCOUNT_COUNT_V3 + ADMITTED_STRATEGY_EVIDENCE_COUNT_V3,
+                HOT_FIXED_ACCOUNT_COUNT_V3 + ADMITTED_STRATEGY_EVIDENCE_COUNT_V3
+                    + invocation_count - 1
+            ),
+            "conjunct": "caller_authority.key != &expected_authority",
+            "refusal": "TradingSbfError::Release 0x4001 (admitted_composition_v3.rs)",
+            "detail": format!(
+                "the {invocation_count} admitted caller authorities could not be derived \
+                 through the authors Trading itself calls -- \
+                 accelerator_caller_authority_digest_v1(Admitted, parent_request_digest, \
+                 index) seeded into CallerAuthoritySeedsV1 -- so no caller can state the \
+                 top-level account list this route requires. The derivation reported: \
+                 {error}"
+            ),
+            "remedy": "read the derivation's own message; a caller-authority span that \
+                       cannot be derived is a change in one of those two authors, not a \
+                       property of this market",
+        }));
+    }
 
     let report = json!({
         "schema": REPORT_SCHEMA_V1,
@@ -946,6 +1049,18 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
         "productOutcomeCount": tail_count,
         "transportProfile": format!("{transport:?}"),
         "acceleratorInvocationCount": invocation_count,
+        "callerAuthority": {
+            "parentRequestDigest": hex(parent_request_digest.as_bytes()),
+            "parentRequestDigestIsProbe": caller_authority_digest_is_probe,
+            "preimage": "accelerator_caller_authority_digest_v1(Admitted, parent_request_digest, index)",
+            "span": caller_authority_span
+                .as_ref()
+                .map(|span| {
+                    span.iter().map(|key| key.to_string()).collect::<Vec<_>>()
+                })
+                .unwrap_or_default(),
+            "derived": caller_authority_span.is_ok(),
+        },
         "acceleratorProgram": accelerator.to_string(),
         "acceleratorArtifactRelease": hex(&artifact_release.to_bytes()),
         "frame": {
@@ -980,6 +1095,28 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
     )
     .map_err(|error| Error::new(format!("frame report: {error}")))?;
 
+    // AN EMPTY WALL LIST IS A PASS, AND IT HAS TO BE SAYABLE.
+    //
+    // This command was written when the answer for four of the accounts was
+    // "nobody can", so its only exits were a refusal and a refusal. With the
+    // rent-credit width re-founded (cohort-15) and the caller-authority seed
+    // moved off the executing slot (`3a8ac205d`), `walls` can now be empty --
+    // and the tail below reported that as
+    // `[session/unreachable] ... 0 unsatisfiable conjunct(s)`, which is a
+    // checker that cannot say the thing it exists to detect. A gate whose
+    // green is spelled as a refusal is a gate nobody can put in front of a
+    // producer.
+    if walls.is_empty() {
+        println!(
+            "DELIVERABLE: OpenBatch names no unsatisfiable conjunct at any of the {} \
+             top-level coordinates of market {}; frame report {}",
+            top_level_count,
+            arguments.market,
+            arguments.output.display()
+        );
+        return Ok(());
+    }
+
     let first = walls
         .first()
         .and_then(|wall| wall.get("code"))
@@ -1003,6 +1140,64 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
     ))
 }
 
+/// Derive the admitted caller-authority span for ONE signed family request.
+///
+/// Both authors here are the ones `invoke_admitted_accelerator_v3` calls, in
+/// the order it calls them: `accelerator_caller_authority_digest_v1` mints the
+/// `role_request_digest` and `CallerAuthoritySeedsV1` places it in the sole
+/// universal release-pinned seed order. Nothing is transcribed, so a change to
+/// either author moves this span and the rows that report it — which is the
+/// whole point, because the row this replaced could not move at all.
+///
+/// `parent_request_digest` and `index` are the only coordinates that vary
+/// across one execution, and neither is a trusted-environment observation.
+/// There is no slot argument because the preimage has no slot in it; if one
+/// ever returns, this function stops compiling rather than quietly agreeing.
+fn admitted_caller_authority_span_v1(
+    trading: Pubkey,
+    release_set: [u8; 32],
+    market: Pubkey,
+    root: Pubkey,
+    parent_request_digest: ContentId,
+    invocation_count: usize,
+) -> Result<Vec<Pubkey>> {
+    (0..invocation_count)
+        .map(|index| {
+            let index = u32::try_from(index).map_err(|_| {
+                refusal(
+                    "session/caller-authority-derivation",
+                    "the accelerator invocation ordinal does not fit its wire width",
+                )
+            })?;
+            let digest = accelerator_caller_authority_digest_v1(
+                AcceleratorCallerKindV1::Admitted,
+                parent_request_digest,
+                index,
+            )
+            .map_err(|error| {
+                refusal(
+                    "session/caller-authority-derivation",
+                    format!("accelerator caller authority digest {index}: {error:?}"),
+                )
+            })?;
+            let seeds = CallerAuthoritySeedsV1::from_bytes(
+                release_set,
+                market.to_bytes(),
+                ExecutionRoleV1::Trading,
+                root.to_bytes(),
+                digest.to_bytes(),
+            )
+            .map_err(|error| {
+                refusal(
+                    "session/caller-authority-derivation",
+                    format!("caller authority seeds {index}: {error:?}"),
+                )
+            })?;
+            Ok(Pubkey::find_program_address(&seeds.as_slices(), &trading).0)
+        })
+        .collect()
+}
+
 struct FrameAuthorsV1 {
     entry_index: u16,
     registry: Pubkey,
@@ -1013,6 +1208,10 @@ struct FrameAuthorsV1 {
     admission: RecordCoordinateV1,
     artifact: RecordCoordinateV1,
     invocation_count: usize,
+    /// The derived admitted caller-authority span, and whether its
+    /// `parent_request_digest` was the caller's own or a stated probe.
+    caller_authorities: Vec<Pubkey>,
+    caller_authority_digest_is_probe: bool,
 }
 
 fn frame_rows_v1(
@@ -1166,16 +1365,32 @@ fn frame_rows_v1(
             observed: shape(address),
         });
     }
+    let provenance = if authors.caller_authority_digest_is_probe {
+        "a STATED PROBE family request digest, because this command signs nothing; \
+         supply --parent-request-digest to report the exact address"
+    } else {
+        "the caller's own signed DCLTHOT3 family request digest"
+    };
     for index in 0..authors.invocation_count {
+        let address = authors
+            .caller_authorities
+            .get(index)
+            .copied()
+            .unwrap_or_default();
         rows.push(FrameRowV1 {
             coordinate: HOT_FIXED_ACCOUNT_COUNT_V3 + ADMITTED_STRATEGY_EVIDENCE_COUNT_V3 + index,
             label: "admitted caller authority",
-            address: Pubkey::default(),
-            author: "PRODUCED BY NOTHING AND UNSTATEABLE: the address is a PDA over \
-                     sha256(accelerator request || inline bank), and the bank carries \
-                     Clock::get().slot for every window-gated action"
-                .to_owned(),
-            observed: None,
+            address,
+            author: format!(
+                "STATEABLE BY THE CALLER since 3a8ac205d, and derived here rather than \
+                 described: PDA under Trading {} over (release set, market, Trading, root, \
+                 accelerator_caller_authority_digest_v1(Admitted, parent_request_digest, \
+                 {index})). The parent request digest used is {provenance}. It carries no \
+                 trusted-environment scalar, so the address does not move with the \
+                 executing slot and a signed account list can name it.",
+                authors.trading
+            ),
+            observed: shape(address),
         });
     }
     rows
@@ -1375,3 +1590,201 @@ fn read_record(
 
 const _: () = assert!(CAPABILITY_ROOT_HEADER_BYTES_V1 > 0);
 const _: () = assert!(system_program::ID.to_bytes()[0] == 0);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TRADING: Pubkey = Pubkey::new_from_array([7_u8; 32]);
+    const RELEASE_SET: [u8; 32] = [9_u8; 32];
+    const MARKET: Pubkey = Pubkey::new_from_array([11_u8; 32]);
+    const ROOT: Pubkey = Pubkey::new_from_array([13_u8; 32]);
+
+    fn digest(bytes: &[u8]) -> ContentId {
+        ContentId::new(
+            Sha256::digest(bytes)
+                .as_slice()
+                .try_into()
+                .expect("sha256 is 32 bytes"),
+        )
+        .expect("the fixture preimages are not the zero identity")
+    }
+
+    /// One admitted caller authority under the PRE-`3a8ac205d` seed.
+    ///
+    /// The old `role_request_digest` was `sha256(accelerator request header ‖
+    /// inline bank)`, and a window-gated action's bank carries
+    /// `scalar::CURRENT_SLOT`. This models exactly that and nothing else, so
+    /// the comparison below is between two seeds rather than between a seed
+    /// and a description of one.
+    fn old_slot_bound_authority(bank: &[u8]) -> Pubkey {
+        let seeds = CallerAuthoritySeedsV1::from_bytes(
+            RELEASE_SET,
+            MARKET.to_bytes(),
+            ExecutionRoleV1::Trading,
+            ROOT.to_bytes(),
+            digest(bank).to_bytes(),
+        )
+        .expect("fixture seeds are non-zero");
+        Pubkey::find_program_address(&seeds.as_slices(), &TRADING).0
+    }
+
+    fn bank_at_slot(slot: u64) -> Vec<u8> {
+        let mut bank = b"accelerator-request-header".to_vec();
+        bank.extend_from_slice(&slot.to_le_bytes());
+        bank
+    }
+
+    /// The wall was real under the old seed and is gone under the new one.
+    ///
+    /// Both halves are measured, and the inputs are asserted DIFFERENT before
+    /// the addresses are compared -- "nothing moved" and "my instrument was
+    /// disconnected" log identically, and this test would otherwise pass with
+    /// two identical banks.
+    #[test]
+    fn the_old_slot_bound_seed_moves_between_slots_and_the_new_preimage_does_not() {
+        let early = bank_at_slot(492_745_516);
+        let late = bank_at_slot(492_745_563);
+        assert_ne!(early, late, "the two banks must differ, or this proves nothing");
+
+        // The old seed: one signed account list could not name both addresses.
+        let old_early = old_slot_bound_authority(&early);
+        let old_late = old_slot_bound_authority(&late);
+        assert_ne!(
+            old_early, old_late,
+            "the pre-3a8ac205d seed moved with the executing slot; that WAS the wall"
+        );
+
+        // The new preimage takes the SIGNED family request digest, which is the
+        // same value in both executions, and no bank at all.
+        let family = digest(b"one signed DCLTHOT3 family request");
+        let span_early =
+            admitted_caller_authority_span_v1(TRADING, RELEASE_SET, MARKET, ROOT, family, 4)
+                .expect("the span derives");
+        let span_late =
+            admitted_caller_authority_span_v1(TRADING, RELEASE_SET, MARKET, ROOT, family, 4)
+                .expect("the span derives");
+        assert_eq!(
+            span_early, span_late,
+            "one signed family request names one authority span at every execution slot"
+        );
+        assert!(
+            !span_early.contains(&old_early) && !span_early.contains(&old_late),
+            "the new span is not the old one under another name"
+        );
+    }
+
+    /// Slot-independence is worthless if the span stopped depending on the
+    /// things it must depend on. Every coordinate that separates two
+    /// invocations, two markets, two roots or two release sets moves the
+    /// address, and the four invocations of one execution are distinct.
+    #[test]
+    fn the_caller_authority_span_moves_with_every_coordinate_that_must_move_it() {
+        let family = digest(b"one signed DCLTHOT3 family request");
+        let base = admitted_caller_authority_span_v1(TRADING, RELEASE_SET, MARKET, ROOT, family, 4)
+            .expect("the span derives");
+        assert_eq!(base.len(), 4);
+        let mut unique = base.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), 4, "each invocation ordinal names its own authority");
+
+        let other_family = digest(b"another signed DCLTHOT3 family request");
+        for (label, span) in [
+            (
+                "family request digest",
+                admitted_caller_authority_span_v1(
+                    TRADING,
+                    RELEASE_SET,
+                    MARKET,
+                    ROOT,
+                    other_family,
+                    4,
+                ),
+            ),
+            (
+                "market",
+                admitted_caller_authority_span_v1(
+                    TRADING,
+                    RELEASE_SET,
+                    Pubkey::new_from_array([12_u8; 32]),
+                    ROOT,
+                    family,
+                    4,
+                ),
+            ),
+            (
+                "root",
+                admitted_caller_authority_span_v1(
+                    TRADING,
+                    RELEASE_SET,
+                    MARKET,
+                    Pubkey::new_from_array([14_u8; 32]),
+                    family,
+                    4,
+                ),
+            ),
+            (
+                "release set",
+                admitted_caller_authority_span_v1(
+                    TRADING,
+                    [10_u8; 32],
+                    MARKET,
+                    ROOT,
+                    family,
+                    4,
+                ),
+            ),
+            (
+                "composing program",
+                admitted_caller_authority_span_v1(
+                    Pubkey::new_from_array([8_u8; 32]),
+                    RELEASE_SET,
+                    MARKET,
+                    ROOT,
+                    family,
+                    4,
+                ),
+            ),
+        ] {
+            let span = span.expect("the span derives");
+            assert_ne!(base, span, "substituting the {label} must move the span");
+        }
+    }
+
+    /// The derivation is the verdict, so it has to be able to fail.
+    ///
+    /// A zero root is the coordinate `CallerAuthoritySeedsV1` refuses, and it
+    /// is refused HERE rather than being turned into an address -- which is
+    /// what makes the wall row a consequence rather than a decoration.
+    #[test]
+    fn a_zero_caller_authority_coordinate_refuses_instead_of_naming_an_address() {
+        let family = digest(b"one signed DCLTHOT3 family request");
+        let refused = admitted_caller_authority_span_v1(
+            TRADING,
+            RELEASE_SET,
+            MARKET,
+            Pubkey::default(),
+            family,
+            4,
+        );
+        let error = refused.expect_err("a zero context is not a caller-authority coordinate");
+        assert!(
+            error.to_string().contains("session/caller-authority-derivation"),
+            "the refusal names the derivation that produced it, got: {error}"
+        );
+    }
+
+    /// The probe preimage is a constant a reader can recompute, and it is never
+    /// the reserved zero identity.
+    #[test]
+    fn the_stated_probe_digest_is_recomputable_and_non_zero() {
+        let probe = digest(CALLER_AUTHORITY_PROBE_PREIMAGE_V1);
+        assert_ne!(probe.to_bytes(), [0_u8; 32]);
+        assert_eq!(
+            probe.to_bytes(),
+            digest(b"dclutch:devnet-general-session:caller-authority-probe:v1").to_bytes(),
+            "the probe preimage is the literal this test restates, not a moving value"
+        );
+    }
+}

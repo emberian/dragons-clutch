@@ -208,6 +208,14 @@
       "producer": "programs/dclutch-series-shadow-sbf",
       "note": "Series occurrence shadow.",
       "reproducible": true
+    },
+    {
+      "campaign": "lineage-loopback",
+      "substrate": "local-validator",
+      "runner": "tools/gauntlet/lineage/run-lineage.sh",
+      "producer": "tools/local-validator/bootstrap/successor/src/release_lineage.rs",
+      "note": "DCLRLND1, the successor declaration, on a real Agave runtime with genesis-staged activation caches. THE RUN IS NOT NEW: `tools/lineage-loopback/run-lineage-loopback.sh` has been landing this transaction, reading the 248-byte record back off the chain and refusing a replay with `LineageAlreadyDeclared`, for as long as it has existed -- while `registry/lineage_v1::process` read NEVER-EXECUTED, because the run swept its own evidence away with the ledger and no campaign folded it. Third instance in two days of the same shape, a green driver with no producer (ABORT-WITNESS found the other two), and the smallest of the three: an `--evidence-dir` flag, a `transactions` array in the document the caller already wrote, and a bindings file. No program changed and the run does what it did before. What this substrate proves past `programs/dclutch-registry-sbf/tests/lineage_program_test.rs` is the CALLER's plumbing: the finalized multi-account read, the vacant-address mapping, the keyless simulation's wire format, the signer set, and the read-back that compares landed bytes against projected ones. WHAT IT DOES NOT PROVE, and the runner's own header says so before anything else: that a real activation ladder produced these caches. They are composed offline and injected at genesis, which the route permits because it authenticates a cache's owner, width, decodability and derived address and asks nothing about provenance. Cut-day evidence comes from devnet's real caches; this campaign is not a substitute for it.",
+      "reproducible": true
     }
   ]
 }

@@ -13,6 +13,10 @@ use std::{
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use dclutch_core_contract::ContentId;
+use dclutch_operator::{
+    Finality, Observation, ObservedAccount,
+    registry::{RegistryReauthenticationState, build_registry_reauthentication_v1},
+};
 use dclutch_product_runtime_v2_operator::{
     AccountObservationV2, CompiledProductRecordsV2,
     publication::{
@@ -22,7 +26,7 @@ use dclutch_product_runtime_v2_operator::{
         derive_record_addresses_v1, product_publication_content_v2,
     },
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_record_contract::{AbortRecordV1, RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetV1, ActivationCacheProgressV1, ArtifactActivationInputV1,
@@ -453,6 +457,40 @@ pub(crate) fn found_through_open(
     }
     verify_activation(&mut rpc, &plan)?;
 
+    // One reauthentication per activated role, read back off the chain.
+    //
+    // `registry/process_reauthenticate#Reauthenticate` is the route every role
+    // adapter's rule is written in: a child entered under a Registry
+    // continuation cannot CPI back here at all -- the Registry is already on
+    // the stack -- so the adapters read the cache directly and share this
+    // function's body rather than reimplementing it. That makes this the one
+    // place the shared rule can be exercised as a route rather than as a
+    // subroutine, and until now nothing anywhere had ever submitted it: the
+    // register read NEVER-EXECUTED while `docs/design/PACKET_LIMIT_2026_09_01.md`
+    // listed it among the routes tier 1 drives.
+    //
+    // It is a separate transaction from the activation that precedes it, and
+    // has to be: the builder is handed a finalized observation of the cache and
+    // refuses a role the cache does not yet carry, so an activation and its
+    // reauthentication cannot share a frame. Read against a slot no earlier
+    // than the activation's, which is what makes this a read-back rather than a
+    // second opinion about the same bytes.
+    for (label, instruction) in
+        reauthentication_instructions(&mut rpc, &plan, transactions.last().map(|t| t.slot))?
+    {
+        transactions.push(rpc.send(&label, &[instruction], &authority)?);
+    }
+
+    // One record published and immediately reclaimed, which is what the Abort
+    // route is FOR: an abandoned record set can always be reclaimed and never
+    // strands its rent or its prepaid bounty. Nothing consumes this record --
+    // it exists to be abandoned -- and until now nothing in this repository had
+    // ever submitted `registry/process_abort#4`, in any campaign, on any
+    // substrate. Its hostile rides in front of it because an unwind route that
+    // let a stranger redirect a sponsor's refund would be a worse defect than
+    // the stranding it was written to prevent.
+    abandon_and_reclaim_one_record(&mut rpc, &plan, &authority, &mut transactions)?;
+
     let rollback_recipient = crate::seed::fresh_probe_address();
     let authority_before = rpc.required_account(authority.pubkey(), "Core authority wallet")?;
     if rpc.account(rollback_recipient)?.is_some() {
@@ -499,7 +537,17 @@ pub(crate) fn found_through_open(
     // already refused every origin this process does not launch itself -- and
     // it is the same two calls this file's `real_sbf_*` test makes, so the
     // path was exercised before it was supported. See `SuccessorRunSpec::market`.
-    let compiled;
+    // One writable spelling per run. The market input carries the route and so
+    // does the spec's fixture selector; a spec holding both would let a reader
+    // of either file be wrong about which route founded the Market.
+    if spec.market.is_some() && spec.founding_route.is_some() {
+        return Err(Error::new(
+            "a run spec that carries `market` must not also carry `founding_route`: the market \
+             input already names the route, and two spellings of one selection is how a run \
+             founds by a route neither of its files names",
+        ));
+    }
+    let mut compiled;
     let market_input = match spec.market.as_ref() {
         Some(input) => input,
         None => {
@@ -515,6 +563,7 @@ pub(crate) fn found_through_open(
                     root_rent,
                 )?;
             compiled = crate::market::demo_market_input(registry, direct.compiler())?;
+            compiled.founding_route = spec.founding_route.unwrap_or_default();
             crate::market::validate_market_input(&compiled)?;
             &compiled
         }
@@ -859,6 +908,281 @@ pub(crate) fn activation_instructions(
                 ExecutionRoleV1::Custody => "activate immutable release-set role: Custody",
             },
             role_activation_instruction(plan, payer, role)?,
+        ));
+    }
+    Ok(ordered)
+}
+
+/// Schema identity of the record this campaign publishes in order to abandon it.
+///
+/// A domain digest rather than a first-party schema: the record family is a
+/// content-addressed store and the Abort route reads a cursor, never a schema,
+/// so borrowing a real schema id here would put a record claiming to be an
+/// execution release set on the chain for two transactions. This one names
+/// itself and is a member of no family.
+fn abandoned_record_schema_id_v1() -> [u8; 32] {
+    sha2::Sha256::digest(b"dclutch.tier1.abandoned-record-probe.v1").into()
+}
+
+/// The exact five-account Abort frame.
+///
+/// `AbortRecordV1` is encoded by `dclutch-record-contract` and by nothing else,
+/// and until this function existed no host could build the instruction that
+/// carries it -- which is the whole reason `registry/process_abort#4` had never
+/// executed anywhere. The frame is spelled here rather than in an operator
+/// crate because every operator crate that would be its proper home is in the
+/// path-dependency closure of at least one SBF link, and a host-only builder is
+/// not worth moving a program digest for under a live cohort. When that changes,
+/// this belongs beside `build_record_publication_step_v1`.
+///
+/// Nothing here is trusted: the program re-derives both PDAs from the cursor,
+/// reads the sponsor refund identity out of the cursor rather than out of this
+/// frame, and requires the actor's signature whenever the contract says a
+/// pre-expiry abort needs one.
+fn record_abort_instruction_v1(
+    registry: Pubkey,
+    raw: Pubkey,
+    cursor: Pubkey,
+    sponsor_wallet: Pubkey,
+    abort_actor: Pubkey,
+) -> Instruction {
+    Instruction {
+        program_id: registry,
+        accounts: vec![
+            AccountMeta::new(raw, false),
+            AccountMeta::new(cursor, false),
+            AccountMeta::new(sponsor_wallet, false),
+            AccountMeta::new(abort_actor, true),
+            AccountMeta::new_readonly(sysvar::clock::ID, false),
+        ],
+        data: AbortRecordV1.to_bytes().to_vec(),
+    }
+}
+
+/// Publish one record's Begin, refuse a substituted refund, then reclaim it.
+///
+/// Three transactions and the campaign's only use of the record family's
+/// liveness guarantee. The Begin is an ordinary publication and is bound by the
+/// campaign's existing `publish record: Begin *` pattern; the two after it are
+/// this route's own. The record is never appended to and never finalized, which
+/// is the state the Abort route exists to resolve.
+fn abandon_and_reclaim_one_record(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    payer: &Keypair,
+    transactions: &mut Vec<crate::model::TransactionEvidence>,
+) -> Result<()> {
+    let registry = pubkey(&plan.registry.program_id)?;
+    // Unique to this run's authority, so a resumed ledger cannot find the
+    // record already published and read a `Complete` where a `Begin` is meant.
+    let mut body = b"dclutch tier-1 abandoned record probe v1: ".to_vec();
+    body.extend_from_slice(payer.pubkey().as_ref());
+    let publication = RecordPublicationContentV1 {
+        schema_release_id: abandoned_record_schema_id_v1(),
+        content: &body,
+    };
+    let (raw, cursor, _digest) = derive_record_addresses_v1(registry, publication)
+        .map_err(|error| Error::new(format!("derive abandoned record: {error:?}")))?;
+
+    let minimum_slot = transactions
+        .last()
+        .map(|transaction| transaction.slot)
+        .unwrap_or(rpc.finalized_slot()?);
+    let keys = [
+        payer.pubkey(),
+        raw,
+        cursor,
+        system_program::ID,
+        sysvar::rent::ID,
+        sysvar::clock::ID,
+    ];
+    let (slot, values) = rpc.finalized_accounts(&keys, minimum_slot)?;
+    let observations = publication_observations(slot, &keys, &values)?;
+    let step = build_record_publication_step_v1(
+        registry,
+        publication,
+        RecordPublicationStateV1 {
+            sponsor: observations[0],
+            raw_record: observations[1],
+            staging_cursor: observations[2],
+            system_program: observations[3],
+            rent: observations[4],
+            clock: observations[5],
+        },
+    )
+    .map_err(|error| Error::new(format!("chain-derived abandoned Begin: {error:?}")))?;
+    if step.action != RecordPublicationActionV1::Begin {
+        return Err(Error::new(format!(
+            "the abandoned record probe found {:?} where a vacant pair was required",
+            step.action
+        )));
+    }
+    let begin = step
+        .instruction
+        .ok_or_else(|| Error::new("the abandoned Begin carried no instruction"))?;
+    // The same label shape every other publication uses, so the campaign's one
+    // `publish record: Begin *` binding covers this one too rather than the
+    // route acquiring a second owner.
+    transactions.push(rpc.send(&format!("publish record: Begin {raw}"), &[begin], payer)?);
+
+    let staged = rpc
+        .account(cursor)?
+        .ok_or_else(|| Error::new("the abandoned record's staging cursor was not created"))?;
+    if staged.owner != registry {
+        return Err(Error::new(
+            "the abandoned record's staging cursor is not Registry-owned",
+        ));
+    }
+
+    // The boundary this route is judged on. The cursor is the SOLE author of
+    // the sponsor refund identity; a frame naming someone else's wallet must
+    // die on that comparison before a single lamport moves, and the record must
+    // survive it.
+    let stranger = crate::seed::fresh_probe_address();
+    transactions.push(
+        rpc.send_expected_failure(
+            "Abort refuses a substituted sponsor refund wallet",
+            &[record_abort_instruction_v1(
+                registry,
+                raw,
+                cursor,
+                stranger,
+                payer.pubkey(),
+            )],
+            payer,
+        )?
+        // RegistryError::Record: the record family's one refusal. It is coarse
+        // -- every conjunct in `record_v1` wears it -- so this asserts the wall
+        // and not the conjunct, and says so rather than implying more.
+        .refusing(0x100C)?,
+    );
+    if rpc.account(raw)?.is_none() || rpc.account(cursor)?.is_none() {
+        return Err(Error::new(
+            "the refused Abort destroyed the record it was refused for",
+        ));
+    }
+
+    let before = rpc.required_account(payer.pubkey(), "abandoned record sponsor")?;
+    let staged_lamports = staged
+        .lamports
+        .checked_add(rpc.required_account(raw, "abandoned raw record")?.lamports)
+        .ok_or_else(|| Error::new("abandoned record lamports overflowed"))?;
+    let reclaim = rpc.send(
+        "reclaim an abandoned record's rent and staging bounty (Abort)",
+        &[record_abort_instruction_v1(
+            registry,
+            raw,
+            cursor,
+            payer.pubkey(),
+            payer.pubkey(),
+        )],
+        payer,
+    )?;
+    let fee = reclaim
+        .fee_lamports
+        .ok_or_else(|| Error::new("the Abort transaction omitted its exact fee"))?;
+    transactions.push(reclaim);
+
+    if rpc.account(raw)?.is_some() || rpc.account(cursor)?.is_some() {
+        return Err(Error::new(
+            "the Abort left one of the two record accounts behind",
+        ));
+    }
+    // Sponsor and actor are the same wallet on an early abort, so the whole
+    // balance returns to it and the only net movement is the fee. Checked here
+    // rather than asserted in a witness, because a witness reads a document and
+    // this reads the chain.
+    let after = rpc.required_account(payer.pubkey(), "abandoned record sponsor")?;
+    let expected = before
+        .lamports
+        .checked_add(staged_lamports)
+        .and_then(|total| total.checked_sub(fee))
+        .ok_or_else(|| Error::new("abandoned record refund arithmetic overflowed"))?;
+    if after.lamports != expected {
+        return Err(Error::new(format!(
+            "the Abort returned {} lamports where the two closed accounts held {staged_lamports} \
+             and the fee was {fee}",
+            after.lamports.saturating_sub(before.lamports),
+        )));
+    }
+    Ok(())
+}
+
+/// Ordered per-role reauthentication instructions, built from the chain.
+///
+/// The exact read-only three-account frame `build_registry_reauthentication_v1`
+/// ships and nothing in this repository had ever submitted. Every input is an
+/// account read at ONE finalized observation at or after `minimum_slot`, and
+/// the builder refuses before any send if the cache does not carry the role, if
+/// the four accounts disagree about their slot, if two of them alias, or if the
+/// deployment the cache pinned is not the deployment the chain now shows -- so a
+/// label reaching the campaign means the frame was authenticated off the chain
+/// first and the transaction is the second opinion, not the first.
+fn reauthentication_instructions(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    minimum_slot: Option<u64>,
+) -> Result<Vec<(String, Instruction)>> {
+    let registry_program = pubkey(&plan.registry.program_id)?;
+    let cache = pubkey(&plan.activation)?;
+    let mut ordered = Vec::with_capacity(ACTIVATION_ROLES_V1.len());
+    for role in ACTIVATION_ROLES_V1 {
+        let pin = match role {
+            ExecutionRoleV1::Core => &plan.core,
+            ExecutionRoleV1::Claims => &plan.claims,
+            ExecutionRoleV1::Trading => &plan.trading,
+            ExecutionRoleV1::Resolution => &plan.resolution,
+            ExecutionRoleV1::Custody => &plan.custody,
+        };
+        let keys = [
+            registry_program,
+            cache,
+            pubkey(&pin.program_id)?,
+            pubkey(&pin.programdata_id)?,
+        ];
+        let (slot, accounts) = rpc.finalized_accounts(&keys, minimum_slot.unwrap_or(0))?;
+        let observation = Observation {
+            slot,
+            unix_timestamp: rpc.block_time(slot)?,
+            finality: Finality::Finalized,
+        };
+        let mut observed = Vec::with_capacity(keys.len());
+        for (key, account) in keys.iter().zip(accounts) {
+            // Every one of the four must exist. A vacant address here is not a
+            // real observation the way the lineage record's is: the cache was
+            // just written and the role programs were deployed at genesis, so
+            // an absence is a defect and is named rather than projected as an
+            // empty System account the builder would refuse three layers down.
+            let account = account.ok_or_else(|| {
+                Error::new(format!(
+                    "reauthentication input {key} is absent at slot {slot}"
+                ))
+            })?;
+            observed.push(ObservedAccount {
+                observation,
+                key: *key,
+                owner: account.owner,
+                lamports: account.lamports,
+                executable: account.executable,
+                data: account.data,
+            });
+        }
+        let mut observed = observed.into_iter();
+        let state = RegistryReauthenticationState {
+            registry_program: observed.next().expect("registry program"),
+            cache: observed.next().expect("activation cache"),
+            role_program: observed.next().expect("role program"),
+            role_programdata: observed.next().expect("role ProgramData"),
+        };
+        let report = build_registry_reauthentication_v1(&state, role).map_err(|error| {
+            Error::new(format!(
+                "chain-derived {role:?} reauthentication frame: {error:?}"
+            ))
+        })?;
+        // The label is a BINDING KEY read by tools/gauntlet/tier1/bindings.json.
+        ordered.push((
+            format!("reauthenticate the activated role: {role:?}"),
+            report.instruction,
         ));
     }
     Ok(ordered)

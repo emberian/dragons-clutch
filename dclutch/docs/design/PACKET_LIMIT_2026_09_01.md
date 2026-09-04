@@ -352,3 +352,82 @@ packet fix; a precondition for any witness that pins a margin (CommitFailure's
 - The 1,277 vs 1,321 Settle discrepancy: rerun the 08-29 caller test beside
   the C-09 sponsored runner at one HEAD.
 - The thirteen/fourteen count: §3.
+
+## 10. Addendum — 2026-09-04, lane SEVEN
+
+The body above is a dated reading. Nothing in it is edited; this section says
+what three days of campaigns changed about four of its rows, and records one
+measurement that has nowhere else to live.
+
+### 10a. The expired-source abort misses the legacy packet by five
+
+`DCLTPCA1` — `trading/projected_custody_bootstrap_v1::process_projected_custody_abort_v1`,
+the only route out of a funded projection whose founding expired — serialises
+to **1,237 bytes with its keys inline, against `PACKET_DATA_SIZE` = 1,232. It
+misses by five.** Measured 2026-09-03 by lane ABORT-WITNESS on the campaign
+serializer (`tools/gauntlet/source-abort/witnesses.json`, witness
+`the-abort-frame-overruns-the-legacy-packet-maximum`); the two cleanup
+transactions in the same suffix fit at 706.
+
+This is a §2a row that did not exist when §2a was written, and it belongs in
+this document rather than only in a campaign's witness file because it is a
+*route property*, not a campaign property: the abort cannot be submitted as a
+legacy transaction by anyone, ever, and five bytes is close enough that a
+reader who has not seen the number will assume it fits.
+
+**The measurement is not an enforcement.** ProgramTest submits no packet and
+cannot refuse for size, which is the fast-lane hole §1 already names and the
+one Found31 fell through. So the campaign measures against the limit; nothing
+has yet asked a runtime to enforce it on this frame.
+
+**THE QUESTION, and it is not this lane's to answer.** The successor bootstrap
+already compiles the same 36-account frame as a v0 message over a finalized
+address lookup table (`tools/local-validator/bootstrap/successor/src/market.rs`,
+`build_projected_custody_abort_v1`), which is the §5 answer applied — a client
+change, tables being routing data and never protocol authority. What nobody has
+decided is whether the abort suffix gets a **lane that submits it to a
+validator**, where the table is real and the packet is enforced. Until it does,
+the route's only witness is a bank that warps past the expiry slot in one call
+where a validator waits out hundreds of real ones, and the ALT is asserted
+rather than exercised on this route. Owner: whoever owns tier 1's shape.
+
+### 10b. §2b's tier-1 row overstated two Registry routes, and no longer does
+
+§2b lists, among the routes tier 1 drives, `registry/*` — naming
+`Reauthenticate` and `record_v1 + arms` explicitly. Both claims were false when
+written, in different ways:
+
+- **`registry/process_reauthenticate#Reauthenticate` had never been submitted
+  anywhere**, by any campaign, on any substrate. The shipped builder
+  `build_registry_reauthentication_v1` produced the exact three-account
+  read-only frame the whole time and nothing called it.
+- **`registry/process_abort#4` had no host builder at all.** `AbortRecordV1` is
+  encoded by `dclutch-record-contract` and by nothing else, so the arm was
+  unreachable from outside the program by construction — not merely unscheduled.
+
+Both execute on tier 1 as of `c42da8fef` (2026-09-04): five reauthentications,
+one per `ExecutionRoleV1`, read back at a slot no earlier than their
+activation's; and a Begin / hostile / reclaim triple over a record published in
+order to be abandoned. **Their extent is still not recorded** — the instrument
+column's point stands unchanged, `founding_submission_journal.rs:384-390`
+computes `expected_wire_bytes` and nothing publishes it.
+
+### 10c. §2c: four of its routes now have a stated reason instead of silence
+
+`tools/gauntlet/blocked.json` gained rows for four routes §2c lists as
+unwitnessed, so they stop rendering as "no campaign and no reason recorded":
+
+- **C-04's `direct_replay_setup_v1` / `direct_token_setup_v1`** are blocked on
+  their producer, not on a packet. `local-private-validator-direct-trade-v1` is
+  their only driver in the tree and its finalized evidence records no `logs` and
+  no `error` — `census observe` cannot corroborate a claim without the chain's
+  own invoke lines, and the binary hard-refuses any transaction whose RPC meta
+  `err` is non-null, so it could only ever produce `executed` rows. §2c's note
+  that the program-tests "exist and are dirty in the tree" is worth narrowing:
+  no program-test drives either setup route. The blocked row states the cost.
+- **C-05's `generic_founding_stages_v1::*`** are blocked on a campaign, not on
+  an executor: `execute_split_market_founding` is complete with four hostiles,
+  and as of 2026-09-04 it is selected by `MarketRunInput::founding_route` rather
+  than by an environment variable nothing set. The blocked row explains why a
+  split run cannot ride tier 1 — it would make tier 1's bindings, its CU budgets
+  and its witnesses wrong at once — and therefore needs a tier of its own.

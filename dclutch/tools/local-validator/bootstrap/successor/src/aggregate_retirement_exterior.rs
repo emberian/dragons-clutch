@@ -49,7 +49,7 @@ use crate::{
         read_keypair_file,
     },
     chaos_fault::{self, BoundaryV1},
-    cluster::{ClusterOriginV1, ExpectedClusterV1},
+    cluster::{ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG, ExpectedClusterV1},
     model::SuccessorPlan,
     plan::pubkey,
     rpc::{Rpc, SignedVersionedPacketV1, WritePolicyV1},
@@ -61,6 +61,23 @@ use crate::{
 };
 
 pub(crate) const COMMAND_V1: &str = "local-private-validator-aggregate-retirement-v1";
+/// The same retirement, against a public devnet cohort.
+///
+/// Retirement was reachable on exactly one cluster because two lines said so:
+/// `ExpectedClusterV1::OwnedLoopback` was a literal in `run`, and the
+/// acknowledgment handed to `ClusterOriginV1::parse` was a literal `None`. The
+/// retirement itself never had a loopback assumption in it -- the packets, the
+/// journal, the vault close and the rent arithmetic are cluster-blind -- so the
+/// devnet arm is a second entry point and a threaded expectation, not a second
+/// implementation. The idiom is `claims_custody_replay.rs`'s.
+pub(crate) const COMMAND_DEVNET_V1: &str = "devnet-aggregate-retirement-v1";
+
+const fn command(expected: ExpectedClusterV1) -> &'static str {
+    match expected {
+        ExpectedClusterV1::Devnet => COMMAND_DEVNET_V1,
+        ExpectedClusterV1::OwnedLoopback => COMMAND_V1,
+    }
+}
 const PROGRESS_SCHEMA_V1: &str = "dclutch-owned-loopback-aggregate-retirement-progress-v1";
 const JOURNAL_NAMES_V1: [&str; 4] = [
     "00-prepare.json",
@@ -100,8 +117,17 @@ pub(crate) struct AggregateRetirementTransportV1<'a> {
     pub(crate) execute: bool,
 }
 
-pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
-    let arguments = parse_arguments_v1(arguments)?;
+pub(crate) fn run_owned_loopback(arguments: Vec<String>) -> Result<()> {
+    run(arguments, ExpectedClusterV1::OwnedLoopback)
+}
+
+pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
+    run(arguments, ExpectedClusterV1::Devnet)
+}
+
+fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
+    let arguments = parse_arguments_v1(arguments, expected)?;
+    expected.authenticate(&arguments.origin)?;
     if !arguments.journal_dir.is_dir() {
         return Err(refusal(
             "--journal-dir must be an existing absolute directory",
@@ -110,10 +136,8 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
     let plan_source = read_bounded(&arguments.plan, "successor plan")?;
     let evidence_source = read_bounded(&arguments.evidence, "terminal evidence")?;
     let plan: SuccessorPlan = serde_json::from_slice(&plan_source)?;
-    let evidence = parse_campaign_terminal_evidence_with_expected_cluster_v1(
-        &evidence_source,
-        ExpectedClusterV1::OwnedLoopback,
-    )?;
+    let evidence =
+        parse_campaign_terminal_evidence_with_expected_cluster_v1(&evidence_source, expected)?;
     authenticate_plan_source(&plan_source, &evidence.plan_sha256)?;
     require_direct_retirement_evidence(&evidence)?;
     authenticate_campaign_market_v1(&evidence, arguments.market)?;
@@ -835,8 +859,9 @@ fn progress_v1(
     }))
 }
 
-fn parse_arguments_v1(arguments: Vec<String>) -> Result<ArgumentsV1> {
+fn parse_arguments_v1(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<ArgumentsV1> {
     let mut values = BTreeMap::new();
+    let mut acknowledgment = None;
     let mut execute = false;
     let mut iterator = arguments.into_iter();
     while let Some(argument) = iterator.next() {
@@ -850,6 +875,17 @@ fn parse_arguments_v1(arguments: Vec<String>) -> Result<ArgumentsV1> {
         let value = iterator
             .next()
             .ok_or_else(|| Error::new(format!("{argument} requires a value")))?;
+        // Accepted on the devnet arm only. On the loopback arm it falls through
+        // to the unknown-argument refusal below, which names the command that
+        // does take it.
+        if argument == DEVNET_ACKNOWLEDGMENT_FLAG && expected == ExpectedClusterV1::Devnet {
+            if acknowledgment.replace(value).is_some() {
+                return Err(Error::new(format!(
+                    "{argument} may be supplied only once"
+                )));
+            }
+            continue;
+        }
         if !matches!(
             argument.as_str(),
             "--rpc-url"
@@ -865,7 +901,8 @@ fn parse_arguments_v1(arguments: Vec<String>) -> Result<ArgumentsV1> {
                 | "--completion"
         ) {
             return Err(Error::new(format!(
-                "unknown {COMMAND_V1} argument: {argument}"
+                "unknown {} argument: {argument}",
+                command(expected)
             )));
         }
         if values.insert(argument.clone(), value).is_some() {
@@ -885,11 +922,16 @@ fn parse_arguments_v1(arguments: Vec<String>) -> Result<ArgumentsV1> {
         Ok(path)
     };
     let rpc_url = take(&mut values, "--rpc-url")?;
+    if expected == ExpectedClusterV1::Devnet && acknowledgment.is_none() {
+        return Err(Error::new(format!(
+            "{DEVNET_ACKNOWLEDGMENT_FLAG} is required by {COMMAND_DEVNET_V1}"
+        )));
+    }
     let parse_key = |value: String, flag: &str| {
         Pubkey::from_str(&value).map_err(|error| Error::new(format!("{flag}: {error}")))
     };
     Ok(ArgumentsV1 {
-        origin: ClusterOriginV1::parse(&rpc_url, None)?,
+        origin: ClusterOriginV1::parse(&rpc_url, acknowledgment.as_deref())?,
         plan: absolute(take(&mut values, "--plan")?, "--plan")?,
         evidence: absolute(take(&mut values, "--evidence")?, "--evidence")?,
         market: parse_key(take(&mut values, "--market")?, "--market")?,
@@ -905,6 +947,19 @@ fn parse_arguments_v1(arguments: Vec<String>) -> Result<ArgumentsV1> {
         completion: absolute(take(&mut values, "--completion")?, "--completion")?,
         execute,
     })
+}
+
+pub(crate) fn devnet_usage() -> &'static str {
+    "\n  dclutch-local-successor-bootstrap devnet-aggregate-retirement-v1 \\\n     \
+     --rpc-url https://api.devnet.solana.com --i-mean-devnet DEVNET_GENESIS \\\n     \
+     --plan ABSOLUTE_JSON \\\n     \
+     --evidence ABSOLUTE_JSON --market PUBKEY --source-receipt PUBKEY \\\n     \
+     --fee-payer PUBKEY --fee-payer-keypair ABSOLUTE_KEYPAIR \\\n     \
+     --lookup-table PUBKEY --campaign ABSOLUTE_JSON \\\n     \
+     --journal-dir ABSOLUTE_DIRECTORY --completion ABSOLUTE_JSON [--execute]\n\nThe same \
+     retirement as the loopback command against a public devnet cohort. The four packets, the \
+     journal, the vault close and the rent arithmetic are identical; only the expected cluster \
+     is threaded rather than fixed."
 }
 
 pub(crate) fn usage() -> &'static str {
@@ -1124,6 +1179,111 @@ mod tests {
 
     use super::*;
 
+    /// The command line every cluster arm shares, minus the two coordinates
+    /// that separate them.
+    fn retirement_arguments(extra: &[&str]) -> Vec<String> {
+        let mut argv: Vec<String> = [
+            "--rpc-url",
+            "http://127.0.0.1:8899",
+            "--plan",
+            "/tmp/plan.json",
+            "--evidence",
+            "/tmp/evidence.json",
+            "--market",
+            "11111111111111111111111111111112",
+            "--source-receipt",
+            "11111111111111111111111111111113",
+            "--fee-payer",
+            "11111111111111111111111111111114",
+            "--fee-payer-keypair",
+            "/tmp/payer.json",
+            "--lookup-table",
+            "11111111111111111111111111111115",
+            "--campaign",
+            "/tmp/campaign.json",
+            "--journal-dir",
+            "/tmp/journal",
+            "--completion",
+            "/tmp/completion.json",
+        ]
+        .iter()
+        .map(|value| (*value).to_owned())
+        .collect();
+        argv.extend(extra.iter().map(|value| (*value).to_owned()));
+        argv
+    }
+
+    /// The devnet acknowledgment belongs to the public arm alone, and the
+    /// loopback arm names the command that does take it rather than refusing
+    /// it as an anonymous unknown argument.
+    #[test]
+    fn the_devnet_acknowledgment_belongs_to_the_public_retirement_arm_alone() {
+        let Err(refusal) = parse_arguments_v1(
+            retirement_arguments(&[DEVNET_ACKNOWLEDGMENT_FLAG, "SomeGenesisHash"]),
+            ExpectedClusterV1::OwnedLoopback,
+        ) else {
+            panic!("the loopback arm must not take a devnet acknowledgment");
+        };
+        let text = refusal.to_string();
+        assert!(
+            text.contains(COMMAND_V1) && text.contains(DEVNET_ACKNOWLEDGMENT_FLAG),
+            "expected the loopback arm to name itself and the flag, got: {text}"
+        );
+        // The same command line without the flag parses, so the refusal above
+        // is about the flag and not about the rest of it.
+        assert!(
+            parse_arguments_v1(retirement_arguments(&[]), ExpectedClusterV1::OwnedLoopback).is_ok(),
+            "the loopback arm must parse its own command line"
+        );
+    }
+
+    /// The public arm REQUIRES the acknowledgment, and says which command
+    /// requires it.
+    #[test]
+    fn the_public_retirement_arm_requires_the_devnet_acknowledgment() {
+        let Err(refusal) =
+            parse_arguments_v1(retirement_arguments(&[]), ExpectedClusterV1::Devnet)
+        else {
+            panic!("the devnet arm must not run unacknowledged");
+        };
+        let text = refusal.to_string();
+        assert!(
+            text.contains(DEVNET_ACKNOWLEDGMENT_FLAG) && text.contains(COMMAND_DEVNET_V1),
+            "expected the devnet arm to name the flag and itself, got: {text}"
+        );
+    }
+
+    /// A loopback URL is refused by the public arm at ORIGIN PARSING -- before
+    /// the cluster check, before any key, before any read. An acknowledgment
+    /// given for a loopback socket means one of the two is a typo and nothing
+    /// here can tell which.
+    #[test]
+    fn the_public_retirement_arm_refuses_a_loopback_origin_before_any_key_or_read() {
+        let Err(refusal) = parse_arguments_v1(
+            retirement_arguments(&[DEVNET_ACKNOWLEDGMENT_FLAG, "SomeGenesisHash"]),
+            ExpectedClusterV1::Devnet,
+        ) else {
+            panic!("a loopback socket must not be acknowledged as devnet");
+        };
+        assert!(
+            refusal.to_string().contains("was given for the loopback origin"),
+            "expected the origin parser's loopback refusal, got: {refusal}"
+        );
+    }
+
+    /// The two arms are two names for one implementation, and the selector is
+    /// total.
+    #[test]
+    fn each_cluster_names_its_own_retirement_command() {
+        assert_eq!(command(ExpectedClusterV1::OwnedLoopback), COMMAND_V1);
+        assert_eq!(command(ExpectedClusterV1::Devnet), COMMAND_DEVNET_V1);
+        assert_ne!(COMMAND_V1, COMMAND_DEVNET_V1);
+        assert!(devnet_usage().contains(COMMAND_DEVNET_V1));
+        assert!(devnet_usage().contains(DEVNET_ACKNOWLEDGMENT_FLAG));
+        assert!(usage().contains(COMMAND_V1));
+        assert!(!usage().contains(DEVNET_ACKNOWLEDGMENT_FLAG));
+    }
+
     fn key(byte: u8) -> Pubkey {
         Pubkey::new_from_array([byte; 32])
     }
@@ -1252,21 +1412,24 @@ mod tests {
     #[test]
     fn argv_freezes_exact_private_exterior_surface() {
         let parsed =
-            parse_arguments_v1(argv("/private/tmp/aggregate-retirement")).expect("exact argv");
+            parse_arguments_v1(
+                argv("/private/tmp/aggregate-retirement"),
+                ExpectedClusterV1::OwnedLoopback,
+            ).expect("exact argv");
         assert!(!parsed.execute);
         let mut execute = argv("/private/tmp/aggregate-retirement");
         execute.push("--execute".into());
-        assert!(parse_arguments_v1(execute).expect("execute argv").execute);
+        assert!(parse_arguments_v1(execute, ExpectedClusterV1::OwnedLoopback).expect("execute argv").execute);
     }
 
     #[test]
     fn argv_refuses_external_origins_duplicates_and_relative_outputs() {
         let mut external = argv("/private/tmp/aggregate-retirement");
         external[1] = "https://api.devnet.solana.com".into();
-        assert!(parse_arguments_v1(external).is_err());
+        assert!(parse_arguments_v1(external, ExpectedClusterV1::OwnedLoopback).is_err());
         let mut duplicate = argv("/private/tmp/aggregate-retirement");
         duplicate.extend(["--market".into(), Pubkey::new_unique().to_string()]);
-        assert!(parse_arguments_v1(duplicate).is_err());
+        assert!(parse_arguments_v1(duplicate, ExpectedClusterV1::OwnedLoopback).is_err());
         let mut relative = argv("/private/tmp/aggregate-retirement");
         let index = relative
             .iter()
@@ -1274,7 +1437,7 @@ mod tests {
             .expect("campaign flag")
             + 1;
         relative[index] = "campaign.json".into();
-        assert!(parse_arguments_v1(relative).is_err());
+        assert!(parse_arguments_v1(relative, ExpectedClusterV1::OwnedLoopback).is_err());
     }
 
     #[test]

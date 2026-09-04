@@ -74,6 +74,15 @@ pub(crate) struct SuccessorRunSpec {
     /// reach a real cluster.
     #[serde(default)]
     pub(crate) market: Option<MarketRunInput>,
+    /// Founding route for the COMPILED FIXTURE, when `market` is absent.
+    ///
+    /// The fixture is built from the plan inside this binary and a spec that
+    /// omits `market` has no other way to choose. Present alongside `market`
+    /// is REFUSED rather than merged: the market input already carries the
+    /// field, and two writable spellings of one selection is how a run ends up
+    /// founding by a route neither of its two files names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) founding_route: Option<FoundingRouteV1>,
     /// Additive and optional: absent means `"genesis"`, which is exactly the
     /// behaviour every v2 spec written before this field had. `"transaction"`
     /// removes the nine infrastructure record bodies from genesis and makes
@@ -245,6 +254,48 @@ impl FoundingBandInputV1 {
     }
 }
 
+/// Which founding route a run drives.
+///
+/// The two routes reach the same poststate -- an OPEN Market with its
+/// collateral realized, its Claims aggregate and its founder Position -- and
+/// they are not parallel authorities: same codec, same Core dispatch, one
+/// prestate prologue shared up to the founding submission itself.
+///
+/// THIS USED TO BE AN ENVIRONMENT VARIABLE, `DCLUTCH_FOUNDING_ROUTE=split`,
+/// read by one function in `market.rs` and set by nothing in the tree. Its
+/// author named this field as its durable home in the same comment that
+/// introduced it, and deferred it only because adding a required field would
+/// have forced every `MarketRunInput` literal to change while several were
+/// mid-rewrite in sibling lanes. There are four such literals today.
+///
+/// It is not only a tidier home. `tools/gauntlet/run.sh` stamps its campaign
+/// stage by `SPEC_INPUT_DIGEST`, which covers the run spec and did NOT cover
+/// that variable -- so exporting it and re-running skipped the campaign as
+/// "up to date" and handed back the ATOMIC run's evidence for a split run.
+/// That is the silent success `AGENTS.md` names: a command reporting a result
+/// having done nothing. Inside the spec, the selection is inside the digest.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum FoundingRouteV1 {
+    /// One transaction: Lock, Found, Realize, Claims, Open -- `DCLTGMF3`.
+    #[default]
+    Atomic,
+    /// Two: `DCLTGFP1` commits the Market in `Founding` with its permit
+    /// escrowed, and `DCLTGMO1` opens it by consuming that permit.
+    Split,
+}
+
+impl FoundingRouteV1 {
+    /// Whether this is the historical single-transaction founding.
+    ///
+    /// Read by `skip_serializing_if`, so a market that founds atomically
+    /// serialises to exactly the bytes it did before this field existed and no
+    /// spec digest, session digest or fixture pin moves for it.
+    pub(crate) fn is_atomic(&self) -> bool {
+        matches!(self, Self::Atomic)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct MarketRunInput {
@@ -337,6 +388,9 @@ pub(crate) struct MarketRunInput {
     /// run spec's claim that a certificate exists.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(crate) price_gate_hex: String,
+    /// Which founding route this run drives. Absent is `Atomic`.
+    #[serde(default, skip_serializing_if = "FoundingRouteV1::is_atomic")]
+    pub(crate) founding_route: FoundingRouteV1,
 }
 
 /// One Registry record a selected capability's publication chain finalizes.

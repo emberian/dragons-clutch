@@ -146,7 +146,10 @@ use crate::{
         FundingReadinessRoutedPlanV1, funding_readiness_routing_addresses_v1,
         plan_funding_readiness_from_rpc_v1, plan_funding_readiness_with_routing_from_rpc_v1,
     },
-    model::{AccountEvidence, MarketRunInput, RecordPair, SuccessorPlan, TransactionEvidence},
+    model::{
+        AccountEvidence, FoundingRouteV1, MarketRunInput, RecordPair, SuccessorPlan,
+        TransactionEvidence,
+    },
     plan::{hex, hex32, pubkey},
     rpc::{FOUNDING_HEAP_FRAME_BYTES, Rpc, RpcAccount, account_evidence, bounded_instructions},
     runtime::{PublishedRecord, decode_hex, publish_product_graph, publish_record, record},
@@ -11752,21 +11755,6 @@ fn publish_founding_request_records_v1(
     Ok(substituted_claims_record.raw)
 }
 
-/// Whether this run drives the two-stage split founding.
-///
-/// A proof-run toggle read from the environment, deliberately confined to this
-/// module while the successor tree is under concurrent construction by other
-/// lanes. The durable home for the route selection is a `MarketRunInput` field;
-/// gating on the environment lands the split executor and its local proof now
-/// without adding a required field that would force every `MarketRunInput`
-/// literal in the tree — several mid-rewrite in other lanes — to change at once.
-fn founding_route_is_split_v1() -> bool {
-    matches!(
-        std::env::var("DCLUTCH_FOUNDING_ROUTE").as_deref(),
-        Ok("split")
-    )
-}
-
 /// Found the Market atomically on a real validator: `DCLTGMF3`.
 ///
 /// Five stages in one rollback domain against the prestate `DCLTPCB2` left.
@@ -11775,7 +11763,7 @@ fn founding_route_is_split_v1() -> bool {
 /// prestate and a live Market with a Claims aggregate, a founder Position, and
 /// a Hoard holding the collateral.
 ///
-/// When [`founding_route_is_split_v1`] is set, founding runs as two
+/// When the run input selects [`FoundingRouteV1::Split`], founding runs as two
 /// transactions instead; this function delegates to
 /// [`execute_split_market_founding`] at the top, sharing the entire prestate
 /// prologue up to the founding submission itself.
@@ -11799,7 +11787,7 @@ fn execute_generic_market_founding(
     completed: &mut Vec<String>,
     mut submission_recorder: Option<&mut FoundingSubmissionRecorderV1<'_>>,
 ) -> Result<()> {
-    if founding_route_is_split_v1() {
+    if input.founding_route == FoundingRouteV1::Split {
         return execute_split_market_founding(
             rpc,
             plan,
@@ -13926,6 +13914,9 @@ fn pyth_market_input_base(
         selected_capability: None,
         linked_basis_hex: hex(&linked_basis),
         price_gate_hex: String::new(),
+        // The infrastructure floor founds atomically; a split tier-1 campaign
+        // selects the other route through `SuccessorRunSpec::founding_route`.
+        founding_route: FoundingRouteV1::Atomic,
     };
     Ok(input)
 }

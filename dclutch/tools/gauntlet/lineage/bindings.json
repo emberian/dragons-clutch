@@ -1,0 +1,16 @@
+{
+  "campaign": "lineage-loopback",
+  "note": "The successor declaration, DCLRLND1, on a real Agave runtime. `registry/lineage_v1::process` has been live in the deployed Registry since cohort-8 with all eight conjuncts dispatched, and `tools/lineage-loopback/run-lineage-loopback.sh` has been landing a real validator transaction through it for as long as that script has existed -- while the register read NEVER-EXECUTED, because the run swept its own evidence away with the ledger and no campaign folded it. That is the same shape ABORT-WITNESS found twice on 2026-09-03 (a green driver, no producer), one subsystem over, and the delta here is the same size: a directory to keep the evidence in, a `transactions` array in the document the caller already writes, and this file. No program changed and the run does exactly what it did before.\n\nONE transaction is bound, because one is what the route takes: the wire is argument-free and everything the hop asserts -- both endpoints, which roles moved, which key consents for each -- is read out of the successor's own activation cache and re-derived from the account bytes. The preflight before it opens no key and sends nothing, and the replay after it is refused in SIMULATION with `LineageAlreadyDeclared`, so neither is a block entry and neither is claimed here. What the run proves beyond the ProgramTest in `programs/dclutch-registry-sbf/tests/lineage_program_test.rs` is the CALLER's plumbing: the finalized multi-account read, the vacant-address mapping, the keyless simulation's wire format, the signer set, and the read-back that compares the landed 248 bytes to the projected ones.\n\nWhat it does NOT prove, and the runner's own header says so first: that a real activation ladder produced these caches. They are composed offline and injected at genesis, which is legal because the declaration route authenticates a cache's owner, width, decodability and derived address and asks nothing about provenance. Cut-day evidence comes from devnet's real caches.",
+  "bindings": [
+    {
+      "label": "declare one release set's successor (DCLRLND1)",
+      "routes": [
+        "registry/lineage_v1::process",
+        "registry/process_instruction"
+      ],
+      "program": "registry",
+      "outcome": "executed",
+      "note": "One transaction and one first-party program. The Registry allocates the 248-byte `ReleaseLineageV1` record by CPI to the System program at depth two -- the only child in the frame -- and writes the hop into it at the PDA the caller projected. The caller then reads that account back off the chain, outside the transaction, and refuses to write its evidence unless the landed bytes are byte-equal to the projection and its length is the contract's `RELEASE_LINEAGE_BYTES_V1`. So `executed` here is corroborated twice by the chain and once by neither: the finalized logs the census reads, the account read the caller made afterwards, and the program's own conjunct 8, which reads back what it persisted before it returns."
+    }
+  ]
+}

@@ -203,7 +203,10 @@ fn run() -> Result<()> {
             wallet_terminal_payout_exterior::run_devnet_v1(arguments.collect())
         }
         Some(command) if command == aggregate_retirement_exterior::COMMAND_V1 => {
-            aggregate_retirement_exterior::run(arguments.collect())
+            aggregate_retirement_exterior::run_owned_loopback(arguments.collect())
+        }
+        Some(command) if command == aggregate_retirement_exterior::COMMAND_DEVNET_V1 => {
+            aggregate_retirement_exterior::run_devnet(arguments.collect())
         }
         Some(command) if command == evidence_refresh::REFRESH_EVIDENCE_COMMAND_V1 => {
             evidence_refresh::run_devnet(arguments.collect())
@@ -2313,6 +2316,7 @@ fn usage() {
     println!("{}", terminal_sequence::owned_loopback_usage());
     println!("{}", direct_resolution_campaign::usage());
     println!("{}", aggregate_retirement_exterior::usage());
+    println!("{}", aggregate_retirement_exterior::devnet_usage());
     println!("{}", source_abort_exterior::usage());
     println!("{}", source_abort_exterior::interruption_audit_usage());
     println!("{}", user_position_admission::usage());

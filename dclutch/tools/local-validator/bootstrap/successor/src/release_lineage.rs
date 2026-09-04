@@ -77,6 +77,13 @@ pub(crate) const COMMAND_V1: &str = "local-private-validator-declare-successor-v
 /// genesis hash against it before a single account is read.
 pub(crate) const COMMAND_DEVNET_V1: &str = "devnet-declare-successor-v1";
 
+/// The label the landed declaration is recorded under.
+///
+/// It is a BINDING KEY: `tools/gauntlet/lineage/bindings.json` matches this
+/// exact string, and the census refuses a transaction no binding claims. Both
+/// arms use it, because the route is the same route whichever cluster ran it.
+pub(crate) const DECLARATION_LABEL_V1: &str = "declare one release set's successor (DCLRLND1)";
+
 pub(crate) fn usage() -> &'static str {
     "dclutch-local-successor-bootstrap local-private-validator-declare-successor-v1 --rpc-url http://127.0.0.1:PORT --registry REGISTRY_PUBKEY --predecessor HEX64 --successor HEX64 --evidence ABSOLUTE_JSON [--execute --fee-payer-keypair ABSOLUTE_JSON --authority-keypair-env NAME]\n\
      dclutch-local-successor-bootstrap devnet-declare-successor-v1 --rpc-url URL --i-mean-devnet GENESIS_HASH --registry REGISTRY_PUBKEY --predecessor HEX64 --successor HEX64 --evidence ABSOLUTE_JSON [--execute --fee-payer-keypair ABSOLUTE_JSON --authority-keypair-env NAME]\n\
@@ -301,7 +308,7 @@ fn declare_v1(mut rpc: Rpc, arguments: &ArgumentsV1, cluster: &str) -> Result<()
 
     let signers: Vec<&Keypair> = authority.iter().collect();
     let evidence = rpc.send_v0_inline_with_signers(
-        "declare-successor",
+        DECLARATION_LABEL_V1,
         &[report.instruction.clone()],
         &fee_payer,
         &signers,
@@ -566,6 +573,18 @@ fn write_evidence(
                 "slot": evidence.slot,
             })
         }),
+        // The same transaction, in the shape `tools/gauntlet/census observe`
+        // reads: label, signature, slot, error, compute units, and the chain's
+        // own finalized logs. `landed` above is the human summary and stays;
+        // this is the machine record, and the logs are the half that makes it
+        // evidence rather than a claim -- the census cross-checks every route
+        // this campaign binds against the `Program <address> invoke` lines
+        // rather than believing the binding. A preflight lands nothing and
+        // emits an empty array, which the census reads as a campaign with no
+        // transactions rather than as a campaign that succeeded.
+        "transactions": landed
+            .map(|evidence| vec![evidence.clone()])
+            .unwrap_or_default(),
     });
     let serialized = serde_json::to_string_pretty(&document)
         .map_err(|error| Error::new(format!("evidence: {error}")))?;

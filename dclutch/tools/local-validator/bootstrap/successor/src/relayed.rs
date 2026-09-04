@@ -63,7 +63,7 @@ use crate::direct_market::{DirectMarketCompilerInputV1, attach_direct_market_cap
 use crate::market::{
     compile_linked_basis_v3, demo_id, record_identity, semantic_basis_identity_v3,
 };
-use crate::model::MarketRunInput;
+use crate::model::{FoundingRouteV1, MarketRunInput};
 use crate::plan::hex;
 use crate::{Error, Result};
 
@@ -665,6 +665,7 @@ pub(crate) fn relayed_market_input(
         selected_capability: None,
         linked_basis_hex: hex(&linked_basis),
         price_gate_hex: String::new(),
+        founding_route: FoundingRouteV1::Atomic,
     };
     attach_direct_market_capability_v1(&mut input, direct)?;
     crate::market::validate_market_input(&input)?;
