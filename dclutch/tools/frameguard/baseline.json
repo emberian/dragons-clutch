@@ -1,10 +1,10 @@
 {
   "bound_bytes": 4096,
-  "commit": "04db9d734e4f993b5ca5291334f500aa782af5c2",
+  "commit": "1c507c45f34e27e1aaeaa34b7335896d094dea94",
   "link_count": 12,
   "links": [
     {
-      "frame_count": 274,
+      "frame_count": 273,
       "functions": [
         {
           "frames_bytes": [
@@ -140,7 +140,7 @@
         },
         {
           "frames_bytes": [
-            3264
+            3200
           ],
           "symbol": "_ZN18dclutch_claims_sbf11founding_v524process_series_transport17h<hash>E"
         },
@@ -263,12 +263,6 @@
             1280
           ],
           "symbol": "_ZN18dclutch_claims_sbf15affine_batch_v228execute_parent_authenticated17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            64
-          ],
-          "symbol": "_ZN18dclutch_claims_sbf15affine_batch_v242authenticate_runtime_product_basis_core_v317h<hash>E"
         },
         {
           "frames_bytes": [
@@ -512,7 +506,7 @@
         },
         {
           "frames_bytes": [
-            3264
+            3200
           ],
           "symbol": "_ZN18dclutch_claims_sbf19rational_product_v332authenticate_rational_product_v317h<hash>E"
         },
@@ -932,7 +926,7 @@
         },
         {
           "frames_bytes": [
-            3584
+            3520
           ],
           "symbol": "_ZN18dclutch_claims_sbf22terminal_settlement_v324authenticate_and_prepare17h<hash>E"
         },
@@ -1052,7 +1046,7 @@
         },
         {
           "frames_bytes": [
-            704
+            640
           ],
           "symbol": "_ZN18dclutch_claims_sbf24fractional_retirement_v320authenticated_cursor17h<hash>E"
         },
@@ -1624,7 +1618,7 @@
       "package": "dclutch-claims-sbf"
     },
     {
-      "frame_count": 274,
+      "frame_count": 272,
       "functions": [
         {
           "frames_bytes": [
@@ -1821,7 +1815,7 @@
         },
         {
           "frames_bytes": [
-            128
+            256
           ],
           "symbol": "_ZN16dclutch_core_sbf10resolution22authenticate_poststate17h<hash>E"
         },
@@ -1842,12 +1836,6 @@
             1152
           ],
           "symbol": "_ZN16dclutch_core_sbf10resolution27authenticate_live_poststate17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            192
-          ],
-          "symbol": "_ZN16dclutch_core_sbf10resolution27resolution_poststate_digest17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -2025,7 +2013,7 @@
         },
         {
           "frames_bytes": [
-            1536
+            1472
           ],
           "symbol": "_ZN16dclutch_core_sbf11series_open7process17h<hash>E"
         },
@@ -2211,7 +2199,7 @@
         },
         {
           "frames_bytes": [
-            384
+            320
           ],
           "symbol": "_ZN16dclutch_core_sbf14series_consume30authenticate_found_coordinates17h<hash>E"
         },
@@ -2319,12 +2307,6 @@
         },
         {
           "frames_bytes": [
-            64
-          ],
-          "symbol": "_ZN16dclutch_core_sbf19execute_provider_v39read_rent17h<hash>E"
-        },
-        {
-          "frames_bytes": [
             1600
           ],
           "symbol": "_ZN16dclutch_core_sbf19generic_founding_v110apply_open17h<hash>E"
@@ -2349,7 +2331,7 @@
         },
         {
           "frames_bytes": [
-            3776
+            3712
           ],
           "symbol": "_ZN16dclutch_core_sbf19generic_founding_v112process_open17h<hash>E"
         },
@@ -2595,7 +2577,7 @@
         },
         {
           "frames_bytes": [
-            1280
+            1344
           ],
           "symbol": "_ZN16dclutch_core_sbf20series_permit_expiry7process17h<hash>E"
         },
@@ -2673,7 +2655,7 @@
         },
         {
           "frames_bytes": [
-            704
+            640
           ],
           "symbol": "_ZN16dclutch_core_sbf5found13process_frame17h<hash>E"
         },
@@ -2723,7 +2705,7 @@
           "frames_bytes": [
             640,
             320,
-            320
+            256
           ],
           "symbol": "_ZN16dclutch_core_sbf5found26authenticate_source_record17h<hash>E"
         },
@@ -2735,7 +2717,7 @@
         },
         {
           "frames_bytes": [
-            768
+            704
           ],
           "symbol": "_ZN16dclutch_core_sbf5found28authenticate_prepare_context17h<hash>E"
         },
@@ -2777,7 +2759,7 @@
         },
         {
           "frames_bytes": [
-            2944
+            2880
           ],
           "symbol": "_ZN16dclutch_core_sbf5found7project17h<hash>E"
         },
@@ -2849,7 +2831,7 @@
         },
         {
           "frames_bytes": [
-            192
+            128
           ],
           "symbol": "_ZN16dclutch_core_sbf7records40authenticate_finalized_record_with_bumps17h<hash>E"
         },
@@ -3017,13 +2999,13 @@
         },
         {
           "frames_bytes": [
-            3008
+            3072
           ],
           "symbol": "_ZN16dclutch_core_sbf9retire_v126process_checkpoint_prepare17h<hash>E"
         },
         {
           "frames_bytes": [
-            1408
+            1344
           ],
           "symbol": "_ZN16dclutch_core_sbf9retire_v127authenticate_source_receipt17h<hash>E"
         },
@@ -4396,7 +4378,7 @@
       "package": "dclutch-general-accelerator-sbf"
     },
     {
-      "frame_count": 10,
+      "frame_count": 9,
       "functions": [
         {
           "frames_bytes": [
@@ -4421,12 +4403,6 @@
             0
           ],
           "symbol": "_RNvCs<hash>_7___rustc19___rust_alloc_zeroed"
-        },
-        {
-          "frames_bytes": [
-            0
-          ],
-          "symbol": "_ZN13solana_sysvar15SysvarSerialize17from_account_info17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -4974,7 +4950,7 @@
       "package": "dclutch-rent-sbf"
     },
     {
-      "frame_count": 172,
+      "frame_count": 171,
       "functions": [
         {
           "frames_bytes": [
@@ -5172,7 +5148,7 @@
         },
         {
           "frames_bytes": [
-            320
+            256
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf11core_effect27authenticate_source_records17h<hash>E"
         },
@@ -5232,7 +5208,7 @@
         },
         {
           "frames_bytes": [
-            2240
+            2176
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf11core_effect40authenticate_direct_material_and_funding17h<hash>E"
         },
@@ -5292,7 +5268,7 @@
         },
         {
           "frames_bytes": [
-            2112
+            2048
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf17sponsored_push_v115boxed_next_head17h<hash>E"
         },
@@ -5322,7 +5298,7 @@
         },
         {
           "frames_bytes": [
-            3904
+            3840
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf17sponsored_push_v120boxed_source_records17h<hash>E"
         },
@@ -5412,7 +5388,7 @@
         },
         {
           "frames_bytes": [
-            1472
+            1408
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf18relay_transport_v112process_seal17h<hash>E"
         },
@@ -5430,7 +5406,7 @@
         },
         {
           "frames_bytes": [
-            1728
+            1664
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf18relay_transport_v114process_append17h<hash>E"
         },
@@ -5688,7 +5664,7 @@
         },
         {
           "frames_bytes": [
-            1280
+            1216
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf21provider_transport_v326authenticate_reclaim_state17h<hash>E"
         },
@@ -5730,7 +5706,7 @@
         },
         {
           "frames_bytes": [
-            1280
+            1216
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf21provider_transport_v331authenticate_submission_records17h<hash>E"
         },
@@ -5757,12 +5733,6 @@
             0
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf23provider_instruction_v315ProviderFrameV315receiver_config17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            0
-          ],
-          "symbol": "_ZN28dclutch_resolution_proof_sbf23provider_instruction_v315ProviderFrameV34rent17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -5868,7 +5838,7 @@
         },
         {
           "frames_bytes": [
-            1664
+            1600
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf23provider_instruction_v338authenticate_market_and_infrastructure17h<hash>E"
         },
@@ -6698,7 +6668,7 @@
         },
         {
           "frames_bytes": [
-            192
+            128
           ],
           "symbol": "_ZN19dclutch_trading_sbf21direct_close_maker_v126authenticate_persisted_raw17h<hash>E"
         },
@@ -6782,7 +6752,7 @@
         },
         {
           "frames_bytes": [
-            256
+            192
           ],
           "symbol": "_ZN19dclutch_trading_sbf21direct_token_setup_v123borrow_finalized_record17h<hash>E"
         },
@@ -6860,19 +6830,19 @@
         },
         {
           "frames_bytes": [
-            1280
+            1216
           ],
           "symbol": "_ZN19dclutch_trading_sbf21execution_strategy_v234authenticate_execution_strategy_v217h<hash>E"
         },
         {
           "frames_bytes": [
-            960
+            896
           ],
           "symbol": "_ZN19dclutch_trading_sbf21execution_strategy_v243authenticate_selected_execution_strategy_v217h<hash>E"
         },
         {
           "frames_bytes": [
-            1408
+            1344
           ],
           "symbol": "_ZN19dclutch_trading_sbf21execution_strategy_v253authenticate_common_frame_with_sealed_capability_pair17h<hash>E"
         },
@@ -7124,7 +7094,7 @@
         },
         {
           "frames_bytes": [
-            768
+            704
           ],
           "symbol": "_ZN19dclutch_trading_sbf24direct_fee_settlement_v119authenticate_config17h<hash>E"
         },
@@ -8216,7 +8186,7 @@
         },
         {
           "frames_bytes": [
-            128
+            64
           ],
           "symbol": "_ZN19dclutch_trading_sbf5outer37authenticate_finalized_record_against17h<hash>E"
         },
@@ -9489,7 +9459,7 @@
         },
         {
           "frames_bytes": [
-            256
+            192
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v323borrow_finalized_record17h<hash>E"
         },
@@ -9597,7 +9567,7 @@
         },
         {
           "frames_bytes": [
-            1408
+            1344
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v324process_hot_execution_v317h<hash>E"
         },
@@ -9970,12 +9940,6 @@
         },
         {
           "frames_bytes": [
-            64
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6hot_v335require_committed_rent_exemption_v317h<hash>E"
-        },
-        {
-          "frames_bytes": [
             448
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v335require_funding_child_separation_v517h<hash>E"
@@ -10021,6 +9985,12 @@
             1600
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v337decode_accelerator_prelude_context_v417h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            64
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf6hot_v337require_committed_accounts_persist_v317h<hash>E"
         },
         {
           "frames_bytes": [
@@ -10264,7 +10234,7 @@
         },
         {
           "frames_bytes": [
-            512
+            448
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v34seal31authenticate_capability_seal_v317h<hash>E"
         },

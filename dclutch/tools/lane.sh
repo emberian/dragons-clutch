@@ -12,7 +12,7 @@
 # `tools/lane.sh <subcommand> --help`.
 #
 # Subcommands:
-#   commit <msg> -- <paths...>          enforced `git commit --only`
+#   commit <msg>|-F <file> -- <paths...> enforced `git commit --only`
 #   commit-patch <msg> <patch-file>     HEAD plus your hunk, for shared files
 #   fmt [--allow-root] <file.rs>...     pinned rustfmt, named files only
 #   board <text...>                     attributed, timestamped board entry
@@ -60,7 +60,7 @@ lane_top_help() {
 usage: lane.sh <subcommand> [args...]
 
 subcommands:
-  commit <msg> -- <paths...>          enforced `git commit --only --no-gpg-sign`
+  commit <msg>|-F <file> -- <paths...> enforced `git commit --only --no-gpg-sign`
   commit-patch <msg> <patch-file>     HEAD plus your hunk, for shared files
   fmt [--allow-root] <file.rs>...     pinned rustfmt, named files only
   board <text...>                     attributed, timestamped board entry
@@ -150,8 +150,17 @@ lane_cmd_commit() {
     lane_commit_help >&2
     lane_die "commit: missing <message> (usage: lane.sh commit <message> -- <paths...>)" 2
   fi
-  local msg="$1"
-  shift
+  # `-F <file>` reads a multi-paragraph message from a file, so a prose body
+  # with blank lines and code spans never has to survive a shell's quoting.
+  local msg
+  if [[ "$1" == "-F" ]]; then
+    [[ -r "${2:-}" ]] || lane_die "commit: -F needs a readable message file, got '${2:-<nothing>}'" 2
+    msg="$(cat "$2")"
+    shift 2
+  else
+    msg="$1"
+    shift
+  fi
   if [[ "${1:-}" != "--" ]]; then
     lane_commit_help >&2
     lane_die "commit: expected '--' before the path list, got '${1:-<nothing>}'" 2

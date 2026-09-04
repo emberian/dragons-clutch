@@ -4571,3 +4571,15 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Started 08:00 EDT: LEAN-DRIFT **`abec5fd737833b71a`** — a guard the emission census counts as guarded is red
   (`generated_transition_programs_v3.rs` vs its emitter): convict the side, realign at the author, and make the census RUN
   the guards it counts.
+- RENT-FLOORS closed (`a4b2cbb17`, `f1fb4f735`, `1c507c45f`, `fae387124`, `b94197ddb`, `0f24245da`): census 666 sites —
+  343 test-only, 191 creating, **122 pre-existing floors (every non-test `is_exempt` in the tree), 7 persisted-principal
+  exactness**; **96 floors replaced by one author `funded_rent_persists_v1` whose argument is the runtime's source** (no rent
+  collection path; exempt cannot become rent-paying; a rate-stranded account still reads exempt under SIMD-0392) — the floor
+  decides only a drained account; −686 lines, 55 Rent parameters and 39 dead sysvar decodes gone; the rate-rise program-test
+  red-proved on the PARENT ELF (`FinalizedRecord 0x3002` on a record nobody touched); 32 frames shrank 64 bytes, one grew
+  past the wall when a dropped parameter made a function inlinable (27 diagnostics — `#[inline(never)]` restored). Owed: 9
+  floors in the resolution-core operator; 22 explicit sites needing per-site judgment; **`release_capture.rs:1165` — a
+  deploy preflight that calls the rate-rise refusal "the direction that matters for safety" and would refuse cohort-16's
+  redeploy over any cohort funded before a rise.** The lane commit helper now takes `-F <file>` (the lane fell back to bare
+  git when a prose body reached git as one line).
+- Cuts: `ce1a012ba`, `d2fc27847`.
