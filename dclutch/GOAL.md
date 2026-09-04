@@ -4368,3 +4368,12 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   already covered — "rendered twice" — while the actual unrendered thing was the eleven Core ROUTES the new magic selects,
   which the instruction arm keys by census route id); fixed one commit later — eleven sentences in instructions.ts, the
   duplicate entry reverted, 54/65 instruction magics rendered, 0 unrendered, explorer suite 129/129. Cut at 744d8b30d.
+- TWINS closed (`537496dd5`, `93eb55ed0`): `tools/twins/classification.mjs` is the one table (seven classes, 38 listed
+  exceptions; TWIN and the unabsorbed BACKLOG derived) read by both sync-from-web and twinIdentity; seven files reclassified
+  by reading (one-line re-exports that had been BACKLOG; a test the SDK copy of which was 59 lines ahead and would have been
+  deleted); content-bearing classes checked against content. **A Rust-emitted example child** (`examples/compact_retire_child_v4.rs`
+  in the owning contract) makes the retirement digest pin an authority — green on first run, red on a swapped slot.
+  Owed: the absorption backlog (205 drifted, 198 with no SDK copy) untouched; the fifteen PDA addresses stay under a
+  regression pin. Started 03:45 EDT: LINT-CLIENTS (ten standing lint errors, fixed at the author; lint in a tier) and
+  MAGIC-NAMES (the dealer/general `REQUEST_MAGIC` collision; a one-to-one name → bytes check).
+- Cuts: `744d8b30d`, `658f8930a`.

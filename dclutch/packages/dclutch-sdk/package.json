@@ -58,6 +58,8 @@
     "abi:rational-descriptor-v3:verify": "node scripts/generate-rational-representation-descriptor-v3.mjs --check",
     "abi:rational-lifecycle-v2": "node scripts/generate-rational-lifecycle-request-v2.mjs",
     "abi:rational-lifecycle-v2:verify": "node scripts/generate-rational-lifecycle-request-v2.mjs --check",
+    "abi:rational-retire-child": "node scripts/generate-rational-retire-child-v4.mjs",
+    "abi:rational-retire-child:verify": "node scripts/generate-rational-retire-child-v4.mjs --check",
     "abi:rational-open-wasm": "node scripts/generate-rational-open-wasm.mjs",
     "abi:rational-open-wasm:verify": "node scripts/generate-rational-open-wasm.mjs --check",
     "abi:source-resolution-state-v2": "node scripts/generate-source-resolution-state-v2.mjs",

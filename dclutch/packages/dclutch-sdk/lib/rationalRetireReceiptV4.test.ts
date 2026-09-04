@@ -1,7 +1,10 @@
 import { AddressLookupTableAccount, PublicKey } from '@solana/web3.js';
 
-import { hex } from './bytes';
+import { fromHex, hex, pubkey } from './bytes';
 import { describe, expect, it } from 'vitest';
+
+import emitted from '../fixtures/rational-retire-receipt-child-v4.json';
+import { TOKEN_2022_PROGRAM_ID } from './rationalTokenV2';
 
 import { HOT_FIXED_ACCOUNT_COUNT_V3 } from './generated/directInlineV3';
 import {
@@ -72,18 +75,71 @@ describe('compact Rational RetireReceipt V4', () => {
     const support = deriveRationalRetireReceiptSupportV4(address(30), bytes(21), decoded.support, address(31));
     const digest = await deriveRationalRetireReceiptChildDigestV4(request, support);
     expect(digest).toHaveLength(32);
-    // A REGRESSION PIN, and it is not an authority. Nothing in this tree can
-    // check this client's child against the program's: the lifecycle contract
-    // owns the layout and publishes no byte fixture, so this value came from
-    // this encoder rather than from Rust. What it catches is the hole the
-    // coordinates' own red proof exposed -- move
-    // LIFECYCLE_ROW_CUSTODY_OWNER_OFFSET in the emitted module and the family
-    // encoder, the child encoder and every other assertion here stay green
-    // while the wallet signs a different child. A Rust-emitted example child
-    // would make this a real cross-boundary check; it is owed.
+    // A REGRESSION PIN OVER THE PDA DERIVATION, and only that. It is what
+    // keeps `deriveRationalRetireReceiptSupportV4`'s fifteen derived addresses
+    // from moving unnoticed, since the Rust emitter derives no PDAs and cannot
+    // speak to them. The LAYOUT it feeds -- which offset each of the five
+    // vacancy accounts lands on, and therefore what the wallet signs -- is no
+    // longer pinned here: the test below asserts it against a child the
+    // lifecycle contract emitted, which is an authority this one never was.
     expect(hex(digest)).toBe('cee208ad10b26cde3bbcfb9567c7d8a6fa1f28dd8bdda2b75d1553b7b965a630');
     await expect(deriveRationalRetireReceiptChildDigestV4(request, [support[1], support[0], support[2]])).rejects.toThrow(/unordered/);
     await expect(deriveRationalRetireReceiptChildDigestV4(request, [])).rejects.toThrow(/wrong exact width/);
+  });
+
+  it('builds the same family and the same child digest as the Rust contract that owns them', async () => {
+    /**
+     * THE CROSS-BOUNDARY CHECK, and the reason it had to exist.
+     *
+     * Everything else in this file compares this encoder against itself. The
+     * defect that motivates the whole module was invisible to exactly that:
+     * `e78fa027d` gave the compact vacancy row its custody-owner account on
+     * 2026-08-29, taking the group from four accounts to five, and for six days
+     * the client built a `20 + 4K` Claims frame for a program reading `20 + 5K`
+     * while every client-side assertion stayed green.
+     *
+     * `fixtures/rational-retire-receipt-child-v4.json` is emitted by
+     * `crates/dclutch-rational-representation-v2-lifecycle-contract/examples/
+     * compact_retire_child_v4.rs`, through the contract's own family,
+     * child-header, row and request encoders — so the bytes below were laid out
+     * by the owner of the layout, not by the code under test. Fixture evidence,
+     * not devnet: the identities are chosen constants.
+     */
+    const identity = (value: string): string => pubkey(fromHex(value, 'emitted identity'), 'emitted identity');
+    const input = emitted.familyInput;
+    // The one identity the encoder does not take as an argument: it bakes
+    // Token-2022 in, so the fixture's agreement with it is a real assertion.
+    expect(identity(input.tokenProgram)).toBe(TOKEN_2022_PROGRAM_ID);
+
+    const family = encodeRationalRetireReceiptFamilyV4({
+      releaseSet: fromHex(input.releaseSet, 'release set'),
+      market: identity(input.market),
+      graphId: fromHex(input.graphId, 'graph'),
+      descriptorId: fromHex(input.descriptorId, 'descriptor'),
+      representationAuthority: identity(input.representationAuthority),
+      receiptMint: identity(input.receiptMint),
+      rentCredit: identity(input.rentCredit),
+      rentProgram: identity(input.rentProgram),
+      generation: BigInt(input.generation),
+      claimsRevision: BigInt(input.claimsRevision),
+      receiptLamports: BigInt(input.receiptLamports),
+      receiptRent: BigInt(input.receiptRent),
+      outcomeCount: input.outcomeCount,
+      rentBefore: BigInt(input.rentBefore),
+    });
+    expect(hex(family)).toBe(emitted.family);
+
+    const support = emitted.support.map((row) => Object.freeze({
+      outcome: row.outcome,
+      coefficient: BigInt(row.coefficient),
+      shardMint: identity(row.shardMint),
+      structuredCustody: identity(row.structuredCustody),
+      owner: identity(row.owner),
+      position: identity(row.position),
+      admission: identity(row.admission),
+    }));
+    expect(support).toHaveLength(3);
+    expect(hex(await deriveRationalRetireReceiptChildDigestV4(family, support))).toBe(emitted.childDigest);
   });
 
   it('compiles a wallet-signable candidate only with the exact Hot frame and an active ALT', () => {
