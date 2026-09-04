@@ -13,7 +13,7 @@ import {
   type MarketActivityV1,
   type MarketFillV1,
 } from '@/lib/marketActivity';
-import { outageDisclosureV1 } from '@/lib/marketDetail';
+import { failureEscrowOwnerV1, outageDisclosureV1 } from '@/lib/marketDetail';
 import { shortAddressV1 } from '@/lib/marketDiscovery';
 import { checkedReleaseSetIdsV1 } from '@/lib/publicCutStaging';
 import { denominationUnitV1, formatQuantityV1, type DenominationV1 } from '@/lib/quantity';
@@ -180,11 +180,19 @@ export default function MarketActivity({ address, endpoint, programs, denominati
     return () => { cancelled = true; };
   }, [read]);
 
+  // Derived, not read: two addresses this component already holds settle who
+  // an outage pays, because a refunding market seats its failure column in a
+  // Position the MARKET derives. See `failureEscrowOwnerV1`.
+  const failureEscrowOwner = supplyAtoms === null || supplyAtoms.length < 2
+    ? null
+    : failureEscrowOwnerV1(claims, address, supplyAtoms.length - 1);
+
   return <MarketActivityView
     state={state}
     denomination={denomination}
     outcomes={outcomes}
     supplyAtoms={supplyAtoms}
+    failureEscrowOwner={failureEscrowOwner}
     onReread={() => { void read(); }}
   />;
 }
@@ -195,11 +203,13 @@ export default function MarketActivity({ address, endpoint, programs, denominati
  * Exported for exactly that: the arrangement of this section is pinned by a
  * case that hands it a state, not by a screenshot.
  */
-export function MarketActivityView({ state, denomination, outcomes, supplyAtoms, onReread }: Readonly<{
+export function MarketActivityView({ state, denomination, outcomes, supplyAtoms, failureEscrowOwner, onReread }: Readonly<{
   state: State;
   denomination: DenominationV1 | null;
   outcomes: ReadonlyArray<string> | null;
   supplyAtoms: ReadonlyArray<string> | null;
+  /** This market's derived failure escrow, when the caller derived one. */
+  failureEscrowOwner?: string | null;
   onReread?: () => void;
 }>) {
   const activity = state.kind === 'ready' ? state.activity : null;
@@ -211,7 +221,12 @@ export function MarketActivityView({ state, denomination, outcomes, supplyAtoms,
   // holds and the Position accounts it just read. See `outageDisclosureV1`.
   const outage = supplyAtoms === null
     ? null
-    : outageDisclosureV1({ outcomeCount: supplyAtoms.length, supplyAtoms, positions });
+    : outageDisclosureV1({
+      outcomeCount: supplyAtoms.length,
+      supplyAtoms,
+      positions,
+      failureEscrowOwner: failureEscrowOwner ?? null,
+    });
 
   return <section className="trade-v3-card" aria-label="What has happened on this market">
     <header>

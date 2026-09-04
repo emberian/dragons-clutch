@@ -282,7 +282,20 @@ pub fn build_series_premarket_expiry_chain_v1(
         input.registry_program,
         input.releases.release_set,
     );
-    let provisional_records = build_series_record_corpus_v1(SeriesRecordInputV1 {
+    // ONE WALLET, NAMED BY THREE AUTHORITIES. The Template's refund owner, the
+    // Ticket's refund owner and the lifecycle RentCredit's `refund_wallet` are
+    // required to be the same key by the Series kernel
+    // (`terminal.rs::requires_wallet`), by Core
+    // (`series_permit_expiry.rs::authenticate_rent_credit_coordinates`) and by
+    // Trading's pre-CPI mirror of it -- and the RentCredit is the ACCOUNT the
+    // refunded lamports land in, never the beneficiary they are credited to.
+    //
+    // This fixture used to stage the Ticket's refund owner as the RentCredit's
+    // own ADDRESS, and derived that address in a throwaway first pass over the
+    // record corpus for no other purpose. All three now name
+    // `refund_beneficiary`, so the corpus is built once and the RentCredit is
+    // derived from it rather than the other way round.
+    let records = build_series_record_corpus_v1(SeriesRecordInputV1 {
         realm: hash(&realm).to_bytes(),
         release_set: input.releases.release_set,
         product_record: hash(&product.product).to_bytes(),
@@ -296,32 +309,6 @@ pub fn build_series_premarket_expiry_chain_v1(
         ticket_refund_owner: refund_beneficiary,
         close_rent: input.rent.minimum_balance(32),
     })?;
-    let (rent_credit, _) = build_lifecycle_rent_credit_v1(
-        input.rent_program,
-        provisional_records.future_market,
-        input.releases.release_set,
-        provisional_records.generation,
-        refund_beneficiary,
-    )?;
-    let records = build_series_record_corpus_v1(SeriesRecordInputV1 {
-        realm: hash(&realm).to_bytes(),
-        release_set: input.releases.release_set,
-        product_record: hash(&product.product).to_bytes(),
-        product_id: product.product_id,
-        result_domain: product.result_domain_digest,
-        capability_manifest: hash(&EMPTY_MANIFEST_BYTES).to_bytes(),
-        registry_program: input.registry_program,
-        core_program: input.core_program,
-        founder,
-        template_refund_owner: refund_beneficiary,
-        ticket_refund_owner: rent_credit,
-        close_rent: input.rent.minimum_balance(32),
-    })?;
-    if provisional_records.future_market != records.future_market
-        || provisional_records.template_id != records.template_id
-    {
-        return Err(SeriesPremarketExpiryChainErrorV1::Record);
-    }
     let substrate = build_root_independent_substrate_v1(
         &input.rent,
         input.registry_program,
@@ -3110,6 +3097,75 @@ mod native_tests {
 
     use super::*;
 
+    /// THE WALL THIS CAMPAIGN NOW STANDS AT, PROVED WITHOUT AN ELF.
+    ///
+    /// A Series root's `selection().config()` is required to be TWO values
+    /// that cannot be equal, and this is the arithmetic that makes them
+    /// unequal. Nothing here is a claim about the fixture: it is a claim about
+    /// the two identities the tree derives from one Template record.
+    ///
+    /// - The FAMILY-NEUTRAL rule. Trading's Hot prelude reads the account at
+    ///   `HOT_CONFIG_RAW_ACCOUNT_V3` with `borrow_finalized_record_at(
+    ///   descriptor.config_schema(), context.selection().config(), ..)`, and
+    ///   `borrow_record_against` refuses unless `hash(&data) == digest`. So the
+    ///   root's config identity is the Registry RECORD DIGEST of the bytes at
+    ///   that coordinate. `dealer/mod.rs` spells the same rule inline, and
+    ///   `crates/dclutch-operator/src/series_hot_v3.rs` requires those bytes to
+    ///   be the Template record itself: `hash(&config.account.data) ==
+    ///   hash(state.lifecycle.template_bytes)`.
+    /// - The SERIES rule. Six sites require the same field to be the
+    ///   DOMAIN-SEPARATED Template content identity:
+    ///   `trading-sbf/src/series/accounts.rs::authenticate_root`,
+    ///   `series/artifacts_v3.rs` (`request.template() != selection.template`,
+    ///   with `selection.template = header.selection().config()` supplied by
+    ///   `operator/src/series_hot_v3.rs`), and four Core routes --
+    ///   `series_open.rs`, `series_consume.rs`, `series_permit_expiry.rs` and
+    ///   `series_permit_expiry_precommit_v1.rs` -- each of which independently
+    ///   pins `request.template() == template_content_id(&template_bytes)`.
+    ///
+    /// `template_content_id(t)` is `sha256("dclutch/series-template-v3" ||
+    /// 0x00 || t)` and the record digest is `sha256(t)`. They differ, so no
+    /// Series root can satisfy both, and any Series action routed through the
+    /// family-neutral Hot prelude refuses at the config-record borrow. That is
+    /// where this campaign stops today, measured on real ELFs; staging the
+    /// other value instead moves the refusal to the Series artifact selection
+    /// 190,000 CU earlier, which is the same contradiction seen from its other
+    /// end.
+    #[test]
+    fn the_series_root_config_identity_has_two_authors_that_cannot_agree() {
+        let product = build_product_record_corpus_v1().expect("Product corpus");
+        let realm = build_realm_record_v1(key(0xc7)).expect("Realm corpus");
+        let refund = key(0xc6);
+        let records = build_series_record_corpus_v1(SeriesRecordInputV1 {
+            realm: hash(&realm).to_bytes(),
+            release_set: [0xc8; 32],
+            product_record: hash(&product.product).to_bytes(),
+            product_id: product.product_id,
+            result_domain: product.result_domain_digest,
+            capability_manifest: hash(&EMPTY_MANIFEST_BYTES).to_bytes(),
+            registry_program: key(0xc1),
+            core_program: key(0xc4),
+            founder: key(0xca),
+            template_refund_owner: refund,
+            ticket_refund_owner: refund,
+            close_rent: Rent::default().minimum_balance(32),
+        })
+        .expect("Series corpus");
+        // What the Series family calls the Template identity.
+        assert_eq!(
+            template_content_id(&records.template).expect("Template content id"),
+            records.template_id
+        );
+        // What the Registry calls the same record, and therefore what the
+        // family-neutral config-record borrow requires the root to name.
+        assert_ne!(
+            hash(&records.template).to_bytes(),
+            records.template_id.to_bytes(),
+            "if these were equal the two authorities would agree and this \
+             campaign would not be blocked"
+        );
+    }
+
     #[test]
     fn root_independent_expiry_substrate_is_exact_and_disjoint() {
         let rent = Rent::default();
@@ -3122,7 +3178,7 @@ mod native_tests {
         let product = build_product_record_corpus_v1().expect("Product corpus");
         let realm = build_realm_record_v1(key(0xa7)).expect("Realm corpus");
         let release_set = [0xa8; 32];
-        let provisional_records = build_series_record_corpus_v1(SeriesRecordInputV1 {
+        let records = build_series_record_corpus_v1(SeriesRecordInputV1 {
             realm: hash(&realm).to_bytes(),
             release_set,
             product_record: hash(&product.product).to_bytes(),
@@ -3137,29 +3193,6 @@ mod native_tests {
             close_rent: rent.minimum_balance(32),
         })
         .expect("Series corpus");
-        let (rent_credit, _) = build_lifecycle_rent_credit_v1(
-            rent_program,
-            provisional_records.future_market,
-            release_set,
-            provisional_records.generation,
-            refund,
-        )
-        .expect("RentCredit");
-        let records = build_series_record_corpus_v1(SeriesRecordInputV1 {
-            realm: hash(&realm).to_bytes(),
-            release_set,
-            product_record: hash(&product.product).to_bytes(),
-            product_id: product.product_id,
-            result_domain: product.result_domain_digest,
-            capability_manifest: hash(&EMPTY_MANIFEST_BYTES).to_bytes(),
-            registry_program: registry,
-            core_program: core,
-            founder: key(0xaa),
-            template_refund_owner: refund,
-            ticket_refund_owner: rent_credit,
-            close_rent: rent.minimum_balance(32),
-        })
-        .expect("Series corpus with RentCredit refund");
         let substrate = build_root_independent_substrate_v1(
             &rent,
             registry,
@@ -3185,18 +3218,38 @@ mod native_tests {
             substrate.permit_account.account.lamports,
             rent.minimum_balance(SERIES_FOUNDING_PERMIT_BYTES_V1)
         );
+        let credit =
+            LifecycleRentCreditV2::decode(&substrate.rent_credit.account.data).expect("RentCredit");
+        assert_eq!(credit.market().to_bytes(), records.future_market.to_bytes());
+        // THE THREE AUTHORITIES THAT MUST NAME ONE WALLET, staged so they do.
+        // The Series kernel (`terminal.rs::requires_wallet`), Core
+        // (`series_permit_expiry.rs::authenticate_rent_credit_coordinates`) and
+        // Trading's pre-CPI mirror each require the RentCredit's `refund_wallet`
+        // to be the Ticket's refund owner; the Expire transition additionally
+        // requires the Template's. Until this commit the fixture staged the
+        // Ticket's as the RentCredit's own ADDRESS and the first two refused.
+        assert_eq!(credit.refund_wallet().to_bytes(), refund.to_bytes());
         assert_eq!(
-            LifecycleRentCreditV2::decode(&substrate.rent_credit.account.data)
-                .expect("RentCredit")
-                .market()
+            admit_ticket(&records.ticket)
+                .expect("Ticket record")
+                .ticket()
+                .refund_owner()
                 .to_bytes(),
-            records.future_market.to_bytes()
+            refund.to_bytes()
         );
+        assert_ne!(substrate.rent_credit.key, refund);
 
         let normal = &substrate.normal_custody;
         assert_eq!(normal.family_request.len(), 128);
         assert_eq!(normal.success_transitions.len(), 3);
-        assert_eq!(normal.rent_refund, substrate.rent_credit.key);
+        // The Ticket's refund owner is a WALLET, and the Custody token refund
+        // destination is an account it OWNS. The lifecycle RentCredit is a
+        // separate account, reached by the Expire effect at its own fixed
+        // coordinate `SERIES_EXPIRE_RENT_CREDIT_COORDINATE_V5`, and it is where
+        // the closed replay's and vault's rent lands -- not where the escrow's
+        // collateral refund goes.
+        assert_eq!(normal.rent_refund, refund);
+        assert_ne!(normal.rent_refund, substrate.rent_credit.key);
         assert_eq!(
             CustodyRequestV1::decode(&normal.prepare_initialize)
                 .expect("Initialize")
@@ -3333,29 +3386,6 @@ mod native_tests {
             controller_manifest_digest,
             hash(&EMPTY_MANIFEST_BYTES).to_bytes()
         );
-        let provisional_records = build_series_record_corpus_v1(SeriesRecordInputV1 {
-            realm: hash(&realm).to_bytes(),
-            release_set,
-            product_record: hash(&product.product).to_bytes(),
-            product_id: product.product_id,
-            result_domain: product.result_domain_digest,
-            capability_manifest: controller_manifest_digest,
-            registry_program: registry,
-            core_program: core,
-            founder: key(0xba),
-            template_refund_owner: refund,
-            ticket_refund_owner: refund,
-            close_rent: rent.minimum_balance(32),
-        })
-        .expect("Series corpus");
-        let (rent_credit, _) = build_lifecycle_rent_credit_v1(
-            rent_program,
-            provisional_records.future_market,
-            release_set,
-            provisional_records.generation,
-            refund,
-        )
-        .expect("RentCredit");
         let records = build_series_record_corpus_v1(SeriesRecordInputV1 {
             realm: hash(&realm).to_bytes(),
             release_set,
@@ -3367,7 +3397,7 @@ mod native_tests {
             core_program: core,
             founder: key(0xba),
             template_refund_owner: refund,
-            ticket_refund_owner: rent_credit,
+            ticket_refund_owner: refund,
             close_rent: rent.minimum_balance(32),
         })
         .expect("Series corpus with controller manifest");

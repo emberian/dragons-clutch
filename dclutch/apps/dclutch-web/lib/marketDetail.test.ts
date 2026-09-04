@@ -14,6 +14,7 @@ import {
 } from './generated/coreFound';
 import {
   capabilityProvenanceV1,
+  failureEscrowOwnerV1,
   inspectMarketDetailV1,
   liabilityProvenanceV1,
   marketPhaseMeaningV1,
@@ -307,6 +308,72 @@ describe('outageDisclosureV1', () => {
       positions: [{ owner: founder, balances: ['500000000', '500000000', '500000000', '0'] }],
     });
     expect(disclosure!.payee).toContain('pays nobody');
+  });
+
+  // Pinned in `programs/dclutch-claims-sbf/src/lib.rs`, test
+  // `the_failure_escrow_owner_is_the_address_the_market_page_derives`, from the
+  // same market and Claims program. The browser is a hand-mirror of this seed
+  // domain with no generated module joining it to the program, so ONE literal
+  // asserted on both sides is the join. A page deriving a different escrow
+  // would tell a buyer an outage refunds them when it does not.
+  const witnessMarket = 'US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx';
+  const witnessClaims = 'cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN';
+  const witnessEscrow = 'AGEyQ6gMncbX3PymFaas3CjZUNWfjLYbGfdq5Mwpcm3';
+
+  it('derives the same failure escrow the Claims program authenticates', () => {
+    expect(failureEscrowOwnerV1(witnessClaims, witnessMarket, 3)).toBe(witnessEscrow);
+    // A different selector is a different escrow, so the seed really carries it.
+    expect(failureEscrowOwnerV1(witnessClaims, witnessMarket, 2)).not.toBe(witnessEscrow);
+  });
+
+  it('says HOLDERS ARE REFUNDED when the failure column is seated in the escrow', () => {
+    // Cohort-13's numbers with the ruling applied: the founder holds the three
+    // ordinary columns short the 200 atoms the crossing sold, and the failure
+    // column is seated where nobody can be paid for it.
+    const disclosure = outageDisclosureV1({
+      ...cohort13,
+      failureEscrowOwner: witnessEscrow,
+      positions: [
+        { owner: founder, balances: ['499999800', '500000000', '500000000', '0'] },
+        { owner: stranger, balances: ['200', '0', '0', '0'] },
+        { owner: witnessEscrow, balances: ['0', '0', '0', '500000000'] },
+      ],
+    });
+    expect(disclosure!.refunds).toBe(true);
+    expect(disclosure!.escrowAtoms).toBe('500000000');
+    expect(disclosure!.headline).toContain('HOLDERS ARE REFUNDED');
+    expect(disclosure!.payee).toContain(witnessEscrow);
+    // The founder is named nowhere as a payee, which is the whole ruling.
+    expect(disclosure!.payee).not.toContain(founder);
+  });
+
+  it('refuses to claim a refund when the escrow holds only part of the column', () => {
+    const disclosure = outageDisclosureV1({
+      ...cohort13,
+      failureEscrowOwner: witnessEscrow,
+      positions: [
+        { owner: witnessEscrow, balances: ['0', '0', '0', '300000000'] },
+        { owner: founder, balances: ['0', '0', '0', '200000000'] },
+      ],
+    });
+    expect(disclosure!.refunds).toBe(false);
+    expect(disclosure!.escrowAtoms).toBe('300000000');
+    expect(disclosure!.payee).toContain('A partly seated escrow refunds nobody.');
+    expect(disclosure!.headline).not.toContain('HOLDERS ARE REFUNDED');
+  });
+
+  it('keeps saying the founder is paid on a market whose column was never seated', () => {
+    // The same page, the same derivation, on cohort-13 as it actually stands.
+    // A disclosure that read the escrow into existence would be worse than none.
+    const disclosure = outageDisclosureV1({
+      ...cohort13,
+      failureEscrowOwner: witnessEscrow,
+      positions: [{ owner: founder, balances: ['499999800', '500000000', '500000000', '500000000'] }],
+    });
+    expect(disclosure!.refunds).toBe(false);
+    expect(disclosure!.escrowAtoms).toBe('0');
+    expect(disclosure!.payee).toContain(founder);
+    expect(disclosure!.payee).toContain('every one of the 500000000 atoms');
   });
 
   it('refuses rather than guessing when the read does not line up', () => {

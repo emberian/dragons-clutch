@@ -416,6 +416,27 @@ macro_rules! heap_mark {
     };
 }
 
+/// Diagnostic-only compute checkpoint, the CU twin of [`heap_mark`].
+///
+/// This program's per-invocation cost was the one figure the output-channel
+/// note could not decompose: "its callback has `heap_mark!` but no CU
+/// checkpoints, so its per-chunk cost is NOT decomposed anywhere in the tree"
+/// (`ACCELERATOR_OUTPUT_CHANNEL_2026_09_02.md`). These are that decomposition,
+/// at exactly the boundaries the heap marks already name, so the two
+/// instruments read the same spans. Never enabled in a shipped artifact.
+#[cfg(feature = "cu-profile")]
+fn cu_checkpoint(label: &str) {
+    sol_log(label);
+    solana_program::log::sol_log_compute_units();
+}
+
+macro_rules! cu_checkpoint {
+    ($label:literal) => {
+        #[cfg(feature = "cu-profile")]
+        cu_checkpoint(concat!("dclutch-general-cu:", $label));
+    };
+}
+
 /// Semantic refusal after the complete physical frame has authenticated.
 ///
 /// This is NOT a protocol-visible refusal code -- it carries no `#[repr]` and
@@ -558,6 +579,7 @@ pub fn process_instruction(
     instruction_data: &[u8],
 ) -> ProgramResult {
     heap_mark!("entry");
+    cu_checkpoint!("entry");
     let request = AdmittedAcceleratorRequestV2::decode(instruction_data)
         .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidRequest)?;
     // THE GEOMETRY IS VALIDATED AFTER THE ACTION IS KNOWN, and the order is the
@@ -579,6 +601,7 @@ pub fn process_instruction(
         .ok_or(GeneralAcceleratorSbfErrorV3::InvalidFrame)?;
     validate_frame(accounts, request, fixed_count, runtime_start)?;
     heap_mark!("frame-validated");
+    cu_checkpoint!("frame-validated");
     let bank_len = usize::try_from(request.total_bank_bytes())
         .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidRequest)?;
     let input_page_start = runtime_start
@@ -620,6 +643,7 @@ pub fn process_instruction(
                 .ok_or(GeneralAcceleratorSbfErrorV3::OutputPageTooNarrow)?;
             assemble_input_bank_into(accounts, request, input_page_start, window)?;
             heap_mark!("input-bank");
+            cu_checkpoint!("input-bank");
             match evaluate_candidate(
                 controller,
                 &family_request,
@@ -639,10 +663,12 @@ pub fn process_instruction(
             }
         };
         heap_mark!("evaluated");
+        cu_checkpoint!("evaluated");
         let mut output = [0_u8; ACCELERATOR_OUTPUT_PAGE_ACK_BYTES_V3];
         ack.encode_into(&mut output)
             .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidAcknowledgement)?;
         heap_mark!("acknowledged");
+        cu_checkpoint!("acknowledged");
         set_return_data(&output);
         return Ok(());
     }
@@ -652,6 +678,7 @@ pub fn process_instruction(
     let mut candidate = vec![0_u8; bank_len];
     assemble_input_bank_into(accounts, request, input_page_start, &mut candidate)?;
     heap_mark!("input-bank");
+    cu_checkpoint!("input-bank");
     let evaluation = evaluate_candidate(
         controller,
         &family_request,
@@ -660,6 +687,7 @@ pub fn process_instruction(
         &mut candidate,
     );
     heap_mark!("evaluated");
+    cu_checkpoint!("evaluated");
     let bank_digest = content(&candidate)?;
     let ack = match evaluation {
         Ok(()) => {
@@ -713,6 +741,7 @@ pub fn process_instruction(
     ack.encode_into(output)
         .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidAcknowledgement)?;
     heap_mark!("acknowledged");
+    cu_checkpoint!("acknowledged");
     set_return_data(output);
     Ok(())
 }

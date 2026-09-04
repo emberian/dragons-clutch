@@ -1671,11 +1671,18 @@ tier_root-targets() {
 # STILL EXCLUDED, BY REASON, and named here so the exclusion is a decision
 # rather than an oversight:
 #
-#   * `dclutch-direct-aot-sbf`, `dclutch-product-runtime-v2-sbf`,
-#     `tools/gauntlet/general-hot` and `crates/dclutch-token-svm/program-test`
-#     -- cheap, but each needs a runner WRITTEN first. Wiring a bare `cargo
-#     test` here would put this file back in the business of restating other
-#     lanes' prerequisites, which is exactly what `PROGRAM_MANIFESTS` got wrong.
+#   * `dclutch-direct-aot-sbf`, `dclutch-product-runtime-v2-sbf` and
+#     `crates/dclutch-token-svm/program-test` -- cheap, but each needs a runner
+#     WRITTEN first. Wiring a bare `cargo test` here would put this file back in
+#     the business of restating other lanes' prerequisites, which is exactly
+#     what `PROGRAM_MANIFESTS` got wrong.
+#   * the General Hot campaign, which HAS a runner since 2026-09-04
+#     (`tools/gauntlet/general-hot/run-general-hot.sh --at <commit>`) and is
+#     still not a SUITE_RUNNERS row, for a different reason than the three
+#     above: it builds SIX SBF links from an archive of a named commit and
+#     publishes a CU table, which is a campaign tier's shape and minutes of
+#     work, not a program-test suite. It belongs beside `run-direct.sh`, and
+#     what it is waiting on is a census binding, not a line here.
 #   * the nine `dclutch-svm-harness` targets -- they need provenance-pinned Pyth
 #     router and receiver ELFs and captured provider accounts, or they fold into
 #     a gauntlet census ledger whose ordering is the campaign runner's job.

@@ -232,6 +232,28 @@ fn program_entrypoint(
     process_instruction(program_id, accounts, instruction_data)
 }
 
+/// Diagnostic-only compute checkpoint at this program's own boundaries.
+///
+/// The `acc-*` trail inside `authenticate_accelerator_invocation_v4` decomposes
+/// the prelude; nothing decomposed what happens after it returns. These close
+/// that gap: the split between the authentication that is byte-identical across
+/// chunks, the family evaluation that recomputes the same bank, and the
+/// slice-and-acknowledge that is the only part a chunk index changes. Never
+/// enabled in a shipped artifact; the `cu-profile` feature also turns on
+/// Trading's `hot-cu-profile`, because the two trails are one measurement.
+#[cfg(feature = "cu-profile")]
+fn cu_checkpoint(label: &str) {
+    solana_program::log::sol_log(label);
+    solana_program::log::sol_log_compute_units();
+}
+
+macro_rules! cu_checkpoint {
+    ($label:literal) => {
+        #[cfg(feature = "cu-profile")]
+        cu_checkpoint(concat!("dclutch-dealer-cu:", $label));
+    };
+}
+
 /// Evaluate one authenticated Dealer candidate chunk.
 ///
 /// Physical authentication failures return a program error with no return
@@ -244,12 +266,14 @@ pub fn process_instruction(
     instruction_data: &[u8],
 ) -> ProgramResult {
     lift_admitted_heap_frame_v4(accounts)?;
+    cu_checkpoint!("entry");
     let request = AdmittedAcceleratorRequestV2::decode(instruction_data)
         .map_err(|_| DealerAcceleratorSbfErrorV4::InvalidRequest)?;
     let bank_bytes = usize::try_from(request.total_bank_bytes())
         .map_err(|_| DealerAcceleratorSbfErrorV4::InvalidRequest)?;
     let invocation = authenticate_accelerator_invocation_v4(program_id, accounts, instruction_data)
         .map_err(accelerator_invocation_refusal_v4)?;
+    cu_checkpoint!("authenticated");
     // Over the request, not over the whole instruction data: the prelude
     // witness rides after it, outside the acknowledged prefix. Trading takes
     // the same prefix on the other side, so an acknowledgement digest over
@@ -267,6 +291,7 @@ pub fn process_instruction(
         AdmittedAcceleratorRequestV2::ChunkedBankV2(chunked) => {
             let mut candidate = vec![0_u8; bank_bytes];
             let accepted = evaluate_selected_family_v4(&invocation, &mut candidate);
+            cu_checkpoint!("evaluated");
             let acknowledgement = if accepted {
                 let bank_digest = content(&candidate)?;
                 let start = usize::try_from(chunked.chunk_offset())
@@ -294,6 +319,7 @@ pub fn process_instruction(
             acknowledgement
                 .encode_into(&mut output)
                 .map_err(|_| DealerAcceleratorSbfErrorV4::InvalidAcknowledgement)?;
+            cu_checkpoint!("acknowledged");
             set_return_data(&output);
         }
         AdmittedAcceleratorRequestV2::OutputPageV3(page_request) => {
@@ -301,6 +327,7 @@ pub fn process_instruction(
             // program cannot write costs the caller the authentication it
             // already paid and not the evaluation on top of it.
             let page = admit_output_page_v4(program_id, accounts, &invocation, bank_bytes)?;
+            cu_checkpoint!("page-admitted");
             let acknowledgement = {
                 // THE EVALUATOR WRITES THE ACCOUNT, with no candidate buffer in
                 // between. That is the transport: the bank is 1,392 bytes for
@@ -329,10 +356,12 @@ pub fn process_instruction(
                     AcceleratorOutputPageAckV3::refused(page_request, request_digest)
                 }
             };
+            cu_checkpoint!("evaluated");
             let mut output = vec![0_u8; ACCELERATOR_OUTPUT_PAGE_ACK_BYTES_V3];
             acknowledgement
                 .encode_into(&mut output)
                 .map_err(|_| DealerAcceleratorSbfErrorV4::InvalidAcknowledgement)?;
+            cu_checkpoint!("acknowledged");
             set_return_data(&output);
         }
     }

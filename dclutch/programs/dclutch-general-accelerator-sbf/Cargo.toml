@@ -28,6 +28,9 @@ custom-panic = []
 # ceiling it actually enforces -- which, with `custom-heap` on, IS the lifted
 # frame. Never enabled in a shipped artifact; the campaign builds without it.
 heap-profile = []
+# Diagnostic-only. The CU twin of `heap-profile`: logs cumulative compute at
+# the same four boundaries. Never enabled in a shipped artifact.
+cu-profile = []
 
 [dependencies]
 dclutch-capability-program-contract = { path = "../../crates/dclutch-capability-program-contract" }

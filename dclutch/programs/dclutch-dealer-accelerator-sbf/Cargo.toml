@@ -29,6 +29,10 @@ default = ["custom-heap"]
 no-entrypoint = []
 custom-heap = ["dep:dclutch-sbf-bump-heap"]
 custom-panic = []
+# Diagnostic-only. Checkpoints at this program's own boundaries, plus Trading's
+# `acc-*` prelude trail, which is where the rest of the invocation is. Never
+# enabled in a shipped artifact.
+cu-profile = ["dclutch-trading-sbf/hot-cu-profile"]
 
 [dependencies]
 dclutch-capability-program-contract = { path = "../../crates/dclutch-capability-program-contract" }

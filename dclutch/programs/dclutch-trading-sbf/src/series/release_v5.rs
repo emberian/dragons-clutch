@@ -452,13 +452,12 @@ pub fn emit_current_series_release_source_v5(
         input.template_occurrence_count,
         consume_authority,
     )?;
-    let expire =
-        emit_series_expire_funding_artifacts_v5(
-            input.expire_profile,
-            input.expire_requests,
-            input.template_occurrence_count,
-        )
-        .map_err(|_| SeriesReleaseErrorV5::Artifact)?;
+    let expire = emit_series_expire_funding_artifacts_v5(
+        input.expire_profile,
+        input.expire_requests,
+        input.template_occurrence_count,
+    )
+    .map_err(|_| SeriesReleaseErrorV5::Artifact)?;
     let retire =
         emit_series_retire_funding_artifacts_v5().map_err(|_| SeriesReleaseErrorV5::Artifact)?;
     let close =

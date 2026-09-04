@@ -5,135 +5,81 @@
 //! `dclutch_trading_sbf::series::release_v5`, and the physical evidence joins
 //! remain owned by the adjacent support module.
 //!
-//! # THREE ROWS ARE STILL RED, AND THE CAMPAIGN NOW SUBMITS A TRANSACTION
+//! # THREE ROWS ARE STILL RED, AND THE WALL IS NOW ONE CONTRADICTION
 //!
-//! It reaches the bank. The Registry continuation lands, Trading is invoked at
-//! depth two, and it refuses inside its ORDINARY Hot prelude, before any
-//! Series semantics run -- `authenticate_market`'s first conjunct, because
-//! this fixture stages the fixed controller Market VACANT. That is the current
-//! wall and it is named at the end of this list.
+//! The transaction reaches the bank on every row, the Registry continuation
+//! lands, Trading is invoked at depth two, and all three rows refuse the same
+//! way at the same place: **Trading consumes 337,005 CU of 1,316,655 and
+//! refuses `Content` (`0x4003`) inside the FAMILY-NEUTRAL config-record
+//! borrow** -- `borrow_finalized_record_at(descriptor.config_schema(),
+//! context.selection().config(), ..)` in `authenticate_and_execute_hot_v3`.
+//! Instrumented (`--features hot-cu-profile` plus temporary markers, not
+//! committed), `borrow_record_against` reports three flags at once: the raw
+//! key is not the expected one, the staging key is not the expected one, and
+//! `hash(&data) != digest`. It is one cause, not three.
 //!
-//! Two walls came out to get there, and BOTH of them were the fixture reading
-//! an authority wrong rather than an account it had failed to build:
+//! ## THE SERIES ROOT'S CONFIG IDENTITY HAS TWO AUTHORS
 //!
-//! - `validate_physical_bindings` compared the instruction's runtime TAIL
-//!   against the release's full physical count. `series_hot_v3.rs` assembles a
-//!   Hot instruction as 39 fixed accounts, the action's strategy extras, then
-//!   `runtime_physical_accounts.skip(HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3)` --
-//!   physical ordinals 0..5 ARE five members of the fixed prefix and are never
-//!   repeated. So `runtime=39` against `geometry.physical=44` was not five
-//!   accounts missing from the fixture; all forty-four are built, installed and
-//!   bound at coordinates 72..76 and have been since `1b8191f9d`. It was five
-//!   the reader declined to count, and an ordinal space shifted under every
-//!   role lookup by exactly the same five.
-//! - The top-level wrapper was `legacy_registry_hot_instruction`, the headered
-//!   `continuation_v1` container. Trading refuses that seam ON PURPOSE:
-//!   `authenticate_hot_invocation_v3` requires the instructions-sysvar record
-//!   of the top-level instruction to carry the same bytes Trading received, and
-//!   the legacy seam forwards only the stripped continuation, so the header is
-//!   observable at the child. `registry_hot_continuation.rs` asserts exactly
-//!   that outcome, with exactly that code, in
-//!   `a_legacy_headered_hot_container_takes_the_v1_seam_and_not_the_transparent_one`.
-//!   The transparent `hot_continuation_v2` seam is the one a Series Expire
-//!   takes, and taking it moved the refusal from `NativeSignature` to a Trading
-//!   prelude conjunct 29,000 CU further in.
+//! `native_tests::the_series_root_config_identity_has_two_authors_that_cannot_agree`
+//! proves the arithmetic without an ELF, and the two authorities are:
 //!
-//! Two more came out after those, and they are items 3 and 4 below.
+//! - **Family-neutral.** `borrow_record_against` refuses unless
+//!   `hash(&config_record_bytes) == context.selection().config()`, so a root's
+//!   config identity is the Registry RECORD DIGEST of the account at
+//!   `HOT_CONFIG_RAW_ACCOUNT_V3`. `dealer/mod.rs` spells the same rule inline,
+//!   and `crates/dclutch-operator/src/series_hot_v3.rs` -- the production Series
+//!   Hot instruction builder -- requires those bytes to be the Template record
+//!   itself (`hash(&config.account.data) == hash(template_bytes)`).
+//! - **Series.** Six sites require the same field to be the DOMAIN-SEPARATED
+//!   Template content identity, `template_content_id(t) =
+//!   sha256("dclutch/series-template-v3" || 0x00 || t)`:
+//!   `trading-sbf/src/series/accounts.rs::authenticate_root`,
+//!   `series/artifacts_v3.rs` (`request.template() != selection.template`, and
+//!   the same operator supplies `selection.template =
+//!   header.selection().config()`), and four Core routes -- `series_open.rs`,
+//!   `series_consume.rs`, `series_permit_expiry.rs` and
+//!   `series_permit_expiry_precommit_v1.rs` -- each of which independently pins
+//!   `request.template() == template_content_id(&template_bytes)`.
 //!
-//! The Series Expire ARTIFACT SET no longer contradicts itself:
-//! `97ce7a748` keyed the family's proof geometry on the Template that owns it,
-//! so the Expire RequestProfile pins `series_action_request_bytes_v3(count)`
-//! and route 4 declares its borrowed range only when the canonical proof is
-//! nonempty. This campaign stages a ONE-occurrence Template, `proof_height(1)`
-//! is zero, and both halves now agree on 128 bytes with no range at all.
+//! `sha256(t)` and `sha256(domain || 0x00 || t)` are different values, so no
+//! Series root satisfies both and no fixture can stage one. Measured from the
+//! other end too: staging the record digest instead moves the refusal 217,000
+//! CU EARLIER, to the Series artifact selection, because the family request's
+//! template field no longer matches the root -- the same contradiction seen
+//! from its opposite side. This is why nothing Series has ever executed through
+//! the family-neutral Hot path, and it is a program ruling with two candidate
+//! repairs, both of which move two ELFs and a witnessed route's convention:
+//! either the Series sites read the record digest, or the Series Template's
+//! content identity stops being domain-separated. This lane names it rather
+//! than picking, because `core/series_consume` is witnessed today under the
+//! second convention.
 //!
-//! Running it against real ELFs built from that commit walked the refusal
-//! through three walls in one afternoon, and each one is worth having named:
+//! ## WHAT CAME OUT TO GET HERE
 //!
-//! 1. `BuilderError::Projection("borrowed-range-resolve")` -- GONE. This was
-//!    the artifact contradiction and it was the only one of the three that was
-//!    program code.
-//! 2. The operator and the bundle builder disagreed in exactly ONE byte of a
-//!    256-byte instruction: envelope offset 127, the eighth bump hint, the
-//!    Custody transfer authority. Both envelopes are VALID -- an absent hint
-//!    means the route searches rather than refuses -- so no program would ever
-//!    have reported it, and only the fixture's exact cross-check could. The
-//!    cause was that this fixture handed the operator a ZERO-LENGTH activation
-//!    cache at Hot coordinate 22 while the bank held the real one:
-//!    `activated_custody_program_v1` read nothing out of it and the operator
-//!    honestly mined an absent hint. Repaired here by giving the operator the
-//!    account the bank actually holds (`Releases::activation_data`).
-//! 3. The controller Market was staged VACANT, and `authenticate_market`
-//!    refuses that on its first conjunct. `process_hot_execution_v3` says why
-//!    in its own words: "the fixed Market is always the live Series controller
-//!    ... the occurrence's distinct future Market is a route-local account,
-//!    never a substitute for the fixed controller coordinate." Pre-Market is a
-//!    claim about the FUTURE Market, which stays vacant; the controller has
-//!    been founded and open for as long as the root has existed. It is founded
-//!    here the way a founding writes it, `market_and_claims` in
-//!    `direct-hot/src/fixture.rs` being the worked example, recorded bumps and
-//!    all.
-//! 4. The transaction carried no `RequestHeapFrame`. Every `DCLTHOT3` route
-//!    declares the extended heap profile and both arms of
-//!    `authenticate_root_against_market_boxed_v3` refuse `HeapFrame` by name
-//!    when the declaration is not matched by a grant. Declaring makes a grant
-//!    admissible; only asking for one makes it arrive.
+//! Two walls, both now gone, and the campaign walks the ENTIRE Series Expire
+//! pre-Market authentication chain -- records, future projection, future-Market
+//! vacancy, replay, Core template, permit and RentCredit -- before reaching the
+//! one above.
 //!
-//! # WHERE IT STOPS TODAY, AND IT IS NO LONGER THE FIXTURE
-//!
-//! Trading consumes 289,328 CU of 1,318,152 and refuses `Content` (`0x4003`).
-//! Checkpoints along the pre-Market chain put it exactly: selection, execution
-//! artifacts, records-and-projection, the future projection, the future-Market
-//! vacancy proof and the replay authentication ALL PASS, and it stops inside
-//! `authenticate_series_expiry_core_request_from_records_v1`, which is three
-//! comparisons long and refuses on the revisions.
-//!
-//! `request` there is the Expire artifact's own Core route template, and
-//! `expire_funding_artifacts_v5.rs:847` emits it as
-//! `SeriesUnallocatedPermitExpiryRequestV1::new(0, 0)` -- a literal, frozen at
-//! release-emission time. `family` is the submitted request, and this fixture's
-//! carries `expected_series_revision = 1` because its staged state is
-//! `SeriesStateV3::new(close_rent).prepare_ticket(0)`: ONE occurrence has been
-//! prepared, so the revision is 1. Both are internally consistent and they
-//! cannot both be right.
-//!
-//! The fixture is not the author of this one, and the emitter says so in its
-//! own words. `encode_request_bank`, four lines above the literal:
-//!
-//! > The hashed release artifact carries the distinct transient transport with
-//! > ZERO PLACEHOLDERS; authenticated RequestProfile scalars patch both
-//! > revisions immediately before the Core CPI.
-//!
-//! So `(0, 0)` is a placeholder by design, not a claim about any Series. The
-//! artifact set carries the machinery to prove it:
-//! `SERIES_EXPIRE_EXPECTED_ROOT_REVISION_SCALAR_V5` (8) and
-//! `SERIES_EXPIRE_EXPECTED_TICKET_REVISION_SCALAR_V5` (9) are documented as
-//! "request-projected", their observed counterparts are 10 and 11, and
-//! `expire_funding_artifacts_v5.rs:621-626` compares expected against observed
-//! at runtime. The revisions are runtime scalars projected from the family
-//! request, exactly as they should be -- a revision is not immutable Template
-//! config and no release could be keyed on one.
-//!
-//! `authenticate_series_expiry_core_request_from_records_v1` is therefore
-//! reading the UN-PATCHED placeholder and demanding it equal the live request.
-//! It can only pass when both live revisions are zero, and a Series root that
-//! has never prepared anything has no unallocated permit to expire -- so the
-//! conjunct admits no reachable state and this route has never been reachable.
-//! That is the same SHAPE as the defect `97ce7a748` repaired: a value that is
-//! not a per-release constant, read as though it were one.
-//!
-//! THE REPAIR IS ONE FUNCTION IN `hot_v3.rs`, and it is queued rather than
-//! taken here because it moves the Trading ELF and therefore digests and owed
-//! frameguard rows, which is not a program-test fixture's commit to make. What
-//! the conjunct should assert is what the emitter promises: that the template
-//! carries the ZERO placeholder, so no stale revision can ride in on an
-//! artifact. The live agreement is already enforced twice downstream -- by the
-//! RequestProfile projection that patches the request, and by Core's own
-//! expected-revision checks against live state.
-//!
-//! Queued behind it and unrelated: the below-minimum row wants a `RentCredit`
-//! prestate the bank does not hold, so `capture_series_account_snapshots_v1`
-//! cannot find it.
+//! 1. **The Core route template's revisions.** The conjunct compared the Expire
+//!    artifact's Core route template against the live family request and
+//!    required the two expected revisions to be EQUAL. That template is the
+//!    UN-PATCHED zero placeholder `encode_request_bank` documents; the Effect
+//!    VM writes the request-projected scalars into those two slots immediately
+//!    before the Core CPI. It admitted no reachable state. It now asserts what
+//!    the emitter promises -- the placeholder is zero -- under its own code,
+//!    `TradingSbfError::SeriesExpireCoreTemplate` (`0x402A`), and passes in 390
+//!    CU. The live agreement is owned downstream, twice.
+//! 2. **The Ticket's refund owner was the RentCredit's ADDRESS.** The kernel
+//!    (`terminal.rs::requires_wallet`), Core
+//!    (`series_permit_expiry.rs::authenticate_rent_credit_coordinates`) and
+//!    Trading's pre-CPI mirror all require the RentCredit's `refund_wallet` to
+//!    BE the Ticket's refund owner, and the RentCredit is the account rent
+//!    lands in, never the beneficiary it is credited to. Staging the address
+//!    also made the bundle's fee payer and the RentCredit the same key, which
+//!    is why the below-minimum row could not find a RentCredit prestate -- the
+//!    gap `05b15ffac` queued. Both are gone: all three rows now reach the
+//!    transaction and refuse identically.
 //!
 //! # WHAT THE ARTIFACT REPAIR ACTUALLY WAS, kept because it is not obvious
 //!
@@ -461,14 +407,14 @@ async fn current_source_series_expire_lands_before_the_future_market_exists() {
 ///
 /// Same fixture, same real ELFs, one lamport short -- and it lands.
 ///
-/// IT IS ALSO ONE OF THE THREE RED ROWS THIS FILE'S HEADER DESCRIBES: `build_chain`
-/// refuses `Projection("borrowed-range-resolve")` before a single ELF executes,
-/// for the artifact-set contradiction named above, which predates this test and
-/// is not rent. So the inversion here is proved by
-/// `series_expiry_permit_requires_exact_prefunded_writable_system_vacancy` on the
-/// native side and is OWED a parent-ELF red-proof until the Expire artifact set
-/// is repaired. Measured at `edfdc22ac`, before this lane began: the same three
-/// rows fail identically.
+/// IT IS ALSO ONE OF THE THREE RED ROWS THIS FILE'S HEADER DESCRIBES. It is no
+/// longer red for a reason of its own: this row builds its chain, installs its
+/// accounts, submits, and refuses at the shared config-identity wall with the
+/// other two, at the identical 337,005 CU. Its own positive control -- that the
+/// permit really is one lamport under today's floor -- runs and holds before
+/// the submission, so what is OWED is a parent-ELF green, not a diagnosis. The
+/// inversion itself is proved on the native side by
+/// `series_expiry_permit_requires_exact_prefunded_writable_system_vacancy`.
 #[tokio::test]
 async fn a_permit_prepaid_below_todays_minimum_still_expires_on_the_deployed_elf() {
     let artifacts = elves();

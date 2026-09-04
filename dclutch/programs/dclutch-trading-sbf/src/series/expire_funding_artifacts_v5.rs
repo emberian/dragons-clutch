@@ -1337,8 +1337,10 @@ mod tests {
             );
             assert_eq!(
                 v4.borrowed_range_count_for_route(4),
-                Ok(u16::try_from(series_expire_borrowed_range_count_v5(occurrence_count))
-                    .expect("range count"))
+                Ok(
+                    u16::try_from(series_expire_borrowed_range_count_v5(occurrence_count))
+                        .expect("range count")
+                )
             );
 
             let mut scalars = [0_u64; SERIES_EXPIRE_COMMON_SCALAR_COUNT_V5 as usize];

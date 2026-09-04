@@ -535,6 +535,28 @@ pub enum TradingSbfError {
     /// ledger header records the exemption-scaled rate its founding paid; this
     /// code is what refuses when that record and the account disagree.
     FundedRent = 0x4029,
+    /// The Expire artifact's Core route template is not the zero placeholder.
+    ///
+    /// Split from `Content` on 2026-09-04, and the conjunct it names had never
+    /// admitted a reachable state. Two facts meet at this template and only one
+    /// of them is the artifact's. The sealed release carries the transient
+    /// `DCLSUPE1` transport with BOTH revision slots zero
+    /// (`series::expire_funding_artifacts_v5::encode_request_bank`), and the
+    /// Effect VM overwrites those two slots from the RequestProfile's
+    /// request-projected scalars immediately before the Core CPI. The live
+    /// agreement -- that the revisions Core asserts are the family request's --
+    /// is therefore owned downstream, twice: `core_composition_v3.rs`'s
+    /// `authenticate_core_request` compares the PROJECTED request against the
+    /// family, and `core-sbf`'s `series_permit_expiry_precommit_v1` compares it
+    /// against the live root and Ticket accounts.
+    ///
+    /// What is left for the prelude to own is the artifact's own promise, and
+    /// that is this code: the template decoded, and its two slots are the
+    /// placeholder rather than a revision frozen at release-emission time. It
+    /// is fail-closed by construction -- an artifact that dropped the patch
+    /// operations would send zeros, and a Series root with an unallocated
+    /// permit to expire is never at revision zero.
+    SeriesExpireCoreTemplate = 0x402A,
 }
 
 impl TradingSbfError {
@@ -544,7 +566,7 @@ impl TradingSbfError {
     /// [`TradingSbfError::ordinal`], whose match is exhaustive: a variant added
     /// to the enum does not compile until its author writes an arm there, and
     /// the only arm that satisfies the assertions is its own index here.
-    pub const ALL: [Self; 42] = [
+    pub const ALL: [Self; 43] = [
         Self::UnsupportedContent,
         Self::Release,
         Self::Root,
@@ -587,6 +609,7 @@ impl TradingSbfError {
         Self::HeapExhausted,
         Self::ShadowTrustedEnvironment,
         Self::FundedRent,
+        Self::SeriesExpireCoreTemplate,
     ];
 
     /// This refusal's position in [`TradingSbfError::ALL`].
@@ -638,6 +661,7 @@ impl TradingSbfError {
             Self::HeapExhausted => 39,
             Self::ShadowTrustedEnvironment => 40,
             Self::FundedRent => 41,
+            Self::SeriesExpireCoreTemplate => 42,
         }
     }
 }

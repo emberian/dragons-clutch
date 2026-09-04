@@ -1708,6 +1708,32 @@ mod tests {
     use super::*;
     use dclutch_market_core_codec::StateBumpsV1;
 
+    /// The escrow owner this program derives, pinned to ONE literal that the
+    /// browser asserts too.
+    ///
+    /// `failureEscrowOwnerV1` in `apps/dclutch-web/lib/marketDetail.ts` derives
+    /// the same address from two addresses a market page already holds, and
+    /// says "holders are refunded" exactly when the failure column is seated
+    /// there. A page deriving a DIFFERENT escrow would tell a buyer an outage
+    /// refunds them when it does not, and nothing would go red -- the browser
+    /// is a hand-mirror of this seed domain and there is no generated module
+    /// joining them. So the join is this literal, asserted on both sides, with
+    /// the inputs written where a reader can see they are the same.
+    #[test]
+    fn the_failure_escrow_owner_is_the_address_the_market_page_derives() {
+        let market = Pubkey::new_from_array([7; 32]);
+        let claims = Pubkey::new_from_array([9; 32]);
+        let seeds = crate::protocol_position_v2::ProtocolPositionClaimsCapabilitySeedsV2::new(
+            market.to_bytes(),
+            3,
+        )
+        .expect("the capability seeds accept a market and a failure selector");
+        let owner = Pubkey::find_program_address(&seeds.as_slices(), &claims).0;
+        assert_eq!(market.to_string(), "US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx");
+        assert_eq!(claims.to_string(), "cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN");
+        assert_eq!(owner.to_string(), "AGEyQ6gMncbX3PymFaas3CjZUNWfjLYbGfdq5Mwpcm3");
+    }
+
     fn account(
         key: Pubkey,
         data: Vec<u8>,

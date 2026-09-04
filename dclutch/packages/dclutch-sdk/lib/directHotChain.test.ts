@@ -425,7 +425,36 @@ describe('Direct V3 chain-selected artifacts', () => {
     // any other value -- so this pins the one case where 1 is a fact and not an
     // assumption, and every consumer that wants the number has to ask for it.
     await expect(validateProductBasisV3(fixture.basis, identity(1), identity(2), fixture.domain))
-      .resolves.toEqual({ basisWidth: 3, payoutScale: 1n, kind: 1 });
+      .resolves.toEqual({ basisWidth: 3, payoutScale: 1n, kind: 1, refundsOnFailure: false });
+
+    // The semantic identity is a digest over the record, so a mutated scale
+    // needs its Product-owned join recomputed or every case below would refuse
+    // for the wrong reason.
+    const rejoined = async (bytes: Uint8Array) => {
+      const domain = fixture.domain.slice();
+      domain.set(await sha256(concat(
+        new TextEncoder().encode('dclutch/product-basis/semantic/v3'),
+        bytes.slice(0, 32),
+        bytes.slice(96),
+      )), 128);
+      return domain;
+    };
+
+    // THE REFUNDING SCALE IS ADMITTED, and until 2026-09-04 it was not: this
+    // validator refused `payoutScale !== 1n` outright, so a browser holding it
+    // would have rejected every refunding market ever founded. Width 3, scale 2
+    // is the narrowest one that can exist.
+    const refunding = fixture.basis.slice();
+    putU64(refunding, 160, 2n);
+    await expect(validateProductBasisV3(refunding, identity(1), identity(2), await rejoined(refunding)))
+      .resolves.toEqual({ basisWidth: 3, payoutScale: 2n, kind: 1, refundsOnFailure: true });
+
+    // And a scale that is NEITHER of the two admissible ones is still refused,
+    // so admitting the refunding shape did not open the field.
+    const invented = fixture.basis.slice();
+    putU64(invented, 160, 5n);
+    await expect(validateProductBasisV3(invented, identity(1), identity(2), await rejoined(invented)))
+      .rejects.toThrow(/neither canonical Q=1 nor its refunding scale/);
 
     const substituted = fixture.basis.slice();
     substituted.set(identity(9), 32);

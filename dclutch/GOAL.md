@@ -4845,3 +4845,10 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   records. Found: **genref is RED at HEAD** — RECOVERY-2's bc78ccd81 added a blocked.json class "evidence" the closed
   taxonomy refuses (routed to that lane); the census pages stale from the wave (a converge owed after it).
 - Cuts: `7ef5eb7a6`, `955e57479`.
+- CHUNK-REMEASURE closed (`1b2bd47fa`): **the page still saves one whole chunk on the Dealer's equity Add — 259,537 CU — and
+  the chunk is 42% smaller than August (216k vs 446k); 99.2% of a chunk is byte-identical between chunks**; the Add now
+  executes chunked with 279k headroom (the page is margin there); General's four chunks are 210,555 CU = 30% of the action,
+  unmoved since 09-02; the movers were the prelude move and 5709672aa, not 0023. Found: two hostile-candidate assertions in
+  the Dealer campaign red at HEAD on a propagated `Projection` cause → DEALER-FIX **`(spawned)`**. **0028 ruled provisionally:
+  option (a), cohort-17** (the 30% on every General action, multiplied by the joint clearing's 9 + 4M transactions).
+- Cuts: `228933519`, `d11c61335`.

@@ -2957,7 +2957,7 @@ fn authenticate_series_expiry_records_and_projection_v1<'accounts, 'info>(
         &occurrence_bytes,
         &ticket_bytes,
     )?;
-    authenticate_series_expiry_core_request_from_records_v1(family_request, core_template)?;
+    authenticate_series_expiry_core_template_v1(core_template)?;
     let rent_credit = authenticate_series_expiry_vacant_permit_request_v1(
         program_id,
         frame,
@@ -3264,20 +3264,49 @@ fn authenticate_series_expiry_replay_from_records_v1(
     Ok(())
 }
 
+/// Authenticate the Expire artifact's Core route template as the canonical
+/// transient transport -- and NOT as a statement about any live revision.
+///
+/// TWO FACTS MEET AT THIS TEMPLATE AND ONLY ONE OF THEM IS THE ARTIFACT'S.
+///
+/// The first is *which revisions the Core CPI will assert*, and the family
+/// request owns it. `SeriesActionRequestV3` carries them; the Expire
+/// RequestProfile projects them into common scalars 8 and 9
+/// (`series::expire_funding_artifacts_v5`'s `emit_request_profile`); the
+/// Transition VM checks those against the account-projected observed revisions
+/// 10 and 11; and the Effect VM writes them into route 4's fixed request at
+/// `SERIES_UNALLOCATED_PERMIT_EXPIRY_EXPECTED_{SERIES,TICKET}_REVISION_OFFSET_V1`
+/// immediately before the Core CPI. The projected bytes are then compared to
+/// the family request AGAIN at `core_composition_v3::authenticate_core_request`,
+/// and to the live root and Ticket accounts a third time inside
+/// `core-sbf`'s `series_permit_expiry_precommit_v1::authenticate_prestate`.
+/// Nothing here is owed a fourth author.
+///
+/// The second is *what the sealed release compiled*, and this function owns it.
+/// `encode_request_bank` emits `SeriesUnallocatedPermitExpiryRequestV1::new(0,
+/// 0)`: the hashed artifact carries the transient transport with ZERO
+/// PLACEHOLDERS, because a revision is per-request runtime state and a release
+/// artifact is per-release-set. The codec says the same thing in its own words
+/// -- "only the two replay revisions originate in the family request and
+/// therefore cross this wire".
+///
+/// Until this commit the conjunct compared the two, and the template it read is
+/// the UN-PATCHED one: the projection that fills those slots has not run when
+/// the prelude authenticates records. It could pass only when both live
+/// revisions were zero, and a Series root that has never prepared anything has
+/// no unallocated permit to expire -- so it admitted no reachable state and
+/// this route had never executed. Same shape as `97ce7a748`: a runtime variable
+/// read as though it were a per-release constant.
+///
+/// What is left to check is the artifact's own promise, and it is fail-closed:
+/// an artifact that dropped the two patch operations would send zeros to Core,
+/// which compares them against a live root that is not at revision zero.
 #[inline(never)]
-fn authenticate_series_expiry_core_request_from_records_v1(
-    family_request: &[u8],
-    core_template: &[u8],
-) -> Result<(), ProgramError> {
-    let family =
-        SeriesActionRequestV3::decode(family_request).map_err(|_| TradingSbfError::Content)?;
-    let request = SeriesUnallocatedPermitExpiryRequestV1::decode(core_template)
-        .map_err(|_| TradingSbfError::Content)?;
-    if family.action() != SeriesActionV3::Expire
-        || request.expected_series_revision() != family.expected_series_revision()
-        || request.expected_ticket_revision() != family.expected_ticket_revision()
-    {
-        return Err(TradingSbfError::Content.into());
+fn authenticate_series_expiry_core_template_v1(core_template: &[u8]) -> Result<(), ProgramError> {
+    let template = SeriesUnallocatedPermitExpiryRequestV1::decode(core_template)
+        .map_err(|_| TradingSbfError::SeriesExpireCoreTemplate)?;
+    if template.expected_series_revision() != 0 || template.expected_ticket_revision() != 0 {
+        return Err(TradingSbfError::SeriesExpireCoreTemplate.into());
     }
     Ok(())
 }

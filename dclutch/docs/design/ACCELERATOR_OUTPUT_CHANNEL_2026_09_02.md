@@ -280,3 +280,212 @@ measured or derived. The devnet cohort's Strategy/Certificate/Admission
 records re-digest under the new pair, which strands nothing that AGENTS.md's
 standing full-redeploy grant does not already abandon; rent reclamation for a
 pooled page is a later accelerator Close route and is named here as debt.
+
+## 4. Remeasured at `faacc7ba8`, 2026-09-04 — what a chunk costs now
+
+Decision 0028 §3 adds a fifth condition to its read: *"remeasure the chunk cost
+first ... the win may have shrunk from 'one whole chunk' to a smaller number."*
+This section is that measurement, and nothing else — 0028 stays OPEN and this
+lane does not rule.
+
+`git rev-parse --show-toplevel` = `/Users/ember/dev/dclutch`, measured in a
+detached worktree at `faacc7ba89480349b2ceff2f331630ab69c0a5b4`, one target
+directory per workspace, every run under a name filter with `--test-threads=1`
+so no other test's `Program log` lines interleave into the trail.
+
+### 4.1 The instrument, and the half of it that did not exist
+
+Trading's `hot-cu-profile` carries the `acc-*` prelude trail, and the Dealer
+accelerator links Trading, so those ten checkpoints fire *inside* the
+accelerator. Two things were missing and are added here, both feature-gated,
+both diagnostic-only, neither compiled into a shipped artifact:
+
+- `dclutch-dealer-accelerator-sbf`'s `cu-profile` — six checkpoints at this
+  program's own boundaries, and the feature turns on
+  `dclutch-trading-sbf/hot-cu-profile` so the prelude trail arrives with them.
+  What the prelude costs was decomposed; what happened after it returned was one
+  number.
+- `dclutch-general-accelerator-sbf`'s `cu-profile` — four checkpoints, the CU
+  twin of the `heap-profile` marks already there. §1 above says General's
+  *"callback has `heap_mark!` but no CU checkpoints, so its per-chunk cost is
+  NOT decomposed anywhere in the tree"*. It is now.
+
+**A profiled total is not a shipped total**, and the board archive says so for
+this exact feature. Every whole-transaction figure below is therefore given
+twice: on the profiled ELFs the trail comes from, and on unprofiled ELFs built
+from the same sources. The instrument's own cost, measured by difference on the
+General accelerator: **831 CU per invocation**.
+
+**The draw.** The Dealer campaign draws fixture keypairs at random, so
+`create_program_address` bump searches differ between runs in multiples of
+1,500. Three draws are reported for every Dealer row, in run order, so a column
+is one run. The General figures are draw-free — that harness's keys are fixed,
+and its trail was identical to the digit at N=2 and N=13 — so one General run is
+the whole reading.
+
+### 4.2 Dealer equity Add — August against today
+
+August is `76f4c9eb`, 2026-09-02 03:54, the nine-checkpoint commit §1 quotes.
+Today is `faacc7ba8`, after `0aa70478e`, `9b5de611e`, `742d7b7be` (the prelude
+move), `5709672aa` (the activation-cache decode) and `3a8ac205d` (decision
+0023). Both columns are profiled builds. Accelerator rows are the program's own
+`consumed` line; the split is its checkpoint trail.
+
+| row | August `76f4c9eb` | today, draw 1 | draw 2 | draw 3 |
+|---|---:|---:|---:|---:|
+| accelerator invocation, chunk 0 | **445,816** | **216,252** | **214,752** | **211,752** |
+| — authentication, byte-identical between chunks | 328,702 (74%) | **118,610** | **118,610** | **117,110** |
+| — family evaluation, recomputes the same bank | 100,064 (22%) | **76,555** | **75,055** | **73,555** |
+| — the 880-byte slice and its acknowledgement | not separated | **1,562** | **1,562** | **1,562** |
+| — entry, decode, heap, CPI frame deserialization | 17,050 (4%) | 20,756 | 20,756 | 20,756 |
+| accelerator invocation, chunk 1, same transaction | never ran | 216,247 | 216,247 | 211,747 |
+| one chunk end to end, `entry`(0) to `entry`(1) | not measured | **273,944** | **273,944** | **267,944** |
+| the whole action, chunked | never completed — 45,764 left at chunk 1 | **1,144,694** | **1,153,694** | **1,132,694** |
+| accelerator invocation, output page | 455,790 | **214,317** | **212,818** | **214,318** |
+| the whole action, output page | not measured | **873,235** | **868,736** | **871,736** |
+
+Unprofiled control, one run each: chunked **1,120,274** of 1,399,700
+(accelerator legs 211,698 and 213,193); output page **860,737** (accelerator
+215,561).
+
+**The authentication fell 64% and the family evaluation 25%.** The slice — the
+only part of a chunk that a chunk index changes — is **1,562 CU**, identical to
+the digit across three draws and across both legs of the same transaction. So
+the ratio §1 states as 74% is now the sharper statement it always wanted to be:
+**195,165 of a 196,727-CU chunk, 99.2%, is byte-identical between chunks.** The
+two accelerator legs of one transaction differ by 5, 1,495 and 5 CU across the
+three draws, and the 1,495 is one `create_program_address` iteration.
+
+**What moved it, and what did not.** Decision 0023 is not in this saving, and
+its own record says so: *"What it saved: Not CU — statability."* Confirmed here
+— `acc-caller-authority` is 3,529 to 5,030 CU and its variation is whole bump
+iterations. The prelude link by link, against `742d7b7be`'s after-column — which
+is the partial equity **Remove**, so the two columns are the same span on two
+routes and only their shape is comparable:
+
+| span | `742d7b7be`, Remove | today, Add (draw 1, chunk 0) |
+|---|---:|---:|
+| `acc-toplevel` | 23,014 | 22,830 |
+| `acc-caller-authority` | 8,651 | 5,030 |
+| `acc-activation` | 32,229 | **15,720** |
+| `acc-market` | 6,777 | 3,946 |
+| `acc-release-waist` | 2,841 | 2,779 |
+| `acc-product-runtime` | 39,217 | **22,124** |
+| `acc-witness` | 1,947 | 1,951 |
+| `acc-seal` | 3,878 | 3,620 |
+| `acc-descriptor` | 2,940 | 2,675 |
+| `acc-records` | 516 | 516 |
+| `acc-input-bank` | 4,857 | 3,930 |
+| `acc-artifacts` | 9,001 | 7,726 |
+| `acc-context` | 30,285 | **23,952** |
+| the whole prelude | 165,153 | **116,799** |
+
+Only one row is attributable from the tree's own record: `acc-activation`'s
+16,509 is `5709672aa`, which stopped
+`ActivatedExecutionReleaseSetViewV1::validate_projection` running twenty-five
+`decode_role` calls for five values. `acc-product-runtime` was *search-free to
+the digit* at `742d7b7be` and has moved 17,093 since; this lane did not bisect
+it and does not claim it.
+
+### 4.3 General OpenBatch — and one row of §1 that is stale
+
+**§1's General rows are out of date, and the correction is in General's
+favour.** The table says OpenBatch is 163 scalars at N=2 and 229 at N=13. Since
+`general_hot_item_scalar_stride_v3` returns **zero** for the two batch actions,
+the bank is 151 scalars and 45 identities — **2,648 bytes at every Product
+width**, still four chunks. Measured: the isolated harness prints
+`bank=2648 chunked_chunks=4` at N=2 and at N=13 with a checkpoint trail
+identical to the digit at both widths, and the real-Trading campaign prints
+`accounts=55 invocations=4` at N=2, N=13 and N=258.
+
+Through real Trading at N=13, four chunks, profiled (whole action 698,146;
+unprofiled control 653,262, against 651,102 at N=2 and 674,057 at N=258):
+
+| span, per chunk | CU |
+|---|---:|
+| `cx-accelerator-frame` → accelerator `entry` (carve, request, CPI, child deserialize) | 37,937 |
+| accelerator `entry` → `frame-validated` (sysvar scan, caller, frame) | 10,163 |
+| → `input-bank` (the scratch-page walk and its digest) | 3,663 |
+| → `evaluated` (the family evaluation) | 3,393 |
+| → `acknowledged` (**the 880-byte slice**) | 2,065 |
+| → `cx-accelerator-returned` (ack decode, validate, copy) | 2,556 |
+| → next `cx-accelerator-frame` (the next chunk's caller authority) | 6,390 / 15,417 / 9,417 |
+| **one whole chunk** | **66,167 / 75,194 / 69,194** |
+
+Every in-accelerator row is identical to the digit across all four chunks; the
+only span that moves is the next caller authority's bump search, in multiples of
+1,500. **17,219 of the 19,284 CU inside the accelerator, 89.3%, is
+byte-identical between chunks**, and the three spans between the four
+accelerator entries sum to **210,555 — 30% of the profiled 698,146-CU action.**
+
+The isolated accelerator harness, unprofiled, both widths: one chunk 50,475, the
+whole bank on a page 51,677, `accounts=64 legacy_packet=890`. Against
+`a4c5add46`'s 50,201 and 51,404 that is +274 and +273 — **General's chunk cost
+has not moved since 2026-09-02**, which is what should be expected: this program
+does not run the admitted prelude, so the prelude move could not reach it, and
+0023 saved statability rather than compute.
+
+### 4.4 The page's win, re-derived
+
+**Dealer equity Add — measured end to end, both transports, same fixture, same
+campaign.** 1,120,274 chunked against 860,737 on the page, unprofiled:
+**259,537 CU per action**, which is one chunk, because two invocations became
+one. Profiled and draw-matched the same difference is 271,459, 284,958 and
+260,958, against a measured chunk-to-chunk span of 267,944 to 273,944.
+
+So the honest sentence the fifth condition asked for: **it is still one whole
+chunk, and the chunk is 42% smaller than the one that motivated the design** —
+259,537 rather than 445,816. Where §2 reads *"saves one whole 445,816 chunk"* it
+should now read *saves one whole 260,000 chunk*.
+
+**One thing the smaller number changes, and two it does not.**
+
+*It does* dissolve the Add's execution argument. In August the Add's second
+chunk had 45,764 CU and needed 445,816, so the route could not execute at all
+under the chunked pair. Today it executes: 1,120,274 of 1,399,700, **279,426 CU
+of headroom**. For the Add the page is now 259,537 CU of margin, not the
+difference between running and not running.
+
+*It does not* change the equity **Remove**, which is the harder case. Its bank
+is three chunks. Measured today on the page, one CPI: accelerator
+250,321–250,353, whole action 1,232,300 to 1,253,268 of 1,399,700 — between
+146,000 and 167,000 left. Derived from the same per-chunk arithmetic and NOT
+measured, because the campaign's chunked run aborts at the Add: two more
+invocations at ~250,000 plus two more Trading round trips at ~57,700 is about
+615,000 more, which is 1.85M against a 1,399,700 ceiling. **The Remove has no
+chunked execution at any headroom**, and no share of the prelude saving reaches
+far enough to give it one.
+
+*It does not* change General, where the win is three chunks rather than one:
+210,555 CU measured as the three inter-entry spans, less the page's own extra
+cost (+1,202 whole-transaction in the isolated harness, +306 inside the
+accelerator), so about **209,000 CU per OpenBatch, roughly 32% of a 653,262-CU
+action**. That figure is DERIVED and not measured end to end, because the
+General operator and host bundle builder still derive `ceil(bank/880)`
+authorities and cannot build a page frame — `0f53b668a` names that as owed and
+it is still owed.
+
+**Packet and ALT, measured.** General OpenBatch presents 55 accounts with four
+caller authorities; on the page that is minus three authorities plus one page,
+**53**. The Dealer equity Add's two authorities become one authority and one
+page: **net zero accounts**, the whole win being compute. And the ALT identity
+`accounts(258) − accounts(1) = 2 × pages` **no longer binds for OpenBatch at
+all**: accounts is 55 at N=2, N=13 and N=258, so the left side is zero and the
+identity is vacuous for the two batch actions, whose per-outcome stride is zero.
+It still binds for the thirteen actions that declare a stride of 6, and for
+those the page changes its coefficient from 2 to 1.
+
+### 4.5 What this measurement is not
+
+It is not a ruling. Decision 0028 §3's read stands or falls on ember's judgment
+about what "stateless accelerator" means, and this section changes only the
+arithmetic under it: the transport's win is real, 42% smaller than August's for
+the route August measured, and unchanged for General and for the Remove.
+
+One red observed at `faacc7ba8` while running this, neither this lane's nor the
+transport's, and named rather than left in a log:
+`build_admitted_bundle_with_candidate_v1` propagates a candidate closure's own
+`Projection` error instead of mapping it to `Projection("admitted-candidate")`,
+so both hostile-candidate assertions in the Dealer accepted campaign fail before
+it reaches its first submission. Every Dealer figure above was taken with those
+two assertions relaxed in the measuring worktree only.

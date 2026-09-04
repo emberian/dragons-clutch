@@ -1,3 +1,5 @@
+import { PublicKey } from '@solana/web3.js';
+
 import {
   inspectMarketDiscoveryV1,
   type MarketCapabilityManifestV1,
@@ -9,6 +11,9 @@ import {
 import { type MarketCorePhaseV2 } from './marketCoreV2';
 import { type RequiredBackingBasisV2 } from './marketDiscovery';
 import { type SolanaRpcClient } from './rpc';
+
+/** Claims `ClaimsCapability` Position-owner seed domain (`protocol_position_v2.rs`). */
+const CLAIMS_CAPABILITY_OWNER_SEED_V2 = new TextEncoder().encode('dclutch:rational-claims:v2');
 
 /**
  * One Market's detail projection.
@@ -206,6 +211,20 @@ export type OutageDisclosureV1 = Readonly<{
   holders: ReadonlyArray<Readonly<{ owner: string; atoms: string; wholeColumn: boolean }>>;
   /** Whether the read accounts for the whole column, so the answer is complete. */
   complete: boolean;
+  /** This market's own derived failure escrow, when the caller derived one. */
+  failureEscrowOwner: string | null;
+  /** How much of the failure column that escrow holds, from the same read. */
+  escrowAtoms: string;
+  /**
+   * Whether an outage REFUNDS the ordinary holders.
+   *
+   * True exactly when the whole failure column is seated in this market's own
+   * escrow: the escrow cannot be paid, so the collateral goes back to whoever
+   * holds an ordinary outcome. This is read off the seating, NOT off the
+   * record's payout scale, which is the stronger question -- a market founded
+   * to refund whose column was never seated still pays whoever holds it.
+   */
+  refunds: boolean;
   /** What happens under an outage, in the words a buyer needs before trading. */
   headline: string;
   /** Who is paid, named from the read rather than asserted. */
@@ -241,6 +260,8 @@ export function outageDisclosureV1(
     outcomeCount: number;
     supplyAtoms: ReadonlyArray<string>;
     positions: ReadonlyArray<Readonly<{ owner: string; balances: ReadonlyArray<string> }>>;
+    /** This market's own failure escrow, from `failureEscrowOwnerV1`. */
+    failureEscrowOwner?: string | null;
   }>,
 ): OutageDisclosureV1 | null {
   if (input.outcomeCount < 2 || input.supplyAtoms.length !== input.outcomeCount) return null;
@@ -273,15 +294,24 @@ export function outageDisclosureV1(
     atoms: holder.atoms.toString(),
     wholeColumn: supply > 0n && holder.atoms === supply,
   }));
+  const escrowOwner = input.failureEscrowOwner ?? null;
+  const escrowAtoms = escrowOwner === null
+    ? 0n
+    : holders.find((holder) => holder.owner === escrowOwner)?.atoms ?? 0n;
+  const refunds = escrowOwner !== null && supply > 0n && escrowAtoms === supply;
   const payee = supply === 0n
     ? 'Nothing is issued on the failure outcome, so an outage pays nobody.'
-    : holders.length === 0
-      ? `No Position this page could read holds any of the ${supply.toString()} atoms on the failure outcome, so this page cannot say who an outage would pay.`
-      : complete && named.length === 1 && named[0]!.wholeColumn
-        ? `One holder, ${named[0]!.owner}, holds every one of the ${supply.toString()} atoms on the failure outcome and would be paid all of the collateral.`
-        : complete
-          ? `${named.length} holders split the ${supply.toString()} atoms on the failure outcome and would be paid in proportion to what each holds.`
-          : `The Positions read here account for ${accounted.toString()} of the ${supply.toString()} atoms on the failure outcome; ${unaccounted.toString()} sit in Positions this page did not read, so this is a partial answer.`;
+    : refunds
+      ? `All ${supply.toString()} atoms on the failure outcome are seated in this market's own escrow, ${escrowOwner}, which is not a person and cannot be paid. An outage returns the collateral to whoever holds an ordinary outcome, in proportion to what they hold.`
+      : escrowOwner !== null && escrowAtoms > 0n
+        ? `This market's escrow ${escrowOwner} holds ${escrowAtoms.toString()} of the ${supply.toString()} atoms on the failure outcome and the rest sits elsewhere, so an outage would pay whoever holds that rest. A partly seated escrow refunds nobody.`
+        : holders.length === 0
+          ? `No Position this page could read holds any of the ${supply.toString()} atoms on the failure outcome, so this page cannot say who an outage would pay.`
+          : complete && named.length === 1 && named[0]!.wholeColumn
+            ? `One holder, ${named[0]!.owner}, holds every one of the ${supply.toString()} atoms on the failure outcome and would be paid all of the collateral.`
+            : complete
+              ? `${named.length} holders split the ${supply.toString()} atoms on the failure outcome and would be paid in proportion to what each holds.`
+              : `The Positions read here account for ${accounted.toString()} of the ${supply.toString()} atoms on the failure outcome; ${unaccounted.toString()} sit in Positions this page did not read, so this is a partial answer.`;
   return Object.freeze({
     failureOutcome,
     supplyAtoms: supply.toString(),
@@ -289,7 +319,38 @@ export function outageDisclosureV1(
     unaccountedAtoms: unaccounted.toString(),
     holders: Object.freeze(named),
     complete,
-    headline: `If the data source never reports, this market settles on outcome ${failureOutcome} \u2014 its failure outcome \u2014 and the whole collateral is paid to whoever holds that claim. Everyone holding one of the other outcomes is paid nothing, whichever of them would have been right.`,
+    failureEscrowOwner: escrowOwner,
+    escrowAtoms: escrowAtoms.toString(),
+    refunds,
+    headline: refunds
+      ? `If the data source never reports, this market settles on outcome ${failureOutcome} \u2014 its failure outcome \u2014 and HOLDERS ARE REFUNDED: the collateral goes back to whoever holds an ordinary outcome, whichever of them would have been right. Nobody is paid for the failure claim, because this market's own escrow holds it.`
+      : `If the data source never reports, this market settles on outcome ${failureOutcome} \u2014 its failure outcome \u2014 and the whole collateral is paid to whoever holds that claim. Everyone holding one of the other outcomes is paid nothing, whichever of them would have been right.`,
     payee,
   });
+}
+
+/**
+ * This market's own failure escrow, derived rather than read.
+ *
+ * Decision 0025 seats a refunding market's failure coordinate in a Position
+ * owned by an identity the MARKET derives and nobody controls: the Claims
+ * `ClaimsCapability` owner PDA at (market, failure selector), which is the same
+ * derivation `authenticate_failure_escrow` checks on chain and the same seed
+ * domain the rational-representation custody owner already uses.
+ *
+ * It is a pure derivation from two addresses this page already holds, so the
+ * disclosure costs no extra account read. What the page then states is whether
+ * the failure column is ACTUALLY seated there -- which is the fact a buyer
+ * needs, and a stronger one than the record's intent.
+ */
+export function failureEscrowOwnerV1(claimsProgramId: string, marketAddress: string, failureOutcome: number): string {
+  if (!Number.isSafeInteger(failureOutcome) || failureOutcome < 0 || failureOutcome > 0xffffffff) {
+    throw new Error('failure outcome is not an exact u32 selector');
+  }
+  const selector = new Uint8Array(4);
+  new DataView(selector.buffer).setUint32(0, failureOutcome, true);
+  return PublicKey.findProgramAddressSync(
+    [CLAIMS_CAPABILITY_OWNER_SEED_V2, new PublicKey(marketAddress).toBytes(), selector],
+    new PublicKey(claimsProgramId),
+  )[0].toBase58();
 }

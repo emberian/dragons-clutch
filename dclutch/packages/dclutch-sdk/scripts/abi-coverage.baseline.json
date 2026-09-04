@@ -43,6 +43,7 @@
     "lib/directTicket.ts\tdclutch/direct-intent-ticket/v1",
     "lib/directTransaction.ts\tdclutch/direct-replay/v3",
     "lib/generalPlanV5.ts\tdclutch/general-successor-plan/v5",
+    "lib/marketDetail.ts\tdclutch:rational-claims:v2",
     "lib/rationalOpenChainV4.ts\tdclutch:rational-authority:v2",
     "lib/rationalOpenChainV4.ts\tdclutch:rational-claims:v2",
     "lib/rationalOpenChainV4.ts\tdclutch:rational-receipt:v2",

@@ -7,9 +7,11 @@ words are at `GOAL.md:4655`. The question itself is stated in
 `docs/decisions/0003-fixed-role-capability-execution.md` under *"The open
 question — docket D6, ember's"*, added by the amendment note of 2026-09-03; this
 record does not close it and does not amend 0003. **The fifth condition §3 adds
-— remeasure the chunk cost on the post-0023 routes before deciding — is being
-measured by the CHUNK-REMEASURE lane started 2026-09-04 13:20 EDT; see the
-addendum at the end of this record.**
+— remeasure the chunk cost on the post-0023 routes before deciding — was
+measured by the CHUNK-REMEASURE lane at `faacc7ba8` and is REPORTED in the
+second addendum at the end of this record; the tables are
+`ACCELERATOR_OUTPUT_CHANNEL_2026_09_02.md` §4. It does not change the read's
+direction and it does move one of its numbers by 42 per cent.**
 
 ## 1. The question
 
@@ -89,7 +91,9 @@ bank. Only the 880-byte slice differs"* (`ACCELERATOR_OUTPUT_CHANNEL:37-45`).
 have since taken most of that re-authentication out of every chunk**, so the win
 may have shrunk from "one whole chunk" to a smaller number. The decision should
 carry the number as it is now, not the one that motivated the design. This is
-the one thing in the read that could change the read.
+the one thing in the read that could change the read. **Measured 2026-09-04 at
+`faacc7ba8`: still one whole chunk, and the chunk is 42 per cent smaller —
+259,537 CU rather than 445,816. See the second addendum below.**
 
 **Why cohort-16 rather than cohort-15.** The request/ack pair *is* the transport
 identity (`v2.rs:139-146`), so switching on is *"a new Strategy record content,
@@ -206,10 +210,74 @@ changes is that a decision described in §7 as needing *"a ruling by ember"* now
 has a measurement in flight and a second beneficiary, and both belong in front of
 whoever rules it.
 
+## Addendum, 2026-09-04 17:05 EDT: the fifth condition, measured
+
+CHUNK-REMEASURE, at `faacc7ba89480349b2ceff2f331630ab69c0a5b4`, in a detached
+worktree, on real ELFs, three draws for every Dealer row and an unprofiled
+control for every whole-transaction figure. The tables are
+`docs/design/ACCELERATOR_OUTPUT_CHANNEL_2026_09_02.md` §4; this is the number
+§3's fifth condition asked for and nothing more. **The record stays OPEN. The
+lane did not rule and this addendum does not.**
+
+**The number.** The Dealer equity Add, measured end to end on both transports
+through the same campaign fixture, unprofiled ELFs: **1,120,274 CU chunked
+against 860,737 CU on one page — the page saves 259,537 CU per action.** The
+read's case was one whole 445,816-CU chunk. **It is still one whole chunk, and
+the chunk is 42 per cent smaller.**
+
+**Where the missing 186,000 went, and where it did not.** Not to decision 0023,
+whose own record says *"What it saved: Not CU — statability"* and which this
+measurement confirms: `acc-caller-authority` is 3,529 to 5,030 CU and every
+movement in it is a whole `create_program_address` iteration. It went to the
+prelude move (`742d7b7be`) and to `5709672aa`, whose activation-cache repair
+alone is 16,509 CU of it. A chunk's authentication fell from 328,702 to
+117,110–118,610 and its family evaluation from 100,064 to 73,555–76,555.
+
+**The wall §1 states got sharper, not weaker.** The 880-byte slice — the only
+part of a chunk that a chunk index changes — is **1,562 CU**, identical to the
+digit across three draws and across both legs of one transaction. So **195,165
+of a 196,727-CU chunk, 99.2 per cent, is byte-identical between chunks**, where
+the note could previously only say 74 per cent.
+
+**What the smaller number changes for the read.**
+
+- **The equity Add loses its execution argument.** Under the chunked pair it now
+  completes, at 1,120,274 of 1,399,700 with **279,426 CU of headroom**, where in
+  August its second chunk had 45,764 left and needed 445,816. For the Add the
+  page is margin, not the difference between running and not running.
+- **The equity Remove does not.** Its bank is three chunks. On the page it
+  completes at 1,232,300–1,253,268 of 1,399,700; the same per-chunk arithmetic
+  puts its chunked form near 1.85M, which no headroom reaches. Derived, not
+  measured — the campaign's chunked run aborts at the Add.
+- **General does not.** Its accelerator never ran the admitted prelude, so
+  nothing the prelude move did could reach it: one chunk is 50,475 CU in the
+  isolated harness against `a4c5add46`'s 50,201, and 66,167–75,194 CU through
+  real Trading, where OpenBatch pays four — **210,555 CU, 30 per cent of the
+  action**. The page removes three of them. That saving is DERIVED and still not
+  measurable end to end, because the General operator cannot build a page frame
+  (`0f53b668a` named that as owed and it remains owed).
+
+**The first addendum's second consumer survives this.** Decision 0032 prices D6
+for the batch at −22 per cent at `K ≤ 13`. The measurement here is the same
+order for a different action and by the same mechanism — three of General's four
+chunks, 30 per cent of an OpenBatch — so nothing in the joint-clearing case rests
+on the Dealer figure that moved.
+
+**Two of §5's and §6's own numbers move with it.** §6's *"one CPI per action
+where General and the Dealer equity route pay four and six today"* stands for
+General, whose bank is four chunks at every Product width, and the Dealer equity
+Add pays two and the Remove three. And §5's ALT identity
+`accounts(258) − accounts(1) = 2 × pages` is **vacuous for OpenBatch**: its
+account count is 55 at N=2, N=13 and N=258, because the two batch actions declare
+a zero per-outcome stride and their bank is 2,648 bytes at every width. The
+identity still binds for the thirteen actions that declare a stride of 6, and for
+those the page changes its coefficient from 2 to 1.
+
 ## Evidence pointers
 
 `docs/design/ACCELERATOR_OUTPUT_CHANNEL_2026_09_02.md` (whole; esp. `:28-45`,
-`:61-147`, `:149-217`, `:233-241`, `:248-261`, `:273-281`);
+`:61-147`, `:149-217`, `:233-241`, `:248-261`, `:273-281`, and §4, the
+2026-09-04 remeasurement at `faacc7ba8`);
 `docs/decisions/0003-fixed-role-capability-execution.md:10-16` and its 2026-09-03
 amendment note; `docs/decisions/0023-slot-free-caller-authority-seed.md`;
 `GOAL.md:2863-2867`, `:3004-3011`, `:3059`, `:4655`, `:4818-4820`;
@@ -220,3 +288,20 @@ amendment note; `docs/decisions/0023-slot-free-caller-authority-seed.md`;
 `programs/dclutch-trading-sbf/src/hot_v3.rs:52-134`, `:3785-3835`;
 `apps/dclutch-web/lib/generalPlanV5.ts:573`;
 commits `93bd4f603`, `4f30d4ce8`, `0f53b668a`, `a4c5add46`.
+
+## Addendum 2026-09-04 14:10 EDT — the fifth condition measured; a provisional ruling
+
+The CHUNK-REMEASURE lane (`1b2bd47fa`) measured the chunk cost at `faacc7ba8` on the post-ruling routes, three draws
+each, profiled and unprofiled: the Dealer equity Add's accelerator chunk is **216,252 / 214,752 / 211,752 CU** (August:
+445,816), of which **195,165 of a 196,727-CU chunk — 99.2% — is byte-identical between chunks**; the 880-byte slice and
+ack cost 1,562 to the digit. The page saves **259,537 CU per equity Add — still one whole chunk, 42% smaller** — and the
+Add now executes chunked with 279,426 headroom, so the page is margin on that route, not the difference between running
+and not. General OpenBatch at N=13: four chunks = 210,555 CU, **30% of the action**; its chunk has not moved since 09-02
+(its accelerator never runs the prelude). Packet: General 55 → 53 accounts; the Dealer Add net zero.
+
+**Provisional ruling (the orchestrator under the standing goal; ember may reverse):** option (a) — a client-provisioned,
+pooled output page under the four conditions in this record, amended into decision 0003 as "the accelerator may hold
+exactly one page under those conditions" — rides cohort-17 with the mechanism cohort (0031), since it re-digests every
+Strategy record and cohort-17 already carries the order-layout move. The number that decided it is the 30% on every
+General action, which the joint clearing multiplies by 9 + 4M transactions per batch; the Dealer's 260k is margin.
+Status: PROVISIONAL (was OPEN).

@@ -104,8 +104,8 @@ use super::{
         SERIES_CONSUME_BASE_EFFECT_BYTES_V4, SERIES_CONSUME_REQUEST_PROFILE_BYTES_V4,
         SERIES_CONSUME_TRANSITION_BYTES_V4, SeriesConsumeChildRequestsV4,
         encode_series_consume_effect_v4_from_requests_atomic,
-        encode_series_consume_request_profile_v4_atomic, series_consume_effect_bytes_v4,
-        encode_series_consume_transition_v4_atomic,
+        encode_series_consume_request_profile_v4_atomic,
+        encode_series_consume_transition_v4_atomic, series_consume_effect_bytes_v4,
     },
     lifecycle_policy_v5::{
         SERIES_CONSUME_ROOT_ACCOUNT_BYTES_V5, SERIES_CONSUME_STATE_LIFECYCLE_BYTES_V5,

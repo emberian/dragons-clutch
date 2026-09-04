@@ -433,12 +433,7 @@ pub fn encode_series_consume_effect_v4_from_requests_atomic(
         base_output,
     )
     .map_err(|_| SeriesConsumeArtifactEmitErrorV4::BaseEffect)?;
-    encode_series_consume_effect_v4_atomic(
-        base_output,
-        occurrence_count,
-        successor_scratch,
-        output,
-    )
+    encode_series_consume_effect_v4_atomic(base_output, occurrence_count, successor_scratch, output)
         .map_err(|_| SeriesConsumeArtifactEmitErrorV4::Effect)
 }
 

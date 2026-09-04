@@ -218,6 +218,37 @@ function concat(...parts: ReadonlyArray<Uint8Array>): Uint8Array {
 }
 
 /**
+ * Narrowest categorical basis that may be founded to refund on failure: two
+ * ordinary regions plus the explicit failure coordinate.
+ *
+ * MATHEMATICAL, not a profile, and it mirrors
+ * `dclutch_product_payoff_v2_codec::runtime_v3::CATEGORICAL_REFUND_MINIMUM_WIDTH_V3`.
+ * At width 2 the legacy scale `1` and the refunding scale `basisWidth - 1` are
+ * the same number, so the record would not say which shape it was founded
+ * under, and a disclosure that cannot be derived is one that gets typed by
+ * hand.
+ */
+export const CATEGORICAL_REFUND_MINIMUM_WIDTH_V3 = 3;
+
+/**
+ * Whether a categorical basis of this width and scale refunds ordinary holders
+ * when its failure coordinate resolves the market.
+ *
+ * THE SOLE AUTHOR OF THE RULE ON THIS SIDE OF THE WIRE, mirroring
+ * `categorical_refunds_on_failure_v3`. Until 2026-09-04 this file was a SECOND,
+ * QUIETER AUTHOR of the opposite rule: `payoutScale !== 1n` refused outright,
+ * so every browser in the tree would have rejected every refunding market as a
+ * noncanonical basis, with a message about `Q=1` that names nothing a reader
+ * could act on. That is the same defect `native_categorical_v1.rs` shed when
+ * the payout arm landed, standing one layer further out.
+ */
+export function categoricalRefundsOnFailureV1(kind: number, basisWidth: number, payoutScale: bigint): boolean {
+  return kind === 1
+    && basisWidth >= CATEGORICAL_REFUND_MINIMUM_WIDTH_V3
+    && payoutScale === BigInt(basisWidth - 1);
+}
+
+/**
  * What one authenticated `ProductBasisV3` record states.
  *
  * `payoutScale` is the fact this validator used to compute and throw away, and
@@ -237,6 +268,12 @@ export type ProductBasisFactsV3 = Readonly<{
   payoutScale: bigint;
   /** 1 for a categorical basis, 2 for a graded one. */
   kind: number;
+  /**
+   * Whether an outage REFUNDS the ordinary holders instead of paying whoever
+   * minted the failure claims. Derived, never asserted: it is
+   * `categoricalRefundsOnFailureV1` applied to this record's own three numbers.
+   */
+  refundsOnFailure: boolean;
 }>;
 
 export async function validateProductBasisV3(
@@ -268,11 +305,18 @@ export async function validateProductBasisV3(
   if (!same(semantic, slice(domain, 128, 32))) throw new Error('Product basis semantic identity differs from Product-owned liability basis');
   if (basisWidth === 0 || payoutScale === 0n) throw new Error('Product basis has zero width or payout scale');
   if (kind === 1) {
-    if (rounding !== EXACT_CATEGORICAL_BOUNDARY_V3 || payoutScale !== 1n || knotDenominator !== 1n
+    // A categorical basis carries exactly TWO admissible payout scales, and the
+    // scale is what says who an outage pays: `1` is the legacy shape, whose
+    // failure column pays whoever minted it, and `basisWidth - 1` is the
+    // refunding shape, whose failure column pays nobody and whose ordinary
+    // claims are refunded one atom each. Both sum to the same scale.
+    const refundsOnFailure = categoricalRefundsOnFailureV1(kind, basisWidth, payoutScale);
+    if (rounding !== EXACT_CATEGORICAL_BOUNDARY_V3 || (payoutScale !== 1n && !refundsOnFailure)
+        || knotDenominator !== 1n
         || knotCount !== 0 || termCount !== 0 || bytes.length !== BASIS_HEADER_BYTES_V3) {
-      throw new Error('categorical Product basis is not canonical Q=1');
+      throw new Error('categorical Product basis is neither canonical Q=1 nor its refunding scale');
     }
-    return Object.freeze({ basisWidth, payoutScale, kind });
+    return Object.freeze({ basisWidth, payoutScale, kind, refundsOnFailure });
   }
   if (kind !== 2 || rounding !== TERM_FLOOR_EXACT_COMPLEMENT_BOUNDARY_V3 || basisWidth < 2
       || knotDenominator === 0n || termCount === 0) throw new Error('graded Product basis kind or counts are not canonical');
@@ -353,7 +397,7 @@ export async function validateProductBasisV3(
     }
     if (bound > payoutScale) throw new Error('graded Product basis exceeds its checked cell envelope');
   }
-  return Object.freeze({ basisWidth, payoutScale, kind });
+  return Object.freeze({ basisWidth, payoutScale, kind, refundsOnFailure: false });
 }
 
 function key(value: string, field: string): PublicKey {

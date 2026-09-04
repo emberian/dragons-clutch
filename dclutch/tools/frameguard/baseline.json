@@ -1,10 +1,10 @@
 {
   "bound_bytes": 4096,
-  "commit": "bc78ccd8116a6b70b8aaa5a3146ccf13ed7bbcb7",
+  "commit": "4ea72c87e85c7b331e063ed7cb52affffa06c40b",
   "link_count": 12,
   "links": [
     {
-      "frame_count": 273,
+      "frame_count": 274,
       "functions": [
         {
           "frames_bytes": [
@@ -1433,6 +1433,12 @@
             640
           ],
           "symbol": "_ZN18dclutch_claims_sbf27authenticate_core_authority17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            256
+          ],
+          "symbol": "_ZN18dclutch_claims_sbf27authenticate_failure_escrow17h<hash>E"
         },
         {
           "frames_bytes": [

@@ -36,6 +36,7 @@
     "lib/directTicket.ts\tdclutch/direct-intent-ticket/v1",
     "lib/directTransaction.ts\tdclutch/direct-replay/v3",
     "lib/generalPlanV5.ts\tdclutch/general-successor-plan/v5",
+    "lib/marketDetail.ts\tdclutch:rational-claims:v2",
     "lib/registeredDirect.ts\tdclutch/direct-registered/v1",
     "lib/releaseRegistry.ts\tdclutch:release-activation:v1",
     "lib/walletTerminalPayoutV3.ts\tdclutch/schema/product-representation-exposure-bundle-v3"
