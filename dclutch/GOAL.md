@@ -4184,3 +4184,13 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   refuse it; Custody `0x6001` fired for the first time in any campaign; tier 1 timed at **19m33s** (not idle). The seven
   remaining are each a campaign away with recipes → SEVEN **`(spawned)`**. Owed: no CI tier runs any family campaign runner.
 - Cuts: `a43626d88`, `d1c74e34c`, `9a4189fa6`.
+- ACTS closed (`2bcad4b43`, `a44696974`, `e38f6bf9a`, `ae8eed20c`, `1407859b4`): the census had ZERO Trading rows (its dispatch
+  was a predicate, so `DCLTHOT3` was a route nobody could name) — predicates resolved to their magics, 75 routes over 72
+  keys; acts declare 16/15/12 routes (from 9/9/9), derived by compiling each act's builder; **load-bearing: `source.close-fund`
+  declared nothing while its planner emits `DCLRFCQ1`, admitted only at Retiring+Consumed — the console said READY on any
+  phase**; live: market B Terminal refuses it by name, cohort-15's Open market `3QytL1bB…` too, with `source.provider`
+  admitted on the same read. The other-machine half stays unbuilt and is now MEASURED unexercisable: no client surface
+  decodes any of the six machines (the Direct root's tail is width-checked, never parsed). Strict accessibility: 6 of 75
+  reachable, computed on every render (no typed number). Owed: client decoders for the machines (a product unit); Core's
+  Action family has no leading-byte selector; three predicate arms compare no magic.
+- Cuts: `21197b305`.
