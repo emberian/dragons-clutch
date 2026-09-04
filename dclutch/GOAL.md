@@ -4355,3 +4355,12 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Cuts: `d144bf55d`.
 - Started 03:10 EDT: TWINS **`ac0cc0469cb7d5966`** — one classification table for sync-from-web and twinIdentity; a Rust-emitted
   example child makes the lifecycle digest pin an authority.
+- LEAN-TAGS-2 closed (`c4b7bfa7d`, `686c0ca9c`, `daad707b9`, `ec600e8aa`, `6cf49cd4d`, `8769defd4`, rows `b527274c6`): **eight
+  of eight machines Lean-emitted**, the SDK's scrape arm deleted; the source machine had three agreeing authors and named
+  none of its six tags — one now, and "Exhausted is not terminal" is a theorem; **`DCLTCRQ2` named — `CORE_REQUEST_MAGIC`
+  emitted, Core's Action match moved behind an `if` the census reads: magic-selected routes 73 → 84, eleven Core routes
+  gain their magic**, plus a new wildcard route blocked with reason; the projected-custody header gets a Lean owner; the
+  Realm/Position emission narrowed to the live seed domain (three negative pins). Zero rows moved. Orchestrator: reference
+  converged, the DCLTPOS1 exemption removed, the Core request rendered in the explorer. Owed: `REQUEST_MAGIC` still collides
+  two-way in the dealer and general codecs; a gauntlet binding for the wildcard route; three custody records still without Lean.
+- Cuts: `989360d51`, `6e01436b5`, `db8afd6f7`.
