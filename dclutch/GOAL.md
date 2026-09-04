@@ -4272,3 +4272,10 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   follow** → CENSUS-BRANCH **`(spawned)`**. Found: `localSuccessor.ts:183-184` decode DCLTSRS1/DCLTCFS1 — zero instances on
   either live cohort (live records are DCLTSRS2/DCLTFL02). Thirteen mutations red-proven.
 - Cuts: `8973fee65`.
+- BUDGETS closed (`08f30f538`, `2912357a9`): eight tier-1 rows pinned over three draws on one ELF set — **band 0 on all eight
+  under a 2.4× load spread** (none of these routes searches; the first band-0 proof); `MEASURED_REAUTHENTICATION_CU_V1 = 65,390`
+  was the cost of hashing a one-day-old Registry ELF on 2026-08-25, never moved through 3,214 commits after decision 0012
+  replaced the hash, and was read by nothing that runs — now 11,337 and LIVE as a packet floor with the witness cited;
+  genref's local-validator control strips comments and follows one level of invocation (red-proven). Reference converged
+  (34fc57ba8). Owed: `dcltgmf3-whole` under-pinned (two of three draws above its pin; left green with the draws recorded).
+- Cuts: `3f597286a`.
