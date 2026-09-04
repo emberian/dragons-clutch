@@ -33,6 +33,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { VALIDATOR_TOKEN, launchesLocalValidator } from "./substrate-control.mjs";
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..", "..");
 
@@ -262,21 +264,30 @@ for (const row of substrates.campaigns) {
         problems.push(`\`${campaign}\`: ${key} \`${rel}\` does not exist`);
       }
     }
-    // The positive control. A campaign that says `local-validator` must start
+    // The positive control. A campaign that says `local-validator` must reach
     // one; a campaign that says `program-test` must not. Without this the
     // substrate column is one more authored sentence, and an authored sentence
     // is the thing this page exists to stop being the only evidence.
+    //
+    // It used to be `runner.includes("solana-test-validator")` over the raw
+    // file, and `tools/gauntlet/lineage/run-lineage.sh` passed it on a COMMENT
+    // — a control that could not fail for the reason it exists. It now strips
+    // shell comments and follows the scripts the runner invokes one level down,
+    // which is where that campaign's validator actually lives. See
+    // tools/genref/substrate-control.mjs for what it does and does not claim.
     if (row.runner) {
-      const runner = read(path.join(REPO, row.runner));
-      const launches = runner.includes("solana-test-validator");
-      if (row.substrate === "local-validator" && !launches) {
+      const control = launchesLocalValidator(REPO, row.runner);
+      if (row.substrate === "local-validator" && !control.launches) {
         problems.push(
-          `\`${campaign}\`: declared local-validator, but ${row.runner} never names solana-test-validator`,
+          `\`${campaign}\`: declared local-validator, but no executable text in ` +
+            `${control.searched.join(", ")} names ${VALIDATOR_TOKEN} ` +
+            `(comments do not count, and only scripts the runner invokes are followed)`,
         );
       }
-      if (row.substrate === "program-test" && launches) {
+      if (row.substrate === "program-test" && control.launches) {
         problems.push(
-          `\`${campaign}\`: declared program-test, but ${row.runner} launches solana-test-validator`,
+          `\`${campaign}\`: declared program-test, but ${control.sites.join(", ")} ` +
+            `names ${VALIDATOR_TOKEN} in executable text`,
         );
       }
     }
@@ -1054,9 +1065,12 @@ field the chain does not agree with.
 ## Campaigns, and the substrate each one ran on
 
 Declared in \`tools/gauntlet/substrates.json\` and checked here: a campaign that
-says \`local-validator\` must have a runner that starts one, a campaign that
-says \`program-test\` must not, and a campaign that binds a route with no row at
-all fails this generator rather than rendering as \`unknown\`.
+says \`local-validator\` must NAME \`solana-test-validator\` in executable text --
+in its runner, or in a script that runner invokes -- a campaign that says
+\`program-test\` must not, and a campaign that binds a route with no row at all
+fails this generator rather than rendering as \`unknown\`. Shell comments are
+stripped before the search, because until 2026-09-04 they were not and one
+campaign passed this control on a sentence in its header.
 
 ` +
       table(

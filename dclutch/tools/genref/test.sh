@@ -243,6 +243,85 @@ git -C "$CONV/repo" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
   && ok "--converge --check passes when the commit IS the fixpoint" \
   || bad "--converge --check on a converged commit: $(cat "$CONV/out")"
 
+
+# ---------------------------------------------------------------------------
+# 12. The substrate positive control, shown capable of failing.
+#
+# `tools/gauntlet/substrates.json` declares which substrate each campaign ran
+# on and `generate.mjs` checks the declaration against the runner's own code.
+# That check used to be a text search over the raw file, and
+# `tools/gauntlet/lineage/run-lineage.sh` passed it on a COMMENT naming
+# `solana-test-validator` in its header -- a control that could not fail for
+# the reason it exists. It is proved here rather than argued: a synthetic
+# runner whose ONLY mention is a comment must be red, and the real
+# `run-lineage.sh` must be green for the right reason, which is the producer it
+# invokes and not its own prose.
+#
+# This section runs the REAL node against the real module -- the stubs above
+# are for generate.sh's argument gate, and stubbing the thing under test here
+# would be the same defect one level up.
+# ---------------------------------------------------------------------------
+
+echo
+echo "substrate control:"
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+CTL="$(mktemp -d "${TMPDIR:-/tmp}/genref-substrate-test.XXXXXX")"
+trap 'rm -rf "$SCRATCH" "$CONV" "$CTL"' EXIT
+
+mkdir -p "$CTL/campaign"
+# The synthetic red: declares a validator in prose, runs a ProgramTest.
+cat > "$CTL/campaign/run-comment-only.sh" <<'FAKE'
+#!/usr/bin/env bash
+# This is a LOCAL VALIDATOR campaign: it starts a real solana-test-validator
+# and drives the route through preflight, execute and replay.
+set -euo pipefail
+cargo test --manifest-path Cargo.toml -- --nocapture
+FAKE
+# The synthetic green, and the one-level case the real tree needs.
+cat > "$CTL/campaign/run-producer.sh" <<'REAL'
+#!/usr/bin/env bash
+set -euo pipefail
+solana-test-validator --ledger "$1" --quiet &
+REAL
+cat > "$CTL/campaign/run-wrapper.sh" <<'WRAP'
+#!/usr/bin/env bash
+# The producer starts the solana-test-validator; this wrapper folds evidence.
+set -euo pipefail
+"$root/campaign/run-producer.sh" --evidence-dir "$evidence"
+WRAP
+
+ctl() { # ctl <repo-root> <runner-relative> -> "<launches> <sites,...>"
+  CTL_MODULE="$REPO_ROOT/tools/genref/substrate-control.mjs" \
+  CTL_REPO="$1" CTL_RUNNER="$2" node --input-type=module -e '
+    import { pathToFileURL } from "node:url";
+    const { launchesLocalValidator } = await import(
+      pathToFileURL(process.env.CTL_MODULE).href
+    );
+    const verdict = launchesLocalValidator(process.env.CTL_REPO, process.env.CTL_RUNNER);
+    console.log(verdict.launches, verdict.sites.join(","));
+  '
+}
+
+[ "$(ctl "$CTL" campaign/run-comment-only.sh)" = "false " ] \
+  && ok "a runner naming the validator only in a COMMENT is RED" \
+  || bad "the comment-only runner passed the control: $(ctl "$CTL" campaign/run-comment-only.sh)"
+
+[ "$(ctl "$CTL" campaign/run-producer.sh)" = "true campaign/run-producer.sh" ] \
+  && ok "a runner that actually names it in executable text is green" \
+  || bad "the real runner did not pass: $(ctl "$CTL" campaign/run-producer.sh)"
+
+[ "$(ctl "$CTL" campaign/run-wrapper.sh)" = "true campaign/run-producer.sh" ] \
+  && ok "a wrapper is green through the producer it INVOKES, not its own prose" \
+  || bad "the wrapper did not resolve: $(ctl "$CTL" campaign/run-wrapper.sh)"
+
+# The real row this was found on. Green, and the site must be the producer:
+# if `run-lineage.sh` itself is ever the site again, the comment is counting.
+lineage_sites="$(ctl "$REPO_ROOT" tools/gauntlet/lineage/run-lineage.sh)"
+[ "$lineage_sites" = "true tools/lineage-loopback/run-lineage-loopback.sh" ] \
+  && ok "run-lineage.sh passes through run-lineage-loopback.sh, not its header" \
+  || bad "run-lineage.sh control reads '$lineage_sites'"
+
 echo
 echo "genref: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

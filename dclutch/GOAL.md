@@ -4230,3 +4230,18 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Started 23:50 EDT: BUDGETS **`ad45a74651219788a`** (eight tier-1 CU rows over three draws; the 5.8×-stale reauthentication
   pin; genref's validator control made structural) and DECODERS **`a85802400c254b7f5`** (six machine decoders derived from
   the emitted layouts; the other-machine verdicts derive; the console shows the machine's state).
+
+### 2026-09-04 00:15 EDT — THE TWO SELECTORS AGREE
+- COHORT-15B closed (five commits; `e1ae00c81` the General session's wall is a derivation — **cohort-15's General market
+  reports DELIVERABLE, walls [], at all 55 coordinates**; `e5a42c632` devnet gains the retirement arm; evidence addendum B):
+  **the settle landed on attempt 1 (140,902 CU), certificate kind 1, Terminal — and the committed selector 1 IS the cell the
+  reading falls in: $103.738449 × 100 = 10,373.84 against cuts 10,200/10,600 → cell 1.** The two-scale defect is fixed on a
+  public chain. **The fill is BLOCKED, and the block is the orchestrator's:** cohort-15's scratch was removed after its lane
+  closed; the job dir's scripts hardcode the driver inside it and the seal's admission recorded digests of the candidate's
+  evidence there — a rebuild reproduces every certified byte (20 of 68 gate files) but 48 files carry per-run identity and
+  `build-run.txt` is one nonce, so the admission binds to a run, not to the release. Retirement reaches its subject and
+  refuses on evidence it expects wrongly. Route witnesses 22 → 22 because the census has no row for four magics
+  (`DCLTPUA1 DCLTSPI1 DCLTCRQ2 DCLTDFS1`). `sim-config.json` carries the Helius key in cleartext (author
+  `build-sim-config.py`). → RELEASE-GATE **`(spawned)`**: the gate digest over reproducible bytes only, the admission
+  re-bindable host-side at 0 SOL, the job dir self-contained, the credential out of the file. COHORT-15C follows it.
+- Cuts: `f81ccac89`, `42ccadedf`.

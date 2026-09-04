@@ -734,6 +734,16 @@ used, so a probe is never presented as a caller's span.
 **Both of cohort-14's walls are now closed on one market**: the rent-credit
 width by cohort-15's re-founding, the caller authority by `3a8ac205d` plus this.
 
+**What DELIVERABLE does and does not say.** It says every one of the 55
+top-level coordinates has a producer and none of them names an unsatisfiable
+conjunct. It does NOT say OpenBatch has run, and it does not say every account
+in the frame EXISTS — the `capability seal` row still reads *"Still unproduced
+ON THIS CHAIN"*, which is a coordinate whose producer exists (`bdce0dc8e`) and
+whose account does not. `tools/cohort15/steps.tsv` row `03` asks for three
+things and this is the first: the report naming no unsatisfiable conjunct. The
+transaction committing, and a `DCLTGBT01` Batch account appearing at the
+address the request's own seeds derive, are still owed.
+
 Four tests, and the substantive one is **proven red**: dropping the invocation
 ordinal from the preimage — the exact regression that collides one execution's
 four authorities — fails
@@ -869,3 +879,198 @@ second build fifteen commits later.
 Because the fill did not happen, no stranger holds a claim, and the
 winning-stranger payout of §15 item 1 is downstream of this blocker rather than
 of the settle.
+
+### B5. THE SETTLE LANDED ON ATTEMPT ONE, AND THE TWO SELECTORS AGREE
+
+The bounded waiter refused its own first pass — `2376s is past the stated
+ceiling of 2000s` — which is the guard working: a forty-minute wait is a
+scheduling decision, so it was made explicitly rather than slept through.
+
+| | |
+| --- | --- |
+| signature | **`2Mqxghzc6Uwtpjndnvhw22QrcH3rbmuBxdSDbxV9ixa6hEwwxgbxbgvyd3qaoCyGjEe1cH6LLSAfWZ4DLyLGk4t7`** |
+| slot / CU / fee | 492,829,232 / **140,902** / 75,000 |
+| fired at | 03:42:47 UTC, chain clock 1788493361 against a legal-from of 1788493329 |
+| attempts | **1** — against the capture's five |
+
+The certificate seat `84YxYUrEYxYyRHAWSnZrNn7D1GeA6teGfvC3hdBfNh9K` went from
+**0 bytes, System-owned** to **312 bytes `DCSRCER2`, Resolution-owned**, holding
+the same **2,786,520 lamports** it was prepaid with at founding — the walk took
+the seat it had been left.
+
+**The verifier, read off the account: the kind byte at offset 10 is `1`**, not
+the `4` of `CERTIFICATE_RESOLUTION_FAILURE_KIND`. Cohort-13's was 4.
+
+#### THE TWO SELECTORS, AND THIS IS WHAT COHORT-15 WAS FOUNDED TO BE ABLE TO SAY
+
+| | |
+| --- | --- |
+| certificate `result_numerator` / `result_denominator` | **10,373,844,866** / 1 |
+| `source_scale_exponent`, from the observed publication | **−8** |
+| the reading in dollars | **$103.738449** |
+| on the cuts' scale (×100) | 10,373.8449 |
+| cuts | 10,200 and 10,600 |
+| **the cell the reading falls in** | **1** |
+| **`CERTIFICATE_V2_SELECTOR_OFFSET` (256), committed** | **1** |
+| | **AGREE** |
+
+Cohort-14's markets B and C each paid the cell the deployed program chose rather
+than the cell its reading falls in, and market C did it across a position a
+stranger had paid for. **Cohort-15 is the first cohort whose committed selector
+and whose cuts-scale selector are the same cell**, and `4cd2b9cb5` — the four
+reserved bytes that became `source_scale_exponent` — is why. The certificate
+carries the raw mantissa with denominator 1; the scale lives in the
+`StatisticSpec`, where the founder put it.
+
+### B6. TERMINAL, AND THE CENSUS RETIRES L4 BY NAME
+
+`--action admit-terminal` on the same `terminalSequence 1` input:
+
+| | |
+| --- | --- |
+| signature | `64jEDVT6ZbdUBxhHnUzeAktSfZY4TunWZcHWLxnxWNoUe8yxYXWVnPmtajBjFcWhLN6m9X2Y5G8d14M6ebuzp5PK` |
+| slot / CU / fee | 492,829,917 / **89,942** / 75,000 |
+
+The Core Market's own phase byte at offset 10 reads **`0x02` = Terminal**,
+against the `0x01` Open it held before.
+
+**L7 VIOLATED FIRST, AGAIN, AND AGAIN IT LOCATED THE CAUSE.** Declared with only
+the two fees:
+
+```
+VIOLATED L7: the payer moved -3899136 lamports since `cohort15b-pre-settle` and
+its transactions paid 150000 in fees, but watched accounts gained 0; -3749136
+lamports are unaccounted for.
+```
+
+**3,749,136 is the settle receipt `BYbLHeWUQn5UBhbyPdfVmWWbrZTgqLmqWWeM8RvAm7j1`
+— 464 bytes `DCLTSPR1`, Resolution-owned — to the lamport.** Re-declared with it
+named, `cohort15b-post-settle-complete` exits zero. Both readings are kept; the
+violation is the finding. This is the fourth cohort boundary running where L7
+has earned its pass by failing first, and the third where the residue it named
+was rent on an account the act itself created.
+
+And **L4 retires by name at Terminal** rather than reading VIOLATED against a
+protocol that did exactly what it should:
+
+```
+INAPPLICABLE L4: the Market is terminal: settlement DISCHARGED the liability
+this law is stated about … L1, L3 and L7 go on watching this boundary
+unweakened.
+```
+
+### B7. THE MONEY
+
+| | deployer | campaign payer |
+| --- | ---: | ---: |
+| at the stop the previous lane left | 24.890564434 | 0.628283565 |
+| after the settle, admit-terminal and four read-only commands | **24.890564434** | **0.624384429** |
+
+The payer moved **3,899,136 lamports**, and it closes exactly:
+**3,749,136** receipt rent **+ 75,000 + 75,000** two fees. Nothing else moved.
+
+**THE DEPLOYER IS STILL AT 24.890564434.** It has moved for its own deploy and
+its own ladder and nothing else — now through the seal, two foundings, the
+activation, the prepay, the admissions, the capture, the settle and the
+Terminal admission.
+
+### B8. RETIREMENT REACHES ITS SUBJECT AND REFUSES BY NAME
+
+With the market Terminal and `devnet-aggregate-retirement-v1` existing, the
+first retirement on any chain was attempted. It got past the cluster gate — the
+whole point of `e5a42c632` — and refused on evidence:
+
+```
+terminal sequence is blocked: the Direct first-use accounts are created together
+by the first trade, so campaign evidence must carry all of them or none. It
+carries direct_trading_funding_ledger and omits direct_capability_root.
+```
+
+`DIRECT_FIRST_USE_LABELS_V1` is `["direct_capability_root",
+"direct_trading_funding_ledger"]`, and `evidence.accounts` is built from
+`/execution/market/accounts` — 62 entries, which carries
+`direct_trading_funding_ledger` and not `direct_capability_root`. **Read off the
+chain, the refusal is right about the world and its comment is not:**
+
+| label | address | on chain |
+| --- | --- | --- |
+| `direct_trading_funding_ledger` | `J4nR8mhJ1dArjXs7hV6D4B8vsHscd64eSfjpoe4hrrgJ` | **120 B `DCLTFL02`**, Trading-owned, 1,570,584 lamports |
+| `direct_capability_root` (founding checkpoint) | `8Ya1hee1QrCnjVgmecqQxcYrV2q9jxVMR1aPEo6qtMkB` | **VACANT** |
+| the LIVE capability root (activation) | `FUJ9pNukWRb5658ysiDP5gz9gF3Hx8c4cU2mUrvELAWG` | 256 B `DCLTCRT1`, Trading-owned |
+
+**Neither was created by the first trade** — this market has never traded. The
+funding ledger was created by the **activation**, which
+`capability-activation.json` names as `fundingLedger` with
+`ledgerLamportsAfter 1570584`; the live capability root was created by the same
+activation, at an address the founding checkpoint's `direct_capability_root`
+label does not name. So the all-or-none rule sees exactly one of its pair and
+refuses correctly, while the sentence it refuses with describes a trade that
+never happens on this route.
+
+That is where this step stops. The question it opens — whether
+`DIRECT_FIRST_USE_LABELS_V1` should pair an activation-era ledger with a
+founding-checkpoint permit root at all, and which capability root a retirement
+is owed — is an evidence-shape decision, not something to guess past on a live
+market.
+
+### B9. What is owed after this lane
+
+1. **The fill**, blocked by §B4's envelope. The winning-stranger payout is
+   downstream of it, not of the settle.
+2. **OpenBatch N=2 on a real chain.** The route now reports DELIVERABLE and this
+   command can finally be the gate in front of a producer; the producer itself —
+   a driver that builds a `GeneralHotStateV3` through
+   `build_general_successor_instruction_v5` into `compile_general_successor_v0`
+   — is still unwritten.
+3. **The General capability seal.** `bdce0dc8e` gave it a family-neutral
+   producer; there is still **no devnet driver command** for it, and the frame's
+   `capability seal` row still reads "Still unproduced ON THIS CHAIN".
+4. **Retirement**, at §B8's refusal.
+5. Route witnesses, and the `docs/reference/route-witnesses.md` devnet class,
+   which stood at **22** before this cohort.
+
+Devnet evidence. Not mainnet evidence.
+
+### B10. THE DEVNET WITNESS CLASS STAYS AT 22, AND THE REASON IS A REGISTER GAP
+
+`corroborate.py --discover` over this document, against a fresh
+`dclutch-route-census inventory` (12 programs, **162 routes**, 350 refusal
+codes) and cohort-15's own program map:
+
+```
+corroborate: discovered 0 record(s) from 6 signature(s); 5 carried no
+resolvable first-party magic
+```
+
+The five it could not credit are not five failures to drive a route. The tool
+read each transaction's outer instruction off the chain and resolved its magic
+correctly — and then found the census has **no row for that magic at all**:
+
+| signature | magic → program | reason |
+| --- | --- | --- |
+| `2wqT3rjH…`, `2yRSDsSs…` (the two admissions) | `DCLTPUA1` → trading | no trading route; **0 routes elsewhere** |
+| `3VsB7dNp…` (the capture) | `DCLTSPI1` → resolution | no resolution route; **0 routes elsewhere** |
+| `2Mqxghzc…` (the settle) | `DCLTSPI1` → resolution | no resolution route; **0 routes elsewhere** |
+| `64jEDVT6…` (admit-terminal) | `DCLTCRQ2` → core | no core route; **0 routes elsewhere** |
+
+Grepping the inventory confirms it: **`DCLTPUA1`, `DCLTSPI1`, `DCLTCRQ2` and
+`DCLTDFS1` occur zero times in all 162 routes**, while `DCLTPUA1` and
+`DCLTSPI1` are declared in
+`crates/dclutch-user-position-admission-contract/src/lib.rs` and
+`crates/dclutch-resolution-codec/src/sponsored_push_v1.rs`.
+
+So `docs/reference/route-witnesses.md`'s devnet class goes **22 → 22**, and this
+cohort contributes **0** — not because these routes were not driven on a public
+chain, but because `dclutch-route-census inventory` does not enumerate them, so
+the register has no row a devnet transaction could be credited against.
+
+This is the same shape `corroborate.py`'s own header describes — *"a route driven
+on a public chain for three cohorts running read as NEVER-EXECUTED, because the
+register had no channel a devnet transaction could reach it through"* — one
+level deeper. The channel now exists; **four of the magics that channel carries
+are not in the register.** `docs/evidence/witnesses/cohort-15-discovered.json`
+is kept with zero corroborated routes, because a witness document naming five
+finalized signatures and the exact reason each was dropped is the evidence for
+that claim.
+
+Devnet evidence. Not mainnet evidence.
