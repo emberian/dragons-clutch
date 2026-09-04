@@ -4411,3 +4411,18 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Cuts: `753997831`, `81ffef323`.
 - Started 03:50 EDT: WORKBENCH-ROOT **`aa11e02bc97de498f`** — the workbench derives the Direct root's address from the Market
   and reads it, so direct.inline's verdict derives on the card; the funding ledger the same way if derivable.
+
+### 2026-09-04 04:45 EDT — MARKET 3 SETTLED, THE SELECTORS AGREE AGAIN; TWO CONVICTIONS OWED
+- COHORT-15D closed (ten commits): **market 3 settled** after a six-attempt `0x8002 OutputState` that was the certificate
+  seat never prepaid by the re-admitted founding (market 1's was, at founding) — 146,902 CU, kind 1, **selector 1 = the cell
+  $103.972224 falls in; the buyer (a stranger) holds outcome 1**; the ATA created and waiting. Stopped with code and
+  conjunct: admit-terminal refuses `Funding — native custody arithmetic` (validate_native_custody, operator :3513) on a
+  ledger equal to market 1's in every measured quantity; OpenBatch refuses `0x4015 DescriptorManifestEntry` — descriptor
+  `derivation_policy` ≠ entry `child_derivation_id`, a FOUNDING INPUT, the accelerator never invoked; retirement coordinate
+  needs the terminal sequence past Funding. Landed on chain: the General seal (225,141 CU), the first route document, the
+  first plan/v5 from a real chain, the first General routing table (53 addresses), market 1's four payouts and
+  begin-retiring (phase 3). Three producer walls found by running (the route grammar could not state the System program;
+  the plan refused nineteen vacant cursors; the prepay required the Clock sysvar unchanged between plan and load).
+  → COHORT-15E **`(spawned)`**: the Funding conviction and the stranger's payout, the General founding input and OpenBatch,
+  market 1's retirement. C16-REHEARSAL-2 **`(spawned, read-only)`**: the night's delta against yesterday's walk.
+- Cuts: `09a08a917`, `b18f002c1`.

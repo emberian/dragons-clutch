@@ -1689,3 +1689,86 @@ require `skipPreflight`, which is the deliberate posture for hostile evidence an
 not the default for an honest act. It is not taken here: the same code, the same
 instruction index and the same compute figure come back from both the simulator
 and the sender, and a third statement of one refusal is not a third fact.
+
+## D9. MARKET 3'S SETTLE: refused six times, convicted to one absent account, then landed
+
+The ladder fired exactly when the market's own record said it could — chain clock
+1788508927 against `legal_from` 1788508896, verdict `due`, read off `DCLTWIN1`
+`APAqeQu3…` as the last statement before the action. Then six attempts refused
+identically:
+
+    Error processing Instruction 2: custom program error: 0x8002
+    Program 24AkUjtXg61La45u7KTge8u4dKpVqkzirmzycVyckFgn
+      consumed 135,522 of 1,399,700 compute units
+
+`0x8002` is `ResolutionError::OutputState` — *"A writable Source state or
+certificate account was not canonical."* Two accounts can carry that accusation,
+so both were read rather than guessed. The settle's writable frame past the payer
+is three accounts, and the plan the ladder itself wrote names them:
+
+| | address | observed |
+| --- | --- | --- |
+| Source state | `68oH466LZ7cdnwKBLg6M24LmJ75oytCW77WS86Vyq6B3` | 224 B `DCLTSRS2`, Resolution-owned — canonical |
+| **certificate seat** | **`9BnUF5rKx2WNbvvexQd3f7CgJzUBEBEwBn8ZvwK62gSu`** | **ABSENT** |
+| settle receipt | `EGTGB7Vtu2Y49im4HNMfXAmjCsqhD16qbsyi2bAQrMHV` | absent, and correctly so — the settle creates it |
+
+**Market 3's founding never prepaid its certificate seat.** Market 1's was, at
+founding, with 2,786,520 lamports and 450 CU (`2tV9iqra…`) — a plain System
+transfer — and this document records it under "THE DIRECT MARKET". Market 3 was
+founded from the re-admitted plan in 83 transactions and that transfer is not
+among them. The seat is not derivable-into-existence by the settle: it must
+arrive prepaid, System-owned and unallocated, and an absent account is the one
+shape `OutputState` names.
+
+Prepaying it to exactly market 1's figure (`2w2DdvCVWcPoKdkoApr7EZsGYyxtWWhogbY5tjoB6NC4FynqdfC96NySHo8mn1NFsX9DMFR75Yi2TM7kcfqh8dQn`)
+and re-running the same ladder landed the settle on **attempt one**:
+
+| | |
+| --- | --- |
+| signature | `25Cxq4WmJKZtj4pKyRU96qZKaXPnMtrR9wfA7Yd2o13cwNZyR4Qr1CSjECdMqkCWtYH4kBd1rjVChRZYTEune2ec` |
+| slot / CU / fee | 492,925,112 / **146,902** / 75,000 |
+| certificate | 0 B System-owned → **312 B `DCSRCER2`**, Resolution-owned, same 2,786,520 lamports |
+| **kind byte @10** | **1** — not the 4 of `CERTIFICATE_RESOLUTION_FAILURE_KIND` |
+
+One attempt against market 1's one, and the difference between six refusals and
+one success was a single 5,000-lamport transfer. Note also that 2,786,520 is
+*above* this cluster's current rent minimum for 312 bytes — the Rent sysvar reads
+`lamports_per_byte_year 5080`, `exemption_threshold 1.0`, so `(128+312)×5080 =
+2,235,200`. The conjunct is rent-exemption, not an exact figure; what failed was
+absence.
+
+### THE TWO SELECTORS AGREE, AND THIS TIME THE STRANGER STANDS TO BE PAID
+
+Committed selector at certificate offset 256: **1**. The observation staged with
+this market was SOL/USD `$103.972224`, which at the statistic's own
+`source_scale_exponent = -8` is 10,397.2224 on the cuts' ×100 scale, against cuts
+10,200 / 10,600 — **cell 1**. Same cell both ways. The buyer holds outcome 1.
+
+## D10. Admit-terminal refuses, and the two markets' ledgers are equivalent
+
+    Core terminal admission builder: Funding
+    active-funding-ledger refused: native custody arithmetic
+
+The diagnostic is the operator's own, printed beside the coarse code:
+`authenticate_active_funding_ledger` in
+`resolution-core-v3-operator/src/lib.rs:3470`, refusing at its last conjunct,
+`authenticated.validate_native_custody(account.lamports,
+rent.minimum_balance(account.data.len()), allow_lamport_surplus)` (`:3513-3517`).
+
+Market 1's admit-terminal passed that same check at 03:42 UTC, so the two ledgers
+were measured against each other rather than reasoned about:
+
+| | market 1 `9xQHh4n6…` | market 3 `5Sa5WXPp…` |
+| --- | ---: | ---: |
+| width | 264 B `DCLTFL02` | 264 B `DCLTFL02` |
+| lamports | 2,482,539 | 2,482,539 |
+| rent minimum | 1,991,360 | 1,991,360 |
+| surplus | 491,179 | 491,179 |
+
+Byte-diffing them: they differ in exactly four ranges — the 32-byte identity at
+`[16:48]` and three 3-byte fields at 56, 128 and 200, one per funding entry.
+Every quantity this conjunct reads is equal. So the refusal is not explained by
+the ledger's own lamports, and the next question is whether
+`allow_lamport_surplus` differs between the settle path and the admission path,
+or whether market 1 passed while its surplus was still zero. That is one
+instrumented re-run away and is not guessed here.
