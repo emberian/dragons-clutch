@@ -4783,3 +4783,12 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   refunding market (the failure coordinate carries no value on the refunding scale); the escrow seated; the refunding
   failure walk on real ELFs. TIDY **`(spawned)`** — the reconcile tool's stale schema literal derives; the runbooks tier's
   two unprobed commands.
+- CONDITIONAL closed (`4b15cf69a`; MECHANISM_CONDITIONAL_MARKETS note + `ConditionalMarketV1.lean`, 50 theorems, 0 sorry):
+  a product market is R_A·R_B cells row-major over an ordinary ResultDomain with a refunding basis — no new domain kind;
+  **a conditional market IS the product's row projection on the condition branch (proven)**, with an off-condition cell that
+  pays the scale without reading B (the brief's escrow-refund shape priced and refused); parents read exactly as Core's
+  AdmitTerminal reads a certificate; full backing, determinism, the decision read's pathology root all PROVEN; consistency
+  across two Hoards NOT closed by a conjunct — the note gives the riskless trade. Walls: K ≤ 60 (7×8 fits, 8×8 refused),
+  heap ≈ 30. Flagship for ember: "if feature X activates by slot S, does mainnet's slot time move?" (2×3, A major).
+  **All six mechanism designs now exist: batch spine, joint clearing, scoring dealer, ensemble, founder bond, conditional.**
+- Cuts: `14e9d8674`, `7a29c27f5`.
