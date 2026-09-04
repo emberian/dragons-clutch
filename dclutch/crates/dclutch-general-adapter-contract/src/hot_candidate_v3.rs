@@ -1909,6 +1909,54 @@ pub enum GeneralHotCandidateErrorV3 {
     Close(GeneralSevenPlanErrorV1),
 }
 
+impl GeneralHotCandidateErrorV3 {
+    /// The exact line a program writes to the validator log for this refusal.
+    ///
+    /// Ten variants reached the chain as one word. Every General action's
+    /// projection ends in `map_err(|_| GeneralAcceleratorSemanticErrorV3::Candidate)`
+    /// and publishes "general: refused, candidate projection", which is true of a
+    /// bank one byte too short, of a stride belonging to another action, of an
+    /// arithmetic overflow, and of a forty-five-clause coordinate conjunct alike.
+    /// A reader who has only that has to rediscover which by bisecting a route
+    /// that carries no diagnostic -- which is exactly what this tree's most
+    /// expensive idiom costs, and it cost a lane a measurement on 2026-09-04.
+    ///
+    /// It does not name the WRAPPED causes: `Verify` and `Close` carry their own
+    /// enums, and a line that flattened them here would be a second author for
+    /// what those refusals mean. The caller logs the inner line beside this one
+    /// where it has it.
+    ///
+    /// A `&'static str` per variant rather than a `{:?}`: the reader is a
+    /// `no_std` program whose peak heap already binds at runtime width 258, and
+    /// `sol_log` takes a `&str` with no allocation at all. The match is
+    /// exhaustive, so an eleventh variant does not compile until its author says
+    /// what a reader should see.
+    #[must_use]
+    pub const fn log_line(self) -> &'static str {
+        match self {
+            Self::InvalidPlan => "general-candidate: refused, a record did not decode",
+            Self::TailCountMismatch => {
+                "general-candidate: refused, Product width is not the effect width"
+            }
+            Self::InvalidCapacity => {
+                "general-candidate: refused, a caller bank had another exact width"
+            }
+            Self::BankStrideMismatch => {
+                "general-candidate: refused, this bank belongs to another action"
+            }
+            Self::InvalidCoordinate => {
+                "general-candidate: refused, an authenticated coordinate disagrees"
+            }
+            Self::RevisionOverflow => {
+                "general-candidate: refused, an optimistic revision cannot advance"
+            }
+            Self::ArithmeticOverflow => "general-candidate: refused, checked arithmetic overflowed",
+            Self::Verify(_) => "general-candidate: refused, the row verifier",
+            Self::Close(_) => "general-candidate: refused, the CloseCandidate plan",
+        }
+    }
+}
+
 /// Result alias for General Hot candidate projection.
 pub type Result<T> = core::result::Result<T, GeneralHotCandidateErrorV3>;
 

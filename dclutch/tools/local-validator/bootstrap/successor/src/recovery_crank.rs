@@ -195,6 +195,50 @@ pub(crate) fn run_devnet_v1(arguments: Vec<String>) -> Result<()> {
 }
 
 fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
+    run_v1(arguments, expected).map(|_| ())
+}
+
+/// What one crank was and, when it executed, what it landed.
+///
+/// The command prints this and writes the evidence document; a caller that is
+/// not a command line needs the same facts as VALUES. In particular it needs
+/// the landed transaction whole -- label, signature, slot, and the finalized
+/// `logs` a route census cross-checks against the chain's own
+/// `Program <address> invoke` lines -- because the evidence document
+/// deliberately carries a summary and a summary cannot be observed.
+pub(crate) struct CrankOutcomeV1 {
+    /// `advance` or `exhaust`, the driver's own word for the arm it planned.
+    pub(crate) arm: &'static str,
+    /// The leg the market stood on when this crank was planned.
+    pub(crate) phase: SourceResolutionPhaseV1,
+    /// The attempt index this crank enters.
+    pub(crate) entering: u8,
+    /// How many attempts the policy funds.
+    pub(crate) attempt_count: u8,
+    /// The last second the current leg is still answerable honestly. A crank is
+    /// admissible STRICTLY after it.
+    pub(crate) due_unix_seconds: i64,
+    /// What the chain's own clock said when the plan was built.
+    pub(crate) observed_unix_seconds: i64,
+    pub(crate) source_state: Pubkey,
+    pub(crate) certificate: Pubkey,
+    pub(crate) frame_accounts: usize,
+    /// `None` on a preflight: no key was opened and nothing was sent.
+    pub(crate) landed: Option<TransactionEvidence>,
+}
+
+/// One crank, as a value rather than as a process exit code.
+///
+/// `run` is this function and `map(|_| ())`. The split is the one the journey
+/// tier asked of the tier-1 producer when it needed `found_through_open`
+/// separately from the write that always followed it: a gauntlet tier has to
+/// FOLD what this driver did, and a tier that rebuilt the frame, the seat or
+/// the arm from its own arithmetic would be measuring a second author instead
+/// of the driver a host runs.
+pub(crate) fn run_v1(
+    arguments: Vec<String>,
+    expected: ExpectedClusterV1,
+) -> Result<CrankOutcomeV1> {
     let arguments = parse(arguments, expected)?;
     expected.authenticate(&arguments.origin)?;
     let mut rpc = Rpc::connect_cluster(
@@ -211,7 +255,7 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
     if !arguments.execute {
         write_evidence(&arguments.output, &plan, expected, None)?;
         println!("preflight only; no key was opened and nothing was sent");
-        return Ok(());
+        return Ok(outcome(&plan, None));
     }
 
     let path = arguments
@@ -243,7 +287,16 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
     }
     instructions.push(plan.instruction.clone());
 
-    let evidence = rpc.send("Recovery ladder crank", &instructions, &worker)?;
+    // THE LABEL NAMES THE ARM. An advance and an exhaustion are different
+    // facts about a market -- different certificate kinds, different
+    // compartments, different phases afterwards -- and a census binding may
+    // not have two owners, so one label covering both would make them
+    // unbindable as the separate campaign steps they are.
+    let evidence = rpc.send(
+        &format!("Recovery ladder crank: {}", plan.arm.label()),
+        &instructions,
+        &worker,
+    )?;
     if let Some(error) = evidence.error.as_ref() {
         return Err(Error::new(format!(
             "the recovery crank refused on chain: {error}"
@@ -289,7 +342,23 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
     );
 
     write_evidence(&arguments.output, &plan, expected, Some(&evidence))?;
-    Ok(())
+    Ok(outcome(&plan, Some(evidence)))
+}
+
+/// Lift a planned crank, and whatever it landed, into the caller's shape.
+fn outcome(plan: &PlanV1, landed: Option<TransactionEvidence>) -> CrankOutcomeV1 {
+    CrankOutcomeV1 {
+        arm: plan.arm.label(),
+        phase: plan.phase,
+        entering: plan.entering,
+        attempt_count: plan.attempt_count,
+        due_unix_seconds: plan.due_unix_seconds,
+        observed_unix_seconds: plan.observed_unix_seconds,
+        source_state: plan.source_state,
+        certificate: plan.certificate,
+        frame_accounts: plan.instruction.accounts.len(),
+        landed,
+    }
 }
 
 /// Build the one instruction this crank will send.

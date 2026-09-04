@@ -537,7 +537,7 @@ binding. An `enforced: true` row here would never be asserted, which overstates
 coverage exactly the way a `MISSING` row does. The rows are in the file so the
 lane that writes that binding does not have to re-measure them.
 
-Three draws, **one ELF set**, at `a6aed340ce94db8003b59eaf840fd3f3ba54f670` on
+Three draws, **one ELF set**, at `44c0ccf196bea239c02f86d115c3a22957d38fb7` on
 2026-09-04: the runner's own campaign plus two re-runs of the same test binary
 against the same `$SBF_OUT_DIR`, so nothing between them was rebuilt. Six links,
 **zero** SBF stack-frame-overwrite diagnostics.
@@ -545,23 +545,32 @@ against the same `$SBF_OUT_DIR`, so nothing between them was rebuilt. Six links,
 | link | sha256 (12) | bytes |
 |---|---|---:|
 | `dclutch_registry_sbf` | `83c9b0e89b21` | 239,816 |
-| `dclutch_trading_sbf` | `ca97232b0b7f` | 2,335,544 |
-| `dclutch_core_sbf` | `e8209ccbf22b` | 1,189,112 |
-| `dclutch_claims_sbf` | `6c55a117135b` | 1,397,808 |
+| `dclutch_trading_sbf` | `d8e277f9a0b0` | 2,335,920 |
+| `dclutch_core_sbf` | `64702fcf08cd` | 1,189,464 |
+| `dclutch_claims_sbf` | `38633f4de349` | 1,449,416 |
 | `dclutch_custody_sbf` | `176f8007b002` | 573,576 |
-| `dclutch_general_accelerator_sbf` | `80c6a04d269b` | 307,752 |
+| `dclutch_general_accelerator_sbf` | `0dc2c43d5427` | 309,352 |
 
 | row | draw 1 | draw 2 | draw 3 | band |
 |---|---:|---:|---:|---:|
-| `general-hot-open-batch` (N=2) | 654,302 | 654,302 | 654,302 | 0 |
-| `general-hot-close-batch` | 640,132 | 640,132 | 640,132 | 0 |
-| `general-hot-close-batch-seal` | 602,575 | 602,575 | 602,575 | 0 |
-| `general-hot-second-open-batch` | 657,302 | 657,302 | 657,302 | 0 |
-| `general-hot-open-batch-n13` | 659,462 | 659,462 | 659,462 | 0 |
-| `general-hot-open-batch-n258` | 677,258 | 677,258 | 677,258 | 0 |
-| `general-hot-standalone-capability-seal` | 616,302 | 616,302 | 616,302 | 0 |
+| `general-hot-open-batch` (N=2) | 676,896 | 676,896 | 676,896 | 0 |
+| `general-hot-close-batch` | 628,230 | 628,230 | 628,230 | 0 |
+| `general-hot-close-batch-seal` | 604,075 | 604,075 | 604,075 | 0 |
+| `general-hot-second-open-batch` | 670,896 | 670,896 | 670,896 | 0 |
+| `general-hot-open-batch-n13` | 674,557 | 674,557 | 674,557 | 0 |
+| `general-hot-open-batch-n258` | 686,353 | 686,353 | 686,353 | 0 |
+| `general-hot-standalone-capability-seal` | 620,802 | 620,802 | 620,802 | 0 |
 | `general-hot-out-of-sequence-close` (`0x4002`) | 40,730 | 40,730 | 40,730 | 0 |
 | `general-hot-foreign-entry` (`0x4015`) | 118,766 | 118,766 | 118,766 | 0 |
+
+**The tenth row is not a CU figure, and that is what it says.** The campaign
+also prints `general-hot-submit-candidate-wall`, which carries a builder
+refusal rather than a number: `SubmitCandidate` cannot be assembled through the
+admitted route at all, because its projector requires `identity::CANDIDATE` and
+`identity::PRIMARY_BENEFICIARY` in the input bank and its own AccountProfile
+projects neither. Recording it beside the nine is deliberate -- an action with
+no row and an action with no route look identical in a table that only lists
+numbers.
 
 **Band 0 on every row, and it has a cause rather than luck.** This campaign's
 keypairs are fixed byte arrays (`Keypair::new_from_array`) and its slots come
@@ -571,11 +580,16 @@ draws FRESH keypairs is the standalone seal, and it drew identically three times
 as well — consistent with a route that runs no bump search, and not a bound on
 one. Every tolerance is therefore the rule's floor of 15,000.
 
-**Read the width ladder together.** N=2, 13 and 258 are 654,302 / 659,462 /
-677,258 on a frame that is 55 accounts and 151 scalars and 45 identities at
-every width: 89.7 CU per outcome over 256 more outcomes, and none of it is bank
-width, because `OpenBatch` declares a zero per-outcome scalar stride. The
-headroom at the accepted maximum Product width is 722,742 CU (51.6%).
+**The width ladder stopped being monotonic, and that is the reading.** N=2, 13
+and 258 are 676,896 / 674,557 / 686,353 on a frame that is 55 accounts and 151
+scalars and 45 identities at every width -- so N=13 is now 2,339 CU CHEAPER than
+N=2, which no per-outcome cost can explain. It never could: `OpenBatch` declares
+a zero per-outcome scalar stride, so width buys no bank, and the ladder's spread
+of 11,796 CU over 256 outcomes is 46.1 CU per outcome AT BEST and is really the
+residue of three different market foundings. The previous table read the same
+spread as "89.7 CU per outcome" and that was a line fitted through three points
+that are not on one. The headroom at the accepted maximum Product width is
+713,647 CU (51.0%).
 
 **And read the two refusals as the pair they are.** `general-hot-foreign-entry`
 is the cohort-15 wall reproduced: that deployment's `OpenBatch` refused `0x4015`
@@ -583,6 +597,17 @@ after 128,724 CU on devnet and had never been reproducible in a harness, because
 the harness founded its manifest entry from the action it was about to run.
 Here the entry is a parameter and everything else is byte-for-byte the campaign
 that commits, which is the positive control the refusal needs.
+
+**Six of the nine rows moved from `a6aed340c`, and NOT because one lane moved
+them.** `open-batch` +22,594, `second-open-batch` +13,594, N=13 +15,095, N=258
++9,095, the standalone seal +4,500 and `close-batch-seal` +1,500, while
+`close-batch` fell 11,902 and the two refusal rows did not move at all. Between
+those two revisions the tree took commits from CLAIMS-17, RECOVERY-3, SERIES-4
+and PROGRAMS-16F and 16G under `crates/` and `programs/`, and four of the six
+links changed bytes -- Trading, Core, Claims and the General accelerator. No row
+here is attributable to one lane and none of them is claimed to be. That the two
+refusal rows are unmoved to the unit is the useful half: both refuse before any
+artifact runs, so they measure the frame and not what changed inside it.
 
 **This table is not comparable with the one at `6ce8929ed`** (the runner's first,
 recorded in `71b5ad10c`). Six of its seven rows moved — `open-batch` −2,900,

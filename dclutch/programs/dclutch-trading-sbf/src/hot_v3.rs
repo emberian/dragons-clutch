@@ -824,6 +824,39 @@ macro_rules! hot_cu_role_carrier {
     ($case:expr, $first:expr, $second:expr, $third:expr) => {};
 }
 
+/// Name which conjunct of the Custody child preparation refused.
+///
+/// `custody_composition_v3::prepare` and the frame-shape guard behind it have
+/// EIGHT `TradingSbfError::Content` exits and the wire carries one code for all
+/// of them -- the same code 2,124 other sites in this program publish. A route
+/// that refuses here is therefore an eight-way guess: the parent facts were
+/// zero or foreign, the callee arrived signing/writable/non-executable or the
+/// successor width disagreed, the invocation was not a Custody one or carried a
+/// borrowed witness, the request slice fell outside the bank, the request bytes
+/// did not decode or named the External compartment, one of the six parent
+/// bindings inside the request disagreed, the frame smuggled the callee into a
+/// coordinate, or the frame was shorter than the replay coordinate. The first
+/// logged word is the case; the rest are its operands. Diagnostic-only.
+#[cfg(feature = "hot-cu-profile")]
+pub(crate) fn log_custody_prepare_refusal_v1(case: u64, first: u64, second: u64, third: u64) {
+    solana_program::log::sol_log("dclutch-hot-why:custody-prepare case/first/second/third");
+    solana_program::log::sol_log_64(case, first, second, third, 0);
+}
+
+#[cfg(feature = "hot-cu-profile")]
+macro_rules! hot_cu_custody_prepare {
+    ($case:expr, $first:expr, $second:expr, $third:expr) => {
+        crate::hot_v3::log_custody_prepare_refusal_v1($case, $first, $second, $third)
+    };
+}
+
+#[cfg(not(feature = "hot-cu-profile"))]
+macro_rules! hot_cu_custody_prepare {
+    ($case:expr, $first:expr, $second:expr, $third:expr) => {};
+}
+
+pub(crate) use hot_cu_custody_prepare as hot_cu_custody_prepare_macro;
+
 #[cfg(feature = "hot-cu-profile")]
 macro_rules! hot_cu_reason {
     ($label:literal, $error:expr) => {{

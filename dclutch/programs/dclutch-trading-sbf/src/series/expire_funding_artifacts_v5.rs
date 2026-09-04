@@ -102,8 +102,34 @@ pub const SERIES_EXPIRE_ROUTE_COUNTS_V5: [u16; 5] = [14, 14, 10, 11, 26];
 pub const SERIES_EXPIRE_RENT_CREDIT_COORDINATE_V5: u16 = 33;
 /// Outer readonly caller PDA synthesized as a signer only for the Core CPI.
 pub const SERIES_EXPIRE_PRECOMMIT_CALLER_COORDINATE_V5: u16 = 80;
+/// The release-selected Custody program the four Custody routes are invoked
+/// through.
+///
+/// A CPI's callee is not a member of its own account list, and
+/// `CustodyFrameRoleV1` has no `CustodyProgram` variant at all -- a Custody
+/// frame names `CallerProgram`, which is Trading's -- so no Custody route
+/// window can carry it. `hot_v3::resolve_role_carrier_v3` resolves a child
+/// route's callee by scanning the downgraded LOGICAL vector for the key the
+/// Registry activation cache names for that role, so the program has to BE one
+/// of this profile's coordinates or every Custody route refuses `Release`
+/// before its first CPI. Series Consume needed no coordinate of its own --
+/// `account_profile_v4`'s Core Found suffix, Claims founding frame and Core
+/// Open suffix each name the Custody program inside their own frames, which is
+/// where its three carriers come from -- and Expire's five frames name it
+/// nowhere: three canonical `CustodyFrameSpecV1` windows, one Trading-owned
+/// projected-custody window, and the twenty-five-account Core
+/// unallocated-permit frame plus its caller.
+///
+/// It is Expire's own outer coordinate, appended PAST every route range, so
+/// carrying it renumbers no frame: `SERIES_EXPIRE_ROUTE_STARTS_V5`,
+/// `SERIES_EXPIRE_ROUTE_COUNTS_V5` and every `ROUTE_ALIASES` pair are
+/// unchanged. Its rule is executable, readonly and opaque, exactly as Direct's
+/// three, General's and Dealer's are: the loader that deployed it owns its
+/// record width, and the activation cache -- not this profile -- is the sole
+/// authority on which program the Custody role selects.
+pub const SERIES_EXPIRE_CUSTODY_PROGRAM_COORDINATE_V5: u16 = 81;
 /// Complete fixed-account width of the Expire outer invocation.
-pub const SERIES_EXPIRE_FIXED_ACCOUNT_COUNT_V5: u16 = 81;
+pub const SERIES_EXPIRE_FIXED_ACCOUNT_COUNT_V5: u16 = 82;
 /// Common scalar register width authenticated by Expire artifacts.
 pub const SERIES_EXPIRE_COMMON_SCALAR_COUNT_V5: u16 = 26;
 /// Common identity register width authenticated by Expire artifacts.
@@ -239,7 +265,16 @@ pub const fn series_expire_effect_bytes_v5(occurrence_count: u32) -> usize {
 }
 
 const _: () = assert!(HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3 == 5);
-const _: () = assert!(SERIES_EXPIRE_ROUTE_STARTS_V5[4] + SERIES_EXPIRE_ROUTE_COUNTS_V5[4] == 81);
+// The callee is appended past the last route range, and the profile ends there.
+// Either assertion alone admits a renumbering; together they are the property
+// the doc comment on `SERIES_EXPIRE_CUSTODY_PROGRAM_COORDINATE_V5` claims.
+const _: () = assert!(
+    SERIES_EXPIRE_ROUTE_STARTS_V5[4] + SERIES_EXPIRE_ROUTE_COUNTS_V5[4]
+        == SERIES_EXPIRE_CUSTODY_PROGRAM_COORDINATE_V5
+);
+const _: () = assert!(
+    SERIES_EXPIRE_CUSTODY_PROGRAM_COORDINATE_V5 + 1 == SERIES_EXPIRE_FIXED_ACCOUNT_COUNT_V5
+);
 
 #[derive(Clone, Copy, Debug)]
 /// Fixed prestate widths required to emit the exact Expire profile.
@@ -390,6 +425,11 @@ fn account_rule(
             AccountPrestateV2::Exact,
         ),
         4 => (0, 0, AccountPrestateV2::AuthenticatedOpaqueReadonlyData),
+        // Opaque on purpose: whichever loader deployed the Custody program owns
+        // its record width, so this profile declares none. See the constant.
+        SERIES_EXPIRE_CUSTODY_PROGRAM_COORDINATE_V5 => {
+            (0, 0, AccountPrestateV2::AuthenticatedOpaqueReadonlyData)
+        }
         SERIES_EXPIRE_TICKET_COORDINATE_V5 => (
             u32::try_from(SERIES_TICKET_STATE_BYTES_V3)
                 .map_err(|_| SeriesExpireFundingArtifactErrorV5::Geometry)?,
@@ -935,7 +975,14 @@ const fn write_data() -> AccountEffectPermissionsV2 {
 }
 
 const WRITABLE_REPRESENTATIVES: &[u16] = &[0, 5, 14, 16, 17, 33, 45, 51, 55];
-const EXECUTABLE_REPRESENTATIVES: &[u16] = &[9, 10, 19, 57, 79];
+const EXECUTABLE_REPRESENTATIVES: &[u16] = &[
+    9,
+    10,
+    19,
+    57,
+    79,
+    SERIES_EXPIRE_CUSTODY_PROGRAM_COORDINATE_V5,
+];
 
 const ROUTE_ALIASES: &[(u16, u16)] = &[
     (21, 7),
@@ -1209,7 +1256,10 @@ mod tests {
         let bytes = profile();
         let profile = AccountProfileV3::decode(&bytes).expect("ProfileV3");
         assert_eq!(profile.funding_bound_count(), 0);
-        assert_eq!(profile.base().fixed_account_count(), 81);
+        assert_eq!(
+            profile.base().fixed_account_count(),
+            SERIES_EXPIRE_FIXED_ACCOUNT_COUNT_V5
+        );
         assert_eq!(profile.base().representative(0, 70), Ok(5));
         let outer = profile.base().rule(false, 5).expect("Ticket rep");
         assert_eq!(outer.prestate(), AccountPrestateV2::Exact);
@@ -1225,7 +1275,8 @@ mod tests {
     fn hot_prefix_and_exact_route_windows_are_pinned() {
         let bytes = profile();
         let profile = AccountProfileV3::decode(&bytes).expect("ProfileV3").base();
-        let mut permissions = [AccountPermission::read_only(); 81];
+        let mut permissions =
+            [AccountPermission::read_only(); SERIES_EXPIRE_FIXED_ACCOUNT_COUNT_V5 as usize];
         dclutch_account_profile_contract::v2::derive_effect_permissions(
             profile,
             2,
@@ -1238,6 +1289,73 @@ mod tests {
         assert_eq!(SERIES_EXPIRE_ROUTE_STARTS_V5, [6, 20, 34, 44, 55]);
         assert_eq!(SERIES_EXPIRE_ROUTE_COUNTS_V5, [14, 14, 10, 11, 26]);
         assert_eq!(SERIES_EXPIRE_PRECOMMIT_CALLER_COORDINATE_V5, 80);
+    }
+
+    /// Every child role this Effect routes to has a coordinate the Hot executor
+    /// can resolve its callee through, and the Custody one renumbers no frame.
+    ///
+    /// `hot_v3::resolve_role_carrier_v3` scans the downgraded logical vector for
+    /// the key the activation cache names for the role and refuses `Release`
+    /// when nothing carries it. Custody is the only role Expire routes to --
+    /// `FixedRole::Core` is resolved from the runtime prefix, not from the frame
+    /// -- so exactly one coordinate must carry it, it must be a readonly
+    /// executable, and it must sit past the last route range or the pinned
+    /// starts and aliases above are wrong.
+    #[test]
+    fn the_custody_callee_is_one_readonly_executable_past_every_route_range() {
+        let bytes = profile();
+        let profile = AccountProfileV3::decode(&bytes).expect("ProfileV3");
+        let base = profile.base();
+        let callee = SERIES_EXPIRE_CUSTODY_PROGRAM_COORDINATE_V5;
+
+        // The roles come from the REAL emitted Effect bytes, not from this
+        // file's own list of them.
+        let refund = [0_u8; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3];
+        let projected_abort = [0_u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3];
+        let effect_bytes = emit_effect(
+            child_requests(&refund, &refund, &refund, &projected_abort),
+            1,
+        )
+        .expect("Expire EffectV5");
+        let effect = ProgramV5::decode(&effect_bytes).expect("EffectV5");
+        let successor = effect.base().base();
+        let mut custody_routes = 0_u16;
+        let mut route = 0_u16;
+        while route < successor.route_count() {
+            if successor.route(route).expect("route").role() == FixedRole::Custody {
+                custody_routes += 1;
+            }
+            route += 1;
+        }
+        assert_eq!(custody_routes, 4, "Expire routes to Custody four times");
+
+        assert!(
+            SERIES_EXPIRE_ROUTE_STARTS_V5
+                .iter()
+                .zip(SERIES_EXPIRE_ROUTE_COUNTS_V5)
+                .all(|(start, count)| start + count <= callee),
+            "the callee must not be inside any route window",
+        );
+        assert_eq!(
+            base.representative(0, usize::from(callee)),
+            Ok(usize::from(callee))
+        );
+        let rule = base.rule(false, callee).expect("Custody callee rule");
+        assert_eq!(rule.privileges(), 4, "readonly executable");
+        assert_eq!(rule.effect_permissions(), 0);
+        assert_eq!(
+            rule.prestate(),
+            AccountPrestateV2::AuthenticatedOpaqueReadonlyData,
+            "the loader that deployed Custody owns its record width",
+        );
+        // One carrier, not two: the executor refuses as hard on a second
+        // distinct physical account as it does on none.
+        let carriers = (0..SERIES_EXPIRE_FIXED_ACCOUNT_COUNT_V5)
+            .filter(|coordinate| {
+                base.representative(0, usize::from(*coordinate)) == Ok(usize::from(callee))
+            })
+            .count();
+        assert_eq!(carriers, 1, "exactly one coordinate carries the callee");
     }
 
     #[test]
@@ -1417,7 +1535,10 @@ mod tests {
             assert_eq!(v4.borrowed_range_count_for_route(route_index), Ok(0));
         }
         let base = v4.base();
-        assert_eq!(base.fixed_account_count(), 81);
+        assert_eq!(
+            base.fixed_account_count(),
+            SERIES_EXPIRE_FIXED_ACCOUNT_COUNT_V5
+        );
         assert_eq!(base.route_count(), 5);
         assert_eq!(base.fixed_operation_count(), 9);
         for route_index in 0..5 {

@@ -21,6 +21,7 @@ use solana_program::{
 
 use crate::child_authority_v4::{PreflightedCallerBumpV4, child_caller_authority_v4};
 use crate::hot_v3::hot_cu_checkpoint_macro as hot_cu_checkpoint;
+use crate::hot_v3::hot_cu_custody_prepare_macro as hot_cu_custody_prepare;
 use crate::{
     TradingSbfError,
     child_receipt_v3::{ReceiptDeliveryV3, deliver_receipt_dependency_v3},
@@ -236,9 +237,23 @@ fn prepare<'a, 'info>(
         || custody_program.is_writable
         || successor_account_count != effect_accounts.len()
     {
+        hot_cu_custody_prepare!(
+            2,
+            u64::from(custody_program.executable)
+                | (u64::from(custody_program.is_signer) << 1)
+                | (u64::from(custody_program.is_writable) << 2),
+            successor_account_count as u64,
+            effect_accounts.len() as u64
+        );
         return Err(TradingSbfError::Content.into());
     }
     if invocation.role != FixedRole::Custody || invocation.borrowed_witness.is_some() {
+        hot_cu_custody_prepare!(
+            3,
+            u64::from(fixed_role_word_v1(invocation.role)),
+            u64::from(invocation.borrowed_witness.is_some()),
+            0
+        );
         return Err(TradingSbfError::Content.into());
     }
     let request_bytes = invocation_request(invocation, request_bank)?;
@@ -251,6 +266,22 @@ fn prepare<'a, 'info>(
         || custody.semantic.parent_request_digest != parent.parent_request_digest
         || custody.caller_program != parent.trading_program
     {
+        // WHICH of the six bindings disagreed, as a bitmap: a request that
+        // names another release set and one that names another generation are
+        // one code on the wire and two different repairs.
+        hot_cu_custody_prepare!(
+            6,
+            u64::from(custody.caller_role != CallerRoleV1::Trading)
+                | (u64::from(custody.release_set != parent.release_set) << 1)
+                | (u64::from(custody.market != parent.market) << 2)
+                | (u64::from(custody.semantic.generation != parent.generation) << 3)
+                | (u64::from(
+                    custody.semantic.parent_request_digest != parent.parent_request_digest
+                ) << 4)
+                | (u64::from(custody.caller_program != parent.trading_program) << 5),
+            custody.semantic.generation,
+            parent.generation
+        );
         return Err(TradingSbfError::Content.into());
     }
     let request_digest = hash(request_bytes).to_bytes();
@@ -311,16 +342,23 @@ fn require_custody_frame_shape_v3(
     custody_program: &Pubkey,
     expected_authority: &Pubkey,
 ) -> Result<(), ProgramError> {
-    if child_accounts
+    if let Some(coordinate) = child_accounts
         .iter()
-        .any(|account| account.key == custody_program)
+        .position(|account| account.key == custody_program)
     {
+        hot_cu_custody_prepare!(7, coordinate as u64, child_accounts.len() as u64, 0);
         return Err(TradingSbfError::Content.into());
     }
     if child_accounts
         .get(CUSTODY_REPLAY_FRAME_COORDINATE_V1)
         .is_none()
     {
+        hot_cu_custody_prepare!(
+            8,
+            child_accounts.len() as u64,
+            CUSTODY_REPLAY_FRAME_COORDINATE_V1 as u64,
+            0
+        );
         return Err(TradingSbfError::Content.into());
     }
     if child_accounts
@@ -336,10 +374,17 @@ fn decode_custody_request_v3(bytes: &[u8]) -> Result<CustodyRequestKindV3, Progr
     if bytes.get(..8) == Some(DELEGATED_CUSTODY_REQUEST_MAGIC_V2.as_slice()) {
         DelegatedCustodyRequestV2::decode(bytes)
             .map(CustodyRequestKindV3::DelegatedV2)
-            .map_err(|_| TradingSbfError::Content.into())
+            .map_err(|_| {
+                hot_cu_custody_prepare!(5, 2, bytes.len() as u64, 0);
+                TradingSbfError::Content.into()
+            })
     } else {
-        let request = CustodyRequestV1::decode(bytes).map_err(|_| TradingSbfError::Content)?;
+        let request = CustodyRequestV1::decode(bytes).map_err(|_| {
+            hot_cu_custody_prepare!(5, 1, bytes.len() as u64, 0);
+            TradingSbfError::Content
+        })?;
         if request.source_compartment == CompartmentV1::External {
+            hot_cu_custody_prepare!(5, 3, bytes.len() as u64, 0);
             return Err(TradingSbfError::Content.into());
         }
         Ok(CustodyRequestKindV3::V1(request))
@@ -382,6 +427,16 @@ fn verify_custody_receipt_v3(
     }
 }
 
+/// A stable one-word name for a child role, for diagnostics only.
+const fn fixed_role_word_v1(role: FixedRole) -> u8 {
+    match role {
+        FixedRole::Core => 0,
+        FixedRole::Claims => 1,
+        FixedRole::Custody => 2,
+        FixedRole::Resolution => 3,
+    }
+}
+
 fn validate_parent(
     program_id: &Pubkey,
     parent: CustodyCompositionParentV3,
@@ -391,6 +446,15 @@ fn validate_parent(
         || parent.parent_request_digest == [0; 32]
         || parent.trading_program != program_id.to_bytes()
     {
+        hot_cu_custody_prepare!(
+            1,
+            u64::from(parent.release_set == [0; 32])
+                | (u64::from(parent.market == [0; 32]) << 1)
+                | (u64::from(parent.parent_request_digest == [0; 32]) << 2)
+                | (u64::from(parent.trading_program != program_id.to_bytes()) << 3),
+            0,
+            0
+        );
         Err(TradingSbfError::Content.into())
     } else {
         Ok(())
@@ -407,7 +471,15 @@ fn invocation_request(
         .ok_or(TradingSbfError::Content)?;
     request_bank
         .get(invocation.request_offset..end)
-        .ok_or_else(|| TradingSbfError::Content.into())
+        .ok_or_else(|| {
+            hot_cu_custody_prepare!(
+                4,
+                invocation.request_offset as u64,
+                end as u64,
+                request_bank.len() as u64
+            );
+            TradingSbfError::Content.into()
+        })
 }
 
 /// Gather this invocation's account windows into a caller-owned buffer.

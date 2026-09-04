@@ -5,25 +5,68 @@
 //! `dclutch_trading_sbf::series::release_v5`, and the physical evidence joins
 //! remain owned by the adjacent support module.
 //!
-//! # THREE ROWS ARE STILL RED, AND THE WALL IS 202,211 CU FURTHER IN
+//! # THREE ROWS ARE STILL RED, AND THE CUSTODY CALLEE NOW RESOLVES
 //!
-//! All three rows refuse identically: **Trading consumes 533,198 CU of
-//! 1,316,619 and refuses `Release` (`0x4001`)** in the preflight child
-//! composition, after `p7-local-effect-discipline` and before
-//! `preflight-children`. Before this lane they refused `Content` (`0x4003`) at
-//! 330,987 CU inside the family-neutral config-record borrow, five conjuncts
-//! into the prelude. The refusal CODE changed, which is the part that matters:
-//! it is a different accusation, not the same one later.
+//! All three rows refuse identically: **Trading consumes 530,018 CU of
+//! 1,317,313 and refuses `Content` (`0x4003`)** in the FIRST Custody route's
+//! preflight, after `pf-invocation-resolved`. Before this lane they refused
+//! `Release` (`0x4001`) at 533,198 in `resolve_carrier_by_representative_v3`,
+//! because the activated Custody program was at no coordinate of the frame.
 //!
-//! Between those two points the route now clears, in order, the config-record
-//! borrow, the descriptor and artifact seals, the runtime observations, the
-//! geometry and Rent quotes, the account projection, the Rent-quote
-//! projection, the native signatures, the request projection, the static
-//! register-ownership verdict, the lifecycle preplan, the candidate, the
-//! post-candidate checks, the borrowed witness, the replan, the effect
-//! permissions and banks, the effect projection, and the local effect
-//! discipline -- eighteen phases that had never executed for any Series
-//! action.
+//! ## THE EXPIRE PROFILE WAS THE DEFECT, AND THE REPAIR RENUMBERS NO FRAME
+//!
+//! A CPI's callee is not a member of its own account list, and
+//! `CustodyFrameRoleV1` has no `CustodyProgram` variant at all -- a Custody
+//! frame names `CallerProgram`, which is Trading's. So no Custody route window
+//! can carry the callee, and `hot_v3::resolve_role_carrier_v3` resolves one by
+//! scanning the downgraded LOGICAL vector for the key the activation cache
+//! names. Every other Custody-routing topology in this tree therefore declares
+//! a coordinate of its own and says so in the same words: Direct's
+//! inline-ordinary (90), RegisterBuy (55) and registered-terminal (70),
+//! General's `general_custody_callee_coordinate_v3`, Dealer's
+//! `DEALER_EQUITY_CUSTODY_CALLEE_ACCOUNT_COUNT_V3`, and
+//! `custody_composition_v3::require_custody_frame_shape_v3`'s own doc comment.
+//! Series Consume needed none because its Core Found suffix, Claims founding
+//! frame and Core Open suffix each name the Custody program inside their own
+//! frames -- those are the three carriers `resolve_role_carrier_v3` was taught
+//! to dedup. Expire's five frames name it nowhere, and Expire was the only
+//! Custody-routing topology in the tree without a callee coordinate.
+//!
+//! The bundle builder is NOT the defect. It packs exactly the profile's logical
+//! coordinates and binds an unbound one to a placeholder; it uses
+//! `WaistFactsV1::custody_program` to MINE Custody's two bumps and to leave the
+//! bank's own deployment uninstalled, and neither of those is a frame entry. It
+//! had nothing to bind because the profile declared nothing to bind to.
+//!
+//! So `SERIES_EXPIRE_CUSTODY_PROGRAM_COORDINATE_V5` is appended PAST every
+//! route range, exactly as Direct's and General's are, and the blast radius the
+//! blocked-route entry predicted does not happen: `SERIES_EXPIRE_ROUTE_STARTS_V5`,
+//! `SERIES_EXPIRE_ROUTE_COUNTS_V5` and all thirty-seven `ROUTE_ALIASES` pairs
+//! are byte-identical. Only the fixed count moves, 81 to 82, and with it the
+//! Trading digest.
+//!
+//! ## THE NEXT WALL IS NAMED, AND IT IS A MARKET APART
+//!
+//! `dclutch-hot-why:custody-prepare` reports **case 6, bitmap `0xc`, operands
+//! 1 and 9**: two of the six parent bindings inside the first escrow refund
+//! request disagree with the executing envelope -- `custody.market !=
+//! parent.market` and `custody.semantic.generation != parent.generation`, the
+//! request naming generation 1 and the envelope 9.
+//!
+//! That is not a fixture typo. The Series escrow's replay, vault and transfer
+//! authority are all PDAs of the FUTURE occurrence Market, derived at Prepare,
+//! and `custody-sbf` requires the CoreMarket account at its own frame
+//! coordinate 1 to have the key `request.market`. So the request must name the
+//! future Market -- while `CustodyCompositionParentV3` binds every child
+//! request to `envelope.market()`/`envelope.generation()`, which for a
+//! pre-Market Expire is the PARENT Series root's Market at its own generation.
+//! The pre-Market Expire topology has always been one Market and eight
+//! generations away from the conjunct that binds it. Either the family-neutral
+//! Custody composition gains a projected-market authority for this case (route
+//! 3 already carries a projected shape whose parent root the Effect patches at
+//! runtime), or the Series escrow lifecycle moves into the parent Market's
+//! namespace. That ruling moves the child composition Direct and Dealer also
+//! ride, and it is NOT taken here.
 //!
 //! ## THE SERIES ROOT'S CONFIG IDENTITY HAS ONE AUTHOR
 //!
@@ -121,11 +164,32 @@
 //!
 //! ## WHAT IS OWED
 //!
-//! The `Release` (`0x4001`) refusal in the preflight child composition is the
-//! next wall and is NOT diagnosed here. `precommit_caller_substitutions_...`
-//! additionally needs re-basing: its positive and substitution legs now refuse
-//! `0x4001` and `0x4003` respectively, where the row was written when the
-//! positive leg refused `0x4003`, so its discrimination reads the wrong side.
+//! The Market/generation ruling above, which no lane owns yet, and the
+//! `TicketStateV3` producer in `prepare_funding_artifacts_v5`, which still
+//! needs this route to reach Core.
+//!
+//! `precommit_caller_substitutions_...` is RE-BASED and is red for a stated
+//! reason. It used to assert inside its loop, so the first disagreeing leg
+//! ended the run and three legs were never measured. Run together they say:
+//!
+//! | leg | refuses | declared | tx CU | reached the seam |
+//! |---|---|---|---|---|
+//! | `Substitution` | `0x4003` | `0x4001` | 612,713 | no |
+//! | `Writable` | `0x4003` | `0x4003` | 520,935 | no |
+//! | `ForeignOwner` | `0x4003` | `0x4003` | 612,713 | no |
+//! | `NonemptyBody` | `0x4003` | `0x4003` | 520,991 | no |
+//!
+//! THREE OF THE FOUR MATCHED ON THE DISCRIMINANT WITHOUT REACHING COORDINATE
+//! 80. `ForeignOwner` matched the SHARED wall's `Content` at the identical
+//! 612,713 the positive row spends; `Writable` and `NonemptyBody` matched a
+//! DIFFERENT `Content`, 91,778 CU earlier, in the account projection. That is
+//! ledger `M-38` exactly -- a universal-donor code standing in for a seam
+//! nobody had reached -- and the row would have read green on all three the
+//! moment its `Substitution` sibling was fixed. Every leg now has to prove it
+//! reached the seam before its code is believed, and the witness is the log:
+//! each hostile perturbs coordinate 80, which lives in route 4's Core window,
+//! and route 4 is preflighted after all four Custody routes, so a run that
+//! never invoked the Custody program never got there.
 //!
 //! ## WHAT CAME OUT EARLIER TO GET HERE
 //!
@@ -563,8 +627,29 @@ async fn a_permit_prepaid_below_todays_minimum_still_expires_on_the_deployed_elf
 /// Coord80 is an exact controller-scoped Trading PDA and only the inner Core
 /// CPI may synthesize its signer privilege. The former funded-crank topology,
 /// a substituted key, and non-vacant account bodies all refuse atomically.
+///
+/// # RE-BASED, AND EVERY LEG IS NOW REPORTED
+///
+/// This row used to `assert_eq!` inside the loop, so the first leg that
+/// disagreed ended the run and the other three never executed while one number
+/// was reported for a surface nobody had measured -- the exact accounting
+/// defect `run-postjoin-hostiles.sh` paid for. It now runs all four legs,
+/// records what each one refused and at what price, and asserts once at the
+/// end, so a rebasing lane reads four rows instead of one.
+///
+/// It also stopped being able to pass by accident. Three of the four legs
+/// declare `Content`, which is the code 2,124 sites of this program publish and
+/// which the SHARED pre-Market Expire wall publishes too, 200,000 CU upstream
+/// of anything coordinate 80 owns -- so a leg matching on the discriminant
+/// alone would have read as green while proving nothing (ledger `M-38`). Each
+/// leg therefore has to prove it REACHED its subject before its code is
+/// believed: every hostile here perturbs coordinate 80, which lives in route
+/// 4's Core window, and route 4 is preflighted after all four Custody routes,
+/// so a run that never invoked the Custody program never reached the seam. The
+/// log is the witness, and `RefusedExecution` already carries it.
 #[tokio::test]
 async fn precommit_caller_substitutions_refuse_with_exact_state_reversion() {
+    let mut observed: Vec<(PrecommitCallerHostileV1, Option<u32>, u32, u64, bool)> = Vec::new();
     for hostile in [
         PrecommitCallerHostileV1::Substitution,
         PrecommitCallerHostileV1::Writable,
@@ -599,12 +684,17 @@ async fn precommit_caller_substitutions_refuse_with_exact_state_reversion() {
                 Ok(_) => panic!("{hostile:?} unexpectedly executed"),
                 Err(refusal) => refusal,
             };
-        assert_eq!(
+        let reached_seam = refusal
+            .logs
+            .iter()
+            .any(|line| line.starts_with(&format!("Program {CUSTODY_PROGRAM_ID} invoke [")));
+        observed.push((
+            hostile,
             refusal_code(&refusal.error),
-            Some(expected as u32),
-            "exact caller seam must own {hostile:?}: {:#?}",
-            refusal.logs,
-        );
+            expected as u32,
+            refusal.compute_units_consumed,
+            reached_seam,
+        ));
         let after =
             capture_series_account_snapshots_v1(&mut context, &fixture.material_snapshot_keys)
                 .await
@@ -612,4 +702,12 @@ async fn precommit_caller_substitutions_refuse_with_exact_state_reversion() {
         assert_series_premarket_expiry_rollback_v1(&report, &before, &after)
             .expect("complete caller-hostile transaction rollback");
     }
+    let wrong = observed
+        .iter()
+        .filter(|(_, code, expected, _, reached)| !reached || *code != Some(*expected))
+        .count();
+    assert_eq!(
+        wrong, 0,
+        "the exact caller seam must own every leg, and every leg must reach it: {observed:#?}",
+    );
 }

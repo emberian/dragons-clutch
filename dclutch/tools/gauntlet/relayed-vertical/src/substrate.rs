@@ -191,7 +191,35 @@ pub(crate) fn bring_up(request: &SubstrateRequestV1<'_>) -> Result<CheckedSubstr
     }
 
     // 4. Administration: publish -> initialize -> activate, through the real
-    //    campaign, signed only by the retained authority.
+    //    campaign.
+    //
+    // THE SUCCESSION STAGE HAS A SECOND SIGNER, and this bring-up did not know
+    // it. `administration_required_roles_v1` adds `campaign-payer` whenever the
+    // Succession stage is Absent or Partial and inside `--through`, which on a
+    // freshly prepared substrate is always; the required set is ALSO the
+    // allowed set, so the payer is neither optional nor safe to pass at another
+    // time. A bring-up that named only the retained authority therefore refused
+    // "campaign omitted required keypair paths: campaign-payer" before sending
+    // anything -- measured 2026-09-04 by the `ladder` tier, which links this
+    // file rather than forking it and hit the refusal on its first run.
+    //
+    // The payer starts empty (the genesis mint is the retained authority), so
+    // the driver funds it here, exactly as `found_market` below funds it for
+    // the founding. The campaign never airdrops.
+    let campaign_payer_path = report
+        .campaign_founding_keypairs
+        .get("campaign-payer")
+        .map(PathBuf::from)
+        .ok_or_else(|| Error::new("prepare report omits founding role campaign-payer"))?;
+    {
+        let mut funding = Rpc::connect(&rpc_url)?;
+        let payer = load_keypair(&campaign_payer_path)?;
+        funding.airdrop(
+            "substrate: fund the campaign payer for the succession stage",
+            payer.pubkey(),
+            500_000_000_000,
+        )?;
+    }
     campaign::execute(CampaignArgsV1 {
         origin: ClusterOriginV1::parse(&rpc_url, None)?,
         mode: CampaignModeV1::Administration,
@@ -209,10 +237,13 @@ pub(crate) fn bring_up(request: &SubstrateRequestV1<'_>) -> Result<CheckedSubstr
         infrastructure_lineage_path: None,
         founding_founder: None,
         substituted_founder: None,
-        keypairs: BTreeMap::from([(
-            "core-upgrade-authority".to_owned(),
-            role_key_path(&report.keypairs, "core-upgrade-authority", "keypairs")?,
-        )]),
+        keypairs: BTreeMap::from([
+            (
+                "core-upgrade-authority".to_owned(),
+                role_key_path(&report.keypairs, "core-upgrade-authority", "keypairs")?,
+            ),
+            ("campaign-payer".to_owned(), campaign_payer_path),
+        ]),
         execute: true,
         through: StageV1::Activation,
     })?;
@@ -227,10 +258,17 @@ pub(crate) fn bring_up(request: &SubstrateRequestV1<'_>) -> Result<CheckedSubstr
     })
 }
 
-/// The founding roles a fixture-liquidity-free market signs with. The
-/// graduation market carries zero fixture liquidity, so the two fixture roles
-/// (participant, direct-buyer) the prepare report also derives are refused by
-/// `campaign --founding-only` as outside this mode.
+/// The founding roles EVERY market signs with.
+///
+/// The two fixture roles the prepare report also derives -- `participant` and
+/// `direct-buyer` -- are not here because they are not universal: they are
+/// required exactly when the market being founded carries local participant
+/// fixture liquidity, and `campaign --founding-only` refuses them on a market
+/// that does not ("outside this mode") and refuses their ABSENCE on a market
+/// that does ("local participant fixture liquidity requires
+/// --keypair-participant"). So the role set is a function of the market, which
+/// is what [`founding_roles_for`] makes it. The graduation market carries zero;
+/// the loopback demo market carries 100,000,000 atoms.
 const FOUNDING_ROLES_V1: &[&str] = &[
     "campaign-payer",
     "collateral-mint",
@@ -239,6 +277,18 @@ const FOUNDING_ROLES_V1: &[&str] = &[
     "founding-projection-witness",
     "founding-source-funder",
 ];
+
+/// The two roles a market with fixture liquidity additionally signs with.
+const FIXTURE_LIQUIDITY_ROLES_V1: &[&str] = &["participant", "direct-buyer"];
+
+/// The roles this market's founding needs, read off the market itself.
+fn founding_roles_for(market: &crate::model::MarketRunInput) -> Vec<&'static str> {
+    let mut roles = FOUNDING_ROLES_V1.to_vec();
+    if market.local_participant_fixture_liquidity_atoms != 0 {
+        roles.extend_from_slice(FIXTURE_LIQUIDITY_ROLES_V1);
+    }
+    roles
+}
 
 /// What the founding campaign left behind, lifted into the session's shape.
 pub(crate) struct FoundingYieldV1 {
@@ -263,8 +313,31 @@ pub(crate) fn found_market(
     // every role's key FILE to sign, so all six paths are handed through; the
     // two fixture roles the prepare report also derives are excluded, since
     // this fixture-liquidity-free founding refuses them as outside its mode.
+    // The market this founding is about decides which roles sign it. Reading
+    // the input rather than pinning a list is what lets one bring-up found the
+    // liquidity-free graduation market AND a demo market that carries fixture
+    // liquidity, instead of one of them refusing by the other's name.
+    // Two spellings reach this function: a bare `MarketRunInput`, and the
+    // graduation wrapper that carries one under `market`. Reading either is not
+    // a second authority -- the campaign authenticates whichever it was given;
+    // this only asks the input how much fixture liquidity it declares.
+    let market_bytes = std::fs::read(market_path)?;
+    let market_input: crate::model::MarketRunInput =
+        match serde_json::from_slice::<crate::model::MarketRunInput>(&market_bytes) {
+            Ok(input) => input,
+            Err(_) => {
+                let wrapper: serde_json::Value = serde_json::from_slice(&market_bytes)?;
+                serde_json::from_value(wrapper.get("market").cloned().ok_or_else(|| {
+                    Error::new(
+                        "the market input is neither a MarketRunInput nor a wrapper carrying one \
+                         under `market`",
+                    )
+                })?)?
+            }
+        };
+    let roles = founding_roles_for(&market_input);
     let mut founding_keys: BTreeMap<String, PathBuf> = BTreeMap::new();
-    for role in FOUNDING_ROLES_V1 {
+    for role in &roles {
         let path = report
             .campaign_founding_keypairs
             .get(*role)

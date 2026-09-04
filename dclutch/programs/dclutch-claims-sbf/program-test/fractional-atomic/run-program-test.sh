@@ -93,6 +93,17 @@ SBF_OUT_DIR="$sbf_out" cargo test \
   --test fractional_compaction \
   -- --nocapture
 
+# The Claims-owned conservation route, DCLCNS01. Two campaigns over ONE frame,
+# differing only in the aggregate account's BYTES, because the route reads that
+# account with two decoders from two account families and no bytes satisfy both.
+# It is the wall marker for split/merge as user acts, and the joined fixture --
+# a founded refunding LBV2 Market beside a real Custody HoardPrincipal vault --
+# the refunding walk was owed.
+SBF_OUT_DIR="$sbf_out" cargo test \
+  --manifest-path programs/dclutch-claims-sbf/program-test/fractional-atomic/Cargo.toml \
+  --test claims_conservation \
+  -- --nocapture --test-threads=1
+
 # The hand-off with a DERIVED escrow, over a Mint carrying the whole shard
 # profile, with Token2022BehaviorProfileV2 run against the bytes Token-2022
 # itself wrote before and after the SetAuthority. Closes the two gaps the wall

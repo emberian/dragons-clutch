@@ -45,6 +45,12 @@ solana-program-test = { version = "=4.3.0-beta.2", features = ["agave-unstable-a
 
 [dev-dependencies]
 base64 = "0.22"
+# The conservation campaign's two subjects. The contract owns the `DCLCNS01`
+# wire the campaign submits; the economic-slice kernel is the OTHER account
+# family the route reads its aggregate with, and the campaign has to build one
+# of those with that family's own initializer rather than by hand.
+dclutch-claims-conservation-contract = { path = "../../../../crates/dclutch-claims-conservation-contract" }
+dclutch-economic-slice-kernel = { path = "../../../../crates/dclutch-economic-slice-kernel" }
 # The census half. `record` is a no-op unless DCLUTCH_PROGRAM_TEST_EVIDENCE_DIR
 # is set, so this campaign stays an ordinary `cargo test` and additionally emits
 # the evidence `dclutch-route-census observe` corroborates a binding against.

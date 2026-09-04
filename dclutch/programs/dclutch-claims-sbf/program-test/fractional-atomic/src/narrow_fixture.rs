@@ -99,6 +99,14 @@ pub struct NarrowSplineBasisInputV3<'a> {
 pub enum NarrowBasisInputV3<'a> {
     /// Exact categorical `Q = 1` basis.
     Categorical,
+    /// Categorical basis that REFUNDS ON FAILURE.
+    ///
+    /// The record says which shape it is and no caller states it: the whole
+    /// difference from [`NarrowBasisInputV3::Categorical`] is the payout
+    /// scale, which `categorical_refunds_on_failure_v3` reads as
+    /// `basis_width - 1` rather than `1`. Compiling it here, from the width
+    /// the fixture already has, is what keeps the predicate's one author.
+    CategoricalRefunding,
     /// Live degree-2/3 spline basis with an admitted price gate.
     SplineDegree2To3(NarrowSplineBasisInputV3<'a>),
 }
@@ -309,6 +317,18 @@ pub fn compile_narrow_fixture_v3(
                 &[][..],
                 &[][..],
             ),
+            NarrowBasisInputV3::CategoricalRefunding => (
+                BasisKindV3::CategoricalQ1,
+                u64::from(
+                    basis_width
+                        .checked_sub(1)
+                        .ok_or(NarrowFixtureError::Basis)?,
+                ),
+                1,
+                &[][..],
+                &[][..],
+                &[][..],
+            ),
             NarrowBasisInputV3::SplineDegree2To3(spline) => (
                 BasisKindV3::SplineDegree2To3 {
                     degree: spline.degree,
@@ -324,7 +344,7 @@ pub fn compile_narrow_fixture_v3(
     let basis_bytes = basis_record_bytes_v3(kind, input.outcome_count, knots.len(), 0)
         .map_err(|_| NarrowFixtureError::Basis)?;
     let price_gate_certificate_digest = match basis_input {
-        NarrowBasisInputV3::Categorical => [0_u8; 32],
+        NarrowBasisInputV3::Categorical | NarrowBasisInputV3::CategoricalRefunding => [0_u8; 32],
         NarrowBasisInputV3::SplineDegree2To3(spline) => {
             let mut probe = vec![0_u8; basis_bytes];
             compile_basis_v3(
@@ -609,6 +629,62 @@ pub fn compile_narrow_fixture_v3(
         actor_position,
         reserve_position,
     })
+}
+
+/// Compile one canonical LBV2 Position at an arbitrary balance vector.
+///
+/// [`compile_narrow_fixture_v3`] emits exactly two Positions and funds one
+/// coordinate, which is the shape a wrap campaign needs. A REFUNDING Market
+/// founded by `founding_v5` has a third: the Market's own failure escrow,
+/// holding the whole failure column and nothing else. This is the same
+/// encoder those two Positions come from, exposed so the escrow is not a
+/// second author of the Position layout.
+///
+/// # Errors
+///
+/// Refuses a zero identity, or a width that does not fit address arithmetic.
+pub fn compile_narrow_position_v2(
+    claims_program: Pubkey,
+    claims_market: Pubkey,
+    owner: Pubkey,
+    semantic_basis_id: [u8; 32],
+    balances: &[u64],
+    revision: u64,
+) -> Result<NarrowPositionV2> {
+    position(
+        claims_program,
+        claims_market,
+        owner,
+        semantic_basis_id,
+        balances,
+        revision,
+    )
+}
+
+/// Overwrite one compiled aggregate's supply vector in place.
+///
+/// The fixture's own supplies are "one funded coordinate", which no FOUNDED
+/// Market ever has: founding issues a complete set, so every coordinate
+/// carries the same supply. Rather than give the compiler a second way to
+/// express supplies -- and a second place for the two to drift -- this writes
+/// the vector the caller states over the one the compiler emitted, at the one
+/// offset the encoder above already owns.
+///
+/// # Errors
+///
+/// Refuses a vector whose length is not the aggregate's own claim count, or
+/// bytes too short to hold it.
+pub fn put_narrow_market_supplies_v2(market_bytes: &mut [u8], supplies: &[u64]) -> Result<()> {
+    let count = u32::try_from(supplies.len()).map_err(|_| NarrowFixtureError::State)?;
+    let declared = market_bytes
+        .get(12..16)
+        .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+        .map(u32::from_le_bytes)
+        .ok_or(NarrowFixtureError::State)?;
+    if declared != count {
+        return Err(NarrowFixtureError::State);
+    }
+    put_vector(market_bytes, CLAIMS_MARKET_HEADER_BYTES_V2, supplies)
 }
 
 fn compile_product(

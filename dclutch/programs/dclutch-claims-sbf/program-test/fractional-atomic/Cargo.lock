@@ -1576,10 +1576,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-claims-conservation-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-custody-contract",
+ "dclutch-source-contract",
+]
+
+[[package]]
 name = "dclutch-claims-sbf"
 version = "0.1.0"
 dependencies = [
  "dclutch-capability-contract",
+ "dclutch-claims-conservation-contract",
  "dclutch-claims-svm",
  "dclutch-core-contract",
  "dclutch-custody-contract",
@@ -1670,10 +1679,12 @@ dependencies = [
  "dclutch-capability-program-contract",
  "dclutch-claim-check-escrow-signer-test-sbf",
  "dclutch-claims-affine-batch-program-test",
+ "dclutch-claims-conservation-contract",
  "dclutch-claims-sbf",
  "dclutch-claims-svm",
  "dclutch-core-contract",
  "dclutch-custody-contract",
+ "dclutch-economic-slice-kernel",
  "dclutch-fractional-atomic-test-caller-sbf",
  "dclutch-fractional-claim-contract",
  "dclutch-fractional-claim-kernel",

@@ -126,8 +126,8 @@ use dclutch_trading_sbf::series::{
         SeriesCustodyPhysicalV3, project_prepare_custody_v3, project_terminal_custody_v3,
     },
     expire_funding_artifacts_v5::{
-        SERIES_EXPIRE_FIXED_ACCOUNT_COUNT_V5, SeriesExpireAccountProfileInputV5,
-        SeriesExpireChildRequestsV5,
+        SERIES_EXPIRE_CUSTODY_PROGRAM_COORDINATE_V5, SERIES_EXPIRE_FIXED_ACCOUNT_COUNT_V5,
+        SeriesExpireAccountProfileInputV5, SeriesExpireChildRequestsV5,
     },
     expire_series_escrow_v3, future_market_projection,
     instruction::{SeriesActionV3, encode_series_action_header_v3},
@@ -1836,6 +1836,21 @@ fn build_expire_bundle_v1(
         (78, rent_sysvar),
         (79, system),
         (80, precommit_caller.clone()),
+        // THE CUSTODY PROGRAM IS A BINDING, NOT A WAIST FACT. The waist names
+        // it so the bundle can MINE Custody's two bumps and so the installer
+        // leaves the bank's own deployment alone; neither of those puts it in
+        // the frame. `hot_v3::resolve_role_carrier_v3` scans the downgraded
+        // logical vector for the key the activation cache names for the role,
+        // so an Expire Custody route is invocable only if a COORDINATE carries
+        // it -- and until `SERIES_EXPIRE_CUSTODY_PROGRAM_COORDINATE_V5` existed
+        // there was none to bind. ProgramTest deploys this campaign's five
+        // ELFs with `prefer_bpf`, so the bank holds the 36-byte Loader-V3
+        // `Program` record at the canonical derived ProgramData address; the
+        // same constructor that models the SPL Token program models this one.
+        (
+            usize::from(SERIES_EXPIRE_CUSTODY_PROGRAM_COORDINATE_V5),
+            program_with_deployed_view(input.custody_program),
+        ),
     ];
     // The System builtin is the BANK'S, not this campaign's. Installing an
     // account at its address REPLACES the builtin, which is why it was modelled

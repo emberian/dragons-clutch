@@ -4979,3 +4979,14 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Cuts: `224a3667d`.
 - Started 18:00 EDT: SERIES-5 **`(spawned)`** — which authority puts Custody in the Expire frame (the profile or the builder),
   the three rows past the composition, the two owed hostiles, row 3 rebased, the lifecycle if the route completes.
+- PROGRAMS-16G closed (`963fe12c3`, `44c0ccf19`, `e4357a01a`, `160ebdfbb`): **the floored real-ELF walk — and the row that
+  refuses is not the row that fills** (the verifier streams; a fill's quote conjuncts are checked when its order closes,
+  one row later at width 258; the join is read out of records now); `CreditLimit` named natively; `EvidenceCorpusV1` binds
+  evidence at the coordinate each profile declares; the campaign builds its first candidate corpus against its own
+  poststate; **the wall: SubmitCandidate's own profile projects neither `identity::CANDIDATE` nor `PRIMARY_BENEFICIARY` —
+  a producer gap the accelerator's test hid by writing both by hand; the first inference from the refusal was wrong (45
+  clauses behind one code) and an instrumented replay convicted it**; nine CU rows re-drawn — the width ladder is
+  NON-monotonic (N=13 cheaper than N=2; the old "89.7 CU per outcome" was a line through three points not on one); ten
+  candidate log lines. → PROGRAMS-16H **`(spawned)`** under a ruling consistent with 0021: the candidate's rent-refund
+  beneficiary is the solver who funded it. Frames red (five commits, three lanes) — 16H's capture discharges them.
+- Cuts: `fc3ceaae3`, `8dfebb87e`, `e7d806b21`.

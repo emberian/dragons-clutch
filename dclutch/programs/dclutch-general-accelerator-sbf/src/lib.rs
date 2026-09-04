@@ -1191,7 +1191,7 @@ fn evaluate_close_candidate(
         environment,
         candidate_bank,
     )
-    .map_err(|_| GeneralAcceleratorSemanticErrorV3::Candidate)?;
+    .map_err(candidate_cause)?;
     Ok(())
 }
 
@@ -1246,7 +1246,7 @@ fn evaluate_submit_candidate(
         request.candidate_id,
         candidate,
     )
-    .map_err(|_| GeneralAcceleratorSemanticErrorV3::Candidate)
+    .map_err(candidate_cause)
 }
 
 fn evaluate_verify_candidate(
@@ -1357,11 +1357,11 @@ fn evaluate_verify_candidate(
         &mut cursor_workspace,
         &manifest_data,
     )
-    .map_err(verify_cause)?;
+    .map_err(candidate_cause)?;
     Ok(())
 }
 
-/// Name the row verifier's own conjunct before publishing the coarse ack.
+/// Name the candidate projector's own refusal before publishing the coarse ack.
 ///
 /// [`GeneralAcceleratorSemanticErrorV3::Candidate`] covers every way candidate
 /// projection can refuse, and the wire deliberately carries no more than that.
@@ -1377,11 +1377,22 @@ fn evaluate_verify_candidate(
 /// enum's own module says what each of its refusals means, so a variant that is
 /// later split cannot leave a stale sentence behind here.
 ///
-/// Only the verifier's cause is surfaced. The other arms of
-/// `GeneralHotCandidateErrorV3` are widths and coordinates the physical frame
-/// already refuses by name, so adding them would cost heap for a distinction
-/// the reader has elsewhere.
-fn verify_cause(error: GeneralHotCandidateErrorV3) -> GeneralAcceleratorSemanticErrorV3 {
+/// TWO LINES, NOT ONE, AND THEY HAVE DIFFERENT AUTHORS. The outer line names
+/// which of `GeneralHotCandidateErrorV3`'s ten arms refused -- a bank of the
+/// wrong width, a stride belonging to another action, an authenticated
+/// coordinate that disagrees, the row verifier -- and the inner line, present
+/// only where the verifier is the arm, names which of ITS sixteen conjuncts.
+/// Neither sentence is written here: each enum's own module says what its
+/// refusals mean, so a variant that is later split cannot leave a stale
+/// sentence behind in the program.
+///
+/// Every one of this program's ten candidate-projection sites goes through
+/// here. It was one site on 2026-09-04 and the other nine were still
+/// `map_err(|_| Candidate)`, which is the same defect nine times: a General
+/// action refusing in its projector reached a reader as six words that are true
+/// of every way projection can fail.
+fn candidate_cause(error: GeneralHotCandidateErrorV3) -> GeneralAcceleratorSemanticErrorV3 {
+    sol_log(error.log_line());
     if let GeneralHotCandidateErrorV3::Verify(GeneralCandidateErrorV1::Verify(cause)) = error {
         sol_log(cause.log_line());
     }
@@ -1417,7 +1428,7 @@ fn evaluate_release_order(
         request.candidate_id,
         candidate,
     )
-    .map_err(|_| GeneralAcceleratorSemanticErrorV3::Candidate)
+    .map_err(candidate_cause)
 }
 
 fn evaluate_cancel_order(
@@ -1455,7 +1466,7 @@ fn evaluate_cancel_order(
         request.candidate_id,
         candidate,
     )
-    .map_err(|_| GeneralAcceleratorSemanticErrorV3::Candidate)
+    .map_err(candidate_cause)
 }
 
 fn evaluate_place_order(
@@ -1494,7 +1505,7 @@ fn evaluate_place_order(
         &signed_order_terms,
         candidate,
     )
-    .map_err(|_| GeneralAcceleratorSemanticErrorV3::Candidate)
+    .map_err(candidate_cause)
 }
 
 fn evaluate_close_batch(
@@ -1527,7 +1538,7 @@ fn evaluate_close_batch(
         request.candidate_id,
         candidate,
     )
-    .map_err(|_| GeneralAcceleratorSemanticErrorV3::Candidate)
+    .map_err(candidate_cause)
 }
 
 fn evaluate_open_batch(
@@ -1556,7 +1567,7 @@ fn evaluate_open_batch(
         request.candidate_id,
         candidate,
     )
-    .map_err(|_| GeneralAcceleratorSemanticErrorV3::Candidate)
+    .map_err(candidate_cause)
 }
 
 fn evaluate_selection(
@@ -1662,7 +1673,7 @@ fn evaluate_selection(
         outcome_count,
         candidate,
     )
-    .map_err(|_| GeneralAcceleratorSemanticErrorV3::Candidate)
+    .map_err(candidate_cause)
 }
 
 fn evaluate_initialize(
@@ -1723,7 +1734,7 @@ fn evaluate_initialize(
         environment,
         candidate,
     )
-    .map_err(|_| GeneralAcceleratorSemanticErrorV3::Candidate)
+    .map_err(candidate_cause)
 }
 
 fn evaluate_settlement(
@@ -1822,7 +1833,7 @@ fn evaluate_settlement(
         environment,
         candidate,
     )
-    .map_err(|_| GeneralAcceleratorSemanticErrorV3::Candidate)
+    .map_err(candidate_cause)
 }
 
 fn authenticated_general_domain(
