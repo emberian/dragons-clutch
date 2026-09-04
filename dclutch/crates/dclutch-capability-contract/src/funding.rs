@@ -1460,14 +1460,14 @@ pub fn validate_funding_ledger_masks_v2(
 #[repr(u8)]
 pub enum FundingLedgerStatusV2 {
     /// The exact quote remains prepaid and activation has not run.
-    Pending = 0,
+    Pending = generated_abi::CAPABILITY_FUNDING_LEDGER_STATUS_PENDING_V2,
     /// Activation ran once; Rent and Creation have been released.
-    Active = 1,
+    Active = generated_abi::CAPABILITY_FUNDING_LEDGER_STATUS_ACTIVE_V2,
     /// This logical entry has closed and retains no principal.
     ///
     /// The shared account remains until every slot is Closed, so closing one
     /// entry cannot refund or destroy another entry's ledger rent.
-    Closed = 2,
+    Closed = generated_abi::CAPABILITY_FUNDING_LEDGER_STATUS_CLOSED_V2,
 }
 
 impl FundingLedgerStatusV2 {
@@ -1478,9 +1478,9 @@ impl FundingLedgerStatusV2 {
     /// index against this pair rather than against a second numbering.
     pub(crate) fn decode(value: u8) -> Result<Self> {
         match value {
-            0 => Ok(Self::Pending),
-            1 => Ok(Self::Active),
-            2 => Ok(Self::Closed),
+            generated_abi::CAPABILITY_FUNDING_LEDGER_STATUS_PENDING_V2 => Ok(Self::Pending),
+            generated_abi::CAPABILITY_FUNDING_LEDGER_STATUS_ACTIVE_V2 => Ok(Self::Active),
+            generated_abi::CAPABILITY_FUNDING_LEDGER_STATUS_CLOSED_V2 => Ok(Self::Closed),
             _ => Err(Error::UnknownFundingLedgerStatus),
         }
     }

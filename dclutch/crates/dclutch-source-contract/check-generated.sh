@@ -76,6 +76,21 @@ verify EmitSourceRecoveryPolicyV2AbiRust.lean generated_source_recovery_policy_v
 )
 grep -q '^pub const SOURCE_RESOLUTION_STATE_V2_BYTES: usize = 224;$' "$candidate"
 grep -q '^pub const SOURCE_RESOLUTION_STATE_V2_SCHEMA_VERSION: u16 = 2;$' "$candidate"
+# The six phase tags and the byte they are written at. This module has always
+# stated the machine -- `State.valid` is a six-armed match on the phase byte --
+# and until now it named none of the six, so `lib.rs` wrote them again as
+# discriminants and a third time as decoder arms. `Resolved`, `FailureCommitted`
+# and `Retired` are the three `terminalPhase` admits and `Exhausted` is the one
+# that looks terminal and is not, which is why the tags are pinned individually
+# rather than as a count.
+grep -q '^pub const SOURCE_RESOLUTION_STATE_V2_PHASE_OFFSET: usize = 10;$' "$candidate"
+grep -q '^pub const SOURCE_RESOLUTION_PHASE_PRIMARY_V1: u8 = 0;$' "$candidate"
+grep -q '^pub const SOURCE_RESOLUTION_PHASE_RECOVERY_V1: u8 = 1;$' "$candidate"
+grep -q '^pub const SOURCE_RESOLUTION_PHASE_RESOLVED_V1: u8 = 2;$' "$candidate"
+grep -q '^pub const SOURCE_RESOLUTION_PHASE_EXHAUSTED_V1: u8 = 3;$' "$candidate"
+grep -q '^pub const SOURCE_RESOLUTION_PHASE_FAILURE_COMMITTED_V1: u8 = 4;$' "$candidate"
+grep -q '^pub const SOURCE_RESOLUTION_PHASE_RETIRED_V1: u8 = 5;$' "$candidate"
+grep -q '^pub const SOURCE_RESOLUTION_PHASE_LIMIT_V1: u8 = 6;$' "$candidate"
 verify EmitSourceResolutionStateV2AbiRust.lean generated_source_resolution_state_v2.rs 300
 
 (

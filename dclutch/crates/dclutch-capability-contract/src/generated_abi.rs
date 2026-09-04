@@ -97,6 +97,14 @@ pub const CAPABILITY_FUNDING_LEDGER_SLOT_REMAINING_PROVIDER_OFFSET_V2: usize = 4
 pub const CAPABILITY_FUNDING_LEDGER_SLOT_REMAINING_BOUNTY_OFFSET_V2: usize = 48;
 pub const CAPABILITY_FUNDING_LEDGER_SLOT_REMAINING_LIQUIDITY_OFFSET_V2: usize = 56;
 pub const CAPABILITY_FUNDING_LEDGER_SLOT_REMAINING_SERVICE_OFFSET_V2: usize = 64;
+/// The exact quote remains prepaid and activation has not run.
+pub const CAPABILITY_FUNDING_LEDGER_STATUS_PENDING_V2: u8 = 0;
+/// Activation ran once; Rent and Creation have been released.
+pub const CAPABILITY_FUNDING_LEDGER_STATUS_ACTIVE_V2: u8 = 1;
+/// This logical entry has closed and retains no principal.
+pub const CAPABILITY_FUNDING_LEDGER_STATUS_CLOSED_V2: u8 = 2;
+/// One past the greatest slot-status tag: every status indexes its own bit of a `u8`.
+pub const CAPABILITY_FUNDING_LEDGER_STATUS_LIMIT_V2: u8 = 3;
 pub const CAPABILITY_FUNDING_LEDGER_PDA_DOMAIN_V2: &[u8] = b"dclutch/cap-funding-ledger/v2";
 pub const CAPABILITY_FUNDING_LEDGER_AUTHORITY_PDA_DOMAIN_V2: &[u8] = b"dclutch/cap-ledger-auth/v2";
 pub const CAPABILITY_FUNDING_LEDGER_VAULT_PDA_DOMAIN_V2: &[u8] = b"dclutch/cap-ledger-vault/v2";

@@ -49,6 +49,12 @@ mod source_material_v3;
 mod source_recovery_policy_v2;
 mod source_resolution_v2;
 
+use generated_source_resolution_state_v2::{
+    SOURCE_RESOLUTION_PHASE_EXHAUSTED_V1, SOURCE_RESOLUTION_PHASE_FAILURE_COMMITTED_V1,
+    SOURCE_RESOLUTION_PHASE_PRIMARY_V1, SOURCE_RESOLUTION_PHASE_RECOVERY_V1,
+    SOURCE_RESOLUTION_PHASE_RESOLVED_V1, SOURCE_RESOLUTION_PHASE_RETIRED_V1,
+};
+
 pub use principal_capacity_v1::{
     BONDING_CURVE_FLOOR_DERIVATION_ID_V1, BONDING_CURVE_FLOOR_DERIVATION_PREIMAGE_V1,
     BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1, CHAIN_STATE_DEFAULT_KAPPA_DENOMINATOR_V1,
@@ -3363,28 +3369,28 @@ pub fn encode_shared_evidence_set_preimage_v1(
 #[repr(u8)]
 pub enum SourceResolutionPhaseV1 {
     /// Primary source may still be accepted.
-    Primary = 0,
+    Primary = SOURCE_RESOLUTION_PHASE_PRIMARY_V1,
     /// Exactly one ordered recovery attempt may be accepted.
-    Recovery = 1,
+    Recovery = SOURCE_RESOLUTION_PHASE_RECOVERY_V1,
     /// A primary or recovery result has been committed.
-    Resolved = 2,
+    Resolved = SOURCE_RESOLUTION_PHASE_RESOLVED_V1,
     /// Every admitted attempt is exhausted; no result is selected yet.
-    Exhausted = 3,
+    Exhausted = SOURCE_RESOLUTION_PHASE_EXHAUSTED_V1,
     /// Product-owned failure semantics have been committed.
-    FailureCommitted = 4,
+    FailureCommitted = SOURCE_RESOLUTION_PHASE_FAILURE_COMMITTED_V1,
     /// Terminal state was retired after settlement.
-    Retired = 5,
+    Retired = SOURCE_RESOLUTION_PHASE_RETIRED_V1,
 }
 
 impl SourceResolutionPhaseV1 {
     fn decode(value: u8) -> Result<Self> {
         match value {
-            0 => Ok(Self::Primary),
-            1 => Ok(Self::Recovery),
-            2 => Ok(Self::Resolved),
-            3 => Ok(Self::Exhausted),
-            4 => Ok(Self::FailureCommitted),
-            5 => Ok(Self::Retired),
+            SOURCE_RESOLUTION_PHASE_PRIMARY_V1 => Ok(Self::Primary),
+            SOURCE_RESOLUTION_PHASE_RECOVERY_V1 => Ok(Self::Recovery),
+            SOURCE_RESOLUTION_PHASE_RESOLVED_V1 => Ok(Self::Resolved),
+            SOURCE_RESOLUTION_PHASE_EXHAUSTED_V1 => Ok(Self::Exhausted),
+            SOURCE_RESOLUTION_PHASE_FAILURE_COMMITTED_V1 => Ok(Self::FailureCommitted),
+            SOURCE_RESOLUTION_PHASE_RETIRED_V1 => Ok(Self::Retired),
             _ => Err(Error::NonCanonicalState),
         }
     }

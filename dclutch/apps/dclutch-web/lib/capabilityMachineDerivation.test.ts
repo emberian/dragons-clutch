@@ -112,7 +112,12 @@ describe('the intersection of declared routes and machine-gated routes', () => {
       machineGateCoverageV1(BROWSER_CAPABILITY_STANDINGS_V1.map((one) => one.action)),
     );
     expect(sentence).toContain('None of the');
-    expect(sentence).toContain('no card here is yet answered by a machine');
+    // Scoped to what this coverage measures. It read "no card here is yet
+    // answered by a machine" while a route gate was the only kind there was;
+    // a gate behind a family's classifier is in neither table this counts and
+    // IS answered on a card (`capabilitySelectedGate.test.ts`), so the
+    // unqualified claim would now contradict the sentence printed beside it.
+    expect(sentence).toContain('no card here is yet answered by a gate the route itself carries');
     // The control: a coverage whose intersection is NOT empty reads differently,
     // so the sentence is not one string with a number in it.
     const withOne = machineGateCoverageV1([{ routes: [ROUTES_GATED_ON_ANOTHER_MACHINE_V1[0]!.route] }]);

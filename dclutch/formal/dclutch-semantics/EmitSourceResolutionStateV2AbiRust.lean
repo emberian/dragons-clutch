@@ -26,6 +26,11 @@ def main : IO Unit := do
   emitSlice "pub" "SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2_GENERATED" pdaDomain
   for field in layout do
     IO.println s!"pub const {Field.rustName field.spec.name}: usize = {field.offset};"
+  for phase in Phase.all do
+    IO.println s!"/// {Phase.doc phase}"
+    IO.println s!"pub const {Phase.rustName phase}: u8 = {Phase.tag phase};"
+  IO.println "/// One past the greatest phase tag."
+  IO.println s!"pub const SOURCE_RESOLUTION_PHASE_LIMIT_V1: u8 = {phaseLimit};"
   IO.println "#[cfg(test)]"
   emitBytes "pub(crate)" "SOURCE_RESOLUTION_STATE_V2_FRESH_EXAMPLE" (encode freshExample)
   IO.println "#[cfg(test)]"

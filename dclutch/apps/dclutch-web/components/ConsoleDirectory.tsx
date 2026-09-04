@@ -4,7 +4,13 @@ import Nav from '@/components/Nav';
 import { Card, CardContent } from '@/components/ui/card';
 import { capabilityAccessSentenceV1, capabilityRouteAccessV1 } from '@dclutch/sdk/capabilityAccess';
 import { machineGateCoverageV1, machineGateSentenceV1 } from '@dclutch/sdk/stateMachines';
-import { capabilityVenueTextV1, type CapabilityStage, type CapabilityStandingV1 } from '@/lib/capabilityModel';
+import {
+  capabilitySelectedGateCoverageV1,
+  capabilitySelectedGateSentenceV1,
+  capabilityVenueTextV1,
+  type CapabilityStage,
+  type CapabilityStandingV1,
+} from '@/lib/capabilityModel';
 import { browserActPrerequisitesV1, BROWSER_CAPABILITY_STANDINGS_V1, capabilityWorkspaceV1 } from '@/lib/capabilitySurface';
 import { docsHrefV1 } from '@/lib/flags';
 
@@ -109,6 +115,16 @@ const ACCESS_SENTENCE_V1 = capabilityAccessSentenceV1(capabilityRouteAccessV1(BR
 const MACHINE_SENTENCE_V1 = machineGateSentenceV1(
   machineGateCoverageV1(BROWSER_CAPABILITY_STANDINGS_V1.map((standing) => standing.action)),
 );
+/**
+ * The gates the sentence above cannot hold, because they are not on the route.
+ *
+ * A gate behind a family's classifier binds one act on a route several others
+ * declare, so it belongs to neither the phase count nor the machine count. It
+ * is computed from the same two tables and the acts' own declared families.
+ */
+const SELECTED_SENTENCE_V1 = capabilitySelectedGateSentenceV1(
+  capabilitySelectedGateCoverageV1(BROWSER_CAPABILITY_STANDINGS_V1.map((standing) => standing.action)),
+);
 
 export default function ConsoleDirectory() {
   return <PageShell className="product-shell trade-v3-shell" header={<Nav current="/console" status="operator tools" />}>
@@ -135,7 +151,7 @@ export default function ConsoleDirectory() {
         deliberately the harsher of the two readings, because a route some
         module can encode but no act offers is not a capability a person can
         perform.</p>
-        <p><strong>And the gates that are not the Market&rsquo;s phase.</strong> {MACHINE_SENTENCE_V1} A
+        <p><strong>And the gates that are not the Market&rsquo;s phase.</strong> {MACHINE_SENTENCE_V1} {SELECTED_SENTENCE_V1} A
         Direct root, a Series ticket, a funding-ledger slot, a projected-custody
         ladder, a Dealer scenario checkpoint and a Source resolution state are
         separate discriminants in separate accounts, and a Market is

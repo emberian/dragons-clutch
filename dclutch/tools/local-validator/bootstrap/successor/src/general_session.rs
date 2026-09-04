@@ -166,7 +166,10 @@ use crate::{
 };
 
 pub(crate) const DEVNET_GENERAL_SESSION_COMMAND_V1: &str = "devnet-general-session";
-const REPORT_SCHEMA_V1: &str = "dclutch-devnet-general-session-frame-report-v1";
+/// The frame report's schema, and the only document `devnet-capability-seal-v1`
+/// will read a frame out of.
+pub(crate) const FRAME_REPORT_SCHEMA_V1: &str =
+    "dclutch-devnet-general-session-frame-report-v1";
 
 /// The action this command frames. `OpenBatch` is the first act of the General
 /// batch lifecycle, so it is the one whose reachability decides the family's.
@@ -1106,7 +1109,7 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
     }
 
     let report = json!({
-        "schema": REPORT_SCHEMA_V1,
+        "schema": FRAME_REPORT_SCHEMA_V1,
         "cluster": "devnet",
         "rpcUrl": origin.redacted_url(),
         "market": arguments.market.to_string(),
@@ -1134,6 +1137,28 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
         },
         "acceleratorProgram": accelerator.to_string(),
         "acceleratorArtifactRelease": hex(&artifact_release.to_bytes()),
+        // THE SEAL'S SEEDS, BECAUSE THIS REPORT ALREADY CALLS IT PRODUCIBLE.
+        //
+        // Fixed coordinate 38's author row has said "PRODUCIBLE, AND THE
+        // PRODUCER EXISTS" since 2026-09-03 while stating only the address.
+        // The address alone is not enough to call the producer:
+        // `capability_seal_instruction_v1` takes the four seeds and DERIVES the
+        // address, refusing `SealCoordinate` when the frame it was handed names
+        // a different one. Stating the seeds here is what lets a caller run
+        // that check rather than assemble the account list by hand -- which the
+        // producer's own module doc says gets no warning at all.
+        "capabilitySeal": {
+            "address": fixed
+                .get(HOT_CAPABILITY_SEAL_ACCOUNT_V3)
+                .copied()
+                .unwrap_or_default()
+                .to_string(),
+            "descriptorDigest": hex(&descriptor_reference.program().to_bytes()),
+            "action": u32::from(SESSION_ACTION_V1 as u8),
+            "tradingSemanticRelease": hex(&trading_semantic_release),
+            "tradingProgram": trading.to_string(),
+            "registryProgram": registry.to_string(),
+        },
         "frame": {
             "fixedAccounts": HOT_FIXED_ACCOUNT_COUNT_V3,
             "strategyAccounts": strategy_account_count,

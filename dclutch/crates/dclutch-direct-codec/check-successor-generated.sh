@@ -35,6 +35,19 @@ trap 'rm -f "$candidate_intent" "$candidate_successor" "$candidate_ordinary" "$c
 
 test "$(wc -l <"$candidate_intent" | tr -d ' ')" -gt 45
 test "$(wc -l <"$candidate_successor" | tr -d ' ')" -gt 90
+
+# The global Direct lifecycle's two wire tags. `DirectRootPhaseV1` declared no
+# discriminants at all until `RootPhase` was added to
+# `DClutchSemantics.DirectSuccessorAbi`: `byte` and `decode` were a hand-written
+# pair in one file, so a renumbering in one without the other was a silent
+# disagreement between an encoder and its own reader. Pinned before the byte
+# compare because `Open = 0` is what makes a zeroed root tail decode as open,
+# which is why the magic and not the phase byte is the partition.
+grep -q '^pub(crate) const DIRECT_ROOT_PHASE_OFFSET_V1: usize = 10;$' "$candidate_successor"
+grep -q '^pub(crate) const DIRECT_ROOT_PHASE_OPEN_V1: u8 = 0;$' "$candidate_successor"
+grep -q '^pub(crate) const DIRECT_ROOT_PHASE_RETIRING_V1: u8 = 1;$' "$candidate_successor"
+grep -q '^pub(crate) const DIRECT_ROOT_PHASE_LIMIT_V1: u8 = 2;$' "$candidate_successor"
+grep -q '^pub(crate) const DIRECT_ROOT_STATE_BYTES_V1: usize = 24;$' "$candidate_successor"
 test "$(wc -l <"$candidate_ordinary" | tr -d ' ')" -gt 250
 test "$(wc -l <"$candidate_registered_fill" | tr -d ' ')" -gt 400
 rustfmt --edition 2024 \

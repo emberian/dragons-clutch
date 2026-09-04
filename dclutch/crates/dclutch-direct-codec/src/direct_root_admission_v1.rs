@@ -29,12 +29,14 @@
 //!
 //! ## The tags are the wire discriminants
 //!
-//! `DirectRootPhaseV1`'s discriminants are not Lean-emitted:
-//! [`DirectRootPhaseV1::byte`] and [`DirectRootPhaseV1::decode`] are a
-//! hand-written pair in this crate, so the Rust enum is the author and the bit
-//! index is its discriminant. `the_bit_index_is_the_wire_encoding` pins the
-//! index against `byte` itself rather than against a second hand-written
-//! numbering, which is the strongest form of that check available here.
+//! `DirectRootPhaseV1`'s discriminants ARE Lean-emitted, since
+//! `DClutchSemantics.DirectSuccessorAbi`'s `RootPhase`. They were not when
+//! this file was written: the enum declared no discriminants at all, so
+//! [`DirectRootPhaseV1::byte`] and [`DirectRootPhaseV1::decode`] were a
+//! hand-written pair and the numbering existed twice in one file and nowhere
+//! else. `the_bit_index_is_the_wire_encoding` still pins the index against
+//! `byte` rather than against a second numbering, and now both sides of that
+//! comparison descend from the emission.
 //!
 //! Every set is a NECESSARY condition and never a sufficient one: a root
 //! admitted by its phase still has its maker count, its rent, its nonce
@@ -42,8 +44,9 @@
 
 use crate::successor::DirectRootPhaseV1;
 
-/// Number of distinct `DirectRootPhaseV1` values.
-const STATE_COUNT: u8 = 2;
+/// Number of distinct `DirectRootPhaseV1` values, from the emission rather
+/// than typed a second time beside it.
+const STATE_COUNT: u8 = crate::successor::DIRECT_ROOT_PHASE_LIMIT_V1;
 
 /// The wire tag of one root phase, as a bit index.
 const fn state_tag(state: DirectRootPhaseV1) -> u8 {

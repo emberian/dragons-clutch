@@ -47,18 +47,38 @@
  */
 
 import {
+  ROUTE_SELECTED_GATES_V1,
   type MarketPhaseV1,
   type MarketReadinessV1,
   type RoutePhaseGateV1,
   routeHasNoStateMachineV1,
   routeOtherMachineGateV1,
   routePhaseGateV1,
+  routeSelectedGatesV1,
 } from './generated/marketPhaseAdmissionV1';
 import {
+  machineGateVerdictV1,
   routeMachineVerdictsV1,
   type MachineGateVerdictV1,
   type MachineObservationV1,
+  type StateMachineV1,
 } from './stateMachines';
+
+/**
+ * Which family's prelude on the Hot route claims this act's request.
+ *
+ * `trading/hot_v3::process_hot_execution_v3` is one route and four families:
+ * Direct, General, Dealer and Series all arrive on `DCLTHOT3`, and each
+ * family's prelude returns a NON-ERROR for every request that is not its own
+ * before it reads anything. So a gate one prelude enforces is a condition of
+ * that family and of nothing else — which is why the census publishes those
+ * gates apart from the route's own, and why answering one needs the act's
+ * family and not just its route.
+ *
+ * The names are the families the Hot dispatch itself distinguishes, not a
+ * second vocabulary: each is a request magic its own codec owns.
+ */
+export type HotFamilyV1 = 'Direct' | 'General' | 'Dealer' | 'Series';
 
 export const CAPABILITY_STAGES = ['author', 'trade', 'resolve', 'claim'] as const;
 export type CapabilityStage = (typeof CAPABILITY_STAGES)[number];
@@ -200,6 +220,32 @@ export type CapabilityActionV1 = Readonly<{
    * `no phase gate`, and a consumer must not read either as admission.
    */
   routes: ReadonlyArray<string>;
+  /**
+   * The Hot families this act's own bytes belong to.
+   *
+   * REQUIRED, and empty is a real answer, for the same reason `routes` is:
+   * the question has to be decided per act rather than defaulted. It is
+   * decided the same way too — by COMPILING the act's builder and reading the
+   * family request the envelope carries, in
+   * `apps/dclutch-web/lib/capabilityFamilyDerivation.test.ts`, so nothing here
+   * is a name somebody typed.
+   *
+   * WHY IT EXISTS. `evaluateCapabilityV1` may answer a gate that lies behind a
+   * classifier's decline (`ROUTE_SELECTED_GATES_V1`) only for an execution it
+   * can show takes that selection. Five acts declare
+   * `trading/hot_v3::process_hot_execution_v3`; exactly one of them is a
+   * Direct fill, and only that one is subject to the Direct root's `Open` set
+   * the inline crosscheck enforces. Answering it for the other four would tell
+   * a General plan it needs a root state nothing in its execution reads — the
+   * false READY TO PREFLIGHT this whole chain removes, inverted.
+   *
+   * EMPTY means NO FAMILY IS ESTABLISHED, never "no family gates it". It
+   * covers every act off the Hot route, and it covers a Hot act whose bytes
+   * this browser does not author: the three General acts hostile-decode a
+   * transaction a reader pastes in, so there is no compile to derive from and
+   * they take no selected gate rather than being credited with one.
+   */
+  families: ReadonlyArray<HotFamilyV1>;
   /** One compact safety/recovery sentence: signing, finality, recovery, submission. */
   guarantee: string;
   walls: ReadonlyArray<CapabilityWallV1>;
@@ -221,11 +267,13 @@ const action = (
   subject: CapabilityMarketSubjectV1,
   actionAnchors: CapabilityAnchorsV1,
   routes: ReadonlyArray<string>,
+  families: ReadonlyArray<HotFamilyV1>,
   guarantee: string,
   walls: ReadonlyArray<CapabilityWallV1> = [],
 ): CapabilityActionV1 => Object.freeze({
   id, stage, family, action: label, workspace, subject, anchors: actionAnchors,
-  routes: Object.freeze([...routes]), guarantee, walls: Object.freeze([...walls]),
+  routes: Object.freeze([...routes]), families: Object.freeze([...families]),
+  guarantee, walls: Object.freeze([...walls]),
 });
 
 /**
@@ -243,130 +291,160 @@ export function capabilityRequiresMarketV1(actionDefinition: CapabilityActionV1)
 /** No census route is established for this act. Written out, never defaulted. */
 const NO_ROUTE: ReadonlyArray<string> = Object.freeze([]);
 
+/** No Hot family is established for this act. Written out, never defaulted. */
+const NO_FAMILY: ReadonlyArray<HotFamilyV1> = Object.freeze([]);
+
 export const CAPABILITY_ACTIONS_V1: ReadonlyArray<CapabilityActionV1> = Object.freeze([
   action('release.activate', 'author', 'Release', 'Activate a checked multiprogram release', '/release', 'no-market',
     anchors('components/ReleaseWorkspace.tsx', 'lib/releaseRegistry.ts'),
     ['registry/record_v1::dispatch'],
+    NO_FAMILY,
     'Each role packet is signed on its own and leaves as a file; this page never sends one.'),
   action('product.compile', 'author', 'Creation', 'Compile a Product record and its admission request', '/product-v2', 'no-market',
     anchors('components/ProductV2Studio.tsx', 'lib/productV2.ts', 'components/ProductV2Studio.tsx'),
     NO_ROUTE,
+    NO_FAMILY,
     'Nothing is read from a chain and nothing is signed: the output is a record and an instruction, not a transaction.'),
   action('market.inspect', 'author', 'Creation', 'Check a founding against the chain before you commit to it', '/create', 'new-market',
     anchors('components/CreateMarketWizard.tsx', 'lib/coreFound.ts'),
     NO_ROUTE,
+    NO_FAMILY,
     'Finalized reads only. The wizard reports what the founding would cost and refuse; it exports no packet.'),
   action('market.found', 'author', 'Creation', 'Found a Market and admit its first participant', '/found', 'new-market',
     anchors('components/CoreFoundWorkspace.tsx', 'lib/coreFound.ts', 'components/CoreFoundWorkspace.tsx'),
     ['core/found::process#Found'],
+    NO_FAMILY,
     'The browser exports unsigned bytes and asks for no key; the published campaign records devnet authorization before any child may sign.'),
   action('market.join', 'author', 'Creation', 'Admit another participant', 'market-detail', 'observed-market',
     anchors('components/JoinPanel.tsx', 'lib/userPositionAdmissionOperation.ts'),
     ['trading/user_position_admission_v1::process_user_position_admission_v1',
      'trading/user_position_admission_v1::process_user_position_admission_v1#Admit'],
+    NO_FAMILY,
     'The compiled Rust planner derives all 27 accounts from one finalized observation; the exact packet is saved before your wallet sees it, sent once, and cleared only after the chain confirms it, so reloading resumes and never resubmits.'),
   action('source.create-fund', 'author', 'Source', 'Create the resolution fund', '/resolution', 'observed-market',
     anchors('components/ResolutionWorkspace.tsx', 'lib/sourceReadinessV1.ts'),
     ['core/resolution::process#CreateFund'],
+    NO_FAMILY,
     'The exact packet is saved before your wallet sees it, sent once, and cleared only after the finalized poststate is read back; reloading resumes and never resubmits.'),
 
   action('direct.route', 'trade', 'Direct', 'Export a portable Direct route', '/operate', 'no-market',
     anchors('components/OperatorSurface.tsx', null, 'components/OperatorSurface.tsx'),
     NO_ROUTE,
+    NO_FAMILY,
     'The published command holds no key and can neither sign nor send: it reads finalized state and writes two files.'),
   action('direct.author', 'trade', 'Direct', 'Author a portable sell offer', 'market-detail', 'observed-market',
     anchors('components/trade/MakerOfferComposer.tsx', 'lib/directOfferAuthoring.ts'),
     NO_ROUTE,
+    NO_FAMILY,
     'One detached message signature. No transaction is built and no claims move; the ticket is yours to keep or hand on.'),
   action('direct.inline', 'trade', 'Direct', 'Take and execute a signed offer', 'market-detail', 'observed-market',
     anchors('lib/tradeFlowMachine.ts', 'lib/directInlineV3.ts'),
     ['trading/hot_v3::process_hot_execution_v3'],
+    ['Direct'],
     'Two separate signatures, neither of which sends. The signed packet is saved before submission, sent once, and reconciled against finalized balances.',
     [wall('Trading runs to 1,330,239 of 1,399,700 CU and dies ProgramFailedToComplete; the fill can exhaust its budget on chain.', 'GOAL.md')]),
   action('direct.register', 'trade', 'Direct', 'Create a registered resting order', null, 'observed-market',
     NO_ANCHORS,
     NO_ROUTE,
+    NO_FAMILY,
     'No signature is requested, because nothing here can build this transaction.',
     [wall('No route renders a control for it and no browser module builds its transaction; the registered-order wire lives in the Rust codec.', 'crates/dclutch-direct-codec')]),
   action('direct.cancel', 'trade', 'Direct', 'Cancel, expire, or cancel through a resting order', null, 'observed-market',
     NO_ANCHORS,
     NO_ROUTE,
+    NO_FAMILY,
     'No signature is requested, because nothing here can build this transaction.',
     [wall('No route renders a control for it and no browser module builds its transaction; successor replay roots and terminal account profiles are not one accepted route.', 'crates/dclutch-direct-codec')]),
   action('series.prepare', 'trade', 'Series', 'Prepare an occurrence and its ticket', null, 'observed-market',
     NO_ANCHORS,
     NO_ROUTE,
+    NO_FAMILY,
     'No signature is requested, because nothing here can build this transaction.',
     [wall('A Template with nonzero close rent describes a root activation may not fund and Close can never open; the activation funding seam is jointly unsatisfiable.', 'WAVE.md')]),
   action('general.consider', 'trade', 'General', 'Check a candidate plan and export its exact packet', '/general', 'observed-market',
     anchors('components/GeneralWorkspace.tsx', 'lib/generalPlanV5.ts'),
     ['trading/hot_v3::process_hot_execution_v3'],
+    NO_FAMILY,
     'The plan is authored elsewhere; this page authenticates it against finalized state and hands back the same bytes. No key is asked for.'),
   action('dealer.liquidity', 'trade', 'Dealer', 'Contribute or redeem dealer equity', '/liquidity', 'observed-market',
     anchors('components/DealerLiquidityWorkspace.tsx', 'lib/dealerEquityV3.ts'),
     ['trading/hot_v3::process_hot_execution_v3'],
+    ['Dealer'],
     'The packet is signed here and downloaded; this page submits nothing, so an external submitter is the only thing that can send it.',
     [wall('Exactly one selector can satisfy validate_selection: derivation_policy is pinned per descriptor to its own lifecycle digest and per root to a single manifest entry.', 'WAVE.md')]),
   action('dealer.trade', 'trade', 'Dealer', 'Take an inventory-bounded immediate trade', null, 'observed-market',
     NO_ANCHORS,
     NO_ROUTE,
+    NO_FAMILY,
     'No signature is requested, because nothing here can build this transaction.',
     [wall('No route renders a control for it and no browser module builds its transaction; the Dealer scenario kernel owns it.', 'crates/dclutch-dealer-scenario-kernel')]),
 
   action('source.ready', 'resolve', 'Source', 'Have Core accept the fund as ready', '/resolution', 'observed-market',
     anchors('components/ResolutionWorkspace.tsx', 'lib/sourceReadinessV1.ts'),
     ['core/resolution::process#VerifyFundReady'],
+    NO_FAMILY,
     'The exact packet is saved before your wallet sees it, sent once, and cleared only after the Ready poststate selects the terminal route.'),
   action('source.provider', 'resolve', 'Source', 'Submit provider evidence, or reclaim it', '/resolution', 'observed-market',
     anchors('components/ResolutionWorkspace.tsx', 'lib/sourceProviderV1.ts'),
     ['core/execute_provider_v3::process#ExecuteProvider'],
+    NO_FAMILY,
     'Two signatures on one immutable message — a fresh operation signer and your wallet — saved before submission and verified against the terminal accounts.'),
   action('source.admit-terminal', 'resolve', 'Source', 'Admit the terminal resolution', '/resolution', 'observed-market',
     anchors('components/ResolutionWorkspace.tsx', 'lib/sourceTerminalV1.ts'),
     ['core/resolution::process#AdmitTerminal'],
+    NO_FAMILY,
     'The signed record is saved before one submission and kept until the finalized Terminal receipt is read back; a reload resumes the same signature.'),
   action('source.close-fund', 'resolve', 'Source', 'Close the resolution fund', '/resolution', 'observed-market',
     anchors('components/ResolutionWorkspace.tsx', 'lib/sourceCloseFundV1.ts'),
     ['resolution/core_effect::process_direct_funding_close_v1'],
+    NO_FAMILY,
     'Prepay and close are separate signed acts; each is saved before submission and confirmed against the finalized typed receipt.'),
   action('general.settle', 'resolve', 'General', 'Check a settlement plan and export its exact packet', '/general', 'observed-market',
     anchors('components/GeneralWorkspace.tsx', 'lib/generalPlanV5.ts'),
     ['trading/hot_v3::process_hot_execution_v3'],
+    NO_FAMILY,
     'The plan is authored elsewhere; this page authenticates it against finalized state and hands back the same bytes. No key is asked for.'),
 
   action('claims.conserve', 'claim', 'Claims', 'Split or merge conservative claims', null, 'observed-market',
     NO_ANCHORS,
     NO_ROUTE,
+    NO_FAMILY,
     'No signature is requested, because nothing here can build this transaction.',
     [wall('No route renders a control for it and no browser module builds its transaction; the conservation contract owns the wire.', 'crates/dclutch-claims-conservation-contract'),
      wall('The wire is absent on chain, not merely unbuilt here: the contract declares magic DCLCNS01 and the Claims program has no handler that dispatches it, which the operator planner records in its own words.', 'crates/dclutch-operator/src/claims_conservation_v1.rs')]),
   action('claims.represent', 'claim', 'Claims', 'Denominate or reconstitute a rational representation', null, 'observed-market',
     NO_ANCHORS,
     NO_ROUTE,
+    NO_FAMILY,
     'No signature is requested, because nothing here can build this transaction.',
     [wall('No route renders a control for it and no browser module builds its transaction; route DCRRPRQ2 and its Denominate/Reconstitute actions own the wire.', 'crates/dclutch-rational-representation-v2-contract'),
      wall('The structured representation campaign stands at a named ATA-derivation wall.', 'GOAL.md')]),
   action('claims.replay', 'claim', 'Claims', 'Create the replay account redemption requires', '/redeem', 'observed-market',
     anchors('components/RedeemFlow.tsx', 'lib/claimsCustodyReplay.ts'),
     ['claims/custody_replay_v1::process'],
+    NO_FAMILY,
     'One signature for the account the chain demands before payout; saved before submission, sent once, and confirmed finalized before the payout step opens.'),
   action('claims.redeem', 'claim', 'Claims', 'Redeem a terminal Claims Position', '/redeem', 'observed-market',
     anchors('components/RedeemFlow.tsx', 'lib/walletTerminalPayoutV3.ts'),
     ['claims/terminal_settlement_v3::process'],
+    NO_FAMILY,
     'The payout plan and the signed packet are both saved before one submission; recovery resumes the saved signature and never sends a second.'),
   action('series.close', 'claim', 'Series', 'Consume or expire a ticket and close the occurrence', null, 'observed-market',
     NO_ANCHORS,
     NO_ROUTE,
+    NO_FAMILY,
     'No signature is requested, because nothing here can build this transaction.',
     [wall('No route renders a control for it and no browser module builds its transaction; the Series V3 kernel owns the exact planning.', 'crates/dclutch-series-v3-kernel'),
      wall('Expire refused on a real ELF at custom code 16387 with the permit account absent.', 'docs/evidence/SERIES_PERMIT_EXPIRY_HOT_WALL_2026_08_31.json')]),
   action('general.close', 'claim', 'General', 'Check a close plan and export its exact packet', '/general', 'observed-market',
     anchors('components/GeneralWorkspace.tsx', 'lib/generalPlanV5.ts'),
     ['trading/hot_v3::process_hot_execution_v3'],
+    NO_FAMILY,
     'The plan is authored elsewhere; this page authenticates it against finalized state and hands back the same bytes. No key is asked for.'),
   action('dealer.close', 'claim', 'Dealer', 'Reset the ladder, close an LP, or retire the pool', null, 'observed-market',
     NO_ANCHORS,
     NO_ROUTE,
+    NO_FAMILY,
     'No signature is requested, because nothing here can build this transaction.',
     [wall('No route renders a control for it and no browser module builds its transaction; the Dealer codec owns the wire.', 'crates/dclutch-dealer-codec')]),
 ]);
@@ -555,6 +633,23 @@ export type CapabilityPhaseGateV1 = Readonly<{
    * Market prestate, and it is published as `wrong-phase` for the same reason.
    */
   machineGates: ReadonlyArray<MachineGateVerdictV1>;
+  /**
+   * The gates behind a classifier's decline that THIS act's family reaches.
+   *
+   * Held apart from `machineGates` because the two are different claims and a
+   * reader has to be able to tell them apart. A machine gate is a condition of
+   * the route: every execution of it passes that set. A selected gate is a
+   * condition of one FAMILY on the route, and the same route carries none of
+   * it for the other four acts that declare it. Merged into one list, a card
+   * would say "the Hot route requires a Direct root" — which is the false
+   * claim the census split this category out to prevent.
+   *
+   * Empty for every act whose family no classifier keeps, which is all but
+   * one of them today. Never empty as a fallback: an act whose family DOES
+   * take a selection and whose machine is unread answers `unobserved` here and
+   * `needs-chain` in the verdict.
+   */
+  selectedGates: ReadonlyArray<SelectedGateVerdictV1>;
 }>;
 
 export type CapabilityVerdictV1 = Readonly<{
@@ -709,6 +804,7 @@ function gateTextV1(gate: RoutePhaseGateV1): string {
 const NO_GATE_READ: CapabilityPhaseGateV1 = Object.freeze({
   routes: Object.freeze([]), gates: Object.freeze([]), verdict: 'no-phase-gate', excludedBy: null,
   unobservableMachines: Object.freeze([]), machineGates: Object.freeze([]),
+  selectedGates: Object.freeze([]),
 });
 
 /**
@@ -745,6 +841,96 @@ export function capabilityActMachineGatesV1(
   return Object.freeze(act.routes.flatMap((route) => [...routeMachineVerdictsV1(route, machines)]));
 }
 
+/**
+ * Which family each Hot classifier keeps, and the discriminant it declines on.
+ *
+ * The census names the function that declines (`selected_by`) and nothing
+ * more, because the function's own family is not a fact the AST reading
+ * produces. It is a fact about two lines of Rust, and it is PINNED to those
+ * two lines rather than asserted: `capabilityFamilyDerivation.test.ts` reads
+ * `programs/dclutch-trading-sbf/src/hot_v3.rs`, finds each classifier below,
+ * and fails unless the classifier's own decline compares `discriminant` and
+ * unless `discriminant` is defined in the crate that owns the family's wire.
+ * A classifier renamed, moved, or repointed at another family's discriminant
+ * is red; a THIRD selected gate the census starts publishing is red too,
+ * because every `selectedBy` must resolve here.
+ *
+ * Direct declines on the descriptor's successor kind and Series on the
+ * decoded action, and the difference does not matter to a consumer: both are
+ * "this request is not mine", returned as a non-error before any state is
+ * read.
+ */
+export type HotFamilyClassifierV1 = Readonly<{
+  /** As `RouteSelectedGateV1.selectedBy` writes it. */
+  classifier: string;
+  family: HotFamilyV1;
+  /** The Rust name the classifier's decline compares. */
+  discriminant: string;
+  /** The crate that owns that name, and the family's wire with it. */
+  crate: string;
+}>;
+
+export const HOT_FAMILY_CLASSIFIERS_V1: ReadonlyArray<HotFamilyClassifierV1> = Object.freeze([
+  Object.freeze({
+    classifier: 'hot_v3::prepare_direct_inline_hot_crosscheck_v3',
+    family: 'Direct' as const,
+    discriminant: 'DIRECT_SUCCESSOR_KIND_ID_V3',
+    crate: 'crates/dclutch-direct-codec',
+  }),
+  Object.freeze({
+    classifier: 'hot_v3::try_authenticate_series_expiry_premarket_v1',
+    family: 'Series' as const,
+    discriminant: 'SeriesActionV3::Expire',
+    crate: 'crates/dclutch-series-v3-kernel',
+  }),
+]);
+
+/** The family one classifier keeps, or `null` when nothing here binds it. */
+export function hotFamilyClassifierV1(classifier: string): HotFamilyClassifierV1 | null {
+  return HOT_FAMILY_CLASSIFIERS_V1.find((entry) => entry.classifier === classifier) ?? null;
+}
+
+/**
+ * One selected gate, answered because this act's family takes the selection.
+ *
+ * Carries the classifier and the family so a card can say WHY it is being
+ * asked about a state machine its route does not require of everyone.
+ */
+export type SelectedGateVerdictV1 = MachineGateVerdictV1 & Readonly<{
+  route: string;
+  selectedBy: string;
+  family: HotFamilyV1;
+}>;
+
+/**
+ * Every gate behind a classifier this act's declared family actually reaches.
+ *
+ * EMPTY IS THE COMMON ANSWER and it is not an absence of checking: an act
+ * whose family the classifier declines never executes the guard, so there is
+ * nothing about it to report. Twenty-six of the twenty-seven acts are empty
+ * here for one of three reasons, and only the first is a gap — no family was
+ * derived (nine planner-authored or pasted acts), the family is one no
+ * classifier keeps (`Dealer`, `General`), or the act is nowhere near the Hot
+ * route.
+ *
+ * A gate whose machine is not one this SDK decodes still answers `unobserved`
+ * rather than being dropped, exactly like a necessary one: the reader's
+ * inability to look is a fact about the reader.
+ */
+export function capabilityActSelectedGatesV1(
+  act: CapabilityActionV1,
+  machines: ReadonlyArray<MachineObservationV1>,
+): ReadonlyArray<SelectedGateVerdictV1> {
+  return Object.freeze(act.routes.flatMap((route) => routeSelectedGatesV1(route).flatMap((gate) => {
+    const classifier = hotFamilyClassifierV1(gate.selectedBy);
+    if (classifier === null || !act.families.includes(classifier.family)) return [];
+    const verdict = machineGateVerdictV1(
+      gate.machine as StateMachineV1, gate.states, machines, gate.selectedBy,
+    );
+    return [Object.freeze({ ...verdict, route, selectedBy: gate.selectedBy, family: classifier.family })];
+  })));
+}
+
 /** The published gates for one act, resolved from the census-derived table. */
 export function capabilityActPhaseGatesV1(act: CapabilityActionV1): ReadonlyArray<RoutePhaseGateV1> {
   return Object.freeze(act.routes.map(routePhaseGateV1).filter((gate): gate is RoutePhaseGateV1 => gate !== null));
@@ -763,6 +949,25 @@ export function machineTextV1(gate: CapabilityPhaseGateV1): ReadonlyArray<string
       ? `${one.machine} unread (admits ${one.states.join(' or ')})`
       : `${one.machine} ${one.observed} ${one.verdict === 'admitted' ? 'admitted' : 'refused'} against ${one.states.join(' or ')}`
   )));
+}
+
+/**
+ * What the selected gates found, as clauses a card can print on their own row.
+ *
+ * Each names the CLASSIFIER, not the route, because the classifier is what
+ * enforces the set: "the Hot route admits only direct-root Open" is false of
+ * the four acts beside this one, and "`hot_v3::prepare_direct_inline_hot_
+ * crosscheck_v3` admits only direct-root Open" is true of exactly the family
+ * that reaches it. The family is said out loud for the same reason — a reader
+ * seeing a Direct root on a Direct fill's card and nothing on a General plan's
+ * should be able to see why without opening the census.
+ */
+export function selectedTextV1(gate: CapabilityPhaseGateV1): ReadonlyArray<string> {
+  return Object.freeze(gate.selectedGates.map((one) => {
+    const selection = `${one.family} via \`${one.selectedBy}\``;
+    if (one.verdict === 'unobserved') return `${one.machine} unread (${selection} admits ${one.states.join(' or ')})`;
+    return `${one.machine} ${one.observed} ${one.verdict === 'admitted' ? 'admitted' : 'refused'} against ${one.states.join(' or ')} · ${selection}`;
+  }));
 }
 
 /**
@@ -815,13 +1020,81 @@ export function capabilityPhaseGateTextV1(gate: CapabilityPhaseGateV1): string {
  *
  * An act gated on a machine this snapshot cannot observe is NOT in this list:
  * the census read a gate for it, and calling it ungated would be the same
- * false claim `no-phase-gate` exists to prevent one level down.
+ * false claim `no-phase-gate` exists to prevent one level down. Nor is an act
+ * whose declared FAMILY takes a selection: the classifier's guard is
+ * unconditional past the decline, so that act has a gate for exactly the same
+ * reason, reached by a route the other acts on it do not take.
  */
 export function capabilityActsWithNoPhaseGateV1(): ReadonlyArray<string> {
   return Object.freeze(CAPABILITY_ACTIONS_V1
     .filter((act) => capabilityActPhaseGatesV1(act).length === 0
-      && capabilityActUnobservableMachinesV1(act).length === 0)
+      && capabilityActUnobservableMachinesV1(act).length === 0
+      && capabilityActSelectedGatesV1(act, []).length === 0)
     .map((act) => act.id));
+}
+
+/**
+ * How much of the census's SELECTED-gate surface any act on the board reaches.
+ *
+ * The companion to `machineGateCoverageV1`, and a separate count because the
+ * two answer different questions. That one asks how many routes carry a gate
+ * every execution passes; this asks how many gates sit behind a family's
+ * classifier and which of them an act's own family actually takes — a number
+ * that can only be computed where the families are declared, which is here.
+ *
+ * `unclassified` is the honest residue: a selected gate whose classifier
+ * nothing in `HOT_FAMILY_CLASSIFIERS_V1` binds cannot be attributed to a
+ * family, so it is answered for nobody and counted here rather than dropped.
+ */
+export type CapabilitySelectedGateCoverageV1 = Readonly<{
+  /** Gates the census publishes behind a classifier's decline. */
+  gates: number;
+  /** Of those, the ones whose classifier this model can attribute to a family. */
+  classified: number;
+  /** Classifiers no family binding names, by name. */
+  unclassified: ReadonlyArray<string>;
+  /** Acts whose declared family takes at least one of those selections. */
+  acts: ReadonlyArray<string>;
+  /** The machines those acts are consequently gated on, once each. */
+  machines: ReadonlyArray<string>;
+}>;
+
+export function capabilitySelectedGateCoverageV1(
+  acts: ReadonlyArray<CapabilityActionV1>,
+): CapabilitySelectedGateCoverageV1 {
+  const unclassified = [...new Set(ROUTE_SELECTED_GATES_V1
+    .filter((gate) => hotFamilyClassifierV1(gate.selectedBy) === null)
+    .map((gate) => gate.selectedBy))].sort();
+  const taking = acts.filter((act) => capabilityActSelectedGatesV1(act, []).length > 0);
+  const machines = [...new Set(taking.flatMap(
+    (act) => capabilityActSelectedGatesV1(act, []).map((gate) => gate.machine),
+  ))].sort();
+  return Object.freeze({
+    gates: ROUTE_SELECTED_GATES_V1.length,
+    classified: ROUTE_SELECTED_GATES_V1.filter((gate) => hotFamilyClassifierV1(gate.selectedBy) !== null).length,
+    unclassified: Object.freeze(unclassified),
+    acts: Object.freeze(taking.map((act) => act.id)),
+    machines: Object.freeze(machines),
+  });
+}
+
+/**
+ * That coverage as one sentence, with the empty case said out loud.
+ *
+ * Nothing in it is typed: the gate count is the generated table's length and
+ * the acts are whichever ones declare a family a classifier keeps, so an act
+ * that gains a family or a census that publishes a third selection moves this
+ * sentence without anybody editing it.
+ */
+export function capabilitySelectedGateSentenceV1(coverage: CapabilitySelectedGateCoverageV1): string {
+  const reach = `${coverage.gates} further gates lie behind a family's classifier rather than on the route, so they bind only the acts whose own request that classifier keeps`;
+  const owed = coverage.unclassified.length === 0
+    ? ''
+    : ` ${coverage.unclassified.length} of them name a classifier no family binding resolves (${coverage.unclassified.join(', ')}), and are answered for nobody.`;
+  const one = coverage.acts.length === 1;
+  return coverage.acts.length === 0
+    ? `${reach}, and no act on this page declares such a family, so none is answered here.${owed}`
+    : `${reach}; ${coverage.acts.length} of the acts above ${one ? 'declares' : 'declare'} one (${coverage.acts.join(', ')}) and ${one ? 'is' : 'are'} therefore gated on the ${coverage.machines.join(' and ')} state machine that no other act on the same route touches.${owed}`;
 }
 
 /** What a reader can do about this act right now, given what has been read. */
@@ -868,6 +1141,7 @@ export function evaluateCapabilityV1(
         excludedBy: null,
         unobservableMachines: capabilityActUnobservableMachinesV1(standing.action),
         machineGates: capabilityActMachineGatesV1(standing.action, machines),
+        selectedGates: capabilityActSelectedGatesV1(standing.action, machines),
       }),
     });
   }
@@ -875,8 +1149,13 @@ export function evaluateCapabilityV1(
   const gates = capabilityActPhaseGatesV1(standing.action);
   const routes = standing.action.routes;
   const machineGates = capabilityActMachineGatesV1(standing.action, machines);
+  // Only the gates this act's own family reaches. An act that declares the Hot
+  // route and no family reaches none of them, which is not a gap: it is the
+  // census's own finding that neither of those two sets is a condition of the
+  // route, so a General plan is asked about neither.
+  const selectedGates = capabilityActSelectedGatesV1(standing.action, machines);
   const unobservableMachines = Object.freeze([...new Set(
-    machineGates.filter((gate) => gate.verdict === 'unobserved').map((gate) => gate.machine),
+    [...machineGates, ...selectedGates].filter((gate) => gate.verdict === 'unobserved').map((gate) => gate.machine),
   )]);
   // The machine gates are answered BEFORE the Market gates, and they are
   // answered even when the Market gates would admit. A route gated on
@@ -888,23 +1167,35 @@ export function evaluateCapabilityV1(
   // the other machines' absence cannot make it attemptable: an act whose
   // Direct root is Open can no more close a maker root than one whose root
   // nobody has read, and only the first of those is worth acting on.
-  const excludedMachine = machineGates.find((gate) => gate.verdict === 'excluded') ?? null;
+  //
+  // A SELECTED gate refuses on exactly the same terms, and it is asked in the
+  // same breath rather than after: for the family that takes the selection the
+  // guard is unconditional, so a Direct fill against a root the inline
+  // crosscheck does not admit is refused before any account is read, precisely
+  // as an excluded Market prestate is. What differs is only WHO is asked --
+  // the four other acts on that route reach no such guard and are asked
+  // nothing.
+  const excludedMachine = [...machineGates, ...selectedGates].find((gate) => gate.verdict === 'excluded') ?? null;
   if (excludedMachine !== null) {
     return Object.freeze({
       standing,
       status: 'wrong-phase',
       reason: `${capitalize(excludedMachine.reason)}. The chain refuses this act before any account is read.`,
       phaseGate: Object.freeze({
-        routes, gates, verdict: 'excluded', excludedBy: null, unobservableMachines, machineGates,
+        routes, gates, verdict: 'excluded', excludedBy: null, unobservableMachines, machineGates, selectedGates,
       }),
     });
   }
   if (unobservableMachines.length > 0) {
+    const selection = selectedGates.filter((gate) => gate.verdict === 'unobserved');
+    const because = selection.length === 0
+      ? 'This act is also gated'
+      : `This act's ${[...new Set(selection.map((gate) => gate.family))].join(' and ')} family reaches a gate`;
     return Object.freeze({
       standing,
       status: 'needs-chain',
-      reason: `This act is also gated on the ${unobservableMachines.join(' and ')} state machine, which this observation does not read. Read that state at the same finalized floor before calling this act attemptable.`,
-      phaseGate: Object.freeze({ routes, gates, verdict: 'other-machine', excludedBy: null, unobservableMachines, machineGates }),
+      reason: `${because} on the ${unobservableMachines.join(' and ')} state machine, which this observation does not read. Read that state at the same finalized floor before calling this act attemptable.`,
+      phaseGate: Object.freeze({ routes, gates, verdict: 'other-machine', excludedBy: null, unobservableMachines, machineGates, selectedGates }),
     });
   }
   if (gates.length === 0) {
@@ -912,7 +1203,7 @@ export function evaluateCapabilityV1(
       standing,
       status: 'ready-to-preflight',
       reason: standing.action.guarantee,
-      phaseGate: Object.freeze({ routes, gates, verdict: 'no-phase-gate', excludedBy: null, unobservableMachines, machineGates }),
+      phaseGate: Object.freeze({ routes, gates, verdict: 'no-phase-gate', excludedBy: null, unobservableMachines, machineGates, selectedGates }),
     });
   }
   // A gated act is about a Market by construction, so a gate with no Market
@@ -923,7 +1214,7 @@ export function evaluateCapabilityV1(
       standing,
       status: 'needs-chain',
       reason: `This act is admitted only at ${gateTextV1(gates[0])}, and the Market's Core phase was not decoded at this observation. Read the Market again at one finalized floor.`,
-      phaseGate: Object.freeze({ routes, gates, verdict: 'unread', excludedBy: null, unobservableMachines, machineGates }),
+      phaseGate: Object.freeze({ routes, gates, verdict: 'unread', excludedBy: null, unobservableMachines, machineGates, selectedGates }),
     });
   }
   // Gates are conjunctive: every one on the path admits, so one refusal is the
@@ -935,14 +1226,14 @@ export function evaluateCapabilityV1(
       standing,
       status: 'wrong-phase',
       reason: `\`${excludedBy.route}\` admits only ${gateTextV1(excludedBy)}; this Market is ${observed}. The chain refuses this act before any account is read.`,
-      phaseGate: Object.freeze({ routes, gates, verdict: 'excluded', excludedBy, unobservableMachines, machineGates }),
+      phaseGate: Object.freeze({ routes, gates, verdict: 'excluded', excludedBy, unobservableMachines, machineGates, selectedGates }),
     });
   }
   return Object.freeze({
     standing,
     status: 'ready-to-preflight',
     reason: standing.action.guarantee,
-    phaseGate: Object.freeze({ routes, gates, verdict: 'admitted', excludedBy: null, unobservableMachines, machineGates }),
+    phaseGate: Object.freeze({ routes, gates, verdict: 'admitted', excludedBy: null, unobservableMachines, machineGates, selectedGates }),
   });
 }
 

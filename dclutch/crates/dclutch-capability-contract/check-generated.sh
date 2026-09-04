@@ -29,5 +29,17 @@ grep -q '^pub const CAPABILITY_FUNDING_BINDING_BYTES_V1: usize = 160;$' "$genera
 grep -q '^pub const MARKET_OPENING_READINESS_BYTES_V1: usize = 128;$' "$generated"
 grep -q '^pub const CAPABILITY_ENTRY_QUOTE_OFFSET_V1: usize = 224;$' "$generated"
 grep -q '^pub const CAPABILITY_FUNDING_STATE_REMAINING_RENT_AMOUNT_OFFSET_V1: usize = 72;$' "$generated"
+# The per-ROW machine's three wire tags, and the byte they are written at.
+# They were `funding.rs`'s alone: an `#[repr(u8)]` enum with literal
+# discriminants, which is the strongest form Rust offers and is still one
+# author for a fact this module already owned the coordinate of. `Pending = 0`
+# is pinned because a ledger account is created at width and read before
+# anything is written, so the zero tag IS the intended initial state and a
+# renumbering would silently reclassify every fresh slot.
+grep -q '^pub const CAPABILITY_FUNDING_LEDGER_SLOT_STATUS_OFFSET_V2: usize = 0;$' "$generated"
+grep -q '^pub const CAPABILITY_FUNDING_LEDGER_STATUS_PENDING_V2: u8 = 0;$' "$generated"
+grep -q '^pub const CAPABILITY_FUNDING_LEDGER_STATUS_ACTIVE_V2: u8 = 1;$' "$generated"
+grep -q '^pub const CAPABILITY_FUNDING_LEDGER_STATUS_CLOSED_V2: u8 = 2;$' "$generated"
+grep -q '^pub const CAPABILITY_FUNDING_LEDGER_STATUS_LIMIT_V2: u8 = 3;$' "$generated"
 rustfmt --edition 2024 "$generated"
 cmp "$generated" "$crate_dir/src/generated_abi.rs"

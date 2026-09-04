@@ -11,29 +11,23 @@
 // exact wire tag of every state its own hostile decoder admits.
 //
 // WHERE EACH FACT'S AUTHOR IS. Every one of these eight machines persists its
-// record at Lean-emitted offsets, and this file reads the emission for those
-// (`generated_successor.rs`, `generated_source_resolution_state_v2.rs`,
-// `generated_abi.rs`, `generated_dealer_*.rs`,
-// `generated_scenario_checkpoint_v1.rs`,
+// record at Lean-emitted offsets AND names its wire tags in the same emission,
+// and this file reads that emission for both (`generated_successor.rs`,
+// `generated_source_resolution_state_v2.rs`, `generated_abi.rs`,
+// `generated_dealer_*.rs`, `generated_scenario_checkpoint_v1.rs`,
 // `generated_scenario_reservation_state_v1.rs`,
 // `generated_projected_state_v2.rs`, `generated_ticket_state_v3.rs`) and never
-// the hand-written mirror beside it. That is new: until the LEAN-TAGS lane,
-// FOUR of the eight had no Lean module at all -- `dealer-checkpoint`,
-// `dealer-reservation`, `projected-custody` and the ticket phase -- and this
-// file scraped their layouts out of Rust because there was nothing else to
-// read.
+// the hand-written mirror beside it. That is new twice over: until the
+// LEAN-TAGS lane FOUR of the eight had no Lean module at all, and until
+// LEAN-TAGS-2 three still authored their tags in Rust.
 //
-// The TAGS are a separate question with a separate answer per machine. Five
-// have Lean-emitted discriminants: `dealer-root`, `dealer-checkpoint`,
-// `dealer-reservation`, `projected-custody` and `series-ticket`. Three still
-// author theirs in Rust -- `direct-root`, whose `DirectRootPhaseV1` declares
-// none at all and whose decoder is therefore the sole author,
-// `funding-ledger`, and `source`. Their own admission modules say so out loud;
-// `direct_root_admission_v1.rs` opens with "`DirectRootPhaseV1`'s
-// discriminants are not Lean-emitted". So the Rust-scrape arm below is not
-// dead: it is what those three still need, and `literalTag` is exactly it.
-// The reader takes each machine's tags from whichever of the two authors them,
-// and `emittedTag` is the other arm.
+// The TAGS were a separate question with a separate answer per machine, and
+// they are not any more: ALL EIGHT now have Lean-emitted discriminants, so
+// every number in the table below comes from a `generated_*.rs`. The Rust
+// scrape that used to recover them is gone with its last consumer --
+// `agreedOffset` for the coordinates, `literalTag` for the tags -- and what
+// remains of the Rust reading is which ARM HEAD each decoder admits, which is
+// a fact about the decoder and cannot be emitted.
 //
 // THE TAGS COME FROM THE HOSTILE DECODER, not from the enum declaration. Three
 // of these enums carry no `#[repr(u8)]` discriminants at all, one resolves its
@@ -208,10 +202,13 @@ function block(source, anchor) {
   return sources[source].slice(start, end);
 }
 
-const literalTag = (head) => {
-  if (!/^[0-9_]+$/.test(head)) throw new Error(`a decoder arm head is not a byte literal: ${head}`);
-  return Number(head.replaceAll('_', ''));
-};
+// `literalTag` used to live here: a decoder arm head that IS a byte literal,
+// resolved by reading the number out of the Rust text. It is deleted rather
+// than kept, because all eight machines now name their tags and it had no
+// remaining consumer -- and a resolver that accepts a literal is exactly the
+// arm through which a hand-written tag re-enters. `emittedTag` is now the only
+// way an arm head becomes a number here, so a machine that reverts to `0 =>
+// Ok(..)` fails loudly instead of being read.
 
 /**
  * A decoder arm head that NAMES its tag, resolved in the Lean emission.
@@ -269,9 +266,9 @@ const machines = [
     discriminant: 'DirectRootPhaseV1',
     states: decodedTags(
       block('directSuccessor', 'impl DirectRootPhaseV1 {'),
-      literalTag,
+      emittedTag('directGenerated'),
     ),
-    declared: declaredDiscriminants('directSuccessor', 'DirectRootPhaseV1'),
+    declared: declaredDiscriminants('directSuccessor', 'DirectRootPhaseV1', emittedTag('directGenerated')),
     variants: declaredVariants('directSuccessor', 'DirectRootPhaseV1'),
     authority: 'crates/dclutch-direct-codec/src/{successor,generated_successor}.rs',
   },
@@ -434,9 +431,9 @@ const machines = [
     discriminant: 'FundingLedgerStatusV2',
     states: decodedTags(
       block('funding', 'impl FundingLedgerStatusV2 {'),
-      literalTag,
+      emittedTag('fundingGenerated'),
     ),
-    declared: declaredDiscriminants('funding', 'FundingLedgerStatusV2'),
+    declared: declaredDiscriminants('funding', 'FundingLedgerStatusV2', emittedTag('fundingGenerated')),
     variants: declaredVariants('funding', 'FundingLedgerStatusV2'),
     authority: 'crates/dclutch-capability-contract/src/{funding,generated_abi}.rs',
   },
@@ -456,9 +453,9 @@ const machines = [
     discriminant: 'SourceResolutionPhaseV1',
     states: decodedTags(
       block('source', 'impl SourceResolutionPhaseV1 {'),
-      literalTag,
+      emittedTag('sourceGenerated'),
     ),
-    declared: declaredDiscriminants('source', 'SourceResolutionPhaseV1'),
+    declared: declaredDiscriminants('source', 'SourceResolutionPhaseV1', emittedTag('sourceGenerated')),
     variants: declaredVariants('source', 'SourceResolutionPhaseV1'),
     authority: 'crates/dclutch-source-contract/src/{lib,generated_source_resolution_state_v2}.rs',
   },

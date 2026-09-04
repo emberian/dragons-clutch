@@ -143,7 +143,8 @@ describe('the phase gate refuses by name and never asserts readiness', () => {
     const machineless = ROUTES_WITHOUT_A_STATE_MACHINE_V1[0]!;
     expect(routeHasNoStateMachineV1(machineless)).toBe(true);
     const gate = (routes: ReadonlyArray<string>) => capabilityPhaseGateTextV1({
-      routes, gates: [], verdict: 'no-phase-gate' as const, excludedBy: null, unobservableMachines: [], machineGates: [],
+      routes, gates: [], verdict: 'no-phase-gate' as const, excludedBy: null, unobservableMachines: [],
+      machineGates: [], selectedGates: [],
     });
     expect(gate([machineless])).toContain('persists no lifecycle state to gate on');
 
@@ -168,6 +169,16 @@ describe('the phase gate refuses by name and never asserts readiness', () => {
     const gated = CAPABILITY_ACTIONS_V1.map((act) => act.id).filter((id) => !ungated.includes(id));
     expect(gated).toEqual([
       'source.create-fund',
+      // The seventh, and the first that is not a Market prestate at all.
+      // `direct.inline` declares `trading/hot_v3::process_hot_execution_v3`
+      // together with four other acts, and the census reads NO gate on that
+      // route -- the Direct root's `Open` set sits behind
+      // `hot_v3::prepare_direct_inline_hot_crosscheck_v3`, which returns
+      // `Ok(None)` for every request that is not a Direct successor. So the
+      // gate belongs to this act's declared FAMILY, and to none of the other
+      // four; before the family was derived it belonged to nobody and this
+      // card read READY TO PREFLIGHT with a root state nobody had read.
+      'direct.inline',
       'source.ready',
       'source.provider',
       'source.admit-terminal',

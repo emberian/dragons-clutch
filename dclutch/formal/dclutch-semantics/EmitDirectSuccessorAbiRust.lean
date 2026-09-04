@@ -29,6 +29,11 @@ def main : IO Unit := do
   emitBytes "DIRECT_ROOT_MAGIC_V1" rootMagic
   for field in rootLayout do
     IO.println s!"pub(crate) const {RootField.rustName field.spec.name}: usize = {field.offset};"
+  for phase in RootPhase.all do
+    IO.println s!"/// {RootPhase.doc phase}"
+    IO.println s!"pub(crate) const {RootPhase.rustName phase}: u8 = {RootPhase.tag phase};"
+  IO.println "/// One past the greatest root-phase tag: every phase indexes its own bit of a `u8`."
+  IO.println s!"pub(crate) const DIRECT_ROOT_PHASE_LIMIT_V1: u8 = {rootPhaseLimit};"
   emitBytes "DIRECT_MAKER_MAGIC_V1" makerMagic
   for field in makerLayout do
     IO.println s!"pub(crate) const {MakerField.rustName field.spec.name}: usize = {field.offset};"

@@ -288,29 +288,47 @@ export function routeMachineVerdictsV1(
 ): ReadonlyArray<MachineGateVerdictV1> {
   const gate = routeOtherMachineGateV1(route);
   if (gate === null) return Object.freeze([]);
-  return Object.freeze(gate.gates.map((set) => {
-    const machine = set.machine as StateMachineV1;
-    const states = set.states;
-    const observation = machineObservationForV1(machine, observations);
-    if (observation === null || !observation.present || observation.state === null) {
-      const reason = observation === null
-        ? `the ${machine} account has not been read at this observation`
-        : observation.present
-          ? `the ${machine} account was read and its bytes were refused: ${observation.refusal ?? 'no reason given'}`
-          : `the ${machine} account was read at this observation and does not exist`;
-      return Object.freeze({ machine, states, observed: null, verdict: 'unobserved' as const, reason });
-    }
-    const admitted = states.includes(observation.state);
-    return Object.freeze({
-      machine,
-      states,
-      observed: observation.state,
-      verdict: admitted ? ('admitted' as const) : ('excluded' as const),
-      reason: admitted
-        ? `the ${machine} is ${observation.state}, which \`${route}\` admits`
-        : `\`${route}\` admits only ${machine} ${states.join(' or ')}; this one is ${observation.state}`,
-    });
-  }));
+  return Object.freeze(gate.gates.map(
+    (set) => machineGateVerdictV1(set.machine as StateMachineV1, set.states, observations, route),
+  ));
+}
+
+/**
+ * One machine's admissible set, answered against what has been observed.
+ *
+ * `enforcedBy` is what the reason NAMES, and it is not always a route. A gate
+ * every execution of a route passes is enforced by the route; a gate behind a
+ * family's classifier is enforced by that classifier, and saying "`route`
+ * admits only direct-root Open" of a gate three quarters of the route's
+ * callers never reach would be false in exactly the direction the selection
+ * tables exist to prevent. So the caller names the thing that enforces its
+ * gate, and the sentence a card prints says which one it was.
+ */
+export function machineGateVerdictV1(
+  machine: StateMachineV1,
+  states: ReadonlyArray<string>,
+  observations: ReadonlyArray<MachineObservationV1>,
+  enforcedBy: string,
+): MachineGateVerdictV1 {
+  const observation = machineObservationForV1(machine, observations);
+  if (observation === null || !observation.present || observation.state === null) {
+    const reason = observation === null
+      ? `the ${machine} account has not been read at this observation`
+      : observation.present
+        ? `the ${machine} account was read and its bytes were refused: ${observation.refusal ?? 'no reason given'}`
+        : `the ${machine} account was read at this observation and does not exist`;
+    return Object.freeze({ machine, states, observed: null, verdict: 'unobserved' as const, reason });
+  }
+  const admitted = states.includes(observation.state);
+  return Object.freeze({
+    machine,
+    states,
+    observed: observation.state,
+    verdict: admitted ? ('admitted' as const) : ('excluded' as const),
+    reason: admitted
+      ? `the ${machine} is ${observation.state}, which \`${enforcedBy}\` admits`
+      : `\`${enforcedBy}\` admits only ${machine} ${states.join(' or ')}; this one is ${observation.state}`,
+  });
 }
 
 /**
@@ -433,10 +451,18 @@ export function machineGateCoverageV1(
  * decoders below can answer a question the cards above have not yet asked. A
  * page that rendered nothing here would leave a reader to infer that from an
  * absence, which is the reading this whole surface exists to remove.
+ *
+ * WHAT IT DOES NOT SAY, since the sentence beside it now does. This counts the
+ * gates a ROUTE carries. It used to end "no card here is yet answered by a
+ * machine", which was true only while that was the sole way a card could be:
+ * a gate behind a family's classifier binds one act on a route several others
+ * declare, is in neither table this counts, and IS answered on a card. So the
+ * clause is scoped to what this coverage measures, and
+ * `capabilitySelectedGateSentenceV1` states the rest.
  */
 export function machineGateSentenceV1(coverage: MachineGateCoverageV1): string {
   const reach = `${coverage.gatedRoutes} census routes are gated on a state machine that is not the Market's phase, over ${coverage.machines.length} machines, and this client decodes ${coverage.decodable.length} of them (${coverage.decodable.join(', ')}).`;
   return coverage.intersection.length === 0
-    ? `${reach} None of the ${coverage.declaredRoutes} routes the acts above declare is one of them, so no card here is yet answered by a machine.`
+    ? `${reach} None of the ${coverage.declaredRoutes} routes the acts above declare is one of them, so no card here is yet answered by a gate the route itself carries.`
     : `${reach} ${coverage.intersection.length} of the ${coverage.declaredRoutes} routes the acts above declare is one of them: ${coverage.intersection.join(', ')}.`;
 }

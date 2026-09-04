@@ -19,6 +19,12 @@ pub(crate) const DIRECT_ROOT_VERSION_OFFSET_V1: usize = 8;
 pub(crate) const DIRECT_ROOT_PHASE_OFFSET_V1: usize = 10;
 pub(crate) const DIRECT_ROOT_RESERVED_OFFSET_V1: usize = 11;
 pub(crate) const DIRECT_ROOT_OPEN_MAKER_COUNT_OFFSET_V1: usize = 16;
+/// New inline nonces and registered intents are admitted.
+pub(crate) const DIRECT_ROOT_PHASE_OPEN_V1: u8 = 0;
+/// New nonces are permanently refused while maker roots drain and close.
+pub(crate) const DIRECT_ROOT_PHASE_RETIRING_V1: u8 = 1;
+/// One past the greatest root-phase tag: every phase indexes its own bit of a `u8`.
+pub(crate) const DIRECT_ROOT_PHASE_LIMIT_V1: u8 = 2;
 pub(crate) const DIRECT_MAKER_MAGIC_V1: [u8; 8] = [0x44, 0x43, 0x4c, 0x54, 0x44, 0x4d, 0x52, 0x31];
 pub(crate) const DIRECT_MAKER_MAGIC_OFFSET_V1: usize = 0;
 pub(crate) const DIRECT_MAKER_VERSION_OFFSET_V1: usize = 8;

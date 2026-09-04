@@ -18,12 +18,17 @@
 //! one manifest are routinely in different statuses, which is why the set is
 //! checked against `slot(entry_index)` and never against the ledger.
 //!
-//! ## The tags are the enum's, and it is its own encoder
+//! ## The tags are Lean-emitted, and the enum is still its own encoder
 //!
-//! `FundingLedgerStatusV2` carries `#[repr(u8)]` with explicit discriminants
-//! and [`FundingLedgerStatusV2::byte`] writes them, so the discriminant is the
-//! wire tag. `the_bit_index_is_the_wire_encoding` pins the index against that
-//! pair rather than against a second numbering.
+//! `FundingLedgerStatusV2` carries `#[repr(u8)]` and
+//! [`FundingLedgerStatusV2::byte`] writes its discriminants, so the
+//! discriminant is the wire tag. Those discriminants are now the emitted
+//! constants of `DClutchSemantics.CapabilityManifestV1Abi`'s
+//! `LedgerSlotStatusV2` -- the module that already owned the byte they are
+//! written at -- rather than three literals typed in `funding.rs`.
+//! `the_bit_index_is_the_wire_encoding` pins the index against the `byte`/
+//! `decode` pair as before, and now both sides of that comparison descend
+//! from the emission.
 //!
 //! ## What is deliberately NOT a set here
 //!
@@ -45,8 +50,9 @@
 
 use crate::funding::FundingLedgerStatusV2;
 
-/// Number of distinct `FundingLedgerStatusV2` values.
-const STATE_COUNT: u8 = 3;
+/// Number of distinct `FundingLedgerStatusV2` values, from the emission
+/// rather than typed a second time beside it.
+const STATE_COUNT: u8 = crate::generated_abi::CAPABILITY_FUNDING_LEDGER_STATUS_LIMIT_V2;
 
 /// The wire tag of one slot status, as a bit index.
 const fn state_tag(state: FundingLedgerStatusV2) -> u8 {

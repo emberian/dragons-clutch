@@ -69,15 +69,35 @@ const READINESS = ['Prepaid', 'Ready', 'Consumed'];
 // and the six-cell refusal applies only inside them, where a wrong width still
 // means the format moved.
 const PROGRAM_HEADING = /^## [a-z0-9-]+$/;
+// The one non-program section this generator READS rather than skips. A gate
+// behind a family's classifier is enforced on the route and is not a condition
+// OF the route, so `routes.md` prints it apart from the phase column; dropping
+// it here is what kept `evaluateCapabilityV1` unable to answer the only two
+// machine gates any act on the board can reach.
+const SELECTION_HEADING = '## Gates behind a selection';
 const routes = [];
+const selected = [];
 let inProgramSection = false;
+let inSelectionSection = false;
 for (const line of referenceSource.split('\n')) {
   if (line.startsWith('## ')) {
     inProgramSection = PROGRAM_HEADING.test(line);
+    inSelectionSection = line === SELECTION_HEADING;
     continue;
   }
-  if (!inProgramSection || !line.startsWith('| `')) continue;
+  if (!line.startsWith('| `')) continue;
   const cells = line.slice(2, line.length - 2).split(' | ');
+  if (inSelectionSection) {
+    if (cells.length !== 4) throw new Error(`a selection row has ${cells.length} cells, not 4: ${line.slice(0, 120)}`);
+    selected.push({
+      route: cells[0].replace(/^`|`$/g, ''),
+      selectedBy: cells[1].replace(/^`|`$/g, ''),
+      declaration: cells[2].trim(),
+      provenance: cells[3].replace(/^`|`$/g, ''),
+    });
+    continue;
+  }
+  if (!inProgramSection) continue;
   if (cells.length !== 6) throw new Error(`routes.md row has ${cells.length} cells, not 6: ${line.slice(0, 120)}`);
   const route = cells[0].replace(/^`|`$/g, '');
   routes.push({ route, phase: cells[3].trim() });
@@ -220,6 +240,27 @@ for (const entry of routes) {
 }
 if (gates.length === 0) throw new Error('routes.md published no phase gate at all; the column is gone or empty');
 
+// The selection rows, in the same shape the machine sets take, so a consumer
+// answers one from a decoded observation exactly as it answers a necessary
+// gate -- and never from the route alone.
+const selectedGates = selected.map((entry) => {
+  const declaration = declarationMachine(entry.route, entry.declaration);
+  if (declaration.machine === 'market') {
+    // A Market prestate behind a classifier would be a real finding and this
+    // table has no field for the pair algebra the phase column runs. Refusing
+    // is the honest end: a row published as a bare state list would be checked
+    // against a phase name that is not one.
+    throw new Error(`selection ${entry.selectedBy} names a market set, which this table cannot carry: ${entry.declaration}`);
+  }
+  const states = declaration.terms.split(', ').map((state) => state.trim());
+  for (const state of states) {
+    if (!/^[A-Z][A-Za-z0-9]*$/.test(state)) {
+      throw new Error(`selection ${entry.selectedBy} names ${declaration.machine} state ${state}, which is not a state name`);
+    }
+  }
+  return { route: entry.route, selectedBy: entry.selectedBy, machine: declaration.machine, states, provenance: entry.provenance };
+});
+
 // -------------------------------------------------------------------- output
 
 const ts = (value) => JSON.stringify(value);
@@ -300,6 +341,42 @@ export function gatedMachinesV1(): ReadonlyArray<string> {
     for (const machine of entry.machines) if (!machines.includes(machine)) machines.push(machine);
   }
   return machines.sort();
+}\n\n`;
+generated += `/**
+ * One gate that lies behind a CLASSIFIER'S DECLINE, not behind the route.
+ *
+ * One route can be the entry for several families -- Trading's
+ * \`process_hot_execution_v3\` is the whole Hot surface -- and each family's
+ * prelude returns a non-error for every request that is not its own before it
+ * reads anything. What such a prelude then enforces is necessary to ITS family
+ * and to no other, so it is not in \`ROUTE_PHASE_GATES_V1\` and not in
+ * \`ROUTES_GATED_ON_ANOTHER_MACHINE_V1\`: written into either it would tell the
+ * four other acts on the route that they need a ticket nobody in their
+ * execution has, which is the false READY TO PREFLIGHT the phase gates were
+ * built to remove, inverted.
+ *
+ * \`selectedBy\` names the function that declines. A consumer may answer one of
+ * these ONLY for an execution it can show takes that selection -- which for a
+ * capability act means its declared family, derived from the bytes its own
+ * builder compiles.
+ */
+export interface RouteSelectedGateV1 {
+  readonly route: string;
+  /** The classifier whose decline this gate sits behind. */
+  readonly selectedBy: string;
+  readonly machine: string;
+  readonly states: ReadonlyArray<string>;
+  /** The Rust the census read the set out of. */
+  readonly provenance: string;
+}\n\n`;
+generated += 'export const ROUTE_SELECTED_GATES_V1: ReadonlyArray<RouteSelectedGateV1> = [\n';
+for (const entry of selectedGates) {
+  generated += `  { route: ${ts(entry.route)}, selectedBy: ${ts(entry.selectedBy)}, machine: ${ts(entry.machine)}, states: [${entry.states.map(ts).join(', ')}], provenance: ${ts(entry.provenance)} },\n`;
+}
+generated += '];\n\n';
+generated += `/** Every gate on one route that lies behind a classifier's decline. */
+export function routeSelectedGatesV1(route: string): ReadonlyArray<RouteSelectedGateV1> {
+  return ROUTE_SELECTED_GATES_V1.filter((entry) => entry.route === route);
 }\n\n`;
 generated += `/**
  * Routes whose program persists NO lifecycle discriminant for them to consult.

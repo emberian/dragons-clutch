@@ -28,6 +28,20 @@ pub const SOURCE_RESOLUTION_STATE_V2_TERMINAL_SEQUENCE_OFFSET: usize = 192;
 pub const SOURCE_RESOLUTION_STATE_V2_RESOLVED_AT_OFFSET: usize = 200;
 pub const SOURCE_RESOLUTION_STATE_V2_RETIRED_AT_OFFSET: usize = 208;
 pub const SOURCE_RESOLUTION_STATE_V2_RESERVED_TAIL_OFFSET: usize = 216;
+/// Primary source may still be accepted.
+pub const SOURCE_RESOLUTION_PHASE_PRIMARY_V1: u8 = 0;
+/// Exactly one ordered recovery attempt may be accepted.
+pub const SOURCE_RESOLUTION_PHASE_RECOVERY_V1: u8 = 1;
+/// A primary or recovery result has been committed.
+pub const SOURCE_RESOLUTION_PHASE_RESOLVED_V1: u8 = 2;
+/// Every admitted attempt is exhausted; no result is selected yet.
+pub const SOURCE_RESOLUTION_PHASE_EXHAUSTED_V1: u8 = 3;
+/// Product-owned failure semantics have been committed.
+pub const SOURCE_RESOLUTION_PHASE_FAILURE_COMMITTED_V1: u8 = 4;
+/// Terminal state was retired after settlement.
+pub const SOURCE_RESOLUTION_PHASE_RETIRED_V1: u8 = 5;
+/// One past the greatest phase tag.
+pub const SOURCE_RESOLUTION_PHASE_LIMIT_V1: u8 = 6;
 #[cfg(test)]
 #[rustfmt::skip]
 pub(crate) const SOURCE_RESOLUTION_STATE_V2_FRESH_EXAMPLE: [u8; 224] = [

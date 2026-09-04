@@ -63,8 +63,14 @@ const webRoot = fileURLToPath(new URL('..', import.meta.url));
  * `routes` is not such a status. It names census route ids, every one of which
  * `capabilityPhaseGate.test.ts` checks against `docs/reference/routes.md`, so
  * a name nobody carries is red rather than a claim the browser made up.
+ *
+ * Neither is `families`, for the same reason one level over: it names the Hot
+ * families whose request this act's own builder compiles, and
+ * `capabilityRouteDerivation.test.ts` derives each one by running that builder
+ * and reading the magic the compiled envelope carries. A family somebody typed
+ * is red there.
  */
-const ACT_FIELDS = ['id', 'stage', 'family', 'action', 'workspace', 'subject', 'anchors', 'routes', 'guarantee', 'walls'];
+const ACT_FIELDS = ['id', 'stage', 'family', 'action', 'workspace', 'subject', 'anchors', 'routes', 'families', 'guarantee', 'walls'];
 
 /**
  * Vocabulary a capability claim may never use.

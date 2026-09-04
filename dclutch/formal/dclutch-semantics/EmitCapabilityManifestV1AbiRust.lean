@@ -77,6 +77,11 @@ def main : IO Unit := do
     IO.println s!"pub const {LedgerHeaderFieldV2.constantName field.spec.name}: usize = {field.offset};"
   for field in ledgerSlotLayoutV2 do
     IO.println s!"pub const {LedgerSlotFieldV2.constantName field.spec.name}: usize = {field.offset};"
+  for status in LedgerSlotStatusV2.all do
+    IO.println s!"/// {LedgerSlotStatusV2.doc status}"
+    IO.println s!"pub const {LedgerSlotStatusV2.constantName status}: u8 = {LedgerSlotStatusV2.tag status};"
+  IO.println "/// One past the greatest slot-status tag: every status indexes its own bit of a `u8`."
+  IO.println s!"pub const CAPABILITY_FUNDING_LEDGER_STATUS_LIMIT_V2: u8 = {ledgerSlotStatusLimitV2};"
   IO.println s!"pub const CAPABILITY_FUNDING_LEDGER_PDA_DOMAIN_V2: &[u8] = b\"{fundingLedgerPdaDomainV2}\";"
   IO.println s!"pub const CAPABILITY_FUNDING_LEDGER_AUTHORITY_PDA_DOMAIN_V2: &[u8] = b\"{fundingLedgerAuthorityPdaDomainV2}\";"
   IO.println s!"pub const CAPABILITY_FUNDING_LEDGER_VAULT_PDA_DOMAIN_V2: &[u8] = b\"{fundingLedgerVaultPdaDomainV2}\";"

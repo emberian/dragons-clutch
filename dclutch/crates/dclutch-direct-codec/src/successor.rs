@@ -27,6 +27,13 @@ mod generated;
 pub const DIRECT_EXECUTION_CONFIG_BYTES_V1: usize = generated::DIRECT_EXECUTION_CONFIG_BYTES_V1;
 /// Mutable Direct capability-root tail width.
 pub const DIRECT_ROOT_STATE_BYTES_V1: usize = generated::DIRECT_ROOT_STATE_BYTES_V1;
+/// The wire tag an open global Direct root is persisted as.
+pub const DIRECT_ROOT_PHASE_OPEN_V1: u8 = generated::DIRECT_ROOT_PHASE_OPEN_V1;
+/// The wire tag a retiring global Direct root is persisted as.
+pub const DIRECT_ROOT_PHASE_RETIRING_V1: u8 = generated::DIRECT_ROOT_PHASE_RETIRING_V1;
+/// One past the greatest root-phase tag, and the bound
+/// `direct_root_admission_v1` asserts its `u8` bitset against.
+pub const DIRECT_ROOT_PHASE_LIMIT_V1: u8 = generated::DIRECT_ROOT_PHASE_LIMIT_V1;
 /// Per-maker replay-root byte width.
 pub const DIRECT_MAKER_REPLAY_BYTES_V1: usize = generated::DIRECT_MAKER_REPLAY_BYTES_V1;
 /// The pre-`fee_owed` per-maker replay-root width, still readable.
@@ -561,12 +568,13 @@ impl AuthenticatedCompactIntentV2 {
 }
 
 /// Global Direct lifecycle inside one composite Trading capability root.
+#[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DirectRootPhaseV1 {
     /// New inline nonces and registered intents are admitted.
-    Open,
+    Open = DIRECT_ROOT_PHASE_OPEN_V1,
     /// New nonces are permanently refused while maker roots drain and close.
-    Retiring,
+    Retiring = DIRECT_ROOT_PHASE_RETIRING_V1,
 }
 
 impl DirectRootPhaseV1 {
@@ -578,16 +586,16 @@ impl DirectRootPhaseV1 {
     /// hand-written numbering.
     pub(crate) fn byte(self) -> u8 {
         match self {
-            Self::Open => 0,
-            Self::Retiring => 1,
+            Self::Open => DIRECT_ROOT_PHASE_OPEN_V1,
+            Self::Retiring => DIRECT_ROOT_PHASE_RETIRING_V1,
         }
     }
 
     /// Hostile-decode one persisted phase byte.
     pub(crate) fn decode(value: u8) -> SuccessorResult<Self> {
         match value {
-            0 => Ok(Self::Open),
-            1 => Ok(Self::Retiring),
+            DIRECT_ROOT_PHASE_OPEN_V1 => Ok(Self::Open),
+            DIRECT_ROOT_PHASE_RETIRING_V1 => Ok(Self::Retiring),
             _ => Err(SuccessorError::InvalidRootPhase),
         }
     }

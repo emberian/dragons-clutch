@@ -9,6 +9,7 @@ mod aggregate_retirement_exterior;
 mod aggregate_retirement_journal;
 mod campaign;
 mod capability_seal_close;
+mod capability_seal_devnet;
 mod chaos_fault;
 mod claims_custody_replay;
 mod cluster;
@@ -251,6 +252,9 @@ fn run() -> Result<()> {
         }
         Some(command) if command == capability_seal_close::COMMAND_DEVNET_V1 => {
             capability_seal_close::run_devnet_v1(arguments.collect())
+        }
+        Some(command) if command == capability_seal_devnet::COMMAND_DEVNET_V1 => {
+            capability_seal_devnet::run_devnet(arguments.collect())
         }
         Some(command) if command == direct_close_maker::COMMAND_V1 => {
             direct_close_maker::run_owned_loopback_v1(arguments.collect())
@@ -2340,6 +2344,8 @@ fn usage() {
     println!("{}", direct_fee_settlement::usage());
     println!("{}", direct_close_maker::usage());
     println!("{}", capability_seal_close::usage());
+    println!("{}", capability_seal_devnet::usage());
+    println!("{}", general_session::usage());
     println!("{}", release_lineage::usage());
     println!("{}", infrastructure_succession::usage());
     println!("{}", flagship_resolution::usage());

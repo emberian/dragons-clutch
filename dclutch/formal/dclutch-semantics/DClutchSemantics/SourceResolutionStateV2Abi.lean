@@ -107,10 +107,78 @@ structure State where
   deriving DecidableEq, Repr
 
 def fits (width value : Nat) : Bool := value < 256 ^ width
-def terminalPhase (phase : Nat) : Bool := phase = 2 || phase = 4 || phase = 5
+
+/-- The six phases one Market generation's Source resolution moves through.
+
+This module has stated the machine's whole canonicity rule since it was
+written -- `State.valid` is a six-armed match on the phase byte, and it is the
+strongest statement of the machine anywhere in the tree.  What it did not do
+was NAME the six tags: they were bare numerals inside the arms, and
+`crates/dclutch-source-contract/src/lib.rs` independently wrote the same six as
+`#[repr(u8)]` discriminants and again as decoder arms.  So one machine had
+three authors, and the Lean one -- the only one that says what each phase
+MEANS for the record's other fields -- exported none of them. -/
+inductive Phase where
+  | primary | recovery | resolved | exhausted | failureCommitted | retired
+  deriving DecidableEq, Repr
+
+namespace Phase
+
+def all : List Phase :=
+  [.primary, .recovery, .resolved, .exhausted, .failureCommitted, .retired]
+
+/-- The wire tag persisted in the phase byte. -/
+def tag : Phase → Nat
+  | .primary => 0
+  | .recovery => 1
+  | .resolved => 2
+  | .exhausted => 3
+  | .failureCommitted => 4
+  | .retired => 5
+
+def rustName : Phase → String
+  | .primary => "SOURCE_RESOLUTION_PHASE_PRIMARY_V1"
+  | .recovery => "SOURCE_RESOLUTION_PHASE_RECOVERY_V1"
+  | .resolved => "SOURCE_RESOLUTION_PHASE_RESOLVED_V1"
+  | .exhausted => "SOURCE_RESOLUTION_PHASE_EXHAUSTED_V1"
+  | .failureCommitted => "SOURCE_RESOLUTION_PHASE_FAILURE_COMMITTED_V1"
+  | .retired => "SOURCE_RESOLUTION_PHASE_RETIRED_V1"
+
+def doc : Phase → String
+  | .primary => "Primary source may still be accepted."
+  | .recovery => "Exactly one ordered recovery attempt may be accepted."
+  | .resolved => "A primary or recovery result has been committed."
+  | .exhausted => "Every admitted attempt is exhausted; no result is selected yet."
+  | .failureCommitted => "Product-owned failure semantics have been committed."
+  | .retired => "Terminal state was retired after settlement."
+
+/-- Whether Core may join on this state as a decided one.  `Exhausted` is the
+phase this predicate is most easily got wrong about: every attempt is spent and
+NO result is selected, so it is an end of the attempt sequence and not a
+terminal read. -/
+def terminal : Phase → Bool
+  | .resolved | .failureCommitted | .retired => true
+  | .primary | .recovery | .exhausted => false
+
+/-- The phase one persisted byte names, or `none` for a byte outside the
+machine. -/
+def ofTag? (value : Nat) : Option Phase := all.find? fun phase => phase.tag == value
+
+end Phase
+
+/-- One past the greatest phase tag. -/
+def phaseLimit : Nat := 6
+
+/-- The terminal read join Core performs, resolved through the machine rather
+than through a second list of numerals. -/
+def terminalPhase (phase : Nat) : Bool :=
+  match Phase.ofTag? phase with
+  | some value => value.terminal
+  | none => false
 
 def State.valid (value : State) : Bool :=
-  value.phase ≤ 5 && value.activeAttempt < 4 && value.terminalRoute ≤ 3 &&
+  (Phase.ofTag? value.phase).isSome && value.activeAttempt < 4 &&
+  value.terminalRoute ≤ 3 &&
   fits 1 value.pdaBump && fits 4 value.selector &&
   value.market != 0 && fits 32 value.market &&
   value.generation != 0 && fits 8 value.generation &&
@@ -235,5 +303,46 @@ theorem encoded_examples_accepted :
 
 theorem generated_refusal_corpus_refuses :
     refusalCorpus.all fun candidate => !validBytes candidate := by native_decide
+
+/-! ## The machine the record's own validity rule is written over -/
+
+/-- **The six tags three files each authored a copy of.**  They are distinct,
+they run from zero with no gap, and `phaseLimit` bounds them. -/
+theorem the_machine_numbers_from_zero_without_a_gap :
+    (Phase.all.map Phase.tag) = [0, 1, 2, 3, 4, 5] ∧
+      (Phase.all.map Phase.tag).Nodup ∧
+      Phase.all.all (fun phase => Phase.tag phase < phaseLimit) = true := by
+  native_decide
+
+/-- The `_ => false` arm of `State.valid` is exactly the complement of the
+machine: every one of the six tags reaches a real arm and every other byte in
+`0..255` falls through to refusal.  This is what `value.phase ≤ 5` used to say
+by arithmetic coincidence, and what the Rust decoder's `_ => Err` says on its
+own side. -/
+theorem exactly_the_machine_s_tags_reach_a_validity_arm :
+    (List.range 256).filter (fun tag => (Phase.ofTag? tag).isSome) =
+      Phase.all.map Phase.tag := by
+  native_decide
+
+/-- **`Exhausted` is not terminal, and that is the whole point of naming
+these.**  Three of six phases are a terminal read Core may join on; the fourth
+end-of-sequence phase, `Exhausted`, has spent every attempt and selected no
+result, so a reader that treated "no attempts remain" as "decided" would settle
+a Market on nothing.  `terminalPhase` is now this predicate rather than a second
+list of numerals beside it. -/
+theorem the_terminal_read_is_three_of_six_and_exhausted_is_not_one :
+    (Phase.all.filter Phase.terminal).map Phase.tag = [2, 4, 5] ∧
+      Phase.terminal .exhausted = false ∧
+      Phase.all.all (fun phase => terminalPhase (Phase.tag phase) = phase.terminal) = true := by
+  native_decide
+
+/-- A zeroed account claims `Primary`, so the phase byte alone cannot separate
+an unwritten account from a live pre-resolution one and
+`SOURCE_RESOLUTION_STATE_V2_MAGIC` is the whole partition -- the same shape the
+occurrence-ticket state and the Direct root record, and the opposite of the
+projected-custody ladder, which numbers from one on purpose. -/
+theorem the_zero_tag_is_primary_so_the_magic_is_the_partition :
+    Phase.ofTag? 0 = some .primary ∧ Phase.tag .primary = 0 := by
+  native_decide
 
 end DClutch.SourceResolutionStateV2Abi

@@ -15,6 +15,7 @@ import {
   capabilityPhaseGateTextV1,
   evaluateCapabilityV1,
   machineTextV1,
+  selectedTextV1,
   type CapabilityStage,
 } from '@/lib/capabilityModel';
 import {
@@ -215,6 +216,11 @@ export default function MarketWorkbench({ initialStage = 'author', surface = 'li
         // the decoded state, so a card cannot say a machine admitted anything
         // the table does not.
         const machineClauses = machineTextV1(verdict.phaseGate);
+        // Beside the two above, and never merged into them. A selected gate
+        // binds one family on a route four other acts also declare, so a row
+        // that read `Machine gate` would state of all five what is true of
+        // one; this row names the classifier and the family that reaches it.
+        const selectedClauses = selectedTextV1(verdict.phaseGate);
         const workspace = capabilityWorkspaceV1(standing.action, snapshot);
         const contract = capabilityActContractV1(standing);
         const accepted = verdict.status === 'ready-to-preflight' && workspace !== null;
@@ -222,7 +228,7 @@ export default function MarketWorkbench({ initialStage = 'author', surface = 'li
         // and cannot say why is the flat-console failure in miniature; where an
         // act cannot be opened, the card says what is missing and links to the
         // page that answers it, which is always reachable.
-        return <article className={accepted ? 'ready' : ''} key={standing.action.id}><div><span className={`operator-status ${verdict.status}`}>{verdict.status.replaceAll('-', ' ')}</span><h3>{standing.action.action}</h3></div><p>{verdict.reason}</p><dl className="operator-action-contract"><div><dt>Where it runs</dt><dd>{contract.venue}</dd></div><div><dt>What it promises</dt><dd>{contract.guarantee}</dd></div><div><dt>Phase gate</dt><dd>{capabilityPhaseGateTextV1(verdict.phaseGate)}</dd></div>{machineClauses.length > 0 ? <div><dt>Machine gate</dt><dd>{machineClauses.join('; ')}</dd></div> : null}</dl>{standing.walls.map((held) => <p className="operator-action-wall" key={held.citation}><strong>Known wall</strong> {held.statement} <small>({held.citation})</small></p>)}{accepted && workspace !== null
+        return <article className={accepted ? 'ready' : ''} key={standing.action.id}><div><span className={`operator-status ${verdict.status}`}>{verdict.status.replaceAll('-', ' ')}</span><h3>{standing.action.action}</h3></div><p>{verdict.reason}</p><dl className="operator-action-contract"><div><dt>Where it runs</dt><dd>{contract.venue}</dd></div><div><dt>What it promises</dt><dd>{contract.guarantee}</dd></div><div><dt>Phase gate</dt><dd>{capabilityPhaseGateTextV1(verdict.phaseGate)}</dd></div>{machineClauses.length > 0 ? <div><dt>Machine gate</dt><dd>{machineClauses.join('; ')}</dd></div> : null}{selectedClauses.length > 0 ? <div><dt>Family gate</dt><dd>{selectedClauses.join('; ')}</dd></div> : null}</dl>{standing.walls.map((held) => <p className="operator-action-wall" key={held.citation}><strong>Known wall</strong> {held.statement} <small>({held.citation})</small></p>)}{accepted && workspace !== null
           ? <Anchor href={workspace}>Open exact preflight →</Anchor>
           : verdict.status === 'not-this-market' && workspace !== null
             ? <Anchor href={workspace}>Open it for a new Market →</Anchor>

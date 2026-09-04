@@ -4337,3 +4337,11 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Cuts: `72966f9c3`.
 - Started 02:50 EDT: WEB-RATIONAL **`(spawned)`** — the four Rational hand-mirrors the census now counts, converted to
   generated twins with verifies.
+- ACTS-2 closed (`adada219d`, `104cc7c19`): two of 27 acts derive a family from the builder compile (direct.inline → Direct,
+  dealer.liquidity → Dealer; 25 declare [] by construction or because a reader pastes the transaction); classifier → family
+  pinned to hot_v3.rs's own text; **the first derived other-machine verdict, live: direct.inline reads cohort-15's activation
+  root FUJ9pNuk… as Open through `prepare_direct_inline_hot_crosscheck_v3`**, the four acts beside it asked nothing (the
+  positive control); ten cases red without the family filter. Owed: the workbench acquires only the Source observation, so
+  direct.inline reads `needs-chain` there until it holds the root's coordinate. The capability surface regenerated at HEAD by
+  the orchestrator.
+- Cuts: `6c14f8244`, `c0ca57b52`.

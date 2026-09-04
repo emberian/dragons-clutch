@@ -162,6 +162,44 @@ export function gatedMachinesV1(): ReadonlyArray<string> {
 }
 
 /**
+ * One gate that lies behind a CLASSIFIER'S DECLINE, not behind the route.
+ *
+ * One route can be the entry for several families -- Trading's
+ * `process_hot_execution_v3` is the whole Hot surface -- and each family's
+ * prelude returns a non-error for every request that is not its own before it
+ * reads anything. What such a prelude then enforces is necessary to ITS family
+ * and to no other, so it is not in `ROUTE_PHASE_GATES_V1` and not in
+ * `ROUTES_GATED_ON_ANOTHER_MACHINE_V1`: written into either it would tell the
+ * four other acts on the route that they need a ticket nobody in their
+ * execution has, which is the false READY TO PREFLIGHT the phase gates were
+ * built to remove, inverted.
+ *
+ * `selectedBy` names the function that declines. A consumer may answer one of
+ * these ONLY for an execution it can show takes that selection -- which for a
+ * capability act means its declared family, derived from the bytes its own
+ * builder compiles.
+ */
+export interface RouteSelectedGateV1 {
+  readonly route: string;
+  /** The classifier whose decline this gate sits behind. */
+  readonly selectedBy: string;
+  readonly machine: string;
+  readonly states: ReadonlyArray<string>;
+  /** The Rust the census read the set out of. */
+  readonly provenance: string;
+}
+
+export const ROUTE_SELECTED_GATES_V1: ReadonlyArray<RouteSelectedGateV1> = [
+  { route: "trading/hot_v3::process_hot_execution_v3", selectedBy: "hot_v3::prepare_direct_inline_hot_crosscheck_v3", machine: "direct-root", states: ["Open"], provenance: "crates/dclutch-direct-codec/src/direct_root_admission_v1.rs:104" },
+  { route: "trading/hot_v3::process_hot_execution_v3", selectedBy: "hot_v3::try_authenticate_series_expiry_premarket_v1", machine: "series-ticket", states: ["Prepared"], provenance: "crates/dclutch-series-v3-kernel/src/ticket_admission_v1.rs:115" },
+];
+
+/** Every gate on one route that lies behind a classifier's decline. */
+export function routeSelectedGatesV1(route: string): ReadonlyArray<RouteSelectedGateV1> {
+  return ROUTE_SELECTED_GATES_V1.filter((entry) => entry.route === route);
+}
+
+/**
  * Routes whose program persists NO lifecycle discriminant for them to consult.
  *
  * Absent from `ROUTE_PHASE_GATES_V1` for a reason no further naming will

@@ -1,4 +1,5 @@
 import DClutchSemantics.AbiSchema
+import DClutchSemantics.CapabilityProgramAbi
 import DClutchSemantics.DirectControllerCodec
 import DClutchSemantics.DirectIntentV2Codec
 import DClutchSemantics.DirectSuccessor
@@ -98,6 +99,60 @@ def rustName : RootField → String
   | .openMakerRootCount => "DIRECT_ROOT_OPEN_MAKER_COUNT_OFFSET_V1"
 
 end RootField
+
+/-- The two phases the global Direct lifecycle moves through.
+
+`DirectRootPhaseV1` is the last of the eight machines the route census gates on
+whose wire tags had no owner outside its decoder, and the only one that
+declared *no discriminants at all*: `successor.rs` wrote `byte` and `decode` as
+a hand-written pair, so the numbering existed twice in one file and nowhere
+else.  `direct_root_admission_v1.rs` said so in its own header.
+
+`Open` here is not the Market's `Open`.  A Core Market is `Open` for the whole
+span in which its Direct root moves `Open` -> `Retiring` and drains its maker
+replay accounts, so the two discriminants live in different accounts, are moved
+by different instructions, and mean different things. -/
+inductive RootPhase where
+  | «open»
+  | retiring
+  deriving DecidableEq, Repr
+
+namespace RootPhase
+
+def all : List RootPhase := [.«open», .retiring]
+
+/-- The wire tag persisted in the root tail's phase byte. -/
+def tag : RootPhase → Nat
+  | .«open» => 0
+  | .retiring => 1
+
+def rustName : RootPhase → String
+  | .«open» => "DIRECT_ROOT_PHASE_OPEN_V1"
+  | .retiring => "DIRECT_ROOT_PHASE_RETIRING_V1"
+
+def doc : RootPhase → String
+  | .«open» => "New inline nonces and registered intents are admitted."
+  | .retiring =>
+      "New nonces are permanently refused while maker roots drain and close."
+
+/-- Whether the phase still admits a new maker nonce.  `Retiring` is terminal
+for admission and is simultaneously the ONLY phase in which a maker replay root
+may be closed, which is why the machine carries per-route sets rather than one
+predicate. -/
+def admitsNonce : RootPhase → Bool
+  | .«open» => true
+  | .retiring => false
+
+end RootPhase
+
+/-- One past the greatest root-phase tag: the `STATE_COUNT` that
+`direct_root_admission_v1.rs` asserts fits a `u8` bitset. -/
+def rootPhaseLimit : Nat := 2
+
+/-- Where the mutable Direct tail begins inside the composite capability root
+account: exactly where the shared header ends, and never a number typed beside
+it. -/
+def rootTailOffset : Nat := CapabilityProgramAbi.rootHeaderBytes
 
 inductive MakerField where
   | magic | version | bump | reserved | market | generation | maker
@@ -404,5 +459,46 @@ theorem exact_example_widths :
 theorem zero_recipient_is_not_valid : bytesNonzero zeroBytes32 = false := by native_decide
 
 end Examples
+
+/-! ## The machine, and where its record sits in the account -/
+
+/-- **The two tags the decoder authored alone.**  The enum declared no
+discriminants, so `byte` and `decode` were the whole statement of which byte
+means what, and a renumbering in one without the other was a silent
+disagreement between an encoder and its own reader.
+
+The machine numbers from ZERO, which is the contrast with
+`ProjectedCustodyStateV2Abi`: a zeroed root tail decodes as `Open` on its phase
+byte alone, so `DIRECT_ROOT_MAGIC_V1` is the whole partition against an
+unwritten account -- the same shape `SeriesTicketStateV3Abi` records for
+`Prepared = 0`. -/
+theorem the_machine_numbers_from_zero :
+    (RootPhase.all.map RootPhase.tag) = [0, 1] ∧
+      (RootPhase.all.map RootPhase.tag).Nodup ∧
+      RootPhase.all.all (fun phase => RootPhase.tag phase < rootPhaseLimit) = true ∧
+      rootPhaseLimit ≤ 8 := by
+  native_decide
+
+/-- Exactly one phase admits a new maker nonce, and it is the zero tag.  This
+is `DIRECT_ROOT_OPEN_ADMISSIBLE_STATES_V1` as an enumeration rather than as a
+set literal built by hand. -/
+theorem exactly_one_phase_admits_a_nonce :
+    RootPhase.all.filter RootPhase.admitsNonce = [.«open»] ∧
+      RootPhase.tag .«open» = 0 := by
+  native_decide
+
+/-- **The 232 every client parses the tail at.**  This record is a 24-byte tail
+inside a composite capability root account, not an account of its own, so a
+reader holding the account slices it at the shared header's width: the SDK
+writes `232 + 24`, `rationalCapabilityChainV4.ts` length-checks
+`232 + rootStateBytes`, and the 232 itself belongs to `CapabilityProgramAbi`.
+Stated here, the account width is a derivation from one owner rather than an
+arithmetic three surfaces each carry a copy of. -/
+theorem the_tail_follows_the_capability_root_header :
+    rootTailOffset = CapabilityProgramAbi.rootHeaderBytes ∧
+      rootTailOffset = 232 ∧
+      rootTailOffset + rootBytes = 256 ∧
+      rootTailOffset + RootField.offset .phase = 242 := by
+  native_decide
 
 end DClutch.DirectSuccessorAbi

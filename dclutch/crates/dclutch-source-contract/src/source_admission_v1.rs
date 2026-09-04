@@ -27,8 +27,10 @@
 
 use crate::SourceResolutionPhaseV1;
 
-/// Number of distinct `SourceResolutionPhaseV1` values.
-const STATE_COUNT: u8 = 6;
+/// Number of distinct `SourceResolutionPhaseV1` values, from the emission
+/// rather than typed a second time beside it.
+const STATE_COUNT: u8 =
+    crate::generated_source_resolution_state_v2::SOURCE_RESOLUTION_PHASE_LIMIT_V1;
 
 /// The wire tag of one resolution state, as a bit index.
 const fn state_tag(state: SourceResolutionPhaseV1) -> u8 {

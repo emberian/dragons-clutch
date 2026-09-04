@@ -15,17 +15,25 @@ import {
 import { CAPABILITY_ACTIONS_V1 } from './capabilityModel';
 import { compileCoreFoundTransactionV2, compileLifecycleRentCreateTransactionV2 } from './coreFound';
 import { compileDealerEquityTransactionV3, type DealerEquityHotRouteV3 } from './dealerEquityV3';
-import { type DirectHotAccountMetaV3 } from './directInlineV3';
+import {
+  encodeDirectInlineOrdinaryRequestV3,
+  type DirectHotAccountMetaV3,
+  type SignedDirectIntentV3,
+} from './directInlineV3';
 import { encodeClaimsCustodyReplayRequestV1 } from './claimsCustodyReplay';
 import { encodeWalletTerminalPayoutRequestV3 } from './walletTerminalPayoutV3';
 import { compileRegistryReauthenticationTransaction, compileRegistryRoleActivationTransaction } from './releaseRegistry';
 import { CORE_FOUND_ACCOUNT_COUNT_V3 } from './generated/coreFound';
 import {
   DEALER_EQUITY_HEADER_BYTES_V3,
+  DEALER_EQUITY_REQUEST_MAGIC_V3,
   DEALER_LP_POSITION_PDA_DOMAIN_V3,
   DEALER_OBLIGATION_PDA_DOMAIN_V3,
 } from './generated/dealerEquityV3';
+import { GENERAL_REQUEST_MAGIC_V3 } from './generated/generalSuccessorV5';
 import {
+  DIRECT_EXECUTION_REQUEST_MAGIC_V3,
+  HOT_FAMILY_REQUEST_OFFSET_V3,
   HOT_FIXED_ACCOUNT_COUNT_V3,
   HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
   HOT_MARKET_ACCOUNT_V3,
@@ -239,6 +247,138 @@ describe('every act with a declared route says who authored its bytes', () => {
     // envelope, so the `DCLTHOT3` derivation it relies on IS exercised.
     expect(act('direct.inline').routes).toEqual(['trading/hot_v3::process_hot_execution_v3']);
     expect(act('dealer.liquidity').routes).toEqual(act('direct.inline').routes);
+  });
+});
+
+/**
+ * WHICH FAMILY an act's Hot request belongs to, from the bytes it writes.
+ *
+ * `trading/hot_v3::process_hot_execution_v3` is ONE route and four families:
+ * Direct, General, Dealer and Series all arrive on `DCLTHOT3`, and each
+ * family's prelude returns a non-error for every request that is not its own
+ * before it reads anything. So the route is not enough to decide what a given
+ * act is subject to -- five acts declare it, and the Direct root's `Open` set
+ * behind `hot_v3::prepare_direct_inline_hot_crosscheck_v3` binds exactly one
+ * of them. The family is the missing coordinate, and it is derived the same
+ * way the route is: from the builder's own compiled bytes.
+ *
+ * WHERE THE DISCRIMINANT IS. `HotExecutionEnvelopeV3::split_instruction` cuts
+ * the instruction at `HOT_FAMILY_REQUEST_OFFSET_V3`, and everything past that
+ * is the family request, which opens with its own codec's magic. Nothing below
+ * writes a magic: each is imported from the generated ABI module of the crate
+ * that owns that family's wire, so a family renamed in Rust reaches this
+ * derivation by regeneration.
+ */
+const FAMILY_REQUEST_MAGICS_V1: Readonly<Record<string, Uint8Array>> = Object.freeze({
+  // Series is absent on purpose and it is not an oversight: no browser module
+  // encodes or decodes `DCLTSIX3`, because no act offers a Series Expire. It
+  // is stated as an empty case below rather than left to look covered.
+  Direct: DIRECT_EXECUTION_REQUEST_MAGIC_V3,
+  Dealer: DEALER_EQUITY_REQUEST_MAGIC_V3,
+  General: GENERAL_REQUEST_MAGIC_V3,
+});
+
+const HOT_ROUTE_V1 = 'trading/hot_v3::process_hot_execution_v3';
+
+/** The family whose codec owns the magic these request bytes open with. */
+function familyOfRequestV1(request: Uint8Array): string | null {
+  for (const [family, magic] of Object.entries(FAMILY_REQUEST_MAGICS_V1)) {
+    if (magic.every((byte, index) => request[index] === byte)) return family;
+  }
+  return null;
+}
+
+function directIntent(seed: number, side: 0 | 1): SignedDirectIntentV3 {
+  return Object.freeze({
+    maker: address(seed),
+    signature: new Uint8Array(64).fill(seed),
+    intent: Object.freeze({
+      side, lifecycle: 0 as const, outcome: 0, market: address(3), generation: 7n,
+      nonce: BigInt(seed), validFrom: 1n, validThrough: 1_000n,
+      maximumFill: 10n, limitPrice: 5n, feeBasisPoints: 0,
+      collateralAccount: address(seed + 60),
+    }),
+  });
+}
+
+describe('an act declares the family its own request bytes belong to', () => {
+  it('dealer.liquidity is the Dealer family, split out of the envelope it compiles', async () => {
+    const value = dealerFixture();
+    const plan = await compileDealerEquityTransactionV3(value.route, value.request);
+    const [hot] = protocolInstructionsV1(plan.transaction, { [value.route.tradingProgram]: 'trading' });
+    expect(hot).toBeDefined();
+    // The same cut the program makes: envelope, then family request. The
+    // offset is the generated one, so a wider envelope moves both together.
+    const family = familyOfRequestV1(hot!.data.subarray(HOT_FAMILY_REQUEST_OFFSET_V3));
+    expect(family).toBe('Dealer');
+    expect(act('dealer.liquidity').families).toEqual([family]);
+  });
+
+  it('direct.inline is the Direct family, from the request its builder authors', () => {
+    // `compileDirectInlineTransactionV3` needs a whole checked hot route --
+    // two signed intents, a Profile14 account profile, a canonical lookup
+    // table -- and none of that decides the family. The family request does,
+    // and this browser AUTHORS it: `validateDirectInlineInstructionSequenceV3`
+    // then refuses any sequence whose bytes at the same offset are not these.
+    const request = encodeDirectInlineOrdinaryRequestV3(directIntent(11, 0), directIntent(12, 1), 4n, 5n);
+    const family = familyOfRequestV1(request);
+    expect(family).toBe('Direct');
+    expect(act('direct.inline').families).toEqual([family]);
+  });
+
+  it('tells the two families apart, so deriving one proves something', () => {
+    // The negative control. A `familyOfRequestV1` that returned the first key
+    // whatever the bytes would pass both cases above.
+    const dealer = dealerFixture();
+    expect(familyOfRequestV1(dealer.request)).toBe('Dealer');
+    expect(familyOfRequestV1(encodeDirectInlineOrdinaryRequestV3(directIntent(11, 0), directIntent(12, 1), 4n, 5n)))
+      .not.toBe('Dealer');
+    expect(familyOfRequestV1(new Uint8Array(64))).toBeNull();
+  });
+
+  it('pins which acts derived a family and which declare none', () => {
+    // Neither list may move silently. An act that gains a family gains a
+    // compile above, and an act that gains the Hot route without one has to
+    // appear in `PLANNER_AUTHORED_V1` and say who wrote its bytes.
+    expect(CAPABILITY_ACTIONS_V1.filter((one) => one.families.length > 0).map((one) => one.id))
+      .toEqual(['direct.inline', 'dealer.liquidity']);
+    expect(CAPABILITY_ACTIONS_V1
+      .filter((one) => one.routes.includes(HOT_ROUTE_V1) && one.families.length === 0)
+      .map((one) => one.id))
+      .toEqual(['general.consider', 'general.settle', 'general.close']);
+    for (const one of CAPABILITY_ACTIONS_V1) {
+      if (one.families.length > 0 || !one.routes.includes(HOT_ROUTE_V1)) continue;
+      expect(one.id in PLANNER_AUTHORED_V1, `${one.id} declares the Hot route, no family, and no author`).toBe(true);
+    }
+  });
+
+  it('claims no General family, though the browser holds that magic', () => {
+    // The empty case that is easiest to get wrong. `generalPlanV5.ts` DECODES
+    // `DCGREQ03` and would recognise a General request instantly -- but the
+    // three General acts hand back a transaction a reader pasted in, so this
+    // browser compiles no General request and derives no General family from a
+    // fixture's placeholder bytes. The magic being available is not the same
+    // fact as an act's own builder emitting it.
+    expect(FAMILY_REQUEST_MAGICS_V1.General).toBeDefined();
+    for (const id of ['general.consider', 'general.settle', 'general.close']) {
+      expect(act(id).families).toEqual([]);
+      expect(act(id).routes).toContain(HOT_ROUTE_V1);
+    }
+  });
+
+  it('claims no Series family, because no act offers a Series Expire', () => {
+    // Said out loud rather than left as an absence: the second selected gate
+    // the census publishes (`series-ticket: Prepared`) is answered for NOBODY
+    // today, and will be the moment an act declares this family.
+    expect(CAPABILITY_ACTIONS_V1.some((one) => one.families.includes('Series'))).toBe(false);
+    expect(Object.keys(FAMILY_REQUEST_MAGICS_V1)).not.toContain('Series');
+  });
+
+  it('gives every act off the Hot route an empty family by construction', () => {
+    for (const one of CAPABILITY_ACTIONS_V1) {
+      if (one.routes.includes(HOT_ROUTE_V1)) continue;
+      expect(one.families, `${one.id} declares a Hot family and no Hot route`).toEqual([]);
+    }
   });
 });
 

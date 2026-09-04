@@ -362,6 +362,58 @@ def constantName : LedgerSlotFieldV2 → String
 
 end LedgerSlotFieldV2
 
+/-- The lifecycle one manifest-indexed ledger slot walks.
+
+The first per-ROW machine of the eight the route census gates on: one ledger
+account holds a slot for every selected manifest entry, and each of them walks
+these three independently, so there is no single answer per Market and no
+single answer per account.
+
+The three tags were `funding.rs`'s alone -- an `#[repr(u8)]` enum with explicit
+literal discriminants, which is the strongest form Rust offers and is still one
+author.  This module already owned the slot's LAYOUT (`ledgerSlotSchemaV2`,
+whose `.status` field is the byte they are written at); the tags written at that
+byte belonged somewhere else entirely. -/
+inductive LedgerSlotStatusV2 where
+  | pending | active | closed
+  deriving DecidableEq, Repr
+
+namespace LedgerSlotStatusV2
+
+def all : List LedgerSlotStatusV2 := [.pending, .active, .closed]
+
+/-- The wire tag persisted in the slot's status byte. -/
+def tag : LedgerSlotStatusV2 → Nat
+  | .pending => 0
+  | .active => 1
+  | .closed => 2
+
+def constantName : LedgerSlotStatusV2 → String
+  | .pending => "CAPABILITY_FUNDING_LEDGER_STATUS_PENDING_V2"
+  | .active => "CAPABILITY_FUNDING_LEDGER_STATUS_ACTIVE_V2"
+  | .closed => "CAPABILITY_FUNDING_LEDGER_STATUS_CLOSED_V2"
+
+def doc : LedgerSlotStatusV2 → String
+  | .pending => "The exact quote remains prepaid and activation has not run."
+  | .active => "Activation ran once; Rent and Creation have been released."
+  | .closed => "This logical entry has closed and retains no principal."
+
+/-- Whether the slot may still hold principal.  `all_closed` folds the
+complement of this across every row to decide whether the shared ACCOUNT may be
+freed, which is a fact about the ledger rather than about one act on one slot. -/
+def holdsPrincipal : LedgerSlotStatusV2 → Bool
+  | .pending | .active => true
+  | .closed => false
+
+/-- The status an unwritten slot's zero byte decodes as. -/
+def zeroTag : LedgerSlotStatusV2 := .pending
+
+end LedgerSlotStatusV2
+
+/-- One past the greatest slot-status tag: the `STATE_COUNT` that
+`funding_admission_v2.rs` asserts its `u8` bitset against. -/
+def ledgerSlotStatusLimitV2 : Nat := 3
+
 /-- The one exact account width for a canonically bounded manifest count. -/
 def fundingLedgerBytesV2 (slotCount : Nat) : Nat :=
   ledgerHeaderBytesV2 + slotCount * ledgerSlotBytesV2
@@ -589,6 +641,39 @@ theorem state_carries_two_congruent_amount_blocks :
 /-- Every ledger entry has one and only one fixed-width physical slot. -/
 theorem ledger_slot_is_exactly_status_slot_and_seven_remaining_amounts :
     ledgerSlotBytesV2 = 72 := by native_decide
+
+/-- **The three tags `funding.rs` authored alone.**  They are distinct, they
+run from zero, and every one of them indexes its own bit of the `u8` bitset
+`funding_admission_v2.rs` writes as `STATE_COUNT <= 8` plus one `assert!` on the
+last variant; here it is the whole enumeration. -/
+theorem the_slot_statuses_are_distinct_bit_indices :
+    (LedgerSlotStatusV2.all.map LedgerSlotStatusV2.tag) = [0, 1, 2] ∧
+      (LedgerSlotStatusV2.all.map LedgerSlotStatusV2.tag).Nodup ∧
+      LedgerSlotStatusV2.all.all
+        (fun status => LedgerSlotStatusV2.tag status < ledgerSlotStatusLimitV2) = true ∧
+      ledgerSlotStatusLimitV2 ≤ 8 := by
+  native_decide
+
+/-- **Pending is the zero tag, so a zeroed slot is a prepaid one.**  A ledger
+account is created at its exact width and every slot in it reads `Pending`
+before anything is written, which is precisely the intended initial state --
+the one place in this record where an unwritten byte and a meaningful state
+coincide on purpose.  The partition against an unwritten ACCOUNT is
+`CAPABILITY_FUNDING_LEDGER_MAGIC_V2` in the header, never a slot's status
+byte. -/
+theorem the_zero_tag_is_pending_so_a_fresh_slot_is_prepaid :
+    LedgerSlotStatusV2.tag LedgerSlotStatusV2.zeroTag = 0 ∧
+      LedgerSlotStatusV2.zeroTag = .pending ∧
+      LedgerSlotStatusV2.all.filter LedgerSlotStatusV2.holdsPrincipal =
+        [.pending, .active] := by
+  native_decide
+
+/-- The status byte is the slot's first, so a slot's address and its tag's
+address differ by nothing: the reader's arithmetic is
+`headerBytes + rowBytes * row`, with no third term. -/
+theorem the_status_heads_the_slot :
+    coordinate? LedgerSlotFieldV2.status ledgerSlotLayoutV2 = some (0, 1) := by
+  native_decide
 
 /-- A four-entry subset uses the exact dynamic width rather than reserving the
 sixteen-entry maximum. -/
