@@ -51,6 +51,17 @@
   margin: 0;
 }
 
+/* A GRID ITEM DEFAULTS TO `min-width: auto`, WHICH IS ITS CONTENT'S WIDTH.
+   So `.viz-table`'s exact-values table -- five columns of atoms, 382px wide on
+   the claims strip -- pushed this figure's only column out to 382 inside a
+   366px main, and the page scrolled sideways the moment a reader opened the
+   twin at 390. The scroller under it never engaged, because its parent had
+   already grown to fit it: a container that is allowed to grow is not a
+   container. Measured 2026-09-04 on /markets/3Qyt…a4T2 at 390x844 -- closed
+   390, twin opened 419 -- which is exactly what the comment below promises does
+   not happen. It applies to the SVG holder too, and costs nothing there: that
+   svg is `width: 100%` of whatever the column ends up being. */
+.viz-figure > * { min-width: 0; }
 .viz-figure svg { display: block; width: 100%; height: auto; }
 /* Many-celled strips scroll inside their own container on narrow screens —
    the page body never scrolls horizontally, and slots keep a usable width. */

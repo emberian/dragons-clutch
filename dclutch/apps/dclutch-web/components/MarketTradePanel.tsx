@@ -229,17 +229,37 @@ export default function MarketTradePanel({
 
   const stepAt = (index: FlowStepIndexV1) => steps[index - 1]!;
 
-  return <section className="trade-v3-card">
-    <header><span>06</span><div><h2>Trade this market</h2><p>Pick an outcome, choose how much, and take one signed offer at the price its maker set.</p></div></header>
+  /*
+    THE VERDICT COMES FIRST, AND THE RE-READ IS NOT THE VERDICT.
 
-    <div className="direct-actions">
-      <button type="button" onClick={() => void inspect()}>Ask the chain about trading here</button>
-    </div>
-    <p className="direct-status" aria-live="polite">{spineStatus}</p>
+    "Ask the chain about trading here" stood at the top of this section, above
+    the wall it produces, so a market that cannot trade led with a green button
+    inviting a reader to ask about trading it — and the answer, "This market is
+    not open for trading", sat underneath. The read runs on mount either way;
+    that control is a RE-READ, which is what every other section on this page
+    calls it and where every other section puts it: in the card header, beside
+    the title, at header weight. So it moves there, and its label says which of
+    the two acts it is rather than promising a first ask that already happened.
+
+    What is left in the body is the answer: the gate when there is a wall, the
+    stepper when there is not. When the gate is closed the only action offered
+    is the gate card's own link to the markets that ARE open, which is the true
+    remedy for a wall no reader can move.
+  */
+  return <section className="trade-v3-card">
+    <header>
+      <span>06</span>
+      <div><h2>Trade this market</h2><p>Pick an outcome, choose how much, and take one signed offer at the price its maker set.</p></div>
+      <div className="direct-actions">
+        <button type="button" onClick={() => void inspect()}>{spine === null ? 'Ask the chain about trading here' : 'Ask the chain again'}</button>
+      </div>
+    </header>
+
+    {gate !== null && gate.kind === 'closed' && <MarketGateCard gate={gate} />}
 
     {spine !== null && spine.status === 'refused' && <p className="market-refusal">Refused: {spine.reason}</p>}
 
-    {gate !== null && gate.kind === 'closed' && <MarketGateCard gate={gate} />}
+    <p className="direct-status" aria-live="polite">{spineStatus}</p>
 
     {inspected !== null && gate !== null && gate.kind === 'open' && <FlowRail steps={steps} />}
 
@@ -438,8 +458,10 @@ export default function MarketTradePanel({
       </FlowStep>
     </>}
 
+    {/* The workbench link is RELOCATED, not deleted: it now sits in the market
+        page's "For operators and auditors" region, which is what it is. What
+        stays here is the one link a reader of this market wants next. */}
     <footer className="flow-footer">
-      <Anchor className="secondary-action" href="/trade">Advanced: full route workbench →</Anchor>
       <Anchor className="secondary-action" href={`/explorer?view=market&q=${encodeURIComponent(marketAddress)}`}>See this market in the explorer →</Anchor>
     </footer>
   </section>;

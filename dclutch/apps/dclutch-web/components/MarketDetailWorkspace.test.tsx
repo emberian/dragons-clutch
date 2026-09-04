@@ -83,6 +83,44 @@ describe('Market detail route', () => {
     expect(html).not.toContain('Sign');
     expect(html).not.toContain('Submit');
   });
+
+  /**
+   * THE READER'S ORDER, pinned by position rather than by presence.
+   *
+   * Every section this page renders was present before and is present now; what
+   * changed is which of them a reader meets first. So an assertion that merely
+   * finds each string would have passed on the old page and says nothing. These
+   * compare INDEXES: the answer and what it means come before the claims and
+   * the history, those come before the trade, and the operator region comes
+   * last -- after everything a reader needs to know what happened here.
+   */
+  it('orders the page for a reader and puts the operator sections last', () => {
+    const at = (needle: string) => {
+      const index = html.indexOf(needle);
+      expect(index, `${needle} is not on the page`).toBeGreaterThan(-1);
+      return index;
+    };
+    expect(at('aria-label="Market decision facts"')).toBeLessThan(at('Where claims sit'));
+    expect(at('Where claims sit')).toBeLessThan(at('For operators and auditors'));
+    expect(at('For operators and auditors')).toBeLessThan(at("In the protocol&#x27;s own words"));
+    expect(at("In the protocol&#x27;s own words")).toBeLessThan(at('Advanced: full route workbench'));
+    // The region names itself to a screen reader by its own heading, and every
+    // section inside it is a real disclosure rather than a hidden div.
+    expect(html).toContain('aria-labelledby="operator-fold-heading"');
+    expect(html).toContain('id="operator-fold-heading"');
+  });
+
+  /**
+   * The fold COUNTS itself. Before the read there is exactly one section in it
+   * -- identity -- because a Realm that has not bound, a capability manifest
+   * that has not authenticated and a retirement checkpoint on an undecoded
+   * market are not sections, and a region that says "four" while rendering one
+   * is the kind of claim this page exists not to make.
+   */
+  it('says how many sections the operator region actually holds', () => {
+    expect(html).toContain('1 section this page already read');
+    expect(html.split('<details').length - 1).toBeGreaterThanOrEqual(2);
+  });
 });
 
 /**

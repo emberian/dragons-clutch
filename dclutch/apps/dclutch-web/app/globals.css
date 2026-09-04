@@ -1099,7 +1099,15 @@ footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: va
 .outcome-vector li { min-width: 0; padding: var(--sp-4); border: 1px solid var(--line); border-radius: var(--r-md); background: rgba(1,8,4,.42); }
 .outcome-vector li.winning-outcome { border-color: rgba(185,255,100,.3); background: rgba(185,255,100,.05); }
 .outcome-vector span, .outcome-vector strong, .outcome-vector small { display: block; }
-.outcome-vector span { color: #7d8c83; font: var(--fs-micro) var(--font-geist-mono); text-transform: uppercase; letter-spacing: .06em; }
+/* THE CLAIMS-PER-OUTCOME LEDGER's own label, which is an outcome's NAME.
+   It was set at --fs-micro, uppercase, mono -- the chip treatment, whose own
+   entry in the scale above says NEVER a sentence. On a registered market that
+   label reads "claim 1 · $102 – $106", which is a name with a range in it, and
+   uppercasing it mangled the range while 10px mono made the one word that says
+   WHICH cell this card is about the smallest text in the card. Names are sans
+   and on the scale; the count below it stays mono, because the count is a
+   value. */
+.outcome-vector span { color: #93a199; font: var(--fs-small)/1.45 var(--font-geist-sans), system-ui, sans-serif; letter-spacing: 0; }
 .outcome-vector strong { margin-top: var(--sp-2); color: #d6e0d8; font: var(--fs-h3)/1.25 var(--font-geist-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .outcome-vector li.winning-outcome strong { color: var(--acid); }
 .outcome-vector small { margin-top: var(--sp-2); color: #8a988e; font-size: var(--fs-small); line-height: 1.45; }
@@ -1113,6 +1121,22 @@ footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: va
 .market-detail-drawer > summary { cursor: pointer; color: #c4d1c7; font-size: var(--fs-base); line-height: var(--lh-body); }
 .market-detail-drawer[open] > summary { color: var(--signal); }
 .market-detail-drawer-body { display: grid; gap: var(--sp-4); min-width: 0; padding-top: var(--sp-4); }
+
+/* THE OPERATOR FOLD. One region at the foot of a market page holding every
+   section that is a fact about the operator's side of the market -- identity
+   and content ids, the Realm, the capability manifest, the retirement
+   checkpoint -- each in its own native disclosure, closed. It is quieter than
+   a card on purpose: it is the end of the page, not another claim on the
+   reader's attention, and its own heading is what tells them whose it is. */
+.operator-fold { display: grid; gap: var(--sp-3); min-width: 0; margin-top: var(--sp-6); padding: var(--sp-5) 0 0; border-top: 1px solid var(--line); }
+.operator-fold > header { display: grid; gap: var(--sp-2); margin-bottom: var(--sp-2); }
+.operator-fold h2 { margin: 0; color: #8a988e; font: var(--fs-micro) var(--font-geist-mono); text-transform: uppercase; letter-spacing: .08em; }
+.operator-fold > header p { max-width: 72ch; margin: 0; color: #93a199; font-size: var(--fs-base); line-height: var(--lh-body); }
+.operator-fold .market-detail-drawer { margin: 0; }
+.operator-fold > footer { margin-top: var(--sp-2); }
+/* The retirement drawer's body carries a whole card's worth of content, and
+   its own status paragraph is prose rather than a card's status line. */
+.retirement-drawer .direct-status { max-width: 78ch; }
 .market-provenance-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-3); }
 .capability-drawers { display: grid; gap: var(--sp-2); }
 .capability-entry { display: grid; gap: var(--sp-4); padding: var(--sp-4); border: 1px solid var(--line); border-radius: var(--r-md); background: rgba(1,8,4,.4); }
@@ -1478,6 +1502,19 @@ footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: va
    not one-word labels, so they are sans and allowed to wrap. The cells stay
    mono, because the cells are values. */
 .holders-table th { color: #8a988e; font-family: var(--font-geist-sans), system-ui, sans-serif; font-size: var(--fs-small); text-transform: none; letter-spacing: 0; white-space: normal; }
+/* A cell that carries a SENTENCE rather than a value. The transaction reading
+   on a market page names what each transaction was ("a Trading act whose
+   leading bytes select no route the general controller knows"), and a mono
+   nowrap cell is the wrong instrument for that: it cannot wrap, so the row
+   grows until the table needs its scroller for a reason that is prose. Sans,
+   on the scale, allowed to wrap, with a floor so the column is not squeezed to
+   one word per line. */
+.holders-table td.table-sentence { max-width: 44ch; min-width: 22ch; font-family: var(--font-geist-sans), system-ui, sans-serif; font-size: var(--fs-small); line-height: var(--lh-body); white-space: normal; }
+/* The fine print inside a cell was rendering at 9.6px -- the browser's `small`
+   factor applied to --fs-tiny, which is not a step on this scale at all -- in
+   mono, nowrap, while carrying the longest sentences in the table (a refusal
+   reason, or why an act could not be named). */
+.holders-table td small { display: block; margin-top: var(--sp-1); color: #8a988e; font-family: var(--font-geist-sans), system-ui, sans-serif; font-size: var(--fs-small); line-height: var(--lh-body); white-space: normal; }
 
 /* THE POPULATION PAGE. Many markets side by side, which is the one layout this
    app did not have: every other surface draws one market's quantities, so its

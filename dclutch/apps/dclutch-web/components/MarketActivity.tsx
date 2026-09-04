@@ -302,10 +302,13 @@ export function MarketActivityView({ state, denomination, outcomes, onReread }: 
                 {activity.rows.map((row) => <tr key={row.signature}>
                   <td>{instantV1(row.blockTime)}</td>
                   <td>{row.slot}</td>
-                  <td>
+                  {/* Prose, not a value: what a transaction WAS is a sentence,
+                      and it gets the sentence treatment rather than the dense
+                      mono nowrap every other cell here correctly uses. */}
+                  <td className="table-sentence">
                     {actV1(row)}
-                    {row.unnamedReason === null ? null : <><br /><small>{row.unnamedReason}</small></>}
-                    {row.succeeded ? null : <><br /><small>refused: {row.errorText ?? 'no reason given'}</small></>}
+                    {row.unnamedReason === null ? null : <small>{row.unnamedReason}</small>}
+                    {row.succeeded ? null : <small>refused: {row.errorText ?? 'no reason given'}</small>}
                   </td>
                   <td>{row.feeLamports}</td>
                   <td><code title={row.signature}>{shortSignatureV1(row.signature)}</code></td>

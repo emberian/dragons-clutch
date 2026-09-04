@@ -4,7 +4,7 @@ import PageShell from '@/components/PageShell';
 import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
 import { Card, CardContent } from '@/components/ui/card';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 
 import { useDeploymentV1 } from '@/lib/deploymentStore';
 
@@ -575,6 +575,112 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
   const redemption = decoded === null ? null : marketRedemptionStateV1(decoded);
   const decisionStats = marketDecisionStatsV1(decoded, activation, denomination, narrative, detail?.phaseMeaning ?? null, derived, nowMs, selectorJoin);
 
+  /**
+   * THE OPERATOR FOLD, built as a list so the region can COUNT it.
+   *
+   * Four sections used to sit in the reader's own flow, between the answer and
+   * the trade: the market's identity and immutable content ids, the Realm it
+   * pays out in, the capability manifest's funding compartments, and the
+   * retirement checkpoint's four durable steps. Every one of them is a fact
+   * about the OPERATOR's side of this market. None of them changes what a
+   * reader here concludes, and together they were most of a 6,159px page.
+   *
+   * They are not removed and they are not summarized: each is the same element
+   * it was, whole, one keypress away inside a native `<details>` — which is the
+   * whole reason this is a disclosure and not a tab or a `hidden` div. A
+   * `<summary>` is focusable, operable with Enter and Space, and announced with
+   * its expanded state by every screen reader, with no ARIA to get wrong.
+   *
+   * The count below is read off this array rather than typed, because a
+   * sentence that says "four sections" while three render is the kind of claim
+   * this page exists to not make: a market whose Realm did not bind, or whose
+   * capability manifest did not authenticate, contributes a REFUSAL instead
+   * (rendered after the fold, never inside a closed drawer — a refusal that has
+   * to be opened to be seen is a refusal nobody read).
+   */
+  const operatorFold: ReadonlyArray<Readonly<{ id: string; node: ReactNode }>> = [
+    {
+      id: 'identity',
+      node: <details className="market-detail-drawer">
+        <summary>{"In the protocol's own words · identity and immutable content"}</summary>
+        <div className="market-detail-drawer-body">
+        {decoded === null
+          ? refused === null && <p className="market-empty">Not read yet.</p>
+          : <>
+            <dl className="detail-facts">
+              <CopyableAddress label="Market address" address={decoded.address} />
+              <Fact label="Phase" value={decoded.phase} />
+              <Fact label="Read at finalized slot" value={decoded.observedSlot} />
+              <Fact label="Schema" value={`${decoded.identity.schemaMagic} · version ${decoded.identity.schemaVersion}`} />
+              <Fact label="Account width" value={`${decoded.identity.accountBytes} bytes, exact`} />
+              <Fact label="Founding readiness" value={decoded.readiness} />
+              <Fact label="Generation" value={decoded.generation} />
+              <Fact label="Outstanding capabilities" value={decoded.outstandingCapabilities} />
+              <Fact label="Permissions checked against" value={decoded.identity.registryProgram} />
+              <Fact label="Rent goes back to" value={decoded.identity.rentBeneficiary} />
+            </dl>
+            <p className="phase-meaning"><strong>{decoded.phase}</strong> {detail?.phaseMeaning}</p>
+            {/* The chain has no phase for a market whose trading can never be
+                switched on, so the page says it beside the phase rather than
+                leaving a reader to infer it from an elapsed deadline. */}
+            {activation.status === 'never' && <p className="market-never-trades-note">
+              Trading can never be switched on. The window closed at slot {activation.lastActivationSlot}.
+            </p>}
+            <h3 className="detail-subhead">What it locked itself to</h3>
+            <dl className="detail-facts">
+              <ContentId label="Its collateral setup" value={decoded.identity.realmId} />
+              <ContentId label="The kind of market it is" value={decoded.identity.productRecordId} />
+              <ContentId label="This particular market" value={decoded.identity.productInstanceId} />
+              <ContentId label="How it gets its answer" value={decoded.identity.resolutionPolicyId} />
+              <ContentId label="What it is allowed to do" value={decoded.identity.capabilityManifestId} />
+              <ContentId label="Which release runs it" value={decoded.identity.selectedReleaseSetId} />
+            </dl>
+            <ul className="market-bindings">
+              {decoded.bindings.map((check) => (
+                <li key={check.label} className={check.ok ? 'check-pass' : 'check-fail'}>
+                  <span aria-hidden="true">{check.ok ? '✓' : '×'}</span>
+                  <div><strong>{check.label}</strong><small>{check.detail}</small></div>
+                </li>
+              ))}
+            </ul>
+          </>}
+        </div>
+      </details>,
+    },
+    ...(decoded !== null && decoded.collateral.status === 'bound'
+      ? [{
+        id: 'realm',
+        node: <details className="market-detail-drawer">
+          <summary>Realm · payout asset</summary>
+          <div className="market-detail-drawer-body"><Realm collateral={decoded.collateral} /></div>
+        </details>,
+      }]
+      : []),
+    ...(decoded !== null && decoded.capabilities.status === 'authenticated'
+      ? [{
+        id: 'capabilities',
+        node: <details className="market-detail-drawer">
+          <summary>Capability manifest · funding and releases</summary>
+          <div className="market-detail-drawer-body"><Capabilities capabilities={decoded.capabilities} clock={clock} nowMs={nowMs} /></div>
+        </details>,
+      }]
+      : []),
+    ...(decoded === null
+      ? []
+      : [{
+        id: 'retirement',
+        node: <AggregateRetirementStatus
+          endpoint={deployment.endpoint}
+          coreProgramId={deployment.programs.core}
+          claimsProgramId={deployment.programs.claims}
+          marketAddress={address}
+          marketPhase={decoded.phase}
+          marketGeneration={decoded.generation}
+          minimumContextSlot={state.kind === 'ready' ? state.detail.floorSlot : decoded.observedSlot}
+        />,
+      }]),
+  ];
+
   return <PageShell className="product-shell trade-v3-shell" header={<Nav current="/markets" status={`${deployment.label} · read live`} />}>
 
     <section className="trade-v3-hero">
@@ -709,52 +815,6 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
 
     {decoded !== null && decoded.bindings.filter((check) => !check.ok).map((check) => <p className="market-refusal" key={check.label}><strong>{check.label}</strong> {check.detail}</p>)}
 
-    <details className="market-detail-drawer">
-      <summary>In the protocol&apos;s own words · identity and immutable content</summary>
-      <div className="market-detail-drawer-body">
-      {decoded === null
-        ? refused === null && <p className="market-empty">Not read yet.</p>
-        : <>
-          <dl className="detail-facts">
-            <CopyableAddress label="Market address" address={decoded.address} />
-            <Fact label="Phase" value={decoded.phase} />
-            <Fact label="Read at finalized slot" value={decoded.observedSlot} />
-            <Fact label="Schema" value={`${decoded.identity.schemaMagic} · version ${decoded.identity.schemaVersion}`} />
-            <Fact label="Account width" value={`${decoded.identity.accountBytes} bytes, exact`} />
-            <Fact label="Founding readiness" value={decoded.readiness} />
-            <Fact label="Generation" value={decoded.generation} />
-            <Fact label="Outstanding capabilities" value={decoded.outstandingCapabilities} />
-            <Fact label="Permissions checked against" value={decoded.identity.registryProgram} />
-            <Fact label="Rent goes back to" value={decoded.identity.rentBeneficiary} />
-          </dl>
-          <p className="phase-meaning"><strong>{decoded.phase}</strong> {detail?.phaseMeaning}</p>
-          {/* The chain has no phase for a market whose trading can never be
-              switched on, so the page says it beside the phase rather than
-              leaving a reader to infer it from an elapsed deadline. */}
-          {activation.status === 'never' && <p className="market-never-trades-note">
-            Trading can never be switched on. The window closed at slot {activation.lastActivationSlot}.
-          </p>}
-          <h3 className="detail-subhead">What it locked itself to</h3>
-          <dl className="detail-facts">
-            <ContentId label="Its collateral setup" value={decoded.identity.realmId} />
-            <ContentId label="The kind of market it is" value={decoded.identity.productRecordId} />
-            <ContentId label="This particular market" value={decoded.identity.productInstanceId} />
-            <ContentId label="How it gets its answer" value={decoded.identity.resolutionPolicyId} />
-            <ContentId label="What it is allowed to do" value={decoded.identity.capabilityManifestId} />
-            <ContentId label="Which release runs it" value={decoded.identity.selectedReleaseSetId} />
-          </dl>
-          <ul className="market-bindings">
-            {decoded.bindings.map((check) => (
-              <li key={check.label} className={check.ok ? 'check-pass' : 'check-fail'}>
-                <span aria-hidden="true">{check.ok ? '✓' : '×'}</span>
-                <div><strong>{check.label}</strong><small>{check.detail}</small></div>
-              </li>
-            ))}
-          </ul>
-        </>}
-      </div>
-    </details>
-
     {refused === null && <section className="trade-v3-card">
       <header><span>01</span><div><h2>Where claims sit</h2><p>{SUPPLY_SHARE_MEANING_V1}</p></div></header>
       {decoded === null
@@ -865,14 +925,6 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
       outcomes={narrative.outcomes}
     />}
 
-    {decoded !== null && (decoded.collateral.status === 'bound'
-      ? <details className="market-detail-drawer"><summary>Realm · payout asset</summary><div className="market-detail-drawer-body"><Realm collateral={decoded.collateral} /></div></details>
-      : <p className="market-refusal">{decoded.collateral.reason}</p>)}
-
-    {decoded !== null && (decoded.capabilities.status === 'authenticated'
-      ? <details className="market-detail-drawer"><summary>Capability manifest · funding and releases</summary><div className="market-detail-drawer-body"><Capabilities capabilities={decoded.capabilities} clock={clock} nowMs={nowMs} /></div></details>
-      : <p className="market-capability-refusal"><span>{decoded.capabilities.status === 'unread' ? 'capabilities unread' : 'capabilities refused'}</span>{decoded.capabilities.reason}</p>)}
-
     {decoded !== null && <MarketTradePanel
       endpoint={deployment.endpoint}
       marketAddress={address}
@@ -889,15 +941,26 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
       nowMs={nowMs}
     />}
 
-    {decoded !== null && <AggregateRetirementStatus
-      endpoint={deployment.endpoint}
-      coreProgramId={deployment.programs.core}
-      claimsProgramId={deployment.programs.claims}
-      marketAddress={address}
-      marketPhase={decoded.phase}
-      marketGeneration={decoded.generation}
-      minimumContextSlot={state.kind === 'ready' ? state.detail.floorSlot : decoded.observedSlot}
-    />}
+    <section className="operator-fold" aria-labelledby="operator-fold-heading">
+      <header>
+        <h2 id="operator-fold-heading">For operators and auditors</h2>
+        <p>
+          {`${operatorFold.length} section${operatorFold.length === 1 ? '' : 's'}`} this page already read
+          and a reader does not need in order to know what happened here. Each is closed, and each is
+          whole when you open it.
+        </p>
+      </header>
+      {operatorFold.map((entry) => <div key={entry.id}>{entry.node}</div>)}
+      {decoded !== null && decoded.collateral.status !== 'bound' && <p className="market-refusal">{decoded.collateral.reason}</p>}
+      {decoded !== null && decoded.capabilities.status !== 'authenticated' && <p className="market-capability-refusal"><span>{decoded.capabilities.status === 'unread' ? 'capabilities unread' : 'capabilities refused'}</span>{decoded.capabilities.reason}</p>}
+      {/* RELOCATED from the trade panel's footer, where it sat beside the
+          explorer link as though the two were the same kind of offer. The
+          explorer is where a reader goes to see what this market is connected
+          to; the workbench is where an operator drives a route by hand. */}
+      <footer className="flow-footer">
+        <Anchor className="secondary-action" href="/trade">Advanced: full route workbench →</Anchor>
+      </footer>
+    </section>
 
   </PageShell>;
 }

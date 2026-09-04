@@ -43,10 +43,39 @@ describe('the market-detail trade panel', () => {
     expect(DIRECT_PRESTATE_WALL_V1.name).toBe('prestate');
   });
 
-  it('starts from an honest empty state and links the advanced workbench', () => {
+  it('starts from an honest empty state', () => {
     expect(html).toContain('The chain has not been asked about trading this Market yet.');
     expect(html).toContain('Ask the chain about trading here');
-    expect(html).toContain('Advanced: full route workbench');
+  });
+
+  /**
+   * The workbench link is RELOCATED, not weakened -- the same treatment this
+   * file already gives the resumption promise below.
+   *
+   * It sat in this footer beside "See this market in the explorer", as though
+   * driving a route by hand and looking at what a market is connected to were
+   * the same kind of offer to the same reader. It now lives in the market
+   * page's "For operators and auditors" region, and
+   * `MarketDetailWorkspace.test.tsx` holds it there. This assertion exists so
+   * that "it moved" can never quietly become "it went".
+   */
+  it('leaves the advanced workbench to the operator fold, and keeps the explorer', () => {
+    expect(html).not.toContain('Advanced: full route workbench');
+    expect(html).toContain('See this market in the explorer');
+  });
+
+  /**
+   * THE VERDICT COMES FIRST. The re-read control is a control, not an answer:
+   * it used to stand in the body above the wall it produces, so the first thing
+   * a market that cannot trade offered was a button inviting a reader to ask
+   * about trading it. It is in the header now, where every other section on
+   * this page puts its re-read, and the body opens on what the chain said.
+   */
+  it('puts the re-read in the header and opens the body with what the chain said', () => {
+    const header = html.slice(0, html.indexOf('</header>'));
+    expect(header).toContain('Ask the chain about trading here');
+    const body = html.slice(html.indexOf('</header>'));
+    expect(body).not.toContain('<button');
   });
 
   it('never invents market-data metrics on a trading surface', () => {

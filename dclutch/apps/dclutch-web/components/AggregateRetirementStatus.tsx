@@ -72,15 +72,27 @@ export default function AggregateRetirementStatus({
   const inspection = state.kind === 'ready' ? state.inspection : null;
   const hostile = inspection?.status === 'refused' || inspection?.status === 'blocked-liabilities';
 
-  return <section className="trade-v3-card route-card">
-    <header>
-      <span>07</span>
-      <div>
-        <h2>Retirement checkpoint</h2>
-        <p>You can see whether this Market has reached the packet-bounded retirement waist and, if it has, which durable step comes next. The account is derived from this Market and decoded from the Rust-owned generated ABI. Browser storage is never treated as progress.</p>
-      </div>
-      <div className="direct-actions"><button type="button" onClick={() => void inspect()} disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading…' : 'Re-read retirement'}</button></div>
-    </header>
+  /**
+   * The summary line, read off the state rather than written.
+   *
+   * This section is a DISCLOSURE now, and a disclosure's summary is the only
+   * thing a reader sees until they open it — so a fixed "Retirement checkpoint"
+   * would make every market's fold look identical while their checkpoints are
+   * not. The status and the next durable step both come from the inspection,
+   * and before it returns the line says which of the two silences this is: a
+   * read still running, or a read that refused.
+   */
+  const summary = inspection !== null
+    ? `Retirement checkpoint · ${inspection.status.replaceAll('-', ' ')} · next durable step ${inspection.nextStep}`
+    : state.kind === 'refused'
+      ? 'Retirement checkpoint · the read refused'
+      : 'Retirement checkpoint · reading';
+
+  return <details className="market-detail-drawer retirement-drawer">
+    <summary>{summary}</summary>
+    <div className="market-detail-drawer-body">
+    <p>You can see whether this Market has reached the packet-bounded retirement waist and, if it has, which durable step comes next. The account is derived from this Market and decoded from the Rust-owned generated ABI. Browser storage is never treated as progress.</p>
+    <div className="direct-actions"><button type="button" onClick={() => void inspect()} disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading…' : 'Re-read retirement'}</button></div>
 
     {inspection === null
       ? <p className={state.kind === 'refused' ? 'market-refusal' : 'direct-status'} aria-live="polite">{state.kind === 'ready' ? 'The retirement read returned no inspection.' : state.message}</p>
@@ -112,5 +124,6 @@ export default function AggregateRetirementStatus({
       <Anchor href="/operate">Inspect the operator boundary →</Anchor>
     </div>
     <p className="direct-status">You still need a checked release that selects this exact route and the Rust-authored four-step campaign with one durable crash journal per mutation. A local-validator execution is not devnet execution. This page never reconstructs the original bundle, opens a wallet, signs, or submits.</p>
-  </section>;
+    </div>
+  </details>;
 }

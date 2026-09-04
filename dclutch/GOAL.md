@@ -4526,3 +4526,12 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   undrivable as shipped** → COHORT-15F told before it spends. Started 07:00 EDT: PROGRAMS-16B (General's one lifecycle
   policy across fifteen actions; the ladder founded the way the founding founds).
 - Cuts: `df2eabdb2`.
+- WEB-PAGE closed (`8080bce96`): the featured page reader-first — answer → stats → what it means → how the chain got it →
+  the read → where claims sit → what happened → trade → **one "For operators and auditors" fold** (native disclosures; the
+  retirement checkpoint's summary derived live); the verdict before the button; three type-scale fixes (a 9.6-px fine
+  print, 10-px uppercase mono outcome labels); **a containment bug: a grid item's `min-width: auto` made the PAGE scroll
+  sideways at 390 px when the exact-values twin opened** — fixed and swept with every disclosure force-opened. Desktop
+  6,159 → 5,396 CSS px, mobile 9,186 → 7,972, words 1,288 → 1,141; a11y 0 in every category; 359 tests green. Note for
+  captures: the dev server reads public devnet unless the RPC is rewritten at request time — a half-rendered page reads
+  `words=924`.
+- Cuts: `564086bc6`.
