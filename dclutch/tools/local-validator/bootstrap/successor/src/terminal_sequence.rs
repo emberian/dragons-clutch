@@ -17,7 +17,7 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use dclutch_capability_contract::{
-    CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, derive_funded_rent_rate_v2, funded_rent_minimum_v2,
+    CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, funded_rent_minimum_v2,
 };
 use dclutch_capability_program_contract::{
     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1, set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
@@ -71,6 +71,9 @@ use dclutch_rent_contract::lifecycle_v2::{
 };
 use dclutch_resolution_codec::{
     SOURCE_CLOSURE_RECEIPT_BYTES_V3, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SourceClosureReceiptV3,
+};
+use dclutch_resolution_core_v3_operator::funded_rent_recovery_v1::{
+    FundedRentReadingV2, recover_funded_rent_rate_v2,
 };
 use dclutch_source_contract::{
     RECOVERY_POLICY_SCHEMA_ID_V2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
@@ -1262,10 +1265,14 @@ pub(crate) fn build_protocol_stage_journal_v1(
             ));
         }
     }
-    authenticate_supplied_terminal_lookup_table_v1(frozen_addresses, frozen_table, funded_rent_rate)
-        .map_err(
-        |_| refusal("terminal stage lookup table was not the exact activated frozen stable union"),
-    )?;
+    authenticate_supplied_terminal_lookup_table_v1(
+        frozen_addresses,
+        frozen_table,
+        funded_rent_rate,
+    )
+    .map_err(|_| {
+        refusal("terminal stage lookup table was not the exact activated frozen stable union")
+    })?;
     let (recent_blockhash, last_valid_block_height) = terminal_latest_blockhash(rpc)?;
     let compiled = compile_v0_message_with_optional_tables(
         payer,
@@ -4173,11 +4180,9 @@ pub(crate) fn plan_resolution_close_from_chain_v1(
     // rederivation that turns the session's own correct arithmetic into a
     // surplus. It stays an upper bound: a seat carrying more than it was
     // prepaid still refuses.
-    let exact_receipt_rent = funded_rent_minimum_v2(
-        session_funded_rent_rate,
-        SOURCE_CLOSURE_RECEIPT_BYTES_V3,
-    )
-    .map_err(|error| Error::new(format!("closure receipt funded rent rate: {error:?}")))?;
+    let exact_receipt_rent =
+        funded_rent_minimum_v2(session_funded_rent_rate, SOURCE_CLOSURE_RECEIPT_BYTES_V3)
+            .map_err(|error| Error::new(format!("closure receipt funded rent rate: {error:?}")))?;
     if close_snapshot.closure_destination.owner != system_program::ID
         || close_snapshot.closure_destination.executable
         || !close_snapshot.closure_destination.data.is_empty()
@@ -5875,8 +5880,7 @@ fn fresh_protocol_stage_from_chain_v1(
                 payer,
                 &[table],
                 funded_rent_rate,
-            )?
-            {
+            )? {
                 ChainResolutionCloseV1::Submit { stage, .. } => Ok(stage),
                 ChainResolutionCloseV1::NeedsReceiptPrepay { .. } => Err(refusal(
                     "Resolution CloseFund remains blocked on its durable receipt prepayment",
@@ -6649,11 +6653,9 @@ pub(crate) fn authenticate_lookup_infrastructure_planned_journal_v1(
             "terminal ALT durable prestate differed from the fresh finalized canonical route",
         ));
     }
-    let table_lamports = funded_rent_minimum_v2(
-        funded_rent_rate,
-        lookup_table_data_len(addresses.len())?,
-    )
-    .map_err(|error| refusal(&format!("terminal ALT funded rent rate: {error:?}")))?;
+    let table_lamports =
+        funded_rent_minimum_v2(funded_rent_rate, lookup_table_data_len(addresses.len())?)
+            .map_err(|error| refusal(&format!("terminal ALT funded rent rate: {error:?}")))?;
     let top_up = table_lamports
         .checked_sub(table.lamports)
         .ok_or_else(|| refusal("terminal ALT authorization required a rent refund"))?;
@@ -7516,8 +7518,7 @@ fn build_terminal_sequence_completion_v1(
         canonical_completion_relative_path_v1(evidence_root, &arguments.journal_dir, true)?;
     let session_path =
         canonical_completion_relative_path_v1(evidence_root, &arguments.session, false)?;
-    let expected =
-        terminal_completion_expected_journals_v1(arguments, session, lookup_addresses)?;
+    let expected = terminal_completion_expected_journals_v1(arguments, session, lookup_addresses)?;
     let expected_paths = expected
         .iter()
         .map(|(path, _)| fs::canonicalize(path))
@@ -7993,23 +7994,52 @@ fn load_or_create_terminal_session_v1(
         None,
     )?;
     let lookup_addresses = terminal_lookup_union_from_closures_v1(arguments.payer, &closures)?;
-    let snapshot = finalized_snapshot(rpc, &[source_receipt, sysvar::rent::ID])?;
-    let rent: Rent = bincode::deserialize(&snapshot.account(sysvar::rent::ID)?.data)
-        .map_err(|error| Error::new(format!("terminal session Rent sysvar: {error}")))?;
+    let snapshot = finalized_snapshot(rpc, &[source_receipt, arguments.market])?;
     let receipt = snapshot.account(source_receipt)?;
-    let receipt_rent_lamports = rent.minimum_balance(SOURCE_CLOSURE_RECEIPT_BYTES_V3);
-    // THE ONE READING THIS SESSION EVER TAKES. Everything downstream prices
-    // against the recorded rate, not against a fresh sysvar.
-    let funded_rent_rate = derive_funded_rent_rate_v2(
-        rent.minimum_balance(0),
-        SOURCE_CLOSURE_RECEIPT_BYTES_V3,
-        receipt_rent_lamports,
-    )
-    .map_err(|error| {
+    let market_account = snapshot.account(arguments.market)?;
+    // THE RATE THE ACCOUNTS THIS SEQUENCE TOUCHES WERE FUNDED AT, AND NOT THE
+    // CLUSTER'S RATE OF THE MOMENT.
+    //
+    // This read the Rent sysvar, which answers what an account created NOW
+    // would cost -- and every account a terminal sequence prices was created by
+    // a founding that may long predate the reading. Devnet dropped its
+    // rent-exempt rate from 6,333 to 5,080 lamports per byte at the epoch-1141
+    // boundary with cohort-15 live on it, and all five of this sequence's rent
+    // guards then refused accounts nobody had touched.
+    //
+    // So the rate is RECOVERED from accounts of the founding itself, through
+    // `one_rate_prices_every_length` read backwards. The Market is the primary
+    // reading: it holds exactly the rent-exempt minimum its founding paid for
+    // its own width and parks no principal. A closure receipt already prepaid
+    // by an earlier session is a second reading at a SECOND WIDTH -- prepaid
+    // for the width it will become, not the zero bytes it currently occupies --
+    // and the two must agree, which is `the_whole_cohort_is_one_rate`. The
+    // division is exact or the recovery refuses; a donated lamport is never
+    // rounded away.
+    let mut readings = vec![FundedRentReadingV2 {
+        account_bytes: market_account.data.len(),
+        account_lamports: market_account.lamports,
+        remaining_native_principal: 0,
+    }];
+    if receipt.lamports != 0 {
+        readings.push(FundedRentReadingV2 {
+            account_bytes: SOURCE_CLOSURE_RECEIPT_BYTES_V3,
+            account_lamports: receipt.lamports,
+            remaining_native_principal: 0,
+        });
+    }
+    let funded_rent_rate = recover_funded_rent_rate_v2(&readings).map_err(|error| {
         refusal(&format!(
-            "terminal session cannot record this cluster's rent as a single rate: {error:?}"
+            "terminal session cannot recover one funded rent rate from this Market              ({} bytes holding {} lamports) and its {} prepaid closure receipt: {error:?}",
+            market_account.data.len(),
+            market_account.lamports,
+            receipt.lamports,
         ))
     })?;
+    let receipt_rent_lamports =
+        funded_rent_minimum_v2(funded_rent_rate, SOURCE_CLOSURE_RECEIPT_BYTES_V3).map_err(
+            |error| refusal(&format!("terminal session closure receipt rent: {error:?}")),
+        )?;
     if receipt.owner != system_program::ID
         || receipt.executable
         || !receipt.data.is_empty()
@@ -8229,11 +8259,9 @@ fn authenticate_terminal_receipt_funding_v1(
     // rate it paid; the check is that the session's own two numbers agree, and
     // it is still EXACT -- a seat carrying one lamport nobody can account for
     // still refuses, at the arithmetic below and on chain.
-    let recorded = funded_rent_minimum_v2(
-        session.funded_rent_rate,
-        SOURCE_CLOSURE_RECEIPT_BYTES_V3,
-    )
-    .map_err(|error| refusal(&format!("terminal session funded rent rate: {error:?}")))?;
+    let recorded =
+        funded_rent_minimum_v2(session.funded_rent_rate, SOURCE_CLOSURE_RECEIPT_BYTES_V3)
+            .map_err(|error| refusal(&format!("terminal session funded rent rate: {error:?}")))?;
     if recorded != session.receipt_rent_lamports {
         return Err(refusal(&format!(
             "terminal session receipt rent {} is not what its own recorded rate of {} lamports \
@@ -9987,12 +10015,14 @@ mod tests {
         let payer = key(1);
         let addresses = (10_u8..55).map(key).collect::<Vec<_>>();
         let rent = Rent::default();
-        let plan = plan_terminal_lookup_table_v1(payer, 99, &addresses, default_scaled_rent_rate()).expect("plan");
+        let plan = plan_terminal_lookup_table_v1(payer, 99, &addresses, default_scaled_rent_rate())
+            .expect("plan");
         assert_eq!(plan.addresses.len(), 45);
         assert_eq!(plan.extensions.len(), 3);
         assert!(plan.maximum_preflight_wire_bytes <= PACKET_DATA_BYTES);
         assert_eq!(
-            route_terminal_lookup_table_v1(&plan, None, default_scaled_rent_rate()).expect("vacant"),
+            route_terminal_lookup_table_v1(&plan, None, default_scaled_rent_rate())
+                .expect("vacant"),
             TerminalLookupTableRouteV1::Create(plan.create.clone())
         );
 
@@ -10006,7 +10036,8 @@ mod tests {
                 0,
             );
             assert_eq!(
-                route_terminal_lookup_table_v1(&plan, Some(&table), default_scaled_rent_rate()).expect("prefix"),
+                route_terminal_lookup_table_v1(&plan, Some(&table), default_scaled_rent_rate())
+                    .expect("prefix"),
                 TerminalLookupTableRouteV1::Extend {
                     prefix_len: prefix,
                     instruction: plan.extensions[extension_index].clone(),
@@ -10016,16 +10047,22 @@ mod tests {
 
         let mutable = observed_table(&plan, &rent, plan.addresses.clone(), Some(payer), 40, 0);
         assert_eq!(
-            route_terminal_lookup_table_v1(&plan, Some(&mutable), default_scaled_rent_rate()).expect("full mutable"),
+            route_terminal_lookup_table_v1(&plan, Some(&mutable), default_scaled_rent_rate())
+                .expect("full mutable"),
             TerminalLookupTableRouteV1::Freeze(plan.freeze.clone())
         );
         let frozen = observed_table(&plan, &rent, plan.addresses.clone(), None, 40, 0);
         assert_eq!(
-            route_terminal_lookup_table_v1(&plan, Some(&frozen), default_scaled_rent_rate()).expect("frozen"),
+            route_terminal_lookup_table_v1(&plan, Some(&frozen), default_scaled_rent_rate())
+                .expect("frozen"),
             TerminalLookupTableRouteV1::Complete
         );
-        authenticate_supplied_terminal_lookup_table_v1(&plan.addresses, &frozen, default_scaled_rent_rate())
-            .expect("supplied exact frozen table");
+        authenticate_supplied_terminal_lookup_table_v1(
+            &plan.addresses,
+            &frozen,
+            default_scaled_rent_rate(),
+        )
+        .expect("supplied exact frozen table");
     }
 
     #[test]
@@ -10033,7 +10070,8 @@ mod tests {
         let payer = key(1);
         let addresses = (10_u8..55).map(key).collect::<Vec<_>>();
         let rent = Rent::default();
-        let plan = plan_terminal_lookup_table_v1(payer, 99, &addresses, default_scaled_rent_rate()).expect("plan");
+        let plan = plan_terminal_lookup_table_v1(payer, 99, &addresses, default_scaled_rent_rate())
+            .expect("plan");
 
         let mut divergent = plan.addresses[..20].to_vec();
         divergent[19] = key(99);
@@ -10066,13 +10104,20 @@ mod tests {
             ),
         ];
         for table in cases {
-            assert!(route_terminal_lookup_table_v1(&plan, Some(&table), default_scaled_rent_rate()).is_err());
+            assert!(
+                route_terminal_lookup_table_v1(&plan, Some(&table), default_scaled_rent_rate())
+                    .is_err()
+            );
         }
 
         let mutable = observed_table(&plan, &rent, plan.addresses.clone(), Some(payer), 40, 0);
         assert!(
-            authenticate_supplied_terminal_lookup_table_v1(&plan.addresses, &mutable, default_scaled_rent_rate())
-                .is_err()
+            authenticate_supplied_terminal_lookup_table_v1(
+                &plan.addresses,
+                &mutable,
+                default_scaled_rent_rate()
+            )
+            .is_err()
         );
     }
 
@@ -10229,7 +10274,8 @@ mod tests {
             TerminalAddressClassV1::InlineRequestBound,
         ]);
         let union = terminal_lookup_union_from_closures_v1(payer, &closures).expect("stable union");
-        let plan = plan_terminal_lookup_table_v1(payer, 99, &union, default_scaled_rent_rate()).expect("ALT plan");
+        let plan = plan_terminal_lookup_table_v1(payer, 99, &union, default_scaled_rent_rate())
+            .expect("ALT plan");
         let table = observed_table(&plan, &rent, union, None, 0, 0);
         let instruction = Instruction {
             program_id: closures[4].program_id,

@@ -8,6 +8,8 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+/// Recovering the funded rent rate of a ledger written before the field existed.
+pub mod funded_rent_recovery_v1;
 /// Pre-Market Resolution-owned subset-ledger CPI builder.
 pub mod pre_market_funding_v1;
 /// Shared finalized Product-graph authentication used by successor operators.
@@ -1044,6 +1046,16 @@ pub enum ResolutionCoreOperatorErrorV3 {
     Frame,
     /// Fixed-width request construction refused.
     Encoding,
+    /// A funding ledger's rate is neither recorded nor recoverable.
+    ///
+    /// Split out of `Funding` under decision 0007's rule for a code covering
+    /// many conjuncts: a ledger written before the header had a field for the
+    /// rate is priced by recovering it from the ledger's own bytes, and the
+    /// two ways that fails -- a balance no rate reproduces exactly, and two
+    /// accounts of one founding deriving different rates -- are not "funding
+    /// state, manifest binding, or physical custody". They are the recovery
+    /// itself, and a reader told `Funding` would go looking in the wrong place.
+    FundedRentUnrecoverable,
     /// The material bought an ordered recovery walk no live route can walk.
     ///
     /// Liveness census R2 / queue Q2. Mirrors the on-chain weld
@@ -2636,7 +2648,18 @@ fn authenticate_pending_funding(
     {
         return Err(ResolutionCoreOperatorErrorV3::Funding);
     }
-    let ledger = FundingLedgerV2::decode(&account.data)
+    // Same pre-cohort-16 recovery as the active path: the ledger records no
+    // rate, so it is recovered from its own bytes and read from a spliced copy.
+    // The bytes this function RETURNS are the account's own, unspliced -- they
+    // are hashed into a lifecycle digest the programs recompute.
+    let priced = funded_rent_recovery_v1::ledger_with_funded_rent_rate_v2(
+        &account.data,
+        account.lamports,
+        manifest_id,
+        manifest,
+        &[],
+    )?;
+    let ledger = FundingLedgerV2::decode(&priced.bytes)
         .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
     if ledger.selected_mask() != selected_mask {
         return Err(ResolutionCoreOperatorErrorV3::Funding);
@@ -3336,10 +3359,20 @@ fn authenticate_close_funding(
         manifest,
         true,
     )?;
-    let mut planned = snapshot.funding_ledger.data.clone();
     // The rent to REFUND is the rent that was PAID. Reading the sysvar here
     // refunded today's price for an account bought at yesterday's, and the
-    // difference then showed up as an unclassified surplus.
+    // difference then showed up as an unclassified surplus. A pre-cohort-16
+    // ledger records no rate at all, so it is recovered from its own bytes
+    // first; `planned` is a host-side simulation of the close and is never sent
+    // to chain, so it carries the recovered rate for the rest of this function.
+    let priced = funded_rent_recovery_v1::ledger_with_funded_rent_rate_v2(
+        &snapshot.funding_ledger.data,
+        snapshot.funding_ledger.lamports,
+        manifest_id,
+        manifest,
+        &[],
+    )?;
+    let mut planned = priced.bytes.clone();
     let ledger_rent = FundingLedgerV2::decode(&planned)
         .map_err(|_| refuse("funding ledger decode"))?
         .funded_rent_minimum(planned.len())
@@ -3504,7 +3537,19 @@ fn authenticate_active_funding_ledger(
     if account.owner != resolution_program || account.executable {
         return Err(refuse("owner/executable"));
     }
-    let ledger = FundingLedgerV2::decode(&account.data).map_err(|_| refuse("decode"))?;
+    // A ledger this founding wrote before the header had a field for the rate
+    // records none, and a zero prices every account at nothing -- so `decode`
+    // refuses it rather than pricing it wrong. Recover the rate from the
+    // ledger's own bytes and plan against a spliced COPY; the account on chain
+    // still holds the zeros it was created with, and nothing here writes it.
+    let priced = funded_rent_recovery_v1::ledger_with_funded_rent_rate_v2(
+        &account.data,
+        account.lamports,
+        manifest_id,
+        manifest,
+        &[],
+    )?;
+    let ledger = FundingLedgerV2::decode(&priced.bytes).map_err(|_| refuse("decode"))?;
     let entries = funding_entries_from_mask(ledger.selected_mask())?;
     let authenticated = ledger
         .authenticate(manifest_id, manifest)
