@@ -4818,3 +4818,14 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Started 13:20 EDT: DECISIONS-3 (records 0031–0034 and two addenda for the provisional mechanism rulings); CHUNK-REMEASURE
   (0028's fifth condition measured on the post-ruling routes, three draws each); CHAOS-SCHEMA (the chaos session string's
   one author).
+- PROGRAMS-16D closed (`909d42dd2`, `9653ef363`, `7611f0551`): **ten of fifteen General actions lacked the GENERATION scalar
+  their domain authentication reads** (`require_market(environment.generation)` at lib.rs:1746, called by every evaluator) —
+  one derived index, a TOTAL guard proved red first; none of the ten is executed yet (the bundle builder still refuses
+  thirteen). **The freeze deadline landed Lean-first** (four ops; Freeze gains the closed Batch as evidence; 1,009 refuses,
+  1,010 admits) **with a hole closed on the way: the evidence is caller-supplied, so any long-closed batch would have
+  satisfied it on a stranger's deadline — the accelerator now joins the batch identity against the cursor's.** The
+  per-batch selection is a saved 524-line patch (green in the campaign 5/5, red in one fixture that installs the cursor
+  vacant; a batch IDENTITY register, no Core wire) → PROGRAMS-16E **`(spawned)`** with the seller's floor. Correction
+  carried: the general-hot campaign builds from the SHARED tree, so its CU tables are one ELF set's reading, not a
+  commit's — the runner must build `--at`. Frames identical.
+- Cuts: `9d0e024c2`, `d6d964037`.
