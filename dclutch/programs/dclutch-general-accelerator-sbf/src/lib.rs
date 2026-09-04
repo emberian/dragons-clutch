@@ -1396,6 +1396,12 @@ fn candidate_cause(error: GeneralHotCandidateErrorV3) -> GeneralAcceleratorSeman
     if let GeneralHotCandidateErrorV3::Verify(GeneralCandidateErrorV1::Verify(cause)) = error {
         sol_log(cause.log_line());
     }
+    // The same two-line shape, for the other conjunct that has a word for its
+    // own clauses. `SubmitCandidate`'s coordinate join is fifty-eight
+    // accusations and published one of them; the inner line says which.
+    if let GeneralHotCandidateErrorV3::SubmitCoordinate(clause) = error {
+        sol_log(clause.log_line());
+    }
     GeneralAcceleratorSemanticErrorV3::Candidate
 }
 

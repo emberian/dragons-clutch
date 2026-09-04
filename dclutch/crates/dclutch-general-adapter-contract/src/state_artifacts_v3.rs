@@ -861,6 +861,55 @@ fn narrow_table_index(value: usize) -> Result<u16> {
     u16::try_from(value).map_err(|_| GeneralStateArtifactErrorV3::Geometry)
 }
 
+/// Whose rent each General state carries, decision 0021's byte five.
+///
+/// ONE AUTHOR FOR BOTH PLANS THAT NAME IT. The candidate's create and its close
+/// have to agree -- the close re-reads the create's recorded answer and a
+/// `Credit` close re-derives it from the market's wallet -- so the two are one
+/// function rather than two literals that could drift apart in a patch.
+///
+/// EVERY GENERAL STATE BUT ONE IS A SHARED STRUCTURE OF THE MARKET. A batch
+/// window, a selection cursor, a settlement cursor and its terminal records are
+/// opened by whoever cranks them and belong to the market for as long as they
+/// exist, which is exactly the case decision 0021 keeps on `Credit`: if the
+/// rent followed whoever paid, a stranger cranking one open would walk away
+/// owning the rent of something the market depends on.
+///
+/// THE CANDIDATE IS THE EXCEPTION AND ITS OWN CLOSE PLAN ALREADY SAID SO --
+/// "the Candidate's immutable lifecycle beneficiary is the solver", written
+/// beside a `Credit` tag that made it the market's wallet instead. A submission
+/// is one solver's own object: the solver funds its rent and its whole work
+/// escrow, its address is derived from the candidate they published, and
+/// `project_general_submit_candidate_in_place_v3` requires
+/// `identity::PRIMARY_BENEFICIARY == submitted_opening.solver_id`. Under
+/// `Credit` the lifecycle preplan writes the market's RentCredit wallet into
+/// that register, so the conjunct could hold only if the market's sponsor were
+/// the solver -- which is to say SubmitCandidate was UNEXECUTABLE for every
+/// permissionless solver, and measurably so: an instrumented replay of the
+/// campaign's own bundle found that register "held the lifecycle's own
+/// beneficiary rather than the solver" (`44c0ccf19`). `Payer` makes the
+/// preplan write `*payer.key`, and the conjunct becomes the real check it
+/// reads as: the account that paid IS the solver the record names, which the
+/// transition states a second time as `identity_eq(PAYER, OWNER)`.
+///
+/// The Order recipe stays `Credit` deliberately. Nothing joins its beneficiary
+/// to the maker today, and moving a refund identity with no conjunct asking for
+/// it would be a change of economics with no reader.
+const fn general_state_refund_source_v3(
+    recipe: GeneralStateRecipeV3,
+) -> LifecycleRefundSourceInputV3 {
+    match recipe {
+        GeneralStateRecipeV3::Candidate => LifecycleRefundSourceInputV3::Payer,
+        GeneralStateRecipeV3::Selection
+        | GeneralStateRecipeV3::Settlement
+        | GeneralStateRecipeV3::Terminal
+        | GeneralStateRecipeV3::Batch
+        | GeneralStateRecipeV3::Order
+        | GeneralStateRecipeV3::Verifier
+        | GeneralStateRecipeV3::VerifiedCandidate => LifecycleRefundSourceInputV3::Credit,
+    }
+}
+
 fn primary_shape(action: Action) -> Result<GeneralActionLifecycleShapeV5> {
     let state_recipe = GeneralStateRecipeV3::primary_for_action(action);
     // `data_base` is the account's fixed byte width; the stride is the
@@ -920,7 +969,7 @@ fn primary_shape(action: Action) -> Result<GeneralActionLifecycleShapeV5> {
         beneficiary: Some(LifecycleRegisterCoordinateV3::common(identity_u16(
             identity::PRIMARY_BENEFICIARY_OBSERVATION,
         )?)),
-        refund_source: LifecycleRefundSourceInputV3::Credit,
+        refund_source: general_state_refund_source_v3(state_recipe),
         guard: LifecycleGuardInputV3::Always,
     }];
     let protected = [Some(primary_protected()?)];
@@ -1091,7 +1140,7 @@ fn close_candidate_shape(action: Action) -> Result<GeneralActionLifecycleShapeV5
         beneficiary: Some(LifecycleRegisterCoordinateV3::common(identity_u16(
             identity::PRIMARY_BENEFICIARY_OBSERVATION,
         )?)),
-        refund_source: LifecycleRefundSourceInputV3::Credit,
+        refund_source: general_state_refund_source_v3(recipe_kind),
         guard: LifecycleGuardInputV3::Always,
     }];
     // A Close plan consumes authenticated observations and emits no lifecycle

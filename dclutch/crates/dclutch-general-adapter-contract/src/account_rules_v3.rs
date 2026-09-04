@@ -207,28 +207,34 @@ pub const fn general_account_profile_operation_count_v3(action: Action) -> u16 {
     // five profiles wrote. The other five are unchanged because the operation
     // they already carried is the one the derived index names. See
     // `general_generation_operation_index_v3`.
+    //
+    // TEN gained two more, and `ReleaseOrder` one, on 2026-09-04: the Market and
+    // the config identity, which `authenticated_general_domain` reads of every
+    // action and which the same five actions -- and no others -- happened to
+    // carry as literals. See `general_market_operation_index_v3`. The four that
+    // carry both literals are unchanged to the byte.
     match action {
-        Action::SubmitCandidate => 38,
-        Action::VerifyCandidateRow => 17,
-        Action::CloseCandidate => 24,
+        Action::SubmitCandidate => 41,
+        Action::VerifyCandidateRow => 19,
+        Action::CloseCandidate => 26,
         Action::OpenBatch => 24,
         Action::CloseBatch => 22,
         Action::PlaceOrder => 35,
         Action::CancelOrder => 33,
-        Action::ReleaseOrder => 21,
-        Action::Close => 15,
+        Action::ReleaseOrder => 22,
+        Action::Close => 17,
         // The two sources of the selection deadline
         // `GeneralTransitionV3.lean`'s `.freeze` arm compares the clock
         // against -- the batch's own collection close, out of the evidence
         // record, and the config's selection window -- plus the batch identity
         // its state recipe is now keyed by.
-        Action::Freeze => 14,
+        Action::Freeze => 16,
         // The batch identity `GENERAL_SELECTION_STATE_RECIPE_V3` is keyed by.
-        Action::Consider => 12,
+        Action::Consider => 14,
         Action::InitializeSettlement
         | Action::Collect
         | Action::Materialize
-        | Action::Distribute => 11,
+        | Action::Distribute => 13,
     }
 }
 
@@ -331,6 +337,78 @@ const fn general_generation_operation_index_v3(action: Action) -> u16 {
     match general_system_program_operation_index_v3(action) {
         Some(system) => system.saturating_sub(1),
         None => general_product_digest_operation_index_v3(action).saturating_sub(1),
+    }
+}
+
+/// Whether this action's own operation body already sources the Market.
+///
+/// FIVE ACTIONS DO AND TEN DID NOT, which is the same distribution the Market
+/// generation had on the morning of 2026-09-04, one register over and for the
+/// same reason: the five that carry a literal are the five whose own projector
+/// happened to need the register early, and the other ten were never asked
+/// because nothing in this tree had ever built their bank from the profile.
+/// The list is CHECKED, not eyeballed --
+/// `every_action_sources_the_domain_registers_its_environment_reads` asserts
+/// exactly one writer per action against the operation table itself, so a
+/// sixteenth action added to one and not the other goes red.
+const fn general_declares_market_literal_v3(action: Action) -> bool {
+    matches!(
+        action,
+        Action::OpenBatch
+            | Action::CloseBatch
+            | Action::PlaceOrder
+            | Action::CancelOrder
+            | Action::ReleaseOrder
+    )
+}
+
+/// Whether this action's own operation body already sources the config identity.
+///
+/// The same five minus `ReleaseOrder`, which carries a Market literal and never
+/// carried a config one -- so it is the one action that takes one derived
+/// operation and not two.
+const fn general_declares_config_id_literal_v3(action: Action) -> bool {
+    matches!(
+        action,
+        Action::OpenBatch | Action::CloseBatch | Action::PlaceOrder | Action::CancelOrder
+    )
+}
+
+/// Index of the operation sourcing the config identity, where it is derived.
+///
+/// `authenticated_general_domain` recomputes `hash(config account)` and compares
+/// it to this register BEFORE any action does anything else, so an action whose
+/// profile omits it is unexecutable against any founded market and refuses
+/// `ConfigIdentity` -- which reads like a caller naming the wrong config. Ten of
+/// the fifteen omitted it. It sits immediately in front of the generation, which
+/// is the operation `require_market` reads next.
+const fn general_config_id_operation_index_v3(action: Action) -> Option<u16> {
+    if general_declares_config_id_literal_v3(action) {
+        None
+    } else {
+        Some(general_generation_operation_index_v3(action).saturating_sub(1))
+    }
+}
+
+/// Index of the operation sourcing the Market identity, where it is derived.
+///
+/// Every candidate and batch projector joins `root.market()` against this
+/// register; `44c0ccf19`'s wall was two registers wide and this is the third,
+/// found by the SubmitCandidate clause split naming `RootMarket` on the first
+/// run after the other two were closed. It sits in front of the config
+/// identity, so the derived tail reads Market, config, generation, System,
+/// Product digest, semantic basis, payer anchor, root.
+const fn general_market_operation_index_v3(action: Action) -> Option<u16> {
+    if general_declares_market_literal_v3(action) {
+        None
+    } else {
+        Some(
+            match general_config_id_operation_index_v3(action) {
+                Some(config) => config,
+                None => general_generation_operation_index_v3(action),
+            }
+            .saturating_sub(1),
+        )
     }
 }
 
@@ -649,11 +727,25 @@ pub fn general_account_profile_operation_v3(
             account: submit_evidence_account(0, GeneralReadonlyEvidenceKindV3::ClosedBatch)?,
             destination: common_identity(identity::SELECTION_BATCH)?,
         }),
+        // THE PRODUCT IN THE FRAME, NOT THE PRODUCT THE BATCH CLAIMS.
+        //
+        // This read the BATCH's own `PRODUCT_ID` until 2026-09-04, which made
+        // the projector's `SELECTION_PRODUCT == batch_opening.product_id`
+        // conjunct compare the batch record against itself -- a guard whose two
+        // sides move together, the defect class this file already records three
+        // instances of. The other join it left standing was worse: with no
+        // register naming the frame's Product, the conjunct in front of it
+        // compared `batch_opening.product_id` against
+        // `environment.product_record_digest`, which is `hash(product account)`
+        // and not a `product_id` at all, so it could not hold for ANY batch.
+        // `OpenBatch`, `PlaceOrder` and `CancelOrder` all read the Product
+        // account here; SubmitCandidate now does too, and the batch's claim is
+        // joined to it.
         10 if action == Action::SubmitCandidate => {
             Ok(AccountOperationInputV2::ProjectDataIdentity {
-                account: submit_evidence_account(0, GeneralReadonlyEvidenceKindV3::ClosedBatch)?,
+                account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_PRODUCT_COORDINATE_V3)?),
                 destination: common_identity(identity::SELECTION_PRODUCT)?,
-                data_offset: batch_body_offset(GeneralBatchLayoutV1::PRODUCT_ID)?,
+                data_offset: width(PRODUCT_RECORD_PRODUCT_ID_OFFSET_V2)?,
             })
         }
         11 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::ProjectDataU64 {
@@ -792,6 +884,38 @@ pub fn general_account_profile_operation_v3(
             account: AccountCoordinateV2::fixed(GENERAL_PRIMARY_PAYER_ACCOUNT_V3),
             expected: common_identity(identity::RESULT_OWNER)?,
         }),
+        // THE CANDIDATE IDENTITY THE STATE ADDRESS IS DERIVED FROM.
+        //
+        // `GENERAL_CANDIDATE_STATE_RECIPE_V3` seeds the primary state on
+        // `GENERAL_CANDIDATE_IDENTITY_REGISTER_V3`, which narrows
+        // `identity::CANDIDATE`, and the projector joins the same register
+        // against the image's own header (`hot_candidate_v3.rs`, the
+        // `AuthenticatedCandidate` clause). Nothing wrote it: the register was
+        // projected by `PlaceOrder`, `CancelOrder` and `ReleaseOrder` -- where
+        // it carries the BATCH the escrow legs belong to -- and by
+        // `CloseCandidate`, out of the live record's own body. On the one
+        // action that CREATES that record the address derived from thirty-two
+        // zero bytes, so every candidate under one root collided at one
+        // address and the projector refused before anything reached it. The
+        // accelerator's program-test never saw it because
+        // `submit_candidate_bank` writes the register by hand.
+        //
+        // The source is the authenticated CandidateImage and must be: the
+        // submission record beside it is a caller-proposed body whose equality
+        // to `GeneralCandidateV1::submit(batch, image, ..)` is proven AFTER
+        // the address is derived, so keying the address on it would derive
+        // from bytes nothing had authenticated yet. The image is a solver's
+        // immutable publication carrying its own digest as its identity, which
+        // is the replay shape the batch and order recipes already have: a
+        // second submission of the same candidate derives the same address and
+        // finds it occupied.
+        33 if action == Action::SubmitCandidate => {
+            Ok(AccountOperationInputV2::ProjectDataIdentity {
+                account: submit_evidence_account(1, GeneralReadonlyEvidenceKindV3::CandidateImage)?,
+                destination: common_identity(identity::CANDIDATE)?,
+                data_offset: width(CandidateLayoutV2::CANDIDATE_ID)?,
+            })
+        }
         // The batch pair's projections: the root tail, the config windows, and
         // the three identities the batch record binds. `zero` receives the
         // persisted batch width on CloseBatch -- the real width conjunct --
@@ -1290,6 +1414,26 @@ pub fn general_account_profile_operation_v3(
             destination: common_identity(identity::TERMINAL_BENEFICIARY_OBSERVATION)?,
             data_offset: GeneralLocalStateLayoutV3::beneficiary(),
         }),
+        // THE MARKET AND THE CONFIG IDENTITY THE SAME AUTHENTICATION READS.
+        //
+        // Both out of the ROOT TAIL, exactly as the five actions that already
+        // carried literals read them, so the derived operation and the literal
+        // are the same projection and the register has one meaning whichever
+        // arm produced it.
+        market if Some(market) == general_market_operation_index_v3(action) => {
+            Ok(AccountOperationInputV2::ProjectDataIdentity {
+                account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_ROOT_COORDINATE_V3)?),
+                destination: common_identity(identity::MARKET)?,
+                data_offset: root_tail_offset(GENERAL_ROOT_MARKET_OFFSET_V2)?,
+            })
+        }
+        config if Some(config) == general_config_id_operation_index_v3(action) => {
+            Ok(AccountOperationInputV2::ProjectDataIdentity {
+                account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_ROOT_COORDINATE_V3)?),
+                destination: common_identity(identity::GENERAL_CONFIG_ID)?,
+                data_offset: root_tail_offset(GENERAL_ROOT_CONFIG_ID_OFFSET_V2)?,
+            })
+        }
         // THE MARKET GENERATION EVERY ACTION'S DOMAIN AUTHENTICATION READS.
         // See `general_generation_operation_index_v3` for why this is one
         // derived arm and not fifteen literals, and for the ten actions that
@@ -1530,7 +1674,7 @@ pub fn encode_general_account_profile_v3_atomic(
 }
 
 /// Widest canonical operation list any action declares.
-const GENERAL_MAX_ACCOUNT_PROFILE_OPERATIONS_V3: usize = 38;
+const GENERAL_MAX_ACCOUNT_PROFILE_OPERATIONS_V3: usize = 41;
 
 /// Inert operation the fixed-width operation buffer is filled with.
 const GENERAL_ACCOUNT_PROFILE_OPERATION_PLACEHOLDER_V3: AccountOperationInputV2 =
@@ -2977,6 +3121,60 @@ mod tests {
         }
     }
 
+    /// Every action sources every identity its own environment reader reads.
+    ///
+    /// `general_hot_environment_from_bank_v3` runs before any action does
+    /// anything, and `authenticated_general_domain` compares four of the
+    /// registers it returns against accounts in the frame. A profile that omits
+    /// one makes its action UNEXECUTABLE and does it silently -- the register is
+    /// a well-formed thirty-two zero bytes and the refusal names a caller error.
+    ///
+    /// THREE ROUNDS OF THIS HAVE NOW BEEN PAID FOR, each found by executing an
+    /// action nothing had executed before: the semantic basis (2026-09-01, "only
+    /// by a harness writing the register by hand"), the Market generation
+    /// (2026-09-04, a literal on five actions and absent from ten), and the
+    /// Market and config identity (2026-09-04, the same five and the same ten).
+    /// Each was repaired with a derived operation and each repair was invisible
+    /// to every test in the tree, because nothing asked this question. This asks
+    /// it, of all fifteen, against the operation table itself -- so the derived
+    /// arms and the five surviving literals are both checked, and a sixteenth
+    /// action cannot be added with an omission.
+    #[test]
+    fn every_action_sources_the_domain_registers_its_environment_reads() {
+        let identity_destination = |operation: AccountOperationInputV2| match operation {
+            AccountOperationInputV2::ProjectKey { destination, .. }
+            | AccountOperationInputV2::ProjectOwner { destination, .. }
+            | AccountOperationInputV2::ProjectDataDigest { destination, .. }
+            | AccountOperationInputV2::ProjectDataIdentity { destination, .. } => Some(destination),
+            _ => None,
+        };
+        for action in ACTIONS {
+            let count = general_account_profile_operation_count_v3(action);
+            for (register, name) in [
+                (identity::MARKET, "MARKET"),
+                (identity::GENERAL_CONFIG_ID, "GENERAL_CONFIG_ID"),
+                (identity::PRODUCT_RECORD_DIGEST, "PRODUCT_RECORD_DIGEST"),
+                (identity::SEMANTIC_BASIS_ID, "SEMANTIC_BASIS_ID"),
+                (identity::GENERAL_ROOT, "GENERAL_ROOT"),
+            ] {
+                let expected = common_identity(register).expect("environment register");
+                let writers = (0..count)
+                    .filter(|index| {
+                        general_account_profile_operation_v3(action, *index)
+                            .ok()
+                            .and_then(identity_destination)
+                            == Some(expected)
+                    })
+                    .count();
+                assert_eq!(
+                    writers, 1,
+                    "{action:?} declares {writers} operations sourcing {name}, which its own \
+                     environment reader reads before the action runs",
+                );
+            }
+        }
+    }
+
     #[test]
     fn submit_candidate_profile_owns_one_fixed_candidate_and_three_exact_evidence_records() {
         let action = Action::SubmitCandidate;
@@ -2986,8 +3184,32 @@ mod tests {
         assert_eq!(general_account_profile_fixed_count_v3(action), Ok(12));
         // 34 until the semantic-basis projection landed; every action's count
         // gained exactly one. 37 until the Market generation gained a derived
-        // index and this action, which had none, gained the operation.
-        assert_eq!(general_account_profile_operation_count_v3(action), 38);
+        // index and this action, which had none, gained the operation. 38 until
+        // the candidate identity the state address is SEEDED by gained a
+        // producer -- the one action that creates that record derived its
+        // address from thirty-two zero bytes until then.
+        assert_eq!(general_account_profile_operation_count_v3(action), 41);
+        // The candidate identity is projected exactly once, out of the
+        // authenticated image, and it is the register
+        // `GENERAL_CANDIDATE_STATE_RECIPE_V3` seeds on.
+        let candidate_writers = (0..general_account_profile_operation_count_v3(action))
+            .filter(|index| {
+                matches!(
+                    general_account_profile_operation_v3(action, *index),
+                    Ok(AccountOperationInputV2::ProjectDataIdentity { destination, account, .. })
+                        if Ok(destination) == common_identity(identity::CANDIDATE)
+                            && Ok(account)
+                                == submit_evidence_account(
+                                    1,
+                                    GeneralReadonlyEvidenceKindV3::CandidateImage,
+                                )
+                )
+            })
+            .count();
+        assert_eq!(
+            candidate_writers, 1,
+            "SubmitCandidate sources the candidate identity its address is seeded by exactly              once, out of the image",
+        );
 
         let candidate =
             general_account_profile_rule_v3(action, GENERAL_PRIMARY_STATE_ACCOUNT_V3, WIDTHS)

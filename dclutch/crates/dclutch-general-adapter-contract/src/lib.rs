@@ -73,6 +73,8 @@ pub mod specialization;
 pub mod state_artifacts_v3;
 /// The one supported derivation for every General action-state PDA.
 pub mod state_seeds_v3;
+/// Which clause of the SubmitCandidate coordinate conjunct disagreed.
+pub mod submit_candidate_clause_v3;
 /// Action-selected TransitionVM programs for admitted General execution.
 pub mod transition_artifacts_v3;
 

@@ -41,6 +41,7 @@ use crate::{
     runtime_settlement::{RuntimeSettlementActionV2, RuntimeSettlementEffectPlanV2},
     runtime_verify::{RuntimeCandidateVerifierV2, RuntimeCompleteSetMoveV2},
     runtime_width::{CandidateV2, SettlementCursorLayoutV2, SettlementCursorV2},
+    submit_candidate_clause_v3::SubmitCandidateClauseV3,
 };
 
 #[cfg(test)]
@@ -946,6 +947,18 @@ pub fn project_general_close_batch_candidate_in_place_v3(
     Ok(())
 }
 
+/// Refuse one named clause of the SubmitCandidate coordinate conjunct.
+///
+/// The clauses stay STATEMENTS rather than becoming a table, so each condition
+/// is evaluated only if every earlier one held -- the exact short-circuit the
+/// `||` chain had, and the reason a bank failing several reports the first.
+fn submit_clause(disagrees: bool, clause: SubmitCandidateClauseV3) -> Result<()> {
+    if disagrees {
+        return Err(GeneralHotCandidateErrorV3::SubmitCoordinate(clause));
+    }
+    Ok(())
+}
+
 /// Authenticate and project one permissionless candidate submission.
 ///
 /// `batch_body`, `candidate_body`, and `submission_body` are the exact hostile
@@ -1032,106 +1045,276 @@ pub fn project_general_submit_candidate_in_place_v3(
                 .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
         )? != u64::from(item)
         {
-            return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
+            return Err(GeneralHotCandidateErrorV3::SubmitCoordinate(
+                SubmitCandidateClauseV3::ItemOutcomeColumn,
+            ));
         }
     }
 
-    if expected.to_bytes().as_slice() != submission_body
-        || requested_candidate_id != Some(candidate_header.candidate_id)
-        || outcome_count != candidate_header.outcome_count
-        || environment.general_root == [0; 32]
-        || environment.trading_program == [0; 32]
-        || root.lifecycle() != GeneralLifecycleV2::Active
-        || root.market() != environment.market
-        || root.config_id() != environment.general_config_id
-        || root.generation() != environment.generation
-        || config.generation() != environment.generation
-        || batch_state.status != BatchStatusV1::Closed
-        || batch_opening.market != root.market()
-        || batch_opening.config_id != root.config_id()
-        || batch_opening.generation != root.generation()
-        || batch_opening.product_id != environment.product_record_digest
-        || batch_opening.outcome_count != outcome_count
-        || batch_opening.price_scale != config.price_scale()
-        || batch_opening.max_orders != config.max_orders_per_candidate()
-        || batch_opening.settlement_close_slot != expected_settlement_close
-        || read_scalar(candidate, scalar::OUTCOME_COUNT)? != u64::from(outcome_count)
-        || read_scalar(candidate, scalar::ZERO)? != u64::from(candidate_header.outcome_count)
-        || read_scalar(candidate, scalar::ROOT_LIFECYCLE_OBSERVATION)?
-            != u64::from(GeneralLifecycleV2::Active.tag())
-        || read_scalar(candidate, scalar::BATCH_STATUS_OBSERVATION)?
-            != u64::from(batch_state.status.tag())
-        || read_scalar(candidate, scalar::BATCH_POST_ORDER_COUNT)?
-            != u64::from(batch_opening.outcome_count)
-        || read_scalar(candidate, scalar::BATCH_COLLECTION_CLOSE_SLOT)?
-            != batch_opening.collection_close_slot
-        || read_scalar(candidate, scalar::BATCH_SETTLEMENT_CLOSE_SLOT)?
-            != batch_opening.settlement_close_slot
-        || read_scalar(candidate, scalar::ORDER_MAX_LOTS)? != batch_opening.price_scale
-        || read_scalar(candidate, scalar::CANDIDATE_PAGE_COUNT)?
-            != u64::from(candidate_header.page_count)
-        || read_scalar(candidate, scalar::SELECTION_BEST_CANDIDATE_COORDINATE)?
-            != u64::from(candidate_header.candidate_coordinate)
-        || read_scalar(candidate, scalar::SELECTION_PRICE_SCALE)? != candidate_header.price_scale
-        || read_scalar(candidate, scalar::VERIFY_POST_ORDER_COUNT)?
-            != u64::from(submitted_opening.outcome_count)
-        || read_scalar(candidate, scalar::VERIFY_POST_PAGE)?
-            != u64::from(submitted_opening.page_count)
-        || read_scalar(candidate, scalar::CANDIDATE_STATUS_OBSERVATION)?
-            != u64::from(submitted_state.status.tag())
-        || read_scalar(candidate, scalar::CANDIDATE_PAGE_REVISION)?
-            != submitted_opening.page_revision
-        || read_scalar(candidate, scalar::CANDIDATE_SUBMITTED_SLOT)?
-            != submitted_opening.submitted_slot
-        || read_scalar(candidate, scalar::CANDIDATE_ROW_COUNT)?
-            != u64::from(submitted_opening.row_count)
-        || read_scalar(candidate, scalar::CANDIDATE_REWARD_RATE)?
-            != submitted_opening.reward_rate_lamports
-        || read_scalar(
+    submit_clause(
+        expected.to_bytes().as_slice() != submission_body,
+        SubmitCandidateClauseV3::SubmissionNotCanonical,
+    )?;
+    submit_clause(
+        requested_candidate_id != Some(candidate_header.candidate_id),
+        SubmitCandidateClauseV3::RequestSubject,
+    )?;
+    submit_clause(
+        outcome_count != candidate_header.outcome_count,
+        SubmitCandidateClauseV3::ImageOutcomeCount,
+    )?;
+    submit_clause(
+        environment.general_root == [0; 32],
+        SubmitCandidateClauseV3::EnvironmentGeneralRoot,
+    )?;
+    submit_clause(
+        environment.trading_program == [0; 32],
+        SubmitCandidateClauseV3::EnvironmentTradingProgram,
+    )?;
+    submit_clause(
+        root.lifecycle() != GeneralLifecycleV2::Active,
+        SubmitCandidateClauseV3::RootLifecycle,
+    )?;
+    submit_clause(
+        root.market() != environment.market,
+        SubmitCandidateClauseV3::RootMarket,
+    )?;
+    submit_clause(
+        root.config_id() != environment.general_config_id,
+        SubmitCandidateClauseV3::RootConfigId,
+    )?;
+    submit_clause(
+        root.generation() != environment.generation,
+        SubmitCandidateClauseV3::RootGeneration,
+    )?;
+    submit_clause(
+        config.generation() != environment.generation,
+        SubmitCandidateClauseV3::ConfigGeneration,
+    )?;
+    submit_clause(
+        batch_state.status != BatchStatusV1::Closed,
+        SubmitCandidateClauseV3::BatchStatus,
+    )?;
+    submit_clause(
+        batch_opening.market != root.market(),
+        SubmitCandidateClauseV3::BatchMarket,
+    )?;
+    submit_clause(
+        batch_opening.config_id != root.config_id(),
+        SubmitCandidateClauseV3::BatchConfigId,
+    )?;
+    submit_clause(
+        batch_opening.generation != root.generation(),
+        SubmitCandidateClauseV3::BatchGeneration,
+    )?;
+    submit_clause(
+        batch_opening.outcome_count != outcome_count,
+        SubmitCandidateClauseV3::BatchOutcomeCount,
+    )?;
+    submit_clause(
+        batch_opening.price_scale != config.price_scale(),
+        SubmitCandidateClauseV3::BatchPriceScale,
+    )?;
+    submit_clause(
+        batch_opening.max_orders != config.max_orders_per_candidate(),
+        SubmitCandidateClauseV3::BatchMaxOrders,
+    )?;
+    submit_clause(
+        batch_opening.settlement_close_slot != expected_settlement_close,
+        SubmitCandidateClauseV3::BatchSettlementClose,
+    )?;
+    submit_clause(
+        read_scalar(candidate, scalar::OUTCOME_COUNT)? != u64::from(outcome_count),
+        SubmitCandidateClauseV3::ScalarOutcomeCount,
+    )?;
+    submit_clause(
+        read_scalar(candidate, scalar::ZERO)? != u64::from(candidate_header.outcome_count),
+        SubmitCandidateClauseV3::ScalarImageOutcomeCount,
+    )?;
+    submit_clause(
+        read_scalar(candidate, scalar::ROOT_LIFECYCLE_OBSERVATION)?
+            != u64::from(GeneralLifecycleV2::Active.tag()),
+        SubmitCandidateClauseV3::ScalarRootLifecycle,
+    )?;
+    submit_clause(
+        read_scalar(candidate, scalar::BATCH_STATUS_OBSERVATION)?
+            != u64::from(batch_state.status.tag()),
+        SubmitCandidateClauseV3::ScalarBatchStatus,
+    )?;
+    submit_clause(
+        read_scalar(candidate, scalar::BATCH_POST_ORDER_COUNT)?
+            != u64::from(batch_opening.outcome_count),
+        SubmitCandidateClauseV3::ScalarBatchOrderCount,
+    )?;
+    submit_clause(
+        read_scalar(candidate, scalar::BATCH_COLLECTION_CLOSE_SLOT)?
+            != batch_opening.collection_close_slot,
+        SubmitCandidateClauseV3::ScalarBatchCollectionClose,
+    )?;
+    submit_clause(
+        read_scalar(candidate, scalar::BATCH_SETTLEMENT_CLOSE_SLOT)?
+            != batch_opening.settlement_close_slot,
+        SubmitCandidateClauseV3::ScalarBatchSettlementClose,
+    )?;
+    submit_clause(
+        read_scalar(candidate, scalar::ORDER_MAX_LOTS)? != batch_opening.price_scale,
+        SubmitCandidateClauseV3::ScalarBatchPriceScale,
+    )?;
+    submit_clause(
+        read_scalar(candidate, scalar::CANDIDATE_PAGE_COUNT)?
+            != u64::from(candidate_header.page_count),
+        SubmitCandidateClauseV3::ScalarImagePageCount,
+    )?;
+    submit_clause(
+        read_scalar(candidate, scalar::SELECTION_BEST_CANDIDATE_COORDINATE)?
+            != u64::from(candidate_header.candidate_coordinate),
+        SubmitCandidateClauseV3::ScalarImageCoordinate,
+    )?;
+    submit_clause(
+        read_scalar(candidate, scalar::SELECTION_PRICE_SCALE)? != candidate_header.price_scale,
+        SubmitCandidateClauseV3::ScalarImagePriceScale,
+    )?;
+    submit_clause(
+        read_scalar(candidate, scalar::VERIFY_POST_ORDER_COUNT)?
+            != u64::from(submitted_opening.outcome_count),
+        SubmitCandidateClauseV3::ScalarSubmissionOutcomeCount,
+    )?;
+    submit_clause(
+        read_scalar(candidate, scalar::VERIFY_POST_PAGE)?
+            != u64::from(submitted_opening.page_count),
+        SubmitCandidateClauseV3::ScalarSubmissionPageCount,
+    )?;
+    submit_clause(
+        read_scalar(candidate, scalar::CANDIDATE_STATUS_OBSERVATION)?
+            != u64::from(submitted_state.status.tag()),
+        SubmitCandidateClauseV3::ScalarSubmissionStatus,
+    )?;
+    submit_clause(
+        read_scalar(candidate, scalar::CANDIDATE_PAGE_REVISION)? != submitted_opening.page_revision,
+        SubmitCandidateClauseV3::ScalarSubmissionPageRevision,
+    )?;
+    submit_clause(
+        read_scalar(candidate, scalar::CANDIDATE_SUBMITTED_SLOT)?
+            != submitted_opening.submitted_slot,
+        SubmitCandidateClauseV3::ScalarSubmissionSlot,
+    )?;
+    submit_clause(
+        read_scalar(candidate, scalar::CANDIDATE_ROW_COUNT)?
+            != u64::from(submitted_opening.row_count),
+        SubmitCandidateClauseV3::ScalarSubmissionRowCount,
+    )?;
+    submit_clause(
+        read_scalar(candidate, scalar::CANDIDATE_REWARD_RATE)?
+            != submitted_opening.reward_rate_lamports,
+        SubmitCandidateClauseV3::ScalarSubmissionRewardRate,
+    )?;
+    submit_clause(
+        read_scalar(
             candidate,
             scalar::CANDIDATE_VERIFICATION_REMAINING_OBSERVATION,
-        )? != submitted_state.verification_remaining
-        || read_scalar(candidate, scalar::CANDIDATE_CLEANUP_REMAINING_OBSERVATION)?
-            != submitted_state.cleanup_remaining
-        || read_scalar(candidate, scalar::PRIMARY_BUMP_OBSERVATION)? != 0
-        || read_scalar(candidate, scalar::PRIMARY_PRINCIPAL_OBSERVATION)? != 0
-        || read_scalar(candidate, scalar::PRIMARY_CREATED)? != 1
-        || read_scalar(candidate, scalar::STATE_BUMP)?
-            != read_scalar(candidate, scalar::PRIMARY_CANONICAL_BUMP)?
-        || read_scalar(candidate, scalar::PRIMARY_RENT_PRINCIPAL)? == 0
-        || read_identity(
+        )? != submitted_state.verification_remaining,
+        SubmitCandidateClauseV3::ScalarVerificationRemaining,
+    )?;
+    submit_clause(
+        read_scalar(candidate, scalar::CANDIDATE_CLEANUP_REMAINING_OBSERVATION)?
+            != submitted_state.cleanup_remaining,
+        SubmitCandidateClauseV3::ScalarCleanupRemaining,
+    )?;
+    submit_clause(
+        read_scalar(candidate, scalar::PRIMARY_BUMP_OBSERVATION)? != 0,
+        SubmitCandidateClauseV3::LifecycleBumpObservation,
+    )?;
+    submit_clause(
+        read_scalar(candidate, scalar::PRIMARY_PRINCIPAL_OBSERVATION)? != 0,
+        SubmitCandidateClauseV3::LifecyclePrincipalObservation,
+    )?;
+    submit_clause(
+        read_scalar(candidate, scalar::PRIMARY_CREATED)? != 1,
+        SubmitCandidateClauseV3::LifecycleCreated,
+    )?;
+    submit_clause(
+        read_scalar(candidate, scalar::STATE_BUMP)?
+            != read_scalar(candidate, scalar::PRIMARY_CANONICAL_BUMP)?,
+        SubmitCandidateClauseV3::LifecycleBump,
+    )?;
+    submit_clause(
+        read_scalar(candidate, scalar::PRIMARY_RENT_PRINCIPAL)? == 0,
+        SubmitCandidateClauseV3::LifecycleRentPrincipal,
+    )?;
+    submit_clause(
+        read_identity(
             candidate,
             scalar_count,
             identity::PRIMARY_BENEFICIARY_OBSERVATION,
-        )? != [0; 32]
-        || read_identity(candidate, scalar_count, identity::PRIMARY_BENEFICIARY)?
-            != submitted_opening.solver_id
-        || read_identity(candidate, scalar_count, identity::PRIMARY_OWNER)?
-            != environment.trading_program
-        || read_identity(candidate, scalar_count, identity::TRADING_PROGRAM)?
-            != environment.trading_program
-        || read_identity(candidate, scalar_count, identity::GENERAL_ROOT)?
-            != environment.general_root
-        || read_identity(candidate, scalar_count, identity::CANDIDATE)?
-            != candidate_header.candidate_id
-        || read_identity(candidate, scalar_count, identity::BEST_VERIFIED_DIGEST)?
-            != candidate_header.candidate_id
-        || read_identity(candidate, scalar_count, identity::ORDER)? != candidate_header.product_id
-        || read_identity(candidate, scalar_count, identity::SELECTION_POLICY)?
-            != candidate_header.batch_id
-        || read_identity(candidate, scalar_count, identity::SELECTION_PRODUCT)?
-            != batch_opening.product_id
-        || read_identity(
+        )? != [0; 32],
+        SubmitCandidateClauseV3::LifecycleBeneficiaryObservation,
+    )?;
+    submit_clause(
+        read_identity(candidate, scalar_count, identity::PRIMARY_BENEFICIARY)?
+            != submitted_opening.solver_id,
+        SubmitCandidateClauseV3::LifecycleBeneficiary,
+    )?;
+    submit_clause(
+        read_identity(candidate, scalar_count, identity::PRIMARY_OWNER)?
+            != environment.trading_program,
+        SubmitCandidateClauseV3::LifecycleOwner,
+    )?;
+    submit_clause(
+        read_identity(candidate, scalar_count, identity::TRADING_PROGRAM)?
+            != environment.trading_program,
+        SubmitCandidateClauseV3::IdentityTradingProgram,
+    )?;
+    submit_clause(
+        read_identity(candidate, scalar_count, identity::GENERAL_ROOT)? != environment.general_root,
+        SubmitCandidateClauseV3::IdentityGeneralRoot,
+    )?;
+    submit_clause(
+        read_identity(candidate, scalar_count, identity::CANDIDATE)?
+            != candidate_header.candidate_id,
+        SubmitCandidateClauseV3::IdentityCandidate,
+    )?;
+    submit_clause(
+        read_identity(candidate, scalar_count, identity::BEST_VERIFIED_DIGEST)?
+            != candidate_header.candidate_id,
+        SubmitCandidateClauseV3::IdentityBestVerifiedDigest,
+    )?;
+    submit_clause(
+        read_identity(candidate, scalar_count, identity::ORDER)? != candidate_header.product_id,
+        SubmitCandidateClauseV3::IdentityImageProduct,
+    )?;
+    submit_clause(
+        read_identity(candidate, scalar_count, identity::SELECTION_POLICY)?
+            != candidate_header.batch_id,
+        SubmitCandidateClauseV3::IdentityImageBatch,
+    )?;
+    // THE BATCH'S PRODUCT IS THE FRAME'S PRODUCT. `SELECTION_PRODUCT` is read
+    // off the Product ACCOUNT this execution carries, so this is a join between
+    // two records written by different acts. It replaces two clauses that were
+    // each unable to state it: one compared the batch against the register the
+    // same profile pass projected out of the batch, and the other compared a
+    // `product_id` against `hash(product account)`.
+    submit_clause(
+        read_identity(candidate, scalar_count, identity::SELECTION_PRODUCT)?
+            != batch_opening.product_id,
+        SubmitCandidateClauseV3::IdentityBatchProduct,
+    )?;
+    submit_clause(
+        read_identity(
             candidate,
             scalar_count,
             identity::RESULT_BENEFICIARY_OBSERVATION,
-        )? != submitted_opening.candidate_id
-        || read_identity(candidate, scalar_count, identity::BENEFICIARY)?
-            != submitted_opening.batch_id
-        || read_identity(candidate, scalar_count, identity::OWNER)? != submitted_opening.solver_id
-    {
-        return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
-    }
+        )? != submitted_opening.candidate_id,
+        SubmitCandidateClauseV3::IdentitySubmissionCandidate,
+    )?;
+    submit_clause(
+        read_identity(candidate, scalar_count, identity::BENEFICIARY)?
+            != submitted_opening.batch_id,
+        SubmitCandidateClauseV3::IdentitySubmissionBatch,
+    )?;
+    submit_clause(
+        read_identity(candidate, scalar_count, identity::OWNER)? != submitted_opening.solver_id,
+        SubmitCandidateClauseV3::IdentitySubmissionSolver,
+    )?;
 
     write_local_state_constants(candidate, GeneralLocalStateKindV3::Candidate)?;
     for (coordinate, value) in [
@@ -1897,6 +2080,15 @@ pub enum GeneralHotCandidateErrorV3 {
     BankStrideMismatch,
     /// An authenticated child coordinate was zero, aliased, or noncanonical.
     InvalidCoordinate,
+    /// One NAMED clause of the SubmitCandidate coordinate conjunct disagreed.
+    ///
+    /// `InvalidCoordinate` above still covers the conjuncts that have not been
+    /// split; this one carries which of SubmitCandidate's fifty-eight. It is a
+    /// separate variant rather than a payload on `InvalidCoordinate` for the
+    /// reason `Verify` and `Close` are separate: the wrapped enum is its own
+    /// author, the outer line says which arm refused and the inner says which
+    /// clause, and a reader gets both without either enum flattening the other.
+    SubmitCoordinate(SubmitCandidateClauseV3),
     /// Position or Custody optimistic revision could not advance.
     RevisionOverflow,
     /// Checked register or byte arithmetic overflowed.
@@ -1946,6 +2138,9 @@ impl GeneralHotCandidateErrorV3 {
             }
             Self::InvalidCoordinate => {
                 "general-candidate: refused, an authenticated coordinate disagrees"
+            }
+            Self::SubmitCoordinate(_) => {
+                "general-candidate: refused, a SubmitCandidate coordinate disagrees"
             }
             Self::RevisionOverflow => {
                 "general-candidate: refused, an optimistic revision cannot advance"
@@ -5094,8 +5289,21 @@ mod tests {
                 current - 1,
             )
             .expect("matching hostile projection");
+            // EXACT, NOT `is_err()`. Until the conjunct's clauses had names a
+            // hostile here could only say "something refused", which passes on
+            // whatever the projector reaches first -- and the five below reach
+            // four different answers. Each is predicted from what the fixture
+            // was made to say before it is run.
+            //
+            // A body one compartment short IS decodable and IS the wrong
+            // record, so it reaches the canonical-submission clause.
             let before = underfunded.bank.clone();
-            assert!(project_submit(&mut underfunded).is_err());
+            assert_eq!(
+                project_submit(&mut underfunded),
+                Err(GeneralHotCandidateErrorV3::SubmitCoordinate(
+                    SubmitCandidateClauseV3::SubmissionNotCanonical
+                )),
+            );
             assert_eq!(underfunded.bank, before);
 
             let mut forged_identity = fixture.clone();
@@ -5116,15 +5324,92 @@ mod tests {
                 )
                 .expect("matching forged projection");
             }
+            // AND THIS ONE NEVER REACHES A CLAUSE AT ALL. A forged image
+            // identity fails `authenticate_candidate_identity_v1` inside
+            // `GeneralCandidateV1::submit`, which is `InvalidPlan` -- two
+            // statements before the conjunct. A bare `is_err()` accepted that
+            // reading and the intended one alike for as long as it stood, which
+            // is the exact defect AGENTS.md records; it is visible here only
+            // because the clauses now have names to be distinguished from.
             let before = forged_identity.bank.clone();
-            assert!(project_submit(&mut forged_identity).is_err());
+            assert_eq!(
+                project_submit(&mut forged_identity),
+                Err(GeneralHotCandidateErrorV3::InvalidPlan),
+            );
             assert_eq!(forged_identity.bank, before);
 
+            // THE PRODUCT SUBSTITUTION IS IN THE REGISTER, NOT THE DIGEST. This
+            // used to move `environment.product_record_digest`, because the
+            // conjunct it tested compared the batch's `product_id` against
+            // `hash(product account)` -- two different kinds of value, which is
+            // why the fixture had to set the digest TO the product id for the
+            // honest case to pass at all. `SELECTION_PRODUCT` is read off the
+            // Product account now, so the hostile substitutes the register the
+            // profile projects and the join is between two records.
             let mut wrong_product = fixture.clone();
-            wrong_product.environment.product_record_digest = [0xef; 32];
+            let scalar_count = general_hot_scalar_count_v3(Action::SubmitCandidate, outcome_count)
+                .expect("scalar count");
+            write_identity(
+                &mut wrong_product.bank,
+                scalar_count,
+                identity::SELECTION_PRODUCT,
+                [0xef; 32],
+            )
+            .expect("foreign Product register");
             let before = wrong_product.bank.clone();
-            assert!(project_submit(&mut wrong_product).is_err());
+            assert_eq!(
+                project_submit(&mut wrong_product),
+                Err(GeneralHotCandidateErrorV3::SubmitCoordinate(
+                    SubmitCandidateClauseV3::IdentityBatchProduct
+                )),
+            );
             assert_eq!(wrong_product.bank, before);
+
+            // THE BENEFICIARY IS THE SOLVER WHO PAID, AND A STRANGER REFUSES BY
+            // NAME. Decision 0021's byte five decides what the lifecycle preplan
+            // writes into this register; under a `Credit` plan it is the
+            // market's RentCredit wallet, which is what the campaign's
+            // instrumented replay found there and what made SubmitCandidate
+            // unexecutable for every permissionless solver. The Candidate
+            // recipe declares `Payer`, so this clause is the join that proves
+            // the account that funded the candidate is the one the record
+            // names.
+            let mut foreign_beneficiary = fixture.clone();
+            write_identity(
+                &mut foreign_beneficiary.bank,
+                scalar_count,
+                identity::PRIMARY_BENEFICIARY,
+                [0xb1; 32],
+            )
+            .expect("stranger beneficiary");
+            let before = foreign_beneficiary.bank.clone();
+            assert_eq!(
+                project_submit(&mut foreign_beneficiary),
+                Err(GeneralHotCandidateErrorV3::SubmitCoordinate(
+                    SubmitCandidateClauseV3::LifecycleBeneficiary
+                )),
+            );
+            assert_eq!(foreign_beneficiary.bank, before);
+
+            // AND THE CANDIDATE IDENTITY THE ADDRESS IS SEEDED ON. Zero here is
+            // exactly what every bundle this tree ever built carried, because
+            // no AccountProfile operation wrote the register until 2026-09-04.
+            let mut vacant_candidate = fixture.clone();
+            write_identity(
+                &mut vacant_candidate.bank,
+                scalar_count,
+                identity::CANDIDATE,
+                [0; 32],
+            )
+            .expect("unprojected candidate register");
+            let before = vacant_candidate.bank.clone();
+            assert_eq!(
+                project_submit(&mut vacant_candidate),
+                Err(GeneralHotCandidateErrorV3::SubmitCoordinate(
+                    SubmitCandidateClauseV3::IdentityCandidate
+                )),
+            );
+            assert_eq!(vacant_candidate.bank, before);
 
             let mut wrong_item = fixture.clone();
             let last = GENERAL_HOT_COMMON_SCALARS_V3
@@ -5136,7 +5421,12 @@ mod tests {
             )
             .expect("out-of-range outcome");
             let before = wrong_item.bank.clone();
-            assert!(project_submit(&mut wrong_item).is_err());
+            assert_eq!(
+                project_submit(&mut wrong_item),
+                Err(GeneralHotCandidateErrorV3::SubmitCoordinate(
+                    SubmitCandidateClauseV3::ItemOutcomeColumn
+                )),
+            );
             assert_eq!(wrong_item.bank, before);
         }
     }

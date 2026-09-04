@@ -93,8 +93,15 @@ use dclutch_rent_contract::{
 };
 use solana_account::Account;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
-use solana_program::{hash::hash, instruction::Instruction, pubkey::Pubkey, rent::Rent};
+use solana_program::{
+    hash::hash,
+    instruction::{Instruction, InstructionError},
+    pubkey::Pubkey,
+    rent::Rent,
+};
+use solana_program_test::BanksClientError;
 use solana_sdk::signature::{Keypair, Signer};
+use solana_sdk::transaction::TransactionError;
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
 
 const ACCELERATOR_PROGRAM: Pubkey = Pubkey::new_from_array([0xa1; 32]);
@@ -1909,6 +1916,17 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     let payer = Keypair::new_from_array([0x11; 32]);
     let fee_payer = Keypair::new_from_array([0x12; 32]);
     let seal_payer = Keypair::new_from_array([0x13; 32]);
+    // THE SOLVER IS NOT THE MARKET'S SPONSOR, AND THAT IS THE CONTROL.
+    //
+    // `payer` is the wallet the founding wrote into the RentCredit's
+    // `RefundAuthority`, so a candidate submitted BY `payer` would satisfy
+    // `identity::PRIMARY_BENEFICIARY == solver_id` under either refund
+    // declaration -- decision 0021 records exactly that coincidence ("it passed
+    // for as long as the campaign staged that credit with the LP owner's own
+    // key") as the shape that hid the Dealer defect for a family. A fourth
+    // keypair makes the two answers different values, so this execution
+    // distinguishes `Payer` from `Credit` instead of agreeing with both.
+    let solver = Keypair::new_from_array([0x14; 32]);
     let mut test = waist::program_test_without_forced_budget(&elves);
     let releases = waist::add_release_waist_v2(&mut test, &elves, substrate);
     waist::add_program_v2(
@@ -1935,16 +1953,18 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         fee_payer.pubkey(),
     );
     add_case_accounts(&mut test, &open, &payer, &fee_payer);
-    test.add_account(
-        seal_payer.pubkey(),
-        Account {
-            lamports: GENESIS_PAYER_LAMPORTS,
-            data: Vec::new(),
-            owner: system_program::ID,
-            executable: false,
-            rent_epoch: 0,
-        },
-    );
+    for funded in [&seal_payer, &solver] {
+        test.add_account(
+            funded.pubkey(),
+            Account {
+                lamports: GENESIS_PAYER_LAMPORTS,
+                data: Vec::new(),
+                owner: system_program::ID,
+                executable: false,
+                rent_epoch: 0,
+            },
+        );
+    }
     waist::add_lookup_table(&mut test, &open.lookup_addresses);
     let mut context = waist::start_with_substrate(test, substrate).await;
 
@@ -2321,7 +2341,12 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         submitted_slot,
         candidate_id,
         batch_id: closed_batch.batch_id(),
-        solver_id: SOLVER,
+        // THE SOLVER IS THE ACCOUNT THAT PAYS, and this line is the whole of
+        // that law on the campaign's side. The transition carries
+        // `identity_eq(PAYER, OWNER)` and the projector joins the lifecycle's
+        // beneficiary to the record's solver; both are satisfied by the payer
+        // this action is bound to, and by nothing else.
+        solver_id: solver.pubkey().to_bytes(),
         row_count: 1,
         reward_rate_lamports: CRANK_REWARD_LAMPORTS,
     };
@@ -2331,7 +2356,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         CANDIDATE_PAGE_REVISION,
         1,
         CRANK_REWARD_LAMPORTS,
-        SOLVER,
+        solver.pubkey().to_bytes(),
         submission_opening.work_capacity().expect("work capacity"),
         submitted_slot,
     )
@@ -2353,7 +2378,11 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         market: observed_binding(&mut context, campaign.state.market.key).await,
         root: observed_binding(&mut context, open.root).await,
         rent_credit: observed_binding(&mut context, open.rent_credit).await,
-        payer: observed_binding(&mut context, payer.pubkey()).await,
+        // The account the profile debits for this action is the SOLVER, not the
+        // campaign's sponsor. `GENERAL_PRIMARY_PAYER_ACCOUNT_V3` is a per-action
+        // binding, so an action whose state belongs to one participant binds
+        // that participant here.
+        payer: observed_binding(&mut context, solver.pubkey()).await,
         primary_state: None,
     };
 
@@ -2372,40 +2401,32 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     )
     .expect("the campaign's candidate corpus is the shape SubmitCandidate reads");
 
-    // AND THE BUNDLE STILL CANNOT BE BUILT. This is the candidate half's wall,
-    // and it is two registers wide.
+    // ---- AND IT EXECUTES. THE WALL WAS TWO REGISTERS AND ONE PLAN BYTE ----
     //
-    // `project_general_submit_candidate_in_place_v3` requires the input bank to
-    // carry `identity::CANDIDATE == candidate_id` and
-    // `identity::PRIMARY_BENEFICIARY == solver_id`
-    // (`hot_candidate_v3.rs:1107` and `:1115`, inside one forty-five-clause
-    // conjunct that publishes a single `InvalidCoordinate`). SubmitCandidate's
-    // own AccountProfile projects neither: its thirty-three operations
-    // (`account_rules_v3.rs:628-795`) write `BEST_VERIFIED_DIGEST`, `ORDER`,
-    // `SELECTION_POLICY`, `RESULT_BENEFICIARY_OBSERVATION`, `BENEFICIARY`,
-    // `OWNER` and `PAYER`, and `identity::CANDIDATE` is projected only by
-    // `PlaceOrder`, `CancelOrder` and `ReleaseOrder`. Measured, not inferred:
-    // an instrumented replay of this exact bundle printed every coordinate the
-    // conjunct reads, and thirty-seven of the thirty-nine matched -- the two
-    // that did not were `CANDIDATE`, which was thirty-two zero bytes, and
-    // `PRIMARY_BENEFICIARY`, which held the lifecycle's own beneficiary rather
-    // than the solver.
+    // `44c0ccf19` measured the refusal and named the two coordinates the input
+    // bank did not carry: `identity::CANDIDATE`, which was thirty-two zero
+    // bytes, and `identity::PRIMARY_BENEFICIARY`, which "held the lifecycle's
+    // own beneficiary rather than the solver". They have DIFFERENT producers
+    // and only one of them is the AccountProfile's, which is why the pair could
+    // not be closed by one edit:
     //
-    // The first inference from the same refusal was WRONG and worth recording:
-    // the conjunct's first clause checks the per-item `OUTCOME` column, so
-    // "nothing projects the item outcomes" was the obvious reading. The probe
-    // showed the bank carrying `[0, 1]` exactly as required. A forty-five-clause
-    // conjunct behind one code is why that cost a measurement instead of a
-    // glance.
-    //
-    // THE HARNESS IS THE MISSING PRODUCER TODAY. The accelerator's own
-    // program-test executes SubmitCandidate on a real ELF because
-    // `submit_candidate_bank` writes both registers by hand, so the projector
-    // has never been asked for them by a route that assembles its own bank.
-    // Nothing here works around it: when the two producers exist, this
-    // assertion becomes the execution the campaign owes, and the corpus above
-    // is already the one it needs.
-    let wall = build_action_case_with_evidence(
+    // * `identity::CANDIDATE` is a profile projection and now is one --
+    //   `account_rules_v3.rs`, SubmitCandidate operation 33, out of the
+    //   authenticated CandidateImage. It is the register
+    //   `GENERAL_CANDIDATE_STATE_RECIPE_V3` seeds the state address on, so
+    //   until it had a source every candidate under one root derived the SAME
+    //   address from thirty-two zero bytes.
+    // * `identity::PRIMARY_BENEFICIARY` is a lifecycle PROTECTED OUTPUT, and
+    //   `validate_protected_outputs_against_profile` refuses `ProfileMismatch`
+    //   for any policy whose profile writes one. The AccountProfile is
+    //   forbidden from projecting it; the lifecycle preplan writes it, and the
+    //   value is decided by decision 0021's byte five. `Credit` writes the
+    //   market's RentCredit wallet, which is why the register held what it
+    //   held. The Candidate recipe declares `Payer` now, so the preplan writes
+    //   `*payer.key`, and the projector's conjunct becomes the check it reads
+    //   as: the account that funded this candidate IS the solver the record
+    //   names.
+    let submit = build_action_case_with_evidence(
         &campaign,
         Action::SubmitCandidate,
         &submit_chain,
@@ -2413,11 +2434,97 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         fee_payer.pubkey(),
         &evidence,
     )
-    .err();
+    .expect("the fifth General action assembles against the corpus this campaign wrote");
+    assert_ne!(
+        submit.built.bundle.artifacts.seal, close.built.bundle.artifacts.seal,
+        "a capability seal is keyed by action; SubmitCandidate needs its own"
+    );
+    let submit_installed =
+        install_absent(&mut context, &submit, &[submit.built.bundle.artifacts.seal]).await;
+    let (submit_seal, submit_seal_cu) =
+        produce_seal(&mut context, &submit, &seal_payer, &fee_payer).await;
+    assert_eq!(submit_seal, submit.built.bundle.artifacts.seal);
+    waist::set_lookup_table(&mut context, &submit.lookup_addresses);
+    assert_frame_control(&mut context, &submit).await;
+    let solver_before = chain_account(&mut context, solver.pubkey()).await.lamports;
+    let sponsor_before_submit = chain_account(&mut context, payer.pubkey()).await.lamports;
+    let submit_refusal = waist::submit_v0_observed(
+        &mut context,
+        &submit.instructions,
+        submit.lookup_addresses.clone(),
+        Some(&fee_payer),
+        &[&solver],
+    )
+    .await
+    .err()
+    .expect("the candidate escrow is funded by a local effect the runtime refuses");
+
+    // ---- THE WALL THAT IS LEFT, AND IT IS ONE EFFECT INSTRUCTION WIDE ----
+    //
+    // EVERYTHING THE PROGRAM OWNS ACCEPTED. The bundle assembles, the real
+    // accelerator CPI runs four times, the projector's fifty-seven coordinate
+    // clauses all hold, the transition folds, the lifecycle preplans and
+    // commits, and Trading returns its acknowledgement after 677,937 CU. The
+    // refusal is the RUNTIME's, raised after the instruction returned, and it
+    // is not about General's semantics at all.
+    //
+    // WHAT IT IS. `append_candidate_action_patches` gives SubmitCandidate a
+    // LOCAL `transfer_lamports(GENERAL_PRIMARY_PAYER_ACCOUNT_V3 -> candidate,
+    // SCRATCH_A)` to fund the work escrow -- `SCRATCH_A` is the candidate's
+    // `work_capacity`, and it is the one lamport movement a General action
+    // makes that is NOT the lifecycle's. A local effect is applied by writing
+    // the coordinate's lamports back at commit, and the payer is a
+    // System-owned account, so the runtime's post-instruction rule refuses:
+    // *"instruction spent from the balance of an account it does not own"*.
+    // The lifecycle's own rent debit of the same payer is legal for exactly the
+    // reason this is not -- it goes through a System CPI, which is the three
+    // `11111111111111111111111111111111 invoke [2]` lines in the log above.
+    //
+    // WHY NOTHING FOUND IT. The accelerator's program-test executes
+    // SubmitCandidate on a real ELF and stops at the accelerator: it never
+    // reaches Trading's commit, so the effect's transfer has never been
+    // APPLIED by anything. Its producer exists, its reader exists, and the
+    // instruction between them had never run -- the same shape as the two
+    // registers this commit gave producers to, one layer down.
+    //
+    // IT IS NOT REPAIRABLE INSIDE THIS ACTION'S ARTIFACTS. A program may only
+    // decrease lamports of an account it owns, so the escrow has to move
+    // through System, which means a funding action rather than a local effect
+    // (`EffectProgramV5`'s funding half, which `require_no_funding_local_
+    // mutation_v5` already keeps disjoint from local ones). That is Trading's
+    // commit and the Effect artifact, not the General profile, and it is the
+    // next thing this route owes.
+    assert!(
+        matches!(
+            submit_refusal.error,
+            BanksClientError::TransactionError(TransactionError::InstructionError(
+                2,
+                InstructionError::ExternalAccountLamportSpend
+            ))
+        ),
+        "SubmitCandidate refuses at the runtime lamport rule and nowhere else: {:?}",
+        submit_refusal.error,
+    );
+    assert!(
+        submit_refusal.invoked(ACCELERATOR_PROGRAM),
+        "the real accelerator CPI ran before the runtime refused the funding"
+    );
+    // NOTHING MOVED. A refused transaction leaves the bank exactly as it was,
+    // which is what makes the wall a wall rather than a partial write.
     assert_eq!(
-        wall,
-        Some(BuilderError::Projection("general-submit-candidate")),
-        "SubmitCandidate no longer refuses at the projector; the campaign owes its execution",
+        chain_account(&mut context, submit.primary_state).await,
+        absent_account(),
+        "the refused submission leaves the candidate address vacant"
+    );
+    assert_eq!(
+        chain_account(&mut context, solver.pubkey()).await.lamports,
+        solver_before,
+        "the refused submission debits the solver nothing"
+    );
+    assert_eq!(
+        chain_account(&mut context, payer.pubkey()).await.lamports,
+        sponsor_before_submit,
+        "the refused submission debits the market sponsor nothing"
     );
 
     eprintln!(
@@ -2449,12 +2556,14 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         replay.compute_units_consumed,
     );
     eprintln!(
-        "general-campaign submit-candidate-wall candidate={} batch={} refusal={:?} \
-         missing=identity::CANDIDATE,identity::PRIMARY_BENEFICIARY",
+        "general-campaign submit-candidate-assembled cu={} candidate={} batch={} solver={} \
+         installed_records={submit_installed} wall=ExternalAccountLamportSpend",
+        submit_refusal.compute_units_consumed,
         hex32(candidate_id),
         hex32(closed_batch.batch_id()),
-        wall,
+        hex32(solver.pubkey().to_bytes()),
     );
+    eprintln!("general-campaign submit-candidate-seal cu={submit_seal_cu}");
 }
 
 /// `TradingSbfError::DescriptorManifestEntry`, derived from its REGISTERED BAND.
