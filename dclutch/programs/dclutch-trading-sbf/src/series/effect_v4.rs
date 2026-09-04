@@ -17,6 +17,7 @@ use dclutch_effect_kernel::{
     },
 };
 use dclutch_series_v3_kernel::request::{SeriesActionRequestV3, SeriesActionV3};
+use dclutch_series_v3_kernel::series_proof_count_v3;
 
 use super::artifacts_v3::{
     SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3, SERIES_CLAIMS_RECEIPT_DEPENDENCIES_V3,
@@ -60,9 +61,44 @@ pub const SERIES_CONSUME_REALIZE_ROUTE_V4: u16 = 2;
 pub const SERIES_CONSUME_CLAIMS_ROUTE_V4: u16 = 3;
 /// Final Core Open global route.
 pub const SERIES_CONSUME_OPEN_ROUTE_V4: u16 = 4;
+/// Exact number of borrowed proof ranges Consume declares for one Template.
+///
+/// Consume borrows the same proof twice -- Core `Found` and Core `Open` both
+/// re-admit the occurrence -- under `IdenticalReuseExactCoverage`. A
+/// `BorrowedRangeV4` is canonically nonempty, so a Template whose canonical
+/// proof is empty declares NEITHER, exactly as
+/// `series::expire_funding_artifacts_v5::series_expire_borrowed_range_count_v5`
+/// declares neither for Expire. `series_proof_count_v3` is the single
+/// authority both read, and it is the same one the Series kernel admits
+/// against, so a declaration cannot drift from an admission.
+/// Takes the PROOF count, not the occurrence count, because two readers ask
+/// this question from opposite sides: the emitter knows the Template's
+/// occurrence count and converts through [`series_proof_count_v3`], while the
+/// onchain [`SeriesConsumeEffectV4::decode`] knows only the family request it
+/// was handed. One function answers both, so a declaration written offchain
+/// and the count checked onchain cannot disagree about what "no proof" means.
+pub const fn series_consume_borrowed_range_count_v4(proof_count: u32) -> usize {
+    2 * series_consume_route_proof_range_count_v4(proof_count) as usize
+}
+
+/// Exact borrowed proof ranges ONE Consume route declares.
+///
+/// This is the primitive of the pair, and it exists because the count is read
+/// in two shapes: the table's total, and the per-route count
+/// [`validate_resolved`] compares against each Core invocation. Those were two
+/// authors and one of them was the literal `1`, so withdrawing the table's
+/// ranges left the per-route pin demanding a range that no longer existed.
+pub const fn series_consume_route_proof_range_count_v4(proof_count: u32) -> u16 {
+    if proof_count == 0 { 0 } else { 1 }
+}
+
 /// Exact DCE5 bytes added around the canonical embedded Effect V3 program.
-pub const SERIES_CONSUME_EFFECT_V4_OVERHEAD_BYTES: usize =
-    HEADER_BYTES_V4 + DYNAMIC_SPAN_BYTES_V4 + 2 * BORROWED_RANGE_BYTES_V4;
+pub const fn series_consume_effect_v4_overhead_bytes(occurrence_count: u32) -> usize {
+    HEADER_BYTES_V4
+        + DYNAMIC_SPAN_BYTES_V4
+        + series_consume_borrowed_range_count_v4(series_proof_count_v3(occurrence_count))
+            * BORROWED_RANGE_BYTES_V4
+}
 
 const ROUTE_LOCK: u16 = SERIES_CONSUME_LOCK_ROUTE_V4;
 const ROUTE_FOUND: u16 = SERIES_CONSUME_FOUND_ROUTE_V4;
@@ -185,12 +221,19 @@ impl<'a> SeriesConsumeEffectV4<'a> {
 
         let program =
             ProgramV4::decode(bytes).map_err(|_| SeriesConsumeEffectErrorV4::Successor)?;
-        validate_successor(program)?;
+        validate_successor(program, u32::from(request.proof_count()))?;
         validate_base(program.base())?;
         program
             .validate_request_coverage(family_request.len(), tail_count, scalars, identities)
             .map_err(|_| SeriesConsumeEffectErrorV4::Successor)?;
-        validate_resolved(program, tail_count, scalars, identities, funding_count_hint)?;
+        validate_resolved(
+            program,
+            tail_count,
+            scalars,
+            identities,
+            funding_count_hint,
+            u32::from(request.proof_count()),
+        )?;
         Ok(Self {
             program,
             funding_count_hint,
@@ -259,6 +302,7 @@ pub const fn series_consume_route_account_start_v4(route: u16, funding_count: u1
 /// the embedded base and the complete successor encoding have both accepted.
 pub fn encode_series_consume_effect_v4_atomic(
     base_program: &[u8],
+    occurrence_count: u32,
     scratch: &mut [u8],
     output: &mut [u8],
 ) -> Result<(), SeriesConsumeEffectErrorV4> {
@@ -271,29 +315,39 @@ pub fn encode_series_consume_effect_v4_atomic(
         SERIES_CONSUME_CORE_FOUND_ACCOUNT_BASE_V3,
         ALLOWED_FUNDING_COUNTS,
     )];
-    let ranges = [proof_range(ROUTE_FOUND), proof_range(ROUTE_OPEN)];
+    let declared = [proof_range(ROUTE_FOUND), proof_range(ROUTE_OPEN)];
+    let proof_count = series_proof_count_v3(occurrence_count);
+    let ranges = declared
+        .get(..series_consume_borrowed_range_count_v4(proof_count))
+        .ok_or(SeriesConsumeEffectErrorV4::Successor)?;
     encode_program_v4_atomic(
         base_program,
         BorrowedRangePolicyV4::IdenticalReuseExactCoverage,
         SERIES_ACTION_HEADER_OFFSET_V4,
         &spans,
-        &ranges,
+        ranges,
         scratch,
         output,
     )
     .map_err(|_| SeriesConsumeEffectErrorV4::Successor)?;
     validate_successor(
         ProgramV4::decode(output).map_err(|_| SeriesConsumeEffectErrorV4::Successor)?,
+        proof_count,
     )
 }
 
-fn validate_successor(program: ProgramV4<'_>) -> Result<(), SeriesConsumeEffectErrorV4> {
+fn validate_successor(
+    program: ProgramV4<'_>,
+    proof_count: u32,
+) -> Result<(), SeriesConsumeEffectErrorV4> {
+    let range_count = u16::try_from(series_consume_borrowed_range_count_v4(proof_count))
+        .map_err(|_| SeriesConsumeEffectErrorV4::Successor)?;
     if program.borrowed_range_policy() != BorrowedRangePolicyV4::IdenticalReuseExactCoverage
         || program.semantic_prefix_bytes()
             != u32::try_from(SERIES_ACTION_HEADER_BYTES_V3)
                 .map_err(|_| SeriesConsumeEffectErrorV4::Successor)?
         || program.span_count() != 1
-        || program.range_count() != 2
+        || program.range_count() != range_count
         || program
             .span(0)
             .map_err(|_| SeriesConsumeEffectErrorV4::Successor)?
@@ -303,14 +357,18 @@ fn validate_successor(program: ProgramV4<'_>) -> Result<(), SeriesConsumeEffectE
                 SERIES_CONSUME_CORE_FOUND_ACCOUNT_BASE_V3,
                 ALLOWED_FUNDING_COUNTS,
             )
-        || program
+    {
+        return Err(SeriesConsumeEffectErrorV4::Successor);
+    }
+    if range_count == 2
+        && (program
             .borrowed_range(0)
             .map_err(|_| SeriesConsumeEffectErrorV4::Successor)?
             != proof_range(ROUTE_FOUND)
-        || program
-            .borrowed_range(1)
-            .map_err(|_| SeriesConsumeEffectErrorV4::Successor)?
-            != proof_range(ROUTE_OPEN)
+            || program
+                .borrowed_range(1)
+                .map_err(|_| SeriesConsumeEffectErrorV4::Successor)?
+                != proof_range(ROUTE_OPEN))
     {
         return Err(SeriesConsumeEffectErrorV4::Successor);
     }
@@ -476,7 +534,9 @@ fn validate_resolved(
     scalars: &[u64],
     identities: &[[u8; 32]],
     funding_count: u16,
+    proof_count: u32,
 ) -> Result<(), SeriesConsumeEffectErrorV4> {
+    let route_ranges = series_consume_route_proof_range_count_v4(proof_count);
     let expected_total = SERIES_CONSUME_LOGICAL_ACCOUNT_BASE_V4
         .checked_add(funding_count)
         .ok_or(SeriesConsumeEffectErrorV4::Registers)?;
@@ -502,13 +562,13 @@ fn validate_resolved(
     if found.invocation.fixed_account_start != FOUND_ACCOUNT_START
         || found.invocation.fixed_account_count
             != SERIES_CONSUME_CORE_FOUND_ACCOUNT_BASE_V3 + funding_count
-        || found.borrowed_range_count() != 1
+        || found.borrowed_range_count() != route_ranges
         || realize.invocation.fixed_account_start
             != REALIZE_ACCOUNT_START_BEFORE_FUNDING + funding_count
         || claims.invocation.fixed_account_start
             != CLAIMS_ACCOUNT_START_BEFORE_FUNDING + funding_count
         || open.invocation.fixed_account_start != OPEN_ACCOUNT_START_BEFORE_FUNDING + funding_count
-        || open.borrowed_range_count() != 1
+        || open.borrowed_range_count() != route_ranges
     {
         return Err(SeriesConsumeEffectErrorV4::Registers);
     }
@@ -645,13 +705,28 @@ pub(super) mod tests {
         output
     }
 
+    /// Four occurrences, because [`request`] carries two siblings.
+    ///
+    /// `series_proof_count_v3(4) == 2`, which is the only occurrence count
+    /// family whose canonical proof this fixture's request could satisfy.
+    /// Before the artifacts were keyed on it, this fixture drove a 192-byte
+    /// request through an Effect built for no Template in particular and a
+    /// RequestProfile that pinned 128 -- and stayed green, because no test
+    /// asked both artifacts the same question.
+    pub(crate) const FIXTURE_OCCURRENCE_COUNT: u32 = 4;
+
     pub(crate) fn successor() -> Vec<u8> {
         let base = base_program();
-        let width = SERIES_CONSUME_EFFECT_V4_OVERHEAD_BYTES + base.len();
+        let width = series_consume_effect_v4_overhead_bytes(FIXTURE_OCCURRENCE_COUNT) + base.len();
         let mut scratch = vec![0_u8; width];
         let mut output = vec![0_u8; width];
-        encode_series_consume_effect_v4_atomic(&base, &mut scratch, &mut output)
-            .expect("successor program");
+        encode_series_consume_effect_v4_atomic(
+            &base,
+            FIXTURE_OCCURRENCE_COUNT,
+            &mut scratch,
+            &mut output,
+        )
+        .expect("successor program");
         output
     }
 
@@ -711,6 +786,68 @@ pub(super) mod tests {
         assert_eq!(
             SERIES_CONSUME_PREFIX_ROUTE_END_V4,
             SERIES_CONSUME_CONTINUATION_ROUTE_START_V4
+        );
+    }
+
+    /// A one-occurrence Series Consume admits with NO borrowed range, and the
+    /// two-range program is refused for it.
+    ///
+    /// `proof_height(1) == 0`, so the canonical single-occurrence Consume
+    /// request is the bare 128-byte header. Before the range table was keyed
+    /// on the Template, this action declared the two duplicate proof ranges
+    /// unconditionally, and `BorrowedRangeV4::resolve` refuses a zero length --
+    /// so the ONLY Series shape the tree has ever actually founded could not
+    /// have consumed an occurrence at all. Nothing was red, because no test in
+    /// the tree drove `consume_artifacts_v4` with an empty proof.
+    #[test]
+    fn a_single_occurrence_consume_admits_with_no_borrowed_range() {
+        let base = base_program();
+        let width = series_consume_effect_v4_overhead_bytes(1) + base.len();
+        let mut scratch = vec![0_u8; width];
+        let mut bytes = vec![0_u8; width];
+        encode_series_consume_effect_v4_atomic(&base, 1, &mut scratch, &mut bytes)
+            .expect("single-occurrence successor");
+        assert_eq!(
+            ProgramV4::decode(&bytes).expect("DCE5").range_count(),
+            0,
+            "a canonical empty proof declares no range"
+        );
+
+        let request = encode_series_action_header_v3(
+            SeriesActionV3::Consume,
+            id(1),
+            Some(id(2)),
+            Some(id(3)),
+            4,
+            5,
+            0,
+        )
+        .expect("Consume header")
+        .to_vec();
+        assert_eq!(request.len(), SERIES_ACTION_HEADER_BYTES_V3);
+
+        // Request geometry with an empty proof: header 128, proof bytes 0,
+        // proof count 0, witness item width 32.
+        let scalars = [128, 0, 0, 32, 7, 9, 4];
+        let identities = [[0_u8; 32]; IDENTITIES];
+        let admitted = SeriesConsumeEffectV4::decode(&bytes, &request, 0, &scalars, &identities, 7)
+            .expect("single-occurrence Series Consume");
+        for route in [ROUTE_FOUND, ROUTE_OPEN] {
+            assert_eq!(
+                admitted
+                    .program()
+                    .borrowed_range_count_for_route(route)
+                    .expect("route range count"),
+                0
+            );
+        }
+
+        // Negative control, and it is the pre-repair artifact exactly: the
+        // two-range program built for a four-occurrence Template refuses this
+        // request rather than resolving a zero-length borrow.
+        assert_eq!(
+            SeriesConsumeEffectV4::decode(&successor(), &request, 0, &scalars, &identities, 7),
+            Err(SeriesConsumeEffectErrorV4::Successor)
         );
     }
 
@@ -779,12 +916,13 @@ pub(super) mod tests {
     #[test]
     fn constructor_is_failure_atomic_for_wrong_base_or_width() {
         let base = base_program();
-        let width = SERIES_CONSUME_EFFECT_V4_OVERHEAD_BYTES + base.len();
+        let width = series_consume_effect_v4_overhead_bytes(FIXTURE_OCCURRENCE_COUNT) + base.len();
         let mut scratch = vec![0_u8; width];
         let mut output = vec![9_u8; width];
         assert_eq!(
             encode_series_consume_effect_v4_atomic(
                 base.get(1..).expect("truncated base"),
+                FIXTURE_OCCURRENCE_COUNT,
                 &mut scratch,
                 &mut output,
             ),
@@ -794,7 +932,12 @@ pub(super) mod tests {
 
         let mut short_scratch = vec![0_u8; width - 1];
         assert_eq!(
-            encode_series_consume_effect_v4_atomic(&base, &mut short_scratch, &mut output,),
+            encode_series_consume_effect_v4_atomic(
+                &base,
+                FIXTURE_OCCURRENCE_COUNT,
+                &mut short_scratch,
+                &mut output,
+            ),
             Err(SeriesConsumeEffectErrorV4::Successor)
         );
         assert!(output.iter().all(|byte| *byte == 9));

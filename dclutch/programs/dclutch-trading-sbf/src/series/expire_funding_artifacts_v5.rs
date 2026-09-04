@@ -60,6 +60,8 @@ use dclutch_release_set_contract::{
     CAPABILITY_EXECUTION_SELECTION_ENTRY_INDEX_OFFSET, CAPABILITY_EXECUTION_SELECTION_KIND_OFFSET,
     CAPABILITY_EXECUTION_SELECTION_MANIFEST_OFFSET, CAPABILITY_EXECUTION_SELECTION_RELEASE_OFFSET,
 };
+use dclutch_series_v3_kernel::{series_action_request_bytes_v3, series_proof_count_v3};
+
 use dclutch_request_profile_contract::{
     HEADER_BYTES as REQUEST_HEADER_BYTES, OPERATION_BYTES as REQUEST_OPERATION_BYTES,
     RequestProfileV1,
@@ -207,12 +209,34 @@ pub const SERIES_EXPIRE_BASE_EFFECT_BYTES_V5: usize = EFFECT_HEADER_BYTES_V3
     + 5 * EFFECT_ROUTE_BYTES_V3
     + EFFECT_OPERATIONS * EFFECT_OPERATION_BYTES_V3
     + SERIES_EXPIRE_REQUEST_BANK_BYTES_V5;
-/// Exact encoded byte width of the borrowed-proof EffectV4.
-pub const SERIES_EXPIRE_EFFECT_V4_BYTES_V5: usize =
-    SERIES_EXPIRE_BASE_EFFECT_BYTES_V5 + EFFECT_HEADER_BYTES_V4 + BORROWED_RANGE_BYTES_V4;
+/// Exact number of borrowed proof ranges route 4 declares for one Template.
+///
+/// A borrowed range is canonically NONEMPTY on both sides of the seam --
+/// `BorrowedRangeV4::resolve` refuses a zero length and
+/// `BorrowedWitnessPolicyV3::validate` refuses a zero minimum -- so a Template
+/// whose canonical proof is empty must declare NO range rather than a range
+/// that happens to resolve to zero. `series_proof_count_v3` is the same
+/// authority the Series kernel admits against, so the declaration and the
+/// admission cannot drift.
+pub const fn series_expire_borrowed_range_count_v5(occurrence_count: u32) -> usize {
+    if series_proof_count_v3(occurrence_count) == 0 {
+        0
+    } else {
+        1
+    }
+}
+
+/// Exact encoded byte width of the borrowed-proof EffectV4 for one Template.
+pub const fn series_expire_effect_v4_bytes_v5(occurrence_count: u32) -> usize {
+    SERIES_EXPIRE_BASE_EFFECT_BYTES_V5
+        + EFFECT_HEADER_BYTES_V4
+        + series_expire_borrowed_range_count_v5(occurrence_count) * BORROWED_RANGE_BYTES_V4
+}
+
 /// Exact encoded byte width of the empty-funding EffectV5 successor.
-pub const SERIES_EXPIRE_EFFECT_BYTES_V5: usize =
-    EFFECT_HEADER_BYTES_V5 + SERIES_EXPIRE_EFFECT_V4_BYTES_V5;
+pub const fn series_expire_effect_bytes_v5(occurrence_count: u32) -> usize {
+    EFFECT_HEADER_BYTES_V5 + series_expire_effect_v4_bytes_v5(occurrence_count)
+}
 
 const _: () = assert!(HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3 == 5);
 const _: () = assert!(SERIES_EXPIRE_ROUTE_STARTS_V5[4] + SERIES_EXPIRE_ROUTE_COUNTS_V5[4] == 81);
@@ -276,12 +300,13 @@ pub type Result<T> = core::result::Result<T, SeriesExpireFundingArtifactErrorV5>
 pub fn emit_series_expire_funding_artifacts_v5(
     profile: SeriesExpireAccountProfileInputV5<'_>,
     requests: SeriesExpireChildRequestsV5<'_>,
+    occurrence_count: u32,
 ) -> Result<SeriesExpireFundingArtifactsV5> {
     Ok(SeriesExpireFundingArtifactsV5 {
         account_profile: emit_account_profile(profile)?,
-        request_profile: emit_request_profile()?,
+        request_profile: emit_request_profile(occurrence_count)?,
         transition: emit_transition()?,
-        effect: emit_effect(requests)?,
+        effect: emit_effect(requests, occurrence_count)?,
     })
 }
 
@@ -531,7 +556,9 @@ fn profile_operations() -> Result<[AccountOperationInputV2; PROFILE_OPERATIONS]>
     ])
 }
 
-fn emit_request_profile() -> Result<Vec<u8>> {
+fn emit_request_profile(occurrence_count: u32) -> Result<Vec<u8>> {
+    let request_bytes = u32::try_from(series_action_request_bytes_v3(occurrence_count))
+        .map_err(|_| SeriesExpireFundingArtifactErrorV5::Geometry)?;
     let instructions = [
         RequestInstructionV1::require_u8(
             RequestCoordinateV1::fixed(ACTION_OFFSET),
@@ -558,7 +585,7 @@ fn emit_request_profile() -> Result<Vec<u8>> {
     let mut output = vec![0; SERIES_EXPIRE_REQUEST_PROFILE_BYTES_V5];
     encode_request_profile_v1_atomic(
         RequestGeometryV1::new(
-            SERIES_ACTION_HEADER_BYTES_V3 as u32,
+            request_bytes,
             0,
             SERIES_EXPIRE_COMMON_SCALAR_COUNT_V5,
             0,
@@ -669,7 +696,10 @@ fn emit_transition() -> Result<Vec<u8>> {
     Ok(output)
 }
 
-fn emit_effect(requests: SeriesExpireChildRequestsV5<'_>) -> Result<Vec<u8>> {
+fn emit_effect(
+    requests: SeriesExpireChildRequestsV5<'_>,
+    occurrence_count: u32,
+) -> Result<Vec<u8>> {
     let bank = encode_request_bank(requests)?;
     let a = SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3;
     let p = SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3;
@@ -763,26 +793,42 @@ fn emit_effect(requests: SeriesExpireChildRequestsV5<'_>) -> Result<Vec<u8>> {
         &mut base,
     )
     .map_err(|_| SeriesExpireFundingArtifactErrorV5::Effect)?;
-    let ranges = [BorrowedRangeV4::new(
+    // Route 4 declares the proof it will borrow, and declares NOTHING when the
+    // Template's canonical proof is empty. A `BorrowedRangeV4` is canonically
+    // nonempty -- `resolve` refuses a zero length -- so "borrow zero bytes" has
+    // no spelling, and the honest declaration for `proof_height(count) == 0` is
+    // an empty range table. Coverage still closes: `validate_request_coverage`
+    // starts its cursor at the 128-byte semantic prefix and requires it to
+    // reach the family request's exact end, which for the empty proof it
+    // already has.
+    let range = BorrowedRangeV4::new(
         4,
         RequestCoordinateV4::Fixed(SERIES_ACTION_HEADER_BYTES_V3 as u32),
         RequestCoordinateV4::CommonScalar(SERIES_EXPIRE_PROOF_BYTES_SCALAR_V5),
-    )];
-    let mut v4_scratch = vec![0; SERIES_EXPIRE_EFFECT_V4_BYTES_V5];
-    let mut v4 = vec![0; SERIES_EXPIRE_EFFECT_V4_BYTES_V5];
+    );
+    let ranges: &[BorrowedRangeV4] = if series_expire_borrowed_range_count_v5(occurrence_count) == 0
+    {
+        &[]
+    } else {
+        core::slice::from_ref(&range)
+    };
+    let v4_bytes = series_expire_effect_v4_bytes_v5(occurrence_count);
+    let mut v4_scratch = vec![0; v4_bytes];
+    let mut v4 = vec![0; v4_bytes];
     encode_program_v4_atomic(
         &base,
         BorrowedRangePolicyV4::DisjointExactCoverage,
         SERIES_ACTION_HEADER_BYTES_V3 as u32,
         &[],
-        &ranges,
+        ranges,
         &mut v4_scratch,
         &mut v4,
     )
     .map_err(|_| SeriesExpireFundingArtifactErrorV5::Effect)?;
     ProgramV4::decode(&v4).map_err(|_| SeriesExpireFundingArtifactErrorV5::Effect)?;
-    let mut v5_scratch = vec![0; SERIES_EXPIRE_EFFECT_BYTES_V5];
-    let mut v5 = vec![0; SERIES_EXPIRE_EFFECT_BYTES_V5];
+    let v5_bytes = series_expire_effect_bytes_v5(occurrence_count);
+    let mut v5_scratch = vec![0; v5_bytes];
+    let mut v5 = vec![0; v5_bytes];
     encode_program_v5_atomic(&v4, &[], &[], &mut v5_scratch, &mut v5)
         .map_err(|_| SeriesExpireFundingArtifactErrorV5::Effect)?;
     let effect = ProgramV5::decode(&v5).map_err(|_| SeriesExpireFundingArtifactErrorV5::Effect)?;
@@ -1245,9 +1291,86 @@ mod tests {
         assert!(AccountProfileV3::decode(&bytes).is_err());
     }
 
+    /// The profile's pinned request width and the effect's coverage agree.
+    ///
+    /// This is the conjunction `6f258cf5e` convicted, and neither half alone
+    /// shows it: the RequestProfile pins ONE exact family-request width and
+    /// `validate_request_coverage` requires the semantic prefix plus every
+    /// declared borrowed range to reach exactly that width. When the profile
+    /// was fixed at 128 for every Template and route 4 declared a range
+    /// unconditionally, `proof_count = 0` refused in the effect (a borrowed
+    /// range is canonically nonempty) and `proof_count >= 1` refused in the
+    /// profile. Both spellings had to move at once, so the test asks both at
+    /// once, across the whole occurrence-count family and not only the two
+    /// endpoints.
+    #[test]
+    fn profile_width_and_effect_coverage_agree_for_every_occurrence_count() {
+        let refund = [0x21; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3];
+        let close_vault = [0x22; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3];
+        let close_replay = [0x23; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3];
+        let projected_abort = [0x24; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3];
+        for occurrence_count in [0, 1, 2, 3, 4, 5, 8, 9, 1_000, u32::MAX] {
+            let proof_count = series_proof_count_v3(occurrence_count);
+            let request_bytes = series_action_request_bytes_v3(occurrence_count);
+            assert_eq!(
+                request_bytes,
+                SERIES_ACTION_HEADER_BYTES_V3 + 32 * proof_count as usize
+            );
+
+            let profile = emit_request_profile(occurrence_count).expect("request profile");
+            let profile = RequestProfileV1::decode(&profile).expect("request decode");
+            // Item stride is zero, so every Product tail count must agree.
+            for tail_count in [0, 1, 7] {
+                assert_eq!(profile.request_bytes(tail_count), Ok(request_bytes));
+            }
+
+            let effect = emit_effect(
+                child_requests(&refund, &close_vault, &close_replay, &projected_abort),
+                occurrence_count,
+            )
+            .expect("Expire EffectV5");
+            let effect = ProgramV5::decode(&effect).expect("EffectV5");
+            let v4 = effect.base();
+            assert_eq!(
+                usize::from(v4.range_count()),
+                series_expire_borrowed_range_count_v5(occurrence_count)
+            );
+            assert_eq!(
+                v4.borrowed_range_count_for_route(4),
+                Ok(u16::try_from(series_expire_borrowed_range_count_v5(occurrence_count))
+                    .expect("range count"))
+            );
+
+            let mut scalars = [0_u64; SERIES_EXPIRE_COMMON_SCALAR_COUNT_V5 as usize];
+            scalars[usize::from(SERIES_EXPIRE_PROOF_BYTES_SCALAR_V5)] = 32 * u64::from(proof_count);
+            let identities = [[0_u8; 32]; SERIES_EXPIRE_COMMON_IDENTITY_COUNT_V5 as usize];
+            assert_eq!(
+                v4.validate_request_coverage(request_bytes, 0, &scalars, &identities),
+                Ok(()),
+                "occurrence_count {occurrence_count}"
+            );
+            // The width the profile pins is the ONLY width coverage accepts.
+            assert!(
+                v4.validate_request_coverage(request_bytes + 32, 0, &scalars, &identities)
+                    .is_err()
+            );
+            if request_bytes > SERIES_ACTION_HEADER_BYTES_V3 {
+                assert!(
+                    v4.validate_request_coverage(
+                        SERIES_ACTION_HEADER_BYTES_V3,
+                        0,
+                        &scalars,
+                        &identities
+                    )
+                    .is_err()
+                );
+            }
+        }
+    }
+
     #[test]
     fn request_and_transition_are_exact_action_selected_programs() {
-        let request = emit_request_profile().expect("request profile");
+        let request = emit_request_profile(1).expect("request profile");
         let request = RequestProfileV1::decode(&request).expect("request decode");
         assert_eq!(request.fixed_request_bytes(), 128);
         assert_eq!(request.common_scalar_count(), 26);
@@ -1268,12 +1391,10 @@ mod tests {
         let close_vault = [0x22; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3];
         let close_replay = [0x23; SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3];
         let projected_abort = [0x24; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3];
-        let bytes = emit_effect(child_requests(
-            &refund,
-            &close_vault,
-            &close_replay,
-            &projected_abort,
-        ))
+        let bytes = emit_effect(
+            child_requests(&refund, &close_vault, &close_replay, &projected_abort),
+            4,
+        )
         .expect("Expire EffectV5");
         let effect = ProgramV5::decode(&bytes).expect("EffectV5");
         assert_eq!(effect.funding_action_count(), 0);

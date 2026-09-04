@@ -576,8 +576,8 @@ mod tests {
         },
         consume_artifacts_v4::{
             SERIES_CONSUME_BASE_EFFECT_BYTES_V4, SERIES_CONSUME_COMMON_IDENTITY_COUNT_V4,
-            SERIES_CONSUME_COMMON_SCALAR_COUNT_V4, SERIES_CONSUME_EFFECT_BYTES_V4,
-            SeriesConsumeChildRequestsV4, encode_series_consume_effect_v4_from_requests_atomic,
+            SERIES_CONSUME_COMMON_SCALAR_COUNT_V4, SeriesConsumeChildRequestsV4,
+            encode_series_consume_effect_v4_from_requests_atomic, series_consume_effect_bytes_v4,
         },
         effect_v4::SeriesConsumeEffectV4,
     };
@@ -701,6 +701,10 @@ mod tests {
         prefix
     }
 
+    /// 512 occurrences, because this module's fixture request carries nine
+    /// siblings: `series_proof_count_v3(512) == 9`.
+    const FIXTURE_OCCURRENCE_COUNT: u32 = 512;
+
     fn effect_bytes() -> Vec<u8> {
         let lock = [0x11; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3];
         let core = [0x22; SERIES_CONSUME_CORE_REQUEST_BYTES_V3];
@@ -708,8 +712,8 @@ mod tests {
         let claims = claims_request();
         let mut base_scratch = vec![0_u8; SERIES_CONSUME_BASE_EFFECT_BYTES_V4];
         let mut base = vec![0_u8; SERIES_CONSUME_BASE_EFFECT_BYTES_V4];
-        let mut scratch = vec![0_u8; SERIES_CONSUME_EFFECT_BYTES_V4];
-        let mut output = vec![0_u8; SERIES_CONSUME_EFFECT_BYTES_V4];
+        let mut scratch = vec![0_u8; series_consume_effect_bytes_v4(FIXTURE_OCCURRENCE_COUNT)];
+        let mut output = vec![0_u8; series_consume_effect_bytes_v4(FIXTURE_OCCURRENCE_COUNT)];
         encode_series_consume_effect_v4_from_requests_atomic(
             SeriesConsumeChildRequestsV4 {
                 lock: &lock,
@@ -717,6 +721,7 @@ mod tests {
                 realize: &realize,
                 claims: &claims,
             },
+            FIXTURE_OCCURRENCE_COUNT,
             &mut base_scratch,
             &mut base,
             &mut scratch,

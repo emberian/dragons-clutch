@@ -127,6 +127,18 @@ impl ResolutionCertificateKindV2 {
             Self::ResolutionFailure => generated::RESOLUTION_CERTIFICATE_FAILURE_KIND_V2,
         }
     }
+
+    /// The Lean-owned wire tag, which is also this kind's certificate PDA seed.
+    ///
+    /// The kind is a seed rather than a field the address ignores, so the four
+    /// certificates one Source state can write at one terminal sequence live at
+    /// four different addresses and none can overwrite another. The route that
+    /// creates a seat therefore needs this byte, and it needs it to be the same
+    /// byte the encoder writes -- a second copy of it in the program would be a
+    /// second author of where a certificate lives.
+    pub const fn kind_seed(self) -> u8 {
+        self.byte()
+    }
 }
 
 /// Canonical Runtime V2 Source certificate.

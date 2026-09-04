@@ -1,7 +1,22 @@
 # The Upkeep Vault — design sketch V0
 
-Status: SKETCH for adversarial review. Nothing here is chartered. Born
-2026-08-31 from the opener-shortfall discussion (WAVE b0e81f7c §3):
+Status: **CHARTERED 2026-09-04 by ember (C-11 D1 as amended). Not yet
+built.** This document is the argument and stands as written; the record
+shape a lane builds from is
+`docs/design/ECONOMICS_MODELS_2026_09_04.md` §7, which also carries the
+measured inflows and the adversary the review below asks for.
+
+**One measurement changes how to read §3.** The two inflows this sketch
+was designed around — the `CloseMakerReplay` donation slice and
+compaction dust — have carried **zero lamports across cohorts 13, 14 and
+15**. The two that carried real money are seat prepays (2,786,520 each,
+at least four seats, none reimbursed) and a rate-change residue (491,176
+lamports reclassified as surplus when devnet moved 6,333 → 5,080 a byte
+mid-cohort). A vault sized on donations is an empty vault. §5's Serum
+lesson is therefore not a caveat about a future failure; it is the
+expected operating condition from day one.
+
+Born 2026-08-31 from the opener-shortfall discussion (WAVE b0e81f7c §3):
 three separate rulings landed on "nowhere / zero / TBD" for the same
 reason — the protocol has no honest sink — and the estates question
 (who funds mainnet upkeep) has no answer that isn't a person's wallet.
@@ -117,3 +132,12 @@ need the C9-REVIEW treatment before charter: the adversary should
 attack I1 (can any involuntary flow be laundered in?), I2 (can any
 route be made to pay twice for one state change?), and the empty-vault
 degradation story.
+
+**Update 2026-09-04.** The charter is granted and the three attacks
+above are answered in shape rather than in code
+(`ECONOMICS_MODELS_2026_09_04.md` §7.5): I1 is attacked at the closed
+source-class enum, I2 at a payout cursor keyed by the receipt digest of
+the state transition it completed, and the empty-vault story is the
+expected state. The opener-receivable completion is still unbuilt, so a
+single-crank market's opener still eats 1,244,945 lamports at the
+cohorts' own rent rate (§5 there).

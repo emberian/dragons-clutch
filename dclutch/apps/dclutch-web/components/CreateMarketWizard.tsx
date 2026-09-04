@@ -55,6 +55,7 @@ import { readSponsoredPriceV1 } from '@/lib/sourceProviderV1';
 import { inspectMarketQuestionV1 } from '@/lib/marketQuestion';
 import { PUBLIC_DEVNET_CUT_V1 } from '@/lib/publicCutStaging';
 import { SolanaRpcClient } from '@/lib/rpc';
+import OpenerFirstCrankTerms from '@/components/OpenerFirstCrankTerms';
 import { useDeploymentFieldV1, useDeploymentV1 } from '@/lib/deploymentStore';
 
 type StepId = 'product' | 'window' | 'funding' | 'review' | 'submit';
@@ -686,6 +687,18 @@ export default function CreateMarketWizard() {
         are selected by the service. Both totals are recomputed from the named purposes and never taken from a caller, and the
         Realm collateral binding is present exactly when the Realm total is nonzero.
       </p>
+      {/* RULING D1 item 2, on the founding surface: the terms a founder agrees
+          to include who is paid first when somebody cranks this market's
+          escrows, and what that leaves the opener short. It sits in the funding
+          step because that is where a founder is already reading what opening
+          costs, and it is the one cost on this page the seven named purposes do
+          NOT cover -- it is borne by whoever opens an escrow later, which on a
+          quiet market is the founder again. */}
+      {product.ok && <OpenerFirstCrankTerms
+        endpoint={deployment.endpoint}
+        outcomeCount={product.value.outcomes.length}
+        heading="And one cost the seven purposes do not cover: the first crank"
+      />}
     </section>}
 
     {step === 'review' && <section className="direct-card">

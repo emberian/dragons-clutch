@@ -61,8 +61,8 @@ use super::{
         SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3, SERIES_WITNESS_ITEM_BYTES_V3,
     },
     effect_v4::{
-        SERIES_CONSUME_EFFECT_V4_OVERHEAD_BYTES, SERIES_CONSUME_INJECTED_ACCOUNT_COUNT_V4,
-        SERIES_CONSUME_LOGICAL_ACCOUNT_BASE_V4,
+        SERIES_CONSUME_INJECTED_ACCOUNT_COUNT_V4, SERIES_CONSUME_LOGICAL_ACCOUNT_BASE_V4,
+        series_consume_effect_v4_overhead_bytes,
     },
     instruction::SERIES_ACTION_HEADER_BYTES_V3,
 };
@@ -101,9 +101,10 @@ pub const SERIES_CONSUME_BASE_EFFECT_BYTES_V4: usize = EFFECT_HEADER_BYTES_V4
     + SERIES_CONSUME_RECEIPT_DEPENDENCY_COUNT_V4 * RECEIPT_DEPENDENCY_BYTES
     + SERIES_CONSUME_EFFECT_OPERATION_COUNT_V4 * EFFECT_OPERATION_BYTES_V4
     + SERIES_CONSUME_IR_REQUEST_BYTES_V3;
-/// Exact DCE5 Series Consume Effect width.
-pub const SERIES_CONSUME_EFFECT_BYTES_V4: usize =
-    SERIES_CONSUME_BASE_EFFECT_BYTES_V4 + SERIES_CONSUME_EFFECT_V4_OVERHEAD_BYTES;
+/// Exact DCE5 Series Consume Effect width for one Template.
+pub const fn series_consume_effect_bytes_v4(occurrence_count: u32) -> usize {
+    SERIES_CONSUME_BASE_EFFECT_BYTES_V4 + series_consume_effect_v4_overhead_bytes(occurrence_count)
+}
 
 const ACTION_SELECTOR_OFFSET: u32 = 12;
 const PROOF_COUNT_OFFSET: u32 = 13;
@@ -121,7 +122,11 @@ const OPEN_ACCOUNT_START: u16 = CLAIMS_ACCOUNT_START + SERIES_CONSUME_CLAIMS_ACC
 
 const _: () = assert!(SERIES_CONSUME_IR_REQUEST_BYTES_V3 == 3_040);
 const _: () = assert!(SERIES_CONSUME_BASE_EFFECT_BYTES_V4 == 3_432);
-const _: () = assert!(SERIES_CONSUME_EFFECT_BYTES_V4 == 3_504);
+// One Template with a canonical proof, one without: the pin now names both
+// widths, and the difference is exactly the two borrowed ranges Consume
+// declares only when the proof it borrows exists.
+const _: () = assert!(series_consume_effect_bytes_v4(1) == 3_472);
+const _: () = assert!(series_consume_effect_bytes_v4(2) == 3_504);
 const _: () = assert!(OPEN_ACCOUNT_START + SERIES_CONSUME_CORE_OPEN_ACCOUNT_COUNT_V3 == 161);
 
 /// Exact child requests owned by the canonical child codecs.
@@ -157,6 +162,21 @@ pub enum SeriesConsumeArtifactEmitErrorV4 {
 }
 
 /// Emit the exact fixed-header Series Consume RequestProfile.
+/// # Why this profile is fixed at the HEADER width and not the request width
+///
+/// Consume's authenticator splits the family request itself:
+/// [`super::artifacts_v4::split_request`] takes the first
+/// `SERIES_ACTION_HEADER_BYTES_V3` bytes as the header and requires the
+/// remainder to be exactly `request.proof_bytes()`, and
+/// `validate_and_execute_header` then REQUIRES `profile.request_bytes(0) ==
+/// SERIES_ACTION_HEADER_BYTES_V3` before projecting the header alone. So
+/// widening this profile to `128 + 32 * proof_count` -- which is what Expire's
+/// profile must do, because Expire is authenticated by the GENERIC Hot path
+/// whose `require_request_shape` compares the profile against the complete
+/// family request -- would refuse here at `SeriesArtifactErrorV4::Geometry`.
+/// The two actions differ in who splits the proof off, not in what the proof
+/// is; only the Effect's borrowed ranges are a shared defect, and those are
+/// keyed on the Template in [`super::effect_v4`].
 pub fn encode_series_consume_request_profile_v4_atomic(
     scratch: &mut [u8],
     output: &mut [u8],
@@ -278,6 +298,7 @@ pub fn encode_series_consume_request_bank_v4_atomic(
 #[cfg(not(target_os = "solana"))]
 pub fn encode_series_consume_effect_v4_from_requests_atomic(
     requests: SeriesConsumeChildRequestsV4<'_>,
+    occurrence_count: u32,
     base_scratch: &mut [u8],
     base_output: &mut [u8],
     successor_scratch: &mut [u8],
@@ -285,8 +306,8 @@ pub fn encode_series_consume_effect_v4_from_requests_atomic(
 ) -> Result<(), SeriesConsumeArtifactEmitErrorV4> {
     if base_scratch.len() != SERIES_CONSUME_BASE_EFFECT_BYTES_V4
         || base_output.len() != SERIES_CONSUME_BASE_EFFECT_BYTES_V4
-        || successor_scratch.len() != SERIES_CONSUME_EFFECT_BYTES_V4
-        || output.len() != SERIES_CONSUME_EFFECT_BYTES_V4
+        || successor_scratch.len() != series_consume_effect_bytes_v4(occurrence_count)
+        || output.len() != series_consume_effect_bytes_v4(occurrence_count)
     {
         return Err(SeriesConsumeArtifactEmitErrorV4::Buffer);
     }
@@ -412,7 +433,12 @@ pub fn encode_series_consume_effect_v4_from_requests_atomic(
         base_output,
     )
     .map_err(|_| SeriesConsumeArtifactEmitErrorV4::BaseEffect)?;
-    encode_series_consume_effect_v4_atomic(base_output, successor_scratch, output)
+    encode_series_consume_effect_v4_atomic(
+        base_output,
+        occurrence_count,
+        successor_scratch,
+        output,
+    )
         .map_err(|_| SeriesConsumeArtifactEmitErrorV4::Effect)
 }
 
@@ -607,10 +633,11 @@ pub(super) mod tests {
         };
         let mut base_scratch = vec![0_u8; SERIES_CONSUME_BASE_EFFECT_BYTES_V4];
         let mut base = vec![0_u8; SERIES_CONSUME_BASE_EFFECT_BYTES_V4];
-        let mut effect_scratch = vec![0_u8; SERIES_CONSUME_EFFECT_BYTES_V4];
-        let mut effect = vec![0_u8; SERIES_CONSUME_EFFECT_BYTES_V4];
+        let mut effect_scratch = vec![0_u8; series_consume_effect_bytes_v4(1)];
+        let mut effect = vec![0_u8; series_consume_effect_bytes_v4(1)];
         encode_series_consume_effect_v4_from_requests_atomic(
             inputs,
+            1,
             &mut base_scratch,
             &mut base,
             &mut effect_scratch,
@@ -719,10 +746,11 @@ pub(super) mod tests {
             };
             let mut base_scratch = vec![0_u8; SERIES_CONSUME_BASE_EFFECT_BYTES_V4];
             let mut base = vec![0_u8; SERIES_CONSUME_BASE_EFFECT_BYTES_V4];
-            let mut effect_scratch = vec![0_u8; SERIES_CONSUME_EFFECT_BYTES_V4];
-            let mut effect = vec![0_u8; SERIES_CONSUME_EFFECT_BYTES_V4];
+            let mut effect_scratch = vec![0_u8; series_consume_effect_bytes_v4(1)];
+            let mut effect = vec![0_u8; series_consume_effect_bytes_v4(1)];
             encode_series_consume_effect_v4_from_requests_atomic(
                 inputs,
+                1,
                 &mut base_scratch,
                 &mut base,
                 &mut effect_scratch,

@@ -13,8 +13,8 @@ use dclutch_release_set_contract::{
     CAPABILITY_EXECUTION_SELECTION_BYTES_V1, CapabilityExecutionSelectionV1,
 };
 use dclutch_source_contract::{
-    ContentId, Error as SourceError, SourceMaterialV3, SourceResolutionStateV2, WindowKind,
-    WindowSpecV1,
+    ContentId, Error as SourceError, RecoveryAttemptV2, RecoveryPolicyV2, SourceMaterialV3,
+    SourceResolutionPhaseV1, SourceResolutionStateV2, WindowKind, WindowSpecV1,
 };
 use solana_hash::Hash;
 use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
@@ -27,7 +27,7 @@ use solana_program::{
 
 use crate::{
     CAPABILITY_PREFIX_BYTES_V1, CAPABILITY_ROLE_PREFIX_BYTES_V2, CoreSbfError, process_instruction,
-    resolution::{ComposedResolutionActionV1, recovery_walk_has_a_live_route},
+    resolution::ComposedResolutionActionV1,
 };
 
 const PACKET_DATA_BYTES: usize = 1_232;
@@ -245,16 +245,20 @@ fn maximum_profile_general_activation_fits_one_lookup_v0_packet() {
     assert!(compressed_bytes <= PACKET_DATA_BYTES);
 }
 
-/// Liveness census R2 / queue Q2 — the weld and the fact that justifies it.
+/// Liveness census R2 / queue Q2 — the weld is gone, and this is why.
 ///
-/// The weld (`resolution::recovery_walk_has_a_live_route`) is only defensible
-/// while the recovery walk is genuinely unwalkable, so this test re-executes
-/// that premise here, beside the weld, rather than citing it. If somebody makes
-/// the ordered ladder live, the first two assertions change shape and this test
-/// goes red pointing at the conjunct to delete — which is exactly the signal a
-/// weld should carry.
+/// The weld (`resolution::recovery_walk_has_a_live_route`) refused `CreateFund`
+/// over a recovery-bearing material because such a market had no terminal at
+/// all: the primary exhaustion refuses that material by name, and nothing could
+/// advance the attempt it was refusing on behalf of. Its own docstring said it
+/// returned `true` again "the moment the ladder gets a live route", and that
+/// deleting it was then the whole of the revert.
+///
+/// This test is the premise, re-executed in the new direction. It does not cite
+/// the ladder; it walks it. If somebody deletes the crank, the second half goes
+/// red here, beside the founding this weld used to guard.
 #[test]
-fn create_fund_refuses_a_material_whose_recovery_walk_no_route_can_walk() {
+fn a_recovery_bearing_market_now_has_the_terminal_the_weld_was_protecting_it_from() {
     fn content(tag: u8) -> ContentId {
         let mut bytes = [0_u8; 32];
         bytes[0] = tag;
@@ -282,12 +286,27 @@ fn create_fund_refuses_a_material_whose_recovery_walk_no_route_can_walk() {
         content(9),
     )
     .expect("terminal window");
+    let policy = RecoveryPolicyV2::new(
+        content(0x60),
+        [
+            Some(
+                RecoveryAttemptV2::new(content(0x61), content(0x62), 1_002_000, content(0x63))
+                    .expect("attempt"),
+            ),
+            None,
+            None,
+            None,
+        ],
+        1,
+    )
+    .expect("one-attempt policy");
+    let policy_id = content(8);
     let bought_recovery = SourceMaterialV3::explicitly_unbounded(
         content(3),
         content(4),
         content(5),
         content(6),
-        Some(content(8)),
+        Some(policy_id),
         content(7),
     );
     let bought_none = SourceMaterialV3::explicitly_unbounded(
@@ -299,11 +318,11 @@ fn create_fund_refuses_a_material_whose_recovery_walk_no_route_can_walk() {
         content(7),
     );
 
-    // The premise, both halves. A no-recovery market walks to Exhausted one
-    // second past the deadline; a recovery market is refused there forever, and
-    // the ladder that was meant to serve it has no live route to serve it with
-    // (`funded::process_funded_transition`'s only call site is under
-    // `#[cfg(any())]`). So the second market has no terminal at all.
+    // Half one, unchanged: the primary exhaustion still refuses a market that
+    // bought alternative sources, and still for the reason it always gave.
+    // Skipping paid-for legs would take an outcome away from the holders who
+    // paid for them, so the ladder replaces the refusal's ABSENT sibling rather
+    // than the refusal.
     let mut walkable = primary_state();
     assert_eq!(
         walkable.exhaust_after_primary_deadline(
@@ -324,59 +343,51 @@ fn create_fund_refuses_a_material_whose_recovery_walk_no_route_can_walk() {
             content(5),
             window,
             9,
-            1_000_601,
-        ),
-        Err(SourceError::RecoveryNotExhausted),
-        "the premise of the Q2 weld: a recovery market cannot be walked to failure"
-    );
-    assert_eq!(
-        stranded.exhaust_after_primary_deadline(
-            content(2),
-            bought_recovery,
-            content(5),
-            window,
-            9,
             i64::MAX,
         ),
         Err(SourceError::RecoveryNotExhausted),
-        "and no later second changes that — the strand is permanent, not a wait"
+        "the primary exhaustion is still not a recovery market's terminal"
     );
 
-    // Therefore CreateFund does not mint that state.
-    assert!(!recovery_walk_has_a_live_route(
-        ComposedResolutionActionV1::CreateFund
-    ));
-    assert_eq!(CoreSbfError::RecoveryWalkUnavailable as u32, 0x3011);
-}
-
-/// A weld may not strand what it finds: it refuses creation, never an exit.
-#[test]
-fn the_recovery_weld_takes_no_route_from_a_fund_that_already_exists() {
-    // `CloseFund` was in this list until the composed action type existed. It
-    // is gone because it CANNOT be passed any more, not because the weld
-    // stopped covering it: Core refuses that action at decode, so there was
-    // never a fund of that kind for the weld to strand.
-    for action in [
-        ComposedResolutionActionV1::VerifyFundReady,
-        ComposedResolutionActionV1::AdmitTerminal,
-    ] {
-        assert!(
-            recovery_walk_has_a_live_route(action),
-            "welding {action:?} would remove a route from an existing state"
-        );
-    }
-    assert_ne!(
-        CoreSbfError::RecoveryWalkUnavailable as u32,
-        CoreSbfError::ReleaseSuperseded as u32
-    );
+    // Half two, and this is what changed: the same market walks its own ladder
+    // to `Exhausted`, which is where the failure commit begins. It is no longer
+    // stranded, so `CreateFund` no longer has to refuse to mint it.
+    let mut ladder = primary_state();
     assert!(
-        (CoreSbfError::RecoveryWalkUnavailable as u32) < 0x4000
-            && (CoreSbfError::RecoveryWalkUnavailable as u32) >= 0x3000,
-        "the weld's refusal must stay inside Core's registered band"
+        ladder
+            .crank_recovery_ladder(
+                content(2),
+                bought_recovery,
+                content(5),
+                window,
+                policy_id,
+                policy,
+                9,
+                1_000_601,
+            )
+            .is_ok(),
+        "the primary window closed and the funded alternative is enterable"
     );
+    assert_eq!(ladder.phase(), SourceResolutionPhaseV1::Recovery);
+    assert!(
+        ladder
+            .crank_recovery_ladder(
+                content(2),
+                bought_recovery,
+                content(5),
+                window,
+                policy_id,
+                policy,
+                9,
+                1_002_001,
+            )
+            .is_ok(),
+        "and the last funded window closed"
+    );
+    assert_eq!(ladder.phase(), SourceResolutionPhaseV1::Exhausted);
 }
 
-/// Every named admissible-prestate constant against the exact inline condition
+/// Every named admissible-prestate constant against the exact inline condition/// Every named admissible-prestate constant against the exact inline condition
 /// it replaced.
 ///
 /// The named constants are the guards themselves, so this is not a second

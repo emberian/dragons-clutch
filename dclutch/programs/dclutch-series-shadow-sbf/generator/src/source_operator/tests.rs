@@ -332,7 +332,16 @@ impl Fixture {
             root_state_bytes: 64,
         };
         let certificate = identity(66);
+        // The occurrence count the operator will read back off the admitted
+        // Template. `SERIES_EXAMPLE_TEMPLATE_V3` names three occurrences and
+        // this fixture's family request carries the two siblings
+        // `series_proof_count_v3(3)` demands, so the compiled Effect must
+        // declare its two duplicate proof ranges. Compiling for any other
+        // count produces a different descriptor and the operator refuses.
         let compiled = compile_series_shadow_bundle_v4(SeriesShadowBundleSourceV4 {
+            occurrence_count: TemplateV3::decode(&SERIES_EXAMPLE_TEMPLATE_V3)
+                .expect("example Template decodes")
+                .occurrence_count(),
             descriptor: descriptor_semantics,
             release_sources: SeriesShadowReleaseSourcesV4 {
                 semantic_source: SEMANTIC_SOURCE,

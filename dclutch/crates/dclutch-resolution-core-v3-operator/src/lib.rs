@@ -1056,15 +1056,16 @@ pub enum ResolutionCoreOperatorErrorV3 {
     /// state, manifest binding, or physical custody". They are the recovery
     /// itself, and a reader told `Funding` would go looking in the wrong place.
     FundedRentUnrecoverable,
-    /// The material bought an ordered recovery walk no live route can walk.
+    /// The material bought a ladder wider than founding funds compartments for.
     ///
-    /// Liveness census R2 / queue Q2. Mirrors the on-chain weld
-    /// (`CoreSbfError::RecoveryWalkUnavailable`, `0x3011`): `CreateFund` will
-    /// not mint a `SourceResolutionStateV2` whose only terminal transition,
-    /// `exhaust_after_primary_deadline`, refuses the very material it is being
-    /// created over. Building the instruction anyway would only move the
-    /// refusal from here to the validator.
-    RecoveryWalkUnavailable,
+    /// This was `RecoveryWalkUnavailable`, the off-chain half of the liveness
+    /// census R2 / Q2 weld, and it refused every recovery-bearing material
+    /// because none could terminalize. The ladder is live now, so what remains
+    /// is the narrower and permanent fact: `authenticate_funding_entries` pins
+    /// exactly three Resolution compartments -- one advance, one exhaustion,
+    /// one failure -- so founding admits exactly one funded alternative source.
+    /// A policy naming more is a market whose later rungs nothing paid for.
+    RecoveryExceedsFundedCompartments,
 }
 
 /// Construct the canonical Core `CreateFund` effect from finalized chain state.
@@ -1137,11 +1138,15 @@ pub fn build_resolution_create_fund_v3(
     // Keep these decoded authorities live in the builder rather than accepting
     // caller-selected entry coordinates.
     match (material.recovery_policy(), recovery_policy) {
-        // Q2 weld, mirroring `CoreSbfError::RecoveryWalkUnavailable` (0x3011).
-        // A shape that authenticates perfectly and can never terminalize is
-        // still a shape this builder must not construct.
-        (Some(_), Some(policy)) if policy.attempt_count() == 1 => {
-            return Err(ResolutionCoreOperatorErrorV3::RecoveryWalkUnavailable);
+        // The ladder is live, so a recovery-bearing material is buildable. What
+        // the builder still refuses is a policy founding cannot fund: the three
+        // pinned Resolution compartments are one advance, one exhaustion and
+        // one failure, and `core_effect::authenticate_funding_entries` refuses
+        // `attempt_count() != 1` for exactly that reason. Building the
+        // instruction anyway would only move the refusal to the validator.
+        (Some(_), Some(policy)) if policy.attempt_count() == 1 => {}
+        (Some(_), Some(_)) => {
+            return Err(ResolutionCoreOperatorErrorV3::RecoveryExceedsFundedCompartments);
         }
         (None, None) => {}
         _ => return Err(ResolutionCoreOperatorErrorV3::Record),

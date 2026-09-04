@@ -2119,7 +2119,7 @@ const fn role_name(name: RelayAccountNameV1) -> &'static str {
         RelayAccountNameV1::PortfolioRecordStagingVacancy => "portfolioRecordStagingVacancy",
         RelayAccountNameV1::CapabilityManifest => "capabilityManifest",
         RelayAccountNameV1::CapabilityManifestStagingVacancy => "capabilityManifestStagingVacancy",
-        RelayAccountNameV1::FailureFunding => "failureFunding",
+        RelayAccountNameV1::ResolutionFunding => "resolutionFunding",
     }
 }
 

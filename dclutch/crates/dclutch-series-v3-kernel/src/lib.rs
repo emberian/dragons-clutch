@@ -1141,12 +1141,62 @@ pub fn admit_ticket(ticket_bytes: &[u8]) -> Result<AdmittedTicketV3, SeriesV3Err
     })
 }
 
-fn proof_height(count: u32) -> usize {
-    if count <= 1 {
+/// Exact canonical ordered-sibling count admitted for one Template.
+///
+/// [`admit_occurrence_bytes`] compares a request's `proof_count` against this
+/// by EQUALITY, not by a floor, so this is not a bound a caller may satisfy
+/// generously: a Template with zero or one occurrence admits exactly the empty
+/// proof, and a Template with `n > 1` admits exactly `ceil(log2 n)` siblings.
+///
+/// # Why this is public, and who could not read it before
+///
+/// The count is a function of immutable Template config alone, so the exact
+/// width of every occurrence-action family request -- `128 + 32 * count` --
+/// is a per-Template CONSTANT that is knowable before any request exists.
+/// The artifact emitters need exactly that: a Series RequestProfile pins one
+/// exact request width, and a Series Effect declares a borrowed proof range
+/// which the effect kernel refuses at length zero. Until this was reachable
+/// they hard-coded the header width and declared a range unconditionally,
+/// which made single-occurrence expiry refuse in the effect and every other
+/// occurrence count refuse in the profile (`6f258cf5e`).
+pub const fn series_proof_count_v3(occurrence_count: u32) -> u32 {
+    if occurrence_count <= 1 {
         0
     } else {
-        usize::try_from(u32::BITS - (count - 1).leading_zeros()).unwrap_or(0)
+        u32::BITS - (occurrence_count - 1).leading_zeros()
     }
+}
+
+/// Exact canonical family-request width for one Template's occurrence actions.
+///
+/// This is the width a `Prepare`, `Consume` or `Expire` request must have for
+/// the Template named by `occurrence_count`, and therefore the width its
+/// release artifacts must pin. It is always within
+/// [`request::SERIES_ACTION_MAXIMUM_BYTES_V3`] because
+/// [`series_proof_count_v3`] never exceeds 32.
+pub const fn series_action_request_bytes_v3(occurrence_count: u32) -> usize {
+    request::SERIES_ACTION_HEADER_BYTES_V3
+        + series_proof_count_v3(occurrence_count) as usize * IDENTITY_BYTES_V3
+}
+
+/// Exact byte width of one ordered Merkle sibling.
+pub const IDENTITY_BYTES_V3: usize = 32;
+
+const _: () = assert!(series_proof_count_v3(0) == 0);
+const _: () = assert!(series_proof_count_v3(1) == 0);
+const _: () = assert!(series_proof_count_v3(2) == 1);
+const _: () = assert!(series_proof_count_v3(3) == 2);
+const _: () = assert!(series_proof_count_v3(4) == 2);
+const _: () = assert!(series_proof_count_v3(5) == 3);
+const _: () = assert!(series_proof_count_v3(u32::MAX) == 32);
+const _: () = assert!(series_proof_count_v3(u32::MAX) as usize == SERIES_MAXIMUM_MERKLE_HEIGHT_V3);
+const _: () = assert!(series_action_request_bytes_v3(1) == request::SERIES_ACTION_HEADER_BYTES_V3);
+const _: () = assert!(
+    series_action_request_bytes_v3(u32::MAX) == request::SERIES_ACTION_MAXIMUM_BYTES_V3
+);
+
+fn proof_height(count: u32) -> usize {
+    series_proof_count_v3(count) as usize
 }
 
 fn projection_node_hash(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {

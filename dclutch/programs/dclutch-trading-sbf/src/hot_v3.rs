@@ -12230,7 +12230,21 @@ fn series_expiry_local_replay_overlap_v1(
         Ok(request) if request.action() == SeriesActionV3::Expire => request,
         Ok(_) | Err(_) => return Ok(AllowedLocalOverlapV3::None),
     };
-    if ranges.count()? != 1 || ranges.range(0)? != family.proof_bytes() {
+    // The route's borrowed bytes must be EXACTLY the family's proof, and the
+    // empty proof is a real case rather than a missing one. `proof_height` is
+    // zero for a Template with one occurrence, a `BorrowedRangeV4` is
+    // canonically nonempty, so route 4 declares NO range there -- and this
+    // read must say "zero ranges borrow zero proof bytes" instead of silently
+    // returning `None`. It is the second author of the same fact as
+    // `series::expire_funding_artifacts_v5::series_expire_borrowed_range_count_v5`,
+    // and withdrawing the range without rewriting this conjunct would have
+    // made the overlap disappear with no refusal and no word in the log.
+    let borrowed_proof_matches = match ranges.count()? {
+        0 => family.proof_bytes().is_empty(),
+        1 => ranges.range(0)? == family.proof_bytes(),
+        _ => false,
+    };
+    if !borrowed_proof_matches {
         return Ok(AllowedLocalOverlapV3::None);
     }
     let request_end = invocation

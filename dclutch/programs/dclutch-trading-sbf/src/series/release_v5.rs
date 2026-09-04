@@ -59,8 +59,8 @@ use super::{
         SERIES_TICKET_DERIVATION_PREIMAGE_V3,
     },
     consume_artifacts_v4::{
-        SERIES_CONSUME_BASE_EFFECT_BYTES_V4, SERIES_CONSUME_EFFECT_BYTES_V4,
-        SeriesConsumeChildRequestsV4, encode_series_consume_effect_v4_from_requests_atomic,
+        SERIES_CONSUME_BASE_EFFECT_BYTES_V4, SeriesConsumeChildRequestsV4,
+        encode_series_consume_effect_v4_from_requests_atomic, series_consume_effect_bytes_v4,
     },
     expire_funding_artifacts_v5::{
         SERIES_EXPIRE_RENT_CREDIT_COORDINATE_V5, SERIES_EXPIRE_TICKET_COORDINATE_V5,
@@ -126,6 +126,16 @@ pub struct SeriesReleaseSourceV5<'a> {
 pub struct SeriesCurrentReleaseInputV5<'a> {
     /// Finalized Series Template identity.
     pub template: ContentId,
+    /// Immutable occurrence count of that finalized Template.
+    ///
+    /// This is release geometry, not a request fact. The canonical proof width
+    /// every occurrence action carries is `32 * series_proof_count_v3(count)`,
+    /// a per-Template CONSTANT, so the artifacts that pin one exact family
+    /// request width and declare one borrowed proof range are functions of it.
+    /// A release for a one-occurrence Template pins 128 bytes and declares no
+    /// range; a release for an `n > 1` Template pins `128 + 32 * ceil(log2 n)`
+    /// and declares the range that covers the difference.
+    pub template_occurrence_count: u32,
     /// Deployed Consume-only Shadow certificate program identity.
     pub consume_shadow_certificate_program: ContentId,
     /// Prepare fixed prestate widths.
@@ -439,11 +449,16 @@ pub fn emit_current_series_release_source_v5(
         input.consume_observed_data_lengths,
         input.consume_requests,
         input.consume_funding_count,
+        input.template_occurrence_count,
         consume_authority,
     )?;
     let expire =
-        emit_series_expire_funding_artifacts_v5(input.expire_profile, input.expire_requests)
-            .map_err(|_| SeriesReleaseErrorV5::Artifact)?;
+        emit_series_expire_funding_artifacts_v5(
+            input.expire_profile,
+            input.expire_requests,
+            input.template_occurrence_count,
+        )
+        .map_err(|_| SeriesReleaseErrorV5::Artifact)?;
     let retire =
         emit_series_retire_funding_artifacts_v5().map_err(|_| SeriesReleaseErrorV5::Artifact)?;
     let close =
@@ -625,6 +640,7 @@ fn emit_current_consume_v5(
     observed: &[u32; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4],
     requests: SeriesConsumeChildRequestsV4<'_>,
     funding_count: u32,
+    occurrence_count: u32,
     authority: SeriesOccurrenceAuthorityV5,
 ) -> Result<SeriesOwnedActionArtifactsV5> {
     if funding_count == 0 {
@@ -654,10 +670,12 @@ fn emit_current_consume_v5(
 
     let mut base_scratch = vec![0_u8; SERIES_CONSUME_BASE_EFFECT_BYTES_V4];
     let mut base = vec![0_u8; SERIES_CONSUME_BASE_EFFECT_BYTES_V4];
-    let mut v4_scratch = vec![0_u8; SERIES_CONSUME_EFFECT_BYTES_V4];
-    let mut v4 = vec![0_u8; SERIES_CONSUME_EFFECT_BYTES_V4];
+    let v4_bytes = series_consume_effect_bytes_v4(occurrence_count);
+    let mut v4_scratch = vec![0_u8; v4_bytes];
+    let mut v4 = vec![0_u8; v4_bytes];
     encode_series_consume_effect_v4_from_requests_atomic(
         requests,
+        occurrence_count,
         &mut base_scratch,
         &mut base,
         &mut v4_scratch,
@@ -1278,6 +1296,7 @@ mod tests {
         let expire_lengths = [0; SERIES_EXPIRE_FIXED_ACCOUNT_COUNT_V5 as usize];
         emit_current_series_release_source_v5(SeriesCurrentReleaseInputV5 {
             template: id(18),
+            template_occurrence_count: 1,
             consume_shadow_certificate_program: id(90),
             prepare_profile: SeriesPrepareAccountProfileInputV5 {
                 fixed_data_lengths: &prepare_lengths,

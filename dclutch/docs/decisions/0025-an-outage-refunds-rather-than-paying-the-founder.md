@@ -190,6 +190,47 @@ resolution* rather than against a fixed coordinate, and pro-rata division is a
 rounding boundary that must be named (`AGENTS.md`, *"exact scaled integers with
 one named rounding boundary"*).
 
+The rounding boundary is now named, and the lane's answer is that **there is no
+remainder, because a remainder is refused at founding rather than housed**. A
+floored atom has nowhere declared to go: the census names nine compartments
+(`tools/gauntlet/journey/src/ledger.rs:270-280`) and none of them is an upkeep
+vault; `unclassified` is a class L8 holds to a declared delta rather than a
+bucket to hide in; and creating a tenth is one of the five economic choices
+C-11 reserves to ember by name (`docs/MASTER_COMPLETION_CONTRACT.md:96`). So
+the admission is a founding-time divisibility condition on the founder's own
+basis scale, and under it `an_admitted_failure_walk_leaves_no_remainder`
+(`EconomicKernel.lean`) holds for **every** partition of the ordinary claims
+with no divisibility hypothesis surviving in it. As built, the refunding scale
+`basis_width - 1` satisfies it by construction: one ordinary claim redeems for
+exactly one atom, and the division disappears.
+
+**The escrow forecloses complete-set MERGE, and that is not an implementation
+choice.** `MergeCompleteSet` burns one claim at *every* coordinate from *one*
+Position (`economic-slice-kernel/src/lib.rs` `validate_basket_quantities`
+forces every coordinate equal, and `basket_candidate` debits `source_native` at
+each index), so a holder who does not hold the failure coordinate can never
+merge a complete set back into collateral. Move that coordinate anywhere the
+founder is not — an escrow Position, a Position nobody owns, or no Position at
+all — and merge stops working for that market. It is reachable and used: it is
+a General child effect (`dclutch-general-adapter-contract/src/escrow_v1.rs:194`,
+`plan.rs:889`) and a routed Claims action (`claims-svm/src/lib.rs:215`, `:599`).
+
+So the escrow as §2 item 2 words it needs a companion: either `MergeCompleteSet`
+is redefined for a refunding market as **the ordinary coordinates only**, with
+the escrow's failure claims burned alongside by the program rather than by the
+merging holder, or the failure coordinate stays in the founder's Position and is
+made **immobile** instead of relocated. The second is much smaller and delivers
+the same protection the escrow was for — the failure coordinate under a
+refunding basis is worth zero, and worth-zero-but-sellable is the actual hazard
+— by refusing, at the signed-delta waist (`claims-svm/src/signed_delta_v3.rs`,
+which every split, transfer, merge and redeem passes through), any Position
+delta at the failure coordinate whose direction is not the aggregate supply
+delta's. A transfer moves no supply, so under that rule it may move no failure
+claim; a mint or a merge moves supply, so it may. Either way the founder is paid
+nothing for choosing the oracle, which is what the ruling is for. **This is a
+fact the ruling did not have, and the choice between the two shapes is ember's
+or the orchestrator's, not the lane's.**
+
 ## 7. The cost of reversal
 
 **Reversing after it ships is a re-found**, symmetrically with landing it: the

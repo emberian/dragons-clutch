@@ -677,6 +677,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
           marketPhase={decoded.phase}
           marketGeneration={decoded.generation}
           minimumContextSlot={state.kind === 'ready' ? state.detail.floorSlot : decoded.observedSlot}
+          outcomeCount={terminalOutcomeCount}
         />,
       }]),
   ];

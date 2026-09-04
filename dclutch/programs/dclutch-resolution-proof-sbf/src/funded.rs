@@ -72,7 +72,8 @@ use dclutch_resolution_codec::{
     RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
 use dclutch_source_contract::{
-    ContentId as SourceContentId, SourceMaterialV3, SourceResolutionStateV2, WindowSpecV1,
+    ContentId as SourceContentId, RecoveryCrankV2, RecoveryPolicyV2, SourceMaterialV3,
+    SourceResolutionStateV2, WindowSpecV1,
 };
 
 /// Stable refusal from the pure funded walk.
@@ -161,24 +162,26 @@ pub struct DeadlineFailurePlanV1 {
     pub funding_lamports_after: u64,
 }
 
-/// Debit the escrowed explicit-failure compartment and credit one walker.
+/// Debit one escrowed compartment and credit one walker.
 ///
-/// The allocation identity is not a caller's choice and not a parameter: the
-/// explicit-failure compartment is the one whose manifest entry names *this
-/// market's own Source material* as its configuration, which is exactly the
-/// binding `core_effect`'s `authenticate_funding_entries` established when the
-/// three compartments were created. A caller presenting the recovery or
-/// exhaustion compartment instead is refused by that comparison rather than by
-/// an account-position convention.
+/// The allocation identity is never a caller's choice. `selecting_config` is
+/// the configuration `core_effect`'s `authenticate_funding_entries` pinned to
+/// this compartment when the market's three were created, and each of the three
+/// walks derives its own from records rather than accepting one: the failure
+/// walk from the market's own Source material, an advance from the attempt's
+/// funding allocation, an exhaustion from the recovery policy's own digest. A
+/// walk presenting another compartment is refused by this comparison rather
+/// than by an account-position convention -- there is no position to get
+/// right, because all three rows live in one ledger account.
 fn plan_funding_release(
     escrow: &AuthenticatedFailureFundingV2<'_>,
-    material_id: SourceContentId,
+    selecting_config: [u8; 32],
 ) -> Result<([u8; RESOLUTION_FUNDING_LEDGER_BYTES_V2], u64, u64, u64), FundedWalkErrorV1> {
     let entry = escrow
         .manifest
         .entry(escrow.entry_index)
         .map_err(|_| FundedWalkErrorV1::Funding)?;
-    if entry.config_id().to_bytes() != material_id.to_bytes()
+    if entry.config_id().to_bytes() != selecting_config
         || entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V7
     {
         return Err(FundedWalkErrorV1::Funding);
@@ -279,6 +282,177 @@ fn plan_funding_release(
     ))
 }
 
+/// The recovery policy the ladder walks, as the outer authenticated it.
+///
+/// It rides beside [`AuthenticatedWalkSourceV1`] rather than inside it because
+/// the deadline-failure walk reads no policy at all -- a material carrying one
+/// is precisely the material that walk refuses -- and widening its input to
+/// carry a field it must never use would be the wrong shape for the route whose
+/// whole property is that it needs nothing from anybody.
+#[derive(Clone, Copy)]
+pub struct AuthenticatedRecoveryPolicyV1 {
+    /// `RecoveryPolicyV2` content identity, from the material's own selection.
+    pub policy_id: SourceContentId,
+    /// The authenticated finalized policy.
+    pub policy: RecoveryPolicyV2,
+}
+
+/// Failure-atomic plan for one crank of the funded ordered-recovery ladder.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FundedTransitionPlanV1 {
+    /// The Source state after exactly one rung.
+    pub next_source: SourceResolutionStateV2,
+    /// The receipt this crank writes.
+    pub certificate: ResolutionCertificateV2,
+    /// The complete subset ledger after this crank's bounty debit.
+    pub next_funding: [u8; RESOLUTION_FUNDING_LEDGER_BYTES_V2],
+    /// Exact lamports credited to whoever cranked it.
+    pub work_paid: u64,
+    /// Bounty principal still escrowed in this compartment after the debit.
+    pub funding_remaining: u64,
+    /// Exact funding-account lamports after the debit.
+    pub funding_lamports_after: u64,
+    /// The receipt's kind, which is also the seat's PDA seed.
+    pub certificate_kind: ResolutionCertificateKindV2,
+}
+
+/// Plan exactly one funded transition of the ordered-recovery ladder.
+///
+/// # What this name is
+///
+/// Six live comments and the completion contract's own recovery row cite
+/// `funded::process_funded_transition` in the present tense, as "the ladder that
+/// consumes the paid-for legs". Until now the citation dangled: the V1 function
+/// of that name was deleted with the rest of the orphaned generation, and the
+/// `#[cfg(any())]` call site the comments describe went with it. The symbol is
+/// back, and it is back as ONE function rather than the three-action ABI the V1
+/// walk had, because there is only one decision to make.
+///
+/// # The one decision
+///
+/// The current window has closed, and either the policy funds another attempt
+/// or it does not. `SourceResolutionStateV2::crank_recovery_ladder` makes that
+/// decision; this function turns it into a payment and a receipt. There is no
+/// caller-chosen action byte, and that is load-bearing: a caller who could pick
+/// `Exhaust` while an attempt was still funded could skip a leg the holders paid
+/// for, which is the whole thing a *funded* ladder forbids.
+///
+/// # Why the order is transition-then-debit, and the failure walk's is not
+///
+/// [`plan_deadline_failure_v1`] debits first, because it always spends the same
+/// compartment and refusing an unpayable walk before it moves the market is the
+/// stronger order. Here the compartment is not known until the crank has been
+/// decided -- an advance spends the entered attempt's own allocation, an
+/// exhaustion spends the one the policy itself configures -- so the transition
+/// runs first. Nothing is at risk in either order: the plan is pure, and a
+/// refusal anywhere in it writes no byte and moves no lamport.
+///
+/// # Nothing here mutates and nothing here reads an account
+pub fn process_funded_transition(
+    request: &DeadlineFailureRequestV1,
+    source_state: &SourceResolutionStateV2,
+    source: &AuthenticatedWalkSourceV1,
+    ladder: &AuthenticatedRecoveryPolicyV1,
+    escrow: &AuthenticatedFailureFundingV2<'_>,
+) -> Result<FundedTransitionPlanV1, FundedWalkErrorV1> {
+    if source_state.market() != request.market
+        || source_state.generation() != request.generation
+        || source_state.material_id() != source.material_id
+        || request.terminal_sequence == 0
+    {
+        return Err(FundedWalkErrorV1::Request);
+    }
+    if source.material.window_spec() != source.window_spec_id
+        || source.material.recovery_policy() != Some(ladder.policy_id)
+    {
+        return Err(FundedWalkErrorV1::Source);
+    }
+
+    let mut next_source = *source_state;
+    let crank = next_source
+        .crank_recovery_ladder(
+            source.material_id,
+            source.material,
+            source.window_spec_id,
+            source.window,
+            ladder.policy_id,
+            ladder.policy,
+            request.generation,
+            request.current_unix_seconds,
+        )
+        .map_err(|_| FundedWalkErrorV1::Transition)?;
+
+    // Which compartment pays is a function of which rung was taken, and both
+    // identities come out of records the market finalized before it opened.
+    let (certificate_kind, attempt_index, route, selecting_config) = match crank {
+        RecoveryCrankV2::Advanced {
+            attempt_index,
+            attempt,
+        } => (
+            ResolutionCertificateKindV2::RecoveryAdvanced,
+            u32::from(attempt_index),
+            attempt.provider_release_id().to_bytes(),
+            attempt.funding_allocation_id().to_bytes(),
+        ),
+        RecoveryCrankV2::Exhausted {
+            final_attempt_index,
+            final_attempt,
+        } => (
+            ResolutionCertificateKindV2::Exhausted,
+            // The count of legs the market has now spent, which for the final
+            // rung is one past its index. A reader of the receipt learns how
+            // much of the paid-for ladder was actually walked.
+            u32::from(final_attempt_index).saturating_add(1),
+            final_attempt.provider_release_id().to_bytes(),
+            ladder.policy_id.to_bytes(),
+        ),
+    };
+
+    let (next_funding, work_paid, funding_remaining, funding_lamports_after) =
+        plan_funding_release(escrow, selecting_config)?;
+
+    let observed_at =
+        u64::try_from(request.current_unix_seconds).map_err(|_| FundedWalkErrorV1::Request)?;
+    let certificate = ResolutionCertificateV2 {
+        kind: certificate_kind,
+        market: request.market,
+        // Unlike the failure terminal, a rung IS attributable: the route is the
+        // provider release the attempt named, so the receipt records which feed
+        // was asked and did not answer.
+        route,
+        source_material: source.material_id.to_bytes(),
+        product_record_digest: source.material.product_record_digest().to_bytes(),
+        provider_evidence: [0; 32],
+        funding_allocation: selecting_config,
+        receipt_account: request.certificate_account,
+        generation: request.generation,
+        attempt_index,
+        schedule_index: 0,
+        // A crank selects nothing. `validate_terminal_product` refuses to be
+        // asked about these two kinds at all, and `validate_shape` pins the
+        // selector to zero, so a rung cannot smuggle an outcome.
+        selector: 0,
+        work_paid,
+        funding_remaining,
+        result_numerator: 0,
+        result_denominator: 0,
+        observed_at,
+    };
+    certificate
+        .to_bytes()
+        .map_err(|_| FundedWalkErrorV1::Transition)?;
+
+    Ok(FundedTransitionPlanV1 {
+        next_source,
+        certificate,
+        next_funding,
+        work_paid,
+        funding_remaining,
+        funding_lamports_after,
+        certificate_kind,
+    })
+}
+
 /// Plan the whole deadline-driven failure walk.
 ///
 /// The order is deliberate and it is the order a reviewer should check: the
@@ -320,7 +494,7 @@ pub fn plan_deadline_failure_v1(
     }
 
     let (next_funding, work_paid, funding_remaining, funding_lamports_after) =
-        plan_funding_release(escrow, source.material_id)?;
+        plan_funding_release(escrow, source.material_id.to_bytes())?;
 
     let mut next_source = *source_state;
     next_source

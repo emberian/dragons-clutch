@@ -780,6 +780,39 @@ impl SourceResolutionStateV2 {
         Ok(decision)
     }
 
+    /// The compartment configuration the next crank of the ladder will spend.
+    ///
+    /// A caller has to select the ledger row BEFORE the crank runs -- one
+    /// account holds all three of a market's Resolution compartments and each
+    /// is found by its own pinned configuration, not by a position -- so the
+    /// answer would otherwise have two authors: the outer that selects the row
+    /// and the crank that returns the attempt. It has one, and the two are
+    /// welded by the planner comparing the selected entry's configuration
+    /// against the identity the crank hands back.
+    ///
+    /// Entering attempt `n` is paid by attempt `n`'s own allocation. The end of
+    /// the ladder belongs to no single attempt, so the policy's own digest
+    /// configures it -- exactly the binding founding established when the three
+    /// compartments were created.
+    pub fn next_crank_funding_config(
+        self,
+        authenticated_recovery_policy_id: ContentId,
+        policy: RecoveryPolicyV2,
+    ) -> Result<ContentId> {
+        let entering = match self.phase {
+            SourceResolutionPhaseV1::Primary => 0_u8,
+            SourceResolutionPhaseV1::Recovery => self
+                .active_attempt
+                .checked_add(1)
+                .ok_or(Error::ArithmeticOverflow)?,
+            _ => return Err(Error::InvalidRecoveryTransition),
+        };
+        match policy.attempt(entering) {
+            Ok(attempt) => Ok(attempt.funding_allocation_id()),
+            Err(_) => Ok(authenticated_recovery_policy_id),
+        }
+    }
+
     /// Join the material, its window and its recovery policy, and project the
     /// attempt the state currently stands on.
     ///

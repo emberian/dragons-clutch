@@ -7,6 +7,7 @@ import {
 } from '@dclutch/sdk/aggregateRetirement';
 
 import Anchor from '@/components/Anchor';
+import OpenerFirstCrankTerms from '@/components/OpenerFirstCrankTerms';
 import { type MarketCorePhaseV2 } from '@/lib/marketCoreV2';
 import { SolanaRpcClient } from '@/lib/rpc';
 
@@ -33,6 +34,7 @@ export default function AggregateRetirementStatus({
   marketPhase,
   marketGeneration,
   minimumContextSlot,
+  outcomeCount,
 }: Readonly<{
   endpoint: string;
   coreProgramId: string;
@@ -41,6 +43,7 @@ export default function AggregateRetirementStatus({
   marketPhase: MarketCorePhaseV2;
   marketGeneration: string;
   minimumContextSlot: string;
+  outcomeCount: number;
 }>) {
   const [state, setState] = useState<State>({ kind: 'loading', message: 'Reading the derived Claims aggregate or Core retirement checkpoint at the Market floor…' });
 
@@ -123,6 +126,7 @@ export default function AggregateRetirementStatus({
       <button type="button" disabled>Retirement unavailable in this browser</button>
       <Anchor href="/operate">Inspect the operator boundary →</Anchor>
     </div>
+    <OpenerFirstCrankTerms endpoint={endpoint} outcomeCount={outcomeCount} heading="What opening an escrow here costs the opener" />
     <p className="direct-status">You still need a checked release that selects this exact route and the Rust-authored four-step campaign with one durable crash journal per mutation. A local-validator execution is not devnet execution. This page never reconstructs the original bundle, opens a wallet, signs, or submits.</p>
     </div>
   </details>;

@@ -101,10 +101,10 @@ use super::{
         SERIES_TICKET_DERIVATION_PREIMAGE_V3,
     },
     consume_artifacts_v4::{
-        SERIES_CONSUME_BASE_EFFECT_BYTES_V4, SERIES_CONSUME_EFFECT_BYTES_V4,
-        SERIES_CONSUME_REQUEST_PROFILE_BYTES_V4, SERIES_CONSUME_TRANSITION_BYTES_V4,
-        SeriesConsumeChildRequestsV4, encode_series_consume_effect_v4_from_requests_atomic,
-        encode_series_consume_request_profile_v4_atomic,
+        SERIES_CONSUME_BASE_EFFECT_BYTES_V4, SERIES_CONSUME_REQUEST_PROFILE_BYTES_V4,
+        SERIES_CONSUME_TRANSITION_BYTES_V4, SeriesConsumeChildRequestsV4,
+        encode_series_consume_effect_v4_from_requests_atomic,
+        encode_series_consume_request_profile_v4_atomic, series_consume_effect_bytes_v4,
         encode_series_consume_transition_v4_atomic,
     },
     lifecycle_policy_v5::{
@@ -331,6 +331,14 @@ pub type SelectedResult<T> = core::result::Result<T, SeriesSelectedReleaseErrorV
 pub struct SeriesConsumeSelectedReleaseInputV4<'a> {
     /// Finalized Series Template record identity the descriptor's config binds.
     pub template: ContentId,
+    /// Immutable occurrence count of that finalized Template.
+    ///
+    /// Release geometry: the canonical proof width every occurrence action
+    /// carries is `32 * series_proof_count_v3(count)`, so the exact family
+    /// request width this release's RequestProfile pins, and whether its
+    /// Effect declares the two duplicate proof ranges at all, are both
+    /// functions of it.
+    pub template_occurrence_count: u32,
     /// The one deployment fact: the deployed Shadow accelerator's certificate.
     ///
     /// See this module's header — everything else in the strategy is a schema
@@ -575,10 +583,12 @@ pub fn series_consume_selected_release_v4(
 
     let mut base_scratch = vec![0_u8; SERIES_CONSUME_BASE_EFFECT_BYTES_V4];
     let mut base = vec![0_u8; SERIES_CONSUME_BASE_EFFECT_BYTES_V4];
-    let mut effect_scratch = vec![0_u8; SERIES_CONSUME_EFFECT_BYTES_V4];
-    let mut effect = vec![0_u8; SERIES_CONSUME_EFFECT_BYTES_V4];
+    let effect_bytes = series_consume_effect_bytes_v4(input.template_occurrence_count);
+    let mut effect_scratch = vec![0_u8; effect_bytes];
+    let mut effect = vec![0_u8; effect_bytes];
     encode_series_consume_effect_v4_from_requests_atomic(
         input.child_requests,
+        input.template_occurrence_count,
         &mut base_scratch,
         &mut base,
         &mut effect_scratch,
@@ -772,6 +782,7 @@ mod tests {
         let observed = [0_u32; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4];
         series_consume_selected_release_v4(SeriesConsumeSelectedReleaseInputV4 {
             template: template(),
+            template_occurrence_count: crate::series::effect_v4::tests::FIXTURE_OCCURRENCE_COUNT,
             shadow_certificate_program: certificate(),
             child_requests: SeriesConsumeChildRequestsV4 {
                 lock: &lock,
@@ -925,6 +936,7 @@ mod tests {
         let observed = [0_u32; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4];
         let input = SeriesConsumeSelectedReleaseInputV4 {
             template: template(),
+            template_occurrence_count: 1,
             shadow_certificate_program: certificate(),
             child_requests: SeriesConsumeChildRequestsV4 {
                 lock: &lock,

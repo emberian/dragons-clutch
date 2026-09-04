@@ -58,6 +58,7 @@ impl Fixture {
 
     fn source_with_certificate(&self, certificate: ContentId) -> SeriesShadowBundleSourceV4<'_> {
         SeriesShadowBundleSourceV4 {
+            occurrence_count: 1,
             descriptor: SeriesShadowDescriptorSemanticsV4 {
                 kind: identity(1),
                 config_schema: identity(2),

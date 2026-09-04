@@ -32,6 +32,8 @@ pub const SEAL_RECORD_INSTRUCTION_BYTES: usize = SEAL_RECORD_PREFIX_BYTES + RELA
 pub const RETIRE_RECORD_INSTRUCTION_BYTES: usize = 24;
 /// Exact `CommitDeadlineFailure` instruction width.
 pub const COMMIT_DEADLINE_FAILURE_INSTRUCTION_BYTES: usize = 32;
+/// Exact `AdvanceRecovery` instruction width.
+pub const ADVANCE_RECOVERY_INSTRUCTION_BYTES: usize = 32;
 /// Fixed prefix before the inline account-set entries in `ConsumeRecord`.
 pub const CONSUME_RECORD_PREFIX_BYTES: usize = 112;
 /// Wire width of one inline account-set entry, identical to its contribution to
@@ -58,6 +60,8 @@ pub enum RelayActionV1 {
     ConsumeRecord = 5,
     /// Walk a silent market to its Product's pre-disclosed failure outcome.
     CommitDeadlineFailure = 6,
+    /// Crank the funded ordered-recovery ladder by exactly one rung.
+    AdvanceRecovery = 7,
 }
 
 impl RelayActionV1 {
@@ -69,6 +73,7 @@ impl RelayActionV1 {
             4 => Ok(Self::RetireRecord),
             5 => Ok(Self::ConsumeRecord),
             6 => Ok(Self::CommitDeadlineFailure),
+            7 => Ok(Self::AdvanceRecovery),
             _ => Err(Error::UnknownInstructionAction),
         }
     }
@@ -380,6 +385,59 @@ impl ConsumeRecordInstructionV1 {
     }
 }
 
+/// Fixed `AdvanceRecovery` wire fields.
+///
+/// As narrow as the deadline-failure request, and for the same reason. Which
+/// rung the ladder stands on is the Source state's own `active_attempt`; which
+/// source that rung names is the `RecoveryPolicyV2` the material selects; when
+/// the rung expires is that attempt's committed deadline. A caller who could
+/// say any of those could choose which leg to skip, and the whole content of a
+/// FUNDED ladder is that nobody may skip a leg the holders paid for.
+///
+/// So the caller says which market generation and which terminal sequence, and
+/// the program reads everything else out of records the market finalized before
+/// it opened.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AdvanceRecoveryInstructionV1 {
+    generation: u64,
+    terminal_sequence: u64,
+}
+
+impl AdvanceRecoveryInstructionV1 {
+    /// Construct one recovery-crank request.
+    pub fn new(generation: u64, terminal_sequence: u64) -> Result<Self> {
+        if terminal_sequence == 0 {
+            return Err(Error::InvalidRecordTransition);
+        }
+        Ok(Self {
+            generation,
+            terminal_sequence,
+        })
+    }
+
+    /// Encode the exact canonical bytes.
+    pub fn to_bytes(self) -> Result<[u8; ADVANCE_RECOVERY_INSTRUCTION_BYTES]> {
+        let mut out = base::<ADVANCE_RECOVERY_INSTRUCTION_BYTES>(RELAY_INSTRUCTION_MAGIC)?;
+        put(
+            &mut out,
+            ACTION_OFFSET,
+            &[RelayActionV1::AdvanceRecovery.byte()],
+        )?;
+        put(&mut out, 16, &self.generation.to_le_bytes())?;
+        put(&mut out, 24, &self.terminal_sequence.to_le_bytes())?;
+        Ok(out)
+    }
+
+    /// The Market generation.
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+    /// The exact positive terminal sequence naming the receipt.
+    pub const fn terminal_sequence(self) -> u64 {
+        self.terminal_sequence
+    }
+}
+
 /// Fixed `CommitDeadlineFailure` wire fields.
 ///
 /// Deliberately the narrowest instruction in the family. The failure outcome is
@@ -449,6 +507,8 @@ pub enum RelayInstructionV1<'a> {
     ConsumeRecord(ConsumeRecordInstructionV1, &'a [u8]),
     /// Walk a silent market to its Product's pre-disclosed failure outcome.
     CommitDeadlineFailure(CommitDeadlineFailureInstructionV1),
+    /// Crank the funded ordered-recovery ladder by exactly one rung.
+    AdvanceRecovery(AdvanceRecoveryInstructionV1),
 }
 
 impl<'a> RelayInstructionV1<'a> {
@@ -552,12 +612,25 @@ impl<'a> RelayInstructionV1<'a> {
                     )?,
                 ))
             }
+            RelayActionV1::AdvanceRecovery => {
+                header(
+                    bytes,
+                    ADVANCE_RECOVERY_INSTRUCTION_BYTES,
+                    RELAY_INSTRUCTION_MAGIC,
+                )?;
+                Ok(Self::AdvanceRecovery(AdvanceRecoveryInstructionV1::new(
+                    u64_at(bytes, 16)?,
+                    u64_at(bytes, 24)?,
+                )?))
+            }
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    extern crate alloc;
+
     use super::*;
 
     #[test]
@@ -666,6 +739,34 @@ mod tests {
             CommitDeadlineFailureInstructionV1::new(7, 0),
             Err(Error::InvalidRecordTransition)
         );
+    }
+
+    #[test]
+    fn the_recovery_crank_round_trips_and_is_a_different_action_from_the_failure_walk() {
+        let request = AdvanceRecoveryInstructionV1::new(7, 1).expect("request");
+        let bytes = request.to_bytes().expect("encode");
+        assert_eq!(
+            RelayInstructionV1::decode(&bytes),
+            Ok(RelayInstructionV1::AdvanceRecovery(request))
+        );
+        assert_eq!(
+            AdvanceRecoveryInstructionV1::new(7, 0),
+            Err(Error::InvalidRecordTransition)
+        );
+
+        // The two requests carry identical fields at identical offsets and are
+        // the same width, so the ACTION byte is the whole partition. A crank
+        // that decoded as a failure walk would skip every paid-for leg at once,
+        // which is the exact outcome the ladder exists to prevent.
+        let failure = CommitDeadlineFailureInstructionV1::new(7, 1)
+            .expect("request")
+            .to_bytes()
+            .expect("encode");
+        assert_eq!(bytes.len(), failure.len());
+        let differing: alloc::vec::Vec<usize> = (0..bytes.len())
+            .filter(|index| bytes[*index] != failure[*index])
+            .collect();
+        assert_eq!(differing, alloc::vec![ACTION_OFFSET]);
     }
 
     #[test]

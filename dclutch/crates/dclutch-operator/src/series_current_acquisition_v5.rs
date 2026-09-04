@@ -1369,6 +1369,7 @@ mod tests {
         expire_lengths[75] = SERIES_TICKET_BYTES_V3 as u32;
         emit_current_series_release_source_v5(SeriesCurrentReleaseInputV5 {
             template,
+            template_occurrence_count: 1,
             consume_shadow_certificate_program: content_id(90),
             prepare_profile: SeriesPrepareAccountProfileInputV5 {
                 fixed_data_lengths: &prepare_lengths,

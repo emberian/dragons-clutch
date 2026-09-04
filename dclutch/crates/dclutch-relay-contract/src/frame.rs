@@ -91,8 +91,18 @@ pub enum RelayAccountNameV1 {
     CapabilityManifest,
     /// The finalized staging vacancy proving the manifest is immutable.
     CapabilityManifestStagingVacancy,
-    /// The Resolution-owned explicit-failure funding compartment the walk debits.
-    FailureFunding,
+    /// The raw immutable `RecoveryPolicyV2` record the material selects.
+    RecoveryPolicy,
+    /// The finalized staging vacancy proving the recovery policy is immutable.
+    RecoveryPolicyStagingVacancy,
+    /// The Resolution-owned three-compartment funding ledger a walk debits.
+    ///
+    /// It was called `FailureFunding` while the only route that debited it was
+    /// the deadline-failure walk, but the account has always held all three of
+    /// a market's Resolution compartments -- recovery, exhaustion and failure
+    /// -- in one three-row ledger, and the funded ladder debits the other two.
+    /// One account class, one name.
+    ResolutionFunding,
 }
 
 /// One ordered SDK-free account-role requirement.
@@ -208,7 +218,14 @@ const MANIFEST_STAGE: RelayAccountRoleV1 = role(
     false,
     false,
 );
-const FAILURE_FUNDING: RelayAccountRoleV1 = role(RelayAccountNameV1::FailureFunding, false, true);
+const RECOVERY_POLICY: RelayAccountRoleV1 = role(RelayAccountNameV1::RecoveryPolicy, false, false);
+const RECOVERY_POLICY_STAGE: RelayAccountRoleV1 = role(
+    RelayAccountNameV1::RecoveryPolicyStagingVacancy,
+    false,
+    false,
+);
+const RESOLUTION_FUNDING: RelayAccountRoleV1 =
+    role(RelayAccountNameV1::ResolutionFunding, false, true);
 
 /// Exact record-creation frame.
 ///
@@ -389,7 +406,49 @@ pub const COMMIT_DEADLINE_FAILURE_FRAME_V1: [RelayAccountRoleV1; 22] = [
     PORTFOLIO_STAGE,
     MANIFEST,
     MANIFEST_STAGE,
-    FAILURE_FUNDING,
+    RESOLUTION_FUNDING,
+    CLOCK,
+    RENT,
+    SYSTEM,
+];
+
+/// Exact funded ordered-recovery frame: one crank of the ladder.
+///
+/// Eighteen positions, and it is shorter than the failure frame by the whole
+/// Product graph.  That is the shape of the transition, not an economy: a crank
+/// selects no result, so `ResolutionCertificateV2::validate_terminal_product`
+/// REFUSES to be asked about a `RecoveryAdvanced` or `Exhausted` certificate at
+/// all, and the only Product fact the receipt carries is the record digest the
+/// market's own `SourceMaterialV3` already names.  Naming the Product record,
+/// the result domain and the portfolio here would be three accounts read to
+/// re-derive a value one authenticated record hands over.
+///
+/// Two positions the failure frame does not have: the `RecoveryPolicyV2` record
+/// and its staging vacancy.  That record is the ladder -- the ordered attempts,
+/// their windows and their funding allocations -- and it is exactly why the
+/// route exists, so it rides as a raw/vacancy pair like every other finalized
+/// record this family reads.
+///
+/// Three positions are writable: the Source state that advances, the receipt
+/// this crank creates, and the ledger it spends.  The worker is writable
+/// because it is *paid* -- the crank is permissionless, and a permissionless
+/// route nobody is paid to run is a route nobody runs.
+pub const ADVANCE_RECOVERY_FRAME_V1: [RelayAccountRoleV1; 18] = [
+    WORKER,
+    MARKET_READ,
+    CORE_PROGRAM,
+    ACTIVATION,
+    SOURCE_STATE,
+    CERTIFICATE,
+    MATERIAL,
+    MATERIAL_STAGE,
+    WINDOW,
+    WINDOW_STAGE,
+    RECOVERY_POLICY,
+    RECOVERY_POLICY_STAGE,
+    MANIFEST,
+    MANIFEST_STAGE,
+    RESOLUTION_FUNDING,
     CLOCK,
     RENT,
     SYSTEM,
@@ -410,6 +469,8 @@ pub enum RelayFrameKindV1 {
     ConsumeRecord,
     /// [`COMMIT_DEADLINE_FAILURE_FRAME_V1`].
     CommitDeadlineFailure,
+    /// [`ADVANCE_RECOVERY_FRAME_V1`].
+    AdvanceRecovery,
 }
 
 /// Return the exact ordered roles for one relay operation.
@@ -421,6 +482,7 @@ pub const fn relay_frame_roles_v1(kind: RelayFrameKindV1) -> &'static [RelayAcco
         RelayFrameKindV1::RetireRecord => &RETIRE_RECORD_FRAME_V1,
         RelayFrameKindV1::ConsumeRecord => &CONSUME_RECORD_FRAME_V1,
         RelayFrameKindV1::CommitDeadlineFailure => &COMMIT_DEADLINE_FAILURE_FRAME_V1,
+        RelayFrameKindV1::AdvanceRecovery => &ADVANCE_RECOVERY_FRAME_V1,
     }
 }
 
@@ -603,7 +665,7 @@ mod tests {
             RelayAccountNameV1::Worker,
             RelayAccountNameV1::SourceResolutionState,
             RelayAccountNameV1::ResolutionCertificate,
-            RelayAccountNameV1::FailureFunding,
+            RelayAccountNameV1::ResolutionFunding,
         ];
         let mut seen = 0usize;
         for role in COMMIT_DEADLINE_FAILURE_FRAME_V1

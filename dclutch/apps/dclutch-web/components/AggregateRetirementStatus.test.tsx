@@ -11,9 +11,28 @@ const html = renderToStaticMarkup(<AggregateRetirementStatus
   marketPhase="Retiring"
   marketGeneration="7"
   minimumContextSlot="100"
+  outcomeCount={4}
 />);
 
 describe('reader-facing aggregate retirement status', () => {
+  /**
+   * RULING D1 item 2: the market's terms state the crank-first order.
+   *
+   * A vocabulary gate as much as a render test. The reversed order -- opener
+   * before cranker -- is what the DESIGN originally stated and every total
+   * still adds up under it, so nothing but the words distinguishes them. The
+   * page must not be able to lose them quietly.
+   */
+  it('states the crank-first order and who it leaves short', () => {
+    expect(html).toContain('costs the opener the first crank');
+    expect(html).toContain('<strong>the cranker before the opener</strong>');
+    expect(html).toContain('never repays its opener in full');
+    // And it states no figure it has not read: the server render has made no
+    // RPC call, so the loading line stands where a quoted number would be.
+    expect(html).toContain('Reading this cluster');
+    expect(html).not.toMatch(/0\.00\d{7} SOL/);
+  });
+
   it('names the four ordered durable steps without offering a mutation', () => {
     for (const step of ['prepare', 'close-vault', 'close-replay', 'finish']) expect(html).toContain(step);
     expect(html).toContain('Retirement unavailable in this browser');

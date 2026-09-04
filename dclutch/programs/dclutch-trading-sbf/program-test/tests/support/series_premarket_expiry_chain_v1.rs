@@ -103,6 +103,15 @@ use dclutch_token_svm::{
     ACCOUNT_BYTES, LEGACY_TOKEN_PROGRAM_ID, MINT_BYTES, Mint, PRODUCTION_ADAPTER_RELEASES,
     TokenAccount,
 };
+/// Occurrence count of the Template this chain stages: exactly one.
+///
+/// `series_proof_count_v3(1) == 0`, so the canonical family request for every
+/// occurrence action here is the bare 128-byte header, the Expire Effect
+/// declares no borrowed proof range, and the Expire RequestProfile pins 128.
+/// This is release geometry, so it must be the SAME number the Template record
+/// carries -- one author, read twice.
+const SERIES_PREMARKET_TEMPLATE_OCCURRENCE_COUNT_V1: u32 = 1;
+
 use dclutch_trading_sbf::series::account_profile_v4::SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4;
 use dclutch_trading_sbf::series::state::{
     SeriesStateV3, TicketPhaseV3, TicketStateSeedsV3, TicketStateV3,
@@ -736,6 +745,7 @@ fn with_current_release_input_v1<R>(
     let consume_lengths = [0_u32; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4];
     consume(SeriesCurrentReleaseInputV5 {
         template: records.template_id,
+        template_occurrence_count: SERIES_PREMARKET_TEMPLATE_OCCURRENCE_COUNT_V1,
         consume_shadow_certificate_program: dclutch_core_contract::ContentId::new(
             hash(input.elves.trading.as_slice()).to_bytes(),
         )
@@ -2781,7 +2791,11 @@ fn build_series_record_corpus_v1(
     put(&mut template, 0, b"DCLTSTV3")?;
     put(&mut template, 8, &3_u16.to_le_bytes())?;
     put(&mut template, 10, &1_u16.to_le_bytes())?;
-    put(&mut template, 12, &1_u32.to_le_bytes())?;
+    put(
+        &mut template,
+        12,
+        &SERIES_PREMARKET_TEMPLATE_OCCURRENCE_COUNT_V1.to_le_bytes(),
+    )?;
     put(&mut template, 16, &FIRST_SLOT.to_le_bytes())?;
     put(&mut template, 24, &PERIOD_SLOTS.to_le_bytes())?;
     put(&mut template, 32, &RETRY_WINDOW.to_le_bytes())?;

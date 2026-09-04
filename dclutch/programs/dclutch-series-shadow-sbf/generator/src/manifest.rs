@@ -22,7 +22,7 @@ use dclutch_trading_sbf::series::{
         SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
     },
     consume_artifacts_v4::{
-        SERIES_CONSUME_EFFECT_BYTES_V4, SERIES_CONSUME_REQUEST_PROFILE_BYTES_V4,
+        SERIES_CONSUME_REQUEST_PROFILE_BYTES_V4, series_consume_effect_bytes_v4,
         SERIES_CONSUME_TRANSITION_BYTES_V4, SeriesConsumeChildRequestsV4,
     },
 };
@@ -70,8 +70,18 @@ const STRATEGY_BYTES_OFFSET: usize = 44;
 const FIXED_RULE_COUNT_OFFSET: usize = 48;
 const HEADER_RESERVED_OFFSET: usize = 50;
 const ROOT_STATE_BYTES_OFFSET: usize = 52;
-const TAIL_RESERVED_OFFSET: usize = 56;
-const TAIL_RESERVED_BYTES: usize = 8;
+/// Immutable occurrence count of the Template this bundle's Effect serves.
+///
+/// Taken from the tail reserve, which shrank from eight bytes to four. The
+/// manifest already pins the Effect's exact width and could not say WHICH
+/// width was canonical: `series_consume_effect_bytes_v4` differs by the two
+/// duplicate proof ranges Consume declares only for a Template whose proof is
+/// nonempty. Without this field a rebuild had to guess, and a length check
+/// against one hard-coded constant silently made one Template shape the only
+/// admissible one.
+const OCCURRENCE_COUNT_OFFSET: usize = 56;
+const TAIL_RESERVED_OFFSET: usize = 60;
+const TAIL_RESERVED_BYTES: usize = 4;
 const IDENTITIES_OFFSET: usize = 64;
 const IDENTITY_COUNT: usize = 11;
 const FIXED_RULES_OFFSET: usize = SERIES_SHADOW_SOURCE_MANIFEST_HEADER_BYTES_V1;
@@ -125,6 +135,7 @@ pub struct SeriesShadowSourceManifestV1<'a> {
     derivation_policy: ContentId,
     capacity_profile: ContentId,
     root_state_bytes: u32,
+    occurrence_count: u32,
 }
 
 /// Borrowed exact generated sections ready for a checked source emitter.
@@ -187,7 +198,11 @@ impl<'a> SeriesShadowSourceManifestV1<'a> {
                 )
             || lengths.get(3).copied() != Some(SERIES_CONSUME_REQUEST_PROFILE_BYTES_V4)
             || lengths.get(5).copied() != Some(SERIES_CONSUME_TRANSITION_BYTES_V4)
-            || lengths.get(6).copied() != Some(SERIES_CONSUME_EFFECT_BYTES_V4)
+            || lengths.get(6).copied()
+                != Some(series_consume_effect_bytes_v4(read_u32(
+                    bytes,
+                    OCCURRENCE_COUNT_OFFSET,
+                )?))
             || lengths.get(7).copied()
                 != Some(
                     dclutch_execution_strategy_contract::v2::EXECUTION_STRATEGY_PROGRAM_BYTES_V2,
@@ -295,7 +310,13 @@ impl<'a> SeriesShadowSourceManifestV1<'a> {
             derivation_policy,
             capacity_profile,
             root_state_bytes,
+            occurrence_count: read_u32(bytes, OCCURRENCE_COUNT_OFFSET)?,
         })
+    }
+
+    /// Immutable occurrence count of the Template this bundle serves.
+    pub const fn occurrence_count(self) -> u32 {
+        self.occurrence_count
     }
 
     /// Exact complete manifest bytes.
@@ -389,6 +410,7 @@ pub fn require_deterministic_series_shadow_rebuild_v1(
         lifecycle: manifest.source_lifecycle,
         fixed_data_lengths: &fixed_data_lengths,
         child_requests: child,
+        occurrence_count: manifest.occurrence_count,
     };
     let rebuilt = compile_series_shadow_source_manifest_v1(source)?;
     if rebuilt != manifest_bytes {
@@ -423,6 +445,7 @@ fn encode_manifest(
     }
     let mut output = vec![0_u8; total];
     put(&mut output, 0, &SERIES_SHADOW_SOURCE_MANIFEST_MAGIC_V1)?;
+    put_u32(&mut output, OCCURRENCE_COUNT_OFFSET, source.occurrence_count)?;
     put_u16(
         &mut output,
         VERSION_OFFSET,

@@ -78,10 +78,11 @@ use dclutch_relay_contract::{
     RELAYER_KEY_SET_SCHEMA_RELEASE_ID_V1, SOLANA_MAINNET_GENESIS_HASH_V1,
     frame::{RelayAccountPrivilegeV1, RelayFrameKindV1, validate_relay_frame_v1},
     instruction::{
-        APPEND_OBSERVATION_PREFIX_BYTES, AppendObservationInstructionV1,
-        CommitDeadlineFailureInstructionV1, ConsumeRecordInstructionV1, CreateRecordInstructionV1,
-        RELAY_INSTRUCTION_MAGIC, RelayInstructionV1, RetireRecordInstructionV1,
-        SEAL_RECORD_PREFIX_BYTES, SealRecordInstructionV1,
+        APPEND_OBSERVATION_PREFIX_BYTES, AdvanceRecoveryInstructionV1,
+        AppendObservationInstructionV1, CommitDeadlineFailureInstructionV1,
+        ConsumeRecordInstructionV1, CreateRecordInstructionV1, RELAY_INSTRUCTION_MAGIC,
+        RelayInstructionV1, RetireRecordInstructionV1, SEAL_RECORD_PREFIX_BYTES,
+        SealRecordInstructionV1,
     },
     record::{
         RelayedObservationRecordViewV1, RelayedRecordBindingV1,
@@ -102,10 +103,11 @@ use dclutch_relay_contract::{
 use dclutch_release_set_contract::ExecutionRoleV1;
 use dclutch_resolution_codec::{
     RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-    RESOLUTION_CONTROLLER_RELEASE_ID_V7,
+    RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateKindV2,
 };
 use dclutch_source_contract::{
     PROVIDER_RELEASE_BYTES, PROVIDER_RELEASE_SCHEMA_ID_V1, ProviderReleaseV1,
+    RECOVERY_POLICY_BYTES_V2, RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryPolicyV2,
     SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_MATERIAL_V3_BYTES,
     SOURCE_RESOLUTION_STATE_BYTES_V2, SOURCE_SPEC_BYTES, SOURCE_SPEC_SCHEMA_ID_V1,
     STATISTIC_SPEC_BYTES, STATISTIC_SPEC_SCHEMA_ID_V1, SourceAccessProfile, SourceMaterialV3,
@@ -130,8 +132,9 @@ use crate::{
     RecordKind, ResolutionError, authenticate_clock, authenticate_finalized_record,
     authenticate_rent,
     funded::{
-        AuthenticatedFailureFundingV2, AuthenticatedWalkSourceV1, DeadlineFailureRequestV1,
-        FundedWalkErrorV1, RESOLUTION_FUNDING_LEDGER_BYTES_V2, plan_deadline_failure_v1,
+        AuthenticatedFailureFundingV2, AuthenticatedRecoveryPolicyV1, AuthenticatedWalkSourceV1,
+        DeadlineFailureRequestV1, FundedWalkErrorV1, RESOLUTION_FUNDING_LEDGER_BYTES_V2,
+        plan_deadline_failure_v1, process_funded_transition,
     },
     provider_instruction_v3::authenticate_record,
     relay_v1::{
@@ -183,6 +186,9 @@ pub(crate) fn process_relay_transport_v1(
         }
         RelayInstructionV1::CommitDeadlineFailure(request) => {
             process_commit_deadline_failure(program_id, accounts, request)
+        }
+        RelayInstructionV1::AdvanceRecovery(request) => {
+            process_advance_recovery(program_id, accounts, request)
         }
     }
 }
@@ -1057,6 +1063,244 @@ fn process_commit_deadline_failure(
     )
 }
 
+/// Crank the funded ordered-recovery ladder by exactly one rung.
+///
+/// This is the route the completion contract's recovery row says does not
+/// exist. A market founded with a `RecoveryPolicyV2` could not be terminalized
+/// at all: `SourceResolutionStateV2::exhaust_after_primary_deadline` refuses a
+/// recovery-bearing material by name -- skipping paid-for legs would take an
+/// outcome away from the holders who paid for them -- and the failure commit
+/// only fires from `Exhausted`, which nothing could reach. Core welded founding
+/// shut rather than let another such market exist.
+///
+/// What it authenticates, in order, each refusing on its own field:
+///
+/// 1. the frame -- eighteen positions, three writable, no aliases;
+/// 2. the Source state's program custody and its own derived address;
+/// 3. the Market, its Core ownership, its derived address, this Program as its
+///    Resolution role, and that its resolution policy is the material the state
+///    is bound to;
+/// 4. the `SourceMaterialV3` record, the `WindowSpecV1` it names, and the
+///    `RecoveryPolicyV2` it selects;
+/// 5. the `CapabilityManifestV1` the Market names, and the compartment the
+///    crank's own rung configures.
+///
+/// There is no Product graph in that list, and its absence is the transition's
+/// shape rather than an economy: a crank selects no outcome, so
+/// `ResolutionCertificateV2::validate_terminal_product` refuses to be asked
+/// about a `RecoveryAdvanced` or `Exhausted` receipt at all, and the only
+/// Product fact the receipt carries is the digest the material already names.
+///
+/// As with the failure walk, the caller supplies which market and when, and
+/// nothing else. Which rung the ladder stands on, which source that rung names,
+/// and which compartment pays for leaving it are all read out of records the
+/// market finalized before it opened.
+#[inline(never)]
+fn process_advance_recovery(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: AdvanceRecoveryInstructionV1,
+) -> ProgramResult {
+    validate_frame(RelayFrameKindV1::AdvanceRecovery, accounts)?;
+    let worker = account(accounts, 0)?;
+    let market_account = account(accounts, 1)?;
+    let core = account(accounts, 2)?;
+    let activation = account(accounts, 3)?;
+    let source_state_account = account(accounts, 4)?;
+    let certificate_account = account(accounts, 5)?;
+    let funding_account = account(accounts, 14)?;
+    let clock_account = account(accounts, 15)?;
+    let rent_sysvar = account(accounts, 16)?;
+    let system = account(accounts, 17)?;
+    require_system(system)?;
+    let rent = authenticate_rent(rent_sysvar)?;
+    let clock = authenticate_clock(clock_account)?;
+    let generation = request.generation();
+
+    authenticate_source_state_account(program_id, source_state_account, market_account)?;
+    let source_state = Box::new({
+        let data = source_state_account
+            .try_borrow_data()
+            .map_err(|_| ResolutionError::OutputState)?;
+        SourceResolutionStateV2::decode(&data).map_err(|_| ResolutionError::OutputState)?
+    });
+    let material_id = source_state.material_id();
+
+    let market = authenticate_market(
+        program_id,
+        market_account,
+        core,
+        activation,
+        generation,
+        material_id.to_bytes(),
+    )?;
+    let walk_source = Box::new(deadline_walk_source(
+        &market.registry_program,
+        accounts,
+        material_id,
+    )?);
+    let ladder = Box::new(authenticate_recovery_policy_record(
+        &market.registry_program,
+        accounts,
+        walk_source.material,
+    )?);
+
+    // Which compartment this crank spends is a function of which rung it takes,
+    // and the row has to be selected before the crank runs because one account
+    // holds all three of a market's Resolution compartments and each is found
+    // by its own pinned configuration. `next_crank_funding_config` is the one
+    // author of that answer; `process_funded_transition` derives it again from
+    // the crank it actually took, and `plan_funding_release` refuses if the two
+    // ever disagreed.
+    let selecting_config = source_state
+        .next_crank_funding_config(ladder.policy_id, ladder.policy)
+        .map_err(|_| ResolutionError::Transition)?
+        .to_bytes();
+
+    let manifest_data = account(accounts, 12)?
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::Funding)?;
+    authenticate_finalized_record(
+        market.registry_program,
+        account(accounts, 12)?,
+        account(accounts, 13)?,
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        market.capability_manifest,
+        &manifest_data,
+        RecordKind::CapabilityManifest,
+    )?;
+    let manifest =
+        CapabilityManifestV1::decode(&manifest_data).map_err(|_| ResolutionError::Funding)?;
+    let manifest_id = CapabilityContentId::new(market.capability_manifest)
+        .map_err(|_| ResolutionError::Funding)?;
+    let escrow = Box::new(authenticate_failure_funding(
+        program_id,
+        funding_account,
+        market_account,
+        manifest_id,
+        manifest,
+        generation,
+        selecting_config,
+        &rent,
+    )?);
+
+    let outputs = plan_and_encode_funded_transition(
+        &DeadlineFailureRequestV1 {
+            market: market_account.key.to_bytes(),
+            generation,
+            terminal_sequence: request.terminal_sequence(),
+            certificate_account: certificate_account.key.to_bytes(),
+            current_unix_seconds: clock.unix_timestamp,
+        },
+        &source_state,
+        &walk_source,
+        &ladder,
+        &escrow,
+    )?;
+
+    let worker_lamports_after = worker
+        .lamports()
+        .checked_add(outputs.encoded.work_paid)
+        .ok_or(ResolutionError::Arithmetic)?;
+    drop(manifest_data);
+    commit_deadline_failure(
+        program_id,
+        outputs.certificate_kind_seed,
+        request.terminal_sequence(),
+        DeadlineFailureOutputs {
+            source_state: source_state_account,
+            certificate: certificate_account,
+            funding: funding_account,
+            worker,
+            system,
+        },
+        &rent,
+        &outputs.encoded,
+        worker_lamports_after,
+    )
+}
+
+/// Everything one crank writes, plus the seed that decides where it writes it.
+struct EncodedFundedTransitionV1 {
+    encoded: EncodedDeadlineFailureV1,
+    certificate_kind_seed: u8,
+}
+
+/// Plan the crank and encode every byte it writes, on a frame of its own.
+///
+/// The same reason the failure walk does it here: an authenticated
+/// `RecoveryPolicyV2` is roughly half a kilobyte, the plan carries a Source
+/// state, a certificate and a complete three-row ledger poststate by value, and
+/// encoding them produces another full wire image beside them. The SBF frame is
+/// four kilobytes and the caller already holds the authenticated Market, Source
+/// graph, ladder and escrow.
+///
+/// The encoding happens here rather than at the commit, and that ordering is
+/// the point: `ResolutionCertificateV2::to_bytes` runs `validate_shape`, which
+/// is where the Lean-owned schema refuses a liveness receipt carrying a zero
+/// `work_paid`, a nonzero selector or any provider evidence. A receipt the
+/// schema would refuse therefore never reaches an account, and no lamport has
+/// moved when it is refused.
+#[inline(never)]
+fn plan_and_encode_funded_transition(
+    request: &DeadlineFailureRequestV1,
+    source_state: &SourceResolutionStateV2,
+    walk_source: &AuthenticatedWalkSourceV1,
+    ladder: &AuthenticatedRecoveryPolicyV1,
+    escrow: &AuthenticatedFailureFundingV2<'_>,
+) -> Result<Box<EncodedFundedTransitionV1>, ProgramError> {
+    let plan = process_funded_transition(request, source_state, walk_source, ladder, escrow)
+        .map_err(map_funded_walk_error)?;
+    let mut outputs = Box::new(EncodedFundedTransitionV1 {
+        encoded: EncodedDeadlineFailureV1 {
+            source: [0; SOURCE_RESOLUTION_STATE_BYTES_V2],
+            certificate: [0; RESOLUTION_CERTIFICATE_BYTES_V2],
+            funding: [0; RESOLUTION_FUNDING_LEDGER_BYTES_V2],
+            funding_prestate_digest: hash(&escrow.ledger_bytes).to_bytes(),
+            work_paid: plan.work_paid,
+            funding_lamports_after: plan.funding_lamports_after,
+        },
+        certificate_kind_seed: plan.certificate_kind.kind_seed(),
+    });
+    outputs.encoded.source = plan.next_source.to_bytes();
+    outputs.encoded.certificate = plan
+        .certificate
+        .to_bytes()
+        .map_err(|_| ResolutionError::Transition)?;
+    outputs.encoded.funding = plan.next_funding;
+    Ok(outputs)
+}
+
+/// Authenticate the `RecoveryPolicyV2` the material selects.
+///
+/// A material that selects none has no ladder and is refused here rather than
+/// deeper in: the primary exhaustion is that market's terminal and this route
+/// must not become a second way to reach it.
+#[inline(never)]
+fn authenticate_recovery_policy_record(
+    registry: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    material: SourceMaterialV3,
+) -> Result<AuthenticatedRecoveryPolicyV1, ProgramError> {
+    let policy_id = material
+        .recovery_policy()
+        .ok_or(ResolutionError::SourceMaterial)?;
+    let data = account(accounts, 10)?
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::FinalizedRecord)?;
+    authenticate_record(
+        registry,
+        account(accounts, 10)?,
+        account(accounts, 11)?,
+        RECOVERY_POLICY_SCHEMA_ID_V2,
+        policy_id.to_bytes(),
+        &data,
+        RECOVERY_POLICY_BYTES_V2,
+    )?;
+    let policy = RecoveryPolicyV2::decode(&data).map_err(|_| ResolutionError::SourceMaterial)?;
+    Ok(AuthenticatedRecoveryPolicyV1 { policy_id, policy })
+}
+
 /// Execute the existing funded primary-deadline walk after a transport-specific
 /// caller has authenticated its own additional liveness boundary.
 ///
@@ -1185,6 +1429,13 @@ pub(crate) fn process_deadline_failure_coordinates(
     drop(manifest_data);
     commit_deadline_failure(
         program_id,
+        // The kind is a PDA *seed*, so the failure a deadline walk writes and
+        // the success an observation writes live at different addresses for one
+        // Source state at one sequence and neither can overwrite the other. It
+        // is read from the codec rather than written again here, because a
+        // second copy of it would be a second author of where a certificate
+        // lives.
+        ResolutionCertificateKindV2::ResolutionFailure.kind_seed(),
         terminal_sequence,
         DeadlineFailureOutputs {
             source_state: source_state_account,
@@ -1347,7 +1598,7 @@ fn authenticate_failure_funding<'a>(
     manifest_id: CapabilityContentId,
     manifest: CapabilityManifestV1<'a>,
     generation: u64,
-    material_id: [u8; 32],
+    selecting_config: [u8; 32],
     rent: &Rent,
 ) -> Result<AuthenticatedFailureFundingV2<'a>, ProgramError> {
     if account_info.owner != program_id
@@ -1382,7 +1633,7 @@ fn authenticate_failure_funding<'a>(
             {
                 return Err(ResolutionError::Funding.into());
             }
-            if entry.config_id().to_bytes() == material_id {
+            if entry.config_id().to_bytes() == selecting_config {
                 if failure_entry_index.replace(entry_index).is_some() {
                     return Err(ResolutionError::Funding.into());
                 }
@@ -1443,6 +1694,7 @@ struct DeadlineFailureOutputs<'a, 'info> {
 #[inline(never)]
 fn commit_deadline_failure(
     program_id: &Pubkey,
+    certificate_kind_seed: u8,
     terminal_sequence: u64,
     outputs: DeadlineFailureOutputs<'_, '_>,
     rent: &Rent,
@@ -1451,7 +1703,7 @@ fn commit_deadline_failure(
 ) -> ProgramResult {
     initialize_certificate_at_kind(
         program_id,
-        RESOLUTION_FAILURE_CERTIFICATE_KIND_SEED,
+        certificate_kind_seed,
         terminal_sequence,
         outputs.source_state,
         outputs.certificate,
@@ -1497,13 +1749,6 @@ fn commit_deadline_failure(
     **worker_lamports = worker_lamports_after;
     Ok(())
 }
-
-/// The Lean-owned Runtime V2 wire tag for `ResolutionFailure`.
-///
-/// The kind is a PDA *seed*, so the failure a deadline walk writes and the
-/// success an observation writes live at different addresses for one Source
-/// state at one sequence, and neither can overwrite the other.
-const RESOLUTION_FAILURE_CERTIFICATE_KIND_SEED: u8 = 4;
 
 const fn map_relay_join_error(error: RelayJoinErrorV1) -> ResolutionError {
     match error {

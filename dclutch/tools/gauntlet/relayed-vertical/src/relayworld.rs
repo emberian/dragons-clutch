@@ -168,7 +168,7 @@ impl RelayAddressBookV1 {
             RelayAccountNameV1::PortfolioRecordStagingVacancy => self.portfolio.staging,
             RelayAccountNameV1::CapabilityManifest => self.manifest.raw,
             RelayAccountNameV1::CapabilityManifestStagingVacancy => self.manifest.staging,
-            RelayAccountNameV1::FailureFunding => self.failure_funding,
+            RelayAccountNameV1::ResolutionFunding => self.failure_funding,
         })
     }
 

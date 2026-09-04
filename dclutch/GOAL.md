@@ -4686,3 +4686,14 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   `exhaust_after_primary_deadline` refusing any recovery policy; 0029 carries the K=3 packet correction (an amendment to
   0011 §3b owed). The census-derived reference pages are stale by one code (a converge owed after the wave).
 - Cuts: `ffe6e1f2c`.
+- BATCH-SPINE closed (`2fbd73474`; docs/design/MECHANISM_BATCH_SPINE_2026_09_04.md, 679 lines): every claim transfer between
+  two parties is one General candidate (a simplex over K plus limit executions balanced by one complete-set move,
+  `Candidate.valid`); cadence from the Market's (collection, selection, settlement) slot triple; **Direct survives as the
+  RFQ — a batch of two — with the matcher's price discretion replaced by a derived price; the resting bearer-ticket pool and
+  the registered GTC branch are the order book in embryo and are deleted**; routes 156 survive / 6 amended / 3 participant /
+  13 delete. Found by reading: **General as built is ONE call auction per Market** (the selection seeded by root alone);
+  **early freeze is live** (no slot conjunct); a seller has no reservation price (owed to the clearing rule); the price
+  series is not a durable chain fact. CU: a batch is 9 + 4M transactions, 3.70 M CU per order at M=136 — 6.4× the bilateral
+  fill (5.2× with the page). **The commitment decision for ember: every transfer of claims is a verified General candidate,
+  the bilateral one included, and a resting order rests in a batch, never in a public pool of bearer tickets.**
+- Cuts: `db59c577e`.

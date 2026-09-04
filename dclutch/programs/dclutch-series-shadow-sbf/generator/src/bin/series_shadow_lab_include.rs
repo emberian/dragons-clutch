@@ -61,6 +61,12 @@ const COMPILER_SOURCE: &[u8] = concat!(
 
 /// Lab template identity. Not a chain fact; the measurement does not use one.
 const LAB_TEMPLATE: [u8; 32] = [1; 32];
+/// Lab Template occurrence count: one occurrence, hence an empty proof.
+///
+/// `series_proof_count_v3(1) == 0`, so the compiled Effect declares no
+/// borrowed proof range. That is the canonical single-occurrence Series, and
+/// it is the only shape this lab has ever staged.
+const LAB_OCCURRENCE_COUNT: u32 = 1;
 
 fn main() -> ExitCode {
     match run() {
@@ -115,6 +121,7 @@ fn run() -> Result<(), String> {
     let template = ContentId::new(LAB_TEMPLATE).map_err(|_| "template identity".to_string())?;
     let release = series_consume_selected_release_v4(SeriesConsumeSelectedReleaseInputV4 {
         template,
+        template_occurrence_count: LAB_OCCURRENCE_COUNT,
         shadow_certificate_program: certificate,
         child_requests,
         observed_data_lengths: &observed,
@@ -137,6 +144,7 @@ fn run() -> Result<(), String> {
         .map_err(|error| format!("Trading descriptor did not decode: {error:?}"))?;
 
     let source = SeriesShadowBundleSourceV4 {
+        occurrence_count: LAB_OCCURRENCE_COUNT,
         descriptor: SeriesShadowDescriptorSemanticsV4 {
             kind: descriptor.kind(),
             config_schema: descriptor.config_schema(),

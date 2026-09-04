@@ -275,6 +275,7 @@ pub fn build_series_shadow_source_v1(
             capacity_profile: descriptor.capacity_profile(),
             root_state_bytes: descriptor.root_state_bytes(),
         },
+        occurrence_count: occurrence.template().occurrence_count(),
         release_sources: SeriesShadowReleaseSourcesV4 {
             semantic_source: input.semantic_source,
             compiler_source: input.compiler_source_manifest,
