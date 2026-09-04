@@ -5,10 +5,40 @@
 //! `dclutch_trading_sbf::series::release_v5`, and the physical evidence joins
 //! remain owned by the adjacent support module.
 //!
-//! # THREE ROWS ARE STILL RED, AND NOW THE FIXTURE IS THE AUTHOR
+//! # THREE ROWS ARE STILL RED, AND THE CAMPAIGN NOW SUBMITS A TRANSACTION
 //!
-//! That is the whole change of state, and it is the opposite of the header
-//! this replaces. The Series Expire ARTIFACT SET no longer contradicts itself:
+//! It reaches the bank. The Registry continuation lands, Trading is invoked at
+//! depth two, and it refuses inside its ORDINARY Hot prelude, before any
+//! Series semantics run -- `authenticate_market`'s first conjunct, because
+//! this fixture stages the fixed controller Market VACANT. That is the current
+//! wall and it is named at the end of this list.
+//!
+//! Two walls came out to get there, and BOTH of them were the fixture reading
+//! an authority wrong rather than an account it had failed to build:
+//!
+//! - `validate_physical_bindings` compared the instruction's runtime TAIL
+//!   against the release's full physical count. `series_hot_v3.rs` assembles a
+//!   Hot instruction as 39 fixed accounts, the action's strategy extras, then
+//!   `runtime_physical_accounts.skip(HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3)` --
+//!   physical ordinals 0..5 ARE five members of the fixed prefix and are never
+//!   repeated. So `runtime=39` against `geometry.physical=44` was not five
+//!   accounts missing from the fixture; all forty-four are built, installed and
+//!   bound at coordinates 72..76 and have been since `1b8191f9d`. It was five
+//!   the reader declined to count, and an ordinal space shifted under every
+//!   role lookup by exactly the same five.
+//! - The top-level wrapper was `legacy_registry_hot_instruction`, the headered
+//!   `continuation_v1` container. Trading refuses that seam ON PURPOSE:
+//!   `authenticate_hot_invocation_v3` requires the instructions-sysvar record
+//!   of the top-level instruction to carry the same bytes Trading received, and
+//!   the legacy seam forwards only the stripped continuation, so the header is
+//!   observable at the child. `registry_hot_continuation.rs` asserts exactly
+//!   that outcome, with exactly that code, in
+//!   `a_legacy_headered_hot_container_takes_the_v1_seam_and_not_the_transparent_one`.
+//!   The transparent `hot_continuation_v2` seam is the one a Series Expire
+//!   takes, and taking it moved the refusal from `NativeSignature` to a Trading
+//!   prelude conjunct 29,000 CU further in.
+//!
+//! The Series Expire ARTIFACT SET no longer contradicts itself:
 //! `97ce7a748` keyed the family's proof geometry on the Template that owns it,
 //! so the Expire RequestProfile pins `series_action_request_bytes_v3(count)`
 //! and route 4 declares its borrowed range only when the canonical proof is
@@ -31,14 +61,26 @@
 //!    `activated_custody_program_v1` read nothing out of it and the operator
 //!    honestly mined an absent hint. Repaired here by giving the operator the
 //!    account the bank actually holds (`Releases::activation_data`).
-//! 3. Where it stops today: `runtime=39` against `geometry.physical=44`, the
-//!    conjunct `support/series_premarket_expiry_v1.rs::validate_physical_bindings`
-//!    measured on 2026-09-01 and names in full. The five missing coordinates
-//!    are `72 template_staging`, `73 occurrence_raw`, `74 occurrence_staging`,
-//!    `75 ticket_raw`, `76 ticket_staging` -- the finalized Series record
-//!    raw/staging accounts Core needs to rebuild the Expire request. This file
-//!    contains no reference to any of the five, so they are never constructed,
-//!    installed, or packed. That is fixture work, and it is the next unit.
+//! 3. Where it stops today, measured on chain and localized with the tree's own
+//!    `hot-cu-profile` checkpoints: Trading consumes 53,491 CU and refuses
+//!    `Content` (`0x4003`) inside `authenticate_market`, ~230 CU past its
+//!    entry, which is its first conjunct --
+//!    `frame.market.owner != frame.core_program.key || data_len() != STATE_BYTES`.
+//!    `build_controller_corpus_v1` builds the controller as
+//!    `market: vacant(controller_market)`, and `process_hot_execution_v3` says
+//!    in its own comment why that cannot stand: "the fixed Market is always the
+//!    live Series controller ... the occurrence's distinct future Market is a
+//!    route-local account, never a substitute for the fixed controller
+//!    coordinate." Pre-Market names the FUTURE Market, which is correctly
+//!    vacant; the controller is a live founded Market and this fixture has
+//!    never staged one. The next unit is to build it the way a founding writes
+//!    it -- `direct-hot/src/fixture.rs::market_and_claims` is the worked
+//!    example, bumps and all -- at its canonical
+//!    `market_core_state_address_v2`, which cascades into the root header, the
+//!    Ticket state PDA, and the permit and caller seeds that derive from it.
+//!    A second fixture gap is queued behind it and is separate: the
+//!    below-minimum row needs a `RentCredit` prestate in the bank, which
+//!    `capture_series_account_snapshots_v1` cannot find today.
 //!
 //! # WHAT THE ARTIFACT REPAIR ACTUALLY WAS, kept because it is not obvious
 //!

@@ -9768,11 +9768,17 @@ async fn the_resolution_certificate_owner_rent_width_and_body_are_all_required()
     let mut wrong_owner = honest.clone();
     wrong_owner.owner = CORE_PROGRAM_ID;
 
-    let mut underfunded = honest.clone();
-    underfunded.lamports = Rent::default()
-        .minimum_balance(underfunded.data.len())
-        .checked_sub(1)
-        .expect("positive certificate rent minimum");
+    // A DRAINED certificate, not an under-priced one. This hostile used to sit
+    // one lamport under `Rent::minimum_balance(len)`, which asked the cluster
+    // what a byte costs today about an account some earlier transaction funded
+    // -- and `funded_rent_persists_v1` stopped asking that (`a4b2cbb17`): the
+    // runtime grandfathers an account funded at a cheaper rate, so a balance
+    // below today's minimum is a LIVE account and refusing it refuses the truth.
+    // Zero is the one case the runtime leaves to the program, because zero is
+    // the only exit it permits: data an earlier instruction of this transaction
+    // has already abandoned, reaped at the transaction's end.
+    let mut drained = honest.clone();
+    drained.lamports = 0;
 
     let mut wrong_width = honest.clone();
     wrong_width.data.pop().expect("nonempty certificate");
@@ -9787,7 +9793,7 @@ async fn the_resolution_certificate_owner_rent_width_and_body_are_all_required()
 
     for (label, hostile) in [
         ("another owner", wrong_owner),
-        ("less than rent exemption", underfunded),
+        ("a drained balance", drained),
         ("a truncated width", wrong_width),
         ("another Market in its canonical body", wrong_body),
     ] {

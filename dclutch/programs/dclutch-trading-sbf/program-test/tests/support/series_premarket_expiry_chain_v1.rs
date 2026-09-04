@@ -50,8 +50,8 @@ use dclutch_custody_contract::{
     ProjectedCustodyStateSeedsV2, ProjectedCustodyStateV2,
 };
 use dclutch_direct_hot_program_test_support::waist::{
-    Elves, REGISTRY_PROGRAM_ID, Releases, fixture_substrate, legacy_registry_hot_instruction,
-    programdata, programdata_v2, release_v2,
+    Elves, REGISTRY_PROGRAM_ID, Releases, fixture_substrate, programdata, programdata_v2,
+    registry_hot_instruction, release_v2,
 };
 use dclutch_market_core_codec::{
     Action as CoreAction, FoundingIntentV5, Identity, MarketCoreStateSeedsV2, MarketIdentity,
@@ -198,7 +198,20 @@ pub struct SeriesPremarketExpiryChainFixtureV1 {
     pub externally_installed: Vec<Pubkey>,
     /// Trading Hot instruction before Registry wrapping.
     pub hot_instruction: Instruction,
-    /// Top-level legacy Registry continuation submitted to ProgramTest.
+    /// Top-level TRANSPARENT Registry Hot continuation submitted to
+    /// ProgramTest: the `hot_continuation_v2` seam, whose instruction data is
+    /// the Trading Hot bytes with nothing in front of them.
+    ///
+    /// It used to be the legacy `continuation_v1` container, and that is a
+    /// seam Trading refuses on purpose. `authenticate_hot_invocation_v3`
+    /// requires the instructions-sysvar record of the top-level instruction to
+    /// carry the SAME bytes Trading received (`hot_v3.rs`
+    /// `observed.data() != instruction_data`), and the legacy seam forwards
+    /// only the stripped continuation, so its header is observable at the
+    /// child and the frame refuses `NativeSignature` before any Series
+    /// semantics run. That is not a discovery: `registry_hot_continuation.rs`
+    /// asserts exactly this outcome for exactly this reason in
+    /// `a_legacy_headered_hot_container_takes_the_v1_seam_and_not_the_transparent_one`.
     pub top_level_instruction: Instruction,
     /// Packed runtime keys in selected physical-ordinal order.
     pub runtime_physical_accounts: Vec<Pubkey>,
@@ -469,8 +482,7 @@ pub fn build_series_premarket_expiry_chain_v1(
         &bundle,
     )?;
     let hot_instruction = bundle.hot_instruction;
-    let top_level_instruction =
-        legacy_registry_hot_instruction(input.releases, hot_instruction.clone()).0;
+    let top_level_instruction = registry_hot_instruction(input.releases, hot_instruction.clone()).0;
     let _current_source_owner = release_source;
     Ok(SeriesPremarketExpiryChainFixtureV1 {
         release,

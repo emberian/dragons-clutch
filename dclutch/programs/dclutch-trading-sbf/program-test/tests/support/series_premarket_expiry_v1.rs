@@ -9,8 +9,12 @@
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
     hot_v3::{
-        HOT_FIXED_ACCOUNT_COUNT_V3, HOT_MARKET_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3,
-        HotExecutionEnvelopeV3,
+        HOT_CONFIG_RAW_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
+        HOT_MARKET_ACCOUNT_V3, HOT_PORTFOLIO_RAW_ACCOUNT_V3, HOT_PRODUCT_RAW_ACCOUNT_V3,
+        HOT_ROOT_ACCOUNT_V3, HOT_RUNTIME_CONFIG_COORDINATE_V3,
+        HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3, HOT_RUNTIME_LINKED_BASIS_COORDINATE_V3,
+        HOT_RUNTIME_PORTFOLIO_COORDINATE_V3, HOT_RUNTIME_PRODUCT_COORDINATE_V3,
+        HOT_RUNTIME_ROOT_COORDINATE_V3, HotExecutionEnvelopeV3,
     },
 };
 use dclutch_market_core_codec::{
@@ -20,7 +24,6 @@ use dclutch_market_core_codec::{
 use dclutch_operator::registry::hot_continuation_v1::{
     REGISTRY_HOT_CONTINUATION_PREFIX_ACCOUNTS_V1, TRADING_HOT_CONTINUATION_ADMISSION_ACCOUNT_V1,
 };
-use dclutch_registry_svm::continuation_v1::REGISTRY_CONTINUATION_REQUEST_BYTES_V1;
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_rent_contract::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
 use dclutch_trading_sbf::series::expire_funding_artifacts_v5::SERIES_EXPIRE_PRECOMMIT_CALLER_COORDINATE_V5;
@@ -302,14 +305,7 @@ pub fn authenticate_series_premarket_expiry_physical_report_v1(
         return Err(SeriesPremarketExpirySupportErrorV1::Instruction);
     }
 
-    let runtime = input
-        .hot_instruction
-        .accounts
-        .get(HOT_FIXED_ACCOUNT_COUNT_V3..)
-        .ok_or_else(|| geometry_site_v1("hot instruction has no runtime tail"))?
-        .iter()
-        .map(|meta| meta.pubkey)
-        .collect::<Vec<_>>();
+    let runtime = runtime_physical_accounts_v1(selected, &input.hot_instruction)?;
     validate_physical_bindings(selected, &runtime)?;
     let root_runtime = selected_role_key(selected.roles.root, selected, &runtime)?;
     let ticket_coordinate = selected
@@ -331,7 +327,9 @@ pub fn authenticate_series_premarket_expiry_physical_report_v1(
         || ticket_runtime != input.ticket_state
         || precommit_caller_runtime != input.precommit_caller
     {
-        return Err(geometry_site_v1("root, Ticket or precommit caller is not the runtime key the fixture installed"));
+        return Err(geometry_site_v1(
+            "root, Ticket or precommit caller is not the runtime key the fixture installed",
+        ));
     }
 
     validate_registry_wrapper(
@@ -681,6 +679,75 @@ fn validate_install_identities(
 /// shifted five ordinals early into 72..75.
 ///
 /// So the repair belongs to the fixture, not to the release compiler.
+/// Rebuild the exact runtime PHYSICAL vector the selected release declares,
+/// from the instruction the bank actually receives.
+///
+/// The submitted account list is not the physical vector and never was:
+/// `series_hot_v3.rs` assembles it as the 39 family-neutral fixed accounts,
+/// then the action's ExecutionStrategy extras, then
+/// `runtime_physical_accounts.skip(HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3)` --
+/// because physical ordinals 0..5 are the SAME accounts as five members of the
+/// fixed prefix and the runtime never repeats them. `validate_injected_runtime`
+/// is the authority for which five, and this reads the identical table.
+///
+/// Reading `accounts[HOT_FIXED_ACCOUNT_COUNT_V3..]` as the physical vector is
+/// therefore short by exactly five for every action and every Template, which
+/// is what `runtime=39` against `geometry.physical=44` was: not five accounts
+/// this fixture failed to install -- all forty-four are installed and bound --
+/// but five it declined to count, and an ordinal space shifted under every
+/// role lookup by the same five.
+fn runtime_physical_accounts_v1(
+    selected: &SeriesSelectedActionV5,
+    hot: &Instruction,
+) -> Result<Vec<Pubkey>, SeriesPremarketExpirySupportErrorV1> {
+    // Expire selects no ExecutionStrategy account: the operator's
+    // `validate_strategy_accounts_v5` admits a nonzero count only for Consume,
+    // and the caller has already refused every non-Expire authority.
+    if selected.action != SeriesActionV3::Expire {
+        return Err(geometry_site_v1(
+            "physical reconstruction was asked for an action whose strategy extras it cannot count",
+        ));
+    }
+    let tail = hot
+        .accounts
+        .get(HOT_FIXED_ACCOUNT_COUNT_V3..)
+        .ok_or_else(|| geometry_site_v1("hot instruction has no runtime tail"))?;
+    let mut runtime =
+        Vec::with_capacity(HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3.saturating_add(tail.len()));
+    for (ordinal, fixed) in [
+        (HOT_RUNTIME_ROOT_COORDINATE_V3, HOT_ROOT_ACCOUNT_V3),
+        (HOT_RUNTIME_CONFIG_COORDINATE_V3, HOT_CONFIG_RAW_ACCOUNT_V3),
+        (
+            HOT_RUNTIME_PRODUCT_COORDINATE_V3,
+            HOT_PRODUCT_RAW_ACCOUNT_V3,
+        ),
+        (
+            HOT_RUNTIME_PORTFOLIO_COORDINATE_V3,
+            HOT_PORTFOLIO_RAW_ACCOUNT_V3,
+        ),
+        (
+            HOT_RUNTIME_LINKED_BASIS_COORDINATE_V3,
+            HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
+        ),
+    ] {
+        if ordinal != runtime.len() {
+            return Err(geometry_site_v1(
+                "the injected runtime prefix table is not in physical ordinal order",
+            ));
+        }
+        runtime.push(
+            hot.accounts
+                .get(fixed)
+                .ok_or_else(|| {
+                    geometry_site_v1("hot instruction omitted an injected fixed-prefix account")
+                })?
+                .pubkey,
+        );
+    }
+    runtime.extend(tail.iter().map(|meta| meta.pubkey));
+    Ok(runtime)
+}
+
 fn validate_physical_bindings(
     selected: &SeriesSelectedActionV5,
     runtime: &[Pubkey],
@@ -688,12 +755,23 @@ fn validate_physical_bindings(
     if runtime.len() != selected.geometry.physical_accounts
         || selected.account_bindings.len() != selected.geometry.logical_accounts
     {
-        return Err(geometry_site_v1("runtime account count differs from the release geometry"));
+        std::eprintln!(
+            "Series Expire physical geometry: runtime={} declared physical={} bindings={} declared logical={}",
+            runtime.len(),
+            selected.geometry.physical_accounts,
+            selected.account_bindings.len(),
+            selected.geometry.logical_accounts,
+        );
+        return Err(geometry_site_v1(
+            "runtime account count differs from the release geometry",
+        ));
     }
     let mut physical_seen = vec![false; runtime.len()];
     for (logical, binding) in selected.account_bindings.iter().enumerate() {
         let Some(seen) = physical_seen.get_mut(binding.physical_ordinal) else {
-            return Err(geometry_site_v1("a logical binding names a physical ordinal past the runtime tail"));
+            return Err(geometry_site_v1(
+                "a logical binding names a physical ordinal past the runtime tail",
+            ));
         };
         if binding.logical != logical
             || binding.representative > binding.logical
@@ -705,12 +783,16 @@ fn validate_physical_bindings(
                         || representative.physical_ordinal != binding.physical_ordinal
                 })
         {
-            return Err(geometry_site_v1("a logical binding is out of order or disagrees with its representative"));
+            return Err(geometry_site_v1(
+                "a logical binding is out of order or disagrees with its representative",
+            ));
         }
         *seen = true;
     }
     if physical_seen.iter().any(|seen| !seen) {
-        return Err(geometry_site_v1("a declared physical ordinal is bound by no logical coordinate"));
+        return Err(geometry_site_v1(
+            "a declared physical ordinal is bound by no logical coordinate",
+        ));
     }
     Ok(())
 }
@@ -730,16 +812,22 @@ fn selected_role_key(
         .ok_or_else(|| geometry_site_v1("a bound logical coordinate has no runtime account"))
 }
 
+/// The wrapper is the TRANSPARENT `hot_continuation_v2` seam, so the top-level
+/// data is the Trading Hot bytes and nothing else.
+///
+/// Trading requires exactly that: `authenticate_hot_invocation_v3` compares the
+/// instructions-sysvar record of the top-level instruction against the bytes it
+/// was handed, and any container header the Registry strips before the CPI is
+/// therefore observable at the child as a difference. The legacy headered
+/// `continuation_v1` container this fixture used to build reaches Trading and
+/// refuses `NativeSignature` for that reason, which
+/// `registry_hot_continuation.rs` asserts on purpose.
 fn validate_registry_wrapper(
     registry_program: Pubkey,
     hot: &Instruction,
     top_level: &Instruction,
 ) -> Result<(), SeriesPremarketExpirySupportErrorV1> {
-    let nested_data = top_level
-        .data
-        .get(REGISTRY_CONTINUATION_REQUEST_BYTES_V1..)
-        .ok_or(SeriesPremarketExpirySupportErrorV1::Instruction)?;
-    if top_level.program_id != registry_program || nested_data != hot.data.as_slice() {
+    if top_level.program_id != registry_program || top_level.data != hot.data {
         return Err(SeriesPremarketExpirySupportErrorV1::Instruction);
     }
     let expected_accounts = REGISTRY_HOT_CONTINUATION_PREFIX_ACCOUNTS_V1

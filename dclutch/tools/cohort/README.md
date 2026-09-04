@@ -132,6 +132,19 @@ Key-free, read-only, **before any founding**. Cohort-12 founded first and
 stranded its market. The five owned roles must preflight `equal:true` against a
 fresh finalized observation.
 
+### refund-scale
+
+Author every categorical `ProductBasisV3` this cohort founds at
+`payout_scale = basis_width - 1`, its ordinary-region count, and **commit the
+records before any founding**. Like `record-core-digest` this is source rather
+than a flag, and it is its own row for the same reason: the legacy `1` founds
+without complaint and is only visible later, as the shape of a failure nobody
+has had yet. At scale 1 an oracle outage pays the whole failure column to a
+single holder; at `basis_width - 1` the same outage refunds every ordinary
+claim. The verifier reads the founded market's authenticated basis back off the
+chain at `BASIS_PAYOUT_SCALE_OFFSET_V3` rather than trusting the record that
+produced it.
+
 ### found-direct
 
 The staged sponsored market, founded from the **sealed** plan with a founder
@@ -145,9 +158,29 @@ the principal permanently.
 
 ### refound-general
 
-`devnet-general-market` against a policy document with **no `external_widths`
-block**, then the ordinary founding campaign. The verifier reads the widths back
-off the chain, not out of the file that produced them.
+*Retired after cohort-15; see `found-general-family`.* `devnet-general-market`
+against a policy document with **no `external_widths` block**, then the ordinary
+founding campaign. The verifier reads the widths back off the chain, not out of
+the file that produced them.
+
+### found-general-family
+
+`refound-general`'s command, under a claim it could not make: this is a **fresh
+founding, not a re-founding**. Cohort-15's General market cannot be repaired
+under cohort-15's deployed programs, and that was measured rather than reasoned
+— the family policy handed to the account-profile contract as it was built at
+`90de010aa` is refused by `StateLifecyclePolicyV3::decode` with
+`InvalidRentQuote`, before any profile join and before any action is selected,
+because the deployed rule orders rent quotes by destination alone and
+`InitializeSettlement` and `PlaceOrder` quote the same four registers. The
+change is in the SBF link closure and not only in the host compiler, which is
+what makes it a cohort and not a re-run.
+
+What the verifier reads is the agreement the family exists for: the fifteen
+published action descriptors carry **one** `derivation_policy`, equal to the
+digest of the single family lifecycle policy the release publishes, and the
+manifest entry's `child_derivation_id` equals it — so every action selects the
+entry the root was activated under.
 
 ### activate-direct
 

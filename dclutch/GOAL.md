@@ -4771,3 +4771,11 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   flagship, or 3/3 with a relayed first rung; per-member bounties at the crank floor. Found: `initialize_certificate_at_kind`
   accepts an already-owned seat — write-once comes from the all-zero conjunct, which the fragment route must keep.
 - Cuts: `5f3959e26`.
+- RELEASE-REDS closed (`c04465f93`, `32260b8ac`, `905e56f04`): `tools/ci/run.sh release` PASS — all eighteen preflight reds
+  were one stale Python COPY of the terminal-session schema string (v1 vs the Rust's v3); the sixteen schema owners now
+  derive from the Rust constants that write them, and one owner had been "verified" by a substring match on prose; the two
+  cohort-16 rows gained headings (the manifest `cohorts/16.json` is deploy evidence and does not exist yet); the stale
+  rent hostile refuses a DRAINED account now (the under-rent one is alive by the ruling; measured both ways on real ELFs).
+  Noted: `tools/devnet-reconcile/reconcile.py:54` holds the same stale literal and nothing runs it; 89 frame diagnostics in
+  the resolution-proof program from RECOVERY-2's in-flight files (theirs to clear before committing).
+- Cuts: `286138234`.
