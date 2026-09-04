@@ -447,6 +447,15 @@ pub enum GeneralAcceleratorSemanticErrorV3 {
     /// uses for its own state accounts. It now means the action's own selected
     /// state or evidence, and the domain says which conjunct of itself failed.
     State,
+    /// A freeze presented a Batch that is not the one its selection cursor names.
+    ///
+    /// The evidence account is caller-supplied and the window conjunct reads
+    /// the deadline out of it, so without this join a freeze presents ANY
+    /// long-closed batch and `collection_close + selectionSlots <= now` passes
+    /// against a deadline belonging to someone else's auction. Its own word
+    /// because the alternative is `State`, which every other selection refusal
+    /// already uses.
+    SelectionBatch,
     /// The pure General transition refused its authenticated inputs.
     Transition,
     /// Candidate-bank projection refused.
@@ -473,6 +482,9 @@ impl GeneralAcceleratorSemanticErrorV3 {
             }
             Self::State => "general: refused, action state or evidence",
             Self::Transition => "general: refused, the pure transition",
+            Self::SelectionBatch => {
+                "general: refused, freeze batch is not the one the cursor names"
+            }
             Self::Candidate => "general: refused, candidate projection",
         }
     }
@@ -1554,6 +1566,30 @@ fn evaluate_selection(
                 || header.price_scale != config.price_scale()
             {
                 return Err(GeneralAcceleratorSemanticErrorV3::State);
+            }
+            // THE DEADLINE'S BATCH IS THE CURSOR'S BATCH.
+            //
+            // `Freeze` gained the closed Batch as readonly evidence so its
+            // transition could compare the clock against
+            // `collection_close + selectionSlots`. That account is
+            // caller-supplied, and `GeneralBatchV1::batch_id` recomputes the
+            // occurrence identity from the batch's own immutable opening, so
+            // this is the one place the presented batch is joined to the
+            // selection it claims to be closing. Without it the window conjunct
+            // is satisfiable by any batch whose window has elapsed.
+            let batch_data = data(
+                runtime,
+                evidence_coordinate(request.action, GeneralReadonlyEvidenceKindV3::ClosedBatch)?,
+            )?;
+            let batch_state = GeneralLocalStateV3::decode(&batch_data)
+                .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+            if batch_state.header().kind != GeneralLocalStateKindV3::Batch {
+                return Err(GeneralAcceleratorSemanticErrorV3::State);
+            }
+            let batch = GeneralBatchV1::decode(batch_state.body())
+                .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+            if batch.batch_id() != header.batch_id {
+                return Err(GeneralAcceleratorSemanticErrorV3::SelectionBatch);
             }
             freeze_selection_v2(before, request.expected_revision, &mut scratch, &mut output)
                 .map_err(|_| GeneralAcceleratorSemanticErrorV3::Transition)?

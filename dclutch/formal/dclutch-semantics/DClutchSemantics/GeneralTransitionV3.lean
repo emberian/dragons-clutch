@@ -588,7 +588,29 @@ def actionOps (action : Action) : List Op :=
       .loadConst (s .selectionPhase) selectionPhaseFrozen,
       .nonzero (s .selectionRevision),
       .nonzero (s .selectionBestCandidateCoordinate),
-      .nonzero (s .selectionBestVerifiedRevision)
+      .nonzero (s .selectionBestVerifiedRevision),
+      -- THE SELECTION WINDOW HAS TO BE OVER, and until 2026-09-04 nothing here
+      -- read a clock at all. `freeze_selection` takes a revision and no slot,
+      -- so a solver who submitted one thin valid candidate, cranked its
+      -- consideration and froze in the SAME slot excluded every fuller
+      -- candidate that would have beaten it -- and
+      -- `closed_selection_is_immutable` then protected that outcome. The
+      -- measurement is in `f66dbb078`: the same Freeze bank folded at slot 0
+      -- and at `2^63` both admitted, and their outputs differed in
+      -- `.currentSlot` alone, carried through untouched.
+      --
+      -- The deadline is the batch's own, not the caller's: collection close
+      -- plus the config's selection window, which is exactly the sum
+      -- `openBatch` computes into `.scratchA` when it derives the settlement
+      -- close. The two `nonzero`s in front are fail-closed guards on the
+      -- projection rather than restatements of the config's constructor: a
+      -- profile that lost either source leaves a zero register, and a zero
+      -- deadline is a freeze admitted at every slot -- which is the state
+      -- this conjunct exists to end.
+      .nonzero (s .batchCollectionCloseSlot),
+      .nonzero (s .configSelectionSlots),
+      .checkedAddInto (s .batchCollectionCloseSlot) (s .configSelectionSlots) (s .scratchA),
+      .scalarLe (s .scratchA) (s .currentSlot)
     ]
   | .initializeSettlement => [
       .loadConst (s .zero) 0,
@@ -1102,7 +1124,10 @@ theorem authored_section_counts :
         (fun action =>
           ((program action).prelude.length, (program action).itemBody.length,
             (program action).epilogue.length)) =
-      [(15, 1, 0), (17, 1, 0), (21, 2, 0), (21, 4, 0), (16, 1, 0), (21, 4, 0), (27, 6, 0),
+      -- freeze 17 -> 21: the selection-window conjunct is four instructions,
+      -- two fail-closed `nonzero`s on its projected sources, the sum, and the
+      -- comparison.
+      [(15, 1, 0), (21, 1, 0), (21, 2, 0), (21, 4, 0), (16, 1, 0), (21, 4, 0), (27, 6, 0),
         (26, 0, 0), (46, 4, 0), (50, 4, 0), (27, 0, 0), (46, 1, 0), (23, 1, 0),
         (42, 4, 0), (34, 1, 0)] := by
   native_decide
@@ -1141,7 +1166,8 @@ theorem authored_encoded_widths :
       -- openBatch 680 -> 656 and closeBatch 704 -> 680: one 24-byte instruction
       -- each, the bound check that had no register to bound. The 32-byte header
       -- is unchanged; only the two zero-stride actions move.
-      [416, 464, 584, 632, 440, 632, 824, 656, 1232, 1328, 680, 1160, 608, 1136,
+      -- freeze 464 -> 560: four more 24-byte instructions for the window.
+      [416, 560, 584, 632, 440, 632, 824, 656, 1232, 1328, 680, 1160, 608, 1136,
         872] := by
   native_decide
 

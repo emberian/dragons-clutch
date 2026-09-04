@@ -19,6 +19,7 @@ use dclutch_general_accelerator_sbf::GeneralAcceleratorSbfErrorV3;
 use dclutch_general_accelerator_test_caller_sbf::GENERAL_ACCELERATOR_TEST_CALLER_AUTHORITY_SEED_V1;
 use dclutch_general_adapter_contract::{
     account_rules_v3::general_account_profile_fixed_count_v3,
+    collection_v1::{GeneralBatchOpeningV1, GeneralBatchV1},
     hot_candidate_v3::{
         GENERAL_HOT_COMMON_IDENTITIES_V3, general_hot_candidate_bank_len_v3,
         general_hot_scalar_count_v3, identity, scalar,
@@ -31,12 +32,16 @@ use dclutch_general_adapter_contract::{
         RUNTIME_SELECTION_CURSOR_BYTES_V2, RuntimeSelectionPhaseV2, consider_verified_candidate_v2,
     },
     runtime_width::{VerifiedCandidateHeaderV2, VerifiedCandidateV2, verified_candidate_len},
+    state_artifacts_v3::general_readonly_evidence_start_v3,
 };
 use dclutch_general_codec::{
     Action, MAX_SELECTION_CRITERIA, SelectionCriterion, SelectionPolicyV1,
     successor_request_v2::ControllerRequestV2,
 };
-use dclutch_general_config_contract::v3::{GeneralConfigV3, GeneralConfigV3Input};
+use dclutch_general_config_contract::{
+    root::GeneralRootV2,
+    v3::{GeneralConfigV3, GeneralConfigV3Input},
+};
 use dclutch_program_test_evidence::{TransactionEvidence, record};
 use solana_account::Account;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
@@ -58,8 +63,9 @@ const DUMMY: Pubkey = Pubkey::new_from_array([0xa4; 32]);
 const SELECTION_STATE: Pubkey = Pubkey::new_from_array([0xa5; 32]);
 const CONFIG_ACCOUNT: Pubkey = Pubkey::new_from_array([0xa6; 32]);
 const PRODUCT_ACCOUNT: Pubkey = Pubkey::new_from_array([0xa7; 32]);
+const BATCH_STATE: Pubkey = Pubkey::new_from_array([0xa8; 32]);
 const PRODUCT_RECORD: [u8; 64] = [0xb1; 64];
-const BATCH: [u8; 32] = [0xb2; 32];
+const MARKET: [u8; 32] = [0xb2; 32];
 const POLICY: [u8; 32] = [0xb3; 32];
 const CANDIDATE: [u8; 32] = [0xb4; 32];
 // The config's own market coordinates, named because the input bank has to
@@ -68,6 +74,21 @@ const CANDIDATE: [u8; 32] = [0xb4; 32];
 // places is how those two stop agreeing.
 const CONFIG_GENERATION: u64 = 9;
 const CONFIG_CLAIM_BASIS_ID: [u8; 32] = [2; 32];
+// The batch whose selection this freeze closes, and the deadline it fixes.
+// `BATCH` used to be the literal `[0xb2; 32]` here, which was fine while
+// nothing joined it to anything: the selection cursor carried it and no
+// account had to agree. `Freeze` now names the closed Batch as readonly
+// evidence so its transition can compare the clock against
+// `collection_close + selectionSlots`, and the accelerator joins the
+// presented batch's recomputed `batch_id` against the cursor's -- so the
+// identity has to be the digest of an opening that was really formed. The
+// deadline these produce is 1,000 + 10 = 1,010.
+const COLLECTION_CLOSE_SLOT: u64 = 1_000;
+const SETTLEMENT_CLOSE_SLOT: u64 = 2_000;
+const ADMISSION_SLOT: u64 = 10;
+const BATCH_MAX_ORDERS: u32 = 4;
+const CONFIG_SELECTION_SLOTS: u64 = 10;
+const FREEZE_SLOT: u64 = COLLECTION_CLOSE_SLOT + CONFIG_SELECTION_SLOTS;
 
 struct Fixture {
     test: ProgramTest,
@@ -92,7 +113,7 @@ fn config() -> Vec<u8> {
         generation: CONFIG_GENERATION,
         price_scale: 1,
         collection_slots: 10,
-        selection_slots: 10,
+        selection_slots: CONFIG_SELECTION_SLOTS,
         settlement_slots: 10,
         max_orders_per_candidate: 4,
         max_pages_per_candidate: 4,
@@ -118,6 +139,67 @@ fn add_account(test: &mut ProgramTest, key: Pubkey, owner: Pubkey, data: Vec<u8>
     );
 }
 
+/// One real opening, whose digest is the batch identity everything else names.
+fn batch_opening(outcome_count: u32, sequence: u64) -> GeneralBatchOpeningV1 {
+    GeneralBatchOpeningV1 {
+        outcome_count,
+        sequence,
+        generation: CONFIG_GENERATION,
+        market: MARKET,
+        product_id: product_id(),
+        config_id: hash(&config()).to_bytes(),
+        price_scale: 1,
+        collection_close_slot: COLLECTION_CLOSE_SLOT,
+        settlement_close_slot: SETTLEMENT_CLOSE_SLOT,
+        max_orders: BATCH_MAX_ORDERS,
+    }
+}
+
+/// One batch opened against one real root, closed the way selection requires.
+fn opened_batch(outcome_count: u32, sequence: u64) -> GeneralBatchV1 {
+    let mut root = GeneralRootV2::active(MARKET, hash(&config()).to_bytes(), CONFIG_GENERATION)
+        .expect("active General root");
+    for _ in 0..sequence {
+        let revision = root.revision();
+        root.open_batch(revision, root.next_batch_sequence())
+            .expect("advance the root to the sequence under test");
+    }
+    let revision = root.revision();
+    GeneralBatchV1::open(
+        &mut root,
+        batch_opening(outcome_count, sequence),
+        revision,
+        ADMISSION_SLOT,
+    )
+    .expect("open batch")
+}
+
+fn batch_id(outcome_count: u32, sequence: u64) -> [u8; 32] {
+    opened_batch(outcome_count, sequence).batch_id()
+}
+
+/// The Batch local state the freeze presents as its readonly evidence.
+fn batch_account(outcome_count: u32, sequence: u64) -> Vec<u8> {
+    let body = opened_batch(outcome_count, sequence).to_bytes();
+    let state_len = general_local_state_len_v3(GeneralLocalStateKindV3::Batch, outcome_count)
+        .expect("batch state width");
+    let mut scratch = vec![0_u8; state_len];
+    let mut state = vec![0_u8; state_len];
+    encode_general_local_state_v3_atomic(
+        GeneralLocalStateHeaderV3 {
+            kind: GeneralLocalStateKindV3::Batch,
+            bump: 1,
+            rent_principal: 1,
+            beneficiary: [0xc1; 32],
+        },
+        &body,
+        &mut scratch,
+        &mut state,
+    )
+    .expect("batch envelope");
+    state
+}
+
 fn open_selection(outcome_count: u32) -> Vec<u8> {
     let mut criteria = [SelectionCriterion::MaximizeFilledLots; MAX_SELECTION_CRITERIA];
     criteria[1] = SelectionCriterion::MinimizeQuoteSurplus;
@@ -137,7 +219,7 @@ fn open_selection(outcome_count: u32) -> Vec<u8> {
             revision: 1,
             candidate_id: CANDIDATE,
             product_id: product_id(),
-            batch_id: BATCH,
+            batch_id: batch_id(outcome_count, 0),
             filled_lots: 7,
             quote_debit: 7,
             quote_credit: 0,
@@ -182,7 +264,7 @@ fn open_selection(outcome_count: u32) -> Vec<u8> {
 /// bytes, and every run refused domain authentication before any Freeze
 /// transition ran. `lifecycle.rs` had always written these; this file simply
 /// had not, and nothing could say so until the refusal learned to name itself.
-fn input_bank(outcome_count: u32) -> Vec<u8> {
+fn input_bank(outcome_count: u32, current_slot: u64) -> Vec<u8> {
     let mut bank = vec![
         0_u8;
         general_hot_candidate_bank_len_v3(Action::Freeze, outcome_count)
@@ -191,6 +273,28 @@ fn input_bank(outcome_count: u32) -> Vec<u8> {
     write_scalar(&mut bank, scalar::OUTCOME_COUNT, u64::from(outcome_count));
     write_scalar(&mut bank, scalar::SETTLEMENT_POSITION_PRESENT, 0);
     write_scalar(&mut bank, scalar::GENERATION, CONFIG_GENERATION);
+    // THE SELECTION DEADLINE'S THREE REGISTERS, AND THE SAME LABEL THE
+    // SEMANTIC BASIS CARRIES BELOW. On the real route the clock is the
+    // AccountProfile's `TrustedEnvironmentV2::CurrentSlot`, the collection
+    // close is projected out of the Batch evidence account, and the selection
+    // window out of the config -- all three added to `Freeze`'s profile on
+    // 2026-09-04 with the window conjunct. This fixture runs no profile, so
+    // the harness IS the producer for them, exactly as it is for the basis.
+    //
+    // The transition VM that READS them runs in Trading, not here, so this
+    // file cannot prove the window conjunct; it proves the accelerator half --
+    // that the presented Batch is joined to the cursor it claims to close.
+    write_scalar(&mut bank, scalar::CURRENT_SLOT, current_slot);
+    write_scalar(
+        &mut bank,
+        scalar::BATCH_COLLECTION_CLOSE_SLOT,
+        COLLECTION_CLOSE_SLOT,
+    );
+    write_scalar(
+        &mut bank,
+        scalar::CONFIG_SELECTION_SLOTS,
+        CONFIG_SELECTION_SLOTS,
+    );
     for (coordinate, value) in [
         (identity::PRODUCT_RECORD_DIGEST, product_id()),
         (identity::GENERAL_CONFIG_ID, hash(&config()).to_bytes()),
@@ -250,7 +354,7 @@ fn page_key(index: u32) -> Pubkey {
     Pubkey::new_from_array([byte; 32])
 }
 
-fn fixture(outcome_count: u32, corrupt_page: bool) -> Fixture {
+fn fixture(outcome_count: u32, corrupt_page: bool, batch_sequence: u64) -> Fixture {
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
     // NO `set_compute_max_units` -- see `lifecycle.rs` for the mechanism. No
@@ -271,6 +375,17 @@ fn fixture(outcome_count: u32, corrupt_page: bool) -> Fixture {
     add_account(&mut test, PRODUCT_ACCOUNT, CALLER, PRODUCT_RECORD.to_vec());
     let selection_before = open_selection(outcome_count);
     add_account(&mut test, SELECTION_STATE, CALLER, selection_before.clone());
+    // `batch_sequence` is the hostile's whole lever: sequence 0 is the batch
+    // the cursor names, and any other sequence is a DIFFERENT real batch --
+    // opened against a real root, correctly formed, and simply not this
+    // selection's. That is the substitution the join exists to refuse, and it
+    // is the one a malformed account could never stand in for.
+    add_account(
+        &mut test,
+        BATCH_STATE,
+        CALLER,
+        batch_account(outcome_count, batch_sequence),
+    );
 
     let family_request = ControllerRequestV2 {
         action: Action::Freeze,
@@ -295,7 +410,7 @@ fn fixture(outcome_count: u32, corrupt_page: bool) -> Fixture {
     let mut top_level_data = envelope.to_bytes().to_vec();
     top_level_data.extend_from_slice(&family_request);
 
-    let bank = input_bank(outcome_count);
+    let bank = input_bank(outcome_count, FREEZE_SLOT);
     let bank_digest = ContentId::new(hash(&bank).to_bytes()).expect("bank digest");
     let scalar_count =
         general_hot_scalar_count_v3(Action::Freeze, outcome_count).expect("scalar count");
@@ -393,6 +508,9 @@ fn fixture(outcome_count: u32, corrupt_page: bool) -> Fixture {
     *frame
         .get_mut(runtime_start + 5)
         .expect("selection runtime frame") = SELECTION_STATE;
+    *frame
+        .get_mut(runtime_start + usize::from(general_readonly_evidence_start_v3(Action::Freeze)))
+        .expect("batch evidence frame") = BATCH_STATE;
     frame.extend(page_keys);
     let mut metas = Vec::with_capacity(frame.len() + 2);
     metas.push(AccountMeta::new_readonly(REQUEST_ACCOUNT, false));
@@ -507,7 +625,7 @@ fn read_payload_scalar(payload: &[u8], coordinate: u32) -> u64 {
 #[tokio::test]
 async fn real_sbf_freeze_accepts_runtime_widths_one_and_258() {
     for outcome_count in [1_u32, 258] {
-        let fixture = fixture(outcome_count, false);
+        let fixture = fixture(outcome_count, false, 0);
         let request = AcceleratorRequestV2::decode(&fixture.request_bytes).expect("request decode");
         let mut context = fixture.test.start_with_context().await;
         let processed = submit(
@@ -543,9 +661,59 @@ async fn real_sbf_freeze_accepts_runtime_widths_one_and_258() {
     }
 }
 
+/// A FREEZE THAT PRESENTS SOMEONE ELSE'S BATCH REFUSES, AND SAYS SO.
+///
+/// `Freeze` names the closed Batch as readonly evidence so its transition can
+/// compare the clock against `collection_close + selectionSlots`. That account
+/// is caller-supplied, and a deadline read out of an account nobody bound is
+/// not a deadline: present any batch whose window has long elapsed and the
+/// conjunct passes on a stranger's clock. `GeneralBatchV1::batch_id` recomputes
+/// the occurrence identity from the batch's own immutable opening, so the join
+/// against the cursor's `batch_id` is the one place a substitution can be
+/// caught.
+///
+/// The substituted account is a REAL batch at a different root sequence, not a
+/// malformed one: a fixture that hands over garbage proves only that the
+/// decoder refuses garbage. The refusal is read from THIS transaction's own
+/// logs -- program logs from one test binary interleave, and the disposition
+/// alone would not distinguish this cause from the four other `State` refusals
+/// the same path can raise.
+#[tokio::test]
+async fn a_freeze_presenting_another_batch_refuses_and_leaves_the_selection() {
+    let fixture = fixture(1, false, 1);
+    let selection_before = fixture.selection_before.clone();
+    let mut context = fixture.test.start_with_context().await;
+    let processed = submit(
+        &mut context,
+        fixture.instruction,
+        "general accelerator Freeze refuses a batch the cursor does not name",
+        false,
+    )
+    .await
+    .expect("ProgramTest processing");
+    let metadata = processed.metadata.expect("transaction metadata");
+    let returned = metadata.return_data.expect("typed accelerator ack");
+    let ack = AcceleratorAckV2::decode(&returned.data).expect("ack decode");
+    assert_eq!(ack.disposition(), AcceleratorDispositionV2::Refused);
+    let logs = metadata.log_messages;
+    assert!(
+        logs.iter()
+            .any(|line| line
+                .contains("general: refused, freeze batch is not the one the cursor names")),
+        "the refusal must name the cursor/batch join, not some earlier conjunct: {logs:?}",
+    );
+    let selection_after = context
+        .banks_client
+        .get_account(SELECTION_STATE)
+        .await
+        .expect("selection query")
+        .expect("selection account");
+    assert_eq!(selection_after.data, selection_before);
+}
+
 #[tokio::test]
 async fn corrupted_scratch_page_refuses_without_mutating_selection() {
-    let fixture = fixture(1, true);
+    let fixture = fixture(1, true, 0);
     let selection_key = SELECTION_STATE;
     let selection_before = fixture.selection_before;
     let mut context = fixture.test.start_with_context().await;

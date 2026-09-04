@@ -233,7 +233,11 @@ pub const fn general_readonly_evidence_count_v3(action: Action) -> u16 {
         // The signed terms the admission projects everything from.
         Action::PlaceOrder => 1,
         Action::Consider => 2,
-        Action::Freeze => 0,
+        // The batch whose selection window this freeze claims is over. See
+        // `GeneralTransitionV3.lean`'s `.freeze` arm: the deadline is the
+        // batch's own collection close plus the config's selection window, and
+        // the batch record is the only account that carries the first term.
+        Action::Freeze => 1,
         Action::InitializeSettlement => 3,
         Action::Collect | Action::Distribute => 2,
         Action::Materialize | Action::Close => 1,
@@ -256,6 +260,7 @@ pub fn general_readonly_evidence_v3(
         (Action::VerifyCandidateRow, 3) => GeneralReadonlyEvidenceKindV3::EscrowedOrder,
         (Action::VerifyCandidateRow, 4) => GeneralReadonlyEvidenceKindV3::SettlementManifest,
         (Action::CloseCandidate, 0) => GeneralReadonlyEvidenceKindV3::ClosedBatch,
+        (Action::Freeze, 0) => GeneralReadonlyEvidenceKindV3::ClosedBatch,
         (Action::Consider, 0) => GeneralReadonlyEvidenceKindV3::SelectionPolicy,
         (Action::Consider, 1) => GeneralReadonlyEvidenceKindV3::SubmittedVerifiedCandidate,
         (Action::InitializeSettlement, 0) => GeneralReadonlyEvidenceKindV3::FrozenSelection,
@@ -2050,7 +2055,7 @@ mod tests {
             (Action::SubmitCandidate, 8, 3, 11),
             (Action::VerifyCandidateRow, 10, 5, 15),
             (Action::Consider, 8, 2, 10),
-            (Action::Freeze, 8, 0, 8),
+            (Action::Freeze, 8, 1, 9),
             (Action::InitializeSettlement, 8, 3, 11),
             (Action::Collect, 8, 2, 10),
             (Action::Materialize, 8, 1, 9),

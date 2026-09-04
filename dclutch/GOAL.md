@@ -4792,3 +4792,6 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   heap ≈ 30. Flagship for ember: "if feature X activates by slot S, does mainnet's slot time move?" (2×3, A major).
   **All six mechanism designs now exist: batch spine, joint clearing, scoring dealer, ensemble, founder bond, conditional.**
 - Cuts: `14e9d8674`, `7a29c27f5`.
+- The six designs synthesized for ember as one page (the mechanism cohort: composition, proofs, prices, the six defects found
+  in the tree we have, the sequence, and the eight rulings): https://claude.ai/code/artifact/76181478-cf24-4c03-8370-c09f56cf9156
+  The root Lean module imports all five mechanism modules (b31b35a21; 145 jobs green, four stated sorries in ScoringRuleV1).

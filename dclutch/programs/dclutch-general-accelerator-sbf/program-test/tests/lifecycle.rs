@@ -2666,9 +2666,24 @@ async fn real_sbf_consider_replaces_with_best_valid_submitted_candidate_then_fre
         let mut scratch = frozen;
         freeze_selection_v2(&expected, 2, &mut scratch, &mut frozen).expect("freeze selection");
         let mut runtime = BTreeMap::new();
+        runtime.insert(1, config(width));
         runtime.insert(
             GENERAL_PRIMARY_STATE_ACCOUNT_V3,
             local_state(GeneralLocalStateKindV3::Selection, width, &expected),
+        );
+        // The batch this selection belongs to. `Freeze` gained it as readonly
+        // evidence on 2026-09-04 so its transition could compare the clock
+        // against `collection_close + selectionSlots`, and the accelerator
+        // joins the presented batch's recomputed `batch_id` against the
+        // cursor's -- which is the same `batch_id(width)` every verified
+        // candidate above already names.
+        runtime.insert(
+            evidence_coordinate(Action::Freeze, GeneralReadonlyEvidenceKindV3::ClosedBatch),
+            local_state(
+                GeneralLocalStateKindV3::Batch,
+                width,
+                &opened_batch(width).1.to_bytes(),
+            ),
         );
         let controller = ControllerRequestV2 {
             action: Action::Freeze,

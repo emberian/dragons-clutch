@@ -237,19 +237,23 @@ fn an_unauthored_action_has_no_request_profile_rather_than_a_permissive_one() {
 /// local-lifecycle prefix every action occupies, because an arithmetic consumer
 /// that reached it without a guard would then compute a window overlapping the
 /// state, payer and rent-credit accounts rather than an empty one past them.
-/// `Freeze` is the authored action that also selects no evidence, so it is the
-/// exact comparison rather than a restated literal.
+/// `OpenBatch` is the authored action that also selects no evidence, so it is
+/// the exact comparison rather than a restated literal. It was `Freeze` until
+/// 2026-09-04, when `Freeze` gained the closed Batch as evidence so its
+/// transition could compare the clock against the selection deadline -- which
+/// is why the reference is named through a live zero-evidence action rather
+/// than assumed to stay one.
 #[test]
 fn the_unauthored_child_prefix_never_narrows_the_common_frame() {
     for action in UNAUTHORED {
         assert_eq!(general_readonly_evidence_count_v3(action), 0);
         assert_eq!(
             general_child_account_start_v3(action),
-            general_child_account_start_v3(Action::Freeze),
+            general_child_account_start_v3(Action::OpenBatch),
             "{action:?} child prefix",
         );
     }
-    assert_eq!(general_readonly_evidence_count_v3(Action::Freeze), 0);
+    assert_eq!(general_readonly_evidence_count_v3(Action::OpenBatch), 0);
 }
 
 /// The escrow table already names the three movements the escrow verbs will

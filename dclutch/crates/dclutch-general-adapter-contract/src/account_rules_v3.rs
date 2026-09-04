@@ -200,22 +200,32 @@ pub const fn general_account_profile_operation_count_v3(action: Action) -> u16 {
     // projection, appended at each action's own last coordinate so that no
     // existing index moved. See the arm that emits it for why the register
     // needed a source at all.
+    //
+    // TEN of them gained one more on 2026-09-04: the Market generation, which
+    // `authenticated_general_domain` requires of every action and which only
+    // five profiles wrote. The other five are unchanged because the operation
+    // they already carried is the one the derived index names. See
+    // `general_generation_operation_index_v3`.
     match action {
-        Action::SubmitCandidate => 37,
-        Action::VerifyCandidateRow => 16,
-        Action::CloseCandidate => 23,
+        Action::SubmitCandidate => 38,
+        Action::VerifyCandidateRow => 17,
+        Action::CloseCandidate => 24,
         Action::OpenBatch => 24,
         Action::CloseBatch => 22,
         Action::PlaceOrder => 35,
         Action::CancelOrder => 33,
         Action::ReleaseOrder => 21,
-        Action::Close => 14,
+        Action::Close => 15,
+        // The two sources of the selection deadline
+        // `GeneralTransitionV3.lean`'s `.freeze` arm compares the clock
+        // against: the batch's own collection close, out of the evidence
+        // record, and the config's selection window.
+        Action::Freeze => 13,
         Action::Consider
-        | Action::Freeze
         | Action::InitializeSettlement
         | Action::Collect
         | Action::Materialize
-        | Action::Distribute => 10,
+        | Action::Distribute => 11,
     }
 }
 
@@ -282,6 +292,45 @@ const fn general_account_profile_fixed_operation_count_v3(action: Action) -> u16
 /// anywhere near a span whose start can move stops being reached without
 /// anything going red, and surfaces as `Geometry` on `Consider` -- the cheapest
 /// action, and so the first to run out of arms.
+/// Index of the operation that sources the config's Market generation.
+///
+/// DERIVED FOR ALL FIFTEEN, because the conjunct that needs it is not one
+/// action's. `authenticated_general_domain` calls
+/// `GeneralConfigV3::require_market(environment.generation, ..)` before any
+/// action does anything else, and `general_hot_environment_from_bank_v3` reads
+/// that generation out of `scalar::GENERATION`. Nothing else in the executing
+/// frame writes that register -- not the fifteen Lean-emitted RequestProfiles,
+/// whose identity destinations are exactly `{0, 3, 29}` and whose scalars do
+/// not name it, and not a trusted environment, which is
+/// `CurrentSlot`/`CurrentExecutingProgram`/`SystemProgram`. So a profile that
+/// omits this operation makes its own action UNEXECUTABLE against any founded
+/// market whose generation is nonzero, and does it silently: the register is a
+/// well-formed zero and the refusal is `ConfigMarket`, which reads like a
+/// caller naming the wrong market.
+///
+/// It was a LITERAL on five actions and absent from the other ten. Five of the
+/// ten are also joined a second time, deeper, by their own candidate
+/// projector (`root.generation() != environment.generation`), and it was one
+/// of those -- `CloseBatch` -- that surfaced it on 2026-09-04 through the real
+/// Trading ELF: `env.gen=0 root.gen=9`. The literals said the register was a
+/// property of the five actions that happened to have one, which is exactly
+/// the shape that let ten omissions sit unremarked. Derived, the operation
+/// exists for every action by construction and cannot be omitted by a
+/// sixteenth.
+///
+/// It sits immediately in front of the System-program bind, or of the product
+/// digest for `CloseCandidate`, which declares no System identity. For four of
+/// the five actions that carried a literal this IS that literal;
+/// `CancelOrder`'s generation and payer projections swap, which is free --
+/// `OP_PROJECT_KEY` and `OP_PROJECT_DATA_U64` write different banks and
+/// neither reads the other.
+const fn general_generation_operation_index_v3(action: Action) -> u16 {
+    match general_system_program_operation_index_v3(action) {
+        Some(system) => system.saturating_sub(1),
+        None => general_product_digest_operation_index_v3(action).saturating_sub(1),
+    }
+}
+
 /// Index of the operation binding the System-program coordinate to its identity.
 ///
 /// Derived, in front of the product digest, for the reason the two behind it
@@ -367,6 +416,38 @@ pub fn general_account_profile_operation_v3(
                     .checked_add(GENERAL_ROOT_LIFECYCLE_OFFSET_V2)
                     .ok_or(GeneralAccountRuleErrorV3::Geometry)?,
             )?,
+        }),
+        // THE SELECTION DEADLINE'S TWO TERMS.
+        //
+        // `Freeze` read no clock at all until 2026-09-04, and could not: its
+        // profile declared nine fixed accounts and ZERO readonly evidence, and
+        // its primary state -- `RuntimeSelectionCursorV2` -- carries the batch
+        // identity and no close slot, so no register held a deadline for
+        // `currentSlot` to be compared against. That made early freeze live:
+        // a solver who submitted one thin valid candidate, cranked its
+        // consideration and froze in the same slot excluded every fuller
+        // candidate (`MECHANISM_BATCH_SPINE_2026_09_04.md` §2(d)(i)).
+        //
+        // The batch record is the only account carrying the first term, so
+        // `Freeze` names it as readonly evidence -- the smaller of the two
+        // repairs `f66dbb078` named, and the same shape as `CloseBatch`'s own
+        // projection of this field. The second term is the config's, out of
+        // the account the runtime prefix already carries.
+        //
+        // Neither register is caller-trusted on its own: which batch is
+        // presented here is joined against the cursor's `batch_id` by the
+        // accelerator, and the `nonzero` in front of each in the Lean arm is
+        // what refuses a projection that lost its source rather than admitting
+        // a zero deadline.
+        5 if action == Action::Freeze => Ok(AccountOperationInputV2::ProjectDataU64 {
+            account: evidence_account(action, 0, GeneralReadonlyEvidenceKindV3::ClosedBatch)?,
+            destination: common_scalar(scalar::BATCH_COLLECTION_CLOSE_SLOT)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV1::COLLECTION_CLOSE_SLOT)?,
+        }),
+        6 if action == Action::Freeze => Ok(AccountOperationInputV2::ProjectDataU64 {
+            account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_CONFIG_COORDINATE_V3)?),
+            destination: common_scalar(scalar::CONFIG_SELECTION_SLOTS)?,
+            data_offset: width(GeneralConfigV3Layout::SELECTION_SLOTS)?,
         }),
         // Verify's mutable Candidate owns the refundable work escrow. Project
         // its actual balance independently of the body compartments so the
@@ -757,11 +838,6 @@ pub fn general_account_profile_operation_v3(
             destination: common_scalar(scalar::SELECTION_PRICE_SCALE)?,
             data_offset: width(GeneralConfigV3Layout::PRICE_SCALE)?,
         }),
-        18 if action == Action::OpenBatch => Ok(AccountOperationInputV2::ProjectDataU64 {
-            account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_CONFIG_COORDINATE_V3)?),
-            destination: common_scalar(scalar::GENERATION)?,
-            data_offset: width(GeneralConfigV3Layout::GENERATION)?,
-        }),
         // PlaceOrder's projections. The batch window supplies its status,
         // clock, both close slots, bound and counters; the SIGNED TERMS
         // evidence supplies every order coordinate the record will carry --
@@ -890,11 +966,6 @@ pub fn general_account_profile_operation_v3(
         26 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectKey {
             account: AccountCoordinateV2::fixed(GENERAL_CLOSE_PAYER_ACCOUNT_V3),
             destination: common_identity(identity::PAYER)?,
-        }),
-        27 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
-            account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_CONFIG_COORDINATE_V3)?),
-            destination: common_scalar(scalar::GENERATION)?,
-            data_offset: width(GeneralConfigV3Layout::GENERATION)?,
         }),
         // PlaceOrder's two item operations are THE TAIL, after every fixed
         // one, and they were written here as `30` and `31`. That was true
@@ -1049,14 +1120,9 @@ pub fn general_account_profile_operation_v3(
             destination: common_identity(identity::SELECTION_PRODUCT)?,
             data_offset: width(PRODUCT_RECORD_PRODUCT_ID_OFFSET_V2)?,
         }),
-        26 if action == Action::CancelOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
-            account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_CONFIG_COORDINATE_V3)?),
-            destination: common_scalar(scalar::GENERATION)?,
-            data_offset: width(GeneralConfigV3Layout::GENERATION)?,
-        }),
         // The maker who pays is the maker the order record names; see
         // SubmitCandidate above for why this cannot be a guard here.
-        27 if action == Action::CancelOrder => Ok(AccountOperationInputV2::ProjectKey {
+        26 if action == Action::CancelOrder => Ok(AccountOperationInputV2::ProjectKey {
             account: AccountCoordinateV2::fixed(GENERAL_CLOSE_PAYER_ACCOUNT_V3),
             destination: common_identity(identity::PAYER)?,
         }),
@@ -1126,11 +1192,6 @@ pub fn general_account_profile_operation_v3(
             destination: common_identity(identity::MARKET)?,
             data_offset: root_tail_offset(GENERAL_ROOT_MARKET_OFFSET_V2)?,
         }),
-        15 if action == Action::ReleaseOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
-            account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_CONFIG_COORDINATE_V3)?),
-            destination: common_scalar(scalar::GENERATION)?,
-            data_offset: width(GeneralConfigV3Layout::GENERATION)?,
-        }),
         // CloseBatch's four batch-record projections: the status and counter
         // its disjunction reads, and the window and bound it compares.
         12 if action == Action::CloseBatch => Ok(AccountOperationInputV2::ProjectDataU8 {
@@ -1152,36 +1213,6 @@ pub fn general_account_profile_operation_v3(
             account: primary,
             destination: common_scalar(scalar::CONFIG_MAX_ORDERS)?,
             data_offset: batch_body_offset(GeneralBatchLayoutV1::MAX_ORDERS)?,
-        }),
-        // THE GENERATION THIS ACTION'S OWN PROJECTOR REQUIRES, and did not have.
-        //
-        // `project_general_close_batch_candidate_in_place_v3` refuses unless
-        // `root.generation() == environment.generation`, and
-        // `general_hot_environment_from_bank_v3` reads that from
-        // `scalar::GENERATION`. Nothing wrote it for `CloseBatch`: not this
-        // profile, not the RequestProfile (whose identity destinations are
-        // exactly `{0, 3, 29}` and whose scalars do not include it), not a
-        // trusted environment (General declares `CurrentSlot`,
-        // `CurrentExecutingProgram` and `SystemProgram`). So the register was
-        // zero, the root's generation was not, and CLOSEBATCH COULD NOT BE
-        // EXECUTED AT ALL through the artifact-driven route.
-        //
-        // It went unnoticed for the ordinary reason: the only harness that ran
-        // `CloseBatch` -- the accelerator's own program-test -- HAND-WRITES its
-        // input bank (`close_batch_bank`) and writes the generation itself, so
-        // it exercised the projector and never the artifact that has to feed
-        // it. Measured 2026-09-04 by the first run that fed the projector from
-        // the published AccountProfile: `env.gen=0 root.gen=9`.
-        //
-        // Appended at this action's own last coordinate, exactly as
-        // `OpenBatch` sources the same register at its own index 18. Every
-        // earlier ordinal keeps its position and its bytes; the four derived
-        // tail indices below are computed from the operation count and move
-        // with it, which is what makes appending safe here.
-        16 if action == Action::CloseBatch => Ok(AccountOperationInputV2::ProjectDataU64 {
-            account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_CONFIG_COORDINATE_V3)?),
-            destination: common_scalar(scalar::GENERATION)?,
-            data_offset: width(GeneralConfigV3Layout::GENERATION)?,
         }),
         // Every other action creates its primary state, so its lifecycle plan is
         // what proves the account's owner. Close destroys that account instead:
@@ -1209,6 +1240,17 @@ pub fn general_account_profile_operation_v3(
             destination: common_identity(identity::TERMINAL_BENEFICIARY_OBSERVATION)?,
             data_offset: GeneralLocalStateLayoutV3::beneficiary(),
         }),
+        // THE MARKET GENERATION EVERY ACTION'S DOMAIN AUTHENTICATION READS.
+        // See `general_generation_operation_index_v3` for why this is one
+        // derived arm and not fifteen literals, and for the ten actions that
+        // had no such operation at all.
+        generation if generation == general_generation_operation_index_v3(action) => {
+            Ok(AccountOperationInputV2::ProjectDataU64 {
+                account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_CONFIG_COORDINATE_V3)?),
+                destination: common_scalar(scalar::GENERATION)?,
+                data_offset: width(GeneralConfigV3Layout::GENERATION)?,
+            })
+        }
         // THE SYSTEM PROGRAM, BOUND TO THE IDENTITY THE PROFILE ALREADY TRUSTED.
         //
         // `TrustedBuiltinIdentityV2::SystemProgram` writes the program's key
@@ -1372,8 +1414,9 @@ pub fn encode_general_account_profile_v3_atomic(
         .ok_or(GeneralAccountRuleErrorV3::Geometry)?;
     encode_account_profile_with_dynamic_fixed_span_v2_generated_atomic_with_item_operations(
         // The window-gated actions read the trusted current slot; a caller may
-        // not state what time it is. The settlement seven declare none, and
-        // adding one there would move seven digests for nothing.
+        // not state what time it is. `Freeze` joined them on 2026-09-04 with
+        // the selection-window conjunct; the settlement six that remain declare
+        // none, and adding one there would move six digests for nothing.
         if matches!(
             action,
             Action::OpenBatch
@@ -1383,6 +1426,7 @@ pub fn encode_general_account_profile_v3_atomic(
                 | Action::ReleaseOrder
                 | Action::SubmitCandidate
                 | Action::CloseCandidate
+                | Action::Freeze
         ) {
             TrustedEnvironmentV2::CurrentSlot {
                 destination: narrow_u32(scalar::CURRENT_SLOT)?,
@@ -1436,7 +1480,7 @@ pub fn encode_general_account_profile_v3_atomic(
 }
 
 /// Widest canonical operation list any action declares.
-const GENERAL_MAX_ACCOUNT_PROFILE_OPERATIONS_V3: usize = 37;
+const GENERAL_MAX_ACCOUNT_PROFILE_OPERATIONS_V3: usize = 38;
 
 /// Inert operation the fixed-width operation buffer is filled with.
 const GENERAL_ACCOUNT_PROFILE_OPERATION_PLACEHOLDER_V3: AccountOperationInputV2 =
@@ -1510,9 +1554,22 @@ fn submit_evidence_account(
     index: u16,
     expected: GeneralReadonlyEvidenceKindV3,
 ) -> Result<AccountCoordinateV2> {
-    let selected =
-        crate::state_artifacts_v3::general_readonly_evidence_v3(Action::SubmitCandidate, index)
-            .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?;
+    evidence_account(Action::SubmitCandidate, index, expected)
+}
+
+/// One action's readonly-evidence coordinate, refusing a kind it does not name.
+///
+/// The kind is an argument rather than a comment because the coordinate is a
+/// derived number: `general_readonly_evidence_start_v3` moves with the account
+/// prefix, and an operation pointed at the wrong evidence account reads
+/// well-formed bytes at a plausible offset instead of refusing.
+fn evidence_account(
+    action: Action,
+    index: u16,
+    expected: GeneralReadonlyEvidenceKindV3,
+) -> Result<AccountCoordinateV2> {
+    let selected = crate::state_artifacts_v3::general_readonly_evidence_v3(action, index)
+        .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?;
     if selected.kind != expected {
         return Err(GeneralAccountRuleErrorV3::Geometry);
     }
@@ -2560,69 +2617,66 @@ mod tests {
                         | Action::ReleaseOrder
                         | Action::SubmitCandidate
                         | Action::CloseCandidate
+                        // Joined on 2026-09-04 by the selection-window
+                        // conjunct; before it, `Freeze` was the one action
+                        // with a window and no clock.
+                        | Action::Freeze
                 ),
                 "{action:?}",
             );
         }
     }
 
-    /// EVERY ACTION WHOSE PROJECTOR JOINS THE GENERATION MUST HAVE A PROFILE
-    /// THAT WRITES ONE.
+    /// EVERY ACTION'S PROFILE WRITES THE MARKET GENERATION, BECAUSE EVERY
+    /// ACTION'S DOMAIN AUTHENTICATION READS IT.
     ///
-    /// `general_hot_environment_from_bank_v3` reads `scalar::GENERATION` out of
-    /// the candidate bank, and seven of the fifteen candidate projectors then
-    /// refuse unless it equals the root's (or, for
-    /// `InitializeSettlement`, unless it is nonzero at all). Nothing else in
-    /// the executing frame writes that register: the fifteen Lean-emitted
-    /// RequestProfiles do not name it, and General's trusted environment is
+    /// `authenticated_general_domain` calls
+    /// `GeneralConfigV3::require_market(environment.generation, ..)` before an
+    /// action touches its own state -- all fifteen evaluators call it, and
+    /// `general_hot_environment_from_bank_v3` reads that generation out of
+    /// `scalar::GENERATION`. Nothing else in the executing frame writes that
+    /// register: the fifteen Lean-emitted RequestProfiles do not name it, and
+    /// General's trusted environment is
     /// `CurrentSlot`/`CurrentExecutingProgram`/`SystemProgram`. So a profile
-    /// that omits this operation makes its own action UNEXECUTABLE, and does it
-    /// silently -- the register is a well-formed zero.
+    /// that omits this operation makes its own action UNEXECUTABLE against any
+    /// market whose generation is nonzero, and does it silently -- the register
+    /// is a well-formed zero, and the refusal is `ConfigMarket`, which reads
+    /// like a caller naming the wrong market.
     ///
-    /// It stayed silent because the only harness that ran those actions --
-    /// `programs/dclutch-general-accelerator-sbf/program-test/tests/lifecycle.rs`
-    /// -- HAND-WRITES its input bank and writes the generation itself. It
+    /// TEN OF FIFTEEN OMITTED IT. Five wrote it at a literal index --
+    /// `OpenBatch`, `CloseBatch`, `PlaceOrder`, `CancelOrder`, `ReleaseOrder`
+    /// -- and the other ten had no such operation. It stayed silent for the
+    /// ordinary reason: the only harness that ran those actions,
+    /// `programs/dclutch-general-accelerator-sbf/program-test/tests/lifecycle.rs`,
+    /// HAND-WRITES its input bank and writes the generation itself, so it
     /// exercised the reader and never the artifact that has to feed it.
     /// Measured 2026-09-04 by the first `CloseBatch` fed from this profile
     /// through the real Trading ELF: `env.gen=0 root.gen=9`.
     ///
-    /// THE LIST IS THE DEBT. `CloseBatch` is fixed and proven end to end.
-    /// `SubmitCandidate`, `CloseCandidate` and `InitializeSettlement` have the
-    /// same omission and are asserted here as still missing, so the day one of
-    /// them is fixed this test says so instead of staying quietly green.
+    /// The repair is one derived index rather than fifteen literals, so this
+    /// test asserts a TOTAL property and no longer carries a debt list a
+    /// sixteenth action could quietly join.
     #[test]
-    fn a_profile_that_omits_the_generation_makes_its_own_action_unexecutable() {
-        let writes_generation = |action: Action| {
-            let count = general_account_profile_fixed_operation_count_v3(action);
-            (0..count).any(|index| {
-                matches!(
-                    general_account_profile_operation_v3(action, index),
-                    Ok(AccountOperationInputV2::ProjectDataU64 { destination, .. })
-                        if Ok(destination) == common_scalar(scalar::GENERATION)
-                )
-            })
+    fn every_action_projects_the_market_generation_its_domain_authentication_reads() {
+        let expected = AccountOperationInputV2::ProjectDataU64 {
+            account: AccountCoordinateV2::fixed(
+                u16::try_from(HOT_RUNTIME_CONFIG_COORDINATE_V3).expect("config coordinate"),
+            ),
+            destination: common_scalar(scalar::GENERATION).expect("generation register"),
+            data_offset: u32::try_from(GeneralConfigV3Layout::GENERATION).expect("offset"),
         };
-        for action in [
-            Action::OpenBatch,
-            Action::CloseBatch,
-            Action::PlaceOrder,
-            Action::CancelOrder,
-            Action::ReleaseOrder,
-        ] {
-            assert!(
-                writes_generation(action),
-                "{action:?}'s projector joins the generation and its profile writes none"
-            );
-        }
-        for action in [
-            Action::SubmitCandidate,
-            Action::CloseCandidate,
-            Action::InitializeSettlement,
-        ] {
-            assert!(
-                !writes_generation(action),
-                "{action:?} gained the generation projection: move it into the list above, \
-                 and prove the action executes rather than only that the register is written"
+        for action in ACTIONS {
+            let count = general_account_profile_fixed_operation_count_v3(action);
+            let writers = (0..count)
+                .filter(|index| {
+                    general_account_profile_operation_v3(action, *index).expect("exact operation")
+                        == expected
+                })
+                .count();
+            assert_eq!(
+                writers, 1,
+                "{action:?} declares {writers} operations sourcing the Market generation, and \
+                 `authenticated_general_domain` requires exactly one",
             );
         }
     }
@@ -2822,8 +2876,9 @@ mod tests {
         // exactly that account.
         assert_eq!(general_account_profile_fixed_count_v3(action), Ok(12));
         // 34 until the semantic-basis projection landed; every action's count
-        // gained exactly one.
-        assert_eq!(general_account_profile_operation_count_v3(action), 37);
+        // gained exactly one. 37 until the Market generation gained a derived
+        // index and this action, which had none, gained the operation.
+        assert_eq!(general_account_profile_operation_count_v3(action), 38);
 
         let candidate =
             general_account_profile_rule_v3(action, GENERAL_PRIMARY_STATE_ACCOUNT_V3, WIDTHS)
