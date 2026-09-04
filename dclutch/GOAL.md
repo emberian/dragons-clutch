@@ -4474,3 +4474,5 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   persisted across the five guards with an epoch-change program-test end to end; one manifest entry per General action;
   cohort-16's runbook rows and the `retire` row.
 - Cuts: `61c8978b0`.
+- The docket republished for the morning (the first link was deleted): https://claude.ai/code/artifact/59b9e153-e1ee-4d32-aeba-8e1faabccfac
+  — D8 (rent across an epoch) and M6 added; the rows' evidence refreshed; the second walk's six-item path in the C-16 row.
