@@ -172,6 +172,39 @@ All of that moves with *when the campaign happens to run*, which is a function
 of machine load. Two of the differing deltas are ±2, which is not even a bump
 iteration — a length that moved by a byte.
 
+**Confirmed again 2026-09-04, by a matched pair, and this time one delta is
+NEGATIVE.** Two tier-1 runs the same evening on one laptop against byte-identical
+ELFs (`claims f6ab44acb904…`), differing only in the producer: `d24c191c2` with
+199 transactions, `c42da8fef` with 207, the eight extra being the Registry
+reauthentication and record-abort lanes. Every one of the five `DCLTGMF3` stage
+deltas is a near-exact multiple of 1,500 —
+
+| stage | 199-tx control | 207-tx run | delta |
+|---|---:|---:|---:|
+| 1 Custody Lock | 74,034 | 78,532 | +4,498 |
+| 2 Core FoundAndPermit | 301,430 | 305,928 | +4,498 |
+| 3 Custody Realize | 50,421 | 45,919 | **−4,502** |
+| 4 Claims FoundingV5 | 161,089 | 177,589 | +16,500 |
+| 5 Core Open | 60,765 | 63,765 | +3,000 |
+
+— and stage 3 got **cheaper**. That is the fact worth keeping: a compute
+regression cannot make a stage cheaper, so a signed multiple-of-1,500 delta
+across a whole transaction is bump-search noise and nothing else, and it can be
+read off a single matched pair without bisecting anything. The mechanism is the
+one above: eight extra transactions move the founding to different slots, the
+slots seed the coordinates, the coordinates draw different bumps.
+
+**What it cost to learn the row was under-pinned.** `dcltgmf3-stage-4-claims-foundingv5`
+went red on the 207-transaction run at 177,589 against a 175,086 budget. Its
+`measured` was ONE draw (155,086) and its provenance said so; the control alone
+already sat 6,003 above that draw, spending 30% of the tolerance before anything
+was added. It is re-pinned to 177,589, the highest of three draws, with the
+tolerance UNCHANGED at 20,000 — widening a tolerance to absorb a draw the band
+already covers is how a ratchet stops ratcheting. Its four sibling stage rows
+and the whole-transaction row are still single draws from `93a2793bd` and are the
+same shape; they are left alone because they are green and re-pinning a green row
+upward can only cost sensitivity.
+
 **Where the seed did and did not land, per enforced row:**
 
 | band | rows |

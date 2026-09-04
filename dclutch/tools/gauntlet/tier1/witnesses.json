@@ -147,6 +147,27 @@
       "kind": "cu-budget",
       "campaign": "tier1",
       "provenance": "The budgets and their tolerances live in tools/gauntlet/CU_BUDGETS.json with their measurement dates, revisions and observed noise bands; this witness carries no number of its own. The independent value is Solana's 1,400,000 per-transaction MAX_COMPUTE_UNIT_LIMIT, which is the chain's and not ours: a transaction that reaches it is refused outright with no partial result, and DCLTGMF1 grew 84.6% -> 91.3% of it in one evening from other lanes' changes with nothing watching. The budgets are pinned at the highest measured draw plus a tolerance derived from the campaign's own measured run-to-run band, so an ordinary run cannot produce a red row and a structural regression can."
+    },
+    {
+      "id": "every-reauthentication-moved-nothing-but-its-fee",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.label | startswith(\"reauthenticate the activated role\")) | .fee_only_balance_change] | unique | tostring",
+      "expect": "[true]",
+      "provenance": "Read out of ONE atomic record the chain wrote: `postBalances[0] + fee == preBalances[0]` and every other pre/post pair equal, static and loaded addresses alike. `registry/process_reauthenticate#Reauthenticate` takes three READ-ONLY accounts and returns a receipt through `set_return_data`; a route that authenticates and answers must not be able to move a lamport, and this is the chain's own arithmetic saying it did not. The claim is not that the code has no write -- it is that the transaction's balance record shows none, which is the property a reader of the ledger can check without reading the program. Five transactions, one per ExecutionRoleV1, and `unique` makes a single false fail the row rather than being averaged away."
+    },
+    {
+      "id": "reauthentication-does-not-rehash-the-role-elf",
+      "kind": "evidence-jq",
+      "query": "([.transactions[] | select(.label | startswith(\"reauthenticate the activated role\")) | .compute_units_consumed] | max) * 20 < ([.transactions[] | select(.label | startswith(\"activate immutable release-set role\")) | .compute_units_consumed] | min) | tostring",
+      "expect": "true",
+      "provenance": "A cross-check between two numbers the CHAIN produced in the same run, against a rate that is Solana's and not ours: the sha256 syscall costs about one compute unit per two bytes, which is why activation is one role per transaction at all (see the activation-is-one-role-per-transaction witness) and why the five role ELFs' roughly 4.2 MB cannot be hashed inside 1,400,000. Activation hashes the whole artifact; reauthentication authenticates the cached deployment against the ProgramData the frame carries and must NOT hash it again -- if it did, the two would sit within an order of magnitude of each other. Measured 2026-09-04: the most expensive reauthentication was 11,337 CU and the cheapest activation 328,016, a factor of twenty-eight. The factor asserted here is twenty, which a re-hash could not survive and which ordinary run-to-run noise cannot reach."
+    },
+    {
+      "id": "the-refused-abort-moved-nothing-and-the-reclaim-moved-the-rent",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.label | test(\"Abort\")) | .fee_only_balance_change] | tostring",
+      "expect": "[true,false]",
+      "provenance": "The boundary `registry/process_abort#4` is judged on, read from the chain's own balance record rather than from either transaction's success. FIRST the hostile: a frame naming a stranger's wallet where the staging cursor commits the sponsor's must move NOTHING -- an unwind route that let a refund be redirected would be a worse defect than the stranding Abort exists to prevent, and `false` here would mean lamports moved on a transaction that refused. THEN the reclaim: it must move something, because closing two program-owned PDAs to zero and crediting one wallet is the whole point, and a `true` there would mean the route reported success having reclaimed nothing. The pair is ordered because the campaign submits it in that order against one record; either value alone proves half of the property and the wrong half is the one that looks green."
     }
   ]
 }

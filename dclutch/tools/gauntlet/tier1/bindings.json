@@ -360,6 +360,39 @@
       "program": "core",
       "outcome": "executed",
       "note": "The third rung, and the one that moves the Market's readiness to Ready. Core alone: it reads the activated funding and accepts it. This is the last transaction tier 1 submits."
+    },
+    {
+      "label": "reauthenticate the activated role: *",
+      "routes": [
+        "registry/process_reauthenticate#Reauthenticate",
+        "registry/process_instruction"
+      ],
+      "program": "registry",
+      "outcome": "executed",
+      "note": "One transaction per ExecutionRoleV1, immediately after the five activations and read back off the chain at a slot no earlier than theirs. This is the route every role adapter's rule is WRITTEN in and none of them can call: a child entered under a Registry continuation cannot CPI back here, the Registry is already on the stack, so the adapters share `process_reauthenticate`'s body rather than reimplementing it. That makes this the one place the shared rule is exercised as a route instead of as a subroutine -- and until 2026-09-03 nothing anywhere had submitted it, while `docs/design/PACKET_LIMIT_2026_09_01.md` listed it among the routes tier 1 drives. It could not share a frame with the activation that precedes it: `build_registry_reauthentication_v1` is handed a finalized observation of the cache and refuses a role the cache does not yet carry."
+    },
+    {
+      "label": "Abort refuses a substituted sponsor refund wallet",
+      "routes": [
+        "registry/process_abort#4",
+        "registry/record_v1::dispatch",
+        "registry/process_instruction"
+      ],
+      "program": "registry",
+      "outcome": "refused",
+      "refusal": "registry/RegistryError::Record",
+      "note": "HOSTILE, and the boundary this route is judged on. The staging cursor is the SOLE author of the sponsor refund identity; a frame naming a stranger's wallet must die on that comparison before a lamport moves, and the record must survive being refused for. An unwind route that let anyone redirect a sponsor's refund would be a worse defect than the stranding Abort was written to prevent. The code is COARSE -- `RegistryError::Record` covers every conjunct in `record_v1`, the substituted refund wallet among them -- so this pins the wall and not the conjunct, which is the honest reading and is stated rather than implied."
+    },
+    {
+      "label": "reclaim an abandoned record's rent and staging bounty (Abort)",
+      "routes": [
+        "registry/process_abort#4",
+        "registry/record_v1::dispatch",
+        "registry/process_instruction"
+      ],
+      "program": "registry",
+      "outcome": "executed",
+      "note": "DCLTRIX1 action 4, and the campaign's only use of the record family's liveness guarantee: an abandoned record set can always be reclaimed and never strands its rent or its prepaid bounty. The record this closes exists to be abandoned -- it is published by a Begin, never appended to, never finalized, and carries a schema id that names itself and belongs to no family. Early sponsor Abort: the actor IS the committed sponsor, so the contract requires its signature, the disclosed bounty is withheld (it funds a STRANGER's later cleanup, not the sponsor's own abort), and both closed accounts' whole balance returns to one wallet. The producer checks that arithmetic against the chain rather than asserting it in a witness."
     }
   ]
 }

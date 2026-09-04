@@ -654,3 +654,218 @@ in front of it, and `0948b0224` already reports the General-hot suite GREEN
 through the real ELFs.
 
 Devnet evidence. Not mainnet evidence.
+
+---
+
+## Addendum B: OPENBATCH REPORTS DELIVERABLE, AND THE FILL IS BLOCKED BY A PROVENANCE ENVELOPE THAT DOES NOT REPRODUCE
+
+Written by the COHORT-15B lane, 2026-09-04, resuming from `HOLD_STATE.md`.
+**Devnet evidence. Not mainnet evidence.**
+
+Tree root `/Users/ember/dev/dclutch`.
+
+### B0. The resumption began by discovering its own tools were gone
+
+cohort-15's scratch (`cohort15-1788476653`) no longer exists, and **every script
+in the job directory hardcodes a driver path inside it**. The driver was rebuilt
+and symlinked back to that path so the scripts run unedited.
+
+It is built at **`e754c6999`**, not at the deploy commit `1cae26fd6`, and the
+difference is measured rather than waved at: `git diff 1cae26fd6..e754c6999`
+touches four files in the successor tool — `campaign.rs`,
+`core_bump_projection.rs`, `infrastructure_succession.rs`, `local_mutable.rs` —
+and three in `dclutch-operator`. **None is on the settle, fill, census or
+General-session path**, and `general_session.rs` is byte-identical at both
+commits.
+
+**A correction to §16 of this document.** It says *"The endpoint credential
+exists in no file under it"*. That is false: `sim-config.json` carries the
+Helius key in cleartext in `cluster.rpc_url`. The file is mode 600, but the
+sentence is wrong, and `build-sim-config.py` is the author — it takes the URL as
+`sys.argv[1]` and writes it straight through.
+
+### B1. THE CALLER-AUTHORITY WALL WAS A HARDCODED VERDICT, AND IS NOW A DERIVATION
+
+`e1ae00c81`. §15 item 4 owed this and named it exactly: `general_session.rs`
+pushed `session/caller-authority-slot-binding` unconditionally with a `detail`
+describing the pre-`3a8ac205d` seed.
+
+The fix is a deletion plus a derivation, through the same two authors
+`invoke_admitted_accelerator_v3` calls and in the order it calls them:
+`accelerator_caller_authority_digest_v1(Admitted, parent_request_digest, index)`
+mints the `role_request_digest`, `CallerAuthoritySeedsV1` places it in the sole
+universal release-pinned seed order, and `find_program_address` over Trading
+closes it. The wall row now appears **only when a derivation fails**, carrying
+the failure's own words.
+
+`admitted_caller_authority_span_v1` takes no slot argument and no bank argument,
+because the preimage has neither. If one returns, the file stops compiling
+rather than quietly agreeing.
+
+**And the command gained a green it never had.** Its only two exits were a
+refusal and a refusal — it was written when the honest answer for four accounts
+was *nobody can*. With the walls gone it printed
+`[session/unreachable] … 0 unsatisfiable conjunct(s)` and exited non-zero. A
+gate whose green is spelled as a refusal is a gate nobody can put in front of a
+producer.
+
+#### Measured on cohort-15's General market
+
+```
+DELIVERABLE: OpenBatch names no unsatisfiable conjunct at any of the 55
+top-level coordinates of market 6aqy89GhhXFtDbawC5ors4HLkGvzdHC4R26TXTaaXRKj
+```
+
+| | |
+| --- | --- |
+| frame report | `$JOB/general/session-derived.json` |
+| `walls` | `[]` |
+| `rentCredit` | **128** |
+| top-level accounts | 55 |
+| caller-authority span, derived | `BN91dspGEEdNVfBV2Q3F7CXg8VXXNeAm9Wx33MkLhi14`, `atxHNGRrhTACswHAsVBNtHtHqhMei5HUrNSvrm5JnH8`, `AAfrdEPUepRbkrUmnSFd8RqQruChRrNfUdoYnyjWXcrn`, `D5dmyKB6RRtaFBLfDBttZuWKAjRaFztcRqhVKUS6Hc39` |
+
+Those four are derived against a **stated probe** family-request digest
+(`5bc43870c202fcc7d1fa5a27e8afb2e21f41a022f3920faee1a0c2e8a40a581e`, the sha256
+of a literal a reader can recompute), because this command signs nothing and the
+span is a function of the SIGNED instruction. `--parent-request-digest` takes the
+real one when a producer has it; the frame row and the report both say which was
+used, so a probe is never presented as a caller's span.
+
+**Both of cohort-14's walls are now closed on one market**: the rent-credit
+width by cohort-15's re-founding, the caller authority by `3a8ac205d` plus this.
+
+Four tests, and the substantive one is **proven red**: dropping the invocation
+ordinal from the preimage — the exact regression that collides one execution's
+four authorities — fails
+`the_caller_authority_span_moves_with_every_coordinate_that_must_move_it` on
+*"each invocation ordinal names its own authority"*; restored, all four pass.
+`the_old_slot_bound_seed_moves_between_slots_and_the_new_preimage_does_not`
+MODELS the old seed rather than describing it, and asserts the two banks DIFFER
+before comparing the addresses they derive.
+
+### B2. RETIREMENT'S CLUSTER STOPS BEING A LITERAL
+
+`e5a42c632`. §15 item 5 named two lines and both are gone:
+`ExpectedClusterV1::OwnedLoopback` was a literal in `run()`, and the
+acknowledgment handed to `ClusterOriginV1::parse` was a literal `None`.
+
+The idiom is `claims_custody_replay.rs`'s, copied whole: a second
+`COMMAND_DEVNET_V1` (`devnet-aggregate-retirement-v1`), a `command(expected)`
+selector, a `devnet_usage()`, and the expected cluster threaded. The packets,
+the journal, the vault close and the rent arithmetic were always cluster-blind,
+so this is a second entry point, not a second implementation.
+
+Four tests; `the_public_retirement_arm_refuses_a_loopback_origin_before_any_key_or_read`
+is **proven red** by restoring the literal `None`, and green when the
+acknowledgment is threaded again.
+
+**This unblocks retirement on devnet. It does not perform one** — cohort-15's
+Direct market is not Terminal at the time of writing.
+
+### B3. THE HONEST SELECTOR, READ OFF THE CHAIN BEFORE THE SETTLE
+
+This is the number §14 says cohort-15 exists to be able to state. It is read
+from the captured candidate account's own bytes, not from a plan:
+
+| | |
+| --- | --- |
+| candidate | `EsdcBPpSQycmvB3AH5kkE5J62XLF7Y3WXwNzKgUjKX5s`, 432 B `DCLTSPC1` |
+| snapshot slot / time | 492,775,238 / 1788484422 |
+| `publish_time` | **1788484406**, inside `[1788484328, 1788486128]` |
+| price mantissa | **10,373,844,866** |
+| `source_scale_exponent` | **−8** |
+| **SOL/USD** | **$103.738449**, conf ±$0.011551 |
+| cuts | `10200`, `10600` over denominator `100` = **$102.00** and **$106.00** |
+| **the cell the reading falls in** | **1** — inside `[102.00, 106.00)` |
+
+Cohort-14's markets B and C each paid the cell the deployed program chose rather
+than the cell its reading falls in. Cohort-15's statistic carries the factor, so
+the committed selector and the cuts-scale selector should be the same cell. Both
+numbers are recorded either way — that is how the disagreement was found.
+
+### B4. THE FILL IS BLOCKED, AND THE CAUSE IS THAT A PROVENANCE ENVELOPE DOES NOT REPRODUCE
+
+Everything the fill needs was built. Two portable Direct intent tickets at
+**outcome 1**, gross 200 at 50 bps per side, generation 2, `valid_from`
+492,808,008 through 493,008,208:
+
+| | |
+| --- | --- |
+| seller ticket | `b4845a8f860255cfca1de0b9afd782ced808a618700ab7944d2ea1715482b658` |
+| buyer ticket | `ec30fbb909cfd4f89005a6e6d44f2a92a7ebf6a7e4898867d9adb3717da995c1` |
+| seller Direct token PDA | `F7kfTc16ftcG8TQ6g4CbUiJjwBwqbq7YvpLV5QNJJd2t`, bump 254, VACANT |
+| venue fee Direct token PDA | `4ypc38HfytpWRNFbrxWjeNf2Fben6cWPrVG76kp878wV`, bump 252, VACANT |
+| `sim-config.json` | rebuilt `with-trade`, `mode: devnet` |
+
+**Outcome 1 was chosen after the capture landed, knowing the reading**, and that
+is said out loud rather than left for a reader to infer. Cohort-14 traded
+outcome 0, drew cell 1, and paid zero, so the stranger-payout path has never
+been exercised; buying the cell a published observation already fixes is what a
+rational trader does and is the only way to exercise it.
+
+#### The reconstruction that worked
+
+`checked-execution-release.bin` died with the scratch. It is
+`CheckedExecutionReleaseSetV1`: a 16-byte header, the 336-byte
+`ExecutionReleaseSetV1`, then five (`ArtifactReleaseV1` ‖ `checked_release_id`)
+pairs — 1,592 bytes — and **every input survived**. The release-set body and all
+five artifact bodies are `records/*` in `plan-seal.json`, each with its own
+`content_sha256`; each `checked_release_id` is the sha256 of that role's
+`evidence/<role>/checked.bin`, which `CHECKED_UPGRADE_GATE.json` names in
+`links[].checked_manifest.sha256`. The assembly self-checks:
+`sha256(release_set_bytes)` = `9895faee8f7f…`, the same identity the plan, the
+seal and the Market's own byte 208 state. Result:
+`183652fb8ecde03ef931345ad2342f6623accc430301cfdd90642e9b3aff49b9`.
+
+#### The reconstruction that must not be attempted
+
+`devnet-direct-trade-produce-v1` authenticates the plan's whole checked-release
+provenance chain, and refuses:
+
+```
+claims artifact provenance bytes or SHA-256 changed after checked-release admission
+```
+
+A **full rerun of `checked-release-candidate.sh` at `1cae26fd6`** —
+`CANDIDATE_EXIT=0` — answers why. It reproduces:
+
+| | |
+| --- | ---: |
+| role ELFs and checked manifests, byte-identical | **20 of 68 gate-named files** |
+| `source-tree.txt`, `build-links.tsv`, `build-diagnostics.txt` | byte-identical |
+| everything else | **differs** |
+
+The other 48 — every `provenance/*.json`, `build-*.log`, `frame/*.txt` and
+`frame-build-*.log` — carry per-run identity, and so does `build-run.txt`, whose
+whole content is `dclutch-sbf-build-run-v1=<per-run nonce>`. That one file is
+why the gate digest itself moved:
+`195bac3cb0b4970244c34acd243edd0b260b57e46486eb36e437ca840279b09a` against the
+deployed `1e614d92c1ec19ed2fcfba4cc255e3d2bbd3c6a955d44a0d3ebdb3ce6f47bbbe`.
+
+**`build-run.txt` alone is recoverable, because the gate states its own
+`build_run_id`**: writing
+`dclutch-sbf-build-run-v1=4a156cf6a038f1cda1adc7bbcc7314a31648593ccf56558ef27a72ef59932492`
+hashes to the pinned `36612048c70bb…`, exactly. The provenance JSONs are not —
+substituting that run id into `provenance/claims.json` leaves
+`b6728084e1aeb44d…` against the pinned `dd7c4f93a1d7b8bf…`, so more than the run
+id varies.
+
+**The 48 were deliberately NOT filled from the new run.** A gate from one build
+run plus provenance from another is inconsistent evidence *even when every check
+passes*, and the point of the envelope is that it is one run's. The rebuilt work
+directory holds only files that hash to the deployed gate's own digests, with a
+`README` saying which are missing and why.
+
+So: **every byte this cohort certifies reproduces; the evidence that it was
+certified does not.** A cohort whose scratch is deleted keeps the ability to
+settle its market and loses the ability to trade it.
+
+**Owed, and it is cheap: the job directory must archive the candidate's
+`products/` and provenance envelope at deploy time**, or the gate must pin only
+the bytes that reproduce. Nothing else in this document was at risk — the ELFs,
+the manifests and the release identity all came back byte-identical from a
+second build fifteen commits later.
+
+Because the fill did not happen, no stranger holds a claim, and the
+winning-stranger payout of §15 item 1 is downstream of this blocker rather than
+of the settle.
