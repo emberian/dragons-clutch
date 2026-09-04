@@ -96,9 +96,18 @@ function scalar(source, name) {
 /**
  * One eight-byte record magic, in either spelling the tree uses.
  *
- * A hand-written module writes `*b"DCLTDSC1"`; a Lean emission writes the byte
- * array. Both are read here so a surface never has to know which of its facts
- * happened to reach Rust through Lean.
+ * The two spellings are `*b"DCLTFL02"` and the byte array, and BOTH appear in
+ * Lean emissions -- `generated_abi.rs` writes the first for the funding
+ * ledger, `generated_successor.rs` and the rest write the second -- so which
+ * one a record uses says nothing about who authors it. All eight magics read
+ * here now come from an emission. The spelling used to correlate with
+ * authorship, and this comment used to say so by naming a hand-written
+ * `*b"DCLTDSC1"`; that record's magic is emitted since the LEAN-TAGS lane and
+ * the correlation was never the rule anyway.
+ *
+ * A byte array may run to the next line, which `[^\]]+` spans; a magic split
+ * after the `=` does not match either branch, and the failure is a thrown
+ * `missing Rust magic`, not a silent absence.
  */
 function magic(source, name) {
   const literal = sources[source].match(new RegExp(`(?:pub(?:\\(crate\\))? )?const ${name}: \\[u8; 8\\] = \\*b"([^"]+)";`));

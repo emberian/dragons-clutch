@@ -1410,3 +1410,24 @@ the retry ladder it fed did not need a second pass.
 **The settle for market 3 is legal strictly after 1788501695 + 7200 =
 `1788508895` = 2026-09-04 06:01:35 UTC**, and the market stays settleable after
 that. The verifier is the certificate's kind byte at offset 10: **1**.
+
+## C10. ROUTE WITNESSES: 22 → 26
+
+`corroborate.py --discover` over this document resolves **nine** records where
+cohort-15's committed witness document had zero, because C5 put the bytes on
+the predicate-selected rows: both stranger admissions and market 3's
+(`DCLTPUA1`), the two captures and the settle (`DCLTSPI1`), the capability
+seal, the fee-bearing fill (`DCLTHOT3`) and the permissionless fee settlement
+(`DCLTDFS1`). `corroborate.py --check` re-reads every signature in all four
+witness documents from devnet: **42 distinct routes, 0 problems**.
+
+A `genref --converge` pass in a detached worktree at the commit that landed the
+witness document moved `docs/reference/route-witnesses.md` from **devnet 22 to
+devnet 26**, and *"a real Agave runtime drives 54 of the 162"* to **58**. That
+regeneration is deliberately not committed by this lane: HEAD moved five
+commits while it ran, another lane was regenerating the same references, and
+`AGENTS.md` gives `genref` to the convergence owner. The witness document is in
+the tree and the next convergence picks the rows up. The number, measured, is
+**22 → 26**.
+
+The one signature still dropped is `DCLTCRQ2` to core, per C5.
