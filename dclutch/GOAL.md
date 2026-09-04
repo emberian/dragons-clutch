@@ -4426,3 +4426,11 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   → COHORT-15E **`(spawned)`**: the Funding conviction and the stranger's payout, the General founding input and OpenBatch,
   market 1's retirement. C16-REHEARSAL-2 **`(spawned, read-only)`**: the night's delta against yesterday's walk.
 - Cuts: `09a08a917`, `b18f002c1`.
+- WORKBENCH-ROOT closed (`83238c9d2`): the Direct root's eight seeds are reachable FORWARD from the Market's own header
+  (the "seven of eight unreachable" was a fact about seed shape, not reach); one author `capabilityRootAddressV1` (the
+  trade spine had the seeds inline); the funding ledger derived the same way (its mask is one bit because the program
+  refuses a controller ledger holding more); **the workbench observes 3 of 8 machines** (source, direct-root, funding-ledger);
+  live: market 3's root Open → ready with the root read; market 1's root now tag 1 (Retiring) → wrong-phase by name; a
+  founded-not-activated sibling → needs-chain, never a state. Orchestrator: the three wasm-derived fact modules regenerated
+  at HEAD. Started 05:00 EDT: TESTS-CORE (two tests that expect Core to select no routes derive instead).
+- Cuts: `ffbe02e3c`.

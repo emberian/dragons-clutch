@@ -1,21 +1,47 @@
+import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
 import vector from '../fixtures/state-machines.devnet.json';
+import { hex as hexOf, sha256 } from './bytes';
+import {
+  capabilityEntryLedgerMaskV2,
+  capabilityFundingLedgerAddressV2,
+  capabilityRootAddressV1,
+  decodeCapabilityManifestV1,
+} from './capabilityManifest';
+import {
+  CAPABILITY_ENTRY_BYTES_V1,
+  CAPABILITY_ENTRY_KIND_ID_OFFSET_V1,
+  CAPABILITY_ENTRY_QUOTE_OFFSET_V1,
+  CAPABILITY_MANIFEST_COUNT_OFFSET_V1,
+  CAPABILITY_MANIFEST_HEADER_BYTES_V1,
+  CAPABILITY_MANIFEST_PROFILE_OFFSET_V1,
+  CAPABILITY_MANIFEST_SCHEMA_OFFSET_V1,
+} from './generated/capabilityManifestV1';
+import { CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1 } from './generated/coreFound';
+import { CAPABILITY_ROOT_HEADER_BYTES_V1, DIRECT_SUCCESSOR_KIND_ID_V3 } from './generated/directInlineV3';
 import {
   ROUTES_GATED_ON_ANOTHER_MACHINE_V1,
   gatedMachinesV1,
   routeMachineStatesV1,
 } from './generated/marketPhaseAdmissionV1';
 import { STATE_MACHINE_RECORDS_V1, stateMachineRecordV1 } from './generated/stateMachinesV1';
+import { deriveFinalizedRecordAddressesV1 } from './releaseRegistry';
 import {
+  MARKET_DERIVABLE_MACHINES_V1,
   STATE_MACHINES_V1,
   absentMachineObservationV1,
+  acquireMachineObservationsV1,
   decodeDirectRootStateV1,
   decodeFundingLedgerSlotV2,
   decodeMachineStateV1,
   decodeSourceResolutionStateV2,
+  machineGateCoverageV1,
+  machineGateSentenceV1,
+  machineGateVerdictV1,
   machineObservationV1,
   routeMachineVerdictsV1,
+  type MachineAccountReaderV1,
   type MachineObservationV1,
   type StateMachineV1,
 } from './stateMachines';
@@ -371,5 +397,267 @@ describe('a route machine gate, answered from an observation', () => {
 
   it('reads nothing at all for a route no machine gates', () => {
     expect(routeMachineVerdictsV1('claims/terminal_settlement_v3::process', [])).toEqual([]);
+  });
+});
+
+/**
+ * The addresses a Market's own header names, and the reads they unlock.
+ *
+ * WHAT THIS COVERS THAT THE DECODERS DID NOT. Every test above hands a decoder
+ * bytes somebody else found. `direct.inline` reported `needs-chain` on every
+ * Market ever selected not because its root could not be decoded but because
+ * nothing could say WHERE one lives, and the census's own note said seven of
+ * the eight machines were unreachable. Two of those seven were not: a Direct
+ * root and the Trading funding ledger of its manifest entry are forward
+ * projections of the Market's generation and the manifest identity its header
+ * commits to.
+ *
+ * THE MANIFEST HERE IS SYNTHETIC AND THE DECODER IS NOT. The bytes below are
+ * built to be exactly what `decodeCapabilityManifestV1` accepts -- one entry,
+ * the real Direct successor kind, the canonical `DCLTFQ01` quote -- and the
+ * reader is handed them at the address the Registry derivation names for their
+ * own hash. So a wrong seed order, a wrong schema, or a record whose bytes do
+ * not hash to the identity the Market committed to is a read that finds
+ * nothing, which is what the refusal cases assert.
+ *
+ * `stateMachines.live.test.ts` runs the same derivation against the chain that
+ * wrote the real ones.
+ */
+
+const DUMMY = (fill: number): string => new PublicKey(new Uint8Array(32).fill(fill)).toBase58();
+const MARKET = DUMMY(7);
+const REGISTRY = DUMMY(11);
+const TRADING = DUMMY(13);
+const RESOLUTION = DUMMY(17);
+const GENERATION = BigInt(2);
+
+/** The narrowest manifest the canonical decoder accepts, holding one kind. */
+function oneEntryManifest(kind: Uint8Array): Uint8Array {
+  const bytes = new Uint8Array(CAPABILITY_MANIFEST_HEADER_BYTES_V1 + CAPABILITY_ENTRY_BYTES_V1);
+  const view = new DataView(bytes.buffer);
+  bytes.set(new TextEncoder().encode('DCLTCAP1'), 0);
+  view.setUint16(CAPABILITY_MANIFEST_SCHEMA_OFFSET_V1, 1, true);
+  view.setUint16(CAPABILITY_MANIFEST_PROFILE_OFFSET_V1, 1, true);
+  view.setUint16(CAPABILITY_MANIFEST_COUNT_OFFSET_V1, 1, true);
+  const entry = CAPABILITY_MANIFEST_HEADER_BYTES_V1;
+  bytes.set(kind, entry + CAPABILITY_ENTRY_KIND_ID_OFFSET_V1);
+  for (let identity = 1; identity < 6; identity += 1) {
+    bytes.fill(identity + 1, entry + identity * 32, entry + identity * 32 + 32);
+  }
+  bytes.set(new TextEncoder().encode('DCLTFQ01'), entry + CAPABILITY_ENTRY_QUOTE_OFFSET_V1);
+  view.setUint16(entry + CAPABILITY_ENTRY_QUOTE_OFFSET_V1 + 8, 1, true);
+  return bytes;
+}
+
+type StubAccount = Readonly<{ owner: string; data: Uint8Array }> | null;
+
+function stubReader(accounts: Readonly<Record<string, StubAccount>>): MachineAccountReaderV1 & Readonly<{ reads: ReadonlyArray<string> }> {
+  const reads: string[] = [];
+  return Object.freeze({
+    reads,
+    accountInfo: (address: string) => {
+      reads.push(address);
+      return Promise.resolve(Object.freeze({ account: accounts[address] ?? null }));
+    },
+  });
+}
+
+/** The capability root account shape: the composite header, then the tail. */
+function rootAccount(state: string): StubAccount {
+  const data = new Uint8Array(CAPABILITY_ROOT_HEADER_BYTES_V1 + 24);
+  data.set(constructed('direct-root', state), CAPABILITY_ROOT_HEADER_BYTES_V1);
+  return Object.freeze({ owner: TRADING, data });
+}
+
+describe('the machines a Market determines the address of', () => {
+  const manifestBytes = oneEntryManifest(DIRECT_SUCCESSOR_KIND_ID_V3);
+  const market = async () => {
+    const manifestId = await sha256(manifestBytes);
+    const [entry] = decodeCapabilityManifestV1(manifestBytes);
+    return {
+      manifestId,
+      entry: entry!,
+      coordinate: Object.freeze({
+        address: MARKET,
+        generation: GENERATION,
+        capabilityManifestId: hexOf(manifestId),
+        registryProgram: REGISTRY,
+      }),
+      record: deriveFinalizedRecordAddressesV1(REGISTRY, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, manifestId).record,
+      root: capabilityRootAddressV1(TRADING, MARKET, GENERATION, manifestId, entry!),
+      ledger: capabilityFundingLedgerAddressV2(TRADING, MARKET, GENERATION, manifestId, capabilityEntryLedgerMaskV2(entry!.index)),
+    };
+  };
+
+  it('reads the Source alone when no Trading program is named', async () => {
+    const client = stubReader({});
+    const observations = await acquireMachineObservationsV1(client, { address: MARKET, generation: GENERATION }, RESOLUTION);
+    expect(observations.map((one) => one.machine)).toEqual(['source']);
+    expect(observations[0]!.present).toBe(false);
+    // One read, and the coordinate that would have unlocked the others was
+    // never supplied -- so nothing about the Direct family was even attempted.
+    expect(client.reads).toHaveLength(1);
+  });
+
+  /**
+   * The whole chain, and the ONE assertion that carries it: the address.
+   *
+   * Nothing here is handed a root address. It is derived from the Market's
+   * generation and the manifest its header commits to, and the test passes
+   * only because the stub's account sits at exactly that address.
+   */
+  it('derives the Direct root and its funding ledger, and answers the gate from them', async () => {
+    const { coordinate, record, root, ledger } = await market();
+    const client = stubReader({
+      [record]: Object.freeze({ owner: REGISTRY, data: manifestBytes }),
+      [root]: rootAccount('Open'),
+      [ledger]: Object.freeze({ owner: TRADING, data: constructed('funding-ledger', 'Active') }),
+    });
+    const observations = await acquireMachineObservationsV1(client, coordinate, RESOLUTION, TRADING);
+    expect(observations.map((one) => one.machine)).toEqual(['source', 'direct-root', 'funding-ledger']);
+    expect(client.reads).toContain(root);
+    expect(client.reads).toContain(ledger);
+
+    // The assertion is the AGREEMENT between what decoded and what the census
+    // publishes, never a state literal: a set widened to admit everything
+    // would fail the disjointness below rather than pass this.
+    const setup = routeMachineVerdictsV1('trading/direct_token_setup_v1::process_direct_token_setup_v1', observations)[0]!;
+    const close = routeMachineVerdictsV1('trading/direct_close_maker_v1::process_direct_close_maker_v1', observations)[0]!;
+    const decoded = observations.find((one) => one.machine === 'direct-root')!.state;
+    expect(setup.verdict).toBe(setup.states.includes(decoded!) ? 'admitted' : 'excluded');
+    expect([setup.verdict, close.verdict].filter((verdict) => verdict === 'admitted')).toHaveLength(1);
+
+    // RED-PROVEN BY DISABLING THE ROOT READ. The same coordinates with no
+    // account at the derived address must lose the admission entirely -- an
+    // `unobserved` that names the machine, never the state it used to hold.
+    const unactivated = stubReader({ [record]: Object.freeze({ owner: REGISTRY, data: manifestBytes }) });
+    const dark = await acquireMachineObservationsV1(unactivated, coordinate, RESOLUTION, TRADING);
+    const darkSetup = routeMachineVerdictsV1('trading/direct_token_setup_v1::process_direct_token_setup_v1', dark)[0]!;
+    expect(darkSetup.verdict).toBe('unobserved');
+    expect(darkSetup.observed).toBeNull();
+    expect(darkSetup.reason).toContain('direct-root');
+  });
+
+  /**
+   * A Market founded and never activated, which is the ordinary case.
+   *
+   * The root does not exist yet; the manifest that names it does. `Open` is
+   * the state this must never report, because the account it would have read
+   * has not been written -- and a card reading READY TO PREFLIGHT off a state
+   * nobody holds is exactly the defect the family gate was added to remove.
+   */
+  it('reports a Market with no activation root as absent, never as Open', async () => {
+    const { coordinate, record, root: rootAddress, ledger } = await market();
+    const client = stubReader({ [record]: Object.freeze({ owner: REGISTRY, data: manifestBytes }) });
+    const observations = await acquireMachineObservationsV1(client, coordinate, RESOLUTION, TRADING);
+    // "Read and not there" and "never read" are the same word on a card and
+    // different facts, so the reads are asserted as well as the answer.
+    expect(client.reads).toContain(rootAddress);
+    expect(client.reads).toContain(ledger);
+    const root = observations.find((one) => one.machine === 'direct-root')!;
+    expect(root.present).toBe(false);
+    expect(root.state).toBeNull();
+    expect(root.refusal).toBeNull();
+    const verdict = machineGateVerdictV1('direct-root', ['Open'], observations, 'a classifier');
+    expect(verdict.verdict).toBe('unobserved');
+    expect(verdict.reason).toContain('does not exist');
+  });
+
+  /**
+   * A record that is not the manifest the Market committed to is not a
+   * manifest, and neither address below it may be published.
+   */
+  it('refuses both Direct machines when the manifest record does not authenticate', async () => {
+    const { coordinate, record, root } = await market();
+    const substituted = oneEntryManifest(new Uint8Array(32).fill(9));
+    const client = stubReader({
+      [record]: Object.freeze({ owner: REGISTRY, data: substituted }),
+      [root]: rootAccount('Open'),
+    });
+    const observations = await acquireMachineObservationsV1(client, coordinate, RESOLUTION, TRADING);
+    for (const machine of ['direct-root', 'funding-ledger'] as const) {
+      const one = observations.find((candidate) => candidate.machine === machine)!;
+      expect(one.state).toBeNull();
+      expect(one.refusal).toContain('does not hash to the capability manifest identity');
+    }
+    // And the substituted record's root was never read, whatever sat there.
+    expect(client.reads).not.toContain(root);
+  });
+
+  /**
+   * A coordinate this reader was handed wrong is not a machine's failure.
+   *
+   * The Source is derived from the Market and the Resolution program and has
+   * nothing to do with the Trading program; a throw on the Direct half that
+   * took the Source observation with it would report a machine as failing when
+   * the reader's own input did.
+   */
+  it('keeps a bad Direct coordinate off the Source observation', async () => {
+    const client = stubReader({});
+    const observations = await acquireMachineObservationsV1(client, Object.freeze({
+      address: MARKET, generation: GENERATION, capabilityManifestId: 'not hex', registryProgram: REGISTRY,
+    }), RESOLUTION, TRADING);
+    expect(observations[0]!.machine).toBe('source');
+    expect(observations[0]!.present).toBe(false);
+    expect(observations[0]!.refusal).toBeNull();
+    for (const machine of ['direct-root', 'funding-ledger'] as const) {
+      const one = observations.find((candidate) => candidate.machine === machine)!;
+      expect(one.refusal).toContain('could not be addressed from this Market');
+    }
+  });
+
+  /** A Market whose manifest founded no Direct capability has no such machine. */
+  it('says nothing about a Direct root a Market never founded', async () => {
+    const other = oneEntryManifest(new Uint8Array(32).fill(5));
+    const manifestId = await sha256(other);
+    const { record } = deriveFinalizedRecordAddressesV1(REGISTRY, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, manifestId);
+    const client = stubReader({ [record]: Object.freeze({ owner: REGISTRY, data: other }) });
+    const observations = await acquireMachineObservationsV1(client, Object.freeze({
+      address: MARKET, generation: GENERATION, capabilityManifestId: hexOf(manifestId), registryProgram: REGISTRY,
+    }), RESOLUTION, TRADING);
+    expect(observations.map((one) => one.machine)).toEqual(['source']);
+  });
+
+  /**
+   * `MARKET_DERIVABLE_MACHINES_V1`, pinned to what the acquisition does.
+   *
+   * The console prints this list's length as the machines /workbench can go
+   * and read. A list is the only honest shape for it -- no table knows that a
+   * Direct root's address is a projection of a manifest entry -- so it is
+   * pinned rather than asserted: a machine the acquisition speaks about and
+   * this list omits is red here, and a name here that no read ever produces is
+   * red too.
+   */
+  it('speaks about exactly the machines it claims a Market determines', async () => {
+    const { coordinate, record, root, ledger } = await market();
+    const client = stubReader({
+      [record]: Object.freeze({ owner: REGISTRY, data: manifestBytes }),
+      [root]: rootAccount('Open'),
+      [ledger]: Object.freeze({ owner: TRADING, data: constructed('funding-ledger', 'Active') }),
+    });
+    const observations = await acquireMachineObservationsV1(client, coordinate, RESOLUTION, TRADING);
+    expect([...observations.map((one) => one.machine)].sort())
+      .toEqual([...MARKET_DERIVABLE_MACHINES_V1].sort());
+    // And each of them was reached by a read at a DERIVED address, which is
+    // the claim the list is making. An observation manufactured without one
+    // would satisfy the set above and fail here.
+    for (const address of [root, ledger]) expect(client.reads).toContain(address);
+    // The complement is the claim's other half: every machine NOT in the list
+    // is one this acquisition never produces, so a gate over it stays honestly
+    // unobserved.
+    const rest = STATE_MACHINES_V1.filter((machine) => !MARKET_DERIVABLE_MACHINES_V1.includes(machine));
+    expect(rest).toHaveLength(STATE_MACHINES_V1.length - MARKET_DERIVABLE_MACHINES_V1.length);
+    for (const machine of rest) expect(observations.some((one) => one.machine === machine)).toBe(false);
+  });
+
+  /** The coverage sentence counts what can be READ, not only what decodes. */
+  it('counts the derivable machines separately from the decodable ones', () => {
+    const coverage = machineGateCoverageV1([]);
+    expect(coverage.derivable.length).toBeLessThan(coverage.decodable.length);
+    for (const machine of coverage.derivable) {
+      expect(coverage.decodable).toContain(machine);
+      expect(MARKET_DERIVABLE_MACHINES_V1).toContain(machine as StateMachineV1);
+    }
+    expect(machineGateSentenceV1(coverage)).toContain(coverage.derivable.join(', '));
   });
 });

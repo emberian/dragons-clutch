@@ -1,4 +1,7 @@
+import { PublicKey } from '@solana/web3.js';
+
 import { ascii, hex, requireNonzero, requireZero, slice, u16, u64 } from './bytes';
+import { CAPABILITY_ROOT_PDA_DOMAIN_V1 } from './generated/directInlineV3';
 import {
   CAPABILITY_ENTRY_ACTIVATION_DEADLINE_OFFSET_V1,
   CAPABILITY_ENTRY_ACTIVATION_POLICY_OFFSET_V1,
@@ -25,6 +28,7 @@ import {
   CAPABILITY_FUNDING_BINDING_REALM_ID_OFFSET_V1,
   CAPABILITY_FUNDING_BINDING_RELEASE_ID_OFFSET_V1,
   CAPABILITY_FUNDING_BINDING_TOKEN_PROGRAM_OFFSET_V1,
+  CAPABILITY_FUNDING_LEDGER_PDA_DOMAIN_V2,
   CAPABILITY_FUNDING_QUOTE_AMOUNTS_OFFSET_V1,
   CAPABILITY_FUNDING_QUOTE_BINDING_OFFSET_V1,
   CAPABILITY_FUNDING_QUOTE_COLLATERAL_KIND_OFFSET_V1,
@@ -309,4 +313,142 @@ export const RECOGNIZED_CAPABILITY_KINDS_V1: Readonly<Record<string, string>> = 
 
 export function recognizeCapabilityKindV1(kind: Uint8Array): string | null {
   return RECOGNIZED_CAPABILITY_KINDS_V1[hex(kind)] ?? null;
+}
+
+/**
+ * The two accounts a Market's own header lets a reader NAME before reading.
+ *
+ * WHAT WAS MISSING. A manifest entry is a promise of two accounts -- the
+ * capability root the entry activates into, and the controller-owned ledger
+ * that funds it -- and both addresses were spelled out only where somebody
+ * already held them. `directTradeSpine.ts` wrote the root's eight seeds inline;
+ * the ledger's six had no client author at all. So a surface holding one Market
+ * could decode a Direct root's lifecycle and still not say WHERE to find one,
+ * which is the whole distance between `needs-chain` and a verdict.
+ *
+ * BOTH ARE FORWARD PROJECTIONS OF ONE HEADER. The Market names its generation
+ * and the content identity of its capability manifest; the manifest -- itself
+ * addressed by that identity under the Registry -- names each entry's index,
+ * kind, capability release and config. Nothing here is a coordinate a caller
+ * supplies out of a route manifest, and that is the point: a caller that could
+ * choose these seeds could name another Market's root.
+ */
+
+/** Every seed here is bounded by the Market's own u64 generation. */
+function generationSeedV1(generation: bigint): Uint8Array {
+  if (generation < BigInt(0) || generation > MAX_U64) throw new Error('a Market generation is a u64');
+  const bytes = new Uint8Array(8);
+  new DataView(bytes.buffer).setBigUint64(0, generation, true);
+  return bytes;
+}
+
+function u16SeedV1(value: number, field: string): Uint8Array {
+  if (!Number.isSafeInteger(value) || value < 0 || value > 0xffff) throw new Error(`${field} is a u16`);
+  const bytes = new Uint8Array(2);
+  new DataView(bytes.buffer).setUint16(0, value, true);
+  return bytes;
+}
+
+function manifestSeedV1(manifestId: Uint8Array): Uint8Array {
+  if (manifestId.length !== CONTENT_ID_BYTES) throw new Error('a capability manifest identity is 32 bytes');
+  requireNonzero(manifestId, 'capability manifest identity');
+  return manifestId;
+}
+
+/**
+ * The four entry fields a capability root's address is built from.
+ *
+ * Named as a subset rather than taken as a whole entry, because the reverse
+ * projection in `directHotBumpHintsV1` recovers exactly these four out of a
+ * root header and holds nothing else -- so the two authors can be compared
+ * without one of them inventing a funding quote it never read.
+ */
+export type CapabilityRootEntryV1 = Pick<CapabilityManifestEntryV1, 'index' | 'kind' | 'programSet' | 'config'>;
+
+/**
+ * The composite capability root one manifest entry activates into.
+ *
+ * `CapabilityRootSeedsV1::as_slices` in `dclutch-capability-program-contract`
+ * is the chain's author of this order, and it builds the seeds out of the
+ * root's OWN immutable header -- correct for a program already holding the
+ * account, and useless to a reader trying to find one. This is the same eight
+ * seeds reached forward, from the Market and the manifest entry the header
+ * would have copied them from.
+ *
+ * `directHotBumpHintsV1.capabilityRootSeedsV1` is the reverse projection and
+ * the independent second author: handed the header of the account this names,
+ * it recovers the same eight seeds, so the two disagree loudly rather than
+ * quietly if either moves.
+ */
+export function capabilityRootAddressV1(
+  controllerProgram: string,
+  market: string,
+  generation: bigint,
+  manifestId: Uint8Array,
+  entry: CapabilityRootEntryV1,
+): string {
+  const controller = new PublicKey(controllerProgram);
+  return PublicKey.findProgramAddressSync([
+    CAPABILITY_ROOT_PDA_DOMAIN_V1,
+    new PublicKey(market).toBytes(),
+    generationSeedV1(generation),
+    manifestSeedV1(manifestId),
+    u16SeedV1(entry.index, 'a capability manifest entry index'),
+    entry.kind,
+    entry.programSet,
+    entry.config,
+  ], controller)[0].toBase58();
+}
+
+/**
+ * The whole selection mask of the ledger that funds ONE activated entry.
+ *
+ * Not a convenience wrapper. `authenticate_ledger_controller`
+ * (`programs/dclutch-core-sbf/src/capability.rs`) refuses any capability
+ * action whose writable Trading-owned ledger holds the acted-on entry's bit
+ * together with anything else -- `ledger_mask != selected_bit` is the refusal
+ * -- so the controller ledger of an entry that has ever been activated or
+ * closed is a SINGLETON and its address is a function of the entry index
+ * alone. The other side of that same branch is why only this one is derivable:
+ * a Resolution-controlled ledger must NOT hold the acted-on bit, its mask is
+ * whichever entries the Source material and recovery policy selected, and a
+ * Market's header says nothing about which those are.
+ */
+export function capabilityEntryLedgerMaskV2(index: number): number {
+  if (!Number.isSafeInteger(index) || index < 0 || index >= MAX_CAPABILITIES_V1) {
+    throw new Error(`a capability manifest entry index is 0..${MAX_CAPABILITIES_V1 - 1}`);
+  }
+  return 1 << index;
+}
+
+/**
+ * One controller-owned subset funding ledger.
+ *
+ * `CapabilityFundingLedgerDerivationV2::seed_components`
+ * (`dclutch-capability-contract/src/funding.rs`) is the author: the domain,
+ * the controlling program, the Market, its generation, the manifest identity,
+ * and the u16 mask of the manifest entries this ledger holds a slot for. The
+ * mask is the one seed a Market does not determine on its own, which is why
+ * {@link capabilityEntryLedgerMaskV2} exists and says what makes the singleton
+ * case a fact rather than a guess.
+ */
+export function capabilityFundingLedgerAddressV2(
+  controllerProgram: string,
+  market: string,
+  generation: bigint,
+  manifestId: Uint8Array,
+  selectedMask: number,
+): string {
+  if (!Number.isSafeInteger(selectedMask) || selectedMask <= 0 || selectedMask > 0xffff) {
+    throw new Error('a funding-ledger selection mask is a nonzero u16');
+  }
+  const controller = new PublicKey(controllerProgram);
+  return PublicKey.findProgramAddressSync([
+    CAPABILITY_FUNDING_LEDGER_PDA_DOMAIN_V2,
+    controller.toBytes(),
+    new PublicKey(market).toBytes(),
+    generationSeedV1(generation),
+    manifestSeedV1(manifestId),
+    u16SeedV1(selectedMask, 'a funding-ledger selection mask'),
+  ], controller)[0].toBase58();
 }

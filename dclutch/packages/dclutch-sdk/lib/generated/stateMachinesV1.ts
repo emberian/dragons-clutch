@@ -69,11 +69,14 @@ export interface StateMachineRecordV1 {
   /**
    * The PDA seed domain of the account, when a reader can derive it.
    *
-   * `null` for seven of the eight: their addresses come out of a route
-   * manifest or a request, not out of a Market. The Source state is the
-   * exception -- `[domain, market, generation]` under the Resolution
-   * program -- which is why a reader holding one Market can read it and
-   * nothing else here.
+   * `null` for seven of the eight, and that is a fact about SEED SHAPE
+   * rather than about reach. The Source state is the one addressed by a
+   * single domain -- `[domain, market, generation]` under the Resolution
+   * program -- so it is the one this table can carry. Two of the other
+   * seven are composite derivations over a capability manifest entry and
+   * are perfectly reachable from a Market; `capabilityManifest.ts` owns
+   * those, and reading a `null` here as "no client can find this account"
+   * is what left a Direct root unread for as long as it was.
    */
   readonly pdaDomain: string | null;
   /** Other u64 lifecycle counters the record carries beside its tag. */

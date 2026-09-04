@@ -1,6 +1,15 @@
 import { PublicKey } from '@solana/web3.js';
 
-import { u16, u64 } from './bytes';
+import { fromHex, hex, sha256, u16, u64 } from './bytes';
+import {
+  capabilityEntryLedgerMaskV2,
+  capabilityFundingLedgerAddressV2,
+  capabilityRootAddressV1,
+  decodeCapabilityManifestV1,
+  type CapabilityManifestEntryV1,
+} from './capabilityManifest';
+import { CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1 } from './generated/coreFound';
+import { CAPABILITY_ROOT_HEADER_BYTES_V1, DIRECT_SUCCESSOR_KIND_ID_V3 } from './generated/directInlineV3';
 import { ROUTES_GATED_ON_ANOTHER_MACHINE_V1, routeOtherMachineGateV1 } from './generated/marketPhaseAdmissionV1';
 import {
   STATE_MACHINE_RECORDS_V1,
@@ -8,6 +17,7 @@ import {
   type StateMachineV1,
   stateMachineRecordV1,
 } from './generated/stateMachinesV1';
+import { deriveFinalizedRecordAddressesV1 } from './releaseRegistry';
 
 export type { StateMachineV1, StateMachineRecordV1 } from './generated/stateMachinesV1';
 
@@ -334,10 +344,12 @@ export function machineGateVerdictV1(
 /**
  * The Source resolution state's account address for one Market generation.
  *
- * The only machine of the eight whose account a reader holding a Market can
- * name. Seven of the others are reached through a route manifest or a request
- * a client is not holding, which is exactly why `unobserved` remains a real
- * answer rather than a bug.
+ * The only machine of the eight a Market addresses DIRECTLY -- one domain, the
+ * Market and its generation, and nothing read in between. Two more are reached
+ * through the capability manifest that Market's header commits to
+ * (`capabilityManifest.ts` derives both), and the remaining five come out of a
+ * request, an occurrence, or a controller's own subset selection, which is why
+ * `unobserved` remains a real answer rather than a bug.
  *
  * The seed ORDER is not a constant and could not be emitted, so
  * `generate-state-machines-v1.mjs` pins the one Rust expression that states it
@@ -368,38 +380,209 @@ export type MachineAccountReaderV1 = Readonly<{
 }>;
 
 /**
+ * One Market, as much of its own header as a reader chose to carry.
+ *
+ * `address` and `generation` alone reach the Source. The other two are the
+ * Market's own fields and they are what make the Direct family reachable: the
+ * manifest identity addresses the authenticated manifest under the Registry
+ * program the Market itself selected. They are OPTIONAL because a caller that
+ * has not decoded the Market cannot supply them honestly, and a missing
+ * coordinate must degrade to `unobserved` rather than to a guess.
+ */
+export type MachineMarketCoordinateV1 = Readonly<{
+  address: string;
+  generation: bigint;
+  /** The Market header's own capability-manifest content identity, hex. */
+  capabilityManifestId?: string | null;
+  /** The Registry program the Market's own header selected. */
+  registryProgram?: string | null;
+}>;
+
+/** An observation that names what stopped this reader, never a bare absence. */
+function refusedObservationV1(machine: StateMachineV1, refusal: string): MachineObservationV1 {
+  return Object.freeze({ machine, present: true, state: null, refusal });
+}
+
+/** The Source resolution state, at the address the Market determines. */
+async function acquireSourceObservationV1(
+  client: MachineAccountReaderV1,
+  market: MachineMarketCoordinateV1,
+  resolutionProgram: string,
+): Promise<MachineObservationV1> {
+  const address = sourceResolutionStateAddressV2(market.address, market.generation, resolutionProgram);
+  const account = (await client.accountInfo(address)).account;
+  if (account === null) return absentMachineObservationV1('source');
+  if (account.owner !== resolutionProgram) {
+    return refusedObservationV1('source', `the Source state at ${address} is owned by ${account.owner} and not the Resolution program`);
+  }
+  return machineObservationV1(decodeSourceResolutionStateV2(account.data));
+}
+
+/**
+ * The Market's authenticated capability manifest, or why it was not read.
+ *
+ * The record is content-addressed, so its bytes are checked against the
+ * identity the Market's own header committed to. Skipping that would let a
+ * Registry-owned account at the derived address name any root it liked, and
+ * every address below is derived FROM these entries.
+ */
+async function acquireCapabilityManifestV1(
+  client: MachineAccountReaderV1,
+  registryProgram: string,
+  manifestId: Uint8Array,
+): Promise<ReadonlyArray<CapabilityManifestEntryV1> | string> {
+  const { record } = deriveFinalizedRecordAddressesV1(registryProgram, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, manifestId);
+  const account = (await client.accountInfo(record)).account;
+  if (account === null) return `this Market's capability manifest record is absent at ${record}`;
+  if (account.owner !== registryProgram) {
+    return `the capability manifest record at ${record} is owned by ${account.owner} and not the Registry program`;
+  }
+  if (hex(await sha256(account.data)) !== hex(manifestId)) {
+    return `the record at ${record} does not hash to the capability manifest identity this Market committed to`;
+  }
+  try {
+    return decodeCapabilityManifestV1(account.data);
+  } catch (error) {
+    return `this Market's capability manifest did not decode: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+/**
+ * The Direct family's two machines, at addresses the Market determines.
+ *
+ * WHAT THIS REPLACED. `direct.inline` reported `needs-chain` on every Market
+ * ever selected, because the census reads its gate on `direct-root` and no
+ * reader could say where a Direct root lives. The address was treated as a
+ * coordinate that arrives from a route manifest; it is not one. It is a
+ * forward projection of the Market's own header through the manifest that
+ * header commits to, and {@link capabilityRootAddressV1} is its one author.
+ *
+ * BOTH MACHINES OR NEITHER, and the pairing is not an optimisation: the same
+ * manifest entry that names the root names the funding ledger, so a reader
+ * that has paid for the manifest read has already bought the second address.
+ *
+ * A Market whose manifest carries NO Direct entry yields nothing here rather
+ * than an absence. "This Market never founded a Direct capability" and "the
+ * root has not been activated yet" are different facts, and only the second
+ * one is about an account: the first is answered by the manifest and belongs
+ * to whoever is reading the manifest, not to a machine gate.
+ */
+async function acquireDirectFamilyObservationsV1(
+  client: MachineAccountReaderV1,
+  market: MachineMarketCoordinateV1,
+  tradingProgram: string,
+): Promise<ReadonlyArray<MachineObservationV1>> {
+  const registryProgram = market.registryProgram ?? null;
+  const manifestIdHex = market.capabilityManifestId ?? null;
+  if (registryProgram === null || manifestIdHex === null) return [];
+  const manifestId = fromHex(manifestIdHex, "this Market's capability manifest identity");
+  const entries = await acquireCapabilityManifestV1(client, registryProgram, manifestId);
+  if (typeof entries === 'string') {
+    return [refusedObservationV1('direct-root', entries), refusedObservationV1('funding-ledger', entries)];
+  }
+  const entry = entries.find((candidate) => hex(candidate.kind) === hex(DIRECT_SUCCESSOR_KIND_ID_V3)) ?? null;
+  if (entry === null) return [];
+
+  const observations: MachineObservationV1[] = [];
+  const rootAddress = capabilityRootAddressV1(tradingProgram, market.address, market.generation, manifestId, entry);
+  const root = (await client.accountInfo(rootAddress)).account;
+  if (root === null) observations.push(absentMachineObservationV1('direct-root'));
+  else if (root.owner !== tradingProgram) {
+    observations.push(refusedObservationV1('direct-root', `the capability root at ${rootAddress} is owned by ${root.owner} and not the Trading program`));
+  } else if (root.data.length <= CAPABILITY_ROOT_HEADER_BYTES_V1) {
+    observations.push(refusedObservationV1('direct-root', `the capability root at ${rootAddress} is ${root.data.length} bytes and carries no lifecycle tail past its ${CAPABILITY_ROOT_HEADER_BYTES_V1}-byte header`));
+  } else {
+    // The tail is sliced here and not in the decoder because the header's
+    // width is the Direct ABI module's fact; `stateMachinesV1.ts` publishes the
+    // RECORD and says so.
+    observations.push(machineObservationV1(decodeDirectRootStateV1(root.data.subarray(CAPABILITY_ROOT_HEADER_BYTES_V1))));
+  }
+
+  const ledgerAddress = capabilityFundingLedgerAddressV2(
+    tradingProgram, market.address, market.generation, manifestId, capabilityEntryLedgerMaskV2(entry.index),
+  );
+  const ledger = (await client.accountInfo(ledgerAddress)).account;
+  if (ledger === null) observations.push(absentMachineObservationV1('funding-ledger'));
+  else if (ledger.owner !== tradingProgram) {
+    observations.push(refusedObservationV1('funding-ledger', `the funding ledger at ${ledgerAddress} is owned by ${ledger.owner} and not the Trading program`));
+  } else {
+    // Row 0, and not by convention: the mask this address was derived FROM is
+    // the single bit of this entry, so the ledger has exactly one slot and it
+    // is this entry's.
+    observations.push(machineObservationV1(decodeFundingLedgerSlotV2(ledger.data, 0)));
+  }
+  return observations;
+}
+
+/**
+ * The machines {@link acquireMachineObservationsV1} can name the address of.
+ *
+ * A LIST, because the fact is a property of the derivations above and of no
+ * table: nothing in `stateMachinesV1.ts` knows that a Direct root's address is
+ * a projection of a manifest entry. So it is pinned instead of asserted --
+ * `stateMachines.test.ts` runs the acquisition against a reader that answers
+ * every address and fails unless the machines it observed are exactly these,
+ * which makes a machine added to the acquisition and not to this list red, and
+ * a name here that no read produces red as well.
+ */
+export const MARKET_DERIVABLE_MACHINES_V1: ReadonlyArray<StateMachineV1> = Object.freeze([
+  'source',
+  'direct-root',
+  'funding-ledger',
+]);
+
+/**
  * Every machine this reader can observe for one Market, at one floor.
  *
- * WHICH IS ONE, and saying so is the point. Seven of the eight machines live
- * at addresses a Market does not determine -- a Direct root and a Dealer root
- * come out of a route manifest, a checkpoint and a reservation out of a
- * request, a ticket out of an occurrence, a funding ledger out of a manifest
- * selection -- so a surface holding only a Market coordinate genuinely cannot
- * read them, and `unobserved` is the truth rather than a gap in this function.
- * The Source state is the exception and it is read here.
+ * WHICH IS THREE OF THE EIGHT, and the boundary is the point. Two of the eight
+ * are addressed by the Market alone or by the manifest it commits to -- the
+ * Source, and the Direct family's root together with the Trading funding
+ * ledger that funds its entry. The other five are reached through a request, an
+ * occurrence, or a controller's own subset selection:
+ *
+ *   * `dealer-checkpoint` and `dealer-reservation` are addressed by a scenario
+ *     REQUEST a client composes, so nothing on chain determines them;
+ *   * `series-ticket` is addressed by an occurrence inside a series, which a
+ *     Market does not enumerate;
+ *   * `projected-custody` belongs to a founding ladder whose coordinate is the
+ *     founding's, not the founded Market's;
+ *   * `dealer-root` is a capability root like the Direct one and would be
+ *     derivable the same way -- its manifest entry is simply not one this
+ *     reader looks for yet, and that is the one honest piece of backlog here.
+ *
+ * The funding ledger is derivable only for a Trading-CONTROLLED entry, and
+ * {@link capabilityEntryLedgerMaskV2} carries the chain rule that makes it so.
+ * The Resolution-controlled ledger over the same manifest is not derivable
+ * from a Market: its selection mask comes from the Source material and the
+ * recovery policy, and the Market's header names neither.
  *
  * An account that is not there comes back `present: false` rather than as a
  * throw: a Market whose resolution fund was never created has no Source state,
- * and that is an ordinary observation about a Market, not a failure to observe.
+ * and a Market founded but never activated has no capability root. Both are
+ * ordinary observations about a Market, and both are `unobserved` at a gate --
+ * never an admission.
  */
 export async function acquireMachineObservationsV1(
   client: MachineAccountReaderV1,
-  market: Readonly<{ address: string; generation: bigint }>,
+  market: MachineMarketCoordinateV1,
   resolutionProgram: string,
+  tradingProgram: string | null = null,
 ): Promise<ReadonlyArray<MachineObservationV1>> {
-  const address = sourceResolutionStateAddressV2(market.address, market.generation, resolutionProgram);
-  const observation = await client.accountInfo(address);
-  const account = observation.account;
-  if (account === null) return Object.freeze([absentMachineObservationV1('source')]);
-  if (account.owner !== resolutionProgram) {
-    return Object.freeze([Object.freeze({
-      machine: 'source' as const,
-      present: true,
-      state: null,
-      refusal: `the Source state at ${address} is owned by ${account.owner} and not the Resolution program`,
-    })]);
+  const observations: MachineObservationV1[] = [await acquireSourceObservationV1(client, market, resolutionProgram)];
+  if (tradingProgram !== null) {
+    // A throw on the Direct half is that half's answer and not the whole
+    // observation's. A malformed Trading program or a manifest identity that
+    // is not hex says nothing about the Source, and collapsing both into one
+    // refusal is how a reader ends up told that a machine failed when the
+    // reader's own coordinate did.
+    try {
+      observations.push(...await acquireDirectFamilyObservationsV1(client, market, tradingProgram));
+    } catch (error) {
+      const refusal = `the Direct family could not be addressed from this Market: ${error instanceof Error ? error.message : String(error)}`;
+      observations.push(refusedObservationV1('direct-root', refusal), refusedObservationV1('funding-ledger', refusal));
+    }
   }
-  return Object.freeze([machineObservationV1(decodeSourceResolutionStateV2(account.data))]);
+  return Object.freeze(observations);
 }
 
 /**
@@ -416,6 +599,8 @@ export type MachineGateCoverageV1 = Readonly<{
   machines: ReadonlyArray<string>;
   /** Of those, the machines this client can decode. */
   decodable: ReadonlyArray<string>;
+  /** Of those, the machines a reader holding one Market can also GO AND READ. */
+  derivable: ReadonlyArray<string>;
   /** Census routes gated on a machine that is not the Market's phase. */
   gatedRoutes: number;
   /** Distinct routes the acts declare, once each. */
@@ -437,6 +622,9 @@ export function machineGateCoverageV1(
   return Object.freeze({
     machines: Object.freeze(machines),
     decodable: Object.freeze(machines.filter((machine) => stateMachineRecordV1(machine) !== null)),
+    derivable: Object.freeze(machines.filter(
+      (machine) => (MARKET_DERIVABLE_MACHINES_V1 as ReadonlyArray<string>).includes(machine),
+    )),
     gatedRoutes: gated.size,
     declaredRoutes: declared.length,
     intersection: Object.freeze(declared.filter((route) => gated.has(route))),
@@ -462,7 +650,12 @@ export function machineGateCoverageV1(
  */
 export function machineGateSentenceV1(coverage: MachineGateCoverageV1): string {
   const reach = `${coverage.gatedRoutes} census routes are gated on a state machine that is not the Market's phase, over ${coverage.machines.length} machines, and this client decodes ${coverage.decodable.length} of them (${coverage.decodable.join(', ')}).`;
+  // DECODING IS NOT READING, and the two counts differed silently for as long
+  // as only one of them was printed. A decoder answers a gate only once
+  // somebody can name the account, so the sentence says which of the machines
+  // it decodes a reader holding one Market coordinate can go and find.
+  const held = `Of those, ${coverage.derivable.length} (${coverage.derivable.join(', ')}) live at addresses a Market's own header determines, so /workbench reads them; the rest are reached through a request, an occurrence, or a coordinate no Market names.`;
   return coverage.intersection.length === 0
-    ? `${reach} None of the ${coverage.declaredRoutes} routes the acts above declare is one of them, so no card here is yet answered by a gate the route itself carries.`
-    : `${reach} ${coverage.intersection.length} of the ${coverage.declaredRoutes} routes the acts above declare is one of them: ${coverage.intersection.join(', ')}.`;
+    ? `${reach} ${held} None of the ${coverage.declaredRoutes} routes the acts above declare is one of them, so no card here is yet answered by a gate the route itself carries.`
+    : `${reach} ${held} ${coverage.intersection.length} of the ${coverage.declaredRoutes} routes the acts above declare is one of them: ${coverage.intersection.join(', ')}.`;
 }

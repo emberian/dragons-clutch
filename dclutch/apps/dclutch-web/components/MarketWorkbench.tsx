@@ -22,8 +22,7 @@ import {
   acquireMachineObservationsV1,
   type MachineObservationV1,
 } from '@dclutch/sdk/stateMachines';
-import { CORE_STATE_GENERATION_OFFSET } from '@dclutch/sdk/generated/coreFound';
-import { u64 } from '@dclutch/sdk/bytes';
+import { decodeMarketCoreStateV2 } from '@/lib/marketCoreV2';
 import { browserCapabilityStandingsForStageV1, capabilityWorkspaceV1 } from '@/lib/capabilitySurface';
 import ConsoleHeader from '@/components/ConsoleHeader';
 import { smokeStoryEnabledV1 } from '@/lib/flags';
@@ -140,9 +139,12 @@ export default function MarketWorkbench({ initialStage = 'author', surface = 'li
       const client = new SolanaRpcClient(endpoint);
       const snapshot = await acquireOperatorSurfaceV1(client, effectiveCoordinates);
       if (currentInputKey.current !== requestedInputKey) return;
-      // The Source state is the one machine whose account a Market determines,
-      // so it is read at the same floor rather than left `needs-chain`. A
-      // refusal here is recorded as a refusal and never dropped: an observation
+      // The machines whose accounts the Market itself determines, read at the
+      // same floor rather than left `needs-chain`. The Market is DECODED here
+      // rather than sliced: its generation, the capability manifest it commits
+      // to and the Registry program it selected all come out of one author, and
+      // the Direct root's address is a projection of exactly those three.
+      // A refusal is recorded as a refusal and never dropped: an observation
       // that quietly became empty is indistinguishable from one that was never
       // attempted, which is the reading this whole surface exists to remove.
       let machines: ReadonlyArray<MachineObservationV1> = [];
@@ -151,10 +153,17 @@ export default function MarketWorkbench({ initialStage = 'author', surface = 'li
         try {
           const core = await client.accountInfo(market);
           if (core.account === null) throw new Error('the Market vanished between reads');
+          const identity = decodeMarketCoreStateV2(market, core.account.data).identity;
           machines = await acquireMachineObservationsV1(
             client,
-            { address: market, generation: u64(core.account.data, CORE_STATE_GENERATION_OFFSET) },
+            {
+              address: market,
+              generation: BigInt(identity.generation),
+              capabilityManifestId: identity.capabilityManifestId,
+              registryProgram: identity.registryProgram,
+            },
             effectiveCoordinates.resolution,
+            effectiveCoordinates.trading,
           );
         } catch (error) {
           machines = [{ machine: 'source', present: true, state: null, refusal: reason(error) }];

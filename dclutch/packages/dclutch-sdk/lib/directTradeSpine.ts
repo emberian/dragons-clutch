@@ -1,7 +1,7 @@
 import { PublicKey } from '@solana/web3.js';
 
 import { hex, requireNonzero, requireZero, sha256, slice, u16, u64 } from './bytes';
-import { decodeCapabilityManifestV1 } from './capabilityManifest';
+import { capabilityRootAddressV1, decodeCapabilityManifestV1 } from './capabilityManifest';
 import { describeDirectDecodeVintageV1 } from './directDecodeVintage';
 import {
   decodeDirectDescriptorV4,
@@ -96,18 +96,6 @@ function canonical(value: string, field: string): string {
 
 function optional(value: string | null | undefined, field: string): string | null {
   return value === undefined || value === null || value === '' ? null : canonical(value, field);
-}
-
-function generationBytes(generation: bigint): Uint8Array {
-  const bytes = new Uint8Array(8);
-  new DataView(bytes.buffer).setBigUint64(0, generation, true);
-  return bytes;
-}
-
-function entryIndexBytes(index: number): Uint8Array {
-  const bytes = new Uint8Array(2);
-  new DataView(bytes.buffer).setUint16(0, index, true);
-  return bytes;
 }
 
 async function finalizedRecordBody(
@@ -240,16 +228,13 @@ export async function inspectDirectTradeSpineV1(
     let positionExists: boolean | null = null;
     const probes: string[] = [];
     if (tradingProgramId !== null) {
-      rootAddress = PublicKey.findProgramAddressSync([
-        DirectAbi.CAPABILITY_ROOT_PDA_DOMAIN_V1,
-        new PublicKey(marketAddress).toBytes(),
-        generationBytes(BigInt(market.identity.generation)),
+      rootAddress = capabilityRootAddressV1(
+        tradingProgramId,
+        marketAddress,
+        BigInt(market.identity.generation),
         manifestDigest,
-        entryIndexBytes(directEntry.index),
-        directEntry.kind,
-        directEntry.programSet,
-        directEntry.config,
-      ], new PublicKey(tradingProgramId))[0].toBase58();
+        directEntry,
+      );
       probes.push(rootAddress);
     }
     if (claimsProgramId !== null) {

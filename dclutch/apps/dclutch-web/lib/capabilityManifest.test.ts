@@ -1,13 +1,22 @@
+import { readFileSync } from 'node:fs';
+
+import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
+import { u16 } from './bytes';
 import {
   CAPABILITY_ENTRY_BYTES_V1,
   CAPABILITY_ENTRY_QUOTE_OFFSET_V1,
   CAPABILITY_MANIFEST_HEADER_BYTES_V1,
+  MAX_CAPABILITIES_V1,
+  capabilityEntryLedgerMaskV2,
+  capabilityFundingLedgerAddressV2,
+  capabilityRootAddressV1,
   decodeCapabilityManifestV1,
   FUNDING_COMPARTMENTS_V1,
   recognizeCapabilityKindV1,
 } from './capabilityManifest';
+import { capabilityRootSeedsV1 } from './directHotBumpHintsV1';
 
 type Compartment = Readonly<{ name: string; assetClass: 0 | 1 | 2; amount: bigint }>;
 type Entry = Readonly<{ kind: number; policy?: 0 | 1; deadline?: bigint; dependencies?: ReadonlyArray<number>; compartments?: ReadonlyArray<Compartment>; binding?: number }>;
@@ -169,5 +178,87 @@ describe('immutable capability manifest', () => {
     ), (pair) => Number.parseInt(pair, 16));
     expect(recognizeCapabilityKindV1(known)).toBe('Product payoff admission');
     expect(recognizeCapabilityKindV1(new Uint8Array(32).fill(3))).toBeNull();
+  });
+});
+
+/**
+ * The two addresses a Market's own header names, against their second author.
+ *
+ * `capabilityRootAddressV1` is the FORWARD projection: a reader holding a
+ * Market and its manifest entry names the root before reading it, which is the
+ * whole difference between `needs-chain` and a verdict on a Direct card.
+ * `directHotBumpHintsV1.capabilityRootSeedsV1` is the REVERSE one, recovering
+ * the same eight seeds out of the root account's own immutable header, and its
+ * fixture is emitted by `crates/dclutch-operator`'s vector test through the
+ * Rust seed constructors. So the agreement below is between two independent
+ * paths out of the chain's own author, and neither is this file.
+ */
+describe('the addresses a Market determines', () => {
+  const vector = JSON.parse(
+    readFileSync(new URL('../fixtures/direct-hot-bump-hints.json', import.meta.url), 'utf8'),
+  ) as Readonly<{ tradingProgram: string; market: string; generation: string; capabilityRootHeaderHex: string }>;
+  const seedBytes = (value: string): Uint8Array =>
+    Uint8Array.from(value.match(/../g) ?? [], (pair) => Number.parseInt(pair, 16));
+
+  it('names the capability root the root header’s own seeds reproduce', () => {
+    const seeds = capabilityRootSeedsV1(seedBytes(vector.capabilityRootHeaderHex));
+    expect(seeds).toHaveLength(8);
+    // The header's Market is the vector's Market: without this the agreement
+    // below could hold between two readings of the same header.
+    expect(new PublicKey(seeds[1]!).toBase58()).toBe(vector.market);
+    const reverse = PublicKey.findProgramAddressSync(
+      seeds as Uint8Array[], new PublicKey(vector.tradingProgram),
+    )[0].toBase58();
+
+    const forward = capabilityRootAddressV1(
+      vector.tradingProgram,
+      vector.market,
+      BigInt(vector.generation),
+      seeds[3]!,
+      Object.freeze({ index: u16(seeds[4]!, 0), kind: seeds[5]!, programSet: seeds[6]!, config: seeds[7]! }),
+    );
+    expect(forward).toBe(reverse);
+
+    // Proved red-able: every seed past the domain is load-bearing, so a
+    // neighbouring entry index is a DIFFERENT account and not a rounding.
+    const neighbour = capabilityRootAddressV1(
+      vector.tradingProgram,
+      vector.market,
+      BigInt(vector.generation),
+      seeds[3]!,
+      Object.freeze({ index: u16(seeds[4]!, 0) + 1, kind: seeds[5]!, programSet: seeds[6]!, config: seeds[7]! }),
+    );
+    expect(neighbour).not.toBe(forward);
+  });
+
+  /**
+   * The singleton mask, which is a chain rule and not a convenience.
+   *
+   * `authenticate_ledger_controller` refuses a writable Trading-owned ledger
+   * whose mask holds the acted-on entry's bit together with anything else, so
+   * a controller ledger's whole selection is one bit and its address is a
+   * function of the entry index. Nothing else about a funding ledger is
+   * derivable from a Market, and the hostiles below are the boundary.
+   */
+  it('derives a controller funding ledger from the entry index alone', () => {
+    const manifestId = new Uint8Array(32).fill(3);
+    const market = new PublicKey(new Uint8Array(32).fill(7)).toBase58();
+    const trading = new PublicKey(new Uint8Array(32).fill(13)).toBase58();
+    expect(capabilityEntryLedgerMaskV2(0)).toBe(1);
+    expect(capabilityEntryLedgerMaskV2(3)).toBe(8);
+    const first = capabilityFundingLedgerAddressV2(trading, market, BigInt(2), manifestId, capabilityEntryLedgerMaskV2(0));
+    const fourth = capabilityFundingLedgerAddressV2(trading, market, BigInt(2), manifestId, capabilityEntryLedgerMaskV2(3));
+    expect(first).not.toBe(fourth);
+    // A generation is part of the address, so a re-founded Market's ledger is
+    // a different account rather than the same one reused.
+    expect(capabilityFundingLedgerAddressV2(trading, market, BigInt(1), manifestId, 1)).not.toBe(first);
+
+    expect(() => capabilityEntryLedgerMaskV2(-1)).toThrow(/entry index is/);
+    expect(() => capabilityEntryLedgerMaskV2(MAX_CAPABILITIES_V1)).toThrow(/entry index is/);
+    expect(() => capabilityFundingLedgerAddressV2(trading, market, BigInt(2), manifestId, 0)).toThrow(/nonzero u16/);
+    expect(() => capabilityFundingLedgerAddressV2(trading, market, BigInt(2), manifestId, 0x1_0000)).toThrow(/nonzero u16/);
+    expect(() => capabilityFundingLedgerAddressV2(trading, market, BigInt(-1), manifestId, 1)).toThrow(/generation is a u64/);
+    expect(() => capabilityFundingLedgerAddressV2(trading, market, BigInt(2), new Uint8Array(32), 1)).toThrow(/reserved all-zero identity/);
+    expect(() => capabilityFundingLedgerAddressV2(trading, market, BigInt(2), new Uint8Array(31).fill(3), 1)).toThrow(/identity is 32 bytes/);
   });
 });
