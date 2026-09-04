@@ -4637,3 +4637,6 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   31/31 ×3, worst headroom 125,759 CU; frames identical. Owed: two `map_err(|_| Geometry)` sites that discarded the cause.
   The general-hot nested lock resolved and committed by the orchestrator.
 - Cuts: `f6bd0d7a1`, `f512da0ec`.
+- Started 10:00 EDT: PROGRAMS-16C **`(spawned)`** — the General family's four-action campaign on one founded market in one
+  bank (the first time in any harness); CAUSES **`(spawned)`** — the two Dealer release joins that discard the lifecycle
+  cause behind Geometry, and the class in host-only operators.
