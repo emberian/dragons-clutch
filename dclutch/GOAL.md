@@ -4990,3 +4990,19 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   candidate log lines. → PROGRAMS-16H **`(spawned)`** under a ruling consistent with 0021: the candidate's rent-refund
   beneficiary is the solver who funded it. Frames red (five commits, three lanes) — 16H's capture discharges them.
 - Cuts: `fc3ceaae3`, `8dfebb87e`, `e7d806b21`.
+
+### 2026-09-04 18:50 EDT — THE SIMPLIFICATION SWARM
+- Ember: "swarm out wider using Fable 5.1 subagents to review this project and change anything they wanna change, rewrite
+  anything they wanna rewrite, delete whatever they wanna delete — can we make this system way better and way simpler?";
+  the account rotated (14 hours of budget); "the agents don't need to wait for builds — rip and tear and converge later,
+  otherwise we serialize on the CPU/build lock". The tree today: 1.56 M lines — programs 308k / 13, crates 534k / 94,
+  formal 73k, tools 352k, apps 106k, packages 76k, docs 115k.
+- Eleven Fable makers, each in its own worktree on a `simplify/<domain>` branch off main, none editing the live tree, none
+  building programs or running suites (checks and filtered unit tests only), each writing `SIMPLIFY_<DOMAIN>.md` at its
+  worktree root: ARCHITECT (the map: what dClutch is at a third the size; the convergence order), TRADING, PROGRAMS (the
+  other twelve; which should exist), CRATES (94 → one per authority), OPERATORS (the 1,768 discard sites carry causes),
+  FORMAL (one ABI module per record; emitters per family), GATES (one `tools/gate` CLI), DRIVERS (one driver, one runbook,
+  one release tool), CLIENTS (one package; no twins), DOCS (GOAL.md an index; stores), GENERATIONS (superseded generations
+  deleted whole, tree-wide). A CONVERGE lane merges the branches, builds once, and runs every gate.
+- The three lanes the harness restart orphaned (RECOVERY-4, CLAIMS-18, PROGRAMS-16H) were resumed by message; they keep
+  main until the convergence.

@@ -1,6 +1,6 @@
 {
   "bound_bytes": 4096,
-  "commit": "c3c5f338355c6fe7459b53b2e00b87620b5811cc",
+  "commit": "272fb867d36aac86aeaa6c816637f6151ab7bb15",
   "link_count": 12,
   "links": [
     {
@@ -974,7 +974,7 @@
         },
         {
           "frames_bytes": [
-            768
+            832
           ],
           "symbol": "_ZN18dclutch_claims_sbf22claims_conservation_v126authenticate_custody_frame17h<hash>E"
         },
@@ -4330,7 +4330,7 @@
       "package": "dclutch-direct-aot-sbf"
     },
     {
-      "frame_count": 27,
+      "frame_count": 28,
       "functions": [
         {
           "frames_bytes": [
@@ -4361,6 +4361,12 @@
             0
           ],
           "symbol": "_ZN21dclutch_core_contract9ContentId3new17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            0
+          ],
+          "symbol": "_ZN31dclutch_general_accelerator_sbf12verify_cause17h<hash>E"
         },
         {
           "frames_bytes": [

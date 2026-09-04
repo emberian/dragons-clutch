@@ -411,7 +411,7 @@ export const CAPABILITY_ACTIONS_V1: ReadonlyArray<CapabilityActionV1> = Object.f
     NO_FAMILY,
     'No signature is requested, because nothing here can build this transaction.',
     [wall('No route renders a control for it and no browser module builds its transaction; the conservation contract owns the wire.', 'crates/dclutch-claims-conservation-contract'),
-     wall('The wire is absent on chain, not merely unbuilt here: the contract declares magic DCLCNS01 and the Claims program has no handler that dispatches it, which the operator planner records in its own words.', 'crates/dclutch-operator/src/claims_conservation_v1.rs')]),
+     wall('The handler now exists and still cannot complete, which is a harder wall than the missing one this used to name: Claims dispatches DCLCNS01, and the route reads its aggregate as LBV2 and then as an economic slice, two account families whose magics differ, so a conserving split on a founded refunding market refuses 0x5005 Economic and the same frame with an economic-slice aggregate refuses 0x5002 Identity.', 'programs/dclutch-claims-sbf/program-test/fractional-atomic/tests/claims_conservation.rs')]),
   action('claims.represent', 'claim', 'Claims', 'Denominate or reconstitute a rational representation', null, 'observed-market',
     NO_ANCHORS,
     NO_ROUTE,
