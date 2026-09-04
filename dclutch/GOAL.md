@@ -5018,3 +5018,15 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   in the Custody HoardPrincipal vault; one LBV2 complete-set executor shared by signed_delta, affine_batch and conservation
   — CLAIMS-19, AFTER the swarm converges (no more Claims work on main under the swarm). Frames corroborated identical.
 - Cuts: `224a3667d`, `f51e153eb`, `1b453e234`.
+- SIMPLIFY-ARCHITECT closed (branch `simplify/architect`, `d706c08b5`/`72557741f`/`123faad77`; the map at
+  docs/design/SIMPLIFICATION_MAP_2026_09_04.md on that branch, 589 lines): **programs 12 → 7** (registry, core+rent, custody,
+  resolution, claims, trading, ONE accelerator — direct-aot and product-runtime-v2 unshipped; dealer-accelerator and
+  series-shadow fold into the one accelerator — the two shipped-links tables DISAGREE about them, a finding); **crates 94 →
+  ~18** (one per authority per layer; `operator` absorbs 16; one `dclutch-wasm` for eight cdylibs); **packages 2 → 1** (the
+  web imports the SDK; 129 byte-identical copies remain); **tools 37 entries / 55 workspaces / 5 languages → 6 in one
+  workspace**; Lean one emitter per record (105 → per record). **A deletion ledger of ≈0.44 M lines needing NO rewrite**:
+  lockfiles 268k (71 lockfiles — a sixth of the tree), eight checked-in .wasm 81k, the web twin 39k, unshipped programs
+  ~20k, unrun tools ~30k; target total 0.5–0.6 M. The digit census finds STACKING not death (every two-digit magic family
+  is live). Convergence order: generations → programs → crates → gates/successor → clients → docs; one build-and-gate
+  pass with every ELF's sha256 against pre-swarm (byte-identical links owe no rows). §1.7 lists what cohort-17 must keep.
+- Cuts: `bbc825dc4`.
