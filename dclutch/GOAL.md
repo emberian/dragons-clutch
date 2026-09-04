@@ -4173,3 +4173,6 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   every one cited at HEAD), history byte-identical below a `## History` fold; settled: 0023 IS applied on the Dealer route
   (the slot-free digest is why Trading's half of the 15,000 draw is minable); §4's read commit was 62a0b7fb5.
 - Cuts: `76d611b3f`.
+- Started 22:00 EDT: ACTS **`ae47a56bcd96728d6`** (every capability act declares its routes, derived from its compiler; the
+  verdicts derive from the machines; the strict accessibility count regenerated) and ABORT-WITNESS **`aeef8d6505f7fc27d`**
+  (the expired-source abort lane witnessed again; the remaining never-executed routes dispositioned; a clean tier-1 timing).
