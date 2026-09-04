@@ -4516,3 +4516,13 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   → COHORT-15F **`(spawned)`**: the planner recovers the funded rate from a ledger's own lamports (exact or refuse), the
   stranger paid on market 3, market 1 retired — no redeploy needed if the deployed Core reads as the lane says.
 - Cuts: `d83f7dc0b`, `eeed62463`.
+- WITNESS-3 closed (`4c5ecb423`, genref `7d54c560d`): the census folds integer `const` expressions to a fixpoint SCOPED BY
+  THE DECLARING FILE'S IMPORTS (`REQUEST_BYTES` is declared five times with four values) — Retire's four routes select by
+  592 / 808 / 2,152 bytes, 592 confirmed by the chain; `DCLTGMF3` was one hop deeper than the census looked (a predicate
+  delegating its whole parameter to one decode) — 15 routes gain 17 selectors, nothing lost; cohorts 13/14/15 re-discovered
+  (`--check` 60 → 78 routes); **thirteen falsified blocking entries deleted with their witnesses — the falsified-block table
+  is empty for the first time**; devnet class 40 → 42; undriven 34 → 32. **New finding: `core/retire_v1::process#Retire`
+  needs a 2,152-byte instruction — above the 1,232 packet, no CPI builds it: retirement's finish may be structurally
+  undrivable as shipped** → COHORT-15F told before it spends. Started 07:00 EDT: PROGRAMS-16B (General's one lifecycle
+  policy across fifteen actions; the ladder founded the way the founding founds).
+- Cuts: `df2eabdb2`.
