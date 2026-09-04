@@ -4400,3 +4400,12 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Started 03:30 EDT: RUNBOOK **`af5cb49fba92b9e51`** — the attractor's one cohort runbook: `tools/cohort/` with a union
   steps.tsv (`since`/`until`), a cohort manifest, one preflight, and a stage-script generator diffed against cohort-15's
   hand-written scripts (the two old directories frozen, not edited, while COHORT-15D is live).
+- RUNBOOK closed (`7f2ce316b`): **`tools/cohort/` — 25 rows with `since`/`until`/`replaces`, `--prove-frozen` reproduces both
+  old files byte for byte**; manifests `cohorts/14.json` and `15.json` (sixteen literals out of the rows; the RPC url as an
+  env var NAME, never a URL; an unresolved field refuses); a stage-script generator emits 22 scripts with 0 absolute paths and
+  0 credentials that refuse to write beside a hand-written one; the corpus measured: 33 hand scripts, 82 absolute paths, 23
+  into a deletable scratch, **134 flags and four structural shapes (bounded wait, attempt loop, guard-exits, peer-chaining)
+  the rows do not carry**; three rows executed with no script (activate-general, openbatch, route-witness); **no retire
+  row exists** though market 1 began retiring; 15 tests red-proven, three of the proofs' own defects fixed. Owed: CI wiring
+  (after COHORT-15D releases run.sh), the flags, the retire row, the General market address in the manifest.
+- Cuts: `753997831`, `81ffef323`.

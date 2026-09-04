@@ -1,5 +1,12 @@
 # The cohort-14 runbook
 
+> **FROZEN until cohort-15 closes; superseded by `tools/cohort/`.** The rows
+> here are now data in `tools/cohort/steps.tsv`, carrying `since` and `until`,
+> and `tools/cohort/check-steps.py --prove-frozen` is the standing proof that
+> this file is reproduced from them exactly. Change a row THERE, not here.
+> This file stays because its prose — the hazard behind each row — is not in
+> the table.
+
 **Nothing here is authorization.** The devnet deploy grant in `AGENTS.md` is
 standing and this document assumes it; every other act names its own condition.
 `preflight.sh` runs offline, signs nothing, and reads no keypair.
