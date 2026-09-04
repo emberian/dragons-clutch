@@ -4397,3 +4397,6 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   `STATE_MAGIC` (the last one; the web generator already renames it on the way out — the tell); associated consts are
   invisible to both magic gates.
 - Cuts: `78137b78f`, `2c5fc2724`.
+- Started 03:30 EDT: RUNBOOK **`af5cb49fba92b9e51`** — the attractor's one cohort runbook: `tools/cohort/` with a union
+  steps.tsv (`since`/`until`), a cohort manifest, one preflight, and a stage-script generator diffed against cohort-15's
+  hand-written scripts (the two old directories frozen, not edited, while COHORT-15D is live).
