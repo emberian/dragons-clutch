@@ -4279,3 +4279,6 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   genref's local-validator control strips comments and follows one level of invocation (red-proven). Reference converged
   (34fc57ba8). Owed: `dcltgmf3-whole` under-pinned (two of three draws above its pin; left green with the draws recorded).
 - Cuts: `3f597286a`.
+- Started 01:20 EDT: WEB-SUCCESSOR **`adf0b6d1fd9ea1532`** (DCLTSRS1/DCLTCFS1 decoders with zero live instances — dead or
+  producer-missing, decided by reading; the client's magics swept against both cohorts) and LEAN-TAGS **`ab1397843061a83c5`**
+  (Lean owners for the four machines' tags; emission census 96 → 100; the SDK generator's Rust-scrape arm retired).
