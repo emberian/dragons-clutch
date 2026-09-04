@@ -28,6 +28,12 @@
 import { PublicKey } from '@solana/web3.js';
 
 import {
+  STATE_MACHINE_RECORDS_V1,
+  type StateMachineRecordV1,
+  type StateMachineV1,
+} from '@dclutch/sdk/generated/stateMachinesV1';
+
+import {
   CAPABILITY_ENTRY_BYTES_V1,
   CAPABILITY_FUNDING_QUOTE_AMOUNTS_OFFSET_V1,
   CAPABILITY_FUNDING_QUOTE_BINDING_OFFSET_V1,
@@ -850,6 +856,21 @@ export type RecordSpec = Readonly<{
   width: RecordWidth;
   fields: ReadonlyArray<RecordField>;
   /**
+   * A discriminant that lives in every ROW rather than in the header.
+   *
+   * The funding ledger is the only record that has one, and a flat field
+   * cannot reach it: offset zero of a slot is offset 48, 120, 192 … of the
+   * account, so declaring it in `fields` would read the magic and call the
+   * answer a state. It is declared here instead and decoded once per row.
+   */
+  rowDiscriminant?: Readonly<{
+    label: string;
+    /** Where the tag sits INSIDE one row, not inside the account. */
+    offset: number;
+    strideBytes: number;
+    tags: ReadonlyArray<EnumTag>;
+  }>;
+  /**
    * Why the field list is empty or partial, when it is. A record whose module
    * emitted no offsets is still identified — it just says so here rather than
    * showing fields nobody emitted.
@@ -1272,7 +1293,10 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
       field('Reserved', CAPABILITY_FUNDING_LEDGER_RESERVED_OFFSET_V2, 'reserved'),
       field('Manifest identity', CAPABILITY_FUNDING_LEDGER_MANIFEST_ID_OFFSET_V2, 'identity'),
     ],
-    note: 'How many rows there are is the number of bits set in the mask, not a count the record stores.',
+    // The slot status is the `funding-ledger` state machine, and it is one row
+    // deep. Looked up by this record's own magic so the two never disagree.
+    rowDiscriminant: rowDiscriminantForMagicV1(CAPABILITY_FUNDING_LEDGER_MAGIC_V2),
+    note: 'How many rows there are is the number of bits set in the mask, not a count the record stores. Each row carries its own status, and every one of them is shown.',
   },
   {
     magic: CAPABILITY_FUNDING_STATE_MAGIC_V1,
@@ -1340,7 +1364,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
     name: 'Capability root',
     family: 'Capability',
     summary: 'One capability as it exists on one market, carrying the manifest entry it runs as.',
-    width: { kind: 'header-only', headerBytes: CAPABILITY_ROOT_HEADER_BYTES_V1, note: 'the rest of the record is defined by the capability family that owns it' },
+    width: { kind: 'header-only', headerBytes: CAPABILITY_ROOT_HEADER_BYTES_V1, note: 'the rest of the record is defined by the capability family that owns it, and is decoded separately when that tail opens with a magic this explorer renders' },
     fields: [
       version(CAPABILITY_ROOT_SCHEMA_VERSION_OFFSET),
       field('Artifact profile', CAPABILITY_ROOT_PROFILE_OFFSET, 'u16'),
@@ -2286,6 +2310,145 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
   },
 ]);
 
+// ------------------------------------------------ the persisted state machines
+
+/**
+ * What each persisted state machine IS, in one sentence.
+ *
+ * `STATE_MACHINE_RECORDS_V1` carries the magic, the width, the pinned header
+ * words, the tag offset and every state; what a generated table cannot carry is
+ * what the record is FOR, which is the one thing a reader looking at an
+ * unfamiliar account actually needs. So the sentences are written here and
+ * nothing else is.
+ *
+ * The map is total over the generated union deliberately: a machine added to
+ * the Rust census arrives here as a type error until somebody writes its
+ * sentence, rather than as a record that renders with a blank summary.
+ */
+const STATE_MACHINE_SUMMARIES: Readonly<Record<StateMachineV1, string>> = Object.freeze({
+  'direct-root': 'Whether one market’s Direct capability is still opening maker roots, and how many of those roots are still open. It is not the market’s phase: a Market stays Open across the whole of this record’s retirement.',
+  'dealer-root': 'The Dealer capability’s own lifecycle on one market, which runs on its own clock rather than on the market’s phase.',
+  'dealer-checkpoint': 'One durable Dealer scenario preparation, from collecting its inputs through evaluation and reservation to a committed result.',
+  'dealer-reservation': 'One per-effect Dealer custody reservation: still active, rolled back, or activated.',
+  'projected-custody': 'How far one projected-custody ladder has come: initialized, hoard open, hoard locked, or funded from its source.',
+  'series-ticket': 'One occurrence ticket’s replay state — prepared, consumed, or expired — which is what stops a series occurrence being replayed.',
+  'funding-ledger': 'Which capabilities one controller is funding, and where each funded slot stands.',
+  'source': 'Where one Source stands in resolution: still on its primary, in recovery, resolved, exhausted, committed to failure, or retired.',
+});
+
+/** One machine's states as render tags, in the order its own decoder admits them. */
+function stateMachineTags(row: StateMachineRecordV1): ReadonlyArray<EnumTag> {
+  return Object.freeze(row.states.map((state) => Object.freeze({ tag: state.tag, name: state.state })));
+}
+
+/**
+ * The discriminant one machine keeps in each ROW, when its record has rows.
+ *
+ * `undefined` for the seven machines whose record has an exact width — for
+ * those the tag is an ordinary header field and belongs in `fields`.
+ */
+function stateMachineRowDiscriminant(row: StateMachineRecordV1): RecordSpec['rowDiscriminant'] {
+  if (row.headerBytes === null || row.rowBytes === null) return undefined;
+  return Object.freeze({
+    label: `${row.machine} slot`,
+    offset: row.tagOffset,
+    strideBytes: row.rowBytes,
+    tags: stateMachineTags(row),
+  });
+}
+
+/** The per-row discriminant the generated table gives one magic, if it gives one. */
+function rowDiscriminantForMagicV1(magic: string): RecordSpec['rowDiscriminant'] {
+  const row = STATE_MACHINE_RECORDS_V1.find((entry) => entry.magic === magic);
+  return row === undefined ? undefined : stateMachineRowDiscriminant(row);
+}
+
+/**
+ * What one machine's record publishes: its pinned schema words, its
+ * discriminant, and the lifecycle counters that travel beside it.
+ *
+ * Every number is read off the row. The first pinned word is the schema
+ * version every canonical record opens with; a machine that pins a second word
+ * beside it — the Series ticket pins its profile — gets that word shown rather
+ * than renamed.
+ */
+function stateMachineFields(row: StateMachineRecordV1): ReadonlyArray<RecordField> {
+  const header = row.header.map(([offset], index) =>
+    index === 0 ? version(offset) : field('Pinned header word', offset, 'u16'));
+  const counters = row.counters.map((counter) => field(counter.field, counter.offset, 'u64'));
+  // A discriminant one row deep is declared as `rowDiscriminant` instead, so
+  // it is absent from the flat list rather than pointed at the wrong bytes.
+  const discriminant = stateMachineRowDiscriminant(row) === undefined
+    ? [field(row.discriminant, row.tagOffset, 'enum', { tags: stateMachineTags(row) })]
+    : [];
+  return Object.freeze([...header, ...discriminant, ...counters]);
+}
+
+/**
+ * Every persisted state machine the hand-written table above does not already
+ * render, as a spec derived entirely from the generated table.
+ *
+ * These eight discriminants are the ones a route gate can be over that the
+ * Market's own phase cannot answer, and until now the explorer rendered none of
+ * them: an account carrying a Source resolution state, a Series ticket or a
+ * Dealer checkpoint came back as "the protocol declares no record with the
+ * magic DCLT…". They arrive here by regeneration, not by hand — a state added
+ * to a Rust enum shows up as a named tag, and a state removed turns a byte that
+ * used to decode into an unnamed one.
+ *
+ * A machine whose magic the table above already carries keeps that spec: a
+ * hand-written field map is strictly more than a discriminant, and two specs
+ * for one magic is the ambiguity `explorerCoverage.test.ts` forbids. The
+ * funding ledger is that case today, and it takes its slot discriminant from
+ * this same table.
+ */
+function stateMachineSpecsV1(rendered: ReadonlyArray<RecordSpec>): ReadonlyArray<RecordSpec> {
+  const already = new Set(rendered.map((spec) => magicText(spec.magic)));
+  const specs: RecordSpec[] = [];
+  for (const row of STATE_MACHINE_RECORDS_V1) {
+    if (already.has(row.magic)) continue;
+    const rowDiscriminant = stateMachineRowDiscriminant(row);
+    let width: RecordWidth;
+    if (row.bytes !== null) {
+      width = Object.freeze({ kind: 'fixed' as const, bytes: row.bytes });
+    } else if (row.headerBytes !== null && rowDiscriminant !== undefined) {
+      // No `header-and-rows`: that shape reads a row count off the wire, and
+      // this record sends none. The count is the width, and it is derived.
+      width = Object.freeze({
+        kind: 'header-only' as const,
+        headerBytes: row.headerBytes,
+        note: `one ${rowDiscriminant.strideBytes}-byte slot per selected manifest entry; the account carries no row count and the reader derives it from the width`,
+      });
+    } else {
+      // A row that declares neither an exact width nor a row stride cannot be
+      // sized at all, and a spec that guessed one would be the invention this
+      // whole table exists to avoid. `stateMachineRecords.test.ts` fails if the
+      // generated table ever produces one, so this is a refusal and not a hole.
+      continue;
+    }
+    specs.push(Object.freeze({
+      magic: row.magic,
+      name: row.record,
+      family: row.machine,
+      summary: STATE_MACHINE_SUMMARIES[row.machine],
+      width,
+      fields: stateMachineFields(row),
+      rowDiscriminant,
+      note: `Only the discriminant and the pinned schema words are published for this record. ${row.record} is emitted from ${row.authority}, which states no full field map, so the rest of its bytes are left unread rather than guessed.`,
+    }));
+  }
+  return Object.freeze(specs);
+}
+
+/**
+ * Everything the explorer renders: the table above, and every state machine it
+ * did not already carry.
+ */
+const RENDERED_SPECS: ReadonlyArray<RecordSpec> = Object.freeze([
+  ...RECORD_RENDERERS,
+  ...stateMachineSpecsV1(RECORD_RENDERERS),
+]);
+
 // -------------------------------------------------------------------- decoding
 
 /** The eight-byte magic as text, whichever form the generated module used. */
@@ -2295,12 +2458,12 @@ export function magicText(magic: string | Uint8Array): string {
 }
 
 const BY_MAGIC: ReadonlyMap<string, RecordSpec> = new Map(
-  RECORD_RENDERERS.map((spec) => [magicText(spec.magic), spec]),
+  RENDERED_SPECS.map((spec) => [magicText(spec.magic), spec]),
 );
 
 /** Every rendered record, for the coverage table and the schema browser. */
 export function renderedRecords(): ReadonlyArray<RecordSpec> {
-  return RECORD_RENDERERS;
+  return RENDERED_SPECS;
 }
 
 /** The magic at the head of `data`, as text, when the leading bytes are printable. */
@@ -2324,6 +2487,32 @@ export function specForData(data: Uint8Array): RecordSpec | null {
 /** The spec for a magic given as text. */
 export function specForMagic(magic: string): RecordSpec | null {
   return BY_MAGIC.get(magic) ?? null;
+}
+
+/**
+ * The family record that follows a capability root's header, and where it
+ * starts.
+ *
+ * `specForData` dispatches on the magic at byte zero, so it can never reach a
+ * record that is not an account's first. Two of the persisted state machines
+ * are exactly that: the Direct root's mutable lifecycle tail and the Dealer
+ * root's own tail sit AFTER the composite capability-root header, and an
+ * account carrying either rendered as a capability root with nothing behind it
+ * — the reader was shown the wrapper and never the state.
+ *
+ * The header width is `directInlineV3.ts`'s fact and is imported, not restated.
+ * A tail whose magic this explorer does not render is `null` rather than a
+ * guess: the capability root's own note already says the tail belongs to
+ * whichever family owns it.
+ */
+export function trailingRecordForData(data: Uint8Array): Readonly<{ offset: number; spec: RecordSpec }> | null {
+  if (leadingMagic(data) !== magicText(CAPABILITY_ROOT_MAGIC_V1)) return null;
+  const offset = CAPABILITY_ROOT_HEADER_BYTES_V1;
+  if (data.length <= offset) return null;
+  const magic = leadingMagic(data.subarray(offset));
+  if (magic === null) return null;
+  const spec = BY_MAGIC.get(magic);
+  return spec === undefined ? null : Object.freeze({ offset, spec });
 }
 
 export type DecodedFieldValue =
@@ -2356,6 +2545,11 @@ export type DecodedRows = Readonly<{
   offset: number;
   /** Rows are shown as u64 scalars when the stride is exactly eight bytes. */
   scalars: ReadonlyArray<string> | null;
+  /**
+   * One named state per row, for a record whose discriminant lives in its rows.
+   * `null` for every record whose rows carry no discriminant.
+   */
+  states: ReadonlyArray<Readonly<{ row: number; tag: number; name: string | null }>> | null;
 }>;
 
 export type DecodedRecord = Readonly<{
@@ -2579,10 +2773,35 @@ export function decodeAgainstSpec(spec: RecordSpec, data: Uint8Array): DecodedRe
       expected = `exactly ${spec.width.bytes} bytes`;
       ok = data.length === spec.width.bytes;
       break;
-    case 'header-only':
-      expected = `at least ${spec.width.headerBytes} bytes (${spec.width.note})`;
-      ok = data.length >= spec.width.headerBytes;
+    case 'header-only': {
+      const { headerBytes } = spec.width;
+      expected = `at least ${headerBytes} bytes (${spec.width.note})`;
+      ok = data.length >= headerBytes;
+      const perRow = spec.rowDiscriminant;
+      if (perRow === undefined || !ok) break;
+      // The row count IS the width: this record sends no count, so a body that
+      // is not a whole number of rows is a disagreement rather than a rounding.
+      const body = data.length - headerBytes;
+      const whole = body % perRow.strideBytes === 0;
+      const count = whole ? body / perRow.strideBytes : 0;
+      expected = `${headerBytes} bytes and a whole number of ${perRow.strideBytes}-byte rows${whole ? ` — ${count} here` : ''}`;
+      ok = whole;
+      rows = Object.freeze({
+        label: perRow.label,
+        count,
+        strideBytes: perRow.strideBytes,
+        offset: headerBytes,
+        scalars: null,
+        states: Object.freeze(
+          Array.from({ length: count }, (_unused, index) => {
+            const tag = data[headerBytes + index * perRow.strideBytes + perRow.offset];
+            const named = perRow.tags.find((entry) => entry.tag === tag) ?? null;
+            return Object.freeze({ row: index, tag, name: named?.name ?? null });
+          }),
+        ),
+      });
       break;
+    }
     case 'action-classes': {
       if (selected === null) {
         const named = spec.width.classes.map((entry) => entry.name).join(', ');
@@ -2612,6 +2831,7 @@ export function decodeAgainstSpec(spec: RecordSpec, data: Uint8Array): DecodedRe
         strideBytes,
         offset: headerBytes,
         scalars: null,
+        states: null,
       });
       break;
     }
@@ -2634,7 +2854,7 @@ export function decodeAgainstSpec(spec: RecordSpec, data: Uint8Array): DecodedRe
               ),
             )
           : null;
-      rows = Object.freeze({ label: rowLabel, count, strideBytes, offset: headerBytes, scalars });
+      rows = Object.freeze({ label: rowLabel, count, strideBytes, offset: headerBytes, scalars, states: null });
       break;
     }
   }

@@ -1,6 +1,12 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { describe, expect, it } from 'vitest';
 
 import * as coverage from '../scripts/explorer-coverage.mjs';
+
+const webRoot = fileURLToPath(new URL('..', import.meta.url));
 import { decodeAgainstSpec, headerEndOf, magicText, renderedRecords, specForMagic } from './explorer/accountRecords';
 import { instructionRenderers } from './explorer/instructions';
 
@@ -20,6 +26,9 @@ const surveyRecordMagics = coverage.surveyRecordMagics as () => ReadonlyArray<
 >;
 const surveyInstructionMagics = coverage.surveyInstructionMagics as () => ReadonlyArray<
   Readonly<{ magic: string; routes: ReadonlyArray<Readonly<{ routeId: string }>> }>
+>;
+const surveyStateMachineMagics = coverage.surveyStateMachineMagics as () => ReadonlyArray<
+  Readonly<{ machine: string; magic: string }>
 >;
 
 /**
@@ -91,10 +100,58 @@ describe('explorer coverage', () => {
 
 describe('the render map itself', () => {
   it('names no magic the generated modules do not declare', () => {
-    const declared = new Set(surveyRecordMagics().map((entry) => entry.magic));
+    // Two emission authorities, because the browser imports from two: this
+    // tree's `lib/generated/`, and the SDK's generated state-machine table,
+    // whose eight magics are declared nowhere here.
+    const declared = new Set([
+      ...surveyRecordMagics().map((entry) => entry.magic),
+      ...surveyStateMachineMagics().map((entry) => entry.magic),
+    ]);
     for (const spec of renderedRecords()) {
       expect(declared.has(magicText(spec.magic)), `${magicText(spec.magic)} is rendered but not emitted`).toBe(true);
     }
+  });
+
+  /**
+   * The arm above cannot defend the eight machine magics, and saying so is the
+   * point.
+   *
+   * `surveyStateMachineMagics()` reads the same emitted table the render map
+   * derives its specs from, so for those eight the check is circular: it can
+   * only agree with itself. What is NOT circular is the table's own gate —
+   * `abi:state-machines:verify` regenerates it from each machine's Rust and
+   * byte-compares — and that gate lives in the SDK, where this suite would
+   * never notice it disappearing. So this asserts the gate exists, which is
+   * the same question `abi-coverage.mjs` asks of every module in this tree,
+   * asked across the package boundary by the tree that depends on the answer.
+   */
+  it('depends on a table the SDK actually gates', () => {
+    const manifest = JSON.parse(readFileSync(join(webRoot, '..', '..', 'packages', 'dclutch-sdk', 'package.json'), 'utf8')) as
+      Readonly<{ scripts: Readonly<Record<string, string>> }>;
+    const module = 'lib/generated/stateMachinesV1.ts';
+    const writer = Object.entries(manifest.scripts).find(([name, command]) =>
+      name.startsWith('abi:') && !name.endsWith(':verify') && command.includes('generate-state-machines'));
+    const verifier = Object.entries(manifest.scripts).find(([name, command]) =>
+      name.endsWith(':verify') && command.includes('generate-state-machines') && command.includes('--check'));
+    expect(writer, `no SDK script writes ${module}`).toBeDefined();
+    expect(verifier, `nothing byte-checks ${module}, so the eight machine magics have no authority behind them`).toBeDefined();
+    // The generator names its own output, which is what makes the verifier
+    // above a check on THIS module rather than on some other one.
+    const generator = readFileSync(
+      join(webRoot, '..', '..', 'packages', 'dclutch-sdk', 'scripts', 'generate-state-machines-v1.mjs'), 'utf8');
+    expect(generator).toContain(module);
+  });
+
+  it('renders every persisted state machine the generated table declares', () => {
+    // The same ratchet the record survey holds, for the eight discriminants a
+    // route gate can be over that the Market's phase cannot answer. Before
+    // 2026-09-04 the explorer rendered one of the eight, and an account
+    // carrying any of the others came back as an unknown magic.
+    const rows = surveyStateMachineMagics();
+    // A survey that matched nothing would make the loop below vacuous.
+    expect(rows.length).toBeGreaterThanOrEqual(8);
+    const unrendered = rows.filter((row) => specForMagic(row.magic) === null).map((row) => row.machine);
+    expect(unrendered, 'derive its spec from STATE_MACHINE_RECORDS_V1 in lib/explorer/accountRecords.ts').toEqual([]);
   });
 
   it('names no census route that does not exist', () => {

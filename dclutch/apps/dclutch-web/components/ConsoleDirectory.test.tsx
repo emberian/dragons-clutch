@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import ConsoleDirectory from './ConsoleDirectory';
 import { browserActPrerequisitesV1, BROWSER_CAPABILITY_STANDINGS_V1 } from '@/lib/capabilitySurface';
+import { machineGateCoverageV1, machineGateSentenceV1 } from '@dclutch/sdk/stateMachines';
 
 /**
  * The directory, held to the model it is generated from.
@@ -20,6 +21,29 @@ describe('the console index', () => {
   const html = renderToStaticMarkup(<ConsoleDirectory />);
   const listed = BROWSER_CAPABILITY_STANDINGS_V1.filter((standing) => standing.venue !== 'no-venue');
   const walled = BROWSER_CAPABILITY_STANDINGS_V1.filter((standing) => standing.venue === 'no-venue');
+
+  /**
+   * The machine coverage the page prints, checked against the tables it is
+   * computed from rather than against its own words.
+   *
+   * The sentence is derived on every render, so asserting the text back would
+   * be the defect the docblock above describes. What is asserted is that the
+   * page carries exactly what the model computes -- including the empty
+   * intersection, which is the finding and not a blank.
+   */
+  it('prints the machine coverage its own tables compute, empty intersection and all', () => {
+    const coverage = machineGateCoverageV1(BROWSER_CAPABILITY_STANDINGS_V1.map((one) => one.action));
+    // React escapes the apostrophe in the possessive, so the comparison is
+    // against the page's TEXT and not its markup. Asserting the escaped form
+    // instead would pin an HTML-serializer detail as if it were the sentence.
+    const text = html.replaceAll('&#x27;', "'").replaceAll('&amp;', '&');
+    expect(text).toContain(machineGateSentenceV1(coverage));
+    expect(coverage.decodable).toEqual(coverage.machines);
+    for (const machine of coverage.machines) expect(text).toContain(machine);
+    // No figure is typed on the page, so a changed table changes the sentence
+    // and this case follows it instead of pinning last week's number.
+    expect(text).not.toContain('6 of 6');
+  });
 
   it('has both kinds of act to speak about at all', () => {
     // A model that lost its acts would make every assertion below vacuous.

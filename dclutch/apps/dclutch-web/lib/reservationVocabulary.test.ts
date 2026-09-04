@@ -4,7 +4,8 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { renderedRecords, magicText } from './explorer/accountRecords';
+import { renderedRecords, magicText, specForMagic } from './explorer/accountRecords';
+import { STATE_MACHINE_RECORDS_V1 } from '@dclutch/sdk/generated/stateMachinesV1';
 
 /**
  * Reservations are declared, not conserved — and the browser must say so.
@@ -157,6 +158,7 @@ describe('a declared ceiling is never rendered as solvency', () => {
   });
 
   it('describes the registered records without borrowing the word', () => {
+    let checked = 0;
     for (const spec of renderedRecords()) {
       if (spec.family !== 'Direct') continue;
       const prose = `${spec.summary} ${spec.note ?? ''}`.toLowerCase();
@@ -166,6 +168,45 @@ describe('a declared ceiling is never rendered as solvency', () => {
           `the explorer's ${magicText(spec.magic)} spec says "${word}"; the record declares a ceiling and holds nothing.`,
         ).toBe(false);
       }
+      checked += 1;
     }
+    // A family filter that stopped matching would pass this silently, which is
+    // exactly how the arm below came to be needed.
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  /**
+   * The same vocabulary, over the eight persisted state machines.
+   *
+   * The arm above filters `family === 'Direct'`, and the machine records carry
+   * their MACHINE label as their family (`direct-root`, `projected-custody`),
+   * so every one of their summaries fell outside it the moment they were
+   * added. That was checked by eye once, which is not a gate; this is.
+   *
+   * The exemption is derived rather than listed: a word that is one of this
+   * machine's own state NAMES is the machine speaking, not a claim about
+   * solvency. `projected-custody` genuinely has a `HoardLocked` and
+   * `dealer-checkpoint` a `Reserved`, and a summary that cannot name its own
+   * states is not a summary. The exemption is per machine and reaches no
+   * further, so a Source summary still may not say `locked`.
+   */
+  it('describes every persisted state machine without borrowing the word', () => {
+    let checked = 0;
+    for (const row of STATE_MACHINE_RECORDS_V1) {
+      const spec = specForMagic(row.magic);
+      expect(spec, `${row.machine} is not rendered`).not.toBeNull();
+      if (spec === null) continue;
+      const names = row.states.map((state) => state.state.toLowerCase());
+      const prose = `${spec.summary} ${spec.note ?? ''}`.toLowerCase();
+      for (const word of SOLVENCY_WORDS) {
+        if (names.some((name) => name.includes(word))) continue;
+        expect(
+          new RegExp(`\\b${word}\\b`).test(prose),
+          `the explorer's ${row.machine} spec says "${word}", and no state of that machine is named for it. A discriminant records where a lifecycle has got to; it holds nothing.`,
+        ).toBe(false);
+      }
+      checked += 1;
+    }
+    expect(checked).toBe(STATE_MACHINE_RECORDS_V1.length);
   });
 });

@@ -44,7 +44,7 @@ import {
  * says so; a machine whose bytes were refused says that instead, because those
  * are different facts and only the second is a defect.
  */
-function machineObservationTextV1(machines: ReadonlyArray<MachineObservationV1>): string {
+export function machineObservationTextV1(machines: ReadonlyArray<MachineObservationV1>): string {
   if (machines.length === 0) return '';
   return machines.map((machine) => {
     if (machine.state !== null) return ` · ${machine.machine} ${machine.state}`;

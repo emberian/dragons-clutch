@@ -4262,3 +4262,13 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   no generator — tools/cohort15 owns the rows and emits nothing** (the attractor's one-runbook thread); `preflight.py`
   still says 13 links where SHIPPED_LINKS is 12.
 - Cuts: `8e8c816db`, `b8e73d183`, `cfecd9130`.
+- DECODERS closed (`8cb4c2147` … `87c8065f5`, six commits): **eight machines decodable from zero** through one generator →
+  one gated table (`abi:state-machines:verify`) → one decoder module; the premise corrected — four machines have no Lean
+  owner and two have Lean offsets with hand-written tags, so the generator reads each machine's own hostile decoder for tags
+  cross-checked against declared discriminants; live on cohort-15: the Direct root's tail parsed (Open), two Sources
+  (Primary / Resolved) at derived addresses, two funding ledgers; `evaluateCapabilityV1` takes observations as a required
+  argument; the intersection of declared and other-machine routes is EMPTY before and after — **the lever located:
+  hot_v3.rs:3257 reads the Series ticket admission on the one route five acts declare, inside a branch the census does not
+  follow** → CENSUS-BRANCH **`(spawned)`**. Found: `localSuccessor.ts:183-184` decode DCLTSRS1/DCLTCFS1 — zero instances on
+  either live cohort (live records are DCLTSRS2/DCLTFL02). Thirteen mutations red-proven.
+- Cuts: `8973fee65`.

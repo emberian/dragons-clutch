@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { CORE_STATE_GENERATION_OFFSET } from './generated/coreFound';
+import { CAPABILITY_ROOT_HEADER_BYTES_V1 } from './generated/directInlineV3';
 import { routeMachineStatesV1 } from './generated/marketPhaseAdmissionV1';
 import { u64 } from './bytes';
 import { SolanaRpcClient } from './rpc';
@@ -51,8 +52,14 @@ const COHORT15_ACTIVATION_ROOT = 'FUJ9pNukWRb5658ysiDP5gz9gF3Hx8c4cU2mUrvELAWG';
 /** The Trading capability funding ledger of the same cohort. */
 const COHORT15_TRADING_LEDGER = '7c8Y9rTjSPPn9rAcwoQGicfrpJEXhaMafmZn2KXgvjGF';
 
-/** The capability-root header the Direct family's mutable tail follows. */
-const CAPABILITY_ROOT_HEADER_BYTES = 232;
+/**
+ * The capability-root header the Direct family's mutable tail follows.
+ *
+ * Imported rather than restated: the header's width is the Direct ABI module's
+ * fact, and a second copy of it here is exactly the hand mirror this lane's
+ * generated table exists to stop.
+ */
+const CAPABILITY_ROOT_HEADER_BYTES = CAPABILITY_ROOT_HEADER_BYTES_V1;
 
 const live = process.env.DCLUTCH_LIVE_DEVNET === '1' ? it : it.skip;
 

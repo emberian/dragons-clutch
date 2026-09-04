@@ -202,9 +202,11 @@ function RecordFields({ decoded }: Readonly<{ decoded: DecodedRecord }>) {
       {decoded.rows === null ? null : (
         <div className="xp-rows">
           <p className="eyebrow">{decoded.rows.count} × {decoded.rows.label} · {decoded.rows.strideBytes} bytes each, from offset {decoded.rows.offset}</p>
-          {decoded.rows.scalars === null
-            ? <Honest>The rows are wider than one scalar, so they are counted rather than expanded.</Honest>
-            : <ol className="xp-scalars">{decoded.rows.scalars.map((entry, index) => <li key={index}><em>{index}</em>{entry}</li>)}</ol>}
+          {decoded.rows.states !== null
+            ? <ol className="xp-scalars">{decoded.rows.states.map((entry) => <li key={entry.row}><em>{entry.row}</em>{entry.name ?? `unnamed tag ${entry.tag}`}</li>)}</ol>
+            : decoded.rows.scalars === null
+              ? <Honest>The rows are wider than one scalar, so they are counted rather than expanded.</Honest>
+              : <ol className="xp-scalars">{decoded.rows.scalars.map((entry, index) => <li key={index}><em>{index}</em>{entry}</li>)}</ol>}
         </div>
       )}
       {decoded.spec.note === null ? null : <Honest>{decoded.spec.note}</Honest>}
@@ -283,6 +285,16 @@ function AccountView({ state }: Readonly<{ state: Async<ExplorerAccountResult> }
         <section className="xp-panel">
           <p className="eyebrow">Fields</p>
           <RecordFields decoded={decoded} />
+        </section>
+      )}
+
+      {account.trailing === null ? null : (
+        <section className="xp-panel">
+          <p className="eyebrow">
+            Trailing record · {account.trailing.decoded.spec.family} · {account.trailing.decoded.spec.name} · from byte {account.trailing.offset}
+          </p>
+          <p className="observation">{account.trailing.decoded.spec.summary}</p>
+          <RecordFields decoded={account.trailing.decoded} />
         </section>
       )}
 

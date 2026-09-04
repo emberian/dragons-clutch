@@ -12,6 +12,10 @@
  *   `decoded`      — its magic is one `lib/generated/` declares, and it is
  *                    rendered against that schema. Fields that lie outside the
  *                    observed bytes refuse individually; the rest still show.
+ *                    An account carrying a second record after the first — a
+ *                    capability root's family tail — decodes that one too, as
+ *                    `trailing`, because the leading magic alone can never
+ *                    reach it.
  *   `unrecognized` — it has a printable eight-byte header that no generated
  *                    module declares, or none at all. Shown as hex with the
  *                    header text if there is one. Never matched to a near-miss.
@@ -26,6 +30,7 @@ import {
   decodeAgainstSpec,
   leadingMagic,
   specForData,
+  trailingRecordForData,
   type DecodedRecord,
 } from './accountRecords';
 import {
@@ -59,6 +64,16 @@ export type ExplorerAccount = Readonly<{
   /** The first bytes in hex, always, so an unrecognized account still shows something. */
   headHex: string;
   decoded: DecodedRecord | null;
+  /**
+   * The record that follows a composite header, decoded on its own.
+   *
+   * An account's layout comes from the magic at byte zero, and some accounts
+   * carry a SECOND record after it — a capability root's family tail, which is
+   * where the Direct and Dealer roots keep their lifecycle. Reading only the
+   * leading magic showed the wrapper and hid the state; this is the tail, with
+   * the offset it starts at, so both are on the page.
+   */
+  trailing: Readonly<{ offset: number; decoded: DecodedRecord }> | null;
   derivations: ReadonlyArray<Derivation>;
   record: RecordIdentification | null;
   /** What could not be said, and why. */
@@ -127,6 +142,11 @@ export async function inspectAccount(
   const data = account.data;
   const spec = specForData(data);
   const decoded = spec === null ? null : decodeAgainstSpec(spec, data);
+  const tail = trailingRecordForData(data);
+  const trailing =
+    tail === null
+      ? null
+      : Object.freeze({ offset: tail.offset, decoded: decodeAgainstSpec(tail.spec, data.subarray(tail.offset)) });
 
   const derivations: Derivation[] = [];
   if (decoded !== null) {
@@ -165,6 +185,7 @@ export async function inspectAccount(
       header: leadingMagic(data),
       headHex: hexOf(data.slice(0, HEAD_HEX_BYTES)),
       decoded,
+      trailing,
       derivations: Object.freeze(derivations),
       record,
       note,

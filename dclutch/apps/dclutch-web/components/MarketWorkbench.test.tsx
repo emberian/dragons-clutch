@@ -1,7 +1,9 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
-import MarketWorkbench, { workbenchRefusalFieldV1 } from './MarketWorkbench';
+import MarketWorkbench, { machineObservationTextV1, workbenchRefusalFieldV1 } from './MarketWorkbench';
+import { STATE_MACHINE_RECORDS_V1 } from '@dclutch/sdk/generated/stateMachinesV1';
+import { absentMachineObservationV1 } from '@dclutch/sdk/stateMachines';
 
 describe('market lifecycle workbench', () => {
   it('says what each authoring act needs before it can begin, and never greys a control', () => {
@@ -27,6 +29,36 @@ describe('market lifecycle workbench', () => {
     expect(html).toContain('Optional state coordinates');
     expect(html).not.toContain('Illustrative');
     expect(html).not.toContain('USDC');
+  });
+
+  /**
+   * The Source state is a DIFFERENT machine at the same finalized floor.
+   *
+   * A reader shown only the Market's phase has been told half of what was
+   * read, and the three answers this line keeps apart are not
+   * interchangeable: a decoded state, an account that is not there, and bytes
+   * that were refused. Only the last is a defect, and a line that printed the
+   * same text for all three would hide it.
+   */
+  it('says which machine was read beside the Market, and never confuses absent with refused', () => {
+    const machine = STATE_MACHINE_RECORDS_V1.find((record) => record.machine === 'source')!;
+    const state = machine.states[0]!.state;
+    expect(machineObservationTextV1([{ machine: 'source', present: true, state, refusal: null }]))
+      .toBe(` · source ${state}`);
+    expect(machineObservationTextV1([absentMachineObservationV1('source')])).toBe(' · no source account');
+    expect(machineObservationTextV1([{ machine: 'source', present: true, state: null, refusal: 'wrong magic' }]))
+      .toBe(' · source refused');
+    // An observation this reader never attempted adds nothing, which is what
+    // the static render below has and why it must not claim otherwise.
+    expect(machineObservationTextV1([])).toBe('');
+  });
+
+  it('claims no machine state before anything has been observed', () => {
+    const html = renderToStaticMarkup(<MarketWorkbench />);
+    for (const record of STATE_MACHINE_RECORDS_V1) {
+      expect(html, `${record.machine} appears before any read`).not.toContain(` · ${record.machine} `);
+    }
+    expect(html).not.toContain('Machine gate');
   });
 
   it('routes single-field read refusals without guessing at cross-field joins', () => {

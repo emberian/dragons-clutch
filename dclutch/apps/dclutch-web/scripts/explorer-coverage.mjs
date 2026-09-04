@@ -26,6 +26,17 @@ import { fileURLToPath } from 'node:url';
 const webRoot = fileURLToPath(new URL('..', import.meta.url));
 const generatedDir = join(webRoot, 'lib', 'generated');
 const exemptPath = join(webRoot, 'scripts', 'explorer-coverage.exempt.json');
+/**
+ * The persisted state machines are emitted into the SDK, not into this tree.
+ *
+ * `packages/dclutch-sdk/lib/generated/stateMachinesV1.ts` is generated from
+ * each machine's own Rust hostile decoder and byte-gated by the SDK's
+ * `abi:state-machines:verify`. It is the second decode authority the browser
+ * imports from, and the eight magics in it are declared nowhere under
+ * `lib/generated/` — so a survey that read only this tree would call every one
+ * of them an invention of the render map.
+ */
+const stateMachineModule = join(webRoot, '..', '..', 'packages', 'dclutch-sdk', 'lib', 'generated', 'stateMachinesV1.ts');
 
 /**
  * The census module is emitted like the rest but declares INSTRUCTION magics,
@@ -68,6 +79,20 @@ export function surveyRecordMagics() {
   return [...found.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([magic, constants]) => ({ magic, constants }));
+}
+
+/**
+ * Every machine the generated state-machine table declares, with its magic.
+ *
+ * Read from the emitted source rather than imported, for the same reason the
+ * surveys above are: this script needs no TypeScript loader. The table's own
+ * spelling is one `machine:` line and one `magic:` line per row.
+ */
+export function surveyStateMachineMagics() {
+  const text = readFileSync(stateMachineModule, 'utf8');
+  return [...text.matchAll(/machine:\s*'([a-z0-9-]+)',[\s\S]{0,400}?magic:\s*'([A-Z0-9]{8})'/g)]
+    .map((match) => ({ machine: match[1], magic: match[2] }))
+    .sort((left, right) => left.machine.localeCompare(right.machine));
 }
 
 /**
@@ -241,6 +266,8 @@ function main() {
     const mark = row.state === 'rendered' ? '  ok  ' : row.state === 'exempt' ? ' skip ' : ' MISS ';
     console.log(`${mark}ix      ${row.magic}  ${row.programs.join(', ')}${row.reason ? `  — ${row.reason}` : ''}`);
   }
+  console.log('\nPersisted state machines, from the SDK\'s generated table\n');
+  for (const row of surveyStateMachineMagics()) console.log(`        machine ${row.magic}  ${row.machine}`);
   const missing = [...report.records, ...report.instructions, ...report.magiclessLayouts].filter((row) => row.state === 'unrendered');
   if (missing.length > 0) {
     console.error(`\n${missing.length} finding(s):`);
