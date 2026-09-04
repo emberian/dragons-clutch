@@ -2463,6 +2463,30 @@ tier_release() {
     if [ -f "$dir/$suite" ]; then py_present+=("$suite"); else py_missing+=("$suite"); fi
   done
 
+  # Suites that live OUTSIDE tools/release and belong in this tier anyway, named
+  # from the repo root.
+  #
+  # `tools/devnet-reconcile` is the independent reader of the evidence the
+  # private-validator lifecycle above produces, and NOTHING RAN IT -- which is
+  # how it came to hold two stale wire schema strings (a terminal-sequence
+  # session at -v1 against the crate's -v3, a chaos session at -v1 against -v2)
+  # that refused every session the current driver writes. Its own suite was
+  # green the whole time, because its fixtures were built from the same
+  # constants. It is 58 pure-Python tests in under two seconds, it shares
+  # `tools/lib/rust_schema.py` with the runner this tier already covers, and a
+  # reconciler nobody runs is a reconciler nobody can trust at a cut.
+  local root_py_suites=(
+    tools/devnet-reconcile/tests/test_reconcile.py
+  )
+  local root_py_present=()
+  for suite in "${root_py_suites[@]}"; do
+    if [ -f "$repo_root/$suite" ]; then
+      root_py_present+=("$suite")
+    else
+      missing+=("$suite")
+    fi
+  done
+
   local failed=() code=0
   for name in "${present[@]}"; do
     code=0
@@ -2476,6 +2500,13 @@ tier_release() {
     code=0
     note "python: $suite"
     (cd "$dir/$(dirname "$suite")" && PYTHONPATH="$repo_root" python3 "$(basename "$suite")") \
+      || code=$?
+    [ "$code" = 0 ] || failed+=("$suite")
+  done
+  for suite in "${root_py_present[@]}"; do
+    code=0
+    note "python: $suite"
+    (cd "$repo_root/$(dirname "$suite")" && PYTHONPATH="$repo_root" python3 "$(basename "$suite")") \
       || code=$?
     [ "$code" = 0 ] || failed+=("$suite")
   done
@@ -2520,7 +2551,7 @@ tier_release() {
     # which is the correct behaviour for a release candidate.
     note "these release suites are not in this tree and did NOT run:"
     for name in "${missing[@]}"; do note "  $name"; done
-    record release $EXIT_PREREQ_MISSING "${#missing[@]} of $(( ${#scripts[@]} + ${#py_suites[@]} )) release suites absent from this tree"
+    record release $EXIT_PREREQ_MISSING "${#missing[@]} of $(( ${#scripts[@]} + ${#py_suites[@]} + ${#root_py_suites[@]} )) release suites absent from this tree"
     return
   fi
   record release $EXIT_PASS
@@ -2570,12 +2601,18 @@ runbooks  seconds      python3            every command README.md, docs/guides
                                           it names the subcommand and flags the
                                           runbook passes it. An unprobed
                                           command is a 2, never a pass
-release   ~5s          python3            the four release-tooling REFUSAL
-                                          suites: build-freshness admission,
-                                          the devnet activity and demo-pulse
-                                          wrappers, the sponsored-market-open
-                                          stager. All hermetic -- stub binaries
-                                          and an invalid RPC, never a chain
+release   ~45s         python3            the release-tooling REFUSAL suites:
+                                          four shell wrappers (build-freshness
+                                          admission, the devnet activity and
+                                          demo-pulse wrappers, the
+                                          sponsored-market-open stager), fifteen
+                                          Python suites including the private
+                                          lifecycle preflight, the devnet
+                                          reconciler that reads the evidence
+                                          that lifecycle writes, and the
+                                          usage/parser parity gate. All
+                                          hermetic -- stub binaries and an
+                                          invalid RPC, never a chain
 genref    ~3 min       cargo, node        docs/reference and the client mirrors
                                           emitted from it are at a FIXPOINT at
                                           the measured commit. The reference,

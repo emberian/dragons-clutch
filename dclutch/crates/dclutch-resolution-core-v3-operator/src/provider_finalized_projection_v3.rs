@@ -1955,6 +1955,7 @@ mod tests {
         let update_digest = hash(&update_data).to_bytes();
         let provider_request = ProviderExecutionRequestV3 {
             caller: ProviderCallerV3::Core,
+            source_index: 0,
             generation,
             terminal_sequence,
             market: market_key.to_bytes(),

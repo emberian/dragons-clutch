@@ -762,6 +762,89 @@ def rewrite_owned_loopback_receipt(receipt: dict, receipt_path: pathlib.Path) ->
     receipt_path.write_bytes(reconcile.canonical_bytes(receipt))
 
 
+SUCCESSOR_SRC = ROOT.parents[1] / "tools" / "local-validator" / "bootstrap" / "successor" / "src"
+
+# The exact string `reconcile.py` carried for the terminal-sequence session
+# until 2026-09-04, by which time the crate had been writing `-v3` for two
+# revisions. Written out once, HERE, as the subject of a negative control --
+# which is the only place a superseded wire string belongs.
+SUPERSEDED_TERMINAL_SESSION_SCHEMA = "dclutch-owned-loopback-terminal-sequence-session-v1"
+
+# Which Rust file writes each schema this tool reads back. The same shape as
+# `preflight.py`'s `SCHEMA_OWNERS` and for the same reason: the VALUE is not
+# restated here, so what this table can check is the WIRING -- that the tool
+# reads the owner an independent reader expects, and that the owner still
+# declares that constant exactly once.
+OWNED_LOOPBACK_SCHEMA_OWNERS = (
+    ("OWNED_LOOPBACK_MANIFEST_SCHEMA", "private_lifecycle.rs", "MANIFEST_SCHEMA_V1"),
+    ("OWNED_LOOPBACK_CAPTURE_SCHEMA", "owned_loopback_capture.rs", "SCHEMA_V1"),
+    ("OWNED_LOOPBACK_RECEIPT_SCHEMA", "private_lifecycle.rs", "RECEIPT_SCHEMA_V1"),
+    (
+        "OWNED_LOOPBACK_PROVIDER_CLOSURE_SCHEMA",
+        "terminal_exterior_pyth.rs",
+        "PROVIDER_CLOSURE_SCHEMA_V1",
+    ),
+    ("OWNED_LOOPBACK_PROVIDER_PLAN_SCHEMA", "model.rs", "SUCCESSOR_PLAN_SCHEMA_V3"),
+    (
+        "OWNED_LOOPBACK_PROVIDER_PROFILE_SCHEMA",
+        "terminal_exterior_pyth.rs",
+        "PROVIDER_PROFILE_SCHEMA_V1",
+    ),
+    (
+        "OWNED_LOOPBACK_PRIVATE_SESSION_SCHEMA",
+        "private_activity.rs",
+        "LIFECYCLE_SESSION_SCHEMA_V1",
+    ),
+    (
+        "OWNED_LOOPBACK_CHAOS_SESSION_SCHEMA",
+        "private_lifecycle.rs",
+        "CHAOS_SESSION_SCHEMA_V2",
+    ),
+    (
+        "OWNED_LOOPBACK_TERMINAL_COMPLETION_SCHEMA",
+        "terminal_sequence.rs",
+        "OWNED_LOOPBACK_TERMINAL_COMPLETION_SCHEMA_V1",
+    ),
+    (
+        "OWNED_LOOPBACK_TERMINAL_JOURNAL_SCHEMA",
+        "terminal_sequence.rs",
+        "OWNED_LOOPBACK_TERMINAL_JOURNAL_SCHEMA_V1",
+    ),
+    (
+        "OWNED_LOOPBACK_TERMINAL_SESSION_SCHEMA",
+        "terminal_sequence.rs",
+        "OWNED_LOOPBACK_TERMINAL_SESSION_SCHEMA_V1",
+    ),
+)
+
+
+def declared_rust_str(file_name: str, constant: str) -> str:
+    """One Rust `&str` const, scanned line by line rather than matched.
+
+    Deliberately NOT `tools/lib/rust_schema.py`, which is what the tool under
+    test uses. A test that re-ran the tool's own reader would agree with it by
+    construction; this is a second implementation, so it can disagree.
+    """
+    lines = (SUCCESSOR_SRC / file_name).read_text(encoding="utf-8").splitlines()
+    found: list[str] = []
+    for index, line in enumerate(lines):
+        head = line.strip()
+        for prefix in ("pub(crate) ", "pub ", ""):
+            if head.startswith(f"{prefix}const {constant}:"):
+                break
+        else:
+            continue
+        tail = head.split("=", 1)[1].strip() if "=" in head else ""
+        if not tail:
+            tail = lines[index + 1].strip()
+        if not (tail.startswith('"') and tail.endswith('";')):
+            raise AssertionError(f"{file_name} {constant} is not one plain &str literal")
+        found.append(tail[1:-2])
+    if len(found) != 1:
+        raise AssertionError(f"{file_name} declares {constant} {len(found)} times, not once")
+    return found[0]
+
+
 class ReconcileTest(unittest.TestCase):
     def test_owned_loopback_dossier_is_create_new_mode_0600_and_confined(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1846,6 +1929,118 @@ class ReconcileTest(unittest.TestCase):
             capture_path.write_bytes(reconcile.canonical_bytes(capture))
             with self.assertRaisesRegex(reconcile.Refusal, "singular finalizedSlot"):
                 reconcile.captured_owned_loopback(capture_path)
+
+    # -----------------------------------------------------------------------
+    # The schema strings, and the two that were stale.
+    #
+    # This tool restated eleven wire schema strings the successor crate writes,
+    # and on 2026-09-04 two of them were wrong: the terminal-sequence session at
+    # `-v1` against the crate's `-v3`, and the private-lifecycle chaos session
+    # at `-v1` against `-v2`. Every session the current driver writes refused.
+    #
+    # The suite could not see it, and that is the part worth fixing rather than
+    # patching. `owned_loopback_fixture` builds its evidence FROM these same
+    # constants, so tool and fixture agreed with each other about a string
+    # neither owned, and fifty-five tests stayed green over a reader that
+    # refused every real artifact. The three below break that circle: the value
+    # comes from the Rust, read a second way, and the superseded string is
+    # exercised as the refusal it should be.
+    # -----------------------------------------------------------------------
+    def test_every_owned_loopback_schema_is_read_from_the_rust_that_writes_it(self):
+        for name, file_name, constant in OWNED_LOOPBACK_SCHEMA_OWNERS:
+            with self.subTest(schema=name):
+                self.assertEqual(
+                    getattr(reconcile, name),
+                    declared_rust_str(file_name, constant),
+                    f"{name} disagrees with {file_name}::{constant}",
+                )
+        # Named, so the two that were stale are checked by their defect and not
+        # only by the sweep above.
+        self.assertNotEqual(
+            reconcile.OWNED_LOOPBACK_TERMINAL_SESSION_SCHEMA,
+            SUPERSEDED_TERMINAL_SESSION_SCHEMA,
+        )
+        self.assertTrue(
+            reconcile.OWNED_LOOPBACK_TERMINAL_SESSION_SCHEMA.endswith("-v3"),
+            reconcile.OWNED_LOOPBACK_TERMINAL_SESSION_SCHEMA,
+        )
+        self.assertTrue(
+            reconcile.OWNED_LOOPBACK_CHAOS_SESSION_SCHEMA.endswith("-v2"),
+            reconcile.OWNED_LOOPBACK_CHAOS_SESSION_SCHEMA,
+        )
+
+    def test_owned_loopback_session_at_the_crates_own_terminal_version_reconciles(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory).resolve()
+            _, _, _, manifest_path, capture_path, receipt_path, evidence = owned_loopback_fixture(root)
+            # The evidence on disk carries the crate's string, read here without
+            # going through the tool -- so "it reconciles" is a claim about the
+            # session a v3 driver writes, not about a fixture agreeing with a
+            # constant it was built from.
+            session = json.loads((evidence / "terminal-session.json").read_text())
+            self.assertEqual(
+                session["schema"],
+                declared_rust_str(
+                    "terminal_sequence.rs", "OWNED_LOOPBACK_TERMINAL_SESSION_SCHEMA_V1"
+                ),
+            )
+            out_path = root / "dossier.json"
+            status = reconcile.main(
+                [
+                    "owned-loopback-captured",
+                    "--manifest", str(manifest_path),
+                    "--rpc-capture", str(capture_path),
+                    "--session-receipt", str(receipt_path),
+                    "--expected-session-receipt-sha256",
+                    hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
+                    "--evidence-root", str(evidence),
+                    "--out", str(out_path),
+                ]
+            )
+            self.assertEqual(status, 0)
+            dossier = json.loads(out_path.read_text())
+            self.assertEqual(dossier["schema"], reconcile.OWNED_LOOPBACK_DOSSIER_SCHEMA)
+
+    def test_owned_loopback_superseded_terminal_session_schema_refuses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            manifest, _, receipt, manifest_path, capture_path, receipt_path, evidence = owned_loopback_fixture(root)
+            session_path = evidence / "terminal-session.json"
+            session = json.loads(session_path.read_text())
+            session["schema"] = SUPERSEDED_TERMINAL_SESSION_SCHEMA
+            session_path.write_bytes(reconcile.canonical_bytes(session))
+            # Every OTHER conjunct of that refusal is repaired, so this can only
+            # be reached by the schema. The digests are re-derived rather than
+            # left stale, which is what would have made this pass for the wrong
+            # reason -- the refusal is one message over four causes.
+            completion_path = evidence / "terminal-completion.json"
+            completion = json.loads(completion_path.read_text())
+            completion["session"]["schema"] = SUPERSEDED_TERMINAL_SESSION_SCHEMA
+            completion["session"]["sha256"] = hashlib.sha256(
+                session_path.read_bytes()
+            ).hexdigest()
+            completion_path.write_bytes(reconcile.canonical_bytes(completion))
+            descriptor = next(
+                row for row in receipt["journals"]
+                if row["schema"] == reconcile.OWNED_LOOPBACK_TERMINAL_COMPLETION_SCHEMA
+            )
+            descriptor["sha256"] = hashlib.sha256(completion_path.read_bytes()).hexdigest()
+            receipt["journalSetSha256"] = hashlib.sha256(
+                reconcile.canonical_bytes(receipt["journals"])
+            ).hexdigest()
+            rewrite_owned_loopback_receipt(receipt, receipt_path)
+            with self.assertRaisesRegex(
+                reconcile.Refusal, "terminal completion session is missing or substituted"
+            ):
+                reconcile.authenticate_owned_loopback_session(
+                    receipt_path,
+                    hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
+                    evidence,
+                    manifest_path,
+                    capture_path,
+                    manifest,
+                    reconcile.captured_owned_loopback(capture_path),
+                )
 
 
 if __name__ == "__main__":

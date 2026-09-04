@@ -48,6 +48,9 @@ def offline_preflight_fixture(
         str(MODULE.OFFLINE_PREFLIGHT_RELATIVE_PATH): MODULE.sha256_file(
             paths.repo / MODULE.OFFLINE_PREFLIGHT_RELATIVE_PATH
         ),
+        str(MODULE.SHARED_RUST_SCHEMA_RELATIVE_PATH): MODULE.sha256_file(
+            paths.repo / MODULE.SHARED_RUST_SCHEMA_RELATIVE_PATH
+        ),
     }
     report: dict[str, object] = {
         "schema": MODULE.OFFLINE_PREFLIGHT_SCHEMA,

@@ -69,8 +69,33 @@ pub(crate) const RESOLUTION_CLOSE_FUND_ADMISSIBLE_PRESTATES_V1: MarketAdmissionV
 /// only the Market gate would report a sponsored capture as admissible on a
 /// Source that has already resolved. Every sponsored route -- capture, settle
 /// and the commit-failure walk -- admits `Primary` and nothing else.
+///
+/// It is Primary-only because the sponsored transport has no recovery
+/// producer, not because a rung is unanswerable. That distinction used to be
+/// invisible: this set was ALSO the complement of the reclaim set, so
+/// "sponsored push admits only the primary" and "only a primary market can
+/// consume a submission" were one constant saying two things. They are two
+/// constants now, and the second one is
+/// [`RESOLUTION_CAPTURABLE_SOURCE_ADMISSIBLE_STATES_V1`].
 pub(crate) const RESOLUTION_PRIMARY_SOURCE_ADMISSIBLE_STATES_V1: SourceAdmissionV1 =
     SourceAdmissionV1::states(&[SourceResolutionPhaseV1::Primary]);
+
+/// The Source resolution states in which a provider submission may be made and
+/// CONSUMED.
+///
+/// `Recovery` belongs here, and until the ladder had a capture producer it did
+/// not: a market standing on a funded rung is a market that can still be
+/// answered, by the alternative source it paid for, until that attempt's own
+/// committed deadline. Every clause of the reclaim hazard applies to it exactly
+/// as it applies to a primary market -- a submission a Source can still consume
+/// is a market's answer, and letting a stranger close it for a transaction fee
+/// is how holders get the pre-disclosed failure outcome instead of the real
+/// one.
+pub(crate) const RESOLUTION_CAPTURABLE_SOURCE_ADMISSIBLE_STATES_V1: SourceAdmissionV1 =
+    SourceAdmissionV1::states(&[
+        SourceResolutionPhaseV1::Primary,
+        SourceResolutionPhaseV1::Recovery,
+    ]);
 
 /// The Source resolution states in which a provider submission may be
 /// RECLAIMED, which is the complement of the one above.
@@ -88,7 +113,6 @@ pub(crate) const RESOLUTION_PRIMARY_SOURCE_ADMISSIBLE_STATES_V1: SourceAdmission
 /// refuses.
 pub(crate) const RESOLUTION_RECLAIMABLE_SOURCE_ADMISSIBLE_STATES_V1: SourceAdmissionV1 =
     SourceAdmissionV1::states(&[
-        SourceResolutionPhaseV1::Recovery,
         SourceResolutionPhaseV1::Resolved,
         SourceResolutionPhaseV1::Exhausted,
         SourceResolutionPhaseV1::FailureCommitted,
@@ -180,12 +204,26 @@ mod tests {
                 state == SourceResolutionPhaseV1::Primary,
                 "the Source set disagrees with the guard it replaced at {state:?}"
             );
+            // provider_transport_v3 process_submit and provider_v3
+            // select_rung: a submission may be made and consumed on the two
+            // states in which this market can still be answered honestly.
+            assert_eq!(
+                RESOLUTION_CAPTURABLE_SOURCE_ADMISSIBLE_STATES_V1.admits(state),
+                matches!(
+                    state,
+                    SourceResolutionPhaseV1::Primary | SourceResolutionPhaseV1::Recovery
+                ),
+                "the capture set disagrees with the routes it gates at {state:?}"
+            );
             // provider_transport_v3 source_can_no_longer_consume, whose sense
-            // is the inverse: `state.phase() != SourceResolutionPhaseV1::Primary`
-            // returned as the RECLAIM condition rather than checked as a refusal.
+            // is the inverse: the RECLAIM condition is returned rather than
+            // checked as a refusal.
             assert_eq!(
                 RESOLUTION_RECLAIMABLE_SOURCE_ADMISSIBLE_STATES_V1.admits(state),
-                state != SourceResolutionPhaseV1::Primary,
+                !matches!(
+                    state,
+                    SourceResolutionPhaseV1::Primary | SourceResolutionPhaseV1::Recovery
+                ),
                 "the reclaim set disagrees with the guard it replaced at {state:?}"
             );
         }
@@ -208,9 +246,17 @@ mod tests {
             SourceResolutionPhaseV1::Retired,
         ] {
             assert_ne!(
-                RESOLUTION_PRIMARY_SOURCE_ADMISSIBLE_STATES_V1.admits(state),
+                RESOLUTION_CAPTURABLE_SOURCE_ADMISSIBLE_STATES_V1.admits(state),
                 RESOLUTION_RECLAIMABLE_SOURCE_ADMISSIBLE_STATES_V1.admits(state),
                 "{state:?} is in both Source sets or in neither"
+            );
+            // And the sponsored set is a SUBSET of the capturable one rather
+            // than its equal, which is the fact the two constants were merged
+            // over: a rung is capturable and is not sponsored-pushable.
+            assert!(
+                !RESOLUTION_PRIMARY_SOURCE_ADMISSIBLE_STATES_V1.admits(state)
+                    || RESOLUTION_CAPTURABLE_SOURCE_ADMISSIBLE_STATES_V1.admits(state),
+                "{state:?} is sponsored-pushable and not capturable"
             );
         }
     }

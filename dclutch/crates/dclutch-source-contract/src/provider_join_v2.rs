@@ -7,9 +7,9 @@
 //! those remain obligations of the Pyth SVM adapter.
 
 use super::{
-    ContentId, Error, NormalizedProviderEvidenceV1, ProviderReleaseV1, PythAdapterConfigV1, Result,
-    SourceAccessProfile, SourceMaterialV3, SourceSpecV1, StatisticKind, StatisticSpecV1,
-    WindowKind, WindowSpecV1,
+    ContentId, Error, NormalizedProviderEvidenceV1, ProviderReleaseV1, PythAdapterConfigV1,
+    RecoveryAttemptV2, RecoveryPolicyV2, Result, SourceAccessProfile, SourceMaterialV3,
+    SourceSpecV1, StatisticKind, StatisticSpecV1, WindowKind, WindowSpecV1,
 };
 
 /// Canonical finalized-record schema for [`SourceSpecV1`].
@@ -173,6 +173,96 @@ impl PythProviderAdapterObligationV2 {
             material.recovery_policy(),
             failure_policy_release,
         )?;
+        Self::join_authenticated_source(
+            source_spec_id,
+            source,
+            provider_release_id,
+            provider_release,
+            adapter_config_id,
+            adapter_config,
+            window,
+            statistic,
+            expected_profile,
+        )
+    }
+
+    /// Join the same terminal-sample graph for one funded recovery rung.
+    ///
+    /// Every check this makes about the MARKET is the check
+    /// [`Self::from_authenticated_records`] makes. What differs is which source
+    /// the market is asking: the attempt names it, so the material's
+    /// `primary_source_spec` edge is replaced by the rung's own pair of
+    /// identities, and the window that decides admissibility stays the market's
+    /// because the question and its period did not change.
+    ///
+    /// The access profile is the terminal one-transaction Pyth profile, the
+    /// same one the primary route admits. An alternative source is an
+    /// alternative FEED, not an alternative transport; a rung that wanted a
+    /// different transport would be a different route with a different frame.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_authenticated_recovery_records(
+        material: SourceMaterialV3,
+        authenticated_product_record_digest: ContentId,
+        attempt: RecoveryAttemptV2,
+        source_spec_id: ContentId,
+        source: SourceSpecV1,
+        provider_release_id: ContentId,
+        provider_release: ProviderReleaseV1,
+        adapter_config_id: ContentId,
+        adapter_config: PythAdapterConfigV1,
+        window_spec_id: ContentId,
+        window: WindowSpecV1,
+        statistic_spec_id: ContentId,
+        statistic: StatisticSpecV1,
+        recovery_policy_id: ContentId,
+        policy: RecoveryPolicyV2,
+        failure_policy_release: ContentId,
+    ) -> Result<Self> {
+        material.authenticate_product_record(authenticated_product_record_digest)?;
+        material.validate_recovery_source_graph(
+            attempt,
+            source_spec_id,
+            source,
+            window_spec_id,
+            statistic_spec_id,
+            statistic,
+            recovery_policy_id,
+            policy,
+            failure_policy_release,
+        )?;
+        Self::join_authenticated_source(
+            source_spec_id,
+            source,
+            provider_release_id,
+            provider_release,
+            adapter_config_id,
+            adapter_config,
+            window,
+            statistic,
+            SourceAccessProfile::PythTerminalOneTransaction,
+        )
+    }
+
+    /// The half of the join that is about the SOURCE rather than the market.
+    ///
+    /// Both entry points above reach it with the same obligation: whichever
+    /// source they authenticated must declare this provider release and this
+    /// adapter configuration, must be reachable through the expected transport,
+    /// and must produce the unit the market's statistic reads. Keeping it in
+    /// one place is why a recovery rung cannot accidentally be admitted under a
+    /// weaker rule than the primary.
+    #[allow(clippy::too_many_arguments)]
+    fn join_authenticated_source(
+        source_spec_id: ContentId,
+        source: SourceSpecV1,
+        provider_release_id: ContentId,
+        provider_release: ProviderReleaseV1,
+        adapter_config_id: ContentId,
+        adapter_config: PythAdapterConfigV1,
+        window: WindowSpecV1,
+        statistic: StatisticSpecV1,
+        expected_profile: SourceAccessProfile,
+    ) -> Result<Self> {
         source.validate_dependencies(provider_release_id, source.capacity_profile_id())?;
         if source.provider_release_id() != provider_release_id
             || source.adapter_config_id() != adapter_config_id
@@ -253,6 +343,95 @@ impl PythProviderAdapterObligationV2 {
         if publication_unix_seconds < oldest || publication_unix_seconds > newest {
             return Err(Error::InvalidPublicationTime);
         }
+        self.finish_normalization(
+            provider_evidence_id,
+            provider_feed_id,
+            price,
+            confidence,
+            exponent,
+            publication_unix_seconds,
+        )
+    }
+
+    /// Normalize the same Pyth facts for a market standing on a funded recovery
+    /// rung.
+    ///
+    /// The schedule bound is IDENTICAL and is the whole point: an alternative
+    /// source answers the same question about the same period, so the
+    /// publication still has to fall inside the market's own `[window.start,
+    /// window.end]`, and a rung that could answer about a different period would
+    /// be a different market.
+    ///
+    /// What is not identical is the age floor, and it is dropped rather than
+    /// widened. `now - max_age` is the primary leg's liveness grace, and the
+    /// ladder only ever stands on a rung BECAUSE that grace expired: the crank
+    /// that advanced the market is admissible exactly one second after
+    /// `window.end + max_age`. Re-applying the floor here would make every rung
+    /// structurally unanswerable -- a capture route whose success is not
+    /// reachable -- so the honest reading is that it has already done its work
+    /// and a later, explicit bound replaces it.
+    ///
+    /// That replacement is the attempt's own committed deadline, and it is not
+    /// enforced here because it is not this record's to enforce.
+    /// [`super::SourceResolutionStateV2::resolve_recovery_from_authenticated_domain`]
+    /// holds the policy and refuses a capture one second past
+    /// `attempt.deadline_unix_seconds()`, which is a per-rung bound the market
+    /// committed to at founding and PREPAID. So the leg is still bounded, still
+    /// by the market's own record, and by a number a founder chose rather than
+    /// by a grace a route inherited.
+    ///
+    /// The future-skew ceiling stays. Nothing about advancing a ladder makes a
+    /// publication from the future admissible.
+    #[allow(clippy::too_many_arguments)]
+    pub fn normalize_authenticated_recovery_update(
+        self,
+        provider_evidence_id: ContentId,
+        provider_feed_id: [u8; 32],
+        price: i64,
+        confidence: u64,
+        exponent: i32,
+        publication_unix_seconds: i64,
+        current_unix_seconds: i64,
+    ) -> Result<NormalizedProviderEvidenceV1> {
+        if current_unix_seconds <= 0 {
+            return Err(Error::InvalidPublicationTime);
+        }
+        if !self.window.contains_observation(publication_unix_seconds)? {
+            return Err(Error::InvalidObservationSchedule);
+        }
+        let newest = current_unix_seconds
+            .checked_add(i64::from(self.window.max_future_skew_seconds()))
+            .ok_or(Error::ArithmeticOverflow)?;
+        if publication_unix_seconds > newest {
+            return Err(Error::InvalidPublicationTime);
+        }
+        self.finish_normalization(
+            provider_evidence_id,
+            provider_feed_id,
+            price,
+            confidence,
+            exponent,
+            publication_unix_seconds,
+        )
+    }
+
+    /// The half of normalization that is about the READING rather than the
+    /// clock: the feed identity, the exponent, and the confidence this market's
+    /// adapter configuration admits, in the unit its statistic declares.
+    ///
+    /// Both legs reach it with the same obligation, which is why a rung cannot
+    /// be admitted under a looser reading rule than the primary -- only under a
+    /// different clock rule, stated above.
+    #[allow(clippy::too_many_arguments)]
+    fn finish_normalization(
+        self,
+        provider_evidence_id: ContentId,
+        provider_feed_id: [u8; 32],
+        price: i64,
+        confidence: u64,
+        exponent: i32,
+        publication_unix_seconds: i64,
+    ) -> Result<NormalizedProviderEvidenceV1> {
         let atoms = self.adapter_config.validate_update(
             provider_feed_id,
             price,

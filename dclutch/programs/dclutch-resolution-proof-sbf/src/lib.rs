@@ -203,6 +203,28 @@ pub enum ResolutionError {
     /// is why it is not `ProviderConfiguration` -- an operator seeing this
     /// should stop resubmitting and read the founding.
     ProviderScale = 0x801C,
+    /// The rung this capture names is not the rung the market stands on.
+    ///
+    /// A funded ordered-recovery ladder answers on exactly one source at a
+    /// time, and which one is the Source state's own `active_attempt` -- never
+    /// the caller's `source_index`, which is a declaration this refusal
+    /// enforces. It fires when a capture claims the primary while the market
+    /// has advanced, claims a rung while the market is still on its primary,
+    /// claims a rung the market has already left or has not reached, or brings
+    /// no `RecoveryPolicyV2` to a market whose ladder is the only thing that
+    /// could name the source it is offering. It also covers a market standing
+    /// on NO leg -- one already `Resolved`, `Exhausted`, `FailureCommitted` or
+    /// `Retired` -- because there is then no index a capture could name that
+    /// would be right.
+    ///
+    /// It is deliberately not `SourceMaterial`: the graph is fine and the
+    /// records authenticate. It is deliberately not `Transition` either, which
+    /// would mean the kernel refused -- this refuses BEFORE the kernel, because
+    /// a request that names the wrong rung would otherwise be joined against
+    /// the wrong source and be refused for a reason about the feed. An operator
+    /// reading this should re-read the market's phase, not the provider's
+    /// bytes.
+    SourceLadder = 0x801D,
 }
 
 impl ResolutionError {
@@ -212,7 +234,7 @@ impl ResolutionError {
     /// [`ResolutionError::ordinal`], whose match is exhaustive: a variant added to the
     /// enum does not compile until its author writes an arm here, and the only
     /// arm that satisfies the assertions is its own index in this array.
-    pub const ALL: [Self; 29] = [
+    pub const ALL: [Self; 30] = [
         Self::AccountFrame,
         Self::Instruction,
         Self::OutputState,
@@ -242,6 +264,7 @@ impl ResolutionError {
         Self::CallerAuthority,
         Self::InfrastructureProfile,
         Self::ProviderScale,
+        Self::SourceLadder,
     ];
 
     /// This refusal's position in [`ResolutionError::ALL`].
@@ -280,6 +303,7 @@ impl ResolutionError {
             Self::CallerAuthority => 26,
             Self::InfrastructureProfile => 27,
             Self::ProviderScale => 28,
+            Self::SourceLadder => 29,
         }
     }
 }

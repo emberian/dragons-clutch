@@ -16,8 +16,8 @@ use dclutch_resolution_codec::{
 };
 use dclutch_source_contract::{
     ContentId as SourceContentId, ProviderReleaseV1, PythAdapterConfigV1,
-    PythProviderAdapterObligationV2, SourceMaterialV3, SourceResolutionStateV2, SourceSpecV1,
-    StatisticSpecV1, WindowSpecV1,
+    PythProviderAdapterObligationV2, RecoveryAttemptV2, RecoveryPolicyV2, SourceMaterialV3,
+    SourceResolutionPhaseV1, SourceResolutionStateV2, SourceSpecV1, StatisticSpecV1, WindowSpecV1,
 };
 use solana_program::hash::{hash, hashv};
 
@@ -46,6 +46,9 @@ pub enum ProviderJoinErrorV3 {
     /// The publication was admitted and this Market's own StatisticSpec and
     /// adapter configuration disagree about the source-to-result scale.
     ProviderScale,
+    /// The request names a rung of the source ladder the market does not stand
+    /// on, or brings no ladder to a market that has one.
+    SourceLadder,
     /// Source terminal transition or certificate construction refused.
     Transition,
     /// A checked integer conversion overflowed.
@@ -96,6 +99,20 @@ pub struct AuthenticatedSourceRecordsV3 {
     pub(crate) failure_policy_release: SourceContentId,
 }
 
+/// One market's authenticated funded ordered-recovery ladder.
+///
+/// It rides BESIDE [`AuthenticatedSourceRecordsV3`] rather than inside it, and
+/// always behind a reference. A `RecoveryPolicyV2` is four attempts wide, and
+/// putting it in the records struct pushed both the join and the record
+/// authentication over the SBF frame -- 5,952 and 4,160 bytes against a 4,096
+/// maximum, measured. Which is also the honest shape: a ladder is a fact about
+/// the market that only ONE of the two capture legs reads.
+#[derive(Clone, Copy)]
+pub struct AuthenticatedRecoveryLadderV3 {
+    pub(crate) policy_id: SourceContentId,
+    pub(crate) policy: RecoveryPolicyV2,
+}
+
 /// Independently authenticated provider/Product observations.
 #[derive(Clone, Copy)]
 pub struct AuthenticatedProviderObservationV3<'a> {
@@ -131,6 +148,7 @@ pub fn plan_provider_resolution_v3(
     request_bytes: &[u8],
     source_state: &SourceResolutionStateV2,
     source_records: &AuthenticatedSourceRecordsV3,
+    ladder: Option<&AuthenticatedRecoveryLadderV3>,
     observation: &AuthenticatedProviderObservationV3<'_>,
 ) -> Result<ProviderResolutionPlanV3, ProviderJoinErrorV3> {
     let request = ProviderExecutionRequestV3::decode(request_bytes)
@@ -160,22 +178,38 @@ pub fn plan_provider_resolution_v3(
         return Err(ProviderJoinErrorV3::Request);
     }
 
-    let obligation = PythProviderAdapterObligationV2::from_authenticated_records(
-        source_records.material,
-        source_records.material.product_record_digest(),
-        source_records.source_spec_id,
-        source_records.source,
-        source_records.provider_release_id,
-        source_records.provider_release,
-        source_records.adapter_config_id,
-        source_records.adapter_config,
-        source_records.window_spec_id,
-        source_records.window,
-        source_records.statistic_spec_id,
-        source_records.statistic,
-        source_records.failure_policy_release,
-    )
-    .map_err(|_| ProviderJoinErrorV3::Source)?;
+    // WHICH SOURCE MAY ANSWER. The market's own state decides, and it decides
+    // before a single provider byte is looked at -- so a capture aimed at the
+    // wrong rung refuses as a ladder fact rather than as a complaint about a
+    // feed that was never the one being asked. The request's `source_index`
+    // only gets to AGREE.
+    //
+    // Rung zero is the primary and its arm is the one that existed before the
+    // ladder had a capture route: same join, same transition, same certificate
+    // fields. Rung `n` is recovery attempt `n - 1`, and reaching it requires
+    // the market to have advanced onto exactly that attempt.
+    let rung = select_rung(&request, source_state, ladder)?;
+    let obligation = match rung {
+        LadderRungV3::Primary => PythProviderAdapterObligationV2::from_authenticated_records(
+            source_records.material,
+            source_records.material.product_record_digest(),
+            source_records.source_spec_id,
+            source_records.source,
+            source_records.provider_release_id,
+            source_records.provider_release,
+            source_records.adapter_config_id,
+            source_records.adapter_config,
+            source_records.window_spec_id,
+            source_records.window,
+            source_records.statistic_spec_id,
+            source_records.statistic,
+            source_records.failure_policy_release,
+        )
+        .map_err(|_| ProviderJoinErrorV3::Source)?,
+        LadderRungV3::Recovery { attempt, ladder } => {
+            join_recovery_rung(source_records, ladder, attempt)?
+        }
+    };
     authenticate_provider_release(obligation, source_records.provider_release, observation)?;
 
     let result_domain_digest = hash(observation.result_domain_bytes).to_bytes();
@@ -229,38 +263,66 @@ pub fn plan_provider_resolution_v3(
         &post_params_body_digest,
     ])
     .to_bytes();
-    let normalized = obligation
-        .normalize_authenticated_update(
-            SourceContentId::new(provider_evidence).map_err(|_| ProviderJoinErrorV3::Provider)?,
+    let evidence =
+        SourceContentId::new(provider_evidence).map_err(|_| ProviderJoinErrorV3::Provider)?;
+    // Same reading rule on both legs; different clock rule, because the primary
+    // leg's liveness grace is spent by the time a rung exists at all. The
+    // attempt's own committed deadline is what bounds a rung, and the kernel
+    // holds it.
+    let normalized = match rung {
+        LadderRungV3::Primary => obligation.normalize_authenticated_update(
+            evidence,
             update.feed_id(),
             update.price(),
             update.confidence(),
             update.exponent(),
             update.publish_time(),
             observation.current_unix_seconds,
-        )
-        .map_err(map_normalization_error)?;
+        ),
+        LadderRungV3::Recovery { .. } => obligation.normalize_authenticated_recovery_update(
+            evidence,
+            update.feed_id(),
+            update.price(),
+            update.confidence(),
+            update.exponent(),
+            update.publish_time(),
+            observation.current_unix_seconds,
+        ),
+    }
+    .map_err(map_normalization_error)?;
 
     let mut next_source = *source_state;
-    let decision = next_source
-        .resolve_primary_from_authenticated_domain(
-            source_records.material_id,
-            source_records.material,
-            source_records.material.product_record_digest(),
-            observation.result_domain,
-            SourceContentId::new(provider_evidence).map_err(|_| ProviderJoinErrorV3::Provider)?,
+    let decision = match rung {
+        // From the obligation, which read the exponent from the market's own
+        // StatisticSpec and has already refused a publication whose feed
+        // exponent the declaration does not admit. Never from the adapter
+        // account this instruction was handed.
+        LadderRungV3::Primary => next_source
+            .resolve_primary_from_authenticated_domain(
+                source_records.material_id,
+                source_records.material,
+                source_records.material.product_record_digest(),
+                observation.result_domain,
+                evidence,
+                normalized.atoms(),
+                1,
+                obligation.source_scale_exponent(),
+                request.generation,
+                observation.current_unix_seconds,
+                request.terminal_sequence,
+            )
+            .map_err(|_| ProviderJoinErrorV3::Transition)?,
+        LadderRungV3::Recovery { ladder, .. } => resolve_recovery_rung(
+            &mut next_source,
+            source_records,
+            ladder,
+            observation,
+            evidence,
             normalized.atoms(),
-            1,
-            // From the obligation, which read it from the market's own
-            // StatisticSpec and has already refused a publication whose feed
-            // exponent the declaration does not admit. Never from the adapter
-            // account this instruction was handed.
             obligation.source_scale_exponent(),
-            request.generation,
-            observation.current_unix_seconds,
-            request.terminal_sequence,
-        )
-        .map_err(|_| ProviderJoinErrorV3::Transition)?;
+            &request,
+        )?,
+    };
     let outcome_count = observation
         .result_domain
         .outcome_count()
@@ -285,6 +347,125 @@ pub fn plan_provider_resolution_v3(
         update.posted_slot(),
         observation.current_slot,
     )
+}
+
+/// Which rung of the market's source ladder this capture answers on.
+#[derive(Clone, Copy)]
+enum LadderRungV3<'a> {
+    /// Rung zero: the source the material names, the market still on `Primary`.
+    Primary,
+    /// Rung `n`: recovery attempt `n - 1`, the market standing on exactly it.
+    Recovery {
+        attempt: RecoveryAttemptV2,
+        ladder: &'a AuthenticatedRecoveryLadderV3,
+    },
+}
+
+/// The recovery leg's join, in its own frame.
+///
+/// `#[inline(never)]` for the same reason [`finish_plan`] carries it: the
+/// policy is four attempts wide and appears twice by value in this call, which
+/// is 1,856 bytes of the caller's frame it does not have.
+#[inline(never)]
+fn join_recovery_rung(
+    source_records: &AuthenticatedSourceRecordsV3,
+    ladder: &AuthenticatedRecoveryLadderV3,
+    attempt: RecoveryAttemptV2,
+) -> Result<PythProviderAdapterObligationV2, ProviderJoinErrorV3> {
+    PythProviderAdapterObligationV2::from_authenticated_recovery_records(
+        source_records.material,
+        source_records.material.product_record_digest(),
+        attempt,
+        source_records.source_spec_id,
+        source_records.source,
+        source_records.provider_release_id,
+        source_records.provider_release,
+        source_records.adapter_config_id,
+        source_records.adapter_config,
+        source_records.window_spec_id,
+        source_records.window,
+        source_records.statistic_spec_id,
+        source_records.statistic,
+        ladder.policy_id,
+        ladder.policy,
+        source_records.failure_policy_release,
+    )
+    .map_err(|_| ProviderJoinErrorV3::Source)
+}
+
+/// The recovery leg's transition, in its own frame.
+///
+/// The kernel re-derives the attempt from the STATE rather than trusting the
+/// one the join used, and it is stricter about time than the primary leg on
+/// purpose: the attempt's own committed deadline is a field of the policy this
+/// transition already holds, so refusing a late capture costs nothing and
+/// closes the second in which a crank and a capture could both claim the rung.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn resolve_recovery_rung(
+    next_source: &mut SourceResolutionStateV2,
+    source_records: &AuthenticatedSourceRecordsV3,
+    ladder: &AuthenticatedRecoveryLadderV3,
+    observation: &AuthenticatedProviderObservationV3<'_>,
+    evidence: SourceContentId,
+    atoms: i128,
+    source_scale_exponent: i32,
+    request: &ProviderExecutionRequestV3,
+) -> Result<dclutch_source_contract::SourceResolutionDecisionV2, ProviderJoinErrorV3> {
+    next_source
+        .resolve_recovery_from_authenticated_domain(
+            source_records.material_id,
+            source_records.material,
+            source_records.window_spec_id,
+            source_records.material.product_record_digest(),
+            ladder.policy_id,
+            ladder.policy,
+            source_records.source_spec_id,
+            source_records.provider_release_id,
+            observation.result_domain,
+            evidence,
+            atoms,
+            1,
+            source_scale_exponent,
+            request.generation,
+            observation.current_unix_seconds,
+            request.terminal_sequence,
+        )
+        .map_err(|_| ProviderJoinErrorV3::Transition)
+}
+
+/// Read the rung off the MARKET and require the request to have named it.
+///
+/// Two authorities have to agree and only one of them is trusted. The Source
+/// state's phase and `active_attempt` are the ladder's position, written by the
+/// crank that got the market there; `request.source_index` is what the caller
+/// says it is answering. This function admits exactly the case where they are
+/// the same fact, and every other case is [`ProviderJoinErrorV3::SourceLadder`]
+/// -- including a capture on a market whose material bought no alternatives at
+/// all, which cannot name a rung because there is no ladder to index.
+fn select_rung<'a>(
+    request: &ProviderExecutionRequestV3,
+    source_state: &SourceResolutionStateV2,
+    ladder: Option<&'a AuthenticatedRecoveryLadderV3>,
+) -> Result<LadderRungV3<'a>, ProviderJoinErrorV3> {
+    match (request.source_index, source_state.phase()) {
+        (0, SourceResolutionPhaseV1::Primary) => Ok(LadderRungV3::Primary),
+        (index, SourceResolutionPhaseV1::Recovery) if index != 0 => {
+            let attempt_index = index
+                .checked_sub(1)
+                .ok_or(ProviderJoinErrorV3::SourceLadder)?;
+            if attempt_index != source_state.active_attempt() {
+                return Err(ProviderJoinErrorV3::SourceLadder);
+            }
+            let ladder = ladder.ok_or(ProviderJoinErrorV3::SourceLadder)?;
+            let attempt = ladder
+                .policy
+                .attempt(attempt_index)
+                .map_err(|_| ProviderJoinErrorV3::SourceLadder)?;
+            Ok(LadderRungV3::Recovery { attempt, ladder })
+        }
+        _ => Err(ProviderJoinErrorV3::SourceLadder),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -315,7 +496,12 @@ fn finish_plan(
         funding_allocation: [0; 32],
         receipt_account: request.certificate_account,
         generation: request.generation,
-        attempt_index: 0,
+        // How many recovery legs the market had entered when it was answered,
+        // which is the rung and is zero for every primary capture ever written.
+        // The same convention the exhaustion receipt uses for "how much of the
+        // paid-for ladder was walked", so a reader of any terminal in this
+        // family counts legs the same way.
+        attempt_index: u32::from(request.source_index),
         schedule_index: 0,
         selector,
         work_paid: 0,
@@ -670,6 +856,7 @@ mod tests {
         };
         let request = ProviderExecutionRequestV3 {
             caller: ProviderCallerV3::Core,
+            source_index: 0,
             generation: 7,
             terminal_sequence: 1,
             market,
@@ -730,7 +917,7 @@ mod tests {
                 update.publish_time()
             },
         };
-        plan_provider_resolution_v3(&request_bytes, &state, &records, &observation)
+        plan_provider_resolution_v3(&request_bytes, &state, &records, None, &observation)
     }
 
     #[test]
@@ -771,12 +958,22 @@ mod tests {
 
         // Exactly one answer, executed. The first admissible observation
         // terminalizes; replaying the same join against the post-state refuses
-        // in the transition, without inspecting the second observation at all.
+        // without inspecting the second observation at all.
+        //
+        // It refuses one step EARLIER than it used to, and the code moved with
+        // it. This used to be `Transition` -- the kernel, having read the
+        // observation, declining to move a decided state. The rung selector now
+        // asks first which leg of the ladder this capture claims to answer on,
+        // and a `Resolved` market stands on no leg at all, so no index can name
+        // it and the refusal is about the market rather than about the reading.
+        // Strictly narrower: `Transition` covers every Source admission and
+        // Product mapping this route can refuse, and `SourceLadder` covers one
+        // sentence.
         let first = plan(Case::Success).expect("first admissible observation resolves");
         assert_eq!(first.next_source.phase(), SourceResolutionPhaseV1::Resolved);
         assert_eq!(
             plan_against(Case::Success, Some(first.next_source)),
-            Err(ProviderJoinErrorV3::Transition),
+            Err(ProviderJoinErrorV3::SourceLadder),
             "a resolved Source answers no second observation from its own window"
         );
     }

@@ -3,8 +3,8 @@
 use core::convert::TryInto;
 
 use super::{
-    ContentId, Error, ManipulationFloorV1, MarketPrincipalCapSetsV1, Result,
-    SourceCapacityProfileV1, SourceSpecV1, StatisticSpecV1, WindowSpecV1,
+    ContentId, Error, ManipulationFloorV1, MarketPrincipalCapSetsV1, RecoveryAttemptV2,
+    RecoveryPolicyV2, Result, SourceCapacityProfileV1, SourceSpecV1, StatisticSpecV1, WindowSpecV1,
     derive_market_principal_cap,
     generated_source_material_v3::{
         SOURCE_MATERIAL_V3_BOUNDED_BY_FLOOR_TAG, SOURCE_MATERIAL_V3_BYTES,
@@ -251,6 +251,59 @@ impl SourceMaterialV3 {
             return Err(Error::LinkageMismatch);
         }
         window.validate_source(source_spec_id)
+    }
+
+    /// Validate the record graph an ALTERNATIVE source must satisfy.
+    ///
+    /// Same market, same question, different feed. [`Self::validate_source_graph`]
+    /// pins `primary_source_spec`, and that is exactly the edge a funded
+    /// recovery rung replaces: attempt `n` names its own `SourceSpecV1` and its
+    /// own `ProviderReleaseV1`, and while the ladder stands on `n` that pair is
+    /// the only source admissible.
+    ///
+    /// Everything the market SOLD is unchanged and is still checked here -- the
+    /// window is the period the question covers, the statistic is how a reading
+    /// becomes a result, the recovery policy is the ladder this rung belongs to
+    /// and the failure policy is the terminal it exhausts into. A rung may
+    /// substitute a source and may substitute nothing else.
+    ///
+    /// The window's own `source_spec_id` names the primary and is deliberately
+    /// NOT re-checked against the rung. That field binds a window to the source
+    /// it was authored beside; the edge that decides here is
+    /// `material.window_spec`, which proves this is the window THIS market
+    /// sold, and re-deriving the primary's identity out of it would refuse
+    /// every alternative by construction. The unit is what keeps an alternative
+    /// honest instead: `statistic.source_unit_id() == source.unit_id()` is the
+    /// same conjunct the primary graph carries, and the statistic is the
+    /// market's own.
+    #[allow(clippy::too_many_arguments)]
+    pub fn validate_recovery_source_graph(
+        self,
+        attempt: RecoveryAttemptV2,
+        source_spec_id: ContentId,
+        source: SourceSpecV1,
+        window_spec_id: ContentId,
+        statistic_spec_id: ContentId,
+        statistic: StatisticSpecV1,
+        recovery_policy_id: ContentId,
+        policy: RecoveryPolicyV2,
+        failure_policy_release: ContentId,
+    ) -> Result<()> {
+        if attempt.source_spec_id() != source_spec_id
+            || attempt.provider_release_id() != source.provider_release_id()
+            || window_spec_id != self.window_spec
+            || statistic_spec_id != self.statistic_spec
+            || Some(recovery_policy_id) != self.recovery_policy
+            || failure_policy_release != self.failure_policy_release
+            || statistic.source_unit_id() != source.unit_id()
+        {
+            return Err(Error::LinkageMismatch);
+        }
+        // The ladder declares the capacity profile its alternatives run under.
+        // A rung whose source runs under a different one is a rung the founding
+        // did not price, and the policy record has carried this identity since
+        // it was written without anything ever asking it.
+        policy.validate_capacity_profile(source.capacity_profile_id())
     }
 
     /// Authenticate the acyclic principal graph and derive the runtime set cap.

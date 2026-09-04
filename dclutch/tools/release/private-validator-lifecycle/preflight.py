@@ -81,6 +81,11 @@ class StageContract:
 
 
 RUNNER = "tools/release/private-validator-lifecycle/run.py"
+# The runner IMPORTS this at module scope for every `rust_schema_constant`
+# derivation below, so it is part of the runner's behaviour and belongs in the
+# snapshot this preflight authenticates. `run.py` binds its bytes explicitly
+# too, beside its own.
+SHARED_RUST_SCHEMA = "tools/lib/rust_schema.py"
 MAIN = "tools/local-validator/bootstrap/successor/src/main.rs"
 SUCCESSOR = "tools/local-validator/bootstrap/successor/src"
 # The retirement supply-zero gate's semantic owner. Named here rather than
@@ -499,6 +504,7 @@ def modeled_source_paths() -> set[str]:
     return {
         PREFLIGHT,
         RUNNER,
+        SHARED_RUST_SCHEMA,
         MAIN,
         ECONOMIC_LEDGER,
         PRIVATE_ECONOMIC_FIXTURE,

@@ -931,6 +931,17 @@ impl SourceResolutionStateV2 {
         self.phase
     }
 
+    /// Return the ladder rung this state currently stands on.
+    ///
+    /// Meaningful only on [`SourceResolutionPhaseV1::Recovery`]; every other
+    /// phase pins it to zero, which `validate_shape` enforces. A provider outer
+    /// reads it to learn WHICH source may answer right now -- the market's own
+    /// state is the authority for that, never the caller, because a caller who
+    /// could name the rung could skip a leg the holders paid for.
+    pub const fn active_attempt(self) -> u8 {
+        self.active_attempt
+    }
+
     /// Return the bound Market account key.
     pub const fn market(self) -> [u8; 32] {
         self.market

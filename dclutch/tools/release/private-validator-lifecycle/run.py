@@ -317,38 +317,26 @@ SUCCESSOR_SRC = "tools/local-validator/bootstrap/successor/src"
 WALLET_TERMINAL_PAYOUT_OPERATOR_SRC = "crates/dclutch-wallet-terminal-payout-operator/src"
 
 
-def rust_schema_constant(directory: str, file_name: str, constant: str) -> str:
-    """One Rust `&str` constant, read from the file that declares it.
+# The derivation itself is not written here, and that is the same argument one
+# turn out. `tools/devnet-reconcile/reconcile.py` reads the SAME artifacts this
+# runner writes, and by 2026-09-04 two of the literals it had kept were stale
+# against these exact owners. It now reads them, through this function -- so the
+# reader has one author and two callers, and neither can drift into a laxer
+# regex than the other. Its bytes are bound below with this file's own.
+SHARED_RUST_SCHEMA_RELATIVE_PATH = Path("tools/lib/rust_schema.py")
 
-    Resolved against the tree this runner is executing from, which
-    `authenticate_offline_preflight` already pins to `--repo`: it refuses with
-    "executing lifecycle runner is outside the clean target source" when the two
-    differ, so there is no second tree for this read to disagree with.
 
-    Exactly one declaration is accepted. Zero means the constant was renamed or
-    the owner moved; two means the file has stopped having one answer -- and a
-    runner that guessed between them would be back to holding an opinion about a
-    value it does not own.
-    """
-    path = Path(__file__).resolve().parents[3] / directory / file_name
-    try:
-        source = path.read_text(encoding="utf-8")
-    except OSError as error:
-        raise Refusal(
-            f"cannot read schema owner {directory}/{file_name}: {error}"
-        ) from error
-    matches = re.findall(
-        r"(?m)^\s*(?:pub(?:\([a-z]+\))?\s+)?const\s+"
-        + re.escape(constant)
-        + r"\s*:\s*&(?:'static\s+)?str\s*=\s*(?:\r?\n\s*)?\"([^\"]*)\"\s*;",
-        source,
-    )
-    if len(matches) != 1 or not matches[0]:
-        raise Refusal(
-            f"{directory}/{file_name} must declare exactly one non-empty &str "
-            f"{constant}; found {len(matches)}"
-        )
-    return matches[0]
+def _load_shared_rust_schema() -> Any:
+    path = Path(__file__).resolve().parents[3] / SHARED_RUST_SCHEMA_RELATIVE_PATH
+    spec = importlib.util.spec_from_file_location("dclutch_rust_schema", path)
+    if spec is None or spec.loader is None:
+        raise Refusal(f"cannot load the shared schema reader at {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+rust_schema_constant = _load_shared_rust_schema().rust_schema_constant
 
 
 DIRECT_PRODUCER_SCHEMA = rust_schema_constant(
@@ -889,9 +877,18 @@ def authenticate_offline_preflight(
     )
     if executing_runner != runner_path:
         raise Refusal("executing lifecycle runner is outside the clean target source")
+    # The shared schema reader is EXECUTED by this file, so its bytes are bound
+    # here beside the runner's own rather than only inside the preflight's
+    # source-set digest: a receipt is evidence about a tree, and a tool this
+    # runner imports has to be part of the tree the receipt is about.
+    shared_rust_schema_path = canonical_file(
+        paths.repo / SHARED_RUST_SCHEMA_RELATIVE_PATH,
+        "shared Rust schema reader in target source",
+    )
     expected_source_files = {
         str(RUNNER_RELATIVE_PATH): sha256_file(runner_path),
         str(OFFLINE_PREFLIGHT_RELATIVE_PATH): sha256_file(preflight_path),
+        str(SHARED_RUST_SCHEMA_RELATIVE_PATH): sha256_file(shared_rust_schema_path),
     }
     for relative, digest in expected_source_files.items():
         if source_sha256.get(relative) != digest:

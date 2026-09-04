@@ -48,7 +48,10 @@ use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
 use solana_system_interface::instruction::{allocate, assign, transfer};
 
 use crate::market_admission_v1::RESOLUTION_LIVE_MARKET_ADMISSIBLE_PRESTATES_V1;
-use crate::market_admission_v1::RESOLUTION_RECLAIMABLE_SOURCE_ADMISSIBLE_STATES_V1;
+use crate::market_admission_v1::{
+    RESOLUTION_CAPTURABLE_SOURCE_ADMISSIBLE_STATES_V1,
+    RESOLUTION_RECLAIMABLE_SOURCE_ADMISSIBLE_STATES_V1,
+};
 use crate::{
     ResolutionError, authenticate_clock, authenticate_rent, cached_deployment_observation,
     pinned_deployment_refusal,
@@ -597,8 +600,13 @@ fn authenticate_current_submission(
         .map_err(|_| ResolutionError::OutputState)?;
     let source =
         SourceResolutionStateV2::decode(&source_data).map_err(|_| ResolutionError::OutputState)?;
+    // A submission may be made on either state in which this market can still
+    // be answered honestly. `Recovery` is one of them: the ladder stands on a
+    // funded alternative with its own committed deadline, and refusing a
+    // submission there would leave the rung with a capture route and no way to
+    // put evidence in front of it.
     if frame.account(16).owner != program_id
-        || source.phase() != SourceResolutionPhaseV1::Primary
+        || !RESOLUTION_CAPTURABLE_SOURCE_ADMISSIBLE_STATES_V1.admits(source.phase())
         || source.market() != request.market
         || source.generation() != request.generation
         || source.material_id().to_bytes() != request.source_material

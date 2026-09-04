@@ -44,18 +44,19 @@ use dclutch_release_set_contract::{
 use dclutch_resolution_codec::{
     PROVIDER_EXECUTION_REQUEST_BYTES_V3, PROVIDER_EXECUTION_REQUEST_MAGIC_V3,
     PROVIDER_EXECUTION_REQUEST_SCHEMA_ID_V3, PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3,
-    PROVIDER_RESOLUTION_CORE_TAIL_START_V3, PROVIDER_RESOLUTION_TRADING_ACCOUNT_COUNT_V3,
-    PROVIDER_RESOLUTION_TRADING_TAIL_START_V3, PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3,
-    PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
-    PYTH_RELEASE_RECORD_SCHEMA_ID_V1, ProviderCallerV3, ProviderExecutionRequestV3,
-    ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_BYTES_V2,
-    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
-    provider_resolution_direct_intent_digest_v1,
+    PROVIDER_RESOLUTION_CORE_TAIL_START_V3, PROVIDER_RESOLUTION_RECOVERY_TAIL_ACCOUNTS_V3,
+    PROVIDER_RESOLUTION_TRADING_ACCOUNT_COUNT_V3, PROVIDER_RESOLUTION_TRADING_TAIL_START_V3,
+    PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3, PROVIDER_UPDATE_LIFECYCLE_BYTES_V3,
+    PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1, ProviderCallerV3,
+    ProviderExecutionRequestV3, ProviderUpdateLifecycleV3, ProviderUpdateStatusV3,
+    RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+    RESOLUTION_CONTROLLER_RELEASE_ID_V7, provider_resolution_direct_intent_digest_v1,
 };
 use dclutch_source_contract::{
     ContentId as SourceContentId, PROVIDER_RELEASE_BYTES, PROVIDER_RELEASE_SCHEMA_ID_V1,
     PYTH_ADAPTER_CONFIG_BYTES, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, ProviderReleaseV1,
-    PythAdapterConfigV1, SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+    PythAdapterConfigV1, RECOVERY_POLICY_BYTES_V2, RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryPolicyV2,
+    SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
     SOURCE_MATERIAL_V3_BYTES, SOURCE_RESOLUTION_STATE_BYTES_V2, SOURCE_SPEC_BYTES,
     SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_BYTES, STATISTIC_SPEC_SCHEMA_ID_V1, SourceMaterialV3,
     SourceResolutionStateV2, SourceSpecV1, StatisticSpecV1, WINDOW_SPEC_BYTES,
@@ -78,8 +79,8 @@ use crate::{
     ResolutionError, authenticate_clock, authenticate_rent, cached_deployment_observation,
     pinned_deployment_refusal,
     provider_v3::{
-        AuthenticatedProviderObservationV3, AuthenticatedSourceRecordsV3, ProviderJoinErrorV3,
-        plan_provider_resolution_v3,
+        AuthenticatedProviderObservationV3, AuthenticatedRecoveryLadderV3,
+        AuthenticatedSourceRecordsV3, ProviderJoinErrorV3, plan_provider_resolution_v3,
     },
 };
 
@@ -111,30 +112,41 @@ pub(crate) fn process_provider_resolution_v3(
             .map_err(|_| ResolutionError::Instruction)?,
     );
     PostUpdateParamsView::parse(post_body).map_err(|_| ResolutionError::ProviderObservation)?;
-    let tail_start = match request.caller {
-        ProviderCallerV3::Core => {
-            if accounts.len() != PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3 {
-                return Err(ResolutionError::AccountFrame.into());
-            }
-            PROVIDER_RESOLUTION_CORE_TAIL_START_V3
-        }
-        ProviderCallerV3::Trading => {
-            if accounts.len() != PROVIDER_RESOLUTION_TRADING_ACCOUNT_COUNT_V3 {
-                return Err(ResolutionError::AccountFrame.into());
-            }
-            PROVIDER_RESOLUTION_TRADING_TAIL_START_V3
-        }
-        ProviderCallerV3::Resolution => {
-            if accounts.len() != PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3 {
-                return Err(ResolutionError::AccountFrame.into());
-            }
-            PROVIDER_RESOLUTION_CORE_TAIL_START_V3
-        }
+    // A capture on a rung above the primary brings the ladder that names its
+    // source, and brings it at the END so that every position a primary capture
+    // ever used keeps its index. `source_index` is not yet trusted here -- the
+    // Source state settles that below -- but it does have to be self-consistent
+    // with the frame it arrived in, and an account count is the cheapest place
+    // to say so.
+    let (base_count, tail_start) = match request.caller {
+        ProviderCallerV3::Core | ProviderCallerV3::Resolution => (
+            PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3,
+            PROVIDER_RESOLUTION_CORE_TAIL_START_V3,
+        ),
+        ProviderCallerV3::Trading => (
+            PROVIDER_RESOLUTION_TRADING_ACCOUNT_COUNT_V3,
+            PROVIDER_RESOLUTION_TRADING_TAIL_START_V3,
+        ),
     };
+    let recovery_start = if request.source_index == 0 {
+        None
+    } else {
+        Some(base_count)
+    };
+    let expected_count = match recovery_start {
+        None => base_count,
+        Some(_) => base_count
+            .checked_add(PROVIDER_RESOLUTION_RECOVERY_TAIL_ACCOUNTS_V3)
+            .ok_or(ResolutionError::AccountFrame)?,
+    };
+    if accounts.len() != expected_count {
+        return Err(ResolutionError::AccountFrame.into());
+    }
     authenticate_privileges(program_id, accounts, tail_start)?;
     let frame = ProviderFrameV3 {
         accounts,
         tail_start,
+        recovery_start,
     };
     authenticate_request_accounts(&request, frame)?;
 
@@ -143,6 +155,7 @@ pub(crate) fn process_provider_resolution_v3(
     let market = authenticate_market_and_infrastructure(program_id, &request, frame)?;
     authenticate_activation_and_caller(program_id, &request, frame)?;
     let source_records = boxed_source_records(&request, frame)?;
+    let ladder = authenticate_recovery_ladder(&request, frame)?;
     let product_runtime = boxed_product_runtime(&request, frame)?;
     if market.identity.product_record.to_bytes() != request.product_record
         || product_runtime.product_record.content_digest.to_bytes() != request.product_record
@@ -181,8 +194,14 @@ pub(crate) fn process_provider_resolution_v3(
         post_body,
         clock,
     )?;
-    let plan = plan_provider_resolution_v3(request_bytes, &source, &source_records, &observation)
-        .map_err(map_provider_join_error)?;
+    let plan = plan_provider_resolution_v3(
+        request_bytes,
+        &source,
+        &source_records,
+        ladder.as_deref(),
+        &observation,
+    )
+    .map_err(map_provider_join_error)?;
     drop(source_data);
     drop(result_domain_data);
     drop(update_data);
@@ -193,6 +212,7 @@ const fn map_provider_join_error(error: ProviderJoinErrorV3) -> ResolutionError 
     match error {
         ProviderJoinErrorV3::Request => ResolutionError::Instruction,
         ProviderJoinErrorV3::Source => ResolutionError::SourceMaterial,
+        ProviderJoinErrorV3::SourceLadder => ResolutionError::SourceLadder,
         ProviderJoinErrorV3::Product => ResolutionError::ProductDomain,
         ProviderJoinErrorV3::Provider => ResolutionError::ProviderObservation,
         ProviderJoinErrorV3::ProviderWindow => ResolutionError::ProviderWindow,
@@ -402,6 +422,9 @@ fn set_provider_receipt(plan: &crate::provider_v3::ProviderResolutionPlanV3) -> 
 struct ProviderFrameV3<'accounts, 'info> {
     accounts: &'accounts [AccountInfo<'info>],
     tail_start: usize,
+    /// Index of the `RecoveryPolicyV2` raw record, present exactly when this
+    /// capture answers on a rung above the primary.
+    recovery_start: Option<usize>,
 }
 
 impl<'accounts, 'info> ProviderFrameV3<'accounts, 'info> {
@@ -443,6 +466,9 @@ impl<'accounts, 'info> ProviderFrameV3<'accounts, 'info> {
     }
     fn system(self) -> &'accounts AccountInfo<'info> {
         self.account(self.tail_start + 8)
+    }
+    fn recovery_policy(self) -> Option<usize> {
+        self.recovery_start
     }
 }
 
@@ -883,6 +909,49 @@ fn authenticate_source_records(
     })
 }
 
+/// Authenticate the funded ordered-recovery ladder a rung capture rides with.
+///
+/// The digest is the MATERIAL's, never the request's: a caller brings the
+/// record but does not get to say which policy this market bought, exactly as
+/// it brings the window and the statistic without getting to say which ones
+/// those are. A market whose material selects no policy has no ladder to
+/// authenticate and refuses on the ladder if a rung was named anyway; a market
+/// that has one but was asked on its primary reads no policy at all, which is
+/// why a primary capture's frame did not have to grow.
+fn authenticate_recovery_ladder(
+    request: &ProviderExecutionRequestV3,
+    frame: ProviderFrameV3<'_, '_>,
+) -> Result<Option<Box<AuthenticatedRecoveryLadderV3>>, ProgramError> {
+    let Some(index) = frame.recovery_policy() else {
+        return Ok(None);
+    };
+    let material_data = borrow_record(
+        frame,
+        17,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+        request.source_material,
+        SOURCE_MATERIAL_V3_BYTES,
+    )?;
+    let material =
+        SourceMaterialV3::decode(&material_data).map_err(|_| ResolutionError::SourceMaterial)?;
+    let policy_id = material
+        .recovery_policy()
+        .ok_or(ResolutionError::SourceLadder)?;
+    let policy_data = borrow_record(
+        frame,
+        index,
+        RECOVERY_POLICY_SCHEMA_ID_V2,
+        policy_id.to_bytes(),
+        RECOVERY_POLICY_BYTES_V2,
+    )?;
+    let policy =
+        RecoveryPolicyV2::decode(&policy_data).map_err(|_| ResolutionError::SourceMaterial)?;
+    Ok(Some(Box::new(AuthenticatedRecoveryLadderV3 {
+        policy_id,
+        policy,
+    })))
+}
+
 fn authenticate_pyth_release(
     request: &ProviderExecutionRequestV3,
     frame: ProviderFrameV3<'_, '_>,
@@ -1316,6 +1385,7 @@ mod tests {
     ) -> ProviderExecutionRequestV3 {
         ProviderExecutionRequestV3 {
             caller: ProviderCallerV3::Trading,
+            source_index: 0,
             generation: 7,
             terminal_sequence: 1,
             market: [41; 32],

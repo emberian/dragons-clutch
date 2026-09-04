@@ -54,10 +54,11 @@ use dclutch_product_runtime_v2_admission::{
 };
 use dclutch_program_test_evidence::TransactionEvidence;
 use dclutch_provider_transport_v3_operator::{
-    ProviderExecuteDeploymentV3, ProviderExecuteIntentV3, ProviderExecuteSnapshotV3,
-    ProviderReclaimDeploymentV3, ProviderSubmitDeploymentV3, ProviderSubmitIntentV3,
-    ProviderSubmitSnapshotV3, ProviderTransportOperatorErrorV3, build_provider_abandon_v3,
-    build_provider_execute_v3, build_provider_reclaim_v3, build_provider_submit_v3,
+    ProviderExecuteDeploymentV3, ProviderExecuteIntentV3, ProviderExecuteLadderV3,
+    ProviderExecuteSnapshotV3, ProviderReclaimDeploymentV3, ProviderSubmitDeploymentV3,
+    ProviderSubmitIntentV3, ProviderSubmitSnapshotV3, ProviderTransportOperatorErrorV3,
+    build_provider_abandon_v3, build_provider_execute_v3, build_provider_reclaim_v3,
+    build_provider_submit_v3,
 };
 use dclutch_pyth_svm::{
     FullPriceUpdateV2, PYTH_RELEASE_V1_ENCODED_LEN, PythReleaseV1, VerifiedEncodedVaaV1,
@@ -82,11 +83,12 @@ use dclutch_release_set_contract::{
     ProtocolInfrastructureProfileV2,
 };
 use dclutch_resolution_codec::{
-    FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1, PROVIDER_UPDATE_LIFECYCLE_BYTES_V3,
-    PYTH_RELEASE_RECORD_SCHEMA_ID_V1, ProviderUpdateLifecycleV3, ProviderUpdateStatusV3,
-    RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-    RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateKindV2, ResolutionCertificateV2,
-    SOURCE_CLOSURE_RECEIPT_BYTES_V3, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SourceClosureReceiptV3,
+    FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1, PROVIDER_EXECUTION_REQUEST_SOURCE_INDEX_OFFSET_V3,
+    PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
+    ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_BYTES_V2,
+    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
+    ResolutionCertificateKindV2, ResolutionCertificateV2, SOURCE_CLOSURE_RECEIPT_BYTES_V3,
+    SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SourceClosureReceiptV3,
 };
 use dclutch_resolution_core_v3_operator::{
     Finality, Observation, ObservedAccount, ResolutionActivateFundSnapshotV1,
@@ -245,6 +247,11 @@ struct Fixture {
     pyth_release: RecordPair,
     capability_manifest: RecordPair,
     recovery_policy: RecordPair,
+    /// The finalized `SourceSpecV1` the single funded recovery attempt names,
+    /// and the `PythAdapterConfigV1` that spec selects. Present in every
+    /// fixture; reachable only from a market whose material bought the ladder.
+    alternative_source_spec: RecordPair,
+    alternative_adapter_config: RecordPair,
     product: RecordPair,
     domain: RecordPair,
     portfolio: RecordPair,
@@ -971,27 +978,6 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
     .expect("Source capacity");
     let capacity_id = source_id(hash(&capacity.to_bytes()).to_bytes());
     let recovery_allocation = source_id([0x93; 32]);
-    let recovery_policy_value = RecoveryPolicyV2::new(
-        capacity_id,
-        [
-            Some(
-                RecoveryAttemptV2::new(
-                    source_id([0x94; 32]),
-                    source_id([0x95; 32]),
-                    TERMINAL_TIME + 20,
-                    recovery_allocation,
-                )
-                .expect("recovery attempt"),
-            ),
-            None,
-            None,
-            None,
-        ],
-        1,
-    )
-    .expect("recovery policy");
-    let recovery_policy_bytes = recovery_policy_value.to_bytes();
-    let recovery_policy_id = hash(&recovery_policy_bytes).to_bytes();
     let update_view =
         FullPriceUpdateV2::parse(pyth_provider::PRICE_UPDATE).expect("captured full Pyth update");
     let pyth_release_bytes = pyth_provider::synthetic_release_bytes(provider);
@@ -1027,6 +1013,63 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
     );
     let source_spec_bytes = source_spec_value.to_bytes();
     let source_spec_id = hash(&source_spec_bytes).to_bytes();
+    // THE ALTERNATIVE SOURCE, and it is a real one rather than a placeholder
+    // identity. The attempt used to name `[0x94; 32]` and `[0x95; 32]` -- two
+    // digests with no record behind them, which was sufficient while the only
+    // thing a rung could do was expire, and is not sufficient now that a rung
+    // can be ANSWERED.
+    //
+    // What makes it a different source is its adapter configuration, which is
+    // the only axis a Pyth adapter has: the same captured feed at the same
+    // exponent, admitted under a TIGHTER confidence bound than the primary's.
+    // A market whose first choice went silent is a market with a reason to
+    // demand a better-conditioned reading from its second, and the bound is
+    // capped at 10,000 basis points so tighter is the only direction available
+    // anyway. It is a distinct `PythAdapterConfigV1` record and therefore a
+    // distinct `SourceSpecV1` record, which is what makes the rung a genuinely
+    // different SOURCE rather than a relabelling of the same one.
+    //
+    // Everything the market sold is shared: the same unit, the same capacity
+    // profile the policy declares, the same provider release, the same window
+    // and the same statistic. A rung substitutes a source and nothing else.
+    let alternative_adapter_value =
+        PythAdapterConfigV1::new(update_view.feed_id(), update_view.exponent(), 9_000)
+            .expect("alternative Pyth adapter configuration");
+    let alternative_adapter_bytes = alternative_adapter_value.to_bytes();
+    let alternative_adapter_id = hash(&alternative_adapter_bytes).to_bytes();
+    assert_ne!(alternative_adapter_bytes, adapter_config_bytes);
+    let alternative_source_value = SourceSpecV1::new(
+        source_id(coordinate_id),
+        source_unit,
+        source_id(provider_release_id),
+        SourceAccessProfile::PythTerminalOneTransaction,
+        source_id(alternative_adapter_id),
+        capacity_id,
+    );
+    let alternative_source_bytes = alternative_source_value.to_bytes();
+    let alternative_source_id = hash(&alternative_source_bytes).to_bytes();
+    assert_ne!(alternative_source_id, source_spec_id);
+    let recovery_policy_value = RecoveryPolicyV2::new(
+        capacity_id,
+        [
+            Some(
+                RecoveryAttemptV2::new(
+                    source_id(alternative_source_id),
+                    source_id(provider_release_id),
+                    TERMINAL_TIME + 20,
+                    recovery_allocation,
+                )
+                .expect("recovery attempt"),
+            ),
+            None,
+            None,
+            None,
+        ],
+        1,
+    )
+    .expect("recovery policy");
+    let recovery_policy_bytes = recovery_policy_value.to_bytes();
+    let recovery_policy_id = hash(&recovery_policy_bytes).to_bytes();
     // A closed period ending at the captured publication, rather than a window
     // pinned to that publication at both ends. The upper bound is load-bearing
     // for every `TERMINAL_TIME + n` deadline in this file; the width is what
@@ -1275,6 +1318,16 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
         &mut test,
         RECOVERY_POLICY_SCHEMA_ID_V2,
         recovery_policy_bytes.to_vec(),
+    );
+    let alternative_source_spec = add_record(
+        &mut test,
+        SOURCE_SPEC_SCHEMA_ID_V1,
+        alternative_source_bytes.to_vec(),
+    );
+    let alternative_adapter_config = add_record(
+        &mut test,
+        PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1,
+        alternative_adapter_bytes.to_vec(),
     );
     let product = add_record(
         &mut test,
@@ -1694,6 +1747,8 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
         pyth_release,
         capability_manifest,
         recovery_policy,
+        alternative_source_spec,
+        alternative_adapter_config,
         product,
         domain,
         portfolio,
@@ -2256,6 +2311,30 @@ async fn provider_execute_snapshot_for(
         product: required_observed(context, fixture.product.raw).await,
         result_domain: required_observed(context, fixture.domain.raw).await,
         portfolio: required_observed(context, fixture.portfolio.raw).await,
+        recovery_ladder: None,
+    }
+}
+
+/// The same observation aimed at the market's CURRENT recovery rung.
+///
+/// Three positions carry the attempt's records rather than the material's --
+/// the SourceSpec, the adapter configuration and, at the tail, the
+/// `RecoveryPolicyV2` that names them. Nothing else about the frame moves,
+/// which is the whole reason the primary snapshot above is untouched.
+async fn provider_execute_recovery_snapshot(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+    lifecycle: Pubkey,
+) -> ProviderExecuteSnapshotV3 {
+    let update = fixture.update.pubkey();
+    ProviderExecuteSnapshotV3 {
+        source_spec: required_observed(context, fixture.alternative_source_spec.raw).await,
+        adapter_config: required_observed(context, fixture.alternative_adapter_config.raw).await,
+        recovery_ladder: Some(ProviderExecuteLadderV3 {
+            policy: required_observed(context, fixture.recovery_policy.raw).await,
+            policy_staging: vacant_observed(fixture.recovery_policy.staging),
+        }),
+        ..provider_execute_snapshot_for(context, fixture, lifecycle, update).await
     }
 }
 
@@ -2362,6 +2441,22 @@ async fn admit_snapshot(
     context: &mut ProgramTestContext,
     fixture: &Fixture,
 ) -> ResolutionAdmitTerminalSnapshotV3 {
+    let certificate = fixture.certificate;
+    admit_snapshot_at(context, fixture, certificate).await
+}
+
+/// The same snapshot aimed at a NAMED terminal seat.
+///
+/// Success and failure are different addresses for one Source at one sequence,
+/// and `Fixture::certificate` is whichever of the two this fixture's campaign
+/// was built to end at. A market that ends the other way -- a
+/// recovery-provisioned fixture that gets ANSWERED rather than walked -- writes
+/// the other seat, and the accept has to be pointed at it.
+async fn admit_snapshot_at(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+    certificate: Pubkey,
+) -> ResolutionAdmitTerminalSnapshotV3 {
     ResolutionAdmitTerminalSnapshotV3 {
         market: required_observed(context, fixture.market).await,
         activation_cache: required_observed(context, fixture.activation).await,
@@ -2376,7 +2471,7 @@ async fn admit_snapshot(
         capability_manifest_staging: vacant_observed(fixture.capability_manifest.staging),
         source_state: required_observed(context, fixture.source).await,
         funding_ledger: required_observed(context, fixture.funding).await,
-        certificate: required_observed(context, fixture.certificate).await,
+        certificate: required_observed(context, certificate).await,
         rent_sysvar: required_observed(context, sysvar::rent::ID).await,
         product_raw: required_observed(context, fixture.product.raw).await,
         product_staging: vacant_observed(fixture.product.staging),
@@ -3505,16 +3600,21 @@ async fn current_resolution_creates_and_activates_exact_funding() {
     // second lifecycle is still `Submitted`, so every frame, privilege,
     // release, deployment, record, product-domain, provider and freshness
     // check the winning execution passed still passes for this one. Exactly
-    // one fact changed: the Source is `Resolved`, and
-    // `SourceResolutionStateV2::resolve_primary_from_authenticated_domain`
-    // refuses anywhere but `Primary`.
+    // one fact changed: the Source is `Resolved`.
     //
     // Named by discriminant. A bare `is_err()` here would also pass on an
     // `AccountFrame`, `ProviderObservation` or `OutputState` refusal, and each
     // of those would prove the OPPOSITE of first-valid -- that the losing
     // submission was never admissible evidence in the first place, so nothing
-    // was ever ordered. `Transition` is the only code that means "this was
-    // good, and it lost".
+    // was ever ordered. The code has to mean "this was good, and it lost".
+    //
+    // It used to be `Transition`, the kernel declining to move a decided state
+    // out of `Primary`. It is `SourceLadder` since the ladder gained a capture
+    // producer, because the route now asks WHICH leg a capture answers on
+    // before it reads the observation, and a `Resolved` market stands on no leg
+    // -- there is no `source_index` this request could have carried that would
+    // have been right. Narrower, earlier, and the same sentence: this was good,
+    // and it lost.
     let before_first_valid =
         provider_rollback_snapshot(&mut context, &fixture, provider_submit.lifecycle).await;
     advance_provider_refusal_slot(&mut context).await;
@@ -3527,9 +3627,9 @@ async fn current_resolution_creates_and_activates_exact_funding() {
             BanksClientError::TransactionError(TransactionError::InstructionError(
                 0,
                 InstructionError::Custom(code)
-            )) if code == ResolutionError::Transition as u32
+            )) if code == ResolutionError::SourceLadder as u32
         ),
-        "the later of two valid submissions must refuse as Resolution Transition, got {later:?}"
+        "the later of two valid submissions must refuse as Resolution SourceLadder, got {later:?}"
     );
     assert_eq!(
         provider_rollback_snapshot(&mut context, &fixture, provider_submit.lifecycle).await,
@@ -4474,6 +4574,364 @@ async fn a_two_source_market_walks_its_funded_ladder_and_every_rung_pays_a_stran
         "RECOVERY LADDER CU: advance={advance_units} exhaust={exhaust_units} \
          failure={failure_units}"
     );
+}
+
+/// The first market ever answered on its SECOND rung.
+///
+/// `a_two_source_market_walks_its_funded_ladder_and_every_rung_pays_a_stranger`
+/// proves a ladder can be walked to its end. It cannot prove a ladder is worth
+/// buying, because in that campaign every rung expires: the alternative source
+/// the market paid for is never asked, only outlived. Until this test the whole
+/// recovery ontology had exactly one reachable outcome, and it was the same
+/// pre-disclosed failure a market with no policy gets for free.
+///
+/// This is the other outcome. Same founding, same crank, same stranger -- and
+/// then the alternative feed answers inside its own committed deadline, and the
+/// market resolves on a REAL reading through the real Receiver ELF.
+///
+/// Three things it pins that nothing else could:
+///
+/// - the honest selector. The alternative's reading maps through the Product's
+///   own domain to the same outcome the primary would have selected from the
+///   same captured update, so a market rescued by its ladder is answered, not
+///   approximated;
+/// - the rung is recorded. `SourceResolutionRouteV1::Recovery` on the state and
+///   `attempt_index = 1` on the certificate say WHICH leg answered, and Core
+///   admits the terminal only against the route the request declared;
+/// - and the ladder is the authority for which source may speak. The request's
+///   `source_index` is checked against the market's own `active_attempt`, so a
+///   capture naming a rung the market is not standing on refuses as
+///   `SourceLadder` rather than being joined against the wrong feed.
+#[tokio::test]
+async fn a_market_is_answered_on_its_funded_second_rung() {
+    let mut fixture = fixture(MarketPrestateV1::WalkableRecovery);
+    let mut context = fixture
+        .test
+        .take()
+        .expect("unstarted ProgramTest")
+        .start_with_context()
+        .await;
+    let encoded_vaa =
+        pyth_provider::initialize_real_providers(&mut context, fixture.provider).await;
+    let mut clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("ProgramTest Clock");
+    clock.slot = clock.slot.max(1);
+    clock.unix_timestamp = TERMINAL_TIME;
+    context.set_sysvar(&clock);
+    let payer = context.payer.pubkey();
+
+    // FOUNDING, identical to the walk campaign's: a market that bought one
+    // named alternative source.
+    let create = build_resolution_create_fund_v3(&create_snapshot(&mut context, &fixture).await)
+        .expect("a recovery-bearing market founds");
+    submit(
+        &mut context,
+        &[
+            transfer(&payer, &fixture.source, create.source_top_up_lamports),
+            create.instruction,
+        ],
+    )
+    .await
+    .expect("Core mints a Source over material that bought a named alternative");
+    let activation = build_resolution_activate_fund_v1(&ResolutionActivateFundSnapshotV1 {
+        pending: verify_snapshot(&mut context, &fixture).await,
+        system_program: required_observed(&mut context, system_program::ID).await,
+    })
+    .expect("chain-derived activation");
+    let mut activation_instructions = Vec::with_capacity(2);
+    if activation.receipt_top_up_lamports != 0 {
+        activation_instructions.push(transfer(
+            &payer,
+            &fixture.activation_receipt,
+            activation.receipt_top_up_lamports,
+        ));
+    }
+    activation_instructions.push(activation.instruction);
+    submit(&mut context, &activation_instructions)
+        .await
+        .expect("activate the three-row Resolution funding ledger");
+    let verify =
+        build_resolution_verify_fund_ready_v3(&verify_snapshot(&mut context, &fixture).await)
+            .expect("chain-derived VerifyFundReady");
+    submit(&mut context, &[verify.instruction])
+        .await
+        .expect("VerifyFundReady rechecks the Active ledger");
+
+    let cranker = Keypair::new();
+    let seat_rent = Rent::default().minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2);
+    let cranker_rent = context
+        .banks_client
+        .get_rent()
+        .await
+        .expect("chain Rent")
+        .minimum_balance(0);
+    let resolver = Keypair::new();
+    // The SUCCESS seat, which is not `fixture.certificate`. This fixture was
+    // provisioned to be WALKED, so its terminal seat is the failure-kind
+    // address; a market that is answered instead writes the success-kind one at
+    // the same sequence, and the two are different addresses on purpose.
+    let success_certificate = Pubkey::find_program_address(
+        &[
+            RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+            fixture.source.as_ref(),
+            &[ResolutionCertificateKindV2::ResolutionSuccess.kind_seed()],
+            &TERMINAL_SEQUENCE.to_le_bytes(),
+        ],
+        &RESOLUTION_PROGRAM_ID,
+    )
+    .0;
+    assert_ne!(
+        success_certificate, fixture.certificate,
+        "a walked market and an answered market never share a terminal seat"
+    );
+    submit(
+        &mut context,
+        &[
+            transfer(&payer, &cranker.pubkey(), cranker_rent),
+            transfer(&payer, &resolver.pubkey(), cranker_rent),
+            transfer(&payer, &fixture.recovery_advanced_certificate, seat_rent),
+            transfer(&payer, &success_certificate, seat_rent),
+        ],
+    )
+    .await
+    .expect("establish the stranger, the resolver, and the two seats this campaign writes");
+
+    let primary_deadline = TERMINAL_TIME + i64::from(WINDOW_MAX_AGE_SECONDS);
+    let attempt_deadline = TERMINAL_TIME + 20;
+    let set_clock = |context: &mut ProgramTestContext, at: i64| {
+        let mut value = Clock {
+            slot: 1,
+            unix_timestamp: at,
+            ..Clock::default()
+        };
+        value.slot = at as u64;
+        context.set_sysvar(&value);
+    };
+
+    // THE PRIMARY WINDOW CLOSES UNOBSERVED, and a stranger advances the ladder
+    // onto the funded alternative. Nothing here is new; it is the state the
+    // capture below needs to exist at all.
+    set_clock(&mut context, primary_deadline + 1);
+    let advance_units = submit_measuring_units(
+        &mut context,
+        &[advance_recovery_instruction(
+            &fixture,
+            cranker.pubkey(),
+            fixture.recovery_advanced_certificate,
+            ADVANCE_SEQUENCE,
+        )],
+        &[&cranker],
+    )
+    .await
+    .expect("a stranger advances the ladder onto the funded alternative");
+    let advanced = SourceResolutionStateV2::decode(
+        &observed(&mut context, fixture.source)
+            .await
+            .expect("advanced Source")
+            .data,
+    )
+    .expect("advanced Source state");
+    assert_eq!(advanced.phase(), SourceResolutionPhaseV1::Recovery);
+    assert_eq!(
+        advanced.active_attempt(),
+        0,
+        "the ladder stands on attempt zero, which is rung one"
+    );
+
+    // THE ALTERNATIVE ANSWERS. One update posted through the real Receiver ELF,
+    // consumed against the ATTEMPT's own SourceSpec and adapter configuration
+    // rather than the material's -- the three finalized-record positions the
+    // frame already had, now carrying a different source, plus the
+    // `RecoveryPolicyV2` at the tail that is the only record entitled to say so.
+    let post_update_body = pyth_provider::RECEIVER_POST_UPDATE
+        .get(8..)
+        .expect("Receiver PostUpdate body")
+        .to_vec();
+    let provider_submit = build_provider_submit_v3(
+        &provider_submit_snapshot(&mut context, &fixture, encoded_vaa).await,
+        provider_submit_deployment(&fixture),
+        &ProviderSubmitIntentV3 {
+            submitter: payer,
+            refund_recipient: fixture.rent_credit,
+            update_account: fixture.update.pubkey(),
+            reclaim_after_unix_seconds: attempt_deadline,
+            post_update_body: post_update_body.clone(),
+        },
+    )
+    .expect("chain-derived real-provider submission onto a market standing on a rung");
+    let provider_lifecycle_rent = context
+        .banks_client
+        .get_rent()
+        .await
+        .expect("chain Rent")
+        .minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V3);
+    pyth_provider::submit(
+        &mut context,
+        &[
+            transfer(&payer, &provider_submit.lifecycle, provider_lifecycle_rent),
+            provider_submit.instruction,
+        ],
+        &[&fixture.update],
+    )
+    .await
+    .expect("Resolution submits one update through the real Receiver ELF");
+
+    // THE BUILDER WILL NOT ANSWER ON THE PRIMARY. The market has advanced, so a
+    // snapshot that brings no ladder is a request to answer on a leg this
+    // market has left -- refused off chain, before a transaction exists, by the
+    // same rule the program enforces on chain.
+    assert_eq!(
+        build_provider_execute_v3(
+            &provider_execute_snapshot(&mut context, &fixture, provider_submit.lifecycle).await,
+            provider_execute_deployment(&fixture),
+            &ProviderExecuteIntentV3 {
+                resolver: resolver.pubkey(),
+                terminal_sequence: TERMINAL_SEQUENCE,
+                post_update_body: post_update_body.clone(),
+            },
+        )
+        .err(),
+        Some(ProviderTransportOperatorErrorV3::State),
+        "a market standing on a rung is not answerable on its primary"
+    );
+
+    let provider_execute = build_provider_execute_v3(
+        &provider_execute_recovery_snapshot(&mut context, &fixture, provider_submit.lifecycle)
+            .await,
+        provider_execute_deployment(&fixture),
+        &ProviderExecuteIntentV3 {
+            resolver: resolver.pubkey(),
+            terminal_sequence: TERMINAL_SEQUENCE,
+            post_update_body,
+        },
+    )
+    .expect("chain-derived Core provider execution on the market's current rung");
+
+    // HOSTILE -- a rung the market is not standing on. The frame is the rung
+    // frame and every record in it authenticates; only the declared index moves,
+    // from the leg the market reached to the one after it. A caller who could
+    // get away with this could answer a market on a source it has not yet
+    // advanced to, which is skipping a leg the holders paid for from the other
+    // direction.
+    let before_wrong_rung =
+        provider_rollback_snapshot(&mut context, &fixture, provider_submit.lifecycle).await;
+    let mut wrong_rung = provider_execute.instruction.clone();
+    *wrong_rung
+        .data
+        .get_mut(REQUEST_BYTES + PROVIDER_EXECUTION_REQUEST_SOURCE_INDEX_OFFSET_V3)
+        .expect("the provider request's source index") = 2;
+    advance_provider_refusal_slot(&mut context).await;
+    let wrong = pyth_provider::submit(&mut context, &[wrong_rung], &[&resolver])
+        .await
+        .expect_err("a capture may not name a rung the market has not reached");
+    assert!(
+        matches!(
+            wrong,
+            BanksClientError::TransactionError(TransactionError::InstructionError(
+                0,
+                InstructionError::Custom(code)
+            )) if code == ResolutionError::SourceLadder as u32
+        ),
+        "a capture on the wrong rung must refuse as Resolution SourceLadder, got {wrong:?}"
+    );
+    assert_eq!(
+        provider_rollback_snapshot(&mut context, &fixture, provider_submit.lifecycle).await,
+        before_wrong_rung,
+        "the wrong-rung refusal leaves Source, lifecycle, certificate and ledger untouched"
+    );
+
+    set_clock(&mut context, attempt_deadline);
+    let capture_units = submit_measuring_units(
+        &mut context,
+        &[provider_execute.instruction.clone()],
+        &[&resolver],
+    )
+    .await
+    .expect("the funded alternative answers inside its own committed deadline");
+
+    let resolved = SourceResolutionStateV2::decode(
+        &observed(&mut context, fixture.source)
+            .await
+            .expect("resolved Source")
+            .data,
+    )
+    .expect("resolved Source state");
+    assert_eq!(resolved.phase(), SourceResolutionPhaseV1::Resolved);
+    let terminal = resolved
+        .terminal_projection()
+        .expect("the rung's terminal projection");
+    assert_eq!(
+        terminal.route(),
+        SourceResolutionRouteV1::Recovery,
+        "the market records WHICH leg answered it"
+    );
+    let certificate = ResolutionCertificateV2::decode(
+        &observed(&mut context, success_certificate)
+            .await
+            .expect("terminal certificate")
+            .data,
+    )
+    .expect("terminal certificate");
+    assert_eq!(
+        certificate.kind,
+        ResolutionCertificateKindV2::ResolutionSuccess,
+        "a rung that answers mints a SUCCESS, not a failure"
+    );
+    assert_eq!(
+        certificate.attempt_index, 1,
+        "one recovery leg had been entered when this market was answered"
+    );
+    assert_eq!(
+        certificate.selector,
+        terminal.selector(),
+        "the certificate carries the selector the transition chose"
+    );
+    assert_ne!(
+        certificate.provider_evidence, [0; 32],
+        "unlike a crank, a capture has evidence"
+    );
+
+    // HOSTILE -- the same instruction again. It refuses, and the code says
+    // WHICH of the two reasons got there first: the update's own lifecycle is
+    // now `Consumed`, so the replay never reaches the ladder at all. That is the
+    // right order -- a spent update is spent for every leg -- and the ladder's
+    // own refusal for a decided market is measured where it is reachable, in
+    // `provider_v3::tests::the_window_refuses_early_late_and_second_observations`,
+    // which replays a fresh observation against the resolved poststate and gets
+    // `SourceLadder`.
+    advance_provider_refusal_slot(&mut context).await;
+    let replayed = pyth_provider::submit(
+        &mut context,
+        &[provider_execute.instruction.clone()],
+        &[&resolver],
+    )
+    .await
+    .expect_err("a decided market cannot be answered again on its rung");
+    assert!(
+        matches!(
+            replayed,
+            BanksClientError::TransactionError(TransactionError::InstructionError(
+                0,
+                InstructionError::Custom(code)
+            )) if code == ResolutionError::ProviderObservation as u32
+        ),
+        "a replayed rung capture must refuse as Resolution ProviderObservation, got {replayed:?}"
+    );
+
+    // CORE ADMITS IT. The market's own terminal, reached on a source it bought
+    // at founding and asked only after its first choice stopped answering.
+    let admit = build_resolution_admit_terminal_v3(
+        &admit_snapshot_at(&mut context, &fixture, success_certificate).await,
+    )
+    .expect("chain-derived terminal Accept for a market answered on its rung");
+    submit(&mut context, &[admit.instruction])
+        .await
+        .expect("Core accepts a terminal reached through the recovery ladder");
+
+    println!("RECOVERY CAPTURE CU: advance={advance_units} capture={capture_units}");
 }
 
 #[tokio::test]

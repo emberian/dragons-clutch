@@ -17,10 +17,10 @@ use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_resolution_codec::{
     PROVIDER_EXECUTION_RECEIPT_BYTES_V3, PROVIDER_EXECUTION_REQUEST_BYTES_V3,
     PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3, PROVIDER_RESOLUTION_CORE_TAIL_START_V3,
-    PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3, PROVIDER_UPDATE_LIFECYCLE_BYTES_V3,
-    PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3, ProviderCallerV3, ProviderExecutionReceiptV3,
-    ProviderExecutionRequestV3, ProviderUpdateLifecycleV3, ProviderUpdateStatusV3,
-    RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+    PROVIDER_RESOLUTION_RECOVERY_TAIL_ACCOUNTS_V3, PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3,
+    PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3, ProviderCallerV3,
+    ProviderExecutionReceiptV3, ProviderExecutionRequestV3, ProviderUpdateLifecycleV3,
+    ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
     ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
 use dclutch_source_contract::{
@@ -55,6 +55,17 @@ pub const EXECUTE_PROVIDER_ADMISSIBLE_PRESTATES_V1: MarketAdmissionV1 =
 
 /// Exact account count shared with the Resolution Core-caller profile.
 pub const EXECUTE_PROVIDER_ACCOUNT_COUNT_V3: usize = PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3;
+/// The same count for a capture answering on a rung above the primary, which
+/// brings the `RecoveryPolicyV2` record pair at the tail.
+///
+/// Core reads the same declared rung the child does and arrives at the same
+/// width independently. That is not redundancy: Core forwards this frame to
+/// Resolution by CPI, so a Core that admitted only one width would make the
+/// ladder's capture route unreachable through its own caller, and a Core that
+/// admitted either width for either rung would forward two accounts nothing
+/// checked.
+pub const EXECUTE_PROVIDER_RECOVERY_ACCOUNT_COUNT_V3: usize =
+    EXECUTE_PROVIDER_ACCOUNT_COUNT_V3 + PROVIDER_RESOLUTION_RECOVERY_TAIL_ACCOUNTS_V3;
 /// Fixed Core request plus fixed provider request before the borrowed provider body.
 pub const EXECUTE_PROVIDER_PREFIX_BYTES_V3: usize =
     dclutch_market_core_codec::REQUEST_BYTES + PROVIDER_EXECUTION_REQUEST_BYTES_V3;
@@ -98,7 +109,7 @@ pub(crate) fn process(
         return Err(CoreSbfError::Instruction.into());
     }
     let provider = boxed_provider_request(provider_request_bytes)?;
-    validate_outer_frame(program_id, accounts)?;
+    validate_outer_frame(program_id, accounts, provider.source_index)?;
 
     let state_bytes = Box::new(read_market_bytes(program_id, account(accounts, MARKET)?)?);
     let state =
@@ -350,7 +361,19 @@ fn authenticate_terminal_poststate(
     let decision = source
         .decision(product.outcome_count)
         .map_err(|_| CoreSbfError::ChildAck)?;
-    if decision.route() != SourceResolutionRouteV1::Primary
+    // WHICH ROUTE ANSWERED, and it has to be the one the request asked on.
+    // A capture on rung zero is the primary route and a capture on any rung
+    // above it is the recovery route, so Core admits exactly one of the two per
+    // request rather than admitting either -- a receipt that claimed the
+    // primary while the Source recorded a recovery terminal would otherwise be
+    // accepted, and the market's own answer would be attributed to a feed that
+    // did not give it.
+    let expected_route = if request.source_index == 0 {
+        SourceResolutionRouteV1::Primary
+    } else {
+        SourceResolutionRouteV1::Recovery
+    };
+    if decision.route() != expected_route
         || decision.selector() != receipt.selector
         || decision.outcome_count() != receipt.outcome_count
         || decision.resolution_evidence_id().to_bytes() != receipt.provider_evidence
@@ -460,7 +483,12 @@ fn authenticate_certificate(
         || certificate.funding_allocation != [0; 32]
         || certificate.receipt_account != request.certificate_account
         || certificate.generation != request.generation
-        || certificate.attempt_index != 0
+        // How many recovery legs this market had entered when it was answered,
+        // which is the rung and is zero for a primary capture. Core reads the
+        // declared index rather than a literal, so a capture on a rung cannot
+        // mint a certificate that reads as the primary's -- and a primary
+        // capture still cannot mint one that claims a leg.
+        || certificate.attempt_index != u32::from(request.source_index)
         || certificate.schedule_index != 0
         || certificate.selector != receipt.selector
         || certificate.work_paid != 0
@@ -480,8 +508,14 @@ fn authenticate_certificate(
 fn validate_outer_frame(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
+    source_index: u8,
 ) -> Result<(), CoreSbfError> {
-    if accounts.len() != EXECUTE_PROVIDER_ACCOUNT_COUNT_V3 {
+    let expected = if source_index == 0 {
+        EXECUTE_PROVIDER_ACCOUNT_COUNT_V3
+    } else {
+        EXECUTE_PROVIDER_RECOVERY_ACCOUNT_COUNT_V3
+    };
+    if accounts.len() != expected {
         return Err(CoreSbfError::AccountFrame);
     }
     require_distinct(accounts)?;

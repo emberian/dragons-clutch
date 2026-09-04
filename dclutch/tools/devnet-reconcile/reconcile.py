@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import importlib.util
 import json
 import os
 import pathlib
@@ -29,30 +30,10 @@ LOADER_V3_PROGRAM_ID = "BPFLoaderUpgradeab1e11111111111111111111111"
 MANIFEST_SCHEMA = "dclutch-activity-reconcile-manifest-v1"
 CAPTURE_SCHEMA = "dclutch-captured-finalized-rpc-v1"
 DOSSIER_SCHEMA = "dclutch-public-activity-dossier-v1"
-OWNED_LOOPBACK_MANIFEST_SCHEMA = "dclutch-owned-loopback-activity-reconcile-manifest-v1"
-OWNED_LOOPBACK_CAPTURE_SCHEMA = "dclutch-owned-loopback-captured-finalized-rpc-v1"
-OWNED_LOOPBACK_RECEIPT_SCHEMA = "dclutch-owned-loopback-reconcile-session-receipt-v1"
-OWNED_LOOPBACK_PROVIDER_CLOSURE_SCHEMA = (
-    "dclutch-owned-loopback-pyth-provider-closure-v1"
-)
-OWNED_LOOPBACK_PROVIDER_PLAN_SCHEMA = "dclutch-local-successor-infrastructure-plan-v3"
-OWNED_LOOPBACK_PROVIDER_PROFILE_SCHEMA = "dclutch-successor-local-validator-profile-v1"
-OWNED_LOOPBACK_PRIVATE_SESSION_SCHEMA = (
-    "dclutch-owned-loopback-private-lifecycle-session-v1"
-)
-OWNED_LOOPBACK_CHAOS_SESSION_SCHEMA = (
-    "dclutch-owned-loopback-private-lifecycle-chaos-session-v1"
-)
+# This tool AUTHORS the owned-loopback dossier, so this one string is written
+# here because here is where it is written. Every other owned-loopback schema
+# below names an artifact somebody else produces, and is read from its producer.
 OWNED_LOOPBACK_DOSSIER_SCHEMA = "dclutch-owned-loopback-activity-dossier-v1"
-OWNED_LOOPBACK_TERMINAL_COMPLETION_SCHEMA = (
-    "dclutch-owned-loopback-terminal-sequence-completion-v1"
-)
-OWNED_LOOPBACK_TERMINAL_JOURNAL_SCHEMA = (
-    "dclutch-owned-loopback-terminal-sequence-journal-v1"
-)
-OWNED_LOOPBACK_TERMINAL_SESSION_SCHEMA = (
-    "dclutch-owned-loopback-terminal-sequence-session-v1"
-)
 EVENT_KINDS = ("founding", "participant", "direct", "resolution", "payout", "retirement")
 RESOLUTION_OPERATIONS_V7 = (
     "resolution-submit",
@@ -83,6 +64,88 @@ class Refusal(Exception):
 
 def refuse(message: str) -> None:
     raise Refusal(message)
+
+
+# ---------------------------------------------------------------------------
+# The owned-loopback schema strings, READ FROM THE RUST that writes them.
+#
+# They were Python literals here, and on 2026-09-04 two of them were stale: the
+# terminal-sequence session at `-v1` against `terminal_sequence.rs`'s `-v3`, and
+# the private-lifecycle chaos session at `-v1` against `private_lifecycle.rs`'s
+# `-v2`. Both had been wrong for as long as the crate had been right, and both
+# refused EVERY session the current driver writes -- the terminal one at
+# `terminal completion session is missing or substituted`, which accuses the
+# evidence of substitution and names the reader's own copy as the authority.
+#
+# Nothing went red, and that is the more interesting half: nothing in CI ran
+# this tool, and the test suite built its fixtures from these same constants, so
+# the reader and its fixtures agreed with each other about a string neither of
+# them owned. `tools/ci/run.sh release` runs the suite now, and the suite pins
+# the values to the Rust with a reader of its own.
+#
+# The derivation is `tools/lib/rust_schema.py`, which the private-validator
+# lifecycle runner has read since `c04465f9` and which this tool now reads too:
+# one author for the reader, and the Rust `const` as the one author for each
+# value. Each owner named below is the file that WRITES the artifact, not one
+# that authenticates it -- when a producer bumps a version, a consumer's copy is
+# the copy that goes stale.
+# ---------------------------------------------------------------------------
+SUCCESSOR_SRC = "tools/local-validator/bootstrap/successor/src"
+
+
+def _load_shared_rust_schema() -> Any:
+    path = pathlib.Path(__file__).resolve().parents[2] / "tools" / "lib" / "rust_schema.py"
+    spec = importlib.util.spec_from_file_location("dclutch_rust_schema", path)
+    if spec is None or spec.loader is None:
+        refuse(f"cannot load the shared schema reader at {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+rust_schema_constant = _load_shared_rust_schema().rust_schema_constant
+
+OWNED_LOOPBACK_MANIFEST_SCHEMA = rust_schema_constant(
+    SUCCESSOR_SRC, "private_lifecycle.rs", "MANIFEST_SCHEMA_V1"
+)
+OWNED_LOOPBACK_CAPTURE_SCHEMA = rust_schema_constant(
+    SUCCESSOR_SRC, "owned_loopback_capture.rs", "SCHEMA_V1"
+)
+OWNED_LOOPBACK_RECEIPT_SCHEMA = rust_schema_constant(
+    SUCCESSOR_SRC, "private_lifecycle.rs", "RECEIPT_SCHEMA_V1"
+)
+OWNED_LOOPBACK_PROVIDER_CLOSURE_SCHEMA = rust_schema_constant(
+    SUCCESSOR_SRC, "terminal_exterior_pyth.rs", "PROVIDER_CLOSURE_SCHEMA_V1"
+)
+OWNED_LOOPBACK_PROVIDER_PLAN_SCHEMA = rust_schema_constant(
+    SUCCESSOR_SRC, "model.rs", "SUCCESSOR_PLAN_SCHEMA_V3"
+)
+OWNED_LOOPBACK_PROVIDER_PROFILE_SCHEMA = rust_schema_constant(
+    SUCCESSOR_SRC, "terminal_exterior_pyth.rs", "PROVIDER_PROFILE_SCHEMA_V1"
+)
+# `private_lifecycle.rs` declares this same string a second time, as
+# `ACTIVITY_SESSION_SCHEMA_V1`, and authenticates against it. The row below is
+# the one that BUILDS a `LifecycleSessionV1`, which is the object this tool
+# reads back, so it is the owner here.
+OWNED_LOOPBACK_PRIVATE_SESSION_SCHEMA = rust_schema_constant(
+    SUCCESSOR_SRC, "private_activity.rs", "LIFECYCLE_SESSION_SCHEMA_V1"
+)
+# The chaos session is written in PYTHON -- `chaos.py` and one bare literal at
+# `run.py:6083` -- so this reads the crate that authenticates it, which is the
+# only Rust declaration and the closest thing the artifact has to a contract.
+# Those two Python copies are a live second and third author for it.
+OWNED_LOOPBACK_CHAOS_SESSION_SCHEMA = rust_schema_constant(
+    SUCCESSOR_SRC, "private_lifecycle.rs", "CHAOS_SESSION_SCHEMA_V2"
+)
+OWNED_LOOPBACK_TERMINAL_COMPLETION_SCHEMA = rust_schema_constant(
+    SUCCESSOR_SRC, "terminal_sequence.rs", "OWNED_LOOPBACK_TERMINAL_COMPLETION_SCHEMA_V1"
+)
+OWNED_LOOPBACK_TERMINAL_JOURNAL_SCHEMA = rust_schema_constant(
+    SUCCESSOR_SRC, "terminal_sequence.rs", "OWNED_LOOPBACK_TERMINAL_JOURNAL_SCHEMA_V1"
+)
+OWNED_LOOPBACK_TERMINAL_SESSION_SCHEMA = rust_schema_constant(
+    SUCCESSOR_SRC, "terminal_sequence.rs", "OWNED_LOOPBACK_TERMINAL_SESSION_SCHEMA_V1"
+)
 
 
 def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:

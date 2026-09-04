@@ -23,17 +23,17 @@ use dclutch_resolution_codec::{
     PROVIDER_SUBMIT_REQUEST_BYTES_V3,
 };
 use dclutch_resolution_codec::{
-    PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3, PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3,
-    PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
-    ProviderAbandonRequestV3, ProviderCallerV3, ProviderExecutionRequestV3,
-    ProviderReclaimRequestV3, ProviderSubmitRequestV3, ProviderUpdateLifecycleV3,
-    ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+    PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3, PROVIDER_RESOLUTION_RECOVERY_TAIL_ACCOUNTS_V3,
+    PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
+    PYTH_RELEASE_RECORD_SCHEMA_ID_V1, ProviderAbandonRequestV3, ProviderCallerV3,
+    ProviderExecutionRequestV3, ProviderReclaimRequestV3, ProviderSubmitRequestV3,
+    ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
 };
 use dclutch_source_contract::{
-    PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1,
-    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1,
-    SourceMaterialV3, SourceResolutionPhaseV1, SourceResolutionStateV2, SourceSpecV1,
-    WINDOW_SPEC_SCHEMA_ID_V1, WindowSpecV1,
+    PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, RECOVERY_POLICY_SCHEMA_ID_V2,
+    RecoveryPolicyV2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_SPEC_SCHEMA_ID_V1,
+    STATISTIC_SPEC_SCHEMA_ID_V1, SourceMaterialV3, SourceResolutionPhaseV1,
+    SourceResolutionStateV2, SourceSpecV1, WINDOW_SPEC_SCHEMA_ID_V1, WindowSpecV1,
 };
 #[cfg(feature = "transaction-planning")]
 use solana_hash::Hash;
@@ -456,6 +456,23 @@ pub struct ProviderExecuteSnapshotV3 {
     pub result_domain: ObservedAccount,
     /// Product-selected portfolio.
     pub portfolio: ObservedAccount,
+    /// The market's funded ordered-recovery ladder, brought exactly when this
+    /// capture answers on a rung above the primary.
+    ///
+    /// `None` is what a primary capture has always sent and still sends, which
+    /// is why a market that never leaves its primary sees no change in this
+    /// builder's output at all. `Some` is the ladder that NAMES the alternative
+    /// source the three finalized-record positions above are then carrying.
+    pub recovery_ladder: Option<ProviderExecuteLadderV3>,
+}
+
+/// The finalized `RecoveryPolicyV2` record pair a rung capture rides with.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderExecuteLadderV3 {
+    /// Finalized `RecoveryPolicyV2` raw record.
+    pub policy: ObservedAccount,
+    /// Its vacant staging cursor.
+    pub policy_staging: ObservedAccount,
 }
 
 /// Current deployment accounts reauthenticated by Core and Resolution.
@@ -612,8 +629,12 @@ pub fn build_provider_submit_v3(
         .map_err(|_| ProviderTransportOperatorErrorV3::State)?;
     let source = SourceResolutionStateV2::decode(&snapshot.source_state.data)
         .map_err(|_| ProviderTransportOperatorErrorV3::State)?;
-    if source.phase() != SourceResolutionPhaseV1::Primary
-        || source.market() != snapshot.market.key.to_bytes()
+    // Either state in which this market can still be answered honestly. A
+    // market standing on a funded rung is one of them.
+    if !matches!(
+        source.phase(),
+        SourceResolutionPhaseV1::Primary | SourceResolutionPhaseV1::Recovery
+    ) || source.market() != snapshot.market.key.to_bytes()
         || source.generation() != market.identity.generation
         || source.material_id().to_bytes() != market.identity.resolution_policy.to_bytes()
         || snapshot.source_state.owner != deployment.resolution_program
@@ -882,7 +903,10 @@ pub fn build_provider_execute_v3(
         .map_err(|_| ProviderTransportOperatorErrorV3::Lifecycle)?;
     if market.phase != CorePhase::Open
         || market.readiness != Readiness::Consumed
-        || source.phase() != SourceResolutionPhaseV1::Primary
+        || !matches!(
+            source.phase(),
+            SourceResolutionPhaseV1::Primary | SourceResolutionPhaseV1::Recovery
+        )
         || source.market() != snapshot.market.key.to_bytes()
         || source.generation() != market.identity.generation
         || source.material_id().to_bytes() != market.identity.resolution_policy.to_bytes()
@@ -911,11 +935,42 @@ pub fn build_provider_execute_v3(
     )?;
     let material = SourceMaterialV3::decode(&snapshot.source_material.data)
         .map_err(|_| ProviderTransportOperatorErrorV3::Record)?;
+    // WHICH SOURCE THIS CAPTURE ANSWERS ON, decided by the market rather than
+    // by the caller. The ladder's position is the Source state's own, so the
+    // builder derives both the request's `source_index` and its source-spec
+    // identity from it: an operator cannot construct a transaction that answers
+    // on a leg the market has not reached, and the frame it emits is the one
+    // that rung needs.
+    let (source_index, expected_source_spec) = match (source.phase(), &snapshot.recovery_ladder) {
+        (SourceResolutionPhaseV1::Primary, None) => (0_u8, material.primary_source_spec()),
+        (SourceResolutionPhaseV1::Recovery, Some(ladder)) => {
+            let policy_id = material
+                .recovery_policy()
+                .ok_or(ProviderTransportOperatorErrorV3::Record)?;
+            authenticate_raw(
+                registry,
+                &ladder.policy,
+                RECOVERY_POLICY_SCHEMA_ID_V2,
+                policy_id.to_bytes(),
+            )?;
+            let policy = RecoveryPolicyV2::decode(&ladder.policy.data)
+                .map_err(|_| ProviderTransportOperatorErrorV3::Record)?;
+            let attempt = policy
+                .attempt(source.active_attempt())
+                .map_err(|_| ProviderTransportOperatorErrorV3::Record)?;
+            let rung = source
+                .active_attempt()
+                .checked_add(1)
+                .ok_or(ProviderTransportOperatorErrorV3::State)?;
+            (rung, attempt.source_spec_id())
+        }
+        _ => return Err(ProviderTransportOperatorErrorV3::State),
+    };
     authenticate_raw(
         registry,
         &snapshot.source_spec,
         SOURCE_SPEC_SCHEMA_ID_V1,
-        material.primary_source_spec().to_bytes(),
+        expected_source_spec.to_bytes(),
     )?;
     let source_spec = SourceSpecV1::decode(&snapshot.source_spec.data)
         .map_err(|_| ProviderTransportOperatorErrorV3::Record)?;
@@ -1030,13 +1085,14 @@ pub fn build_provider_execute_v3(
     let parent_request_digest = hash(&core_bytes).to_bytes();
     let provider_request = ProviderExecutionRequestV3 {
         caller: ProviderCallerV3::Core,
+        source_index,
         generation: market.identity.generation,
         terminal_sequence: intent.terminal_sequence,
         market: snapshot.market.key.to_bytes(),
         source_state: snapshot.source_state.key.to_bytes(),
         certificate_account: certificate.to_bytes(),
         source_material: source.material_id().to_bytes(),
-        source_spec: material.primary_source_spec().to_bytes(),
+        source_spec: expected_source_spec.to_bytes(),
         product_record: market.identity.product_record.to_bytes(),
         result_domain: product.result_domain_digest().to_bytes(),
         provider_release: pyth_id,
@@ -1066,7 +1122,7 @@ pub fn build_provider_execute_v3(
         &snapshot.market.owner,
     )
     .0;
-    let accounts = vec![
+    let mut accounts = vec![
         AccountMeta::new_readonly(caller_authority, false),
         AccountMeta::new_readonly(intent.resolver, true),
         AccountMeta::new(snapshot.source_state.key, false),
@@ -1094,7 +1150,7 @@ pub fn build_provider_execute_v3(
         staging_meta(
             registry,
             SOURCE_SPEC_SCHEMA_ID_V1,
-            material.primary_source_spec().to_bytes(),
+            expected_source_spec.to_bytes(),
         ),
         raw_meta(&snapshot.source_provider_release),
         staging_meta(
@@ -1151,7 +1207,21 @@ pub fn build_provider_execute_v3(
         AccountMeta::new_readonly(sysvar::rent::ID, false),
         AccountMeta::new_readonly(system_program::ID, false),
     ];
-    if accounts.len() != PROVIDER_EXECUTE_ACCOUNT_COUNT_V3 || !distinct(&accounts) {
+    // The ladder rides at the very END, after the System program, so that a
+    // primary capture's account list is the one it has always been. Two
+    // positions, read-only, exactly like every other finalized record this
+    // route reads.
+    let expected_accounts = match &snapshot.recovery_ladder {
+        None => PROVIDER_EXECUTE_ACCOUNT_COUNT_V3,
+        Some(ladder) => {
+            accounts.push(raw_meta(&ladder.policy));
+            accounts.push(AccountMeta::new_readonly(ladder.policy_staging.key, false));
+            PROVIDER_EXECUTE_ACCOUNT_COUNT_V3
+                .checked_add(PROVIDER_RESOLUTION_RECOVERY_TAIL_ACCOUNTS_V3)
+                .ok_or(ProviderTransportOperatorErrorV3::Address)?
+        }
+    };
+    if accounts.len() != expected_accounts || !distinct(&accounts) {
         return Err(ProviderTransportOperatorErrorV3::Address);
     }
     Ok(ProviderTransportReportV3 {
@@ -1402,7 +1472,12 @@ fn source_is_past_primary(
     if state.market() != lifecycle.market || state.generation() != lifecycle.generation {
         return Err(ProviderTransportOperatorErrorV3::State);
     }
-    Ok(state.phase() != SourceResolutionPhaseV1::Primary)
+    // The exact complement of the capture set: a submission is reclaimable only
+    // once no leg of this market can consume it, and a funded rung is a leg.
+    Ok(!matches!(
+        state.phase(),
+        SourceResolutionPhaseV1::Primary | SourceResolutionPhaseV1::Recovery
+    ))
 }
 
 /// Compile one exact provider submission into an unsigned v0 message.
@@ -1896,6 +1971,7 @@ mod tests {
         let body = vec![0xa5; 94];
         let request = ProviderExecutionRequestV3 {
             caller: ProviderCallerV3::Core,
+            source_index: 0,
             generation: 7,
             terminal_sequence: 3,
             market: accounts[4].pubkey.to_bytes(),

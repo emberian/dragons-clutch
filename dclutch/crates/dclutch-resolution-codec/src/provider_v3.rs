@@ -38,6 +38,24 @@ pub const PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3: usize = 47;
 /// Exact account count for the Trading caller frame, including its selected
 /// ProgramSet and descriptor raw/staging pairs.
 pub const PROVIDER_RESOLUTION_TRADING_ACCOUNT_COUNT_V3: usize = 51;
+/// What a capture on a recovery rung adds to either count: the
+/// `RecoveryPolicyV2` raw record and its staging vacancy, in that order, at the
+/// very END of the frame.
+///
+/// The tail is where they go, and that is a control rather than a convenience.
+/// Every existing position keeps its index, so a primary capture's account
+/// list, request bytes and poststates are the ones it always had -- the honest
+/// path is unchanged, which decision 0027 requires and which the existing
+/// campaign proves by still passing unedited. The rung is the only caller that
+/// pays for the two extra reads and the only caller that needs the record:
+/// which source may answer is a fact only the ladder holds.
+pub const PROVIDER_RESOLUTION_RECOVERY_TAIL_ACCOUNTS_V3: usize = 2;
+/// Byte offset of `ProviderExecutionRequestV3::source_index` in the encoded
+/// request.
+///
+/// Exported because a hostile that flips the declared rung has to name the byte
+/// it is flipping, and a bare `12` in a test is a number nothing keeps honest.
+pub const PROVIDER_EXECUTION_REQUEST_SOURCE_INDEX_OFFSET_V3: usize = 12;
 /// First common account index. The order from this index is caller authority,
 /// resolver, Source state, certificate, Market, activation, infrastructure
 /// profile, Registry Program/ProgramData/artifact pair, Core Program/ProgramData,
@@ -79,6 +97,9 @@ pub const PROVIDER_RESOLUTION_CORE_TAIL_START_V3: usize = 38;
 /// writable provider lifecycle account at index 41.
 pub const PROVIDER_RESOLUTION_TRADING_TAIL_START_V3: usize = 42;
 
+const SOURCE_INDEX_OFFSET: usize = PROVIDER_EXECUTION_REQUEST_SOURCE_INDEX_OFFSET_V3;
+const HEADER_RESERVED_OFFSET: usize = 13;
+const HEADER_RESERVED_BYTES: usize = 3;
 const GENERATION_OFFSET: usize = 16;
 const TERMINAL_SEQUENCE_OFFSET: usize = 24;
 const REQUEST_IDENTITIES_OFFSET: usize = 32;
@@ -117,6 +138,20 @@ impl ProviderCallerV3 {
 pub struct ProviderExecutionRequestV3 {
     /// Typed protocol caller.
     pub caller: ProviderCallerV3,
+    /// Which rung of the market's source ladder this capture answers on.
+    ///
+    /// Zero is the primary, and every request written before the ladder had a
+    /// capture route encoded a zero in this byte because it was reserved. One
+    /// is recovery attempt zero, two is attempt one, and so on: the index is
+    /// the RUNG, not an array subscript, so the primary and the alternatives
+    /// are one ordered sequence and a later ensemble member can take the next
+    /// number without the wire learning a second vocabulary.
+    ///
+    /// It is a DECLARATION, never a choice. The outer refuses unless it equals
+    /// the rung the market's own Source state currently stands on, so naming
+    /// the wrong one cannot skip a leg the holders paid for -- it can only
+    /// fail.
+    pub source_index: u8,
     /// Immutable Market generation.
     pub generation: u64,
     /// Positive terminal replay sequence.
@@ -175,7 +210,7 @@ impl ProviderExecutionRequestV3 {
         {
             return Err(Error::UnsupportedVersion);
         }
-        require_zero(bytes, 12, 4)?;
+        require_zero(bytes, HEADER_RESERVED_OFFSET, HEADER_RESERVED_BYTES)?;
         let mut identities = [[0_u8; 32]; REQUEST_IDENTITY_COUNT];
         for (index, identity) in identities.iter_mut().enumerate() {
             *identity = array(
@@ -187,6 +222,7 @@ impl ProviderExecutionRequestV3 {
         }
         let value = Self {
             caller: ProviderCallerV3::decode(byte(bytes, 11)?)?,
+            source_index: byte(bytes, SOURCE_INDEX_OFFSET)?,
             generation: read_u64(bytes, GENERATION_OFFSET)?,
             terminal_sequence: read_u64(bytes, TERMINAL_SEQUENCE_OFFSET)?,
             market: identities[0],
@@ -220,6 +256,7 @@ impl ProviderExecutionRequestV3 {
         bytes[8..10].copy_from_slice(&PROVIDER_EXECUTION_VERSION_V3.to_le_bytes());
         bytes[10] = PROVIDER_EXECUTION_ACTION_V3;
         bytes[11] = self.caller as u8;
+        bytes[SOURCE_INDEX_OFFSET] = self.source_index;
         bytes[GENERATION_OFFSET..GENERATION_OFFSET + 8]
             .copy_from_slice(&self.generation.to_le_bytes());
         bytes[TERMINAL_SEQUENCE_OFFSET..TERMINAL_SEQUENCE_OFFSET + 8]
@@ -585,6 +622,7 @@ mod tests {
     fn request(caller: ProviderCallerV3) -> ProviderExecutionRequestV3 {
         ProviderExecutionRequestV3 {
             caller,
+            source_index: 0,
             generation: 7,
             terminal_sequence: 11,
             market: identity(1),
@@ -743,11 +781,40 @@ mod tests {
                 Err(Error::InvalidLength)
             );
         }
-        let mut hostile = bytes;
-        hostile[12] = 1;
+        // Byte 12 is the source index and byte 13 is where the reserved span
+        // now starts. The span shrank by one when the ladder got a capture
+        // route, so this loop names every byte that is STILL reserved rather
+        // than one that used to be -- a hostile aimed at a byte that has since
+        // acquired a meaning is a hostile that passes for the wrong reason.
+        for offset in HEADER_RESERVED_OFFSET..HEADER_RESERVED_OFFSET + HEADER_RESERVED_BYTES {
+            let mut hostile = bytes;
+            hostile[offset] = 1;
+            assert_eq!(
+                ProviderExecutionRequestV3::decode(&hostile),
+                Err(Error::NonCanonicalReserved),
+                "byte {offset} is reserved and must refuse a nonzero"
+            );
+        }
+
+        // THE HONEST PATH AT THE WIRE. A primary capture writes a zero into the
+        // byte that used to be reserved, so every request this codec produced
+        // before the ladder had a capture route encodes to the identical bytes
+        // it encoded then. That is the control decision 0027 asks for, stated
+        // where it is cheapest to check.
+        assert_eq!(bytes[SOURCE_INDEX_OFFSET], 0);
         assert_eq!(
-            ProviderExecutionRequestV3::decode(&hostile),
-            Err(Error::NonCanonicalReserved)
+            request(ProviderCallerV3::Core).source_index,
+            0,
+            "the primary is rung zero"
+        );
+        let mut rung = bytes;
+        rung[SOURCE_INDEX_OFFSET] = 3;
+        let decoded = ProviderExecutionRequestV3::decode(&rung).expect("a rung decodes");
+        assert_eq!(decoded.source_index, 3);
+        assert_eq!(
+            decoded.to_bytes().expect("a rung re-encodes"),
+            rung,
+            "the rung survives a round trip and moves no other byte"
         );
     }
 }
