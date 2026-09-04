@@ -4899,3 +4899,13 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   accepted from two captures (a baseline copied from one was corrected the same hour). → SERIES-4 **`(spawned)`** under a
   ruling: the family-neutral convention is the one author; the six sites derive the content id from the record they hold.
 - Cuts: `528c93454`, `e9920c0e2`, `487767cb1`.
+- PROGRAMS-16E closed (`6ce8929ed`, `1a93506b0`, `71b5ad10c`, `5922bfb85`): **the per-batch selection landed — the real red
+  was the off-chain builder writing NO selection identity (`general_hot_v3.rs`'s recipe arm was empty), so every batch under
+  every root derived one wrong address**; 16D's cursor-plus-evidence construction kept (CancelOrder already derives from
+  another record); three operator tests red at HEAD from 16D repaired; **the seller's floor costs no bytes and no width**
+  (the order's zero window and the cursor's reserved span become the field; `order_id` unmoved for a floorless order;
+  coordinate 86 reclaimed; floor 2 refuses `CreditLimit`, 0 and 1 admit); `run-general-hot.sh --at <sha>` builds from an
+  archive and names the sha in its CU table (16C's table was assembled from more than one build); frames: 1,869 rows,
+  zero moved, seven debtor commits discharged, `owed` clean. Owed: the thirteen General actions the bundle builder still
+  refuses → PROGRAMS-16F **`(spawned)`** (the real sequence and a second batch on one market); the floored real-ELF walk.
+- Cuts: `da7f3e028`.
