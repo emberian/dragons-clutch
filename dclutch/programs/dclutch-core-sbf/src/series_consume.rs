@@ -256,6 +256,13 @@ struct AdmittedSeries {
     occurrence: dclutch_series_v3_kernel::AdmittedOccurrenceV3,
     ticket: dclutch_series_v3_kernel::AdmittedTicketV3,
     product: AuthenticatedProductProjectionV2,
+    /// Registry record digest of the Template record admitted above.
+    ///
+    /// This is what the root's `selection().config()` names, because the
+    /// Series config record IS the Template record. It is carried out of
+    /// `authenticate_series` rather than recomputed so that exactly one
+    /// borrow of `template_raw` decides it.
+    template_record: [u8; 32],
 }
 
 #[derive(Clone, Copy)]
@@ -539,6 +546,7 @@ fn authenticate_series(
         &ticket_bytes,
     )?;
 
+    let template_record = hash(&template_bytes).to_bytes();
     let occurrence = admit_occurrence_bytes(&template_bytes, &occurrence_bytes, proof_bytes)
         .map_err(|_| CoreSbfError::Reference)?;
     let ticket = admit_ticket(&ticket_bytes).map_err(|_| CoreSbfError::Reference)?;
@@ -590,6 +598,7 @@ fn authenticate_series(
         occurrence,
         ticket,
         product,
+        template_record,
     }))
 }
 
@@ -637,9 +646,19 @@ fn authenticate_root_and_replay(
     .map_err(|_| CoreSbfError::Reference)?;
     let expected_root =
         Pubkey::find_program_address(&header.seeds().as_slices(), frame.trading_program.key).0;
+    // ONE AUTHOR FOR THE ROOT'S CONFIG IDENTITY. `selection().config()` is the
+    // Registry RECORD DIGEST of the root's config record -- exactly what every
+    // other family's is, and what `borrow_record_against` in Trading's
+    // family-neutral Hot prelude requires -- and for Series that config record
+    // IS this Template record: the descriptor's `config_schema()` is
+    // `SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3`. The Template's DOMAIN-SEPARATED
+    // content identity is a different value, derived from these same bytes by
+    // `authenticate_series` and pinned there to `request.template()`; it is
+    // never read off the root. `admitted.template_record` is
+    // `hash(&template_bytes)` from that same single borrow.
     if frame.root.key != &expected_root
         || header.release_set().to_bytes() != request.release_set().to_bytes()
-        || header.selection().config().to_bytes() != request.template().to_bytes()
+        || header.selection().config().to_bytes() != admitted.template_record
     {
         return Err(CoreSbfError::Reference);
     }

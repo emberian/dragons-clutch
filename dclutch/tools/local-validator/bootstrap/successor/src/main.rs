@@ -967,6 +967,7 @@ fn run_devnet_pyth_market(arguments: Vec<String>, family: DevnetMarketFamilyV1) 
     let mut coordinate_domain_name = None;
     let mut feed_label = None;
     let mut generation = None;
+    let mut recovery_rungs = None;
     let mut direct = DirectCompilerArgumentsV1::default();
     let mut general = GeneralCompilerArgumentsV1::default();
     let mut iterator = arguments.into_iter();
@@ -992,6 +993,7 @@ fn run_devnet_pyth_market(arguments: Vec<String>, family: DevnetMarketFamilyV1) 
             "--coordinate-domain" => Some(&mut coordinate_domain_name),
             "--feed" => Some(&mut feed_label),
             "--generation" => Some(&mut generation),
+            "--recovery-rungs" => Some(&mut recovery_rungs),
             // A family's flags are admissible only on that family. A General
             // market has no Direct fee policy and a Direct market has no
             // accelerator; letting either through would accept a stated belief
@@ -1091,6 +1093,15 @@ fn run_devnet_pyth_market(arguments: Vec<String>, family: DevnetMarketFamilyV1) 
         generation: match generation {
             None => 1,
             Some(value) => decimal::<u64>(Some(value), "--generation")?,
+        },
+        // `--recovery-rungs BPS:SECONDS_AFTER_PREVIOUS` buys a funded ordered
+        // ladder. Absent is the no-recovery market this producer has always
+        // compiled, and the flag is REQUIRED to name at least one rung: a
+        // caller who typed it meant to buy something, and a policy funding no
+        // attempt is the no-recovery market spelled at greater length.
+        recovery: match &recovery_rungs {
+            None => None,
+            Some(raw) => Some(local_mutable::parse_recovery_rungs_v1(raw)?),
         },
     };
     // THE PROVIDER RELEASE IS OBSERVED, NOT TYPED. A market pins its provider

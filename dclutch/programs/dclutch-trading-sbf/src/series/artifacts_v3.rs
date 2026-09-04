@@ -28,7 +28,7 @@ use dclutch_execution_strategy_contract::v2::{
     EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyProgramV2,
 };
 use dclutch_request_profile_contract::{ProjectionRegistersV1, RequestProfileV1, project_atomic};
-use dclutch_series_v3_kernel::SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3;
+use dclutch_series_v3_kernel::{SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3, template_content_id};
 use dclutch_transition_vm::{MAX_IDENTITIES, MAX_SCALARS, v3::ProgramV3 as TransitionProgramV3};
 use solana_program::hash::{hash, hashv};
 
@@ -218,12 +218,49 @@ pub struct SeriesArtifactBytesV3<'a> {
 }
 
 /// Immutable manifest/root selections authenticated before this join.
+///
+/// ONE AUTHOR FOR THE TEMPLATE'S CONTENT IDENTITY. Both fields are private and
+/// the only way to build this is [`SeriesArtifactSelectionV3::from_config_record`],
+/// which DERIVES the Template content identity from the config record's bytes.
+/// A caller cannot hand this join `header.selection().config()` any more: that
+/// field is the Registry RECORD DIGEST of the same record -- `sha256(t)`, what
+/// the family-neutral Hot prelude's `borrow_record_against` requires -- while
+/// the Template content identity is `sha256("dclutch/series-template-v3" ||
+/// 0x00 || t)`. They are different values over the same bytes, and reading one
+/// where the other was meant is the contradiction that kept every Series action
+/// out of the family-neutral Hot path.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SeriesArtifactSelectionV3 {
     /// Capability release selecting the exact ProgramSet record.
-    pub program_set: [u8; 32],
-    /// Manifest config selecting the exact Series Template content identity.
-    pub template: ContentId,
+    program_set: [u8; 32],
+    /// Template content identity DERIVED from the selected config record.
+    template: ContentId,
+}
+
+impl SeriesArtifactSelectionV3 {
+    /// Select from the capability release and the ROOT'S CONFIG RECORD BYTES.
+    ///
+    /// The Series config record is the Template record -- every Series action
+    /// descriptor pins `config_schema() == SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3`
+    /// (`validate_descriptor` below) -- so these bytes are the only thing the
+    /// Template's content identity may be computed from here.
+    pub fn from_config_record(program_set: [u8; 32], config_record: &[u8]) -> Result<Self> {
+        Ok(Self {
+            program_set,
+            template: template_content_id(config_record)
+                .map_err(|_| SeriesArtifactErrorV3::ContentIdentity)?,
+        })
+    }
+
+    /// Capability release selecting the exact ProgramSet record.
+    pub const fn program_set(self) -> [u8; 32] {
+        self.program_set
+    }
+
+    /// Template content identity derived from the selected config record.
+    pub const fn template(self) -> ContentId {
+        self.template
+    }
 }
 
 /// Stable refusal from the complete Series artifact join.

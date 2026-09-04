@@ -915,7 +915,24 @@ pub struct SealedStaticOwnershipV1<'a> {
     transition: &'a [u8],
 }
 
-impl SealedStaticOwnershipV1<'_> {
+impl<'a> SealedStaticOwnershipV1<'a> {
+    /// The four proved artifact ranges, in the order [`Self::require`] checks
+    /// them: account profile, lifecycle policy, request profile, transition.
+    ///
+    /// `TokenRangeMismatch` is one code over four independent accusations, and
+    /// the caller of `require` cannot say which of its four arguments strayed
+    /// without seeing what was proved. This exposes only what the verdict
+    /// already holds, and only for reading -- a token still cannot be minted or
+    /// widened outside this crate.
+    pub const fn proved_ranges(self) -> [&'a [u8]; 4] {
+        [self.profile, self.policy, self.request, self.transition]
+    }
+
+    /// The action seed this verdict was minted under.
+    pub const fn action(self) -> u32 {
+        self.action
+    }
+
     /// Refuse unless this verdict covers exactly these four artifacts and this
     /// action.
     pub fn require(

@@ -411,6 +411,7 @@ fn execute_authenticated(
     authenticate_market(program_id, accounts, plan, market, &market_before)?;
     claims_cu_checkpoint!("sd-market");
     authenticate_product_and_basis_digests(accounts, plan)?;
+    authenticate_failure_escrow_deltas(program_id, accounts, plan, market)?;
     let principal_cap_sets = authenticate_core_market_v3(
         accounts.core_market,
         accounts.core_program,
@@ -844,6 +845,146 @@ fn authenticate_market(
     Ok(())
 }
 
+/// A refunding Market's failure coordinate may move only in the escrow's own
+/// Position, on this route as well as on the complete-set route.
+///
+/// # The hole this closes
+///
+/// `signed_delta_v3` expresses an ARBITRARY conservative batch, so before this
+/// it could credit a refunding Market's failure coordinate to any Position it
+/// liked -- a stranger's, the founder's -- with no escrow check at all, and
+/// could debit the escrow's. The complete-set gate
+/// (`authenticate_failure_escrow`) does not see this route, and the founding
+/// that seats the escrow cannot defend a coordinate after founding. Decision
+/// 0025 section 6 named this route for the sibling immobility shape; under the
+/// escrow shape it is the one waist the complete-set gate does not cover, and
+/// leaving it open would have made the seating a formality -- the claims the
+/// ruling exists to keep out of somebody's hands could simply be written there.
+///
+/// # Why it costs nothing on the route it is added to
+///
+/// The scan is over the plan's own delta table, which is already decoded and
+/// in hand. A plan that touches no coordinate at the runtime width's last
+/// index returns here having read no account and derived no address, and that
+/// is every ordinary fill, every ordinary redemption and every batch on a
+/// categorical Market's non-final outcome. Only a plan that reaches for the
+/// failure coordinate pays for the basis decode and the one derivation --
+/// which matters, because this route's compute is measured and defended
+/// (`docs/design/DEALER_PARTIAL_REMOVE_COMPUTE_2026_09_02.md`), and a gate
+/// that charged every batch for a rule about one coordinate would be paid for
+/// by every trade.
+///
+/// # What it does NOT forbid
+///
+/// The escrow's own Position moving at the failure coordinate, which is how a
+/// refunding merge burns the seated claims and how a failure settlement
+/// retires them. And every coordinate of a CATEGORICAL Market, whose last
+/// outcome is an ordinary tradeable claim -- cohort-13's failure walk paid it
+/// to its holder, which was the protocol doing what it says it does.
+#[inline(never)]
+fn authenticate_failure_escrow_deltas(
+    program_id: &Pubkey,
+    accounts: &SignedDeltaAccountsV3<'_, '_>,
+    plan: SignedDeltaPlanV3<'_>,
+    market: MarketViewV2,
+) -> Result<(), ProgramError> {
+    // A width that can seat no escrow has no failure coordinate to defend, so
+    // this gate is INERT there rather than a refusal. Founding will not create
+    // such a market any more; one founded before the seating still trades.
+    let Ok(failure) =
+        dclutch_economic_slice_kernel::refunding_failure_index(market.claim_count)
+    else {
+        return Ok(());
+    };
+    let Ok(failure) = u32::try_from(failure) else {
+        return Ok(());
+    };
+    if !plan_touches_failure_coordinate_v1(plan, failure)? {
+        return Ok(());
+    }
+    // The record's own answer, not this route's. The bytes were pinned to the
+    // plan's `linked_basis_record_digest` one call above, so this decodes an
+    // account the caller has already signed for and Core authenticated at
+    // founding.
+    let basis_bytes = accounts
+        .basis_record
+        .try_borrow_data()
+        .map_err(|_| SignedDeltaSbfErrorV3::Accounts)?;
+    let refunding =
+        dclutch_product_payoff_v2_codec::runtime_v3::ProductBasisV3::decode(&basis_bytes)
+            .map_err(|_| SignedDeltaSbfErrorV3::ProductBasis)?
+            .refunds_on_failure();
+    drop(basis_bytes);
+    if !refunding {
+        return Ok(());
+    }
+    let escrow =
+        crate::FailureEscrowIdentityV1::derive(program_id, market.logical_market, market.claim_count)
+            .map_err(|_| crate::ClaimsSbfError::FailureEscrow)?;
+    admit_failure_coordinate_owners_v1(plan, failure, escrow.owner)
+}
+
+/// Whether this plan moves any Position at the failure coordinate.
+///
+/// Split out from the gate because it is the whole of what a plan that does
+/// NOT touch that coordinate pays, and a claim about cost is worth a test.
+fn plan_touches_failure_coordinate_v1(
+    plan: SignedDeltaPlanV3<'_>,
+    failure: u32,
+) -> Result<bool, ProgramError> {
+    for index in 0..plan.position_delta_count() {
+        let row = plan
+            .position_delta(index)
+            .map_err(|_| SignedDeltaSbfErrorV3::Instruction)?;
+        if row.outcome() == failure {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Every CREDIT at the failure coordinate must name the escrow's own Position.
+///
+/// CREDITS ONLY, and the asymmetry is the whole of the rule rather than a
+/// gap in it. The hazard decision 0025 exists to close is a refunding Market's
+/// worthless failure claims IN SOMEBODY'S HANDS -- worse than worthless
+/// because they are sellable to a reader of a claim balance -- and only a
+/// credit puts them there. A debit takes them away.
+///
+/// Refusing debits too would have been strictly worse, and not hypothetically:
+/// cohort-16 founds markets whose RECORD refunds while their failure column
+/// still sits with the founder, because the seating rides cohort-17. On those
+/// markets every ordinary settlement and every retirement debit of that column
+/// is a debit from a Position that is not the escrow, so a two-directional
+/// gate would have frozen the failure column of every market founded between
+/// the payout arm and the seating -- and a market that cannot retire leaks
+/// rent forever (decision 0029 item 3).
+fn admit_failure_coordinate_owners_v1(
+    plan: SignedDeltaPlanV3<'_>,
+    failure: u32,
+    escrow_owner: [u8; 32],
+) -> Result<(), ProgramError> {
+    for index in 0..plan.position_delta_count() {
+        let row = plan
+            .position_delta(index)
+            .map_err(|_| SignedDeltaSbfErrorV3::Instruction)?;
+        if row.outcome() != failure || row.delta().direction() != DeltaDirectionV3::Credit {
+            continue;
+        }
+        let owner = plan
+            .position(row.position_index())
+            .map_err(|_| SignedDeltaSbfErrorV3::Instruction)?
+            .owner();
+        if owner != escrow_owner {
+            // 0x5010, the same code the complete-set gate and the founding
+            // raise: a Position that is not this Market's escrow was OFFERED
+            // the failure claims. Three routes, one accusation, one reader.
+            return Err(crate::ClaimsSbfError::FailureEscrow.into());
+        }
+    }
+    Ok(())
+}
+
 /// Preflight every positive aggregate delta against Core's set-denominated
 /// principal cap before any candidate or account byte is changed.
 fn admit_principal_growth(
@@ -1229,6 +1370,128 @@ mod tests {
         assert_eq!(
             caller_coordinate(CallerRole::Claims),
             CallerCoordinateV3::Claims
+        );
+    }
+
+    /// One width-three plan with a single Position moving a single
+    /// coordinate, and the aggregate moving with it.
+    ///
+    /// One Position because the table requires strictly increasing owners, so
+    /// a two-row plan at one coordinate can never name the same owner twice --
+    /// and the positive control this gate needs is exactly "the escrow, and
+    /// nobody else, moved the failure column".
+    fn one_position_plan_bytes(
+        owner: [u8; 32],
+        outcome: u32,
+        direction: DeltaDirectionV3,
+    ) -> Vec<u8> {
+        let positions = [SignedDeltaPositionV3::new(owner, 4).expect("position")];
+        let rows = [PositionDeltaV3::new(
+            PositionDeltaInputV3 {
+                position_index: 0,
+                outcome,
+                delta: delta(direction, 5),
+            },
+            1,
+            3,
+        )
+        .expect("row")];
+        let mut aggregates = [
+            delta(DeltaDirectionV3::Neutral, 0),
+            delta(DeltaDirectionV3::Neutral, 0),
+            delta(DeltaDirectionV3::Neutral, 0),
+        ];
+        aggregates[outcome as usize] = delta(direction, 5);
+        let mut bytes = vec![0; plan_bytes(3, 1, 1).expect("width")];
+        SignedDeltaPlanV3::encode_into(
+            SignedDeltaPlanInputV3 {
+                caller_role: CallerRole::Trading,
+                release_set: [1; 32],
+                market: [2; 32],
+                request_id: [3; 32],
+                product_record_digest: [4; 32],
+                semantic_basis_id: [5; 32],
+                linked_basis_record_digest: [6; 32],
+                expected_market_revision: 3,
+                claim_count: 3,
+            },
+            &positions,
+            &aggregates,
+            &rows,
+            &mut bytes,
+        )
+        .expect("encode");
+        bytes
+    }
+
+    const ESCROW_OWNER: [u8; 32] = [0x5e; 32];
+    const STRANGER_OWNER: [u8; 32] = [0x77; 32];
+    /// Coordinate 2 of a width-three Market: `refunding_failure_index(3)`.
+    const FAILURE: u32 = 2;
+
+    /// POSITIVE CONTROL FIRST. Without it the refusals below prove nothing: a
+    /// gate that refused every plan would pass them all.
+    ///
+    /// The escrow's own failure column moving is ADMITTED, which is what a
+    /// refunding merge's burn and a failure settlement's retirement look like
+    /// on this route.
+    #[test]
+    fn the_escrows_own_failure_column_may_move() {
+        let bytes = one_position_plan_bytes(ESCROW_OWNER, FAILURE, DeltaDirectionV3::Credit);
+        let plan = SignedDeltaPlanV3::decode(&bytes).expect("plan");
+        assert!(plan_touches_failure_coordinate_v1(plan, FAILURE).expect("scan"));
+        admit_failure_coordinate_owners_v1(plan, FAILURE, ESCROW_OWNER)
+            .expect("the escrow's own column may move");
+    }
+
+    /// A refunding Market's failure claims CREDITED to a stranger refuse.
+    ///
+    /// Decision 0025's hazard in bytes, on the one waist the complete-set gate
+    /// does not cover: claims worth nothing on a refunding basis, in somebody's
+    /// hands, and therefore sellable to a reader of a claim balance.
+    #[test]
+    fn a_strangers_failure_column_refuses_failure_escrow() {
+        let bytes = one_position_plan_bytes(STRANGER_OWNER, FAILURE, DeltaDirectionV3::Credit);
+        let plan = SignedDeltaPlanV3::decode(&bytes).expect("plan");
+        assert!(plan_touches_failure_coordinate_v1(plan, FAILURE).expect("scan"));
+        assert_eq!(
+            admit_failure_coordinate_owners_v1(plan, FAILURE, ESCROW_OWNER).unwrap_err(),
+            ProgramError::Custom(crate::ClaimsSbfError::FailureEscrow as u32),
+        );
+    }
+
+    /// A stranger GIVING UP a failure column is admitted, and that is what
+    /// keeps every market founded before the seating able to close.
+    ///
+    /// Cohort-16 founds refunding RECORDS whose failure column is still the
+    /// founder's, because the seating rides cohort-17. Their settlement and
+    /// their retirement both debit that column from a Position that is not the
+    /// escrow. A gate that refused debits would have frozen it, and a market
+    /// that cannot retire leaks rent forever.
+    #[test]
+    fn a_stranger_giving_up_a_failure_column_is_admitted() {
+        let bytes = one_position_plan_bytes(STRANGER_OWNER, FAILURE, DeltaDirectionV3::Debit);
+        let plan = SignedDeltaPlanV3::decode(&bytes).expect("plan");
+        assert!(plan_touches_failure_coordinate_v1(plan, FAILURE).expect("scan"));
+        admit_failure_coordinate_owners_v1(plan, FAILURE, ESCROW_OWNER)
+            .expect("a debit takes worthless claims out of a stranger's hands");
+    }
+
+    /// The gate is INERT off the failure coordinate, and that is the COST
+    /// claim: a plan touching no failure coordinate never reaches the basis
+    /// decode or the escrow derivation, so every ordinary fill and every
+    /// ordinary redemption pays this rule nothing at all.
+    #[test]
+    fn a_plan_that_touches_no_failure_coordinate_is_never_scanned_for_owners() {
+        let bytes = one_position_plan_bytes(STRANGER_OWNER, 0, DeltaDirectionV3::Credit);
+        let plan = SignedDeltaPlanV3::decode(&bytes).expect("plan");
+        assert!(!plan_touches_failure_coordinate_v1(plan, FAILURE).expect("scan"));
+        // The SAME plan refuses when the coordinate it moves IS the failure
+        // one, which is what makes the assertion above load-bearing rather
+        // than a tautology about a plan that could never refuse at all.
+        assert_eq!(
+            admit_failure_coordinate_owners_v1(plan, 0, ESCROW_OWNER).unwrap_err(),
+            ProgramError::Custom(crate::ClaimsSbfError::FailureEscrow as u32),
         );
     }
 

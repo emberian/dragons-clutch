@@ -340,6 +340,62 @@ three suffix magics at `dclutch-core-sbf/src/lib.rs:392`). The 2,152-byte
 `RETIREMENT_INSTRUCTION_BYTES_V1` aggregate route is the legacy builder's and
 nothing in this row submits it.
 
+### found-two-source
+
+The first cohort market that buys a second answerer. Decision 0027's funded
+ordered ladder has been walked end to end on real ELFs since `beca9243e` and
+answered on its second rung since the same commit, and until cohort 16 no
+producer outside a program test could found one: `recovery_policy_hex` was
+written empty by every caller there was.
+
+What the flag buys is one prepaid Resolution compartment per rung on top of the
+two every market already has, and one genuinely different source. For a
+Pyth-backed feed "different" has exactly one axis — the adapter's tolerance for
+the provider's own stated confidence interval — so a rung is the same feed at
+the same exponent admitted under a TIGHTER bound. A market whose first choice
+went silent has a reason to demand a better-conditioned reading from its second,
+and the bound is capped at 10,000 bp, so tighter is the only direction there is.
+
+The rung's lifetime is stated as seconds AFTER the leg before it, because the
+primary leg's deadline is the live window's close plus its submission-latency
+budget and is computed inside the producer. State it generously: the whole point
+of the rung is to be answerable after the primary was not.
+
+### crank-ladder
+
+The permissionless crank, run once per leg. `AdvanceRecovery` is a 32-byte
+instruction naming only the generation and the terminal sequence; which rung,
+which source and when it expires are read by the program off the market's own
+state, so the driver is a frame builder and a bounded wait rather than a
+decision.
+
+**It is admissible STRICTLY after the leg's deadline.** The last second an
+honest observation may land and the first second a crank may run are different
+seconds, and the driver refuses the earlier one by name before a lamport moves.
+`--wait --max-wait-seconds` sleeps to it through one bounded wait against the
+chain's own clock and refuses a target further away than the stated ceiling; it
+never warps, because a crank cannot be brought forward, only waited for.
+
+The crank pays whoever runs it, out of the compartment the rung it enters names.
+That is the property worth checking on devnet rather than in a bank: a route
+nobody is paid to run is a route nobody runs, and cohort-13's silent window is
+what a market with no such route costs its holders.
+
+### capture-rung
+
+The other outcome, and the one that makes a ladder worth buying. Its sibling
+`crank-ladder` proves the ladder can be WALKED; walking it to the end reaches
+the same pre-disclosed failure a market with no policy gets for free. This row
+is the market being ANSWERED by the alternative it paid for.
+
+The capture is the ordinary flagship submit/execute pair with two additions: the
+input names the `RecoveryPolicyV2` record pair, and the three finalized-record
+positions carry the rung's own source instead of the primary's. The market's
+`active_attempt` is the authority for which source may speak — a request naming
+a rung the market has not reached refuses `SourceLadder` rather than being
+joined against the wrong feed — so nothing about this row is a second opinion
+about which leg is live.
+
 ### route-witness
 
 Harvest the signatures out of this cohort's evidence document, ask devnet what

@@ -4921,3 +4921,15 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   open question. The orchestrator confirmed 0019–0023 the same way (the docket listed them as M1–M5) and renamed 0028's
   heading. Two lanes stalled on the stream watchdog mid-write and were resumed, not relaunched.
 - Cuts: `6fc7b2c03`, `dc5fa1c61`.
+
+### 2026-09-04 17:15 EDT — AFTER THE LIMIT
+- Five lanes hit the session limit at 16:40 and were RESUMED by message after the reset (never relaunched).
+- PROGRAMS-16F closed (`911bf7236`, `a6aed340c`, `f67c9b718`, `940fd9b16`, `4300c71f2`, `138df5db6`): **all fifteen General
+  actions derive and project**, every coordinate read off a live record, no seed literal; **seven of the fifteen were about
+  to be built in the WRONG WIRE — General ships two 64-byte request generations (DCGREQ02 for the settlement/selection
+  seven, DCGREQ03 for the front eight) and each action's own profile revalidates exactly one** — the generation is now
+  selected by the boundary's own decoder; 18 tests; five table rows moved when the record→parameter wiring got its first
+  test; CU at `a6aed340c`, three draws, **band 0** (fixed keypairs, warped slots, no search); nine CU_BUDGETS rows recorded
+  not enforced (no witness names the campaign). Owed → PROGRAMS-16G **`(spawned)`**: the real sequence on a bank (the
+  no-escrow five first), escrow accounts installed for the rest, the second batch's selection on chain, the floored walk.
+- Cuts: `577d37a8e`, `687238ed2`, `765bb8565`.

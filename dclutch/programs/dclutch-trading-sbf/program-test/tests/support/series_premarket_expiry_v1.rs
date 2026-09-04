@@ -209,18 +209,25 @@ pub fn install_series_premarket_expiry_accounts_v1(
     let mut installed_keys = Vec::with_capacity(accounts.len());
     let mut rollback_snapshot_keys = Vec::new();
     for candidate in accounts {
+        if candidate.snapshot_for_rollback {
+            rollback_snapshot_keys.push(candidate.key);
+        }
+        if externally_installed.contains(&candidate.key) {
+            // The bank owns this account and this campaign installs nothing
+            // over it, so its lamports are not this campaign's to fund. The
+            // Rent gate below exists to stop the campaign installing an
+            // account the runtime would reap; applied to a BANK-OWNED account
+            // it refused the System builtin, whose twenty-one bytes of
+            // registered name sit under one lamport and always will.
+            continue;
+        }
         if !candidate.account.data.is_empty()
             && candidate.account.lamports < rent.minimum_balance(candidate.account.data.len())
         {
             return Err(SeriesPremarketExpirySupportErrorV1::InstallRent);
         }
-        if candidate.snapshot_for_rollback {
-            rollback_snapshot_keys.push(candidate.key);
-        }
-        if !externally_installed.contains(&candidate.key) {
-            test.add_account(candidate.key, candidate.account.clone());
-            installed_keys.push(candidate.key);
-        }
+        test.add_account(candidate.key, candidate.account.clone());
+        installed_keys.push(candidate.key);
     }
     Ok(InstalledSeriesPremarketExpiryV1 {
         installed_keys,

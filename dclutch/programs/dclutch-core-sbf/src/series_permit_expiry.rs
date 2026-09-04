@@ -260,6 +260,7 @@ fn authenticate_series(
         frame.template_staging,
         SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
     )?;
+    let template_record = hash(&template_bytes).to_bytes();
     let occurrence_bytes = finalized_series_record(
         frame,
         frame.occurrence_raw,
@@ -295,7 +296,7 @@ fn authenticate_series(
     {
         return Err(CoreSbfError::Reference);
     }
-    authenticate_replay(frame, occurrence, ticket)?;
+    authenticate_replay(frame, occurrence, ticket, template_record)?;
     let clock = Clock::from_account_info(frame.clock).map_err(|_| CoreSbfError::Creation)?;
     require_expired(clock.slot, retry_through, intent.expiry_slot())?;
     Ok(ticket_record.refund_owner().to_bytes())
@@ -305,6 +306,7 @@ fn authenticate_replay(
     frame: &ExpiryAccounts<'_, '_>,
     occurrence: dclutch_series_v3_kernel::AdmittedOccurrenceV3,
     ticket: dclutch_series_v3_kernel::AdmittedTicketV3,
+    template_record: [u8; 32],
 ) -> Result<(), CoreSbfError> {
     if frame.root.owner != frame.trading_program.key
         || frame.root.data_len() != CAPABILITY_ROOT_HEADER_BYTES_V1 + SERIES_STATE_BYTES_V3
@@ -337,9 +339,18 @@ fn authenticate_replay(
         .occurrence()
         .checked_add(1)
         .ok_or(CoreSbfError::Arithmetic)?;
+    // ONE AUTHOR FOR THE ROOT'S CONFIG IDENTITY. `selection().config()` is the
+    // Registry RECORD DIGEST of the root's config record -- what every other
+    // family's is, and what `borrow_record_against` in Trading's family-neutral
+    // Hot prelude requires -- and for Series that config record IS the Template
+    // record: the descriptor's `config_schema()` is
+    // `SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3`. The Template's DOMAIN-SEPARATED
+    // content identity (`occurrence.template_id()`) is a different value over
+    // the same bytes, and it is what the occurrence proof is admitted against;
+    // it is never read off the root.
     if frame.root.key != &expected_root
         || header.release_set().to_bytes() != occurrence.template().release_set().to_bytes()
-        || header.selection().config().to_bytes() != occurrence.template_id().to_bytes()
+        || header.selection().config().to_bytes() != template_record
         || series.next_occurrence() != settled_occurrence
         || series.current_ticket_prepared()
     {

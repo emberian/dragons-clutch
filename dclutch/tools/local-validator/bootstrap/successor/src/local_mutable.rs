@@ -1781,7 +1781,9 @@ fn market_shape_from_arguments_v1(
 /// and a caller has no way to name it. Both halves are required on every rung:
 /// a rung is a confidence bound and a lifetime, and defaulting either would
 /// author a market dimension nobody stated.
-fn parse_recovery_rungs_v1(raw: &str) -> Result<Vec<crate::market::LocalRecoveryRungV1>> {
+pub(crate) fn parse_recovery_rungs_v1(
+    raw: &str,
+) -> Result<Vec<crate::market::RelativeRecoveryRungV1>> {
     let mut rungs = Vec::new();
     for part in raw
         .split(',')
@@ -1794,7 +1796,7 @@ fn parse_recovery_rungs_v1(raw: &str) -> Result<Vec<crate::market::LocalRecovery
                  lifetime"
             ))
         })?;
-        rungs.push(crate::market::LocalRecoveryRungV1 {
+        rungs.push(crate::market::RelativeRecoveryRungV1 {
             max_confidence_bps: bps.trim().parse::<u16>().map_err(|_| {
                 Error::new(format!("--recovery-rungs confidence {bps:?} is not a u16"))
             })?,

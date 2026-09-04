@@ -8,7 +8,7 @@
 
 #![allow(dead_code)]
 
-use dclutch_account_profile_contract::v3::AccountProfileV3;
+use dclutch_account_profile_contract::{v2::AccountPrestateV2, v3::AccountProfileV3};
 use dclutch_capability_contract::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
     CapabilityEntryV1, CapabilityManifestV1, CompartmentFundingV1, EMPTY_MANIFEST_BYTES,
@@ -25,8 +25,8 @@ use dclutch_chain_bundle_builder::{
     artifacts::{ArtifactSetV1, DerivedRecordV1, derive_record},
     bundle::{BuiltBundleV1, BundleInputV1, FixedCorpusV1, ScenarioV1, build_bundle},
     frame::{
-        BuiltAccountV1, data_account, external_with_view, pack_frame, program_with_view,
-        rent_sysvar_bytes, vacant,
+        BuiltAccountV1, data_account, external_with_view, pack_frame, program_with_deployed_view,
+        program_with_view, rent_sysvar_bytes, system_program_builtin, vacant,
     },
 };
 use dclutch_claims_svm::{
@@ -428,6 +428,7 @@ pub fn build_series_premarket_expiry_chain_v1(
         &release,
         &selected,
     )?;
+    audit_expire_profile_data_lengths_v1(&bundle, &selected)?;
     let (operator_report, runtime_physical_accounts) = build_operator_report_v1(
         &input,
         &product,
@@ -830,7 +831,18 @@ fn build_controller_corpus_v1(
             .ok_or(SeriesPremarketExpiryChainErrorV1::Release)?,
     )
     .map_err(|_| SeriesPremarketExpiryChainErrorV1::Release)?;
-    let config_digest = records.template_id.to_bytes();
+    // ONE AUTHOR. The root's config identity is the Registry RECORD DIGEST of
+    // its config record, and the Series config record IS the Template record --
+    // the action descriptor's `config_schema()` is
+    // `SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3`, the same schema the Template is
+    // installed under. So this digest names the account already installed at
+    // `finalized.template.raw`, the manifest entry and the root selection
+    // agree with it, and the bundle builder derives the config raw/staging
+    // coordinates onto that same record. Staging `records.template_id` here --
+    // the DOMAIN-SEPARATED Template content identity -- named a coordinate at
+    // which no Registry record can ever exist, because a record's coordinate is
+    // its own hash.
+    let config_digest = hash(&records.template).to_bytes();
     let amounts = FundingAmountsV1::new(
         CompartmentFundingV1::native_lamports(1)
             .map_err(|_| SeriesPremarketExpiryChainErrorV1::Record)?,
@@ -889,7 +901,8 @@ fn build_controller_corpus_v1(
             .map_err(|_| SeriesPremarketExpiryChainErrorV1::Record)?,
         dclutch_core_contract::ContentId::new(release.program_set_id)
             .map_err(|_| SeriesPremarketExpiryChainErrorV1::Record)?,
-        records.template_id,
+        dclutch_core_contract::ContentId::new(config_digest)
+            .map_err(|_| SeriesPremarketExpiryChainErrorV1::Record)?,
     )
     .map_err(|_| SeriesPremarketExpiryChainErrorV1::Record)?
     .with_capability_release_record_bumps(program_set_bumps.0, program_set_bumps.1);
@@ -1404,7 +1417,26 @@ fn build_core_infrastructure_corpus_v1(
     );
     let rent_programdata_key = programdata(input.rent_program);
     let rent_programdata_bytes = programdata_v2(substrate, input.elves.registry.as_slice());
-    let rent_program = program_with_view(input.rent_program, rent_programdata_key);
+    // THE BANK DOES NOT DEPLOY THE RENT PROGRAM; THIS CAMPAIGN INSTALLS IT.
+    // `program_with_view` models a program the BANK deploys: its installed
+    // `account` is an empty stand-in and only its `observed` view carries the
+    // 36-byte Loader-V3 `Program` record. `program_test_without_forced_budget`
+    // deploys Registry, Trading, Core, Claims and Custody -- not the Rent
+    // program -- so installing that stand-in left the chain holding zero bytes
+    // at a coordinate whose rule is `Exact`, and the account projection refused
+    // `DataLengthMismatch` for the entire eighty-one-account walk. The bytes
+    // installed and the bytes observed are now one record.
+    let rent_program = {
+        let viewed = program_with_view(input.rent_program, rent_programdata_key);
+        let mut installed = data_account(
+            &input.rent,
+            viewed.key,
+            bpf_loader_upgradeable::ID,
+            viewed.chain_view().data.clone(),
+        );
+        installed.account.executable = true;
+        installed
+    };
     let rent_programdata = data_account(
         &input.rent,
         rent_programdata_key,
@@ -1454,6 +1486,78 @@ fn build_core_infrastructure_corpus_v1(
     })
 }
 
+/// Authenticated Product outcome count this campaign's frame is packed at.
+///
+/// It is the `tail_count` every affine width in the Expire profile is resolved
+/// against, and it is the same literal `pack_frame` is called with below.
+const EXPIRE_PROFILE_TAIL_COUNT_V1: usize = 3;
+
+/// Name the coordinate whose observed width disagrees with the Expire profile.
+///
+/// `project_accounts_atomic` refuses `DataLengthMismatch` for the whole walk
+/// and Trading maps every projection refusal to one `TradingSbfError::Content`,
+/// so on chain this is a 346,000-CU refusal with no coordinate in it. The
+/// profile and the packed frame are both in hand here, before a transaction is
+/// built, and comparing them costs microseconds -- so the fixture answers the
+/// question the wire cannot carry.
+fn audit_expire_profile_data_lengths_v1(
+    bundle: &BuiltBundleV1,
+    selected: &SeriesSelectedActionV5,
+) -> Result<(), SeriesPremarketExpiryChainErrorV1> {
+    let profile = AccountProfileV3::decode(selected.artifacts.account_profile.as_slice())
+        .map_err(|_| SeriesPremarketExpiryChainErrorV1::Operator)?
+        .base();
+    let mut mismatches = 0_usize;
+    for coordinate in 0..profile.fixed_account_count() {
+        let rule = profile
+            .rule(false, coordinate)
+            .map_err(|_| SeriesPremarketExpiryChainErrorV1::Operator)?;
+        if rule.prestate() != AccountPrestateV2::Exact {
+            continue;
+        }
+        let observed = match bundle.logical.get(usize::from(coordinate)) {
+            Some(account) => account.chain_view().data.len(),
+            None => {
+                std::eprintln!(
+                    "Series Expire profile coordinate {coordinate}: declared Exact and UNBOUND"
+                );
+                mismatches = mismatches.saturating_add(1);
+                continue;
+            }
+        };
+        // `exact_rule_data_length` is `data_length + data_item_stride *
+        // tail_count`, and the Product's Portfolio is the coordinate with a
+        // nonzero stride: 208 header bytes plus eight per outcome. Comparing
+        // the header alone reported it as a mismatch at the exact width it is
+        // supposed to have.
+        let expected = usize::try_from(rule.data_length())
+            .ok()
+            .and_then(|header| {
+                usize::try_from(rule.data_item_stride())
+                    .ok()
+                    .and_then(|stride| stride.checked_mul(EXPIRE_PROFILE_TAIL_COUNT_V1))
+                    .and_then(|tail| header.checked_add(tail))
+            })
+            .ok_or(SeriesPremarketExpiryChainErrorV1::Operator)?;
+        if observed != expected {
+            mismatches = mismatches.saturating_add(1);
+            std::eprintln!(
+                "Series Expire profile coordinate {coordinate}: declared {expected} bytes, \
+                 packed {observed} ({})",
+                bundle
+                    .logical
+                    .get(usize::from(coordinate))
+                    .map_or_else(|| "unbound".to_string(), |account| account.key.to_string()),
+            );
+        }
+    }
+    if mismatches == 0 {
+        Ok(())
+    } else {
+        Err(SeriesPremarketExpiryChainErrorV1::Physical)
+    }
+}
+
 fn expire_fixed_data_lengths_v1(
     input: &SeriesPremarketExpiryChainInputV1<'_>,
     substrate: &RootIndependentSubstrateV1,
@@ -1482,7 +1586,16 @@ fn expire_fixed_data_lengths_v1(
     set(15, MINT_BYTES)?;
     set(16, ACCOUNT_BYTES)?;
     set(17, ACCOUNT_BYTES)?;
-    set(19, 0)?;
+    // See `build_expire_bundle_v1`: the SPL Token program is a Loader-V3
+    // program account on this bank, and this width is read off the very
+    // constructor that builds it rather than written out again.
+    set(
+        19,
+        program_with_deployed_view(Pubkey::new_from_array(LEGACY_TOKEN_PROGRAM_ID))
+            .chain_view()
+            .data
+            .len(),
+    )?;
     set(45, PROJECTED_CUSTODY_STATE_BYTES_V2)?;
     set(51, ACCOUNT_BYTES)?;
     set(57, infrastructure.rent_program.chain_view().data.len())?;
@@ -1498,6 +1611,8 @@ fn expire_fixed_data_lengths_v1(
     set(75, substrate.finalized.ticket.bytes.len())?;
     set(77, Clock::size_of())?;
     set(78, rent_sysvar_bytes(&input.rent).len())?;
+    // The System builtin's registered name; see `build_expire_bundle_v1`.
+    set(79, system_program_builtin().chain_view().data.len())?;
     // Assert the two material mutable widths came from the exact constructed
     // bodies rather than merely agreeing with ABI constants by accident.
     if substrate
@@ -1593,17 +1708,17 @@ fn build_expire_bundle_v1(
         vec![0_u8; ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1],
     );
     let token_program_key = Pubkey::new_from_array(LEGACY_TOKEN_PROGRAM_ID);
-    let token_program = BuiltAccountV1 {
-        key: token_program_key,
-        account: Account {
-            lamports: 1,
-            data: Vec::new(),
-            owner: native_loader::ID,
-            executable: true,
-            rent_epoch: 0,
-        },
-        observed: None,
-    };
+    // THE BANK DEPLOYS SPL Token AS A LOADER-V3 PROGRAM, NOT A BUILTIN.
+    // `ProgramTest::default()` with `prefer_bpf(true)` installs it the same way
+    // it installs this campaign's own five ELFs, so its account is the 36-byte
+    // `Program { programdata }` state at the canonical derived address -- not
+    // the empty native-loader account modelled here before. The profile's rule
+    // at this coordinate is `Exact`, so an empty stand-in declared a width the
+    // chain does not have and the account projection refused
+    // `DataLengthMismatch` for the whole eighty-one-account walk. One
+    // constructor now owns both the account and the width
+    // `expire_fixed_data_lengths_v1` declares for it.
+    let token_program = program_with_deployed_view(token_program_key);
     let core_request = SeriesUnallocatedPermitExpiryRequestV1::new(1, 0).encode();
     let core_caller_seeds = CallerAuthoritySeedsV1::from_bytes(
         input.releases.release_set,
@@ -1620,17 +1735,13 @@ fn build_expire_bundle_v1(
     let clock = external_with_view(sysvar::clock::ID, sysvar::ID, vec![0_u8; Clock::size_of()]);
     let rent_sysvar =
         external_with_view(sysvar::rent::ID, sysvar::ID, rent_sysvar_bytes(&input.rent));
-    let system = BuiltAccountV1 {
-        key: system_program::ID,
-        account: Account {
-            lamports: 1,
-            data: Vec::new(),
-            owner: native_loader::ID,
-            executable: true,
-            rent_epoch: 0,
-        },
-        observed: None,
-    };
+    // THE BANK'S System BUILTIN IS NOT EMPTY. A native-loader builtin account
+    // holds its REGISTERED NAME, twenty-one bytes of `solana_system_program`,
+    // and `system_program_builtin` is this tree's one author for that fact --
+    // `general-hot`'s `open_batch` asserts it against a live bank. Modelling it
+    // empty declared a width the chain does not have at a coordinate whose rule
+    // is `Exact`.
+    let system = system_program_builtin();
     let bindings = vec![
         (5, controller.ticket_state.clone()),
         (7, substrate.future_market.clone()),
@@ -1726,7 +1837,13 @@ fn build_expire_bundle_v1(
         (79, system),
         (80, precommit_caller.clone()),
     ];
-    let external = [token_program_key, sysvar::clock::ID];
+    // The System builtin is the BANK'S, not this campaign's. Installing an
+    // account at its address REPLACES the builtin, which is why it was modelled
+    // empty here: an empty account passes the installer's Rent gate and a
+    // twenty-one-byte one does not. Naming it externally installed is the
+    // honest form -- the campaign states what the bank holds and installs
+    // nothing over it.
+    let external = [token_program_key, sysvar::clock::ID, system_program::ID];
     let scenario = ScenarioV1 {
         family_request: &normal.family_request,
         tail_count: 3,
@@ -3094,45 +3211,41 @@ fn _abi_type_pins(account: Account, identity: Identity) -> (Account, Identity) {
 #[cfg(test)]
 mod native_tests {
     use dclutch_custody_contract::{CustodyRequestV1, OperationV1};
+    use dclutch_series_v3_kernel::SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3;
+    use dclutch_trading_sbf::series::artifacts_v3::SeriesArtifactSelectionV3;
 
     use super::*;
 
-    /// THE WALL THIS CAMPAIGN NOW STANDS AT, PROVED WITHOUT AN ELF.
+    /// ONE AUTHOR FOR THE SERIES ROOT'S CONFIG IDENTITY, PROVED WITHOUT AN ELF.
     ///
-    /// A Series root's `selection().config()` is required to be TWO values
-    /// that cannot be equal, and this is the arithmetic that makes them
-    /// unequal. Nothing here is a claim about the fixture: it is a claim about
-    /// the two identities the tree derives from one Template record.
+    /// A Series root's `selection().config()` is the Registry RECORD DIGEST of
+    /// the root's config record, exactly as every other family's is. Nothing
+    /// about that was ever a choice: a Registry record's coordinate is
+    /// `[RAW_RECORD_PDA_SEED_V1, schema, digest]` with `digest == hash(bytes)`,
+    /// and `borrow_record_against` refuses unless `hash(&data) == digest`. So
+    /// the DOMAIN-SEPARATED `template_content_id(t)` can never be the identity
+    /// of a record whose bytes are `t` -- it names a coordinate at which no
+    /// Registry record can exist. The Series family had a second author saying
+    /// otherwise at six sites, and that is why nothing Series ever executed
+    /// through the family-neutral Hot prelude.
     ///
-    /// - The FAMILY-NEUTRAL rule. Trading's Hot prelude reads the account at
-    ///   `HOT_CONFIG_RAW_ACCOUNT_V3` with `borrow_finalized_record_at(
-    ///   descriptor.config_schema(), context.selection().config(), ..)`, and
-    ///   `borrow_record_against` refuses unless `hash(&data) == digest`. So the
-    ///   root's config identity is the Registry RECORD DIGEST of the bytes at
-    ///   that coordinate. `dealer/mod.rs` spells the same rule inline, and
-    ///   `crates/dclutch-operator/src/series_hot_v3.rs` requires those bytes to
-    ///   be the Template record itself: `hash(&config.account.data) ==
-    ///   hash(state.lifecycle.template_bytes)`.
-    /// - The SERIES rule. Six sites require the same field to be the
-    ///   DOMAIN-SEPARATED Template content identity:
-    ///   `trading-sbf/src/series/accounts.rs::authenticate_root`,
-    ///   `series/artifacts_v3.rs` (`request.template() != selection.template`,
-    ///   with `selection.template = header.selection().config()` supplied by
-    ///   `operator/src/series_hot_v3.rs`), and four Core routes --
-    ///   `series_open.rs`, `series_consume.rs`, `series_permit_expiry.rs` and
-    ///   `series_permit_expiry_precommit_v1.rs` -- each of which independently
-    ///   pins `request.template() == template_content_id(&template_bytes)`.
+    /// Both values still exist, and each now has exactly one author:
     ///
-    /// `template_content_id(t)` is `sha256("dclutch/series-template-v3" ||
-    /// 0x00 || t)` and the record digest is `sha256(t)`. They differ, so no
-    /// Series root can satisfy both, and any Series action routed through the
-    /// family-neutral Hot prelude refuses at the config-record borrow. That is
-    /// where this campaign stops today, measured on real ELFs; staging the
-    /// other value instead moves the refusal to the Series artifact selection
-    /// 190,000 CU earlier, which is the same contradiction seen from its other
-    /// end.
+    /// - `hash(t)` -- the record digest. The root's config field, the manifest
+    ///   entry's `config_id`, the config record's PDA coordinate, and what
+    ///   Core's four Series routes compare the root against.
+    /// - `template_content_id(t) = sha256("dclutch/series-template-v3" || 0x00
+    ///   || t)` -- the Template's content identity. The family request's
+    ///   `template()`, the occurrence proof's root, the Ticket derivation, and
+    ///   what `SeriesArtifactSelectionV3::from_config_record` DERIVES from the
+    ///   config record's bytes. It is no longer readable off a root.
+    ///
+    /// The Series config record IS the Template record: every Series action
+    /// descriptor pins `config_schema() == SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3`,
+    /// which is the schema this corpus installs the Template under. So the two
+    /// authors are one record's bytes, read twice, by two named functions.
     #[test]
-    fn the_series_root_config_identity_has_two_authors_that_cannot_agree() {
+    fn the_series_root_config_identity_has_one_author() {
         let product = build_product_record_corpus_v1().expect("Product corpus");
         let realm = build_realm_record_v1(key(0xc7)).expect("Realm corpus");
         let refund = key(0xc6);
@@ -3151,19 +3264,51 @@ mod native_tests {
             close_rent: Rent::default().minimum_balance(32),
         })
         .expect("Series corpus");
-        // What the Series family calls the Template identity.
+
+        // The record digest is the coordinate the Registry itself derives, and
+        // it is the only value a root's config field can name.
+        let registry = key(0xc1);
+        // The schema this corpus installs the Template under IS the schema
+        // every Series action descriptor names as its `config_schema()`. That
+        // identity is what makes the config record and the Template record one
+        // account rather than two.
         assert_eq!(
+            hash(b"dclutch/schema/series-template-v3").to_bytes(),
+            SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
+        );
+        let record = derive_record(
+            registry,
+            SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
+            &records.template,
+        );
+        assert_eq!(record.digest, hash(&records.template).to_bytes());
+        assert_eq!(
+            record.raw,
+            Pubkey::find_program_address(
+                &[
+                    RAW_RECORD_PDA_SEED_V1,
+                    &SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
+                    &record.digest,
+                ],
+                &registry,
+            )
+            .0
+        );
+
+        // The Template's content identity is a different value over the same
+        // bytes, and the artifact join now DERIVES it from those bytes. A
+        // caller cannot hand the join a root's config field any more: the
+        // struct has no public fields and one constructor.
+        let selection = SeriesArtifactSelectionV3::from_config_record([7; 32], &records.template)
+            .expect("config-record selection");
+        assert_eq!(
+            selection.template(),
             template_content_id(&records.template).expect("Template content id"),
-            records.template_id
         );
-        // What the Registry calls the same record, and therefore what the
-        // family-neutral config-record borrow requires the root to name.
-        assert_ne!(
-            hash(&records.template).to_bytes(),
-            records.template_id.to_bytes(),
-            "if these were equal the two authorities would agree and this \
-             campaign would not be blocked"
-        );
+        assert_eq!(selection.template(), records.template_id);
+
+        // They are distinct, which is exactly why one field could not be both.
+        assert_ne!(record.digest, records.template_id.to_bytes());
     }
 
     #[test]

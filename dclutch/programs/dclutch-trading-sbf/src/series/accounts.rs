@@ -7,9 +7,7 @@
 use dclutch_capability_contract::{
     CapabilityFundingDerivationV1, CapabilityManifestV1, ContentId, FUNDING_STATE_BYTES,
 };
-use dclutch_capability_program_contract::{
-    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
-};
+use dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1;
 use dclutch_market_core_codec::{Identity as CoreIdentity, SeriesCoreAckV1};
 use solana_program::{
     account_info::AccountInfo, program::invoke_signed, program_error::ProgramError, pubkey::Pubkey,
@@ -23,8 +21,7 @@ use super::{
         RetirePlanV3,
     },
     state::{
-        SERIES_STATE_BYTES_V3, SERIES_TICKET_STATE_BYTES_V3, SeriesStateV3, TicketStateSeedsV3,
-        TicketStateV3,
+        SERIES_STATE_BYTES_V3, SERIES_TICKET_STATE_BYTES_V3, TicketStateSeedsV3, TicketStateV3,
     },
 };
 
@@ -131,60 +128,16 @@ impl From<SeriesAccountErrorV3> for ProgramError {
     }
 }
 
-/// Exact authenticated composite root and mutable tail.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AuthenticatedSeriesRootV3 {
-    header: CapabilityRootHeaderV1,
-    state: SeriesStateV3,
-}
-
-impl AuthenticatedSeriesRootV3 {
-    /// Immutable common capability-root header.
-    pub const fn header(self) -> CapabilityRootHeaderV1 {
-        self.header
-    }
-    /// Mutable Series replay state.
-    pub const fn state(self) -> SeriesStateV3 {
-        self.state
-    }
-}
-
-/// Authenticate exact root owner, PDA, selector/config, width, and tail bytes.
-pub fn authenticate_root(
-    program_id: &Pubkey,
-    root: &AccountInfo<'_>,
-    template_id: ContentId,
-    occurrence_count: u32,
-) -> Result<AuthenticatedSeriesRootV3, SeriesAccountErrorV3> {
-    if root.owner != program_id
-        || root.data_len() != SERIES_ROOT_ACCOUNT_BYTES_V3
-        || root.is_signer
-        || !root.is_writable
-        || root.executable
-    {
-        return Err(SeriesAccountErrorV3::Frame);
-    }
-    let data = root
-        .try_borrow_data()
-        .map_err(|_| SeriesAccountErrorV3::State)?;
-    let header = CapabilityRootHeaderV1::decode(
-        data.get(..CAPABILITY_ROOT_HEADER_BYTES_V1)
-            .ok_or(SeriesAccountErrorV3::State)?,
-    )
-    .map_err(|_| SeriesAccountErrorV3::State)?;
-    if header.selection().config() != template_id
-        || Pubkey::find_program_address(&header.seeds().as_slices(), program_id).0 != *root.key
-    {
-        return Err(SeriesAccountErrorV3::State);
-    }
-    let state = SeriesStateV3::decode(
-        data.get(CAPABILITY_ROOT_HEADER_BYTES_V1..)
-            .ok_or(SeriesAccountErrorV3::State)?,
-        occurrence_count,
-    )
-    .map_err(|_| SeriesAccountErrorV3::State)?;
-    Ok(AuthenticatedSeriesRootV3 { header, state })
-}
+// THE SERIES ROOT HAS NO SECOND ACCOUNT BOUNDARY. `AuthenticatedSeriesRootV3`
+// and `authenticate_root` lived here with ZERO callers -- production, operator
+// and test alike -- while every family, Series included, authenticates its
+// composite root through `hot_v3.rs::authenticate_root_against_market_boxed_v3`.
+// What the orphan carried was a SECOND author for the root's config identity:
+// it compared `header.selection().config()` against the Template's
+// domain-separated content identity, where the family-neutral boundary compares
+// it against the config record's own digest. A duplicate that nothing calls
+// cannot go red when it drifts, so it drifted, and it is deleted rather than
+// re-synchronised.
 
 /// Authenticate one exact mutable Ticket replay account and its PDA.
 pub fn authenticate_ticket(
@@ -562,7 +515,7 @@ mod tests {
     use crate::series::{
         commit_plans::{plan_close, plan_retire},
         generated,
-        state::TicketPhaseV3,
+        state::{SeriesStateV3, TicketPhaseV3},
     };
 
     #[repr(C)]

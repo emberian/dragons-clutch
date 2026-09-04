@@ -92,6 +92,7 @@ pub(crate) fn process(
         frame.template_staging,
         SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
     )?;
+    let template_record = hash(&template_bytes).to_bytes();
     let occurrence_bytes = finalized_series_record(
         &frame,
         frame.occurrence_raw,
@@ -126,6 +127,7 @@ pub(crate) fn process(
         admitted_ticket,
         request.expected_series_revision(),
         request.expected_ticket_revision(),
+        template_record,
     )?;
     let (root_candidate, ticket_candidate) = recompute_candidates(
         admitted,
@@ -187,6 +189,7 @@ fn authenticate_prestate(
     admitted_ticket: dclutch_series_v3_kernel::AdmittedTicketV3,
     expected_series_revision: u64,
     expected_ticket_revision: u64,
+    template_record: [u8; 32],
 ) -> Result<(SeriesStateV3, TicketStateV3, [u8; 32]), CoreSbfError> {
     if frame.root.owner != frame.trading_program.key
         || frame.root.data_len() != CAPABILITY_ROOT_HEADER_BYTES_V1 + SERIES_STATE_BYTES_V3
@@ -226,7 +229,7 @@ fn authenticate_prestate(
             admitted.occurrence().market().to_bytes(),
         )
         || header.generation() == 0
-        || header.selection().config().to_bytes() != admitted.template_id().to_bytes()
+        || header.selection().config().to_bytes() != template_record
         || series.next_occurrence() != admitted.occurrence().occurrence()
         || !series.current_ticket_prepared()
         || series.revision() != expected_series_revision

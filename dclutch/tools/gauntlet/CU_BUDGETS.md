@@ -525,6 +525,74 @@ admission, one hostile refusal, and the vault open/transfer/close triple in both
 token profiles. A refusal is budgeted on purpose: a refusal that gets more
 expensive is a refusal that can stop fitting.
 
+### general-hot — `tools/gauntlet/general-hot/run-general-hot.sh --at`, ProgramTest on six real ELFs
+
+**RECORDED, not enforced, and the reason is structural rather than a deferral.**
+`check-witnesses.sh` evaluates a budget only for a campaign some witness names,
+and this campaign has none: `tools/ci/run.sh` records why, in the same note that
+records that it HAS had a runner since 2026-09-04 — six SBF links built from an
+archive of a named commit plus a CU table is a campaign tier's shape and minutes
+of work, not a program-test suite, and what it is waiting on is a census
+binding. An `enforced: true` row here would never be asserted, which overstates
+coverage exactly the way a `MISSING` row does. The rows are in the file so the
+lane that writes that binding does not have to re-measure them.
+
+Three draws, **one ELF set**, at `a6aed340ce94db8003b59eaf840fd3f3ba54f670` on
+2026-09-04: the runner's own campaign plus two re-runs of the same test binary
+against the same `$SBF_OUT_DIR`, so nothing between them was rebuilt. Six links,
+**zero** SBF stack-frame-overwrite diagnostics.
+
+| link | sha256 (12) | bytes |
+|---|---|---:|
+| `dclutch_registry_sbf` | `83c9b0e89b21` | 239,816 |
+| `dclutch_trading_sbf` | `ca97232b0b7f` | 2,335,544 |
+| `dclutch_core_sbf` | `e8209ccbf22b` | 1,189,112 |
+| `dclutch_claims_sbf` | `6c55a117135b` | 1,397,808 |
+| `dclutch_custody_sbf` | `176f8007b002` | 573,576 |
+| `dclutch_general_accelerator_sbf` | `80c6a04d269b` | 307,752 |
+
+| row | draw 1 | draw 2 | draw 3 | band |
+|---|---:|---:|---:|---:|
+| `general-hot-open-batch` (N=2) | 654,302 | 654,302 | 654,302 | 0 |
+| `general-hot-close-batch` | 640,132 | 640,132 | 640,132 | 0 |
+| `general-hot-close-batch-seal` | 602,575 | 602,575 | 602,575 | 0 |
+| `general-hot-second-open-batch` | 657,302 | 657,302 | 657,302 | 0 |
+| `general-hot-open-batch-n13` | 659,462 | 659,462 | 659,462 | 0 |
+| `general-hot-open-batch-n258` | 677,258 | 677,258 | 677,258 | 0 |
+| `general-hot-standalone-capability-seal` | 616,302 | 616,302 | 616,302 | 0 |
+| `general-hot-out-of-sequence-close` (`0x4002`) | 40,730 | 40,730 | 40,730 | 0 |
+| `general-hot-foreign-entry` (`0x4015`) | 118,766 | 118,766 | 118,766 | 0 |
+
+**Band 0 on every row, and it has a cause rather than luck.** This campaign's
+keypairs are fixed byte arrays (`Keypair::new_from_array`) and its slots come
+from `warp_to_slot` rather than a wall clock, so the bump search that is tier
+1's one remaining noise source has nothing to vary. The one row whose test still
+draws FRESH keypairs is the standalone seal, and it drew identically three times
+as well — consistent with a route that runs no bump search, and not a bound on
+one. Every tolerance is therefore the rule's floor of 15,000.
+
+**Read the width ladder together.** N=2, 13 and 258 are 654,302 / 659,462 /
+677,258 on a frame that is 55 accounts and 151 scalars and 45 identities at
+every width: 89.7 CU per outcome over 256 more outcomes, and none of it is bank
+width, because `OpenBatch` declares a zero per-outcome scalar stride. The
+headroom at the accepted maximum Product width is 722,742 CU (51.6%).
+
+**And read the two refusals as the pair they are.** `general-hot-foreign-entry`
+is the cohort-15 wall reproduced: that deployment's `OpenBatch` refused `0x4015`
+after 128,724 CU on devnet and had never been reproducible in a harness, because
+the harness founded its manifest entry from the action it was about to run.
+Here the entry is a parameter and everything else is byte-for-byte the campaign
+that commits, which is the positive control the refusal needs.
+
+**This table is not comparable with the one at `6ce8929ed`** (the runner's first,
+recorded in `71b5ad10c`). Six of its seven rows moved — `open-batch` −2,900,
+`close-batch` −5,902, `second-open-batch` +6,100, N=258 +9,099, and the seal and
+foreign-entry rows by −5 each — while `out-of-sequence-close` did not move at
+all. That is the whole reason the runner takes `--at`: the ELF set is different,
+because six other lanes (CHUNK-REMEASURE, CLAIMS-17, DEALER-FIX, ESCROW-2,
+PROGRAMS-16E, SERIES-3) landed commits under `crates/` or `programs/` between
+the two revisions. A CU figure names its commit or it names nothing.
+
 ### The tiers deliberately NOT budgeted here
 
 Not an oversight, and each can opt in with the one witness entry `TIERS.md`
@@ -554,6 +622,10 @@ documents:
   completing tier-1 run exists". Three more happened. All three rows are enforced
   in the table above, pinned to the highest of four draws with tolerances derived
   from the observed band rather than assumed.
+- The nine `general-hot` rows — a full three-draw band-0 measurement with no
+  evaluator to assert it, because that campaign has no `cu-budget` witness and
+  is not a `SUITE_RUNNERS` row. See its own section above; they become enforced
+  the day it gets a census binding.
 - `hot-canonical-bundle-phase-subtotals` — there is no green number to pin. The
   canonical Hot bundle does not pass at HEAD (tail over the 32,768-byte heap at
   phase 7; W2i's gate), and its phase subtotals need `--features hot-cu-profile`

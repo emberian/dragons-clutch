@@ -250,10 +250,18 @@ fn build_series_occurrence_hot_v3(
     authenticate_occurrence_records(state, frame.registry_program)?;
     let request = build_family_request(state, action, frame.series, frame.clock_slot, outer)?;
     let artifacts = artifacts_from_frame(state)?;
-    let selection = SeriesArtifactSelectionV3 {
-        program_set: frame.header.selection().capability_release().to_bytes(),
-        template: frame.header.selection().config(),
-    };
+    // ONE AUTHOR. `authenticate_frame` has already required the root's
+    // `selection().config()` to be `hash(config_record)`, so the Template's
+    // content identity this join needs is DERIVED from those same bytes rather
+    // than read off the root. The two values are `sha256(t)` and
+    // `sha256("dclutch/series-template-v3" || 0x00 || t)`; handing one where
+    // the other was meant is what `SeriesArtifactSelectionV3::from_config_record`
+    // now makes unspellable.
+    let selection = SeriesArtifactSelectionV3::from_config_record(
+        frame.header.selection().capability_release().to_bytes(),
+        frame.config_record,
+    )
+    .map_err(|_| SeriesHotOperatorErrorV3::ArtifactMismatch)?;
     let bundle = authenticate_series_artifacts_v3(selection, artifacts, request.as_bytes())
         .map_err(|_| SeriesHotOperatorErrorV3::ArtifactMismatch)?;
     if bundle.request.action() != action {
@@ -330,6 +338,11 @@ struct AuthenticatedFrameV3<'a> {
     registry_program: Pubkey,
     series: SeriesStateV3,
     clock_slot: u64,
+    /// Exact bytes of the root's selected config record, which for Series IS
+    /// the Template record. Carried out so the Template's content identity is
+    /// derived from the bytes the root names rather than from the root's own
+    /// config field, which is those bytes' Registry RECORD DIGEST.
+    config_record: &'a [u8],
 }
 
 fn authenticate_frame<'a>(
@@ -381,8 +394,21 @@ fn authenticate_frame<'a>(
     validate_injected_runtime(state)?;
     let observation = market.account.observation;
     validate_observation_set(state, observation)?;
-    let template = TemplateV3::decode(&fixed(state, HOT_CONFIG_RAW_ACCOUNT_V3)?.account.data)
-        .map_err(|_| SeriesHotOperatorErrorV3::RecordMismatch)?;
+    // THE ROOT NAMES ITS CONFIG RECORD BY THAT RECORD'S OWN DIGEST. This is
+    // the family-neutral rule `borrow_record_against` enforces on chain and
+    // that `series_current_acquisition_v5` already spelled here; the Series Hot
+    // builder did not state it, and instead read the config field as if it were
+    // the Template's domain-separated content identity. Stating it makes the
+    // config record's bytes -- the Template record -- the single author of both.
+    let config_record = fixed(state, HOT_CONFIG_RAW_ACCOUNT_V3)?
+        .account
+        .data
+        .as_slice();
+    if header.selection().config().to_bytes() != hash(config_record).to_bytes() {
+        return Err(SeriesHotOperatorErrorV3::RecordMismatch);
+    }
+    let template =
+        TemplateV3::decode(config_record).map_err(|_| SeriesHotOperatorErrorV3::RecordMismatch)?;
     let series = SeriesStateV3::decode(
         root_meta
             .account
@@ -401,6 +427,7 @@ fn authenticate_frame<'a>(
         registry_program: registry.account.key,
         series,
         clock_slot: clock.slot,
+        config_record,
     })
 }
 

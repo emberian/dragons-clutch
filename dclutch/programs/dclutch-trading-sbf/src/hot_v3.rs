@@ -697,6 +697,121 @@ macro_rules! hot_heap_mark {
     ($label:literal) => {};
 }
 
+/// Name, under the diagnostic feature, a cause this route's wire cannot carry.
+///
+/// `TradingSbfError::Content` covers thousands of sites, and the callees that
+/// reach it have already computed WHICH conjunct refused -- an
+/// `account_profile_contract::v2::Error` distinguishing forty causes, say. A
+/// `map_err(|_| Content)` throws that away and converts a located defect into a
+/// bisection, which AGENTS.md prices at hours, three times over, in one day.
+///
+/// This keeps the cause where a reader looks first without paying for `Debug`
+/// formatting in the production ELF: under `hot-cu-profile` it logs beside the
+/// CU checkpoints, and without it the error is dropped exactly as before.
+/// Log the first coordinate whose observed width disagrees with its rule.
+///
+/// `Error::DataLengthMismatch` names the walk, not the account, and the walk is
+/// eighty-one accounts wide on the Series Expire profile. The rule accessors are
+/// public and the arithmetic is `data_length + data_item_stride * tail_count`,
+/// so the coordinate is one loop away from the refusal that already happened.
+/// Diagnostic-only: nothing here runs in a production ELF.
+#[cfg(feature = "hot-cu-profile")]
+fn log_first_data_length_disagreement_v1(
+    profile: AccountProfileV2<'_>,
+    tail_count: u32,
+    observations: &[AccountObservationV1<'_>],
+) {
+    for (coordinate, account) in observations.iter().enumerate() {
+        let Ok(index) = u16::try_from(coordinate) else {
+            return;
+        };
+        let Ok(rule) = profile.rule(false, index) else {
+            return;
+        };
+        if rule.prestate() != AccountPrestateV2::Exact {
+            continue;
+        }
+        let expected = u64::from(rule.data_length()).saturating_add(
+            u64::from(rule.data_item_stride()).saturating_mul(u64::from(tail_count)),
+        );
+        let observed = account.data().len() as u64;
+        if observed != expected {
+            solana_program::log::sol_log(
+                "dclutch-hot-why:data-length coordinate/expected/observed",
+            );
+            solana_program::log::sol_log_64(coordinate as u64, expected, observed, 0, 0);
+            return;
+        }
+    }
+    solana_program::log::sol_log("dclutch-hot-why:data-length no fixed-rule coordinate disagrees");
+}
+
+#[cfg(feature = "hot-cu-profile")]
+macro_rules! hot_cu_data_length_disagreement {
+    ($profile:expr, $tail:expr, $observations:expr) => {
+        crate::hot_v3::log_first_data_length_disagreement_v1($profile, $tail, $observations)
+    };
+}
+
+#[cfg(not(feature = "hot-cu-profile"))]
+macro_rules! hot_cu_data_length_disagreement {
+    ($profile:expr, $tail:expr, $observations:expr) => {};
+}
+
+/// Log which of the static-ownership verdict's four ranges strayed.
+///
+/// `Error::TokenRangeMismatch` is one code over four artifacts, and the
+/// distinction is pointer identity, which no equality test recovers after the
+/// fact. Diagnostic-only.
+#[cfg(feature = "hot-cu-profile")]
+fn log_sealed_ownership_ranges_v1(
+    verdict: dclutch_capability_seal_contract::SealedStaticOwnershipV1<'_>,
+    action: u32,
+    observed: [&[u8]; 4],
+) {
+    solana_program::log::sol_log("dclutch-hot-why:sealed-ownership action proved/observed");
+    solana_program::log::sol_log_64(u64::from(verdict.action()), u64::from(action), 0, 0, 0);
+    for (index, (proved, seen)) in verdict.proved_ranges().iter().zip(observed).enumerate() {
+        if core::ptr::eq(proved.as_ptr(), seen.as_ptr()) && proved.len() == seen.len() {
+            continue;
+        }
+        solana_program::log::sol_log("dclutch-hot-why:sealed-ownership role/proved-len/seen-len");
+        solana_program::log::sol_log_64(
+            index as u64,
+            proved.len() as u64,
+            seen.len() as u64,
+            proved.as_ptr() as u64,
+            seen.as_ptr() as u64,
+        );
+    }
+}
+
+#[cfg(feature = "hot-cu-profile")]
+macro_rules! hot_cu_sealed_ownership_ranges {
+    ($verdict:expr, $action:expr, $observed:expr) => {
+        crate::hot_v3::log_sealed_ownership_ranges_v1($verdict, $action, $observed)
+    };
+}
+
+#[cfg(not(feature = "hot-cu-profile"))]
+macro_rules! hot_cu_sealed_ownership_ranges {
+    ($verdict:expr, $action:expr, $observed:expr) => {};
+}
+
+#[cfg(feature = "hot-cu-profile")]
+macro_rules! hot_cu_reason {
+    ($label:literal, $error:expr) => {{
+        solana_program::msg!(concat!("dclutch-hot-why:", $label, " {:?}"), $error);
+    }};
+}
+
+#[cfg(not(feature = "hot-cu-profile"))]
+macro_rules! hot_cu_reason {
+    ($label:literal, $error:expr) => {{
+        let _ = &$error;
+    }};
+}
+
 // The admitted CPI loop lives in `admitted_composition_v3`, and until this
 // export the whole loop was ONE heap span in this module -- which is how
 // twelve kilobytes of it went unattributed when the input transport changed.
@@ -4171,15 +4286,40 @@ fn execute_authenticated_hot_v3(
     )?;
     hot_heap_mark!("request-registers");
     hot_cu_checkpoint!("p5-request-registers");
+    // THE VERDICT COVERS THE RECORD THE SEAL PINNED, NOT ITS INTERIOR.
+    // `authenticate_static_ownership` is minted from `account_profile_token`,
+    // and that token names `&account_profile_data` -- the complete Registry
+    // record. For schema V2 the profile IS that record. For schema V3 the
+    // profile handed on is `funding.base()`, an interior slice starting after
+    // the V3 header and its funding table, so presenting it here compared a
+    // 1,712-byte base against a 1,736-byte proved range and refused
+    // `TokenRangeMismatch` -- by pointer identity, which no equality test
+    // recovers. That made this conjunct UNSATISFIABLE for every capability
+    // whose account profile is schema V3, and it went unnoticed because no V3
+    // family had ever reached this statement: the Series arm is the first, and
+    // it reached it only once the config-identity wall came down.
     sealed_ownership
         .require(
             selected_action,
-            account_profile.bytes(),
+            funding_profile.map_or_else(|| account_profile.bytes(), AccountProfileV3::bytes),
             lifecycle.bytes(),
             request_profile.bytes(),
             transition.bytes(),
         )
-        .map_err(|_| TradingSbfError::Content)?;
+        .map_err(|error| {
+            hot_cu_reason!("sealed-ownership", error);
+            hot_cu_sealed_ownership_ranges!(
+                sealed_ownership,
+                selected_action,
+                [
+                    account_profile.bytes(),
+                    lifecycle.bytes(),
+                    request_profile.bytes(),
+                    transition.bytes(),
+                ]
+            );
+            TradingSbfError::Content
+        })?;
     // Every register bank the rest of this execution needs is now already on
     // the heap. The projection rotated through three pairs and kept one; the
     // preplan arena takes the two it finished with, the interpreted transition
@@ -14107,7 +14247,11 @@ fn project_account_and_request_registers_v3<'region, 'artifact, 'accounts, 'info
             Some(effect_permissions),
         )
     }
-    .map_err(|_| TradingSbfError::Content)?;
+    .map_err(|error| {
+        hot_cu_reason!("account-projection", error);
+        hot_cu_data_length_disagreement!(account_profile, tail_count, &observations);
+        TradingSbfError::Content
+    })?;
     hot_cu_checkpoint!("p5r-account-projection");
     core::mem::swap(&mut current_scalars, &mut next_scalars);
     core::mem::swap(&mut current_identities, &mut next_identities);

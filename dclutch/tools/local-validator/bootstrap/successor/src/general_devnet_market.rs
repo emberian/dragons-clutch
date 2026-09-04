@@ -923,6 +923,9 @@ mod tests {
         update: &dclutch_pyth_svm::FullPriceUpdateV2,
     ) -> crate::market::DevnetPythMarketSpecV1<'a> {
         crate::market::DevnetPythMarketSpecV1 {
+            // The General devnet market buys no ladder; a caller that wants
+            // one states it on the market command that compiles this spec.
+            recovery: None,
             founding_band: crate::market::LocalMarketShapeV1::default().founding_band,
             registry,
             price_update: price,

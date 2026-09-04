@@ -13668,6 +13668,25 @@ fn author_pyth_recovery_ladder_v1(
 /// projection documented in `docs/evidence/PYTH_SYNTHETIC_RELEASE_V1.md`; it is
 /// not a production provider release, and this Market is not a mainnet or
 /// devnet product.
+/// One rung of a ladder, in the terms a CALLER can state.
+///
+/// The rung's committed deadline is ABSOLUTE in the record, and no caller of
+/// either producer can name an absolute second usefully: the primary leg's own
+/// deadline is the captured publication plus the fixture's declared shelf life
+/// for the lab, and a live window's close plus its submission-latency budget on
+/// devnet. Both are computed inside the producer. So a caller states how long
+/// this rung lives AFTER the leg before it, and `authored_relative_ladder_v1`
+/// folds the offsets into the absolute deadlines the policy carries. Strictly
+/// positive, which is what makes the ladder's deadlines strictly increasing by
+/// construction rather than by a check the caller has to pass.
+#[derive(Clone, Debug)]
+pub(crate) struct RelativeRecoveryRungV1 {
+    /// This rung's confidence bound, in basis points.
+    pub(crate) max_confidence_bps: u16,
+    /// Seconds after the previous leg's deadline that this rung's falls.
+    pub(crate) deadline_after_previous_seconds: i64,
+}
+
 /// The dimensions of the local demo market a CALLER may choose, with the
 /// values this fixture has always emitted as its defaults.
 ///
@@ -13689,25 +13708,6 @@ fn author_pyth_recovery_ladder_v1(
 /// field at all -- `compile_linked_basis_v3` hard-wires `payout_scale: 1`
 /// alongside the categorical basis kind, so varying it is the same edit as
 /// emitting a graded basis and belongs to whoever does that one.
-/// One rung of a local market's ladder, in the terms a CALLER can state.
-///
-/// The rung's committed deadline is absolute in the record, and a caller of a
-/// lab fixture has no way to name an absolute second: the primary leg's own
-/// deadline is the captured publication plus the fixture's declared shelf life,
-/// which is a fact about the lab and not a parameter. So a caller states how
-/// long this rung lives AFTER the leg before it, and
-/// `demo_market_input_base_shaped` folds the offsets into the absolute
-/// deadlines the policy carries. Strictly positive, which is what makes the
-/// ladder's deadlines strictly increasing by construction rather than by a
-/// check the caller has to pass.
-#[derive(Clone, Debug)]
-pub(crate) struct LocalRecoveryRungV1 {
-    /// This rung's confidence bound, in basis points.
-    pub(crate) max_confidence_bps: u16,
-    /// Seconds after the previous leg's deadline that this rung's falls.
-    pub(crate) deadline_after_previous_seconds: i64,
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct LocalMarketShapeV1 {
     /// Denominator under every cut. The band's scale.
@@ -13735,7 +13735,7 @@ pub(crate) struct LocalMarketShapeV1 {
     /// bytes it always did. `Some` is a loopback market that buys named
     /// alternative sources, which is the only shape `advance-recovery` has
     /// anything to crank.
-    pub(crate) recovery: Option<Vec<LocalRecoveryRungV1>>,
+    pub(crate) recovery: Option<Vec<RelativeRecoveryRungV1>>,
     /// The author's founding band, or `None`.
     ///
     /// `Option` rather than a plain field so `Default` stays constructible
@@ -13749,8 +13749,8 @@ pub(crate) struct LocalMarketShapeV1 {
 
 /// Fold a caller's relative rung offsets into the absolute deadlines a
 /// `RecoveryPolicyV2` carries, starting from the primary leg's own deadline.
-fn authored_local_ladder_v1(
-    rungs: Option<&[LocalRecoveryRungV1]>,
+fn authored_relative_ladder_v1(
+    rungs: Option<&[RelativeRecoveryRungV1]>,
     primary_deadline_unix_seconds: i64,
 ) -> Result<Option<Vec<PythRecoveryRungV1>>> {
     let Some(rungs) = rungs else {
@@ -13936,7 +13936,7 @@ pub(crate) fn demo_market_input_base_shaped(
     pyth_market_input_base(
         PythMarketParamsV1 {
             founding_band: shape.founding_band.clone(),
-            recovery: authored_local_ladder_v1(
+            recovery: authored_relative_ladder_v1(
                 shape.recovery.as_deref(),
                 update
                     .publish_time()
@@ -14000,6 +14000,14 @@ pub(crate) struct DevnetPythMarketSpecV1<'a> {
     /// devnet market whose author has not stated how uncertain they think
     /// the outcome is has not finished describing itself.
     pub(crate) founding_band: Option<crate::model::FoundingBandInputV1>,
+    /// The funded ordered ladder this market buys, in rung order.
+    ///
+    /// `None` is the no-recovery shape every devnet market founded before this
+    /// field existed, and it stays the default: a ladder is PREPAID at founding
+    /// -- one extra Resolution compartment per rung -- so defaulting a market
+    /// into buying one would be spending on the founder's behalf. `Some` costs
+    /// real lamports and buys a real second answerer.
+    pub(crate) recovery: Option<Vec<RelativeRecoveryRungV1>>,
 }
 
 /// Four measured 313-second cadences, the §12.3 guidance floor.
@@ -14015,13 +14023,16 @@ pub(crate) fn devnet_market_input(
     pyth_market_input(
         PythMarketParamsV1 {
             founding_band: spec.founding_band.clone(),
-            // NO LADDER ON DEVNET FROM THIS PRODUCER. A ladder is a founding
-            // decision with a live cost -- one extra prepaid compartment per
-            // rung and a real alternative feed to name -- and `None` here says
-            // this spec's author has not made it, rather than defaulting a
-            // market into buying legs nobody chose. A devnet market that wants
-            // one grows a field on `DevnetPythMarketSpecV1`.
-            recovery: None,
+            // The ladder a devnet author bought, folded from offsets against
+            // this market's own primary deadline -- the live window's close
+            // plus its submission-latency budget, which is the second after
+            // which a crank onto rung zero becomes admissible.
+            recovery: authored_relative_ladder_v1(
+                spec.recovery.as_deref(),
+                window_end
+                    .checked_add(i64::from(spec.max_age_seconds))
+                    .ok_or_else(|| Error::new("devnet primary deadline overflowed"))?,
+            )?,
             registry: spec.registry,
             release: PythMarketProviderV1::Pull(&release),
             // The cluster identity is the devnet label: a devnet market's ids can
@@ -14092,13 +14103,16 @@ pub(crate) fn devnet_sponsored_market_input_base(
     pyth_market_input_base(
         PythMarketParamsV1 {
             founding_band: spec.founding_band.clone(),
-            // NO LADDER ON DEVNET FROM THIS PRODUCER. A ladder is a founding
-            // decision with a live cost -- one extra prepaid compartment per
-            // rung and a real alternative feed to name -- and `None` here says
-            // this spec's author has not made it, rather than defaulting a
-            // market into buying legs nobody chose. A devnet market that wants
-            // one grows a field on `DevnetPythMarketSpecV1`.
-            recovery: None,
+            // The ladder a devnet author bought, folded from offsets against
+            // this market's own primary deadline -- the live window's close
+            // plus its submission-latency budget, which is the second after
+            // which a crank onto rung zero becomes admissible.
+            recovery: authored_relative_ladder_v1(
+                spec.recovery.as_deref(),
+                window_end
+                    .checked_add(i64::from(spec.max_age_seconds))
+                    .ok_or_else(|| Error::new("devnet primary deadline overflowed"))?,
+            )?,
             registry: spec.registry,
             release: PythMarketProviderV1::Sponsored(release),
             label: release.cluster_id(),
@@ -14822,7 +14836,7 @@ mod tests {
 
     /// One local market compiler shared by the ladder tests below.
     fn ladder_fixture_v1(
-        rungs: Option<Vec<LocalRecoveryRungV1>>,
+        rungs: Option<Vec<RelativeRecoveryRungV1>>,
     ) -> (
         Pubkey,
         crate::direct_market::DirectMarketCompilerOwnedV1,
@@ -14896,7 +14910,7 @@ mod tests {
     /// rather than discovered at a capture.
     #[test]
     fn a_founding_that_buys_a_rung_publishes_the_source_that_rung_names() {
-        let (registry, _, input) = ladder_fixture_v1(Some(vec![LocalRecoveryRungV1 {
+        let (registry, _, input) = ladder_fixture_v1(Some(vec![RelativeRecoveryRungV1 {
             max_confidence_bps: 9_000,
             deadline_after_previous_seconds: 20,
         }]));
@@ -14975,7 +14989,7 @@ mod tests {
     #[test]
     fn a_ladder_that_would_not_found_refuses_offline_and_by_name() {
         let (_, _, no_ladder) = ladder_fixture_v1(None);
-        let (_, _, ladder) = ladder_fixture_v1(Some(vec![LocalRecoveryRungV1 {
+        let (_, _, ladder) = ladder_fixture_v1(Some(vec![RelativeRecoveryRungV1 {
             max_confidence_bps: 9_000,
             deadline_after_previous_seconds: 20,
         }]));
@@ -15095,7 +15109,7 @@ mod tests {
                 .expect("deployment widths"),
         );
         let shape = LocalMarketShapeV1 {
-            recovery: Some(vec![LocalRecoveryRungV1 {
+            recovery: Some(vec![RelativeRecoveryRungV1 {
                 max_confidence_bps: 9_000,
                 deadline_after_previous_seconds: 0,
             }]),
@@ -15791,6 +15805,9 @@ mod tests {
         let update = dclutch_pyth_svm::FullPriceUpdateV2::parse(&price).expect("price update");
         devnet_sponsored_market_input(
             DevnetPythMarketSpecV1 {
+                // The fixture states no ladder, which is the shape every
+                // devnet market founded before ladders were authorable.
+                recovery: None,
                 founding_band: LocalMarketShapeV1::default().founding_band,
                 registry,
                 price_update: &price,
