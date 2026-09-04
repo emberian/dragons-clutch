@@ -216,7 +216,7 @@ impl CandidateV1 {
         header(
             input,
             CANDIDATE_BYTES,
-            &generated_general_controller::CANDIDATE_MAGIC,
+            &generated_general_controller::GENERAL_CANDIDATE_MAGIC,
             generated_general_controller::CANDIDATE_VERSION_OFFSET,
         )?;
         require_zero(
@@ -266,7 +266,7 @@ impl CandidateV1 {
         let mut output = [0_u8; CANDIDATE_BYTES];
         put_header(
             &mut output,
-            &generated_general_controller::CANDIDATE_MAGIC,
+            &generated_general_controller::GENERAL_CANDIDATE_MAGIC,
             generated_general_controller::CANDIDATE_VERSION_OFFSET,
         )?;
         put_byte(
@@ -526,7 +526,7 @@ impl<'a> PageViewV1<'a> {
         header(
             input,
             PAGE_BYTES,
-            &generated_general_controller::PAGE_MAGIC,
+            &generated_general_controller::GENERAL_PAGE_MAGIC,
             generated_general_controller::PAGE_VERSION_OFFSET,
         )?;
         require_zero(
@@ -648,7 +648,7 @@ impl PageV1 {
         header(
             input,
             PAGE_BYTES,
-            &generated_general_controller::PAGE_MAGIC,
+            &generated_general_controller::GENERAL_PAGE_MAGIC,
             generated_general_controller::PAGE_VERSION_OFFSET,
         )?;
         require_zero(
@@ -706,7 +706,7 @@ impl PageV1 {
         let mut output = [0_u8; PAGE_BYTES];
         put_header(
             &mut output,
-            &generated_general_controller::PAGE_MAGIC,
+            &generated_general_controller::GENERAL_PAGE_MAGIC,
             generated_general_controller::PAGE_VERSION_OFFSET,
         )?;
         put_byte(
@@ -794,7 +794,7 @@ impl SelectionPolicyV1 {
         header(
             input,
             SELECTION_POLICY_BYTES,
-            &generated_general_controller::POLICY_MAGIC,
+            &generated_general_controller::GENERAL_POLICY_MAGIC,
             generated_general_controller::POLICY_VERSION_OFFSET,
         )?;
         require_zero(
@@ -840,7 +840,7 @@ impl SelectionPolicyV1 {
         let mut output = [0_u8; SELECTION_POLICY_BYTES];
         put_header(
             &mut output,
-            &generated_general_controller::POLICY_MAGIC,
+            &generated_general_controller::GENERAL_POLICY_MAGIC,
             generated_general_controller::POLICY_VERSION_OFFSET,
         )?;
         put_byte(
@@ -916,7 +916,7 @@ impl SelectionCursorV1 {
         header(
             input,
             SELECTION_CURSOR_BYTES,
-            &generated_general_controller::SELECTION_MAGIC,
+            &generated_general_controller::GENERAL_SELECTION_MAGIC,
             generated_general_controller::SELECTION_VERSION_OFFSET,
         )?;
         require_zero(
@@ -970,7 +970,7 @@ impl SelectionCursorV1 {
         let mut output = [0_u8; SELECTION_CURSOR_BYTES];
         put_header(
             &mut output,
-            &generated_general_controller::SELECTION_MAGIC,
+            &generated_general_controller::GENERAL_SELECTION_MAGIC,
             generated_general_controller::SELECTION_VERSION_OFFSET,
         )?;
         put_byte(
@@ -1050,7 +1050,7 @@ impl SettlementCursorV1 {
         header(
             input,
             SETTLEMENT_CURSOR_BYTES,
-            &generated_general_controller::SETTLEMENT_MAGIC,
+            &generated_general_controller::GENERAL_SETTLEMENT_MAGIC,
             generated_general_controller::SETTLEMENT_VERSION_OFFSET,
         )?;
         require_zero(
@@ -1110,7 +1110,7 @@ impl SettlementCursorV1 {
         let mut output = [0_u8; SETTLEMENT_CURSOR_BYTES];
         put_header(
             &mut output,
-            &generated_general_controller::SETTLEMENT_MAGIC,
+            &generated_general_controller::GENERAL_SETTLEMENT_MAGIC,
             generated_general_controller::SETTLEMENT_VERSION_OFFSET,
         )?;
         put_byte(
@@ -1222,7 +1222,7 @@ impl ControllerRequestV1 {
         header(
             input,
             CONTROLLER_REQUEST_BYTES,
-            &generated_general_controller::REQUEST_MAGIC,
+            &generated_general_controller::GENERAL_REQUEST_MAGIC,
             generated_general_controller::REQUEST_VERSION_OFFSET,
         )?;
         require_zero(
@@ -1269,7 +1269,7 @@ impl ControllerRequestV1 {
         let mut output = [0_u8; CONTROLLER_REQUEST_BYTES];
         put_header(
             &mut output,
-            &generated_general_controller::REQUEST_MAGIC,
+            &generated_general_controller::GENERAL_REQUEST_MAGIC,
             generated_general_controller::REQUEST_VERSION_OFFSET,
         )?;
         put_byte(

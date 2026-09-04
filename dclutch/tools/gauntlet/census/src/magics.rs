@@ -111,6 +111,11 @@ pub struct DeclaredMagic {
     pub value: String,
     /// `path:line`, repo-relative.
     pub provenance: String,
+    /// Whether the declaration is written as an export -- `pub` or `pub(...)`
+    /// -- rather than a file-private `const`. Only an export can be named by
+    /// someone else, which is what makes [`check_names`] a dispatch-safety
+    /// question rather than a style one.
+    pub exported: bool,
 }
 
 /// Render eight bytes the way a reader greps for them.
@@ -228,6 +233,7 @@ fn collect(
                     name: needle,
                     value: render(&bytes),
                     provenance: format!("{relative}:{line}"),
+                    exported: !matches!(konst.vis, syn::Visibility::Inherited),
                 });
             }
             _ => {}
@@ -420,6 +426,95 @@ pub fn check(declared: &[DeclaredMagic], exemptions: &[Exemption]) -> (Vec<Strin
     (problems, summary)
 }
 
+/// One constant NAME bound to two or more different magics.
+///
+/// The exact inverse of [`check`], and the other half of the same
+/// one-to-one rule: that gate asks whether a wire VALUE means one thing, this
+/// one asks whether a NAME does. A value with two names can route a caller
+/// into the wrong handler. A name with two values misleads the AUTHOR instead
+/// -- whoever writes `use ...::REQUEST_MAGIC` gets whichever eight bytes their
+/// crate happens to declare, and nothing tells them another crate spells
+/// different bytes the same way.
+///
+/// The measured case this exists for: `EmitDealerLiquidityAbiRust.lean` and
+/// `EmitGeneralControllerAbiRust.lean` both emitted a bare `REQUEST_MAGIC`, for
+/// `DCDREQ01` and `DCGREQ01` -- and, with `EmitMarketCoreRust.lean`'s third
+/// bare one for `DCLTCRQ2`, `ConstantIndex::resolve` refused the name as a
+/// collision instead of answering it, so the route census could attribute none
+/// of the three magics to any route. Core's was fixed first (`ec600e8a`); the
+/// other two, plus `CANDIDATE_MAGIC`, `POLICY_MAGIC` and `STATE_MAGIC`, were
+/// still bare when this gate was written. Nothing was red the whole time.
+///
+/// **No exemption register, deliberately.** A magic VALUE is a shipped wire
+/// discriminant, so re-lettering one is a wire event needing a decision record
+/// -- which is why [`check`] must be able to adjudicate rather than demand.
+/// A constant NAME is not on the wire at all. Renaming one costs a
+/// re-emission and an import, and never a redeploy, so there is nothing here
+/// to trade off and no argued verdict that could excuse it. Fix it at the
+/// author: for a Lean-emitted constant that is the emitter, not the generated
+/// file the emitter overwrites.
+///
+/// Returns the gate failures and, separately, the name-shares where fewer than
+/// two of the claimants are exported. A file-private `const MAGIC` cannot be
+/// named from anywhere else, so it can mislead no importer; it is printed for
+/// the same reason a mirror is, and does not fail the gate.
+pub fn check_names(declared: &[DeclaredMagic]) -> (Vec<String>, Vec<String>) {
+    let mut by_name: BTreeMap<&str, BTreeMap<&str, Vec<&DeclaredMagic>>> = BTreeMap::new();
+    for magic in declared {
+        by_name
+            .entry(&magic.name)
+            .or_default()
+            .entry(&magic.value)
+            .or_default()
+            .push(magic);
+    }
+
+    let mut problems = Vec::new();
+    let mut unexported = Vec::new();
+
+    for (name, by_value) in &by_name {
+        if by_value.len() < 2 {
+            continue;
+        }
+        let exported: Vec<&&str> = by_value
+            .iter()
+            .filter(|(_, sites)| sites.iter().any(|site| site.exported))
+            .map(|(value, _)| value)
+            .collect();
+        if exported.len() < 2 {
+            let values: Vec<&str> = by_value.keys().copied().collect();
+            unexported.push(format!(
+                "{name} = {} across {} declarations, {} exported",
+                values.join(" / "),
+                by_value.values().map(Vec::len).sum::<usize>(),
+                exported.len()
+            ));
+            continue;
+        }
+        let sites = by_value
+            .iter()
+            .flat_map(|(value, entries)| {
+                entries
+                    .iter()
+                    .filter(|entry| entry.exported)
+                    .map(move |entry| format!("{value} ({})", entry.provenance))
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        problems.push(format!(
+            "constant `{name}` is exported for {} different magics: {sites}. A name is what a \
+             consumer writes, so two values behind one spelling means an import cannot say which \
+             eight bytes it carries, and a name index refuses it rather than answering it. \
+             Unlike a magic value, a name is not on the wire: rename it -- at the emitter, if it \
+             is emitted -- and give each family its own prefix. There is no register to \
+             adjudicate this into, because there is nothing to trade off.",
+            exported.len()
+        ));
+    }
+
+    (problems, unexported)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -430,6 +525,15 @@ mod tests {
             name: name.into(),
             value: value.into(),
             provenance: provenance.into(),
+            exported: true,
+        }
+    }
+
+    /// The same declaration written as a file-private `const`.
+    fn private(package: &str, name: &str, value: &str, provenance: &str) -> DeclaredMagic {
+        DeclaredMagic {
+            exported: false,
+            ..magic(package, name, value, provenance)
         }
     }
 
@@ -649,6 +753,132 @@ mod tests {
             problems[0].contains("DCLTSAME"),
             "the collision names the value: {}",
             problems[0]
+        );
+    }
+
+    /// The measured case `check_names` exists for, as the tree actually
+    /// declared it: two Lean emitters printing a bare `REQUEST_MAGIC` for two
+    /// different wire values. Neither is a mirror (the bytes differ) and
+    /// neither is a value collision (the values are unique), so BOTH existing
+    /// gates were green while a name meant two things.
+    #[test]
+    fn two_magics_under_one_exported_name_is_a_collision() {
+        let declared = [
+            magic(
+                "dclutch-dealer-codec",
+                "REQUEST_MAGIC",
+                "DCDREQ01",
+                "crates/dclutch-dealer-codec/src/generated_dealer_liquidity.rs:25",
+            ),
+            magic(
+                "dclutch-general-codec",
+                "REQUEST_MAGIC",
+                "DCGREQ01",
+                "crates/dclutch-general-codec/src/generated_general_controller.rs:29",
+            ),
+        ];
+        let (value_problems, summary) = check(&declared, &[]);
+        assert!(
+            value_problems.is_empty(),
+            "two distinct values are not a value collision: {value_problems:?}"
+        );
+        assert!(
+            summary.mirrored.is_empty(),
+            "different bytes under one name is not a mirror either"
+        );
+
+        let (problems, unexported) = check_names(&declared);
+        assert_eq!(problems.len(), 1, "one name, reported once");
+        assert!(problems[0].contains("REQUEST_MAGIC"), "{}", problems[0]);
+        assert!(problems[0].contains("DCDREQ01"), "{}", problems[0]);
+        assert!(problems[0].contains("DCGREQ01"), "{}", problems[0]);
+        assert!(
+            unexported.is_empty(),
+            "both declarations are exported, so neither is excused"
+        );
+    }
+
+    /// A name shared only by file-private constants misleads nobody: no `use`
+    /// can reach it, so no import can carry the wrong bytes under it. Counted
+    /// and printed, exactly as a mirror is, and NOT a gate failure. This test
+    /// is the record of that decision -- `ORDER_MAGIC` (`DCGORD01`/`DCGORD02`,
+    /// both private, both in `dclutch-general-adapter-contract`) is the tree's
+    /// live instance, and anyone who makes this fail has to delete an
+    /// assertion saying why it did not.
+    #[test]
+    fn a_name_shared_only_by_unexported_declarations_does_not_fail_the_gate() {
+        let declared = [
+            private(
+                "dclutch-general-adapter-contract",
+                "ORDER_MAGIC",
+                "DCGORD01",
+                "crates/dclutch-general-adapter-contract/src/collection_v1.rs:74",
+            ),
+            private(
+                "dclutch-general-adapter-contract",
+                "ORDER_MAGIC",
+                "DCGORD02",
+                "crates/dclutch-general-adapter-contract/src/runtime_manifest.rs:17",
+            ),
+        ];
+        let (problems, unexported) = check_names(&declared);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(unexported.len(), 1);
+        assert!(unexported[0].contains("ORDER_MAGIC"), "{}", unexported[0]);
+
+        // One export among them is still only one reachable name, so it stays
+        // out of the gate; a SECOND export is the collision.
+        let mut one_public = declared.to_vec();
+        one_public[0].exported = true;
+        assert!(check_names(&one_public).0.is_empty(), "one export is safe");
+        let mut both_public = one_public.clone();
+        both_public[1].exported = true;
+        assert_eq!(
+            check_names(&both_public).0.len(),
+            1,
+            "the second export is what makes the name ambiguous to an importer"
+        );
+    }
+
+    /// One name, one magic, however many places declare it, is the ordinary
+    /// case and must stay silent -- a same-name/same-value re-declaration is a
+    /// mirror, which `check` already counts and which this gate must not
+    /// double-report.
+    #[test]
+    fn one_name_bound_to_one_magic_raises_nothing() {
+        let declared = [
+            magic("a", "SHARED_MAGIC_V1", "DCLTSHR1", "a.rs:1"),
+            magic("b", "SHARED_MAGIC_V1", "DCLTSHR1", "b.rs:1"),
+        ];
+        let (problems, unexported) = check_names(&declared);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(unexported.is_empty(), "{unexported:?}");
+    }
+
+    /// The sweep has to be able to tell an export from a private constant, or
+    /// the distinction the gate rests on is decided by a field nobody sets.
+    #[test]
+    fn the_sweep_records_whether_a_magic_is_exported() {
+        let source = r#"
+            pub const PUBLIC_MAGIC_V1: [u8; 8] = *b"DCLTPUB1";
+            pub(crate) const CRATE_MAGIC_V1: [u8; 8] = *b"DCLTCRT1";
+            const PRIVATE_MAGIC_V1: [u8; 8] = *b"DCLTPRV1";
+        "#;
+        let parsed = syn::parse_file(source).expect("parses");
+        let mut found = Vec::new();
+        collect(&parsed.items, "p", "a.rs", source, &mut found);
+        let seen: Vec<(&str, bool)> = found
+            .iter()
+            .map(|m| (m.name.as_str(), m.exported))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("PUBLIC_MAGIC_V1", true),
+                ("CRATE_MAGIC_V1", true),
+                ("PRIVATE_MAGIC_V1", false),
+            ],
+            "`pub(crate)` is an export -- it is exactly how every Lean emitter              in this tree writes a magic"
         );
     }
 }

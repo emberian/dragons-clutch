@@ -157,7 +157,7 @@ impl Policy {
         header(
             input,
             POLICY_BYTES,
-            &generated::POLICY_MAGIC,
+            &generated::DEALER_POLICY_MAGIC,
             generated::POLICY_VERSION_OFFSET,
         )?;
         require_zero(input, generated::POLICY_RESERVED_OFFSET, 5)?;
@@ -184,7 +184,7 @@ impl Policy {
         let mut output = [0_u8; POLICY_BYTES];
         put_header(
             &mut output,
-            &generated::POLICY_MAGIC,
+            &generated::DEALER_POLICY_MAGIC,
             generated::POLICY_VERSION_OFFSET,
         )?;
         put_byte(
@@ -321,7 +321,7 @@ pub fn encode_candidate(output: &mut [u8], input: CandidateInput<'_>) -> Result<
     output.fill(0);
     put_header(
         output,
-        &generated::CANDIDATE_MAGIC,
+        &generated::DEALER_CANDIDATE_MAGIC,
         generated::CANDIDATE_VERSION_OFFSET,
     )?;
     put_byte(
@@ -493,7 +493,7 @@ impl<'a> CandidateView<'a> {
         header(
             input,
             CANDIDATE_BYTES,
-            &generated::CANDIDATE_MAGIC,
+            &generated::DEALER_CANDIDATE_MAGIC,
             generated::CANDIDATE_VERSION_OFFSET,
         )?;
         require_zero(input, generated::CANDIDATE_RESERVED_OFFSET, 5)?;
@@ -764,7 +764,7 @@ impl State {
         header(
             input,
             STATE_BYTES,
-            &generated::STATE_MAGIC,
+            &generated::DEALER_STATE_MAGIC,
             generated::STATE_VERSION_OFFSET,
         )?;
         require_zero(input, generated::STATE_RESERVED_A_OFFSET, 2)?;
@@ -818,7 +818,7 @@ impl State {
         output.fill(0);
         put_header(
             output,
-            &generated::STATE_MAGIC,
+            &generated::DEALER_STATE_MAGIC,
             generated::STATE_VERSION_OFFSET,
         )?;
         put_byte(output, generated::STATE_PHASE_OFFSET, self.phase.tag())?;
@@ -928,7 +928,7 @@ impl ReleaseReceipt {
         header(
             input,
             RECEIPT_BYTES,
-            &generated::RECEIPT_MAGIC,
+            &generated::DEALER_RECEIPT_MAGIC,
             generated::RECEIPT_VERSION_OFFSET,
         )?;
         require_zero(input, generated::RECEIPT_RESERVED_OFFSET, 4)?;
@@ -968,7 +968,7 @@ impl ReleaseReceipt {
         let mut output = [0_u8; RECEIPT_BYTES];
         put_header(
             &mut output,
-            &generated::RECEIPT_MAGIC,
+            &generated::DEALER_RECEIPT_MAGIC,
             generated::RECEIPT_VERSION_OFFSET,
         )?;
         put_byte(
@@ -1164,7 +1164,7 @@ impl Request {
         header(
             input,
             REQUEST_BYTES,
-            &generated::REQUEST_MAGIC,
+            &generated::DEALER_REQUEST_MAGIC,
             generated::REQUEST_VERSION_OFFSET,
         )?;
         require_zero(input, generated::REQUEST_RESERVED_OFFSET, 3)?;
@@ -1202,7 +1202,7 @@ impl Request {
         let mut output = [0_u8; REQUEST_BYTES];
         put_header(
             &mut output,
-            &generated::REQUEST_MAGIC,
+            &generated::DEALER_REQUEST_MAGIC,
             generated::REQUEST_VERSION_OFFSET,
         )?;
         put_byte(

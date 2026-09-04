@@ -29,11 +29,11 @@ def main : IO Unit := do
   IO.println s!"pub(crate) const STATE_BYTES: usize = {stateBytes};"
   IO.println s!"pub(crate) const RECEIPT_BYTES: usize = {receiptBytes};"
   IO.println s!"pub(crate) const REQUEST_BYTES: usize = {requestBytes};"
-  emitBytes "POLICY_MAGIC" policyMagic
-  emitBytes "CANDIDATE_MAGIC" candidateMagic
-  emitBytes "STATE_MAGIC" stateMagic
-  emitBytes "RECEIPT_MAGIC" receiptMagic
-  emitBytes "REQUEST_MAGIC" requestMagic
+  emitBytes "DEALER_POLICY_MAGIC" policyMagic
+  emitBytes "DEALER_CANDIDATE_MAGIC" candidateMagic
+  emitBytes "DEALER_STATE_MAGIC" stateMagic
+  emitBytes "DEALER_RECEIPT_MAGIC" receiptMagic
+  emitBytes "DEALER_REQUEST_MAGIC" requestMagic
   for (name, field) in [
       ("VERSION", PolicyField.version), ("OUTCOME_COUNT", .outcomeCount),
       ("RESERVED", .reserved), ("MARKET_ID", .marketId),

@@ -4383,3 +4383,9 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   four hand-edited files were unlisted twins and landed in both trees. Found: an empty newline-named directory nest under
   lib/generated/ — the orchestrator's (a file list split as one word fed `mkdir -p`); removed.
 - Cuts: `363943dec`.
+- COHORT-15D (interim, resumed at the settle): **the General capability seal is on devnet** (F8U3Jsvi…, 225,141 CU — the
+  coordinate that had read "producible and unproduced"); **the first `GeneralSuccessorRouteV1` ever written and the first
+  general-successor plan produced from a real chain; the first General Hot routing table frozen (53 addresses)**; market 1's
+  four wallet payouts landed (three zeros and one 500,000,000, agreeing with the certificate) and **market 1 has begun
+  retiring — phase byte 3 read back, the first retirement act on any chain**. Market 3's settle, the stranger's payout and
+  OpenBatch follow in the resumed turn.

@@ -10,19 +10,19 @@ pub(crate) const CANDIDATE_BYTES: usize = 4576;
 pub(crate) const STATE_BYTES: usize = 840;
 pub(crate) const RECEIPT_BYTES: usize = 176;
 pub(crate) const REQUEST_BYTES: usize = 144;
-pub(crate) const POLICY_MAGIC: [u8; 8] = [
+pub(crate) const DEALER_POLICY_MAGIC: [u8; 8] = [
     0x44, 0x43, 0x44, 0x50, 0x4f, 0x4c, 0x59, 0x31,
 ];
-pub(crate) const CANDIDATE_MAGIC: [u8; 8] = [
+pub(crate) const DEALER_CANDIDATE_MAGIC: [u8; 8] = [
     0x44, 0x43, 0x44, 0x43, 0x41, 0x4e, 0x44, 0x31,
 ];
-pub(crate) const STATE_MAGIC: [u8; 8] = [
+pub(crate) const DEALER_STATE_MAGIC: [u8; 8] = [
     0x44, 0x43, 0x44, 0x53, 0x54, 0x41, 0x54, 0x31,
 ];
-pub(crate) const RECEIPT_MAGIC: [u8; 8] = [
+pub(crate) const DEALER_RECEIPT_MAGIC: [u8; 8] = [
     0x44, 0x43, 0x44, 0x52, 0x43, 0x50, 0x54, 0x31,
 ];
-pub(crate) const REQUEST_MAGIC: [u8; 8] = [
+pub(crate) const DEALER_REQUEST_MAGIC: [u8; 8] = [
     0x44, 0x43, 0x44, 0x52, 0x45, 0x51, 0x30, 0x31,
 ];
 pub(crate) const POLICY_VERSION_OFFSET: usize = 8;

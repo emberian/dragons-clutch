@@ -232,6 +232,21 @@ fn command_inventory(options: &Options) -> Result<(), String> {
         for mirror in &magic_summary.mirrored {
             eprintln!("census: magic mirrored across packages: {mirror}");
         }
+        // The same one-to-one rule read the other way: a magic value must mean
+        // one thing, and a constant NAME must mean one thing too. Two bare
+        // `REQUEST_MAGIC` declarations for different bytes are not a mirror and
+        // not a value collision -- they are the defect that made three magics
+        // unresolvable by name at once. See `magics.rs::check_names`.
+        let (name_problems, unexported_shares) = magics::check_names(&declared_magics);
+        eprintln!(
+            "census: {} constant names bound to more than one magic, {} of them shared only by \
+             unexported declarations",
+            name_problems.len(),
+            unexported_shares.len()
+        );
+        for share in &unexported_shares {
+            eprintln!("census: magic name shared without export: {share}");
+        }
         // Third wire object, same shape of question: an identity constant the
         // tree documents as the SHA-256 of a label it also ships. Nothing
         // recomputed one until this ran. See `preimages.rs`.
@@ -244,6 +259,7 @@ fn command_inventory(options: &Options) -> Result<(), String> {
         );
 
         problems.extend(magic_problems);
+        problems.extend(name_problems);
         problems.extend(preimage_problems);
         if !problems.is_empty() {
             for problem in &problems {

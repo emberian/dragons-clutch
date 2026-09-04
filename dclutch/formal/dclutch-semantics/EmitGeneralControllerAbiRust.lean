@@ -30,12 +30,12 @@ def main : IO Unit := do
   IO.println s!"pub(crate) const SELECTION_BYTES: usize = {selectionBytes};"
   IO.println s!"pub(crate) const SETTLEMENT_BYTES: usize = {settlementBytes};"
   IO.println s!"pub(crate) const REQUEST_BYTES: usize = {requestBytes};"
-  emitRustBytes "pub(crate)" "CANDIDATE_MAGIC" candidateMagic
-  emitRustBytes "pub(crate)" "PAGE_MAGIC" pageMagic
-  emitRustBytes "pub(crate)" "POLICY_MAGIC" policyMagic
-  emitRustBytes "pub(crate)" "SELECTION_MAGIC" selectionMagic
-  emitRustBytes "pub(crate)" "SETTLEMENT_MAGIC" settlementMagic
-  emitRustBytes "pub(crate)" "REQUEST_MAGIC" requestMagic
+  emitRustBytes "pub(crate)" "GENERAL_CANDIDATE_MAGIC" candidateMagic
+  emitRustBytes "pub(crate)" "GENERAL_PAGE_MAGIC" pageMagic
+  emitRustBytes "pub(crate)" "GENERAL_POLICY_MAGIC" policyMagic
+  emitRustBytes "pub(crate)" "GENERAL_SELECTION_MAGIC" selectionMagic
+  emitRustBytes "pub(crate)" "GENERAL_SETTLEMENT_MAGIC" settlementMagic
+  emitRustBytes "pub(crate)" "GENERAL_REQUEST_MAGIC" requestMagic
   for (name, field) in [
       ("VERSION", CandidateField.version), ("OUTCOME_COUNT", .outcomeCount),
       ("RESERVED_A", .reservedA), ("CANDIDATE_ID", .candidateId),
