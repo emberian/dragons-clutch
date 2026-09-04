@@ -158,3 +158,6 @@ import DClutchSemantics.SeriesTicketStateV3Abi
 import DClutchSemantics.ProjectedCustodyStateV2Abi
 import DClutchSemantics.DealerScenarioCheckpointV1Abi
 import DClutchSemantics.DealerScenarioReservationStateV1Abi
+import DClutchSemantics.JointClearingV1
+import DClutchSemantics.ConditionalMarketV1
+import DClutchSemantics.EnsembleResolutionV1
