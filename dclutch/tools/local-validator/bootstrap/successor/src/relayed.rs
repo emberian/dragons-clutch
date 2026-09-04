@@ -660,6 +660,10 @@ pub(crate) fn relayed_market_input(
         pyth_adapter_config_hex: hex(&venue_release_bytes),
         pyth_sponsored_push_release_hex: String::new(),
         recovery_policy_hex: String::new(),
+        // The relayed graduation market buys no ladder, so it publishes no
+        // alternative source records: empty here and empty above are one fact
+        // said twice, and `validate_market_input` refuses them disagreeing.
+        recovery_source_records: Vec::new(),
         capability_manifest_hex: hex(&manifest),
         direct_capability: None,
         selected_capability: None,

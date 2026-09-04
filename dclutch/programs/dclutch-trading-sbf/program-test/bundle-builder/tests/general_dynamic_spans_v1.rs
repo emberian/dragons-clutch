@@ -16,7 +16,10 @@
 use dclutch_account_profile_contract::v2::AccountProfileV2;
 use dclutch_chain_bundle_builder::{
     BuilderError, WaistFactsV1,
-    general::{GeneralRequestInputV1, derive_general_request_v1},
+    general::{
+        GeneralRequestEvidenceV1, GeneralRequestInputV1, GeneralRequestV1,
+        derive_general_request_v1,
+    },
     profile_ops,
     registers::{SpanWidthInputV1, derive_dynamic_span_widths},
 };
@@ -34,7 +37,16 @@ use dclutch_general_adapter_contract::{
         GeneralExternalAccountWidthsV3, encode_general_account_profile_v3_atomic,
         general_account_profile_bytes_v3, general_account_profile_fixed_count_v3,
     },
-    collection_v1::{GeneralBatchOpeningV1, GeneralBatchV1},
+    artifacts_v3::decode_general_request_v3,
+    candidate_v1::{
+        CandidateVerifyRowBuffersV1, CandidateVerifyRowViewV1, GeneralCandidateOpeningV1,
+        GeneralCandidateV1, general_candidate_identity_v1, verify_candidate_row_v1,
+    },
+    collection_v1::{
+        GeneralBatchOpeningV1, GeneralBatchV1, GeneralOrderHeaderV1, GeneralOrderPhaseV1,
+        GeneralOrderStateV1, GeneralOrderV1, MakerFundingV1, general_order_len_v1,
+        general_signed_order_terms_len_v1,
+    },
     effect_artifacts_v3::{
         GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3, encode_general_effect_program_v4_atomic,
         general_effect_instruction_count_v3, general_effect_program_bytes_v3,
@@ -45,12 +57,21 @@ use dclutch_general_adapter_contract::{
         GeneralLocalStateHeaderV3, GeneralLocalStateKindV3, encode_general_local_state_v3_atomic,
         general_local_state_len_v3,
     },
-    release_v3::GENERAL_ACTIONS_V3,
-    specialization::general_request_profile_bytes_v1,
+    release_v3::{GENERAL_ACTIONS_V3, GENERAL_ACTIONS_V5},
+    runtime_manifest::settlement_manifest_len_v2,
+    runtime_selection::{RUNTIME_SELECTION_CURSOR_BYTES_V2, consider_verified_candidate_v2},
+    runtime_settlement::initialize_runtime_settlement_in_place_v2,
+    runtime_verify::runtime_verifier_len_v2,
+    runtime_width::{
+        CandidateHeaderV2, CandidateV2, ExecutionHeaderV2, ExecutionV2, PageHeaderV2, PageV2,
+        candidate_len, execution_len, page_len, settlement_cursor_len, verified_candidate_len,
+    },
+    specialization::{general_request_profile_bytes_v1, general_request_profile_v1},
     state_seeds_v3::GeneralStateAddressSeedsV3,
 };
 use dclutch_general_codec::{
-    Action, successor_request_v2::ControllerRequestV2, successor_request_v3::ControllerRequestV3,
+    Action, MAX_SELECTION_CRITERIA, SelectionCriterion, SelectionPolicyV1,
+    successor_request_v2::ControllerRequestV2, successor_request_v3::ControllerRequestV3,
 };
 use dclutch_general_config_contract::{
     GeneralRootV2,
@@ -58,7 +79,7 @@ use dclutch_general_config_contract::{
 };
 use dclutch_request_profile_contract::{
     ProjectionRegisterKindV1, ProjectionRegisterSpaceV1, ProjectionTargetV1, RequestProfileV1,
-    SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1,
+    SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1, validate_request,
 };
 use solana_program::pubkey::Pubkey;
 
@@ -431,12 +452,13 @@ fn open_batch_request_derives_occurrence_and_lifecycle_bump_at_runtime_widths() 
             product_id: [0x63; 32],
             trading_program: waist().trading_program,
             primary_state_account: None,
+            evidence: GeneralRequestEvidenceV1::default(),
         })
         .expect("chain-derived OpenBatch request");
         let decoded = ControllerRequestV3::decode(&derived.request).expect("canonical V3 request");
         assert_eq!(decoded.action.legacy(), Some(Action::OpenBatch));
         assert_eq!(derived.action, Action::OpenBatch);
-        assert_eq!(decoded.subject_id, Some(derived.subject_id));
+        assert_eq!(decoded.subject_id, derived.subject_id);
         assert_eq!(decoded.expected_revision, root.revision());
         assert_eq!(decoded.primary_state_bump, derived.primary_state_bump);
         assert_ne!(derived.primary_state, root_address);
@@ -461,6 +483,7 @@ fn open_batch_request_refuses_substituted_config_generation_and_zero_coordinates
         product_id: [0x63; 32],
         trading_program: waist().trading_program,
         primary_state_account: None,
+        evidence: GeneralRequestEvidenceV1::default(),
     };
     let foreign_config = open_config(10);
     assert!(matches!(
@@ -575,6 +598,7 @@ fn close_batch_request_reads_its_subject_off_the_live_batch_at_runtime_widths() 
             product_id,
             trading_program,
             primary_state_account: None,
+            evidence: GeneralRequestEvidenceV1::default(),
         })
         .expect("chain-derived OpenBatch request");
         let (account, batch_id, _) = live_batch_account(
@@ -590,7 +614,7 @@ fn close_batch_request_reads_its_subject_off_the_live_batch_at_runtime_widths() 
         // are the same, and that is a measurement rather than an assumption:
         // `GeneralBatchOccurrenceTermsV1::new` zeroes both close slots before
         // hashing, so the identity is slot-independent and precomputable.
-        assert_eq!(opened.subject_id, batch_id);
+        assert_eq!(opened.subject_id, Some(batch_id));
         let derived = derive_general_request_v1(GeneralRequestInputV1 {
             action: Action::CloseBatch,
             root,
@@ -600,11 +624,12 @@ fn close_batch_request_reads_its_subject_off_the_live_batch_at_runtime_widths() 
             product_id,
             trading_program,
             primary_state_account: Some(&account),
+            evidence: GeneralRequestEvidenceV1::default(),
         })
         .expect("chain-derived CloseBatch request");
         let decoded = ControllerRequestV3::decode(&derived.request).expect("canonical V3 request");
         assert_eq!(decoded.action.legacy(), Some(Action::CloseBatch));
-        assert_eq!(derived.subject_id, batch_id);
+        assert_eq!(derived.subject_id, Some(batch_id));
         assert_eq!(derived.primary_state, opened.primary_state);
         assert_eq!(derived.primary_state_bump, opened.primary_state_bump);
         // The open consumed revision 1; the close must ask for what the root
@@ -649,6 +674,7 @@ fn each_action_refuses_the_prestate_shape_the_other_one_needs() {
             product_id,
             trading_program,
             primary_state_account: Some(&account),
+            evidence: GeneralRequestEvidenceV1::default(),
         }),
         Err(BuilderError::Binding(_))
     ));
@@ -663,6 +689,7 @@ fn each_action_refuses_the_prestate_shape_the_other_one_needs() {
             product_id,
             trading_program,
             primary_state_account: None,
+            evidence: GeneralRequestEvidenceV1::default(),
         }),
         Err(BuilderError::Binding(_))
     ));
@@ -678,11 +705,14 @@ fn each_action_refuses_the_prestate_shape_the_other_one_needs() {
             product_id: [0x71; 32],
             trading_program,
             primary_state_account: Some(&account),
+            evidence: GeneralRequestEvidenceV1::default(),
         }),
         Err(BuilderError::Binding(_))
     ));
-    // Every action this module does not derive yet says so by name rather than
-    // being built wrong.
+    // No action refuses `UnsupportedRoute` any more, and an action whose own
+    // evidence is absent says which record it wanted rather than being built
+    // against a vacancy. `Consider` reads its batch identity out of the
+    // certificate it considers, so without one there is no address to derive.
     assert!(matches!(
         derive_general_request_v1(GeneralRequestInputV1 {
             action: Action::Consider,
@@ -693,8 +723,9 @@ fn each_action_refuses_the_prestate_shape_the_other_one_needs() {
             product_id,
             trading_program,
             primary_state_account: None,
+            evidence: GeneralRequestEvidenceV1::default(),
         }),
-        Err(BuilderError::UnsupportedRoute(_))
+        Err(BuilderError::Binding(_))
     ));
 }
 
@@ -862,4 +893,745 @@ fn every_general_action_declares_one_register_geometry_across_its_four_artifacts
         mismatches, 0,
         "General artifacts cannot satisfy Trading's require_geometry; see this test's doc comment"
     );
+}
+
+/// One live General market: everything the fifteen actions share.
+#[derive(Clone)]
+struct LiveMarketV1 {
+    config: Vec<u8>,
+    root: GeneralRootV2,
+    root_address: Pubkey,
+    trading_program: Pubkey,
+    product_id: [u8; 32],
+    outcome_count: u32,
+}
+
+/// Every record one of the fifteen arms reads, produced by the protocol.
+///
+/// NOT ONE OF THESE IS TYPED HERE. The batch comes out of `GeneralBatchV1::open`
+/// and `close`, the order out of `GeneralOrderV1::encode_into` and the batch's
+/// own `admit`, the submission out of `GeneralCandidateV1::submit`, and the
+/// verifier cursor, the certificate and the settlement manifest are the three
+/// outputs of ONE run of `verify_candidate_row_v1` -- the manifest has exactly
+/// one producer in this tree and it is that verb, so a test that spelled one
+/// would be inventing the record the settlement half authenticates. The
+/// selection cursor is `consider_verified_candidate_v2` over that certificate
+/// and the settlement cursor is `initialize_runtime_settlement_in_place_v2`
+/// over that pair.
+struct LiveRecordsV1 {
+    batch_account: Vec<u8>,
+    batch_id: [u8; 32],
+    order_account: Vec<u8>,
+    signed_terms: Vec<u8>,
+    order_id: [u8; 32],
+    candidate_image: Vec<u8>,
+    candidate_id: [u8; 32],
+    candidate_account: Vec<u8>,
+    verifier_account: Vec<u8>,
+    verified: Vec<u8>,
+    manifest: Vec<u8>,
+    selection_account: Vec<u8>,
+    settlement_account: Vec<u8>,
+}
+
+/// The one slot the collection half runs at.
+const LIVE_ADMISSION_SLOT: u64 = 1_000;
+/// Revision the candidate's single page is pinned at.
+const LIVE_PAGE_REVISION: u64 = 11;
+/// Lamports one verification crank pays.
+const LIVE_CRANK_REWARD: u64 = 5_000;
+/// The maker every order in the fixture belongs to.
+const LIVE_OWNER: [u8; 32] = [0xc1; 32];
+/// The solver funding the submission.
+const LIVE_SOLVER: [u8; 32] = [0xc3; 32];
+/// The rent principal every lifecycle envelope declares.
+const LIVE_RENT_PRINCIPAL: u64 = 2_282_880;
+/// The beneficiary every lifecycle envelope declares.
+const LIVE_BENEFICIARY: [u8; 32] = [0x64; 32];
+
+/// Wrap one semantic record in the physical lifecycle envelope the chain holds,
+/// with the canonical bump its own recipe derives.
+fn envelope(
+    kind: GeneralLocalStateKindV3,
+    outcome_count: u32,
+    seeds: GeneralStateAddressSeedsV3,
+    trading_program: Pubkey,
+    body: &[u8],
+) -> Vec<u8> {
+    let bump = Pubkey::find_program_address(
+        seeds.as_slices().expect("state seed slices").as_slice(),
+        &trading_program,
+    )
+    .1;
+    let bytes = general_local_state_len_v3(kind, outcome_count).expect("envelope width");
+    let mut scratch = vec![0_u8; bytes];
+    let mut account = vec![0_u8; bytes];
+    encode_general_local_state_v3_atomic(
+        GeneralLocalStateHeaderV3 {
+            kind,
+            bump,
+            rent_principal: LIVE_RENT_PRINCIPAL,
+            beneficiary: LIVE_BENEFICIARY,
+        },
+        body,
+        &mut scratch,
+        &mut account,
+    )
+    .expect("lifecycle envelope");
+    account
+}
+
+/// Run one whole General market, from an opened batch to an initialized
+/// settlement cursor, through the protocol's own semantic owners.
+#[allow(clippy::too_many_lines)]
+fn live_records(market: &mut LiveMarketV1) -> LiveRecordsV1 {
+    let width = market.outcome_count;
+    let count = usize::try_from(width).expect("runtime width");
+    let config = GeneralConfigV3::decode(&market.config).expect("General config");
+    let root_seed = market.root_address.to_bytes();
+    let collection_close = LIVE_ADMISSION_SLOT + config.collection_slots();
+    let settlement_close = collection_close + config.selection_slots() + config.settlement_slots();
+
+    let revision = market.root.revision();
+    let opening = GeneralBatchOpeningV1 {
+        outcome_count: width,
+        sequence: market.root.next_batch_sequence(),
+        generation: market.root.generation(),
+        market: market.root.market(),
+        product_id: market.product_id,
+        config_id: market.root.config_id(),
+        price_scale: config.price_scale(),
+        collection_close_slot: collection_close,
+        settlement_close_slot: settlement_close,
+        max_orders: config.max_orders_per_candidate(),
+    };
+    let mut batch = GeneralBatchV1::open(&mut market.root, opening, revision, LIVE_ADMISSION_SLOT)
+        .expect("open batch");
+    let batch_id = batch.batch_id();
+
+    let mut order_account = vec![0_u8; general_order_len_v1(width).expect("order width")];
+    GeneralOrderV1::encode_into(
+        GeneralOrderHeaderV1 {
+            outcome_count: width,
+            nonce: 1,
+            owner_id: LIVE_OWNER,
+            market: market.root.market(),
+            batch_id,
+            generation: market.root.generation(),
+            max_lots: 10,
+            max_quote_debit_per_lot: 2,
+            min_quote_credit_per_lot: 0,
+            valid_until_slot: settlement_close,
+        },
+        &vec![1_u64; count],
+        &vec![0_u64; count],
+        GeneralOrderStateV1 {
+            phase: GeneralOrderPhaseV1::Placed,
+            admitted_slot: LIVE_ADMISSION_SLOT,
+            released_slot: 0,
+        },
+        &mut order_account,
+    )
+    .expect("order record");
+    let order = GeneralOrderV1::decode(&order_account).expect("order record");
+    let order_id = order.order_id();
+    batch
+        .admit(
+            order,
+            MakerFundingV1 {
+                owner_id: LIVE_OWNER,
+                available_quote: u64::MAX / 4,
+                available_claims: &vec![u64::MAX / 4; count],
+            },
+            LIVE_ADMISSION_SLOT,
+        )
+        .expect("admit order");
+    let mut signed_terms =
+        vec![0_u8; general_signed_order_terms_len_v1(width).expect("signed terms width")];
+    order
+        .encode_signed_terms_into(&mut signed_terms)
+        .expect("signed terms");
+
+    let revision = market.root.revision();
+    assert_eq!(
+        batch
+            .close(&mut market.root, revision)
+            .expect("close batch"),
+        batch_id,
+        "closing the batch changed its identity",
+    );
+
+    // The candidate carries its OWN digest, and `CandidateV2` checks nothing
+    // about that field: encode once to fix every other byte, then re-encode
+    // with the digest those bytes produce.
+    let prices = {
+        let mut values = vec![config.price_scale() / u64::from(width); count];
+        let remainder = config.price_scale() - values.iter().sum::<u64>();
+        if let Some(first) = values.first_mut() {
+            *first += remainder;
+        }
+        values
+    };
+    let mut candidate_image = vec![0_u8; candidate_len(width).expect("candidate width")];
+    let header = CandidateHeaderV2 {
+        outcome_count: width,
+        page_count: 1,
+        candidate_coordinate: 1,
+        price_scale: config.price_scale(),
+        candidate_id: [0xb5; 32],
+        product_id: market.product_id,
+        batch_id,
+    };
+    CandidateV2::encode_into(header, &prices, &mut candidate_image).expect("draft candidate");
+    let candidate_id = general_candidate_identity_v1(&candidate_image).expect("candidate identity");
+    CandidateV2::encode_into(
+        CandidateHeaderV2 {
+            candidate_id,
+            ..header
+        },
+        &prices,
+        &mut candidate_image,
+    )
+    .expect("addressed candidate");
+    let image = CandidateV2::decode(&candidate_image).expect("candidate image");
+
+    let opening = GeneralCandidateOpeningV1 {
+        outcome_count: width,
+        page_count: 1,
+        page_revision: LIVE_PAGE_REVISION,
+        submitted_slot: collection_close,
+        candidate_id,
+        batch_id,
+        solver_id: LIVE_SOLVER,
+        row_count: 1,
+        reward_rate_lamports: LIVE_CRANK_REWARD,
+    };
+    let submission = GeneralCandidateV1::submit(
+        batch,
+        image,
+        LIVE_PAGE_REVISION,
+        1,
+        LIVE_CRANK_REWARD,
+        LIVE_SOLVER,
+        opening.work_capacity().expect("work capacity"),
+        collection_close,
+    )
+    .expect("submit candidate");
+
+    let mut row = vec![0_u8; execution_len(width).expect("execution width")];
+    ExecutionV2::encode_into(
+        ExecutionHeaderV2 {
+            outcome_count: width,
+            page_coordinate: 1,
+            execution_coordinate: 1,
+            nonce: order.header().nonce,
+            order_id,
+            owner_id: LIVE_OWNER,
+            max_lots: order.header().max_lots,
+            lots: 2,
+        },
+        &vec![1_u64; count],
+        &vec![0_u64; count],
+        &mut row,
+    )
+    .expect("execution row");
+    let mut page = vec![0_u8; page_len(width, 1).expect("page width")];
+    PageV2::encode_into(
+        PageHeaderV2 {
+            outcome_count: width,
+            page_coordinate: 1,
+            page_count: 1,
+            revision: LIVE_PAGE_REVISION,
+            candidate_id,
+        },
+        &[row.as_slice()],
+        &mut page,
+    )
+    .expect("page");
+
+    // ONE ROW, WHICH IS THE WHOLE CANDIDATE. The single page is also the last,
+    // so this crank closes the only globally grouped order: it emits the
+    // one-entry settlement manifest AND completes the certificate, which is why
+    // this fixture needs one verification rather than a chain of them.
+    let cursor_len = runtime_verifier_len_v2(width).expect("verifier width");
+    let verified_len = verified_candidate_len(width).expect("certificate width");
+    let manifest_len = settlement_manifest_len_v2(width, 1).expect("manifest width");
+    let zero_verified = vec![0_u8; verified_len];
+    let mut cursor_scratch = vec![0_u8; cursor_len];
+    let mut cursor_output = vec![0xa5_u8; cursor_len];
+    let mut verified_scratch = vec![0_u8; verified_len];
+    let mut verified_output = zero_verified.clone();
+    let mut manifest_scratch = vec![0_u8; manifest_len];
+    let mut manifest_output = vec![0xa5_u8; manifest_len];
+    let summary = verify_candidate_row_v1(
+        CandidateVerifyRowViewV1 {
+            batch,
+            submission,
+            candidate: &candidate_image,
+            page: &page,
+            order: &order_account,
+            cursor_before: &vec![0_u8; cursor_len],
+            verified_before: &zero_verified,
+            expected_page_index: 0,
+            expected_row_index: 0,
+            expected_revision: 0,
+        },
+        CandidateVerifyRowBuffersV1 {
+            cursor_scratch: &mut cursor_scratch,
+            cursor_output: &mut cursor_output,
+            verified_scratch: &mut verified_scratch,
+            verified_output: &mut verified_output,
+            manifest_scratch: &mut manifest_scratch,
+            manifest_output: &mut manifest_output,
+        },
+    )
+    .expect("verify the candidate's only row");
+    assert!(
+        summary.complete,
+        "the one row of a one-page candidate did not complete it",
+    );
+
+    let mut selection = vec![0_u8; RUNTIME_SELECTION_CURSOR_BYTES_V2];
+    let mut selection_scratch = vec![0_u8; RUNTIME_SELECTION_CURSOR_BYTES_V2];
+    consider_verified_candidate_v2(
+        SelectionPolicyV1 {
+            policy_id: config.selection_policy_id(),
+            criterion_count: 1,
+            criteria: [SelectionCriterion::MaximizeFilledLots; MAX_SELECTION_CRITERIA],
+        },
+        &vec![0_u8; RUNTIME_SELECTION_CURSOR_BYTES_V2],
+        &verified_output,
+        0,
+        &mut selection_scratch,
+        &mut selection,
+    )
+    .expect("consider the certificate");
+
+    let mut settlement = vec![0_u8; settlement_cursor_len(width).expect("cursor width")];
+    initialize_runtime_settlement_in_place_v2(&cursor_output, &verified_output, 0, &mut settlement)
+        .expect("initialize settlement");
+
+    let batch_account = envelope(
+        GeneralLocalStateKindV3::Batch,
+        width,
+        GeneralStateAddressSeedsV3::batch(root_seed, batch_id).expect("Batch seeds"),
+        market.trading_program,
+        &batch.to_bytes(),
+    );
+    let candidate_account = envelope(
+        GeneralLocalStateKindV3::Candidate,
+        width,
+        GeneralStateAddressSeedsV3::candidate(root_seed, candidate_id).expect("Candidate seeds"),
+        market.trading_program,
+        &summary.submission.to_bytes(),
+    );
+    LiveRecordsV1 {
+        batch_account,
+        batch_id,
+        order_account: envelope(
+            GeneralLocalStateKindV3::Order,
+            width,
+            GeneralStateAddressSeedsV3::order(root_seed, order_id).expect("Order seeds"),
+            market.trading_program,
+            &order_account,
+        ),
+        signed_terms,
+        order_id,
+        candidate_image,
+        candidate_id,
+        candidate_account,
+        verifier_account: envelope(
+            GeneralLocalStateKindV3::Verifier,
+            width,
+            GeneralStateAddressSeedsV3::verifier(root_seed, candidate_id).expect("Verifier seeds"),
+            market.trading_program,
+            &cursor_output,
+        ),
+        verified: verified_output,
+        manifest: manifest_output,
+        selection_account: envelope(
+            GeneralLocalStateKindV3::Selection,
+            width,
+            GeneralStateAddressSeedsV3::selection(root_seed, batch_id).expect("Selection seeds"),
+            market.trading_program,
+            &selection,
+        ),
+        settlement_account: envelope(
+            GeneralLocalStateKindV3::Settlement,
+            width,
+            GeneralStateAddressSeedsV3::settlement(root_seed, candidate_id)
+                .expect("Settlement seeds"),
+            market.trading_program,
+            &settlement,
+        ),
+    }
+}
+
+/// The exact primary state and evidence one action names, and nothing else.
+///
+/// The table is the whole per-action surface of the deriver stated once from
+/// the campaign's side: an action gets the account its own profile declares as
+/// its primary state and the records its own profile declares as evidence. A
+/// row that handed an action a record it does not name would be refused at a
+/// named line, which is what
+/// `each_action_refuses_the_evidence_shape_another_one_needs` executes.
+fn action_input<'a>(
+    market: &'a LiveMarketV1,
+    action: Action,
+    records: &'a LiveRecordsV1,
+) -> GeneralRequestInputV1<'a> {
+    let (primary_state_account, evidence) = match action {
+        // The two batch actions and the two order-in-batch actions name the
+        // Batch window as their primary state; `OpenBatch` creates it.
+        Action::OpenBatch => (None, GeneralRequestEvidenceV1::default()),
+        Action::CloseBatch => (
+            Some(records.batch_account.as_slice()),
+            GeneralRequestEvidenceV1::default(),
+        ),
+        Action::PlaceOrder => (
+            Some(records.batch_account.as_slice()),
+            GeneralRequestEvidenceV1 {
+                signed_order_terms: Some(&records.signed_terms),
+                ..GeneralRequestEvidenceV1::default()
+            },
+        ),
+        Action::CancelOrder => (
+            Some(records.batch_account.as_slice()),
+            GeneralRequestEvidenceV1 {
+                order_account: Some(&records.order_account),
+                ..GeneralRequestEvidenceV1::default()
+            },
+        ),
+        Action::ReleaseOrder => (
+            Some(records.order_account.as_slice()),
+            GeneralRequestEvidenceV1::default(),
+        ),
+        Action::SubmitCandidate => (
+            None,
+            GeneralRequestEvidenceV1 {
+                candidate_image: Some(&records.candidate_image),
+                ..GeneralRequestEvidenceV1::default()
+            },
+        ),
+        // A verifier account that is still vacant IS the candidate's first row,
+        // and the runtime accepts `(0, 0, 0)` only against that vacancy.
+        Action::VerifyCandidateRow => (
+            Some(records.candidate_account.as_slice()),
+            GeneralRequestEvidenceV1 {
+                verifier_account: Some(&records.verifier_account),
+                ..GeneralRequestEvidenceV1::default()
+            },
+        ),
+        Action::CloseCandidate => (
+            Some(records.candidate_account.as_slice()),
+            GeneralRequestEvidenceV1::default(),
+        ),
+        Action::Consider => (
+            Some(records.selection_account.as_slice()),
+            GeneralRequestEvidenceV1 {
+                verified_candidate: Some(&records.verified),
+                ..GeneralRequestEvidenceV1::default()
+            },
+        ),
+        Action::Freeze => (
+            Some(records.selection_account.as_slice()),
+            GeneralRequestEvidenceV1::default(),
+        ),
+        Action::InitializeSettlement => (
+            None,
+            GeneralRequestEvidenceV1 {
+                verified_candidate: Some(&records.verified),
+                ..GeneralRequestEvidenceV1::default()
+            },
+        ),
+        Action::Collect | Action::Distribute => (
+            Some(records.settlement_account.as_slice()),
+            GeneralRequestEvidenceV1 {
+                settlement_manifest: Some(&records.manifest),
+                ..GeneralRequestEvidenceV1::default()
+            },
+        ),
+        Action::Materialize | Action::Close => (
+            Some(records.settlement_account.as_slice()),
+            GeneralRequestEvidenceV1::default(),
+        ),
+    };
+    GeneralRequestInputV1 {
+        action,
+        root: market.root,
+        root_address: market.root_address,
+        config: &market.config,
+        outcome_count: market.outcome_count,
+        product_id: market.product_id,
+        trading_program: market.trading_program,
+        primary_state_account,
+        evidence,
+    }
+}
+
+/// One founded market, one collection half, and the fifteen requests it admits.
+fn live_market() -> (LiveMarketV1, LiveRecordsV1) {
+    let config = open_config(9);
+    let config_id = solana_program::hash::hash(&config).to_bytes();
+    let mut market = LiveMarketV1 {
+        config,
+        root: GeneralRootV2::active([0x61; 32], config_id, 9).expect("active root"),
+        root_address: Pubkey::new_from_array([0x62; 32]),
+        trading_program: waist().trading_program,
+        product_id: [0x63; 32],
+        outcome_count: OUTCOME_COUNT,
+    };
+    let records = live_records(&mut market);
+    (market, records)
+}
+
+/// EVERY action derives a request, and every request is canonical to two
+/// independent readers.
+///
+/// The bar is deliberately the pair the chain applies before any semantics run:
+/// `ControllerRequestV3::decode` is the codec's own per-action canonical form
+/// -- which subject, which coordinates and which bump witnesses that action may
+/// carry -- and `validate_request` against
+/// `general_request_profile_v1(action)` is the same pass
+/// `authenticate_general_artifacts_v3` runs on chain before Trading projects a
+/// register. A request that satisfies both is one the selected artifacts admit;
+/// a fifteen-arm derivation that satisfied neither would have been invisible
+/// until a real ELF refused it with `AdmittedTransport`.
+///
+/// It is TOTAL over `GENERAL_ACTIONS_V5` rather than a list, so a sixteenth
+/// action cannot join without a deriver.
+#[test]
+fn every_general_action_derives_a_request_its_own_profile_admits() {
+    let (market, records) = live_market();
+    for action in GENERAL_ACTIONS_V5 {
+        let derived = derive_general_request_v1(action_input(&market, action, &records))
+            .unwrap_or_else(|error| panic!("derive {action:?}: {error:?}"));
+        assert_eq!(derived.action, action);
+        // THE READER IS THE CHAIN'S, NOT ONE GENERATION'S. Seven of the
+        // fifteen actions kept the `DCGREQ02` wire and eight speak `DCGREQ03`;
+        // `decode_general_request_v3` selects the generation off the shared
+        // selector byte exactly as the accelerator boundary does, so a request
+        // built in the wrong generation is refused here rather than at a real
+        // ELF.
+        let decoded = decode_general_request_v3(&derived.request)
+            .unwrap_or_else(|error| panic!("canonical request for {action:?}: {error:?}"));
+        assert_eq!(decoded.action, action);
+        assert_eq!(decoded.candidate_id, derived.subject_id);
+        assert_eq!(decoded.state_bump, derived.primary_state_bump);
+        assert_eq!(decoded.terminal_record_bump, derived.secondary_state_bump);
+        assert_eq!(decoded.result_state_bump, derived.result_state_bump);
+        assert_ne!(derived.primary_state, market.root_address);
+        validate_request(
+            general_request_profile_v1(action).expect("published request profile"),
+            0,
+            &derived.request,
+        )
+        .unwrap_or_else(|error| panic!("{action:?} profile refuses its own request: {error:?}"));
+    }
+}
+
+/// The subject and the state are two different coordinates, and eleven of the
+/// fifteen actions prove it.
+///
+/// A deriver that returned the subject for both would pass every round-trip
+/// above and derive the wrong account for `PlaceOrder`, `CancelOrder` and
+/// `Consider` -- whose primary state is keyed on a batch while their subject is
+/// an order or a candidate. This states the whole join table once.
+#[test]
+fn each_action_names_the_state_its_family_policy_selects() {
+    let (market, records) = live_market();
+    let root = market.root_address.to_bytes();
+    let program = market.trading_program;
+    let address = |seeds: GeneralStateAddressSeedsV3| {
+        Pubkey::find_program_address(seeds.as_slices().expect("seed slices").as_slice(), &program).0
+    };
+    let batch = address(GeneralStateAddressSeedsV3::batch(root, records.batch_id).expect("batch"));
+    let order = address(GeneralStateAddressSeedsV3::order(root, records.order_id).expect("order"));
+    let candidate = address(
+        GeneralStateAddressSeedsV3::candidate(root, records.candidate_id).expect("candidate"),
+    );
+    let selection =
+        address(GeneralStateAddressSeedsV3::selection(root, records.batch_id).expect("selection"));
+    let settlement = address(
+        GeneralStateAddressSeedsV3::settlement(root, records.candidate_id).expect("settlement"),
+    );
+    // `OpenBatch` is the one action whose state does not yet exist: the market
+    // already holds `records.batch_id` at sequence zero, so the open names the
+    // NEXT occurrence and its address is derived from the subject it predicts.
+    let opened = derive_general_request_v1(action_input(&market, Action::OpenBatch, &records))
+        .expect("derive OpenBatch");
+    let next = opened.subject_id.expect("OpenBatch names its occurrence");
+    assert_ne!(next, records.batch_id, "the open re-named the live batch");
+    assert_eq!(
+        opened.primary_state,
+        address(GeneralStateAddressSeedsV3::batch(root, next).expect("next batch")),
+    );
+    for (action, expected_state, expected_subject) in [
+        (Action::CloseBatch, batch, Some(records.batch_id)),
+        (Action::PlaceOrder, batch, Some(records.order_id)),
+        (Action::CancelOrder, batch, Some(records.order_id)),
+        (Action::ReleaseOrder, order, Some(records.order_id)),
+        (
+            Action::SubmitCandidate,
+            candidate,
+            Some(records.candidate_id),
+        ),
+        (
+            Action::VerifyCandidateRow,
+            candidate,
+            Some(records.candidate_id),
+        ),
+        (
+            Action::CloseCandidate,
+            candidate,
+            Some(records.candidate_id),
+        ),
+        (Action::Consider, selection, Some(records.candidate_id)),
+        (Action::Freeze, selection, None),
+        (
+            Action::InitializeSettlement,
+            settlement,
+            Some(records.candidate_id),
+        ),
+        (Action::Collect, settlement, Some(records.candidate_id)),
+        (Action::Materialize, settlement, Some(records.candidate_id)),
+        (Action::Distribute, settlement, Some(records.candidate_id)),
+        (Action::Close, settlement, Some(records.candidate_id)),
+    ] {
+        let derived = derive_general_request_v1(action_input(&market, action, &records))
+            .unwrap_or_else(|error| panic!("derive {action:?}: {error:?}"));
+        assert_eq!(derived.primary_state, expected_state, "{action:?} state");
+        assert_eq!(derived.subject_id, expected_subject, "{action:?} subject");
+    }
+}
+
+/// The four actions that name a second account derive it, and the eleven that
+/// do not leave both witnesses zero.
+#[test]
+fn the_secondary_and_result_states_are_exactly_the_four_actions_that_declare_them() {
+    let (market, records) = live_market();
+    let root = market.root_address.to_bytes();
+    let program = market.trading_program;
+    let address = |seeds: GeneralStateAddressSeedsV3| {
+        Pubkey::find_program_address(seeds.as_slices().expect("seed slices").as_slice(), &program).0
+    };
+    let mut secondary_actions = Vec::new();
+    let mut result_actions = Vec::new();
+    for action in GENERAL_ACTIONS_V5 {
+        let derived = derive_general_request_v1(action_input(&market, action, &records))
+            .unwrap_or_else(|error| panic!("derive {action:?}: {error:?}"));
+        assert_eq!(
+            derived.secondary_state.is_some(),
+            derived.secondary_state_bump != 0,
+            "{action:?} secondary address and bump disagree about existing",
+        );
+        assert_eq!(
+            derived.result_state.is_some(),
+            derived.result_state_bump != 0,
+            "{action:?} result address and bump disagree about existing",
+        );
+        if derived.secondary_state.is_some() {
+            secondary_actions.push(action);
+        }
+        if derived.result_state.is_some() {
+            result_actions.push(action);
+        }
+        match action {
+            Action::PlaceOrder | Action::CancelOrder => assert_eq!(
+                derived.secondary_state,
+                Some(address(
+                    GeneralStateAddressSeedsV3::order(root, records.order_id).expect("order")
+                )),
+                "{action:?} names its order record",
+            ),
+            Action::VerifyCandidateRow => {
+                assert_eq!(
+                    derived.secondary_state,
+                    Some(address(
+                        GeneralStateAddressSeedsV3::verifier(root, records.candidate_id)
+                            .expect("verifier")
+                    )),
+                );
+                assert_eq!(
+                    derived.result_state,
+                    Some(address(
+                        GeneralStateAddressSeedsV3::verified_candidate(root, records.candidate_id)
+                            .expect("verified")
+                    )),
+                );
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(
+        secondary_actions,
+        vec![
+            Action::Close,
+            Action::PlaceOrder,
+            Action::CancelOrder,
+            Action::VerifyCandidateRow,
+        ],
+        "the actions declaring a secondary state moved",
+    );
+    assert_eq!(
+        result_actions,
+        vec![Action::VerifyCandidateRow],
+        "only VerifyCandidateRow may carry a result-state witness",
+    );
+}
+
+/// An action handed another action's record refuses at a named line.
+#[test]
+fn each_action_refuses_the_evidence_shape_another_one_needs() {
+    let (market, records) = live_market();
+    let strip = |mut input: GeneralRequestInputV1<'_>| {
+        input.evidence = GeneralRequestEvidenceV1::default();
+        derive_general_request_v1(input)
+    };
+    // Each of the five arms that reads a record its primary state does not
+    // carry says so rather than deriving an address from a vacancy.
+    for action in [
+        Action::PlaceOrder,
+        Action::CancelOrder,
+        Action::SubmitCandidate,
+        Action::Consider,
+        Action::InitializeSettlement,
+        Action::Collect,
+        Action::Distribute,
+    ] {
+        assert!(
+            matches!(
+                strip(action_input(&market, action, &records)),
+                Err(BuilderError::Binding(_))
+            ),
+            "{action:?} accepted an execution with none of the evidence it names",
+        );
+    }
+    // A Batch envelope where an Order is named, and the reverse: the kind check
+    // is what keeps a mismatched record from reaching a decoder that would only
+    // say the bytes were the wrong width.
+    let mut swapped = action_input(&market, Action::ReleaseOrder, &records);
+    swapped.primary_state_account = Some(&records.batch_account);
+    assert!(matches!(
+        swapped_result(swapped),
+        Err(BuilderError::Binding(_))
+    ));
+    let mut swapped = action_input(&market, Action::CancelOrder, &records);
+    swapped.evidence.order_account = Some(&records.candidate_account);
+    assert!(matches!(
+        swapped_result(swapped),
+        Err(BuilderError::Binding(_))
+    ));
+    // The settlement four read their coordinate off the cursor, and a selection
+    // cursor is not one.
+    let mut swapped = action_input(&market, Action::Materialize, &records);
+    swapped.primary_state_account = Some(&records.selection_account);
+    assert!(matches!(
+        swapped_result(swapped),
+        Err(BuilderError::Binding(_))
+    ));
+}
+
+fn swapped_result(input: GeneralRequestInputV1<'_>) -> Result<GeneralRequestV1, BuilderError> {
+    derive_general_request_v1(input)
 }

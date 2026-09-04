@@ -25,12 +25,12 @@ use dclutch_market_core_codec::{CoreState, Identity, Phase as CorePhase, Readine
 use dclutch_operator::{
     Finality, Observation, ObservedAccount,
     provider_transport_v3::{
-        ProviderExecuteDeploymentV3, ProviderExecuteIntentV3, ProviderExecuteSnapshotV3,
-        ProviderReclaimDeploymentV3, ProviderSubmitDeploymentV3, ProviderSubmitIntentV3,
-        ProviderSubmitSnapshotV3, ProviderTransportReportV3, ProviderTransportTransactionErrorV3,
-        build_provider_execute_v3, build_provider_reclaim_v3, build_provider_submit_v3,
-        compile_provider_execute_v0, compile_provider_reclaim_v0, compile_provider_submit_v0,
-        provider_execute_caller_authority_v3,
+        ProviderExecuteDeploymentV3, ProviderExecuteIntentV3, ProviderExecuteLadderV3,
+        ProviderExecuteSnapshotV3, ProviderReclaimDeploymentV3, ProviderSubmitDeploymentV3,
+        ProviderSubmitIntentV3, ProviderSubmitSnapshotV3, ProviderTransportReportV3,
+        ProviderTransportTransactionErrorV3, build_provider_execute_v3, build_provider_reclaim_v3,
+        build_provider_submit_v3, compile_provider_execute_v0, compile_provider_reclaim_v0,
+        compile_provider_submit_v0, provider_execute_caller_authority_v3,
     },
     resolution_core_v3::{
         ResolutionAdmitTerminalReportV3, ResolutionAdmitTerminalSnapshotV3,
@@ -60,8 +60,8 @@ use dclutch_resolution_core_v3_operator::provider_finalized_projection_v3::{
     project_finalized_provider_submit_v3,
 };
 use dclutch_source_contract::{
-    PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, SOURCE_SPEC_SCHEMA_ID_V1,
-    STATISTIC_SPEC_SCHEMA_ID_V1, WINDOW_SPEC_SCHEMA_ID_V1,
+    PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, RECOVERY_POLICY_SCHEMA_ID_V2,
+    SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1, WINDOW_SPEC_SCHEMA_ID_V1,
 };
 use dclutch_source_contract::{
     ProviderReleaseV1, PythAdapterConfigV1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
@@ -229,6 +229,22 @@ struct AccountSelectorsV1 {
     portfolio_staging: String,
     capability_manifest: String,
     capability_manifest_staging: String,
+    /// The funded ordered ladder's `RecoveryPolicyV2` record pair.
+    ///
+    /// EMPTY IS A PRIMARY CAPTURE, and it is what every input this producer has
+    /// ever written carries, so no existing document moves and no primary
+    /// campaign changes a byte. Both fields present is a capture answering a
+    /// market that has ADVANCED: the three finalized-record positions above
+    /// (`source_spec`, `adapter_config`, `source_provider_release`) then carry
+    /// the rung's own alternative source, and the policy record is the only
+    /// record entitled to say that substitution was bought. Exactly one of the
+    /// two present is refused by name in `SelectedInputV1::parse` -- a raw
+    /// record with no staging cursor is an unauthenticable record, not a
+    /// shorthand.
+    #[serde(default)]
+    recovery_policy: String,
+    #[serde(default)]
+    recovery_policy_staging: String,
     funding_ledger: String,
     certificate: String,
     activation_cache: String,
@@ -566,6 +582,9 @@ struct SelectedInputV1 {
     reclaim_after_unix_seconds: i64,
     post_update_body: Vec<u8>,
     accounts: BTreeMap<&'static str, Pubkey>,
+    /// The `RecoveryPolicyV2` raw record and its vacant staging cursor, present
+    /// exactly when this input answers a market standing on a funded rung.
+    recovery_ladder: Option<(Pubkey, Pubkey)>,
     lookup_tables: BTreeMap<StageV1, Pubkey>,
 }
 
@@ -640,6 +659,30 @@ impl SelectedInputV1 {
         account!("portfolio_staging", portfolio_staging);
         account!("capability_manifest", capability_manifest);
         account!("capability_manifest_staging", capability_manifest_staging);
+        // The ladder pair, present exactly when this input answers on a rung.
+        // Both or neither: a raw record whose staging cursor nobody named
+        // cannot be authenticated as finalized, and a staging cursor with no
+        // record is nothing at all.
+        let recovery_ladder = match (
+            input.accounts.recovery_policy.is_empty(),
+            input.accounts.recovery_policy_staging.is_empty(),
+        ) {
+            (true, true) => None,
+            (false, false) => {
+                account!("recovery_policy", recovery_policy);
+                account!("recovery_policy_staging", recovery_policy_staging);
+                Some((
+                    accounts["recovery_policy"],
+                    accounts["recovery_policy_staging"],
+                ))
+            }
+            _ => {
+                return Err(Error::new(
+                    "recoveryPolicy and recoveryPolicyStaging are one fact: a rung capture names \
+                     both, a primary capture names neither",
+                ));
+            }
+        };
         account!("funding_ledger", funding_ledger);
         account!("certificate", certificate);
         account!("activation_cache", activation_cache);
@@ -698,6 +741,7 @@ impl SelectedInputV1 {
             reclaim_after_unix_seconds: input.reclaim_after_unix_seconds,
             post_update_body,
             accounts,
+            recovery_ladder,
             lookup_tables,
         };
         selected.require_distinct()?;
@@ -3588,6 +3632,29 @@ fn producer_selected_input(
         registry_program,
     )?;
     let funding_ledger = campaign_account(campaign, "resolution_funding_ledger")?;
+    // THE LADDER, IF THE MARKET BOUGHT ONE. A founding that named no recovery
+    // policy publishes no policy record and its evidence says so by ABSENCE
+    // (`market.rs`, "A no-recovery material published no recovery record, and
+    // the evidence says so by absence rather than by a placeholder address"),
+    // so absence here is a primary market rather than a truncated document.
+    // Where the record exists it is re-derived from its own schema and body
+    // digest by the same rule every other record pair takes, so a policy
+    // published under the wrong schema refuses at the producer instead of
+    // seating a junk coordinate in the Execute frame.
+    let (recovery_policy, recovery_policy_staging) =
+        match campaign.accounts.get("recovery_policy_record") {
+            None => (String::new(), String::new()),
+            Some(row) => (
+                nonzero_pubkey(&row.address, "recovery_policy_record")?.to_string(),
+                campaign_record_staging(
+                    campaign,
+                    "recovery_policy_record",
+                    RECOVERY_POLICY_SCHEMA_ID_V2,
+                    registry_program,
+                )?
+                .to_string(),
+            ),
+        };
     Ok(PlanInputV1 {
         format: input_format(expected_cluster).to_owned(),
         generation,
@@ -3625,6 +3692,8 @@ fn producer_selected_input(
             portfolio_staging: portfolio_staging.to_string(),
             capability_manifest: capability_manifest.to_string(),
             capability_manifest_staging: capability_manifest_staging.to_string(),
+            recovery_policy,
+            recovery_policy_staging,
             funding_ledger: funding_ledger.to_string(),
             certificate: certificate.to_string(),
             activation_cache: plan.activation.clone(),
@@ -5132,6 +5201,18 @@ fn provider_execute_report(
             product: snapshot.observed(selected.account("product")?, "Product")?,
             result_domain: snapshot.observed(selected.account("result_domain")?, "ResultDomain")?,
             portfolio: snapshot.observed(selected.account("portfolio")?, "Portfolio")?,
+            // `None` is the primary capture this driver has always built. The
+            // `Some` arm is the whole of what a rung capture adds to it: the
+            // builder reads WHICH rung the market stands on off the Source
+            // state and the policy, and refuses a snapshot whose finalized
+            // records are not that rung's.
+            recovery_ladder: match selected.recovery_ladder {
+                None => None,
+                Some((policy, staging)) => Some(ProviderExecuteLadderV3 {
+                    policy: snapshot.observed(policy, "RecoveryPolicyV2")?,
+                    policy_staging: snapshot.observed(staging, "RecoveryPolicyV2 staging")?,
+                }),
+            },
         },
         ProviderExecuteDeploymentV3 {
             registry_programdata: selected.account("registry_programdata")?,
@@ -8526,6 +8607,8 @@ mod tests {
             portfolio_staging: key(),
             capability_manifest: key(),
             capability_manifest_staging: key(),
+            recovery_policy: String::new(),
+            recovery_policy_staging: String::new(),
             funding_ledger: key(),
             certificate: key(),
             activation_cache: key(),

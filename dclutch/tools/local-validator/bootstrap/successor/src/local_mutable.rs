@@ -1448,6 +1448,7 @@ pub(crate) fn run_market(arguments: Vec<String>) -> Result<()> {
     let mut initial_collateral_raw = None;
     let mut window_width_raw = None;
     let mut generation_raw = None;
+    let mut recovery_rungs_raw = None;
     let mut band_anchor_raw = None;
     let mut band_volatility_raw = None;
     let mut band_window_slots_raw = None;
@@ -1469,6 +1470,7 @@ pub(crate) fn run_market(arguments: Vec<String>) -> Result<()> {
             "--initial-collateral-atoms" => &mut initial_collateral_raw,
             "--terminal-window-width-seconds" => &mut window_width_raw,
             "--generation" => &mut generation_raw,
+            "--recovery-rungs" => &mut recovery_rungs_raw,
             "--band-anchor" => &mut band_anchor_raw,
             "--band-volatility-bps" => &mut band_volatility_raw,
             "--band-window-slots" => &mut band_window_slots_raw,
@@ -1519,6 +1521,7 @@ pub(crate) fn run_market(arguments: Vec<String>) -> Result<()> {
         initial_collateral_raw,
         window_width_raw,
         generation_raw,
+        recovery_rungs_raw,
         band,
     )?;
     // Capability selection follows the split-founding precedent: an
@@ -1683,6 +1686,7 @@ fn market_shape_from_arguments_v1(
     initial_collateral_atoms: Option<String>,
     terminal_window_width_seconds: Option<String>,
     generation: Option<String>,
+    recovery_rungs: Option<String>,
     band: Option<crate::model::FoundingBandInputV1>,
 ) -> Result<crate::market::LocalMarketShapeV1> {
     let default = crate::market::LocalMarketShapeV1::default();
@@ -1756,9 +1760,58 @@ fn market_shape_from_arguments_v1(
                 .map_err(|_| Error::new("--terminal-window-width-seconds must be a decimal i64"))?,
         },
         generation: scalar(generation, "--generation", default.generation)?,
+        // `--recovery-rungs BPS:SECONDS[,BPS:SECONDS]` buys a funded ordered
+        // ladder. Absent is the no-recovery market this fixture has always
+        // compiled; `--recovery-rungs ""` is a REFUSAL rather than a synonym
+        // for absent, because a caller who typed the flag meant to buy
+        // something and a policy funding no attempt is not a thing to buy.
+        recovery: match &recovery_rungs {
+            None => default.recovery.clone(),
+            Some(raw) => Some(parse_recovery_rungs_v1(raw)?),
+        },
     };
     shape.validate()?;
     Ok(shape)
+}
+
+/// Parse `--recovery-rungs BPS:SECONDS_AFTER_PREVIOUS[,...]`.
+///
+/// The second half is an OFFSET and not an instant, because the primary leg's
+/// deadline is the captured publication plus the fixture's declared shelf life
+/// and a caller has no way to name it. Both halves are required on every rung:
+/// a rung is a confidence bound and a lifetime, and defaulting either would
+/// author a market dimension nobody stated.
+fn parse_recovery_rungs_v1(raw: &str) -> Result<Vec<crate::market::LocalRecoveryRungV1>> {
+    let mut rungs = Vec::new();
+    for part in raw
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
+        let (bps, seconds) = part.split_once(':').ok_or_else(|| {
+            Error::new(format!(
+                "--recovery-rungs takes BPS:SECONDS_AFTER_PREVIOUS per rung; {part:?} names no \
+                 lifetime"
+            ))
+        })?;
+        rungs.push(crate::market::LocalRecoveryRungV1 {
+            max_confidence_bps: bps.trim().parse::<u16>().map_err(|_| {
+                Error::new(format!("--recovery-rungs confidence {bps:?} is not a u16"))
+            })?,
+            deadline_after_previous_seconds: seconds.trim().parse::<i64>().map_err(|_| {
+                Error::new(format!(
+                    "--recovery-rungs lifetime {seconds:?} is not an i64"
+                ))
+            })?,
+        });
+    }
+    if rungs.is_empty() {
+        return Err(Error::new(
+            "--recovery-rungs was given and names no rung: omit the flag for the no-recovery \
+             market rather than asking for a ladder with no legs",
+        ));
+    }
+    Ok(rungs)
 }
 
 pub(crate) fn usage() -> &'static str {
@@ -1829,7 +1882,7 @@ mod tests {
     #[test]
     fn omitting_every_shape_flag_keeps_the_fixtures_own_stated_band() {
         let default = crate::market::LocalMarketShapeV1::default();
-        let shape = market_shape_from_arguments_v1(None, None, None, None, None, None, None)
+        let shape = market_shape_from_arguments_v1(None, None, None, None, None, None, None, None)
             .expect("no flags is the fixture's own shape");
         let inherited = shape
             .founding_band
@@ -1852,6 +1905,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             Some(crate::model::FoundingBandInputV1::spot_band(
                 21_000, 350, 8_000, 4, 8_500,
             )),
@@ -1865,9 +1919,11 @@ mod tests {
             )
         );
 
-        assert!(founding_band_from_arguments_v1(None, None, None, None, None)
-            .expect("no band flags at all is not a refusal")
-            .is_none());
+        assert!(
+            founding_band_from_arguments_v1(None, None, None, None, None)
+                .expect("no band flags at all is not a refusal")
+                .is_none()
+        );
         let partial = founding_band_from_arguments_v1(
             Some("15000".into()),
             Some("200".into()),

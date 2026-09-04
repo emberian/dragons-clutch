@@ -367,6 +367,23 @@ pub(crate) struct MarketRunInput {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(crate) pyth_sponsored_push_release_hex: String,
     pub(crate) recovery_policy_hex: String,
+    /// One alternative source record pair per funded rung, in ladder order.
+    ///
+    /// A rung substitutes a SOURCE and substitutes nothing else, so what an
+    /// attempt needs published beyond the primary graph is exactly its own
+    /// `SourceSpecV1` and the `PythAdapterConfigV1` that spec names. Everything
+    /// else the rung resolves against -- the window, the statistic, the
+    /// provider release, the capacity profile -- is the market's, already named
+    /// by `SourceMaterialV3` and already published above.
+    ///
+    /// EMPTY IS THE NO-LADDER MARKET, and it is the only value every founding
+    /// before this field existed could have had, so a market with no recovery
+    /// policy serializes to exactly the bytes it always did. A market that
+    /// bought a ladder carries one entry per attempt and
+    /// `validate_market_input` refuses any other count: an attempt whose spec
+    /// nobody publishes is a rung that can be advanced onto and never answered.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) recovery_source_records: Vec<RecoverySourceRecordsV1>,
     pub(crate) capability_manifest_hex: String,
     /// Complete Direct record closure selected by the one non-Resolution
     /// manifest entry. The field is syntactically required; `None` exists only
@@ -391,6 +408,22 @@ pub(crate) struct MarketRunInput {
     /// Which founding route this run drives. Absent is `Atomic`.
     #[serde(default, skip_serializing_if = "FoundingRouteV1::is_atomic")]
     pub(crate) founding_route: FoundingRouteV1,
+}
+
+/// The two record bodies one funded recovery rung adds to a market's graph.
+///
+/// Both are checked against the attempt that names them before anything is
+/// published: the spec's digest must be the attempt's `source_spec_id` and the
+/// configuration's digest must be the identity that spec selects, so a rung
+/// cannot name a record nobody can publish and a publisher cannot land a record
+/// at an address the ladder does not point at.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RecoverySourceRecordsV1 {
+    /// Exact canonical `SourceSpecV1` body for this rung's alternative source.
+    pub(crate) source_spec_hex: String,
+    /// Exact canonical `PythAdapterConfigV1` body that spec selects.
+    pub(crate) pyth_adapter_config_hex: String,
 }
 
 /// One Registry record a selected capability's publication chain finalizes.

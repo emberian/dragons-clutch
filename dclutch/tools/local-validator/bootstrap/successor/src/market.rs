@@ -106,7 +106,7 @@ use dclutch_resolution_codec::{
 use dclutch_source_contract::{
     ContentId as SourceContentId, MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1, ManipulationFloorV1,
     PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, ProviderReleaseV1,
-    PythAdapterConfigV1, RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryPolicyV2,
+    PythAdapterConfigV1, RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryAttemptV2, RecoveryPolicyV2,
     SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
     SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1,
     SourceAccessProfile, SourceCapacityProfileV1, SourceMaterialV3, SourceSpecV1,
@@ -2060,6 +2060,244 @@ fn authenticate_source_publication_v1(
     }
 }
 
+/// The alternative-source records a market's funded ordered ladder publishes.
+///
+/// One semantic join, used by input validation and by the publisher, for the
+/// same reason `SourcePublicationContractV1` is: the ladder's records are
+/// authenticated against the attempt that names them BEFORE anything is
+/// created, so a rung can never name a record no publisher will land, and a
+/// publisher can never land a record at an address the ladder does not point
+/// at.
+struct RecoveryLadderPublicationV1 {
+    /// Canonical `RecoveryPolicyV2` body, empty for a market with no ladder.
+    policy: Vec<u8>,
+    /// One `(SourceSpecV1, PythAdapterConfigV1)` body pair per attempt, in
+    /// ladder order.
+    rungs: Vec<(Vec<u8>, Vec<u8>)>,
+}
+
+impl RecoveryLadderPublicationV1 {
+    /// Resolution-controller compartments this market's founding must fund.
+    ///
+    /// FOUNDING FUNDS EVERY RUNG. `core_effect::authenticate_funding_entries`
+    /// walks attempt `k` to the manifest entry at `recovery_entry_index + k`,
+    /// then the exhaustion entry configured by the policy digest and the
+    /// failure entry configured by the material -- so a policy of `n` attempts
+    /// wants `n + 2` entries. A market with no ladder wants three: the failure
+    /// compartment plus the two structural companions that stand in for the
+    /// rungs nobody bought, which is `0.max(1) + 2` and is why the honest
+    /// no-recovery founding keeps the count it has always had.
+    fn controller_entries(&self) -> usize {
+        self.rungs.len().max(1).saturating_add(2)
+    }
+}
+
+/// Authenticate one market's ladder against the primary source it substitutes.
+///
+/// A RUNG SUBSTITUTES A SOURCE AND SUBSTITUTES NOTHING ELSE, which is the rule
+/// `SourceMaterialV3::validate_recovery_source_graph` enforces on chain, and
+/// every conjunct below is that rule asked one layer earlier so a founding that
+/// would refuse refuses OFFLINE. The window, the statistic, the failure policy,
+/// the capacity profile and the provider release stay the market's; the source
+/// spec and the adapter configuration are the rung's own.
+fn authenticate_recovery_ladder_publication_v1(
+    input: &MarketRunInput,
+    primary: SourceSpecV1,
+    primary_source_spec_id: [u8; 32],
+) -> Result<RecoveryLadderPublicationV1> {
+    let policy_bytes = decode_hex(&input.recovery_policy_hex)?;
+    // Empty means the material carries NO recovery policy: the deliberate
+    // section-12.8 demo shape, admitted on chain at e5b6923 and decided in
+    // MAINNET_STATE_RELAY.md section 13.
+    if policy_bytes.is_empty() {
+        if !input.recovery_source_records.is_empty() {
+            return Err(Error::new(
+                "the run spec carries alternative source records and no recovery policy: nothing \
+                 would name them, and a record no attempt names is a record no market resolves \
+                 against",
+            ));
+        }
+        return Ok(RecoveryLadderPublicationV1 {
+            policy: Vec::new(),
+            rungs: Vec::new(),
+        });
+    }
+    let policy = RecoveryPolicyV2::decode(&policy_bytes)
+        .map_err(|error| Error::new(format!("RecoveryPolicyV2: {error:?}")))?;
+    if policy.to_bytes().as_slice() != policy_bytes {
+        return Err(Error::new("RecoveryPolicyV2 input was not canonical"));
+    }
+    // `RecoveryPolicyV2::validate_capacity_profile`'s producer, asked at the
+    // founding rather than at the capture: a ladder running under a capacity
+    // profile the market did not publish is a ladder the founding did not
+    // price, and the recovery join refuses it on chain with `SourceMaterial`.
+    policy
+        .validate_capacity_profile(primary.capacity_profile_id())
+        .map_err(|error| {
+            Error::new(format!(
+                "the recovery policy declares a capacity profile this market did not publish: \
+                 {error:?}"
+            ))
+        })?;
+    let declared = usize::from(policy.attempt_count());
+    if input.recovery_source_records.len() != declared {
+        return Err(Error::new(format!(
+            "the recovery policy funds {declared} attempts and the run spec carries {} \
+             alternative source record pairs; an attempt whose spec nobody publishes is a rung a \
+             market can be advanced onto and never answered on",
+            input.recovery_source_records.len()
+        )));
+    }
+    let mut rungs = Vec::with_capacity(declared);
+    for (index, records) in input.recovery_source_records.iter().enumerate() {
+        let rung = u8::try_from(index).map_err(|_| Error::new("recovery rung index overflow"))?;
+        let attempt = policy
+            .attempt(rung)
+            .map_err(|error| Error::new(format!("recovery attempt {rung}: {error:?}")))?;
+        let spec_bytes = decode_hex(&records.source_spec_hex)?;
+        let spec = SourceSpecV1::decode(&spec_bytes)
+            .map_err(|error| Error::new(format!("rung {rung} SourceSpecV1: {error:?}")))?;
+        if spec.to_bytes().as_slice() != spec_bytes {
+            return Err(Error::new(format!(
+                "rung {rung} SourceSpecV1 input was not canonical"
+            )));
+        }
+        let spec_id = record_identity(&spec_bytes);
+        if spec_id != attempt.source_spec_id().to_bytes() {
+            return Err(Error::new(format!(
+                "rung {rung} carries a SourceSpec body whose digest is not the source spec the \
+                 attempt names, so the attempt names a finalized record that can never exist"
+            )));
+        }
+        if spec_id == primary_source_spec_id {
+            return Err(Error::new(format!(
+                "rung {rung} names the market's PRIMARY source: a ladder whose alternative is the \
+                 feed that already went silent buys nothing"
+            )));
+        }
+        // The five conjuncts a rung may not move. `validate_recovery_source_graph`
+        // replaces exactly one edge of the primary graph -- the source -- and a
+        // rung that moved its unit, its domain, its capacity, its access profile
+        // or its provider release would be substituting the QUESTION rather than
+        // the answerer.
+        if spec.unit_id() != primary.unit_id()
+            || spec.domain_id() != primary.domain_id()
+            || spec.capacity_profile_id() != primary.capacity_profile_id()
+            || spec.access_profile() != primary.access_profile()
+            || spec.provider_release_id() != primary.provider_release_id()
+        {
+            return Err(Error::new(format!(
+                "rung {rung} substitutes more than a source: its unit, coordinate domain, \
+                 capacity profile, access profile and provider release must all be the market's \
+                 own, and a rung differs from the primary in its adapter configuration alone"
+            )));
+        }
+        if spec.provider_release_id() != attempt.provider_release_id() {
+            return Err(Error::new(format!(
+                "rung {rung} names a provider release its own SourceSpec does not select"
+            )));
+        }
+        let adapter_bytes = decode_hex(&records.pyth_adapter_config_hex)?;
+        let adapter = PythAdapterConfigV1::decode(&adapter_bytes)
+            .map_err(|error| Error::new(format!("rung {rung} PythAdapterConfigV1: {error:?}")))?;
+        if adapter.to_bytes().as_slice() != adapter_bytes {
+            return Err(Error::new(format!(
+                "rung {rung} PythAdapterConfigV1 input was not canonical"
+            )));
+        }
+        if record_identity(&adapter_bytes) != spec.adapter_config_id().to_bytes() {
+            return Err(Error::new(format!(
+                "rung {rung} carries an adapter configuration that is not the one its SourceSpec \
+                 names"
+            )));
+        }
+        rungs.push((spec_bytes, adapter_bytes));
+    }
+    Ok(RecoveryLadderPublicationV1 {
+        policy: policy_bytes,
+        rungs,
+    })
+}
+
+/// ONE INDEX NAMES THE WHOLE RUN, so the run has to be adjacent.
+///
+/// `core_effect::authenticate_funding_entries` pays attempt `k` from the
+/// manifest entry at `recovery_entry_index + k`, and the off-chain operator's
+/// `select_resolution_funding_entries` finds only attempt ZERO's entry by its
+/// allocation and derives the rest by that adjacency. A manifest is canonical
+/// only when its entries are strictly ordered by capability-kind identity, and
+/// the demo kinds are digests, so the ORDER a founding gets is a fact about
+/// hashes rather than about the ladder. For a one-attempt ladder that is
+/// vacuous. For a wider one it is a real constraint, and this is where a
+/// founding that would refuse on chain -- after collateral, records, RentCredit
+/// and an ALT already exist -- refuses offline instead.
+///
+/// PROVISIONAL BOUND, with its lifting plan named: a wider ladder whose kind
+/// digests do not happen to sort into ladder order cannot be founded by this
+/// producer today. Lifting it means authoring the rung kind identities so their
+/// canonical order IS the run's -- which is a choice about how a demo capability
+/// kind is derived, not a protocol change -- and it belongs to whoever founds
+/// the first two-rung market.
+fn authenticate_ladder_entry_adjacency_v1(
+    input: &MarketRunInput,
+    manifest: CapabilityManifestV1<'_>,
+) -> Result<()> {
+    let policy_bytes = decode_hex(&input.recovery_policy_hex)?;
+    if policy_bytes.is_empty() {
+        return Ok(());
+    }
+    let policy = RecoveryPolicyV2::decode(&policy_bytes)
+        .map_err(|error| Error::new(format!("RecoveryPolicyV2: {error:?}")))?;
+    let mut first: Option<u16> = None;
+    for rung in 0..policy.attempt_count() {
+        let attempt = policy
+            .attempt(rung)
+            .map_err(|error| Error::new(format!("recovery attempt {rung}: {error:?}")))?;
+        let allocation = attempt.funding_allocation_id().to_bytes();
+        let mut found: Option<u16> = None;
+        let mut index = 0_u16;
+        while index < manifest.entry_count() {
+            let entry = manifest
+                .entry(index)
+                .map_err(|error| Error::new(format!("capability entry {index}: {error:?}")))?;
+            if entry.config_id().to_bytes() == allocation {
+                if found.replace(index).is_some() {
+                    return Err(Error::new(format!(
+                        "two capability entries are configured by rung {rung}'s funding \
+                         allocation; one identity is one compartment, and a ladder whose rung \
+                         names two would be paid twice for a leg it enters once"
+                    )));
+                }
+            }
+            index = index
+                .checked_add(1)
+                .ok_or_else(|| Error::new("capability entry index overflow"))?;
+        }
+        let at = found.ok_or_else(|| {
+            Error::new(format!(
+                "no capability entry is configured by rung {rung}'s funding allocation: the \
+                 founding would sell a leg nothing paid for"
+            ))
+        })?;
+        match first {
+            None => first = Some(at),
+            Some(base) => {
+                let expected = base
+                    .checked_add(u16::from(rung))
+                    .ok_or_else(|| Error::new("recovery entry index overflow"))?;
+                if at != expected {
+                    return Err(Error::new(format!(
+                        "rung {rung}'s compartment sits at manifest entry {at} and the run that \
+                         starts at {base} requires {expected}: one recovery_entry_index names the \
+                         whole run, so the compartments must be adjacent in ladder order"
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_market_input(input: &MarketRunInput) -> Result<()> {
     if input.initial_collateral_atoms == 0
         || input.cut_denominator == 0
@@ -2147,26 +2385,33 @@ pub(crate) fn validate_market_input(input: &MarketRunInput) -> Result<()> {
         }
     }
     let _ = authenticate_source_publication_v1(input)?;
-    let recovery_bytes = decode_hex(&input.recovery_policy_hex)?;
-    // Empty means the material carries NO recovery policy: the deliberate
-    // section-12.8 demo shape, admitted on chain at e5b6923 and decided in
-    // MAINNET_STATE_RELAY.md section 13. Non-empty keeps the original rule.
-    if !recovery_bytes.is_empty() {
-        let recovery = RecoveryPolicyV2::decode(&recovery_bytes)
-            .map_err(|error| Error::new(format!("RecoveryPolicyV2: {error:?}")))?;
-        if recovery.to_bytes().as_slice() != recovery_bytes {
-            return Err(Error::new("RecoveryPolicyV2 input was not canonical"));
-        }
-    }
+    let primary_spec_bytes = decode_hex(&input.source_spec_hex)?;
+    let primary_spec = SourceSpecV1::decode(&primary_spec_bytes)
+        .map_err(|error| Error::new(format!("SourceSpecV1: {error:?}")))?;
+    let ladder = authenticate_recovery_ladder_publication_v1(
+        input,
+        primary_spec,
+        record_identity(&primary_spec_bytes),
+    )?;
     let manifest = decode_hex(&input.capability_manifest_hex)?;
     let manifest = CapabilityManifestV1::decode(&manifest)
         .map_err(|error| Error::new(format!("CapabilityManifestV1: {error:?}")))?;
-    if manifest.entry_count() != 4 {
-        return Err(Error::new(
-            "capability manifest must contain one selected trade entry and three Resolution \
-             companions",
-        ));
+    // ONE SELECTED TRADE ENTRY PLUS THE RESOLUTION COMPARTMENTS THE LADDER
+    // COSTS. This was a hard four, which is the right number for a market with
+    // no ladder and the wrong one for every market that buys a rung: founding
+    // funds every rung, so a policy of `n` attempts wants `n + 2` controller
+    // entries. `n = 1` is still four, so the one-alternative founding and the
+    // no-recovery founding both keep the count they had.
+    let expected_entries = ladder.controller_entries().saturating_add(1);
+    if usize::from(manifest.entry_count()) != expected_entries {
+        return Err(Error::new(format!(
+            "capability manifest must contain one selected trade entry and {} Resolution \
+             compartments -- one per funded rung, then exhaustion, then failure -- and carries {}",
+            ladder.controller_entries(),
+            manifest.entry_count()
+        )));
     }
+    authenticate_ladder_entry_adjacency_v1(input, manifest)?;
     match (&input.direct_capability, &input.selected_capability) {
         (Some(_), None) => validate_direct_market_capability_v1(input)?,
         (None, Some(_)) => {
@@ -2285,6 +2530,11 @@ struct MarketRecords {
     statistic_spec: PublishedRecord,
     provider_release: PublishedRecord,
     adapter_config: PublishedRecord,
+    /// One `(SourceSpecV1, PythAdapterConfigV1)` published pair per funded
+    /// rung, in ladder order. Empty for a market that bought no ladder, and
+    /// empty is what the evidence then says -- by absence, exactly as the
+    /// recovery policy record does.
+    recovery_sources: Vec<(PublishedRecord, PublishedRecord)>,
     sponsored_push_release: Option<PublishedRecord>,
     /// Exact Registry closure selected by the manifest's one trade entry —
     /// Direct's typed record set, or a family-neutral closure's record list.
@@ -4039,6 +4289,14 @@ fn publish_market_records(
     transactions: &mut Vec<TransactionEvidence>,
 ) -> Result<(MarketRecords, ProductContentId)> {
     let source_publication = authenticate_source_publication_v1(input)?;
+    let primary_spec_bytes = decode_hex(&input.source_spec_hex)?;
+    let recovery_rungs = authenticate_recovery_ladder_publication_v1(
+        input,
+        SourceSpecV1::decode(&primary_spec_bytes)
+            .map_err(|error| Error::new(format!("SourceSpecV1: {error:?}")))?,
+        record_identity(&primary_spec_bytes),
+    )?
+    .rungs;
     let CompiledMarketBodiesV1 {
         compiled,
         semantic_product_id,
@@ -4272,6 +4530,39 @@ fn publish_market_records(
         None,
         transactions,
     )?;
+    // THE LADDER'S OWN RECORDS. A rung's `SourceSpecV1` and the
+    // `PythAdapterConfigV1` it names are finalized records like any other, and
+    // the recovery join authenticates them exactly as the primary leg
+    // authenticates the market's. They ride under the SAME two schemas as the
+    // primary pair, because a rung's records are the same KIND of record --
+    // what makes the rung an alternative is the confidence bound inside the
+    // configuration, not a different schema.
+    //
+    // `authenticate_recovery_ladder_publication_v1` has already proved every
+    // digest, so `publish_record` cannot land one at an address no attempt
+    // points at.
+    let mut recovery_sources = Vec::with_capacity(recovery_rungs.len());
+    for (spec_bytes, adapter_bytes) in &recovery_rungs {
+        let spec = publish_record(
+            rpc,
+            registry,
+            payer,
+            SOURCE_SPEC_SCHEMA_ID_V1,
+            spec_bytes,
+            None,
+            transactions,
+        )?;
+        let adapter = publish_record(
+            rpc,
+            registry,
+            payer,
+            source_publication.adapter_config_schema,
+            adapter_bytes,
+            None,
+            transactions,
+        )?;
+        recovery_sources.push((spec, adapter));
+    }
     let sponsored_push_release = match source_publication.sponsored_release {
         Some(body) => Some(publish_record(
             rpc,
@@ -4326,6 +4617,7 @@ fn publish_market_records(
             statistic_spec,
             provider_release,
             adapter_config,
+            recovery_sources,
             sponsored_push_release,
             direct,
             principal_cap_sets,
@@ -13209,6 +13501,155 @@ pub(crate) struct PythMarketParamsV1<'a> {
     /// The author's founding band. `None` refuses at compile by name rather
     /// than defaulting to a belief nobody stated.
     pub(crate) founding_band: Option<crate::model::FoundingBandInputV1>,
+    /// The funded ordered ladder this market buys, in rung order.
+    ///
+    /// `None` is the section-12.7/12.8 no-recovery shape and is what every
+    /// caller of this producer has always passed, so a market that buys no
+    /// ladder compiles to exactly the bytes it did before this field existed.
+    /// `Some` authors an alternative source per rung and the `RecoveryPolicyV2`
+    /// that funds them.
+    pub(crate) recovery: Option<Vec<PythRecoveryRungV1>>,
+}
+
+/// One authored rung of a Pyth market's funded ordered ladder.
+///
+/// A RUNG SUBSTITUTES A SOURCE AND NOTHING ELSE, and for a Pyth-backed source
+/// there is exactly one axis on which two sources of the same feed can differ:
+/// the adapter's tolerance for the provider's own stated confidence interval.
+/// So that is the only thing a rung authors beside its deadline. A market whose
+/// first choice went silent is a market with a reason to demand a
+/// better-conditioned reading from its second, and `max_confidence_bps` is
+/// capped at the type's 10,000-bp ceiling anyway, so tighter is the only
+/// direction available.
+#[derive(Clone, Debug)]
+pub(crate) struct PythRecoveryRungV1 {
+    /// This rung's confidence bound, in basis points.
+    pub(crate) max_confidence_bps: u16,
+    /// The rung's own committed absolute deadline, in Unix seconds.
+    ///
+    /// PREPAID AT FOUNDING AND CHOSEN BY THE FOUNDER, which is the whole point
+    /// of it living in the policy rather than being inherited from the primary
+    /// window's liveness grace: the crank that enters this rung is admissible
+    /// one second after the previous leg's deadline, and the capture that
+    /// answers it is admissible up to and including this one.
+    pub(crate) deadline_unix_seconds: i64,
+}
+
+/// What one authored ladder contributes to a market's run spec and manifest.
+#[derive(Debug)]
+struct AuthoredRecoveryLadderV1 {
+    /// Canonical `RecoveryPolicyV2` body, hex, for `recovery_policy_hex`.
+    policy_hex: String,
+    /// The record pairs the run spec publishes, in rung order.
+    records: Vec<crate::model::RecoverySourceRecordsV1>,
+    /// `(capability kind, capability config)` for every Resolution compartment
+    /// this ladder needs EXCEPT the failure entry: one per rung configured by
+    /// that rung's own allocation, then the exhaustion entry configured by the
+    /// policy digest.
+    entries: Vec<([u8; 32], [u8; 32])>,
+}
+
+/// Author one Pyth market's funded ordered ladder from its primary source.
+///
+/// Everything the rungs share with the primary is READ OFF the primary spec
+/// rather than restated: the coordinate domain, the source unit, the provider
+/// release, the access profile and the capacity profile. That is what makes the
+/// authored ladder satisfy `validate_recovery_source_graph` by construction
+/// instead of by coincidence, and it is why this function takes the compiled
+/// primary rather than the parameters that produced it.
+fn author_pyth_recovery_ladder_v1(
+    rungs: &[PythRecoveryRungV1],
+    local_label: &[u8; 32],
+    feed_id: [u8; 32],
+    exponent: i32,
+    primary: SourceSpecV1,
+    primary_deadline_unix_seconds: i64,
+) -> Result<AuthoredRecoveryLadderV1> {
+    if rungs.is_empty() {
+        return Err(Error::new(
+            "a recovery-bearing market must author at least one rung; a policy funding no attempt \
+             is the no-recovery market spelled at greater length",
+        ));
+    }
+    let mut attempts = [None; 4];
+    let mut records = Vec::with_capacity(rungs.len());
+    let mut entries = Vec::with_capacity(rungs.len().saturating_add(1));
+    for (index, rung) in rungs.iter().enumerate() {
+        let slot = u8::try_from(index).map_err(|_| Error::new("recovery rung index overflow"))?;
+        // A rung whose deadline has already passed when the crank that enters
+        // it becomes legal is a leg nobody can answer, and a market that sold
+        // it sold nothing. The crank onto rung zero is admissible one second
+        // after the primary deadline, so that is the floor.
+        if rung.deadline_unix_seconds <= primary_deadline_unix_seconds {
+            return Err(Error::new(format!(
+                "rung {slot} commits to deadline {} and the primary leg is not even over until \
+                 {primary_deadline_unix_seconds}: the crank that enters this rung is admissible \
+                 only after the primary deadline, so the rung would expire before it opened",
+                rung.deadline_unix_seconds
+            )));
+        }
+        let adapter = PythAdapterConfigV1::new(feed_id, exponent, rung.max_confidence_bps)
+            .map_err(|error| {
+                Error::new(format!("rung {slot} Pyth adapter configuration: {error:?}"))
+            })?;
+        let adapter_bytes = adapter.to_bytes();
+        let spec = SourceSpecV1::new(
+            primary.domain_id(),
+            primary.unit_id(),
+            primary.provider_release_id(),
+            primary.access_profile(),
+            SourceContentId::new(record_identity(&adapter_bytes))
+                .map_err(|error| Error::new(format!("rung {slot} adapter identity: {error:?}")))?,
+            primary.capacity_profile_id(),
+        );
+        let spec_bytes = spec.to_bytes();
+        let spec_id = record_identity(&spec_bytes);
+        // One allocation identity per rung, because a compartment is found by
+        // its CONFIGURATION and two rungs sharing one identity would name one
+        // compartment: the first spends it and the second has nothing to be
+        // paid from. `RecoveryPolicyV2::validate_shape` refuses that outright,
+        // and folding the rung index into the derivation is what stops this
+        // producer from ever handing it one.
+        let allocation = demo_id("funding-allocation/recovery-rung", &[local_label, &[slot]]);
+        attempts[index] = Some(
+            RecoveryAttemptV2::new(
+                SourceContentId::new(spec_id).map_err(|error| {
+                    Error::new(format!("rung {slot} source spec identity: {error:?}"))
+                })?,
+                primary.provider_release_id(),
+                rung.deadline_unix_seconds,
+                SourceContentId::new(allocation).map_err(|error| {
+                    Error::new(format!("rung {slot} allocation identity: {error:?}"))
+                })?,
+            )
+            .map_err(|error| Error::new(format!("rung {slot} recovery attempt: {error:?}")))?,
+        );
+        records.push(crate::model::RecoverySourceRecordsV1 {
+            source_spec_hex: hex(&spec_bytes),
+            pyth_adapter_config_hex: hex(&adapter_bytes),
+        });
+        entries.push((
+            demo_id("capability/recovery-rung", &[local_label, &[slot]]),
+            allocation,
+        ));
+    }
+    let count =
+        u8::try_from(rungs.len()).map_err(|_| Error::new("recovery rung count overflow"))?;
+    let policy = RecoveryPolicyV2::new(primary.capacity_profile_id(), attempts, count)
+        .map_err(|error| Error::new(format!("recovery policy: {error:?}")))?;
+    let policy_bytes = policy.to_bytes();
+    // The exhaustion compartment belongs to no rung, so the POLICY's own digest
+    // configures it -- exactly the binding `next_crank_funding_config` reads
+    // when the ladder runs out of legs.
+    entries.push((
+        demo_id("capability/exhaustion-companion", &[local_label]),
+        record_identity(&policy_bytes),
+    ));
+    Ok(AuthoredRecoveryLadderV1 {
+        policy_hex: hex(&policy_bytes),
+        records,
+        entries,
+    })
 }
 
 /// Construct the canonical local demo Market: SOL/USD range protection.
@@ -13248,6 +13689,25 @@ pub(crate) struct PythMarketParamsV1<'a> {
 /// field at all -- `compile_linked_basis_v3` hard-wires `payout_scale: 1`
 /// alongside the categorical basis kind, so varying it is the same edit as
 /// emitting a graded basis and belongs to whoever does that one.
+/// One rung of a local market's ladder, in the terms a CALLER can state.
+///
+/// The rung's committed deadline is absolute in the record, and a caller of a
+/// lab fixture has no way to name an absolute second: the primary leg's own
+/// deadline is the captured publication plus the fixture's declared shelf life,
+/// which is a fact about the lab and not a parameter. So a caller states how
+/// long this rung lives AFTER the leg before it, and
+/// `demo_market_input_base_shaped` folds the offsets into the absolute
+/// deadlines the policy carries. Strictly positive, which is what makes the
+/// ladder's deadlines strictly increasing by construction rather than by a
+/// check the caller has to pass.
+#[derive(Clone, Debug)]
+pub(crate) struct LocalRecoveryRungV1 {
+    /// This rung's confidence bound, in basis points.
+    pub(crate) max_confidence_bps: u16,
+    /// Seconds after the previous leg's deadline that this rung's falls.
+    pub(crate) deadline_after_previous_seconds: i64,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct LocalMarketShapeV1 {
     /// Denominator under every cut. The band's scale.
@@ -13268,6 +13728,14 @@ pub(crate) struct LocalMarketShapeV1 {
     /// Product generation. Two markets drawn from one seed with the same band
     /// would otherwise collide on every derived identity.
     pub(crate) generation: u64,
+    /// The funded ordered ladder this market buys, or `None`.
+    ///
+    /// `None` is the default and is what every fixture and campaign that takes
+    /// this shape has always founded, so the no-recovery market compiles to the
+    /// bytes it always did. `Some` is a loopback market that buys named
+    /// alternative sources, which is the only shape `advance-recovery` has
+    /// anything to crank.
+    pub(crate) recovery: Option<Vec<LocalRecoveryRungV1>>,
     /// The author's founding band, or `None`.
     ///
     /// `Option` rather than a plain field so `Default` stays constructible
@@ -13277,6 +13745,37 @@ pub(crate) struct LocalMarketShapeV1 {
     /// so a caller that has not authored it has not finished describing its
     /// market.
     pub(crate) founding_band: Option<crate::model::FoundingBandInputV1>,
+}
+
+/// Fold a caller's relative rung offsets into the absolute deadlines a
+/// `RecoveryPolicyV2` carries, starting from the primary leg's own deadline.
+fn authored_local_ladder_v1(
+    rungs: Option<&[LocalRecoveryRungV1]>,
+    primary_deadline_unix_seconds: i64,
+) -> Result<Option<Vec<PythRecoveryRungV1>>> {
+    let Some(rungs) = rungs else {
+        return Ok(None);
+    };
+    let mut previous = primary_deadline_unix_seconds;
+    let mut authored = Vec::with_capacity(rungs.len());
+    for (index, rung) in rungs.iter().enumerate() {
+        if rung.deadline_after_previous_seconds <= 0 {
+            return Err(Error::new(format!(
+                "rung {index} lives {} seconds past the leg before it: a rung whose deadline is \
+                 not strictly later than its predecessor's is a leg that expires before it opens",
+                rung.deadline_after_previous_seconds
+            )));
+        }
+        let deadline = previous
+            .checked_add(rung.deadline_after_previous_seconds)
+            .ok_or_else(|| Error::new(format!("rung {index} deadline overflowed")))?;
+        previous = deadline;
+        authored.push(PythRecoveryRungV1 {
+            max_confidence_bps: rung.max_confidence_bps,
+            deadline_unix_seconds: deadline,
+        });
+    }
+    Ok(Some(authored))
 }
 
 impl Default for LocalMarketShapeV1 {
@@ -13315,6 +13814,12 @@ impl Default for LocalMarketShapeV1 {
             founding_band: Some(crate::model::FoundingBandInputV1::spot_band(
                 15_000, 200, 10_000, 3, 9_000,
             )),
+            // NO LADDER BY DEFAULT, which is what every fixture and campaign
+            // that takes this shape has founded since there was a shape to
+            // take. A ladder is prepaid at founding -- one extra compartment
+            // per rung, plus a named alternative feed -- so defaulting a market
+            // into buying one would be spending on the caller's behalf.
+            recovery: None,
         }
     }
 }
@@ -13431,6 +13936,13 @@ pub(crate) fn demo_market_input_base_shaped(
     pyth_market_input_base(
         PythMarketParamsV1 {
             founding_band: shape.founding_band.clone(),
+            recovery: authored_local_ladder_v1(
+                shape.recovery.as_deref(),
+                update
+                    .publish_time()
+                    .checked_add(i64::from(FIXTURE_SHELF_LIFE_SECONDS))
+                    .ok_or_else(|| Error::new("fixture primary deadline overflowed"))?,
+            )?,
             registry,
             release: PythMarketProviderV1::Pull(fixture.release()),
             label: fixture.local_label(),
@@ -13503,6 +14015,13 @@ pub(crate) fn devnet_market_input(
     pyth_market_input(
         PythMarketParamsV1 {
             founding_band: spec.founding_band.clone(),
+            // NO LADDER ON DEVNET FROM THIS PRODUCER. A ladder is a founding
+            // decision with a live cost -- one extra prepaid compartment per
+            // rung and a real alternative feed to name -- and `None` here says
+            // this spec's author has not made it, rather than defaulting a
+            // market into buying legs nobody chose. A devnet market that wants
+            // one grows a field on `DevnetPythMarketSpecV1`.
+            recovery: None,
             registry: spec.registry,
             release: PythMarketProviderV1::Pull(&release),
             // The cluster identity is the devnet label: a devnet market's ids can
@@ -13573,6 +14092,13 @@ pub(crate) fn devnet_sponsored_market_input_base(
     pyth_market_input_base(
         PythMarketParamsV1 {
             founding_band: spec.founding_band.clone(),
+            // NO LADDER ON DEVNET FROM THIS PRODUCER. A ladder is a founding
+            // decision with a live cost -- one extra prepaid compartment per
+            // rung and a real alternative feed to name -- and `None` here says
+            // this spec's author has not made it, rather than defaulting a
+            // market into buying legs nobody chose. A devnet market that wants
+            // one grows a field on `DevnetPythMarketSpecV1`.
+            recovery: None,
             registry: spec.registry,
             release: PythMarketProviderV1::Sponsored(release),
             label: release.cluster_id(),
@@ -13921,35 +14447,37 @@ fn pyth_market_input_base(
     // already founds and funds this shape in execution (2026-08-27: CreateFund
     // 1,200,587 CU, VerifyFundReady 1,185,248 CU).
     //
-    // WHAT FOUNDING THE TWO-SOURCE SHAPE HERE ACTUALLY NEEDS, written down so
-    // the next lane does not have to rediscover it. It is owed, not blocked,
-    // and it is no longer "pin three compartments": founding funds EVERY rung,
-    // so a policy of `n` attempts wants `n + 2` Resolution-controller entries --
-    // one per attempt at `recovery_entry_index + k` configured by that
-    // attempt's own allocation, then the exhaustion entry configured by the
-    // policy digest and the failure entry by the material.
-    //
-    // Four things this producer does not yet emit:
-    //
-    // 1. an ALTERNATIVE `SourceSpecV1` and the `PythAdapterConfigV1` it names,
-    //    published as their own finalized records. `MarketRunInput` carries one
-    //    `source_spec_hex` and one `pyth_adapter_config_hex`, so the run spec
-    //    grows a second pair before the compiler can publish them;
-    // 2. a `RecoveryPolicyV2` whose single attempt names that spec, that
-    //    provider release, a deadline past the primary window's own, and a
-    //    funding allocation identity -- into `recovery_policy_hex`, which
-    //    already exists and is deliberately empty below;
-    // 3. the manifest above with the allocation and the policy digest as the
-    //    first two compartments instead of the structural companions, which is
-    //    what turns `authenticate_no_recovery_entries` into the `Some` arm both
-    //    Core and the Resolution controller take;
-    // 4. and a crank driver. `RelayActionV1::AdvanceRecovery` is a 32-byte
-    //    instruction over an 18-account frame naming only the market generation
-    //    and the terminal sequence, and the whole of the rest -- which rung,
-    //    which source, when it expires -- is read from the market's own state,
-    //    so the driver is a frame builder and a bounded wait rather than a
-    //    decision. `crates/dclutch-svm-harness/tests/resolution_core_v3_lifecycle.rs`
-    //    builds exactly that frame by hand and is the reference.
+    // AND A CALLER MAY NOW BUY ONE. `params.recovery` authors an alternative
+    // source per rung and the `RecoveryPolicyV2` that funds them; the manifest
+    // below then carries one compartment per rung configured by that rung's own
+    // allocation, plus the exhaustion entry configured by the policy digest,
+    // which is what turns `authenticate_no_recovery_entries` into the `Some`
+    // arm both Core and the Resolution controller take. What crank the ladder
+    // is `advance-recovery`'s, and it is a frame builder and a bounded wait
+    // rather than a decision because `AdvanceRecovery` reads which rung, which
+    // source and when it expires off the market's own state.
+    let primary_deadline = params
+        .window_end
+        .checked_add(i64::from(params.max_age_seconds))
+        .ok_or_else(|| Error::new("primary window end + max_age overflows"))?;
+    let ladder = match &params.recovery {
+        None => None,
+        Some(rungs) => Some(author_pyth_recovery_ladder_v1(
+            rungs,
+            &local_label,
+            update.feed_id(),
+            update.exponent(),
+            source_spec,
+            primary_deadline,
+        )?),
+    };
+    let recovery_link = match &ladder {
+        None => None,
+        Some(authored) => Some(
+            SourceContentId::new(record_identity(&decode_hex(&authored.policy_hex)?))
+                .map_err(|error| Error::new(format!("recovery policy identity: {error:?}")))?,
+        ),
+    };
     let material = SourceMaterialV3::explicitly_unbounded(
         SourceContentId::new(product_digest)
             .map_err(|error| Error::new(format!("demo Product digest: {error:?}")))?,
@@ -13959,7 +14487,7 @@ fn pyth_market_input_base(
             .map_err(|error| Error::new(format!("demo window: {error:?}")))?,
         SourceContentId::new(statistic)
             .map_err(|error| Error::new(format!("demo statistic: {error:?}")))?,
-        None,
+        recovery_link,
         SourceContentId::new(failure_policy)
             .map_err(|error| Error::new(format!("demo failure policy: {error:?}")))?,
     );
@@ -13986,20 +14514,26 @@ fn pyth_market_input_base(
     // deadline walk admits -- and exactly two other Resolution-controller
     // entries, pairwise distinct and neither equal to the material. The two
     // companions stay prepaid until `CloseFund` refunds them.
-    let mut entries_input: Vec<([u8; 32], [u8; 32])> = vec![
-        (
-            demo_id("capability/recovery-companion", &[&local_label]),
-            demo_id("companion-config/recovery", &[&local_label]),
-        ),
-        (
-            demo_id("capability/exhaustion-companion", &[&local_label]),
-            demo_id("companion-config/exhaustion", &[&local_label]),
-        ),
-        (
-            demo_id("capability/source-material", &[&local_label]),
-            material_digest,
-        ),
-    ];
+    let mut entries_input: Vec<([u8; 32], [u8; 32])> = match &ladder {
+        // The two structural companions of a market that bought no ladder.
+        None => vec![
+            (
+                demo_id("capability/recovery-companion", &[&local_label]),
+                demo_id("companion-config/recovery", &[&local_label]),
+            ),
+            (
+                demo_id("capability/exhaustion-companion", &[&local_label]),
+                demo_id("companion-config/exhaustion", &[&local_label]),
+            ),
+        ],
+        // One compartment per rung plus the exhaustion entry, each pinned to
+        // the identity the crank that spends it will name.
+        Some(authored) => authored.entries.clone(),
+    };
+    entries_input.push((
+        demo_id("capability/source-material", &[&local_label]),
+        material_digest,
+    ));
     // The manifest is canonical only when entries are strictly ordered by
     // capability-kind identity; the demo kinds are digests, so sort them.
     entries_input.sort_by_key(|entry| entry.0);
@@ -14068,8 +14602,16 @@ fn pyth_market_input_base(
         pyth_sponsored_push_release_hex: params.release.sponsored_release_hex(),
         // Empty IS the statement that this material bought no ordered recovery
         // walk: the compiler derives the same `None` link the material above
-        // carries, and no recovery-policy record is published or observed.
-        recovery_policy_hex: String::new(),
+        // carries, and no recovery-policy record is published or observed. A
+        // market that bought a ladder carries the policy and one alternative
+        // record pair per rung, and `validate_market_input` refuses any other
+        // count.
+        recovery_policy_hex: ladder
+            .as_ref()
+            .map_or_else(String::new, |authored| authored.policy_hex.clone()),
+        recovery_source_records: ladder
+            .as_ref()
+            .map_or_else(Vec::new, |authored| authored.records.clone()),
         capability_manifest_hex: hex(&manifest),
         direct_capability: None,
         selected_capability: None,
@@ -14276,6 +14818,291 @@ mod tests {
         );
         assert_eq!(compiled.price_gate, None);
         assert_eq!(compiled.basis_scale, 1);
+    }
+
+    /// One local market compiler shared by the ladder tests below.
+    fn ladder_fixture_v1(
+        rungs: Option<Vec<LocalRecoveryRungV1>>,
+    ) -> (
+        Pubkey,
+        crate::direct_market::DirectMarketCompilerOwnedV1,
+        MarketRunInput,
+    ) {
+        let registry = Pubkey::new_from_array([0x41; 32]);
+        let direct = crate::direct_market::DirectMarketCompilerOwnedV1::for_test(
+            registry,
+            crate::direct_market::DirectDeploymentWidthsV1::new(1_141_117, 971_053, 934_037)
+                .expect("deployment widths"),
+        );
+        let shape = LocalMarketShapeV1 {
+            recovery: rungs,
+            ..LocalMarketShapeV1::default()
+        };
+        let input = demo_market_input_shaped(registry, direct.compiler(), &shape)
+            .expect("local market at the stated shape");
+        (registry, direct, input)
+    }
+
+    /// THE CONTROL. A market that buys no ladder is the market it always was.
+    ///
+    /// Two fields grew here and a third check widened, and every one of them
+    /// had to leave the no-recovery founding alone: `recovery_source_records`
+    /// is `skip_serializing_if`-empty so the serialized run spec carries no new
+    /// key at all, the manifest count `1 + rungs.max(1) + 2` is still four when
+    /// nothing was bought, and the two structural companions are still the
+    /// entries `authenticate_no_recovery_entries` selects. If any of that had
+    /// moved, every existing fixture, campaign and spec digest in the tree
+    /// would have moved with it.
+    #[test]
+    fn a_market_that_buys_no_ladder_is_the_market_it_always_was() {
+        let (_, _, input) = ladder_fixture_v1(None);
+        assert!(
+            input.recovery_policy_hex.is_empty(),
+            "empty IS the statement that no ordered walk was bought"
+        );
+        assert!(input.recovery_source_records.is_empty());
+        let wire = serde_json::to_string(&input).expect("run spec serializes");
+        assert!(
+            !wire.contains("recovery_source_records"),
+            "a no-recovery run spec must serialize to the bytes it did before the field existed"
+        );
+        let manifest_bytes = decode_hex(&input.capability_manifest_hex).expect("manifest hex");
+        let manifest = CapabilityManifestV1::decode(&manifest_bytes).expect("manifest");
+        assert_eq!(manifest.entry_count(), 4);
+        validate_market_input(&input).expect("the no-recovery market still validates");
+        let compiled = compile_market_bodies(
+            Pubkey::new_from_array([0x41; 32]),
+            &input,
+            Pubkey::new_unique(),
+        )
+        .expect("no-recovery bodies");
+        assert!(compiled.recovery.is_empty());
+        assert_eq!(
+            SourceMaterialV3::decode(&compiled.source)
+                .expect("material")
+                .recovery_policy(),
+            None
+        );
+    }
+
+    /// A two-source founding names a REAL alternative and funds it.
+    ///
+    /// The rung's spec is a record this founding publishes, its identity is the
+    /// one the attempt names, and the only thing it moves is the adapter
+    /// configuration -- which is the only axis a Pyth adapter has. Everything
+    /// the market sold stays the market's: unit, coordinate domain, capacity
+    /// profile, access profile, provider release. That is
+    /// `validate_recovery_source_graph`'s rule, satisfied by construction here
+    /// rather than discovered at a capture.
+    #[test]
+    fn a_founding_that_buys_a_rung_publishes_the_source_that_rung_names() {
+        let (registry, _, input) = ladder_fixture_v1(Some(vec![LocalRecoveryRungV1 {
+            max_confidence_bps: 9_000,
+            deadline_after_previous_seconds: 20,
+        }]));
+        let policy_bytes = decode_hex(&input.recovery_policy_hex).expect("policy hex");
+        let policy = RecoveryPolicyV2::decode(&policy_bytes).expect("policy");
+        assert_eq!(policy.attempt_count(), 1);
+        let attempt = policy.attempt(0).expect("the funded rung");
+
+        assert_eq!(input.recovery_source_records.len(), 1);
+        let alternative_bytes =
+            decode_hex(&input.recovery_source_records[0].source_spec_hex).expect("rung spec hex");
+        assert_eq!(
+            record_identity(&alternative_bytes),
+            attempt.source_spec_id().to_bytes(),
+            "the attempt must name a record this founding actually publishes"
+        );
+        let primary_bytes = decode_hex(&input.source_spec_hex).expect("primary spec hex");
+        assert_ne!(alternative_bytes, primary_bytes);
+        let alternative = SourceSpecV1::decode(&alternative_bytes).expect("rung spec");
+        let primary = SourceSpecV1::decode(&primary_bytes).expect("primary spec");
+        assert_ne!(
+            alternative.adapter_config_id(),
+            primary.adapter_config_id(),
+            "the rung is a different SOURCE, and the adapter configuration is what makes it one"
+        );
+        assert_eq!(alternative.unit_id(), primary.unit_id());
+        assert_eq!(alternative.domain_id(), primary.domain_id());
+        assert_eq!(alternative.access_profile(), primary.access_profile());
+        assert_eq!(
+            alternative.provider_release_id(),
+            primary.provider_release_id()
+        );
+        assert_eq!(
+            alternative.capacity_profile_id(),
+            primary.capacity_profile_id()
+        );
+        assert_eq!(
+            policy.capacity_profile_id(),
+            primary.capacity_profile_id(),
+            "a ladder running under a profile the market did not publish is one nobody priced"
+        );
+        let adapter_bytes = decode_hex(&input.recovery_source_records[0].pyth_adapter_config_hex)
+            .expect("rung adapter hex");
+        assert_eq!(
+            record_identity(&adapter_bytes),
+            alternative.adapter_config_id().to_bytes()
+        );
+
+        // FOUNDING FUNDS EVERY RUNG: one compartment pinned to this rung's own
+        // allocation, one to the policy digest, one to the material, and the
+        // Direct entry the Resolution subset does not select.
+        let manifest_bytes = decode_hex(&input.capability_manifest_hex).expect("manifest hex");
+        let manifest = CapabilityManifestV1::decode(&manifest_bytes).expect("manifest");
+        assert_eq!(manifest.entry_count(), 4);
+        let configs: Vec<[u8; 32]> = (0..manifest.entry_count())
+            .map(|index| manifest.entry(index).expect("entry").config_id().to_bytes())
+            .collect();
+        assert!(configs.contains(&attempt.funding_allocation_id().to_bytes()));
+        assert!(configs.contains(&record_identity(&policy_bytes)));
+
+        validate_market_input(&input).expect("the two-source market validates");
+        let compiled =
+            compile_market_bodies(registry, &input, Pubkey::new_unique()).expect("ladder bodies");
+        assert_eq!(compiled.recovery, policy_bytes);
+        assert_eq!(
+            SourceMaterialV3::decode(&compiled.source)
+                .expect("material")
+                .recovery_policy()
+                .map(|id| id.to_bytes()),
+            Some(record_identity(&policy_bytes)),
+            "the material is the one bit that separates a market with a ladder from one without"
+        );
+    }
+
+    /// Each way of authoring a ladder wrong refuses, and each refusal says which.
+    #[test]
+    fn a_ladder_that_would_not_found_refuses_offline_and_by_name() {
+        let (_, _, no_ladder) = ladder_fixture_v1(None);
+        let (_, _, ladder) = ladder_fixture_v1(Some(vec![LocalRecoveryRungV1 {
+            max_confidence_bps: 9_000,
+            deadline_after_previous_seconds: 20,
+        }]));
+
+        // Records nothing names. Publishing a source spec no attempt selects is
+        // a record no market can ever resolve against.
+        let mut orphaned = no_ladder.clone();
+        orphaned
+            .recovery_source_records
+            .clone_from(&ladder.recovery_source_records);
+        let refusal = validate_market_input(&orphaned).expect_err("orphaned records must refuse");
+        assert!(
+            format!("{refusal}").contains("no recovery policy"),
+            "got {refusal}"
+        );
+
+        // A rung whose spec nobody publishes: the market can be advanced onto
+        // it and never answered on it.
+        let mut unpublished = ladder.clone();
+        unpublished.recovery_source_records.clear();
+        let refusal =
+            validate_market_input(&unpublished).expect_err("an unpublished rung must refuse");
+        assert!(
+            format!("{refusal}").contains("funds 1 attempts"),
+            "got {refusal}"
+        );
+
+        // A rung that IS the primary. The policy names the primary's own spec
+        // and the records carry it, so every digest joins -- and the founding
+        // still refuses, because a ladder whose alternative is the feed that
+        // already went silent buys nothing.
+        let primary_bytes = decode_hex(&ladder.source_spec_hex).expect("primary hex");
+        let primary = SourceSpecV1::decode(&primary_bytes).expect("primary spec");
+        let mirrored = RecoveryPolicyV2::new(
+            primary.capacity_profile_id(),
+            [
+                Some(
+                    RecoveryAttemptV2::new(
+                        SourceContentId::new(record_identity(&primary_bytes)).expect("primary id"),
+                        primary.provider_release_id(),
+                        i64::from(u32::MAX),
+                        SourceContentId::new([0x5a; 32]).expect("allocation"),
+                    )
+                    .expect("mirrored attempt"),
+                ),
+                None,
+                None,
+                None,
+            ],
+            1,
+        )
+        .expect("mirrored policy");
+        let mut mirror = ladder.clone();
+        mirror.recovery_policy_hex = hex(&mirrored.to_bytes());
+        mirror.recovery_source_records = vec![crate::model::RecoverySourceRecordsV1 {
+            source_spec_hex: ladder.source_spec_hex.clone(),
+            pyth_adapter_config_hex: ladder.pyth_adapter_config_hex.clone(),
+        }];
+        let refusal = validate_market_input(&mirror).expect_err("a mirrored rung must refuse");
+        assert!(
+            format!("{refusal}").contains("PRIMARY source"),
+            "got {refusal}"
+        );
+
+        // A ladder whose compartments the manifest does not carry: the
+        // no-recovery manifest under a recovery-bearing policy.
+        let mut unfunded = ladder.clone();
+        unfunded
+            .capability_manifest_hex
+            .clone_from(&no_ladder.capability_manifest_hex);
+        let refusal = validate_market_input(&unfunded).expect_err("an unfunded rung must refuse");
+        assert!(
+            format!("{refusal}").contains("funding allocation"),
+            "got {refusal}"
+        );
+
+        // A rung that expires before it opens. The crank that enters rung zero
+        // is admissible only after the primary deadline, so a rung whose
+        // deadline is not strictly later is a leg nobody can answer. TWO gates
+        // say so and the local one is reached first: the shape's fold refuses a
+        // non-positive lifetime before an absolute deadline exists at all.
+        let refusal = ladder_fixture_zero_lifetime_v1();
+        assert!(
+            format!("{refusal}").contains("expires before it opens"),
+            "got {refusal}"
+        );
+
+        // The second gate, reached directly, because a caller that hands
+        // absolute deadlines -- every non-lab caller -- never passes through
+        // the fold above.
+        let primary_bytes = decode_hex(&ladder.source_spec_hex).expect("primary hex");
+        let primary = SourceSpecV1::decode(&primary_bytes).expect("primary spec");
+        let refusal = author_pyth_recovery_ladder_v1(
+            &[PythRecoveryRungV1 {
+                max_confidence_bps: 9_000,
+                deadline_unix_seconds: 1_800_000_000,
+            }],
+            &[0x11; 32],
+            [0x22; 32],
+            -8,
+            primary,
+            1_800_000_000,
+        )
+        .expect_err("a rung due on the primary deadline must refuse");
+        assert!(
+            format!("{refusal}").contains("expire before it opened"),
+            "got {refusal}"
+        );
+    }
+
+    /// The zero-lifetime rung, authored through the local shape's own fold.
+    fn ladder_fixture_zero_lifetime_v1() -> Error {
+        let registry = Pubkey::new_from_array([0x41; 32]);
+        let direct = crate::direct_market::DirectMarketCompilerOwnedV1::for_test(
+            registry,
+            crate::direct_market::DirectDeploymentWidthsV1::new(1_141_117, 971_053, 934_037)
+                .expect("deployment widths"),
+        );
+        let shape = LocalMarketShapeV1 {
+            recovery: Some(vec![LocalRecoveryRungV1 {
+                max_confidence_bps: 9_000,
+                deadline_after_previous_seconds: 0,
+            }]),
+            ..LocalMarketShapeV1::default()
+        };
+        demo_market_input_shaped(registry, direct.compiler(), &shape)
+            .expect_err("a rung with no lifetime must refuse")
     }
 
     #[test]
@@ -15607,6 +16434,7 @@ mod tests {
             statistic_spec: published(0x74),
             provider_release: published(0x76),
             adapter_config: published(0x78),
+            recovery_sources: Vec::new(),
             sponsored_push_release: None,
             direct: BTreeMap::new(),
             principal_cap_sets: 1,
