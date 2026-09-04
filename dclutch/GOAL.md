@@ -4888,3 +4888,14 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Started 15:05 EDT: CLAIMS-17 **`(spawned)`** — founding v6 seats the escrow (shape A, ruled provisionally), split and merge
   as user acts that move collateral, the refunding failure walk on real ELFs; RECOVERY-3 **`(spawned)`** — the successor founds
   a two-source market, `advance-recovery` with a bounded wait, cohort-16 rows, the relayed tier's binding.
+- SERIES-3 closed (`8b5d1c96f`, `0d2035c9c`, `36e0aed6b`, `013e3f910`, `60a04ca6b`): the revisions have one author — the family
+  request; the Effect VM writes them into route 4's fixed request before the CPI (the operation pair SERIES-2 had not found);
+  the artifact-side conjunct asserts the placeholder (`SeriesExpireCoreTemplate 0x402A`, 390 CU); the Ticket's refund owner
+  was staged as the RentCredit's address (three authorities want the credit's wallet) — **the entire Series Expire pre-Market
+  chain passes**; a FIFTH author of the proof-width fact (a literal `1` that refused every single-occurrence Series) derives;
+  the first release-level test with occurrence count 2. **The wall now: a Series root's config identity has TWO AUTHORS that
+  cannot agree — the family-neutral record digest vs `template_content_id` (six sites incl. Core's four) — proven natively
+  and from both ends on real ELFs: why nothing Series has ever run through Hot.** Frames: one row substituted (192 → 64 B),
+  accepted from two captures (a baseline copied from one was corrected the same hour). → SERIES-4 **`(spawned)`** under a
+  ruling: the family-neutral convention is the one author; the six sites derive the content id from the record they hold.
+- Cuts: `528c93454`, `e9920c0e2`, `487767cb1`.
