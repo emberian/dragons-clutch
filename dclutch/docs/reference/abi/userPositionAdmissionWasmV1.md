@@ -20,7 +20,7 @@ Regenerate with: npm run abi:user-position-admission
 | --- | --- |
 | `USER_POSITION_ADMISSION_SNAPSHOT_FORMAT_V1` | `dclutch-user-position-admission-snapshot-v1` |
 | `USER_POSITION_ADMISSION_PLAN_FORMAT_V1` | `dclutch-user-position-admission-plan-v1` |
-| `USER_POSITION_ADMISSION_WASM_SHA256_V1` | `653fa5dfe9334f85c9b62ab02262617e6f8790e537c3ae813d8fcb7e3a2f9356` |
+| `USER_POSITION_ADMISSION_WASM_SHA256_V1` | `22e2ae4b323e1d1d78a007e63ffb998f3fb4f90de18f1a5fb7ba09a6af67a240` |
 
 ## Numeric constants (widths, offsets, counts, tags)
 
@@ -29,4 +29,4 @@ Regenerate with: npm run abi:user-position-admission
 | `USER_POSITION_ADMISSION_ACCOUNT_COUNT_V1` | 27 |
 | `USER_POSITION_ADMISSION_OWNER_ACCOUNT_V1` | 24 |
 | `USER_POSITION_ADMISSION_AUTHORITY_ACCOUNT_V1` | 1 |
-| `USER_POSITION_ADMISSION_WASM_BYTES_V1` | 346,458 |
+| `USER_POSITION_ADMISSION_WASM_BYTES_V1` | 346,324 |

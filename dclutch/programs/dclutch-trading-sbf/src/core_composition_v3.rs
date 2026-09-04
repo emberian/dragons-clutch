@@ -25,7 +25,9 @@ use dclutch_market_core_codec::{
     SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1, SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_BYTES_V1,
 };
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_series_v3_kernel::request::{SeriesActionRequestV3, SeriesActionV3};
+use dclutch_series_v3_kernel::request::{
+    SERIES_ACTION_HEADER_BYTES_V3, SeriesActionRequestV3, SeriesActionV3,
+};
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
@@ -481,7 +483,25 @@ fn prepare<'info>(
         } else {
             SERIES_PERMIT_EXPIRY_ACCOUNT_COUNT_V1
         };
-        if range_count != 1
+        // THE RANGE COUNT IS A PER-TEMPLATE CONSTANT, NOT THE LITERAL `1`.
+        //
+        // The fifth author of the fact `97ce7a748` moved four authors of, and
+        // the one its sweep missed. An expiry route borrows the family
+        // request's canonical proof exactly once -- and a `BorrowedRangeV4` is
+        // canonically nonempty, so the honest declaration for a Template whose
+        // `series_proof_count_v3` is ZERO is an EMPTY range table, which is
+        // what `series_expire_borrowed_range_count_v5` emits. Pinning this to
+        // `1` therefore refused every single-occurrence Series -- the only
+        // shape this tree has ever founded -- with `Content`.
+        //
+        // The width the request arrives at is already authenticated against
+        // the RequestProfile, which pins `series_action_request_bytes_v3` for
+        // the Template this release serves, so "does this Template have a
+        // proof" is readable here without a second copy of the rule and
+        // without decoding the request again.
+        let expected_ranges =
+            u16::from(borrowed_ranges.family_request().len() > SERIES_ACTION_HEADER_BYTES_V3);
+        if range_count != expected_ranges
             || legacy_witness.is_some()
             || invocation_index != 0
             || route_index.checked_add(1) != Some(effect.route_count())

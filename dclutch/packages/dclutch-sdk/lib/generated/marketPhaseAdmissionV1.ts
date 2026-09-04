@@ -20,7 +20,7 @@ export interface RoutePhaseGateV1 {
 }
 
 /** Routes enumerated by the census, gated or not. */
-export const ROUTE_COUNT_V1 = 163 as const;
+export const ROUTE_COUNT_V1 = 164 as const;
 
 export const ROUTE_PHASE_GATES_V1: ReadonlyArray<RoutePhaseGateV1> = [
   { route: "claims/affine_batch_v2::process", phases: ["Open"], prestates: [] },
@@ -56,6 +56,7 @@ export const ROUTE_PHASE_GATES_V1: ReadonlyArray<RoutePhaseGateV1> = [
   { route: "resolution/core_effect::process_direct_funding_activation_v1", phases: ["Founding", "Open"], prestates: [["Founding", "Prepaid"], ["Open", "Consumed"]] },
   { route: "resolution/core_effect::process_direct_funding_close_v1", phases: ["Retiring"], prestates: [["Retiring", "Consumed"]] },
   { route: "resolution/process_admit#AdmitTerminal", phases: ["Open"], prestates: [["Open", "Consumed"]] },
+  { route: "resolution/process_advance_recovery#AdvanceRecovery", phases: ["Open"], prestates: [["Open", "Consumed"]] },
   { route: "resolution/process_capture#Capture", phases: ["Open"], prestates: [["Open", "Consumed"]] },
   { route: "resolution/process_close#CloseFund", phases: ["Retiring"], prestates: [["Retiring", "Consumed"]] },
   { route: "resolution/process_commit_deadline_failure#CommitDeadlineFailure", phases: ["Open"], prestates: [["Open", "Consumed"]] },
@@ -126,11 +127,13 @@ export const ROUTES_GATED_ON_ANOTHER_MACHINE_V1: ReadonlyArray<RouteOtherMachine
   { route: "custody/open_source_compartment#OpenSourceCompartment", machines: ["projected-custody"], gates: [{ machine: "projected-custody", states: ["HoardOpen"] }] },
   { route: "custody/realize_and_close#RealizeAndClose", machines: ["projected-custody"], gates: [{ machine: "projected-custody", states: ["HoardLocked"] }] },
   { route: "custody/refund_and_close#RefundAndClose", machines: ["projected-custody"], gates: [{ machine: "projected-custody", states: ["HoardLocked"] }] },
-  { route: "resolution/process_abandon#magic", machines: ["source"], gates: [{ machine: "source", states: ["Exhausted", "FailureCommitted", "Recovery", "Resolved", "Retired"] }] },
+  { route: "resolution/process_abandon#magic", machines: ["source"], gates: [{ machine: "source", states: ["Exhausted", "FailureCommitted", "Resolved", "Retired"] }] },
+  { route: "resolution/process_advance_recovery#AdvanceRecovery", machines: ["funding-ledger"], gates: [{ machine: "funding-ledger", states: ["Active"] }] },
   { route: "resolution/process_capture#Capture", machines: ["source"], gates: [{ machine: "source", states: ["Primary"] }] },
   { route: "resolution/process_commit_deadline_failure#CommitDeadlineFailure", machines: ["funding-ledger"], gates: [{ machine: "funding-ledger", states: ["Active"] }] },
   { route: "resolution/process_commit_failure#CommitFailure", machines: ["funding-ledger", "source"], gates: [{ machine: "funding-ledger", states: ["Active"] }, { machine: "source", states: ["Primary"] }] },
   { route: "resolution/process_settle#Settle", machines: ["source"], gates: [{ machine: "source", states: ["Primary"] }] },
+  { route: "resolution/process_submit#magic", machines: ["source"], gates: [{ machine: "source", states: ["Primary", "Recovery"] }] },
   { route: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_cleanup_v1", machines: ["dealer-checkpoint"], gates: [{ machine: "dealer-checkpoint", states: ["Collecting", "Evaluated", "Reserved", "RollingBack"] }] },
   { route: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_commit_v1", machines: ["dealer-checkpoint"], gates: [{ machine: "dealer-checkpoint", states: ["Reserved"] }] },
   { route: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_evaluate_v1", machines: ["dealer-checkpoint"], gates: [{ machine: "dealer-checkpoint", states: ["Collecting"] }] },

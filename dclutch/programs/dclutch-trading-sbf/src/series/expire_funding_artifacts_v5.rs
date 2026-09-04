@@ -1317,6 +1317,15 @@ mod tests {
                 SERIES_ACTION_HEADER_BYTES_V3 + 32 * proof_count as usize
             );
 
+            // The two authors of "does this Template have a proof" compute the
+            // same function, and `core_composition_v3`'s expiry shape gate is
+            // the third: it reads the family request's own width, which the
+            // RequestProfile below has already pinned to `request_bytes`.
+            assert_eq!(
+                series_expire_borrowed_range_count_v5(occurrence_count),
+                usize::from(request_bytes > SERIES_ACTION_HEADER_BYTES_V3)
+            );
+
             let profile = emit_request_profile(occurrence_count).expect("request profile");
             let profile = RequestProfileV1::decode(&profile).expect("request decode");
             // Item stride is zero, so every Product tail count must agree.

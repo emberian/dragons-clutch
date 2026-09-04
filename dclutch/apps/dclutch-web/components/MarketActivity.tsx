@@ -306,6 +306,7 @@ export function MarketActivityView({ state, denomination, outcomes, supplyAtoms,
         <h3 className="detail-subhead">If the source never reports</h3>
         <p>{outage.headline}</p>
         <p className={outage.complete ? undefined : 'market-refusal'}>{outage.payee}</p>
+        <p>{outage.columnNote}</p>
         {outage.holders.length > 0 && <div className="viz-table-scroll" tabIndex={0} role="region" aria-label="Who holds this market's failure outcome">
           <table className="holders-table">
             <thead><tr><th>Holder of claim {outage.failureOutcome}</th><th>Claims held · raw u64</th><th>Share of the failure outcome</th></tr></thead>

@@ -2029,6 +2029,128 @@ mod tests {
         Ok(())
     }
 
+    fn refunding_plan<'a>(
+        action: ClaimsAction,
+        release_set: [u8; 32],
+        source_owner: [u8; 32],
+        destination_owner: [u8; 32],
+        quantities: &'a [u8],
+    ) -> Result<ClaimsPlanV1<'a>, ProgramError> {
+        ClaimsPlanV1::new(
+            action,
+            CallerRole::Trading,
+            release_set,
+            [2; 32],
+            [3; 32],
+            source_owner,
+            destination_owner,
+            1,
+            1,
+            0,
+            3,
+            quantities,
+        )
+        .map_err(|_| ClaimsSbfError::Instruction.into())
+    }
+
+    /// The failure-escrow gate, both codes and both directions of the slot
+    /// rule, against the fixture's own market.
+    ///
+    /// The fixture mints one complete set of 10 into the SOURCE Position, so
+    /// the source holds the whole failure column and the destination holds none
+    /// of it -- which is exactly the pre-state that separates a seated escrow
+    /// from an unseated one without forging a byte.
+    #[test]
+    fn the_failure_escrow_gate_names_which_account_and_which_market()
+    -> Result<(), ProgramError> {
+        let (accounts, release) = fixture()?;
+        let view = GenericAccounts::parse(&accounts)?;
+        let program_id = Pubkey::new_from_array([9; 32]);
+        let release_set: [u8; 32] = release
+            .as_slice()
+            .try_into()
+            .map_err(|_| ClaimsSbfError::Instruction)?;
+        let quantities = quantities(&[4, 4, 4]);
+        let seeds = crate::protocol_position_v2::ProtocolPositionClaimsCapabilitySeedsV2::new(
+            [2; 32], 2,
+        )
+        .map_err(|_| ClaimsSbfError::Instruction)?;
+        let escrow = Pubkey::find_program_address(&seeds.as_slices(), &program_id)
+            .0
+            .to_bytes();
+
+        // POSITIVE CONTROL. A refunding mint names the escrow in the source
+        // slot and this market's whole failure column is there, so the gate
+        // admits it. Without this the two refusals below prove nothing: a gate
+        // that refused everything would pass them both.
+        assert_eq!(
+            authenticate_failure_escrow(
+                &program_id,
+                &view,
+                refunding_plan(
+                    ClaimsAction::MintRefundingCompleteSet,
+                    release_set,
+                    escrow,
+                    [5; 32],
+                    &quantities,
+                )?,
+                BasketAction::MintRefundingCompleteSet,
+            ),
+            Ok(())
+        );
+
+        // WHICH ACCOUNT. A stranger in the escrow slot has asked to be minted
+        // the failure claims, which on a refunding basis are worth nothing and
+        // are still sellable -- the hazard the ruling exists to close.
+        assert_eq!(
+            authenticate_failure_escrow(
+                &program_id,
+                &view,
+                refunding_plan(
+                    ClaimsAction::MintRefundingCompleteSet,
+                    release_set,
+                    [4; 32],
+                    [5; 32],
+                    &quantities,
+                )?,
+                BasketAction::MintRefundingCompleteSet,
+            ),
+            Err(ClaimsSbfError::FailureEscrow.into())
+        );
+
+        // WHICH MARKET, and the slot rule with it: a refunding MERGE reads the
+        // DESTINATION, which holds none of the failure column here. The right
+        // account, the wrong market shape.
+        assert_eq!(
+            authenticate_failure_escrow(
+                &program_id,
+                &view,
+                refunding_plan(
+                    ClaimsAction::MergeRefundingCompleteSet,
+                    release_set,
+                    [4; 32],
+                    escrow,
+                    &quantities,
+                )?,
+                BasketAction::MergeRefundingCompleteSet,
+            ),
+            Err(ClaimsSbfError::FailureEscrowUnseated.into())
+        );
+
+        // And the gate is inert off the refunding actions: it asks nothing of a
+        // transfer, whoever the packet names.
+        assert_eq!(
+            authenticate_failure_escrow(
+                &program_id,
+                &view,
+                transfer_plan(release_set, &quantities)?,
+                BasketAction::TransferNative,
+            ),
+            Ok(())
+        );
+        Ok(())
+    }
+
     #[test]
     fn migration_only_complete_set_growth_checks_core_cap_without_mutation()
     -> Result<(), ProgramError> {

@@ -21,17 +21,17 @@ SHA-256, so a reviewer can verify a claim without re-running a gauntlet.
 | **devnet** | **42** | a finalized transaction on Solana devnet, named by signature and slot, and corroborated against the chain's own logs |
 | **local validator** | 23 | `solana-test-validator`: a real Agave runtime, real slots, real finalization, on localhost |
 | **ProgramTest only** | 53 | an in-process `solana-program-test` bank. It runs the REAL SBF ELFs -- which is why it is evidence -- but it is not a validator: no packet limit, no leader schedule, no finalization, no fee market |
-| **blocked** | 45 | no campaign and no devnet witness; `tools/gauntlet/blocked.json` records a reason, a class and an owner |
-| **unrecorded** | 0 | no campaign, no devnet witness, and no reason recorded |
+| **blocked** | 44 | no campaign and no devnet witness; `tools/gauntlet/blocked.json` records a reason, a class and an owner |
+| **unrecorded** | 2 | no campaign, no devnet witness, and no reason recorded |
 
 Those five classes partition the 163, and the last one is NOT the count of
 routes nothing has ever run:
 
-- **unrecorded: 0 of 163** -- no campaign
+- **unrecorded: 2 of 164** -- no campaign
   binding, no devnet witness, and no entry in `tools/gauntlet/blocked.json`.
   Nobody has written anything at all about this route. This is the number the
   register has always printed under the name NEVER-EXECUTED.
-- **undriven: 32 of 163** -- unrecorded, PLUS every
+- **undriven: 34 of 164** -- unrecorded, PLUS every
   blocked route whose entry is classed `status-report` ("no campaign or tier
   drives it yet", with nothing structural in the way), PLUS every blocked route
   whose entry is classed `unwired` (it admits the route is driven today and
@@ -47,12 +47,12 @@ denominators are not the same number: one entry's trailing `*` covers a whole
 program's routes, and an entry whose route now executes stops being counted
 here at all while its text stays in the file (route-witnesses.md lists those,
 under *Blocks their own route has already falsified*). 37
-entries classify 45 routes.
+entries classify 44 routes.
 
-By class of blocking entry: **out-of-release-set** 6, **structural** 5, **repointing** 2, **unwired** 5, **status-report** 27.
+By class of blocking entry: **out-of-release-set** 6, **structural** 4, **repointing** 2, **unwired** 5, **status-report** 27.
 
 **A real Agave runtime drives 65 of the
-163.** `docs/MASTER_COMPLETION_CONTRACT.md` item 5 asks for a local
+164.** `docs/MASTER_COMPLETION_CONTRACT.md` item 5 asks for a local
 validator or devnet transaction where the route is chain-facing; those are the
 rows that meet it. The ProgramTest column is not a lesser version of the same
 thing -- `tools/gauntlet/DESIGN.md` admits that substrate only as a labelled
@@ -160,7 +160,7 @@ campaign passed this control on a sentence in its header.
 | `journey` | local-validator | yes | 15 | `tools/gauntlet/journey/run-journey.sh` | `cc0af7e4821413e1` |
 | `lineage-loopback` | local-validator | yes | 2 | `tools/gauntlet/lineage/run-lineage.sh` | `92ecdbc413b376b0` |
 | `relayed-vertical` | local-validator | yes | 5 | `tools/gauntlet/relayed-vertical/run-relayed-vertical.sh` | `7602376cb7809e06` |
-| `resolution-core-v3-programtest` | program-test | yes | 12 | `tools/gauntlet/resolution-core-v3/run-resolution-core-v3.sh` | `3fe2abd2f49064e3` |
+| `resolution-core-v3-programtest` | program-test | yes | 12 | `tools/gauntlet/resolution-core-v3/run-resolution-core-v3.sh` | `b6b65d6c15366723` |
 | `resolution-pre-market-funding-programtest` | program-test | yes | 3 | `tools/gauntlet/resolution-pre-market-funding/run-resolution-pre-market-funding.sh` | `8d301707583822e4` |
 | `resolution-relayed-programtest` | program-test | yes | 8 | `tools/gauntlet/resolution-relayed/run-resolution-relayed.sh` | `582bfeddcc7b7613` |
 | `resolution-sponsored-programtest` | program-test | yes | 7 | `tools/gauntlet/resolution-sponsored/run-resolution-sponsored.sh` | `161ab1a8e200521a` |
@@ -237,6 +237,7 @@ entries whose route now executes.
 | `claims/sparse_native_transfer_v1::process` | program-test | `claims-family-programtest` | `tools/gauntlet/claims-custody/claims-bindings.json` |
 | `claims/terminal_settlement_v3::process` | devnet | cohort 13 `DCLTSQ03` slot 492,154,205; cohort 14 `DCLTSQ03` slot 492,415,150; cohort 14 `DCLTSQ03` slot 492,551,404; cohort 15 `DCLTSQ03` slot 492,895,097; cohort 15 `DCLTSQ03` slot 492,896,353; cohort 15 `DCLTSQ03` slot 492,897,408; cohort 15 `DCLTSQ03` slot 492,897,766; also bound by `claims-claim-check-programtest`, `claims-rational-representation-v2-programtest` | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-14-discovered.json`<br>`docs/evidence/witnesses/cohort-15-discovered.json` |
 | `core/activate_capability_child#ActivateCapability` | blocked | blocked by rule `core/activate_capability_child#ActivateCapability` | `tools/gauntlet/blocked.json` |
+| `core/authenticate_controller_entry#(recovery_id,policy)` | never-executed | no campaign, no reason recorded | -- |
 | `core/authenticate_no_recovery_entries#None` | program-test | `resolution-core-v3-programtest` | `tools/gauntlet/resolution-core-v3/bindings.json` |
 | `core/begin_retiring::process#BeginRetiring` | devnet | cohort 15 `DCLTCRQ2` slot 492,897,913; also bound by `claims-rational-representation-v2-programtest`, `journey` | `docs/evidence/witnesses/cohort-15-discovered.json` |
 | `core/capability::process#ActivateCapability` | blocked | blocked by rule `core/capability::process#ActivateCapability` | `tools/gauntlet/blocked.json` |
@@ -258,7 +259,6 @@ entries whose route now executes.
 | `core/process_instruction#Retire` | program-test | `retirement-checkpoint-programtest` | `tools/gauntlet/retirement-checkpoint/bindings.json` |
 | `core/process_instruction#else` | blocked | blocked by rule `core/process_instruction#else` | `tools/gauntlet/blocked.json` |
 | `core/process_open#Open` | devnet | cohort 13 `DCLTGMF3` slot 491,963,072; also bound by `tier1` | `docs/evidence/witnesses/cohort-13-founding.json` |
-| `core/resolution::authenticate_recovery_policy#(recovery_id,policy)` | blocked | blocked by rule `core/resolution::authenticate_recovery_policy#(recovery_id,policy)` | `tools/gauntlet/blocked.json` |
 | `core/resolution::process#AdmitTerminal` | program-test | `resolution-core-v3-programtest` | `tools/gauntlet/resolution-core-v3/bindings.json` |
 | `core/resolution::process#CloseFund` | blocked | blocked by rule `core/resolution::process#CloseFund` | `tools/gauntlet/blocked.json` |
 | `core/resolution::process#CreateFund` | local-validator | `journey`, `resolution-core-v3-programtest`, `tier1` | `tools/gauntlet/journey/bindings.json`<br>`tools/gauntlet/tier1/bindings.json` |
@@ -315,6 +315,7 @@ entries whose route now executes.
 | `resolution/pre_market_funding_v1::process_pre_market_funding_v2` | local-validator | `resolution-pre-market-funding-programtest`, `tier1` | `tools/gauntlet/tier1/bindings.json` |
 | `resolution/process_abandon#magic` | program-test | `resolution-core-v3-programtest` | `tools/gauntlet/resolution-core-v3/bindings.json` |
 | `resolution/process_admit#AdmitTerminal` | blocked | blocked by rule `resolution/process_admit#AdmitTerminal` | `tools/gauntlet/blocked.json` |
+| `resolution/process_advance_recovery#AdvanceRecovery` | never-executed | no campaign, no reason recorded | -- |
 | `resolution/process_append#AppendObservation` | program-test | `resolution-relayed-programtest` | `tools/gauntlet/resolution-relayed/bindings.json` |
 | `resolution/process_capture#Capture` | program-test | `resolution-sponsored-programtest` | `tools/gauntlet/resolution-sponsored/bindings.json` |
 | `resolution/process_close#CloseFund` | blocked | blocked by rule `resolution/process_close#CloseFund` | `tools/gauntlet/blocked.json` |

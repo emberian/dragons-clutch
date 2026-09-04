@@ -7703,18 +7703,22 @@ mod lp_lifecycle {
             }
             Err(BuilderError::Projection("hostile-equity-candidate"))
         };
-        // Name what came back. A bare `matches!` here reports only that the
-        // hostile did not land where it was aimed, which is exactly the
-        // question when the builder refuses somewhere earlier for its own
-        // reasons.
+        // Name what came back, and name the HOSTILE'S OWN WORD for it. The
+        // builder carries a candidate projector's refusal out unaltered, and
+        // this string exists nowhere in the builder -- only in the closure
+        // above -- so the match proves both that the builder reached the
+        // candidate phase and that the closure this test installed is what
+        // refused there. Any other error is the builder refusing earlier for
+        // its own reasons, which is exactly the question a bare `matches!`
+        // could not answer.
         match build_admitted_bundle_with_candidate_v1(
             &bundle_input,
             campaign.equity_admitted(expected_selector),
             &hostile_candidate,
         ) {
-            Err(BuilderError::Projection("admitted-candidate")) => {}
+            Err(BuilderError::Projection("hostile-equity-candidate")) => {}
             Err(other) => {
-                panic!("hostile equity candidate refused as {other:?}, not at admission")
+                panic!("hostile equity candidate refused as {other:?}, not with its own cause")
             }
             Ok(_) => panic!("hostile equity candidate was admitted"),
         }
@@ -8147,18 +8151,22 @@ mod lp_lifecycle {
             }
             Err(BuilderError::Projection("hostile-scenario-candidate"))
         };
-        // Name what came back. A bare `matches!` here reports only that the
-        // hostile did not land where it was aimed, which is exactly the
-        // question when the builder refuses somewhere earlier for its own
-        // reasons.
+        // Name what came back, and name the HOSTILE'S OWN WORD for it. The
+        // builder carries a candidate projector's refusal out unaltered, and
+        // this string exists nowhere in the builder -- only in the closure
+        // above -- so the match proves both that the builder reached the
+        // candidate phase and that the closure this test installed is what
+        // refused there. Any other error is the builder refusing earlier for
+        // its own reasons, which is exactly the question a bare `matches!`
+        // could not answer.
         match build_admitted_bundle_with_candidate_v1(
             &bundle_input,
             campaign.scenario_admitted(),
             &hostile_candidate,
         ) {
-            Err(BuilderError::Projection("admitted-candidate")) => {}
+            Err(BuilderError::Projection("hostile-scenario-candidate")) => {}
             Err(other) => {
-                panic!("hostile scenario candidate refused as {other:?}, not at admission")
+                panic!("hostile scenario candidate refused as {other:?}, not with its own cause")
             }
             Ok(_) => panic!("hostile scenario candidate was admitted"),
         }

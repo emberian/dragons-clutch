@@ -215,16 +215,22 @@ export type OutageDisclosureV1 = Readonly<{
   failureEscrowOwner: string | null;
   /** How much of the failure column that escrow holds, from the same read. */
   escrowAtoms: string;
+  /** Whether the WHOLE failure column is seated in that escrow. */
+  escrowSeated: boolean;
   /**
-   * Whether an outage REFUNDS the ordinary holders.
+   * Whether an outage REFUNDS the ordinary holders, from the market's
+   * authenticated payout scale; `null` when the caller has not read it.
    *
-   * True exactly when the whole failure column is seated in this market's own
-   * escrow: the escrow cannot be paid, so the collateral goes back to whoever
-   * holds an ordinary outcome. This is read off the seating, NOT off the
-   * record's payout scale, which is the stronger question -- a market founded
-   * to refund whose column was never seated still pays whoever holds it.
+   * This and not the seating is what settles who an outage pays. A refunding
+   * basis pays one atom to every ordinary claim and NOTHING to the failure
+   * coordinate, whoever holds it, so a market founded to refund refunds even
+   * while its failure column still sits with the founder. The seating is the
+   * separate question of whether worth-nothing claims are in somebody's hands
+   * to sell.
    */
-  refunds: boolean;
+  refundsOnFailure: boolean | null;
+  /** Where the failure column actually sits, from the Positions this page read. */
+  columnNote: string;
   /** What happens under an outage, in the words a buyer needs before trading. */
   headline: string;
   /** Who is paid, named from the read rather than asserted. */
@@ -262,6 +268,11 @@ export function outageDisclosureV1(
     positions: ReadonlyArray<Readonly<{ owner: string; balances: ReadonlyArray<string> }>>;
     /** This market's own failure escrow, from `failureEscrowOwnerV1`. */
     failureEscrowOwner?: string | null;
+    /**
+     * `ProductBasisFactsV3.refundsOnFailure`, when the caller read the record.
+     * Absent means unread, and the disclosure says so rather than guessing.
+     */
+    refundsOnFailure?: boolean | null;
   }>,
 ): OutageDisclosureV1 | null {
   if (input.outcomeCount < 2 || input.supplyAtoms.length !== input.outcomeCount) return null;
@@ -298,20 +309,39 @@ export function outageDisclosureV1(
   const escrowAtoms = escrowOwner === null
     ? 0n
     : holders.find((holder) => holder.owner === escrowOwner)?.atoms ?? 0n;
-  const refunds = escrowOwner !== null && supply > 0n && escrowAtoms === supply;
+  const escrowSeated = escrowOwner !== null && supply > 0n && escrowAtoms === supply;
+  const refundsOnFailure = input.refundsOnFailure ?? null;
+  // WHO IS PAID IS THE PAYOUT SCALE'S ANSWER, NOT THE SEATING'S. A refunding
+  // basis pays one atom to every ordinary claim and nothing to the failure
+  // coordinate, so it refunds whoever holds an ordinary outcome even while the
+  // failure column still sits with the founder; a legacy basis pays the failure
+  // column to whoever holds it. Deriving the payee from the seating alone would
+  // tell a buyer on a refunding market that the founder takes everything, which
+  // is the opposite of what would happen.
+  const unread = ' This page has not read this market\u2019s payout scale, which is what settles whether the failure claim is paid at all: every market founded before this ruling pays it.';
+  const paid = holders.length === 0
+    ? `No Position this page could read holds any of the ${supply.toString()} atoms on the failure outcome, so this page cannot say who an outage would pay.`
+    : complete && named.length === 1 && named[0]!.wholeColumn
+      ? `One holder, ${named[0]!.owner}, holds every one of the ${supply.toString()} atoms on the failure outcome and would be paid all of the collateral.`
+      : complete
+        ? `${named.length} holders split the ${supply.toString()} atoms on the failure outcome and would be paid in proportion to what each holds.`
+        : `The Positions read here account for ${accounted.toString()} of the ${supply.toString()} atoms on the failure outcome; ${unaccounted.toString()} sit in Positions this page did not read, so this is a partial answer.`;
   const payee = supply === 0n
     ? 'Nothing is issued on the failure outcome, so an outage pays nobody.'
-    : refunds
-      ? `All ${supply.toString()} atoms on the failure outcome are seated in this market's own escrow, ${escrowOwner}, which is not a person and cannot be paid. An outage returns the collateral to whoever holds an ordinary outcome, in proportion to what they hold.`
+    : refundsOnFailure === true
+      ? 'This market is founded to REFUND. An outage pays one atom to every ordinary claim and nothing at all to the failure outcome, whoever holds it, so the collateral goes back to the people holding the outcomes \u2014 in proportion to what each holds. Nobody is paid for having chosen the oracle.'
+      : refundsOnFailure === false
+        ? paid
+        : `${paid}${unread}`;
+  const columnNote = supply === 0n
+    ? 'Nothing is issued on the failure outcome, so there is no failure column to hold.'
+    : escrowSeated
+      ? `All ${supply.toString()} atoms on the failure outcome are seated in this market\u2019s own escrow, ${escrowOwner}, which is not a person.`
       : escrowOwner !== null && escrowAtoms > 0n
-        ? `This market's escrow ${escrowOwner} holds ${escrowAtoms.toString()} of the ${supply.toString()} atoms on the failure outcome and the rest sits elsewhere, so an outage would pay whoever holds that rest. A partly seated escrow refunds nobody.`
-        : holders.length === 0
-          ? `No Position this page could read holds any of the ${supply.toString()} atoms on the failure outcome, so this page cannot say who an outage would pay.`
-          : complete && named.length === 1 && named[0]!.wholeColumn
-            ? `One holder, ${named[0]!.owner}, holds every one of the ${supply.toString()} atoms on the failure outcome and would be paid all of the collateral.`
-            : complete
-              ? `${named.length} holders split the ${supply.toString()} atoms on the failure outcome and would be paid in proportion to what each holds.`
-              : `The Positions read here account for ${accounted.toString()} of the ${supply.toString()} atoms on the failure outcome; ${unaccounted.toString()} sit in Positions this page did not read, so this is a partial answer.`;
+        ? `This market\u2019s escrow ${escrowOwner} holds ${escrowAtoms.toString()} of the ${supply.toString()} atoms on the failure outcome and the rest sits elsewhere: a partly seated escrow.`
+        : escrowOwner !== null
+          ? `None of the ${supply.toString()} atoms on the failure outcome is seated in this market\u2019s own escrow ${escrowOwner}; the column is held by ordinary Positions.`
+          : `This page did not derive this market\u2019s failure escrow, so it says nothing about where the failure column is seated.`;
   return Object.freeze({
     failureOutcome,
     supplyAtoms: supply.toString(),
@@ -321,9 +351,11 @@ export function outageDisclosureV1(
     complete,
     failureEscrowOwner: escrowOwner,
     escrowAtoms: escrowAtoms.toString(),
-    refunds,
-    headline: refunds
-      ? `If the data source never reports, this market settles on outcome ${failureOutcome} \u2014 its failure outcome \u2014 and HOLDERS ARE REFUNDED: the collateral goes back to whoever holds an ordinary outcome, whichever of them would have been right. Nobody is paid for the failure claim, because this market's own escrow holds it.`
+    escrowSeated,
+    refundsOnFailure,
+    columnNote,
+    headline: refundsOnFailure === true
+      ? `If the data source never reports, this market settles on outcome ${failureOutcome} \u2014 its failure outcome \u2014 and HOLDERS ARE REFUNDED: the collateral goes back to whoever holds an ordinary outcome, whichever of them would have been right. The failure claim is paid nothing.`
       : `If the data source never reports, this market settles on outcome ${failureOutcome} \u2014 its failure outcome \u2014 and the whole collateral is paid to whoever holds that claim. Everyone holding one of the other outcomes is paid nothing, whichever of them would have been right.`,
     payee,
   });

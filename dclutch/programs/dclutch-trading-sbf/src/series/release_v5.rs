@@ -1100,7 +1100,10 @@ mod tests {
     use dclutch_market_core_codec::{
         FoundingIntentV5, Identity, SeriesFoundingPermitV1, SeriesPermitExpiryRequestV1,
     };
-    use dclutch_series_v3_kernel::request::encode_series_action_header_v3;
+    use dclutch_series_v3_kernel::request::{
+        SERIES_ACTION_HEADER_BYTES_V3, encode_series_action_header_v3,
+    };
+    use dclutch_series_v3_kernel::{series_action_request_bytes_v3, series_proof_count_v3};
 
     use crate::series::{
         artifacts_v3::{
@@ -1238,6 +1241,13 @@ mod tests {
     }
 
     fn current_source_with_root(parent_root: u8) -> SeriesOwnedReleaseSourceV5 {
+        current_source_with_root_and_count(parent_root, 1)
+    }
+
+    fn current_source_with_root_and_count(
+        parent_root: u8,
+        template_occurrence_count: u32,
+    ) -> SeriesOwnedReleaseSourceV5 {
         let root = [parent_root; 32];
         let prepare_initialize = projected(ProjectedCustodyOperationV1::Initialize, root)
             .encode()
@@ -1295,7 +1305,7 @@ mod tests {
         let expire_lengths = [0; SERIES_EXPIRE_FIXED_ACCOUNT_COUNT_V5 as usize];
         emit_current_series_release_source_v5(SeriesCurrentReleaseInputV5 {
             template: id(18),
-            template_occurrence_count: 1,
+            template_occurrence_count,
             consume_shadow_certificate_program: id(90),
             prepare_profile: SeriesPrepareAccountProfileInputV5 {
                 fixed_data_lengths: &prepare_lengths,
@@ -1336,9 +1346,13 @@ mod tests {
     }
 
     fn family_request(action: SeriesActionV3) -> Vec<u8> {
+        family_request_with_proof(action, 0)
+    }
+
+    fn family_request_with_proof(action: SeriesActionV3, proof_count: u8) -> Vec<u8> {
         let occurrence = action.occurrence_bound().then(|| id(30));
         let ticket = (action != SeriesActionV3::Close).then(|| id(31));
-        encode_series_action_header_v3(
+        let mut request = encode_series_action_header_v3(
             action,
             id(18),
             occurrence,
@@ -1349,10 +1363,102 @@ mod tests {
             } else {
                 1
             },
-            0,
+            proof_count,
         )
         .expect("family request")
-        .to_vec()
+        .to_vec();
+        for item in 0..proof_count {
+            request.extend_from_slice(&[0x40_u8.wrapping_add(item); 32]);
+        }
+        request
+    }
+
+    /// THE FIRST NONEMPTY PROOF ANY RELEASE-LEVEL TEST HAS COMPILED.
+    ///
+    /// Every other test in this module fixes `template_occurrence_count` at 1,
+    /// whose canonical proof is EMPTY -- so the whole release bank has only
+    /// ever been compiled and reauthenticated for the one Template shape whose
+    /// Expire effect declares no borrowed range and whose family request is the
+    /// bare 128-byte header. `97ce7a748` keyed the family's proof geometry on
+    /// the Template that owns it and
+    /// `profile_width_and_effect_coverage_agree_for_every_occurrence_count`
+    /// walks the artifacts across the whole occurrence-count family; this walks
+    /// the RELEASE, which is where the RequestProfile's pinned width meets the
+    /// selection path a Hot route actually takes.
+    ///
+    /// Two occurrences is the smallest Template with a proof:
+    /// `series_proof_count_v3(2)` is 1, so the request is 160 bytes and route
+    /// 4 declares exactly one range.
+    #[test]
+    fn a_two_occurrence_bank_compiles_and_reauthenticates_with_a_nonempty_proof() {
+        let occurrence_count = 2;
+        let proof_count = series_proof_count_v3(occurrence_count);
+        assert_eq!(proof_count, 1);
+        assert_eq!(
+            series_action_request_bytes_v3(occurrence_count),
+            SERIES_ACTION_HEADER_BYTES_V3 + 32
+        );
+        let owned = current_source_with_root_and_count(7, occurrence_count);
+        let release = compile_series_release_v5(owned.as_source()).expect("five-entry release");
+        assert_eq!(
+            CapabilityProgramSetV2::decode(&release.program_set)
+                .expect("SetV2")
+                .entry_count(),
+            SERIES_RELEASE_ACTION_COUNT_V5 as u16
+        );
+        for action in [
+            SeriesActionV3::Prepare,
+            SeriesActionV3::Consume,
+            SeriesActionV3::Expire,
+            SeriesActionV3::Retire,
+            SeriesActionV3::Close,
+        ] {
+            // Only the three OCCURRENCE actions carry a proof; `Retire` and
+            // `Close` name no occurrence and the kernel's own shape rule
+            // refuses a nonzero count for them.
+            let carries_proof = !matches!(action, SeriesActionV3::Retire | SeriesActionV3::Close);
+            let request = family_request_with_proof(
+                action,
+                if carries_proof {
+                    u8::try_from(proof_count).expect("proof count width")
+                } else {
+                    0
+                },
+            );
+            assert_eq!(
+                request.len(),
+                if carries_proof {
+                    series_action_request_bytes_v3(occurrence_count)
+                } else {
+                    SERIES_ACTION_HEADER_BYTES_V3
+                }
+            );
+            let selected =
+                authenticate_series_selected_action_v5(&release, owned.as_source(), &request)
+                    .expect("selected action");
+            assert_eq!(selected.action, action);
+            assert_eq!(selected.request_bytes, request);
+            assert_eq!(selected.descriptor, release.descriptors[action as usize]);
+        }
+        // WHERE THE WIDTH IS ACTUALLY DECIDED, measured rather than assumed.
+        // Selection does NOT reject the one-occurrence bank's empty-proof
+        // Expire request against this release: it admits it, because selection
+        // authenticates the ARTIFACTS and the generic Hot path's
+        // `require_request_shape` is what compares the complete family request
+        // against the RequestProfile. So the release's statement of the width
+        // is the profile, and this is it -- 160 bytes for a two-occurrence
+        // Template against the 128 the empty-proof request carries.
+        let empty_proof = family_request(SeriesActionV3::Expire);
+        let admitted =
+            authenticate_series_selected_action_v5(&release, owned.as_source(), &empty_proof)
+                .expect("selection authenticates artifacts, not request width");
+        let profile =
+            RequestProfileV1::decode(&admitted.artifacts.request_profile).expect("RequestProfile");
+        assert_eq!(
+            profile.request_bytes(0),
+            Ok(series_action_request_bytes_v3(occurrence_count))
+        );
+        assert_eq!(empty_proof.len(), SERIES_ACTION_HEADER_BYTES_V3);
     }
 
     #[test]

@@ -326,12 +326,12 @@ describe('outageDisclosureV1', () => {
     expect(failureEscrowOwnerV1(witnessClaims, witnessMarket, 2)).not.toBe(witnessEscrow);
   });
 
-  it('says HOLDERS ARE REFUNDED when the failure column is seated in the escrow', () => {
-    // Cohort-13's numbers with the ruling applied: the founder holds the three
-    // ordinary columns short the 200 atoms the crossing sold, and the failure
-    // column is seated where nobody can be paid for it.
+  it('says HOLDERS ARE REFUNDED off the payout scale, not off the seating', () => {
+    // Cohort-13's numbers with the ruling applied end to end: a refunding
+    // record AND the failure column seated where nobody can be paid for it.
     const disclosure = outageDisclosureV1({
       ...cohort13,
+      refundsOnFailure: true,
       failureEscrowOwner: witnessEscrow,
       positions: [
         { owner: founder, balances: ['499999800', '500000000', '500000000', '0'] },
@@ -339,41 +339,75 @@ describe('outageDisclosureV1', () => {
         { owner: witnessEscrow, balances: ['0', '0', '0', '500000000'] },
       ],
     });
-    expect(disclosure!.refunds).toBe(true);
+    expect(disclosure!.refundsOnFailure).toBe(true);
+    expect(disclosure!.escrowSeated).toBe(true);
     expect(disclosure!.escrowAtoms).toBe('500000000');
     expect(disclosure!.headline).toContain('HOLDERS ARE REFUNDED');
-    expect(disclosure!.payee).toContain(witnessEscrow);
+    expect(disclosure!.columnNote).toContain(witnessEscrow);
     // The founder is named nowhere as a payee, which is the whole ruling.
     expect(disclosure!.payee).not.toContain(founder);
   });
 
-  it('refuses to claim a refund when the escrow holds only part of the column', () => {
+  /**
+   * THE CASE THAT MAKES THE SCALE LOAD-BEARING, and it is the one cohort-16
+   * actually founds: a refunding record whose failure column is still seated
+   * with the founder, because the founding that seats the escrow is not built.
+   * A disclosure keyed on the seating would say the founder takes all of it,
+   * which is the OPPOSITE of what the payout vector does.
+   */
+  it('refunds on a refunding record even while the founder still holds the column', () => {
     const disclosure = outageDisclosureV1({
       ...cohort13,
+      refundsOnFailure: true,
+      failureEscrowOwner: witnessEscrow,
+      positions: [{ owner: founder, balances: ['499999800', '500000000', '500000000', '500000000'] }],
+    });
+    expect(disclosure!.escrowSeated).toBe(false);
+    expect(disclosure!.headline).toContain('HOLDERS ARE REFUNDED');
+    expect(disclosure!.payee).toContain('founded to REFUND');
+    expect(disclosure!.payee).not.toContain(founder);
+    // And the seating is still reported, as the separate fact it is: those
+    // claims are worth nothing and are still in somebody's hands to sell.
+    expect(disclosure!.columnNote).toContain('None of the 500000000 atoms');
+  });
+
+  it('names the holder on a LEGACY record, whatever the escrow holds', () => {
+    const disclosure = outageDisclosureV1({
+      ...cohort13,
+      refundsOnFailure: false,
+      failureEscrowOwner: witnessEscrow,
+      positions: [{ owner: founder, balances: ['499999800', '500000000', '500000000', '500000000'] }],
+    });
+    expect(disclosure!.refundsOnFailure).toBe(false);
+    expect(disclosure!.payee).toContain(founder);
+    expect(disclosure!.payee).toContain('every one of the 500000000 atoms');
+    expect(disclosure!.payee).not.toContain('payout scale');
+  });
+
+  it('says what it did not read when the payout scale was not read', () => {
+    const disclosure = outageDisclosureV1({
+      ...cohort13,
+      failureEscrowOwner: witnessEscrow,
+      positions: [{ owner: founder, balances: ['499999800', '500000000', '500000000', '500000000'] }],
+    });
+    expect(disclosure!.refundsOnFailure).toBeNull();
+    expect(disclosure!.payee).toContain(founder);
+    expect(disclosure!.payee).toContain('has not read this market\u2019s payout scale');
+  });
+
+  it('reports a partly seated escrow as the partial fact it is', () => {
+    const disclosure = outageDisclosureV1({
+      ...cohort13,
+      refundsOnFailure: true,
       failureEscrowOwner: witnessEscrow,
       positions: [
         { owner: witnessEscrow, balances: ['0', '0', '0', '300000000'] },
         { owner: founder, balances: ['0', '0', '0', '200000000'] },
       ],
     });
-    expect(disclosure!.refunds).toBe(false);
+    expect(disclosure!.escrowSeated).toBe(false);
     expect(disclosure!.escrowAtoms).toBe('300000000');
-    expect(disclosure!.payee).toContain('A partly seated escrow refunds nobody.');
-    expect(disclosure!.headline).not.toContain('HOLDERS ARE REFUNDED');
-  });
-
-  it('keeps saying the founder is paid on a market whose column was never seated', () => {
-    // The same page, the same derivation, on cohort-13 as it actually stands.
-    // A disclosure that read the escrow into existence would be worse than none.
-    const disclosure = outageDisclosureV1({
-      ...cohort13,
-      failureEscrowOwner: witnessEscrow,
-      positions: [{ owner: founder, balances: ['499999800', '500000000', '500000000', '500000000'] }],
-    });
-    expect(disclosure!.refunds).toBe(false);
-    expect(disclosure!.escrowAtoms).toBe('0');
-    expect(disclosure!.payee).toContain(founder);
-    expect(disclosure!.payee).toContain('every one of the 500000000 atoms');
+    expect(disclosure!.columnNote).toContain('a partly seated escrow');
   });
 
   it('refuses rather than guessing when the read does not line up', () => {

@@ -24,7 +24,7 @@ clearing's three owed rulings (0032), the founder bond's mode (0033) and the
 ensemble's flagship parameters (0034). Statuses are load-bearing: PROVISIONAL
 means ember may reverse it at the cost the record's last section states, and
 OPEN means nobody has ruled. Counted from the records below rather than kept
-by hand: **14 PROVISIONAL, 1 OPEN**; every other
+by hand: **15 PROVISIONAL, 0 OPEN**; every other
 record is accepted, adopted, ratified or ruled.
 
 | decision | status |
@@ -56,7 +56,7 @@ record is accepted, adopted, ratified or ruled.
 | [Decision 0025: an oracle outage refunds the holders, it does not pay the founder](../decisions/0025-an-outage-refunds-rather-than-paying-the-founder.md) | **PROVISIONAL — ruled by the orchestrator on 2026-09-04 under ember's standing goal, amended by ember at 10:15 EDT to require that the pathways be explained and robust, and reversible at the cost §7 states**. |
 | [Decision 0026: mainnet deployment follows assurance, and is not part of feature completion](../decisions/0026-mainnet-follows-assurance.md) | **PROVISIONAL — ruled by the orchestrator on 2026-09-04 under ember's standing goal, confirmed by ember at 10:15 EDT, and reversible at the cost §7 states**. |
 | [Decision 0027: recovery is kept, as one funded ordered ladder that exhausts into the failure selector](../decisions/0027-recovery-is-one-funded-ordered-ladder.md) | **PROVISIONAL — ruled by the orchestrator on 2026-09-04 under ember's standing goal, amended by ember at 10:15 EDT to require robust failure pathways, and reversible at the cost §7 states**. |
-| [Decision 0028: the accelerator output page — open, with a read](../decisions/0028-the-accelerator-output-page.md) | **OPEN — ember asked at 10:15 EDT 2026-09-04 for the best architectural course rather than for a switch, so this record carries a READ and not a ruling, and decision 0003 stays unamended until ember rules**. |
+| [Decision 0028: the accelerator output page — open, with a read](../decisions/0028-the-accelerator-output-page.md) | **PROVISIONAL — ruled 2026-09-04 14:10 EDT by the orchestrator under the standing goal (option (a), cohort-17; see the addendum); ember may reverse. |
 | [Decision 0029: the product list — what gets built, what is refused, and why each refusal is load-bearing](../decisions/0029-the-product-list-nine-rulings.md) | **PROVISIONAL — nine items ruled by the orchestrator on 2026-09-04 under ember's standing goal, answered by ember at 10:15 EDT with "build", and reversible item by item at the costs §7 states**. |
 | [Decision 0030: an account's rent is fixed when it is funded, and the fact persisted is the RATE](../decisions/0030-rent-is-fixed-when-an-account-is-funded.md) | **RULED by the orchestrator on 2026-09-04 under ember's standing goal, put to ember on the docket as D8 the same morning and not objected to at the 10:15 EDT reading, landed the same day, and reversible at the cost §7 states**. |
 | [Decision 0031: the mechanism agenda — six directions explored as designs, and cohort-17 is the mechanism cohort](../decisions/0031-the-mechanism-agenda.md) | **PROVISIONAL — the agenda, its design-first form and its order ruled by the orchestrator on 2026-09-04 under ember's standing goal and under ember's own instruction to explore all six, and reversible direction by direction at the cost §7 states**. |
