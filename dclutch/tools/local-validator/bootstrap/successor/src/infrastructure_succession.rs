@@ -55,8 +55,10 @@
 //! the ceremony can be checked against the live chain BEFORE the deployer key
 //! is fetched -- leaving the signature as the last unknown rather than the
 //! first blocker. This matters more here than anywhere else in this binary:
-//! the succession spends the V2 domain's ONE vacancy, and there is no second
-//! attempt at it. A simulation is a decision aid before a write and never
+//! the succession spends the V2 domain's ONE SUCCESSION, and there is no second
+//! attempt at it. (The domain is not necessarily vacant: since `c60b25e8` a
+//! cohort is born at V2, and the ceremony supersedes that genesis profile in
+//! place. What is spent once is the succession, not the account.) A simulation is a decision aid before a write and never
 //! evidence that one happened; the 224 bytes this tool reports as landed are
 //! read back off the chain and byte-compared against what it projected.
 
@@ -66,7 +68,7 @@ use dclutch_operator::{
     Finality, Observation, ObservedAccount,
     infrastructure_succession_v1::{
         CoreInfrastructureSuccessionReportV1, CoreInfrastructureSuccessionStateV1,
-        InfrastructureBindingV1, PredecessorRecordObservationV1,
+        InfrastructureBindingV1, PredecessorRecordObservationV1, SuccessionProfileStandingV1,
         build_core_infrastructure_succession_v1,
     },
 };
@@ -409,8 +411,10 @@ fn plan_for_values_v1(
     let mut observed = Vec::with_capacity(keys.len());
     for (key, account) in keys.iter().zip(accounts) {
         observed.push(match account {
-            // A vacant address is a real observation: the V2 profile is
-            // expected to be exactly this, and conjunct 6 reads it.
+            // A vacant address is a real observation, and conjunct 6 reads
+            // it. On a cohort born at V2 the V2 profile is present instead and
+            // arrives through the `Some` arm; both are standings the ceremony
+            // admits, and the builder is what tells them apart.
             None => ObservedAccount {
                 observation,
                 key: *key,
@@ -571,8 +575,8 @@ fn succeed_v1(mut rpc: Rpc, arguments: &ArgumentsV1, cluster: &str) -> Result<()
     if !outcome.accepted() {
         return Err(Error::new(
             "refusing to send: the cluster refused this frame in simulation. Nothing about the \
-             succession changes between a simulation and a send, and this domain has exactly one \
-             vacancy, so a refused simulation is a refused ceremony.",
+             succession changes between a simulation and a send, and this domain gets exactly \
+             one succession, so a refused simulation is a refused ceremony.",
         ));
     }
 
@@ -718,7 +722,17 @@ fn consenting_authorities(
 fn self_report(arguments: &ArgumentsV1, report: &CoreInfrastructureSuccessionReportV1) {
     println!("infrastructure succession");
     println!("  core             {}", arguments.core);
-    println!("  profile          {} (vacant)", report.profile);
+    println!(
+        "  profile          {} ({})",
+        report.profile,
+        match report.profile_standing {
+            SuccessionProfileStandingV1::Vacant => "vacant",
+            // Since c60b25e8 this is the ordinary standing: initialization
+            // writes the cohort's genesis V2, and the ceremony supersedes it in
+            // place rather than creating an account.
+            SuccessionProfileStandingV1::BornAtV2 => "genesis V2, succession unspent",
+        }
+    );
     println!("  bump             {}", report.profile_bump);
     println!(
         "  rent debit       {} lamports",

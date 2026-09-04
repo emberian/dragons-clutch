@@ -33,6 +33,15 @@
 //! refused by name rather than quietly corrected, because the disagreement
 //! means the caller is describing a different chain than the one it fetched.
 //!
+//! Conjunct 6 is ONE SUCCESSION PER DOMAIN, not one V2 per domain. It was raw
+//! vacancy while this ceremony was the only writer of a V2; since `c60b25e8` a
+//! genesis cohort writes its own V2 at initialization, and vacancy would refuse
+//! the first real succession of every cohort that started clean — reinstating
+//! P-008, the protocol-wide brick this ceremony exists to repair, for exactly
+//! the cohorts that never carried the defect. The distinction needs no new
+//! field: a profile naming the two genesis sentinels has not spent its
+//! succession, and one naming two real artifact releases has.
+//!
 //! Like every other module in this crate it performs no RPC, holds no key,
 //! signs nothing and submits nothing. [`CoreInfrastructureSuccessionReportV1`]
 //! names the signatures the frame will require; obtaining them is the caller's
@@ -100,7 +109,7 @@ pub struct PredecessorRecordObservationV1 {
 pub struct CoreInfrastructureSuccessionStateV1 {
     /// System wallet signing and paying the V2 profile's rent.
     pub payer: ObservedAccount,
-    /// The derived V2 profile PDA, which conjunct 6 requires to be vacant.
+    /// The derived V2 profile PDA, vacant or holding an unspent genesis V2.
     pub profile: ObservedAccount,
     /// The written V1 profile PDA this succession succeeds.
     pub predecessor_profile: ObservedAccount,
@@ -201,10 +210,17 @@ pub struct CoreInfrastructureSuccessionReportV1 {
     pub instruction: Instruction,
     /// Shared finalized observation selecting every input.
     pub observation: Observation,
-    /// Canonical derived V2 profile address, the domain's one vacancy.
+    /// Canonical derived V2 profile address, the domain's one succession.
     pub profile: Pubkey,
     /// Canonical bump Core will sign that account into existence with.
     pub profile_bump: u8,
+    /// What conjunct 6 found standing at that address.
+    ///
+    /// A caller that prints "vacant" unconditionally is describing a chain it
+    /// did not read: since `c60b25e8` a cohort writes its own genesis V2 at
+    /// initialization, so `BornAtV2` is the ordinary standing and `Vacant` is
+    /// the one only a pre-genesis-arm Core can present.
+    pub profile_standing: SuccessionProfileStandingV1,
     /// The exact 224 bytes this ceremony would persist, composed locally.
     ///
     /// A caller can print this and byte-compare it against what lands. The
@@ -219,11 +235,14 @@ pub struct CoreInfrastructureSuccessionReportV1 {
     /// authority and consented to both upgrades, a succession that moved both
     /// bindings still needs exactly two signatures.
     pub required_signers: Vec<Pubkey>,
-    /// Exact lamports the payer will spend creating the 224-byte profile.
+    /// Exact lamports the payer will spend on the 224-byte profile.
     ///
-    /// The route tops the PDA up to rent exemption rather than funding it
-    /// outright (`create_profile_v2`), so lamports already sitting on the
-    /// vacant address reduce this debit to exactly what is still owed.
+    /// On a vacant domain the route tops the PDA up to rent exemption rather
+    /// than funding it outright (`create_profile_v2`), so lamports already
+    /// sitting on the address reduce this debit to exactly what is still owed.
+    /// On a `BornAtV2` domain it is **zero**: the account already exists at the
+    /// exact width, already Core-owned and already rent-exempt, and the route
+    /// overwrites its bytes without a transfer.
     pub profile_rent_debit_lamports: u64,
 }
 
@@ -297,8 +316,14 @@ pub enum Error {
     ConsentAuthorityIsPayer,
     /// Conjunct 6: the presented profile account is not the derived V2 address.
     InvalidProfileAddress,
-    /// Conjunct 6: the V2 domain is no longer vacant — one succession per
+    /// Conjunct 6: the V2 domain's succession is spent — one succession per
     /// domain, ever, and this one already happened.
+    ///
+    /// A profile naming two real predecessor artifact releases has succeeded;
+    /// one naming the two genesis sentinels has not, and is overwritten in
+    /// place. Anything else at the address — a foreign owner, the wrong width,
+    /// an executable, bytes that do not decode as a V2 — is this refusal too:
+    /// an account the ceremony cannot read is never room to write.
     AlreadySucceeded,
     /// The payer could not cover the exact profile rent debit.
     InsufficientPayer,
@@ -316,8 +341,8 @@ pub enum Error {
 /// # Errors
 ///
 /// Refuses locally on everything it can see the chain will refuse: the V2 PDA
-/// at another address or no longer vacant ([`Error::InvalidProfileAddress`],
-/// [`Error::AlreadySucceeded`]), an absent or undecodable predecessor profile
+/// at another address, or one whose succession is already spent
+/// ([`Error::InvalidProfileAddress`], [`Error::AlreadySucceeded`]), an absent or undecodable predecessor profile
 /// ([`Error::PredecessorProfileAbsent`]), conjunct 1's record and deployment
 /// authentication ([`Error::InvalidSuccessorRecord`],
 /// [`Error::InvalidDeployment`], [`Error::InfrastructureProgramIsCore`]),
@@ -420,7 +445,8 @@ pub fn build_core_infrastructure_succession_v1(
     )
     .map_err(|_| Error::ProfileIncoherent)?;
 
-    // Conjunct 6: the address, and the vacancy that forbids a second ceremony.
+    // Conjunct 6: the address, and the ONE SUCCESSION PER DOMAIN that forbids a
+    // second ceremony. Not one V2 per domain -- see `profile_standing`.
     let (profile, profile_bump) = Pubkey::find_program_address(
         &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
         &core_program,
@@ -428,15 +454,19 @@ pub fn build_core_infrastructure_succession_v1(
     if state.profile.key != profile {
         return Err(Error::InvalidProfileAddress);
     }
-    if state.profile.owner != system_program::ID
-        || state.profile.executable
-        || !state.profile.data.is_empty()
-    {
-        return Err(Error::AlreadySucceeded);
-    }
-    let profile_rent_debit_lamports = rent
-        .minimum_balance(PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2)
-        .saturating_sub(state.profile.lamports);
+    let standing = profile_standing(core_program, &state.profile)?;
+    // Exactly `create_profile_v2`'s two paths. A vacant domain is created and
+    // topped up to rent exemption; a genesis profile is OVERWRITTEN IN PLACE,
+    // and that path transfers nothing at all -- the account is already
+    // Core-owned at the exact width, and the System program would refuse both
+    // allocate and assign. Reporting a debit the ceremony will not spend would
+    // be a forecast of a transfer that never happens.
+    let profile_rent_debit_lamports = match standing {
+        SuccessionProfileStandingV1::Vacant => rent
+            .minimum_balance(PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2)
+            .saturating_sub(state.profile.lamports),
+        SuccessionProfileStandingV1::BornAtV2 => 0,
+    };
     if state.payer.lamports < profile_rent_debit_lamports {
         return Err(Error::InsufficientPayer);
     }
@@ -470,6 +500,7 @@ pub fn build_core_infrastructure_succession_v1(
         observation,
         profile,
         profile_bump,
+        profile_standing: standing,
         record,
         consent: [registry_arm.consent, rent_arm.consent],
         required_signers,
@@ -562,6 +593,56 @@ fn authenticate_predecessor_profile(
     }
     ProtocolInfrastructureProfileV1::decode(&predecessor_profile.data)
         .map_err(|_| Error::PredecessorProfileAbsent)
+}
+
+/// What the V2 domain holds when a succession is composed against it.
+///
+/// The two states conjunct 6 ADMITS. `Succeeded` is not a variant here because
+/// it is not a standing a report can carry: the builder refuses it by name.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SuccessionProfileStandingV1 {
+    /// No V2 has ever been written. The route creates the account.
+    Vacant,
+    /// A genesis profile stands here, born at V2 with its succession unspent.
+    ///
+    /// The route overwrites it in place and transfers nothing.
+    BornAtV2,
+}
+
+/// Conjunct 6's classification of the V2 domain, mirroring the route exactly.
+///
+/// This is `dclutch_core_sbf::infrastructure_v2::profile_succession_state_v2`
+/// restated rather than imported — a host builder crate does not link the Core
+/// program — and the campaign that drives the compiled program is what proves
+/// the two agree. Restating it is why it drifted once: `c60b25e8` changed the
+/// route's conjunct 6 from RAW VACANCY to ONE SUCCESSION PER DOMAIN and this
+/// side was left behind, so the builder refused, before it built anything, the
+/// first succession of every cohort born at V2 — which since that commit is
+/// every cohort. The chain would have taken it.
+///
+/// Anything occupying the PDA that is not a decodable Core-owned V2 of the
+/// exact width is `AlreadySucceeded`, never room to write: an account this
+/// ceremony cannot read is not one it gets to overwrite. That is what makes a
+/// V2 profile under a FOREIGN Core — a decodable profile at a PDA this Core did
+/// not derive, or a profile this Core does not own — refuse by the no-fork name
+/// rather than by a decode accident.
+fn profile_standing(
+    core_program: Pubkey,
+    profile: &ObservedAccount,
+) -> Result<SuccessionProfileStandingV1, Error> {
+    if profile.owner == system_program::ID && profile.data.is_empty() && !profile.executable {
+        return Ok(SuccessionProfileStandingV1::Vacant);
+    }
+    if profile.owner != core_program
+        || profile.executable
+        || profile.data.len() != PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2
+    {
+        return Err(Error::AlreadySucceeded);
+    }
+    match ProtocolInfrastructureProfileV2::decode(&profile.data) {
+        Ok(standing) if standing.born_at_v2() => Ok(SuccessionProfileStandingV1::BornAtV2),
+        _ => Err(Error::AlreadySucceeded),
+    }
 }
 
 /// Conjunct 1 for one selected binding: its record, and the code it describes.
@@ -922,7 +1003,10 @@ mod tests {
 
     use dclutch_core_contract::ContentId;
     use dclutch_registry_contract::ArtifactUpgradePolicyV1;
-    use dclutch_release_set_contract::ProgramIdentityV1;
+    use dclutch_release_set_contract::{
+        PROTOCOL_INFRASTRUCTURE_GENESIS_REGISTRY_ARTIFACT_V2,
+        PROTOCOL_INFRASTRUCTURE_GENESIS_RENT_ARTIFACT_V2, ProgramIdentityV1,
+    };
 
     use super::*;
 
@@ -1263,6 +1347,28 @@ mod tests {
         fn report(&self) -> CoreInfrastructureSuccessionReportV1 {
             self.build().expect("succession")
         }
+
+        /// Plant the genesis V2 this cohort was born with at the V2 domain.
+        ///
+        /// Exactly what `InitializeProtocolInfrastructureV1` leaves there since
+        /// `c60b25e8`: the same two bindings V1 names, with the two genesis
+        /// sentinels standing in for predecessor ids it has none of.
+        fn born_at_v2(&mut self) -> ProtocolInfrastructureProfileV2 {
+            let genesis = ProtocolInfrastructureProfileV2::genesis(
+                self.v1_profile.registry(),
+                self.v1_profile.rent(),
+            )
+            .expect("genesis V2");
+            self.occupy(self.core_program, genesis.to_bytes().to_vec());
+            genesis
+        }
+
+        /// Stand `data` at the V2 domain under `owner`, rent-exempt for its width.
+        fn occupy(&mut self, owner: Pubkey, data: Vec<u8>) {
+            self.state.profile.owner = owner;
+            self.state.profile.lamports = self.rent.minimum_balance(data.len());
+            self.state.profile.data = data;
+        }
     }
 
     #[test]
@@ -1539,6 +1645,135 @@ mod tests {
             .minimum_balance(PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2);
         fixture.state.profile.data = vec![0; PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2];
         assert_eq!(fixture.build(), Err(Error::AlreadySucceeded));
+    }
+
+    /// The regression `c60b25e8` left behind, and the reason it was invisible:
+    /// the route changed conjunct 6 and this restatement did not, so the
+    /// builder refused — before it built anything — the first succession of
+    /// every cohort born at V2, which since that commit is every cohort. The
+    /// chain would have taken it.
+    #[test]
+    fn the_genesis_v2_a_cohort_is_born_with_is_superseded_not_refused() {
+        let vacant = Fixture::new().report();
+
+        let mut fixture = Fixture::new();
+        let genesis = fixture.born_at_v2();
+        assert!(genesis.born_at_v2());
+        let report = fixture.report();
+
+        assert_eq!(
+            report.profile_standing,
+            SuccessionProfileStandingV1::BornAtV2
+        );
+        // The account already exists, Core-owned, at the exact width and
+        // rent-exempt, so `create_profile_v2` overwrites it and transfers
+        // nothing. A forecast debit here would be a transfer that never happens.
+        assert_eq!(report.profile_rent_debit_lamports, 0);
+        assert_ne!(vacant.profile_rent_debit_lamports, 0);
+
+        // The standing changes the debit and nothing else. Same address, same
+        // frame, same bytes — and those bytes name the two REAL predecessors
+        // read out of the live V1, never a sentinel, which is the whole of the
+        // soundness argument for reading the ids instead of the vacancy.
+        assert_eq!(report.profile, vacant.profile);
+        assert_eq!(report.instruction, vacant.instruction);
+        assert_eq!(report.record, vacant.record);
+        assert!(!report.record.born_at_v2());
+        assert_eq!(
+            report.record.predecessor_registry_artifact(),
+            fixture.v1_profile.registry().artifact_release()
+        );
+    }
+
+    /// One succession per domain, ever — and an account this ceremony cannot
+    /// read is never room to write.
+    ///
+    /// Each arm stands something at the exact derived address that a decode
+    /// alone might have accepted: a genesis profile belonging to a FOREIGN
+    /// Core, an executable, the predecessor V1 width, and a profile that has
+    /// already spent its succession. All four are the no-fork refusal, and none
+    /// of them reaches the encoder.
+    #[test]
+    fn a_v2_domain_this_ceremony_cannot_claim_refuses_as_succeeded() {
+        let genesis = {
+            let mut fixture = Fixture::new();
+            fixture.born_at_v2().to_bytes().to_vec()
+        };
+
+        // A perfectly well-formed genesis V2 under someone else's Core.
+        let mut fixture = Fixture::new();
+        fixture.occupy(seeded(211), genesis.clone());
+        assert_eq!(fixture.build(), Err(Error::AlreadySucceeded));
+
+        // Core-owned, right width, right bytes, but executable.
+        let mut fixture = Fixture::new();
+        fixture.occupy(fixture.core_program, genesis.clone());
+        fixture.state.profile.executable = true;
+        assert_eq!(fixture.build(), Err(Error::AlreadySucceeded));
+
+        // Core-owned but the predecessor V1 width, which decodes as nothing.
+        let mut fixture = Fixture::new();
+        let narrow = genesis[..PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1].to_vec();
+        fixture.occupy(fixture.core_program, narrow);
+        assert_eq!(fixture.build(), Err(Error::AlreadySucceeded));
+
+        // Exact width and owner, one byte of magic wrong: undecodable.
+        let mut fixture = Fixture::new();
+        let mut corrupt = genesis.clone();
+        put(&mut corrupt, 0, &[0xff]);
+        fixture.occupy(fixture.core_program, corrupt);
+        assert_eq!(fixture.build(), Err(Error::AlreadySucceeded));
+
+        // The one this rule exists to still refuse: a profile naming two real
+        // predecessor artifact releases has spent its succession.
+        let mut fixture = Fixture::new();
+        let spent = ProtocolInfrastructureProfileV2::new(
+            fixture.registry_binding,
+            fixture.rent_binding,
+            fixture.v1_profile.registry().artifact_release(),
+            fixture.v1_profile.rent().artifact_release(),
+        )
+        .expect("spent V2");
+        assert!(!spent.born_at_v2());
+        fixture.occupy(fixture.core_program, spent.to_bytes().to_vec());
+        assert_eq!(fixture.build(), Err(Error::AlreadySucceeded));
+    }
+
+    /// Half a forgery is still a forgery.
+    ///
+    /// One sentinel and one real predecessor id is a shape neither writer can
+    /// produce — genesis writes both sentinels, the ceremony writes two ids
+    /// read out of the live V1 — so it must not buy a second succession. The
+    /// route requires BOTH; so does this side.
+    #[test]
+    fn a_half_sentinel_profile_does_not_buy_a_second_succession() {
+        let genesis_registry =
+            ArtifactReleaseIdV1::new(PROTOCOL_INFRASTRUCTURE_GENESIS_REGISTRY_ARTIFACT_V2)
+                .expect("sentinel");
+        let genesis_rent = ArtifactReleaseIdV1::new(PROTOCOL_INFRASTRUCTURE_GENESIS_RENT_ARTIFACT_V2)
+            .expect("sentinel");
+
+        for (registry_predecessor, rent_predecessor) in [(true, false), (false, true)] {
+            let mut fixture = Fixture::new();
+            let forged = ProtocolInfrastructureProfileV2::new(
+                fixture.v1_profile.registry(),
+                fixture.v1_profile.rent(),
+                if registry_predecessor {
+                    fixture.v1_profile.registry().artifact_release()
+                } else {
+                    genesis_registry
+                },
+                if rent_predecessor {
+                    fixture.v1_profile.rent().artifact_release()
+                } else {
+                    genesis_rent
+                },
+            )
+            .expect("half-sentinel V2");
+            assert!(!forged.born_at_v2());
+            fixture.occupy(fixture.core_program, forged.to_bytes().to_vec());
+            assert_eq!(fixture.build(), Err(Error::AlreadySucceeded));
+        }
     }
 
     #[test]

@@ -316,6 +316,20 @@ name:
 6. **No-fork vacancy** (lineage conjunct 7). The V2 PDA is System-owned,
    zero-data, zero-lamport-tolerant exactly as `create_profile` demands —
    write-once by the same discipline, one succession per domain, ever.
+
+   **AMENDED 2026-09-01 by `c60b25e8`, and the amendment is the operative
+   rule.** Vacancy was exact while this ceremony was the only writer of a V2.
+   It is not any more: a cohort that succeeds nothing could never found (§6's
+   V2-only readers, measured on cohort-9 sixty transactions deep), so
+   `InitializeProtocolInfrastructureV1` now commits a GENESIS V2 at this domain
+   alongside the sealed V1. Conjunct 6 therefore reads **one succession per
+   domain, not one V2 per domain**: the PDA is vacant, or holds a profile whose
+   two predecessor ids are the genesis sentinels and has not spent its
+   succession. A genesis profile is overwritten in place; anything at the
+   address that is not a decodable Core-owned V2 of the exact width is
+   `InfrastructureAlreadySucceeded`, never room to write.
+   `programs/dclutch-core-sbf/src/infrastructure_v2.rs` conjunct 6 is the
+   authority, and `dclutch-operator`'s host builder restates it.
 7. **Read-back belt** (lineage conjunct 8). Decode what was persisted;
    compare to the composed value.
 

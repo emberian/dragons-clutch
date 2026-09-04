@@ -66,7 +66,8 @@ use dclutch_registry_contract::{
     ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1, ArtifactUpgradePolicyV1,
 };
 use dclutch_release_set_contract::{
-    ArtifactReleaseIdV1, ExecutionRoleBindingV1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1,
+    ArtifactReleaseIdV1, ExecutionRoleBindingV1, InitializeProtocolInfrastructureV1,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProgramIdentityV1,
     ProtocolInfrastructureProfileV1, ProtocolInfrastructureProfileV2,
@@ -134,6 +135,26 @@ const BANK_SLOT: u64 = SUCCESSOR_DEPLOYMENT_SLOT + 1;
 /// for its slot and its bound authority and never observes the deployment
 /// behind it, so no account is planted here and none is needed.
 const PREDECESSOR_DEPLOYMENT_SLOT: u64 = 167;
+/// The generation [`WorldV1::Uninitialized`] is first deployed at.
+///
+/// Zero, and its bank is therefore the one `ProgramTest` starts at with no warp
+/// — which is what `infrastructure_program_test.rs` does to drive the very same
+/// instruction. Warping a bank and then running an initialization that creates
+/// two program-owned accounts trips a `debug_assert` inside the runtime's own
+/// program cache (a Core entry assigned twice at one slot, `Loaded` over
+/// `Loaded`), which is a property of `solana-program-test` and not of anything
+/// this campaign is testing.
+const GENESIS_DEPLOYMENT_SLOT: u64 = 0;
+/// That world's first bank: `ProgramTest`'s own starting slot, unwarped.
+const GENESIS_BANK_SLOT: u64 = 1;
+/// The slot the Registry's UPGRADE lands at in [`WorldV1::Uninitialized`].
+///
+/// That world is the only one where a deployment moves during the campaign
+/// rather than before it, so it is the only one that needs a second generation.
+const UPGRADED_DEPLOYMENT_SLOT: u64 = SUCCESSOR_DEPLOYMENT_SLOT + 200;
+/// The bank slot the upgraded generation is visible and rooted at.
+const UPGRADED_BANK_SLOT: u64 = UPGRADED_DEPLOYMENT_SLOT + 1;
+
 /// A predecessor deployment slot that does not precede the successor's.
 ///
 /// Conjunct 4 wants strictly forward, so binding a predecessor record LATER than
@@ -239,7 +260,7 @@ fn programdata_address(program: Pubkey) -> Pubkey {
 
 /// Loader V3 ProgramData: variant tag, deployment slot, the 33-byte authority
 /// option, then the complete ELF tail.
-fn programdata_bytes(elf: &[u8], authority: Pubkey) -> Vec<u8> {
+fn programdata_bytes_at(elf: &[u8], authority: Pubkey, deployment_slot: u64) -> Vec<u8> {
     let mut bytes = vec![0; 45 + elf.len()];
     bytes
         .get_mut(0..4)
@@ -248,7 +269,7 @@ fn programdata_bytes(elf: &[u8], authority: Pubkey) -> Vec<u8> {
     bytes
         .get_mut(4..12)
         .expect("slot")
-        .copy_from_slice(&SUCCESSOR_DEPLOYMENT_SLOT.to_le_bytes());
+        .copy_from_slice(&deployment_slot.to_le_bytes());
     *bytes.get_mut(12).expect("authority tag") = 1;
     bytes
         .get_mut(13..45)
@@ -258,20 +279,23 @@ fn programdata_bytes(elf: &[u8], authority: Pubkey) -> Vec<u8> {
     bytes
 }
 
-/// Deploy one program at [`SUCCESSOR_DEPLOYMENT_SLOT`] under `authority`.
+/// Deploy one program at `deployment_slot` under `authority`.
 ///
 /// The genesis helper writes a ProgramData reporting slot 0; the override that
 /// follows is what pins the generation, and `ProgramTest::add_account` stores
-/// after genesis so it wins.
-fn add_program(
+/// after genesis so it wins. Only the GENERATION may be overridden this way:
+/// planting bytes the genesis helper did not load is a program-cache
+/// replacement, which the runtime panics on rather than reports.
+fn add_program_at(
     test: &mut ProgramTest,
     name: &'static str,
     program: Pubkey,
     elf: &[u8],
     authority: Pubkey,
+    deployment_slot: u64,
 ) {
     test.add_upgradeable_program_to_genesis(name, &program);
-    let data = programdata_bytes(elf, authority);
+    let data = programdata_bytes_at(elf, authority, deployment_slot);
     test.add_account(
         programdata_address(program),
         Account {
@@ -412,10 +436,23 @@ enum WorldV1 {
     /// V1 pins a Registry record binding the SAME slot the live deployment
     /// reports, so the succession advances nowhere.
     PredecessorLevel,
+    /// NEITHER profile is planted, and the Registry stands at its PREDECESSOR
+    /// deployment: the state a cohort is actually in the instant it is deployed.
+    ///
+    /// This is the only world whose profiles the COMPILED PROGRAM writes rather
+    /// than the fixture — `InitializeProtocolInfrastructureV1` commits both, and
+    /// the ceremony then runs against what it left. Every other world plants a
+    /// V1 by hand and a vacant V2, which is a shape no cohort has been in since
+    /// `c60b25e8`, and that is precisely why the two conjunct 6s could disagree
+    /// for two days with every test in this file green.
+    Uninitialized,
 }
 
 /// One planted world, and the addresses its campaign reads.
 struct Fixture {
+    /// The slot this world's bank executes at, and the slot every observation
+    /// this fixture hands the builder is stamped with.
+    bank_slot: u64,
     profile_v1: Pubkey,
     profile_v2: Pubkey,
     /// The Registry record V1 pins in the cohort-9 shape, at
@@ -425,6 +462,13 @@ struct Fixture {
     non_advancing_registry: Record,
     /// The Registry record V1 pins in [`WorldV1::PredecessorLevel`].
     level_registry: Record,
+    /// The Registry record V1 pins in [`WorldV1::Uninitialized`].
+    ///
+    /// Unlike every other predecessor record here, this one's ELF digest names
+    /// bytes that ARE deployed at the point it is used — they have to be, because
+    /// initialization admits a deployment by hashing it, and the cohort is
+    /// initialized before the upgrade rather than after.
+    genesis_registry: Record,
     registry: Record,
     rent: Record,
     /// The V1 profile the cohort-9 world plants, and the one the builder is
@@ -442,6 +486,44 @@ struct Fixture {
 
 impl Fixture {
     fn new(world: WorldV1) -> (ProgramTest, Self) {
+        Self::build(world, None)
+    }
+
+    /// The SECOND bank of [`WorldV1::Uninitialized`]: the Registry upgraded, and
+    /// the two profiles the compiled program wrote on the first bank planted
+    /// verbatim.
+    ///
+    /// Two banks and not one, for a reason the runtime settles rather than the
+    /// campaign: replacing a live program's ProgramData inside the fork that
+    /// already loaded it is a program-cache replacement, which
+    /// `solana-program-runtime` PANICS on. A deployment generation is a property
+    /// of the bank it was loaded into, so an upgrade is a new bank. The V2 the
+    /// ceremony supersedes here is byte-for-byte what `process_initialize`
+    /// committed, which is the whole point; nothing about it is reconstructed.
+    fn succeeding(profile_v1: Vec<u8>, profile_v2: Vec<u8>) -> (ProgramTest, Self) {
+        Self::build(WorldV1::Uninitialized, Some((profile_v1, profile_v2)))
+    }
+
+    fn build(world: WorldV1, succeeding: Option<(Vec<u8>, Vec<u8>)>) -> (ProgramTest, Self) {
+        // Which generation each program stands at, and the bank that makes it
+        // visible. Only `Uninitialized` has two of either.
+        let (bank_slot, deployment_slot, registry_slot) = match (world, &succeeding) {
+            (WorldV1::Uninitialized, None) => (
+                GENESIS_BANK_SLOT,
+                GENESIS_DEPLOYMENT_SLOT,
+                GENESIS_DEPLOYMENT_SLOT,
+            ),
+            (WorldV1::Uninitialized, Some(_)) => (
+                UPGRADED_BANK_SLOT,
+                GENESIS_DEPLOYMENT_SLOT,
+                UPGRADED_DEPLOYMENT_SLOT,
+            ),
+            _ => (
+                BANK_SLOT,
+                SUCCESSOR_DEPLOYMENT_SLOT,
+                SUCCESSOR_DEPLOYMENT_SLOT,
+            ),
+        };
         let artifacts = artifacts();
         let core_authority = core_authority();
         let consent = consent_authority();
@@ -456,30 +538,33 @@ impl Fixture {
         test.add_sysvar_account(
             sysvar::clock::ID,
             &Clock {
-                slot: BANK_SLOT,
+                slot: bank_slot,
                 ..Clock::default()
             },
         );
-        add_program(
+        add_program_at(
             &mut test,
             "dclutch_core_sbf",
             CORE_PROGRAM_ID,
             &artifacts.core,
             core_authority.pubkey(),
+            deployment_slot,
         );
-        add_program(
+        add_program_at(
             &mut test,
             "dclutch_registry_sbf",
             REGISTRY_PROGRAM_ID,
             &artifacts.registry,
             consent.pubkey(),
+            registry_slot,
         );
-        add_program(
+        add_program_at(
             &mut test,
             "dclutch_rent_sbf",
             RENT_PROGRAM_ID,
             &artifacts.rent,
             consent.pubkey(),
+            deployment_slot,
         );
         wallet(&mut test, funder.pubkey(), 10_000_000_000);
         wallet(&mut test, core_authority.pubkey(), 1_000_000_000);
@@ -539,6 +624,45 @@ impl Fixture {
                 EQUAL_PREDECESSOR_SLOT,
             ),
         );
+        // The Registry release a cohort is INITIALIZED against, and the one its
+        // succession then supersedes. Unlike every other predecessor record here
+        // it names bytes that ARE deployed at the point it is used, because
+        // initialization admits a deployment by hashing it in full rather than by
+        // believing a claimed digest — so this record has to describe the live
+        // deployment or the cohort cannot stand up at all.
+        let genesis_registry = add_artifact_record(
+            &mut test,
+            artifact_release(
+                REGISTRY_PROGRAM_ID,
+                hash(&artifacts.registry).to_bytes(),
+                0xb4,
+                GENESIS_DEPLOYMENT_SLOT,
+            ),
+        );
+        // The Rent release that world is initialized against, and never moves.
+        let genesis_rent = add_artifact_record(
+            &mut test,
+            artifact_release(
+                RENT_PROGRAM_ID,
+                hash(&artifacts.rent).to_bytes(),
+                0xb6,
+                GENESIS_DEPLOYMENT_SLOT,
+            ),
+        );
+        // What the upgrade produces: a REDEPLOY of the same bytes at a later
+        // generation. That is a real upgrade and the honest one to model here —
+        // the protocol distinguishes releases by their finalized record, and
+        // conjunct 4's forward-only comparison reads the deployment SLOT, which
+        // is the coordinate this world moves.
+        let upgraded_registry = add_artifact_record(
+            &mut test,
+            artifact_release(
+                REGISTRY_PROGRAM_ID,
+                hash(&artifacts.registry).to_bytes(),
+                0xb5,
+                UPGRADED_DEPLOYMENT_SLOT,
+            ),
+        );
 
         let honest_v1_profile =
             ProtocolInfrastructureProfileV1::new(predecessor_registry.binding, rent.binding)
@@ -571,6 +695,21 @@ impl Fixture {
                 ProtocolInfrastructureProfileV1::new(level_registry.binding, rent.binding)
                     .expect("level V1 profile"),
             ),
+            // Never planted; the compiled program writes it. The value is what
+            // Initialize MUST produce, so the campaign can byte-compare.
+            WorldV1::Uninitialized => (
+                genesis_registry,
+                ProtocolInfrastructureProfileV1::new(genesis_registry.binding, genesis_rent.binding)
+                    .expect("genesis V1 profile"),
+            ),
+        };
+        // The two selections this world's ceremony reads. Every other world has
+        // one generation of each program; this one performs the Registry upgrade
+        // itself and selects what the upgrade produced, while its Rent binding
+        // stands unmoved across both banks.
+        let (registry, rent) = match world {
+            WorldV1::Uninitialized => (upgraded_registry, genesis_rent),
+            _ => (registry, rent),
         };
 
         let profile_v1 = Pubkey::find_program_address(
@@ -583,40 +722,60 @@ impl Fixture {
             &CORE_PROGRAM_ID,
         )
         .0;
-        test.add_account(
-            profile_v1,
-            Account {
-                lamports: Rent::default().minimum_balance(PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1),
-                data: planted_v1_profile.to_bytes().to_vec(),
-                owner: CORE_PROGRAM_ID,
-                executable: false,
-                rent_epoch: 0,
-            },
-        );
-        // The one vacancy this domain will ever have, planted exactly as the V1
-        // ceremony plants its own: System-owned, dataless, and carrying dust the
-        // route tops up rather than refuses.
-        test.add_account(
-            profile_v2,
-            Account {
-                lamports: 1,
-                data: Vec::new(),
-                owner: system_program::ID,
-                executable: false,
-                rent_epoch: 0,
-            },
-        );
+        if world == WorldV1::Uninitialized {
+            if let Some((v1, v2)) = &succeeding {
+                for (domain, data) in [(profile_v1, v1), (profile_v2, v2)] {
+                    test.add_account(
+                        domain,
+                        Account {
+                            lamports: Rent::default().minimum_balance(data.len()),
+                            data: data.clone(),
+                            owner: CORE_PROGRAM_ID,
+                            executable: false,
+                            rent_epoch: 0,
+                        },
+                    );
+                }
+            }
+        } else {
+            test.add_account(
+                profile_v1,
+                Account {
+                    lamports: Rent::default()
+                        .minimum_balance(PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1),
+                    data: planted_v1_profile.to_bytes().to_vec(),
+                    owner: CORE_PROGRAM_ID,
+                    executable: false,
+                    rent_epoch: 0,
+                },
+            );
+            // The one succession this domain will ever have, planted exactly as
+            // the V1 ceremony plants its own: System-owned, dataless, and
+            // carrying dust the route tops up rather than refuses.
+            test.add_account(
+                profile_v2,
+                Account {
+                    lamports: 1,
+                    data: Vec::new(),
+                    owner: system_program::ID,
+                    executable: false,
+                    rent_epoch: 0,
+                },
+            );
+        }
 
         let registry_moved =
             pinned_registry.binding.artifact_release() != registry.binding.artifact_release();
         (
             test,
             Self {
+                bank_slot,
                 profile_v1,
                 profile_v2,
                 predecessor_registry,
                 non_advancing_registry,
                 level_registry,
+                genesis_registry,
                 registry,
                 rent,
                 honest_v1_profile,
@@ -637,16 +796,24 @@ impl Fixture {
 /// makes every program in the fixture invisible and the runtime reports it as a
 /// program-cache replacement rather than as anything about the deployment.
 async fn start(test: ProgramTest) -> ProgramTestContext {
+    start_at(test, BANK_SLOT).await
+}
+
+/// Start one world's bank at `slot`, which its deployment generation is
+/// visible and rooted at.
+async fn start_at(test: ProgramTest, slot: u64) -> ProgramTestContext {
     let mut context = test.start_with_context().await;
-    context
-        .warp_to_slot(BANK_SLOT)
-        .expect("warp the bank one slot past the deployment generation");
+    if slot > GENESIS_BANK_SLOT {
+        context
+            .warp_to_slot(slot)
+            .expect("warp the bank one slot past the deployment generation");
+    }
     context
 }
 
-fn observation() -> Observation {
+fn observation(slot: u64) -> Observation {
     Observation {
-        slot: BANK_SLOT,
+        slot,
         unix_timestamp: 1_800_000_000,
         finality: Finality::Finalized,
     }
@@ -657,10 +824,10 @@ fn observation() -> Observation {
 /// A vacant address is a real observation too — conjunct 6 reads exactly one —
 /// so an absent account becomes the System-owned zero-lamport empty account the
 /// runtime would present.
-async fn observe(context: &mut ProgramTestContext, key: Pubkey) -> ObservedAccount {
+async fn observe(context: &mut ProgramTestContext, key: Pubkey, slot: u64) -> ObservedAccount {
     let account = account_at(context, key).await;
     ObservedAccount {
-        observation: observation(),
+        observation: observation(slot),
         key,
         owner: account.owner,
         lamports: account.lamports,
@@ -687,10 +854,11 @@ async fn account_at(context: &mut ProgramTestContext, key: Pubkey) -> Account {
 async fn predecessor_record(
     context: &mut ProgramTestContext,
     record: Record,
+    slot: u64,
 ) -> PredecessorRecordObservationV1 {
     PredecessorRecordObservationV1 {
-        raw: observe(context, record.raw).await,
-        staging: observe(context, record.staging).await,
+        raw: observe(context, record.raw, slot).await,
+        staging: observe(context, record.staging, slot).await,
     }
 }
 
@@ -704,28 +872,29 @@ async fn succession_state(
     fixture: &Fixture,
 ) -> CoreInfrastructureSuccessionStateV1 {
     let pinned = fixture.pinned_registry;
+    let slot = fixture.bank_slot;
     let registry_moved = fixture.registry_moved;
     CoreInfrastructureSuccessionStateV1 {
-        payer: observe(context, fixture.funder.pubkey()).await,
-        profile: observe(context, fixture.profile_v2).await,
-        predecessor_profile: observe(context, fixture.profile_v1).await,
-        core_programdata: observe(context, programdata_address(CORE_PROGRAM_ID)).await,
-        upgrade_authority: observe(context, fixture.core_authority.pubkey()).await,
-        registry_artifact_raw: observe(context, fixture.registry.raw).await,
-        registry_artifact_staging: observe(context, fixture.registry.staging).await,
-        registry_program: observe(context, REGISTRY_PROGRAM_ID).await,
-        registry_programdata: observe(context, programdata_address(REGISTRY_PROGRAM_ID)).await,
-        rent_artifact_raw: observe(context, fixture.rent.raw).await,
-        rent_artifact_staging: observe(context, fixture.rent.staging).await,
-        rent_program: observe(context, RENT_PROGRAM_ID).await,
-        rent_programdata: observe(context, programdata_address(RENT_PROGRAM_ID)).await,
+        payer: observe(context, fixture.funder.pubkey(), slot).await,
+        profile: observe(context, fixture.profile_v2, slot).await,
+        predecessor_profile: observe(context, fixture.profile_v1, slot).await,
+        core_programdata: observe(context, programdata_address(CORE_PROGRAM_ID), slot).await,
+        upgrade_authority: observe(context, fixture.core_authority.pubkey(), slot).await,
+        registry_artifact_raw: observe(context, fixture.registry.raw, slot).await,
+        registry_artifact_staging: observe(context, fixture.registry.staging, slot).await,
+        registry_program: observe(context, REGISTRY_PROGRAM_ID, slot).await,
+        registry_programdata: observe(context, programdata_address(REGISTRY_PROGRAM_ID), slot).await,
+        rent_artifact_raw: observe(context, fixture.rent.raw, slot).await,
+        rent_artifact_staging: observe(context, fixture.rent.staging, slot).await,
+        rent_program: observe(context, RENT_PROGRAM_ID, slot).await,
+        rent_programdata: observe(context, programdata_address(RENT_PROGRAM_ID), slot).await,
         predecessor_registry_record: match registry_moved {
-            true => Some(predecessor_record(context, pinned).await),
+            true => Some(predecessor_record(context, pinned, slot).await),
             false => None,
         },
         predecessor_rent_record: None,
-        rent_sysvar: observe(context, sysvar::rent::ID).await,
-        system_program: observe(context, system_program::ID).await,
+        rent_sysvar: observe(context, sysvar::rent::ID, slot).await,
+        system_program: observe(context, system_program::ID, slot).await,
     }
 }
 
@@ -745,7 +914,7 @@ async fn honest_frame_against(
     let mut state = succession_state(context, fixture).await;
     state.predecessor_profile.data = fixture.honest_v1_profile.to_bytes().to_vec();
     state.predecessor_registry_record =
-        Some(predecessor_record(context, fixture.predecessor_registry).await);
+        Some(predecessor_record(context, fixture.predecessor_registry, fixture.bank_slot).await);
     build_core_infrastructure_succession_v1(CORE_PROGRAM_ID, &state)
         .expect("the builder must admit the honest succession")
 }
@@ -837,6 +1006,176 @@ async fn assert_v2_still_vacant(context: &mut ProgramTestContext, fixture: &Fixt
     assert!(
         account.data.is_empty(),
         "a refused ceremony must leave the V2 domain dataless"
+    );
+}
+
+/// The fifteen-account genesis initialization, as `bootstrap/successor` builds it.
+fn initialize_instruction(fixture: &Fixture) -> Instruction {
+    Instruction {
+        program_id: CORE_PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(fixture.funder.pubkey(), true),
+            AccountMeta::new(fixture.profile_v1, false),
+            AccountMeta::new(fixture.profile_v2, false),
+            AccountMeta::new_readonly(programdata_address(CORE_PROGRAM_ID), false),
+            AccountMeta::new_readonly(fixture.core_authority.pubkey(), true),
+            AccountMeta::new_readonly(fixture.genesis_registry.raw, false),
+            AccountMeta::new_readonly(fixture.genesis_registry.staging, false),
+            AccountMeta::new_readonly(REGISTRY_PROGRAM_ID, false),
+            AccountMeta::new_readonly(programdata_address(REGISTRY_PROGRAM_ID), false),
+            AccountMeta::new_readonly(fixture.rent.raw, false),
+            AccountMeta::new_readonly(fixture.rent.staging, false),
+            AccountMeta::new_readonly(RENT_PROGRAM_ID, false),
+            AccountMeta::new_readonly(programdata_address(RENT_PROGRAM_ID), false),
+            AccountMeta::new_readonly(sysvar::rent::ID, false),
+            AccountMeta::new_readonly(system_program::ID, false),
+        ],
+        data: InitializeProtocolInfrastructureV1.to_bytes().to_vec(),
+    }
+}
+
+/// The one order a cohort actually lives: initialize, upgrade, succeed.
+///
+/// Every other test in this file starts on a bank whose V1 profile was planted
+/// by hand and whose V2 domain is empty. No cohort has been in that state since
+/// `c60b25e8` made `InitializeProtocolInfrastructureV1` commit the genesis V2
+/// alongside the sealed V1 — and because nothing anywhere drove the two
+/// instructions in sequence, `dclutch-operator`'s restatement of conjunct 6 went
+/// on demanding RAW VACANCY for two days while the route it restates had moved
+/// to ONE SUCCESSION PER DOMAIN. The chain would have taken the ceremony; the
+/// host refused it before composing a frame, twenty-four transactions into the
+/// cold machine's loopback (`docs/runbooks/COLD_MACHINE_2026_09_03.md` §6).
+///
+/// So this is not decoration on the campaign above. It is the only test here
+/// whose profiles the COMPILED PROGRAM writes, and it is the shape of every
+/// cohort standing on devnet: `9JW1qqJVeFo9ZRvzzVzNvqrwzt7QvyHpGafTJmj2hBFB`'s
+/// V2 profile carries both genesis sentinels, read finalized off devnet on
+/// 2026-09-03.
+#[tokio::test]
+async fn a_cohort_born_at_v2_initializes_upgrades_and_succeeds_its_own_genesis_profile() {
+    let (test, fixture) = Fixture::new(WorldV1::Uninitialized);
+    let mut context = start_at(test, GENESIS_BANK_SLOT).await;
+
+    // A cohort deployed and nothing else: neither domain is written.
+    for domain in [fixture.profile_v1, fixture.profile_v2] {
+        let account = account_at(&mut context, domain).await;
+        assert_eq!(account.owner, system_program::ID);
+        assert!(account.data.is_empty());
+    }
+
+    // ---- 1. initialization commits BOTH profiles in one instruction ----
+    submit(
+        &mut context,
+        initialize_instruction(&fixture),
+        &[&fixture.funder, &fixture.core_authority],
+        PROTOCOL_COMPUTE_UNIT_LIMIT,
+    )
+    .await
+    .expect("a freshly deployed cohort must initialize");
+
+    let sealed_v1 = account_at(&mut context, fixture.profile_v1).await;
+    let expected_v1 =
+        ProtocolInfrastructureProfileV1::new(fixture.genesis_registry.binding, fixture.rent.binding)
+            .expect("the V1 initialization writes");
+    assert_eq!(sealed_v1.owner, CORE_PROGRAM_ID);
+    assert_eq!(sealed_v1.data, expected_v1.to_bytes().to_vec());
+
+    let born = account_at(&mut context, fixture.profile_v2).await;
+    assert_eq!(born.owner, CORE_PROGRAM_ID);
+    let genesis = ProtocolInfrastructureProfileV2::decode(&born.data).expect("genesis V2");
+    assert!(
+        genesis.born_at_v2(),
+        "initialization must leave the domain's succession UNSPENT"
+    );
+    assert_eq!(genesis.registry(), fixture.genesis_registry.binding);
+
+    // ---- 2. the physical Registry upgrade the ceremony exists to record ----
+    //
+    // A second bank carrying the upgraded generation and the two profiles the
+    // compiled program just wrote, byte for byte. See `Fixture::succeeding` for
+    // why the upgrade cannot happen inside the first bank.
+    let (test, fixture) = Fixture::succeeding(sealed_v1.data.clone(), born.data.clone());
+    let mut context = start_at(test, UPGRADED_BANK_SLOT).await;
+    assert_eq!(
+        account_at(&mut context, fixture.profile_v2).await.data,
+        born.data
+    );
+
+    // ---- 3. the succession, composed by the shipped host builder ----
+    let state = succession_state(&mut context, &fixture).await;
+    let report = build_core_infrastructure_succession_v1(CORE_PROGRAM_ID, &state)
+        .expect("the builder must admit a succession over the cohort's own genesis profile");
+    // The account exists, is Core-owned at the exact width and is already
+    // rent-exempt, so the route overwrites it and transfers nothing.
+    assert_eq!(report.profile_rent_debit_lamports, 0);
+    let payer_before = account_at(&mut context, fixture.funder.pubkey())
+        .await
+        .lamports;
+
+    submit_signed(&mut context, report.instruction.clone(), &fixture)
+        .await
+        .expect("the ceremony must land on the cohort's genesis profile");
+
+    // ---- 4. what the chain now holds ----
+    let succeeded_account = account_at(&mut context, fixture.profile_v2).await;
+    assert_eq!(succeeded_account.owner, CORE_PROGRAM_ID);
+    assert_eq!(
+        succeeded_account.data,
+        report.record.to_bytes().to_vec(),
+        "the landed bytes must be exactly the ones the builder projected"
+    );
+    assert_eq!(
+        account_at(&mut context, fixture.funder.pubkey())
+            .await
+            .lamports,
+        payer_before,
+        "an overwrite in place must not move a lamport"
+    );
+    let succeeded =
+        ProtocolInfrastructureProfileV2::decode(&succeeded_account.data).expect("succeeded V2");
+    assert!(
+        !succeeded.born_at_v2(),
+        "a spent succession must never present as unspent"
+    );
+    // It now selects the upgraded Registry record, and names the genesis
+    // profile's own binding as the predecessor it superseded — the walk back is
+    // the point of reading the ids rather than the vacancy.
+    assert_eq!(succeeded.registry(), fixture.registry.binding);
+    assert_eq!(succeeded.rent(), fixture.rent.binding);
+    assert_eq!(
+        succeeded.predecessor_registry_artifact(),
+        fixture.genesis_registry.binding.artifact_release()
+    );
+    assert_eq!(
+        succeeded.predecessor_rent_artifact(),
+        fixture.rent.binding.artifact_release()
+    );
+    // V1 is the sealed historical record: still on chain, never rewritten.
+    assert_eq!(
+        account_at(&mut context, fixture.profile_v1).await.data,
+        sealed_v1.data
+    );
+
+    // ---- 5. one succession per domain, EVER — the rule that had to survive ----
+    let replayed = succession_state(&mut context, &fixture).await;
+    assert_eq!(
+        build_core_infrastructure_succession_v1(CORE_PROGRAM_ID, &replayed),
+        Err(SuccessionBuilderError::AlreadySucceeded)
+    );
+    refused(
+        submit(
+            &mut context,
+            report.instruction,
+            &[&fixture.funder, &fixture.core_authority, &fixture.consent],
+            PROTOCOL_COMPUTE_UNIT_LIMIT - 1,
+        )
+        .await,
+        CoreSbfError::InfrastructureAlreadySucceeded,
+    );
+    assert_eq!(
+        account_at(&mut context, fixture.profile_v2).await.data,
+        succeeded_account.data,
+        "a refused replay must not touch the profile it found"
     );
 }
 
