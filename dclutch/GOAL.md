@@ -4610,3 +4610,11 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   poststate.** One 5,000-lamport fee spent. → COHORT-15H **`(spawned)`**: the host models the DEPLOYED program's partition
   (keyed on the deployment, the Core-digest table's shape) and a bounded clock; market 1 retired.
 - Cuts: `c746673eb`, `fa643735d`.
+- FIXPOINT closed (`42dd89c98` … `9eab47bb7`, nine commits): all eighteen emissions were already byte-identical to their
+  committed files — the hazard was the guard every time; 15 guards normalise with the pinned rustfmt and the committed
+  files are rustfmt's own fixpoint, so `lane.sh fmt` on them is a no-op; **debt 18 → 0; COVERAGE's Normalises 40 → 55 of
+  65**; census PASS hazards=0, emission 77/77 in 7m26s; the five ABI generators that scrape those files verify green in both
+  trees. Owed: frameguard rows for six of its commits (+ RELEASE-PREFLIGHT's two in range) — one capture after that lane
+  closes; `render_fixpoint_debt` hardcodes "the other forty-two guards" beside a count the census computes. Three files
+  other lanes had committed unformatted took the pinned form (ace5d24e9).
+- Cuts: `231f1f633`.
