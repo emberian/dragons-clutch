@@ -4252,3 +4252,13 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   f4ffbe732, c311e5a70 landed), the fill (a third market if Terminal refuses by phase), the winning stranger paid, the
   General seal's devnet driver and the GeneralHotStateV3 producer → OpenBatch on a real chain, retirement on devnet, census
   rows for the four unrowed magics.
+- RELEASE-GATE closed (`9a5332884`, `f4ffbe732`, `db1e4eaa6`, `3b31e6f7b`, `c311e5a70`): of 84 gate-named files 35 reproduce
+  (ELFs, checked manifests, source tree, links, diagnostics, frame objects) and 49 carry a run's identity; **the gate digest
+  now binds the 35 — two roots at one commit produce one `gate.sha256`, and cohort-15's deployed ELF digests come back
+  byte-identical from a fresh candidate**; the admission dispatches on schema; `re-admit` is a 0-SOL runbook step with three
+  measured verifiers; the job dir carries its own driver (the emitted wrapper contains no absolute path — proven red);
+  the simulator resolves the endpoint at use time and refuses a config carrying a credential. Owed: the mixed gate has no
+  reproducible form; the deployment-set journal's gate row is hand-authored; **~18 cohort job scripts are hand-written with
+  no generator — tools/cohort15 owns the rows and emits nothing** (the attractor's one-runbook thread); `preflight.py`
+  still says 13 links where SHIPPED_LINKS is 12.
+- Cuts: `8e8c816db`, `b8e73d183`, `cfecd9130`.

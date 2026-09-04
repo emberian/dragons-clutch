@@ -220,6 +220,55 @@ describe('a machine gate answered from a decoded observation', () => {
     expect(verdict.phaseGate.unobservableMachines).toEqual(['series-ticket']);
   });
 
+  /**
+   * The hostile, for EVERY machine the census gates on rather than the three
+   * that happen to have a live account.
+   *
+   * A per-machine claim proven on one machine is a claim about that machine.
+   * This walks the generated table, picks for each machine a route that gates
+   * on it and a state of that machine the route does NOT admit, and requires
+   * the refusal to name the machine, its set and the observed state. A machine
+   * whose every state is admitted by every one of its routes is skipped and
+   * counted, so the case cannot pass by silently walking nothing.
+   */
+  it('refuses by name for every machine the census gates a route on', () => {
+    const covered: string[] = [];
+    const unrefutable: string[] = [];
+    for (const record of STATE_MACHINE_RECORDS_V1) {
+      const entry = ROUTES_GATED_ON_ANOTHER_MACHINE_V1.find((row) => row.machines.includes(record.machine));
+      if (entry === undefined) continue;
+      const admitted = routeMachineStatesV1(entry.route, record.machine)!;
+      const wrong = record.states.map((state) => state.state).find((state) => !admitted.includes(state));
+      if (wrong === undefined) { unrefutable.push(record.machine); continue; }
+      const observation: MachineObservationV1 = {
+        machine: record.machine, present: true, state: wrong, refusal: null,
+      };
+      const verdict = evaluateCapabilityV1(overRoute(entry.route), observed('Open', 'Consumed'), [observation]);
+      expect(verdict.status, `${record.machine} on ${entry.route}`).toBe('wrong-phase');
+      expect(verdict.reason).toContain(`${record.machine} ${admitted.join(' or ')}`);
+      expect(verdict.reason).toContain(wrong);
+      // The positive control on the same route: a state it DOES admit stops
+      // refusing BY THIS MACHINE. Not "stops refusing" -- several of these
+      // routes carry a Market gate as well, and `direct_begin_retiring_v1`
+      // wants `market: Retiring` against an observation that is Open, so the
+      // whole verdict is still `wrong-phase` for a reason that is not this
+      // machine's. A control that asserted the status would be asserting the
+      // Market half by accident.
+      const admits = evaluateCapabilityV1(overRoute(entry.route), observed('Open', 'Consumed'), [
+        { machine: record.machine, present: true, state: admitted[0]!, refusal: null },
+      ]);
+      expect(
+        admits.phaseGate.machineGates.filter((gate) => gate.verdict === 'excluded'),
+        `${record.machine} on ${entry.route}`,
+      ).toEqual([]);
+      covered.push(record.machine);
+    }
+    // Every machine that carries a route gate is covered or explicitly named.
+    const gated = machineGateCoverageV1(BROWSER_CAPABILITY_STANDINGS_V1.map((one) => one.action)).machines;
+    expect([...covered, ...unrefutable].sort()).toEqual([...gated].sort());
+    expect(unrefutable, 'a machine every route admits entirely cannot be refuted').toEqual([]);
+  });
+
   it('leaves every act with no machine gate exactly as it was', () => {
     // The regression this parameter could have caused: an act with no machine
     // gate must answer identically whatever is passed.
