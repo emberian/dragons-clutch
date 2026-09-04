@@ -67,10 +67,9 @@ use dclutch_registry_contract::{
 };
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, ExecutionRoleBindingV1, InitializeProtocolInfrastructureV1,
-    PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1,
-    PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
-    PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProgramIdentityV1,
-    ProtocolInfrastructureProfileV1, ProtocolInfrastructureProfileV2,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2,
+    ProgramIdentityV1, ProtocolInfrastructureProfileV1, ProtocolInfrastructureProfileV2,
 };
 use solana_account::Account;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
@@ -699,8 +698,11 @@ impl Fixture {
             // Initialize MUST produce, so the campaign can byte-compare.
             WorldV1::Uninitialized => (
                 genesis_registry,
-                ProtocolInfrastructureProfileV1::new(genesis_registry.binding, genesis_rent.binding)
-                    .expect("genesis V1 profile"),
+                ProtocolInfrastructureProfileV1::new(
+                    genesis_registry.binding,
+                    genesis_rent.binding,
+                )
+                .expect("genesis V1 profile"),
             ),
         };
         // The two selections this world's ceremony reads. Every other world has
@@ -883,7 +885,8 @@ async fn succession_state(
         registry_artifact_raw: observe(context, fixture.registry.raw, slot).await,
         registry_artifact_staging: observe(context, fixture.registry.staging, slot).await,
         registry_program: observe(context, REGISTRY_PROGRAM_ID, slot).await,
-        registry_programdata: observe(context, programdata_address(REGISTRY_PROGRAM_ID), slot).await,
+        registry_programdata: observe(context, programdata_address(REGISTRY_PROGRAM_ID), slot)
+            .await,
         rent_artifact_raw: observe(context, fixture.rent.raw, slot).await,
         rent_artifact_staging: observe(context, fixture.rent.staging, slot).await,
         rent_program: observe(context, RENT_PROGRAM_ID, slot).await,
@@ -1074,9 +1077,11 @@ async fn a_cohort_born_at_v2_initializes_upgrades_and_succeeds_its_own_genesis_p
     .expect("a freshly deployed cohort must initialize");
 
     let sealed_v1 = account_at(&mut context, fixture.profile_v1).await;
-    let expected_v1 =
-        ProtocolInfrastructureProfileV1::new(fixture.genesis_registry.binding, fixture.rent.binding)
-            .expect("the V1 initialization writes");
+    let expected_v1 = ProtocolInfrastructureProfileV1::new(
+        fixture.genesis_registry.binding,
+        fixture.rent.binding,
+    )
+    .expect("the V1 initialization writes");
     assert_eq!(sealed_v1.owner, CORE_PROGRAM_ID);
     assert_eq!(sealed_v1.data, expected_v1.to_bytes().to_vec());
 

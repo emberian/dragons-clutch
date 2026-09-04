@@ -7,7 +7,9 @@
 //! baselines. The predicted receipt carries authenticated live balances, so a
 //! third-party donation cannot veto close or disappear during reclamation.
 
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
+use dclutch_capability_contract::funding::{
+    funded_rent_minimum_v2, funded_rent_persists_v1, funded_rent_rate_from_minimum_v1,
+};
 use dclutch_claims_svm::{
     liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
@@ -36,7 +38,6 @@ use solana_program::{
     hash::{hash, hashv},
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
-    rent::Rent,
 };
 use solana_sdk_ids::{bpf_loader_upgradeable, native_loader, system_program};
 
@@ -146,7 +147,12 @@ pub fn plan_user_position_close_v1(
         return Err(UserPositionClosePlanErrorV1::DevnetOnly);
     }
     let observation = same_finalized_observation(snapshot)?;
-    let rent = decode_rent(&snapshot.rent_sysvar)
+    // The Rent sysvar is still AUTHENTICATED here -- key, owner, executable bit,
+    // exact width, canonical body -- even though nothing prices a floor against
+    // it any more. Dropping the decode with the floor would silently stop
+    // checking the coordinate, which is the debt `a4b2cbb17` named at
+    // `authenticate_execution_strategy_v2` and this does not repeat.
+    decode_rent(&snapshot.rent_sysvar)
         .map_err(|_| UserPositionClosePlanErrorV1::InvalidInfrastructure)?;
     authenticate_infrastructure(snapshot)?;
     let activated = authenticate_release_cache(snapshot)?;
@@ -166,7 +172,7 @@ pub fn plan_user_position_close_v1(
             .map_err(|_| UserPositionClosePlanErrorV1::InvalidRelease)?;
     }
     let market = authenticate_claims_market(snapshot, activated)?;
-    let admission = authenticate_position(snapshot, &rent, market)?;
+    let admission = authenticate_position(snapshot, market)?;
     authenticate_rent_credit(snapshot, market)?;
     assemble_plan(snapshot, observation, market, admission)
 }
@@ -293,7 +299,6 @@ fn authenticate_claims_market(
 
 fn authenticate_position(
     snapshot: &UserPositionCloseSnapshotV1,
-    rent: &Rent,
     market: LiabilityBasisMarketViewV2,
 ) -> Result<ProtocolPositionAdmissionV2, UserPositionClosePlanErrorV1> {
     let position_seeds = ProtocolPositionSeedsV2::new(
@@ -353,13 +358,34 @@ fn authenticate_position(
         || admission.semantic_basis_id() != market.basis_id
         || admission.outcome_count() != market.claim_count
         || admission.generation() != market.generation
-        || admission.position_rent_principal() != rent.minimum_balance(snapshot.position.data.len())
-        || admission.admission_rent_principal()
-            != rent.minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2)
         || snapshot.position.lamports < admission.position_lamports()
         || snapshot.admission.lamports < admission.admission_lamports()
     {
         return Err(UserPositionClosePlanErrorV1::InvalidPosition);
+    }
+    // The two rent principals this admission recorded were written by ONE
+    // transaction, at ONE cluster rate, over two accounts nothing has moved
+    // since. Requiring them to equal `Rent::minimum_balance` of the moment
+    // therefore refuses a live position whenever the rate moves -- in EITHER
+    // direction, because an exactness has no slack: devnet's fall from 6,333 to
+    // 5,080 at epoch 1141 is what stranded cohort-15, and a rise breaks the
+    // same check by the same arithmetic with the sign flipped.
+    //
+    // Recover the rate the admission was funded at from one principal, and
+    // require it to price the other. `minimum_balance` is affine in the length,
+    // so one rate prices both widths exactly or the record is garbled -- which
+    // is a stronger statement than the sysvar comparison ever made, and it is
+    // true at every rate the cluster later adopts.
+    let funded_rate = funded_rent_rate_from_minimum_v1(
+        admission.admission_rent_principal(),
+        PROTOCOL_POSITION_ADMISSION_BYTES_V2,
+    )
+    .map_err(|_| UserPositionClosePlanErrorV1::InvalidRent)?;
+    if funded_rent_minimum_v2(funded_rate, snapshot.position.data.len())
+        .map_err(|_| UserPositionClosePlanErrorV1::InvalidRent)?
+        != admission.position_rent_principal()
+    {
+        return Err(UserPositionClosePlanErrorV1::InvalidRent);
     }
     Ok(admission)
 }
@@ -579,8 +605,17 @@ mod tests {
         }
     }
 
-    #[test]
-    fn close_plan_uses_admission_baselines_but_conserves_donated_live_balances() {
+    /// One coherent close snapshot, parameterised by the two rent principals
+    /// the admission recorded -- which is the only thing the funded-rate check
+    /// reads, and the only thing these two tests need to differ on.
+    fn fixture(
+        position_rent_principal: u64,
+        admission_rent_principal: u64,
+    ) -> (
+        UserPositionCloseSnapshotV1,
+        LiabilityBasisMarketViewV2,
+        ProtocolPositionAdmissionV2,
+    ) {
         let claims_market = key(2);
         let logical_market = key(3);
         let release_set = key(4);
@@ -642,10 +677,10 @@ mod tests {
             generation: market.generation,
             expected_market_revision: market.revision,
             expected_position_revision: 0,
-            observed_position_lamports: 12,
-            observed_admission_lamports: 13,
-            position_rent_principal: 10,
-            admission_rent_principal: 11,
+            observed_position_lamports: position_rent_principal + 2,
+            observed_admission_lamports: admission_rent_principal + 2,
+            position_rent_principal,
+            admission_rent_principal,
             capability_descriptor: [0; 32],
             capability_outcome: 0,
         })
@@ -668,11 +703,16 @@ mod tests {
         let snapshot = UserPositionCloseSnapshotV1 {
             genesis_hash: SOLANA_DEVNET_GENESIS_HASH_V1,
             claims_market: observed(claims_market, claims_program, 100, vec![1]),
-            position: observed(position, claims_program, 17, position_data),
+            position: observed(
+                position,
+                claims_program,
+                position_rent_principal + 7,
+                position_data,
+            ),
             admission: observed(
                 admission_key,
                 claims_program,
-                19,
+                admission_rent_principal + 8,
                 admission
                     .to_state_bytes()
                     .expect("admission bytes")
@@ -690,6 +730,12 @@ mod tests {
             rent_credit: observed(rent_credit, rent_program, 50, vec![2]),
             rent_program: observed(rent_program, key(24), 1, vec![1]),
         };
+        (snapshot, market, admission)
+    }
+
+    #[test]
+    fn close_plan_uses_admission_baselines_but_conserves_donated_live_balances() {
+        let (snapshot, market, admission) = fixture(10, 11);
         let plan = assemble_plan(&snapshot, OBSERVATION, market, admission).expect("close plan");
         assert_eq!(
             plan.instruction.accounts.len(),
@@ -697,7 +743,7 @@ mod tests {
         );
         assert_eq!(
             plan.instruction.accounts[USER_POSITION_CLOSE_CLAIMS_CALLEE_ACCOUNT_V1].pubkey,
-            claims_program
+            key(6)
         );
         assert!(plan.instruction.accounts[USER_POSITION_CLOSE_OWNER_ACCOUNT_V1].is_signer);
         assert_eq!(plan.claims_request.action, ProtocolPositionActionV2::Close);
@@ -712,5 +758,72 @@ mod tests {
         assert_eq!(receipt.position_lamports(), 17);
         assert_eq!(receipt.admission_lamports(), 19);
         assert_eq!(receipt.total_credit(), 36);
+    }
+
+    /// A POSITION ADMITTED AT ONE RATE STILL CLOSES AFTER THE CLUSTER MOVES.
+    ///
+    /// The two principals this admission recorded were written by one
+    /// transaction at one cluster rate over two accounts nothing has touched
+    /// since. Requiring them to equal `Rent::minimum_balance` of the moment
+    /// refused the close whenever the rate moved -- in either direction,
+    /// because an exactness has no slack. Devnet's fall from 6,333 to 5,080 at
+    /// epoch 1141 is the measured instance; a rise breaks the same check by the
+    /// same arithmetic with the sign flipped, and a position that cannot close
+    /// is a position whose rent is stranded forever.
+    ///
+    /// The replacement never reads a sysvar at all: recover the rate from one
+    /// principal and require it to price the other, at a different width.
+    #[test]
+    fn a_position_admitted_at_a_rate_the_cluster_has_left_still_closes() {
+        let width = liability_basis_vector_width_v2(LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, 2)
+            .expect("Position width");
+        // Cohort-15's rate, read off devnet at finalized slot 493,000,156, and
+        // two more the cluster has quoted since. None of them is consulted.
+        for rate in [6_333_u32, 5_080, 6_960, 1] {
+            let position_principal = funded_rent_minimum_v2(rate, width).expect("position");
+            let admission_principal =
+                funded_rent_minimum_v2(rate, PROTOCOL_POSITION_ADMISSION_BYTES_V2)
+                    .expect("admission");
+            assert_ne!(
+                position_principal, admission_principal,
+                "the two widths must differ, or one rate pricing both says nothing"
+            );
+            let (snapshot, market, _) = fixture(position_principal, admission_principal);
+            let admitted = authenticate_position(&snapshot, market)
+                .expect("one rate prices both recorded principals, whatever the cluster charges");
+            assert_eq!(admitted.position_rent_principal(), position_principal);
+            assert_eq!(admitted.admission_rent_principal(), admission_principal);
+        }
+
+        // THE HOSTILE: two principals no single rate prices. That is a garbled
+        // record, and it is refused by a code that names the term to look at.
+        let width_principal = funded_rent_minimum_v2(6_333, width).expect("position");
+        let admission_principal =
+            funded_rent_minimum_v2(6_333, PROTOCOL_POSITION_ADMISSION_BYTES_V2).expect("admission");
+        let (mixed, market, _) = fixture(
+            funded_rent_minimum_v2(5_080, width).expect("position at another rate"),
+            admission_principal,
+        );
+        assert_eq!(
+            authenticate_position(&mixed, market),
+            Err(UserPositionClosePlanErrorV1::InvalidRent),
+            "two rates in one admission is a record nothing wrote"
+        );
+        let (donated, market, _) = fixture(width_principal, admission_principal + 1);
+        assert_eq!(
+            authenticate_position(&donated, market),
+            Err(UserPositionClosePlanErrorV1::InvalidRent),
+            "a principal one lamport off the affine line is no rate's minimum"
+        );
+        // A zero principal never reaches this check: `ProtocolPositionRequestV2`
+        // refuses to build one, so an admission recording nothing cannot exist
+        // on chain to be read back.
+        assert!(
+            ProtocolPositionRequestV2::new(ProtocolPositionRequestV2 {
+                admission_rent_principal: 0,
+                ..fixture(width_principal, admission_principal).2.request()
+            })
+            .is_err()
+        );
     }
 }

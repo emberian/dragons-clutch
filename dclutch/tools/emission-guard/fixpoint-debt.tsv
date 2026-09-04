@@ -21,21 +21,3 @@
 # still listed here. It only moves when somebody looks at it.
 #
 # path	emitter
-crates/dclutch-capability-program-contract/src/generated_set_v1.rs	EmitCapabilityProgramSetV1Rust.lean
-crates/dclutch-capability-program-contract/src/generated_set_v2.rs	EmitCapabilityProgramSetV2Rust.lean
-crates/dclutch-capability-program-contract/src/generated_v3.rs	EmitCapabilityProgramV3AbiRust.lean
-crates/dclutch-capability-program-contract/src/generated_v4.rs	EmitCapabilityProgramV4AbiRust.lean
-crates/dclutch-dealer-codec/src/generated_dealer_liquidity.rs	EmitDealerLiquidityAbiRust.lean
-crates/dclutch-dealer-codec/src/generated_dealer_trading_profile.rs	EmitDealerTradingProfileRust.lean
-crates/dclutch-execution-strategy-contract/src/generated_v2.rs	EmitExecutionStrategyV2AbiRust.lean
-crates/dclutch-general-codec/src/generated_general_controller.rs	EmitGeneralControllerAbiRust.lean
-crates/dclutch-general-codec/src/generated_general_controller_request_v3.rs	EmitGeneralControllerRequestV3Rust.lean
-crates/dclutch-liability-basis-v2-kernel/src/generated.rs	EmitLiabilityBasisV2Rust.lean
-crates/dclutch-liability-basis-v2-kernel/src/generated_price_gate.rs	EmitLiabilityBasisV2PriceGateRust.lean
-crates/dclutch-liability-basis-v2-kernel/src/generated_spline.rs	EmitLiabilityBasisV2SplineRust.lean
-crates/dclutch-market-core-codec/src/generated.rs	EmitMarketCoreRust.lean
-crates/dclutch-market-core-codec/src/generated_physical.rs	EmitMarketCorePhysicalRust.lean
-crates/dclutch-market-core-codec/src/generated_retirement_v1.rs	EmitMarketRetirementV1Rust.lean
-crates/dclutch-market-core-codec/src/generated_series_found_ack_v2.rs	EmitSeriesCoreFoundAckV2Rust.lean
-crates/dclutch-product-payoff-v2-codec/tests/generated/basis_corpus_v3.rs	EmitProductBasisV3CorpusRust.lean
-crates/dclutch-transition-vm/src/v2/generated.rs	EmitTransitionVMV2Rust.lean

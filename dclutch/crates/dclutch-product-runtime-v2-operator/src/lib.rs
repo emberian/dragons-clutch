@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_product_compiler::CompileError;
 pub use dclutch_product_compiler::partition_quality::{
     BandProfileV1, FoundingBandV1, FoundingBeliefV1, MAX_CELL_EX_ANTE_SHARE_BPS_V1,
@@ -436,7 +437,7 @@ pub(crate) fn validate_record(
     if observation.raw.key != raw_key
         || observation.raw.owner != registry
         || observation.raw.executable
-        || observation.raw.lamports < observation.raw_rent_minimum
+        || !funded_rent_persists_v1(observation.raw.lamports)
         || observation.staging.key != staging_key
         || observation.staging.owner != system_program::ID
         || observation.staging.executable

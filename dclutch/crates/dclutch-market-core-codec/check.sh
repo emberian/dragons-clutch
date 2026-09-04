@@ -23,6 +23,17 @@ trap 'rm -f "$generated" "$generated_physical" "$generated_retirement" "$generat
   lake env lean --run EmitCoreFoundFrameV3Rust.lean > "$generated_found_frame"
 )
 
+# Normalise before comparing: each committed file is rustfmt's fixpoint, so a
+# raw compare would hold `committed == emission` and red the first time anyone
+# ran `tools/lane.sh fmt` on a `do not edit` file -- which a direct rustfmt will
+# do, because the `#[rustfmt::skip]`/`include!` that stops `cargo fmt` lives in
+# `src/lib.rs` and never enters the picture. Three of these four moved under
+# rustfmt and sat in `tools/emission-guard/fixpoint-debt.tsv`; the fourth
+# (`generated_found_frame_v3.rs`) was already a fixpoint, and running rustfmt
+# over it as well is what makes this guard's promise true of every emitter it
+# re-runs rather than of three of them.
+rustfmt --edition 2024 "$generated" "$generated_physical" "$generated_retirement" "$generated_found_frame"
+
 cmp "$generated" "$crate_dir/src/generated.rs"
 cmp "$generated_physical" "$crate_dir/src/generated_physical.rs"
 cmp "$generated_retirement" "$crate_dir/src/generated_retirement_v1.rs"

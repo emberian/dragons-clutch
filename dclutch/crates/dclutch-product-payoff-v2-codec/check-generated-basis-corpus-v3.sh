@@ -25,7 +25,15 @@ test "$(sed -n '2p' "$temporary")" = \
 grep -q '^pub const BASIS_AGREEMENT_CASES_V3: \[BasisAgreementCaseV3; 22\] = \[$' "$temporary"
 grep -q '^pub const BASIS_CATEGORICAL_CASES_V3: \[BasisCategoricalCaseV3; 3\] = \[$' "$temporary"
 
-# rustfmt is deliberately NOT run: each record is a single unwrapped line of
-# several hundred bytes, and the file is reached through include! rather than
-# as a module, so nothing formats it in place either.
+# rustfmt IS run, and the comment that used to stand here said the opposite for
+# a reason that measurement did not support: "the file is reached through
+# include! rather than as a module, so nothing formats it in place either".
+# `include!` stops `cargo fmt`'s module walk and stops nothing else --
+# `tools/lane.sh fmt <path>`, this tree's own recommended formatting command,
+# reformats it, and this corpus moves a long way under rustfmt (200 emitted
+# lines become 860). So the raw compare was green only until somebody ran that
+# command, exactly as `ea4c46e02` was. The pins above still read the emitter's
+# RAW output, where each record is one unwrapped line; the compare reads it
+# formatted, which is what the committed file now is.
+rustfmt --edition 2024 "$temporary"
 cmp "$temporary" "$accepted"

@@ -8,8 +8,8 @@ use dclutch_account_profile_contract::AccountProfileV1;
 use dclutch_capability_contract::{
     CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingLedgerDerivationV2,
     CapabilityManifestV1, FUNDING_LEDGER_ACTIVE_ADMISSIBLE_STATES_V2, FundingLedgerCloseCustodyV2,
-    FundingLedgerV2, capability_dependency_closure_mask_v1, manifest_entry_for_ledger_row_v2,
-    validate_funding_ledger_masks_v2,
+    FundingLedgerV2, capability_dependency_closure_mask_v1, funding::funded_rent_persists_v1,
+    manifest_entry_for_ledger_row_v2, validate_funding_ledger_masks_v2,
 };
 use dclutch_capability_program_contract::{
     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1, CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityProgramV1,
@@ -734,7 +734,12 @@ pub fn build_direct_native_close_v1(
     let observation = close_observation(snapshot)?;
     let market = authenticate_close_market(snapshot)?;
     authenticate_close_releases(snapshot, market)?;
-    let rent = decode_rent(&snapshot.rent_sysvar).map_err(|_| TerminalRetirementErrorV1::Record)?;
+    // The Rent sysvar is still AUTHENTICATED here -- key, owner, executable bit,
+    // exact width, canonical body -- even though nothing prices a floor against
+    // it any more. Dropping the decode with the floor would silently stop
+    // checking the coordinate, which is the debt `a4b2cbb17` named at
+    // `authenticate_execution_strategy_v2` and this does not repeat.
+    decode_rent(&snapshot.rent_sysvar).map_err(|_| TerminalRetirementErrorV1::Record)?;
     authenticate_close_system(snapshot)?;
     authenticate_finalized_record(
         snapshot.registry_program.key,
@@ -783,7 +788,7 @@ pub fn build_direct_native_close_v1(
     }
     let funding =
         authenticate_close_funding(snapshot, market, manifest, selected_bit, required_union)?;
-    if snapshot.root.lamports < rent.minimum_balance(snapshot.root.data.len()) {
+    if !funded_rent_persists_v1(snapshot.root.lamports) {
         return Err(TerminalRetirementErrorV1::Projection);
     }
     authenticate_close_rent_credit(snapshot, market)?;

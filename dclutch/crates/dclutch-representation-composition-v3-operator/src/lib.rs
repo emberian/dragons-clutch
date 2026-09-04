@@ -18,6 +18,7 @@ pub mod hot_v6;
 /// Canonical Product-native categorical composition publication.
 pub mod native_categorical_v1;
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_product_payoff_v2_codec::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
     runtime_v3::{ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, semantic_basis_preimage_v3},
@@ -972,7 +973,7 @@ fn authenticate_record<'a>(
         || observed.raw.owner != registry
         || observed.raw.executable
         || observed.raw.data.is_empty()
-        || observed.raw.lamports < observed.raw_rent_minimum
+        || !funded_rent_persists_v1(observed.raw.lamports)
         || observed.raw_rent_minimum == 0
         || observed.staging.owner != system_program::ID
         || observed.staging.executable

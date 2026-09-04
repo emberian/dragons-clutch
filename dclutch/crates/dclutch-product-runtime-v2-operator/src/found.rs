@@ -5,7 +5,10 @@
 //! emits the exact unsigned 31-account Core Found instruction. It performs no
 //! RPC, signing, submission, funding, or account mutation.
 
-use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
+use dclutch_capability_contract::{
+    CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1,
+    funding::funded_rent_persists_v1,
+};
 use dclutch_market_core_codec::{
     Action, FOUND_ACCOUNT_ROLES_V3, FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3,
     FOUND_PRICE_GATE_RAW_INDEX_V3, Identity, MarketCoreStateSeedsV2, MarketIdentity, REQUEST_BYTES,
@@ -470,7 +473,7 @@ pub fn project_found_v2(
         .map_err(|_| Error::InvalidRecord)?;
 
     let release_set_digest = authenticate_activation(state)?;
-    authenticate_infrastructure(state, &rent)?;
+    authenticate_infrastructure(state)?;
 
     let mut market_identity = MarketIdentity {
         market_id: identity(state.market.key.to_bytes())?,
@@ -678,15 +681,14 @@ fn authenticate_activation(
     dclutch_product_runtime_v2::ContentId::new(release_set_digest).map_err(|_| Error::InvalidRecord)
 }
 
-fn authenticate_infrastructure(state: FoundProjectionStateV2<'_>, rent: &Rent) -> Result<()> {
+fn authenticate_infrastructure(state: FoundProjectionStateV2<'_>) -> Result<()> {
     let expected_profile = Pubkey::find_program_address(
         &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
         &state.core_program.key,
     )
     .0;
     if state.infrastructure_profile.key != expected_profile
-        || state.infrastructure_profile.lamports
-            < rent.minimum_balance(PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2)
+        || !funded_rent_persists_v1(state.infrastructure_profile.lamports)
     {
         return Err(Error::AccountAuthority);
     }

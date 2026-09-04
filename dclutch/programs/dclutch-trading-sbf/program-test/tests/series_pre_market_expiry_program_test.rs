@@ -98,6 +98,7 @@ mod series_premarket_expiry_chain_v1;
 #[path = "support/series_premarket_expiry_v1.rs"]
 mod series_premarket_expiry_v1;
 
+use dclutch_market_core_codec::SERIES_FOUNDING_PERMIT_BYTES_V1;
 use dclutch_trading_sbf::TradingSbfError;
 use series_premarket_expiry_chain_v1::{
     SeriesPremarketExpiryChainFixtureV1, SeriesPremarketExpiryChainInputV1,
@@ -328,11 +329,31 @@ async fn current_source_series_expire_lands_before_the_future_market_exists() {
     assert!(execution.compute_units_consumed <= 1_400_000);
 }
 
-/// The permit PDA is selected correctly but one lamport below the exact body
-/// Rent floor. This perturbs only a late pre-Market vacancy conjunct and proves
-/// the full Registry transaction restores every material account exactly.
+/// A PERMIT PREPAID AT A CHEAPER RATE STILL EXPIRES, ON THE DEPLOYED ELF.
+///
+/// This route REFUNDS a permit Core never allocated: the founding prepaid the
+/// slot in an earlier transaction, at that transaction's rate, and Expire hands
+/// the lamports back to the RentCredit. Until the ruling of 2026-09-04 05:50
+/// the pre-Market vacancy conjunct floored the slot at
+/// `Rent::minimum_balance(SERIES_FOUNDING_PERMIT_BYTES_V1)` of the moment, and
+/// this test asserted that one lamport below it refused with `Content`. That is
+/// backwards: the cluster may raise its rate at any epoch boundary, and a slot
+/// nobody owns can never be topped up, so the floor stranded the prepayment
+/// permanently. The seeds say WHICH slot this is; `funded_rent_persists_v1`
+/// says whether there is anything left in it.
+///
+/// Same fixture, same real ELFs, one lamport short -- and it lands.
+///
+/// IT IS ALSO ONE OF THE THREE RED ROWS THIS FILE'S HEADER DESCRIBES: `build_chain`
+/// refuses `Projection("borrowed-range-resolve")` before a single ELF executes,
+/// for the artifact-set contradiction named above, which predates this test and
+/// is not rent. So the inversion here is proved by
+/// `series_expiry_permit_requires_exact_prefunded_writable_system_vacancy` on the
+/// native side and is OWED a parent-ELF red-proof until the Expire artifact set
+/// is repaired. Measured at `edfdc22ac`, before this lane began: the same three
+/// rows fail identically.
 #[tokio::test]
-async fn underfunded_selected_permit_refuses_with_exact_state_reversion() {
+async fn a_permit_prepaid_below_todays_minimum_still_expires_on_the_deployed_elf() {
     let artifacts = elves();
     let mut test = program_test_without_forced_budget(&artifacts);
     let mut fixture = build_chain(&mut test, &artifacts);
@@ -364,23 +385,56 @@ async fn underfunded_selected_permit_refuses_with_exact_state_reversion() {
         .expect("warp beyond the Series retry deadline");
     let before = capture_series_account_snapshots_v1(&mut context, &fixture.material_snapshot_keys)
         .await
-        .expect("hostile prestates");
-    let refusal = match submit_v0_observed(&mut context, &instructions, addresses, None, &[]).await
-    {
-        Ok(_) => panic!("underfunded vacant permit unexpectedly executed"),
-        Err(refusal) => refusal,
-    };
+        .expect("stranded-permit prestates");
+    let permit_before = before
+        .accounts
+        .iter()
+        .find(|snapshot| snapshot.key == report.permit_account)
+        .and_then(|snapshot| snapshot.account.clone())
+        .expect("the stranded permit must exist before the expiry");
+    let credit_before = before
+        .accounts
+        .iter()
+        .find(|snapshot| snapshot.key == report.rent_credit)
+        .and_then(|snapshot| snapshot.account.clone())
+        .expect("RentCredit prestate");
+    // THE POSITIVE CONTROL: the perturbation really did put this slot under
+    // what the bank charges today, or the admission below proves nothing.
     assert_eq!(
-        refusal_code(&refusal.error),
-        Some(TradingSbfError::Content as u32),
-        "the exact pre-Market permit precondition must own the refusal: {:#?}",
-        refusal.logs,
+        permit_before.lamports,
+        Rent::default()
+            .minimum_balance(SERIES_FOUNDING_PERMIT_BYTES_V1)
+            .checked_sub(1)
+            .expect("a positive permit minimum"),
+        "the fixture must be exactly one lamport under today's floor"
     );
+    submit_v0_observed(&mut context, &instructions, addresses, None, &[])
+        .await
+        .expect("real-ELF Series Expire over a permit the cluster repriced");
     let after = capture_series_account_snapshots_v1(&mut context, &fixture.material_snapshot_keys)
         .await
-        .expect("hostile poststates");
-    assert_series_premarket_expiry_rollback_v1(&report, &before, &after)
-        .expect("full Registry transaction rollback");
+        .expect("stranded-permit poststates");
+    let permit_after = after
+        .accounts
+        .iter()
+        .find(|snapshot| snapshot.key == report.permit_account)
+        .expect("permit poststate row")
+        .account
+        .clone();
+    assert!(
+        permit_after.is_none_or(|account| account.lamports == 0 && account.data.is_empty()),
+        "the expiry must drain the slot it refunded"
+    );
+    let credit_after = after
+        .accounts
+        .iter()
+        .find(|snapshot| snapshot.key == report.rent_credit)
+        .and_then(|snapshot| snapshot.account.clone())
+        .expect("RentCredit poststate");
+    assert!(
+        credit_after.lamports > credit_before.lamports,
+        "the stranded prepayment must reach the RentCredit, not stay stranded"
+    );
 }
 
 /// Coord80 is an exact controller-scoped Trading PDA and only the inner Core

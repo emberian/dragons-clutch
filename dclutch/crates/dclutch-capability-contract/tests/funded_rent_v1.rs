@@ -15,7 +15,8 @@
 
 use dclutch_capability_contract::funding::{
     ACCOUNT_STORAGE_OVERHEAD_BYTES, FundingAmountsV1, FundingLedgerV2, FundingQuoteV1,
-    derive_funded_rent_rate_v2, funded_rent_minimum_v2, funding_ledger_bytes_v2,
+    derive_funded_rent_rate_v2, funded_rent_minimum_v2, funded_rent_rate_from_minimum_v1,
+    funding_ledger_bytes_v2,
 };
 use dclutch_capability_contract::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1, ContentId,
@@ -307,5 +308,86 @@ fn a_rent_no_single_rate_reproduces_is_refused_rather_than_approximated() {
         funded_rent_minimum_v2(0, 264),
         Err(Error::FundedRentRateMissing),
         "and a zero rate never prices an account at nothing"
+    );
+}
+
+/// A RECORDED PRINCIPAL CARRIES THE RATE THAT WROTE IT, AND ONE RATE PRICES
+/// EVERY WIDTH THAT FOUNDING TOUCHED.
+///
+/// The floors over pre-existing accounts became `funded_rent_persists_v1`,
+/// which is rate-free. The EXACTNESS checks over a persisted principal cannot
+/// be: they must compare against a number. Comparing against
+/// `Rent::minimum_balance` of the moment is what stranded cohort-15 in one
+/// direction and would strand cohort-16's redeploy in the other, so the number
+/// to compare against is recovered from the record itself.
+///
+/// The readings are cohort-15's, off devnet at finalized slot 493,000,156: its
+/// seven Program accounts hold 1,038,612 lamports over 36 bytes and its seven
+/// ProgramData accounts hold their own widths' minima -- fourteen accounts,
+/// three widths shown here, one rate.
+#[test]
+fn a_recorded_principal_recovers_the_rate_that_wrote_it() {
+    assert_eq!(
+        funded_rent_rate_from_minimum_v1(1_038_612, 36),
+        Ok(FUNDED_RATE),
+        "cohort-15's Program accounts were funded at 6,333, which 164 x 6,333 says exactly"
+    );
+    assert_eq!(
+        funded_rent_rate_from_minimum_v1(1_523_802_129, 240_485),
+        Ok(FUNDED_RATE),
+        "and its Registry ProgramData, at a width six thousand times larger"
+    );
+    assert_eq!(
+        funded_rent_rate_from_minimum_v1(14_828_523_177, 2_341_341),
+        Ok(FUNDED_RATE),
+        "and its Trading ProgramData, the widest account the cohort deployed"
+    );
+
+    // The point of the recovery: one recorded principal prices the OTHER
+    // account of the same founding, at a different width, with no sysvar in the
+    // arithmetic at all. This is the shape `user_position_close_v1` now uses
+    // over its two admission principals.
+    let rate = funded_rent_rate_from_minimum_v1(1_038_612, 36).expect("rate");
+    assert_eq!(
+        funded_rent_minimum_v2(rate, 240_485),
+        Ok(1_523_802_129),
+        "one rate prices every width that founding touched"
+    );
+
+    // A DONATED LAMPORT PUTS THE READING OFF THE AFFINE LINE, and no rate
+    // reproduces it. That is refused by name, never rounded to the nearest
+    // plausible cluster -- the same hostile the recorded-rate path answers with
+    // `FundedRentNotEvidenced`, asked of a principal instead of a balance.
+    assert_eq!(
+        funded_rent_rate_from_minimum_v1(1_038_613, 36),
+        Err(Error::UnrepresentableRentRate),
+        "one lamport above the minimum is not a rent-exempt minimum at any rate"
+    );
+    assert_eq!(
+        funded_rent_rate_from_minimum_v1(1_038_611, 36),
+        Err(Error::UnrepresentableRentRate),
+        "and one lamport below it is not either"
+    );
+    assert_eq!(
+        funded_rent_rate_from_minimum_v1(0, 36),
+        Err(Error::UnrepresentableRentRate),
+        "a zero principal records no rate rather than pricing every account at nothing"
+    );
+    assert_eq!(
+        funded_rent_rate_from_minimum_v1(u64::from(u32::MAX) * 164 + 164, 36),
+        Err(Error::UnrepresentableRentRate),
+        "a principal implying a rate no u32 holds is refused, not truncated"
+    );
+
+    // THE POSITIVE CONTROL, two-sided: the rate really is what distinguishes
+    // these numbers. Devnet's own live rate at that slot was 5,080 and the
+    // genesis default prices a byte at 6,960; neither reproduces the balances
+    // above, and the recovery says so rather than picking the closest.
+    assert_eq!(funded_rent_minimum_v2(5_080, 36), Ok(833_120));
+    assert_eq!(funded_rent_minimum_v2(6_960, 36), Ok(1_141_440));
+    assert!(
+        funded_rent_minimum_v2(5_080, 36) != Ok(1_038_612)
+            && funded_rent_minimum_v2(6_960, 36) != Ok(1_038_612),
+        "cohort-15 was funded at neither the rate of the moment nor the genesis constant"
     );
 }

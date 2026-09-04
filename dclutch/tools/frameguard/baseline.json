@@ -1,6 +1,6 @@
 {
   "bound_bytes": 4096,
-  "commit": "1c507c45f34e27e1aaeaa34b7335896d094dea94",
+  "commit": "1973f4bd18fb3c9555d958662003d1c1f65a2abe",
   "link_count": 12,
   "links": [
     {
@@ -2571,7 +2571,7 @@
         },
         {
           "frames_bytes": [
-            384
+            320
           ],
           "symbol": "_ZN16dclutch_core_sbf20series_permit_expiry46authenticate_record_derived_unallocated_permit17h<hash>E"
         },
@@ -5214,7 +5214,7 @@
         },
         {
           "frames_bytes": [
-            832
+            768
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf11core_effect45authenticate_admitted_terminal_certificate_v217h<hash>E"
         },

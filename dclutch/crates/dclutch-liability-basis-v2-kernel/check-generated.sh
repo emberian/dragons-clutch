@@ -22,7 +22,9 @@ test "$(sed -n '2p' "$temporary")" = 'use super::{AgreementCaseV2, RefusalCaseV2
 # -- BASIS_REQUEST_MAGIC_V2, plus RAMP_MAGIC_V2 as an alias, where there had
 # been one line -- so the re-emission was correct and this pin was the only
 # thing that noticed it, which is what the pin is for. It fired, red, on
-# 2026-09-02, and nothing ran this script for two days.
+# 2026-09-02, and nothing ran this script for two days. It counts the emitter's
+# RAW output, which is not the committed file's line count: the committed file
+# is that output formatted (see the note below).
 test "$(wc -l < "$temporary" | tr -d ' ')" -eq 549
 # The magic the ramp and the spline now SHARE rather than each declaring: the
 # reviewed content of that same move, pinned here so a silent un-sharing is a
@@ -32,4 +34,8 @@ grep -q '^pub const RAMP_MAGIC_V2: \[u8; 8\] = BASIS_REQUEST_MAGIC_V2;$' "$tempo
 grep -q '^pub const AGREEMENT_CASES_V2: \[AgreementCaseV2; 16\] = \[$' "$temporary"
 grep -q '^pub const REFUSAL_CASES_V2: \[RefusalCaseV2; 19\] = \[$' "$temporary"
 grep -q '^pub const TRANSITION_CASES_V2: \[TransitionCaseV2; 24\] = \[$' "$temporary"
+# Normalise before comparing: the committed file is rustfmt's fixpoint, so the
+# pins above read the RAW emission and this compare reads the formatted one. A
+# raw compare reds the first time `tools/lane.sh fmt` touches this file.
+rustfmt --edition 2024 "$temporary"
 cmp "$temporary" "$accepted"

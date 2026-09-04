@@ -2665,6 +2665,7 @@ name = "dclutch-representation-composition-v3-operator"
 version = "0.1.0"
 dependencies = [
  "dclutch-account-profile-contract",
+ "dclutch-capability-contract",
  "dclutch-capability-program-contract",
  "dclutch-product-payoff-v2-codec",
  "dclutch-product-runtime-v2",

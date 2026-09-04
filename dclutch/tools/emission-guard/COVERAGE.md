@@ -13,7 +13,7 @@ An unguarded row is not a bug in itself — it is a file that can be hand-edited
 
 An inventory of guards that exist, not a record of guards that passed — each of these re-runs its emitter and compares the output against the committed bytes WHEN SOMEBODY RUNS IT. All of them need `lake`, which is why they are not on a cheap CI tier. A guard is a comparison, never a build: three kinds qualify — a `check*.sh` script, a `package.json` script passing `--check`, and a Rust integration test that reads the committed artifact back and asserts equality.
 
-**Normalises** says whether the guard runs `rustfmt --edition 2024` over the emission before comparing. It decides whether the guard can survive somebody formatting the committed file — which `cargo fmt` will not do (every generated module is behind `#[rustfmt::skip]` or an `include!`) but `tools/lane.sh fmt <path>` will, because a direct rustfmt never sees that attribute: of the 65 guards over Rust emissions, 40 do and 25 compare raw emitter stdout — green only while the emission is already a rustfmt fixpoint. `n/a` is the TypeScript half, which rustfmt does not format. `tools/emission-guard/fixpoint-debt.tsv` is the list of files where the raw comparison is not safe, and `--fixpoint` is the gate that keeps it honest.
+**Normalises** says whether the guard runs `rustfmt --edition 2024` over the emission before comparing. It decides whether the guard can survive somebody formatting the committed file — which `cargo fmt` will not do (every generated module is behind `#[rustfmt::skip]` or an `include!`) but `tools/lane.sh fmt <path>` will, because a direct rustfmt never sees that attribute: of the 65 guards over Rust emissions, 55 do and 10 compare raw emitter stdout — green only while the emission is already a rustfmt fixpoint. `n/a` is the TypeScript half, which rustfmt does not format. `tools/emission-guard/fixpoint-debt.tsv` is the list of files where the raw comparison is not safe, and `--fixpoint` is the gate that keeps it honest.
 
 | Guard | Kind | Normalises | Emitters re-run |
 |---|---|---|---|
@@ -30,35 +30,35 @@ An inventory of guards that exist, not a record of guards that passed — each o
 | `crates/dclutch-capability-contract/check-generated.sh` | shell | yes | `EmitCapabilityManifestV1AbiRust.lean` |
 | `crates/dclutch-capability-contract/tests/funding_activation_corpus_generator_fresh.rs` | cargo-test | yes | `EmitCapabilityFundingActivationCorpusRust.lean` |
 | `crates/dclutch-capability-program-contract/check-generated.sh` | shell | yes | `EmitCapabilityProgramAbiRust.lean` |
-| `crates/dclutch-capability-program-contract/tests/set_v1_generator_fresh.rs` | cargo-test | raw | `EmitCapabilityProgramSetV1Rust.lean` |
-| `crates/dclutch-capability-program-contract/tests/set_v2_generator_fresh.rs` | cargo-test | raw | `EmitCapabilityProgramSetV2Rust.lean` |
-| `crates/dclutch-capability-program-contract/tests/v3_generator_fresh.rs` | cargo-test | raw | `EmitCapabilityProgramV3AbiRust.lean` |
-| `crates/dclutch-capability-program-contract/tests/v4_generator_fresh.rs` | cargo-test | raw | `EmitCapabilityProgramV4AbiRust.lean` |
+| `crates/dclutch-capability-program-contract/tests/set_v1_generator_fresh.rs` | cargo-test | yes | `EmitCapabilityProgramSetV1Rust.lean` |
+| `crates/dclutch-capability-program-contract/tests/set_v2_generator_fresh.rs` | cargo-test | yes | `EmitCapabilityProgramSetV2Rust.lean` |
+| `crates/dclutch-capability-program-contract/tests/v3_generator_fresh.rs` | cargo-test | yes | `EmitCapabilityProgramV3AbiRust.lean` |
+| `crates/dclutch-capability-program-contract/tests/v4_generator_fresh.rs` | cargo-test | yes | `EmitCapabilityProgramV4AbiRust.lean` |
 | `crates/dclutch-claims-svm/check-generated.sh` | shell | yes | `EmitClaimsLiabilityBasisStateV2Rust.lean`, `EmitClaimsMarketClosureV1Rust.lean` |
 | `crates/dclutch-custody-contract/check-generated.sh` | shell | yes | `EmitProjectedCustodyStateV2Rust.lean` |
-| `crates/dclutch-dealer-codec/tests/generator_fresh.rs` | cargo-test | raw | `EmitDealerLiquidityAbiRust.lean`, `EmitDealerScenarioCheckpointV1Rust.lean`, `EmitDealerScenarioReservationStateV1Rust.lean`, `EmitDealerScenarioTradeV4Rust.lean`, `EmitDealerTradingProfileRust.lean` |
+| `crates/dclutch-dealer-codec/tests/generator_fresh.rs` | cargo-test | yes | `EmitDealerLiquidityAbiRust.lean`, `EmitDealerScenarioCheckpointV1Rust.lean`, `EmitDealerScenarioReservationStateV1Rust.lean`, `EmitDealerScenarioTradeV4Rust.lean`, `EmitDealerTradingProfileRust.lean` |
 | `crates/dclutch-dealer-scenario-kernel/tests/netting_corpus_generator_fresh.rs` | cargo-test | yes | `EmitDealerScenarioNettingCorpusRust.lean` |
 | `crates/dclutch-direct-aot-contract/check-generated.sh` | shell | yes | `EmitDirectProgramV2Rust.lean` |
 | `crates/dclutch-direct-codec/check-generated.sh` | shell | yes | `EmitDirectCodecRust.lean`, `EmitDirectLifecycleAbiRust.lean`, `EmitRegisteredControllerAbiRust.lean` |
 | `crates/dclutch-direct-codec/check-successor-generated.sh` | shell | yes | `EmitDirectIntentV2Rust.lean`, `EmitDirectOrdinaryV3Rust.lean`, `EmitDirectRegisteredFillV4Rust.lean`, `EmitDirectSuccessorAbiRust.lean` |
 | `crates/dclutch-effect-kernel/tests/effect_v4_lean_generator_fresh.rs` | cargo-test | yes | `EmitEffectProgramV4AbiRust.lean` |
-| `crates/dclutch-execution-strategy-contract/tests/v2_generator_fresh.rs` | cargo-test | raw | `EmitExecutionStrategyV2AbiRust.lean` |
+| `crates/dclutch-execution-strategy-contract/tests/v2_generator_fresh.rs` | cargo-test | yes | `EmitExecutionStrategyV2AbiRust.lean` |
 | `crates/dclutch-fractional-claim-kernel/check-generated.sh` | shell | raw | `EmitFractionalClaimV1AbiRust.lean` |
 | `crates/dclutch-general-adapter-contract/tests/request_profiles_generator_fresh.rs` | cargo-test | yes | `EmitGeneralRequestProfilesV1Rust.lean` |
 | `crates/dclutch-general-adapter-contract/tests/runtime_wire_v2_generator_fresh.rs` | cargo-test | yes | `EmitGeneralRuntimeWireV2Rust.lean` |
 | `crates/dclutch-general-adapter-contract/tests/selection_decision_corpus_generator_fresh.rs` | cargo-test | yes | `EmitGeneralSelectionDecisionCorpusRust.lean` |
 | `crates/dclutch-general-adapter-contract/tests/transition_programs_generator_fresh.rs` | cargo-test | yes | `EmitGeneralTransitionV3Rust.lean` |
-| `crates/dclutch-general-codec/tests/generator_fresh.rs` | cargo-test | raw | `EmitGeneralControllerAbiRust.lean` |
-| `crates/dclutch-general-codec/tests/request_v3_generator_fresh.rs` | cargo-test | raw | `EmitGeneralControllerRequestV3Rust.lean` |
+| `crates/dclutch-general-codec/tests/generator_fresh.rs` | cargo-test | yes | `EmitGeneralControllerAbiRust.lean` |
+| `crates/dclutch-general-codec/tests/request_v3_generator_fresh.rs` | cargo-test | yes | `EmitGeneralControllerRequestV3Rust.lean` |
 | `crates/dclutch-general-config-contract/tests/generator_fresh.rs` | cargo-test | raw | `EmitGeneralConfigAbiRust.lean` |
 | `crates/dclutch-general-config-contract/tests/generator_v3_fresh.rs` | cargo-test | raw | `EmitGeneralConfigV3AbiRust.lean` |
-| `crates/dclutch-liability-basis-v2-kernel/check-generated-price-gate.sh` | shell | raw | `EmitLiabilityBasisV2PriceGateRust.lean` |
-| `crates/dclutch-liability-basis-v2-kernel/check-generated-spline.sh` | shell | raw | `EmitLiabilityBasisV2SplineRust.lean` |
-| `crates/dclutch-liability-basis-v2-kernel/check-generated.sh` | shell | raw | `EmitLiabilityBasisV2Rust.lean` |
-| `crates/dclutch-market-core-codec/check.sh` | shell | raw | `EmitCoreFoundFrameV3Rust.lean`, `EmitMarketCorePhysicalRust.lean`, `EmitMarketCoreRust.lean`, `EmitMarketRetirementV1Rust.lean` |
+| `crates/dclutch-liability-basis-v2-kernel/check-generated-price-gate.sh` | shell | yes | `EmitLiabilityBasisV2PriceGateRust.lean` |
+| `crates/dclutch-liability-basis-v2-kernel/check-generated-spline.sh` | shell | yes | `EmitLiabilityBasisV2SplineRust.lean` |
+| `crates/dclutch-liability-basis-v2-kernel/check-generated.sh` | shell | yes | `EmitLiabilityBasisV2Rust.lean` |
+| `crates/dclutch-market-core-codec/check.sh` | shell | yes | `EmitCoreFoundFrameV3Rust.lean`, `EmitMarketCorePhysicalRust.lean`, `EmitMarketCoreRust.lean`, `EmitMarketRetirementV1Rust.lean` |
 | `crates/dclutch-market-core-codec/tests/capability_funding_header_v2.rs` | cargo-test | raw | `EmitCapabilityFundingHeaderV2Rust.lean` |
-| `crates/dclutch-market-core-codec/tests/series_found_ack_v2_generator_fresh.rs` | cargo-test | raw | `EmitSeriesCoreFoundAckV2Rust.lean` |
-| `crates/dclutch-product-payoff-v2-codec/check-generated-basis-corpus-v3.sh` | shell | raw | `EmitProductBasisV3CorpusRust.lean` |
+| `crates/dclutch-market-core-codec/tests/series_found_ack_v2_generator_fresh.rs` | cargo-test | yes | `EmitSeriesCoreFoundAckV2Rust.lean` |
+| `crates/dclutch-product-payoff-v2-codec/check-generated-basis-corpus-v3.sh` | shell | yes | `EmitProductBasisV3CorpusRust.lean` |
 | `crates/dclutch-product-payoff-v2-codec/check-generated-price-gate-v1.sh` | shell | yes | `EmitProductPriceGateV1AbiRust.lean` |
 | `crates/dclutch-product-payoff-v2-codec/check-generated-runtime-v3.sh` | shell | yes | `EmitProductBasisV3AbiRust.lean` |
 | `crates/dclutch-product-payoff-v2-codec/check-generated-v3.sh` | shell | yes | `EmitProductGradedBasisAdmissionV3AbiRust.lean` |
@@ -82,7 +82,7 @@ An inventory of guards that exist, not a record of guards that passed — each o
 | `crates/dclutch-source-contract/check-generated.sh` | shell | yes | `EmitSourceMaterialV2AbiRust.lean`, `EmitSourceMaterialV3AbiRust.lean`, `EmitSourcePrincipalCapacityV1Rust.lean`, `EmitSourceRecoveryPolicyV2AbiRust.lean`, `EmitSourceResolutionStateV2AbiRust.lean`, `EmitSourceScheduledMedianV1Rust.lean`, `EmitSourceStatisticSpecV1Rust.lean`, `EmitSourceWindowSpecV1Rust.lean` |
 | `crates/dclutch-structured-v2-kernel/check-generated.sh` | shell | yes | `EmitStructuredV2AbiRust.lean` |
 | `crates/dclutch-structured-v2-kernel/tests/lean_generator_fresh.rs` | cargo-test | yes | `EmitStructuredV2AbiRust.lean` |
-| `crates/dclutch-transition-vm/check-v2-generated.sh` | shell | raw | `EmitTransitionVMV2Rust.lean` |
+| `crates/dclutch-transition-vm/check-v2-generated.sh` | shell | yes | `EmitTransitionVMV2Rust.lean` |
 | `packages/dclutch-sdk: lean-emit EmitCapabilityManifestV1AbiTs.lean` | lean-emit | n/a | `EmitCapabilityManifestV1AbiTs.lean` |
 | `packages/dclutch-sdk: lean-emit EmitProtocolInfrastructureTs.lean` | lean-emit | n/a | `EmitProtocolInfrastructureTs.lean` |
 | `packages/dclutch-sdk: lean-emit EmitRationalTerminalHotV3Ts.lean` | lean-emit | n/a | `EmitRationalTerminalHotV3Ts.lean` |

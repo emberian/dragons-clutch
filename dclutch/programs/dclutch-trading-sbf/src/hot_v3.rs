@@ -149,8 +149,8 @@ use dclutch_execution_strategy_contract::{
 };
 use dclutch_market_core_codec::{
     CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity,
-    SERIES_FOUNDING_PERMIT_BYTES_V1, SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_BYTES_V1,
-    STATE_BYTES, SeriesFoundingPermitSeedsV1, SeriesUnallocatedPermitExpiryRequestV1,
+    SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_BYTES_V1, STATE_BYTES, SeriesFoundingPermitSeedsV1,
+    SeriesUnallocatedPermitExpiryRequestV1,
 };
 use dclutch_product_runtime_v2::ContentId as ProductContentId;
 use dclutch_product_runtime_v2_svm_reader::{
@@ -2543,7 +2543,6 @@ pub fn process_hot_execution_v3(
         family_request,
         invocation,
         &frame,
-        &rent,
         &root,
         &product_runtime_v3,
     )?;
@@ -2673,7 +2672,6 @@ fn try_authenticate_series_expiry_premarket_v1<'accounts, 'info>(
     family_request: &[u8],
     invocation: AuthenticatedHotInvocationV3,
     frame: &HotFrameV3<'accounts, 'info>,
-    rent: &Rent,
     root: &AuthenticatedRootV3,
     product_runtime_v3: &AuthenticatedProductRuntimeV3<'accounts, 'info>,
 ) -> Result<Option<[u8; 32]>, ProgramError> {
@@ -2700,7 +2698,6 @@ fn try_authenticate_series_expiry_premarket_v1<'accounts, 'info>(
         family_request,
         invocation,
         frame,
-        rent,
         root,
         product_runtime_v3,
         descriptor,
@@ -2724,7 +2721,6 @@ fn authenticate_selected_series_expiry_premarket_v1<'accounts, 'info>(
     family_request: &[u8],
     invocation: AuthenticatedHotInvocationV3,
     frame: &HotFrameV3<'accounts, 'info>,
-    rent: &Rent,
     root: &AuthenticatedRootV3,
     product_runtime_v3: &AuthenticatedProductRuntimeV3<'accounts, 'info>,
     descriptor: CapabilityProgramV4,
@@ -2745,7 +2741,6 @@ fn authenticate_selected_series_expiry_premarket_v1<'accounts, 'info>(
         program_id,
         family_request,
         frame,
-        rent,
         &runtime_accounts,
         &core_template,
         product_runtime_v3,
@@ -2896,7 +2891,6 @@ fn authenticate_series_expiry_records_and_projection_v1<'accounts, 'info>(
     program_id: &Pubkey,
     family_request: &[u8],
     frame: &HotFrameV3<'accounts, 'info>,
-    rent: &Rent,
     runtime_accounts: &[&'accounts AccountInfo<'info>],
     core_template: &[u8],
     product_runtime_v3: &AuthenticatedProductRuntimeV3<'accounts, 'info>,
@@ -2972,7 +2966,6 @@ fn authenticate_series_expiry_records_and_projection_v1<'accounts, 'info>(
         &template_bytes,
         &occurrence_bytes,
         &ticket_bytes,
-        rent,
     )?;
     drop(template_bytes);
     drop(occurrence_bytes);
@@ -3150,10 +3143,20 @@ fn require_series_expiry_future_market_vacancy_v1(
     Ok(())
 }
 
+/// The vacant permit an expiry REFUNDS, which is not the permit a founding
+/// creates.
+///
+/// Core never allocated this slot; the founding prepaid it in an earlier
+/// transaction, at that transaction's rate, and this route hands the lamports
+/// back. A floor at the rate of the moment therefore refuses a slot the
+/// founding really did prepay the instant the cluster charges more than it did
+/// then -- and the refund is stranded forever, because nothing tops up a permit
+/// nobody owns. The seeds are the authority for WHICH slot this is;
+/// `funded_rent_persists_v1` is the authority for whether there is anything
+/// left in it.
 fn require_series_expiry_vacant_permit_v1(
     permit: &AccountInfo<'_>,
     expected_permit: Pubkey,
-    rent: &Rent,
 ) -> Result<(), ProgramError> {
     if permit.key != &expected_permit
         || permit.owner != &system_program::ID
@@ -3161,7 +3164,7 @@ fn require_series_expiry_vacant_permit_v1(
         || !permit.is_writable
         || permit.is_signer
         || permit.executable
-        || permit.lamports() < rent.minimum_balance(SERIES_FOUNDING_PERMIT_BYTES_V1)
+        || !funded_rent_persists_v1(permit.lamports())
     {
         return Err(TradingSbfError::Content.into());
     }
@@ -3289,7 +3292,6 @@ fn authenticate_series_expiry_vacant_permit_request_v1(
     template_bytes: &[u8],
     occurrence_bytes: &[u8],
     ticket_bytes: &[u8],
-    rent: &Rent,
 ) -> Result<[u8; 32], ProgramError> {
     let admitted = admit_series_action_v3(
         family_request,
@@ -3319,7 +3321,7 @@ fn authenticate_series_expiry_vacant_permit_request_v1(
     let permit = *runtime
         .get(series_expiry_v1::SERIES_EXPIRE_PERMIT_ACCOUNT_V1)
         .ok_or(TradingSbfError::Content)?;
-    require_series_expiry_vacant_permit_v1(permit, expected_permit, rent)?;
+    require_series_expiry_vacant_permit_v1(permit, expected_permit)?;
 
     let rent_credit = *runtime
         .get(series_expiry_v1::SERIES_EXPIRE_RENT_CREDIT_ACCOUNT_V1)
@@ -16134,6 +16136,8 @@ mod tests {
 
     #[test]
     fn series_expiry_permit_requires_exact_prefunded_writable_system_vacancy() {
+        use dclutch_market_core_codec::SERIES_FOUNDING_PERMIT_BYTES_V1;
+
         let rent = Rent::default();
         let key = Pubkey::new_unique();
         let other = Pubkey::new_unique();
@@ -16150,9 +16154,8 @@ mod tests {
             &system_program::ID,
             false,
         );
-        require_series_expiry_vacant_permit_v1(&exact, key, &rent)
-            .expect("exact unallocated permit");
-        assert!(require_series_expiry_vacant_permit_v1(&exact, other, &rent).is_err());
+        require_series_expiry_vacant_permit_v1(&exact, key).expect("exact unallocated permit");
+        assert!(require_series_expiry_vacant_permit_v1(&exact, other).is_err());
 
         let mut readonly_lamports = minimum;
         let mut readonly_empty = [];
@@ -16165,7 +16168,7 @@ mod tests {
             &system_program::ID,
             false,
         );
-        assert!(require_series_expiry_vacant_permit_v1(&readonly, key, &rent).is_err());
+        assert!(require_series_expiry_vacant_permit_v1(&readonly, key).is_err());
 
         let mut signer_lamports = minimum;
         let mut signer_empty = [];
@@ -16178,7 +16181,7 @@ mod tests {
             &system_program::ID,
             false,
         );
-        assert!(require_series_expiry_vacant_permit_v1(&signer, key, &rent).is_err());
+        assert!(require_series_expiry_vacant_permit_v1(&signer, key).is_err());
 
         let mut owned_lamports = minimum;
         let mut owned_empty = [];
@@ -16191,20 +16194,46 @@ mod tests {
             &owner,
             false,
         );
-        assert!(require_series_expiry_vacant_permit_v1(&owned, key, &rent).is_err());
+        assert!(require_series_expiry_vacant_permit_v1(&owned, key).is_err());
 
-        let mut thin_lamports = minimum.saturating_sub(1);
-        let mut thin_empty = [];
-        let thin = AccountInfo::new(
+        // A SLOT A RISEN RATE STRANDED IS STILL THE SLOT THE FOUNDING PREPAID.
+        // This route REFUNDS a permit Core never allocated: the prepayment was
+        // made by an earlier transaction at that transaction's rate, and a
+        // floor at the rate of the moment refuses the refund the instant the
+        // cluster charges more -- permanently, because nobody owns a vacant
+        // permit to top up. One lamport below today's minimum used to refuse
+        // here.
+        let mut stranded_lamports = minimum.saturating_sub(1);
+        let mut stranded_empty = [];
+        let stranded = AccountInfo::new(
             &key,
             false,
             true,
-            &mut thin_lamports,
-            &mut thin_empty,
+            &mut stranded_lamports,
+            &mut stranded_empty,
             &system_program::ID,
             false,
         );
-        assert!(require_series_expiry_vacant_permit_v1(&thin, key, &rent).is_err());
+        require_series_expiry_vacant_permit_v1(&stranded, key)
+            .expect("a prepaid slot the cluster repriced is still prepaid");
+
+        // THE HOSTILE is a DRAINED slot: no prepayment left to hand back, and
+        // its vacancy is residue the runtime reaps rather than a prepayment.
+        let mut drained_lamports = 0;
+        let mut drained_empty = [];
+        let drained = AccountInfo::new(
+            &key,
+            false,
+            true,
+            &mut drained_lamports,
+            &mut drained_empty,
+            &system_program::ID,
+            false,
+        );
+        assert_eq!(
+            require_series_expiry_vacant_permit_v1(&drained, key),
+            Err(TradingSbfError::Content.into())
+        );
     }
 
     #[test]
@@ -18406,7 +18435,41 @@ mod tests {
         let item_two = commit_last_account_v1(Box::leak(Box::new(Pubkey::new_unique())), exempt);
         let accounts = [&root, &state, &aliased, &item_one, &item_two];
         let aliases = [0_usize, 1, 0, 3, 4];
-        let output_lamports = [exempt - 1, exempt, exempt, exempt, exempt];
+        // A ROOT ONE LAMPORT UNDER TODAY'S MINIMUM IS NOT WHAT THIS REFUSES.
+        // `require_committed_accounts_persist_v3` stopped pricing a committed
+        // account at the rate of the moment (`a4b2cbb17`): the runtime already
+        // refuses any transaction that leaves a writable account partially
+        // rented, so the postcondition this commit is answerable for is that it
+        // drained nothing it wrote. A root funded when a byte cost less is a
+        // root the runtime grandfathers, and it commits.
+        let stranded = [exempt - 1, exempt, exempt, exempt, exempt];
+        let stranded_plan = commit_non_root_effects_v3(
+            effect,
+            fixture.tail_count,
+            &fixture.scalars,
+            &[],
+            &accounts,
+            &aliases,
+            &stranded,
+            None,
+        )
+        .expect("non-root commit pass over a repriced root");
+        commit_root_effects_v3(
+            effect,
+            fixture.tail_count,
+            &fixture.scalars,
+            &[],
+            &accounts,
+            &aliases,
+            &stranded,
+            None,
+            &stranded_plan,
+        )
+        .expect("a root the cluster funded at a cheaper rate still commits");
+
+        // THE HOSTILE is a root this commit DRAINED: residue the runtime reaps,
+        // and the one case it has not already decided.
+        let output_lamports = [0, exempt, exempt, exempt, exempt];
         let plan = commit_non_root_effects_v3(
             effect,
             fixture.tail_count,

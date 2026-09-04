@@ -35,7 +35,7 @@
 //!       --example compact_retire_child_v4`
 
 use dclutch_rational_representation_v2_lifecycle_contract::{
-    LIFECYCLE_COORDINATE_BYTES_V2, LIFECYCLE_HEADER_BYTES_V2, ABSENT_POSITION_REVISION_V2,
+    ABSENT_POSITION_REVISION_V2, LIFECYCLE_COORDINATE_BYTES_V2, LIFECYCLE_HEADER_BYTES_V2,
     LifecycleActionV2, LifecycleCoordinateV2, LifecycleHeaderV2, LifecycleRequestV2,
     compact_hot_v4::RationalLifecycleCompactHotRequestV4,
 };
@@ -145,9 +145,7 @@ fn main() {
 
     let child = LifecycleRequestV2::new(specialized, &rows).expect("child request");
     let mut child_bytes = vec![0_u8; LIFECYCLE_HEADER_BYTES_V2 + rows.len()];
-    child
-        .encode_into(&mut child_bytes)
-        .expect("child encoding");
+    child.encode_into(&mut child_bytes).expect("child encoding");
     // The header the contract projected and the header it re-encodes are the
     // same bytes, or this fixture would describe a child nobody builds.
     assert_eq!(
@@ -173,21 +171,35 @@ fn main() {
         .collect();
 
     println!("{{");
-    println!("  \"note\": \"EMITTED BY RUST. crates/dclutch-rational-representation-v2-lifecycle-contract/examples/compact_retire_child_v4.rs, through the contract's own family, child-header, row and request encoders. Regenerate with `npm run abi:rational-retire-child` from packages/dclutch-sdk; never edit by hand. Fixture evidence, not devnet: the identities are chosen constants.\",");
+    println!(
+        "  \"note\": \"EMITTED BY RUST. crates/dclutch-rational-representation-v2-lifecycle-contract/examples/compact_retire_child_v4.rs, through the contract's own family, child-header, row and request encoders. Regenerate with `npm run abi:rational-retire-child` from packages/dclutch-sdk; never edit by hand. Fixture evidence, not devnet: the identities are chosen constants.\","
+    );
     println!("  \"familyInput\": {{");
     println!("    \"releaseSet\": \"{}\",", hex(&header.release_set));
     println!("    \"market\": \"{}\",", hex(&header.market));
     println!("    \"graphId\": \"{}\",", hex(&header.graph_id));
     println!("    \"descriptorId\": \"{}\",", hex(&header.descriptor_id));
-    println!("    \"representationAuthority\": \"{}\",", hex(&header.representation_authority));
+    println!(
+        "    \"representationAuthority\": \"{}\",",
+        hex(&header.representation_authority)
+    );
     println!("    \"receiptMint\": \"{}\",", hex(&header.receipt_mint));
     println!("    \"tokenProgram\": \"{}\",", hex(&header.token_program));
     println!("    \"rentCredit\": \"{}\",", hex(&header.rent_credit));
     println!("    \"rentProgram\": \"{}\",", hex(&header.rent_program));
     println!("    \"generation\": \"{}\",", header.generation);
-    println!("    \"claimsRevision\": \"{}\",", header.expected_claims_market_revision);
-    println!("    \"receiptLamports\": \"{}\",", header.observed_receipt_lamports);
-    println!("    \"receiptRent\": \"{}\",", header.receipt_rent_principal);
+    println!(
+        "    \"claimsRevision\": \"{}\",",
+        header.expected_claims_market_revision
+    );
+    println!(
+        "    \"receiptLamports\": \"{}\",",
+        header.observed_receipt_lamports
+    );
+    println!(
+        "    \"receiptRent\": \"{}\",",
+        header.receipt_rent_principal
+    );
     println!("    \"outcomeCount\": {},", header.outcome_count);
     println!("    \"rentBefore\": \"{}\"", header.rent_credit_before);
     println!("  }},");

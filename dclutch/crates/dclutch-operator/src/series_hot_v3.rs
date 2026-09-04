@@ -51,6 +51,7 @@ use crate::{
     direct_inline_v3::{CheckedHotOuterReleaseV3, ObservedAccountMetaV3},
     observation::{FinalizedRecordProof, authenticate_finalized_record, decode_clock, decode_rent},
 };
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
     hot_v3::{
@@ -77,9 +78,7 @@ use dclutch_execution_strategy_contract::v2::{
 use dclutch_hot_bump_miner_v1::{
     HotBumpCorpusV1, activated_custody_program_v1, mine_hot_bump_hints_v1,
 };
-use dclutch_market_core_codec::{
-    Identity as CoreIdentity, SERIES_FOUNDING_PERMIT_BYTES_V1, SeriesFoundingPermitSeedsV1,
-};
+use dclutch_market_core_codec::{Identity as CoreIdentity, SeriesFoundingPermitSeedsV1};
 use dclutch_registry_contract::{ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1};
 use dclutch_release_set_contract::{ArtifactReleaseIdV1, ExecutionRoleV1};
 use dclutch_series_v3_kernel::{
@@ -1332,7 +1331,12 @@ pub(crate) fn authenticate_expire_permit_v5(
         CoreIdentity::new(ticket.to_bytes())
             .map_err(|_| SeriesHotOperatorErrorV3::ActionMismatch)?,
     );
-    let rent = decode_rent(rent_account).map_err(|_| SeriesHotOperatorErrorV3::ActionMismatch)?;
+    // The Rent sysvar is still AUTHENTICATED here -- key, owner, executable bit,
+    // exact width, canonical body -- even though nothing prices a floor against
+    // it any more. Dropping the decode with the floor would silently stop
+    // checking the coordinate, which is the debt `a4b2cbb17` named at
+    // `authenticate_execution_strategy_v2` and this does not repeat.
+    decode_rent(rent_account).map_err(|_| SeriesHotOperatorErrorV3::ActionMismatch)?;
     let expected = Pubkey::find_program_address(&seeds.as_slices(), &core.account.key).0;
     let mut matches = physical.iter().filter(|value| value.account == *observed);
     let permit_meta = matches
@@ -1346,8 +1350,7 @@ pub(crate) fn authenticate_expire_permit_v5(
         || observed.owner != system_program::ID
         || observed.executable
         || !observed.data.is_empty()
-        || observed.lamports == 0
-        || observed.lamports < rent.minimum_balance(SERIES_FOUNDING_PERMIT_BYTES_V1)
+        || !funded_rent_persists_v1(observed.lamports)
         || !permit_meta.is_writable
         || permit_meta.is_signer
         || !core.account.executable
@@ -1457,6 +1460,7 @@ const _: () = assert!(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dclutch_market_core_codec::SERIES_FOUNDING_PERMIT_BYTES_V1;
     use dclutch_series_v3_kernel::{generated, request::encode_series_action_header_v3};
     use solana_program::{account_info::AccountInfo, rent::Rent, sysvar::SysvarSerialize};
 
@@ -1979,11 +1983,33 @@ mod tests {
         let mut owner = first_permit.clone();
         owner.owner = Pubkey::new_unique();
         refuse(&first, &core, &owner, &[hostile_meta(owner.clone())]);
-        let mut thin = first_permit.clone();
-        thin.lamports = rent
+        // A PERMIT PREPAID AT A CHEAPER RATE IS NOT A HOSTILE. This expiry
+        // REFUNDS a slot Core never allocated; the prepayment was made at the
+        // rate of an earlier transaction, and one lamport below what the
+        // cluster charges today is a slot the founding really did prepay. The
+        // old floor refused exactly that and stranded the refund forever, which
+        // is `a4b2cbb17`'s ruling with the sign flipped.
+        let mut stranded = first_permit.clone();
+        stranded.lamports = rent
             .minimum_balance(SERIES_FOUNDING_PERMIT_BYTES_V1)
             .saturating_sub(1);
-        refuse(&first, &core, &thin, &[hostile_meta(thin.clone())]);
+        assert_eq!(
+            authenticate_expire_permit_v5(
+                &first,
+                &core,
+                &rent_account,
+                observation(),
+                &stranded,
+                &[hostile_meta(stranded.clone())],
+            ),
+            Ok(stranded.key),
+            "a prepaid slot a risen rate stranded is still the slot the founding prepaid"
+        );
+        // THE HOSTILE is a DRAINED slot: nothing to refund, and its vacancy is
+        // residue rather than a prepayment.
+        let mut drained = first_permit.clone();
+        drained.lamports = 0;
+        refuse(&first, &core, &drained, &[hostile_meta(drained.clone())]);
         let readonly = [ObservedAccountMetaV3 {
             account: first_permit.clone(),
             is_signer: false,

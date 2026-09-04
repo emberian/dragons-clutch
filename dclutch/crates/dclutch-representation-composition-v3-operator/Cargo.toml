@@ -8,6 +8,7 @@ description = "Chain-derived unsigned operator for Product-to-representation com
 publish = false
 
 [dependencies]
+dclutch-capability-contract = { path = "../dclutch-capability-contract" }
 dclutch-product-payoff-v2-codec = { path = "../dclutch-product-payoff-v2-codec" }
 dclutch-product-runtime-v2 = { path = "../dclutch-product-runtime-v2" }
 dclutch-product-runtime-v2-admission = { path = "../dclutch-product-runtime-v2-admission" }

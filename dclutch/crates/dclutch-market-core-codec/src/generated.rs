@@ -27,12 +27,8 @@ pub const HOLDER_DESTINATION_TAG: u8 = 2;
 pub const REPRESENTATION_NONE_TAG: u8 = 0;
 pub const REPRESENTATION_NATIVE_TAG: u8 = 1;
 pub const REPRESENTATION_MATERIALIZED_TAG: u8 = 2;
-pub const STATE_MAGIC: [u8; 8] = [
-    0x44, 0x43, 0x4c, 0x54, 0x43, 0x4f, 0x52, 0x33,
-];
-pub const CORE_REQUEST_MAGIC: [u8; 8] = [
-    0x44, 0x43, 0x4c, 0x54, 0x43, 0x52, 0x51, 0x32,
-];
+pub const STATE_MAGIC: [u8; 8] = [0x44, 0x43, 0x4c, 0x54, 0x43, 0x4f, 0x52, 0x33];
+pub const CORE_REQUEST_MAGIC: [u8; 8] = [0x44, 0x43, 0x4c, 0x54, 0x43, 0x52, 0x51, 0x32];
 const STATE_MAGIC_OFFSET: usize = 0;
 const STATE_VERSION_OFFSET: usize = 8;
 const STATE_PHASE_OFFSET: usize = 10;
@@ -195,11 +191,10 @@ fn admission_valid(admission: Admission, role: Role) -> bool {
         && admission.receipt.current_deployment_reauthenticated
 }
 
-const RETIREMENT_REQUIRED_ROLE_MASK: u8 =
-    (1 << Role::Core as u8)
-        | (1 << Role::Claims as u8)
-        | (1 << Role::Resolution as u8)
-        | (1 << Role::Custody as u8);
+const RETIREMENT_REQUIRED_ROLE_MASK: u8 = (1 << Role::Core as u8)
+    | (1 << Role::Claims as u8)
+    | (1 << Role::Resolution as u8)
+    | (1 << Role::Custody as u8);
 
 /// One shared ReleaseSet authenticated serially for every retirement role.
 ///
@@ -429,7 +424,11 @@ impl ProductGraphBumpsV1 {
         let mut bumps = [0_u8; PRODUCT_GRAPH_BUMP_COUNT];
         for (index, bump) in bumps.iter_mut().enumerate() {
             let byte = packed.get(index / 2).copied().unwrap_or(0);
-            let nibble = if index % 2 == 0 { byte & 0x0f } else { byte >> 4 };
+            let nibble = if index % 2 == 0 {
+                byte & 0x0f
+            } else {
+                byte >> 4
+            };
             *bump = if nibble == 0 {
                 0
             } else {
@@ -480,9 +479,13 @@ impl StateBumpsV1 {
 
     /// Zero is the unrecorded encoding, so it is not a representable bump.
     pub(crate) fn canonical(self) -> bool {
-        [self.market, self.realm_raw_record, self.realm_staging_record]
-            .iter()
-            .all(|bump| *bump != Some(0))
+        [
+            self.market,
+            self.realm_raw_record,
+            self.realm_staging_record,
+        ]
+        .iter()
+        .all(|bump| *bump != Some(0))
     }
 }
 
@@ -511,27 +514,28 @@ pub const PRODUCT_GRAPH_LOWEST_CARRIED_BUMP: u8 = 241;
 
 impl CoreState {
     fn valid_static(self) -> bool {
-        self.principal_cap_sets != 0 && self.bumps.canonical() && match self.phase {
-            Phase::Founding => {
-                self.readiness != Readiness::Consumed
-                    && self.terminal_receipt.is_none()
-                    && self.terminal_winner == 0
+        self.principal_cap_sets != 0
+            && self.bumps.canonical()
+            && match self.phase {
+                Phase::Founding => {
+                    self.readiness != Readiness::Consumed
+                        && self.terminal_receipt.is_none()
+                        && self.terminal_winner == 0
+                }
+                Phase::Open => {
+                    self.readiness == Readiness::Consumed
+                        && self.terminal_receipt.is_none()
+                        && self.terminal_winner == 0
+                }
+                Phase::Terminal | Phase::Retiring => {
+                    self.readiness == Readiness::Consumed && self.terminal_receipt.is_some()
+                }
+                Phase::Retired => {
+                    self.readiness == Readiness::Consumed
+                        && self.terminal_receipt.is_some()
+                        && self.outstanding_capabilities == 0
+                }
             }
-            Phase::Open => {
-                self.readiness == Readiness::Consumed
-                    && self.terminal_receipt.is_none()
-                    && self.terminal_winner == 0
-            }
-            Phase::Terminal | Phase::Retiring => {
-                self.readiness == Readiness::Consumed
-                    && self.terminal_receipt.is_some()
-            }
-            Phase::Retired => {
-                self.readiness == Readiness::Consumed
-                    && self.terminal_receipt.is_some()
-                    && self.outstanding_capabilities == 0
-            }
-        }
     }
 
     /// Encode the sole canonical fixed state header.
@@ -543,17 +547,57 @@ impl CoreState {
         put(&mut output, STATE_MAGIC_OFFSET, &STATE_MAGIC)?;
         put_u16(&mut output, STATE_VERSION_OFFSET, VERSION)?;
         put_byte(&mut output, STATE_PHASE_OFFSET, phase_tag(self.phase))?;
-        put_byte(&mut output, STATE_READINESS_OFFSET, readiness_tag(self.readiness))?;
-        put_u32(&mut output, STATE_TERMINAL_WINNER_OFFSET, self.terminal_winner)?;
+        put_byte(
+            &mut output,
+            STATE_READINESS_OFFSET,
+            readiness_tag(self.readiness),
+        )?;
+        put_u32(
+            &mut output,
+            STATE_TERMINAL_WINNER_OFFSET,
+            self.terminal_winner,
+        )?;
         put_identity(&mut output, STATE_MARKET_ID_OFFSET, self.identity.market_id)?;
-        put_identity(&mut output, STATE_IDENTITY_REALM_OFFSET, self.identity.realm_id)?;
-        put_identity(&mut output, STATE_PRODUCT_RECORD_OFFSET, self.identity.product_record)?;
-        put_identity(&mut output, STATE_PRODUCT_ID_OFFSET, self.identity.product_id)?;
-        put_identity(&mut output, STATE_RESOLUTION_POLICY_OFFSET, self.identity.resolution_policy)?;
-        put_identity(&mut output, STATE_CAPABILITY_MANIFEST_OFFSET, self.identity.capability_manifest)?;
-        put_identity(&mut output, STATE_SELECTED_RELEASE_SET_OFFSET, self.identity.selected_release_set)?;
-        put_identity(&mut output, STATE_REGISTRY_PROGRAM_OFFSET, self.identity.registry_program)?;
-        put_u64(&mut output, STATE_GENERATION_OFFSET, self.identity.generation)?;
+        put_identity(
+            &mut output,
+            STATE_IDENTITY_REALM_OFFSET,
+            self.identity.realm_id,
+        )?;
+        put_identity(
+            &mut output,
+            STATE_PRODUCT_RECORD_OFFSET,
+            self.identity.product_record,
+        )?;
+        put_identity(
+            &mut output,
+            STATE_PRODUCT_ID_OFFSET,
+            self.identity.product_id,
+        )?;
+        put_identity(
+            &mut output,
+            STATE_RESOLUTION_POLICY_OFFSET,
+            self.identity.resolution_policy,
+        )?;
+        put_identity(
+            &mut output,
+            STATE_CAPABILITY_MANIFEST_OFFSET,
+            self.identity.capability_manifest,
+        )?;
+        put_identity(
+            &mut output,
+            STATE_SELECTED_RELEASE_SET_OFFSET,
+            self.identity.selected_release_set,
+        )?;
+        put_identity(
+            &mut output,
+            STATE_REGISTRY_PROGRAM_OFFSET,
+            self.identity.registry_program,
+        )?;
+        put_u64(
+            &mut output,
+            STATE_GENERATION_OFFSET,
+            self.identity.generation,
+        )?;
         put_u64(
             &mut output,
             STATE_OUTSTANDING_CAPABILITIES_OFFSET,
@@ -564,7 +608,11 @@ impl CoreState {
             STATE_PRINCIPAL_CAP_SETS_OFFSET,
             self.principal_cap_sets,
         )?;
-        put_identity(&mut output, STATE_RENT_BENEFICIARY_OFFSET, self.rent_beneficiary)?;
+        put_identity(
+            &mut output,
+            STATE_RENT_BENEFICIARY_OFFSET,
+            self.rent_beneficiary,
+        )?;
         if let Some(receipt) = self.terminal_receipt {
             put_identity(&mut output, STATE_TERMINAL_RECEIPT_OFFSET, receipt)?;
         }
@@ -686,11 +734,7 @@ pub struct Request {
 impl Request {
     /// Construct an administrative action with canonical inactive fields.
     #[must_use]
-    pub const fn administrative(
-        action: Action,
-        generation: u64,
-        market: Identity,
-    ) -> Self {
+    pub const fn administrative(action: Action, generation: u64, market: Identity) -> Self {
         Self {
             action,
             holder: None,
@@ -750,7 +794,11 @@ impl Request {
         put(&mut output, REQUEST_MAGIC_OFFSET, &CORE_REQUEST_MAGIC)?;
         put_u16(&mut output, REQUEST_VERSION_OFFSET, VERSION)?;
         put_byte(&mut output, REQUEST_ACTION_OFFSET, action_tag(self.action))?;
-        put_byte(&mut output, REQUEST_HOLDER_OFFSET, option_holder_tag(self.holder))?;
+        put_byte(
+            &mut output,
+            REQUEST_HOLDER_OFFSET,
+            option_holder_tag(self.holder),
+        )?;
         put_byte(
             &mut output,
             REQUEST_REPRESENTATION_OFFSET,
@@ -777,7 +825,10 @@ impl Request {
         let request = Self {
             action: decode_action(read_byte(input, REQUEST_ACTION_OFFSET)?)?,
             holder: decode_holder(read_byte(input, REQUEST_HOLDER_OFFSET)?)?,
-            representation: decode_representation(read_byte(input, REQUEST_REPRESENTATION_OFFSET)?)?,
+            representation: decode_representation(read_byte(
+                input,
+                REQUEST_REPRESENTATION_OFFSET,
+            )?)?,
             outcome: read_u32(input, REQUEST_OUTCOME_OFFSET)?,
             quantity: read_u64(input, REQUEST_QUANTITY_OFFSET)?,
             generation: read_u64(input, REQUEST_GENERATION_OFFSET)?,
@@ -969,7 +1020,12 @@ pub struct SeriesOpenObservation {
 
 /// Execute sparse Core Found without mutating external state.
 pub fn found(request: Request, frame: FoundingFrame) -> Result<FoundingResult, Error> {
-    require_request(request, Action::Found, frame.identity.market_id, frame.identity.generation)?;
+    require_request(
+        request,
+        Action::Found,
+        frame.identity.market_id,
+        frame.identity.generation,
+    )?;
     if !frame.product.valid()
         || frame.identity.realm_id != frame.realm.realm_id
         || frame.identity.product_record != frame.product.product_record
@@ -1030,7 +1086,12 @@ pub fn verify_readiness(
     manifest_readiness_authenticated: bool,
     readiness_effect: ChildEffectObservation,
 ) -> Result<(), Error> {
-    require_request(request, Action::VerifyReadiness, state.identity.market_id, state.identity.generation)?;
+    require_request(
+        request,
+        Action::VerifyReadiness,
+        state.identity.market_id,
+        state.identity.generation,
+    )?;
     if state.phase != Phase::Founding || state.readiness != Readiness::Prepaid {
         return Err(Error::InvalidPhase);
     }
@@ -1062,7 +1123,12 @@ pub fn open_market(
     custody_rent_authenticated: bool,
     custody_effect: ChildEffectObservation,
 ) -> Result<AccountCreation, Error> {
-    require_request(request, Action::OpenMarket, state.identity.market_id, state.identity.generation)?;
+    require_request(
+        request,
+        Action::OpenMarket,
+        state.identity.market_id,
+        state.identity.generation,
+    )?;
     if state.phase != Phase::Founding || state.readiness != Readiness::Ready {
         return Err(Error::InvalidPhase);
     }
@@ -1106,7 +1172,12 @@ pub fn open_series_market(
     state: &mut CoreState,
     observation: SeriesOpenObservation,
 ) -> Result<(), Error> {
-    require_request(request, Action::OpenMarket, state.identity.market_id, state.identity.generation)?;
+    require_request(
+        request,
+        Action::OpenMarket,
+        state.identity.market_id,
+        state.identity.generation,
+    )?;
     if state.phase != Phase::Founding || state.readiness != Readiness::Prepaid {
         return Err(Error::InvalidPhase);
     }
@@ -1148,7 +1219,12 @@ pub fn split_complete_set(
     claims: ClaimsEffectObservation,
     custody: ChildEffectObservation,
 ) -> Result<(), Error> {
-    require_request(request, Action::Split, state.identity.market_id, state.identity.generation)?;
+    require_request(
+        request,
+        Action::Split,
+        state.identity.market_id,
+        state.identity.generation,
+    )?;
     if state.phase != Phase::Open {
         return Err(Error::InvalidPhase);
     }
@@ -1173,7 +1249,12 @@ pub fn admit_terminal(
     product_record_authenticated: bool,
     receipt: TerminalReceipt,
 ) -> Result<(), Error> {
-    require_request(request, Action::AdmitTerminal, state.identity.market_id, state.identity.generation)?;
+    require_request(
+        request,
+        Action::AdmitTerminal,
+        state.identity.market_id,
+        state.identity.generation,
+    )?;
     if state.phase != Phase::Open {
         return Err(Error::InvalidPhase);
     }
@@ -1208,7 +1289,12 @@ pub fn begin_retiring(
     state: &mut CoreState,
     admission: Admission,
 ) -> Result<(), Error> {
-    require_request(request, Action::BeginRetiring, state.identity.market_id, state.identity.generation)?;
+    require_request(
+        request,
+        Action::BeginRetiring,
+        state.identity.market_id,
+        state.identity.generation,
+    )?;
     require_admission(*state, admission, Role::Core)?;
     if state.phase != Phase::Terminal {
         return Err(Error::InvalidPhase);
@@ -1301,7 +1387,12 @@ pub fn redeem_terminal(
     claims: ClaimsEffectObservation,
     custody: Option<ChildEffectObservation>,
 ) -> Result<u64, Error> {
-    require_request(request, Action::Redeem, state.identity.market_id, state.identity.generation)?;
+    require_request(
+        request,
+        Action::Redeem,
+        state.identity.market_id,
+        state.identity.generation,
+    )?;
     if state.phase != Phase::Terminal && state.phase != Phase::Retiring {
         return Err(Error::InvalidPhase);
     }
@@ -1347,7 +1438,12 @@ pub fn retire(
     core_account_authenticated: bool,
     rent_credit_authenticated: bool,
 ) -> Result<u64, Error> {
-    require_request(request, Action::Retire, state.identity.market_id, state.identity.generation)?;
+    require_request(
+        request,
+        Action::Retire,
+        state.identity.market_id,
+        state.identity.generation,
+    )?;
     admissions.require_complete(*state)?;
     if state.phase != Phase::Retiring {
         return Err(Error::InvalidPhase);
@@ -1589,7 +1685,12 @@ fn read_array<const N: usize>(input: &[u8], offset: usize) -> Result<[u8; N], Er
 
 fn put(output: &mut [u8], offset: usize, value: &[u8]) -> Result<(), Error> {
     output
-        .get_mut(offset..offset.checked_add(value.len()).ok_or(Error::InvalidLength)?)
+        .get_mut(
+            offset
+                ..offset
+                    .checked_add(value.len())
+                    .ok_or(Error::InvalidLength)?,
+        )
         .ok_or(Error::InvalidLength)?
         .copy_from_slice(value);
     Ok(())

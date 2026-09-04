@@ -164,7 +164,6 @@ pub(crate) fn process(
         generation,
         ticket_context,
         admitted_ticket.ticket().refund_owner().to_bytes(),
-        &rent,
     )?;
 
     // Both candidates were completely reconstructed and hostile-decoded before

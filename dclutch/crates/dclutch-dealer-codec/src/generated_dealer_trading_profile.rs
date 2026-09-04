@@ -2,12 +2,8 @@
 pub(crate) const ROOT_TAIL_ABI_VERSION: u16 = 1;
 pub(crate) const ROOT_TAIL_BYTES: usize = 384;
 pub(crate) const TRADING_REQUEST_BYTES: usize = 152;
-pub(crate) const ROOT_TAIL_MAGIC: [u8; 8] = [
-    0x44, 0x43, 0x44, 0x54, 0x41, 0x49, 0x4c, 0x31,
-];
-pub(crate) const TRADING_REQUEST_MAGIC: [u8; 8] = [
-    0x44, 0x43, 0x44, 0x54, 0x52, 0x51, 0x30, 0x31,
-];
+pub(crate) const ROOT_TAIL_MAGIC: [u8; 8] = [0x44, 0x43, 0x44, 0x54, 0x41, 0x49, 0x4c, 0x31];
+pub(crate) const TRADING_REQUEST_MAGIC: [u8; 8] = [0x44, 0x43, 0x44, 0x54, 0x52, 0x51, 0x30, 0x31];
 pub(crate) const ROOT_TAIL_VERSION_OFFSET: usize = 8;
 pub(crate) const ROOT_TAIL_PHASE_OFFSET: usize = 10;
 pub(crate) const ROOT_TAIL_HAS_PENDING_OFFSET: usize = 11;

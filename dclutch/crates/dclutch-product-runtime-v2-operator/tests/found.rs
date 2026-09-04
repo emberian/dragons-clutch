@@ -1007,6 +1007,110 @@ fn stale_snapshot_and_caller_supplied_rent_projection_refuse() {
     );
 }
 
+/// A COHORT FUNDED AT A CHEAPER RATE STILL FOUNDS, AND A DRAINED ONE DOES NOT.
+///
+/// Every account this projection reads was created and funded by an EARLIER
+/// transaction, so pricing it at the Rent sysvar of the moment asks the cluster
+/// what a byte costs today about an account nobody has touched. Devnet's fall
+/// from 6,333 to 5,080 at epoch 1141 broke that question in one direction with
+/// cohort-15 live on it; a RISE breaks it in the other, and there is no
+/// direction a cluster is forbidden to move. `funded_rent_persists_v1` is the
+/// one case the runtime has not already decided.
+///
+/// The positive control is two-sided: the stranded balance must be a real
+/// rent-exempt minimum at the rate that funded it, and strictly below the
+/// minimum the projection's own sysvar quotes.
+#[test]
+fn a_risen_rate_still_founds_over_records_it_did_not_fund_and_a_drained_record_refuses() {
+    // Cohort-15's rate, measured off devnet at finalized slot 493,000,156, and
+    // the genesis constant's 6,960 that the fixture's Rent quotes.
+    const FUNDED_RATE: u64 = 6_333;
+    let fixture = Fixture::new();
+    let state = fixture.state();
+    let stranded = |observed: FinalizedRecordObservationV2<'_>| {
+        let len = observed.raw.data.len() as u64;
+        let funded = (128 + len) * FUNDED_RATE;
+        assert!(
+            funded < observed.raw_rent_minimum,
+            "the rise must actually strand this width: {funded} vs {}",
+            observed.raw_rent_minimum
+        );
+        funded
+    };
+
+    let realm_stranded = stranded(state.realm.record);
+    let product_stranded = stranded(state.product);
+    assert_eq!(
+        build_found_instruction_v2(
+            GENERATION,
+            FoundStateV2 {
+                realm: FinalizedReferenceObservationV2 {
+                    record: FinalizedRecordObservationV2 {
+                        raw: AccountObservationV2 {
+                            lamports: realm_stranded,
+                            ..state.realm.record.raw
+                        },
+                        ..state.realm.record
+                    },
+                    ..state.realm
+                },
+                product: FinalizedRecordObservationV2 {
+                    raw: AccountObservationV2 {
+                        lamports: product_stranded,
+                        ..state.product.raw
+                    },
+                    ..state.product
+                },
+                infrastructure_profile: AccountObservationV2 {
+                    lamports: 1,
+                    ..state.infrastructure_profile
+                },
+                ..state
+            }
+        ),
+        build_found_instruction_v2(GENERATION, fixture.state()),
+        "records the cluster funded at a cheaper rate found exactly as they always did"
+    );
+
+    // THE HOSTILE: a record an earlier instruction of this transaction drained.
+    // Its data is residue the runtime reaps at the transaction's end, and no
+    // rate is involved in saying so.
+    assert_eq!(
+        build_found_instruction_v2(
+            GENERATION,
+            FoundStateV2 {
+                realm: FinalizedReferenceObservationV2 {
+                    record: FinalizedRecordObservationV2 {
+                        raw: AccountObservationV2 {
+                            lamports: 0,
+                            ..state.realm.record.raw
+                        },
+                        ..state.realm.record
+                    },
+                    ..state.realm
+                },
+                ..state
+            }
+        ),
+        // `RecordMismatch` is one code over nine conjuncts of `validate_record`;
+        // it is the exact variant this reaches, and the coarseness is its own.
+        Err(Error::RecordMismatch)
+    );
+    assert_eq!(
+        build_found_instruction_v2(
+            GENERATION,
+            FoundStateV2 {
+                infrastructure_profile: AccountObservationV2 {
+                    lamports: 0,
+                    ..state.infrastructure_profile
+                },
+                ..state
+            }
+        ),
+        Err(Error::AccountAuthority)
+    );
+}
+
 #[test]
 fn substituted_profile_and_mutable_infrastructure_refuse() {
     let fixture = Fixture::new();

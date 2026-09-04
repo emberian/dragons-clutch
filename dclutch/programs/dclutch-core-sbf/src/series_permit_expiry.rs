@@ -14,8 +14,7 @@ use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
 };
 use dclutch_market_core_codec::{
-    Role, SERIES_FOUNDING_PERMIT_BYTES_V1, SeriesFoundingPermitSeedsV1, SeriesFoundingPermitV1,
-    SeriesPermitExpiryRequestV1,
+    Role, SeriesFoundingPermitSeedsV1, SeriesFoundingPermitV1, SeriesPermitExpiryRequestV1,
 };
 use dclutch_rent_contract::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
 use dclutch_series_v3_kernel::{
@@ -238,7 +237,7 @@ pub(crate) fn process(
         Role::Trading,
     )?;
     let refund_owner = authenticate_series(&frame, permit, proof_bytes)?;
-    authenticate_unallocated_permit(program_id, &frame, permit, refund_owner, &rent)?;
+    authenticate_unallocated_permit(program_id, &frame, permit, refund_owner)?;
     refund(&frame, permit, &rent)?;
     Ok(())
 }
@@ -387,7 +386,6 @@ pub(crate) fn authenticate_unallocated_permit(
     frame: &ExpiryAccounts<'_, '_>,
     permit: SeriesFoundingPermitV1,
     expected_refund_owner: [u8; 32],
-    rent: &Rent,
 ) -> Result<(), CoreSbfError> {
     let intent = permit.intent();
     let seeds = permit.seeds();
@@ -401,7 +399,7 @@ pub(crate) fn authenticate_unallocated_permit(
     if frame.permit.key != &expected
         || frame.permit.owner != &system_program::ID
         || frame.permit.data_len() != 0
-        || frame.permit.lamports() < rent.minimum_balance(SERIES_FOUNDING_PERMIT_BYTES_V1)
+        || !funded_rent_persists_v1(frame.permit.lamports())
     {
         return Err(CoreSbfError::Creation);
     }
@@ -457,7 +455,6 @@ pub(crate) fn authenticate_record_derived_unallocated_permit(
     generation: u64,
     ticket_context: [u8; 32],
     expected_refund_owner: [u8; 32],
-    rent: &Rent,
 ) -> Result<u8, CoreSbfError> {
     let seeds = SeriesFoundingPermitSeedsV1::new(
         identity(release_set)?,
@@ -468,7 +465,7 @@ pub(crate) fn authenticate_record_derived_unallocated_permit(
     if frame.permit.key != &expected
         || frame.permit.owner != &system_program::ID
         || frame.permit.data_len() != 0
-        || frame.permit.lamports() < rent.minimum_balance(SERIES_FOUNDING_PERMIT_BYTES_V1)
+        || !funded_rent_persists_v1(frame.permit.lamports())
     {
         return Err(CoreSbfError::Creation);
     }

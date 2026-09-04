@@ -633,9 +633,7 @@ fn account_address_v1(value: &str, field: &str) -> Result<Pubkey> {
         .parse::<Pubkey>()
         .map_err(|error| Error::new(format!("{field}: {error}")))?;
     if parsed.to_string() != value {
-        return Err(Error::new(format!(
-            "{field} is not a canonical public key"
-        )));
+        return Err(Error::new(format!("{field} is not a canonical public key")));
     }
     Ok(parsed)
 }
@@ -1199,14 +1197,10 @@ mod tests {
         ]);
         let parsed = parse_route_v1(&serde_json::to_vec(&route).expect("route JSON"))
             .expect("the System program is a runtime coordinate");
-        assert_eq!(
-            parsed.runtime_suffix_accounts[3].address,
-            Pubkey::default()
-        );
+        assert_eq!(parsed.runtime_suffix_accounts[3].address, Pubkey::default());
 
         let mut fixed_zero = route.clone();
-        fixed_zero["fixedAccounts"][7]["address"] =
-            json!(Pubkey::default().to_string());
+        fixed_zero["fixedAccounts"][7]["address"] = json!(Pubkey::default().to_string());
         let error = parse_route_v1(&serde_json::to_vec(&fixed_zero).expect("JSON"))
             .expect_err("no fixed coordinate is the System program");
         assert!(

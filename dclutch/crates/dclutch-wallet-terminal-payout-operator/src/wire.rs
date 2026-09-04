@@ -37,6 +37,7 @@ use std::collections::BTreeMap;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 #[cfg(any(test, feature = "test-fixtures"))]
 use dclutch_capability_contract::ContentId;
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_claims_svm::{
     claim_check_v1::{ClaimCheckEscrowSeedsV1, ClaimCheckVaultSeedsV1},
     liability_basis_state_v2::{LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2},
@@ -91,10 +92,10 @@ use serde::{Deserialize, Serialize};
 use solana_address_lookup_table_interface::instruction::{
     create_lookup_table, extend_lookup_table,
 };
+use solana_hash::Hash;
 use solana_program::{
     account_info::AccountInfo, hash::hash, instruction::Instruction, pubkey::Pubkey, rent::Rent,
 };
-use solana_hash::Hash;
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 
 use crate::{Error, ObservedAccountValueV1, Result, hex, hex32, pubkey};
@@ -224,10 +225,7 @@ enum RecipientRouteV1 {
 }
 
 impl SelectedInputV1 {
-    pub fn parse(
-        input: &PlanInputV1,
-        requirement: LookupTableRequirementV1,
-    ) -> Result<Self> {
+    pub fn parse(input: &PlanInputV1, requirement: LookupTableRequirementV1) -> Result<Self> {
         Self::parse_for_route(input, requirement, RecipientRouteV1::Wallet)
     }
 
@@ -681,7 +679,6 @@ pub struct WalletTerminalPayoutAltPlanV1 {
     payout_input: PlanInputV1,
 }
 
-
 pub fn build_report(
     selected: &SelectedInputV1,
     snapshot: &FinalizedSnapshotV1,
@@ -1071,10 +1068,10 @@ fn authenticate_terminal_certificate(
     if account.owner != selected.resolution
         || account.executable
         || account.data.len() != RESOLUTION_CERTIFICATE_BYTES_V2
-        || account.lamports < rent.minimum_balance(account.data.len())
+        || !funded_rent_persists_v1(account.lamports)
     {
         return Err(Error::new(
-            "Resolution certificate owner, width, executable bit, or rent refused",
+            "Resolution certificate owner, width, executable bit, or drained account refused",
         ));
     }
     let certificate = ResolutionCertificateV2::decode(&account.data)
@@ -1108,13 +1105,13 @@ fn authenticate_record<'a>(
         || raw.executable
         || raw.data.is_empty()
         || hash(&raw.data).to_bytes() != pair.digest
-        || raw.lamports < rent.minimum_balance(raw.data.len())
+        || !funded_rent_persists_v1(raw.lamports)
         || staging.owner != system_program::ID
         || staging.executable
         || !staging.data.is_empty()
     {
         return Err(Error::new(
-            "finalized record owner, PDA, digest, rent, or vacancy refused",
+            "finalized record owner, PDA, digest, drained account, or vacancy refused",
         ));
     }
     Ok(raw)

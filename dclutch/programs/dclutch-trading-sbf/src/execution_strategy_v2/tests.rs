@@ -425,6 +425,7 @@ impl Fixture {
             schema(CAPABILITY_PROGRAM_SCHEMA_ID_V4),
             self.capability_program_id,
             &self.registry,
+            &self.rent,
             &self.accounts,
         )
     }
@@ -485,6 +486,7 @@ fn interpreted_uses_exact_unpadded_record_frame() {
             schema(CAPABILITY_PROGRAM_SCHEMA_ID_V4),
             fixture.capability_program_id,
             &fixture.registry,
+            &fixture.rent,
             &padded,
         ),
         Err(TradingSbfError::Content)
@@ -597,6 +599,7 @@ fn admitted_requires_the_exact_registry_admission_chain() {
             schema(CAPABILITY_PROGRAM_SCHEMA_ID_V4),
             fixture.capability_program_id,
             &fixture.registry,
+            &fixture.rent,
             &missing_admission,
         ),
         Err(TradingSbfError::Content)
@@ -612,6 +615,7 @@ fn hostile_record_owner_digest_staging_alias_and_selection_refuse() {
             id(209),
             schema_substitution.capability_program_id,
             &schema_substitution.registry,
+            &schema_substitution.rent,
             &schema_substitution.accounts,
         ),
         Err(TradingSbfError::UnsupportedContent),
@@ -830,6 +834,7 @@ fn registry_rent_privileges_and_account_width_are_not_caller_trust() {
             schema(CAPABILITY_PROGRAM_SCHEMA_ID_V4),
             short.capability_program_id,
             &short.registry,
+            &short.rent,
             short.accounts.get(..3).expect("short frame"),
         ),
         Err(TradingSbfError::Content)

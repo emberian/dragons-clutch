@@ -7,7 +7,7 @@ use dclutch_capability_contract::{
     CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingLedgerDerivationV2,
     CapabilityManifestV1, ContentId as CapabilityContentId, FUNDING_LEDGER_HEADER_BYTES_V2,
     FUNDING_LEDGER_SLOT_BYTES_V2, FundingLedgerCloseCustodyV2, FundingLedgerStatusV2,
-    FundingLedgerV2, funding_ledger_bytes_v2,
+    FundingLedgerV2, funding::funded_rent_persists_v1, funding_ledger_bytes_v2,
 };
 use dclutch_market_core_codec::{
     CAPABILITY_FUNDING_HEADER_BYTES_V2, CORE_EFFECT_ACK_BYTES_V1, CORE_EFFECT_DIGEST_DOMAIN_V1,
@@ -609,11 +609,10 @@ fn commit_direct_close(
         request.generation,
         terminal.selector(),
         &certificate_data,
-        rent,
     )?;
     let ledger_refund = direct.funding_ledger.lamports();
     let source_refund = direct.source_state.lamports();
-    if source_refund < rent.minimum_balance(SOURCE_RESOLUTION_STATE_BYTES_V2)
+    if !funded_rent_persists_v1(source_refund)
         || ledger_remaining_native_principal
             .checked_add(ledger_rent_lamports)
             .and_then(|value| value.checked_add(ledger_lamport_surplus))
@@ -1306,7 +1305,7 @@ fn authenticate_completed_activation(
         .try_borrow_data()
         .map_err(|_| ResolutionError::OutputState)?;
     if direct.receipt.data_len() != FUNDING_ACTIVATION_RECEIPT_BYTES_V1
-        || direct.receipt.lamports() < rent.minimum_balance(FUNDING_ACTIVATION_RECEIPT_BYTES_V1)
+        || !funded_rent_persists_v1(direct.receipt.lamports())
     {
         return Err(ResolutionError::OutputState.into());
     }
@@ -2234,7 +2233,6 @@ fn process_admit(
         decision.selector(),
         product_runtime.outcome_count,
         &certificate_data,
-        rent,
     )?;
     let post_digest = poststate_digest(
         request.action,
@@ -2421,12 +2419,11 @@ fn process_close<'info>(
         authenticated.state.identity.generation,
         terminal.selector(),
         &certificate_data,
-        rent,
     )?;
     let funding_set_digest = funding_set_digest(&ledger_prestate);
     let ledger_refund = common.funding_ledger.lamports();
     let source_refund = common.source_state.lamports();
-    if source_refund < rent.minimum_balance(SOURCE_RESOLUTION_STATE_BYTES_V2) {
+    if !funded_rent_persists_v1(source_refund) {
         return Err(ResolutionError::Funding.into());
     }
     if ledger_remaining_native_principal
@@ -3063,7 +3060,6 @@ fn authenticate_terminal_certificate_v2(
     selector: u32,
     outcome_count: u32,
     bytes: &[u8],
-    rent: &Rent,
 ) -> ProgramResult {
     let (expected_kind, kind_tag) = match receipt_kind {
         ResolutionCoreReceiptKindV1::TerminalSuccess => {
@@ -3079,7 +3075,7 @@ fn authenticate_terminal_certificate_v2(
     if account.owner != program_id
         || account.executable
         || account.data_len() != RESOLUTION_CERTIFICATE_BYTES_V2
-        || account.lamports() < rent.minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2)
+        || !funded_rent_persists_v1(account.lamports())
     {
         return Err(ResolutionError::OutputState.into());
     }
@@ -3129,7 +3125,6 @@ fn authenticate_admitted_terminal_certificate_v2(
     generation: u64,
     selector: u32,
     bytes: &[u8],
-    rent: &Rent,
 ) -> ProgramResult {
     let (expected_kind, kind_tag) = match receipt_kind {
         ResolutionCoreReceiptKindV1::TerminalSuccess => {
@@ -3145,7 +3140,7 @@ fn authenticate_admitted_terminal_certificate_v2(
     if account.owner != program_id
         || account.executable
         || account.data_len() != RESOLUTION_CERTIFICATE_BYTES_V2
-        || account.lamports() < rent.minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2)
+        || !funded_rent_persists_v1(account.lamports())
     {
         return Err(ResolutionError::OutputState.into());
     }

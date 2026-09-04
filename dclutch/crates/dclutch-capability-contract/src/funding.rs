@@ -67,6 +67,43 @@ pub fn derive_funded_rent_rate_v2(
     Ok(rate)
 }
 
+/// The exemption-scaled rate a RECORDED rent principal was funded at.
+///
+/// The exact inverse of [`funded_rent_minimum_v2`] for one reading, and the
+/// instrument for a check the ruling otherwise leaves without one: a PERSISTED
+/// principal that must be compared to something, over an account nobody is
+/// creating. Comparing it to `Rent::minimum_balance` asks the cluster what a
+/// byte costs today, which is the question [`funded_rent_persists_v1`] exists
+/// to stop asking -- the principal was written when the account was funded and
+/// prices that moment, so a rate that moves in EITHER direction refuses a
+/// record that is telling the truth.
+///
+/// So recover the moment instead of quoting the present. `minimum_balance(len)`
+/// is `(ACCOUNT_STORAGE_OVERHEAD + len) x rate`, and the division back out must
+/// be EXACT: a principal no rate reproduces is a garbled record, refused by
+/// name rather than rounded to the nearest plausible cluster. One founding is
+/// one rate at every width, so a caller holding two principals one record wrote
+/// recovers the rate from either and requires it to price the other -- a
+/// statement the sysvar comparison never made, and true under every rate the
+/// cluster later adopts.
+///
+/// The host recovery in `dclutch-resolution-core-v3-operator`'s
+/// `funded_rent_recovery_v1` reads the same inverse off an account's BALANCE
+/// rather than off a recorded principal; folding it onto this author is owed
+/// and belongs to whoever next holds that file.
+pub fn funded_rent_rate_from_minimum_v1(minimum: u64, account_bytes: usize) -> Result<u32> {
+    let bytes = u64::try_from(account_bytes).map_err(|_| Error::ArithmeticOverflow)?;
+    let span = ACCOUNT_STORAGE_OVERHEAD_BYTES
+        .checked_add(bytes)
+        .ok_or(Error::ArithmeticOverflow)?;
+    let rate = u32::try_from(minimum.checked_div(span).ok_or(Error::ArithmeticOverflow)?)
+        .map_err(|_| Error::UnrepresentableRentRate)?;
+    if rate == 0 || funded_rent_minimum_v2(rate, account_bytes)? != minimum {
+        return Err(Error::UnrepresentableRentRate);
+    }
+    Ok(rate)
+}
+
 /// Whether a PRE-EXISTING account's funded rent still holds it, without asking
 /// the cluster what a byte costs today.
 ///

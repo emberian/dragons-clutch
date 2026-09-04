@@ -327,8 +327,10 @@ pub fn authenticate_execution_strategy_v2(
     selected_capability_program_schema: ContentId,
     selected_capability_program_id: ContentId,
     registry_program: &AccountInfo<'_>,
+    rent_sysvar: &AccountInfo<'_>,
     accounts: &[AccountInfo<'_>],
 ) -> Result<AuthenticatedExecutionStrategyV2, TradingSbfError> {
+    authenticate_untrusted_frame_coordinates_v2(registry_program, rent_sysvar)?;
     if accounts.len() < INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2 {
         return Err(TradingSbfError::Content);
     }
@@ -889,16 +891,23 @@ pub(crate) fn authenticate_activated_current_deployment(
         .map_err(TradingSbfError::from)
 }
 
-#[inline(never)]
-fn authenticate_common_frame_with_sealed_capability_pair(
+/// The frame's Registry and Rent COORDINATES, which is a different question
+/// from any rate.
+///
+/// `a4b2cbb17` repriced this boundary's floors through
+/// `funded_rent_persists_v1`, and the interpreted entry point's `Rent`
+/// parameter died with the decode -- taking with it the only thing that
+/// checked the caller handed over the real sysvar and an unwritable Registry
+/// rather than accounts of its own choosing. `registry_rent_privileges_and_
+/// account_width_are_not_caller_trust` had been red ever since. The sysvar
+/// stays in the frame and stays authenticated; what left is the deserialize.
+/// This is that authentication at ONE author, so neither entry point can lose
+/// it again while the other keeps it.
+fn authenticate_untrusted_frame_coordinates_v2(
     registry_program: &AccountInfo<'_>,
     rent_sysvar: &AccountInfo<'_>,
-    accounts: &[AccountInfo<'_>],
-    capability_program_id: ContentId,
-    capability_program: &CapabilityProgramV4,
-) -> Result<RecordPairBumpsV2, TradingSbfError> {
-    if accounts.len() < INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2
-        || registry_program.is_signer
+) -> Result<(), TradingSbfError> {
+    if registry_program.is_signer
         || registry_program.is_writable
         || !registry_program.executable
         || rent_sysvar.key != &sysvar::rent::ID
@@ -907,6 +916,21 @@ fn authenticate_common_frame_with_sealed_capability_pair(
         || rent_sysvar.is_writable
         || rent_sysvar.executable
     {
+        return Err(TradingSbfError::Content);
+    }
+    Ok(())
+}
+
+#[inline(never)]
+fn authenticate_common_frame_with_sealed_capability_pair(
+    registry_program: &AccountInfo<'_>,
+    rent_sysvar: &AccountInfo<'_>,
+    accounts: &[AccountInfo<'_>],
+    capability_program_id: ContentId,
+    capability_program: &CapabilityProgramV4,
+) -> Result<RecordPairBumpsV2, TradingSbfError> {
+    authenticate_untrusted_frame_coordinates_v2(registry_program, rent_sysvar)?;
+    if accounts.len() < INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2 {
         return Err(TradingSbfError::Content);
     }
     let raw = account(accounts, CAPABILITY_RAW)?;
