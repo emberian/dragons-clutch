@@ -59,9 +59,23 @@ describe('public devnet cut staging', () => {
     // A lifecycle signature appears only when one has been read back off the
     // chain, never because a step is expected to have happened. A pending cut
     // may not name one at all; the parser refuses that shape.
+    //
+    // THIS USED TO PIN ALL FOUR TO NULL, and that was an assertion about the
+    // protocol's history rather than about the cut: no step had ever been read
+    // back, so "null" and "unread" were the same value and the case could not
+    // tell them apart. The featured market has now been settled and its winning
+    // claim paid, both signatures read back off devnet before they were written
+    // here -- finalized, `err: null`, and each naming this market in its own
+    // account keys. So the shape is what is pinned, and `trade` stays null
+    // because this market never took a fill: its first attempt arrived after it
+    // was already Terminal and was refused by phase.
+    expect(PUBLIC_DEVNET_CUT_V1.activity.found).toBeNull();
     expect(PUBLIC_DEVNET_CUT_V1.activity.trade).toBeNull();
-    expect(PUBLIC_DEVNET_CUT_V1.activity.resolve).toBeNull();
-    expect(PUBLIC_DEVNET_CUT_V1.activity.redeem).toBeNull();
+    for (const step of ['resolve', 'redeem'] as const) {
+      const signature = PUBLIC_DEVNET_CUT_V1.activity[step];
+      expect(signature, `the live cut names no ${step}`).not.toBeNull();
+      expect(signature).toMatch(/^[1-9A-HJ-NP-Za-km-z]{64,88}$/);
+    }
     expect(checkedReleaseSetIdsV1(pending)).toBeNull();
   });
 

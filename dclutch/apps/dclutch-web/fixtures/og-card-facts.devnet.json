@@ -2,25 +2,20 @@
   "schema": "dclutch-og-card-facts-v1",
   "cluster": "devnet",
   "markets": {
-    "DUVcCGfjXzp1fBktTCjsAomgrn9S6sxSDziQHoyRiu8A": {
-      "phase": "Terminal",
-      "settledAtUnixSeconds": "1788415399",
-      "windowEndUnixSeconds": "1788417096"
+    "3QytL1bBMtCvRoXWR5h7MgutRBZqtv7emUVubEo5a4T2": {
+      "phase": "Retiring",
+      "settledAtUnixSeconds": "1788484406",
+      "windowEndUnixSeconds": "1788486128"
     },
-    "FgzbVSWVp36R5AVPchneyz9AKCMzdjpRfsekUsY4tT6i": {
+    "C9dLhWj7yi76RtQhhHV13gKuudAbV8qio8TZVEn3CjAT": {
       "phase": "Open",
       "settledAtUnixSeconds": null,
-      "windowEndUnixSeconds": "1788417666"
+      "windowEndUnixSeconds": "1788501695"
     },
-    "8ExdC1RwbyuJweEqT1F6Gk9rgN87uuVaLwtaY2wmr5x": {
+    "6aqy89GhhXFtDbawC5ors4HLkGvzdHC4R26TXTaaXRKj": {
       "phase": "Open",
       "settledAtUnixSeconds": null,
-      "windowEndUnixSeconds": "1788417096"
-    },
-    "BL8zsFokbz7aEdo3wjtcNffd5P1D8a9wVxwKq3mcMsMN": {
-      "phase": "Open",
-      "settledAtUnixSeconds": null,
-      "windowEndUnixSeconds": "1788439083"
+      "windowEndUnixSeconds": "1788490573"
     }
   }
 }

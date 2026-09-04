@@ -5,23 +5,23 @@
     "rpc_url": "https://devnet.helius-rpc.com/?<redacted>"
   },
   "cycles": {
-    "run": 1,
+    "run": 0,
     "target": 1
   },
-  "halt_reason": null,
-  "halted": false,
+  "halt_reason": "ledger-census violated a conservation law at cycle 1",
+  "halted": true,
   "heartbeat": {
     "backoff_seconds": 0.0,
     "budget_seconds": 325.0,
     "cadence_seconds": 20.0,
-    "expected_next_update_by": "2026-09-03T06:13:25+00:00",
+    "expected_next_update_by": "2026-09-04T00:57:21+00:00",
     "grace_seconds": 300.0,
     "jitter_fraction": 0.25,
     "note": "A living run rewrites this file every cycle. If your clock is past expected_next_update_by, no process is writing here any more -- read that and not the halted flag, which a run killed outright never gets to set. EXIT.json records how a run ended when it was able to; its absence past this instant means the run could not say."
   },
   "last_reconciliation": null,
   "market": {
-    "address": "DUVcCGfjXzp1fBktTCjsAomgrn9S6sxSDziQHoyRiu8A"
+    "address": "3QytL1bBMtCvRoXWR5h7MgutRBZqtv7emUVubEo5a4T2"
   },
   "mode": "finite",
   "schema": "dclutch-load-simulator-status-v1",
@@ -33,13 +33,13 @@
     "payers": {},
     "spent_lamports": 0
   },
-  "started_at": "2026-09-03T06:07:45+00:00",
+  "started_at": "2026-09-04T00:50:43+00:00",
   "stopping": false,
   "trades": {
     "landed": 0,
     "signatures": []
   },
   "trades_attempted": false,
-  "updated_at": "2026-09-03T06:08:00+00:00",
+  "updated_at": "2026-09-04T00:51:56+00:00",
   "wallets": []
 }

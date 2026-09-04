@@ -3,7 +3,9 @@
   "cohort": "13",
   "cluster": "devnet",
   "note": "Built by tools/gauntlet/devnet-witness/corroborate.py --discover from the signatures in COHORT13_SEALED_FOUNDED_2026_09_02.md, then corroborated against devnet. No route claim in this file was authored: each comes from the eight bytes the chain shows the transaction sent, resolved against the census route that dispatches on them, and kept only when the route's program is the program the instruction was sent to. Every `slot`, `compute_units`, `programs_invoked`, `routes_corroborated` and `not_corroborated` field is written by the tool from the chain's own reply. WHAT THIS DOES NOT SAY: a devnet witness corroborates the PROGRAM and the OUTER MAGIC. It does not corroborate which internal branch a program took, and it is not a proof about every input -- the same boundary `dclutch-route-census observe` draws for the localhost campaigns.",
-  "evidence_document": "docs/evidence/COHORT13_SEALED_FOUNDED_2026_09_02.md",
+  "evidence_documents": [
+    "docs/evidence/COHORT13_SEALED_FOUNDED_2026_09_02.md"
+  ],
   "programs": {
     "registry": "8XsxVn35gtemD9PuWC9pHYX1rxBAC4T8xV4xdrkdfCBV",
     "rent": "CUDLPLjjiLNAQ6hPczhL3AoDux3u77zaJyTERbAbs7Am",

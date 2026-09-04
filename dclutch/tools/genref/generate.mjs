@@ -349,6 +349,7 @@ if (fs.existsSync(witnessDir)) {
 const blockedRules = blocked.blocked.map((b) => ({
   route: b.route,
   reason: b.reason,
+  class: b.class,
 }));
 function blockedRuleFor(routeId) {
   let best = null;
@@ -370,18 +371,123 @@ function firstSentence(s) {
   return (m ? m[1] : s).replaceAll("\n", " ");
 }
 
+// ------------------------------------------------- one classifier, one tally
+
+// Every `blocked.json` entry declares which KIND of block it is, and the
+// taxonomy is closed here rather than left to a reader's judgement, because
+// the honest never-executed figure below is a sum over two of these classes
+// and a class that can rot is a figure that can rot. An entry with no `class`
+// fails this generator instead of being counted as whatever is convenient.
+const BLOCK_CLASSES = new Map([
+  ["out-of-release-set", "no tier deploys the program at all"],
+  ["structural", "genuinely undrivable at HEAD, and the entry argues why"],
+  ["repointing", "not a block: the entry redirects a reader, or records one already discharged"],
+  ["unwired", "the route IS driven today and emits no census evidence -- a wiring gap"],
+  ["status-report", "no campaign or tier drives it yet, and nothing structural is in the way"],
+]);
+{
+  const bad = blocked.blocked.filter((b) => !BLOCK_CLASSES.has(b.class));
+  if (bad.length > 0) {
+    console.error(
+      "genref: tools/gauntlet/blocked.json entries with no known `class`:\n" +
+        bad.map((b) => `  ${b.route}: ${JSON.stringify(b.class)}`).join("\n") +
+        "\n  known classes: " + [...BLOCK_CLASSES.keys()].join(", "),
+    );
+    process.exit(1);
+  }
+}
+
+// ONE AUTHOR for "has this route been driven, and if not why not".
+// `routes.md` used to ask `routeEvidence` alone while `route-witnesses.md`
+// asked `routeEvidence` OR `devnetWitness`, so two generated pages that both
+// passed `--check` disagreed about the same 163 routes: two routes with a
+// finalized devnet transaction and no campaign binding printed `devnet` on one
+// page and `blocked by rule` on the other, and the page a reader opens first
+// told them a route driven on a public chain cannot be driven. Byte-identity
+// is not cross-page consistency, so the fix is not another check -- it is that
+// there is only one function that can answer.
+function classifyRoute(routeId) {
+  const campaigns = routeEvidence.get(routeId) ?? [];
+  const devnet = devnetWitness.get(routeId) ?? [];
+  const rule = blockedRuleFor(routeId);
+  const kind =
+    campaigns.length > 0 || devnet.length > 0
+      ? "witnessed"
+      : rule
+        ? "blocked"
+        : "none";
+  return { kind, campaigns, devnet, rule };
+}
+const routeClass = new Map(
+  [...inventoryRouteIds].map((id) => [id, classifyRoute(id)]),
+);
+
+// The two never-executed numbers, both derived, both named wherever either is
+// printed. They answer different questions and the C-16 walk found the tree's
+// own work queue pointing at the first while meaning the second.
+const tally = {
+  routes: inventoryRouteIds.size,
+  witnessed: 0,
+  blocked: 0,
+  // (a) THE REGISTER'S VOCABULARY: no campaign binding, no devnet witness, and
+  //     no entry in blocked.json. Nobody has said anything about this route.
+  unrecorded: 0,
+  // (b) THE HONEST FORMULA: (a), plus every blocked route whose entry is a
+  //     status report ("no campaign drives it yet"), plus every blocked route
+  //     whose entry admits the route runs but emits no census evidence. A
+  //     sentence in blocked.json is not an execution.
+  undriven: 0,
+};
+for (const held of routeClass.values()) {
+  if (held.kind === "witnessed") tally.witnessed += 1;
+  else if (held.kind === "blocked") {
+    tally.blocked += 1;
+    if (held.rule.class === "status-report" || held.rule.class === "unwired") {
+      tally.undriven += 1;
+    }
+  } else {
+    tally.unrecorded += 1;
+    tally.undriven += 1;
+  }
+}
+
+const NEVER_EXECUTED_FORMULAS = `- **unrecorded: ${tally.unrecorded} of ${tally.routes}** -- no campaign
+  binding, no devnet witness, and no entry in \`tools/gauntlet/blocked.json\`.
+  Nobody has written anything at all about this route. This is the number the
+  register has always printed under the name NEVER-EXECUTED.
+- **undriven: ${tally.undriven} of ${tally.routes}** -- unrecorded, PLUS every
+  blocked route whose entry is classed \`status-report\` ("no campaign or tier
+  drives it yet", with nothing structural in the way), PLUS every blocked route
+  whose entry is classed \`unwired\` (it admits the route is driven today and
+  emits no census evidence). A reason is not an execution, and writing one down
+  moves a route between these two numbers without moving it on any chain.
+
+The first can be driven to zero by writing sentences. Only the second can be
+driven to zero by running the protocol, and it is the one
+\`docs/MASTER_COMPLETION_CONTRACT.md\` means by *never-executed intended route*.
+
+Both are counts of ROUTES, not of \`blocked.json\` entries, and the two
+denominators are not the same number: one entry's trailing \`*\` covers a whole
+program's routes, and an entry whose route now executes stops being counted
+here at all while its text stays in the file (route-witnesses.md lists those,
+under *Blocks their own route has already falsified*). ${blocked.blocked.length}
+entries classify ${tally.blocked} routes.`;
+
 function routeStatus(routeId) {
-  const ev = routeEvidence.get(routeId);
-  if (ev) {
-    const parts = [...new Set(ev.map((e) => `${e.outcome} (${e.campaign})`))]
-      .sort();
+  const held = routeClass.get(routeId) ?? classifyRoute(routeId);
+  if (held.kind === "witnessed") {
+    const parts = [
+      ...new Set(held.campaigns.map((e) => `${e.outcome} (${e.campaign})`)),
+      ...new Set(
+        held.devnet.map((w) => `executed (devnet cohort ${w.cohort})`),
+      ),
+    ].sort();
     return { kind: "witnessed", text: parts.join("; ") };
   }
-  const rule = blockedRuleFor(routeId);
-  if (rule) {
+  if (held.kind === "blocked") {
     return {
       kind: "blocked",
-      text: `blocked by rule \`${rule.route}\`: ${firstSentence(rule.reason)}`,
+      text: `blocked by rule \`${held.rule.route}\` (${held.rule.class}): ${firstSentence(held.rule.reason)}`,
     };
   }
   return { kind: "none", text: "NEVER-EXECUTED, no stated reason" };
@@ -528,9 +634,10 @@ const pages = new Map(); // relpath -> content
   ]);
   const totalRoutes = programs.reduce((n, p) => n + p.routes.length, 0);
   const totalRefusals = programs.reduce((n, p) => n + p.refusals.length, 0);
-  const witnessed = [...inventoryRouteIds].filter(
-    (id) => routeEvidence.has(id),
-  ).length;
+  // The same classification routes.md and route-witnesses.md print. Asking
+  // `routeEvidence` here is what made this line say 111 while the witness page
+  // said 113 about the same routes.
+  const witnessed = tally.witnessed;
 
   pages.set(
     "README.md",
@@ -566,8 +673,8 @@ these pages always match the source they describe. Regenerate with
   widths and offsets, account tables.
 
 Current totals: **${programs.length} programs**, **${totalRoutes} routes**
-(${witnessed} exercised by the test campaigns), **${totalRefusals} refusal
-codes**.
+(${witnessed} with a witness -- a campaign binding or a corroborated devnet
+transaction), **${totalRefusals} refusal codes**.
 
 If you'd rather start with prose, the [guides](../guides/README.md)
 explain the protocol in plain terms and link back into these tables.
@@ -718,6 +825,10 @@ function phaseGate(route, program) {
         .join("; ");
       const st = routeStatus(r.id);
       if (st.kind === "none") neverExecuted.push(r.id);
+      // The page prints `tally.unrecorded`; this is the same set counted a
+      // second way, and a disagreement means the classifier and the renderer
+      // walked different routes.
+
       if ((r.admissible_prestates ?? []).length > 0) gatedRoutes += 1;
       return [
         `\`${r.id}\``,
@@ -826,16 +937,27 @@ stands:
   same. The devnet half of that corroboration IS in the tree, under
   \`docs/evidence/witnesses/\`, and route-witnesses.md counts it. And even a
   corroborated row is test coverage, never a proof about every input.
-- **blocked** -- the route cannot be driven yet, and the reason is written
-  down in \`tools/gauntlet/blocked.json\` (rows show the first sentence;
-  the file has the rest). A campaign that exists and passes but emits no
-  census evidence is recorded here too, with its owner, rather than being
-  left to look like a route nobody ever wrote.
-- **NEVER-EXECUTED** -- no campaign binding names it and no reason is
-  recorded yet.
+- **blocked** -- nothing has been observed driving the route, and a reason is
+  written down in \`tools/gauntlet/blocked.json\` (rows show the class and the
+  first sentence; the file has the rest). Every entry declares WHICH KIND of
+  block it is, and the kinds are not interchangeable: \`structural\` and
+  \`out-of-release-set\` say the route cannot be driven at HEAD, while
+  \`status-report\` says only that nobody has written the campaign and
+  \`unwired\` says the route IS driven and emits no census evidence. A campaign
+  that exists and passes but emits no census evidence is recorded here too,
+  with its owner, rather than being left to look like a route nobody ever
+  wrote -- and it is counted in the second number below, not the first.
+- **NEVER-EXECUTED** -- no campaign binding names it, no devnet witness
+  corroborates it, and no reason is recorded yet.
 
-Currently **${neverExecuted.length}** of **${inventoryRouteIds.size}**
-routes are in that last group.
+## Two never-executed numbers, and neither one is the other
+
+Currently **${tally.unrecorded}** of **${inventoryRouteIds.size}** routes are in
+that last group. That is not the number of routes nothing has ever run, and a
+reader who takes it for one will conclude the register's work queue is empty.
+Both figures are derived here, from the same classification:
+
+${NEVER_EXECUTED_FORMULAS}
 
 The **phase** column is the route's own guard, not a summary of one. It is
 the named admission constant the guard checks against -- one admission type
@@ -1037,19 +1159,80 @@ ${noMachine}
     ]);
   }
 
-  const devnetRows = [];
+  // The two pages now derive from one classifier, so this cannot fail without
+  // someone reintroducing a second answer. It is here anyway, because the
+  // whole class of defect was invisible to `--check`: both pages were
+  // byte-identical to their committed selves while disagreeing with each other.
+  {
+    const driven = counts.devnet + counts["local-validator"] + counts["program-test"];
+    const complaints = [];
+    if (driven !== tally.witnessed) {
+      complaints.push(
+        `routes.md counts ${tally.witnessed} witnessed, route-witnesses.md ${driven}`,
+      );
+    }
+    if (counts.blocked !== tally.blocked) {
+      complaints.push(
+        `routes.md counts ${tally.blocked} blocked, route-witnesses.md ${counts.blocked}`,
+      );
+    }
+    if (counts["never-executed"] !== tally.unrecorded) {
+      complaints.push(
+        `routes.md counts ${tally.unrecorded} unrecorded, route-witnesses.md ${counts["never-executed"]}`,
+      );
+    }
+    if (complaints.length > 0) {
+      console.error(
+        "genref: the register's two pages disagree about the same routes:\n" +
+          complaints.map((c) => `  ${c}`).join("\n"),
+      );
+      process.exit(1);
+    }
+  }
+
+  // One row per KIND of act, not per transaction: a founding campaign writes
+  // forty-eight rent-index transactions that witness the same three routes,
+  // and a register that prints each of them buries the acts that happened once.
+  // The witness documents keep every signature; this is the reading of them.
+  const devnetGroups = new Map();
   for (const document of devnetDocuments) {
     for (const record of document.records ?? []) {
-      devnetRows.push([
-        document.cohort,
-        record.stage,
-        record.magic ? `\`${record.magic}\`` : "--",
-        num(record.slot),
-        num((record.routes_corroborated ?? []).length),
-        num((record.not_corroborated ?? []).length),
-        `\`${record.signature.slice(0, 12)}...\``,
-      ]);
+      const variant = record.action?.variant;
+      const key = [document.cohort, record.magic ?? record.stage, variant ?? ""].join("\u0000");
+      const held = devnetGroups.get(key) ?? {
+        cohort: document.cohort,
+        magic: record.magic,
+        variant,
+        slots: [],
+        routes: new Set(),
+        dropped: 0,
+        signature: record.signature,
+        count: 0,
+      };
+      held.count += 1;
+      held.slots.push(record.slot);
+      for (const route of record.routes_corroborated ?? []) held.routes.add(route);
+      held.dropped += (record.not_corroborated ?? []).length;
+      if (record.slot < Math.min(...held.slots)) held.signature = record.signature;
+      devnetGroups.set(key, held);
     }
+  }
+  const devnetRows = [];
+  for (const held of [...devnetGroups.values()].sort(
+    (a, b) => Math.min(...a.slots) - Math.min(...b.slots),
+  )) {
+    const low = Math.min(...held.slots);
+    const high = Math.max(...held.slots);
+    devnetRows.push([
+      held.cohort,
+      held.magic ? `\`${held.magic}\`` : "--",
+      held.variant ? `\`${held.variant}\`` : "--",
+      num(held.count),
+      low === high ? num(low) : `${num(low)}--${num(high)}`,
+      num(held.routes.size),
+      num(held.dropped),
+      `\`${held.signature.slice(0, 12)}...\``,
+    ]);
   }
 
   pages.set(
@@ -1078,8 +1261,24 @@ SHA-256, so a reviewer can verify a claim without re-running a gauntlet.
 | **devnet** | **${num(counts.devnet)}** | a finalized transaction on Solana devnet, named by signature and slot, and corroborated against the chain's own logs |
 | **local validator** | ${num(counts["local-validator"])} | \`solana-test-validator\`: a real Agave runtime, real slots, real finalization, on localhost |
 | **ProgramTest only** | ${num(counts["program-test"])} | an in-process \`solana-program-test\` bank. It runs the REAL SBF ELFs -- which is why it is evidence -- but it is not a validator: no packet limit, no leader schedule, no finalization, no fee market |
-| **blocked** | ${num(counts.blocked)} | no campaign; \`tools/gauntlet/blocked.json\` records a reason and an owner |
-| **never-executed** | ${num(counts["never-executed"])} | no campaign and no reason recorded |
+| **blocked** | ${num(counts.blocked)} | no campaign and no devnet witness; \`tools/gauntlet/blocked.json\` records a reason, a class and an owner |
+| **unrecorded** | ${num(counts["never-executed"])} | no campaign, no devnet witness, and no reason recorded |
+
+Those five classes partition the 163, and the last one is NOT the count of
+routes nothing has ever run:
+
+${NEVER_EXECUTED_FORMULAS}
+
+By class of blocking entry: ${[...BLOCK_CLASSES.keys()]
+  .map(
+    (name) =>
+      `**${name}** ${num(
+        [...routeClass.values()].filter(
+          (h) => h.kind === "blocked" && h.rule.class === name,
+        ).length,
+      )}`,
+  )
+  .join(", ")}.
 
 **A real Agave runtime drives ${num(witnessedByChain)} of the
 ${num(rows.length)}.** \`docs/MASTER_COMPLETION_CONTRACT.md\` item 5 asks for a local
@@ -1097,17 +1296,29 @@ transaction's own \`Program <address> invoke\` lines show every claimed route's
 program running. That is \`dclutch-route-census observe\`'s rule, applied
 unchanged to a public chain.
 
-It does **not** say which internal branch a program took, and it is not a
-proof about every input. A claimed route whose program the chain does not show
-invoked is recorded in the witness document's \`not_corroborated\` list and is
-counted nowhere.
+Where eight bytes name a request FAMILY rather than one route, the witness
+also carries the discriminant the program itself reads to pick the arm.
+\`DCLTCRQ2\` selects eleven Core routes and the \`Action\` variant inside the
+request selects one of them, so the record names the byte's offset constant,
+its tag and the variant that tag decodes to -- all three read out of the same
+codec the program links -- and \`--check\` re-reads that byte from the chain.
+Where a variant still names several routes and the dispatch separates them by
+an instruction length whose constant the reader cannot fold, the witness
+credits NONE of them and says so, rather than crediting four routes for one
+transaction.
+
+It does **not** say which internal branch a program took below the
+discriminants the dispatch selects on, and it is not a proof about every
+input. A claimed route whose program the chain does not show invoked is
+recorded in the witness document's \`not_corroborated\` list and is counted
+nowhere.
 
 ${
   devnetRows.length > 0
     ? table(
-        ["cohort", "stage", "magic", "slot", "routes", "dropped", "signature"],
+        ["cohort", "magic", "variant", "txs", "slot(s)", "routes", "dropped", "first signature"],
         devnetRows,
-        [null, null, null, "r", "r", "r", null],
+        [null, null, null, "r", "r", "r", "r", null],
       )
     : "*No devnet witness document exists yet, so the devnet count above is zero.*"
 }
@@ -1150,11 +1361,15 @@ ${
 ## Blocks their own route has already falsified
 
 \`tools/gauntlet/blocked.json\`'s rule is "keep an entry only while it is true,
-and delete it the moment its route executes". [routes.md](routes.md) cannot
-enforce it: that page returns **witnessed** before it consults the blocked set,
-so a route that is both bound and blocked renders as witnessed and its stale
-reason never surfaces. The join is free here, so these are the entries whose
-route now executes.
+and delete it the moment its route executes". Neither page can enforce it:
+both return **witnessed** before consulting the blocked set, so a route that is
+both driven and blocked renders as witnessed and its stale reason never
+surfaces. Until 2026-09-04 the two pages did not even agree on which routes
+those were -- routes.md asked the campaign bindings and this page asked the
+bindings OR the devnet witnesses, and two routes with a finalized devnet
+transaction printed \`blocked by rule\` on one page and \`devnet\` on the other.
+One classifier now answers for both. The join is free here, so these are the
+entries whose route now executes.
 
 ${
   falsifiedBlocks.length > 0

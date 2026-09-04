@@ -1,0 +1,11 @@
+{
+  "format": "dclutch-web/core-market-reading/v1",
+  "provenance": "Read off devnet at finalized slot 492,946,108, from cohort-15's first Direct market -- the market the public cut features. These bytes are that account, whole and unmodified. They exist so a gate can be proven RED against the one shape that has twice reached production: a Core Market whose owning cohort has been closed, or a public cut whose checked-release table is about a release set the featured market does not select. Neither refusal can be exercised against a synthetic record, because forging a 368-byte DCLTCOR3 by hand means forging exactly the invariants the decoder is there to check.",
+  "market": "3QytL1bBMtCvRoXWR5h7MgutRBZqtv7emUVubEo5a4T2",
+  "owner": "7hGerMC6Wj742FVTyiF9PhRnGSBzbee7TMZ6sUytsmFr",
+  "lamports": "3141168",
+  "space": 368,
+  "slot": "492946108",
+  "reading": "Phase byte 3 Retiring, readiness 2 Consumed, generation 2, outstanding capabilities 1, and a terminal receipt naming the resolution certificate 84YxYUrEYxYyRHAWSnZrNn7D1GeA6teGfvC3hdBfNh9K. The 32 bytes at offset 208 are the execution release set this market SELECTS, and the public cut's checked-release table is keyed by that same string.",
+  "dataHex": "44434c54434f5233030003020100000023dc0d7023684d3e95f3c5745f992ccf1cb8599b2f57623a7700dee6b1f861b9f2b99f246d55f4d5686e27ecc8ff4271282ac639343b6862ba2e82cdd995cb2449003f6f24de9c485386c47c9a4dc3a7db78847161798dc2d43b8cb683581cbff75122013991db195170ad9e2ead52ed9491a09727c5ea574c262347ff427f0efdea108fda41f8ac74a0072e6a31ae080e3f49529c3af69aca6a5b5ddffbd2b4118f3012f3893529010524e3e47ecb149781beaca4119f9c3fbeb643a6d3ddb99895faee8f7f6a1926df18302f1b003afcf4b6c56518ba7bba2614c86eea8a2271278594cf10fa43124ad21f6ca2ecdbbbd130abc868edae65f2c9e4c3c3a03c02000000000000000100000000000000ffffffffffffffffe0aca07da4fe6f3f0e4d3e4bbd1bd4239eb1aeb312fbc55a81db914d9ae749c068eaaf7e76e93d698e440c07da93e1340beb5c4a5569151625d49b154f96166afffeff2c11150000"
+}

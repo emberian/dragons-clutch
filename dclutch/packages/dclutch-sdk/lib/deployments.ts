@@ -91,70 +91,78 @@ export const DEVNET_DEPLOYMENT_V1: DeploymentV1 = Object.freeze({
   label: 'Devnet',
   endpoint: 'https://api.devnet.solana.com',
   genesisHash: SOLANA_DEVNET_GENESIS_HASH_V1,
-  // COHORT-14, deployed 2026-09-03 from commit 8e96ec3f and byte-identical on
-  // read-back three ways: the dump compares equal, the byte count matches, and
-  // each live ProgramData payload's SHA-256 equals the built ELF's. Devnet is
-  // disposable by ruling: each cohort is a full redeploy with fresh identities
-  // and the previous one is abandoned in place and then CLOSED, which returns
-  // its rent to pay for the next. These ids are not permanent and nothing here
-  // should say they are.
+  // COHORT-15, deployed 2026-09-04 from commit 1cae26fd6 and byte-identical on
+  // read-back three ways: the dump compares equal per role, the byte count
+  // matches, and a hostile decode of each live ProgramData answers MATCH for
+  // all seven. Devnet is disposable by ruling: each cohort is a full redeploy
+  // with fresh identities and the previous one is abandoned in place and then
+  // CLOSED, which returns its rent to pay for the next. These ids are not
+  // permanent and nothing here should say they are.
   //
-  // NOT TYPED. Each id is the `program_id` the sealed plan `plan-seal.json`
-  // names for its role, and the two facts beside it below are read off the
-  // chain. Cohort-13's rows were replaced only once all seven of this cohort's
-  // ProgramData accounts had answered -- a closed cohort's Program stubs answer
-  // every other question, so the account holding the code is the only one worth
-  // asking.
+  // NOT TYPED, AND NOT MOVED BY HAND EITHER. Each id is the `program_id` the
+  // sealed plan `plan-seal.json` names for its role, and the two facts beside
+  // it below are read off the chain; `scripts/derive-deployment-manifest.mjs`
+  // is what performs both and what wrote these lines. That script exists
+  // because this table has now shipped a CLOSED cohort twice -- `0f1d75b27`
+  // fixed it for cohort-8 and the second C-16 walk found cohort-14's seven
+  // ProgramData accounts reading AccountNotFound the morning after cohort-15
+  // landed -- and both times the derivation that could have said so had been
+  // performed in a scratch directory and thrown away. It refuses to emit a row
+  // for a role whose ProgramData is vacant, so a closed cohort cannot be
+  // written here at all: proven against cohort-14's own sealed plan, which it
+  // refuses by naming all seven vacant addresses.
   programs: Object.freeze({
-    registry: 'ySYoUvUw7Z5AtDNqxQAo93vJXD1enNoK8Bf5uLRSyRm',
-    rent: '4oQLFDM9TbGBdb2q6QZCxRKZ3u5sqhTycb9MeHt9k41r',
-    custody: '8mWrLG2sjfzSKA3fEVBfY3RkGLTLuZZjKqDXWDuTpLbk',
-    resolution: '5ML5pbUfCaDwokNtmLyTgDEb7eHrfDRrW4PmktXAmphs',
-    claims: 'H8ANKXECwkntr8Cczo6gZX5d9PWN6uwrqCyeohYsZVhV',
-    trading: 'DcsWHSjPTTpYzXScmB5xYh3iEsM9fx4YFC1BPvQggEtu',
-    core: '9JW1qqJVeFo9ZRvzzVzNvqrwzt7QvyHpGafTJmj2hBFB',
+    registry: '8ci2LojrUPtVZoByaAmoNCj8244DTdxkUkHRVA9JiHdV',
+    rent: 'EQ61nrN71xaTsDMSrrH9FzMeqc27ghRex9abyjKu8vC4',
+    custody: '4sCbUV6f8iZaaVDkp3qAJtxiLY1cfBcKrVc5wpAFjpzM',
+    resolution: '24AkUjtXg61La45u7KTge8u4dKpVqkzirmzycVyckFgn',
+    claims: '595PExHje1GnbryQtXvpxSfxK72snpMcrG1Sj8VpPLEe',
+    trading: '3gBSSjYwSC4phutpGKRkMhrnCDVzHu6kfQ3L4jLf2UmG',
+    core: '7hGerMC6Wj742FVTyiF9PhRnGSBzbee7TMZ6sUytsmFr',
   }),
   // Bootstrap hint, GENERATED — do not hand-edit. Regenerate with
   // `node packages/dclutch-sdk/scripts/derive-activation-hint.mjs --write`.
   //
   // The one cache of those the Registry owns whose five pinned deployment
   // slots equalled the five live ProgramData slots in a single reading.
-  // Release set 398e51c008cc5f592f3252f0c1f2246e019ace000b04b74766a41cb45a8a3e09,
-  // pinning Core at deployment slot 492226262.
+  // Release set 9895faee8f7f6a1926df18302f1b003afcf4b6c56518ba7bba2614c86eea8a22,
+  // pinning Core at deployment slot 492746271.
   // A session follows past this when it ages out; a reader cannot.
-  activationCache: 'F66BhQey3ESPRQHEQaLFFEwya4xCb6s2Uh27JiUJ1yVc',
-  provenance: 'Cohort-14’s devnet substrate, deployed 2026-09-03 from commit 8e96ec3f and byte-identical on read-back; cohort-13 was closed the same day and the 42.08 SOL its rent returned paid for this one. Its founding, its checked seal and the Market account itself all carry one release-set identity — and the third of those is the one a browser can check for itself, because it is 32 bytes at offset 208 of a Market this site reads.',
+  activationCache: '3hFTU9ka7fryKrVY7s8Lm5ZMCHsnq5bxEGcgSCd6TSiu',
+  provenance: 'Cohort-15’s devnet substrate, deployed 2026-09-04 from commit 1cae26fd6 and byte-identical on read-back; cohort-14 was closed the same day and the 42.20 SOL its rent returned paid for this one, which cost 42.55 against a 42.55 projection. Its founding, its checked seal and the Market account itself all carry one release-set identity — and the third of those is the one a browser can check for itself, because it is 32 bytes at offset 208 of a Market this site reads. It is also the first cohort whose statistic carries the source-to-result scale factor, which is why a market page here can now reproduce the cell the chain committed instead of assuming the shift is zero.',
 });
 
 /**
- * Cohort-14's ProgramData addresses and deployment slots.
+ * Cohort-15's ProgramData addresses and deployment slots.
  *
  * READ, not copied from a record, and not derived either: each address is the
  * 32 bytes the Program account itself names at offset 4, and each slot is the
  * u64 at offset 4 of that ProgramData account's own Loader-v3 header. Read
- * finalized at slot 492,423,716 -- the day AFTER the deploy rather than the
+ * finalized at slot 492,944,410 -- hours after the deploy rather than the
  * minute after it, which is the stronger reading: these slots are what the
- * chain still says, not what the deploy reported. They run 492,225,646 through
- * 492,226,262, one per role in the order the seven were deployed, and they
- * reproduce COHORT14_SEALED_FOUNDED_FILLED_2026_09_03.md §3 without reading it.
+ * chain still says, not what the deploy reported. They run 492,745,516 through
+ * 492,746,271, one per role in the order the seven were deployed, and they
+ * reproduce COHORT15_DEPLOYED_SEALED_FOUNDED_CAPTURED_2026_09_04.md §3 without
+ * reading it.
  *
  * THAT LAST CHECK IS THE ONE THAT MATTERS. A closed program keeps its 36-byte
  * Program account, its executable flag and the ProgramData address it names --
  * only the ProgramData itself is gone. Cohort-8's rows survived here after its
- * close on 2026-09-01 because every gate asked the Program account, which was
- * alive, and none asked the account that holds the code. `deployments.live.test.ts`
- * now asks, and so does the derivation that wrote these rows: it refuses to
- * emit a row for a role whose ProgramData account is vacant, so a cohort that
- * has been closed cannot be written down here at all.
+ * close on 2026-09-01, and cohort-14's survived here after its close on
+ * 2026-09-04, both because every gate asked the Program account, which was
+ * alive, and none asked the account that holds the code.
+ * `deployments.live.test.ts` asks, `deploymentLiveness.live.test.ts` makes the
+ * refusal a gate rather than an env-gated skip, and the derivation that wrote
+ * these rows refuses to emit one for a role whose ProgramData is vacant.
  */
 export const DEVNET_PROGRAM_EVIDENCE_V1: Readonly<Record<ProtocolRoleV1, ProgramEvidenceV1>> = Object.freeze({
-  registry: Object.freeze({ programData: '9TZNB3AuGZh9XfpP8t8NE8KieinmDRGTyeQ9GctGsEVN', deploymentSlot: '492225646' }),
-  rent: Object.freeze({ programData: '9RYt8ePJncr4bftaiB1BFo4xeo8DL2B46AdX6Kp1ciTt', deploymentSlot: '492225697' }),
-  custody: Object.freeze({ programData: 'GHD79BJhR8xB2T2TCUccpL7CUbiy9AoK6CBfnvbeTmto', deploymentSlot: '492225768' }),
-  resolution: Object.freeze({ programData: 'AXnQbjYTqFD25qQ4BsY9urYpSRhhHfJH2HGPs59v1SUw', deploymentSlot: '492225857' }),
-  claims: Object.freeze({ programData: 'DkkGjSpV7X5enzpUM5GB4qPwnidXmquwimGLpFVXp9cC', deploymentSlot: '492225979' }),
-  trading: Object.freeze({ programData: 'FMgGM3THeeqML5ALMG3XKee4k8eh8QaqXGjE2uiUUAxH', deploymentSlot: '492226154' }),
-  core: Object.freeze({ programData: 'CC39Q4RstSZBniSZZASYoZXMyQtTari3WHZs9Zscgt2t', deploymentSlot: '492226262' }),
+  registry: Object.freeze({ programData: '2Xvmiz5kBseLAeCCgJsuJmK7UHQ1fzzbaSm7FqHF8Eat', deploymentSlot: '492745516' }),
+  rent: Object.freeze({ programData: '6jqwvw8jPSqomLLir3rNohLHAm5awrkcx4b3WvjxVmSm', deploymentSlot: '492745574' }),
+  custody: Object.freeze({ programData: 'D7X4Wximtu9BwHXdrWgWpXkjMCFS7xPtV3UevgMVXhKB', deploymentSlot: '492745658' }),
+  resolution: Object.freeze({ programData: 'B8N72QJgwKypTfgr9TsLDtKWjrCFeJ9n7FjsjV1xgB71', deploymentSlot: '492745773' }),
+  claims: Object.freeze({ programData: '7RLeuS5vDph1VpgG3NGYwZnjnTxvwmwJE2FfgWNUDWPG', deploymentSlot: '492745957' }),
+  trading: Object.freeze({ programData: 'CnER99tNi7gz24g7sFEzoUoxa9Q3cZe8FMJTdu9iEfxG', deploymentSlot: '492746142' }),
+  core: Object.freeze({ programData: 'DrT1XF1qDgbTs8WCkhk1yjxFyehPSBM1VQrrowipmDyt', deploymentSlot: '492746271' }),
 });
 
 export const LOCAL_DEPLOYMENT_V1: DeploymentV1 = Object.freeze({

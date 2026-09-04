@@ -4476,3 +4476,13 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Cuts: `61c8978b0`.
 - The docket republished for the morning (the first link was deleted): https://claude.ai/code/artifact/59b9e153-e1ee-4d32-aeba-8e1faabccfac
   — D8 (rent across an epoch) and M6 added; the rows' evidence refreshed; the second walk's six-item path in the C-16 row.
+- WITNESS-2 closed (`32ce7d19d`): `corroborate.py` binds `DCLTCRQ2` to its Action discriminant (tag at offset 10, read from
+  the decode function that also reads the magic — by enclosing function, not name prefix), exhaustive over the eleven
+  (tag 7 `Retire` names four routes it cannot fold — credits none, says why); `--source` reads signature fields by name (a
+  bare scan found 582 base58 runs for six transactions); **cohort-15 witnesses 9 records / 9 routes → 81 / 27; devnet class
+  26 → 40; six Core routes reach the register for the first time; `DCLTDBR1` witnessed by signature** (C-16 N-3 closed);
+  the two pages had asked two questions of one generator — one `classifyRoute` now; **both never-executed numbers printed
+  by name: unrecorded 0 of 163, undriven 34 of 163**, every blocked.json entry carrying a class from a closed taxonomy or
+  the generator refuses. Owed: `Action::Retire`'s four cross-crate length sums; `DCLTGMF3` to Trading resolves to no route
+  (the generic-founding family's DCLTCRQ2); eight falsified blocking entries kept, classified.
+- Cuts: `f6ea3bc60`, `48028e1c7`.

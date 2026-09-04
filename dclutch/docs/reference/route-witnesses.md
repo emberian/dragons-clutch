@@ -18,13 +18,40 @@ SHA-256, so a reviewer can verify a claim without re-running a gauntlet.
 
 | class | routes | what actually executed the route |
 | --- | ---: | --- |
-| **devnet** | **26** | a finalized transaction on Solana devnet, named by signature and slot, and corroborated against the chain's own logs |
-| **local validator** | 32 | `solana-test-validator`: a real Agave runtime, real slots, real finalization, on localhost |
-| **ProgramTest only** | 55 | an in-process `solana-program-test` bank. It runs the REAL SBF ELFs -- which is why it is evidence -- but it is not a validator: no packet limit, no leader schedule, no finalization, no fee market |
-| **blocked** | 50 | no campaign; `tools/gauntlet/blocked.json` records a reason and an owner |
-| **never-executed** | 0 | no campaign and no reason recorded |
+| **devnet** | **40** | a finalized transaction on Solana devnet, named by signature and slot, and corroborated against the chain's own logs |
+| **local validator** | 23 | `solana-test-validator`: a real Agave runtime, real slots, real finalization, on localhost |
+| **ProgramTest only** | 53 | an in-process `solana-program-test` bank. It runs the REAL SBF ELFs -- which is why it is evidence -- but it is not a validator: no packet limit, no leader schedule, no finalization, no fee market |
+| **blocked** | 47 | no campaign and no devnet witness; `tools/gauntlet/blocked.json` records a reason, a class and an owner |
+| **unrecorded** | 0 | no campaign, no devnet witness, and no reason recorded |
 
-**A real Agave runtime drives 58 of the
+Those five classes partition the 163, and the last one is NOT the count of
+routes nothing has ever run:
+
+- **unrecorded: 0 of 163** -- no campaign
+  binding, no devnet witness, and no entry in `tools/gauntlet/blocked.json`.
+  Nobody has written anything at all about this route. This is the number the
+  register has always printed under the name NEVER-EXECUTED.
+- **undriven: 34 of 163** -- unrecorded, PLUS every
+  blocked route whose entry is classed `status-report` ("no campaign or tier
+  drives it yet", with nothing structural in the way), PLUS every blocked route
+  whose entry is classed `unwired` (it admits the route is driven today and
+  emits no census evidence). A reason is not an execution, and writing one down
+  moves a route between these two numbers without moving it on any chain.
+
+The first can be driven to zero by writing sentences. Only the second can be
+driven to zero by running the protocol, and it is the one
+`docs/MASTER_COMPLETION_CONTRACT.md` means by *never-executed intended route*.
+
+Both are counts of ROUTES, not of `blocked.json` entries, and the two
+denominators are not the same number: one entry's trailing `*` covers a whole
+program's routes, and an entry whose route now executes stops being counted
+here at all while its text stays in the file (route-witnesses.md lists those,
+under *Blocks their own route has already falsified*). 50
+entries classify 47 routes.
+
+By class of blocking entry: **out-of-release-set** 6, **structural** 5, **repointing** 2, **unwired** 5, **status-report** 29.
+
+**A real Agave runtime drives 63 of the
 163.** `docs/MASTER_COMPLETION_CONTRACT.md` item 5 asks for a local
 validator or devnet transaction where the route is chain-facing; those are the
 rows that meet it. The ProgramTest column is not a lesser version of the same
@@ -40,33 +67,51 @@ transaction's own `Program <address> invoke` lines show every claimed route's
 program running. That is `dclutch-route-census observe`'s rule, applied
 unchanged to a public chain.
 
-It does **not** say which internal branch a program took, and it is not a
-proof about every input. A claimed route whose program the chain does not show
-invoked is recorded in the witness document's `not_corroborated` list and is
-counted nowhere.
+Where eight bytes name a request FAMILY rather than one route, the witness
+also carries the discriminant the program itself reads to pick the arm.
+`DCLTCRQ2` selects eleven Core routes and the `Action` variant inside the
+request selects one of them, so the record names the byte's offset constant,
+its tag and the variant that tag decodes to -- all three read out of the same
+codec the program links -- and `--check` re-reads that byte from the chain.
+Where a variant still names several routes and the dispatch separates them by
+an instruction length whose constant the reader cannot fold, the witness
+credits NONE of them and says so, rather than crediting four routes for one
+transaction.
 
-| cohort | stage | magic | slot | routes | dropped | signature |
-| --- | --- | --- | ---: | ---: | ---: | --- |
-| 13 | dcltcfq1-491961396 | `DCLTCFQ1` | 491,961,396 | 4 | 0 | `31Cb2kwwKq6x...` |
-| 13 | dcltpcb2-491962044 | `DCLTPCB2` | 491,962,044 | 4 | 0 | `2SLSaUPmp8VF...` |
-| 13 | dcltsel1-492092785 | `DCLTSEL1` | 492,092,785 | 2 | 0 | `4Yi8YHmYd7Mc...` |
-| 13 | dclccr01-492151322 | `DCLCCR01` | 492,151,322 | 3 | 0 | `5JKdUXJurc4j...` |
-| 13 | dcltsq03-492154205 | `DCLTSQ03` | 492,154,205 | 3 | 0 | `etUrsvhwZkue...` |
-| 13 | controller-funding-prepare | `DCLTCFQ1` | 491,961,396 | 4 | 0 | `31Cb2kwwKq6x...` |
-| 13 | projected-custody-bootstrap | `DCLTPCB2` | 491,962,044 | 9 | 2 | `2SLSaUPmp8VF...` |
-| 13 | generic-market-founding | `DCLTGMF3` | 491,963,072 | 12 | 2 | `5Ji1babqGgui...` |
-| 14 | dcltsq03-492415150 | `DCLTSQ03` | 492,415,150 | 3 | 0 | `5aPHBEoaLHVE...` |
-| 14 | dclccr01-492550558 | `DCLCCR01` | 492,550,558 | 3 | 0 | `4aXbeYtXiVkA...` |
-| 14 | dcltsq03-492551404 | `DCLTSQ03` | 492,551,404 | 3 | 0 | `fqcRNCVt3bEt...` |
-| 15 | dcltpua1-492767048 | `DCLTPUA1` | 492,767,048 | 3 | 0 | `2wqT3rjHAvUx...` |
-| 15 | dcltpua1-492767229 | `DCLTPUA1` | 492,767,229 | 3 | 0 | `2yRSDsSs3oRC...` |
-| 15 | dcltspi1-492775238 | `DCLTSPI1` | 492,775,238 | 2 | 0 | `3VsB7dNppiq6...` |
-| 15 | dcltspi1-492829232 | `DCLTSPI1` | 492,829,232 | 2 | 0 | `2Mqxghzc6Uwt...` |
-| 15 | dcltpua1-492863447 | `DCLTPUA1` | 492,863,447 | 3 | 0 | `2CabHYSLTdKe...` |
-| 15 | dcltsel1-492865103 | `DCLTSEL1` | 492,865,103 | 2 | 0 | `5wPF5SbftvtB...` |
-| 15 | dclthot3-492865197 | `DCLTHOT3` | 492,865,197 | 4 | 0 | `3eKAiD9T13wg...` |
-| 15 | dcltdfs1-492865496 | `DCLTDFS1` | 492,865,496 | 3 | 0 | `5yVEK542AE4o...` |
-| 15 | dcltspi1-492868986 | `DCLTSPI1` | 492,868,986 | 2 | 0 | `2p5urmVAjSDr...` |
+It does **not** say which internal branch a program took below the
+discriminants the dispatch selects on, and it is not a proof about every
+input. A claimed route whose program the chain does not show invoked is
+recorded in the witness document's `not_corroborated` list and is counted
+nowhere.
+
+| cohort | magic | variant | txs | slot(s) | routes | dropped | first signature |
+| --- | --- | --- | ---: | ---: | ---: | ---: | --- |
+| 13 | `DCLTCFQ1` | -- | 2 | 491,961,396 | 4 | 0 | `31Cb2kwwKq6x...` |
+| 13 | `DCLTPCB2` | -- | 2 | 491,962,044 | 9 | 2 | `2SLSaUPmp8VF...` |
+| 13 | `DCLTGMF3` | -- | 1 | 491,963,072 | 12 | 2 | `5Ji1babqGgui...` |
+| 13 | `DCLTSEL1` | -- | 1 | 492,092,785 | 2 | 0 | `4Yi8YHmYd7Mc...` |
+| 13 | `DCLCCR01` | -- | 1 | 492,151,322 | 3 | 0 | `5JKdUXJurc4j...` |
+| 13 | `DCLTSQ03` | -- | 1 | 492,154,205 | 3 | 0 | `etUrsvhwZkue...` |
+| 14 | `DCLTSQ03` | -- | 2 | 492,415,150--492,551,404 | 3 | 0 | `5aPHBEoaLHVE...` |
+| 14 | `DCLCCR01` | -- | 1 | 492,550,558 | 3 | 0 | `4aXbeYtXiVkA...` |
+| 15 | `DCLTCRQ2` | `ActivateCapability` | 2 | 492,765,919--492,862,505 | 4 | 0 | `2eCUqXZxFrPd...` |
+| 15 | `DCLTPUA1` | -- | 3 | 492,767,048--492,863,447 | 3 | 0 | `2wqT3rjHAvUx...` |
+| 15 | `DCLTSPI1` | -- | 4 | 492,775,238--492,925,112 | 2 | 0 | `3VsB7dNppiq6...` |
+| 15 | `DCLTCRQ2` | `AdmitTerminal` | 1 | 492,829,917 | 2 | 0 | `64jEDVT6ZbdU...` |
+| 15 | `DCLTRIX1` | -- | 48 | 492,856,707--492,860,619 | 2 | 0 | `5b9xXXw4VznU...` |
+| 15 | `DCLRNCI2` | -- | 2 | 492,858,173--492,858,671 | 4 | 0 | `48neFvj1UxJm...` |
+| 15 | `DCLTCRQ2` | `Found` | 3 | 492,858,402--492,858,484 | 2 | 0 | `hUm7uF7kziFx...` |
+| 15 | `DCLTCFQ1` | -- | 1 | 492,859,368 | 4 | 0 | `6175QesqJoem...` |
+| 15 | `DCLTCF1A` | -- | 1 | 492,859,569 | 2 | 0 | `5AwqKfWgjkKC...` |
+| 15 | `DCLTPCB2` | -- | 3 | 492,859,837--492,860,006 | 4 | 0 | `4NFjo5NumfWf...` |
+| 15 | `DCLTCRQ2` | `VerifyReadiness` | 2 | 492,861,140--492,861,287 | 3 | 0 | `5GKoNZdZkdZA...` |
+| 15 | `DCLRFAQ1` | -- | 1 | 492,861,217 | 2 | 0 | `5rFe34k1KJik...` |
+| 15 | `DCLTSEL1` | -- | 2 | 492,865,103--492,886,343 | 2 | 0 | `5wPF5SbftvtB...` |
+| 15 | `DCLTHOT3` | -- | 1 | 492,865,197 | 4 | 0 | `3eKAiD9T13wg...` |
+| 15 | `DCLTDFS1` | -- | 1 | 492,865,496 | 3 | 0 | `5yVEK542AE4o...` |
+| 15 | `DCLTSQ03` | -- | 4 | 492,895,097--492,897,766 | 3 | 0 | `2R3e5YoZa44H...` |
+| 15 | `DCLTCRQ2` | `BeginRetiring` | 1 | 492,897,913 | 2 | 0 | `35P7GLnQRVmS...` |
+| 15 | `DCLTDBR1` | -- | 1 | 492,898,053 | 2 | 0 | `51xXs3Zqsx13...` |
 
 Refresh a document with `tools/gauntlet/devnet-witness/corroborate.py --write
 FILE`; `--check` re-reads every one of them from devnet and fails on any
@@ -110,10 +155,10 @@ campaign passed this control on a sentence in its header.
 | `structured-v2-programtest` | program-test | yes | 2 | `tools/gauntlet/structured/run-structured.sh` | `98937647cc92d70f` |
 | `tier1` | local-validator | yes | 37 | `tools/gauntlet/run.sh` | `0739195671e165e4` |
 | `tier4-series-occurrence-programtest` | program-test | yes | 1 | `tools/gauntlet/tier4/run-campaign.sh` | `eccd05c0e5ba3d38` |
-| cohort 13 (devnet) | devnet | yes | 10 | `tools/gauntlet/devnet-witness/corroborate.py` | `9f18f7c5d9e1a57e` |
-| cohort 13 (devnet) | devnet | yes | 19 | `tools/gauntlet/devnet-witness/corroborate.py` | `9909b0b59ab4e9b3` |
-| cohort 14 (devnet) | devnet | yes | 4 | `tools/gauntlet/devnet-witness/corroborate.py` | `a08c5c64298bc6a2` |
-| cohort 15 (devnet) | devnet | yes | 9 | `tools/gauntlet/devnet-witness/corroborate.py` | `3bfca1e91f45b04c` |
+| cohort 13 (devnet) | devnet | yes | 10 | `tools/gauntlet/devnet-witness/corroborate.py` | `a208097a0845cf49` |
+| cohort 13 (devnet) | devnet | yes | 19 | `tools/gauntlet/devnet-witness/corroborate.py` | `95ae567618473e63` |
+| cohort 14 (devnet) | devnet | yes | 4 | `tools/gauntlet/devnet-witness/corroborate.py` | `20ce1fda65f4d630` |
+| cohort 15 (devnet) | devnet | yes | 27 | `tools/gauntlet/devnet-witness/corroborate.py` | `c04716bffae3eb91` |
 
 ## Routes whose only witness is a campaign that does not reproduce
 
@@ -127,16 +172,23 @@ somewhere to say so. These are the routes left standing on one.
 ## Blocks their own route has already falsified
 
 `tools/gauntlet/blocked.json`'s rule is "keep an entry only while it is true,
-and delete it the moment its route executes". [routes.md](routes.md) cannot
-enforce it: that page returns **witnessed** before it consults the blocked set,
-so a route that is both bound and blocked renders as witnessed and its stale
-reason never surfaces. The join is free here, so these are the entries whose
-route now executes.
+and delete it the moment its route executes". Neither page can enforce it:
+both return **witnessed** before consulting the blocked set, so a route that is
+both driven and blocked renders as witnessed and its stale reason never
+surfaces. Until 2026-09-04 the two pages did not even agree on which routes
+those were -- routes.md asked the campaign bindings and this page asked the
+bindings OR the devnet witnesses, and two routes with a finalized devnet
+transaction printed `blocked by rule` on one page and `devnet` on the other.
+One classifier now answers for both. The join is free here, so these are the
+entries whose route now executes.
 
 | route | class | driven by | blocking rule | the reason, first sentence |
 | --- | --- | --- | --- | --- |
-| `core/begin_retiring::process#BeginRetiring` | local-validator | `claims-rational-representation-v2-programtest`, `journey` | `core/begin_retiring::process#BeginRetiring` | Market retirement; needs an open, then terminal, Market. |
+| `core/begin_retiring::process#BeginRetiring` | devnet | `claims-rational-representation-v2-programtest`, `journey` | `core/begin_retiring::process#BeginRetiring` | Market retirement; needs an open, then terminal, Market. |
+| `core/capability::process#CloseCapability` | devnet | devnet | `core/capability::process#CloseCapability` | Capability closure; needs an activated capability root first. |
 | `core/execute_provider_v3::process#ExecuteProvider` | local-validator | `journey` | `core/execute_provider_v3::process#ExecuteProvider` | Provider execution; needs the Source/provider tier. |
+| `core/process_instruction#CloseCapability` | devnet | devnet | `core/process_instruction#CloseCapability` | The inline arm of Core's capability dispatch. |
+| `rent/process_close_v2#Close` | devnet | devnet | `rent/process_close_v2#Close` | LifecycleRentCreditV2 Close. |
 | `resolution/process_submit#magic` | local-validator | `journey` | `resolution/process_submit#magic` | The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. |
 | `resolution/process_verify#VerifyFundReady` | local-validator | `journey` | `resolution/process_verify#VerifyFundReady` | The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. |
 | `resolution/provider_instruction_v3::process_provider_resolution_v3` | local-validator | `journey` | `resolution/provider_instruction_v3::process_provider_resolution_v3` | The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. |
@@ -170,7 +222,7 @@ route now executes.
 | `claims/process_core_effect#RedeemClaims` | blocked | blocked by rule `claims/process_core_effect*` | `tools/gauntlet/blocked.json` |
 | `claims/process_core_effect#SplitClaims` | blocked | blocked by rule `claims/process_core_effect*` | `tools/gauntlet/blocked.json` |
 | `claims/process_finish#Finish` | program-test | `claims-family-programtest` | `tools/gauntlet/claims-custody/claims-bindings.json` |
-| `claims/process_instruction` | devnet | cohort 13 `DCLCCR01` slot 492,151,322; cohort 13 `DCLTGMF3` slot 491,963,072; cohort 13 `DCLTSQ03` slot 492,154,205; cohort 14 `DCLCCR01` slot 492,550,558; cohort 14 `DCLTSQ03` slot 492,415,150; cohort 14 `DCLTSQ03` slot 492,551,404; cohort 15 `DCLTHOT3` slot 492,865,197; cohort 15 `DCLTPUA1` slot 492,767,048; cohort 15 `DCLTPUA1` slot 492,767,229; cohort 15 `DCLTPUA1` slot 492,863,447; also bound by `claims-affine-batch-programtest`, `claims-claim-check-programtest`, `claims-family-programtest`, `claims-fractional-atomic-programtest`, `claims-fractional-signed-delta-programtest`, `claims-rational-lifecycle-programtest`, `claims-rational-representation-v2-programtest`, `structured-v2-programtest`, `tier1` | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-13-founding.json`<br>`docs/evidence/witnesses/cohort-14-discovered.json`<br>`docs/evidence/witnesses/cohort-15-discovered.json` |
+| `claims/process_instruction` | devnet | cohort 13 `DCLCCR01` slot 492,151,322; cohort 13 `DCLTGMF3` slot 491,963,072; cohort 13 `DCLTSQ03` slot 492,154,205; cohort 14 `DCLCCR01` slot 492,550,558; cohort 14 `DCLTSQ03` slot 492,415,150; cohort 14 `DCLTSQ03` slot 492,551,404; cohort 15 `DCLTHOT3` slot 492,865,197; cohort 15 `DCLTPUA1` slot 492,767,048; cohort 15 `DCLTPUA1` slot 492,767,229; cohort 15 `DCLTPUA1` slot 492,863,447; cohort 15 `DCLTSQ03` slot 492,895,097; cohort 15 `DCLTSQ03` slot 492,896,353; cohort 15 `DCLTSQ03` slot 492,897,408; cohort 15 `DCLTSQ03` slot 492,897,766; also bound by `claims-affine-batch-programtest`, `claims-claim-check-programtest`, `claims-family-programtest`, `claims-fractional-atomic-programtest`, `claims-fractional-signed-delta-programtest`, `claims-rational-lifecycle-programtest`, `claims-rational-representation-v2-programtest`, `structured-v2-programtest`, `tier1` | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-13-founding.json`<br>`docs/evidence/witnesses/cohort-14-discovered.json`<br>`docs/evidence/witnesses/cohort-15-discovered.json` |
 | `claims/process_open#WholeUnwrap` | blocked | blocked by rule `claims/process_open#WholeUnwrap` | `tools/gauntlet/blocked.json` |
 | `claims/process_terminal#TerminalZeroBurn` | blocked | blocked by rule `claims/process_terminal#TerminalZeroBurn` | `tools/gauntlet/blocked.json` |
 | `claims/protocol_position_v2::process` | program-test | `claims-family-programtest` | `tools/gauntlet/claims-custody/claims-bindings.json` |
@@ -180,26 +232,26 @@ route now executes.
 | `claims/series_founding_transport_v1::process` | blocked | blocked by rule `claims/series_founding_transport_v1::process` | `tools/gauntlet/blocked.json` |
 | `claims/signed_delta_v3::process` | program-test | `claims-fractional-signed-delta-programtest` | `tools/gauntlet/claims-fractional-signed-delta/bindings.json` |
 | `claims/sparse_native_transfer_v1::process` | program-test | `claims-family-programtest` | `tools/gauntlet/claims-custody/claims-bindings.json` |
-| `claims/terminal_settlement_v3::process` | devnet | cohort 13 `DCLTSQ03` slot 492,154,205; cohort 14 `DCLTSQ03` slot 492,415,150; cohort 14 `DCLTSQ03` slot 492,551,404; also bound by `claims-claim-check-programtest`, `claims-rational-representation-v2-programtest` | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-14-discovered.json` |
+| `claims/terminal_settlement_v3::process` | devnet | cohort 13 `DCLTSQ03` slot 492,154,205; cohort 14 `DCLTSQ03` slot 492,415,150; cohort 14 `DCLTSQ03` slot 492,551,404; cohort 15 `DCLTSQ03` slot 492,895,097; cohort 15 `DCLTSQ03` slot 492,896,353; cohort 15 `DCLTSQ03` slot 492,897,408; cohort 15 `DCLTSQ03` slot 492,897,766; also bound by `claims-claim-check-programtest`, `claims-rational-representation-v2-programtest` | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-14-discovered.json`<br>`docs/evidence/witnesses/cohort-15-discovered.json` |
 | `core/activate_capability_child#ActivateCapability` | blocked | blocked by rule `core/activate_capability_child#ActivateCapability` | `tools/gauntlet/blocked.json` |
 | `core/authenticate_no_recovery_entries#None` | program-test | `resolution-core-v3-programtest` | `tools/gauntlet/resolution-core-v3/bindings.json` |
-| `core/begin_retiring::process#BeginRetiring` | local-validator | `claims-rational-representation-v2-programtest`, `journey` | `tools/gauntlet/journey/bindings.json` |
+| `core/begin_retiring::process#BeginRetiring` | devnet | cohort 15 `DCLTCRQ2` slot 492,897,913; also bound by `claims-rational-representation-v2-programtest`, `journey` | `docs/evidence/witnesses/cohort-15-discovered.json` |
 | `core/capability::process#ActivateCapability` | blocked | blocked by rule `core/capability::process#ActivateCapability` | `tools/gauntlet/blocked.json` |
-| `core/capability::process#CloseCapability` | blocked | blocked by rule `core/capability::process#CloseCapability` | `tools/gauntlet/blocked.json` |
+| `core/capability::process#CloseCapability` | devnet | cohort 15 `DCLTCRQ2` slot 492,765,919; cohort 15 `DCLTCRQ2` slot 492,862,505 | `docs/evidence/witnesses/cohort-15-discovered.json` |
 | `core/close_capability_child#CloseCapability` | blocked | blocked by rule `core/close_capability_child#CloseCapability` | `tools/gauntlet/blocked.json` |
 | `core/commit_checkpoint#AGGREGATE_RETIREMENT_CLOSE_REPLAY_MAGIC_V1` | program-test | `retirement-checkpoint-programtest` | `tools/gauntlet/retirement-checkpoint/bindings.json` |
 | `core/commit_checkpoint#AGGREGATE_RETIREMENT_CLOSE_VAULT_MAGIC_V1` | program-test | `retirement-checkpoint-programtest` | `tools/gauntlet/retirement-checkpoint/bindings.json` |
 | `core/execute_provider_v3::process#ExecuteProvider` | local-validator | `journey` | `tools/gauntlet/journey/bindings.json` |
 | `core/finish_checkpoint_retirement#AGGREGATE_RETIREMENT_FINISH_MAGIC_V1` | program-test | `retirement-checkpoint-programtest` | `tools/gauntlet/retirement-checkpoint/bindings.json` |
-| `core/found::process#Found` | local-validator | `tier1` | `tools/gauntlet/tier1/bindings.json` |
+| `core/found::process#Found` | devnet | cohort 15 `DCLTCRQ2` slot 492,858,402; cohort 15 `DCLTCRQ2` slot 492,858,444; cohort 15 `DCLTCRQ2` slot 492,858,484; also bound by `tier1` | `docs/evidence/witnesses/cohort-15-discovered.json` |
 | `core/found::project` | devnet | cohort 13 `DCLTPCB2` slot 491,962,044; also bound by `tier1` | `docs/evidence/witnesses/cohort-13-founding.json` |
 | `core/generic_founding_v1::process` | devnet | cohort 13 `DCLTGMF3` slot 491,963,072; also bound by `tier1` | `docs/evidence/witnesses/cohort-13-founding.json` |
 | `core/infrastructure::process_initialize` | local-validator | `tier1` | `tools/gauntlet/tier1/bindings.json` |
 | `core/infrastructure_v2::process_initialize_v2` | blocked | blocked by rule `core/infrastructure_v2::process_initialize_v2` | `tools/gauntlet/blocked.json` |
 | `core/open_market::process#OpenMarket` | blocked | blocked by rule `core/open_market::process#OpenMarket` | `tools/gauntlet/blocked.json` |
 | `core/process_found#FoundAndPermit` | devnet | cohort 13 `DCLTGMF3` slot 491,963,072; also bound by `tier1` | `docs/evidence/witnesses/cohort-13-founding.json` |
-| `core/process_instruction` | devnet | cohort 13 `DCLTCFQ1` slot 491,961,396; cohort 13 `DCLTGMF3` slot 491,963,072; cohort 13 `DCLTPCB2` slot 491,962,044; also bound by `claims-rational-representation-v2-programtest`, `journey`, `resolution-core-v3-programtest`, `tier1` | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-13-founding.json` |
-| `core/process_instruction#CloseCapability` | blocked | blocked by rule `core/process_instruction#CloseCapability` | `tools/gauntlet/blocked.json` |
+| `core/process_instruction` | devnet | cohort 13 `DCLTCFQ1` slot 491,961,396; cohort 13 `DCLTGMF3` slot 491,963,072; cohort 13 `DCLTPCB2` slot 491,962,044; cohort 15 `DCLTCFQ1` slot 492,859,368; cohort 15 `DCLTCRQ2` slot 492,765,919; cohort 15 `DCLTCRQ2` slot 492,829,917; cohort 15 `DCLTCRQ2` slot 492,858,402; cohort 15 `DCLTCRQ2` slot 492,858,444; cohort 15 `DCLTCRQ2` slot 492,858,484; cohort 15 `DCLTCRQ2` slot 492,861,140; cohort 15 `DCLTCRQ2` slot 492,861,287; cohort 15 `DCLTCRQ2` slot 492,862,505; cohort 15 `DCLTCRQ2` slot 492,897,913; cohort 15 `DCLTPCB2` slot 492,860,006; also bound by `claims-rational-representation-v2-programtest`, `journey`, `resolution-core-v3-programtest`, `tier1` | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-13-founding.json`<br>`docs/evidence/witnesses/cohort-15-discovered.json` |
+| `core/process_instruction#CloseCapability` | devnet | cohort 15 `DCLTCRQ2` slot 492,765,919; cohort 15 `DCLTCRQ2` slot 492,862,505 | `docs/evidence/witnesses/cohort-15-discovered.json` |
 | `core/process_instruction#Retire` | program-test | `retirement-checkpoint-programtest` | `tools/gauntlet/retirement-checkpoint/bindings.json` |
 | `core/process_instruction#else` | blocked | blocked by rule `core/process_instruction#else` | `tools/gauntlet/blocked.json` |
 | `core/process_open#Open` | devnet | cohort 13 `DCLTGMF3` slot 491,963,072; also bound by `tier1` | `docs/evidence/witnesses/cohort-13-founding.json` |
@@ -207,7 +259,7 @@ route now executes.
 | `core/resolution::process#AdmitTerminal` | program-test | `resolution-core-v3-programtest` | `tools/gauntlet/resolution-core-v3/bindings.json` |
 | `core/resolution::process#CloseFund` | blocked | blocked by rule `core/resolution::process#CloseFund` | `tools/gauntlet/blocked.json` |
 | `core/resolution::process#CreateFund` | local-validator | `journey`, `resolution-core-v3-programtest`, `tier1` | `tools/gauntlet/journey/bindings.json`<br>`tools/gauntlet/tier1/bindings.json` |
-| `core/resolution::process#Retire` | program-test | `resolution-core-v3-programtest` | `tools/gauntlet/resolution-core-v3/bindings.json` |
+| `core/resolution::process#Retire` | devnet | cohort 15 `DCLTCRQ2` slot 492,829,917; cohort 15 `DCLTCRQ2` slot 492,861,140; cohort 15 `DCLTCRQ2` slot 492,861,287; also bound by `resolution-core-v3-programtest` | `docs/evidence/witnesses/cohort-15-discovered.json` |
 | `core/resolution::process#VerifyFundReady` | local-validator | `journey`, `tier1` | `tools/gauntlet/journey/bindings.json`<br>`tools/gauntlet/tier1/bindings.json` |
 | `core/retire_v1::process#Retire` | blocked | blocked by rule `core/retire_v1::process#Retire` | `tools/gauntlet/blocked.json` |
 | `core/retire_v1::process_checkpoint_prepare#Retire` | program-test | `retirement-checkpoint-programtest` | `tools/gauntlet/retirement-checkpoint/bindings.json` |
@@ -226,7 +278,7 @@ route now executes.
 | `custody/lock_hoard_and_close_source#LockHoardAndCloseSource` | devnet | cohort 13 `DCLTGMF3` slot 491,963,072; also bound by `tier1` | `docs/evidence/witnesses/cohort-13-founding.json` |
 | `custody/open_hoard#OpenHoard` | devnet | cohort 13 `DCLTPCB2` slot 491,962,044; also bound by `tier1` | `docs/evidence/witnesses/cohort-13-founding.json` |
 | `custody/open_source_compartment#OpenSourceCompartment` | devnet | cohort 13 `DCLTPCB2` slot 491,962,044; also bound by `tier1` | `docs/evidence/witnesses/cohort-13-founding.json` |
-| `custody/process_instruction` | devnet | cohort 13 `DCLCCR01` slot 492,151,322; cohort 13 `DCLTGMF3` slot 491,963,072; cohort 13 `DCLTPCB2` slot 491,962,044; cohort 13 `DCLTSQ03` slot 492,154,205; cohort 14 `DCLCCR01` slot 492,550,558; cohort 14 `DCLTSQ03` slot 492,415,150; cohort 14 `DCLTSQ03` slot 492,551,404; cohort 15 `DCLTDFS1` slot 492,865,496; cohort 15 `DCLTHOT3` slot 492,865,197; also bound by `custody-family-programtest`, `source-abort-programtest`, `tier1` | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-13-founding.json`<br>`docs/evidence/witnesses/cohort-14-discovered.json`<br>`docs/evidence/witnesses/cohort-15-discovered.json` |
+| `custody/process_instruction` | devnet | cohort 13 `DCLCCR01` slot 492,151,322; cohort 13 `DCLTGMF3` slot 491,963,072; cohort 13 `DCLTPCB2` slot 491,962,044; cohort 13 `DCLTSQ03` slot 492,154,205; cohort 14 `DCLCCR01` slot 492,550,558; cohort 14 `DCLTSQ03` slot 492,415,150; cohort 14 `DCLTSQ03` slot 492,551,404; cohort 15 `DCLTDFS1` slot 492,865,496; cohort 15 `DCLTHOT3` slot 492,865,197; cohort 15 `DCLTPCB2` slot 492,860,006; cohort 15 `DCLTSQ03` slot 492,896,353; also bound by `custody-family-programtest`, `source-abort-programtest`, `tier1` | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-13-founding.json`<br>`docs/evidence/witnesses/cohort-14-discovered.json`<br>`docs/evidence/witnesses/cohort-15-discovered.json` |
 | `custody/projected::process` | devnet | cohort 13 `DCLTGMF3` slot 491,963,072; cohort 13 `DCLTPCB2` slot 491,962,044; also bound by `source-abort-programtest`, `tier1` | `docs/evidence/witnesses/cohort-13-founding.json` |
 | `custody/realize_and_close#RealizeAndClose` | devnet | cohort 13 `DCLTGMF3` slot 491,963,072; also bound by `tier1` | `docs/evidence/witnesses/cohort-13-founding.json` |
 | `custody/refund_and_close#RefundAndClose` | blocked | blocked by rule `custody/refund_and_close#RefundAndClose` | `tools/gauntlet/blocked.json` |
@@ -245,16 +297,16 @@ route now executes.
 | `registry/process_append#2` | local-validator | `tier1` | `tools/gauntlet/tier1/bindings.json` |
 | `registry/process_begin#5` | local-validator | `tier1` | `tools/gauntlet/tier1/bindings.json` |
 | `registry/process_finalize#3` | local-validator | `tier1` | `tools/gauntlet/tier1/bindings.json` |
-| `registry/process_instruction` | local-validator | `lineage-loopback`, `tier1` | `tools/gauntlet/lineage/bindings.json`<br>`tools/gauntlet/tier1/bindings.json` |
+| `registry/process_instruction` | devnet | cohort 15 `DCLTRIX1` slot 492,856,707; cohort 15 `DCLTRIX1` slot 492,856,749; cohort 15 `DCLTRIX1` slot 492,856,790; cohort 15 `DCLTRIX1` slot 492,856,830; cohort 15 `DCLTRIX1` slot 492,856,896; cohort 15 `DCLTRIX1` slot 492,856,937; cohort 15 `DCLTRIX1` slot 492,856,977; cohort 15 `DCLTRIX1` slot 492,857,186; cohort 15 `DCLTRIX1` slot 492,857,227; cohort 15 `DCLTRIX1` slot 492,857,269; cohort 15 `DCLTRIX1` slot 492,857,318; cohort 15 `DCLTRIX1` slot 492,857,361; cohort 15 `DCLTRIX1` slot 492,857,403; cohort 15 `DCLTRIX1` slot 492,857,443; cohort 15 `DCLTRIX1` slot 492,857,491; cohort 15 `DCLTRIX1` slot 492,857,534; cohort 15 `DCLTRIX1` slot 492,857,575; cohort 15 `DCLTRIX1` slot 492,857,624; cohort 15 `DCLTRIX1` slot 492,857,665; cohort 15 `DCLTRIX1` slot 492,857,706; cohort 15 `DCLTRIX1` slot 492,857,754; cohort 15 `DCLTRIX1` slot 492,857,795; cohort 15 `DCLTRIX1` slot 492,857,838; cohort 15 `DCLTRIX1` slot 492,857,880; cohort 15 `DCLTRIX1` slot 492,857,922; cohort 15 `DCLTRIX1` slot 492,857,987; cohort 15 `DCLTRIX1` slot 492,858,028; cohort 15 `DCLTRIX1` slot 492,858,068; cohort 15 `DCLTRIX1` slot 492,858,714; cohort 15 `DCLTRIX1` slot 492,858,755; cohort 15 `DCLTRIX1` slot 492,858,796; cohort 15 `DCLTRIX1` slot 492,858,844; cohort 15 `DCLTRIX1` slot 492,858,886; cohort 15 `DCLTRIX1` slot 492,858,928; cohort 15 `DCLTRIX1` slot 492,858,977; cohort 15 `DCLTRIX1` slot 492,859,019; cohort 15 `DCLTRIX1` slot 492,859,061; cohort 15 `DCLTRIX1` slot 492,860,190; cohort 15 `DCLTRIX1` slot 492,860,231; cohort 15 `DCLTRIX1` slot 492,860,272; cohort 15 `DCLTRIX1` slot 492,860,320; cohort 15 `DCLTRIX1` slot 492,860,361; cohort 15 `DCLTRIX1` slot 492,860,404; cohort 15 `DCLTRIX1` slot 492,860,445; cohort 15 `DCLTRIX1` slot 492,860,495; cohort 15 `DCLTRIX1` slot 492,860,536; cohort 15 `DCLTRIX1` slot 492,860,578; cohort 15 `DCLTRIX1` slot 492,860,619; also bound by `lineage-loopback`, `tier1` | `docs/evidence/witnesses/cohort-15-discovered.json` |
 | `registry/process_reauthenticate#Reauthenticate` | local-validator | `tier1` | `tools/gauntlet/tier1/bindings.json` |
-| `registry/record_v1::dispatch` | local-validator | `tier1` | `tools/gauntlet/tier1/bindings.json` |
-| `rent/process_close_v2#Close` | blocked | blocked by rule `rent/process_close_v2#Close` | `tools/gauntlet/blocked.json` |
-| `rent/process_create_v2#Create` | local-validator | `tier1` | `tools/gauntlet/tier1/bindings.json` |
-| `rent/process_instruction` | local-validator | `journey`, `tier1` | `tools/gauntlet/journey/bindings.json`<br>`tools/gauntlet/tier1/bindings.json` |
-| `rent/process_sweep_v2#Sweep` | local-validator | `journey` | `tools/gauntlet/journey/bindings.json` |
+| `registry/record_v1::dispatch` | devnet | cohort 15 `DCLTRIX1` slot 492,856,707; cohort 15 `DCLTRIX1` slot 492,856,749; cohort 15 `DCLTRIX1` slot 492,856,790; cohort 15 `DCLTRIX1` slot 492,856,830; cohort 15 `DCLTRIX1` slot 492,856,896; cohort 15 `DCLTRIX1` slot 492,856,937; cohort 15 `DCLTRIX1` slot 492,856,977; cohort 15 `DCLTRIX1` slot 492,857,186; cohort 15 `DCLTRIX1` slot 492,857,227; cohort 15 `DCLTRIX1` slot 492,857,269; cohort 15 `DCLTRIX1` slot 492,857,318; cohort 15 `DCLTRIX1` slot 492,857,361; cohort 15 `DCLTRIX1` slot 492,857,403; cohort 15 `DCLTRIX1` slot 492,857,443; cohort 15 `DCLTRIX1` slot 492,857,491; cohort 15 `DCLTRIX1` slot 492,857,534; cohort 15 `DCLTRIX1` slot 492,857,575; cohort 15 `DCLTRIX1` slot 492,857,624; cohort 15 `DCLTRIX1` slot 492,857,665; cohort 15 `DCLTRIX1` slot 492,857,706; cohort 15 `DCLTRIX1` slot 492,857,754; cohort 15 `DCLTRIX1` slot 492,857,795; cohort 15 `DCLTRIX1` slot 492,857,838; cohort 15 `DCLTRIX1` slot 492,857,880; cohort 15 `DCLTRIX1` slot 492,857,922; cohort 15 `DCLTRIX1` slot 492,857,987; cohort 15 `DCLTRIX1` slot 492,858,028; cohort 15 `DCLTRIX1` slot 492,858,068; cohort 15 `DCLTRIX1` slot 492,858,714; cohort 15 `DCLTRIX1` slot 492,858,755; cohort 15 `DCLTRIX1` slot 492,858,796; cohort 15 `DCLTRIX1` slot 492,858,844; cohort 15 `DCLTRIX1` slot 492,858,886; cohort 15 `DCLTRIX1` slot 492,858,928; cohort 15 `DCLTRIX1` slot 492,858,977; cohort 15 `DCLTRIX1` slot 492,859,019; cohort 15 `DCLTRIX1` slot 492,859,061; cohort 15 `DCLTRIX1` slot 492,860,190; cohort 15 `DCLTRIX1` slot 492,860,231; cohort 15 `DCLTRIX1` slot 492,860,272; cohort 15 `DCLTRIX1` slot 492,860,320; cohort 15 `DCLTRIX1` slot 492,860,361; cohort 15 `DCLTRIX1` slot 492,860,404; cohort 15 `DCLTRIX1` slot 492,860,445; cohort 15 `DCLTRIX1` slot 492,860,495; cohort 15 `DCLTRIX1` slot 492,860,536; cohort 15 `DCLTRIX1` slot 492,860,578; cohort 15 `DCLTRIX1` slot 492,860,619; also bound by `tier1` | `docs/evidence/witnesses/cohort-15-discovered.json` |
+| `rent/process_close_v2#Close` | devnet | cohort 15 `DCLRNCI2` slot 492,858,173; cohort 15 `DCLRNCI2` slot 492,858,671 | `docs/evidence/witnesses/cohort-15-discovered.json` |
+| `rent/process_create_v2#Create` | devnet | cohort 15 `DCLRNCI2` slot 492,858,173; cohort 15 `DCLRNCI2` slot 492,858,671; also bound by `tier1` | `docs/evidence/witnesses/cohort-15-discovered.json` |
+| `rent/process_instruction` | devnet | cohort 15 `DCLRNCI2` slot 492,858,173; cohort 15 `DCLRNCI2` slot 492,858,671; also bound by `journey`, `tier1` | `docs/evidence/witnesses/cohort-15-discovered.json` |
+| `rent/process_sweep_v2#Sweep` | devnet | cohort 15 `DCLRNCI2` slot 492,858,173; cohort 15 `DCLRNCI2` slot 492,858,671; also bound by `journey` | `docs/evidence/witnesses/cohort-15-discovered.json` |
 | `resolution/core_effect::process_close#Retired` | blocked | blocked by rule `resolution/core_effect::process_close#Retired` | `tools/gauntlet/blocked.json` |
 | `resolution/core_effect::process_core_effect` | local-validator | `journey`, `resolution-core-v3-programtest` | `tools/gauntlet/journey/bindings.json` |
-| `resolution/core_effect::process_direct_funding_activation_v1` | local-validator | `resolution-core-v3-programtest`, `tier1` | `tools/gauntlet/tier1/bindings.json` |
+| `resolution/core_effect::process_direct_funding_activation_v1` | devnet | cohort 15 `DCLRFAQ1` slot 492,861,217; also bound by `resolution-core-v3-programtest`, `tier1` | `docs/evidence/witnesses/cohort-15-discovered.json` |
 | `resolution/core_effect::process_direct_funding_close_v1` | local-validator | `journey`, `resolution-core-v3-programtest` | `tools/gauntlet/journey/bindings.json` |
 | `resolution/pre_market_funding_abort_v1::process_pre_market_funding_abort_v1` | program-test | `resolution-pre-market-funding-programtest` | `tools/gauntlet/resolution-pre-market-funding/bindings.json` |
 | `resolution/pre_market_funding_v1::process_pre_market_funding_v2` | local-validator | `resolution-pre-market-funding-programtest`, `tier1` | `tools/gauntlet/tier1/bindings.json` |
@@ -270,7 +322,7 @@ route now executes.
 | `resolution/process_consume#ConsumeRecord` | local-validator | `relayed-vertical`, `resolution-relayed-programtest` | `tools/gauntlet/relayed-vertical/bindings.json` |
 | `resolution/process_create#CreateFund` | local-validator | `journey`, `resolution-core-v3-programtest`, `tier1` | `tools/gauntlet/journey/bindings.json`<br>`tools/gauntlet/tier1/bindings.json` |
 | `resolution/process_create_record#CreateRecord` | local-validator | `relayed-vertical`, `resolution-relayed-programtest` | `tools/gauntlet/relayed-vertical/bindings.json` |
-| `resolution/process_instruction` | devnet | cohort 13 `DCLTCFQ1` slot 491,961,396; cohort 15 `DCLTSPI1` slot 492,775,238; cohort 15 `DCLTSPI1` slot 492,829,232; cohort 15 `DCLTSPI1` slot 492,868,986; also bound by `journey`, `relayed-vertical`, `resolution-core-v3-programtest`, `resolution-pre-market-funding-programtest`, `resolution-relayed-programtest`, `resolution-sponsored-programtest`, `tier1` | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-13-founding.json`<br>`docs/evidence/witnesses/cohort-15-discovered.json` |
+| `resolution/process_instruction` | devnet | cohort 13 `DCLTCFQ1` slot 491,961,396; cohort 15 `DCLRFAQ1` slot 492,861,217; cohort 15 `DCLTCFQ1` slot 492,859,368; cohort 15 `DCLTCRQ2` slot 492,861,140; cohort 15 `DCLTSPI1` slot 492,775,238; cohort 15 `DCLTSPI1` slot 492,829,232; cohort 15 `DCLTSPI1` slot 492,868,986; cohort 15 `DCLTSPI1` slot 492,925,112; also bound by `journey`, `relayed-vertical`, `resolution-core-v3-programtest`, `resolution-pre-market-funding-programtest`, `resolution-relayed-programtest`, `resolution-sponsored-programtest`, `tier1` | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-13-founding.json`<br>`docs/evidence/witnesses/cohort-15-discovered.json` |
 | `resolution/process_reclaim#magic` | blocked | blocked by rule `resolution/process_reclaim#magic` | `tools/gauntlet/blocked.json` |
 | `resolution/process_retire#RetireRecord` | program-test | `resolution-relayed-programtest` | `tools/gauntlet/resolution-relayed/bindings.json` |
 | `resolution/process_seal#SealRecord` | program-test | `resolution-relayed-programtest` | `tools/gauntlet/resolution-relayed/bindings.json` |
@@ -280,7 +332,7 @@ route now executes.
 | `resolution/provider_instruction_v3::process_provider_resolution_v3` | local-validator | `journey` | `tools/gauntlet/journey/bindings.json` |
 | `resolution/provider_transport_v3::process_provider_transport_v3` | local-validator | `journey`, `resolution-core-v3-programtest` | `tools/gauntlet/journey/bindings.json` |
 | `resolution/relay_transport_v1::process_relay_transport_v1` | local-validator | `relayed-vertical`, `resolution-relayed-programtest` | `tools/gauntlet/relayed-vertical/bindings.json` |
-| `resolution/sponsored_push_v1::process_sponsored_push_v1` | devnet | cohort 15 `DCLTSPI1` slot 492,775,238; cohort 15 `DCLTSPI1` slot 492,829,232; cohort 15 `DCLTSPI1` slot 492,868,986; also bound by `resolution-sponsored-programtest` | `docs/evidence/witnesses/cohort-15-discovered.json` |
+| `resolution/sponsored_push_v1::process_sponsored_push_v1` | devnet | cohort 15 `DCLTSPI1` slot 492,775,238; cohort 15 `DCLTSPI1` slot 492,829,232; cohort 15 `DCLTSPI1` slot 492,868,986; cohort 15 `DCLTSPI1` slot 492,925,112; also bound by `resolution-sponsored-programtest` | `docs/evidence/witnesses/cohort-15-discovered.json` |
 | `series-shadow/entrypoint::evaluate_selected_and_publish#accepted` | blocked | blocked by rule `series-shadow/*` | `tools/gauntlet/blocked.json` |
 | `series-shadow/process_instruction` | blocked | blocked by rule `series-shadow/*` | `tools/gauntlet/blocked.json` |
 | `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_cleanup_v1` | program-test | `dealer-checkpoint-programtest` | `tools/gauntlet/dealer-checkpoint/bindings.json` |
@@ -290,7 +342,7 @@ route now executes.
 | `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_page_v1` | program-test | `dealer-checkpoint-programtest` | `tools/gauntlet/dealer-checkpoint/bindings.json` |
 | `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_reserve_v1` | program-test | `dealer-checkpoint-programtest` | `tools/gauntlet/dealer-checkpoint/bindings.json` |
 | `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_rollback_v1` | program-test | `dealer-checkpoint-programtest` | `tools/gauntlet/dealer-checkpoint/bindings.json` |
-| `trading/direct_begin_retiring_v1::process_direct_begin_retiring_v1` | program-test | `direct-begin-retiring-programtest` | `tools/gauntlet/direct-begin-retiring/bindings.json` |
+| `trading/direct_begin_retiring_v1::process_direct_begin_retiring_v1` | devnet | cohort 15 `DCLTDBR1` slot 492,898,053; also bound by `direct-begin-retiring-programtest` | `docs/evidence/witnesses/cohort-15-discovered.json` |
 | `trading/direct_close_maker_v1::process_direct_close_maker_v1` | blocked | blocked by rule `trading/direct_close_maker_v1::process_direct_close_maker_v1` | `tools/gauntlet/blocked.json` |
 | `trading/direct_fee_settlement_v1::process_direct_fee_settlement_v1` | devnet | cohort 15 `DCLTDFS1` slot 492,865,496; also bound by `direct-fee-pair-programtest` | `docs/evidence/witnesses/cohort-15-discovered.json` |
 | `trading/direct_replay_setup_v1::process_direct_replay_setup_v1` | blocked | blocked by rule `trading/direct_replay_setup_v1::process_direct_replay_setup_v1` | `tools/gauntlet/blocked.json` |
@@ -299,15 +351,15 @@ route now executes.
 | `trading/generic_founding_stages_v1::process_generic_market_open_v1` | blocked | blocked by rule `trading/generic_founding_stages_v1::process_generic_market_open_v1` | `tools/gauntlet/blocked.json` |
 | `trading/generic_market_founding_v1::process_generic_market_founding_v3` | devnet | cohort 13 `DCLTGMF3` slot 491,963,072; also bound by `tier1` | `docs/evidence/witnesses/cohort-13-founding.json` |
 | `trading/hot_v3::process_capability_seal_close_v1` | blocked | blocked by rule `trading/hot_v3::process_capability_seal_close_v1` | `tools/gauntlet/blocked.json` |
-| `trading/hot_v3::process_capability_seal_v1` | devnet | cohort 13 `DCLTSEL1` slot 492,092,785; cohort 15 `DCLTSEL1` slot 492,865,103 | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-15-discovered.json` |
+| `trading/hot_v3::process_capability_seal_v1` | devnet | cohort 13 `DCLTSEL1` slot 492,092,785; cohort 15 `DCLTSEL1` slot 492,865,103; cohort 15 `DCLTSEL1` slot 492,886,343 | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-15-discovered.json` |
 | `trading/hot_v3::process_hot_execution_v3` | devnet | cohort 15 `DCLTHOT3` slot 492,865,197; also bound by `claims-rational-representation-v2-programtest`, `direct-fee-pair-programtest` | `docs/evidence/witnesses/cohort-15-discovered.json` |
 | `trading/outer::process_capability_lifecycle#else` | blocked | blocked by rule `trading/outer::process_capability_lifecycle#else` | `tools/gauntlet/blocked.json` |
-| `trading/process_instruction` | devnet | cohort 13 `DCLTCFQ1` slot 491,961,396; cohort 13 `DCLTGMF3` slot 491,963,072; cohort 13 `DCLTPCB2` slot 491,962,044; cohort 13 `DCLTSEL1` slot 492,092,785; cohort 15 `DCLTDFS1` slot 492,865,496; cohort 15 `DCLTHOT3` slot 492,865,197; cohort 15 `DCLTPUA1` slot 492,767,048; cohort 15 `DCLTPUA1` slot 492,767,229; cohort 15 `DCLTPUA1` slot 492,863,447; cohort 15 `DCLTSEL1` slot 492,865,103; also bound by `claims-rational-representation-v2-programtest`, `dealer-checkpoint-programtest`, `source-abort-programtest`, `tier1` | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-13-founding.json`<br>`docs/evidence/witnesses/cohort-15-discovered.json` |
-| `trading/projected_custody_bootstrap_v1::process_controller_funding_cleanup_step1_v1` | local-validator | `source-abort-programtest`, `tier1` | `tools/gauntlet/tier1/bindings.json` |
+| `trading/process_instruction` | devnet | cohort 13 `DCLTCFQ1` slot 491,961,396; cohort 13 `DCLTGMF3` slot 491,963,072; cohort 13 `DCLTPCB2` slot 491,962,044; cohort 13 `DCLTSEL1` slot 492,092,785; cohort 15 `DCLTCF1A` slot 492,859,569; cohort 15 `DCLTCFQ1` slot 492,859,368; cohort 15 `DCLTCRQ2` slot 492,765,919; cohort 15 `DCLTCRQ2` slot 492,862,505; cohort 15 `DCLTDBR1` slot 492,898,053; cohort 15 `DCLTDFS1` slot 492,865,496; cohort 15 `DCLTHOT3` slot 492,865,197; cohort 15 `DCLTPCB2` slot 492,859,837; cohort 15 `DCLTPCB2` slot 492,859,891; cohort 15 `DCLTPCB2` slot 492,860,006; cohort 15 `DCLTPUA1` slot 492,767,048; cohort 15 `DCLTPUA1` slot 492,767,229; cohort 15 `DCLTPUA1` slot 492,863,447; cohort 15 `DCLTSEL1` slot 492,865,103; cohort 15 `DCLTSEL1` slot 492,886,343; also bound by `claims-rational-representation-v2-programtest`, `dealer-checkpoint-programtest`, `source-abort-programtest`, `tier1` | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-13-founding.json`<br>`docs/evidence/witnesses/cohort-15-discovered.json` |
+| `trading/projected_custody_bootstrap_v1::process_controller_funding_cleanup_step1_v1` | devnet | cohort 15 `DCLTCF1A` slot 492,859,569; also bound by `source-abort-programtest`, `tier1` | `docs/evidence/witnesses/cohort-15-discovered.json` |
 | `trading/projected_custody_bootstrap_v1::process_controller_funding_cleanup_step2_v1` | program-test | `source-abort-programtest` | `tools/gauntlet/source-abort/bindings.json` |
-| `trading/projected_custody_bootstrap_v1::process_controller_funding_prepare_v1` | devnet | cohort 13 `DCLTCFQ1` slot 491,961,396; also bound by `tier1` | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-13-founding.json` |
+| `trading/projected_custody_bootstrap_v1::process_controller_funding_prepare_v1` | devnet | cohort 13 `DCLTCFQ1` slot 491,961,396; cohort 15 `DCLTCFQ1` slot 492,859,368; also bound by `tier1` | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-13-founding.json`<br>`docs/evidence/witnesses/cohort-15-discovered.json` |
 | `trading/projected_custody_bootstrap_v1::process_projected_custody_abort_v1` | program-test | `source-abort-programtest` | `tools/gauntlet/source-abort/bindings.json` |
-| `trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2` | devnet | cohort 13 `DCLTPCB2` slot 491,962,044; also bound by `tier1` | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-13-founding.json` |
+| `trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2` | devnet | cohort 13 `DCLTPCB2` slot 491,962,044; cohort 15 `DCLTPCB2` slot 492,859,837; cohort 15 `DCLTPCB2` slot 492,859,891; cohort 15 `DCLTPCB2` slot 492,860,006; also bound by `tier1` | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-13-founding.json`<br>`docs/evidence/witnesses/cohort-15-discovered.json` |
 | `trading/user_position_admission_v1::process_user_position_admission_v1` | devnet | cohort 15 `DCLTPUA1` slot 492,767,048; cohort 15 `DCLTPUA1` slot 492,767,229; cohort 15 `DCLTPUA1` slot 492,863,447 | `docs/evidence/witnesses/cohort-15-discovered.json` |
 | `trading/user_position_admission_v1::process_user_position_admission_v1#Admit` | blocked | blocked by rule `trading/user_position_admission_v1::process_user_position_admission_v1#Admit` | `tools/gauntlet/blocked.json` |
 | `trading/user_position_admission_v1::process_user_position_admission_v1#Close` | blocked | blocked by rule `trading/user_position_admission_v1::process_user_position_admission_v1#Close` | `tools/gauntlet/blocked.json` |

@@ -416,7 +416,12 @@ tier_seam() {
 #   make sense for a vendored snapshot.
 #
 # Everything else in both suites runs unfiltered. The live-devnet tests are
-# env-gated off by default and reach no network.
+# env-gated off by default and reach no network -- with ONE deliberate
+# exception, `lib/deploymentLiveness.live.test.ts`, which this tier runs against
+# devnet after proving the cluster answers. Its subject is whether the seven
+# program ids this site ships still have code behind them, and that question
+# has no offline form: a closed program keeps every byte an offline check could
+# read.
 # ---------------------------------------------------------------------------
 tier_web() {
   say "web -- web + SDK eslint and vitest suites"
@@ -483,6 +488,34 @@ tier_web() {
     (cd "$full" && npx vitest run --config vitest.config.ts \
       --exclude 'lib/abiVerification.test.ts' \
       --exclude 'lib/sbomVerify.test.ts') || failed=1
+    # THE COHORT-LIVENESS GATE, and the one live read this tier performs.
+    #
+    # The browser has published a CLOSED cohort twice -- cohort-8 for a day
+    # (`0f1d75b27`) and cohort-14 for a morning (the second C-16 walk) -- and
+    # both times a test that would have said so was sitting in the tree,
+    # `it.skip`ped because no tier set `DCLUTCH_LIVE_DEVNET`. The repair is not
+    # a third test; it is running the one that exists. A closed cohort is the
+    # single defect that makes every other client assertion vacuous, so it
+    # belongs in the cheapest tier that can ask.
+    #
+    # AND THE POSITIVE CONTROL, which is why this is eight lines and not one:
+    # an unreachable cluster and a dead cohort are the same silence. `getHealth`
+    # is asked first, and a cluster that does not answer produces NEVER RAN, not
+    # a red -- distinct outcomes for distinct facts, which is the discipline
+    # `run-postjoin-hostiles.sh` cost us.
+    if curl -fsS -m 10 -X POST -H 'content-type: application/json' \
+         -d '{"jsonrpc":"2.0","id":1,"method":"getHealth"}' \
+         https://api.devnet.solana.com 2>/dev/null | grep -q '"result":"ok"'; then
+      if (cd "$full" && DCLUTCH_LIVE_DEVNET=1 npx vitest run --config vitest.config.ts \
+            lib/deploymentLiveness.live.test.ts); then
+        note "$dir: the pinned cohort is alive and the featured market selects the checked release"
+      else
+        note "$dir: THE SHIPPED COHORT DID NOT ANSWER -- see the verdict above"
+        failed=1
+      fi
+    else
+      note "$dir: devnet did not answer getHealth; the cohort-liveness gate NEVER RAN"
+    fi
   done
   if [ "$ran" = 0 ]; then
     record web $EXIT_PREREQ_MISSING "no suite had its dependencies installed"

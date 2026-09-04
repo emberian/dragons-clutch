@@ -1,253 +1,303 @@
 {
-  "note": "Routes that cannot be driven by any gauntlet tier today. Every entry names WHY and WHO. A route with no entry and no observation appears in the report's 'NO stated reason at all' row, which is the row that should make someone uncomfortable. 'No tier drives it yet' is a real and admissible reason; it is deliberately NOT phrased as 'blocked' when nothing structural prevents it, so that a missing test never launders itself into an external blocker. Rules: most specific matching rule wins; a trailing '*' is a prefix glob; keep an entry only while it is true, and delete it the moment its route executes.",
+  "note": "Routes that cannot be driven by any gauntlet tier today. Every entry names WHY and WHO. A route with no entry and no observation appears in the report's 'NO stated reason at all' row, which is the row that should make someone uncomfortable. 'No tier drives it yet' is a real and admissible reason; it is deliberately NOT phrased as 'blocked' when nothing structural prevents it, so that a missing test never launders itself into an external blocker. Rules: most specific matching rule wins; a trailing '*' is a prefix glob; keep an entry only while it is true, and delete it the moment its route executes. Every entry also carries a `class`, and tools/genref/generate.mjs refuses this file if one is missing or unknown, because the register's honest never-executed figure is a sum over two of these classes. out-of-release-set: no tier deploys the program at all. structural: genuinely undrivable at HEAD, and the entry argues why. repointing: not a block -- the entry redirects a reader, or records one already discharged. unwired: the route IS driven today and emits no census evidence, which is a wiring defect and not a protocol one. status-report: no campaign or tier drives it yet, and nothing structural is in the way. The last two are the classes that count as never-executed however carefully they are worded, because a sentence in this file is not an execution.",
   "blocked": [
     {
       "route": "dealer-accelerator/*",
+      "class": "out-of-release-set",
       "reason": "Dealer accelerator, not part of the seven-role successor release set; no tier deploys it. THE FRAME-CLEANLINESS HALF OF THIS ROW IS RESOLVED (W2h, 2026-08-27): measured at c3c4950 and again at 5e25f8e, cargo build-sbf on programs/dclutch-dealer-accelerator-sbf emits ZERO 'overwrites values in the frame' diagnostics, against 253 measured on the same tree at the immediately preceding HEAD. TA-DLR's root cause was correct and is independent of the fix: with `no-entrypoint` set, dclutch-trading-sbf compiles without its own #[global_allocator], which leaves __rust_alloc an opaque extern that cannot be folded at its call sites and spills hot_v3::process_hot_execution_v3 past the SBPF v0 4,096-byte frame. What changed is the headroom, not the allocator: process_hot_execution_v3 used 3,904 bytes of that frame with the outgoing-argument area filling the rest, and c3c4950 split it into an authentication half (3,008 bytes) and an execution half (2,496), which absorbs the opaque extern. TA-DLR's two-edit patch is therefore NOT required for this row and is NOT applied. It remains the principled fix for the underlying incoherence -- a no-entrypoint library build of Trading still runs Hot code under whichever allocator its host executable installs, not the one the shipped Trading program uses -- and if it is taken: re-measure on top of c3c4950 rather than against the stale 253; land both halves together (either alone is a duplicate or a missing #[global_allocator], both hard errors); and per W1f keep admit_heap_frame_v1 and lift_declared_heap_profile_v1 reachable in the SHIPPED ELF, where DCLTPCB1 depends on them on chain now. Widening the cfg does not move the shipped build either way, since `no-entrypoint` is off there and both predicates already evaluate the same. The emitted accelerator .so was never contaminated in any case: process_hot_execution_v3 is dead-stripped from it.",
       "owner": "TA-DLR (the campaign); frame blocker cleared by W2h, the allocator-coherence question is an owner decision"
     },
     {
       "route": "series-shadow/*",
+      "class": "out-of-release-set",
       "reason": "Shadow accelerator, not part of the seven-role successor release set; no tier deploys it. The workspace half of this entry is DISCHARGED: the callback authenticator now lives in crates/dclutch-shadow-accelerator-auth-v4, dclutch-series-shadow-sbf no longer depends on dclutch-trading-sbf at all, and the package is a root workspace member that builds under `cargo check --workspace --all-targets`. What remains is that no campaign drives the ELF.",
       "owner": "cycle-2 tranche A (WAVE.md), Series"
     },
     {
       "route": "product-runtime-v2/*",
+      "class": "out-of-release-set",
       "reason": "Product Runtime V2 admission artifact, not part of the seven-role successor release set; no tier deploys it. Tier 1 does publish the Runtime-V2 Product graph as Registry records, but never invokes this program.",
       "owner": "cycle-2 tranche A (WAVE.md)"
     },
     {
       "route": "claims/market_closure_v1::process",
+      "class": "status-report",
       "reason": "No campaign drives it. Closure requires a zero-supply Claims aggregate and the RentCredit identities behind it, which is a terminal prestate no fixture builds.",
       "owner": "cycle-2 tranche A, Claims"
     },
     {
       "route": "claims/process_core_effect*",
-      "reason": "The DCLTCEF1 Core-effect route. Reachable only from a Core effect batch; no campaign drives Core into it. GLOBBED 2026-09-02: the census learned to walk `let`-bound guards, and the Core-effect action pairing at claims/lib.rs:690 and the post-revision guard at :754 -- both `let … = match … { _ => return Err(Instruction) }` -- became five child rows of this route. They are the same route's arms, unreachable for the same reason, so the trailing `*` carries this entry's reason to them instead of leaving five freshly-enumerated rows with none.",
+      "class": "status-report",
+      "reason": "The DCLTCEF1 Core-effect route. Reachable only from a Core effect batch; no campaign drives Core into it. GLOBBED 2026-09-02: the census learned to walk `let`-bound guards, and the Core-effect action pairing at claims/lib.rs:690 and the post-revision guard at :754 -- both `let \u2026 = match \u2026 { _ => return Err(Instruction) }` -- became five child rows of this route. They are the same route's arms, unreachable for the same reason, so the trailing `*` carries this entry's reason to them instead of leaving five freshly-enumerated rows with none.",
       "owner": "cycle-2 tranche A, Claims"
     },
     {
       "route": "resolution/process_verify#VerifyFundReady",
+      "class": "status-report",
       "reason": "The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. This route runs green under ProgramTest against the compiled Core and Resolution ELFs in crates/dclutch-svm-harness/tests/resolution_core_v3_lifecycle.rs -- including, since 2026-08-27, an atomically founded Market reaching a terminal certificate through the real Pyth transport -- but that campaign emits no census evidence. Two separate things are missing and they should not be confused: the evidence wiring (a tools/gauntlet/ tier around the existing green campaign, the same shape as tools/gauntlet/resolution-relayed/, which is a few hours) and validator evidence (the same code in a transaction against genesis Loader-v3 accounts, which is the Source/provider tier).",
       "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
     },
     {
       "route": "resolution/process_admit#AdmitTerminal",
+      "class": "status-report",
       "reason": "The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. This route runs green under ProgramTest against the compiled Core and Resolution ELFs in crates/dclutch-svm-harness/tests/resolution_core_v3_lifecycle.rs -- including, since 2026-08-27, an atomically founded Market reaching a terminal certificate through the real Pyth transport -- but that campaign emits no census evidence. Two separate things are missing and they should not be confused: the evidence wiring (a tools/gauntlet/ tier around the existing green campaign, the same shape as tools/gauntlet/resolution-relayed/, which is a few hours) and validator evidence (the same code in a transaction against genesis Loader-v3 accounts, which is the Source/provider tier).",
       "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
     },
     {
       "route": "resolution/process_close#CloseFund",
+      "class": "structural",
       "reason": "STRUCTURALLY UNDRIVABLE IN THE RELEASE SET, and this entry's previous reason is superseded. It said the route 'runs green under ProgramTest ... in resolution_core_v3_lifecycle.rs' and owed only evidence wiring. That was true while Core still composed the close; it is not true now. This is the `CloseFund` arm of `process_core_effect` (programs/dclutch-resolution-proof-sbf/src/core_effect.rs:1487), reachable only through a Core-effect envelope -- and the only program that CPIs a Core effect is Core, which refuses the action at decode (programs/dclutch-core-sbf/src/resolution.rs:144-146). The arm has no live caller. The campaign that used to reach it now drives a DIFFERENT route: `build_resolution_direct_close_fund_v1` addresses Resolution directly and lands on `core_effect::process_direct_funding_close_v1` (lib.rs:313), which has its own path through `commit_direct_close` and never enters `process_close`. That direct route is WITNESSED -- tools/gauntlet/resolution-core-v3, `core-v3: CloseFund closes all three rows of the subset ledger`, executed at 260,141 CU against real ELFs -- so the family is covered and this particular arm is the composed one V7 retired on purpose: retaining it would preserve the duplicate-authentication route that exceeds the transaction compute ceiling. Like its Core sibling it was credited as executed until 2026-09-02 by the journey's incorrect binding, now corrected.",
       "owner": "the Resolution lane owns core_effect.rs; the weld is the Core lane's (a34ff595). Reason corrected by C-10 (WITNESS) 2026-09-02. Delete this and the `core/resolution::process#CloseFund` entry together the day a caller for the composed close exists."
     },
     {
       "route": "resolution/provider_instruction_v3::process_provider_resolution_v3",
+      "class": "status-report",
       "reason": "The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. The Pyth provider transport runs green under ProgramTest against the compiled Registry and Resolution ELFs and the provenance-pinned local-validator projection of the captured receiver/router programs (crates/dclutch-svm-harness/tests/resolution_successor.rs, resolution_core_v3_lifecycle.rs), and emits no census evidence. Wiring it is the same shape as tools/gauntlet/resolution-relayed/. Validator evidence is the separate, larger Source/provider tier.",
       "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
     },
     {
       "route": "resolution/process_submit#magic",
+      "class": "status-report",
       "reason": "The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. The Pyth provider transport runs green under ProgramTest against the compiled Registry and Resolution ELFs and the provenance-pinned local-validator projection of the captured receiver/router programs (crates/dclutch-svm-harness/tests/resolution_successor.rs, resolution_core_v3_lifecycle.rs), and emits no census evidence. Wiring it is the same shape as tools/gauntlet/resolution-relayed/. Validator evidence is the separate, larger Source/provider tier.",
       "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
     },
     {
       "route": "resolution/process_reclaim#magic",
+      "class": "status-report",
       "reason": "The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. The Pyth provider transport runs green under ProgramTest against the compiled Registry and Resolution ELFs and the provenance-pinned local-validator projection of the captured receiver/router programs (crates/dclutch-svm-harness/tests/resolution_successor.rs, resolution_core_v3_lifecycle.rs), and emits no census evidence. Wiring it is the same shape as tools/gauntlet/resolution-relayed/. Validator evidence is the separate, larger Source/provider tier.",
       "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
     },
     {
       "route": "trading/direct_close_maker_v1::process_direct_close_maker_v1",
+      "class": "status-report",
       "reason": "CloseMakerReplay (wall 22's missing decrement, cohort-9) has the same gauntlet gap as begin-retiring above it: tier 1's local-validator bootstrap founds and trades but retires nothing, so no tier constructs a `DirectCloseMakerRequestV1` against a Retiring root. The route DOES have real-ELF green evidence: `programs/dclutch-trading-sbf/program-test/tests/direct_close_maker_on_chain.rs` drives the complete wall-22 sequence on a real bank -- begin-retiring over three standing maker roots, the debtor refusing CloseMakerFeeOutstanding, the live-intent replay refusing CloseMakerLiveIntents, the clean close decrementing the count through the RELEASED transition's own nonzero+sub_into with principal-plus-donation conserved to the recorded rent_owner, the double close refusing by absence, and the released native-close gate opening on the drained tail. The first real close is the cohort-9 cut's acceptance act (review gate 9): one market driven through the COMPLETE life including retirement.",
       "owner": "gauntlet owner for a retirement tier; the cohort-9 cut campaign for the first real close"
     },
     {
       "route": "trading/hot_v3::process_capability_seal_close_v1",
+      "class": "status-report",
       "reason": "CloseSeal (omission P-006's close, 2026-08-31) has the same gauntlet gap as the seal WRITE outer directly below it, for the same reason: tier 1's local-validator bootstrap constructs no `CapabilitySealCloseRequestV1` and cannot, because there is nothing stranded on a freshly bootstrapped ledger -- a seal only becomes closeable once a LATER Trading release has stopped addressing it, which is a two-release history no single tier run has. The route DOES have real-ELF green evidence: all nine cases in `programs/dclutch-trading-sbf/program-test/tests/capability_seal_close.rs` (five ordinary-arm cases plus, since cohort-9's ZeroBump rider, four defunct-arm cases: a planted bump-0 body closing under a mined bump candidate, its live-release control, a well-formed seal refusing any candidate, and a wrong candidate mismatching), including a stranger closing a planted stranded seal and keeping exactly `minimum_balance(CAPABILITY_SEAL_BYTES_V1)`, the live-release refusal against a seal the on-chain seal outer wrote seconds earlier, and the superseded-cache refusal on the `SlotPinnedSuperseded` substrate. The record()-instrumented wiring is blocked on the same shared `submit_v0` widening the entry below names. THE FIRST REAL CLOSE IS A DEVNET ACT, not a gauntlet one: cohort-7 is deployed and cohort-6's seals are stranded now, so the devnet steward's queue is where this route first runs against accounts nobody planted -- including the pre-cohort-8 bump-0 seal `6hDpsgAo...`, which the defunct arm exists for and whose gate probe (`dclutch-release-tool seal-probe`) is a cut-time act.",
       "owner": "gauntlet owner for the wiring (same shared-surface coordination as the seal write outer); devnet steward for the first real close of cohort-6's seals"
     },
     {
       "route": "trading/hot_v3::process_capability_seal_v1",
+      "class": "status-report",
       "reason": "RELAY-REHOME's census fix (2026-08-27) restored Trading's real dispatch surface and left four routes with no stated reason: `trading/process_instruction`, `hot_v3::process_capability_seal_v1`, `generic_market_founding_v1::...`, `projected_custody_bootstrap_v1::...`. Three of those are already EXECUTED via tier1 as of `12347de` ('gauntlet: bind the founding transactions to the routes the census can now see'); this is the only one of the four that tier 1's local-validator bootstrap genuinely never drives -- grep confirms no `CapabilitySealRequestV1` construction anywhere under tools/local-validator. The route DOES have real-ELF green evidence: `the_seal_outer_writes_exactly_the_bytes_the_hot_path_expects` and `a_seal_for_another_action_or_descriptor_never_lands_at_this_address` in programs/dclutch-trading-sbf/program-test/tests/registry_hot_continuation.rs submit a canonical CapabilitySealRequestV1 as its own self-contained transaction and it commits independently of the unrelated Hot-execution CU/emitter defects tracked below (DIRECT_FAMILY_CAMPAIGN_2026_08_27.md: 12/15 of that file's tests pass at HEAD, and the three failures are not the seal tests). SN-REC (2026-08-27) deliberately did NOT wire this: the only path to record()-instrumented evidence runs through `programs/dclutch-trading-sbf/program-test/direct-hot/src/waist.rs`'s `submit_v0`, whose narrow `Result<u64, RefusedExecution>` return carries no signature/slot and would need widening across every one of its many callers across multiple test files -- exactly the kind of shared-surface change the wave board says needs coordination, and `hot_v3.rs`/its direct-hot fixture are W2h/W2i/GEN-WIRE's live, actively-edited territory this evening. Wiring needs either a coordinated widening of that shared submit helper, or a standalone additive `submit_v0_with_evidence` beside it, plus a new bindings/witnesses/programs set and a run script -- none of which touches tier1, census, or any Claims file.",
       "owner": "gauntlet owner (coordinate with whoever holds direct-hot/waist.rs and hot_v3.rs) for the wiring; the campaign itself already exists and passes"
     },
     {
       "route": "trading/hot_v3::process_hot_execution_v3",
+      "class": "status-report",
       "reason": "No gauntlet campaign drives this route yet. The former Content refusal is resolved: the canonical Direct Hot continuation now executes to completion through the real SBF programs at the protocol-default 32 KiB heap, and the seeded compute instrument has passed 20/20 under the 1,400,000-CU ceiling. That instrument is deliberately not a census campaign and ProgramTest has no finalized validator transaction, so neither can mark this route EXECUTED here. The remaining work is outside-in wiring that records finalized transaction logs and poststate without weakening the existing Hot refusals.",
       "owner": "gauntlet owner for a Direct-Hot validator tier; SMOKE-1 may discharge it first with equivalent finalized evidence"
     },
     {
       "route": "registry/hot_continuation_v2::process",
+      "class": "status-report",
       "reason": "No gauntlet campaign drives this route yet. The former dependency on a refusing Direct Hot execution is resolved: the canonical continuation now completes through Registry, Trading, and its children in the real-SBF ProgramTest harness. The 20-seed compute instrument emits no census evidence, and ProgramTest supplies no finalized validator transaction, so this route remains honestly NEVER-EXECUTED until an outside-in tier records the chain logs and poststate.",
       "owner": "gauntlet owner for a Direct-Hot validator tier; SMOKE-1 may discharge it first with equivalent finalized evidence"
     },
     {
       "route": "custody/lock_hoard#LockHoard",
+      "class": "status-report",
       "reason": "Projected-Custody `LockHoard`, the Series-shaped Lock that admits a `HoardOpen` prestate holding nothing. It is NOT the operation DCLTGMF1 drives - that is `LockHoardAndCloseSource`, which has executed. Reachable through the Series family tier. CORRECTED 2026-08-27 (W1f): the first Open Market exists. `DCLTGMF1` executed on a localhost validator at 1,184,132 CU - Custody LockHoardAndCloseSource, Core Found-and-permit, Custody RealizeAndClose, Claims FoundingV5, and Core Open last, one rollback domain - after `DCLTPCB1` completed all four projected-Custody prestate stages at 754,119 CU. Any part of this entry's reason that rested on the Open-last chain being unreachable is superseded.",
       "owner": "W1d"
     },
     {
       "route": "custody/refund_and_close#RefundAndClose",
+      "class": "status-report",
       "reason": "Projected-Custody refund path; reachable only after a projected compartment exists.",
       "owner": "W1d"
     },
     {
       "route": "custody/abort_open_and_close#AbortOpenAndClose",
+      "class": "status-report",
       "reason": "Projected-Custody abort path; reachable only after a projected compartment exists.",
       "owner": "W1d"
     },
     {
       "route": "core/open_market::process#OpenMarket",
+      "class": "status-report",
       "reason": "The standalone `Action::OpenMarket` route. It is NOT the founding's Open stage: DCLTGMF1's commit-last stage is `core/process_open#Open` inside the generic-founding route, which has executed. This entry is the separate ordinary OpenMarket action, and no tier drives it yet. CORRECTED 2026-08-27 (W1f): the first Open Market exists. `DCLTGMF1` executed on a localhost validator at 1,184,132 CU - Custody LockHoardAndCloseSource, Core Found-and-permit, Custody RealizeAndClose, Claims FoundingV5, and Core Open last, one rollback domain - after `DCLTPCB1` completed all four projected-Custody prestate stages at 754,119 CU. Any part of this entry's reason that rested on the Open-last chain being unreachable is superseded.",
       "owner": "W1d"
     },
     {
       "route": "core/capability::process#ActivateCapability",
+      "class": "status-report",
       "reason": "ADR 0004 makes the founding capability root DERIVED at founding and created afterwards by the ordinary activation route. Tier 1 now reaches Open and still never runs that activation. CORRECTED 2026-08-27 (W1f): the first Open Market exists. `DCLTGMF1` executed on a localhost validator at 1,184,132 CU - Custody LockHoardAndCloseSource, Core Found-and-permit, Custody RealizeAndClose, Claims FoundingV5, and Core Open last, one rollback domain - after `DCLTPCB1` completed all four projected-Custody prestate stages at 754,119 CU. Any part of this entry's reason that rested on the Open-last chain being unreachable is superseded.",
       "owner": "W1d (ADR 0004 fallout), then cycle-2"
     },
     {
       "route": "core/capability::process#CloseCapability",
+      "class": "status-report",
       "reason": "Capability closure; needs an activated capability root first.",
       "owner": "W1d (ADR 0004 fallout), then cycle-2"
     },
     {
       "route": "core/activate_capability_child#ActivateCapability",
+      "class": "status-report",
       "reason": "Capability child activation; needs an activated capability root first.",
       "owner": "W1d (ADR 0004 fallout), then cycle-2"
     },
     {
       "route": "core/close_capability_child#CloseCapability",
+      "class": "status-report",
       "reason": "Capability child closure; needs an activated capability child first.",
       "owner": "W1d (ADR 0004 fallout), then cycle-2"
     },
     {
       "route": "core/series_open::process",
+      "class": "status-report",
       "reason": "Series Core route; needs the Series family tier and a Claims FoundingV5 receipt.",
       "owner": "cycle-2 tranche A (WAVE.md), Series"
     },
     {
       "route": "claims/series_founding_transport_v1::process",
+      "class": "status-report",
       "reason": "The Claims half of Series founding, and it is blocked for exactly the reason its sibling core/series_open::process is: it needs the Series family tier. Nothing has ever built a DCLSFTR1 instruction. Its magic, SERIES_CLAIMS_FOUNDING_TRANSPORT_MAGIC_V1, has one construction site in the whole tree -- its own definition in crates/dclutch-claims-svm/src/series_founding_transport_v1.rs -- and the route is reached only as a route template of a Series consume effect inside dclutch-trading-sbf (claims_composition_v3.rs, series/consume_artifacts_v4.rs). No bootstrap, no operator and no CLI emits one, so no campaign can drive it without the tier that founds a Series Market first. THIS ROW IS A CORRECTION, NOT A NEW JUDGEMENT: the C-16 rehearsal (docs/evidence/C16_REHEARSAL_2026_09_03.md, residue row 5) found this route reading NEVER-EXECUTED with no reason recorded beside a sibling carrying the same owner and the same blocker, and called the asymmetry 'an inconsistency, not a judgement'. The register was reporting a missing sentence as a missing campaign.",
       "owner": "cycle-2 tranche A (WAVE.md), Series"
     },
     {
       "route": "core/series_permit_expiry::process",
+      "class": "status-report",
       "reason": "Series permit expiry; needs an open Series Market.",
       "owner": "cycle-2 tranche A (WAVE.md), Series"
     },
     {
       "route": "core/execute_provider_v3::process#ExecuteProvider",
+      "class": "status-report",
       "reason": "Provider execution; needs the Source/provider tier.",
       "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
     },
     {
       "route": "core/resolution::process#CloseFund",
+      "class": "repointing",
       "reason": "NOT a dead arm any more, and no longer a coverage gap of the kind this file usually records. The trailing enumerator match was deleted and this route now names Core's decode-time refusal of the action, which is reachable, cheap, and refuses by name with `CoreSbfError::UnsupportedAction` (0x301C) before any authentication work is spent (programs/dclutch-core-sbf/src/resolution.rs:144-146). It used to refuse `CoreSbfError::Instruction`, which accused the caller's bytes of being malformed when nothing about them was: the action decodes cleanly and Resolution still dispatches it. The live successor is `resolution/core_effect::process_direct_funding_close_v1`, EXECUTED at 260,141 CU (tools/gauntlet/resolution-core-v3, `core-v3: CloseFund closes all three rows of the subset ledger`) -- the close did not go missing, it moved out of Core in V7 because the composed route authenticated the same plan on both sides of a CPI and exceeded the transaction compute ceiling. THE OWED WORK IS DISCHARGED, 2026-09-02. This entry recorded a real defect: the journey built the instruction with `build_resolution_close_fund_v3` (whose `instruction.program_id` is the CORE program) and SUBMITTED it, while tools/gauntlet/journey/bindings.json claimed `outcome: executed` -- a claim that could not be true on any tree since `a34ff595` welded the action shut, and the reason the register credited this route as executed. The journey now builds `build_resolution_direct_close_fund_v1` from the same finalized snapshot (the V3 planner keeps the certificate, the three-slot discharge arithmetic and the retirement projection; only the execution boundary moved) and its binding names the two Resolution routes that instruction drives. This route has no honest observation and cannot have one: it is enumerated at its own refusal. Delete this entry the day Core owns a close again, which is not a plan.",
       "owner": "the Core lane (a34ff595 welded the action; the id was repointed at the refusal 2026-09-02). Convicted by C-09 (WITNESS) 2026-09-01; the journey's builder call and false binding corrected by C-10 (WITNESS) 2026-09-02. Nothing is owed."
     },
     {
       "route": "core/begin_retiring::process#BeginRetiring",
+      "class": "status-report",
       "reason": "Market retirement; needs an open, then terminal, Market.",
       "owner": "cycle-2 (WAVE.md), retirement"
     },
     {
       "route": "core/retire_v1::process#Retire",
+      "class": "status-report",
       "reason": "Market retirement; needs an open, then terminal, Market.",
       "owner": "cycle-2 (WAVE.md), retirement"
     },
     {
       "route": "rent/process_close_v2#Close",
+      "class": "status-report",
       "reason": "LifecycleRentCreditV2 Close. JRNY-1 now executes the Sweep half of rent recovery, and Close is the other half: it is not a structural blocker either, it needs a RETIRED Market plus a Core close-authority signer, and no campaign reaches a retired Market yet. A tier that drives a Market to Terminal and retires it discharges this.",
       "owner": "cycle-2 retirement (behind a terminal Market), then JRNY-1"
     },
     {
       "route": "registry/continuation_v1::process",
+      "class": "status-report",
       "reason": "DCLRGCI1, the Registry continuation route. Reached from a continuation-bearing child request; no tier-1 transaction carries one.",
       "owner": "W1d for the Open chain; cycle-2 tranche A"
     },
     {
       "route": "core/process_instruction#CloseCapability",
+      "class": "status-report",
       "reason": "The inline arm of Core's capability dispatch. Same blocker as core/capability::process#CloseCapability: it needs an activated capability root, which tier 1 never creates because it stops at Found.",
       "owner": "W1d (ADR 0004 fallout), then cycle-2"
     },
     {
       "route": "trading/outer::process_capability_lifecycle#else",
+      "class": "repointing",
       "reason": "REPOINTED 2026-09-02. This entry named `trading/outer::process_activation#else`, which the census does not emit -- so it matched no route, gave its reason to nobody, and left the route it was actually about sitting in the report's NEVER-EXECUTED-with-no-stated-reason row, which is the row this file exists to keep empty. The branch did not move; the enumerator renamed it. Trading's outer dispatch falls through at lib.rs:799 into `outer::process_capability_lifecycle`, which reads the Core-effect envelope and calls `process_close` for CloseCapability and `process_activation` for everything else (outer.rs:209-225), so the id now names the branch after the function it enters rather than after the one it eventually reaches. The reason is unchanged and still true, and it now covers both halves of that lifecycle: no tier drives either. Tier 1 activates the five REGISTRY release-set roles, which is a different thing -- it never activates or closes a TRADING capability child. A live Market is not what it waits on: `DCLTGMF1` executed on a localhost validator at 1,184,132 CU (Custody LockHoardAndCloseSource, Core Found-and-permit, Custody RealizeAndClose, Claims FoundingV5, Core Open last, one rollback domain) after `DCLTPCB1` completed all four projected-Custody prestate stages at 754,119 CU, so any part of the original reason that rested on the Open-last chain being unreachable was superseded on 2026-08-27 and is not restated here.",
       "owner": "W1d for the Open path; W2d owns outer.rs"
     },
     {
       "route": "claims/fractional_atomic_v3::process",
+      "class": "unwired",
       "reason": "Driven today, and invisible to the census for a wiring reason rather than a protocol one. `programs/dclutch-claims-sbf/program-test/fractional-atomic` loads the real `dclutch_claims_sbf.so` from `SBF_OUT_DIR` and runs 49 async cases across four targets (`fractional_atomic.rs`, `fractional_compaction.rs`, `escrow_pda_handover.rs`, `permissioned_burn_wall.rs`), asserting exact discriminants -- e.g. `FractionalClaimCheckRedemptionSbfErrorV1::{NoWholeClaim,Conservation,Authority}` at `fractional_compaction.rs:2544-2568`. It is committed (`8fdcdc56`). What is missing is the census half and only that: the workspace takes no `dclutch-program-test-evidence` dependency, so it calls `record()` for no transaction, emits no evidence document, and no gauntlet runner drives it -- therefore no `bindings.json` can be corroborated by `census observe` and none exists. This is NOT 'no tier drives it': the campaign exists and passes. PARTLY DONE 2026-09-01: the workspace now takes the evidence dependency and `tests/fractional_compaction.rs` emits, runs and is bound (`tools/gauntlet/claims-fractional-atomic`), which retired this entry for the two fractional claim-check routes. THIS entry survives because the remaining three targets -- `fractional_atomic.rs`, `escrow_pda_handover.rs`, `permissioned_burn_wall.rs` -- still call `record()` for nothing. Flip it the same way: one `record()` per submitted transaction in those three, then extend the tier's bindings from what the fold OBSERVES. Until then the route register must not read as though nobody ever exercised this route. Convicted 2026-09-01 by lane S11 (`docs/evidence/DEBT_OWNERSHIP_LEDGER_2026_09_01.md` section 2.2).",
       "owner": "S7 owns programs/dclutch-claims-sbf (evidence emission in the three remaining targets); S11/gauntlet owns the tier"
     },
     {
       "route": "claims/process_open#WholeUnwrap",
+      "class": "unwired",
       "reason": "Driven today, and invisible to the census for a wiring reason rather than a protocol one. `programs/dclutch-claims-sbf/program-test/fractional-atomic` loads the real `dclutch_claims_sbf.so` from `SBF_OUT_DIR` and runs 49 async cases across four targets (`fractional_atomic.rs`, `fractional_compaction.rs`, `escrow_pda_handover.rs`, `permissioned_burn_wall.rs`), asserting exact discriminants -- e.g. `FractionalClaimCheckRedemptionSbfErrorV1::{NoWholeClaim,Conservation,Authority}` at `fractional_compaction.rs:2544-2568`. It is committed (`8fdcdc56`). What is missing is the census half and only that: the workspace takes no `dclutch-program-test-evidence` dependency, so it calls `record()` for no transaction, emits no evidence document, and no gauntlet runner drives it -- therefore no `bindings.json` can be corroborated by `census observe` and none exists. This is NOT 'no tier drives it': the campaign exists and passes. PARTLY DONE 2026-09-01: the workspace now takes the evidence dependency and `tests/fractional_compaction.rs` emits, runs and is bound (`tools/gauntlet/claims-fractional-atomic`), which retired this entry for the two fractional claim-check routes. THIS entry survives because the remaining three targets -- `fractional_atomic.rs`, `escrow_pda_handover.rs`, `permissioned_burn_wall.rs` -- still call `record()` for nothing. Flip it the same way: one `record()` per submitted transaction in those three, then extend the tier's bindings from what the fold OBSERVES. Until then the route register must not read as though nobody ever exercised this route. Convicted 2026-09-01 by lane S11 (`docs/evidence/DEBT_OWNERSHIP_LEDGER_2026_09_01.md` section 2.2). This route's `Wrap` and `WholeUnwrap` arms are both exercised.",
       "owner": "S7 owns programs/dclutch-claims-sbf (evidence emission in the three remaining targets); S11/gauntlet owns the tier"
     },
     {
       "route": "claims/process_terminal#TerminalZeroBurn",
+      "class": "unwired",
       "reason": "Driven today, and invisible to the census for a wiring reason rather than a protocol one. `programs/dclutch-claims-sbf/program-test/fractional-atomic` loads the real `dclutch_claims_sbf.so` from `SBF_OUT_DIR` and runs 49 async cases across four targets (`fractional_atomic.rs`, `fractional_compaction.rs`, `escrow_pda_handover.rs`, `permissioned_burn_wall.rs`), asserting exact discriminants -- e.g. `FractionalClaimCheckRedemptionSbfErrorV1::{NoWholeClaim,Conservation,Authority}` at `fractional_compaction.rs:2544-2568`. It is committed (`8fdcdc56`). What is missing is the census half and only that: the workspace takes no `dclutch-program-test-evidence` dependency, so it calls `record()` for no transaction, emits no evidence document, and no gauntlet runner drives it -- therefore no `bindings.json` can be corroborated by `census observe` and none exists. This is NOT 'no tier drives it': the campaign exists and passes. PARTLY DONE 2026-09-01: the workspace now takes the evidence dependency and `tests/fractional_compaction.rs` emits, runs and is bound (`tools/gauntlet/claims-fractional-atomic`), which retired this entry for the two fractional claim-check routes. THIS entry survives because the remaining three targets -- `fractional_atomic.rs`, `escrow_pda_handover.rs`, `permissioned_burn_wall.rs` -- still call `record()` for nothing. Flip it the same way: one `record()` per submitted transaction in those three, then extend the tier's bindings from what the fold OBSERVES. Until then the route register must not read as though nobody ever exercised this route. Convicted 2026-09-01 by lane S11 (`docs/evidence/DEBT_OWNERSHIP_LEDGER_2026_09_01.md` section 2.2). This route's `TerminalRedeem` and `TerminalZeroBurn` arms are both exercised.",
       "owner": "S7 owns programs/dclutch-claims-sbf (evidence emission in the three remaining targets); S11/gauntlet owns the tier"
     },
     {
       "route": "trading/user_position_admission_v1::process_user_position_admission_v1",
+      "class": "unwired",
       "reason": "Driven today, and invisible to the census for a wiring reason rather than a protocol one. `programs/dclutch-trading-sbf/program-test/user-position-admission/tests/lifecycle.rs` builds a real `ProtocolPositionRequestV2 { action: ProtocolPositionActionV2::Admit, owner_kind: User, presence: Vacant, .. }` (`:376-386`) and drives it against the real ELF, and the workspace carries its own `run-program-test.sh`. What is missing is the census half and only that: no `dclutch-program-test-evidence` dependency, so no `record()` call, no evidence document, no runner, and therefore no corroborable `bindings.json`. This is NOT 'no tier drives it': the campaign exists. Flip it by wiring evidence emission, then a runner and bindings. Convicted 2026-09-01 by lane S11 (`docs/evidence/DEBT_OWNERSHIP_LEDGER_2026_09_01.md` section 2.2).",
       "owner": "the Trading lane owns programs/dclutch-trading-sbf (evidence emission); S11/gauntlet owns the runner and bindings"
     },
     {
       "route": "trading/user_position_admission_v1::process_user_position_admission_v1#Admit",
+      "class": "unwired",
       "reason": "Driven today, and invisible to the census for a wiring reason rather than a protocol one. `programs/dclutch-trading-sbf/program-test/user-position-admission/tests/lifecycle.rs` builds a real `ProtocolPositionRequestV2 { action: ProtocolPositionActionV2::Admit, owner_kind: User, presence: Vacant, .. }` (`:376-386`) and drives it against the real ELF, and the workspace carries its own `run-program-test.sh`. What is missing is the census half and only that: no `dclutch-program-test-evidence` dependency, so no `record()` call, no evidence document, no runner, and therefore no corroborable `bindings.json`. This is NOT 'no tier drives it': the campaign exists. Flip it by wiring evidence emission, then a runner and bindings. Convicted 2026-09-01 by lane S11 (`docs/evidence/DEBT_OWNERSHIP_LEDGER_2026_09_01.md` section 2.2).",
       "owner": "the Trading lane (evidence emission); S11/gauntlet (runner, bindings)"
     },
     {
       "route": "trading/user_position_admission_v1::process_user_position_admission_v1#Close",
+      "class": "unwired",
       "reason": "Driven today, and invisible to the census for a wiring reason rather than a protocol one. `programs/dclutch-trading-sbf/program-test/user-position-admission/tests/lifecycle.rs` builds a real `ProtocolPositionRequestV2 { action: ProtocolPositionActionV2::Admit, owner_kind: User, presence: Vacant, .. }` (`:376-386`) and drives it against the real ELF, and the workspace carries its own `run-program-test.sh`. What is missing is the census half and only that: no `dclutch-program-test-evidence` dependency, so no `record()` call, no evidence document, no runner, and therefore no corroborable `bindings.json`. This is NOT 'no tier drives it': the campaign exists. Flip it by wiring evidence emission, then a runner and bindings. Convicted 2026-09-01 by lane S11 (`docs/evidence/DEBT_OWNERSHIP_LEDGER_2026_09_01.md` section 2.2).",
       "owner": "the Trading lane (evidence emission); S11/gauntlet (runner, bindings)"
     },
     {
       "route": "core/infrastructure_v2::process_initialize_v2",
+      "class": "structural",
       "reason": "The V1 -> V2 infrastructure succession ceremony. Undrivable at HEAD, and the reason has now moved TWICE in one day -- re-read it before citing it. It was 'no chain carries a live V1'; RELEASE-DEVNET falsified that on 2026-09-01 (cohort-9's core carries a live 144-byte V1 at FYzxwAjEqRwzYA727p3K3bCyEioesJoCQzx6oKVeVmNe, so conjunct 2 is satisfied) and it became conjunct 4: infrastructure_v2.rs refuses a succession in which nothing moved, and a cohort deployed hours ago has moved nothing. c60b25e8 then changed what the route MEANS. Since 2951b226 every Core route authenticates the V2 profile only, so a genesis cohort could never found -- measured on cohort-9, which reached activation and refused its founding sixty transactions deep. The repair was NOT a V1 fallback in the readers (PROFILE_UPGRADE_RULING_2026_08_31 section 6 refuses try-V2-then-V1 by name, and while that refusal's benefit analysis went stale the parallel-authority failure it named did not): process_initialize now commits a GENESIS V2 alongside the V1, using two distinct domain-separated sentinels as predecessor ids, so there is still exactly one authentication path. Conjunct 6 became ONE SUCCESSION PER DOMAIN rather than one V2 per domain, reading those sentinels -- a born-at-V2 profile has not spent its succession, a profile naming real V1 artifact releases has. So this route is no longer the thing that makes a cohort foundable; it is now only what a cohort needs to MOVE its Registry. It stays undrivable until a cohort carries a born-at-V2 profile and makes a real Loader-v3 upgrade to a strictly later deployment slot -- which needs the cohort-10 redeploy that carries c60b25e8, since this is a program change and reaches chain no other way. Cohort-9 cannot host it: its Core predates the genesis arm and its V2 PDA G5M2jgBQXypkUgoMc2jswH8WZx61ykDcSeQm3Bfw5tTF was read back as an untouched vacancy. Manufacturing the forward slot by re-uploading identical Registry bytes is a ceremony performed on the check and was refused. Consent still needs the PREDECESSOR release's bound upgrade authority to sign, so a cohort revoking authority on both infrastructure roles is permanently unfoundable -- 6155219a refuses that at plan time by name. Evidence: docs/evidence/COHORT9_DEVNET_DEPLOY_2026_09_01.md. NOTHING may report the ceremony as executed until it actually runs.",
       "owner": "RELEASE-DEVNET (carries the evidence and the cohort-10 redeploy that lands c60b25e8)"
     },
     {
       "route": "core/resolution::authenticate_recovery_policy#(recovery_id,policy)",
+      "class": "structural",
       "reason": "STRUCTURALLY UNDRIVABLE, and the emptiness is convicted rather than asserted. This is the `Some((recovery_id, policy))` arm -- the recovery-BEARING half of `authenticate_recovery_policy` -- and its satisfying set is empty for three independent reasons, any one of which suffices. (1) `recovery_walk_has_a_live_route` (programs/dclutch-core-sbf/src/resolution.rs:883) returns FALSE for `CreateFund`, so a Market whose SourceMaterialV3 names a recovery policy refuses fund creation with `CoreSbfError::RecoveryWalkUnavailable` (0x3011, lib.rs:160) at resolution.rs:726, before the arm's body runs. (2) The two actions the predicate DOES admit, `VerifyFundReady` and `CloseFund`, each require a fund that `CreateFund` refused to create, so neither can ever present recovery-bearing material. (3) `CloseFund` is separately refused at the top of `resolution::process` (line 136), so it cannot reach the call at all. The weld is doubled off-chain: `build_resolution_create_fund_v3` returns `ResolutionCoreOperatorErrorV3::RecoveryWalkUnavailable` for exactly this shape (crates/dclutch-resolution-core-v3-operator/src/lib.rs:1131), so the instruction cannot even be built. The stated cause is a real protocol fact and not a gap in the harness: `SourceResolutionStateV2` HAS NO TRANSITION THAT ADVANCES A RECOVERY ATTEMPT -- `funded.rs` plans the whole failure walk as Primary -> Exhausted -> FailureCommitted -- so a fund created over recovery-bearing material would have no terminal at all. A fixture that faked the precondition would witness nothing. THE POSITIVE CONTROL that this is a branch problem and not an unreached guard: the sibling arm `core/authenticate_no_recovery_entries#None` is EXECUTED (resolution-core-v3-programtest, one CreateFund at 286,481 CU) -- the guard is reached and evaluated on every fund creation; it is the other branch that has no inhabitant.",
       "owner": "ember -- open ruling, \"recovery as a capability child\" (GOAL.md). NOT C-09's to build: the honest cost is between one transition function and ~5,000 lines (architect-scholar A2), and the design question of whether recovery is universal ontology or a purchased capability is unanswered. C-09 drives this arm the day a transition that advances a recovery attempt exists."
     },
     {
       "route": "resolution/core_effect::process_close#Retired",
-      "reason": "STRUCTURALLY UNDRIVABLE, and newly ENUMERATED rather than newly written: the census learned on 2026-09-02 to walk `let`-bound guards, and `let terminal_kind = match source.phase() { Retired => …, _ => return Err(Transition) }` (core_effect.rs:2383) became a row. It is inside `process_close`, which is reached only from the `CloseFund` arm of `process_core_effect` -- a Core-effect envelope only Core CPIs, and Core refuses that action at decode (dclutch-core-sbf/src/resolution.rs, the UnsupportedAction guard). Same weld as `resolution/process_close#CloseFund`; the live close is `core_effect::process_direct_funding_close_v1`, which has its own path through `commit_direct_close` and never enters `process_close`.",
+      "class": "structural",
+      "reason": "STRUCTURALLY UNDRIVABLE, and newly ENUMERATED rather than newly written: the census learned on 2026-09-02 to walk `let`-bound guards, and `let terminal_kind = match source.phase() { Retired => \u2026, _ => return Err(Transition) }` (core_effect.rs:2383) became a row. It is inside `process_close`, which is reached only from the `CloseFund` arm of `process_core_effect` -- a Core-effect envelope only Core CPIs, and Core refuses that action at decode (dclutch-core-sbf/src/resolution.rs, the UnsupportedAction guard). Same weld as `resolution/process_close#CloseFund`; the live close is `core_effect::process_direct_funding_close_v1`, which has its own path through `commit_direct_close` and never enters `process_close`.",
       "owner": "the Resolution lane owns core_effect.rs; the weld is the Core lane's (a34ff595). Delete this with the two `CloseFund` entries the day a caller for the composed close exists."
     },
     {
       "route": "core/series_permit_expiry_precommit_v1::process",
+      "class": "structural",
       "reason": "STRUCTURALLY UNDRIVABLE TODAY, and not for the reason its sibling gives. `core/series_permit_expiry::process` is blocked here as \"needs an open Series Market\"; that sentence does not cover this route and the generated register already prints why -- routes.md gives the expiry route the prestate `series-ticket: Expired` and this one `series-ticket: Prepared`, and neither frame carries a Market account at all. Three things hold it, and all three are inside this tree. (1) It is CPI-ONLY: programs/dclutch-core-sbf/src/series_permit_expiry_precommit_v1.rs fixes the frame at SERIES_PERMIT_EXPIRY_ACCOUNT_COUNT_V1 + 1 and requires the extra account be a release-pinned Trading caller PDA that signs, so only a Trading CPI can synthesize it -- `local-private-validator-series-permit-expiry-v1` replays the 25-account DCLTSFX1 frame and is one account short by construction. (2) Its one real-ELF driver, programs/dclutch-trading-sbf/program-test/tests/series_pre_market_expiry_program_test.rs, is RED at HEAD on all three rows: `build_chain` refuses BuilderError::Projection(\"borrowed-range-resolve\") because expire_funding_artifacts_v5 fixes the family request at 128 bytes (V1 RequestProfile) while its effect declares route 4 a borrowed range of proof_count * 32, which is canonically nonempty -- proof_count = 0 refuses in the effect, proof_count >= 1 in the profile. 6f258cf5e states the repair and says it was NOT taken there. (3) The route authenticates a Prepared TicketStateV3 and NOTHING DISPATCHED WRITES THE FIRST VALID ONE: crates/dclutch-series-v3-kernel/src/replay.rs says so in its own words, and the only caller of TicketStateV3::prepared(..).encode() into a real account is test support. Fix (2) and (3) and this becomes a campaign away with the driver already written; nothing external blocks it and nothing needs deleting.",
       "owner": "the Series lane owns expire_funding_artifacts_v5's request-profile/effect contradiction and the missing TicketStateV3 producer; ABORT-WITNESS wrote this row after finding the route in the never-executed set with no reason recorded (2026-09-03), and drove none of it."
     },
     {
       "route": "trading/direct_replay_setup_v1::process_direct_replay_setup_v1",
+      "class": "status-report",
       "reason": "NO CAMPAIGN, and the two walls are specific rather than general. This route has exactly one driver in the tree -- `local-private-validator-direct-trade-v1` (tools/local-validator/bootstrap/successor/src/direct_trade.rs, stage `replay-setup`) -- and it landed on a real chain when a machine that no longer exists ran it. WALL ONE, the evidence: its finalized document (`dclutch-owned-loopback-direct-trade-finalized-v1`) records per transaction a `kind`, a signature, a slot, a fee and compute units, and NO `logs` and NO `error`. `census observe` cross-checks every claimed route against the chain's own `Program <address> invoke` lines and refuses a claim it cannot corroborate, so this producer cannot feed the census at all -- and because the binary hard-refuses any transaction whose RPC meta `err` is non-null (direct_trade.rs:2620, :4477, :6147), it could only ever produce `executed` rows even with logs added. Every refusal in `direct_replay_setup_v1.rs` is unwitnessable from it. `logs`, `log_messages` and `logMessages` appear ZERO times across direct_trade.rs, direct_trade_setup.rs and direct_trade_setup_journal.rs: they are not dropped at serialisation, they are never collected. WALL TWO, the prestate: the command bootstraps nothing and refuses everything it cannot re-authenticate from chain. It is the last stage of the five named in tools/local-validator/bootstrap/successor/README.md:765-773 -- founding, then direct-capability-activation, then user-position-admission, then direct-trade-produce, then this -- driven today only by tools/release/private-validator-lifecycle/run.py, which is the cold runbook another lane owns. THE COST, so nobody re-derives it: capture logs and an `error` at the three RPC poll sites, give the mutation row a `label` (the field is `kind`), and wrap run.py's five stages in a family runner. No program-test drives either setup route -- `grep replay_setup` over every program-test and the SVM harness returns two doc comments and no driver -- so a fast lane is not the cheaper alternative here; it is a second campaign to write.",
       "owner": "the lane that owns tools/release/private-validator-lifecycle (the cold runbook)"
     },
     {
       "route": "trading/direct_token_setup_v1::process_direct_token_setup_v1",
+      "class": "status-report",
       "reason": "NO CAMPAIGN, blocked identically to `trading/direct_replay_setup_v1::process_direct_replay_setup_v1` and by the same producer: stage `token-setup`, the second of the two setup mutations, which the journal gates behind the replay setup finalizing first (direct_trade_setup_journal.rs:203-224). Read that row for both walls and the cost; they are one campaign, not two.",
       "owner": "the lane that owns tools/release/private-validator-lifecycle (the cold runbook)"
     },
     {
       "route": "trading/generic_founding_stages_v1::process_generic_found_and_permit_v1",
+      "class": "status-report",
       "reason": "NO CAMPAIGN, and the driver is COMPLETE -- this is a binding gap, not a missing executor. `execute_split_market_founding` (tools/local-validator/bootstrap/successor/src/market.rs) drives DCLTGFP1 then DCLTGMO1 with four hostiles (stage interleaving, a substituted Claims request, a wrong permit, a permit replay), and as of 2026-09-04 it is selected by `MarketRunInput::founding_route` rather than by an environment variable nothing set. It is not a parallel authority to the atomic route: same codec, same Core dispatch, one prestate prologue shared up to the founding submission itself. WHY IT CANNOT SIMPLY RIDE TIER 1, which is the part worth writing down: a split run makes three of tier 1's own files wrong at once. Its two `DCLTGMF3` bindings would match no transaction, and a binding that matched nothing is a hard census error; six of its CU_BUDGETS rows key on the atomic label, and a budget matching no transaction is red; and its witnesses query `.label | startswith(\"DCLTGMF3 refuses\")`. So a split campaign is a TIER, in the sense TIERS.md means: its own directory, its own bindings merged with tier 1's shared prefix at run time the way journey/ does it, its own witnesses, and its own CU_BUDGETS campaign name with numbers measured from its first completing run -- plus `SuccessorRunSpec::founding_route`, which exists, to select the route for tier 1's compiled fixture. Nothing structural is in the way; the work is a campaign nobody has written.",
       "owner": "whoever owns tier 1's shape (unclaimed as of 2026-09-04)"
     },
     {
       "route": "trading/generic_founding_stages_v1::process_generic_market_open_v1",
+      "class": "status-report",
       "reason": "NO CAMPAIGN, blocked identically to `trading/generic_founding_stages_v1::process_generic_found_and_permit_v1` and by the same driver: DCLTGMO1 is the second stage, the permissionless commit-last Core Open that consumes the permit DCLTGFP1 escrowed, and it is 23 accounts that fit an inline v0 packet with no ALT and no extended heap. Read that row for why a split run needs its own tier rather than a flag on tier 1. One campaign witnesses both.",
       "owner": "whoever owns tier 1's shape (unclaimed as of 2026-09-04)"
     },
     {
       "route": "core/process_instruction#else",
+      "class": "status-report",
       "reason": "The wildcard refusal arm of Core's `Action` dispatch, and a route the census could not see until `DCLTCRQ2` was read at the dispatch guard rather than only inside `Request::decode`. It is reached by an instruction carrying the Core request magic whose decoded action and length match no arm -- a shape every gauntlet campaign builds correctly by construction, so no tier drives it yet. It is not structurally undrivable: a hostile that sends a well-formed `Request` at a length no arm admits reaches it, and that binding is what this entry is waiting for.",
       "owner": "LEAN-TAGS-2, then whoever adds the malformed-Action hostile"
     }

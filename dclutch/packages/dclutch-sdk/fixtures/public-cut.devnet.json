@@ -1,17 +1,17 @@
 {
   "schema": "dclutch-public-cut-v1",
   "cluster": "devnet",
-  "market": "DUVcCGfjXzp1fBktTCjsAomgrn9S6sxSDziQHoyRiu8A",
+  "market": "3QytL1bBMtCvRoXWR5h7MgutRBZqtv7emUVubEo5a4T2",
   "activity": {
     "found": null,
     "trade": null,
-    "resolve": null,
-    "redeem": null
+    "resolve": "2Mqxghzc6Uwtpjndnvhw22QrcH3rbmuBxdSDbxV9ixa6hEwwxgbxbgvyd3qaoCyGjEe1cH6LLSAfWZ4DLyLGk4t7",
+    "redeem": "5ktVXiodjkHt5VkJKycTr9c4wqTCfMKyHwxyPym8Br9hhmbx5b7MQMyMQjdCRBaTrbMGqRzKAU9LmVLoHDynxLue"
   },
   "checkedReleases": {
-    "398e51c008cc5f592f3252f0c1f2246e019ace000b04b74766a41cb45a8a3e09": {
-      "gateDigest": "afee5f070c7388d8622203873d6c550f32ea5188a2f3d2912ad6a06d01a3ba61",
-      "sealedSet": "f53575526c0a46309e0ea476264d46e905145fdf011e256a06e5e656a2e26b20"
+    "9895faee8f7f6a1926df18302f1b003afcf4b6c56518ba7bba2614c86eea8a22": {
+      "gateDigest": "52dd6b66f849e78d7cbdd10ed92007886235d6a6f922d3c2a09f97457734f064",
+      "sealedSet": "b0be3dd8e98cfb26fdc449ba4e4a0e48659e847bd2f71ff91ebe2327266ac1c9"
     }
   }
 }

@@ -24,30 +24,36 @@ describe('the deployment manifest', () => {
   it('bakes the seven devnet addresses of the cohort that is actually running', () => {
     // NOT "permanent". They were called that -- DEPLOY_1.md §2 says
     // "these are the durable protocol addresses" -- and then devnet was ruled
-    // disposable, and cohorts 9 through 14 each replaced the whole set and
+    // disposable, and cohorts 9 through 15 each replaced the whole set and
     // CLOSED the one before. This table shipped cohort-8's ids for a day after
-    // cohort-8 was closed, which is what a word like "permanent" buys.
+    // cohort-8 was closed and cohort-14's for a morning after cohort-14 was,
+    // which is what a word like "permanent" buys.
+    //
+    // Generated, not typed: `scripts/derive-deployment-manifest.mjs --write`
+    // reads the sealed plan for the ids and the chain for what sits behind
+    // them. These literals are the review copy, so the table cannot move
+    // without a reviewer seeing which cohort it moved to.
     expect(DEVNET_DEPLOYMENT_V1.programs).toEqual({
-      registry: 'ySYoUvUw7Z5AtDNqxQAo93vJXD1enNoK8Bf5uLRSyRm',
-      rent: '4oQLFDM9TbGBdb2q6QZCxRKZ3u5sqhTycb9MeHt9k41r',
-      custody: '8mWrLG2sjfzSKA3fEVBfY3RkGLTLuZZjKqDXWDuTpLbk',
-      resolution: '5ML5pbUfCaDwokNtmLyTgDEb7eHrfDRrW4PmktXAmphs',
-      claims: 'H8ANKXECwkntr8Cczo6gZX5d9PWN6uwrqCyeohYsZVhV',
-      trading: 'DcsWHSjPTTpYzXScmB5xYh3iEsM9fx4YFC1BPvQggEtu',
-      core: '9JW1qqJVeFo9ZRvzzVzNvqrwzt7QvyHpGafTJmj2hBFB',
+      registry: '8ci2LojrUPtVZoByaAmoNCj8244DTdxkUkHRVA9JiHdV',
+      rent: 'EQ61nrN71xaTsDMSrrH9FzMeqc27ghRex9abyjKu8vC4',
+      custody: '4sCbUV6f8iZaaVDkp3qAJtxiLY1cfBcKrVc5wpAFjpzM',
+      resolution: '24AkUjtXg61La45u7KTge8u4dKpVqkzirmzycVyckFgn',
+      claims: '595PExHje1GnbryQtXvpxSfxK72snpMcrG1Sj8VpPLEe',
+      trading: '3gBSSjYwSC4phutpGKRkMhrnCDVzHu6kfQ3L4jLf2UmG',
+      core: '7hGerMC6Wj742FVTyiF9PhRnGSBzbee7TMZ6sUytsmFr',
     });
     // Generated, not typed: `scripts/derive-activation-hint.mjs --write` moves
     // this and the manifest together. Pinned here so the value cannot change
     // without a reviewer seeing it — but it is a HINT the session follows past,
     // so a cohort making it stale costs a reader accuracy, not a session.
-    expect(DEVNET_DEPLOYMENT_V1.activationCache).toBe('F66BhQey3ESPRQHEQaLFFEwya4xCb6s2Uh27JiUJ1yVc');
+    expect(DEVNET_DEPLOYMENT_V1.activationCache).toBe('3hFTU9ka7fryKrVY7s8Lm5ZMCHsnq5bxEGcgSCd6TSiu');
     expect(DEVNET_DEPLOYMENT_V1.genesisHash).toBe('EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG');
     expect(DEVNET_DEPLOYMENT_V1.endpoint).toBe('https://api.devnet.solana.com');
   });
 
   it('carries the Loader-derived ProgramData and deployment slot for every devnet role', () => {
-    expect(DEVNET_PROGRAM_EVIDENCE_V1.registry).toEqual({ programData: '9TZNB3AuGZh9XfpP8t8NE8KieinmDRGTyeQ9GctGsEVN', deploymentSlot: '492225646' });
-    expect(DEVNET_PROGRAM_EVIDENCE_V1.core).toEqual({ programData: 'CC39Q4RstSZBniSZZASYoZXMyQtTari3WHZs9Zscgt2t', deploymentSlot: '492226262' });
+    expect(DEVNET_PROGRAM_EVIDENCE_V1.registry).toEqual({ programData: '2Xvmiz5kBseLAeCCgJsuJmK7UHQ1fzzbaSm7FqHF8Eat', deploymentSlot: '492745516' });
+    expect(DEVNET_PROGRAM_EVIDENCE_V1.core).toEqual({ programData: 'DrT1XF1qDgbTs8WCkhk1yjxFyehPSBM1VQrrowipmDyt', deploymentSlot: '492746271' });
     for (const role of PROTOCOL_ROLES_V1) {
       const evidence = DEVNET_PROGRAM_EVIDENCE_V1[role];
       expect(new PublicKey(evidence.programData).toBase58()).toBe(evidence.programData);

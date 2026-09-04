@@ -3,7 +3,9 @@
   "cohort": "13",
   "cluster": "devnet",
   "note": "Devnet transactions from cohort 13's founding projection, corroborated against the chain by tools/gauntlet/devnet-witness/corroborate.py. Every field named `slot`, `compute_units`, `programs_invoked`, `routes_corroborated` and `not_corroborated` is written BY THAT TOOL from the chain's own reply, never by hand. The route lists in `routes` are not authored here either: for DCLTGMF3 and DCLTPCB2 they are the route sets tools/gauntlet/tier1/bindings.json already binds to the SAME eight-byte instruction magic, carried across so a devnet cohort and the localhost tier make the same claim about the same wire object; DCLTCFQ1 has no tier-1 binding at all and its route is derived from the dispatch predicate itself (programs/dclutch-trading-sbf/src/projected_custody_bootstrap_v1.rs:267-268, `instruction_data == CONTROLLER_FUNDING_PREPARE_MAGIC_V1`), which the chain shows was the outer instruction's exact eight bytes. WHAT THIS DOES NOT SAY: a devnet witness corroborates the PROGRAM and the OUTER MAGIC. It does not corroborate which internal branch a program took, and it is not a proof about every input. That is the same boundary `dclutch-route-census observe` draws for the localhost campaigns, drawn here rather than quietly widened.",
-  "evidence_document": "docs/evidence/COHORT13_SEALED_FOUNDED_2026_09_02.md",
+  "evidence_documents": [
+    "docs/evidence/COHORT13_SEALED_FOUNDED_2026_09_02.md"
+  ],
   "evidence_table": "docs/evidence/COHORT13_SEALED_FOUNDED_2026_09_02.md:876-883",
   "programs": {
     "registry": "8XsxVn35gtemD9PuWC9pHYX1rxBAC4T8xV4xdrkdfCBV",
