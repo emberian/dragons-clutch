@@ -4208,3 +4208,13 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   → COHORT-15B **`(spawned)`**: the fill, the derived verdict + the General seal + OpenBatch on chain, the settle with the
   honest selector, the winning stranger paid, retirement on devnet, the cohort's witnesses.
 - Cuts: `cd398c23f`.
+- SUCCESSION closed (`204233776`, `34fa44b81`, `5fa069093`, `48ad76992`, runbook `a37e1832c`): **no contradiction** — c60b25e8
+  had already made conjunct 6 "one succession per domain" in the program and said so; `dclutch-operator` restated the old
+  conjunct (a host builder cannot link Core) and was left behind; option (b) refused by the design (V2-only, no fallback) and
+  by the chain (cohort-14's Core carries a born-at-V2 DCLTINF2 with both genesis sentinels); two more readers treated the
+  plan's genesis body as the body at the V2 domain. Tier 1 complete at the fix (21/21 witnesses). **The cold loopback on hbox
+  founds and opens a market** (founding 695 s / 189 tx; four candidates and four loopbacks under swarm-build). C-13 NOT met:
+  no admission/fill/settle/census/retirement/interruption yet — the fifth wall is `run.py`'s frozen-table identification
+  (eleven freeze sites, three tables hold the market; the founding evidence must record which is DCLTGMF3's — cohort-15's
+  evidence to change). Caution recorded: sharing CARGO_TARGET_DIR across the two workspaces yields bogus type-mismatch errors.
+- Cuts: `4df31b6cc`.
