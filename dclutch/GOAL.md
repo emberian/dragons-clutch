@@ -4535,3 +4535,5 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   captures: the dev server reads public devnet unless the RPC is rewritten at request time — a half-rendered page reads
   `words=924`.
 - Cuts: `564086bc6`.
+- Started 07:20 EDT: RENT-FLOORS **`af72191b027481cab`** — the ~112 `is_exempt` floor sites over pre-existing accounts that a
+  rate RISE would break, censused by class and fixed at the author under the rent ruling; a rate-rise program-test.
