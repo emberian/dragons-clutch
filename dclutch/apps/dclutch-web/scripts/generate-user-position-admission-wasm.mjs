@@ -62,7 +62,12 @@ function rustUsize(source, name) {
 
 const temporary = mkdtempSync(join(tmpdir(), 'dclutch-admission-wasm.'));
 try {
-  const target = join(temporary, 'target');
+  // Shared with the other wasm generators when the caller names a directory
+  // (`tools/ci/run.sh abi` does, so its eight builds pay one crate closure
+  // between them); private, cold and deleted on the way out otherwise, which
+  // is the right default for a lane running this one by hand in a checkout a
+  // dozen other lanes are also building in.
+  const target = process.env.DCLUTCH_WASM_TARGET_DIR ?? join(temporary, 'target');
   // `--no-default-features` is load-bearing and not an optimisation. The
   // default `dealer-series` feature links `dclutch-trading-sbf`, which pins
   // its layouts for a 64-bit target with `const _: [(); N] = [(); size_of]`;

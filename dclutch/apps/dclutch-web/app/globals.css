@@ -1352,6 +1352,8 @@ footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: va
 .xp-span { display: grid; gap: 3px; color: #8d9a91; }
 .xp-span em { color: var(--dim); font-style: normal; overflow-wrap: anywhere; }
 .xp-span small { color: #8a988e; font-size: var(--fs-micro); }
+.xp-scale { display: grid; gap: 3px; }
+.xp-scale small { color: #8a988e; font-size: var(--fs-micro); }
 
 .xp-rows { display: grid; gap: 8px; padding-top: 6px; }
 .xp-scalars { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }

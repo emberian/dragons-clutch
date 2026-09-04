@@ -504,14 +504,27 @@ tier_web() {
 #
 # COST, measured 2026-09-03 rather than estimated: 8m28s and 8m54s on two
 # consecutive runs -- 6m24s/6m32s for the 28 web verifiers, 2m04s/2m22s for the
-# 25 SDK ones. It does NOT get cheaper on a second run, and that is worth knowing
-# before anyone tries to make this tier cheap: each of the eight wasm
-# generators builds into a FRESH `mkdtemp` target directory, so it recompiles
-# its ~70-crate closure every single time. Seven of those eight minutes are
-# that. Sharing one target directory across the eight would be the obvious
-# saving and is NOT free -- the generators are also what a lane runs by hand,
-# and a shared directory is a shared lock on a checkout with a dozen lanes in
-# it.
+# 25 SDK ones. Most of that was the eight wasm generators, each building its
+# crate closure into a FRESH `mkdtemp` target directory, so eight cold builds of
+# largely the same dependencies. Timed on their own the same day: 216s for the
+# eight, 9s to 43s each.
+#
+# THEY SHARE ONE DIRECTORY NOW, and the objection that used to sit here -- that
+# the generators are also what a lane runs BY HAND, so a shared directory is a
+# shared cargo lock in a checkout a dozen lanes are building in -- is why the
+# sharing is the CALLER'S to ask for and not the generator's default. Each
+# generator reads `DCLUTCH_WASM_TARGET_DIR` and falls back to its own private
+# `mkdtemp` when nobody set one, so a lane by hand is exactly as isolated as
+# before. This tier sets it, to a directory it creates under the system temp
+# and removes on the way out: OUTSIDE the checkout, so it is neither committed
+# nor shared with a lane's own run, and one build instead of eight. A caller
+# with somewhere better to put it -- a CI runner with a cache, say -- may set
+# the variable itself, and then this tier leaves the directory alone.
+#
+# Re-measured after the change, same machine, same day: 89s for the eight,
+# against 216s, and all eight still byte-compare green -- the saving is one
+# crate closure instead of eight, not a weaker comparison. The tier's own row
+# in `list_tiers` carries the new total.
 # ---------------------------------------------------------------------------
 tier_abi() {
   say "abi -- the 53 generated client modules against their authorities"
@@ -529,6 +542,19 @@ tier_abi() {
     record abi $EXIT_PREREQ_MISSING "$missing not available"
     return
   fi
+  # One target directory for the eight wasm generators, unless the caller
+  # already named one -- in which case it is the caller's to keep and to clean.
+  local wasm_target_owned=0
+  if [ -z "${DCLUTCH_WASM_TARGET_DIR:-}" ]; then
+    DCLUTCH_WASM_TARGET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/dclutch-abi-wasm.XXXXXX")" || {
+      record abi $EXIT_PREREQ_MISSING "could not create a scratch directory for the wasm builds"
+      return
+    }
+    wasm_target_owned=1
+  fi
+  export DCLUTCH_WASM_TARGET_DIR
+  note "wasm target directory: $DCLUTCH_WASM_TARGET_DIR"
+
   local failed=0 ran=0 dir
   for dir in apps/dclutch-web packages/dclutch-sdk; do
     local full="$repo_root/$dir"
@@ -540,6 +566,12 @@ tier_abi() {
     note "$dir"
     (cd "$full" && npx vitest run --config vitest.config.ts lib/abiVerification.test.ts) || failed=1
   done
+  if [ "$wasm_target_owned" = 1 ]; then
+    # Ours, so we remove it AND stop exporting it: a later tier in the same
+    # invocation must not inherit a path that no longer exists.
+    rm -rf "$DCLUTCH_WASM_TARGET_DIR"
+    unset DCLUTCH_WASM_TARGET_DIR
+  fi
   if [ "$ran" = 0 ]; then
     record abi $EXIT_PREREQ_MISSING "no client tree had its dependencies installed"
   elif [ "$failed" = 0 ]; then
@@ -2460,14 +2492,17 @@ sbom      ~3 min       cargo, python3     the dependency/licence closure over
 web       ~1 min       node               the web + SDK vitest suites, minus
                                           the two files the `abi` and `sbom`
                                           tiers own
-abi       ~8.5 min     lake, cargo,       all 53 `abi:*:verify` scripts in both
+abi       ~3 min       lake, cargo,       all 53 `abi:*:verify` scripts in both
                        wasm-bindgen       client trees: every generated module
                                           regenerated from the Rust or Lean
                                           that owns it and byte-compared.
                                           `emission` re-runs the 12 Lean-emitted
                                           ones; the other 41 were gated by no
                                           tier at all until this one, and four
-                                          were red
+                                          were red. Was ~8.5 min until the eight
+                                          wasm generators stopped each building
+                                          the same crate closure into a private
+                                          target directory
 emission  minutes      lake (Lean)        every generated file still byte-
                                           matches the emitter that printed it
 frameguard minutes     cargo-build-sbf    every function in the exact twelve

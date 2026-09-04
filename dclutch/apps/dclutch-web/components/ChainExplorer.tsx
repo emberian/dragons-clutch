@@ -165,6 +165,15 @@ function FieldValue({ field }: Readonly<{ field: DecodedField }>) {
           {value.note === null ? null : <small>{value.note}</small>}
         </span>
       );
+    case 'scale':
+      // The number and its reading together. The exponent alone is the byte;
+      // the reading alone would hide which value produced it.
+      return (
+        <span className="xp-scale">
+          <span className="xp-num">{value.exponent}</span>
+          <small>{value.reading}</small>
+        </span>
+      );
     case 'refused':
       return <span className="xp-bad">{value.reason}</span>;
   }

@@ -4129,3 +4129,14 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   8m28s / 8m54s). Owed: the `web` tier is red on `DCLTSTA1` unrendered in the explorer (fca070a90's); the wrapper runs no
   `web`/`emission`/`abi` job; the abi tier's cost is seven minutes of per-generator target dirs. → WEB-EXPLORER **`(spawned)`**.
 - Cuts: `2402b965c`.
+- WEB-EXPLORER closed (`e596e2774` the explorer renders DCLTSTA1 from the emitted layout — the emission had been partial
+  (five of twelve coordinates), now all twelve, Lean ownership 91 → 109 of 116 reads; the scale reading DERIVED ("0" and
+  "−8" are the same field and different sentences); live case: cohort-14 market B's statistic at its derived address —
+  two unit identities and exponent 0, the defect's signature; the test earned its teeth twice (a wrong offset was green
+  because family and rounding are both 1 and the threshold 0); `dca2c858d` **the abi tier 8m28s → 2m52s** by one shared
+  wasm target dir under the tier's scratch, all 55 verifiers green). Wrapper: `clients.yml` (web + abi jobs) applied from
+  the branch onto the wrapper's main and pushed (c8283a0d9) — the branch had been cut from the wrapper's stale local branch,
+  so only its workflow diff was taken. Owed: an intermittent web-suite red (three unhandled ECONNREFUSED to :3000, scale-
+  dependent, not localized — my dev server is not running, so it is the suite's own); `checks.yml`'s `suites` job restates
+  the web tier and lacks its newest vector (left until clients.yml has run on a real runner).
+- Cuts: `ef7c01cde`, `117c30745`.

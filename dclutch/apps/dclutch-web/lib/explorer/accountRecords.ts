@@ -119,6 +119,21 @@ import {
   LIFECYCLE_RENT_CREDIT_MAGIC_V2,
   LIFECYCLE_RENT_INSTRUCTION_ACTION_OFFSET_V2,
   LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2,
+  STATISTIC_SPEC_BODY_RESERVED_OFFSET_V1,
+  STATISTIC_SPEC_BYTES_V1,
+  STATISTIC_SPEC_CAPACITY_PROFILE_ID_OFFSET_V1,
+  STATISTIC_SPEC_EVALUATOR_RELEASE_ID_OFFSET_V1,
+  STATISTIC_SPEC_KIND_OFFSET_V1,
+  STATISTIC_SPEC_KIND_TAGS_V1,
+  STATISTIC_SPEC_MAGIC,
+  STATISTIC_SPEC_REQUIRED_SAMPLES_OFFSET_V1,
+  STATISTIC_SPEC_RESULT_UNIT_ID_OFFSET_V1,
+  STATISTIC_SPEC_ROUNDING_OFFSET_V1,
+  STATISTIC_SPEC_ROUNDING_TAGS_V1,
+  STATISTIC_SPEC_SCHEMA_VERSION_OFFSET_V1,
+  STATISTIC_SPEC_SOURCE_SCALE_EXPONENT_OFFSET_V1,
+  STATISTIC_SPEC_SOURCE_UNIT_ID_OFFSET_V1,
+  STATISTIC_SPEC_THRESHOLD_ATOMS_OFFSET_V1,
   WINDOW_SPEC_BYTES_V1,
   WINDOW_SPEC_END_UNIX_SECONDS_OFFSET_V1,
   WINDOW_SPEC_MAGIC,
@@ -732,6 +747,24 @@ export type RecordFieldKind =
    * instant as eighteen quintillion rather than as a negative second.
    */
   | 'i64'
+  /**
+   * A signed 128-bit integer. `StatisticSpecV1.threshold_atoms` is the only one
+   * the protocol publishes -- a signed atom count wide enough that reading it as
+   * two `u64`s would show a reader two numbers neither of which is the value.
+   */
+  | 'i128'
+  /**
+   * `StatisticSpecV1.source_scale_exponent`: a signed 32-bit decimal shift that
+   * carries its own reading.
+   *
+   * It is not `i32` with a note, because a note is written once and the reading
+   * changes with the value. `0` and `-8` are the same field and different
+   * sentences: the first says the observation and the cuts are compared as
+   * written, the second says the observation is eight decimal places finer than
+   * the cuts it is compared against. A reader shown `-8` and left to work out
+   * which side moves is being shown the byte, not the fact.
+   */
+  | 'scale-exponent'
   | 'pubkey'
   | 'identity'
   | 'identity32'
@@ -1271,6 +1304,27 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
       field('Window end', WINDOW_SPEC_END_UNIX_SECONDS_OFFSET_V1, 'i64', { note: 'unix seconds, inclusive' }),
     ],
     note: 'Two of this record’s seven coordinates are named by the Rust that writes it, and those two are the settlement window itself. The rest — its source identity, kind, freshness budget, schedule and cadence tolerance — sit at bare numbers inside `WindowSpecV1::decode`, and this table does not restate a coordinate nobody published.',
+  },
+  {
+    magic: STATISTIC_SPEC_MAGIC,
+    name: 'Statistic spec',
+    family: 'Source',
+    summary: 'Which cell a market pays: the unit its observation is counted in, the unit its cuts are written in, and the decimal shift between them.',
+    width: { kind: 'fixed', bytes: STATISTIC_SPEC_BYTES_V1 },
+    fields: [
+      version(STATISTIC_SPEC_SCHEMA_VERSION_OFFSET_V1),
+      field('Statistic family', STATISTIC_SPEC_KIND_OFFSET_V1, 'enum', { tags: STATISTIC_SPEC_KIND_TAGS_V1 }),
+      field('Rounding boundary', STATISTIC_SPEC_ROUNDING_OFFSET_V1, 'enum', { tags: STATISTIC_SPEC_ROUNDING_TAGS_V1 }),
+      field('Source scale exponent', STATISTIC_SPEC_SOURCE_SCALE_EXPONENT_OFFSET_V1, 'scale-exponent'),
+      field('Source unit', STATISTIC_SPEC_SOURCE_UNIT_ID_OFFSET_V1, 'identity'),
+      field('Result unit', STATISTIC_SPEC_RESULT_UNIT_ID_OFFSET_V1, 'identity'),
+      field('Required samples', STATISTIC_SPEC_REQUIRED_SAMPLES_OFFSET_V1, 'u16'),
+      field('Reserved', STATISTIC_SPEC_BODY_RESERVED_OFFSET_V1, 'reserved'),
+      field('Threshold atoms', STATISTIC_SPEC_THRESHOLD_ATOMS_OFFSET_V1, 'i128'),
+      field('Capacity profile', STATISTIC_SPEC_CAPACITY_PROFILE_ID_OFFSET_V1, 'identity'),
+      field('Evaluator release', STATISTIC_SPEC_EVALUATOR_RELEASE_ID_OFFSET_V1, 'identity'),
+    ],
+    note: 'All twelve coordinates and both tag tables are read from the crate `EmitSourceStatisticSpecV1Rust.lean` prints, so this table restates nothing. The scale exponent is the one field whose reading depends on its value, and it is the one a reader most needs: the units above it say WHICH two quantities are being compared and only this says on what scale.',
   },
   {
     magic: MARKET_OPENING_READINESS_MAGIC_V1,
@@ -2280,6 +2334,11 @@ export type DecodedFieldValue =
   | Readonly<{ form: 'enum'; tag: number; name: string | null }>
   | Readonly<{ form: 'reserved'; zero: boolean; hex: string }>
   | Readonly<{ form: 'span'; bytes: number; hex: string; note: string | null }>
+  /**
+   * A declared decimal shift and what it means for this record's own bytes.
+   * `reading` is derived from `exponent` and never stored beside it.
+   */
+  | Readonly<{ form: 'scale'; exponent: number; reading: string }>
   | Readonly<{ form: 'refused'; reason: string }>;
 
 export type DecodedField = Readonly<{
@@ -2328,12 +2387,14 @@ function readUnsigned(data: Uint8Array, offset: number, width: number): bigint {
   return value;
 }
 
-const SCALAR_WIDTHS: Readonly<Record<'u8' | 'u16' | 'u32' | 'u64' | 'i64', number>> = Object.freeze({
+const SCALAR_WIDTHS: Readonly<Record<'u8' | 'u16' | 'u32' | 'u64' | 'i64' | 'i128' | 'scale-exponent', number>> = Object.freeze({
   u8: 1,
   u16: 2,
   u32: 4,
   u64: 8,
   i64: 8,
+  i128: 16,
+  'scale-exponent': 4,
 });
 
 /**
@@ -2352,6 +2413,8 @@ function fieldWidth(spec: RecordSpec, index: number, headerEnd: number): number 
     case 'u32':
     case 'u64':
     case 'i64':
+    case 'i128':
+    case 'scale-exponent':
       return SCALAR_WIDTHS[declared.kind];
     case 'enum':
       return 1;
@@ -2396,6 +2459,32 @@ function base58OrNull(bytes: Uint8Array): string | null {
   }
 }
 
+/**
+ * What a declared source-to-result decimal shift MEANS, in one sentence.
+ *
+ * The direction is `ResultDomainV2::select_ordinary`'s and is mirrored by
+ * `lib/ordinarySelectorV1.ts`: the shift multiplies one side's DENOMINATOR,
+ * chosen by its sign, and never divides. Multiplying the observation's
+ * denominator by ten to the |e| for a negative `e`, and the cuts' denominator
+ * for a positive one, is in both cases the statement that the observation times
+ * ten to the `e` is on the cuts' scale. So there is one sentence, not two.
+ *
+ * ZERO IS THE IDENTITY AND SAYS SO. Every market founded before the factor
+ * existed declares it -- those four bytes were a reserved span decode required
+ * to be canonically zero -- so `0` here is not a reader's default standing in
+ * for a number nobody read; it is the founding's own statement that the
+ * observation and the cuts are compared exactly as written. That is also the
+ * two-scale defect's signature: cohort-14b settled on a raw Pyth mantissa
+ * against cuts in cents and declares the identity anyway, because when it was
+ * founded the record had no way to say otherwise, and 500,000,000 atoms moved
+ * on the difference. A reader who sees `identity` on a market whose observation
+ * and cuts are plainly in different units is looking at that defect.
+ */
+export function scaleExponentReadingV1(exponent: number): string {
+  if (exponent === 0) return 'identity — the observation and the cuts are compared as written';
+  return `observation atoms × 10^${String(exponent).replace('-', '−')} → the cuts’ scale`;
+}
+
 function decodeValue(field_: RecordField, data: Uint8Array, width: number): DecodedFieldValue {
   const end = field_.offset + width;
   if (end > data.length) {
@@ -2413,6 +2502,12 @@ function decodeValue(field_: RecordField, data: Uint8Array, width: number): Deco
       return Object.freeze({ form: 'scalar', text: readUnsigned(data, field_.offset, width).toString() });
     case 'i64':
       return Object.freeze({ form: 'scalar', text: BigInt.asIntN(64, readUnsigned(data, field_.offset, width)).toString() });
+    case 'i128':
+      return Object.freeze({ form: 'scalar', text: BigInt.asIntN(128, readUnsigned(data, field_.offset, width)).toString() });
+    case 'scale-exponent': {
+      const exponent = Number(BigInt.asIntN(32, readUnsigned(data, field_.offset, width)));
+      return Object.freeze({ form: 'scale', exponent, reading: scaleExponentReadingV1(exponent) });
+    }
     case 'enum': {
       const tag = data[field_.offset];
       const named = field_.tags?.find((entry) => entry.tag === tag) ?? null;
