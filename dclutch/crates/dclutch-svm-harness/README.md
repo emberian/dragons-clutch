@@ -53,6 +53,14 @@ so this is neither devnet nor mainnet evidence.
 > (`a_two_source_market_walks_its_funded_ladder_and_every_rung_pays_a_stranger`,
 > decision 0027): advance **216,637**, exhaust **218,163**, terminal **227,662**
 > compute units, on the current Core, Custody, Registry and Resolution ELFs.
+> Those three are the ladder EXPIRING. The ladder being ANSWERED is
+> `a_market_is_answered_on_its_funded_second_rung` in the same file: advance
+> **215,138**, then a real-Pyth capture on the second rung at **311,232**
+> compute units, ending in a `ResolutionSuccess` certificate whose
+> `attempt_index` is 1. The capture is dearer than the crank by roughly the
+> Product graph and the provider join, which is the shape of the two
+> transitions rather than a cost of recovery: it is what any primary capture
+> costs, asked of a different source.
 > Nothing below has been re-measured; read it as a record of what the retired
 > campaign once cost.
 

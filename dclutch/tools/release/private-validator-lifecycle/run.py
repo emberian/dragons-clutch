@@ -397,6 +397,18 @@ TERMINAL_AGGREGATE_JOURNAL_SCHEMA = rust_schema_constant(
 TERMINAL_PROGRESS_SCHEMA = rust_schema_constant(
     SUCCESSOR_SRC, "aggregate_retirement_exterior.rs", "PROGRESS_SCHEMA_V1"
 )
+# The chaos session is the one artifact on this list that a PYTHON file writes:
+# `chaos.py` builds it, and `private_lifecycle.rs` only authenticates it. The
+# argument for reading it from the Rust anyway is written where the writer is --
+# the schema string is the version tag on a matrix BOTH files state in full, and
+# `rust_schema_constant` is the only direction of derivation that exists. What
+# this row ends is the third author: until it, `finalize_lifecycle_receipt`
+# spelled the string as a bare literal inside a descriptor row, where no gate
+# could see it, and where a v2-to-v3 bump would have left this runner claiming
+# one schema for a session that carried another.
+CHAOS_SESSION_SCHEMA = rust_schema_constant(
+    SUCCESSOR_SRC, "private_lifecycle.rs", "CHAOS_SESSION_SCHEMA_V2"
+)
 # ---------------------------------------------------------------------------
 
 
@@ -819,6 +831,7 @@ def authenticate_offline_preflight(
         "command_exposures",
         "recovery_exposure",
         "schema_handoffs",
+        "chaos_contract_schemas",
         "stage_vocabulary",
         "constants",
         "economic_owner",
@@ -885,10 +898,20 @@ def authenticate_offline_preflight(
         paths.repo / SHARED_RUST_SCHEMA_RELATIVE_PATH,
         "shared Rust schema reader in target source",
     )
+    # `load_chaos_contract` EXECUTES this one, on the same argument, and it had
+    # been absent from this set for as long as the set existed. It matters more
+    # now than it did: since the chaos schema strings became derivations rather
+    # than literals, that file is a READER of the Rust that names the session,
+    # not merely the code that fills one in.
+    chaos_contract_path = canonical_file(
+        paths.repo / CHAOS_CONTRACT_RELATIVE_PATH,
+        "private lifecycle chaos contract in target source",
+    )
     expected_source_files = {
         str(RUNNER_RELATIVE_PATH): sha256_file(runner_path),
         str(OFFLINE_PREFLIGHT_RELATIVE_PATH): sha256_file(preflight_path),
         str(SHARED_RUST_SCHEMA_RELATIVE_PATH): sha256_file(shared_rust_schema_path),
+        str(CHAOS_CONTRACT_RELATIVE_PATH): sha256_file(chaos_contract_path),
     }
     for relative, digest in expected_source_files.items():
         if source_sha256.get(relative) != digest:
@@ -6080,7 +6103,7 @@ def finalize_lifecycle_receipt(
     chaos_row = {
         "semanticRole": "chaos-session",
         "path": run_relative_path(run, local_chaos, "local chaos session"),
-        "schema": "dclutch-owned-loopback-private-lifecycle-chaos-session-v2",
+        "schema": CHAOS_SESSION_SCHEMA,
         "completionPointer": "/status",
     }
     rows = [

@@ -215,6 +215,17 @@ pub enum ClaimsAction {
     MergeCompleteSet = 6,
     /// Initialize vacant canonical Claims accounts and mint the founding complete set.
     InitializeCompleteSet = 7,
+    /// Mint complete sets on a REFUNDING Market: the ordinary coordinates into
+    /// the destination Position and the failure coordinate into the source,
+    /// which must be the Market's own failure escrow.
+    MintRefundingCompleteSet = 8,
+    /// Merge complete sets on a REFUNDING Market: the ordinary coordinates out
+    /// of the source Position and the failure coordinate out of the
+    /// destination, which must be the Market's own failure escrow.
+    ///
+    /// The collateral reaches the SOURCE owner, so the holder who burned the
+    /// ordinary claims is paid and the escrow is not.
+    MergeRefundingCompleteSet = 9,
 }
 
 impl ClaimsAction {
@@ -225,6 +236,8 @@ impl ClaimsAction {
             5 => Ok(Self::MintCompleteSet),
             6 => Ok(Self::MergeCompleteSet),
             7 => Ok(Self::InitializeCompleteSet),
+            8 => Ok(Self::MintRefundingCompleteSet),
+            9 => Ok(Self::MergeRefundingCompleteSet),
             _ => Err(Error::UnknownTag),
         }
     }
@@ -462,6 +475,17 @@ impl<'a> ClaimsPlanV1<'a> {
             ClaimsAction::MintCompleteSet | ClaimsAction::InitializeCompleteSet => {
                 !source && destination && !source_revision && destination_revision
             }
+            // A refunding complete set names TWO Positions, and never the same
+            // one twice: aliasing them would seat the failure coordinate right
+            // back where decision 0025 took it from.
+            ClaimsAction::MintRefundingCompleteSet
+            | ClaimsAction::MergeRefundingCompleteSet => {
+                source
+                    && destination
+                    && self.source_owner != self.destination_owner
+                    && source_revision
+                    && destination_revision
+            }
         };
         if !shape_valid {
             return Err(
@@ -478,6 +502,8 @@ impl<'a> ClaimsPlanV1<'a> {
             ClaimsAction::MintCompleteSet
                 | ClaimsAction::MergeCompleteSet
                 | ClaimsAction::InitializeCompleteSet
+                | ClaimsAction::MintRefundingCompleteSet
+                | ClaimsAction::MergeRefundingCompleteSet
         );
         let mut any_positive = false;
         let mut outcome = 0_u32;
@@ -595,7 +621,9 @@ impl ClaimsReceiptV1 {
             return Err(Error::InvalidPostRevision);
         }
         let (source_present, destination_present) = match value.action {
-            ClaimsAction::TransferNative => (true, true),
+            ClaimsAction::TransferNative
+            | ClaimsAction::MintRefundingCompleteSet
+            | ClaimsAction::MergeRefundingCompleteSet => (true, true),
             ClaimsAction::RedeemNativeTerminal | ClaimsAction::MergeCompleteSet => (true, false),
             ClaimsAction::MintCompleteSet | ClaimsAction::InitializeCompleteSet => (false, true),
         };
@@ -937,6 +965,106 @@ mod tests {
                 &equal,
             ),
             Err(Error::InvalidRevisionShape)
+        );
+    }
+
+    /// The two refunding tags encode, decode, and are not aliases of the
+    /// categorical ones a caller might already be building.
+    #[test]
+    fn a_refunding_complete_set_carries_its_own_tag_and_two_positions() -> Result<()> {
+        let equal = quantities(&[5, 5, 5, 5]);
+        for (action, tag) in [
+            (ClaimsAction::MintRefundingCompleteSet, 8_u8),
+            (ClaimsAction::MergeRefundingCompleteSet, 9),
+        ] {
+            let plan = ClaimsPlanV1::new(
+                action,
+                CallerRole::Trading,
+                [1; 32],
+                [2; 32],
+                [3; 32],
+                [5; 32],
+                [6; 32],
+                0,
+                0,
+                0,
+                4,
+                &equal,
+            )?;
+            let mut encoded = vec![0_u8; CLAIMS_PLAN_HEADER_BYTES_V1 + equal.len()];
+            plan.encode_into(&mut encoded)?;
+            assert_eq!(encoded.get(PLAN_KIND_OFFSET), Some(&tag));
+            assert_eq!(ClaimsPlanV1::decode(&encoded), Ok(plan));
+            assert_ne!(action, ClaimsAction::MintCompleteSet);
+            assert_ne!(action, ClaimsAction::MergeCompleteSet);
+        }
+        Ok(())
+    }
+
+    /// Three hostiles against the refunding plan shape, each naming its own
+    /// discriminant.
+    #[test]
+    fn refunding_plan_hostiles_name_their_own_refusal() {
+        let equal = quantities(&[5, 5, 5, 5]);
+
+        // A refunding set that names ONE Position is a categorical set wearing
+        // the refunding tag, and its failure column would land on the holder.
+        assert_eq!(
+            ClaimsPlanV1::new(
+                ClaimsAction::MintRefundingCompleteSet,
+                CallerRole::Trading,
+                [1; 32],
+                [2; 32],
+                [3; 32],
+                [0; 32],
+                [6; 32],
+                0,
+                NO_POSITION_REVISION,
+                0,
+                4,
+                &equal,
+            ),
+            Err(Error::InvalidPositionShape)
+        );
+
+        // The escrow may not be the holder: aliasing them seats the failure
+        // column right back where decision 0025 took it from.
+        assert_eq!(
+            ClaimsPlanV1::new(
+                ClaimsAction::MergeRefundingCompleteSet,
+                CallerRole::Trading,
+                [1; 32],
+                [2; 32],
+                [3; 32],
+                [6; 32],
+                [6; 32],
+                0,
+                0,
+                0,
+                4,
+                &equal,
+            ),
+            Err(Error::InvalidPositionShape)
+        );
+
+        // A refunding set is still ONE set.
+        let skewed = quantities(&[5, 5, 5, 9]);
+        assert_eq!(
+            ClaimsPlanV1::new(
+                ClaimsAction::MintRefundingCompleteSet,
+                CallerRole::Trading,
+                [1; 32],
+                [2; 32],
+                [3; 32],
+                [5; 32],
+                [6; 32],
+                0,
+                0,
+                0,
+                4,
+                &skewed,
+            ),
+            Err(Error::InvalidQuantityVector)
         );
     }
 

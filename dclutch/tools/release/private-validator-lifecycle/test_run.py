@@ -51,6 +51,9 @@ def offline_preflight_fixture(
         str(MODULE.SHARED_RUST_SCHEMA_RELATIVE_PATH): MODULE.sha256_file(
             paths.repo / MODULE.SHARED_RUST_SCHEMA_RELATIVE_PATH
         ),
+        str(MODULE.CHAOS_CONTRACT_RELATIVE_PATH): MODULE.sha256_file(
+            paths.repo / MODULE.CHAOS_CONTRACT_RELATIVE_PATH
+        ),
     }
     report: dict[str, object] = {
         "schema": MODULE.OFFLINE_PREFLIGHT_SCHEMA,
@@ -73,6 +76,7 @@ def offline_preflight_fixture(
         "command_exposures": [],
         "recovery_exposure": {},
         "schema_handoffs": [],
+        "chaos_contract_schemas": [],
         "stage_vocabulary": [],
         "constants": {},
         "economic_owner": {},
@@ -290,6 +294,34 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
             ).encode()
         )
         hostiles.append(("source", changed_source, "did not bind exact"))
+        # The runner EXECUTES the chaos contract, and since the chaos schema
+        # strings became derivations that file is also one of the two Python
+        # readers of the Rust that names the session. A receipt that does not say
+        # which bytes it ran is evidence about a tree it cannot name, so a report
+        # built without the row is refused BY THAT PATH rather than generically.
+        dropped_chaos = copy.deepcopy(report)
+        del dropped_chaos["source_sha256"][str(MODULE.CHAOS_CONTRACT_RELATIVE_PATH)]
+        dropped_chaos["repository"]["source_set_sha256"] = MODULE.sha256_bytes(
+            MODULE.json.dumps(
+                dropped_chaos["source_sha256"],
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        )
+        dropped_chaos["model_sha256"] = MODULE.sha256_bytes(
+            MODULE.json.dumps(
+                {key: value for key, value in dropped_chaos.items() if key != "model_sha256"},
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        )
+        hostiles.append(
+            (
+                "chaos-contract",
+                dropped_chaos,
+                r"did not bind exact tools/release/private-validator-lifecycle/chaos\.py bytes",
+            )
+        )
         changed_mode = copy.deepcopy(report)
         changed_mode["through"] = "participant"
         changed_mode["model_sha256"] = MODULE.sha256_bytes(

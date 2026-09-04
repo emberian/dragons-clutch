@@ -49,6 +49,15 @@ pub const PROVIDER_RESOLUTION_TRADING_ACCOUNT_COUNT_V3: usize = 51;
 /// campaign proves by still passing unedited. The rung is the only caller that
 /// pays for the two extra reads and the only caller that needs the record:
 /// which source may answer is a fact only the ladder holds.
+///
+/// **Reachable through the Core caller only, today.** Both Core and the
+/// Resolution child derive the widened count from the declared rung, and
+/// `dclutch-trading-sbf`'s `resolution_composition_v3` still compares its child
+/// frame against a hard `PROVIDER_RESOLUTION_TRADING_ACCOUNT_COUNT_V3`, so a
+/// rung capture composed by Trading refuses on the count. That is a correct
+/// refusal and not a wrong result -- nothing is admitted -- but it is a
+/// reachability gap and it is owed: a Trading-composed market cannot yet be
+/// answered on its funded alternative.
 pub const PROVIDER_RESOLUTION_RECOVERY_TAIL_ACCOUNTS_V3: usize = 2;
 /// Byte offset of `ProviderExecutionRequestV3::source_index` in the encoded
 /// request.

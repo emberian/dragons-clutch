@@ -6,7 +6,10 @@ and decision 0003 stays unamended until ember rules**. Docket item D6. Ember's
 words are at `GOAL.md:4655`. The question itself is stated in
 `docs/decisions/0003-fixed-role-capability-execution.md` under *"The open
 question — docket D6, ember's"*, added by the amendment note of 2026-09-03; this
-record does not close it and does not amend 0003.
+record does not close it and does not amend 0003. **The fifth condition §3 adds
+— remeasure the chunk cost on the post-0023 routes before deciding — is being
+measured by the CHUNK-REMEASURE lane started 2026-09-04 13:20 EDT; see the
+addendum at the end of this record.**
 
 ## 1. The question
 
@@ -173,13 +176,45 @@ switched on"*. Until then this record's status is OPEN, and `GOAL.md:3006` and
 `:3059`, which both refer to *"ember's 0003 ruling"* as already given, are
 referring to the question having been **put**, not answered.
 
+## Addendum, 2026-09-04 13:20 EDT: the fifth condition is being measured, and the read has gained a second consumer
+
+**The record stays OPEN.** Nothing here rules the question; this section records
+what is being done about the one thing §3 says *"could change the read."*
+
+**§3's fifth condition is now a lane.** CHUNK-REMEASURE was started at 13:20 EDT
+(`GOAL.md:4818-4820`) to measure the chunk cost **on the post-0023 routes**, three
+draws each. The read's case for the page is August's -- Dealer equity Add chunk 0
+at 445,816 CU, *"of which 328,702 (74%) is authentication that is byte-identical
+between chunks"* -- and decision 0023's slot-free caller-authority seed plus the
+accelerator prelude have since taken most of that re-authentication out of every
+chunk. **The decision should carry the number as it is now, not the one that
+motivated the design**, and until the lane reports, this record's §3 is a read
+resting on a figure the tree has already moved.
+
+**And the read has a second consumer it did not have when it was written.** The
+joint-clearing design (decision 0032, `MECHANISM_JOINT_CLEARING:358-389`) prices
+D6 for the batch: the output page removes `chunks − 1` re-evaluations per
+transaction, **−22 % at `K ≤ 13`, −40 % at `K = 60`**, taking a General
+verification transaction from ≈ 0.67 M CU to ≈ 0.53 M, and flattening the
+K-dependence to one evaluation. At `N = 258` that is ≈ 395 M CU against ≈ 313 M
+per batch. The note also observes that D6, if ember rules it in, **rides the same
+cohort-17 boundary** the clearing rule needs, so the cohort cost §3 attributes to
+the page is shared rather than additional.
+
+Neither fact changes the question, and this addendum does not answer it. What it
+changes is that a decision described in §7 as needing *"a ruling by ember"* now
+has a measurement in flight and a second beneficiary, and both belong in front of
+whoever rules it.
+
 ## Evidence pointers
 
 `docs/design/ACCELERATOR_OUTPUT_CHANNEL_2026_09_02.md` (whole; esp. `:28-45`,
 `:61-147`, `:149-217`, `:233-241`, `:248-261`, `:273-281`);
 `docs/decisions/0003-fixed-role-capability-execution.md:10-16` and its 2026-09-03
 amendment note; `docs/decisions/0023-slot-free-caller-authority-seed.md`;
-`GOAL.md:2863-2867`, `:3004-3011`, `:3059`, `:4655`;
+`GOAL.md:2863-2867`, `:3004-3011`, `:3059`, `:4655`, `:4818-4820`;
+`docs/design/MECHANISM_JOINT_CLEARING_2026_09_04.md:358-389`;
+`docs/decisions/0032-joint-clearing-residual-tie-break-and-seal.md`;
 `crates/dclutch-execution-strategy-contract/src/v2.rs:130`, `:139-146`,
 `:944-957`, `:1784-1795`;
 `programs/dclutch-trading-sbf/src/hot_v3.rs:52-134`, `:3785-3835`;

@@ -1,6 +1,6 @@
 {
   "bound_bytes": 4096,
-  "commit": "9653ef363754822000904f3d07161e99f61a88b8",
+  "commit": "bc78ccd8116a6b70b8aaa5a3146ccf13ed7bbcb7",
   "link_count": 12,
   "links": [
     {
@@ -1618,7 +1618,7 @@
       "package": "dclutch-claims-sbf"
     },
     {
-      "frame_count": 272,
+      "frame_count": 273,
       "functions": [
         {
           "frames_bytes": [
@@ -1839,7 +1839,7 @@
         },
         {
           "frames_bytes": [
-            768
+            1536
           ],
           "symbol": "_ZN16dclutch_core_sbf10resolution28authenticate_recovery_policy17h<hash>E"
         },
@@ -1848,6 +1848,12 @@
             2304
           ],
           "symbol": "_ZN16dclutch_core_sbf10resolution29authenticate_admit_projection17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            576
+          ],
+          "symbol": "_ZN16dclutch_core_sbf10resolution29authenticate_controller_entry17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -4250,7 +4256,7 @@
         },
         {
           "frames_bytes": [
-            1216
+            1408
           ],
           "symbol": "_ZN31dclutch_general_accelerator_sbf18evaluate_selection17h<hash>E"
         },
@@ -4950,7 +4956,7 @@
       "package": "dclutch-rent-sbf"
     },
     {
-      "frame_count": 175,
+      "frame_count": 179,
       "functions": [
         {
           "frames_bytes": [
@@ -5154,7 +5160,7 @@
         },
         {
           "frames_bytes": [
-            640
+            704
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf11core_effect28authenticate_funding_entries17h<hash>E"
         },
@@ -5220,13 +5226,31 @@
         },
         {
           "frames_bytes": [
-            1920
+            1856
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf11provider_v311finish_plan17h<hash>E"
         },
         {
           "frames_bytes": [
-            3712
+            832
+          ],
+          "symbol": "_ZN28dclutch_resolution_proof_sbf11provider_v311select_rung17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            2368
+          ],
+          "symbol": "_ZN28dclutch_resolution_proof_sbf11provider_v318join_recovery_rung17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            1216
+          ],
+          "symbol": "_ZN28dclutch_resolution_proof_sbf11provider_v321resolve_recovery_rung17h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            3840
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf11provider_v327plan_provider_resolution_v317h<hash>E"
         },
@@ -5328,7 +5352,7 @@
         },
         {
           "frames_bytes": [
-            2304
+            3008
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf17sponsored_push_v124authenticate_live_update17h<hash>E"
         },
@@ -5370,7 +5394,7 @@
         },
         {
           "frames_bytes": [
-            2112
+            2624
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf17sponsored_push_v132sponsored_normalized_observation17h<hash>E"
         },
@@ -5829,6 +5853,12 @@
             640
           ],
           "symbol": "_ZN28dclutch_resolution_proof_sbf23provider_instruction_v327boxed_capability_program_v417h<hash>E"
+        },
+        {
+          "frames_bytes": [
+            1088
+          ],
+          "symbol": "_ZN28dclutch_resolution_proof_sbf23provider_instruction_v328authenticate_recovery_ladder17h<hash>E"
         },
         {
           "frames_bytes": [

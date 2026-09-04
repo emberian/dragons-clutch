@@ -14,7 +14,8 @@ use dclutch_economic_slice_kernel::{
     BasketAction, BasketFrame, MARKET_HEADER_BYTES, POSITION_HEADER_BYTES, Phase as EconomicPhase,
     SCALAR_BYTES, execute_basket, initialize_market, initialize_position, market_hoard,
     market_identity, market_outcome_count, market_phase, market_registry_program,
-    market_release_set_id, market_revision, position_market_id, position_owner, position_revision,
+    market_release_set_id, market_revision, market_supply, position_market_id, position_native,
+    position_owner, position_revision, refunding_failure_index,
 };
 use dclutch_market_core_codec::{
     CORE_EFFECT_DIGEST_DOMAIN_V1, CORE_EFFECT_ENVELOPE_BYTES_V1, CORE_EFFECT_MAGIC_V1,
@@ -314,6 +315,43 @@ pub enum ClaimsSbfError {
     /// actually did, and three hostiles across two languages assert it by
     /// name.
     ReceiptAlias = 0x500F,
+    /// The Position offered as a refunding complete set's failure escrow is not
+    /// the Market's own escrow.
+    ///
+    /// A refunding complete set seats the failure coordinate away from anybody
+    /// with an interest in the oracle going quiet (decision 0025 item 2), and
+    /// the only Position that satisfies that is the one this program DERIVES
+    /// from the Market and the failure selector. A caller who names their own
+    /// Position instead has asked to be minted the failure claims, which are
+    /// worth nothing on a refunding basis and are still sellable -- the exact
+    /// hazard the ruling exists to close.
+    ///
+    /// Distinct from [`ClaimsSbfError::Identity`], which is the same
+    /// comparison with the other operand: `Identity` means the ACCOUNT
+    /// presented is not the Position this program derives for the owner the
+    /// packet names, and its reader goes looking for a substituted account.
+    /// This one means the account and the Position agree perfectly and the
+    /// OWNER the packet named is a stranger. A reader who saw `Identity` here
+    /// would hunt a derivation bug that is not there.
+    FailureEscrow = 0x5010,
+    /// The escrow account is the Market's own, and this Market's failure supply
+    /// is not seated in it.
+    ///
+    /// A refunding Market's escrow holds the WHOLE failure supply from founding
+    /// onward -- that is the invariant `the_refunding_actions_keep_the_escrow_seated`
+    /// proves both refunding actions preserve -- so an escrow that holds less
+    /// than the aggregate owes at the failure coordinate means this Market was
+    /// not founded refunding. Zero outstanding supply reads the same way and is
+    /// refused by the same code: the issuance shape is fixed at FOUNDING
+    /// (decision 0025 section 6), and a routed split may maintain a refunding
+    /// Market but may never convert a categorical one into a hybrid whose
+    /// failure claims pay an escrow that cannot redeem them.
+    ///
+    /// Distinct from [`ClaimsSbfError::FailureEscrow`], which is about WHICH
+    /// account was named. This one means the right account was named and the
+    /// MARKET is the wrong shape, and the two send their reader to opposite
+    /// places: one to the packet's owner field, the other to the founding.
+    FailureEscrowUnseated = 0x5011,
 }
 
 impl ClaimsSbfError {
@@ -324,7 +362,7 @@ impl ClaimsSbfError {
     /// to the enum does not compile until its author writes an arm here, and
     /// the only arm that satisfies the assertions is its own index in this
     /// array.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 18] = [
         Self::Instruction,
         Self::Accounts,
         Self::Identity,
@@ -341,6 +379,8 @@ impl ClaimsSbfError {
         Self::PrincipalCapacity,
         Self::ExposureNotIdentity,
         Self::ReceiptAlias,
+        Self::FailureEscrow,
+        Self::FailureEscrowUnseated,
     ];
 
     /// This refusal's position in [`ClaimsSbfError::ALL`].
@@ -366,6 +406,8 @@ impl ClaimsSbfError {
             Self::PrincipalCapacity => 13,
             Self::ExposureNotIdentity => 14,
             Self::ReceiptAlias => 15,
+            Self::FailureEscrow => 16,
+            Self::FailureEscrowUnseated => 17,
         }
     }
 }
@@ -696,9 +738,12 @@ fn process_generic_plan(
         ClaimsAction::RedeemNativeTerminal => BasketAction::RedeemNativeTerminal,
         ClaimsAction::MintCompleteSet => BasketAction::MintCompleteSet,
         ClaimsAction::MergeCompleteSet => BasketAction::MergeCompleteSet,
+        ClaimsAction::MintRefundingCompleteSet => BasketAction::MintRefundingCompleteSet,
+        ClaimsAction::MergeRefundingCompleteSet => BasketAction::MergeRefundingCompleteSet,
         ClaimsAction::InitializeCompleteSet => return Err(ClaimsSbfError::Instruction.into()),
     };
     let core = authenticate_economic_accounts(program_id, &accounts, plan, false)?;
+    authenticate_failure_escrow(program_id, &accounts, plan, basket_action)?;
     authenticate_complete_set_growth(&accounts, plan, basket_action, core)?;
     let applied = execute_plan_economics(&accounts, plan, basket_action)?;
     let receipt = ClaimsReceiptV1::new(
@@ -1442,6 +1487,65 @@ fn authenticate_economic_accounts(
     Ok(core)
 }
 
+/// Authenticate the Position a refunding complete set seats the failure
+/// coordinate in.
+///
+/// The escrow is the existing `ClaimsCapability` owner PDA at
+/// `(market, failure selector)`, so a refunding market's failure claims are
+/// held by an identity the MARKET derives and nobody controls -- the same
+/// owner kind and the same admission the rational-representation custody owner
+/// already uses, rather than a new kind for one use.
+///
+/// The failure selector comes from the economic kernel's
+/// `refunding_failure_index`, which is the sole author of which coordinate a
+/// refunding complete set seats where. This function does not re-spell "the
+/// last one".
+fn authenticate_failure_escrow(
+    program_id: &Pubkey,
+    accounts: &GenericAccounts<'_, '_>,
+    plan: ClaimsPlanV1<'_>,
+    action: BasketAction,
+) -> ProgramResult {
+    if !action.is_refunding() {
+        return Ok(());
+    }
+    let failure = refunding_failure_index(plan.outcome_count())
+        .map_err(|_| ClaimsSbfError::Economic)?;
+    let failure = u32::try_from(failure).map_err(|_| ClaimsSbfError::Economic)?;
+    let seeds = crate::protocol_position_v2::ProtocolPositionClaimsCapabilitySeedsV2::new(
+        plan.market(),
+        failure,
+    )
+    .map_err(|_| ClaimsSbfError::FailureEscrow)?;
+    let expected = Pubkey::find_program_address(&seeds.as_slices(), program_id)
+        .0
+        .to_bytes();
+    let (named, escrow) = if action.escrow_is_source() {
+        (plan.source_owner(), accounts.source)
+    } else {
+        (plan.destination_owner(), accounts.destination)
+    };
+    if named != expected {
+        return Err(ClaimsSbfError::FailureEscrow.into());
+    }
+    let market_data = accounts
+        .market
+        .try_borrow_data()
+        .map_err(|_| ClaimsSbfError::Accounts)?;
+    let failure_supply =
+        market_supply(&market_data, failure).map_err(|_| ClaimsSbfError::Economic)?;
+    drop(market_data);
+    let escrow_data = escrow
+        .try_borrow_data()
+        .map_err(|_| ClaimsSbfError::Accounts)?;
+    let seated = position_native(&escrow_data, plan.outcome_count(), failure)
+        .map_err(|_| ClaimsSbfError::Identity)?;
+    if failure_supply == 0 || seated != failure_supply {
+        return Err(ClaimsSbfError::FailureEscrowUnseated.into());
+    }
+    Ok(())
+}
+
 /// Enforce Core's sole runtime principal cap at the legacy complete-set owner.
 ///
 /// This route stores outstanding principal as the Claims aggregate Hoard in
@@ -1453,7 +1557,10 @@ fn authenticate_complete_set_growth(
     action: BasketAction,
     core: CoreState,
 ) -> ProgramResult {
-    if action != BasketAction::MintCompleteSet {
+    if !matches!(
+        action,
+        BasketAction::MintCompleteSet | BasketAction::MintRefundingCompleteSet
+    ) {
         return Ok(());
     }
     let market = accounts

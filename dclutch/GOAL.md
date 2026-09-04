@@ -4829,3 +4829,10 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   carried: the general-hot campaign builds from the SHARED tree, so its CU tables are one ELF set's reading, not a
   commit's — the runner must build `--at`. Frames identical.
 - Cuts: `9d0e024c2`, `d6d964037`.
+- CHAOS-SCHEMA closed (`9d3ea1080`): the Rust `const` declares, both Python sites derive — not by the producer rule (a chaos
+  session is a matrix both sides state in full) but because `rust_schema_constant` is the only crossing that exists; the
+  bare literal in run.py had no `SCHEMA_OWNERS` row, so a bump would have left the runner claiming one schema for a session
+  carrying another with nothing red; the writer is gated too; chaos.py enters the preflight's source set; tests read the Rust
+  by splitting lines, so they can disagree with the reader; the one control that matters — owner at v2 with an AGREEING
+  literal beside it — goes red at the authorship case. Release tier PASS.
+- Cuts: `f715296f6`.

@@ -86,6 +86,14 @@ RUNNER = "tools/release/private-validator-lifecycle/run.py"
 # snapshot this preflight authenticates. `run.py` binds its bytes explicitly
 # too, beside its own.
 SHARED_RUST_SCHEMA = "tools/lib/rust_schema.py"
+# The seventeen-case chaos matrix's executable contract. The runner IMPORTS it
+# too (`load_chaos_contract`), so the same argument that put the shared schema
+# reader above in this snapshot puts it here: a receipt is evidence about a tree,
+# and a file the runner executes is part of the tree the receipt is about. It
+# arrived late because it WRITES the chaos session rather than reading one, and a
+# writer looks like an output until you notice it is also stating the artifact's
+# name.
+CHAOS_CONTRACT = "tools/release/private-validator-lifecycle/chaos.py"
 MAIN = "tools/local-validator/bootstrap/successor/src/main.rs"
 SUCCESSOR = "tools/local-validator/bootstrap/successor/src"
 # The retirement supply-zero gate's semantic owner. Named here rather than
@@ -449,6 +457,25 @@ SCHEMA_OWNERS: tuple[tuple[str, str], ...] = (
     ("TERMINAL_CAMPAIGN_SCHEMA", f"{SUCCESSOR}/aggregate_retirement_journal.rs"),
     ("TERMINAL_AGGREGATE_JOURNAL_SCHEMA", f"{SUCCESSOR}/aggregate_retirement_journal.rs"),
     ("TERMINAL_PROGRESS_SCHEMA", f"{SUCCESSOR}/aggregate_retirement_exterior.rs"),
+    # The odd one out, and worth saying why it belongs on a list of schemas the
+    # runner reads from their PRODUCER: nothing in Rust produces a chaos session.
+    # `chaos.py` writes it and `private_lifecycle.rs` authenticates it, so the
+    # string is a contract the two sides pin rather than one side's output --
+    # and of the two declarations, only the Rust one is readable from the other
+    # language. The runner had no row here at all until now: it spelled the
+    # string as a literal in a descriptor row, which this walk cannot see and
+    # which the check below now forbids.
+    ("CHAOS_SESSION_SCHEMA", f"{SUCCESSOR}/private_lifecycle.rs"),
+)
+
+
+# The same wiring, one file out. `chaos.py` is where the session's schema is
+# WRITTEN, so a literal here is worse than a literal in the runner: it names the
+# artifact rather than merely describing it. Both of its strings are read from
+# the same Rust owner.
+CHAOS_CONTRACT_SCHEMA_OWNERS: tuple[tuple[str, str], ...] = (
+    ("SESSION_SCHEMA_V2", f"{SUCCESSOR}/private_lifecycle.rs"),
+    ("CASE_SCHEMA_V1", f"{SUCCESSOR}/private_lifecycle.rs"),
 )
 
 
@@ -505,6 +532,7 @@ def modeled_source_paths() -> set[str]:
         PREFLIGHT,
         RUNNER,
         SHARED_RUST_SCHEMA,
+        CHAOS_CONTRACT,
         MAIN,
         ECONOMIC_LEDGER,
         PRIVATE_ECONOMIC_FIXTURE,
@@ -877,18 +905,18 @@ def validate_exposures(repo: Path, constants: dict[str, Any], through: str) -> l
     ]
 
 
-def runner_schema_derivations(source: str) -> dict[str, tuple[str, str]]:
-    """Which Rust constant each runner schema name says it is read from.
+def python_schema_derivations(source: str, label: str) -> dict[str, tuple[str, str]]:
+    """Which Rust constant each derived schema name in one Python file names.
 
     Every accepted row is a top-level ``NAME = rust_schema_constant(dir, file,
     CONST)``. An assignment in any other shape -- above all a plain string
     literal -- is not a derivation and is simply absent from this map, which is
-    what `validate_schemas` refuses on.
+    what `validate_derived_schemas` refuses on.
     """
     try:
         tree = ast.parse(source)
     except SyntaxError as error:
-        raise Refusal(f"private lifecycle runner is not valid Python: {error}") from error
+        raise Refusal(f"{label} is not valid Python: {error}") from error
     values = python_constants(source)
     found: dict[str, tuple[str, str]] = {}
     for row in tree.body:
@@ -903,7 +931,7 @@ def runner_schema_derivations(source: str) -> dict[str, tuple[str, str]]:
             continue
         if row.value.keywords or len(row.value.args) != 3:
             raise Refusal(
-                f"runner {row.targets[0].id} calls rust_schema_constant with an "
+                f"{label} {row.targets[0].id} calls rust_schema_constant with an "
                 "unreadable argument list"
             )
         try:
@@ -912,51 +940,81 @@ def runner_schema_derivations(source: str) -> dict[str, tuple[str, str]]:
             )
         except (KeyError, TypeError, ValueError) as error:
             raise Refusal(
-                f"runner {row.targets[0].id} names a schema owner this reader "
+                f"{label} {row.targets[0].id} names a schema owner this reader "
                 f"cannot resolve: {error}"
             ) from error
         if not all(isinstance(part, str) and part for part in (directory, file_name, constant)):
-            raise Refusal(f"runner {row.targets[0].id} names an empty schema owner")
+            raise Refusal(f"{label} {row.targets[0].id} names an empty schema owner")
         found[row.targets[0].id] = (f"{directory}/{file_name}", constant)
     return found
 
 
-def validate_schemas(repo: Path, runner_source: str) -> list[dict[str, str]]:
-    """The runner reads each shared schema from the Rust; this checks the wiring.
+def validate_derived_schemas(
+    repo: Path,
+    source: str,
+    owners: tuple[tuple[str, str], ...],
+    label: str,
+    constant_key: str,
+) -> list[dict[str, str]]:
+    """One Python file reads each shared schema from the Rust; check the wiring.
 
     It used to compare a Python copy of the string against its owner file, and
     that is the check whose absence of a copy now makes it unnecessary: the value
-    has one author. What is left to go wrong is the WIRING -- the runner reading
+    has one author. What is left to go wrong is the WIRING -- a reader pointed at
     a file that is not the semantic owner, the owner declaring the constant twice
     or not at all, or a derivation quietly reverting to a literal -- and each of
     those is refused here by name.
     """
-    derivations = runner_schema_derivations(runner_source)
+    derivations = python_schema_derivations(source, label)
     report = []
-    for name, owner in SCHEMA_OWNERS:
+    for name, owner in owners:
         declared = derivations.get(name)
         if declared is None:
             raise Refusal(
-                f"runner {name} is not read from its semantic owner {owner}; a "
+                f"{label} {name} is not read from its semantic owner {owner}; a "
                 "restated schema string is a second author for a value that has one"
             )
         declared_owner, constant = declared
         if declared_owner != owner:
             raise Refusal(
-                f"runner {name} reads {declared_owner}, not semantic owner {owner}"
+                f"{label} {name} reads {declared_owner}, not semantic owner {owner}"
             )
         value = rust_str_const(read_source(repo, owner), constant, owner)
         if not value.startswith("dclutch-"):
             raise Refusal(f"{owner} {constant} is not a dclutch schema string")
         report.append(
             {
-                "runner_constant": name,
+                constant_key: name,
                 "schema": value,
                 "owner": owner,
                 "owner_constant": constant,
             }
         )
     return report
+
+
+def validate_schemas(repo: Path, runner_source: str) -> list[dict[str, str]]:
+    return validate_derived_schemas(
+        repo, runner_source, SCHEMA_OWNERS, "runner", "runner_constant"
+    )
+
+
+def validate_chaos_contract_schemas(repo: Path) -> list[dict[str, str]]:
+    """The chaos contract is the WRITER, and it derives too.
+
+    Everything on `SCHEMA_OWNERS` is a name the runner uses to read a session
+    back. These two are the names a session is written UNDER, by `chaos.py`, and
+    they were Python literals until the same sweep that landed this check --
+    which is why the runner and the contract could have disagreed about what the
+    file on disk is called with nothing anywhere going red.
+    """
+    return validate_derived_schemas(
+        repo,
+        read_source(repo, CHAOS_CONTRACT),
+        CHAOS_CONTRACT_SCHEMA_OWNERS,
+        "chaos contract",
+        "contract_constant",
+    )
 
 
 def validate_stage_vocabulary(repo: Path) -> dict[str, list[str]]:
@@ -1447,6 +1505,7 @@ def run_preflight(
         constant_report = validate_constants(constants)
         exposures = validate_exposures(repo, constants, through)
         schemas = validate_schemas(repo, runner_source)
+        chaos_schemas = validate_chaos_contract_schemas(repo)
         vocabulary = validate_stage_vocabulary(repo)
         founding = validate_founding_geometry(repo, constants)
         geometry = validate_geometry_and_state(repo)
@@ -1483,6 +1542,7 @@ def run_preflight(
             "command_exposures": exposures,
             "recovery_exposure": recovery,
             "schema_handoffs": schemas,
+            "chaos_contract_schemas": chaos_schemas,
             "stage_vocabulary": vocabulary,
             "constants": constant_report,
             "economic_owner": economics,

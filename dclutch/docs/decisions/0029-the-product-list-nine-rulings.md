@@ -6,7 +6,9 @@ reversible item by item at the costs §7 states**. Docket item D7. Ember's
 amendment is at `GOAL.md:4655-4656`. These are the queued product questions the
 tree had been carrying, several of them for weeks; each was tabled with options
 and a cost, and none was an engineering blocker — the ruling decides which lane
-exists.
+exists. **A tenth item — the conditional layer's flagship child market — arrived
+on 2026-09-04 from decision 0031 and is OPEN, waiting on ember; it is the
+addendum at the end of this record.**
 
 ## 1. The question
 
@@ -197,6 +199,63 @@ arithmetic fact rather than a preference — 1,269 against 1,232.
 - **9, add Switchboard:** about 13,000 lines by the tree's own precedent, gated
   on economics *"currently recorded as reported secondhand and unverified"*.
 
+## Addendum, 2026-09-04 13:20 EDT: a tenth item, and it waits on ember
+
+The nine items above are ruled. A tenth product question arrived the same day
+from the mechanism agenda (decision 0031) and is **not** ruled here, because the
+part of it nobody in this tree can supply is the part ember has to choose.
+
+**The item: the conditional layer's flagship child market.** The CONDITIONAL
+design (`docs/design/MECHANISM_CONDITIONAL_MARKETS_2026_09_04.md` §8, commit
+`4b15cf69a`) proposes
+
+> **"If feature `X` activates by slot `S`, does mainnet's slot time move?"**
+
+as the first conditional market — a decision market on mainnet's own parameters,
+built as the mainnet-state relay's product, with **both parents read through the
+relay's four-account set and no venue decoding at all**.
+
+- **Parent `A`, the decision.** The feature-gate account of `X` on mainnet,
+  relay-attested; cuts `[S + 1]`, giving *activated by `S`* and *not activated by
+  `S`* plus failure. **Both branches are observed**, which a decision market needs
+  and which the graduation product's one-cell shape does not give.
+- **Parent `B`, the metric.** Mean slot duration over a window after `S`, from the
+  mainnet `Clock` sysvar — already account 4 of the relay's set — attested at two
+  slots; cuts at the founder's thresholds (e.g. `[390, 410]` ms).
+- **The child.** `A × B` with `A` major: `2 × 3 = 6` cells, width 7, whose two
+  rows are `P(slot time | activated)` and `P(slot time | not activated)` read off
+  **one price vector**, with the futarchy comparison being their difference. Or
+  the conditional `B | A = activated`, width 5, which settles the moment the
+  feature is seen *not* to have activated.
+
+**What ember decides, and why the tree cannot:**
+
+1. **Which feature, and which slot `S`** — a real calendar, and no lane can pick it.
+2. **The metric.** Slot time needs no venue and demonstrates the mechanism
+   totally; SOL/USD through a T-1 threshold (*"if `X` activates, does SOL/USD land
+   above `P`?"*) is the classic futarchy shape with the deeper trader interest.
+3. **The disclosure line** for a decision made by validators who do not read this
+   market (the note's §5(c)).
+
+**The honest sentence about it**, which is the note's own and belongs in a product
+record rather than a design one: *its economic interest is modest and its mechanism
+interest is total* — two relayed parents, one derived child, every settlement arm
+exercised on devnet, and the first conditional read that is a chain fact.
+
+**Two further rulings the same note owes**, neither of them ember-only and neither
+ruled here: `AttestedUnobservable` — whether a child exhausts early on a parent's
+failure certificate or walks its deadline — and **whether the founder bond applies
+to a founder who chose parents rather than an oracle**. The second is a live
+interaction with decision 0033, which makes the bond mandatory at a size rule
+derived from *the terminal's* cost: a child market's terminal reads two
+certificates and observes nothing, so the rule's terms are computable for it, but
+whether the bond's *purpose* — pricing an oracle choice — survives a founder who
+made no oracle choice is exactly the question, and 0033 does not answer it.
+
+**Status of this item: OPEN.** It is a product question with an owner (ember) and
+a design already written, which is the state §3 of this record calls
+*underdesigned* being repaired rather than the state it warns about.
+
 ## Evidence pointers
 
 `GOAL.md:1391-1397`, `:1500-1502`, `:1751-1767`, `:1812-1830`, `:2171-2174`,
@@ -207,4 +266,8 @@ arithmetic fact rather than a preference — 1,269 against 1,232.
 `docs/decisions/0011-structured-v2-physical-route.md` §3b (amendment owed);
 `docs/decisions/0022-pda-signed-caller-facts.md`;
 `docs/INTENT.md` §4; `tools/gauntlet/journey/src/ledger.rs:1004-1012`;
+`docs/design/MECHANISM_CONDITIONAL_MARKETS_2026_09_04.md` §8, §9;
+`docs/decisions/0031-the-mechanism-agenda.md`;
+`docs/decisions/0033-the-founder-bond-is-mandatory.md`;
+`GOAL.md:4786-4794`; commit `4b15cf69a`;
 `docs/evidence/C16_ENTRY_LIST_2026_09_01.md:418`.

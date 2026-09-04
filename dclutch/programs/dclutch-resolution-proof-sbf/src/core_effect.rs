@@ -2497,6 +2497,24 @@ fn process_close<'info>(
     )
 }
 
+/// One manifest entry, configured by exactly one identity and released by this
+/// Resolution controller.
+fn authenticate_controller_entry(
+    manifest: CapabilityManifestV1<'_>,
+    index: u16,
+    expected_config: [u8; 32],
+) -> ProgramResult {
+    let entry = manifest
+        .entry(index)
+        .map_err(|_| ResolutionError::Funding)?;
+    if entry.config_id().to_bytes() != expected_config
+        || entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V7
+    {
+        return Err(ResolutionError::Funding.into());
+    }
+    Ok(())
+}
+
 fn authenticate_funding_entries(
     material: SourceMaterialV3,
     recovery_policy: Option<RecoveryPolicyV2>,
@@ -2505,32 +2523,59 @@ fn authenticate_funding_entries(
 ) -> ProgramResult {
     match (material.recovery_policy(), recovery_policy) {
         (Some(recovery_policy_id), Some(recovery_policy)) => {
-            if recovery_policy.attempt_count() != 1 {
-                return Err(ResolutionError::SourceMaterial.into());
-            }
-            let recovery_allocation = recovery_policy
-                .attempt(0)
-                .map_err(|_| ResolutionError::SourceMaterial)?
-                .funding_allocation_id()
-                .to_bytes();
-            for (index, expected_config) in [
-                (request.recovery_entry_index, recovery_allocation),
-                (
-                    request.exhaustion_entry_index,
-                    recovery_policy_id.to_bytes(),
-                ),
-                (request.failure_entry_index, request.source_material),
-            ] {
-                let entry = manifest
-                    .entry(index)
-                    .map_err(|_| ResolutionError::Funding)?;
-                if entry.config_id().to_bytes() != expected_config
-                    || entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V7
-                {
+            // ONE COMPARTMENT PER RUNG, AND ONE INDEX TO NAME THEM ALL.
+            //
+            // This used to refuse `attempt_count() != 1` outright, so a market
+            // could found exactly one alternative source while the record, the
+            // emitted layout and the Lean model all carried four. The bound was
+            // never the ladder's; it was this function having one index for the
+            // rungs and no rule for where the rest would sit.
+            //
+            // The rule is adjacency: attempt `k` is paid by the manifest entry
+            // at `recovery_entry_index + k`, configured by that attempt's own
+            // allocation identity. One index still names the whole run, so the
+            // wire does not change and a one-attempt founding is byte-identical
+            // to what it always was -- `recovery_entry_index + 0` IS
+            // `recovery_entry_index`. The compartments are distinct because
+            // `RecoveryPolicyV2::validate_shape` refuses two attempts sharing
+            // an allocation identity, and `funded::plan_funding_release` finds
+            // a compartment by that identity, so each rung is paid exactly once
+            // by the entry the founding created for it.
+            let count = recovery_policy.attempt_count();
+            let mut rung = 0_u8;
+            while rung < count {
+                let attempt = recovery_policy
+                    .attempt(rung)
+                    .map_err(|_| ResolutionError::SourceMaterial)?;
+                let index = request
+                    .recovery_entry_index
+                    .checked_add(u16::from(rung))
+                    .ok_or(ResolutionError::Funding)?;
+                authenticate_controller_entry(
+                    manifest,
+                    index,
+                    attempt.funding_allocation_id().to_bytes(),
+                )?;
+                // The exhaustion and failure compartments belong to no rung, so
+                // neither may be a rung's. The request already pins the three
+                // indices pairwise-distinct; this is the same statement widened
+                // to the whole run, and without it a wider ladder could point
+                // its last rung at the escrow.
+                if index == request.exhaustion_entry_index || index == request.failure_entry_index {
                     return Err(ResolutionError::Funding.into());
                 }
+                rung = rung.checked_add(1).ok_or(ResolutionError::Arithmetic)?;
             }
-            Ok(())
+            authenticate_controller_entry(
+                manifest,
+                request.exhaustion_entry_index,
+                recovery_policy_id.to_bytes(),
+            )?;
+            authenticate_controller_entry(
+                manifest,
+                request.failure_entry_index,
+                request.source_material,
+            )
         }
         // The §12.7 no-recovery material. There is no allocation identity and
         // no policy digest to pin the recovery and exhaustion entries to, so
@@ -3626,6 +3671,175 @@ mod tests {
             authenticate_funding_entries(material, None, manifest, exact),
             Err(ResolutionError::SourceMaterial.into())
         );
+    }
+
+    /// Founding funds EVERY rung, and the run is one index wide.
+    ///
+    /// The rule this test pins is adjacency: attempt `k` is paid by the
+    /// manifest entry at `recovery_entry_index + k`. Before it, both authors of
+    /// the founding join refused `attempt_count() != 1`, so a market could buy
+    /// exactly one alternative source while the record, the emitted layout and
+    /// the Lean model all carried four -- a bound that belonged to the join
+    /// rather than to the ladder.
+    #[test]
+    fn founding_funds_every_rung_of_a_two_attempt_ladder() {
+        let material_id = source_id(2);
+        let recovery_policy_id = source_id(15);
+        let first_allocation = source_id(14);
+        let second_allocation = source_id(13);
+        let material = SourceMaterialV3::explicitly_unbounded(
+            source_id(20),
+            source_id(21),
+            source_id(22),
+            source_id(23),
+            Some(recovery_policy_id),
+            source_id(24),
+        );
+        let ladder = |second: dclutch_source_contract::ContentId| {
+            RecoveryPolicyV2::new(
+                source_id(25),
+                [
+                    Some(
+                        RecoveryAttemptV2::new(source_id(26), source_id(27), 100, first_allocation)
+                            .expect("first attempt"),
+                    ),
+                    Some(
+                        RecoveryAttemptV2::new(source_id(28), source_id(29), 200, second)
+                            .expect("second attempt"),
+                    ),
+                    None,
+                    None,
+                ],
+                2,
+            )
+        };
+        let policy = ladder(second_allocation).expect("two-attempt policy");
+
+        // TWO ATTEMPTS MAY NOT SHARE ONE COMPARTMENT, and the record refuses to
+        // exist rather than the join refusing to admit it. A compartment is
+        // found by its configuration, so one identity is one compartment: a
+        // ladder whose second rung named the first rung's allocation would sell
+        // a leg it had already spent.
+        assert_eq!(
+            ladder(first_allocation).unwrap_err(),
+            dclutch_source_contract::Error::NonCanonicalRecoveryOrder,
+        );
+
+        let quote = FundingQuoteV1::new(FundingAmountsV1::default(), None).expect("zero quote");
+        let configs = [
+            first_allocation.to_bytes(),
+            second_allocation.to_bytes(),
+            recovery_policy_id.to_bytes(),
+            material_id.to_bytes(),
+        ];
+        let entry = |index: usize, config: [u8; 32]| {
+            CapabilityEntryV1::new(
+                capability_id(u8::try_from(60 + index).expect("bounded")),
+                CapabilityContentId::new(RESOLUTION_CONTROLLER_RELEASE_ID_V7).expect("release"),
+                CapabilityContentId::new(config).expect("config"),
+                capability_id(50),
+                capability_id(51),
+                capability_id(52),
+                ActivationPolicy::RequiredAtFounding,
+                0,
+                0,
+                [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+                quote,
+            )
+            .expect("entry")
+        };
+        let mut entries = [entry(0, configs[0]); 4];
+        for (index, config) in configs.into_iter().enumerate() {
+            entries[index] = entry(index, config);
+        }
+        let mut bytes = [0_u8; MANIFEST_HEADER_BYTES + 4 * CAPABILITY_ENTRY_BYTES];
+        let manifest = CapabilityManifestV1::encode_into(&entries, &mut bytes).expect("manifest");
+        let mut exact = request(ResolutionCoreActionV1::CreateFund);
+        exact.recovery_entry_index = 0;
+        exact.exhaustion_entry_index = 2;
+        exact.failure_entry_index = 3;
+        authenticate_funding_entries(material, Some(policy), manifest, exact)
+            .expect("a two-attempt ladder founds when every rung has its compartment");
+
+        // HOSTILE -- an attempt with no funding. The manifest carries the
+        // second rung's index and the entry there is configured by something
+        // else, which is exactly the market whose later rungs nothing paid for.
+        let mut unfunded_entries = entries;
+        unfunded_entries[1] = entry(1, source_id(98).to_bytes());
+        let mut unfunded_bytes = [0_u8; MANIFEST_HEADER_BYTES + 4 * CAPABILITY_ENTRY_BYTES];
+        let unfunded = CapabilityManifestV1::encode_into(&unfunded_entries, &mut unfunded_bytes)
+            .expect("manifest");
+        assert_eq!(
+            authenticate_funding_entries(material, Some(policy), unfunded, exact),
+            Err(ResolutionError::Funding.into()),
+            "a rung whose compartment is configured by something else is unfunded"
+        );
+
+        // HOSTILE -- the run walks off the end of the manifest. The second rung
+        // has no entry at all, which is the same accusation reached a different
+        // way, and it must not read a neighbouring compartment instead.
+        let mut short_bytes = [0_u8; MANIFEST_HEADER_BYTES + 3 * CAPABILITY_ENTRY_BYTES];
+        let short = CapabilityManifestV1::encode_into(
+            entries.get(..3).expect("three entries"),
+            &mut short_bytes,
+        )
+        .expect("short manifest");
+        let mut short_request = exact;
+        short_request.exhaustion_entry_index = 2;
+        short_request.failure_entry_index = 1;
+        assert_eq!(
+            authenticate_funding_entries(material, Some(policy), short, short_request),
+            Err(ResolutionError::Funding.into()),
+        );
+
+        // HOSTILE -- a rung pointed at the escrow. The failure compartment is
+        // the market's pre-disclosed terminal and belongs to no leg; a run that
+        // reached it would spend the outcome to pay a crank.
+        let mut colliding = exact;
+        colliding.failure_entry_index = 1;
+        colliding.exhaustion_entry_index = 2;
+        assert_eq!(
+            authenticate_funding_entries(material, Some(policy), manifest, colliding),
+            Err(ResolutionError::Funding.into()),
+            "a rung may not be the escrow"
+        );
+
+        // CONTROL -- the one-attempt founding is the join it always was.
+        // `recovery_entry_index + 0` is `recovery_entry_index`, so nothing
+        // about a market that bought one alternative moved.
+        let single = RecoveryPolicyV2::new(
+            source_id(25),
+            [
+                Some(
+                    RecoveryAttemptV2::new(source_id(26), source_id(27), 100, first_allocation)
+                        .expect("attempt"),
+                ),
+                None,
+                None,
+                None,
+            ],
+            1,
+        )
+        .expect("one-attempt policy");
+        let single_configs = [
+            first_allocation.to_bytes(),
+            recovery_policy_id.to_bytes(),
+            material_id.to_bytes(),
+        ];
+        let mut single_entries = [entry(0, single_configs[0]); 3];
+        for (index, config) in single_configs.into_iter().enumerate() {
+            single_entries[index] = entry(index, config);
+        }
+        let mut single_bytes = [0_u8; MANIFEST_HEADER_BYTES + 3 * CAPABILITY_ENTRY_BYTES];
+        let single_manifest = CapabilityManifestV1::encode_into(&single_entries, &mut single_bytes)
+            .expect("manifest");
+        authenticate_funding_entries(
+            material,
+            Some(single),
+            single_manifest,
+            request(ResolutionCoreActionV1::CreateFund),
+        )
+        .expect("the one-alternative founding is unchanged");
     }
 
     #[test]

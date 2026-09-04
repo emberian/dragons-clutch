@@ -259,6 +259,34 @@ impl RecoveryPolicyV2 {
                     return Err(Error::NonCanonicalRecoveryOrder);
                 }
                 prior_deadline = attempt.deadline_unix_seconds();
+                // ONE COMPARTMENT PER RUNG, and this is where that becomes a
+                // fact about the record rather than a hope about the founding.
+                //
+                // A crank is paid by the compartment the attempt it enters
+                // names, and `funded::plan_funding_release` finds that
+                // compartment by comparing CONFIGURATIONS. Two attempts naming
+                // one allocation identity therefore name one compartment: the
+                // first rung spends it and the second rung has nothing to be
+                // paid from, so a market could sell a leg it had already
+                // spent. The ladder is finite and each rung is prepaid, and
+                // both of those are only true if the prepayments are distinct.
+                //
+                // Checked here, in the policy's own canonicity, so every
+                // decoder gets it -- founding, the crank, and the capture --
+                // rather than only whichever route remembered to ask.
+                let mut earlier = 0_usize;
+                while earlier < index {
+                    let previous = self
+                        .attempts
+                        .get(earlier)
+                        .copied()
+                        .flatten()
+                        .ok_or(Error::NonCanonicalReservedBytes)?;
+                    if previous.funding_allocation_id() == attempt.funding_allocation_id() {
+                        return Err(Error::NonCanonicalRecoveryOrder);
+                    }
+                    earlier = earlier.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+                }
             } else if attempt.is_some() {
                 return Err(Error::NonCanonicalReservedBytes);
             }

@@ -13819,10 +13819,35 @@ fn pyth_market_input_base(
     // already founds and funds this shape in execution (2026-08-27: CreateFund
     // 1,200,587 CU, VerifyFundReady 1,185,248 CU).
     //
-    // Founding the two-source shape here is now a matter of naming the policy
-    // in the material and pinning the three compartments to it -- one advance,
-    // one exhaustion, one failure -- which is exactly what
-    // `authenticate_funding_entries` requires. It is owed, not blocked.
+    // WHAT FOUNDING THE TWO-SOURCE SHAPE HERE ACTUALLY NEEDS, written down so
+    // the next lane does not have to rediscover it. It is owed, not blocked,
+    // and it is no longer "pin three compartments": founding funds EVERY rung,
+    // so a policy of `n` attempts wants `n + 2` Resolution-controller entries --
+    // one per attempt at `recovery_entry_index + k` configured by that
+    // attempt's own allocation, then the exhaustion entry configured by the
+    // policy digest and the failure entry by the material.
+    //
+    // Four things this producer does not yet emit:
+    //
+    // 1. an ALTERNATIVE `SourceSpecV1` and the `PythAdapterConfigV1` it names,
+    //    published as their own finalized records. `MarketRunInput` carries one
+    //    `source_spec_hex` and one `pyth_adapter_config_hex`, so the run spec
+    //    grows a second pair before the compiler can publish them;
+    // 2. a `RecoveryPolicyV2` whose single attempt names that spec, that
+    //    provider release, a deadline past the primary window's own, and a
+    //    funding allocation identity -- into `recovery_policy_hex`, which
+    //    already exists and is deliberately empty below;
+    // 3. the manifest above with the allocation and the policy digest as the
+    //    first two compartments instead of the structural companions, which is
+    //    what turns `authenticate_no_recovery_entries` into the `Some` arm both
+    //    Core and the Resolution controller take;
+    // 4. and a crank driver. `RelayActionV1::AdvanceRecovery` is a 32-byte
+    //    instruction over an 18-account frame naming only the market generation
+    //    and the terminal sequence, and the whole of the rest -- which rung,
+    //    which source, when it expires -- is read from the market's own state,
+    //    so the driver is a frame builder and a bounded wait rather than a
+    //    decision. `crates/dclutch-svm-harness/tests/resolution_core_v3_lifecycle.rs`
+    //    builds exactly that frame by hand and is the reference.
     let material = SourceMaterialV3::explicitly_unbounded(
         SourceContentId::new(product_digest)
             .map_err(|error| Error::new(format!("demo Product digest: {error:?}")))?,

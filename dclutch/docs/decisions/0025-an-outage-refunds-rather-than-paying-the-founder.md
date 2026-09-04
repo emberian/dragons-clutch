@@ -6,7 +6,11 @@ explained and robust, and reversible at the cost §7 states**. Docket item D2.
 Ember's amendment is at `GOAL.md:4653-4654`. **The payout arm landed the same
 morning at `f9d40b615` (lane ESCROW), hostile-first, and §5 records what it
 turns on; the founding change that seats the failure coordinate in an escrow
-Position is owed and rides cohort-16.**
+Position is owed and rides cohort-16.** **Amended again at 12:30 EDT by the
+orchestrator's merge ruling — for a refunding market `MergeCompleteSet` is
+redefined over the ORDINARY coordinates — recorded in the amendment section at
+the end of this record; ESCROW-2 stated it in Lean at `e37116b03` and ember may
+reverse it to the immobile-coordinate shape.**
 
 ## 1. The question
 
@@ -264,6 +268,83 @@ under every market's release pin, which no founder caused. The point stands
 regardless of cause: the shape is what a stranger would rightly call rigged,
 whoever triggered it.
 
+## Amendment, 2026-09-04 12:30 EDT: merge is redefined over the ordinary coordinates
+
+**PROVISIONAL, ruled by the orchestrator under ember's standing goal**, recorded
+at `GOAL.md:4782-4785`, and reversible by ember to the second shape at the cost
+this section states.
+
+**The question this answers is the one §6 left open.** The ESCROW lane stopped
+before seating the escrow because it found that the escrow **forecloses
+`MergeCompleteSet`**: the kernel burns one claim at *every* coordinate from *one*
+Position, so a holder who does not hold the failure coordinate can never merge a
+complete set back into collateral. §6 named two repairs and said the choice was
+*"ember's or the orchestrator's, not the lane's"* -- redefine merge for a
+refunding market over the **ordinary coordinates**, with the escrow's failure
+claims burned alongside by the program; or leave the failure coordinate in the
+founder's Position and make it **immobile** at the signed-delta waist.
+
+**The ruling: the first. Merge is redefined over the ordinary coordinates for a
+refunding market.**
+
+Why, in one line: §2 item 2 of this record already ruled that the failure
+coordinate is founded into an escrow, and the immobile-coordinate shape is not an
+implementation of that ruling -- it is a different ruling wearing the same
+protection. Under it the founder still *holds* the whole failure supply and is
+stopped from selling it by a conjunct that every split, transfer, merge and redeem
+must keep passing; under the escrow the founder never holds it, and the protection
+is a fact about who owns what rather than a refusal that has to stay correct
+forever. The smaller change is not the safer one here.
+
+**What the ESCROW-2 lane landed under it** (`e37116b03`, `EconomicKernel.lean`,
+twenty-one new declarations, zero `sorry`, and `#print axioms` reporting only
+`propext` and `Quot.sound`):
+
+- **The foreclosure is proved, not asserted.**
+  `a_holder_without_the_failure_coordinate_cannot_merge` shows `commandAccepts`
+  returns false and `execute?` refuses `notAdmissible` for a holder whose failure
+  coordinate is zero -- which is every holder on a market whose failure column is
+  seated in an escrow -- instantiated against a **concrete** founded,
+  cohort-13-shaped state, so it is a reachable refusal and not a hypothesis nobody
+  satisfies.
+- **The law is four combinators and one observation.** `addBelow`/`addFrom` and
+  `subBelow`/`subFrom` split a coordinate vector at the ordinary boundary, and
+  `addFrom_addBelow_eq_addEvery` says the two Positions of a refunding market hold,
+  between them, **exactly one categorical complete set**.
+- `refunding_merge_is_a_complete_set_merge_in_the_aggregate`: Hoard, supply and
+  the native partition move exactly as the categorical merge moves them, so every
+  conservation already proved still governs a refunding market and **the census
+  reads it with no new compartment**.
+- `the_refunding_merge_undoes_the_refunding_split` with **no hypothesis at all**,
+  and its converse under exactly the merge's own admission.
+- `the_refunding_actions_keep_the_escrow_seated` -- the induction, so the escrow
+  holds the whole failure supply for a market's entire open life rather than only
+  at founding; and
+  `the_seated_escrow_stands_against_exactly_the_ordinary_supply`, which is what
+  makes the pro-rata rate **a constant of the Market header** rather than a
+  division.
+- Founding is not a separate law: `refundingSplitPost` is the renamed and
+  generalised `escrowedFoundingPost`, because **founding IS the refunding split
+  run against a vacant pre-state**, and a law with two spellings eventually
+  disagrees with itself.
+
+**Still owed:** the Rust. The founding change that seats the failure coordinate,
+the merge route that burns across two Positions, and a market that shows a refund
+on a forced outage on a real chain. Until those exist this half of decision 0025
+is a design with a proof, and §5's closing sentence still governs.
+
+**The cost of reversing to the immobile-coordinate shape.** It is the smaller
+change and it stays available: the founding is untouched, the failure supply stays
+in the founder's Position, and the protection becomes a direction conjunct at
+`claims-svm/src/signed_delta_v3.rs` -- any Position delta at the failure
+coordinate whose direction is not the aggregate supply delta's is refused, so a
+transfer (which moves no supply) may move no failure claim, while a mint or merge
+may. What it costs is that the founder holds a worthless-but-held position for the
+market's life, that every future route through the signed-delta waist inherits an
+invariant it must not break, and that the Lean above would be replaced rather than
+extended. Reversing **after** a market is founded is a re-found either way, because
+the seating is a founding fact.
+
 ## Evidence pointers
 
 `docs/evidence/COHORT13_SEALED_FOUNDED_2026_09_02.md:1320-1357`, `:1443-1445`,
@@ -276,4 +357,9 @@ whoever triggered it.
 `crates/dclutch-product-runtime-v2/src/lib.rs:204-213`;
 `crates/dclutch-source-contract/src/source_resolution_v2.rs:449-451`, `:525`;
 `programs/dclutch-resolution-proof-sbf/src/funded.rs:4-5`, `:348`;
-`GOAL.md:3507-3514`, `:4653-4658`; `tools/gauntlet/journey/src/ledger.rs:1004-1012`.
+`GOAL.md:3507-3514`, `:4653-4658`, `:4739-4750`, `:4782-4785`;
+`formal/dclutch-semantics/DClutchSemantics/EconomicKernel.lean` (the refunding
+split and merge, `e37116b03`);
+`crates/dclutch-claims-svm/src/signed_delta_v3.rs`;
+`docs/decisions/0033-the-founder-bond-is-mandatory.md` (the bond that prices the
+oracle choice this record leaves at zero); `tools/gauntlet/journey/src/ledger.rs:1004-1012`.

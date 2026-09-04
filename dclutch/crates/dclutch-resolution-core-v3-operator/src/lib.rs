@@ -1060,11 +1060,18 @@ pub enum ResolutionCoreOperatorErrorV3 {
     ///
     /// This was `RecoveryWalkUnavailable`, the off-chain half of the liveness
     /// census R2 / Q2 weld, and it refused every recovery-bearing material
-    /// because none could terminalize. The ladder is live now, so what remains
-    /// is the narrower and permanent fact: `authenticate_funding_entries` pins
-    /// exactly three Resolution compartments -- one advance, one exhaustion,
-    /// one failure -- so founding admits exactly one funded alternative source.
-    /// A policy naming more is a market whose later rungs nothing paid for.
+    /// because none could terminalize. It then refused every ladder wider than
+    /// ONE, because `authenticate_funding_entries` pinned exactly three
+    /// Resolution compartments.
+    ///
+    /// Founding funds every rung now: attempt `k` is paid by the manifest entry
+    /// at `recovery_entry_index + k`, so a policy of `n` attempts wants `n + 2`
+    /// compartments. What survives is the fact that made the refusal worth
+    /// having -- a market whose later rungs nothing paid for -- and this is the
+    /// builder's word for a manifest that does not carry the run: the entries
+    /// are missing, they are not this controller's, or one of them is the
+    /// escrow. Building the instruction anyway would only move the refusal to
+    /// the validator.
     RecoveryExceedsFundedCompartments,
 }
 
@@ -1138,15 +1145,39 @@ pub fn build_resolution_create_fund_v3(
     // Keep these decoded authorities live in the builder rather than accepting
     // caller-selected entry coordinates.
     match (material.recovery_policy(), recovery_policy) {
-        // The ladder is live, so a recovery-bearing material is buildable. What
-        // the builder still refuses is a policy founding cannot fund: the three
-        // pinned Resolution compartments are one advance, one exhaustion and
-        // one failure, and `core_effect::authenticate_funding_entries` refuses
-        // `attempt_count() != 1` for exactly that reason. Building the
-        // instruction anyway would only move the refusal to the validator.
-        (Some(_), Some(policy)) if policy.attempt_count() == 1 => {}
-        (Some(_), Some(_)) => {
-            return Err(ResolutionCoreOperatorErrorV3::RecoveryExceedsFundedCompartments);
+        // The ladder is live and founding funds every rung, so what the builder
+        // checks is no longer a WIDTH -- it is whether this manifest actually
+        // carries the run. One entry per attempt at `recovery_entry_index + k`,
+        // configured by that attempt's own allocation, released by this
+        // Resolution controller, and none of them the exhaustion or failure
+        // compartment. It is the same question
+        // `core_effect::authenticate_funding_entries` and Core's
+        // `authenticate_reference_records` both ask on chain; asking it here
+        // keeps the refusal off the validator.
+        (Some(_), Some(policy)) => {
+            let mut rung = 0_u8;
+            while rung < policy.attempt_count() {
+                let attempt = policy
+                    .attempt(rung)
+                    .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+                let index = entries[0]
+                    .checked_add(u16::from(rung))
+                    .ok_or(ResolutionCoreOperatorErrorV3::RecoveryExceedsFundedCompartments)?;
+                if index == entries[1] || index == entries[2] {
+                    return Err(ResolutionCoreOperatorErrorV3::RecoveryExceedsFundedCompartments);
+                }
+                let entry = manifest.entry(index).map_err(|_| {
+                    ResolutionCoreOperatorErrorV3::RecoveryExceedsFundedCompartments
+                })?;
+                if entry.config_id().to_bytes() != attempt.funding_allocation_id().to_bytes()
+                    || entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V7
+                {
+                    return Err(ResolutionCoreOperatorErrorV3::RecoveryExceedsFundedCompartments);
+                }
+                rung = rung
+                    .checked_add(1)
+                    .ok_or(ResolutionCoreOperatorErrorV3::Record)?;
+            }
         }
         (None, None) => {}
         _ => return Err(ResolutionCoreOperatorErrorV3::Record),

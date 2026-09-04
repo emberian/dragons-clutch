@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import copy
+import functools
 import hashlib
 import importlib.util
 from pathlib import Path
@@ -18,6 +19,142 @@ assert SPEC is not None and SPEC.loader is not None
 CHAOS = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = CHAOS
 SPEC.loader.exec_module(CHAOS)
+
+
+# ---------------------------------------------------------------------------
+# A SECOND READER OF THE RUST, DELIBERATELY NOT THE ONE THE CONTRACT USES.
+#
+# `chaos.py` now derives its two schema strings through
+# `tools/lib/rust_schema.py`. A test that checked them by calling the same
+# function would be asking the reader whether it agrees with itself -- the
+# circle `2f2c22246` found in `tools/devnet-reconcile`, where fifty-five green
+# tests sat over a reader that refused every real artifact because its fixtures
+# were built out of the same constants.
+#
+# So these read `private_lifecycle.rs` by splitting lines, not by matching the
+# shape `rust_schema_constant` matches. They can disagree with it. They also
+# reach things it cannot: the three `[&str; N]` vocabularies the Rust checks the
+# matrix against, and the serde field sets of the five `deny_unknown_fields`
+# structs it deserializes the document into -- which is what makes "an exact key
+# set" a claim about the Rust rather than about this file.
+RUST_OWNER = (
+    Path(__file__).resolve().parents[3]
+    / "tools/local-validator/bootstrap/successor/src/private_lifecycle.rs"
+)
+
+
+@functools.lru_cache(maxsize=1)
+def rust_lines() -> tuple[str, ...]:
+    return tuple(RUST_OWNER.read_text(encoding="utf-8").splitlines())
+
+
+def rust_str_const(name: str) -> str:
+    head = f"const {name}: &str = "
+    found = [row.strip() for row in rust_lines() if row.strip().startswith(head)]
+    assert len(found) == 1, f"{name} is declared {len(found)} times"
+    tail = found[0][len(head) :]
+    assert tail.startswith('"') and tail.endswith('";'), tail
+    return tail[1:-2]
+
+
+def rust_str_array(name: str) -> list[str]:
+    lines = rust_lines()
+    head = f"const {name}: [&str; "
+    starts = [index for index, row in enumerate(lines) if row.startswith(head)]
+    assert len(starts) == 1, f"{name} is declared {len(starts)} times"
+    declared = int(lines[starts[0]][len(head) :].split("]")[0])
+    rows = []
+    for row in lines[starts[0] + 1 :]:
+        stripped = row.strip()
+        if stripped == "];":
+            break
+        assert stripped.startswith('"') and stripped.endswith('",'), stripped
+        rows.append(stripped[1:-2])
+    assert len(rows) == declared, f"{name} states {declared} and lists {len(rows)}"
+    return rows
+
+
+def camel(field: str) -> str:
+    head, *tail = field.split("_")
+    return head + "".join(part[:1].upper() + part[1:] for part in tail)
+
+
+def rust_exact_fields(name: str) -> set[str]:
+    """The camelCase keys one `deny_unknown_fields` struct accepts, and only those."""
+
+    lines = rust_lines()
+    starts = [
+        index for index, row in enumerate(lines) if row == f"struct {name} {{"
+    ]
+    assert len(starts) == 1, f"{name} is declared {len(starts)} times"
+    attribute = lines[starts[0] - 1]
+    assert 'rename_all = "camelCase"' in attribute and "deny_unknown_fields" in attribute, (
+        f"{name} is no longer an exact camelCase document: {attribute}"
+    )
+    fields = set()
+    for row in lines[starts[0] + 1 :]:
+        stripped = row.strip()
+        if stripped == "}":
+            break
+        assert stripped.endswith(","), stripped
+        fields.add(camel(stripped.split(":")[0].strip()))
+    assert fields, f"{name} has no fields"
+    return fields
+
+
+def previous_version(schema: str) -> str:
+    """The `-vN` one below a Rust-declared schema string.
+
+    Computed rather than spelled, and that is the whole reason it is a function:
+    a test that writes `...-v1` next to an owner that says `-v2` goes red the day
+    the owner says `-v3`, at a case whose subject is refusal and not versions.
+    The preflight has already paid that bill once, in COHORT-15F/15G, where one
+    stale copy read as fifteen failures about other contracts.
+    """
+
+    head, marker, version = schema.rpartition("-v")
+    assert head and marker and version.isdigit(), schema
+    return f"{head}-v{int(version) - 1}"
+
+
+def rust_identity_complaints(document: dict) -> list[str]:
+    """Every conjunct `authenticate_chaos` decides from a Rust DECLARATION.
+
+    Not a reimplementation of that function: its index arithmetic, hex widths and
+    one-send algebra are logic, and restating logic in a harness produces a
+    second interpreter to disagree with. What is restated here is only what the
+    Rust file DECLARES -- two schema strings, three vocabularies, five exact
+    field sets -- which is exactly the surface a Python writer can drift on
+    without anything going red.
+    """
+
+    complaints = []
+    if document.get("schema") != rust_str_const("CHAOS_SESSION_SCHEMA_V2"):
+        complaints.append("session schema is not the Rust-declared session schema")
+    if set(document) != rust_exact_fields("ChaosSession"):
+        complaints.append("session keys are not the exact ChaosSession field set")
+    matrix = document.get("matrix", {})
+    if set(matrix) != rust_exact_fields("ChaosMatrix"):
+        complaints.append("matrix keys are not the exact ChaosMatrix field set")
+    for key, owner in (
+        ("stages", "CHAOS_STAGES"),
+        ("boundaries", "CHAOS_BOUNDARIES"),
+        ("targetMutations", "CHAOS_TARGET_MUTATIONS"),
+    ):
+        if matrix.get(key) != rust_str_array(owner):
+            complaints.append(f"matrix {key} is not the Rust-declared {owner}")
+    for index, row in enumerate(document.get("cases", [])):
+        if row.get("schema") != rust_str_const("CHAOS_CASE_SCHEMA_V1"):
+            complaints.append(f"case {index} schema is not the Rust-declared case schema")
+        if set(row) != rust_exact_fields("ChaosCase"):
+            complaints.append(f"case {index} keys are not the exact ChaosCase field set")
+        if row.get("completedStages") != rust_str_array("CHAOS_STAGES"):
+            complaints.append(f"case {index} completedStages is not CHAOS_STAGES")
+        for key, owner in (("fault", "ChaosFault"), ("recovery", "ChaosRecovery")):
+            value = row.get(key)
+            if value is not None and set(value) != rust_exact_fields(owner):
+                complaints.append(f"case {index} {key} is not the exact {owner} field set")
+    return complaints
 
 
 def digest(label: str) -> str:
@@ -196,6 +333,79 @@ class ChaosContractTests(unittest.TestCase):
         )
         self.assertEqual(len(seen), 17)
         self.assertEqual(accepted["matrix"]["caseCount"], 17)
+
+
+class RustAuthenticatorHandoffTests(unittest.TestCase):
+    """The half of the handoff this suite could not see before.
+
+    Every other test here builds its fixtures out of `chaos.py`'s own constants
+    and asks `chaos.py` whether it likes them. That cannot fail on the fact that
+    matters -- whether the Rust that reads this session back agrees about what it
+    is called -- and it was the shape under which `tools/devnet-reconcile` held a
+    `-v1` chaos schema against the crate's `-v2` for as long as anyone had looked.
+    """
+
+    def test_a_session_this_contract_writes_carries_the_rust_declared_identity(
+        self,
+    ) -> None:
+        self.assertEqual(rust_identity_complaints(session()), [])
+        # And the two derived constants are the Rust's, read the other way.
+        self.assertEqual(CHAOS.SESSION_SCHEMA_V2, rust_str_const("CHAOS_SESSION_SCHEMA_V2"))
+        self.assertEqual(CHAOS.CASE_SCHEMA_V1, rust_str_const("CHAOS_CASE_SCHEMA_V1"))
+
+    def test_the_contract_states_neither_schema_string_in_its_own_words(self) -> None:
+        # The literal that was here until this change, and the one in the
+        # runner's `finalize_lifecycle_receipt`, are the two second authors. A
+        # grep is the whole check: a value with one author appears in this file
+        # zero times.
+        for owner in ("CHAOS_SESSION_SCHEMA_V2", "CHAOS_CASE_SCHEMA_V1"):
+            self.assertNotIn(rust_str_const(owner), MODULE_PATH.read_text())
+
+    def test_a_superseded_session_schema_refuses_on_both_sides(self) -> None:
+        # The one below current is the string `tools/devnet-reconcile` actually
+        # held while the crate had moved on, and it refused every session the
+        # driver wrote for as long as nothing ran it.
+        hostile = copy.deepcopy(session())
+        hostile["schema"] = previous_version(rust_str_const("CHAOS_SESSION_SCHEMA_V2"))
+        hostile["sessionSha256"] = CHAOS._session_digest(hostile)
+        # The Rust refuses it: `authenticate_chaos`'s first conjunct is
+        # `chaos.schema != CHAOS_SESSION_SCHEMA_V2`.
+        self.assertEqual(
+            rust_identity_complaints(hostile),
+            ["session schema is not the Rust-declared session schema"],
+        )
+        # And so does this contract, which is what makes the pair a handoff
+        # rather than two independent opinions.
+        with self.assertRaisesRegex(CHAOS.Refusal, "changed schema"):
+            CHAOS.authenticate_session(hostile)
+
+    def test_a_case_schema_that_is_not_the_current_one_refuses_on_both_sides(
+        self,
+    ) -> None:
+        hostile = copy.deepcopy(session())
+        row = hostile["cases"][0]
+        row["schema"] = previous_version(rust_str_const("CHAOS_CASE_SCHEMA_V1"))
+        row["caseSha256"] = CHAOS._case_digest(row)
+        hostile["sessionSha256"] = CHAOS._session_digest(hostile)
+        self.assertEqual(
+            rust_identity_complaints(hostile),
+            ["case 0 schema is not the Rust-declared case schema"],
+        )
+        with self.assertRaisesRegex(CHAOS.Refusal, "changed identity"):
+            CHAOS.authenticate_session(hostile)
+
+    def test_an_extra_document_key_refuses_under_deny_unknown_fields(self) -> None:
+        # `chaos.py` and the Rust both hold the document to an EXACT key set, and
+        # this proves the two sets are the same one: a key `chaos.py` would
+        # reject is a key serde would reject, named by the struct it belongs to.
+        hostile = copy.deepcopy(session())
+        hostile["chaosSessionNote"] = "added by a later author"
+        self.assertEqual(
+            rust_identity_complaints(hostile),
+            ["session keys are not the exact ChaosSession field set"],
+        )
+        with self.assertRaisesRegex(CHAOS.Refusal, "changed its exact fields"):
+            CHAOS.authenticate_session(hostile)
 
 
 if __name__ == "__main__":

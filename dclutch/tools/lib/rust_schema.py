@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """One Rust `&str` constant, read from the file that declares it.
 
-WHY THIS IS ITS OWN FILE. Two Python tools in this tree state the same wire
+WHY THIS IS ITS OWN FILE. Several Python tools in this tree state the same wire
 schema strings that the successor crate writes into the artifacts they read
 back: `tools/release/private-validator-lifecycle/run.py`, which drives the
 private-validator lifecycle, and `tools/devnet-reconcile/reconcile.py`, which
@@ -12,10 +12,16 @@ crate's `-v3`, and the private-lifecycle chaos session at `-v1` against `-v2`.
 Both refused every session the current driver writes, and nothing went red,
 because nothing in CI ran the reconciler at all.
 
-So the derivation lives here, with one author and two readers, rather than
-being copied into the second tool along with whatever the copy would drift
-into. The VALUE has one author too, and it is neither of them: it is the Rust
-`const`.
+So the derivation lives here, with one author and three readers, rather than
+being copied into each tool along with whatever the copy would drift into. The
+VALUE has one author too, and it is none of them: it is the Rust `const`.
+
+The third reader is `private-validator-lifecycle/chaos.py`, and it is the one
+that shows this file is not only for consumers. That module WRITES the chaos
+session, and it reads its two schema strings from the Rust that authenticates
+one -- because the session is a matrix both languages state in full, so the
+string is a contract rather than one side's output, and this is the only
+direction of derivation that exists between them.
 
 This is deliberately not the only reader of a Rust constant in the tree.
 `preflight.py` keeps its own `rust_str_const` because its whole job is to

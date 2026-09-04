@@ -130,10 +130,13 @@ OWNED_LOOPBACK_PROVIDER_PROFILE_SCHEMA = rust_schema_constant(
 OWNED_LOOPBACK_PRIVATE_SESSION_SCHEMA = rust_schema_constant(
     SUCCESSOR_SRC, "private_activity.rs", "LIFECYCLE_SESSION_SCHEMA_V1"
 )
-# The chaos session is written in PYTHON -- `chaos.py` and one bare literal at
-# `run.py:6083` -- so this reads the crate that authenticates it, which is the
-# only Rust declaration and the closest thing the artifact has to a contract.
-# Those two Python copies are a live second and third author for it.
+# The chaos session is written in PYTHON, by `chaos.py`, so this row reads the
+# crate that AUTHENTICATES it rather than one that produces it -- the exception
+# to the rule every other row here follows. It is not a compromise any more.
+# `chaos.py` and `run.py` derive from this same `const` now, so the three
+# declarations this comment used to name are one; and the direction was
+# forced rather than chosen, because the session is a matrix both languages
+# state in full and `rust_schema_constant` is the only crossing that exists.
 OWNED_LOOPBACK_CHAOS_SESSION_SCHEMA = rust_schema_constant(
     SUCCESSOR_SRC, "private_lifecycle.rs", "CHAOS_SESSION_SCHEMA_V2"
 )

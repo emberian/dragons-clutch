@@ -760,9 +760,6 @@ fn authenticate_recovery_policy(
             )?;
             let policy =
                 RecoveryPolicyV2::decode(&policy_data).map_err(|_| CoreSbfError::Reference)?;
-            if policy.attempt_count() != 1 {
-                return Err(CoreSbfError::Reference);
-            }
             Some((recovery_id, policy))
         }
         None => {
@@ -794,27 +791,69 @@ fn authenticate_recovery_policy(
         CapabilityManifestV1::decode(&manifest_data).map_err(|_| CoreSbfError::Funding)?;
     match policy {
         Some((recovery_id, policy)) => {
-            let recovery_allocation = policy
-                .attempt(0)
-                .map_err(|_| CoreSbfError::Reference)?
-                .funding_allocation_id()
-                .to_bytes();
-            for (entry_index, expected_config) in [
-                (request.recovery_entry_index, recovery_allocation),
-                (request.exhaustion_entry_index, recovery_id.to_bytes()),
-                (request.failure_entry_index, request.source_material),
-            ] {
-                let entry = manifest
-                    .entry(entry_index)
-                    .map_err(|_| CoreSbfError::Funding)?;
-                if entry.config_id().to_bytes() != expected_config
-                    || entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V7
+            // One compartment per rung, at `recovery_entry_index + k`. Core
+            // asks the same question the Resolution controller asks in
+            // `core_effect::authenticate_funding_entries` and asks it
+            // independently, which is the point of Core asking at all: a
+            // market that reaches founding has had its whole ladder priced
+            // twice, by two programs, from the same two records.
+            //
+            // Both used to refuse `attempt_count() != 1` and neither had a
+            // reason to -- the record, the emitted layout and the Lean model
+            // all carry four. The one index is still the whole wire; adjacency
+            // is what lets it name a run instead of a single entry, and a
+            // one-attempt founding is byte-identical because
+            // `recovery_entry_index + 0` is `recovery_entry_index`.
+            let count = policy.attempt_count();
+            let mut rung = 0_u8;
+            while rung < count {
+                let attempt = policy.attempt(rung).map_err(|_| CoreSbfError::Reference)?;
+                let entry_index = request
+                    .recovery_entry_index
+                    .checked_add(u16::from(rung))
+                    .ok_or(CoreSbfError::Funding)?;
+                if entry_index == request.exhaustion_entry_index
+                    || entry_index == request.failure_entry_index
                 {
                     return Err(CoreSbfError::Funding);
                 }
+                authenticate_controller_entry(
+                    manifest,
+                    entry_index,
+                    attempt.funding_allocation_id().to_bytes(),
+                )?;
+                rung = rung.checked_add(1).ok_or(CoreSbfError::Arithmetic)?;
             }
+            authenticate_controller_entry(
+                manifest,
+                request.exhaustion_entry_index,
+                recovery_id.to_bytes(),
+            )?;
+            authenticate_controller_entry(
+                manifest,
+                request.failure_entry_index,
+                request.source_material,
+            )?;
         }
         None => authenticate_no_recovery_entries(manifest, request)?,
+    }
+    Ok(())
+}
+
+/// One manifest entry, configured by exactly one identity and released by the
+/// Resolution controller this market selected.
+fn authenticate_controller_entry(
+    manifest: CapabilityManifestV1<'_>,
+    entry_index: u16,
+    expected_config: [u8; 32],
+) -> Result<(), CoreSbfError> {
+    let entry = manifest
+        .entry(entry_index)
+        .map_err(|_| CoreSbfError::Funding)?;
+    if entry.config_id().to_bytes() != expected_config
+        || entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V7
+    {
+        return Err(CoreSbfError::Funding);
     }
     Ok(())
 }

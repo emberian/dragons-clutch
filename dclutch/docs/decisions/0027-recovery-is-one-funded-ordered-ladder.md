@@ -174,6 +174,74 @@ be cranked out of its terminal. 84 tests green in `dclutch-source-contract`; the
 Lean library builds with no warnings. The generated file moved by exactly one
 constant, *"every offset and every corpus byte identical"*.
 
+### What landed after: the capture, and founding every rung (lane RECOVERY-2)
+
+The ladder had a walk and no ANSWER. §2's *"the honest path is unchanged. Once
+advanced, resolution runs on the next source exactly as it runs on the first"*
+was a design sentence with no producer behind it:
+`resolve_recovery_from_authenticated_domain` was written and hostile-tested in
+the contract and no provider outer called it, so every reachable outcome of the
+whole ontology was the same pre-disclosed failure a market with no policy gets
+for free.
+
+It has one now. The real-Pyth outer dispatches on `provider_v3::select_rung`,
+and the authority for WHICH source may answer is the market's own
+`active_attempt` — the request's `source_index` is a declaration that must
+agree, so a caller can name a rung and can never choose one. Rung zero is the
+primary; rung `n` is attempt `n - 1`; and the index took a byte the request
+already required to be zero, so the honest path is byte-identical at the wire,
+in the account frame and in the poststates, with the existing primary campaigns
+passing unedited as the control.
+
+Three contract additions, each replacing exactly one edge rather than relaxing
+one: `SourceMaterialV3::validate_recovery_source_graph` swaps the
+`primary_source_spec` edge for the attempt's own spec and provider release and
+keeps every other conjunct, including the unit; the obligation gains a recovery
+constructor sharing the primary's reading rule; and
+`normalize_authenticated_recovery_update` is the same reading rule under a
+different CLOCK rule. That last one is the interesting decision. The primary
+leg's `now - max_age` grace is the very thing whose expiry lets the crank
+advance, so re-applying it on a rung would make every rung structurally
+unanswerable — a capture route whose success is not reachable. It is dropped
+rather than widened, and what replaces it is the attempt's OWN committed
+deadline, enforced by the kernel and prepaid at founding: a bound a founder
+chose instead of one a route inherited.
+
+**Founding funds every rung.** Both authors of the founding join refused
+`attempt_count() != 1`, which is why §6's *"a recovery-bearing market costs more
+to found"* could only ever have bought one alternative. The rule is adjacency —
+attempt `k` is paid by the manifest entry at `recovery_entry_index + k` — so one
+index still names the whole run, the wire does not change, and a one-attempt
+founding is byte-identical. `RecoveryPolicyV2::validate_shape` now refuses two
+attempts sharing a funding allocation, because a compartment is found by its
+configuration and one identity is one compartment: a ladder whose second rung
+named the first rung's allocation would sell a leg it had already spent.
+
+**Two gates were wrong, and only the capture producer could expose them.**
+`RESOLUTION_PRIMARY_SOURCE_ADMISSIBLE_STATES_V1` was doing two jobs — "the
+sponsored transport admits only the primary" and "only a primary market can
+consume a submission" — and the second is false the moment a rung can be
+answered. Until this landed, a submission against a market standing on a funded
+rung, a market that could still consume it, was RECLAIMABLE by anyone past the
+submitter's own deadline. That is the `SubmissionStillConsumable` hazard, live,
+on the one leg nobody had looked at.
+
+`a_market_is_answered_on_its_funded_second_rung`: found with a two-source
+policy, the primary window closes unobserved, a stranger advances onto the
+funded alternative, one update is posted through the real Receiver ELF, and the
+ALTERNATIVE answers inside its own committed deadline. Terminal route
+`Recovery`, certificate kind `ResolutionSuccess`, `attempt_index` 1, and Core
+accepts it — advance 215,138 CU, capture 311,232 CU.
+
+**Still owed after this:** `CoreSbfError::RecoveryWalkUnavailable` `0x3011` has
+no producer and stays allocated only because Core's discriminants are asserted
+contiguous; no successor driver founds a recovery-bearing market or cranks the
+ladder, so cohort-16 has no `found-two-source` or `crank-ladder` rows
+(`tools/local-validator/bootstrap/successor/src/market.rs` now writes down
+exactly what such a driver needs); and the ladder's transactions emit no census
+evidence, for the reason `tools/gauntlet/blocked.json` states — corrected there,
+because the obstacle it recorded was false.
+
 **Owed and named:** the on-chain route, which the lane says is the next commit;
 and the four stale comments in `dclutch-core-sbf` and the local-validator
 bootstrap that cite `funded::process_funded_transition` and its `#[cfg(any())]`

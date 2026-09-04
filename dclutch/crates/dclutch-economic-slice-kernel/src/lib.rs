@@ -145,6 +145,82 @@ pub enum BasketAction {
     MintCompleteSet,
     /// Merge coordinate-equal complete sets from one source Position.
     MergeCompleteSet,
+    /// Mint coordinate-equal complete sets on a REFUNDING Market: the ordinary
+    /// coordinates into the destination Position and the failure coordinate
+    /// into the source Position, which is the Market's escrow.
+    MintRefundingCompleteSet,
+    /// Merge coordinate-equal complete sets on a REFUNDING Market: the ordinary
+    /// coordinates out of the source Position and the failure coordinate out of
+    /// the destination Position, which is the Market's escrow.
+    MergeRefundingCompleteSet,
+}
+
+impl BasketAction {
+    /// Whether this action moves one coordinate-equal complete set.
+    ///
+    /// Both refunding actions do: a refunding set is the SAME set as a
+    /// categorical one -- aggregate supply moves by the same amount at every
+    /// coordinate -- and only which Position each coordinate is seated in
+    /// differs, so the coordinate-equal vector rule is unchanged.
+    const fn is_complete_set(self) -> bool {
+        matches!(
+            self,
+            Self::MintCompleteSet
+                | Self::MergeCompleteSet
+                | Self::MintRefundingCompleteSet
+                | Self::MergeRefundingCompleteSet
+        )
+    }
+
+    /// Whether this action seats the failure coordinate in a second Position.
+    ///
+    /// Public because the authenticating adapter has to know whether to demand
+    /// the Market's escrow Position at all.
+    pub const fn is_refunding(self) -> bool {
+        matches!(
+            self,
+            Self::MintRefundingCompleteSet | Self::MergeRefundingCompleteSet
+        )
+    }
+
+    /// Which slot the escrow occupies: the one the categorical action of the
+    /// same name leaves empty.
+    ///
+    /// A categorical mint credits only the destination, so a refunding mint
+    /// seats the escrow in the SOURCE; a categorical merge debits only the
+    /// source, so a refunding merge seats it in the DESTINATION -- which is
+    /// what keeps the merge's collateral payout, derived from the source
+    /// owner, reaching the holder who burned the ordinary claims rather than
+    /// the escrow. An adapter authenticating the escrow PDA asks this function
+    /// which account to check, and nothing else spells the rule.
+    pub const fn escrow_is_source(self) -> bool {
+        matches!(self, Self::MintRefundingCompleteSet)
+    }
+}
+
+/// The failure coordinate of a refunding Market.
+///
+/// Public because the authenticating adapter derives the escrow's Position
+/// owner from this index and must not re-spell "the last coordinate".
+///
+/// A runtime Product's claim vector is `ordinary_region_count` ordinary regions
+/// followed by exactly one explicit failure coordinate
+/// (`dclutch-product-runtime-v2`), so the failure selector is the LAST one.
+/// This function is the sole author of "which coordinates a refunding complete
+/// set has"; `basket_candidate` reads it and nothing else spells the boundary.
+///
+/// The floor here is STRUCTURAL: a refunding set needs at least one ordinary
+/// coordinate to seat with the holder and the failure coordinate to seat with
+/// the escrow. The record-level floor -- width three, so a basis's two
+/// admissible payout scales are different numbers and the record can SAY which
+/// shape it carries -- belongs to `categorical_refunds_on_failure_v3` and is
+/// deliberately not restated here.
+pub fn refunding_failure_index(outcome_count: u32) -> Result<usize> {
+    let count = usize::try_from(outcome_count).map_err(|_| Error::InvalidOutcomeCount)?;
+    if count < 2 {
+        return Err(Error::InvalidOutcomeCount);
+    }
+    Ok(count - 1)
 }
 
 /// Optimistic coordinates for one borrowed runtime-width basket.
@@ -572,6 +648,16 @@ pub fn position_revision(bytes: &[u8], outcome_count: u32) -> Result<u64> {
     validate_position(bytes, outcome_count).map(|value| value.revision)
 }
 
+/// Return one outcome's exact aggregate claim supply.
+///
+/// The Market names its own runtime width, so a caller cannot ask this question
+/// at a width the account does not have.
+pub fn market_supply(bytes: &[u8], outcome: u32) -> Result<u64> {
+    let meta = decode_market(bytes)?;
+    let index = checked_outcome_index(meta.outcome_count, outcome)?;
+    u64_at(bytes, vector_offsets(meta.outcome_count, index)?.supply)
+}
+
 /// Return one native claim balance.
 pub fn position_native(bytes: &[u8], outcome_count: u32, outcome: u32) -> Result<u64> {
     let index = checked_outcome_index(outcome_count, outcome)?;
@@ -599,7 +685,9 @@ fn validate_basket_shape(
     destination_present: bool,
 ) -> Result<()> {
     let expected = match action {
-        BasketAction::TransferNative => (true, true),
+        BasketAction::TransferNative
+        | BasketAction::MintRefundingCompleteSet
+        | BasketAction::MergeRefundingCompleteSet => (true, true),
         BasketAction::RedeemNativeTerminal | BasketAction::MergeCompleteSet => (true, false),
         BasketAction::MintCompleteSet => (false, true),
     };
@@ -615,11 +703,11 @@ fn validate_basket_quantities(frame: BasketFrame<'_>, outcome_count: u32) -> Res
         return Err(Error::ZeroQuantity);
     }
     let count = usize::try_from(outcome_count).map_err(|_| Error::InvalidOutcomeCount)?;
+    if frame.action.is_refunding() {
+        refunding_failure_index(outcome_count)?;
+    }
     let first = basket_quantity(frame, 0)?;
-    let complete_set = matches!(
-        frame.action,
-        BasketAction::MintCompleteSet | BasketAction::MergeCompleteSet
-    );
+    let complete_set = frame.action.is_complete_set();
     let mut any_positive = false;
     let mut index = 0_usize;
     while index < count {
@@ -645,7 +733,9 @@ fn admit_basket_phase(phase: Phase, action: BasketAction) -> Result<()> {
             Phase::Open,
             BasketAction::TransferNative
             | BasketAction::MintCompleteSet
-            | BasketAction::MergeCompleteSet,
+            | BasketAction::MergeCompleteSet
+            | BasketAction::MintRefundingCompleteSet
+            | BasketAction::MergeRefundingCompleteSet,
         )
         | (Phase::Terminal(_) | Phase::Retiring(_), BasketAction::RedeemNativeTerminal) => Ok(()),
         _ => Err(Error::InvalidPhase),
@@ -701,8 +791,10 @@ fn validate_optional_positions(
 fn basket_hoard_and_payout(market: MarketMeta, frame: BasketFrame<'_>) -> Result<(u64, u64)> {
     let complete_quantity = basket_quantity(frame, 0)?;
     match frame.action {
-        BasketAction::MintCompleteSet => Ok((credit(market.hoard, complete_quantity)?, 0)),
-        BasketAction::MergeCompleteSet => {
+        BasketAction::MintCompleteSet | BasketAction::MintRefundingCompleteSet => {
+            Ok((credit(market.hoard, complete_quantity)?, 0))
+        }
+        BasketAction::MergeCompleteSet | BasketAction::MergeRefundingCompleteSet => {
             Ok((debit(market.hoard, complete_quantity)?, complete_quantity))
         }
         BasketAction::RedeemNativeTerminal => {
@@ -777,6 +869,28 @@ fn basket_candidate(
             candidate.supply = debit(candidate.supply, quantity)?;
             candidate.native = debit(candidate.native, quantity)?;
             candidate.source_native = debit(candidate.source_native, quantity)?;
+        }
+        // The two refunding arms move the aggregate exactly as their
+        // categorical namesakes do; the whole difference is which Position the
+        // FAILURE coordinate is seated in, and the boundary is read from
+        // `refunding_failure_index` rather than spelled here.
+        BasketAction::MintRefundingCompleteSet => {
+            candidate.supply = credit(candidate.supply, quantity)?;
+            candidate.native = credit(candidate.native, quantity)?;
+            if index == refunding_failure_index(outcome_count)? {
+                candidate.source_native = credit(candidate.source_native, quantity)?;
+            } else {
+                candidate.destination_native = credit(candidate.destination_native, quantity)?;
+            }
+        }
+        BasketAction::MergeRefundingCompleteSet => {
+            candidate.supply = debit(candidate.supply, quantity)?;
+            candidate.native = debit(candidate.native, quantity)?;
+            if index == refunding_failure_index(outcome_count)? {
+                candidate.destination_native = debit(candidate.destination_native, quantity)?;
+            } else {
+                candidate.source_native = debit(candidate.source_native, quantity)?;
+            }
         }
     }
     Ok(candidate)
@@ -1353,6 +1467,235 @@ mod tests {
         assert_eq!(position_revision(&holder, count), Ok(2));
         assert_eq!(position_native(&holder, count, 256), Ok(0));
         assert_eq!(u64_at(&market, HOARD_OFFSET), Ok(0));
+        Ok(())
+    }
+
+    fn refunding_fixture(
+        count: u32,
+    ) -> (std::vec::Vec<u8>, std::vec::Vec<u8>, std::vec::Vec<u8>) {
+        let (mut market, escrow, holder) = fixture(count);
+        set_claim(&mut market, HOARD_OFFSET, 0);
+        (market, escrow, holder)
+    }
+
+    fn uniform_vector(count: u32, quantity: u64) -> std::vec::Vec<u8> {
+        (0..count).flat_map(|_| quantity.to_le_bytes()).collect()
+    }
+
+    /// The refunding complete set, both directions, on a cohort-13 width: three
+    /// ordinary regions and one failure column. The holder never touches the
+    /// failure column and the escrow never touches an ordinary one, the
+    /// aggregate moves exactly as the categorical set moves it, and the merge's
+    /// collateral reaches the HOLDER rather than the escrow.
+    #[test]
+    fn refunding_complete_set_seats_the_failure_column_in_the_escrow_and_roundtrips()
+    -> Result<()> {
+        let count = 4;
+        let (mut market, mut escrow, mut holder) = refunding_fixture(count);
+        let quantities = uniform_vector(count, 5);
+        assert_eq!(
+            execute_basket(
+                &mut market,
+                Some(&mut escrow),
+                Some(&mut holder),
+                BasketFrame {
+                    expected_market_revision: 0,
+                    expected_source_revision: Some(0),
+                    expected_destination_revision: Some(0),
+                    action: BasketAction::MintRefundingCompleteSet,
+                    quantities: &quantities,
+                    quantity_multiplier: 1,
+                },
+            ),
+            Ok(Payout {
+                recipient: [0; 32],
+                amount: 0,
+            })
+        );
+        for outcome in 0..3 {
+            assert_eq!(position_native(&holder, count, outcome), Ok(5));
+            assert_eq!(position_native(&escrow, count, outcome), Ok(0));
+            assert_eq!(
+                u64_at(&market, vector_offsets(count, outcome as usize)?.supply),
+                Ok(5)
+            );
+        }
+        assert_eq!(position_native(&holder, count, 3), Ok(0));
+        assert_eq!(position_native(&escrow, count, 3), Ok(5));
+        assert_eq!(u64_at(&market, vector_offsets(count, 3)?.supply), Ok(5));
+        assert_eq!(u64_at(&market, HOARD_OFFSET), Ok(5));
+
+        // The merge seats the escrow in the DESTINATION slot, which is what
+        // keeps the payout -- derived from the source owner -- reaching the
+        // holder who burned the ordinary claims.
+        assert_eq!(
+            execute_basket(
+                &mut market,
+                Some(&mut holder),
+                Some(&mut escrow),
+                BasketFrame {
+                    expected_market_revision: 1,
+                    expected_source_revision: Some(1),
+                    expected_destination_revision: Some(1),
+                    action: BasketAction::MergeRefundingCompleteSet,
+                    quantities: &quantities,
+                    quantity_multiplier: 1,
+                },
+            ),
+            Ok(Payout {
+                recipient: [4; 32],
+                amount: 5,
+            })
+        );
+        for outcome in 0..count {
+            assert_eq!(position_native(&holder, count, outcome), Ok(0));
+            assert_eq!(position_native(&escrow, count, outcome), Ok(0));
+            assert_eq!(
+                u64_at(&market, vector_offsets(count, outcome as usize)?.supply),
+                Ok(0)
+            );
+        }
+        assert_eq!(u64_at(&market, HOARD_OFFSET), Ok(0));
+        Ok(())
+    }
+
+    /// THE FORECLOSURE, which is why the refunding actions exist at all. The
+    /// categorical merge debits ONE Position at EVERY coordinate, so a holder
+    /// on a refunding Market -- whose failure column is seated in the escrow --
+    /// cannot merge with it, and the refusal names the failure coordinate's
+    /// empty balance rather than something coarse.
+    #[test]
+    fn a_categorical_merge_of_a_refunding_market_refuses_insufficient_balance() -> Result<()> {
+        let count = 4;
+        let (mut market, mut escrow, mut holder) = refunding_fixture(count);
+        let quantities = uniform_vector(count, 5);
+        execute_basket(
+            &mut market,
+            Some(&mut escrow),
+            Some(&mut holder),
+            BasketFrame {
+                expected_market_revision: 0,
+                expected_source_revision: Some(0),
+                expected_destination_revision: Some(0),
+                action: BasketAction::MintRefundingCompleteSet,
+                quantities: &quantities,
+                quantity_multiplier: 1,
+            },
+        )?;
+        let before_market = market.clone();
+        let before_holder = holder.clone();
+        assert_eq!(
+            execute_basket(
+                &mut market,
+                Some(&mut holder),
+                None,
+                BasketFrame {
+                    expected_market_revision: 1,
+                    expected_source_revision: Some(1),
+                    expected_destination_revision: None,
+                    action: BasketAction::MergeCompleteSet,
+                    quantities: &quantities,
+                    quantity_multiplier: 1,
+                },
+            ),
+            Err(Error::InsufficientBalance)
+        );
+        assert_eq!(market, before_market);
+        assert_eq!(holder, before_holder);
+        Ok(())
+    }
+
+    /// Four hostiles against the refunding actions, each naming its own code.
+    #[test]
+    fn refunding_basket_hostiles_name_their_own_refusal() -> Result<()> {
+        // A width with no room for both an ordinary coordinate and a failure
+        // one has no refunding complete set to mint.
+        let (mut narrow_market, mut narrow_escrow, mut narrow_holder) = refunding_fixture(1);
+        assert_eq!(
+            execute_basket(
+                &mut narrow_market,
+                Some(&mut narrow_escrow),
+                Some(&mut narrow_holder),
+                BasketFrame {
+                    expected_market_revision: 0,
+                    expected_source_revision: Some(0),
+                    expected_destination_revision: Some(0),
+                    action: BasketAction::MintRefundingCompleteSet,
+                    quantities: &uniform_vector(1, 5),
+                    quantity_multiplier: 1,
+                },
+            ),
+            Err(Error::InvalidOutcomeCount)
+        );
+
+        let count = 4;
+        let quantities = uniform_vector(count, 5);
+        let (mut market, mut escrow, mut holder) = refunding_fixture(count);
+
+        // A refunding mint with no escrow account is a categorical mint wearing
+        // the refunding tag, and the failure column would land on the holder.
+        assert_eq!(
+            execute_basket(
+                &mut market,
+                None,
+                Some(&mut holder),
+                BasketFrame {
+                    expected_market_revision: 0,
+                    expected_source_revision: None,
+                    expected_destination_revision: Some(0),
+                    action: BasketAction::MintRefundingCompleteSet,
+                    quantities: &quantities,
+                    quantity_multiplier: 1,
+                },
+            ),
+            Err(Error::AccountMismatch)
+        );
+
+        // A refunding set is still ONE set: a vector that mints more failure
+        // claims than ordinary ones is refused before any write.
+        let mut skewed = quantities.clone();
+        skewed[24..32].copy_from_slice(&9_u64.to_le_bytes());
+        assert_eq!(
+            execute_basket(
+                &mut market,
+                Some(&mut escrow),
+                Some(&mut holder),
+                BasketFrame {
+                    expected_market_revision: 0,
+                    expected_source_revision: Some(0),
+                    expected_destination_revision: Some(0),
+                    action: BasketAction::MintRefundingCompleteSet,
+                    quantities: &skewed,
+                    quantity_multiplier: 1,
+                },
+            ),
+            Err(Error::CandidateInvariantFailure)
+        );
+
+        // The escrow cannot be the holder: aliasing the two would seat the
+        // failure column right back where the ruling took it from.
+        let (_, position_bytes) = widths(count);
+        let mut alias = vec![0; position_bytes];
+        assert_eq!(
+            initialize_position(&mut alias, [1; 32], [4; 32], count),
+            Ok(())
+        );
+        assert_eq!(
+            execute_basket(
+                &mut market,
+                Some(&mut alias),
+                Some(&mut holder),
+                BasketFrame {
+                    expected_market_revision: 0,
+                    expected_source_revision: Some(0),
+                    expected_destination_revision: Some(0),
+                    action: BasketAction::MintRefundingCompleteSet,
+                    quantities: &quantities,
+                    quantity_multiplier: 1,
+                },
+            ),
+            Err(Error::AccountMismatch)
+        );
         Ok(())
     }
 

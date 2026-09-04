@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -26,8 +27,54 @@ import re
 from typing import Any, Callable, Mapping, Sequence
 
 
-SESSION_SCHEMA_V2 = "dclutch-owned-loopback-private-lifecycle-chaos-session-v2"
-CASE_SCHEMA_V1 = "dclutch-owned-loopback-private-lifecycle-chaos-case-v1"
+class Refusal(RuntimeError):
+    """One fail-closed chaos evidence refusal."""
+
+
+# THE TWO SCHEMA STRINGS THIS FILE WRITES ARE READ FROM THE RUST THAT
+# AUTHENTICATES THEM, and that is the opposite of this tree's usual rule.
+#
+# `2f2c22246` named the producer as the owner of every wire schema, because when
+# a producer bumps a version it is the CONSUMER's copy that goes stale. By that
+# rule the author would be here: this module writes the chaos session, and
+# `private_lifecycle.rs` only reads it back. It is not here, because this is the
+# pair that rule does not decide. The session is not one side's output that the
+# other happens to parse -- it is a matrix both sides state in full. The eight
+# stages, the two boundaries and the eight target mutations below are declared a
+# second time as `CHAOS_STAGES`, `CHAOS_BOUNDARIES` and `CHAOS_TARGET_MUTATIONS`
+# in that Rust file, and `preflight.py` has read the vocabulary FROM THE RUST
+# since before this change. The schema string is the version tag on that shared
+# contract, so the question is not who produces it but which of the two
+# declarations the other can read -- and only one direction exists:
+# `rust_schema_constant` reads a Rust `const`, and nothing in this tree reads a
+# Python one.
+#
+# So the Rust declares and both Python readers derive. What that ends is three
+# authors for one string: this file, `run.py`'s `finalize_lifecycle_receipt` --
+# a bare literal inside a descriptor row, which no gate could see at all -- and
+# the Rust.
+SUCCESSOR_SRC = "tools/local-validator/bootstrap/successor/src"
+SHARED_RUST_SCHEMA_RELATIVE_PATH = Path("tools/lib/rust_schema.py")
+
+
+def _load_shared_rust_schema() -> Any:
+    path = Path(__file__).resolve().parents[3] / SHARED_RUST_SCHEMA_RELATIVE_PATH
+    spec = importlib.util.spec_from_file_location("dclutch_rust_schema", path)
+    if spec is None or spec.loader is None:
+        raise Refusal(f"cannot load the shared schema reader at {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+rust_schema_constant = _load_shared_rust_schema().rust_schema_constant
+
+SESSION_SCHEMA_V2 = rust_schema_constant(
+    SUCCESSOR_SRC, "private_lifecycle.rs", "CHAOS_SESSION_SCHEMA_V2"
+)
+CASE_SCHEMA_V1 = rust_schema_constant(
+    SUCCESSOR_SRC, "private_lifecycle.rs", "CHAOS_CASE_SCHEMA_V1"
+)
 CONTROL_CASE_ID = "control"
 CONTROL_STAGE = "control"
 CONTROL_BOUNDARY = "uninterrupted"
@@ -63,10 +110,6 @@ TARGET_MUTATIONS: Mapping[str, str] = {
 _HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 _HEX40 = re.compile(r"[0-9a-f]{40}\Z")
 _BASE58 = re.compile(r"[1-9A-HJ-NP-Za-km-z]+\Z")
-
-
-class Refusal(RuntimeError):
-    """One fail-closed chaos evidence refusal."""
 
 
 @dataclasses.dataclass(frozen=True)

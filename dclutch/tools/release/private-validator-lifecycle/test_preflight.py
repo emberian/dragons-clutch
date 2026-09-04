@@ -117,9 +117,9 @@ class OfflinePreflightTests(unittest.TestCase):
         self.assertFalse(report["keys_read"])
         self.assertFalse(report["build_run"])
         self.assertEqual(len(report["model_sha256"]), 64)
-        # Every shared schema is DERIVED, and all sixteen rows survive the walk.
-        # The values are deliberately not restated here: a test that spells the
-        # string is the copy this fix deleted, one layer out.
+        # Every shared schema is DERIVED, and all seventeen rows survive the
+        # walk. The values are deliberately not restated here: a test that spells
+        # the string is the copy this fix deleted, one layer out.
         self.assertEqual(
             [row["runner_constant"] for row in report["schema_handoffs"]],
             [name for name, _ in preflight.SCHEMA_OWNERS],
@@ -129,6 +129,33 @@ class OfflinePreflightTests(unittest.TestCase):
                 row["schema"].startswith("dclutch-") and row["owner_constant"]
                 for row in report["schema_handoffs"]
             )
+        )
+        # And so does the WRITER of the chaos session, which is the half of that
+        # handoff no `SCHEMA_OWNERS` row can reach: those name constants the
+        # runner reads a session back with, these name the constants a session is
+        # written under.
+        self.assertEqual(
+            [row["contract_constant"] for row in report["chaos_contract_schemas"]],
+            [name for name, _ in preflight.CHAOS_CONTRACT_SCHEMA_OWNERS],
+        )
+        self.assertTrue(
+            all(
+                row["schema"].startswith("dclutch-") and row["owner_constant"]
+                for row in report["chaos_contract_schemas"]
+            )
+        )
+        # The runner's descriptor row and the contract's write use ONE value.
+        self.assertEqual(
+            {
+                row["schema"]
+                for row in report["schema_handoffs"]
+                if row["runner_constant"] == "CHAOS_SESSION_SCHEMA"
+            },
+            {
+                row["schema"]
+                for row in report["chaos_contract_schemas"]
+                if row["contract_constant"] == "SESSION_SCHEMA_V2"
+            },
         )
 
     def test_participant_mode_excludes_terminal_commands_and_stages(self) -> None:
@@ -194,6 +221,37 @@ class OfflinePreflightTests(unittest.TestCase):
             'DIRECT_FINALIZED_SCHEMA = "dclutch-owned-loopback-direct-trade-finalized-v9"',
         )
         self.assert_refuses("DIRECT_FINALIZED_SCHEMA is not read from its semantic owner")
+
+    def test_chaos_contract_restating_the_session_schema_refuses(self) -> None:
+        # The literal this puts BACK is the shape both Python sites held until
+        # `CHAOS_SESSION_SCHEMA` landed: one here and one in the runner's
+        # `finalize_lifecycle_receipt`, with no gate over either. It is spelled at the superseded `-v1` rather than
+        # at the owner's current value on purpose -- any literal at all is what
+        # this refuses, and a test that spelled the CURRENT string would be the
+        # copy this whole arrangement deletes. A stale copy here is the worse of
+        # the two sites, because this file is what WRITES the name onto disk: the
+        # runner would merely describe a session wrongly, while the session
+        # itself would already be unauthenticatable.
+        self.mutate(
+            preflight.CHAOS_CONTRACT,
+            "SESSION_SCHEMA_V2 = rust_schema_constant(\n"
+            '    SUCCESSOR_SRC, "private_lifecycle.rs", "CHAOS_SESSION_SCHEMA_V2"\n'
+            ")",
+            'SESSION_SCHEMA_V2 = "dclutch-owned-loopback-private-lifecycle-chaos-session-v1"',
+        )
+        self.assert_refuses(
+            "chaos contract SESSION_SCHEMA_V2 is not read from its semantic owner"
+        )
+
+    def test_chaos_contract_reading_the_wrong_owner_file_refuses(self) -> None:
+        self.mutate(
+            preflight.CHAOS_CONTRACT,
+            'SUCCESSOR_SRC, "private_lifecycle.rs", "CHAOS_CASE_SCHEMA_V1"',
+            'SUCCESSOR_SRC, "market.rs", "CHAOS_CASE_SCHEMA_V1"',
+        )
+        self.assert_refuses(
+            "chaos contract CASE_SCHEMA_V1 reads .*market.rs, not semantic owner"
+        )
 
     def test_runner_reading_an_absent_owner_constant_refuses(self) -> None:
         self.mutate(

@@ -1616,6 +1616,13 @@ ${provenance}
     }
     rows.push([`[${title}](../decisions/${f})`, status]);
   }
+  // The status marker is the first ALL-CAPS word of the status sentence, so the
+  // counts below are derived from the records rather than kept by hand.
+  const marker = (status) =>
+    (status.replace(/^\*+/, "").match(/^[A-Z]{2,}/) || [""])[0];
+  const provisionalCount = rows.filter(([, s]) => marker(s) === "PROVISIONAL")
+    .length;
+  const openCount = rows.filter(([, s]) => marker(s) === "OPEN").length;
   pages.set(
     "decisions.md",
     generatedHeader(["docs/decisions/*.md"]) +
@@ -1633,8 +1640,14 @@ the accelerator output page (0028, which carries a read and is OPEN because
 ember asked for the architecture rather than a switch), D7 the product list
 (0029), and D8 rent across an epoch (0030). Records 0019-0023 hold the five
 rulings the orchestrator made under ember's standing goal before that
-docket. Statuses are load-bearing: PROVISIONAL means ember may reverse it at
-the cost the record's last section states, and OPEN means nobody has ruled.
+docket. Records 0031-0034 hold the mechanism agenda's rulings, made under the
+same standing goal later the same day: the agenda itself (0031), the joint
+clearing's three owed rulings (0032), the founder bond's mode (0033) and the
+ensemble's flagship parameters (0034). Statuses are load-bearing: PROVISIONAL
+means ember may reverse it at the cost the record's last section states, and
+OPEN means nobody has ruled. Counted from the records below rather than kept
+by hand: **${provisionalCount} PROVISIONAL, ${openCount} OPEN**; every other
+record is accepted, adopted, ratified or ruled.
 
 ` +
       table(["decision", "status"], rows) +
