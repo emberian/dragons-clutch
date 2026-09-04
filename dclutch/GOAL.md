@@ -4852,3 +4852,15 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   the Dealer campaign red at HEAD on a propagated `Projection` cause → DEALER-FIX **`(spawned)`**. **0028 ruled provisionally:
   option (a), cohort-17** (the 30% on every General action, multiplied by the joint clearing's 9 + 4M transactions).
 - Cuts: `228933519`, `d11c61335`.
+- RECOVERY-2 closed (`beca9243e`, `bc78ccd81`, `2566de12b`, `7cd16737e`, `ef128ce18`): **the recovery capture has a producer**
+  (`provider_v3.rs:441 select_rung → :283 → :319`, reached from the real Pyth outer; the request's `source_index` at byte 12
+  inside the reserved span — the honest path byte-identical); **a market is answered on its funded second rung on real ELFs:
+  advance 215,138 CU, capture 311,232 CU on the alternative through the real Receiver**; the primary's `now − max_age`
+  grace deliberately NOT re-applied on a rung (its expiry is what lets the crank advance); **a live hazard fixed: a
+  submission on a funded rung was reclaimable by a stranger** — the capturable set is now the reclaim set's exact
+  complement; `SourceLadder 0x801D`; **founding funds every rung** (attempt k paid by manifest entry recovery_index + k; no
+  wire change; a one-attempt founding byte-identical); two attempts sharing a compartment refused. Frames captured twice at
+  bc78ccd81 (5 added, 7 moved, 0 diagnostics after `#[inline(never)]` split the stages). Owed: the successor driver and the
+  `advance-recovery` command (specified in market.rs); the gauntlet binding needs a tier run; the Trading caller cannot reach
+  a rung capture (a hard account count, correct refusal). genref converged by the orchestrator.
+- Cuts: `3743a8f8a`, `63580acbe`.
