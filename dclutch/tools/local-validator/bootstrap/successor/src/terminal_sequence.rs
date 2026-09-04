@@ -4473,24 +4473,47 @@ fn authenticate_persisted_terminal_poststate_v1(
             })?,
             Some(rule) => canonical_lookup_poststate_bytes_v1(rule, finalized.slot)?,
         };
-        if let Some(clock) = &expected.execution_clock {
-            let observed = finalized
-                .execution_clocks
-                .get(key)
-                .copied()
-                .ok_or_else(|| {
-                    refusal(&format!(
-                        "the finalized evidence for {key} records no execution clock, so the one \
-                     field its plan could not bind cannot be reconstructed"
-                    ))
-                })?;
-            if observed < clock.planned_unix_timestamp || observed > clock.ceiling_unix_timestamp {
+        // THE RECORD IS THE STATEMENT; THE INTERVAL IS THE FALLBACK.
+        //
+        // Certification writes down the clock it admitted, and with that record
+        // this is one exact comparison. A journal CERTIFIED BEFORE that record
+        // existed carries none -- and must stay verifiable, or a change to the
+        // evidence schema retroactively rots journals that already landed,
+        // which is the placement mistake `450cc2222` cost a lane. It does stay
+        // verifiable, because the declared interval is finite and the other
+        // bytes are known: exactly one admissible clock can reproduce the
+        // recorded digest, and finding it IS the proof that the observed bytes
+        // are the plan's bytes with an admissible clock. The search is bounded
+        // by the plan's own ceiling and is never a substitute for the record --
+        // a clock outside the interval is not among the candidates.
+        let candidates = match (
+            &expected.execution_clock,
+            finalized.execution_clocks.get(key),
+        ) {
+            (None, None) => Vec::new(),
+            (None, Some(observed)) => {
                 return Err(refusal(&format!(
-                    "the execution clock recorded for {key} is {observed}, outside the [{}, {}] \
-                     its plan declared",
-                    clock.planned_unix_timestamp, clock.ceiling_unix_timestamp,
+                    "the finalized evidence records execution clock {observed} for {key}, whose \
+                     plan declares no such field"
                 )));
             }
+            (Some(clock), Some(observed)) => {
+                if *observed < clock.planned_unix_timestamp
+                    || *observed > clock.ceiling_unix_timestamp
+                {
+                    return Err(refusal(&format!(
+                        "the execution clock recorded for {key} is {observed}, outside the [{}, \
+                         {}] its plan declared",
+                        clock.planned_unix_timestamp, clock.ceiling_unix_timestamp,
+                    )));
+                }
+                vec![*observed]
+            }
+            (Some(clock), None) => {
+                (clock.planned_unix_timestamp..=clock.ceiling_unix_timestamp).collect::<Vec<_>>()
+            }
+        };
+        if let Some(clock) = &expected.execution_clock {
             let end = clock
                 .offset
                 .checked_add(8)
@@ -4498,7 +4521,29 @@ fn authenticate_persisted_terminal_poststate_v1(
                 .ok_or_else(|| {
                     refusal("a persisted execution-clock field does not fit its poststate bytes")
                 })?;
-            data[clock.offset..end].copy_from_slice(&observed.to_le_bytes());
+            let recorded = finalized.poststate.get(key).ok_or_else(|| {
+                refusal("persisted finalized poststate omitted a declared expected account")
+            })?;
+            let admitted = candidates.into_iter().find(|candidate| {
+                let mut probe = data.clone();
+                probe[clock.offset..end].copy_from_slice(&candidate.to_le_bytes());
+                durable_state(
+                    address,
+                    owner,
+                    expected.lamports_after_fee,
+                    expected.executable,
+                    &probe,
+                ) == *recorded
+            });
+            let admitted = admitted.ok_or_else(|| {
+                refusal(&format!(
+                    "no execution clock in [{}, {}] reproduces the poststate recorded for {key}; \
+                     the finalized bytes differ from the plan somewhere other than the one field \
+                     it could not bind",
+                    clock.planned_unix_timestamp, clock.ceiling_unix_timestamp,
+                ))
+            })?;
+            data[clock.offset..end].copy_from_slice(&admitted.to_le_bytes());
         }
         let exact = durable_state(
             address,
@@ -12012,7 +12057,7 @@ mod tests {
         let owner = Pubkey::from_str(&expected.owner).expect("fixture owner");
         let lamports = expected.lamports_after_fee;
         let executable = expected.executable;
-        let mut poststate = BTreeMap::new();
+        let mut poststate: BTreeMap<String, DurableAccountStateV1> = BTreeMap::new();
         for (key, account) in &intent.expected_accounts {
             let data = if *key == address.to_string() {
                 body(executed)
@@ -12030,7 +12075,6 @@ mod tests {
                 ),
             );
         }
-        let _ = (owner, lamports, executable);
         let evidence = |clocks: BTreeMap<String, u64>| DurableFinalizedEvidenceV1 {
             signature: Signature::default().to_string(),
             slot: 493_003_631,
@@ -12047,12 +12091,71 @@ mod tests {
         )
         .expect("the recorded execution fact reconstructs the exact poststate");
 
-        // Certification that checked the interval and threw the value away.
-        let error =
-            authenticate_persisted_terminal_poststate_v1(&intent, &evidence(BTreeMap::new()))
-                .expect_err("an unrecorded execution clock cannot be reconstructed");
+        // A JOURNAL CERTIFIED BEFORE THE RECORD EXISTED STAYS VERIFIABLE.
+        //
+        // The declared interval is finite and the other bytes are known, so
+        // exactly one admissible clock reproduces the recorded digest. That is
+        // the fallback, and it is why an evidence-schema change does not
+        // retroactively rot journals that already landed.
+        authenticate_persisted_terminal_poststate_v1(&intent, &evidence(BTreeMap::new()))
+            .expect("the bounded interval recovers a clock no record states");
+
+        // And a poststate that differs somewhere OTHER than that one field is
+        // recoverable by no clock in the interval.
+        let mut elsewhere = evidence(BTreeMap::new());
+        let mut other = body(executed);
+        other[0] = 1;
+        elsewhere.poststate.insert(
+            address.to_string(),
+            durable_state(address, owner, lamports, executable, &other),
+        );
+        let error = authenticate_persisted_terminal_poststate_v1(&intent, &elsewhere)
+            .expect_err("only the declared field may move");
         assert!(
-            error.to_string().contains("records no execution clock"),
+            error
+                .to_string()
+                .contains("reproduces the poststate recorded for"),
+            "{error}"
+        );
+
+        // The search is bounded BY THE PLAN'S CEILING, not by convenience: a
+        // poststate stamped past it is recoverable by no candidate.
+        let mut late = evidence(BTreeMap::new());
+        late.poststate.insert(
+            address.to_string(),
+            durable_state(
+                address,
+                owner,
+                lamports,
+                executable,
+                &body(planned + TERMINAL_EXECUTION_CLOCK_CEILING_SECONDS + 1),
+            ),
+        );
+        let error = authenticate_persisted_terminal_poststate_v1(&intent, &late)
+            .expect_err("the fallback never reaches past the declared interval");
+        assert!(
+            error
+                .to_string()
+                .contains("reproduces the poststate recorded for"),
+            "{error}"
+        );
+
+        // Evidence that records a clock for a poststate declaring none.
+        let mut undeclared = intent.clone();
+        undeclared
+            .expected_accounts
+            .get_mut(&address.to_string())
+            .expect("the fixture declares that poststate")
+            .execution_clock = None;
+        let error = authenticate_persisted_terminal_poststate_v1(
+            &undeclared,
+            &evidence(BTreeMap::from([(address.to_string(), executed)])),
+        )
+        .expect_err("a record without a rule is a claim the plan never made");
+        assert!(
+            error
+                .to_string()
+                .contains("whose plan declares no such field"),
             "{error}"
         );
 
