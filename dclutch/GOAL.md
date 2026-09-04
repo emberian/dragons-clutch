@@ -4815,3 +4815,6 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   in the release tier. Runbooks tier exit 0 (71 commands, 40 probed, 0 unprobed): the two commands answer --help, the CLI
   binary was mode 644, and **the one flag `--help` did not name was `--help`**. Owed: the chaos schema's two Python authors.
 - Cuts: `38b66078d`, `d129b09a1`.
+- Started 13:20 EDT: DECISIONS-3 (records 0031–0034 and two addenda for the provisional mechanism rulings); CHUNK-REMEASURE
+  (0028's fifth condition measured on the post-ruling routes, three draws each); CHAOS-SCHEMA (the chaos session string's
+  one author).
