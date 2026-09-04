@@ -4248,3 +4248,7 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Credential sweep 00:20 EDT: the Helius key was in nine local job-dir files back to cohorts 7/8/11 (execute scripts, a
   validator log, sim configs); all redacted; zero remain under ~/jobs; never in the repo, its history or the cut. The
   author fix (sim config reads the key at use time) is in RELEASE-GATE's unit. Rotation is ember's call.
+- Started 00:30 EDT: COHORT-15C **`a5b8c364024475d14`** — re-admit at 0 SOL through the reproducible gate (9a5332884,
+  f4ffbe732, c311e5a70 landed), the fill (a third market if Terminal refuses by phase), the winning stranger paid, the
+  General seal's devnet driver and the GeneralHotStateV3 producer → OpenBatch on a real chain, retirement on devnet, census
+  rows for the four unrowed magics.
