@@ -4977,3 +4977,5 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   same hour (measured on a development ELF). The orchestrator fixed Trading's test binary at HEAD (a test request lacked the
   recovery capture's `source_index`).
 - Cuts: `224a3667d`.
+- Started 18:00 EDT: SERIES-5 **`(spawned)`** — which authority puts Custody in the Expire frame (the profile or the builder),
+  the three rows past the composition, the two owed hostiles, row 3 rebased, the lifecycle if the route completes.
