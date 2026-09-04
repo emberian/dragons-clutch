@@ -4324,3 +4324,5 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   the emission. Owed: three machines still author tags in Rust (direct-root, funding-ledger, source); two named-debt asserts
   in the custody family.
 - Cuts: `1548611a3`.
+- Started 02:35 EDT: LEAN-TAGS-2 **`a85a718a84a5c30b2`** — Lean owners for direct-root, funding-ledger and source tags (census
+  100 → 103; the SDK's scrape arm deleted); the Core request magic `DCLTCRQ2` gets one author so the census can name its route.
