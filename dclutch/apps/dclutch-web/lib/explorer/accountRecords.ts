@@ -45,7 +45,7 @@ import {
   CAPABILITY_FUNDING_LEDGER_HEADER_BYTES_V2,
   CAPABILITY_FUNDING_LEDGER_MAGIC_V2,
   CAPABILITY_FUNDING_LEDGER_MANIFEST_ID_OFFSET_V2,
-  CAPABILITY_FUNDING_LEDGER_RESERVED_OFFSET_V2,
+  CAPABILITY_FUNDING_LEDGER_FUNDED_RENT_RATE_OFFSET_V2,
   CAPABILITY_FUNDING_LEDGER_SCHEMA_OFFSET_V2,
   CAPABILITY_FUNDING_LEDGER_SELECTED_MASK_OFFSET_V2,
   CAPABILITY_FUNDING_LEDGER_SLOT_BYTES_V2,
@@ -1271,7 +1271,14 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
     fields: [
       version(CAPABILITY_FUNDING_LEDGER_SCHEMA_OFFSET_V2),
       field('Selected manifest-entry mask', CAPABILITY_FUNDING_LEDGER_SELECTED_MASK_OFFSET_V2, 'u16'),
-      field('Reserved', CAPABILITY_FUNDING_LEDGER_RESERVED_OFFSET_V2, 'reserved'),
+      // Not reserved any more. This is the exemption-scaled rent rate --
+      // lamports per byte-year times the exemption threshold -- that the cluster
+      // charged when this ledger's founding created and funded it, and every
+      // exactness check over the account prices `(128 + len) * rate` from it
+      // rather than from the Rent sysvar of the moment. A reader comparing this
+      // account's lamports against today's rent-exempt minimum will be wrong by
+      // the rate difference the moment a cluster moves; compare against this.
+      field('Funded rent rate (lamports per byte)', CAPABILITY_FUNDING_LEDGER_FUNDED_RENT_RATE_OFFSET_V2, 'u32'),
       field('Manifest identity', CAPABILITY_FUNDING_LEDGER_MANIFEST_ID_OFFSET_V2, 'identity'),
     ],
     // The slot status is the `funding-ledger` state machine, and it is one row

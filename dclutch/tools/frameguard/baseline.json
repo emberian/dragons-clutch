@@ -1,6 +1,6 @@
 {
   "bound_bytes": 4096,
-  "commit": "d08bf12486f89a8796ff620a07300d9c39d217ba",
+  "commit": "c0a1586b12237e46161d395a6365a9d99bbb82dd",
   "link_count": 12,
   "links": [
     {
@@ -1749,7 +1749,7 @@
         },
         {
           "frames_bytes": [
-            3840
+            3776
           ],
           "symbol": "_ZN16dclutch_core_sbf10capability7process17h<hash>E"
         },

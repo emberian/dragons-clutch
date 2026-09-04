@@ -1573,6 +1573,36 @@ name = "dclutch-core-contract"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-core-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-contract",
+ "dclutch-capability-program-contract",
+ "dclutch-claims-svm",
+ "dclutch-core-contract",
+ "dclutch-custody-contract",
+ "dclutch-market-core-codec",
+ "dclutch-product-contract",
+ "dclutch-product-runtime-v2",
+ "dclutch-product-runtime-v2-svm-reader",
+ "dclutch-realm-contract",
+ "dclutch-record-contract",
+ "dclutch-refusal-registry",
+ "dclutch-registry-activation-auth-v1",
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
+ "dclutch-rent-contract",
+ "dclutch-resolution-codec",
+ "dclutch-series-v3-kernel",
+ "dclutch-source-contract",
+ "dclutch-token-svm",
+ "solana-program",
+ "solana-sdk-ids",
+ "solana-system-interface 2.0.0",
+]
+
+[[package]]
 name = "dclutch-custody-contract"
 version = "0.1.0"
 dependencies = [
@@ -1942,6 +1972,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-series-v3-kernel"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-market-core-codec",
+ "dclutch-rent-contract",
+ "dclutch-sha256-adapter",
+]
+
+[[package]]
 name = "dclutch-sha256-adapter"
 version = "0.1.0"
 dependencies = [
@@ -1966,6 +2006,7 @@ dependencies = [
  "dclutch-capability-program-contract",
  "dclutch-claims-svm",
  "dclutch-core-contract",
+ "dclutch-core-sbf",
  "dclutch-custody-contract",
  "dclutch-direct-codec",
  "dclutch-market-core-codec",
@@ -2001,6 +2042,7 @@ dependencies = [
  "solana-program-option",
  "solana-program-pack",
  "solana-program-test",
+ "solana-rent 4.3.0",
  "solana-rpc-client",
  "solana-sdk",
  "solana-sdk-ids",

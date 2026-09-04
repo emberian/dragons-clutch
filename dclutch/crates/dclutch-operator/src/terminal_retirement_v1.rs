@@ -783,14 +783,7 @@ pub fn build_direct_native_close_v1(
     {
         return Err(TerminalRetirementErrorV1::Projection);
     }
-    let funding = authenticate_close_funding(
-        snapshot,
-        market,
-        manifest,
-        &rent,
-        selected_bit,
-        required_union,
-    )?;
+    let funding = authenticate_close_funding(snapshot, market, manifest, selected_bit, required_union)?;
     if snapshot.root.lamports < rent.minimum_balance(snapshot.root.data.len()) {
         return Err(TerminalRetirementErrorV1::Projection);
     }
@@ -1262,7 +1255,6 @@ fn authenticate_close_funding(
     snapshot: &DirectNativeCloseSnapshotV1,
     market: CoreState,
     manifest: CapabilityManifestV1<'_>,
-    rent: &solana_program::rent::Rent,
     selected_bit: u16,
     required_union: u16,
 ) -> Result<CloseFundingProjectionV1, TerminalRetirementErrorV1> {
@@ -1297,7 +1289,9 @@ fn authenticate_close_funding(
         )
         .map_err(|_| TerminalRetirementErrorV1::Projection)?;
         let expected = Pubkey::find_program_address(&derivation.seed_components(), &controller).0;
-        let exact_rent = rent.minimum_balance(account.data.len());
+        let exact_rent = authenticated
+            .funded_rent_minimum(account.data.len())
+            .map_err(|_| TerminalRetirementErrorV1::Projection)?;
         if account.key != expected
             || account.owner != controller
             || account.executable

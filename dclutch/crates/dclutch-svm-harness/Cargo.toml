@@ -17,6 +17,7 @@ exclude = [
 ]
 
 [dev-dependencies]
+dclutch-core-sbf = { path = "../../programs/dclutch-core-sbf", features = ["no-entrypoint"] }
 dclutch-resolution-proof-sbf = { path = "../../programs/dclutch-resolution-proof-sbf", features = ["no-entrypoint"] }
 dclutch-resolution-receipt-test-caller-sbf = { path = "test-programs/resolution-receipt-caller", features = ["no-entrypoint"] }
 dclutch-pre-market-funding-test-caller-sbf = { path = "test-programs/pre-market-funding-caller", features = ["no-entrypoint"] }
@@ -80,6 +81,11 @@ solana-address-lookup-table-interface = { version = "=3.1.0", features = ["binco
 solana-commitment-config = "=3.1.1"
 solana-message = "=4.4.1"
 solana-account = "=4.3.2"
+# The 4.x Rent, which is the one `ProgramTestContext::set_sysvar` accepts --
+# `solana-program`'s is the 3.x line and does not implement `SysvarSerialize`.
+# Pinned to the version solana-program-test =4.2.1 already resolves, so this adds
+# no node to the graph; it only names one the tests could not otherwise spell.
+solana-rent = "=4.3.0"
 solana-sdk = "=3.0.0"
 solana-sdk-ids = "=3.1.0"
 solana-system-interface = { version = "=2.0.0", features = ["bincode"] }

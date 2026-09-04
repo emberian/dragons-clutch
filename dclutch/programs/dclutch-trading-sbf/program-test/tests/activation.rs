@@ -17,8 +17,8 @@ use dclutch_capability_contract::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1,
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, CompartmentFundingV1, ContentId,
     FundingAmountsV1, FundingCompartment, FundingLedgerStatusV2, FundingLedgerV2, FundingQuoteV1,
-    MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY, funding_ledger_bytes_v2,
-    funding_ledger_remaining_offset_v2,
+    MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY, derive_funded_rent_rate_v2,
+    funding_ledger_bytes_v2, funding_ledger_remaining_offset_v2,
 };
 use dclutch_capability_program_contract::{
     CAPABILITY_PROGRAM_ACCOUNT_PROFILE_OFFSET, CAPABILITY_PROGRAM_CAPACITY_PROFILE_OFFSET,
@@ -1468,8 +1468,24 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
     );
     let decoded_manifest = CapabilityManifestV1::decode(&manifest).expect("manifest");
     let mut funding_state = vec![0_u8; funding_ledger_bytes_v2(1).expect("funding width")];
-    FundingLedgerV2::initialize(&mut funding_state, manifest_id, decoded_manifest, 0b1)
-        .expect("funding ledger");
+    // The rate this bank's own `rent` prices at: `funding_rent` above already
+    // charged the fixture that figure, so the ledger has to record the rate
+    // that reproduces it.
+    let funding_state_width = funding_state.len();
+    let funded_rent_rate = derive_funded_rent_rate_v2(
+        rent.minimum_balance(0),
+        funding_state_width,
+        rent.minimum_balance(funding_state_width),
+    )
+    .expect("this bank's Rent is affine in the account length");
+    FundingLedgerV2::initialize(
+        &mut funding_state,
+        manifest_id,
+        decoded_manifest,
+        0b1,
+        funded_rent_rate,
+    )
+    .expect("funding ledger");
     let funding_ledger = FundingLedgerV2::decode(&funding_state).expect("funding ledger");
     let funding_derivation = CapabilityFundingLedgerDerivationV2::new(
         TRADING_PROGRAM_ID.to_bytes(),

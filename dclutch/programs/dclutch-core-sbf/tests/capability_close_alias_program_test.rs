@@ -7,7 +7,7 @@ use dclutch_capability_contract::{
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, CompartmentFundingV1, ContentId,
     FundingAmountsV1, FundingLedgerStatusV2, FundingLedgerV2, FundingQuoteV1,
     MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY, capability_dependency_closure_mask_v1,
-    funding_ledger_bytes_v2,
+    derive_funded_rent_rate_v2, funding_ledger_bytes_v2,
 };
 use dclutch_capability_program_contract::{
     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1, CAPABILITY_ROOT_HEADER_BYTES_V1,
@@ -308,6 +308,20 @@ fn activation(artifacts: &Artifacts) -> ([u8; 32], Vec<u8>) {
 fn add_account(test: &mut ProgramTest, key: Pubkey, owner: Pubkey, data: Vec<u8>) {
     let lamports = Rent::default().minimum_balance(data.len()).max(1);
     add_account_with_lamports(test, key, owner, data, lamports);
+}
+
+/// The exemption-scaled rate this bank charges, which is what a founding here
+/// would have recorded in its ledger header. Every account this file funds is
+/// priced with the same `Rent::default()`, so the ledgers' own
+/// `validate_recorded_native_custody` has to agree with it.
+fn funded_rent_rate(account_bytes: usize) -> u32 {
+    let rent = Rent::default();
+    derive_funded_rent_rate_v2(
+        rent.minimum_balance(0),
+        account_bytes,
+        rent.minimum_balance(account_bytes),
+    )
+    .expect("Rent::default() is affine in the account length")
 }
 
 fn add_account_with_lamports(
@@ -712,11 +726,13 @@ fn build_fixture(fault: Fault) -> (ProgramTest, Fixture) {
     let decoded_manifest = CapabilityManifestV1::decode(&manifest).expect("decoded manifest");
     let mut dependency_funding_data =
         vec![0; funding_ledger_bytes_v2(3).expect("dependency funding width")];
+    let dependency_funding_rate = funded_rent_rate(dependency_funding_data.len());
     FundingLedgerV2::initialize(
         &mut dependency_funding_data,
         manifest_id,
         decoded_manifest,
         0b0111,
+        dependency_funding_rate,
     )
     .expect("dependency funding initialize");
     for entry_index in 0_u16..3 {
@@ -759,8 +775,15 @@ fn build_fixture(fault: Fault) -> (ProgramTest, Fixture) {
     );
 
     let mut funding_data = vec![0; funding_ledger_bytes_v2(1).expect("funding width")];
-    FundingLedgerV2::initialize(&mut funding_data, manifest_id, decoded_manifest, 0b1000)
-        .expect("funding initialize");
+    let funding_rate = funded_rent_rate(funding_data.len());
+    FundingLedgerV2::initialize(
+        &mut funding_data,
+        manifest_id,
+        decoded_manifest,
+        0b1000,
+        funding_rate,
+    )
+    .expect("funding initialize");
     FundingLedgerV2::activate_in_place(&mut funding_data, manifest_id, decoded_manifest, 3, 4)
         .expect("funding activate");
     let funding_derivation = CapabilityFundingLedgerDerivationV2::new(
@@ -1736,8 +1759,15 @@ fn build_activation_fixture() -> (ProgramTest, ActivationFixture) {
     // Pending, and holding the root's rent as well as its own: the founding
     // moves the parked quote into the account it creates.
     let mut funding_data = vec![0; funding_ledger_bytes_v2(1).expect("funding width")];
-    FundingLedgerV2::initialize(&mut funding_data, manifest_id, decoded_manifest, 0b0001)
-        .expect("funding initialize");
+    let funding_rate = funded_rent_rate(funding_data.len());
+    FundingLedgerV2::initialize(
+        &mut funding_data,
+        manifest_id,
+        decoded_manifest,
+        0b0001,
+        funding_rate,
+    )
+    .expect("funding initialize");
     let funding_derivation = CapabilityFundingLedgerDerivationV2::new(
         TRADING_PROGRAM_ID.to_bytes(),
         market.to_bytes(),

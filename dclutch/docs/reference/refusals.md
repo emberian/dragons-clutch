@@ -18,12 +18,12 @@ never used, meaning a code below `0x1000` came from some other program in
 your transaction, not from dClutch. Bands at `0x100000` and above belong
 to test-only programs that are never deployed.
 
-The tables below carry all **350** codes, with meanings taken
+The tables below carry all **352** codes, with meanings taken
 from the source code's own documentation.
 
 ## Which of these have actually fired
 
-**76 of 350** codes have been observed refusing a real
+**76 of 352** codes have been observed refusing a real
 transaction against a compiled ELF.
 
 The `observed firing` column names the campaign that saw each one. It is
@@ -54,7 +54,7 @@ frame that invoked it, most often. Those are real refusals and are deliberately
 not counted above.
 
 **And the denominator is the narrower of two.** These tables carry the
-350 codes belonging to the programs the route census enumerates.
+352 codes belonging to the programs the route census enumerates.
 The tree as a whole declares more -- the census reports its own, larger figure
 across every package it indexes -- and the difference is codes in packages that
 have no enumerated program, so no campaign could observe them through a route.
@@ -248,6 +248,7 @@ The 24 campaigns contributing:
 | `0x301A` | `CoreSbfError::InfrastructureConsentMissing` | A moved binding lacks its predecessor release's bound authority. | -- | `programs/dclutch-core-sbf/src/lib.rs:213` |
 | `0x301B` | `CoreSbfError::InfrastructureAlreadySucceeded` | The V2 profile PDA is already occupied: the succession happened. | -- | `programs/dclutch-core-sbf/src/lib.rs:219` |
 | `0x301C` | `CoreSbfError::UnsupportedAction` | A wire action this program decodes and no longer composes. | -- | `programs/dclutch-core-sbf/src/lib.rs:235` |
+| `0x301D` | `CoreSbfError::FundedRent` | The rent a funding ledger was FUNDED at did not price its balance. | -- | `programs/dclutch-core-sbf/src/lib.rs:244` |
 
 ## custody
 
@@ -471,6 +472,7 @@ The 24 campaigns contributing:
 | `0x4026` | `TradingSbfError::BorrowedWitnessBytes` | The witness the borrowing route would pass is not the one the request declared. | -- | `programs/dclutch-trading-sbf/src/lib.rs:488` |
 | `0x4027` | `TradingSbfError::HeapExhausted` | The upward end of the program heap could not serve an exactly-sized bank. | -- | `programs/dclutch-trading-sbf/src/lib.rs:511` |
 | `0x4028` | `TradingSbfError::ShadowTrustedEnvironment` | A `ShadowAot` strategy was paired with a slot-declaring AccountProfile. | -- | `programs/dclutch-trading-sbf/src/lib.rs:530` |
+| `0x4029` | `TradingSbfError::FundedRent` | The rent a funding ledger was FUNDED at did not price its balance. | -- | `programs/dclutch-trading-sbf/src/lib.rs:537` |
 | `0x4100` | `SeriesAccountErrorV3::State` | Owner, width, key, phase, or canonical bytes refused. | -- | `programs/dclutch-trading-sbf/src/series/accounts.rs:47` |
 | `0x4101` | `SeriesAccountErrorV3::Frame` | Signer, writable, executable, System, or alias contract refused. | -- | `programs/dclutch-trading-sbf/src/series/accounts.rs:49` |
 | `0x4102` | `SeriesAccountErrorV3::Funding` | Exact native funding or checked arithmetic refused. | -- | `programs/dclutch-trading-sbf/src/series/accounts.rs:51` |

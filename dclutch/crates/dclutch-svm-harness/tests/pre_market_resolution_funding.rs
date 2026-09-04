@@ -16,7 +16,7 @@ use dclutch_capability_contract::{
     ControllerFundingCheckpointDerivationV1, ControllerFundingCheckpointInputV1,
     ControllerFundingCheckpointV1, FUNDING_STATE_BYTES, FundingAmountsV1, FundingLedgerStatusV2,
     FundingLedgerV2, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
-    funding_ledger_bytes_v2,
+    derive_funded_rent_rate_v2, funding_ledger_bytes_v2,
 };
 use dclutch_core_contract::ContentId as CoreContentId;
 use dclutch_market_core_codec::{
@@ -158,6 +158,20 @@ struct Fixture {
     rent_artifact: Record,
     ledger: Pubkey,
     source: Pubkey,
+}
+
+/// The exemption-scaled rent rate this bank charges, which is what a founding
+/// here records in its FundingLedgerV2 header. Every account these fixtures
+/// fund is priced with the same `Rent::default()`, so a ledger's own
+/// `validate_recorded_native_custody` has to agree with this figure.
+fn funded_rent_rate(account_bytes: usize) -> u32 {
+    let rent = Rent::default();
+    derive_funded_rent_rate_v2(
+        rent.minimum_balance(0),
+        account_bytes,
+        rent.minimum_balance(account_bytes),
+    )
+    .expect("Rent::default() is affine in the account length")
 }
 
 fn content(bytes: [u8; 32]) -> CoreContentId {
@@ -716,8 +730,15 @@ fn fixture() -> Fixture {
     let manifest_id = CapabilityContentId::new(manifest.digest).expect("manifest identity");
     let width = funding_ledger_bytes_v2(3).expect("Resolution ledger width");
     let mut pending = vec![0_u8; width];
-    FundingLedgerV2::initialize(&mut pending, manifest_id, manifest_view, 0b111)
-        .expect("pending ledger projection");
+    let pending_rate = funded_rent_rate(width);
+    FundingLedgerV2::initialize(
+        &mut pending,
+        manifest_id,
+        manifest_view,
+        0b111,
+        pending_rate,
+    )
+    .expect("pending ledger projection");
     let ledger_view = FundingLedgerV2::decode(&pending).expect("pending ledger");
     let derivation = CapabilityFundingLedgerDerivationV2::new(
         RESOLUTION_PROGRAM_ID.to_bytes(),

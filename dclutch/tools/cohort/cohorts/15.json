@@ -64,6 +64,7 @@
     {
       "label": "G",
       "kind": "general",
+      "address": "6aqy89GhhXFtDbawC5ors4HLkGvzdHC4R26TXTaaXRKj",
       "work_dir": "general",
       "collateral_mint_keypair": "keys/collateral-mint-general.json",
       "collateral_wallet_keypair": "keys/collateral-wallet-general.json"

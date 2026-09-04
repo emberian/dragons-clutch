@@ -19,7 +19,7 @@ use dclutch_capability_contract::{
     CapabilityEntryV1, CapabilityFundingLedgerDerivationV2, CapabilityManifestV1,
     CompartmentFundingV1, ContentId as CapabilityContentId, FUNDING_STATE_BYTES, FundingAmountsV1,
     FundingLedgerStatusV2, FundingLedgerV2, FundingQuoteV1, MANIFEST_HEADER_BYTES,
-    MAX_DEPENDENCIES_PER_CAPABILITY, funding_ledger_bytes_v2,
+    MAX_DEPENDENCIES_PER_CAPABILITY, derive_funded_rent_rate_v2, funding_ledger_bytes_v2,
 };
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
@@ -280,6 +280,20 @@ struct ProviderRollbackSnapshot {
     treasury: Option<Account>,
 }
 
+/// The exemption-scaled rent rate this bank charges, which is what a founding
+/// here records in its FundingLedgerV2 header. Every account these fixtures
+/// fund is priced with the same `Rent::default()`, so a ledger's own
+/// `validate_recorded_native_custody` has to agree with this figure.
+fn funded_rent_rate(account_bytes: usize) -> u32 {
+    let rent = Rent::default();
+    derive_funded_rent_rate_v2(
+        rent.minimum_balance(0),
+        account_bytes,
+        rent.minimum_balance(account_bytes),
+    )
+    .expect("Rent::default() is affine in the account length")
+}
+
 fn id(bytes: [u8; 32]) -> CoreContentId {
     CoreContentId::new(bytes).expect("nonzero content identity")
 }
@@ -486,7 +500,8 @@ fn add_active_funding(
     let width = funding_ledger_bytes_v2(3).expect("three-row FundingLedgerV2 width");
     let rent = Rent::default().minimum_balance(width);
     let mut state = vec![0_u8; width];
-    FundingLedgerV2::initialize(&mut state, manifest_id, manifest, selected_mask)
+    let rate = funded_rent_rate(width);
+    FundingLedgerV2::initialize(&mut state, manifest_id, manifest, selected_mask, rate)
         .expect("pending FundingLedgerV2");
     for entry_index in entries {
         FundingLedgerV2::activate_in_place(&mut state, manifest_id, manifest, entry_index, 1)
@@ -525,7 +540,8 @@ fn add_pending_funding(
     let width = funding_ledger_bytes_v2(3).expect("three-row FundingLedgerV2 width");
     let rent = Rent::default().minimum_balance(width);
     let mut state = vec![0_u8; width];
-    FundingLedgerV2::initialize(&mut state, manifest_id, manifest, selected_mask)
+    let rate = funded_rent_rate(width);
+    FundingLedgerV2::initialize(&mut state, manifest_id, manifest, selected_mask, rate)
         .expect("pre-Market Pending FundingLedgerV2");
     let authenticated = FundingLedgerV2::decode(&state)
         .and_then(|ledger| ledger.authenticate(manifest_id, manifest))
@@ -555,7 +571,8 @@ fn funding_key(
 ) -> Pubkey {
     let width = funding_ledger_bytes_v2(3).expect("three-row FundingLedgerV2 width");
     let mut state = vec![0_u8; width];
-    FundingLedgerV2::initialize(&mut state, manifest_id, manifest, selected_mask)
+    let rate = funded_rent_rate(width);
+    FundingLedgerV2::initialize(&mut state, manifest_id, manifest, selected_mask, rate)
         .expect("pending FundingLedgerV2");
     let ledger = FundingLedgerV2::decode(&state).expect("FundingLedgerV2");
     let derivation = CapabilityFundingLedgerDerivationV2::new(
@@ -4813,4 +4830,183 @@ async fn an_atomically_founded_market_reaches_a_terminal_certificate() {
         Some(direct_root_before),
         "the Resolution walk moved a capability root it must never read"
     );
+}
+
+/// AN EPOCH RENT CHANGE UNDER A LIVE MARKET, ON THE REAL DEPLOYED CORE.
+///
+/// This is the defect that stopped cohort-15, reproduced against the ELF rather
+/// than against a fixture of the arithmetic: a funding ledger created and funded
+/// while the cluster charged one rate, and admitted to Terminal after the
+/// cluster charged another. Devnet did exactly this at the epoch-1141 boundary
+/// on 2026-09-04 -- 6,333 down to 5,080 lamports per byte -- and
+/// `authenticate_funding`'s custody conjunct then refused market 3's admission
+/// by 491,176 lamports that no transaction had moved.
+///
+/// The drop is the direction devnet actually took and the only one that matters
+/// here: every OTHER rent check on the admission frame is a floor
+/// (`rent.is_exempt`), which a falling rate cannot break. It was the one EXACT
+/// check that stranded the cohort.
+///
+/// Proven red by construction: `assert_ne!` below is the positive control that
+/// the sysvar really moved for this account's width, and before the ledger
+/// header recorded the rate its founding paid this submission refused
+/// `CoreSbfError::Funding`.
+#[tokio::test]
+async fn an_epoch_rent_change_no_longer_strands_a_market_the_cluster_already_funded() {
+    let mut fixture = fixture(MarketPrestateV1::Terminal);
+    let mut context = fixture
+        .test
+        .take()
+        .expect("unstarted ProgramTest")
+        .start_with_context()
+        .await;
+    let mut clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("ProgramTest Clock");
+    clock.unix_timestamp = TERMINAL_TIME + 1;
+    context.set_sysvar(&clock);
+
+    let width = funding_ledger_bytes_v2(3).expect("three-row FundingLedgerV2 width");
+    let funded_rent = Rent::default();
+    let ledger_before = observed(&mut context, fixture.funding)
+        .await
+        .expect("the Active funding ledger the fixture funded");
+
+    // THE EPOCH BOUNDARY. The runtime's own Rent sysvar carries ONE number since
+    // SIMD-0194 -- `lamports_per_byte`, already exemption-scaled -- which is the
+    // same affine rate the ledger header records, and the bank's default agrees
+    // to the lamport with what the fixture funded this account at. Drop it to
+    // 5,080, which is where devnet landed. The ledger was funded before this line
+    // and is not touched by it.
+    let cluster: solana_rent::Rent = context
+        .banks_client
+        .get_sysvar()
+        .await
+        .expect("ProgramTest Rent");
+    assert_eq!(
+        cluster.minimum_balance(width),
+        funded_rent.minimum_balance(width),
+        "the bank must have funded this fixture at the rate the fixture recorded"
+    );
+    let mut lowered = cluster;
+    lowered.lamports_per_byte = 5_080;
+    context.set_sysvar(&lowered);
+
+    let funded_minimum = funded_rent.minimum_balance(width);
+    let repriced_minimum = lowered.minimum_balance(width);
+    assert_ne!(
+        funded_minimum, repriced_minimum,
+        "the cluster must really have moved for this width or the test proves nothing"
+    );
+    assert_eq!(
+        ledger_before.lamports - repriced_minimum - (ledger_before.lamports - funded_minimum),
+        funded_minimum - repriced_minimum,
+        "what the old rule would have called surplus is the whole of the rate difference"
+    );
+
+    // And the account itself is untouched across the boundary, which is the
+    // whole complaint: nothing about it changed except what it is compared to.
+    let admit = build_resolution_admit_terminal_v3(&admit_snapshot(&mut context, &fixture).await)
+        .expect("chain-derived AdmitTerminal across the rent change");
+    submit(&mut context, &[admit.instruction])
+        .await
+        .expect("Core admits a Market funded at a rate the cluster no longer charges");
+
+    let admitted = CoreState::decode(
+        &observed(&mut context, fixture.market)
+            .await
+            .expect("Market")
+            .data,
+    )
+    .expect("Core state");
+    assert_eq!(admitted.phase, Phase::Terminal);
+    assert_eq!(
+        admitted.terminal_receipt.map(|value| value.to_bytes()),
+        Some(fixture.certificate.to_bytes())
+    );
+    let ledger_after = observed(&mut context, fixture.funding)
+        .await
+        .expect("the funding ledger after admission");
+    assert_eq!(
+        ledger_after.lamports, ledger_before.lamports,
+        "the admission moved no lamport of the ledger's custody"
+    );
+}
+
+/// THE REPAIR IS NOT A RELAXATION: ONE DONATED LAMPORT STILL REFUSES.
+///
+/// Widening the conjunct to `>=` would have admitted market 3 too, and would
+/// have admitted a real donation as custody -- which the ledger census laws
+/// forbid. The recorded rate keeps the check exact, so an account carrying one
+/// lamport nobody can account for refuses on the SAME admission the test above
+/// commits.
+///
+/// AND IT CORRECTS ADDENDUM E ON WHO REFUSES. That document says
+/// `programs/dclutch-core-sbf/src/resolution.rs:1270` "runs the same call with
+/// the same `false`", so "a host relaxation would build a transaction the
+/// deployed Core refuses". Core does not run it on this action: that conjunct
+/// sits in `authenticate_live_poststate`, which `AdmitTerminal` never reaches --
+/// `authenticate_poststate` is called from the `CreateFund` arm alone, and
+/// `AdmitTerminal` makes no child invocation to acknowledge. The custody
+/// arithmetic on a terminal admission belongs to
+/// `dclutch-resolution-core-v3-operator`, and that is the wall cohort-15
+/// actually hit. The assertion below is the positive control for the claim:
+/// Core commits a donated ledger it is not asked to price.
+#[tokio::test]
+async fn a_donated_lamport_still_refuses_the_admission_across_the_same_rent_change() {
+    let mut fixture = fixture(MarketPrestateV1::Terminal);
+    let mut context = fixture
+        .test
+        .take()
+        .expect("unstarted ProgramTest")
+        .start_with_context()
+        .await;
+    let mut clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("ProgramTest Clock");
+    clock.unix_timestamp = TERMINAL_TIME + 1;
+    context.set_sysvar(&clock);
+
+    let cluster: solana_rent::Rent = context
+        .banks_client
+        .get_sysvar()
+        .await
+        .expect("ProgramTest Rent");
+    let mut lowered = cluster;
+    lowered.lamports_per_byte = 5_080;
+    context.set_sysvar(&lowered);
+
+    // Build the admission against the honest ledger FIRST, so the donation is
+    // reached by the program rather than refused by the operator that plans it.
+    let admit = build_resolution_admit_terminal_v3(&admit_snapshot(&mut context, &fixture).await)
+        .expect("chain-derived AdmitTerminal across the rent change");
+
+    let mut donated = observed(&mut context, fixture.funding)
+        .await
+        .expect("the Active funding ledger");
+    donated.lamports += 1;
+    context.set_account(
+        &fixture.funding,
+        &solana_account::AccountSharedData::from(donated),
+    );
+
+    // THE PLANNER IS THE WALL, and it refuses before a transaction exists --
+    // which is where cohort-15 met this, with the instrument that prints both
+    // numbers rather than the conjunct's name.
+    assert!(
+        build_resolution_admit_terminal_v3(&admit_snapshot(&mut context, &fixture).await).is_err(),
+        "one donated lamport must refuse the admission the planner would build"
+    );
+
+    // The positive control for the sentence in this test's doc comment: Core
+    // itself does not price the ledger on `AdmitTerminal`, so the instruction
+    // built before the donation still commits. If this line ever starts
+    // refusing, Core has grown a conjunct here and the doc comment is stale.
+    submit(&mut context, &[admit.instruction])
+        .await
+        .expect("Core does not re-price the funding ledger on a terminal admission");
 }

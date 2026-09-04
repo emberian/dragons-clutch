@@ -1266,13 +1266,26 @@ fn authenticate_live_poststate(
             return Err(CoreSbfError::ChildAck);
         }
     }
+    // THE RENT AN ACCOUNT WAS FUNDED AT IS A FACT, NOT A READING.
+    // This conjunct used to ask the Rent sysvar of the moment what a
+    // 264-byte ledger costs, and compare that against an account funded in an
+    // earlier transaction. Devnet moved its rate 6,333 -> 5,080 at the
+    // epoch-1141 boundary while cohort-15 was live, and this line then refused
+    // market 3's admission by exactly 491,176 lamports that nobody had moved.
+    // The ledger's own header records the rate its founding paid; ask that.
     authenticated
-        .validate_native_custody(
+        .validate_recorded_native_custody(
             funding_account.lamports(),
-            rent.minimum_balance(RESOLUTION_FUNDING_LEDGER_BYTES),
+            RESOLUTION_FUNDING_LEDGER_BYTES,
             false,
         )
-        .map_err(|_| CoreSbfError::Funding)?;
+        .map_err(|error| match error {
+            dclutch_capability_contract::Error::FundedRentNotEvidenced
+            | dclutch_capability_contract::Error::FundedRentRateMissing => {
+                CoreSbfError::FundedRent
+            }
+            _ => CoreSbfError::Funding,
+        })?;
     let derivation = CapabilityFundingLedgerDerivationV2::new(
         frame.target_program().key.to_bytes(),
         frame.market().key.to_bytes(),

@@ -4501,3 +4501,18 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Cuts: `1633a3edf`, `518bb5319`.
 - Started 06:30 EDT: WEB-PAGE **`a28b8afc2171cf1c0`** — the orchestrator's own read of the featured page (12,318 px at desktop):
   reader first, the operator sections behind one fold, the verdict before the button, the long tables on the type scale.
+
+### 2026-09-04 06:45 EDT — RENT IS A RATE, AND THE WALL WAS THE PLANNER
+- PROGRAMS-16 closed (`c0a1586b1`, `4137ec0d3`, `8a0d3f893`, `315c1df2e`): **the fact to persist is the RATE, not the minimum**
+  — `minimum_balance(len) = (128 + len) × rate`, a u32 in the ledger header's four reserved bytes (Lean: `.fundedRentRate`;
+  five theorems — cohort-15's 491,176 is now a corollary); all fifteen production `validate_native_custody` sites check a
+  FundingLedgerV2, so one header field serves every one; pre-existing-account sites price from the record, creating sites
+  read the sysvar and record what they paid; the terminal session v2 records the rate and the sequence never reads the
+  sysvar again; codes `FundedRent 0x301D/0x4029`; **the epoch program-test on real ELFs: funded at 6,960, the sysvar dropped
+  to 5,080 mid-test, the terminal admission commits.** Rows: one function shrank. **Correction to addendum E: Core does NOT
+  run the conjunct on AdmitTerminal (CreateFund only) — the wall cohort-15 hit is the operator's planner, a host.** The
+  General "one entry per action" is unbuildable at three layers (manifest keyed by kind_id, MAX 16, one entry_index per
+  root); the real lever is `LifecycleCurrentRentQuoteInputV5.action = None` → the union of lifecycle counts — owed.
+  → COHORT-15F **`(spawned)`**: the planner recovers the funded rate from a ledger's own lamports (exact or refuse), the
+  stranger paid on market 3, market 1 retired — no redeploy needed if the deployed Core reads as the lane says.
+- Cuts: `d83f7dc0b`, `eeed62463`.

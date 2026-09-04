@@ -760,6 +760,54 @@ fn a_substituted_activation_record_refuses() {
 /// the Market is able to run. The Direct family does not have this shape: its
 /// non-ordinary bundles carry `ordinary.derivation_policy()`, so one entry binds
 /// every Direct action.
+/// WHAT THE REPAIR IS NOT, MEASURED 2026-09-04 BEFORE ANYONE BUILT IT.
+///
+/// The obvious reading of this wall is "give the manifest an entry per action".
+/// It is unbuildable, at three independent layers, and each one refuses before a
+/// per-action entry could exist:
+///
+/// 1. A manifest is KEYED BY `kind_id` and strictly ascending in it
+///    (`dclutch-capability-contract/src/lib.rs` `validate_manifest` and
+///    `validate_entry_slice`). Fifteen entries all carrying
+///    `GENERAL_CAPABILITY_KIND_ID_V1` do not encode at all --
+///    `Error::NonCanonicalEntryOrder`, before any signature exists. Minting
+///    fifteen synthetic kind ids instead breaks `validate_selection`'s own
+///    `self.kind != selection.kind()` and the "one selected trade capability per
+///    Market" rule the compilation seam enforces.
+/// 2. `MAX_CAPABILITIES_V1` is 16 and the dependency closure is a `u16` bitset.
+///    A founded Market already carries three Resolution companions; 3 + 15 = 18.
+/// 3. `CapabilityRootHeaderV1` persists ONE `entry_index`, fixed at activation
+///    and read on every hot action. Fifteen entries with one persisted index buy
+///    nothing.
+///
+/// AND DIRECT DOES NOT HAVE PER-ACTION ENTRIES EITHER. Its non-ordinary bundles
+/// carry `ordinary.derivation_policy()` -- `begin_retiring_bundle_v1.rs:131`,
+/// `native_close_bundle_v1.rs:187`, `close_maker_bundle_v1.rs:137`,
+/// `activation_bundle_v1.rs:231`, each re-pinned by its own validator. That is
+/// FIFTEEN DESCRIPTORS SHARING ONE POLICY, which is the shape General owes, and
+/// it leaves `artifacts_v3.rs:522` untouched because all fifteen would then name
+/// the same lifecycle record.
+///
+/// The lever already exists and is already `None` for every General quote:
+/// `LifecycleCurrentRentQuoteInputV5.action: Option<u32>`
+/// (`dclutch-account-profile-contract/src/lifecycle_v3/encode.rs`), which Direct
+/// used to make one policy serve its registered Sell and Buy -- the third way
+/// its own record at
+/// `programs/dclutch-trading-sbf/program-test/tests/direct_registered_creation_hot.rs`
+/// says it found after rejecting both of the two this comment used to offer.
+/// What General owes beyond that is the rest of the policy: `lifecycle_counts`
+/// (`general-adapter-contract/src/state_artifacts_v3.rs`) gives each action a
+/// different `(recipes, seeds, plans)` triple, so the fifteen policies differ in
+/// WIDTH and not only in content, and a unified one is their union.
+///
+/// A second thing this test cannot see, and the reason devnet found the wall
+/// before the ladder did: the General program-test builds its manifest entry
+/// FROM the OpenBatch bundle
+/// (`programs/dclutch-trading-sbf/program-test/general-hot/tests/open_batch.rs`),
+/// while the founding tool builds it from `bundles.first()` and lets the action
+/// come later. The ladder picks the action first and derives the entry; the
+/// founding picks the entry and hopes. Until they agree, a green ladder says
+/// nothing about a founded market.
 #[test]
 fn every_action_descriptor_carries_its_own_derivation_policy() {
     let release = general_selected_release_v1(input()).expect("release");

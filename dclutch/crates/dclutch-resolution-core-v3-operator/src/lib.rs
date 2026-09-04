@@ -1121,7 +1121,6 @@ pub fn build_resolution_create_fund_v3(
         manifest_id,
         manifest,
         selected_mask,
-        &rent,
     )?;
     // Keep these decoded authorities live in the builder rather than accepting
     // caller-selected entry coordinates.
@@ -1238,7 +1237,6 @@ pub fn build_resolution_verify_fund_ready_v3(
         market.identity.generation,
         manifest_id,
         manifest,
-        &rent,
         false,
     )?;
     // The records-derived entry list arrives in record-traversal order while
@@ -1444,7 +1442,6 @@ pub fn build_resolution_activate_fund_v1(
             manifest_id,
             manifest,
             funding_entry_mask(entries)?,
-            &rent,
         )?;
         let mut beneficiary_credit = 0_u64;
         for entry_index in entries {
@@ -1485,7 +1482,6 @@ pub fn build_resolution_activate_fund_v1(
             market.identity.generation,
             manifest_id,
             manifest,
-            &rent,
             false,
         )?;
         let receipt = FundingActivationReceiptV1::decode(&pending.activation_receipt.data)
@@ -1724,7 +1720,7 @@ pub fn build_resolution_admit_terminal_v3(
     {
         return Err(ResolutionCoreOperatorErrorV3::Terminal);
     }
-    let entries = authenticate_funding(snapshot, market, &rent)?;
+    let entries = authenticate_funding(snapshot, market)?;
     let role_request = ResolutionRoleRequestV2 {
         action: ResolutionCoreActionV1::AdmitTerminal,
         receipt_kind,
@@ -2628,7 +2624,6 @@ fn authenticate_pending_funding(
     manifest_id: CapabilityContentId,
     manifest: CapabilityManifestV1<'_>,
     selected_mask: u16,
-    rent: &solana_program::rent::Rent,
 ) -> Result<Vec<u8>, ResolutionCoreOperatorErrorV3> {
     if account.owner != resolution_program
         || account.executable
@@ -2662,11 +2657,7 @@ fn authenticate_pending_funding(
         }
     }
     authenticated
-        .validate_native_custody(
-            account.lamports,
-            rent.minimum_balance(account.data.len()),
-            false,
-        )
+        .validate_recorded_native_custody(account.lamports, account.data.len(), false)
         .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
     let derivation = CapabilityFundingLedgerDerivationV2::new(
         resolution_program.to_bytes(),
@@ -3274,7 +3265,6 @@ fn authenticate_close_source(
 fn authenticate_funding(
     snapshot: &ResolutionAdmitTerminalSnapshotV3,
     market: CoreState,
-    rent: &solana_program::rent::Rent,
 ) -> Result<[u16; 3], ResolutionCoreOperatorErrorV3> {
     let manifest_id = CapabilityContentId::new(market.identity.capability_manifest.to_bytes())
         .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
@@ -3287,7 +3277,6 @@ fn authenticate_funding(
         market.identity.generation,
         manifest_id,
         manifest,
-        rent,
         false,
     )
 }
@@ -3345,11 +3334,16 @@ fn authenticate_close_funding(
         market.identity.generation,
         manifest_id,
         manifest,
-        rent,
         true,
     )?;
     let mut planned = snapshot.funding_ledger.data.clone();
-    let ledger_rent = rent.minimum_balance(planned.len());
+    // The rent to REFUND is the rent that was PAID. Reading the sysvar here
+    // refunded today's price for an account bought at yesterday's, and the
+    // difference then showed up as an unclassified surplus.
+    let ledger_rent = FundingLedgerV2::decode(&planned)
+        .map_err(|_| refuse("funding ledger decode"))?
+        .funded_rent_minimum(planned.len())
+        .map_err(|_| refuse("funded rent rate"))?;
     let mut planned_lamports = snapshot.funding_ledger.lamports;
     let mut ledger_can_close = false;
     let mut ledger_remaining_native_principal = 0_u64;
@@ -3501,7 +3495,6 @@ fn authenticate_active_funding_ledger(
     generation: u64,
     manifest_id: CapabilityContentId,
     manifest: CapabilityManifestV1<'_>,
-    rent: &solana_program::rent::Rent,
     allow_lamport_surplus: bool,
 ) -> Result<[u16; 3], ResolutionCoreOperatorErrorV3> {
     let refuse = |conjunct: &str| {
@@ -3535,16 +3528,21 @@ fn authenticate_active_funding_ledger(
             return Err(refuse("realm-collateral quote"));
         }
     }
-    // The arithmetic, not just its name. `rent.minimum_balance` is a CHAIN
-    // parameter read at the moment of the check, while the account was funded
-    // at whatever the parameter was when it was created -- so this conjunct can
-    // refuse a ledger nothing has touched, and "native custody arithmetic"
-    // alone sends the reader to diff two ledgers that are equal. Cohort-15
-    // spent a lane on exactly that: devnet's rent-exempt rate fell from 6,333
-    // to 5,080 lamports per byte at an epoch boundary, and a Market whose
-    // sibling had been admitted four hours earlier refused with every byte of
-    // its ledger unchanged.
-    let ledger_rent_minimum = rent.minimum_balance(account.data.len());
+    // The arithmetic, not just its name -- and the term that used to move.
+    // This read `rent.minimum_balance`, a CHAIN parameter read at the moment of
+    // the check, while the account was funded at whatever the parameter was
+    // when it was created; so the conjunct could refuse a ledger nothing had
+    // touched. Cohort-15 spent a lane on exactly that: devnet's rent-exempt
+    // rate fell from 6,333 to 5,080 lamports per byte at the epoch-1141
+    // boundary and a Market whose sibling had been admitted four hours earlier
+    // refused with every byte of its ledger unchanged. The ledger's header now
+    // carries the rate its founding paid, and the figure below is derived from
+    // that record -- so the refusal is still EXACT, and one lamport of donation
+    // still refuses; it just no longer accuses the account of what the cluster
+    // did.
+    let ledger_rent_minimum = authenticated
+        .funded_rent_minimum(account.data.len())
+        .map_err(|_| refuse("funded rent rate"))?;
     authenticated
         .validate_native_custody(account.lamports, ledger_rent_minimum, allow_lamport_surplus)
         .map_err(|_| {

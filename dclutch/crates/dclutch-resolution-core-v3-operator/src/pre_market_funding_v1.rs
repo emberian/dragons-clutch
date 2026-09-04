@@ -105,8 +105,25 @@ pub fn build_pre_market_funding_v2(
     let selected_mask = resolution_mask(manifest)?;
     let width = funding_ledger_bytes_v2(3).map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
     let mut ledger_bytes = vec![0_u8; width];
-    FundingLedgerV2::initialize(&mut ledger_bytes, manifest_id, manifest, selected_mask)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+    // The host mirror of the program's own observation. Both read the SAME
+    // sysvar in the SAME transaction, so the recorded rate is identical by
+    // construction; a divergence here is a divergence the receipt catches.
+    let creation_rent =
+        decode_rent(&snapshot.rent).map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+    let funded_rent_rate = dclutch_capability_contract::derive_funded_rent_rate_v2(
+        creation_rent.minimum_balance(0),
+        width,
+        creation_rent.minimum_balance(width),
+    )
+    .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+    FundingLedgerV2::initialize(
+        &mut ledger_bytes,
+        manifest_id,
+        manifest,
+        selected_mask,
+        funded_rent_rate,
+    )
+    .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
     let authenticated = FundingLedgerV2::decode(&ledger_bytes)
         .and_then(|ledger| ledger.authenticate(manifest_id, manifest))
         .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;

@@ -11,7 +11,7 @@ use solana_sdk::signature::{Keypair, Signer};
 
 use dclutch_capability_contract::{
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
-    FundingLedgerStatusV2, FundingLedgerV2, funding_ledger_bytes_v2,
+    FundingLedgerStatusV2, FundingLedgerV2, derive_funded_rent_rate_v2, funding_ledger_bytes_v2,
 };
 use dclutch_market_core_codec::{CoreState, Phase};
 use dclutch_product_runtime_v2::ResultDomainV2;
@@ -523,11 +523,20 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
             format!("FundingLedgerV2 width: {error:?}")
         ))?
     ];
+    // The rate THIS chain charges, read from the same connection the founding
+    // ran on, so the rebuilt ledger is byte-identical to the one on chain.
+    let funded_rent_rate = derive_funded_rent_rate_v2(
+        session.rpc.minimum_balance(0)?,
+        funding_ledger_bytes.len(),
+        session.rpc.minimum_balance(funding_ledger_bytes.len())?,
+    )
+    .map_err(|error| Error::new(format!("funded rent rate: {error:?}")))?;
     FundingLedgerV2::initialize(
         &mut funding_ledger_bytes,
         manifest_id,
         manifest_view,
         selected_mask,
+        funded_rent_rate,
     )
     .map_err(|error| Error::new(format!("pending FundingLedgerV2: {error:?}")))?;
     let pending_funding = FundingLedgerV2::decode(&funding_ledger_bytes)

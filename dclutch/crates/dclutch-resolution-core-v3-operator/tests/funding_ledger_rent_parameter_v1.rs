@@ -44,6 +44,37 @@ const CREATION_RATE_LAMPORTS_PER_BYTE: u64 = 6_333;
 /// the epoch-1141 boundary onward.
 const EPOCH_1141_RATE_LAMPORTS_PER_BYTE: u64 = 5_080;
 
+/// THE FIXTURES ARE CHAIN EVIDENCE AND ARE NOT EDITED.
+///
+/// These four `.bin` files are cohort-15's own account bytes, read off devnet at
+/// finalized commitment, and they were written by programs that had no field for
+/// the rate they were funded at. So every read below splices `6,333` into a COPY
+/// of the header, at the four bytes that used to be reserved -- which is exactly
+/// and only what a cohort-16 founding writes there itself. The splice is the
+/// whole content of the repair: nothing else about these accounts changes, and
+/// the tests below are the before and after of that one field existing.
+fn recorded(ledger_bytes: &[u8]) -> Vec<u8> {
+    let rate = u32::try_from(CREATION_RATE_LAMPORTS_PER_BYTE).expect("rate fits");
+    let mut bytes = ledger_bytes.to_vec();
+    // Located by decode rather than by a hand-written offset: the span is the one
+    // whose four zero bytes, filled with the rate, make a header decode at all.
+    let offset = (0..44)
+        .find(|start| {
+            let mut probe = ledger_bytes.to_vec();
+            let Some(span) = probe.get_mut(*start..start + 4) else {
+                return false;
+            };
+            span.copy_from_slice(&rate.to_le_bytes());
+            FundingLedgerV2::decode(&probe).is_ok()
+        })
+        .expect("exactly one header span carries the funded rate");
+    bytes
+        .get_mut(offset..offset + 4)
+        .expect("the span the search found")
+        .copy_from_slice(&rate.to_le_bytes());
+    bytes
+}
+
 #[allow(deprecated)]
 fn rent_at(rate: u64) -> Rent {
     Rent {
@@ -61,8 +92,9 @@ struct LedgerReading {
     remaining_native_total: u64,
 }
 
-fn read(ledger_bytes: &[u8], manifest_bytes: &[u8]) -> LedgerReading {
-    let ledger = FundingLedgerV2::decode(ledger_bytes).expect("ledger decodes");
+fn read(raw_ledger_bytes: &[u8], manifest_bytes: &[u8]) -> LedgerReading {
+    let ledger_bytes = recorded(raw_ledger_bytes);
+    let ledger = FundingLedgerV2::decode(&ledger_bytes).expect("ledger decodes");
     let manifest = CapabilityManifestV1::decode(manifest_bytes).expect("manifest decodes");
     // The identity the ledger itself binds; `authenticate` refuses any other.
     let manifest_id = ledger.manifest_content_id();
@@ -93,15 +125,16 @@ fn read(ledger_bytes: &[u8], manifest_bytes: &[u8]) -> LedgerReading {
     }
 }
 
-fn custody_at(ledger_bytes: &[u8], manifest_bytes: &[u8], rate: u64) -> Result<(), Error> {
-    let ledger = FundingLedgerV2::decode(ledger_bytes).expect("ledger decodes");
+fn custody_at(raw_ledger_bytes: &[u8], manifest_bytes: &[u8], rate: u64) -> Result<(), Error> {
+    let ledger_bytes = recorded(raw_ledger_bytes);
+    let ledger = FundingLedgerV2::decode(&ledger_bytes).expect("ledger decodes");
     let manifest = CapabilityManifestV1::decode(manifest_bytes).expect("manifest decodes");
     ledger
         .authenticate(ledger.manifest_content_id(), manifest)
         .expect("the ledger binds its own manifest")
         .validate_native_custody(
             OBSERVED_LEDGER_LAMPORTS,
-            rent_at(rate).minimum_balance(ledger_bytes.len()),
+            rent_at(rate).minimum_balance(raw_ledger_bytes.len()),
             false,
         )
 }
@@ -155,4 +188,64 @@ fn the_stranded_lamports_are_exactly_the_rent_difference() {
         creation_minimum - epoch_1141_minimum,
         "the surplus the conjunct refuses is the rent difference and nothing else"
     );
+}
+
+/// THE PAYOFF, ON THE SAME BYTES: THE VERDICT STOPS MOVING.
+///
+/// Everything above is the defect. This is the repair, measured on cohort-15's
+/// own ledgers rather than on a fixture built to agree with it: once the header
+/// records the rate the account was funded at, the custody conjunct gives the
+/// same answer no matter what the cluster charges today, and it is still EXACT.
+/// The three assertions are the ruling's three hostiles in order.
+#[test]
+fn a_recorded_rate_makes_the_verdict_stop_moving_and_stay_exact() {
+    for (market, raw, manifest_bytes) in [
+        ("market 1", MARKET_1_LEDGER, MARKET_1_MANIFEST),
+        ("market 3", MARKET_3_LEDGER, MARKET_3_MANIFEST),
+    ] {
+        let bytes = recorded(raw);
+        let manifest = CapabilityManifestV1::decode(manifest_bytes).expect("manifest decodes");
+        let ledger = FundingLedgerV2::decode(&bytes).expect("ledger decodes");
+        let authenticated = ledger
+            .authenticate(ledger.manifest_content_id(), manifest)
+            .expect("the ledger binds its own manifest");
+
+        // The record reproduces the cluster reading that funded it, to the lamport.
+        assert_eq!(
+            authenticated.funded_rent_minimum(raw.len()),
+            Ok(rent_at(CREATION_RATE_LAMPORTS_PER_BYTE).minimum_balance(raw.len())),
+            "{market}'s recorded rate rederives the minimum it was funded at"
+        );
+
+        // (a) exact after the cluster moved.
+        assert_eq!(
+            authenticated.validate_recorded_native_custody(
+                OBSERVED_LEDGER_LAMPORTS,
+                raw.len(),
+                false
+            ),
+            Ok(()),
+            "{market} is exact against the rate it was funded at, whatever devnet charges now"
+        );
+
+        // (b) a donation of one lamport still refuses.
+        assert_eq!(
+            authenticated.validate_recorded_native_custody(
+                OBSERVED_LEDGER_LAMPORTS + 1,
+                raw.len(),
+                false
+            ),
+            Err(Error::FundedRentNotEvidenced),
+            "{market} still refuses one lamport nobody can account for"
+        );
+
+        // (c) and the old rule, run beside it on the same bytes, still refuses --
+        //     which is the positive control that this fixture straddles a real
+        //     rate change rather than proving nothing.
+        assert_eq!(
+            custody_at(raw, manifest_bytes, EPOCH_1141_RATE_LAMPORTS_PER_BYTE),
+            Err(Error::PresentNativeLamportsMismatch),
+            "{market} is still stranded by the rule this repair replaces"
+        );
+    }
 }

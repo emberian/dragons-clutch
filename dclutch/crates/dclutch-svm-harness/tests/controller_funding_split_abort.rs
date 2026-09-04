@@ -19,7 +19,7 @@ use dclutch_capability_contract::{
     ContentId as CapabilityContentId, ControllerFundingCheckpointDerivationV1,
     ControllerFundingCheckpointInputV1, ControllerFundingCheckpointV1, FundingAmountsV1,
     FundingLedgerV2, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
-    funding_ledger_bytes_v2,
+    derive_funded_rent_rate_v2, funding_ledger_bytes_v2,
 };
 use dclutch_core_contract::ContentId as CoreContentId;
 use dclutch_custody_contract::{
@@ -128,6 +128,20 @@ enum SlotPinHostile {
     TradingUpgradeAuthority,
     ResolutionUpgradeAuthority,
     ActivationCache,
+}
+
+/// The exemption-scaled rent rate this bank charges, which is what a founding
+/// here records in its FundingLedgerV2 header. Every account these fixtures
+/// fund is priced with the same `Rent::default()`, so a ledger's own
+/// `validate_recorded_native_custody` has to agree with this figure.
+fn funded_rent_rate(account_bytes: usize) -> u32 {
+    let rent = Rent::default();
+    derive_funded_rent_rate_v2(
+        rent.minimum_balance(0),
+        account_bytes,
+        rent.minimum_balance(account_bytes),
+    )
+    .expect("Rent::default() is affine in the account length")
 }
 
 fn artifacts() -> Elves {
@@ -303,8 +317,10 @@ fn ledger(
     let manifest_id =
         CapabilityContentId::new(hash(manifest_bytes).to_bytes()).expect("manifest identity");
     let rows = u16::try_from(selected_mask.count_ones()).expect("row count");
-    let mut bytes = vec![0_u8; funding_ledger_bytes_v2(rows).expect("ledger width")];
-    FundingLedgerV2::initialize(&mut bytes, manifest_id, manifest, selected_mask)
+    let width = funding_ledger_bytes_v2(rows).expect("ledger width");
+    let mut bytes = vec![0_u8; width];
+    let rate = funded_rent_rate(width);
+    FundingLedgerV2::initialize(&mut bytes, manifest_id, manifest, selected_mask, rate)
         .expect("Pending ledger");
     let decoded = FundingLedgerV2::decode(&bytes).expect("ledger");
     let principal = decoded

@@ -31,10 +31,10 @@ Source module: `apps/dclutch-web/lib/generated/sourceReadinessWasmV1.ts`, whose 
 | `SOURCE_CLOSE_SNAPSHOT_FORMAT_V1` | `dclutch-source-close-snapshot-v1` |
 | `SOURCE_CLOSE_PLAN_FORMAT_V1` | `dclutch-source-close-plan-v1` |
 | `SOURCE_CLOSE_VERIFY_FORMAT_V1` | `dclutch-source-close-verify-v1` |
-| `SOURCE_READINESS_WASM_SHA256_V1` | `6a43a1ebe984c88aa1447693cdb5e106ced85005dc05f99dd8b5e665ed5239ad` |
+| `SOURCE_READINESS_WASM_SHA256_V1` | `bcbac6015ac0d2e61f8bca2a51d75ef684d135e5d23b5e180a814eece927e466` |
 
 ## Numeric constants (widths, offsets, counts, tags)
 
 | name | value |
 | --- | ---: |
-| `SOURCE_READINESS_WASM_BYTES_V1` | 856,417 |
+| `SOURCE_READINESS_WASM_BYTES_V1` | 859,511 |

@@ -206,13 +206,7 @@ pub(crate) fn process(
                 .map_err(|_| CoreSbfError::FinalizedRecord)?;
             let manifest =
                 CapabilityManifestV1::decode(&manifest_data).map_err(|_| CoreSbfError::Funding)?;
-            validate_ledgers_post(
-                route.funding_ledgers,
-                manifest_id,
-                manifest,
-                &rent,
-                &ledger_plans,
-            )?;
+            validate_ledgers_post(route.funding_ledgers, manifest_id, manifest, &ledger_plans)?;
             if route.root.owner != route.child_program.key || route.root.data_len() == 0 {
                 return Err(CoreSbfError::ChildAck.into());
             }
@@ -223,13 +217,7 @@ pub(crate) fn process(
                 .map_err(|_| CoreSbfError::FinalizedRecord)?;
             let manifest =
                 CapabilityManifestV1::decode(&manifest_data).map_err(|_| CoreSbfError::Funding)?;
-            validate_ledgers_post(
-                route.funding_ledgers,
-                manifest_id,
-                manifest,
-                &rent,
-                &ledger_plans,
-            )?;
+            validate_ledgers_post(route.funding_ledgers, manifest_id, manifest, &ledger_plans)?;
             if route.root.owner != &system_program::ID
                 || route.root.data_len() != 0
                 || route.root.lamports() != 0
@@ -498,12 +486,18 @@ fn validate_ledgers_pre(
         let selected_ledger = ledger_mask == selected_bit;
         validate_ledger_pda(ledger_account, &controller, state, manifest_id, ledger)?;
         authenticated
-            .validate_native_custody(
+            .validate_recorded_native_custody(
                 ledger_account.lamports(),
-                rent.minimum_balance(ledger_data.len()),
+                ledger_data.len(),
                 action == Action::CloseCapability && selected_ledger,
             )
-            .map_err(|_| CoreSbfError::Funding)?;
+            .map_err(|error| match error {
+                dclutch_capability_contract::Error::FundedRentNotEvidenced
+                | dclutch_capability_contract::Error::FundedRentRateMissing => {
+                    CoreSbfError::FundedRent
+                }
+                _ => CoreSbfError::Funding,
+            })?;
 
         let mut entry_index = 0_u16;
         while entry_index < manifest.entry_count() {
@@ -705,7 +699,6 @@ fn validate_ledgers_post(
     ledger_accounts: &[AccountInfo<'_>],
     manifest_id: ContentId,
     manifest: CapabilityManifestV1<'_>,
-    rent: &Rent,
     plans: &[LedgerTransitionPlan],
 ) -> Result<(), CoreSbfError> {
     if ledger_accounts.len() != plans.len() {
@@ -737,9 +730,9 @@ fn validate_ledgers_post(
         ledger
             .authenticate(manifest_id, manifest)
             .and_then(|authenticated| {
-                authenticated.validate_native_custody(
+                authenticated.validate_recorded_native_custody(
                     ledger_account.lamports(),
-                    rent.minimum_balance(ledger_data.len()),
+                    ledger_data.len(),
                     false,
                 )
             })

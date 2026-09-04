@@ -73,6 +73,19 @@ every Core signature across three cohorts with "resolves to no core route",
 which made the program the protocol drives most the one program invisible to
 its own devnet witness channel.
 
+THE WIDTH IS THE CENSUS'S TO FOLD, and this tool reads it rather than
+recomputing it. `Action::Retire`'s four arms are guarded on
+`RESOLUTION_CORE_INSTRUCTION_BYTES_V1` (592), `RETIREMENT_INSTRUCTION_BYTES_V1`
+(2,152) and `RETIREMENT_CHECKPOINT_PREPARE_INSTRUCTION_BYTES_V1` (808, named by
+two of them), and not one of those is a literal: each is a sum reaching four
+crates, so this reader used to credit NONE of the four and say why. The census
+now folds such an expression to a fixpoint, scoped by the declaring file's own
+imports because `REQUEST_BYTES` is declared five times in four crates with four
+different values, and writes the number beside the constant. 592 is also the
+instruction length devnet reports for every `core/resolution::process#Retire`
+transaction cohort-15 has run, so the fold is not merely arithmetic that
+type-checks: it reproduces the width the deployed program compiled.
+
 The RPC key is read from ~/.helius-key at use time and never written anywhere;
 the endpoint is redacted out of every message this tool prints.
 """
@@ -428,8 +441,8 @@ def source_files() -> list[pathlib.Path]:
     return found
 
 
-def magic_routes(inventory: dict, paths) -> tuple[dict, dict, dict]:
-    """(magic -> {(program label, route id)}, magic -> constant names, literal usize consts).
+def magic_routes(inventory: dict, paths) -> tuple[dict, dict]:
+    """(magic -> {(program label, route id)}, magic -> constant names).
 
     Two dispatch shapes reach a route from eight bytes. The census records the
     first directly, as a `magic` selector. The second it records as a
@@ -440,14 +453,11 @@ def magic_routes(inventory: dict, paths) -> tuple[dict, dict, dict]:
     """
     constants: dict[str, set[tuple[str, str]]] = {}
     predicates: dict[str, set[str]] = {}
-    literals: dict[str, set[int]] = {}
     for path in paths:
         try:
             text = path.read_text()
         except OSError:
             continue
-        for match in USIZE_CONST.finditer(text):
-            literals.setdefault(match.group(1), set()).add(int(match.group(2)))
         found = list(MAGIC_CONST.finditer(text))
         if not found:
             continue
@@ -486,18 +496,18 @@ def magic_routes(inventory: dict, paths) -> tuple[dict, dict, dict]:
                     for magic, held in predicates.items():
                         if name in held:
                             routes.setdefault(magic, set()).add((program["label"], route["id"]))
-    return routes, names, literals
+    return routes, names
 
 
-def narrow_by_discriminant(hits, selectors, data, tables, literals):
+def narrow_by_discriminant(hits, selectors, data, tables):
     """Eleven routes behind one magic, cut to the arm the payload names.
 
     Returns (kept, dropped, action). `action` is the chain-derived reading --
     offset, tag, variant -- and is written into the record so `--check` can put
-    the same question to devnet later. Nothing is credited on a guess: when a
-    variant still names several routes AND those routes are separated by a
-    length constant this reader cannot fold, the whole set is dropped with the
-    reason, the same direction of error the program guard already takes.
+    the same question to devnet later. Nothing is credited on a guess: a
+    variant whose routes are separated by a width the census could not fold
+    drops the whole set with the reason, the same direction of error the
+    program guard already takes.
     """
     variants = {
         route: {
@@ -573,45 +583,59 @@ def narrow_by_discriminant(hits, selectors, data, tables, literals):
         if selected not in variants[route]
     ]
     if len(kept) > 1:
-        # The dispatch separates same-variant arms by length
-        # (`Action::Retire if instruction_data.len() == ..`). Fold the
-        # constants when they are literals; when they are not, credit nobody
-        # rather than credit four routes for one transaction.
-        # Compare the CONSTANT NAMES, not their values: these constants are
-        # sums of other crates' widths, so folding them needs an evaluator this
-        # reader does not have, and comparing unresolved values makes four
-        # different guards look like one.
-        names = {
-            route: frozenset(
-                (selector.get("constant") or "").split("::")[-1]
-                for selector in selectors.get(route, [])
-                if selector.get("kind") == "length"
-            )
-            for route in kept
-        }
+        # The dispatch separates same-variant arms by an EXACT instruction
+        # length (`Action::Retire if instruction_data.len() == ..`), and the
+        # width is never a literal: `RETIREMENT_INSTRUCTION_BYTES_V1` is a sum
+        # over four crates. The census folds it -- scoped by the declaring
+        # file's own imports, because `REQUEST_BYTES` is declared five times
+        # with four values -- and writes the folded number beside the constant
+        # it came from. Reading THAT is reading the census; re-deriving it here
+        # would be a second interpreter of the same Rust.
+        #
+        # Only routes the dispatch actually separates this way are cut: a
+        # variant whose arms carry the same width guard (or none) is a dispatch
+        # arm and the function it calls, and both of them ran.
         lengths = {
-            route: {
-                value
-                for name in names[route]
-                for value in (literals.get(name) or set())
-                if len(literals.get(name) or set()) == 1
-            }
+            route: frozenset(
+                selector["value"]
+                for selector in selectors.get(route, [])
+                if selector.get("kind") == "length" and selector.get("value") is not None
+            )
             for route in kept
         }
-        if len({names[route] for route in kept}) > 1:
-            foldable = all(
-                len(literals.get(name) or set()) == 1
-                for route in kept
-                for name in names[route]
+        unfolded = {
+            route: sorted(
+                selector.get("constant") or "?"
+                for selector in selectors.get(route, [])
+                if selector.get("kind") == "length" and selector.get("value") is None
             )
+            for route in kept
+        }
+        if len({lengths[route] for route in kept}) > 1:
+            missing = sorted({name for route in kept for name in unfolded[route]})
             by_length = [route for route in kept if len(data) in lengths[route]]
-            if foldable and by_length:
+            if missing:
+                dropped += [
+                    {
+                        "route": route,
+                        "reason": (
+                            f"`{enum}::{named[1]}` names {len(kept)} routes the dispatch "
+                            "separates by an instruction length, and the census folded no "
+                            f"value for {', '.join(f'`{name}`' for name in missing)}, so none "
+                            "of them is credited"
+                        ),
+                    }
+                    for route in kept
+                ]
+                kept = []
+            elif by_length:
                 dropped += [
                     {
                         "route": route,
                         "reason": (
                             f"the instruction is {len(data)} bytes and this arm of "
-                            f"`{enum}::{named[1]}` is guarded on a different length"
+                            f"`{enum}::{named[1]}` is guarded on "
+                            + ", ".join(str(value) for value in sorted(lengths[route]))
                         ),
                     }
                     for route in kept
@@ -619,13 +643,18 @@ def narrow_by_discriminant(hits, selectors, data, tables, literals):
                 ]
                 kept = by_length
             else:
+                # The variant is right and no arm's width matches. That is the
+                # chain refuting the reading, not an unresolved constant, and
+                # saying so is different from saying "cannot fold".
                 dropped += [
                     {
                         "route": route,
                         "reason": (
-                            f"`{enum}::{named[1]}` names {len(kept)} routes that the dispatch "
-                            "separates by an instruction length whose constant this reader "
-                            "cannot fold, so none of them is credited"
+                            f"the instruction is {len(data)} bytes and no arm of "
+                            f"`{enum}::{named[1]}` is guarded on that length "
+                            "(this route: "
+                            + ", ".join(str(value) for value in sorted(lengths[route]))
+                            + ")"
                         ),
                     }
                     for route in kept
@@ -648,7 +677,7 @@ def harvest(source: pathlib.Path) -> list[str]:
 def discover(arguments) -> int:
     inventory = json.loads(pathlib.Path(arguments.inventory).read_text())
     paths = source_files()
-    resolved, magic_names, literals = magic_routes(inventory, paths)
+    resolved, magic_names = magic_routes(inventory, paths)
     discriminants = discriminant_index(paths)
     selectors = {
         route["id"]: route.get("selectors", [])
@@ -705,7 +734,7 @@ def discover(arguments) -> int:
             for constant in magic_names.get(magic, set()):
                 tables.update(discriminants.get(constant, {}))
             hits, unselected, action = narrow_by_discriminant(
-                hits, selectors, instruction["data"], tables, literals
+                hits, selectors, instruction["data"], tables
             )
             if not hits:
                 skipped.append(

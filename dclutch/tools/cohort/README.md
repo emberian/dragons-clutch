@@ -204,6 +204,32 @@ in any other phase is left exactly where it is.
 Into the owner's own ATA. Done when the evidence names a finalized payout, not
 when a status field says so.
 
+### funded-rent-recorded
+
+The rent an account was funded at is a fact fixed when it was funded, and from
+cohort 16 the funding ledger's header carries it: the four bytes that were
+reserved now hold the exemption-scaled rent rate -- lamports per byte-year times
+the exemption threshold -- that the cluster charged when the founding created
+the account. Every exactness check downstream prices `(128 + len) * rate` from
+that record instead of re-deriving from the Rent sysvar of the moment. This row
+exists because cohort-15 learned the cost of not having it: devnet moved the
+rate from 6,333 to 5,080 at the epoch-1141 boundary mid-cohort and stranded
+three walls, each refusing by exactly the rate difference times the account's
+own footprint, on accounts nobody had touched. Run this immediately after the
+census and before `admit-terminal`, because a zero here means the deployed image
+predates the schema and every terminal check will refuse `FundedRent`.
+
+### retire
+
+The last unrun step in the runbook, and the reason it was never written down:
+until cohort 16 no market had reached it. It is four checkpointed packets, not
+one transaction -- the onchain checkpoint is the route owner and each packet
+keeps its own durable journal, so a crash resumes rather than inventing a second
+transaction identity. Rerun until every journal reads finalized. Cohort-15's
+market 1 got as far as phase 3 `Retiring` and stopped five rent-exactness guards
+deep; those five now price against `funded-rent-recorded`'s figure, which is
+what makes this row runnable at all.
+
 ### route-witness
 
 Harvest the signatures out of this cohort's evidence document, ask devnet what

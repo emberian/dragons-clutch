@@ -213,6 +213,22 @@ pub enum Error {
     FundingBindingMismatch,
     /// Present observed native lamports did not equal remaining lamports.
     PresentNativeLamportsMismatch,
+    /// The rent rate a record was funded at was absent, zero, or unreadable.
+    ///
+    /// Split out of the coarse custody refusal on 2026-09-04: an account funded
+    /// before this field existed carries a zero here, and a zero rate prices
+    /// every account at nothing. Fail closed and say which.
+    FundedRentRateMissing,
+    /// The cluster's rent-exempt minimum was not affine in the account's length,
+    /// so no single rate reproduces it and none may be recorded as if one did.
+    UnrepresentableRentRate,
+    /// A record's funded rent rate did not price the balance the account holds.
+    ///
+    /// This is `PresentNativeLamportsMismatch`'s recorded-rent sibling: the
+    /// custody arithmetic disagreed and the term that disagreed was the
+    /// PERSISTED figure, not the observed lamports. A reader given one code for
+    /// both has to bisect to learn which.
+    FundedRentNotEvidenced,
     /// Present observed Realm tokens did not equal remaining Realm collateral.
     PresentRealmCollateralMismatch,
     /// A quote requiring Realm collateral had no authenticated token vault.
@@ -1081,6 +1097,10 @@ fn read_byte(bytes: &[u8], offset: usize) -> Result<u8> {
     bytes.get(offset).copied().ok_or(Error::InvalidLength)
 }
 
+fn read_u32(bytes: &[u8], offset: usize) -> Result<u32> {
+    Ok(u32::from_le_bytes(read_array(bytes, offset)?))
+}
+
 fn read_u16(bytes: &[u8], offset: usize) -> Result<u16> {
     Ok(u16::from_le_bytes(read_array::<2>(bytes, offset)?))
 }
@@ -1133,6 +1153,10 @@ fn put_byte(output: &mut [u8], offset: usize, value: u8) {
     if let Some(byte) = output.get_mut(offset) {
         *byte = value;
     }
+}
+
+fn put_u32(output: &mut [u8], offset: usize, value: u32) {
+    copy_infallible(output, offset, &value.to_le_bytes());
 }
 
 fn put_u16(output: &mut [u8], offset: usize, value: u16) {

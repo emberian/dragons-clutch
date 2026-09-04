@@ -295,22 +295,52 @@ def fundingLedgerAuthorityPdaDomainV2 : String := "dclutch/cap-ledger-auth/v2"
 /-- Optional per-entry Realm-collateral vault. -/
 def fundingLedgerVaultPdaDomainV2 : String := "dclutch/cap-ledger-vault/v2"
 
+/-! ### The rent an account was funded at
+
+A rent-exempt minimum is a CLUSTER parameter, not a constant, and Solana's
+`Rent::minimum_balance` is affine in the account's length:
+
+    minimum_balance(len) = (accountStorageOverheadBytes + len) * rate
+
+where `rate` is `lamports_per_byte_year * exemption_threshold`.  Devnet moved
+that rate from 6,333 to 5,080 at the epoch-1141 boundary WHILE COHORT-15 WAS
+LIVE, and every exactness check that re-derived it from the sysvar of the moment
+then refused an account nobody had touched.
+
+The fact worth persisting is therefore the RATE and not any one length's
+minimum: one `u32` rederives the funded minimum of every account one founding
+created, at every length, in integer arithmetic with no rounding boundary.  That
+is why the ledger header's four reserved bytes are enough after all -- a `u64`
+minimum does not fit them, and the rate that generates every such minimum
+does. -/
+
+/-- Solana's fixed per-account storage overhead, in bytes.  Chain-derived. -/
+def accountStorageOverheadBytes : Nat := 128
+
+/-- The rent-exempt minimum an account of `accountBytes` was funded at, given
+the exemption-scaled rate in force when its founding created it. -/
+def fundedRentMinimum (rate accountBytes : Nat) : Nat :=
+  (accountStorageOverheadBytes + accountBytes) * rate
+
 inductive LedgerHeaderFieldV2 where
-  | magic | schemaVersion | selectedMask | reserved | manifestId
+  | magic | schemaVersion | selectedMask | fundedRentRate | manifestId
   deriving DecidableEq, Repr
 
 def ledgerHeaderSchemaV2 : List (FieldSpec LedgerHeaderFieldV2) := [
   ⟨.magic, .bytes 8⟩,
   ⟨.schemaVersion, .u16⟩,
   ⟨.selectedMask, .u16⟩,
-  ⟨.reserved, .reserved 4⟩,
+  ⟨.fundedRentRate, .u32⟩,
   ⟨.manifestId, .bytes 32⟩
 ]
 
 def ledgerHeaderLayoutV2 : List (PlacedField LedgerHeaderFieldV2) :=
   specialize ledgerHeaderSchemaV2
 def ledgerHeaderBytesV2 : Nat := schemaWidth ledgerHeaderSchemaV2
-def ledgerHeaderReservedBytesV2 : Nat := 4
+/-- The header holds no reserved span any more: the four bytes that were
+reserved now carry the funded rent rate, at the same coordinate and the same
+width. -/
+def ledgerHeaderReservedBytesV2 : Nat := 0
 
 namespace LedgerHeaderFieldV2
 
@@ -318,7 +348,7 @@ def constantName : LedgerHeaderFieldV2 → String
   | .magic => "CAPABILITY_FUNDING_LEDGER_MAGIC_OFFSET_V2"
   | .schemaVersion => "CAPABILITY_FUNDING_LEDGER_SCHEMA_OFFSET_V2"
   | .selectedMask => "CAPABILITY_FUNDING_LEDGER_SELECTED_MASK_OFFSET_V2"
-  | .reserved => "CAPABILITY_FUNDING_LEDGER_RESERVED_OFFSET_V2"
+  | .fundedRentRate => "CAPABILITY_FUNDING_LEDGER_FUNDED_RENT_RATE_OFFSET_V2"
   | .manifestId => "CAPABILITY_FUNDING_LEDGER_MANIFEST_ID_OFFSET_V2"
 
 end LedgerHeaderFieldV2
@@ -611,6 +641,72 @@ theorem ledger_header_fields_are_disjoint :
     ledgerHeaderLayoutV2.Pairwise Before := specializeFrom_pairwise 0 ledgerHeaderSchemaV2
 theorem ledger_slot_fields_are_disjoint :
     ledgerSlotLayoutV2.Pairwise Before := specializeFrom_pairwise 0 ledgerSlotSchemaV2
+
+/-! ### The funded rent rate, and what it costs -/
+
+/-- Recording the rate the cluster charged when a ledger was funded costs the
+header nothing.  The field occupies exactly the span the reserved bytes held --
+same coordinate, same width -- so a `FundingLedgerV2` account is the width it
+has always been, its PDA is the address it has always had, and every wire that
+embeds `48 + 72 * rows` is unmoved.  A `u64` minimum would not have fit; the
+rate that generates every minimum does. -/
+theorem the_funded_rate_reuses_the_reserved_span :
+    coordinate? LedgerHeaderFieldV2.fundedRentRate ledgerHeaderLayoutV2 = some (12, 4)
+      ∧ ledgerHeaderBytesV2 = 48
+      ∧ ledgerHeaderReservedBytesV2 = 0 := by
+  native_decide
+
+/-- The rate is recoverable from the cluster's own zero-length reading, which is
+how a program derives what to record without trusting a caller for it. -/
+theorem the_rate_is_recoverable_from_the_zero_length_minimum (rate : Nat) :
+    fundedRentMinimum rate 0 / accountStorageOverheadBytes = rate := by
+  simp [fundedRentMinimum, accountStorageOverheadBytes]
+
+/-- ONE RATE SERVES EVERY LENGTH.  This is the whole reason the persisted fact is
+the rate and not one account's minimum: a founding creates accounts of many
+widths, and a lookup table's width GROWS between the check that funded it and
+the check that reads it. -/
+theorem one_rate_prices_every_length (rate len : Nat) :
+    fundedRentMinimum rate len
+      = fundedRentMinimum rate 0 + len * rate := by
+  simp [fundedRentMinimum, accountStorageOverheadBytes, Nat.add_mul]
+
+/-- WHAT A RATE CHANGE STRANDS, IN CLOSED FORM.  An account funded at one rate
+and checked against another is refused by exactly the rate difference scaled by
+its own footprint -- a quantity no transaction moved and no party owns.  This is
+the arithmetic behind the refusal that stopped cohort-15. -/
+theorem the_stranded_amount_is_the_rate_gap (funded checked len : Nat) :
+    fundedRentMinimum funded len - fundedRentMinimum checked len
+      = (accountStorageOverheadBytes + len) * (funded - checked) := by
+  simpa [fundedRentMinimum] using (Nat.mul_sub (accountStorageOverheadBytes + len) funded checked).symm
+
+/-- Devnet's own numbers, as a corollary rather than as an observation: the
+264-byte funding ledger cohort-15 funded at 6,333 held 2,482,536 of rent, the
+same account re-priced at 5,080 needs 1,991,360, and the 491,176 lamport
+difference the epoch-1141 boundary stranded is `392 * 1,253`. -/
+theorem cohort_fifteen_funding_ledger_gap_is_four_hundred_ninety_one_thousand_one_hundred_seventy_six :
+    fundedRentMinimum 6333 264 = 2482536
+      ∧ fundedRentMinimum 5080 264 = 1991360
+      ∧ fundedRentMinimum 6333 264 - fundedRentMinimum 5080 264 = 491176 := by
+  native_decide
+
+/-- Every account width cohort-15 created, priced by the one rate its founding
+paid.  Nine readings taken off the chain in
+`docs/evidence/COHORT15_DEPLOYED_SEALED_FOUNDED_CAPTURED_2026_09_04.md`, and
+nine agreements -- which is what makes the affine model a measurement rather
+than a hope. -/
+theorem the_whole_cohort_is_one_rate :
+    fundedRentMinimum 6333 264 = 2482536      -- funding ledger
+      ∧ fundedRentMinimum 6333 312 = 2786520  -- certificate seat
+      ∧ fundedRentMinimum 6333 170 = 1887234  -- payout ATA
+      ∧ fundedRentMinimum 6333 368 = 3141168  -- Market
+      ∧ fundedRentMinimum 6333 2128 = 14287248 -- capability manifest
+      ∧ fundedRentMinimum 6333 416 = 3445152  -- terminal session receipt
+      ∧ fundedRentMinimum 6333 1720 = 11703384 -- terminal lookup table
+      ∧ fundedRentMinimum 5080 416 = 2763520
+      ∧ fundedRentMinimum 5080 1720 = 9387840
+      ∧ fundedRentMinimum 5080 0 = 650240 := by
+  native_decide
 theorem entry_fields_are_disjoint :
     entryLayout.Pairwise Before := specializeFrom_pairwise 0 entrySchema
 theorem header_fields_are_disjoint :

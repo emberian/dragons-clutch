@@ -561,7 +561,7 @@ fn authenticate_generic_core_found_references(
     roles: RoleBatchAdmissions,
 ) -> Result<(), CoreSbfError> {
     authenticate_found_request(frame, request, request_bytes, prepared, rent)?;
-    authenticate_generic_funding_and_capability_root(frame, request, prepared, rent, roles)
+    authenticate_generic_funding_and_capability_root(frame, request, prepared, roles)
 }
 
 #[inline(never)]
@@ -905,7 +905,6 @@ fn authenticate_generic_funding_and_capability_root(
     frame: &GenericFoundAccounts<'_, '_>,
     request: &GenericFoundingRequestV1,
     prepared: &PreparedFound,
-    rent: &Rent,
     roles: RoleBatchAdmissions,
 ) -> Result<(), CoreSbfError> {
     let manifest_data = frame
@@ -990,12 +989,14 @@ fn authenticate_generic_funding_and_capability_root(
                 .ok_or(CoreSbfError::Arithmetic)?;
         }
         authenticated
-            .validate_native_custody(
-                funding_account.lamports(),
-                rent.minimum_balance(data.len()),
-                false,
-            )
-            .map_err(|_| CoreSbfError::Funding)?;
+            .validate_recorded_native_custody(funding_account.lamports(), data.len(), false)
+            .map_err(|error| match error {
+                dclutch_capability_contract::Error::FundedRentNotEvidenced
+                | dclutch_capability_contract::Error::FundedRentRateMissing => {
+                    CoreSbfError::FundedRent
+                }
+                _ => CoreSbfError::Funding,
+            })?;
         let derivation = CapabilityFundingLedgerDerivationV2::new(
             controller.to_bytes(),
             request.market().to_bytes(),

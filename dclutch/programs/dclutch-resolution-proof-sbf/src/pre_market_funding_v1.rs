@@ -141,11 +141,21 @@ pub fn process_pre_market_funding_v2(
         CapabilityContentId::new(request.manifest).map_err(|_| ResolutionError::Funding)?;
     let width = funding_ledger_bytes_v2(3).map_err(|_| ResolutionError::Funding)?;
     let mut ledger_bytes = vec![0_u8; width];
+    // THE ONE PLACE THE RATE IS OBSERVED. Everything downstream -- activation,
+    // admission, the terminal walk, the close -- reads the figure recorded here
+    // instead of re-deriving it from a sysvar that can move under a live cohort.
+    let funded_rent_rate = dclutch_capability_contract::derive_funded_rent_rate_v2(
+        rent.minimum_balance(0),
+        width,
+        rent.minimum_balance(width),
+    )
+    .map_err(|_| ResolutionError::Funding)?;
     FundingLedgerV2::initialize(
         &mut ledger_bytes,
         manifest_id,
         manifest,
         request.selected_mask,
+        funded_rent_rate,
     )
     .map_err(|_| ResolutionError::Funding)?;
     let funding_ledger =

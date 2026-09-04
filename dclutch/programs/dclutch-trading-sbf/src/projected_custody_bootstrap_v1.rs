@@ -1215,15 +1215,22 @@ fn close_trading_pending_ledger_v1(
     if Pubkey::find_program_address(&derivation.seed_components(), program_id).0 != *ledger.key {
         return Err(TradingSbfError::Content.into());
     }
-    let rent = Rent::from_account_info(account(accounts, FUNDING_ABORT_RENT)?)
+    // The framed Rent sysvar is still AUTHENTICATED and no longer READ: the
+    // abort prices this ledger by the rate its own header records, not by the
+    // cluster's rate at the moment of the abort. Keeping the frame slot keeps
+    // the account layout stable for every builder; dropping the reading is the
+    // whole repair.
+    let _rent = Rent::from_account_info(account(accounts, FUNDING_ABORT_RENT)?)
         .map_err(|_| TradingSbfError::Content)?;
-    let exact_rent = rent.minimum_balance(ledger_data.len());
+    let exact_rent = authenticated
+        .funded_rent_minimum(ledger_data.len())
+        .map_err(|_| TradingSbfError::FundedRent)?;
     let principal = authenticated
         .remaining_native_lamports_total()
         .map_err(|_| TradingSbfError::Content)?;
     authenticated
         .validate_native_custody(ledger.lamports(), exact_rent, false)
-        .map_err(|_| TradingSbfError::Content)?;
+        .map_err(|_| TradingSbfError::FundedRent)?;
     drop(ledger_data);
     close_one_pending_ledger_v1(
         ledger,
@@ -2157,8 +2164,23 @@ fn plan_funding_ledger_v2(
     )
     .map_err(|_| TradingSbfError::Content)?;
     let mut bytes = vec![0_u8; width];
-    FundingLedgerV2::initialize(&mut bytes, manifest_id, manifest, selected_mask)
-        .map_err(|_| TradingSbfError::Content)?;
+    // Record the rate this founding is paying, so every later exactness check
+    // over this account asks what it was funded at rather than what the sysvar
+    // says at the moment of the check.
+    let funded_rent_rate = dclutch_capability_contract::derive_funded_rent_rate_v2(
+        rent.minimum_balance(0),
+        width,
+        rent.minimum_balance(width),
+    )
+    .map_err(|_| TradingSbfError::FundedRent)?;
+    FundingLedgerV2::initialize(
+        &mut bytes,
+        manifest_id,
+        manifest,
+        selected_mask,
+        funded_rent_rate,
+    )
+    .map_err(|_| TradingSbfError::Content)?;
     let ledger = FundingLedgerV2::decode(&bytes).map_err(|_| TradingSbfError::Content)?;
     let authenticated = ledger
         .authenticate(manifest_id, manifest)

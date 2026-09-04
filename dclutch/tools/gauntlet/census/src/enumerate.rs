@@ -71,6 +71,14 @@ const MAX_DISPATCH_DEPTH: usize = 2;
 struct ConstantFact {
     value: ConstantValue,
     provenance: Provenance,
+    /// The crate whose sources declare it, with `-` normalised to `_`.
+    ///
+    /// A bare name is enough to key most of this index, and deliberately so.
+    /// It is not enough to FOLD one: `REQUEST_BYTES` is declared five times
+    /// in four crates with four different values, and `retire_v1.rs` sums the
+    /// Core codec's 72 while `open_selected_v3.rs` means its own. The crate is
+    /// what a scoped lookup filters on when the bare name collides.
+    krate: String,
 }
 
 #[derive(Clone, Debug)]
@@ -85,6 +93,13 @@ enum ConstantValue {
 #[derive(Default)]
 pub struct ConstantIndex {
     facts: BTreeMap<String, Vec<ConstantFact>>,
+    /// Every crate directory the walk saw, `-` normalised to `_`.
+    ///
+    /// A path's first segment is a crate only if it names one. `resolution::
+    /// RESOLUTION_CORE_INSTRUCTION_BYTES_V1` and `dclutch_market_core_codec::
+    /// REQUEST_BYTES` are both two segments, and only the second is qualified
+    /// by a crate; without this set the first would be read as one.
+    crates: BTreeSet<String>,
 }
 
 impl ConstantIndex {
@@ -97,11 +112,73 @@ impl ConstantIndex {
             None
         }
     }
+
+    /// Resolve a path written inside `krate`, with that file's imports.
+    ///
+    /// The cautious bare-name rule first, because it needs no scope and is
+    /// right whenever the tree declares a name once. Only a COLLIDING name
+    /// consults the scope, and then it answers what the compiler answers: an
+    /// explicit crate qualifier if the path carries one, else the crate the
+    /// file imported the name from, else the file's own crate. If that crate
+    /// does not declare the name exactly once, the lookup refuses.
+    fn resolve_scoped(
+        &self,
+        path: &str,
+        krate: &str,
+        imports: &BTreeMap<String, String>,
+    ) -> Option<&ConstantFact> {
+        let name = path.rsplit("::").next().unwrap_or(path);
+        let facts = self.facts.get(name)?;
+        if facts.len() == 1 {
+            return facts.first();
+        }
+        let segments: Vec<&str> = path.split("::").collect();
+        let qualifier = segments
+            .first()
+            .filter(|_| segments.len() >= 2)
+            .and_then(|first| self.crates.contains(*first).then_some((*first).to_string()))
+            .or_else(|| {
+                imports.get(name).and_then(|full| {
+                    let first = full.split("::").next()?;
+                    self.crates.contains(first).then(|| first.to_string())
+                })
+            })
+            .unwrap_or_else(|| krate.to_string());
+        let mut scoped = facts.iter().filter(|fact| fact.krate == qualifier);
+        let first = scoped.next()?;
+        if scoped.next().is_some() {
+            return None;
+        }
+        Some(first)
+    }
 }
 
-/// Index every `const NAME: ... = <literal>;` in the tree that we can evaluate.
+/// A `const` whose value is an expression over other constants.
+///
+/// Held back from the index until the names it sums are themselves known.
+struct PendingConstant {
+    name: String,
+    expr: Expr,
+    provenance: Provenance,
+    krate: String,
+    /// The declaring file's imports: leaf name -> the path it was imported by.
+    imports: BTreeMap<String, String>,
+}
+
+/// Index every `const NAME: ... = <expr>;` in the tree that we can evaluate.
+///
+/// Two phases, because a width is rarely a literal. The first takes every
+/// constant whose right-hand side IS one; the second folds the sums, to a
+/// fixpoint, so that a constant may be written over names declared later or in
+/// another crate. `RETIREMENT_INSTRUCTION_BYTES_V1` is
+/// `REQUEST_BYTES + RETIREMENT_BUNDLE_BYTES_V1 +
+/// CLAIMS_MARKET_CLOSURE_REQUEST_BYTES_V1 + CUSTODY_REQUEST_BYTES_V1 * 2` over
+/// four crates, and until it folded, the four `Action::Retire` routes the Core
+/// dispatch separates BY that width were indistinguishable to every reader
+/// downstream -- so `corroborate.py` credited none of them and said so.
 pub fn index_constants(root: &Path) -> Result<ConstantIndex, String> {
     let mut index = ConstantIndex::default();
+    let mut pending: Vec<PendingConstant> = Vec::new();
     for directory in ["crates", "programs"] {
         let base = root.join(directory);
         if !base.is_dir() {
@@ -115,50 +192,232 @@ pub fn index_constants(root: &Path) -> Result<ConstantIndex, String> {
                 continue;
             };
             let relative = relative(root, &path);
-            index_constants_in_items(&file.items, &relative, &mut index);
+            let krate = crate_of(&relative);
+            index.crates.insert(krate.clone());
+            let mut imports = BTreeMap::new();
+            collect_imports(&file.items, &mut imports);
+            index_constants_in_items(
+                &file.items,
+                &relative,
+                &krate,
+                &imports,
+                &mut index,
+                &mut pending,
+            );
         }
     }
+    fold_pending_constants(&mut index, pending);
     Ok(index)
 }
 
-fn index_constants_in_items(items: &[Item], relative: &str, index: &mut ConstantIndex) {
+/// `crates/dclutch-market-core-codec/src/generated.rs` -> `dclutch_market_core_codec`.
+fn crate_of(relative: &str) -> String {
+    relative
+        .split('/')
+        .nth(1)
+        .unwrap_or_default()
+        .replace('-', "_")
+}
+
+/// Flatten every `use` into leaf name -> full path.
+///
+/// Only the leaf matters: what a bare `REQUEST_BYTES` in this file MEANS is
+/// the crate the file imported it from, which is the one thing a bare-name
+/// index cannot know.
+fn collect_imports(items: &[Item], out: &mut BTreeMap<String, String>) {
+    for item in items {
+        match item {
+            Item::Use(use_item) => collect_use_tree(&use_item.tree, "", out),
+            Item::Mod(module) => {
+                if let Some((_, items)) = &module.content {
+                    collect_imports(items, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn collect_use_tree(tree: &syn::UseTree, prefix: &str, out: &mut BTreeMap<String, String>) {
+    let join = |segment: &str| {
+        if prefix.is_empty() {
+            segment.to_string()
+        } else {
+            format!("{prefix}::{segment}")
+        }
+    };
+    match tree {
+        syn::UseTree::Path(path) => {
+            collect_use_tree(&path.tree, &join(&path.ident.to_string()), out);
+        }
+        syn::UseTree::Name(name) => {
+            let leaf = name.ident.to_string();
+            let full = join(&leaf);
+            out.insert(leaf, full);
+        }
+        syn::UseTree::Rename(rename) => {
+            let full = join(&rename.ident.to_string());
+            out.insert(rename.rename.to_string(), full);
+        }
+        syn::UseTree::Group(group) => {
+            for item in &group.items {
+                collect_use_tree(item, prefix, out);
+            }
+        }
+        syn::UseTree::Glob(_) => {}
+    }
+}
+
+/// Fold the expression-valued constants until nothing more resolves.
+///
+/// Bounded by construction: every pass either learns at least one constant or
+/// is the last. A name that never folds simply stays out of the index, which
+/// is the same "unresolved" a reader downstream already handles.
+fn fold_pending_constants(index: &mut ConstantIndex, mut pending: Vec<PendingConstant>) {
+    loop {
+        let mut resolved = Vec::new();
+        let mut still = Vec::new();
+        for constant in pending {
+            match evaluate_integer(&constant.expr, index, &constant.krate, &constant.imports) {
+                Some(value) => resolved.push((constant, value)),
+                None => still.push(constant),
+            }
+        }
+        if resolved.is_empty() {
+            return;
+        }
+        for (constant, value) in resolved {
+            index
+                .facts
+                .entry(constant.name)
+                .or_default()
+                .push(ConstantFact {
+                    value: ConstantValue::Integer(value),
+                    provenance: constant.provenance,
+                    krate: constant.krate,
+                });
+        }
+        pending = still;
+    }
+}
+
+/// Evaluate an integer constant expression over the index.
+///
+/// Deliberately small: the widths this exists for are sums, differences and
+/// small products of named widths, and nothing here evaluates a call, an
+/// `impl` associated item or a generic. An expression it does not model
+/// returns `None`, and the constant stays unresolved rather than wrong.
+fn evaluate_integer(
+    expr: &Expr,
+    index: &ConstantIndex,
+    krate: &str,
+    imports: &BTreeMap<String, String>,
+) -> Option<i64> {
+    match expr {
+        Expr::Lit(literal) => match &literal.lit {
+            syn::Lit::Int(int) => int.base10_parse::<i64>().ok(),
+            _ => None,
+        },
+        Expr::Paren(paren) => evaluate_integer(&paren.expr, index, krate, imports),
+        Expr::Group(group) => evaluate_integer(&group.expr, index, krate, imports),
+        // `X as usize` over an integer changes no value this index holds.
+        Expr::Cast(cast) => evaluate_integer(&cast.expr, index, krate, imports),
+        Expr::Binary(binary) => {
+            let left = evaluate_integer(&binary.left, index, krate, imports)?;
+            let right = evaluate_integer(&binary.right, index, krate, imports)?;
+            match binary.op {
+                BinOp::Add(_) => left.checked_add(right),
+                BinOp::Sub(_) => left.checked_sub(right),
+                BinOp::Mul(_) => left.checked_mul(right),
+                _ => None,
+            }
+        }
+        Expr::Path(path) => {
+            let text = render_path(&path.path);
+            match &index.resolve_scoped(&text, krate, imports)?.value {
+                ConstantValue::Integer(value) => Some(*value),
+                ConstantValue::Bytes { .. } => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn index_constants_in_items(
+    items: &[Item],
+    relative: &str,
+    krate: &str,
+    imports: &BTreeMap<String, String>,
+    index: &mut ConstantIndex,
+    pending: &mut Vec<PendingConstant>,
+) {
     for item in items {
         match item {
             Item::Const(konst) => {
-                if let Some(value) = constant_value(&konst.expr) {
-                    index
-                        .facts
-                        .entry(konst.ident.to_string())
-                        .or_default()
-                        .push(ConstantFact {
-                            value,
-                            provenance: at(relative, konst.ident.span()),
-                        });
-                }
+                record_constant(
+                    &konst.ident,
+                    &konst.expr,
+                    relative,
+                    krate,
+                    imports,
+                    index,
+                    pending,
+                );
             }
             Item::Mod(module) => {
                 if let Some((_, items)) = &module.content {
-                    index_constants_in_items(items, relative, index);
+                    index_constants_in_items(items, relative, krate, imports, index, pending);
                 }
             }
             Item::Impl(block) => {
                 for item in &block.items {
-                    if let syn::ImplItem::Const(konst) = item
-                        && let Some(value) = constant_value(&konst.expr)
-                    {
-                        index
-                            .facts
-                            .entry(konst.ident.to_string())
-                            .or_default()
-                            .push(ConstantFact {
-                                value,
-                                provenance: at(relative, konst.ident.span()),
-                            });
+                    if let syn::ImplItem::Const(konst) = item {
+                        record_constant(
+                            &konst.ident,
+                            &konst.expr,
+                            relative,
+                            krate,
+                            imports,
+                            index,
+                            pending,
+                        );
                     }
                 }
             }
             _ => {}
         }
+    }
+}
+
+/// A literal goes straight into the index; anything else waits for the fold.
+#[allow(clippy::too_many_arguments)]
+fn record_constant(
+    ident: &syn::Ident,
+    expr: &Expr,
+    relative: &str,
+    krate: &str,
+    imports: &BTreeMap<String, String>,
+    index: &mut ConstantIndex,
+    pending: &mut Vec<PendingConstant>,
+) {
+    let provenance = at(relative, ident.span());
+    match constant_value(expr) {
+        Some(value) => index
+            .facts
+            .entry(ident.to_string())
+            .or_default()
+            .push(ConstantFact {
+                value,
+                provenance,
+                krate: krate.to_string(),
+            }),
+        None => pending.push(PendingConstant {
+            name: ident.to_string(),
+            expr: expr.clone(),
+            provenance,
+            krate: krate.to_string(),
+            imports: imports.clone(),
+        }),
     }
 }
 
@@ -262,6 +521,15 @@ pub(crate) struct FunctionFact {
     /// The seed of receiver-type resolution: `context.validate(false)` names
     /// a parameter, and the signature is where its type is written.
     pub(crate) inputs: Vec<(String, String)>,
+    /// Every named parameter, whatever its type.
+    ///
+    /// `inputs` is deliberately narrower -- it drops a parameter whose type
+    /// this reader cannot name, because a receiver it cannot type is a
+    /// receiver it must not resolve. But `&[u8]` is exactly such a type, and
+    /// it is the type of EVERY instruction payload in this tree, so a rule
+    /// phrased "hands its own parameter to one call" cannot be asked of
+    /// `inputs` at all: the set is empty for every recogniser in the census.
+    pub(crate) parameters: Vec<String>,
     /// The type this returns, unwrapped through one generic layer.
     ///
     /// `Result<PlanV2>` reads as `PlanV2`, because a `?` at the call site is
@@ -503,6 +771,23 @@ pub(crate) fn signature_inputs(signature: &syn::Signature) -> Vec<(String, Strin
     inputs
 }
 
+/// Every named parameter of a signature, whatever its declared type.
+pub(crate) fn signature_parameters(signature: &syn::Signature) -> Vec<String> {
+    signature
+        .inputs
+        .iter()
+        .filter_map(|argument| {
+            let syn::FnArg::Typed(typed) = argument else {
+                return None;
+            };
+            let syn::Pat::Ident(ident) = typed.pat.as_ref() else {
+                return None;
+            };
+            Some(ident.ident.to_string())
+        })
+        .collect()
+}
+
 fn signature_output(signature: &syn::Signature, self_type: Option<&str>) -> Option<String> {
     let syn::ReturnType::Type(_, declared) = &signature.output else {
         return None;
@@ -590,6 +875,7 @@ fn function_fact(
         relative: relative.to_string(),
         self_type: self_type.map(str::to_string),
         inputs: signature_inputs(&function.sig),
+        parameters: signature_parameters(&function.sig),
         output: signature_output(&function.sig, self_type),
         output_elements: signature_output_elements(&function.sig, self_type),
         machine_boundary: cfg_texts(&function.attrs)
@@ -689,6 +975,7 @@ fn collect_functions(items: &[Item], module: &str, relative: &str, out: &mut Cra
                         relative: relative.to_string(),
                         self_type: self_type.map(str::to_string),
                         inputs: signature_inputs(&method.sig),
+                        parameters: signature_parameters(&method.sig),
                         output: signature_output(&method.sig, self_type),
                         output_elements: signature_output_elements(&method.sig, self_type),
                         machine_boundary: cfg_texts(&method.attrs)
@@ -1490,6 +1777,19 @@ impl DispatchWalk<'_> {
     /// entrypoint's selector set a function of arbitrary call depth, which is
     /// the ambiguity `index` exists to refuse. A predicate that cannot be
     /// resolved, or that states no constant, leaves the row exactly as it was.
+    ///
+    /// ONE further hop, and only for a predicate that DELEGATES ENTIRELY.
+    /// `is_generic_market_founding_v3` is
+    /// `GenericMarketFoundingCallerBumpsV3::decode(instruction_data).is_ok()`
+    /// -- it states no constant of its own, hands its whole parameter to one
+    /// call, and every byte it recognises (`DCLTGMF3`, and the 13-byte width)
+    /// is written inside that callee. This is not arbitrary depth: the
+    /// forwarding predicate is a wrapper with no content, and refusing to look
+    /// through it left the SOLE Trading route for `DCLTGMF3` with no bytes at
+    /// all, so two finalized cohort-15 transactions carrying that magic
+    /// resolved to no route. The hop is taken only when the predicate's own
+    /// body yielded nothing, and the callee's body is read the same way -- the
+    /// constants only.
     fn scan_predicate_body(&self, target: &str, out: &mut Vec<Selector>) {
         // A crate-qualified call names a CRATE, and a crate root's module path
         // is empty, so `resolve` cannot match `dclutch_x_contract` against it.
@@ -1503,16 +1803,14 @@ impl DispatchWalk<'_> {
             return;
         };
         let mut found = Vec::new();
-        for statement in &function.block.stmts {
-            match statement {
-                syn::Stmt::Expr(expr, _) => self.scan_condition(expr, &mut found),
-                syn::Stmt::Local(local) => {
-                    if let Some(initializer) = &local.init {
-                        self.scan_condition(&initializer.expr, &mut found);
-                    }
-                }
-                _ => {}
-            }
+        self.scan_function_body(function, &mut found);
+        if !found
+            .iter()
+            .any(|selector| matches!(selector, Selector::Magic { .. } | Selector::Length { .. }))
+            && let Some(callee) = forwarded_call(function)
+            && let Some(body) = self.predicates.resolve_from(&function.module, &callee)
+        {
+            self.scan_function_body(body, &mut found);
         }
         for selector in found {
             if !matches!(selector, Selector::Magic { .. } | Selector::Length { .. }) {
@@ -1524,6 +1822,49 @@ impl DispatchWalk<'_> {
             {
                 out.push(selector);
             }
+        }
+    }
+
+    /// Scan one function body's statements for wire discriminants.
+    ///
+    /// A recogniser states its bytes in one of two shapes and both are read
+    /// here: as the tail expression (`data.len() == N && data[..8] == MAGIC`),
+    /// or as an early-return GUARD (`if data.len() != N || data[..8] != MAGIC
+    /// { return Err(..) }`). Only the first was read before, which is why a
+    /// `decode` -- where every width check in this tree is written as a guard
+    /// -- yielded nothing at all. The `if` contributes its CONDITION and
+    /// nothing else; its branches are the handler, not the selector.
+    fn scan_function_body(&self, function: &FunctionFact, out: &mut Vec<Selector>) {
+        for statement in &function.block.stmts {
+            match statement {
+                Stmt::Expr(expr, _) => self.scan_body_expression(expr, out),
+                Stmt::Local(local) => {
+                    if let Some(initializer) = &local.init {
+                        self.scan_body_expression(&initializer.expr, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn scan_body_expression(&self, expr: &Expr, out: &mut Vec<Selector>) {
+        match expr {
+            Expr::If(conditional) => {
+                self.scan_condition(&conditional.cond, out);
+                if let Some((_, otherwise)) = &conditional.else_branch {
+                    self.scan_body_expression(otherwise, out);
+                }
+            }
+            // `else { .. }` is a block; an `else if` is the expression above.
+            Expr::Block(block) => {
+                for statement in &block.block.stmts {
+                    if let Stmt::Expr(inner, _) = statement {
+                        self.scan_body_expression(inner, out);
+                    }
+                }
+            }
+            other => self.scan_condition(other, out),
         }
     }
 
@@ -1567,6 +1908,74 @@ impl DispatchWalk<'_> {
         if !out.iter().any(|held| held.render() == rendered) {
             out.push(selector);
         }
+    }
+}
+
+/// The one call a forwarding predicate hands its whole parameter to.
+///
+/// `Some` only when the body writes EXACTLY ONE path call taking a bare
+/// parameter of the enclosing function -- `Type::decode(instruction_data)`.
+/// Two such calls is a predicate that composes rather than delegates, and it
+/// gets no hop: which of them states the selector is exactly the question
+/// this reader must not answer by guessing.
+fn forwarded_call(function: &FunctionFact) -> Option<String> {
+    let parameters: BTreeSet<&str> = function.parameters.iter().map(String::as_str).collect();
+    let mut found = BTreeSet::new();
+    for statement in &function.block.stmts {
+        match statement {
+            Stmt::Expr(expr, _) => collect_forwarded(expr, &parameters, &mut found),
+            Stmt::Local(local) => {
+                if let Some(initializer) = &local.init {
+                    collect_forwarded(&initializer.expr, &parameters, &mut found);
+                }
+            }
+            _ => {}
+        }
+    }
+    if found.len() == 1 {
+        found.into_iter().next()
+    } else {
+        None
+    }
+}
+
+fn collect_forwarded(expr: &Expr, parameters: &BTreeSet<&str>, out: &mut BTreeSet<String>) {
+    match expr {
+        Expr::Call(call) => {
+            if let Expr::Path(path) = call.func.as_ref() {
+                let target = render_path(&path.path);
+                let forwards = call.args.iter().any(|argument| {
+                    let argument = match argument {
+                        Expr::Reference(reference) => reference.expr.as_ref(),
+                        other => other,
+                    };
+                    matches!(argument, Expr::Path(inner)
+                        if parameters.contains(render_path(&inner.path).as_str()))
+                });
+                if forwards && target.contains("::") {
+                    out.insert(target);
+                }
+            }
+            for argument in &call.args {
+                collect_forwarded(argument, parameters, out);
+            }
+        }
+        Expr::MethodCall(call) => {
+            collect_forwarded(&call.receiver, parameters, out);
+            for argument in &call.args {
+                collect_forwarded(argument, parameters, out);
+            }
+        }
+        Expr::Paren(inner) => collect_forwarded(&inner.expr, parameters, out),
+        Expr::Group(inner) => collect_forwarded(&inner.expr, parameters, out),
+        Expr::Unary(inner) => collect_forwarded(&inner.expr, parameters, out),
+        Expr::Try(inner) => collect_forwarded(&inner.expr, parameters, out),
+        Expr::Reference(inner) => collect_forwarded(&inner.expr, parameters, out),
+        Expr::Binary(binary) => {
+            collect_forwarded(&binary.left, parameters, out);
+            collect_forwarded(&binary.right, parameters, out);
+        }
+        _ => {}
     }
 }
 
@@ -2141,10 +2550,14 @@ mod predicate_body_tests {
                         ascii: Some(ascii.to_string()),
                     },
                     provenance: "crates/example/src/lib.rs:1".to_string(),
+                    krate: "example".to_string(),
                 }],
             );
         }
-        let constants = ConstantIndex { facts };
+        let constants = ConstantIndex {
+            facts,
+            crates: BTreeSet::new(),
+        };
         let predicates = index_source("", predicate_source);
         let index = CrateIndex::default();
         let walk = DispatchWalk {
@@ -2172,6 +2585,46 @@ mod predicate_body_tests {
             input.get(..8) == Some(EXAMPLE_MAGIC_V1.as_slice())
         }
     "#;
+
+    /// The shape `DCLTGMF3` is written in: a predicate that delegates its
+    /// whole parameter to a `decode`, which states the bytes in a GUARD.
+    const FORWARDING_SOURCE: &str = r#"
+        struct BumpsV3 { values: [u8; 5] }
+
+        impl BumpsV3 {
+            fn decode(instruction_data: &[u8]) -> Result<Self, ProgramError> {
+                if instruction_data.len() != EXAMPLE_BYTES_V1
+                    || instruction_data.get(..8) != Some(EXAMPLE_MAGIC_V1.as_slice())
+                {
+                    return Err(Error::Unsupported.into());
+                }
+                Ok(Self { values: [0; 5] })
+            }
+        }
+
+        pub fn is_example_v1(instruction_data: &[u8]) -> bool {
+            BumpsV3::decode(instruction_data).is_ok()
+        }
+    "#;
+
+    /// THE `DCLTGMF3` DEFECT. A forwarding predicate is a wrapper with no
+    /// content of its own, and stopping at it left the sole Trading route for
+    /// that magic with no bytes in the whole inventory -- so two finalized
+    /// cohort-15 transactions carrying it resolved to no route at all.
+    #[test]
+    fn a_forwarding_predicate_carries_the_bytes_its_callee_guards_on() {
+        let rendered = selectors_for(
+            "generic_market_founding_v1::is_example_v1(instruction_data)",
+            FORWARDING_SOURCE,
+            Some("DCLTGMF3"),
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|text| text == "magic EXAMPLE_MAGIC_V1 = b\"DCLTGMF3\""),
+            "the callee's magic must reach the row: {rendered:?}"
+        );
+    }
 
     #[test]
     fn a_predicate_guard_carries_the_bytes_its_body_matches_on() {
@@ -2261,6 +2714,7 @@ mod local_initialiser_tests {
     fn route_ids(block: syn::Block) -> Vec<String> {
         let constants = ConstantIndex {
             facts: BTreeMap::new(),
+            crates: BTreeSet::new(),
         };
         let index = CrateIndex::default();
         let mut walk = DispatchWalk {

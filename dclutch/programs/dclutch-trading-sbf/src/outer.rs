@@ -1573,10 +1573,12 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
             if expected != *account.key {
                 return Err(TradingSbfError::Content.into());
             }
-            let ledger_rent = rent.minimum_balance(pre_bytes.len());
+            let ledger_rent = authenticated
+                .funded_rent_minimum(pre_bytes.len())
+                .map_err(|_| TradingSbfError::FundedRent)?;
             authenticated
-                .validate_native_custody(account.lamports(), ledger_rent, false)
-                .map_err(|_| TradingSbfError::Content)?;
+                .validate_recorded_native_custody(account.lamports(), pre_bytes.len(), false)
+                .map_err(|_| TradingSbfError::FundedRent)?;
             let slot_count = ledger.slot_count();
             let mut row_index = 0_u16;
             while row_index < slot_count {
@@ -1855,10 +1857,12 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
             if expected != *account.key {
                 return Err(TradingSbfError::Content.into());
             }
-            let exact_ledger_rent = rent.minimum_balance(pre_bytes.len());
+            let exact_ledger_rent = authenticated
+                .funded_rent_minimum(pre_bytes.len())
+                .map_err(|_| TradingSbfError::FundedRent)?;
             authenticated
-                .validate_native_custody(account.lamports(), exact_ledger_rent, selected)
-                .map_err(|_| TradingSbfError::Content)?;
+                .validate_recorded_native_custody(account.lamports(), pre_bytes.len(), selected)
+                .map_err(|_| TradingSbfError::FundedRent)?;
             let slot_count = ledger.slot_count();
             let mut row_index = 0_u16;
             while row_index < slot_count {
@@ -2534,7 +2538,7 @@ mod funding_v2_tests {
     use dclutch_capability_contract::{
         ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1,
         FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
-        RealmCollateralBindingV1, funding_ledger_bytes_v2,
+        RealmCollateralBindingV1, derive_funded_rent_rate_v2, funding_ledger_bytes_v2,
     };
 
     #[test]
@@ -2625,8 +2629,24 @@ mod funding_v2_tests {
 
         let mut resolution_bytes =
             vec![0_u8; funding_ledger_bytes_v2(3).expect("Resolution ledger width")];
-        FundingLedgerV2::initialize(&mut resolution_bytes, manifest_id, manifest, 0b0111)
-            .expect("Resolution ledger");
+        // The rents above are synthetic figures handed to `validate_native_custody`
+        // explicitly, so nothing here reads the recorded rate back; both ledgers
+        // record the rate `Rent::default()` prices at.
+        let default_rent = Rent::default();
+        let funded_rent_rate = derive_funded_rent_rate_v2(
+            default_rent.minimum_balance(0),
+            resolution_bytes.len(),
+            default_rent.minimum_balance(resolution_bytes.len()),
+        )
+        .expect("Rent::default() is affine in the account length");
+        FundingLedgerV2::initialize(
+            &mut resolution_bytes,
+            manifest_id,
+            manifest,
+            0b0111,
+            funded_rent_rate,
+        )
+        .expect("Resolution ledger");
         for (entry_index, slot) in [(0_u16, 91_u64), (1, 92), (2, 93)] {
             FundingLedgerV2::activate_in_place(
                 &mut resolution_bytes,
@@ -2665,8 +2685,14 @@ mod funding_v2_tests {
 
         let mut trading_bytes =
             vec![0_u8; funding_ledger_bytes_v2(1).expect("Trading ledger width")];
-        FundingLedgerV2::initialize(&mut trading_bytes, manifest_id, manifest, 0b1000)
-            .expect("Trading ledger");
+        FundingLedgerV2::initialize(
+            &mut trading_bytes,
+            manifest_id,
+            manifest,
+            0b1000,
+            funded_rent_rate,
+        )
+        .expect("Trading ledger");
         let trading_ledger = FundingLedgerV2::decode(&trading_bytes)
             .expect("Trading ledger")
             .authenticate(manifest_id, manifest)

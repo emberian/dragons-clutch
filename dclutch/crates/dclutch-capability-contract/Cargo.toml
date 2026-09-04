@@ -12,5 +12,10 @@ path = "src/lib.rs"
 dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-sha256-adapter = { path = "../dclutch-sha256-adapter" }
 
+[dev-dependencies]
+# The integration test builds a manifest and must name its content identity the
+# same way every adapter does.
+dclutch-sha256-adapter = { path = "../dclutch-sha256-adapter" }
+
 [lints]
 workspace = true

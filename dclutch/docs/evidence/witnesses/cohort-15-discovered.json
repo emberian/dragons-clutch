@@ -144,14 +144,6 @@
       "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
     },
     {
-      "signature": "4F3KsQxCJ7RREn1DWv9xz87ctNoidPcgUS1F1cV67wSLQBNYkPCBKN8cm7detLyd4jv5PfKNncPaSgyY5BdATtAo",
-      "reason": "DCLTGMF3 to trading resolves to no trading route (0 route(s) elsewhere)"
-    },
-    {
-      "signature": "ntcneGaAtepbdsQJFwqh1C1ubCGvLNPPwXhfYLs61oWtE79QQJcGapbTJnLy4CaeEXbTQsRFqefYbRRe8iAdY3c",
-      "reason": "DCLTGMF3 to trading resolves to no trading route (0 route(s) elsewhere)"
-    },
-    {
       "signature": "2g96zc5mG3Y1oqfCTSfu4GwMj8NP8Mkvu4ZxuDqXLsGQ32SNHYCJHX78yzmYLBA54g7qhT5hvTpffjG5ttkL5kv8",
       "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
     },
@@ -2133,6 +2125,61 @@
       "not_corroborated": []
     },
     {
+      "stage": "dcltgmf3-492860924",
+      "magic": "DCLTGMF3",
+      "program": "trading",
+      "outcome": "refused",
+      "signature": "4F3KsQxCJ7RREn1DWv9xz87ctNoidPcgUS1F1cV67wSLQBNYkPCBKN8cm7detLyd4jv5PfKNncPaSgyY5BdATtAo",
+      "instruction_data_len": 13,
+      "routes": [
+        "trading/generic_market_founding_v1::process_generic_market_founding_v3",
+        "trading/process_instruction"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to trading begins with DCLTGMF3, and the tree dispatches trading/generic_market_founding_v1::process_generic_market_founding_v3 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 492860924,
+      "compute_units": 30660,
+      "programs_invoked": [
+        "trading"
+      ],
+      "routes_corroborated": [
+        "trading/generic_market_founding_v1::process_generic_market_founding_v3",
+        "trading/process_instruction"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltgmf3-492861027",
+      "magic": "DCLTGMF3",
+      "program": "trading",
+      "outcome": "executed",
+      "signature": "ntcneGaAtepbdsQJFwqh1C1ubCGvLNPPwXhfYLs61oWtE79QQJcGapbTJnLy4CaeEXbTQsRFqefYbRRe8iAdY3c",
+      "instruction_data_len": 13,
+      "routes": [
+        "claims/process_instruction",
+        "core/process_instruction",
+        "custody/process_instruction",
+        "trading/generic_market_founding_v1::process_generic_market_founding_v3",
+        "trading/process_instruction"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to trading begins with DCLTGMF3, and the tree dispatches trading/generic_market_founding_v1::process_generic_market_founding_v3 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 492861027,
+      "compute_units": 841491,
+      "programs_invoked": [
+        "claims",
+        "core",
+        "custody",
+        "trading"
+      ],
+      "routes_corroborated": [
+        "claims/process_instruction",
+        "core/process_instruction",
+        "custody/process_instruction",
+        "trading/generic_market_founding_v1::process_generic_market_founding_v3",
+        "trading/process_instruction"
+      ],
+      "not_corroborated": []
+    },
+    {
       "stage": "dcltcrq2-verifyreadiness-492861140",
       "magic": "DCLTCRQ2",
       "program": "core",
@@ -2549,5 +2596,5 @@
       "not_corroborated": []
     }
   ],
-  "corroborated_route_count": 27
+  "corroborated_route_count": 28
 }

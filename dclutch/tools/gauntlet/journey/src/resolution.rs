@@ -29,7 +29,7 @@ use std::collections::BTreeMap;
 
 use dclutch_capability_contract::{
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
-    FundingLedgerStatusV2, FundingLedgerV2, funding_ledger_bytes_v2,
+    FundingLedgerStatusV2, FundingLedgerV2, derive_funded_rent_rate_v2, funding_ledger_bytes_v2,
 };
 use dclutch_market_core_codec::{
     Action, CoreState, Identity as CoreIdentity, Phase, Readiness, Request,
@@ -264,8 +264,20 @@ pub(crate) fn derive(
             "FundingLedgerV2 width: {error:?}"
         )))?
     ];
-    FundingLedgerV2::initialize(&mut ledger_bytes, manifest_id, manifest, selected_mask)
-        .map_err(|error| Error::new(format!("pending FundingLedgerV2: {error:?}")))?;
+    let funded_rent_rate = derive_funded_rent_rate_v2(
+        rpc.minimum_balance(0)?,
+        ledger_bytes.len(),
+        rpc.minimum_balance(ledger_bytes.len())?,
+    )
+    .map_err(|error| Error::new(format!("funded rent rate: {error:?}")))?;
+    FundingLedgerV2::initialize(
+        &mut ledger_bytes,
+        manifest_id,
+        manifest,
+        selected_mask,
+        funded_rent_rate,
+    )
+    .map_err(|error| Error::new(format!("pending FundingLedgerV2: {error:?}")))?;
     let ledger = FundingLedgerV2::decode(&ledger_bytes)
         .map_err(|error| Error::new(format!("FundingLedgerV2: {error:?}")))?;
     let derivation = CapabilityFundingLedgerDerivationV2::new(

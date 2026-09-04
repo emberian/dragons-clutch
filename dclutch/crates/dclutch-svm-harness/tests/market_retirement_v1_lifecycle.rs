@@ -279,6 +279,7 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
         manifest_id,
         manifest,
         resolution_funding_mask,
+        funded_rent_rate(funding_width),
     )
     .expect("pre-Market pending Resolution subset ledger");
     let funding_principal = FundingLedgerV2::decode(&funding_data)

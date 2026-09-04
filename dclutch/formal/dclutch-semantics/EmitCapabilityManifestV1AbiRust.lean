@@ -71,6 +71,8 @@ def main : IO Unit := do
   IO.println s!"pub const CAPABILITY_FUNDING_LEDGER_SCHEMA_VERSION_V2: u16 = {fundingLedgerSchemaVersionV2};"
   IO.println s!"pub const CAPABILITY_FUNDING_LEDGER_HEADER_BYTES_V2: usize = {ledgerHeaderBytesV2};"
   IO.println s!"pub const CAPABILITY_FUNDING_LEDGER_SLOT_BYTES_V2: usize = {ledgerSlotBytesV2};"
+  IO.println "/// Solana's fixed per-account storage overhead, in bytes.  Chain-derived."
+  IO.println s!"pub const ACCOUNT_STORAGE_OVERHEAD_BYTES: u64 = {accountStorageOverheadBytes};"
   IO.println s!"pub const CAPABILITY_FUNDING_LEDGER_HEADER_RESERVED_BYTES_V2: usize = {ledgerHeaderReservedBytesV2};"
   IO.println s!"pub const CAPABILITY_FUNDING_LEDGER_SLOT_RESERVED_BYTES_V2: usize = {ledgerSlotReservedBytesV2};"
   for field in ledgerHeaderLayoutV2 do

@@ -528,6 +528,13 @@ pub enum TradingSbfError {
     /// executed in two banks, asserted identical -- and then delete the
     /// conjunct. See `require_shadow_declares_no_trusted_slot_v1`.
     ShadowTrustedEnvironment = 0x4028,
+    /// The rent a funding ledger was FUNDED at did not price its balance.
+    ///
+    /// Split from `Content` on 2026-09-04, which covered 2,124 sites and could
+    /// not distinguish a cluster rent-rate change from a corrupted packet. The
+    /// ledger header records the exemption-scaled rate its founding paid; this
+    /// code is what refuses when that record and the account disagree.
+    FundedRent = 0x4029,
 }
 
 impl TradingSbfError {
@@ -537,7 +544,7 @@ impl TradingSbfError {
     /// [`TradingSbfError::ordinal`], whose match is exhaustive: a variant added
     /// to the enum does not compile until its author writes an arm there, and
     /// the only arm that satisfies the assertions is its own index here.
-    pub const ALL: [Self; 41] = [
+    pub const ALL: [Self; 42] = [
         Self::UnsupportedContent,
         Self::Release,
         Self::Root,
@@ -579,6 +586,7 @@ impl TradingSbfError {
         Self::BorrowedWitnessBytes,
         Self::HeapExhausted,
         Self::ShadowTrustedEnvironment,
+        Self::FundedRent,
     ];
 
     /// This refusal's position in [`TradingSbfError::ALL`].
@@ -629,6 +637,7 @@ impl TradingSbfError {
             Self::BorrowedWitnessBytes => 38,
             Self::HeapExhausted => 39,
             Self::ShadowTrustedEnvironment => 40,
+            Self::FundedRent => 41,
         }
     }
 }

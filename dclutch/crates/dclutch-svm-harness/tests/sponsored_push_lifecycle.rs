@@ -10,7 +10,7 @@ mod sponsored_campaign {
         CapabilityEntryV1, CapabilityFundingLedgerDerivationV2, CapabilityManifestV1,
         CompartmentFundingV1, ContentId as CapabilityContentId, FUNDING_STATE_BYTES,
         FundingAmountsV1, FundingLedgerV2, FundingQuoteV1, MANIFEST_HEADER_BYTES,
-        MAX_DEPENDENCIES_PER_CAPABILITY, funding_ledger_bytes_v2,
+        MAX_DEPENDENCIES_PER_CAPABILITY, derive_funded_rent_rate_v2, funding_ledger_bytes_v2,
     };
     use dclutch_core_contract::ContentId;
     use dclutch_market_core_codec::{
@@ -148,6 +148,20 @@ mod sponsored_campaign {
             );
         }
         Elves { core, resolution }
+    }
+
+    /// The exemption-scaled rent rate this bank charges, which is what a founding
+    /// here records in its FundingLedgerV2 header. Every account these fixtures
+    /// fund is priced with the same `Rent::default()`, so a ledger's own
+    /// `validate_recorded_native_custody` has to agree with this figure.
+    fn funded_rent_rate(account_bytes: usize) -> u32 {
+        let rent = Rent::default();
+        derive_funded_rent_rate_v2(
+            rent.minimum_balance(0),
+            account_bytes,
+            rent.minimum_balance(account_bytes),
+        )
+        .expect("Rent::default() is affine in the account length")
     }
 
     fn programdata(program: Pubkey) -> Pubkey {
@@ -386,7 +400,8 @@ mod sponsored_campaign {
         let width = funding_ledger_bytes_v2(3).expect("three-row ledger width");
         assert_eq!(width, 264, "exact three-row Resolution ledger width");
         let mut bytes = vec![0_u8; width];
-        FundingLedgerV2::initialize(&mut bytes, manifest_id, manifest, mask)
+        let rate = funded_rent_rate(width);
+        FundingLedgerV2::initialize(&mut bytes, manifest_id, manifest, mask, rate)
             .expect("pending ledger");
         for index in entry_indices {
             FundingLedgerV2::activate_in_place(&mut bytes, manifest_id, manifest, index, 1)

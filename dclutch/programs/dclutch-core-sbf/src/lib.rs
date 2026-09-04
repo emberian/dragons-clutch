@@ -233,6 +233,15 @@ pub enum CoreSbfError {
     /// ceiling. Core refuses it at decode, before any authentication work is
     /// spent on an instruction that cannot succeed.
     UnsupportedAction = 0x301C,
+    /// The rent a funding ledger was FUNDED at did not price its balance.
+    ///
+    /// Split from `Funding` on 2026-09-04. `Funding` covered every conjunct of
+    /// the custody arithmetic, including the one term a reader cannot see from
+    /// the account: the exemption-scaled rent rate the ledger's header records.
+    /// A cluster that changes its rent-exempt rate under a live cohort refuses
+    /// here and nowhere else, and this code says so instead of naming the
+    /// whole of funding.
+    FundedRent = 0x301D,
 }
 
 impl CoreSbfError {
@@ -242,7 +251,7 @@ impl CoreSbfError {
     /// [`CoreSbfError::ordinal`], whose match is exhaustive: a variant added to the
     /// enum does not compile until its author writes an arm here, and the only
     /// arm that satisfies the assertions is its own index in this array.
-    pub const ALL: [Self; 29] = [
+    pub const ALL: [Self; 30] = [
         Self::Instruction,
         Self::AccountFrame,
         Self::FinalizedRecord,
@@ -272,6 +281,7 @@ impl CoreSbfError {
         Self::InfrastructureConsentMissing,
         Self::InfrastructureAlreadySucceeded,
         Self::UnsupportedAction,
+        Self::FundedRent,
     ];
 
     /// This refusal's position in [`CoreSbfError::ALL`].
@@ -310,6 +320,7 @@ impl CoreSbfError {
             Self::InfrastructureConsentMissing => 26,
             Self::InfrastructureAlreadySucceeded => 27,
             Self::UnsupportedAction => 28,
+            Self::FundedRent => 29,
         }
     }
 }

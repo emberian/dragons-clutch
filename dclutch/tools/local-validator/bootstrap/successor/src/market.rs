@@ -20,7 +20,7 @@ use dclutch_capability_contract::{
         ControllerFundingCheckpointDerivationV1, ControllerFundingCheckpointPhaseV1,
         ControllerFundingCheckpointV1, ControllerFundingControllerV1,
     },
-    funding_ledger_bytes_v2,
+    derive_funded_rent_rate_v2, funding_ledger_bytes_v2,
 };
 use dclutch_claims_svm::{
     founding_v5::{
@@ -6003,8 +6003,24 @@ fn derive_founding_coordinates(
                 format!("FundingLedgerV2 width: {error:?}")
             ))?
         ];
-        FundingLedgerV2::initialize(&mut bytes, manifest_id, manifest, selected_mask)
-            .map_err(|error| Error::new(format!("FundingLedgerV2 initialization: {error:?}")))?;
+        // The rate THIS cluster charges, read from the connection the founding is
+        // about to run on. The ledger records what its own account is funded at,
+        // so a later exactness check asks the founding's figure and not whatever
+        // the sysvar says at the moment of the check.
+        let funded_rent_rate = derive_funded_rent_rate_v2(
+            rpc.minimum_balance(0)?,
+            bytes.len(),
+            rpc.minimum_balance(bytes.len())?,
+        )
+        .map_err(|error| Error::new(format!("funded rent rate: {error:?}")))?;
+        FundingLedgerV2::initialize(
+            &mut bytes,
+            manifest_id,
+            manifest,
+            selected_mask,
+            funded_rent_rate,
+        )
+        .map_err(|error| Error::new(format!("FundingLedgerV2 initialization: {error:?}")))?;
         let ledger = FundingLedgerV2::decode(&bytes)
             .map_err(|error| Error::new(format!("FundingLedgerV2: {error:?}")))?;
         let required_lamports = rpc

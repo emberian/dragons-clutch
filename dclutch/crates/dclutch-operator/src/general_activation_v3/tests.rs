@@ -10,7 +10,7 @@ use dclutch_capability_contract::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1,
     CapabilityFundingLedgerDerivationV2, CompartmentFundingV1, FundingAmountsV1,
     FundingLedgerStatusV2, FundingLedgerV2, FundingQuoteV1, MANIFEST_HEADER_BYTES,
-    MAX_DEPENDENCIES_PER_CAPABILITY, funding_ledger_bytes_v2,
+    MAX_DEPENDENCIES_PER_CAPABILITY, derive_funded_rent_rate_v2, funding_ledger_bytes_v2,
 };
 use dclutch_capability_program_contract::set_v2::{
     CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, SelectorWidthV2,
@@ -28,6 +28,7 @@ use dclutch_capability_program_contract::{
 };
 use dclutch_general_config_contract::v3::GeneralConfigV3Input;
 use dclutch_market_core_codec::{Identity, MarketIdentity, Readiness, StateBumpsV1};
+use solana_program::rent::Rent;
 
 use super::*;
 
@@ -225,8 +226,24 @@ fn fixture(phase: Phase, entries: &[CapabilityEntryV1]) -> Fixture {
     }
     let ledger_slots = u16::try_from(selected_mask.count_ones()).expect("ledger slots");
     let mut funding = vec![0_u8; funding_ledger_bytes_v2(ledger_slots).expect("ledger width")];
-    FundingLedgerV2::initialize(&mut funding, manifest_id, manifest, selected_mask)
-        .expect("funding ledger");
+    // `FUNDING_RENT` is a synthetic figure this fixture hands the planner
+    // explicitly, so nothing here reads the recorded rate back; it only has to
+    // be a real one, and `Rent::default()`'s is the rate the banks use.
+    let default_rent = Rent::default();
+    let funded_rent_rate = derive_funded_rent_rate_v2(
+        default_rent.minimum_balance(0),
+        funding.len(),
+        default_rent.minimum_balance(funding.len()),
+    )
+    .expect("Rent::default() is affine in the account length");
+    FundingLedgerV2::initialize(
+        &mut funding,
+        manifest_id,
+        manifest,
+        selected_mask,
+        funded_rent_rate,
+    )
+    .expect("funding ledger");
     let decoded = FundingLedgerV2::decode(&funding).expect("funding decode");
     let funding_key = Pubkey::find_program_address(
         &CapabilityFundingLedgerDerivationV2::new(

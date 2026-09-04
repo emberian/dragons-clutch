@@ -5,8 +5,8 @@
 
 use crate::{
     ActivationPolicy, CapabilityManifestV1, ContentId, Error, Result, copy_content_id,
-    copy_infallible, put_byte, put_u16, put_u64, read_array, read_byte, read_content_id, read_u16,
-    read_u64, require_nonzero_identifier, require_zero, subslice,
+    copy_infallible, put_byte, put_u16, put_u32, put_u64, read_array, read_byte, read_content_id,
+    read_u16, read_u32, read_u64, require_nonzero_identifier, require_zero, subslice,
 };
 
 use crate::funding_admission_v2::{
@@ -14,6 +14,58 @@ use crate::funding_admission_v2::{
     FUNDING_LEDGER_PENDING_ADMISSIBLE_STATES_V2,
 };
 use crate::generated_abi;
+
+/// Solana's fixed per-account storage overhead, in bytes. Chain-derived; the
+/// one author is `formal/dclutch-semantics/DClutchSemantics/CapabilityManifestV1Abi.lean`.
+pub const ACCOUNT_STORAGE_OVERHEAD_BYTES: u64 = generated_abi::ACCOUNT_STORAGE_OVERHEAD_BYTES;
+
+/// The rent-exempt minimum an account of `account_bytes` was funded at, given
+/// the exemption-scaled rate in force when its founding created it.
+///
+/// `Rent::minimum_balance` is affine in the account's length, so ONE rate
+/// prices every account one founding created, at every width — including a
+/// lookup table whose width grows between the transaction that funded it and
+/// the transaction that reads it. That is why the persisted fact is the rate
+/// and not any one length's minimum, and it is why four reserved header bytes
+/// were enough for a fact a `u64` could not hold.
+pub fn funded_rent_minimum_v2(funded_rent_rate: u32, account_bytes: usize) -> Result<u64> {
+    if funded_rent_rate == 0 {
+        return Err(Error::FundedRentRateMissing);
+    }
+    let bytes = u64::try_from(account_bytes).map_err(|_| Error::ArithmeticOverflow)?;
+    ACCOUNT_STORAGE_OVERHEAD_BYTES
+        .checked_add(bytes)
+        .and_then(|span| span.checked_mul(u64::from(funded_rent_rate)))
+        .ok_or(Error::ArithmeticOverflow)
+}
+
+/// Derive the rate to record from two readings of the cluster's own Rent, and
+/// REFUSE a cluster whose rent-exempt minimum is not affine in the length.
+///
+/// Two readings pin an affine function; the caller supplies the zero-length one
+/// and the one for the account it is about to fund, and both must agree with the
+/// derived rate exactly. A cluster whose rent this cannot reproduce is refused
+/// by name rather than approximated — the alternative is a recorded number that
+/// silently prices some other account wrong.
+pub fn derive_funded_rent_rate_v2(
+    minimum_balance_zero: u64,
+    account_bytes: usize,
+    minimum_balance_for_account: u64,
+) -> Result<u32> {
+    let rate = minimum_balance_zero
+        .checked_div(ACCOUNT_STORAGE_OVERHEAD_BYTES)
+        .ok_or(Error::ArithmeticOverflow)?;
+    let rate = u32::try_from(rate).map_err(|_| Error::UnrepresentableRentRate)?;
+    if rate == 0 {
+        return Err(Error::UnrepresentableRentRate);
+    }
+    if funded_rent_minimum_v2(rate, 0)? != minimum_balance_zero
+        || funded_rent_minimum_v2(rate, account_bytes)? != minimum_balance_for_account
+    {
+        return Err(Error::UnrepresentableRentRate);
+    }
+    Ok(rate)
+}
 
 /// Exact width of one typed compartment allocation.
 pub const FUNDING_ALLOCATION_BYTES: usize = generated_abi::CAPABILITY_FUNDING_ALLOCATION_BYTES_V1;
@@ -141,10 +193,8 @@ const STATE_RELEASED_OFFSET: usize = generated_abi::CAPABILITY_FUNDING_STATE_REL
 const LEDGER_SCHEMA_OFFSET_V2: usize = generated_abi::CAPABILITY_FUNDING_LEDGER_SCHEMA_OFFSET_V2;
 const LEDGER_SELECTED_MASK_OFFSET_V2: usize =
     generated_abi::CAPABILITY_FUNDING_LEDGER_SELECTED_MASK_OFFSET_V2;
-const LEDGER_RESERVED_OFFSET_V2: usize =
-    generated_abi::CAPABILITY_FUNDING_LEDGER_RESERVED_OFFSET_V2;
-const LEDGER_RESERVED_BYTES_V2: usize =
-    generated_abi::CAPABILITY_FUNDING_LEDGER_HEADER_RESERVED_BYTES_V2;
+const LEDGER_FUNDED_RENT_RATE_OFFSET_V2: usize =
+    generated_abi::CAPABILITY_FUNDING_LEDGER_FUNDED_RENT_RATE_OFFSET_V2;
 const LEDGER_MANIFEST_ID_OFFSET_V2: usize =
     generated_abi::CAPABILITY_FUNDING_LEDGER_MANIFEST_ID_OFFSET_V2;
 const LEDGER_SLOT_STATUS_OFFSET_V2: usize =
@@ -1601,6 +1651,7 @@ pub struct FundingLedgerV2<'ledger> {
     manifest_content_id: ContentId,
     selected_mask: u16,
     slot_count: u16,
+    funded_rent_rate: u32,
 }
 
 impl<'ledger> FundingLedgerV2<'ledger> {
@@ -1615,7 +1666,10 @@ impl<'ledger> FundingLedgerV2<'ledger> {
         if read_u16(bytes, LEDGER_SCHEMA_OFFSET_V2)? != FUNDING_LEDGER_SCHEMA_VERSION_V2 {
             return Err(Error::UnsupportedSchema);
         }
-        require_zero(bytes, LEDGER_RESERVED_OFFSET_V2, LEDGER_RESERVED_BYTES_V2)?;
+        let funded_rent_rate = read_u32(bytes, LEDGER_FUNDED_RENT_RATE_OFFSET_V2)?;
+        if funded_rent_rate == 0 {
+            return Err(Error::FundedRentRateMissing);
+        }
         let selected_mask = read_u16(bytes, LEDGER_SELECTED_MASK_OFFSET_V2)?;
         let slot_count = funding_ledger_slot_count_v2(selected_mask)?;
         if bytes.len() != funding_ledger_bytes_v2(slot_count)? {
@@ -1626,6 +1680,7 @@ impl<'ledger> FundingLedgerV2<'ledger> {
             manifest_content_id: read_content_id(bytes, LEDGER_MANIFEST_ID_OFFSET_V2)?,
             selected_mask,
             slot_count,
+            funded_rent_rate,
         };
         let mut row_index = 0;
         while row_index < slot_count {
@@ -1646,7 +1701,11 @@ impl<'ledger> FundingLedgerV2<'ledger> {
         manifest_content_id: ContentId,
         manifest: CapabilityManifestV1<'_>,
         selected_mask: u16,
+        funded_rent_rate: u32,
     ) -> Result<()> {
+        if funded_rent_rate == 0 {
+            return Err(Error::FundedRentRateMissing);
+        }
         validate_selected_mask_v2(manifest.entry_count(), selected_mask)?;
         let slot_count = funding_ledger_slot_count_v2(selected_mask)?;
         if output.len() != funding_ledger_bytes_v2(slot_count)? {
@@ -1660,6 +1719,7 @@ impl<'ledger> FundingLedgerV2<'ledger> {
             FUNDING_LEDGER_SCHEMA_VERSION_V2,
         );
         put_u16(output, LEDGER_SELECTED_MASK_OFFSET_V2, selected_mask);
+        put_u32(output, LEDGER_FUNDED_RENT_RATE_OFFSET_V2, funded_rent_rate);
         copy_content_id(output, LEDGER_MANIFEST_ID_OFFSET_V2, manifest_content_id);
         let mut row_index = 0;
         while row_index < slot_count {
@@ -1712,6 +1772,23 @@ impl<'ledger> FundingLedgerV2<'ledger> {
     /// Return the manifest content identity persisted in the header.
     pub const fn manifest_content_id(self) -> ContentId {
         self.manifest_content_id
+    }
+
+    /// Return the exemption-scaled rent rate this ledger was funded at.
+    ///
+    /// Nonzero by decode. This is the CLUSTER parameter in force when the
+    /// founding created and funded the account, not a reading of today's.
+    pub const fn funded_rent_rate(self) -> u32 {
+        self.funded_rent_rate
+    }
+
+    /// Rederive the rent-exempt minimum this ledger was funded at, for a width.
+    ///
+    /// Every exactness check over an account this founding created asks THIS,
+    /// never `Rent::minimum_balance`: the sysvar answers what an account created
+    /// now would cost, and the account was not created now.
+    pub fn funded_rent_minimum(self, account_bytes: usize) -> Result<u64> {
+        funded_rent_minimum_v2(self.funded_rent_rate, account_bytes)
     }
 
     /// Return the exact nonzero manifest-index selection persisted in the header.
@@ -2076,6 +2153,32 @@ impl<'ledger, 'manifest> AuthenticatedFundingLedgerV2<'ledger, 'manifest> {
     /// Return the exact authenticated manifest content identity.
     pub const fn manifest_content_id(self) -> ContentId {
         self.manifest_content_id
+    }
+
+    /// Rederive the rent-exempt minimum this ledger's account was funded at.
+    pub fn funded_rent_minimum(self, account_bytes: usize) -> Result<u64> {
+        self.ledger.funded_rent_minimum(account_bytes)
+    }
+
+    /// Validate custody against the rent the account was FUNDED at.
+    ///
+    /// This is `validate_native_custody` with its rent term supplied by the
+    /// ledger's own record instead of by the caller's reading of the Rent
+    /// sysvar, and it is the form every check over a pre-existing account
+    /// should take. The refusal is its own code: when the arithmetic fails
+    /// here, the term a reader must look at first is the PERSISTED rate.
+    pub fn validate_recorded_native_custody(
+        self,
+        account_lamports: u64,
+        account_bytes: usize,
+        admit_donations: bool,
+    ) -> Result<()> {
+        let funded = self.funded_rent_minimum(account_bytes)?;
+        self.validate_native_custody(account_lamports, funded, admit_donations)
+            .map_err(|error| match error {
+                Error::PresentNativeLamportsMismatch => Error::FundedRentNotEvidenced,
+                other => other,
+            })
     }
 }
 
@@ -2955,6 +3058,11 @@ mod tests {
         ContentId::new([value; 32]).expect("nonzero fixture")
     }
 
+    /// `solana_program::rent::Rent::default()`'s exemption-scaled rate: 3480
+    /// lamports per byte-year at an exemption threshold of 2.0. Stated as a
+    /// literal because this crate is `no_std` and depends on no Solana types.
+    const DEFAULT_FUNDED_RENT_RATE: u32 = 6960;
+
     /// The published offset is a projection of the encoder, not a second layout.
     ///
     /// A data-defined activation reads this offset out of the live account with
@@ -3489,8 +3597,14 @@ mod tests {
         let manifest = ledger_manifest(&mut manifest_storage);
         let manifest_id = id(70);
         let mut ledger_bytes = [0_u8; 264];
-        FundingLedgerV2::initialize(&mut ledger_bytes, manifest_id, manifest, 0b111)
-            .expect("initialize");
+        FundingLedgerV2::initialize(
+            &mut ledger_bytes,
+            manifest_id,
+            manifest,
+            0b111,
+            DEFAULT_FUNDED_RENT_RATE,
+        )
+        .expect("initialize");
         let ledger = FundingLedgerV2::decode(&ledger_bytes).expect("decode");
         assert_eq!(ledger.selected_mask(), 0b111);
         assert_eq!(ledger.slot_count(), 3);
@@ -3538,8 +3652,14 @@ mod tests {
         let manifest = ledger_manifest(&mut manifest_storage);
         let manifest_id = id(70);
         let mut bytes = [0_u8; 192];
-        FundingLedgerV2::initialize(&mut bytes, manifest_id, manifest, 0b101)
-            .expect("sparse subset");
+        FundingLedgerV2::initialize(
+            &mut bytes,
+            manifest_id,
+            manifest,
+            0b101,
+            DEFAULT_FUNDED_RENT_RATE,
+        )
+        .expect("sparse subset");
         let ledger = FundingLedgerV2::decode(&bytes).expect("decode sparse");
         assert_eq!(ledger.selected_mask(), 0b101);
         assert_eq!(ledger.slot_count(), 2);
@@ -3599,7 +3719,14 @@ mod tests {
         let manifest = ledger_manifest(&mut manifest_storage);
         let manifest_id = id(70);
         let mut bytes = [0_u8; 264];
-        FundingLedgerV2::initialize(&mut bytes, manifest_id, manifest, 0b111).expect("initialize");
+        FundingLedgerV2::initialize(
+            &mut bytes,
+            manifest_id,
+            manifest,
+            0b111,
+            DEFAULT_FUNDED_RENT_RATE,
+        )
+        .expect("initialize");
 
         assert_eq!(
             FundingLedgerV2::decode(bytes.get(..bytes.len() - 1).expect("short ledger")),
@@ -3608,11 +3735,6 @@ mod tests {
         for (offset, value, expected) in [
             (0, 0, Error::InvalidMagic),
             (LEDGER_SCHEMA_OFFSET_V2, 1, Error::UnsupportedSchema),
-            (
-                LEDGER_RESERVED_OFFSET_V2,
-                1,
-                Error::NonCanonicalReservedBytes,
-            ),
             (
                 funding_ledger_slot_offset_v2(1).expect("slot") + LEDGER_SLOT_RESERVED_OFFSET_V2,
                 1,
@@ -3628,6 +3750,16 @@ mod tests {
             *hostile.get_mut(offset).expect("hostile coordinate") = value;
             assert_eq!(FundingLedgerV2::decode(&hostile), Err(expected));
         }
+
+        // The four bytes this header once reserved now carry the founding's
+        // exemption-scaled rent rate, so a zeroed rate is what a hostile header
+        // gets refused for at that coordinate.
+        let mut missing_rate = bytes;
+        put_u32(&mut missing_rate, LEDGER_FUNDED_RENT_RATE_OFFSET_V2, 0);
+        assert_eq!(
+            FundingLedgerV2::decode(&missing_rate),
+            Err(Error::FundedRentRateMissing)
+        );
 
         let mut wrong_count = bytes;
         put_u16(&mut wrong_count, LEDGER_SELECTED_MASK_OFFSET_V2, 0b1111);
@@ -3687,7 +3819,14 @@ mod tests {
         let manifest = ledger_manifest(&mut manifest_storage);
         let manifest_id = id(70);
         let mut bytes = [0_u8; 264];
-        FundingLedgerV2::initialize(&mut bytes, manifest_id, manifest, 0b111).expect("initialize");
+        FundingLedgerV2::initialize(
+            &mut bytes,
+            manifest_id,
+            manifest,
+            0b111,
+            DEFAULT_FUNDED_RENT_RATE,
+        )
+        .expect("initialize");
         let before = bytes;
         let debit = FundingLedgerV2::activate_in_place(&mut bytes, manifest_id, manifest, 1, 9)
             .expect("activate selected slot");
@@ -3787,8 +3926,14 @@ mod tests {
 
         for vector in FUNDING_ACTIVATION_VECTORS_V1 {
             let mut bytes = [0_u8; 264];
-            FundingLedgerV2::initialize(&mut bytes, manifest_id, manifest, 0b111)
-                .expect("initialize");
+            FundingLedgerV2::initialize(
+                &mut bytes,
+                manifest_id,
+                manifest,
+                0b111,
+                DEFAULT_FUNDED_RENT_RATE,
+            )
+            .expect("initialize");
 
             // Drive slot 1 to this vector's status through the real transitions;
             // writing a status byte by hand would bypass the authentication the
@@ -3874,7 +4019,14 @@ mod tests {
         let manifest = ledger_manifest(&mut manifest_storage);
         let manifest_id = id(70);
         let mut bytes = [0_u8; 264];
-        FundingLedgerV2::initialize(&mut bytes, manifest_id, manifest, 0b111).expect("initialize");
+        FundingLedgerV2::initialize(
+            &mut bytes,
+            manifest_id,
+            manifest,
+            0b111,
+            DEFAULT_FUNDED_RENT_RATE,
+        )
+        .expect("initialize");
 
         for entry_index in 0..3 {
             FundingLedgerV2::activate_in_place(
@@ -3950,7 +4102,14 @@ mod tests {
         let manifest = ledger_manifest(&mut manifest_storage);
         let manifest_id = id(70);
         let mut bytes = [0_u8; 264];
-        FundingLedgerV2::initialize(&mut bytes, manifest_id, manifest, 0b111).expect("initialize");
+        FundingLedgerV2::initialize(
+            &mut bytes,
+            manifest_id,
+            manifest,
+            0b111,
+            DEFAULT_FUNDED_RENT_RATE,
+        )
+        .expect("initialize");
         for entry_index in 0..3 {
             FundingLedgerV2::activate_in_place(
                 &mut bytes,
@@ -4054,7 +4213,14 @@ mod tests {
         let manifest = ledger_manifest(&mut manifest_storage);
         let manifest_id = id(70);
         let mut unpaid = [0_u8; 264];
-        FundingLedgerV2::initialize(&mut unpaid, manifest_id, manifest, 0b111).expect("initialize");
+        FundingLedgerV2::initialize(
+            &mut unpaid,
+            manifest_id,
+            manifest,
+            0b111,
+            DEFAULT_FUNDED_RENT_RATE,
+        )
+        .expect("initialize");
         for entry_index in 0..3 {
             FundingLedgerV2::activate_in_place(
                 &mut unpaid,
@@ -4135,7 +4301,14 @@ mod tests {
             .expect("realm manifest");
         let manifest_id = id(70);
         let mut bytes = [0_u8; 120];
-        FundingLedgerV2::initialize(&mut bytes, manifest_id, manifest, 1).expect("initialize");
+        FundingLedgerV2::initialize(
+            &mut bytes,
+            manifest_id,
+            manifest,
+            1,
+            DEFAULT_FUNDED_RENT_RATE,
+        )
+        .expect("initialize");
         FundingLedgerV2::activate_in_place(&mut bytes, manifest_id, manifest, 0, 9)
             .expect("activate");
         let authenticated = FundingLedgerV2::decode(&bytes)

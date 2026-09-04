@@ -34,7 +34,7 @@ use dclutch_capability_contract::{
     CompartmentFundingV1, ContentId as CapabilityContentId, FUNDING_LEDGER_HEADER_BYTES_V2,
     FUNDING_STATE_BYTES, FundingAmountsV1, FundingCompartment, FundingLedgerStatusV2,
     FundingLedgerV2, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
-    funding_ledger_bytes_v2,
+    derive_funded_rent_rate_v2, funding_ledger_bytes_v2,
 };
 use dclutch_core_contract::ContentId;
 use dclutch_market_core_codec::{
@@ -206,6 +206,20 @@ const ELF_DIGEST: [u8; 32] = [0xee; 32];
 /// fixture pins is checkable by reading it. Token-2022 is Loader V3, which is
 /// what makes row 1 reachable at all: classic SPL Token is BPFLoader2, has no
 /// `ProgramData`, and cannot be pinned cross-cluster by this family.
+/// The exemption-scaled rent rate this bank charges, which is what a founding
+/// here records in its FundingLedgerV2 header. Every account these fixtures
+/// fund is priced with the same `Rent::default()`, so a ledger's own
+/// `validate_recorded_native_custody` has to agree with this figure.
+fn funded_rent_rate(account_bytes: usize) -> u32 {
+    let rent = Rent::default();
+    derive_funded_rent_rate_v2(
+        rent.minimum_balance(0),
+        account_bytes,
+        rent.minimum_balance(account_bytes),
+    )
+    .expect("Rent::default() is affine in the account length")
+}
+
 fn token_2022_program() -> [u8; 32] {
     use core::str::FromStr as _;
     Pubkey::from_str("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb")
@@ -545,7 +559,8 @@ fn add_active_funding_ledger(
     let width = funding_ledger_bytes_v2(3).expect("three-row FundingLedgerV2 width");
     assert_eq!(width, 264, "the live Resolution ledger width is exact");
     let mut state = vec![0_u8; width];
-    FundingLedgerV2::initialize(&mut state, manifest_id, manifest, selected_mask)
+    let rate = funded_rent_rate(width);
+    FundingLedgerV2::initialize(&mut state, manifest_id, manifest, selected_mask, rate)
         .expect("pending FundingLedgerV2");
     for entry_index in entry_indices {
         FundingLedgerV2::activate_in_place(&mut state, manifest_id, manifest, entry_index, 1)
