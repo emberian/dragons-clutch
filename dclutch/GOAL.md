@@ -4143,3 +4143,20 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Started 20:30 EDT: SUCCESSION **`a05ca21dcfd011b9d`** — the cold machine's contradiction decided by reading (succession's
   conjunct 6 wants the V2 PDA vacant; initialize fills it since c60b25e8), fixed at the author with tier 1 as the corpus,
   then the cold lifecycle finished on hbox under /tank (retirement, interrupt + recover, sign/submit) for C-13's row.
+
+### Parsimony closeout — 2026-09-03 21:30 EDT
+- Accretion measured over the session (65d3f9ee2..HEAD): 515 commits, +87,044 / −27,844 lines; docs +14,364; GOAL.md
+  +1,119 → 4,145 lines; two new host crates (both one-author replacements for three hand copies); 23 new .md; 24 files
+  deleted incl. two generations (Fractional V1 6,428 lines; the Direct plan layer). **Trajectory verdict: the CODE is on
+  track (deletions by reading, one author per fact, generated registers with --check twins); the DOCUMENTS drift** — the
+  rehearsal found 47 stale claims, the rulings reader spot-verified forty items inside this file, three design notes carry
+  addenda that correct each other.
+- **The attractor:** a tree where every fact has exactly one author and every claim is either generated from the tree or
+  dated and owned. Concretely: (1) GOAL.md becomes an index of dated deltas, not the store — the store is docs/decisions/
+  (records, generated index), docs/evidence/<cohort> (facts from the job dir's machine-readable witnesses, prose only for
+  findings), docs/reference/* (generated, --converge); (2) a design note's HEAD states the current truth and addenda live
+  below a fold as history (three notes owe this rewrite); (3) one cohort runbook parameterized by a cohort manifest
+  (tools/cohort14 + tools/cohort15 → one steps.tsv with a `since` column and one preflight); (4) no Hot builder without a
+  campaign that executes it — dead ones deleted by reading, producer-missing ones named in their crate doc
+  (PARSIMONY **`(spawned)`** with a blind defend before any cut).
+- Cuts: `01fbe6a4b`, `903cb6f8e`, `f610fadc9`.

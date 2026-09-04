@@ -1725,7 +1725,18 @@ fn market_shape_from_arguments_v1(
         }
     };
     let shape = crate::market::LocalMarketShapeV1 {
-        founding_band: band,
+        // The one field that must fall back like all the others, and did not.
+        //
+        // `founding_band_from_arguments_v1` returns `None` for "the caller
+        // stated no band", not for "this market has no band" — and the fixture's
+        // default STATES one, in the words of its own declaration: "what the
+        // fixture's author believes, written down where the compiler can hold
+        // them to it. A caller that means something else states something else."
+        // Passing that `None` straight through made a caller who stated nothing
+        // an author who declared nothing, and the Pyth compiler refuses that by
+        // name — which is how the loopback lifecycle's market stage died one
+        // stage past the succession wall.
+        founding_band: band.or(default.founding_band.clone()),
         cut_denominator: scalar(
             cut_denominator,
             "--cut-denominator",
@@ -1808,6 +1819,72 @@ fn absolute_new_directory(value: String, label: &str) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Omitting every shape flag compiles the fixture's own market, band included.
+    ///
+    /// The band is the only one of the six that could regress silently: the
+    /// other five have values a caller can read back off the shape, while an
+    /// absent band is not visible until a Pyth compile refuses. It regressed,
+    /// and cost the cold machine's loopback a whole stage.
+    #[test]
+    fn omitting_every_shape_flag_keeps_the_fixtures_own_stated_band() {
+        let default = crate::market::LocalMarketShapeV1::default();
+        let shape = market_shape_from_arguments_v1(None, None, None, None, None, None, None)
+            .expect("no flags is the fixture's own shape");
+        let inherited = shape
+            .founding_band
+            .as_ref()
+            .expect("the fixture's author states a band, and a caller who states nothing inherits it");
+        let stated = default.founding_band.as_ref().expect("the default states its band");
+        assert_eq!(format!("{inherited:?}"), format!("{stated:?}"));
+        assert_eq!(shape.cuts, default.cuts);
+        assert_eq!(shape.coefficients, default.coefficients);
+        assert_eq!(shape.cut_denominator, default.cut_denominator);
+    }
+
+    /// A caller that means something else states something else — all five.
+    #[test]
+    fn a_stated_band_replaces_the_fixtures_and_a_partial_one_refuses_by_name() {
+        let stated = market_shape_from_arguments_v1(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(crate::model::FoundingBandInputV1::spot_band(
+                21_000, 350, 8_000, 4, 8_500,
+            )),
+        )
+        .expect("a stated band is the shape's band");
+        assert_ne!(
+            format!("{:?}", stated.founding_band),
+            format!(
+                "{:?}",
+                crate::market::LocalMarketShapeV1::default().founding_band
+            )
+        );
+
+        assert!(founding_band_from_arguments_v1(None, None, None, None, None)
+            .expect("no band flags at all is not a refusal")
+            .is_none());
+        let partial = founding_band_from_arguments_v1(
+            Some("15000".into()),
+            Some("200".into()),
+            None,
+            None,
+            None,
+        )
+        .expect_err("a partial band must refuse");
+        let text = format!("{partial:?}");
+        for flag in [
+            "--band-window-slots",
+            "--band-plausible-half-widths",
+            "--band-max-cell-share-bps",
+        ] {
+            assert!(text.contains(flag), "the refusal must name {flag}: {text}");
+        }
+    }
 
     #[test]
     fn prepare_parser_accepts_only_one_explicit_hot_cu_profile_token() {
