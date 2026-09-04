@@ -716,6 +716,243 @@ theorem valueAt_addBelow_failure
               have inner : bound ≤ index := by omega
               simpa [addBelow, valueAt] using ih rest index inner
 
+/-- The dual of `addBelow`: add `quantity` at every coordinate AT OR ABOVE
+`bound`.  A runtime Product's width is `ordinaryCount + 1`, so
+`addFrom ordinaryCount` credits exactly the one failure column, and `addBelow`
+and `addFrom` at the same bound are together `addEvery` -- which is what makes
+a refunding complete set the SAME set as a categorical one, spread across two
+Positions instead of held in one. -/
+def addFrom : Nat → List Nat → Nat → List Nat
+  | 0, values, quantity => addEvery values quantity
+  | _, [], _ => []
+  | bound + 1, value :: rest, quantity => value :: addFrom bound rest quantity
+
+/-- The dual of `addBelow` in the other direction: a refunding merge burns the
+holder's ordinary claims. -/
+def subBelow : Nat → List Nat → Nat → List Nat
+  | 0, values, _ => values
+  | _, [], _ => []
+  | bound + 1, value :: rest, quantity =>
+      (value - quantity) :: subBelow bound rest quantity
+
+/-- A refunding merge burns the escrow's failure claim alongside. -/
+def subFrom : Nat → List Nat → Nat → List Nat
+  | 0, values, quantity => subEvery values quantity
+  | _, [], _ => []
+  | bound + 1, value :: rest, quantity => value :: subFrom bound rest quantity
+
+theorem length_addFrom (bound : Nat) (values : List Nat) (quantity : Nat) :
+    (addFrom bound values quantity).length = values.length := by
+  induction bound generalizing values with
+  | zero => simp [addFrom, addEvery]
+  | succ bound ih =>
+      cases values with
+      | nil => simp [addFrom]
+      | cons value rest => simp [addFrom, ih]
+
+theorem length_subBelow (bound : Nat) (values : List Nat) (quantity : Nat) :
+    (subBelow bound values quantity).length = values.length := by
+  induction bound generalizing values with
+  | zero => simp [subBelow]
+  | succ bound ih =>
+      cases values with
+      | nil => simp [subBelow]
+      | cons value rest => simp [subBelow, ih]
+
+theorem length_subFrom (bound : Nat) (values : List Nat) (quantity : Nat) :
+    (subFrom bound values quantity).length = values.length := by
+  induction bound generalizing values with
+  | zero => simp [subFrom, subEvery]
+  | succ bound ih =>
+      cases values with
+      | nil => simp [subFrom]
+      | cons value rest => simp [subFrom, ih]
+
+theorem valueAt_addFrom_ordinary
+    (bound : Nat) (values : List Nat) (quantity index : Nat)
+    (ordinary : index < bound) :
+    valueAt (addFrom bound values quantity) index = valueAt values index := by
+  induction bound generalizing values index with
+  | zero => omega
+  | succ bound ih =>
+      cases values with
+      | nil => simp [addFrom]
+      | cons value rest =>
+          cases index with
+          | zero => simp [addFrom, valueAt]
+          | succ index =>
+              have inner : index < bound := by omega
+              simpa [addFrom, valueAt] using ih rest index inner
+
+theorem valueAt_addFrom_failure
+    (bound : Nat) (values : List Nat) (quantity index : Nat)
+    (failure : bound ≤ index) (present : index < values.length) :
+    valueAt (addFrom bound values quantity) index = valueAt values index + quantity := by
+  induction bound generalizing values index with
+  | zero =>
+      simp only [addFrom]
+      exact valueAt_addEvery_eq values index quantity present
+  | succ bound ih =>
+      cases values with
+      | nil => simp at present
+      | cons value rest =>
+          cases index with
+          | zero => omega
+          | succ index =>
+              have inner : bound ≤ index := by omega
+              have shorter : index < rest.length := by simpa using present
+              simpa [addFrom, valueAt] using ih rest index inner shorter
+
+theorem valueAt_subBelow_ordinary
+    (bound : Nat) (values : List Nat) (quantity index : Nat)
+    (ordinary : index < bound) (present : index < values.length) :
+    valueAt (subBelow bound values quantity) index
+      = valueAt values index - quantity := by
+  induction bound generalizing values index with
+  | zero => omega
+  | succ bound ih =>
+      cases values with
+      | nil => simp at present
+      | cons value rest =>
+          cases index with
+          | zero => simp [subBelow, valueAt]
+          | succ index =>
+              have inner : index < bound := by omega
+              have shorter : index < rest.length := by simpa using present
+              simpa [subBelow, valueAt] using ih rest index inner shorter
+
+theorem valueAt_subBelow_failure
+    (bound : Nat) (values : List Nat) (quantity index : Nat)
+    (failure : bound ≤ index) :
+    valueAt (subBelow bound values quantity) index = valueAt values index := by
+  induction bound generalizing values index with
+  | zero => simp [subBelow]
+  | succ bound ih =>
+      cases values with
+      | nil => simp [subBelow]
+      | cons value rest =>
+          cases index with
+          | zero => omega
+          | succ index =>
+              have inner : bound ≤ index := by omega
+              simpa [subBelow, valueAt] using ih rest index inner
+
+theorem valueAt_subFrom_ordinary
+    (bound : Nat) (values : List Nat) (quantity index : Nat)
+    (ordinary : index < bound) :
+    valueAt (subFrom bound values quantity) index = valueAt values index := by
+  induction bound generalizing values index with
+  | zero => omega
+  | succ bound ih =>
+      cases values with
+      | nil => simp [subFrom]
+      | cons value rest =>
+          cases index with
+          | zero => simp [subFrom, valueAt]
+          | succ index =>
+              have inner : index < bound := by omega
+              simpa [subFrom, valueAt] using ih rest index inner
+
+theorem valueAt_subFrom_failure
+    (bound : Nat) (values : List Nat) (quantity index : Nat)
+    (failure : bound ≤ index) (present : index < values.length) :
+    valueAt (subFrom bound values quantity) index = valueAt values index - quantity := by
+  induction bound generalizing values index with
+  | zero =>
+      simp only [subFrom]
+      exact valueAt_subEvery_eq values index quantity present
+  | succ bound ih =>
+      cases values with
+      | nil => simp at present
+      | cons value rest =>
+          cases index with
+          | zero => omega
+          | succ index =>
+              have inner : bound ≤ index := by omega
+              have shorter : index < rest.length := by simpa using present
+              simpa [subFrom, valueAt] using ih rest index inner shorter
+
+/-- `addBelow` and `addFrom` at the same bound are `addEvery`: the two Positions
+of a refunding market hold, between them, exactly one categorical complete
+set. -/
+theorem addFrom_addBelow_eq_addEvery (bound : Nat) (values : List Nat) (quantity : Nat) :
+    addFrom bound (addBelow bound values quantity) quantity = addEvery values quantity := by
+  induction bound generalizing values with
+  | zero => simp [addBelow, addFrom]
+  | succ bound ih =>
+      cases values with
+      | nil => simp [addBelow, addFrom, addEvery]
+      | cons value rest => simp [addBelow, addFrom, addEvery, ih]
+
+theorem subEvery_addEvery (values : List Nat) (quantity : Nat) :
+    subEvery (addEvery values quantity) quantity = values := by
+  induction values with
+  | nil => simp [addEvery, subEvery]
+  | cons value rest ih =>
+      simp only [addEvery, subEvery, List.map_cons] at ih ⊢
+      rw [ih]
+      simp
+
+theorem subBelow_addBelow (bound : Nat) (values : List Nat) (quantity : Nat) :
+    subBelow bound (addBelow bound values quantity) quantity = values := by
+  induction bound generalizing values with
+  | zero => simp [addBelow, subBelow]
+  | succ bound ih =>
+      cases values with
+      | nil => simp [addBelow, subBelow]
+      | cons value rest => simp [addBelow, subBelow, ih]
+
+theorem subFrom_addFrom (bound : Nat) (values : List Nat) (quantity : Nat) :
+    subFrom bound (addFrom bound values quantity) quantity = values := by
+  induction bound generalizing values with
+  | zero => simpa [addFrom, subFrom] using subEvery_addEvery values quantity
+  | succ bound ih =>
+      cases values with
+      | nil => simp [addFrom, subFrom]
+      | cons value rest => simp [addFrom, subFrom, ih]
+
+theorem addEvery_subEvery (values : List Nat) (quantity : Nat)
+    (available : ∀ value ∈ values, quantity ≤ value) :
+    addEvery (subEvery values quantity) quantity = values := by
+  induction values with
+  | nil => simp [addEvery, subEvery]
+  | cons value rest ih =>
+      have head : quantity ≤ value := available value (by simp)
+      have tail : ∀ v ∈ rest, quantity ≤ v := fun v hv => available v (by simp [hv])
+      have inner := ih tail
+      simp only [addEvery, subEvery, List.map_cons] at inner ⊢
+      rw [inner, Nat.sub_add_cancel head]
+
+theorem addBelow_subBelow (bound : Nat) (values : List Nat) (quantity : Nat)
+    (available : ∀ value ∈ values.take bound, quantity ≤ value) :
+    addBelow bound (subBelow bound values quantity) quantity = values := by
+  induction bound generalizing values with
+  | zero => simp [addBelow, subBelow]
+  | succ bound ih =>
+      cases values with
+      | nil => simp [addBelow, subBelow]
+      | cons value rest =>
+          have head : quantity ≤ value := available value (by simp)
+          have tail : ∀ v ∈ rest.take bound, quantity ≤ v :=
+            fun v hv => available v (by simp [hv])
+          simp only [addBelow, subBelow]
+          rw [ih rest tail, Nat.sub_add_cancel head]
+
+theorem addFrom_subFrom (bound : Nat) (values : List Nat) (quantity : Nat)
+    (available : ∀ value ∈ values.drop bound, quantity ≤ value) :
+    addFrom bound (subFrom bound values quantity) quantity = values := by
+  induction bound generalizing values with
+  | zero => exact addEvery_subEvery values quantity (by simpa using available)
+  | succ bound ih =>
+      cases values with
+      | nil => simp [addFrom, subFrom]
+      | cons value rest =>
+          have tail : ∀ v ∈ rest.drop bound, quantity ≤ v := by
+            intro v hv
+            exact available v (by simpa using hv)
+          simp only [addFrom, subFrom]
+          rw [ih rest tail]
+
 theorem valueAt_replicate_zero (count index : Nat) :
     valueAt (List.replicate count 0) index = 0 := by
   unfold valueAt
@@ -726,21 +963,18 @@ theorem valueAt_replicate_zero (count index : Nat) :
       simp [hv.symm]
 
 
-theorem valueAt_addAt_ne
-    (values : List Nat) (index other quantity : Nat) (distinct : other ≠ index) :
-    valueAt (addAt values index quantity) other = valueAt values other := by
-  simp [addAt, setAt, valueAt, Ne.symm distinct]
-
-/-- Founding under the escrow ruling: one complete set, the ordinary
-coordinates credited to the founder (`destination`) and the failure coordinate
-credited to the market-derived escrow (`source`). -/
-def escrowedFoundingPost (ordinaryCount : Nat) (pre : State) (quantity : Nat) : State :=
+/-- A refunding market's complete-set split: one set, the ordinary coordinates
+credited to the holder (`destination`) and the failure coordinate to the
+market-derived escrow (`source`).  Founding is this run against a vacant
+pre-state, so there is one author for what a refunding complete set IS and
+founding is a use of it rather than a second spelling. -/
+def refundingSplitPost (ordinaryCount : Nat) (pre : State) (quantity : Nat) : State :=
   { pre with
     hoard := pre.hoard + quantity
     supply := addEvery pre.supply quantity
     nativeSupply := addEvery pre.nativeSupply quantity
     destinationNative := addBelow ordinaryCount pre.destinationNative quantity
-    sourceNative := addAt pre.sourceNative (failureSelector ordinaryCount) quantity }
+    sourceNative := addFrom ordinaryCount pre.sourceNative quantity }
 
 /-- The vacant pre-state founding runs against. -/
 def vacantFounding (ordinaryCount : Nat) (pre : State) : Prop :=
@@ -749,27 +983,27 @@ def vacantFounding (ordinaryCount : Nat) (pre : State) : Prop :=
 
 theorem escrowed_founding_is_a_complete_set_split_in_the_aggregate
     (ordinaryCount : Nat) (pre : State) (quantity : Nat) :
-    (escrowedFoundingPost ordinaryCount pre quantity).hoard =
+    (refundingSplitPost ordinaryCount pre quantity).hoard =
       (splitPost pre .destination .native quantity).hoard ∧
-    (escrowedFoundingPost ordinaryCount pre quantity).supply =
+    (refundingSplitPost ordinaryCount pre quantity).supply =
       (splitPost pre .destination .native quantity).supply ∧
-    (escrowedFoundingPost ordinaryCount pre quantity).nativeSupply =
+    (refundingSplitPost ordinaryCount pre quantity).nativeSupply =
       (splitPost pre .destination .native quantity).nativeSupply ∧
-    (escrowedFoundingPost ordinaryCount pre quantity).materializedSupply =
+    (refundingSplitPost ordinaryCount pre quantity).materializedSupply =
       (splitPost pre .destination .native quantity).materializedSupply := by
-  simp [escrowedFoundingPost, splitPost, State.withRepresentationSupply,
+  simp [refundingSplitPost, splitPost, State.withRepresentationSupply,
     State.withHolderClaims, State.representationSupply, State.holderClaims]
 
 theorem escrowed_founding_mints_ordinary_claims_to_the_founder
     (ordinaryCount : Nat) (pre : State) (quantity outcome : Nat)
     (vacant : vacantFounding ordinaryCount pre)
     (ordinary : outcome < ordinaryCount) :
-    valueAt (escrowedFoundingPost ordinaryCount pre quantity).destinationNative outcome
+    valueAt (refundingSplitPost ordinaryCount pre quantity).destinationNative outcome
       = quantity := by
   obtain ⟨_, founder⟩ := vacant
   have present : outcome < pre.destinationNative.length := by
     rw [founder]; simp [outcomeWidth]; omega
-  simp only [escrowedFoundingPost]
+  simp only [refundingSplitPost]
   rw [valueAt_addBelow_ordinary ordinaryCount pre.destinationNative quantity outcome
       ordinary present, founder, valueAt_replicate_zero]
   simp
@@ -777,30 +1011,330 @@ theorem escrowed_founding_mints_ordinary_claims_to_the_founder
 theorem escrowed_founding_seats_the_failure_coordinate_in_the_escrow
     (ordinaryCount : Nat) (pre : State) (quantity : Nat)
     (vacant : vacantFounding ordinaryCount pre) :
-    valueAt (escrowedFoundingPost ordinaryCount pre quantity).destinationNative
+    valueAt (refundingSplitPost ordinaryCount pre quantity).destinationNative
         (failureSelector ordinaryCount) = 0 ∧
-    valueAt (escrowedFoundingPost ordinaryCount pre quantity).sourceNative
+    valueAt (refundingSplitPost ordinaryCount pre quantity).sourceNative
         (failureSelector ordinaryCount) = quantity := by
   obtain ⟨escrow, founder⟩ := vacant
   have present : failureSelector ordinaryCount < pre.sourceNative.length := by
     rw [escrow]; simp [outcomeWidth, failureSelector]
-  simp only [escrowedFoundingPost]
+  simp only [refundingSplitPost]
   constructor
   · rw [valueAt_addBelow_failure ordinaryCount pre.destinationNative quantity
       (failureSelector ordinaryCount) (Nat.le_refl _), founder, valueAt_replicate_zero]
-  · rw [valueAt_addAt_eq _ _ _ present, escrow, valueAt_replicate_zero]
+  · rw [valueAt_addFrom_failure ordinaryCount pre.sourceNative quantity
+      (failureSelector ordinaryCount) (Nat.le_refl _) present, escrow,
+      valueAt_replicate_zero]
     simp
 
 theorem escrowed_founding_gives_the_escrow_no_ordinary_claims
     (ordinaryCount : Nat) (pre : State) (quantity outcome : Nat)
     (vacant : vacantFounding ordinaryCount pre)
     (ordinary : outcome < ordinaryCount) :
-    valueAt (escrowedFoundingPost ordinaryCount pre quantity).sourceNative outcome = 0 := by
+    valueAt (refundingSplitPost ordinaryCount pre quantity).sourceNative outcome = 0 := by
   obtain ⟨escrow, _⟩ := vacant
-  have distinct : outcome ≠ failureSelector ordinaryCount := by
-    simp [failureSelector]; omega
-  simp only [escrowedFoundingPost]
-  rw [valueAt_addAt_ne _ _ _ _ distinct, escrow, valueAt_replicate_zero]
+  simp only [refundingSplitPost]
+  rw [valueAt_addFrom_ordinary ordinaryCount pre.sourceNative quantity outcome ordinary,
+    escrow, valueAt_replicate_zero]
+
+/-! ### The refunding complete-set law
+
+`MergeCompleteSet` burns one claim at EVERY coordinate from ONE Position, so
+seating the failure coordinate anywhere the merging holder is not forecloses
+the merge outright -- `a_holder_without_the_failure_coordinate_cannot_merge`
+states exactly that, and it is why a refunding market cannot reuse the
+categorical law rather than a preference between two spellings.
+
+So a refunding market's complete set is redefined over the ORDINARY
+coordinates.  One ordinary claim is one atom on the refunding scale, so a
+holder presenting one claim at every ordinary coordinate has presented the
+whole set's collateral; the failure coordinate stays seated in the escrow,
+is burned by the program alongside, and is never part of a holder's merge.
+
+The AGGREGATE is untouched.  Hoard, supply and the native partition move by
+`quantity` at every coordinate exactly as the categorical law moves them
+(`refunding_merge_is_a_complete_set_merge_in_the_aggregate`, and the split's
+counterpart above), so every conservation proved earlier still governs a
+refunding market and the census reads it with no new compartment.
+-/
+
+/-- Both refunding actions move the same claim at every coordinate, so
+aggregate supply stays uniform for as long as a Market is open -- which is what
+makes the escrow's pro-rata rate a constant of the Market header rather than a
+holder census. -/
+def uniformSupply (ordinaryCount : Nat) (state : State) (supply : Nat) : Prop :=
+  ∀ outcome, outcome < outcomeWidth ordinaryCount → valueAt state.supply outcome = supply
+
+/-- The escrow holds the WHOLE failure supply.  A vacant Market is seated,
+founding is a refunding split, and both refunding actions preserve it, so this
+holds for the whole of a refunding Market's open life. -/
+def escrowSeated (ordinaryCount : Nat) (state : State) : Prop :=
+  valueAt state.sourceNative (failureSelector ordinaryCount)
+    = valueAt state.supply (failureSelector ordinaryCount)
+
+/-- A refunding market's complete-set merge: the holder's ordinary claims and
+the escrow's failure claim are burned together and the set's collateral is
+released.  Dual to `refundingSplitPost` coordinate by coordinate. -/
+def refundingMergePost (ordinaryCount : Nat) (pre : State) (quantity : Nat) : State :=
+  { pre with
+    hoard := pre.hoard - quantity
+    supply := subEvery pre.supply quantity
+    nativeSupply := subEvery pre.nativeSupply quantity
+    destinationNative := subBelow ordinaryCount pre.destinationNative quantity
+    sourceNative := subFrom ordinaryCount pre.sourceNative quantity }
+
+/-- The refunding merge is INDISTINGUISHABLE from the categorical merge in the
+aggregate.  Only which Position each coordinate was burned from moved, so every
+law already proved about Hoard, supply and the native partition still governs
+it. -/
+theorem refunding_merge_is_a_complete_set_merge_in_the_aggregate
+    (ordinaryCount : Nat) (pre : State) (quantity : Nat) :
+    (refundingMergePost ordinaryCount pre quantity).hoard =
+      (mergePost pre .destination .native quantity).hoard ∧
+    (refundingMergePost ordinaryCount pre quantity).supply =
+      (mergePost pre .destination .native quantity).supply ∧
+    (refundingMergePost ordinaryCount pre quantity).nativeSupply =
+      (mergePost pre .destination .native quantity).nativeSupply ∧
+    (refundingMergePost ordinaryCount pre quantity).materializedSupply =
+      (mergePost pre .destination .native quantity).materializedSupply := by
+  simp [refundingMergePost, mergePost, State.withRepresentationSupply,
+    State.withHolderClaims, State.representationSupply, State.holderClaims]
+
+/-- What a refunding split does to the two Positions: the holder gains one
+claim at every ordinary coordinate and NOTHING at the failure coordinate; the
+escrow gains the failure coordinate and nothing else. -/
+theorem the_refunding_split_spreads_one_set_across_two_positions
+    (ordinaryCount : Nat) (pre : State) (quantity outcome : Nat)
+    (ordinary : outcome < ordinaryCount)
+    (holderLength : outcome < pre.destinationNative.length)
+    (escrowLength : failureSelector ordinaryCount < pre.sourceNative.length) :
+    valueAt (refundingSplitPost ordinaryCount pre quantity).destinationNative outcome
+      = valueAt pre.destinationNative outcome + quantity ∧
+    valueAt (refundingSplitPost ordinaryCount pre quantity).sourceNative outcome
+      = valueAt pre.sourceNative outcome ∧
+    valueAt (refundingSplitPost ordinaryCount pre quantity).destinationNative
+        (failureSelector ordinaryCount)
+      = valueAt pre.destinationNative (failureSelector ordinaryCount) ∧
+    valueAt (refundingSplitPost ordinaryCount pre quantity).sourceNative
+        (failureSelector ordinaryCount)
+      = valueAt pre.sourceNative (failureSelector ordinaryCount) + quantity := by
+  simp only [refundingSplitPost]
+  exact ⟨valueAt_addBelow_ordinary ordinaryCount pre.destinationNative quantity outcome
+      ordinary holderLength,
+    valueAt_addFrom_ordinary ordinaryCount pre.sourceNative quantity outcome ordinary,
+    valueAt_addBelow_failure ordinaryCount pre.destinationNative quantity
+      (failureSelector ordinaryCount) (Nat.le_refl _),
+    valueAt_addFrom_failure ordinaryCount pre.sourceNative quantity
+      (failureSelector ordinaryCount) (Nat.le_refl _) escrowLength⟩
+
+/-- What a refunding merge does to the two Positions.  The holder's failure
+balance is UNTOUCHED -- the failure coordinate is never part of a holder's
+merge -- and the escrow's ordinary balances are untouched too. -/
+theorem the_refunding_merge_burns_one_set_across_two_positions
+    (ordinaryCount : Nat) (pre : State) (quantity outcome : Nat)
+    (ordinary : outcome < ordinaryCount)
+    (holderLength : outcome < pre.destinationNative.length)
+    (escrowLength : failureSelector ordinaryCount < pre.sourceNative.length) :
+    valueAt (refundingMergePost ordinaryCount pre quantity).destinationNative outcome
+      = valueAt pre.destinationNative outcome - quantity ∧
+    valueAt (refundingMergePost ordinaryCount pre quantity).sourceNative outcome
+      = valueAt pre.sourceNative outcome ∧
+    valueAt (refundingMergePost ordinaryCount pre quantity).destinationNative
+        (failureSelector ordinaryCount)
+      = valueAt pre.destinationNative (failureSelector ordinaryCount) ∧
+    valueAt (refundingMergePost ordinaryCount pre quantity).sourceNative
+        (failureSelector ordinaryCount)
+      = valueAt pre.sourceNative (failureSelector ordinaryCount) - quantity := by
+  simp only [refundingMergePost]
+  exact ⟨valueAt_subBelow_ordinary ordinaryCount pre.destinationNative quantity outcome
+      ordinary holderLength,
+    valueAt_subFrom_ordinary ordinaryCount pre.sourceNative quantity outcome ordinary,
+    valueAt_subBelow_failure ordinaryCount pre.destinationNative quantity
+      (failureSelector ordinaryCount) (Nat.le_refl _),
+    valueAt_subFrom_failure ordinaryCount pre.sourceNative quantity
+      (failureSelector ordinaryCount) (Nat.le_refl _) escrowLength⟩
+
+/-- The refunding split and merge are INVERSE, first direction and the one that
+carries the economics: a set that was minted and then burned leaves the Market
+in exactly the state it found it, with no hypothesis at all. -/
+theorem the_refunding_merge_undoes_the_refunding_split
+    (ordinaryCount : Nat) (pre : State) (quantity : Nat) :
+    refundingMergePost ordinaryCount (refundingSplitPost ordinaryCount pre quantity) quantity
+      = pre := by
+  simp [refundingMergePost, refundingSplitPost, subEvery_addEvery, subBelow_addBelow,
+    subFrom_addFrom]
+
+/-- The other direction, under exactly the merge's own admission: the Hoard
+backs the set, and both Positions hold the claims the merge burns.  Nat
+truncation is why the hypotheses are here and not in the direction above. -/
+theorem the_refunding_split_undoes_an_admitted_refunding_merge
+    (ordinaryCount : Nat) (pre : State) (quantity : Nat)
+    (backed : quantity ≤ pre.hoard)
+    (supplyHeld : ∀ value ∈ pre.supply, quantity ≤ value)
+    (nativeHeld : ∀ value ∈ pre.nativeSupply, quantity ≤ value)
+    (holderHeld : ∀ value ∈ pre.destinationNative.take ordinaryCount, quantity ≤ value)
+    (escrowHeld : ∀ value ∈ pre.sourceNative.drop ordinaryCount, quantity ≤ value) :
+    refundingSplitPost ordinaryCount (refundingMergePost ordinaryCount pre quantity) quantity
+      = pre := by
+  simp only [refundingSplitPost, refundingMergePost]
+  rw [addEvery_subEvery pre.supply quantity supplyHeld,
+    addEvery_subEvery pre.nativeSupply quantity nativeHeld,
+    addBelow_subBelow ordinaryCount pre.destinationNative quantity holderHeld,
+    addFrom_subFrom ordinaryCount pre.sourceNative quantity escrowHeld,
+    Nat.sub_add_cancel backed]
+
+/-- A vacant Market is seated on both sides, so founding -- which is the
+refunding split -- starts seated. -/
+theorem a_vacant_market_is_seated
+    (ordinaryCount : Nat) (pre : State)
+    (vacant : vacantFounding ordinaryCount pre)
+    (empty : valueAt pre.supply (failureSelector ordinaryCount) = 0) :
+    escrowSeated ordinaryCount pre := by
+  obtain ⟨escrow, _⟩ := vacant
+  unfold escrowSeated
+  rw [escrow, valueAt_replicate_zero, empty]
+
+/-- Both refunding actions preserve the seating, so the escrow's failure claims
+are the whole failure supply for the whole of a Market's open life. -/
+theorem the_refunding_actions_keep_the_escrow_seated
+    (ordinaryCount : Nat) (pre : State) (quantity : Nat)
+    (supplyLength : failureSelector ordinaryCount < pre.supply.length)
+    (escrowLength : failureSelector ordinaryCount < pre.sourceNative.length)
+    (seated : escrowSeated ordinaryCount pre) :
+    escrowSeated ordinaryCount (refundingSplitPost ordinaryCount pre quantity) ∧
+    escrowSeated ordinaryCount (refundingMergePost ordinaryCount pre quantity) := by
+  unfold escrowSeated at seated ⊢
+  constructor
+  · simp only [refundingSplitPost]
+    rw [valueAt_addFrom_failure ordinaryCount pre.sourceNative quantity
+        (failureSelector ordinaryCount) (Nat.le_refl _) escrowLength,
+      valueAt_addEvery_eq pre.supply (failureSelector ordinaryCount) quantity supplyLength,
+      seated]
+  · simp only [refundingMergePost]
+    rw [valueAt_subFrom_failure ordinaryCount pre.sourceNative quantity
+        (failureSelector ordinaryCount) (Nat.le_refl _) escrowLength,
+      valueAt_subEvery_eq pre.supply (failureSelector ordinaryCount) quantity supplyLength,
+      seated]
+
+/-- ESCROW SUPPLY EQUALS ORDINARY SUPPLY.  A seated escrow on a Market whose
+supply is uniform holds exactly as many failure claims as there are complete
+sets outstanding at any ordinary coordinate -- which is the fact the pro-rata
+rate is a constant because of. -/
+theorem the_seated_escrow_stands_against_exactly_the_ordinary_supply
+    (ordinaryCount supply : Nat) (state : State) (outcome : Nat)
+    (seated : escrowSeated ordinaryCount state)
+    (uniform : uniformSupply ordinaryCount state supply)
+    (ordinary : outcome < ordinaryCount) :
+    valueAt state.sourceNative (failureSelector ordinaryCount)
+      = valueAt state.supply outcome := by
+  unfold escrowSeated at seated
+  rw [seated,
+    uniform (failureSelector ordinaryCount) (by simp [failureSelector, outcomeWidth]),
+    uniform outcome (by simp [outcomeWidth]; omega)]
+
+/-- L1 and L3 for the refunding split, stated as the census states them: the
+Hoard moved by exactly the set's collateral, and at EVERY coordinate the supply
+moved by exactly what the two Positions moved between them -- the holder's at
+the ordinary coordinates, the escrow's at the failure coordinate. -/
+theorem the_refunding_split_conserves_L1_and_L3
+    (ordinaryCount : Nat) (pre : State) (quantity outcome : Nat)
+    (supplyLength : outcome < pre.supply.length)
+    (holderLength : outcome < pre.destinationNative.length)
+    (escrowLength : outcome < pre.sourceNative.length) :
+    (refundingSplitPost ordinaryCount pre quantity).hoard = pre.hoard + quantity ∧
+    valueAt (refundingSplitPost ordinaryCount pre quantity).supply outcome
+      = valueAt pre.supply outcome + quantity ∧
+    (valueAt (refundingSplitPost ordinaryCount pre quantity).destinationNative outcome
+        - valueAt pre.destinationNative outcome)
+      + (valueAt (refundingSplitPost ordinaryCount pre quantity).sourceNative outcome
+        - valueAt pre.sourceNative outcome)
+      = quantity := by
+  refine ⟨rfl, ?_, ?_⟩
+  · simp only [refundingSplitPost]
+    exact valueAt_addEvery_eq pre.supply outcome quantity supplyLength
+  · simp only [refundingSplitPost]
+    rcases Nat.lt_or_ge outcome ordinaryCount with ordinary | failure
+    · rw [valueAt_addBelow_ordinary ordinaryCount pre.destinationNative quantity outcome
+        ordinary holderLength,
+        valueAt_addFrom_ordinary ordinaryCount pre.sourceNative quantity outcome ordinary]
+      omega
+    · rw [valueAt_addBelow_failure ordinaryCount pre.destinationNative quantity outcome
+        failure,
+        valueAt_addFrom_failure ordinaryCount pre.sourceNative quantity outcome failure
+          escrowLength]
+      omega
+
+/-- L1 and L3 for the refunding merge.  The availability hypotheses are the
+merge's own admission read at whichever Position owns the coordinate. -/
+theorem the_refunding_merge_conserves_L1_and_L3
+    (ordinaryCount : Nat) (pre : State) (quantity outcome : Nat)
+    (supplyLength : outcome < pre.supply.length)
+    (holderLength : outcome < pre.destinationNative.length)
+    (escrowLength : outcome < pre.sourceNative.length)
+    (backed : quantity ≤ pre.hoard)
+    (supplyHeld : quantity ≤ valueAt pre.supply outcome)
+    (holderHeld : outcome < ordinaryCount → quantity ≤ valueAt pre.destinationNative outcome)
+    (escrowHeld : ordinaryCount ≤ outcome → quantity ≤ valueAt pre.sourceNative outcome) :
+    pre.hoard - (refundingMergePost ordinaryCount pre quantity).hoard = quantity ∧
+    valueAt pre.supply outcome
+        - valueAt (refundingMergePost ordinaryCount pre quantity).supply outcome = quantity ∧
+    (valueAt pre.destinationNative outcome
+        - valueAt (refundingMergePost ordinaryCount pre quantity).destinationNative outcome)
+      + (valueAt pre.sourceNative outcome
+        - valueAt (refundingMergePost ordinaryCount pre quantity).sourceNative outcome)
+      = quantity := by
+  refine ⟨?_, ?_, ?_⟩
+  · simp only [refundingMergePost]
+    omega
+  · simp only [refundingMergePost]
+    rw [valueAt_subEvery_eq pre.supply outcome quantity supplyLength]
+    omega
+  · simp only [refundingMergePost]
+    rcases Nat.lt_or_ge outcome ordinaryCount with ordinary | failure
+    · rw [valueAt_subBelow_ordinary ordinaryCount pre.destinationNative quantity outcome
+        ordinary holderLength,
+        valueAt_subFrom_ordinary ordinaryCount pre.sourceNative quantity outcome ordinary]
+      have := holderHeld ordinary
+      omega
+    · rw [valueAt_subBelow_failure ordinaryCount pre.destinationNative quantity outcome
+        failure,
+        valueAt_subFrom_failure ordinaryCount pre.sourceNative quantity outcome failure
+          escrowLength]
+      have := escrowHeld failure
+      omega
+
+theorem allHas_eq_false_of_empty_coordinate
+    (values : List Nat) (index quantity : Nat) (positive : 0 < quantity)
+    (present : index < values.length) (empty : valueAt values index = 0) :
+    allHas quantity values = false := by
+  have zero : values[index] = 0 := by
+    simpa [valueAt, List.getElem?_eq_getElem present] using empty
+  refine Bool.eq_false_iff.mpr ?_
+  intro contra
+  have held := (List.all_eq_true.mp contra) values[index] (List.getElem_mem present)
+  simp only [zero, decide_eq_true_eq] at held
+  omega
+
+/-- THE FORECLOSURE, which is why this law exists.  The categorical
+`mergeCompleteSet` requires `quantity` at EVERY coordinate of ONE Position, so
+a holder whose failure coordinate is seated in the escrow cannot merge at all:
+the frame is not admissible and the kernel refuses it.  A refunding market that
+reused the categorical merge would have no merge. -/
+theorem a_holder_without_the_failure_coordinate_cannot_merge
+    (ordinaryCount : Nat) (frame : Frame) (holder : Holder)
+    (representation : Representation) (quantity : Nat)
+    (command : frame.command = .mergeCompleteSet holder representation quantity)
+    (positive : 0 < quantity)
+    (present : failureSelector ordinaryCount
+      < (frame.pre.holderClaims holder representation).length)
+    (empty : valueAt (frame.pre.holderClaims holder representation)
+      (failureSelector ordinaryCount) = 0) :
+    accepts frame = false ∧ execute? frame = .error .notAdmissible := by
+  have missing : allHas quantity (frame.pre.holderClaims holder representation) = false :=
+    allHas_eq_false_of_empty_coordinate _ _ quantity positive present empty
+  have rejected : accepts frame = false := by
+    simp [accepts, commandAccepts, command, missing]
+  exact ⟨rejected, rejected_execute_refuses frame rejected⟩
 
 /-- Collateral one holder draws from the escrow for `quantity` ordinary claims
 when the failure selector resolves the Market.  Supply is uniform across every
@@ -931,12 +1465,6 @@ theorem half_the_ordinary_claims_draw_half_the_escrow
   rw [failure_refund_exhausts_the_escrow ordinaryCount supply multiplier positive,
     failure_refund_exhausts_the_escrow ordinaryCount (2 * supply) multiplier positive]
   exact (Nat.mul_assoc 2 supply multiplier).symm
-
-/-- Aggregate supply is uniform across every coordinate for as long as a Market
-is open: the complete-set actions are the only ones that move it and both
-refuse a non-uniform vector. -/
-def uniformSupply (ordinaryCount : Nat) (state : State) (supply : Nat) : Prop :=
-  ∀ outcome, outcome < outcomeWidth ordinaryCount → valueAt state.supply outcome = supply
 
 /-- The failure coordinate's supply, valued in collateral, is exactly the sum
 of the ordinary claims' pro-rata shares at resolution. -/

@@ -4806,3 +4806,5 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   callback still uncommitted upstream of the three builders; no substrates row (nothing completed). The resolution-proof
   ELF at HEAD emits zero diagnostics — the 89 are RECOVERY-2's uncommitted edits (misrouted message corrected).
 - Cuts: `d435467eb`, `b31b35a21`, `653a71a0d`.
+- Started 13:10 EDT: SERIES-3 **`(spawned)`** — the Expire route's revision placeholder gets one author, the route executes,
+  the Series lifecycle completes in one bank with a substrates row.
