@@ -13,75 +13,25 @@
  *                                               # absorb one named seam
  *
  * Only git-TRACKED web files are considered — an untracked file is a lane's
- * work in progress and is deliberately invisible here. Files listed in
- * DIVERGED carry deliberate SDK-side edits (they typecheck under the plain
- * node lib set where the web tree never typechecks at all); the script
- * reports them but never overwrites them — merge those by hand and record
- * why in the commit.
+ * work in progress and is deliberately invisible here.
+ *
+ * WHICH FILES IT MAY TOUCH IS NOT DECIDED HERE. This script used to hold its
+ * own three sets, `apps/dclutch-web/lib/twinIdentity.test.ts` held its own
+ * one, and the two disagreed about six files — including two whose absorption
+ * would have overwritten an SDK owner with the two-line browser shim that
+ * re-exports it. Both readers now ask `tools/twins/classification.mjs`, which
+ * is the single table, and each asks its own question of the answer.
  */
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { absorbsFromWeb, classifyWebPath, reportsWithoutCopying } from '../../../tools/twins/classification.mjs';
+
 const sdkRoot = fileURLToPath(new URL('..', import.meta.url));
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const webRoot = join(repoRoot, 'apps', 'dclutch-web');
-
-/** Web files that stay web-side: browser coupling or repo-wide gates. */
-const WEB_ONLY = new Set([
-  'lib/walletStandard.ts',
-  'lib/walletStandard.test.ts',
-  'lib/sbomVerify.test.ts',
-  // Repo-wide gates: they read BOTH trees, so a copy here would compare a
-  // package against itself and pass on anything.
-  'lib/twinIdentity.test.ts',
-]);
-
-/** App compatibility shims that already re-export their SDK semantic owner. */
-const SDK_OWNED_REEXPORTS = new Set([
-  // The checked live-devnet operator surface. The web copy was a fork that
-  // authenticated the deployment more weakly than this one -- no upgrade
-  // authority binding, no release join, no route-admission boundary -- and is
-  // now a re-export. Absorbing it would overwrite the owner with its own shim.
-  'lib/operatorSurface.ts',
-
-  // The capability catalogue and every rule that turns evidence into a status
-  // are SDK semantics; the browser supplies only its own routes, through
-  // `apps/dclutch-web/lib/capabilitySurface.ts`. Absorbing the web file would
-  // overwrite the owner with its own two-line shim.
-  'lib/capabilityModel.ts',
-  'lib/founding/principalCapacity.ts',
-  'lib/marketDiscovery.ts',
-  'lib/marketResolution.ts',
-  'lib/rationalTerminalChainV4.ts',
-  // The four Rational shims. `lib/twinIdentity.test.ts` has listed all of them
-  // as REEXPORT since the flip, and this file listed none: a `--copy` here
-  // would have overwritten 974 lines of compact-retirement semantics with the
-  // two-line shim that re-exports them. The two maps are meant to say the same
-  // thing about the same files and did not.
-  'lib/rationalOpenChainV4.ts',
-  'lib/rationalOpenHotV3.ts',
-  'lib/rationalOpenWasmV1.testSupport.ts',
-  'lib/rationalRetireReceiptV4.ts',
-  'lib/directOfferAuthoring.ts',
-  'lib/directMakerReplay.ts',
-  // The board's transport is SDK-owned and takes its URL as an argument; the
-  // web file is the deployment half, reading the one `NEXT_PUBLIC_*` variable
-  // that survives a static export. An SDK that reached for `process.env` would
-  // be a second place a deployment is decided.
-  'lib/ticketBoard.ts',
-]);
-
-/** SDK files with deliberate local edits; never auto-copied. */
-const DIVERGED = new Set([
-  'lib/founding/principalCapacity.test.ts',
-  'lib/rpc.ts',
-  'lib/rpc.test.ts',
-  'lib/localSuccessor.ts',
-  'scripts/abi-coverage.mjs',
-  'scripts/abi-coverage.baseline.json',
-]);
 
 const tracked = execFileSync('git', ['-C', repoRoot, 'ls-files',
   'apps/dclutch-web/lib', 'apps/dclutch-web/scripts', 'apps/dclutch-web/fixtures',
@@ -97,9 +47,10 @@ let fresh = 0;
 for (const file of tracked) {
   const rel = file.replace('apps/dclutch-web/', '');
   if (only.size > 0 && !only.has(rel)) continue;
-  if (WEB_ONLY.has(rel) || SDK_OWNED_REEXPORTS.has(rel)) continue;
   const webPath = join(webRoot, rel.split('/').join('/'));
   const sdkPath = join(sdkRoot, rel.split('/').join('/'));
+  const twin = classifyWebPath(rel, existsSync(sdkPath));
+  if (!absorbsFromWeb(twin.class) && !reportsWithoutCopying(twin.class)) continue;
   const upstream = readFileSync(webPath);
   if (!existsSync(sdkPath)) {
     fresh += 1;
@@ -112,9 +63,9 @@ for (const file of tracked) {
   }
   const local = readFileSync(sdkPath);
   if (upstream.equals(local)) continue;
-  if (DIVERGED.has(rel)) {
+  if (reportsWithoutCopying(twin.class)) {
     diverged += 1;
-    console.log(`diverged (deliberate SDK edits, merge by hand): ${rel}`);
+    console.log(`diverged (${twin.reason}), merge by hand: ${rel}`);
     continue;
   }
   drift += 1;

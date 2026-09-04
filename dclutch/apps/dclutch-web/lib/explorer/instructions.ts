@@ -117,6 +117,50 @@ const INSTRUCTION_RENDERERS: ReadonlyArray<InstructionRenderer> = Object.freeze(
 
   // --------------------------------------------------------------------- core
   {
+    routeId: 'core/found::process#Found',
+    summary: 'Founds a Market from its finalized records: the first Core action, the one every later action names.',
+  },
+  {
+    routeId: 'core/open_market::process#OpenMarket',
+    summary: 'Opens a founded Market for trading once its readiness has been verified.',
+  },
+  {
+    routeId: 'core/begin_retiring::process#BeginRetiring',
+    summary: 'Moves a Terminal Market into retirement, the phase in which its claims are reclaimed.',
+  },
+  {
+    routeId: 'core/retire_v1::process#Retire',
+    summary: 'Advances a retiring Market one coordinate toward Retired, reclaiming what that coordinate held.',
+  },
+  {
+    routeId: 'core/retire_v1::process_checkpoint_prepare#Retire',
+    summary: 'Prepares the retirement checkpoint a Retire step will commit against.',
+  },
+  {
+    routeId: 'core/resolution::process#Retire',
+    summary: 'Retires the resolution side of a Market whose answer is in.',
+  },
+  {
+    routeId: 'core/process_instruction#Retire',
+    summary: 'The inline Retire arm of Core’s dispatcher: the same Action, routed by the request’s length.',
+  },
+  {
+    routeId: 'core/capability::process#CloseCapability',
+    summary: 'Closes a capability root once nothing on the Market still needs it.',
+  },
+  {
+    routeId: 'core/process_instruction#CloseCapability',
+    summary: 'The inline CloseCapability arm of Core’s dispatcher, routed by the request’s length.',
+  },
+  {
+    routeId: 'core/execute_provider_v3::process#ExecuteProvider',
+    summary: 'Executes a provider step on a Market’s source, the act that moves an observation toward a certificate.',
+  },
+  {
+    routeId: 'core/process_instruction#else',
+    summary: 'Core’s wildcard arm: a well-formed request whose length no Action admits, refused by name.',
+  },
+  {
     routeId: 'core/found::project',
     summary: 'Works out what a founding would create, without creating it.',
   },

@@ -1801,15 +1801,6 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
     note: null,
   },
   {
-    magic: CORE_REQUEST_MAGIC,
-    name: 'Core request V2',
-    family: 'Core',
-    summary: 'The Market program\'s one request body: an Action variant (Found, Permit, Activate and their siblings) dispatched behind this magic, so eleven Core routes select on the same eight bytes and differ by the variant behind them. The browser holds the magic and the width; the variant coordinates are Core\'s own.',
-    width: { kind: 'fixed', bytes: CORE_REQUEST_BYTES },
-    fields: [],
-    note: 'Which of the eleven routes a request reaches is decided by the Action variant inside it, which no client layout emits yet; the census names the routes (docs/reference/routes.md, DCLTCRQ2).',
-  },
-  {
     magic: GENERAL_REQUEST_MAGIC_V3,
     name: 'General request V3',
     family: 'General',
