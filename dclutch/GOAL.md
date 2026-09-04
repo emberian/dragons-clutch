@@ -4499,3 +4499,5 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   regenerated. Owed: no census covers the payout boundary; a market page cannot say from the chain that a dead market's
   programs are closed.
 - Cuts: `1633a3edf`, `518bb5319`.
+- Started 06:30 EDT: WEB-PAGE **`a28b8afc2171cf1c0`** — the orchestrator's own read of the featured page (12,318 px at desktop):
+  reader first, the operator sections behind one fold, the verdict before the button, the long tables on the type scale.
