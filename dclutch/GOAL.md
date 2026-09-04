@@ -4628,3 +4628,5 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   taken a live refusal with it). Frames recaptured at 1973f4bd1 (two shrank 64 bytes). Owed: the expiry family's ELF
   red-proof (blocked on the Series contradiction); three `dealer::` unit tests red with ProfileMismatch/Geometry — not rent.
 - Cuts: `ace5d24e9`, `a10d5af4f`.
+- Started 09:50 EDT: DEALER-TESTS **`a246c134c61daeed1`** — the three `dealer::` unit tests red with ProfileMismatch/Geometry,
+  convicted to a commit (the shared-contract change is the likeliest) and fixed at the author.
