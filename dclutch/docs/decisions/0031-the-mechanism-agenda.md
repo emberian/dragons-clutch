@@ -148,7 +148,7 @@ falsify — and the guards against it are structural.**
   (`tools/gauntlet/journey/src/ledger.rs:1004-1012`) stays the standing
   instrument and no note asks for a tenth compartment — which C-11 reserves to
   ember by name.
-- **The sorries are stated.** Four in `ScoringRuleV1`, each named for its reason
+- **The sorries are stated.** Two in `ScoringRuleV1` since LEAN-SCORING 1f755edc4 (the two log bounds are proven; the two exp bounds were FALSE as stated — `b ≤ 2^62` added, tolerance 2^-50 → 2^-19 — and are restated, still `sorry`). Originally four, each named for its reason
   (the one-sided and two-sided approximation bounds), with `table_power_bound`
   landed at `a16c06d33` as the fact they compose from. A design whose gaps are
   named is falsifiable; one whose gaps are not is a claim.
