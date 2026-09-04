@@ -4761,3 +4761,13 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   stands). Cohort-17 (founding frame, payout frame, close route). Question for ember: mandatory at the size rule, or a
   founder's choice the page derives from the escrow's lamports.
 - Cuts: `80fd54186`, `26683ee71`.
+- ENSEMBLE closed (`ff4f3b142`; MECHANISM_ENSEMBLE_RESOLUTION note + `EnsembleResolutionV1.lean`, 768 lines, 0 sorry): k
+  members as the ladder's leading slots with the window's deadline, rungs after; the two ensemble bytes are the material's
+  reserved zeros as (k−1, q−1) so **k=q=1 is today's material to the byte** (cohort-15 market 3 replayed as a witness);
+  the fold is the tree's existing rank-⌊n/2⌋ median once through the selector; PROVEN: the median is bracketed by an honest
+  majority, an attacker below half cannot move the cell, **exactly half can move it UP and not down — never an even q**,
+  the fold never stalls, fewer than q → the ladder. Price: +0.0065 SOL for k=3, +0.0130 for k=5, nearly all returning rent.
+  The push route's fragment mode IS the owed recovery-capture producer (RECOVERY-2 is on it). Recommends 5/3 for a
+  flagship, or 3/3 with a relayed first rung; per-member bounties at the crank floor. Found: `initialize_certificate_at_kind`
+  accepts an already-owned seat — write-once comes from the all-zero conjunct, which the fragment route must keep.
+- Cuts: `5f3959e26`.
