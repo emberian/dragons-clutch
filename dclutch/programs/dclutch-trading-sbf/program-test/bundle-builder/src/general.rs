@@ -890,6 +890,22 @@ pub fn build_general_action_bundle_v1(
     Ok(built)
 }
 
+/// Ask whether one action's prestate is the shape that action reads.
+///
+/// [`build_general_action_bundle_v1`] decodes the corpus before it builds
+/// anything, so a campaign that supplied the wrong record pays a whole bundle
+/// construction to be told `Binding` at a line. This is that decode alone, and
+/// it exists because it is also the only part of the thirteen new projector
+/// arms a test without a chain frame can execute: WHICH RECORD GOES TO WHICH
+/// PARAMETER is the plumbing, and the projectors it hands them to are the
+/// accelerator's own and already have tests.
+pub fn general_action_prestate_shape_v1(
+    action: Action,
+    prestate: GeneralActionPrestateV1<'_>,
+) -> Result<(), BuilderError> {
+    GeneralActionCorpusV1::decode(action, prestate).map(|_| ())
+}
+
 /// The request coordinates and joins every projector arm shares.
 #[derive(Clone, Copy)]
 struct GeneralProjectionInputV1<'a> {

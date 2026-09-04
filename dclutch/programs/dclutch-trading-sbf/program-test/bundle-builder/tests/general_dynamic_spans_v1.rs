@@ -17,8 +17,8 @@ use dclutch_account_profile_contract::v2::AccountProfileV2;
 use dclutch_chain_bundle_builder::{
     BuilderError, WaistFactsV1,
     general::{
-        GeneralRequestEvidenceV1, GeneralRequestInputV1, GeneralRequestV1,
-        derive_general_request_v1,
+        GeneralActionPrestateV1, GeneralRequestEvidenceV1, GeneralRequestInputV1, GeneralRequestV1,
+        derive_general_request_v1, general_action_prestate_shape_v1,
     },
     profile_ops,
     registers::{SpanWidthInputV1, derive_dynamic_span_widths},
@@ -932,6 +932,12 @@ struct LiveRecordsV1 {
     manifest: Vec<u8>,
     selection_account: Vec<u8>,
     settlement_account: Vec<u8>,
+    /// The exact submission record `SubmitCandidate` writes.
+    submitted_candidate: Vec<u8>,
+    /// The immutable Page `VerifyCandidateRow` walks.
+    candidate_page: Vec<u8>,
+    /// The canonical selection-policy record `Consider` interprets.
+    selection_policy: Vec<u8>,
 }
 
 /// The one slot the collection half runs at.
@@ -1118,6 +1124,8 @@ fn live_records(market: &mut LiveMarketV1) -> LiveRecordsV1 {
     )
     .expect("submit candidate");
 
+    let submitted_candidate = submission.to_bytes().to_vec();
+
     let mut row = vec![0_u8; execution_len(width).expect("execution width")];
     ExecutionV2::encode_into(
         ExecutionHeaderV2 {
@@ -1191,14 +1199,29 @@ fn live_records(market: &mut LiveMarketV1) -> LiveRecordsV1 {
         "the one row of a one-page candidate did not complete it",
     );
 
+    // THE POLICY IS CANONICAL, which is a stronger fixture than the struct
+    // `consider_verified_candidate_v2` will accept: `SelectionPolicyV1::validate`
+    // requires the last active criterion to be the deterministic identity
+    // tie-break and every inactive slot to be the tag-zero sentinel, and only a
+    // policy that satisfies both has an encoding for `Consider` to read as its
+    // evidence account.
+    let mut criteria = [SelectionCriterion::MaximizeFilledLots; MAX_SELECTION_CRITERIA];
+    if let Some(slot) = criteria.get_mut(1) {
+        *slot = SelectionCriterion::MinimizeQuoteSurplus;
+    }
+    if let Some(slot) = criteria.get_mut(2) {
+        *slot = SelectionCriterion::MinimizeCandidateId;
+    }
+    let policy = SelectionPolicyV1 {
+        policy_id: config.selection_policy_id(),
+        criterion_count: 3,
+        criteria,
+    };
+    let selection_policy = policy.to_bytes().expect("canonical policy").to_vec();
     let mut selection = vec![0_u8; RUNTIME_SELECTION_CURSOR_BYTES_V2];
     let mut selection_scratch = vec![0_u8; RUNTIME_SELECTION_CURSOR_BYTES_V2];
     consider_verified_candidate_v2(
-        SelectionPolicyV1 {
-            policy_id: config.selection_policy_id(),
-            criterion_count: 1,
-            criteria: [SelectionCriterion::MaximizeFilledLots; MAX_SELECTION_CRITERIA],
-        },
+        policy,
         &vec![0_u8; RUNTIME_SELECTION_CURSOR_BYTES_V2],
         &verified_output,
         0,
@@ -1264,6 +1287,9 @@ fn live_records(market: &mut LiveMarketV1) -> LiveRecordsV1 {
             market.trading_program,
             &settlement,
         ),
+        submitted_candidate,
+        candidate_page: page,
+        selection_policy,
     }
 }
 
@@ -1280,7 +1306,30 @@ fn action_input<'a>(
     action: Action,
     records: &'a LiveRecordsV1,
 ) -> GeneralRequestInputV1<'a> {
-    let (primary_state_account, evidence) = match action {
+    let (primary_state_account, evidence) = action_primary_and_evidence(action, records);
+    GeneralRequestInputV1 {
+        action,
+        root: market.root,
+        root_address: market.root_address,
+        config: &market.config,
+        outcome_count: market.outcome_count,
+        product_id: market.product_id,
+        trading_program: market.trading_program,
+        primary_state_account,
+        evidence,
+    }
+}
+
+/// The evidence half of that table alone, which the projector's prestate reuses.
+fn action_input_evidence(action: Action, records: &LiveRecordsV1) -> GeneralRequestEvidenceV1<'_> {
+    action_primary_and_evidence(action, records).1
+}
+
+fn action_primary_and_evidence<'a>(
+    action: Action,
+    records: &'a LiveRecordsV1,
+) -> (Option<&'a [u8]>, GeneralRequestEvidenceV1<'a>) {
+    match action {
         // The two batch actions and the two order-in-batch actions name the
         // Batch window as their primary state; `OpenBatch` creates it.
         Action::OpenBatch => (None, GeneralRequestEvidenceV1::default()),
@@ -1355,17 +1404,6 @@ fn action_input<'a>(
             Some(records.settlement_account.as_slice()),
             GeneralRequestEvidenceV1::default(),
         ),
-    };
-    GeneralRequestInputV1 {
-        action,
-        root: market.root,
-        root_address: market.root_address,
-        config: &market.config,
-        outcome_count: market.outcome_count,
-        product_id: market.product_id,
-        trading_program: market.trading_program,
-        primary_state_account,
-        evidence,
     }
 }
 
@@ -1735,4 +1773,117 @@ fn the_first_consideration_and_the_first_row_derive_from_a_vacant_account() {
     let after = decode_general_request_v3(&after.request).expect("canonical request");
     assert_eq!(after.expected_revision, 1);
     assert_eq!(after.page_index, 1);
+}
+
+/// The exact prestate each action's PROJECTOR reads, which is not the same set
+/// its request derivation reads.
+///
+/// Four records appear only here: the closed Batch where an action reads it as
+/// EVIDENCE rather than as its primary state, the submission record
+/// `SubmitCandidate` writes, the Page `VerifyCandidateRow` walks, and the
+/// selection policy `Consider` interprets. A campaign builds one evidence value
+/// for both ends of an execution, and this is the half the derivation ignores.
+fn projector_prestate<'a>(
+    action: Action,
+    records: &'a LiveRecordsV1,
+) -> GeneralActionPrestateV1<'a> {
+    let derived = action_input_evidence(action, records);
+    GeneralActionPrestateV1 {
+        primary_state_account: match action {
+            Action::OpenBatch | Action::SubmitCandidate | Action::InitializeSettlement => None,
+            Action::ReleaseOrder => Some(&records.order_account),
+            Action::VerifyCandidateRow | Action::CloseCandidate => Some(&records.candidate_account),
+            Action::Consider | Action::Freeze => Some(&records.selection_account),
+            Action::Collect | Action::Materialize | Action::Distribute | Action::Close => {
+                Some(&records.settlement_account)
+            }
+            _ => Some(&records.batch_account),
+        },
+        evidence: GeneralRequestEvidenceV1 {
+            batch_account: matches!(
+                action,
+                Action::SubmitCandidate | Action::VerifyCandidateRow | Action::CloseCandidate
+            )
+            .then_some(records.batch_account.as_slice()),
+            submitted_candidate: (action == Action::SubmitCandidate)
+                .then_some(records.submitted_candidate.as_slice()),
+            candidate_page: (action == Action::VerifyCandidateRow)
+                .then_some(records.candidate_page.as_slice()),
+            // The immutable candidate image is `SubmitCandidate`'s subject and
+            // `VerifyCandidateRow`'s page authority: the row's page must carry
+            // this candidate's identity at the revision the submission pinned.
+            candidate_image: matches!(action, Action::SubmitCandidate | Action::VerifyCandidateRow)
+                .then_some(records.candidate_image.as_slice()),
+            selection_policy: (action == Action::Consider)
+                .then_some(records.selection_policy.as_slice()),
+            // THE MANIFEST IS READ AT BOTH ENDS OF ITS LIFE. `Collect` and
+            // `Distribute` SELECT a row from one; `VerifyCandidateRow` is the
+            // verb that EMITS one, and the accelerator requires the chunk the
+            // execution will publish to be presented so the projection can join
+            // what it produced against what the caller declared.
+            settlement_manifest: matches!(
+                action,
+                Action::Collect | Action::Distribute | Action::VerifyCandidateRow
+            )
+            .then_some(records.manifest.as_slice()),
+            order_account: matches!(action, Action::CancelOrder | Action::VerifyCandidateRow)
+                .then_some(records.order_account.as_slice()),
+            // `InitializeSettlement` derives its request from the CERTIFICATE
+            // alone and projects from the certificate AND the completed
+            // verifier: the cursor it opens is
+            // `initialize_runtime_settlement_in_place_v2` over the pair, and the
+            // join between them is what proves the certificate is the one those
+            // rows produced. The two ends of one execution do not read the same
+            // set, and this is the action where they differ most.
+            verifier_account: matches!(
+                action,
+                Action::InitializeSettlement | Action::VerifyCandidateRow
+            )
+            .then_some(records.verifier_account.as_slice()),
+            // THE SETTLEMENT FOUR READ THE CERTIFICATE AND THEIR REQUEST DOES
+            // NOT. Every coordinate their request carries comes off the cursor;
+            // the certificate is what `evaluate_runtime_settlement_in_place_v2`
+            // settles AGAINST, and `Close` proves its quote surplus against it.
+            verified_candidate: matches!(
+                action,
+                Action::Consider
+                    | Action::InitializeSettlement
+                    | Action::Collect
+                    | Action::Materialize
+                    | Action::Distribute
+                    | Action::Close
+            )
+            .then_some(records.verified.as_slice()),
+            ..derived
+        },
+    }
+}
+
+/// Every action's projector corpus decodes, and every action refuses a
+/// prestate with none of what it names.
+///
+/// This is the whole of the thirteen new projector arms a test without a chain
+/// frame can execute: which record reaches which parameter. The projectors
+/// those parameters feed are `hot_candidate_v3`'s own and the accelerator's
+/// program-test already runs them; what had never been stated anywhere is the
+/// join between a campaign's account list and their argument lists.
+#[test]
+fn every_action_decodes_the_projector_corpus_its_own_profile_declares() {
+    let (_, records) = live_market();
+    for action in GENERAL_ACTIONS_V5 {
+        general_action_prestate_shape_v1(action, projector_prestate(action, &records))
+            .unwrap_or_else(|error| panic!("{action:?} projector corpus: {error:?}"));
+        // An empty prestate is what a campaign that named nothing supplies. Only
+        // `OpenBatch` reads nothing at all, so it is the one action that must
+        // still accept.
+        let bare = general_action_prestate_shape_v1(action, GeneralActionPrestateV1::default());
+        if action == Action::OpenBatch {
+            bare.expect("OpenBatch creates every state it names");
+        } else {
+            assert!(
+                matches!(bare, Err(BuilderError::Binding(_))),
+                "{action:?} accepted a prestate holding none of what it reads",
+            );
+        }
+    }
 }
