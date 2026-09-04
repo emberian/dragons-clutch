@@ -1,6 +1,17 @@
 import { ascii, isZero, requireNonzero, requireZero, slice, u16, u64 } from './bytes';
 import * as Abi from './generated/resolutionCertificateV2';
 
+/**
+ * The record identity, republished from the emission.
+ *
+ * A caller naming this certificate — a card that has to say WHICH record it
+ * refused, for instance — otherwise has to reach past this module into
+ * `generated/resolutionCertificateV2`, and a caller in the web tree reaches it
+ * by a different path than one here. Republishing the constant costs nothing
+ * and keeps that difference out of the twin.
+ */
+export const RESOLUTION_CERTIFICATE_MAGIC_V2 = Abi.RESOLUTION_CERTIFICATE_MAGIC_V2;
+
 export type ResolutionCertificateKindV2 =
   | 'resolution-success'
   | 'recovery-advanced'

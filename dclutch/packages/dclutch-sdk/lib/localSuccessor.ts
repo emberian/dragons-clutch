@@ -4,7 +4,17 @@ import checkpointJson from '../fixtures/successor-checkpoint.json';
 import { ascii, decodeBase64, hex, requireZero, sha256, slice, u16, u64 } from './bytes';
 import { stateMachineRecordV1, type StateMachineV1 } from './generated/stateMachinesV1';
 import { decodeMachineStateV1 } from './stateMachines';
+import {
+  SOURCE_RESOLUTION_STATE_V2_ACTIVE_ATTEMPT_OFFSET,
+  SOURCE_RESOLUTION_STATE_V2_GENERATION_OFFSET,
+  SOURCE_RESOLUTION_STATE_V2_MARKET_OFFSET,
+  SOURCE_RESOLUTION_STATE_V2_RESOLVED_AT_OFFSET,
+  SOURCE_RESOLUTION_STATE_V2_SELECTOR_OFFSET,
+  SOURCE_RESOLUTION_STATE_V2_TERMINAL_ROUTE_OFFSET,
+  SOURCE_RESOLUTION_STATE_V2_TERMINAL_SEQUENCE_OFFSET,
+} from './generated/sourceResolutionStateV2';
 import { releaseSupersededMeaningV1 } from './refusals';
+import { RESOLUTION_CERTIFICATE_MAGIC_V2, decodeResolutionCertificateV2 } from './resolutionCertificateV2';
 import { SolanaRpcClient, type ConnectionFacts, type RpcAccount } from './rpc';
 
 const MAX_HISTORY = 64;
@@ -64,9 +74,28 @@ function digest(value: unknown, field: string): string { const parsed = text(val
 function commit(value: unknown, field: string): string { const parsed = text(value, field, 40); if (!/^[0-9a-f]{40}$/.test(parsed)) throw new Error(`${field} is not a full lowercase git commit`); return parsed; }
 function flag(value: unknown, field: string): boolean { if (typeof value !== 'boolean') throw new Error(`${field} is not Boolean`); return value; }
 function same(left: unknown, right: unknown): boolean { return JSON.stringify(left) === JSON.stringify(right); }
-function readI128(bytes: Uint8Array, offset: number): bigint { let value = 0n; for (let index = 15; index >= 0; index -= 1) value = (value << 8n) | BigInt(bytes[offset + index]); return value >= (1n << 127n) ? value - (1n << 128n) : value; }
 function pubkey(bytes: Uint8Array, offset: number): string { return new PublicKey(slice(bytes, offset, 32)).toBase58(); }
 function fact(label: string, value: string | number | bigint | boolean) { return Object.freeze({ label, value: String(value) }); }
+function u32(bytes: Uint8Array, offset: number): number { const value = slice(bytes, offset, 4); return new DataView(value.buffer, value.byteOffset, value.byteLength).getUint32(0, true); }
+function byteAt(bytes: Uint8Array, offset: number): number { return slice(bytes, offset, 1)[0] ?? 0; }
+
+/**
+ * A refusal whose FIRST cause is the generation, said as the generation.
+ *
+ * A derived decoder is right to report the width or the magic it was given,
+ * but "opens with DCLTSRS1 and not DCLTSRS2" on a card reads as a corrupt
+ * account; what actually happened is that the capture predates the successor.
+ * The observed magic is read from the bytes rather than written down, so no
+ * superseded magic is stated anywhere in this client. Returns null when the
+ * observed header is not some OTHER canonical dClutch magic -- in which case
+ * the decoder's own refusal is the honest one and this must not overwrite it.
+ */
+function supersededGenerationRefusal(name: string, bytes: Uint8Array, record: string, magic: string): string | null {
+  let observed: string | null = null;
+  try { observed = ascii(bytes, 0, 8); } catch { observed = null; }
+  if (observed === null || observed === magic || !/^DC[A-Z0-9]{6}$/.test(observed)) return null;
+  return `SupersededRecordGeneration: ${name} opens with ${observed}, and the record this client reads is ${record} (${magic}). No program in this tree writes ${observed}, so this body was captured from a superseded generation and is not current state.`;
+}
 
 function decodeExpectedAccount(value: unknown, field: string): ExpectedAccount {
   if (!plain(value)) throw new Error(`${field} is not an account expectation`);
@@ -187,12 +216,17 @@ function decodeLoader(name: string, bytes: Uint8Array, expected: ExpectedAccount
  * is not a permanent state of this surface: a checkpoint recaptured from
  * today's bootstrap carries `DCLTSRS2` and `DCLTFL02` and decodes.
  *
- * WHAT LEFT WITH THE FIELD MAP, named as debt: the Source card used to print
- * market, generation, active attempt, terminal route, selector and terminal
- * sequence. Those were literal offsets with no owner. Neither client tree has
- * an emitted `SourceResolutionStateV2` offsets module yet, and hand-writing
- * one here would recreate exactly the defect this deletes, so the card shows
- * what the derived table can source and no more.
+ * WHAT CAME BACK. The Source card used to print market, generation, active
+ * attempt, terminal route, selector, terminal sequence and a resolution time,
+ * and those seven left with the field map because they were literal offsets
+ * with no owner and hand-writing them again would recreate the defect the
+ * deletion was for. They are back, from
+ * `generated/sourceResolutionStateV2.ts` -- scraped from
+ * `crates/dclutch-source-contract/src/generated_source_resolution_state_v2.rs`,
+ * which Lean emits -- so the card names the same fields and this file states
+ * none of their coordinates. `terminal route` prints its wire number rather
+ * than a name: the route names were a four-element array written here, and no
+ * emission owns them.
  */
 function checkpointMachine(name: string): StateMachineV1 | null {
   if (name.endsWith('.state')) return 'source';
@@ -208,17 +242,8 @@ function decodeStateMachineAccount(name: string, bytes: Uint8Array): ParsedSucce
   const rows = record.headerBytes === null || record.rowBytes === null ? null : Math.floor((bytes.length - record.headerBytes) / record.rowBytes);
   const decoded = decodeMachineStateV1(machine, bytes, rows === null ? null : 0);
   if (decoded.status === 'refused') {
-    // A refusal whose FIRST cause is the generation, said as the generation.
-    // The derived decoder is right to report the width or the magic it was
-    // given, but "opens with DCLTSRS1 and not DCLTSRS2" on a card reads as a
-    // corrupt account; what actually happened is that this capture predates
-    // the successor. The observed magic is read from the bytes rather than
-    // written down, so no superseded magic is stated anywhere in this client.
-    let observed: string | null = null;
-    try { observed = ascii(bytes, 0, 8); } catch { observed = null; }
-    if (observed !== null && observed !== record.magic && /^DC[A-Z0-9]{6}$/.test(observed)) {
-      throw new Error(`SupersededRecordGeneration: ${name} opens with ${observed}, and the record this client reads is ${record.record} (${record.magic}). No program in this tree writes ${observed}, so this body was captured from a superseded generation and is not current state.`);
-    }
+    const superseded = supersededGenerationRefusal(name, bytes, record.record, record.magic);
+    if (superseded !== null) throw new Error(superseded);
     throw new Error(`${record.record}: ${decoded.reason}`);
   }
   return Object.freeze({
@@ -231,6 +256,89 @@ function decodeStateMachineAccount(name: string, bytes: Uint8Array): ParsedSucce
       ...(rows === null ? [] : [fact('slots', rows), fact('slot read', 0)]),
       fact('bytes', bytes.length),
       ...Object.entries(decoded.counters).map(([field, value]) => fact(field, value)),
+      ...(machine === 'source' ? sourceResolutionFieldsV2(bytes) : []),
+    ]),
+  });
+}
+
+/**
+ * The Source's own fields, at the coordinates their Lean owner emits.
+ *
+ * The machine table says WHICH state a Source is in and nothing about where
+ * its fields live, because it is emitted from the machine's discriminant
+ * decoder. These seven come from `generated/sourceResolutionStateV2.ts`
+ * instead, which is scraped from the record's Lean-emitted Rust layout and
+ * byte-gated by `abi:source-resolution-state-v2:verify`. Not one coordinate is
+ * written here, which is the whole difference between this and what used to be
+ * on this card.
+ */
+function sourceResolutionFieldsV2(bytes: Uint8Array) {
+  return [
+    fact('market', pubkey(bytes, SOURCE_RESOLUTION_STATE_V2_MARKET_OFFSET)),
+    fact('generation', u64(bytes, SOURCE_RESOLUTION_STATE_V2_GENERATION_OFFSET)),
+    fact('active attempt', byteAt(bytes, SOURCE_RESOLUTION_STATE_V2_ACTIVE_ATTEMPT_OFFSET)),
+    fact('terminal route', byteAt(bytes, SOURCE_RESOLUTION_STATE_V2_TERMINAL_ROUTE_OFFSET)),
+    fact('selector', u32(bytes, SOURCE_RESOLUTION_STATE_V2_SELECTOR_OFFSET)),
+    fact('terminal sequence', u64(bytes, SOURCE_RESOLUTION_STATE_V2_TERMINAL_SEQUENCE_OFFSET)),
+    fact('resolved at', u64(bytes, SOURCE_RESOLUTION_STATE_V2_RESOLVED_AT_OFFSET)),
+  ];
+}
+
+/**
+ * The checkpoint's certificate bodies, read through the SDK's derived decoder.
+ *
+ * WHAT WAS HERE AND WHY IT IS GONE. A 312-byte `DCSRCER1` arm carrying its own
+ * field map at 8/10/11/16/240/248/252/256/260/264/272/280/296/304, and its own
+ * five-element kind vocabulary. `ResolutionCertificateV1` has no producer,
+ * measured rather than assumed: every use of it in
+ * `crates/dclutch-resolution-codec/src/lib.rs` sits at or below line 2112,
+ * inside the `#[cfg(test)] mod tests` that opens at line 2090, and the only
+ * consumer outside the crate is the svm-harness `resolution-receipt-caller`
+ * test program. `programs/dclutch-resolution-proof-sbf/src/funded.rs:16-18`
+ * says the rest out loud: the V1 generation of that accounting, written
+ * against `SourceResolutionStateV1` and `ResolutionCertificateV1`, was
+ * orphaned dead code and was deleted. What the Resolution program writes is
+ * `ResolutionCertificateV2`.
+ *
+ * WHAT REPLACES IT. `decodeResolutionCertificateV2`, the SDK's hostile decoder
+ * over the Lean-emitted `generated/resolutionCertificateV2` offsets, which
+ * `lib/marketResolution.ts` and `lib/rationalTerminalChainV4.ts` already read
+ * live certificates through. Routing is by ACCOUNT NAME rather than by magic,
+ * the same way the state machines route: a superseded body has to reach the
+ * arm that can name it as superseded, and a magic test would drop it through
+ * to the unrecognized-magic refusal, which reports eight bytes of hex.
+ *
+ * WHAT THE COMMITTED CHECKPOINT SAYS NOW. Its certificate bodies open with
+ * `DCSRCER1` at schema version 1 -- the same superseded generation as its
+ * Source and funding bodies, captured 2026-08-25 against a program pair whose
+ * ids appear nowhere in this tree but the fixture. They refuse by name, and
+ * the observed magic is read from the bytes rather than written down.
+ */
+function decodeResolutionCertificateAccount(name: string, bytes: Uint8Array): ParsedSuccessorAccount | null {
+  if (!name.includes('.certificate.')) return null;
+  let certificate: ReturnType<typeof decodeResolutionCertificateV2>;
+  try {
+    certificate = decodeResolutionCertificateV2(bytes);
+  } catch (error) {
+    const superseded = supersededGenerationRefusal(name, bytes, 'ResolutionCertificateV2', RESOLUTION_CERTIFICATE_MAGIC_V2);
+    if (superseded !== null) throw new Error(superseded);
+    throw error;
+  }
+  return Object.freeze({
+    kind: 'signed Resolution certificate',
+    headline: certificate.kind,
+    facts: Object.freeze([
+      fact('record', 'ResolutionCertificateV2'),
+      fact('magic', RESOLUTION_CERTIFICATE_MAGIC_V2),
+      fact('market', new PublicKey(certificate.market).toBase58()),
+      fact('generation', certificate.generation),
+      fact('attempt / schedule', `${certificate.attemptIndex} / ${certificate.scheduleIndex}`),
+      fact('selector', certificate.selector),
+      fact('work paid', certificate.workPaid),
+      fact('funding remaining', certificate.fundingRemaining),
+      fact('result', `${certificate.resultNumerator}/${certificate.resultDenominator}`),
+      fact('observed at', certificate.observedAt),
+      fact('bytes', bytes.length),
     ]),
   });
 }
@@ -239,9 +347,9 @@ export function parseSuccessorAccount(name: string, account: RpcAccount, checkpo
   const bytes = account.data; const loader = decodeLoader(name, bytes, checkpoint.expected_accounts[name], checkpoint); if (loader) return loader;
   if (name.endsWith('.occupied')) { if (bytes.length !== 312 || !bytes.every((byte) => byte === 0xa5)) throw new Error('hostile certificate sentinel is not the exact occupied pattern'); return Object.freeze({ kind: 'hostile preoccupied certificate', headline: 'deliberately malformed', facts: Object.freeze([fact('bytes', bytes.length), fact('purpose', 'late output-gate refusal')]) }); }
   const machine = decodeStateMachineAccount(name, bytes); if (machine !== null) return machine;
+  const certificate = decodeResolutionCertificateAccount(name, bytes); if (certificate !== null) return certificate;
   const magic = bytes.length >= 8 ? ascii(bytes, 0, 8) : '';
   if (magic === 'DCLTACT1') { if (bytes.length !== 1288 || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 1) throw new Error('activation cache has the wrong exact profile'); requireZero(bytes, 13, 3, 'activation cache'); return Object.freeze({ kind: 'Registry activation cache', headline: 'five checked roles', facts: Object.freeze([fact('release set', hex(slice(bytes, 16, 32))), fact('roles', 5), fact('origin', 'transaction-created')]) }); }
-  if (magic === 'DCSRCER1') { if (bytes.length !== 312 || u16(bytes, 8) !== 1 || bytes[10] < 1 || bytes[10] > 4) throw new Error('Resolution certificate has the wrong exact layout'); requireZero(bytes, 11, 5, 'Resolution certificate header'); requireZero(bytes, 260, 4, 'Resolution certificate body'); const kinds = ['unknown', 'primary success', 'recovery advanced', 'exhausted', 'failure committed']; return Object.freeze({ kind: 'signed Resolution certificate', headline: kinds[bytes[10]], facts: Object.freeze([fact('market', pubkey(bytes, 16)), fact('generation', u64(bytes, 240)), fact('attempt / schedule', `${new DataView(bytes.buffer, bytes.byteOffset + 248, 4).getUint32(0, true)} / ${new DataView(bytes.buffer, bytes.byteOffset + 252, 4).getUint32(0, true)}`), fact('selector', new DataView(bytes.buffer, bytes.byteOffset + 256, 4).getUint32(0, true)), fact('work paid', u64(bytes, 264)), fact('funding remaining', u64(bytes, 272)), fact('result', `${readI128(bytes, 280)}/${u64(bytes, 296)}`), fact('observed at', u64(bytes, 304))]) }); }
   // No `DCLTCAT1` arm. It decoded a "categorical Market root", asserting a
   // nested `DCLTROOT` at 16 and reading a phase byte and a generation -- and
   // NEITHER magic is declared anywhere in Rust or Lean. `a5e16cd6` banished

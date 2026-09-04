@@ -38,8 +38,79 @@ const SURVEYED = ['lib', 'components', 'app'].filter((directory) => existsSync(j
 /** The one place a protocol fact is allowed to be written down. */
 const GENERATED = join('lib', 'generated');
 
-/** An eight-character canonical record magic. */
-const MAGIC = /'((?:DCLT|DCLR)[A-Z0-9]{4})'/g;
+/** The two client trees. Both are read: the browser decodes through both. */
+const TREES = ['apps/dclutch-web', 'packages/dclutch-sdk'];
+const repoRoot = join(webRoot, '..', '..');
+
+/**
+ * The canonical magic prefixes, DERIVED rather than listed.
+ *
+ * This arm matched `/'((?:DCLT|DCLR)[A-Z0-9]{4})'/` for as long as it existed,
+ * which is a two-element hand-kept list at the heart of the gate whose whole
+ * job is to catch hand-kept protocol facts. The protocol has twenty magic
+ * families, not two: `DCSRCER1` sat in `lib/localSuccessor.ts` as a fully
+ * hand-written 312-byte decoder and the census counted it as nothing, and
+ * `DCRRLC02`, `DCRRGRP2`, `DCRRREP2` and `DCRRDSC3` did the same in the
+ * Rational surfaces. A ratchet blind to eighteen twentieths of its subject
+ * reports a shrinking inventory while the inventory grows.
+ *
+ * So the prefix set comes from the emissions themselves: every magic the two
+ * trees' `lib/generated/` modules declare, in either the string or the byte
+ * form, plus every `magic:` row in a generated TABLE -- which is where the
+ * route census's `INSTRUCTION_MAGICS` and the state-machine table live. Both
+ * trees are read because the browser decodes through both: `explorer-coverage.mjs`
+ * reads the SDK's `stateMachinesV1.ts` for exactly this reason, and the web's
+ * certificate decoding reaches the SDK's `resolutionCertificateV2.ts`, which is
+ * the only place `DCSR` is declared at all.
+ *
+ * A family therefore becomes visible to this census when some emission declares
+ * it -- not when someone remembers to widen a regex.
+ */
+const GENERATED_STRING_MAGIC = /export const [A-Z0-9_]*MAGIC[A-Z0-9_]*\s*=\s*'([A-Z0-9]{8})'/g;
+const GENERATED_BYTES_MAGIC = /export const [A-Z0-9_]*MAGIC[A-Z0-9_]*\s*=\s*Uint8Array\.from\(\[([^\]]*)\]\)/g;
+const GENERATED_TABLE_MAGIC = /magic:\s*["']([A-Z0-9]{8})["']/g;
+
+function asciiFromByteList(text) {
+  const bytes = [...text.matchAll(/0x[0-9a-fA-F]{1,2}|\b\d{1,3}\b/g)].map((entry) => Number(entry[0]));
+  if (bytes.length !== 8) return null;
+  if (bytes.some((byte) => byte < 0x20 || byte > 0x7e)) return null;
+  return String.fromCharCode(...bytes);
+}
+
+export function magicPrefixes() {
+  const found = new Set();
+  for (const tree of TREES) {
+    const directory = join(repoRoot, tree, GENERATED);
+    let entries;
+    try {
+      entries = readdirSync(directory);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.endsWith('.ts') || entry.endsWith('.d.ts')) continue;
+      const text = readFileSync(join(directory, entry), 'utf8');
+      for (const match of text.matchAll(GENERATED_STRING_MAGIC)) found.add(match[1]);
+      for (const match of text.matchAll(GENERATED_TABLE_MAGIC)) found.add(match[1]);
+      for (const match of text.matchAll(GENERATED_BYTES_MAGIC)) {
+        const magic = asciiFromByteList(match[1]);
+        if (magic !== null) found.add(magic);
+      }
+    }
+  }
+  const prefixes = [...new Set([...found].map((magic) => magic.slice(0, 4)))].sort();
+  // A scrape that matched nothing would silently switch the magic arm off and
+  // report a clean inventory, which is the failure mode this whole file is
+  // against. Two families were hardcoded here for months; finding fewer than
+  // that means the emissions moved and this reader did not.
+  if (prefixes.length < 2) throw new Error(`derived only ${prefixes.length} magic prefixes from lib/generated/; the scrape is wrong`);
+  return prefixes;
+}
+
+/** An eight-character canonical record magic, in one of the derived families. */
+function magicPattern() {
+  return new RegExp(`'((?:${magicPrefixes().join('|')})[A-Z0-9]{4})'`, 'g');
+}
 /** A PDA seed domain, in either of the two punctuation conventions in use. */
 const DOMAIN = /'(dclutch[:/][A-Za-z0-9:/._-]*)'/g;
 /**
@@ -79,6 +150,7 @@ function matches(text, pattern) {
 export function surveyHandMirrors() {
   const gating = { magics: [], domains: [], offsets: {} };
   const pins = { magics: [], domains: [], offsets: {} };
+  const MAGIC = magicPattern();
   for (const directory of SURVEYED) {
     for (const absolute of sourceFiles(directory)) {
       const path = relative(webRoot, absolute);
@@ -152,8 +224,6 @@ export function auditAgainstBaseline(gating, baseline) {
  *      module in a single run, and a second script here would be a second
  *      author for a file that already has one.
  */
-const TREES = ['apps/dclutch-web', 'packages/dclutch-sdk'];
-const repoRoot = join(webRoot, '..', '..');
 
 function scriptsOf(root) {
   try {
@@ -247,7 +317,7 @@ function main() {
   }
   const offsetTotal = Object.values(gating.offsets).reduce((sum, count) => sum + count, 0);
   console.log('Hand-mirror inventory — protocol facts the browser still states itself\n');
-  console.log(`  record magics   ${gating.magics.length}`);
+  console.log(`  record magics   ${gating.magics.length}  (families ${magicPrefixes().join(' ')})`);
   console.log(`  seed domains    ${gating.domains.length}`);
   console.log(`  byte offsets    ${offsetTotal} across ${Object.keys(gating.offsets).length} files\n`);
   for (const entry of gating.magics) console.log(`  magic   ${entry.replace('\t', '  ')}`);

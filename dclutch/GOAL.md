@@ -4326,3 +4326,12 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Cuts: `1548611a3`.
 - Started 02:35 EDT: LEAN-TAGS-2 **`a85a718a84a5c30b2`** — Lean owners for direct-root, funding-ledger and source tags (census
   100 → 103; the SDK's scrape arm deleted); the Core request magic `DCLTCRQ2` gets one author so the census can name its route.
+- WEB-DEAD closed (`958901b45`): DCLTPOS1's explorer arm deleted (one declaration, no writer) — its generated module could
+  NOT go: one Lean emission carries the dead account type AND the live `POSITION_PDA_DOMAIN_V1` the Direct controller derives
+  from (routed to LEAN-TAGS-2 to narrow); DCSRCER1 dead (V1 certificate orphaned; routed to the V2 shim by account name);
+  **the magic census's prefix set derived from the emissions: 20 families, not 2** (web 26 → 27, SDK 33 → 37 counted); the
+  Source card's seven fields back through a generated `sourceResolutionStateV2.ts`; the explorer's 24 instruction magics
+  rendered from their own Rust docs (28 → 52 of 64), zero exemptions added; a seventh mutation stayed green and was a hole
+  (the selector read as its leading byte) — closed with the Lean wide example. Owed: four Rational hand-mirrors now counted
+  but unconverted; a family declared in Rust but emitted nowhere is still invisible.
+- Cuts: `72966f9c3`.

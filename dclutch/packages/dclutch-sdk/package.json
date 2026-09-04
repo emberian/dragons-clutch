@@ -52,6 +52,8 @@
     "abi:rational-terminal-v3:verify": "node scripts/lean-emit.mjs DClutchSemantics.RationalRepresentationV2PhysicalAbi,DClutchSemantics.RationalTerminalHotV3Abi EmitRationalTerminalHotV3Ts.lean lib/generated/rationalTerminalHotV3.ts --check",
     "abi:rational-open-wasm": "node scripts/generate-rational-open-wasm.mjs",
     "abi:rational-open-wasm:verify": "node scripts/generate-rational-open-wasm.mjs --check",
+    "abi:source-resolution-state-v2": "node scripts/generate-source-resolution-state-v2.mjs",
+    "abi:source-resolution-state-v2:verify": "node scripts/generate-source-resolution-state-v2.mjs --check",
     "abi:resolution-certificate-v2": "node scripts/generate-resolution-certificate-v2.mjs",
     "abi:resolution-certificate-v2:verify": "node scripts/generate-resolution-certificate-v2.mjs --check",
     "abi:aggregate-retirement": "node scripts/generate-aggregate-retirement-v1.mjs",

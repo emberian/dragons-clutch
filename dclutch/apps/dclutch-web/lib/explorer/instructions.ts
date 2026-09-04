@@ -206,6 +206,123 @@ const INSTRUCTION_RENDERERS: ReadonlyArray<InstructionRenderer> = Object.freeze(
     summary:
       'Returns the bond behind a submission the market can no longer consume, once its own deadline has passed and the source has moved on.',
   },
+  {
+    // `provider_instruction_v3.rs:3` is explicit about the negative space, and
+    // it is the part a reader most needs: "This instruction never submits or
+    // reclaims a Pyth update." Posting the update and consuming it are
+    // separate transactions by different parties, and only the second is this.
+    routeId: 'resolution/provider_instruction_v3::process_provider_resolution_v3',
+    summary: 'Resolves a market from a price update already posted on chain. It does not post that update and does not reclaim it.',
+  },
+  {
+    routeId: 'resolution/sponsored_push_v1::process_sponsored_push_v1',
+    summary:
+      'Captures a sponsored price feed’s current value as a permanent candidate, and afterwards settles, closes or fails what it captured. The upstream feed is overwritten in place; this is what keeps a copy.',
+  },
+  {
+    routeId: 'resolution/pre_market_funding_v1::process_pre_market_funding_v2',
+    summary: 'Funds the market a founding is about to create, against a projection of exactly which market that will be.',
+  },
+  {
+    routeId: 'resolution/pre_market_funding_abort_v1::process_pre_market_funding_abort_v1',
+    summary: 'Rolls back a pre-market funding ledger whose checkpoint expired, returning what it held.',
+  },
+  {
+    routeId: 'resolution/core_effect::process_direct_funding_activation_v1',
+    summary: 'Activates one pending funding ledger and writes the receipt for it last. Anyone may submit it.',
+  },
+  {
+    routeId: 'resolution/core_effect::process_direct_funding_close_v1',
+    summary: 'Closes a finished market’s source and its funding ledger together, without asking the Core program to do it.',
+  },
+
+  // ------------------------------------------------------------------ trading
+  {
+    routeId: 'trading/generic_founding_stages_v1::process_generic_market_open_v1',
+    summary:
+      'Opens the market a founding permit already paid for. The submitter supplies no economic truth of its own: the permit carries all of it, and expires on its own schedule.',
+  },
+  {
+    routeId: 'trading/projected_custody_bootstrap_v1::process_controller_funding_prepare_v1',
+    summary: 'Creates the two pending funding ledgers a founding needs, and the checkpoint that binds them to it.',
+  },
+  {
+    routeId: 'trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2',
+    summary:
+      'Creates the collateral vault and replay record a market is founded on top of. Both are created together or neither is, so a market is never left with one and not the other.',
+  },
+  {
+    routeId: 'trading/user_position_admission_v1::process_user_position_admission_v1',
+    summary:
+      'Opens or closes one wallet’s position in a market, on that wallet’s own signature. The Claims program stays the only writer of the balances; this route adds the signature and nothing else.',
+  },
+  {
+    routeId: 'trading/hot_v3::process_capability_seal_v1',
+    summary:
+      'Records once, permanently, that this build accepts a trading artifact. Anyone may write it, because the answer is a function of public bytes; nobody may rewrite it.',
+  },
+  {
+    routeId: 'trading/hot_v3::process_capability_seal_close_v1',
+    summary: 'Reclaims the rent from a seal no live release addresses any more. It refuses to close one that is still reachable.',
+  },
+  {
+    routeId: 'trading/direct_begin_retiring_v1::process_direct_begin_retiring_v1',
+    summary: 'Moves a market’s Direct trading from open to retiring. Anyone may submit it once the market itself is retiring.',
+  },
+  {
+    routeId: 'trading/direct_token_setup_v1::process_direct_token_setup_v1',
+    summary: 'Creates the empty seller and fee token accounts a Direct market pays through, before any trade uses them.',
+  },
+  {
+    routeId: 'trading/direct_replay_setup_v1::process_direct_replay_setup_v1',
+    summary: 'Creates, on first use, the record that stops one maker’s trades being replayed.',
+  },
+  {
+    routeId: 'trading/direct_fee_settlement_v1::process_direct_fee_settlement_v1',
+    summary:
+      'Pays the fee a fill recorded but did not move, from whoever owes it to the market’s configured recipient. The market’s phase is not checked: the debt outlives trading.',
+  },
+  {
+    // The module names itself the ONLY route that ever lowers
+    // `open_maker_root_count`, which is what `CloseCapability` gates on, so a
+    // reader looking at a market stuck short of retirement is usually looking
+    // at makers nobody has closed yet. The closer keeps nothing: the reward is
+    // zero and the rent goes to the wallet the record names.
+    routeId: 'trading/direct_close_maker_v1::process_direct_close_maker_v1',
+    summary:
+      'Closes one drained, settled maker and returns its rent to whoever paid it. This is the only route that lowers a market’s open-maker count, and it refuses while a fee is still owed.',
+  },
+
+  // The seven stages of one durable Dealer scenario, in the order they run.
+  // Each is its own transaction because the work does not fit in one.
+  {
+    routeId: 'trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_create_v1',
+    summary: 'Starts one Dealer scenario: creates the checkpoint everything below is written into.',
+  },
+  {
+    routeId: 'trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_page_v1',
+    summary: 'Appends one page of a scenario’s transcript. Six pages, in order, and each is read-only afterwards.',
+  },
+  {
+    routeId: 'trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_evaluate_v1',
+    summary: 'Seals the producer’s evaluation of a scenario, once all six transcript pages exist.',
+  },
+  {
+    routeId: 'trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_reserve_v1',
+    summary: 'Records the collateral reservation an evaluated scenario needs before it can commit.',
+  },
+  {
+    routeId: 'trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_rollback_v1',
+    summary: 'Records the reverse of a reservation, for a scenario that expired instead of committing.',
+  },
+  {
+    routeId: 'trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_commit_v1',
+    summary: 'Commits an evaluated scenario: applies its claim changes and writes its obligation, in one step.',
+  },
+  {
+    routeId: 'trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_cleanup_v1',
+    summary: 'Closes an expired scenario checkpoint and returns its rent to the wallet named when it was created. Anyone may submit it.',
+  },
 ]);
 
 const RENDERER_BY_ROUTE: ReadonlyMap<string, InstructionRenderer> = new Map(

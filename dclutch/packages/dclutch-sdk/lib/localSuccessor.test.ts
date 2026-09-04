@@ -1,6 +1,13 @@
 import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
+import {
+  RESOLUTION_CERTIFICATE_V2_REFUSAL_CORPUS_HEX,
+  RESOLUTION_CERTIFICATE_V2_WIDE_SUCCESS_EXAMPLE_HEX,
+} from '@dclutch/sdk/generated/resolutionCertificateV2';
+
+import { SOURCE_RESOLUTION_STATE_V2_WIDE_TERMINAL_EXAMPLE_HEX } from './generated/sourceResolutionStateV2';
+
 import machineVectors from '../fixtures/state-machines.devnet.json';
 import checkpointJson from '../fixtures/successor-checkpoint.json';
 import {
@@ -65,11 +72,9 @@ describe('immutable localhost successor checkpoint', () => {
 
   it('decodes representative live RPC bodies through exact account layouts', () => {
     const activation = parseSuccessorAccount('registry.activation', fixture('registry.activation'));
-    const certificate = parseSuccessorAccount('primary.certificate.success', fixture('primary.certificate.success'));
     const hostile = parseSuccessorAccount('rollback.certificate.failure.occupied', fixture('rollback.certificate.failure.occupied'));
 
     expect([activation.kind, activation.headline]).toEqual(['Registry activation cache', 'five checked roles']);
-    expect([certificate.kind, certificate.headline]).toEqual(['signed Resolution certificate', 'primary success']);
     expect([hostile.kind, hostile.headline]).toEqual(['hostile preoccupied certificate', 'deliberately malformed']);
   });
 
@@ -83,7 +88,6 @@ describe('immutable localhost successor checkpoint', () => {
     // carrying a bump is an ordinary cache, and a reader that refuses one
     // refuses every cache the current Registry signs into existence.
     expect(() => parseSuccessorAccount('registry.activation', mutate(fixture('registry.activation'), 12, 254))).not.toThrow();
-    expect(() => parseSuccessorAccount('primary.certificate.success', mutate(fixture('primary.certificate.success'), 10, 0))).toThrow('certificate');
     expect(() => parseSuccessorAccount('rollback.certificate.failure.occupied', mutate(fixture('rollback.certificate.failure.occupied'), 311, 0))).toThrow('occupied pattern');
   });
 
@@ -170,6 +174,52 @@ describe('Source and funding read through the derived decoder', () => {
     expect(resolved.facts.map((entry) => [entry.label, entry.value])).toContainEqual(['wire tag', '2']);
   });
 
+  // The six fields that left with the hand-written field map, against the two
+  // devnet bodies that separate them. Every coordinate comes from
+  // `generated/sourceResolutionStateV2.ts`; this file names none, which is why
+  // it can assert them at all.
+  it('prints the Source fields the derived table does not carry', () => {
+    const unresolved = parseSuccessorAccount('lifecycle.state', vector('source', 0)).facts.map((entry) => [entry.label, entry.value]);
+    const resolved = parseSuccessorAccount('lifecycle.state', vector('source', 1)).facts.map((entry) => [entry.label, entry.value]);
+
+    expect(unresolved).toContainEqual(['market', '6aqy89GhhXFtDbawC5ors4HLkGvzdHC4R26TXTaaXRKj']);
+    expect(resolved).toContainEqual(['market', '3QytL1bBMtCvRoXWR5h7MgutRBZqtv7emUVubEo5a4T2']);
+    expect(resolved).toContainEqual(['generation', '2']);
+
+    // The four that separate an unresolved Source from a resolved one. A
+    // reader that had them at the wrong offsets would print the same value
+    // for both, which is what makes this pair the test and not one body.
+    expect(unresolved).toContainEqual(['terminal route', '0']);
+    expect(resolved).toContainEqual(['terminal route', '1']);
+    expect(unresolved).toContainEqual(['selector', '0']);
+    expect(resolved).toContainEqual(['selector', '1']);
+    expect(unresolved).toContainEqual(['terminal sequence', '0']);
+    expect(resolved).toContainEqual(['terminal sequence', '1']);
+    expect(unresolved).toContainEqual(['resolved at', '0']);
+    expect(resolved).toContainEqual(['resolved at', '1788493373']);
+
+    // Neither body has entered recovery, so this one is the same on both and
+    // is asserted for presence rather than for a distinction it cannot make.
+    expect(resolved).toContainEqual(['active attempt', '0']);
+  });
+
+  // The devnet pair above cannot pin the selector's WIDTH: both bodies carry a
+  // selector of 0 or 1, so a reader taking it as a single byte agrees with
+  // them and is wrong on every selector above 255. Measured -- that exact
+  // mutation stayed green against the pair alone. The Lean-emitted wide
+  // terminal example exists for this, and carries 257.
+  it('reads the Source selector at its native width, not its leading byte', () => {
+    const data = Uint8Array.from(SOURCE_RESOLUTION_STATE_V2_WIDE_TERMINAL_EXAMPLE_HEX.match(/../g) ?? [], (byte) => Number.parseInt(byte, 16));
+    const wide = parseSuccessorAccount('lifecycle.state', Object.freeze({ owner: UPGRADEABLE_LOADER_ID, executable: false, data, space: data.length, lamports: '1' }));
+    const facts = wide.facts.map((entry) => [entry.label, entry.value]);
+
+    expect([wide.kind, wide.headline]).toEqual(['Source resolution state', 'Resolved']);
+    expect(facts).toContainEqual(['selector', '257']);
+    expect(facts).toContainEqual(['generation', '9']);
+    expect(facts).toContainEqual(['terminal sequence', '1']);
+    expect(facts).toContainEqual(['resolved at', '100']);
+  });
+
   it('reads a cohort-15 funding ledger, including its slot count', () => {
     const single = parseSuccessorAccount('lifecycle.funding.failure', vector('funding-ledger', 0));
     const three = parseSuccessorAccount('lifecycle.funding.failure', vector('funding-ledger', 1));
@@ -206,6 +256,68 @@ describe('Source and funding read through the derived decoder', () => {
     corrupted.data[10] = 9;
     expect(() => parseSuccessorAccount('lifecycle.state', corrupted))
       .toThrow('SourceResolutionStateV2: SourceResolutionPhaseV1 admits no state for byte 9');
+  });
+});
+
+/**
+ * The certificate, after `DCSRCER1` left.
+ *
+ * That arm was a 312-byte hand-written decoder over fourteen literal
+ * coordinates, and `ResolutionCertificateV1` has no producer: every use of it
+ * in `crates/dclutch-resolution-codec/src/lib.rs` sits inside the
+ * `#[cfg(test)] mod tests` that opens at line 2090, its only out-of-crate
+ * consumer is the svm-harness `resolution-receipt-caller` test program, and
+ * `programs/dclutch-resolution-proof-sbf/src/funded.rs:16-18` records that the
+ * V1 generation of that accounting was orphaned dead code and was deleted.
+ * What the Resolution program writes is `ResolutionCertificateV2`, and the SDK
+ * already had the decoder for it.
+ *
+ * So the three cases below are the ones that make the swap real: a canonical
+ * V2 body the Rust fixtures pin, the frozen checkpoint's V1 body saying what
+ * it actually is, and a V2 body that is genuinely malformed keeping the
+ * derived decoder's own words instead of being called a superseded generation.
+ */
+describe('Resolution certificates read through the derived V2 decoder', () => {
+  const certificateAccount = (hex: string): RpcAccount => {
+    const data = Uint8Array.from(hex.match(/../g) ?? [], (byte) => Number.parseInt(byte, 16));
+    return Object.freeze({ owner: UPGRADEABLE_LOADER_ID, executable: false, data, space: data.length, lamports: '1' });
+  };
+
+  it('reads the canonical V2 certificate its own Rust fixture pins', () => {
+    // `RESOLUTION_CERTIFICATE_V2_WIDE_SUCCESS_EXAMPLE_HEX` is emitted from
+    // `crates/dclutch-resolution-codec/src/generated_v2.rs`, so this is the
+    // authority's own example read by the browser's own card.
+    const certificate = parseSuccessorAccount('primary.certificate.success', certificateAccount(RESOLUTION_CERTIFICATE_V2_WIDE_SUCCESS_EXAMPLE_HEX));
+    const facts = certificate.facts.map((entry) => [entry.label, entry.value]);
+
+    expect([certificate.kind, certificate.headline]).toEqual(['signed Resolution certificate', 'resolution-success']);
+    expect(facts).toContainEqual(['record', 'ResolutionCertificateV2']);
+    expect(facts).toContainEqual(['magic', 'DCSRCER2']);
+    expect(facts).toContainEqual(['generation', '9']);
+    expect(facts).toContainEqual(['attempt / schedule', '0 / 0']);
+    // 257 and not 1: the selector is a native u32, and a reader that took it
+    // as the leading byte would report 1 here and be wrong on every selector
+    // above 255. The example is wide on purpose.
+    expect(facts).toContainEqual(['selector', '257']);
+    expect(facts).toContainEqual(['result', '7/1']);
+    expect(facts).toContainEqual(['observed at', '100']);
+  });
+
+  it('names the committed checkpoint certificate as a superseded generation', () => {
+    // The same disposition its Source and funding siblings already have. The
+    // capture predates the successor; the observed magic is read from the
+    // bytes, never written down here.
+    expect(() => parseSuccessorAccount('primary.certificate.success', fixture('primary.certificate.success')))
+      .toThrow(/SupersededRecordGeneration: primary.certificate.success opens with DCSRCER1, and the record this client reads is ResolutionCertificateV2 \(DCSRCER2\)/);
+  });
+
+  it('keeps a malformed live certificate distinct from a superseded one', () => {
+    // Corpus entry 2 opens with the LIVE magic at the live version and carries
+    // kind 9, which the Rust enum admits no variant for. A refusal that called
+    // that a superseded generation would be accusing the wrong thing.
+    const malformed = RESOLUTION_CERTIFICATE_V2_REFUSAL_CORPUS_HEX[2] ?? '';
+    expect(() => parseSuccessorAccount('primary.certificate.success', certificateAccount(malformed)))
+      .toThrow('ResolutionCertificateV2 has an unknown kind');
   });
 });
 

@@ -184,19 +184,30 @@ export function readExemptions() {
  * Join the survey into a coverage report.
  *
  * A record magic is COVERED when the render map names one of the constants that
- * declares it. It is EXEMPT when `explorer-coverage.exempt.json` records it with
- * a reason. Otherwise it is UNRENDERED, and the gate fails.
+ * declares it, or when the generated state-machine table declares it: for those
+ * `accountRecords.ts` derives a spec per ROW rather than writing `magic: CONST`,
+ * so the name-matching survey above is structurally unable to see them, and
+ * `explorerCoverage.test.ts`'s own "renders every persisted state machine"
+ * arm is what actually holds that path. Without this, a module emitting a
+ * layout for a record the explorer already renders through the machine table
+ * would be reported as an unrendered record — the join blaming the emission
+ * for a rendering it cannot observe.
+ *
+ * A magic is EXEMPT when `explorer-coverage.exempt.json` records it with a
+ * reason. Otherwise it is UNRENDERED, and the gate fails.
  */
 export function coverage() {
   const records = surveyRecordMagics();
   const instructions = surveyInstructionMagics();
   const { accountConstants, instructionRoutes } = surveyRenderMaps();
+  const derived = new Set(surveyStateMachineMagics().map((entry) => entry.magic));
   const exempt = readExemptions();
   const recordExempt = new Map(Object.entries(exempt.records ?? {}));
   const instructionExempt = new Map(Object.entries(exempt.instructions ?? {}));
 
   const recordRows = records.map((entry) => {
-    const rendered = entry.constants.some((held) => accountConstants.has(held.constant));
+    const rendered = derived.has(entry.magic)
+      || entry.constants.some((held) => accountConstants.has(held.constant));
     const reason = recordExempt.get(entry.magic) ?? null;
     return {
       magic: entry.magic,
