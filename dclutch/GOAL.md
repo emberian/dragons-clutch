@@ -4486,3 +4486,5 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   the generator refuses. Owed: `Action::Retire`'s four cross-crate length sums; `DCLTGMF3` to Trading resolves to no route
   (the generic-founding family's DCLTCRQ2); eight falsified blocking entries kept, classified.
 - Cuts: `f6ea3bc60`, `48028e1c7`.
+- Started 05:35 EDT: WITNESS-3 **`af2d01884647a5860`** — `Action::Retire`'s four routes folded by request length; the
+  generic-founding magic's second coordinate; the eight falsified blocking entries deleted by the file's own rule.
