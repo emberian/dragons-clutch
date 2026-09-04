@@ -1,3 +1,69 @@
+# The sponsored-push window, as admitted
+
+**Head current at `61450f1fe` (2026-09-04), tree root `/Users/ember/dev/dclutch`; devnet and program-source evidence, not mainnet evidence.** The body below
+`## History` is the note as written on 2026-09-02 with its own §4 amendment (`84e37949f`), verbatim; §4's original headline — that a market's admissible
+window depends on which product family it bought — was false at the commit it was read at, `62a0b7fb5`, and this head carries only what survived.
+
+## The admission rules
+
+| action | conjunct | site | refusal |
+| --- | --- | --- | --- |
+| `Capture` | `clock.unix_timestamp > window.end + max_age` | `sponsored_push_v1.rs:132` (deadline built at `:1000`) | `ProviderFreshness` (`:133`) |
+| `Capture` | `publish_time` admitted by `WindowSpecV1::contains_observation` | `provider_join_v2.rs:244` → `lib.rs:1276` | `ProviderWindow` (`:580`) |
+| `Capture` | `publish_time` outside `[clock − max_age, clock + skew]` | `provider_join_v2.rs:247` | `ProviderFreshness` (`:583`) |
+| `Settle` | `clock.unix_timestamp <= window.end + max_age` | `sponsored_push_v1.rs:875` | `ProviderFreshness` (`:877`) |
+| `Settle` | the same two bounds, re-run against the candidate's own `snapshot_unix_seconds` | `:1116`, called at `:1221` | `ProviderWindow` / `ProviderFreshness` (`:1152`, `:1155`) |
+| `CommitFailure` | head must be System-owned and empty | `:1668` | `SponsoredPush` |
+| `CloseHead` | Source must be terminal | `terminal_source_for_cleanup`, `:1437` | `Transition` |
+
+Two facts make the lifecycle total rather than strandable, and both look like shortcuts and are the opposite. **Settle re-normalizes against the
+CAPTURE clock**, `sealed.candidate.snapshot_unix_seconds` — settlement begins only after `end + max_age`, so re-checking freshness against the
+settle clock would refuse every candidate the market ever admitted. And **the candidate is a durable snapshot, not a pointer**: `Settle` parses
+`candidate.update_bytes` and never re-reads the mutable price account, so a later sponsored push cannot invalidate a captured one. Consequently
+the griefing vector this note was opened to record — a permissionless capture between `window.end` and `window.end + max_age` stranding a market
+forever — **does not exist**: capture already carries the window conjunct, and the two repairs that addendum queued stay withdrawn.
+
+## The tolerance, and why it is structurally zero here
+
+`cadence_tolerance_seconds` widens the window symmetrically, and since `0b0a05e93` all four sites read one author (`contains_observation`). On the single-snapshot
+Pyth routes the widening is unreachable by construction, twice over: `WindowSpecV1::tolerating_cadence` (`crates/dclutch-source-contract/src/lib.rs:1175`) is the
+sole mutator and refuses `InvalidWindow` for a nonzero tolerance on a `WindowKind::Terminal` window, while the single-snapshot obligation refuses any window that is
+not `Terminal` (`provider_join_v2.rs:183`, `LinkageMismatch`); and `validate_cadence_tolerance_pairing` (`lib.rs:1802`) separately refuses `NonCanonicalStatistic`
+for a nonzero tolerance under any statistic but `OddScheduledMedian`. `a_terminal_window_cannot_reach_the_single_snapshot_route_with_a_tolerance`
+(`provider_join_v2.rs:710`) pins all three gates and then shows the widening is real where it IS reachable, on a `ScheduledInterval` window: `end + 120` admitted,
+`end + 121` refused (`:757`–`:758`). The cost of the old duplication was a second author, never a wrong answer.
+
+## Where an oracle outage's money goes — STILL OPEN
+
+**When the oracle goes quiet, the market pays the outcome the founder minted and kept, and pays the strangers who bought a real outcome
+nothing.** That is the documented property of `exhaust_after_primary_deadline` (`crates/dclutch-source-contract/src/source_resolution_v2.rs:467`)
+— *"a silent provider cannot make a market unresolvable, only drive it to a pre-disclosed outcome"* — and cohort-13 is the worked example:
+failure selector 3, the founder holding the entire 500,000,000-atom failure supply, participant-2 paid `0` for their 200 atoms of outcome 0.
+
+**The disposition is a decision, not a lane's, and it is pending.** It is docket item **D2, "the failure selector pays the founder"**
+(`GOAL.md:3946-3952`), published for ember with the rest of the docket on 2026-09-03. Nothing here proposes a program change; the two
+consequences this note records — that a market with no recovery policy prices its oracle risk entirely into the failure claims, and that
+the founder's incentive under an outage is not neutral — are disclosure surfaces in `apps/dclutch-web` unless and until D2 says otherwise.
+
+## Cohort-13's window closed unobserved, and the root cause is not the configuration
+
+This note's §5 read cohort-13's outage as the founder's own configuration deciding the outcome. That is true and it is not the nearest cause.
+**Pyth redeployed their devnet Receiver at slot 491,006,444**, while cohort-13's market pinned 487,855,452 and cohort-13's registry deployed
+at 491,947,648 — 4.36 days later. `authenticate_provider_program_pin` pins the Receiver and push oracle by exact `(ProgramData address,
+deployment_slot, upgrade_authority)`, so **cohort-13's capture would have refused `ReleaseSuperseded 0x8014` at any second of its window**,
+and the honest observation was unreachable before timing entered it. The ELF did not move: Pyth redeployed the same bytes at a new slot, and
+the pin failed closed on a supersession that changed no code (`docs/evidence/COHORT14_SEALED_FOUNDED_FILLED_2026_09_03.md:786-860`).
+
+`12a9b13a5` is the repair, and it is not a retyped constant: `sponsored_release_observation`
+(`tools/local-validator/bootstrap/successor/src/sponsored_release_observation.rs`) reads five accounts in one finalized `getMultipleAccounts` and **re-mints the
+release off chain** from what it finds. Nine facts become chain-owned — both deployment slots, both ELF digests, both upgrade authorities, both ProgramData
+addresses and the Config body digest — and everything else stays declared, because it says which accounts the release is about rather than what they hold.
+
+## History
+
+*Everything below is this note as written on 2026-09-02, with its own §4 amendment, unchanged and in order. Where it
+contradicts the head above, the head is the current truth.*
+
 # The sponsored-push window: a griefing vector that is not there, and a widening that is not applied
 
 Status: **finding, §4 amended.** It changes no program byte. Claims below are

@@ -1,3 +1,69 @@
+# The observation scale's one author
+
+**Head current at `887d6c04a` (2026-09-04), tree root `/Users/ember/dev/dclutch`; devnet evidence, not mainnet evidence.** The three sections below `## History` — the finding, the factor as landed, the three debts closed — are verbatim and in order.
+
+## The defect, and the two markets that are its instances
+
+A market's cuts and its observation could be authored on **different scales** with no record declaring a factor between them, so nothing — program, operator or
+reader — could notice. Cohort-14's markets **B** (`DUVcCGfjXzp1fBktTCjsAomgrn9S6sxSDziQHoyRiu8A`) and **C** (`BL8zsFokbz7aEdo3wjtcNffd5P1D8a9wVxwKq3mcMsMN`)
+each compared a raw Pyth mantissa at exponent −8 against cuts in US cents, and each was paid the cell the deployed program chose rather than the cell its
+reading falls in: the chain paid cell 2, the reading at the feed's own exponent falls in cell 1, which pays zero. Market C is the one that reached a stranger —
+participant-2 held 200 claims at index 1. Both are asserted from chain, per market, by `apps/dclutch-web/lib/ordinarySelector.live.test.ts:48-49`.
+
+## The authority
+
+`StatisticSpecV1.source_scale_exponent: i32` is the source-to-result decimal shift: the observation times ten to this power is the
+reading in the result unit. It occupies **bytes 12..16** (`crates/dclutch-source-contract/src/generated_statistic_spec_v1.rs:23`,
+width at `:9`) — four bytes `decode` previously required canonically zero — and `STATISTIC_SPEC_BYTES` stays **176** (`:5`).
+
+Lean has owned the layout since **`485f5cb9f`**: `DClutchSemantics.SourceStatisticSpecV1Abi` declares the fields and
+`formal/dclutch-semantics/EmitSourceStatisticSpecV1Rust.lean` prints them. The theorems worth naming:
+
+- `the_factor_fills_the_span_that_was_reserved` (`SourceStatisticSpecV1Abi.lean:170`) — the shift begins where the rounding tag ends
+  and ends where the first unit identity begins, so it occupies exactly the four bytes that were reserved.
+- `ResultDomain.scaled_selection_in_one_cell` (`DClutchSemantics/ProductRuntimeV2.lean:253`) — once the declared factor has put the observation
+  and the cuts on one scale, the observation falls in exactly one ordinary cell. `maxScaleExponent = 18` (`:126`) is emitted to
+  `MAX_SOURCE_SCALE_EXPONENT` (`crates/dclutch-product-runtime-v2/src/generated.rs:27`).
+- `ResultDomain.selectOrdinaryScaled_identity` (`:184`) is **the migration statement**: a record declaring no factor selects exactly what the
+  unscaled selector selected. Every statistic founded before the field decodes with the factor at zero, re-encodes byte-for-byte and keeps its
+  content digest, so no account is rewritten and a pre-factor market's reading is now a *declared* identity scale, not an undefined one.
+
+## One selection site, one adapter rule, three routes
+
+Every on-chain route reaches the selector through `SourceResolutionStateV2::resolve_primary_from_authenticated_domain` (`crates/dclutch-source-contract/src/source_resolution_v2.rs:393`),
+which takes the shift as an argument and hands it to `ResultDomainV2::select_ordinary` (`:416`); an unsupported scale refuses `NonCanonicalSourceScale` rather than being flattened into
+`InvalidResultMap`. The shift is never defaulted — a caller that omits it has not chosen the identity, it has failed to state a choice.
+
+`StatisticSpecV1::require_admitted_scale` (`crates/dclutch-source-contract/src/lib.rs:1617`) is the single author of which shift an adapter admits, called
+by both provider families: `PythAdapterConfigV1::validate_update` (`:703`) and `relay_v1.rs:339`. `StatisticSpecV1::validate_scale` (`:1639`) refuses a
+statistic claiming a conversion between one unit and itself. A shift the publication does not carry refuses `ResolutionError::ProviderScale = 0x801C`
+(`programs/dclutch-resolution-proof-sbf/src/lib.rs:204`), checked **after** the publication is admitted, so that code can only mean the market's own two
+records disagree — a fault no resubmission can fix. The three routes read the number off the record, never off an adapter account: `provider_v3.rs:258`
+(`obligation.source_scale_exponent()`), `sponsored_push_v1.rs:1238` and `relay_v1.rs:376` (`records.statistic.source_scale_exponent()`).
+
+## The relayed route's slot, and its second fault
+
+The relayed route had no statistic in its frame and passed the identity. `0b5e862ea` grew `CONSUME_RECORD_FRAME_V1` from 28 positions to **30**
+(`crates/dclutch-relay-contract/src/frame.rs:317`) — the raw `StatisticSpecV1` and its staging vacancy, both read-only, authenticated against
+`SourceMaterialV3::statistic_spec` by content identity. **The second fault it fixed was the larger one:** the route had compared the *Source spec's* unit against
+the Product's result unit, the wrong end of the map, so a market whose own statistic said `A` maps to `B` by a factor could satisfy it and be selected at the
+identity with nothing red. Still not executable is a relayed founding whose declared conversion MOVES a cell: both decoding-rules rows publish `raw_exponent = 0`.
+
+## The browser, and cohort-15
+
+`inspectMarketDeclaredScaleV1` (`packages/dclutch-sdk/lib/marketResolution.ts`) walks `SourceMaterialV3 → StatisticSpecV1` in two
+account reads; `MarketDetailWorkspace.tsx` passes `resolution.scale.sourceScaleExponent` where it passed the literal `0`, and
+withholds the join entirely when the record did not read. **`unread` is a status, never a zero** (`marketResolution.ts:123`).
+
+**Cohort-15 is the first cohort founded carrying the factor.** Its devnet founding writes the shift from the observed publication's own exponent,
+and a market founded after `4cd2b9cb5` that declares a conversion and omits the number cannot resolve at all. The witness is
+`docs/evidence/COHORT15_DEPLOYED_SEALED_FOUNDED_CAPTURED_2026_09_04.md` §8, in flight with the COHORT-15 lane as this head was written.
+
+## History
+
+*Everything below is this note as written on 2026-09-03, unchanged and in order: the finding, the factor as landed, and
+the three debts closed. Where it contradicts the head above, the head is the current truth.*
+
 # The observation scale nothing publishes — 2026-09-03
 
 **Devnet evidence. Not mainnet evidence.** Written by the WEB lane while

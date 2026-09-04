@@ -4169,3 +4169,7 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   clients.yml: the web job installed no Rust toolchain while `tier_web` already calls cargo — fixed and pushed (0895f5004);
   `checks.yml`'s `suites` job stays because `clients.yml` is path-filtered and self-gates.
 - Cuts: `799466d08`.
+- NOTES closed (`887d6c04a`, `61450f1fe`, `52233ad29`): three design notes' heads state the current truth (≈70 claims,
+  every one cited at HEAD), history byte-identical below a `## History` fold; settled: 0023 IS applied on the Dealer route
+  (the slot-free digest is why Trading's half of the 15,000 draw is minable); §4's read commit was 62a0b7fb5.
+- Cuts: `76d611b3f`.
