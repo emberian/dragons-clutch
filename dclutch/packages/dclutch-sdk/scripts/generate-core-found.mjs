@@ -268,7 +268,7 @@ output += `export const CORE_FOUND_PRICE_GATE_ACCOUNT_LABELS_V3 = Object.freeze(
 output += `export const CORE_FOUND_PRICE_GATE_ACCOUNT_ROLES_V3 = Object.freeze(${JSON.stringify(extendedAccountMetas.map(({ signer, writable }) => ({ signer, writable })))}) as ReadonlyArray<Readonly<{ signer: boolean; writable: boolean }>>;\n`;
 output += `export const SPLINE_PRODUCT_AUTHORING_COMMAND_V1 = '${stringConstant('splineAuthoring', 'COMMAND_V1')}' as const;\n`;
 output += `export const SPLINE_PRODUCT_AUTHORING_REPORT_SCHEMA_V1 = '${stringConstant('splineAuthoring', 'REPORT_SCHEMA_V1')}' as const;\n`;
-output += array('CORE_REQUEST_MAGIC', bytes('core', 'REQUEST_MAGIC'));
+output += array('CORE_REQUEST_MAGIC', bytes('core', 'CORE_REQUEST_MAGIC'));
 output += array('MARKET_CORE_STATE_PDA_DOMAIN_V2', bytes('physical', 'MARKET_CORE_STATE_PDA_DOMAIN_V2'));
 for (const [source, name] of [
   ['product', 'PRODUCT_RECORD_SCHEMA_ID_V2'], ['product', 'RESULT_DOMAIN_SCHEMA_ID_V2'], ['product', 'PORTFOLIO_SCHEMA_ID_V2'],

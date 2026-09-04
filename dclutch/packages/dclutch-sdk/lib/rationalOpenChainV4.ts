@@ -6,7 +6,7 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js';
 
-import { ascii, hex, requireNonzero, requireZero, slice, u16, u64 } from './bytes';
+import { hex, requireNonzero, requireZero, slice, u16, u64 } from './bytes';
 import {
   LIABILITY_BASIS_MARKET_BASIS_OFFSET,
   LIABILITY_BASIS_MARKET_CLAIM_COUNT_OFFSET,
@@ -33,6 +33,20 @@ import {
   LIABILITY_BASIS_STATE_VERSION_V2,
 } from './generated/coreFound';
 import * as Hot from './generated/directInlineV3';
+import {
+  RATIONAL_REPLAY_ACTOR_OFFSET,
+  RATIONAL_REPLAY_BYTES_V2,
+  RATIONAL_REPLAY_DESCRIPTOR_OFFSET,
+  RATIONAL_REPLAY_MAGIC_BYTES,
+  RATIONAL_REPLAY_MAGIC_OFFSET,
+  RATIONAL_REPLAY_MAGIC_V2,
+  RATIONAL_REPLAY_RESERVED_BYTES,
+  RATIONAL_REPLAY_RESERVED_OFFSET,
+  RATIONAL_REPLAY_REVISION_OFFSET,
+  RATIONAL_REPLAY_SEED_V2,
+  RATIONAL_REPLAY_VERSION_OFFSET,
+  RATIONAL_REPLAY_VERSION_V2,
+} from './generated/rationalReplayV2';
 import {
   OPEN_REPRESENTATION_HOT_REQUEST_SCHEMA_ID_V3,
   RATIONAL_OPEN_ABSENT_REVISION_V3,
@@ -68,7 +82,7 @@ const SHARD_MINT_SEED = new TextEncoder().encode('dclutch:rational-shard-mint:v2
 const STRUCTURED_CUSTODY_SEED = new TextEncoder().encode('dclutch:rational-structured:v2');
 const RECEIPT_MINT_SEED = new TextEncoder().encode('dclutch:rational-receipt:v2');
 const REPRESENTATION_AUTHORITY_SEED = new TextEncoder().encode('dclutch:rational-authority:v2');
-const REPLAY_SEED = new TextEncoder().encode('dclutch:rational-replay:v2');
+const REPLAY_SEED = new TextEncoder().encode(RATIONAL_REPLAY_SEED_V2);
 const CALLER_AUTHORITY_SEED = new TextEncoder().encode('dclutch:role-authority:v1');
 const ACCOUNT_PROFILE_HEADER = 40;
 
@@ -302,10 +316,13 @@ function decodeRationalRepresentationReplayStateV2(
   refuseExhausted: boolean,
 ): bigint {
   if (account.owner === claims) {
-    if (account.executable || account.data.length !== 88 || ascii(account.data, 0, 8) !== 'DCRRREP2' || u16(account.data, 8) !== 2) throw new Error('representation replay has the wrong exact V2 ABI');
-    requireZero(account.data, 10, 6, 'representation replay');
-    if (!same(slice(account.data, 16, 32), descriptor) || new PublicKey(slice(account.data, 48, 32)).toBase58() !== actor) throw new Error('representation replay descriptor or actor differs');
-    const revision = u64(account.data, 80);
+    if (account.executable || account.data.length !== RATIONAL_REPLAY_BYTES_V2
+        || !same(slice(account.data, RATIONAL_REPLAY_MAGIC_OFFSET, RATIONAL_REPLAY_MAGIC_BYTES), RATIONAL_REPLAY_MAGIC_V2)
+        || u16(account.data, RATIONAL_REPLAY_VERSION_OFFSET) !== RATIONAL_REPLAY_VERSION_V2) throw new Error('representation replay has the wrong exact V2 ABI');
+    requireZero(account.data, RATIONAL_REPLAY_RESERVED_OFFSET, RATIONAL_REPLAY_RESERVED_BYTES, 'representation replay');
+    if (!same(slice(account.data, RATIONAL_REPLAY_DESCRIPTOR_OFFSET, 32), descriptor)
+        || new PublicKey(slice(account.data, RATIONAL_REPLAY_ACTOR_OFFSET, 32)).toBase58() !== actor) throw new Error('representation replay descriptor or actor differs');
+    const revision = u64(account.data, RATIONAL_REPLAY_REVISION_OFFSET);
     if (refuseExhausted && revision === MAX_U64) throw new Error('representation replay revision is exhausted');
     return revision;
   }
@@ -558,9 +575,9 @@ export async function inspectRationalOpenChainV4(
   const replayAccount = required(accounts, replay.toBase58(), 'representation replay funding');
   const replayRevision = decodeRationalRepresentationReplayV2(replayAccount, activation.claims, descriptorId, actor);
   if (replayAccount.owner === SYSTEM_PROGRAM_ID) {
-    const replayRent = await client.minimumBalanceForRentExemption(88);
+    const replayRent = await client.minimumBalanceForRentExemption(RATIONAL_REPLAY_BYTES_V2);
     if (BigInt(replayAccount.lamports) < BigInt(replayRent.lamports)) {
-      throw new Error('new representation replay cannot fund its exact 88-byte rent minimum');
+      throw new Error(`new representation replay cannot fund its exact ${RATIONAL_REPLAY_BYTES_V2}-byte rent minimum`);
     }
   }
   const receiptMint = decodeToken2022BehaviorMintV2(descriptor.receiptMint, required(accounts, descriptor.receiptMint, 'receipt Mint'));

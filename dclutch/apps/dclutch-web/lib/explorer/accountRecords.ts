@@ -645,6 +645,19 @@ import {
   TERMINAL_REQUEST_SELECTED_OUTCOME_OFFSET_V3,
 } from '../generated/rationalTerminalHotV3';
 import {
+  GRAPH_EDGE_COUNT_OFFSET,
+  GRAPH_HEADER_BYTES,
+  GRAPH_ID_OFFSET,
+  GRAPH_MAGIC_V2,
+  GRAPH_NODE_COUNT_OFFSET,
+  GRAPH_OUTCOME_COUNT_OFFSET,
+  GRAPH_RESERVED_HEADER_OFFSET,
+  GRAPH_RESERVED_OFFSET,
+  GRAPH_ROOT_ID_OFFSET,
+  GRAPH_SCALE_OFFSET,
+  GRAPH_VERSION_OFFSET,
+} from '../generated/rationalRepresentationGraphV2';
+import {
   REALM_ADAPTER_RELEASE_ID_OFFSET_V1,
   REALM_BYTES_V1,
   REALM_COLLATERAL_MINT_OFFSET_V1,
@@ -2152,6 +2165,33 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
       field('Parent context', RATIONAL_TERMINAL_HOT_PARENT_CONTEXT_OFFSET_V3, 'identity'),
     ],
     note: 'Past these fields the layout is the same as the rational representation request.',
+  },
+  {
+    magic: GRAPH_MAGIC_V2,
+    name: 'Representation graph',
+    family: 'Rational',
+    summary: 'The flattened recipe a wrapped claim is built from: which node is the root, and what each outcome pays there.',
+    width: {
+      kind: 'header-only',
+      headerBytes: GRAPH_HEADER_BYTES,
+      // Three runs, not one: the node records, then the edge records, then one
+      // exposure scalar per node per outcome. The header's own three counts
+      // give all three lengths, and a single stride cannot express them, so
+      // the tail is described rather than enumerated.
+      note: 'node records, then edge records, then one exposure scalar per node per outcome — the three counts above give each length',
+    },
+    fields: [
+      version(GRAPH_VERSION_OFFSET),
+      field('Reserved', GRAPH_RESERVED_HEADER_OFFSET, 'reserved'),
+      field('Graph identity', GRAPH_ID_OFFSET, 'identity'),
+      field('Root node identity', GRAPH_ROOT_ID_OFFSET, 'identity'),
+      field('Outcome count', GRAPH_OUTCOME_COUNT_OFFSET, 'u32'),
+      field('Node count', GRAPH_NODE_COUNT_OFFSET, 'u32'),
+      field('Edge count', GRAPH_EDGE_COUNT_OFFSET, 'u32'),
+      field('Reserved', GRAPH_RESERVED_OFFSET, 'reserved'),
+      field('Exposure scale', GRAPH_SCALE_OFFSET, 'u64'),
+    ],
+    note: null,
   },
 
   // ---------------------------------------------------------------- Product V2

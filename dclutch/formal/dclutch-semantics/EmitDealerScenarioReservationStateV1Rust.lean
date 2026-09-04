@@ -46,6 +46,21 @@ def main : IO Unit := do
   emitConst "DEALER_SCENARIO_RESERVATION_STATE_BALANCES_OFFSET_V1" "usize"
     (toString balancesOffset)
     "Where the four exact balance measurements begin."
+  emitConst "DEALER_SCENARIO_CUSTODY_HEADER_MAGIC_OFFSET_V1" "usize"
+    (toString familyMagicOffset)
+    "Magic coordinate of the header ALL FOUR records in this family share."
+  emitConst "DEALER_SCENARIO_CUSTODY_HEADER_MAGIC_BYTES_V1" "usize"
+    (toString familyMagicBytes)
+    "Magic width of that shared header."
+  emitConst "DEALER_SCENARIO_CUSTODY_HEADER_VERSION_OFFSET_V1" "usize"
+    (toString familyVersionOffset)
+    "Version-word coordinate of that shared header."
+  emitConst "DEALER_SCENARIO_CUSTODY_HEADER_VERSION_BYTES_V1" "usize"
+    (toString familyVersionBytes)
+    "Version-word width of that shared header."
+  emitConst "DEALER_SCENARIO_CUSTODY_HEADER_BYTES_V1" "usize"
+    (toString familyHeaderBytes)
+    "Total width of that shared header: the magic plus the version word."
   emitConst "DEALER_SCENARIO_RESERVATION_STATE_HEAD_RESERVED_BYTES_V1" "usize"
     (toString (Field.width .headReserved))
     "Width of the canonical-zero span between the three tags and the batch identity."

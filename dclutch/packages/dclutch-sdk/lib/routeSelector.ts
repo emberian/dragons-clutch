@@ -18,10 +18,20 @@
  * WHAT THIS CANNOT NAME, said out loud because the alternative is a consumer
  * reading an empty answer as "no route".
  *
- *   * Core dispatches on a decoded `Action` variant, not on its request magic
- *     — `DCLTCRQ2` appears in no census selector at all. Every Core route an
- *     act drives is therefore invisible to this derivation, including the four
- *     that carry the only Market phase gates a browser acts on today.
+ *   * Core USED to be the largest hole here: it dispatches on a decoded
+ *     `Action` variant, and its request magic `DCLTCRQ2` appeared in no census
+ *     selector at all, so every Core route an act drives was invisible to this
+ *     derivation — including the four carrying the only Market phase gates a
+ *     browser acts on today. It is not a property of Core's wire format: every
+ *     one of those instructions starts with `DCLTCRQ2`. It was a property of
+ *     WHERE the check was written, inside `Request::decode` rather than in the
+ *     dispatch, which the census's walk treats as terminal. The check is now
+ *     also in the dispatch guard, so eleven Core routes are magic-selected and
+ *     `DCLTCRQ2` resolves like any other magic. Because they share one magic
+ *     and are separated by a decoded `Action` this has no offset for, Core is
+ *     now the tree's most AMBIGUOUS magic rather than its missing one: the
+ *     answer is the whole eleven-route candidate set, exactly as Rent's
+ *     `DCLRNCI2` is answered below.
  *   * Where one magic selects several routes the answer is the whole candidate
  *     set: Rent's `DCLRNCI2` names Create, Close and Sweep, separated by a
  *     decoded variant this has no offset for. Reported as a set rather than
@@ -30,9 +40,9 @@
  *     magic at all (`GenericMarketFoundingCallerBumpsV3::decode(..).is_ok()`).
  *     No eight-byte view will ever name those.
  *
- * A caller that needs "did this act reach a route it did not declare" gets a
- * sound answer for every program but Core; a caller that needs "is this the
- * only route it reached" must read the empty cases above first.
+ * A caller that needs "did this act reach a route it did not declare" now gets
+ * a sound answer for every program; a caller that needs "is this the only route
+ * it reached" must read the ambiguous and empty cases above first.
  */
 
 import {

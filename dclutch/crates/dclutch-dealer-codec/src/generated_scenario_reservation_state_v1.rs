@@ -18,6 +18,16 @@ pub const DEALER_SCENARIO_RESERVATION_STATUS_LIMIT_V1: u8 = 4;
 pub const DEALER_SCENARIO_RESERVATION_STATE_IDENTITIES_OFFSET_V1: usize = 16;
 /// Where the four exact balance measurements begin.
 pub const DEALER_SCENARIO_RESERVATION_STATE_BALANCES_OFFSET_V1: usize = 464;
+/// Magic coordinate of the header ALL FOUR records in this family share.
+pub const DEALER_SCENARIO_CUSTODY_HEADER_MAGIC_OFFSET_V1: usize = 0;
+/// Magic width of that shared header.
+pub const DEALER_SCENARIO_CUSTODY_HEADER_MAGIC_BYTES_V1: usize = 8;
+/// Version-word coordinate of that shared header.
+pub const DEALER_SCENARIO_CUSTODY_HEADER_VERSION_OFFSET_V1: usize = 8;
+/// Version-word width of that shared header.
+pub const DEALER_SCENARIO_CUSTODY_HEADER_VERSION_BYTES_V1: usize = 2;
+/// Total width of that shared header: the magic plus the version word.
+pub const DEALER_SCENARIO_CUSTODY_HEADER_BYTES_V1: usize = 10;
 /// Width of the canonical-zero span between the three tags and the batch identity.
 pub const DEALER_SCENARIO_RESERVATION_STATE_HEAD_RESERVED_BYTES_V1: usize = 3;
 /// Width of the canonical-zero tail span.

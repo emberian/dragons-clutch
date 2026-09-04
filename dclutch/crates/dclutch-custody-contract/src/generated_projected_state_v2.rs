@@ -24,6 +24,14 @@ pub const PROJECTED_CUSTODY_STATE_IDENTITY_BYTES_V2: usize = 32;
 pub const PROJECTED_CUSTODY_STATE_IDENTITIES_BYTES_V2: usize = 672;
 /// Where the mutable tail begins: the header plus the whole identity run.
 pub const PROJECTED_CUSTODY_STATE_TAIL_OFFSET_V2: usize = 704;
+/// Magic coordinate of the header EVERY record in this family shares.
+pub const PROJECTED_CUSTODY_HEADER_MAGIC_OFFSET_V1: usize = 0;
+/// Magic width of that shared header.
+pub const PROJECTED_CUSTODY_HEADER_MAGIC_BYTES_V1: usize = 8;
+/// ABI-version coordinate of that shared header.
+pub const PROJECTED_CUSTODY_HEADER_VERSION_OFFSET_V1: usize = 8;
+/// Total width of that shared header: the magic plus the version word.
+pub const PROJECTED_CUSTODY_HEADER_BYTES_V1: usize = 10;
 /// Width of the canonical-zero span between the three tags and the cap count.
 pub const PROJECTED_CUSTODY_STATE_HEAD_RESERVED_BYTES_V2: usize = 3;
 /// Width of the canonical-zero span between the cap count and the identity block.

@@ -22,13 +22,13 @@ use dclutch_custody_contract::{
 use dclutch_market_core_codec::{
     AGGREGATE_RETIREMENT_CLOSE_REPLAY_MAGIC_V1, AGGREGATE_RETIREMENT_CLOSE_VAULT_MAGIC_V1,
     AGGREGATE_RETIREMENT_FINISH_MAGIC_V1, AGGREGATE_RETIREMENT_SUFFIX_REQUEST_BYTES_V1, Action,
-    CAPABILITY_FUNDING_HEADER_BYTES_V2, CORE_EFFECT_ENVELOPE_BYTES_V1, CapabilityFundingHeaderV2,
-    CoreEffectEnvelopeV1, GENERIC_FOUNDING_REQUEST_BYTES_V1, GENERIC_FOUNDING_REQUEST_MAGIC_V1,
-    GenericFoundingRequestV1, PROJECT_FOUND_REQUEST_BYTES_V2, PROJECT_FOUND_REQUEST_MAGIC_V2,
-    ProjectFoundRequestV2, REQUEST_BYTES, RETIREMENT_BUNDLE_BYTES_V1, Request,
-    SERIES_CORE_REQUEST_BYTES_V1, SERIES_CORE_REQUEST_MAGIC_V1,
-    SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1, SERIES_PERMIT_EXPIRY_REQUEST_MAGIC_V1,
-    SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_BYTES_V1,
+    CAPABILITY_FUNDING_HEADER_BYTES_V2, CORE_EFFECT_ENVELOPE_BYTES_V1, CORE_REQUEST_MAGIC,
+    CapabilityFundingHeaderV2, CoreEffectEnvelopeV1, GENERIC_FOUNDING_REQUEST_BYTES_V1,
+    GENERIC_FOUNDING_REQUEST_MAGIC_V1, GenericFoundingRequestV1, PROJECT_FOUND_REQUEST_BYTES_V2,
+    PROJECT_FOUND_REQUEST_MAGIC_V2, ProjectFoundRequestV2, REQUEST_BYTES,
+    RETIREMENT_BUNDLE_BYTES_V1, Request, SERIES_CORE_REQUEST_BYTES_V1,
+    SERIES_CORE_REQUEST_MAGIC_V1, SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1,
+    SERIES_PERMIT_EXPIRY_REQUEST_MAGIC_V1, SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_BYTES_V1,
     SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_MAGIC_V1, SeriesCoreRequestV1,
     SeriesPermitExpiryRequestV1, SeriesUnallocatedPermitExpiryRequestV1,
 };
@@ -566,153 +566,169 @@ pub fn process_instruction(
     let request_bytes = instruction_data
         .get(..REQUEST_BYTES)
         .ok_or(CoreSbfError::Instruction)?;
-    let request = Request::decode(request_bytes).map_err(|_| CoreSbfError::Instruction)?;
-    match request.action {
-        Action::Found if instruction_data.len() == REQUEST_BYTES => {
-            found::process(program_id, accounts, request)
-        }
-        Action::BeginRetiring if instruction_data.len() == REQUEST_BYTES => {
-            begin_retiring::process(program_id, accounts, request)
-        }
-        Action::ExecuteProvider
-            if instruction_data.len() > execute_provider_v3::EXECUTE_PROVIDER_PREFIX_BYTES_V3 =>
-        {
-            let provider_data = instruction_data
-                .get(REQUEST_BYTES..)
-                .ok_or(CoreSbfError::Instruction)?;
-            execute_provider_v3::process(
-                program_id,
-                accounts,
-                request,
-                request_bytes,
-                provider_data,
-            )
-        }
-        Action::OpenMarket
-            if instruction_data.len() == open_market::OPEN_MARKET_INSTRUCTION_BYTES_V1 =>
-        {
-            let custody_bytes = instruction_data
-                .get(REQUEST_BYTES..)
-                .ok_or(CoreSbfError::Instruction)?;
-            open_market::process(program_id, accounts, request, request_bytes, custody_bytes)
-        }
-        Action::Retire if instruction_data.len() == retire_v1::RETIREMENT_INSTRUCTION_BYTES_V1 => {
-            let bundle_start = REQUEST_BYTES;
-            let claims_start = bundle_start + RETIREMENT_BUNDLE_BYTES_V1;
-            let close_vault_start = claims_start + CLAIMS_MARKET_CLOSURE_REQUEST_BYTES_V1;
-            let close_replay_start = close_vault_start + CUSTODY_REQUEST_BYTES_V1;
-            let bundle_bytes = instruction_data
-                .get(bundle_start..claims_start)
-                .ok_or(CoreSbfError::Instruction)?;
-            let claims_request_bytes = instruction_data
-                .get(claims_start..close_vault_start)
-                .ok_or(CoreSbfError::Instruction)?;
-            let close_vault_request_bytes = instruction_data
-                .get(close_vault_start..close_replay_start)
-                .ok_or(CoreSbfError::Instruction)?;
-            let close_replay_request_bytes = instruction_data
-                .get(close_replay_start..)
-                .ok_or(CoreSbfError::Instruction)?;
-            retire_v1::process(
-                program_id,
-                accounts,
-                request,
-                request_bytes,
-                bundle_bytes,
-                claims_request_bytes,
-                close_vault_request_bytes,
-                close_replay_request_bytes,
-            )
-        }
-        Action::Retire
-            if instruction_data.len()
-                == retire_v1::RETIREMENT_CHECKPOINT_PREPARE_INSTRUCTION_BYTES_V1 =>
-        {
-            let bundle_start = REQUEST_BYTES;
-            let claims_start = bundle_start + RETIREMENT_BUNDLE_BYTES_V1;
-            let bundle_bytes = instruction_data
-                .get(bundle_start..claims_start)
-                .ok_or(CoreSbfError::Instruction)?;
-            let claims_request_bytes = instruction_data
-                .get(claims_start..)
-                .ok_or(CoreSbfError::Instruction)?;
-            if claims_request_bytes.get(
-                ..dclutch_claims_svm::retirement_checkpoint_handoff_v1::CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_REQUEST_MAGIC_V1.len(),
-            ) != Some(
-                dclutch_claims_svm::retirement_checkpoint_handoff_v1::CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_REQUEST_MAGIC_V1.as_slice(),
-            ) {
-                return Err(CoreSbfError::Instruction.into());
+    // **The `Action` family's magic, read at the dispatch and not only inside
+    // the decoder.** `Request::decode` has always checked it -- `exact_magic`
+    // is unchanged and still runs, and it is the codec's own hostile check --
+    // but a magic no dispatch guard names is a magic the route census cannot
+    // attribute to a route: its walk treats the decode as terminal. So
+    // `DCLTCRQ2` selected no route at all while every act driving one of the
+    // arms below carried it on the wire, and `corroborate.py --discover`
+    // dropped every signature it resolved to Core across three cohorts. This
+    // is the shape the Series arm above already uses for `DCLTCSR1`, where the
+    // dispatch and `SeriesCoreRequestV1::decode` also both check it.
+    if request_bytes.get(..CORE_REQUEST_MAGIC.len()) == Some(CORE_REQUEST_MAGIC.as_slice()) {
+        let request = Request::decode(request_bytes).map_err(|_| CoreSbfError::Instruction)?;
+        return match request.action {
+            Action::Found if instruction_data.len() == REQUEST_BYTES => {
+                found::process(program_id, accounts, request)
             }
-            retire_v1::process_checkpoint_prepare(
-                program_id,
-                accounts,
-                request,
-                request_bytes,
-                bundle_bytes,
-                claims_request_bytes,
-            )
-        }
-        Action::ActivateCapability | Action::CloseCapability => {
-            let envelope_end = CAPABILITY_PREFIX_BYTES_V1;
-            let envelope_bytes = instruction_data
-                .get(REQUEST_BYTES..envelope_end)
-                .ok_or(CoreSbfError::Instruction)?;
-            let role_request = instruction_data
-                .get(envelope_end..)
-                .ok_or(CoreSbfError::Instruction)?;
-            let selection_bytes = role_request
-                .get(..CAPABILITY_EXECUTION_SELECTION_BYTES_V1)
-                .ok_or(CoreSbfError::Instruction)?;
-            let header_end = CAPABILITY_ROLE_PREFIX_BYTES_V2;
-            let header_bytes = role_request
-                .get(CAPABILITY_EXECUTION_SELECTION_BYTES_V1..header_end)
-                .ok_or(CoreSbfError::Instruction)?;
-            let family_request = role_request
-                .get(header_end..)
-                .ok_or(CoreSbfError::Instruction)?;
-            if family_request.is_empty() {
-                return Err(CoreSbfError::Instruction.into());
+            Action::BeginRetiring if instruction_data.len() == REQUEST_BYTES => {
+                begin_retiring::process(program_id, accounts, request)
             }
-            let envelope = CoreEffectEnvelopeV1::decode(envelope_bytes)
-                .map_err(|_| CoreSbfError::Instruction)?;
-            let selection = CapabilityExecutionSelectionV1::decode(selection_bytes)
-                .map_err(|_| CoreSbfError::Instruction)?;
-            let funding_header = CapabilityFundingHeaderV2::decode(header_bytes)
-                .map_err(|_| CoreSbfError::Instruction)?;
-            capability::process(
-                program_id,
-                accounts,
-                request,
-                envelope,
-                envelope_bytes,
-                role_request,
-                selection,
-                funding_header,
-            )
-        }
-        Action::VerifyReadiness | Action::AdmitTerminal | Action::Retire
-            if instruction_data.len() == resolution::RESOLUTION_CORE_INSTRUCTION_BYTES_V1 =>
-        {
-            let envelope_end = CAPABILITY_PREFIX_BYTES_V1;
-            let envelope_bytes = instruction_data
-                .get(REQUEST_BYTES..envelope_end)
-                .ok_or(CoreSbfError::Instruction)?;
-            let role_request = instruction_data
-                .get(envelope_end..)
-                .ok_or(CoreSbfError::Instruction)?;
-            let envelope = CoreEffectEnvelopeV1::decode(envelope_bytes)
-                .map_err(|_| CoreSbfError::Instruction)?;
-            resolution::process(
-                program_id,
-                accounts,
-                request,
-                envelope,
-                envelope_bytes,
-                role_request,
-            )
-        }
-        _ => Err(CoreSbfError::Instruction.into()),
+            Action::ExecuteProvider
+                if instruction_data.len()
+                    > execute_provider_v3::EXECUTE_PROVIDER_PREFIX_BYTES_V3 =>
+            {
+                let provider_data = instruction_data
+                    .get(REQUEST_BYTES..)
+                    .ok_or(CoreSbfError::Instruction)?;
+                execute_provider_v3::process(
+                    program_id,
+                    accounts,
+                    request,
+                    request_bytes,
+                    provider_data,
+                )
+            }
+            Action::OpenMarket
+                if instruction_data.len() == open_market::OPEN_MARKET_INSTRUCTION_BYTES_V1 =>
+            {
+                let custody_bytes = instruction_data
+                    .get(REQUEST_BYTES..)
+                    .ok_or(CoreSbfError::Instruction)?;
+                open_market::process(program_id, accounts, request, request_bytes, custody_bytes)
+            }
+            Action::Retire
+                if instruction_data.len() == retire_v1::RETIREMENT_INSTRUCTION_BYTES_V1 =>
+            {
+                let bundle_start = REQUEST_BYTES;
+                let claims_start = bundle_start + RETIREMENT_BUNDLE_BYTES_V1;
+                let close_vault_start = claims_start + CLAIMS_MARKET_CLOSURE_REQUEST_BYTES_V1;
+                let close_replay_start = close_vault_start + CUSTODY_REQUEST_BYTES_V1;
+                let bundle_bytes = instruction_data
+                    .get(bundle_start..claims_start)
+                    .ok_or(CoreSbfError::Instruction)?;
+                let claims_request_bytes = instruction_data
+                    .get(claims_start..close_vault_start)
+                    .ok_or(CoreSbfError::Instruction)?;
+                let close_vault_request_bytes = instruction_data
+                    .get(close_vault_start..close_replay_start)
+                    .ok_or(CoreSbfError::Instruction)?;
+                let close_replay_request_bytes = instruction_data
+                    .get(close_replay_start..)
+                    .ok_or(CoreSbfError::Instruction)?;
+                retire_v1::process(
+                    program_id,
+                    accounts,
+                    request,
+                    request_bytes,
+                    bundle_bytes,
+                    claims_request_bytes,
+                    close_vault_request_bytes,
+                    close_replay_request_bytes,
+                )
+            }
+            Action::Retire
+                if instruction_data.len()
+                    == retire_v1::RETIREMENT_CHECKPOINT_PREPARE_INSTRUCTION_BYTES_V1 =>
+            {
+                let bundle_start = REQUEST_BYTES;
+                let claims_start = bundle_start + RETIREMENT_BUNDLE_BYTES_V1;
+                let bundle_bytes = instruction_data
+                    .get(bundle_start..claims_start)
+                    .ok_or(CoreSbfError::Instruction)?;
+                let claims_request_bytes = instruction_data
+                    .get(claims_start..)
+                    .ok_or(CoreSbfError::Instruction)?;
+                if claims_request_bytes.get(
+                    ..dclutch_claims_svm::retirement_checkpoint_handoff_v1::CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_REQUEST_MAGIC_V1.len(),
+                ) != Some(
+                    dclutch_claims_svm::retirement_checkpoint_handoff_v1::CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_REQUEST_MAGIC_V1.as_slice(),
+                ) {
+                    return Err(CoreSbfError::Instruction.into());
+                }
+                retire_v1::process_checkpoint_prepare(
+                    program_id,
+                    accounts,
+                    request,
+                    request_bytes,
+                    bundle_bytes,
+                    claims_request_bytes,
+                )
+            }
+            Action::ActivateCapability | Action::CloseCapability => {
+                let envelope_end = CAPABILITY_PREFIX_BYTES_V1;
+                let envelope_bytes = instruction_data
+                    .get(REQUEST_BYTES..envelope_end)
+                    .ok_or(CoreSbfError::Instruction)?;
+                let role_request = instruction_data
+                    .get(envelope_end..)
+                    .ok_or(CoreSbfError::Instruction)?;
+                let selection_bytes = role_request
+                    .get(..CAPABILITY_EXECUTION_SELECTION_BYTES_V1)
+                    .ok_or(CoreSbfError::Instruction)?;
+                let header_end = CAPABILITY_ROLE_PREFIX_BYTES_V2;
+                let header_bytes = role_request
+                    .get(CAPABILITY_EXECUTION_SELECTION_BYTES_V1..header_end)
+                    .ok_or(CoreSbfError::Instruction)?;
+                let family_request = role_request
+                    .get(header_end..)
+                    .ok_or(CoreSbfError::Instruction)?;
+                if family_request.is_empty() {
+                    return Err(CoreSbfError::Instruction.into());
+                }
+                let envelope = CoreEffectEnvelopeV1::decode(envelope_bytes)
+                    .map_err(|_| CoreSbfError::Instruction)?;
+                let selection = CapabilityExecutionSelectionV1::decode(selection_bytes)
+                    .map_err(|_| CoreSbfError::Instruction)?;
+                let funding_header = CapabilityFundingHeaderV2::decode(header_bytes)
+                    .map_err(|_| CoreSbfError::Instruction)?;
+                capability::process(
+                    program_id,
+                    accounts,
+                    request,
+                    envelope,
+                    envelope_bytes,
+                    role_request,
+                    selection,
+                    funding_header,
+                )
+            }
+            Action::VerifyReadiness | Action::AdmitTerminal | Action::Retire
+                if instruction_data.len() == resolution::RESOLUTION_CORE_INSTRUCTION_BYTES_V1 =>
+            {
+                let envelope_end = CAPABILITY_PREFIX_BYTES_V1;
+                let envelope_bytes = instruction_data
+                    .get(REQUEST_BYTES..envelope_end)
+                    .ok_or(CoreSbfError::Instruction)?;
+                let role_request = instruction_data
+                    .get(envelope_end..)
+                    .ok_or(CoreSbfError::Instruction)?;
+                let envelope = CoreEffectEnvelopeV1::decode(envelope_bytes)
+                    .map_err(|_| CoreSbfError::Instruction)?;
+                resolution::process(
+                    program_id,
+                    accounts,
+                    request,
+                    envelope,
+                    envelope_bytes,
+                    role_request,
+                )
+            }
+            _ => Err(CoreSbfError::Instruction.into()),
+        };
     }
+    Err(CoreSbfError::Instruction.into())
 }
 
 #[cfg(test)]

@@ -4513,9 +4513,27 @@ pub(crate) fn publish_routing_table(
     transactions: &mut Vec<TransactionEvidence>,
 ) -> Result<(Observation, Vec<ObservedAccount>)> {
     let addresses = canonical_routing_addresses_v1(payer.pubkey(), instructions)?;
+    publish_routing_table_over_v1(rpc, payer, label, &addresses, transactions)
+}
+
+/// Publish one frozen routing table over an address set the CALLER states.
+///
+/// [`publish_routing_table`] derives its set from a probe compile of the
+/// instructions, which is right for every founding and activation here. It is
+/// not right for a General Hot frame: `compile_general_hot_v0` requires the
+/// table to equal `canonical_general_lookup_addresses_v3` exactly, and only the
+/// General operator can compute that. So the set becomes an argument and the
+/// create/extend/freeze/readback discipline stays one function.
+pub(crate) fn publish_routing_table_over_v1(
+    rpc: &mut Rpc,
+    payer: &Keypair,
+    label: &str,
+    addresses: &[Pubkey],
+    transactions: &mut Vec<TransactionEvidence>,
+) -> Result<(Observation, Vec<ObservedAccount>)> {
     let recent_slot = rpc.finalized_slot()?;
     let plan =
-        build_lookup_table_creation_v1(payer.pubkey(), payer.pubkey(), recent_slot, &addresses)
+        build_lookup_table_creation_v1(payer.pubkey(), payer.pubkey(), recent_slot, addresses)
             .map_err(|error| Error::new(format!("{label} frozen routing plan: {error:?}")))?;
     transactions.push(rpc.send(
         &format!("create {label} frozen routing address lookup table"),

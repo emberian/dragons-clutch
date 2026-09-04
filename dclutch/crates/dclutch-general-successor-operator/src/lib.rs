@@ -29,7 +29,8 @@ use dclutch_operator::general_hot_v3::{
     CheckedGeneralHotReleaseV3, GENERAL_HOT_HEAP_FRAME_BYTES_V3, GeneralHotArtifactDigestsV3,
     GeneralHotStateV3, GeneralObservedAccountMetaV3, GeneralSuccessorInstructionV5,
     GeneralSuccessorTransactionPlanV0, build_general_successor_instruction_v5,
-    compile_general_successor_v0, general_artifact_bytes_from_hot_state_v3,
+    canonical_general_lookup_addresses_v3, compile_general_successor_v0,
+    general_artifact_bytes_from_hot_state_v3,
 };
 use dclutch_versioned_message_operator::{Finality, ObservedAccount};
 use serde::{
@@ -423,7 +424,7 @@ pub fn parse_route_v1(bytes: &[u8]) -> Result<GeneralSuccessorRouteV1> {
     if wire.format != ROUTE_FORMAT_V1 {
         return Err(Error::new("General route format is not exact V1"));
     }
-    let fixed_accounts = parse_metas_v1(wire.fixed_accounts, "fixedAccounts")?;
+    let fixed_accounts = parse_metas_v1(wire.fixed_accounts, "fixedAccounts", false)?;
     if fixed_accounts.len()
         != dclutch_capability_program_contract::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3
     {
@@ -431,9 +432,19 @@ pub fn parse_route_v1(bytes: &[u8]) -> Result<GeneralSuccessorRouteV1> {
             "General route must carry exactly the canonical Hot fixed frame",
         ));
     }
-    let strategy_accounts = parse_metas_v1(wire.strategy_accounts, "strategyAccounts")?;
+    let strategy_accounts = parse_metas_v1(wire.strategy_accounts, "strategyAccounts", false)?;
+    // THE RUNTIME SUFFIX IS THE ONE PLACE THE SYSTEM PROGRAM CAN APPEAR.
+    //
+    // Every General AccountProfile declares a System-program runtime
+    // coordinate, and on Solana the System program IS the all-zero key -- so
+    // the blanket "nonzero" refusal below made this grammar unable to state any
+    // General action at all. Nothing found it for as long as nothing produced a
+    // route: the parser, the projection and the refusal were all written and
+    // only the failure path was ever exercised. The guard that matters for an
+    // ACCOUNT is the canonical base58 round trip; nonzero is a guard for
+    // content IDENTITIES, where the zero value is reserved and means nothing.
     let runtime_suffix_accounts =
-        parse_metas_v1(wire.runtime_suffix_accounts, "runtimeSuffixAccounts")?;
+        parse_metas_v1(wire.runtime_suffix_accounts, "runtimeSuffixAccounts", true)?;
     let minimum_finalized_slot =
         decimal_u64_v1(&wire.minimum_finalized_slot, "minimumFinalizedSlot", false)?;
     let generation = decimal_u64_v1(&wire.generation, "generation", false)?;
@@ -510,13 +521,22 @@ pub fn parse_route_v1(bytes: &[u8]) -> Result<GeneralSuccessorRouteV1> {
     Ok(route)
 }
 
-fn parse_metas_v1(values: Vec<RouteMetaWireV1>, field: &str) -> Result<Vec<RouteMetaV1>> {
+fn parse_metas_v1(
+    values: Vec<RouteMetaWireV1>,
+    field: &str,
+    admits_system_program: bool,
+) -> Result<Vec<RouteMetaV1>> {
     values
         .into_iter()
         .enumerate()
         .map(|(index, value)| {
+            let field = format!("{field}[{index}].address");
             Ok(RouteMetaV1 {
-                address: address_v1(&value.address, &format!("{field}[{index}].address"))?,
+                address: if admits_system_program {
+                    account_address_v1(&value.address, &field)?
+                } else {
+                    address_v1(&value.address, &field)?
+                },
                 is_signer: value.is_signer,
                 is_writable: value.is_writable,
             })
@@ -597,6 +617,24 @@ fn address_v1(value: &str, field: &str) -> Result<Pubkey> {
     if parsed == Pubkey::default() || parsed.to_string() != value {
         return Err(Error::new(format!(
             "{field} is not a nonzero canonical public key"
+        )));
+    }
+    Ok(parsed)
+}
+
+/// Accept one canonical account address, INCLUDING the System program.
+///
+/// [`address_v1`] additionally refuses the all-zero key, which is right for the
+/// payer, the lookup table and the Trading program -- a zero there is a field
+/// nobody filled in -- and wrong for a runtime coordinate whose published
+/// AccountProfile requires the System program to be exactly there.
+fn account_address_v1(value: &str, field: &str) -> Result<Pubkey> {
+    let parsed = value
+        .parse::<Pubkey>()
+        .map_err(|error| Error::new(format!("{field}: {error}")))?;
+    if parsed.to_string() != value {
+        return Err(Error::new(format!(
+            "{field} is not a canonical public key"
         )));
     }
     Ok(parsed)
@@ -723,6 +761,48 @@ pub fn acquire_route_v1(
         },
         lookup_table,
     ))
+}
+
+/// The exact address set this route's compiled instruction requires of its
+/// lookup table.
+///
+/// `compile_general_hot_v0` accepts one table and requires
+/// `table.addresses == canonical_general_lookup_addresses_v3(instruction, payer)`
+/// -- byte-for-byte slice equality, not a superset and not a permutation. So a
+/// caller who does not already hold such a table has no way to build one from
+/// the route document alone: the set is a function of the COMPILED
+/// instruction, which needs the snapshot, the artifacts and the derived
+/// request. This returns it, doing everything `produce_plan_v5` does except the
+/// compilation that would refuse.
+///
+/// It exists because nothing in this tree creates a table over a General Hot
+/// frame. `publish_routing_table` creates them for foundings, activations and
+/// Direct fills, and the General family's only table is `GENERAL-ACT`, whose
+/// set is the ACTIVATION instruction's. Measured on devnet, 2026-09-04: the
+/// first route ever produced reached `General v0 compilation: LookupTable` and
+/// stopped there.
+pub fn canonical_lookup_addresses_v1(
+    route: &GeneralSuccessorRouteV1,
+    observed: Vec<ObservedAccount>,
+) -> Result<Vec<Pubkey>> {
+    let (state, _) = acquire_route_v1(route, observed)?;
+    let artifacts = general_artifact_bytes_from_hot_state_v3(&state)
+        .map_err(|error| Error::new(format!("General artifact carriers: {error:?}")))?;
+    let successor = build_general_successor_instruction_v5(
+        &state,
+        route.artifact_selection,
+        artifacts,
+        route.action,
+    )
+    .map_err(|error| Error::new(format!("General successor construction: {error:?}")))?;
+    canonical_general_lookup_addresses_v3(&successor.hot.instruction, route.payer)
+        .map_err(|error| Error::new(format!("General lookup addresses: {error:?}")))
+}
+
+/// The payer this route names, which the address set above is relative to.
+#[must_use]
+pub fn route_payer_v1(route: &GeneralSuccessorRouteV1) -> Pubkey {
+    route.payer
 }
 
 /// Build one complete unsigned plan from an exact route, one finalized atomic
@@ -1092,6 +1172,54 @@ mod tests {
             "strategyAccounts": strategy,
             "runtimeSuffixAccounts": []
         })
+    }
+
+    /// THE SYSTEM PROGRAM IS THE ALL-ZERO KEY, AND EVERY GENERAL ACTION
+    /// DECLARES IT AS A RUNTIME COORDINATE.
+    ///
+    /// This grammar refused it everywhere until a producer existed to try, so
+    /// no General route could be stated at all -- the parser, the projection
+    /// and the refusal were all written and only the failure path was ever
+    /// exercised. The runtime suffix admits it; the fixed frame and the
+    /// strategy accounts, where no profile ever puts it, still do not.
+    #[test]
+    fn the_runtime_suffix_may_name_the_system_program_and_nothing_else_may() {
+        // `Pubkey::default()` IS `11111111111111111111111111111111`, the System
+        // program. That identity is the whole finding.
+        let mut route = route_value();
+        route["runtimeSuffixAccounts"] = json!([
+            {"address": key(50), "isSigner": false, "isWritable": true},
+            {"address": key(51), "isSigner": true, "isWritable": true},
+            {"address": key(52), "isSigner": false, "isWritable": true},
+            {
+                "address": Pubkey::default().to_string(),
+                "isSigner": false,
+                "isWritable": false
+            },
+        ]);
+        let parsed = parse_route_v1(&serde_json::to_vec(&route).expect("route JSON"))
+            .expect("the System program is a runtime coordinate");
+        assert_eq!(
+            parsed.runtime_suffix_accounts[3].address,
+            Pubkey::default()
+        );
+
+        let mut fixed_zero = route.clone();
+        fixed_zero["fixedAccounts"][7]["address"] =
+            json!(Pubkey::default().to_string());
+        let error = parse_route_v1(&serde_json::to_vec(&fixed_zero).expect("JSON"))
+            .expect_err("no fixed coordinate is the System program");
+        assert!(
+            error.to_string().contains("nonzero canonical public key"),
+            "{error}"
+        );
+
+        let mut payer_zero = route;
+        payer_zero["payer"] = json!(Pubkey::default().to_string());
+        assert!(
+            parse_route_v1(&serde_json::to_vec(&payer_zero).expect("JSON")).is_err(),
+            "a zero payer is a field nobody filled in"
+        );
     }
 
     #[test]

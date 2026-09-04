@@ -4345,3 +4345,11 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   direct.inline reads `needs-chain` there until it holds the root's coordinate. The capability surface regenerated at HEAD by
   the orchestrator.
 - Cuts: `6c14f8244`, `c0ca57b52`.
+- WEB-RATIONAL closed (`2e3ec462b`): the four Rational hand-mirrors are generated twins with verifies (one from Lean, three
+  scraped from hand-written Rust with the authority marked); **a client defect found under one: `rationalRetireReceiptV4.ts`
+  built the compact retirement frame with FOUR vacancy accounts for a program reading FIVE since e78fa027d (2026-08-29) —
+  every gate on that change was Rust-side**; fixed with the emitted count as authority, which exposed a 65-lock bound above
+  devnet's 64 at three coordinates (now an assertion). Hand-mirror census web 27 → 26, SDK 37 → 33; no devnet Rational
+  instance exists (fixture cases). Owed: no cross-boundary fixture for the lifecycle child (a Rust-emitted example would make
+  the digest pin an authority); `sync-from-web` vs `twinIdentity` disagree on three files; the graph layout owes a Lean schema.
+- Cuts: `d144bf55d`.

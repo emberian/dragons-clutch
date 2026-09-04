@@ -207,6 +207,36 @@ def width (field : Field) : Nat := (coordinate field).2
 
 end Field
 
+/-! ## The two words all four records in the file share
+
+`scenario_custody_reservation_v1.rs` holds the custody effect, the effect
+manifest, the reservation batch and this state, and `require_header` and
+`put_header` read ONE shape for all four: an eight-byte magic at zero, then the
+family's `u16` version word.  Both coordinates were file-private literals, and
+`5f8a09971` pinned them with a `const _: () = assert!` because no Lean module
+owned them.  These do.
+
+What is deliberately NOT emitted here is the three byte slots behind that
+header.  They are at 10, 11 and 12 in all four records and they are NOT one
+fact: this state reads them as a status, an ordinal and an effect count; the
+custody effect reads byte 10 as a request KIND; the effect manifest reads byte
+10 as an effect COUNT; the batch reads 10 as a status and 12 as a reserved
+count with a rollback count behind it.  A shared emitted name would assert a
+shared meaning that does not exist, which is a worse failure than the literals
+were.  Their assert stays and says so.
+-/
+
+/-- Where the eight-byte magic sits in every record of this family. -/
+def familyMagicOffset : Nat := Field.offset .magic
+/-- The magic's width, which is the `..8` slice `require_header` reads. -/
+def familyMagicBytes : Nat := Field.width .magic
+/-- Where the family's `u16` version word sits in every record. -/
+def familyVersionOffset : Nat := Field.offset .schemaVersion
+/-- That word's width, which `require_header` adds to its own offset. -/
+def familyVersionBytes : Nat := Field.width .schemaVersion
+/-- Total width of the shared header: the magic plus the version word. -/
+def familyHeaderBytes : Nat := familyVersionOffset + familyVersionBytes
+
 /-- Physical predicate a schema-level statement can be made about. -/
 def isReserved : FieldKind → Bool
   | .reserved _ => true
@@ -306,6 +336,19 @@ amount, which is the canonicity rule `validate` enforces against
 `escrow_after`. -/
 theorem active_is_the_only_status_the_escrow_holds_in :
     Status.all.filter Status.escrowHolds = [.active] := by
+  native_decide
+
+/-- **The header the other three records repeat.**  Magic at zero for eight
+bytes, the version word immediately behind it, ten bytes before any record's
+own content -- which is exactly what `require_header` and `put_header` enforce
+for all four.  The three byte slots at 10, 11 and 12 follow it and are each
+record's own; this states where they START, not what they mean. -/
+theorem the_family_header_is_the_magic_and_the_version_word :
+    familyMagicOffset = 0 ∧ familyMagicBytes = 8 ∧
+      familyVersionOffset = 8 ∧ familyVersionBytes = 2 ∧
+      familyHeaderBytes = 10 ∧
+      familyVersionOffset = familyMagicOffset + familyMagicBytes ∧
+      Field.offset .status = familyHeaderBytes := by
   native_decide
 
 theorem magic_is_eight_bytes : magic.length = 8 := by native_decide

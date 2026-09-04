@@ -174,7 +174,6 @@ const _: () = assert!(
     "the activation receipt domain must be a usable PDA seed"
 );
 
-const VERSION_OFFSET: usize = 8;
 const TAG_OFFSET: usize = 10;
 const ORDINAL_OFFSET: usize = 11;
 const COUNT_OFFSET: usize = 12;
@@ -217,6 +216,13 @@ const BATCH_STATES_OFFSET: usize = 352;
 const BATCH_RECEIPTS_OFFSET: usize = 480;
 const BATCH_LAST_PRESTATE_OFFSET: usize = 608;
 
+use crate::generated_scenario_reservation_state_v1::{
+    DEALER_SCENARIO_CUSTODY_HEADER_MAGIC_BYTES_V1, DEALER_SCENARIO_CUSTODY_HEADER_MAGIC_OFFSET_V1,
+    DEALER_SCENARIO_CUSTODY_HEADER_VERSION_BYTES_V1,
+    DEALER_SCENARIO_CUSTODY_HEADER_VERSION_OFFSET_V1,
+    DEALER_SCENARIO_RESERVATION_STATUS_ACTIVATED_V1, DEALER_SCENARIO_RESERVATION_STATUS_ACTIVE_V1,
+    DEALER_SCENARIO_RESERVATION_STATUS_ROLLED_BACK_V1,
+};
 /// Every coordinate of the reservation STATE, under the short local names
 /// its encoder and hostile decoder have always used.
 ///
@@ -255,29 +261,35 @@ use crate::generated_scenario_reservation_state_v1::{
     DEALER_SCENARIO_RESERVATION_STATE_STATUS_OFFSET_V1 as STATE_STATUS_OFFSET,
     DEALER_SCENARIO_RESERVATION_STATE_TOKEN_PROGRAM_OFFSET_V1 as STATE_TOKEN_PROGRAM_OFFSET,
 };
-use crate::generated_scenario_reservation_state_v1::{
-    DEALER_SCENARIO_RESERVATION_STATE_VERSION_OFFSET_V1,
-    DEALER_SCENARIO_RESERVATION_STATUS_ACTIVATED_V1, DEALER_SCENARIO_RESERVATION_STATUS_ACTIVE_V1,
-    DEALER_SCENARIO_RESERVATION_STATUS_ROLLED_BACK_V1,
-};
 
-/// The family header three other records in this file still author.
+/// The three byte slots behind the shared header, and why an assert is the
+/// right terminal for them and was not for `VERSION_OFFSET`.
 ///
-/// `VERSION_OFFSET`, `TAG_OFFSET`, `ORDINAL_OFFSET` and `COUNT_OFFSET` are
-/// read by the custody effect, the effect manifest and the reservation
-/// batch as well as by this state, and `require_header`/`put_header` read
-/// the version through the first of them for all four. None of those three
-/// records has a Lean module yet, so the shared block stays where they need
-/// it and this pins it to the one record that does: if Lean ever moves a
-/// coordinate of the reservation state, the shared header stops describing
-/// it and a compiler says which. That is named debt, and the next lane to
-/// own one of the other three can take the block apart.
+/// `VERSION_OFFSET` is gone: the magic and the version word ARE one fact
+/// across all four records -- `require_header` and `put_header` enforce
+/// exactly that shape for every one of them -- so they are emitted as
+/// `DEALER_SCENARIO_CUSTODY_HEADER_*_V1` and read by name. This record's own
+/// `DEALER_SCENARIO_RESERVATION_STATE_VERSION_OFFSET_V1` is no longer read
+/// here for the same reason: the shared helper reads the FAMILY's coordinate,
+/// and Lean's `the_family_header_is_the_magic_and_the_version_word` is what
+/// says the two are the same placement.
+///
+/// `TAG_OFFSET`, `ORDINAL_OFFSET` and `COUNT_OFFSET` are NOT one fact, and
+/// emitting them under a shared name would assert a shared meaning that does
+/// not exist. At byte 10 this state reads a STATUS, the custody effect reads
+/// a request KIND, the effect manifest reads an effect COUNT and the batch
+/// reads a status; at byte 12 this state reads an effect count and the batch
+/// reads a reserved count with a rollback count behind it. What the four
+/// records genuinely share is the PLACEMENT -- three single-byte slots
+/// immediately behind the ten-byte header -- and only this record's slots have
+/// a Lean owner. So the assert stays, narrowed to the three, and it is the
+/// right terminal until the other three records have modules of their own:
+/// it is a cross-record claim, and neither file is the other's author.
 const _: () = assert!(
-    VERSION_OFFSET == DEALER_SCENARIO_RESERVATION_STATE_VERSION_OFFSET_V1
-        && TAG_OFFSET == STATE_STATUS_OFFSET
+    TAG_OFFSET == STATE_STATUS_OFFSET
         && ORDINAL_OFFSET == STATE_ORDINAL_OFFSET
         && COUNT_OFFSET == STATE_EFFECT_COUNT_OFFSET,
-    "the shared scenario-custody header stopped describing the reservation state"
+    "the shared scenario-custody tag slots stopped describing the reservation state"
 );
 
 const ACTIVATION_PRODUCER_OFFSET: usize = 16;
@@ -1166,26 +1178,32 @@ fn require_header(bytes: &[u8], width: usize, magic: &[u8; 8]) -> Result<()> {
     if bytes.len() != width {
         return Err(Error::InvalidLength);
     }
-    if bytes.get(..8) != Some(magic.as_slice()) {
+    if bytes.get(
+        DEALER_SCENARIO_CUSTODY_HEADER_MAGIC_OFFSET_V1
+            ..DEALER_SCENARIO_CUSTODY_HEADER_MAGIC_BYTES_V1,
+    ) != Some(magic.as_slice())
+    {
         return Err(Error::InvalidMagic);
     }
-    if bytes.get(VERSION_OFFSET..VERSION_OFFSET + 2)
-        != Some(
-            DEALER_SCENARIO_CUSTODY_STATE_VERSION_V1
-                .to_le_bytes()
-                .as_slice(),
-        )
-    {
+    if bytes.get(
+        DEALER_SCENARIO_CUSTODY_HEADER_VERSION_OFFSET_V1
+            ..DEALER_SCENARIO_CUSTODY_HEADER_VERSION_OFFSET_V1
+                + DEALER_SCENARIO_CUSTODY_HEADER_VERSION_BYTES_V1,
+    ) != Some(
+        DEALER_SCENARIO_CUSTODY_STATE_VERSION_V1
+            .to_le_bytes()
+            .as_slice(),
+    ) {
         return Err(Error::UnsupportedVersion);
     }
     Ok(())
 }
 
 fn put_header(bytes: &mut [u8], magic: &[u8; 8]) -> Result<()> {
-    put(bytes, 0, magic)?;
+    put(bytes, DEALER_SCENARIO_CUSTODY_HEADER_MAGIC_OFFSET_V1, magic)?;
     put(
         bytes,
-        VERSION_OFFSET,
+        DEALER_SCENARIO_CUSTODY_HEADER_VERSION_OFFSET_V1,
         &DEALER_SCENARIO_CUSTODY_STATE_VERSION_V1.to_le_bytes(),
     )
 }

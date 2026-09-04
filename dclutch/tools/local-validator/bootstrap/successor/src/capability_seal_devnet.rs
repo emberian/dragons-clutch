@@ -33,7 +33,7 @@
 use std::path::{Path, PathBuf};
 
 use dclutch_capability_program_contract::hot_v3::{
-    HOT_CAPABILITY_SEAL_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
+    DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_CAPABILITY_SEAL_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
 };
 use dclutch_operator::capability_seal_v1::{
     CapabilitySealInstructionInputV1, capability_seal_instruction_v1,
@@ -67,13 +67,16 @@ pub(crate) fn usage() -> String {
         "dclutch-local-successor-bootstrap {COMMAND_DEVNET_V1} \
          --rpc-url URL {DEVNET_ACKNOWLEDGMENT_FLAG} GENESIS_HASH \
          --frame-report ABSOLUTE_JSON --payer PUBKEY --evidence ABSOLUTE_NEW_JSON \
-         [--payer-keypair ABSOLUTE_JSON --execute]\n     \
+         [--payer-keypair ABSOLUTE_JSON --routing-table ADDRESS --execute]\n     \
          Composes the permissionless validated-artifact seal for the family, \
          descriptor and action one devnet-general-session frame report states, \
          through the same builder that derives the seal address and refuses a \
          frame naming a different one. Without --execute this opens no key and \
          sends nothing. With it, the seal account is read back off the chain \
-         before this command reports success."
+         before this command reports success. The seal frame is 41 accounts and \
+         never fits a legacy packet, so --execute publishes one frozen routing \
+         table unless --routing-table names a table already holding this \
+         frame's exact address set."
     )
 }
 
@@ -83,6 +86,12 @@ struct ArgumentsV1 {
     frame_report: PathBuf,
     payer: Pubkey,
     payer_keypair: Option<PathBuf>,
+    /// A frozen routing table already holding this frame's exact address set.
+    ///
+    /// Absent, `--execute` publishes one. Present, the table is reused, which
+    /// is what a second seal of the same market, descriptor and action should
+    /// do rather than pay a second rent-exempt minimum for the same list.
+    routing_table: Option<Pubkey>,
     evidence: PathBuf,
     execute: bool,
 }
@@ -93,6 +102,7 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
     let mut frame_report = None;
     let mut payer = None;
     let mut payer_keypair = None;
+    let mut routing_table = None;
     let mut evidence = None;
     let mut execute = false;
     let mut iterator = arguments.into_iter();
@@ -113,6 +123,7 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
             "--frame-report" => &mut frame_report,
             "--payer" => &mut payer,
             "--payer-keypair" => &mut payer_keypair,
+            "--routing-table" => &mut routing_table,
             "--evidence" => &mut evidence,
             other => return Err(refusal("input/unknown-flag", other)),
         };
@@ -135,6 +146,7 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
         frame_report: PathBuf::from(required(frame_report, "--frame-report")?),
         payer: pubkey(&required(payer, "--payer")?)?,
         payer_keypair: payer_keypair.map(PathBuf::from),
+        routing_table: routing_table.as_deref().map(pubkey).transpose()?,
         evidence: PathBuf::from(required(evidence, "--evidence")?),
         execute,
     })
@@ -361,10 +373,56 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
             ),
         ));
     }
-    let sent = rpc.send(
+    // THE SEAL FRAME IS 41 ACCOUNTS AND NEVER FITS A LEGACY PACKET.
+    //
+    // Measured on devnet, 2026-09-04: `legacy transaction is 1566 bytes, above
+    // the 1,232-byte packet ceiling`. That is not this market being unusual --
+    // every family's seal reads the whole common Hot fixed frame plus a payer,
+    // by construction, so this route has never been reachable without v0
+    // routing and the builder alone could never have made it so.
+    let mut table_transactions = Vec::new();
+    let (observation, tables) = match arguments.routing_table {
+        Some(address) => {
+            let finalized = rpc.finalized_slot()?;
+            let (observation, tables) = rpc.finalized_observed_accounts(&[address], finalized)?;
+            println!("routing table        {address} (supplied)");
+            (observation, tables)
+        }
+        None => {
+            let published = crate::market::publish_routing_table(
+                &mut rpc,
+                &payer,
+                "GENERAL-SEAL",
+                std::slice::from_ref(&composed.instruction),
+                &mut table_transactions,
+            )?;
+            println!(
+                "routing table        {} (published in {} transactions)",
+                published
+                    .1
+                    .first()
+                    .map_or_else(|| "unnamed".to_owned(), |table| table.key.to_string()),
+                table_transactions.len()
+            );
+            published
+        }
+    };
+    // AND IT DECLARES ITS OWN HEAP, BECAUSE THE ADAPTER ONLY ADMITS ONE.
+    //
+    // `declares_extended_heap_profile_v1` lists `DCLTSEL1` so a grant is
+    // ADMISSIBLE on this route; it is never automatic.
+    // `process_capability_seal_v1` authenticates its Market and root through
+    // the same prologue a hot action uses, whose first act is
+    // `require_declared_heap_ceiling_above_default_v1`. The constant is spelled
+    // `DIRECT_HOT_HEAP_FRAME_BYTES_V1` for historical reasons and is already
+    // the family-neutral Hot grant -- `general_hot_v3` takes it too.
+    let sent = rpc.send_v0_on_heap(
         "general capability seal",
         std::slice::from_ref(&composed.instruction),
         &payer,
+        observation,
+        &tables,
+        DIRECT_HOT_HEAP_FRAME_BYTES_V1,
     )?;
     if let Some(error) = sent.error.as_ref() {
         return Err(refusal(
@@ -412,6 +470,18 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
         after.data.len(),
         after.owner,
         after.lamports
+    );
+    evidence["routingTable"] = json!(tables.first().map(|table| table.key.to_string()));
+    evidence["routingTablePublished"] = json!(arguments.routing_table.is_none());
+    evidence["routingTableTransactions"] = json!(
+        table_transactions
+            .iter()
+            .map(|value| json!({
+                "label": value.label,
+                "signature": value.signature,
+                "slot": value.slot,
+            }))
+            .collect::<Vec<_>>()
     );
     evidence["signature"] = json!(sent.signature);
     evidence["slot"] = json!(sent.slot);

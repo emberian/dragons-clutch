@@ -55,6 +55,15 @@ const SDK_OWNED_REEXPORTS = new Set([
   'lib/marketDiscovery.ts',
   'lib/marketResolution.ts',
   'lib/rationalTerminalChainV4.ts',
+  // The four Rational shims. `lib/twinIdentity.test.ts` has listed all of them
+  // as REEXPORT since the flip, and this file listed none: a `--copy` here
+  // would have overwritten 974 lines of compact-retirement semantics with the
+  // two-line shim that re-exports them. The two maps are meant to say the same
+  // thing about the same files and did not.
+  'lib/rationalOpenChainV4.ts',
+  'lib/rationalOpenHotV3.ts',
+  'lib/rationalOpenWasmV1.testSupport.ts',
+  'lib/rationalRetireReceiptV4.ts',
   'lib/directOfferAuthoring.ts',
   'lib/directMakerReplay.ts',
   // The board's transport is SDK-owned and takes its URL as an argument; the

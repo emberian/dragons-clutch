@@ -1431,3 +1431,182 @@ the tree and the next convergence picks the rows up. The number, measured, is
 **22 → 26**.
 
 The one signature still dropped is `DCLTCRQ2` to core, per C5.
+
+---
+
+# ADDENDUM D — OpenBatch's missing documents, written; and the field that stops it
+
+Devnet evidence. Not mainnet evidence. Written by the COHORT-15D lane,
+2026-09-04. Every measurement below was taken against tree root
+`/Users/ember/dev/dclutch`.
+
+## D1. The seam was three missing producers, not one
+
+Addendum C recorded OpenBatch's seam as *"one missing DOCUMENT"*: nothing wrote
+the `GeneralSuccessorRouteV1` that `general-successor-plan-v5` consumes. That was
+true and it was the first of three. Running the route through to a chain found
+the other two, and each was invisible for the same reason: a reader, a schema
+and a refusal all built, and only the failure path ever exercised.
+
+| owed | what it was | now |
+| --- | --- | --- |
+| the route | `devnet-general-session` derived the frame and emitted a report | `--emit-route` |
+| the table | `compile_general_hot_v0` requires an exact address set nothing could compute | `devnet-general-lookup-table-v1` |
+| the signer | two commands produce a plan document; nothing signed one | `devnet-general-successor-execute-v1` |
+
+## D2. The route, and why its three flags are flags
+
+`--emit-route` serializes the derivation the frame report is already made of, so
+the report and the route cannot disagree about a frame. Three coordinates the
+frame cannot observe are arguments, all-or-nothing, with a refusal that names
+the missing one:
+
+* `--lookup-table` — a caller-owned account whose address set is a function of a
+  compiled instruction, and this command compiles nothing;
+* `--rent-credit` — the frame report's own row for it reads *"nothing on chain
+  names it"*;
+* `--checked-release` — and this one is authenticated rather than transcribed.
+  `build_general_successor_instruction_v5` never re-derives the checked-manifest
+  digest, so a route could carry any nonzero 32 bytes and the producer would copy
+  them into its plan. What the chain does state is the release set the Market
+  selected, so the manifest's own `execution_release_set_id` must equal the
+  Market's `selected_release_set` before the digest is stated at all.
+
+The batch state PDA is derived, never supplied: `GeneralBatchOccurrenceTermsV1`
+over the root's own sequence, generation and Market, the config record's price
+scale and order bound, and the Product graph's outcome count and record identity,
+then `GeneralStateAddressSeedsV3::batch` for the seed order — the same two types
+the operator calls. The runtime suffix's privileges are read off the published
+AccountProfile through `physical_account_geometry_with_dynamic_spans`, which is
+the function `validate_runtime_geometry` compares them against.
+
+The route is emitted only on the DELIVERABLE path. A gate that also emits its
+subject on the refusing path is not a gate. And the producer closes its own loop
+before writing: the document is fed back through `parse_route_v1`.
+
+**The first `GeneralSuccessorRouteV1` ever written**, market
+`6aqy89GhhXFtDbawC5ors4HLkGvzdHC4R26TXTaaXRKj`:
+
+    format          dclutch/general-successor-route/v1
+    action          open-batch
+    accounts        39 fixed + 12 strategy + 4 runtime suffix, 56 to reacquire
+    batch state     6Bai5tHS5enG1BN91k3ntQFcvgtJkkFXHXswg5t42kTR  (derived, bump 254)
+    runtime suffix  6Bai5tHS…  signer=false writable=true
+                    D5qe7ZoQ…  signer=true  writable=true
+                    64mXYRdx…  signer=false writable=true
+                    1111…1111  signer=false writable=false
+
+## D3. Two walls the first production run found, and neither was findable without one
+
+**The route grammar could not state the System program.** `parse_route_v1`
+refused every account address equal to the all-zero key, and on Solana the System
+program IS the all-zero key. Every General AccountProfile declares a
+System-program runtime coordinate, so no General route of any action could be
+parsed. The producer's self-check caught it before a file existed:
+`runtimeSuffixAccounts[3].address is not a nonzero canonical public key`. The
+guard that matters for an ACCOUNT is the canonical base58 round trip; nonzero is
+a guard for content IDENTITIES, where the zero value is reserved. The runtime
+suffix admits it now; the fixed frame, the strategy accounts, the payer and the
+lookup table still do not.
+
+**A real route always carries nineteen vacant staging cursors, and the plan's
+snapshot refused the first.** `finalized_observed_accounts` treats a null
+`getMultipleAccounts` answer as a missing observation — right for its twenty
+other callers, wrong for a frame that deliberately names what a closed
+publication ladder leaves behind. Measured: `finalized observation missing
+MUKgLFXeGK8tCCRzjTZMiEXS5WSvwzZFW8XjQD7X6qz`, the manifest staging cursor, three
+accounts into a fifty-six account snapshot. `general_session::finalized_frame_v1`
+already knew this, in one function for one command; that synthesis is now
+`observed_or_vacant_v1` with one author and both callers.
+
+## D4. THE GENERAL CAPABILITY SEAL, on a real chain
+
+Fixed coordinate 38's author row has read *"PRODUCIBLE, AND THE PRODUCER EXISTS
+… Still unproduced ON THIS CHAIN"* since 2026-09-03.
+`capability_seal_instruction_v1`'s only caller tree-wide was one program-test.
+
+`devnet-capability-seal-v1` consumes the frame report rather than deriving a
+second frame, and the transcription is safe for one specific reason: the builder
+DERIVES the seal address from the four seeds and refuses `SealCoordinate` when
+the frame names a different one. It refused twice before it landed, and both
+refusals were the caller's:
+
+1. `legacy transaction is 1566 bytes, above the 1,232-byte packet ceiling`. The
+   seal frame is 41 accounts — the whole common Hot fixed frame plus a payer, by
+   construction, for every family — so this route has never been reachable
+   without v0 routing.
+2. `0x4008 TradingSbfError::HeapFrame`, 24,612 CU of the 1,399,700 it asked for
+   and none of the heap it had not. `declares_extended_heap_profile_v1` lists
+   `DCLTSEL1` so a grant is ADMISSIBLE and never automatic, and the adapter's own
+   comment names the shape: *"the right shape for a caller who forgot, rather
+   than an unnamed abort."*
+
+| | |
+| --- | --- |
+| seal | **`F8U3JsvigjFGX1Pynx1bBao2i1k7nAnJDWc7b7gwZUmr`**, bump 255 |
+| signature | `2rXCJ2ieKZuimXqn9eREfNSNwhUx5K2owZ91mTywKnrB2LQvHjMVX84ZS1pdG3Gfyqkr7eqPVeKjiLDwCc5GppQs` |
+| slot / CU | 492,886,343 / **225,141** |
+| read back | 968 bytes, owner `3gBSSjYwSC4phutpGKRkMhrnCDVzHu6kfQ3L4jLf2UmG`, 6,940,968 lamports |
+| routing table | `FEdxo6sMN4gHVSTzdiGdsttnStP9nYP1QMC5UeC9QYAQ`, 4 transactions |
+
+The builder derived that address from the four seeds; the frame report had been
+stating it at coordinate 38 since the day before. Two authors, one address,
+neither told by the other.
+
+## D5. The first General Hot routing table, and the first plan document
+
+    GENERAL-HOT   GTZD8BonxAiUFx8D3cx7pnJbFG4UpUWRT7WJhxHDP5YV
+                  53 addresses, create + 3 extends + freeze, frozen and read back
+                  slots 492,887,555 / 595 / 634 / 675 / 715
+
+`compile_general_hot_v0` requires `table.addresses ==
+canonical_general_lookup_addresses_v3(instruction, payer)` byte for byte. Nothing
+in this tree creates a table over a General Hot frame — `publish_routing_table`
+serves foundings, activations and Direct fills, and the General family's only
+table was `GENERAL-ACT`, whose set is the ACTIVATION instruction's.
+`canonical_lookup_addresses_v1` computes the set by doing everything
+`produce_plan_v5` does except the compilation that would refuse.
+
+The first `dclutch/general-successor-plan/v5` produced from a real chain:
+
+    observedSlot              492,887,872
+    outcomeCount              4
+    admittedInvocationCount   4
+    heapFrameBytes            65,536
+    requiredSigners           1  (D5qe7ZoQ…)
+    lifecycle.primary         6Bai5tHS…  coordinate 5, bump 254, isMaterialized false
+    childRoutes               0
+    familyRequestDigest       e6c1f43d5d935244567496edcacb861dc4492c3421de5404480e9d849b077332
+    rootPrestateDigest        b1809a57df13d64c9dcfe1e54758aae2887a09dabe45bfd53f561831f6338ad0
+
+## D6. THE FINDING: one field, and it is a founding input
+
+The first General OpenBatch simulation on a real chain:
+
+    units 128,724, err {"InstructionError":[1,{"Custom":16405}]}
+
+`16405` is `0x4015`, `TradingSbfError::DescriptorManifestEntry`. That code covers
+five conjuncts of `CapabilityProgramV4::validate_selection`, and
+`devnet-general-session` held every input that function takes and had never asked
+it — so a market whose descriptor does not bind its manifest entry reported
+DELIVERABLE at all 55 coordinates. It asks now, through the same function, and
+names each side rather than restating the code:
+
+| conjunct | descriptor | entry / selection | |
+| --- | --- | --- | --- |
+| entry release vs root selection | — | `7c0457ce…` = `7c0457ce…` | equal |
+| entry config vs root selection | — | `2438edf4…` = `2438edf4…` | equal |
+| capacityProfile | `99cb433a…` | `99cb433a…` | equal |
+| rootSchema | `b94537e8…` | `b94537e8…` | equal |
+| **derivationPolicy** | **`68b513717dce78482c1fd6a56e81f5f07e8d41b5c60bea7750718e55379850f6`** | **`7fe9b22d9897e44ab02cdd9f5aaf85dbca59a02c27143350b243d66535c184c1`** | **NOT EQUAL** |
+
+Cohort-15's General OpenBatch descriptor's `derivation_policy` is not its
+manifest entry's `child_derivation_id`. The ACTIVATION descriptor's was, which is
+exactly why this market activated and why this action cannot execute. It is a
+compile-time property of the founding, fixed by re-founding and by no producer —
+which is why the gate now says so before it emits a route, rather than 128,724 CU
+into a simulation.
+
+**OpenBatch N=2 on a real chain is therefore still owed, and its remaining
+blocker is a market, not a route.** Every producer between the frame and the
+chain now exists and every one of them has been exercised against devnet.

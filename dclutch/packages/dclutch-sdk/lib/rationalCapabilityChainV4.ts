@@ -1,6 +1,6 @@
 import { PublicKey } from '@solana/web3.js';
 
-import { ascii, fromHex, requireNonzero, requireZero, sha256, slice, u16, u64 } from './bytes';
+import { fromHex, requireNonzero, requireZero, sha256, slice, u16, u64 } from './bytes';
 import { decodeCoreFoundProductGraphV2 } from './coreFound';
 import {
   CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
@@ -9,6 +9,7 @@ import {
   RESULT_DOMAIN_SCHEMA_ID_V2,
 } from './generated/coreFound';
 import * as Hot from './generated/directInlineV3';
+import * as Graph from './generated/rationalRepresentationGraphV2';
 import {
   CAPABILITY_PROGRAM_V4_SCHEMA,
   RATIONAL_REPRESENTATION_DESCRIPTOR_SCHEMA_V3,
@@ -39,10 +40,6 @@ const PROGRAM_SET_SCHEMA_V2 = Uint8Array.from([
   0x37,0xdf,0x09,0xe7,0xde,0xeb,0xdd,0x0a,0xd0,0xd1,0x25,0x13,0xa7,0x8d,0xd4,0x4c,
   0x97,0x24,0x30,0x37,0x99,0xb7,0x54,0x4d,0xc9,0x1b,0x3b,0x6a,0x2e,0x6d,0x62,0x96,
 ]);
-const REPRESENTATION_GRAPH_SCHEMA_V2 = Uint8Array.from([
-  0xbe,0x69,0x36,0xbb,0xa2,0x4e,0xa0,0xd2,0xd1,0x78,0xfa,0x65,0x92,0x74,0x8e,0xa5,
-  0xf5,0xdc,0x95,0xdf,0x9a,0x72,0xbb,0xa8,0x58,0x84,0xa9,0x27,0xe2,0x89,0xd5,0x97,
-]);
 const INSTRUCTIONS_SYSVAR = 'Sysvar1nstructions1111111111111111111111111';
 
 function same(left: Uint8Array, right: Uint8Array): boolean {
@@ -70,29 +67,37 @@ export function authenticateRationalRepresentationGraphV2(
   bytes: Uint8Array,
   descriptor: ReturnType<typeof decodeRationalRepresentationDescriptorV3>,
 ): void {
-  if (bytes.length < 104 || ascii(bytes, 0, 8) !== 'DCRRGRP2' || u16(bytes, 8) !== 2) throw new Error('representation graph has the wrong exact V2 header');
-  requireZero(bytes, 10, 6, 'representation graph header');
-  const outcomes = readU32(bytes, 80); const nodes = readU32(bytes, 84); const edges = readU32(bytes, 88);
-  requireZero(bytes, 92, 4, 'representation graph header');
-  const exact = 104 + nodes * 64 + edges * 48 + nodes * outcomes * 8;
+  if (bytes.length < Graph.GRAPH_HEADER_BYTES
+      || !same(slice(bytes, Graph.GRAPH_MAGIC_OFFSET, Graph.GRAPH_MAGIC_BYTES), Graph.GRAPH_MAGIC_V2)
+      || u16(bytes, Graph.GRAPH_VERSION_OFFSET) !== Graph.GRAPH_SCHEMA_VERSION_V2) {
+    throw new Error('representation graph has the wrong exact V2 header');
+  }
+  requireZero(bytes, Graph.GRAPH_RESERVED_HEADER_OFFSET, Graph.GRAPH_RESERVED_HEADER_BYTES, 'representation graph header');
+  const outcomes = readU32(bytes, Graph.GRAPH_OUTCOME_COUNT_OFFSET);
+  const nodes = readU32(bytes, Graph.GRAPH_NODE_COUNT_OFFSET);
+  const edges = readU32(bytes, Graph.GRAPH_EDGE_COUNT_OFFSET);
+  requireZero(bytes, Graph.GRAPH_RESERVED_OFFSET, Graph.GRAPH_RESERVED_BYTES, 'representation graph header');
+  const exposureBase = Graph.GRAPH_HEADER_BYTES + nodes * Graph.GRAPH_NODE_BYTES + edges * Graph.GRAPH_EDGE_BYTES;
+  const exact = exposureBase + nodes * outcomes * Graph.SCALAR_BYTES;
   if (outcomes !== descriptor.outcomeCount || nodes === 0 || !Number.isSafeInteger(exact) || bytes.length !== exact
-      || !same(slice(bytes, 16, 32), descriptor.graphId) || !same(slice(bytes, 48, 32), descriptor.rootId)) {
+      || !same(slice(bytes, Graph.GRAPH_ID_OFFSET, 32), descriptor.graphId)
+      || !same(slice(bytes, Graph.GRAPH_ROOT_ID_OFFSET, 32), descriptor.rootId)) {
     throw new Error('representation graph width or descriptor join is inconsistent');
   }
-  const scale = u64(bytes, 96); if (scale === 0n) throw new Error('representation graph scale is zero');
-  const rootId = slice(bytes, 48, 32); let root = -1;
+  const scale = u64(bytes, Graph.GRAPH_SCALE_OFFSET); if (scale === 0n) throw new Error('representation graph scale is zero');
+  const rootId = slice(bytes, Graph.GRAPH_ROOT_ID_OFFSET, 32); let root = -1;
   for (let index = 0; index < nodes; index += 1) {
-    if (same(slice(bytes, 104 + index * 64, 32), rootId)) {
+    if (same(slice(bytes, Graph.GRAPH_HEADER_BYTES + index * Graph.GRAPH_NODE_BYTES + Graph.NODE_ID_OFFSET, 32), rootId)) {
       if (root !== -1) throw new Error('representation graph repeats its root identity');
       root = index;
     }
   }
   if (root < 0) throw new Error('representation graph omits its selected root');
-  const exposure = 104 + nodes * 64 + edges * 48 + root * outcomes * 8;
+  const exposure = exposureBase + root * outcomes * Graph.SCALAR_BYTES;
   const coefficients = new Map(descriptor.support.map(({ outcome, coefficient }) => [outcome, coefficient]));
   for (let outcome = 0; outcome < outcomes; outcome += 1) {
     const coefficient = coefficients.get(outcome) ?? 0n;
-    if (coefficient * scale !== u64(bytes, exposure + outcome * 8) * descriptor.denominator) {
+    if (coefficient * scale !== u64(bytes, exposure + outcome * Graph.SCALAR_BYTES) * descriptor.denominator) {
       throw new Error(`representation descriptor payoff differs from graph root at outcome ${outcome}`);
     }
   }
@@ -211,10 +216,10 @@ export async function inspectRationalCapabilityCommonV4(
     descriptorAddresses.record, descriptorAddresses.staging, RATIONAL_REPRESENTATION_DESCRIPTOR_SCHEMA_V3, descriptorId, 'representation descriptor');
   const descriptor = decodeRationalRepresentationDescriptorV3(descriptorRaw.data, descriptorId);
   if (descriptor.market !== marketAddress || !same(descriptor.releaseSet, market.releaseSet)) throw new Error('representation descriptor differs from Market/release');
-  const graphAddresses = deriveFinalizedRecordAddressesV1(registry, REPRESENTATION_GRAPH_SCHEMA_V2, descriptor.graphDigest);
+  const graphAddresses = deriveFinalizedRecordAddressesV1(registry, Graph.REPRESENTATION_GRAPH_SCHEMA_RELEASE_ID_V2, descriptor.graphDigest);
   const graphObservation = await acquireRationalHotAccountsV4(client, [graphAddresses.record, graphAddresses.staging], descriptorObservation.slot);
   const graphRaw = await authenticateFinalizedRationalHotRecordV4(client, graphObservation.accounts, registry,
-    graphAddresses.record, graphAddresses.staging, REPRESENTATION_GRAPH_SCHEMA_V2, descriptor.graphDigest, 'representation graph');
+    graphAddresses.record, graphAddresses.staging, Graph.REPRESENTATION_GRAPH_SCHEMA_RELEASE_ID_V2, descriptor.graphDigest, 'representation graph');
   authenticateRationalRepresentationGraphV2(graphRaw.data, descriptor);
   const merged = new Map([...first.accounts, ...descriptorObservation.accounts, ...graphObservation.accounts]);
   const productRaw = await authenticateFinalizedRationalHotRecordV4(client, merged, registry,

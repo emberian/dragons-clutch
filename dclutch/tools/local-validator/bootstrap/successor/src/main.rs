@@ -326,6 +326,12 @@ fn run() -> Result<()> {
         {
             general_capability_activation::run_devnet(arguments.collect())
         }
+        Some(command) if command == general_successor_plan::DEVNET_EXECUTE_COMMAND_V1 => {
+            general_successor_plan::run_execute_devnet(arguments.collect())
+        }
+        Some(command) if command == general_successor_plan::DEVNET_LOOKUP_TABLE_COMMAND_V1 => {
+            general_successor_plan::run_lookup_table_devnet(arguments.collect())
+        }
         Some(command) if command == general_successor_plan::COMMAND_V1 => {
             general_successor_plan::run(arguments.collect())
         }
@@ -2345,6 +2351,8 @@ fn usage() {
     println!("{}", direct_close_maker::usage());
     println!("{}", capability_seal_close::usage());
     println!("{}", capability_seal_devnet::usage());
+    println!("{}", general_successor_plan::lookup_table_usage());
+    println!("{}", general_successor_plan::execute_usage());
     println!("{}", general_session::usage());
     println!("{}", release_lineage::usage());
     println!("{}", infrastructure_succession::usage());

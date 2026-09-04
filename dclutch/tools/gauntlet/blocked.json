@@ -245,6 +245,11 @@
       "route": "trading/generic_founding_stages_v1::process_generic_market_open_v1",
       "reason": "NO CAMPAIGN, blocked identically to `trading/generic_founding_stages_v1::process_generic_found_and_permit_v1` and by the same driver: DCLTGMO1 is the second stage, the permissionless commit-last Core Open that consumes the permit DCLTGFP1 escrowed, and it is 23 accounts that fit an inline v0 packet with no ALT and no extended heap. Read that row for why a split run needs its own tier rather than a flag on tier 1. One campaign witnesses both.",
       "owner": "whoever owns tier 1's shape (unclaimed as of 2026-09-04)"
+    },
+    {
+      "route": "core/process_instruction#else",
+      "reason": "The wildcard refusal arm of Core's `Action` dispatch, and a route the census could not see until `DCLTCRQ2` was read at the dispatch guard rather than only inside `Request::decode`. It is reached by an instruction carrying the Core request magic whose decoded action and length match no arm -- a shape every gauntlet campaign builds correctly by construction, so no tier drives it yet. It is not structurally undrivable: a hostile that sends a well-formed `Request` at a length no arm admits reaches it, and that binding is what this entry is waiting for.",
+      "owner": "LEAN-TAGS-2, then whoever adds the malformed-Action hostile"
     }
   ]
 }

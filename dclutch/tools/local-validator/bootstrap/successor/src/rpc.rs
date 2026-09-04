@@ -997,6 +997,44 @@ impl Rpc {
         Ok((observation, observed))
     }
 
+    /// One finalized snapshot in which an ABSENT account is a VACANT account.
+    ///
+    /// [`Self::finalized_observed_accounts`] refuses an address
+    /// `getMultipleAccounts` answers with null, and for its twenty callers that
+    /// is right: they name accounts whose absence is the failure. It is wrong
+    /// for a frame that deliberately names accounts a closed publication ladder
+    /// leaves behind. Every General route carries nineteen vacant staging
+    /// cursors, and every record authenticator in this tree REQUIRES that exact
+    /// shape -- System-owned with zero data -- so refusing them made the
+    /// General successor plan unreachable against any real market. Measured on
+    /// devnet, 2026-09-04: the first route ever produced refused at the
+    /// manifest staging cursor, `MUKgLFXe...`, three accounts in.
+    ///
+    /// A vacant account here is synthesized, not observed, and it is
+    /// indistinguishable from an account that never existed -- which is
+    /// precisely what a staging cursor that was closed and one that was never
+    /// opened have in common, and why the authenticators judge the shape rather
+    /// than the history.
+    pub(crate) fn finalized_observed_accounts_admitting_vacant(
+        &mut self,
+        addresses: &[Pubkey],
+        minimum_slot: u64,
+    ) -> Result<(Observation, Vec<ObservedAccount>)> {
+        let (slot, accounts) = self.finalized_accounts(addresses, minimum_slot)?;
+        let observation = Observation {
+            slot,
+            unix_timestamp: self.block_time(slot)?,
+            finality: Finality::Finalized,
+        };
+        let observed = addresses
+            .iter()
+            .copied()
+            .zip(accounts)
+            .map(|(key, account)| observed_or_vacant_v1(observation, key, account))
+            .collect();
+        Ok((observation, observed))
+    }
+
     /// The authoritative wall-clock read: a caller whose semantics depend on
     /// the clock (a resolution window, a retirement deadline) must fail when
     /// the chain will not answer.
@@ -1550,6 +1588,38 @@ impl Rpc {
         )
     }
 
+    /// Submit one routed v0 transaction that declares its own heap frame.
+    ///
+    /// [`Self::send_v0`] sends the ComputeBudget compute-unit declarations and
+    /// no heap grant, which is right for a route that fits the runtime's
+    /// default 32 KiB and silently wrong for one that does not: Trading's
+    /// adapter admits an extended heap for a declared route and then refuses
+    /// `TradingSbfError::HeapFrame` (0x4008) by name when the grant does not
+    /// arrive. Measured on devnet, 2026-09-04: the first General capability
+    /// seal ever sent died exactly there, having consumed 24,612 CU of the
+    /// 1,399,700 it asked for and none of the heap it had not.
+    pub(crate) fn send_v0_on_heap(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        payer: &Keypair,
+        observation: Observation,
+        tables: &[ObservedAccount],
+        heap_frame_bytes: u32,
+    ) -> Result<TransactionEvidence> {
+        self.send_v0_inner(
+            label,
+            instructions,
+            payer,
+            &[],
+            observation,
+            tables,
+            false,
+            Some(heap_frame_bytes),
+            false,
+        )
+    }
+
     pub(crate) fn send_v0_expected_failure(
         &mut self,
         label: &str,
@@ -1739,6 +1809,56 @@ impl Rpc {
     /// evidence if it reaches consensus* is unchanged and lives at
     /// [`Rpc::submit_signed_v0_packet_expecting_failure`]; a simulation is a
     /// decision aid before a write, never the evidence that one happened.
+    /// Submit and confirm one ALREADY-COMPILED versioned transaction.
+    ///
+    /// Every other sender here builds its own message from instructions, which
+    /// is right when this binary is the author. It is wrong for a
+    /// `dclutch/general-successor-plan/v5` document: the producer compiled that
+    /// message, the plan states its exact bytes, and a sender that recompiled
+    /// them would be a second author for the transaction the plan describes --
+    /// so the thing signed would no longer be the thing the plan published.
+    /// This signs the bytes it was handed and nothing else.
+    pub(crate) fn submit_and_confirm_versioned_v1(
+        &mut self,
+        label: &str,
+        transaction: &VersionedTransaction,
+        last_valid_block_height: u64,
+    ) -> Result<TransactionEvidence> {
+        let packet = bincode::serialize(transaction)
+            .map_err(|error| Error::new(format!("{label}: packet serialization: {error}")))?;
+        let signature = *transaction
+            .signatures
+            .first()
+            .ok_or_else(|| Error::new(format!("{label}: the packet carries no signature")))?;
+        self.submit_signed_packet_once(label, &packet, signature, false)?;
+        match self.confirm_inner(label, signature, None, false, last_valid_block_height)? {
+            ConfirmOutcomeV1::Confirmed(evidence) => Ok(evidence),
+            ConfirmOutcomeV1::Dropped => Err(Error::new(format!(
+                "{label}: signature {signature} expired without a finalized status; produce a \
+                 new plan under a new output path"
+            ))),
+        }
+    }
+
+    /// Simulate one ALREADY-COMPILED versioned transaction.
+    pub(crate) fn simulate_versioned_v1(&mut self, label: &str, packet: &[u8]) -> Result<Value> {
+        self.call(
+            "simulateTransaction",
+            &json!([BASE64.encode(packet), {
+                "encoding":"base64",
+                "sigVerify":false,
+                "replaceRecentBlockhash":false,
+                "commitment":"confirmed"
+            }]),
+        )
+        .map_err(|error| Error::new(format!("{label}: simulate: {error}")))
+    }
+
+    /// One recent blockhash and the block height past which it is dead.
+    pub(crate) fn recent_blockhash_with_height_v1(&mut self) -> Result<(Hash, u64)> {
+        self.latest_blockhash_with_height()
+    }
+
     pub(crate) fn simulate_v0(
         &mut self,
         label: &str,
@@ -2409,6 +2529,44 @@ fn parse_account_wire_v1(value: RpcAccountWireV1) -> Result<RpcAccount> {
     })
 }
 
+/// One observed account, where ABSENT means VACANT.
+///
+/// `getMultipleAccounts` answers null for an address that holds nothing, and
+/// two very different frames need that answered two different ways. A frame
+/// whose accounts must exist wants a refusal. A frame that deliberately names
+/// accounts a closed publication ladder left behind wants the shape those
+/// accounts have: System-owned, zero lamports, zero data -- which is exactly
+/// what every record authenticator in this tree requires of a staging cursor.
+///
+/// This is the one author for that synthesis. It used to be written twice, in
+/// `general_session::finalized_frame_v1` and nowhere else, so the General
+/// successor plan -- whose route carries nineteen of those cursors -- refused
+/// at the first of them the first time a route was ever produced.
+pub(crate) fn observed_or_vacant_v1(
+    observation: Observation,
+    key: Pubkey,
+    account: Option<RpcAccount>,
+) -> ObservedAccount {
+    match account {
+        Some(account) => ObservedAccount {
+            observation,
+            key,
+            owner: account.owner,
+            lamports: account.lamports,
+            executable: account.executable,
+            data: account.data,
+        },
+        None => ObservedAccount {
+            observation,
+            key,
+            owner: solana_sdk_ids::system_program::ID,
+            lamports: 0,
+            executable: false,
+            data: Vec::new(),
+        },
+    }
+}
+
 pub(crate) fn account_evidence(address: Pubkey, account: &RpcAccount) -> AccountEvidence {
     let data_sha256 = Sha256::digest(&account.data);
     let mut exact = Sha256::new();
@@ -2471,6 +2629,48 @@ fn u64_field(value: &Value, name: &str) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// AN ABSENT ACCOUNT IS A VACANT ACCOUNT, AND VACANT HAS AN EXACT SHAPE.
+    ///
+    /// Every record authenticator in this tree requires a closed staging cursor
+    /// to be System-owned with zero data, and `getMultipleAccounts` reports
+    /// exactly that account as null. A synthesis that got the owner or the
+    /// width wrong would be worse than the refusal it replaced, because the
+    /// authenticator downstream would then reject it for a reason that names
+    /// the record rather than the snapshot.
+    #[test]
+    fn an_absent_account_is_synthesized_as_the_exact_vacant_shape() {
+        let observation = Observation {
+            slot: 492_882_252,
+            unix_timestamp: 1_788_500_000,
+            finality: Finality::Finalized,
+        };
+        let key = Pubkey::new_from_array([5_u8; 32]);
+        let vacant = observed_or_vacant_v1(observation, key, None);
+        assert_eq!(vacant.key, key);
+        assert_eq!(vacant.observation, observation);
+        assert_eq!(vacant.owner, solana_sdk_ids::system_program::ID);
+        assert_eq!(vacant.lamports, 0);
+        assert!(!vacant.executable);
+        assert!(vacant.data.is_empty());
+
+        // A present account is carried through byte for byte; the synthesis
+        // must never be reachable for an account the chain answered with.
+        let present = observed_or_vacant_v1(
+            observation,
+            key,
+            Some(RpcAccount {
+                owner: Pubkey::new_from_array([9_u8; 32]),
+                lamports: 2_786_520,
+                executable: false,
+                data: vec![1, 2, 3],
+                rent_epoch: 0,
+            }),
+        );
+        assert_eq!(present.owner, Pubkey::new_from_array([9_u8; 32]));
+        assert_eq!(present.lamports, 2_786_520);
+        assert_eq!(present.data, vec![1, 2, 3]);
+    }
 
     /// The ordinary legacy send refuses one byte over and admits the last byte
     /// under, on real transactions through the real serializer.

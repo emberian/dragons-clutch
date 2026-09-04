@@ -62,4 +62,14 @@ grep -q '^pub const PROJECTED_CUSTODY_PHASE_LIMIT_V1: u8 = 5;$' "$candidate"
 grep -q '^pub const PROJECTED_CUSTODY_STATE_HEAD_RESERVED_OFFSET_V2: usize = 13;$' "$candidate"
 grep -q '^pub const PROJECTED_CUSTODY_STATE_CAP_RESERVED_OFFSET_V2: usize = 24;$' "$candidate"
 grep -q '^pub const PROJECTED_CUSTODY_STATE_IDENTITIES_OFFSET_V2: usize = 32;$' "$candidate"
+# The header all five records in `projected.rs` share, which `7ee656e2d` left as
+# named debt: `header_version` read the magic slice and the version coordinate
+# as literals for every one of them, and a `const _: () = assert!` stood in for
+# the missing owner. These four are that owner, so the assert is gone and the
+# pins take its place -- a family header that moved would make every record in
+# the module unreadable at once.
+grep -q '^pub const PROJECTED_CUSTODY_HEADER_MAGIC_OFFSET_V1: usize = 0;$' "$candidate"
+grep -q '^pub const PROJECTED_CUSTODY_HEADER_MAGIC_BYTES_V1: usize = 8;$' "$candidate"
+grep -q '^pub const PROJECTED_CUSTODY_HEADER_VERSION_OFFSET_V1: usize = 8;$' "$candidate"
+grep -q '^pub const PROJECTED_CUSTODY_HEADER_BYTES_V1: usize = 10;$' "$candidate"
 verify EmitProjectedCustodyStateV2Rust.lean generated_projected_state_v2.rs 60

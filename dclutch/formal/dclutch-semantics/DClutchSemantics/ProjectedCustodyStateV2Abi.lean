@@ -208,6 +208,34 @@ def width (field : Field) : Nat := (coordinate field).2
 
 end Field
 
+/-! ## The header five records share
+
+`projected.rs` holds five records -- the request, this state, the receipt, the
+lock receipt, and the request's own re-encode -- and all five open with the
+same two words: an eight-byte magic, then a `u16` ABI version. One private
+`header_version` helper reads that shape for every one of them and wrote both
+coordinates as bare literals: `input.get(..8)` for the magic and
+`read_u16(input, 8)` for the version. Four `encode` methods wrote the same two
+literals back.
+
+That was the debt `7ee656e2d` named rather than paid: this record's version
+coordinate was emitted, the family's was not, and a `const _: () = assert!` in
+Rust pinned the two together because no Lean module owned the second. It does
+now. The family header is exactly this record's first two fields -- the other
+four records repeat the shape, they do not vary it -- so the constants below
+are emitted under FAMILY names, which say whose they are, and the assert has
+nothing left to compare.
+-/
+
+/-- Where the eight-byte magic sits in every record of this family. -/
+def familyMagicOffset : Nat := Field.offset .magic
+/-- The magic's width, which is the `..8` slice four encoders wrote. -/
+def familyMagicBytes : Nat := Field.width .magic
+/-- Where the `u16` ABI version sits in every record of this family. -/
+def familyVersionOffset : Nat := Field.offset .schemaVersion
+/-- Total width of the shared header: the magic plus the version word. -/
+def familyHeaderBytes : Nat := familyVersionOffset + Field.width .schemaVersion
+
 /-- Physical predicate a schema-level statement can be made about. -/
 def isReserved : FieldKind → Bool
   | .reserved _ => true
@@ -309,6 +337,16 @@ theorem the_machine_numbers_from_one :
 one in either of the last two. -/
 theorem exactly_the_last_two_phases_are_custodied :
     Phase.all.filter Phase.custodied = [.hoardLocked, .sourceFunded] := by
+  native_decide
+
+/-- **The header the other four records repeat.**  It is this record's first
+two fields and nothing else: the magic at zero for eight bytes, the version
+word immediately behind it, ten bytes in total before any record's own content
+begins.  `header_version` read all three of those numbers as literals. -/
+theorem the_family_header_is_this_record_s_first_two_fields :
+    familyMagicOffset = 0 ∧ familyMagicBytes = 8 ∧
+      familyVersionOffset = 8 ∧ familyHeaderBytes = 10 ∧
+      familyVersionOffset = familyMagicOffset + familyMagicBytes := by
   native_decide
 
 theorem magic_is_eight_bytes : magic.length = 8 := by native_decide

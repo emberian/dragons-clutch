@@ -47,6 +47,8 @@
     "abi:dealer-v3:verify": "node scripts/generate-dealer-equity-v3.mjs --check",
     "abi:rational-terminal-v3": "node scripts/lean-emit.mjs DClutchSemantics.RationalRepresentationV2PhysicalAbi,DClutchSemantics.RationalTerminalHotV3Abi EmitRationalTerminalHotV3Ts.lean lib/generated/rationalTerminalHotV3.ts",
     "abi:rational-terminal-v3:verify": "node scripts/lean-emit.mjs DClutchSemantics.RationalRepresentationV2PhysicalAbi,DClutchSemantics.RationalTerminalHotV3Abi EmitRationalTerminalHotV3Ts.lean lib/generated/rationalTerminalHotV3.ts --check",
+    "abi:rational-graph-v2": "node scripts/generate-rational-representation-graph-v2.mjs",
+    "abi:rational-graph-v2:verify": "node scripts/generate-rational-representation-graph-v2.mjs --check",
     "abi:product-payoff-v2-wasm": "node scripts/generate-product-payoff-v2-wasm.mjs",
     "abi:product-payoff-v2-wasm:verify": "node scripts/generate-product-payoff-v2-wasm.mjs --check",
     "abi:product-v2-payoff": "node scripts/generate-product-v2-payoff.mjs",

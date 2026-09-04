@@ -6,9 +6,11 @@ use dclutch_release_set_contract::ExecutionRoleV1;
 use crate::{
     CompartmentV1, CustodyReplayV1,
     generated_projected_state_v2::{
-        PROJECTED_CUSTODY_PHASE_HOARD_LOCKED_V1, PROJECTED_CUSTODY_PHASE_HOARD_OPEN_V1,
-        PROJECTED_CUSTODY_PHASE_INITIALIZED_V1, PROJECTED_CUSTODY_PHASE_SOURCE_FUNDED_V1,
-        PROJECTED_CUSTODY_STATE_BUMP_OFFSET_V2, PROJECTED_CUSTODY_STATE_CAP_RESERVED_BYTES_V2,
+        PROJECTED_CUSTODY_HEADER_MAGIC_BYTES_V1, PROJECTED_CUSTODY_HEADER_MAGIC_OFFSET_V1,
+        PROJECTED_CUSTODY_HEADER_VERSION_OFFSET_V1, PROJECTED_CUSTODY_PHASE_HOARD_LOCKED_V1,
+        PROJECTED_CUSTODY_PHASE_HOARD_OPEN_V1, PROJECTED_CUSTODY_PHASE_INITIALIZED_V1,
+        PROJECTED_CUSTODY_PHASE_SOURCE_FUNDED_V1, PROJECTED_CUSTODY_STATE_BUMP_OFFSET_V2,
+        PROJECTED_CUSTODY_STATE_CAP_RESERVED_BYTES_V2,
         PROJECTED_CUSTODY_STATE_CAP_RESERVED_OFFSET_V2,
         PROJECTED_CUSTODY_STATE_EXPIRY_SLOT_OFFSET_V2,
         PROJECTED_CUSTODY_STATE_FUNDING_SOURCE_COMPARTMENT_OFFSET_V2,
@@ -113,15 +115,14 @@ pub const PROJECTED_CUSTODY_LOCK_RECEIPT_MAGIC_V1: [u8; 8] = *b"DCLPCL01";
 const VERSION_V1: u16 = 1;
 const VERSION_V2: u16 = PROJECTED_CUSTODY_STATE_SCHEMA_VERSION_V2;
 
-/// `header_version` reads the ABI version at a literal `8` for every record in
-/// this module, which is the custody family's shared header shape and not this
-/// record's to re-own. The projected STATE's own version coordinate is emitted,
-/// so this pins the two together: if Lean ever moves it, the shared helper
-/// stops reading this record's version and a compiler says so.
-const _: () = assert!(
-    PROJECTED_CUSTODY_STATE_VERSION_OFFSET_V2 == 8,
-    "the projected state's emitted version coordinate left the family header"
-);
+// The header five records in this module share -- magic, then a `u16` ABI
+// version -- is emitted as `PROJECTED_CUSTODY_HEADER_*_V1` and read by
+// `header_version` and by all four encoders below. It used to be three
+// literals (`..8`, `8`, and `8` again) plus a `const _: () = assert!` pinning
+// the STATE's emitted version coordinate to the number the shared helper
+// happened to use, because no Lean module owned the family's. One does now --
+// `the_family_header_is_this_record_s_first_two_fields` -- so the assert has
+// nothing left to compare and is gone rather than left as ceremony.
 
 /// Stable refusal from projected pre-founding custody.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -649,8 +650,13 @@ impl ProjectedCustodyRequestV1 {
     pub fn encode(self) -> Result<[u8; PROJECTED_CUSTODY_REQUEST_BYTES_V1], ProjectedCustodyError> {
         self.validate()?;
         let mut output = [0; PROJECTED_CUSTODY_REQUEST_BYTES_V1];
-        output[..8].copy_from_slice(&PROJECTED_CUSTODY_REQUEST_MAGIC_V1);
-        put_u16(&mut output, 8, VERSION_V1)?;
+        output[..PROJECTED_CUSTODY_HEADER_MAGIC_BYTES_V1]
+            .copy_from_slice(&PROJECTED_CUSTODY_REQUEST_MAGIC_V1);
+        put_u16(
+            &mut output,
+            PROJECTED_CUSTODY_HEADER_VERSION_OFFSET_V1,
+            VERSION_V1,
+        )?;
         put_u8(&mut output, 10, self.operation as u8)?;
         put_u8(&mut output, 11, self.caller_role as u8)?;
         put_u8(&mut output, 12, self.funding_source_compartment.tag())?;
@@ -784,7 +790,8 @@ impl ProjectedCustodyStateV2 {
             return Err(ProjectedCustodyError::NonCanonical);
         }
         let mut output = [0; PROJECTED_CUSTODY_STATE_BYTES_V2];
-        output[..8].copy_from_slice(&PROJECTED_CUSTODY_STATE_MAGIC_V2);
+        output[..PROJECTED_CUSTODY_HEADER_MAGIC_BYTES_V1]
+            .copy_from_slice(&PROJECTED_CUSTODY_STATE_MAGIC_V2);
         put_u16(
             &mut output,
             PROJECTED_CUSTODY_STATE_VERSION_OFFSET_V2,
@@ -1519,8 +1526,13 @@ impl ProjectedCustodyLockReceiptV1 {
             return Err(ProjectedCustodyError::Receipt);
         }
         let mut output = [0; PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1];
-        output[..8].copy_from_slice(&PROJECTED_CUSTODY_LOCK_RECEIPT_MAGIC_V1);
-        put_u16(&mut output, 8, VERSION_V1)?;
+        output[..PROJECTED_CUSTODY_HEADER_MAGIC_BYTES_V1]
+            .copy_from_slice(&PROJECTED_CUSTODY_LOCK_RECEIPT_MAGIC_V1);
+        put_u16(
+            &mut output,
+            PROJECTED_CUSTODY_HEADER_VERSION_OFFSET_V1,
+            VERSION_V1,
+        )?;
         write_identities(
             &mut output,
             32,
@@ -1619,8 +1631,13 @@ impl ProjectedCustodyReceiptV1 {
             return Err(ProjectedCustodyError::Receipt);
         }
         let mut output = [0; PROJECTED_CUSTODY_RECEIPT_BYTES_V1];
-        output[..8].copy_from_slice(&PROJECTED_CUSTODY_RECEIPT_MAGIC_V1);
-        put_u16(&mut output, 8, VERSION_V1)?;
+        output[..PROJECTED_CUSTODY_HEADER_MAGIC_BYTES_V1]
+            .copy_from_slice(&PROJECTED_CUSTODY_RECEIPT_MAGIC_V1);
+        put_u16(
+            &mut output,
+            PROJECTED_CUSTODY_HEADER_VERSION_OFFSET_V1,
+            VERSION_V1,
+        )?;
         put_u8(&mut output, 10, u8::from(self.realized))?;
         put_u8(&mut output, 11, u8::from(self.aborted_open))?;
         write_identities(
@@ -1772,10 +1789,14 @@ fn header_version(
     width: usize,
     version: u16,
 ) -> Result<(), ProjectedCustodyError> {
-    if input.len() != width || input.get(..8) != Some(magic.as_slice()) {
+    if input.len() != width
+        || input
+            .get(PROJECTED_CUSTODY_HEADER_MAGIC_OFFSET_V1..PROJECTED_CUSTODY_HEADER_MAGIC_BYTES_V1)
+            != Some(magic.as_slice())
+    {
         return Err(ProjectedCustodyError::InvalidHeader);
     }
-    if read_u16(input, 8)? != version {
+    if read_u16(input, PROJECTED_CUSTODY_HEADER_VERSION_OFFSET_V1)? != version {
         return Err(ProjectedCustodyError::InvalidHeader);
     }
     Ok(())

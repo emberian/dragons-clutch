@@ -45,6 +45,14 @@ def main : IO Unit := do
     "Width of the whole identity run, which is the count times the identity width."
   emitConst "PROJECTED_CUSTODY_STATE_TAIL_OFFSET_V2" "usize" (toString tailOffset)
     "Where the mutable tail begins: the header plus the whole identity run."
+  emitConst "PROJECTED_CUSTODY_HEADER_MAGIC_OFFSET_V1" "usize" (toString familyMagicOffset)
+    "Magic coordinate of the header EVERY record in this family shares."
+  emitConst "PROJECTED_CUSTODY_HEADER_MAGIC_BYTES_V1" "usize" (toString familyMagicBytes)
+    "Magic width of that shared header."
+  emitConst "PROJECTED_CUSTODY_HEADER_VERSION_OFFSET_V1" "usize" (toString familyVersionOffset)
+    "ABI-version coordinate of that shared header."
+  emitConst "PROJECTED_CUSTODY_HEADER_BYTES_V1" "usize" (toString familyHeaderBytes)
+    "Total width of that shared header: the magic plus the version word."
   emitConst "PROJECTED_CUSTODY_STATE_HEAD_RESERVED_BYTES_V2" "usize"
     (toString (Field.width .headReserved))
     "Width of the canonical-zero span between the three tags and the cap count."

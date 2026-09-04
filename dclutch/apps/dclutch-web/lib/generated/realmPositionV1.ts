@@ -18,26 +18,4 @@ export const REALM_TOKEN_PROGRAM_OFFSET_V1 = 16 as const;
 export const REALM_COLLATERAL_MINT_OFFSET_V1 = 48 as const;
 export const REALM_ADAPTER_RELEASE_ID_OFFSET_V1 = 80 as const;
 
-export const POSITION_MAGIC_V1 = 'DCLTPOS1' as const;
-export const POSITION_SCHEMA_VERSION_V1 = 1 as const;
-export const POSITION_BASE_BYTES_V1 = 88 as const;
-export const POSITION_RESERVED_BYTES_V1 = 5 as const;
-export const POSITION_OUTCOME_BALANCE_BYTES_V1 = 8 as const;
-export const MIN_OUTCOMES_V1 = 2 as const;
-export const MAX_OUTCOMES_V1 = 16 as const;
-export const BINARY_POSITION_BYTES_V1 = 104 as const;
-export const MAX_POSITION_BYTES_V1 = 216 as const;
 export const POSITION_PDA_DOMAIN_V1 = new TextEncoder().encode('dclutch/position/v1');
-
-export const POSITION_MAGIC_OFFSET_V1 = 0 as const;
-export const POSITION_SCHEMA_VERSION_OFFSET_V1 = 8 as const;
-export const POSITION_OUTCOME_COUNT_OFFSET_V1 = 10 as const;
-export const POSITION_RESERVED_OFFSET_V1 = 11 as const;
-export const POSITION_MARKET_OFFSET_V1 = 16 as const;
-export const POSITION_OWNER_OFFSET_V1 = 48 as const;
-export const POSITION_GENERATION_OFFSET_V1 = 80 as const;
-
-/** Exact width of a Position of a given categorical width. */
-export function positionBytesV1(outcomes: number): number {
-  return POSITION_BASE_BYTES_V1 + outcomes * POSITION_OUTCOME_BALANCE_BYTES_V1;
-}

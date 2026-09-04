@@ -694,7 +694,7 @@ impl Request {
     pub fn encode(self) -> Result<[u8; REQUEST_BYTES], Error> {
         self.validate_shape()?;
         let mut output = [0_u8; REQUEST_BYTES];
-        put(&mut output, REQUEST_MAGIC_OFFSET, &REQUEST_MAGIC)?;
+        put(&mut output, REQUEST_MAGIC_OFFSET, &CORE_REQUEST_MAGIC)?;
         put_u16(&mut output, REQUEST_VERSION_OFFSET, VERSION)?;
         put_byte(&mut output, REQUEST_ACTION_OFFSET, action_tag(self.action))?;
         put_byte(&mut output, REQUEST_HOLDER_OFFSET, option_holder_tag(self.holder))?;
@@ -715,7 +715,7 @@ impl Request {
         if input.len() != REQUEST_BYTES {
             return Err(Error::InvalidLength);
         }
-        exact_magic(input, REQUEST_MAGIC_OFFSET, &REQUEST_MAGIC)?;
+        exact_magic(input, REQUEST_MAGIC_OFFSET, &CORE_REQUEST_MAGIC)?;
         if read_u16(input, REQUEST_VERSION_OFFSET)? != VERSION {
             return Err(Error::UnsupportedVersion);
         }
@@ -1591,7 +1591,7 @@ def main : IO Unit := do
   IO.println s!"pub const REPRESENTATION_NATIVE_TAG: u8 = {representationNativeTag};"
   IO.println s!"pub const REPRESENTATION_MATERIALIZED_TAG: u8 = {representationMaterializedTag};"
   emitBytes "STATE_MAGIC" stateMagic
-  emitBytes "REQUEST_MAGIC" requestMagic
+  emitBytes "CORE_REQUEST_MAGIC" requestMagic
   for field in stateLayout do
     IO.println s!"const {StateField.rustName field.spec.name}: usize = {field.offset};"
   for field in requestLayout do

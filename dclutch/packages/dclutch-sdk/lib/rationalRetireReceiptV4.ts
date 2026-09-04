@@ -36,6 +36,30 @@ import {
   RESULT_DOMAIN_SCHEMA_ID_V2,
 } from './generated/coreFound';
 import { MAX_TX_ACCOUNT_LOCKS_V2 } from './generated/genericFoundingV1';
+import * as Lifecycle from './generated/rationalLifecycleRequestV2';
+import {
+  DESCRIPTOR_COEFFICIENT_BYTES,
+  DESCRIPTOR_DENOMINATOR_OFFSET,
+  DESCRIPTOR_GRAPH_DIGEST_OFFSET,
+  DESCRIPTOR_GRAPH_ID_OFFSET,
+  DESCRIPTOR_HEADER_BYTES,
+  DESCRIPTOR_MAGIC_BYTES,
+  DESCRIPTOR_MAGIC_OFFSET,
+  DESCRIPTOR_MAGIC_V3,
+  DESCRIPTOR_MARKET_ID_OFFSET,
+  DESCRIPTOR_OUTCOME_COUNT_OFFSET,
+  DESCRIPTOR_RECEIPT_MINT_OFFSET,
+  DESCRIPTOR_RELEASE_SET_ID_OFFSET,
+  DESCRIPTOR_RESERVED_BYTES,
+  DESCRIPTOR_RESERVED_HEADER_BYTES,
+  DESCRIPTOR_RESERVED_HEADER_OFFSET,
+  DESCRIPTOR_RESERVED_OFFSET,
+  DESCRIPTOR_ROOT_ID_OFFSET,
+  DESCRIPTOR_SCHEMA_VERSION_V3,
+  DESCRIPTOR_TOKEN_PROGRAM_OFFSET,
+  DESCRIPTOR_VERSION_OFFSET,
+  REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
+} from './generated/rationalRepresentationDescriptorV3';
 import * as Hot from './generated/directInlineV3';
 import {
   ACTIVATION_CACHE_BYTES,
@@ -57,27 +81,27 @@ import {
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
 import { SOLANA_PACKET_BYTES_V1 } from './solanaLimits';
 
-export const RATIONAL_LIFECYCLE_COMPACT_REQUEST_BYTES_V4 = 400;
-export const RATIONAL_LIFECYCLE_COMPACT_OUTER_BYTES_V4 = 528;
-export const RATIONAL_LIFECYCLE_CLAIMS_COMMON_ACCOUNTS_V2 = 20;
-export const RATIONAL_LIFECYCLE_VACANCY_ACCOUNTS_V2 = 4;
-export const RATIONAL_REPRESENTATION_DESCRIPTOR_SCHEMA_V3 = Uint8Array.from([
-  0x63, 0xe4, 0x17, 0xde, 0x63, 0x6d, 0xc1, 0x95, 0xdc, 0xa3, 0xec, 0x0d, 0xaf, 0xdc, 0x6c, 0x10,
-  0x59, 0xda, 0xd9, 0x22, 0xe4, 0x8d, 0x27, 0xee, 0x3d, 0x65, 0x60, 0xb6, 0x96, 0x12, 0xbe, 0xb5,
-]);
-export const RATIONAL_LIFECYCLE_COMPACT_REQUEST_SCHEMA_V4 = Uint8Array.from([
-  0xb8, 0x38, 0x14, 0x7c, 0x37, 0x47, 0xa7, 0x75, 0x10, 0x67, 0x56, 0xc4, 0xa6, 0x53, 0xa6, 0xc3,
-  0xa8, 0x48, 0x01, 0x4c, 0xad, 0x77, 0x87, 0x60, 0xb8, 0x9a, 0x5a, 0x16, 0x95, 0xa2, 0x83, 0x74,
-]);
+export const RATIONAL_LIFECYCLE_COMPACT_REQUEST_BYTES_V4 = Lifecycle.RATIONAL_LIFECYCLE_COMPACT_HOT_REQUEST_BYTES_V4;
+export const RATIONAL_LIFECYCLE_COMPACT_OUTER_BYTES_V4 = Hot.HOT_EXECUTION_ENVELOPE_BYTES_V3 + RATIONAL_LIFECYCLE_COMPACT_REQUEST_BYTES_V4;
+export const RATIONAL_LIFECYCLE_CLAIMS_COMMON_ACCOUNTS_V2 = Lifecycle.LIFECYCLE_COMMON_ACCOUNT_COUNT_V2;
+/**
+ * The Claims accounts one proven-vacant support row adds.
+ *
+ * FIVE, and this file said four until the emission above arrived. `e78fa027d`
+ * gave the compact row its custody-owner account so the effect could PROJECT
+ * the address rather than bake it into the artifacts; the contract went to
+ * five, the client stayed at four, and a compact RetireReceipt built here
+ * carried a frame one account per row short of the one the program reads.
+ */
+export const RATIONAL_LIFECYCLE_VACANCY_ACCOUNTS_V2 = Lifecycle.LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2;
+export const RATIONAL_REPRESENTATION_DESCRIPTOR_SCHEMA_V3 = REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3;
+export const RATIONAL_LIFECYCLE_COMPACT_REQUEST_SCHEMA_V4 = Lifecycle.RATIONAL_LIFECYCLE_COMPACT_HOT_SCHEMA_RELEASE_ID_V4;
 export const CAPABILITY_PROGRAM_V4_SCHEMA = Uint8Array.from([
   0x2d, 0x85, 0xb2, 0x21, 0x7c, 0x9b, 0x58, 0xbb, 0x59, 0xb8, 0x5d, 0x43, 0x7f, 0xf4, 0xd1, 0x7f,
   0xa0, 0x70, 0x58, 0xd9, 0x5d, 0xee, 0xb7, 0xd2, 0x58, 0x43, 0xa6, 0xea, 0x31, 0x30, 0x11, 0x62,
 ]);
 
 const MAX_U64 = 18_446_744_073_709_551_615n;
-const ABSENT_POSITION_REVISION = MAX_U64;
-const DESCRIPTOR_HEADER_BYTES = 256;
-const LIFECYCLE_COORDINATE_BYTES = 272;
 const SYSTEM_INSTRUCTIONS_SYSVAR = 'Sysvar1nstructions1111111111111111111111111';
 const CALLER_AUTHORITY_SEED = new TextEncoder().encode('dclutch:role-authority:v1');
 const REPRESENTATION_AUTHORITY_SEED = new TextEncoder().encode('dclutch:rational-authority:v2');
@@ -463,23 +487,37 @@ export type RationalRepresentationDescriptorViewV3 = Readonly<{
   support: ReadonlyArray<Readonly<{ outcome: number; coefficient: bigint }>>;
 }>;
 
+/**
+ * The descriptor's seven 32-byte identities, in the order the view names them.
+ *
+ * The names are listed; the coordinates are not. Each one is the Lean-emitted
+ * offset, so a field that moves in the schema moves here by regeneration.
+ */
+const DESCRIPTOR_IDENTITY_OFFSETS_V3 = [
+  DESCRIPTOR_GRAPH_ID_OFFSET, DESCRIPTOR_GRAPH_DIGEST_OFFSET, DESCRIPTOR_ROOT_ID_OFFSET,
+  DESCRIPTOR_MARKET_ID_OFFSET, DESCRIPTOR_RELEASE_SET_ID_OFFSET, DESCRIPTOR_RECEIPT_MINT_OFFSET,
+  DESCRIPTOR_TOKEN_PROGRAM_OFFSET,
+] as const;
+
 export function decodeRationalRepresentationDescriptorV3(bytes: Uint8Array, id: Uint8Array): RationalRepresentationDescriptorViewV3 {
-  if (bytes.length < DESCRIPTOR_HEADER_BYTES || ascii(bytes, 0, 8) !== 'DCRRDSC3' || u16(bytes, 8) !== 3) {
+  if (bytes.length < DESCRIPTOR_HEADER_BYTES
+      || !same(slice(bytes, DESCRIPTOR_MAGIC_OFFSET, DESCRIPTOR_MAGIC_BYTES), DESCRIPTOR_MAGIC_V3)
+      || u16(bytes, DESCRIPTOR_VERSION_OFFSET) !== DESCRIPTOR_SCHEMA_VERSION_V3) {
     throw new Error('Rational representation descriptor has the wrong exact V3 header');
   }
-  requireZero(bytes, 10, 6, 'representation descriptor header');
-  requireZero(bytes, 244, 4, 'representation descriptor body');
-  const outcomeCount = u32(bytes, 240);
-  if (outcomeCount === 0 || bytes.length !== DESCRIPTOR_HEADER_BYTES + outcomeCount * 8) {
+  requireZero(bytes, DESCRIPTOR_RESERVED_HEADER_OFFSET, DESCRIPTOR_RESERVED_HEADER_BYTES, 'representation descriptor header');
+  requireZero(bytes, DESCRIPTOR_RESERVED_OFFSET, DESCRIPTOR_RESERVED_BYTES, 'representation descriptor body');
+  const outcomeCount = u32(bytes, DESCRIPTOR_OUTCOME_COUNT_OFFSET);
+  if (outcomeCount === 0 || bytes.length !== DESCRIPTOR_HEADER_BYTES + outcomeCount * DESCRIPTOR_COEFFICIENT_BYTES) {
     throw new Error('representation descriptor outcome width is inconsistent');
   }
-  const identities = [16, 48, 80, 112, 144, 176, 208].map((offset) => slice(bytes, offset, 32));
+  const identities = DESCRIPTOR_IDENTITY_OFFSETS_V3.map((offset) => slice(bytes, offset, 32));
   identities.forEach((identity, index) => requireNonzero(identity, `representation descriptor identity ${index}`));
-  const denominator = u64(bytes, 248);
+  const denominator = u64(bytes, DESCRIPTOR_DENOMINATOR_OFFSET);
   if (denominator === 0n) throw new Error('representation descriptor denominator is zero');
   const support: Array<Readonly<{ outcome: number; coefficient: bigint }>> = [];
   for (let outcome = 0; outcome < outcomeCount; outcome += 1) {
-    const coefficient = u64(bytes, DESCRIPTOR_HEADER_BYTES + outcome * 8);
+    const coefficient = u64(bytes, DESCRIPTOR_HEADER_BYTES + outcome * DESCRIPTOR_COEFFICIENT_BYTES);
     if (coefficient !== 0n) support.push(Object.freeze({ outcome, coefficient }));
   }
   if (support.length === 0) throw new Error('representation descriptor has empty support');
@@ -571,23 +609,34 @@ export function encodeRationalRetireReceiptFamilyV4(input: Readonly<{
   const after = input.rentBefore + input.receiptLamports;
   if (after > MAX_U64 || input.receiptLamports < input.receiptRent || input.receiptRent === 0n) throw new Error('receipt retirement rent accounting does not balance');
   const output = new Uint8Array(RATIONAL_LIFECYCLE_COMPACT_REQUEST_BYTES_V4);
-  output.set(new TextEncoder().encode('DCRLHC04'), 0); putU16(output, 8, 4); output[10] = 3;
-  output.set(input.releaseSet, 16); output.set(key(input.market, 'Market').toBytes(), 48);
-  output.set(input.graphId, 80); output.set(input.descriptorId, 112);
-  output.set(key(input.representationAuthority, 'representation authority').toBytes(), 176);
-  output.set(key(input.receiptMint, 'receipt Mint').toBytes(), 208);
-  output.set(key(TOKEN_2022_PROGRAM_ID, 'Token-2022 program').toBytes(), 240);
-  output.set(key(input.rentCredit, 'RentCredit').toBytes(), 272);
-  output.set(key(input.rentProgram, 'Rent program').toBytes(), 304);
-  putU64(output, 336, input.generation); putU64(output, 344, input.claimsRevision);
-  putU64(output, 352, input.receiptLamports); putU64(output, 360, input.receiptRent);
-  putU64(output, 368, 0n); putU32(output, 376, input.outcomeCount); putU32(output, 380, 0);
-  putU64(output, 384, input.rentBefore); putU64(output, 392, after);
+  output.set(Lifecycle.RATIONAL_LIFECYCLE_COMPACT_HOT_MAGIC_V4, Lifecycle.LIFECYCLE_MAGIC_OFFSET);
+  putU16(output, Lifecycle.LIFECYCLE_VERSION_OFFSET, Lifecycle.RATIONAL_LIFECYCLE_COMPACT_HOT_VERSION_V4);
+  output[Lifecycle.LIFECYCLE_ACTION_OFFSET] = Lifecycle.LIFECYCLE_ACTION_RETIRE_RECEIPT_V2;
+  output.set(input.releaseSet, Lifecycle.LIFECYCLE_RELEASE_SET_OFFSET);
+  output.set(key(input.market, 'Market').toBytes(), Lifecycle.LIFECYCLE_MARKET_OFFSET);
+  output.set(input.graphId, Lifecycle.LIFECYCLE_GRAPH_ID_OFFSET);
+  output.set(input.descriptorId, Lifecycle.LIFECYCLE_DESCRIPTOR_ID_OFFSET);
+  output.set(key(input.representationAuthority, 'representation authority').toBytes(), Lifecycle.LIFECYCLE_REPRESENTATION_AUTHORITY_OFFSET);
+  output.set(key(input.receiptMint, 'receipt Mint').toBytes(), Lifecycle.LIFECYCLE_RECEIPT_MINT_OFFSET);
+  output.set(key(TOKEN_2022_PROGRAM_ID, 'Token-2022 program').toBytes(), Lifecycle.LIFECYCLE_TOKEN_PROGRAM_OFFSET);
+  output.set(key(input.rentCredit, 'RentCredit').toBytes(), Lifecycle.LIFECYCLE_RENT_CREDIT_OFFSET);
+  output.set(key(input.rentProgram, 'Rent program').toBytes(), Lifecycle.LIFECYCLE_RENT_PROGRAM_OFFSET);
+  putU64(output, Lifecycle.LIFECYCLE_GENERATION_OFFSET, input.generation);
+  putU64(output, Lifecycle.LIFECYCLE_EXPECTED_MARKET_REVISION_OFFSET, input.claimsRevision);
+  putU64(output, Lifecycle.LIFECYCLE_OBSERVED_RECEIPT_LAMPORTS_OFFSET, input.receiptLamports);
+  putU64(output, Lifecycle.LIFECYCLE_RECEIPT_RENT_PRINCIPAL_OFFSET, input.receiptRent);
+  putU64(output, Lifecycle.LIFECYCLE_EXPECTED_RECEIPT_SUPPLY_OFFSET, 0n);
+  putU32(output, Lifecycle.LIFECYCLE_OUTCOME_COUNT_OFFSET, input.outcomeCount);
+  putU32(output, Lifecycle.LIFECYCLE_COORDINATE_COUNT_OFFSET, 0);
+  putU64(output, Lifecycle.LIFECYCLE_RENT_CREDIT_BEFORE_OFFSET, input.rentBefore);
+  putU64(output, Lifecycle.LIFECYCLE_RENT_CREDIT_AFTER_OFFSET, after);
   return output;
 }
 
 export async function deriveRationalRetireReceiptChildDigestV4(family: Uint8Array, support: ReadonlyArray<CompactSupportRowV4>): Promise<Uint8Array> {
-  if (family.length !== RATIONAL_LIFECYCLE_COMPACT_REQUEST_BYTES_V4 || ascii(family, 0, 8) !== 'DCRLHC04' || support.length === 0) {
+  if (family.length !== RATIONAL_LIFECYCLE_COMPACT_REQUEST_BYTES_V4
+      || !same(slice(family, Lifecycle.LIFECYCLE_MAGIC_OFFSET, Lifecycle.LIFECYCLE_MAGIC_BYTES), Lifecycle.RATIONAL_LIFECYCLE_COMPACT_HOT_MAGIC_V4)
+      || support.length === 0) {
     throw new Error('compact family or descriptor support has the wrong exact width');
   }
   let prior = -1;
@@ -602,18 +651,22 @@ export async function deriveRationalRetireReceiptChildDigestV4(family: Uint8Arra
   identities.forEach((address, index) => key(address, `support identity ${index}`));
   if (new Set(identities).size !== identities.length) throw new Error('compact support aliases two physical identities');
   const familyDigest = await sha256(family);
-  const child = new Uint8Array(RATIONAL_LIFECYCLE_COMPACT_REQUEST_BYTES_V4 + support.length * LIFECYCLE_COORDINATE_BYTES);
-  child.set(family); child.set(new TextEncoder().encode('DCRRLC02'), 0); putU16(child, 8, 2);
-  child.set(familyDigest, 144); putU32(child, 380, support.length);
+  const child = new Uint8Array(RATIONAL_LIFECYCLE_COMPACT_REQUEST_BYTES_V4 + support.length * Lifecycle.LIFECYCLE_COORDINATE_BYTES_V2);
+  child.set(family);
+  child.set(Lifecycle.LIFECYCLE_REQUEST_MAGIC_V2, Lifecycle.LIFECYCLE_MAGIC_OFFSET);
+  putU16(child, Lifecycle.LIFECYCLE_VERSION_OFFSET, Lifecycle.LIFECYCLE_VERSION_V2);
+  child.set(familyDigest, Lifecycle.LIFECYCLE_PARENT_CONTEXT_OFFSET);
+  putU32(child, Lifecycle.LIFECYCLE_COORDINATE_COUNT_OFFSET, support.length);
   support.forEach((row, index) => {
-    const offset = RATIONAL_LIFECYCLE_COMPACT_REQUEST_BYTES_V4 + index * LIFECYCLE_COORDINATE_BYTES;
-    putU32(child, offset, row.outcome); putU64(child, offset + 8, row.coefficient);
-    child.set(key(row.shardMint, 'shard Mint').toBytes(), offset + 16);
-    child.set(key(row.structuredCustody, 'Structured custody').toBytes(), offset + 48);
-    child.set(key(row.owner, 'Claims custody owner').toBytes(), offset + 80);
-    child.set(key(row.position, 'Claims Position').toBytes(), offset + 112);
-    child.set(key(row.admission, 'Position admission').toBytes(), offset + 144);
-    putU64(child, offset + 256, ABSENT_POSITION_REVISION);
+    const offset = RATIONAL_LIFECYCLE_COMPACT_REQUEST_BYTES_V4 + index * Lifecycle.LIFECYCLE_COORDINATE_BYTES_V2;
+    putU32(child, offset + Lifecycle.LIFECYCLE_ROW_OUTCOME_OFFSET, row.outcome);
+    putU64(child, offset + Lifecycle.LIFECYCLE_ROW_COEFFICIENT_OFFSET, row.coefficient);
+    child.set(key(row.shardMint, 'shard Mint').toBytes(), offset + Lifecycle.LIFECYCLE_ROW_SHARD_MINT_OFFSET);
+    child.set(key(row.structuredCustody, 'Structured custody').toBytes(), offset + Lifecycle.LIFECYCLE_ROW_STRUCTURED_CUSTODY_OFFSET);
+    child.set(key(row.owner, 'Claims custody owner').toBytes(), offset + Lifecycle.LIFECYCLE_ROW_CUSTODY_OWNER_OFFSET);
+    child.set(key(row.position, 'Claims Position').toBytes(), offset + Lifecycle.LIFECYCLE_ROW_CUSTODY_POSITION_OFFSET);
+    child.set(key(row.admission, 'Position admission').toBytes(), offset + Lifecycle.LIFECYCLE_ROW_POSITION_ADMISSION_OFFSET);
+    putU64(child, offset + Lifecycle.LIFECYCLE_ROW_POSITION_REVISION_OFFSET, Lifecycle.LIFECYCLE_ABSENT_POSITION_REVISION_V2);
   });
   return sha256(child);
 }
@@ -837,8 +890,11 @@ export async function inspectRationalRetireReceiptV4(
     { address: coreProgram, isSigner: false, isWritable: false },
     { address: fixed[24].address, isSigner: false, isWritable: false },
     ...support.flatMap((row) => [
+      // The exact vacancy group, in the physical order the contract reads:
+      // shard Mint, Structured custody, Claims custody OWNER, Position, admission.
       { address: row.shardMint, isSigner: false, isWritable: false },
       { address: row.structuredCustody, isSigner: false, isWritable: false },
+      { address: row.owner, isSigner: false, isWritable: false },
       { address: row.position, isSigner: false, isWritable: false },
       { address: row.admission, isSigner: false, isWritable: false },
     ]),
@@ -872,7 +928,7 @@ export function buildRationalRetireReceiptCandidateV4(
       || inspection.claimsAccounts.length !== RATIONAL_LIFECYCLE_CLAIMS_COMMON_ACCOUNTS_V2
         + RATIONAL_LIFECYCLE_VACANCY_ACCOUNTS_V2 * inspection.support.length
       || inspection.familyBytes.length !== RATIONAL_LIFECYCLE_COMPACT_REQUEST_BYTES_V4
-      || ascii(inspection.familyBytes, 0, 8) !== 'DCRLHC04'
+      || !same(slice(inspection.familyBytes, Lifecycle.LIFECYCLE_MAGIC_OFFSET, Lifecycle.LIFECYCLE_MAGIC_BYTES), Lifecycle.RATIONAL_LIFECYCLE_COMPACT_HOT_MAGIC_V4)
       || inspection.rootDigest.length !== 32 || isZero(inspection.rootDigest)) {
     throw new Error('compact RetireReceipt inspection has inconsistent fixed, support, Claims, or request geometry');
   }

@@ -162,7 +162,7 @@ use crate::{
     cluster::{ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG, ExpectedClusterV1},
     model::SuccessorPlan,
     plan::pubkey,
-    rpc::{Rpc, WritePolicyV1},
+    rpc::{Rpc, WritePolicyV1, observed_or_vacant_v1},
 };
 
 pub(crate) const DEVNET_GENERAL_SESSION_COMMAND_V1: &str = "devnet-general-session";
@@ -1060,6 +1060,64 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
     // are real, they have different remedies, and a reader who fixes only the
     // one printed would find the other on the next run.
     let mut walls: Vec<Value> = Vec::new();
+    // THE DESCRIPTOR/ENTRY BINDING, ASKED HERE THROUGH THE FUNCTION TRADING
+    // ITSELF CALLS.
+    //
+    // `reauthenticate_top_level_root_roles_v3` runs
+    // `CapabilityProgramV4::validate_selection` over the SELECTED action's
+    // descriptor and refuses `TradingSbfError::DescriptorManifestEntry`
+    // (0x4015) on five conjuncts collapsed into one code. This command had
+    // every input that function takes and never asked it, so a market whose
+    // OpenBatch descriptor does not bind its manifest entry reported
+    // DELIVERABLE at all 55 coordinates and refused 128,724 CU into a
+    // simulation. Measured on devnet, 2026-09-04, against cohort-15's General
+    // market. Two of the five conjuncts compare the ENTRY to the root's
+    // persisted selection and three compare the DESCRIPTOR to the entry, so the
+    // row names each side rather than restating the code.
+    if let Err(error) = descriptor.validate_selection(selection, entry) {
+        walls.push(json!({
+            "code": "session/descriptor-manifest-entry",
+            "kind": "founding input",
+            "coordinate": format!("fixed {HOT_DESCRIPTOR_RAW_ACCOUNT_V3}"),
+            "conjunct": "CapabilityProgramV4::validate_selection(selection, entry)",
+            "refusal": "TradingSbfError::DescriptorManifestEntry 0x4015",
+            "error": format!("{error:?}"),
+            "entryVersusRootSelection": {
+                "releaseId": {
+                    "entry": hex(&entry.release_id().to_bytes()),
+                    "selection": hex(&selection.capability_release().to_bytes()),
+                    "equal": entry.release_id() == selection.capability_release(),
+                },
+                "configId": {
+                    "entry": hex(&entry.config_id().to_bytes()),
+                    "selection": hex(&selection.config().to_bytes()),
+                    "equal": entry.config_id() == selection.config(),
+                },
+            },
+            "descriptorVersusEntry": {
+                "capacityProfile": {
+                    "descriptor": hex(&descriptor.capacity_profile().to_bytes()),
+                    "entry": hex(&entry.capacity_profile_id().to_bytes()),
+                    "equal": descriptor.capacity_profile() == entry.capacity_profile_id(),
+                },
+                "rootSchema": {
+                    "descriptor": hex(&descriptor.root_schema().to_bytes()),
+                    "entry": hex(&entry.child_schema_id().to_bytes()),
+                    "equal": descriptor.root_schema() == entry.child_schema_id(),
+                },
+                "derivationPolicy": {
+                    "descriptor": hex(&descriptor.derivation_policy().to_bytes()),
+                    "entry": hex(&entry.child_derivation_id().to_bytes()),
+                    "equal": descriptor.derivation_policy() == entry.child_derivation_id(),
+                },
+            },
+            "detail": "the selected action's descriptor does not bind the manifest entry the \
+                       root was activated under; the activation's own descriptor did, which is \
+                       why the market activated and this action cannot execute",
+            "remedy": "compare the two hex pairs above that are not equal; the disagreeing field \
+                       is a compile-time property of the General market, fixed by re-founding",
+        }));
+    }
     if rent_credit != u32::try_from(LIFECYCLE_RENT_CREDIT_BYTES_V2).unwrap_or(u32::MAX) {
         walls.push(json!({
             "code": "session/rent-credit-width",
@@ -2080,24 +2138,7 @@ fn finalized_frame_v1(rpc: &mut Rpc, addresses: &[Pubkey]) -> Result<(u64, Vec<O
         .iter()
         .copied()
         .zip(values)
-        .map(|(key, value)| match value {
-            Some(account) => ObservedAccount {
-                observation,
-                key,
-                owner: account.owner,
-                lamports: account.lamports,
-                executable: account.executable,
-                data: account.data,
-            },
-            None => ObservedAccount {
-                observation,
-                key,
-                owner: system_program::ID,
-                lamports: 0,
-                executable: false,
-                data: Vec::new(),
-            },
-        })
+        .map(|(key, value)| observed_or_vacant_v1(observation, key, value))
         .collect();
     Ok((slot, observed))
 }

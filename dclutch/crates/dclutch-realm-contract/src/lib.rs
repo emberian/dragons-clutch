@@ -13,22 +13,23 @@
 //!
 //! The compact native `PositionV1` was banished with the DCLTCAT1 stratum; its
 //! only consumers were `dclutch-direct-contract` and the browser fixture
-//! generator, both deleted in that series. `generated_abi` still carries its
-//! Lean-emitted coordinates, because the same Lean schema drives the browser,
-//! where `POSITION_PDA_DOMAIN_V1` remains live for a DIFFERENT PDA family --
-//! the Direct controller's `[domain, market, maker, outcome]` positions. Two
-//! families share the domain string; only one of them has an account type
-//! here.
+//! generator, both deleted in that series. Its LAYOUT outlived it here for
+//! another cycle, because the same Lean schema drives the browser and
+//! `POSITION_PDA_DOMAIN_V1` is live there for a DIFFERENT PDA family -- the
+//! Direct controller's `[domain, market, maker, outcome]` positions. The
+//! layout is now cut and the domain kept: two families shared the domain
+//! string, only one of them ever had an account type here, and the emission
+//! carries only the half that has a writer.
 
 use core::convert::TryInto;
 
-/// Lean-emitted byte coordinates for `RealmV1` and the retired `PositionV1`.
+/// Lean-emitted byte coordinates for `RealmV1`, and the Position seed domain.
 ///
 /// This module is the crate's single authority for every Realm width, offset,
-/// magic and seed domain; the constants below are projections of it. It also
-/// emits the Position coordinates, which this crate no longer reads at all
-/// after the DCLTCAT1 burial, because the same Lean schema drives the
-/// browser's decoder and the Direct controller's Position seed domain.
+/// magic and seed domain; the constants below are projections of it. The one
+/// thing here that is not a Realm fact is `POSITION_PDA_DOMAIN_V1`, which this
+/// crate does not read either -- it is emitted for the browser, where the
+/// Direct controller derives its per-outcome Position accounts from it.
 #[allow(missing_docs, dead_code)]
 mod generated_abi;
 mod realm_layout;

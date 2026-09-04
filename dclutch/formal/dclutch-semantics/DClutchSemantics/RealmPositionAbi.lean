@@ -1,17 +1,37 @@
 import DClutchSemantics.AbiSchema
 
 /-!
-# Realm and Position ABI
+# Realm ABI, and the Position seed domain
 
-The sole byte-layout owner for the two immutable core records
-`dclutch-realm-contract` publishes: a reusable collateral `Realm` and a compact
-native `Position`.
+The sole byte-layout owner for the one immutable core record
+`dclutch-realm-contract` publishes: a reusable collateral `Realm`.
 
-It also owns the two SVM seed domains those records are addressed under.  A
-seed domain is protocol meaning, not an implementation detail — it selects
-which account a signature can move — and until this module existed it was
-restated by hand in the crate, in the operator, and again in the browser.  It
-is stated once here.
+It also owns two SVM seed domains.  A seed domain is protocol meaning, not an
+implementation detail — it selects which account a signature can move — and
+until this module existed it was restated by hand in the crate, in the
+operator, and again in the browser.  It is stated once here.
+
+## Why one domain outlived its record
+
+This module used to state a second RECORD as well: the compact native
+`PositionV1`, magic `DCLTPOS1`, eighty-eight base bytes plus a stride of
+outcome balances.  That record was banished with the DCLTCAT1 stratum — its
+only two consumers, `dclutch-direct-contract` and the browser's fixture
+generator, were deleted in that series — and the emission outlived it on both
+backends.  What that cost is exactly measurable: `POSITION_MAGIC_V1` appeared
+on ONE line of Rust in the whole tree, its own declaration, inside a module the
+crate marks `dead_code`; no type, no writer, no program header.  The browser's
+explorer carried a decoder arm for a record nothing writes until `958901b45`
+deleted it, and had to hold an exemption saying the emission could not be
+narrowed from that tree.
+
+`positionPdaDomain` is the half that is alive, and it is alive for a DIFFERENT
+family: the Direct controller derives one per-outcome Position account from
+`[domain, market, maker, outcome]`, which `directTransaction.ts` builds on every
+Direct trade.  Two families shared the domain string and only one of them ever
+had an account type here, which is why the dead half could be cut without
+touching the live one — and why `domains_are_distinct` is still the theorem
+that matters.
 -/
 
 namespace DClutch.RealmPositionAbi
@@ -63,62 +83,17 @@ def constantName : RealmField → String
 
 end RealmField
 
-/-! ## Position
+/-! ## The Position seed domain
 
-A Position carries `N` eight-byte outcome balances after a fixed base, so the
-schema states the base and the balance stride; the two measured widths follow
-from the provisional categorical profile rather than being separately asserted.
+The record is gone; the domain is not.  See the module header for which family
+still derives against it.
 -/
 
-def positionMagic : String := "DCLTPOS1"
-def positionSchemaVersion : Nat := 1
 /-- Domain seed preceding the exact Market and owner keys in a Position PDA
-derivation. -/
+derivation.  The Direct controller's per-outcome Position family is the live
+consumer; the compact native `PositionV1` this domain was written for was
+banished with the DCLTCAT1 stratum. -/
 def positionPdaDomain : String := "dclutch/position/v1"
-
-/-- Minimum categorical width represented by the current measured profile. -/
-def minOutcomes : Nat := 2
-/-- Maximum categorical width in the current provisional measured profile. -/
-def maxOutcomes : Nat := 16
-
-inductive PositionField where
-  | magic | schemaVersion | outcomeCount | reserved | market | owner | generation
-  deriving DecidableEq, Repr
-
-def positionSchema : List (FieldSpec PositionField) := [
-  ⟨.magic, .bytes 8⟩,
-  ⟨.schemaVersion, .u16⟩,
-  ⟨.outcomeCount, .u8⟩,
-  ⟨.reserved, .reserved 5⟩,
-  ⟨.market, .bytes 32⟩,
-  ⟨.owner, .bytes 32⟩,
-  ⟨.generation, .u64⟩
-]
-
-def positionLayout : List (PlacedField PositionField) := specialize positionSchema
-/-- Fixed Position bytes before its outcome balances. -/
-def positionBaseBytes : Nat := schemaWidth positionSchema
-/-- Width of the canonically-zero Position reserved span. -/
-def positionReservedBytes : Nat := 5
-/-- Stride of one outcome balance. -/
-def outcomeBalanceBytes : Nat := 8
-
-/-- Exact width of a Position of a given categorical width. -/
-def positionBytes (outcomes : Nat) : Nat :=
-  positionBaseBytes + outcomes * outcomeBalanceBytes
-
-namespace PositionField
-
-def constantName : PositionField → String
-  | .magic => "POSITION_MAGIC_OFFSET_V1"
-  | .schemaVersion => "POSITION_SCHEMA_VERSION_OFFSET_V1"
-  | .outcomeCount => "POSITION_OUTCOME_COUNT_OFFSET_V1"
-  | .reserved => "POSITION_RESERVED_OFFSET_V1"
-  | .market => "POSITION_MARKET_OFFSET_V1"
-  | .owner => "POSITION_OWNER_OFFSET_V1"
-  | .generation => "POSITION_GENERATION_OFFSET_V1"
-
-end PositionField
 
 /-! ## Exact-value pins
 
@@ -138,24 +113,6 @@ theorem realm_is_wellFormed : WellFormed realmSchema := by
   simp only [realmSchema, List.mem_cons, List.not_mem_nil, or_false] at member
   rcases member with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> decide
 
-theorem position_base_width_is_exact : positionBaseBytes = 88 := by native_decide
-theorem position_names_are_unique :
-    (positionSchema.map fun field => field.name).Nodup := by native_decide
-theorem position_fields_are_disjoint :
-    positionLayout.Pairwise Before := specializeFrom_pairwise 0 positionSchema
-theorem position_is_wellFormed : WellFormed positionSchema := by
-  refine ⟨by native_decide, ?_⟩
-  intro field member
-  simp only [positionSchema, List.mem_cons, List.not_mem_nil, or_false] at member
-  rcases member with rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> decide
-
-/-- The binary Position width the Direct family transacts against. -/
-theorem binary_position_width_is_exact : positionBytes minOutcomes = 104 := by
-  native_decide
-/-- The widest Position the provisional categorical profile admits. -/
-theorem maximum_position_width_is_exact : positionBytes maxOutcomes = 216 := by
-  native_decide
-
 /-- Both seed domains fit one SVM seed component.  A domain that outgrew this
 bound would not be a layout change; it would make every derived address
 underivable, so the bound is proved rather than assumed. -/
@@ -165,14 +122,11 @@ theorem position_domain_is_seedable :
     positionPdaDomain.toUTF8.size ≤ svmMaxSeedBytes := by native_decide
 
 /-- The two domains are distinct, so no Realm address can be reached by a
-Position derivation or the reverse. -/
+Position derivation or the reverse.  This outlived the Position RECORD on
+purpose: the derivation it separates the Realm from is the Direct controller's,
+which is live. -/
 theorem domains_are_distinct : realmPdaDomain ≠ positionPdaDomain := by
   native_decide
-
-/-- The two record magics are distinct, so the browser's magic dispatch cannot
-route one record to the other's decoder. -/
-theorem magics_are_distinct : realmMagic ≠ positionMagic := by native_decide
-
 
 /-- Canonical finalized-record schema label, and its SHA-256 identity.
 

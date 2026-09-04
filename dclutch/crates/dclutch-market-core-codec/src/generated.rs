@@ -30,7 +30,7 @@ pub const REPRESENTATION_MATERIALIZED_TAG: u8 = 2;
 pub const STATE_MAGIC: [u8; 8] = [
     0x44, 0x43, 0x4c, 0x54, 0x43, 0x4f, 0x52, 0x33,
 ];
-pub const REQUEST_MAGIC: [u8; 8] = [
+pub const CORE_REQUEST_MAGIC: [u8; 8] = [
     0x44, 0x43, 0x4c, 0x54, 0x43, 0x52, 0x51, 0x32,
 ];
 const STATE_MAGIC_OFFSET: usize = 0;
@@ -747,7 +747,7 @@ impl Request {
     pub fn encode(self) -> Result<[u8; REQUEST_BYTES], Error> {
         self.validate_shape()?;
         let mut output = [0_u8; REQUEST_BYTES];
-        put(&mut output, REQUEST_MAGIC_OFFSET, &REQUEST_MAGIC)?;
+        put(&mut output, REQUEST_MAGIC_OFFSET, &CORE_REQUEST_MAGIC)?;
         put_u16(&mut output, REQUEST_VERSION_OFFSET, VERSION)?;
         put_byte(&mut output, REQUEST_ACTION_OFFSET, action_tag(self.action))?;
         put_byte(&mut output, REQUEST_HOLDER_OFFSET, option_holder_tag(self.holder))?;
@@ -768,7 +768,7 @@ impl Request {
         if input.len() != REQUEST_BYTES {
             return Err(Error::InvalidLength);
         }
-        exact_magic(input, REQUEST_MAGIC_OFFSET, &REQUEST_MAGIC)?;
+        exact_magic(input, REQUEST_MAGIC_OFFSET, &CORE_REQUEST_MAGIC)?;
         if read_u16(input, REQUEST_VERSION_OFFSET)? != VERSION {
             return Err(Error::UnsupportedVersion);
         }

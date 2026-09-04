@@ -1,7 +1,9 @@
 import DClutchSemantics.RealmPositionAbi
 import DClutchSemantics.Codec
 
-/-! Emit the Lean-owned Realm and Position byte ABI as Rust constants. -/
+/-! Emit the Lean-owned Realm byte ABI, and the Position seed domain, as Rust
+constants.  The Position RECORD is not emitted: it was banished with the
+DCLTCAT1 stratum and the emission outlived it. -/
 
 open DClutch.RealmPositionAbi
 
@@ -25,17 +27,6 @@ def main : IO Unit := do
   IO.println s!"pub const REALM_RESERVED_BYTES_V1: usize = {realmReservedBytes};"
   for field in realmLayout do
     IO.println s!"pub const {RealmField.constantName field.spec.name}: usize = {field.offset};"
-  IO.println s!"pub const POSITION_BASE_BYTES_V1: usize = {positionBaseBytes};"
-  IO.println s!"pub const POSITION_MAGIC_V1: [u8; 8] = *b\"{positionMagic}\";"
-  IO.println s!"pub const POSITION_SCHEMA_VERSION_V1: u16 = {positionSchemaVersion};"
   IO.println s!"pub const POSITION_PDA_DOMAIN_V1: &[u8] = b\"{positionPdaDomain}\";"
-  IO.println s!"pub const POSITION_RESERVED_BYTES_V1: usize = {positionReservedBytes};"
-  IO.println s!"pub const POSITION_OUTCOME_BALANCE_BYTES_V1: usize = {outcomeBalanceBytes};"
-  IO.println s!"pub const MIN_OUTCOMES_V1: usize = {minOutcomes};"
-  IO.println s!"pub const MAX_OUTCOMES_V1: usize = {maxOutcomes};"
-  IO.println s!"pub const BINARY_POSITION_BYTES_V1: usize = {positionBytes minOutcomes};"
-  IO.println s!"pub const MAX_POSITION_BYTES_V1: usize = {positionBytes maxOutcomes};"
-  for field in positionLayout do
-    IO.println s!"pub const {PositionField.constantName field.spec.name}: usize = {field.offset};"
   emitSchemaIdentity "REALM_SCHEMA_RELEASE_PREIMAGE_V1" "REALM_SCHEMA_RELEASE_ID_V1"
     schemaReleasePreimage schemaReleaseId

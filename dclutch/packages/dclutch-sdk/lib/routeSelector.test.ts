@@ -61,13 +61,21 @@ describe('the leading-byte derivation is the census’s own table', () => {
 });
 
 describe('what the derivation refuses to answer', () => {
-  it('reads Core’s request magic as no selector rather than as a route', () => {
-    // Core dispatches on a decoded `Action` variant. `DCLTCRQ2` is the request
-    // magic every Core instruction this browser builds starts with, and no
-    // census selector mentions it — so the honest answer is the empty set, and
-    // a consumer must not read that as "this instruction reaches no route".
-    expect(censusRoutesForInstructionV1(headed('core', 'DCLTCRQ2', 64))).toEqual([]);
-    expect(LEADING_BYTE_SELECTED_ROUTES_V1.some((entry) => entry.magic === 'DCLTCRQ2')).toBe(false);
+  it('reads Core’s request magic as the whole Action candidate set', () => {
+    // `DCLTCRQ2` is the magic every Core `Action` instruction starts with, and
+    // it used to select NOTHING: the check lived only inside `Request::decode`,
+    // which the census's dispatch walk treats as terminal, so the honest answer
+    // was the empty set and a consumer had to be told not to read that as "this
+    // instruction reaches no route". The check is now also in the dispatch
+    // guard, so the magic resolves — to eleven routes at once, because Core
+    // separates them by a decoded `Action` variant this derivation has no
+    // offset for. Ambiguous is a different answer from absent, and this is the
+    // test that keeps the two apart.
+    expect(magicIsAmbiguousV1('core', 'DCLTCRQ2')).toBe(true);
+    expect(censusRouteIdsForInstructionsV1([headed('core', 'DCLTCRQ2', 64)])).toContain(
+      'core/found::process#Found',
+    );
+    expect(LEADING_BYTE_SELECTED_ROUTES_V1.some((entry) => entry.magic === 'DCLTCRQ2')).toBe(true);
   });
 
   it('returns the whole candidate set when one magic selects several routes', () => {

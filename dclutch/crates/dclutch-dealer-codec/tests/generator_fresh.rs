@@ -217,6 +217,17 @@ fn checked_in_scenario_reservation_state_is_exact_lean_generator_output() {
         "pub const DEALER_SCENARIO_RESERVATION_STATE_HEAD_RESERVED_OFFSET_V1: usize = 13;",
         "pub const DEALER_SCENARIO_RESERVATION_STATE_RESERVED_OFFSET_V1: usize = 496;",
         "pub const DEALER_SCENARIO_RESERVATION_STATE_AMOUNT_OFFSET_V1: usize = 464;",
+        // The two words all four records in `scenario_custody_reservation_v1.rs`
+        // share, which `5f8a09971` left as a `const _: () = assert!` because no
+        // Lean module owned them. `require_header` and `put_header` read these
+        // for the custody effect, the effect manifest, the reservation batch and
+        // this state alike, so a header that moved would make all four
+        // unreadable at once.
+        "pub const DEALER_SCENARIO_CUSTODY_HEADER_MAGIC_OFFSET_V1: usize = 0;",
+        "pub const DEALER_SCENARIO_CUSTODY_HEADER_MAGIC_BYTES_V1: usize = 8;",
+        "pub const DEALER_SCENARIO_CUSTODY_HEADER_VERSION_OFFSET_V1: usize = 8;",
+        "pub const DEALER_SCENARIO_CUSTODY_HEADER_VERSION_BYTES_V1: usize = 2;",
+        "pub const DEALER_SCENARIO_CUSTODY_HEADER_BYTES_V1: usize = 10;",
     ] {
         assert!(
             emitted.lines().any(|line| line == pin),
