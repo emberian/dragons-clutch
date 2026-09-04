@@ -91,45 +91,73 @@ export function routePhaseGateV1(route: string): RoutePhaseGateV1 | null {
 export interface RouteOtherMachineGateV1 {
   readonly route: string;
   readonly machines: ReadonlyArray<string>;
+  /**
+   * The states each of those machines admits, as the guard declares them.
+   *
+   * A reader holding a decoded observation of the machine answers the gate
+   * from this set. Only a reader that has NO observation says `needs-chain`,
+   * and it says which machine it is missing.
+   */
+  readonly gates: ReadonlyArray<RouteMachineStatesV1>;
+}
+
+/** One machine's admissible states on one route. */
+export interface RouteMachineStatesV1 {
+  readonly machine: string;
+  readonly states: ReadonlyArray<string>;
 }
 
 export const ROUTES_GATED_ON_ANOTHER_MACHINE_V1: ReadonlyArray<RouteOtherMachineGateV1> = [
-  { route: "core/activate_capability_child#ActivateCapability", machines: ["funding-ledger"] },
-  { route: "core/capability::process#ActivateCapability", machines: ["funding-ledger"] },
-  { route: "core/capability::process#CloseCapability", machines: ["funding-ledger"] },
-  { route: "core/close_capability_child#CloseCapability", machines: ["funding-ledger"] },
-  { route: "core/process_found#FoundAndPermit", machines: ["projected-custody"] },
-  { route: "core/series_consume::process", machines: ["projected-custody", "series-ticket"] },
-  { route: "core/series_open::process", machines: ["series-ticket"] },
-  { route: "core/series_permit_expiry::process", machines: ["series-ticket"] },
-  { route: "core/series_permit_expiry_precommit_v1::process", machines: ["series-ticket"] },
-  { route: "custody/abort_open_and_close#AbortOpenAndClose", machines: ["projected-custody"] },
-  { route: "custody/abort_source_and_close#AbortSourceAndClose", machines: ["projected-custody"] },
-  { route: "custody/dealer_reservation_v1::process", machines: ["dealer-checkpoint"] },
-  { route: "custody/lock_hoard#LockHoard", machines: ["projected-custody"] },
-  { route: "custody/lock_hoard_and_close_source#LockHoardAndCloseSource", machines: ["projected-custody"] },
-  { route: "custody/open_hoard#OpenHoard", machines: ["projected-custody"] },
-  { route: "custody/open_source_compartment#OpenSourceCompartment", machines: ["projected-custody"] },
-  { route: "custody/realize_and_close#RealizeAndClose", machines: ["projected-custody"] },
-  { route: "custody/refund_and_close#RefundAndClose", machines: ["projected-custody"] },
-  { route: "resolution/process_abandon#magic", machines: ["source"] },
-  { route: "resolution/process_capture#Capture", machines: ["source"] },
-  { route: "resolution/process_commit_failure#CommitFailure", machines: ["source"] },
-  { route: "resolution/process_settle#Settle", machines: ["source"] },
-  { route: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_cleanup_v1", machines: ["dealer-checkpoint"] },
-  { route: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_commit_v1", machines: ["dealer-checkpoint"] },
-  { route: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_evaluate_v1", machines: ["dealer-checkpoint"] },
-  { route: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_page_v1", machines: ["dealer-checkpoint"] },
-  { route: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_reserve_v1", machines: ["dealer-checkpoint"] },
-  { route: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_rollback_v1", machines: ["dealer-checkpoint"] },
-  { route: "trading/direct_begin_retiring_v1::process_direct_begin_retiring_v1", machines: ["direct-root"] },
-  { route: "trading/direct_close_maker_v1::process_direct_close_maker_v1", machines: ["direct-root"] },
-  { route: "trading/direct_token_setup_v1::process_direct_token_setup_v1", machines: ["direct-root"] },
+  { route: "core/activate_capability_child#ActivateCapability", machines: ["funding-ledger"], gates: [{ machine: "funding-ledger", states: ["Active", "Pending"] }] },
+  { route: "core/capability::process#ActivateCapability", machines: ["funding-ledger"], gates: [{ machine: "funding-ledger", states: ["Active", "Pending"] }] },
+  { route: "core/capability::process#CloseCapability", machines: ["funding-ledger"], gates: [{ machine: "funding-ledger", states: ["Active", "Pending"] }] },
+  { route: "core/close_capability_child#CloseCapability", machines: ["funding-ledger"], gates: [{ machine: "funding-ledger", states: ["Active", "Pending"] }] },
+  { route: "core/process_found#FoundAndPermit", machines: ["projected-custody"], gates: [{ machine: "projected-custody", states: ["HoardLocked"] }] },
+  { route: "core/series_consume::process", machines: ["projected-custody", "series-ticket"], gates: [{ machine: "projected-custody", states: ["HoardLocked"] }, { machine: "series-ticket", states: ["Prepared"] }] },
+  { route: "core/series_open::process", machines: ["series-ticket"], gates: [{ machine: "series-ticket", states: ["Prepared"] }] },
+  { route: "core/series_permit_expiry::process", machines: ["series-ticket"], gates: [{ machine: "series-ticket", states: ["Expired"] }] },
+  { route: "core/series_permit_expiry_precommit_v1::process", machines: ["series-ticket"], gates: [{ machine: "series-ticket", states: ["Prepared"] }] },
+  { route: "custody/abort_open_and_close#AbortOpenAndClose", machines: ["projected-custody"], gates: [{ machine: "projected-custody", states: ["HoardOpen"] }] },
+  { route: "custody/abort_source_and_close#AbortSourceAndClose", machines: ["projected-custody"], gates: [{ machine: "projected-custody", states: ["SourceFunded"] }] },
+  { route: "custody/dealer_reservation_v1::process", machines: ["dealer-checkpoint"], gates: [{ machine: "dealer-checkpoint", states: ["Evaluated", "Reserved", "RollingBack"] }] },
+  { route: "custody/lock_hoard#LockHoard", machines: ["projected-custody"], gates: [{ machine: "projected-custody", states: ["HoardOpen"] }] },
+  { route: "custody/lock_hoard_and_close_source#LockHoardAndCloseSource", machines: ["projected-custody"], gates: [{ machine: "projected-custody", states: ["HoardOpen", "SourceFunded"] }] },
+  { route: "custody/open_hoard#OpenHoard", machines: ["projected-custody"], gates: [{ machine: "projected-custody", states: ["Initialized"] }] },
+  { route: "custody/open_source_compartment#OpenSourceCompartment", machines: ["projected-custody"], gates: [{ machine: "projected-custody", states: ["HoardOpen"] }] },
+  { route: "custody/realize_and_close#RealizeAndClose", machines: ["projected-custody"], gates: [{ machine: "projected-custody", states: ["HoardLocked"] }] },
+  { route: "custody/refund_and_close#RefundAndClose", machines: ["projected-custody"], gates: [{ machine: "projected-custody", states: ["HoardLocked"] }] },
+  { route: "resolution/process_abandon#magic", machines: ["source"], gates: [{ machine: "source", states: ["Exhausted", "FailureCommitted", "Recovery", "Resolved", "Retired"] }] },
+  { route: "resolution/process_capture#Capture", machines: ["source"], gates: [{ machine: "source", states: ["Primary"] }] },
+  { route: "resolution/process_commit_failure#CommitFailure", machines: ["source"], gates: [{ machine: "source", states: ["Primary"] }] },
+  { route: "resolution/process_settle#Settle", machines: ["source"], gates: [{ machine: "source", states: ["Primary"] }] },
+  { route: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_cleanup_v1", machines: ["dealer-checkpoint"], gates: [{ machine: "dealer-checkpoint", states: ["Collecting", "Evaluated", "Reserved", "RollingBack"] }] },
+  { route: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_commit_v1", machines: ["dealer-checkpoint"], gates: [{ machine: "dealer-checkpoint", states: ["Reserved"] }] },
+  { route: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_evaluate_v1", machines: ["dealer-checkpoint"], gates: [{ machine: "dealer-checkpoint", states: ["Collecting"] }] },
+  { route: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_page_v1", machines: ["dealer-checkpoint"], gates: [{ machine: "dealer-checkpoint", states: ["Collecting"] }] },
+  { route: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_reserve_v1", machines: ["dealer-checkpoint"], gates: [{ machine: "dealer-checkpoint", states: ["Evaluated", "Reserved", "RollingBack"] }] },
+  { route: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_rollback_v1", machines: ["dealer-checkpoint"], gates: [{ machine: "dealer-checkpoint", states: ["Evaluated", "Reserved", "RollingBack"] }] },
+  { route: "trading/direct_begin_retiring_v1::process_direct_begin_retiring_v1", machines: ["direct-root"], gates: [{ machine: "direct-root", states: ["Open"] }] },
+  { route: "trading/direct_close_maker_v1::process_direct_close_maker_v1", machines: ["direct-root"], gates: [{ machine: "direct-root", states: ["Retiring"] }] },
+  { route: "trading/direct_token_setup_v1::process_direct_token_setup_v1", machines: ["direct-root"], gates: [{ machine: "direct-root", states: ["Open"] }] },
 ];
 
 /** The machines gating one route that this table cannot state, if any. */
 export function routeOtherMachineGateV1(route: string): RouteOtherMachineGateV1 | null {
   return ROUTES_GATED_ON_ANOTHER_MACHINE_V1.find((entry) => entry.route === route) ?? null;
+}
+
+/** The states one machine admits on one route, or `null` when it gates neither. */
+export function routeMachineStatesV1(route: string, machine: string): ReadonlyArray<string> | null {
+  return routeOtherMachineGateV1(route)?.gates.find((set) => set.machine === machine)?.states ?? null;
+}
+
+/** Every machine any route in this table is gated on, once each. */
+export function gatedMachinesV1(): ReadonlyArray<string> {
+  const machines: string[] = [];
+  for (const entry of ROUTES_GATED_ON_ANOTHER_MACHINE_V1) {
+    for (const machine of entry.machines) if (!machines.includes(machine)) machines.push(machine);
+  }
+  return machines.sort();
 }
 
 /**

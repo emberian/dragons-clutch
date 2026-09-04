@@ -23,6 +23,43 @@ from typing import Any, Mapping, NoReturn, Sequence
 
 SCHEMA = "dclutch-sbf-link-provenance-v1"
 GATE_SCHEMA = "dclutch-checked-upgrade-gate-v1"
+# The reproducible gate carries only what a second build of the same commit on
+# the same platform-tools host OS produces byte-identically: the source-tree,
+# build-link and diagnostics manifests, the shipped ELFs, the checked release
+# manifests, and the frame measurements as NUMBERS.  Everything with per-run
+# identity -- the build run nonce, every build/frame log, every frame report
+# file, every link provenance descriptor -- lives in the run record instead,
+# which is kept for the reader and is deliberately not covered by this digest.
+REPRODUCIBLE_GATE_SCHEMA = "dclutch-reproducible-release-gate-v1"
+RUN_RECORD_SCHEMA = "dclutch-release-gate-run-record-v1"
+REPRODUCIBLE_GATE_NAME = "RELEASE_GATE.json"
+GATE_DIGEST_NAME = "gate.sha256"
+RUN_RECORD_NAME = "run/RUN_RECORD.json"
+# Exactly the link fields that reproduce.  `frame_count`/`deepest_frame_bytes`
+# are measurements OF the reproducible object, not properties of the run that
+# measured it, so they belong here while the report file that states them does
+# not.
+REPRODUCIBLE_LINK_FIELDS = (
+    "label",
+    "package",
+    "sbf_diagnostics_count",
+    "frame_count",
+    "frame_bound_bytes",
+    "frames_at_or_over_bound",
+    "deepest_frame_bytes",
+    "elf",
+    "checked_manifest",
+)
+RUN_LINK_FIELDS = (
+    "label",
+    "package",
+    "build_log",
+    "compile_marker",
+    "frame_build_log",
+    "frame_compile_marker",
+    "frame_report",
+    "artifact_provenance",
+)
 SAFE_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
@@ -232,6 +269,255 @@ def atomic_new(path: Path, value: Mapping[str, Any]) -> None:
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+
+
+def atomic_new_bytes(path: Path, value: bytes) -> None:
+    if path.exists() or path.is_symlink():
+        refuse(f"output already exists: {path}")
+    parent = path.parent.resolve(strict=True)
+    if parent != path.parent:
+        refuse("output parent is not canonical")
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=parent)
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(value)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def project(value: Mapping[str, Any], fields: Sequence[str]) -> dict[str, Any]:
+    return {field: value[field] for field in fields}
+
+
+def emit_reproducible_gate(
+    root: Path,
+    *,
+    source_revision: str,
+    source_tree_sha256: str,
+    solana_cli_version: str,
+    build_run_id: str,
+    links: Sequence[Mapping[str, Any]],
+) -> tuple[str, str]:
+    """Split one run's evidence into the reproducible gate and its run record.
+
+    The gate is the admission authority: two builds of one commit on one
+    platform-tools host OS produce it byte-for-byte, so an admission that binds
+    to its digest survives the loss of the directory that first produced it.
+    The run record is the same run's substantiation -- the logs, reports and
+    per-link descriptors that show HOW those bytes were reached -- and is
+    excluded from the gate digest precisely because it cannot reproduce.
+    """
+
+    gate = {
+        "schema": REPRODUCIBLE_GATE_SCHEMA,
+        "source_revision": source_revision,
+        "source_tree_sha256": source_tree_sha256,
+        "solana_cli_version": solana_cli_version,
+        "link_count": len(links),
+        "source_tree_manifest": evidence(
+            root, "source-tree.txt", "source tree manifest"
+        ),
+        "build_links_manifest": evidence(
+            root, "build-links.tsv", "build links manifest"
+        ),
+        "diagnostics_manifest": evidence(
+            root, "build-diagnostics.txt", "build diagnostics manifest"
+        ),
+        "links": [project(link, REPRODUCIBLE_LINK_FIELDS) for link in links],
+    }
+    gate_path = root / REPRODUCIBLE_GATE_NAME
+    atomic_new(gate_path, gate)
+    gate_digest = sha256_file(gate_path)
+    # `shasum -a 256 -c gate.sha256` from the root is the whole check, so the
+    # digest a cohort records is separately readable without a JSON parser.
+    atomic_new_bytes(
+        root / GATE_DIGEST_NAME,
+        f"{gate_digest}  {REPRODUCIBLE_GATE_NAME}\n".encode(),
+    )
+
+    run_directory = root / "run"
+    run_directory.mkdir(exist_ok=True)
+    record = {
+        "schema": RUN_RECORD_SCHEMA,
+        "source_revision": source_revision,
+        "source_tree_sha256": source_tree_sha256,
+        "build_run_id": build_run_id,
+        "reproducible_gate": evidence(root, REPRODUCIBLE_GATE_NAME, "reproducible gate"),
+        "checked_upgrade_gate": evidence(
+            root, "CHECKED_UPGRADE_GATE.json", "checked Upgrade gate"
+        ),
+        "build_run_manifest": evidence(root, "build-run.txt", "build run manifest"),
+        "link_count": len(links),
+        "links": [project(link, RUN_LINK_FIELDS) for link in links],
+    }
+    record_path = root / RUN_RECORD_NAME
+    atomic_new(record_path, record)
+    return gate_digest, sha256_file(record_path)
+
+
+def verify_reproducible_gate(root: Path, expected_gate_sha256: str) -> dict[str, Any]:
+    """Rehash every byte the reproducible gate names, and nothing else.
+
+    A candidate rebuilt at the admitted commit satisfies this without owning a
+    single file from the run that was admitted.  That is the whole point: the
+    cohort's authority is the bytes it deployed, not the directory that first
+    hashed them.
+    """
+
+    if not HEX64.fullmatch(expected_gate_sha256):
+        refuse("expected reproducible gate SHA-256 is malformed")
+    gate_path = root / REPRODUCIBLE_GATE_NAME
+    regular(gate_path, "reproducible gate")
+    if sha256_file(gate_path) != expected_gate_sha256:
+        refuse("reproducible gate SHA-256 differs")
+    gate = read_json(gate_path, "reproducible gate")
+    exact_keys(
+        gate,
+        {
+            "schema",
+            "source_revision",
+            "source_tree_sha256",
+            "solana_cli_version",
+            "link_count",
+            "source_tree_manifest",
+            "build_links_manifest",
+            "diagnostics_manifest",
+            "links",
+        },
+        "reproducible gate",
+    )
+    if gate["schema"] != REPRODUCIBLE_GATE_SCHEMA:
+        refuse("reproducible gate schema differs")
+    if not HEX40.fullmatch(gate["source_revision"] or "") or not HEX64.fullmatch(
+        gate["source_tree_sha256"] or ""
+    ):
+        refuse("reproducible gate source identity is malformed")
+    if (
+        not gate["solana_cli_version"]
+        or not isinstance(gate["solana_cli_version"], str)
+        or "\n" in gate["solana_cli_version"]
+    ):
+        refuse("reproducible gate Solana CLI version is empty or multiline")
+    links = gate["links"]
+    if (
+        not isinstance(links, list)
+        or gate["link_count"] != len(links)
+        or len(links) != len(SHIPPED_LINKS)
+    ):
+        refuse("reproducible gate is not the exact shipped link set")
+    if [
+        (link.get("label"), link.get("package")) if isinstance(link, dict) else None
+        for link in links
+    ] != [(label, package) for label, package, _ in SHIPPED_LINKS]:
+        refuse("reproducible gate link order/identity is not canonical")
+
+    source_tree = verify_evidence(
+        root, gate["source_tree_manifest"], "source tree manifest"
+    )
+    if sha256_file(source_tree) != gate["source_tree_sha256"]:
+        refuse("source tree manifest does not hash to the gate's source tree")
+    build_links_path = verify_evidence(
+        root, gate["build_links_manifest"], "build links manifest"
+    )
+    build_links = []
+    for line in read_lines(build_links_path, "build links manifest"):
+        if line.count("\t") != 1:
+            refuse("build links manifest row is malformed")
+        build_links.append(tuple(line.split("\t", 1)))
+    if build_links != [(label, package) for label, package, _ in SHIPPED_LINKS]:
+        refuse("build links manifest is not the canonical shipped order")
+    diagnostics_path = verify_evidence(
+        root, gate["diagnostics_manifest"], "build diagnostics manifest"
+    )
+    diagnostics: dict[str, int] = {}
+    for line in read_lines(diagnostics_path, "build diagnostics manifest"):
+        if line.count("=") != 1:
+            refuse("build diagnostics row is malformed")
+        label, count_text = line.split("=", 1)
+        if label in diagnostics or not count_text.isascii() or not count_text.isdigit():
+            refuse("build diagnostics row is duplicated or noncanonical")
+        diagnostics[label] = int(count_text)
+    if list(diagnostics) != [label for label, _, _ in SHIPPED_LINKS]:
+        refuse("build diagnostics manifest is not the canonical shipped order")
+
+    selected: dict[str, dict[str, Any]] = {}
+    for link, (label, package, produces_artifact) in zip(links, SHIPPED_LINKS):
+        exact_keys(link, set(REPRODUCIBLE_LINK_FIELDS), f"reproducible gate {label} link")
+        if (
+            link["sbf_diagnostics_count"] != 0
+            or diagnostics[label] != 0
+            or link["frames_at_or_over_bound"] != 0
+            or link["frame_bound_bytes"] != 4096
+        ):
+            refuse(f"reproducible gate {label} link is not frame/diagnostic clean")
+        for field in ("frame_count", "deepest_frame_bytes"):
+            if (
+                not isinstance(link[field], int)
+                or isinstance(link[field], bool)
+                or link[field] < 0
+            ):
+                refuse(f"reproducible gate {label} {field} is malformed")
+        if produces_artifact != (link["elf"] is not None) or produces_artifact != (
+            link["checked_manifest"] is not None
+        ):
+            refuse(f"reproducible gate {label} link has the wrong shipped shape")
+        if not produces_artifact:
+            continue
+        if link["elf"].get("canonical_path") != f"elf/{label}.so":
+            refuse(f"reproducible gate {label} ELF is not its canonical named-role path")
+        if link["checked_manifest"].get("canonical_path") != f"evidence/{label}/checked.bin":
+            refuse(
+                f"reproducible gate {label} checked manifest is not its canonical path"
+            )
+        elf = verify_evidence(root, link["elf"], f"{label} ELF")
+        if elf.read_bytes()[:4] != b"\x7fELF":
+            refuse(f"reproducible gate {label} shipped file is not an ELF")
+        manifest = verify_evidence(
+            root, link["checked_manifest"], f"{label} checked manifest"
+        )
+        selected[label] = {
+            "package": package,
+            "elf_path": str(elf),
+            "elf_bytes": elf.stat().st_size,
+            "elf_sha256": link["elf"]["sha256"],
+            "checked_manifest_path": str(manifest),
+            "checked_manifest_sha256": link["checked_manifest"]["sha256"],
+        }
+    return {
+        "gate": gate,
+        "gate_path": gate_path,
+        "gate_sha256": expected_gate_sha256,
+        "roles": selected,
+    }
+
+
+def select_reproducible_role(
+    root: Path, expected_gate_sha256: str, role: str
+) -> dict[str, Any]:
+    if role not in ROLE_PACKAGES:
+        refuse(f"unknown permanent role: {role}")
+    verified = verify_reproducible_gate(root, expected_gate_sha256)
+    chosen = verified["roles"].get(role)
+    if chosen is None or chosen["package"] != ROLE_PACKAGES[role]:
+        refuse(f"reproducible gate does not ship exactly one {role} artifact")
+    return {
+        "schema": "dclutch-reproducible-gate-role-selection-v1",
+        "role": role,
+        "package": chosen["package"],
+        "source_revision": verified["gate"]["source_revision"],
+        "source_tree_sha256": verified["gate"]["source_tree_sha256"],
+        "gate_path": str(verified["gate_path"]),
+        "gate_sha256": expected_gate_sha256,
+        "elf_path": chosen["elf_path"],
+        "elf_bytes": chosen["elf_bytes"],
+        "elf_sha256": chosen["elf_sha256"],
+        "checked_manifest_path": chosen["checked_manifest_path"],
+        "checked_manifest_sha256": chosen["checked_manifest_sha256"],
+    }
 
 
 def emit(arguments: argparse.Namespace) -> None:
@@ -718,6 +1004,16 @@ def emit_gate(arguments: argparse.Namespace) -> None:
     target = root / "CHECKED_UPGRADE_GATE.json"
     atomic_new(target, gate)
     print(f"checked Upgrade gate sha256={sha256_file(target)}")
+    gate_digest, record_digest = emit_reproducible_gate(
+        root,
+        source_revision=arguments.source_revision,
+        source_tree_sha256=arguments.source_tree_sha256,
+        solana_cli_version=arguments.solana_cli_version,
+        build_run_id=arguments.build_run_id,
+        links=links,
+    )
+    print(f"reproducible release gate sha256={gate_digest}")
+    print(f"release gate run record sha256={record_digest}")
 
 
 def parser() -> argparse.ArgumentParser:
@@ -760,6 +1056,15 @@ def parser() -> argparse.ArgumentParser:
     gate.add_argument("--source-tree-sha256", required=True)
     gate.add_argument("--solana-cli-version", required=True)
     gate.add_argument("--build-run-id", required=True)
+
+    reproducible = commands.add_parser("verify-reproducible-gate")
+    reproducible.add_argument("--root", required=True)
+    reproducible.add_argument("--gate-sha256", required=True)
+
+    reproducible_role = commands.add_parser("select-reproducible-role")
+    reproducible_role.add_argument("--root", required=True)
+    reproducible_role.add_argument("--gate-sha256", required=True)
+    reproducible_role.add_argument("--role", required=True)
     return top
 
 
@@ -815,6 +1120,36 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if arguments.command == "emit-gate":
             emit_gate(arguments)
+            return 0
+        if arguments.command == "verify-reproducible-gate":
+            root = Path(arguments.root).resolve(strict=True)
+            verified = verify_reproducible_gate(root, arguments.gate_sha256)
+            print(
+                json.dumps(
+                    {
+                        "schema": "dclutch-reproducible-gate-verification-v1",
+                        "gate_sha256": verified["gate_sha256"],
+                        "source_revision": verified["gate"]["source_revision"],
+                        "source_tree_sha256": verified["gate"]["source_tree_sha256"],
+                        "link_count": verified["gate"]["link_count"],
+                        "roles": verified["roles"],
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return 0
+        if arguments.command == "select-reproducible-role":
+            root = Path(arguments.root).resolve(strict=True)
+            print(
+                json.dumps(
+                    select_reproducible_role(
+                        root, arguments.gate_sha256, arguments.role
+                    ),
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
             return 0
         selected = select_gate_role(
             Path(arguments.gate).resolve(strict=True),

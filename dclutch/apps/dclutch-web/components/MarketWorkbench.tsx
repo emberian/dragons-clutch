@@ -14,8 +14,15 @@ import {
   capabilityActContractV1,
   capabilityPhaseGateTextV1,
   evaluateCapabilityV1,
+  machineTextV1,
   type CapabilityStage,
 } from '@/lib/capabilityModel';
+import {
+  acquireMachineObservationsV1,
+  type MachineObservationV1,
+} from '@dclutch/sdk/stateMachines';
+import { CORE_STATE_GENERATION_OFFSET } from '@dclutch/sdk/generated/coreFound';
+import { u64 } from '@dclutch/sdk/bytes';
 import { browserCapabilityStandingsForStageV1, capabilityWorkspaceV1 } from '@/lib/capabilitySurface';
 import ConsoleHeader from '@/components/ConsoleHeader';
 import { smokeStoryEnabledV1 } from '@/lib/flags';
@@ -27,6 +34,23 @@ import {
   OperatorRefusal,
   PubkeyField,
 } from '@/components/operator/OperatorFields';
+
+/**
+ * What the machines this observation read are in, for the status line.
+ *
+ * Said beside the Market's own slot because a Source resolution state is a
+ * DIFFERENT machine at the same floor, and a reader who sees only the Market's
+ * phase has been told half of what was read. A machine whose account is absent
+ * says so; a machine whose bytes were refused says that instead, because those
+ * are different facts and only the second is a defect.
+ */
+function machineObservationTextV1(machines: ReadonlyArray<MachineObservationV1>): string {
+  if (machines.length === 0) return '';
+  return machines.map((machine) => {
+    if (machine.state !== null) return ` · ${machine.machine} ${machine.state}`;
+    return machine.present ? ` · ${machine.machine} refused` : ` · no ${machine.machine} account`;
+  }).join('');
+}
 
 type Stage = Readonly<{
   id: CapabilityStage;
@@ -45,7 +69,21 @@ const STAGES: ReadonlyArray<Stage> = Object.freeze([
 type WorkbenchState =
   | Readonly<{ kind: 'idle'; message: string }>
   | Readonly<{ kind: 'loading' | 'error'; message: string; inputKey: string }>
-  | Readonly<{ kind: 'ready'; snapshot: OperatorSurfaceSnapshotV1; inputKey: string }>;
+  | Readonly<{
+      kind: 'ready';
+      snapshot: OperatorSurfaceSnapshotV1;
+      /**
+       * The state machines this observation could read, decoded.
+       *
+       * Empty is not "none apply": it is "this reader observed none", which is
+       * what `evaluateCapabilityV1` turns into `needs-chain` with the machine
+       * named. Only the Source state has an address a Market determines, so
+       * this holds at most one entry today and says so on the surface rather
+       * than leaving a reader to infer it.
+       */
+      machines: ReadonlyArray<MachineObservationV1>;
+      inputKey: string;
+    }>;
 type WorkbenchRefusalFieldV1 = 'endpoint' | (typeof OPERATOR_ROLES)[number] | 'realm' | 'market' | null;
 
 function reason(error: unknown): string { return error instanceof Error ? error.message : 'chain acquisition refused without a usable reason'; }
@@ -98,9 +136,31 @@ export default function MarketWorkbench({ initialStage = 'author', surface = 'li
     const requestedInputKey = inputKey;
     setState({ kind: 'loading', message: 'Reacquiring executable roles and exact Market ownership from finalized local RPC…', inputKey: requestedInputKey });
     try {
-      const snapshot = await acquireOperatorSurfaceV1(new SolanaRpcClient(endpoint), effectiveCoordinates);
+      const client = new SolanaRpcClient(endpoint);
+      const snapshot = await acquireOperatorSurfaceV1(client, effectiveCoordinates);
       if (currentInputKey.current !== requestedInputKey) return;
-      setState({ kind: 'ready', snapshot, inputKey: requestedInputKey });
+      // The Source state is the one machine whose account a Market determines,
+      // so it is read at the same floor rather than left `needs-chain`. A
+      // refusal here is recorded as a refusal and never dropped: an observation
+      // that quietly became empty is indistinguishable from one that was never
+      // attempted, which is the reading this whole surface exists to remove.
+      let machines: ReadonlyArray<MachineObservationV1> = [];
+      if (snapshot.market !== null) {
+        const market = snapshot.market.address;
+        try {
+          const core = await client.accountInfo(market);
+          if (core.account === null) throw new Error('the Market vanished between reads');
+          machines = await acquireMachineObservationsV1(
+            client,
+            { address: market, generation: u64(core.account.data, CORE_STATE_GENERATION_OFFSET) },
+            effectiveCoordinates.resolution,
+          );
+        } catch (error) {
+          machines = [{ machine: 'source', present: true, state: null, refusal: reason(error) }];
+        }
+      }
+      if (currentInputKey.current !== requestedInputKey) return;
+      setState({ kind: 'ready', snapshot, machines, inputKey: requestedInputKey });
     } catch (error) {
       if (currentInputKey.current === requestedInputKey) setState({ kind: 'error', message: `Refused: ${reason(error)}`, inputKey: requestedInputKey });
     }
@@ -110,6 +170,7 @@ export default function MarketWorkbench({ initialStage = 'author', surface = 'li
     ? { kind: 'idle', message: 'Inputs changed. Reacquire this exact chain surface before opening a route.' }
     : state;
   const snapshot = currentState.kind === 'ready' ? currentState.snapshot : null;
+  const machines: ReadonlyArray<MachineObservationV1> = currentState.kind === 'ready' ? currentState.machines : [];
   const resolutionSurface = surface === 'resolution';
   const refusalField = currentState.kind === 'error' ? workbenchRefusalFieldV1(currentState.message) : null;
   const refusalFor = (field: Exclude<WorkbenchRefusalFieldV1, null>) => refusalField === field
@@ -146,10 +207,14 @@ export default function MarketWorkbench({ initialStage = 'author', surface = 'li
         <div className="operator-field-slot"><PubkeyField label="Realm · optional" value={coordinates.realm} onChange={(next) => update('realm', next)} provenance="Add one only when the lifecycle decision depends on a Realm read." />{refusalFor('realm')}</div>
         <div className="operator-field-slot"><PubkeyField label="Market · optional during authoring" value={coordinates.market} onChange={(next) => update('market', next)} provenance="Add one to evaluate market-bound lifecycle actions; leave it empty while authoring records." />{refusalFor('market')}</div>
       </div></fieldset>
-      <button type="submit" disabled={currentState.kind === 'loading'}>{currentState.kind === 'loading' ? 'Reading finalized state…' : 'Observe this chain surface'}</button><p className="direct-status" aria-live="polite">{currentState.kind === 'ready' ? `Observed at slot ${currentState.snapshot.observedSlot}${currentState.snapshot.market ? ` · ${compact(currentState.snapshot.market.address)} · ${currentState.snapshot.market.dataBytes} bytes` : ' · no Market selected'}` : currentState.kind === 'error' && refusalField !== null ? `Observation refused at ${refusalField}. Its remedy is beside that field.` : currentState.message}</p>{currentState.kind === 'error' && refusalField === null ? <OperatorRefusal remedy="Recheck the coordinates as one deployment." detail={currentState.message} /> : null}{currentState.kind === 'ready' && <dl className="workbench-authority"><div><dt>Programs</dt><dd>{currentState.snapshot.roles.length} executable</dd></div><div><dt>Realm</dt><dd>{currentState.snapshot.realm?.header ?? (currentState.snapshot.realm ? 'Core-owned / unclassified' : 'not selected')}</dd></div><div><dt>Market</dt><dd>{currentState.snapshot.market?.header ?? (currentState.snapshot.market ? 'Core-owned / unclassified' : 'not selected')}</dd></div><div><dt>Release</dt><dd>unrecognized until route preflight</dd></div></dl>}</form>
+      <button type="submit" disabled={currentState.kind === 'loading'}>{currentState.kind === 'loading' ? 'Reading finalized state…' : 'Observe this chain surface'}</button><p className="direct-status" aria-live="polite">{currentState.kind === 'ready' ? `Observed at slot ${currentState.snapshot.observedSlot}${currentState.snapshot.market ? ` · ${compact(currentState.snapshot.market.address)} · ${currentState.snapshot.market.dataBytes} bytes` : ' · no Market selected'}${machineObservationTextV1(currentState.machines)}` : currentState.kind === 'error' && refusalField !== null ? `Observation refused at ${refusalField}. Its remedy is beside that field.` : currentState.message}</p>{currentState.kind === 'error' && refusalField === null ? <OperatorRefusal remedy="Recheck the coordinates as one deployment." detail={currentState.message} /> : null}{currentState.kind === 'ready' && <dl className="workbench-authority"><div><dt>Programs</dt><dd>{currentState.snapshot.roles.length} executable</dd></div><div><dt>Realm</dt><dd>{currentState.snapshot.realm?.header ?? (currentState.snapshot.realm ? 'Core-owned / unclassified' : 'not selected')}</dd></div><div><dt>Market</dt><dd>{currentState.snapshot.market?.header ?? (currentState.snapshot.market ? 'Core-owned / unclassified' : 'not selected')}</dd></div><div><dt>Release</dt><dd>unrecognized until route preflight</dd></div></dl>}</form>
 
       <section className="workbench-actions"><header><span>{stage.number} · current stage</span><h2>{stage.title}</h2><p>{stage.summary}</p></header><div>{actions.map((standing) => {
-        const verdict = evaluateCapabilityV1(standing, snapshot);
+        const verdict = evaluateCapabilityV1(standing, snapshot, machines);
+        // Derived, never typed: the clauses come from the census's own sets and
+        // the decoded state, so a card cannot say a machine admitted anything
+        // the table does not.
+        const machineClauses = machineTextV1(verdict.phaseGate);
         const workspace = capabilityWorkspaceV1(standing.action, snapshot);
         const contract = capabilityActContractV1(standing);
         const accepted = verdict.status === 'ready-to-preflight' && workspace !== null;
@@ -157,7 +222,7 @@ export default function MarketWorkbench({ initialStage = 'author', surface = 'li
         // and cannot say why is the flat-console failure in miniature; where an
         // act cannot be opened, the card says what is missing and links to the
         // page that answers it, which is always reachable.
-        return <article className={accepted ? 'ready' : ''} key={standing.action.id}><div><span className={`operator-status ${verdict.status}`}>{verdict.status.replaceAll('-', ' ')}</span><h3>{standing.action.action}</h3></div><p>{verdict.reason}</p><dl className="operator-action-contract"><div><dt>Where it runs</dt><dd>{contract.venue}</dd></div><div><dt>What it promises</dt><dd>{contract.guarantee}</dd></div><div><dt>Phase gate</dt><dd>{capabilityPhaseGateTextV1(verdict.phaseGate)}</dd></div></dl>{standing.walls.map((held) => <p className="operator-action-wall" key={held.citation}><strong>Known wall</strong> {held.statement} <small>({held.citation})</small></p>)}{accepted && workspace !== null
+        return <article className={accepted ? 'ready' : ''} key={standing.action.id}><div><span className={`operator-status ${verdict.status}`}>{verdict.status.replaceAll('-', ' ')}</span><h3>{standing.action.action}</h3></div><p>{verdict.reason}</p><dl className="operator-action-contract"><div><dt>Where it runs</dt><dd>{contract.venue}</dd></div><div><dt>What it promises</dt><dd>{contract.guarantee}</dd></div><div><dt>Phase gate</dt><dd>{capabilityPhaseGateTextV1(verdict.phaseGate)}</dd></div>{machineClauses.length > 0 ? <div><dt>Machine gate</dt><dd>{machineClauses.join('; ')}</dd></div> : null}</dl>{standing.walls.map((held) => <p className="operator-action-wall" key={held.citation}><strong>Known wall</strong> {held.statement} <small>({held.citation})</small></p>)}{accepted && workspace !== null
           ? <Anchor href={workspace}>Open exact preflight →</Anchor>
           : verdict.status === 'not-this-market' && workspace !== null
             ? <Anchor href={workspace}>Open it for a new Market →</Anchor>

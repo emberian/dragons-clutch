@@ -281,6 +281,23 @@ tolerates the rest.
 
 ## Secrets
 
+**The config file never holds the key.** `cluster.rpc_url` stores the
+credential-free endpoint -- `https://devnet.helius-rpc.com/` -- and
+`load_config` REFUSES a config whose `rpc_url` carries an `api-key`,
+`access-token` or any other credential parameter. The live endpoint is built
+at use time by `simcore.resolve_endpoint`: `$DCLUTCH_RPC_URL` if the runner
+exported one, otherwise the stored endpoint plus the key read from
+`$DCLUTCH_HELIUS_KEY_FILE` or `~/.helius-key`. `build_config_from_probe.py`
+refuses to *write* one for the same reason, through the one writer both its
+config shapes go through.
+
+That rule exists because redaction after the fact is not the same repair.
+Cohort-15's `sim-config.json` carried a live key in `cluster.rpc_url`; the
+scrub that followed hand-edited the value to a placeholder, which removed the
+credential and left the file unrunnable -- `--rpc-url` would have been given
+the placeholder -- while leaving the next builder free to write the key again.
+A refused config cannot be a credential at rest.
+
 The live endpoint is `https://devnet.helius-rpc.com/?api-key=<the key in
 ~/.helius-key>`, and it is passed to every driver as `--rpc-url`.  Redaction
 happens where a value is **stored**, never where it is passed, so no caller

@@ -4,7 +4,7 @@
 standing and this document assumes it; every other act names its own condition.
 
 **Read `tools/cohort14/README.md` first and run it.** This file is not a second
-copy of it. Cohort-14's nineteen steps still describe the cohort; the five rows
+copy of it. Cohort-14's nineteen steps still describe the cohort; the six rows
 here are what cohort-15 carries that cohort-14 could not, and each names where
 it inserts into that ladder.
 
@@ -152,3 +152,58 @@ Run it AFTER the evidence document is written, and commit the JSON it produces.
 Then regenerate `docs/reference/route-witnesses.md`: a witness document that is
 in the tree and not in the register is the same invisible as no document at
 all.
+
+### 05 re-admit
+
+**This row is for a cohort whose recorded admission is the old nonce-bound
+one, and cohort-15 is that cohort.** Its `plan-seal.json` pins
+`checked_release_gate_sha256 = 1e614d92c1ec19ed…`, the digest of a
+`CHECKED_UPGRADE_GATE.json` in a scratch directory that no longer exists. That
+digest covered 48 files carrying per-run identity, `build-run.txt` among them,
+so no rebuild can reproduce it — and `devnet-direct-trade-produce-v1` refuses
+`claims artifact provenance bytes or SHA-256 changed after checked-release
+admission` even though a rebuild at the deploy commit reproduces every byte the
+cohort deployed. The market can still be settled and cannot be traded.
+
+The gate now has a reproducible form (`tools/release/README.md`, "The
+reproducible gate"), and re-admission is host-side, key-free and moves no
+lamports:
+
+```
+tools/release/checked-release-candidate.sh --work <fresh> --commit <deploy commit> ...
+shasum -a 256 -c <fresh>/gate.sha256
+python3 tools/release/artifact_provenance.py select-reproducible-role \
+  --root <fresh> --gate-sha256 <digest> --role trading
+```
+
+Then rewrite `upgrade/deployment-set.json` so `checked_release_gate` names
+`<fresh>/RELEASE_GATE.json` and that digest, and re-run
+`prepare --deployment-set-journal` into a NEW `plan-seal.json`.
+
+**The verifier is not that prepare exits zero.** Three things, each measured:
+
+1. `shasum -a 256 -c gate.sha256` passes in the rebuilt root, and the digest it
+   names is the one the deployment set now pins. Two candidate runs at one
+   commit produce it byte-for-byte, so this is a statement about the commit and
+   not about either directory.
+2. Each of the seven roles' `checked_candidate_elf_sha256` in the new
+   `plan-seal.json` equals the ProgramData ELF digest **read off chain** for
+   that role. The re-admission is only legitimate if the reproduced bytes are
+   the deployed bytes; nothing else establishes that, and a gate that agreed
+   with itself would not.
+3. `devnet-direct-trade-produce-v1` reaches its ticket checks from a job
+   directory that names no path under the deleted scratch. Since the produce
+   command re-derives the whole pin through
+   `reauthenticate_checked_deployment_set_pin`, getting past it IS the proof
+   that the admission no longer depends on a directory.
+
+A candidate built from a **different** commit fails at (1) — its `gate.sha256`
+differs — and that is the property being relied on: the gate stopped being
+sensitive to which run built the bytes and did not stop being sensitive to
+which bytes were built.
+
+The rebuilt candidate's `run/RUN_RECORD.json` belongs to the new run, not the
+deployed one, and the document must say so. A gate from one run beside
+provenance from another is inconsistent evidence even when every check passes;
+what re-admission recovers is the authority of the **bytes**, and the original
+run's substantiation is gone for good.

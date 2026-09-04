@@ -145,6 +145,13 @@ for (const entry of routes) {
   let admitted = new Set(EVERY_PAIR);
   let sawMarket = false;
   const machines = [];
+  // The same algebra the Market half runs, over each other machine's own state
+  // names: union inside a conjunct, intersection across conjuncts on one
+  // machine. These used to be DROPPED -- the table carried the machine's name
+  // and not its set -- so a client that could decode a Direct root still had
+  // nothing to compare the decoded phase against, and `needs-chain` was the
+  // only answer available even with the account in hand.
+  const otherAdmitted = new Map();
   for (const conjunct of entry.phase.split('; ')) {
     const united = new Set();
     let machine = null;
@@ -154,16 +161,45 @@ for (const entry of routes) {
         throw new Error(`route ${entry.route} unites sets over two machines: ${entry.phase}`);
       }
       machine = declaration.machine;
-      if (machine !== 'market') continue;
-      for (const pair of declarationPairs(entry.route, declaration.terms)) united.add(pair);
+      if (machine === 'market') {
+        for (const pair of declarationPairs(entry.route, declaration.terms)) united.add(pair);
+        continue;
+      }
+      for (const state of declaration.terms.split(', ')) {
+        const name = state.trim();
+        if (!/^[A-Z][A-Za-z0-9]*$/.test(name)) {
+          throw new Error(`route ${entry.route} names ${machine} state ${name}, which is not a state name`);
+        }
+        united.add(name);
+      }
     }
     if (!machines.includes(machine)) machines.push(machine);
-    if (machine !== 'market') continue;
+    if (machine !== 'market') {
+      const standing = otherAdmitted.get(machine);
+      otherAdmitted.set(machine, standing === undefined
+        ? united
+        : new Set([...standing].filter((state) => united.has(state))));
+      continue;
+    }
     sawMarket = true;
     admitted = new Set([...admitted].filter((pair) => united.has(pair)));
   }
   const other = machines.filter((one) => one !== 'market');
-  if (other.length > 0) otherMachines.push({ route: entry.route, machines: other });
+  if (other.length > 0) {
+    const sets = other.map((machine) => {
+      const states = [...otherAdmitted.get(machine)].sort();
+      if (states.length === 0) {
+        // The same finding the Market half throws on, one machine over: two
+        // conjuncts on one machine that share no state means the census
+        // attributed a gate to a route that cannot reach it, or the route is
+        // dead. Publishing an empty set would hide it behind a client that
+        // simply refuses everything.
+        throw new Error(`route ${entry.route} admits no ${machine} state at all: ${entry.phase}`);
+      }
+      return { machine, states };
+    });
+    otherMachines.push({ route: entry.route, machines: other, gates: sets });
+  }
   if (!sawMarket) continue;
   if (admitted.size === 0) {
     // Contradictory gates on one route: either the census attributed a gate
@@ -226,15 +262,44 @@ generated += `/**
 export interface RouteOtherMachineGateV1 {
   readonly route: string;
   readonly machines: ReadonlyArray<string>;
+  /**
+   * The states each of those machines admits, as the guard declares them.
+   *
+   * A reader holding a decoded observation of the machine answers the gate
+   * from this set. Only a reader that has NO observation says \`needs-chain\`,
+   * and it says which machine it is missing.
+   */
+  readonly gates: ReadonlyArray<RouteMachineStatesV1>;
+}
+
+/** One machine's admissible states on one route. */
+export interface RouteMachineStatesV1 {
+  readonly machine: string;
+  readonly states: ReadonlyArray<string>;
 }\n\n`;
 generated += 'export const ROUTES_GATED_ON_ANOTHER_MACHINE_V1: ReadonlyArray<RouteOtherMachineGateV1> = [\n';
 for (const entry of otherMachines) {
-  generated += `  { route: ${ts(entry.route)}, machines: [${entry.machines.map(ts).join(', ')}] },\n`;
+  const sets = entry.gates.map((set) => `{ machine: ${ts(set.machine)}, states: [${set.states.map(ts).join(', ')}] }`).join(', ');
+  generated += `  { route: ${ts(entry.route)}, machines: [${entry.machines.map(ts).join(', ')}], gates: [${sets}] },\n`;
 }
 generated += '];\n\n';
 generated += `/** The machines gating one route that this table cannot state, if any. */
 export function routeOtherMachineGateV1(route: string): RouteOtherMachineGateV1 | null {
   return ROUTES_GATED_ON_ANOTHER_MACHINE_V1.find((entry) => entry.route === route) ?? null;
+}
+
+/** The states one machine admits on one route, or \`null\` when it gates neither. */
+export function routeMachineStatesV1(route: string, machine: string): ReadonlyArray<string> | null {
+  return routeOtherMachineGateV1(route)?.gates.find((set) => set.machine === machine)?.states ?? null;
+}
+
+/** Every machine any route in this table is gated on, once each. */
+export function gatedMachinesV1(): ReadonlyArray<string> {
+  const machines: string[] = [];
+  for (const entry of ROUTES_GATED_ON_ANOTHER_MACHINE_V1) {
+    for (const machine of entry.machines) if (!machines.includes(machine)) machines.push(machine);
+  }
+  return machines.sort();
 }\n\n`;
 generated += `/**
  * Routes whose program persists NO lifecycle discriminant for them to consult.

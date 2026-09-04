@@ -102,6 +102,95 @@ def redact_endpoint(url: str) -> str:
     return f"{parts.scheme}://{parts.netloc}{path}{query}"
 
 
+# Query parameters that ARE a credential. `redact_endpoint` blanks the whole
+# query, so it never had to name them; refusing a stored credential does.
+CREDENTIAL_PARAMETERS = ("api-key", "api_key", "apikey", "access-token", "token")
+# Hosts whose endpoint is unusable without a key. The key is never stored with
+# the endpoint: the endpoint is stored, and the key is fetched at use time.
+KEYED_ENDPOINT_HOSTS = (".helius-rpc.com",)
+RPC_URL_ENVIRONMENT = "DCLUTCH_RPC_URL"
+PROVIDER_KEY_FILE_ENVIRONMENT = "DCLUTCH_HELIUS_KEY_FILE"
+DEFAULT_PROVIDER_KEY_FILE = ".helius-key"
+
+
+def endpoint_credential(url: str) -> Optional[str]:
+    """The name of the credential this endpoint carries, or None.
+
+    `redact_endpoint` exists because credentials reach files that are read by
+    other people. This exists because the better answer, where it is available,
+    is for the credential never to be in the file: a config that carries a
+    provider key is a credential at rest that every copy, backup and paste of
+    that file inherits, and redacting it afterwards -- which is what cohort-15
+    did -- leaves the file both scrubbed and unusable.
+    """
+
+    if not url:
+        return None
+    parts = urllib.parse.urlsplit(url)
+    for name, value in urllib.parse.parse_qsl(parts.query, keep_blank_values=True):
+        if name.lower() in CREDENTIAL_PARAMETERS and value:
+            return name
+    return None
+
+
+def endpoint_needs_provider_key(url: str) -> bool:
+    if not url:
+        return False
+    host = urllib.parse.urlsplit(url).hostname or ""
+    return any(host.endswith(suffix) for suffix in KEYED_ENDPOINT_HOSTS)
+
+
+def read_provider_key(environ=None, home: Optional[Path] = None) -> str:
+    environ = os.environ if environ is None else environ
+    named = environ.get(PROVIDER_KEY_FILE_ENVIRONMENT)
+    path = (
+        Path(named)
+        if named
+        else (home or Path.home()) / DEFAULT_PROVIDER_KEY_FILE
+    )
+    try:
+        key = path.read_text().strip()
+    except OSError as error:
+        raise RuntimeError(f"provider key file {path} cannot be read: {error}")
+    if not key:
+        raise RuntimeError(f"provider key file {path} is empty")
+    if any(character in key for character in " \t\n&#?/"):
+        raise RuntimeError(
+            f"provider key file {path} holds a URL or a multi-field value; "
+            "it must hold the bare key"
+        )
+    return key
+
+
+def resolve_endpoint(
+    stored: str, *, environ=None, home: Optional[Path] = None
+) -> str:
+    """The live endpoint, built at USE time from a credential-free stored one.
+
+    Order: an explicit `DCLUTCH_RPC_URL` from the runner wins, because a runner
+    that already holds the endpoint should not be made to write it down. Then a
+    stored endpoint whose host needs a key gets one from the key file. Anything
+    else -- loopback, a public endpoint -- is used exactly as stored.
+    """
+
+    environ = os.environ if environ is None else environ
+    override = (environ.get(RPC_URL_ENVIRONMENT) or "").strip()
+    endpoint = override or stored
+    if not endpoint:
+        raise RuntimeError(
+            "no RPC endpoint: the config stores none and "
+            f"{RPC_URL_ENVIRONMENT} is unset"
+        )
+    if endpoint_credential(endpoint) or not endpoint_needs_provider_key(endpoint):
+        return endpoint
+    parts = urllib.parse.urlsplit(endpoint)
+    query = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+    query.append(("api-key", read_provider_key(environ, home)))
+    return urllib.parse.urlunsplit(
+        (parts.scheme, parts.netloc, parts.path or "/", urllib.parse.urlencode(query), "")
+    )
+
+
 _URL_IN_TEXT = re.compile(r"\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s'\"]+")
 
 

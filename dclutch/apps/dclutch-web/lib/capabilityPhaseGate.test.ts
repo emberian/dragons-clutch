@@ -76,13 +76,13 @@ describe('the phase gate refuses by name and never asserts readiness', () => {
     // the honest verdict there is admitted -- the positive control, without
     // which "not ready" would prove nothing about the instrument.
     const provider = standing('source.provider');
-    expect(evaluateCapabilityV1(provider, observed('Open', 'Consumed'))).toMatchObject({
+    expect(evaluateCapabilityV1(provider, observed('Open', 'Consumed'), [])).toMatchObject({
       status: 'ready-to-preflight',
       phaseGate: { verdict: 'admitted' },
     });
     // The same act, the same market, one phase earlier in its life: refused,
     // by name, before any account is read.
-    const early = evaluateCapabilityV1(provider, observed('Founding', 'Prepaid'));
+    const early = evaluateCapabilityV1(provider, observed('Founding', 'Prepaid'), []);
     expect(early.status).toBe('wrong-phase');
     expect(early.phaseGate.verdict).toBe('excluded');
     expect(early.phaseGate.excludedBy?.route).toBe('core/execute_provider_v3::process#ExecuteProvider');
@@ -92,7 +92,7 @@ describe('the phase gate refuses by name and never asserts readiness', () => {
 
   it('refuses a resolution act on a retired market', () => {
     const ready = standing('source.ready');
-    const retired = evaluateCapabilityV1(ready, observed('Retired', 'Consumed'));
+    const retired = evaluateCapabilityV1(ready, observed('Retired', 'Consumed'), []);
     expect(retired.status).toBe('wrong-phase');
     expect(retired.phaseGate.excludedBy?.route).toBe('core/resolution::process#VerifyFundReady');
   });
@@ -110,7 +110,7 @@ describe('the phase gate refuses by name and never asserts readiness', () => {
 
   it('will not call an act ready when the Market did not decode', () => {
     const provider = standing('source.provider');
-    const unread = evaluateCapabilityV1(provider, observed(null, null));
+    const unread = evaluateCapabilityV1(provider, observed(null, null), []);
     expect(unread.status).toBe('needs-chain');
     expect(unread.phaseGate.verdict).toBe('unread');
   });
@@ -122,7 +122,7 @@ describe('the phase gate refuses by name and never asserts readiness', () => {
     const found = standing('market.found');
     expect(found.action.routes).toEqual(['core/found::process#Found']);
     expect(capabilityActPhaseGatesV1(found.action)).toHaveLength(0);
-    const verdict = evaluateCapabilityV1(found, { market: null });
+    const verdict = evaluateCapabilityV1(found, { market: null }, []);
     expect(verdict.status).toBe('ready-to-preflight');
     expect(verdict.phaseGate.verdict).toBe('no-phase-gate');
   });
@@ -143,7 +143,7 @@ describe('the phase gate refuses by name and never asserts readiness', () => {
     const machineless = ROUTES_WITHOUT_A_STATE_MACHINE_V1[0]!;
     expect(routeHasNoStateMachineV1(machineless)).toBe(true);
     const gate = (routes: ReadonlyArray<string>) => capabilityPhaseGateTextV1({
-      routes, gates: [], verdict: 'no-phase-gate' as const, excludedBy: null, unobservableMachines: [],
+      routes, gates: [], verdict: 'no-phase-gate' as const, excludedBy: null, unobservableMachines: [], machineGates: [],
     });
     expect(gate([machineless])).toContain('persists no lifecycle state to gate on');
 
@@ -225,7 +225,7 @@ describe('an act gated on a machine this observation cannot read', () => {
     // The Market half of `resolution/process_capture#Capture` is
     // `Open+Consumed`, which this observation IS. A reader that answered from
     // the Market alone would call it ready.
-    const verdict = evaluateCapabilityV1(overRoute(sourceGated!.route), observed('Open', 'Consumed'));
+    const verdict = evaluateCapabilityV1(overRoute(sourceGated!.route), observed('Open', 'Consumed'), []);
     expect(verdict.status).toBe('needs-chain');
     expect(verdict.phaseGate.verdict).toBe('other-machine');
     expect(verdict.phaseGate.unobservableMachines).toEqual(['source']);
@@ -254,7 +254,7 @@ describe('an act that founds a Market is not about the Market on screen', () => 
   it('refuses ready by name against cohort-12, and says which Market it is holding', () => {
     const found = standing('market.found');
     expect(found.action.subject).toBe('new-market');
-    const verdict = evaluateCapabilityV1(found, observed('Open', 'Consumed'));
+    const verdict = evaluateCapabilityV1(found, observed('Open', 'Consumed'), []);
     expect(verdict.status).toBe('not-this-market');
     expect(verdict.reason).toContain('founds a NEW Market');
     expect(verdict.reason).toContain(COHORT_12);
@@ -266,7 +266,7 @@ describe('an act that founds a Market is not about the Market on screen', () => 
     // The positive control. Without it "not ready" would prove nothing: an act
     // that never reads ready is not a verdict, it is a wall.
     for (const id of ['market.found', 'market.inspect']) {
-      expect(evaluateCapabilityV1(standing(id), { market: null })).toMatchObject({
+      expect(evaluateCapabilityV1(standing(id), { market: null }, [])).toMatchObject({
         status: 'ready-to-preflight',
       });
     }
@@ -276,10 +276,10 @@ describe('an act that founds a Market is not about the Market on screen', () => 
     // The subject is wrong at every phase. A rule keyed on `Open` would pass a
     // Founding Market through and report ready for founding a second one.
     for (const phase of ['Founding', 'Open', 'Terminal', 'Retiring', 'Retired'] as const) {
-      expect(evaluateCapabilityV1(standing('market.found'), observed(phase, 'Consumed')).status)
+      expect(evaluateCapabilityV1(standing('market.found'), observed(phase, 'Consumed'), []).status)
         .toBe('not-this-market');
     }
-    expect(evaluateCapabilityV1(standing('market.found'), observed(null, null)).status)
+    expect(evaluateCapabilityV1(standing('market.found'), observed(null, null), []).status)
       .toBe('not-this-market');
   });
 
@@ -288,7 +288,7 @@ describe('an act that founds a Market is not about the Market on screen', () => 
     // is about a release set and stays ready with cohort-12 on screen.
     const release = standing('release.activate');
     expect(release.action.subject).toBe('no-market');
-    expect(evaluateCapabilityV1(release, observed('Open', 'Consumed')).status)
+    expect(evaluateCapabilityV1(release, observed('Open', 'Consumed'), []).status)
       .toBe('ready-to-preflight');
   });
 

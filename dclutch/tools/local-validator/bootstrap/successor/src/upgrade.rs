@@ -73,6 +73,20 @@ const SCHEMA: &str = "dclutch-devnet-permanent-id-upgrade-receipt-v8";
 const PREFLIGHT_SCHEMA: &str = "dclutch-devnet-permanent-id-upgrade-preflight-v2";
 const CHECKED_GATE_SCHEMA: &str = "dclutch-checked-upgrade-gate-v1";
 const CHECKED_MIXED_GATE_SCHEMA: &str = "dclutch-checked-upgrade-gate-v2";
+/// The gate a rebuild of the same commit brings back byte-for-byte.
+///
+/// `dclutch-checked-upgrade-gate-v1` binds one run's whole envelope -- its
+/// build-run nonce, its logs, its frame reports, its per-link provenance
+/// descriptors -- and none of those reproduce. Cohort-15 lost the directory
+/// that held them and could no longer satisfy this validator even though a
+/// rebuild reproduced every byte it had deployed. This schema carries only the
+/// bytes: the three manifests, each link's diagnostics and frame measurements,
+/// each role's ELF and checked manifest. An admission pinned to it survives
+/// losing the scratch, and still refuses an artifact that is not the admitted
+/// one.
+const REPRODUCIBLE_GATE_SCHEMA: &str = "dclutch-reproducible-release-gate-v1";
+const REPRODUCIBLE_GATE_FILE: &str = "RELEASE_GATE.json";
+const CHECKED_GATE_FILE: &str = "CHECKED_UPGRADE_GATE.json";
 const RELEASE_BATCH_PLAN_SCHEMA: &str = "dclutch-sbf-release-batch-plan-v1";
 const LINK_PROVENANCE_SCHEMA: &str = "dclutch-sbf-link-provenance-v1";
 const BASELINE_SCHEMA: &str = "dclutch-devnet-upgrade-baseline-v1";
@@ -657,6 +671,37 @@ struct CheckedUpgradeGateV1 {
     build_run_manifest: GateFileV1,
     diagnostics_manifest: GateFileV1,
     links: Vec<CheckedGateLinkV1>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ReproducibleGateLinkV1 {
+    label: String,
+    package: String,
+    sbf_diagnostics_count: u64,
+    /// The frame measurements stay here as NUMBERS while the report file that
+    /// states them does not: a number the source determines reproduces, and a
+    /// file that stamps the run that measured it does not.
+    frame_count: u64,
+    frame_bound_bytes: u64,
+    frames_at_or_over_bound: u64,
+    deepest_frame_bytes: u64,
+    elf: Option<GateFileV1>,
+    checked_manifest: Option<GateFileV1>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ReproducibleReleaseGateV1 {
+    schema: String,
+    source_revision: String,
+    source_tree_sha256: String,
+    solana_cli_version: String,
+    link_count: u64,
+    source_tree_manifest: GateFileV1,
+    build_links_manifest: GateFileV1,
+    diagnostics_manifest: GateFileV1,
+    links: Vec<ReproducibleGateLinkV1>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -3725,6 +3770,23 @@ fn set_role_elf_path(gate_path: &Path, role: &str) -> Result<PathBuf> {
             )));
         }
         matches[0].link.elf.clone()
+    } else if schema == REPRODUCIBLE_GATE_SCHEMA {
+        let gate: ReproducibleReleaseGateV1 = serde_json::from_slice(&bytes).map_err(|error| {
+            Error::new(format!(
+                "set checked-release gate is not canonical reproducible JSON: {error}"
+            ))
+        })?;
+        let matches = gate
+            .links
+            .iter()
+            .filter(|link| link.label == role)
+            .collect::<Vec<_>>();
+        if matches.len() != 1 {
+            return Err(Error::new(format!(
+                "set checked-release gate does not contain one exact {role} link"
+            )));
+        }
+        matches[0].elf.clone()
     } else if schema == CHECKED_GATE_SCHEMA {
         let gate: CheckedUpgradeGateV1 = serde_json::from_slice(&bytes).map_err(|error| {
             Error::new(format!(
@@ -6454,15 +6516,17 @@ fn validate_checked_release_gate_selection(
             "checked-release gate must itself be one regular non-symlink file",
         ));
     }
-    if args
+    let gate_file_name = args
         .checked_release_gate_path
         .file_name()
         .and_then(|name| name.to_str())
-        != Some("CHECKED_UPGRADE_GATE.json")
-    {
-        return Err(Error::new(
-            "checked-release gate must retain its canonical CHECKED_UPGRADE_GATE.json name",
-        ));
+        .unwrap_or_default()
+        .to_owned();
+    if gate_file_name != CHECKED_GATE_FILE && gate_file_name != REPRODUCIBLE_GATE_FILE {
+        return Err(Error::new(format!(
+            "checked-release gate must retain its canonical {CHECKED_GATE_FILE} or \
+             {REPRODUCIBLE_GATE_FILE} name",
+        )));
     }
     let gate_bytes = fs::read(&args.checked_release_gate_path)?;
     let gate_sha256 = digest(&gate_bytes);
@@ -6480,6 +6544,20 @@ fn validate_checked_release_gate_selection(
                 .and_then(Value::as_str)
                 .map(str::to_owned)
         });
+    // The file NAME and the SCHEMA are bound to each other in both directions,
+    // so a reproducible gate can never be read under the run-bound validator's
+    // rules by being renamed, and neither can the reverse.
+    if (gate_file_name == REPRODUCIBLE_GATE_FILE)
+        != (schema.as_deref() == Some(REPRODUCIBLE_GATE_SCHEMA))
+    {
+        return Err(Error::new(format!(
+            "checked-release gate name {gate_file_name} and schema {schema:?} disagree; \
+             {REPRODUCIBLE_GATE_FILE} carries {REPRODUCIBLE_GATE_SCHEMA} and nothing else does",
+        )));
+    }
+    if schema.as_deref() == Some(REPRODUCIBLE_GATE_SCHEMA) {
+        return validate_reproducible_release_gate_selection(args, &gate_bytes, gate_sha256);
+    }
     if schema.as_deref() == Some(CHECKED_MIXED_GATE_SCHEMA) {
         return validate_checked_mixed_gate_selection(args, &gate_bytes, gate_sha256);
     }
@@ -6715,6 +6793,191 @@ fn validate_checked_release_gate_selection(
         selected_manifest.ok_or_else(|| {
             Error::new(format!(
                 "checked-release gate carries no checked build manifest for selected role {}",
+                args.role
+            ))
+        })?;
+    Ok(ValidatedUpgradeGateV1 {
+        gate_sha256,
+        artifact_source_revision: gate.source_revision.clone(),
+        artifact_source_tree_sha256: gate.source_tree_sha256.clone(),
+        source_revision: gate.source_revision,
+        source_tree_sha256: gate.source_tree_sha256,
+        solana_cli_version: gate.solana_cli_version,
+        raw_elf,
+        raw_elf_sha256,
+        checked_build_manifest_path,
+        checked_build_manifest_sha256,
+        checked_build_manifest,
+    })
+}
+
+/// Authenticate one role against the gate that a rebuild reproduces.
+///
+/// This walks strictly less evidence than the v1 validator, and that is the
+/// point rather than a weakening: everything it drops is per-run identity that
+/// a second build of the same commit cannot reproduce, so requiring it made
+/// the admission bind to a directory instead of to the artifact. What it keeps
+/// is every byte the cohort actually deploys and every measurement that
+/// decided the link was admissible.
+fn validate_reproducible_release_gate_selection(
+    args: CheckedReleaseGateSelectionV1<'_>,
+    gate_bytes: &[u8],
+    gate_sha256: String,
+) -> Result<ValidatedUpgradeGateV1> {
+    let gate: ReproducibleReleaseGateV1 = serde_json::from_slice(gate_bytes).map_err(|error| {
+        Error::new(format!(
+            "reproducible release gate is not canonical JSON; handwritten acceptance has no \
+             authority: {error}"
+        ))
+    })?;
+    if gate.schema != REPRODUCIBLE_GATE_SCHEMA {
+        return Err(Error::new(format!(
+            "reproducible release gate schema is {:?}; expected {REPRODUCIBLE_GATE_SCHEMA}",
+            gate.schema
+        )));
+    }
+    if gate.source_revision != args.expected_source_revision
+        || gate.source_tree_sha256 != args.expected_source_tree_sha256
+    {
+        return Err(Error::new(
+            "reproducible release gate names a different source revision or source tree than the \
+             admission expects",
+        ));
+    }
+    require_lower_hex(&gate.source_revision, "gate source revision", 40, 40)?;
+    require_digest(&gate.source_tree_sha256, "gate source tree SHA-256")?;
+    if gate.solana_cli_version.trim().is_empty() || gate.solana_cli_version.contains('\n') {
+        return Err(Error::new(
+            "reproducible release gate Solana CLI version is empty or multiline",
+        ));
+    }
+    if usize::try_from(gate.link_count).ok() != Some(gate.links.len())
+        || gate.links.len() != SHIPPED_LINKS.len()
+    {
+        return Err(Error::new(
+            "reproducible release gate is not the exact shipped link set",
+        ));
+    }
+    for (link, (label, package, produces_artifact)) in gate.links.iter().zip(SHIPPED_LINKS.iter()) {
+        if link.label != *label || link.package != *package {
+            return Err(Error::new(
+                "reproducible release gate link order or identity is not canonical",
+            ));
+        }
+        if link.sbf_diagnostics_count != 0
+            || link.frame_count == 0
+            || link.frame_bound_bytes != 4096
+            || link.frames_at_or_over_bound != 0
+        {
+            return Err(Error::new(format!(
+                "reproducible release gate link {label} is not frame/diagnostic clean"
+            )));
+        }
+        if link.elf.is_some() != *produces_artifact
+            || link.checked_manifest.is_some() != *produces_artifact
+        {
+            return Err(Error::new(format!(
+                "reproducible release gate link {label} has the wrong release-artifact shape"
+            )));
+        }
+    }
+
+    let gate_path = fs::canonicalize(args.checked_release_gate_path)?;
+    let root = gate_path
+        .parent()
+        .ok_or_else(|| Error::new("reproducible release gate has no evidence root"))?
+        .to_path_buf();
+    let source_tree =
+        verify_gate_file(&root, &gate.source_tree_manifest, "source tree manifest")?.1;
+    if gate.source_tree_manifest.sha256 != gate.source_tree_sha256 || source_tree.is_empty() {
+        return Err(Error::new(
+            "reproducible release gate source tree manifest does not bind the declared source tree",
+        ));
+    }
+    let build_links = verify_gate_file(&root, &gate.build_links_manifest, "build-link manifest")?.1;
+    let expected_build_links = SHIPPED_LINKS
+        .iter()
+        .map(|(label, package, _)| format!("{label}\t{package}\n"))
+        .collect::<String>();
+    if build_links != expected_build_links.as_bytes() {
+        return Err(Error::new(
+            "reproducible release gate build-link manifest is missing, reordered, or names an \
+             unknown shipped link",
+        ));
+    }
+    let diagnostics =
+        verify_gate_file(&root, &gate.diagnostics_manifest, "diagnostics manifest")?.1;
+    let expected_diagnostics = SHIPPED_LINKS
+        .iter()
+        .map(|(label, _, _)| format!("{label}=0\n"))
+        .collect::<String>();
+    if diagnostics != expected_diagnostics.as_bytes() {
+        return Err(Error::new(
+            "reproducible release gate diagnostics manifest is not the exact zero row for every \
+             shipped link",
+        ));
+    }
+
+    let mut selected = None;
+    let mut selected_manifest = None;
+    for link in &gate.links {
+        if let Some(manifest) = &link.checked_manifest {
+            if manifest.canonical_path != format!("evidence/{}/checked.bin", link.label) {
+                return Err(Error::new(format!(
+                    "reproducible release gate {} checked manifest is not at its canonical path",
+                    link.label
+                )));
+            }
+            let (canonical, bytes) =
+                verify_gate_file(&root, manifest, &format!("{} checked manifest", link.label))?;
+            if link.label == args.role {
+                selected_manifest = Some((canonical, manifest.sha256.clone(), bytes));
+            }
+        }
+        if let Some(elf) = &link.elf {
+            if elf.canonical_path != format!("elf/{}.so", link.label) {
+                return Err(Error::new(format!(
+                    "reproducible release gate {} ELF is not at its canonical named-role path",
+                    link.label
+                )));
+            }
+            let (canonical, raw_elf) =
+                verify_gate_file(&root, elf, &format!("{} ELF", link.label))?;
+            if raw_elf.get(..4) != Some(b"\x7fELF") {
+                return Err(Error::new(format!(
+                    "reproducible release gate {} ELF does not begin with ELF magic",
+                    link.label
+                )));
+            }
+            if link.label == args.role {
+                let argument_metadata = fs::symlink_metadata(args.elf_path)?;
+                if argument_metadata.file_type().is_symlink()
+                    || !argument_metadata.file_type().is_file()
+                {
+                    return Err(Error::new(
+                        "selected candidate ELF must be one regular non-symlink file",
+                    ));
+                }
+                if fs::canonicalize(args.elf_path)? != canonical {
+                    return Err(Error::new(format!(
+                        "selected {} ELF path is not the gate's exact canonical role ELF",
+                        args.role
+                    )));
+                }
+                selected = Some((raw_elf, elf.sha256.clone()));
+            }
+        }
+    }
+    let (raw_elf, raw_elf_sha256) = selected.ok_or_else(|| {
+        Error::new(format!(
+            "reproducible release gate carries no deployable ELF for selected role {}",
+            args.role
+        ))
+    })?;
+    let (checked_build_manifest_path, checked_build_manifest_sha256, checked_build_manifest) =
+        selected_manifest.ok_or_else(|| {
+            Error::new(format!(
+                "reproducible release gate carries no checked build manifest for selected role {}",
                 args.role
             ))
         })?;
@@ -13232,6 +13495,162 @@ mod tests {
             ),
             "{error}"
         );
+    }
+
+    /// The reproducible projection of one run's gate: exactly the fields that a
+    /// second build of the same commit brings back.
+    fn reproducible_gate(gate: &CheckedUpgradeGateV1) -> ReproducibleReleaseGateV1 {
+        ReproducibleReleaseGateV1 {
+            schema: REPRODUCIBLE_GATE_SCHEMA.into(),
+            source_revision: gate.source_revision.clone(),
+            source_tree_sha256: gate.source_tree_sha256.clone(),
+            solana_cli_version: gate.solana_cli_version.clone(),
+            link_count: gate.link_count,
+            source_tree_manifest: gate.source_tree_manifest.clone(),
+            build_links_manifest: gate.build_links_manifest.clone(),
+            diagnostics_manifest: gate.diagnostics_manifest.clone(),
+            links: gate
+                .links
+                .iter()
+                .map(|link| ReproducibleGateLinkV1 {
+                    label: link.label.clone(),
+                    package: link.package.clone(),
+                    sbf_diagnostics_count: link.sbf_diagnostics_count,
+                    frame_count: link.frame_count,
+                    frame_bound_bytes: link.frame_bound_bytes,
+                    frames_at_or_over_bound: link.frames_at_or_over_bound,
+                    deepest_frame_bytes: link.deepest_frame_bytes,
+                    elf: link.elf.clone(),
+                    checked_manifest: link.checked_manifest.clone(),
+                })
+                .collect(),
+        }
+    }
+
+    fn write_reproducible_gate(root: &Path, gate: &ReproducibleReleaseGateV1) -> (PathBuf, String) {
+        let path = root.join(REPRODUCIBLE_GATE_FILE);
+        fs::write(&path, serde_json::to_vec_pretty(gate).expect("reproducible gate JSON"))
+            .expect("write reproducible gate");
+        let sha256 = digest(&fs::read(&path).expect("reproducible gate bytes"));
+        (path, sha256)
+    }
+
+    fn delete_every_per_run_file(root: &Path) {
+        let _ = fs::remove_file(root.join(CHECKED_GATE_FILE));
+        let _ = fs::remove_file(root.join("build-run.txt"));
+        let _ = fs::remove_dir_all(root.join("provenance"));
+        let _ = fs::remove_dir_all(root.join("frame"));
+        for (label, package, _) in SHIPPED_LINKS.iter() {
+            let _ = fs::remove_file(root.join(format!("build-{label}.log")));
+            let _ = fs::remove_file(root.join(format!("frame-build-{label}.log")));
+            let _ = fs::remove_dir_all(root.join(format!("frame-target-{label}")));
+            let _ = package;
+        }
+    }
+
+    fn select_gate(
+        fixture: &Fixture,
+        gate_path: &Path,
+        gate_sha256: &str,
+    ) -> Result<ValidatedUpgradeGateV1> {
+        validate_checked_release_gate_selection(CheckedReleaseGateSelectionV1 {
+            checked_release_gate_path: gate_path,
+            expected_checked_release_gate_sha256: gate_sha256,
+            expected_source_revision: &fixture.args.expected_source_revision,
+            expected_source_tree_sha256: &fixture.args.expected_source_tree_sha256,
+            role: &fixture.args.role,
+            elf_path: &fixture.args.elf_path,
+        })
+    }
+
+    /// The defect this schema exists for: cohort-15's scratch was deleted, and
+    /// the admission it had recorded could no longer be satisfied even though
+    /// every byte it deployed still reproduced.
+    #[test]
+    fn the_reproducible_gate_admits_a_role_after_every_per_run_file_is_gone() {
+        let fixture = Fixture::new();
+        let root = fixture._directory.0.clone();
+        let (gate_path, gate_sha256) =
+            write_reproducible_gate(&root, &reproducible_gate(&fixture.gate));
+        delete_every_per_run_file(&root);
+
+        let validated =
+            select_gate(&fixture, &gate_path, &gate_sha256).expect("reproducible gate admits");
+        assert_eq!(validated.gate_sha256, gate_sha256);
+        assert_eq!(validated.raw_elf_sha256, digest(&fixture.raw_elf));
+        assert_eq!(validated.raw_elf, fixture.raw_elf);
+        assert_eq!(validated.source_revision, fixture.args.expected_source_revision);
+        assert_eq!(
+            validated.checked_build_manifest_path,
+            fs::canonicalize(root.join("evidence/custody/checked.bin"))
+                .expect("checked manifest path")
+        );
+
+        // The control: the run-bound gate cannot do this, and that asymmetry is
+        // the whole finding rather than an incidental difference.
+        let run_bound = root.join(CHECKED_GATE_FILE);
+        assert!(select_gate(&fixture, &run_bound, &fixture.args.expected_checked_release_gate_sha256)
+            .is_err());
+    }
+
+    /// The hostile: a fresh candidate whose artifact is not the admitted one.
+    #[test]
+    fn a_rebuilt_artifact_that_is_not_the_admitted_one_refuses_by_the_admission_name() {
+        for target in ["elf/custody.so", "evidence/custody/checked.bin"] {
+            let fixture = Fixture::new();
+            let root = fixture._directory.0.clone();
+            let (gate_path, gate_sha256) =
+                write_reproducible_gate(&root, &reproducible_gate(&fixture.gate));
+            delete_every_per_run_file(&root);
+            select_gate(&fixture, &gate_path, &gate_sha256).expect("clean root admits");
+
+            let mut bytes = fs::read(root.join(target)).expect("artifact bytes");
+            bytes.push(0);
+            fs::write(root.join(target), &bytes).expect("rewrite artifact");
+            let error = select_gate(&fixture, &gate_path, &gate_sha256)
+                .expect_err("a changed artifact must refuse");
+            assert!(
+                error
+                    .to_string()
+                    .contains("bytes or SHA-256 changed after checked-release admission"),
+                "{target} refused with {error}"
+            );
+        }
+    }
+
+    /// A gate cannot escape its own rules by being renamed in either direction.
+    #[test]
+    fn the_reproducible_gate_name_and_schema_are_bound_to_each_other() {
+        let fixture = Fixture::new();
+        let root = fixture._directory.0.clone();
+        let reproducible = reproducible_gate(&fixture.gate);
+
+        let misnamed = root.join("misnamed-gate.json");
+        fs::write(&misnamed, serde_json::to_vec_pretty(&reproducible).expect("JSON"))
+            .expect("write misnamed gate");
+        let misnamed_sha = digest(&fs::read(&misnamed).expect("bytes"));
+        let error = select_gate(&fixture, &misnamed, &misnamed_sha).expect_err("name refused");
+        assert!(error.to_string().contains("canonical"), "{error}");
+
+        // Reproducible content under the run-bound name.
+        fs::remove_file(root.join(CHECKED_GATE_FILE)).expect("remove run-bound gate");
+        fs::write(
+            root.join(CHECKED_GATE_FILE),
+            serde_json::to_vec_pretty(&reproducible).expect("JSON"),
+        )
+        .expect("write reproducible content under the run-bound name");
+        let path = root.join(CHECKED_GATE_FILE);
+        let sha = digest(&fs::read(&path).expect("bytes"));
+        let error = select_gate(&fixture, &path, &sha).expect_err("schema/name disagreement");
+        assert!(error.to_string().contains("disagree"), "{error}");
+
+        // Run-bound content under the reproducible name.
+        let path = root.join(REPRODUCIBLE_GATE_FILE);
+        fs::write(&path, serde_json::to_vec_pretty(&fixture.gate).expect("JSON"))
+            .expect("write run-bound content under the reproducible name");
+        let sha = digest(&fs::read(&path).expect("bytes"));
+        let error = select_gate(&fixture, &path, &sha).expect_err("schema/name disagreement");
+        assert!(error.to_string().contains("disagree"), "{error}");
     }
 
     #[test]

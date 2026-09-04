@@ -62,7 +62,7 @@ describe('live devnet capability phase gate', () => {
     expect(gates[0]!.route).toBe('claims/terminal_settlement_v3::process');
     expect(gates[0]!.phases).toEqual(['Terminal', 'Retiring']);
 
-    const verdict = evaluateCapabilityV1(redeem, snapshot);
+    const verdict = evaluateCapabilityV1(redeem, snapshot, []);
     const settled = state.phase === 'Terminal' || state.phase === 'Retiring';
     if (settled) {
       expect(verdict.phaseGate.verdict).toBe('admitted');
@@ -96,7 +96,7 @@ describe('live devnet capability phase gate', () => {
     expect(gates).toHaveLength(1);
     expect(gates[0]!.prestates).toEqual([['Open', 'Consumed']]);
 
-    const verdict = evaluateCapabilityV1(provider, snapshot);
+    const verdict = evaluateCapabilityV1(provider, snapshot, []);
     const live_market = state.phase === 'Open' && state.readiness === 'Consumed';
     expect(verdict.phaseGate.verdict).toBe(live_market ? 'admitted' : 'excluded');
     if (live_market) expect(verdict.status).toBe('ready-to-preflight');

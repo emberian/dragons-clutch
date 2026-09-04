@@ -54,6 +54,11 @@ import {
   routeOtherMachineGateV1,
   routePhaseGateV1,
 } from './generated/marketPhaseAdmissionV1';
+import {
+  routeMachineVerdictsV1,
+  type MachineGateVerdictV1,
+  type MachineObservationV1,
+} from './stateMachines';
 
 export const CAPABILITY_STAGES = ['author', 'trade', 'resolve', 'claim'] as const;
 export type CapabilityStage = (typeof CAPABILITY_STAGES)[number];
@@ -522,7 +527,7 @@ export type CapabilityPhaseGateV1 = Readonly<{
   /** The gate that excluded the observation, when one did. */
   excludedBy: RoutePhaseGateV1 | null;
   /**
-   * State machines gating this act that this snapshot cannot observe.
+   * State machines gating this act that this reader has NOT observed.
    *
    * A Source resolution state, a Dealer root's lifecycle, a Series ticket:
    * none of them is the Market's phase, and none of them can be answered by
@@ -530,8 +535,26 @@ export type CapabilityPhaseGateV1 = Readonly<{
    * driving it reports `other-machine` and the verdict says `needs-chain` --
    * never `ready-to-preflight`, and never `no-phase-gate`, which would claim
    * the census read nothing when it read something this reader cannot use.
+   *
+   * THIS USED TO BE EVERY SUCH MACHINE, unconditionally. The field was
+   * computed from the act's declared routes alone, so an act gated on a Direct
+   * root reported `needs-chain` whether or not the caller was holding that
+   * root's bytes -- and there was no way to hold them, because no client
+   * surface could decode one. It is now what its name says: the machines with
+   * no observation. The ones that WERE observed are answered in
+   * `machineGates`.
    */
   unobservableMachines: ReadonlyArray<string>;
+  /**
+   * Each machine gate this act's routes carry, answered where it could be.
+   *
+   * `admitted` and `excluded` are decided against a decoded observation and
+   * name the machine; `unobserved` is the residue that makes
+   * `unobservableMachines` non-empty. An excluded machine gate is a refusal
+   * the chain makes before any account is read, exactly like an excluded
+   * Market prestate, and it is published as `wrong-phase` for the same reason.
+   */
+  machineGates: ReadonlyArray<MachineGateVerdictV1>;
 }>;
 
 export type CapabilityVerdictV1 = Readonly<{
@@ -671,6 +694,11 @@ function gateAdmitsV1(
   return gate.phases.includes(phase);
 }
 
+/** One sentence's first letter, for a machine reason used as a headline. */
+function capitalize(text: string): string {
+  return text.length === 0 ? text : `${text[0]!.toUpperCase()}${text.slice(1)}`;
+}
+
 /** How one gate reads out loud, for a refusal a person has to act on. */
 function gateTextV1(gate: RoutePhaseGateV1): string {
   return gate.prestates.length > 0
@@ -680,7 +708,7 @@ function gateTextV1(gate: RoutePhaseGateV1): string {
 
 const NO_GATE_READ: CapabilityPhaseGateV1 = Object.freeze({
   routes: Object.freeze([]), gates: Object.freeze([]), verdict: 'no-phase-gate', excludedBy: null,
-  unobservableMachines: Object.freeze([]),
+  unobservableMachines: Object.freeze([]), machineGates: Object.freeze([]),
 });
 
 /**
@@ -702,9 +730,39 @@ export function capabilityActUnobservableMachinesV1(act: CapabilityActionV1): Re
   return Object.freeze(machines);
 }
 
+/**
+ * Every machine gate this act's routes carry, answered against observations.
+ *
+ * Conjunctive across the act's routes exactly as the Market gates are: an act
+ * that declares two routes must pass both, so one machine refusal is the whole
+ * refusal. The same machine named by two routes is answered twice and both
+ * answers are published, because the two routes may admit different sets of it.
+ */
+export function capabilityActMachineGatesV1(
+  act: CapabilityActionV1,
+  machines: ReadonlyArray<MachineObservationV1>,
+): ReadonlyArray<MachineGateVerdictV1> {
+  return Object.freeze(act.routes.flatMap((route) => [...routeMachineVerdictsV1(route, machines)]));
+}
+
 /** The published gates for one act, resolved from the census-derived table. */
 export function capabilityActPhaseGatesV1(act: CapabilityActionV1): ReadonlyArray<RoutePhaseGateV1> {
   return Object.freeze(act.routes.map(routePhaseGateV1).filter((gate): gate is RoutePhaseGateV1 => gate !== null));
+}
+
+/**
+ * What the machine half of a gate found, as clauses a card can append.
+ *
+ * Empty when the act declares no machine gate at all, which is most of them:
+ * a card should say nothing rather than say "no machine gate", the same way it
+ * says nothing about a Market gate an act does not carry.
+ */
+export function machineTextV1(gate: CapabilityPhaseGateV1): ReadonlyArray<string> {
+  return Object.freeze(gate.machineGates.map((one) => (
+    one.verdict === 'unobserved'
+      ? `${one.machine} unread (admits ${one.states.join(' or ')})`
+      : `${one.machine} ${one.observed} ${one.verdict === 'admitted' ? 'admitted' : 'refused'} against ${one.states.join(' or ')}`
+  )));
 }
 
 /**
@@ -716,15 +774,29 @@ export function capabilityActPhaseGatesV1(act: CapabilityActionV1): ReadonlyArra
  */
 export function capabilityPhaseGateTextV1(gate: CapabilityPhaseGateV1): string {
   switch (gate.verdict) {
-    case 'admitted':
-      return `admitted at ${gate.gates.map(gateTextV1).join('; ')}`;
-    case 'excluded':
-      return `admits only ${gate.excludedBy === null ? 'another prestate' : gateTextV1(gate.excludedBy)}`;
+    case 'admitted': {
+      const market = gate.gates.length === 0 ? [] : [`admitted at ${gate.gates.map(gateTextV1).join('; ')}`];
+      return [...market, ...machineTextV1(gate)].join('; ') || 'admitted';
+    }
+    case 'excluded': {
+      // A machine refusal and a Market refusal are both `excluded`, and only
+      // one of them has an `excludedBy` -- so the machine half is asked first
+      // rather than printing "another prestate" for a refusal that named a
+      // machine, a set and an observed state.
+      const byMachine = gate.machineGates.find((one) => one.verdict === 'excluded') ?? null;
+      if (byMachine !== null) return `admits only ${byMachine.machine} ${byMachine.states.join(' or ')}; this one is ${byMachine.observed ?? 'unread'}`;
+      return [
+        `admits only ${gate.excludedBy === null ? 'another prestate' : gateTextV1(gate.excludedBy)}`,
+        ...machineTextV1(gate),
+      ].join('; ');
+    }
     case 'unread':
       return 'the Market did not decode at this observation';
     case 'other-machine':
       return `gated on the ${gate.unobservableMachines.join(' and ')} state machine, which this observation does not read`;
     case 'no-phase-gate': {
+      const machines = machineTextV1(gate);
+      if (machines.length > 0) return machines.join('; ');
       if (gate.routes.length === 0) return 'no published gate; no census route is established for this act';
       // "No gate was read" and "there is no state to read" are different
       // answers, and only the second is final. A route in a program that
@@ -756,6 +828,7 @@ export function capabilityActsWithNoPhaseGateV1(): ReadonlyArray<string> {
 export function evaluateCapabilityV1(
   standing: CapabilityStandingV1,
   snapshot: CapabilityMarketSnapshotV1 | null,
+  machines: ReadonlyArray<MachineObservationV1>,
 ): CapabilityVerdictV1 {
   if (standing.venue === 'no-venue') {
     return Object.freeze({
@@ -794,24 +867,44 @@ export function evaluateCapabilityV1(
         verdict: 'no-phase-gate',
         excludedBy: null,
         unobservableMachines: capabilityActUnobservableMachinesV1(standing.action),
+        machineGates: capabilityActMachineGatesV1(standing.action, machines),
       }),
     });
   }
 
   const gates = capabilityActPhaseGatesV1(standing.action);
   const routes = standing.action.routes;
-  const unobservableMachines = capabilityActUnobservableMachinesV1(standing.action);
-  // A machine this snapshot cannot observe is checked BEFORE the Market gates,
-  // and it is checked even when the Market gates would admit. A route gated on
+  const machineGates = capabilityActMachineGatesV1(standing.action, machines);
+  const unobservableMachines = Object.freeze([...new Set(
+    machineGates.filter((gate) => gate.verdict === 'unobserved').map((gate) => gate.machine),
+  )]);
+  // The machine gates are answered BEFORE the Market gates, and they are
+  // answered even when the Market gates would admit. A route gated on
   // `market: Open+Consumed` and `source: Primary` passes both or neither, and
   // reporting the Market half as an admission is exactly the half-answer this
   // whole chain replaced.
+  //
+  // An EXCLUDED machine comes first among those, because it is a refusal and
+  // the other machines' absence cannot make it attemptable: an act whose
+  // Direct root is Open can no more close a maker root than one whose root
+  // nobody has read, and only the first of those is worth acting on.
+  const excludedMachine = machineGates.find((gate) => gate.verdict === 'excluded') ?? null;
+  if (excludedMachine !== null) {
+    return Object.freeze({
+      standing,
+      status: 'wrong-phase',
+      reason: `${capitalize(excludedMachine.reason)}. The chain refuses this act before any account is read.`,
+      phaseGate: Object.freeze({
+        routes, gates, verdict: 'excluded', excludedBy: null, unobservableMachines, machineGates,
+      }),
+    });
+  }
   if (unobservableMachines.length > 0) {
     return Object.freeze({
       standing,
       status: 'needs-chain',
       reason: `This act is also gated on the ${unobservableMachines.join(' and ')} state machine, which this observation does not read. Read that state at the same finalized floor before calling this act attemptable.`,
-      phaseGate: Object.freeze({ routes, gates, verdict: 'other-machine', excludedBy: null, unobservableMachines }),
+      phaseGate: Object.freeze({ routes, gates, verdict: 'other-machine', excludedBy: null, unobservableMachines, machineGates }),
     });
   }
   if (gates.length === 0) {
@@ -819,7 +912,7 @@ export function evaluateCapabilityV1(
       standing,
       status: 'ready-to-preflight',
       reason: standing.action.guarantee,
-      phaseGate: Object.freeze({ routes, gates, verdict: 'no-phase-gate', excludedBy: null, unobservableMachines }),
+      phaseGate: Object.freeze({ routes, gates, verdict: 'no-phase-gate', excludedBy: null, unobservableMachines, machineGates }),
     });
   }
   // A gated act is about a Market by construction, so a gate with no Market
@@ -830,7 +923,7 @@ export function evaluateCapabilityV1(
       standing,
       status: 'needs-chain',
       reason: `This act is admitted only at ${gateTextV1(gates[0])}, and the Market's Core phase was not decoded at this observation. Read the Market again at one finalized floor.`,
-      phaseGate: Object.freeze({ routes, gates, verdict: 'unread', excludedBy: null, unobservableMachines }),
+      phaseGate: Object.freeze({ routes, gates, verdict: 'unread', excludedBy: null, unobservableMachines, machineGates }),
     });
   }
   // Gates are conjunctive: every one on the path admits, so one refusal is the
@@ -842,14 +935,14 @@ export function evaluateCapabilityV1(
       standing,
       status: 'wrong-phase',
       reason: `\`${excludedBy.route}\` admits only ${gateTextV1(excludedBy)}; this Market is ${observed}. The chain refuses this act before any account is read.`,
-      phaseGate: Object.freeze({ routes, gates, verdict: 'excluded', excludedBy, unobservableMachines }),
+      phaseGate: Object.freeze({ routes, gates, verdict: 'excluded', excludedBy, unobservableMachines, machineGates }),
     });
   }
   return Object.freeze({
     standing,
     status: 'ready-to-preflight',
     reason: standing.action.guarantee,
-    phaseGate: Object.freeze({ routes, gates, verdict: 'admitted', excludedBy: null, unobservableMachines }),
+    phaseGate: Object.freeze({ routes, gates, verdict: 'admitted', excludedBy: null, unobservableMachines, machineGates }),
   });
 }
 

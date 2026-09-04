@@ -548,5 +548,84 @@ class SpendLedgerTests(unittest.TestCase):
                 simcore.SpendLedger.from_config({"budget": {"max_lamports_spent": bad}})
 
 
+class EndpointCredentialTests(unittest.TestCase):
+    """The config file is a stored place, so it does not hold the credential.
+
+    Cohort-15's `sim-config.json` carried a live Helius key in cleartext, and
+    the remedy applied then -- hand-editing the value to a placeholder -- left
+    the file both scrubbed and unrunnable, because the placeholder is what
+    `--rpc-url` would have been given.
+    """
+
+    def test_a_credentialed_endpoint_is_named_and_a_bare_one_is_not(self) -> None:
+        self.assertEqual(
+            simcore.endpoint_credential(
+                "https://devnet.helius-rpc.com/?api-key=00000000-0000-0000-0000-000000000000"
+            ),
+            "api-key",
+        )
+        self.assertEqual(
+            simcore.endpoint_credential("https://rpc.example/?access-token=abc"),
+            "access-token",
+        )
+        for bare in (
+            "https://devnet.helius-rpc.com/",
+            "https://api.devnet.solana.com",
+            "http://127.0.0.1:8899/",
+            "https://rpc.example/?commitment=finalized",
+            "",
+        ):
+            self.assertIsNone(simcore.endpoint_credential(bare), bare)
+
+    def test_the_key_is_read_at_use_time_and_never_stored(self) -> None:
+        with tempfile.TemporaryDirectory() as home_text:
+            home = Path(home_text)
+            (home / simcore.DEFAULT_PROVIDER_KEY_FILE).write_text(
+                "00000000-0000-0000-0000-000000000000\n"
+            )
+            stored = "https://devnet.helius-rpc.com/"
+            live = simcore.resolve_endpoint(stored, environ={}, home=home)
+            self.assertEqual(
+                live,
+                "https://devnet.helius-rpc.com/"
+                "?api-key=00000000-0000-0000-0000-000000000000",
+            )
+            self.assertEqual(simcore.endpoint_credential(stored), None)
+            self.assertEqual(simcore.endpoint_credential(live), "api-key")
+            # And the credential never survives into anything written down.
+            self.assertNotIn("00000000", simcore.redact_endpoint(live))
+
+    def test_the_runner_environment_wins_and_an_unkeyed_host_is_left_alone(self) -> None:
+        self.assertEqual(
+            simcore.resolve_endpoint(
+                "https://devnet.helius-rpc.com/",
+                environ={simcore.RPC_URL_ENVIRONMENT: "https://api.devnet.solana.com"},
+                home=Path("/nonexistent"),
+            ),
+            "https://api.devnet.solana.com",
+        )
+        self.assertEqual(
+            simcore.resolve_endpoint(
+                "http://127.0.0.1:8899/", environ={}, home=Path("/nonexistent")
+            ),
+            "http://127.0.0.1:8899/",
+        )
+
+    def test_a_missing_or_url_shaped_key_file_refuses_rather_than_guessing(self) -> None:
+        with tempfile.TemporaryDirectory() as home_text:
+            home = Path(home_text)
+            with self.assertRaisesRegex(RuntimeError, "cannot be read"):
+                simcore.resolve_endpoint(
+                    "https://devnet.helius-rpc.com/", environ={}, home=home
+                )
+            (home / simcore.DEFAULT_PROVIDER_KEY_FILE).write_text(
+                "https://devnet.helius-rpc.com/?api-key=k\n"
+            )
+            with self.assertRaisesRegex(RuntimeError, "holds a URL"):
+                simcore.resolve_endpoint(
+                    "https://devnet.helius-rpc.com/", environ={}, home=home
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

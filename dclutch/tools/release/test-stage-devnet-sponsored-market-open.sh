@@ -33,14 +33,15 @@ chmod +x "$WORK/bin"/*
 printf '{}\n' > "$WORK/plan.json"
 # THE DRIVER IS STUBBED TOO, and until 2026-09-03 it was not -- so case 10
 # below, "the held identity is what reaches the driver", could not reach it.
-# The wrapper invokes `$BOOT/target/debug/dclutch-local-successor-bootstrap` by
-# absolute path, so no PATH stub substitutes for it: the case exited 127 on a
-# missing file, which is a test of nothing. It was invisible because the RPC
-# origin defect above fired four cases earlier.
-mkdir -p "$WORK/target/debug"
+# The wrapper invokes the driver by path, so no PATH stub substitutes for it:
+# the case exited 127 on a missing file, which is a test of nothing. It was
+# invisible because the RPC origin defect above fired four cases earlier.
+#
+# It now lives in `bin/` BESIDE the wrapper rather than in a build scratch the
+# wrapper reached into, which is the whole of case 14.
 printf '%s\n' '#!/usr/bin/env bash' 'echo "driver stub: $*"' \
-  > "$WORK/target/debug/dclutch-local-successor-bootstrap"
-chmod +x "$WORK/target/debug/dclutch-local-successor-bootstrap"
+  > "$WORK/bin/dclutch-local-successor-bootstrap"
+chmod +x "$WORK/bin/dclutch-local-successor-bootstrap"
 FOUNDER=FounderPub1111111111111111111111111111111111
 OTHER=OtherPub111111111111111111111111111111111111
 printf '%s\n' "$FOUNDER" > "$WORK/founder.json"
@@ -132,6 +133,7 @@ export BOOT="$WORK" PLAN="$WORK/plan.json" DEVNET_RPC=https://example.invalid DE
 {
     sed -n '/^# THE ENDPOINT IS NOT WRITTEN TO DISK/,/^esac$/p' "$STAGER"
     sed -n '/^cat > "\$WORK\/open-market.execute.sh" <<EOF$/,/^EOF$/p' "$STAGER"
+    sed -n '/^# THE SECOND VALUE TEST/,/^fi$/p' "$STAGER"
 } > "$WORK/emit-wrapper.sh"
 grep -q '^ *RPC_ORIGIN_LINE=' "$WORK/emit-wrapper.sh" || fail 'wrapper emitter extraction found no RPC origin choice'
 grep -q 'DCLUTCH_FOUNDING_FOUNDER_KEYPAIR' "$WORK/emit-wrapper.sh" || fail 'wrapper emitter extraction found no founder guard'
@@ -225,4 +227,47 @@ CHECK
 python3 "$WORK/redaction-check.py" "$STAGER" || fail 'staging manifest redaction missing or leaking'
 echo 'redaction: the staging manifest emits a redacted origin and no raw rpcUrl'
 
-echo 'stage-devnet-sponsored-market-open refusals: PASS (20 cases)'
+# 14. THE JOB DIRECTORY IS SELF-CONTAINED. The emitter above already ran the
+#     stager's own value test -- if the wrapper had named an absolute path, no
+#     wrapper would exist and every case since 6 would have failed on a missing
+#     file. Say it directly anyway, because a guard that only fires through
+#     another case's failure is a guard nobody can read.
+grep -q '^HERE=' "$WORK/wrapper.sh" || fail 'emitted wrapper does not resolve its own directory'
+grep -q '"\$HERE/bin/dclutch-local-successor-bootstrap"' "$WORK/wrapper.sh" \
+    || fail 'emitted wrapper does not invoke the driver copied beside it'
+python3 - "$WORK/wrapper.sh" <<'SELFCHECK' || fail 'emitted wrapper names an absolute path'
+import pathlib, re, sys
+lines = pathlib.Path(sys.argv[1]).read_text().splitlines()
+bad = [
+    (n, m.group(0))
+    for n, line in enumerate(lines, 1)
+    if not (n == 1 and line.startswith("#!"))
+    for m in re.finditer(r"""(?<![\w$:/])/[A-Za-z0-9._/-]+""", line)
+    if m.group(0) != "/dev/null"
+]
+if bad:
+    raise SystemExit(f"absolute paths in the emitted wrapper: {bad}")
+SELFCHECK
+#     THE GUARD IS PROVEN RED against a wrapper that names one, so the check
+#     above is not passing because the regex matches nothing.
+sed 's#"\$HERE/bin/dclutch#"/private/tmp/scratch/bin/dclutch#' "$WORK/wrapper.sh" \
+    > "$WORK/stranded-wrapper.sh"
+if python3 - "$WORK/stranded-wrapper.sh" <<'SELFCHECK'
+import pathlib, re, sys
+lines = pathlib.Path(sys.argv[1]).read_text().splitlines()
+bad = [
+    (n, m.group(0))
+    for n, line in enumerate(lines, 1)
+    if not (n == 1 and line.startswith("#!"))
+    for m in re.finditer(r"""(?<![\w$:/])/[A-Za-z0-9._/-]+""", line)
+    if m.group(0) != "/dev/null"
+]
+if bad:
+    raise SystemExit(f"absolute paths in the emitted wrapper: {bad}")
+SELFCHECK
+then
+    fail 'the self-containment check does not fire on a scratch path'
+fi
+echo 'self-containment: the emitted wrapper names no absolute path, and the check fires when one is injected'
+
+echo 'stage-devnet-sponsored-market-open refusals: PASS (21 cases)'

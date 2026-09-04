@@ -121,6 +121,39 @@ class SimlifeConfigTests(unittest.TestCase):
             # And it builds a substrate rather than merely parsing.
             drive.build_substrate(config, root / "run", execute=False)
 
+    def test_the_emitted_config_can_never_carry_a_provider_key(self):
+        """The value test, not the intention: nothing keyed reaches the file.
+
+        This builder has only ever been pointed at a loopback probe, which is
+        exactly why it never redacted anything -- and why cohort-15's devnet
+        fork of it wrote a live Helius key into `sim-config.json` in cleartext.
+        A refusal here is what stops the next fork inheriting that.
+        """
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            probe = held_probe(root)
+            output = self.build(root, probe)
+            self.assertNotIn("api-key", output.read_text())
+
+            handoff = probe / "runs" / "seed-01" / "participant-handoff.json"
+            body = json.loads(handoff.read_text())
+            secret = "00000000-0000-0000-0000-000000000000"
+            body["rpcUrl"] = f"https://devnet.helius-rpc.com/?api-key={secret}"
+            handoff.write_text(json.dumps(body))
+            keyed = root / "keyed.json"
+            with self.assertRaises(adapter.Refusal) as refusal:
+                adapter.main([
+                    "--probe-work", str(probe),
+                    "--sim-work", str(root / "run2"),
+                    "--output", str(keyed),
+                    "--simlife",
+                    "--seed", "dclutch/simlife3/test",
+                ])
+            self.assertIn("refusing to write a api-key credential", str(refusal.exception))
+            self.assertNotIn(secret, str(refusal.exception))
+            self.assertFalse(keyed.exists(), "a refused config must not be left on disk")
+
     def test_every_identity_comes_from_the_probe_and_none_from_a_default(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -33,6 +33,9 @@ import json
 from pathlib import Path
 import sys
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import simcore  # noqa: E402
+
 
 class Refusal(RuntimeError):
     pass
@@ -42,6 +45,26 @@ def need(mapping: dict, key: str, where: str):
     if key not in mapping:
         raise Refusal(f"{where} lacks required field {key!r}")
     return mapping[key]
+
+
+def write_config_file(out: Path, config: dict) -> Path:
+    """Serialize, prove the bytes carry no credential, then write.
+
+    Both emitters go through here so the value test cannot be true of one
+    config shape and forgotten for the other.
+    """
+
+    body = json.dumps(config, sort_keys=True, indent=2) + "\n"
+    carried = simcore.endpoint_credential((config.get("cluster") or {}).get("rpc_url", ""))
+    if carried:
+        raise Refusal(
+            f"refusing to write a {carried} credential into {out}: store the "
+            "credential-free endpoint and let "
+            f"${simcore.RPC_URL_ENVIRONMENT} or "
+            f"~/{simcore.DEFAULT_PROVIDER_KEY_FILE} supply the key at use time"
+        )
+    out.write_text(body)
+    return out
 
 
 def load(path: Path, what: str) -> dict:
@@ -212,10 +235,9 @@ def write_simlife_config(args, probe: Path, boot: str, rpc_url: str, plan: str,
         if args.max_lamports_spent <= 0:
             raise Refusal("--max-lamports-spent must be positive; omit it for an unbounded run")
         config["budget"] = {"max_lamports_spent": args.max_lamports_spent}
-    out = Path(args.output)
-    out.write_text(json.dumps(config, sort_keys=True, indent=2) + "\n")
+    out = write_config_file(Path(args.output), config)
     print(f"config written: {out}")
-    print(f"rpc: {rpc_url}")
+    print(f"rpc: {simcore.redact_endpoint(rpc_url)}")
     print(f"world: {args.seed!r}, {args.markets} markets over {args.ticks} ticks "
           f"({args.archetype_mix})")
     print("budget: " + (f"{args.max_lamports_spent} lamports"
@@ -270,6 +292,22 @@ def main(argv=None) -> int:
         raise Refusal(f"unexpected handoff schema {handoff.get('schema')!r}")
 
     rpc_url = need(handoff, "rpcUrl", "handoff")
+    # THE CREDENTIAL DOES NOT ENTER THIS BUILDER, so it cannot leave in a file.
+    #
+    # This builder has only ever been pointed at a loopback probe, which is why
+    # it never redacted anything -- and why cohort-15's devnet fork of it wrote
+    # a live Helius key into `sim-config.json` in cleartext. Refusing the keyed
+    # endpoint at the one place it arrives is what stops the next fork
+    # inheriting that; the endpoint's key is read at use time instead
+    # (`simcore.resolve_endpoint`).
+    carried = simcore.endpoint_credential(rpc_url)
+    if carried:
+        raise Refusal(
+            f"refusing to write a {carried} credential into a config file: "
+            "store the credential-free endpoint and let "
+            f"${simcore.RPC_URL_ENVIRONMENT} or "
+            f"~/{simcore.DEFAULT_PROVIDER_KEY_FILE} supply the key at use time"
+        )
     plan = need(handoff, "plan", "handoff")
     market_input = need(handoff, "marketInput", "handoff")
     founding_evidence = need(handoff, "foundingEvidence", "handoff")
@@ -399,11 +437,10 @@ def main(argv=None) -> int:
             "note": "teardown: SIGCONT the (stopped) run.py supervisor; never kill the validator directly",
         },
     }
-    out = Path(args.output)
-    out.write_text(json.dumps(config, sort_keys=True, indent=2) + "\n")
+    out = write_config_file(Path(args.output), config)
     print(f"config written: {out}")
     print(f"market: {market_address}")
-    print(f"rpc: {rpc_url}")
+    print(f"rpc: {simcore.redact_endpoint(rpc_url)}")
     return 0
 
 

@@ -1,0 +1,54 @@
+{
+  "schema": "dclutch-state-machine-record-vector-v1",
+  "cluster": "devnet",
+  "cohort": 15,
+  "evidence": "docs/evidence/COHORT15_DEPLOYED_SEALED_FOUNDED_CAPTURED_2026_09_04.md",
+  "observedFinalizedSlot": "492837406",
+  "records": [
+    {
+      "machine": "direct-root",
+      "address": "FUJ9pNukWRb5658ysiDP5gz9gF3Hx8c4cU2mUrvELAWG",
+      "owner": "3gBSSjYwSC4phutpGKRkMhrnCDVzHu6kfQ3L4jLf2UmG",
+      "accountBytes": 256,
+      "recordOffset": 232,
+      "recordHex": "44434c544452543101000000000000000000000000000000",
+      "note": "cohort-15's activation root; the Direct family's 24-byte mutable tail follows the 232-byte composite capability-root header"
+    },
+    {
+      "machine": "source",
+      "address": "5QoawNdiiBtggmeFs81UsejxC5XwWayfPFsswN1redBr",
+      "owner": "24AkUjtXg61La45u7KTge8u4dKpVqkzirmzycVyckFgn",
+      "accountBytes": 224,
+      "recordOffset": 0,
+      "recordHex": "44434c54535253320200000000ff0000000000000000000052f5f81eba0b0dda2c9e426539d5ed3aef0960f7bbab82fdcc81f056b6a8d67e020000000000000040de4ae6f1b1b5e51da9ad5f6d58d254baeaf72b500fd2dce2971faa5fa67f642f2d305a5f397387559129dcd675402637691829c278c6fc577ed4c75eb14dc7000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "note": "a Source that has not resolved"
+    },
+    {
+      "machine": "source",
+      "address": "JAz42gc4tRTKFEWVzELAHe5tvYUG3SXkQJFVtWrRa5ka",
+      "owner": "24AkUjtXg61La45u7KTge8u4dKpVqkzirmzycVyckFgn",
+      "accountBytes": 224,
+      "recordOffset": 0,
+      "recordHex": "44434c54535253320200020001fe0000010000000000000023dc0d7023684d3e95f3c5745f992ccf1cb8599b2f57623a7700dee6b1f861b90200000000000000fdea108fda41f8ac74a0072e6a31ae080e3f49529c3af69aca6a5b5ddffbd2b4e0aca07da4fe6f3f0e4d3e4bbd1bd4239eb1aeb312fbc55a81db914d9ae749c00000000000000000000000000000000000000000000000000000000000000000d9197300d6720e8338f3d2232bf52277ec6fc94d25df6500e3b84aa1e9ca877d01000000000000003d3e9a6a0000000000000000000000000000000000000000",
+      "note": "a Source that has resolved"
+    },
+    {
+      "machine": "funding-ledger",
+      "address": "7c8Y9rTjSPPn9rAcwoQGicfrpJEXhaMafmZn2KXgvjGF",
+      "owner": "3gBSSjYwSC4phutpGKRkMhrnCDVzHu6kfQ3L4jLf2UmG",
+      "accountBytes": 120,
+      "recordOffset": 0,
+      "recordHex": "44434c54464c30320200080000000000b139ebae4524cc27f1d5a8f5a3850a6ed04b816280bbb6625f0a9228357e8be90100000000000000a8935f1d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "note": "one Trading ledger, one selected manifest entry"
+    },
+    {
+      "machine": "funding-ledger",
+      "address": "8Vqh8E14hdZgjuV6VFUiwnv2EJPN1HzSugPa8gUvHjoE",
+      "owner": "24AkUjtXg61La45u7KTge8u4dKpVqkzirmzycVyckFgn",
+      "accountBytes": 264,
+      "recordOffset": 0,
+      "recordHex": "44434c54464c30320200070000000000b139ebae4524cc27f1d5a8f5a3850a6ed04b816280bbb6625f0a9228357e8be90100000000000000d6905f1d0000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000100000000000000d6905f1d0000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000100000000000000d6905f1d000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000",
+      "note": "one Resolution ledger, three selected manifest entries"
+    }
+  ]
+}

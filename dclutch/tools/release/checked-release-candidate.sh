@@ -377,14 +377,21 @@ SOURCE_TREE="$WORK/source-tree.txt"
 LOCKS_BEFORE="$WORK/cargo-locks-before.tsv"
 LOCKS_AFTER="$WORK/cargo-locks-after.tsv"
 UPGRADE_GATE="$WORK/CHECKED_UPGRADE_GATE.json"
+# The admission authority. `CHECKED_UPGRADE_GATE.json` binds one run's whole
+# envelope and therefore cannot reproduce; this one binds only the bytes a
+# rebuild at the same commit brings back, so a cohort that records its digest
+# survives losing the directory that first produced it.
+RELEASE_GATE="$WORK/RELEASE_GATE.json"
+GATE_DIGEST_FILE="$WORK/gate.sha256"
+RUN_RECORD="$WORK/run/RUN_RECORD.json"
 CAMPAIGN_PACK="$WORK/SUCCESSOR_CAMPAIGN_PACK.json"
 PROVENANCE_DIR="$WORK/provenance"
 PRODUCT_HANDOFF_DIR="$WORK/product-handoff"
 PRODUCT_BUILD_DIR="$WORK/product-handoff-build"
 TOOLCHAIN_DIR="$WORK/toolchain"
-rm -f "$UPGRADE_GATE" "$CAMPAIGN_PACK" "$SUMMARY"
+rm -f "$UPGRADE_GATE" "$RELEASE_GATE" "$GATE_DIGEST_FILE" "$CAMPAIGN_PACK" "$SUMMARY"
 rm -rf "$EVIDENCE" "$SET_DIR" "$INFRA_DIR" "$ELF_DIR" "$FRAME_DIR" "$PROVENANCE_DIR" \
-    "$PRODUCT_HANDOFF_DIR" "$PRODUCT_BUILD_DIR" "$TOOLCHAIN_DIR"
+    "$WORK/run" "$PRODUCT_HANDOFF_DIR" "$PRODUCT_BUILD_DIR" "$TOOLCHAIN_DIR"
 mkdir -p "$EVIDENCE" "$SET_DIR" "$INFRA_DIR" "$ELF_DIR" "$FRAME_DIR" "$PROVENANCE_DIR" \
     "$PRODUCT_HANDOFF_DIR" "$PRODUCT_BUILD_DIR" "$TOOLCHAIN_DIR"
 
@@ -1199,6 +1206,10 @@ if [ "$DIAGNOSTIC_TOTAL" = "0" ] && [ "$ALLOW_DIAGNOSTICS" = "false" ] \
         --solana-cli-version "$SOLANA_VERSION" \
         --build-run-id "$BUILD_RUN_ID"
     printf 'checked_upgrade_gate_sha256=%s\n' "$(sha256 "$UPGRADE_GATE")" >> "$SUMMARY"
+    # The digest a cohort's admission records. Everything above it in this
+    # summary describes one run; this line describes the commit.
+    printf 'reproducible_release_gate_sha256=%s\n' "$(sha256 "$RELEASE_GATE")" >> "$SUMMARY"
+    printf 'release_gate_run_record_sha256=%s\n' "$(sha256 "$RUN_RECORD")" >> "$SUMMARY"
 elif [ "$PREBUILT_TOOL" = "true" ]; then
     echo "checked Upgrade gate: not emitted because --tool is not a source-pinned host-tool build" >&2
 fi
@@ -1220,6 +1231,9 @@ echo
 echo "summary: $SUMMARY"
 if [ -f "$UPGRADE_GATE" ]; then
     echo "checked Upgrade gate: $UPGRADE_GATE"
+    echo "reproducible release gate: $RELEASE_GATE"
+    echo "reproducible release gate digest: $GATE_DIGEST_FILE"
+    echo "release gate run record: $RUN_RECORD"
 fi
 if [ -f "$CAMPAIGN_PACK" ]; then
     echo "successor campaign release pack: $CAMPAIGN_PACK"

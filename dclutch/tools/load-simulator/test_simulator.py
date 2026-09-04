@@ -546,6 +546,41 @@ class SimulatorLoopTest(SimulatorHarness):
         self.assertEqual(proc.returncode, 2)
         self.assertIn("acknowledge", proc.stderr)
 
+    def test_a_config_carrying_the_provider_key_refuses_to_load(self) -> None:
+        """A credential at rest is refused, not redacted after the fact.
+
+        Cohort-15's job directory carried a live Helius key in this exact
+        field. The scrub that followed replaced it with a placeholder, which
+        made the file unusable without making the class unrepeatable -- the
+        next builder would have written the key again.
+        """
+
+        body = self.config()
+        body["cluster"] = {
+            "label": "devnet",
+            "rpc_url": "https://devnet.helius-rpc.com/"
+            "?api-key=00000000-0000-0000-0000-000000000000",
+            "devnet_genesis": simulator.DEVNET_GENESIS,
+        }
+        cfg = self.write_config(body)
+        proc = self.run_sim("run", "--config", str(cfg), "--cycles", "1")
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("carries a api-key credential", proc.stderr)
+        self.assertNotIn("00000000-0000", proc.stderr)
+
+    def test_the_credential_free_devnet_endpoint_is_accepted(self) -> None:
+        body = self.config()
+        body["cluster"] = {
+            "label": "devnet",
+            "rpc_url": "https://devnet.helius-rpc.com/",
+            "devnet_genesis": simulator.DEVNET_GENESIS,
+        }
+        cfg = self.write_config(body)
+        loaded = simulator.load_config(cfg)
+        self.assertEqual(
+            loaded["cluster"]["rpc_url"], "https://devnet.helius-rpc.com/"
+        )
+
     def test_loopback_config_refuses_devnet_acknowledgment(self) -> None:
         body = self.config()
         body["cluster"]["devnet_genesis"] = simulator.DEVNET_GENESIS

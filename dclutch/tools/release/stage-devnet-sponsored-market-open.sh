@@ -318,12 +318,41 @@ case "$DEVNET_RPC" in
         ;;
 esac
 
+# THE JOB DIRECTORY IS THE UNIT, AND A PATH INTO A BUILD SCRATCH IS NOT IN IT.
+#
+# This generator used to resolve the driver as `$BOOT/target/debug/...` from its
+# own location and freeze that absolute path into the script it wrote. When the
+# generator was invoked from a detached worktree under /private/tmp -- which is
+# how every cohort has run it -- the emitted job directory named a scratch it
+# did not own, and deleting that scratch stranded the cohort. Cohort-15 has
+# sixteen such references.
+#
+# So the driver is BUILT ONCE HERE and COPIED IN, and the wrapper resolves it
+# from its own location. The job directory is then self-contained and, because
+# nothing in the wrapper is absolute, relocatable as one tree.
+mkdir -m 700 "$WORK/bin"
+cargo build --locked --manifest-path "$BOOT/Cargo.toml" >&2
+cp "$BOOT/target/debug/dclutch-local-successor-bootstrap" \
+    "$WORK/bin/dclutch-local-successor-bootstrap"
+cmp -s "$BOOT/target/debug/dclutch-local-successor-bootstrap" \
+    "$WORK/bin/dclutch-local-successor-bootstrap" \
+    || { echo "copied driver differs from the build it was taken from" >&2; exit 1; }
+chmod 700 "$WORK/bin/dclutch-local-successor-bootstrap"
+shasum -a 256 "$WORK/bin/dclutch-local-successor-bootstrap" \
+    | cut -d' ' -f1 > "$WORK/bin/dclutch-local-successor-bootstrap.sha256"
+# The plan is the other input the wrapper reads, and it is equally not the
+# generator's to leave outside.
+cp "$PLAN" "$WORK/plan.json"
+cmp -s "$PLAN" "$WORK/plan.json" \
+    || { echo "copied plan differs from its admitted input" >&2; exit 1; }
+
 # This only makes the remaining authority explicit. It invokes the existing
 # campaign driver after the operator supplies paths/public identities; staging
 # never opens a key file or invokes this wrapper.
 cat > "$WORK/open-market.execute.sh" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
+HERE="\$(cd "\$(dirname "\$0")" && pwd -P)"
 $RPC_ORIGIN_LINE
 : "\${DCLUTCH_AUTHORIZE_MARKET_OPEN:?set to YES under a separate authorization}"
 [ "\$DCLUTCH_AUTHORIZE_MARKET_OPEN" = YES ] || { echo 'authorization not granted' >&2; exit 2; }
@@ -361,14 +390,17 @@ if [ "\$DCLUTCH_SUBSTITUTED_FOUNDER" = "\$DCLUTCH_FOUNDING_FOUNDER_DERIVED" ]; t
     echo 'the substituted founder must be a DISTINCT identity from the founder' >&2
     exit 2
 fi
-# Built and then called, for the same reason the generator above is: \`cargo run\`
-# echoes its exec line, and \$DCLUTCH_RPC_URL is expanded by the shell BEFORE
-# cargo sees it, so the credential this file was careful not to hold would be
-# printed by every run of it.
-cargo build --locked --manifest-path '$BOOT/Cargo.toml' >&2
-'$BOOT/target/debug/dclutch-local-successor-bootstrap' campaign --founding-only \\
+# The driver was built and copied in at staging time, so this file neither
+# builds nor names anything outside its own directory. It used to \`cargo build\`
+# here -- which was itself a fix, because \`cargo run\` echoes its exec line and
+# \$DCLUTCH_RPC_URL is expanded by the shell BEFORE cargo sees it, so the
+# credential this file is careful not to hold would have been printed by every
+# run of it. Building at staging keeps that property and adds the one this file
+# lacked: it does not depend on a source tree still being there.
+"\$HERE/bin/dclutch-local-successor-bootstrap" campaign --founding-only \\
   --rpc-url "\$DCLUTCH_RPC_URL" --i-mean-devnet '$DEVNET_GENESIS' \\
-  --plan '$PLAN' --market '$WORK/market.json' --evidence '$WORK/campaign-open.json' \\
+  --plan "\$HERE/plan.json" --market "\$HERE/market.json" \\
+  --evidence "\$HERE/campaign-open.json" \\
   --keypair-campaign-payer "\$DCLUTCH_CAMPAIGN_PAYER_KEYPAIR" \\
   --keypair-collateral-mint "\$DCLUTCH_COLLATERAL_MINT_KEYPAIR" \\
   --keypair-collateral-wallet "\$DCLUTCH_COLLATERAL_WALLET_KEYPAIR" \\
@@ -392,6 +424,41 @@ case "$DEVNET_RPC" in
         fi
         ;;
 esac
+
+# THE SECOND VALUE TEST, and the one cohort-15 needed: the emitted script must
+# name no absolute path at all. Every input it reads is beside it, resolved from
+# its own location, so the job directory can be moved, archived or handed over
+# and still run -- and no build scratch can strand it by being deleted.
+if ! python3 - "$WORK/open-market.execute.sh" <<'SELFCONTAINED'
+import pathlib
+import re
+import sys
+
+script = pathlib.Path(sys.argv[1])
+# `/dev/null` is a kernel device, not an input this job directory has to carry.
+# Nothing else is exempt: a real filesystem path is exactly what strands a
+# cohort when the tree that held it is deleted.
+ALLOWED = {"/dev/null"}
+# `://` is a URL authority, not a filesystem root; the endpoint is separately
+# refused by the credential check above.
+offenders = []
+for number, line in enumerate(script.read_text().splitlines(), 1):
+    if number == 1 and line.startswith("#!"):
+        continue
+    for match in re.finditer(r"""(?<![\w$:/])/[A-Za-z0-9._/-]+""", line):
+        if match.group(0) in ALLOWED:
+            continue
+        offenders.append(f"  line {number}: {match.group(0)}")
+if offenders:
+    print("the generated wrapper names absolute paths:", file=sys.stderr)
+    print("\n".join(offenders), file=sys.stderr)
+    raise SystemExit(1)
+SELFCONTAINED
+then
+    echo 'refusing to leave a job directory whose script depends on a path outside it' >&2
+    rm -f "$WORK/open-market.execute.sh"
+    exit 2
+fi
 
 python3 - "$WORK/market-open-staging.json" "$WORK/market.json" "$PLAN" "$REGISTRY" "$FEE_RECIPIENT" "$DEVNET_RPC" "$DEVNET_GENESIS" "$PRICE_ACCOUNT" "$FEE_BPS" <<'PY'
 import json, sys

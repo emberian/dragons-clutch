@@ -101,7 +101,7 @@ describe('live devnet gates over machines that are not the Market phase', () => 
     const redeem = standing('claims.redeem');
     const gates = capabilityActPhaseGatesV1(redeem.action);
     expect(gates).toHaveLength(1);
-    const verdict = evaluateCapabilityV1(redeem, snapshot);
+    const verdict = evaluateCapabilityV1(redeem, snapshot, []);
     const settled = state.phase === 'Terminal' || state.phase === 'Retiring';
     expect(verdict.phaseGate.verdict).toBe(settled ? 'admitted' : 'excluded');
     expect(verdict.status).toBe(settled ? 'ready-to-preflight' : 'wrong-phase');

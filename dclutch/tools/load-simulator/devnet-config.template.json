@@ -1,6 +1,6 @@
 {
   "schema": "dclutch-load-simulator-config-v1",
-  "_comment": "DEVNET FLIP TEMPLATE. Fill every <...> from SPINE's campaign-open facts on the wave board, then validate with: simulator.py run --config THIS --cycles 1 (preflight, signs nothing). Devnet rails: https RPC only, genesis acknowledged in full, gentle cadence, one process. NEVER mainnet; NEVER the deployer as a participant; ~/.helius-key never in a commit.",
+  "_comment": "DEVNET FLIP TEMPLATE. Fill every <...> from SPINE's campaign-open facts on the wave board, then validate with: simulator.py run --config THIS --cycles 1 (preflight, signs nothing). Devnet rails: https RPC only, genesis acknowledged in full, gentle cadence, one process. NEVER mainnet; NEVER the deployer as a participant. THE KEY IS NEVER IN THIS FILE: rpc_url holds the credential-free endpoint (https://devnet.helius-rpc.com/ or https://api.devnet.solana.com) and simulator.py REFUSES a config whose rpc_url carries an api-key; the key is read at use time from $DCLUTCH_RPC_URL or ~/.helius-key.",
   "cluster": {
     "label": "devnet",
     "rpc_url": "https://api.devnet.solana.com",

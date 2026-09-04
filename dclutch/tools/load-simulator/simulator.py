@@ -160,6 +160,22 @@ def load_config(path: Path) -> dict:
         raise Refusal(f"config schema must be {SCHEMA_CONFIG}")
     label = body["cluster"]["label"]
     rpc = body["cluster"]["rpc_url"]
+    # A CONFIG FILE IS A STORED PLACE, SO IT DOES NOT HOLD THE CREDENTIAL.
+    #
+    # Same doctrine as `redact_endpoint`, one step earlier: cohort-15's
+    # `sim-config.json` carried a live Helius key in `cluster.rpc_url`, and the
+    # remedy applied at the time -- hand-editing the value to a placeholder --
+    # left the file both scrubbed and unrunnable, because the placeholder is
+    # what `--rpc-url` would have been given. Refusing the key here makes the
+    # class unrepeatable; `simcore.resolve_endpoint` supplies the real endpoint
+    # at use time from the runner's environment or the key file.
+    carried = simcore.endpoint_credential(rpc)
+    if carried:
+        raise Refusal(
+            f"cluster.rpc_url carries a {carried} credential; store the "
+            "credential-free endpoint and let the key be read at use time "
+            f"(${simcore.RPC_URL_ENVIRONMENT} or ~/{simcore.DEFAULT_PROVIDER_KEY_FILE})"
+        )
     if label == "devnet":
         if not rpc.startswith("https://"):
             raise Refusal("devnet rpc_url must be https")
@@ -213,6 +229,17 @@ def child_text(proc: subprocess.CompletedProcess) -> str:
 class Simulator:
     def __init__(self, config: dict, execute: bool, sustain: bool, cycles: int):
         self.config = config
+        # Resolved once, held in memory, never written anywhere. The config on
+        # disk stores a credential-free endpoint; this is the live one.
+        self.rpc_url = simcore.resolve_endpoint(config["cluster"]["rpc_url"])
+        # The stored endpoint was checked by `load_config`; an environment
+        # override was not, and it is the one that reaches a signer.
+        if "mainnet" in self.rpc_url:
+            raise Refusal("mainnet is refused unconditionally")
+        if config["cluster"]["label"] == "devnet" and not self.rpc_url.startswith(
+            "https://"
+        ):
+            raise Refusal("devnet rpc_url must be https")
         self.execute = execute
         self.sustain = sustain
         self.cycles_target = None if sustain else cycles
@@ -234,7 +261,7 @@ class Simulator:
         self.status = simcore.StatusWriter(
             path=self.work / "status.json",
             cluster_label=config["cluster"]["label"],
-            rpc_url=config["cluster"]["rpc_url"],
+            rpc_url=self.rpc_url,
             mode="sustain" if sustain else "finite",
             market_address=config.get("market_address"),
             cadence_seconds=period_seconds,
@@ -279,7 +306,7 @@ class Simulator:
     # ---------- cluster argv helpers ----------
 
     def cluster_args(self) -> list:
-        args = ["--rpc-url", self.config["cluster"]["rpc_url"]]
+        args = ["--rpc-url", self.rpc_url]
         if self.config["cluster"]["label"] == "devnet":
             args += ["--i-mean-devnet", DEVNET_GENESIS]
         return args
@@ -405,7 +432,7 @@ class Simulator:
                 key_dir = pair.get("key_dir", key_dir)
             argv = [
                 self.boot(), "local-private-validator-direct-trade-produce-v1",
-                "--rpc-url", self.config["cluster"]["rpc_url"],
+                "--rpc-url", self.rpc_url,
                 "--plan", local["plan"],
                 "--market-input", local["market_input"],
                 "--campaign-report", local["campaign_report"],
@@ -695,7 +722,7 @@ class Simulator:
             "jsonrpc": "2.0", "id": 1, "method": "getBalance", "params": [address],
         }).encode("utf-8")
         request = urllib.request.Request(
-            self.config["cluster"]["rpc_url"], data=payload,
+            self.rpc_url, data=payload,
             headers={"Content-Type": "application/json"},
         )
         try:
@@ -735,7 +762,7 @@ class Simulator:
             "cluster": self.config["cluster"]["label"],
             # The plan is hashed into the cycle journal and read back on
             # resume, so it records the endpoint's identity, never its key.
-            "rpc_url": simcore.redact_endpoint(self.config["cluster"]["rpc_url"]),
+            "rpc_url": simcore.redact_endpoint(self.rpc_url),
             "market": self.config.get("market_address"),
             "mode": "execute" if self.execute else "preflight",
             "trade_mode": self.config["cluster"]["label"],
@@ -922,7 +949,7 @@ def cmd_mint_wallets(args: argparse.Namespace) -> int:
         raise Refusal(f"activity harness not found at {script}; set activity_sh in config")
     argv = [
         "bash", str(script),
-        "--rpc-url", config["cluster"]["rpc_url"],
+        "--rpc-url", simcore.resolve_endpoint(config["cluster"]["rpc_url"]),
         "--i-mean-devnet", DEVNET_GENESIS,
         "--state-dir", str(work),
         "--participants", str(args.count),

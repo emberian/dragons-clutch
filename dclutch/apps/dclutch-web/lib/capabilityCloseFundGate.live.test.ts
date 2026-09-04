@@ -68,7 +68,7 @@ describe('live devnet close-fund gate', () => {
     expect(gates[0]!.route).toBe('resolution/core_effect::process_direct_funding_close_v1');
     expect(gates[0]!.prestates).toEqual([['Retiring', 'Consumed']]);
 
-    const verdict = evaluateCapabilityV1(close, snapshot);
+    const verdict = evaluateCapabilityV1(close, snapshot, []);
     const phase = snapshot.market!.phase;
     if (phase === 'Retiring' && snapshot.market!.readiness === 'Consumed') {
       expect(verdict.status).toBe('ready-to-preflight');
@@ -90,7 +90,7 @@ describe('live devnet close-fund gate', () => {
     const phase = snapshot.market!.phase;
     const readiness = snapshot.market!.readiness;
 
-    const close = evaluateCapabilityV1(standing('source.close-fund'), snapshot);
+    const close = evaluateCapabilityV1(standing('source.close-fund'), snapshot, []);
     if (phase === 'Retiring' && readiness === 'Consumed') {
       expect(close.status).toBe('ready-to-preflight');
     } else {
@@ -98,7 +98,7 @@ describe('live devnet close-fund gate', () => {
       expect(close.phaseGate.excludedBy?.route).toBe('resolution/core_effect::process_direct_funding_close_v1');
     }
 
-    const provider = evaluateCapabilityV1(standing('source.provider'), snapshot);
+    const provider = evaluateCapabilityV1(standing('source.provider'), snapshot, []);
     const admits = phase === 'Open' && readiness === 'Consumed';
     expect(provider.phaseGate.verdict).toBe(admits ? 'admitted' : 'excluded');
     if (admits) expect(provider.status).toBe('ready-to-preflight');
