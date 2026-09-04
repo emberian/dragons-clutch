@@ -4583,3 +4583,6 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   redeploy over any cohort funded before a rise.** The lane commit helper now takes `-F <file>` (the lane fell back to bare
   git when a prose body reached git as one line).
 - Cuts: `ce1a012ba`, `d2fc27847`.
+- Started 08:20 EDT: RELEASE-PREFLIGHT **`a248939337b44b41d`** — the deploy preflight inverted under the ruling (a rate-risen
+  account admits; a drained one refuses), proven against cohort-15's deployed accounts; the 22 explicit floor/exactness
+  sites dispositioned, the operator's nine left to COHORT-15G's file.
