@@ -4389,3 +4389,11 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   four wallet payouts landed (three zeros and one 500,000,000, agreeing with the certificate) and **market 1 has begun
   retiring — phase byte 3 read back, the first retirement act on any chain**. Market 3's settle, the stranger's payout and
   OpenBatch follow in the resumed turn.
+- MAGIC-NAMES closed (`d08bf1248`, `cea8adc17`): the two emitters owned FOUR name collisions, not one — every magic they print
+  now carries its family prefix (eleven names, `pub(crate)`, no alias); **routes gained: zero, measured — `Request::decode`
+  and `ControllerRequestV1::decode` are called from no program dispatcher** (the Dealer and General requests travel as CPI
+  data, not top-level instructions); `check_names` in the census is the inverse gate (a name means one thing) — red on the
+  pre-rename tree naming four constants, green now; rows unmoved, `owed` clean. Owed: `EmitMarketCoreRust.lean`'s bare
+  `STATE_MAGIC` (the last one; the web generator already renames it on the way out — the tell); associated consts are
+  invisible to both magic gates.
+- Cuts: `78137b78f`, `2c5fc2724`.

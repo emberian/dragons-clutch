@@ -1664,3 +1664,28 @@ one wall.** Read off the chain rather than inferred: market 1's
 at `market-retirement-v1-operator/src/lib.rs:751` requires **0**. The capability
 is retired by the rest of the terminal sequence. Retirement is downstream of
 CloseFund, and CloseFund is the whole remedy.
+
+## D8. The OpenBatch execute path, and where the refusal sits
+
+`devnet-general-successor-execute-v1 --execute` was run against the same route.
+It produces the plan, signs the exact bytes the plan published, and submits with
+preflight on — so it never became a block entry, and the runtime's answer is the
+same one the simulator gave:
+
+    Error processing Instruction 1: custom program error: 0x4015
+    Program 3gBSSjYwSC4phutpGKRkMhrnCDVzHu6kfQ3L4jLf2UmG
+      consumed 128,566 of 202,850 compute units
+    unitsConsumed 128,724
+
+**The accelerator is never invoked.** The logs carry ComputeBudget and Trading
+and nothing else: Trading refuses in its own prologue, in
+`reauthenticate_top_level_root_roles_v3`, before any CPI. So the accelerator's
+single ack, the chunk count and the `DCLTGBT01` Batch account are all downstream
+of a conjunct that is not about them — and reporting them as "owed" without
+saying that would put the reader two hops from the cause.
+
+Landing this refusal as a block entry rather than a preflight rejection would
+require `skipPreflight`, which is the deliberate posture for hostile evidence and
+not the default for an honest act. It is not taken here: the same code, the same
+instruction index and the same compute figure come back from both the simulator
+and the sender, and a third statement of one refusal is not a third fact.
