@@ -27,8 +27,8 @@ export const PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1 = 14 as const;
 export const PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1 = 12 as const;
 export const GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1 = 26 as const;
 export const GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1 = 15 as const;
-export const CLAIMS_FOUNDING_ACCOUNT_COUNT_V5 = 31 as const;
-export const GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1 = 21 as const;
+export const CLAIMS_FOUNDING_ACCOUNT_COUNT_V6 = 33 as const;
+export const GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1 = 23 as const;
 
 /**
  * Frame width at `funding_count = 0`, restated by the reference client.
@@ -37,11 +37,11 @@ export const GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1 = 21 as const;
  * disagreement rather than as a silently wider frame; the assertion that the
  * six widths above sum to it lives in `genericMarketFounding.test.ts`.
  */
-export const GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3 = 125 as const;
+export const GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3 = 129 as const;
 export const PROJECTED_FOUND_ACCOUNT_COUNT_V2 = 24 as const;
 
 /** Exact distinct writable keys the outer requires, asserted by the client. */
-export const GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3 = 12 as const;
+export const GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3 = 14 as const;
 
 /** Devnet transaction account-lock limit without the raise feature. */
 export const MAX_TX_ACCOUNT_LOCKS_V2 = 64 as const;

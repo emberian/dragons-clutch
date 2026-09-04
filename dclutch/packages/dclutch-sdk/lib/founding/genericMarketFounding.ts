@@ -29,7 +29,7 @@
 import { PublicKey, TransactionInstruction } from '@solana/web3.js';
 
 import {
-  CLAIMS_FOUNDING_ACCOUNT_COUNT_V5,
+  CLAIMS_FOUNDING_ACCOUNT_COUNT_V6,
   GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1,
   GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1,
   GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1,
@@ -97,6 +97,15 @@ export type GenericMarketFoundingCoordinatesV3 = Readonly<{
   aggregate: string;
   position: string;
   admission: string;
+  /**
+   * The failure escrow's Position and admission (decision 0025 item 2).
+   *
+   * DERIVED, never chosen: the owner is the ClaimsCapability PDA at
+   * `(market, basisWidth - 1)` and these are the Position and admission PDAs
+   * under it. Supplied on every founding and written only by a refunding one.
+   */
+  escrowPosition: string;
+  escrowAdmission: string;
 
   /** Registry raw/staging pairs the Claims stage authenticates. */
   liabilityBasisRaw: string;
@@ -267,7 +276,7 @@ export function buildGenericMarketFoundingFrameV3(input: GenericMarketFoundingCo
     emit(input.tokenProgram, false, 'Token program');
   });
 
-  segment('claims', CLAIMS_FOUNDING_ACCOUNT_COUNT_V5, (emit) => {
+  segment('claims', CLAIMS_FOUNDING_ACCOUNT_COUNT_V6, (emit) => {
     emit(input.claimsCaller, false, 'Claims caller authority');
     emit(input.permit, true, 'one-shot Core permit');
     emit(input.aggregate, true, 'Claims liability aggregate');
@@ -299,6 +308,13 @@ export function buildGenericMarketFoundingFrameV3(input: GenericMarketFoundingCo
     emit(input.founder, false, 'founder');
     emit(input.credit, true, 'lifecycle RentCredit');
     emit(input.rentProgram, false, 'Rent program');
+    // The failure escrow, appended by the V6 frame (decision 0025 item 2).
+    // Present and writable on EVERY founding; written only when the Market's
+    // authenticated ProductBasisV3 refunds on failure. Both addresses are
+    // derived, so the caller declares nothing about the escrow -- it supplies
+    // the two accounts the program is going to derive anyway.
+    emit(input.escrowPosition, true, 'failure escrow Position');
+    emit(input.escrowAdmission, true, 'failure escrow admission');
   });
 
   segment('open', GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1, (emit) => {
@@ -323,6 +339,11 @@ export function buildGenericMarketFoundingFrameV3(input: GenericMarketFoundingCo
     emit(input.aggregate, true, 'Claims liability aggregate');
     emit(input.position, true, 'founder Position');
     emit(input.admission, true, 'Position admission');
+    // Read-only here: the Open stage only HASHES them, into the five-account
+    // post-resource transcript the Claims founding receipt commits to. They
+    // were written, if at all, in the Found stage.
+    emit(input.escrowPosition, false, 'failure escrow Position');
+    emit(input.escrowAdmission, false, 'failure escrow admission');
   });
 
   segment('checkpoint', 1, (emit) => {

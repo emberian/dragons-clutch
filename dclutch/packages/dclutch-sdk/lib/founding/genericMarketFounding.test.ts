@@ -9,7 +9,7 @@ import {
 import { describe, expect, it } from 'vitest';
 
 import {
-  CLAIMS_FOUNDING_ACCOUNT_COUNT_V5,
+  CLAIMS_FOUNDING_ACCOUNT_COUNT_V6,
   GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1,
   GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1,
   GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1,
@@ -122,6 +122,8 @@ function keys(): GenericMarketFoundingCoordinatesV3 {
     aggregate: next(),
     position: next(),
     admission: next(),
+    escrowPosition: next(),
+    escrowAdmission: next(),
     liabilityBasisRaw: next(),
     liabilityBasisStaging: next(),
     productRaw,
@@ -205,7 +207,7 @@ describe('the DCLTGMF3 outer frame', () => {
       + GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1
       + GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1
       + PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1
-      + CLAIMS_FOUNDING_ACCOUNT_COUNT_V5
+      + CLAIMS_FOUNDING_ACCOUNT_COUNT_V6
       + GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1
       + 1;
     expect(stages).toBe(GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3);
@@ -219,14 +221,14 @@ describe('the DCLTGMF3 outer frame', () => {
     const foundCount = GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1 + 2 + GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1;
     const realizeStart = foundStart + foundCount;
     const claimsStart = realizeStart + PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1;
-    const openStart = claimsStart + CLAIMS_FOUNDING_ACCOUNT_COUNT_V5;
+    const openStart = claimsStart + CLAIMS_FOUNDING_ACCOUNT_COUNT_V6;
     const checkpointStart = openStart + GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1;
     expect(frame.stageBounds).toEqual({
       prefix: { start: 0, count: GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V3 },
       lock: { start: lockStart, count: PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1 },
       found: { start: foundStart, count: foundCount },
       realize: { start: realizeStart, count: PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1 },
-      claims: { start: claimsStart, count: CLAIMS_FOUNDING_ACCOUNT_COUNT_V5 },
+      claims: { start: claimsStart, count: CLAIMS_FOUNDING_ACCOUNT_COUNT_V6 },
       open: { start: openStart, count: GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1 },
       checkpoint: { start: checkpointStart, count: 1 },
     });
@@ -247,7 +249,7 @@ describe('the DCLTGMF3 outer frame', () => {
     expect(frame.accounts.slice(0, 5).every((account) => !account.writable)).toBe(true);
   });
 
-  it('names exactly the twelve writable keys, and they are the accounts the founding mutates', () => {
+  it('names exactly the fourteen writable keys, and they are the accounts the founding mutates', () => {
     const input = keys();
     const frame = buildGenericMarketFoundingFrameV3(input);
     expect(frame.distinctWritable.length).toBe(GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3);
@@ -263,6 +265,8 @@ describe('the DCLTGMF3 outer frame', () => {
       input.aggregate,
       input.position,
       input.admission,
+      input.escrowPosition,
+      input.escrowAdmission,
       input.controllerFundingCheckpoint,
     ].sort());
   });
@@ -287,18 +291,24 @@ describe('the DCLTGMF3 outer frame', () => {
     expect(frame.accounts.some((account) => account.signer)).toBe(false);
   });
 
-  it('compiles the four-entry Direct frame to 58 locks and detects the devnet 64/65 boundary', () => {
+  // THE ESCROW SEATING COST TWO LOCKS. This route compiled to 58 before the
+  // failure escrow was seated at founding (decision 0025 item 2) and to 60
+  // after it, and the ceiling did not move: a founding that could carry six
+  // physical funding entries under the devnet 64-lock limit now carries four.
+  // That is the capacity price of the ruling, and it is stated here rather
+  // than discovered by a cohort whose funding profile stopped fitting.
+  it('compiles the four-entry Direct frame to 60 locks and detects the devnet 64/65 boundary', () => {
     expect(DIRECT_FUNDING_MASKS_V2[0] | DIRECT_FUNDING_MASKS_V2[1]).toBe(0b1111);
     expect(DIRECT_FUNDING_MASKS_V2[0] & DIRECT_FUNDING_MASKS_V2[1]).toBe(0);
     const direct = keys();
     expect(direct.fundingLedgers.length).toBe(2);
     const base = compiledMessageStats(direct);
-    const admitted = compiledMessageStats(direct, 6);
-    const refused = compiledMessageStats(direct, 7);
-    expect(base.locks).toBe(58);
-    expect(base.bytes).toBe(429);
-    expect(admitted.bytes).toBe(441);
-    expect(refused.bytes).toBe(443);
+    const admitted = compiledMessageStats(direct, 4);
+    const refused = compiledMessageStats(direct, 5);
+    expect(base.locks).toBe(60);
+    expect(base.bytes).toBe(436);
+    expect(admitted.bytes).toBe(444);
+    expect(refused.bytes).toBe(446);
     expect(admitted.locks).toBe(MAX_TX_ACCOUNT_LOCKS_V2);
     expect(refused.locks).toBe(MAX_TX_ACCOUNT_LOCKS_V2 + 1);
     expect(admitted.locks <= MAX_TX_ACCOUNT_LOCKS_V2).toBe(true);
@@ -341,12 +351,12 @@ describe('the DCLTGMF3 outer frame refuses', () => {
     expect(() => buildGenericMarketFoundingFrameV3({ ...base, projectedFoundKeys: base.projectedFoundKeys.slice(0, 23) })).toThrow(/exactly 24 compact ProjectedFound V2 keys/);
   });
 
-  it('a frame whose writable set is not the twelve the outer requires', () => {
+  it('a frame whose writable set is not the fourteen the outer requires', () => {
     // Aliasing the Hoard onto the readonly Custody authority removes one
     // distinct writable key without changing the frame's width, which is
     // exactly the class of slip the client's own assertion exists to catch.
     const base = keys();
-    expect(() => buildGenericMarketFoundingFrameV3({ ...base, hoardVault: base.sourceVault })).toThrow(/declared 11 writable keys, not the 12/);
+    expect(() => buildGenericMarketFoundingFrameV3({ ...base, hoardVault: base.sourceVault })).toThrow(/declared 13 writable keys, not the 14/);
   });
 
   it('noncanonical base58 in any coordinate', () => {

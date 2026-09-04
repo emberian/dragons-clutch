@@ -1,11 +1,30 @@
 # Decision 0033: the founder bond is mandatory, at the size rule
 
-Status: **PROVISIONAL — the BOND note's §8 question ruled by the orchestrator on
-2026-09-04 under ember's standing goal, with the bond itself designed and unbuilt,
-and reversible at the cost §7 states**. The question is
-`docs/design/MECHANISM_FOUNDER_BOND_2026_09_04.md:456-473`; the design and its 34
-sorry-free theorems landed at `86d38a203` and `9365be226` (`GOAL.md:4756-4763`).
-Direction 5 of the mechanism agenda, decision 0031.
+Status: **CONFIRMED (ember, 2026-09-04 15:50 EDT, in conversation; reversible
+on request) — the BOND note's §8 question ruled by the orchestrator on
+2026-09-04 under ember's standing goal, with the bond itself designed and
+unbuilt, and reversible at the cost §7 states**. It was PROVISIONAL from the
+ruling until 15:50 EDT, when ember read the docket and accepted it in
+conversation without amending it; the confirmation line below is the whole of
+what was said. The question is
+`docs/design/MECHANISM_FOUNDER_BOND_2026_09_04.md:456-473`; the design and its
+34 sorry-free theorems landed at `86d38a203` and `9365be226`
+(`GOAL.md:4756-4763`). Direction 5 of the mechanism agenda, decision 0031.
+
+**Confirmed, 2026-09-04 15:50 EDT.** Ember, after reading the docket and the
+mechanism cohort page:
+
+> you aren't waiting on me for rulings are you? i was reading the docket and
+> contemplating it, but overall find your takes reasonable
+
+The orchestrator's reply: nothing was waiting on ember — the rulings were
+provisional and already in force, and the lanes had been working under them
+since they were made; *"overall find your takes reasonable"* is taken as
+confirmation rather than as an invitation to re-argue them; and the one thing
+still genuinely ember's is the flagship conditional market's feature gate, its
+slot and its metric (decision 0029's tenth item). So the status above is
+CONFIRMED and no longer PROVISIONAL: accepted in conversation, unamended, and
+reversible on request at the cost §7 states.
 
 ## 1. The question
 

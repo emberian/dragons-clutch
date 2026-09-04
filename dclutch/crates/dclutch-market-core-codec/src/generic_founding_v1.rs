@@ -36,7 +36,14 @@ pub const GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1: usize = 15;
 pub const GENERIC_FOUNDING_FOUND_PRICE_GATE_SUFFIX_ACCOUNT_COUNT_V2: usize =
     GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1 + 2;
 /// Exact Core final-Open account count.
-pub const GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1: usize = 21;
+///
+/// Twenty-three since the failure escrow was seated at founding (decision 0025
+/// item 2). The Open stage rebuilds and re-verifies the Claims founding
+/// receipt from LIVE accounts, and that receipt's post-resource transcript now
+/// covers five Claims accounts rather than three, so the two escrow accounts
+/// ride here read-only -- they were written in the Found stage and this window
+/// only hashes them. Appended, so every existing index is unmoved.
+pub const GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1: usize = 23;
 /// Domain for the exact ordered generic FundingState account list.
 pub const GENERIC_FOUNDING_FUNDING_LIST_DOMAIN_V1: &[u8] =
     b"dclutch/generic-founding-funding-list/v1";

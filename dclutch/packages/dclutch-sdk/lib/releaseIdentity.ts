@@ -59,7 +59,7 @@ import { CORE_FOUND_ACCOUNT_COUNT_V3 } from './generated/coreFound';
 import { CLAIMS_CUSTODY_REPLAY_ACCOUNT_COUNT_V1 } from './generated/claimsCustodyReplayV1';
 import { HOT_FIXED_ACCOUNT_COUNT_V3 } from './generated/directInlineV3';
 import {
-  CLAIMS_FOUNDING_ACCOUNT_COUNT_V5,
+  CLAIMS_FOUNDING_ACCOUNT_COUNT_V6,
   CORE_FOUND_TRADING_PROGRAM_INDEX_V1,
   GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1,
   GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1,
@@ -143,7 +143,7 @@ export const CURRENT_ABI_FRAME_FACTS_V1: AbiFrameFactsV1 = Object.freeze({
   genericFoundingFoundFixedAccountCount: GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1,
   genericFoundingOpenAccountCount: GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1,
   projectedFoundAccountCount: PROJECTED_FOUND_ACCOUNT_COUNT_V2,
-  claimsFoundingAccountCount: CLAIMS_FOUNDING_ACCOUNT_COUNT_V5,
+  claimsFoundingAccountCount: CLAIMS_FOUNDING_ACCOUNT_COUNT_V6,
   claimsCustodyReplayAccountCount: CLAIMS_CUSTODY_REPLAY_ACCOUNT_COUNT_V1,
   directHotFixedAccountCount: HOT_FIXED_ACCOUNT_COUNT_V3,
   terminalSettlementAccountCount: TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3,

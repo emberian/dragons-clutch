@@ -637,6 +637,26 @@ fn authenticate_product_and_basis(
 /// graph-root digest, Product semantic identity, semantic basis identity, and
 /// raw basis-record digest remain distinct joins; no receipt or decoded DTO is
 /// a substitute for any of them.
+/// What the Market-wide basis admission established, for callers that need
+/// more than the cap.
+///
+/// The admission already decodes the authenticated `ProductBasisV3`; whether
+/// the record refunds on failure is a field of that decode and used to be
+/// thrown away. Founding needs it -- the escrow seating is fixed by the RECORD
+/// and by nothing a caller writes -- and re-decoding the basis to ask a
+/// question the admission already answered would put the same rule on the
+/// route twice at full CU cost.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RuntimeProductBasisAdmissionV3 {
+    /// Core's sole runtime principal cap, in complete sets.
+    pub(crate) principal_cap_sets: u64,
+    /// `ProductBasisV3::refunds_on_failure` for the authenticated record.
+    ///
+    /// Carried, never recomputed: `categorical_refunds_on_failure_v3` stays the
+    /// sole author of the rule.
+    pub(crate) refunds_on_failure: bool,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn authenticate_runtime_product_basis_core_v3(
     registry: &AccountInfo<'_>,
@@ -658,6 +678,7 @@ pub(crate) fn authenticate_runtime_product_basis_core_v3(
         expected_linked_basis_record_digest,
         admission,
     )
+    .map(|admitted| admitted.principal_cap_sets)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -670,7 +691,7 @@ pub(crate) fn authenticate_runtime_product_basis_core_with_rent_v3(
     expected_product_record_digest: [u8; 32],
     expected_linked_basis_record_digest: [u8; 32],
     admission: MarketAdmissionV1,
-) -> Result<u64, ProgramError> {
+) -> Result<RuntimeProductBasisAdmissionV3, ProgramError> {
     let runtime = authenticate_product_runtime_v2(
         registry.key,
         expected_product_record_digest,
@@ -698,14 +719,27 @@ pub(crate) fn authenticate_runtime_product_basis_core_with_rent_v3(
     {
         return Err(AffineBatchSbfErrorV2::ProductBasis.into());
     }
-    authenticate_core_market_v3(
+    let principal_cap_sets = authenticate_core_market_v3(
         core_market,
         core_program,
         registry,
         market,
         expected_product_record_digest,
         admission,
-    )
+    )?;
+    Ok(RuntimeProductBasisAdmissionV3 {
+        principal_cap_sets,
+        // The authenticated MIRROR of the record's three fields, put through
+        // the sole author of the rule -- which is exactly what that function's
+        // own doc asks a mirror-holding consumer to do, and what the two
+        // settlement call sites already do.
+        refunds_on_failure:
+            dclutch_product_payoff_v2_codec::runtime_v3::categorical_refunds_on_failure_v3(
+                product.basis_kind,
+                product.basis_width,
+                product.payout_scale,
+            ),
+    })
 }
 
 /// Authenticate and return the sole Core-owned runtime principal cap.

@@ -270,6 +270,10 @@ struct GenericOpenFrame<'accounts, 'info> {
     aggregate: &'accounts AccountInfo<'info>,
     position: &'accounts AccountInfo<'info>,
     admission: &'accounts AccountInfo<'info>,
+    /// The failure escrow's Position, vacant on a categorical Market.
+    escrow_position: &'accounts AccountInfo<'info>,
+    /// The failure escrow's admission, vacant on a categorical Market.
+    escrow_admission: &'accounts AccountInfo<'info>,
 }
 
 impl<'accounts, 'info> GenericOpenFrame<'accounts, 'info> {
@@ -303,6 +307,8 @@ impl<'accounts, 'info> GenericOpenFrame<'accounts, 'info> {
             aggregate: account(accounts, 18)?,
             position: account(accounts, 19)?,
             admission: account(accounts, 20)?,
+            escrow_position: account(accounts, 21)?,
+            escrow_admission: account(accounts, 22)?,
         };
         if !value.caller.is_signer
             || value.caller.is_writable
@@ -344,6 +350,8 @@ impl<'accounts, 'info> GenericOpenFrame<'accounts, 'info> {
             value.aggregate,
             value.position,
             value.admission,
+            value.escrow_position,
+            value.escrow_admission,
         ] {
             if readonly.is_signer || readonly.is_writable || readonly.executable {
                 return Err(CoreSbfError::AccountFrame);
@@ -368,6 +376,8 @@ impl<'accounts, 'info> GenericOpenFrame<'accounts, 'info> {
             aggregate: self.aggregate,
             position: self.position,
             admission: self.admission,
+            escrow_position: self.escrow_position,
+            escrow_admission: self.escrow_admission,
         }
     }
 }
@@ -1742,6 +1752,8 @@ pub(crate) struct GenericFoundingOpenAccounts<'accounts, 'info> {
     pub(crate) aggregate: &'accounts AccountInfo<'info>,
     pub(crate) position: &'accounts AccountInfo<'info>,
     pub(crate) admission: &'accounts AccountInfo<'info>,
+    pub(crate) escrow_position: &'accounts AccountInfo<'info>,
+    pub(crate) escrow_admission: &'accounts AccountInfo<'info>,
 }
 
 /// Authenticate the sole Core permit for one already family-admitted context.
@@ -2026,11 +2038,26 @@ fn authenticate_claims_poststate(
         .admission
         .try_borrow_data()
         .map_err(|_| CoreSbfError::ChildAck)?;
+    // The two escrow accounts as they LIVE: allocated and written by a
+    // refunding founding, still System-owned and empty after a categorical
+    // one. An empty account contributes zero bytes, which is what makes a
+    // categorical Market's transcript identical to the three-account one this
+    // check computed before the escrow existed.
+    let escrow_position = frame
+        .escrow_position
+        .try_borrow_data()
+        .map_err(|_| CoreSbfError::ChildAck)?;
+    let escrow_admission = frame
+        .escrow_admission
+        .try_borrow_data()
+        .map_err(|_| CoreSbfError::ChildAck)?;
     if hashv(&[
         CLAIMS_FOUNDING_POST_RESOURCE_DIGEST_DOMAIN_V5,
         &aggregate,
         &position,
         &admission,
+        &escrow_position,
+        &escrow_admission,
     ])
     .to_bytes()
         != receipt.post_resource_digest()

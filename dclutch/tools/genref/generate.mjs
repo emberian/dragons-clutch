@@ -1623,6 +1623,8 @@ ${provenance}
   const provisionalCount = rows.filter(([, s]) => marker(s) === "PROVISIONAL")
     .length;
   const openCount = rows.filter(([, s]) => marker(s) === "OPEN").length;
+  const confirmedCount = rows.filter(([, s]) => marker(s) === "CONFIRMED")
+    .length;
   pages.set(
     "decisions.md",
     generatedHeader(["docs/decisions/*.md"]) +
@@ -1636,18 +1638,36 @@ A ruling that lives only inside a narrative file has no durable home, which
 is what these records are for. Every item on the 2026-09-04 rulings docket
 now has one: D1 economics (0024), D2 the failure selector (0025), D3 the
 privacy horizon (0018), D4 mainnet's place (0026), D5 recovery (0027), D6
-the accelerator output page (0028, which carries a read and is OPEN because
-ember asked for the architecture rather than a switch), D7 the product list
-(0029), and D8 rent across an epoch (0030). Records 0019-0023 hold the five
-rulings the orchestrator made under ember's standing goal before that
-docket. Records 0031-0034 hold the mechanism agenda's rulings, made under the
-same standing goal later the same day: the agenda itself (0031), the joint
-clearing's three owed rulings (0032), the founder bond's mode (0033) and the
-ensemble's flagship parameters (0034). Statuses are load-bearing: PROVISIONAL
-means ember may reverse it at the cost the record's last section states, and
-OPEN means nobody has ruled. Counted from the records below rather than kept
-by hand: **${provisionalCount} PROVISIONAL, ${openCount} OPEN**; every other
-record is accepted, adopted, ratified or ruled.
+the accelerator output page (0028, which carries a read as well as its
+ruling, because ember asked for the architecture rather than a switch), D7
+the product list (0029), and D8 rent across an epoch (0030). Records
+0019-0023 hold the five rulings the orchestrator made under ember's standing
+goal before that docket. Records 0031-0034 hold the mechanism agenda's
+rulings, made under the same standing goal later the same day: the agenda
+itself (0031), the joint clearing's three owed rulings (0032), the founder
+bond's mode (0033) and the ensemble's flagship parameters (0034).
+
+Statuses are load-bearing, and there are three live ones. **PROVISIONAL**
+means the orchestrator ruled under ember's standing goal and ember has not
+read it yet; it is in force, and ember may reverse it at the cost the
+record's last section states. **CONFIRMED** means ember has read the ruling
+and accepted it in conversation without amending it — it was not re-argued,
+so nothing in the record moved, and it stays reversible on request at that
+same cost. **OPEN** means nobody has ruled. On 2026-09-04 at 15:50 EDT ember
+read the docket and the mechanism cohort page and found the takes *"overall
+reasonable"*, which moved the eleven docket and mechanism records 0024-0034
+to CONFIRMED in one act (0030 from RULED, 0028 from a ruling made at 14:10
+that day, the rest from PROVISIONAL). The five pre-docket rulings
+(0019-0023) were not part of that reading and stay PROVISIONAL. Counted from
+the records below rather than kept by hand:
+**${confirmedCount} CONFIRMED, ${provisionalCount} PROVISIONAL, ${openCount} OPEN**;
+every other record is accepted, adopted, ratified or ruled.
+
+The one thing still waiting on ember is not a record but an item inside one:
+decision 0029's tenth item, the conditional layer's flagship child market —
+its feature gate, its slot and its metric. That record is CONFIRMED for its
+nine ruled items and its addendum carries the tenth as OPEN, which is why
+the OPEN column above counts zero while a question is still owed.
 
 ` +
       table(["decision", "status"], rows) +

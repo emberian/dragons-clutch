@@ -1,17 +1,39 @@
 # Decision 0028: the accelerator output page — open, with a read
 
-Status: **PROVISIONAL — ruled 2026-09-04 14:10 EDT by the orchestrator under the standing goal (option (a), cohort-17; see the addendum); ember may reverse. Originally OPEN: ember asked at 10:15 EDT 2026-09-04 for the best architectural
-course rather than for a switch, so this record carries a READ and not a ruling,
-and decision 0003 stays unamended until ember rules**. Docket item D6. Ember's
+Status: **CONFIRMED (ember, 2026-09-04 15:50 EDT, in conversation; reversible
+on request) — option (a), the client-provisioned pooled output page, ruled
+2026-09-04 14:10 EDT by the orchestrator under the standing goal (see the
+addendum), and reversible at the cost §6 states**. It was OPEN until 14:10 EDT
+and PROVISIONAL from then until 15:50 EDT, when ember read the docket and
+accepted it in conversation without amending it; the confirmation line below is
+the whole of what was said. **It was originally OPEN** because ember asked at 10:15 EDT
+2026-09-04 for the best architectural course rather than for a switch, so this
+record carries a READ as well as a ruling, and decision 0003 is not amended yet
+— the addendum states the amendment option (a) carries. Docket item D6. Ember's
 words are at `GOAL.md:4655`. The question itself is stated in
 `docs/decisions/0003-fixed-role-capability-execution.md` under *"The open
-question — docket D6, ember's"*, added by the amendment note of 2026-09-03; this
-record does not close it and does not amend 0003. **The fifth condition §3 adds
-— remeasure the chunk cost on the post-0023 routes before deciding — was
+question — docket D6, ember's"*, added by the amendment note of 2026-09-03;
+this record does not close it and does not amend 0003. **The fifth condition §3
+adds — remeasure the chunk cost on the post-0023 routes before deciding — was
 measured by the CHUNK-REMEASURE lane at `faacc7ba8` and is REPORTED in the
 second addendum at the end of this record; the tables are
 `ACCELERATOR_OUTPUT_CHANNEL_2026_09_02.md` §4. It does not change the read's
 direction and it does move one of its numbers by 42 per cent.**
+
+**Confirmed, 2026-09-04 15:50 EDT.** Ember, after reading the docket and the
+mechanism cohort page:
+
+> you aren't waiting on me for rulings are you? i was reading the docket and
+> contemplating it, but overall find your takes reasonable
+
+The orchestrator's reply: nothing was waiting on ember — the rulings were
+provisional and already in force, and the lanes had been working under them
+since they were made; *"overall find your takes reasonable"* is taken as
+confirmation rather than as an invitation to re-argue them; and the one thing
+still genuinely ember's is the flagship conditional market's feature gate, its
+slot and its metric (decision 0029's tenth item). So the status above is
+CONFIRMED and no longer PROVISIONAL: accepted in conversation, unamended, and
+reversible on request at the cost §6 states.
 
 ## 1. The question
 

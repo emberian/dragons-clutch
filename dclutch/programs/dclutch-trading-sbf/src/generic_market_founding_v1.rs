@@ -25,7 +25,7 @@ use dclutch_capability_contract::{
 };
 
 use dclutch_claims_svm::founding_v5::{
-    CLAIMS_FOUNDING_ACCOUNT_COUNT_V5, CLAIMS_FOUNDING_POST_RESOURCE_DIGEST_DOMAIN_V5,
+    CLAIMS_FOUNDING_ACCOUNT_COUNT_V6, CLAIMS_FOUNDING_POST_RESOURCE_DIGEST_DOMAIN_V5,
     CLAIMS_FOUNDING_RECEIPT_BYTES_V5, CLAIMS_FOUNDING_REQUEST_BYTES_V5, ClaimsFoundingReceiptV5,
     ClaimsFoundingRequestV5,
 };
@@ -116,6 +116,10 @@ const CORE_FOUND_CUSTODY_PROGRAM_SUFFIX: usize = 9;
 const CLAIMS_AGGREGATE: usize = 2;
 const CLAIMS_POSITION: usize = 3;
 const CLAIMS_ADMISSION: usize = 4;
+/// The failure escrow's Position, appended by the V6 Claims founding frame.
+const CLAIMS_ESCROW_POSITION: usize = 31;
+/// The failure escrow's admission, appended by the V6 Claims founding frame.
+const CLAIMS_ESCROW_ADMISSION: usize = 32;
 
 const LOCK_CALLER_BUMP_INDEX_V3: usize = 0;
 const FOUND_CALLER_BUMP_INDEX_V3: usize = 1;
@@ -278,7 +282,7 @@ impl<'accounts, 'info> GenericFoundingFrameV1<'accounts, 'info> {
             .checked_add(PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1)
             .ok_or(TradingSbfError::Content)?;
         let open_start = claims_start
-            .checked_add(CLAIMS_FOUNDING_ACCOUNT_COUNT_V5)
+            .checked_add(CLAIMS_FOUNDING_ACCOUNT_COUNT_V6)
             .ok_or(TradingSbfError::Content)?;
         let checkpoint_index = open_start
             .checked_add(GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1)
@@ -304,7 +308,7 @@ impl<'accounts, 'info> GenericFoundingFrameV1<'accounts, 'info> {
                 realize_start,
                 PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1,
             )?,
-            claims: subslice(accounts, claims_start, CLAIMS_FOUNDING_ACCOUNT_COUNT_V5)?,
+            claims: subslice(accounts, claims_start, CLAIMS_FOUNDING_ACCOUNT_COUNT_V6)?,
             open: subslice(accounts, open_start, GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1)?,
             checkpoint: account(accounts, checkpoint_index)?,
             funding_count,
@@ -374,7 +378,7 @@ fn select_generic_found_count_v4(
         found_start
             .checked_add(found_count)
             .and_then(|value| value.checked_add(PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1))
-            .and_then(|value| value.checked_add(CLAIMS_FOUNDING_ACCOUNT_COUNT_V5))
+            .and_then(|value| value.checked_add(CLAIMS_FOUNDING_ACCOUNT_COUNT_V6))
             .and_then(|value| value.checked_add(GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1))
             .and_then(|value| value.checked_add(1))
     };
@@ -1043,7 +1047,15 @@ pub(crate) fn execute_claims(
         claims_program,
         frame.claims,
         &child_data,
-        &[CLAIMS_AGGREGATE, CLAIMS_POSITION, CLAIMS_ADMISSION],
+        &[
+            CLAIMS_AGGREGATE,
+            CLAIMS_POSITION,
+            CLAIMS_ADMISSION,
+            // Writable on every founding: the frame is fixed and only a
+            // refunding record makes Claims write them.
+            CLAIMS_ESCROW_POSITION,
+            CLAIMS_ESCROW_ADMISSION,
+        ],
         &[
             domain,
             release,
@@ -1081,11 +1093,19 @@ fn authenticate_claims_receipt(
     let admission = account(frame.claims, CLAIMS_ADMISSION)?
         .try_borrow_data()
         .map_err(|_| TradingSbfError::AccountData)?;
+    let escrow_position = account(frame.claims, CLAIMS_ESCROW_POSITION)?
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::AccountData)?;
+    let escrow_admission = account(frame.claims, CLAIMS_ESCROW_ADMISSION)?
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::AccountData)?;
     let combined = hashv(&[
         CLAIMS_FOUNDING_POST_RESOURCE_DIGEST_DOMAIN_V5,
         &aggregate,
         &position,
         &admission,
+        &escrow_position,
+        &escrow_admission,
     ])
     .to_bytes();
     if receipt.aggregate_digest() != hash(&aggregate).to_bytes()
@@ -1860,7 +1880,7 @@ mod tests {
                 + funding
                 + GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1
                 + PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1
-                + CLAIMS_FOUNDING_ACCOUNT_COUNT_V5
+                + CLAIMS_FOUNDING_ACCOUNT_COUNT_V6
                 + GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1
                 + 1 // controller-funding checkpoint, closed last
         };

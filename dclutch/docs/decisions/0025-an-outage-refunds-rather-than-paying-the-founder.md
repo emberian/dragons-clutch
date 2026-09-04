@@ -1,16 +1,35 @@
 # Decision 0025: an oracle outage refunds the holders, it does not pay the founder
 
-Status: **PROVISIONAL — ruled by the orchestrator on 2026-09-04 under ember's
-standing goal, amended by ember at 10:15 EDT to require that the pathways be
-explained and robust, and reversible at the cost §7 states**. Docket item D2.
-Ember's amendment is at `GOAL.md:4653-4654`. **The payout arm landed the same
-morning at `f9d40b615` (lane ESCROW), hostile-first, and §5 records what it
-turns on; the founding change that seats the failure coordinate in an escrow
-Position is owed and rides cohort-16.** **Amended again at 12:30 EDT by the
-orchestrator's merge ruling — for a refunding market `MergeCompleteSet` is
-redefined over the ORDINARY coordinates — recorded in the amendment section at
-the end of this record; ESCROW-2 stated it in Lean at `e37116b03` and ember may
-reverse it to the immobile-coordinate shape.**
+Status: **CONFIRMED (ember, 2026-09-04 15:50 EDT, in conversation; reversible
+on request) — ruled by the orchestrator on 2026-09-04 under ember's standing
+goal, amended by ember at 10:15 EDT to require that the pathways be explained
+and robust, and reversible at the cost §7 states**. It was PROVISIONAL from the
+ruling until 15:50 EDT, when ember read the docket and accepted it in
+conversation without amending it; the confirmation line below is the whole of
+what was said. Docket item D2. Ember's amendment is at `GOAL.md:4653-4654`.
+**The payout arm landed the same morning at `f9d40b615` (lane ESCROW),
+hostile-first, and §5 records what it turns on; the founding change that seats
+the failure coordinate in an escrow Position is owed and rides cohort-16.**
+**Amended again at 12:30 EDT by the orchestrator's merge ruling — for a
+refunding market `MergeCompleteSet` is redefined over the ORDINARY coordinates
+— recorded in the amendment section at the end of this record; ESCROW-2 stated
+it in Lean at `e37116b03` and ember may reverse it to the immobile-coordinate
+shape.**
+
+**Confirmed, 2026-09-04 15:50 EDT.** Ember, after reading the docket and the
+mechanism cohort page:
+
+> you aren't waiting on me for rulings are you? i was reading the docket and
+> contemplating it, but overall find your takes reasonable
+
+The orchestrator's reply: nothing was waiting on ember — the rulings were
+provisional and already in force, and the lanes had been working under them
+since they were made; *"overall find your takes reasonable"* is taken as
+confirmation rather than as an invitation to re-argue them; and the one thing
+still genuinely ember's is the flagship conditional market's feature gate, its
+slot and its metric (decision 0029's tenth item). So the status above is
+CONFIRMED and no longer PROVISIONAL: accepted in conversation, unamended, and
+reversible on request at the cost §7 states.
 
 ## 1. The question
 

@@ -65,7 +65,7 @@ use dclutch_claims_svm::liability_basis_state_v2::{
     put_liability_basis_market_bump_v2, put_liability_basis_position_bump_v2,
 };
 
-pub use dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_ACCOUNT_COUNT_V5;
+pub use dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_ACCOUNT_COUNT_V6;
 /// Exact request plus typed projected-Custody receipt instruction width.
 pub const CLAIMS_FOUNDING_INSTRUCTION_BYTES_V5: usize =
     dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_REQUEST_BYTES_V5
@@ -103,6 +103,14 @@ const CUSTODY_PROGRAMDATA: usize = 27;
 const FOUNDER: usize = 28;
 const RENT_CREDIT: usize = 29;
 const RENT_PROGRAM: usize = 30;
+/// The failure escrow's `ProtocolPositionV2`, appended by the V6 frame.
+///
+/// Present on every founding and allocated only by a refunding one. Appending
+/// rather than inserting is what keeps every V5 index -- and therefore every
+/// caller's account order -- unmoved by the escrow seating.
+const ESCROW_POSITION: usize = 31;
+/// The failure escrow's admission record, appended by the V6 frame.
+const ESCROW_ADMISSION: usize = 32;
 
 /// Stable FoundingV5 adapter refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -445,11 +453,13 @@ struct FoundingAccounts<'accounts, 'info> {
     founder: &'accounts AccountInfo<'info>,
     rent_credit: &'accounts AccountInfo<'info>,
     rent_program: &'accounts AccountInfo<'info>,
+    escrow_position: &'accounts AccountInfo<'info>,
+    escrow_admission: &'accounts AccountInfo<'info>,
 }
 
 impl<'accounts, 'info> FoundingAccounts<'accounts, 'info> {
     fn parse(accounts: &'accounts [AccountInfo<'info>]) -> Result<Self, ProgramError> {
-        if accounts.len() != CLAIMS_FOUNDING_ACCOUNT_COUNT_V5 {
+        if accounts.len() != CLAIMS_FOUNDING_ACCOUNT_COUNT_V6 {
             return Err(ClaimsFoundingSbfErrorV5::Accounts.into());
         }
         Ok(Self {
@@ -484,6 +494,8 @@ impl<'accounts, 'info> FoundingAccounts<'accounts, 'info> {
             founder: account(accounts, FOUNDER)?,
             rent_credit: account(accounts, RENT_CREDIT)?,
             rent_program: account(accounts, RENT_PROGRAM)?,
+            escrow_position: account(accounts, ESCROW_POSITION)?,
+            escrow_admission: account(accounts, ESCROW_ADMISSION)?,
         })
     }
 }
@@ -587,17 +599,20 @@ fn process_authenticated(
         projected_receipt_digest,
     )?;
     claims_cu_checkpoint!("found-custody");
-    let market = authenticate_product_core(program_id, accounts, &request, custody_context)?;
+    let (market, refunds_on_failure) =
+        authenticate_product_core(program_id, accounts, &request, custody_context)?;
     claims_cu_checkpoint!("found-product-core");
     authenticate_rent_and_vacancy(program_id, accounts, &request, market, &rent)?;
+    let escrow =
+        authenticate_escrow_seating(program_id, accounts, &request, refunds_on_failure, &rent)?;
     claims_cu_checkpoint!("found-rent-vacancy");
 
     let candidates =
-        build_candidates_boxed(program_id, accounts, &request, market, request_digest)?;
+        build_candidates_boxed(program_id, accounts, &request, market, request_digest, escrow)?;
     let receipt = build_receipt(&request, request_digest, &candidates)?;
     claims_cu_checkpoint!("found-candidates");
 
-    allocate_all(program_id, accounts, &request, &candidates)?;
+    allocate_all(program_id, accounts, &request, &candidates, escrow)?;
     claims_cu_checkpoint!("found-allocate");
     commit_candidates(accounts, &candidates)?;
     set_return_data(receipt.as_slice());
@@ -660,11 +675,24 @@ fn build_receipt(
         hash(&candidates.aggregate).to_bytes(),
         hash(&candidates.position).to_bytes(),
         hash(&candidates.admission).to_bytes(),
+        // FIVE accounts, in frame order. A categorical founding allocates
+        // neither escrow account, so both contribute zero bytes and this is
+        // byte-for-byte the transcript V5 computed over three -- which is what
+        // makes a categorical founding identical across the frame change. A
+        // refunding founding's escrow bodies are present and hashed.
         hashv(&[
             CLAIMS_FOUNDING_POST_RESOURCE_DIGEST_DOMAIN_V5,
             &candidates.aggregate,
             &candidates.position,
             &candidates.admission,
+            candidates
+                .escrow
+                .as_ref()
+                .map_or(&[][..], |seated| seated.position.as_slice()),
+            candidates
+                .escrow
+                .as_ref()
+                .map_or(&[][..], |seated| seated.admission.as_slice()),
         ])
         .to_bytes(),
     )
@@ -676,6 +704,14 @@ struct FoundingCandidates {
     aggregate: Vec<u8>,
     position: Vec<u8>,
     admission: [u8; PROTOCOL_POSITION_ADMISSION_BYTES_V2],
+    /// The escrow's Position and admission, present exactly when the record
+    /// refunds on failure.
+    ///
+    /// `None` is not "not supplied": the accounts are in the frame either way
+    /// and were authenticated as the Market's own. It is "this Market does not
+    /// seat a failure escrow", and it is the reason a categorical founding
+    /// writes the same three accounts V5 wrote and hashes the same transcript.
+    escrow: Option<EscrowCandidates>,
     /// The two PDA bumps this route both SIGNS with and RECORDS in the bodies.
     ///
     /// Derived once, in `build_candidates_boxed`, because the bump has to be in
@@ -757,6 +793,11 @@ fn authenticate_privileges(
         || !accounts.aggregate.is_writable
         || !accounts.position.is_writable
         || !accounts.admission.is_writable
+        // Writable on EVERY founding, including a categorical one that will
+        // never touch them. The frame is fixed, so a caller cannot signal the
+        // market's shape by which accounts it marks; the record does that.
+        || !accounts.escrow_position.is_writable
+        || !accounts.escrow_admission.is_writable
         || accounts.claims_program.key != program_id
         || accounts.claims_program.key.to_bytes() != request.claims_program()
         || accounts.trading_program.key.to_bytes() != request.trading_program()
@@ -810,6 +851,8 @@ fn authenticate_privileges(
         accounts.aggregate,
         accounts.position,
         accounts.admission,
+        accounts.escrow_position,
+        accounts.escrow_admission,
         accounts.funding_source,
         accounts.hoard,
         accounts.custody_replay,
@@ -1488,7 +1531,7 @@ fn authenticate_product_core(
     accounts: FoundingAccounts<'_, '_>,
     request: &ClaimsFoundingRequestV5,
     custody_context: [u8; 32],
-) -> Result<MarketViewV2, ProgramError> {
+) -> Result<(MarketViewV2, bool), ProgramError> {
     if accounts.core_market.key.to_bytes() != request.market()
         || accounts.core_market.owner != accounts.core_program.key
         || accounts.core_market.data_len() != STATE_BYTES
@@ -1528,7 +1571,7 @@ fn authenticate_product_core(
         custody_context,
         generation: request.generation(),
     };
-    authenticate_runtime_product_basis_core_with_rent_v3(
+    let admitted = authenticate_runtime_product_basis_core_with_rent_v3(
         accounts.registry,
         accounts.core_market,
         accounts.core_program,
@@ -1564,7 +1607,136 @@ fn authenticate_product_core(
     {
         return Err(ClaimsFoundingSbfErrorV5::ClaimsState.into());
     }
-    Ok(market)
+    // Carried out of the admission that already decoded the record rather than
+    // recomputed: whether this Market refunds on failure is the ONE fact that
+    // decides whether founding seats an escrow, and it belongs to the record.
+    Ok((market, admitted.refunds_on_failure))
+}
+
+/// Where a founding seats the failure coordinate, and whether it seats one.
+///
+/// Decision 0025 item 2: a refunding Market's failure claims are worth nothing
+/// and are still sellable, so they are minted to an identity the MARKET
+/// derives and nobody controls rather than to the founder. This value is the
+/// whole of what founding needs to know about that identity, and it is
+/// DERIVED -- from the Market, its runtime width, and the authenticated
+/// `ProductBasisV3` record. No request field declares any part of it, which is
+/// why the escrow seating cost the founding wire nothing at all.
+#[derive(Clone, Copy)]
+struct FoundingEscrowSeatingV1 {
+    /// Coordinate seated away from the founder.
+    selector: u32,
+    /// `ClaimsCapability` owner identity at `(market, selector)`.
+    owner: [u8; 32],
+    /// Bump of the escrow `ProtocolPositionV2` PDA, signed with and recorded.
+    position_bump: u8,
+    /// Whether the authenticated record refunds on failure.
+    ///
+    /// THE ISSUANCE SHAPE IS FIXED AT FOUNDING (decision 0025 section 6), and
+    /// this is where it is fixed: by the record's own payout scale, through
+    /// `categorical_refunds_on_failure_v3`, never by a caller.
+    seated: bool,
+    /// Rent-exempt minimum of the escrow Position at this runtime width.
+    position_rent_principal: u64,
+    /// Rent-exempt minimum of the escrow admission record.
+    admission_rent_principal: u64,
+    /// Lamports the founder had already placed on the escrow Position.
+    observed_position_lamports: u64,
+    /// Lamports the founder had already placed on the escrow admission.
+    observed_admission_lamports: u64,
+}
+
+/// Derive this Market's escrow and authenticate the two accounts presented for
+/// it, whatever shape the record carries.
+///
+/// EVERY founding names its Market's escrow; only a refunding founding seats
+/// it. The frame is the same thirty-three accounts either way, so a caller
+/// cannot signal a shape by which accounts it supplies, and a categorical
+/// Market can never later be handed a different escrow than the one its own
+/// address arithmetic gives.
+///
+/// Rent is the founder's: both escrow accounts must already carry at least
+/// their rent-exempt minimum, exactly as the aggregate, Position and admission
+/// must. Unlike those three the observed lamports are not pinned to a request
+/// field, because nothing upstream joins them -- pinning would have cost a wire
+/// field and would have handed anyone who can read a derivation a founding-time
+/// denial by sending one lamport to the address first.
+#[inline(never)]
+fn authenticate_escrow_seating(
+    program_id: &Pubkey,
+    accounts: FoundingAccounts<'_, '_>,
+    request: &ClaimsFoundingRequestV5,
+    refunds_on_failure: bool,
+    rent: &Rent,
+) -> Result<FoundingEscrowSeatingV1, ProgramError> {
+    let derived = crate::FailureEscrowIdentityV1::derive(
+        program_id,
+        request.market(),
+        request.claim_count(),
+    )
+    .map_err(|_| {
+        refuse(
+            ClaimsFoundingSbfErrorV5::ClaimsState,
+            "no failure escrow is derivable at this runtime width",
+        )
+    })?;
+    let position_seeds =
+        ProtocolPositionSeedsV2::new(accounts.aggregate.key.to_bytes(), derived.owner)
+            .map_err(|_| ClaimsFoundingSbfErrorV5::ClaimsState)?;
+    let (position_key, position_bump) =
+        Pubkey::find_program_address(&position_seeds.as_slices(), program_id);
+    let admission_seeds =
+        ProtocolPositionAdmissionSeedsV2::new(accounts.aggregate.key.to_bytes(), derived.owner)
+            .map_err(|_| ClaimsFoundingSbfErrorV5::ClaimsState)?;
+    let admission_key = Pubkey::find_program_address(&admission_seeds.as_slices(), program_id).0;
+    if accounts.escrow_position.key != &position_key
+        || accounts.escrow_admission.key != &admission_key
+    {
+        // 0x5010, the same accusation the complete-set gate makes with the same
+        // word: the account offered as this Market's failure escrow is not the
+        // one the Market derives. One code, two routes, one reader.
+        return Err(crate::ClaimsSbfError::FailureEscrow.into());
+    }
+    for vacant in [accounts.escrow_position, accounts.escrow_admission] {
+        if vacant.owner != &system_program::ID
+            || !vacant.data_is_empty()
+            || vacant.is_signer
+            || vacant.executable
+        {
+            return Err(refuse(
+                ClaimsFoundingSbfErrorV5::ClaimsState,
+                "escrow position or admission was not vacant",
+            ));
+        }
+    }
+    let position_width = vector_width(
+        LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+        request.claim_count(),
+    )
+    .map_err(|_| ClaimsFoundingSbfErrorV5::ClaimsState)?;
+    let position_rent_principal = rent.minimum_balance(position_width);
+    let admission_rent_principal = rent.minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2);
+    let observed_position_lamports = accounts.escrow_position.lamports();
+    let observed_admission_lamports = accounts.escrow_admission.lamports();
+    if refunds_on_failure
+        && (observed_position_lamports < position_rent_principal
+            || observed_admission_lamports < admission_rent_principal)
+    {
+        return Err(refuse(
+            ClaimsFoundingSbfErrorV5::Rent,
+            "escrow rent was not prepaid by the founder",
+        ));
+    }
+    Ok(FoundingEscrowSeatingV1 {
+        selector: derived.failure_selector,
+        owner: derived.owner,
+        position_bump,
+        seated: refunds_on_failure,
+        position_rent_principal,
+        admission_rent_principal,
+        observed_position_lamports,
+        observed_admission_lamports,
+    })
 }
 
 #[inline(never)]
@@ -1678,9 +1850,25 @@ fn build_candidates_boxed(
     request: &ClaimsFoundingRequestV5,
     market: MarketViewV2,
     request_digest: [u8; 32],
+    escrow: FoundingEscrowSeatingV1,
 ) -> Result<Box<FoundingCandidates>, ProgramError> {
-    let (mut aggregate, mut position) = build_liability_candidates(accounts, request, market)?;
-    let admission = build_admission_candidate(program_id, accounts, request)?;
+    let (mut aggregate, mut position, escrow_position) =
+        build_liability_candidates(accounts, request, market, escrow)?;
+    let admission = build_admission_candidate(
+        program_id,
+        accounts,
+        request,
+        AdmissionSubjectV1 {
+            owner: request.founder(),
+            owner_kind: ProtocolPositionOwnerKindV2::User,
+            capability_descriptor: [0; 32],
+            capability_outcome: 0,
+            observed_position_lamports: request.observed_position_lamports(),
+            observed_admission_lamports: request.observed_admission_lamports(),
+            position_rent_principal: request.position_rent_principal(),
+            admission_rent_principal: request.admission_rent_principal(),
+        },
+    )?;
     if request_digest == [0; 32] {
         return Err(ClaimsFoundingSbfErrorV5::Receipt.into());
     }
@@ -1706,13 +1894,78 @@ fn build_candidates_boxed(
         .map_err(|_| ClaimsFoundingSbfErrorV5::ClaimsState)?;
     put_liability_basis_position_bump_v2(&mut position, position_bump)
         .map_err(|_| ClaimsFoundingSbfErrorV5::ClaimsState)?;
+    let escrow_candidates = match escrow_position {
+        None => None,
+        Some(mut body) => {
+            put_liability_basis_position_bump_v2(&mut body, escrow.position_bump)
+                .map_err(|_| ClaimsFoundingSbfErrorV5::ClaimsState)?;
+            Some(EscrowCandidates {
+                position: body,
+                admission: build_admission_candidate(
+                    program_id,
+                    accounts,
+                    request,
+                    AdmissionSubjectV1 {
+                        owner: escrow.owner,
+                        owner_kind: ProtocolPositionOwnerKindV2::ClaimsCapability,
+                        // The very coordinates the owner is derived from, so
+                        // the admission record states in its own body how to
+                        // reproduce the identity it admits.
+                        capability_descriptor: request.market(),
+                        capability_outcome: escrow.selector,
+                        observed_position_lamports: escrow.observed_position_lamports,
+                        observed_admission_lamports: escrow.observed_admission_lamports,
+                        position_rent_principal: escrow.position_rent_principal,
+                        admission_rent_principal: escrow.admission_rent_principal,
+                    },
+                )?,
+            })
+        }
+    };
     Ok(Box::new(FoundingCandidates {
         aggregate,
         position,
         admission,
+        escrow: escrow_candidates,
         aggregate_bump,
         position_bump,
     }))
+}
+
+/// The escrow's two candidate bodies, built only for a refunding founding.
+struct EscrowCandidates {
+    position: Vec<u8>,
+    admission: [u8; PROTOCOL_POSITION_ADMISSION_BYTES_V2],
+}
+
+/// The two Position vectors a refunding founding writes, and nothing else.
+///
+/// Extracted from the candidate builder because it is the LAYOUT the Lean
+/// owns, and a layout that can only be exercised through an account frame is a
+/// layout no test reads. `refundingSplitPost` against a vacant pre-state, in
+/// bytes: the founder takes every ordinary coordinate and none of the failure
+/// one, the escrow takes the failure one and none of the ordinary ones, and
+/// their pointwise sum is the equal complete set the aggregate's supply vector
+/// carries -- `addFrom_addBelow_eq_addEvery`.
+fn refunding_founding_vectors_v1(
+    quantity: u64,
+    count: usize,
+    failure_selector: u32,
+) -> Result<(Vec<u64>, Vec<u64>), ProgramError> {
+    let failure =
+        usize::try_from(failure_selector).map_err(|_| ClaimsFoundingSbfErrorV5::ClaimsState)?;
+    if failure >= count {
+        return Err(ClaimsFoundingSbfErrorV5::ClaimsState.into());
+    }
+    let mut founder = vec![quantity; count];
+    let mut seated = vec![0_u64; count];
+    *founder
+        .get_mut(failure)
+        .ok_or(ClaimsFoundingSbfErrorV5::ClaimsState)? = 0;
+    *seated
+        .get_mut(failure)
+        .ok_or(ClaimsFoundingSbfErrorV5::ClaimsState)? = quantity;
+    Ok((founder, seated))
 }
 
 #[inline(never)]
@@ -1720,7 +1973,8 @@ fn build_liability_candidates(
     accounts: FoundingAccounts<'_, '_>,
     request: &ClaimsFoundingRequestV5,
     market: MarketViewV2,
-) -> Result<(Vec<u8>, Vec<u8>), ProgramError> {
+    escrow: FoundingEscrowSeatingV1,
+) -> Result<(Vec<u8>, Vec<u8>, Option<Vec<u8>>), ProgramError> {
     let count = usize::try_from(request.claim_count())
         .map_err(|_| ClaimsFoundingSbfErrorV5::ClaimsState)?;
     let quantities = vec![request.quantity(); count];
@@ -1739,6 +1993,24 @@ fn build_liability_candidates(
         &quantities,
     )
     .map_err(|_| ClaimsFoundingSbfErrorV5::ClaimsState)?;
+    // THE AGGREGATE DOES NOT MOVE. Supply is `[q; count]` under either shape,
+    // which is `refunding_merge_is_a_complete_set_merge_in_the_aggregate` in the
+    // Lean at `e37116b03` seen from founding: only which Position each
+    // coordinate lands in differs, so every conservation already proved governs
+    // a refunding Market and the census reads it with no new compartment.
+    //
+    // Founding IS the refunding split run against a vacant pre-state
+    // (`refundingSplitPost`), and this is its two-Position arm: the founder
+    // takes `[q; ordinary] ++ [0]`, the escrow takes `[0; ordinary] ++ [q]`,
+    // and `addFrom_addBelow_eq_addEvery` says the two hold exactly one
+    // categorical complete set between them.
+    let (founder_quantities, escrow_quantities) = if escrow.seated {
+        let (founder, seated) =
+            refunding_founding_vectors_v1(request.quantity(), count, escrow.selector)?;
+        (founder, Some(seated))
+    } else {
+        (quantities, None)
+    };
     let position = encode_liability_basis_position_v2(
         LiabilityBasisPositionInputV2 {
             revision: request.post_position_revision(),
@@ -1746,10 +2018,45 @@ fn build_liability_candidates(
             owner: request.founder(),
             basis_id: market.basis_id,
         },
-        &quantities,
+        &founder_quantities,
     )
     .map_err(|_| ClaimsFoundingSbfErrorV5::ClaimsState)?;
-    Ok((aggregate, position))
+    let escrow_position = match escrow_quantities {
+        None => None,
+        Some(seated) => Some(
+            encode_liability_basis_position_v2(
+                LiabilityBasisPositionInputV2 {
+                    revision: request.post_position_revision(),
+                    market_account: accounts.aggregate.key.to_bytes(),
+                    owner: escrow.owner,
+                    basis_id: market.basis_id,
+                },
+                &seated,
+            )
+            .map_err(|_| ClaimsFoundingSbfErrorV5::ClaimsState)?,
+        ),
+    };
+    Ok((aggregate, position, escrow_position))
+}
+
+/// Which identity an admission record is being built for.
+///
+/// Founding writes two of these on a refunding Market: the founder's, whose
+/// owner is a `User` and whose capability fields stay canonically zero, and the
+/// escrow's, whose owner is the `ClaimsCapability` PDA and whose descriptor and
+/// outcome are the very coordinates that derive it. Founding used to hard-zero
+/// the capability fields because it only ever admitted a User; the escrow is
+/// what needed them to be real.
+#[derive(Clone, Copy)]
+struct AdmissionSubjectV1 {
+    owner: [u8; 32],
+    owner_kind: ProtocolPositionOwnerKindV2,
+    capability_descriptor: [u8; 32],
+    capability_outcome: u32,
+    observed_position_lamports: u64,
+    observed_admission_lamports: u64,
+    position_rent_principal: u64,
+    admission_rent_principal: u64,
 }
 
 #[inline(never)]
@@ -1757,26 +2064,27 @@ fn build_admission_candidate(
     program_id: &Pubkey,
     accounts: FoundingAccounts<'_, '_>,
     request: &ClaimsFoundingRequestV5,
+    subject: AdmissionSubjectV1,
 ) -> Result<[u8; PROTOCOL_POSITION_ADMISSION_BYTES_V2], ProgramError> {
     let admission_request = ProtocolPositionRequestV2 {
         action: ProtocolPositionActionV2::Admit,
-        owner_kind: ProtocolPositionOwnerKindV2::User,
+        owner_kind: subject.owner_kind,
         presence: ProtocolPositionPresenceV2::Vacant,
         release_set: request.release_set(),
         market: request.market(),
-        position_owner: request.founder(),
+        position_owner: subject.owner,
         parent_request_digest: request.founding_intent_digest(),
         rent_credit: request.rent_credit(),
         rent_program: request.rent_program(),
         generation: request.generation(),
         expected_market_revision: request.post_aggregate_revision(),
         expected_position_revision: request.pre_position_revision(),
-        observed_position_lamports: request.observed_position_lamports(),
-        observed_admission_lamports: request.observed_admission_lamports(),
-        position_rent_principal: request.position_rent_principal(),
-        admission_rent_principal: request.admission_rent_principal(),
-        capability_descriptor: [0; 32],
-        capability_outcome: 0,
+        observed_position_lamports: subject.observed_position_lamports,
+        observed_admission_lamports: subject.observed_admission_lamports,
+        position_rent_principal: subject.position_rent_principal,
+        admission_rent_principal: subject.admission_rent_principal,
+        capability_descriptor: subject.capability_descriptor,
+        capability_outcome: subject.capability_outcome,
     }
     .new()
     .map_err(|_| ClaimsFoundingSbfErrorV5::ClaimsState)?;
@@ -1792,8 +2100,8 @@ fn build_admission_candidate(
             request_digest: hash(&admission_request_bytes).to_bytes(),
             claims_program: program_id.to_bytes(),
             trading_program: accounts.trading_program.key.to_bytes(),
-            capability_descriptor: [0; 32],
-            capability_outcome: 0,
+            capability_descriptor: subject.capability_descriptor,
+            capability_outcome: subject.capability_outcome,
             outcome_count: request.claim_count(),
         },
     )
@@ -1809,6 +2117,7 @@ fn allocate_all(
     accounts: FoundingAccounts<'_, '_>,
     request: &ClaimsFoundingRequestV5,
     candidates: &FoundingCandidates,
+    escrow: FoundingEscrowSeatingV1,
 ) -> Result<(), ProgramError> {
     let aggregate = ClaimsFoundingAggregateSeedsV5::new(request.market())
         .map_err(|_| ClaimsFoundingSbfErrorV5::Allocation)?;
@@ -1842,6 +2151,31 @@ fn allocate_all(
         &admission.as_slices(),
         // The admission record has no reserved byte to carry a bump, so it
         // still searches. It is not on the hot route.
+        None,
+    )?;
+    let Some(seated) = candidates.escrow.as_ref() else {
+        return Ok(());
+    };
+    let escrow_position =
+        ProtocolPositionSeedsV2::new(accounts.aggregate.key.to_bytes(), escrow.owner)
+            .map_err(|_| ClaimsFoundingSbfErrorV5::Allocation)?;
+    allocate_one(
+        program_id,
+        accounts.escrow_position,
+        accounts.system,
+        seated.position.len(),
+        &escrow_position.as_slices(),
+        Some(escrow.position_bump),
+    )?;
+    let escrow_admission =
+        ProtocolPositionAdmissionSeedsV2::new(accounts.aggregate.key.to_bytes(), escrow.owner)
+            .map_err(|_| ClaimsFoundingSbfErrorV5::Allocation)?;
+    allocate_one(
+        program_id,
+        accounts.escrow_admission,
+        accounts.system,
+        seated.admission.len(),
+        &escrow_admission.as_slices(),
         None,
     )
 }
@@ -1917,6 +2251,29 @@ fn commit_candidates(
     aggregate.copy_from_slice(&candidates.aggregate);
     position.copy_from_slice(&candidates.position);
     admission.copy_from_slice(&candidates.admission);
+    drop(aggregate);
+    drop(position);
+    drop(admission);
+    let Some(seated) = candidates.escrow.as_ref() else {
+        return Ok(());
+    };
+    let mut escrow_position = accounts
+        .escrow_position
+        .try_borrow_mut_data()
+        .map_err(|_| ClaimsFoundingSbfErrorV5::Commit)?;
+    let mut escrow_admission = accounts
+        .escrow_admission
+        .try_borrow_mut_data()
+        .map_err(|_| ClaimsFoundingSbfErrorV5::Commit)?;
+    if escrow_position.len() != seated.position.len()
+        || escrow_admission.len() != seated.admission.len()
+        || escrow_position.iter().any(|byte| *byte != 0)
+        || escrow_admission.iter().any(|byte| *byte != 0)
+    {
+        return Err(ClaimsFoundingSbfErrorV5::Commit.into());
+    }
+    escrow_position.copy_from_slice(&seated.position);
+    escrow_admission.copy_from_slice(&seated.admission);
     Ok(())
 }
 
@@ -2236,5 +2593,108 @@ mod tests {
         instruction.extend_from_slice(&lock.encode().expect("lock bytes"));
         instruction.extend_from_slice(&projected.encode().expect("projected bytes"));
         assert!(decode_instruction(&instruction).is_err());
+    }
+
+    /// The refunding founding's two Positions hold exactly one complete set.
+    ///
+    /// This is `addFrom_addBelow_eq_addEvery` in bytes and it is the whole
+    /// reason the aggregate's supply vector did not have to change: whatever
+    /// the seating does to WHO holds a coordinate, the pointwise sum over both
+    /// Positions is the same equal complete set a categorical founding minted
+    /// into one. Every conservation already proved therefore governs a
+    /// refunding market, and the census reads it with no new compartment.
+    #[test]
+    fn the_two_founded_positions_sum_to_one_complete_set() {
+        let count = 4;
+        let quantity = 500_000_000;
+        let failure =
+            u32::try_from(dclutch_economic_slice_kernel::refunding_failure_index(4).unwrap())
+                .unwrap();
+        assert_eq!(failure, 3, "the failure coordinate is the last one");
+        let (founder, escrow) = refunding_founding_vectors_v1(quantity, count, failure).unwrap();
+        assert_eq!(founder, vec![quantity, quantity, quantity, 0]);
+        assert_eq!(escrow, vec![0, 0, 0, quantity]);
+        for index in 0..count {
+            assert_eq!(
+                founder[index] + escrow[index],
+                quantity,
+                "coordinate {index} is not one complete set across the two Positions",
+            );
+        }
+    }
+
+    /// The founder holds NONE of the failure column, which is the ruling.
+    ///
+    /// Stated as its own assertion rather than left implicit in the vector
+    /// literal above, because it is the sentence decision 0025 item 2 is: the
+    /// founder receives exactly their share as a holder and nothing for having
+    /// chosen the oracle.
+    #[test]
+    fn the_founder_is_issued_no_failure_claim_at_all() {
+        for count in 2_usize..8 {
+            let failure = u32::try_from(
+                dclutch_economic_slice_kernel::refunding_failure_index(
+                    u32::try_from(count).unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            let (founder, escrow) = refunding_founding_vectors_v1(7, count, failure).unwrap();
+            assert_eq!(founder[count - 1], 0);
+            assert_eq!(escrow[count - 1], 7);
+            assert!(escrow[..count - 1].iter().all(|value| *value == 0));
+            assert!(founder[..count - 1].iter().all(|value| *value == 7));
+        }
+    }
+
+    /// A selector outside the runtime width refuses rather than writing.
+    #[test]
+    fn a_failure_selector_past_the_width_refuses() {
+        assert_eq!(
+            refunding_founding_vectors_v1(7, 3, 3).unwrap_err(),
+            ProgramError::Custom(ClaimsFoundingSbfErrorV5::ClaimsState as u32),
+        );
+    }
+
+    /// Founding derives the same escrow the complete-set gate requires.
+    ///
+    /// The two routes are the only places in the tree that answer "which
+    /// Position holds this Market's failure column", and they answer it with
+    /// ONE function. This test is what keeps that true: it reproduces the
+    /// address from the seeds by hand and compares.
+    #[test]
+    fn founding_and_the_complete_set_gate_derive_one_escrow() {
+        let claims_program = Pubkey::new_from_array(id(88));
+        let market = id(2);
+        let derived = crate::FailureEscrowIdentityV1::derive(&claims_program, market, 4)
+            .expect("escrow identity");
+        assert_eq!(derived.failure_selector, 3);
+        let seeds =
+            dclutch_claims_svm::protocol_position_v2::ProtocolPositionClaimsCapabilitySeedsV2::new(
+                market, 3,
+            )
+            .expect("capability seeds");
+        assert_eq!(
+            derived.owner,
+            Pubkey::find_program_address(&seeds.as_slices(), &claims_program)
+                .0
+                .to_bytes(),
+        );
+    }
+
+    /// A Market too narrow to seat an escrow cannot be founded.
+    ///
+    /// The structural floor is width two -- one ordinary coordinate to seat
+    /// with the holder and one failure coordinate to seat with the escrow --
+    /// and it is the economic slice kernel's, not this route's. EVERY founding
+    /// names its Market's escrow even when the record is categorical, so a
+    /// width at which no escrow is derivable is a width at which no market is
+    /// foundable, and that is a NARROWING of what founding admits.
+    #[test]
+    fn a_width_that_can_seat_no_escrow_is_not_foundable() {
+        let claims_program = Pubkey::new_from_array(id(88));
+        assert!(crate::FailureEscrowIdentityV1::derive(&claims_program, id(2), 1).is_err());
+        assert!(crate::FailureEscrowIdentityV1::derive(&claims_program, id(2), 0).is_err());
+        assert!(crate::FailureEscrowIdentityV1::derive(&claims_program, id(2), 2).is_ok());
     }
 }

@@ -1,14 +1,32 @@
 # Decision 0024: the five economic knobs, and a parameter surface that can be governed rather than recompiled
 
-Status: **PROVISIONAL — the five knobs ruled by the orchestrator on 2026-09-04
-under ember's standing goal, then AMENDED by ember at 10:15 EDT with a sixth
-item the orchestrator had not asked for, and reversible at the cost §7 states**.
-The rulings are docket item D1; ember's amendment is recorded at
-`GOAL.md:4652-4653`. This is C-11's row
+Status: **CONFIRMED (ember, 2026-09-04 15:50 EDT, in conversation; reversible
+on request) — the five knobs ruled by the orchestrator on 2026-09-04 under
+ember's standing goal, AMENDED by ember at 10:15 EDT with a sixth item the
+orchestrator had not asked for, and reversible at the cost §7 states**. It was
+PROVISIONAL from the ruling until 15:50 EDT, when ember read the docket and
+accepted it in conversation without amending it; the confirmation line below is
+the whole of what was said. The rulings are docket item D1; ember's amendment
+is recorded at `GOAL.md:4652-4653`. This is C-11's row
 (`docs/MASTER_COMPLETION_CONTRACT.md:96`), the only row in the contract that
-names a precondition on ember before code may be written. Item 5 landed the same
-morning at `8ed7f242f` (lane ECONOMICS); the rest is the ECONOMICS lane's
+names a precondition on ember before code may be written. Item 5 landed the
+same morning at `8ed7f242f` (lane ECONOMICS); the rest is the ECONOMICS lane's
 charter.
+
+**Confirmed, 2026-09-04 15:50 EDT.** Ember, after reading the docket and the
+mechanism cohort page:
+
+> you aren't waiting on me for rulings are you? i was reading the docket and
+> contemplating it, but overall find your takes reasonable
+
+The orchestrator's reply: nothing was waiting on ember — the rulings were
+provisional and already in force, and the lanes had been working under them
+since they were made; *"overall find your takes reasonable"* is taken as
+confirmation rather than as an invitation to re-argue them; and the one thing
+still genuinely ember's is the flagship conditional market's feature gate, its
+slot and its metric (decision 0029's tenth item). So the status above is
+CONFIRMED and no longer PROVISIONAL: accepted in conversation, unamended, and
+reversible on request at the cost §7 states.
 
 ## 1. The question
 

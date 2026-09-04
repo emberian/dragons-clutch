@@ -58,7 +58,12 @@ pub const SERIES_OPEN_ADMISSIBLE_PRESTATES_V1: MarketAdmissionV1 =
     MarketAdmissionV1::prestates(&[(Phase::Founding, Readiness::Prepaid)]);
 
 /// Exact final-Series-Open account count.
-pub const SERIES_OPEN_ACCOUNT_COUNT_V1: usize = 37;
+///
+/// Thirty-nine since the failure escrow was seated at founding (decision 0025
+/// item 2): the Claims founding receipt this stage re-verifies commits to five
+/// Claims accounts rather than three. Both escrow accounts are READ-ONLY here
+/// and are appended after the two sysvars, so every existing index is unmoved.
+pub const SERIES_OPEN_ACCOUNT_COUNT_V1: usize = 39;
 struct SeriesOpenAccounts<'accounts, 'info> {
     caller: &'accounts AccountInfo<'info>,
     market: &'accounts AccountInfo<'info>,
@@ -95,6 +100,8 @@ struct SeriesOpenAccounts<'accounts, 'info> {
     aggregate: &'accounts AccountInfo<'info>,
     position: &'accounts AccountInfo<'info>,
     admission: &'accounts AccountInfo<'info>,
+    escrow_position: &'accounts AccountInfo<'info>,
+    escrow_admission: &'accounts AccountInfo<'info>,
     clock: &'accounts AccountInfo<'info>,
     rent: &'accounts AccountInfo<'info>,
 }
@@ -147,6 +154,8 @@ impl<'accounts, 'info> SeriesOpenAccounts<'accounts, 'info> {
             admission: account(accounts, 34)?,
             clock: account(accounts, 35)?,
             rent: account(accounts, 36)?,
+            escrow_position: account(accounts, 37)?,
+            escrow_admission: account(accounts, 38)?,
         };
         if !value.caller.is_signer
             || value.caller.is_writable
@@ -215,6 +224,8 @@ impl<'accounts, 'info> SeriesOpenAccounts<'accounts, 'info> {
             value.aggregate,
             value.position,
             value.admission,
+            value.escrow_position,
+            value.escrow_admission,
         ] {
             if readonly.is_signer || readonly.is_writable || readonly.executable {
                 return Err(CoreSbfError::AccountFrame);
@@ -236,6 +247,8 @@ impl<'accounts, 'info> SeriesOpenAccounts<'accounts, 'info> {
             custody_replay: self.custody_replay,
             hoard: self.hoard,
             funding_source: self.funding_source,
+            escrow_position: self.escrow_position,
+            escrow_admission: self.escrow_admission,
             aggregate: self.aggregate,
             position: self.position,
             admission: self.admission,
@@ -566,11 +579,27 @@ fn authenticate_series(
     {
         return Err(CoreSbfError::Reference);
     }
+    // ONE AUTHOR FOR THE ROOT'S CONFIG IDENTITY. `selection().config()` is the
+    // Registry RECORD DIGEST of the root's config record -- exactly what every
+    // other family's is, and what `borrow_record_against` in Trading's
+    // family-neutral Hot prelude requires -- and for Series that config record
+    // IS this Template record: the descriptor's `config_schema()` is
+    // `SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3`. The Template's DOMAIN-SEPARATED
+    // content identity is a different value, derived from these same bytes and
+    // pinned to `request.template()` above; it is never read off the root.
+    let template_record = hash(&template_bytes).to_bytes();
     drop(template_bytes);
     drop(occurrence_bytes);
     drop(ticket_bytes);
-    authenticate_replay_candidates(frame, request, occurrence, ticket, ticket_context)
-        .map(|candidate| (ticket_context, Box::new(candidate)))
+    authenticate_replay_candidates(
+        frame,
+        request,
+        occurrence,
+        ticket,
+        ticket_context,
+        template_record,
+    )
+    .map(|candidate| (ticket_context, Box::new(candidate)))
 }
 
 #[inline(never)]
@@ -580,6 +609,7 @@ fn authenticate_replay_candidates(
     occurrence: dclutch_series_v3_kernel::AdmittedOccurrenceV3,
     ticket: dclutch_series_v3_kernel::AdmittedTicketV3,
     ticket_context: [u8; 32],
+    template_record: [u8; 32],
 ) -> Result<ReplayCandidates, CoreSbfError> {
     if frame.root.owner != frame.trading_program.key
         || frame.root.data_len() != CAPABILITY_ROOT_HEADER_BYTES_V1 + SERIES_STATE_BYTES_V3
@@ -601,7 +631,7 @@ fn authenticate_replay_candidates(
     if Pubkey::find_program_address(&header.seeds().as_slices(), frame.trading_program.key).0
         != *frame.root.key
         || header.release_set().to_bytes() != request.release_set().to_bytes()
-        || header.selection().config().to_bytes() != request.template().to_bytes()
+        || header.selection().config().to_bytes() != template_record
     {
         return Err(CoreSbfError::Reference);
     }

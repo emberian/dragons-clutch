@@ -1,13 +1,32 @@
 # Decision 0030: an account's rent is fixed when it is funded, and the fact persisted is the RATE
 
-Status: **RULED by the orchestrator on 2026-09-04 under ember's standing goal,
-put to ember on the docket as D8 the same morning and not objected to at the
+Status: **CONFIRMED (ember, 2026-09-04 15:50 EDT, in conversation; reversible
+on request) — RULED by the orchestrator on 2026-09-04 under ember's standing
+goal, put to ember on the docket as D8 the same morning, not objected to at the
 10:15 EDT reading, landed the same day, and reversible at the cost §7 states**.
-The ruling is `GOAL.md:4471-4475`, carrying the standing formula *"RULING (under
-the standing goal; ember may reverse)"*. Landed at `c0a1586b1`, `4137ec0d3`,
-`8a0d3f893`, `315c1df2e` (lane PROGRAMS-16) with the cohort-15 host recovery at
-`afab02c25` and `ec373d90d` (lane COHORT-15F). It is the only one of the eight
-docket rulings that arrived from a live wall rather than from a queue.
+It was RULED from the morning of 2026-09-04 until 15:50 EDT, when ember read
+the docket and accepted it in conversation without amending it; the
+confirmation line below is the whole of what was said. The ruling is
+`GOAL.md:4471-4475`, carrying the standing formula *"RULING (under the standing
+goal; ember may reverse)"*. Landed at `c0a1586b1`, `4137ec0d3`, `8a0d3f893`,
+`315c1df2e` (lane PROGRAMS-16) with the cohort-15 host recovery at `afab02c25`
+and `ec373d90d` (lane COHORT-15F). It is the only one of the eight docket
+rulings that arrived from a live wall rather than from a queue.
+
+**Confirmed, 2026-09-04 15:50 EDT.** Ember, after reading the docket and the
+mechanism cohort page:
+
+> you aren't waiting on me for rulings are you? i was reading the docket and
+> contemplating it, but overall find your takes reasonable
+
+The orchestrator's reply: nothing was waiting on ember — the rulings were
+provisional and already in force, and the lanes had been working under them
+since they were made; *"overall find your takes reasonable"* is taken as
+confirmation rather than as an invitation to re-argue them; and the one thing
+still genuinely ember's is the flagship conditional market's feature gate, its
+slot and its metric (decision 0029's tenth item). So the status above is
+CONFIRMED and no longer RULED: accepted in conversation, unamended, and
+reversible on request at the cost §7 states.
 
 ## 1. The defect
 

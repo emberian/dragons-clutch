@@ -1,12 +1,30 @@
 # Decision 0026: mainnet deployment follows assurance, and is not part of feature completion
 
-Status: **PROVISIONAL — ruled by the orchestrator on 2026-09-04 under ember's
-standing goal, confirmed by ember at 10:15 EDT, and reversible at the cost §7
-states**. Docket item D4. Ember's amendment is at `GOAL.md:4654`. This record
-closes the contract's `Mainnet act` register row
-(`docs/MASTER_COMPLETION_CONTRACT.md:184`) and settles what C-14 closes on. It
-authorizes nothing: mainnet remains a separately authorized external act, and
-`AGENTS.md` still forbids it by name.
+Status: **CONFIRMED (ember, 2026-09-04 15:50 EDT, in conversation; reversible
+on request) — ruled by the orchestrator on 2026-09-04 under ember's standing
+goal, confirmed by ember at 10:15 EDT and again at 15:50 EDT, and reversible at
+the cost §7 states**. It was PROVISIONAL from the ruling until 15:50 EDT, when
+ember read the docket and accepted it in conversation without amending it; the
+confirmation line below is the whole of what was said. Docket item D4. Ember's
+amendment is at `GOAL.md:4654`. This record closes the contract's `Mainnet act`
+register row (`docs/MASTER_COMPLETION_CONTRACT.md:184`) and settles what C-14
+closes on. It authorizes nothing: mainnet remains a separately authorized
+external act, and `AGENTS.md` still forbids it by name.
+
+**Confirmed, 2026-09-04 15:50 EDT.** Ember, after reading the docket and the
+mechanism cohort page:
+
+> you aren't waiting on me for rulings are you? i was reading the docket and
+> contemplating it, but overall find your takes reasonable
+
+The orchestrator's reply: nothing was waiting on ember — the rulings were
+provisional and already in force, and the lanes had been working under them
+since they were made; *"overall find your takes reasonable"* is taken as
+confirmation rather than as an invitation to re-argue them; and the one thing
+still genuinely ember's is the flagship conditional market's feature gate, its
+slot and its metric (decision 0029's tenth item). So the status above is
+CONFIRMED and no longer PROVISIONAL: accepted in conversation, unamended, and
+reversible on request at the cost §7 states.
 
 ## 1. The question
 

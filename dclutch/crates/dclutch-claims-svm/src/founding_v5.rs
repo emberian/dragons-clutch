@@ -11,8 +11,20 @@
 
 /// Exact fixed founding request width.
 pub const CLAIMS_FOUNDING_REQUEST_BYTES_V5: usize = 832;
-/// Exact account count of the sole Claims FoundingV5 physical frame.
-pub const CLAIMS_FOUNDING_ACCOUNT_COUNT_V5: usize = 31;
+/// Exact account count of the sole Claims founding physical frame.
+///
+/// V6 is the frame that SEATS THE FAILURE ESCROW (decision 0025 item 2). It
+/// adds exactly two accounts to V5's thirty-one, both appended so every
+/// existing index is unmoved: the escrow `ProtocolPositionV2` and its
+/// admission record. The request and receipt WIRES DID NOT MOVE -- neither
+/// magic, version, width nor field -- because every fact about the escrow is
+/// derived from the Market and its runtime width rather than declared by a
+/// caller, and because the shape is fixed by the authenticated
+/// `ProductBasisV3` record rather than by anything the request says. A
+/// categorical founding presents the same two accounts, leaves them vacant,
+/// and produces a byte-identical aggregate, Position, admission, request and
+/// receipt.
+pub const CLAIMS_FOUNDING_ACCOUNT_COUNT_V6: usize = 33;
 /// Exact fixed founding receipt width.
 pub const CLAIMS_FOUNDING_RECEIPT_BYTES_V5: usize = 1008;
 /// Founding request wire magic.
@@ -29,7 +41,18 @@ pub const CLAIMS_FOUNDING_AGGREGATE_SEED_V5: &[u8] =
 /// Domain for the ordered post-resource transcript.
 ///
 /// The adapter hashes this domain followed by the exact post aggregate,
-/// Position, and admission bytes, in that order.
+/// Position, admission, escrow-Position and escrow-admission bytes, in that
+/// order.
+///
+/// THE DOMAIN DID NOT MOVE WHEN THE FRAME GREW, and that is deliberate rather
+/// than an oversight. A categorical founding does not allocate either escrow
+/// account, so both contribute ZERO BYTES to the transcript and the digest is
+/// the same value V5 computed over three accounts. That is what makes a
+/// categorical founding byte-identical across the frame change -- state,
+/// request, receipt and transcript alike -- which is the property the escrow
+/// seating had to preserve and which a fresh domain would have destroyed for
+/// no reader's benefit. A refunding founding allocates both, so its escrow
+/// bytes are present and the transcript witnesses them.
 pub const CLAIMS_FOUNDING_POST_RESOURCE_DIGEST_DOMAIN_V5: &[u8] =
     b"dclutch/claims/founding/post-resources/v5";
 

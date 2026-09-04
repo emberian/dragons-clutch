@@ -2273,6 +2273,8 @@ struct MarketRecords {
     basis: PublishedRecord,
     price_gate: Option<PublishedRecord>,
     basis_scale: u64,
+    /// Carried from the authenticated record, never recomputed here.
+    basis_refunds_on_failure: bool,
     /// The five source-graph records both provider legs authenticate. They are
     /// published with the rest of the graph rather than left to a resolution
     /// campaign, because the Market's `SourceMaterialV2` NAMES them and a
@@ -3565,6 +3567,7 @@ struct CompiledMarketBodiesV1 {
     basis: Vec<u8>,
     price_gate: Option<Vec<u8>>,
     basis_scale: u64,
+    basis_refunds_on_failure: bool,
     source: Vec<u8>,
     source_capacity_profile: Vec<u8>,
     manipulation_floor: Vec<u8>,
@@ -3581,6 +3584,16 @@ struct AuthenticatedMarketBasisV1 {
     body: Vec<u8>,
     price_gate: Option<Vec<u8>>,
     payout_scale: u64,
+    /// Whether this record refunds ordinary holders on an oracle outage.
+    ///
+    /// Read from the decoded record through `ProductBasisV3::refunds_on_failure`,
+    /// which is `categorical_refunds_on_failure_v3` -- the SOLE AUTHOR of the
+    /// rule -- applied to the record's own kind, width and payout scale. The
+    /// founding needs it because a refunding Market seats its failure column in
+    /// an escrow whose two accounts the founder must pre-fund, and a host that
+    /// spelled the rule a second time would eventually disagree with the
+    /// program about which markets those are.
+    refunds_on_failure: bool,
 }
 
 fn authenticate_market_basis_v1(
@@ -3642,7 +3655,9 @@ fn authenticate_market_basis_v1(
         Some(offered)
     };
     let payout_scale = basis.payout_scale();
+    let refunds_on_failure = basis.refunds_on_failure();
     Ok(AuthenticatedMarketBasisV1 {
+        refunds_on_failure,
         body,
         price_gate,
         payout_scale,
@@ -3987,6 +4002,7 @@ fn compile_market_bodies(
         basis: authenticated_basis.body,
         price_gate: authenticated_basis.price_gate,
         basis_scale: authenticated_basis.payout_scale,
+        basis_refunds_on_failure: authenticated_basis.refunds_on_failure,
         source: source.to_vec(),
         source_capacity_profile,
         manipulation_floor,
@@ -4033,6 +4049,7 @@ fn publish_market_records(
         basis: basis_bytes,
         price_gate: price_gate_bytes,
         basis_scale,
+        basis_refunds_on_failure,
         source,
         source_capacity_profile,
         manipulation_floor: manipulation_floor_bytes,
@@ -4303,6 +4320,7 @@ fn publish_market_records(
             basis,
             price_gate,
             basis_scale,
+            basis_refunds_on_failure,
             source_spec,
             window_spec,
             statistic_spec,
@@ -9161,15 +9179,19 @@ const GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V3: usize =
 ///
 /// Four readonly requests, the instructions sysvar the heap-frame admission
 /// reads back, then Lock (14), Found (26 fixed + tail + 15 suffix), Realize
-/// (12), Claims (31), Open (21), and the durable funding checkpoint. The total is
+/// (12), Claims (33), Open (23), and the durable funding checkpoint. The total is
 /// `GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3 + physical_funding_count`.
-const GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3: usize = 125;
+///
+/// Claims and Open each grew by two when the failure escrow was seated at
+/// founding (decision 0025 item 2): the escrow's Position and admission, both
+/// derived, written by Claims and hashed by Core's Open.
+const GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3: usize = 129;
 /// DCLTGMF3 account-frame revision with an appended DCLTPGT1 raw/staging pair.
 const GENERIC_MARKET_FOUNDING_PRICE_GATE_FIXED_ACCOUNTS_V4: usize =
     GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3 + 2;
 const GENERIC_MARKET_FOUNDING_PHYSICAL_FUNDING_ACCOUNTS_V3: usize = 2;
-const GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3: usize = 12;
-const GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3: usize = 58;
+const GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3: usize = 14;
+const GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3: usize = 60;
 const GENERIC_MARKET_FOUNDING_PRICE_GATE_COMPLETE_KEYS_V4: usize =
     GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3 + 2;
 
@@ -9185,7 +9207,7 @@ const GENERIC_FOUND_AND_PERMIT_INSTRUCTION_BYTES_V1: usize =
     8 + GENERIC_FOUND_AND_PERMIT_CALLER_BUMP_COUNT_V1;
 
 /// Exact width of the composed frame's commit-last Core Open window.
-const GENERIC_FOUNDING_OPEN_WINDOW_ACCOUNTS_V1: usize = 21;
+const GENERIC_FOUNDING_OPEN_WINDOW_ACCOUNTS_V1: usize = 23;
 
 /// Exact `DCLTGFP1` frame width before the founding's FundingLedgerV2 tail:
 /// the composed `DCLTGMF3` frame minus its Core Open window, checkpoint last.
@@ -9498,6 +9520,12 @@ struct FoundingPoststateExpectationV1 {
     aggregate: Pubkey,
     position: Pubkey,
     admission: Pubkey,
+    /// The failure escrow's Position and admission, derived from the Market's
+    /// own `ClaimsCapability` owner at the last coordinate. Both are supplied
+    /// on every founding; both are written only when the Market's basis record
+    /// refunds on failure.
+    escrow_position: Pubkey,
+    escrow_admission: Pubkey,
     aggregate_width: usize,
     position_width: usize,
     principal: u64,
@@ -9538,6 +9566,39 @@ fn derive_founding_poststate_expectation_v1(
         &claims_program,
     )
     .0;
+    // Decision 0025 item 2. The escrow owner is the ClaimsCapability PDA at
+    // `(market, claim_count - 1)`, which is `refunding_failure_index`'s answer
+    // for this width, and its Position and admission are the ordinary PDAs
+    // under that owner. Nothing here is chosen -- a host that derived a
+    // different escrow would be refused by `FailureEscrow` 0x5010.
+    let escrow_failure_selector = claim_count
+        .checked_sub(1)
+        .filter(|_| claim_count >= 2)
+        .ok_or_else(|| Error::new("no failure escrow is derivable at this runtime width"))?;
+    let escrow_owner = Pubkey::find_program_address(
+        &dclutch_claims_svm::protocol_position_v2::ProtocolPositionClaimsCapabilitySeedsV2::new(
+            coordinates.market.to_bytes(),
+            escrow_failure_selector,
+        )
+        .map_err(|error| Error::new(format!("Claims escrow owner seeds: {error:?}")))?
+        .as_slices(),
+        &claims_program,
+    )
+    .0;
+    let escrow_position = Pubkey::find_program_address(
+        &ProtocolPositionSeedsV2::new(aggregate.to_bytes(), escrow_owner.to_bytes())
+            .map_err(|error| Error::new(format!("Claims escrow position seeds: {error:?}")))?
+            .as_slices(),
+        &claims_program,
+    )
+    .0;
+    let escrow_admission = Pubkey::find_program_address(
+        &ProtocolPositionAdmissionSeedsV2::new(aggregate.to_bytes(), escrow_owner.to_bytes())
+            .map_err(|error| Error::new(format!("Claims escrow admission seeds: {error:?}")))?
+            .as_slices(),
+        &claims_program,
+    )
+    .0;
     let aggregate_width =
         liability_basis_vector_width_v2(LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, claim_count)
             .map_err(|error| Error::new(format!("aggregate width: {error:?}")))?;
@@ -9550,6 +9611,8 @@ fn derive_founding_poststate_expectation_v1(
         aggregate,
         position,
         admission,
+        escrow_position,
+        escrow_admission,
         aggregate_width,
         position_width,
         principal: coordinates.lock.amount,
@@ -9577,6 +9640,17 @@ struct FoundingOuterV1 {
     aggregate: Pubkey,
     position: Pubkey,
     admission: Pubkey,
+    /// The Market's derived failure escrow (decision 0025 item 2).
+    escrow_position: Pubkey,
+    escrow_admission: Pubkey,
+    /// Whether this founding's basis record refunds on failure, and therefore
+    /// whether the two escrow accounts are written and must be pre-funded.
+    ///
+    /// Read off the record the founding already authenticated, through
+    /// `categorical_refunds_on_failure_v3`, which is the sole author of the
+    /// rule. The host does not choose it and the program does not take it from
+    /// the host: both derive it from the same record.
+    seats_failure_escrow: bool,
     aggregate_width: usize,
     position_width: usize,
     market_rent: u64,
@@ -9764,6 +9838,8 @@ fn derive_founding_outer_v1(
     let aggregate = poststate.aggregate;
     let position = poststate.position;
     let admission = poststate.admission;
+    let escrow_position = poststate.escrow_position;
+    let escrow_admission = poststate.escrow_admission;
     let aggregate_width = poststate.aggregate_width;
     let position_width = poststate.position_width;
     let aggregate_rent = rpc.minimum_balance(aggregate_width)?;
@@ -9938,6 +10014,9 @@ fn derive_founding_outer_v1(
         aggregate,
         position,
         admission,
+        escrow_position,
+        escrow_admission,
+        seats_failure_escrow: records.basis_refunds_on_failure,
         aggregate_width,
         position_width,
         market_rent: coordinates.found.market_rent(),
@@ -10413,6 +10492,10 @@ fn build_generic_market_founding_v3(
     push(founder, false, &mut accounts);
     push(coordinates.credit, true, &mut accounts);
     push(rent_program, false, &mut accounts);
+    // The failure escrow, appended by the V6 Claims founding frame. Present on
+    // every founding and written only by a refunding one.
+    push(outer.escrow_position, true, &mut accounts);
+    push(outer.escrow_admission, true, &mut accounts);
 
     // Core Open, commit-last, 21 accounts.
     push(outer.open_authority, false, &mut accounts);
@@ -10436,6 +10519,8 @@ fn build_generic_market_founding_v3(
     push(outer.aggregate, true, &mut accounts);
     push(outer.position, true, &mut accounts);
     push(outer.admission, true, &mut accounts);
+    push(outer.escrow_position, true, &mut accounts);
+    push(outer.escrow_admission, true, &mut accounts);
 
     // The durable CustodyStaged checkpoint is authenticated before Lock and
     // consumed only after the exact Open acknowledgement and unchanged
@@ -10678,6 +10763,10 @@ fn build_generic_found_and_permit_v3(
     push(founder, false, &mut accounts);
     push(coordinates.credit, true, &mut accounts);
     push(rent_program, false, &mut accounts);
+    // The failure escrow, appended by the V6 Claims founding frame. Present on
+    // every founding and written only by a refunding one.
+    push(outer.escrow_position, true, &mut accounts);
+    push(outer.escrow_admission, true, &mut accounts);
 
     // No Open window: the escrowed permit carries the founding to the
     // `DCLTGMO1` stage. The durable CustodyStaged checkpoint is still
@@ -10825,6 +10914,8 @@ fn build_generic_market_open_v1(
     push(outer.aggregate, false, &mut accounts);
     push(outer.position, false, &mut accounts);
     push(outer.admission, false, &mut accounts);
+    push(outer.escrow_position, false, &mut accounts);
+    push(outer.escrow_admission, false, &mut accounts);
 
     if accounts.len() != GENERIC_MARKET_OPEN_FRAME_ACCOUNTS_V1 {
         return Err(Error::new(format!(
@@ -11680,13 +11771,24 @@ fn prefund_founding_accounts_v1(
     let aggregate_rent = rpc.minimum_balance(outer.aggregate_width)?;
     let position_rent = rpc.minimum_balance(outer.position_width)?;
     let admission_rent = rpc.minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2)?;
-    let prefunding = [
+    // Seven accounts on a refunding Market, five on a categorical one. THE
+    // FOUNDER PAYS THE ESCROW'S RENT: the escrow is the Market's own identity
+    // and has no funds of its own, so its Position and admission are
+    // pre-funded here exactly as the founder's three are. A categorical
+    // founding pre-funds neither -- the program leaves both accounts vacant,
+    // and funding them would strand two rent-exempt minima in addresses
+    // nothing will ever allocate.
+    let mut prefunding = vec![
         (market, outer.market_rent),
         (outer.permit, outer.permit_rent),
         (outer.aggregate, aggregate_rent),
         (outer.position, position_rent),
         (outer.admission, admission_rent),
     ];
+    if outer.seats_failure_escrow {
+        prefunding.push((outer.escrow_position, position_rent));
+        prefunding.push((outer.escrow_admission, admission_rent));
+    }
     let observed_prefunding = prefunding
         .iter()
         .map(|(address, _)| rpc.account(*address))
@@ -11694,7 +11796,7 @@ fn prefund_founding_accounts_v1(
     if observed_prefunding.iter().all(Option::is_none) {
         transactions.push(
             rpc.send(
-                "pre-fund the founding's five program-allocated accounts",
+                "pre-fund the founding's program-allocated accounts",
                 &prefunding
                     .iter()
                     .map(|(address, lamports)| transfer(&payer.pubkey(), address, *lamports))
@@ -11719,7 +11821,7 @@ fn prefund_founding_accounts_v1(
         );
     } else {
         return Err(Error::new(
-            "founding pre-funding is partial or differs from the five exact rent principals; never top up or overwrite it",
+            "founding pre-funding is partial or differs from the exact rent principals; never top up or overwrite it",
         ));
     }
     authenticate_founding_prefunding_v1(rpc, outer, market)?;
@@ -15499,6 +15601,7 @@ mod tests {
             basis: published(0x6e),
             price_gate: None,
             basis_scale: 1,
+            basis_refunds_on_failure: false,
             source_spec: published(0x70),
             window_spec: published(0x72),
             statistic_spec: published(0x74),
@@ -15632,6 +15735,9 @@ mod tests {
             aggregate: Pubkey::new_unique(),
             position: Pubkey::new_unique(),
             admission: Pubkey::new_unique(),
+            escrow_position: Pubkey::new_unique(),
+            escrow_admission: Pubkey::new_unique(),
+            seats_failure_escrow: false,
             aggregate_width: 258,
             position_width: 258,
             market_rent: 15,

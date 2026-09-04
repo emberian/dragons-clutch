@@ -1487,6 +1487,54 @@ fn authenticate_economic_accounts(
     Ok(core)
 }
 
+/// The identity a refunding Market seats its failure coordinate in, derived.
+///
+/// The escrow is the existing `ClaimsCapability` owner PDA at
+/// `(market, failure selector)`. Every fact about it is DERIVED -- the owner
+/// identity from the Market and the width, the Position and its admission from
+/// that owner -- which is why founding needs no wire field to declare one and
+/// why a caller cannot name a different escrow than the Market's own.
+///
+/// One author for two routes: the founding that SEATS the escrow and the
+/// complete-set gate that requires it to stay seated ask the same question, and
+/// a derivation with two spellings eventually disagrees about which Position
+/// holds a market's worthless claims.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FailureEscrowIdentityV1 {
+    /// Coordinate the refunding complete set seats away from every holder.
+    pub(crate) failure_selector: u32,
+    /// `ClaimsCapability` owner PDA at `(market, failure selector)`.
+    pub(crate) owner: [u8; 32],
+}
+
+impl FailureEscrowIdentityV1 {
+    /// Derive this Market's escrow owner identity at its runtime width.
+    ///
+    /// The failure selector comes from the economic kernel's
+    /// `refunding_failure_index`, the sole author of which coordinate a
+    /// refunding complete set seats where. Nothing here re-spells "the last
+    /// one".
+    pub(crate) fn derive(
+        claims_program: &Pubkey,
+        market: [u8; 32],
+        outcome_count: u32,
+    ) -> Result<Self, ProgramError> {
+        let failure = refunding_failure_index(outcome_count).map_err(|_| ClaimsSbfError::Economic)?;
+        let failure_selector = u32::try_from(failure).map_err(|_| ClaimsSbfError::Economic)?;
+        let seeds = crate::protocol_position_v2::ProtocolPositionClaimsCapabilitySeedsV2::new(
+            market,
+            failure_selector,
+        )
+        .map_err(|_| ClaimsSbfError::FailureEscrow)?;
+        Ok(Self {
+            failure_selector,
+            owner: Pubkey::find_program_address(&seeds.as_slices(), claims_program)
+                .0
+                .to_bytes(),
+        })
+    }
+}
+
 /// Authenticate the Position a refunding complete set seats the failure
 /// coordinate in.
 ///
@@ -1509,17 +1557,10 @@ fn authenticate_failure_escrow(
     if !action.is_refunding() {
         return Ok(());
     }
-    let failure = refunding_failure_index(plan.outcome_count())
-        .map_err(|_| ClaimsSbfError::Economic)?;
-    let failure = u32::try_from(failure).map_err(|_| ClaimsSbfError::Economic)?;
-    let seeds = crate::protocol_position_v2::ProtocolPositionClaimsCapabilitySeedsV2::new(
-        plan.market(),
-        failure,
-    )
-    .map_err(|_| ClaimsSbfError::FailureEscrow)?;
-    let expected = Pubkey::find_program_address(&seeds.as_slices(), program_id)
-        .0
-        .to_bytes();
+    let derived = FailureEscrowIdentityV1::derive(program_id, plan.market(), plan.outcome_count())
+        .map_err(|_| ClaimsSbfError::FailureEscrow)?;
+    let failure = derived.failure_selector;
+    let expected = derived.owner;
     let (named, escrow) = if action.escrow_is_source() {
         (plan.source_owner(), accounts.source)
     } else {

@@ -57,7 +57,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use dclutch_claims_svm::founding_v5::{
-    CLAIMS_FOUNDING_ACCOUNT_COUNT_V5, CLAIMS_FOUNDING_POST_RESOURCE_DIGEST_DOMAIN_V5,
+    CLAIMS_FOUNDING_ACCOUNT_COUNT_V6, CLAIMS_FOUNDING_POST_RESOURCE_DIGEST_DOMAIN_V5,
     CLAIMS_FOUNDING_REQUEST_BYTES_V5, ClaimsFoundingReceiptV5, ClaimsFoundingRequestV5,
 };
 use dclutch_custody_contract::{
@@ -129,6 +129,10 @@ const OPEN_CORE_PROGRAM: usize = 13;
 const OPEN_AGGREGATE: usize = 18;
 const OPEN_POSITION: usize = 19;
 const OPEN_ADMISSION: usize = 20;
+/// The failure escrow's Position, read-only in the Open window.
+const OPEN_ESCROW_POSITION: usize = 21;
+/// The failure escrow's admission, read-only in the Open window.
+const OPEN_ESCROW_ADMISSION: usize = 22;
 
 /// Writable Open-window indices: market, permit, rent credit.
 const OPEN_WRITABLE: [usize; 3] = [OPEN_MARKET, OPEN_PERMIT, OPEN_RENT_CREDIT];
@@ -274,7 +278,7 @@ fn parse_found_and_permit_frame<'accounts, 'info>(
         .checked_add(PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1)
         .ok_or(TradingSbfError::Content)?;
     let checkpoint_index = claims_start
-        .checked_add(CLAIMS_FOUNDING_ACCOUNT_COUNT_V5)
+        .checked_add(CLAIMS_FOUNDING_ACCOUNT_COUNT_V6)
         .ok_or(TradingSbfError::Content)?;
     let end = checkpoint_index
         .checked_add(1)
@@ -303,7 +307,7 @@ fn parse_found_and_permit_frame<'accounts, 'info>(
             realize_start,
             PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1,
         )?,
-        claims: subslice(accounts, claims_start, CLAIMS_FOUNDING_ACCOUNT_COUNT_V5)?,
+        claims: subslice(accounts, claims_start, CLAIMS_FOUNDING_ACCOUNT_COUNT_V6)?,
         // Stage 1 has no Open window. Nothing on the stage-1 path reads
         // `frame.open`; `execute_core_open` and the ack's Open branch are the
         // only readers and they are unreachable from this route.
@@ -447,11 +451,19 @@ fn rebuild_claims_receipt_v1(
     let admission = account(open_window, OPEN_ADMISSION)?
         .try_borrow_data()
         .map_err(|_| TradingSbfError::AccountData)?;
+    let escrow_position = account(open_window, OPEN_ESCROW_POSITION)?
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::AccountData)?;
+    let escrow_admission = account(open_window, OPEN_ESCROW_ADMISSION)?
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::AccountData)?;
     let combined = hashv(&[
         CLAIMS_FOUNDING_POST_RESOURCE_DIGEST_DOMAIN_V5,
         &aggregate,
         &position,
         &admission,
+        &escrow_position,
+        &escrow_admission,
     ])
     .to_bytes();
     let receipt = ClaimsFoundingReceiptV5::new(
@@ -624,6 +636,6 @@ mod tests {
             GENERIC_MARKET_OPEN_ACCOUNT_COUNT_V1,
             GENERIC_MARKET_OPEN_RAW_ACCOUNT_COUNT_V1 + GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1
         );
-        assert!(OPEN_ADMISSION < GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1);
+        assert!(OPEN_ESCROW_ADMISSION < GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1);
     }
 }

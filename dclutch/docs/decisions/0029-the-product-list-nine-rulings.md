@@ -1,14 +1,36 @@
 # Decision 0029: the product list — what gets built, what is refused, and why each refusal is load-bearing
 
-Status: **PROVISIONAL — nine items ruled by the orchestrator on 2026-09-04 under
+Status: **CONFIRMED (ember, 2026-09-04 15:50 EDT, in conversation; reversible
+on request) — the nine items ruled by the orchestrator on 2026-09-04 under
 ember's standing goal, answered by ember at 10:15 EDT with "build", and
-reversible item by item at the costs §7 states**. Docket item D7. Ember's
-amendment is at `GOAL.md:4655-4656`. These are the queued product questions the
-tree had been carrying, several of them for weeks; each was tabled with options
-and a cost, and none was an engineering blocker — the ruling decides which lane
-exists. **A tenth item — the conditional layer's flagship child market — arrived
-on 2026-09-04 from decision 0031 and is OPEN, waiting on ember; it is the
-addendum at the end of this record.**
+reversible item by item at the costs §7 states; the tenth item — the
+conditional layer's flagship child market — stays OPEN and is ember's**. It was
+PROVISIONAL from the ruling until 15:50 EDT, when ember read the docket and
+accepted it in conversation without amending it; the confirmation line below is
+the whole of what was said. Docket item D7. Ember's amendment is at
+`GOAL.md:4655-4656`. These are the queued product questions the tree had been
+carrying, several of them for weeks; each was tabled with options and a cost,
+and none was an engineering blocker — the ruling decides which lane exists. **A
+tenth item — the conditional layer's flagship child market — arrived on
+2026-09-04 from decision 0031 and is OPEN, waiting on ember; it is the addendum
+at the end of this record.**
+
+**Confirmed, 2026-09-04 15:50 EDT.** Ember, after reading the docket and the
+mechanism cohort page:
+
+> you aren't waiting on me for rulings are you? i was reading the docket and
+> contemplating it, but overall find your takes reasonable
+
+The orchestrator's reply: nothing was waiting on ember — the rulings were
+provisional and already in force, and the lanes had been working under them
+since they were made; *"overall find your takes reasonable"* is taken as
+confirmation rather than as an invitation to re-argue them; and the one thing
+still genuinely ember's is this record's tenth item — the flagship conditional
+market's feature gate, its slot and its metric. So the nine items above are
+CONFIRMED and no longer PROVISIONAL: accepted in conversation, unamended, and
+reversible item by item at the costs §7 states. **The tenth item stays OPEN.**
+It is the one thing ember's sentence leaves with ember by name, and the
+addendum at the end of this record is unchanged by this confirmation.
 
 ## 1. The question
 
