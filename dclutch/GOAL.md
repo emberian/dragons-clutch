@@ -4965,3 +4965,15 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   a Claims founding at all**; the conservation route has no ELF test; the refunding walk needs a joined fixture; frames red
   on three links (three lanes landing at once). `refundsOnFailure` on the page is a browser-architecture question.
 - Cuts: `f030f4470`, `db5045975`.
+- SERIES-4 closed (six commits incl. `c3c5f3383`, `f906f5269`): **the ruling was forced, not chosen — a content id names a
+  coordinate at which no Registry record can exist** (`[RAW, schema, digest]` with `digest == hash(bytes)`), and the
+  successor had always written the record digest; the five Core/Trading sites derive the content id from the record they
+  hold; the sixth (`accounts.rs::authenticate_root`) had zero callers and is deleted (640 frame bytes); the artifact's
+  `ROUTE_ALIASES` had already declared the Template raw an alias of the config raw. **Eighteen phases no Series action had
+  ever executed now run**; four more walls fell, one a program defect — `sealed_ownership.require` was unsatisfiable for
+  every schema-V3 profile (compared by pointer identity 24 bytes in; no V3 family had reached it). The rows stop at
+  533,198 CU `Release 0x4001`: the activated Custody program is at no coordinate of the 81-coordinate Expire frame — a
+  profile/builder question for a lane. Frames 1,869 → 1,887 accepted from two captures. A published CU corrected the
+  same hour (measured on a development ELF). The orchestrator fixed Trading's test binary at HEAD (a test request lacked the
+  recovery capture's `source_index`).
+- Cuts: `224a3667d`.

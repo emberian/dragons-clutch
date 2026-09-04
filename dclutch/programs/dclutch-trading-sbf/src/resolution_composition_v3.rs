@@ -604,6 +604,8 @@ mod tests {
             source_state: id(2),
             certificate_account: id(3),
             source_material: id(4),
+            // the primary source; a rung capture names its attempt (RECOVERY-2 beca9243e)
+            source_index: 0,
             source_spec: id(5),
             product_record: id(6),
             result_domain: id(7),
