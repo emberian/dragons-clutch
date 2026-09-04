@@ -837,7 +837,13 @@ pub fn build_report(
         core,
         product.join.outcome_count,
     )?;
-    let terminal = terminal_scenario(core, basis.kind(), product.join.outcome_count, certificate)?;
+    let terminal = terminal_scenario(
+        core,
+        basis.kind(),
+        basis.refunds_on_failure(),
+        product.join.outcome_count,
+        certificate,
+    )?;
     let admission = ProductClaimsTerminalAdmissionV3::new(
         exposure.bundle_id(),
         exposure.bundle_digest(),
@@ -1004,9 +1010,15 @@ fn instruction_manifest(instruction: Instruction) -> InstructionManifestV1 {
     }
 }
 
+/// `refunds_on_failure` is a PROJECTION of the authenticated basis record,
+/// exactly as `kind` beside it is, and the sole production caller reads both
+/// off the same `ProductBasisV3` one line apart. It is a parameter rather than
+/// a recomputation because recomputing it here would make this host a second
+/// author of the rule the program owns.
 fn terminal_scenario(
     core: CoreState,
     kind: BasisKindV3,
+    refunds_on_failure: bool,
     outcome_count: u32,
     certificate: ResolutionCertificateV2,
 ) -> Result<TerminalScenarioV3> {
@@ -1033,7 +1045,18 @@ fn terminal_scenario(
         ));
     }
     match kind {
-        BasisKindV3::CategoricalQ1 => Ok(TerminalScenarioV3::Categorical(core.terminal_winner)),
+        // The host mirrors the program's arm rather than restating it: a
+        // categorical market founded to refund settles an outage through the
+        // failure vector, and one founded before the rule settles it as the
+        // column it was sold as. Reading `refunds_on_failure` off the same
+        // authenticated record is what keeps the driver from building a
+        // transaction the program will refuse.
+        BasisKindV3::CategoricalQ1 => match certificate.kind {
+            ResolutionCertificateKindV2::ResolutionFailure if refunds_on_failure => {
+                Ok(TerminalScenarioV3::Failure)
+            }
+            _ => Ok(TerminalScenarioV3::Categorical(core.terminal_winner)),
+        },
         // Both non-categorical families consume the authenticated rational
         // coordinate on success and their basis-owned failure vector on
         // failure. The Claims program and public rational operator use this
@@ -1480,14 +1503,21 @@ pub mod tests {
         let success =
             terminal_certificate(ResolutionCertificateKindV2::ResolutionSuccess, 1, -7, 10);
         assert_eq!(
-            terminal_scenario(terminal_core(1), BasisKindV3::CategoricalQ1, 3, success)
-                .expect("categorical certificate"),
+            terminal_scenario(
+                terminal_core(1),
+                BasisKindV3::CategoricalQ1,
+                false,
+                3,
+                success
+            )
+            .expect("categorical certificate"),
             TerminalScenarioV3::Categorical(1)
         );
         assert_eq!(
             terminal_scenario(
                 terminal_core(1),
                 BasisKindV3::GradedExactComplement,
+                false,
                 3,
                 success,
             )
@@ -1504,6 +1534,7 @@ pub mod tests {
                     degree: 3,
                     interior_multiplicity: false,
                 },
+                false,
                 4,
                 success,
             )
@@ -1518,6 +1549,7 @@ pub mod tests {
             terminal_scenario(
                 terminal_core(2),
                 BasisKindV3::GradedExactComplement,
+                false,
                 3,
                 failure,
             )
@@ -1531,6 +1563,7 @@ pub mod tests {
                     degree: 2,
                     interior_multiplicity: true,
                 },
+                false,
                 3,
                 failure,
             )
@@ -1543,6 +1576,7 @@ pub mod tests {
             terminal_scenario(
                 terminal_core(1),
                 BasisKindV3::GradedExactComplement,
+                false,
                 3,
                 wrong_kind,
             )
@@ -1559,6 +1593,7 @@ pub mod tests {
                     degree: 3,
                     interior_multiplicity: false,
                 },
+                false,
                 4,
                 mismatched,
             )
@@ -1574,6 +1609,7 @@ pub mod tests {
                     degree: 3,
                     interior_multiplicity: false,
                 },
+                false,
                 4,
                 recovery,
             )
@@ -1590,6 +1626,7 @@ pub mod tests {
                     degree: 3,
                     interior_multiplicity: false,
                 },
+                false,
                 4,
                 substituted_product,
             )

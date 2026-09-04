@@ -647,6 +647,19 @@ fn evaluate(
         ) => basis
             .evaluate_failure(output)
             .map_err(|_| Error::ProductBasis),
+        // A categorical basis founded to refund carries no stored failure
+        // vector -- it does not need one. The vector is DERIVED: one
+        // collateral atom to every ordinary claim, nothing to the failure
+        // coordinate the escrow holds. `validate_partition` below then gates
+        // it against the record's payout scale exactly as it gates the success
+        // arm, because both vectors sum to the same scale. A categorical basis
+        // that was NOT founded to refund never reaches here: the certificate
+        // authenticator hands it `Categorical(winner)` instead, and if one
+        // arrives anyway `evaluate_categorical_failure` refuses by name rather
+        // than paying a refund its Hoard cannot cover.
+        (BasisKindV3::CategoricalQ1, TerminalScenarioV3::Failure) => basis
+            .evaluate_categorical_failure(output)
+            .map_err(|_| Error::ProductBasis),
         // Still fail-closed for every remaining (kind, terminal) mismatch: a
         // categorical basis handed a rational coordinate, and so on.
         _ => Err(Error::ProductBasis),
@@ -1009,6 +1022,141 @@ mod tests {
 
     fn neutral(width: usize) -> Vec<SignedDeltaV3> {
         vec![SignedDeltaV3::new(DeltaDirectionV3::Neutral, 0).expect("neutral"); width]
+    }
+
+    /// Cohort-13's own numbers, re-walked under the escrow ruling.
+    ///
+    /// Three ordinary regions under cuts 9600/10000, one explicit failure
+    /// coordinate, 500,000,000 complete sets minted, the founder short exactly
+    /// the 200 atoms of outcome 0 the Direct crossing sold to a stranger --
+    /// and the failure column seated in an escrow rather than the founder's
+    /// Position. On 2026-09-02 this walk paid the founder 500,000,000 and the
+    /// two strangers nothing.
+    #[test]
+    fn the_cohort13_failure_walk_refunds_the_stranger_instead_of_paying_the_founder() {
+        const SETS: u64 = 500_000_000;
+        const STRANGER: u64 = 200;
+        let refunding = basis(BasisKindV3::CategoricalQ1, 4, 3, &[], &[], &[]);
+        let (refunding_admission, refunding_exposure) = admission(&refunding, 4, 4, 3);
+        let hoard = SETS * 3;
+        let supplies = [SETS; 4];
+
+        // The escrow holds the whole failure column and the founder holds none
+        // of it: that is the founding change, read back off the Positions.
+        let founder = state(&supplies, &[SETS - STRANGER, SETS, SETS, 0], SEMANTIC_BASIS);
+        let escrow = state(&supplies, &[0, 0, 0, SETS], SEMANTIC_BASIS);
+        let stranger = state(&supplies, &[STRANGER, 0, 0, 0], SEMANTIC_BASIS);
+
+        let mut settle = |state: &State, claim_index: u32, quantity: u64| {
+            let mut payouts = [0_u64; 4];
+            let mut translation = [0_u64; 4];
+            let mut claims_payouts = [0_u64; 4];
+            let mut deltas = neutral(4);
+            let mut packet = vec![0_u8; plan_bytes(4, 1, 1).expect("packet bytes")];
+            let outcome = encode_product_basis_terminal_signed_delta_v3(
+                input(
+                    (&refunding, refunding_admission, &refunding_exposure),
+                    state,
+                    TerminalScenarioV3::Failure,
+                    claim_index,
+                    quantity,
+                    hoard,
+                ),
+                &mut payouts,
+                &mut translation,
+                &mut claims_payouts,
+                &mut deltas,
+                &mut packet,
+            );
+            (outcome, payouts)
+        };
+
+        // The stranger who bought a real outcome is refunded their share.
+        let (paid, payouts) = settle(&stranger, 0, STRANGER);
+        assert_eq!(paid.expect("stranger refund"), STRANGER);
+        assert_eq!(payouts, [1, 1, 1, 0]);
+
+        // The founder is paid for the ordinary claims they still hold, and for
+        // nothing else -- exactly what any other holder of those claims would
+        // draw. Their whole share plus the stranger's is the whole Hoard.
+        let (founder_paid, _) = settle(&founder, 0, SETS - STRANGER);
+        assert_eq!(
+            founder_paid.expect("founder ordinary share"),
+            SETS - STRANGER
+        );
+        let (second, _) = settle(&founder, 1, SETS);
+        let (third, _) = settle(&founder, 2, SETS);
+        assert_eq!(
+            founder_paid.expect("first")
+                + STRANGER
+                + second.expect("second")
+                + third.expect("third"),
+            hoard
+        );
+
+        // The escrow's own failure claims draw nothing. If they drew anything
+        // the Hoard would be paid out twice.
+        let (escrow_paid, _) = settle(&escrow, 3, SETS);
+        assert_eq!(escrow_paid.expect("escrow claims are unpayable"), 0);
+
+        // And a market founded before the rule keeps the shape it was sold
+        // under: the failure column is a column, and it pays its holder.
+        let legacy = basis(BasisKindV3::CategoricalQ1, 4, 1, &[], &[], &[]);
+        let (legacy_admission, legacy_exposure) = admission(&legacy, 4, 4, 1);
+        let legacy_founder = state(
+            &supplies,
+            &[SETS - STRANGER, SETS, SETS, SETS],
+            SEMANTIC_BASIS,
+        );
+        let mut payouts = [0_u64; 4];
+        let mut translation = [0_u64; 4];
+        let mut claims_payouts = [0_u64; 4];
+        let mut deltas = neutral(4);
+        let mut packet = vec![0_u8; plan_bytes(4, 1, 1).expect("packet bytes")];
+        let paid_founder = encode_product_basis_terminal_signed_delta_v3(
+            input(
+                (&legacy, legacy_admission, &legacy_exposure),
+                &legacy_founder,
+                TerminalScenarioV3::Categorical(3),
+                3,
+                SETS,
+                SETS,
+            ),
+            &mut payouts,
+            &mut translation,
+            &mut claims_payouts,
+            &mut deltas,
+            &mut packet,
+        )
+        .expect("legacy failure column pays its holder");
+        assert_eq!(paid_founder, SETS);
+        assert_eq!(payouts, [0, 0, 0, 1]);
+
+        // A legacy market handed the refunding terminal refuses rather than
+        // refunding at a rate its Hoard of one atom per set cannot cover.
+        let mut payouts = [0_u64; 4];
+        let mut translation = [0_u64; 4];
+        let mut claims_payouts = [0_u64; 4];
+        let mut deltas = neutral(4);
+        let mut packet = vec![0_u8; plan_bytes(4, 1, 1).expect("packet bytes")];
+        assert_eq!(
+            encode_product_basis_terminal_signed_delta_v3(
+                input(
+                    (&legacy, legacy_admission, &legacy_exposure),
+                    &legacy_founder,
+                    TerminalScenarioV3::Failure,
+                    0,
+                    STRANGER,
+                    SETS,
+                ),
+                &mut payouts,
+                &mut translation,
+                &mut claims_payouts,
+                &mut deltas,
+                &mut packet,
+            ),
+            Err(Error::ProductBasis)
+        );
     }
 
     #[test]

@@ -75,6 +75,10 @@ name = "emit-custody-abi-rust"
 root = "EmitCustodyAbiRust"
 
 [[lean_exe]]
+name = "emit-protocol-parameters-v1-rust"
+root = "EmitProtocolParametersV1Rust"
+
+[[lean_exe]]
 name = "emit-custody-vector"
 root = "EmitCustodyVector"
 

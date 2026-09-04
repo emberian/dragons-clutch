@@ -34,6 +34,7 @@ members = [
     "crates/dclutch-pyth-svm",
     "crates/dclutch-partition-quality-wasm",
     "crates/dclutch-product-compiler",
+    "crates/dclutch-protocol-parameters-contract",
     "crates/dclutch-product-contract",
     "crates/dclutch-product-runtime-v2",
     "crates/dclutch-product-runtime-v2-admission",

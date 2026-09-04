@@ -566,8 +566,15 @@ pub(crate) fn run_engine_with_admitted_candidate(
     if let Some(projector) = candidate_projector {
         let mut candidate_scalars = current_scalars.clone();
         let mut candidate_identities = current_identities.clone();
-        projector(&mut candidate_scalars, &mut candidate_identities)
-            .map_err(|_| BuilderError::Projection("admitted-candidate"))?;
+        // THE PROJECTOR'S OWN REFUSAL, not one word for every way it can refuse.
+        // This site discarded the cause behind `Projection("admitted-candidate")`
+        // until 2026-09-04, and the first General action that was not `OpenBatch`
+        // met it immediately: a family half that publishes eleven distinct
+        // projector stages reported one string, and the difference between "the
+        // bank width is wrong" and "the semantic owner refused this batch" was a
+        // bisect. The projector already returns `BuilderError`; wrapping it was
+        // pure loss.
+        projector(&mut candidate_scalars, &mut candidate_identities)?;
         next_scalars.copy_from_slice(&candidate_scalars);
         next_identities.copy_from_slice(&candidate_identities);
     } else {

@@ -10,6 +10,17 @@ Why the protocol is built the way it is, one decision per record. Each
 record carries its context, the alternatives, and the consequences; this
 index shows each record's current status.
 
+A ruling that lives only inside a narrative file has no durable home, which
+is what these records are for. Every item on the 2026-09-04 rulings docket
+now has one: D1 economics (0024), D2 the failure selector (0025), D3 the
+privacy horizon (0018), D4 mainnet's place (0026), D5 recovery (0027), D6
+the accelerator output page (0028, which carries a read and is OPEN because
+ember asked for the architecture rather than a switch), D7 the product list
+(0029), and D8 rent across an epoch (0030). Records 0019-0023 hold the five
+rulings the orchestrator made under ember's standing goal before that
+docket. Statuses are load-bearing: PROVISIONAL means ember may reverse it at
+the cost the record's last section states, and OPEN means nobody has ruled.
+
 | decision | status |
 | --- | --- |
 | [Decision 0001: thin Market Core and optional capability children](../decisions/0001-thin-market-core.md) | accepted at repository bootstrap. |
@@ -35,4 +46,11 @@ index shows each record's current status.
 | [Decision 0021: whose rent a state carries is a per-plan declaration, not one global rule about lamport flow](../decisions/0021-per-plan-refund-source.md) | **PROVISIONAL — ruled by the orchestrator on 2026-09-03, REFUTED the same day by the lane it was given to, re-made as the declaration below, and reversible by ember at the cost §8 states**. |
 | [Decision 0022: a callee invoked by a PDA-signed CPI from Trading takes the facts the signer's seeds pin as established](../decisions/0022-pda-signed-caller-facts.md) | **PROVISIONAL — ruled by the orchestrator on 2026-09-02 under ember's standing goal, spent the same day in Claims, Custody and the accelerator prelude, and reversible by ember at the cost §7 states**. |
 | [Decision 0023: a caller authority's address is a function of the signed instruction alone, never of the executing slot](../decisions/0023-slot-free-caller-authority-seed.md) | **PROVISIONAL — ruled by the orchestrator on 2026-09-03 under ember's standing goal, landed the same morning, and reversible by ember at the cost §7 states**. |
+| [Decision 0024: the five economic knobs, and a parameter surface that can be governed rather than recompiled](../decisions/0024-sustainable-economics-and-a-governable-parameter-surface.md) | **PROVISIONAL — the five knobs ruled by the orchestrator on 2026-09-04 under ember's standing goal, then AMENDED by ember at 10:15 EDT with a sixth item the orchestrator had not asked for, and reversible at the cost §7 states**. |
+| [Decision 0025: an oracle outage refunds the holders, it does not pay the founder](../decisions/0025-an-outage-refunds-rather-than-paying-the-founder.md) | **PROVISIONAL — ruled by the orchestrator on 2026-09-04 under ember's standing goal, amended by ember at 10:15 EDT to require that the pathways be explained and robust, and reversible at the cost §7 states**. |
+| [Decision 0026: mainnet deployment follows assurance, and is not part of feature completion](../decisions/0026-mainnet-follows-assurance.md) | **PROVISIONAL — ruled by the orchestrator on 2026-09-04 under ember's standing goal, confirmed by ember at 10:15 EDT, and reversible at the cost §7 states**. |
+| [Decision 0027: recovery is kept, as one funded ordered ladder that exhausts into the failure selector](../decisions/0027-recovery-is-one-funded-ordered-ladder.md) | **PROVISIONAL — ruled by the orchestrator on 2026-09-04 under ember's standing goal, amended by ember at 10:15 EDT to require robust failure pathways, and reversible at the cost §7 states**. |
+| [Decision 0028: the accelerator output page — open, with a read](../decisions/0028-the-accelerator-output-page.md) | **OPEN — ember asked at 10:15 EDT 2026-09-04 for the best architectural course rather than for a switch, so this record carries a READ and not a ruling, and decision 0003 stays unamended until ember rules**. |
+| [Decision 0029: the product list — what gets built, what is refused, and why each refusal is load-bearing](../decisions/0029-the-product-list-nine-rulings.md) | **PROVISIONAL — nine items ruled by the orchestrator on 2026-09-04 under ember's standing goal, answered by ember at 10:15 EDT with "build", and reversible item by item at the costs §7 states**. |
+| [Decision 0030: an account's rent is fixed when it is funded, and the fact persisted is the RATE](../decisions/0030-rent-is-fixed-when-an-account-is-funded.md) | **RULED by the orchestrator on 2026-09-04 under ember's standing goal, put to ember on the docket as D8 the same morning and not objected to at the 10:15 EDT reading, landed the same day, and reversible at the cost §7 states**. |
 | [Decision packet — 2026-08-30](../decisions/DECISION_PACKET_2026_08_30.md) |  |

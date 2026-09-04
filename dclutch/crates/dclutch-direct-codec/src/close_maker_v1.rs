@@ -28,7 +28,11 @@ pub const DIRECT_CLOSE_MAKER_SELECTOR_V1: u32 = 0xffff_ff04;
 /// Exact permissionless close-maker request width.
 pub const DIRECT_CLOSE_MAKER_REQUEST_BYTES_V1: usize = 96;
 /// Exact close-maker receipt width.
-pub const DIRECT_CLOSE_MAKER_RECEIPT_BYTES_V1: usize = 240;
+///
+/// Widened from 240 on 2026-09-04 for `closer_reward`. The receipt is
+/// `set_return_data` only -- no released record, descriptor or profile digests
+/// it -- so the width is a codec fact and not a release identity.
+pub const DIRECT_CLOSE_MAKER_RECEIPT_BYTES_V1: usize = 248;
 /// Close-maker request magic.
 pub const DIRECT_CLOSE_MAKER_REQUEST_MAGIC_V1: [u8; 8] = *b"DCLTDMC1";
 /// Close-maker receipt magic.
@@ -46,19 +50,33 @@ pub const DIRECT_CLOSE_MAKER_REQUEST_SCHEMA_ID_V1: [u8; 32] = [
     0x42, 0xa3, 0x87, 0xd9, 0xac, 0x0a, 0xae, 0x61, 0x8f, 0x7a, 0x90, 0x71, 0x5c, 0xe7, 0x19, 0x36,
 ];
 
-/// The permissionless closer's reward, named while ruling 1 of the cohort-9
-/// review (`COHORT9_PLAN_REVIEW_2026_08_31.md` section 8) is pending.
+/// The carve ceiling this route passes to `close_maker_replay_v2`.
 ///
-/// Until ruled, the whole observed balance follows the landed Lean plan
-/// (`MakerClosePlan`: `totalCredit` to `rentOwner`, refund conservation
-/// proved), so the `unclassified_donation` slice reaches the recorded
-/// `rent_owner` rather than being refused: refusing a nonzero donation would
-/// hand a griefer a 1-lamport transfer that strands the replay -- and the
-/// market behind it -- permanently, the exact outcome `CloseSeal`'s own cap
-/// commentary documents against. A ruled closer reward is a later carve out of
-/// the donation slice alone; the principal is the maker's own money and never
-/// part of it.
-pub const DIRECT_CLOSE_MAKER_CLOSER_REWARD_V1: u64 = 0;
+/// **RULED 2026-09-04 (C-11 D1 item 4): a permissionless closer's reward is
+/// carved from the donation slice alone, capped at the funded-crank floor.**
+/// The rule is in the kernel and proved in Lean
+/// (`the_closer_carve_never_touches_principal`,
+/// `the_closer_carve_is_capped_and_bounded_by_the_donation`), and the governed
+/// value is `closer_reward_cap_lamports` in
+/// `dclutch-protocol-parameters-contract`'s record, whose genesis this constant
+/// projects so the two can never disagree.
+///
+/// **It is zero, and the reason is the FRAME, not the ruling.**
+/// `direct_close_maker_v1.rs` refuses any signer at all
+/// (`accounts.iter().any(|account| account.is_signer)`), so there is no closer
+/// in the twenty-two-account frame to pay. Paying one needs a twenty-third
+/// account with a signer conjunct -- `FUNDED_CRANK_V1.md` section 6's "the
+/// caller signs only to own the reward, never to be authorized" -- which moves
+/// the released AccountProfile, the close descriptor's digest, and therefore
+/// every derived identity. That is a cohort cut's work and it is OWED, named
+/// here rather than left as a zero a reader would take for a policy.
+///
+/// What did NOT change: refusing a nonzero donation is still rejected, on
+/// `CloseSeal`'s own documented lesson -- anyone can transfer one lamport into
+/// a Trading-owned PDA, so a refusal would let a griefer strand any replay, and
+/// the market behind it, permanently, for nothing.
+pub const DIRECT_CLOSE_MAKER_CLOSER_REWARD_V1: u64 =
+    dclutch_protocol_parameters_contract::PROTOCOL_GENESIS_CLOSER_REWARD_CAP_LAMPORTS_V1;
 
 /// Exact number of scalar registers in the authenticated close artifacts.
 pub const DIRECT_CLOSE_MAKER_SCALAR_COUNT_V1: u16 = 10;
@@ -182,8 +200,9 @@ const RECEIPT_RENT_OWNER_OFFSET: usize = 144;
 const RECEIPT_POST_ROOT_DIGEST_OFFSET: usize = 176;
 const RECEIPT_RENT_PRINCIPAL_OFFSET: usize = 208;
 const RECEIPT_DONATION_OFFSET: usize = 216;
-const RECEIPT_TOTAL_CREDIT_OFFSET: usize = 224;
-const RECEIPT_REMAINING_COUNT_OFFSET: usize = 232;
+const RECEIPT_CLOSER_REWARD_OFFSET: usize = 224;
+const RECEIPT_TOTAL_CREDIT_OFFSET: usize = 232;
+const RECEIPT_REMAINING_COUNT_OFFSET: usize = 240;
 
 /// Stable request/receipt refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -274,6 +293,8 @@ pub struct DirectCloseMakerReceiptV1 {
     pub rent_principal: u64,
     /// Lamports above principal, explicitly not fees or reserves.
     pub unclassified_donation: u64,
+    /// The permissionless closer's carve, out of the donation slice alone.
+    pub closer_reward: u64,
     /// Exact total lamports credited to the beneficiary.
     pub total_credit: u64,
     /// Open maker roots still standing after this close.
@@ -293,9 +314,16 @@ impl DirectCloseMakerReceiptV1 {
         ] {
             require_nonzero(value)?;
         }
+        // Conservation, and the ruling's own bound, in one place: the whole
+        // observed balance is exactly the carve plus what the beneficiary
+        // received, and the carve came out of the donation slice, so the
+        // beneficiary still received at least everything the maker put in. A
+        // receipt claiming a larger carve than the donation is a receipt for a
+        // close that took principal, and it refuses here.
         if self.rent_principal == 0
+            || self.closer_reward > self.unclassified_donation
             || self.rent_principal.checked_add(self.unclassified_donation)
-                != Some(self.total_credit)
+                != self.closer_reward.checked_add(self.total_credit)
         {
             return Err(DirectCloseMakerErrorV1::InvalidRefund);
         }
@@ -318,6 +346,7 @@ impl DirectCloseMakerReceiptV1 {
             post_root_digest: array(input, RECEIPT_POST_ROOT_DIGEST_OFFSET)?,
             rent_principal: u64_at(input, RECEIPT_RENT_PRINCIPAL_OFFSET)?,
             unclassified_donation: u64_at(input, RECEIPT_DONATION_OFFSET)?,
+            closer_reward: u64_at(input, RECEIPT_CLOSER_REWARD_OFFSET)?,
             total_credit: u64_at(input, RECEIPT_TOTAL_CREDIT_OFFSET)?,
             remaining_open_maker_roots: u64_at(input, RECEIPT_REMAINING_COUNT_OFFSET)?,
         }
@@ -349,6 +378,7 @@ impl DirectCloseMakerReceiptV1 {
         let scalars = [
             self.rent_principal,
             self.unclassified_donation,
+            self.closer_reward,
             self.total_credit,
             self.remaining_open_maker_roots,
         ];
@@ -495,6 +525,7 @@ mod tests {
             post_root_digest: id(6),
             rent_principal: 100,
             unclassified_donation: 11,
+            closer_reward: 0,
             total_credit: 111,
             remaining_open_maker_roots: 0,
         }
@@ -586,11 +617,73 @@ mod tests {
         );
     }
 
-    /// The closer reward is deliberately zero until ruling 1 lands; the whole
-    /// balance follows the landed Lean plan to the recorded rent owner.
+    /// RULING D1 ITEM 4 on the wire: a receipt may report a carve, and it may
+    /// not report one larger than the donation it claims to have come from.
+    ///
+    /// The hostile is the one the ruling names -- a larger carve refuses -- and
+    /// it is checked at the exact discriminant with a control one lamport away,
+    /// so it cannot pass on the conservation conjunct beside it.
     #[test]
-    fn the_closer_reward_is_named_and_zero_until_ruled() {
+    fn a_receipt_carving_more_than_the_donation_refuses() {
+        // The carve at exactly the donation: legal, and the beneficiary
+        // receives exactly the principal.
+        let whole = DirectCloseMakerReceiptV1 {
+            closer_reward: 11,
+            total_credit: 100,
+            ..receipt()
+        };
+        assert!(whole.new().is_ok());
+        assert_eq!(whole.rent_principal, whole.total_credit);
+        assert_eq!(
+            DirectCloseMakerReceiptV1::decode(&whole.to_bytes().expect("encode")),
+            Ok(whole),
+        );
+
+        // One lamport more: the carve has reached into principal and it
+        // refuses. Both conjuncts would catch it, and the bound is stated
+        // separately so the refusal names the right accusation.
+        assert_eq!(
+            DirectCloseMakerReceiptV1 {
+                closer_reward: 12,
+                total_credit: 99,
+                ..receipt()
+            }
+            .new(),
+            Err(DirectCloseMakerErrorV1::InvalidRefund)
+        );
+        // And a carve that does not come out of anything: conservation holds
+        // for the numbers, but the carve exceeds the donation.
+        assert_eq!(
+            DirectCloseMakerReceiptV1 {
+                unclassified_donation: 0,
+                closer_reward: 11,
+                total_credit: 100,
+                rent_principal: 111,
+                ..receipt()
+            }
+            .new(),
+            Err(DirectCloseMakerErrorV1::InvalidRefund)
+        );
+    }
+
+    /// The carve ceiling this route passes is zero because its FRAME admits no
+    /// closer, not because ruling D1 item 4 says zero -- and the frame fact is
+    /// asserted beside it so the two cannot be confused.
+    #[test]
+    fn the_carve_ceiling_is_zero_because_the_frame_admits_no_closer() {
         assert_eq!(DIRECT_CLOSE_MAKER_CLOSER_REWARD_V1, 0);
+        // The governed record's genesis is its single author.
+        assert_eq!(
+            DIRECT_CLOSE_MAKER_CLOSER_REWARD_V1,
+            dclutch_protocol_parameters_contract::PROTOCOL_GENESIS_CLOSER_REWARD_CAP_LAMPORTS_V1,
+        );
+        // Twenty-two accounts, none of them a closer: indices 20 and 21 are the
+        // replay and the recorded rent owner, and there is no index 22.
+        assert_eq!(DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1, 22);
+        assert_eq!(
+            direct_close_maker_account_privileges_v1(DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1),
+            None,
+        );
     }
 
     #[test]

@@ -258,7 +258,15 @@ pub fn compile_native_categorical_composition_v1(
 ) -> Result<NativeCategoricalCompositionRecordsV1> {
     let product_basis =
         ProductBasisV3::decode(input.product_basis_bytes).map_err(|_| Error::ProductBasis)?;
-    if product_basis.kind() != BasisKindV3::CategoricalQ1 || product_basis.payout_scale() != 1 {
+    // A categorical basis carries exactly two admissible payout scales -- the
+    // legacy `1` and the refunding ordinary-region count -- and the record's
+    // own decoder is the authority on which it is. Restating "scale must be 1"
+    // here would have made this operator a second, quieter author of the
+    // economics, refusing every refunding market with a cross-record error
+    // that named nothing.
+    if product_basis.kind() != BasisKindV3::CategoricalQ1
+        || (product_basis.payout_scale() != 1 && !product_basis.refunds_on_failure())
+    {
         return Err(Error::CrossRecord);
     }
     compile_native_basis_composition_v1(NativeBasisCompositionInputV1 {

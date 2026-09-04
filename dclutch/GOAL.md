@@ -4679,3 +4679,10 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   bond, conditional) after the clearing rule is stated. The explainer page for ember: failure/recovery, the output page's
   best course, the coherently extrapolated product (artifact 34ac3161…).
 - Cuts: `5a2b8d425`.
+- DECISIONS-2 closed (`00014f1a2`, `be9ba8a8c`, `5a7df8d0e`): records 0024–0030 (D1 amended by ember; D2, D5 amended; D4
+  confirmed; D6 OPEN with a read, deliberately not a ruling; D7 nine items; D8 RULED unopposed); the index 0001–0030 at its
+  fixpoint; 0025 and 0027 were stale on arrival — ESCROW's payout arm (f9d40b615) and RECOVERY's transition system
+  (332b432e6) had landed — corrected; 0027 corrects the contract row: the V1 FailNext walk is GONE, the live wall is
+  `exhaust_after_primary_deadline` refusing any recovery policy; 0029 carries the K=3 packet correction (an amendment to
+  0011 §3b owed). The census-derived reference pages are stale by one code (a converge owed after the wave).
+- Cuts: `ffe6e1f2c`.

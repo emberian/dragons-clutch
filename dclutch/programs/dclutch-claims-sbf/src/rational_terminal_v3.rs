@@ -153,6 +153,11 @@ pub(crate) fn execute_rational_terminal_v3<'accounts, 'info>(
         header.release_set,
         authenticated.core,
         authenticated.admission.basis_kind(),
+        dclutch_product_payoff_v2_codec::runtime_v3::categorical_refunds_on_failure_v3(
+            authenticated.admission.basis_kind(),
+            authenticated.admission.basis_width(),
+            authenticated.admission.payout_scale(),
+        ),
         authenticated.result_outcome_count,
     )?;
     let hoard_before = token_amount(

@@ -28,6 +28,15 @@ dclutch-realm-contract = { path = "../../../../crates/dclutch-realm-contract" }
 dclutch-registry-contract = { path = "../../../../crates/dclutch-registry-contract" }
 dclutch-release-set-contract = { path = "../../../../crates/dclutch-release-set-contract" }
 dclutch-rent-contract = { path = "../../../../crates/dclutch-rent-contract" }
+# The refusal codes this campaign's hostiles name, derived from the REGISTERED
+# BAND rather than written out. Decision 0007 names this as the alternative to
+# the enum where taking a dependency on the program would be wrong, and here it
+# is: a direct `dclutch-trading-sbf` dependency adds the `families` feature to
+# this workspace's union, which links the whole Series and Dealer adapter
+# closure into a General campaign's HOST build for one `u32` -- and couples this
+# suite's ability to compile to every lane editing those adapters in the shared
+# checkout. A bare literal is what neither of those is.
+dclutch-refusal-registry = { path = "../../../../crates/dclutch-refusal-registry" }
 sha2 = { version = "=0.10.9", default-features = false }
 solana-account = "=4.6.0"
 solana-compute-budget-interface = "=3.1.0"

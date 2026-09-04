@@ -327,6 +327,11 @@ fn authenticate_and_prepare(
         input.release_set,
         core,
         runtime.basis_kind,
+        dclutch_product_payoff_v2_codec::runtime_v3::categorical_refunds_on_failure_v3(
+            runtime.basis_kind,
+            runtime.runtime.outcome_count,
+            runtime.payout_scale,
+        ),
         runtime.runtime.outcome_count,
     )?;
     let exposure_bytes = accounts[EXPOSURE_RAW]

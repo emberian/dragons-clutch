@@ -458,11 +458,26 @@ def beginRetiring (root : Root) : Option Root :=
   if ¬root.Valid ∨ root.phase ≠ .open then none
   else some { root with phase := .retiring }
 
-/-- Exact account-rent and unclassified-donation refund on maker-root close. -/
+/-- Exact account-rent and unclassified-donation refund on maker-root close.
+
+The `closerReward` field is ruling D1 item 4 (2026-09-04): a permissionless
+closer may be paid, and the payment is carved from the DONATION SLICE ALONE.
+The principal is the maker's own money and is never part of it -- which is why
+`totalCredit` is bounded below by `rentPrincipal` and the theorem saying so is
+the one that matters here.
+
+The cap arrives as an argument rather than living in this file, because
+`docs/design/FUNDED_CRANK_V1.md` section 3 rules that a crank's floor is derived
+from the Rent sysvar and never written as a source literal.  Today the deployed
+route passes ZERO, and it does so because its frame admits no closer account at
+all, not because the ruling says zero: `direct_close_maker_v1.rs` refuses ANY
+signer, so there is nobody in the frame to pay.  That is named debt, not a
+finished value. -/
 structure MakerClosePlan where
   rentOwner : Nat
   rentPrincipal : Nat
   unclassifiedDonation : Nat
+  closerReward : Nat
   totalCredit : Nat
   deriving DecidableEq, Inhabited, Repr
 
@@ -479,7 +494,8 @@ amendment 2): the maker root is the sole record of the receivable, so a close
 that ignored it would erase a debt with no residue.  Settlement is phase-free,
 so settle-then-close is always available in Retiring; nothing strands. -/
 def closeMaker
-    (root : Root) (makerRoot : MakerRoot) (observedLamports : Nat) :
+    (root : Root) (makerRoot : MakerRoot) (observedLamports : Nat)
+    (closerRewardCap : Nat) :
     Option MakerCloseResult := do
   if ¬root.Valid ∨ root.phase ≠ .retiring ∨ root.openMakerRootCount = 0 ∨
       ¬makerRoot.Valid ∨ makerRoot.liveCount ≠ 0 ∨ makerRoot.feeOwed ≠ 0 ∨
@@ -487,52 +503,102 @@ def closeMaker
   else
     some {
       root := { root with openMakerRootCount := root.openMakerRootCount - 1 }
-      plan := {
-        rentOwner := makerRoot.rentOwner
-        rentPrincipal := makerRoot.rentPrincipal
-        unclassifiedDonation := observedLamports - makerRoot.rentPrincipal
-        totalCredit := observedLamports
-      }
+      plan :=
+        let donation := observedLamports - makerRoot.rentPrincipal
+        let reward := min closerRewardCap donation
+        {
+          rentOwner := makerRoot.rentOwner
+          rentPrincipal := makerRoot.rentPrincipal
+          unclassifiedDonation := donation
+          closerReward := reward
+          totalCredit := observedLamports - reward
+        }
     }
 
 theorem maker_close_count_conserved
-    (root : Root) (makerRoot : MakerRoot) (lamports : Nat)
+    (root : Root) (makerRoot : MakerRoot) (lamports cap : Nat)
     (result : MakerCloseResult)
-    (success : closeMaker root makerRoot lamports = some result) :
+    (success : closeMaker root makerRoot lamports cap = some result) :
     result.root.openMakerRootCount + 1 = root.openMakerRootCount := by
   simp [closeMaker] at success
   rcases success with ⟨_, _, count, _, _, _, _, rfl⟩
   change root.openMakerRootCount - 1 + 1 = root.openMakerRootCount
   omega
 
+/-- Nothing is created and nothing evaporates: the whole observed balance is
+exactly the closer's carve plus what the recorded beneficiary receives. -/
 theorem maker_close_refund_conserved
-    (root : Root) (makerRoot : MakerRoot) (lamports : Nat)
+    (root : Root) (makerRoot : MakerRoot) (lamports cap : Nat)
     (result : MakerCloseResult)
-    (success : closeMaker root makerRoot lamports = some result) :
+    (success : closeMaker root makerRoot lamports cap = some result) :
     result.plan.rentPrincipal + result.plan.unclassifiedDonation =
-      result.plan.totalCredit := by
+      result.plan.closerReward + result.plan.totalCredit := by
   simp [closeMaker] at success
   rcases success with ⟨_, _, _, _, _, _, funded, rfl⟩
-  change makerRoot.rentPrincipal + (lamports - makerRoot.rentPrincipal) = lamports
+  change makerRoot.rentPrincipal + (lamports - makerRoot.rentPrincipal)
+    = min cap (lamports - makerRoot.rentPrincipal)
+      + (lamports - min cap (lamports - makerRoot.rentPrincipal))
+  have bound : min cap (lamports - makerRoot.rentPrincipal) <= lamports := by
+    have := Nat.min_le_right cap (lamports - makerRoot.rentPrincipal)
+    omega
   omega
+
+/-- RULING D1 ITEM 4, and the theorem that makes it a ruling rather than a
+formula: the carve comes out of the DONATION SLICE and never out of the
+principal.  Whatever the cap is -- a caller may pass any number at all -- the
+recorded `rentOwner` still receives at least everything the maker put in. -/
+theorem the_closer_carve_never_touches_principal
+    (root : Root) (makerRoot : MakerRoot) (lamports cap : Nat)
+    (result : MakerCloseResult)
+    (success : closeMaker root makerRoot lamports cap = some result) :
+    result.plan.rentPrincipal <= result.plan.totalCredit := by
+  simp [closeMaker] at success
+  rcases success with ⟨_, _, _, _, _, _, funded, rfl⟩
+  change makerRoot.rentPrincipal <= lamports - min cap (lamports - makerRoot.rentPrincipal)
+  have := Nat.min_le_right cap (lamports - makerRoot.rentPrincipal)
+  omega
+
+/-- And the carve is bounded by BOTH the cap and the donation, so a cap larger
+than the donation pays out the donation rather than inventing lamports. -/
+theorem the_closer_carve_is_capped_and_bounded_by_the_donation
+    (root : Root) (makerRoot : MakerRoot) (lamports cap : Nat)
+    (result : MakerCloseResult)
+    (success : closeMaker root makerRoot lamports cap = some result) :
+    result.plan.closerReward <= cap /\
+      result.plan.closerReward <= result.plan.unclassifiedDonation := by
+  simp [closeMaker] at success
+  rcases success with ⟨_, _, _, _, _, _, funded, rfl⟩
+  exact ⟨Nat.min_le_left _ _, Nat.min_le_right _ _⟩
+
+/-- Today's deployed behaviour is the cap-zero instance, byte for byte: a zero
+cap pays nobody and credits the whole observed balance, which is exactly what
+`close_maker_replay_v2` did before the carve existed. -/
+theorem a_zero_cap_is_todays_close
+    (root : Root) (makerRoot : MakerRoot) (lamports : Nat)
+    (result : MakerCloseResult)
+    (success : closeMaker root makerRoot lamports 0 = some result) :
+    result.plan.closerReward = 0 /\ result.plan.totalCredit = lamports := by
+  simp [closeMaker] at success
+  rcases success with ⟨_, _, _, _, _, _, funded, rfl⟩
+  exact ⟨by simp, by simp⟩
 
 /-- Fee conservation at close: a close is never the event that ends a nonzero
 obligation.  The only transition that zeroes `feeOwed` is `settleFeeOwed`,
 which demands the exact recorded amount -- so the receivable either stands on
 the replay or was paid in full, never erased. -/
 theorem close_conserves_fee_receivable
-    (root : Root) (makerRoot : MakerRoot) (lamports : Nat)
+    (root : Root) (makerRoot : MakerRoot) (lamports cap : Nat)
     (result : MakerCloseResult)
-    (success : closeMaker root makerRoot lamports = some result) :
+    (success : closeMaker root makerRoot lamports cap = some result) :
     makerRoot.feeOwed = 0 := by
   simp [closeMaker] at success
   exact success.1.2.2.2.2.2.1
 
 /-- The debtor's close refuses by name: `feeOwed ≠ 0` alone forces refusal. -/
 theorem debtor_close_refuses
-    (root : Root) (makerRoot : MakerRoot) (lamports : Nat)
+    (root : Root) (makerRoot : MakerRoot) (lamports cap : Nat)
     (owing : makerRoot.feeOwed ≠ 0) :
-    closeMaker root makerRoot lamports = none := by
+    closeMaker root makerRoot lamports cap = none := by
   simp [closeMaker, owing]
 
 /-- The reachability amendment (cohort-9 review item 1, amendment 1): global
@@ -589,11 +655,35 @@ theorem hostile_replay_refuses :
 theorem closure_path :
     let created := (consumeNonce openRoot none intent .inline (some funding)).get!
     let retiring := (beginRetiring created.root).get!
-    let closed := (closeMaker retiring created.makerRoot 111).get!
+    let closed := (closeMaker retiring created.makerRoot 111 0).get!
     closed.plan.rentPrincipal = 100 ∧
       closed.plan.unclassifiedDonation = 11 ∧
+      closed.plan.closerReward = 0 ∧
+      closed.plan.totalCredit = 111 ∧
       closed.root.openMakerRootCount = 0 ∧
       rootClosable closed.root = true := by
+  native_decide
+
+/-- NON-VACUITY for the carve: the same close under a cap of four pays the
+closer four out of the eleven-lamport donation and credits the recorded owner
+one hundred and seven, which is still more than the hundred of principal. -/
+theorem a_funded_closer_is_paid_out_of_the_donation_alone :
+    let created := (consumeNonce openRoot none intent .inline (some funding)).get!
+    let retiring := (beginRetiring created.root).get!
+    let closed := (closeMaker retiring created.makerRoot 111 4).get!
+    closed.plan.rentPrincipal = 100 ∧
+      closed.plan.unclassifiedDonation = 11 ∧
+      closed.plan.closerReward = 4 ∧
+      closed.plan.totalCredit = 107 := by
+  native_decide
+
+/-- And a cap larger than the donation carves the donation, never the
+principal: the beneficiary still receives every lamport the maker put in. -/
+theorem an_oversized_cap_carves_only_the_donation :
+    let created := (consumeNonce openRoot none intent .inline (some funding)).get!
+    let retiring := (beginRetiring created.root).get!
+    let closed := (closeMaker retiring created.makerRoot 111 1000000).get!
+    closed.plan.closerReward = 11 ∧ closed.plan.totalCredit = 100 := by
   native_decide
 
 /-- The debtor's whole story, decided: an outstanding fee refuses the close
@@ -603,11 +693,11 @@ theorem debtor_settles_before_closing :
     let created := (consumeNonce openRoot none intent .inline (some funding)).get!
     let owing := (recordFeeOwed created.makerRoot 4).get!
     let retiring := (beginRetiring created.root).get!
-    closeMaker retiring owing 111 = none ∧
+    closeMaker retiring owing 111 0 = none ∧
       consumeNonce created.root (some owing)
         { intent with nonce := 1 } .inline none = none ∧
       settleFeeOwed owing 3 = none ∧
-      (closeMaker retiring ((settleFeeOwed owing 4).get!) 111).isSome = true := by
+      (closeMaker retiring ((settleFeeOwed owing 4).get!) 111 0).isSome = true := by
   native_decide
 
 /-- Retirement begins over a standing maker root -- the count is drained

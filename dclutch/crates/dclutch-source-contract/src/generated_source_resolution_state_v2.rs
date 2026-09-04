@@ -42,6 +42,13 @@ pub const SOURCE_RESOLUTION_PHASE_FAILURE_COMMITTED_V1: u8 = 4;
 pub const SOURCE_RESOLUTION_PHASE_RETIRED_V1: u8 = 5;
 /// One past the greatest phase tag.
 pub const SOURCE_RESOLUTION_PHASE_LIMIT_V1: u8 = 6;
+/// The greatest number of funded recovery attempts a market can buy, and
+/// therefore the exclusive bound on the record's `active_attempt` byte.
+///
+/// It is the recovery policy's own capacity rather than a second number
+/// chosen beside it: an `active_attempt` the policy cannot fund is an attempt
+/// nothing paid for.
+pub const SOURCE_RESOLUTION_MAX_RECOVERY_ATTEMPTS_V2: u8 = 4;
 #[cfg(test)]
 #[rustfmt::skip]
 pub(crate) const SOURCE_RESOLUTION_STATE_V2_FRESH_EXAMPLE: [u8; 224] = [

@@ -1851,6 +1851,7 @@ dependencies = [
  "dclutch-product-runtime-v2-operator",
  "dclutch-realm-contract",
  "dclutch-record-contract",
+ "dclutch-refusal-registry",
  "dclutch-registry-contract",
  "dclutch-release-set-contract",
  "dclutch-rent-contract",

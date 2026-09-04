@@ -3,11 +3,25 @@
 use dclutch_product_runtime_v2::{Error as ProductRuntimeError, ResultDomainV2};
 
 use super::{
-    ContentId, Error, MarketChildDeltaV1, Result, SourceMaterialV3, SourceResolutionPhaseV1,
-    SourceResolutionRouteV1, WindowSpecV1, generated_source_resolution_state_v2 as generated,
+    ContentId, Error, MarketChildDeltaV1, RecoveryAttemptV2, RecoveryPolicyV2, Result,
+    SourceMaterialV3, SourceResolutionPhaseV1, SourceResolutionRouteV1, WindowSpecV1,
+    generated_source_resolution_state_v2 as generated,
 };
 
-const MAX_RECOVERY_ATTEMPTS_V2: u8 = 4;
+/// The exclusive bound on the persisted `active_attempt` byte.
+///
+/// It used to be a bare `4` written here, a second bare `4` inside the Lean
+/// record's own validity rule, and `RECOVERY_POLICY_MAX_ATTEMPTS_V2` emitted
+/// from the policy's schema -- three authors of one number. It is now the
+/// emitted one, and the Lean rule is defined as the policy's capacity rather
+/// than as a numeral beside it, because an `active_attempt` the policy cannot
+/// fund is an attempt nothing paid for.
+const MAX_RECOVERY_ATTEMPTS_V2: u8 = generated::SOURCE_RESOLUTION_MAX_RECOVERY_ATTEMPTS_V2;
+
+const _: () = assert!(
+    MAX_RECOVERY_ATTEMPTS_V2 as usize == super::RECOVERY_POLICY_MAX_ATTEMPTS_V2,
+    "the state's attempt bound and the policy's capacity are one number"
+);
 
 /// PDA seed material for one runtime-width Source resolution state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -128,6 +142,36 @@ impl SourceResolutionDecisionV2 {
     pub const fn terminal_sequence(self) -> u64 {
         self.terminal_sequence
     }
+}
+
+/// The one thing a permissionless crank of the funded ladder can do.
+///
+/// The two variants are not two transitions. They are the two arms of one
+/// decision taken at one moment -- the current window has closed, and either
+/// the policy funds another attempt or it does not -- so a caller never chooses
+/// between them and no rung has both available or neither.
+///
+/// Each arm carries the attempt whose funding pays for it. Entering attempt `n`
+/// is paid by attempt `n`'s own allocation, which is the binding founding
+/// established when the compartments were created; the exhaustion is paid by
+/// the compartment configured by the policy itself, because no single attempt
+/// owns the end of the ladder.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecoveryCrankV2 {
+    /// The ladder entered a funded attempt.
+    Advanced {
+        /// Zero-based index of the attempt now active.
+        attempt_index: u8,
+        /// The attempt the ladder entered, whose allocation pays this crank.
+        attempt: RecoveryAttemptV2,
+    },
+    /// The last funded window closed with nothing observed.
+    Exhausted {
+        /// Zero-based index of the attempt the ladder just spent.
+        final_attempt_index: u8,
+        /// The spent attempt, whose provider release names the dead route.
+        final_attempt: RecoveryAttemptV2,
+    },
 }
 
 /// Persisted Source state whose selector covers the full Product Runtime V2 domain.
@@ -543,6 +587,231 @@ impl SourceResolutionStateV2 {
         Ok(decision)
     }
 
+    /// One permissionless crank of the funded ordered-recovery ladder.
+    ///
+    /// This is the transition the machine did not have. `Phase::Recovery` was a
+    /// phase the record could describe and no route could reach: the primary
+    /// exhaustion above refuses a recovery-bearing material on purpose, and the
+    /// failure commit only fires from `Exhausted`, so a market founded with a
+    /// recovery policy had no terminal at all and every holder's principal sat
+    /// in it. This is the way in.
+    ///
+    /// It is ONE transition rather than a family, and the two outcomes are the
+    /// two arms of a single decision made at a single moment: the current
+    /// window has closed, and either the policy funds another attempt (the
+    /// ladder advances) or it does not (the ladder is exhausted). Nothing else
+    /// can happen at that moment, which is what makes the walk a walk instead
+    /// of a choice -- `Ladder.a_closed_recovery_window_has_exactly_one_move` in
+    /// `SourceResolutionStateV2Abi.lean` is exactly that claim.
+    ///
+    /// What it does not do: move a lamport. The caller debits the compartment
+    /// the returned attempt names, exactly as the deadline-failure walk debits
+    /// the compartment the material names. An advance that cannot be paid for
+    /// must not move the market either, so the outer plans the debit first.
+    ///
+    /// Timing is strict on both legs. On `Primary` the window is the material's
+    /// own `WindowSpecV1` closed end plus its liveness grace -- the same
+    /// `primary_deadline` the failure walk uses. On `Recovery` it is the active
+    /// attempt's own committed absolute deadline. In both cases the last
+    /// admissible second for an honest observation and the first admissible
+    /// second for a crank are different seconds.
+    #[allow(clippy::too_many_arguments)]
+    pub fn crank_recovery_ladder(
+        &mut self,
+        material_id: ContentId,
+        material: SourceMaterialV3,
+        authenticated_window_spec_id: ContentId,
+        window: WindowSpecV1,
+        authenticated_recovery_policy_id: ContentId,
+        policy: RecoveryPolicyV2,
+        expected_generation: u64,
+        current_unix_seconds: i64,
+    ) -> Result<RecoveryCrankV2> {
+        self.validate_material_and_generation(material_id, expected_generation)?;
+        let active = self.authenticate_ladder(
+            material,
+            authenticated_window_spec_id,
+            authenticated_recovery_policy_id,
+            policy,
+        )?;
+        if current_unix_seconds <= 0 {
+            return Err(Error::InvalidRecoveryTransition);
+        }
+
+        // The window whose closing this crank claims. On `Primary` it is the
+        // market's own; on `Recovery` it is the active attempt's, which is why
+        // an attempt index nothing funds has no window and can never close.
+        let due = match self.phase {
+            SourceResolutionPhaseV1::Primary => window
+                .end_unix_seconds()
+                .checked_add(i64::from(window.max_age_seconds()))
+                .ok_or(Error::ArithmeticOverflow)?,
+            SourceResolutionPhaseV1::Recovery => active
+                .ok_or(Error::InvalidRecoveryTransition)?
+                .1
+                .deadline_unix_seconds(),
+            _ => return Err(Error::InvalidRecoveryTransition),
+        };
+        if current_unix_seconds <= due {
+            return Err(Error::DeadlineNotReached);
+        }
+
+        let entering = match self.phase {
+            SourceResolutionPhaseV1::Primary => 0_u8,
+            _ => active
+                .ok_or(Error::InvalidRecoveryTransition)?
+                .0
+                .checked_add(1)
+                .ok_or(Error::ArithmeticOverflow)?,
+        };
+
+        // Funded and enterable are one word. `attempt` refuses any index the
+        // policy does not fund, so the advance arm cannot be reached for a leg
+        // nobody paid for and the exhaustion arm is its exact complement.
+        match policy.attempt(entering) {
+            Ok(attempt) => {
+                let mut candidate = *self;
+                candidate.phase = SourceResolutionPhaseV1::Recovery;
+                candidate.active_attempt = entering;
+                candidate.validate_shape()?;
+                *self = candidate;
+                Ok(RecoveryCrankV2::Advanced {
+                    attempt_index: entering,
+                    attempt,
+                })
+            }
+            Err(_) => {
+                let (final_index, final_attempt) = active.ok_or(Error::RecoveryNotExhausted)?;
+                let mut candidate = *self;
+                candidate.phase = SourceResolutionPhaseV1::Exhausted;
+                candidate.active_attempt = 0;
+                candidate.validate_shape()?;
+                *self = candidate;
+                Ok(RecoveryCrankV2::Exhausted {
+                    final_attempt_index: final_index,
+                    final_attempt,
+                })
+            }
+        }
+    }
+
+    /// Map one exact normalized recovery result through an independently
+    /// authenticated Product Runtime V2 domain.
+    ///
+    /// The recovery leg is stricter than the primary one about time, and
+    /// deliberately so. The primary window lives in a separate authenticated
+    /// `WindowSpecV1` record and its freshness is the provider outer's to
+    /// enforce; a recovery attempt's deadline is a field of the policy this
+    /// transition already holds, so refusing a late capture here costs nothing
+    /// and closes the gap by which a crank and a capture could both claim the
+    /// same second.
+    ///
+    /// The capture must also name the active attempt's OWN source spec and
+    /// provider release. A market that bought a named alternative feed is not a
+    /// market where any feed may answer at any time: attempt `n` is the only
+    /// source admissible while the ladder stands on `n`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn resolve_recovery_from_authenticated_domain(
+        &mut self,
+        material_id: ContentId,
+        material: SourceMaterialV3,
+        authenticated_window_spec_id: ContentId,
+        authenticated_product_record_digest: ContentId,
+        authenticated_recovery_policy_id: ContentId,
+        policy: RecoveryPolicyV2,
+        authenticated_attempt_source_spec_id: ContentId,
+        authenticated_provider_release_id: ContentId,
+        domain: ResultDomainV2<'_>,
+        resolution_evidence_id: ContentId,
+        numerator: i128,
+        denominator: u64,
+        source_scale_exponent: i32,
+        expected_generation: u64,
+        current_unix_seconds: i64,
+        terminal_sequence: u64,
+    ) -> Result<SourceResolutionDecisionV2> {
+        self.validate_material_and_generation(material_id, expected_generation)?;
+        material.authenticate_product_record(authenticated_product_record_digest)?;
+        let active = self.authenticate_ladder(
+            material,
+            authenticated_window_spec_id,
+            authenticated_recovery_policy_id,
+            policy,
+        )?;
+        if self.phase != SourceResolutionPhaseV1::Recovery || current_unix_seconds <= 0 {
+            return Err(Error::InvalidRecoveryTransition);
+        }
+        let (_, attempt) = active.ok_or(Error::InvalidRecoveryTransition)?;
+        if attempt.source_spec_id() != authenticated_attempt_source_spec_id
+            || attempt.provider_release_id() != authenticated_provider_release_id
+        {
+            return Err(Error::LinkageMismatch);
+        }
+        if current_unix_seconds > attempt.deadline_unix_seconds() {
+            return Err(Error::DeadlineElapsed);
+        }
+        let outcome_count = domain
+            .outcome_count()
+            .map_err(|_| Error::InvalidResultMap)?;
+        let selector = domain
+            .select_ordinary(numerator, denominator, source_scale_exponent)
+            .map_err(|error| match error {
+                ProductRuntimeError::UnsupportedScale => Error::NonCanonicalSourceScale,
+                ProductRuntimeError::ArithmeticOverflow => Error::ArithmeticOverflow,
+                _ => Error::InvalidResultMap,
+            })?;
+        let decision = SourceResolutionDecisionV2::new(
+            SourceResolutionRouteV1::Recovery,
+            selector,
+            outcome_count,
+            resolution_evidence_id,
+            terminal_sequence,
+        )?;
+        let mut candidate = *self;
+        candidate.phase = SourceResolutionPhaseV1::Resolved;
+        candidate.active_attempt = 0;
+        candidate.terminal_route = Some(SourceResolutionRouteV1::Recovery);
+        candidate.result_selector = selector;
+        candidate.resolution_evidence_id = Some(resolution_evidence_id);
+        candidate.terminal_sequence = terminal_sequence;
+        candidate.resolved_at_unix_seconds = current_unix_seconds;
+        candidate.validate_shape()?;
+        *self = candidate;
+        Ok(decision)
+    }
+
+    /// Join the material, its window and its recovery policy, and project the
+    /// attempt the state currently stands on.
+    ///
+    /// `None` means the state is not on `Recovery`, which is a different fact
+    /// from "the policy does not fund this index" -- the second cannot happen,
+    /// because the record's own canonicity rule bounds `active_attempt` and the
+    /// join below refuses any index the policy will not hand back.
+    fn authenticate_ladder(
+        self,
+        material: SourceMaterialV3,
+        authenticated_window_spec_id: ContentId,
+        authenticated_recovery_policy_id: ContentId,
+        policy: RecoveryPolicyV2,
+    ) -> Result<Option<(u8, RecoveryAttemptV2)>> {
+        // Both records reached this crate as values a caller authenticated by
+        // digest, exactly as the terminal transitions take an authenticated
+        // result domain. This crate hashes nothing and cannot re-derive them.
+        if material.window_spec() != authenticated_window_spec_id {
+            return Err(Error::LinkageMismatch);
+        }
+        if material.recovery_policy() != Some(authenticated_recovery_policy_id) {
+            return Err(Error::LinkageMismatch);
+        }
+        match self.phase {
+            SourceResolutionPhaseV1::Recovery => {
+                let attempt = policy.attempt(self.active_attempt)?;
+                Ok(Some((self.active_attempt, attempt)))
+            }
+            _ => Ok(None),
+        }
+    }
+
     /// Reconstruct the terminal decision against the independently
     /// authenticated Product Runtime V2 outcome count.
     pub fn decision(self, authenticated_outcome_count: u32) -> Result<SourceResolutionDecisionV2> {
@@ -916,6 +1185,416 @@ mod tests {
             Err(Error::RecoveryNotExhausted)
         );
         assert_eq!(state.phase(), SourceResolutionPhaseV1::Primary);
+    }
+
+    /// The two-source market: a primary window and exactly one funded
+    /// alternative, which is the shape founding admits and the shape the
+    /// campaign walks.
+    fn two_source_material() -> (SourceMaterialV3, RecoveryPolicyV2, ContentId) {
+        let policy = RecoveryPolicyV2::new(
+            id(0x60),
+            [
+                Some(
+                    RecoveryAttemptV2::new(id(0x61), id(0x62), RECOVERY_DEADLINE, id(0x63))
+                        .expect("attempt"),
+                ),
+                None,
+                None,
+                None,
+            ],
+            1,
+        )
+        .expect("policy");
+        let policy_id = id(0x64);
+        let material = SourceMaterialV3::explicitly_unbounded(
+            id(3),
+            id(4),
+            id(5),
+            id(6),
+            Some(policy_id),
+            id(7),
+        );
+        (material, policy, policy_id)
+    }
+
+    const PRIMARY_DEADLINE: i64 = 1_000_600;
+    const RECOVERY_DEADLINE: i64 = 1_002_000;
+
+    fn ladder_state() -> SourceResolutionStateV2 {
+        SourceResolutionStateV2::fresh(key(1), 9, id(2), key(3), 7, 0, 0)
+            .expect("fresh")
+            .state()
+    }
+
+    #[test]
+    fn the_funded_ladder_walks_primary_recovery_exhausted_failure() {
+        // The whole property, executed on the shape founding admits. A market
+        // that bought one named alternative source cannot be terminalized at
+        // all without this walk: `exhaust_after_primary_deadline` refuses it by
+        // name, so before the crank existed every holder's principal sat in a
+        // market with no exit.
+        let (material, policy, policy_id) = two_source_material();
+        let window = terminal_window(id(4), 1_000_000, 600);
+        let mut state = ladder_state();
+
+        // Primary window still open: the crank refuses on the second the honest
+        // observation is still admissible.
+        assert_eq!(
+            state.crank_recovery_ladder(
+                id(2),
+                material,
+                id(5),
+                window,
+                policy_id,
+                policy,
+                9,
+                PRIMARY_DEADLINE
+            ),
+            Err(Error::DeadlineNotReached)
+        );
+        assert_eq!(state.phase(), SourceResolutionPhaseV1::Primary);
+
+        // One second later the ladder advances onto the funded alternative.
+        let crank = state
+            .crank_recovery_ladder(
+                id(2),
+                material,
+                id(5),
+                window,
+                policy_id,
+                policy,
+                9,
+                PRIMARY_DEADLINE + 1,
+            )
+            .expect("the funded alternative is enterable");
+        assert_eq!(state.phase(), SourceResolutionPhaseV1::Recovery);
+        assert_eq!(
+            crank,
+            RecoveryCrankV2::Advanced {
+                attempt_index: 0,
+                attempt: policy.attempt(0).expect("attempt"),
+            },
+            "the entered attempt names the compartment that pays for entering it"
+        );
+
+        // The alternative's own window is open until its committed deadline.
+        assert_eq!(
+            state.crank_recovery_ladder(
+                id(2),
+                material,
+                id(5),
+                window,
+                policy_id,
+                policy,
+                9,
+                RECOVERY_DEADLINE
+            ),
+            Err(Error::DeadlineNotReached)
+        );
+        assert_eq!(state.phase(), SourceResolutionPhaseV1::Recovery);
+
+        // Past it, the same one transition exhausts rather than advances --
+        // there is no second attempt to enter.
+        let crank = state
+            .crank_recovery_ladder(
+                id(2),
+                material,
+                id(5),
+                window,
+                policy_id,
+                policy,
+                9,
+                RECOVERY_DEADLINE + 1,
+            )
+            .expect("the last funded window closed");
+        assert_eq!(state.phase(), SourceResolutionPhaseV1::Exhausted);
+        assert_eq!(
+            crank,
+            RecoveryCrankV2::Exhausted {
+                final_attempt_index: 0,
+                final_attempt: policy.attempt(0).expect("attempt"),
+            }
+        );
+
+        // And `Exhausted` is where the existing failure commit already begins,
+        // so the ladder added a way in and changed no way out.
+        let domain_bytes = runtime_domain_bytes(2);
+        let domain = ResultDomainV2::decode(&domain_bytes).expect("domain");
+        let decision = state
+            .commit_failure_from_authenticated_domain(
+                id(2),
+                material,
+                id(3),
+                domain,
+                9,
+                RECOVERY_DEADLINE + 2,
+                1,
+            )
+            .expect("the pre-disclosed outcome is reachable at the end of the ladder");
+        assert_eq!(state.phase(), SourceResolutionPhaseV1::FailureCommitted);
+        assert_eq!(decision.route(), SourceResolutionRouteV1::Failure);
+        assert_eq!(decision.selector(), domain.failure_selector());
+    }
+
+    #[test]
+    fn the_alternative_source_observed_inside_its_window_resolves() {
+        // The honest recovery branch. The market bought the alternative and the
+        // alternative answered, so the holders get a real outcome rather than
+        // the failure cell, and the terminal route records that it came from
+        // recovery rather than from the primary.
+        let (material, policy, policy_id) = two_source_material();
+        let window = terminal_window(id(4), 1_000_000, 600);
+        let domain_bytes = runtime_domain_bytes(3);
+        let domain = ResultDomainV2::decode(&domain_bytes).expect("domain");
+        let mut state = ladder_state();
+        state
+            .crank_recovery_ladder(
+                id(2),
+                material,
+                id(5),
+                window,
+                policy_id,
+                policy,
+                9,
+                PRIMARY_DEADLINE + 1,
+            )
+            .expect("advance");
+
+        let decision = state
+            .resolve_recovery_from_authenticated_domain(
+                id(2),
+                material,
+                id(5),
+                id(3),
+                policy_id,
+                policy,
+                id(0x61),
+                id(0x62),
+                domain,
+                id(0x70),
+                0,
+                1,
+                0,
+                9,
+                RECOVERY_DEADLINE,
+                4,
+            )
+            .expect("the alternative answered inside its own window");
+        assert_eq!(state.phase(), SourceResolutionPhaseV1::Resolved);
+        assert_eq!(decision.route(), SourceResolutionRouteV1::Recovery);
+        assert!(decision.selector() < domain.failure_selector());
+        assert_eq!(
+            state.active_attempt, 0,
+            "a terminal state carries no attempt"
+        );
+    }
+
+    #[test]
+    fn a_capture_against_the_wrong_attempts_source_refuses() {
+        // A market that bought a named alternative is not a market where any
+        // feed may answer at any time. The active attempt's own source spec and
+        // provider release are the only pair admissible while the ladder stands
+        // on it.
+        let (material, policy, policy_id) = two_source_material();
+        let window = terminal_window(id(4), 1_000_000, 600);
+        let domain_bytes = runtime_domain_bytes(3);
+        let domain = ResultDomainV2::decode(&domain_bytes).expect("domain");
+        let mut state = ladder_state();
+        state
+            .crank_recovery_ladder(
+                id(2),
+                material,
+                id(5),
+                window,
+                policy_id,
+                policy,
+                9,
+                PRIMARY_DEADLINE + 1,
+            )
+            .expect("advance");
+
+        for (source_spec, release, why) in [
+            (id(0x99), id(0x62), "a foreign source spec"),
+            (id(0x61), id(0x99), "a foreign provider release"),
+            (
+                id(4),
+                id(0x62),
+                "the PRIMARY source spec, which is the near miss",
+            ),
+        ] {
+            assert_eq!(
+                state.resolve_recovery_from_authenticated_domain(
+                    id(2),
+                    material,
+                    id(5),
+                    id(3),
+                    policy_id,
+                    policy,
+                    source_spec,
+                    release,
+                    domain,
+                    id(0x70),
+                    0,
+                    1,
+                    0,
+                    9,
+                    RECOVERY_DEADLINE,
+                    4,
+                ),
+                Err(Error::LinkageMismatch),
+                "{why} must not resolve a market standing on attempt 0"
+            );
+            assert_eq!(state.phase(), SourceResolutionPhaseV1::Recovery);
+        }
+
+        // And the alternative's own window closes: a capture one second past
+        // the committed deadline is the crank's second, not the capture's.
+        assert_eq!(
+            state.resolve_recovery_from_authenticated_domain(
+                id(2),
+                material,
+                id(5),
+                id(3),
+                policy_id,
+                policy,
+                id(0x61),
+                id(0x62),
+                domain,
+                id(0x70),
+                0,
+                1,
+                0,
+                9,
+                RECOVERY_DEADLINE + 1,
+                4,
+            ),
+            Err(Error::DeadlineElapsed)
+        );
+        assert_eq!(state.phase(), SourceResolutionPhaseV1::Recovery);
+    }
+
+    #[test]
+    fn the_ladder_refuses_a_policy_the_material_does_not_name() {
+        // The policy reaches this crate as a value the caller authenticated by
+        // digest. Presenting a well-formed policy the material never selected is
+        // the whole substitution attack, and it is one comparison.
+        let no_recovery = material(id(3));
+        let (material, policy, policy_id) = two_source_material();
+        let window = terminal_window(id(4), 1_000_000, 600);
+        let mut state = ladder_state();
+        assert_eq!(
+            state.crank_recovery_ladder(
+                id(2),
+                material,
+                id(5),
+                window,
+                id(0x9a),
+                policy,
+                9,
+                PRIMARY_DEADLINE + 1
+            ),
+            Err(Error::LinkageMismatch)
+        );
+        assert_eq!(
+            state.crank_recovery_ladder(
+                id(2),
+                material,
+                id(0x9b),
+                window,
+                policy_id,
+                policy,
+                9,
+                PRIMARY_DEADLINE + 1
+            ),
+            Err(Error::LinkageMismatch)
+        );
+        // A material that bought no alternatives has no ladder to crank at all:
+        // it selects no policy, so no policy authenticates against it. The
+        // no-recovery market keeps the primary exhaustion it already had.
+        assert_eq!(
+            state.crank_recovery_ladder(
+                id(2),
+                no_recovery,
+                id(5),
+                window,
+                policy_id,
+                policy,
+                9,
+                PRIMARY_DEADLINE + 1
+            ),
+            Err(Error::LinkageMismatch),
+            "a material that selects no policy cannot be walked with one"
+        );
+        assert_eq!(state.phase(), SourceResolutionPhaseV1::Primary);
+    }
+
+    #[test]
+    fn the_ladder_cannot_be_cranked_out_of_a_terminal_state() {
+        // Once the market is decided the crank has nothing to move, whatever
+        // deadline has passed. Without this the ladder would be a route by
+        // which a late crank overwrites a real observation.
+        let (material, policy, policy_id) = two_source_material();
+        let window = terminal_window(id(4), 1_000_000, 600);
+        let domain_bytes = runtime_domain_bytes(3);
+        let domain = ResultDomainV2::decode(&domain_bytes).expect("domain");
+        let mut state = ladder_state();
+        state
+            .resolve_primary_from_authenticated_domain(
+                id(2),
+                material,
+                id(3),
+                domain,
+                id(0x71),
+                0,
+                1,
+                0,
+                9,
+                1_000_000,
+                3,
+            )
+            .expect("the primary answered");
+        assert_eq!(state.phase(), SourceResolutionPhaseV1::Resolved);
+        assert_eq!(
+            state.crank_recovery_ladder(
+                id(2),
+                material,
+                id(5),
+                window,
+                policy_id,
+                policy,
+                9,
+                RECOVERY_DEADLINE + 1,
+            ),
+            Err(Error::InvalidRecoveryTransition)
+        );
+        assert_eq!(state.phase(), SourceResolutionPhaseV1::Resolved);
+    }
+
+    #[test]
+    fn the_state_attempt_bound_is_the_policys_capacity() {
+        // Three files used to write the number 4. The state's bound is now the
+        // emitted policy capacity, and `RecoveryPolicyV2` refuses to describe a
+        // ladder wider than the record can carry -- so an `active_attempt` the
+        // policy cannot fund is unrepresentable rather than merely unreachable.
+        assert_eq!(
+            usize::from(MAX_RECOVERY_ATTEMPTS_V2),
+            crate::RECOVERY_POLICY_MAX_ATTEMPTS_V2
+        );
+        let attempt = RecoveryAttemptV2::new(id(0x61), id(0x62), RECOVERY_DEADLINE, id(0x63))
+            .expect("attempt");
+        assert_eq!(
+            RecoveryPolicyV2::new(id(0x60), [Some(attempt), None, None, None], 0),
+            Err(Error::RecoveryExceedsCapacity),
+            "a ladder with no funded attempt is not a ladder"
+        );
+        assert_eq!(
+            RecoveryPolicyV2::new(
+                id(0x60),
+                [Some(attempt), None, None, None],
+                MAX_RECOVERY_ATTEMPTS_V2 + 1
+            ),
+            Err(Error::RecoveryExceedsCapacity)
+        );
     }
 
     #[test]

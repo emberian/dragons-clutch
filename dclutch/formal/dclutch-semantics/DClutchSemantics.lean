@@ -47,6 +47,7 @@ import DClutchSemantics.GeneralConfigAbi
 import DClutchSemantics.GeneralConfigV3Abi
 import DClutchSemantics.GeneralRequestProfilesV1
 import DClutchSemantics.GeneralTransitionV3
+import DClutchSemantics.ProtocolParametersV1
 import DClutchSemantics.ProductPayoff
 import DClutchSemantics.ProductPayoffExamples
 import DClutchSemantics.ProductPayoffAbi

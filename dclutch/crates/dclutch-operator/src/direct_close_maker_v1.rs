@@ -63,7 +63,8 @@ use dclutch_direct_codec::{
         direct_close_maker_effect_schema_v1,
     },
     close_maker_v1::{
-        DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1, DIRECT_CLOSE_MAKER_REQUEST_BYTES_V1,
+        DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1, DIRECT_CLOSE_MAKER_CLOSER_REWARD_V1,
+        DIRECT_CLOSE_MAKER_RECEIPT_BYTES_V1, DIRECT_CLOSE_MAKER_REQUEST_BYTES_V1,
         DirectCloseMakerReceiptV1, DirectCloseMakerRequestV1,
         direct_close_maker_account_privileges_v1,
     },
@@ -534,6 +535,8 @@ pub struct DirectCloseMakerSubmitV1 {
     pub rent_principal: u64,
     /// Lamports above principal, explicitly not fees or reserves.
     pub unclassified_donation: u64,
+    /// The permissionless closer's carve, out of the donation slice alone.
+    pub closer_reward: u64,
     /// Exact total lamports credited to the beneficiary.
     pub total_credit: u64,
     /// Exact program required to produce immediate return data.
@@ -541,7 +544,7 @@ pub struct DirectCloseMakerSubmitV1 {
     /// Typed receipt predicted from the request and exact poststate.
     pub expected_receipt: DirectCloseMakerReceiptV1,
     /// Exact DCLTDMX1 return-data body predicted from authenticated inputs.
-    pub expected_receipt_body: [u8; 240],
+    pub expected_receipt_body: [u8; DIRECT_CLOSE_MAKER_RECEIPT_BYTES_V1],
 }
 
 /// Authenticated exact poststate proving the close needs no resubmission.
@@ -1172,6 +1175,7 @@ fn assemble_plan(
         authenticated.root_state,
         maker_root,
         snapshot.maker_replay.lamports,
+        DIRECT_CLOSE_MAKER_CLOSER_REWARD_V1,
     )
     .map_err(|error| match error {
         SuccessorError::FeeOwedOutstanding => DirectCloseMakerPlanErrorV1::FeeOutstanding,
@@ -1210,6 +1214,7 @@ fn assemble_plan(
         post_root_digest,
         rent_principal: closed.plan.rent_principal,
         unclassified_donation: closed.plan.unclassified_donation,
+        closer_reward: closed.plan.closer_reward,
         total_credit: closed.plan.total_credit,
         remaining_open_maker_roots: closed.root.open_maker_root_count(),
     }
@@ -1285,6 +1290,7 @@ fn assemble_plan(
             expected_rent_owner_lamports,
             rent_principal: closed.plan.rent_principal,
             unclassified_donation: closed.plan.unclassified_donation,
+            closer_reward: closed.plan.closer_reward,
             total_credit: closed.plan.total_credit,
             expected_receipt_producer: snapshot.trading_program.key,
             expected_receipt,

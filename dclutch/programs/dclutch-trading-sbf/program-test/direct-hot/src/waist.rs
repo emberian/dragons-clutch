@@ -1365,22 +1365,47 @@ pub(crate) fn superseded_per_occurrence_lookup_addresses(
     addresses
 }
 
-pub fn add_lookup_table(test: &mut ProgramTest, addresses: &[Pubkey]) {
+/// The canonical lookup-table account for one address set.
+///
+/// One author for the encoding, because there are two ways to put a table in
+/// front of a bank -- at genesis and between two transactions of a same-bank
+/// campaign -- and a campaign that re-derived the second would be a second
+/// authority for the table's own serialization.
+#[must_use]
+pub fn lookup_table_account(addresses: &[Pubkey]) -> Account {
     let data = AddressLookupTable {
         meta: LookupTableMeta::default(),
         addresses: addresses.into(),
     }
     .serialize_for_tests()
     .expect("lookup-table bytes");
-    test.add_account(
-        LOOKUP_TABLE,
-        Account {
-            lamports: Rent::default().minimum_balance(data.len()),
-            data,
-            owner: solana_address_lookup_table_interface::program::id(),
-            executable: false,
-            rent_epoch: 0,
-        },
+    Account {
+        lamports: Rent::default().minimum_balance(data.len()),
+        data,
+        owner: solana_address_lookup_table_interface::program::id(),
+        executable: false,
+        rent_epoch: 0,
+    }
+}
+
+pub fn add_lookup_table(test: &mut ProgramTest, addresses: &[Pubkey]) {
+    test.add_account(LOOKUP_TABLE, lookup_table_account(addresses));
+}
+
+/// Replace the live bank's lookup table between two transactions.
+///
+/// A multi-action campaign signs one account list per action and they differ,
+/// so the table each message resolves through differs too. `LookupTableMeta`
+/// defaults to a zero `last_extended_slot`, which is what makes a table written
+/// this way usable in the very next transaction rather than the next slot.
+///
+/// This is HARNESS TRANSPORT and nothing else: the table names no protocol
+/// fact, and every account it carries is already derived by the builder and
+/// checked against the bank by the campaign's own frame control.
+pub fn set_lookup_table(context: &mut ProgramTestContext, addresses: &[Pubkey]) {
+    context.set_account(
+        &LOOKUP_TABLE,
+        &solana_account::AccountSharedData::from(lookup_table_account(addresses)),
     );
 }
 

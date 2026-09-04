@@ -1901,6 +1901,7 @@ dependencies = [
  "dclutch-product-payoff-v2-codec",
  "dclutch-product-runtime-v2",
  "dclutch-product-runtime-v2-admission",
+ "dclutch-protocol-parameters-contract",
  "dclutch-realm-contract",
  "dclutch-registry-contract",
  "dclutch-registry-svm",
@@ -2400,6 +2401,13 @@ dependencies = [
 [[package]]
 name = "dclutch-program-test-evidence"
 version = "0.1.0"
+
+[[package]]
+name = "dclutch-protocol-parameters-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-sha256-adapter",
+]
 
 [[package]]
 name = "dclutch-provider-transport-v3-operator"

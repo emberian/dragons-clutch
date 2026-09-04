@@ -28,16 +28,15 @@ use dclutch_chain_bundle_builder::{
         program_with_view, system_program_builtin, vacant,
     },
     general::{
-        GeneralOpenBatchRequestInputV1, build_general_open_batch_bundle_v1,
-        derive_general_open_batch_request_v1,
+        GeneralActionPrestateV1, GeneralRequestInputV1, build_general_action_bundle_v1,
+        derive_general_request_v1,
     },
 };
 use dclutch_core_contract::ContentId;
 use dclutch_direct_hot_program_test_support::waist;
 use dclutch_general_adapter_contract::{
-    account_rules_v3::GeneralExternalAccountWidthsV3,
-    collection_v1::{GeneralBatchOccurrenceTermsV1, GeneralBatchV1},
-    local_state_v3::GeneralLocalStateV3,
+    collection_v1::{BatchStatusV1, GeneralBatchOccurrenceTermsV1, GeneralBatchV1},
+    local_state_v3::{GeneralLocalStateKindV3, GeneralLocalStateV3},
     state_artifacts_v3::{
         GENERAL_PRIMARY_PAYER_ACCOUNT_V3, GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3,
         GENERAL_PRIMARY_STATE_ACCOUNT_V3, general_system_program_account_v3,
@@ -83,12 +82,24 @@ use dclutch_rent_contract::{
 };
 use solana_account::Account;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
-use solana_program::{hash::hash, pubkey::Pubkey, rent::Rent};
+use solana_program::{hash::hash, instruction::Instruction, pubkey::Pubkey, rent::Rent};
 use solana_sdk::signature::{Keypair, Signer};
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
 
 const ACCELERATOR_PROGRAM: Pubkey = Pubkey::new_from_array([0xa1; 32]);
+/// `TradingSbfError::Root`, derived from its REGISTERED BAND.
+///
+/// The enum itself is the better author and it is not reachable from this
+/// workspace; see the `dclutch-refusal-registry` note in `Cargo.toml`. What
+/// decision 0007 forbids either way is the third option, a bare `16386` that
+/// keeps asserting an old number at a route that no longer raises it.
+const TRADING_ROOT: u32 = dclutch_refusal_registry::TRADING_REFUSAL_BASE + 0x002;
 const GENERATION: u64 = 9;
+/// What genesis funds every wallet this campaign installs.
+///
+/// One author: `add_case_accounts` writes it and `genesis_prestate` models it,
+/// and the frame control compares the two against the live bank.
+const GENESIS_PAYER_LAMPORTS: u64 = 10_000_000_000;
 const PRICE_SCALE: u64 = 1_000_000;
 const CLAIM_BASIS: [u8; 32] = [0x56; 32];
 
@@ -448,25 +459,114 @@ fn state_corpus(
     }
 }
 
+/// Everything one founded General market fixes before any action executes.
+///
+/// A market is founded ONCE and the family's fifteen actions run against that
+/// one founding: the same Product, the same selected release, the same manifest
+/// entry -- which since `ae026955d` binds one FAMILY lifecycle policy rather
+/// than one action's -- and the same Core Market, root and RentCredit.
+///
+/// Splitting this out of the per-action case is what makes more than one
+/// General action on one market expressible at all. Until 2026-09-04 the
+/// harness built the founding and the action together, so every run was a fresh
+/// market and "the second action" had no meaning to express.
+struct CampaignV1 {
+    outcome_count: u32,
+    payer: Pubkey,
+    rent: Rent,
+    substrate: waist::FixtureSubstrateV1,
+    releases: waist::Releases,
+    product: ProductRecords,
+    release: GeneralSelectedReleaseV1,
+    manifest: ManifestSelection,
+    state: StateCorpus,
+    waist_facts: WaistFactsV1,
+    accelerator_artifact: Vec<u8>,
+    accelerator_program: BuiltAccountV1,
+    accelerator_programdata_account: BuiltAccountV1,
+    externally_installed: [Pubkey; 2],
+}
+
+/// The bank state one action reads.
+///
+/// Genesis for the first action; READ BACK OUT OF THE BANK for every action
+/// after it. A campaign that carried its own prediction forward instead would
+/// be asserting against itself: the whole point of a second action is that the
+/// first one's poststate is the second one's authority.
+struct ChainPrestateV1 {
+    market: BuiltAccountV1,
+    root: BuiltAccountV1,
+    rent_credit: BuiltAccountV1,
+    /// The protocol payer, WITH ITS CURRENT BALANCE.
+    ///
+    /// It was a literal until 2026-09-04, and a literal was survivable only
+    /// because no market ever ran a second action: `OpenBatch` moves one exact
+    /// Batch principal out of this wallet, so from the second action onward the
+    /// modelled balance is wrong by that amount and the admitted route refuses
+    /// `0x4018 AdmittedTransport` naming no coordinate. The frame control found
+    /// it by name on the first two-action run.
+    payer: BuiltAccountV1,
+    /// The live primary state this action operates on, or `None` where this
+    /// execution is the one that creates it.
+    primary_state: Option<BuiltAccountV1>,
+}
+
 struct HostCase {
+    /// The action this case executes.
+    action: Action,
     built: dclutch_chain_bundle_builder::bundle::BuiltAdmittedBundleV1,
-    batch: Pubkey,
+    /// The primary state this action names: created by `OpenBatch`, read by
+    /// every action after it.
+    primary_state: Pubkey,
     root: Pubkey,
     rent_credit: Pubkey,
     /// The Trading role's semantic release, a seed of this case's seal address.
     trading_semantic_release: [u8; 32],
+    /// The complete top-level instruction list, exactly as it will be signed.
+    instructions: Vec<Instruction>,
+    /// The canonical lookup addresses that instruction list resolves through.
+    lookup_addresses: Vec<Pubkey>,
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_host_case(
+fn build_campaign(
     outcome_count: u32,
     payer: Pubkey,
-    rent: &Rent,
+    rent: Rent,
     substrate: waist::FixtureSubstrateV1,
     elves: &waist::Elves,
     releases: waist::Releases,
     accelerator_elf: &[u8],
-) -> HostCase {
+) -> CampaignV1 {
+    build_campaign_with_entry(
+        outcome_count,
+        payer,
+        rent,
+        substrate,
+        elves,
+        releases,
+        accelerator_elf,
+        None,
+    )
+}
+
+/// The same founding with an explicitly supplied manifest entry descriptor.
+///
+/// `None` is the founding a founding performs. `Some` is how a hostile founds a
+/// market on an entry that does NOT bind this release's actions -- the cohort-15
+/// shape -- and it is a parameter rather than a mutation because the entry is a
+/// choice the founding makes, once, before any action exists.
+#[allow(clippy::too_many_arguments)]
+fn build_campaign_with_entry(
+    outcome_count: u32,
+    payer: Pubkey,
+    rent: Rent,
+    substrate: waist::FixtureSubstrateV1,
+    elves: &waist::Elves,
+    releases: waist::Releases,
+    accelerator_elf: &[u8],
+    foreign_entry: Option<Vec<u8>>,
+) -> CampaignV1 {
     let product = build_product(outcome_count);
     let accelerator_artifact =
         waist::release_v2(ACCELERATOR_PROGRAM, 0x71, accelerator_elf, substrate);
@@ -475,16 +575,10 @@ fn build_host_case(
         &product,
         waist::artifact_id(accelerator_artifact),
     );
-    let selected = release
-        .bundles
-        .iter()
-        .find(|bundle| bundle.action == Action::OpenBatch)
-        .expect("OpenBatch bundle");
-    let descriptor = CapabilityProgramV4::decode(&selected.descriptor).expect("descriptor");
-    // THE ENTRY IS FOUNDED THE WAY A FOUNDING FOUNDS IT, not from the action
-    // this harness happens to execute.
+    // THE ENTRY IS FOUNDED THE WAY A FOUNDING FOUNDS IT, not from whichever
+    // action this harness happens to execute first.
     //
-    // This used to read `descriptor` -- the OpenBatch bundle's -- while
+    // This used to read the OpenBatch bundle's descriptor while
     // `tools/local-validator/bootstrap/successor/src/general_market.rs` read
     // `bundles.first()`, which is Consider. So the ladder picked the action and
     // derived the entry while the founding picked the entry and hoped, and until
@@ -492,50 +586,63 @@ fn build_host_case(
     // found the wall first, `0x4015 DescriptorManifestEntry` after 128,724 CU.
     // Both now go through `general_selected_entry_descriptor_v1`, which refuses
     // a release whose fifteen descriptors disagree about what an entry holds.
-    let entry_descriptor_bytes =
-        general_selected_entry_descriptor_v1(&release).expect("family entry descriptor");
+    //
+    // THAT IT IS ACTION-FREE IS WHAT THIS CAMPAIGN RESTS ON. One entry binding
+    // one family policy is exactly the property a multi-action run needs, and
+    // it is stated here, at the founding, rather than per action.
+    let entry_descriptor_bytes = foreign_entry.unwrap_or_else(|| {
+        general_selected_entry_descriptor_v1(&release).expect("family entry descriptor")
+    });
     let entry_descriptor =
         CapabilityProgramV4::decode(&entry_descriptor_bytes).expect("entry descriptor");
-    // The two are different objects that agree on exactly the coordinates the
-    // entry holds -- which is the property this harness is now exercising on the
-    // founding's behalf, and is stated here rather than assumed by the run.
-    assert_ne!(
-        entry_descriptor_bytes, selected.descriptor,
-        "the founding's descriptor and the executing action's must really differ"
-    );
-    assert_eq!(
-        entry_descriptor.derivation_policy(),
-        descriptor.derivation_policy(),
-        "the entry the founding authors must bind the action this harness runs"
-    );
+    let founds_this_release = release.bundles.iter().all(|bundle| {
+        CapabilityProgramV4::decode(&bundle.descriptor)
+            .expect("descriptor")
+            .derivation_policy()
+            == entry_descriptor.derivation_policy()
+    });
+    let mut distinct = 0_usize;
+    for bundle in &release.bundles {
+        if !founds_this_release {
+            continue;
+        }
+        let descriptor = CapabilityProgramV4::decode(&bundle.descriptor).expect("descriptor");
+        // Every one of the fifteen must be BOUND by the entry the founding
+        // authors -- that is the property a multi-action campaign rests on, and
+        // it is the property cohort-15 was founded without.
+        assert_eq!(
+            entry_descriptor.derivation_policy(),
+            descriptor.derivation_policy(),
+            "the entry the founding authors must bind {:?}",
+            bundle.action
+        );
+        if entry_descriptor_bytes != bundle.descriptor {
+            distinct += 1;
+        }
+    }
+    // The entry descriptor IS one of the fifteen -- `bundles.first()`, which is
+    // Consider -- so exactly fourteen of them are different objects that agree
+    // on the coordinates an entry holds. Counting them is what makes the
+    // agreement above a measurement rather than fifteen tautologies: if the
+    // fifteen descriptors collapsed to one object the count would read zero and
+    // this campaign would prove nothing about a founding.
+    if founds_this_release {
+        assert_eq!(
+            distinct,
+            release.bundles.len() - 1,
+            "the founding's descriptor must really differ from every action's but its own"
+        );
+    }
     let clock_slot = substrate.bank_slot();
     let manifest = manifest_selection(&release, entry_descriptor, clock_slot);
     let state = state_corpus(
-        rent,
+        &rent,
         payer,
         releases.release_set,
         &product,
         &manifest,
         &release,
     );
-    let root_tail = GeneralRootV2::decode(
-        state
-            .root
-            .account
-            .data
-            .get(CAPABILITY_ROOT_HEADER_BYTES_V1..)
-            .expect("root tail"),
-    )
-    .expect("General root");
-    let request = derive_general_open_batch_request_v1(GeneralOpenBatchRequestInputV1 {
-        root: root_tail,
-        root_address: state.root.key,
-        config: &release.config,
-        outcome_count,
-        product_id: product.product_id,
-        trading_program: waist::TRADING_PROGRAM_ID,
-    })
-    .expect("chain-derived OpenBatch request");
     let trading_release =
         waist::release_v2(waist::TRADING_PROGRAM_ID, 0x33, &elves.trading, substrate);
     let waist_facts = WaistFactsV1 {
@@ -548,41 +655,124 @@ fn build_host_case(
         activation_cache: releases.activation,
         trading_semantic_release: trading_release.semantic_release_id().to_bytes(),
     };
-    let trading_semantic_release = waist_facts.trading_semantic_release;
     let accelerator_programdata = waist::programdata(ACCELERATOR_PROGRAM);
-    let accelerator_program = program_with_view(ACCELERATOR_PROGRAM, accelerator_programdata);
-    let accelerator_programdata_account = external_with_view(
-        accelerator_programdata,
-        bpf_loader_upgradeable::ID,
-        waist::programdata_v2(substrate, accelerator_elf),
-    );
-    let payer_binding = vacant(payer).with_observed(Account {
-        lamports: 10_000_000_000,
-        data: Vec::new(),
-        owner: system_program::ID,
-        executable: false,
-        rent_epoch: 0,
-    });
-    let bindings = vec![
-        (usize::from(GENERAL_PRIMARY_PAYER_ACCOUNT_V3), payer_binding),
+    CampaignV1 {
+        outcome_count,
+        payer,
+        rent,
+        substrate,
+        releases,
+        product,
+        release,
+        manifest,
+        state,
+        waist_facts,
+        accelerator_artifact: accelerator_artifact.to_bytes().to_vec(),
+        accelerator_program: program_with_view(ACCELERATOR_PROGRAM, accelerator_programdata),
+        accelerator_programdata_account: external_with_view(
+            accelerator_programdata,
+            bpf_loader_upgradeable::ID,
+            waist::programdata_v2(substrate, accelerator_elf),
+        ),
+        externally_installed: [ACCELERATOR_PROGRAM, accelerator_programdata],
+    }
+}
+
+/// The founding's own prestate: what the bank holds before any action runs.
+fn genesis_prestate(campaign: &CampaignV1) -> ChainPrestateV1 {
+    ChainPrestateV1 {
+        market: campaign.state.market.clone(),
+        root: campaign.state.root.clone(),
+        rent_credit: campaign.state.rent_credit.clone(),
+        payer: vacant(campaign.payer).with_observed(Account {
+            lamports: GENESIS_PAYER_LAMPORTS,
+            data: Vec::new(),
+            owner: system_program::ID,
+            executable: false,
+            rent_epoch: 0,
+        }),
+        primary_state: None,
+    }
+}
+
+/// Build one action's complete admitted bundle against one chain prestate.
+///
+/// `clock_slot` is the slot this transaction will EXECUTE at, and it is a
+/// parameter rather than a campaign constant because a same-bank campaign warps
+/// between actions -- `close_is_permissionless` requires the collection window
+/// to have elapsed. The host seeds `scalar::CURRENT_SLOT` from this and the
+/// chain seeds it from `Clock::get()`; the campaign asserts the executed Clock
+/// against it rather than assuming the warp landed.
+fn build_action_case(
+    campaign: &CampaignV1,
+    action: Action,
+    chain: &ChainPrestateV1,
+    clock_slot: u64,
+    fee_payer: Pubkey,
+) -> HostCase {
+    let selected = campaign
+        .release
+        .bundles
+        .iter()
+        .find(|bundle| bundle.action == action)
+        .expect("selected action bundle");
+    let root_tail = GeneralRootV2::decode(
+        chain
+            .root
+            .account
+            .data
+            .get(CAPABILITY_ROOT_HEADER_BYTES_V1..)
+            .expect("root tail"),
+    )
+    .expect("General root");
+    let request = derive_general_request_v1(GeneralRequestInputV1 {
+        action,
+        root: root_tail,
+        root_address: chain.root.key,
+        config: &campaign.release.config,
+        outcome_count: campaign.outcome_count,
+        product_id: campaign.product.product_id,
+        trading_program: waist::TRADING_PROGRAM_ID,
+        primary_state_account: chain
+            .primary_state
+            .as_ref()
+            .map(|state| state.account.data.as_slice()),
+    })
+    .expect("chain-derived General request");
+    let mut bindings = vec![
+        (
+            usize::from(GENERAL_PRIMARY_PAYER_ACCOUNT_V3),
+            chain.payer.clone(),
+        ),
         (
             usize::from(GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3),
-            state.rent_credit.clone(),
+            chain.rent_credit.clone(),
         ),
         // The System program itself, not an account owned by it. The commit
-        // phase invokes System to allocate and assign the Batch state, and it
-        // looks for the program among the profile-declared runtime accounts;
-        // without this the route refuses `0x4005 Commit` at the first conjunct
-        // of `apply_lifecycle_creates_v3`, which is what it did until
-        // 2026-09-02.
+        // phase invokes System to allocate and assign the state a lifecycle plan
+        // creates, and it looks for the program among the profile-declared
+        // runtime accounts; without this the route refuses `0x4005 Commit` at
+        // the first conjunct of `apply_lifecycle_creates_v3`, which is what it
+        // did until 2026-09-02.
         (
             usize::from(
-                general_system_program_account_v3(Action::OpenBatch)
-                    .expect("OpenBatch declares a System coordinate"),
+                general_system_program_account_v3(action)
+                    .expect("this action declares a System coordinate"),
             ),
             system_program_builtin(),
         ),
     ];
+    if let Some(primary) = chain.primary_state.as_ref() {
+        // THE LIVE STATE IS A CORPUS BINDING, and the lifecycle preplan is an
+        // independent author for its ADDRESS. `build_bundle` refuses when a
+        // campaign-bound coordinate and the policy's derivation disagree, so
+        // binding it here is a join rather than an assertion the harness makes
+        // about itself.
+        bindings.push((
+            usize::from(GENERAL_PRIMARY_STATE_ACCOUNT_V3),
+            primary.clone(),
+        ));
+    }
     let set = ArtifactSetV1 {
         descriptor: &selected.descriptor,
         account_profile: &selected.account_profile,
@@ -591,60 +781,185 @@ fn build_host_case(
         effect: &selected.effect,
         lifecycle: &selected.lifecycle_policy,
         strategy: &selected.strategy,
-        program_set: &release.program_set,
-        manifest: &manifest.bytes,
-        config: &release.config,
+        program_set: &campaign.release.program_set,
+        manifest: &campaign.manifest.bytes,
+        config: &campaign.release.config,
     };
-    let externally_installed = [ACCELERATOR_PROGRAM, accelerator_programdata];
     let input = BundleInputV1 {
         set,
-        waist: waist_facts,
+        waist: campaign.waist_facts,
         scenario: ScenarioV1 {
             family_request: &request.request,
-            tail_count: outcome_count,
+            tail_count: campaign.outcome_count,
             clock_slot,
             generation: GENERATION,
             ed25519_evidence: None,
             native_message_instruction_index: 2,
-            externally_installed_extra: &externally_installed,
-            payer,
+            externally_installed_extra: &campaign.externally_installed,
+            payer: campaign.payer,
         },
         fixed: FixedCorpusV1 {
-            market: state.market,
-            root: state.root.clone(),
-            product: product.product,
-            result_domain: product.domain,
-            portfolio: product.portfolio,
-            linked_basis: product.basis,
-            core_programdata: releases.core_programdata,
-            trading_programdata: releases.trading_programdata,
+            market: chain.market.clone(),
+            root: chain.root.clone(),
+            product: campaign.product.product.clone(),
+            result_domain: campaign.product.domain.clone(),
+            portfolio: campaign.product.portfolio.clone(),
+            linked_basis: campaign.product.basis.clone(),
+            core_programdata: campaign.releases.core_programdata,
+            trading_programdata: campaign.releases.trading_programdata,
         },
         bindings: &bindings,
-        rent,
+        rent: &campaign.rent,
     };
-    let built = build_general_open_batch_bundle_v1(
+    let built = build_general_action_bundle_v1(
         &input,
         AdmittedAotInputV1 {
             certificate: Some(&selected.certificate),
             admission: Some(&selected.admission),
-            artifact_release: Some(&accelerator_artifact.to_bytes()),
-            accelerator_program: Some(&accelerator_program),
-            accelerator_programdata: Some(&accelerator_programdata_account),
+            artifact_release: Some(&campaign.accelerator_artifact),
+            accelerator_program: Some(&campaign.accelerator_program),
+            accelerator_programdata: Some(&campaign.accelerator_programdata_account),
+        },
+        GeneralActionPrestateV1 {
+            primary_state_account: chain
+                .primary_state
+                .as_ref()
+                .map(|state| state.account.data.as_slice()),
         },
     )
-    .expect("complete admitted OpenBatch bundle");
+    .expect("complete admitted General bundle");
     // NO SPAN AND NO TRANSPORT SPAN. General's bank rides inline in the CPI
     // instruction data; the four input scratch pages it used to carry are gone
     // from the frame and there is no width for the builder to derive.
     assert!(built.bundle.span_counts.is_empty());
     assert_eq!(built.bundle.transport_span, None);
+    // The accelerator's admission joins the request's witnessed `STATE_BUMP` to
+    // the lifecycle's `PRIMARY_CANONICAL_BUMP` and nothing else, so two
+    // derivations that name DIFFERENT accounts still satisfy it whenever their
+    // canonical bump bytes happen to agree. Join the addresses here, where both
+    // are in hand, or a bump collision silently hides a lifecycle recipe reading
+    // a register no artifact ever writes.
+    assert_eq!(
+        built
+            .bundle
+            .logical
+            .get(usize::from(GENERAL_PRIMARY_STATE_ACCOUNT_V3))
+            .expect("primary state coordinate")
+            .key,
+        request.primary_state,
+        "the lifecycle-derived primary state is not the PDA the {action:?} request names"
+    );
+    let instructions = vec![
+        ComputeBudgetInstruction::request_heap_frame(DIRECT_HOT_HEAP_FRAME_BYTES_V1),
+        ComputeBudgetInstruction::set_compute_unit_limit(
+            u32::try_from(waist::COMPUTE_LIMIT).expect("compute limit"),
+        ),
+        built.bundle.hot_instruction.clone(),
+    ];
+    let lookup_addresses = waist::canonical_lookup_addresses(&instructions, fee_payer);
     HostCase {
+        action,
         built,
-        batch: request.batch,
-        root: state.root.key,
-        rent_credit: state.rent_credit.key,
-        trading_semantic_release,
+        primary_state: request.primary_state,
+        root: chain.root.key,
+        rent_credit: chain.rent_credit.key,
+        trading_semantic_release: campaign.waist_facts.trading_semantic_release,
+        instructions,
+        lookup_addresses,
     }
+}
+
+/// The account the bank presents for a coordinate it holds nothing at.
+///
+/// The runtime presents an absent account to a program exactly as this, so a
+/// coordinate the transaction is about to CREATE is not an exception to the
+/// frame control; it is the rule stated for a coordinate with no stored
+/// account.
+fn absent_account() -> Account {
+    Account {
+        lamports: 0,
+        data: Vec::new(),
+        owner: system_program::ID,
+        executable: false,
+        rent_epoch: 0,
+    }
+}
+
+/// Read one account exactly as the bank holds it, absent included.
+async fn chain_account(
+    context: &mut solana_program_test::ProgramTestContext,
+    key: Pubkey,
+) -> Account {
+    context
+        .banks_client
+        .get_account(key)
+        .await
+        .expect("bank query")
+        .unwrap_or_else(absent_account)
+}
+
+/// One binding whose model IS what the bank holds.
+async fn observed_binding(
+    context: &mut solana_program_test::ProgramTestContext,
+    key: Pubkey,
+) -> BuiltAccountV1 {
+    BuiltAccountV1 {
+        key,
+        account: chain_account(context, key).await,
+        observed: None,
+    }
+}
+
+/// THE FRAME CONTROL, and the reason it is an assertion rather than a
+/// diagnostic.
+///
+/// `runtime_observations_digest` is a field of `AdmittedInvocationContextV3`,
+/// and the host computes it over `bundle.logical`'s modelled chain views while
+/// the chain computes it over the accounts the bank actually holds. So every
+/// coordinate the host mismodels is an invisible defect until the admitted
+/// route hashes the frame, at which point it surfaces as `0x4018
+/// AdmittedTransport` naming no coordinate at all -- which is what General
+/// `OpenBatch` refused with for the whole of 2026-09-02 because one binding
+/// claimed the System program was a deployed upgradeable program.
+///
+/// IT RUNS BEFORE EVERY ACTION, not only the first. In a same-bank campaign the
+/// second action's model is built from accounts read back out of the bank, and
+/// this is what says so: a coordinate the campaign forgot to re-read, or one an
+/// install silently clobbered back to its prestate, is caught here by name
+/// instead of at the far end of a hash.
+async fn assert_frame_control(
+    context: &mut solana_program_test::ProgramTestContext,
+    case: &HostCase,
+) {
+    for coordinate in 0..case.built.bundle.logical.len() {
+        let Some(built) = case.built.bundle.logical.get(coordinate) else {
+            continue;
+        };
+        let view = built.chain_view();
+        let observed = chain_account(context, built.key).await;
+        assert_eq!(
+            (
+                observed.owner,
+                observed.lamports,
+                observed.data.len(),
+                observed.executable
+            ),
+            (view.owner, view.lamports, view.data.len(), view.executable),
+            "{:?}: logical coordinate {coordinate} ({}) is modelled by the host as something the bank does not hold",
+            case.action,
+            built.key,
+        );
+        assert_eq!(
+            observed.data, view.data,
+            "{:?}: logical coordinate {coordinate} ({}) has the declared width and different bytes",
+            case.action, built.key,
+        );
+    }
+    assert_eq!(
+        chain_account(context, system_program::ID).await.data,
+        SYSTEM_PROGRAM_BUILTIN_NAME_V1.as_bytes(),
+        "the bank renamed its System builtin; `SYSTEM_PROGRAM_BUILTIN_NAME_V1` is the one author"
+    );
 }
 
 fn add_case_accounts(
@@ -667,7 +982,7 @@ fn add_case_accounts(
         test.add_account(
             signer.pubkey(),
             Account {
-                lamports: 10_000_000_000,
+                lamports: GENESIS_PAYER_LAMPORTS,
                 data: Vec::new(),
                 owner: system_program::ID,
                 executable: false,
@@ -715,14 +1030,21 @@ async fn execute_open_batch_at(outcome_count: u32, warp_to: Option<u64>) -> Open
         &accelerator_elf,
         substrate,
     );
-    let case = build_host_case(
+    let campaign = build_campaign(
         outcome_count,
         payer.pubkey(),
-        &rent,
+        rent,
         substrate,
         &elves,
         releases,
         &accelerator_elf,
+    );
+    let case = build_action_case(
+        &campaign,
+        Action::OpenBatch,
+        &genesis_prestate(&campaign),
+        substrate.bank_slot(),
+        fee_payer.pubkey(),
     );
     // THE TWO COUNTS HAVE COME APART, which is the whole change. The
     // caller-authority span is still one account per accelerator invocation --
@@ -748,31 +1070,9 @@ async fn execute_open_batch_at(outcome_count: u32, warp_to: Option<u64>) -> Open
         case.built.bundle.engine.input_scalars.len(),
         case.built.bundle.engine.input_identities.len(),
     );
-    // The accelerator's OpenBatch admission joins the request's witnessed
-    // `STATE_BUMP` to the lifecycle's `PRIMARY_CANONICAL_BUMP` and nothing
-    // else, so two derivations that name DIFFERENT accounts still satisfy it
-    // whenever their canonical bump bytes happen to agree. Join the addresses
-    // here, where both are in hand, or a bump collision silently hides a
-    // lifecycle recipe reading a register no artifact ever writes.
-    assert_eq!(
-        case.built
-            .bundle
-            .logical
-            .get(usize::from(GENERAL_PRIMARY_STATE_ACCOUNT_V3))
-            .expect("primary state coordinate")
-            .key,
-        case.batch,
-        "the lifecycle-derived primary state is not the Batch PDA the request names"
-    );
     add_case_accounts(&mut test, &case, &payer, &fee_payer);
-    let instructions = vec![
-        ComputeBudgetInstruction::request_heap_frame(DIRECT_HOT_HEAP_FRAME_BYTES_V1),
-        ComputeBudgetInstruction::set_compute_unit_limit(
-            u32::try_from(waist::COMPUTE_LIMIT).expect("compute limit"),
-        ),
-        case.built.bundle.hot_instruction.clone(),
-    ];
-    let lookup_addresses = waist::canonical_lookup_addresses(&instructions, fee_payer.pubkey());
+    let instructions = case.instructions.clone();
+    let lookup_addresses = case.lookup_addresses.clone();
     waist::add_lookup_table(&mut test, &lookup_addresses);
     let mut context = waist::start_with_substrate(test, substrate).await;
     // THE ONLY DIFFERENCE BETWEEN THE TWO RUNS THIS FUNCTION SERVES. Everything
@@ -788,66 +1088,7 @@ async fn execute_open_batch_at(outcome_count: u32, warp_to: Option<u64>) -> Open
         .await
         .expect("clock sysvar")
         .slot;
-    // THE FRAME CONTROL, and the reason it is an assertion rather than a
-    // diagnostic. `runtime_observations_digest` is a field of
-    // `AdmittedInvocationContextV3`, and the host computes it over
-    // `bundle.logical`'s modelled chain views while the chain computes it over
-    // the accounts the bank actually holds. So every coordinate the host
-    // mismodels is an invisible defect until the admitted route hashes the
-    // frame, at which point it surfaces as `0x4018 AdmittedTransport` naming
-    // no coordinate at all -- which is what General `OpenBatch` refused with
-    // for the whole of 2026-09-02 because one binding claimed the System
-    // program was a deployed upgradeable program.
-    //
-    // An account the transaction is about to CREATE is absent from the bank,
-    // and the runtime presents an absent account to the program exactly as the
-    // default System-owned empty account below, so that is not an exception to
-    // the rule; it is the rule stated for a coordinate with no stored account.
-    for coordinate in 0..case.built.bundle.logical.len() {
-        let Some(built) = case.built.bundle.logical.get(coordinate) else {
-            continue;
-        };
-        let view = built.chain_view();
-        let observed = context
-            .banks_client
-            .get_account(built.key)
-            .await
-            .expect("bank query")
-            .unwrap_or(Account {
-                lamports: 0,
-                data: Vec::new(),
-                owner: system_program::ID,
-                executable: false,
-                rent_epoch: 0,
-            });
-        assert_eq!(
-            (
-                observed.owner,
-                observed.lamports,
-                observed.data.len(),
-                observed.executable
-            ),
-            (view.owner, view.lamports, view.data.len(), view.executable),
-            "logical coordinate {coordinate} ({}) is modelled by the host as something the bank does not hold",
-            built.key,
-        );
-        assert_eq!(
-            observed.data, view.data,
-            "logical coordinate {coordinate} ({}) has the declared width and different bytes",
-            built.key,
-        );
-    }
-    assert_eq!(
-        context
-            .banks_client
-            .get_account(system_program::ID)
-            .await
-            .expect("System program query")
-            .expect("the bank holds the System program builtin")
-            .data,
-        SYSTEM_PROGRAM_BUILTIN_NAME_V1.as_bytes(),
-        "the bank renamed its System builtin; `SYSTEM_PROGRAM_BUILTIN_NAME_V1` is the one author"
-    );
+    assert_frame_control(&mut context, &case).await;
     let payer_before = context
         .banks_client
         .get_account(payer.pubkey())
@@ -869,7 +1110,7 @@ async fn execute_open_batch_at(outcome_count: u32, warp_to: Option<u64>) -> Open
     assert!(
         context
             .banks_client
-            .get_account(case.batch)
+            .get_account(case.primary_state)
             .await
             .expect("Batch query")
             .is_none()
@@ -898,7 +1139,7 @@ async fn execute_open_batch_at(outcome_count: u32, warp_to: Option<u64>) -> Open
         .expect("root account");
     let batch_after = context
         .banks_client
-        .get_account(case.batch)
+        .get_account(case.primary_state)
         .await
         .expect("Batch query")
         .expect("materialized Batch");
@@ -1000,7 +1241,7 @@ async fn execute_open_batch_at(outcome_count: u32, warp_to: Option<u64>) -> Open
         case.built.admitted_authorities.entries.len(),
         case.built.bundle.hot_instruction.accounts.len(),
         execution.compute_units_consumed,
-        case.batch,
+        case.primary_state,
         before.revision(),
         after.revision(),
     );
@@ -1058,14 +1299,21 @@ async fn a_general_descriptor_seals_through_the_family_neutral_producer() {
         &accelerator_elf,
         substrate,
     );
-    let case = build_host_case(
+    let campaign = build_campaign(
         2,
         payer.pubkey(),
-        &rent,
+        rent,
         substrate,
         &elves,
         releases,
         &accelerator_elf,
+    );
+    let case = build_action_case(
+        &campaign,
+        Action::OpenBatch,
+        &genesis_prestate(&campaign),
+        substrate.bank_slot(),
+        fee_payer.pubkey(),
     );
     let fixed_frame = case
         .built
@@ -1099,7 +1347,7 @@ async fn a_general_descriptor_seals_through_the_family_neutral_producer() {
     test.add_account(
         seal_payer.pubkey(),
         Account {
-            lamports: 10_000_000_000,
+            lamports: GENESIS_PAYER_LAMPORTS,
             data: Vec::new(),
             owner: system_program::ID,
             executable: false,
@@ -1295,4 +1543,593 @@ async fn real_elf_open_batch_commits_at_every_width_because_its_bank_does_not_gr
         "N=2 and N=258 must present the same invocation span and account frame"
     );
     assert_eq!((middle.0, middle.1), (widest.0, widest.1));
+}
+
+/// The refusal code one execution published, derived from the executing
+/// Program's own enum by every caller of this.
+fn refusal_code(error: &solana_program_test::BanksClientError) -> Option<u32> {
+    let transaction = match error {
+        solana_program_test::BanksClientError::TransactionError(value) => value,
+        solana_program_test::BanksClientError::SimulationError { err, .. } => err,
+        _ => return None,
+    };
+    match transaction {
+        solana_sdk::transaction::TransactionError::InstructionError(
+            _,
+            solana_program::instruction::InstructionError::Custom(code),
+        ) => Some(*code),
+        _ => None,
+    }
+}
+
+/// Install this action's accounts that the bank does not already hold.
+///
+/// THE BANK IS THE AUTHORITY FOR EVERYTHING IT HOLDS. A same-bank campaign's
+/// second action derives a complete install list, and most of that list is the
+/// founding's own state -- which the first action has since MUTATED. Writing
+/// the model back over it would silently restore the prestate and make the
+/// second action a second first action, which is the exact failure a green run
+/// could not distinguish from a real sequence.
+///
+/// So this installs only coordinates the bank holds nothing at: this action's
+/// own artifact records, which are inert Registry-owned content no execution
+/// ever writes. Everything else is left alone and then CHECKED, coordinate by
+/// coordinate, by `assert_frame_control`.
+async fn install_absent(
+    context: &mut solana_program_test::ProgramTestContext,
+    case: &HostCase,
+    skip: &[Pubkey],
+) -> usize {
+    let mut installed = 0;
+    for install in &case.built.bundle.accounts {
+        if case
+            .built
+            .bundle
+            .externally_installed_keys
+            .contains(&install.key)
+            || skip.contains(&install.key)
+        {
+            continue;
+        }
+        let observed = chain_account(context, install.key).await;
+        if observed != absent_account() {
+            continue;
+        }
+        context.set_account(
+            &install.key,
+            &solana_account::AccountSharedData::from(install.account.clone()),
+        );
+        installed += 1;
+    }
+    installed
+}
+
+/// Produce one action's capability seal through the family-neutral producer.
+///
+/// PER ACTION, BY CONSTRUCTION: `CapabilitySealKeyV1`'s third seed is the action
+/// selector, so a market that runs two actions needs two seals and the second
+/// one has no producer until somebody calls this. In the single-action harness
+/// the builder STAGED the seal into genesis, which exercises the reader and
+/// never the writer -- the shape `devnet-general-session` reported as
+/// "producible and unproduced". Here the seal starts vacant and the real
+/// Trading ELF writes it.
+async fn produce_seal(
+    context: &mut solana_program_test::ProgramTestContext,
+    case: &HostCase,
+    seal_payer: &Keypair,
+    fee_payer: &Keypair,
+) -> (Pubkey, u64) {
+    let fixed_frame = case
+        .built
+        .bundle
+        .hot_instruction
+        .accounts
+        .iter()
+        .take(HOT_FIXED_ACCOUNT_COUNT_V3)
+        .map(|meta| meta.pubkey)
+        .collect::<Vec<_>>();
+    let composed = capability_seal_instruction_v1(CapabilitySealInstructionInputV1 {
+        trading_program: waist::TRADING_PROGRAM_ID,
+        registry_program: waist::REGISTRY_PROGRAM_ID,
+        trading_semantic_release: case.trading_semantic_release,
+        descriptor_digest: case.built.invocation_context.capability_program.to_bytes(),
+        action: case.built.invocation_context.selected_action,
+        fixed_frame: &fixed_frame,
+        payer: seal_payer.pubkey(),
+    })
+    .expect("the General frame names the seal this builder derives");
+    assert_eq!(
+        composed.seal, fixed_frame[HOT_CAPABILITY_SEAL_ACCOUNT_V3],
+        "the two authors must agree, and the builder must be the one that says so"
+    );
+    assert_eq!(
+        composed.seal, case.built.bundle.artifacts.seal,
+        "the seal the bundle stages and the seal the producer derives are one address"
+    );
+    let before = chain_account(context, composed.seal).await;
+    assert_eq!(
+        before,
+        absent_account(),
+        "the seal must be VACANT before this, or the run proves nothing"
+    );
+    let instructions = vec![
+        ComputeBudgetInstruction::request_heap_frame(DIRECT_HOT_HEAP_FRAME_BYTES_V1),
+        ComputeBudgetInstruction::set_compute_unit_limit(
+            u32::try_from(waist::COMPUTE_LIMIT).expect("compute limit"),
+        ),
+        composed.instruction.clone(),
+    ];
+    let lookup_addresses = waist::canonical_lookup_addresses(&instructions, fee_payer.pubkey());
+    waist::set_lookup_table(context, &lookup_addresses);
+    let execution = waist::submit_v0_observed(
+        context,
+        &instructions,
+        lookup_addresses,
+        Some(fee_payer),
+        &[seal_payer],
+    )
+    .await
+    .expect("the permissionless General seal");
+    let sealed = chain_account(context, composed.seal).await;
+    assert_eq!(sealed.owner, waist::TRADING_PROGRAM_ID);
+    assert_eq!(sealed.data.len(), CAPABILITY_SEAL_BYTES_V1);
+    // TWO AUTHORS FOR ONE BODY. The host derived `seal_bytes` from the artifact
+    // set alone; the Program wrote what it computed from the frame it was
+    // handed. Comparing them is what makes the staged seal in every other run
+    // of this harness a REPRODUCTION of the Program's verdict rather than a
+    // fixture nobody ever checked.
+    assert_eq!(
+        sealed.data, case.built.bundle.artifacts.seal_bytes,
+        "the Program's seal body and the builder's differ"
+    );
+    let closure = SealedDescriptorClosureV1::decode(&sealed.data).expect("sealed closure");
+    let key = closure.key().expect("sealed key");
+    assert_eq!(key.action(), case.built.invocation_context.selected_action);
+    assert_eq!(
+        key.descriptor_digest(),
+        case.built.invocation_context.capability_program.to_bytes()
+    );
+    assert_eq!(closure.bump().expect("sealed bump"), composed.bump);
+    (composed.seal, execution.compute_units_consumed)
+}
+
+/// Decode the live Batch envelope exactly as the bank holds it.
+fn decode_batch(account: &Account) -> (GeneralLocalStateV3<'_>, GeneralBatchV1) {
+    let envelope = GeneralLocalStateV3::decode(&account.data).expect("local Batch envelope");
+    let batch = GeneralBatchV1::decode(envelope.body()).expect("Batch");
+    (envelope, batch)
+}
+
+/// The General root tail one account carries.
+fn root_tail_of(account: &Account) -> GeneralRootV2 {
+    GeneralRootV2::decode(
+        account
+            .data
+            .get(CAPABILITY_ROOT_HEADER_BYTES_V1..)
+            .expect("root tail"),
+    )
+    .expect("General root")
+}
+
+/// TWO GENERAL ACTIONS, ONE FOUNDED MARKET, ONE BANK -- THE FIRST TIME IN ANY
+/// HARNESS.
+///
+/// Every General run before this founded a market and executed exactly one
+/// action against it, because the founding and the action were built together.
+/// Cohort-15 measured why that mattered on devnet: a manifest entry holds ONE
+/// `child_derivation_id`, so a market founded on a per-action lifecycle policy
+/// could execute exactly one action and refused every other with `0x4015
+/// DescriptorManifestEntry`. `ae026955d` made the fifteen actions share one
+/// FAMILY policy; this is the first run that spends that -- one entry, two
+/// actions, and the second one reading the first one's poststate.
+///
+/// THE SEQUENCE IS REAL AND ITS ORDER IS FORCED. `OpenBatch` creates the Batch
+/// and consumes root revision 1; `CloseBatch` names the Batch by the identity
+/// the CHAIN holds, consumes revision 2, and is admitted only once the
+/// config-derived collection window has elapsed
+/// (`GeneralBatchV1::close_is_permissionless`). Neither can be run first and
+/// neither can be run twice, and both facts are executed below rather than
+/// asserted in prose.
+///
+/// WHAT IS NOT HERE. The thirteen other actions need semantic corpus this
+/// campaign does not build -- a signed order and its Claims/Custody escrow for
+/// `PlaceOrder`, a submitted candidate for `SubmitCandidate`, a selection cursor
+/// and a verified candidate for `Consider`, a settlement cursor for the five
+/// settlement actions. `derive_general_request_v1` refuses each of them by name
+/// (`BuilderError::UnsupportedRoute`) rather than building one wrong.
+#[tokio::test]
+async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
+    const OUTCOME_COUNT: u32 = 2;
+    let substrate = waist::fixture_substrate();
+    let elves = waist::elves();
+    let accelerator_elf = load_accelerator_elf();
+    let rent = Rent::default();
+    let payer = Keypair::new_from_array([0x11; 32]);
+    let fee_payer = Keypair::new_from_array([0x12; 32]);
+    let seal_payer = Keypair::new_from_array([0x13; 32]);
+    let mut test = waist::program_test_without_forced_budget(&elves);
+    let releases = waist::add_release_waist_v2(&mut test, &elves, substrate);
+    waist::add_program_v2(
+        &mut test,
+        "dclutch_general_accelerator_sbf",
+        ACCELERATOR_PROGRAM,
+        &accelerator_elf,
+        substrate,
+    );
+    let campaign = build_campaign(
+        OUTCOME_COUNT,
+        payer.pubkey(),
+        rent,
+        substrate,
+        &elves,
+        releases,
+        &accelerator_elf,
+    );
+    let open = build_action_case(
+        &campaign,
+        Action::OpenBatch,
+        &genesis_prestate(&campaign),
+        substrate.bank_slot(),
+        fee_payer.pubkey(),
+    );
+    add_case_accounts(&mut test, &open, &payer, &fee_payer);
+    test.add_account(
+        seal_payer.pubkey(),
+        Account {
+            lamports: GENESIS_PAYER_LAMPORTS,
+            data: Vec::new(),
+            owner: system_program::ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+    waist::add_lookup_table(&mut test, &open.lookup_addresses);
+    let mut context = waist::start_with_substrate(test, substrate).await;
+
+    // ---- ACTION ONE: OpenBatch ------------------------------------------
+    assert_frame_control(&mut context, &open).await;
+    let payer_before_open = chain_account(&mut context, payer.pubkey()).await.lamports;
+    let open_execution = waist::submit_v0_observed(
+        &mut context,
+        &open.instructions,
+        open.lookup_addresses.clone(),
+        Some(&fee_payer),
+        &[&payer],
+    )
+    .await
+    .expect("real Trading -> General accelerator OpenBatch");
+    let opened_root = root_tail_of(&chain_account(&mut context, open.root).await);
+    assert_eq!(opened_root.revision(), 2);
+    assert_eq!(opened_root.open_batches(), 1);
+    assert_eq!(opened_root.next_batch_sequence(), 1);
+
+    // ---- THE POSTSTATE IS READ, NOT PREDICTED ---------------------------
+    let batch_account = chain_account(&mut context, open.primary_state).await;
+    let (envelope, opened_batch) = decode_batch(&batch_account);
+    assert_eq!(envelope.header().kind, GeneralLocalStateKindV3::Batch);
+    assert_eq!(opened_batch.state().order_count, 0);
+    assert_eq!(opened_batch.state().opened_root_revision, 1);
+    assert_eq!(opened_batch.state().closed_root_revision, 0);
+    let collection_close_slot = opened_batch.opening().collection_close_slot;
+    let chain = ChainPrestateV1 {
+        market: observed_binding(&mut context, campaign.state.market.key).await,
+        root: observed_binding(&mut context, open.root).await,
+        rent_credit: observed_binding(&mut context, open.rent_credit).await,
+        payer: observed_binding(&mut context, payer.pubkey()).await,
+        primary_state: Some(observed_binding(&mut context, open.primary_state).await),
+    };
+
+    // THE WINDOW IS THE PROTOCOL'S, NOT THE HARNESS'S. `close_is_permissionless`
+    // admits an early close only for a FULL batch; this one holds zero orders,
+    // so the config-derived collection window has to elapse and the campaign
+    // warps to exactly the slot the Batch itself names.
+    assert!(collection_close_slot > substrate.bank_slot());
+    context
+        .warp_to_slot(collection_close_slot)
+        .expect("warp the bank to the batch's own collection close slot");
+    let executed_slot = context
+        .banks_client
+        .get_sysvar::<solana_program::clock::Clock>()
+        .await
+        .expect("clock sysvar")
+        .slot;
+    assert_eq!(
+        executed_slot, collection_close_slot,
+        "the warp is asserted through the executed Clock, not assumed"
+    );
+
+    // ---- ACTION TWO: CloseBatch -----------------------------------------
+    let close = build_action_case(
+        &campaign,
+        Action::CloseBatch,
+        &chain,
+        collection_close_slot,
+        fee_payer.pubkey(),
+    );
+    assert_eq!(
+        close.primary_state, open.primary_state,
+        "the second action must name the Batch the first one created"
+    );
+    assert_ne!(
+        close.built.bundle.artifacts.seal, open.built.bundle.artifacts.seal,
+        "a capability seal is keyed by action; two actions cannot share one"
+    );
+    let installed =
+        install_absent(&mut context, &close, &[close.built.bundle.artifacts.seal]).await;
+    let (seal, seal_cu) = produce_seal(&mut context, &close, &seal_payer, &fee_payer).await;
+    assert_eq!(seal, close.built.bundle.artifacts.seal);
+    waist::set_lookup_table(&mut context, &close.lookup_addresses);
+    assert_frame_control(&mut context, &close).await;
+    let payer_before_close = chain_account(&mut context, payer.pubkey()).await.lamports;
+    let credit_before_close = chain_account(&mut context, open.rent_credit).await;
+    let close_execution = waist::submit_v0_observed(
+        &mut context,
+        &close.instructions,
+        close.lookup_addresses.clone(),
+        Some(&fee_payer),
+        &[&payer],
+    )
+    .await
+    .expect("real Trading -> General accelerator CloseBatch on the same founded market");
+    assert!(
+        close_execution
+            .logs
+            .iter()
+            .any(|line| line.contains(&format!("Program {ACCELERATOR_PROGRAM} invoke"))),
+        "the success log proves the real accelerator CPI ran for the SECOND action"
+    );
+
+    // ---- THE TERMINAL STATE ---------------------------------------------
+    let closed_batch_account = chain_account(&mut context, open.primary_state).await;
+    let (_, closed_batch) = decode_batch(&closed_batch_account);
+    assert_eq!(closed_batch.state().status, BatchStatusV1::Closed);
+    assert_eq!(closed_batch.state().closed_root_revision, 3);
+    assert_eq!(closed_batch.state().opened_root_revision, 1);
+    assert_eq!(closed_batch.batch_id(), opened_batch.batch_id());
+    assert_eq!(closed_batch.opening(), opened_batch.opening());
+    assert_eq!(
+        closed_batch_account.lamports, batch_account.lamports,
+        "closing a batch's order window moves no principal"
+    );
+    assert_eq!(closed_batch_account.owner, waist::TRADING_PROGRAM_ID);
+    let closed_root = root_tail_of(&chain_account(&mut context, open.root).await);
+    assert_eq!(closed_root.revision(), 3);
+    assert_eq!(closed_root.open_batches(), 0);
+    assert_eq!(
+        closed_root.next_batch_sequence(),
+        1,
+        "a close returns no sequence coordinate"
+    );
+    assert_eq!(
+        chain_account(&mut context, payer.pubkey()).await.lamports,
+        payer_before_close,
+        "CloseBatch creates nothing and the protocol payer funds nothing"
+    );
+    assert_eq!(
+        chain_account(&mut context, open.rent_credit).await,
+        credit_before_close,
+        "CloseBatch does not spend credit"
+    );
+    assert!(
+        payer_before_open > payer_before_close,
+        "the open funded the Batch principal and the close did not"
+    );
+
+    // ---- THE HOSTILE: THE SAME ACTION, ONE SLOT LATER --------------------
+    //
+    // AN ACTION OUT OF SEQUENCE, stated the only way a same-bank campaign can
+    // state it. The host cannot BUILD a second `CloseBatch` -- the projector
+    // decodes the batch the bank now holds and `GeneralBatchV1::close` refuses a
+    // batch that is not `Collecting` -- so the out-of-order execution that
+    // reaches the chain is this one: the exact bundle that just committed,
+    // resubmitted against the poststate it produced. Its `expected_revision` is
+    // 2 and the root now holds 3.
+    //
+    // The slot advances so the blockhash differs; a byte-identical transaction
+    // at the same blockhash is refused for its SIGNATURE and would prove
+    // nothing about a sequence.
+    //
+    // IT REFUSES AS `Root`, NOT AS `Transition`, and the difference is the
+    // finding. The predicted code was `Transition` -- the request asks for
+    // revision 2 and the root holds 3, so the candidate projection is where a
+    // reader expects the join to fail. The chain refuses earlier and more
+    // cheaply: `HotExecutionEnvelopeV3` carries the ROOT PRESTATE DIGEST the
+    // bundle was built against, and Trading compares it to the account it was
+    // handed before any artifact runs. So a General action executed out of
+    // sequence is refused by the market's own state moving under it, which is a
+    // stronger statement than an arithmetic mismatch and one no other harness
+    // could have made -- it needs two actions on one root.
+    context
+        .warp_to_slot(collection_close_slot + 1)
+        .expect("advance the bank for a distinct blockhash");
+    // `Result::expect_err` is unavailable: `SuccessfulExecution` carries the
+    // whole program log and is deliberately not `Debug`, so a failed
+    // expectation could not print itself. This names the arm and reports what
+    // an unexpected success actually cost, which is the one number worth having.
+    let replay = match waist::submit_v0_observed(
+        &mut context,
+        &close.instructions,
+        close.lookup_addresses.clone(),
+        Some(&fee_payer),
+        &[&payer],
+    )
+    .await
+    {
+        Ok(execution) => panic!(
+            "a CloseBatch against its own poststate committed, at {} CU",
+            execution.compute_units_consumed
+        ),
+        Err(refused) => refused,
+    };
+    assert_eq!(
+        refusal_code(&replay.error),
+        Some(TRADING_ROOT),
+        "the out-of-sequence close refused with the wrong code: {:#?}",
+        replay.logs,
+    );
+    assert_eq!(
+        chain_account(&mut context, open.primary_state).await,
+        closed_batch_account,
+        "a refused close leaves the Batch byte-for-byte"
+    );
+    assert_eq!(
+        root_tail_of(&chain_account(&mut context, open.root).await).revision(),
+        3,
+        "a refused close leaves the root revision where it was"
+    );
+
+    eprintln!(
+        "general-campaign N={OUTCOME_COUNT} market={} root={} batch={}",
+        campaign.state.market.key, open.root, open.primary_state,
+    );
+    eprintln!(
+        "general-campaign open-batch cu={} accounts={} invocations={}",
+        open_execution.compute_units_consumed,
+        open.built.bundle.hot_instruction.accounts.len(),
+        open.built.admitted_authorities.entries.len(),
+    );
+    eprintln!("general-campaign close-batch-seal cu={seal_cu} installed_records={installed}");
+    eprintln!(
+        "general-campaign close-batch cu={} accounts={} invocations={} slot={}",
+        close_execution.compute_units_consumed,
+        close.built.bundle.hot_instruction.accounts.len(),
+        close.built.admitted_authorities.entries.len(),
+        collection_close_slot,
+    );
+    eprintln!(
+        "general-campaign out-of-sequence-close cu={} code=0x{TRADING_ROOT:04X}",
+        replay.compute_units_consumed,
+    );
+}
+
+/// `TradingSbfError::DescriptorManifestEntry`, derived from its REGISTERED BAND.
+///
+/// The variant `hot_v3` publishes when the selected descriptor and the entry the
+/// Market was founded on disagree on one of the five coordinates an entry holds.
+const TRADING_DESCRIPTOR_MANIFEST_ENTRY: u32 =
+    dclutch_refusal_registry::TRADING_REFUSAL_BASE + 0x015;
+
+/// THE COHORT-15 WALL, ON A REAL ELF, WITH THE ENTRY AS THE ONLY VARIABLE.
+///
+/// Cohort-15's General market activated under one action's lifecycle policy and
+/// its `OpenBatch` refused `0x4015 DescriptorManifestEntry` after 128,724 CU on
+/// devnet. That measurement cost a cohort and it has never been reproducible in
+/// a harness, because the harness founded its entry from the action it was about
+/// to run -- so the two could not disagree.
+///
+/// They can now: `build_campaign_with_entry` makes the entry a parameter. This
+/// founds a market whose manifest entry carries the family policy of a release
+/// compiled at ANOTHER Product width -- so its `child_derivation_id` is a real,
+/// well-formed policy that simply is not this release's -- and runs the exact
+/// `OpenBatch` bundle the campaign above commits. Everything else is byte for
+/// byte the same founding.
+///
+/// THE POSITIVE CONTROL IS THE CAMPAIGN ITSELF: the same code path with the
+/// family entry commits, four transactions deep, in the test above. Without that
+/// pairing this would be a test that something refuses, which is a test of
+/// nothing.
+#[tokio::test]
+async fn a_market_founded_on_a_foreign_entry_refuses_its_first_action_by_name() {
+    const OUTCOME_COUNT: u32 = 2;
+    /// A width whose external account widths, and therefore whose family
+    /// lifecycle policy, genuinely differ from this market's.
+    const FOREIGN_WIDTH: u32 = 13;
+    let substrate = waist::fixture_substrate();
+    let elves = waist::elves();
+    let accelerator_elf = load_accelerator_elf();
+    let rent = Rent::default();
+    let payer = Keypair::new_from_array([0x11; 32]);
+    let fee_payer = Keypair::new_from_array([0x12; 32]);
+    let mut test = waist::program_test_without_forced_budget(&elves);
+    let releases = waist::add_release_waist_v2(&mut test, &elves, substrate);
+    waist::add_program_v2(
+        &mut test,
+        "dclutch_general_accelerator_sbf",
+        ACCELERATOR_PROGRAM,
+        &accelerator_elf,
+        substrate,
+    );
+    let accelerator_release = waist::artifact_id(waist::release_v2(
+        ACCELERATOR_PROGRAM,
+        0x71,
+        &accelerator_elf,
+        substrate,
+    ));
+    let foreign_release = selected_release(
+        FOREIGN_WIDTH,
+        &build_product(FOREIGN_WIDTH),
+        accelerator_release,
+    );
+    let foreign_entry =
+        general_selected_entry_descriptor_v1(&foreign_release).expect("foreign entry descriptor");
+    let native_entry = general_selected_entry_descriptor_v1(&selected_release(
+        OUTCOME_COUNT,
+        &build_product(OUTCOME_COUNT),
+        accelerator_release,
+    ))
+    .expect("family entry descriptor");
+    // THE TWO ENTRIES MUST REALLY DIFFER, or this founds the same market twice
+    // and refuses for a reason that has nothing to do with an entry.
+    assert_ne!(
+        CapabilityProgramV4::decode(&foreign_entry)
+            .expect("foreign entry")
+            .derivation_policy(),
+        CapabilityProgramV4::decode(&native_entry)
+            .expect("native entry")
+            .derivation_policy(),
+        "the foreign entry must name a lifecycle policy this release does not"
+    );
+    let campaign = build_campaign_with_entry(
+        OUTCOME_COUNT,
+        payer.pubkey(),
+        rent,
+        substrate,
+        &elves,
+        releases,
+        &accelerator_elf,
+        Some(foreign_entry),
+    );
+    let case = build_action_case(
+        &campaign,
+        Action::OpenBatch,
+        &genesis_prestate(&campaign),
+        substrate.bank_slot(),
+        fee_payer.pubkey(),
+    );
+    add_case_accounts(&mut test, &case, &payer, &fee_payer);
+    waist::add_lookup_table(&mut test, &case.lookup_addresses);
+    let mut context = waist::start_with_substrate(test, substrate).await;
+    assert_frame_control(&mut context, &case).await;
+    let refused = match waist::submit_v0_observed(
+        &mut context,
+        &case.instructions,
+        case.lookup_addresses.clone(),
+        Some(&fee_payer),
+        &[&payer],
+    )
+    .await
+    {
+        Ok(execution) => panic!(
+            "a market founded on a foreign entry opened a batch, at {} CU",
+            execution.compute_units_consumed
+        ),
+        Err(value) => value,
+    };
+    assert_eq!(
+        refusal_code(&refused.error),
+        Some(TRADING_DESCRIPTOR_MANIFEST_ENTRY),
+        "the foreign entry refused with the wrong code: {:#?}",
+        refused.logs,
+    );
+    assert!(
+        chain_account(&mut context, case.primary_state)
+            .await
+            .data
+            .is_empty(),
+        "a refused OpenBatch materializes no Batch"
+    );
+    eprintln!(
+        "general-campaign foreign-entry cu={} code=0x{TRADING_DESCRIPTOR_MANIFEST_ENTRY:04X}",
+        refused.compute_units_consumed,
+    );
 }

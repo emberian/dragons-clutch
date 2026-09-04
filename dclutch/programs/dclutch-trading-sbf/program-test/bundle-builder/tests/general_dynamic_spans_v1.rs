@@ -16,7 +16,7 @@
 use dclutch_account_profile_contract::v2::AccountProfileV2;
 use dclutch_chain_bundle_builder::{
     BuilderError, WaistFactsV1,
-    general::{GeneralOpenBatchRequestInputV1, derive_general_open_batch_request_v1},
+    general::{GeneralRequestInputV1, derive_general_request_v1},
     profile_ops,
     registers::{SpanWidthInputV1, derive_dynamic_span_widths},
 };
@@ -34,14 +34,20 @@ use dclutch_general_adapter_contract::{
         GeneralExternalAccountWidthsV3, encode_general_account_profile_v3_atomic,
         general_account_profile_bytes_v3, general_account_profile_fixed_count_v3,
     },
+    collection_v1::{GeneralBatchOpeningV1, GeneralBatchV1},
     effect_artifacts_v3::{
         GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3, encode_general_effect_program_v4_atomic,
         general_effect_instruction_count_v3, general_effect_program_bytes_v3,
         general_effect_program_bytes_v4, general_effect_template_bytes_v3,
     },
     hot_candidate_v3::{GENERAL_HOT_COMMON_IDENTITIES_V3, general_hot_scalar_count_v3, scalar},
+    local_state_v3::{
+        GeneralLocalStateHeaderV3, GeneralLocalStateKindV3, encode_general_local_state_v3_atomic,
+        general_local_state_len_v3,
+    },
     release_v3::GENERAL_ACTIONS_V3,
     specialization::general_request_profile_bytes_v1,
+    state_seeds_v3::GeneralStateAddressSeedsV3,
 };
 use dclutch_general_codec::{
     Action, successor_request_v2::ControllerRequestV2, successor_request_v3::ControllerRequestV3,
@@ -411,21 +417,24 @@ fn open_batch_request_derives_occurrence_and_lifecycle_bump_at_runtime_widths() 
     let root_address = Pubkey::new_from_array([0x62; 32]);
     let root = GeneralRootV2::active(market, config_id, 9).expect("active root");
     for outcome_count in [1_u32, 258] {
-        let derived = derive_general_open_batch_request_v1(GeneralOpenBatchRequestInputV1 {
+        let derived = derive_general_request_v1(GeneralRequestInputV1 {
+            action: Action::OpenBatch,
             root,
             root_address,
             config: &config,
             outcome_count,
             product_id: [0x63; 32],
             trading_program: waist().trading_program,
+            primary_state_account: None,
         })
         .expect("chain-derived OpenBatch request");
         let decoded = ControllerRequestV3::decode(&derived.request).expect("canonical V3 request");
         assert_eq!(decoded.action.legacy(), Some(Action::OpenBatch));
-        assert_eq!(decoded.subject_id, Some(derived.occurrence_id));
+        assert_eq!(derived.action, Action::OpenBatch);
+        assert_eq!(decoded.subject_id, Some(derived.subject_id));
         assert_eq!(decoded.expected_revision, root.revision());
-        assert_eq!(decoded.primary_state_bump, derived.batch_bump);
-        assert_ne!(derived.batch, root_address);
+        assert_eq!(decoded.primary_state_bump, derived.primary_state_bump);
+        assert_ne!(derived.primary_state, root_address);
     }
 }
 
@@ -438,35 +447,249 @@ fn open_batch_request_refuses_substituted_config_generation_and_zero_coordinates
         9,
     )
     .expect("active root");
-    let base = GeneralOpenBatchRequestInputV1 {
+    let base = GeneralRequestInputV1 {
+        action: Action::OpenBatch,
         root,
         root_address: Pubkey::new_from_array([0x62; 32]),
         config: &config,
         outcome_count: 1,
         product_id: [0x63; 32],
         trading_program: waist().trading_program,
+        primary_state_account: None,
     };
     let foreign_config = open_config(10);
     assert!(matches!(
-        derive_general_open_batch_request_v1(GeneralOpenBatchRequestInputV1 {
+        derive_general_request_v1(GeneralRequestInputV1 {
             config: &foreign_config,
             ..base
         }),
         Err(BuilderError::Binding(_))
     ));
     assert!(matches!(
-        derive_general_open_batch_request_v1(GeneralOpenBatchRequestInputV1 {
+        derive_general_request_v1(GeneralRequestInputV1 {
             product_id: [0; 32],
             ..base
         }),
         Err(BuilderError::Binding(_))
     ));
     assert!(matches!(
-        derive_general_open_batch_request_v1(GeneralOpenBatchRequestInputV1 {
+        derive_general_request_v1(GeneralRequestInputV1 {
             outcome_count: 0,
             ..base
         }),
         Err(BuilderError::Binding(_))
+    ));
+}
+
+/// One live Batch envelope exactly as the chain holds it after an `OpenBatch`.
+///
+/// Built through the semantic owners -- `GeneralBatchV1::open` consumes the
+/// root's revision and sequence, `encode_general_local_state_v3_atomic` wraps
+/// the record in its physical lifecycle -- rather than by spelling 224 bytes
+/// here, so a record layout that moved would move this fixture with it.
+fn live_batch_account(
+    root: &mut GeneralRootV2,
+    config: &[u8],
+    root_address: Pubkey,
+    trading_program: Pubkey,
+    outcome_count: u32,
+    product_id: [u8; 32],
+    current_slot: u64,
+) -> (Vec<u8>, [u8; 32], u64) {
+    let decoded = GeneralConfigV3::decode(config).expect("General config");
+    let opening = GeneralBatchOpeningV1 {
+        outcome_count,
+        sequence: root.next_batch_sequence(),
+        generation: root.generation(),
+        market: root.market(),
+        product_id,
+        config_id: root.config_id(),
+        price_scale: decoded.price_scale(),
+        collection_close_slot: current_slot + decoded.collection_slots(),
+        settlement_close_slot: current_slot
+            + decoded.collection_slots()
+            + decoded.settlement_slots(),
+        max_orders: decoded.max_orders_per_candidate(),
+    };
+    let expected_revision = root.revision();
+    let batch =
+        GeneralBatchV1::open(root, opening, expected_revision, current_slot).expect("open batch");
+    let batch_id = batch.batch_id();
+    let seeds =
+        GeneralStateAddressSeedsV3::batch(root_address.to_bytes(), batch_id).expect("Batch seeds");
+    let bump = Pubkey::find_program_address(
+        seeds.as_slices().expect("Batch seed slices").as_slice(),
+        &trading_program,
+    )
+    .1;
+    let body = batch.to_bytes();
+    let bytes = general_local_state_len_v3(GeneralLocalStateKindV3::Batch, outcome_count)
+        .expect("Batch envelope width");
+    let mut scratch = vec![0_u8; bytes];
+    let mut account = vec![0_u8; bytes];
+    encode_general_local_state_v3_atomic(
+        GeneralLocalStateHeaderV3 {
+            kind: GeneralLocalStateKindV3::Batch,
+            bump,
+            rent_principal: 2_282_880,
+            beneficiary: [0x64; 32],
+        },
+        &body,
+        &mut scratch,
+        &mut account,
+    )
+    .expect("Batch envelope");
+    (account, batch_id, opening.collection_close_slot)
+}
+
+/// THE SECOND ACTION DERIVES ITS SUBJECT FROM THE CHAIN, NOT FROM A PREDICTION.
+///
+/// `OpenBatch` computes the occurrence identity it is about to create; every
+/// action after it must READ the identity the chain already holds, because a
+/// host that recomputed the opening would be a second author for a record the
+/// Batch already owns -- and it would agree right up until one config window or
+/// one close slot differed, at which point it would name an address that does
+/// not exist and the refusal would be about a missing account rather than about
+/// the substitution that caused it.
+#[test]
+fn close_batch_request_reads_its_subject_off_the_live_batch_at_runtime_widths() {
+    let config = open_config(9);
+    let config_id = solana_program::hash::hash(&config).to_bytes();
+    let market = [0x61; 32];
+    let root_address = Pubkey::new_from_array([0x62; 32]);
+    let product_id = [0x63; 32];
+    let trading_program = waist().trading_program;
+    for outcome_count in [1_u32, 258] {
+        let mut root = GeneralRootV2::active(market, config_id, 9).expect("active root");
+        let opened = derive_general_request_v1(GeneralRequestInputV1 {
+            action: Action::OpenBatch,
+            root,
+            root_address,
+            config: &config,
+            outcome_count,
+            product_id,
+            trading_program,
+            primary_state_account: None,
+        })
+        .expect("chain-derived OpenBatch request");
+        let (account, batch_id, _) = live_batch_account(
+            &mut root,
+            &config,
+            root_address,
+            trading_program,
+            outcome_count,
+            product_id,
+            1_000,
+        );
+        // The occurrence the open PREDICTED and the identity the batch CARRIES
+        // are the same, and that is a measurement rather than an assumption:
+        // `GeneralBatchOccurrenceTermsV1::new` zeroes both close slots before
+        // hashing, so the identity is slot-independent and precomputable.
+        assert_eq!(opened.subject_id, batch_id);
+        let derived = derive_general_request_v1(GeneralRequestInputV1 {
+            action: Action::CloseBatch,
+            root,
+            root_address,
+            config: &config,
+            outcome_count,
+            product_id,
+            trading_program,
+            primary_state_account: Some(&account),
+        })
+        .expect("chain-derived CloseBatch request");
+        let decoded = ControllerRequestV3::decode(&derived.request).expect("canonical V3 request");
+        assert_eq!(decoded.action.legacy(), Some(Action::CloseBatch));
+        assert_eq!(derived.subject_id, batch_id);
+        assert_eq!(derived.primary_state, opened.primary_state);
+        assert_eq!(derived.primary_state_bump, opened.primary_state_bump);
+        // The open consumed revision 1; the close must ask for what the root
+        // now holds, or the batch's own replay guard refuses it.
+        assert_eq!(decoded.expected_revision, root.revision());
+        assert_ne!(
+            decoded.expected_revision,
+            ControllerRequestV3::decode(&opened.request)
+                .expect("canonical V3 request")
+                .expected_revision,
+        );
+    }
+}
+
+#[test]
+fn each_action_refuses_the_prestate_shape_the_other_one_needs() {
+    let config = open_config(9);
+    let config_id = solana_program::hash::hash(&config).to_bytes();
+    let root_address = Pubkey::new_from_array([0x62; 32]);
+    let product_id = [0x63; 32];
+    let trading_program = waist().trading_program;
+    let mut root = GeneralRootV2::active([0x61; 32], config_id, 9).expect("active root");
+    let opened_root = root;
+    let (account, _, _) = live_batch_account(
+        &mut root,
+        &config,
+        root_address,
+        trading_program,
+        1,
+        product_id,
+        1_000,
+    );
+    // `OpenBatch` creates its primary state, so a campaign that supplied one is
+    // describing a different execution than the one it asked for.
+    assert!(matches!(
+        derive_general_request_v1(GeneralRequestInputV1 {
+            action: Action::OpenBatch,
+            root: opened_root,
+            root_address,
+            config: &config,
+            outcome_count: 1,
+            product_id,
+            trading_program,
+            primary_state_account: Some(&account),
+        }),
+        Err(BuilderError::Binding(_))
+    ));
+    // `CloseBatch` names one that already exists, and there is nothing to read.
+    assert!(matches!(
+        derive_general_request_v1(GeneralRequestInputV1 {
+            action: Action::CloseBatch,
+            root,
+            root_address,
+            config: &config,
+            outcome_count: 1,
+            product_id,
+            trading_program,
+            primary_state_account: None,
+        }),
+        Err(BuilderError::Binding(_))
+    ));
+    // A Batch under a different Product is not this market's batch, and the
+    // join refuses before an address is derived from it.
+    assert!(matches!(
+        derive_general_request_v1(GeneralRequestInputV1 {
+            action: Action::CloseBatch,
+            root,
+            root_address,
+            config: &config,
+            outcome_count: 1,
+            product_id: [0x71; 32],
+            trading_program,
+            primary_state_account: Some(&account),
+        }),
+        Err(BuilderError::Binding(_))
+    ));
+    // Every action this module does not derive yet says so by name rather than
+    // being built wrong.
+    assert!(matches!(
+        derive_general_request_v1(GeneralRequestInputV1 {
+            action: Action::Consider,
+            root,
+            root_address,
+            config: &config,
+            outcome_count: 1,
+            product_id,
+            trading_program,
+            primary_state_account: None,
+        }),
+        Err(BuilderError::UnsupportedRoute(_))
     ));
 }
 

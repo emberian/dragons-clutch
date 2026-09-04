@@ -32,7 +32,8 @@
 //! # Rent, and the pending ruling
 //!
 //! The whole observed balance follows the landed Lean plan
-//! (`MakerClosePlan`: principal plus `unclassified_donation`, all to the
+//! (`MakerClosePlan`: principal plus `unclassified_donation`, less the ruled
+//! closer carve -- zero here, because this frame admits no closer -- to the
 //! immutably recorded `rent_owner` -- refund conservation proved). Refusing a
 //! nonzero donation instead would hand a griefer a 1-lamport transfer that
 //! strands the replay permanently, the exact outcome `CloseSeal`'s cap
@@ -437,6 +438,7 @@ pub fn process_direct_close_maker_v1(
         post_root_digest,
         rent_principal: closed.plan.rent_principal,
         unclassified_donation: closed.plan.unclassified_donation,
+        closer_reward: closed.plan.closer_reward,
         total_credit: closed.plan.total_credit,
         remaining_open_maker_roots: closed.root.open_maker_root_count(),
     }
@@ -555,17 +557,23 @@ fn authenticate_replay_close(
     {
         return Err(TradingSbfError::CloseMakerReplayAccount.into());
     }
-    let closed =
-        close_maker_replay_v2(pre_root_state, maker_root, replay.lamports()).map_err(|error| {
-            match error {
-                SuccessorError::FeeOwedOutstanding => TradingSbfError::CloseMakerFeeOutstanding,
-                SuccessorError::LiveCountInvariant => TradingSbfError::CloseMakerLiveIntents,
-                SuccessorError::InvalidRootPhase | SuccessorError::MakerRootCountInvariant => {
-                    TradingSbfError::Transition
-                }
-                _ => TradingSbfError::CloseMakerReplayAccount,
-            }
-        })?;
+    let closed = close_maker_replay_v2(
+        pre_root_state,
+        maker_root,
+        replay.lamports(),
+        // The carve ceiling. Zero because this frame admits no closer
+        // account -- see the constant's own note; the ruling is landed in
+        // the kernel and the route work is owed.
+        close_maker_v1::DIRECT_CLOSE_MAKER_CLOSER_REWARD_V1,
+    )
+    .map_err(|error| match error {
+        SuccessorError::FeeOwedOutstanding => TradingSbfError::CloseMakerFeeOutstanding,
+        SuccessorError::LiveCountInvariant => TradingSbfError::CloseMakerLiveIntents,
+        SuccessorError::InvalidRootPhase | SuccessorError::MakerRootCountInvariant => {
+            TradingSbfError::Transition
+        }
+        _ => TradingSbfError::CloseMakerReplayAccount,
+    })?;
     Ok(closed)
 }
 

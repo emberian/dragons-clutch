@@ -1625,6 +1625,17 @@ Why the protocol is built the way it is, one decision per record. Each
 record carries its context, the alternatives, and the consequences; this
 index shows each record's current status.
 
+A ruling that lives only inside a narrative file has no durable home, which
+is what these records are for. Every item on the 2026-09-04 rulings docket
+now has one: D1 economics (0024), D2 the failure selector (0025), D3 the
+privacy horizon (0018), D4 mainnet's place (0026), D5 recovery (0027), D6
+the accelerator output page (0028, which carries a read and is OPEN because
+ember asked for the architecture rather than a switch), D7 the product list
+(0029), and D8 rent across an epoch (0030). Records 0019-0023 hold the five
+rulings the orchestrator made under ember's standing goal before that
+docket. Statuses are load-bearing: PROVISIONAL means ember may reverse it at
+the cost the record's last section states, and OPEN means nobody has ruled.
+
 ` +
       table(["decision", "status"], rows) +
       "\n",

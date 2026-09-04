@@ -31,6 +31,13 @@ def main : IO Unit := do
     IO.println s!"pub const {Phase.rustName phase}: u8 = {Phase.tag phase};"
   IO.println "/// One past the greatest phase tag."
   IO.println s!"pub const SOURCE_RESOLUTION_PHASE_LIMIT_V1: u8 = {phaseLimit};"
+  IO.println "/// The greatest number of funded recovery attempts a market can buy, and"
+  IO.println "/// therefore the exclusive bound on the record's `active_attempt` byte."
+  IO.println "///"
+  IO.println "/// It is the recovery policy's own capacity rather than a second number"
+  IO.println "/// chosen beside it: an `active_attempt` the policy cannot fund is an attempt"
+  IO.println "/// nothing paid for."
+  IO.println s!"pub const SOURCE_RESOLUTION_MAX_RECOVERY_ATTEMPTS_V2: u8 = {maxRecoveryAttempts};"
   IO.println "#[cfg(test)]"
   emitBytes "pub(crate)" "SOURCE_RESOLUTION_STATE_V2_FRESH_EXAMPLE" (encode freshExample)
   IO.println "#[cfg(test)]"

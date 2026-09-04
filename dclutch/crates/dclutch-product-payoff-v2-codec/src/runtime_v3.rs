@@ -56,6 +56,34 @@ const HEADER_TAIL_RESERVED_OFFSET: usize = BASIS_HEADER_TAIL_RESERVED_OFFSET_V3;
 const PRICE_GATE_DIGEST_OFFSET: usize = BASIS_PRICE_GATE_DIGEST_OFFSET_V3;
 const PRODUCT_LINK_END: usize = RESULT_DOMAIN_ID_OFFSET + 32;
 
+/// Whether a categorical basis of this width and scale refunds ordinary
+/// holders when its failure coordinate resolves the market.
+///
+/// This function is the SOLE AUTHOR of the rule. [`ProductBasisV3::refunds_on_failure`]
+/// is this function applied to a record's own fields, and every consumer that
+/// holds an authenticated MIRROR of those fields rather than the record --
+/// a graded-basis admission, a browser reading the same three numbers --
+/// calls this rather than spelling the comparison again. A rule with two
+/// authors is a rule that will eventually disagree with itself about who an
+/// oracle outage pays.
+pub fn categorical_refunds_on_failure_v3(
+    kind: BasisKindV3,
+    basis_width: u32,
+    payout_scale: u64,
+) -> bool {
+    matches!(kind, BasisKindV3::CategoricalQ1)
+        && basis_width >= CATEGORICAL_REFUND_MINIMUM_WIDTH_V3
+        && payout_scale == u64::from(basis_width - 1)
+}
+
+/// Narrowest categorical basis that may be founded to refund on failure:
+/// two ordinary regions plus the explicit failure coordinate.
+///
+/// MATHEMATICAL. At width 2 the legacy scale `1` and the refunding scale
+/// `basis_width - 1` are the same number, so the record would not say which
+/// shape it was founded under.
+pub const CATEGORICAL_REFUND_MINIMUM_WIDTH_V3: u32 = 3;
+
 const CATEGORICAL_KIND: u8 = BASIS_CATEGORICAL_KIND_V3;
 const GRADED_COMPLEMENT_KIND: u8 = BASIS_GRADED_COMPLEMENT_KIND_V3;
 const SPLINE_KIND: u8 = BASIS_SPLINE_DEGREE_2_TO_3_KIND_V3;
@@ -93,6 +121,24 @@ pub enum Error {
     UnsupportedCoordinate,
     /// A categorical selector was outside runtime width.
     SelectorOutOfRange,
+    /// A categorical basis was asked for the failure-refund payout vector and
+    /// was not founded to refund: its payout scale is the legacy `1` rather
+    /// than its ordinary-region count.
+    ///
+    /// Distinct from [`Error::UnsupportedCoordinate`] on purpose. That one
+    /// says "this basis kind has no such terminal at all"; this one says the
+    /// kind has it and THIS RECORD was founded without it, which is a fact
+    /// about one market's own configuration and the only fact a reader needs
+    /// in order to say who an outage pays.
+    FailureRefundUnavailable,
+    /// A refunding categorical basis was asked to pay its failure coordinate.
+    ///
+    /// The escrow holds every failure claim and they are worth nothing: the
+    /// collateral behind them leaves through the ordinary columns exactly
+    /// once. Paying the failure coordinate as well would pay the Hoard out
+    /// twice, so it refuses here rather than becoming an `Insolvent` two
+    /// crates away.
+    FailureCoordinateNotPayable,
     /// Checked record sizing or exact arithmetic overflowed.
     ArithmeticOverflow,
     /// A degree-2-to-3 spline basis was selected and this build has no
@@ -512,11 +558,34 @@ impl<'a> ProductBasisV3<'a> {
                 if read_byte(self.bytes, ROUNDING_OFFSET)? != EXACT_CATEGORICAL_BOUNDARY_V3 {
                     return Err(Error::UnsupportedKind);
                 }
-                if self.payout_scale != 1
-                    || self.knot_denominator != 1
-                    || self.knot_count != 0
-                    || self.term_count != 0
-                {
+                if self.knot_denominator != 1 || self.knot_count != 0 || self.term_count != 0 {
+                    return Err(Error::NonCanonicalReserved);
+                }
+                // The payout scale is a categorical record's one economic
+                // degree of freedom and it is exactly two-valued.
+                //
+                // `1` is the legacy shape: the winner's claims pay one
+                // collateral atom each, and when the winner is the failure
+                // coordinate that pays whoever minted the failure claims --
+                // the founder, on every market founded before this rule.
+                //
+                // `basis_width - 1` is the refunding shape: the winner pays
+                // its ordinary-region count per claim on the honest walk, and
+                // an outage instead pays one atom to every ORDINARY claim.
+                // Both vectors sum to the same scale, so `validate_partition`
+                // gates both arms with nothing added to it.
+                //
+                // Width 3 is a MATHEMATICAL bound, not a profile: at width 2
+                // the two scales coincide (`basis_width - 1 == 1`) and no
+                // reader could tell which shape a market was founded under.
+                // A disclosure that cannot be derived is a disclosure that
+                // gets typed by hand, so the ambiguous record is refused.
+                let refunding = categorical_refunds_on_failure_v3(
+                    self.kind,
+                    self.basis_width,
+                    self.payout_scale,
+                );
+                if self.payout_scale != 1 && !refunding {
                     return Err(Error::NonCanonicalReserved);
                 }
             }
@@ -862,7 +931,36 @@ impl<'a> ProductBasisV3<'a> {
         Ok(())
     }
 
-    /// Evaluate a categorical selector. This is the exact `Q = 1` embedding.
+    /// Whether an outage refunds ordinary holders on this market, read off the
+    /// authenticated record and nothing else.
+    ///
+    /// This is the ONE derived fact that decides who an oracle outage pays,
+    /// and it is deliberately the same fact for the program and for anything
+    /// that displays a market's terms. Neither may state it in its own words:
+    /// the payout arm below branches on it, and a browser answering "who is
+    /// paid if the feed goes quiet" recomputes it from the same bytes.
+    ///
+    /// False here is not a defect. It is the legacy shape, and it is the
+    /// truthful answer for every market founded before the rule -- the founder
+    /// minted every failure claim and an outage pays them to the founder.
+    pub fn refunds_on_failure(self) -> bool {
+        categorical_refunds_on_failure_v3(self.kind, self.basis_width, self.payout_scale)
+    }
+
+    /// The ordinary-region count: every coordinate but the explicit failure
+    /// one. Mirrors `ResultDomainV2::failure_selector`, which returns exactly
+    /// this number as the failure coordinate's index.
+    pub fn ordinary_region_count(self) -> Result<u32> {
+        self.basis_width.checked_sub(1).ok_or(Error::InvalidCount)
+    }
+
+    /// Evaluate a categorical selector. This is the exact one-hot embedding at
+    /// the record's own payout scale.
+    ///
+    /// On a legacy record the scale is `1` and this is byte-for-byte the `Q =
+    /// 1` embedding it always was. On a refunding record the scale is the
+    /// ordinary-region count, so a winning claim pays that many collateral
+    /// atoms and the honest walk still exhausts the Hoard exactly.
     pub fn evaluate_categorical(self, selector: u32, output: &mut [u64]) -> Result<()> {
         if self.kind != BasisKindV3::CategoricalQ1 {
             return Err(Error::UnsupportedCoordinate);
@@ -871,9 +969,38 @@ impl<'a> ProductBasisV3<'a> {
         if selector >= self.basis_width {
             return Err(Error::SelectorOutOfRange);
         }
+        if self.refunds_on_failure() && selector == self.ordinary_region_count()? {
+            return Err(Error::FailureCoordinateNotPayable);
+        }
         let index = usize::try_from(selector).map_err(|_| Error::SelectorOutOfRange)?;
         output.fill(0);
-        *output.get_mut(index).ok_or(Error::SelectorOutOfRange)? = 1;
+        *output.get_mut(index).ok_or(Error::SelectorOutOfRange)? = self.payout_scale;
+        Ok(())
+    }
+
+    /// Evaluate the failure terminal of a refunding categorical basis: one
+    /// collateral atom to every ordinary claim, nothing to the failure
+    /// coordinate.
+    ///
+    /// The vector sums to the ordinary-region count, which is this record's
+    /// payout scale, so it partitions the scale exactly like the success arm
+    /// does -- there is no rounding here and no remainder to house. A market
+    /// founded at the legacy scale refuses by name instead of silently
+    /// refunding at a rate its collateral cannot cover.
+    pub fn evaluate_categorical_failure(self, output: &mut [u64]) -> Result<()> {
+        if self.kind != BasisKindV3::CategoricalQ1 {
+            return Err(Error::UnsupportedCoordinate);
+        }
+        self.require_output(output)?;
+        if !self.refunds_on_failure() {
+            return Err(Error::FailureRefundUnavailable);
+        }
+        let ordinary =
+            usize::try_from(self.ordinary_region_count()?).map_err(|_| Error::InvalidCount)?;
+        output.fill(0);
+        for claim in output.get_mut(..ordinary).ok_or(Error::InvalidLength)? {
+            *claim = 1;
+        }
         Ok(())
     }
 
@@ -1146,12 +1273,23 @@ fn validate_input(input: BasisInputV3<'_>) -> Result<()> {
             if offered_certificate {
                 return Err(Error::PriceGateCertificateUnexpected);
             }
-            if input.payout_scale != 1
-                || input.knot_denominator != 1
+            if input.knot_denominator != 1
                 || !input.knots.is_empty()
                 || !input.terms.is_empty()
                 || !input.failure_payouts.is_empty()
             {
+                return Err(Error::NonCanonicalReserved);
+            }
+            // The encoder admits exactly the two scales the decoder admits, so
+            // a record that would refuse on decode cannot be built here and
+            // shipped to a chain to refuse there. See the decoder's own arm
+            // for what the two scales mean and why width 3 is the floor.
+            let refunding = categorical_refunds_on_failure_v3(
+                input.kind,
+                input.basis_width,
+                input.payout_scale,
+            );
+            if input.payout_scale != 1 && !refunding {
                 return Err(Error::NonCanonicalReserved);
             }
         }
@@ -2049,6 +2187,154 @@ mod tests {
         assert_eq!(
             validate_input(graded_input(&knots, &terms, &failure)),
             Err(Error::UnorderedKnots)
+        );
+    }
+
+    /// Categorical fixture at an arbitrary width and scale, so the two shapes
+    /// are built by the same code and differ only in the scale.
+    fn categorical_input(basis_width: u32, payout_scale: u64) -> BasisInputV3<'static> {
+        BasisInputV3 {
+            kind: BasisKindV3::CategoricalQ1,
+            product_id: id(1),
+            result_domain_id: id(2),
+            coordinate_domain_id: id(3),
+            result_unit_id: id(4),
+            evaluator_release_id: id(5),
+            basis_width,
+            payout_scale,
+            knot_denominator: 1,
+            knots: &[],
+            terms: &[],
+            failure_payouts: &[],
+            price_gate_certificate_digest: [0_u8; 32],
+        }
+    }
+
+    /// Cohort-13's own shape: three ordinary regions under cuts 9600/10000 and
+    /// one explicit failure coordinate, founded to refund.
+    fn cohort13_refunding_basis() -> Vec<u8> {
+        compile(categorical_input(4, 3))
+    }
+
+    #[test]
+    fn a_legacy_categorical_basis_does_not_refund_and_says_so() {
+        let bytes = compile(categorical_input(4, 1));
+        let basis = ProductBasisV3::decode(&bytes).expect("basis");
+        assert!(!basis.refunds_on_failure());
+        let mut output = [9_u64; 4];
+        assert_eq!(
+            basis.evaluate_categorical_failure(&mut output),
+            Err(Error::FailureRefundUnavailable)
+        );
+        // Untouched: a refusal that had already written the vector would leave
+        // a caller reading a refund it was refused.
+        assert_eq!(output, [9; 4]);
+        // And its failure coordinate still pays, which is exactly the shape
+        // cohort-13 executed. This assertion is the status quo, on purpose.
+        basis
+            .evaluate_categorical(3, &mut output)
+            .expect("legacy failure column pays");
+        assert_eq!(output, [0, 0, 0, 1]);
+    }
+
+    #[test]
+    fn a_refunding_basis_pays_every_ordinary_claim_and_the_escrow_nothing() {
+        let bytes = cohort13_refunding_basis();
+        let basis = ProductBasisV3::decode(&bytes).expect("basis");
+        assert!(basis.refunds_on_failure());
+        assert_eq!(basis.ordinary_region_count(), Ok(3));
+        let mut failure = [9_u64; 4];
+        basis
+            .evaluate_categorical_failure(&mut failure)
+            .expect("refund vector");
+        assert_eq!(failure, [1, 1, 1, 0]);
+        // Both arms partition the SAME scale, which is what lets the terminal
+        // route gate the failure arm with the partition check it already runs.
+        assert_eq!(failure.iter().sum::<u64>(), basis.payout_scale());
+        let mut success = [9_u64; 4];
+        basis
+            .evaluate_categorical(1, &mut success)
+            .expect("winner vector");
+        assert_eq!(success, [0, 3, 0, 0]);
+        assert_eq!(success.iter().sum::<u64>(), basis.payout_scale());
+    }
+
+    #[test]
+    fn a_refunding_basis_refuses_to_pay_its_failure_coordinate() {
+        let bytes = cohort13_refunding_basis();
+        let basis = ProductBasisV3::decode(&bytes).expect("basis");
+        let mut output = [9_u64; 4];
+        assert_eq!(
+            basis.evaluate_categorical(3, &mut output),
+            Err(Error::FailureCoordinateNotPayable)
+        );
+        assert_eq!(output, [9; 4]);
+        // Every ordinary selector still pays, so the refusal is about the one
+        // coordinate and not about the record.
+        for selector in 0..3 {
+            basis
+                .evaluate_categorical(selector, &mut output)
+                .expect("ordinary selector pays");
+        }
+        assert_eq!(
+            basis.evaluate_categorical(4, &mut output),
+            Err(Error::SelectorOutOfRange)
+        );
+    }
+
+    #[test]
+    fn the_escrow_exactly_covers_every_ordinary_claim_at_cohort13_supply() {
+        // Cohort-13 minted 500,000,000 complete sets. Under the refunding
+        // shape the Hoard holds supply * payout_scale, and the ordinary claims
+        // outstanding are ordinary_region_count * supply, each worth one atom.
+        const SUPPLY: u64 = 500_000_000;
+        let bytes = cohort13_refunding_basis();
+        let basis = ProductBasisV3::decode(&bytes).expect("basis");
+        let hoard = SUPPLY * basis.payout_scale();
+        let mut failure = [0_u64; 4];
+        basis
+            .evaluate_categorical_failure(&mut failure)
+            .expect("refund vector");
+        // The terminal route computes exactly this sum as `liability_before`.
+        let liability: u64 = failure.iter().map(|payout| payout * SUPPLY).sum();
+        assert_eq!(liability, hoard);
+        // The founder's 1,499,999,800 ordinary claims and the stranger's 200
+        // draw their own shares and nothing else, and the two exhaust it.
+        assert_eq!(1_499_999_800_u64 * 1 + 200_u64 * 1, hoard);
+    }
+
+    #[test]
+    fn width_two_may_not_be_founded_refunding_because_nobody_could_tell() {
+        // At width 2 the legacy scale and the refunding scale are the same
+        // number, so the record would not say which shape it carries.
+        let bytes = compile(categorical_input(2, 1));
+        let basis = ProductBasisV3::decode(&bytes).expect("basis");
+        assert!(!basis.refunds_on_failure());
+        assert_eq!(
+            validate_input(categorical_input(2, 2)),
+            Err(Error::NonCanonicalReserved)
+        );
+    }
+
+    #[test]
+    fn only_the_two_named_scales_encode_or_decode() {
+        for (basis_width, payout_scale) in [(4_u32, 2_u64), (4, 4), (4, 0), (258, 1_000)] {
+            let refused = validate_input(categorical_input(basis_width, payout_scale));
+            assert!(
+                refused.is_err(),
+                "scale {payout_scale} at width {basis_width} must not encode"
+            );
+        }
+        // And the decoder refuses the same set, so a hand-built record cannot
+        // reach a chain with a scale the encoder would not have written.
+        let mut bytes = compile(categorical_input(4, 3));
+        bytes
+            .get_mut(BASIS_PAYOUT_SCALE_OFFSET_V3..BASIS_PAYOUT_SCALE_OFFSET_V3 + 8)
+            .expect("scale field")
+            .copy_from_slice(&2_u64.to_le_bytes());
+        assert_eq!(
+            ProductBasisV3::decode(&bytes).err(),
+            Some(Error::NonCanonicalReserved)
         );
     }
 

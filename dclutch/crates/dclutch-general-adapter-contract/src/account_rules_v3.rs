@@ -205,7 +205,7 @@ pub const fn general_account_profile_operation_count_v3(action: Action) -> u16 {
         Action::VerifyCandidateRow => 16,
         Action::CloseCandidate => 23,
         Action::OpenBatch => 24,
-        Action::CloseBatch => 21,
+        Action::CloseBatch => 22,
         Action::PlaceOrder => 35,
         Action::CancelOrder => 33,
         Action::ReleaseOrder => 21,
@@ -1152,6 +1152,36 @@ pub fn general_account_profile_operation_v3(
             account: primary,
             destination: common_scalar(scalar::CONFIG_MAX_ORDERS)?,
             data_offset: batch_body_offset(GeneralBatchLayoutV1::MAX_ORDERS)?,
+        }),
+        // THE GENERATION THIS ACTION'S OWN PROJECTOR REQUIRES, and did not have.
+        //
+        // `project_general_close_batch_candidate_in_place_v3` refuses unless
+        // `root.generation() == environment.generation`, and
+        // `general_hot_environment_from_bank_v3` reads that from
+        // `scalar::GENERATION`. Nothing wrote it for `CloseBatch`: not this
+        // profile, not the RequestProfile (whose identity destinations are
+        // exactly `{0, 3, 29}` and whose scalars do not include it), not a
+        // trusted environment (General declares `CurrentSlot`,
+        // `CurrentExecutingProgram` and `SystemProgram`). So the register was
+        // zero, the root's generation was not, and CLOSEBATCH COULD NOT BE
+        // EXECUTED AT ALL through the artifact-driven route.
+        //
+        // It went unnoticed for the ordinary reason: the only harness that ran
+        // `CloseBatch` -- the accelerator's own program-test -- HAND-WRITES its
+        // input bank (`close_batch_bank`) and writes the generation itself, so
+        // it exercised the projector and never the artifact that has to feed
+        // it. Measured 2026-09-04 by the first run that fed the projector from
+        // the published AccountProfile: `env.gen=0 root.gen=9`.
+        //
+        // Appended at this action's own last coordinate, exactly as
+        // `OpenBatch` sources the same register at its own index 18. Every
+        // earlier ordinal keeps its position and its bytes; the four derived
+        // tail indices below are computed from the operation count and move
+        // with it, which is what makes appending safe here.
+        16 if action == Action::CloseBatch => Ok(AccountOperationInputV2::ProjectDataU64 {
+            account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_CONFIG_COORDINATE_V3)?),
+            destination: common_scalar(scalar::GENERATION)?,
+            data_offset: width(GeneralConfigV3Layout::GENERATION)?,
         }),
         // Every other action creates its primary state, so its lifecycle plan is
         // what proves the account's owner. Close destroys that account instead:
@@ -2532,6 +2562,67 @@ mod tests {
                         | Action::CloseCandidate
                 ),
                 "{action:?}",
+            );
+        }
+    }
+
+    /// EVERY ACTION WHOSE PROJECTOR JOINS THE GENERATION MUST HAVE A PROFILE
+    /// THAT WRITES ONE.
+    ///
+    /// `general_hot_environment_from_bank_v3` reads `scalar::GENERATION` out of
+    /// the candidate bank, and seven of the fifteen candidate projectors then
+    /// refuse unless it equals the root's (or, for
+    /// `InitializeSettlement`, unless it is nonzero at all). Nothing else in
+    /// the executing frame writes that register: the fifteen Lean-emitted
+    /// RequestProfiles do not name it, and General's trusted environment is
+    /// `CurrentSlot`/`CurrentExecutingProgram`/`SystemProgram`. So a profile
+    /// that omits this operation makes its own action UNEXECUTABLE, and does it
+    /// silently -- the register is a well-formed zero.
+    ///
+    /// It stayed silent because the only harness that ran those actions --
+    /// `programs/dclutch-general-accelerator-sbf/program-test/tests/lifecycle.rs`
+    /// -- HAND-WRITES its input bank and writes the generation itself. It
+    /// exercised the reader and never the artifact that has to feed it.
+    /// Measured 2026-09-04 by the first `CloseBatch` fed from this profile
+    /// through the real Trading ELF: `env.gen=0 root.gen=9`.
+    ///
+    /// THE LIST IS THE DEBT. `CloseBatch` is fixed and proven end to end.
+    /// `SubmitCandidate`, `CloseCandidate` and `InitializeSettlement` have the
+    /// same omission and are asserted here as still missing, so the day one of
+    /// them is fixed this test says so instead of staying quietly green.
+    #[test]
+    fn a_profile_that_omits_the_generation_makes_its_own_action_unexecutable() {
+        let writes_generation = |action: Action| {
+            let count = general_account_profile_fixed_operation_count_v3(action);
+            (0..count).any(|index| {
+                matches!(
+                    general_account_profile_operation_v3(action, index),
+                    Ok(AccountOperationInputV2::ProjectDataU64 { destination, .. })
+                        if Ok(destination) == common_scalar(scalar::GENERATION)
+                )
+            })
+        };
+        for action in [
+            Action::OpenBatch,
+            Action::CloseBatch,
+            Action::PlaceOrder,
+            Action::CancelOrder,
+            Action::ReleaseOrder,
+        ] {
+            assert!(
+                writes_generation(action),
+                "{action:?}'s projector joins the generation and its profile writes none"
+            );
+        }
+        for action in [
+            Action::SubmitCandidate,
+            Action::CloseCandidate,
+            Action::InitializeSettlement,
+        ] {
+            assert!(
+                !writes_generation(action),
+                "{action:?} gained the generation projection: move it into the list above, \
+                 and prove the action executes rather than only that the register is written"
             );
         }
     }

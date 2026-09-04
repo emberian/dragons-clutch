@@ -72,9 +72,25 @@ pub const DIRECT_FEE_DENOMINATOR_V1: u16 = 10_000;
 /// positive gross forces a rate of exactly 10,000. See
 /// `DClutch.Direct.banded_fee_leaves_a_positive_seller_net` for the proof, and
 /// [`DirectInlineCandidateErrorV2::FeeSoleRetired`] for the refusal.
-pub const DIRECT_MAX_FEE_BASIS_POINTS_V1: u16 = 500;
+/// **It is no longer this crate's number.** Ruled 2026-09-04 (C-11 D1, as
+/// amended): every economic knob the protocol has lives in one governed record,
+/// `dclutch-protocol-parameters-contract`, and 500 is that record's
+/// CONSTITUTIONAL CEILING -- the bound a release owns and governance can only
+/// narrow beneath. The value is unchanged and every artifact digest is
+/// byte-identical; what moved is who authors it. A market's EFFECTIVE cap is
+/// the record's `max_fee_basis_points`, read from the account, which is at or
+/// below this and is what a founding adapter will check once the record ships.
+pub const DIRECT_MAX_FEE_BASIS_POINTS_V1: u16 =
+    dclutch_protocol_parameters_contract::PROTOCOL_ABSOLUTE_FEE_CEILING_BASIS_POINTS_V1;
 
 const _: () = assert!(DIRECT_MAX_FEE_BASIS_POINTS_V1 <= DIRECT_FEE_DENOMINATOR_V1);
+// The two crates state the denominator independently -- one from Lean's
+// `basisPointDenominator`, one from the Direct fee geometry -- so a divergence
+// would silently rescale one side's percentages.
+const _: () = assert!(
+    DIRECT_FEE_DENOMINATOR_V1
+        == dclutch_protocol_parameters_contract::PROTOCOL_BASIS_POINT_DENOMINATOR_V1
+);
 
 /// Canonical projection coordinates of [`DirectExecutionConfigV1`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2483,6 +2499,13 @@ pub struct MakerReplayClosePlanV2 {
     pub rent_principal: u64,
     /// Lamports above historical principal, explicitly not fees or reserves.
     pub unclassified_donation: u64,
+    /// The permissionless closer's carve, out of the donation slice alone.
+    ///
+    /// Ruling D1 item 4 (2026-09-04). Bounded by the cap AND by the donation,
+    /// so `total_credit >= rent_principal` for every cap a caller can pass:
+    /// the principal is the maker's own money and is never part of the carve.
+    /// Lean: `the_closer_carve_never_touches_principal`.
+    pub closer_reward: u64,
     /// Exact total lamports credited to the beneficiary RentCredit.
     pub total_credit: u64,
 }
@@ -2504,10 +2527,26 @@ pub struct MakerReplayCloseResultV2 {
 /// deliberately phase-free, so settle-then-close is always available in
 /// Retiring; the refusal strands nobody. Lean: `closeMaker` /
 /// `close_conserves_fee_receivable` in `DirectSuccessor.lean`.
+///
+/// `closer_reward_cap` is ruling D1 item 4's carve ceiling and it is an
+/// ARGUMENT, not a constant here, because `docs/design/FUNDED_CRANK_V1.md`
+/// section 3 rules that a crank's floor derives from the Rent sysvar and is
+/// never a source literal. The governed value lives in
+/// `dclutch-protocol-parameters-contract`'s record as
+/// `closer_reward_cap_lamports`.
+///
+/// **The deployed route passes zero, and it does so for a frame reason rather
+/// than a policy reason.** `direct_close_maker_v1.rs` refuses ANY signer, so
+/// there is no closer account in the frame to pay: a nonzero cap here would
+/// compute a carve with nowhere to send it. Paying a closer needs a
+/// twenty-third account and a signer conjunct -- a released AccountProfile
+/// change, which moves the descriptor digest and re-founds -- and that is
+/// named debt, not a finished value.
 pub fn close_maker_replay_v2(
     root: DirectRootStateV1,
     maker_root: MakerReplayRootV1,
     observed_lamports: u64,
+    closer_reward_cap: u64,
 ) -> SuccessorResult<MakerReplayCloseResultV2> {
     if !DIRECT_ROOT_RETIRING_ADMISSIBLE_STATES_V1.admits(root.phase) {
         return Err(SuccessorError::InvalidRootPhase);
@@ -2531,11 +2570,19 @@ pub fn close_maker_replay_v2(
             open_maker_root_count,
             ..root
         },
-        plan: MakerReplayClosePlanV2 {
-            rent_owner: maker_root.rent_owner,
-            rent_principal: maker_root.rent_principal,
-            unclassified_donation: observed_lamports - maker_root.rent_principal,
-            total_credit: observed_lamports,
+        plan: {
+            let unclassified_donation = observed_lamports - maker_root.rent_principal;
+            // A cap, never a demand: a thin donation yields a thin carve rather
+            // than a refusal, because a close that could refuse for lack of
+            // funds is a close nobody turns and a market nobody retires.
+            let closer_reward = closer_reward_cap.min(unclassified_donation);
+            MakerReplayClosePlanV2 {
+                rent_owner: maker_root.rent_owner,
+                rent_principal: maker_root.rent_principal,
+                unclassified_donation,
+                closer_reward,
+                total_credit: observed_lamports - closer_reward,
+            }
         },
     })
 }
@@ -3570,21 +3617,83 @@ mod tests {
         )
         .expect("create");
         assert_eq!(
-            close_maker_replay_v2(created.root, created.maker_root, 111),
+            close_maker_replay_v2(created.root, created.maker_root, 111, 0),
             Err(SuccessorError::InvalidRootPhase)
         );
         let retiring = created.root.begin_retiring().expect("retiring");
-        let closed = close_maker_replay_v2(retiring, created.maker_root, 111).expect("close maker");
+        let closed =
+            close_maker_replay_v2(retiring, created.maker_root, 111, 0).expect("close maker");
         assert_eq!(closed.root.open_maker_root_count(), 0);
         assert_eq!(closed.plan.rent_owner, id(9));
         assert_eq!(closed.plan.rent_principal, 100);
         assert_eq!(closed.plan.unclassified_donation, 11);
+        assert_eq!(closed.plan.closer_reward, 0);
         assert_eq!(closed.plan.total_credit, 111);
         closed.root.require_closable().expect("root closable");
         assert_eq!(
-            close_maker_replay_v2(closed.root, created.maker_root, 111),
+            close_maker_replay_v2(closed.root, created.maker_root, 111, 0),
             Err(SuccessorError::MakerRootCountInvariant)
         );
+    }
+
+    /// RULING D1 ITEM 4: the closer's carve comes out of the donation slice
+    /// alone, and the cap bounds it.
+    ///
+    /// The Lean twin proves it for every cap
+    /// (`the_closer_carve_never_touches_principal`); this is the same statement
+    /// over the executable, plus the two numbers a reader wants to see. The
+    /// deployed route passes a cap of zero -- the first case below is today's
+    /// behaviour, unchanged to the lamport -- and the rest are the shape the
+    /// ruling installs once the frame can carry a closer.
+    #[test]
+    fn the_closer_carve_comes_out_of_the_donation_and_never_the_principal() {
+        let created = consume_nonce_v2(
+            DirectRootStateV1::new(),
+            MakerReplayObservationV1::Vacant(MakerReplayVacancyV1::new(8, 3)),
+            intent(id(2), 0),
+            NonceConsumptionV2::Inline,
+            Some(MakerReplayFirstUseV1 {
+                rent_owner: id(9),
+                rent_principal: 100,
+            }),
+        )
+        .expect("create");
+        let retiring = created.root.begin_retiring().expect("retiring");
+
+        // cap 0: today's deployed close, to the lamport.
+        let today = close_maker_replay_v2(retiring, created.maker_root, 111, 0).expect("today");
+        assert_eq!(today.plan.closer_reward, 0);
+        assert_eq!(today.plan.total_credit, 111);
+
+        // cap 4: the carve binds and the beneficiary keeps 107 -- still more
+        // than the 100 of principal, which is the whole point.
+        let funded = close_maker_replay_v2(retiring, created.maker_root, 111, 4).expect("funded");
+        assert_eq!(funded.plan.closer_reward, 4);
+        assert_eq!(funded.plan.total_credit, 107);
+
+        // cap larger than the donation: the DONATION binds, not the cap, and
+        // the beneficiary still receives every lamport of principal.
+        let greedy =
+            close_maker_replay_v2(retiring, created.maker_root, 111, u64::MAX).expect("greedy");
+        assert_eq!(greedy.plan.closer_reward, 11);
+        assert_eq!(greedy.plan.total_credit, 100);
+        assert_eq!(greedy.plan.total_credit, greedy.plan.rent_principal);
+
+        // No donation, any cap: nothing to carve, and it is not a refusal.
+        let bare =
+            close_maker_replay_v2(retiring, created.maker_root, 100, u64::MAX).expect("bare");
+        assert_eq!(bare.plan.unclassified_donation, 0);
+        assert_eq!(bare.plan.closer_reward, 0);
+        assert_eq!(bare.plan.total_credit, 100);
+
+        // Conservation over every case: nothing created, nothing stranded.
+        for plan in [today.plan, funded.plan, greedy.plan, bare.plan] {
+            assert_eq!(
+                plan.rent_principal + plan.unclassified_donation,
+                plan.closer_reward + plan.total_credit,
+            );
+            assert!(plan.total_credit >= plan.rent_principal);
+        }
     }
 
     /// FEE-TX2 amendment red-proof, both ways (cohort-9 review item 1,
@@ -3609,7 +3718,7 @@ mod tests {
         let owing = created.maker_root.record_fee_owed(4).expect("record");
         let retiring = created.root.begin_retiring().expect("retiring");
         assert_eq!(
-            close_maker_replay_v2(retiring, owing, 111),
+            close_maker_replay_v2(retiring, owing, 111, 0),
             Err(SuccessorError::FeeOwedOutstanding)
         );
         // A short settlement cannot clear the flag on the way past.
@@ -3618,7 +3727,7 @@ mod tests {
             Err(SuccessorError::FeeOwedOutstanding)
         );
         let settled = owing.settle_fee_owed(4).expect("exact settlement");
-        let closed = close_maker_replay_v2(retiring, settled, 111).expect("settled close");
+        let closed = close_maker_replay_v2(retiring, settled, 111, 0).expect("settled close");
         assert_eq!(closed.root.open_maker_root_count(), 0);
         assert_eq!(closed.plan.rent_owner, id(9));
     }
@@ -3648,7 +3757,7 @@ mod tests {
             Err(SuccessorError::MakerRootCountInvariant),
             "Retired stays gated on zero makers -- the invariant never moved",
         );
-        let closed = close_maker_replay_v2(retiring, created.maker_root, 111).expect("close");
+        let closed = close_maker_replay_v2(retiring, created.maker_root, 111, 0).expect("close");
         closed
             .root
             .require_closable()

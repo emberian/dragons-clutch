@@ -847,6 +847,7 @@ fn report_plan(coordinates: &CoordinatesV1, report: &DirectCloseMakerSubmitV1) {
     );
     println!("rent principal       {}", report.rent_principal);
     println!("donation             {}", report.unclassified_donation);
+    println!("closer carve         {}", report.closer_reward);
     println!("total credit         {}", report.total_credit);
     println!(
         "beneficiary after    {}",
@@ -917,6 +918,7 @@ fn write_evidence(
             "rentOwner": Pubkey::new_from_array(report.expected_receipt.rent_owner).to_string(),
             "rentPrincipal": report.rent_principal,
             "unclassifiedDonation": report.unclassified_donation,
+            "closerReward": report.closer_reward,
             "totalCredit": report.total_credit,
             "beneficiaryLamportsAfter": report.expected_rent_owner_lamports,
             "remainingOpenMakerRoots": report.expected_remaining_open_maker_roots,
