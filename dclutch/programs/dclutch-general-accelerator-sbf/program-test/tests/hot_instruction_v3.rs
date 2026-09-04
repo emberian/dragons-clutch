@@ -64,15 +64,21 @@ use dclutch_general_adapter_contract::local_state_v3::{
     general_local_state_len_v3,
 };
 use dclutch_general_adapter_contract::release_v3::GENERAL_ACTIONS_V3;
-use dclutch_general_adapter_contract::runtime_width::{
-    SettlementCursorHeaderV2, SettlementCursorV2, SettlementPhaseV2, settlement_cursor_len,
+use dclutch_general_adapter_contract::runtime_selection::{
+    RUNTIME_SELECTION_CURSOR_BYTES_V2, consider_verified_candidate_v2,
 };
-use dclutch_general_adapter_contract::state_artifacts_v3::general_child_account_start_v3;
+use dclutch_general_adapter_contract::runtime_width::{
+    SettlementCursorHeaderV2, SettlementCursorV2, SettlementPhaseV2, VerifiedCandidateHeaderV2,
+    VerifiedCandidateV2, settlement_cursor_len, verified_candidate_len,
+};
+use dclutch_general_adapter_contract::state_artifacts_v3::{
+    GeneralReadonlyEvidenceKindV3, general_child_account_start_v3, general_readonly_evidence_v3,
+};
 use dclutch_general_adapter_contract::state_seeds_v3::{
     GeneralStateAddressSeedsV3, GeneralStateRecipeV3,
 };
 use dclutch_general_codec::{
-    Action,
+    Action, MAX_SELECTION_CRITERIA, SelectionCriterion, SelectionPolicyV1,
     successor_request_v2::{CONTROLLER_REQUEST_BYTES_V2, ControllerRequestV2},
 };
 use dclutch_general_config_contract::root::{GeneralRootV2, general_root_creation_tail_v2};
@@ -349,7 +355,13 @@ fn placeholder_request(action: Action) -> ControllerRequestV2 {
 /// call decides which seed order the published policy encodes.
 fn primary_state_seeds(action: Action, root: Pubkey) -> GeneralStateAddressSeedsV3 {
     let coordinates = match GeneralStateRecipeV3::primary_for_action(action) {
-        GeneralStateRecipeV3::Selection => GeneralStateAddressSeedsV3::selection(root.to_bytes()),
+        // The selection recipe gained the batch identity on 2026-09-04, so a
+        // cursor's address is per (root, batch) rather than per root. This file
+        // exercises one batch, so `CANDIDATE_ID` stands in for it exactly as it
+        // does for the settlement recipe below.
+        GeneralStateRecipeV3::Selection => {
+            GeneralStateAddressSeedsV3::selection(root.to_bytes(), CANDIDATE_ID)
+        }
         _ => GeneralStateAddressSeedsV3::settlement(root.to_bytes(), CANDIDATE_ID),
     };
     coordinates.expect("General primary state coordinates")
@@ -369,6 +381,83 @@ fn terminal_state_seeds(root: Pubkey, terminal_coordinate: u64) -> GeneralStateA
 fn state_address(seeds: GeneralStateAddressSeedsV3) -> (Pubkey, u8) {
     let projected = seeds.as_slices().expect("General state seed projection");
     Pubkey::find_program_address(projected.as_slice(), &TRADING_PROGRAM)
+}
+
+/// One submitted VerifiedCandidate naming the batch a selection is keyed by.
+///
+/// Only its `batch_id` is read on this file's path -- the AccountProfile
+/// projects that field into the register the selection recipe seeds on -- but
+/// it is written through the record's own encoder rather than as bytes at an
+/// offset, because a fixture that spells a layout becomes a second author for
+/// it.
+fn verified_candidate_naming_the_batch() -> Vec<u8> {
+    let width = usize::try_from(OUTCOME_COUNT).expect("Product width");
+    let mut verified = vec![0_u8; verified_candidate_len(OUTCOME_COUNT).expect("verified width")];
+    VerifiedCandidateV2::encode_into(
+        VerifiedCandidateHeaderV2 {
+            outcome_count: OUTCOME_COUNT,
+            page_count: 1,
+            candidate_coordinate: 1,
+            revision: 1,
+            candidate_id: CANDIDATE_ID,
+            product_id: [0x45; 32],
+            batch_id: CANDIDATE_ID,
+            filled_lots: 1,
+            quote_debit: 1,
+            quote_credit: 0,
+            price_scale: 1,
+        },
+        &vec![1; width],
+        &vec![1; width],
+        &mut verified,
+    )
+    .expect("verified candidate");
+    verified
+}
+
+/// One live selection cursor naming the batch its address is seeded by.
+///
+/// Opened through `consider_verified_candidate_v2` for the same reason: the
+/// cursor's body is a record with its own author, and this file's business is
+/// the ADDRESS the envelope sits at.
+fn live_selection_state(bump: u8) -> Vec<u8> {
+    let mut criteria = [SelectionCriterion::MaximizeFilledLots; MAX_SELECTION_CRITERIA];
+    criteria[1] = SelectionCriterion::MinimizeQuoteSurplus;
+    criteria[2] = SelectionCriterion::MinimizeCandidateId;
+    let policy = SelectionPolicyV1 {
+        policy_id: [0x43; 32],
+        criterion_count: 3,
+        criteria,
+    };
+    let vacant = [0_u8; RUNTIME_SELECTION_CURSOR_BYTES_V2];
+    let mut scratch = vacant;
+    let mut body = vacant;
+    consider_verified_candidate_v2(
+        policy,
+        &vacant,
+        &verified_candidate_naming_the_batch(),
+        0,
+        &mut scratch,
+        &mut body,
+    )
+    .expect("open selection");
+    let len = general_local_state_len_v3(GeneralLocalStateKindV3::Selection, OUTCOME_COUNT)
+        .expect("local state width");
+    let mut state_scratch = vec![0; len];
+    let mut output = vec![0; len];
+    encode_general_local_state_v3_atomic(
+        GeneralLocalStateHeaderV3 {
+            kind: GeneralLocalStateKindV3::Selection,
+            bump,
+            rent_principal: Rent::default().minimum_balance(len),
+            beneficiary: [0x44; 32],
+        },
+        &body,
+        &mut state_scratch,
+        &mut output,
+    )
+    .expect("selection envelope");
+    output
 }
 
 /// One live General local state at the exact width the profile declares.
@@ -845,6 +934,23 @@ fn build_fixture(action: Action) -> GeneralChainFixtureV3 {
                     TRADING_PROGRAM,
                     live_settlement_state(primary_state_bump),
                 )
+            } else if action == Action::Freeze {
+                // A FREEZE'S CURSOR IS ALWAYS LIVE, and this fixture used to
+                // install it vacant along with everything else. That was a
+                // fixture choice standing in for a state the protocol cannot
+                // reach -- `freeze_selection_v2` refuses a zero revision, and
+                // the emitted transition requires a nonzero best candidate --
+                // and it stopped being merely unrealistic on 2026-09-04, when
+                // the selection recipe gained the batch identity: the address
+                // is now seeded by the cursor's own `batch_id`, so a vacant
+                // account seeds it with thirty-two zero bytes and derives a
+                // different address than the one the fixture installed. Live is
+                // what `AuthenticateOrCreate` reaches in every real freeze.
+                (
+                    primary_state,
+                    TRADING_PROGRAM,
+                    live_selection_state(primary_state_bump),
+                )
             } else {
                 (primary_state, system_program::ID, Vec::new())
             }
@@ -860,6 +966,21 @@ fn build_fixture(action: Action) -> GeneralChainFixtureV3 {
                 .expect("runtime key prefix")
                 .copy_from_slice(&u64::try_from(ordinal).expect("ordinal").to_le_bytes());
             *key.get_mut(31).expect("runtime key tag") = 0xa0;
+            // CONSIDER'S SUBMITTED CANDIDATE IS NOT FILLER ANY MORE. Every other
+            // evidence account here is zeroes at the declared width, which is
+            // enough while nothing reads them; the selection recipe now seeds on
+            // the batch identity and `Consider` projects it out of THIS record,
+            // so a zeroed one derives the selection address from thirty-two zero
+            // bytes and the frame stops agreeing with itself.
+            let data = if action == Action::Consider
+                && general_readonly_evidence_v3(Action::Consider, 1).is_ok_and(|evidence| {
+                    evidence.kind == GeneralReadonlyEvidenceKindV3::SubmittedVerifiedCandidate
+                        && usize::from(evidence.coordinate) == representative
+                }) {
+                verified_candidate_naming_the_batch()
+            } else {
+                vec![0; data_len]
+            };
             (
                 Pubkey::new_from_array(key),
                 if privileges.executable() {
@@ -867,7 +988,7 @@ fn build_fixture(action: Action) -> GeneralChainFixtureV3 {
                 } else {
                     system_program::ID
                 },
-                vec![0; data_len],
+                data,
             )
         };
         runtime_suffix_accounts.push(GeneralObservedAccountMetaV3 {
@@ -927,6 +1048,17 @@ fn primary_state_index(action: Action, primary: bool) -> Option<usize> {
     } else {
         None
     }
+}
+
+/// Whether `build_fixture` installed a MATERIALIZED primary state for this run.
+///
+/// The builder reports `is_materialized` from the account it was handed, so the
+/// assertion about it belongs to whatever the fixture installed -- not to a list
+/// of actions maintained beside it.
+fn fixture_primary_state_is_live(fixture: &GeneralChainFixtureV3) -> bool {
+    fixture.state.runtime_suffix_accounts.iter().any(|account| {
+        account.account.key == fixture.primary_state && !account.account.data.is_empty()
+    })
 }
 
 /// Exact content identities the builder should report for one action bundle.
@@ -1123,15 +1255,16 @@ fn the_builder_turns_one_finalized_general_snapshot_into_a_complete_hot_instruct
     assert_eq!(report.lifecycle.primary.account, fixture.primary_state);
     assert_eq!(report.lifecycle.primary.bump, fixture.primary_state_bump);
     assert_eq!(report.lifecycle.primary.account_coordinate, 5);
-    // The fixture installs this coordinate VACANT for every action but Close
-    // -- "the honest prestate for an action that has not run yet", in its own
-    // words above -- and Freeze's Lifecycle V5 plan is AuthenticateOrCreate,
-    // so a vacant selection cursor is exactly what it must admit. Asserting
-    // materialized here contradicted the frame two hundred lines up; nothing
-    // caught it because no test in this file reached this line.
+    // THE FIXTURE IS ASKED, NOT RESTATED. This used to read
+    // `action == Action::Close`, which was a second author for a fact
+    // `build_fixture` already decides -- and it went stale on 2026-09-04, when
+    // `Freeze` joined `Close` in installing a live primary state (its cursor
+    // now SEEDS its own address, so a vacant one derives a different account).
+    // A list of actions here would have to be edited every time the fixture's
+    // prestate changes; reading the prestate back cannot go stale.
     assert_eq!(
         report.lifecycle.primary.is_materialized,
-        action == Action::Close,
+        fixture_primary_state_is_live(&fixture),
     );
     assert_eq!(report.lifecycle.secondary, None);
     assert_eq!(report.lifecycle.conditional_result, None);
@@ -1309,7 +1442,19 @@ fn a_runtime_account_one_byte_off_its_profile_width_refuses() {
                 .runtime_suffix_accounts
                 .iter_mut()
                 .find(|account| {
-                    account.is_writable && !account.is_signer && !account.account.data.is_empty()
+                    // THE LIFECYCLE STATE IS NOT THE RENT CREDIT, and until
+                    // 2026-09-04 this predicate could not tell them apart
+                    // because `Freeze`'s primary state was installed vacant.
+                    // It is a live cursor now, it is writable, and it has
+                    // bytes -- so "the first writable account with data"
+                    // started naming the account this test is not about, and
+                    // the refusal moved from `RuntimeGeometry` to
+                    // `ChainState`. The owner is what separates them: only a
+                    // materialized lifecycle state is Trading-owned.
+                    account.is_writable
+                        && !account.is_signer
+                        && !account.account.data.is_empty()
+                        && account.account.owner != TRADING_PROGRAM
                 })
                 .expect("lifecycle rent credit");
             rent_credit.account.data.push(0);

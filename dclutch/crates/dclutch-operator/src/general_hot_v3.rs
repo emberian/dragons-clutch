@@ -2529,7 +2529,20 @@ fn project_general_lifecycle_seed_identities_v5(
 ) -> Result<(), GeneralHotOperatorErrorV3> {
     let subject = request.candidate_id.filter(|value| *value != [0; 32]);
     match GeneralStateRecipeV3::primary_for_action(request.action) {
-        GeneralStateRecipeV3::Selection => {}
+        // ONE CURSOR PER BATCH, and this builder is the SECOND author of the
+        // address that says so. `GENERAL_SELECTION_STATE_RECIPE_V3` gained the
+        // batch identity register on 2026-09-04 and the AccountProfile gained
+        // the two operations that write it; this arm did not, and a register
+        // nothing writes is a well-formed zero -- one identical, wrong
+        // selection address for every batch under every root, refused as
+        // `Lifecycle` against the account the chain really holds. The two
+        // sources below are the SAME two accounts the profile projects from,
+        // read here through the records' own decoders.
+        GeneralStateRecipeV3::Selection => set_identity(
+            identities,
+            general_identity::SELECTION_BATCH,
+            selection_batch_identity_v5(state, request.action)?,
+        )?,
         GeneralStateRecipeV3::Settlement | GeneralStateRecipeV3::Candidate => set_identity(
             identities,
             general_identity::CANDIDATE,
@@ -2570,6 +2583,55 @@ fn project_general_lifecycle_seed_identities_v5(
         }
     }
     Ok(())
+}
+
+/// The batch a selection cursor belongs to, from the record that owns the fact.
+///
+/// NEITHER SOURCE IS THE CALLER, and the two differ for one reason: the first
+/// `Consider` of a batch CREATES the cursor, so at that moment the cursor is
+/// thirty-two zero bytes and cannot name anything. The submitted
+/// `VerifiedCandidate` already names its batch and is the record
+/// `consider_verified_candidate_v2` compares against, so it is the source while
+/// the cursor is being opened; by `Freeze` the cursor exists and is the record
+/// whose `batch_id` the accelerator joins against the presented Batch, so it is
+/// the source once it does. Deriving the address from a field of the account AT
+/// that address is not circular: the derived address must BE the supplied
+/// account's key, so only the genuine cursor for that batch satisfies it.
+///
+/// This mirrors `general_account_profile_operation_v3`'s two
+/// `ProjectDataIdentity` operations exactly, at the same two coordinates, and a
+/// disagreement between them surfaces as a refused build rather than a wrong
+/// instruction: the address this function feeds is compared against the account
+/// the chain holds.
+fn selection_batch_identity_v5(
+    state: &GeneralHotStateV3,
+    action: Action,
+) -> Result<[u8; 32], GeneralHotOperatorErrorV3> {
+    match action {
+        Action::Consider => Ok(VerifiedCandidateV2::decode(
+            &readonly_evidence_account_v5(
+                state,
+                Action::Consider,
+                GeneralReadonlyEvidenceKindV3::SubmittedVerifiedCandidate,
+            )?
+            .account
+            .data,
+        )
+        .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?
+        .header()
+        .batch_id),
+        Action::Freeze => Ok(RuntimeSelectionCursorV2::decode(
+            primary_state_body_v5(state, GeneralLocalStateKindV3::Selection)?
+                .ok_or(GeneralHotOperatorErrorV3::ChainState)?,
+        )
+        .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?
+        .header()
+        .batch_id),
+        // `primary_for_action` maps exactly these two onto the selection
+        // recipe. A third would need its own source named here rather than
+        // silently seeding on a zero.
+        _ => Err(GeneralHotOperatorErrorV3::Lifecycle),
+    }
 }
 
 fn local_state_kind_for_recipe_v5(
@@ -4690,9 +4752,15 @@ mod tests {
         // readonly-index array and once in the instruction's own account-index
         // array -- and both are one byte. Uniform across all seven, which is
         // what says the append moved a count and nothing else.
+        // FREEZE MOVED ALONE on 2026-09-04 and the other six did not, which is
+        // the opposite of the uniformity above and says the same kind of thing:
+        // `9653ef363` gave `Freeze` the closed Batch as its ONE readonly
+        // evidence account, so exactly the action that gained an account gained
+        // a coordinate and two wire bytes. Nothing else in the seven declares a
+        // new record.
         for (action, accounts, wire) in [
             (Action::Consider, 71, 674),
-            (Action::Freeze, 69, 670),
+            (Action::Freeze, 70, 672),
             (Action::InitializeSettlement, 105, 932),
             (Action::Collect, 99, 825),
             (Action::Materialize, 97, 821),
@@ -4759,7 +4827,13 @@ mod tests {
     fn the_derived_geometry_reproduces_the_executed_campaign_frame() {
         for (action, campaign_accounts) in [
             (Action::Consider, 61),
-            (Action::Freeze, 59),
+            // +1 on 2026-09-04 from `9653ef363`, and on this row alone: the
+            // freeze deadline needed a batch to read a collection close out of,
+            // so `Freeze` went from zero readonly evidence accounts to one.
+            // The real-ELF authority for it is `real_sbf` in the accelerator's
+            // `lifecycle.rs`, which derives this frame and asserts it against
+            // the ELF; it moved with the profile and this copy did not.
+            (Action::Freeze, 60),
             (Action::InitializeSettlement, 118),
             (Action::Collect, 98),
             (Action::Materialize, 96),
@@ -5080,6 +5154,13 @@ mod tests {
     /// were refused outright, and nobody noticed because
     /// `build_general_hot_instruction_v3` had no caller to run it.
     ///
+    /// SEVEN OF SEVEN SINCE 2026-09-04. `Freeze` was the one action left that
+    /// declared none, and `9653ef363` gave it the closed Batch so its transition
+    /// could read a collection close. The witness is stronger for it -- there is
+    /// now no action the stale conjunct would have admitted -- and it is also
+    /// the reason this count is asserted against the action list rather than
+    /// written as a literal 6.
+    ///
     /// Both replacements compare quantities with independent authors. (a) pins
     /// the literals to the thing they were always describing -- evidence begins
     /// at the fixed-prefix boundary -- so a drifted evidence table still fires
@@ -5115,8 +5196,8 @@ mod tests {
         }
         assert_eq!(
             refused_by_the_stale_form,
-            GENERAL_ACTIONS_V3.len() - 1,
-            "only an action with no readonly evidence could ever have passed the stale check",
+            GENERAL_ACTIONS_V3.len(),
+            "the stale check admits an action, so one of the seven declares no readonly evidence",
         );
     }
 

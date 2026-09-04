@@ -66,11 +66,12 @@ use crate::{
     },
     local_state_v3::{GENERAL_LOCAL_STATE_HEADER_BYTES_V3, GeneralLocalStateLayoutV3},
     runtime_manifest::SETTLEMENT_MANIFEST_HEADER_BYTES_V2,
-    runtime_selection::RUNTIME_SELECTION_CURSOR_BYTES_V2,
+    runtime_selection::{RUNTIME_SELECTION_CURSOR_BYTES_V2, RuntimeSelectionLayoutV2},
     runtime_verify::RUNTIME_VERIFIER_HEADER_BYTES_V2,
     runtime_width::{
         CANDIDATE_HEADER_BYTES_V2, CandidateLayoutV2, PAGE_HEADER_BYTES_V2,
         SETTLEMENT_CURSOR_HEADER_BYTES_V2, VERIFIED_CANDIDATE_HEADER_BYTES_V2,
+        VerifiedCandidateLayoutV2,
     },
     state_artifacts_v3::{
         GENERAL_CLOSE_PAYER_ACCOUNT_V3, GENERAL_CLOSE_RENT_CREDIT_ACCOUNT_V3,
@@ -218,11 +219,13 @@ pub const fn general_account_profile_operation_count_v3(action: Action) -> u16 {
         Action::Close => 15,
         // The two sources of the selection deadline
         // `GeneralTransitionV3.lean`'s `.freeze` arm compares the clock
-        // against: the batch's own collection close, out of the evidence
-        // record, and the config's selection window.
-        Action::Freeze => 13,
-        Action::Consider
-        | Action::InitializeSettlement
+        // against -- the batch's own collection close, out of the evidence
+        // record, and the config's selection window -- plus the batch identity
+        // its state recipe is now keyed by.
+        Action::Freeze => 14,
+        // The batch identity `GENERAL_SELECTION_STATE_RECIPE_V3` is keyed by.
+        Action::Consider => 12,
+        Action::InitializeSettlement
         | Action::Collect
         | Action::Materialize
         | Action::Distribute => 11,
@@ -416,6 +419,53 @@ pub fn general_account_profile_operation_v3(
                     .checked_add(GENERAL_ROOT_LIFECYCLE_OFFSET_V2)
                     .ok_or(GeneralAccountRuleErrorV3::Geometry)?,
             )?,
+        }),
+        // THE BATCH A SELECTION BELONGS TO, WHICH ITS ADDRESS IS NOW KEYED BY.
+        //
+        // `GENERAL_SELECTION_STATE_RECIPE_V3` was `[domain, root, "selection",
+        // bump]` -- one cursor per General ROOT -- and nothing writes a
+        // selection back to `Open`, so after the first `Freeze` a root's
+        // selection was Frozen forever and `consider_verified_candidate_v2`
+        // refused a second batch's candidate by `batch_id`. A market could open,
+        // fill and close as many batches as it liked and could SELECT in
+        // exactly one (`MECHANISM_BATCH_SPINE_2026_09_04.md` §1.1, measured by
+        // `db9c6c75c`). The recipe now carries the batch identity register, the
+        // way the settlement cursor carries the candidate, and these are the two
+        // operations that give that register a writer.
+        //
+        // NEITHER IS THE CALLER. `Freeze`'s RequestProfile requires its whole
+        // subject range zero and `Consider` spends its subject on the candidate
+        // id, so a request-projected batch was not available without a grammar
+        // change -- and would have been a caller-stated address seed, which is
+        // the weaker construction anyway. Both sources are authenticated
+        // records the action already reads:
+        //
+        //   * `Consider` takes it from the submitted VerifiedCandidate, which
+        //     is where `consider_verified_candidate_v2` reads the batch it
+        //     compares. It must come from there rather than from the cursor,
+        //     because the first `Consider` of a batch CREATES the cursor and a
+        //     projection from a vacant account is thirty-two zero bytes.
+        //   * `Freeze` takes it from the cursor itself, which always exists by
+        //     then and is the record whose `batch_id` the accelerator joins
+        //     against the presented Batch. Deriving an address from a field of
+        //     the account at that address is not circular: the derived address
+        //     must BE the supplied account's, so only the real cursor for that
+        //     batch satisfies it.
+        5 if action == Action::Consider => Ok(AccountOperationInputV2::ProjectDataIdentity {
+            account: evidence_account(
+                action,
+                1,
+                GeneralReadonlyEvidenceKindV3::SubmittedVerifiedCandidate,
+            )?,
+            destination: common_identity(identity::SELECTION_BATCH)?,
+            data_offset: VerifiedCandidateLayoutV2::batch_id(),
+        }),
+        7 if action == Action::Freeze => Ok(AccountOperationInputV2::ProjectDataIdentity {
+            account: primary,
+            destination: common_identity(identity::SELECTION_BATCH)?,
+            data_offset: GeneralLocalStateLayoutV3::body()
+                .checked_add(RuntimeSelectionLayoutV2::batch_id())
+                .ok_or(GeneralAccountRuleErrorV3::Geometry)?,
         }),
         // THE SELECTION DEADLINE'S TWO TERMS.
         //
@@ -2527,7 +2577,9 @@ mod tests {
         general_effect_instruction_count_v3, general_effect_program_bytes_v3,
         general_effect_template_bytes_v3,
     };
-    use crate::state_seeds_v3::{GENERAL_ROOT_IDENTITY_REGISTER_V3, GeneralStateRecipeV3};
+    use crate::state_seeds_v3::{
+        GENERAL_BATCH_IDENTITY_REGISTER_V3, GENERAL_ROOT_IDENTITY_REGISTER_V3, GeneralStateRecipeV3,
+    };
 
     /// The exact emitted Effect bytes for one action.
     fn effect(action: Action) -> vec::Vec<u8> {
@@ -2864,6 +2916,61 @@ mod tests {
                         LifecycleSeedInputV3::CommonIdentity(GENERAL_ROOT_IDENTITY_REGISTER_V3)
                     )),
                 "{action:?} primary state recipe does not seed on the root identity register",
+            );
+        }
+    }
+
+    /// EVERY IDENTITY REGISTER A SELECTION SEEDS ON HAS A WRITER IN ITS OWN
+    /// PROFILE.
+    ///
+    /// `GENERAL_SELECTION_STATE_RECIPE_V3` gained the batch identity register
+    /// on 2026-09-04, and a seed register with no writer is not a build error
+    /// and not a geometry refusal: `validate_seed_against_profile` only checks
+    /// that the index is inside the bank, so the lifecycle adapter would derive
+    /// every selection address from thirty-two zero bytes -- one well-formed,
+    /// wrong, and IDENTICAL address for every batch under every root, which is
+    /// precisely the collision the new seed exists to prevent. The root
+    /// register's own test above exists for exactly this reason and this is its
+    /// sibling.
+    ///
+    /// THE BATCH PAIR IS NOT IN THIS TEST, and that is a statement rather than
+    /// an omission. `OpenBatch` and `CloseBatch` seed on the same register and
+    /// their writer is the REQUEST profile -- `batchCoordinates` in
+    /// `GeneralRequestProfilesV1.lean` projects the request subject into
+    /// identity 29 -- because the batch a caller opens is a fact the caller
+    /// states and the occupied address is what refuses a replay. A selection is
+    /// the opposite: nobody may state which batch a cursor belongs to, so both
+    /// selection actions read it out of an authenticated record instead, and
+    /// neither request grammar carries a subject to state it with.
+    #[test]
+    fn both_selection_actions_project_the_batch_identity_their_recipe_seeds_on() {
+        let seeds = GeneralStateRecipeV3::Selection.lifecycle_seeds();
+        assert!(
+            seeds.iter().any(|seed| matches!(
+                seed,
+                LifecycleSeedInputV3::CommonIdentity(GENERAL_BATCH_IDENTITY_REGISTER_V3)
+            )),
+            "the selection recipe stopped seeding on the batch identity",
+        );
+        for action in [Action::Consider, Action::Freeze] {
+            assert_eq!(
+                GeneralStateRecipeV3::primary_for_action(action),
+                GeneralStateRecipeV3::Selection,
+            );
+            let count = general_account_profile_fixed_operation_count_v3(action);
+            let writers = (0..count)
+                .filter(|index| {
+                    matches!(
+                        general_account_profile_operation_v3(action, *index),
+                        Ok(AccountOperationInputV2::ProjectDataIdentity { destination, .. })
+                            if Ok(destination) == common_identity(identity::SELECTION_BATCH)
+                    )
+                })
+                .count();
+            assert_eq!(
+                writers, 1,
+                "{action:?} declares {writers} operations sourcing the batch identity its \
+                 selection address is seeded by",
             );
         }
     }

@@ -1599,7 +1599,10 @@ const fn lifecycle_counts(action: Action) -> (usize, usize, usize) {
         // Two recipes over one ten-entry table: the batch window and the
         // order record.
         Action::PlaceOrder | Action::CancelOrder => (2, 10, 2),
-        Action::Consider | Action::Freeze => (1, 4, 1),
+        // Five since 2026-09-04: the selection recipe is keyed by the batch
+        // identity as well as the root, so a market can select in more than one
+        // batch. See `GENERAL_SELECTION_STATE_RECIPE_V3`.
+        Action::Consider | Action::Freeze => (1, 5, 1),
         Action::InitializeSettlement
         | Action::Collect
         | Action::Materialize

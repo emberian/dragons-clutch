@@ -100,7 +100,7 @@ fn the_declared_geometry_is_the_table_and_not_a_number_beside_it() {
             1
         );
     }
-    assert_eq!(GeneralStateRecipeV3::Selection.seed_count(), 4);
+    assert_eq!(GeneralStateRecipeV3::Selection.seed_count(), 5);
     assert_eq!(GeneralStateRecipeV3::Settlement.seed_count(), 5);
     assert_eq!(GeneralStateRecipeV3::Terminal.seed_count(), 6);
     assert_eq!(GeneralStateRecipeV3::Batch.seed_count(), 5);
@@ -156,12 +156,14 @@ fn the_selection_and_terminal_orders_are_the_ones_the_campaign_executed() {
     let root = id(3);
     let candidate = id(4);
 
-    let selection = GeneralStateAddressSeedsV3::selection(root).expect("selection");
+    let batch = id(5);
+    let selection = GeneralStateAddressSeedsV3::selection(root, batch).expect("selection");
     assert_eq!(
         selection.as_slices().expect("slices").as_slice(),
         &[
             GENERAL_STATE_SEED_DOMAIN_V3,
             root.as_slice(),
+            batch.as_slice(),
             GENERAL_SELECTION_STATE_SEED_V3,
         ]
     );
@@ -334,12 +336,24 @@ fn distinct_coordinates_never_project_onto_one_address() {
         right.as_slices().expect("right").as_slice()
     );
 
-    // Selection carries no candidate, so it can never alias a settlement state
-    // even under the same root -- the phase discriminator is what separates them.
-    let selection = GeneralStateAddressSeedsV3::selection(root).expect("selection");
+    // Selection now carries a second identity like settlement does, so the two
+    // could in principle collide under one root: the phase discriminator is
+    // what still separates them, and it is asserted rather than assumed --
+    // here with the SAME second identity in both, which is the only case where
+    // the discriminator is load-bearing.
+    let selection = GeneralStateAddressSeedsV3::selection(root, id(4)).expect("selection");
     assert_ne!(
         selection.as_slices().expect("selection").as_slice(),
         left.as_slices().expect("left").as_slice()
+    );
+
+    // AND TWO BATCHES UNDER ONE ROOT NEVER SHARE A SELECTION, which is the
+    // whole point of the second seed: before it, a market could open a second
+    // batch and could not select in it.
+    let second_batch = GeneralStateAddressSeedsV3::selection(root, id(6)).expect("second");
+    assert_ne!(
+        selection.as_slices().expect("selection").as_slice(),
+        second_batch.as_slices().expect("second").as_slice()
     );
 
     // One settlement closes into one terminal record PER coordinate.
@@ -385,8 +399,16 @@ fn the_action_to_phase_mapping_is_published_rather_than_restated() {
 #[test]
 fn zero_aliased_and_missing_coordinates_refuse_with_pinned_codes() {
     assert_eq!(
-        GeneralStateAddressSeedsV3::selection([0; 32]),
+        GeneralStateAddressSeedsV3::selection([0; 32], id(5)),
         Err(GeneralStateSeedErrorV3::ZeroIdentity)
+    );
+    assert_eq!(
+        GeneralStateAddressSeedsV3::selection(id(3), [0; 32]),
+        Err(GeneralStateSeedErrorV3::ZeroIdentity)
+    );
+    assert_eq!(
+        GeneralStateAddressSeedsV3::selection(id(3), id(3)),
+        Err(GeneralStateSeedErrorV3::AccountAlias)
     );
     assert_eq!(
         GeneralStateAddressSeedsV3::settlement([0; 32], id(4)),
@@ -416,10 +438,12 @@ fn zero_aliased_and_missing_coordinates_refuse_with_pinned_codes() {
 /// refuses rather than silently projecting a shorter, different seed program.
 #[test]
 fn a_recipe_demanding_an_absent_coordinate_refuses_rather_than_shortening() {
-    let mut selection = GeneralStateAddressSeedsV3::selection(id(3)).expect("selection");
+    let mut selection = GeneralStateAddressSeedsV3::selection(id(3), id(5)).expect("selection");
     // Force the mismatch the public constructors make unreachable, to prove the
-    // walk is total rather than relying on construction alone.
-    selection.recipe = GeneralStateRecipeV3::Settlement;
+    // walk is total rather than relying on construction alone. Selection and
+    // settlement now carry the same coordinates, so the recipe that demands
+    // more is the TERMINAL one, which also wants a cursor coordinate.
+    selection.recipe = GeneralStateRecipeV3::Terminal;
     assert_eq!(
         selection.as_slices().err(),
         Some(GeneralStateSeedErrorV3::MissingCoordinate)

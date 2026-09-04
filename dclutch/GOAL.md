@@ -4838,3 +4838,10 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Cuts: `f715296f6`.
 - Started 13:50 EDT: LEAN-SCORING **`(spawned)`** — the scoring rule's four stated sorries closed by decision over the finite
   63-entry table within the admitted range.
+- DECISIONS-3 closed (`16e3a2a42`, `f82863c06`, `23e570ed4`): records 0031 (the mechanism agenda, ember's sentence quoted),
+  0032 (residual strands, tie-break minimises, batch sealed — **bounded by 0018: the only sealing transport the note names
+  is the FHE horizon ember ruled out, so cohort-17 ships the VISIBLE book**), 0033 (the bond mandatory), 0034 (k=5, q=3,
+  never even); 0025/0028/0029 amended; the index 0001–0034 at its fixpoint with 14 PROVISIONAL / 1 OPEN derived from the
+  records. Found: **genref is RED at HEAD** — RECOVERY-2's bc78ccd81 added a blocked.json class "evidence" the closed
+  taxonomy refuses (routed to that lane); the census pages stale from the wave (a converge owed after it).
+- Cuts: `7ef5eb7a6`, `955e57479`.

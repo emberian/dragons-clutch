@@ -18,8 +18,14 @@ the accelerator output page (0028, which carries a read and is OPEN because
 ember asked for the architecture rather than a switch), D7 the product list
 (0029), and D8 rent across an epoch (0030). Records 0019-0023 hold the five
 rulings the orchestrator made under ember's standing goal before that
-docket. Statuses are load-bearing: PROVISIONAL means ember may reverse it at
-the cost the record's last section states, and OPEN means nobody has ruled.
+docket. Records 0031-0034 hold the mechanism agenda's rulings, made under the
+same standing goal later the same day: the agenda itself (0031), the joint
+clearing's three owed rulings (0032), the founder bond's mode (0033) and the
+ensemble's flagship parameters (0034). Statuses are load-bearing: PROVISIONAL
+means ember may reverse it at the cost the record's last section states, and
+OPEN means nobody has ruled. Counted from the records below rather than kept
+by hand: **14 PROVISIONAL, 1 OPEN**; every other
+record is accepted, adopted, ratified or ruled.
 
 | decision | status |
 | --- | --- |
@@ -53,4 +59,8 @@ the cost the record's last section states, and OPEN means nobody has ruled.
 | [Decision 0028: the accelerator output page — open, with a read](../decisions/0028-the-accelerator-output-page.md) | **OPEN — ember asked at 10:15 EDT 2026-09-04 for the best architectural course rather than for a switch, so this record carries a READ and not a ruling, and decision 0003 stays unamended until ember rules**. |
 | [Decision 0029: the product list — what gets built, what is refused, and why each refusal is load-bearing](../decisions/0029-the-product-list-nine-rulings.md) | **PROVISIONAL — nine items ruled by the orchestrator on 2026-09-04 under ember's standing goal, answered by ember at 10:15 EDT with "build", and reversible item by item at the costs §7 states**. |
 | [Decision 0030: an account's rent is fixed when it is funded, and the fact persisted is the RATE](../decisions/0030-rent-is-fixed-when-an-account-is-funded.md) | **RULED by the orchestrator on 2026-09-04 under ember's standing goal, put to ember on the docket as D8 the same morning and not objected to at the 10:15 EDT reading, landed the same day, and reversible at the cost §7 states**. |
+| [Decision 0031: the mechanism agenda — six directions explored as designs, and cohort-17 is the mechanism cohort](../decisions/0031-the-mechanism-agenda.md) | **PROVISIONAL — the agenda, its design-first form and its order ruled by the orchestrator on 2026-09-04 under ember's standing goal and under ember's own instruction to explore all six, and reversible direction by direction at the cost §7 states**. |
+| [Decision 0032: the joint clearing's three owed rulings — the residual strands, the tie-break minimises the vector, the collecting batch is sealed](../decisions/0032-joint-clearing-residual-tie-break-and-seal.md) | **PROVISIONAL — the three rulings the JOINT-CLEARING note owed ember, made by the orchestrator on 2026-09-04 under ember's standing goal, none of them changing a theorem in `JointClearingV1.lean`, and reversible at the cost §7 states**. |
+| [Decision 0033: the founder bond is mandatory, at the size rule](../decisions/0033-the-founder-bond-is-mandatory.md) | **PROVISIONAL — the BOND note's §8 question ruled by the orchestrator on 2026-09-04 under ember's standing goal, with the bond itself designed and unbuilt, and reversible at the cost §7 states**. |
+| [Decision 0034: the ensemble's flagship is k = 5, q = 3, never an even quorum, with per-member bounties](../decisions/0034-ensemble-flagship-parameters.md) | **PROVISIONAL — the ENSEMBLE note's two questions ruled by the orchestrator on 2026-09-04 under ember's standing goal, with the ensemble designed and unbuilt, and reversible at the cost §7 states**. |
 | [Decision packet — 2026-08-30](../decisions/DECISION_PACKET_2026_08_30.md) |  |

@@ -206,11 +206,28 @@ pub const GENERAL_MAX_STATE_SEEDS_V3: usize = 5;
 
 /// Sole seed order for a selection-phase General state.
 ///
-/// One per General root: the selection cursor exists before any candidate is
-/// chosen, so naming a candidate here would name a fact that does not yet hold.
-pub const GENERAL_SELECTION_STATE_RECIPE_V3: [LifecycleSeedInputV3<'static>; 4] = [
+/// ONE PER BATCH, and it was one per General ROOT until 2026-09-04. The
+/// candidate is still absent from the key -- the cursor exists before any
+/// candidate is chosen, so naming one here would name a fact that does not yet
+/// hold -- but the BATCH is not: a selection is opened by considering a
+/// candidate that already names its batch, and it is frozen around one.
+///
+/// The old key made General one call auction per Market. Nothing in the fifteen
+/// writes a selection back to `Open` (`runtime_selection.rs:343-349` writes it
+/// only at creation), so after the first `Freeze` a root's selection was Frozen
+/// for the life of the capability, and `consider_verified_candidate_v2` refused
+/// a second batch's candidate by `batch_id` (`:363`). `db9c6c75c` measured the
+/// asymmetry exactly: a market can open, fill and close a second batch -- the
+/// batch recipe is keyed by (root, batch id) and the root carries a monotonic
+/// sequence -- and could SELECT in only the first.
+///
+/// Keyed by the batch identity register, this is the same construction as the
+/// settlement recipe below, and it is what makes "one clearing per batch" a
+/// property of an address rather than of a conjunct.
+pub const GENERAL_SELECTION_STATE_RECIPE_V3: [LifecycleSeedInputV3<'static>; 5] = [
     LifecycleSeedInputV3::Literal(GENERAL_STATE_SEED_DOMAIN_V3),
     LifecycleSeedInputV3::CommonIdentity(GENERAL_ROOT_IDENTITY_REGISTER_V3),
+    LifecycleSeedInputV3::CommonIdentity(GENERAL_BATCH_IDENTITY_REGISTER_V3),
     LifecycleSeedInputV3::Literal(GENERAL_SELECTION_STATE_SEED_V3),
     LifecycleSeedInputV3::CanonicalBump,
 ];
@@ -634,12 +651,26 @@ pub struct GeneralStateAddressSeedsV3 {
 }
 
 impl GeneralStateAddressSeedsV3 {
-    /// Coordinates for the selection cursor of one General root.
-    pub fn selection(general_root: [u8; GENERAL_IDENTITY_SEED_BYTES_V3]) -> Result<Self> {
+    /// Coordinates for the selection cursor of one (root, batch identity).
+    ///
+    /// It took the root alone until 2026-09-04, which made General one call
+    /// auction per Market. See `GENERAL_SELECTION_STATE_RECIPE_V3`. The batch
+    /// rides the `candidate` field because that field IS the recipe's second
+    /// identity slot, whatever the recipe calls it -- `batch` uses it for the
+    /// batch identity already.
+    pub fn selection(
+        general_root: [u8; GENERAL_IDENTITY_SEED_BYTES_V3],
+        batch: [u8; GENERAL_IDENTITY_SEED_BYTES_V3],
+    ) -> Result<Self> {
+        let general_root = require_nonzero(general_root)?;
+        let batch = require_nonzero(batch)?;
+        if general_root == batch {
+            return Err(GeneralStateSeedErrorV3::AccountAlias);
+        }
         Ok(Self {
             recipe: GeneralStateRecipeV3::Selection,
-            general_root: require_nonzero(general_root)?,
-            candidate: None,
+            general_root,
+            candidate: Some(batch),
             terminal_coordinate: None,
         })
     }

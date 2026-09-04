@@ -160,8 +160,8 @@ recovery capture's owed producer, which RECOVERY-2 took up the same afternoon.
 ## 6. What was given up, named
 
 **Cohort-16 gets nothing from any of this.** That is the design-first rule's exact
-cost, and it was paid deliberately: six directions, roughly 3,000 lines of note and
-4,000 lines of Lean, and not one atom moves differently on any chain until
+cost, and it was paid deliberately: six directions, 3,501 lines of note and 4,058
+lines of Lean, and not one atom moves differently on any chain until
 cohort-17.
 
 **Three of six are scheduled and three are not.** Ordering joint clearing, the
