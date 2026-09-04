@@ -14,15 +14,28 @@ import { CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1 } from './generated/coreFound'
 import * as DirectAbi from './generated/directInlineV3';
 import { decodeMarketCoreStateV2 } from './marketCoreV2';
 import { deriveFinalizedRecordAddressesV1 } from './releaseRegistry';
+import { PUBLIC_DEVNET_CUT_V1 } from './publicCutStaging';
 import { SolanaRpcClient } from './rpc';
 
-const live = process.env.DCLUTCH_LIVE_DEVNET === '1' ? it : it.skip;
 const report = (line: string) => {
   const out = process.env.DCLUTCH_LIVE_REPORT;
   if (out !== undefined) appendFileSync(out, `${line}\n`);
 };
 
-const MARKET = '8Xky2yx3wBmDRXeNfKSuJigqiWDtwSvGvB75BSW6tPxK';
+/**
+ * The Market whose descriptor artifacts this walks.
+ *
+ * This pinned cohort-8's `8Xky2yx3wB…`, and every record it reaches is derived
+ * from `DEVNET_DEPLOYMENT_V1.programs.registry` -- so the coordinate and the
+ * registry it is resolved against came from different cohorts, and the walk
+ * refused at the first `body()` with "capability manifest record is absent".
+ * A finalized record lives at a PDA of the REGISTRY that published it; naming a
+ * market from one cohort and a registry from another asks for a record that was
+ * never written. It reads the cut's market now, so the two always agree.
+ */
+const MARKET = PUBLIC_DEVNET_CUT_V1.market ?? '';
+
+const live = process.env.DCLUTCH_LIVE_DEVNET === '1' && MARKET !== '' ? it : it.skip;
 
 /**
  * The artifact validators the full Hot route runs, against the real records.
@@ -40,8 +53,8 @@ const MARKET = '8Xky2yx3wBmDRXeNfKSuJigqiWDtwSvGvB75BSW6tPxK';
  * the Market alone. Reads only. Gated on `DCLUTCH_LIVE_DEVNET=1`.
  */
 describe('live devnet Direct Hot artifact validators', () => {
-  live('binds and validates every descriptor-named artifact on cohort-8 bytes', async () => {
-    const client = new SolanaRpcClient(DEVNET_DEPLOYMENT_V1.endpoint);
+  live('binds and validates every descriptor-named artifact the featured Market names', async () => {
+    const client = new SolanaRpcClient(process.env.DCLUTCH_LIVE_ENDPOINT ?? DEVNET_DEPLOYMENT_V1.endpoint);
     const registry = DEVNET_DEPLOYMENT_V1.programs.registry;
     const floor = await client.finalizedSlot();
     const body = async (schema: Uint8Array, digest: Uint8Array, field: string) => {

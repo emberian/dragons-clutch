@@ -177,9 +177,51 @@ export const DEVNET_COHORT_5_ABI_RELEASE_V1: AbiReleaseTableV1 = Object.freeze({
   abi: CURRENT_ABI_FRAME_FACTS_V1,
 });
 
+/**
+ * The release identity public devnet is running now.
+ *
+ * The five ids are OBSERVED, by the same call this module exports: they were
+ * decoded from the live Registry activation cache
+ * `3hFTU9ka7fryKrVY7s8Lm5ZMCHsnq5bxEGcgSCd6TSiu` (release set
+ * `9895faee8f7f6a1926df18302f1b003afcf4b6c56518ba7bba2614c86eea8a22`) at
+ * finalized slot 492,954,022 on 2026-09-04, and the five deployment slots that
+ * cache pins were equal to the five the deployment manifest carries in the same
+ * reading. Trading and Resolution are BYTE-IDENTICAL to cohort-5's: those two
+ * roles' semantics have not moved in ten cohorts, which is the useful thing a
+ * table of observations says and a table of guesses cannot.
+ *
+ * AND THE FRAME FACTS ARE NOT A GUESS EITHER, which is the conjunct that makes
+ * this an observation rather than the fabrication the note above forbids.
+ * `CURRENT_ABI_FRAME_FACTS_V1` is whatever THIS build generated, and cohort-15
+ * was deployed from `1cae26fd6`; every one of the nine counts is byte-identical
+ * between that commit's generated modules and this build's, and the one
+ * generated file that moved at all (`generated/coreFound.ts`) moved by ADDING
+ * StatisticSpecV1 offsets and changed no count. So the frame this table offers
+ * is the frame those programs were built with.
+ *
+ * WHAT THIS UNBLOCKS. `selectAbiReleaseV1` refused every cohort from 6 through
+ * 15 — correctly, fail-closed, "refusing to build a frame against semantics it
+ * was not generated for" — which meant no browser could open a release-bound
+ * session against any live deployment. The refusal was never the defect; the
+ * missing row was, and a row is one observation per cohort.
+ */
+export const DEVNET_COHORT_15_ABI_RELEASE_V1: AbiReleaseTableV1 = Object.freeze({
+  label: 'devnet cohort-15',
+  provenance: 'Decoded from the live Registry activation cache 3hFTU9ka7fryKrVY7s8Lm5ZMCHsnq5bxEGcgSCd6TSiu on public devnet at finalized slot 492954022 (2026-09-04) by discoverCurrentActivationCacheV1; its five pinned deployment slots equalled the five the deployment manifest records for this cohort in the same reading. The frame facts are this build\u2019s own generated modules, whose nine counts are byte-identical to those at 1cae26fd6, the commit cohort-15 was deployed from.',
+  semanticReleaseIds: Object.freeze({
+    core: 'f069d9ef9ed59cace372746436245ec4f766baccd64b04a4cf023c5d51f0b89a',
+    claims: '4d43ae7308d64002d52def66c6c889c9af70f9d7583ebd3ae4a23ac63f93f196',
+    trading: '79fad2f04f8d9ce07d76c809fe116db8ef9374adbeb15e62f603235c3a2b96b9',
+    resolution: '6e4b9a545277cf68731108fe1729ff047affe72e16d79c3930acadc8016f554a',
+    custody: '9bc89cbb7e30eec5ebc98a83658f56a2eb525d70f575b48997f3b610d1913721',
+  }),
+  abi: CURRENT_ABI_FRAME_FACTS_V1,
+});
+
 /** Every release identity this build carries an ABI table for. */
 export const KNOWN_ABI_RELEASES_V1: ReadonlyArray<AbiReleaseTableV1> = Object.freeze([
   DEVNET_COHORT_5_ABI_RELEASE_V1,
+  DEVNET_COHORT_15_ABI_RELEASE_V1,
 ]);
 
 function shortId(value: string): string {

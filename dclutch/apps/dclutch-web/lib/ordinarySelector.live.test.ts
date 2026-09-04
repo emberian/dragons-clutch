@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { DEVNET_DEPLOYMENT_V1 } from './deployments';
+import { PUBLIC_DEVNET_CUT_V1 } from './publicCutStaging';
 import { inspectMarketDetailV1 } from './marketDetail';
 import { derivedOutcomeLabelsV1, inspectMarketQuestionV1 } from './marketQuestion';
 import { inspectMarketResolutionV1 } from './marketResolution';
@@ -27,32 +28,40 @@ import { SolanaRpcClient } from './rpc';
  * Devnet evidence. Not mainnet evidence.
  */
 /**
- * BOTH SETTLED COHORT-14 MARKETS, because one of them is the case that reached
- * a stranger.
+ * THE SETTLED MARKET THE SITE FEATURES, READ OUT OF THE PUBLIC CUT.
  *
- * Market B’s mis-scaled settlement moved atoms between the founder and the
- * founder; market C was FILLED, and participant-2 bought 200 claims at index 1
- * — the cell the reading falls in — which the deployed program pays zero
- * (`docs/evidence/COHORT14_SEALED_FOUNDED_FILLED_2026_09_03.md`). Running both
- * is what makes this an assertion about the DEFECT rather than about one
- * market: they were founded by the same path, they declare the same identity
- * scale, and the same two readings differ on each.
+ * This named two cohort-14 markets as literals, and both went unreadable the
+ * hour their programs were closed -- a pin beside the fixture it should have
+ * been reading, which is the staleness the registry itself was built to stop.
+ * The address comes from the cut now, so a cohort boundary moves it.
  *
- * `DCLUTCH_RESOLVED_MARKET` still overrides, and overrides the whole list, so a
- * later cohort can be pointed at one market without editing this file.
+ * AND THE ASSERTION TURNED OVER WITH THE COHORT. Cohort-14's markets declared
+ * the identity scale while comparing a raw Pyth mantissa at exponent -8 against
+ * cuts in dollars, so their two readings DISAGREED and the chain paid the cell
+ * its own boundaries do not imply. Cohort-15's featured market is the first
+ * founded after `4cd2b9cb5` gave `StatisticSpecV1` a `source_scale_exponent`,
+ * and its two readings AGREE. Both directions are asserted below, because
+ * "they agree" alone passes on any market whose defect happens to be invisible:
+ * the counterfactual reading at exponent 0 -- exactly what cohort-14 declared --
+ * must land on a DIFFERENT cell, or this market's factor is doing no work and
+ * the agreement proves nothing.
+ *
+ * `DCLUTCH_RESOLVED_MARKET` still overrides, so a later cohort can be pointed
+ * at one market without editing this file.
  */
-const COHORT14_SETTLED_MARKETS_V1: ReadonlyArray<Readonly<{ name: string; address: string }>> =
+const SETTLED_MARKETS_V1: ReadonlyArray<Readonly<{ name: string; address: string }>> =
   process.env.DCLUTCH_RESOLVED_MARKET
     ? [{ name: 'the market named by DCLUTCH_RESOLVED_MARKET', address: process.env.DCLUTCH_RESOLVED_MARKET }]
-    : [
-      { name: 'cohort-14 market B', address: 'DUVcCGfjXzp1fBktTCjsAomgrn9S6sxSDziQHoyRiu8A' },
-      { name: 'cohort-14 market C', address: 'BL8zsFokbz7aEdo3wjtcNffd5P1D8a9wVxwKq3mcMsMN' },
-    ];
+    : PUBLIC_DEVNET_CUT_V1.market === null
+      ? []
+      : [{ name: 'the featured market', address: PUBLIC_DEVNET_CUT_V1.market }];
 
 const live = process.env.DCLUTCH_LIVE_DEVNET === '1' ? it : it.skip;
 
 describe('live devnet: the certificate-to-partition join', () => {
-  for (const market of COHORT14_SETTLED_MARKETS_V1) live(`derives the very cell the chain committed for ${market.name}, from that market’s own records`, async () => {
+  it('has a settled market to read', () => { expect(SETTLED_MARKETS_V1.length, 'the public cut names no market, so this whole file asserts nothing').toBeGreaterThan(0); });
+
+  for (const market of SETTLED_MARKETS_V1) live(`derives the very cell the chain committed for ${market.name}, from that market’s own records`, async () => {
     const client = new SolanaRpcClient(process.env.DCLUTCH_LIVE_ENDPOINT ?? DEVNET_DEPLOYMENT_V1.endpoint);
     const detail = await inspectMarketDetailV1(client, {
       coreProgramId: DEVNET_DEPLOYMENT_V1.programs.core,
@@ -92,7 +101,13 @@ describe('live devnet: the certificate-to-partition join', () => {
     // decodes to a stated scale and not to an absent one.
     expect(resolution.scale.status, resolution.scale.status === 'unread' ? resolution.scale.reason : '').toBe('declared');
     if (resolution.scale.status !== 'declared') return;
-    expect(resolution.scale.sourceScaleExponent, 'every cohort-14 market declares the identity').toBe(0);
+    // A DECLARED FACTOR, not the identity. This pinned 0 and said "every
+    // cohort-14 market declares the identity", which was true and is the
+    // defect: those four bytes were a reserved span enforced zero, so a
+    // pre-factor record decodes to a STATED identity rather than to an absent
+    // scale, and the founder had no way to say the feed and the cuts are
+    // written in different units.
+    expect(resolution.scale.sourceScaleExponent, 'the featured market declares a source-to-result factor').not.toBe(0);
     expect(resolution.scale.statisticRecord).not.toBe(resolution.scale.sourceMaterialRecord);
 
     const join = ordinarySelectorJoinV1(question, resolution.observation, resolution.selector, resolution.scale.sourceScaleExponent);
@@ -103,22 +118,19 @@ describe('live devnet: the certificate-to-partition join', () => {
     // AND WHAT THAT AGREEMENT IS AND IS NOT. The scale above came off the
     // chain, so the agreement is an exact statement of what the protocol DID,
     // and no statement at all about whether the cell is right about the world.
+    // A founding that declared the wrong shift is reproduced faithfully here
+    // and is still wrong.
     //
-    // It is not. This market's cuts are dollars authored in cents and its
-    // observation is a raw Pyth mantissa at exponent -8, and read on the
-    // cuts' own scale the price is inside the band rather than outside it.
-    // Both cells below are honest arithmetic; they differ only in whether a
-    // factor was declared, and that difference moved 500,000,000 atoms.
-    const onTheCutsScale = ordinarySelectorJoinV1(question, resolution.observation, resolution.selector, -8);
-    expect(onTheCutsScale.refusal).toBeNull();
-    expect(onTheCutsScale.derived).not.toBe(join.derived);
-    expect(onTheCutsScale.agrees).toBe(false);
-    // The two cells NAMED rather than merely differing. Both markets committed
-    // the top cell and both readings fall one cell lower, and asserting the
-    // pair is what stops this from passing on any two numbers that happen not
-    // to be equal.
-    expect(join.derived, 'the chain paid the top ordinary cell').toBe(2);
-    expect(onTheCutsScale.derived, 'the price is inside the band, which pays zero').toBe(1);
+    // THE COUNTERFACTUAL IS THE OTHER HALF OF THE ASSERTION. Read at exponent
+    // 0 -- what every cohort-14 market declared, and what a reader that assumes
+    // the identity computes -- the same observation and the same cuts land on a
+    // DIFFERENT cell. So the factor is load-bearing on this market rather than
+    // decorative, and the agreement above is not the accident of a market whose
+    // reading would fall in the committed cell either way.
+    const asCohort14Declared = ordinarySelectorJoinV1(question, resolution.observation, resolution.selector, 0);
+    expect(asCohort14Declared.refusal).toBeNull();
+    expect(asCohort14Declared.derived).not.toBe(join.derived);
+    expect(asCohort14Declared.agrees).toBe(false);
 
     // The chain's own agreement, read twice: Core's `terminal_winner` and the
     // certificate's selector are separate bytes in separate accounts, and the

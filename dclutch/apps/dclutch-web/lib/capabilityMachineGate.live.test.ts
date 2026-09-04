@@ -9,21 +9,27 @@ import { routeOtherMachineGateV1, routePhaseGateV1 } from '@dclutch/sdk/generate
 import { BROWSER_CAPABILITY_STANDINGS_V1 } from './capabilitySurface';
 import { decodeMarketCoreStateV2 } from './marketCoreV2';
 import { DEVNET_DEPLOYMENT_V1 } from './deployments';
+import { PUBLIC_DEVNET_CUT_V1 } from './publicCutStaging';
 import { SolanaRpcClient } from './rpc';
 
 /**
- * Cohort-14's second Market, which resolved and paid.
+ * The settled Market, which resolved and paid and is now retiring.
  *
- * Named as a coordinate rather than read from the public cut, because the cut
- * follows whatever is featured and this case wants a Market that has LEFT
- * `Open`. Its phase is still read from the chain and never assumed: what is
- * pinned below is the AGREEMENT between the decoded phase and the published
- * gate, so a later re-founding at a different phase changes which branch runs
- * and not whether the test passes.
+ * This named cohort-14's market B as a coordinate, on the argument that the cut
+ * follows whatever is featured while this case wants a Market that has LEFT
+ * `Open`. Both halves of that were true and the conclusion was not: the case
+ * asserts the account is owned by `DEVNET_DEPLOYMENT_V1.programs.core`, so a
+ * coordinate from a cohort the manifest no longer names goes red at the owner
+ * check before any phase is decoded, which is what happened the morning
+ * cohort-15 landed. The cut's market is a Market that has left Open whenever
+ * the site features a settled one, and the phase is still READ: what is pinned
+ * below is the AGREEMENT between the decoded phase and the published gate, so
+ * a re-founding at a different phase changes which branch runs and not whether
+ * this passes.
  */
-const COHORT14_MARKET_B = 'DUVcCGfjXzp1fBktTCjsAomgrn9S6sxSDziQHoyRiu8A';
+const SETTLED_MARKET = PUBLIC_DEVNET_CUT_V1.market ?? '';
 
-const live = process.env.DCLUTCH_LIVE_DEVNET === '1' ? it : it.skip;
+const live = process.env.DCLUTCH_LIVE_DEVNET === '1' && SETTLED_MARKET !== '' ? it : it.skip;
 
 const standing = (id: string) => {
   const found = BROWSER_CAPABILITY_STANDINGS_V1.find((one) => one.action.id === id);
@@ -54,11 +60,11 @@ const standing = (id: string) => {
 describe('live devnet gates over machines that are not the Market phase', () => {
   live('answers Direct token setup from the decoded phase and still names direct-root', async () => {
     const client = new SolanaRpcClient(process.env.DCLUTCH_LIVE_ENDPOINT ?? DEVNET_DEPLOYMENT_V1.endpoint);
-    const observation = await client.accountInfo(COHORT14_MARKET_B);
-    expect(observation.account, `no account at ${COHORT14_MARKET_B}`).not.toBeNull();
+    const observation = await client.accountInfo(SETTLED_MARKET);
+    expect(observation.account, `no account at ${SETTLED_MARKET}`).not.toBeNull();
     expect(observation.account!.owner).toBe(DEVNET_DEPLOYMENT_V1.programs.core);
 
-    const state = decodeMarketCoreStateV2(COHORT14_MARKET_B, observation.account!.data);
+    const state = decodeMarketCoreStateV2(SETTLED_MARKET, observation.account!.data);
     const route = 'trading/direct_token_setup_v1::process_direct_token_setup_v1';
 
     // The Market half, which this observation can answer.
@@ -77,11 +83,11 @@ describe('live devnet gates over machines that are not the Market phase', () => 
 
   live('does not call an ungated-looking capability route ungated', async () => {
     const client = new SolanaRpcClient(process.env.DCLUTCH_LIVE_ENDPOINT ?? DEVNET_DEPLOYMENT_V1.endpoint);
-    const observation = await client.accountInfo(COHORT14_MARKET_B);
+    const observation = await client.accountInfo(SETTLED_MARKET);
     expect(observation.account).not.toBeNull();
-    const state = decodeMarketCoreStateV2(COHORT14_MARKET_B, observation.account!.data);
+    const state = decodeMarketCoreStateV2(SETTLED_MARKET, observation.account!.data);
     const snapshot: CapabilityMarketSnapshotV1 = {
-      market: { address: COHORT14_MARKET_B, phase: state.phase, readiness: state.readiness },
+      market: { address: SETTLED_MARKET, phase: state.phase, readiness: state.readiness },
     };
 
     // Closing a capability is exactly the act a Market in this phase is walking
@@ -95,7 +101,7 @@ describe('live devnet gates over machines that are not the Market phase', () => 
     expect(other!.machines).toEqual(['funding-ledger']);
 
     // The positive control, on the same observation, so "the table answers
-    // nothing" and "this Market admits nothing" cannot read alike. Market B
+    // nothing" and "this Market admits nothing" cannot read alike. The market
     // settled, so redemption is admitted by its own gate at exactly the phase
     // just decoded.
     const redeem = standing('claims.redeem');

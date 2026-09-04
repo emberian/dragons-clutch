@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { DEVNET_DEPLOYMENT_V1 } from './deployments';
 import {
-  DEVNET_COHORT_5_ABI_RELEASE_V1,
+  KNOWN_ABI_RELEASES_V1,
   authenticateReleaseCurrencyV1,
   discoverCurrentActivationCacheV1,
   openReleaseBoundSessionV1,
@@ -22,23 +22,30 @@ const live = process.env.DCLUTCH_LIVE_DEVNET === '1' ? it : it.skip;
  * reads: two `getAccountInfo` on 1288-byte caches and two 45-byte-per-account
  * ProgramData header reads. It never downloads an ELF body and never writes.
  *
- * The current activation cache, established by reading the chain on
- * 2026-08-29: the Registry owns FIVE accounts of width 1288, one per cohort,
- * and the current one is the single cache whose five pinned deployment slots
- * equal the five live ProgramData deployment slots.
+ * The current activation cache, TAKEN FROM THE MANIFEST rather than pinned.
+ *
+ * This was cohort-5's `77PrN82T…`, on the reasoning that a cache is a permanent
+ * devnet fact. It is — and it stopped being the cache of the registry this
+ * manifest names, because a cohort deploys a FRESH Registry program and a cache
+ * belongs to the registry that minted it. Read against cohort-15's registry,
+ * cohort-5's cache is not a superseded cache, it is a foreign account. The
+ * manifest's own hint is generated per cohort and is the honest input.
  */
-const CURRENT_ACTIVATION_CACHE_V1 = '77PrN82TY4rrQwUjyKBM14A1n3qxktHrN8vd2RcacovK';
+const CURRENT_ACTIVATION_CACHE_V1 = DEVNET_DEPLOYMENT_V1.activationCache ?? '';
 
 /**
- * A cache that is permanently NOT current: DEPLOY-1's, from cohort-1.
+ * A hint that is permanently NOT this deployment's: the PREVIOUS cohort's cache.
  *
- * Activation never deletes a superseded cache, so this address will stay
- * decodable, Registry-owned and 1288 bytes wide forever, and will never again
- * describe the running programs. That makes it a stable input for the
- * follow-the-chain test — unlike the manifest's hint, which is supposed to be
- * current and so cannot be relied on to be stale.
+ * This was cohort-1's, chosen because a superseded cache is never deleted and
+ * so is a permanent input. That reasoning survives; the shape it produces does
+ * not. Measured 2026-09-04: cohort-15's Registry program owns EXACTLY ONE
+ * account of width 1288, so there is no same-registry superseded cache on this
+ * deployment at all, and the `SUPERSEDED` refusal has no live subject here. The
+ * staleness that actually happens is this one — a hint that ages across a
+ * cohort boundary and belongs to the retired registry — and it is the shape
+ * the shipped manifest carried this morning.
  */
-const SUPERSEDED_ACTIVATION_CACHE_V1 = 'Hz6BXyxyf66teABb6Pr6ev9jCZBJJpP5Q9p4sYJwJSkj';
+const PREVIOUS_COHORT_ACTIVATION_CACHE_V1 = 'F66BhQey3ESPRQHEQaLFFEwya4xCb6s2Uh27JiUJ1yVc';
 
 describe('live devnet release identity', () => {
   live('reads the release the chain is running and selects this build\'s ABI table for it', async () => {
@@ -48,12 +55,18 @@ describe('live devnet release identity', () => {
       activationCache: CURRENT_ACTIVATION_CACHE_V1,
     });
 
-    expect(session.release.label).toBe(DEVNET_COHORT_5_ABI_RELEASE_V1.label);
-    expect(session.identity.executionReleaseSetId)
-      .toBe('094336271db1146f09f6ff419488af2d3174da762d3b2b468fac635754aa862d');
+    // NOT A COHORT LITERAL. This pinned cohort-5's label and its release-set
+    // id, so it could only ever pass on the one cohort it was written during --
+    // and it went red on every cohort from 6 to 15 while saying "the ABI table
+    // is missing", which was true and was not what the case is about. What it
+    // asserts now is the JOIN: the table the client selected must agree with
+    // the identity the chain reported, role by role, and the selection must
+    // come from the shipped list rather than from nowhere.
+    expect(KNOWN_ABI_RELEASES_V1.map((release) => release.label)).toContain(session.release.label);
+    expect(session.identity.executionReleaseSetId).toMatch(/^[0-9a-f]{64}$/);
     for (const role of REGISTRY_ROLES) {
-      expect(session.identity.roles[role].semanticReleaseId, role)
-        .toBe(DEVNET_COHORT_5_ABI_RELEASE_V1.semanticReleaseIds[role]);
+      expect(session.release.semanticReleaseIds[role], `${role}: the selected table and the chain must be the same release`)
+        .toBe(session.identity.roles[role].semanticReleaseId);
     }
     // Reading identity is worth nothing if the frames are not bound to it.
     expect(session.abi.coreFoundAccountCount).toBeGreaterThan(0);
@@ -107,8 +120,8 @@ describe('live devnet release identity', () => {
    * entire point: no human updates a constant.
    */
   live('opens a working session from a SUPERSEDED hint by following the chain', async () => {
-    const client = new SolanaRpcClient(DEVNET_DEPLOYMENT_V1.endpoint);
-    const hint = SUPERSEDED_ACTIVATION_CACHE_V1;
+    const client = new SolanaRpcClient(process.env.DCLUTCH_LIVE_ENDPOINT ?? DEVNET_DEPLOYMENT_V1.endpoint);
+    const hint = PREVIOUS_COHORT_ACTIVATION_CACHE_V1;
 
     const session = await openReleaseBoundSessionV1(client, {
       registryProgram: DEVNET_DEPLOYMENT_V1.programs.registry,
@@ -122,12 +135,18 @@ describe('live devnet release identity', () => {
     expect(session.source.note).toContain(hint);
     expect(session.source.note).toContain(session.identity.activationCache);
 
-    // And the stale hint really is stale, named slot by slot.
-    const stale = await readExecutionReleaseIdentityV1(client, {
+    // AND THE STALE HINT REALLY IS UNUSABLE, by the refusal that applies to it.
+    // This expected /SUPERSEDED/, which is the refusal for a cache this
+    // registry minted and has since replaced. A cache from the PREVIOUS cohort
+    // never reaches that check: it is owned by the retired Registry program, so
+    // it is refused one conjunct earlier, by name. Both are correct refusals of
+    // the same hint and the difference is which registry minted it -- so the
+    // case asserts the reason rather than a string that describes a different
+    // staleness.
+    await expect(readExecutionReleaseIdentityV1(client, {
       registryProgram: DEVNET_DEPLOYMENT_V1.programs.registry,
       activationCache: hint,
-    });
-    await expect(authenticateReleaseCurrencyV1(client, stale)).rejects.toThrow(/SUPERSEDED/);
+    })).rejects.toThrow(/not an activation cache/);
   }, 60_000);
 
   /**

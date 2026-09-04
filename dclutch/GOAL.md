@@ -4488,3 +4488,14 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Cuts: `f6ea3bc60`, `48028e1c7`.
 - Started 05:35 EDT: WITNESS-3 **`af2d01884647a5860`** — `Action::Retire`'s four routes folded by request length; the
   generic-founding magic's second coordinate; the eight falsified blocking entries deleted by the file's own rule.
+- WEB-COHORT15 closed (`6946218be` the deployment manifest derived by a COMMITTED producer — it had been a thrown-away
+  scratch script for three cohorts — refusing cohort-14 by naming its seven vacant ProgramData; `8739cf8da` the public cut
+  on cohort-15 with **market 1 featured — the brief's market 3 has a zero terminal receipt and reads Open, so its page can
+  say nothing about a selector; market 1's says "the chain committed claim 1, that is $102–$106, and this page CHECKED it"**;
+  `a3a6a5827` the liveness gate (every pinned program's ProgramData live; the featured market owned by this Core with its
+  byte-208 set among the cut's rows; the web tier runs it with three branches proven); `ab049e00c` /pulse on cohort-15;
+  `34347098f` **`selectAbiReleaseV1` had one row and refused every cohort from 6 to 15** — an observed cohort-15 row added).
+  56 live cases; eight captures with zero errors and zero bare hex. Orchestrator: the two wasm fact modules red at HEAD
+  regenerated. Owed: no census covers the payout boundary; a market page cannot say from the chain that a dead market's
+  programs are closed.
+- Cuts: `1633a3edf`, `518bb5319`.

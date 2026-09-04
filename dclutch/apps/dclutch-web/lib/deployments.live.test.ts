@@ -16,7 +16,7 @@ const UPGRADEABLE_LOADER = 'BPFLoaderUpgradeab1e11111111111111111111111';
  */
 describe('live devnet deployment manifest', () => {
   live('finds all seven programs executable under the upgradeable loader, with their recorded ProgramData', async () => {
-    const client = new SolanaRpcClient(DEVNET_DEPLOYMENT_V1.endpoint);
+    const client = new SolanaRpcClient(process.env.DCLUTCH_LIVE_ENDPOINT ?? DEVNET_DEPLOYMENT_V1.endpoint);
     const facts = await client.probe();
     expect(facts.genesisHash).toBe(DEVNET_DEPLOYMENT_V1.genesisHash);
 
@@ -54,7 +54,7 @@ describe('live devnet deployment manifest', () => {
      * the deployment slot at 4, and neither exists at all if the account is
      * gone. It never downloads an ELF.
      */
-    const client = new SolanaRpcClient(DEVNET_DEPLOYMENT_V1.endpoint);
+    const client = new SolanaRpcClient(process.env.DCLUTCH_LIVE_ENDPOINT ?? DEVNET_DEPLOYMENT_V1.endpoint);
     const addresses = PROTOCOL_ROLES_V1.map((role) => DEVNET_PROGRAM_EVIDENCE_V1[role].programData);
     const observation = await client.multipleAccountDataSlices(addresses, 0, 45);
     for (const [index, role] of PROTOCOL_ROLES_V1.entries()) {
@@ -75,7 +75,7 @@ describe('live devnet deployment manifest', () => {
   }, 60_000);
 
   live('finds the activation cache alive under the Registry program', async () => {
-    const client = new SolanaRpcClient(DEVNET_DEPLOYMENT_V1.endpoint);
+    const client = new SolanaRpcClient(process.env.DCLUTCH_LIVE_ENDPOINT ?? DEVNET_DEPLOYMENT_V1.endpoint);
     const cache = DEVNET_DEPLOYMENT_V1.activationCache;
     expect(cache).not.toBeNull();
     const observation = await client.accountInfo(cache as string);

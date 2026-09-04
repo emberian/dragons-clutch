@@ -461,21 +461,36 @@ describe('opening a release-bound session', () => {
 });
 
 describe('the shipped table', () => {
-  it('carries exactly one release, with observed provenance', () => {
-    expect(KNOWN_ABI_RELEASES_V1).toHaveLength(1);
-    const only = KNOWN_ABI_RELEASES_V1[0];
-    expect(only.provenance).toMatch(/decoded from the live registry activation cache/i);
-    for (const role of REGISTRY_ROLES) {
-      expect(only.semanticReleaseIds[role], role).toMatch(/^[0-9a-f]{64}$/);
+  it('carries only observed releases, each with observed provenance', () => {
+    // THIS PINNED A LENGTH OF ONE, and that was a rule about how many cohorts
+    // had shipped rather than about the table. The table's charter is that
+    // every row is an OBSERVATION -- "do not add tables for releases this
+    // repository never observed" -- and the charter is per row, so it is
+    // asserted per row. Cohort-15's row is the second, and the day a cohort
+    // ships without one this file must not be what goes red.
+    expect(KNOWN_ABI_RELEASES_V1.length).toBeGreaterThan(0);
+    for (const release of KNOWN_ABI_RELEASES_V1) {
+      expect(release.provenance, release.label).toMatch(/decoded from the live registry activation cache/i);
+      for (const role of REGISTRY_ROLES) {
+        expect(release.semanticReleaseIds[role], `${release.label} ${role}`).toMatch(/^[0-9a-f]{64}$/);
+      }
+      // Distinct semantics per role: a table that repeated one id would select
+      // on a coincidence rather than on the five facts the chain states.
+      expect(new Set(REGISTRY_ROLES.map((role) => release.semanticReleaseIds[role])).size, release.label).toBe(REGISTRY_ROLES.length);
     }
-    // Distinct semantics per role: a table that repeated one id would select
-    // on a coincidence rather than on the five facts the chain states.
-    expect(new Set(REGISTRY_ROLES.map((role) => only.semanticReleaseIds[role])).size).toBe(REGISTRY_ROLES.length);
+    // And two rows may not be the same release under two names, which is the
+    // way an append-only table of observations goes wrong.
+    const labels = KNOWN_ABI_RELEASES_V1.map((release) => release.label);
+    expect(new Set(labels).size).toBe(labels.length);
+    const fingerprints = KNOWN_ABI_RELEASES_V1.map((release) => REGISTRY_ROLES.map((role) => release.semanticReleaseIds[role]).join('/'));
+    expect(new Set(fingerprints).size).toBe(fingerprints.length);
   });
 
   it('reads its frame facts from the generated modules, not from transcribed literals', async () => {
     const generated = await import('./generated/genericFoundingV1');
-    expect(KNOWN_ABI_RELEASES_V1[0].abi.coreFoundTradingProgramIndex)
-      .toBe(generated.CORE_FOUND_TRADING_PROGRAM_INDEX_V1);
+    for (const release of KNOWN_ABI_RELEASES_V1) {
+      expect(release.abi.coreFoundTradingProgramIndex, release.label)
+        .toBe(generated.CORE_FOUND_TRADING_PROGRAM_INDEX_V1);
+    }
   });
 });

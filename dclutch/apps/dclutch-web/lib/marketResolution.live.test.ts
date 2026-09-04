@@ -52,10 +52,19 @@ describe('live devnet market resolution', () => {
       registryProgramId: DEVNET_DEPLOYMENT_V1.programs.registry,
     });
 
-    if (card.phase !== 'Terminal') {
+    if (card.settlement.status !== 'terminal') {
       // An Open market has no certificate and the reader must SAY so rather
       // than refusing, because "not yet" and "it did not read" are different
       // facts and a page that conflates them tells a reader to wait forever.
+      //
+      // THE BRANCH USED TO ASK `card.phase !== 'Terminal'`, AND THAT IS A
+      // DIFFERENT QUESTION. A settled Market keeps its terminal receipt through
+      // Retiring and Retired -- `decodeMarketCoreStateV2` admits all three and
+      // refuses a receipt without one of them -- so the moment cohort-15's
+      // featured market ran its payouts and began retiring, this case asserted
+      // that a market with an authenticated certificate had none. The receipt
+      // is what decides whether a certificate exists; the phase decides only
+      // how far past settlement the market has walked.
       expect(resolution.status).toBe('not-terminal');
       return;
     }

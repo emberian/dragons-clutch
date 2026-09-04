@@ -26,7 +26,7 @@ const live = process.env.DCLUTCH_LIVE_DEVNET === '1' ? it : it.skip;
  */
 describe('the shipped deployment, against devnet itself', () => {
   live('finds every pinned program ALIVE — the ProgramData, not the stub that outlives it', async () => {
-    const client = new SolanaRpcClient(DEVNET_DEPLOYMENT_V1.endpoint);
+    const client = new SolanaRpcClient(process.env.DCLUTCH_LIVE_ENDPOINT ?? DEVNET_DEPLOYMENT_V1.endpoint);
     const liveness = await readShippedDeploymentLivenessV1(client);
     // The whole description on failure, because the one thing a reader needs
     // when this goes red is WHICH roles are gone.
@@ -41,7 +41,7 @@ describe('the shipped deployment, against devnet itself', () => {
   }, 60_000);
 
   live('finds the featured market selecting exactly the release set the cut says was checked', async () => {
-    const client = new SolanaRpcClient(DEVNET_DEPLOYMENT_V1.endpoint);
+    const client = new SolanaRpcClient(process.env.DCLUTCH_LIVE_ENDPOINT ?? DEVNET_DEPLOYMENT_V1.endpoint);
     const liveness = await readShippedDeploymentLivenessV1(client);
     expect(liveness.status, liveness.status === 'refused' ? liveness.reason : '').toBe('alive');
     if (liveness.status !== 'alive') return;
