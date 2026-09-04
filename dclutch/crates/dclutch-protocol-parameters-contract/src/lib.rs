@@ -59,6 +59,12 @@
 
 #![no_std]
 
+// `rustfmt::skip` because the file is EMITTED and `check-generated.sh` diffs it
+// byte for byte against a fresh emission. rustfmt follows `mod` declarations, so
+// formatting this crate's root rewraps two long constants and the parity gate
+// then reports a divergence that is the formatter's, not the emitter's --
+// measured 2026-09-04, one line apart, on the first run of the gate.
+#[rustfmt::skip]
 #[allow(missing_docs)]
 mod generated;
 

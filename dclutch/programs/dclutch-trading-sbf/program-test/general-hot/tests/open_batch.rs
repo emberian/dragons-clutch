@@ -1591,6 +1591,15 @@ async fn install_absent(
         {
             continue;
         }
+        // An install that is ITSELF the absent account writes nothing: the
+        // runtime presents a stored empty System account and an absent one
+        // identically, and every derived coordinate a bundle names -- the
+        // caller authorities, the state it is about to create -- is one of
+        // these. Counting them would make "records installed" a number about
+        // the frame's width rather than about content.
+        if install.account == absent_account() {
+            continue;
+        }
         let observed = chain_account(context, install.key).await;
         if observed != absent_account() {
             continue;
@@ -1978,6 +1987,92 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         "a refused close leaves the root revision where it was"
     );
 
+    // ---- ACTION THREE: A SECOND BATCH ON THE SAME MARKET -----------------
+    //
+    // WHERE "ONE CALL AUCTION PER MARKET" IS TRUE AND WHERE IT IS NOT. The
+    // BATCH half is already plural: `GENERAL_BATCH_STATE_RECIPE_V3` keys a
+    // batch by (root, batch id) and the root carries a monotonic
+    // `next_batch_sequence`, so the second occurrence is a different identity
+    // at a different address and the market opens it after the first has
+    // closed. That is measured here rather than argued.
+    //
+    // The SELECTION half is not: `GENERAL_SELECTION_STATE_RECIPE_V3` is keyed
+    // by the root ALONE -- its own doc says "One per General root" -- and
+    // nothing reopens it, so `Consider`/`Freeze` can run against exactly one
+    // selection for the life of the capability. A second batch can be opened,
+    // filled and closed; it cannot be SELECTED. Keying that recipe by a batch
+    // ordinal is a lifecycle-policy change and therefore a re-founding, and it
+    // is not in this campaign.
+    // READ THE CLOCK, DO NOT PREDICT IT. `warp_to_slot` refuses a slot the bank
+    // has already reached, and by this point four transactions and a warp have
+    // advanced it by an amount this campaign does not own.
+    let before_second = context
+        .banks_client
+        .get_sysvar::<solana_program::clock::Clock>()
+        .await
+        .expect("clock sysvar")
+        .slot;
+    context
+        .warp_to_slot(before_second + 1)
+        .expect("advance the bank for the second open");
+    let second_chain = ChainPrestateV1 {
+        market: observed_binding(&mut context, campaign.state.market.key).await,
+        root: observed_binding(&mut context, open.root).await,
+        rent_credit: observed_binding(&mut context, open.rent_credit).await,
+        payer: observed_binding(&mut context, payer.pubkey()).await,
+        primary_state: None,
+    };
+    let second_open = build_action_case(
+        &campaign,
+        Action::OpenBatch,
+        &second_chain,
+        before_second + 1,
+        fee_payer.pubkey(),
+    );
+    assert_ne!(
+        second_open.primary_state, open.primary_state,
+        "the second batch must be a different account, or the root's sequence is not consumed"
+    );
+    let second_installed = install_absent(
+        &mut context,
+        &second_open,
+        &[second_open.built.bundle.artifacts.seal],
+    )
+    .await;
+    assert_eq!(
+        second_installed, 0,
+        "a second OpenBatch reuses the first one's artifact records and its seal exactly"
+    );
+    waist::set_lookup_table(&mut context, &second_open.lookup_addresses);
+    assert_frame_control(&mut context, &second_open).await;
+    let second_execution = waist::submit_v0_observed(
+        &mut context,
+        &second_open.instructions,
+        second_open.lookup_addresses.clone(),
+        Some(&fee_payer),
+        &[&payer],
+    )
+    .await
+    .expect("a second OpenBatch on the same founded market");
+    let second_batch_account = chain_account(&mut context, second_open.primary_state).await;
+    let (_, second_batch) = decode_batch(&second_batch_account);
+    assert_eq!(second_batch.opening().sequence, 1);
+    assert_eq!(second_batch.state().status, BatchStatusV1::Collecting);
+    assert_eq!(second_batch.state().opened_root_revision, 3);
+    assert_ne!(second_batch.batch_id(), opened_batch.batch_id());
+    let after_second = root_tail_of(&chain_account(&mut context, open.root).await);
+    assert_eq!(after_second.revision(), 4);
+    assert_eq!(after_second.open_batches(), 1);
+    assert_eq!(after_second.next_batch_sequence(), 2);
+    // THE FIRST BATCH IS UNTOUCHED, which is what "two auctions" has to mean:
+    // a second occurrence that mutated the first one's record would be one
+    // auction wearing two names.
+    assert_eq!(
+        chain_account(&mut context, open.primary_state).await,
+        closed_batch_account,
+        "opening a second batch leaves the closed one byte-for-byte"
+    );
+
     eprintln!(
         "general-campaign N={OUTCOME_COUNT} market={} root={} batch={}",
         campaign.state.market.key, open.root, open.primary_state,
@@ -1995,6 +2090,12 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         close.built.bundle.hot_instruction.accounts.len(),
         close.built.admitted_authorities.entries.len(),
         collection_close_slot,
+    );
+    eprintln!(
+        "general-campaign second-open-batch cu={} batch={} sequence={} root_revision=3=>4",
+        second_execution.compute_units_consumed,
+        second_open.primary_state,
+        second_batch.opening().sequence,
     );
     eprintln!(
         "general-campaign out-of-sequence-close cu={} code=0x{TRADING_ROOT:04X}",

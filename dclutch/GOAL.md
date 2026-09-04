@@ -4697,3 +4697,16 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   fill (5.2× with the page). **The commitment decision for ember: every transfer of claims is a verified General candidate,
   the bilateral one included, and a resting order rests in a batch, never in a public pool of bearer tickets.**
 - Cuts: `db59c577e`.
+- ECONOMICS closed (`8ed7f242f`, `06008f46b`, `b019d2450`, `2812fc007`, `98472044d`, `5360dff57`, `6c807cc33`, `ec47b680a`):
+  **the first crank costs the opener 1,244,945 lamports at the cohorts' rate — 0.00124 SOL, 29% of their own advance, 0.54%
+  of a market lane; cohort-9's 1,348,376 reproduces within 24 lamports**; `ProtocolParametersV1` (192 bytes + a 112-byte
+  change receipt): governance authority (zero = frozen forever), beneficiary, max fee ≤ the release's 500 bps — governance
+  NARROWS never widens — take, closer carve and cap, crank cap, a 7-day delay derived from the compaction deadline's slots,
+  propose → wait → permissionless apply; nine Lean laws; `HoardPrincipal → FeeVault` refused by name (`0x6011`; 64 → 63
+  admissible pairs; L1–L7 had all passed the hostile — only L8 catches it, in the harness); the closer carve donation-only
+  and capped (Lean); the terms sentence on the page reads the cluster's own rent; **the donation slice has never carried a
+  lamport on any cohort — a donation-funded vault is an empty vault; the money is seat prepays (≥ 11,146,080 unreimbursed)**.
+  Correction: there was no 80/12 lamport census — the live one closed 09-01 at 120/120. Owed: the runtime parameter read
+  (producer-missing, said in the crate); the closer-reward route needs a signer coordinate; the vault build; frames left red
+  on purpose (11 rows in range are RECOVERY's and SERIES's).
+- Cuts: `0db543873`, `f5a3f814e`.
