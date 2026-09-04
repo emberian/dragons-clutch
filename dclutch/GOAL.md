@@ -4951,3 +4951,5 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   needs a family tier on the relayed pattern — a lane**; the gauntlet binding cannot be authored without a tier run.
   Six successor tests red at HEAD are CLAIMS-17's widened frame vs the host's pinned twelve keys (routed).
 - Cuts: `4153bd0eb`.
+- Started 17:50 EDT: RECOVERY-4 **`(spawned)`** — a `ladder` family tier on one live validator (found two-source → advance →
+  the rung captured → settle; and the exhausted path), the four labels bound from folded evidence, the first loopback CU.
