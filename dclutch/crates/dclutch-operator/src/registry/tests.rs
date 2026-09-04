@@ -465,6 +465,33 @@ fn reauthentication_derives_three_readonly_accounts_and_rechecks_deployment() {
     assert_eq!(packet.required_signatures, 1);
     assert_eq!(packet.wire_bytes, 294);
 
+    // The measurement is UNCONDITIONAL on this route, because its cost is not a
+    // function of the artifact it authenticates -- see
+    // MEASURED_REAUTHENTICATION_CU_V1. This fixture's ProgramData ELF is 96 bytes
+    // and matches no real release, which is exactly the case the deleted
+    // ELF-digest gate would have answered `None` for.
+    assert_eq!(
+        report.compute.matching_measured_compute_units,
+        Some(MEASURED_REAUTHENTICATION_CU_V1)
+    );
+    assert_eq!(
+        packet.measured_headroom,
+        Some(80_000 - MEASURED_REAUTHENTICATION_CU_V1)
+    );
+    // And the floor it implies is LIVE rather than decorative: a caller asking
+    // for one unit less than the route is known to cost is refused before a
+    // message is compiled. Red before green -- with the gate in place and the
+    // digest stale this returned Ok, because the report carried `None`.
+    assert_eq!(
+        compile_registry_reauthentication_packet_v0(
+            &report,
+            Pubkey::new_from_array(bytes(91)),
+            Hash::new_from_array(bytes(56)),
+            MEASURED_REAUTHENTICATION_CU_V1 - 1,
+        ),
+        Err(Error::InvalidComputeLimit)
+    );
+
     let mut stale = state;
     stale
         .role_programdata

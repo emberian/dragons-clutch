@@ -63,13 +63,48 @@ pub const REGISTRY_REAUTHENTICATE_ACCOUNT_COUNT_V1: usize = 3;
 ///
 /// This is transaction plumbing, not a protocol-semantic bound.
 pub const TRANSACTION_COMPUTE_UNIT_LIMIT_V1: u32 = 1_400_000;
-/// ELF digest of the exact Registry artifact used for the local measured profile.
-pub const MEASURED_REGISTRY_ELF_DIGEST_V1: [u8; 32] = [
-    0xfd, 0x7d, 0xdc, 0x66, 0x30, 0x93, 0x26, 0x53, 0x89, 0x3f, 0xa8, 0xcf, 0x9e, 0xd4, 0x92, 0xee,
-    0x61, 0xc9, 0x16, 0x9a, 0x81, 0x06, 0x58, 0xbe, 0x64, 0xe5, 0xe8, 0x3a, 0xd0, 0x9e, 0xe5, 0xac,
-];
-/// Measured one-role reauthentication cost for the measured ELF.
-pub const MEASURED_REAUTHENTICATION_CU_V1: u32 = 65_390;
+/// Highest measured cost of one role reauthentication on a real validator.
+///
+/// MEASURED-PROFILE bound. Three tier-1 campaigns at `9ae8fd53be60` on one ELF
+/// set (Registry `3a6d615de8cf51fb…`), five roles each: Core, Claims and Trading
+/// draw 11,337 and Resolution and Custody 11,336, identically on every run under
+/// a 2.4x spread in machine load. `tools/gauntlet/CU_BUDGETS.json` enforces the
+/// five per-role rows against that evidence.
+///
+/// ## It read 65,390 for 4,719 commits, and it was measuring a vanished route
+///
+/// It was written at `866660e66` (2026-08-25), 75 minutes after `f9b606981` gave
+/// the Registry's `deployment_observation` a `hash(programdata_view.elf())` over
+/// the activated role's WHOLE ProgramData, which `process_reauthenticate` then
+/// called. Solana's sha256 costs about one compute unit per two bytes, so 65,390
+/// is roughly 130,780 bytes -- a Registry artifact a day into its life, against
+/// today's 240,440. Decision 0012 landed at `0e34c0365` (2026-08-27) and replaced
+/// that hash with a slot-and-authority equality over an account the frame already
+/// carries: see `slot_pinned_release_elf_digest_v1`, whose own doc says "no
+/// sysvar, no extra account, no hash", and whose decision record measures the pin
+/// at 73 CU. The route stopped hashing 3,214 commits ago and the number never
+/// moved, so it stood at 5.8x the truth with no provenance recorded anywhere in
+/// the tree -- not a test, not an evidence document, not the commit that wrote it.
+///
+/// ## The cost does not depend on the artifact, and the chain says so
+///
+/// `tools/gauntlet/tier1/witnesses.json`'s
+/// `reauthentication-does-not-rehash-the-role-elf` asserts, from two numbers the
+/// chain produced in one campaign, that twenty reauthentications fit inside one
+/// activation -- activation being the route that does hash the artifact. Measured
+/// 2026-09-04 the factor is twenty-eight: 11,337 against a cheapest activation of
+/// 328,016. So this number is a measurement of the REGISTRY'S OWN CODE, not of
+/// the role being reauthenticated, and it must be re-measured when the Registry
+/// moves rather than when a role does.
+///
+/// That is why there is no ELF-digest gate on it any more. There was one --
+/// `MEASURED_REGISTRY_ELF_DIGEST_V1`, `fd7ddc66…` -- and it was compared against
+/// the ACTIVATED ROLE's `elf_digest()`, which is a different artifact from the one
+/// its own name claimed. No `ExecutionRoleV1` is the Registry, so if that name was
+/// accurate the branch could never be taken at all; either way it had not fired
+/// since the digest went stale, and gating an artifact-independent measurement on
+/// an artifact was the wrong shape regardless.
+pub const MEASURED_REAUTHENTICATION_CU_V1: u32 = 11_337;
 
 /// One finalized raw record and its now-vacant canonical staging cursor.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -158,12 +193,24 @@ pub enum RegistryActivationModeV1 {
 /// Compute-relevant evidence derived from authenticated deployment state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RegistryComputeEvidenceV1 {
-    /// Complete ELF-tail bytes hashed by this exact instruction.
-    pub elf_bytes_hashed: usize,
-    /// Exact local ProgramTest measurement when the observed ELF profile matches.
+    /// Complete ELF-tail bytes the route reads for this exact instruction.
     ///
-    /// `None` is an honest absence of a matching measurement, not a zero-cost
-    /// claim. Callers must still select an explicit transaction compute limit.
+    /// **It is bytes HASHED only on the activation path.** Activation admits an
+    /// artifact by digesting its whole ProgramData, so there the figure is the
+    /// route's dominant cost. Reauthentication reads the same span to report its
+    /// width and does NOT hash it -- decision 0012 replaced that hash with a slot
+    /// equality -- so there the figure is a description of the deployment and
+    /// says nothing about what the transaction costs. The name is the activation
+    /// path's and is left alone rather than renamed across a public API; see
+    /// [`MEASURED_REAUTHENTICATION_CU_V1`] for the same era's other residue.
+    pub elf_bytes_hashed: usize,
+    /// Measured cost of this route, when one has been taken.
+    ///
+    /// `None` is an honest absence of a measurement, not a zero-cost claim, and
+    /// it is what the activation report carries: activation's cost is a function
+    /// of the artifact it hashes, so there is no one number to give. Callers must
+    /// still select an explicit transaction compute limit; a `Some` here is a
+    /// FLOOR under it, enforced by `compile_registry_packet_v0`.
     pub matching_measured_compute_units: Option<u32>,
 }
 
@@ -514,9 +561,12 @@ pub fn build_registry_reauthentication_v1(
         semantic_release_id: release.semantic_release_id(),
         compute: RegistryComputeEvidenceV1 {
             elf_bytes_hashed,
-            matching_measured_compute_units: (release.elf_digest()
-                == MEASURED_REGISTRY_ELF_DIGEST_V1)
-                .then_some(MEASURED_REAUTHENTICATION_CU_V1),
+            // Unconditional, because the cost is not a function of this release:
+            // the route authenticates the cached deployment by a slot-and-authority
+            // equality and does not hash the artifact. See
+            // MEASURED_REAUTHENTICATION_CU_V1 for the digest gate that used to be
+            // here and why removing it is the correction rather than a relaxation.
+            matching_measured_compute_units: Some(MEASURED_REAUTHENTICATION_CU_V1),
         },
     })
 }

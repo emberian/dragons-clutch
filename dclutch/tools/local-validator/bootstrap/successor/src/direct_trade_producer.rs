@@ -156,6 +156,11 @@ struct DevnetDirectProducerArgumentsV1 {
     payer: Pubkey,
     payer_keypair: PathBuf,
     output_dir: PathBuf,
+    /// The plan the founding campaign names, supplied only by a cohort that has
+    /// re-admitted its checked release since founding. Both halves are present
+    /// or neither is.
+    founding_plan: Option<PathBuf>,
+    expected_founding_plan_sha256: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1090,6 +1095,7 @@ pub(crate) fn produce_owned_loopback_direct_trade_v1(
         checked_release,
         None,
         ExpectedClusterV1::OwnedLoopback,
+        None,
     )?;
     if public.config.price_scale() != EXPECTED_PRICE_SCALE_V1
         || public.config.fee_basis_points() != FEE_BASIS_POINTS_V1
@@ -1271,7 +1277,14 @@ pub(crate) fn devnet_direct_usage() -> &'static str {
      --seller-ticket ABSOLUTE_JSON --expected-seller-ticket-sha256 HEX64 \
      --buyer-ticket ABSOLUTE_JSON --expected-buyer-ticket-sha256 HEX64 \
      --payer PUBKEY --payer-keypair ABSOLUTE_RUNTIME_KEYPAIR_JSON \
-     --output-dir ABSOLUTE_EXISTING_EMPTY_DIRECTORY"
+     --output-dir ABSOLUTE_EXISTING_EMPTY_DIRECTORY \
+     [--founding-plan ABSOLUTE_JSON --expected-founding-plan-sha256 HEX64]\n\n\
+     The founding campaign names the plan that FOUNDED the Market by whole-file \
+     digest. A cohort that has since re-admitted its checked release holds a \
+     plan with a different digest and the same content, and supplies the \
+     founding plan so the difference can be MEASURED: every leaf must be equal \
+     except the checked-release gate, the deployment-set journal digests and \
+     the candidate paths. Omit both flags unless the campaign refuses the plan."
 }
 
 /// Build the existing public manifest and private-session wires from one
@@ -1414,6 +1427,37 @@ fn produce_devnet_direct_trade_v1(
     let seller_signed = parse_portable_direct_ticket_v1(&fs::read(&seller_ticket)?, "seller")?;
     let buyer_signed = parse_portable_direct_ticket_v1(&fs::read(&buyer_ticket)?, "buyer")?;
     let terms = exact_ticket_pair_terms_v1(&seller_signed, &buyer_signed)?;
+    // The founding plan, supplied only by a cohort that has re-admitted its
+    // checked release since founding. It is authenticated here against its own
+    // stated digest exactly like every other input; `prepare_public_facts_v1`
+    // then requires it to be the one the campaign names and to differ from the
+    // current plan in nothing but re-admission provenance.
+    let founding_plan_bytes = match (
+        &arguments.founding_plan,
+        &arguments.expected_founding_plan_sha256,
+    ) {
+        (Some(path), Some(expected)) => {
+            let bytes = fs::read(path)?;
+            require_unique_json_v1(&bytes, "Direct founding successor plan")?;
+            if &sha256_hex(&bytes) != expected {
+                return Err(refusal(
+                    "founding plan bytes differ from --expected-founding-plan-sha256",
+                ));
+            }
+            Some(bytes)
+        }
+        _ => None,
+    };
+    let readmission = founding_plan_bytes
+        .as_ref()
+        .map(|bytes| PlanReadmissionInputV1 {
+            founding_plan_sha256: arguments
+                .expected_founding_plan_sha256
+                .as_deref()
+                .unwrap_or_default(),
+            founding_plan_bytes: bytes,
+            plan_bytes: &plan_bytes,
+        });
     let public = prepare_public_facts_v1(
         &mut rpc,
         &plan_value,
@@ -1428,6 +1472,7 @@ fn produce_devnet_direct_trade_v1(
         fs::read(&checked_execution_release)?,
         Some(terms),
         ExpectedClusterV1::Devnet,
+        readmission.as_ref(),
     )?;
     let public_value = assemble_public_manifest_v1(
         &public,
@@ -2027,6 +2072,131 @@ fn validate_paths_v1(
     })
 }
 
+/// The two documents a re-admission binding needs, and their digests.
+#[derive(Clone, Copy, Debug)]
+struct PlanReadmissionInputV1<'a> {
+    founding_plan_sha256: &'a str,
+    founding_plan_bytes: &'a [u8],
+    plan_bytes: &'a [u8],
+}
+
+/// Leaf keys a re-admission may move, and the only ones.
+///
+/// A checked-release admission is re-runnable now (`tools/release/README.md`,
+/// "The reproducible gate"), and re-running it necessarily rewrites the plan:
+/// the plan records WHERE the candidate is and WHICH gate authenticated it, and
+/// a rebuild puts the candidate somewhere else under a gate digest of its own.
+/// Nothing the founded Market depends on moves -- not one program id, release
+/// id, record body or `checked_candidate_elf_sha256`.
+///
+/// Measured on cohort-15, 2026-09-04: re-admitting at the deploy commit moved
+/// exactly twenty leaves, and every one of them is in this list.
+const PLAN_READMISSION_MOVABLE_KEYS_V1: [&str; 7] = [
+    "account_dir",
+    "checked_release_gate_path",
+    "checked_release_gate_sha256",
+    "final_set_sha256",
+    "journal_sha256",
+    "checked_candidate_elf_path",
+    "elf_path",
+];
+
+/// Prove that two plan documents differ ONLY in re-admission provenance.
+///
+/// The founding campaign binds its plan by whole-file digest, which is right:
+/// the campaign is evidence about one exact document. But that binding also
+/// makes every re-admission look like a substituted plan, because a whole-file
+/// digest cannot distinguish "the gate was rebuilt" from "the trading program
+/// changed". This walks both documents structurally and requires every leaf to
+/// be equal except the closed provenance set above, so the distinction is
+/// MEASURED rather than asserted -- and a caller who supplies a genuinely
+/// different plan is refused by whichever leaf differs, named.
+fn authenticate_plan_readmission_v1(founding: &[u8], current: &[u8]) -> Result<()> {
+    let founding: serde_json::Value = serde_json::from_slice(founding)
+        .map_err(|error| refusal(format!("founding plan is not canonical JSON: {error}")))?;
+    let current: serde_json::Value = serde_json::from_slice(current)
+        .map_err(|error| refusal(format!("checked plan is not canonical JSON: {error}")))?;
+    let mut moved: Vec<String> = Vec::new();
+    compare_plan_readmission_v1(&founding, &current, "", &mut moved)?;
+    if moved.is_empty() {
+        return Err(refusal(
+            "founding and checked plans are byte-distinct but leaf-identical; a re-admission \
+             moves at least the checked-release gate it re-authenticated",
+        ));
+    }
+    Ok(())
+}
+
+fn compare_plan_readmission_v1(
+    founding: &serde_json::Value,
+    current: &serde_json::Value,
+    path: &str,
+    moved: &mut Vec<String>,
+) -> Result<()> {
+    match (founding, current) {
+        (serde_json::Value::Object(left), serde_json::Value::Object(right)) => {
+            if left.len() != right.len() || left.keys().ne(right.keys()) {
+                return Err(refusal(format!(
+                    "founding and checked plans have different fields at {path}/; a re-admission \
+                     rewrites values, never the shape of the plan"
+                )));
+            }
+            for (key, value) in left {
+                compare_plan_readmission_v1(value, &right[key], &format!("{path}/{key}"), moved)?;
+            }
+            Ok(())
+        }
+        (serde_json::Value::Array(left), serde_json::Value::Array(right)) => {
+            if left.len() != right.len() {
+                return Err(refusal(format!(
+                    "founding and checked plans have different lengths at {path}[]; a \
+                     re-admission adds and removes nothing"
+                )));
+            }
+            for (index, (value, other)) in left.iter().zip(right).enumerate() {
+                compare_plan_readmission_v1(value, other, &format!("{path}[{index}]"), moved)?;
+            }
+            Ok(())
+        }
+        (left, right) if left == right => Ok(()),
+        (left, right) => {
+            let key = path.rsplit('/').next().unwrap_or_default();
+            let key = key.split('[').next().unwrap_or_default();
+            if !PLAN_READMISSION_MOVABLE_KEYS_V1.contains(&key) {
+                return Err(refusal(format!(
+                    "founding and checked plans differ at {path}, which no re-admission may \
+                     move; only {} may differ",
+                    PLAN_READMISSION_MOVABLE_KEYS_V1.join(", ")
+                )));
+            }
+            let (Some(left), Some(right)) = (left.as_str(), right.as_str()) else {
+                return Err(refusal(format!(
+                    "re-admission field {path} is not a string on both sides"
+                )));
+            };
+            if key.ends_with("_sha256") {
+                let hex = |value: &str| {
+                    value.len() == 64
+                        && value
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                };
+                if !hex(left) || !hex(right) {
+                    return Err(refusal(format!(
+                        "re-admission digest {path} is not 64 lowercase hex on both sides"
+                    )));
+                }
+            } else if !Path::new(left).is_absolute() || !Path::new(right).is_absolute() {
+                return Err(refusal(format!(
+                    "re-admission path {path} is not absolute on both sides"
+                )));
+            }
+            moved.push(path.to_owned());
+            Ok(())
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn prepare_public_facts_v1(
     rpc: &mut Rpc,
@@ -2042,12 +2212,34 @@ fn prepare_public_facts_v1(
     checked_release: Vec<u8>,
     requested_terms: Option<DirectTradeTermsV1>,
     expected_cluster: ExpectedClusterV1,
+    readmission: Option<&PlanReadmissionInputV1<'_>>,
 ) -> Result<PreparedPublicFactsV1> {
     crate::market::validate_market_input(market_input)?;
-    if campaign.plan_sha256 != plan_sha256 || campaign.market_sha256 != market_sha256 {
+    if campaign.market_sha256 != market_sha256 {
         return Err(refusal(
-            "Direct campaign and checked plan/Market input digests differ",
+            "Direct campaign and checked Market input digests differ",
         ));
+    }
+    if campaign.plan_sha256 != plan_sha256 {
+        // The campaign names the plan that FOUNDED this Market, and a cohort
+        // that has re-admitted its checked release no longer holds that file's
+        // bytes. Accepting the current plan here requires proving the two
+        // documents differ only in re-admission provenance -- which requires
+        // the founding plan itself, so a caller who does not supply it is
+        // refused exactly as before.
+        let Some(readmission) = readmission else {
+            return Err(refusal(
+                "Direct campaign and checked plan digests differ; if this cohort re-admitted \
+                 its checked release, supply the founding plan the campaign names with \
+                 --founding-plan and --expected-founding-plan-sha256",
+            ));
+        };
+        if readmission.founding_plan_sha256 != campaign.plan_sha256 {
+            return Err(refusal(
+                "supplied founding plan is not the one the Direct campaign names",
+            ));
+        }
+        authenticate_plan_readmission_v1(readmission.founding_plan_bytes, readmission.plan_bytes)?;
     }
     let direct = market_input
         .direct_capability
@@ -3628,6 +3820,8 @@ fn parse_devnet_direct_arguments_v1(
                 | "--payer"
                 | "--payer-keypair"
                 | "--output-dir"
+                | "--founding-plan"
+                | "--expected-founding-plan-sha256"
         ) {
             return Err(Error::new(format!(
                 "unknown devnet Direct producer argument: {argument}"
@@ -3669,6 +3863,23 @@ fn parse_devnet_direct_arguments_v1(
         payer: pubkey(&take("--payer")?)?,
         payer_keypair: PathBuf::from(take("--payer-keypair")?),
         output_dir: PathBuf::from(take("--output-dir")?),
+        // Both halves or neither: a founding plan with no expected digest is an
+        // unauthenticated file, and an expected digest with no file names
+        // nothing.
+        founding_plan: match (
+            values.get("--founding-plan"),
+            values.get("--expected-founding-plan-sha256"),
+        ) {
+            (Some(path), Some(_)) => Some(PathBuf::from(path)),
+            (None, None) => None,
+            _ => {
+                return Err(refusal(
+                    "--founding-plan and --expected-founding-plan-sha256 are supplied \
+                     together or not at all",
+                ));
+            }
+        },
+        expected_founding_plan_sha256: values.get("--expected-founding-plan-sha256").cloned(),
     })
 }
 
@@ -5106,5 +5317,120 @@ mod tests {
         let (_, clauses) =
             classify_direct_token_destination_v1(Some(&doubly), mint, owner, token_program);
         assert!(clauses.len() >= 2, "only one clause reported: {clauses:?}");
+    }
+
+    // ---------------------------------------------------------------------
+    // Re-admission: the founding campaign names one plan file, and a cohort
+    // that has rebuilt its checked release holds another with the same
+    // content. These pin exactly which differences that buys.
+
+    fn readmission_plan_v1(gate: &str, trading_elf_sha256: &str, elf_root: &str) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "account_dir": format!("{elf_root}/accounts"),
+            "release_set_id": "9895faee8f7f6a1926df18302f1b003afcf4b6c56518ba7bba2614c86eea8a22",
+            "trading": {
+                "program_id": "3gBSSjYwSC4phutpGKRkMhrnCDVzHu6kfQ3L4jLf2UmG",
+                "elf_path": format!("{elf_root}/elf/trading.so"),
+                "checked_candidate_elf_path": format!("{elf_root}/elf/trading.so"),
+                "checked_candidate_elf_sha256": trading_elf_sha256,
+            },
+            "checked_upgrade_set": {
+                "checked_release_gate_path": format!("{elf_root}/RELEASE_GATE.json"),
+                "checked_release_gate_sha256": gate,
+                "final_set_sha256": gate,
+                "journal_sha256": gate,
+                "roles": [{
+                    "role": "trading",
+                    "checked_candidate_elf_path": format!("{elf_root}/elf/trading.so"),
+                    "checked_candidate_elf_sha256": trading_elf_sha256,
+                }],
+            },
+        }))
+        .expect("plan fixture serializes")
+    }
+
+    const READMISSION_TRADING_ELF_V1: &str =
+        "7e581f12c89a56cfb9fa34da065db30ea02c17ee9e768439d10e6a13b358de24";
+    const READMISSION_OTHER_ELF_V1: &str =
+        "0000000000000000000000000000000000000000000000000000000000000001";
+
+    #[test]
+    fn readmission_admits_a_plan_that_moved_only_its_gate_and_candidate_paths() {
+        let founding = readmission_plan_v1(&"1e".repeat(32), READMISSION_TRADING_ELF_V1, "/gone");
+        let current =
+            readmission_plan_v1(&"52".repeat(32), READMISSION_TRADING_ELF_V1, "/job/cand");
+        assert_ne!(founding, current, "the fixture must be byte-distinct");
+        super::authenticate_plan_readmission_v1(&founding, &current)
+            .expect("a re-admission that moved only provenance is admitted");
+    }
+
+    #[test]
+    fn readmission_refuses_a_plan_whose_shipped_elf_digest_moved() {
+        let founding = readmission_plan_v1(&"1e".repeat(32), READMISSION_TRADING_ELF_V1, "/gone");
+        let current = readmission_plan_v1(&"52".repeat(32), READMISSION_OTHER_ELF_V1, "/job/cand");
+        let refusal = super::authenticate_plan_readmission_v1(&founding, &current)
+            .expect_err("a moved ELF digest is not re-admission provenance");
+        let text = refusal.to_string();
+        assert!(
+            text.contains("/trading/checked_candidate_elf_sha256")
+                || text.contains("/checked_upgrade_set/roles[0]/checked_candidate_elf_sha256"),
+            "the refusal must name the leaf that moved: {text}"
+        );
+    }
+
+    #[test]
+    fn readmission_refuses_a_plan_that_moved_nothing() {
+        let founding = readmission_plan_v1(&"1e".repeat(32), READMISSION_TRADING_ELF_V1, "/gone");
+        let refusal = super::authenticate_plan_readmission_v1(&founding, &founding)
+            .expect_err("a re-admission moves at least its gate");
+        assert!(
+            refusal.to_string().contains("leaf-identical"),
+            "unexpected refusal: {refusal}"
+        );
+    }
+
+    #[test]
+    fn readmission_refuses_a_gate_digest_that_is_not_a_digest() {
+        let founding = readmission_plan_v1(&"1e".repeat(32), READMISSION_TRADING_ELF_V1, "/gone");
+        let current = readmission_plan_v1("not-a-digest", READMISSION_TRADING_ELF_V1, "/job/cand");
+        let refusal = super::authenticate_plan_readmission_v1(&founding, &current)
+            .expect_err("an allowlisted field is still typed");
+        assert!(
+            refusal.to_string().contains("64 lowercase hex"),
+            "unexpected refusal: {refusal}"
+        );
+    }
+
+    #[test]
+    fn readmission_refuses_a_relative_candidate_path() {
+        let founding = readmission_plan_v1(&"1e".repeat(32), READMISSION_TRADING_ELF_V1, "/gone");
+        let current = readmission_plan_v1(
+            &"52".repeat(32),
+            READMISSION_TRADING_ELF_V1,
+            "relative/cand",
+        );
+        let refusal = super::authenticate_plan_readmission_v1(&founding, &current)
+            .expect_err("a relative candidate path is not an admitted candidate");
+        assert!(
+            refusal.to_string().contains("is not absolute"),
+            "unexpected refusal: {refusal}"
+        );
+    }
+
+    #[test]
+    fn readmission_refuses_a_plan_that_grew_a_field() {
+        let founding = readmission_plan_v1(&"1e".repeat(32), READMISSION_TRADING_ELF_V1, "/gone");
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&founding).expect("fixture parses");
+        value["trading"]["surprise"] = serde_json::json!("extra");
+        let current = serde_json::to_vec(&value).expect("mutated fixture serializes");
+        let refusal = super::authenticate_plan_readmission_v1(&founding, &current)
+            .expect_err("a re-admission never changes the shape of the plan");
+        assert!(
+            refusal
+                .to_string()
+                .contains("different fields at /trading/"),
+            "unexpected refusal: {refusal}"
+        );
     }
 }

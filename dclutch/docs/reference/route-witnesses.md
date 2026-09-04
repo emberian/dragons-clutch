@@ -66,9 +66,12 @@ field the chain does not agree with.
 ## Campaigns, and the substrate each one ran on
 
 Declared in `tools/gauntlet/substrates.json` and checked here: a campaign that
-says `local-validator` must have a runner that starts one, a campaign that
-says `program-test` must not, and a campaign that binds a route with no row at
-all fails this generator rather than rendering as `unknown`.
+says `local-validator` must NAME `solana-test-validator` in executable text --
+in its runner, or in a script that runner invokes -- a campaign that says
+`program-test` must not, and a campaign that binds a route with no row at all
+fails this generator rather than rendering as `unknown`. Shell comments are
+stripped before the search, because until 2026-09-04 they were not and one
+campaign passed this control on a sentence in its header.
 
 | campaign | substrate | reproduces | routes | runner | artifact sha256 |
 | --- | --- | --- | ---: | --- | --- |
@@ -101,6 +104,7 @@ all fails this generator rather than rendering as `unknown`.
 | cohort 13 (devnet) | devnet | yes | 10 | `tools/gauntlet/devnet-witness/corroborate.py` | `9f18f7c5d9e1a57e` |
 | cohort 13 (devnet) | devnet | yes | 19 | `tools/gauntlet/devnet-witness/corroborate.py` | `9909b0b59ab4e9b3` |
 | cohort 14 (devnet) | devnet | yes | 4 | `tools/gauntlet/devnet-witness/corroborate.py` | `a08c5c64298bc6a2` |
+| cohort 15 (devnet) | devnet | yes | 0 | `tools/gauntlet/devnet-witness/corroborate.py` | `7f65e3ccb4b7e293` |
 
 ## Routes whose only witness is a campaign that does not reproduce
 

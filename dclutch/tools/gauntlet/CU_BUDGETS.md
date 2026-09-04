@@ -293,13 +293,55 @@ previous table was pinned before the founding was split and named `DCLTGMF1`,
 those rows MISSING on the first run that could reach them. The `DCLTPCA1` rows
 are gone entirely: that lane is no longer submitted.
 
-**Every number below is ONE draw.** This file's rule is to pin the highest of
-several, and there is only one completing run in existence. The tolerances are
-therefore the ones the rows they replace carried, not re-derived: the noise
-CAUSE is unchanged — a keypair seed does not seed the expiry slots and
-lookup-table slots the founding ladders hash — so the recorded bands still
-apply and nothing here licenses tightening them. A second completing run is
-what this table is waiting for.
+**Every number below WAS one draw, and eleven of them are no longer.** This
+file's rule is to pin the highest of several, and when this table was written
+there was exactly one completing run in existence. The tolerances were therefore
+the ones the rows they replace carried, not re-derived: the noise CAUSE is
+unchanged — a keypair seed does not seed the expiry slots and lookup-table slots
+the founding ladders hash — so the recorded bands still applied and nothing
+licensed tightening them. **The second and third completing runs happened on
+2026-09-04** (see "Three runs, one ELF set" below); the eight new rows and the
+three that were RECORDED-pending-a-second-run are pinned against them. The rest
+are still single draws and are still green.
+
+### Three runs, one ELF set — 2026-09-04, at `9ae8fd53be60`
+
+Three tier-1 campaigns, one ELF set, one seed, the campaign stage forced with
+`--from campaign` so nothing between them was rebuilt. **The machine's load
+average at each start is part of the measurement**, because load is what moves
+this campaign's slots and the slots are what seed its bump search:
+
+| run | started | load average | transactions | result |
+|---|---|---|---:|---|
+| 1 | 03:44:58Z | 6.98 7.56 8.42 | 209 | exit 0, 24 witnesses, 0 failed |
+| 2 | 04:05:06Z | 9.17 8.93 10.21 | 209 | exit 0, 24 witnesses, 0 failed |
+| 3 | 04:26:51Z | 16.50 29.02 33.47 | 209 | exit 0, 24 witnesses, 0 failed |
+
+A factor of 2.4 in one-minute load across the three, and the eight new rows drew
+**byte-identically on all three**. That is not luck: none of those routes runs
+`find_program_address`, so none of them has a bump search to draw, and the bump
+search is the only noise source this campaign has left after the keypair seed.
+
+**What DID move, on the rows that carry a clock.** Reported here rather than
+re-pinned, because CU_BUDGETS.md's own rule is that re-pinning a green row
+upward can only cost sensitivity:
+
+| row | run 1 | run 2 | run 3 | band | ÷1,500 |
+|---|---:|---:|---:|---:|---:|
+| `dcltgmf3-whole` | 866,574 | 827,568 | 863,574 | 39,006 | 26.0 |
+| `dcltcfq1-whole` | 484,735 | 489,232 | 484,735 | 4,497 | 3.0 |
+| `dcltpcb2-whole` | 617,861 | 614,859 | 617,861 | 3,002 | 2.0 |
+| `found37-whole` | 190,380 | 193,380 | 190,380 | 3,000 | 2.0 |
+| `found37-substituted-market-rollback` | 161,293 | 164,293 | 161,293 | 3,000 | 2.0 |
+
+Every band is a whole number of the 1,500 CU a `sol_create_program_address`
+iteration costs, to within four. **`dcltgmf3-whole` is the row to read**: its pin
+is 829,068 and two of the three draws are ABOVE it, so 37,506 of its 70,000
+tolerance is spent by noise before any regression is added — the same shape
+`dcltgmf3-stage-4-claims-foundingv5` was in before it was re-pinned. It is still
+green (866,574 against 899,068) and is deliberately left alone; the three draws
+are recorded here so the next lane that touches it does not have to re-measure
+them. Every other enforced tier-1 row drew band 0 on all three runs.
 
 **Read `activation-role-trading` first.** It draws 1,200,411 CU and leaves
 199,589 (14.3%) to the 1,400,000 ceiling. That row is a measurement of the ELF,
@@ -336,9 +378,52 @@ position — `dcltgmf1-whole`, 8.7% and shrinking — came in at 40.8%.
 | `activation-role-resolution` | 466,563 | 446,563 | 20,000 | 933,437 (66.7%) |
 | `activation-role-custody` | 348,016 | 328,016 | 20,000 | 1,051,984 (75.1%) |
 | `activation-refuses-pre-revocation-core` | 650,713 | 630,713 | 20,000 | 749,287 (53.5%) |
-| `core-funding-create` | — | 303,613 | — | RECORDED, not enforced: one draw, no band |
-| `resolution-funding-activate` | — | 278,311 | — | RECORDED, not enforced: one draw, no band |
-| `core-funding-accept` | — | 192,371 | — | RECORDED, not enforced: one draw, no band |
+| `core-funding-create` | 333,613 | 303,613 | 30,000 | 1,066,387 (76.2%) |
+| `resolution-funding-activate` | 308,311 | 278,311 | 30,000 | 1,091,689 (78.0%) |
+| `core-funding-accept` | 222,371 | 192,371 | 30,000 | 1,177,629 (84.1%) |
+| `reauthenticate-role-core` | 26,337 | 11,337 | 15,000 | 1,373,663 (98.1%) |
+| `reauthenticate-role-claims` | 26,337 | 11,337 | 15,000 | 1,373,663 (98.1%) |
+| `reauthenticate-role-trading` | 26,337 | 11,337 | 15,000 | 1,373,663 (98.1%) |
+| `reauthenticate-role-resolution` | 26,336 | 11,336 | 15,000 | 1,373,664 (98.1%) |
+| `reauthenticate-role-custody` | 26,336 | 11,336 | 15,000 | 1,373,664 (98.1%) |
+| `abandoned-record-begin` | 33,191 | 18,191 | 15,000 | 1,366,809 (97.6%) |
+| `abort-substituted-refund-refusal` | 22,258 | 7,258 | 15,000 | 1,377,742 (98.4%) |
+| `abort-reclaims-abandoned-record` | 23,503 | 8,503 | 15,000 | 1,376,497 (98.3%) |
+
+**The eight new rows are SEVEN's two Registry routes** (`c42da8fef`,
+`c226b6d95`), which read NEVER-EXECUTED in every campaign on every substrate
+until that commit and which its own message left owed here: "NO CU BUDGETS for
+the eight new transactions. One draw each, and CU_BUDGETS.md says pin the highest
+of several." There are now three draws each and all three agree exactly, so the
+tolerance is this file's 15,000 floor on all eight.
+
+Two things about them are worth keeping. **The five reauthentications split
+11,337 / 11,336 and the split is structural**: Core, Claims and Trading draw the
+higher figure and Resolution and Custody the lower, identically on every run, out
+of the role discriminant's own encoding. That one CU is why these are five rows
+and not one wildcard. And **none of the five is a measurement of an artifact** —
+unlike the five `activation-role-*` rows above, which move whenever their ELF
+does. The witness `reauthentication-does-not-rehash-the-role-elf` proves that
+from the chain's own numbers at a factor of twenty-eight, so a change in one of
+these rows is a change in the Registry's code and nothing else.
+
+**`abandoned-record-begin` names an address on purpose.** `publish record:
+Begin *` is a BINDING pattern covering 41 publications in this campaign, and a
+budget must match exactly one transaction or the evaluator returns `AMBIGUOUS`
+— so the row names the abandoned record's own derived address. That address is a
+PDA over the Registry's gauntlet-local program id and a body ending in the seeded
+payer's pubkey, so it is stable (verified identical on all three runs) and it
+moves if the seed preimage or the program-id domain moves. When it moves the row
+goes `MISSING`, which is red; it cannot quietly match a different Begin.
+
+**The three readiness-ladder rows are now ENFORCED.** They said in their own
+words that they were "enforced by nothing until a second completing tier-1 run
+exists" and that "that second run is the whole of what this row is waiting for."
+All three of the new draws came in BELOW the `93a2793bd` figure, so `measured`
+stays at the highest of the four and nothing is re-pinned downward onto a lucky
+run; the bands over four draws are 16,498, 10,498 and 17,999, each within two CU
+of a whole number of 1,500, and the tolerance is what `roundup(band, 10,000) +
+10,000` returns rather than a number chosen to make the row green.
 
 
 `activation-role-trading` is the only row whose headroom is under a fifth, and
@@ -462,11 +547,13 @@ documents:
   56,265 CU. It is `dcltgmf3-stage-5-core-open`, an ordinary enforced stage
   budget, and the subtraction is gone. The truncation was a property of a
   transaction that FAILED at stage 4, not of the RPC.
-- `core-funding-create`, `resolution-funding-activate`, `core-funding-accept` —
-  the post-founding readiness ladder, reached for the first time on 2026-09-03.
-  One draw is not a band and this file pins the highest of several, so the three
-  numbers are written down and enforced by nothing until a second completing
-  tier-1 run exists.
+- ~~`core-funding-create`, `resolution-funding-activate`,
+  `core-funding-accept`~~ — **resolved 2026-09-04.** The post-founding readiness
+  ladder was reached for the first time on 2026-09-03 and one draw is not a band,
+  so the three numbers were written down and enforced by nothing "until a second
+  completing tier-1 run exists". Three more happened. All three rows are enforced
+  in the table above, pinned to the highest of four draws with tolerances derived
+  from the observed band rather than assumed.
 - `hot-canonical-bundle-phase-subtotals` — there is no green number to pin. The
   canonical Hot bundle does not pass at HEAD (tail over the 32,768-byte heap at
   phase 7; W2i's gate), and its phase subtotals need `--features hot-cu-profile`
@@ -542,6 +629,25 @@ A red row reads:
   OVER      found31-whole                                        237041     222041      +15000
             OVER BUDGET by 15000 CU: create canonical Found31 Market
 ```
+
+## The injected-red proof, tier 1's eight new rows — 2026-09-04
+
+The same cut, against the first of the three runs' real evidence, on the eight
+rows added that day. It is the band-0 shape, and on tier 1 rather than tier 4 for
+the first time:
+
+| budgets file | every one of the eight |
+|---|---|
+| committed | OK, `observed == measured` exactly, on all three runs |
+| tolerance cut to 0 | still OK — the draw IS the pin |
+| tolerance cut to −1,000 | **OVER by exactly 1,000**, all eight |
+| tolerance cut to −15,000 | **OVER by exactly 15,000**, all eight |
+
+The middle row is the one that matters and it has never been available on tier 1
+before: with the tolerance at zero the budget IS the measured value, so a green
+run proves the campaign drew exactly the pinned number rather than "within
+tolerance of it". Tier 1's founding ladders cannot say that and still cannot; the
+Registry routes can, because they run no bump search.
 
 ## The injected-red proof, tier 4 — reproduced 2026-08-27
 
