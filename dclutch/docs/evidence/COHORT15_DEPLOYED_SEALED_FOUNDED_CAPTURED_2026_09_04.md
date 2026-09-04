@@ -1383,3 +1383,30 @@ fee-bearing fill and its settlement — cost **0.224581914 SOL**, inside the
    `programs/dclutch-trading-sbf/program-test/general-hot/tests/open_batch.rs:1056`;
    it has no host caller and no devnet driver. One transaction plus rent.
 5. `DCLTCRQ2`'s census row, per C5.
+
+## C9. MARKET 3'S CAPTURE LANDED, INSIDE ITS WINDOW, ON ATTEMPT ONE
+
+| | |
+| --- | --- |
+| signature | `2p5urmVAjSDrfjZUz9jL7yChRVFd3tYaHTTejvs4bH7jLNjBe5h5vKXbM86sbXjpUT2gW4HPNXzfZkv5zZ7AKxtX` |
+| slot / CU / fee | 492,868,986 / **103,810** / 75,000 |
+| fired at | 05:32:44 UTC, **1,731 s of window left** |
+| candidate | `Aeh8S9PuMtZG2tTjbBDtAMNx3GKpA1sYySDXGQWfQ8Q9` — 432 B `DCLTSPC1`, 3,546,480 lamports |
+| head | `ByGGsDxatVMwLcsegUqo2oACkMhfhytpRquNoiXGAo3T` — 2,938,512 lamports |
+| **the verifier** | the candidate's own snapshot seconds, read off the account: **1788499916, 1788499917, 1788499969**, all inside `[1788499895, 1788501695]` |
+
+The window was read off the market's own 112-byte `DCLTWIN1` record
+`APAqeQu3dZ22F1pwbs1ddtLcfrCdSF8DrbbeV3uABNdb` — start 1788499895, end
+1788501695, max_age 7,200 — never from a handoff table.
+
+**ONE ATTEMPT, against market 1's five.** The difference is not luck and not
+margin: market 1's `input-capture.json` was assembled by hand, and this one was
+authored by `devnet-sponsored-push-input-v1` — the producer that `sponsored_push.rs`
+records as having been written precisely because *"the consumer was written,
+shipped, exercised and used to resolve a devnet market, and until this function
+nothing in the tree WROTE its input."* Its first devnet use is this capture, and
+the retry ladder it fed did not need a second pass.
+
+**The settle for market 3 is legal strictly after 1788501695 + 7200 =
+`1788508895` = 2026-09-04 06:01:35 UTC**, and the market stays settleable after
+that. The verifier is the certificate's kind byte at offset 10: **1**.

@@ -43,11 +43,16 @@ describe('the leading-byte derivation is the census’s own table', () => {
 
   it('names the two routes this browser builds and could not name before', () => {
     // The case that made the predicate resolution worth having: `DCLTHOT3` and
-    // `DCLTPUA1` are Trading arms, Trading dispatches on predicates, and
-    // `INSTRUCTION_MAGICS` carries no Trading row at all — so before this the
-    // browser could name the route behind a redemption and not the route
-    // behind the fill it is redeeming.
-    expect(INSTRUCTION_MAGICS.some((entry) => entry.program === 'trading')).toBe(false);
+    // `DCLTPUA1` are Trading arms and Trading dispatches on predicates, so
+    // before `a44696974` the browser could name the route behind a redemption
+    // and not the route behind the fill it is redeeming.
+    //
+    // This line used to assert that `INSTRUCTION_MAGICS` carries NO Trading
+    // row, which was the shape of the defect rather than a property worth
+    // keeping. `4b2519c3a` reads each predicate's magic out of its own body,
+    // so every Trading arm now reaches the magic table too, and the reference
+    // regeneration that surfaced it is `95544a853`. Asserting the old premise
+    // would have held the defect open inside a green test.
     expect(censusRouteIdsForInstructionsV1([headed('trading', 'DCLTHOT3')]))
       .toEqual(['trading/hot_v3::process_hot_execution_v3']);
     expect(censusRouteIdsForInstructionsV1([headed('trading', 'DCLTPUA1')]))
