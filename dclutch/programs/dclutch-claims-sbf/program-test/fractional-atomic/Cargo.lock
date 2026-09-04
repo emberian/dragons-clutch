@@ -1584,6 +1584,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-claims-founding-test-caller-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-claims-svm",
+ "dclutch-core-contract",
+ "dclutch-release-set-contract",
+ "solana-program",
+]
+
+[[package]]
 name = "dclutch-claims-sbf"
 version = "0.1.0"
 dependencies = [
@@ -1680,6 +1690,7 @@ dependencies = [
  "dclutch-claim-check-escrow-signer-test-sbf",
  "dclutch-claims-affine-batch-program-test",
  "dclutch-claims-conservation-contract",
+ "dclutch-claims-founding-test-caller-sbf",
  "dclutch-claims-sbf",
  "dclutch-claims-svm",
  "dclutch-core-contract",
@@ -1700,6 +1711,7 @@ dependencies = [
  "dclutch-rational-representation-v2-kernel",
  "dclutch-realm-contract",
  "dclutch-record-contract",
+ "dclutch-refusal-registry",
  "dclutch-registry-contract",
  "dclutch-release-set-contract",
  "dclutch-rent-contract",

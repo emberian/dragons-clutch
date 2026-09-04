@@ -93,12 +93,23 @@ SBF_OUT_DIR="$sbf_out" cargo test \
   --test fractional_compaction \
   -- --nocapture
 
+# THE FIRST CLAIMS FOUNDING ON A REAL ELF. Needs the founding caller, which is
+# the only thing in this tree that can sign a Trading-role founding authority.
+cargo build-sbf \
+  --manifest-path programs/dclutch-claims-sbf/test-programs/founding-caller/Cargo.toml \
+  --sbf-out-dir "$sbf_out"
+
 # The Claims-owned conservation route, DCLCNS01. Two campaigns over ONE frame,
 # differing only in the aggregate account's BYTES, because the route reads that
 # account with two decoders from two account families and no bytes satisfy both.
 # It is the wall marker for split/merge as user acts, and the joined fixture --
 # a founded refunding LBV2 Market beside a real Custody HoardPrincipal vault --
 # the refunding walk was owed.
+SBF_OUT_DIR="$sbf_out" cargo test \
+  --manifest-path programs/dclutch-claims-sbf/program-test/fractional-atomic/Cargo.toml \
+  --test claims_founding \
+  -- --nocapture --test-threads=1
+
 SBF_OUT_DIR="$sbf_out" cargo test \
   --manifest-path programs/dclutch-claims-sbf/program-test/fractional-atomic/Cargo.toml \
   --test claims_conservation \

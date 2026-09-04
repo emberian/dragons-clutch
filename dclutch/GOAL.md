@@ -5006,3 +5006,15 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   deleted whole, tree-wide). A CONVERGE lane merges the branches, builds once, and runs every gate.
 - The three lanes the harness restart orphaned (RECOVERY-4, CLAIMS-18, PROGRAMS-16H) were resumed by message; they keep
   main until the convergence.
+- CLAIMS-18 closed (`a514cacec`, `7e7c0949c`, `7f5fb10e1`, `39ccd79ac`, `330bbfaba`): **the first Claims founding executed on
+  a real ELF** — the blocker was a missing test program (`founding-caller`: the route wants account 0 as a PDA under the
+  request's own trading program; it declares no refusal code so Claims' own surfaces); v5 209,160 CU, v6 240,040; the
+  escrow holds the whole failure column, the founder none; both CLAIMS-17 conjuncts fire (`0x5010`, `0x5186`); **the
+  activation loop is 47,165 CU — a quarter of the route**; the escrow's real price ≈18,900 (the rest was bump-search
+  variance). **The conservation route CANNOT execute: it reads every account with decoders from two disjoint families
+  (LBV2 `DCLLBM02` — no Hoard scalar — and the economic slice `DCLTEMK2`), eight cross-family sites, the operator's
+  addresses in two domains; two-sided proof on the shipped ELF; the tree has no LBV2 complete-set executor (signed_delta
+  and affine_batch each open-code one).** RULING (orchestrator, provisional): an LBV2 market's outstanding principal lives
+  in the Custody HoardPrincipal vault; one LBV2 complete-set executor shared by signed_delta, affine_batch and conservation
+  — CLAIMS-19, AFTER the swarm converges (no more Claims work on main under the swarm). Frames corroborated identical.
+- Cuts: `224a3667d`, `f51e153eb`, `1b453e234`.

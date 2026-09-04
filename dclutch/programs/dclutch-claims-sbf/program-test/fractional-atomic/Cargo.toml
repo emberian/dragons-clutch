@@ -51,6 +51,10 @@ base64 = "0.22"
 # of those with that family's own initializer rather than by hand.
 dclutch-claims-conservation-contract = { path = "../../../../crates/dclutch-claims-conservation-contract" }
 dclutch-economic-slice-kernel = { path = "../../../../crates/dclutch-economic-slice-kernel" }
+dclutch-refusal-registry = { path = "../../../../crates/dclutch-refusal-registry" }
+# The founding campaign: the Core permit and intent codec, and the Trading-role
+# caller that is the only thing in this tree able to sign a founding authority.
+dclutch-claims-founding-test-caller-sbf = { path = "../../test-programs/founding-caller", features = ["no-entrypoint"] }
 # The census half. `record` is a no-op unless DCLUTCH_PROGRAM_TEST_EVIDENCE_DIR
 # is set, so this campaign stays an ordinary `cargo test` and additionally emits
 # the evidence `dclutch-route-census observe` corroborates a binding against.
