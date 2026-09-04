@@ -4596,3 +4596,17 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Cuts: `7668db575`, `a9258eeee`.
 - Started 08:45 EDT: FIXPOINT **`a7848f912a5558d32`** — the eighteen raw-stdout guards normalise (or their emitters print the
   fixpoint with zero content bytes moved); the debt file empties; the emission and census tiers green.
+
+### 2026-09-04 09:00 EDT — A RESOLUTION FUND CLOSED ON CHAIN; ONE MODEL STEP FROM THE FIRST RETIREMENT
+- COHORT-15G closed (`bbd01bbeb` … `d2d1d51cb`): **the durable terminal message declares its compute budget as a schema**
+  (exactly one first-party instruction, optionally preceded by exactly one SetComputeUnitLimit equal to the recorded budget,
+  pinned by program and encoded bytes; budget 267,518 = 252,518 measured + the floor tolerance; the stuck message decoded
+  and simulated as recorded reproduced `200000 of 200000` — the positive control); **ResolutionCloseFund executed:
+  3rDH7V5X…, slot 493,003,631, 252,368 of 267,368 CU, predicted to the unit**; the stuck packet retired through a
+  `Superseded` phase reachable only with both readings (blockhash expired AND signature absent), never re-signed. **Market
+  1 is NOT retired: certification refuses the closure receipt on three u64s — `ledger_rent_lamports` (392 × 5,080 on chain
+  vs 392 × 6,333 planned), `ledger_lamport_surplus` (the invariant sum holds), `closed_at` (the Clock at execution) — the
+  deployed program prices from the sysvar of the moment, the host from the funded rate; the clock is neither prestate nor
+  poststate.** One 5,000-lamport fee spent. → COHORT-15H **`(spawned)`**: the host models the DEPLOYED program's partition
+  (keyed on the deployment, the Core-digest table's shape) and a bounded clock; market 1 retired.
+- Cuts: `c746673eb`, `fa643735d`.

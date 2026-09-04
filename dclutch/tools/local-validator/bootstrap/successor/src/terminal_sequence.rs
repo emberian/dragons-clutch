@@ -4775,6 +4775,39 @@ pub(crate) fn plan_direct_begin_retiring_caller_v1(
 /// Consume Resolution's existing CloseFund semantic owner and project every
 /// writable account exactly. The closure receipt bytes are encoded by their
 /// protocol contract from the report's authenticated typed facts.
+/// The Resolution closure receipt is written to its account AND returned by
+/// the same instruction, and they are the same 416 bytes -- measured on devnet
+/// 2026-09-04, where `getTransaction`'s `returnData` was byte-identical to the
+/// closure destination's account data. The plan states those bytes ONCE and
+/// spends them in both places, so a defect in the prediction can never make
+/// the two halves of the plan disagree with each other on top of disagreeing
+/// with the chain.
+///
+/// It used to declare only the account, which is why the first CloseFund ever
+/// to execute could not be certified: `authenticate_terminal_return_data_v1`
+/// read `(None, Some(_))` -- "finalized terminal transaction carried
+/// unexpected return data" -- against a receipt the plan had in fact already
+/// written down, in the other field.
+fn resolution_close_receipt_poststate_v1(
+    resolution_program: Pubkey,
+    destination: &ObservedAccount,
+    receipt: Vec<u8>,
+) -> (ExpectedReturnDataV1, ExpectedAccountPoststateV1) {
+    (
+        ExpectedReturnDataV1 {
+            producer: resolution_program,
+            body: receipt.clone(),
+        },
+        ExpectedAccountPoststateV1::exact(
+            destination.key,
+            resolution_program,
+            destination.lamports,
+            false,
+            receipt,
+        ),
+    )
+}
+
 pub(crate) fn plan_resolution_close_caller_v1(
     snapshot: &ResolutionCloseFundSnapshotV3,
     persisted_closure: &TerminalMetaClosureV1,
@@ -4839,11 +4872,16 @@ pub(crate) fn plan_resolution_close_caller_v1(
     };
     persisted_closure.authenticate_fresh_closure(&fresh_closure)?;
     fresh_closure.authenticate_instruction(&report.instruction)?;
+    let (expected_return_data, expected_receipt_account) = resolution_close_receipt_poststate_v1(
+        snapshot.resolution_program.key,
+        &snapshot.closure_destination,
+        receipt,
+    );
     Ok(TerminalSemanticMutationV1 {
         stage: TerminalStageV1::ResolutionCloseFund,
         observation: report.observation,
         instruction: report.instruction,
-        expected_return_data: None,
+        expected_return_data: Some(expected_return_data),
         expected_accounts: vec![
             ExpectedAccountPoststateV1::exact(
                 snapshot.market.key,
@@ -4866,13 +4904,7 @@ pub(crate) fn plan_resolution_close_caller_v1(
                 false,
                 Vec::new(),
             ),
-            ExpectedAccountPoststateV1::exact(
-                snapshot.closure_destination.key,
-                snapshot.resolution_program.key,
-                snapshot.closure_destination.lamports,
-                false,
-                receipt,
-            ),
+            expected_receipt_account,
             ExpectedAccountPoststateV1::exact(
                 snapshot.beneficiary.key,
                 snapshot.beneficiary.owner,
@@ -10755,6 +10787,52 @@ mod tests {
             StageJournalPhaseV1::Planned,
         ))
         .expect_err("a planned entry was never signed and has nothing to retire");
+    }
+
+    /// THE RECEIPT IS WRITTEN AND RETURNED, AND IT IS THE SAME BYTES.
+    ///
+    /// Measured on devnet 2026-09-04 from the first `ResolutionCloseFund` ever
+    /// to execute -- signature `3rDH7V5X...`, slot 493,003,631 -- where the
+    /// transaction's `returnData` was byte-identical to the closure
+    /// destination's 416-byte `DCSRCLS3` account data. The plan had declared
+    /// the account and not the return, so the certification refused with
+    /// "finalized terminal transaction carried unexpected return data" against
+    /// bytes it had already written down.
+    #[test]
+    fn the_resolution_closure_receipt_is_declared_once_and_spent_twice() {
+        let program = key(15);
+        let destination = test_account(key(24), program, 3_445_152, false);
+        let receipt = b"DCSRCLS3 and then four hundred and eight more".to_vec();
+        let (returned, account) =
+            resolution_close_receipt_poststate_v1(program, &destination, receipt.clone());
+        assert_eq!(returned.producer, program, "the producer is Resolution");
+        assert_eq!(returned.body, receipt);
+        assert_eq!(
+            account.data, receipt,
+            "the account and the return carry ONE statement of the receipt"
+        );
+        assert_eq!(account.key, destination.key);
+        assert_eq!(account.owner, program);
+        assert_eq!(account.lamports, destination.lamports);
+        assert!(!account.executable);
+        // And the pair the certification compares: a plan that declares the
+        // return data at all is the only kind that can be certified, because
+        // the route always produces some.
+        let observed = json!({"returnData": {
+            "programId": program.to_string(),
+            "data": [BASE64.encode(&receipt), "base64"],
+        }});
+        authenticate_terminal_return_data_v1(&observed, None)
+            .expect_err("an undeclared return is exactly what refused market 1");
+        authenticate_terminal_return_data_v1(
+            &observed,
+            Some(&DurableReturnDataV1 {
+                producer: program.to_string(),
+                body_base64: BASE64.encode(&receipt),
+                body_sha256: sha256_hex(&receipt),
+            }),
+        )
+        .expect("the declared receipt certifies");
     }
 
     fn unique_test_path(label: &str) -> PathBuf {

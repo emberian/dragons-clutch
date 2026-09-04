@@ -2308,3 +2308,265 @@ Every one carries `Lane: COHORT-15F`. The driver in the job directory is built a
 the last of them and its digest is beside it in `bin/DRIVER_PROVENANCE.txt`; it
 was built from a DETACHED WORKTREE at that commit, because the shared live tree
 was mid-edit by another lane and would not compile.
+
+---
+
+## Addendum G: `ResolutionCloseFund` EXECUTED, AND THE RECEIPT IT WROTE CANNOT BE CERTIFIED BY THE PLAN THAT ASKED FOR IT
+
+Written by the COHORT-15G lane, 2026-09-04. **Devnet evidence. Not mainnet
+evidence.** Commits `bbd01bbeb`, `44fec0cd6`, `450cc2222`, `3672898bb`,
+`b00dcad96`, all `Lane: COHORT-15G`, all in
+`tools/local-validator/bootstrap/successor/src/terminal_sequence.rs`.
+
+### The wall addendum F left, and what was on the other side of it
+
+Addendum F stopped with `ResolutionCloseFund` building, signing, and hitting
+`consumed 200000 of 200000 compute units ... exceeded CUs meter at BPF
+instruction`. The terminal sequence was the only driver in this tree declaring
+no `ComputeBudget` prefix at all, and
+`authenticate_terminal_message_decompilation_v1` pinned the durable message at
+exactly one instruction, so the prefix could not be a flag.
+
+It is now a schema. **The route executed.**
+
+    signature   3rDH7V5XoHDPwZEzfoCi6f4mWYaWR3ZrDnjuUuKi1hAjMCqrEttPJNzT4aQRwF2ePYJqnzw6ftADhJYrnMs3cXin
+    slot        493,003,631      err null      fee 5,000      wire 848 B
+    meter       Program 24AkUjtXg61La45u7KTge8u4dKpVqkzirmzycVyckFgn
+                consumed 252,368 of 267,368 compute units
+    transaction 252,518 CU against a declared 267,518
+
+The prediction was exact to the unit. 252,368 inside Resolution plus the 150 the
+`ComputeBudget` instruction costs itself is 252,518, which is what the route
+was measured at before a byte was signed, and the granted 267,368 is the
+declared 267,518 less that same 150.
+
+### How the number was got, and why it is derived rather than chosen
+
+The stuck packet's own durable message was decoded, re-encoded to prove the
+codec faithful (byte-identical, 743 bytes, 5 static keys, one instruction), and
+then simulated twice: once as recorded, which reproduced the wall exactly
+(`unitsConsumed 200000`, `ProgramFailedToComplete`), and once with a
+`SetComputeUnitLimit(1_400_000)` prefix, which **succeeded**. The as-recorded
+run is the positive control: an instrument that could not reproduce the known
+failure would not be trusted for the unknown one.
+
+Three draws of the probe, 252,518 every time. `tools/gauntlet/CU_BUDGETS.md`'s
+rule then gives the budget mechanically:
+
+    tolerance = roundup(band, 10_000) + 10_000, floor 15_000
+    budget    = measured + tolerance
+    252,518 + 15,000 = 267,518          19.1% of the 1,400,000 ceiling
+
+The band is 0 rather than the 1,500-CU search-depth grid the gauntlet's rows
+ride, and the reason is structural: a cohort's deployed ELFs are fixed for its
+life, so no PDA in this frame can redraw its bump.
+
+### The shape the durable message now has
+
+`authenticate_terminal_message_decompilation_v1` reads **exactly one first-party
+instruction, optionally preceded by exactly one `ComputeBudget` limit whose
+value is the one the intent records**. The prefix is pinned by program AND by
+its exact encoded data, built from the same SDK constructor that compiled it so
+no second copy of the discriminant exists to drift — the way `direct_trade.rs`
+pins its two — rather than skipped, because "ignore the instructions before the
+interesting one" is how a substituted prefix gets past a verifier that reads the
+interesting one correctly.
+
+Four hostiles, each red before it was green, each refused for its own reason:
+
+| hostile | refusal |
+|---|---|
+| a prefix whose value is not the recorded budget | names `SetComputeUnitLimit` and the recorded figure |
+| two prefixes and no first-party instruction | "first-party instruction was itself a ComputeBudget declaration" |
+| two prefixes plus the instruction | "carried 3 instruction(s)" against the recorded budget |
+| the prefix AFTER the instruction | the prefix conjunct, because the slot in front is not ComputeBudget |
+
+Under the pre-change code the substituted-value hostile refused only
+incidentally, as `terminal compiled program index was not the exact inline
+program identity` — a coarse code for a substituted budget, and the `map_err`
+lesson in miniature.
+
+**A message with no prefix is still valid, and that is why the field is optional
+rather than the schema rewritten.** Every route this sequence has landed on
+devnet fits inside Solana's 200,000-CU default meter and says so with a
+measurement: ALT create **10,508**, ALT freeze **1,517**, `CoreBeginRetiring`
+**23,106**, `DirectBeginRetiring` **92,137**, the Resolution receipt prepay
+**150**. Their finalized journals reverify byte-for-byte under the new code, and
+a journal written with no `computeUnitLimit` key at all still hashes to the
+digest it was written with.
+
+`DirectCloseCapability`, `RetirementReplayHandoff` and `AggregateRetirement`
+have never been reached, so nothing declares a number for them; if one meets the
+meter, the finding is a new row with its own measured draw, not a blanket.
+
+### The session records the table, and refuses a driver that moved it
+
+Session schema `…-session-v2` → `…-session-v3`. The session carries
+`declaredComputeUnitLimits` and it is checked equal to the driver's compiled
+table on **every** load, so a driver rebuilt mid-sequence with a re-pinned
+budget refuses by name rather than planning its next stage against a number the
+stages already signed never saw. A v2 session, defaulted, would have said "every
+route here fits 200,000" — the claim CloseFund refuted on chain.
+
+Market 1's v3 session reads `fundedRentRate 6333`,
+`receiptRentLamports 3445152`, and the one declared row.
+
+### `Submitted` gets its only exit that is not a re-signing
+
+`JGLMWwRMmASsszK3ciYjWpa1RYPD4BzC5xv4ZSongFrLDY6dveAprxeTYhfgsipHuiguGxKUcK6bZmFs2JsVdRi`
+was signed, submitted, and could never land. `Submitted` is one-way on purpose:
+"the endpoint did not answer" and "the packet landed" are the same observation,
+so a driver may not infer permission to re-sign from silence. That rule had no
+exit for a packet whose fate was decided against it, and the sequence was wedged.
+
+Exactly one thing separates the two readings and it is not a timeout. Once the
+finalized block height passes the packet's own `lastValidBlockHeight`, no
+validator will accept that blockhash from anyone again. A signature still absent
+from transaction history at that point is absent for good.
+
+    --supersede-unlandable JGLMWwRM…   proved BOTH readings against the chain:
+      lastValidBlockHeight   480,769,364
+      observedBlockHeight    480,785,117      15,753 blocks past it
+      getSignatureStatuses   null, searchTransactionHistory true
+      observedSlot           493,003,419
+
+The journal keeps its packet and its signature, gains the two readings, and
+moves to `13-resolution-close-fund.json.superseded.JGLMWwRM…`.
+`terminal_resume_route_v1` sends the retired phase to `RefuseRetired` under
+`--execute` exactly as under read-only, and the refusal names the signature —
+the journal refuses its own resubmission rather than a comment promising nobody
+will. Nothing in the file can move a `Superseded` entry to any other phase, and
+the way back to a submittable packet is a fresh plan under a fresh blockhash,
+which is a different signature, so resubmitting the retired one is not
+expressible. Five hostiles, red against a neutered guard: an unexpired
+blockhash, evidence naming another signature, a retired phase with no readings,
+readings on a still-live `Submitted` packet, and a `Planned` entry that was
+never signed.
+
+**The retirement never touched the chain's money and it is not a rollback.** The
+retired packet's effect was nil because it never executed; that is what was
+proven, not assumed.
+
+### One attempt convicted the placement of the new rule
+
+The first `--supersede-unlandable` run refused:
+
+    REFUSED terminal sequence: terminal Protocol { stage: ResolutionCloseFund }
+    durable message declared no ComputeBudget limit and this route does not fit
+    Solana's 200,000-CU default meter
+
+Correct about the message, wrong about the moment. That journal **is** an
+undeclared CloseFund — it is the packet that hit the meter — and every read runs
+the decompilation, so the rule as placed made its own remedy unreachable: a
+journal that cannot be read cannot be retired. The route requirement moved off
+the read and onto the two doors where a durable obligation is created, the plan
+site and the sign site, and the shape rule that belongs to the bytes stayed
+where every read still runs it (`450cc2222`).
+
+A second attempt convicted a smaller one: the supersede path refreshed the
+journal digest before writing, which is exactly what the writer's lost-update
+guard exists to catch (`3672898bb`).
+
+### AND THEN THE ROUTE RAN, AND THE PLAN COULD NOT CERTIFY WHAT IT DID
+
+    REFUSED terminal sequence: finalized terminal transaction carried
+    unexpected return data
+
+`authenticate_terminal_return_data_v1`, the `(None, Some(_))` arm. The
+transaction is final and correct; the plan is not a complete description of it.
+Everything else about that plan holds, and it was checked rather than assumed:
+
+    packet byte-identical to the durable signed packet     yes
+    fee 5,000 == the exact planned fee                     yes
+    preBalances  == intent.preBalances  (all resolved)     yes
+    postBalances == intent.postBalances (all resolved)     yes
+    declared poststates read back off chain                5 of 6 exact
+
+The sixth is the closure receipt `AmSYWY9vyWbryAkf16LJPgKawHvtuxUVSSfvGgFTi5MB`
+— 416 bytes, `DCSRCLS3`, Resolution-owned, 3,445,152 lamports, all as planned —
+whose BODY differs from the plan's prediction in **three `u64` fields and no
+others**, located to the byte:
+
+| offset | field | chain | plan |
+|---:|---|---:|---:|
+| 376 | `ledger_rent_lamports` | 1,991,360 | 2,482,536 |
+| 384 | `ledger_lamport_surplus` | 491,176 | 0 |
+| 400 | `closed_at` | 1,788,522,302 | 1,788,522,293 |
+
+Every other field is equal, including `generation`, `terminal_sequence`,
+`selector`, `source_refund_lamports` (2,229,216), `ledger_remaining_native_principal`
+(3) and `refund_lamports` (4,711,755).
+
+**The first two are ONE disagreement and their sum is invariant**: 1,991,360 +
+491,176 = 2,482,536 = 392 × 6,333, and 1,991,360 = 392 × **5,080**. The deployed
+Resolution program prices the funding ledger's rent-exempt minimum from the Rent
+sysvar OF THE MOMENT, which devnet moved from 6,333 to 5,080 at the epoch-1141
+boundary in the middle of this cohort; the host predicts with the rate the
+account was FUNDED at, which is what addendum F taught it (`ec373d90d`). Both
+answers are right about their own question. Recovering the funded rate is
+correct for "was this seat properly prepaid"; it is wrong for "what will the
+program write", and one rate is currently answering both. The partition moved;
+the total did not.
+
+**The third cannot be predicted at all.** `closed_at` is the Clock at
+EXECUTION; the plan carries the Clock at PLANNING, and the journal's own
+`observationUnixTimestamp` is 1,788,522,293 — the plan's value exactly, nine
+seconds early. This is the lesson `prestate_is_slot_bound_runtime_account_v1`
+already learned one level down, arriving one level up: **the clock is not a
+prestate, and it is not a poststate either.** A byte-exact poststate over a
+record that embeds an execution timestamp is structurally unsatisfiable, and no
+CloseFund journal could ever have been certified on any chain.
+
+### What this lane closed and what it did not
+
+Closed, in `b00dcad96`: the return data itself. The route writes the 416-byte
+receipt to the closure destination AND returns the same bytes — byte-identical,
+measured off the finalized transaction — and the plan declared only the account.
+Both halves now come from one statement of those bytes, so a defect in the
+prediction can never make the account half and the return half disagree with
+each other on top of disagreeing with the chain.
+
+**Not closed, and neither is this lane's to close.** The rent partition lives in
+`build_resolution_direct_close_fund_v1`
+(`crates/dclutch-resolution-core-v3-operator`), which the RENT-FLOORS lane is
+editing; the shape of the fix is that a session records TWO rates — the funded
+rate for guards on accounts already paid for, and the cluster rate for
+predicting what the program will write — rather than one rate answering both.
+The `closed_at` conjunct needs the poststate model to admit a field a plan
+cannot bind, with the same discipline the prestate exemption carries: a named
+set, one member, and the measurement that says why.
+
+**So market 1 is not retired.** `outstanding_capabilities` @280 is still 1 — the
+capability is retired by `DirectCloseCapability`, stage four, which is behind
+stage three's certification. The four checkpoint retirement instructions
+(prepare 808 / close-vault 864 / close-replay 864 / finish 744) are unblocked in
+every other respect and the deployed Core routes all four; nothing about them
+was refuted here.
+
+### Balances and state at the stop
+
+    deployer  4zrxtw5c…  23.890559434   unmoved by this lane
+    payer     D5qe7ZoQ…   1.289440181   was 1.289445181; one 5,000-lamport fee,
+                                        the CloseFund that landed
+    market 1  3QytL1bB…  phase @10 = 3 Retiring, outstanding_capabilities @280 = 1
+    market 3  C9dLhWj7…  phase @10 = 2 Terminal, outstanding_capabilities @280 = 1
+
+One transaction was signed by this lane and it succeeded.
+
+### Commits
+
+    bbd01bbeb  terminal sequence: the durable message declares the budget it
+               needs, because CloseFund does not fit the default meter
+    44fec0cd6  terminal sequence: an ambiguous submission that can never be
+               included gets an exit, and it is not a re-signing
+    450cc2222  terminal sequence: the budget requirement stands at the two doors
+               that create an obligation, not on every read
+    3672898bb  supersede: the writer owns the digest refresh, and refreshing
+               before it defeats the lost-update guard
+    b00dcad96  close fund: the closure receipt is stated once and spent twice,
+               because it is written AND returned
+
+Every one carries `Lane: COHORT-15G`. The driver in the job directory is built
+at the last of them from a DETACHED WORKTREE, because the shared live tree does
+not compile — another lane is mid-edit on `require_rent_exempt` in the rent
+crates. Its digest is in `bin/DRIVER_PROVENANCE.txt`.

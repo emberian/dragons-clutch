@@ -16,6 +16,7 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
     ARTIFACT_RELEASE_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
@@ -251,14 +252,10 @@ pub(crate) fn run_carry_forward(arguments: Vec<String>) -> Result<()> {
     // will judge, and is sliced off before the nine-account closure is built --
     // so the snapshot schema is unchanged and the rate is not read at some other
     // slot than the accounts.
-    let (discovery_slot, discovery_accounts, discovery_rent) =
+    let (discovery_slot, discovery_accounts, _discovery_rent) =
         finalized_accounts_with_rent(&mut rpc, &discovery_addresses, args.minimum_context_slot)?;
-    let coordinates = discover_infrastructure_coordinates(
-        &args,
-        &discovery_addresses,
-        &discovery_accounts,
-        &discovery_rent,
-    )?;
+    let coordinates =
+        discover_infrastructure_coordinates(&args, &discovery_addresses, &discovery_accounts)?;
     let minimum_final_slot = discovery_slot.max(args.minimum_context_slot);
     let (context_slot, accounts, rent) =
         finalized_accounts_with_rent(&mut rpc, &coordinates.addresses, minimum_final_slot)?;
@@ -284,10 +281,10 @@ pub(crate) fn run_prepare_programdata(arguments: Vec<String>) -> Result<()> {
         addresses.push(programdata(program));
     }
     let mut rpc = Rpc::connect_cluster(&args.origin, WritePolicyV1::ReadsOnly)?;
-    let (context_slot, accounts, rent) =
+    let (context_slot, accounts, _rent) =
         finalized_accounts_with_rent(&mut rpc, &addresses, args.minimum_context_slot)?;
     let (manifest, bodies) =
-        authenticate_prepare_programdata(&args, context_slot, &addresses, accounts, &rent)?;
+        authenticate_prepare_programdata(&args, context_slot, &addresses, accounts)?;
     write_prepare_bundle_atomic(&args.output_dir, &manifest, &bodies)?;
 
     let mut stdout = std::io::stdout().lock();
@@ -559,7 +556,6 @@ fn discover_infrastructure_coordinates(
     args: &CarryForwardArgsV1,
     addresses: &[Pubkey; 5],
     accounts: &[Option<RpcAccount>],
-    rent: &Rent,
 ) -> Result<InfrastructureCoordinatesV1> {
     if accounts.len() != addresses.len() {
         return Err(Error::new(
@@ -580,7 +576,6 @@ fn discover_infrastructure_coordinates(
         args.expected_upgrade_authority,
         registry_program,
         registry_pd,
-        rent,
     )?;
     let _ = authenticate_loader_pair(
         "Rent",
@@ -589,7 +584,6 @@ fn discover_infrastructure_coordinates(
         args.expected_upgrade_authority,
         rent_program,
         rent_pd,
-        rent,
     )?;
     require_account_shape(
         "infrastructure profile",
@@ -598,7 +592,7 @@ fn discover_infrastructure_coordinates(
         false,
         Some(PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1),
     )?;
-    require_rent_exempt("infrastructure profile", profile_account, rent)?;
+    require_funded_rent_persists("infrastructure profile", profile_account)?;
     let profile = ProtocolInfrastructureProfileV1::decode(&profile_account.data)
         .map_err(|error| Error::new(format!("infrastructure profile decode: {error:?}")))?;
     if profile.registry().program().to_bytes() != args.registry_program.to_bytes()
@@ -670,7 +664,6 @@ fn authenticate_carry_forward_snapshot(
         args.expected_upgrade_authority,
         required(&accounts, 0, "Registry Program")?,
         required(&accounts, 1, "Registry ProgramData")?,
-        rent,
     )?;
     let rent_facts = authenticate_loader_pair(
         "Rent",
@@ -679,7 +672,6 @@ fn authenticate_carry_forward_snapshot(
         args.expected_upgrade_authority,
         required(&accounts, 2, "Rent Program")?,
         required(&accounts, 3, "Rent ProgramData")?,
-        rent,
     )?;
     let profile_account = required(&accounts, 8, "infrastructure profile")?;
     require_account_shape(
@@ -689,7 +681,7 @@ fn authenticate_carry_forward_snapshot(
         false,
         Some(PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1),
     )?;
-    require_rent_exempt("infrastructure profile", profile_account, rent)?;
+    require_funded_rent_persists("infrastructure profile", profile_account)?;
     if profile_account.data != coordinates.discovery_profile_body {
         return Err(Error::new(
             "infrastructure profile moved between discovery and the final one-context observation",
@@ -717,7 +709,6 @@ fn authenticate_carry_forward_snapshot(
         required(&accounts, 0, "Registry Program")?,
         required(&accounts, 1, "Registry ProgramData")?,
         &registry_facts,
-        rent,
     )?;
     authenticate_artifact_release(
         "Rent",
@@ -730,7 +721,6 @@ fn authenticate_carry_forward_snapshot(
         required(&accounts, 2, "Rent Program")?,
         required(&accounts, 3, "Rent ProgramData")?,
         &rent_facts,
-        rent,
     )?;
 
     let rows = coordinates
@@ -773,7 +763,6 @@ fn authenticate_prepare_programdata(
     context_slot: u64,
     addresses: &[Pubkey],
     accounts: Vec<Option<RpcAccount>>,
-    rent: &Rent,
 ) -> Result<(PrepareProgramdataManifestV1, Vec<Vec<u8>>)> {
     if context_slot < args.minimum_context_slot || addresses.len() != 10 || accounts.len() != 10 {
         return Err(Error::new(
@@ -810,7 +799,6 @@ fn authenticate_prepare_programdata(
             args.expected_upgrade_authority,
             program_account,
             programdata_account,
-            rent,
         )?;
         let ordinal_u8 = u8::try_from(ordinal)
             .map_err(|_| Error::new("prepare ProgramData role ordinal overflow"))?;
@@ -911,7 +899,6 @@ fn authenticate_permanent_substrate(
             args.expected_upgrade_authority,
             program_account,
             programdata_account,
-            rent,
         )?;
         program_lamports_total = program_lamports_total
             .checked_add(program_account.lamports)
@@ -941,7 +928,7 @@ fn authenticate_permanent_substrate(
         .and_then(Option::as_ref)
         .ok_or_else(|| Error::new("explicit permanent-substrate fee payer is absent"))?;
     require_account_shape("fee payer", payer, system_program::ID, false, Some(0))?;
-    require_rent_exempt("fee payer", payer, rent)?;
+    require_fee_payer_rent_floor_v1("fee payer", payer, rent)?;
 
     let mut snapshot = PermanentSubstrateSnapshotV1 {
         schema: PERMANENT_SUBSTRATE_SCHEMA.into(),
@@ -987,7 +974,6 @@ fn authenticate_artifact_release(
     program_account: &RpcAccount,
     programdata_account: &RpcAccount,
     facts: &LoaderFactsV1,
-    rent: &Rent,
 ) -> Result<()> {
     require_account_shape(
         &format!("{label} artifact raw"),
@@ -1002,7 +988,7 @@ fn authenticate_artifact_release(
             "{label} artifact body does not match the profile-selected content ID"
         )));
     }
-    require_rent_exempt(&format!("{label} artifact raw"), raw_account, rent)?;
+    require_funded_rent_persists(&format!("{label} artifact raw"), raw_account)?;
     let release = ArtifactReleaseV1::decode(&raw_account.data)
         .map_err(|error| Error::new(format!("{label} artifact release decode: {error:?}")))?;
     require_slot_pinned_release_v1(release)
@@ -1035,7 +1021,6 @@ fn authenticate_loader_pair(
     expected_authority: Pubkey,
     program_account: &RpcAccount,
     programdata_account: &RpcAccount,
-    rent: &Rent,
 ) -> Result<LoaderFactsV1> {
     if programdata(program) != expected_programdata {
         return Err(Error::new(format!(
@@ -1056,8 +1041,8 @@ fn authenticate_loader_pair(
         false,
         None,
     )?;
-    require_rent_exempt(&format!("{label} Program"), program_account, rent)?;
-    require_rent_exempt(&format!("{label} ProgramData"), programdata_account, rent)?;
+    require_funded_rent_persists(&format!("{label} Program"), program_account)?;
+    require_funded_rent_persists(&format!("{label} ProgramData"), programdata_account)?;
     let program_view = ProgramV3View::parse(&program_account.data)
         .map_err(|error| Error::new(format!("{label} Program decode: {error:?}")))?;
     let programdata_view = ProgramDataV3View::parse(&programdata_account.data)
@@ -1151,18 +1136,66 @@ fn live_rent(account: &RpcAccount) -> Result<Rent> {
     Ok(rent)
 }
 
-/// Rent exemption judged against the LIVE Rent sysvar, not `Rent::default()`.
+/// An ALREADY-DEPLOYED account still holds the rent its deployment funded.
 ///
-/// `Rent::default()` is the genesis constant, and a cluster's live rate is a
-/// changeable chain fact. Measured 2026-09-02 on devnet: the live rate is LOWER
-/// than the default, so every 36-byte Program account `solana program deploy`
-/// funds today holds 1,038,612 lamports against a default-derived demand of
-/// 1,141,440 -- and the whole cohort-12 closure was judged not rent exempt by a
-/// check reading a number the cluster does not use. The seven accounts were
-/// topped up operationally that day; this is the actual repair. The error names
-/// both numbers, because a threshold refusal that does not say what it wanted is
-/// a search rather than a finding.
-fn require_rent_exempt(label: &str, account: &RpcAccount, rent: &Rent) -> Result<()> {
+/// This preflight reads accounts some earlier cohort's transactions created and
+/// funded, and it used to price them at the rate of the moment. That is the
+/// wrong question in a direction this tool cannot afford, because it gates a
+/// redeploy: a cluster whose rate RISES after a cohort was funded would leave
+/// every one of that cohort's accounts below today's minimum, and the preflight
+/// would refuse a redeploy over a substrate the cluster itself considers alive.
+/// Measured, not supposed -- cohort-15's seven Programs each hold 1,038,612
+/// lamports over 36 bytes, which is 164 x 6,333, and devnet quoted 5,080 at
+/// finalized slot 493,000,156. `Rent::default()` prices those same 36 bytes at
+/// 1,141,440. One deployed cohort, three rates, and only one of them funded it.
+///
+/// `solana-svm 4.3.0-beta.2` says the funded rate is the one that counts:
+/// `src/rent_calculator.rs` carries no rent-collection path at all, so nothing
+/// debits a funded account for the passage of time or a change of rate;
+/// `get_pre_exec_account_rent_state` reads an account a raised rate left behind
+/// as `RentExempt` under SIMD-0392; and `transition_allowed` refuses
+/// `RentExempt -> RentPaying`, so no transaction can leave a live account
+/// partially rented. The one case the runtime has not already decided is
+/// `lamports == 0` -- a drained account whose data is residue -- and
+/// [`funded_rent_persists_v1`] is exactly that case, rate-free.
+///
+/// The rate the deployment paid is still captured, in
+/// [`carry_forward_rent_v1`], because a re-validator reproducing this evidence
+/// offline needs the number. It is recorded, not used as a threshold.
+fn require_funded_rent_persists(label: &str, account: &RpcAccount) -> Result<()> {
+    if !funded_rent_persists_v1(account.lamports) {
+        return Err(Error::new(format!(
+            "{label} account is DRAINED: it holds 0 lamports over {} bytes, so its data is residue \
+             the runtime reaps rather than state a redeploy may build on",
+            account.data.len()
+        )));
+    }
+    Ok(())
+}
+
+/// The exclusive fee payer, floored at the LIVE rate -- which is the runtime's
+/// own question for this one account and no other in this file.
+///
+/// Every other account here is read and left alone, and the runtime
+/// grandfathers what it was funded at. The fee payer's balance FALLS, by
+/// construction, and a falling balance is the exact case SIMD-0392 does not
+/// grandfather: `validate_fee_payer` charges the fee and then calls
+/// `check_static_account_rent_state_transition`, whose post-execution state is
+/// computed against `rent.minimum_balance(len)` at TODAY's rate. A payer that
+/// ends below it is `RentPaying`, the transition from `RentExempt` is refused,
+/// and the deploy fails with `InsufficientFundsForRent` no matter what the
+/// payer was funded at. So this floor is not a statement about the past; it is
+/// the runtime's precondition read one step early.
+///
+/// It is a floor and not the whole precondition: the runtime wants
+/// `minimum_balance(len) + fee`, and the fees of a seven-role redeploy are not
+/// known here. `Rent::default()` is still never the rate to ask -- measured
+/// 2026-09-02, devnet's live rate is LOWER than the genesis constant, and a
+/// default-derived demand called all seven of cohort-12's genuinely exempt
+/// accounts not exempt and cost a night and 0.2373 SOL of unnecessary top-ups.
+/// The error names both numbers, because a threshold refusal that does not say
+/// what it wanted is a search rather than a finding.
+fn require_fee_payer_rent_floor_v1(label: &str, account: &RpcAccount, rent: &Rent) -> Result<()> {
     let minimum = rent.minimum_balance(account.data.len());
     if account.lamports < minimum {
         return Err(Error::new(format!(
@@ -1518,16 +1551,71 @@ mod tests {
         Rent::default()
     }
 
-    /// Decision 0012's rent repair, and the hostile that makes it a repair
-    /// rather than a relaxation.
+    /// Every account cohort-15 deployed, read off devnet, judged at a rate it
+    /// was NOT funded at -- and admitted.
     ///
-    /// `Rent::default()` is the genesis constant. A cluster's rate is a live
-    /// chain fact, and reading the wrong one is wrong in BOTH directions: too
-    /// strict refuses accounts that are exempt, too lax admits accounts that are
-    /// not. The first cost cohort-12 a night and 0.2373 SOL of unnecessary
-    /// top-ups; the second is what this test forbids.
+    /// This preflight gates a redeploy over accounts an earlier cohort created,
+    /// so the direction that matters for safety is a rate that ROSE since the
+    /// funding. The rate is a live chain fact and there is no direction a
+    /// cluster is forbidden to move; the rate-of-the-moment floor this check
+    /// used to be would refuse cohort-16's redeploy over a substrate the
+    /// cluster itself considers alive, and nothing about the substrate would
+    /// have changed. `solana-svm 4.3.0-beta.2` is the authority and it
+    /// grandfathers (no rent-collection path; `get_pre_exec_account_rent_state`
+    /// reads a rate-stranded account as `RentExempt` under SIMD-0392;
+    /// `transition_allowed` refuses `RentExempt -> RentPaying`). The one case
+    /// left is a DRAINED account, which is this test's hostile.
+    ///
+    /// THE POSITIVE CONTROL IS TWO-SIDED, over all fourteen accounts: each must
+    /// be exempt at the rate it was funded at AND below the risen minimum. A
+    /// rate that did not really move for these widths could not let this pass.
     #[test]
-    fn rent_exemption_is_judged_against_the_live_sysvar_not_the_genesis_default() {
+    fn a_risen_rate_admits_the_cohort_it_did_not_fund_and_a_drained_account_refuses() {
+        // Read off devnet at finalized slot 493,000,156: cohort-15's seven
+        // Program accounts and the seven ProgramData accounts the Loader
+        // derived for them, exactly as `getMultipleAccounts` returned them.
+        // `tools/cohort/cohorts/15.json` names the program ids.
+        const COHORT_15_PROGRAMS_V1: [(&str, u64, usize); 7] = [
+            ("registry", 1_038_612, 36),
+            ("rent", 1_038_612, 36),
+            ("custody", 1_038_612, 36),
+            ("resolution", 1_038_612, 36),
+            ("claims", 1_038_612, 36),
+            ("trading", 1_038_612, 36),
+            ("core", 1_038_612, 36),
+        ];
+        const COHORT_15_PROGRAMDATA_V1: [(&str, u64, usize); 7] = [
+            ("registry", 1_523_802_129, 240_485),
+            ("rent", 911_375_697, 143_781),
+            ("custody", 3_638_365_497, 574_381),
+            ("resolution", 5_256_776_313, 829_933),
+            ("claims", 8_788_107_777, 1_387_541),
+            ("trading", 14_828_523_177, 2_341_341),
+            ("core", 7_558_897_809, 1_193_445),
+        ];
+
+        // The three rates one deployed cohort has now been priced at, and only
+        // the first funded it.
+        let funded = Rent {
+            lamports_per_byte_year: 6_333,
+            exemption_threshold: 1.0,
+            burn_percent: 50,
+        };
+        // Devnet's live rate at slot 493,000,156. It FELL after the funding --
+        // which is the direction `c0a1586b1` repaired for the exactness checks.
+        let live_devnet = Rent {
+            lamports_per_byte_year: 5_080,
+            exemption_threshold: 1.0,
+            burn_percent: 50,
+        };
+        // A RISEN rate, which is this test's subject. The genesis constant is
+        // one: 3,480 over a 2.0-year threshold prices a byte at 6,960, above
+        // the 6,333 this cohort was funded at.
+        let risen = Rent::default();
+        assert_eq!(funded.minimum_balance(36), 1_038_612);
+        assert_eq!(live_devnet.minimum_balance(36), 833_120);
+        assert_eq!(risen.minimum_balance(36), 1_141_440);
+
         let account = |bytes: usize, lamports: u64| RpcAccount {
             lamports,
             owner: bpf_loader_upgradeable::ID,
@@ -1535,52 +1623,100 @@ mod tests {
             rent_epoch: 0,
             data: vec![0; bytes],
         };
-        // Read off devnet 2026-09-02 at finalized slot 491,925,181. The default
-        // is 3,480 lamports per byte-year over a 2.0-year threshold.
+
+        for (label, lamports, bytes) in COHORT_15_PROGRAMS_V1
+            .iter()
+            .chain(COHORT_15_PROGRAMDATA_V1.iter())
+        {
+            // Side one: the cluster really did fund it, at 6,333, exactly.
+            assert_eq!(
+                *lamports,
+                funded.minimum_balance(*bytes),
+                "{label}: cohort-15 was funded at one rate, at every width"
+            );
+            // Side two: the risen rate really did move for THIS width, so an
+            // admission below cannot be a rate that failed to rise.
+            assert!(
+                *lamports < risen.minimum_balance(*bytes),
+                "{label}: the risen rate must actually strand this account"
+            );
+            // And the account the runtime calls alive is admitted.
+            require_funded_rent_persists(label, &account(*bytes, *lamports))
+                .expect("a deployed account the cluster funded is alive at any later rate");
+        }
+
+        // THE HOSTILE, and the only case the runtime has not already decided: a
+        // DRAINED account. Its data is residue an earlier instruction of this
+        // transaction left behind and the runtime reaps at the end, and a
+        // redeploy may not build on it.
+        let drained = account(36, 0);
+        let refusal = require_funded_rent_persists("Registry Program", &drained)
+            .expect_err("a drained account is not a substrate to redeploy over")
+            .to_string();
+        assert!(
+            refusal.contains("Registry Program") && refusal.contains("DRAINED"),
+            "the refusal must name the account and what it found: {refusal}"
+        );
+        // One lamport is the whole difference, at any rate and any width.
+        require_funded_rent_persists("Registry Program", &account(36, 1))
+            .expect("one lamport is not residue");
+        require_funded_rent_persists("Trading ProgramData", &account(2_341_341, 1))
+            .expect("width is not the question either");
+
+        // The FEE PAYER keeps a live-rate floor, because its balance falls:
+        // `validate_fee_payer` charges the fee and then prices the result at
+        // today's minimum, so a payer that ends below it is refused by the
+        // runtime no matter what it was funded at.
+        let payer = |lamports: u64| RpcAccount {
+            lamports,
+            owner: system_program::ID,
+            executable: false,
+            rent_epoch: 0,
+            data: Vec::new(),
+        };
+        require_fee_payer_rent_floor_v1(
+            "fee payer",
+            &payer(live_devnet.minimum_balance(0)),
+            &live_devnet,
+        )
+        .expect("a payer at the live minimum clears the runtime's own floor");
+        let thin = require_fee_payer_rent_floor_v1(
+            "fee payer",
+            &payer(live_devnet.minimum_balance(0) - 1),
+            &live_devnet,
+        )
+        .expect_err("one lamport below the live minimum cannot pay a fee and stay exempt")
+        .to_string();
+        assert!(
+            thin.contains("fee payer")
+                && thin.contains(&live_devnet.minimum_balance(0).to_string()),
+            "a threshold refusal must state what it wanted: {thin}"
+        );
+        // And the cohort-12 regression stays fixed: the genesis default is not
+        // the rate to ask. A payer exempt on devnet today would be refused by
+        // it, which cost a night and 0.2373 SOL of unnecessary top-ups.
+        assert!(
+            live_devnet.minimum_balance(0) < risen.minimum_balance(0),
+            "the genesis default is not devnet's live rate"
+        );
+        require_fee_payer_rent_floor_v1(
+            "fee payer",
+            &payer(live_devnet.minimum_balance(0)),
+            &risen,
+        )
+        .expect_err("reading the wrong rate is what this refuses to do in production");
+    }
+
+    /// The Rent sysvar body is authenticated, not trusted. The rate it quotes
+    /// is still recorded in every carry-forward capture, so an offline
+    /// re-validator can reproduce the deployment's own arithmetic.
+    #[test]
+    fn the_finalized_rent_sysvar_body_is_authenticated_not_trusted() {
         let live_devnet = Rent {
-            lamports_per_byte_year: 6_333,
+            lamports_per_byte_year: 5_080,
             exemption_threshold: 1.0,
             burn_percent: 50,
         };
-        assert_eq!(Rent::default().minimum_balance(36), 1_141_440);
-        assert_eq!(live_devnet.minimum_balance(36), 1_038_612);
-
-        // The regression, reproduced exactly: every 36-byte Program account
-        // `solana program deploy` funds on devnet today holds 1,038,612 lamports,
-        // and the default-derived check called all seven of them not exempt.
-        let deployed = account(36, 1_038_612);
-        let stale = require_rent_exempt("Registry Program", &deployed, &Rent::default())
-            .expect_err("the genesis default refuses a genuinely exempt devnet account")
-            .to_string();
-        assert!(
-            stale.contains("1038612") && stale.contains("1141440"),
-            "a threshold refusal must state both numbers: {stale}"
-        );
-        require_rent_exempt("Registry Program", &deployed, &live_devnet)
-            .expect("the live sysvar admits the account the cluster itself funded");
-
-        // THE HOSTILE, and the direction that matters for safety: a cluster
-        // whose rate is HIGHER than the default. An account funded to exactly
-        // the default minimum is then NOT exempt, and only the sysvar says so.
-        let costly = Rent {
-            lamports_per_byte_year: 13_920,
-            exemption_threshold: 2.0,
-            burn_percent: 50,
-        };
-        let funded_to_default = account(36, 1_141_440);
-        require_rent_exempt("Rent ProgramData", &funded_to_default, &Rent::default())
-            .expect("passes under the genesis default, which is exactly the trap");
-        let error = require_rent_exempt("Rent ProgramData", &funded_to_default, &costly)
-            .expect_err("a live rate above the default must refuse by name")
-            .to_string();
-        assert!(
-            error.contains("Rent ProgramData")
-                && error.contains("1141440")
-                && error.contains(&costly.minimum_balance(36).to_string()),
-            "the refusal must name the account, what it holds, and what the live rate wants: {error}"
-        );
-
-        // The sysvar body itself is authenticated, not trusted.
         let canonical = bincode::serialize(&live_devnet).expect("Rent body");
         let sysvar_account = |owner: Pubkey, executable: bool, data: Vec<u8>| RpcAccount {
             lamports: 1,
@@ -1623,7 +1759,12 @@ mod tests {
                 .to_string()
                 .contains("zero rate or a non-positive exemption threshold")
         );
+        assert_eq!(
+            carry_forward_rent_v1(&live_devnet).lamports_per_byte_year,
+            5_080
+        );
     }
+
     use crate::{cluster::DEVNET_GENESIS_HASH, rpc::parse_json_without_duplicate_keys_v1};
 
     /// One real seven-role Loader set, used ONLY as a fixture. See the identical
@@ -1936,13 +2077,9 @@ mod tests {
             minimum_context_slot: 1,
             output_path: std::env::temp_dir().join("unused-carry-forward-fixture.json"),
         };
-        let coordinates = discover_infrastructure_coordinates(
-            &args,
-            &discovery_addresses,
-            &discovery_accounts,
-            &fixture_rent(),
-        )
-        .expect("authenticated infrastructure discovery");
+        let coordinates =
+            discover_infrastructure_coordinates(&args, &discovery_addresses, &discovery_accounts)
+                .expect("authenticated infrastructure discovery");
         let final_accounts = vec![
             Some(registry_program),
             Some(registry_programdata),
@@ -2048,9 +2185,8 @@ mod tests {
                     .clone()
             })
             .collect();
-        let (manifest, bodies) =
-            authenticate_prepare_programdata(&args, 777, &addresses, accounts, &fixture_rent())
-                .expect("authenticated capture");
+        let (manifest, bodies) = authenticate_prepare_programdata(&args, 777, &addresses, accounts)
+            .expect("authenticated capture");
         assert_eq!(manifest.context_slot, 777);
         assert_eq!(manifest.roles.len(), PREPARE_ROLES.len());
         assert_eq!(bodies, expected_bodies);
@@ -2075,10 +2211,7 @@ mod tests {
 
         let mut missing = accounts.clone();
         *missing.get_mut(3).expect("second ProgramData") = None;
-        assert!(
-            authenticate_prepare_programdata(&args, 1, &addresses, missing, &fixture_rent())
-                .is_err()
-        );
+        assert!(authenticate_prepare_programdata(&args, 1, &addresses, missing).is_err());
 
         let mut wrong_authority = accounts.clone();
         *wrong_authority
@@ -2086,16 +2219,7 @@ mod tests {
             .and_then(Option::as_mut)
             .and_then(|account| account.data.get_mut(13))
             .expect("first ProgramData authority") ^= 1;
-        assert!(
-            authenticate_prepare_programdata(
-                &args,
-                1,
-                &addresses,
-                wrong_authority,
-                &fixture_rent()
-            )
-            .is_err()
-        );
+        assert!(authenticate_prepare_programdata(&args, 1, &addresses, wrong_authority).is_err());
 
         let mut wrong_owner = accounts.clone();
         wrong_owner
@@ -2103,10 +2227,7 @@ mod tests {
             .and_then(Option::as_mut)
             .expect("third Program")
             .owner = Pubkey::new_unique();
-        assert!(
-            authenticate_prepare_programdata(&args, 1, &addresses, wrong_owner, &fixture_rent())
-                .is_err()
-        );
+        assert!(authenticate_prepare_programdata(&args, 1, &addresses, wrong_owner).is_err());
 
         let mut wrong_link = accounts.clone();
         wrong_link
@@ -2117,17 +2238,11 @@ mod tests {
             .get_mut(4..)
             .expect("ProgramData link")
             .copy_from_slice(Pubkey::new_unique().as_ref());
-        assert!(
-            authenticate_prepare_programdata(&args, 1, &addresses, wrong_link, &fixture_rent())
-                .is_err()
-        );
+        assert!(authenticate_prepare_programdata(&args, 1, &addresses, wrong_link).is_err());
 
         let mut reordered = addresses.clone();
         reordered.swap(0, 2);
-        assert!(
-            authenticate_prepare_programdata(&args, 1, &reordered, accounts, &fixture_rent())
-                .is_err()
-        );
+        assert!(authenticate_prepare_programdata(&args, 1, &reordered, accounts).is_err());
     }
 
     #[test]

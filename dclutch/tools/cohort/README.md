@@ -241,19 +241,31 @@ market 1 got as far as phase 3 `Retiring` and stopped five rent-exactness guards
 deep; those five now price against `funded-rent-recorded`'s figure, which is
 necessary and is not sufficient.
 
-**One wall is still open and it is not a refusal.** `ResolutionCloseFund` --
-which the terminal sequence must land before this row's first packet, because it
-is what takes `outstanding_capabilities` to 0 -- exceeds the default compute
-budget. Driven on devnet 2026-09-04 against cohort-15's market 1 it consumed
-**200,000 of 200,000 compute units and returned `ProgramFailedToComplete`,
-"exceeded CUs meter at BPF instruction"**. The terminal sequence declares no
-`ComputeBudget` prefix at all -- the only driver in this tree that does not,
-while the wallet payout path routinely spends 235,003 CU -- and
-`authenticate_terminal_message_decompilation_v1` pins the durable message at
-exactly ONE instruction, so the prefix is a change to the durability schema, the
-v0 placement authenticator and the completion expectations together, not a flag.
-Until it lands, no market can reach this row, and that is why retirement has
-never completed on any chain. The four packets themselves are drivable: they are
+**`ResolutionCloseFund` HAS NOW EXECUTED, and the wall moved rather than
+closing.** It is what takes `outstanding_capabilities` to 0, so the terminal
+sequence must land it before this row's first packet. It used to exceed the
+default compute meter -- 200,000 of 200,000, `ProgramFailedToComplete` -- because
+the terminal sequence declared no `ComputeBudget` prefix at all. It declares one
+now: the durable message carries exactly one first-party instruction optionally
+preceded by exactly one `SetComputeUnitLimit` for the recorded budget, and the
+budget is 267,518, derived from a measured 252,518 under `CU_BUDGETS.md`'s
+tolerance rule. Driven on devnet 2026-09-04 against cohort-15's market 1 the
+route consumed **252,368 of 267,368 compute units and succeeded** --
+`3rDH7V5XoHDPwZEzfoCi6f4mWYaWR3ZrDnjuUuKi1hAjMCqrEttPJNzT4aQRwF2ePYJqnzw6ftADhJYrnMs3cXin`,
+slot 493,003,631.
+
+**The open wall is now certification, not execution, and it is in the plan
+rather than the chain.** The route writes a 416-byte `DCSRCLS3` closure receipt
+and returns the same bytes, and the plan's prediction of that body differs from
+what the program wrote in three `u64` fields and no others: `ledger_rent_lamports`
+(1,991,360 on chain = 392 bytes x 5,080, against 392 x 6,333 in the plan),
+`ledger_lamport_surplus` (491,176 against 0 -- the same 2,482,536 partitioned
+differently, because the deployed program prices from the Rent sysvar of the
+moment and the host prices from the rate the account was funded at), and
+`closed_at`, which is the Clock at EXECUTION against the Clock at PLANNING and
+cannot be predicted at all. Until those are answered, no market can reach this
+row, and that is why retirement has never completed on any chain. The four
+packets themselves are drivable: they are
 808, 864, 864 and 744 bytes against a 1,232-byte packet, and the DEPLOYED Core
 routes all four (`Action::Retire` at
 `RETIREMENT_CHECKPOINT_PREPARE_INSTRUCTION_BYTES_V1` for the prepare, and the
