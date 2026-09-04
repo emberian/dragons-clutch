@@ -4448,3 +4448,11 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   the Funding refusal blocking both markets' terminal paths**; two register pages pass --check and disagree; C-14's nine of
   ten non-reproducing roles. → WEB-COHORT15 **`(spawned)`**, WITNESS-2 **`(spawned)`**, COHORT-15E told the rent conviction.
 - Cuts: `7416a31ee`.
+- TESTS-CORE closed (`4be5791a0`): the two tests derive from the census's own tables; `market.found` declares
+  `core/found::process#Found`, now CHECKED by reading the Action tag at `CORE_REQUEST_ACTION_OFFSET` from the compiled
+  instruction against the census's variant selector (narrowing, not resolving — `Action::Retire` alone reaches four of the
+  eleven); reachable 6 → 8, selectable 75 → 85, nothing typed; eight assertions red under a ten-route-smaller census while
+  the four derived counts stay green. Owed: the route census's generator drops variant selectors for magic-selected rows
+  (the test reads them from routes.md meanwhile); `CORE_REQUEST_ACTION_OFFSET` is a browser copy of a crate-private offset
+  (one line in generate-core-found.mjs).
+- Cuts: `4fbc06803`.
