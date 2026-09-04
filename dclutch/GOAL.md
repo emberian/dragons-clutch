@@ -4364,3 +4364,7 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   converged, the DCLTPOS1 exemption removed, the Core request rendered in the explorer. Owed: `REQUEST_MAGIC` still collides
   two-way in the dealer and general codecs; a gauntlet binding for the wildcard route; three custody records still without Lean.
 - Cuts: `989360d51`, `6e01436b5`, `db8afd6f7`.
+- Orchestrator correction: my explorer commit 3f690de90 was RED (it rendered the Core request as a record the Core spec
+  already covered — "rendered twice" — while the actual unrendered thing was the eleven Core ROUTES the new magic selects,
+  which the instruction arm keys by census route id); fixed one commit later — eleven sentences in instructions.ts, the
+  duplicate entry reverted, 54/65 instruction magics rendered, 0 unrendered, explorer suite 129/129. Cut at 744d8b30d.
