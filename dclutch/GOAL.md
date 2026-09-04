@@ -4218,3 +4218,12 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   (eleven freeze sites, three tables hold the market; the founding evidence must record which is DCLTGMF3's — cohort-15's
   evidence to change). Caution recorded: sharing CARGO_TARGET_DIR across the two workspaces yields bogus type-mismatch errors.
 - Cuts: `4df31b6cc`.
+- SEVEN closed (`d24c191c2`, `c42da8fef`, `a00117f39`, `c226b6d95`, + one): **never-executed 7 → 0** — lineage_v1 EXECUTES
+  (the loopback had landed it all along; the delta was evidence emission), process_abort#4 EXECUTES and REFUSES (it had no
+  host builder anywhere), reauthenticate EXECUTES (five roles, 11,337 CU — the pinned `MEASURED_REAUTHENTICATION_CU_V1 =
+  65,390` is 5.8× stale, named); the two Direct setup routes and the two split-founding stages BLOCKED with reasons and
+  owners, the `DCLUTCH_FOUNDING_ROUTE` env toggle promoted into the spec where a digest sees it (it had been a silent-success
+  hazard). A red CU row settled by re-running at a clean commit: five stage deltas all near multiples of 1,500 and one
+  NEGATIVE — the draw, not a regression. Tier 1: 207 tx, 24/24 witnesses, 0 diagnostics. Owed: CU budgets for eight new
+  transactions; the abort suffix on a validator (PACKET_LIMIT §10); genref's local-validator control is a text search.
+- Cuts: `621446d5e`, `2c026d3bd`, `d070b1dfa`.

@@ -38,7 +38,7 @@ stands:
 - **NEVER-EXECUTED** -- no campaign binding names it and no reason is
   recorded yet.
 
-Currently **7** of **162**
+Currently **0** of **162**
 routes are in that last group.
 
 The **phase** column is the route's own guard, not a summary of one. It is
@@ -215,14 +215,14 @@ instead:
 | --- | --- | --- | --- | --- | --- |
 | `registry/continuation_v1::process` | entry | magic `DCLRGCI1` | no state machine | blocked by rule `registry/continuation_v1::process`: DCLRGCI1, the Registry continuation route. | `programs/dclutch-registry-sbf/src/lib.rs:390` |
 | `registry/hot_continuation_v2::process` | entry | magic `DCLTHOT3` | no state machine | blocked by rule `registry/hot_continuation_v2::process`: No gauntlet campaign drives this route yet. | `programs/dclutch-registry-sbf/src/lib.rs:372` |
-| `registry/lineage_v1::process` | entry | magic `DCLRLND1` | no state machine | NEVER-EXECUTED, no stated reason | `programs/dclutch-registry-sbf/src/lib.rs:395` |
-| `registry/process_abort#4` | action | tag `` | no state machine | NEVER-EXECUTED, no stated reason | `programs/dclutch-registry-sbf/src/record_v1.rs:76` |
+| `registry/lineage_v1::process` | entry | magic `DCLRLND1` | no state machine | executed (lineage-loopback) | `programs/dclutch-registry-sbf/src/lib.rs:395` |
+| `registry/process_abort#4` | action | tag `` | no state machine | executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/record_v1.rs:76` |
 | `registry/process_activate_role#ActivateRole` | entry | variant `RegistryInstructionV1::ActivateRole` | no state machine | executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/lib.rs:399` |
 | `registry/process_append#2` | action | tag `` | no state machine | executed (tier1) | `programs/dclutch-registry-sbf/src/record_v1.rs:70` |
 | `registry/process_begin#5` | action | tag `` | no state machine | executed (tier1) | `programs/dclutch-registry-sbf/src/record_v1.rs:67` |
 | `registry/process_finalize#3` | action | tag `` | no state machine | executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/record_v1.rs:73` |
-| `registry/process_instruction` | entry | -- | no state machine | executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/lib.rs:1` |
-| `registry/process_reauthenticate#Reauthenticate` | entry | variant `RegistryInstructionV1::Reauthenticate` | no state machine | NEVER-EXECUTED, no stated reason | `programs/dclutch-registry-sbf/src/lib.rs:402` |
+| `registry/process_instruction` | entry | -- | no state machine | executed (lineage-loopback); executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/lib.rs:1` |
+| `registry/process_reauthenticate#Reauthenticate` | entry | variant `RegistryInstructionV1::Reauthenticate` | no state machine | executed (tier1) | `programs/dclutch-registry-sbf/src/lib.rs:402` |
 | `registry/record_v1::dispatch` | entry | magic `DCLTRIX1`; length `dclutch_registry_svm::REGISTRY_INSTRUCTION_BYTES_V1` | no state machine | executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/lib.rs:382` |
 
 ## rent
@@ -289,10 +289,10 @@ instead:
 | `trading/direct_begin_retiring_v1::process_direct_begin_retiring_v1` | entry | predicate `` | `direct-root: Open`; `market: Retiring` | executed (direct-begin-retiring-programtest); refused (direct-begin-retiring-programtest) | `programs/dclutch-trading-sbf/src/lib.rs:850` |
 | `trading/direct_close_maker_v1::process_direct_close_maker_v1` | entry | predicate `` | `direct-root: Retiring`; `market: Retiring` | blocked by rule `trading/direct_close_maker_v1::process_direct_close_maker_v1`: CloseMakerReplay (wall 22's missing decrement, cohort-9) has the same gauntlet gap as begin-retiring above it: tier 1's local-validator bootstrap founds and trades but retires nothing, so no tier constructs a `DirectCloseMakerRequestV1` against a Retiring root. | `programs/dclutch-trading-sbf/src/lib.rs:858` |
 | `trading/direct_fee_settlement_v1::process_direct_fee_settlement_v1` | entry | predicate `` | no phase gate | executed (direct-fee-pair-programtest); refused (direct-fee-pair-programtest) | `programs/dclutch-trading-sbf/src/lib.rs:884` |
-| `trading/direct_replay_setup_v1::process_direct_replay_setup_v1` | entry | predicate `` | `market: Open` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:866` |
-| `trading/direct_token_setup_v1::process_direct_token_setup_v1` | entry | predicate `` | `direct-root: Open`; `market: Open` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:874` |
-| `trading/generic_founding_stages_v1::process_generic_found_and_permit_v1` | entry | predicate `` | no phase gate | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:908` |
-| `trading/generic_founding_stages_v1::process_generic_market_open_v1` | entry | predicate `` | no phase gate | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:920` |
+| `trading/direct_replay_setup_v1::process_direct_replay_setup_v1` | entry | predicate `` | `market: Open` | blocked by rule `trading/direct_replay_setup_v1::process_direct_replay_setup_v1`: NO CAMPAIGN, and the two walls are specific rather than general. | `programs/dclutch-trading-sbf/src/lib.rs:866` |
+| `trading/direct_token_setup_v1::process_direct_token_setup_v1` | entry | predicate `` | `direct-root: Open`; `market: Open` | blocked by rule `trading/direct_token_setup_v1::process_direct_token_setup_v1`: NO CAMPAIGN, blocked identically to `trading/direct_replay_setup_v1::process_direct_replay_setup_v1` and by the same producer: stage `token-setup`, the second of the two setup mutations, which the journal gates behind the replay setup finalizing first (direct_trade_setup_journal.rs:203-224). | `programs/dclutch-trading-sbf/src/lib.rs:874` |
+| `trading/generic_founding_stages_v1::process_generic_found_and_permit_v1` | entry | predicate `` | no phase gate | blocked by rule `trading/generic_founding_stages_v1::process_generic_found_and_permit_v1`: NO CAMPAIGN, and the driver is COMPLETE -- this is a binding gap, not a missing executor. | `programs/dclutch-trading-sbf/src/lib.rs:908` |
+| `trading/generic_founding_stages_v1::process_generic_market_open_v1` | entry | predicate `` | no phase gate | blocked by rule `trading/generic_founding_stages_v1::process_generic_market_open_v1`: NO CAMPAIGN, blocked identically to `trading/generic_founding_stages_v1::process_generic_found_and_permit_v1` and by the same driver: DCLTGMO1 is the second stage, the permissionless commit-last Core Open that consumes the permit DCLTGFP1 escrowed, and it is 23 accounts that fit an inline v0 packet with no ALT and no extended heap. | `programs/dclutch-trading-sbf/src/lib.rs:920` |
 | `trading/generic_market_founding_v1::process_generic_market_founding_v3` | entry | predicate `` | no phase gate | executed (tier1); refused (tier1) | `programs/dclutch-trading-sbf/src/lib.rs:896` |
 | `trading/hot_v3::process_capability_seal_close_v1` | entry | predicate `` | no phase gate | blocked by rule `trading/hot_v3::process_capability_seal_close_v1`: CloseSeal (omission P-006's close, 2026-08-31) has the same gauntlet gap as the seal WRITE outer directly below it, for the same reason: tier 1's local-validator bootstrap constructs no `CapabilitySealCloseRequestV1` and cannot, because there is nothing stranded on a freshly bootstrapped ledger -- a seal only becomes closeable once a LATER Trading release has stopped addressing it, which is a two-release history no single tier run has. | `programs/dclutch-trading-sbf/src/lib.rs:1005` |
 | `trading/hot_v3::process_capability_seal_v1` | entry | predicate `` | no phase gate | blocked by rule `trading/hot_v3::process_capability_seal_v1`: RELAY-REHOME's census fix (2026-08-27) restored Trading's real dispatch surface and left four routes with no stated reason: `trading/process_instruction`, `hot_v3::process_capability_seal_v1`, `generic_market_founding_v1::...`, `projected_custody_bootstrap_v1::...`. | `programs/dclutch-trading-sbf/src/lib.rs:996` |

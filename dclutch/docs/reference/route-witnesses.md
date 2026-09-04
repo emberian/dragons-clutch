@@ -19,12 +19,12 @@ SHA-256, so a reviewer can verify a claim without re-running a gauntlet.
 | class | routes | what actually executed the route |
 | --- | ---: | --- |
 | **devnet** | **22** | a finalized transaction on Solana devnet, named by signature and slot, and corroborated against the chain's own logs |
-| **local validator** | 29 | `solana-test-validator`: a real Agave runtime, real slots, real finalization, on localhost |
+| **local validator** | 32 | `solana-test-validator`: a real Agave runtime, real slots, real finalization, on localhost |
 | **ProgramTest only** | 58 | an in-process `solana-program-test` bank. It runs the REAL SBF ELFs -- which is why it is evidence -- but it is not a validator: no packet limit, no leader schedule, no finalization, no fee market |
-| **blocked** | 46 | no campaign; `tools/gauntlet/blocked.json` records a reason and an owner |
-| **never-executed** | 7 | no campaign and no reason recorded |
+| **blocked** | 50 | no campaign; `tools/gauntlet/blocked.json` records a reason and an owner |
+| **never-executed** | 0 | no campaign and no reason recorded |
 
-**A real Agave runtime drives 51 of the
+**A real Agave runtime drives 54 of the
 162.** `docs/MASTER_COMPLETION_CONTRACT.md` item 5 asks for a local
 validator or devnet transaction where the route is chain-facing; those are the
 rows that meet it. The ProgramTest column is not a lesser version of the same
@@ -86,6 +86,7 @@ all fails this generator rather than rendering as `unknown`.
 | `direct-fee-pair-programtest` | program-test | yes | 2 | `tools/gauntlet/direct-fee-pair/run-direct-fee-pair.sh` | `48d33f9f96ca0dc0` |
 | `general-accelerator-programtest` | program-test | yes | 1 | `tools/gauntlet/general/run-general.sh` | `a257248cdbe48b23` |
 | `journey` | local-validator | yes | 15 | `tools/gauntlet/journey/run-journey.sh` | `cc0af7e4821413e1` |
+| `lineage-loopback` | local-validator | yes | 2 | `tools/gauntlet/lineage/run-lineage.sh` | `92ecdbc413b376b0` |
 | `relayed-vertical` | local-validator | yes | 5 | `tools/gauntlet/relayed-vertical/run-relayed-vertical.sh` | `7602376cb7809e06` |
 | `resolution-core-v3-programtest` | program-test | yes | 12 | `tools/gauntlet/resolution-core-v3/run-resolution-core-v3.sh` | `3fe2abd2f49064e3` |
 | `resolution-pre-market-funding-programtest` | program-test | yes | 3 | `tools/gauntlet/resolution-pre-market-funding/run-resolution-pre-market-funding.sh` | `8d301707583822e4` |
@@ -95,7 +96,7 @@ all fails this generator rather than rendering as `unknown`.
 | `retirement-replay-handoff-programtest` | program-test | yes | 2 | `tools/gauntlet/retirement-replay-handoff/run-retirement-replay-handoff.sh` | `950b33db1915d0c0` |
 | `source-abort-programtest` | program-test | yes | 7 | `tools/gauntlet/source-abort/run-source-abort.sh` | `eedde83f5554eea7` |
 | `structured-v2-programtest` | program-test | yes | 2 | `tools/gauntlet/structured/run-structured.sh` | `98937647cc92d70f` |
-| `tier1` | local-validator | yes | 35 | `tools/gauntlet/run.sh` | `3747f7da57f94e9f` |
+| `tier1` | local-validator | yes | 37 | `tools/gauntlet/run.sh` | `0739195671e165e4` |
 | `tier4-series-occurrence-programtest` | program-test | yes | 1 | `tools/gauntlet/tier4/run-campaign.sh` | `eccd05c0e5ba3d38` |
 | cohort 13 (devnet) | devnet | yes | 10 | `tools/gauntlet/devnet-witness/corroborate.py` | `9f18f7c5d9e1a57e` |
 | cohort 13 (devnet) | devnet | yes | 19 | `tools/gauntlet/devnet-witness/corroborate.py` | `9909b0b59ab4e9b3` |
@@ -223,14 +224,14 @@ route now executes.
 | `product-runtime-v2/process_instruction` | blocked | blocked by rule `product-runtime-v2/*` | `tools/gauntlet/blocked.json` |
 | `registry/continuation_v1::process` | blocked | blocked by rule `registry/continuation_v1::process` | `tools/gauntlet/blocked.json` |
 | `registry/hot_continuation_v2::process` | blocked | blocked by rule `registry/hot_continuation_v2::process` | `tools/gauntlet/blocked.json` |
-| `registry/lineage_v1::process` | never-executed | no campaign, no reason recorded | -- |
-| `registry/process_abort#4` | never-executed | no campaign, no reason recorded | -- |
+| `registry/lineage_v1::process` | local-validator | `lineage-loopback` | `tools/gauntlet/lineage/bindings.json` |
+| `registry/process_abort#4` | local-validator | `tier1` | `tools/gauntlet/tier1/bindings.json` |
 | `registry/process_activate_role#ActivateRole` | local-validator | `tier1` | `tools/gauntlet/tier1/bindings.json` |
 | `registry/process_append#2` | local-validator | `tier1` | `tools/gauntlet/tier1/bindings.json` |
 | `registry/process_begin#5` | local-validator | `tier1` | `tools/gauntlet/tier1/bindings.json` |
 | `registry/process_finalize#3` | local-validator | `tier1` | `tools/gauntlet/tier1/bindings.json` |
-| `registry/process_instruction` | local-validator | `tier1` | `tools/gauntlet/tier1/bindings.json` |
-| `registry/process_reauthenticate#Reauthenticate` | never-executed | no campaign, no reason recorded | -- |
+| `registry/process_instruction` | local-validator | `lineage-loopback`, `tier1` | `tools/gauntlet/lineage/bindings.json`<br>`tools/gauntlet/tier1/bindings.json` |
+| `registry/process_reauthenticate#Reauthenticate` | local-validator | `tier1` | `tools/gauntlet/tier1/bindings.json` |
 | `registry/record_v1::dispatch` | local-validator | `tier1` | `tools/gauntlet/tier1/bindings.json` |
 | `rent/process_close_v2#Close` | blocked | blocked by rule `rent/process_close_v2#Close` | `tools/gauntlet/blocked.json` |
 | `rent/process_create_v2#Create` | local-validator | `tier1` | `tools/gauntlet/tier1/bindings.json` |
@@ -277,10 +278,10 @@ route now executes.
 | `trading/direct_begin_retiring_v1::process_direct_begin_retiring_v1` | program-test | `direct-begin-retiring-programtest` | `tools/gauntlet/direct-begin-retiring/bindings.json` |
 | `trading/direct_close_maker_v1::process_direct_close_maker_v1` | blocked | blocked by rule `trading/direct_close_maker_v1::process_direct_close_maker_v1` | `tools/gauntlet/blocked.json` |
 | `trading/direct_fee_settlement_v1::process_direct_fee_settlement_v1` | program-test | `direct-fee-pair-programtest` | `tools/gauntlet/direct-fee-pair/bindings.json` |
-| `trading/direct_replay_setup_v1::process_direct_replay_setup_v1` | never-executed | no campaign, no reason recorded | -- |
-| `trading/direct_token_setup_v1::process_direct_token_setup_v1` | never-executed | no campaign, no reason recorded | -- |
-| `trading/generic_founding_stages_v1::process_generic_found_and_permit_v1` | never-executed | no campaign, no reason recorded | -- |
-| `trading/generic_founding_stages_v1::process_generic_market_open_v1` | never-executed | no campaign, no reason recorded | -- |
+| `trading/direct_replay_setup_v1::process_direct_replay_setup_v1` | blocked | blocked by rule `trading/direct_replay_setup_v1::process_direct_replay_setup_v1` | `tools/gauntlet/blocked.json` |
+| `trading/direct_token_setup_v1::process_direct_token_setup_v1` | blocked | blocked by rule `trading/direct_token_setup_v1::process_direct_token_setup_v1` | `tools/gauntlet/blocked.json` |
+| `trading/generic_founding_stages_v1::process_generic_found_and_permit_v1` | blocked | blocked by rule `trading/generic_founding_stages_v1::process_generic_found_and_permit_v1` | `tools/gauntlet/blocked.json` |
+| `trading/generic_founding_stages_v1::process_generic_market_open_v1` | blocked | blocked by rule `trading/generic_founding_stages_v1::process_generic_market_open_v1` | `tools/gauntlet/blocked.json` |
 | `trading/generic_market_founding_v1::process_generic_market_founding_v3` | devnet | cohort 13 `DCLTGMF3` slot 491,963,072; also bound by `tier1` | `docs/evidence/witnesses/cohort-13-founding.json` |
 | `trading/hot_v3::process_capability_seal_close_v1` | blocked | blocked by rule `trading/hot_v3::process_capability_seal_close_v1` | `tools/gauntlet/blocked.json` |
 | `trading/hot_v3::process_capability_seal_v1` | devnet | cohort 13 `DCLTSEL1` slot 492,092,785 | `docs/evidence/witnesses/cohort-13-discovered.json` |
