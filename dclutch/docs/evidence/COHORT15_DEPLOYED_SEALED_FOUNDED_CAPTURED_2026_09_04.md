@@ -2570,3 +2570,203 @@ Every one carries `Lane: COHORT-15G`. The driver in the job directory is built
 at the last of them from a DETACHED WORKTREE, because the shared live tree does
 not compile — another lane is mid-edit on `require_rent_exempt` in the rent
 crates. Its digest is in `bin/DRIVER_PROVENANCE.txt`.
+
+---
+
+# ADDENDUM H — the first certified `ResolutionCloseFund`, and the stage after it
+
+**Devnet evidence. Not mainnet evidence.** Written by COHORT-15H, 2026-09-04.
+No transaction was signed by this lane: deployer `4zrxtw5c…` 23.890559434 and
+payer `D5qe7ZoQ…` 1.289440181, both exactly where addendum G left them.
+
+## THE RECEIPT'S THREE FIELDS, ANSWERED, AND THE JOURNAL CERTIFIED
+
+Addendum G left market 1's CloseFund landed and uncertifiable. Its plan differed
+from what the program wrote in three `u64`s and no others, and the three are two
+questions.
+
+### One: the partition belongs to the deployment, not to this tree
+
+`ledger_rent_lamports` @376 and `ledger_lamport_surplus` @384 are one
+disagreement whose sum is invariant at 2,482,536. The host was answering "what
+rent did this account already pay" — recovered from its own bytes, which is
+right for every guard on an account a founding already bought and is what
+`ec373d90d` taught the session — with the same number it used for "what will the
+deployed program write". Those are different questions and the second belongs to
+the deployment: cohort-15's Resolution was built at `1cae26fd6`, before
+`afab02c25` existed, so nothing in those bytes can consult a funded rate.
+
+`closure_receipt_projection.rs` keys the answer by the Resolution role's checked
+candidate ELF digest, in the same append-only table shape
+`core_bump_projection.rs` uses for Core's Product-graph nibbles and for the same
+reason: a row can be written the moment the candidate is built, before the
+deploy has spent. Cohort-15's row is
+`24af85048c086c28b529960f2b785b58a794026c73a7e7799aa6da6df340ac9d`. The
+funded-rate list is EMPTY, and its emptiness is a measurement rather than an
+omission: no program in this tree consults a funded rate today; both
+`dclutch-resolution-proof-sbf` and `dclutch-core-sbf/src/resolution.rs` reach
+the partition through `rent.minimum_balance`. A deployment the driver has no
+statement about refuses by name; a pin that INSTALLS this tree's candidate gets
+this tree's answer, so the loopback lifecycle needs no row.
+
+The sum is checked exactly on both sides of the repricing. A rate is a
+partition, never a source of lamports.
+
+### Two: `closed_at` is an execution fact and the model now says so
+
+`prestate_is_slot_bound_runtime_account_v1` already learned that the Clock is
+not a prestate. It is not a poststate either. The poststate model grew a named
+set with exactly one member: a field whose eight bytes are bounded by an
+interval while every other byte of the account stays exact.
+
+* The **lower bound** is the plan's own observation clock. A receipt stamped
+  before the observation its plan was built on describes an execution that
+  preceded its own inputs.
+* The **upper bound** is the sequence's own deadline, `TERMINAL_FINALITY_WAIT`
+  (300 s) — the looser of the two facts that bound it, so it refuses nothing the
+  packet's 150-block blockhash life admits. Market 1's gap was **9 seconds**, 3%
+  of the interval.
+* The **offset** is asked of the codec, never written down: two receipts
+  identical but for `closed_at` differ in exactly one contiguous eight-byte
+  window that reads back the little-endian value. It resolves to 400, which is
+  what the chain measured, and a layout where the field is not one contiguous
+  little-endian u64 refuses rather than binding the wrong bytes.
+
+The rule is stated once and spent twice, since `b00dcad96` made the receipt one
+statement of bytes the route both writes and returns: a return body declaring
+such a field must be the exact bytes of exactly one declared account poststate,
+carrying the same rule.
+
+**MEASURED, AND WORTH A LATER LANE'S ATTENTION: the transaction's own
+`blockTime` is 1,788,522,302, which is `closed_at` exactly.** The bound could
+therefore become an equality resolved from finalized transaction history, the
+way `DurableLookupLastExtendedSlotV1::FinalizedTransaction` already resolves an
+ALT's `last_extended_slot`. This lane did not build on that: one agreement is
+not a rule, and the interval refuses nothing the equality would admit.
+
+## RECONCILED, NOT RE-SENT
+
+Correcting a model does not move a prediction already fsynced into a journal
+directory. Market 1's `13-resolution-close-fund.json` was at `submitted` with a
+signature that LANDED, and `--supersede-unlandable` refuses it by name — "is
+known to transaction history and must be reconciled, not retired" — with
+nothing to send it to. Re-planning the stage is a second CloseFund, which is
+what a durable journal exists to forbid.
+
+`--reconcile-landed SIGNATURE` re-derives the PREDICTIONS and nothing else. What
+may move and what may not is the whole of the act, and it is proved rather than
+promised: the reconciled intent is compared against a copy of the original with
+only the two re-derived fields restored, so no field of the struct is left
+unchecked. The re-derivation reads RECORDED inputs — the Rent sysvar the program
+executed against is read live and required to hash to the digest this journal
+recorded in its own prestate, so a cluster that moved its rate again refuses
+instead of guessing. Nothing is identified by position: the closure receipt is
+the one declared poststate whose bytes decode as `SourceClosureReceiptV3` AND
+name their own address; the closing funding ledger is the one account whose
+prestate lamports equal the three classes the receipt itself sums and whose
+poststate is vacant.
+
+    reconciled     ledger_rent_lamports 2,482,536 -> 1,991,360
+                   ledger_lamport_surplus       0 ->   491,176
+                   execution clock offset 400, interval
+                   [1788522293, 1788522593]
+                   funding ledger 9xQHh4n6cMsLTuEyvS7bQ7ho9Qoiyb5fuJLQE9bCqium
+                   receipt        AmSYWY9vyWbryAkf16LJPgKawHvtuxUVSSfvGgFTi5MB
+                   Rent sysvar authenticated against the journal's own prestate
+
+## THE CERTIFICATION, AND THE ONE IT BROKE
+
+The next ordinary pass certified it. `13-resolution-close-fund.json` reads
+**phase `finalized`** — the first `ResolutionCloseFund` certified on any chain,
+416 bytes of `DCSRCLS3` at `AmSYWY9vyWbryAkf16LJPgKawHvtuxUVSSfvGgFTi5MB`,
+3,445,152 lamports, Resolution-owned, packet and fee and both balance vectors
+equal and all six poststates admitted.
+
+And the pass after that refused: *"persisted finalized poststate differed from
+exact intent bytes"*. Correctly. A persisted poststate holds a length and two
+digests, never bytes, so for the one field a plan cannot bind the prediction and
+the chain differ by nine seconds forever and nothing archived bridges them — the
+interval was checked once and the value thrown away. Two answers, and the
+journal needs both:
+
+* certification now **records** the clock it admitted, so every later
+  re-verification is one exact comparison and re-checks the interval a second
+  time against the number in front of it; and
+* a journal certified BEFORE that record existed still verifies, because the
+  declared interval is finite and every other byte is known — exactly one
+  admissible clock reproduces the recorded digest, and finding it is the proof.
+  The fallback is bounded by the plan's own ceiling and never widens it.
+
+Market 1's own journal is the case: it carries no `executionClocks` and verifies
+through the fallback, which is how the sequence reached stage four.
+
+## STAGE FOUR REFUSES, AND THE CONJUNCT IS A FOUNDING INPUT
+
+`DirectCloseCapability` is what takes `outstanding_capabilities` to 0. It
+refuses, and an instrumented probe over `terminal_retirement_v1.rs` convicted
+it to one line in one pass:
+
+    Direct close caller preflight: Projection
+    crates/dclutch-operator/src/terminal_retirement_v1.rs:699
+    CapabilityFundingHeaderV2::new(physical_count = 2, logical_count = 1, mask = 0b1)
+
+`CapabilityFundingHeaderV2` refuses `physical_count > logical_count`, because a
+header counts physical ledgers whose disjoint subsets COVER the logical entries.
+The frame carries two physical ledgers — `9xQHh4n6…` (Resolution) and
+`J4nR8mhJ…` (Trading) — while `logical_count` is the population count of the
+selected entry's dependency closure, which is 1.
+
+**Market 1's capability manifest declares no dependency edges at all.** Read off
+chain through the same probe:
+
+    manifest entry_count 4
+      entry 0 dependency_count 0  closure 0b0001
+      entry 1 dependency_count 0  closure 0b0010
+      entry 2 dependency_count 0  closure 0b0100
+      entry 3 dependency_count 0  closure 0b1000
+
+Every closure is a singleton, so the Direct entry's closure can never cover the
+Resolution compartments its close frame preserves, and the F=2 Direct close is
+not expressible for this market. That is a founding input, frozen at founding —
+the same shape as the OpenBatch `0x4015` finding in addendum E, and no producer
+repairs it.
+
+**A second fact sits behind it, and it is the sequence's own order.** The
+Resolution funding ledger `9xQHh4n6…` reads VACANT: `ResolutionCloseFund`,
+stage three, closed it. `authenticate_close_funding` at stage four decodes every
+ledger in the frame and classifies the unselected ones as PRESERVED dependency
+ledgers, and the host requires exactly one. A ledger stage three closed cannot
+be decoded, let alone preserved. So even with a manifest that declared its
+dependencies, stage four as ordered would refuse on the ledger stage three
+consumed. `TerminalStageV1::ORDERED` pins that order and
+`exact_six_stage_route_and_operational_prepay_are_ordered` tests it, so this is
+a question about which stage owns the Resolution ledger's lamports, not a typo.
+
+Both are decisions above this lane: one changes what a founding writes, the
+other changes what a deployed cohort's stage order means. Neither is reachable
+without them, so **market 1 is still not retired**: phase @10 = 3 `Retiring`,
+`outstanding_capabilities` @280 = 1.
+
+## Balances and state at the stop
+
+    deployer  4zrxtw5c…  23.890559434   unmoved
+    payer     D5qe7ZoQ…   1.289440181   unmoved -- this lane signed nothing
+    market 1  3QytL1bB…  phase @10 = 3 Retiring, outstanding_capabilities @280 = 1
+    market 3  C9dLhWj7…  phase @10 = 2 Terminal, outstanding_capabilities @280 = 1
+    journal   13-resolution-close-fund.json  phase FINALIZED, reconciled once
+
+## Commits
+
+    890b58886  close fund: the host predicted the ruling's receipt and the chain
+               wrote the deployed program's
+    58b929640  terminal sequence: a landed packet whose plan predicted it wrong
+               needs a reconciliation, and there was no path to one
+    2df2a286a  terminal sequence: a persisted poststate holds digests, so
+               certification has to write down the execution fact it admitted
+    1dd4ba657  terminal sequence: a journal certified before the record existed
+               still verifies, because the interval is finite
+
+All carry `Lane: COHORT-15H`. Fourteen hostiles across the four, each proven red
+against a neutered guard and green when restored. The driver in the job
+directory is built at the last of them from a detached worktree; its digest is
+in `bin/DRIVER_PROVENANCE.txt`.

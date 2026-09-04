@@ -42,7 +42,7 @@ use alloc::vec;
 
 #[cfg(not(target_os = "solana"))]
 use dclutch_account_profile_contract::{
-    lifecycle_v3::StateLifecyclePolicyV4,
+    lifecycle_v3::{Error as LifecycleErrorV3, StateLifecyclePolicyV4},
     v2::{AccountPrestateV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE},
 };
 #[cfg(not(target_os = "solana"))]
@@ -107,6 +107,15 @@ pub enum DealerReleaseErrorV3 {
     Descriptor,
     /// Canonical ProgramSet encoding or hostile decode refused.
     ProgramSet,
+    /// The per-action lifecycle/AccountProfile join refused, carrying its cause.
+    ///
+    /// `Geometry` is the accusation "the artifacts do not fit each other" and
+    /// covers eighteen sites in this file; the join is the one that already
+    /// knows which conjunct it was, so it says so. Host-only, because
+    /// `finalize_dealer_lp_descriptor_v3` -- the sole producer -- is, and the
+    /// SBF enum is therefore byte-for-byte what it was.
+    #[cfg(not(target_os = "solana"))]
+    ProfileJoin(LifecycleErrorV3),
 }
 
 impl From<DealerEquityArtifactsErrorV3> for DealerReleaseErrorV3 {
@@ -321,7 +330,7 @@ pub fn finalize_dealer_lp_descriptor_v3(
     // the other. See `v4_lp_release.rs` for the full account.
     lifecycle
         .validate_account_profile_for_action(profile, u32::from(selector))
-        .map_err(|_| DealerReleaseErrorV3::Geometry)?;
+        .map_err(DealerReleaseErrorV3::ProfileJoin)?;
     if lifecycle.action_plan_count(u32::from(selector)) != Ok(1) {
         return Err(DealerReleaseErrorV3::Geometry);
     }
@@ -558,6 +567,17 @@ mod tests {
         EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
     };
 
+    use dclutch_account_profile_contract::lifecycle_v3::{
+        ACTION_PLAN_BYTES as LIFECYCLE_ACTION_PLAN_BYTES, HEADER_BYTES as LIFECYCLE_HEADER_BYTES,
+        PROTECTED_OUTPUT_BYTES as LIFECYCLE_PROTECTED_OUTPUT_BYTES,
+        RECIPE_BYTES as LIFECYCLE_RECIPE_BYTES, SEED_BYTES as LIFECYCLE_SEED_BYTES,
+        encode::{
+            LifecycleAccountCoordinateV3, LifecycleGuardInputV3, LifecycleOperationInputV3,
+            LifecyclePlanInputV3, LifecycleRecipeInputV3, LifecycleRefundSourceInputV3,
+            LifecycleSeedInputV3, encode_lifecycle_policy_v4_atomic,
+        },
+    };
+
     use super::super::v3_lp_artifacts::{
         DealerLpAccountProfileInputV3, encode_dealer_lp_account_profile_v3,
     };
@@ -626,6 +646,54 @@ mod tests {
         .expect("LP account profile")
     }
 
+    /// One decodable V4 policy whose sole plan names `action` and nothing else.
+    ///
+    /// Minimal on purpose: the join's action filter refuses before any recipe,
+    /// seed or coordinate is validated against the profile, so the fixture owes
+    /// only a policy that decodes and carries one plan.
+    fn policy_for_action(action: u32) -> Vec<u8> {
+        let recipes = [LifecycleRecipeInputV3 {
+            state: LifecycleAccountCoordinateV3::fixed(DEALER_LP_STATE_ACCOUNT_V3),
+            seed_start: 0,
+            seed_count: 1,
+            bump_offset: 0,
+            data_base: 1,
+            data_stride: 0,
+        }];
+        let seeds = [LifecycleSeedInputV3::CanonicalBump];
+        let plans = [LifecyclePlanInputV3 {
+            action,
+            operation: LifecycleOperationInputV3::Authenticate,
+            recipe: 0,
+            payer: None,
+            rent_credit: None,
+            principal: None,
+            beneficiary: None,
+            // Zero is the only canonical refund spelling for an Authenticate:
+            // it moves no rent, so it has no refund identity to declare.
+            refund_source: LifecycleRefundSourceInputV3::Credit,
+            guard: LifecycleGuardInputV3::Always,
+        }];
+        let bytes = LIFECYCLE_HEADER_BYTES
+            + LIFECYCLE_RECIPE_BYTES
+            + LIFECYCLE_SEED_BYTES
+            + LIFECYCLE_ACTION_PLAN_BYTES
+            + LIFECYCLE_PROTECTED_OUTPUT_BYTES;
+        let mut scratch = vec![0; bytes];
+        let mut output = vec![0; bytes];
+        encode_lifecycle_policy_v4_atomic(
+            &recipes,
+            &seeds,
+            &plans,
+            &[None],
+            &[],
+            &mut scratch,
+            &mut output,
+        )
+        .expect("one-plan V4 policy");
+        output
+    }
+
     #[test]
     fn lp_descriptors_rederive_every_successor_artifact() {
         let mut lifecycle_scratch = vec![0; DEALER_LP_LIFECYCLE_BYTES_V3];
@@ -668,7 +736,10 @@ mod tests {
 
             let last = effect.len().checked_sub(1).expect("effect byte");
             *effect.get_mut(last).expect("effect byte") ^= 1;
-            assert!(
+            // Named, not `is_err()`: a corrupted Effect byte must refuse at the
+            // Effect rederivation, and a bare `is_err()` here would also accept
+            // a refusal from any of the six conjuncts that run before it.
+            assert_eq!(
                 finalize_dealer_lp_descriptor_v3(DealerLpFinalizedArtifactsV3 {
                     action,
                     account_profile: &profile,
@@ -678,10 +749,81 @@ mod tests {
                     request_profile: &request,
                     execution_strategy: &strategy,
                     transition: &transition,
-                })
-                .is_err()
+                }),
+                Err(DealerReleaseErrorV3::Geometry),
             );
         }
+    }
+
+    /// A substituted derivation policy names its own action, and now says so.
+    ///
+    /// The LP finalizer joins the policy to the profile BEFORE it rederives the
+    /// policy bytes, which is what makes this reachable at all: a policy that
+    /// decodes but describes some other Dealer action -- selector 9, the
+    /// scenario trade -- reaches the join, and the join already knows the
+    /// answer. Behind `map_err(|_| Geometry)` that answer joined the eighteen
+    /// other `Geometry` sites in this file and the reader got a search.
+    #[test]
+    fn a_substituted_policy_surfaces_the_join_cause_and_not_geometry() {
+        let action = MultiLpRequestActionV3::Open;
+        let profile = lp_profile(action);
+        let mut request_scratch = vec![0; DEALER_LP_REQUEST_PROFILE_BYTES_V3];
+        let mut request = vec![0; DEALER_LP_REQUEST_PROFILE_BYTES_V3];
+        encode_dealer_lp_request_profile_v3(action, &mut request_scratch, &mut request)
+            .expect("request");
+        let mut transition_scratch = vec![0; dealer_lp_transition_bytes_v3(action)];
+        let mut transition = vec![0; dealer_lp_transition_bytes_v3(action)];
+        encode_dealer_lp_transition_v3(action, &mut transition_scratch, &mut transition)
+            .expect("transition");
+        let mut effect_scratch = vec![0; dealer_lp_effect_bytes_v3(action)];
+        let mut effect = vec![0; dealer_lp_effect_bytes_v3(action)];
+        encode_dealer_lp_effect_v3(action, &mut effect_scratch, &mut effect).expect("effect");
+        let strategy = admitted_strategy(&transition);
+
+        let mut lifecycle_scratch = vec![0; DEALER_LP_LIFECYCLE_BYTES_V3];
+        let mut lifecycle = vec![0; DEALER_LP_LIFECYCLE_BYTES_V3];
+        encode_dealer_lp_lifecycle_v3(&mut lifecycle_scratch, &mut lifecycle).expect("lifecycle");
+        let artifacts = |derivation_policy: &[u8], request_profile: &[u8]| {
+            finalize_dealer_lp_descriptor_v3(DealerLpFinalizedArtifactsV3 {
+                action,
+                account_profile: &profile,
+                derivation_policy,
+                capacity_profile: &[1],
+                effect_program: &effect,
+                request_profile,
+                execution_strategy: &strategy,
+                transition: &transition,
+            })
+        };
+
+        // Positive control: this fixture reaches the join and passes it, so a
+        // refusal below is the substitution and not the harness.
+        assert!(artifacts(&lifecycle, &request).is_ok());
+
+        // The finding. Selector 9 is the scenario trade -- a real Dealer action
+        // whose policy is a plausible thing to hand the LP finalizer by
+        // mistake -- and the join already knows that is what happened.
+        let substituted = policy_for_action(u32::from(
+            super::super::v3_trade::DEALER_SCENARIO_TRADE_ACTION_V3,
+        ));
+        assert_eq!(
+            artifacts(&substituted, &request),
+            Err(DealerReleaseErrorV3::ProfileJoin(
+                LifecycleErrorV3::ProfileMismatch
+            )),
+        );
+
+        // Negative control: `Geometry` still means what it meant. A corrupted
+        // RequestProfile is caught by the byte-for-byte rederivation, where the
+        // accusation really is one undifferentiated "these are not the bytes",
+        // and the two are now distinguishable in the same run.
+        let mut corrupted = request.clone();
+        let last = corrupted.len().checked_sub(1).expect("request byte");
+        *corrupted.get_mut(last).expect("request byte") ^= 1;
+        assert_eq!(
+            artifacts(&lifecycle, &corrupted),
+            Err(DealerReleaseErrorV3::Geometry),
+        );
     }
 
     #[test]

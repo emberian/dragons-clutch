@@ -254,18 +254,34 @@ route consumed **252,368 of 267,368 compute units and succeeded** --
 `3rDH7V5XoHDPwZEzfoCi6f4mWYaWR3ZrDnjuUuKi1hAjMCqrEttPJNzT4aQRwF2ePYJqnzw6ftADhJYrnMs3cXin`,
 slot 493,003,631.
 
-**The open wall is now certification, not execution, and it is in the plan
-rather than the chain.** The route writes a 416-byte `DCSRCLS3` closure receipt
-and returns the same bytes, and the plan's prediction of that body differs from
-what the program wrote in three `u64` fields and no others: `ledger_rent_lamports`
-(1,991,360 on chain = 392 bytes x 5,080, against 392 x 6,333 in the plan),
-`ledger_lamport_surplus` (491,176 against 0 -- the same 2,482,536 partitioned
-differently, because the deployed program prices from the Rent sysvar of the
-moment and the host prices from the rate the account was funded at), and
-`closed_at`, which is the Clock at EXECUTION against the Clock at PLANNING and
-cannot be predicted at all. Until those are answered, no market can reach this
-row, and that is why retirement has never completed on any chain. The four
-packets themselves are drivable: they are
+**`ResolutionCloseFund` IS ALSO CERTIFIED NOW**, and the wall moved again. Its
+receipt's three disagreeing `u64`s were two questions and both are answered.
+`ledger_rent_lamports` and `ledger_lamport_surplus` are one partition whose sum
+is invariant: the deployed program prices the closing ledger from the Rent
+sysvar of the moment and the host was pricing from the rate the account was
+FUNDED at, so the second question now gets its own author, keyed by the
+Resolution role's checked candidate ELF digest in
+`closure_receipt_projection.rs`. `closed_at` is the Clock at EXECUTION against
+the Clock at PLANNING and cannot be predicted at all, so the poststate model
+admits one interval-bound field -- lower bound the plan's own observation clock,
+upper bound the sequence's `TERMINAL_FINALITY_WAIT`, every other byte still
+exact. Market 1's journal reads phase `finalized`; the gap was nine seconds.
+
+**The open wall is now stage FOUR, `DirectCloseCapability`, which is what takes
+`outstanding_capabilities` to 0, and it is a founding input rather than a
+producer.** `CapabilityFundingHeaderV2::new(physical_count 2, logical_count 1,
+mask 0b1)` refuses at
+`crates/dclutch-operator/src/terminal_retirement_v1.rs:699`, because a header
+counts physical ledgers whose disjoint subsets COVER the logical entries and
+market 1's manifest declares NO dependency edges: all four entries have
+`dependency_count 0`, so the Direct entry's closure is a singleton and can never
+cover the Resolution compartments its close frame preserves. Behind it sits a
+second fact -- stage three closed the Resolution funding ledger that stage four
+decodes and preserves -- which is a question about which stage owns those
+lamports, not a typo. **A cohort that intends to retire must found a manifest
+whose Direct entry declares its Resolution dependencies.** Until then no market
+reaches this row, and that is why retirement has never completed on any chain.
+The four packets themselves are drivable: they are
 808, 864, 864 and 744 bytes against a 1,232-byte packet, and the DEPLOYED Core
 routes all four (`Action::Retire` at
 `RETIREMENT_CHECKPOINT_PREPARE_INSTRUCTION_BYTES_V1` for the prepare, and the

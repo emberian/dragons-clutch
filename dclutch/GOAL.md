@@ -4640,3 +4640,21 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Started 10:00 EDT: PROGRAMS-16C **`(spawned)`** — the General family's four-action campaign on one founded market in one
   bank (the first time in any harness); CAUSES **`(spawned)`** — the two Dealer release joins that discard the lifecycle
   cause behind Geometry, and the class in host-only operators.
+
+### 2026-09-04 10:30 EDT — EMBER'S RULINGS, AS AMENDED
+- COHORT-15H closed (`890b58886`, `58b929640`, `2df2a286a`, `1dd4ba657`, `9f3e9a825`): **ResolutionCloseFund CERTIFIED — the
+  first on any chain**, nothing signed; the closure receipt's rent partition keyed on the deployment's Resolution digest
+  (cohort-15 → the live sysvar; the funded-rate list empty because no deployed program consults one yet); `closed_at` a
+  bounded poststate (plan clock … +300 s; market 1's gap 9 s); `--reconcile-landed`. **Market 1 not retired: stage four
+  (DirectCloseCapability) refuses `Projection` — the capability manifest declares NO dependency edges (four entries, every
+  closure a singleton), frozen at founding, so the Direct entry's closure cannot cover the Resolution compartments its
+  close frame preserves — a founding input, cohort-16's.**
+- Ember on the docket (10:15 EDT): D1 — the upkeep vault is wanted; crank-first fine but measure the first crank; **a
+  governable parameter surface so we are not stuck (prototype the policy we intend to deploy)**; D2 — wants the failure/
+  recovery pathways explained, robust; D4 — mainnet is far, after assurance; D5 — robust failure pathways (keep recovery);
+  D6 — wants the best architectural course understood, not a switch; D7 — build; wants to understand what is refused,
+  underdesigned, and how the product becomes the coherently extrapolated vision of itself; supported_builders — converge
+  by swarmcycles. Lanes: ECONOMICS (amended with the vault charter, the crank cost, the governable record), ESCROW (D2's
+  refund), SERIES (D7 A), RECOVERY (D5's funded ladder), REPRO (cross-host bytes; supported_builders defined), plus
+  PROGRAMS-16C, CAUSES, DECISIONS-2 live. The explainers ember asked for follow as a page.
+- Cuts: `824aaef0d`.

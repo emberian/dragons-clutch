@@ -13,8 +13,8 @@ use alloc::vec;
 use dclutch_account_profile_contract::{
     lifecycle_v3::{
         ACTION_PLAN_BYTES, CURRENT_RENT_QUOTE_BYTES_V5, CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5,
-        HEADER_BYTES, IMMUTABLE_IDENTITY_BINDING_BYTES, PROTECTED_OUTPUT_BYTES, RECIPE_BYTES,
-        SEED_BYTES, StateLifecyclePolicyV5,
+        Error as LifecycleErrorV3, HEADER_BYTES, IMMUTABLE_IDENTITY_BINDING_BYTES,
+        PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SEED_BYTES, StateLifecyclePolicyV5,
         encode::{
             LifecycleAccountCoordinateV3, LifecycleCurrentRentQuoteInputV5, LifecycleGuardInputV3,
             LifecycleImmutableIdentityBindingInputV4, LifecycleOperationInputV3,
@@ -88,6 +88,23 @@ pub enum DealerLpReleaseErrorV4 {
     Strategy,
     /// Descriptor schemas or immutable Dealer identities differed.
     Descriptor,
+    /// The per-action lifecycle/AccountProfile join refused, carrying its cause.
+    ///
+    /// The join is the one conjunct in this module that already knows which
+    /// clause of the policy the profile failed, so it is the one that must not
+    /// be flattened into `Geometry` with the fifteen sites that do not.
+    ///
+    /// Unreachable today, and deliberately kept: `validate_generated_artifacts`
+    /// pins BOTH operands byte-for-byte before it joins them -- the profile
+    /// against `encode_dealer_lp_account_profile_v3` of the same input, the
+    /// policy against `encode_dealer_lp_lifecycle_v5` -- so a substitution
+    /// refuses at the pin with `Geometry` and never reaches here. Measured, not
+    /// assumed: a sweep of every caller-controlled logical data length over
+    /// both actions finalized cleanly or was refused by the encoder, and none
+    /// reached the join. The V3 twin orders the join BEFORE its pin and its
+    /// hostile does fire (`v3_release`), which is why the cause is carried in
+    /// both: the day this pin moves, the answer is already here.
+    ProfileJoin(LifecycleErrorV3),
 }
 
 /// Exact finalized inputs for one selector-7/8 V4 descriptor.
@@ -365,7 +382,7 @@ fn validate_generated_artifacts(
     // and not a finding about the artifacts.
     policy
         .validate_account_profile_for_action(profile, u32::from(action.selector()))
-        .map_err(|_| DealerLpReleaseErrorV4::Geometry)?;
+        .map_err(DealerLpReleaseErrorV4::ProfileJoin)?;
     if policy.action_plan_count(u32::from(action.selector())) != Ok(1)
         || policy.current_rent_quote_count() != 1
     {
