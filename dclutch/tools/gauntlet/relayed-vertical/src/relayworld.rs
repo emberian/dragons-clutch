@@ -169,6 +169,16 @@ impl RelayAddressBookV1 {
             RelayAccountNameV1::CapabilityManifest => self.manifest.raw,
             RelayAccountNameV1::CapabilityManifestStagingVacancy => self.manifest.staging,
             RelayAccountNameV1::ResolutionFunding => self.failure_funding,
+            // This campaign's market buys no alternative sources -- it exists
+            // to prove the silent-relayer walk on a NO-recovery material -- so
+            // it has no policy record to name and the frame that needs one is
+            // not a frame it builds.
+            RelayAccountNameV1::RecoveryPolicy
+            | RelayAccountNameV1::RecoveryPolicyStagingVacancy => {
+                return Err(Error::new(
+                    "this campaign's material selects no recovery policy, so it has no ladder frame",
+                ));
+            }
         })
     }
 

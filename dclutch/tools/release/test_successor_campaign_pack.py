@@ -138,6 +138,78 @@ class SuccessorCampaignPackTests(unittest.TestCase):
         with self.assertRaisesRegex(pack_tool.Refusal, "source toolchain pin"):
             pack_tool.host_substrate_value(summary, "1.97.1")
 
+    def test_a_candidate_off_the_named_builder_artifact_refuses(self) -> None:
+        """The measurement this refusal exists for.
+
+        At one commit, one source tree and one platform-tools version, nine of
+        ten role ELFs differed between hbox (Linux/x86_64) and the laptop
+        (Darwin/arm64), and two causes were convicted rather than one. The
+        prebuilt SBF stdlib's panic locations carry Anza's CI checkout path,
+        which differs per tarball; installing the linux sysroot on macOS made
+        `.rodata` and the file length identical and left 654 bytes of `.text`
+        moved, because cargo's per-unit metadata hash also carries the builder's
+        host triple -- 61 of 76 units took a different `-C metadata`, and the
+        shipped ELF is a function of that hash. So this is not a refusal that a
+        later remap could lift.
+        """
+        base = {
+            "host_rustc_version": "rustc 1.97.1 (fixture)",
+            "host_rustc_verbose_sha256": "12" * 32,
+            "host_cargo_version": "cargo 1.97.1 (fixture)",
+            "host_cc_version": "cc fixture",
+            "host_linker_version": "ld fixture",
+            "host_libc_version": "libc fixture",
+            "host_os": "Linux",
+            "host_arch": "x86_64",
+            "host_kernel": "fixture-kernel",
+        }
+        self.assertEqual(pack_tool.host_substrate_value(base, "1.97.1")["os"], "Linux")
+
+        macos = dict(base, host_os="Darwin", host_arch="arm64")
+        with self.assertRaisesRegex(pack_tool.Refusal, "named release builder"):
+            pack_tool.host_substrate_value(macos, "1.97.1")
+
+        # An architecture the artifact does not name refuses even on Linux.
+        with self.assertRaisesRegex(pack_tool.Refusal, "named release builder"):
+            pack_tool.host_substrate_value(dict(base, host_arch="aarch64"), "1.97.1")
+
+        # And --diagnostic-builder is not a way in: the candidate script stamps
+        # the summary, and the stamp is read.
+        with self.assertRaisesRegex(pack_tool.Refusal, "not a release"):
+            pack_tool.host_substrate_value(
+                dict(base, release_builder="false"), "1.97.1"
+            )
+        # A pack built before the stamp existed still verifies on os/arch alone.
+        self.assertEqual(
+            pack_tool.host_substrate_value(dict(base, release_builder="true"), "1.97.1"),
+            pack_tool.host_substrate_value(base, "1.97.1"),
+        )
+
+    def test_supported_builders_are_hosts_that_run_the_named_artifact(self) -> None:
+        """`local` is not one of them, and that is the whole correction.
+
+        The old list was `local`, `persvati`, `hbox-through-swarm-build`, stated
+        as policy and never measured. `persvati` and `hbox` reproduce each other
+        byte-for-byte on all ten roles because they run the same builder
+        artifact; a macOS `local` build never can. A host joins by running the
+        artifact -- natively, or through a linux/amd64 container.
+        """
+        self.assertNotIn("local", pack_tool.SUPPORTED_BUILDERS)
+        self.assertEqual(
+            set(pack_tool.SUPPORTED_BUILDERS),
+            {"hbox-through-swarm-build", "persvati", "linux-x86_64-container"},
+        )
+        self.assertEqual(pack_tool.RELEASE_BUILDER_HOST_OS, "Linux")
+        self.assertEqual(pack_tool.RELEASE_BUILDER_HOST_ARCH, "x86_64")
+        self.assertIn("release_builder_artifact", pack_tool.PROJECTED_TOOLCHAIN_KEYS)
+
+    def test_reproduction_refuses_rather_than_raising_on_an_older_pack(self) -> None:
+        """`KeyError` is not a refusal, and this file has paid for that before."""
+        pack = self.reproduction_fixture()
+        del pack["toolchains"]["release_builder_artifact"]
+        with self.assertRaisesRegex(pack_tool.Refusal, "predates"):
+            pack_tool.reproduction_projection(pack)
+
     def test_resolution_identity_is_derived_from_source_preimage(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
@@ -406,7 +478,12 @@ class SuccessorCampaignPackTests(unittest.TestCase):
                 "cargo_build_sbf": "cargo-build-sbf 4.0.0",
                 "platform_tools": "1.53",
                 "target_triple": "sbpf-solana-solana",
-                "actual_builder": "local",
+                "release_builder_artifact": {
+                    "platform_tools": "1.53",
+                    "host_os": "Linux",
+                    "host_arch": "x86_64",
+                },
+                "actual_builder": "persvati",
                 "actual_builder_scheduler": "direct",
                 "host_substrate": {
                     "rustc": "rustc 1.97.1 (fixture)",
@@ -502,7 +579,7 @@ class SuccessorCampaignPackTests(unittest.TestCase):
     def test_reproduction_projection_excludes_only_declared_host_nondeterminism(self) -> None:
         left = self.reproduction_fixture()
         right = copy.deepcopy(left)
-        right["toolchains"]["actual_builder"] = "hbox"
+        right["toolchains"]["actual_builder"] = "hbox-through-swarm-build"
         right["toolchains"]["actual_builder_scheduler"] = "swarm-build"
         right["toolchains"]["host_substrate"]["cc"] = "independent cc"
         right["toolchains"]["host_substrate"]["kernel"] = "independent kernel"
@@ -541,7 +618,7 @@ class SuccessorCampaignPackTests(unittest.TestCase):
             output = root / "reproduction.json"
             left = self.reproduction_fixture()
             right = copy.deepcopy(left)
-            right["toolchains"]["actual_builder"] = "hbox"
+            right["toolchains"]["actual_builder"] = "hbox-through-swarm-build"
             right["toolchains"]["actual_builder_scheduler"] = "swarm-build"
 
             def verified(path: Path) -> tuple[Path, dict]:

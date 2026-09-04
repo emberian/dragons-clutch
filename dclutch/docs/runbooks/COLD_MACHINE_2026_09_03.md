@@ -187,6 +187,15 @@ macOS `local` build can never be byte-identical to either. The pack's
 and libc identity" — the shipped SBF ELFs are not excluded, and they carry the
 host OS inside them.
 
+**Two clauses of that paragraph are wrong, and §10 measures both.** *"hbox and
+persvati (both linux-x64) can"* was an inference from a cause, never a
+measurement — §10 runs it, and it is true: ten of ten, byte for byte. And *"the
+cause is one string"*, above, is **half the cause**: removing the string
+entirely, by installing the linux sysroot into the macOS platform-tools, closes
+`.rodata` and the file length exactly and leaves 654 bytes of `.text` moved by a
+second channel nothing here suspected. §10 convicts it, and it is what turns
+`supported_builders` from a list of hosts into one named builder artifact.
+
 ## 4. Runbook and tooling defects, all replayed
 
 | # | where | what it was | how it showed |
@@ -483,3 +492,333 @@ chain. Inspect/export/sign/submit and the twelve-for-twelve signature census are
 routing-table identification above. No interruption was injected or recovered.
 `--through full` (twenty seeds plus seventeen chaos cases) has never been run on
 any host.
+
+---
+
+## 10. The second cause, the named builder artifact, and the cross-host green
+
+**Every command in this section was run**, 2026-09-04, on four substrates: the
+laptop (macOS arm64), hbox (Linux x86-64), persvati (Linux x86-64), and a
+`linux/amd64` container on the laptop. One commit throughout,
+`fe70f076944ab2a7d5379c9f7b2ee074e0af014b` — §3's own commit, so every number
+here is comparable to §3's table without re-deriving it.
+
+The source tree was shipped to each host and fingerprinted before anything was
+built: the SHA-256 of the sorted `<sha256> <path>` manifest of all 3,247 files is
+`32e207323863601bf405857f774e7c4a0ef75a5000498a89bbb0dcf69a428c58` on the
+laptop, on hbox and on persvati. The laptop's and the Linux hosts'
+`platform-tools` are the same upstream build — `anza-xyz/rust` at `7a87f939…`, `clang`/`LLD` 20.1.7 at
+`anza-xyz/llvm-project` `afb02f33…`, `rustc 1.89.0-dev` — differing only in
+which host they were compiled *for*.
+
+**The instrument was verified first, and it reproduces §3 exactly.** A plain
+`cargo build-sbf --manifest-path programs/dclutch-registry-sbf/Cargo.toml --
+--locked` in a scratch directory produced `3a6d615de8cf51fb…` on the laptop and
+`ac50fd36192d187a…` on hbox — the two values §3's table reports for `registry`,
+from scratch roots on different filesystems from the ones that produced them.
+
+### 10.1 The two strings, convicted to the byte
+
+`registry.so` is 240,432 bytes on hbox and 240,440 on the laptop, and every byte
+of that difference traces to two `&'static str` panic locations that Anza's CI
+baked into the prebuilt `alloc`:
+
+| host | `.rodata` offset | length | string |
+| --- | --- | --- | --- |
+| hbox | `0x036fa7` | 83 | `/home/runner/work/platform-tools/platform-tools/out/rust/library/alloc/src/slice.rs` |
+| hbox | `0x0370c5` | 89 | `/home/runner/work/platform-tools/platform-tools/out/rust/library/alloc/src/raw_vec/mod.rs` |
+| laptop | `0x036f1b` | 90 | `/Users/runner/work/platform-tools/platform-tools/out/rust/library/alloc/src/raw_vec/mod.rs` |
+| laptop | `0x036ff2` | 84 | `/Users/runner/work/platform-tools/platform-tools/out/rust/library/alloc/src/slice.rs` |
+
+They are the *only* `platform-tools` strings in either ELF. §3's per-role counts
+re-derive exactly on both packs — three in claims, core, custody,
+dealer-accelerator, resolution and trading; two in registry and rent; one in
+general-accelerator; **zero in series-shadow** — and the third string, which §3
+counted but never named, is `core/src/iter/traits/iterator.rs`.
+
+Note that the two also appear in the **opposite order**, which is the first hint that a byte-for-byte
+rewrite could never have been the remedy: they differ in length, so
+canonicalizing them shifts `.rodata` and every address behind it — a relink, not
+a rewrite.
+
+Per section:
+
+| section | hbox | laptop | differing bytes in the overlap |
+| --- | --- | --- | --- |
+| `.text` | 224,752 | 224,752 | 2,215 |
+| `.rodata` | 5,352 | 5,360 | 4,560 |
+| `.data.rel.ro` | 2,120 | 2,120 | 115 |
+| `.dynamic` | 176 | 176 | 3 |
+| `.dynsym` / `.dynstr` / `.shstrtab` | — | — | **identical** |
+| `.rel.dyn` | 6,560 | 6,560 | 145 |
+
+`.text` is the same *size* and differs in 2,215 bytes: those are `.rodata`
+addresses shifted by eight, exactly as §3 said.
+
+### 10.2 Removing the string is not enough, and that is the finding
+
+`--remap-path-prefix` cannot reach a prebuilt `.rlib`, but the *sysroot* can be
+replaced. The linux-x64 tarball's `rust/lib/rustlib/sbpf-solana-solana/` holds
+only target artifacts, so it was installed into a copy of the macOS
+platform-tools and the laptop built `registry.so` against it. Four cells, one
+commit, one source tree:
+
+| host | `sbpf-solana-solana` sysroot | `registry.so` |
+| --- | --- | --- |
+| hbox | linux (stock) | `ac50fd36192d187a…` |
+| laptop | macOS (stock) | `3a6d615de8cf51fb…` |
+| laptop | **linux (installed)** | `719622c07bdd51c2…` |
+| hbox | **macOS (installed)** | `d08680dc6bf968df…` |
+
+Four distinct values, so there are **two** inputs, not one. And the third cell
+against hbox's first shows exactly how far the string went:
+
+| section | result |
+| --- | --- |
+| `.rodata` | **identical**, 5,352 bytes, both strings now `/home/runner/…` in hbox's order |
+| `.dynamic`, `.dynsym`, `.dynstr`, `.shstrtab` | **identical** |
+| file length, `e_shoff` | **identical** (240,432 / `0x3a8f0`) |
+| `.text` | 654 bytes differ, in 55 runs |
+| `.data.rel.ro` | 13 bytes differ |
+| `.rel.dyn` | 14 bytes differ |
+
+The residue is not noise, and it is not codegen either. The large runs are the
+same instruction sequences with a block moved: at `.text+0x232` one side carries
+a three-instruction block that the other carries later, and the single-byte runs
+around it are branch displacements differing by exactly one instruction. That is
+a layout difference.
+
+### 10.3 The second cause: cargo's per-unit metadata hash carries the host triple
+
+With one source tree, one sysroot, one `rustc 1.89.0-dev` and the same
+`rust-toolchain.toml` pin, **61 of the 76 dependency `.rlib`s took a different
+`-C extra-filename` hash on the laptop than on hbox** — different filenames, not
+merely different contents. Of the 15 whose names *did* match, 14 were
+byte-identical.
+
+The split is exact and mechanical: cargo computes a unit's `-C metadata` from
+its dependency units' metadata, and **build-script and proc-macro units are HOST
+units**. Every crate whose closure contains one inherits the builder's host
+triple. The 14 identical ones — `bytemuck`, `log`, `lazy_static`,
+`sha2-const-stable`, `solana-define-syscall` (all three feature sets),
+`solana-atomic-u64`, `solana-native-token`, `solana-sanitize`,
+`dclutch-core-contract`, `dclutch-record-contract`,
+`dclutch-refusal-registry`, `dclutch-capability-seal-contract` — are exactly the
+ones with neither.
+
+**And the shipped ELF is a function of that hash.** The decisive experiment
+changes nothing else at all — same host, same sysroot, same source, same flags,
+only the value of `__CARGO_DEFAULT_LIB_METADATA`:
+
+```
+__CARGO_DEFAULT_LIB_METADATA=AAA   registry.so  c4eb97562efa57d05d9b3a4f37cf22f9…
+__CARGO_DEFAULT_LIB_METADATA=BBB   registry.so  4f711ce1bceb87700b6e0277937f6447…
+```
+
+So the three remedies the lane was sent to measure all fail, and they fail for
+reasons worth writing down once:
+
+- **Post-link canonicalization of the panic strings.** The strings differ in
+  length; canonicalizing them is a relink. And it reaches none of cause 2.
+- **`-Z build-std` with `--remap-path-prefix`, or `panic_immediate_abort`.**
+  Both rebuild the standard library, so both move the frame manifest — and
+  neither reaches cause 2 either.
+- **Pinning one platform-tools tarball.** Necessary, not sufficient: it *is*
+  the third cell above, and it leaves 654 bytes.
+
+**No source change, no flag, and no post-processing can make two different host
+triples emit the same SBF bytes.** Only pinning the host triple can, which is
+why `supported_builders` had to stop naming hosts and start naming an artifact.
+
+### 10.4 `supported_builders`, defined
+
+**The release is the bytes ONE builder artifact produces, and
+`supported_builders` names the hosts that run that artifact.** The artifact is
+**platform-tools v1.53 on `Linux/x86_64`**, with the host Rust channel
+`rust-toolchain.toml` pins. Its members:
+
+| member | how it runs the artifact |
+| --- | --- |
+| `hbox-through-swarm-build` | natively, inside `swarm-build` |
+| `persvati` | natively |
+| `linux-x86_64-container` | any other machine, in a `linux/amd64` container — the laptop's route |
+
+A native macOS build is a **diagnostic** build: real sources, real compilation,
+useful for finding a defect, and not a release. `--diagnostic-builder` is how to
+make one deliberately; it stamps `release_builder=false` and every pack built
+from that candidate refuses.
+
+### 10.5 The cross-host green, ten roles, twice
+
+**persvati against hbox, native, both running the named artifact.** persvati is
+a different machine: different kernel (`6.17.0-40-generic` against
+`6.11.0-29-generic`), different `$HOME`, different absolute build paths, `cc`
+15.2.0 against hbox's. The comparison is against §3's own hbox column
+(`candidate-6`, the hbox half of §3's pair), so these are §3's numbers with a
+third column added:
+
+| role | hbox | persvati | laptop, `linux/amd64` container | laptop, native (§3) |
+| --- | --- | --- | --- | --- |
+| claims | `9c8076bf7a971b5f…` | **identical** | **identical** | `bc264881e7dda322…` |
+| core | `78da365ad2eed48e…` | **identical** | **identical** | `a073b24e9100d300…` |
+| custody | `7e4e4745de129249…` | **identical** | **identical** | `b4bd159c097d94b9…` |
+| dealer-accelerator | `5162692bb47683d9…` | **identical** | **identical** | `82c5441fb30ac5b7…` |
+| general-accelerator | `b27888978651c770…` | **identical** | **identical** | `c8bf00c8ed315b88…` |
+| registry | `ac50fd36192d187a…` | **identical** | **identical** | `3a6d615de8cf51fb…` |
+| rent | `332979111ea18a26…` | **identical** | **identical** | `738d847981f60815…` |
+| resolution | `cf9a710b94c41c6e…` | **identical** | **identical** | `1af6c374e7785e3d…` |
+| series-shadow | `548dae10fb82be4e…` | **identical** | **identical** | identical |
+| trading | `8c0f57f882083256…` | **identical** | **identical** | `7e581f12c89a56cf…` |
+
+**Ten of ten, twice.** persvati's column is a full
+`checked-release-candidate.sh --genesis-cohort --builder persvati` run,
+`CANDIDATE_EXIT=0`, `sbf_build_freshness_links=12`. The container column is a
+`debian:bookworm-slim` `linux/amd64` container **on the laptop**, cold
+toolchain built by §1's recipe inside it — so the machine that produces §3's
+right-hand column also produces its left-hand one, when it runs the named
+artifact instead of its own.
+
+### 10.6 The release identities, and the shipped projection function
+
+Every identity §3 reported as diverging is now equal, hbox against persvati:
+
+| field | hbox `candidate-6` | persvati | laptop, native (§3) |
+| --- | --- | --- | --- |
+| `source_digest` | `4244e275797ccc43…` | **equal** | — |
+| `cargo_lock_set_sha256` | `0670b453c77ceb30…` | **equal** | — |
+| `multiprogram.execution_release_set_id` | `457ebc6e977e4bd6…` | **equal** | `804c026ca7f85903…` |
+| `multiprogram.checked_execution_release_set_id` | `cb2f40463297a8b8…` | **equal** | — |
+| `infrastructure.checked_infrastructure_id` | `8350f3fee3fe5e1e…` | **equal** | `7ac4e2d9d6e121b1…` |
+| `infrastructure.profile_sha256` | `f27c4c2b11150523…` | **equal** | `003250c486ed2833…` |
+| `infrastructure.genesis_profile_v2_sha256` | `7dfc1eb1a689c1dd…` | **equal** | — |
+
+And the whole comparison, computed the way §3 says it must be — verify each
+pack on its own host, then compare the shipped projection function's output:
+
+```
+hbox      projection_sha256 0e50ca5658ec2d07a250ebeb8ea1dae7d61f415e63cb2c59726ad0f155863db2
+persvati  projection_sha256 0e50ca5658ec2d07a250ebeb8ea1dae7d61f415e63cb2c59726ad0f155863db2
+```
+
+Section for section: `toolchains` `867e4e0f…`, `artifacts` `137f36f3…`,
+`release` `e18170f0…`, `ceilings` `5828269f…` with **12 frame rows** — all four
+equal. §3's cross-builder projection differed in `toolchains`, `artifacts` and
+`release`; between two hosts running the named artifact it differs in nothing.
+
+Two notes on how that was computed, because both are findings:
+
+- `verify_pack` binds the Product-handoff smoke's ABSOLUTE run paths, so a pack
+  cannot be verified on the other host — §3's finding, unchanged, and the reason
+  `compare-packs` is still not a cross-host command.
+- `reproduction_projection` at `fe70f076` **raises `KeyError` on a genesis
+  pack**, which is §4 defect 5's shape surviving in the one function §3 said it
+  had used. HEAD's copy carries the `release.get(...)` fix, so the projections
+  above were computed with HEAD's function over each pack verified by its own.
+  This lane's change adds the same guard for the toolchain keys: a pack that
+  predates a projected field now **refuses** rather than raising.
+
+### 10.7 What changed, and what is owed
+
+`supported_builders` is now `hbox-through-swarm-build`, `persvati`,
+`linux-x86_64-container`, beside a `release_builder_artifact` record naming
+platform-tools and `Linux/x86_64`. `checked-release-candidate.sh` refuses a
+non-artifact host after every argument check and before any source or build
+work, and `--diagnostic-builder` is the stated way past it; it stamps
+`release_builder=false`, which `successor_campaign_pack.py` refuses.
+`reproduction_projection` carries `release_builder_artifact`, so two packs are
+compared only when they name the same producer. `tools/cohort`'s
+`redeploy-named-builder` row states the artifact from cohort 16 on, replacing a
+verifier whose "second detached worktree" clause named the build-path control
+and called it the reproduction.
+
+**Owed, and not this lane's:**
+
+- `tools/release/private-validator-lifecycle/test_preflight.py` is 15 failures
+  and 3 errors at HEAD, on `runner TERMINAL_SESSION_SCHEMA differs from semantic
+  owner tools/local-validator/bootstrap/successor/src/terminal_sequence.rs`. It
+  is the only red row in `tools/ci/run.sh release` after this lane's nine
+  additions, and it belongs to whoever owns that schema.
+- `tools/cohort`'s `found-general-family` row has no README heading, so
+  `check-steps.py --cohort 16` refuses for a row this lane did not write.
+- The two release-path breakages in §10.8: one fixed here, one owed by SERIES,
+  and together they mean **no checked release candidate completes at HEAD**.
+- The frame ratchet is red for four commits from ECONOMICS, SERIES and RECOVERY.
+  This lane touches no crate compiled into an SBF link and owes no rows.
+
+**Not done here:** the `linux-x86_64-container` recipe is a bare
+`debian:bookworm-slim` plus §1's cold toolchain, run by hand. It is not a
+committed image, not pinned by digest, and not wired into any runner — so the
+laptop's route to the supported set is measured and reproducible but not yet
+one command.
+
+### 10.8 The same result at a second commit, and the two things that stop a candidate at HEAD
+
+Everything above is one commit, so it was run again at another: `7d2f91e5f`,
+this lane's own HEAD, 30 commits later with real program changes from four other
+lanes in between. hbox and persvati, both `--genesis-cohort`, the release
+runner's own per-package target layout on each:
+
+| role | `fe70f076` | `7d2f91e5f` | hbox vs persvati at `7d2f91e5f` |
+| --- | --- | --- | --- |
+| claims | `9c8076bf7a971b5f…` | `5449a2742d14a476…` | **identical** |
+| core | `78da365ad2eed48e…` | `5f73bf5f03a873a5…` | **identical** |
+| custody | `7e4e4745de129249…` | `5c1f1198dcbb3326…` | **identical** |
+| dealer-accelerator | `5162692bb47683d9…` | `5ded31423ec9dae4…` | **identical** |
+| general-accelerator | `b27888978651c770…` | unchanged | **identical** |
+| registry | `ac50fd36192d187a…` | `6d4792d5a2c16359…` | **identical** |
+| rent | `332979111ea18a26…` | unchanged | **identical** |
+| resolution | `cf9a710b94c41c6e…` | `d37b13bf5984d54c…` | **identical** |
+| series-shadow | `548dae10fb82be4e…` | unchanged | **identical** |
+| trading | `8c0f57f882083256…` | `09692b8b70eb0d80…` | **identical** |
+
+Seven roles moved between the two commits and three did not, and every one of
+the ten agrees across the two hosts. The result is not a property of one commit.
+
+**Neither run finished, and the two reasons are both cross-lane debts on the
+release path that this campaign found by trying to use it.**
+
+1. **`tools/local-validator/bootstrap/successor/Cargo.lock` did not carry a
+   dependency edge.** `06008f46b` (ECONOMICS) made `dclutch-direct-codec`
+   depend on `dclutch-protocol-parameters-contract`; that workspace is the
+   source-pinned **Product producer**, built `--locked --offline` at
+   `checked-release-candidate.sh:938`, so every candidate at HEAD refused there
+   — §4 defect 3's exact shape, a nonzero exit whose reason is only in
+   `product-handoff/build.log`. **Fixed in `7d2f91e5f`**, eight cargo-generated
+   lines. **Twenty-five other workspaces are red the same way and are not**:
+   `tools/dclutch-cli`, `tools/devnet-scenarios`, `tools/ticket-board`,
+   `tools/direct-translation-validator`, `crates/dclutch-svm-harness`, three
+   `tools/gauntlet` workspaces and seventeen `programs/*/program-test`
+   workspaces. The root workspace is green, so the SBF links were never at risk.
+   One command per workspace is the whole discriminator:
+   `cargo metadata --locked --offline`.
+
+2. **`SeriesCurrentReleaseInputV5` gained a field and one consumer was not
+   swept.** `97ce7a748` (SERIES) added `template_occurrence_count`;
+   `tools/local-validator/bootstrap/successor/src/series_terminal_campaign.rs:823`
+   still constructs the struct without it, so the Product producer fails to
+   compile at committed HEAD with `E0063`. **Not fixed here, deliberately**: the
+   field's own documentation calls it release geometry — a one-occurrence
+   Template pins 128 bytes and declares no proof range, an `n > 1` Template pins
+   `128 + 32 * ceil(log2 n)` and declares one — and the campaign struct carries
+   no occurrence count to read it from. The operator's test passes `1`; writing
+   `1` here would be choosing a release geometry by guess. The question that
+   belongs to SERIES is: **what is this campaign's Template occurrence count,
+   and which of its inputs already knows it?**
+
+So **no checked release candidate can be completed at HEAD today**, and neither
+half of that is this lane's. What the two runs do prove is the part upstream of
+them: twelve fresh SBF links, `sbf_build_freshness=passed`, and the ten shipped
+ELFs identical across two hosts running the named builder artifact.
+
+**One more thing the pack tool proved about itself.** The new
+`successor_campaign_pack.py` `emit` was run against the real `fe70f076`
+persvati candidate and wrote the intended block —
+`supported_builders` = `hbox-through-swarm-build`, `persvati`,
+`linux-x86_64-container`, beside
+`release_builder_artifact = {platform_tools 1.53, Linux, x86_64}`. `verify` on
+that pack then **refused**: *"executing campaign pack verifier differs from the
+pack's exact source revision"*. That is correct and is worth writing down — the
+verifier binds itself to the candidate's own source copy, so a pack cannot be
+verified by a tool the candidate did not contain. It also means a full
+emit-and-verify of this change needs a candidate whose source IS this commit,
+which is what item 2 above blocks.

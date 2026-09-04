@@ -272,6 +272,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-capability-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-sha256-adapter",
+]
+
+[[package]]
 name = "dclutch-capability-seal-contract"
 version = "0.1.0"
 
@@ -305,6 +313,7 @@ dependencies = [
 name = "dclutch-custody-sbf"
 version = "0.1.0"
 dependencies = [
+ "dclutch-capability-contract",
  "dclutch-claims-svm",
  "dclutch-core-contract",
  "dclutch-custody-contract",

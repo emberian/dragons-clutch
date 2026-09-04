@@ -44,6 +44,18 @@ escrow one lamport short of what the market promised.
 The signatures are cryptographically real; everything they attest is synthetic,
 so this is neither devnet nor mainnet evidence.
 
+> **STALE, and kept as history rather than corrected in place.** The campaign
+> below is `resolution_successor.rs`, which is `#[ignore]`d: its two instruction
+> builders have been `panic!` stubs since `d1325c7f`, and the V1 funded ABI it
+> drove was deleted with the rest of that generation. Its "funded recovery" and
+> "funded exhaustion" rows measure a route that no longer exists. **The live
+> ladder's numbers are in `resolution_core_v3_lifecycle.rs`**
+> (`a_two_source_market_walks_its_funded_ladder_and_every_rung_pays_a_stranger`,
+> decision 0027): advance **216,637**, exhaust **218,163**, terminal **227,662**
+> compute units, on the current Core, Custody, Registry and Resolution ELFs.
+> Nothing below has been re-measured; read it as a record of what the retired
+> campaign once cost.
+
 The successor Resolution campaign executes the compiled Registry and
 Resolution ELFs against the provenance-pinned local-validator projection of
 the captured Pyth receiver/router programs and account bodies. It covers one

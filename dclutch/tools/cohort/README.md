@@ -90,6 +90,24 @@ available — `AGENTS.md` permits full redeploys only. What proves the deployed
 bytes carry the new derivation is `openbatch-refounded`, on chain, and nothing
 before it.
 
+### redeploy-named-builder
+
+`redeploy`, with the reproduction clause repaired. Until cohort 16 the verifier
+said *"reproduced byte-identically from a second detached worktree"*, which does
+not say **same host** — and run across two hosts it was guaranteed to fail, for
+a reason that has nothing to do with the deploy. Two worktrees on one machine
+are the **build-path control**: they prove the absolute path is not an input,
+and they prove nothing about reproduction.
+
+Reproduction is a **second host running the named release builder artifact**:
+platform-tools v1.53 on `Linux/x86_64`, whose supported builders are
+`hbox-through-swarm-build`, `persvati`, and `linux-x86_64-container` — any other
+machine running that artifact in a `linux/amd64` container. A native macOS build
+of the same commit differs in nine of ten roles and cannot be made to agree; the
+measurement and its two causes are `docs/runbooks/COLD_MACHINE_2026_09_03.md`
+§10, and `tools/release/README.md` under "One builder artifact" is the standing
+statement.
+
 ### record-core-digest
 
 Put the deployed Core's ELF sha256 into

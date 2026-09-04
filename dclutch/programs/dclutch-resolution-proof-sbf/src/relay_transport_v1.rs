@@ -1535,10 +1535,12 @@ const fn map_funded_walk_error(error: FundedWalkErrorV1) -> ResolutionError {
 ///
 /// A consumption walks material → spec → provider release → configuration →
 /// window → venue, because it has to interpret bytes a provider signed. This
-/// walk interprets nothing: it needs the material (for the Product record and
-/// the absence of a recovery policy) and the window (for the deadline), and
-/// naming any of the others would make the route depend on the party that has
-/// stopped answering.
+/// walk interprets nothing: it needs the material (for the Product record) and
+/// the window (for the deadline), and naming any of the others would make the
+/// route depend on the party that has stopped answering.
+///
+/// The recovery crank reads the same two records and one more, which is why it
+/// shares this function rather than growing a second Source walk beside it.
 #[inline(never)]
 fn deadline_walk_source(
     registry: &Pubkey,

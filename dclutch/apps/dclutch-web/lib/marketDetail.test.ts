@@ -17,6 +17,7 @@ import {
   inspectMarketDetailV1,
   liabilityProvenanceV1,
   marketPhaseMeaningV1,
+  outageDisclosureV1,
   realmProvenanceV1,
   requiredBackingMeaningV1,
   terminalOutcomeMeaningV1,
@@ -239,5 +240,86 @@ describe('what a resolved market\'s answer means for a holder', () => {
     // outcome won. Saying "the source never reported" off an unread width
     // would be an invented fact on the page's most load-bearing sentence.
     expect(terminalOutcomeMeaningV1({ winner: 0, outcomeCount: 0 }).sourceFailure).toBe(false);
+  });
+});
+
+describe('outageDisclosureV1', () => {
+  const cohort13 = {
+    outcomeCount: 4,
+    supplyAtoms: ['500000000', '500000000', '500000000', '500000000'],
+  };
+  const founder = 'FBYW95Fo';
+  const stranger = 'BVBriJDj';
+
+  it('names the founder when the founder holds the whole failure column', () => {
+    // Cohort-13's measured table, 2026-09-02, before anything moved.
+    const disclosure = outageDisclosureV1({
+      ...cohort13,
+      positions: [
+        { owner: founder, balances: ['499999800', '500000000', '500000000', '500000000'] },
+        { owner: stranger, balances: ['200', '0', '0', '0'] },
+        { owner: 'H1cYAJL3', balances: ['0', '0', '0', '0'] },
+      ],
+    });
+    expect(disclosure).not.toBeNull();
+    expect(disclosure!.failureOutcome).toBe(3);
+    expect(disclosure!.complete).toBe(true);
+    expect(disclosure!.holders).toHaveLength(1);
+    expect(disclosure!.holders[0]!.owner).toBe(founder);
+    expect(disclosure!.holders[0]!.wholeColumn).toBe(true);
+    expect(disclosure!.payee).toContain(founder);
+    expect(disclosure!.payee).toContain('every one of the 500000000 atoms');
+    // The stranger who bought a real outcome is named nowhere in the payee,
+    // which is the whole point of showing it before somebody trades.
+    expect(disclosure!.payee).not.toContain(stranger);
+  });
+
+  it('reports what it could not see rather than presenting a partial read as the answer', () => {
+    const disclosure = outageDisclosureV1({
+      ...cohort13,
+      positions: [{ owner: founder, balances: ['499999800', '500000000', '500000000', '400000000'] }],
+    });
+    expect(disclosure!.complete).toBe(false);
+    expect(disclosure!.accountedAtoms).toBe('400000000');
+    expect(disclosure!.unaccountedAtoms).toBe('100000000');
+    expect(disclosure!.payee).toContain('partial answer');
+    expect(disclosure!.payee).toContain('100000000');
+  });
+
+  it('splits the column between holders in proportion, and says so', () => {
+    const disclosure = outageDisclosureV1({
+      ...cohort13,
+      positions: [
+        { owner: founder, balances: ['0', '0', '0', '250000000'] },
+        { owner: stranger, balances: ['0', '0', '0', '250000000'] },
+      ],
+    });
+    expect(disclosure!.complete).toBe(true);
+    expect(disclosure!.holders).toHaveLength(2);
+    expect(disclosure!.holders.every((holder) => !holder.wholeColumn)).toBe(true);
+    expect(disclosure!.payee).toContain('2 holders split');
+  });
+
+  it('says an outage pays nobody when nothing is issued on the failure outcome', () => {
+    const disclosure = outageDisclosureV1({
+      outcomeCount: 4,
+      supplyAtoms: ['500000000', '500000000', '500000000', '0'],
+      positions: [{ owner: founder, balances: ['500000000', '500000000', '500000000', '0'] }],
+    });
+    expect(disclosure!.payee).toContain('pays nobody');
+  });
+
+  it('refuses rather than guessing when the read does not line up', () => {
+    expect(outageDisclosureV1({ outcomeCount: 4, supplyAtoms: ['1', '1', '1'], positions: [] })).toBeNull();
+    expect(outageDisclosureV1({ outcomeCount: 1, supplyAtoms: ['1'], positions: [] })).toBeNull();
+    expect(outageDisclosureV1({ outcomeCount: 4, supplyAtoms: ['1', '1', '1', 'x'], positions: [] })).toBeNull();
+    // A Position of another width is not this market's, so it contributes
+    // nothing rather than being read at the wrong coordinate.
+    const narrow = outageDisclosureV1({
+      ...cohort13,
+      positions: [{ owner: founder, balances: ['1', '2', '3'] }],
+    });
+    expect(narrow!.holders).toHaveLength(0);
+    expect(narrow!.payee).toContain('cannot say who an outage would pay');
   });
 });

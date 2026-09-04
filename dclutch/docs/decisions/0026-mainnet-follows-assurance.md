@@ -74,6 +74,26 @@ its own build path. Ember's disposition, `GOAL.md:4656`: **converge by
 swarmcycles** — the definition is reached by iterating the lane, not by ruling
 on it now.
 
+**PRODUCED 2026-09-04 (REPRO), and the control this record named did not
+falsify it.** The definition is the one this record predicted, with the subject
+narrowed from a host to an artifact: **`supported_builders` names the hosts that
+run ONE builder artifact, and that artifact's bytes are the release.** The
+artifact is platform-tools v1.53 on `Linux/x86_64` with the host Rust channel
+`rust-toolchain.toml` pins; its members are `hbox-through-swarm-build`,
+`persvati`, and `linux-x86_64-container` — any machine running the artifact in a
+linux/amd64 container, which is how the laptop joins. A native macOS build is a
+diagnostic build, and `--diagnostic-builder` is the only way to make one.
+
+**The control was run and it holds.** *"If two supported builders cannot produce
+identical bytes, C-14 does not close on devnet either"* — persvati against hbox,
+one commit, **ten of ten role ELFs byte-identical**, and the shipped projection
+function's output equal section for section, so `execution_release_set_id`,
+`checked_infrastructure_id` and `infrastructure_profile_sha256` are equal too.
+The laptop reproduces the same ten in a `linux/amd64` container. `docs/runbooks/COLD_MACHINE_2026_09_03.md`
+§10 carries the measurement and the two causes it convicted, the second of which
+— cargo's per-unit metadata hash carrying the builder's host triple — is why the
+subject had to become an artifact rather than a host OS.
+
 The C-16 rehearsal spoke walks the seventeen rows against current source and
 produces the entry list before the spine's cohort closes, so what assurance
 actually requires is a hostile's list rather than the orchestrator's estimate.

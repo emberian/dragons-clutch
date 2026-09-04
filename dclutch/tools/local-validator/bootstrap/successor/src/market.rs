@@ -13798,31 +13798,31 @@ fn pyth_market_input_base(
         ));
     }
 
-    // NO ORDERED RECOVERY WALK. A material that buys one has no terminal at
-    // all: `SourceResolutionStateV2::exhaust_after_primary_deadline` refuses
-    // `recovery_policy().is_some()` outright, and the ladder meant to consume
-    // the paid-for legs (`funded::process_funded_transition`) has one call
-    // site, under `#[cfg(any())]`. Core welded that shut on creation
-    // (`recovery_walk_has_a_live_route`, `CoreSbfError::RecoveryWalkUnavailable`
-    // 0x3011, commit 12d0deb5) and the off-chain builder mirrors it, so a
-    // recovery market's `CreateFund` refuses OFFLINE, in
-    // `build_resolution_create_fund_v3`, before any transaction -- which is
-    // exactly where every founding this driver produced stopped, three of six
-    // mutations in, once the founding itself went green.
+    // NO ORDERED RECOVERY WALK, and it is now a CHOICE rather than a wall.
     //
-    // So this market is the section-12.7/12.8 no-recovery shape the weld leaves
-    // live: the funded `Primary -> Exhausted -> FailureCommitted` walk to the
-    // Product's own pre-disclosed failure outcome. Its record set is two
-    // accounts narrower (no recovery-policy pair) and its funding entries are
-    // selected structurally rather than by allocation identity --
+    // It used to be a wall: a material that bought a ladder had no terminal at
+    // all, Core welded `CreateFund` shut against it, and the off-chain builder
+    // mirrored the weld, so a recovery market's founding refused OFFLINE before
+    // any transaction. Decision 0027 built the ladder --
+    // `RelayActionV1::AdvanceRecovery` advances the funded attempt and exhausts
+    // into the failure commit, walked end to end on real ELFs in
+    // `resolution_core_v3_lifecycle.rs` -- and the weld is deleted.
+    //
+    // This market stays the section-12.7/12.8 no-recovery shape because that is
+    // what this driver is for: the funded `Primary -> Exhausted ->
+    // FailureCommitted` walk to the Product's own pre-disclosed outcome, on a
+    // market that bought no alternatives. Its record set is two accounts
+    // narrower (no recovery-policy pair) and its funding entries are selected
+    // structurally rather than by allocation identity --
     // `authenticate_no_recovery_entries` in Core and
     // `select_resolution_funding_entries` in the operator. The relayed family
     // already founds and funds this shape in execution (2026-08-27: CreateFund
     // 1,200,587 CU, VerifyFundReady 1,185,248 CU).
     //
-    // Restoring the recovery shape here means restoring Q2's build half first
-    // (give `RecoveryAdvanced`/`Exhausted` real routes, then delete
-    // `recovery_walk_has_a_live_route`) -- not re-adding these bytes.
+    // Founding the two-source shape here is now a matter of naming the policy
+    // in the material and pinning the three compartments to it -- one advance,
+    // one exhaustion, one failure -- which is exactly what
+    // `authenticate_funding_entries` requires. It is owed, not blocked.
     let material = SourceMaterialV3::explicitly_unbounded(
         SourceContentId::new(product_digest)
             .map_err(|error| Error::new(format!("demo Product digest: {error:?}")))?,

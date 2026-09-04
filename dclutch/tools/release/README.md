@@ -341,35 +341,112 @@ SWARM_MEM_MAX=32G CARGO_BUILD_JOBS=4 swarm-build \
 Measured cost of one clean genesis candidate: **447-455 s on hbox** (24 cores,
 co-tenant, `CARGO_BUILD_JOBS=4`), **526-619 s on the laptop** (macOS arm64).
 
-## Cross-host reproduction is scoped to one platform-tools host OS
+## One builder artifact
 
-Measured 2026-09-03 at three commits, hbox (Linux x86-64) against the laptop
-(macOS arm64), both on `cargo-build-sbf 4.0.0` / `platform-tools v1.53` /
-`rustc 1.89.0`:
+**The release is the bytes ONE builder artifact produces**, and
+`supported_builders` names the hosts that run *that artifact*. It is not a set
+of hosts asserted to agree; the previous list -- `local`, `persvati`,
+`hbox-through-swarm-build` -- was policy that had never been measured, and when
+it was measured it was false.
 
-- **Same host, two different absolute `--work` roots: all ten ELFs
-  byte-identical.** The build path is NOT an input.
-- **Across the two hosts: nine of the ten differ, and `series-shadow.so` is
-  byte-identical.**
+The named artifact is **platform-tools v1.53 on Linux/x86_64**, with the host
+Rust channel `rust-toolchain.toml` pins. `checked-release-candidate.sh` refuses
+on any other host in its first second, and every pack built from a candidate
+that says otherwise refuses.
 
-The whole difference is one string. `platform-tools`' own Rust standard library
-was compiled on Anza's CI runner and carries that runner's absolute source paths
-in the panic locations it embeds in `.rodata`:
-`/home/runner/work/platform-tools/...` in the linux-x64 tarball and
-`/Users/runner/work/platform-tools/...` in the darwin-arm64 one. Nine roles
-embed one to three of those strings; `series-shadow` embeds none, which is
-exactly why it is the one that reproduces. The extra byte shifts `.rodata`, and
-every address in `.text`, `.data.rel.ro`, `.dynamic` and `.rel.dyn` shifts with
-it, so the divergence looks like a codegen difference and is not one.
+### The measurement
 
-So `supported_builders` -- `local`, `persvati`, `hbox-through-swarm-build` --
-is a set whose members can only reproduce each other **within one
-platform-tools host OS**. `hbox` and `persvati` (both linux-x64) reproduce; a
-macOS `local` build can never be byte-identical to either, and
-`compare-packs` correctly refuses that pair. `excluded_nondeterminism` says it
-excludes "host OS, kernel, C toolchain, and libc identity" -- the shipped SBF
-ELFs are not excluded and they carry the host OS inside them, which is the
-distinction that sentence was missing.
+Measured 2026-09-03 (hbox against the laptop, ten roles) and 2026-09-04
+(the causes, on `registry.so`, and persvati against hbox, ten roles), all at
+commit `fe70f076`, `cargo-build-sbf 4.0.0` / `platform-tools v1.53` /
+`rustc 1.89.0` on every host:
+
+| pair | result |
+| --- | --- |
+| one host, two absolute `--work` roots | **all ten identical** -- the build path is not an input |
+| hbox (Linux x86-64) vs laptop (macOS arm64) | **nine of ten differ**; only `series-shadow` reproduces |
+| **persvati (Linux x86-64) vs hbox (Linux x86-64)** | **all ten identical** |
+| **the laptop in a `linux/amd64` container vs hbox** | **all ten identical** |
+
+The third row is the one C-14 needed and never had, and it is what makes the
+first two mean something: two independent machines, different kernels,
+different `$HOME`, different absolute build paths, a fresh per-package target
+directory on one side and the release runner's on the other, and the ten
+shipped ELFs agree byte for byte. The whole pack projection agrees too --
+`toolchains`, `artifacts`, `release` and `ceilings`, `projection_sha256
+0e50ca5658ec2d07...` on both hosts -- so `execution_release_set_id`,
+`checked_infrastructure_id` and `infrastructure_profile_sha256`, the three §3
+reported as diverging, are equal.
+
+The fourth row is the same laptop that produces row two's right-hand side. Run
+the named artifact instead of its own and it produces row two's left-hand side
+instead, all ten.
+
+### Why a macOS build can never join, and why it is two reasons
+
+**Cause 1 -- the prebuilt standard library carries Anza's CI checkout path.**
+`platform-tools` ships `core` and `alloc` already compiled, and their
+`core::panic::Location` file strings are the paths of the machine Anza built
+them on. In `registry.so` there are exactly two, and they are the whole of
+`.rodata`'s divergence:
+
+```
+hbox    /home/runner/work/platform-tools/platform-tools/out/rust/library/alloc/src/slice.rs        (83 bytes)
+laptop  /Users/runner/work/platform-tools/platform-tools/out/rust/library/alloc/src/slice.rs       (84 bytes)
+hbox    /home/runner/work/platform-tools/platform-tools/out/rust/library/alloc/src/raw_vec/mod.rs  (89 bytes)
+laptop  /Users/runner/work/platform-tools/platform-tools/out/rust/library/alloc/src/raw_vec/mod.rs (90 bytes)
+```
+
+`/Users/` is one byte longer than `/home/`, `.rodata` rounds up by eight, and
+every address behind it moves -- which is why the difference reads as codegen
+and is not. Three such strings in claims, core, custody, dealer-accelerator,
+resolution and trading; two in registry and rent; one in general-accelerator;
+**zero in series-shadow**, which is exactly why series-shadow was the one role
+that reproduced. `--remap-path-prefix` cannot reach any of them: they are data
+in a prebuilt `.rlib`, not a path the local compiler is given.
+
+**Cause 2 -- cargo's per-unit metadata hash carries the builder's host triple,
+and nothing about the ELF is downstream of a string.** Installing the linux-x64
+`sbpf-solana-solana` sysroot into the macOS platform-tools closes cause 1
+exactly: `.rodata`, `.dynamic`, `.dynsym`, `.dynstr`, `.shstrtab` and the file
+length all become identical to hbox's. **654 bytes of `.text` still differ.**
+Cargo computes each unit's `-C metadata` from its dependency units' hashes, and
+build-script and proc-macro units are HOST units, so every crate that
+transitively uses one inherits the host triple: at one commit, one source tree,
+one sysroot and one rustc version, **61 of 76 units took a different
+`-C metadata`** on macOS than on Linux. And the shipped ELF is a function of
+that hash -- changing only `__CARGO_DEFAULT_LIB_METADATA`, with no source, flag
+or toolchain change at all, moves the bytes.
+
+So the three remedies that suggest themselves all fail, and they fail for
+reasons worth writing down once:
+
+- **Post-link rewrite of the panic strings.** The strings differ in *length*,
+  so canonicalizing them shifts `.rodata` and every address behind it: that is
+  a relink, not a rewrite. And it cannot touch cause 2 at all.
+- **`-Z build-std` with `--remap-path-prefix`, or `panic_immediate_abort`.**
+  Both rebuild the standard library, so both move the frame manifest, and
+  neither touches cause 2.
+- **Pinning the platform-tools tarball.** Necessary, not sufficient -- it is
+  exactly the experiment above, and it leaves 654 bytes.
+
+Only pinning the *host triple* reaches byte identity, which is why the policy
+is one named artifact rather than a set of agreeing hosts.
+
+### How a host joins the supported set
+
+A host is a supported builder when it **runs the named artifact**:
+
+- `hbox-through-swarm-build` and `persvati` run it natively.
+- `linux-x86_64-container` is any other machine running it in a linux/amd64
+  container -- the laptop's route. Build with `--builder container` inside the
+  container; the cold-toolchain recipe under "A cold machine" is the whole
+  setup.
+
+A native macOS build is a **diagnostic** build: real sources, real compilation,
+useful for finding a defect, and not a release. `--diagnostic-builder` is how
+to make one deliberately; it stamps `release_builder=false` into the summary
+and every pack built from that candidate refuses.
 
 ## hbox
 

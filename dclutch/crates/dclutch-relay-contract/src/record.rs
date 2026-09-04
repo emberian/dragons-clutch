@@ -769,9 +769,11 @@ pub fn consume_relayed_observation_in_place_v1(bytes: &mut [u8]) -> Result<()> {
 /// The rent is delayed, never lost. Every market terminalizes: the funded
 /// failure walk is permissionless and pays its caller, so `terminal_receipt`
 /// becomes `Some` with no identified party's help — and the one market shape
-/// that could NOT terminalize, a recovery-policy market, is no longer foundable
-/// (`CoreSbfError::RecoveryWalkUnavailable`, census R2/Q2). After that moment
-/// every phase retires exactly as before. A `Sealed` record also has a second
+/// that could NOT terminalize, a recovery-policy market, now walks its own
+/// funded ladder to `Exhausted`, where that same walk begins (decision 0027;
+/// `RelayActionV1::AdvanceRecovery`). It used to be unfoundable instead, which
+/// was the weld standing in for the route. After that moment every phase
+/// retires exactly as before. A `Sealed` record also has a second
 /// way out that is strictly better for its holder: anyone may consume it.
 pub fn retire_relayed_observation_in_place_v1(
     bytes: &mut [u8],

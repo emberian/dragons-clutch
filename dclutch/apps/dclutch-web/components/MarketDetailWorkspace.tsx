@@ -924,6 +924,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
       }}
       denomination={denomination}
       outcomes={narrative.outcomes}
+      supplyAtoms={'supplyAtoms' in decoded.liability ? decoded.liability.supplyAtoms : null}
     />}
 
     {decoded !== null && <MarketTradePanel

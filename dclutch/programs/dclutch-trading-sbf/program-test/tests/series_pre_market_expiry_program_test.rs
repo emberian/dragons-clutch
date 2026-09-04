@@ -5,93 +5,66 @@
 //! `dclutch_trading_sbf::series::release_v5`, and the physical evidence joins
 //! remain owned by the adjacent support module.
 //!
-//! # THREE ROWS ARE RED AND THE FIXTURE IS NOT THE AUTHOR
+//! # THREE ROWS ARE STILL RED, AND NOW THE FIXTURE IS THE AUTHOR
 //!
-//! `build_chain` refuses `BuilderError::Projection("borrowed-range-resolve")`
-//! on all three campaign rows, and the two `native_tests` beside it pass. This
-//! is not a fixture that stages the wrong request; the Series Expire ARTIFACT
-//! SET contradicts itself, and no request width satisfies both halves:
+//! That is the whole change of state, and it is the opposite of the header
+//! this replaces. The Series Expire ARTIFACT SET no longer contradicts itself:
+//! `97ce7a748` keyed the family's proof geometry on the Template that owns it,
+//! so the Expire RequestProfile pins `series_action_request_bytes_v3(count)`
+//! and route 4 declares its borrowed range only when the canonical proof is
+//! nonempty. This campaign stages a ONE-occurrence Template, `proof_height(1)`
+//! is zero, and both halves now agree on 128 bytes with no range at all.
 //!
-//! * `series::expire_funding_artifacts_v5::emit_request_profile` encodes a **V1**
-//!   RequestProfile at `RequestGeometryV1::new(SERIES_ACTION_HEADER_BYTES_V3, 0, ...)`,
-//!   so the family request is fixed at exactly 128 bytes. That is an EQUALITY on
-//!   both sides of the boundary: `dclutch_request_profile_contract::project_atomic`
-//!   refuses `InvalidLength` otherwise, and `hot_v3`'s `require_request_shape`
-//!   refuses `TradingSbfError::Content` for the same reason on the real ELF.
-//! * `series::expire_funding_artifacts_v5::emit_effect` declares route 4 -- the
-//!   Core unallocated-permit leg -- one borrowed range at `Fixed(128)` of length
-//!   `CommonScalar(SERIES_EXPIRE_PROOF_BYTES_SCALAR_V5)`, which the transition
-//!   computes as `proof_count * SERIES_WITNESS_ITEM_BYTES_V3`. A borrowed range
-//!   is canonically nonempty, so `dclutch_effect_kernel::v4::BorrowedRangeV4::resolve`
-//!   refuses when that length is zero.
+//! Running it against real ELFs built from that commit walked the refusal
+//! through three walls in one afternoon, and each one is worth having named:
 //!
-//! `proof_count = 0` refuses in the effect; `proof_count >= 1` refuses in the
-//! request profile. Measured 2026-09-03 by staging both: a two-occurrence
-//! template with one Merkle sibling moves the refusal from
-//! `borrowed-range-resolve` to `request-projection`/`InvalidLength` at 160
-//! bytes, and moves it back. Neither is reachable from this file.
+//! 1. `BuilderError::Projection("borrowed-range-resolve")` -- GONE. This was
+//!    the artifact contradiction and it was the only one of the three that was
+//!    program code.
+//! 2. The operator and the bundle builder disagreed in exactly ONE byte of a
+//!    256-byte instruction: envelope offset 127, the eighth bump hint, the
+//!    Custody transfer authority. Both envelopes are VALID -- an absent hint
+//!    means the route searches rather than refuses -- so no program would ever
+//!    have reported it, and only the fixture's exact cross-check could. The
+//!    cause was that this fixture handed the operator a ZERO-LENGTH activation
+//!    cache at Hot coordinate 22 while the bank held the real one:
+//!    `activated_custody_program_v1` read nothing out of it and the operator
+//!    honestly mined an absent hint. Repaired here by giving the operator the
+//!    account the bank actually holds (`Releases::activation_data`).
+//! 3. Where it stops today: `runtime=39` against `geometry.physical=44`, the
+//!    conjunct `support/series_premarket_expiry_v1.rs::validate_physical_bindings`
+//!    measured on 2026-09-01 and names in full. The five missing coordinates
+//!    are `72 template_staging`, `73 occurrence_raw`, `74 occurrence_staging`,
+//!    `75 ticket_raw`, `76 ticket_staging` -- the finalized Series record
+//!    raw/staging accounts Core needs to rebuild the Expire request. This file
+//!    contains no reference to any of the five, so they are never constructed,
+//!    installed, or packed. That is fixture work, and it is the next unit.
 //!
-//! Two candidate repairs, both program code in an SBF link and both changing
-//! shipped artifact digests, so neither is taken here: widen the Expire request
-//! profile to a shape that admits a proof tail, or withdraw route 4's range and
-//! let Core authenticate the occurrence without a borrowed proof. The sibling
-//! families are NOT in the same position and that is the clue --
-//! `prepare_funding_artifacts_v5` attaches its proof range to
-//! `SEMANTIC_RANGE_ROUTE_V4` rather than to a child route, so nothing resolves
-//! it per invocation and nothing refuses.
+//! # WHAT THE ARTIFACT REPAIR ACTUALLY WAS, kept because it is not obvious
 //!
-//! # DECIDED, 2026-09-03, BY THE KERNEL RATHER THAN BY A PREFERENCE
+//! The Series kernel had already decided it. `series_proof_count_v3` (formerly
+//! the private `proof_height`) is compared by EQUALITY in
+//! `admit_occurrence_bytes`, not as a floor, and it is a function of immutable
+//! Template config alone. So `128 + 32 * count` is a per-Template CONSTANT
+//! knowable before any request exists, and the artifacts had been written as
+//! if the proof width were a runtime variable. It never was.
 //!
-//! "Whoever owns Series decides" stood here, and it turns out the Series kernel
-//! had already decided. Three lines settle it, and none of them is in this
-//! file:
+//! Both spellings of "a borrowed thing is here" are canonically nonempty --
+//! `BorrowedRangeV4::resolve` refuses a zero length and
+//! `BorrowedWitnessPolicyV3::validate` refuses a zero minimum -- so a Template
+//! whose canonical proof is empty declares NO range rather than one that
+//! resolves to zero. Coverage still closes on its own:
+//! `validate_request_coverage` starts its cursor at the 128-byte semantic
+//! prefix and requires it to reach the request's exact end.
 //!
-//! * `dclutch-series-v3-kernel/src/lib.rs:868` refuses unless
-//!   `proof_count == proof_height(template.occurrence_count)`. An EQUALITY, not
-//!   a floor.
-//! * `:1140` makes `proof_height(count)` **zero** for `count <= 1`.
-//! * so for a single-occurrence Series -- which is what this campaign stages,
-//!   and `support/series_premarket_expiry_chain_v1.rs:2343` admits its
-//!   occurrence with a literally EMPTY proof and succeeds -- `proof_count = 0`
-//!   is not merely permitted. It is the only value the kernel admits.
-//!
-//! `SeriesActionRequestV3::decode` agrees from the other side: it pins
-//! `proof_count == 0` for `Retire` and `Close` and constrains `Expire` not at
-//! all, which is exactly the line that would say so if a nonempty proof were
-//! meant.
-//!
-//! THAT ELIMINATES THE FIRST REPAIR, including the shape one would reach for
-//! first. A V3 borrowed-witness profile cannot express an empty proof either:
-//! `BorrowedWitnessPolicyV3::validate`
-//! (`crates/dclutch-request-profile-contract/src/v3.rs:90`) refuses
-//! `minimum_bytes == 0`, for the same reason
-//! `BorrowedRangeV4::resolve` (`crates/dclutch-effect-kernel/src/v4.rs:334`)
-//! refuses a zero length. Both spellings of "a borrowed thing is here" are
-//! canonically nonempty, and the canonical Series Expire has nothing to borrow.
-//!
-//! So the repair is the SECOND one: **route 4 must not declare a borrowed
-//! range**, and the V1 profile fixed at 128 is already right for the case this
-//! route serves. It is still not taken here, and now for a stated reason rather
-//! than for indecision -- it has TWO authors and the second is not in the
-//! artifact file:
-//!
-//! * `series/expire_funding_artifacts_v5.rs:766-782`, the range itself, plus
-//!   the module's own `range_count() == 1` pin at `:1282` and the fixed
-//!   `SERIES_EXPIRE_EFFECT_V4_BYTES_V5` width;
-//! * `hot_v3.rs:12251`, which selects the Series expiry local replay overlap
-//!   ONLY when `ranges.count() == 1 && ranges.range(0) == family.proof_bytes()`.
-//!   Withdrawing the range makes that read zero and silently returns
-//!   `AllowedLocalOverlapV3::None`, so the conjunct has to be rewritten to
-//!   admit "no range, and no proof to borrow" in the same commit or the
-//!   replay overlap disappears without a word.
-//!
-//! AND A SECOND DEFECT IS EXPOSED BY THE SAME READING, larger than this one and
-//! not this test's: a MULTI-occurrence Series expiry needs `proof_count >= 1`
-//! and therefore a 128 + 32n family request, which the V1 profile's
-//! `item_request_bytes = 0` forbids at every tail count. Withdrawing the range
-//! does not fix that; it makes it visible. Multi-occurrence Series expiry is
-//! unreachable as shipped, and `consume_artifacts_v4` is in the same position
-//! with no real-ELF program-test to report it.
+//! The repair had four authors and this file was none of them: the artifact,
+//! `hot_v3.rs`'s replay-overlap conjunct (which required `ranges.count() == 1`
+//! and would have gone silent), `effect_v4.rs`'s per-route `borrowed_range_count()`
+//! pin, and the shadow generator's source manifest. `consume_artifacts_v4` was
+//! HALF in the same position: its Effect shared the defect, but its
+//! RequestProfile did not -- `authenticate_series_consume_artifacts_v4` splits
+//! the proof off itself and REQUIRES a 128-byte profile, where Expire is
+//! authenticated by the generic Hot path against the complete request.
 
 #[path = "support/series_premarket_expiry_chain_v1.rs"]
 mod series_premarket_expiry_chain_v1;

@@ -315,6 +315,18 @@ pub struct Elves {
 pub struct Releases {
     pub release_set: [u8; 32],
     pub activation: Pubkey,
+    /// Exact bytes this function wrote at [`Releases::activation`].
+    ///
+    /// The account goes into the bank and nowhere else, so a fixture that
+    /// hands an OPERATOR its own copy of the Hot fixed frame had no way to
+    /// supply it and installed a zero-length stand-in instead. That is not
+    /// inert: `activated_custody_program_v1` reads this cache for the Custody
+    /// deployment, an undecodable cache yields `None`, and the mined Custody
+    /// transfer-authority bump hint then comes out ABSENT where a bundle
+    /// builder taking the waist's Custody program on trust mines the real one.
+    /// The two envelopes differ in exactly one byte and both are valid, which
+    /// is why nothing refused and only an exact cross-check could see it.
+    pub activation_data: [u8; ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1],
     pub activation_digest: [u8; 32],
     pub core_programdata: Pubkey,
     pub trading_programdata: Pubkey,
@@ -544,6 +556,10 @@ pub fn add_release_waist_v2(
     put_activation_cache_bump_v1(&mut cache, activation_bump).expect("activation cache bump");
     ActivatedExecutionReleaseSetV1::decode(&cache).expect("complete activation cache");
     let activation_digest = hash(&cache).to_bytes();
+    let activation_data: [u8; ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1] = cache
+        .as_slice()
+        .try_into()
+        .expect("activation cache is exactly its declared width");
     test.add_account(
         activation,
         Account {
@@ -557,6 +573,7 @@ pub fn add_release_waist_v2(
     Releases {
         release_set: release_set_id,
         activation,
+        activation_data,
         activation_digest,
         core_programdata: programdata(CORE_PROGRAM_ID),
         trading_programdata: programdata(TRADING_PROGRAM_ID),

@@ -227,6 +227,19 @@ pub fn install_series_premarket_expiry_accounts_v1(
 
 /// Authenticate canonical selection, physical packing, Registry wrapping, root
 /// coordinates, and the nested still-vacant permit into one report.
+/// Name which of the ten `PhysicalGeometry` conjuncts refused.
+///
+/// One discriminant covered ten independent accusations, and the campaign that
+/// reaches them is the one campaign in the tree with no chain to ask instead:
+/// it refuses off chain, before a transaction exists, so a validator log cannot
+/// narrow it. The wire cannot carry the distinction -- this is a support enum
+/// the fixture reads, not a program error -- so the cause travels in a printed
+/// line, which is where a reader looks first.
+fn geometry_site_v1(site: &'static str) -> SeriesPremarketExpirySupportErrorV1 {
+    std::eprintln!("Series Expire physical geometry refused: {site}");
+    SeriesPremarketExpirySupportErrorV1::PhysicalGeometry
+}
+
 pub fn authenticate_series_premarket_expiry_physical_report_v1(
     selected: &SeriesSelectedActionV5,
     input: SeriesPremarketExpiryPhysicalInputV1,
@@ -293,7 +306,7 @@ pub fn authenticate_series_premarket_expiry_physical_report_v1(
         .hot_instruction
         .accounts
         .get(HOT_FIXED_ACCOUNT_COUNT_V3..)
-        .ok_or(SeriesPremarketExpirySupportErrorV1::PhysicalGeometry)?
+        .ok_or_else(|| geometry_site_v1("hot instruction has no runtime tail"))?
         .iter()
         .map(|meta| meta.pubkey)
         .collect::<Vec<_>>();
@@ -302,12 +315,12 @@ pub fn authenticate_series_premarket_expiry_physical_report_v1(
     let ticket_coordinate = selected
         .roles
         .ticket
-        .ok_or(SeriesPremarketExpirySupportErrorV1::PhysicalGeometry)?;
+        .ok_or_else(|| geometry_site_v1("selected action names no Ticket role"))?;
     let ticket_runtime = selected_role_key(ticket_coordinate, selected, &runtime)?;
     let rent_credit_coordinate = selected
         .roles
         .rent_credit
-        .ok_or(SeriesPremarketExpirySupportErrorV1::PhysicalGeometry)?;
+        .ok_or_else(|| geometry_site_v1("selected action names no RentCredit role"))?;
     let rent_credit = selected_role_key(rent_credit_coordinate, selected, &runtime)?;
     let precommit_caller_runtime = selected_role_key(
         SERIES_EXPIRE_PRECOMMIT_CALLER_COORDINATE_V5,
@@ -318,7 +331,7 @@ pub fn authenticate_series_premarket_expiry_physical_report_v1(
         || ticket_runtime != input.ticket_state
         || precommit_caller_runtime != input.precommit_caller
     {
-        return Err(SeriesPremarketExpirySupportErrorV1::PhysicalGeometry);
+        return Err(geometry_site_v1("root, Ticket or precommit caller is not the runtime key the fixture installed"));
     }
 
     validate_registry_wrapper(
@@ -675,12 +688,12 @@ fn validate_physical_bindings(
     if runtime.len() != selected.geometry.physical_accounts
         || selected.account_bindings.len() != selected.geometry.logical_accounts
     {
-        return Err(SeriesPremarketExpirySupportErrorV1::PhysicalGeometry);
+        return Err(geometry_site_v1("runtime account count differs from the release geometry"));
     }
     let mut physical_seen = vec![false; runtime.len()];
     for (logical, binding) in selected.account_bindings.iter().enumerate() {
         let Some(seen) = physical_seen.get_mut(binding.physical_ordinal) else {
-            return Err(SeriesPremarketExpirySupportErrorV1::PhysicalGeometry);
+            return Err(geometry_site_v1("a logical binding names a physical ordinal past the runtime tail"));
         };
         if binding.logical != logical
             || binding.representative > binding.logical
@@ -692,12 +705,12 @@ fn validate_physical_bindings(
                         || representative.physical_ordinal != binding.physical_ordinal
                 })
         {
-            return Err(SeriesPremarketExpirySupportErrorV1::PhysicalGeometry);
+            return Err(geometry_site_v1("a logical binding is out of order or disagrees with its representative"));
         }
         *seen = true;
     }
     if physical_seen.iter().any(|seen| !seen) {
-        return Err(SeriesPremarketExpirySupportErrorV1::PhysicalGeometry);
+        return Err(geometry_site_v1("a declared physical ordinal is bound by no logical coordinate"));
     }
     Ok(())
 }
@@ -710,11 +723,11 @@ fn selected_role_key(
     let binding = selected
         .account_bindings
         .get(usize::from(logical))
-        .ok_or(SeriesPremarketExpirySupportErrorV1::PhysicalGeometry)?;
+        .ok_or_else(|| geometry_site_v1("a named role has no logical binding"))?;
     runtime
         .get(binding.physical_ordinal)
         .copied()
-        .ok_or(SeriesPremarketExpirySupportErrorV1::PhysicalGeometry)
+        .ok_or_else(|| geometry_site_v1("a bound logical coordinate has no runtime account"))
 }
 
 fn validate_registry_wrapper(

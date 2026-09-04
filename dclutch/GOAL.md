@@ -4710,3 +4710,46 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   (producer-missing, said in the crate); the closer-reward route needs a signer coordinate; the vault build; frames left red
   on purpose (11 rows in range are RECOVERY's and SERIES's).
 - Cuts: `0db543873`, `f5a3f814e`.
+
+### 2026-09-04 11:30 EDT — WAVE ONE OF THE MECHANISM AGENDA, AND THE RULING SPOKES
+- JOINT-CLEARING closed (`554a29119`; MECHANISM_JOINT_CLEARING note + `JointClearingV1.lean`, 44 theorems, zero sorry): the
+  rule is a CERTIFICATE — eight O(N·K) integer KKT conjuncts the chain verifies, solvers off chain; prices sum to scale,
+  fills at or better, minted sets funded exactly (L1 on Settlement, L8 on Hoard), no cross-outcome arbitrage, permutation
+  invariance, weak duality → "optimal clearing" is a permitted sentence; found: a net seller has NO price floor today
+  (`runtime_verify.rs:1242`), a candidate can omit an order; CU per batch 9.4 M (N=2) → 395 M (N=258), no single tx near the
+  ceiling, K ≤ 60; cohort-17 (order layout re-digests). Rulings owed to ember: residual disposition, the tie-break,
+  sealed vs visible batch.
+- SCORING-DEALER closed (`3bf1905a7`, `a16c06d33`; `ScoringRuleV1.lean`): base-2 LMSR through the Claims inventory, Q62/u128
+  with a 63-entry root-chain table, no log on chain (the solver inverts; the chain checks); bounded loss PROVEN, prices in
+  (0,1) summing to scale PROVEN, solvency PROVEN; participation check 39k/46k/93k CU for K=2/3/5 — cheaper than the
+  131,790 selector-9 evaluation it replaces; LS-LMSR refused (leaves the simplex); cohort-17.
+- PROGRAMS-16C closed (`4467e1f6d`, `a062dc653`, `30dd2500a`, `db9c6c75c`, `f66dbb078`): per-action request deriver and candidate
+  projector (one author); OpenBatch → CloseBatch → OpenBatch again on ONE market, real ELFs (663k / 638k / 668k CU); the
+  cohort-15 `0x4015` wall reproduced in the harness for the first time; CloseBatch had been UNEXECUTABLE (no GENERATION
+  scalar in its profile — three sibling actions still lack it); the selection is keyed by root (a second batch needs a
+  re-founding); early freeze confirmed by measurement, unfixable without a profile change.
+- SERIES closed (`97ce7a748`, `8f45bed6f`): the proof width is a per-Template CONSTANT knowable at release — four authors of
+  the fact became one; route 4 declares no range for an empty proof; `consume_artifacts_v4` driven with an empty proof for
+  the first time; the campaign advanced three walls and stops at five uninstalled fixture accounts (nothing submitted, no
+  CU); C-07 rewritten. Its new release input field stops every checked candidate at HEAD.
+- RECOVERY closed (`332b432e6`, `b4316ea52`, `be8cac7b0`, `8ade3b837`): twelve theorems on the real policy type; ONE transition,
+  two arms; `process_funded_transition` DEFINED; the AdvanceRecovery relay action; a two-source market walks its funded
+  ladder on real ELFs — advance 216,637 / exhaust 218,163 / terminal 227,662 CU, every rung paying a stranger; owed: the
+  recovery CAPTURE has no producer (no provider outer calls it); founding funds exactly one alternative; no successor driver.
+- ESCROW closed (`84941cde2`, `f9d40b615`, addenda, `ede3315dd`, `d1169c81d`, `0f87d9518`): pro rata collapses to a constant
+  (uniform supply; one ordinary claim = one atom on the refunding scale); the terminal route already gates the vector;
+  cohort-13's failure walk REFUNDS the stranger 200 and the founder draws only their holdings, to the atom; the escrow owner
+  PDA exists already; the remainder REFUSED at founding under L8; stopped before seating: the escrow forecloses
+  MergeCompleteSet — a ruling owed (redefine merge over ordinary coordinates, or an immobile failure coordinate); frames
+  green at 1854 rows.
+- REPRO closed (`d5e178217`, `7d2f91e5f`, `a1bf4ddf0`): `supported_builders` = the hosts that run ONE builder artifact
+  (platform-tools 1.53 on Linux/x86_64); ten of ten roles byte-identical on hbox, persvati and the laptop in a linux/amd64
+  container, at two commits; the whole release projection equal — the ELF carries the host triple through TWO channels
+  (the stdlib's panic paths AND cargo's host-unit metadata), so no remap reaches identity; a native macOS build is diagnostic
+  and refused as a release. Found: no checked candidate completes at HEAD (Series' new field); 19 workspaces red under
+  --locked (resolved by the orchestrator); test_preflight 15 red on the terminal session schema.
+- Started 11:30 EDT: wave two designers ENSEMBLE, BOND, CONDITIONAL; SERIES-2 (the candidate at HEAD, the fixture accounts,
+  the dispatch); RECOVERY-2 (the capture's producer, funding every rung, the drivers); PROGRAMS-16D (the three GENERATION
+  omissions, the freeze deadline, the per-batch selection, the seller's floor); RELEASE-REDS (test_preflight, the stale
+  rent hostile, the cohort-16 README heading).
+- Cuts: `6963de51c`.

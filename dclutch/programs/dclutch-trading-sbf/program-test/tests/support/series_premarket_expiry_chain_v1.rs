@@ -50,8 +50,8 @@ use dclutch_custody_contract::{
     ProjectedCustodyStateSeedsV2, ProjectedCustodyStateV2,
 };
 use dclutch_direct_hot_program_test_support::waist::{
-    Elves, Releases, fixture_substrate, legacy_registry_hot_instruction, programdata,
-    programdata_v2, release_v2,
+    Elves, REGISTRY_PROGRAM_ID, Releases, fixture_substrate, legacy_registry_hot_instruction,
+    programdata, programdata_v2, release_v2,
 };
 use dclutch_market_core_codec::{
     Action as CoreAction, FoundingIntentV5, Identity, MarketCoreStateSeedsV2, MarketIdentity,
@@ -434,6 +434,12 @@ pub fn build_series_premarket_expiry_chain_v1(
     )?;
     if operator_report.selected != selected || operator_report.instruction != bundle.hot_instruction
     {
+        std::eprintln!(
+            "Series Expire operator report differs from the bundle: selected_eq={} \
+             instruction_eq={}",
+            operator_report.selected == selected,
+            operator_report.instruction == bundle.hot_instruction,
+        );
         return Err(SeriesPremarketExpiryChainErrorV1::Operator);
     }
     let success_transitions =
@@ -1680,6 +1686,22 @@ fn fixed_operator_accounts_v1(
                     executable: false,
                     rent_epoch: 0,
                 };
+            } else if meta.pubkey == input.releases.activation {
+                // The bank holds the REAL activation cache; the bundle
+                // builder's copy of this coordinate is a zero-length
+                // stand-in. An operator handed the stand-in reads no Custody
+                // deployment out of it, mines an ABSENT Custody
+                // transfer-authority bump, and disagrees with the bundle in
+                // exactly one byte of a 256-byte instruction. Both envelopes
+                // are valid -- an absent hint means the route searches -- so
+                // nothing refuses and only this exact cross-check sees it.
+                account = Account {
+                    lamports: 1,
+                    data: input.releases.activation_data.to_vec(),
+                    owner: REGISTRY_PROGRAM_ID,
+                    executable: false,
+                    rent_epoch: 0,
+                };
             } else if meta.pubkey == input.releases.core_programdata {
                 account = Account {
                     lamports: 1,
@@ -1771,13 +1793,38 @@ fn build_operator_report_v1(
         projected,
         controller.root.key,
         expire_lengths,
+        // The plan the operator returns is the diagnostic. Collapsing every
+        // non-Ready answer into one `Operator` made this refusal a search over
+        // the whole inspector: `Acquire` names a missing account, `WaitUntil` a
+        // deadline the fixture has not warped past, and the error arm carries
+        // the inspector's own conjunct. The sibling at :1616 already prints its
+        // builder error; this one printed nothing.
         |current| match inspect_current_series_hot_v5(&state, current) {
             Ok(SeriesCurrentHotPlanV5::Ready(report)) => Ok(report),
-            Ok(SeriesCurrentHotPlanV5::Acquire(_) | SeriesCurrentHotPlanV5::WaitUntil { .. })
-            | Err(_) => Err(SeriesPremarketExpiryChainErrorV1::Operator),
+            Ok(other) => {
+                std::eprintln!("Series Expire operator is not Ready: {other:?}");
+                Err(SeriesPremarketExpiryChainErrorV1::Operator)
+            }
+            Err(error) => {
+                std::eprintln!("Series Expire operator refused: {error:?}");
+                Err(SeriesPremarketExpiryChainErrorV1::Operator)
+            }
         },
     )?;
     if report.instruction != bundle.hot_instruction {
+        // Name the first differing byte. This refusal used to be one word for
+        // a 256-byte instruction, and the byte that differed was the eighth
+        // bump hint -- a value both sides may legally omit, which is why
+        // nothing else in the fixture could see it.
+        let left = &report.instruction.data;
+        let right = &bundle.hot_instruction.data;
+        let first = left.iter().zip(right.iter()).position(|(a, b)| a != b);
+        std::eprintln!(
+            "Series Expire operator instruction differs from the bundle: \
+             report_len={} bundle_len={} first_differing_byte={first:?}",
+            left.len(),
+            right.len(),
+        );
         return Err(SeriesPremarketExpiryChainErrorV1::Operator);
     }
     Ok((report, runtime_keys))

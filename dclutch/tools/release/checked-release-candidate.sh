@@ -24,8 +24,16 @@ usage: checked-release-candidate.sh [options]
   --tool PATH    prebuilt dclutch-release-tool binary (never emits an Upgrade gate;
                  default source-pinned build under --work is required for that gate)
   --commit REV   source revision to archive (default: HEAD)
-  --builder NAME execution substrate label: local, persvati, or hbox
-                 (default: local; hbox refuses unless inside swarm-build)
+  --builder NAME execution substrate label: local, persvati, container, or
+                 hbox (default: local; hbox refuses unless inside swarm-build).
+                 The named RELEASE builder artifact is platform-tools on
+                 Linux/x86_64; any other host refuses unless
+                 --diagnostic-builder is given.
+  --diagnostic-builder
+                 build on a host that is not the named release builder anyway.
+                 The candidate is stamped release_builder=false and every pack
+                 built from it refuses: it is a real build of the real sources
+                 for diagnosis, and it is not a release.
   --node PATH    absolute canonical Node v26.4.0 executable extracted from the
                  official platform archive named by --node-archive. REQUIRED.
   --node-archive PATH
@@ -73,6 +81,7 @@ NODE=""
 NODE_ARCHIVE=""
 KEEP_ELF="false"
 ALLOW_DIAGNOSTICS="false"
+DIAGNOSTIC_BUILDER="false"
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --repo) REPO="${2:?--repo needs a value}"; shift 2 ;;
@@ -86,6 +95,7 @@ while [ "$#" -gt 0 ]; do
         --genesis-cohort) GENESIS_COHORT="true"; shift ;;
         --keep-elf) KEEP_ELF="true"; shift ;;
         --allow-build-diagnostics) ALLOW_DIAGNOSTICS="true"; shift ;;
+        --diagnostic-builder) DIAGNOSTIC_BUILDER="true"; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
     esac
@@ -97,12 +107,12 @@ NODE_ARCHIVE_LISTER="$SCRIPT_DIR/node_archive_members.py"
     || { echo "Node archive member lister not executable: $NODE_ARCHIVE_LISTER" >&2; exit 1; }
 
 case "$BUILDER" in
-    local|persvati) ;;
+    local|persvati|container) ;;
     hbox)
         [ "${SWARM_BUILD_INNER:-}" = "1" ] \
             || { echo "--builder hbox requires the whole runner to execute inside swarm-build" >&2; exit 2; }
         ;;
-    *) echo "--builder must be local, persvati, or hbox" >&2; exit 2 ;;
+    *) echo "--builder must be local, persvati, container, or hbox" >&2; exit 2 ;;
 esac
 
 if [ -z "$REPO" ]; then
@@ -146,10 +156,45 @@ PREDECESSOR_PROFILE_BYTES="$(wc -c < "$PREDECESSOR_PROFILE" | tr -d ' ')"
     || { echo "--predecessor-profile must be exactly 144 bytes, got $PREDECESSOR_PROFILE_BYTES" >&2; exit 2; }
 fi
 
+# THE NAMED RELEASE BUILDER ARTIFACT. The shipped SBF ELFs carry the builder's
+# host triple in two independent places -- the prebuilt platform-tools standard
+# library's panic locations, which hold Anza's own CI checkout path, and cargo's
+# per-unit metadata hash, which inherits the host triple through every
+# build-script and proc-macro unit -- so a macOS build and a Linux build of one
+# commit cannot be byte-identical and no remap, strip or post-link rewrite makes
+# them so. See tools/release/README.md, "One builder artifact".
+#
+# Refused here -- after every argument check and before any source or build
+# work -- rather than 400 seconds in at the pack: a candidate that cannot be a
+# release should not cost an operator a build.
+# --diagnostic-builder is the honest way to build one anyway; it stamps the
+# summary so nothing downstream can mistake it for a release candidate.
+RELEASE_BUILDER_HOST_OS="Linux"
+RELEASE_BUILDER_HOST_ARCH="x86_64"
+RELEASE_BUILDER="true"
+if [ "$(uname -s)" != "$RELEASE_BUILDER_HOST_OS" ] \
+    || [ "$(uname -m)" != "$RELEASE_BUILDER_HOST_ARCH" ]; then
+    RELEASE_BUILDER="false"
+    if [ "$DIAGNOSTIC_BUILDER" != "true" ]; then
+        cat >&2 <<REFUSAL
+refusing: this host is $(uname -s)/$(uname -m); the named release builder
+artifact is platform-tools on $RELEASE_BUILDER_HOST_OS/$RELEASE_BUILDER_HOST_ARCH.
+The shipped ELFs carry the builder's host triple, so bytes built here can never
+reproduce a release built there. Supported builders: hbox-through-swarm-build,
+persvati, linux-x86_64-container. On this machine, run the same command inside a
+linux/amd64 container with --builder container. Pass --diagnostic-builder to
+build a NON-RELEASE candidate here anyway.
+REFUSAL
+        exit 2
+    fi
+fi
+
 # The public Product handoff is a checked candidate gate, so its JS runtime is
 # an admitted build input rather than an ambient PATH choice. Both final Linux
 # builders use one official v26.4.0 archive. Local macOS/arm64 remains useful
-# for diagnostics but is not a member of the cross-builder release pair.
+# for diagnostics but is not a member of the cross-builder release pair, which
+# the gate above now enforces rather than merely stating: reaching this line on
+# macOS at all means --diagnostic-builder was said out loud.
 [ -n "$NODE" ] || { echo "--node is required for the source-pinned Product handoff gate" >&2; exit 2; }
 [ -n "$NODE_ARCHIVE" ] || { echo "--node-archive is required for the source-pinned Product handoff gate" >&2; exit 2; }
 case "$NODE" in /*) ;; *) echo "--node must be an absolute canonical path" >&2; exit 2 ;; esac
@@ -1110,6 +1155,9 @@ fi
     printf 'evidence_level=local-reproducible-release-candidate\n'
     printf 'not_a_deployment=true\n'
     printf 'builder=%s\n' "$BUILDER"
+    printf 'release_builder=%s\n' "$RELEASE_BUILDER"
+    printf 'release_builder_artifact_host=%s/%s\n' \
+        "$RELEASE_BUILDER_HOST_OS" "$RELEASE_BUILDER_HOST_ARCH"
     if [ "$BUILDER" = "hbox" ]; then
         printf 'builder_scheduler=swarm-build\n'
     else

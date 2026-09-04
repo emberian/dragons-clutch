@@ -22,33 +22,36 @@
 //!
 //! **That `#[cfg(any())]` call site is gone too**, along with the other
 //! thirteen in `lib.rs`, so neither half of the sentence above can be looked up
-//! any more; it is history, not a pointer. Four comments in `dclutch-core-sbf`
-//! and the local-validator bootstrap still cite
-//! `funded::process_funded_transition` in the present tense as the ladder that
-//! "has one call site, under `#[cfg(any())]`". That function has no definition
-//! anywhere in the tree and neither does the block. What those comments are
-//! actually justifying — `CoreSbfError::RecoveryWalkUnavailable` — remains
-//! correct for a live and checkable reason:
-//! `SourceResolutionStateV2::exhaust_after_primary_deadline` refuses
-//! `recovery_policy().is_some()` outright, so a recovery-bearing material has
-//! no terminal regardless of what any ladder does.
+//! any more; it is history, not a pointer.
 //!
-//! # Why the walk is one transition rather than three
+//! # The two walks this module plans, and why they are two
 //!
 //! The V1 walk was `FailNext` per recovery leg, then `Exhaust`, then
 //! `CommitFailure` — six funded transitions in the worst case, each debiting its
-//! own allocation. That shape belongs to a market that *bought* named
-//! alternative sources. `SourceResolutionStateV2::exhaust_after_primary_deadline`
-//! refuses any material carrying a recovery policy precisely because skipping
-//! paid-for legs would take an outcome away from the holders who paid for them.
+//! own allocation, and every one of them a caller-chosen action byte. Decision
+//! 0027 keeps the ladder and drops that shape: a caller who could pick `Exhaust`
+//! while an attempt was still funded could skip a leg the holders paid for.
 //!
-//! So the walk this module plans is the whole walk for a market with no
-//! recovery policy: `Primary → Exhausted → FailureCommitted`, one debit from the
-//! explicit-failure compartment, one `ResolutionFailure` certificate. There is
-//! no intermediate `Exhausted` certificate because there is no intermediate
-//! moment a third party could act on — nothing can be observed between the two
-//! transitions, and minting a certificate for a state no route can leave would
-//! be recording a bounty for work nobody can do.
+//! So [`process_funded_transition`] is ONE transition with two arms — the
+//! current window has closed, and either the policy funds another attempt or it
+//! does not — and [`plan_deadline_failure_v1`] is the terminal both ends of the
+//! ladder reach. The two are separate because they answer to different
+//! materials:
+//!
+//! - a market that bought no alternative sources arrives at the terminal on
+//!   `Primary`, and the failure walk spends its own deadline to reach
+//!   `Exhausted`: `Primary → Exhausted → FailureCommitted`, one debit from the
+//!   explicit-failure compartment, one `ResolutionFailure` certificate;
+//! - a market that bought them arrives already `Exhausted`, because its ladder
+//!   walked every leg it sold and each crank was paid from that leg's own
+//!   compartment. `exhaust_after_primary_deadline` still refuses that material
+//!   by name, and still should: the refusal is the ladder's own correctness
+//!   condition, not an obstacle to it.
+//!
+//! Hence the exhaustion inside the failure walk is conditional and the commit
+//! is not. Nothing is weakened by that:
+//! `commit_failure_from_authenticated_domain` refuses any phase but
+//! `Exhausted`, and a ladder with a funded leg left has not reached it.
 //!
 //! # Nothing here mutates and nothing here reads an account
 //!
@@ -73,7 +76,7 @@ use dclutch_resolution_codec::{
 };
 use dclutch_source_contract::{
     ContentId as SourceContentId, RecoveryCrankV2, RecoveryPolicyV2, SourceMaterialV3,
-    SourceResolutionStateV2, WindowSpecV1,
+    SourceResolutionPhaseV1, SourceResolutionStateV2, WindowSpecV1,
 };
 
 /// Stable refusal from the pure funded walk.
@@ -497,16 +500,32 @@ pub fn plan_deadline_failure_v1(
         plan_funding_release(escrow, source.material_id.to_bytes())?;
 
     let mut next_source = *source_state;
-    next_source
-        .exhaust_after_primary_deadline(
-            source.material_id,
-            source.material,
-            source.window_spec_id,
-            source.window,
-            request.generation,
-            request.current_unix_seconds,
-        )
-        .map_err(|_| FundedWalkErrorV1::Transition)?;
+    // Two ways into `Exhausted`, one way out of it.
+    //
+    // A market that bought no alternative sources arrives here on `Primary` and
+    // this walk spends its own deadline to get there -- that transition refuses
+    // a recovery-bearing material by name, and still should: skipping paid-for
+    // legs would take an outcome away from the holders who paid for them. A
+    // market that DID buy them arrives here already `Exhausted`, because its
+    // funded ladder walked every leg it sold and the last crank left it there.
+    //
+    // So the exhaustion is conditional and the commit is not. Nothing is
+    // weakened by that: `commit_failure_from_authenticated_domain` refuses any
+    // phase but `Exhausted`, so a market that reached neither end is refused by
+    // the same conjunct it always was, and a ladder that still has a funded leg
+    // has not reached `Exhausted` to begin with.
+    if next_source.phase() == SourceResolutionPhaseV1::Primary {
+        next_source
+            .exhaust_after_primary_deadline(
+                source.material_id,
+                source.material,
+                source.window_spec_id,
+                source.window,
+                request.generation,
+                request.current_unix_seconds,
+            )
+            .map_err(|_| FundedWalkErrorV1::Transition)?;
+    }
     let decision = next_source
         .commit_failure_from_authenticated_domain(
             source.material_id,
@@ -538,7 +557,10 @@ pub fn plan_deadline_failure_v1(
         funding_allocation: source.material_id.to_bytes(),
         receipt_account: request.certificate_account,
         generation: request.generation,
-        // Zero legs were skipped: this material bought none.
+        // Zero legs were SKIPPED. A market with no policy bought none; a
+        // market with one arrived here having walked every leg it sold, and
+        // the count of legs it actually walked is on the ladder's own
+        // `Exhausted` receipt rather than smuggled into the terminal.
         attempt_index: 0,
         schedule_index: 0,
         selector: decision.selector(),

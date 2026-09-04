@@ -1654,6 +1654,7 @@ dependencies = [
  "dclutch-product-payoff-v2-codec",
  "dclutch-product-runtime-v2",
  "dclutch-product-runtime-v2-admission",
+ "dclutch-protocol-parameters-contract",
  "dclutch-realm-contract",
  "dclutch-registry-contract",
  "dclutch-registry-svm",
@@ -1975,6 +1976,7 @@ dependencies = [
 name = "dclutch-product-runtime-v2-svm-reader"
 version = "0.1.0"
 dependencies = [
+ "dclutch-capability-contract",
  "dclutch-product-payoff-v2-codec",
  "dclutch-product-runtime-v2",
  "dclutch-product-runtime-v2-admission",
@@ -1988,6 +1990,13 @@ dependencies = [
 [[package]]
 name = "dclutch-program-test-evidence"
 version = "0.1.0"
+
+[[package]]
+name = "dclutch-protocol-parameters-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-sha256-adapter",
+]
 
 [[package]]
 name = "dclutch-provider-transport-v3-operator"
@@ -2069,6 +2078,7 @@ dependencies = [
 name = "dclutch-rational-representation-v2-operator"
 version = "0.1.0"
 dependencies = [
+ "dclutch-capability-contract",
  "dclutch-claims-svm",
  "dclutch-core-contract",
  "dclutch-custody-contract",
@@ -2158,6 +2168,7 @@ name = "dclutch-release-tool"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "dclutch-capability-contract",
  "dclutch-capability-program-contract",
  "dclutch-capability-seal-contract",
  "dclutch-core-contract",

@@ -156,12 +156,88 @@ def evaluateRational (basis : Basis) (numerator : Int) (denominator : Nat) :
   else
     some (payouts.set (basis.width - 1) (basis.payoutScale - total))
 
-/-- The categorical `Q = 1` embedding: a one-hot vector at runtime width. -/
+/-- The categorical one-hot embedding, at the record's own payout scale.
+
+On a legacy record the scale is `1` and this is the `Q = 1` embedding it always
+was; on a record founded to refund it is the ordinary-region count, so a winning
+claim pays that many collateral atoms and the honest walk still exhausts the
+Hoard exactly. -/
 def evaluateCategorical (basis : Basis) (selector : Nat) : Option (List Nat) :=
   if selector < basis.width then
-    some ((List.replicate basis.width 0).set selector 1)
+    some ((List.replicate basis.width 0).set selector basis.payoutScale)
   else
     none
+
+/-- Narrowest categorical basis that may be founded to refund on failure.  At
+width 2 the legacy scale `1` and the refunding scale `width - 1` are the same
+number, so the record would not say which shape it carries. -/
+def categoricalRefundMinimumWidth : Nat := 3
+
+/-- Whether an outage refunds ordinary holders on this market, read off the
+record and nothing else.  Mirrors `categorical_refunds_on_failure_v3`, which is
+the evaluator's sole author of the rule. -/
+def categoricalRefundsOnFailure (basis : Basis) : Bool :=
+  basis.categorical && categoricalRefundMinimumWidth ≤ basis.width &&
+    basis.payoutScale == basis.width - 1
+
+/-- The failure terminal of a refunding categorical basis: one collateral atom
+to every ordinary column, nothing to the failure coordinate the escrow holds. -/
+def evaluateCategoricalFailure (basis : Basis) : Option (List Nat) :=
+  if categoricalRefundsOnFailure basis then
+    some (List.replicate (basis.width - 1) 1 ++ [0])
+  else
+    none
+
+theorem sumSetReplicateZero (count index value : Nat) (present : index < count) :
+    ((List.replicate count 0).set index value).sum = value := by
+  induction count generalizing index with
+  | zero => omega
+  | succ count ih =>
+      cases index with
+      | zero => simp [List.replicate_succ]
+      | succ index =>
+          have inner : index < count := by omega
+          simp [List.replicate_succ, ih index inner]
+
+/-- Both terminal arms of a categorical record partition the SAME payout scale,
+which is the conservation gate the terminal route already runs on every payout
+vector.  The refund arm therefore needs nothing added to that gate. -/
+theorem categorical_terminals_partition_the_payout_scale
+    (basis : Basis) (selector : Nat) (inRange : selector < basis.width) :
+    (∀ payouts, evaluateCategorical basis selector = some payouts →
+      payouts.sum = basis.payoutScale) ∧
+    (∀ payouts, evaluateCategoricalFailure basis = some payouts →
+      payouts.sum = basis.payoutScale) := by
+  constructor
+  · intro payouts emitted
+    simp only [evaluateCategorical, if_pos inRange, Option.some.injEq] at emitted
+    subst emitted
+    exact sumSetReplicateZero basis.width selector basis.payoutScale (by simpa using inRange)
+  · intro payouts emitted
+    unfold evaluateCategoricalFailure at emitted
+    split at emitted
+    · rename_i refunds
+      simp only [Option.some.injEq] at emitted
+      subst emitted
+      have scale : basis.payoutScale = basis.width - 1 := by
+        simp [categoricalRefundsOnFailure] at refunds
+        omega
+      simp [scale]
+    · simp at emitted
+
+/-- A refunding record pays its failure coordinate NOTHING: the escrow's claims
+are worth zero, which is what lets the ordinary columns draw the Hoard exactly
+once instead of twice. -/
+theorem the_failure_coordinate_draws_nothing_from_a_refunding_record
+    (basis : Basis) (payouts : List Nat)
+    (emitted : evaluateCategoricalFailure basis = some payouts) :
+    payouts.getLast? = some 0 := by
+  unfold evaluateCategoricalFailure at emitted
+  split at emitted
+  · simp only [Option.some.injEq] at emitted
+    subst emitted
+    simp
+  · simp at emitted
 
 /-! ## Encoding
 

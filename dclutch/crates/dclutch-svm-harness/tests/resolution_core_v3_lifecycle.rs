@@ -72,7 +72,9 @@ use dclutch_registry_contract::{
     ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
     activate_execution_role_into_v1, initialize_activation_cache_v1,
 };
-use dclutch_relay_contract::instruction::CommitDeadlineFailureInstructionV1;
+use dclutch_relay_contract::instruction::{
+    AdvanceRecoveryInstructionV1, CommitDeadlineFailureInstructionV1,
+};
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1,
     ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
@@ -155,6 +157,14 @@ const DIRECT_ACTIVATION_DEADLINE_SLOT: u64 = 1_000_000;
 const DIRECT_PRICE_SCALE: u64 = 1_000;
 const DIRECT_FEE_BASIS_POINTS: u16 = 25;
 const TERMINAL_SEQUENCE: u64 = 1;
+/// The sequence the ladder's advance receipt takes, and the exhaustion's.
+///
+/// They are distinct from each other and from `TERMINAL_SEQUENCE` because a
+/// rung receipt is not a terminal: nothing joins on it, and giving each rung its
+/// own sequence is what lets a ladder be walked to its capacity rather than to
+/// its first collision.
+const ADVANCE_SEQUENCE: u64 = 2;
+const EXHAUST_SEQUENCE: u64 = 3;
 const TERMINAL_TIME: i64 = 1_787_431_680;
 /// A wall clock strictly past the market's own primary deadline
 /// (`window.end + max_age`), which is the only time a deadline walk exists at.
@@ -242,6 +252,8 @@ struct Fixture {
     funding: Pubkey,
     activation_receipt: Pubkey,
     certificate: Pubkey,
+    recovery_advanced_certificate: Pubkey,
+    recovery_exhausted_certificate: Pubkey,
     closure: Pubkey,
     rent_credit: Pubkey,
 }
@@ -701,6 +713,17 @@ enum MarketPrestateV1 {
     /// activated, then nobody answers, and the deadline walk carries it to the
     /// Product's own pre-disclosed failure region and pays whoever walked it.
     WalkableFailure,
+    /// `WalkableFailure`'s two-source sibling: the same market, founded with a
+    /// `RecoveryPolicyV2` naming one funded alternative.
+    ///
+    /// This prestate could not exist until the ladder had a route. Core welded
+    /// `CreateFund` shut against recovery-bearing material because the primary
+    /// exhaustion refuses it by name and nothing could advance the attempt it
+    /// was refusing on behalf of, so such a market had no terminal at all. The
+    /// three funding compartments this fixture has always built are the
+    /// ladder's: the first is configured by the attempt's own allocation, the
+    /// second by the policy digest, the third by the material.
+    WalkableRecovery,
 }
 
 impl MarketPrestateV1 {
@@ -713,6 +736,7 @@ impl MarketPrestateV1 {
                 | Self::Terminal
                 | Self::TerminalFailure
                 | Self::WalkableFailure
+                | Self::WalkableRecovery
         )
     }
 
@@ -731,13 +755,29 @@ impl MarketPrestateV1 {
     /// success and failure are different addresses for one Source at one
     /// sequence.
     const fn failure_terms(self) -> bool {
-        matches!(self, Self::TerminalFailure | Self::WalkableFailure)
+        matches!(
+            self,
+            Self::TerminalFailure | Self::WalkableFailure | Self::WalkableRecovery
+        )
+    }
+
+    /// Whether this market's `SourceMaterialV3` SELECTS the recovery policy the
+    /// fixture has always built.
+    ///
+    /// One boolean, because it is one fact: the policy record, its funding
+    /// allocation and the three compartments configured against them are built
+    /// for every prestate. What changes is whether the material names the
+    /// policy -- and naming it is what turns a market with one terminal into a
+    /// market with a ladder.
+    const fn recovery_terms(self) -> bool {
+        matches!(self, Self::WalkableRecovery)
     }
 }
 
 fn fixture(prestate: MarketPrestateV1) -> Fixture {
     let preload_terminal = prestate.preload_terminal();
     let failure_terms = prestate.failure_terms();
+    let recovery_terms = prestate.recovery_terms();
     let elves = artifacts();
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
@@ -1023,26 +1063,22 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
         source_id(source_spec_id),
         source_id(window_id),
         source_id(statistic_id),
-        // A funded deadline walk only exists where nothing else is owed: with a
+        // The one bit that separates a market with a single terminal from a
+        // market with a ladder.
+        //
+        // A funded DEADLINE walk only exists where nothing else is owed: with a
         // recovery policy still unspent, `exhaust_after_primary_deadline`
         // refuses, because a market that has attempts left has not run out of
-        // ways to be answered honestly.
+        // ways to be answered honestly. That refusal is unchanged, and it is
+        // still the reason no `WalkableFailure` market names a policy.
         //
-        // No prestate carries one any more. `SourceResolutionStateV2` has no
-        // transition that advances a recovery attempt -- `funded.rs` plans the
-        // whole walk as `Primary -> Exhausted -> FailureCommitted` -- so
-        // `12d0deb5` welded `build_resolution_create_fund_v3` shut against
-        // recovery-bearing material. A recovery-bearing prestate would
-        // therefore assert a poststate no founding can reach.
-        //
-        // This comment used to add that the per-leg `FailNext` route "sits
-        // under `cfg(any())` in the Resolution program's dispatch". It does
-        // not: that block and the other thirteen were deleted, and the V1
-        // ladder they gated has no definition anywhere. The weld's real and
-        // checkable premise is the first clause -- there is no transition that
-        // advances a recovery attempt -- which is why the sentence survives
-        // without it.
-        None,
+        // What changed is the sibling it used to have no answer for. Core welded
+        // `CreateFund` shut against recovery-bearing material because
+        // `SourceResolutionStateV2` had no transition that advanced a recovery
+        // attempt, so such a market had no terminal at all; the ladder is live
+        // now (`RelayActionV1::AdvanceRecovery`), the weld is deleted, and
+        // `WalkableRecovery` founds the shape it used to forbid.
+        recovery_terms.then(|| source_id(recovery_policy_id)),
         source_id(SOURCE_FAILURE_POLICY_RELEASE_ID_V2),
     );
     let material_bytes = material_value.to_bytes();
@@ -1422,7 +1458,11 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
     // Success and failure are different ADDRESSES for one Source at one
     // sequence, so a walked market's certificate can never occupy the seat a
     // provider-resolved one would have taken.
-    let terminal_kind_tag: u8 = if failure_terms { 4 } else { 1 };
+    let terminal_kind_tag = if failure_terms {
+        ResolutionCertificateKindV2::ResolutionFailure.kind_seed()
+    } else {
+        ResolutionCertificateKindV2::ResolutionSuccess.kind_seed()
+    };
     let certificate = Pubkey::find_program_address(
         &[
             RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
@@ -1433,6 +1473,29 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
         &RESOLUTION_PROGRAM_ID,
     )
     .0;
+    // A crank's receipt is not a terminal, so it takes its own kind seed AND
+    // its own sequence. The kind alone would be enough for a one-rung ladder
+    // and not for a wider one: two advances would collide at one address, and a
+    // seat that is not vacant refuses. The sequence is what makes the ladder
+    // walkable to its own capacity.
+    let rung_certificate = |kind: ResolutionCertificateKindV2, sequence: u64| {
+        Pubkey::find_program_address(
+            &[
+                RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+                source.as_ref(),
+                &[kind.kind_seed()],
+                &sequence.to_le_bytes(),
+            ],
+            &RESOLUTION_PROGRAM_ID,
+        )
+        .0
+    };
+    let recovery_advanced_certificate = rung_certificate(
+        ResolutionCertificateKindV2::RecoveryAdvanced,
+        ADVANCE_SEQUENCE,
+    );
+    let recovery_exhausted_certificate =
+        rung_certificate(ResolutionCertificateKindV2::Exhausted, EXHAUST_SEQUENCE);
     if preload_terminal {
         let mut source_value = SourceResolutionStateV2::fresh(
             market.to_bytes(),
@@ -1638,6 +1701,8 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
         funding,
         activation_receipt,
         certificate,
+        recovery_advanced_certificate,
+        recovery_exhausted_certificate,
         closure,
         rent_credit,
     }
@@ -2368,6 +2433,81 @@ fn deadline_failure_instruction(fixture: &Fixture, worker: Pubkey) -> Instructio
             .expect("deadline failure bytes")
             .to_vec(),
     }
+}
+
+/// One crank of the funded ordered-recovery ladder.
+///
+/// Eighteen positions against the failure walk's twenty-two, and the difference
+/// is the whole Product graph out and the recovery policy pair in. A crank
+/// selects no outcome, so the only Product fact its receipt carries is the
+/// digest the material already names.
+fn advance_recovery_instruction(
+    fixture: &Fixture,
+    worker: Pubkey,
+    certificate: Pubkey,
+    sequence: u64,
+) -> Instruction {
+    Instruction {
+        program_id: RESOLUTION_PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(worker, true),
+            AccountMeta::new_readonly(fixture.market, false),
+            AccountMeta::new_readonly(CORE_PROGRAM_ID, false),
+            AccountMeta::new_readonly(fixture.activation, false),
+            AccountMeta::new(fixture.source, false),
+            AccountMeta::new(certificate, false),
+            AccountMeta::new_readonly(fixture.source_material.raw, false),
+            AccountMeta::new_readonly(fixture.source_material.staging, false),
+            AccountMeta::new_readonly(fixture.window.raw, false),
+            AccountMeta::new_readonly(fixture.window.staging, false),
+            AccountMeta::new_readonly(fixture.recovery_policy.raw, false),
+            AccountMeta::new_readonly(fixture.recovery_policy.staging, false),
+            AccountMeta::new_readonly(fixture.capability_manifest.raw, false),
+            AccountMeta::new_readonly(fixture.capability_manifest.staging, false),
+            AccountMeta::new(fixture.funding, false),
+            AccountMeta::new_readonly(sysvar::clock::ID, false),
+            AccountMeta::new_readonly(sysvar::rent::ID, false),
+            AccountMeta::new_readonly(system_program::ID, false),
+        ],
+        data: AdvanceRecoveryInstructionV1::new(GENERATION, sequence)
+            .expect("recovery crank request")
+            .to_bytes()
+            .expect("recovery crank bytes")
+            .to_vec(),
+    }
+}
+
+/// Submit one transaction and return what the runtime charged for it.
+///
+/// The campaign below reports compute per STAGE rather than per campaign,
+/// because the ladder's cost question is not "what does a market cost" but
+/// "what does one more rung cost", and only a per-stage number answers it.
+async fn submit_measuring_units(
+    context: &mut ProgramTestContext,
+    instructions: &[Instruction],
+    signers: &[&Keypair],
+) -> Result<u64, BanksClientError> {
+    let blockhash = context.banks_client.get_latest_blockhash().await?;
+    let mut all_signers: Vec<&dyn Signer> = Vec::with_capacity(signers.len() + 1);
+    all_signers.push(&context.payer);
+    all_signers.extend(signers.iter().copied().map(|signer| signer as &dyn Signer));
+    let transaction = Transaction::new_signed_with_payer(
+        instructions,
+        Some(&context.payer.pubkey()),
+        &all_signers,
+        blockhash,
+    );
+    let processed = context
+        .banks_client
+        .process_transaction_with_metadata(transaction)
+        .await?;
+    processed
+        .result
+        .map_err(BanksClientError::TransactionError)?;
+    Ok(processed
+        .metadata
+        .as_ref()
+        .map_or(0, |metadata| metadata.compute_units_consumed))
 }
 
 fn begin_retiring_instruction(fixture: &Fixture) -> Instruction {
@@ -3921,6 +4061,421 @@ async fn a_market_walked_to_failure_ends_terminal_on_its_pre_disclosed_terms() {
 /// property — a silent provider cannot make a market unresolvable, only drive it
 /// to a pre-disclosed outcome along a bounded, prepaid, permissionless path that
 /// pays whoever walks it — and every clause of it is measured below.
+/// The two-source market walks its whole ladder, and every rung pays a stranger.
+///
+/// This is the market Core refused to found. `CreateFund` welded shut against
+/// recovery-bearing material because such a market had no terminal at all: the
+/// primary exhaustion refuses it by name, and nothing advanced the attempt it
+/// was refusing on behalf of. Every holder's principal would have sat in it.
+///
+/// The campaign is the whole ladder on real ELFs:
+/// found with a two-source policy, the primary window closes unobserved, a
+/// stranger advances the ladder onto the funded alternative, that window closes
+/// too, the same stranger exhausts it, and the failure walk commits the
+/// Product's own pre-disclosed selector. Each rung is paid from its OWN
+/// compartment -- the advance from the attempt's allocation, the exhaustion
+/// from the one the policy configures, the failure from the market's material
+/// -- all three in one ledger account, each found by its pinned configuration
+/// rather than by a position.
+///
+/// The hostiles are the timing ones, and they are the ones that matter: a crank
+/// standing exactly on a window's deadline must refuse, on both rungs, because
+/// the last second an honest observation may land and the first second a crank
+/// may run are different seconds.
+#[tokio::test]
+async fn a_two_source_market_walks_its_funded_ladder_and_every_rung_pays_a_stranger() {
+    let mut fixture = fixture(MarketPrestateV1::WalkableRecovery);
+    let mut context = fixture
+        .test
+        .take()
+        .expect("unstarted ProgramTest")
+        .start_with_context()
+        .await;
+    let mut clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("ProgramTest Clock");
+    clock.slot = clock.slot.max(1);
+    clock.unix_timestamp = TERMINAL_TIME;
+    context.set_sysvar(&clock);
+    let payer = context.payer.pubkey();
+
+    // FOUNDING. The instruction the off-chain builder used to refuse to
+    // construct, and the state Core used to refuse to mint.
+    let create = build_resolution_create_fund_v3(&create_snapshot(&mut context, &fixture).await)
+        .expect("a recovery-bearing market is buildable now that the ladder has a route");
+    submit(
+        &mut context,
+        &[
+            transfer(&payer, &fixture.source, create.source_top_up_lamports),
+            create.instruction,
+        ],
+    )
+    .await
+    .expect("Core mints a Source over material that bought a named alternative");
+    let activation = build_resolution_activate_fund_v1(&ResolutionActivateFundSnapshotV1 {
+        pending: verify_snapshot(&mut context, &fixture).await,
+        system_program: required_observed(&mut context, system_program::ID).await,
+    })
+    .expect("chain-derived activation");
+    let mut activation_instructions = Vec::with_capacity(2);
+    if activation.receipt_top_up_lamports != 0 {
+        activation_instructions.push(transfer(
+            &payer,
+            &fixture.activation_receipt,
+            activation.receipt_top_up_lamports,
+        ));
+    }
+    activation_instructions.push(activation.instruction);
+    submit(&mut context, &activation_instructions)
+        .await
+        .expect("activate the three-row Resolution funding ledger");
+    assert_funding_ledger_status(&mut context, &fixture, FundingLedgerStatusV2::Active).await;
+    let verify =
+        build_resolution_verify_fund_ready_v3(&verify_snapshot(&mut context, &fixture).await)
+            .expect("chain-derived VerifyFundReady");
+    submit(&mut context, &[verify.instruction])
+        .await
+        .expect("VerifyFundReady rechecks the Active ledger");
+    assert_eq!(
+        SourceResolutionStateV2::decode(
+            &observed(&mut context, fixture.source)
+                .await
+                .expect("created Source")
+                .data,
+        )
+        .expect("Source state")
+        .phase(),
+        SourceResolutionPhaseV1::Primary,
+        "the ladder starts where every market starts"
+    );
+
+    // The cranker is a stranger, exactly as the failure walk's walker is.
+    let cranker = Keypair::new();
+    let seat_rent = Rent::default().minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2);
+    let cranker_rent = context
+        .banks_client
+        .get_rent()
+        .await
+        .expect("chain Rent")
+        .minimum_balance(0);
+    submit(
+        &mut context,
+        &[
+            transfer(&payer, &cranker.pubkey(), cranker_rent),
+            transfer(&payer, &fixture.recovery_advanced_certificate, seat_rent),
+            transfer(&payer, &fixture.recovery_exhausted_certificate, seat_rent),
+            transfer(&payer, &fixture.certificate, seat_rent),
+        ],
+    )
+    .await
+    .expect("establish the stranger and prepay all three seats the ladder writes");
+
+    let primary_deadline = TERMINAL_TIME + i64::from(WINDOW_MAX_AGE_SECONDS);
+    let attempt_deadline = TERMINAL_TIME + 20;
+    let set_clock = |context: &mut ProgramTestContext, at: i64| {
+        let mut value = Clock {
+            slot: 1,
+            unix_timestamp: at,
+            ..Clock::default()
+        };
+        value.slot = at as u64;
+        context.set_sysvar(&value);
+    };
+
+    // HOSTILE — a crank standing exactly on the primary deadline. The market
+    // can still be answered honestly on this second.
+    set_clock(&mut context, primary_deadline);
+    let before_early = retirement_snapshot(&mut context, &fixture).await;
+    let early = pyth_provider::submit(
+        &mut context,
+        &[advance_recovery_instruction(
+            &fixture,
+            cranker.pubkey(),
+            fixture.recovery_advanced_certificate,
+            ADVANCE_SEQUENCE,
+        )],
+        &[&cranker],
+    )
+    .await
+    .expect_err("a crank standing exactly on the primary deadline must refuse");
+    assert!(
+        matches!(
+            early,
+            BanksClientError::TransactionError(TransactionError::InstructionError(
+                0,
+                InstructionError::Custom(code)
+            )) if code == ResolutionError::Transition as u32
+        ),
+        "an early crank must refuse as Resolution Transition, got {early:?}"
+    );
+    assert_eq!(
+        retirement_snapshot(&mut context, &fixture).await,
+        before_early,
+        "the early refusal leaves Source, ledger and seats untouched"
+    );
+
+    // HOSTILE — and this is the conjunct the whole ladder rests on. Even past
+    // the primary deadline, the failure walk must NOT be a shortcut around the
+    // legs this market paid for: `exhaust_after_primary_deadline` refuses a
+    // recovery-bearing material by name, so the pre-disclosed outcome stays out
+    // of reach while a funded alternative is still owed an answer.
+    set_clock(&mut context, primary_deadline + 1);
+    let shortcut = pyth_provider::submit(
+        &mut context,
+        &[deadline_failure_instruction(&fixture, cranker.pubkey())],
+        &[&cranker],
+    )
+    .await
+    .expect_err("the failure walk must not skip a leg the holders paid for");
+    assert!(
+        matches!(
+            shortcut,
+            BanksClientError::TransactionError(TransactionError::InstructionError(
+                0,
+                InstructionError::Custom(code)
+            )) if code == ResolutionError::Transition as u32
+        ),
+        "the shortcut must refuse as Resolution Transition, got {shortcut:?}"
+    );
+
+    // RUNG ONE. One second past the primary deadline the ladder advances onto
+    // the funded alternative, and the stranger is paid from that attempt's own
+    // compartment.
+    let cranker_before = observed(&mut context, cranker.pubkey())
+        .await
+        .expect("cranker")
+        .lamports;
+    let funding_before = observed(&mut context, fixture.funding)
+        .await
+        .expect("Active subset ledger")
+        .lamports;
+    let advance_units = submit_measuring_units(
+        &mut context,
+        &[advance_recovery_instruction(
+            &fixture,
+            cranker.pubkey(),
+            fixture.recovery_advanced_certificate,
+            ADVANCE_SEQUENCE,
+        )],
+        &[&cranker],
+    )
+    .await
+    .expect("a stranger advances the ladder onto the funded alternative");
+
+    let advanced = SourceResolutionStateV2::decode(
+        &observed(&mut context, fixture.source)
+            .await
+            .expect("advanced Source")
+            .data,
+    )
+    .expect("advanced Source state");
+    assert_eq!(advanced.phase(), SourceResolutionPhaseV1::Recovery);
+    assert!(
+        advanced.terminal_projection().is_err(),
+        "a rung is not a terminal read: Core must not be able to join on it"
+    );
+    let advance_receipt = ResolutionCertificateV2::decode(
+        &observed(&mut context, fixture.recovery_advanced_certificate)
+            .await
+            .expect("advance receipt")
+            .data,
+    )
+    .expect("advance receipt");
+    assert_eq!(
+        advance_receipt.kind,
+        ResolutionCertificateKindV2::RecoveryAdvanced
+    );
+    assert_eq!(advance_receipt.attempt_index, 0);
+    assert_eq!(advance_receipt.selector, 0, "a crank selects nothing");
+    assert_eq!(advance_receipt.provider_evidence, [0; 32]);
+    assert_ne!(
+        advance_receipt.route, [0; 32],
+        "unlike the failure terminal, a rung records WHICH feed was asked"
+    );
+    assert_eq!(advance_receipt.work_paid, BOUNTY);
+    assert_eq!(
+        observed(&mut context, cranker.pubkey())
+            .await
+            .expect("paid cranker")
+            .lamports
+            - cranker_before,
+        BOUNTY,
+        "the crank is permissionless AND paid, or nobody turns it"
+    );
+    assert_eq!(
+        funding_before
+            - observed(&mut context, fixture.funding)
+                .await
+                .expect("debited ledger")
+                .lamports,
+        BOUNTY
+    );
+
+    // HOSTILE — the alternative's own window is open until its own deadline,
+    // and the same strictness applies to the second rung as to the first.
+    set_clock(&mut context, attempt_deadline);
+    let before_early_exhaust = retirement_snapshot(&mut context, &fixture).await;
+    let early_exhaust = pyth_provider::submit(
+        &mut context,
+        &[advance_recovery_instruction(
+            &fixture,
+            cranker.pubkey(),
+            fixture.recovery_exhausted_certificate,
+            EXHAUST_SEQUENCE,
+        )],
+        &[&cranker],
+    )
+    .await
+    .expect_err("a crank standing on the alternative's deadline must refuse");
+    assert!(
+        matches!(
+            early_exhaust,
+            BanksClientError::TransactionError(TransactionError::InstructionError(
+                0,
+                InstructionError::Custom(code)
+            )) if code == ResolutionError::Transition as u32
+        ),
+        "an early exhaustion must refuse as Resolution Transition, got {early_exhaust:?}"
+    );
+    assert_eq!(
+        retirement_snapshot(&mut context, &fixture).await,
+        before_early_exhaust,
+        "the ladder does not move while a paid-for leg still has time on it"
+    );
+
+    // RUNG TWO. Past the LAST funded window, the same one transition exhausts
+    // rather than advances -- there is no attempt after this one -- and it is
+    // paid from the compartment the policy itself configures.
+    set_clock(&mut context, attempt_deadline + 1);
+    let cranker_before_exhaust = observed(&mut context, cranker.pubkey())
+        .await
+        .expect("cranker")
+        .lamports;
+    let exhaust_units = submit_measuring_units(
+        &mut context,
+        &[advance_recovery_instruction(
+            &fixture,
+            cranker.pubkey(),
+            fixture.recovery_exhausted_certificate,
+            EXHAUST_SEQUENCE,
+        )],
+        &[&cranker],
+    )
+    .await
+    .expect("the last funded window closed and the ladder exhausts");
+
+    let exhausted = SourceResolutionStateV2::decode(
+        &observed(&mut context, fixture.source)
+            .await
+            .expect("exhausted Source")
+            .data,
+    )
+    .expect("exhausted Source state");
+    assert_eq!(exhausted.phase(), SourceResolutionPhaseV1::Exhausted);
+    assert!(
+        exhausted.terminal_projection().is_err(),
+        "Exhausted is an end of the attempt sequence, not a terminal read"
+    );
+    let exhaust_receipt = ResolutionCertificateV2::decode(
+        &observed(&mut context, fixture.recovery_exhausted_certificate)
+            .await
+            .expect("exhaustion receipt")
+            .data,
+    )
+    .expect("exhaustion receipt");
+    assert_eq!(exhaust_receipt.kind, ResolutionCertificateKindV2::Exhausted);
+    assert_eq!(
+        exhaust_receipt.attempt_index, 1,
+        "the receipt records how much of the paid-for ladder was walked"
+    );
+    assert_eq!(exhaust_receipt.work_paid, BOUNTY);
+    assert_eq!(
+        observed(&mut context, cranker.pubkey())
+            .await
+            .expect("paid cranker")
+            .lamports
+            - cranker_before_exhaust,
+        BOUNTY
+    );
+
+    // HOSTILE — the ladder is finite, and a third crank has nothing to move.
+    let past_end = pyth_provider::submit(
+        &mut context,
+        &[advance_recovery_instruction(
+            &fixture,
+            cranker.pubkey(),
+            fixture.certificate,
+            TERMINAL_SEQUENCE,
+        )],
+        &[&cranker],
+    )
+    .await
+    .expect_err("a ladder past its last rung cannot be cranked again");
+    assert!(
+        matches!(
+            past_end,
+            BanksClientError::TransactionError(TransactionError::InstructionError(
+                0,
+                InstructionError::Custom(code)
+            )) if code == ResolutionError::Transition as u32
+        ),
+        "cranking a spent ladder must refuse as Transition, got {past_end:?}"
+    );
+
+    // THE TERMINAL. `Exhausted` is where the failure commit already began, so
+    // the ladder added a way in and changed no way out.
+    let failure_units = submit_measuring_units(
+        &mut context,
+        &[deadline_failure_instruction(&fixture, cranker.pubkey())],
+        &[&cranker],
+    )
+    .await
+    .expect("the Product's own pre-disclosed selector commits at the end of the ladder");
+    let terminal = SourceResolutionStateV2::decode(
+        &observed(&mut context, fixture.source)
+            .await
+            .expect("terminal Source")
+            .data,
+    )
+    .expect("terminal Source state");
+    assert_eq!(terminal.phase(), SourceResolutionPhaseV1::FailureCommitted);
+    let terminal_receipt = ResolutionCertificateV2::decode(
+        &observed(&mut context, fixture.certificate)
+            .await
+            .expect("terminal certificate")
+            .data,
+    )
+    .expect("terminal certificate");
+    assert_eq!(
+        terminal_receipt.kind,
+        ResolutionCertificateKindV2::ResolutionFailure
+    );
+    assert_eq!(terminal_receipt.route, [0; 32]);
+    assert_eq!(
+        terminal_receipt.attempt_index, 0,
+        "the failure terminal counts skipped legs, and this ladder skipped none"
+    );
+
+    // The three compartments are spent exactly once each, and the ledger keeps
+    // only its own rent.
+    assert_eq!(
+        observed(&mut context, fixture.funding)
+            .await
+            .expect("spent ledger")
+            .lamports,
+        Rent::default()
+            .minimum_balance(funding_ledger_bytes_v2(3).expect("three-row FundingLedgerV2 width"),),
+        "three rungs, three bounties, one ledger left holding exactly its rent"
+    );
+
+    println!(
+        "RECOVERY LADDER CU: advance={advance_units} exhaust={exhaust_units} \
+         failure={failure_units}"
+    );
+}
+
 #[tokio::test]
 async fn a_silent_provider_cannot_strand_a_market_and_the_walker_is_paid() {
     let mut fixture = fixture(MarketPrestateV1::WalkableFailure);

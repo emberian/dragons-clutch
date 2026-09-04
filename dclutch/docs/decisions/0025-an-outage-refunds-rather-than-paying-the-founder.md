@@ -163,6 +163,20 @@ a refused evaluation leaves the caller's output buffer untouched and that a
 hand-built record with an inadmissible scale is refused by the **decoder**, not
 only by the encoder. 272 tests green across the five touched crates.
 
+**The founding already carries the refunding scale, and this was not designed
+for -- it was found.** Core founding does not take a collateral scale from a
+caller: it DERIVES it from the Product, `programs/dclutch-core-sbf/src/generic_founding_v1.rs:1104`
+--- `basis_scale: product.payout_scale` --- and Claims founding then binds the
+permit's scale to the request's (`programs/dclutch-claims-sbf/src/founding_v5.rs:1247`).
+So a market founded on a refunding record funds its Hoard at
+`quantity * ordinary_region_count` with no founding code change at all, the
+honest walk pays that same scale per winning claim, and the failure walk pays
+one atom to each of `ordinary_region_count` columns --- the same total, per
+complete set, either way. The payout half of §2 therefore needs a founded
+RECORD, not a founded PROGRAM, which is why it is a runbook row
+(`tools/cohort/steps.tsv`, key `refund-scale`, `since=16`) rather than a wire
+version. Only the escrow SEATING in §2 item 2 needs founding to change.
+
 **What is owed, named by the lane rather than left to be found:** the founding
 change that seats the failure coordinate in the escrow Position. *"Until it
 lands, a refunding market's failure column is still minted to the founder —

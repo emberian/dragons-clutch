@@ -76,6 +76,54 @@ SHIPPED_LABELS = frozenset(label for label, _package, _produces in SHIPPED_LINKS
 ARTIFACT_ROLES = tuple(
     label for label, _package, produces_artifact in SHIPPED_LINKS if produces_artifact
 )
+# THE RELEASE IS THE BYTES ONE BUILDER ARTIFACT PRODUCES, and `supported_builders`
+# names the hosts that run THAT artifact -- not a set of hosts asserted to agree.
+# The distinction is a measurement, taken 2026-09-04 on `registry.so` at
+# `fe70f076`, and it replaces a three-name list that had never been tested:
+#
+#   1. The prebuilt SBF standard library embeds the absolute path of Anza's own
+#      CI checkout in every `core`/`alloc` panic location it ships. The linux-x64
+#      tarball carries `/home/runner/work/platform-tools/...`, the darwin-arm64
+#      one `/Users/runner/work/platform-tools/...`, one byte longer, so `.rodata`
+#      rounds up by eight and every address behind it moves. `registry` embeds
+#      two such strings; `series-shadow` embeds none, which is exactly why it was
+#      the one role that ever reproduced across the two hosts.
+#   2. AND THAT IS NOT THE WHOLE CAUSE. Cargo's per-unit metadata hash is a
+#      function of its dependency units' hashes, and build-script and proc-macro
+#      units are HOST units carrying the builder's host triple. At one commit,
+#      one source tree, one sbpf sysroot and one rustc version, 61 of 76 units
+#      took a different `-C metadata` on macOS than on Linux -- and the shipped
+#      ELF is a function of that hash: changing ONLY `__CARGO_DEFAULT_LIB_METADATA`
+#      moves the bytes. Installing the linux sysroot on macOS closes (1) exactly
+#      -- `.rodata`, `.dynamic`, `.dynsym`, `.dynstr` and the file length all
+#      become identical -- and leaves 654 bytes of `.text` moved by (2).
+#
+# So no remap, no strip, no post-link rewrite reaches it: two different host
+# triples cannot emit the same SBF bytes. One artifact is named, and a host
+# joins the supported set by RUNNING that artifact -- natively on linux-x86_64,
+# or through a linux/amd64 container anywhere else.
+RELEASE_BUILDER_HOST_OS = "Linux"
+RELEASE_BUILDER_HOST_ARCH = "x86_64"
+SUPPORTED_BUILDERS = (
+    "hbox-through-swarm-build",
+    "persvati",
+    "linux-x86_64-container",
+)
+# Two packs reproduce each other only if they name the SAME builder artifact, so
+# `release_builder_artifact` is projected beside the toolchain versions. Before
+# it, the projection compared the outputs and never the thing that produced
+# them, so a pair that could not possibly agree was compared anyway and the
+# verdict came back as a difference in `artifacts` -- a true statement about the
+# wrong subject.
+PROJECTED_TOOLCHAIN_KEYS = (
+    "host_rust_channel",
+    "sbf_rustc",
+    "solana_cli",
+    "cargo_build_sbf",
+    "platform_tools",
+    "target_triple",
+    "release_builder_artifact",
+)
 GENESIS_SLOTS = {
     "registry": 11,
     "core": 13,
@@ -495,11 +543,34 @@ def host_substrate_value(
         "arch": summary_required(summary, "host_arch"),
         "kernel": summary_required(summary, "host_kernel"),
     }
-    if values["os"] not in {"Linux", "Darwin"} or values["arch"] not in {
-        "x86_64",
-        "arm64",
-    }:
-        refuse("candidate host OS/architecture is not a supported builder substrate")
+    # The named builder artifact, enforced here because this is the one place
+    # every pack -- built or verified -- reads the executed host. A candidate
+    # built anywhere else is a diagnostic candidate: it is a real build of the
+    # real sources and it is useful, but its bytes are not the release's, and
+    # the two channels above mean no later step can convert one into the other.
+    if (
+        values["os"] != RELEASE_BUILDER_HOST_OS
+        or values["arch"] != RELEASE_BUILDER_HOST_ARCH
+    ):
+        refuse(
+            "candidate was built by "
+            f"{values['os']}/{values['arch']}, not the named release builder "
+            f"artifact {RELEASE_BUILDER_HOST_OS}/{RELEASE_BUILDER_HOST_ARCH}: the "
+            "shipped SBF ELFs carry the builder's host triple through the "
+            "prebuilt stdlib's panic locations and through cargo's per-unit "
+            "metadata hash, so they cannot be reproduced from another one; run "
+            "the build on a supported builder "
+            f"({', '.join(SUPPORTED_BUILDERS)})"
+        )
+    # The candidate script stamps this when --diagnostic-builder was used. The
+    # os/arch conjunct above is the gate; this one is read only when present, so
+    # a pack built before the stamp existed still verifies on its own evidence
+    # rather than refusing for a field its builder could not have written.
+    if summary.get("release_builder", "true") != "true":
+        refuse(
+            "candidate was built with --diagnostic-builder and stamped "
+            "release_builder=false; a diagnostic candidate is not a release"
+        )
     return values
 
 
@@ -1015,7 +1086,12 @@ def emit(arguments: argparse.Namespace) -> None:
             "cargo_build_sbf": summary_required(summary, "cargo_build_sbf_version"),
             "platform_tools": platform_match.group(1),
             "target_triple": summary_required(summary, "target_triple"),
-            "supported_builders": ["local", "persvati", "hbox-through-swarm-build"],
+            "release_builder_artifact": {
+                "platform_tools": platform_match.group(1),
+                "host_os": RELEASE_BUILDER_HOST_OS,
+                "host_arch": RELEASE_BUILDER_HOST_ARCH,
+            },
+            "supported_builders": list(SUPPORTED_BUILDERS),
             "hbox_scheduler": "swarm-build",
             "actual_builder": actual_builder,
             "actual_builder_scheduler": builder_scheduler,
@@ -1194,12 +1270,16 @@ def verify_pack(pack_path: Path) -> tuple[Path, dict[str, Any]]:
     toolchains = pack["toolchains"]
     if not isinstance(toolchains, dict) or toolchains.get("host_rust_channel") != host_channel:
         refuse("pack host toolchain differs from source pin")
-    if toolchains.get("supported_builders") != [
-        "local",
-        "persvati",
-        "hbox-through-swarm-build",
-    ] or toolchains.get("hbox_scheduler") != "swarm-build":
+    if toolchains.get("supported_builders") != list(
+        SUPPORTED_BUILDERS
+    ) or toolchains.get("hbox_scheduler") != "swarm-build":
         refuse("pack supported-builder policy differs")
+    if toolchains.get("release_builder_artifact") != {
+        "platform_tools": toolchains.get("platform_tools"),
+        "host_os": RELEASE_BUILDER_HOST_OS,
+        "host_arch": RELEASE_BUILDER_HOST_ARCH,
+    }:
+        refuse("pack release builder artifact differs from the named one")
     if toolchains.get("actual_builder") != summary.get("builder") or toolchains.get(
         "actual_builder_scheduler"
     ) != summary.get("builder_scheduler"):
@@ -1709,23 +1789,24 @@ def reproduction_projection(pack: Mapping[str, Any]) -> dict[str, Any]:
         }
         for item in pack["ceilings"]["frames"]
     ]
+    # A missing projection key is a REFUSAL, never a KeyError. The cold-machine
+    # campaign lost a run to exactly this shape: `reproduction_projection` read
+    # `predecessor_infrastructure_profile` unconditionally and raised KeyError on
+    # every genesis pack, which is the only shape a cold machine can build.
+    missing = [key for key in PROJECTED_TOOLCHAIN_KEYS if key not in pack["toolchains"]]
+    if missing:
+        refuse(
+            "release pack predates the projected toolchain fields and cannot be "
+            "compared: " + ", ".join(missing)
+        )
     release = pack["release"]
     return {
         "source_revision": pack["source"]["revision"],
         "source_tree_sha256": pack["source"]["tree_sha256"],
         "root_cargo_lock_sha256": pack["source"]["root_cargo_lock_sha256"],
         "cargo_lock_set_sha256": pack["source"]["cargo_lock_set_sha256"],
-        "toolchains": {
-            key: pack["toolchains"][key]
-            for key in (
-                "host_rust_channel",
-                "sbf_rustc",
-                "solana_cli",
-                "cargo_build_sbf",
-                "platform_tools",
-                "target_triple",
-            )
-        } | {"node": pack["toolchains"]["node"]},
+        "toolchains": {key: pack["toolchains"][key] for key in PROJECTED_TOOLCHAIN_KEYS}
+        | {"node": pack["toolchains"]["node"]},
         "artifacts": artifacts,
         "release": {
             "execution_release_set_id": release["execution_release_set_id"],
@@ -1847,7 +1928,16 @@ def reproduction_value(
             "fresh random build-run identifier",
             "per-run provenance and gate JSON hashes",
             "actual builder label",
-            "host OS, kernel, C toolchain, and libc identity",
+            # The old spelling of this line was "host OS, kernel, C toolchain,
+            # and libc identity", which read as though the host were excluded.
+            # It is not, and the shipped ELFs are the proof: they carry the
+            # builder's host triple in two places at once, so the host OS and
+            # architecture are PINNED by the named builder artifact rather than
+            # excluded, and only the substrate details below vary between two
+            # machines running that artifact.
+            "kernel, C toolchain, and libc identity WITHIN the named builder"
+            " artifact's host OS and architecture, which are pinned rather than"
+            " excluded",
             "source-built host successor binary (its exact source and deterministic Product outputs are compared)",
         ],
     }

@@ -2113,6 +2113,85 @@ mod tests {
     /// The refusal is the lifecycle conjunct, not some other unmet prelude
     /// requirement: the same bank at `Active` reaches the action-specific
     /// conjuncts, which is where the other actions legitimately refuse.
+    /// THE FREEZE IS A FUNCTION OF NO CLOCK, AND THAT IS THE DEFECT.
+    ///
+    /// `Freeze` closes selection around the current best valid submitted
+    /// candidate. Every other window-gated General action names the clock:
+    /// `PlaceOrder` and `CancelOrder` require `currentSlot < collectionCloseSlot`,
+    /// `CloseBatch` requires `collectionCloseSlot <= currentSlot`,
+    /// `SubmitCandidate` requires both bounds. `Freeze`'s transition names it
+    /// nowhere, so a freeze one slot after the batch opened admits exactly as a
+    /// freeze after the collection window closed: whoever moves first ends
+    /// selection, and every candidate not yet submitted is simply lost.
+    ///
+    /// Measured, not asserted from the source: the same bank folded at slot 0
+    /// and at slot `u64::MAX / 2` both accept and produce BYTE-IDENTICAL output,
+    /// which is what "a function of no clock" means as a statement about a
+    /// program rather than about its text.
+    ///
+    /// THE CONJUNCT CANNOT BE ADDED ALONE. `Freeze`'s AccountProfile declares
+    /// nine fixed accounts and zero readonly evidence, and its primary state --
+    /// `RuntimeSelectionCursorV2` -- carries `batch_id` and NO close slot. So
+    /// there is no register holding a deadline for a `scalarLe` to compare
+    /// `currentSlot` against; the repair is either that cursor persisting the
+    /// batch's `collection_close_slot`, or that profile naming the Batch as
+    /// readonly evidence and projecting `scalar::BATCH_COLLECTION_CLOSE_SLOT`
+    /// the way `CloseBatch` does. Both change an artifact digest, so both are a
+    /// re-founding, and neither is executable in any harness today because no
+    /// campaign builds a selection cursor.
+    ///
+    /// This test is the debt made checkable: the day a slot conjunct lands it
+    /// goes red, naming itself, instead of the gap staying a sentence in a
+    /// design note.
+    #[test]
+    fn freeze_admits_at_every_slot_because_its_transition_names_no_clock() {
+        let bytes = artifact(Action::Freeze);
+        let program = ProgramV3::decode(&bytes).expect("decode");
+        let bank = |slot: u64| {
+            let (mut scalars, identities) = consider_input_bank(1, ACTIVE_LIFECYCLE);
+            for (coordinate, value) in [
+                (scalar::CURRENT_SLOT, slot),
+                (scalar::SELECTION_BEST_CANDIDATE_COORDINATE, 1),
+                (scalar::SELECTION_BEST_VERIFIED_REVISION, 1),
+            ] {
+                scalars[usize::try_from(coordinate).expect("register")] = value;
+            }
+            (scalars, identities)
+        };
+        let (early_scalars, early_identities) = bank(0);
+        let (late_scalars, late_identities) = bank(u64::MAX / 2);
+        let early = fold(program, 1, &early_scalars, &early_identities)
+            .expect("a freeze at slot zero admits, which is the defect");
+        let late = fold(program, 1, &late_scalars, &late_identities)
+            .expect("a freeze at an unbounded slot admits");
+        // IDENTICAL EXCEPT AT THE CLOCK REGISTER ITSELF, which the fold carries
+        // through untouched. That is the exact statement: the freeze's output is
+        // a function of everything in the bank EXCEPT the slot, and the slot is
+        // present -- it is projected, it is available, and no conjunct reads it.
+        let differing: std::vec::Vec<usize> = early
+            .iter()
+            .zip(late.iter())
+            .enumerate()
+            .filter(|(_, (a, b))| a != b)
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(
+            differing,
+            vec![usize::try_from(scalar::CURRENT_SLOT).expect("clock register")],
+            "the freeze fold moved a register other than the clock it carries through"
+        );
+        // THE POSITIVE CONTROL, and without it this proves nothing: the same
+        // pair of banks through a transition that DOES name the clock must
+        // disagree. `CloseBatch` requires the collection window to have elapsed,
+        // so slot zero refuses and an unbounded slot does not.
+        let close_bytes = artifact(Action::CloseBatch);
+        let close = ProgramV3::decode(&close_bytes).expect("decode");
+        assert!(
+            fold(close, 1, &early_scalars, &early_identities).is_err(),
+            "CloseBatch must refuse at slot zero, or this fixture reaches no window conjunct"
+        );
+    }
+
     #[test]
     fn the_active_bank_passes_the_lifecycle_conjunct_for_every_action() {
         for action in ACTIONS {

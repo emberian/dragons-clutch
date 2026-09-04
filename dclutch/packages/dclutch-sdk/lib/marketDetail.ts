@@ -191,3 +191,105 @@ export async function inspectMarketDetailV1(
       : `Market ${card.address} refused at finalized floor ${discovery.floorSlot}: ${card.refusal}`,
   });
 }
+
+/** Who is paid if this market's data source never reports, read off the chain. */
+export type OutageDisclosureV1 = Readonly<{
+  /** The failure outcome's index: the last cell, which is the failure cell. */
+  failureOutcome: number;
+  /** The whole failure column's supply, from the Claims aggregate. */
+  supplyAtoms: string;
+  /** How much of it the Positions this page could read account for. */
+  accountedAtoms: string;
+  /** Supply this page could not attribute to any Position it read. */
+  unaccountedAtoms: string;
+  /** Every reader of the failure column this page saw, largest first. */
+  holders: ReadonlyArray<Readonly<{ owner: string; atoms: string; wholeColumn: boolean }>>;
+  /** Whether the read accounts for the whole column, so the answer is complete. */
+  complete: boolean;
+  /** What happens under an outage, in the words a buyer needs before trading. */
+  headline: string;
+  /** Who is paid, named from the read rather than asserted. */
+  payee: string;
+}>;
+
+/**
+ * What an oracle outage pays, and to whom, DERIVED rather than written down.
+ *
+ * A market resolves to its failure outcome when the data source never reports,
+ * and that outcome's claims are paid exactly the way any other winner's are.
+ * So the question "who is paid if the feed goes quiet" has a chain answer:
+ * whoever holds the failure column. Nobody trades for a failure claim, so on
+ * every market founded so far that is the founder, who also chose the oracle,
+ * the window, and whether there is a recovery policy.
+ *
+ * THIS FUNCTION MUST NEVER BE REPLACED BY A SENTENCE IN THE REGISTRY. The
+ * registry is editorial and a founder writes it; the payee under an outage is
+ * the one fact a buyer cannot afford to take a founder's word for. It is read
+ * from the Claims aggregate's own supply vector and the Position accounts
+ * themselves.
+ *
+ * IT ALSO REPORTS WHAT IT COULD NOT SEE. The Positions this page reads are
+ * harvested from the market's recent transactions and capped, so the set is not
+ * guaranteed complete -- and a disclosure that quietly presented a partial read
+ * as the whole answer would be worse than none. Comparing the failure balances
+ * it did read against the aggregate's own supply at that coordinate settles it
+ * exactly: equal means the column is fully accounted for, and any shortfall is
+ * reported as a number rather than rounded away.
+ */
+export function outageDisclosureV1(
+  input: Readonly<{
+    outcomeCount: number;
+    supplyAtoms: ReadonlyArray<string>;
+    positions: ReadonlyArray<Readonly<{ owner: string; balances: ReadonlyArray<string> }>>;
+  }>,
+): OutageDisclosureV1 | null {
+  if (input.outcomeCount < 2 || input.supplyAtoms.length !== input.outcomeCount) return null;
+  const failureOutcome = input.outcomeCount - 1;
+  let supply: bigint;
+  try {
+    supply = BigInt(input.supplyAtoms[failureOutcome] ?? '');
+  } catch {
+    return null;
+  }
+  const holders = input.positions
+    .map((position) => {
+      const raw = position.balances[failureOutcome];
+      if (raw === undefined || position.balances.length !== input.outcomeCount) return null;
+      let atoms: bigint;
+      try {
+        atoms = BigInt(raw);
+      } catch {
+        return null;
+      }
+      return atoms === 0n ? null : { owner: position.owner, atoms };
+    })
+    .filter((holder): holder is { owner: string; atoms: bigint } => holder !== null)
+    .sort((left, right) => (right.atoms > left.atoms ? 1 : right.atoms < left.atoms ? -1 : 0));
+  const accounted = holders.reduce((total, holder) => total + holder.atoms, 0n);
+  const unaccounted = supply > accounted ? supply - accounted : 0n;
+  const complete = supply > 0n && unaccounted === 0n;
+  const named = holders.map((holder) => Object.freeze({
+    owner: holder.owner,
+    atoms: holder.atoms.toString(),
+    wholeColumn: supply > 0n && holder.atoms === supply,
+  }));
+  const payee = supply === 0n
+    ? 'Nothing is issued on the failure outcome, so an outage pays nobody.'
+    : holders.length === 0
+      ? `No Position this page could read holds any of the ${supply.toString()} atoms on the failure outcome, so this page cannot say who an outage would pay.`
+      : complete && named.length === 1 && named[0]!.wholeColumn
+        ? `One holder, ${named[0]!.owner}, holds every one of the ${supply.toString()} atoms on the failure outcome and would be paid all of the collateral.`
+        : complete
+          ? `${named.length} holders split the ${supply.toString()} atoms on the failure outcome and would be paid in proportion to what each holds.`
+          : `The Positions read here account for ${accounted.toString()} of the ${supply.toString()} atoms on the failure outcome; ${unaccounted.toString()} sit in Positions this page did not read, so this is a partial answer.`;
+  return Object.freeze({
+    failureOutcome,
+    supplyAtoms: supply.toString(),
+    accountedAtoms: accounted.toString(),
+    unaccountedAtoms: unaccounted.toString(),
+    holders: Object.freeze(named),
+    complete,
+    headline: `If the data source never reports, this market settles on outcome ${failureOutcome} \u2014 its failure outcome \u2014 and the whole collateral is paid to whoever holds that claim. Everyone holding one of the other outcomes is paid nothing, whichever of them would have been right.`,
+    payee,
+  });
+}

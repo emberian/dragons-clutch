@@ -2442,6 +2442,21 @@ tier_release() {
     devnet-flight/test_devnet_flight.py
     lifecycle-chaos/test_lifecycle_chaos.py
     test_usage_parity.py
+    # The nine that were still running NOWHERE after the 2026-09-01 sweep above
+    # added `test_usage_parity.py` and stopped. `test_successor_campaign_pack.py`
+    # is the one that matters most: it is the release pack's whole refusal
+    # surface -- the shipped-link count, the evidence rehash, and now the named
+    # builder artifact that decides whether a candidate's bytes can be a release
+    # at all. All nine were green when they were added, so a red one is news.
+    test_artifact_provenance.py
+    test_devnet_direct_lifecycle.py
+    test_node_archive_members.py
+    test_public_route_campaign.py
+    test_successor_campaign_pack.py
+    test-check-all-workspaces.py
+    test-compose-mixed-gate.py
+    test-final-generated-convergence.py
+    test-plan-sbf-release-batch.py
   )
   local py_present=() py_missing=() suite
   for suite in "${py_suites[@]}"; do

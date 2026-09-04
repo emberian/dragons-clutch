@@ -67,6 +67,7 @@ import DClutchSemantics.DealerLiquidityExamples
 import DClutchSemantics.DealerScenarioCollateral
 import DClutchSemantics.DealerScenarioSolvency
 import DClutchSemantics.DealerTradingProfile
+import DClutchSemantics.ScoringRuleV1
 import DClutchSemantics.Series
 import DClutchSemantics.SeriesEscrowV3
 import DClutchSemantics.SeriesOccurrenceV3

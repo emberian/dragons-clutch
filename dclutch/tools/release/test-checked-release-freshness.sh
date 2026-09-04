@@ -121,7 +121,7 @@ expect_refusal "legacy keep-elf mode refuses before using stale evidence" \
     "refusing --keep-elf" "$RUNNER" --work "$SCRATCH/keep" --keep-elf
 
 expect_refusal "unknown builder refuses before any build" \
-    "--builder must be local, persvati, or hbox" \
+    "--builder must be local, persvati, container, or hbox" \
     "$RUNNER" --work "$SCRATCH/builder-unknown" --builder other
 
 expect_refusal "hbox label refuses outside swarm-build" \
@@ -131,6 +131,26 @@ expect_refusal "hbox label refuses outside swarm-build" \
 expect_refusal "hbox label is admitted inside the scheduler boundary" \
     "--predecessor-profile is required" \
     env SWARM_BUILD_INNER=1 "$RUNNER" --work "$SCRATCH/builder-hbox-inner" --builder hbox
+
+# THE NAMED RELEASE BUILDER ARTIFACT, asserted on whichever host is running
+# this. Both branches assert something: nothing here is skipped, because a
+# skip that prints `ok` is the failure mode this file exists to refuse.
+#
+# The gate sits after every argument refusal and before the Node gate, so on a
+# host that is not the named artifact the Node gate is unreachable without
+# saying --diagnostic-builder out loud -- which is the second assertion.
+if [ "$(uname -s)/$(uname -m)" = "Linux/x86_64" ]; then
+    expect_refusal "the named release builder host passes the gate and reaches the Node gate" \
+        "--node is required" \
+        "$RUNNER" --work "$SCRATCH/builder-host" --genesis-cohort
+else
+    expect_refusal "a host that is not the named release builder artifact refuses before the Node gate" \
+        "named release builder" \
+        "$RUNNER" --work "$SCRATCH/builder-host" --genesis-cohort
+    expect_refusal "--diagnostic-builder carries a NON-RELEASE build past the gate" \
+        "--node is required" \
+        "$RUNNER" --work "$SCRATCH/builder-diag" --genesis-cohort --diagnostic-builder
+fi
 
 expect_refusal "relative predecessor profile refuses before source or build work" \
     "--predecessor-profile must be an absolute canonical path" \
@@ -149,9 +169,13 @@ expect_refusal "symlink predecessor profile refuses before source or build work"
     "$RUNNER" --work "$SCRATCH/predecessor-link" \
         --predecessor-profile "$SCRATCH/predecessor-link.bin"
 
+# --diagnostic-builder on both of the Node-gate cases below, because the Node
+# gate is downstream of the release-builder gate and these two are about Node.
+# On the named builder host the flag is a no-op; anywhere else it is the only
+# way to reach a refusal past the gate, and saying it is the point.
 expect_refusal "ambient Node is never accepted for the Product handoff gate" \
     "--node is required for the source-pinned Product handoff gate" \
-    "$RUNNER" --work "$SCRATCH/node-required" \
+    "$RUNNER" --work "$SCRATCH/node-required" --diagnostic-builder \
         --predecessor-profile "$SCRATCH/predecessor.bin"
 
 # Infrastructure lineage is a stated choice, and both ways of failing to state
@@ -173,7 +197,7 @@ expect_refusal "stating no lineage at all refuses before source or build work" \
 # pinned Node runtime) rather than at a predecessor it will never have.
 expect_refusal "a genesis candidate needs no predecessor and reaches the Node gate" \
     "--node is required for the source-pinned Product handoff gate" \
-    "$RUNNER" --work "$SCRATCH/lineage-genesis" --genesis-cohort
+    "$RUNNER" --work "$SCRATCH/lineage-genesis" --genesis-cohort --diagnostic-builder
 
 if grep -Fq 'run_tool derive-genesis-infrastructure-profile' "$RUNNER" \
     && grep -Fq 'infrastructure_lineage=genesis' "$RUNNER" \

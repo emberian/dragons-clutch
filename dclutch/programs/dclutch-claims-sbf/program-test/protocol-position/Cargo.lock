@@ -1614,6 +1614,7 @@ dependencies = [
 name = "dclutch-claims-sbf"
 version = "0.1.0"
 dependencies = [
+ "dclutch-capability-contract",
  "dclutch-claims-svm",
  "dclutch-core-contract",
  "dclutch-custody-contract",
@@ -1829,6 +1830,7 @@ dependencies = [
 name = "dclutch-product-runtime-v2-svm-reader"
 version = "0.1.0"
 dependencies = [
+ "dclutch-capability-contract",
  "dclutch-product-payoff-v2-codec",
  "dclutch-product-runtime-v2",
  "dclutch-product-runtime-v2-admission",

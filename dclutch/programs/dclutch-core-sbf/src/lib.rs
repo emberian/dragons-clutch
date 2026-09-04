@@ -134,26 +134,25 @@ pub enum CoreSbfError {
     /// upgrade authority the release names shipped new bytes, so the cached
     /// authentication no longer describes what is deployed.
     ReleaseSuperseded = 0x3010,
-    /// A Source material bought a recovery walk that no live route can walk.
+    /// **RETIRED: this refusal has no producer, and reaching it is impossible.**
     ///
-    /// Liveness census R2/Q2 (`docs/evidence/LIVENESS_CENSUS_2026_08_29.md`).
-    /// `SourceResolutionStateV2::exhaust_after_primary_deadline` refuses any
-    /// material carrying a recovery policy
-    /// (`source_resolution_v2.rs`, `Error::RecoveryNotExhausted`), and the
-    /// ordered ladder that was supposed to consume those paid-for legs has no
-    /// live call site — `funded::process_funded_transition` is reachable only
-    /// from a `#[cfg(any())]` function. So a resolution fund created over such
-    /// a material admits neither the success capture nor the failure walk at
-    /// its deadline: it has no terminal at all, and every holder's principal
-    /// stays in it forever.
+    /// It was the liveness census R2/Q2 weld
+    /// (`docs/evidence/LIVENESS_CENSUS_2026_08_29.md`). `CreateFund` refused a
+    /// Source material carrying a recovery policy, because such a market had no
+    /// terminal at all: `exhaust_after_primary_deadline` refuses that material
+    /// by name, and nothing advanced the attempt it was refusing on behalf of.
+    /// The weld's own docstring said it lifted "the moment the ladder gets a
+    /// live route", and decision 0027 built one -- `RelayActionV1::AdvanceRecovery`
+    /// walks the funded ordered ladder and exhausts into the failure commit --
+    /// so `recovery_walk_has_a_live_route` is deleted and nothing raises this.
     ///
-    /// `CreateFund` is therefore refused for a recovery-policy material. This
-    /// is a weld, not a design: it refuses to *create* the un-terminalizable
-    /// resolution state. `VerifyFundReady` is deliberately untouched, so any
-    /// state that already exists keeps every route it has. (`CloseFund` was
-    /// named here too until V7 moved the close out of Core entirely; it now
-    /// earns [`CoreSbfError::UnsupportedAction`] at decode, weld or no weld.)
-    /// The weld lifts when the ladder gets a live route.
+    /// **Why the variant stays anyway, and the debt that keeps it here.** The
+    /// discriminants below are asserted CONTIGUOUS from the registered band
+    /// base, so removing `0x3011` renumbers every Core refusal above it: twelve
+    /// wire-visible codes, their bindings, their tests and their docs. That is
+    /// a release event and it is owed, not done. Until it happens: nothing may
+    /// reuse `0x3011`, and a reader who sees this variant in the enum must not
+    /// conclude that any route can raise it.
     RecoveryWalkUnavailable = 0x3011,
     /// A basis declaring degree >= 2 was founded with no `DCLTPGT1` price-gate
     /// certificate account offered.

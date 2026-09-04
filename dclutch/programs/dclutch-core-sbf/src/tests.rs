@@ -247,7 +247,9 @@ fn maximum_profile_general_activation_fits_one_lookup_v0_packet() {
 
 /// Liveness census R2 / queue Q2 — the weld is gone, and this is why.
 ///
-/// The weld (`resolution::recovery_walk_has_a_live_route`) refused `CreateFund`
+/// The weld -- a predicate named recovery-walk-has-a-live-route, deleted with
+/// this rewrite, so the name is history rather than a pointer -- refused
+/// `CreateFund`
 /// over a recovery-bearing material because such a market had no terminal at
 /// all: the primary exhaustion refuses that material by name, and nothing could
 /// advance the attempt it was refusing on behalf of. Its own docstring said it

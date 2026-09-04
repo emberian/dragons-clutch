@@ -13,6 +13,7 @@ import {
   type MarketActivityV1,
   type MarketFillV1,
 } from '@/lib/marketActivity';
+import { outageDisclosureV1 } from '@/lib/marketDetail';
 import { shortAddressV1 } from '@/lib/marketDiscovery';
 import { checkedReleaseSetIdsV1 } from '@/lib/publicCutStaging';
 import { denominationUnitV1, formatQuantityV1, type DenominationV1 } from '@/lib/quantity';
@@ -119,13 +120,15 @@ export function CrossingsTable({ fills, denomination, outcomes }: Readonly<{
   </div>;
 }
 
-export default function MarketActivity({ address, endpoint, programs, denomination, outcomes }: Readonly<{
+export default function MarketActivity({ address, endpoint, programs, denomination, outcomes, supplyAtoms }: Readonly<{
   address: string;
   endpoint: string;
   /** The deployment's program ids, from the page's own deployment store. */
   programs: Readonly<{ core: string; registry: string; trading: string; claims: string }>;
   denomination: DenominationV1 | null;
   outcomes: ReadonlyArray<string> | null;
+  /** The Claims aggregate's own supply vector, which the page already read. */
+  supplyAtoms: ReadonlyArray<string> | null;
 }>) {
   const [state, setState] = useState<State>({ kind: 'loading', message: 'Reading what has happened here…' });
   const { core, registry, trading, claims } = programs;
@@ -181,6 +184,7 @@ export default function MarketActivity({ address, endpoint, programs, denominati
     state={state}
     denomination={denomination}
     outcomes={outcomes}
+    supplyAtoms={supplyAtoms}
     onReread={() => { void read(); }}
   />;
 }
@@ -191,16 +195,23 @@ export default function MarketActivity({ address, endpoint, programs, denominati
  * Exported for exactly that: the arrangement of this section is pinned by a
  * case that hands it a state, not by a screenshot.
  */
-export function MarketActivityView({ state, denomination, outcomes, onReread }: Readonly<{
+export function MarketActivityView({ state, denomination, outcomes, supplyAtoms, onReread }: Readonly<{
   state: State;
   denomination: DenominationV1 | null;
   outcomes: ReadonlyArray<string> | null;
+  supplyAtoms: ReadonlyArray<string> | null;
   onReread?: () => void;
 }>) {
   const activity = state.kind === 'ready' ? state.activity : null;
   const spine = state.kind === 'ready' ? state.spine : null;
   const fills = activity?.fills ?? [];
   const positions = activity?.positions ?? [];
+  // The one thing a buyer cannot take a founder's word for, and it is not
+  // written down anywhere: it is read off the supply vector this page already
+  // holds and the Position accounts it just read. See `outageDisclosureV1`.
+  const outage = supplyAtoms === null
+    ? null
+    : outageDisclosureV1({ outcomeCount: supplyAtoms.length, supplyAtoms, positions });
 
   return <section className="trade-v3-card" aria-label="What has happened on this market">
     <header>
@@ -275,6 +286,30 @@ export function MarketActivityView({ state, denomination, outcomes, onReread }: 
             with the same count on every outcome holds complete sets and has taken no side.
           </p>
         </>}
+
+      {outage !== null && <>
+        <h3 className="detail-subhead">If the source never reports</h3>
+        <p>{outage.headline}</p>
+        <p className={outage.complete ? undefined : 'market-refusal'}>{outage.payee}</p>
+        {outage.holders.length > 0 && <div className="viz-table-scroll" tabIndex={0} role="region" aria-label="Who holds this market's failure outcome">
+          <table className="holders-table">
+            <thead><tr><th>Holder of claim {outage.failureOutcome}</th><th>Claims held · raw u64</th><th>Share of the failure outcome</th></tr></thead>
+            <tbody>
+              {outage.holders.map((holder) => <tr key={holder.owner}>
+                <td title={holder.owner}>{shortAddressV1(holder.owner, 5)}</td>
+                <td>{holder.atoms}</td>
+                <td>{holder.wholeColumn ? 'all of it' : `${holder.atoms} of ${outage.supplyAtoms}`}</td>
+              </tr>)}
+            </tbody>
+          </table>
+        </div>}
+        <p className="slot-clock-note">
+          Read from the Claims aggregate&apos;s supply vector and the Position accounts above, not from
+          this market&apos;s written terms. {outage.complete
+            ? `Those Positions account for every one of the ${outage.supplyAtoms} atoms on the failure outcome, so this is the whole answer.`
+            : `They account for ${outage.accountedAtoms} of ${outage.supplyAtoms}; the rest sits in Positions this read did not reach.`}
+        </p>
+      </>}
 
       {activity.feeStandings.length > 0 && <>
         <h3 className="detail-subhead">What the venue is owed</h3>

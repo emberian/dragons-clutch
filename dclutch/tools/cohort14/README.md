@@ -103,9 +103,17 @@ tree: `platform-tools` ships a Rust standard library that embeds its own CI
 build path (`/home/runner/...` on linux-x64, `/Users/runner/...` on
 darwin-arm64) in the panic locations it puts in `.rodata`. Reproduce a deploy
 candidate on the same OS as the machine that built it, or the comparison is
-guaranteed to fail for a reason that has nothing to do with the deploy. See
-`tools/release/README.md`, "Cross-host reproduction is scoped to one
-platform-tools host OS".
+guaranteed to fail for a reason that has nothing to do with the deploy.
+
+**Amended 2026-09-04: that is half the cause, and the other half is why "same
+OS" is the wrong rule.** Installing the linux sysroot into the macOS
+platform-tools removes the string entirely and still leaves 654 bytes of
+`.text` moved, because cargo's per-unit `-C metadata` hash inherits the
+builder's host triple through every build-script and proc-macro unit. The rule
+is **the same builder ARTIFACT**, not the same OS: platform-tools v1.53 on
+`Linux/x86_64`, run natively on hbox or persvati or in a `linux/amd64`
+container anywhere else. See `tools/release/README.md`, "One builder artifact",
+and `docs/runbooks/COLD_MACHINE_2026_09_03.md` §10.
 
 **Cost:** **−42.26 SOL**, projected from cohort-13's measured 42.123003619 over
 6,643,784 bytes (6,340.21 lamports/byte) against cohort-14's 6,665,200. The
