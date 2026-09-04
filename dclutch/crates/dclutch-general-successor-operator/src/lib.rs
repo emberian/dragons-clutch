@@ -80,7 +80,12 @@ pub type Result<T> = core::result::Result<T, Error>;
 
 /// Stable command name used by both first-party host binaries.
 pub const COMMAND_V1: &str = "general-successor-plan-v5";
-const ROUTE_FORMAT_V1: &str = "dclutch/general-successor-route/v1";
+/// The exact `format` string every General successor route document carries.
+///
+/// Public so a route PRODUCER states the format this parser checks rather than
+/// a copy of it: the one thing a producer and a parser must never disagree
+/// about is the name of the agreement.
+pub const ROUTE_FORMAT_V1: &str = "dclutch/general-successor-route/v1";
 const PLAN_FORMAT_V5: &str = "dclutch/general-successor-plan/v5";
 const MAX_ROUTE_BYTES_V1: usize = 256 * 1024;
 /// Exact UTF-8 JSON bound shared by the producer and both hostile client twins.
@@ -540,7 +545,13 @@ fn action_v1(value: &str) -> Result<Action> {
     }
 }
 
-fn action_name_v1(action: Action) -> &'static str {
+/// The exact route/plan spelling of one General action.
+///
+/// Public because a route PRODUCER must spell the action the way
+/// [`parse_route_v1`] reads it, and a producer that keeps its own table is a
+/// second author for a name whose only job is to match.
+#[must_use]
+pub fn action_name_v1(action: Action) -> &'static str {
     match action {
         Action::Consider => "consider",
         Action::Freeze => "freeze",
@@ -635,7 +646,15 @@ fn snapshot_addresses_v1(route: &GeneralSuccessorRouteV1) -> Result<Vec<Pubkey>>
     Ok(addresses)
 }
 
-fn acquire_route_v1(
+/// Project one exact finalized snapshot onto an authenticated route.
+///
+/// This is the sole non-test constructor of [`GeneralHotStateV3`], and it is
+/// public so that a PRODUCER of routes can close its own loop: a host that
+/// emits a route document has no other way to prove the document it just wrote
+/// is one this parser and this projection accept. Callers get no new authority
+/// from it -- every field it fills is taken from the route it was handed and
+/// the observation it was handed, and both are re-checked here.
+pub fn acquire_route_v1(
     route: &GeneralSuccessorRouteV1,
     observed: Vec<ObservedAccount>,
 ) -> Result<(GeneralHotStateV3, ObservedAccount)> {

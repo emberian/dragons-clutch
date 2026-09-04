@@ -705,6 +705,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "bincode",
+ "dclutch-account-profile-contract",
  "dclutch-capability-activation-codec",
  "dclutch-capability-contract",
  "dclutch-capability-program-contract",

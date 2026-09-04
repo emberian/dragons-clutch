@@ -94,8 +94,9 @@ use dclutch_capability_program_contract::{
         HOT_TRANSITION_RAW_ACCOUNT_V3,
     },
     set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
-    v4::{CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4},
+    v4::{CapabilityProgramV4, CapabilityRootAccountV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4},
 };
+use dclutch_account_profile_contract::v2::AccountProfileV2;
 use dclutch_capability_seal_contract::CapabilitySealKeyV1;
 use dclutch_core_contract::ContentId;
 use dclutch_execution_strategy_contract::{
@@ -125,8 +126,17 @@ use dclutch_general_adapter_contract::{
         GENERAL_PRIMARY_STATE_ACCOUNT_V3, general_system_program_account_v3,
     },
 };
+use dclutch_general_adapter_contract::{
+    collection_v1::{GeneralBatchOccurrenceTermsV1, GeneralBatchOpeningV1},
+    state_seeds_v3::GeneralStateAddressSeedsV3,
+};
 use dclutch_general_codec::{Action, successor_request_v2::CONTROLLER_REQUEST_BYTES_V2};
-use dclutch_general_config_contract::GENERAL_CAPABILITY_KIND_ID_V1;
+use dclutch_general_config_contract::{
+    GENERAL_CAPABILITY_KIND_ID_V1,
+    root::GeneralRootV2,
+    v3::GeneralConfigV3,
+};
+use dclutch_general_successor_operator::{self as successor, ROUTE_FORMAT_V1};
 use dclutch_market_core_codec::{CoreState, Phase as CorePhase};
 use dclutch_operator::resolution_core_v3::product_graph_observation_v3::{
     FinalizedProductGraphAccountsV3, authenticate_product_graph_observation_v3,
@@ -137,6 +147,7 @@ use dclutch_product_runtime_v2_admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
 };
 use dclutch_record_contract::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
+use dclutch_release_tool::CheckedExecutionReleaseSetV1;
 use dclutch_registry_contract::ARTIFACT_RELEASE_SCHEMA_ID_V1;
 use dclutch_registry_contract::ActivatedExecutionReleaseSetV1;
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
@@ -190,13 +201,21 @@ pub(crate) fn usage() -> &'static str {
      --result-domain-record ADDRESS --portfolio-record ADDRESS \
      --linked-basis-record ADDRESS \
      --payer PUBKEY --output ABSOLUTE_NEW_JSON \
-     [--parent-request-digest HEX64]\n     \
+     [--parent-request-digest HEX64] \
+     [--emit-route ABSOLUTE_NEW_JSON --lookup-table ADDRESS \
+     --rent-credit ADDRESS --checked-release ABSOLUTE_BIN]\n     \
      Read-only. Derives the complete General OpenBatch hot frame from the \
      Market's own records, recovers the published AccountProfile's external \
      widths from the chain's bytes, and reports each account's producer. \
      --parent-request-digest is the digest of the signed DCLTHOT3 family \
      request; supplied, the admitted caller-authority span is reported at the \
-     exact addresses Trading will require."
+     exact addresses Trading will require. --emit-route additionally writes \
+     the GeneralSuccessorRouteV1 document `general-successor-plan-v5` \
+     consumes, from THIS derivation and only when the frame names no \
+     unsatisfiable conjunct; it needs the three coordinates the frame cannot \
+     observe -- the lookup table, the RentCredit account, and the checked \
+     multiprogram release set whose own release-set identity must equal the \
+     Market's."
 }
 
 struct ArgumentsV1 {
@@ -218,6 +237,27 @@ struct ArgumentsV1 {
     /// probe digest — so that a derivation that has stopped working is a
     /// refusal rather than a silence.
     parent_request_digest: Option<ContentId>,
+    /// Where to write the `GeneralSuccessorRouteV1` this derivation implies.
+    ///
+    /// Absent, this command is exactly what it was: a report. Present, the
+    /// SAME locals that produced every reported row are serialized as the
+    /// route document, so the report and the route cannot disagree about a
+    /// frame -- which is the whole reason the producer lives here rather than
+    /// in a second command that would have to re-derive it.
+    emit_route: Option<PathBuf>,
+    /// The route's lookup table. Not observable from the frame: it is a
+    /// caller-owned account whose address set is a function of the compiled
+    /// instruction, and this command compiles nothing.
+    lookup_table: Option<Pubkey>,
+    /// The RentCredit account at the primary rent-credit runtime coordinate.
+    /// The frame report says of it that "nothing on chain names it", which is
+    /// exactly why a route has to be told.
+    rent_credit: Option<Pubkey>,
+    /// The cohort's `CheckedExecutionReleaseSetV1` bytes. Its own release-set
+    /// identity is required to equal the Market's `selected_release_set`, so
+    /// the route's checked-manifest digest is authenticated against the chain
+    /// rather than transcribed from a table.
+    checked_release: Option<PathBuf>,
 }
 
 fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
@@ -231,6 +271,10 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
     let mut payer = None;
     let mut output = None;
     let mut parent_request_digest = None;
+    let mut emit_route = None;
+    let mut lookup_table = None;
+    let mut rent_credit = None;
+    let mut checked_release = None;
     let mut iterator = arguments.into_iter();
     while let Some(flag) = iterator.next() {
         let value = iterator
@@ -247,6 +291,10 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
             "--payer" => &mut payer,
             "--output" => &mut output,
             "--parent-request-digest" => &mut parent_request_digest,
+            "--emit-route" => &mut emit_route,
+            "--lookup-table" => &mut lookup_table,
+            "--rent-credit" => &mut rent_credit,
+            "--checked-release" => &mut checked_release,
             other => return Err(refusal("input/unknown-flag", other)),
         };
         if slot.replace(value).is_some() {
@@ -256,6 +304,25 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
     let required = |value: Option<String>, name: &str| {
         value.ok_or_else(|| refusal("input/missing-flag", format!("{name}; usage: {}", usage())))
     };
+    // THE ROUTE FLAGS ARE ALL-OR-NOTHING, AND THE REFUSAL SAYS WHICH IS MISSING.
+    //
+    // A route emitted with a defaulted lookup table or a defaulted RentCredit
+    // would parse, reach the producer, and refuse there against an address
+    // nobody chose -- one refusal further from its cause than it needs to be.
+    let route_flags = [
+        ("--emit-route", emit_route.is_some()),
+        ("--lookup-table", lookup_table.is_some()),
+        ("--rent-credit", rent_credit.is_some()),
+        ("--checked-release", checked_release.is_some()),
+    ];
+    if route_flags.iter().any(|(_, present)| *present)
+        && let Some((missing, _)) = route_flags.iter().find(|(_, present)| !*present)
+    {
+        return Err(refusal(
+            "input/partial-route",
+            format!("emitting a route needs {missing} as well; usage: {}", usage()),
+        ));
+    }
     Ok(ArgumentsV1 {
         rpc_url: required(rpc_url, "--rpc-url")?,
         acknowledgment: required(acknowledgment, DEVNET_ACKNOWLEDGMENT_FLAG)?,
@@ -269,6 +336,10 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
         parent_request_digest: parent_request_digest
             .map(|value| content_id_from_hex_v1(&value))
             .transpose()?,
+        emit_route: emit_route.map(PathBuf::from),
+        lookup_table: lookup_table.as_deref().map(pubkey).transpose()?,
+        rent_credit: rent_credit.as_deref().map(pubkey).transpose()?,
+        checked_release: checked_release.map(PathBuf::from),
     })
 }
 
@@ -1114,6 +1185,196 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
             arguments.market,
             arguments.output.display()
         );
+        // THE ROUTE IS EMITTED ONLY HERE, PAST THE WALL LIST.
+        //
+        // `devnet-general-session` is the gate in front of the producer, and a
+        // gate that also emits its subject on the refusing path is not a gate.
+        // A route for a frame with an unsatisfiable conjunct would parse, reach
+        // `general-successor-plan-v5`, and refuse there against a conjunct this
+        // command had already named in words.
+        if let Some(path) = arguments.emit_route.as_deref() {
+            let (lookup_table, rent_credit, checked_release) = (
+                arguments
+                    .lookup_table
+                    .ok_or_else(|| refusal("route/lookup-table", "--lookup-table"))?,
+                arguments
+                    .rent_credit
+                    .ok_or_else(|| refusal("route/rent-credit", "--rent-credit"))?,
+                arguments
+                    .checked_release
+                    .as_deref()
+                    .ok_or_else(|| refusal("route/checked-release", "--checked-release"))?,
+            );
+            let checked_bytes = std::fs::read(checked_release).map_err(|error| {
+                refusal("input/unreadable", format!("checked release: {error}"))
+            })?;
+            let checked = CheckedExecutionReleaseSetV1::decode(&checked_bytes).map_err(|error| {
+                refusal(
+                    "route/checked-release",
+                    format!("the checked multiprogram manifest did not decode: {error:?}"),
+                )
+            })?;
+            // THE ONLY CONJUNCT THAT MAKES THIS PROVENANCE AUTHENTICATED.
+            //
+            // `build_general_successor_instruction_v5` never re-derives the
+            // checked-manifest digest, so a route could carry any nonzero
+            // 32 bytes and the producer would copy them into its plan. What the
+            // chain DOES state is the release set the Market selected, and the
+            // checked manifest states its own; requiring the two to be equal is
+            // what turns a transcribed digest into an observed one.
+            let observed_release_set = checked
+                .execution_release_set_id()
+                .map_err(|error| {
+                    refusal(
+                        "route/checked-release",
+                        format!("the checked manifest has no release-set identity: {error:?}"),
+                    )
+                })?
+                .to_bytes();
+            if observed_release_set != release_set.to_bytes() {
+                return Err(refusal(
+                    "route/release-set",
+                    format!(
+                        "the checked manifest states release set {}; market {} selected {}",
+                        hex(&observed_release_set),
+                        arguments.market,
+                        hex(&release_set.to_bytes())
+                    ),
+                ));
+            }
+            let checked_manifest_digest = checked
+                .checked_execution_release_set_id()
+                .map_err(|error| {
+                    refusal(
+                        "route/checked-release",
+                        format!("the checked manifest has no digest: {error:?}"),
+                    )
+                })?
+                .to_bytes();
+            // The Trading ArtifactRelease identity is the SHA-256 of the
+            // activated role's own release bytes, which is the recipe
+            // `authenticate_checked_direct_release_v3` uses for the same field.
+            let trading_artifact_release = sha256(
+                &activated
+                    .role(ExecutionRoleV1::Trading)
+                    .release()
+                    .to_bytes(),
+            );
+            let config_body = read_record(
+                &mut rpc,
+                &registry,
+                config_record,
+                entry.config_id().to_bytes(),
+                "General config",
+            )?;
+            let config = GeneralConfigV3::decode(&config_body).map_err(|error| {
+                refusal("route/config", format!("General config: {error:?}"))
+            })?;
+            let root_data = by_key(&first_pass, root)?.data;
+            let composite = CapabilityRootAccountV4::decode(&root_data, descriptor)
+                .map_err(|error| {
+                    refusal("route/root", format!("capability root account: {error:?}"))
+                })?;
+            let root_state = GeneralRootV2::decode(composite.state()).map_err(|error| {
+                refusal("route/root", format!("General root state: {error:?}"))
+            })?;
+            let state = open_batch_state_address_v1(
+                trading,
+                root,
+                root_state,
+                config,
+                entry.config_id().to_bytes(),
+                graph.product_record,
+                tail_count,
+            )?;
+            let runtime_suffix = runtime_suffix_accounts_v1(
+                &published_profile,
+                SESSION_ACTION_V1,
+                tail_count,
+                state,
+                arguments.payer,
+                rent_credit,
+            )?;
+            if runtime_suffix.len() != runtime_suffix_count {
+                return Err(refusal(
+                    "route/runtime-width",
+                    format!(
+                        "the route states {} runtime suffix accounts; the frame reports {}",
+                        runtime_suffix.len(),
+                        runtime_suffix_count
+                    ),
+                ));
+            }
+            let mut strategy = vec![
+                certificate_record.raw,
+                certificate_record.staging,
+                admission_record.raw,
+                admission_record.staging,
+                artifact_record_pair.raw,
+                artifact_record_pair.staging,
+                accelerator,
+                accelerator_programdata,
+            ];
+            strategy.extend(caller_authority_span.as_ref().map_err(|error| {
+                refusal(
+                    "route/caller-authority",
+                    format!("no caller-authority span to state: {error}"),
+                )
+            })?);
+            if strategy.len() != strategy_account_count {
+                return Err(refusal(
+                    "route/strategy-width",
+                    format!(
+                        "the route states {} strategy accounts; the frame reports {}",
+                        strategy.len(),
+                        strategy_account_count
+                    ),
+                ));
+            }
+            let document = route_document_v1(&RouteInputV1 {
+                action: SESSION_ACTION_V1,
+                minimum_finalized_slot: observed_slot,
+                payer: arguments.payer,
+                lookup_table,
+                release_set: release_set.to_bytes(),
+                generation,
+                trading_program: trading,
+                trading_artifact_release,
+                general_artifact_release: artifact_release.to_bytes(),
+                checked_manifest_digest,
+                program_set: entry.release_id().to_bytes(),
+                config: entry.config_id().to_bytes(),
+                fixed: fixed.clone(),
+                strategy,
+                runtime_suffix,
+            })?;
+            // THE PRODUCER CLOSES ITS OWN LOOP BEFORE IT WRITES.
+            //
+            // A route document is only ever read by `parse_route_v1`, so the
+            // one check worth making here is that this document survives it.
+            // Writing first and discovering later is how a producer ships a
+            // file whose only reader refuses it.
+            let encoded = format!("{}\n", serde_json::to_string_pretty(&document)?);
+            let parsed = successor::parse_route_v1(encoded.as_bytes()).map_err(|error| {
+                refusal(
+                    "route/self-check",
+                    format!("the emitted route did not survive its own parser: {error}"),
+                )
+            })?;
+            if parsed.minimum_finalized_slot() != observed_slot {
+                return Err(refusal(
+                    "route/self-check",
+                    "the emitted route parsed to a different observation floor",
+                ));
+            }
+            write_new_route_v1(path, &document)?;
+            println!(
+                "ROUTE: {} accounts to reacquire, batch state {}, written to {}",
+                parsed.snapshot_addresses().map_err(|error| Error::new(error.to_string()))?.len(),
+                state,
+                path.display()
+            );
+        }
         return Ok(());
     }
 
@@ -1446,6 +1707,264 @@ fn runtime_vector_json_v1(fixed_count: usize, rent_credit: u32, payer: Pubkey) -
     }))
 }
 
+
+/// Everything one `GeneralSuccessorRouteV1` document states, and nothing else.
+///
+/// It is a struct rather than a long argument list so the emitter can be
+/// exercised without a chain: every field here is either derived by
+/// `run_devnet` from the Market's own records or supplied by a flag whose
+/// value the frame cannot observe, and the test below builds one by hand.
+struct RouteInputV1 {
+    action: Action,
+    minimum_finalized_slot: u64,
+    payer: Pubkey,
+    lookup_table: Pubkey,
+    release_set: [u8; 32],
+    generation: u64,
+    trading_program: Pubkey,
+    trading_artifact_release: [u8; 32],
+    general_artifact_release: [u8; 32],
+    checked_manifest_digest: [u8; 32],
+    program_set: [u8; 32],
+    config: [u8; 32],
+    /// The canonical Hot fixed frame, in `HOT_*_ACCOUNT_V3` order.
+    fixed: Vec<Pubkey>,
+    /// The admitted-AOT evidence records followed by the caller authorities.
+    strategy: Vec<Pubkey>,
+    /// The packed AccountProfile representatives after the five injected ones.
+    runtime_suffix: Vec<RouteRuntimeAccountV1>,
+}
+
+/// One runtime-suffix account and the privileges the published profile
+/// declares for it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RouteRuntimeAccountV1 {
+    address: Pubkey,
+    is_signer: bool,
+    is_writable: bool,
+}
+
+fn route_meta_json_v1(address: Pubkey, is_signer: bool, is_writable: bool) -> Value {
+    json!({
+        "address": address.to_string(),
+        "isSigner": is_signer,
+        "isWritable": is_writable,
+    })
+}
+
+/// Serialize the exact route document `general-successor-plan-v5` consumes.
+///
+/// The two privilege vectors this function does NOT take as input are the two
+/// the route grammar fixes: every fixed coordinate is a read-only nonsigner
+/// except the capability root, and every strategy account is a read-only
+/// nonsigner. Spelling them here from the same constants the parser checks
+/// them against is the point -- a producer that accepted them as arguments
+/// could emit a document only the parser would ever disagree with.
+fn route_document_v1(input: &RouteInputV1) -> Result<Value> {
+    if input.fixed.len() != HOT_FIXED_ACCOUNT_COUNT_V3 {
+        return Err(refusal(
+            "route/fixed-frame",
+            format!(
+                "a route states exactly {HOT_FIXED_ACCOUNT_COUNT_V3} fixed accounts; this frame has {}",
+                input.fixed.len()
+            ),
+        ));
+    }
+    if input.lookup_table == input.payer
+        || input
+            .fixed
+            .iter()
+            .chain(&input.strategy)
+            .chain(input.runtime_suffix.iter().map(|value| &value.address))
+            .any(|address| *address == input.lookup_table)
+    {
+        return Err(refusal(
+            "route/lookup-table-alias",
+            format!(
+                "lookup table {} is also the payer or one instruction account",
+                input.lookup_table
+            ),
+        ));
+    }
+    Ok(json!({
+        "format": ROUTE_FORMAT_V1,
+        "action": successor::action_name_v1(input.action),
+        "minimumFinalizedSlot": input.minimum_finalized_slot.to_string(),
+        "payer": input.payer.to_string(),
+        "lookupTable": input.lookup_table.to_string(),
+        "releaseSet": hex(&input.release_set),
+        "generation": input.generation.to_string(),
+        "checkedRelease": {
+            "tradingProgram": input.trading_program.to_string(),
+            "tradingArtifactRelease": hex(&input.trading_artifact_release),
+            "generalArtifactRelease": hex(&input.general_artifact_release),
+            "checkedManifestDigest": hex(&input.checked_manifest_digest),
+        },
+        "artifactSelection": {
+            "programSet": hex(&input.program_set),
+            "config": hex(&input.config),
+            "artifactRelease": hex(&input.general_artifact_release),
+        },
+        "fixedAccounts": input
+            .fixed
+            .iter()
+            .enumerate()
+            .map(|(index, address)| {
+                route_meta_json_v1(*address, false, index == HOT_ROOT_ACCOUNT_V3)
+            })
+            .collect::<Vec<_>>(),
+        "strategyAccounts": input
+            .strategy
+            .iter()
+            .map(|address| route_meta_json_v1(*address, false, false))
+            .collect::<Vec<_>>(),
+        "runtimeSuffixAccounts": input
+            .runtime_suffix
+            .iter()
+            .map(|value| route_meta_json_v1(value.address, value.is_signer, value.is_writable))
+            .collect::<Vec<_>>(),
+    }))
+}
+
+/// The runtime suffix, with each account's privileges READ OFF the published
+/// AccountProfile rather than assumed.
+///
+/// `validate_runtime_geometry` compares every physical runtime account's
+/// signer, writable and executable bits against
+/// `physical_account_geometry_with_dynamic_spans`, so a producer that typed
+/// `payer: signer+writable` by hand would be a second author for a vector the
+/// chain already publishes. The three addresses are the only inputs: the state
+/// PDA this instruction will create, the payer, and the RentCredit account
+/// nothing on chain names.
+fn runtime_suffix_accounts_v1(
+    published_profile: &[u8],
+    action: Action,
+    tail_count: u32,
+    state: Pubkey,
+    payer: Pubkey,
+    rent_credit: Pubkey,
+) -> Result<Vec<RouteRuntimeAccountV1>> {
+    let profile = AccountProfileV2::decode(published_profile).map_err(|error| {
+        refusal(
+            "route/account-profile",
+            format!("the published AccountProfile did not decode: {error:?}"),
+        )
+    })?;
+    let span_counts: [u32; 0] = [];
+    let physical_count = profile
+        .physical_account_count_with_dynamic_spans(tail_count, &span_counts)
+        .map_err(|error| {
+            refusal(
+                "route/runtime-geometry",
+                format!("physical runtime width: {error:?}"),
+            )
+        })?;
+    let state_coordinate = usize::from(GENERAL_PRIMARY_STATE_ACCOUNT_V3);
+    let payer_coordinate = usize::from(GENERAL_PRIMARY_PAYER_ACCOUNT_V3);
+    let credit_coordinate = usize::from(GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3);
+    let system_coordinate = general_system_program_account_v3(action).map(usize::from);
+    let mut accounts = Vec::new();
+    for ordinal in HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3..physical_count {
+        let address = if ordinal == state_coordinate {
+            state
+        } else if ordinal == payer_coordinate {
+            payer
+        } else if ordinal == credit_coordinate {
+            rent_credit
+        } else if Some(ordinal) == system_coordinate {
+            system_program::ID
+        } else {
+            return Err(refusal(
+                "route/unmapped-runtime-coordinate",
+                format!(
+                    "physical runtime ordinal {ordinal} of {action:?} has no producer this \
+                     command can name; the frame report's runtimeVector says the same thing \
+                     and a route must not guess"
+                ),
+            ));
+        };
+        let geometry = profile
+            .physical_account_geometry_with_dynamic_spans(tail_count, &span_counts, ordinal)
+            .map_err(|error| {
+                refusal(
+                    "route/runtime-geometry",
+                    format!("physical runtime ordinal {ordinal}: {error:?}"),
+                )
+            })?;
+        let privileges = geometry.privileges();
+        accounts.push(RouteRuntimeAccountV1 {
+            address,
+            is_signer: privileges.signer(),
+            is_writable: privileges.writable(),
+        });
+    }
+    Ok(accounts)
+}
+
+/// Derive the batch-window state address this `OpenBatch` will create.
+///
+/// Every input is authenticated: the root's own body supplies the sequence,
+/// generation and Market it was activated against, the config record supplies
+/// the price scale and order bound, and the Product graph supplies the outcome
+/// count and record identity. The occurrence identity and the seed order both
+/// come from the same two types the operator calls, so this address and the
+/// one `derive_lifecycle_state_v3` re-derives cannot disagree unless one of
+/// those authors changed -- in which case this stops compiling or refuses.
+fn open_batch_state_address_v1(
+    trading: Pubkey,
+    root: Pubkey,
+    root_state: GeneralRootV2,
+    config: GeneralConfigV3,
+    config_id: [u8; 32],
+    product_record: [u8; 32],
+    outcome_count: u32,
+) -> Result<Pubkey> {
+    let occurrence = GeneralBatchOccurrenceTermsV1::new(GeneralBatchOpeningV1 {
+        outcome_count,
+        sequence: root_state.next_batch_sequence(),
+        generation: root_state.generation(),
+        market: root_state.market(),
+        product_id: product_record,
+        config_id,
+        price_scale: config.price_scale(),
+        collection_close_slot: 0,
+        settlement_close_slot: 0,
+        max_orders: config.max_orders_per_candidate(),
+    })
+    .map_err(|error| {
+        refusal(
+            "route/batch-occurrence",
+            format!("the next batch occurrence did not form: {error:?}"),
+        )
+    })?;
+    let seeds = GeneralStateAddressSeedsV3::batch(root.to_bytes(), occurrence.occurrence_id())
+        .map_err(|error| {
+            refusal(
+                "route/batch-seeds",
+                format!("the batch state coordinates did not form: {error:?}"),
+            )
+        })?;
+    let slices = seeds.as_slices().map_err(|error| {
+        refusal(
+            "route/batch-seeds",
+            format!("the batch state seed order did not form: {error:?}"),
+        )
+    })?;
+    Ok(Pubkey::find_program_address(slices.as_slice(), &trading).0)
+}
+
+/// Write one route document to a path that must not already exist.
+fn write_new_route_v1(path: &std::path::Path, document: &Value) -> Result<()> {
+    if path.exists() {
+        return Err(refusal(
+            "output/exists",
+            format!("refusing to overwrite {}", path.display()),
+        ));
+    }
+    std::fs::write(path, format!("{}\n", serde_json::to_string_pretty(document)?))
+        .map_err(|error| Error::new(format!("route document: {error}")))
+}
+
 /// The accelerator invocation count the published effect selects.
 ///
 /// One caller authority per invocation, which is what makes the count part of
@@ -1599,6 +2118,151 @@ mod tests {
     const RELEASE_SET: [u8; 32] = [9_u8; 32];
     const MARKET: Pubkey = Pubkey::new_from_array([11_u8; 32]);
     const ROOT: Pubkey = Pubkey::new_from_array([13_u8; 32]);
+
+
+    /// One synthetic frame whose only job is to be a well-formed route.
+    ///
+    /// Every address is a distinct nonzero key, which is what the parser's
+    /// alias and canonicality checks actually test; the semantic content is
+    /// irrelevant to a round trip and deliberately not faked into looking real.
+    fn route_input_v1() -> RouteInputV1 {
+        let key = |seed: u8| Pubkey::new_from_array([seed; 32]);
+        RouteInputV1 {
+            action: Action::OpenBatch,
+            minimum_finalized_slot: 492_814_212,
+            payer: key(200),
+            lookup_table: key(201),
+            release_set: RELEASE_SET,
+            generation: 2,
+            trading_program: TRADING,
+            trading_artifact_release: [21_u8; 32],
+            general_artifact_release: [22_u8; 32],
+            checked_manifest_digest: [23_u8; 32],
+            program_set: [24_u8; 32],
+            config: [25_u8; 32],
+            fixed: (0..HOT_FIXED_ACCOUNT_COUNT_V3)
+                .map(|index| key(u8::try_from(index).expect("fixed frame fits a byte") + 1))
+                .collect(),
+            strategy: (0..12)
+                .map(|index| key(u8::try_from(index).expect("strategy fits a byte") + 100))
+                .collect(),
+            runtime_suffix: vec![
+                RouteRuntimeAccountV1 {
+                    address: key(150),
+                    is_signer: false,
+                    is_writable: true,
+                },
+                RouteRuntimeAccountV1 {
+                    address: key(151),
+                    is_signer: true,
+                    is_writable: true,
+                },
+                RouteRuntimeAccountV1 {
+                    address: key(152),
+                    is_signer: false,
+                    is_writable: true,
+                },
+                RouteRuntimeAccountV1 {
+                    address: key(153),
+                    is_signer: false,
+                    is_writable: false,
+                },
+            ],
+        }
+    }
+
+    fn observed_at(key: Pubkey, slot: u64) -> ObservedAccount {
+        ObservedAccount {
+            key,
+            observation: Observation {
+                slot,
+                unix_timestamp: 1_788_500_000,
+                finality: Finality::Finalized,
+            },
+            owner: Pubkey::new_from_array([1_u8; 32]),
+            lamports: 1,
+            data: Vec::new(),
+            executable: false,
+        }
+    }
+
+    /// THE PRODUCER'S ONLY READER IS THE PARSER, SO THE TEST IS THE ROUND TRIP.
+    ///
+    /// `parse_route_v1` and `acquire_route_v1` are the whole consumer side of
+    /// `general-successor-plan-v5`: the first decides whether the document is a
+    /// route at all, and the second is the sole non-test constructor of the
+    /// `GeneralHotStateV3` the successor instruction is built from. A document
+    /// that survives both is a document the producer can be handed.
+    #[test]
+    fn an_emitted_route_round_trips_through_the_parser_and_the_projection() {
+        let input = route_input_v1();
+        let document = route_document_v1(&input).expect("emit");
+        let encoded = format!("{}\n", serde_json::to_string_pretty(&document).expect("json"));
+        let route = successor::parse_route_v1(encoded.as_bytes()).expect("parse");
+        assert_eq!(route.minimum_finalized_slot(), input.minimum_finalized_slot);
+
+        let addresses = route.snapshot_addresses().expect("snapshot addresses");
+        // 39 fixed + 12 strategy + 4 runtime suffix + the lookup table, all
+        // distinct by construction.
+        assert_eq!(addresses.len(), HOT_FIXED_ACCOUNT_COUNT_V3 + 12 + 4 + 1);
+        let observed = addresses
+            .iter()
+            .map(|key| observed_at(*key, input.minimum_finalized_slot))
+            .collect::<Vec<_>>();
+        let (state, lookup_table) =
+            successor::acquire_route_v1(&route, observed).expect("acquire");
+
+        assert_eq!(lookup_table.key, input.lookup_table);
+        assert_eq!(state.release_set, input.release_set);
+        assert_eq!(state.generation, input.generation);
+        assert_eq!(state.minimum_finalized_slot, input.minimum_finalized_slot);
+        let checked = state.checked_release.expect("checked release survives");
+        assert_eq!(checked.trading_program, input.trading_program);
+        assert_eq!(checked.general_artifact_release, input.general_artifact_release);
+        assert_eq!(checked.checked_manifest_digest, input.checked_manifest_digest);
+
+        for (index, value) in state.fixed_accounts.iter().enumerate() {
+            assert_eq!(value.account.key, input.fixed[index]);
+            assert!(!value.is_signer);
+            assert_eq!(value.is_writable, index == HOT_ROOT_ACCOUNT_V3);
+        }
+        for (index, value) in state.strategy_accounts.iter().enumerate() {
+            assert_eq!(value.account.key, input.strategy[index]);
+            assert!(!value.is_signer && !value.is_writable);
+        }
+        for (index, value) in state.runtime_suffix_accounts.iter().enumerate() {
+            let expected = input.runtime_suffix[index];
+            assert_eq!(value.account.key, expected.address);
+            assert_eq!(value.is_signer, expected.is_signer);
+            assert_eq!(value.is_writable, expected.is_writable);
+        }
+    }
+
+    /// A LOOKUP TABLE THAT IS ALSO AN INSTRUCTION ACCOUNT REFUSES AT THE
+    /// PRODUCER, NOT ONE HOP LATER.
+    ///
+    /// `parse_route_v1` refuses this too, and that is the point: the producer
+    /// is the first authority that can see it, and a producer that emits a
+    /// document its only reader rejects has written a file for nobody.
+    #[test]
+    fn a_lookup_table_that_aliases_an_instruction_account_refuses_at_the_producer() {
+        let mut input = route_input_v1();
+        input.lookup_table = input.fixed[HOT_MARKET_ACCOUNT_V3];
+        let error = route_document_v1(&input).expect_err("aliased lookup table");
+        assert!(
+            error.to_string().contains("route/lookup-table-alias"),
+            "{error}"
+        );
+    }
+
+    /// A FRAME THAT IS NOT THE CANONICAL 39 IS NOT A ROUTE.
+    #[test]
+    fn a_short_fixed_frame_refuses_before_anything_is_written() {
+        let mut input = route_input_v1();
+        input.fixed.pop();
+        let error = route_document_v1(&input).expect_err("short frame");
+        assert!(error.to_string().contains("route/fixed-frame"), "{error}");
+    }
 
     fn digest(bytes: &[u8]) -> ContentId {
         ContentId::new(

@@ -13,6 +13,9 @@ publish = false
 [dependencies]
 base64 = "=0.22.1"
 bincode = "=1.3.3"
+# The published AccountProfile the General route's runtime-suffix privileges
+# are READ OFF, rather than typed into the route producer by hand.
+dclutch-account-profile-contract = { path = "../../../../crates/dclutch-account-profile-contract" }
 dclutch-capability-activation-codec = { path = "../../../../crates/dclutch-capability-activation-codec" }
 dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
 dclutch-capability-contract = { path = "../../../../crates/dclutch-capability-contract" }

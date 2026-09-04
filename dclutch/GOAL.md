@@ -4335,3 +4335,5 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   (the selector read as its leading byte) — closed with the Lean wide example. Owed: four Rational hand-mirrors now counted
   but unconverted; a family declared in Rust but emitted nowhere is still invisible.
 - Cuts: `72966f9c3`.
+- Started 02:50 EDT: WEB-RATIONAL **`(spawned)`** — the four Rational hand-mirrors the census now counts, converted to
+  generated twins with verifies.
