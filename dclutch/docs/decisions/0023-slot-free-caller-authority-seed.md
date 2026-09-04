@@ -1,6 +1,6 @@
 # Decision 0023: a caller authority's address is a function of the signed instruction alone, never of the executing slot
 
-Status: **PROVISIONAL — ruled by the orchestrator on 2026-09-03 under ember's
+Status: **CONFIRMED (ember, 2026-09-04 15:50 EDT, in conversation; reversible on request).** Previously: PROVISIONAL — ruled by the orchestrator on 2026-09-03 under ember's**
 standing goal, landed the same morning, and reversible by ember at the cost §7
 states**. The ruling is `GOAL.md:3874-3877`, carrying the standing formula
 *"RULING (under the standing goal; ember may reverse)"*. Landed at `3a8ac205d`
@@ -154,3 +154,5 @@ The latent Shadow instance returns and re-arms the moment any family pairs
 `programs/dclutch-trading-sbf/src/hot_v3.rs:14231`;
 `programs/dclutch-trading-sbf/src/lib.rs:530`;
 `docs/design/GENERAL_CALLER_AUTHORITY_SLOT_BINDING_2026_09_03.md`.
+
+**Confirmed, 2026-09-04 15:50 EDT.** Ember, having read the docket that listed this ruling under "M1–M6: a word if any should be reversed; silence is not a ruling": "you aren't waiting on me for rulings are you? i was reading the docket and contemplating it, but overall find your takes reasonable." Taken as confirmation; reversible on request.
