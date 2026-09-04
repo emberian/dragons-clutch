@@ -127,13 +127,15 @@ use crate::{
     },
     wallet_terminal::authenticate_role,
 };
-use solana_sdk_ids::{system_program, sysvar};
+use solana_compute_budget_interface::ComputeBudgetInstruction;
+use solana_sdk_ids::{compute_budget, system_program, sysvar};
 
 const ALT_ADDRESS_BYTES: usize = 32;
 const ALT_GEOMETRY_BLOCKHASH: [u8; 32] = [0x5a; 32];
 const TERMINAL_JOURNAL_SCHEMA_V1: &str = "dclutch-devnet-terminal-sequence-journal-v1";
 /// A terminal session's schema, bumped to v2 on 2026-09-04 when the session
-/// began recording the rent rate it was funded at.
+/// began recording the rent rate it was funded at, and to v3 the same day when
+/// it began recording the ComputeBudget limits its driver declares.
 ///
 /// A v1 session carries no `fundedRentRate`, and every guard in this file now
 /// prices against that field. Reading a v1 session under v2 code is refused at
@@ -141,11 +143,16 @@ const TERMINAL_JOURNAL_SCHEMA_V1: &str = "dclutch-devnet-terminal-sequence-journ
 /// account at nothing, which is exactly the silent success this tree treats as
 /// the worst failure mode. There is no migration and no parallel path: a v1
 /// session belongs to cohort-15, whose programs cohort-16 abandons in place.
-const TERMINAL_SESSION_SCHEMA_V1: &str = "dclutch-devnet-terminal-sequence-session-v2";
+///
+/// A v2 session carries no `declaredComputeUnitLimits`, and the same argument
+/// applies one level up: a defaulted-empty table says "every route in this
+/// sequence fits the 200,000-CU default meter", which is the claim
+/// `ResolutionCloseFund` refuted on chain at 252,368 CU.
+const TERMINAL_SESSION_SCHEMA_V1: &str = "dclutch-devnet-terminal-sequence-session-v3";
 const OWNED_LOOPBACK_TERMINAL_JOURNAL_SCHEMA_V1: &str =
     "dclutch-owned-loopback-terminal-sequence-journal-v1";
 const OWNED_LOOPBACK_TERMINAL_SESSION_SCHEMA_V1: &str =
-    "dclutch-owned-loopback-terminal-sequence-session-v2";
+    "dclutch-owned-loopback-terminal-sequence-session-v3";
 const TERMINAL_COMPLETION_SCHEMA_V1: &str = "dclutch-devnet-terminal-sequence-completion-v1";
 const OWNED_LOOPBACK_TERMINAL_COMPLETION_SCHEMA_V1: &str =
     "dclutch-owned-loopback-terminal-sequence-completion-v1";
@@ -234,6 +241,14 @@ struct TerminalSequenceSessionV1 {
     /// sysvar of the moment is what refused a correctly prepaid seat with no
     /// word for why.
     funded_rent_rate: u32,
+    /// The ComputeBudget limits this session's driver declares, in stage order.
+    ///
+    /// It is a RECORD, not a second authority: it is checked equal to
+    /// `declared_terminal_compute_budgets_v1()` on every load, so a driver
+    /// rebuilt mid-sequence with a re-pinned budget refuses here by name
+    /// instead of planning its next stage against a number the stages already
+    /// signed never saw.
+    declared_compute_unit_limits: Vec<TerminalStageComputeBudgetV1>,
     supplied_lookup_table: bool,
     lookup_table: String,
     lookup_recent_slot: u64,
@@ -259,6 +274,12 @@ struct TerminalSequenceArgumentsV1 {
     journal_dir: PathBuf,
     completion: PathBuf,
     supplied_lookup_table: Option<Pubkey>,
+    /// Retire one ambiguous submission that can never be included, naming its
+    /// exact signature. It is deliberately not part of the completion's
+    /// invocation record: the act is durable in the retired journal itself,
+    /// and a later pass that did not repeat the flag must still reproduce the
+    /// same completion.
+    supersede_unlandable: Option<String>,
     execute: bool,
 }
 
@@ -383,6 +404,107 @@ impl TerminalStageV1 {
     }
 }
 
+/// `ResolutionCloseFund`'s declared ComputeBudget limit.
+///
+/// Solana meters a transaction that declares nothing at 200,000 compute units.
+/// Every other message this sequence sends fits inside that, and each has
+/// landed on devnet to say so -- ALT create 10,508, ALT freeze 1,517,
+/// `CoreBeginRetiring` 23,106, `DirectBeginRetiring` 92,137, the Resolution
+/// receipt prepay 150. `ResolutionCloseFund` does not: on 2026-09-04 it
+/// consumed 200,000 of 200,000 and failed at `exceeded CUs meter at BPF
+/// instruction`, which is how market 1's retirement stopped and why no
+/// retirement had completed on any chain.
+///
+/// The number is derived, not chosen, under `tools/gauntlet/CU_BUDGETS.md`'s
+/// rule -- `tolerance = roundup(band, 10_000) + 10_000`, floor 15,000;
+/// `budget = measured + tolerance`; `measured` is the highest draw, never a
+/// single run. The route was simulated against market 1's exact durable
+/// message on devnet under a 1,400,000-CU probe: three draws, 252,518 every
+/// time (252,368 in the Resolution program plus the 150 the ComputeBudget
+/// instruction itself costs), so the band is 0 and the tolerance bottoms out
+/// at its floor. 252,518 + 15,000 = 267,518, which is 19.1% of Solana's
+/// 1,400,000 per-transaction ceiling.
+///
+/// The band is 0 rather than the 1,500-CU search-depth grid the gauntlet's
+/// rows ride because this is a devnet route over accounts that already exist:
+/// the deployed ELFs are fixed for the life of a cohort, so no PDA in the
+/// frame can redraw its bump.
+const RESOLUTION_CLOSE_FUND_COMPUTE_UNIT_LIMIT_V1: u32 = 267_518;
+
+/// The ComputeBudget limit a stage's durable message declares, or `None` when
+/// the route runs inside the default meter.
+///
+/// `None` is not "unbudgeted". It is the positive claim that the route fits
+/// 200,000 compute units, and every `None` below except the three stages after
+/// `ResolutionCloseFund` has landed on devnet inside it. Those three have never
+/// been reached, so nothing here can honestly declare a number for them; if one
+/// meets the meter, the finding is a new row with its own measured draw, not a
+/// blanket.
+const fn terminal_stage_compute_unit_limit_v1(stage: TerminalStageV1) -> Option<u32> {
+    match stage {
+        TerminalStageV1::ResolutionCloseFund => Some(RESOLUTION_CLOSE_FUND_COMPUTE_UNIT_LIMIT_V1),
+        TerminalStageV1::CoreBeginRetiring
+        | TerminalStageV1::DirectBeginRetiring
+        | TerminalStageV1::DirectCloseCapability
+        | TerminalStageV1::RetirementReplayHandoff
+        | TerminalStageV1::AggregateRetirement => None,
+    }
+}
+
+/// Whether a route MUST declare a limit, which is a fact about the route and
+/// not about the number.
+///
+/// The value a session declares may be re-pinned -- a measurement is a
+/// measurement -- and a finalized journal must stay verifiable across that.
+/// What may never change is that `ResolutionCloseFund` does not fit the
+/// default meter, so a durable message for it that declares nothing is refused
+/// by name however the table is later edited.
+const fn terminal_route_requires_declared_budget_v1(mutation: &DurableTerminalMutationV1) -> bool {
+    matches!(
+        mutation,
+        DurableTerminalMutationV1::Protocol {
+            stage: TerminalStageV1::ResolutionCloseFund
+        }
+    )
+}
+
+/// One row of the session's record of what its driver declares.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct TerminalStageComputeBudgetV1 {
+    stage: TerminalStageV1,
+    compute_unit_limit: u32,
+}
+
+/// What THIS RUN declares for a stage, read off its own session rather than
+/// off the driver's table. The two are checked equal whenever the session is
+/// loaded, so this is the same answer with the drift check in front of it.
+fn session_stage_compute_unit_limit_v1(
+    session: &TerminalSequenceSessionV1,
+    stage: TerminalStageV1,
+) -> Option<u32> {
+    session
+        .declared_compute_unit_limits
+        .iter()
+        .find(|row| row.stage == stage)
+        .map(|row| row.compute_unit_limit)
+}
+
+/// The declared table, in stage order, as the session records it.
+fn declared_terminal_compute_budgets_v1() -> Vec<TerminalStageComputeBudgetV1> {
+    TerminalStageV1::ORDERED
+        .into_iter()
+        .filter_map(|stage| {
+            terminal_stage_compute_unit_limit_v1(stage).map(|compute_unit_limit| {
+                TerminalStageComputeBudgetV1 {
+                    stage,
+                    compute_unit_limit,
+                }
+            })
+        })
+        .collect()
+}
+
 /// Durable phase of one exact stage intent.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
@@ -395,6 +517,29 @@ pub(crate) enum StageJournalPhaseV1 {
     Submitted,
     /// The exact transaction and poststate were observed at finalized.
     Finalized,
+    /// The signed packet can never be included, and the observation that
+    /// proves it is durable beside it. Terminal in the other direction: a
+    /// superseded journal is never signed, submitted, polled or resumed again.
+    Superseded,
+}
+
+/// Why an ambiguous submission was retired, and the observation that settled it.
+///
+/// `Submitted` is deliberately one-way: a driver may not infer permission to
+/// re-sign from a missing RPC answer, because "the endpoint did not respond"
+/// and "the packet landed" are the same observation. Exactly one thing tells
+/// them apart and it is not a timeout -- once the finalized block height passes
+/// the packet's `lastValidBlockHeight`, no validator will accept that blockhash
+/// from anyone again, so the packet's fate stops being open. A signature absent
+/// from transaction history at that point is absent for good.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct DurableSupersededEvidenceV1 {
+    reason: String,
+    retired_signature: String,
+    last_valid_block_height: u64,
+    observed_block_height: u64,
+    observed_slot: u64,
 }
 
 /// Core Market state relevant to terminal routing.
@@ -1107,6 +1252,12 @@ pub(crate) struct DurableTerminalIntentV1 {
     accounts: Vec<DurableInstructionAccountV1>,
     instruction_data_base64: String,
     instruction_data_sha256: String,
+    /// The ComputeBudget limit this durable message declares, when it declares
+    /// one. Absent from the JSON when it does not, so a journal written before
+    /// any route declared a budget still hashes to the digest it was written
+    /// with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    compute_unit_limit: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     lookup_table: Option<String>,
     lookup_table_addresses: Vec<String>,
@@ -1157,6 +1308,8 @@ pub(crate) struct DurableTerminalJournalV1 {
     expected_signature: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     finalized: Option<DurableFinalizedEvidenceV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    superseded: Option<DurableSupersededEvidenceV1>,
 }
 
 /// Reauthenticated Resolution-fund closure facts handed to the complete-life
@@ -1224,6 +1377,7 @@ pub(crate) fn build_protocol_stage_journal_v1(
     frozen_table: &ObservedAccount,
     frozen_addresses: &[Pubkey],
     funded_rent_rate: u32,
+    compute_unit_limit: Option<u32>,
     prestate: &[ObservedAccount],
     authorized_mutation: bool,
 ) -> Result<DurableTerminalJournalV1> {
@@ -1258,6 +1412,11 @@ pub(crate) fn build_protocol_stage_journal_v1(
     for key in std::iter::once(payer)
         .chain(mutation.instruction.accounts.iter().map(|meta| meta.pubkey))
         .chain(std::iter::once(frozen_table.key))
+        // The ComputeBudget program becomes a static key of the compiled
+        // message, so it is a resolved account with its own pre- and
+        // post-balance and its exact finalized prestate is required like any
+        // other account in the frame.
+        .chain(compute_unit_limit.map(|_| compute_budget::ID))
     {
         if !prestate_by_key.contains_key(&key) {
             return Err(refusal(
@@ -1273,10 +1432,23 @@ pub(crate) fn build_protocol_stage_journal_v1(
     .map_err(|_| {
         refusal("terminal stage lookup table was not the exact activated frozen stable union")
     })?;
+    // THE DECLARATION IS PART OF THE MESSAGE, NOT A FLAG ON THE SEND.
+    //
+    // A route that does not fit Solana's 200,000-CU default meter has to say so
+    // in the bytes that get signed, which is why this is a durability-schema
+    // change and not a flag: the limit is compiled in ahead of the one
+    // first-party instruction, the exact fee is quoted for the wider message,
+    // and `authenticate_terminal_message_decompilation_v1` reads the prefix
+    // back by program and by discriminant rather than skipping past it.
+    let mut instructions = Vec::with_capacity(2);
+    if let Some(limit) = compute_unit_limit {
+        instructions.push(ComputeBudgetInstruction::set_compute_unit_limit(limit));
+    }
+    instructions.push(mutation.instruction.clone());
     let (recent_blockhash, last_valid_block_height) = terminal_latest_blockhash(rpc)?;
     let compiled = compile_v0_message_with_optional_tables(
         payer,
-        std::slice::from_ref(&mutation.instruction),
+        &instructions,
         recent_blockhash,
         mutation.observation,
         std::slice::from_ref(frozen_table),
@@ -1462,6 +1634,7 @@ pub(crate) fn build_protocol_stage_journal_v1(
             .collect(),
         instruction_data_base64: BASE64.encode(&mutation.instruction.data),
         instruction_data_sha256: sha256_hex(&mutation.instruction.data),
+        compute_unit_limit,
         lookup_table: Some(frozen_table.key.to_string()),
         lookup_table_addresses: frozen_addresses.iter().map(ToString::to_string).collect(),
         lookup_table_addresses_sha256: pubkey_vector_sha256(frozen_addresses),
@@ -1510,8 +1683,18 @@ pub(crate) fn build_protocol_stage_journal_v1(
         signed_packet_base64: None,
         expected_signature: None,
         finalized: None,
+        superseded: None,
     };
     refresh_terminal_journal_digest_v1(&mut journal)?;
+    // A BUILDER MAY NOT WRITE A JOURNAL ITS OWN AUTHORITY WOULD REFUSE.
+    //
+    // The resume path authenticates before it signs, so an undeclared
+    // `ResolutionCloseFund` was always going to be refused -- but only after it
+    // had been fsynced into the journal directory, where a Planned entry is a
+    // durable obligation that has to be preserved and dated out of the way by
+    // hand. Refusing here keeps the sequence's one send boundary the only place
+    // that has to think about durability.
+    authenticate_terminal_journal_v1(&journal)?;
     Ok(journal)
 }
 
@@ -1598,12 +1781,17 @@ pub(crate) fn build_resolution_receipt_prepay_journal_v1(
         frozen_table,
         frozen_addresses,
         funded_rent_rate,
+        // A System transfer, measured at 150 CU on devnet 2026-09-04. It rides
+        // the stage-three slot only because it is the prerequisite of that
+        // stage; it is not that route and does not carry its budget.
+        None,
         prestate,
         authorized_mutation,
     )?;
     journal.intent.mutation = DurableTerminalMutationV1::ResolutionReceiptPrepay;
     journal.intent_sha256 = sha256_hex(&serde_json::to_vec(&journal.intent)?);
     refresh_terminal_journal_digest_v1(&mut journal)?;
+    authenticate_terminal_journal_v1(&journal)?;
     Ok(journal)
 }
 
@@ -2186,6 +2374,7 @@ enum TerminalResumeRouteV1 {
     PollOnly,
     PlannedReadOnly,
     SignAndSubmitOnce,
+    RefuseRetired,
 }
 
 const fn terminal_resume_route_v1(
@@ -2197,6 +2386,7 @@ const fn terminal_resume_route_v1(
         (StageJournalPhaseV1::SignedNotSubmitted | StageJournalPhaseV1::Submitted, _) => {
             TerminalResumeRouteV1::PollOnly
         }
+        (StageJournalPhaseV1::Superseded, _) => TerminalResumeRouteV1::RefuseRetired,
         (StageJournalPhaseV1::Planned, false) => TerminalResumeRouteV1::PlannedReadOnly,
         (StageJournalPhaseV1::Planned, true) => TerminalResumeRouteV1::SignAndSubmitOnce,
     }
@@ -2235,6 +2425,11 @@ pub(crate) fn resume_terminal_journal_v1(
         TerminalResumeRouteV1::PollOnly => {
             reconcile_terminal_signature_v1(rpc, journal_path, journal)
         }
+        // The journal refuses its own resubmission, by signature. Nothing in
+        // this file can move a Superseded entry to any other phase; the only
+        // way back to a submittable packet is a fresh plan under a fresh
+        // blockhash, which is a different signature.
+        TerminalResumeRouteV1::RefuseRetired => Err(terminal_retired_refusal_v1(journal)),
         TerminalResumeRouteV1::PlannedReadOnly => Ok(()),
         TerminalResumeRouteV1::SignAndSubmitOnce => {
             planned_authorization
@@ -2244,6 +2439,7 @@ pub(crate) fn resume_terminal_journal_v1(
                     )
                 })?
                 .authenticate(journal)?;
+            require_declared_budget_before_signing_v1(&journal.intent)?;
             require_terminal_prestate_unchanged_v1(rpc, journal)?;
             let height = rpc
                 .call("getBlockHeight", &json!([{"commitment":"finalized"}]))?
@@ -2359,6 +2555,176 @@ fn submit_terminal_packet_once_v1(
     Ok(expected_signature)
 }
 
+/// Retire one ambiguous submission that can never be included.
+///
+/// This is the only exit from `Submitted` other than finality, and it is
+/// deliberately explicit: the caller names the exact signature it means, so
+/// nothing here can retire a packet by inference, by timeout, or in bulk. Two
+/// observations have to hold together, and neither alone is enough --
+///
+///   * the finalized block height has passed the packet's own
+///     `lastValidBlockHeight`, after which no validator will accept that
+///     blockhash from anyone, so the packet's fate is settled forever; and
+///   * `getSignatureStatuses` with `searchTransactionHistory` still does not
+///     know the signature, so what it settled on is "never included".
+///
+/// The retired journal keeps its packet and its signature and gains the two
+/// readings, then moves aside under a name that carries the signature. The
+/// canonical path is left free for a fresh plan -- which will carry a
+/// different blockhash and therefore a different signature, so no resubmission
+/// of the retired packet is even expressible.
+fn operate_terminal_supersede_v1(
+    rpc: &mut Rpc,
+    arguments: &TerminalSequenceArgumentsV1,
+    retired: &str,
+) -> Result<()> {
+    if !arguments.execute {
+        return Err(refusal(
+            "--supersede-unlandable changes a durable journal and requires --execute",
+        ));
+    }
+    let mut candidates = vec![
+        arguments
+            .journal_dir
+            .join("12-resolution-receipt-prepay.json"),
+    ];
+    candidates.extend(
+        TerminalStageV1::ORDERED
+            .into_iter()
+            .map(|stage| arguments.journal_dir.join(stage_journal_name_v1(stage))),
+    );
+    let mut found = None;
+    for path in candidates {
+        if !path.exists() {
+            continue;
+        }
+        let journal = read_terminal_journal_v1(&path)?;
+        if journal.expected_signature.as_deref() == Some(retired) {
+            found = Some((path, journal));
+            break;
+        }
+    }
+    let (path, mut journal) = found.ok_or_else(|| {
+        refusal(&format!(
+            "no canonical terminal journal in this directory carries the signature {retired}"
+        ))
+    })?;
+    match journal.phase {
+        StageJournalPhaseV1::SignedNotSubmitted | StageJournalPhaseV1::Submitted => {}
+        StageJournalPhaseV1::Finalized => {
+            return Err(refusal(&format!(
+                "terminal packet {retired} is finalized on chain and is not unlandable"
+            )));
+        }
+        StageJournalPhaseV1::Planned | StageJournalPhaseV1::Superseded => {
+            return Err(refusal(&format!(
+                "terminal packet {retired} is in phase {:?} and has no ambiguous submission to retire",
+                journal.phase
+            )));
+        }
+    }
+    let observed_block_height = rpc
+        .call("getBlockHeight", &json!([{"commitment":"finalized"}]))?
+        .as_u64()
+        .ok_or_else(|| Error::new("getBlockHeight result was not a u64"))?;
+    if observed_block_height <= journal.intent.last_valid_block_height {
+        return Err(refusal(&format!(
+            "terminal packet {retired} may still be included: finalized block height \
+             {observed_block_height} has not passed its last valid height {}",
+            journal.intent.last_valid_block_height
+        )));
+    }
+    let status = rpc.call(
+        "getSignatureStatuses",
+        &json!([[retired], {"searchTransactionHistory":true}]),
+    )?;
+    let known = status
+        .get("value")
+        .and_then(Value::as_array)
+        .and_then(|values| values.first())
+        .is_some_and(|value| !value.is_null());
+    if known {
+        return Err(refusal(&format!(
+            "terminal packet {retired} is known to transaction history and must be reconciled, \
+             not retired"
+        )));
+    }
+    let observed_slot = rpc.finalized_slot()?;
+    journal.phase = StageJournalPhaseV1::Superseded;
+    journal.superseded = Some(DurableSupersededEvidenceV1 {
+        reason: format!(
+            "the packet exceeded the 200,000-CU default meter and can never land; its blockhash \
+             expired at last valid block height {} and the signature is absent from transaction \
+             history at finalized block height {observed_block_height}",
+            journal.intent.last_valid_block_height
+        ),
+        retired_signature: retired.into(),
+        last_valid_block_height: journal.intent.last_valid_block_height,
+        observed_block_height,
+        observed_slot,
+    });
+    // The writer is the one that refreshes the digest, and it refuses an update
+    // whose in-memory digest has already moved -- that guard is how a lost
+    // update is caught, so refreshing here would defeat it. It authenticates
+    // the refreshed journal before it publishes, so the retired shape is still
+    // proven canonical before it reaches disk.
+    write_terminal_journal_v1(&path, &mut journal, false)?;
+    let retired_path = path.with_file_name(format!(
+        "{}.superseded.{retired}",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| refusal("terminal journal path had no file name"))?
+    ));
+    if retired_path.exists() {
+        return Err(refusal(
+            "a retired terminal journal already exists under that signature",
+        ));
+    }
+    fs::rename(&path, &retired_path)?;
+    terminal_stdout_v1(json!({
+        "status": "superseded",
+        "retiredSignature": retired,
+        "journal": retired_path.display().to_string(),
+        "lastValidBlockHeight": journal.intent.last_valid_block_height,
+        "observedBlockHeight": observed_block_height,
+        "observedSlot": observed_slot,
+        "message": "The ambiguous submission can never be included and is retired; plan the stage fresh."
+    }))
+}
+
+/// A route that does not fit the default meter may not be planned or signed
+/// without declaring its budget.
+///
+/// Stated by ROUTE rather than by number, so a later re-pin of the measured
+/// figure can never retroactively refuse a journal that already finalized, and
+/// checked at the two doors where a durable obligation is created rather than
+/// on every read -- market 1's retired packet IS an undeclared CloseFund, and
+/// it has to stay readable to be retired.
+fn require_declared_budget_before_signing_v1(intent: &DurableTerminalIntentV1) -> Result<()> {
+    if terminal_route_requires_declared_budget_v1(&intent.mutation)
+        && intent.compute_unit_limit.is_none()
+    {
+        return Err(refusal(&format!(
+            "terminal {:?} durable message declares no ComputeBudget limit and this route does \
+             not fit Solana's 200,000-CU default meter; it consumed 200,000 of 200,000 on devnet \
+             2026-09-04 and can never land",
+            intent.mutation
+        )));
+    }
+    Ok(())
+}
+
+fn terminal_retired_refusal_v1(journal: &DurableTerminalJournalV1) -> Error {
+    refusal(&format!(
+        "terminal packet {} was superseded and may never be signed, submitted or polled again: {}",
+        journal.expected_signature.as_deref().unwrap_or("<unknown>"),
+        journal
+            .superseded
+            .as_ref()
+            .map_or("<no reason recorded>", |evidence| evidence.reason.as_str())
+    ))
+}
+
 fn authenticate_terminal_journal_v1(journal: &DurableTerminalJournalV1) -> Result<()> {
     terminal_journal_cluster_v1(journal)?;
     if sha256_hex(&serde_json::to_vec(&journal.intent)?) != journal.intent_sha256
@@ -2373,15 +2739,35 @@ fn authenticate_terminal_journal_v1(journal: &DurableTerminalJournalV1) -> Resul
         StageJournalPhaseV1::Planned
             if journal.signed_packet_base64.is_none()
                 && journal.expected_signature.is_none()
-                && journal.finalized.is_none() => {}
+                && journal.finalized.is_none()
+                && journal.superseded.is_none() => {}
         StageJournalPhaseV1::SignedNotSubmitted | StageJournalPhaseV1::Submitted
             if journal.signed_packet_base64.is_some()
                 && journal.expected_signature.is_some()
-                && journal.finalized.is_none() => {}
+                && journal.finalized.is_none()
+                && journal.superseded.is_none() => {}
         StageJournalPhaseV1::Finalized
             if journal.signed_packet_base64.is_some()
                 && journal.expected_signature.is_some()
-                && journal.finalized.is_some() => {}
+                && journal.finalized.is_some()
+                && journal.superseded.is_none() => {}
+        // A retired packet keeps every byte it had -- the packet, the
+        // signature, the intent -- and gains the observation that closed it. It
+        // may never also carry finalized evidence: those are the two answers to
+        // the same question and a journal that claimed both would be claiming a
+        // transaction both landed and cannot land.
+        StageJournalPhaseV1::Superseded
+            if journal.signed_packet_base64.is_some()
+                && journal.expected_signature.is_some()
+                && journal.finalized.is_none()
+                && journal.superseded.as_ref().is_some_and(|evidence| {
+                    journal.expected_signature.as_deref()
+                        == Some(evidence.retired_signature.as_str())
+                        && evidence.observed_block_height > evidence.last_valid_block_height
+                        && evidence.last_valid_block_height
+                            == journal.intent.last_valid_block_height
+                        && !evidence.reason.is_empty()
+                }) => {}
         _ => {
             return Err(refusal(
                 "terminal journal phase/evidence shape is noncanonical",
@@ -2637,13 +3023,60 @@ fn authenticate_terminal_message_decompilation_v1(intent: &DurableTerminalIntent
         || message.header.num_required_signatures != 1
         || message.header.num_readonly_signed_accounts != 0
         || message.account_keys.first() != Some(&payer)
-        || message.instructions.len() != 1
     {
         return Err(refusal(
-            "terminal message blockhash, payer, signer header, or instruction width differed from intent",
+            "terminal message blockhash, payer, or signer header differed from intent",
         ));
     }
-    let instruction = &message.instructions[0];
+    // EXACTLY ONE FIRST-PARTY INSTRUCTION, OPTIONALLY PRECEDED BY EXACTLY ONE
+    // ComputeBudget LIMIT WHOSE VALUE IS THE ONE THE INTENT RECORDS.
+    //
+    // The prefix is pinned by PROGRAM and by its exact encoded data -- built
+    // here from the same SDK constructor that compiled it, so no second copy of
+    // the discriminant or the little-endian width exists to drift -- rather
+    // than skipped, because "ignore the instructions before the interesting
+    // one" is how a substituted prefix gets past a verifier that reads the
+    // interesting one correctly. `direct_trade.rs` pins its two the same way.
+    //
+    // The ROUTE requirement is deliberately NOT here. This function is what
+    // every read of a journal runs, and the journal that most needs reading is
+    // the one whose defect is exactly an undeclared CloseFund: market 1's
+    // retired packet. Refusing to decode it would be refusing to look at the
+    // evidence. What may not happen to such a journal is that it gets PLANNED
+    // or SIGNED, and `require_declared_budget_before_signing_v1` stands at both
+    // of those doors.
+    let program_at = |index: u8| message.account_keys.get(usize::from(index)).copied();
+    let instruction = match (message.instructions.as_slice(), intent.compute_unit_limit) {
+        ([first_party], None) => first_party,
+        ([limit, first_party], Some(declared)) => {
+            if program_at(limit.program_id_index) != Some(compute_budget::ID)
+                || !limit.accounts.is_empty()
+                || limit.data != ComputeBudgetInstruction::set_compute_unit_limit(declared).data
+            {
+                return Err(refusal(&format!(
+                    "terminal durable ComputeBudget prefix was not exactly one \
+                     SetComputeUnitLimit for the recorded budget of {declared}"
+                )));
+            }
+            first_party
+        }
+        _ => {
+            return Err(refusal(&format!(
+                "terminal durable message carried {} instruction(s) against a recorded budget of \
+                 {:?}; the shape is exactly one first-party instruction, optionally preceded by \
+                 exactly one ComputeBudget limit",
+                message.instructions.len(),
+                intent.compute_unit_limit
+            )));
+        }
+    };
+    // Which makes a second ComputeBudget in the first-party slot -- two
+    // prefixes -- refuse for its own reason rather than incidentally.
+    if program_at(instruction.program_id_index) == Some(compute_budget::ID) {
+        return Err(refusal(
+            "terminal durable first-party instruction was itself a ComputeBudget declaration",
+        ));
+    }
     let resolved = intent
         .resolved_account_keys
         .iter()
@@ -5883,8 +6316,18 @@ fn fresh_protocol_stage_from_chain_v1(
     source_receipt: Pubkey,
     stage: TerminalStageV1,
     funded_rent_rate: u32,
+    compute_unit_limit: Option<u32>,
 ) -> Result<ChainDerivedTerminalMutationV1> {
-    let extra = [payer, table];
+    // A message that declares a limit carries the ComputeBudget program as a
+    // static key, which makes it a resolved account with a pre- and
+    // post-balance; it has to be snapshotted at the SAME finalized observation
+    // as the rest of the frame, not read separately afterwards.
+    let mut extra = vec![payer, table];
+    let mut table_only = vec![table];
+    if compute_unit_limit.is_some() {
+        extra.push(compute_budget::ID);
+        table_only.push(compute_budget::ID);
+    }
     match stage {
         TerminalStageV1::CoreBeginRetiring => {
             plan_core_begin_retiring_from_chain_v1(rpc, plan, evidence, market, &extra)
@@ -5911,7 +6354,7 @@ fn fresh_protocol_stage_from_chain_v1(
                 evidence,
                 market,
                 payer,
-                &[table],
+                &table_only,
                 funded_rent_rate,
             )? {
                 ChainResolutionCloseV1::Submit { stage, .. } => Ok(stage),
@@ -5951,7 +6394,7 @@ fn fresh_protocol_stage_from_chain_v1(
                 rpc,
                 &discovery,
                 &closure,
-                &[table],
+                &table_only,
             )
         }
         TerminalStageV1::AggregateRetirement => {
@@ -6518,6 +6961,9 @@ pub(crate) fn build_lookup_infrastructure_journal_v1(
             .collect(),
         instruction_data_base64: BASE64.encode(&instruction.data),
         instruction_data_sha256: sha256_hex(&instruction.data),
+        // ALT create/extend/freeze: measured on devnet 2026-09-04 at 10,508,
+        // 1,500-odd and 1,517 CU, all inside the default meter.
+        compute_unit_limit: None,
         lookup_table: None,
         lookup_table_addresses: Vec::new(),
         lookup_table_addresses_sha256: pubkey_vector_sha256(&[]),
@@ -6559,6 +7005,7 @@ pub(crate) fn build_lookup_infrastructure_journal_v1(
         signed_packet_base64: None,
         expected_signature: None,
         finalized: None,
+        superseded: None,
     };
     refresh_terminal_journal_digest_v1(&mut journal)?;
     authenticate_terminal_journal_v1(&journal)?;
@@ -7301,6 +7748,15 @@ fn run_terminal_sequence_with_expected_cluster_v1(
         },
     )?;
     authenticate_terminal_cluster_v1(&mut rpc, &arguments.origin, expected_cluster)?;
+    // ONE DURABLE ACT, AND IT DOES NOT DEPEND ON THE SESSION.
+    //
+    // Retiring an unlandable packet is what a sequence needs precisely when its
+    // session cannot be loaded -- a schema that moved under it, an input digest
+    // that changed -- so it runs before the session is touched and returns
+    // rather than continuing into a pass that would plan a stage.
+    if let Some(retired) = arguments.supersede_unlandable.as_deref() {
+        return operate_terminal_supersede_v1(&mut rpc, &arguments, retired);
+    }
     // The refresh widens *which document may carry a row*, never what is then
     // demanded of the row: `require_direct_retirement_evidence` and
     // `authenticate_campaign_market_v1` below run unchanged, against the
@@ -8122,6 +8578,7 @@ fn load_or_create_terminal_session_v1(
         receipt_initial_lamports: receipt.lamports,
         receipt_rent_lamports,
         funded_rent_rate,
+        declared_compute_unit_limits: declared_terminal_compute_budgets_v1(),
         supplied_lookup_table,
         lookup_table: lookup_table.to_string(),
         lookup_recent_slot,
@@ -8571,6 +9028,15 @@ fn authenticate_terminal_session_v1(session: &TerminalSequenceSessionV1) -> Resu
             "terminal session schema, digest, exact devnet, ALT union, receipt, or lookup identity changed",
         ));
     }
+    if session.declared_compute_unit_limits != declared_terminal_compute_budgets_v1() {
+        return Err(refusal(&format!(
+            "terminal session declares ComputeBudget limits {:?} and this driver declares {:?}; \
+             a sequence may not change the budget its later stages compile against after its \
+             earlier stages were signed",
+            session.declared_compute_unit_limits,
+            declared_terminal_compute_budgets_v1()
+        )));
+    }
     Ok(())
 }
 
@@ -8981,6 +9447,7 @@ fn operate_terminal_protocol_journals_v1(
                     source_receipt,
                     stage,
                     session.funded_rent_rate,
+                    session_stage_compute_unit_limit_v1(session, stage),
                 )?;
                 Some(authenticate_chain_derived_planned_journal_v1(
                     &journal, &fresh,
@@ -9028,6 +9495,7 @@ fn operate_terminal_protocol_journals_v1(
             source_receipt,
             stage,
             session.funded_rent_rate,
+            session_stage_compute_unit_limit_v1(session, stage),
         )?;
         let table = fresh
             .prestate
@@ -9049,9 +9517,11 @@ fn operate_terminal_protocol_journals_v1(
             table,
             lookup_addresses,
             session.funded_rent_rate,
+            session_stage_compute_unit_limit_v1(session, stage),
             &fresh.prestate,
             arguments.execute,
         )?;
+        require_declared_budget_before_signing_v1(&journal.intent)?;
         write_terminal_journal_v1(&path, &mut journal, true)?;
         let authorization = authenticate_chain_derived_planned_journal_v1(&journal, &fresh)?;
         resume_terminal_journal_v1(
@@ -9293,6 +9763,7 @@ fn parse_terminal_sequence_arguments_v1(
     let mut journal_dir = None;
     let mut completion = None;
     let mut supplied_lookup_table = None;
+    let mut supersede_unlandable = None;
     let mut execute = false;
     let mut iterator = arguments.into_iter();
     while let Some(argument) = iterator.next() {
@@ -9320,6 +9791,7 @@ fn parse_terminal_sequence_arguments_v1(
             "--journal-dir" => &mut journal_dir,
             "--completion" => &mut completion,
             "--lookup-table" => &mut supplied_lookup_table,
+            "--supersede-unlandable" => &mut supersede_unlandable,
             _ => {
                 return Err(Error::new(format!(
                     "unknown {} argument: {argument}",
@@ -9365,6 +9837,14 @@ fn parse_terminal_sequence_arguments_v1(
                     .map_err(|error| Error::new(format!("--lookup-table: {error}")))
             })
             .transpose()?,
+        supersede_unlandable: supersede_unlandable
+            .map(|value| {
+                value
+                    .parse::<Signature>()
+                    .map(|signature| signature.to_string())
+                    .map_err(|error| Error::new(format!("--supersede-unlandable: {error}")))
+            })
+            .transpose()?,
         execute,
     })
 }
@@ -9384,14 +9864,18 @@ pub(crate) fn usage() -> &'static str {
      --fee-payer PUBKEY --fee-payer-keypair ABSOLUTE_KEYPAIR \\
      --session ABSOLUTE_JSON --journal-dir ABSOLUTE_DIRECTORY \\
      --completion ABSOLUTE_JSON \\
-     [--lookup-table PUBKEY] [--execute]\n\nWithout --execute this command performs bounded \
+     [--lookup-table PUBKEY] [--supersede-unlandable SIGNATURE] [--execute]\n\nWithout --execute \
+     this command performs bounded \
      finalized devnet reads and persists exactly one unsigned durable next action before any key \
      can be opened. With --execute it reauthenticates that Planned intent through its stage's \
      semantic owner, reads only the named fee-payer key, persists the signed packet and local \
      signature before first send, and accepts only its exact finalized transaction, balances, \
      return data, and account poststate. Rerun to advance. If --lookup-table is absent, the same \
      journal machinery creates, extends, activates, and freezes a dedicated exact-union ALT before \
-     protocol stage one. Mainnet-beta is refused unconditionally."
+     protocol stage one. --supersede-unlandable retires ONE named ambiguous submission, and only \
+     after proving on chain that its blockhash has expired and that transaction history still \
+     does not know the signature; it performs that one act and returns. Mainnet-beta is refused \
+     unconditionally."
 }
 
 const fn terminal_sequence_command_v1(expected_cluster: ExpectedClusterV1) -> &'static str {
@@ -9409,7 +9893,8 @@ pub(crate) fn owned_loopback_usage() -> &'static str {
      --fee-payer PUBKEY --fee-payer-keypair ABSOLUTE_KEYPAIR \
      --session ABSOLUTE_JSON --journal-dir ABSOLUTE_DIRECTORY \
      --completion ABSOLUTE_JSON \\
-     [--lookup-table PUBKEY] [--execute]\n\nWithout --execute this command performs bounded \
+     [--lookup-table PUBKEY] [--supersede-unlandable SIGNATURE] [--execute]\n\nWithout --execute \
+     this command performs bounded \
      finalized reads from a validator launched and owned by the private lifecycle runner, then \
      persists exactly one unsigned durable next action before any key can be opened. With \
      --execute it uses the same crash-safe signed-packet journal and exact finalized-poststate \
@@ -9652,6 +10137,7 @@ mod tests {
                 .collect(),
             instruction_data_base64: BASE64.encode(&instruction.data),
             instruction_data_sha256: sha256_hex(&instruction.data),
+            compute_unit_limit: None,
             lookup_table: None,
             lookup_table_addresses: Vec::new(),
             lookup_table_addresses_sha256: pubkey_vector_sha256(&[]),
@@ -9712,6 +10198,7 @@ mod tests {
             signed_packet_base64: None,
             expected_signature: None,
             finalized: None,
+            superseded: None,
         };
         refresh_terminal_journal_digest_v1(&mut journal).expect("journal digest");
         (journal, mutation, closure, prestate)
@@ -9724,6 +10211,435 @@ mod tests {
         Vec<ObservedAccount>,
     ) {
         synthetic_system_transfer_journal_for_payer(key(1))
+    }
+
+    /// A synthetic `ResolutionCloseFund` journal whose COMPILED message and
+    /// whose RECORDED budget are supplied separately, so the two can be driven
+    /// apart on purpose. Everything else is the system-transfer fixture above.
+    fn synthetic_close_fund_journal_v1(
+        compiled_instructions: &[Instruction],
+        recorded_limit: Option<u32>,
+    ) -> DurableTerminalJournalV1 {
+        let payer = key(1);
+        let recipient = key(2);
+        let first_party = solana_system_interface::instruction::transfer(&payer, &recipient, 10);
+        let message = compile_v0_message_with_optional_tables(
+            payer,
+            compiled_instructions,
+            Hash::new_from_array([7; 32]),
+            test_observation(),
+            &[],
+        )
+        .expect("synthetic v0 message");
+        let VersionedMessage::V0(compiled) = &message.message else {
+            panic!("synthetic v0")
+        };
+        let resolved = compiled.account_keys.clone();
+        let prestate = resolved
+            .iter()
+            .map(|address| {
+                if *address == payer {
+                    test_account(*address, solana_sdk_ids::system_program::ID, 100, false)
+                } else if *address == recipient {
+                    test_account(*address, solana_sdk_ids::system_program::ID, 0, false)
+                } else {
+                    test_account(*address, solana_sdk_ids::native_loader::ID, 1, true)
+                }
+            })
+            .collect::<Vec<_>>();
+        let pre_balances = prestate
+            .iter()
+            .map(|account| account.lamports)
+            .collect::<Vec<_>>();
+        let post_balances = resolved
+            .iter()
+            .zip(pre_balances.iter().copied())
+            .map(|(address, balance)| {
+                if *address == payer {
+                    balance - 15
+                } else if *address == recipient {
+                    balance + 10
+                } else {
+                    balance
+                }
+            })
+            .collect::<Vec<_>>();
+        let expected_accounts = BTreeMap::from([
+            (
+                payer.to_string(),
+                DurableExpectedAccountV1 {
+                    address: payer.to_string(),
+                    owner: solana_sdk_ids::system_program::ID.to_string(),
+                    lamports_after_protocol: 90,
+                    lamports_after_fee: 85,
+                    executable: false,
+                    data_base64: String::new(),
+                    data_sha256: sha256_hex(&[]),
+                    lookup_table: None,
+                },
+            ),
+            (
+                recipient.to_string(),
+                DurableExpectedAccountV1 {
+                    address: recipient.to_string(),
+                    owner: solana_sdk_ids::system_program::ID.to_string(),
+                    lamports_after_protocol: 10,
+                    lamports_after_fee: 10,
+                    executable: false,
+                    data_base64: String::new(),
+                    data_sha256: sha256_hex(&[]),
+                    lookup_table: None,
+                },
+            ),
+        ]);
+        let message_bytes = message.message.serialize();
+        let intent = DurableTerminalIntentV1 {
+            mutation: DurableTerminalMutationV1::Protocol {
+                stage: TerminalStageV1::ResolutionCloseFund,
+            },
+            observation_slot: test_observation().slot,
+            observation_unix_timestamp: test_observation().unix_timestamp,
+            payer: payer.to_string(),
+            program_id: first_party.program_id.to_string(),
+            program_class: TerminalAddressClassV1::InlineProgram,
+            accounts: first_party
+                .accounts
+                .iter()
+                .zip([
+                    TerminalAddressClassV1::InlineSigner,
+                    TerminalAddressClassV1::InlineRequestBound,
+                ])
+                .map(|(meta, class)| DurableInstructionAccountV1 {
+                    address: meta.pubkey.to_string(),
+                    signer: meta.is_signer,
+                    writable: meta.is_writable,
+                    class,
+                })
+                .collect(),
+            instruction_data_base64: BASE64.encode(&first_party.data),
+            instruction_data_sha256: sha256_hex(&first_party.data),
+            compute_unit_limit: recorded_limit,
+            lookup_table: None,
+            lookup_table_addresses: Vec::new(),
+            lookup_table_addresses_sha256: pubkey_vector_sha256(&[]),
+            loaded_writable: Vec::new(),
+            loaded_readonly: Vec::new(),
+            resolved_account_keys: resolved.iter().map(ToString::to_string).collect(),
+            pre_balances,
+            post_balances,
+            recent_blockhash: Hash::new_from_array([7; 32]).to_string(),
+            last_valid_block_height: 1_000,
+            transaction_fee_lamports: 5,
+            wire_bytes: message.wire_bytes,
+            message_base64: BASE64.encode(&message_bytes),
+            message_sha256: sha256_hex(&message_bytes),
+            prestate: prestate
+                .iter()
+                .map(|account| (account.key.to_string(), durable_observed_state(account)))
+                .collect(),
+            expected_accounts,
+            expected_return_data: None,
+            protocol_lamport_deltas: BTreeMap::from([
+                (payer.to_string(), -10),
+                (recipient.to_string(), 10),
+            ]),
+        };
+        let mut journal = DurableTerminalJournalV1 {
+            schema: TERMINAL_JOURNAL_SCHEMA_V1.into(),
+            cluster: "devnet".into(),
+            rpc_url: "https://example.invalid".into(),
+            authorized_mutation: false,
+            state_sha256: String::new(),
+            phase: StageJournalPhaseV1::Planned,
+            intent_sha256: sha256_hex(&serde_json::to_vec(&intent).expect("intent")),
+            intent,
+            signed_packet_base64: None,
+            expected_signature: None,
+            finalized: None,
+            superseded: None,
+        };
+        refresh_terminal_journal_digest_v1(&mut journal).expect("journal digest");
+        journal
+    }
+
+    fn close_fund_first_party_v1() -> Instruction {
+        solana_system_interface::instruction::transfer(&key(1), &key(2), 10)
+    }
+
+    /// THE NUMBER IS DERIVED, NOT CHOSEN.
+    ///
+    /// `tools/gauntlet/CU_BUDGETS.md`: `tolerance = roundup(band, 10_000) +
+    /// 10_000`, floor 15,000; `budget = measured + tolerance`; `measured` is
+    /// the highest draw. Market 1's exact durable message, simulated on devnet
+    /// 2026-09-04 under a 1,400,000-CU probe, drew 252,518 three times out of
+    /// three -- 252,368 inside Resolution plus the 150 the ComputeBudget
+    /// instruction costs itself -- so the band is 0 and the tolerance is its
+    /// floor.
+    #[test]
+    fn the_close_fund_budget_is_its_measured_draw_plus_the_trees_tolerance() {
+        const MEASURED: u32 = 252_518;
+        const BAND: u32 = 0;
+        let tolerance = (BAND.div_ceil(10_000) * 10_000 + 10_000).max(15_000);
+        assert_eq!(tolerance, 15_000, "a zero band bottoms out at the floor");
+        assert_eq!(
+            RESOLUTION_CLOSE_FUND_COMPUTE_UNIT_LIMIT_V1,
+            MEASURED + tolerance
+        );
+        assert!(
+            RESOLUTION_CLOSE_FUND_COMPUTE_UNIT_LIMIT_V1 > 200_000,
+            "a budget inside the default meter would not need declaring"
+        );
+        assert!(
+            RESOLUTION_CLOSE_FUND_COMPUTE_UNIT_LIMIT_V1 < 1_400_000,
+            "and one above the ceiling would not fit at all"
+        );
+        // Exactly one route declares, and it is the one that met the meter.
+        assert_eq!(
+            declared_terminal_compute_budgets_v1(),
+            vec![TerminalStageComputeBudgetV1 {
+                stage: TerminalStageV1::ResolutionCloseFund,
+                compute_unit_limit: RESOLUTION_CLOSE_FUND_COMPUTE_UNIT_LIMIT_V1,
+            }]
+        );
+    }
+
+    /// The shape, stated positively: one ComputeBudget limit carrying the
+    /// recorded budget, then exactly one first-party instruction.
+    #[test]
+    fn a_close_fund_message_authenticates_with_its_declared_compute_budget() {
+        let limit = RESOLUTION_CLOSE_FUND_COMPUTE_UNIT_LIMIT_V1;
+        let journal = synthetic_close_fund_journal_v1(
+            &[
+                ComputeBudgetInstruction::set_compute_unit_limit(limit),
+                close_fund_first_party_v1(),
+            ],
+            Some(limit),
+        );
+        authenticate_terminal_journal_v1(&journal)
+            .expect("a declared budget matching the message authenticates");
+
+        // And the declaration is really in the signed bytes, not merely in the
+        // journal's own JSON: decode the message back out and read it.
+        let message_bytes = BASE64
+            .decode(&journal.intent.message_base64)
+            .expect("durable message base64");
+        let message: VersionedMessage =
+            bincode::deserialize(&message_bytes).expect("durable versioned message");
+        let VersionedMessage::V0(message) = message else {
+            panic!("durable message is v0")
+        };
+        assert_eq!(message.instructions.len(), 2);
+        assert_eq!(
+            message.account_keys[usize::from(message.instructions[0].program_id_index)],
+            compute_budget::ID
+        );
+        assert_eq!(
+            message.instructions[0].data,
+            ComputeBudgetInstruction::set_compute_unit_limit(limit).data
+        );
+    }
+
+    /// A ROUTE UNDER THE DEFAULT METER IS STILL VALID WITH NO PREFIX AT ALL.
+    ///
+    /// Which is the whole reason the field is optional rather than the schema
+    /// being rewritten: `00-alt-create` (10,508 CU), `01-alt-extend`,
+    /// `02-alt-freeze` (1,517), `10-core-begin-retiring` (23,106),
+    /// `11-direct-begin-retiring` (92,137) and `12-resolution-receipt-prepay`
+    /// (150) all landed on devnet inside 200,000, and their finalized journals
+    /// must go on reverifying byte-for-byte under this code.
+    #[test]
+    fn a_route_inside_the_default_meter_authenticates_with_no_prefix() {
+        let (journal, _, _, _) = synthetic_system_transfer_journal();
+        assert_eq!(
+            journal.intent.mutation,
+            DurableTerminalMutationV1::Protocol {
+                stage: TerminalStageV1::CoreBeginRetiring
+            }
+        );
+        assert_eq!(journal.intent.compute_unit_limit, None);
+        assert!(!terminal_route_requires_declared_budget_v1(
+            &journal.intent.mutation
+        ));
+        authenticate_terminal_journal_v1(&journal)
+            .expect("an undeclared route inside the meter is unchanged by this schema");
+        // And a journal that carries no `computeUnitLimit` key at all -- every
+        // journal written before this change -- still parses and still hashes
+        // to the digest it was written with.
+        let encoded = serde_json::to_string(&journal.intent).expect("intent json");
+        assert!(!encoded.contains("computeUnitLimit"), "{encoded}");
+        let round_trip: DurableTerminalIntentV1 =
+            serde_json::from_str(&encoded).expect("an intent with no budget key");
+        assert_eq!(round_trip, journal.intent);
+    }
+
+    /// THE WALL THAT STOPPED MARKET 1, TURNED INTO A REFUSAL WITH A NAME.
+    ///
+    /// `13-resolution-close-fund.json` declared nothing, was signed, and hit
+    /// `consumed 200000 of 200000`. Under this code it cannot be planned.
+    #[test]
+    fn close_fund_without_a_declared_budget_refuses_by_route() {
+        let journal = synthetic_close_fund_journal_v1(&[close_fund_first_party_v1()], None);
+        // It still DECODES, and it has to: the packet that hit the meter is an
+        // undeclared CloseFund, and a journal that cannot be read cannot be
+        // retired either.
+        authenticate_terminal_journal_v1(&journal)
+            .expect("a historical undeclared journal stays readable");
+        let refused = format!(
+            "{}",
+            require_declared_budget_before_signing_v1(&journal.intent)
+                .expect_err("CloseFund does not fit the default meter")
+        );
+        assert!(
+            refused.contains("ResolutionCloseFund") && refused.contains("200,000-CU default meter"),
+            "the refusal names the route and the meter: {refused}"
+        );
+        // And every route that does fit passes the same door untouched.
+        let (inside, _, _, _) = synthetic_system_transfer_journal();
+        require_declared_budget_before_signing_v1(&inside.intent)
+            .expect("a route inside the meter needs no declaration");
+        let declared = synthetic_close_fund_journal_v1(
+            &[
+                ComputeBudgetInstruction::set_compute_unit_limit(
+                    RESOLUTION_CLOSE_FUND_COMPUTE_UNIT_LIMIT_V1,
+                ),
+                close_fund_first_party_v1(),
+            ],
+            Some(RESOLUTION_CLOSE_FUND_COMPUTE_UNIT_LIMIT_V1),
+        );
+        require_declared_budget_before_signing_v1(&declared.intent)
+            .expect("a declared CloseFund passes");
+    }
+
+    /// The three hostiles a prefix invites, each refused for its own reason.
+    #[test]
+    fn a_substituted_doubled_or_trailing_compute_budget_prefix_refuses() {
+        let limit = RESOLUTION_CLOSE_FUND_COMPUTE_UNIT_LIMIT_V1;
+
+        // (1) A prefix whose VALUE is not the recorded budget. This is the one
+        // that a verifier which merely skips the prefix would admit.
+        let substituted = synthetic_close_fund_journal_v1(
+            &[
+                ComputeBudgetInstruction::set_compute_unit_limit(1_400_000),
+                close_fund_first_party_v1(),
+            ],
+            Some(limit),
+        );
+        let refused = format!(
+            "{}",
+            authenticate_terminal_journal_v1(&substituted)
+                .expect_err("a substituted budget must refuse")
+        );
+        assert!(
+            refused.contains("SetComputeUnitLimit") && refused.contains(&limit.to_string()),
+            "the refusal names the prefix and the recorded figure: {refused}"
+        );
+
+        // (2) TWO prefixes. The second one lands in the first-party slot, and
+        // it is refused for being a ComputeBudget declaration rather than
+        // incidentally, by the program-index conjunct further down.
+        let doubled = synthetic_close_fund_journal_v1(
+            &[
+                ComputeBudgetInstruction::set_compute_unit_limit(limit),
+                ComputeBudgetInstruction::set_compute_unit_limit(limit),
+            ],
+            Some(limit),
+        );
+        let refused = format!(
+            "{}",
+            authenticate_terminal_journal_v1(&doubled)
+                .expect_err("two ComputeBudget declarations must refuse")
+        );
+        assert!(
+            refused.contains("first-party instruction was itself a ComputeBudget"),
+            "the refusal names the doubled declaration: {refused}"
+        );
+
+        // (3) THREE instructions -- two prefixes and the first-party one --
+        // refuse on width, which is the shape rule stated in its own words.
+        let widened = synthetic_close_fund_journal_v1(
+            &[
+                ComputeBudgetInstruction::set_compute_unit_limit(limit),
+                ComputeBudgetInstruction::set_compute_unit_limit(limit),
+                close_fund_first_party_v1(),
+            ],
+            Some(limit),
+        );
+        let refused = format!(
+            "{}",
+            authenticate_terminal_journal_v1(&widened)
+                .expect_err("a third instruction must refuse")
+        );
+        assert!(
+            refused.contains("carried 3 instruction(s)"),
+            "the refusal names the width it found: {refused}"
+        );
+
+        // (4) The prefix AFTER the instruction, which is a declaration the
+        // runtime honours and a reader skimming for "the interesting one"
+        // would not notice had moved.
+        let trailing = synthetic_close_fund_journal_v1(
+            &[
+                close_fund_first_party_v1(),
+                ComputeBudgetInstruction::set_compute_unit_limit(limit),
+            ],
+            Some(limit),
+        );
+        let refused = format!(
+            "{}",
+            authenticate_terminal_journal_v1(&trailing)
+                .expect_err("a trailing declaration must refuse")
+        );
+        assert!(
+            refused.contains("SetComputeUnitLimit"),
+            "the refusal names the prefix it did not find in front: {refused}"
+        );
+
+        // (5) And a prefix nobody recorded, on a route that needs none.
+        let undeclared = synthetic_close_fund_journal_v1(
+            &[
+                ComputeBudgetInstruction::set_compute_unit_limit(limit),
+                close_fund_first_party_v1(),
+            ],
+            None,
+        );
+        let refused = format!(
+            "{}",
+            authenticate_terminal_journal_v1(&undeclared)
+                .expect_err("an unrecorded prefix must refuse")
+        );
+        assert!(
+            refused.contains("carried 2 instruction(s)"),
+            "the refusal names the width it found against a recorded None: {refused}"
+        );
+    }
+
+    /// A DRIVER REBUILT MID-SEQUENCE MAY NOT MOVE THE BUDGET UNDER A SESSION
+    /// WHOSE EARLIER STAGES ARE ALREADY SIGNED.
+    #[test]
+    fn a_session_declaring_another_budget_than_this_driver_refuses() {
+        let mut session = test_session(&[key(10), key(11)]);
+        authenticate_terminal_session_v1(&session).expect("the driver's own table");
+        session.declared_compute_unit_limits = vec![TerminalStageComputeBudgetV1 {
+            stage: TerminalStageV1::ResolutionCloseFund,
+            compute_unit_limit: RESOLUTION_CLOSE_FUND_COMPUTE_UNIT_LIMIT_V1 + 1,
+        }];
+        refresh_terminal_session_digest_v1(&mut session).expect("session digest");
+        let refused = format!(
+            "{}",
+            authenticate_terminal_session_v1(&session)
+                .expect_err("a re-pinned budget mid-sequence must refuse")
+        );
+        assert!(
+            refused.contains("may not change the budget"),
+            "the refusal names the rule: {refused}"
+        );
+        // An empty table is the claim that every route fits the default meter,
+        // which is exactly what a v2 session said and what CloseFund refuted.
+        let mut emptied = test_session(&[key(10), key(11)]);
+        emptied.declared_compute_unit_limits = Vec::new();
+        refresh_terminal_session_digest_v1(&mut emptied).expect("session digest");
+        authenticate_terminal_session_v1(&emptied)
+            .expect_err("a session declaring nothing must refuse");
     }
 
     fn signed_synthetic_system_transfer_journal() -> (DurableTerminalJournalV1, Signature) {
@@ -9746,6 +10662,99 @@ mod tests {
         refresh_terminal_journal_digest_v1(&mut journal).expect("signed journal digest");
         authenticate_terminal_journal_v1(&journal).expect("canonical signed journal");
         (journal, signature)
+    }
+
+    /// THE ONLY EXIT FROM AN AMBIGUOUS SUBMISSION OTHER THAN FINALITY.
+    ///
+    /// Market 1's `13-resolution-close-fund.json` was signed and submitted and
+    /// then could never land, because the packet exceeded the default meter.
+    /// `Submitted` had no exit for that, so the sequence was wedged: polling a
+    /// signature that will never appear, and forbidden -- correctly -- from
+    /// re-signing. The retired phase is that exit, and it is reachable only
+    /// with the two readings that together settle the packet's fate.
+    #[test]
+    fn a_superseded_journal_carries_its_proof_and_refuses_every_resume() {
+        let (signed, signature) = signed_synthetic_system_transfer_journal();
+        let retire = |journal: &DurableTerminalJournalV1,
+                      evidence: Option<DurableSupersededEvidenceV1>,
+                      phase: StageJournalPhaseV1| {
+            let mut retired = journal.clone();
+            retired.phase = phase;
+            retired.superseded = evidence;
+            refresh_terminal_journal_digest_v1(&mut retired).expect("digest");
+            retired
+        };
+        let sound = DurableSupersededEvidenceV1 {
+            reason: "the packet exceeded the default meter and can never land".into(),
+            retired_signature: signature.to_string(),
+            last_valid_block_height: signed.intent.last_valid_block_height,
+            observed_block_height: signed.intent.last_valid_block_height + 1,
+            observed_slot: 500_000,
+        };
+
+        let retired = retire(
+            &signed,
+            Some(sound.clone()),
+            StageJournalPhaseV1::Superseded,
+        );
+        authenticate_terminal_journal_v1(&retired)
+            .expect("a retired packet with both readings is canonical");
+        assert_eq!(
+            terminal_resume_route_v1(retired.phase, true),
+            TerminalResumeRouteV1::RefuseRetired,
+            "and --execute does not open a door that read-only leaves shut"
+        );
+        assert_eq!(
+            terminal_resume_route_v1(retired.phase, false),
+            TerminalResumeRouteV1::RefuseRetired
+        );
+        let refused = format!("{}", terminal_retired_refusal_v1(&retired));
+        assert!(
+            refused.contains(&signature.to_string()) && refused.contains("can never land"),
+            "the journal refuses its own resubmission by signature: {refused}"
+        );
+
+        // The blockhash has NOT expired: the packet may still be included and
+        // retiring it would be a guess dressed as a fact.
+        let premature = retire(
+            &signed,
+            Some(DurableSupersededEvidenceV1 {
+                observed_block_height: signed.intent.last_valid_block_height,
+                ..sound.clone()
+            }),
+            StageJournalPhaseV1::Superseded,
+        );
+        authenticate_terminal_journal_v1(&premature)
+            .expect_err("a packet whose blockhash may still be accepted is not retirable");
+
+        // Evidence that names a different signature retires nothing.
+        let mismatched = retire(
+            &signed,
+            Some(DurableSupersededEvidenceV1 {
+                retired_signature: Signature::default().to_string(),
+                ..sound.clone()
+            }),
+            StageJournalPhaseV1::Superseded,
+        );
+        authenticate_terminal_journal_v1(&mismatched)
+            .expect_err("retirement evidence must name this journal's own signature");
+
+        // A retired phase with no proof at all, and proof attached to a phase
+        // that is still live. Both are the same defect from opposite sides.
+        authenticate_terminal_journal_v1(&retire(&signed, None, StageJournalPhaseV1::Superseded))
+            .expect_err("a retired phase without its readings is noncanonical");
+        authenticate_terminal_journal_v1(&retire(
+            &signed,
+            Some(sound.clone()),
+            StageJournalPhaseV1::Submitted,
+        ))
+        .expect_err("a submitted packet may not also carry retirement evidence");
+        authenticate_terminal_journal_v1(&retire(
+            &signed,
+            Some(sound),
+            StageJournalPhaseV1::Planned,
+        ))
+        .expect_err("a planned entry was never signed and has nothing to retire");
     }
 
     fn unique_test_path(label: &str) -> PathBuf {
@@ -9790,6 +10799,7 @@ mod tests {
             receipt_initial_lamports: 7,
             receipt_rent_lamports: 9,
             funded_rent_rate: 1,
+            declared_compute_unit_limits: declared_terminal_compute_budgets_v1(),
             supplied_lookup_table: false,
             lookup_table: key(5).to_string(),
             lookup_recent_slot: 99,

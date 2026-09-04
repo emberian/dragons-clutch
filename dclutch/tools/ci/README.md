@@ -17,12 +17,12 @@ tools/ci/run.sh all --require             # the release answer
 
 | tier | cost | needs | what it gates |
 |---|---|---|---|
-| `census` | milliseconds | python3 | a generated file arriving with **no** re-emit guard, or losing one; and the three two-sided wire vectors still carrying their reviewed digests |
+| `census` | ~1s | python3, rustfmt | a generated file arriving with **no** re-emit guard, or losing one; the three two-sided wire vectors still carrying their reviewed digests; and a raw-compared emission that a direct `lane.sh fmt` would red — which `cargo fmt` cannot reach, so the `fmt` tier is not its author |
 | `seam` | ~20s | `ast-grep` | six structural seam defect classes, new findings against a triaged baseline |
 | `release` | ~5s | python3 | the four release-tooling **refusal** suites: build-freshness admission, the devnet activity and demo-pulse wrappers, the sponsored-market-open stager |
 | `clippy` | 22s warm, minutes cold | cargo, clippy, python3 | the deny table at `Cargo.toml:119` and the command `README.md:183` publishes, which **no tier ran**: 105 workspace members judged per package against `tools/ci/clippy-debt.tsv`, and the packages `--keep-going` never *reached* counted separately |
 | `web` | ~1 min | node | the web + SDK vitest suites |
-| `emission` | minutes | `lake` | every generated file still byte-matches the emitter that printed it |
+| `emission` | **86s warm / 195s cold-target**, measured twice 2026-09-04 | `lake`, `rustfmt`, node | every generated file still byte-matches the emitter that printed it — 77 guards, and its first ever full run found two reds |
 | `journey` | ~2 min | `cargo` | the journey campaign still **compiles** |
 | `root-targets` | ~4 min | `cargo` | the root-workspace integration tests `--all-targets` compiles and nothing ran |
 | `programs` | minutes | `cargo-build-sbf` | the programs build with no SBF stack-frame diagnostic, and the public Direct route holds its compute margin across 32 pinned seeds |
@@ -362,6 +362,24 @@ loudly which tree it measured, and counts the uncommitted files if there are any
 
 ## What is not wired, and what it would take
 
+- **The `emission` tier itself. No job runs it.** The wrapper's
+  `.github/workflows/rust.yml` has jobs for `programs`, `journey`, `suites`,
+  `workspaces` and `cheap`, and the one named **"seam register and emission
+  census"** runs `cheap` — which is the CENSUS. So the tier that takes an
+  actual verdict on the 77 byte-identity guards has never run automatically,
+  and until 2026-09-04 had never run at all: its first full run found two
+  guards that had been red for days, in a tree `COVERAGE.md` was calling `100
+  guarded, 0 unguarded` throughout. Neither was a stale emission — one was a
+  guard comparing raw emitter stdout against a file its crate had since
+  formatted (`ea4c46e02`), the other a pinned line count a correct re-emission
+  moved past (`d0c0990fc`). The wiring is one job of the same shape as
+  `journey`, and the number that was missing is now measured: **86s warm, 195s
+  with a cold cargo target**,
+  cheaper than `journey`+`root-targets` and a fifth of `suites`. It needs
+  `lake`, `rustfmt` and node for the six web guards. The cheap half of what it
+  would have caught is already wired: `census` now runs `--fixpoint`, which
+  costs a second and names a raw-compared emission a direct `lane.sh fmt`
+  would red, BEFORE anyone runs it.
 - **The 33 `lake` and 11 ELF root-workspace targets.** `root-targets` runs the
   80 cheap ones and names these as excluded, with the reason, from the census
   rather than from a list of its own. The `lake` ones re-run a Lean emitter and

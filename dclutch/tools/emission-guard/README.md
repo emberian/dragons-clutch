@@ -7,6 +7,8 @@ tools/emission-guard/emission_guard.py --verify   # byte-gate it; exit 1 on drif
 tools/emission-guard/emission_guard.py --affected BASE..HEAD   # what a range moves
 tools/emission-guard/emission_guard.py --run BASE..HEAD        # run those guards
 tools/emission-guard/emission_guard.py --run --all             # run every guard
+tools/emission-guard/emission_guard.py --fixpoint              # formatting hazards, ~1s
+tools/emission-guard/emission_guard.py --fixpoint --write-debt # rewrite that baseline
 sh tools/emission-guard/install-hooks.sh          # opt-in pre-push hook
 ```
 
@@ -68,6 +70,82 @@ purpose:
   rather than passing silently. A hand-edited generated file is the exact
   failure this whole pattern exists to prevent, so it gets named.
 
+## The third tier: `--fixpoint`, and why a census can be green beside a red guard
+
+The two tiers above answer "does a guard exist" and "does it pass". Nothing
+answered the question in between — **can this guard survive an ordinary day in
+this repository** — and that gap is what let `100 guarded, 0 unguarded` stand
+beside a red guard for a week.
+
+The arithmetic is short. `rustfmt.toml` exists precisely so that every
+formatter invocation produces the same bytes, so "formatted" is one thing here
+and not two. So:
+
+* A guard that runs `rustfmt` over the emission before comparing holds
+  `committed == rustfmt(emission)`. Formatting rewrites the committed file to
+  `rustfmt(committed)`, and rustfmt is idempotent, so the equality survives.
+  **Such a guard cannot be broken by formatting.**
+* A guard that compares RAW emitter stdout holds `committed == emission`.
+  Formatting leaves `rustfmt(emission)`, so the guard survives only if the
+  emission was already a fixpoint — and reds the first time anyone formats the
+  file otherwise.
+
+### The vector is not `cargo fmt`, and that was measured
+
+Every generated module in this tree is declared
+
+```rust
+#[rustfmt::skip]
+#[path = "generated_x.rs"]
+mod generated;
+```
+
+or pulled in with `include!`, and **both stop rustfmt's module walk**.
+`cargo fmt --check -v` over the eight crates holding these files visits three
+generated files and none of the eighteen listed in `fixpoint-debt.tsv` — which
+is why that file and `tools/ci/fmt-baseline.txt` share not a single path, and
+why the `fmt` tier is not already the author of this question.
+
+What is not stopped is a **direct invocation**. `tools/lane.sh fmt <file>` is
+`rustup run 1.97.1 rustfmt --edition 2024 -- <file>`; it refuses crate roots and
+nothing else, and the `#[rustfmt::skip]` that would protect the file lives in a
+*different* file, so it never enters the picture. The tree's own recommended
+formatting command, pointed at a path a lane just touched, reformats a
+`do not edit` file.
+
+That is not a reconstruction. `generated_transition_programs_v3.rs` carried
+`#[rustfmt::skip]` from its first commit, was twelve bytes per line for six
+days, and arrived at `ea4c46e02` reflowed to sixteen — every array moved, not
+one byte changed. `#[rustfmt::skip]` on the `mod` is protection against
+`cargo fmt` and against nothing else, and four crates are currently relying on
+it as though it were more.
+
+`--fixpoint` finds that second pair: a generated `.rs` file no guard normalises
+for, that rustfmt does not leave alone. It needs `rustfmt` and NOT `lake`, and
+it costs about a second, so it runs on the cheap `census` tier rather than
+beside the Lean builds. `fixpoint-debt.tsv` is its committed baseline and moves
+in both directions — a new pair reds it, and so does a repaired pair still
+listed — which is `COVERAGE.md`'s ratchet applied to formatting.
+
+This is not a hypothetical class. `generated_transition_programs_v3.rs` was
+exactly such a pair from `3affdadcb` and went red six days later at `ea4c46e02`
+when its file was formatted; `request_profiles_generator_fresh` was the same
+defect in the same crate three days earlier. Eighteen pairs were live when this
+check was written. Each has two possible repairs, both the owning lane's:
+normalise the guard (as forty-two of the sixty-five Rust guards already do), or
+make the emitter print what rustfmt would print.
+
+**The verdict tier had never been run.** Measured 2026-09-04: `--run --all` is
+**86 seconds for all 77 guards** with a warm Lean build and a warm cargo
+target, and **195 seconds** on the first run of the day, where the difference is
+entirely `cargo` rebuilding the 32 test binaries. Its first full run found two
+reds —
+the formatting one above, and a pinned line count in
+`dclutch-liability-basis-v2-kernel/check-generated.sh` that a correct
+re-emission had moved past at `d0c0990fc`. Neither was a stale emission. No CI
+job runs this tier; that is recorded in `tools/ci/README.md` under what is not
+wired.
+
 ## The hook
 
 `install-hooks.sh` is opt-in and you run it yourself. It sets one
@@ -86,6 +164,10 @@ is guarded at all.
 
 ## What this does not do
 
+- `--fixpoint` does not repair a pair, and deliberately: which repair applies
+  is the owning lane's judgment about its own ABI, and a tool that reformatted
+  another lane's generated file would be hand-editing a `do not edit` file to
+  silence its own gate.
 - It does not write check scripts for the unguarded files. Each needs pinned
   literals chosen by someone who knows what a silent width change would look
   like in that ABI, which is judgment, not generation.

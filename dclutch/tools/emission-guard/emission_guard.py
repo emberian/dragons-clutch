@@ -42,6 +42,8 @@ Usage:
     tools/emission-guard/emission_guard.py --run BASE..HEAD
                                                            run those scripts
     tools/emission-guard/emission_guard.py --run --all     run every guard
+    tools/emission-guard/emission_guard.py --fixpoint      gate the formatting
+                                                           hazards, no Lean
 """
 
 from __future__ import annotations
@@ -93,6 +95,36 @@ RUST_EMITTER_RE = re.compile(r'"(Emit[A-Za-z0-9_]+\.lean)"')
 RUST_READBACK_RE = re.compile(r"fs::read\b|include_str!|read_to_string\b")
 RUST_COMPARE_RE = re.compile(r"assert_eq!")
 
+# Whether a guard NORMALISES before it compares. This tree has exactly one
+# formatting authority (`rustfmt.toml`, which sets `style_edition` so that
+# `cargo fmt`, `lane.sh fmt` and a bare `rustfmt` all emit the same bytes). A
+# guard that compares RAW emitter stdout is green only while nobody formats the
+# committed file; a guard that runs `rustfmt` over the emission first is green
+# either way, because rustfmt is idempotent and formatting the committed file
+# cannot move it away from `rustfmt(emission)`.
+RUSTFMT_RE = re.compile(r"\brustfmt\b")
+
+
+def runs_rustfmt(text: str) -> bool:
+    """Whether a guard INVOKES rustfmt, not merely mentions it.
+
+    The distinction is not pedantry: the two guards this got wrong on its first
+    pass both mention rustfmt in a comment explaining that they deliberately do
+    NOT run it -- `dealer-codec/tests/generator_fresh.rs` ("a raw byte compare
+    rather than a rustfmt-normalized one, because the emitter's own output is
+    already rustfmt-stable") and `check-generated-basis-corpus-v3.sh`. Reading
+    the comment as the behaviour would have exempted from the fixpoint check
+    exactly the guards that most need it, and the dealer comment's claim is in
+    fact false: both of its committed files move under rustfmt.
+    """
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith(("#", "//", "*", "/*")):
+            continue
+        if RUSTFMT_RE.search(line):
+            return True
+    return False
+
 
 @dataclass
 class Guard:
@@ -103,6 +135,10 @@ class Guard:
     kind: str = "shell"  # "shell" | "lean-emit"
     workdir: str = ""
     command: list[str] = field(default_factory=list)
+    # Whether this guard runs the emitter's output through `rustfmt` before
+    # comparing. It decides whether the guard can survive somebody formatting
+    # the committed file, which is what `--fixpoint` below is about.
+    normalises: bool = False
 
 
 class ToolError(Exception):
@@ -185,7 +221,8 @@ def discover_guards(root: pathlib.Path, files: list[str]) -> list[Guard]:
             guards.append(
                 Guard(path=rel, emitters=emitters, kind="shell",
                       workdir=str(pathlib.PurePosixPath(rel).parent),
-                      command=["sh", str(root / rel)])
+                      command=["sh", str(root / rel)],
+                      normalises=runs_rustfmt(text))
             )
 
     for rel in files:
@@ -224,7 +261,8 @@ def discover_guards(root: pathlib.Path, files: list[str]) -> list[Guard]:
                 Guard(path=rel, emitters=emitters, kind="cargo-test",
                       workdir=str(crate_dir),
                       command=["cargo", "test", "--manifest-path",
-                               f"{crate_dir}/Cargo.toml", "--test", path.stem])
+                               f"{crate_dir}/Cargo.toml", "--test", path.stem],
+                      normalises=runs_rustfmt(text))
             )
 
     return sorted(guards, key=lambda g: g.path)
@@ -287,23 +325,61 @@ def render_coverage(census: Census) -> str:
         "which it is going to be."
     )
     lines.append("")
+    lines.append(
+        "**`guarded` above is a count of guards that EXIST. It is not a "
+        "verdict, and this file has never held one.** Whether the guarded "
+        "bytes still match is a different question with a different price: "
+        "`tools/ci/run.sh emission`, which runs every guard here for real. "
+        "Measured twice on 2026-09-04: **86 seconds for all 77 guards** warm, "
+        "**195 seconds** with a cold cargo target — and on its first full run "
+        "it found TWO that had been red "
+        "for days, in a tree this file was calling fully guarded the whole "
+        "time. One had been red since `ea4c46e02` (a guard comparing raw "
+        "emitter stdout against a file its crate had since formatted); the "
+        "other since `d0c0990fc` (a pinned line count a correct re-emission "
+        "moved past). Neither was a stale emission. `--fixpoint` catches the "
+        "first kind in about a second and with no Lean at all, which is why "
+        "it is on the cheap tier and this is not."
+    )
+    lines.append("")
 
     lines.append("## Guards")
     lines.append("")
     lines.append(
-        "Each runs its emitter and compares the output against the committed "
-        "bytes. All of them need `lake` (and the shell ones `rustfmt`), which "
-        "is why they are not on a cheap CI tier. A guard is a comparison, "
-        "never a build: three kinds qualify — a `check*.sh` script, a "
-        "`package.json` script passing `--check`, and a Rust integration test "
-        "that reads the committed artifact back and asserts equality."
+        "An inventory of guards that exist, not a record of guards that "
+        "passed — each of these re-runs its emitter and compares the output "
+        "against the committed bytes WHEN SOMEBODY RUNS IT. All of them need "
+        "`lake`, which is why they are not on a cheap CI tier. A guard is a "
+        "comparison, never a build: three kinds qualify — a `check*.sh` "
+        "script, a `package.json` script passing `--check`, and a Rust "
+        "integration test that reads the committed artifact back and asserts "
+        "equality."
     )
     lines.append("")
-    lines.append("| Guard | Kind | Emitters re-run |")
-    lines.append("|---|---|---|")
+    rust_guards = [g for g in census.guards if g.kind != "lean-emit"]
+    raw_guards = [g for g in rust_guards if not g.normalises]
+    lines.append(
+        "**Normalises** says whether the guard runs `rustfmt --edition 2024` "
+        "over the emission before comparing. It decides whether the guard can "
+        "survive somebody formatting the committed file — which `cargo fmt` "
+        "will not do (every generated module is behind `#[rustfmt::skip]` or "
+        "an `include!`) but `tools/lane.sh fmt <path>` will, because a direct "
+        f"rustfmt never sees that attribute: of the {len(rust_guards)} guards over Rust "
+        f"emissions, {len(rust_guards) - len(raw_guards)} do and "
+        f"{len(raw_guards)} compare raw emitter stdout — green only while the "
+        "emission is already a rustfmt fixpoint. `n/a` is the TypeScript half, "
+        "which rustfmt does not format. "
+        "`tools/emission-guard/fixpoint-debt.tsv` is the list of files where "
+        "the raw comparison is not safe, and `--fixpoint` is the gate that "
+        "keeps it honest."
+    )
+    lines.append("")
+    lines.append("| Guard | Kind | Normalises | Emitters re-run |")
+    lines.append("|---|---|---|---|")
     for guard in census.guards:
         names = ", ".join(f"`{e}`" for e in sorted(guard.emitters))
-        lines.append(f"| `{guard.path}` | {guard.kind} | {names} |")
+        shape = "n/a" if guard.kind == "lean-emit" else ("yes" if guard.normalises else "raw")
+        lines.append(f"| `{guard.path}` | {guard.kind} | {shape} | {names} |")
     lines.append("")
 
     lines.append("## Guarded generated files")
@@ -333,6 +409,135 @@ def render_coverage(census: Census) -> str:
     else:
         lines.append("None. Every generated file has a check script behind it.")
     lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+FIXPOINT_DEBT_REL = "tools/emission-guard/fixpoint-debt.tsv"
+
+
+def normalising_emitters(census: Census) -> set[str]:
+    """Emitters some guard re-formats before comparing."""
+    covered: set[str] = set()
+    for guard in census.guards:
+        if guard.normalises:
+            covered |= guard.emitters
+    return covered
+
+
+def fixpoint_hazards(root: pathlib.Path, census: Census) -> list[tuple[str, str]]:
+    """Generated Rust files one `lane.sh fmt` away from reddening their guard.
+
+    THE ARITHMETIC, because it is short and it is the whole justification. A
+    guard is green when the committed bytes equal what it compares against.
+
+      * A guard that NORMALISES compares against `rustfmt(emission)`. Running
+        rustfmt over the committed file leaves `rustfmt(committed)`, and
+        rustfmt is idempotent, so the equality is preserved. Such a guard
+        cannot be broken by formatting, whatever the emitter prints.
+      * A guard that compares RAW emitter stdout is green only while
+        `committed == emission`. Formatting leaves `rustfmt(emission)`, so the
+        guard survives exactly when the emission is already a rustfmt fixpoint,
+        and reds the first time anyone formats the file otherwise.
+
+    So a hazard is: a generated `.rs` file whose emitter NO guard normalises
+    for, and which rustfmt does not leave alone.
+
+    THE VECTOR IS NOT `cargo fmt`, AND THIS IS THE PART THAT WAS MEASURED
+    RATHER THAN ASSUMED. Every generated module in this tree is declared
+    `#[rustfmt::skip] #[path = "generated_x.rs"] mod generated;` or pulled in
+    with `include!`, and both stop rustfmt's MODULE WALK: `cargo fmt --check`
+    over the eight crates holding these files visits three of them and none of
+    the eighteen listed here, which is why `tools/ci/fmt-baseline.txt` and this
+    list have zero overlap and why the `fmt` tier is not a second author for
+    this question.
+
+    What is not stopped is a DIRECT invocation. `tools/lane.sh fmt <file>` is
+    `rustup run 1.97.1 rustfmt --edition 2024 -- <file>`; it refuses only
+    crate roots, and the `#[rustfmt::skip]` that would protect the file lives
+    in a DIFFERENT file and never enters the picture. So the tree's own
+    recommended formatting command, run on a path a lane just touched,
+    reformats a `do not edit` file and reds its guard -- and that is exactly
+    what happened. `generated_transition_programs_v3.rs` carried
+    `#[rustfmt::skip]` from its first commit (`3affdadcb`, 2026-08-27), was
+    twelve bytes per line for six days, and arrived at `ea4c46e02` reflowed to
+    sixteen with every array moved and not one byte changed. Its guard was red
+    from that moment; the census reported `100 guarded, 0 unguarded` for two
+    more days, because a census counts guards and not verdicts.
+
+    This check names such a pair on the day it is created rather than on the
+    day somebody formats it. It costs about a second and needs no Lean build,
+    which matters because the tier that would otherwise catch it -- running
+    the guards for real -- costs minutes and had never been run at all.
+
+    TypeScript emissions are out of scope: rustfmt is not their formatter and
+    a second formatter here would be a second authority.
+    """
+    import shutil
+    import tempfile
+
+    if shutil.which("rustfmt") is None:
+        raise ToolError(
+            "rustfmt is not on PATH, so the fixpoint check could not run. "
+            "Install the pinned toolchain (`rustup toolchain install 1.97.1`) "
+            "or skip this check deliberately -- it has not passed."
+        )
+    normalised = normalising_emitters(census)
+    hazards: list[tuple[str, str]] = []
+    with tempfile.TemporaryDirectory() as scratch:
+        target = pathlib.Path(scratch) / "generated.rs"
+        for rel, emitter in sorted(census.generated.items()):
+            if not rel.endswith(".rs") or emitter in normalised:
+                continue
+            original = (root / rel).read_bytes()
+            target.write_bytes(original)
+            result = subprocess.run(
+                ["rustfmt", "--edition", "2024", str(target)],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            if result.returncode != 0 or target.read_bytes() != original:
+                hazards.append((rel, emitter))
+    return hazards
+
+
+def read_fixpoint_debt(path: pathlib.Path) -> list[tuple[str, str]]:
+    if not path.is_file():
+        return []
+    rows: list[tuple[str, str]] = []
+    for line in path.read_text().splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        rel, _, emitter = line.partition("\t")
+        rows.append((rel, emitter))
+    return sorted(rows)
+
+
+def render_fixpoint_debt(hazards: list[tuple[str, str]]) -> str:
+    lines = [
+        "# @generated by tools/emission-guard/emission_guard.py --fixpoint --write-debt",
+        "#",
+        "# Generated Rust files that rustfmt does not leave alone AND whose guard",
+        "# compares raw emitter stdout. Each is green today and reds the first time",
+        "# anyone formats the FILE -- which `cargo fmt` will not do, because every one",
+        "# of these is behind `#[rustfmt::skip]` or an `include!` that stops rustfmt's",
+        "# module walk, but which `tools/lane.sh fmt <path>` does, because a direct",
+        "# invocation never sees the attribute that lives in the sibling file. That is",
+        "# how `generated_transition_programs_v3.rs` went red at `ea4c46e02`.",
+        "#",
+        "# The repair is one of two, and both are the owning lane's to make, not this",
+        "# file's:",
+        "#",
+        "#   * teach the guard to `rustfmt --edition 2024` the emission before it",
+        "#     compares, as the other forty-two guards in this tree do, and commit the",
+        "#     formatted file; or",
+        "#   * make the emitter print what rustfmt would print, so raw and formatted",
+        "#     are the same bytes.",
+        "#",
+        "# This list is a RATCHET. A new pair reds `--fixpoint`; so does a repaired one",
+        "# still listed here. It only moves when somebody looks at it.",
+        "#",
+        "# path\temitter",
+    ]
+    lines += [f"{rel}\t{emitter}" for rel, emitter in sorted(hazards)]
     return "\n".join(lines) + "\n"
 
 
@@ -443,12 +648,48 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--affected", metavar="RANGE", help="list guards a git range could move")
     parser.add_argument("--run", metavar="RANGE", nargs="?", const="", help="run affected guards")
     parser.add_argument("--all", action="store_true", help="with --run: every guard")
+    parser.add_argument(
+        "--fixpoint", action="store_true",
+        help="gate the raw-compared emissions rustfmt does not leave alone",
+    )
+    parser.add_argument(
+        "--write-debt", action="store_true", help="with --fixpoint: rewrite the baseline"
+    )
     args = parser.parse_args(argv)
 
     root = pathlib.Path(args.root).resolve()
     out = pathlib.Path(args.out).resolve() if args.out else root / DEFAULT_COVERAGE_REL
     census = build_census(root)
     guarded, unguarded = census.split()
+
+    if args.fixpoint:
+        debt_path = root / FIXPOINT_DEBT_REL
+        hazards = fixpoint_hazards(root, census)
+        if args.write_debt:
+            debt_path.write_text(render_fixpoint_debt(hazards))
+            print(f"FIXPOINT-DEBT\t{debt_path}")
+            print(f"SUMMARY\thazards={len(hazards)}")
+            return 0
+        recorded = read_fixpoint_debt(debt_path)
+        arrived = [row for row in hazards if row not in recorded]
+        repaired = [row for row in recorded if row not in hazards]
+        for rel, emitter in arrived:
+            print(
+                f"FIXPOINT\tARRIVED\t{rel}\t{emitter}\t"
+                "raw-compared and rustfmt does not leave it alone -- one "
+                "`lane.sh fmt` on this path reds its guard"
+            )
+        for rel, emitter in repaired:
+            print(
+                f"FIXPOINT\tREPAIRED\t{rel}\t{emitter}\t"
+                "no longer a hazard; drop it from the baseline with --write-debt"
+            )
+        print(
+            f"SUMMARY\thazards={len(hazards)}\trecorded={len(recorded)}"
+            f"\tarrived={len(arrived)}\trepaired={len(repaired)}"
+            f"\tstatus={'STOP' if (arrived or repaired) else 'PASS'}"
+        )
+        return 1 if (arrived or repaired) else 0
 
     if args.verify:
         fresh = render_coverage(census)

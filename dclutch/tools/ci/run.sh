@@ -166,12 +166,54 @@ tier_census() {
     pin_code=0
   fi
 
+  # THE FORMATTING HAZARDS, here for the same two reasons the pins are: it
+  # costs a second, and it guards the same thing from the other side.
+  #
+  # The census above counts a guard's PRESENCE. It structurally cannot count
+  # its VERDICT -- that is the `emission` tier, which needs `lake` and, as of
+  # 2026-09-04, had never been run: its first full run found TWO guards that
+  # had been red for days while this tier reported "100 guarded, 0 unguarded".
+  #
+  # One of those two was pure formatting, and formatting is checkable here with
+  # no Lean at all. A guard that compares RAW emitter stdout is green only while
+  # the emission is already a rustfmt fixpoint. That pair -- raw guard,
+  # non-fixpoint file -- is a red guard with a fuse on it, and `--fixpoint`
+  # names it on the day it is created instead of the day somebody formats it.
+  #
+  # NOT a second author for the `fmt` tier below, and the measurement says so:
+  # `cargo fmt` cannot reach these files at all. Every generated module is
+  # declared `#[rustfmt::skip] #[path = ...] mod generated;` or pulled in with
+  # `include!`, both of which stop rustfmt's module walk -- which is why
+  # fmt-baseline.txt and fixpoint-debt.tsv share not one path. What reaches
+  # them is `tools/lane.sh fmt <path>`, a DIRECT `rustfmt --edition 2024` that
+  # never sees an attribute living in a sibling file. That is this tree's own
+  # recommended formatting command, and it is how ea4c46e02 reflowed a
+  # `do not edit` file without changing a byte of it.
+  local fixpoint_code=0
+  if have rustfmt; then
+    (cd "$repo_root" && python3 "$tool" --fixpoint) || fixpoint_code=$?
+    if [ "$fixpoint_code" = 2 ]; then
+      note "The fixpoint check could not run. It has not passed."
+      fixpoint_code=0
+    elif [ "$fixpoint_code" != 0 ]; then
+      note "A generated file is one \`lane.sh fmt\` from reddening its guard,"
+      note "or one on the recorded list no longer is. Both move"
+      note "\`tools/emission-guard/fixpoint-debt.tsv\`, and it only moves when"
+      note "somebody looks: \`--fixpoint --write-debt\` rewrites it."
+    fi
+  else
+    note "rustfmt is not on PATH, so the emission FORMATTING hazards were not"
+    note "checked. The census half above still ran."
+  fi
+
   case "$code" in
   0)
-    if [ "$pin_code" = 0 ]; then
-      record census $EXIT_PASS
-    else
+    if [ "$pin_code" != 0 ]; then
       record census $EXIT_GATE_FAILED "a wire vector moved without its pin"
+    elif [ "$fixpoint_code" != 0 ]; then
+      record census $EXIT_GATE_FAILED "a raw-compared emission rustfmt does not leave alone"
+    else
+      record census $EXIT_PASS
     fi
     ;;
   2)
@@ -2475,12 +2517,21 @@ list_tiers() {
   cat <<'EOF'
 tier      cost         prerequisite       what it gates
 
-census    milliseconds python3            a generated file arriving with no
-                                          re-emit guard, or losing one; and the
+census    ~1s          python3, rustfmt   a generated file arriving with no
+                                          re-emit guard, or losing one; the
                                           three two-sided wire vectors still
                                           carrying their reviewed digests, so
                                           DCLUTCH_WRITE_WIRE_VECTOR=1 cannot
-                                          green a moved wire on its own
+                                          green a moved wire on its own; and a
+                                          generated file whose guard compares
+                                          RAW emitter stdout and which rustfmt
+                                          does not leave alone -- a red guard
+                                          with a fuse on it, waiting for the
+                                          next `lane.sh fmt` on that path.
+                                          `cargo fmt` cannot reach these (they
+                                          are behind #[rustfmt::skip] or an
+                                          include!), which is why the fmt tier
+                                          is not already the author of this
 fmt       ~10s         cargo, rustfmt     rustfmt disagreeing with a file that
                                           is not in tools/ci/fmt-baseline.txt,
                                           or a baseline line that is no longer
@@ -2557,8 +2608,13 @@ abi       ~3 min       lake, cargo,       all 53 `abi:*:verify` scripts in both
                                           wasm generators stopped each building
                                           the same crate closure into a private
                                           target directory
-emission  minutes      lake (Lean)        every generated file still byte-
-                                          matches the emitter that printed it
+emission  86s warm     lake, rustfmt,     every generated file still byte-
+          195s cold    node               matches the emitter that printed it.
+                                          77 guards; measured 2026-09-04, and
+                                          that was its FIRST full run -- it
+                                          found two guards red for days while
+                                          census reported 100 guarded, 0
+                                          unguarded. Existence is not a verdict
 frameguard minutes     cargo-build-sbf    every function in the exact twelve
                                           SBF links retains its admitted frame;
                                           catches growth below the 4,096 wall,

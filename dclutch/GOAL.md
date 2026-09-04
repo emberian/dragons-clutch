@@ -4586,3 +4586,11 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Started 08:20 EDT: RELEASE-PREFLIGHT **`a248939337b44b41d`** — the deploy preflight inverted under the ruling (a rate-risen
   account admits; a drained one refuses), proven against cohort-15's deployed accounts; the 22 explicit floor/exactness
   sites dispositioned, the operator's nine left to COHORT-15G's file.
+- LEAN-DRIFT closed (`edfdc22ac`, `31972aca4`, `0162638ce`, `290ab7d2b`): **no drift — a rustfmt reflow (12 → 16 bytes per
+  line, not one byte changed) against a guard that compared RAW emitter stdout**, the last of four in its crate (513f0d8e6
+  named it two days ago); a second red pin (`549 -eq 548`, red since 09-02) fixed; **the `emission` tier ran every guard and
+  nobody had ever run it** — 86 s warm / 195 s cold, 77/77 green; the `census` tier now runs a rustfmt-fixpoint check (18
+  hazards baselined as a ratchet; `#[rustfmt::skip]` does not protect a file from `lane.sh fmt <path>`); COVERAGE.md says
+  "guarded" counts existence, never a verdict, and gains a Normalises column (40 of 65 Rust guards). The wrapper gained an
+  `emission` job (aee5d325c). Owed: the 18 fixpoint hazards, each the owning lane's call.
+- Cuts: `7668db575`, `a9258eeee`.
