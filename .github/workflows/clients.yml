@@ -1,0 +1,328 @@
+# The two client tiers, which until now ran in no CI at all.
+#
+# `tools/ci/run.sh` defines nine tiers. This repository's workflows called five
+# of them -- `programs`, `journey`, `suites`, `workspaces`, `cheap` -- and the
+# two that gate the BROWSER, `web` and `abi`, ran nowhere. That gap has the
+# shape this project keeps finding in itself: `checks.yml`'s `suites` job runs
+# the web and SDK vitest suites, so it LOOKS like the web tier runs here. It
+# does not. That job restates the tier's vitest invocation, and the tier has
+# since grown a step the restatement does not have -- the selector-9 profile
+# vector from the side that AUTHORS the bytes, which exists because the
+# TypeScript mirror and its fixture can go stale together and stay green. A
+# copy of a definition agrees with it right up until it does not.
+#
+# WHY A THIRD FILE RATHER THAN A JOB IN EITHER EXISTING ONE. `checks.yml` says
+# in its own header that it carries "no Lean build" and "no SBF/cargo-build
+# job", and both tiers here need cargo (`abi` also needs lake, wasm-bindgen and
+# a wasm32 target). Adding them there would break that file's stated contract
+# silently. `rust.yml` is path-filtered to programs, crates and Cargo files, so
+# a change to `apps/dclutch-web` would not trigger it -- and the web tier is
+# exactly what a web change should run. Neither file was the right home, so the
+# tiering gets a third one whose filter matches what these tiers actually read.
+#
+# NOTHING HERE IS WEAKENED OR REMOVED. `checks.yml`'s `suites` job stays as it
+# is: it needs no toolchain, runs on every push, and is the only client gate
+# this repository has ever actually executed on a runner. Once the `web` job
+# below has run green on real runners it makes that job redundant and it can be
+# deleted -- by whoever reads that result, not in advance of it.
+#
+# WHAT THE PUBLISHED SUBTREE CARRIES RIGHT NOW, measured 2026-09-03 against
+# `dclutch/` at this commit and not assumed: `tools/ci/run.sh` is present and
+# lists a `web` tier, and does NOT list an `abi` tier -- that tier landed in the
+# live tree after the last cut. So the `abi` job below will report NOT RUN until
+# the next subtree refresh. That is stated here because the alternative is a job
+# that exits 64 on an unknown tier and reads as a broken workflow.
+#
+# HOW EACH JOB DECIDES WHETHER ITS TIER EXISTS: it asks the runner, with
+# `run.sh --list`, rather than grepping for a shell function or keeping its own
+# list. `run.sh`'s own header argues exactly this about prerequisites -- "where
+# a gate already reports its own 2, THIS SCRIPT READS THAT ANSWER RATHER THAN
+# RE-DERIVING IT" -- and a workflow holding a second copy of the tier table is
+# the same defect one repository further out.
+name: clients
+
+on:
+  push:
+    paths:
+      - "dclutch/apps/dclutch-web/**"
+      - "dclutch/packages/dclutch-sdk/**"
+      # Both tiers read the Rust and the Lean that own the facts: `abi`
+      # regenerates every client module from them and byte-compares, and the
+      # web tier's profile vector is written by a Rust encoder. A crate or a
+      # Lean schema moving is the most common way either goes red WITHOUT a
+      # line of TypeScript changing, so those paths belong in this filter.
+      - "dclutch/crates/**"
+      - "dclutch/programs/**"
+      - "dclutch/formal/**"
+      - "dclutch/tools/ci/**"
+      - ".github/workflows/clients.yml"
+  pull_request:
+    paths:
+      - "dclutch/apps/dclutch-web/**"
+      - "dclutch/packages/dclutch-sdk/**"
+      - "dclutch/crates/**"
+      - "dclutch/programs/**"
+      - "dclutch/formal/**"
+      - "dclutch/tools/ci/**"
+      - ".github/workflows/clients.yml"
+  # The `abi` tier compiles eight crates to wasm and shells out to `lake`, so a
+  # toolchain release or a yanked dependency can turn it red with no diff at
+  # all. `rust.yml` carries a schedule for the same reason and says so.
+  schedule:
+    - cron: "43 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clients-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # -------------------------------------------------------------------------
+  # web -- the vitest suites in both client trees, plus the encoder side of the
+  # one fixture that can go stale in both directions at once.
+  #
+  # About a minute of tests behind a few minutes of install. It installs Rust
+  # even though today's published `tier_web` never invokes cargo, and that is
+  # deliberate: the live tree's version runs `cargo test -p dclutch-trading-sbf
+  # --test dealer_scenario_profile_vector`, and that step reports a MISSING
+  # CARGO as a failed gate rather than as an absent prerequisite. Without a
+  # toolchain here, the first subtree refresh that carries it would turn this
+  # job red and the log would blame the fixture.
+  # -------------------------------------------------------------------------
+  web:
+    name: web + SDK suites (tools/ci/run.sh web)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Is the web tier in the published subtree yet?
+        id: probe
+        run: |
+          if [ -x dclutch/tools/ci/run.sh ] && dclutch/tools/ci/run.sh --list | grep -qE '^web[[:space:]]'; then
+            echo "present=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=0" >> "$GITHUB_OUTPUT"
+            echo "::warning::dclutch/tools/ci/ does not publish a web tier yet, so no client suite ran from the tiering. checks.yml's suites job still runs the two vitest suites."
+            echo "web tier: NOT RUN (not in the published subtree)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.probe.outputs.present == '1'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            dclutch/apps/dclutch-web/package-lock.json
+            dclutch/packages/dclutch-sdk/package-lock.json
+
+      # `rust-toolchain.toml` pins the channel, so rustup resolves it from the
+      # tree and this file states no version. The same rule rust.yml states
+      # about the compute constant: the pin has one owner.
+      - uses: actions/cache@v4
+        if: steps.probe.outputs.present == '1'
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            dclutch/target
+          key: clients-web-${{ hashFiles('dclutch/Cargo.lock', 'dclutch/rust-toolchain.toml') }}
+          restore-keys: clients-web-
+
+      - name: Install both client trees
+        if: steps.probe.outputs.present == '1'
+        run: |
+          (cd dclutch/apps/dclutch-web && npm ci)
+          (cd dclutch/packages/dclutch-sdk && npm ci)
+          # `tier_web` SKIPS a tree whose node_modules is absent and only
+          # reports a missing prerequisite when BOTH are, so one failed install
+          # would narrow the gate to one tree and still report a pass. Asserting
+          # both here keeps "installed" and "green" from being the same word.
+          for dir in dclutch/apps/dclutch-web dclutch/packages/dclutch-sdk; do
+            [ -d "$dir/node_modules" ] || { echo "::error::$dir has no node_modules; the tier would have skipped it and still passed"; exit 1; }
+          done
+          # Vite caches a transformed module graph keyed on mtime, and a
+          # restored npm cache can hand it a graph older than the sources it
+          # claims to describe. `npm ci` removes node_modules outright so this
+          # is belt and braces on a runner -- it is here because it is the same
+          # command a lane runs locally before a live read, and the two should
+          # not differ.
+          rm -rf dclutch/apps/dclutch-web/node_modules/.vite
+
+      - name: Run the web tier
+        if: steps.probe.outputs.present == '1'
+        working-directory: dclutch
+        run: |
+          set +e
+          tools/ci/run.sh web
+          code=$?
+          set -e
+          case "$code" in
+            0) echo "web tier: passed" | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            2)
+              echo "::warning::the web tier could not run -- a prerequisite is missing. Nothing was proven either way."
+              echo "web tier: NOT RUN (missing prerequisite)" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            64)
+              echo "::error::tools/ci/run.sh rejected 'web' as a tier name. The probe above said the tier was listed, so the runner's table and its dispatch disagree -- that is a defect in run.sh, not in this workflow."
+              echo "web tier: USAGE ERROR" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+              ;;
+            *)
+              echo "::error::the web tier FAILED. Either a vitest suite is red in one of the two client trees, or the selector-9 profile vector's ENCODER side moved and the checked-in fixture did not -- the second is the one to check first, because the browser mirror and the fixture stay consistent with each other while both are stale."
+              echo "web tier: FAILED" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+              ;;
+          esac
+
+  # -------------------------------------------------------------------------
+  # abi -- all 53 `abi:*:verify` scripts, in both client trees.
+  #
+  # Its own job because it is minutes, not seconds, and because it answers a
+  # different question from the suites above: not "does the browser's logic
+  # hold" but "does every generated module still equal what the Rust or Lean
+  # that owns those facts prints today". 41 of the 53 ran in no tier at all
+  # until the tier existed, and four of them were red when it first did.
+  #
+  # THE COST IS ITS OWN REASON FOR THE CACHES BELOW. Measured in the live tree
+  # on 2026-09-03: 8m28s and 8m54s, most of it the eight wasm generators each
+  # building the same crate closure into a private `mkdtemp` target directory --
+  # timed alone, 216s for the eight. The tier now points all eight at ONE
+  # directory it creates and removes, which took the same eight to 89s and the
+  # whole tier to 2m52s. `DCLUTCH_WASM_TARGET_DIR` below hands it a runner-temp
+  # path instead, so the cache can carry it between runs; the tier accepts a
+  # caller's directory precisely so somewhere better to put it can be named.
+  # None of those numbers are GitHub's -- they are one laptop with a warm cargo
+  # registry, and a cold runner will be slower. They are here as a ratio, not a
+  # budget: the timeout below is set for a cold first run.
+  #
+  # A cold run still pays a Lean build and a wasm-bindgen install. Both are
+  # cached and neither is pinned in this file: the Lean channel comes from
+  # `formal/dclutch-semantics/lean-toolchain` and the wasm-bindgen version is
+  # READ OUT OF THE LOCKFILE, because a CLI whose version disagrees with the
+  # `wasm-bindgen` crate in the build refuses, and a number typed here would be
+  # a second owner for a version the tree already states.
+  # -------------------------------------------------------------------------
+  abi:
+    name: 53 generated client modules against their authorities (tools/ci/run.sh abi)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Is the abi tier in the published subtree yet?
+        id: probe
+        run: |
+          if [ -x dclutch/tools/ci/run.sh ] && dclutch/tools/ci/run.sh --list | grep -qE '^abi[[:space:]]'; then
+            echo "present=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=0" >> "$GITHUB_OUTPUT"
+            echo "::warning::dclutch/tools/ci/ does not publish an abi tier yet, so NO generated client module was checked against its authority. This is a statement about what is published, not about the live tree. Refresh the subtree to make this job real."
+            {
+              echo "### abi tier: not run"
+              echo
+              echo "\`tools/ci/run.sh\` in the vendored subtree lists no \`abi\` tier."
+              echo "None of the 53 \`abi:*:verify\` scripts ran."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.probe.outputs.present == '1'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            dclutch/apps/dclutch-web/package-lock.json
+            dclutch/packages/dclutch-sdk/package-lock.json
+
+      - uses: actions/cache@v4
+        if: steps.probe.outputs.present == '1'
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cargo/bin/wasm-bindgen
+            ~/.elan
+            dclutch/formal/dclutch-semantics/.lake
+            ${{ runner.temp }}/dclutch-abi-wasm-target
+          key: clients-abi-${{ hashFiles('dclutch/Cargo.lock', 'dclutch/rust-toolchain.toml', 'dclutch/formal/dclutch-semantics/lean-toolchain') }}
+          restore-keys: clients-abi-
+
+      - name: wasm32 target and wasm-bindgen, at the tree's own version
+        if: steps.probe.outputs.present == '1'
+        run: |
+          rustup target add wasm32-unknown-unknown
+          # The CLI must match the `wasm-bindgen` crate the build links, or it
+          # refuses with a version mismatch. Read from the lockfile so this file
+          # holds no copy of it.
+          wanted=$(awk '/^name = "wasm-bindgen"$/ { getline; gsub(/[",]/, "", $3); print $3; exit }' dclutch/Cargo.lock)
+          [ -n "$wanted" ] || { echo "::error::could not read the wasm-bindgen version out of dclutch/Cargo.lock"; exit 1; }
+          have=$(wasm-bindgen --version 2>/dev/null | awk '{print $2}')
+          if [ "$have" != "$wanted" ]; then
+            echo "installing wasm-bindgen-cli $wanted (cache held ${have:-none})"
+            cargo install wasm-bindgen-cli --locked --version "$wanted" --force
+          else
+            echo "wasm-bindgen $have is already the version the lockfile names"
+          fi
+          wasm-bindgen --version
+
+      - name: Lean, at the channel the semantics name
+        if: steps.probe.outputs.present == '1'
+        run: |
+          if ! command -v lake >/dev/null 2>&1; then
+            curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o elan-init.sh
+            sh elan-init.sh -y --default-toolchain none
+          fi
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Install both client trees
+        if: steps.probe.outputs.present == '1'
+        run: |
+          (cd dclutch/apps/dclutch-web && npm ci)
+          (cd dclutch/packages/dclutch-sdk && npm ci)
+          # Same reason as the web job: `tier_abi` skips a tree with no
+          # node_modules and only reports a missing prerequisite when BOTH are
+          # absent, so a half-installed runner could report a pass over 28
+          # verifiers instead of 53.
+          for dir in dclutch/apps/dclutch-web dclutch/packages/dclutch-sdk; do
+            [ -d "$dir/node_modules" ] || { echo "::error::$dir has no node_modules; the tier would have skipped its verifiers and still passed"; exit 1; }
+          done
+
+      - name: Run the abi tier
+        if: steps.probe.outputs.present == '1'
+        working-directory: dclutch
+        env:
+          # One shared target directory for the eight wasm generators, OUTSIDE
+          # the checkout so it is neither committed nor a lock shared with a
+          # lane's own by-hand run, and inside the runner temp so the cache
+          # above can carry it. Absent this the tier makes its own and deletes
+          # it, which is right for a laptop and wasteful for a runner.
+          DCLUTCH_WASM_TARGET_DIR: ${{ runner.temp }}/dclutch-abi-wasm-target
+        run: |
+          lake --version
+          set +e
+          tools/ci/run.sh abi
+          code=$?
+          set -e
+          case "$code" in
+            0) echo "abi tier: 53 generated modules agree with their authorities" | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            2)
+              echo "::warning::the abi tier could not run -- lake, cargo, wasm-bindgen or the wasm32 target is missing. The verifiers FAIL rather than skip without a toolchain, so the tier refuses to start instead of reporting red surfaces that are not red. Nothing was proven either way."
+              echo "abi tier: NOT RUN (missing prerequisite)" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            64)
+              echo "::error::tools/ci/run.sh rejected 'abi' as a tier name. The probe above said the tier was listed, so the runner's table and its dispatch disagree -- that is a defect in run.sh, not in this workflow."
+              echo "abi tier: USAGE ERROR" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+              ;;
+            *)
+              echo "::error::a generated client module no longer matches the Rust or Lean that printed it. The log names which surface. The fix is to REGENERATE from a detached worktree at HEAD in the live tree and read the diff -- never to relax the check, and never to regenerate from a shared working tree, which bakes another lane's half-written source into a committed digest."
+              echo "abi tier: FAILED" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+              ;;
+          esac
