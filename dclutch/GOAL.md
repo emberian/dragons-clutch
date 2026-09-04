@@ -4885,3 +4885,6 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   one — the silent-success shape, caught by checking the build log existed; the laptop could not fit the campaign (target
   78G + 19G).
 - Cuts: `6cba95019`, `227040db0`, `64cc6dc53`.
+- Started 15:05 EDT: CLAIMS-17 **`(spawned)`** — founding v6 seats the escrow (shape A, ruled provisionally), split and merge
+  as user acts that move collateral, the refunding failure walk on real ELFs; RECOVERY-3 **`(spawned)`** — the successor founds
+  a two-source market, `advance-recovery` with a bounded wait, cohort-16 rows, the relayed tier's binding.
