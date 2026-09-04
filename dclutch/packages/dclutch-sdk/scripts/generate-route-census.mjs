@@ -28,7 +28,7 @@
  *   node scripts/generate-route-census.mjs --inventory FILE   # reuse one
  */
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -145,6 +145,195 @@ for (const program of programs) {
 }
 refusals.sort((left, right) => left.code - right.code);
 
+/**
+ * A predicate arm's magic, resolved from the Rust the predicate is.
+ *
+ * WHY THIS EXISTS. The census records a predicate arm as
+ * `predicate hot_v3::is_hot_execution_v3()` and stops there, so
+ * `INSTRUCTION_MAGICS` carried none of Trading's twenty-four arms and none of
+ * Resolution's ten. A consumer holding a compiled instruction could name the
+ * route behind `DCLTSQ03` and not the route behind `DCLTHOT3` -- and the
+ * second is the one this browser actually builds. The predicate is not an
+ * absence of a magic; it is a magic comparison written as a function, and
+ * every one of these reads the same leading eight bytes the direct arms do.
+ *
+ * So this resolves the function: find its body, find the constant it compares
+ * the leading bytes against, and resolve that constant to its ASCII. What does
+ * NOT resolve is reported by name in `UNRESOLVED_PREDICATE_ARMS_V1` rather
+ * than dropped, because a predicate that decodes a struct instead of comparing
+ * a magic (`GenericMarketFoundingCallerBumpsV3::decode(..).is_ok()`) is a real
+ * arm that no leading-byte view can ever name, and a consumer must be able to
+ * tell that from a resolution this script merely failed at.
+ */
+const rustSources = new Map();
+function collectRustSources(directory) {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === 'target' || entry.name === 'node_modules') continue;
+      collectRustSources(path);
+    } else if (entry.name.endsWith('.rs')) {
+      rustSources.set(path, readFileSync(path, 'utf8'));
+    }
+  }
+}
+collectRustSources(join(repoRoot, 'crates'));
+collectRustSources(join(repoRoot, 'programs'));
+
+/** The body of `fn <name>`, at any visibility, brace-balanced, or null. */
+function functionBody(source, name) {
+  // `pub(crate) fn` is as much a dispatch predicate as `pub fn`: eight of the
+  // ten arms this failed to find were crate-visible, which read here as "the
+  // function does not exist" and is the exact confusion this table exists to
+  // stop reporting.
+  const start = source.search(new RegExp(`(?:^|\\n)\\s*(?:pub(?:\\([a-z]+\\))?\\s+)?fn ${name}\\s*[(<]`));
+  if (start < 0) return null;
+  const open = source.indexOf('{', start);
+  if (open < 0) return null;
+  let depth = 0;
+  for (let index = open; index < source.length; index += 1) {
+    if (source[index] === '{') depth += 1;
+    else if (source[index] === '}') {
+      depth -= 1;
+      if (depth === 0) return source.slice(open + 1, index);
+    }
+  }
+  return null;
+}
+
+/** Files a `a::b::is_x` path could live in, most specific first. */
+function predicateCandidates(functionPath, programPackage) {
+  const parts = functionPath.split('::');
+  const moduleHint = parts.length > 1 ? parts[parts.length - 2] : null;
+  // `dclutch_direct_codec::token_setup_v1::is_x` names a crate then a module;
+  // `dclutch_user_position_admission_contract::is_x` names a crate and its
+  // root. Both spellings appear, so the crate is whichever leading segment
+  // carries the prefix rather than a fixed position.
+  const crateHint = parts.length > 1 && parts[0].startsWith('dclutch_')
+    ? parts[0].replaceAll('_', '-')
+    : null;
+  const paths = [...rustSources.keys()];
+  const inCrate = crateHint === null ? [] : paths.filter((path) => path.includes(`/crates/${crateHint}/src/`));
+  const inProgram = paths.filter((path) => path.includes(`/programs/${programPackage}/src/`));
+  const byModule = moduleHint === null
+    ? []
+    : paths.filter((path) => path.endsWith(`/${moduleHint}.rs`) || path.endsWith(`/${moduleHint}/mod.rs`));
+  const ordered = [];
+  for (const group of [
+    crateHint === null ? [] : inCrate.filter((path) => byModule.includes(path)),
+    inProgram.filter((path) => byModule.includes(path)),
+    inCrate,
+    inProgram,
+    byModule,
+  ]) {
+    for (const path of group) if (!ordered.includes(path)) ordered.push(path);
+  }
+  return ordered;
+}
+
+const MAGIC_COMPARISONS = [
+  // `input.get(..8) == Some(MAGIC.as_slice())`, its `..MAGIC.len()` form, and
+  // the `Some(&MAGIC)` spelling two Resolution arms use.
+  /get\(\.\.(?:8|[A-Za-z0-9_:]+\.len\(\))\)\s*==\s*Some\(&?([A-Za-z0-9_:]+)(?:\.as_slice\(\))?\)/g,
+  // `data == MAGIC`, where the whole instruction IS the eight-byte magic.
+  /^\s*(?:instruction_)?data\s*==\s*([A-Z][A-Z0-9_]+)\s*$/gm,
+  /^\s*input\s*==\s*([A-Z][A-Z0-9_]+)\s*$/gm,
+  // `matches!(bytes.get(..8), Some(magic) if magic == A || magic == B)` --
+  // one arm that admits several magics, which is a fact about the route and
+  // not an ambiguity: each one selects it.
+  /\bmagic\s*==\s*([A-Z][A-Z0-9_]+)/g,
+  // `input[..8] == MAGIC` / `input.starts_with(&MAGIC)`.
+  /\[\.\.8\]\s*==\s*([A-Za-z0-9_:]+)/g,
+  /starts_with\(&([A-Za-z0-9_:]+)\)/g,
+];
+
+/** The eight ASCII bytes a `[u8; 8]` constant holds, or null. */
+function constantAscii(name, preferredFiles) {
+  const short = name.split('::').pop();
+  const order = [...preferredFiles, ...rustSources.keys()];
+  for (const path of order) {
+    const source = rustSources.get(path);
+    if (source === undefined) continue;
+    const byteString = source.match(new RegExp(`const ${short}: \\[u8; 8\\] = \\*b"([^"]{8})";`));
+    if (byteString) return { ascii: byteString[1], provenance: path };
+    const array = source.match(new RegExp(`const ${short}: \\[u8; 8\\] = \\[([^\\]]+)\\]`));
+    if (array) {
+      const bytes = array[1].split(',').map((piece) => piece.trim()).filter((piece) => piece.length > 0);
+      if (bytes.length !== 8) continue;
+      const values = bytes.map((piece) => Number(piece));
+      if (values.some((value) => !Number.isInteger(value) || value < 0x20 || value > 0x7e)) continue;
+      return { ascii: values.map((value) => String.fromCharCode(value)).join(''), provenance: path };
+    }
+  }
+  return null;
+}
+
+/** Resolve one predicate arm to the magic it compares, or say why not. */
+function resolvePredicate(functionPath, programPackage) {
+  const candidates = predicateCandidates(functionPath, programPackage);
+  const name = functionPath.split('::').pop();
+  for (const path of candidates) {
+    const body = functionBody(rustSources.get(path), name);
+    if (body === null) continue;
+    for (const pattern of MAGIC_COMPARISONS) {
+      const names = [...new Set([...body.matchAll(pattern)].map((match) => match[1]))];
+      if (names.length === 0) continue;
+      const magics = [];
+      for (const constant of names) {
+        const resolved = constantAscii(constant, [path]);
+        if (resolved === null) {
+          return { magics: [], source: relative(path), reason: `${constant} did not resolve to eight ASCII bytes` };
+        }
+        magics.push({ ascii: resolved.ascii, constant });
+      }
+      return { magics, source: relative(path), reason: null };
+    }
+    return {
+      magics: [],
+      source: relative(path),
+      reason: `${name} compares no leading magic: ${body.trim().split('\n')[0].trim()}`,
+    };
+  }
+  return { magics: [], source: null, reason: `${functionPath} was not found in crates/ or programs/` };
+}
+
+function relative(path) {
+  return path.startsWith(repoRoot) ? path.slice(repoRoot.length) : path;
+}
+
+const predicateArms = [];
+const unresolvedPredicateArms = [];
+for (const program of programs) {
+  for (const route of [...program.routes].sort((left, right) => left.id.localeCompare(right.id))) {
+    for (const selector of route.selectors) {
+      if (selector.kind !== 'predicate') continue;
+      const resolved = resolvePredicate(selector.function, program.package);
+      if (resolved.magics.length === 0) {
+        unresolvedPredicateArms.push({
+          routeId: route.id,
+          program: program.label,
+          function: selector.function,
+          reason: resolved.reason,
+        });
+        continue;
+      }
+      for (const magic of resolved.magics) {
+        predicateArms.push({
+          magic: magic.ascii,
+          constant: magic.constant,
+          program: program.label,
+          routeId: route.id,
+          handler: route.handler,
+          function: selector.function,
+          provenance: resolved.source,
+        });
+      }
+    }
+  }
+}
+predicateArms.sort((left, right) => left.magic.localeCompare(right.magic) || left.routeId.localeCompare(right.routeId));
+unresolvedPredicateArms.sort((left, right) => left.routeId.localeCompare(right.routeId));
+
 const magics = [];
 for (const program of programs) {
   for (const route of [...program.routes].sort((left, right) => left.id.localeCompare(right.id))) {
@@ -225,7 +414,7 @@ out += '// Sources:\n';
 out += '//   tools/gauntlet/census                        (the route/refusal enumeration)\n';
 out += '//   crates/dclutch-refusal-registry/src/generated_bands.rs   (the band allocation)\n';
 out += '//\n';
-out += `// ${programs.length} programs, ${magics.length} magic-selected routes, ${refusals.length} refusal codes.\n\n`;
+out += `// ${programs.length} programs, ${magics.length} magic-selected routes, ${predicateArms.length} predicate-selected routes, ${refusals.length} refusal codes.\n\n`;
 
 out += '/** Whether a band is deployed to a real cluster or exists only under `program-test`. */\n';
 out += "export type RefusalBandTier = 'program' | 'test-caller';\n\n";
@@ -248,6 +437,18 @@ out += '/** An entry route no leading-bytes magic selects. */\n';
 out += 'export type UnselectedEntryRoute = Readonly<{\n';
 out += '  routeId: string;\n  program: string;\n  handler: string;\n';
 out += '  selectors: ReadonlyArray<string>;\n  provenance: string;\n}>;\n\n';
+
+out += '/**\n';
+out += ' * A route a `fn is_x(instruction_data) -> bool` predicate selects, with the\n';
+out += ' * magic that predicate compares resolved from its own Rust.\n';
+out += ' */\n';
+out += 'export type PredicateSelectedRoute = Readonly<{\n';
+out += '  magic: string;\n  constant: string;\n  program: string;\n  routeId: string;\n';
+out += '  handler: string;\n  predicate: string;\n  provenance: string;\n}>;\n\n';
+
+out += '/** A predicate arm whose selector is not a leading magic at all. */\n';
+out += 'export type UnresolvedPredicateArm = Readonly<{\n';
+out += '  routeId: string;\n  program: string;\n  predicate: string;\n  reason: string;\n}>;\n\n';
 
 out += '/** Width of one refusal band, in codes. */\n';
 out += `export const REFUSAL_BAND_SPAN = ${bands[0]?.span ?? 0} as const;\n`;
@@ -314,6 +515,52 @@ for (const route of unselectedEntries) {
     ['provenance', literal(route.provenance)],
   ])},\n`;
 }
+out += ']);\n\n';
+
+out += '/**\n';
+out += ' * Every route a dispatch predicate selects, and the magic it compares.\n';
+out += ' *\n';
+out += ' * `INSTRUCTION_MAGICS` above carries the arms whose dispatch compares the\n';
+out += ' * leading bytes INLINE. Trading compares them inside `fn is_x()` instead, and\n';
+out += ' * so does Resolution -- so a consumer holding a compiled instruction could\n';
+out += ' * name the route behind `DCLTSQ03` and not the one behind `DCLTHOT3`, which is\n';
+out += ' * the route this browser actually builds. The predicate is a magic comparison\n';
+out += ' * written as a function; this table is that function resolved, with the file\n';
+out += ' * it was resolved from as provenance. Read the two tables together: an\n';
+out += ' * instruction is named by its program and its first eight bytes either way.\n';
+out += ' */\n';
+out += 'export const PREDICATE_SELECTED_ROUTES: ReadonlyArray<PredicateSelectedRoute> = Object.freeze([\n';
+for (const arm of predicateArms) {
+  out += `  ${record([
+    ['magic', literal(arm.magic)],
+    ['constant', literal(arm.constant)],
+    ['program', literal(arm.program)],
+    ['routeId', literal(arm.routeId)],
+    ['handler', literal(arm.handler)],
+    ['predicate', literal(arm.function)],
+    ['provenance', literal(arm.provenance)],
+  ])},\n`;
+}
+out += ']);\n\n';
+
+out += '/**\n';
+out += ' * Predicate arms that no leading-byte view can ever name, and why.\n';
+out += ' *\n';
+out += ' * A predicate that decodes a whole struct rather than comparing a magic\n';
+out += ' * (`GenericMarketFoundingCallerBumpsV3::decode(..).is_ok()`) selects a real\n';
+out += ' * route on bytes no eight-byte prefix distinguishes. That is a fact about the\n';
+out += ' * program, not a failure of this scrape, and it is carried by name so a\n';
+out += ' * consumer can tell it from a resolution that merely did not happen.\n';
+out += ' */\n';
+out += 'export const UNRESOLVED_PREDICATE_ARMS_V1: ReadonlyArray<UnresolvedPredicateArm> = Object.freeze([\n';
+for (const arm of unresolvedPredicateArms) {
+  out += `  ${record([
+    ['routeId', literal(arm.routeId)],
+    ['program', literal(arm.program)],
+    ['predicate', literal(arm.function)],
+    ['reason', literal(arm.reason)],
+  ])},\n`;
+}
 out += ']);\n';
 
 if (process.argv.includes('--check')) {
@@ -322,8 +569,8 @@ if (process.argv.includes('--check')) {
     console.error('lib/generated/routeCensus.ts is stale — run `npm run abi:route-census`');
     process.exit(1);
   }
-  console.log(`route census up to date: ${refusals.length} refusals, ${magics.length} magic-selected routes`);
+  console.log(`route census up to date: ${refusals.length} refusals, ${magics.length} magic-selected and ${predicateArms.length} predicate-selected routes`);
 } else {
   writeFileSync(outputPath, out);
-  console.log(`wrote lib/generated/routeCensus.ts: ${refusals.length} refusals, ${magics.length} magic-selected routes`);
+  console.log(`wrote lib/generated/routeCensus.ts: ${refusals.length} refusals, ${magics.length} magic-selected and ${predicateArms.length} predicate-selected routes, ${unresolvedPredicateArms.length} predicate arms unresolved`);
 }

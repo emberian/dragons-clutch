@@ -3215,11 +3215,12 @@ pub(crate) fn wallet_arithmetic(
     let genesis_profile_body = runtime::decode_hex(&plan.genesis_infrastructure_profile.body_hex)?;
     let genesis_profile_minimum = rpc.minimum_balance(genesis_profile_body.len())?;
     let genesis_profile_account = rpc.account(genesis_profile_address)?;
-    let genesis_profile_rent = remaining_profile_rent(
+    let genesis_profile_rent = remaining_genesis_v2_rent(
         genesis_profile_account.as_ref(),
         pubkey(&plan.core.program_id)?,
         &genesis_profile_body,
         genesis_profile_minimum,
+        plan.infrastructure_succession.is_some(),
     )?;
     let profile_rent = profile_rent.saturating_add(genesis_profile_rent);
     let activation_rent = runtime::remaining_activation_rent(rpc, plan)?;
@@ -3237,6 +3238,42 @@ pub(crate) fn wallet_arithmetic(
         estimated_fee_lamports: fees,
         required_lamports: required,
     })
+}
+
+/// Lamports still owed on the V2 domain, whose body this plan may have moved.
+///
+/// `remaining_profile_rent` refuses any body but the plan's, which is right for
+/// the V1 coordinate — nothing rewrites the sealed historical record — and wrong
+/// for this one after the plan's own ceremony has overwritten the genesis V2 in
+/// place. A campaign that had completed initialization AND its succession then
+/// priced its own founding as a conflict.
+///
+/// Nothing is owed on a superseded profile: initialization paid this account's
+/// rent, and the ceremony overwrites it at the same width and transfers nothing.
+/// Anything else at the coordinate still reaches the exact refusal.
+fn remaining_genesis_v2_rent(
+    account: Option<&crate::rpc::RpcAccount>,
+    core: Pubkey,
+    expected_body: &[u8],
+    minimum_balance: u64,
+    plan_carries_succession: bool,
+) -> Result<u64> {
+    if plan_carries_succession {
+        if let Some(account) = account {
+            if account.data != expected_body
+                && account.lamports >= minimum_balance
+                && genesis_v2_was_superseded_v1(
+                    core,
+                    account.owner,
+                    account.executable,
+                    &account.data,
+                )
+            {
+                return Ok(0);
+            }
+        }
+    }
+    remaining_profile_rent(account, core, expected_body, minimum_balance)
 }
 
 fn remaining_profile_rent(
@@ -5357,6 +5394,37 @@ mod tests {
         let mut corrupt = succeeded.clone();
         corrupt[0] ^= 0xff;
         assert!(!genesis_v2_was_superseded_v1(core, core, false, &corrupt));
+
+        // And nothing is owed on it: the same run that stranded the founding
+        // stage priced this account as a conflict instead of as paid.
+        let minimum = 2_229_216;
+        let paid = crate::rpc::RpcAccount {
+            lamports: minimum,
+            owner: core,
+            executable: false,
+            rent_epoch: 0,
+            data: succeeded.clone(),
+        };
+        assert_eq!(
+            remaining_genesis_v2_rent(Some(&paid), core, &genesis, minimum, true)
+                .expect("a superseded profile owes nothing"),
+            0
+        );
+        // A plan with no ceremony cannot have superseded anything, so the exact
+        // refusal stands; so does an underfunded account, and a vacancy is the
+        // whole rent.
+        assert!(remaining_genesis_v2_rent(Some(&paid), core, &genesis, minimum, false).is_err());
+        let underfunded = crate::rpc::RpcAccount {
+            lamports: minimum - 1,
+            ..paid.clone()
+        };
+        assert!(
+            remaining_genesis_v2_rent(Some(&underfunded), core, &genesis, minimum, true).is_err()
+        );
+        assert_eq!(
+            remaining_genesis_v2_rent(None, core, &genesis, minimum, true).expect("vacant"),
+            minimum
+        );
     }
 
     use dclutch_core_contract::ContentId;
