@@ -2031,3 +2031,280 @@ real chain. Both wait on one rule inside a deployed program.
 All carry `Lane: COHORT-15E`. Every new test was proven red against a real
 regression and green when restored. No crate in an SBF link was changed, so no
 frameguard rows are owed.
+
+---
+
+# ADDENDUM F — COHORT-15F, 2026-09-04
+
+**Devnet evidence. Not mainnet evidence.**
+
+Addendum E stopped with two walls convicted and nothing signed, and named the
+one fact a resumer needed: devnet dropped its rent-exempt rate from 6,333 to
+5,080 lamports per byte at the epoch-1141 boundary with this cohort live on it.
+PROGRAMS-16 then gave the funding ledger a field for the rate its founding paid
+(`c0a1586b1`) and corrected addendum E on who refuses (`4137ec0d3`): Core does
+not run the native-custody conjunct on `AdmitTerminal`, so the wall belonged to
+`dclutch-resolution-core-v3-operator`'s planner, a host.
+
+This addendum is what the host had to learn to price a cohort that was founded
+before the field existed, and what happened when it could.
+
+## THE FIRST STRANGER PAYOUT ON AN HONEST SELECTOR, ON ANY CHAIN
+
+| act | signature | facts |
+| --- | --- | --- |
+| market 3 admit-terminal | `UNQQiM29eLGJy6LHkXo5Dt7aVwsD29SyXaECQ3T8JLu7sd3Xotv94QQdZUeXuJk5EComD7JsmpmCG3MPpYW3uo8` | slot 492,976,283; Market phase byte @10 goes 1 Open to **2 Terminal**, read back |
+| market 3 custody replay | `2qrSV6jRhnsFYLQawvGAAjyUzBr5Saw6Yzfp7xPyH2RZCfQsSTKtXBPKYY8SMqdzQZg8V7ab9QRaZHnmc2fW96Wv` | slot 492,976,487, 91,911 CU, replay `6hAgMbNWkpnzkf3T2sEX8UXzMuHg9zSvA4FzQqaq3xPU` next_revision 1 |
+| **the winning stranger's payout** | `5K5Tqf1NnjdaQk2L8XNBmqtG3vUQQaeEuF1vJPu3Sf5gDF9YdtM8MW5fDpMzCskfxsTVMg3YUjrXxSJz62jpSbwe` | **payout 200 atoms** to `EorpstZuhLHkXXraUHm32zN8kzP8YedEfnVuXG4it9ew`, six passes (ALT create, two extends, freeze, activation, payout) |
+| the loser's zero | `dfUtUcZshtRZ5qyRb3AVqFFd7iQP9JcEqLgpNtGLG4CaFKk2sZy1i4o7EJbLpSSB2wQ6bKK2n8EeQWNSZvmoNj7` | **payout 0**, founder's claim index 0, quantity 500,000,000 |
+
+The stranger is participant-2, a key admitted as an ordinary user with no
+relationship to the founding, and the outcome that paid is **1**. The selector
+is stated both ways and they are the same cell: the certificate at
+`9BnUF5rKx2WNbvvexQd3f7CgJzUBEBEwBn8ZvwK62gSu` (312 B `DCSRCER2`, kind byte @10
+= 1) commits selector **1** at offset 256; and the statistic, SOL/USD
+`$103.972224` at exponent −8, is 10,397.2224 on the cuts' ×100 scale, which
+falls between the cuts 10,200 and 10,600 — **cell 1**. Read off chain after the
+payout: the stranger's ATA holds **200** atoms of a 6-decimal mint and the
+founder's payout ATA `5ieuXMUGy472Fx97nhnquQUXD4iYrnj1VjdVsVKeLYLi` holds **0**.
+
+The loser's zero was asked twice and answered twice, which is worth separating.
+The founder's claim at index 0 — an outcome that did not occur, on a position
+that holds 500,000,000 of it — executed and paid **0**. The stranger's claim at
+index 0 does not exist at all, and its producer says so rather than building a
+zero-atom transfer: `payout quantity must be within 1..=0 atoms at claim index
+0`. A holder of one outcome has no claim on another; a holder of every outcome
+has a claim worth nothing on three of them.
+
+### The census at the boundary, with L4 retiring by name
+
+`$JOB/census-c.sh cohort15f-market3-post-payout`:
+
+    HOLDS L1: tracked 1000000000 atoms across 7 accounts == Mint supply 1000000000
+    HOLDS L3: 2 Positions sum to the aggregate supply vector [0, 499999800, 500000000, 500000000]
+    INAPPLICABLE L4: the Market is terminal: settlement DISCHARGED the liability
+      this law is stated about ... L4 is a PRE-TERMINAL invariant and retires by
+      name here rather than reading VIOLATED against a protocol that did exactly
+      what it should. L1, L3 and L7 go on watching this boundary unweakened.
+
+The aperture cost one wrong reading first, and the instrument was right about it
+for the third time in this cohort. Six 160-byte `DCLLBP02` Positions exist on
+this cluster; three are market 1's, one is the second market's untouched founder
+position carrying `[500000000 x4]`, and two are market 3's. Binding the extra
+one made L3 read VIOLATED by exactly one position's supply at every index.
+`$JOB/census-c.sh` now names the two and says how they were enumerated.
+
+## UNIT 1 — THE PLANNER RECOVERS A RATE NOBODY RECORDED
+
+A cohort-15 funding ledger carries zero in the span a cohort-16 founding writes
+its rate into, and zero prices every account at nothing, so
+`FundingLedgerV2::decode` refuses it. That is right for a program and wrong for
+a host that must plan against a cohort already on chain. `afab02c25` adds
+`dclutch-resolution-core-v3-operator::funded_rent_recovery_v1`:
+
+    rate = (lamports − remaining native principal) / (ACCOUNT_STORAGE_OVERHEAD + len)
+
+which is `the_rate_is_recoverable_from_the_zero_length_minimum` and
+`one_rate_prices_every_length` read backwards. Three things make it a recovery
+rather than a guess.
+
+- **The division is exact or nothing is recovered.** A donated lamport puts the
+  balance off the affine line and no rate reproduces it. That is the same
+  hostile PROGRAMS-16 wrote for the recorded-rate path, asked one layer earlier,
+  and it refuses under its own name: `FundedRentUnrecoverable`, split out of
+  `Funding` under decision 0007 because "funding state, manifest binding, or
+  physical custody" would send a reader to the wrong place.
+- **One founding is one rate** — `the_whole_cohort_is_one_rate`. Sibling
+  readings are folded into one rate and any disagreement refuses. The siblings
+  are not invented: market 3's founding created a second funding ledger,
+  Trading-owned, at `Gm5WFhDCa7CryyLkfPWBvcDQhAEcwszjDVAhJvdmq1tx` — 120 bytes
+  holding 1,570,584 lamports with no principal outstanding. Two widths pin the
+  affine function, which is the shape `derive_funded_rent_rate_v2` requires of a
+  founding that records its rate rather than recovering it.
+- **A recorded rate is never second-guessed.** A header that speaks for itself
+  is returned unchanged, even when the balance would derive another — otherwise
+  the record stops being the authority and a lying record becomes unfalsifiable.
+
+The header span is located by probe rather than by an offset this module would
+be a second author of: the span is the one that is currently all zero and,
+filled with a probe rate, decodes to THAT rate with the manifest identity and
+selected mask unchanged. Exactly one span in a legacy header does that. The
+recovered rate is spliced into a COPY; the account on chain still holds the
+zeros it was created with, and the ledger's PDA derivation binds only the
+manifest identity and the mask, so the splice cannot move an address.
+
+The tests are on the four `.bin` fixtures PROGRAMS-16 committed — cohort-15's
+own account bytes at finalized commitment, unedited — and the red half is
+permanent rather than a moment in a session:
+`a_cohort_fifteen_ledger_records_no_rate_and_does_not_decode` pins the wall so
+that a recovery which did nothing could not look like one that worked.
+
+Five accounts of this cohort at five widths, read off chain 2026-09-04, all
+derive 6,333:
+
+| account | bytes | lamports | (128 + len) × 6,333 |
+| --- | ---: | ---: | ---: |
+| Resolution funding ledger ×2 | 264 | 2,482,539 | 2,482,536 + 3 principal |
+| Trading funding ledger | 120 | 1,570,584 | 1,570,584 |
+| Core Market ×2 | 368 | 3,141,168 | 3,141,168 |
+| certificate seat | 312 | 2,786,520 | 2,786,520 |
+| payout ATA | 170 | 1,887,234 | 1,887,234 |
+| Position ×6 | 288 | 1,823,904 | 1,823,904 |
+
+On chain the recovery prints one line per planned ledger and it is in every log
+this lane produced:
+
+    funded-rent recovery: ledger of 264 bytes holding 2482539 lamports over 3
+    native principal was funded at 6333 lamports per byte (0 siblings agreed)
+
+`ec373d90d` then gives the terminal session the same treatment. It derived its
+rate from the Rent sysvar, which answers what an account created NOW would cost
+while every account the sequence prices was created by a founding that may long
+predate the reading — the reading that refused market 1 five guards deep. It now
+recovers from the Market (which holds exactly its funded minimum and parks no
+principal) cross-checked against a closure receipt an earlier session already
+prepaid, at a second width. Market 1's session records `fundedRentRate 6333` and
+`receiptRentLamports 3445152`, which is 544 × 6,333 and is exactly what its seat
+has held since 03:42 UTC.
+
+## UNIT 3 — MARKET 1 MOVED FROM FIVE WALLS TO ONE, AND THE ONE IS NOT A REFUSAL
+
+Four host defects stood between market 1 and `Resolution CloseFund`, each found
+by driving the sequence and reading what it said. None was repaired by loosening
+a check.
+
+**1. A journal outlives the session that wrote it** (`291e3e277`, `713a0f012`).
+The funded-rate schema superseded the v1 session that had prepaid market 1's
+seat, and a successor session then refused the pair — prepay journal beside a
+receipt that needed no prepay — categorically, at two sites. The replacement is
+stricter about the case that matters: a journal accounts for a seat only when it
+is FINALIZED, because a planned or submitted prepay puts no lamports anywhere.
+The prepay stays inside the durable prefix so a later action after a missing
+earlier one goes on refusing.
+
+**2. The mask says which three entries; the material says what each is for**
+(`270f23a13`), and this one was building a wrong instruction, not only refusing
+one. `funding_entries_from_mask` walks the selected mask's ascending bits;
+`select_resolution_funding_entries` is the one author of the roles and returns
+`[recovery, exhaustion, failure]`. `authenticate_close_funding` read the first
+list as the second twice. Convicted by printing the four identities rather than
+by inspection:
+
+    close-funding no-recovery compartments: entries [1, 2, 3],
+      material fdea108fda41f8ac74a0072e6a31ae080e3f49529c3af69aca6a5b5ddffbd2b4,
+      configs [3a4c18d1…, fdea108fda41f8ac…, a8b3245e…]
+
+Exactly one config is the material's own and it is the **middle** entry, so the
+structural fact the check means to assert holds and only the positional binding
+failed. Core folds entries into a mask at `CreateFund`, so nothing on chain ever
+required failure to be last, and this market was founded and activated with it
+in the middle. The second reading of the same list filled
+`recovery_entry_index` / `exhaustion_entry_index` / `failure_entry_index` in the
+retirement facts — same mistake, no refusal, wrong compartment in two of three
+slots. The positional config check was the thing stopping that, which is why the
+repair is the author and not the check. Third instance of this exact defect;
+`0c26bba0` fixed it at verify-fund-ready and the activation-receipt arm was
+fixed after it, both by comparing MEMBERSHIP.
+
+**3. A readonly account may be declared unmoved, and may not be moved**
+(`16dd0e917`). Two sites carried one refusal over two accusations — a writable
+account with no poststate, and a lamport delta on an account the frame cannot
+write. The second is a contradiction only when the delta is NONZERO. A zero
+delta says the account's lamports do not move, which is what a readonly account
+supports and which is checked against its own recorded pre/post balances.
+`ResolutionCloseFund` says exactly that about the Market, correctly, and was
+undrivable for it. Convicted the same way, by naming the key:
+
+    terminal semantic report: writable with no poststate [],
+      lamport deltas on readonly accounts ["3QytL1bBMtCvRoXWR5h7MgutRBZqtv7emUVubEo5a4T2"]
+
+**4. And then the transaction was built, signed, and could not run.**
+
+    Program 24AkUjtXg61La45u7KTge8u4dKpVqkzirmzycVyckFgn invoke [1]
+    Program 24AkUjtXg61La45u7KTge8u4dKpVqkzirmzycVyckFgn consumed 200000 of
+      200000 compute units
+    Program … failed: exceeded CUs meter at BPF instruction
+
+**`ResolutionCloseFund` exceeds the default compute budget, and the terminal
+sequence declares no `ComputeBudget` prefix at all.** It is the only driver in
+this tree that does not: `direct_trade.rs` and `aggregate_retirement_journal.rs`
+both bind two exact ComputeBudget prefixes, and the wallet payout that landed
+above spent 235,003 CU, which is not possible under the default. The prefix is
+not a flag: `authenticate_terminal_message_decompilation_v1` pins the durable
+message at exactly ONE instruction, so it is a change to the durability schema,
+the v0 placement authenticator, the completion expectations and the fee
+arithmetic together. **This lane stopped here rather than start it**, and this is
+why retirement has never completed on any chain — not the five rent guards,
+which are now passed, and not the retirement packets, which are drivable.
+
+The signed packet is durable at
+`$JOB/terminal-1/journal/13-resolution-close-fund.json`, phase `submitted`,
+expected signature
+`JGLMWwRMmASsszK3ciYjWpa1RYPD4BzC5xv4ZSongFrLDY6dveAprxeTYhfgsipHuiguGxKUcK6bZmFs2JsVdRi`.
+`getSignatureStatuses` with `searchTransactionHistory` returns `null`: it never
+landed and, exceeding the meter, never can. **It was not re-signed and must not
+be** — it is left for its blockhash to expire, which is what the ambiguous phase
+is for.
+
+## THE RETIREMENT PACKETS ARE DRIVABLE, AND WITNESS-3'S CONCERN IS ANSWERED
+
+WITNESS-3 asked whether market 1's retirement finish needs
+`core/retire_v1::process#Retire`, whose 2,152-byte instruction
+(`RETIREMENT_INSTRUCTION_BYTES_V1`) exceeds Solana's 1,232-byte packet and which
+no CPI caller builds — and, if so, whether the row belongs in `blocked.json` as
+`structural`. **It does not, and no such row is owed.**
+
+`build_market_retirement_v1` is the legacy aggregate builder and is where the
+2,152 bytes come from: 72 + 480 + 256 + 2 × 672. Nothing in the retirement
+sequence submits it. `build_checkpoint_market_retirement_v1` builds four
+packet-bounded instructions from the same finalized snapshot, all four to the
+Core program:
+
+| packet | data bytes | route in the DEPLOYED Core (`1cae26fd6`) |
+| --- | ---: | --- |
+| prepare | 72 + 480 + 256 = **808** | `Action::Retire` at `RETIREMENT_CHECKPOINT_PREPARE_INSTRUCTION_BYTES_V1`, `lib.rs:627` |
+| close-vault | 192 + 672 = **864** | `AGGREGATE_RETIREMENT_CLOSE_VAULT_MAGIC_V1`, `lib.rs:392` |
+| close-replay | 192 + 672 = **864** | `AGGREGATE_RETIREMENT_CLOSE_REPLAY_MAGIC_V1`, `lib.rs:392` |
+| finish | 192 + 72 + 480 = **744** | `AGGREGATE_RETIREMENT_FINISH_MAGIC_V1`, `lib.rs:392` |
+
+The 808 figure is the `core/process_instruction#Retire` route WITNESS-3 named.
+All four are inside the packet, and all four dispatch arms are in the bytes
+actually deployed — checked by reading `1cae26fd6`'s `dclutch-core-sbf/src/lib.rs`
+rather than HEAD's. What blocks the row is upstream of it and is item 4 above.
+
+## THE RUNBOOK
+
+`tools/cohort/steps.tsv`'s `retire` row named the phase byte at CoreState offset
+280. It is at offset **10**; 280 is `outstanding_capabilities`. Corrected, with
+both figures now read off chain in this addendum. The README's `retire` section
+records the compute-budget wall as the open one, and its `funded-rent-recorded`
+section now says what a reader who finds a zero should do — a zero is not a dead
+end for a cohort already on chain, and `funded_rent_recovery_v1` is the host that
+answers it.
+
+## BALANCES AND STATE AT THE STOP
+
+    deployer  4zrxtw5c…  23.890559434   unmoved by this lane
+    payer     D5qe7ZoQ…   1.289445181   was 1.304204301; this lane spent 0.014759120
+    market 1  3QytL1bB…  phase @10 = 3 Retiring, outstanding_capabilities @280 = 1
+    market 3  C9dLhWj7…  phase @10 = 2 Terminal, outstanding_capabilities @280 = 1
+
+## COMMITS FROM THIS LANE
+
+    afab02c25  funded rent: a cohort already on chain records no rate, and its
+               own bytes still name one
+    ec373d90d  terminal session: the rate is recovered from the founding, not
+               read off todays cluster
+    291e3e277  terminal sequence: a journal outlives the session that wrote it,
+               and can account for what it started from
+    270f23a13  close funding: the mask says which three entries, the material
+               says what each one is for
+    713a0f012  terminal sequence: the same inherited prepay, for the order of the
+               journals as well as their arithmetic
+    16dd0e917  terminal sequence: a readonly account may be declared unmoved, and
+               may not be moved
+
+Every one carries `Lane: COHORT-15F`. The driver in the job directory is built at
+the last of them and its digest is beside it in `bin/DRIVER_PROVENANCE.txt`; it
+was built from a DETACHED WORKTREE at that commit, because the shared live tree
+was mid-edit by another lane and would not compile.

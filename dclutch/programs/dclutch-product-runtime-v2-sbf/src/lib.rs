@@ -12,6 +12,7 @@
 
 extern crate std;
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_product_runtime_v2_admission::{
     ADMISSION_RECEIPT_BYTES_V2, ADMISSION_RECEIPT_PDA_DOMAIN_V2, AdmissionReceiptV2,
     AdmissionRequestV2,
@@ -24,8 +25,6 @@ use solana_program::{
     entrypoint::ProgramResult,
     program_error::ProgramError,
     pubkey::Pubkey,
-    rent::Rent,
-    sysvar::SysvarSerialize,
 };
 use solana_sdk_ids::sysvar;
 
@@ -185,8 +184,7 @@ pub fn process_instruction(
         rent_account,
         request,
     )?;
-    let rent = Rent::from_account_info(rent_account).map_err(|_| AdmissionSbfErrorV2::Rent)?;
-    if !rent.is_exempt(receipt.lamports(), receipt.data_len()) {
+    if !funded_rent_persists_v1(receipt.lamports()) {
         return Err(AdmissionSbfErrorV2::Receipt.into());
     }
 
@@ -204,7 +202,6 @@ pub fn process_instruction(
 
     let authenticated = authenticate_product_runtime_v2(
         registry.key,
-        &rent,
         request.product_digest,
         ProductRuntimeFrameV2 {
             product: FinalizedRecordFrameV2 {

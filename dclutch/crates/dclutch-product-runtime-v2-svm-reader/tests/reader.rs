@@ -487,7 +487,6 @@ fn authenticate_representation_v3(
     let graph_staging = backing.graph.staging.info();
     let authenticated = authenticate_product_representation_v3(
         &REGISTRY,
-        &Rent::default(),
         backing.runtime.product.coordinate.content_digest,
         backing.descriptor.coordinate.content_digest,
         backing.context,
@@ -546,7 +545,6 @@ fn authenticate(
     let portfolio_staging = portfolio.staging.info();
     authenticate_product_runtime_v2(
         &REGISTRY,
-        &Rent::default(),
         product.coordinate.content_digest,
         ProductRuntimeFrameV2 {
             product: FinalizedRecordFrameV2 {
@@ -576,7 +574,6 @@ fn authenticate_v3(runtime: &mut RuntimeV3Backing) -> Result<RuntimeV3Snapshot> 
     let basis_staging = runtime.basis.staging.info();
     let authenticated = authenticate_product_runtime_v3(
         &REGISTRY,
-        &Rent::default(),
         runtime.product.coordinate.content_digest,
         ProductRuntimeFrameV3 {
             product: FinalizedRecordFrameV2 {
@@ -631,7 +628,6 @@ fn authenticate_v3_continuation(runtime: &mut RuntimeV3Backing) -> Result<Runtim
     let basis_staging = runtime.basis.staging.info();
     let authenticated_v2 = authenticate_product_runtime_v2(
         &REGISTRY,
-        &Rent::default(),
         runtime.product.coordinate.content_digest,
         ProductRuntimeFrameV2 {
             product: FinalizedRecordFrameV2 {
@@ -650,7 +646,6 @@ fn authenticate_v3_continuation(runtime: &mut RuntimeV3Backing) -> Result<Runtim
     )?;
     let authenticated = authenticate_product_basis_v3(
         &REGISTRY,
-        &Rent::default(),
         authenticated_v2,
         FinalizedRecordFrameV2 {
             raw: &basis_raw,
@@ -691,7 +686,6 @@ fn authenticate_v3_at_founding_without_certificate(runtime: &mut RuntimeV3Backin
     let basis_staging = runtime.basis.staging.info();
     let authenticated_v2 = authenticate_product_runtime_v2(
         &REGISTRY,
-        &Rent::default(),
         runtime.product.coordinate.content_digest,
         ProductRuntimeFrameV2 {
             product: FinalizedRecordFrameV2 {
@@ -710,7 +704,6 @@ fn authenticate_v3_at_founding_without_certificate(runtime: &mut RuntimeV3Backin
     )?;
     authenticate_founding_product_basis_v3(
         &REGISTRY,
-        &Rent::default(),
         authenticated_v2,
         FinalizedRecordFrameV2 {
             raw: &basis_raw,

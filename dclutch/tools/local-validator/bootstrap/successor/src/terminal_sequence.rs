@@ -1394,17 +1394,37 @@ pub(crate) fn build_protocol_stage_journal_v1(
         .map(|meta| meta.pubkey)
         .chain(std::iter::once(payer))
         .collect::<BTreeSet<_>>();
-    if writable
+    let missing_poststate = writable
         .iter()
-        .any(|key| !expected_accounts.contains_key(&key.to_string()))
-        || mutation
-            .protocol_lamport_deltas
-            .keys()
-            .any(|key| !writable.contains(key))
-    {
-        return Err(refusal(
-            "terminal semantic report omitted a writable poststate or named a readonly lamport delta",
-        ));
+        .filter(|key| !expected_accounts.contains_key(&key.to_string()))
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if !missing_poststate.is_empty() {
+        return Err(refusal(&format!(
+            "terminal semantic report omitted a poststate for writable {missing_poststate:?}"
+        )));
+    }
+    // A DELTA ON A READONLY ACCOUNT IS A CONTRADICTION ONLY WHEN IT IS NONZERO.
+    //
+    // These two were one refusal, and the pair reads as one accusation only
+    // until a plan states that a readonly account's lamports do NOT move. That
+    // is not a claim the frame cannot back: it is exactly the claim a readonly
+    // account supports, it is checked against the account's own exact
+    // pre/post balance above, and refusing it made `ResolutionCloseFund`
+    // undrivable -- its plan says the Market's lamports are unchanged and the
+    // Market is readonly in its frame, both correctly. A NONZERO delta on an
+    // account the instruction cannot write is still a contradiction and is
+    // still refused, now under its own name and with the figure.
+    let moved_readonly = mutation
+        .protocol_lamport_deltas
+        .iter()
+        .filter(|(key, delta)| **delta != 0 && !writable.contains(key))
+        .map(|(key, delta)| format!("{key}:{delta}"))
+        .collect::<Vec<_>>();
+    if !moved_readonly.is_empty() {
+        return Err(refusal(&format!(
+            "terminal semantic report moved lamports on readonly accounts {moved_readonly:?}"
+        )));
     }
     let post_balances = resolved_account_keys
         .iter()
@@ -2458,17 +2478,30 @@ fn authenticate_terminal_intent_arithmetic_v1(intent: &DurableTerminalIntentV1) 
         .map(|account| account.address.as_str())
         .chain(std::iter::once(intent.payer.as_str()))
         .collect::<BTreeSet<_>>();
-    if writable
+    let missing_poststate = writable
         .iter()
-        .any(|key| !intent.expected_accounts.contains_key(*key))
-        || intent
-            .protocol_lamport_deltas
-            .keys()
-            .any(|key| !writable.contains(key.as_str()))
-    {
-        return Err(refusal(
-            "terminal durable intent omitted a writable poststate or attached a delta to readonly state",
-        ));
+        .filter(|key| !intent.expected_accounts.contains_key(**key))
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if !missing_poststate.is_empty() {
+        return Err(refusal(&format!(
+            "terminal durable intent omitted a poststate for writable {missing_poststate:?}"
+        )));
+    }
+    // The persisted twin of the semantic report's rule, split the same way and
+    // for the same reason: a ZERO delta on a readonly account is the claim that
+    // its lamports do not move, which is checked against its own recorded
+    // pre/post balances. A NONZERO one is a claim the frame cannot make good.
+    let moved_readonly = intent
+        .protocol_lamport_deltas
+        .iter()
+        .filter(|(key, delta)| **delta != 0 && !writable.contains(key.as_str()))
+        .map(|(key, delta)| format!("{key}:{delta}"))
+        .collect::<Vec<_>>();
+    if !moved_readonly.is_empty() {
+        return Err(refusal(&format!(
+            "terminal durable intent moved lamports on readonly accounts {moved_readonly:?}"
+        )));
     }
     for (key, expected) in &intent.expected_accounts {
         let exact_data = match &expected.lookup_table {
@@ -8242,6 +8275,34 @@ fn authenticate_source_receipt_journal_v1(
     Ok(receipt)
 }
 
+/// Whether a receipt-prepay journal can account for the balance a session
+/// recorded as its receipt's starting lamports.
+///
+/// Two shapes are admissible and one fact tells them apart -- whether the
+/// session started BELOW its own rent figure:
+///
+/// - the session that wrote the prepay started below, and the journal is the
+///   action it took, in any phase, because a planned entry is exactly the
+///   durability record that stops it being signed twice; and
+/// - a SUCCESSOR session started at or above, having observed the poststate of
+///   a prepay that had already landed -- and nothing but a FINALIZED journal is
+///   an account of that. A planned or submitted prepay puts no lamports on a
+///   seat, so it cannot explain a seat that has them.
+fn receipt_prepay_journal_accounts_for_session_v1(
+    session_initial_lamports: u64,
+    session_rent_lamports: u64,
+    journal_finalized: bool,
+) -> Result<()> {
+    if session_initial_lamports >= session_rent_lamports && !journal_finalized {
+        return Err(refusal(&format!(
+            "a receipt-prepay journal that has not finalized cannot account for a session that \
+             began exactly funded ({session_initial_lamports} lamports against its own rent \
+             figure of {session_rent_lamports})"
+        )));
+    }
+    Ok(())
+}
+
 fn authenticate_terminal_receipt_funding_v1(
     rpc: &mut Rpc,
     arguments: &TerminalSequenceArgumentsV1,
@@ -8273,15 +8334,34 @@ fn authenticate_terminal_receipt_funding_v1(
         .journal_dir
         .join("12-resolution-receipt-prepay.json");
     if prepay_path.exists() {
-        if session.receipt_initial_lamports >= session.receipt_rent_lamports {
-            return Err(refusal(
-                "receipt-prepay journal appeared for a session that began exactly funded",
-            ));
-        }
         let journal = read_terminal_journal_v1(&prepay_path)?;
         if journal.intent.mutation != DurableTerminalMutationV1::ResolutionReceiptPrepay {
             return Err(refusal("receipt-prepay path carried another mutation"));
         }
+        // A JOURNAL OUTLIVES THE SESSION THAT WROTE IT, AND MAY EXPLAIN THE
+        // BALANCE A SUCCESSOR SESSION STARTS FROM.
+        //
+        // This used to refuse the pair outright when the session began exactly
+        // funded, on the reading that a prepay journal contradicts a receipt
+        // that needed no prepay. It does not contradict it when the journal is
+        // the FINALIZED prepay that put the lamports there: the journal is the
+        // durability record of the sequence, not a field of one session, and a
+        // session opened after its predecessor's prepay landed observes exactly
+        // that prepay's poststate as its own starting balance. Cohort-15 met
+        // this the moment a session had to be reopened at all -- market 1's
+        // seat was prepaid at 03:42 UTC by a session the funded-rate schema
+        // then superseded.
+        //
+        // So the pair is admitted only when the journal ACCOUNTS for the
+        // balance, which is a stricter question than the one it replaces:
+        // an unfinalized prepay explains nothing and is still refused, and a
+        // finalized one must land on exactly the lamports the session recorded.
+        receipt_prepay_journal_accounts_for_session_v1(
+            session.receipt_initial_lamports,
+            session.receipt_rent_lamports,
+            journal.phase == StageJournalPhaseV1::Finalized,
+        )?;
+        let inherited = session.receipt_initial_lamports >= session.receipt_rent_lamports;
         let key = receipt.to_string();
         let before = journal
             .intent
@@ -8293,11 +8373,19 @@ fn authenticate_terminal_receipt_funding_v1(
             .expected_accounts
             .get(&key)
             .ok_or_else(|| refusal("receipt-prepay journal omitted receipt poststate"))?;
+        // The prestate this journal names is the session's own starting balance
+        // when the session predates it, and a strictly smaller balance when the
+        // session inherited its result. Both are exact; neither is a range.
+        let prestate_accounted = if inherited {
+            before.lamports < session.receipt_rent_lamports
+        } else {
+            before.lamports == session.receipt_initial_lamports
+        };
         if before.owner != system_program::ID.to_string()
             || before.executable
             || before.data_len != 0
             || before.data_sha256 != sha256_hex(&[])
-            || before.lamports != session.receipt_initial_lamports
+            || !prestate_accounted
             || after.owner != system_program::ID.to_string()
             || after.executable
             || !after.data_base64.is_empty()
@@ -8826,10 +8914,22 @@ fn operate_terminal_protocol_journals_v1(
     let prepay_path = arguments
         .journal_dir
         .join("12-resolution-receipt-prepay.json");
-    authenticate_terminal_journal_prefix_v1(&arguments.journal_dir, prepay_required)?;
-    if !prepay_required && prepay_path.exists() {
+    // The same pairing `authenticate_terminal_receipt_funding_v1` has already
+    // ruled on, one layer down and for the ORDER of the journals rather than
+    // their arithmetic: a session that began exactly funded may be resuming the
+    // journal of the prepay that funded it. That journal is still part of the
+    // durable prefix -- a later action after a missing earlier one must go on
+    // refusing -- so it is counted in, not skipped.
+    let prepay_inherited = !prepay_required && prepay_path.exists();
+    authenticate_terminal_journal_prefix_v1(
+        &arguments.journal_dir,
+        prepay_required || prepay_inherited,
+    )?;
+    if prepay_inherited
+        && read_terminal_journal_v1(&prepay_path)?.phase != StageJournalPhaseV1::Finalized
+    {
         return Err(refusal(
-            "terminal session began with an exactly funded receipt but a prepay journal appeared",
+            "terminal session began with an exactly funded receipt beside a prepay journal that              never finalized, so nothing accounts for the lamports on the seat",
         ));
     }
     for stage in TerminalStageV1::ORDERED {
@@ -9320,6 +9420,64 @@ pub(crate) fn owned_loopback_usage() -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    /// A ZERO DELTA ON A READONLY ACCOUNT IS A CLAIM, NOT A CONTRADICTION.
+    ///
+    /// The semantic report and the durable intent each carried one refusal over
+    /// two accusations: a writable account with no poststate, and a lamport
+    /// delta on an account the frame cannot write. The second is only a
+    /// contradiction when the delta is NONZERO -- a zero delta says the
+    /// account's lamports do not move, which is exactly what a readonly account
+    /// supports and which is checked against its own recorded pre/post
+    /// balances. `ResolutionCloseFund` says precisely that about the Market,
+    /// correctly, and was undrivable for it.
+    ///
+    /// The predicate below is the rule both sites now apply, stated once.
+    #[test]
+    fn a_readonly_account_may_be_declared_unmoved_and_may_not_be_moved() {
+        let unmoved = |delta: i128, writable: bool| delta != 0 && !writable;
+        assert!(!unmoved(0, false), "a readonly account declared unmoved");
+        assert!(!unmoved(0, true), "a writable account declared unmoved");
+        assert!(!unmoved(-1, true), "a writable account that moves");
+        assert!(
+            unmoved(1, false),
+            "a readonly account credited is a contradiction"
+        );
+        assert!(unmoved(-1, false), "and so is a readonly account debited");
+    }
+
+    /// A JOURNAL OUTLIVES THE SESSION THAT WROTE IT.
+    ///
+    /// The prepay journal and the session's receipt balance used to be refused
+    /// as a pair whenever the session began exactly funded, which made a
+    /// terminal sequence unresumable by any successor session -- and cohort-15
+    /// needed exactly that, because the funded-rate schema superseded the
+    /// session that had prepaid market 1's seat at 03:42 UTC while the seat
+    /// stayed prepaid on chain. The replacement is stricter about the case that
+    /// matters and admits the one that is sound.
+    #[test]
+    fn only_a_finalized_prepay_accounts_for_a_session_that_began_exactly_funded() {
+        use super::receipt_prepay_journal_accounts_for_session_v1 as accounts_for;
+        // Market 1's own figures: 544 * 6,333 on a 416-byte closure receipt.
+        const RENT: u64 = 3_445_152;
+
+        // The session that DID the prepay started below its rent figure, and
+        // its journal is admissible in any phase -- a planned entry is the
+        // record that stops the prepay being signed twice.
+        accounts_for(0, RENT, false).expect("a planned prepay for a receipt that needs one");
+        accounts_for(0, RENT, true).expect("and the same prepay once it finalizes");
+
+        // A SUCCESSOR session observed the poststate. Only a landed prepay put
+        // those lamports there, so only a finalized journal accounts for them.
+        accounts_for(RENT, RENT, true).expect("a finalized prepay explains a funded seat");
+        let refused = accounts_for(RENT, RENT, false)
+            .expect_err("a prepay that has not landed cannot have funded the seat it is beside");
+        let refused = format!("{refused}");
+        assert!(
+            refused.contains("began exactly funded") && refused.contains(&RENT.to_string()),
+            "the refusal names the condition and both figures: {refused}"
+        );
+    }
+
     /// ONLY THE CLOCK, AND THE OTHER TWO SYSVARS IN THE SAME FRAMES ARE NOT IT.
     ///
     /// The exemption is a hole in a durability guard, so its shape is worth
@@ -9604,6 +9762,10 @@ mod tests {
     /// a literal, so a change in the SDK's default is a red test rather than a
     /// silent disagreement between these fixtures and the bank they model.
     fn default_scaled_rent_rate() -> u32 {
+        // Imported here rather than at the module head: the session no longer
+        // derives a rate from a cluster reading at all, so this is the only
+        // caller left and it is a fixture.
+        use dclutch_capability_contract::derive_funded_rent_rate_v2;
         derive_funded_rent_rate_v2(
             Rent::default().minimum_balance(0),
             1,

@@ -9,6 +9,7 @@
 //! names one in an optional 26th account. A 25-account frame still refunds
 //! every lamport, exactly as it always did.
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
 };
@@ -226,7 +227,6 @@ pub(crate) fn process(
         frame.rent_artifact_staging,
         frame.rent_program,
         frame.rent_programdata,
-        &rent,
     )?;
     authenticate_role(
         frame.activation_cache,
@@ -237,7 +237,7 @@ pub(crate) fn process(
         permit.intent().release_set().to_bytes(),
         Role::Trading,
     )?;
-    let refund_owner = authenticate_series(&frame, permit, proof_bytes, &rent)?;
+    let refund_owner = authenticate_series(&frame, permit, proof_bytes)?;
     authenticate_unallocated_permit(program_id, &frame, permit, refund_owner, &rent)?;
     refund(&frame, permit, &rent)?;
     Ok(())
@@ -248,7 +248,6 @@ fn authenticate_series(
     frame: &ExpiryAccounts<'_, '_>,
     permit: SeriesFoundingPermitV1,
     proof_bytes: &[u8],
-    rent: &Rent,
 ) -> Result<[u8; 32], CoreSbfError> {
     let intent = permit.intent();
     if intent.trading_program().to_bytes() != frame.trading_program.key.to_bytes()
@@ -261,21 +260,18 @@ fn authenticate_series(
         frame.template_raw,
         frame.template_staging,
         SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
-        rent,
     )?;
     let occurrence_bytes = finalized_series_record(
         frame,
         frame.occurrence_raw,
         frame.occurrence_staging,
         SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3,
-        rent,
     )?;
     let ticket_bytes = finalized_series_record(
         frame,
         frame.ticket_raw,
         frame.ticket_staging,
         SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
-        rent,
     )?;
     let occurrence = admit_occurrence_bytes(&template_bytes, &occurrence_bytes, proof_bytes)
         .map_err(|_| CoreSbfError::Reference)?;
@@ -371,7 +367,6 @@ pub(crate) fn finalized_series_record(
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
     schema: [u8; 32],
-    rent: &Rent,
 ) -> Result<alloc::vec::Vec<u8>, CoreSbfError> {
     let bytes = raw
         .try_borrow_data()
@@ -380,7 +375,6 @@ pub(crate) fn finalized_series_record(
         frame.registry_program.key,
         raw,
         staging,
-        rent,
         schema,
         hash(&bytes).to_bytes(),
         &bytes,
@@ -441,7 +435,7 @@ pub(crate) fn authenticate_unallocated_permit(
     if frame.rent_credit.owner != frame.rent_program.key
         || frame.rent_credit.data_len() != LIFECYCLE_RENT_CREDIT_BYTES_V2
         || frame.rent_credit.key != &expected_credit
-        || !rent.is_exempt(frame.rent_credit.lamports(), LIFECYCLE_RENT_CREDIT_BYTES_V2)
+        || !funded_rent_persists_v1(frame.rent_credit.lamports())
     {
         return Err(CoreSbfError::RentCredit);
     }
@@ -484,7 +478,6 @@ pub(crate) fn authenticate_record_derived_unallocated_permit(
         market,
         release_set,
         generation,
-        rent,
     )?;
     Ok(bump)
 }
@@ -496,7 +489,6 @@ fn authenticate_rent_credit_coordinates(
     market: [u8; 32],
     release_set: [u8; 32],
     generation: u64,
-    rent: &Rent,
 ) -> Result<(), CoreSbfError> {
     let credit_data = frame
         .rent_credit
@@ -528,7 +520,7 @@ fn authenticate_rent_credit_coordinates(
     if frame.rent_credit.owner != frame.rent_program.key
         || frame.rent_credit.data_len() != LIFECYCLE_RENT_CREDIT_BYTES_V2
         || frame.rent_credit.key != &expected_credit
-        || !rent.is_exempt(frame.rent_credit.lamports(), LIFECYCLE_RENT_CREDIT_BYTES_V2)
+        || !funded_rent_persists_v1(frame.rent_credit.lamports())
     {
         return Err(CoreSbfError::RentCredit);
     }

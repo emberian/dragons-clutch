@@ -47,6 +47,7 @@
 //! names the signatures the frame will require; obtaining them is the caller's
 //! problem and deliberately not this crate's.
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
     ARTIFACT_RELEASE_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
@@ -372,8 +373,7 @@ pub fn build_core_infrastructure_succession_v1(
     )?;
 
     // Conjunct 2: the predecessor stands written and decodes.
-    let predecessor =
-        authenticate_predecessor_profile(core_program, &state.predecessor_profile, &rent)?;
+    let predecessor = authenticate_predecessor_profile(core_program, &state.predecessor_profile)?;
 
     // Whether a binding MOVED is decided by content, before any of the records
     // are authenticated and without consulting the caller: the presented
@@ -390,7 +390,6 @@ pub fn build_core_infrastructure_succession_v1(
         &state.registry_artifact_staging,
         &state.registry_program,
         &state.registry_programdata,
-        &rent,
     )?;
     let (rent_binding, rent_release) = authenticate_successor_record(
         registry,
@@ -398,7 +397,6 @@ pub fn build_core_infrastructure_succession_v1(
         &state.rent_artifact_staging,
         &state.rent_program,
         &state.rent_programdata,
-        &rent,
     )?;
     if registry == core_program || state.rent_program.key == core_program {
         return Err(Error::InfrastructureProgramIsCore);
@@ -425,7 +423,6 @@ pub fn build_core_infrastructure_succession_v1(
         registry_release,
         registry_moved,
         state.predecessor_registry_record.as_ref(),
-        &rent,
     )?;
     let rent_arm = compose_arm(
         InfrastructureBindingV1::Rent,
@@ -434,7 +431,6 @@ pub fn build_core_infrastructure_succession_v1(
         rent_release,
         rent_moved,
         state.predecessor_rent_record.as_ref(),
-        &rent,
     )?;
 
     let record = ProtocolInfrastructureProfileV2::new(
@@ -573,7 +569,6 @@ fn authenticate_core_upgrade_authority(
 fn authenticate_predecessor_profile(
     core_program: Pubkey,
     predecessor_profile: &ObservedAccount,
-    rent: &Rent,
 ) -> Result<ProtocolInfrastructureProfileV1, Error> {
     let expected = Pubkey::find_program_address(
         &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
@@ -584,10 +579,7 @@ fn authenticate_predecessor_profile(
         || predecessor_profile.owner != core_program
         || predecessor_profile.executable
         || predecessor_profile.data.len() != PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1
-        || !rent.is_exempt(
-            predecessor_profile.lamports,
-            PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1,
-        )
+        || !funded_rent_persists_v1(predecessor_profile.lamports)
     {
         return Err(Error::PredecessorProfileAbsent);
     }
@@ -652,10 +644,9 @@ fn authenticate_successor_record(
     staging: &ObservedAccount,
     program: &ObservedAccount,
     programdata: &ObservedAccount,
-    rent: &Rent,
 ) -> Result<(ExecutionRoleBindingV1, ArtifactReleaseV1), Error> {
     let (release, artifact) =
-        authenticate_artifact_record(registry, raw, staging, rent, Error::InvalidSuccessorRecord)?;
+        authenticate_artifact_record(registry, raw, staging, Error::InvalidSuccessorRecord)?;
     if release.program().to_bytes() != program.key.to_bytes() {
         return Err(Error::InvalidSuccessorRecord);
     }
@@ -678,7 +669,6 @@ fn authenticate_artifact_record(
     registry: Pubkey,
     raw: &ObservedAccount,
     staging: &ObservedAccount,
-    rent: &Rent,
     refusal: Error,
 ) -> Result<(ArtifactReleaseV1, ArtifactReleaseIdV1), Error> {
     if raw.data.len() != ARTIFACT_RELEASE_BYTES_V1 {
@@ -708,7 +698,7 @@ fn authenticate_artifact_record(
     if raw.key != expected_raw
         || raw.owner != registry
         || raw.executable
-        || !rent.is_exempt(raw.lamports, raw.data.len())
+        || !funded_rent_persists_v1(raw.lamports)
         || staging.key != expected_staging
         || staging.owner != system_program::ID
         || staging.executable
@@ -782,7 +772,6 @@ fn compose_arm(
     successor_release: ArtifactReleaseV1,
     moved: bool,
     record: Option<&PredecessorRecordObservationV1>,
-    rent: &Rent,
 ) -> Result<SuccessionArmV1, Error> {
     let Some(record) = record else {
         if moved {
@@ -806,7 +795,6 @@ fn compose_arm(
         registry,
         &record.raw,
         &record.staging,
-        rent,
         Error::InvalidPredecessorRecord,
     )?;
     // The record digest IS the artifact-release id, so pinning the presented
@@ -1750,8 +1738,9 @@ mod tests {
         let genesis_registry =
             ArtifactReleaseIdV1::new(PROTOCOL_INFRASTRUCTURE_GENESIS_REGISTRY_ARTIFACT_V2)
                 .expect("sentinel");
-        let genesis_rent = ArtifactReleaseIdV1::new(PROTOCOL_INFRASTRUCTURE_GENESIS_RENT_ARTIFACT_V2)
-            .expect("sentinel");
+        let genesis_rent =
+            ArtifactReleaseIdV1::new(PROTOCOL_INFRASTRUCTURE_GENESIS_RENT_ARTIFACT_V2)
+                .expect("sentinel");
 
         for (registry_predecessor, rent_predecessor) in [(true, false), (false, true)] {
             let mut fixture = Fixture::new();

@@ -1478,7 +1478,6 @@ pub fn build_direct_inline_capability_seal_v3(
             descriptor_digest,
             &fixed.descriptor,
             fixed.registry_program.key,
-            &rent,
         )?,
         seal_row(
             SealedRoleV1::LifecyclePolicy,
@@ -1486,7 +1485,6 @@ pub fn build_direct_inline_capability_seal_v3(
             descriptor.lifecycle().program().to_bytes(),
             &fixed.lifecycle,
             fixed.registry_program.key,
-            &rent,
         )?,
         seal_row(
             SealedRoleV1::AccountProfile,
@@ -1494,7 +1492,6 @@ pub fn build_direct_inline_capability_seal_v3(
             descriptor.account_profile().program().to_bytes(),
             &fixed.account_profile,
             fixed.registry_program.key,
-            &rent,
         )?,
         seal_row(
             SealedRoleV1::RequestProfile,
@@ -1502,7 +1499,6 @@ pub fn build_direct_inline_capability_seal_v3(
             descriptor.request_profile().program().to_bytes(),
             &fixed.request_profile,
             fixed.registry_program.key,
-            &rent,
         )?,
         seal_row(
             SealedRoleV1::TransitionProgram,
@@ -1510,7 +1506,6 @@ pub fn build_direct_inline_capability_seal_v3(
             descriptor.transition().program().to_bytes(),
             &fixed.transition,
             fixed.registry_program.key,
-            &rent,
         )?,
         seal_row(
             SealedRoleV1::EffectProgram,
@@ -1518,7 +1513,6 @@ pub fn build_direct_inline_capability_seal_v3(
             descriptor.effect().program().to_bytes(),
             &fixed.effect,
             fixed.registry_program.key,
-            &rent,
         )?,
     ];
     let mut expected_body = vec![0_u8; CAPABILITY_SEAL_BYTES_V1];
@@ -1709,7 +1703,6 @@ fn seal_row(
     digest: [u8; 32],
     record: &FinalizedRecordRouteV3,
     registry: Pubkey,
-    rent: &solana_program::rent::Rent,
 ) -> Result<SealedRecordRowV1, DirectInlineRouteErrorV3> {
     if hash(&record.raw.data).to_bytes() != digest
         || record.raw.observation != record.staging.observation
@@ -1718,7 +1711,6 @@ fn seal_row(
     }
     authenticate_finalized_record(
         registry,
-        rent,
         &record.raw,
         &FinalizedRecordProof {
             schema_release_id: schema,
@@ -2052,7 +2044,6 @@ fn authenticate_direct_ordinary_context_v3(
     let realm_digest = hash(&route.custody.realm.raw.data).to_bytes();
     authenticate_finalized_record(
         fixed.registry_program.key,
-        &rent,
         &route.custody.realm.raw,
         &FinalizedRecordProof {
             schema_release_id: REALM_SCHEMA_RELEASE_ID_V1,

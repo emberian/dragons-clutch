@@ -267,7 +267,6 @@ impl Fixture {
                 &mut output,
                 self.release_set_id,
                 &self.release_set,
-                &self.rent,
                 role,
                 frame,
             )
@@ -382,7 +381,6 @@ fn distinct_core_and_registry_activate_all_exact_aliased_roles() {
         &fixture.registry,
         &fixture.release_set_raw,
         &fixture.release_set_staging,
-        &fixture.rent,
     )
     .expect("finalized release-set record");
     assert_eq!(release_set_id, fixture.release_set_id);
@@ -772,7 +770,6 @@ fn finalized_record_refuses_substituted_owner_or_live_staging() {
             &fixture.registry,
             &wrong_owner,
             &fixture.release_set_staging,
-            &fixture.rent,
         ),
         Err(RegistryError::FinalizedRecord.into())
     );
@@ -787,12 +784,7 @@ fn finalized_record_refuses_substituted_owner_or_live_staging() {
         false,
     );
     assert_eq!(
-        authenticate_release_set_record(
-            &fixture.registry,
-            &fixture.release_set_raw,
-            &live_staging,
-            &fixture.rent,
-        ),
+        authenticate_release_set_record(&fixture.registry, &fixture.release_set_raw, &live_staging,),
         Err(RegistryError::FinalizedRecord.into())
     );
 }

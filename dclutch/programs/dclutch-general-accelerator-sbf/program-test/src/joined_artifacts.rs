@@ -38,8 +38,8 @@ use dclutch_general_adapter_contract::{
     },
     release_v3::GENERAL_ACTIONS_V3,
     state_artifacts_v3::{
-        GeneralChildRentWidthsV5, encode_general_state_lifecycle_v5_atomic,
-        general_state_lifecycle_bytes_v5,
+        GeneralChildRentWidthsV5, encode_general_family_state_lifecycle_v5_atomic,
+        general_family_state_lifecycle_bytes_v5,
     },
     transition_artifacts_v3::{
         GENERAL_TRANSITION_INSTRUCTION_PLACEHOLDER_V3, encode_general_transition_program_v3_atomic,
@@ -242,7 +242,7 @@ fn action_artifacts(
     action: Action,
 ) -> Result<JoinedGeneralActionArtifactsV5, JoinedGeneralArtifactErrorV5> {
     let account_profile = account_profile(input.external_widths, action)?;
-    let lifecycle_policy = lifecycle(input, action)?;
+    let lifecycle_policy = lifecycle(input)?;
     let request_profile =
         dclutch_general_adapter_contract::specialization::general_request_profile_bytes_v1(action)
             .to_vec();
@@ -351,23 +351,21 @@ fn account_profile(
     Ok(output)
 }
 
-fn lifecycle(
-    input: JoinedGeneralArtifactInputV5,
-    action: Action,
-) -> Result<Vec<u8>, JoinedGeneralArtifactErrorV5> {
-    let bytes = general_state_lifecycle_bytes_v5(action)
-        .map_err(|_| JoinedGeneralArtifactErrorV5::Encoding)?;
+/// THE FAMILY POLICY, not this action's -- what a founded Market selects.
+///
+/// The action is no longer a parameter. A capability manifest entry pins ONE
+/// `child_derivation_id`, so the fifteen descriptors must name one lifecycle
+/// artifact; a harness that kept building a per-action one would be exercising
+/// a shape no release publishes, which is exactly how a green ladder came to say
+/// nothing about a founded market.
+fn lifecycle(input: JoinedGeneralArtifactInputV5) -> Result<Vec<u8>, JoinedGeneralArtifactErrorV5> {
+    let bytes = general_family_state_lifecycle_bytes_v5();
     let mut scratch = vec![0_u8; bytes];
     let mut output = vec![0_u8; bytes];
-    let child_widths = if action == Action::InitializeSettlement {
-        Some(
-            GeneralChildRentWidthsV5::new(input.outcome_count, input.token_account_bytes)
-                .map_err(|_| JoinedGeneralArtifactErrorV5::Encoding)?,
-        )
-    } else {
-        None
-    };
-    encode_general_state_lifecycle_v5_atomic(action, child_widths, &mut scratch, &mut output)
+    let child_widths =
+        GeneralChildRentWidthsV5::new(input.outcome_count, input.token_account_bytes)
+            .map_err(|_| JoinedGeneralArtifactErrorV5::Encoding)?;
+    encode_general_family_state_lifecycle_v5_atomic(child_widths, &mut scratch, &mut output)
         .map_err(|_| JoinedGeneralArtifactErrorV5::Encoding)?;
     Ok(output)
 }

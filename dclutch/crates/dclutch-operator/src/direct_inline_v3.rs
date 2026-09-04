@@ -7,13 +7,14 @@
 
 use crate::{
     Finality, Observation, ObservedAccount,
-    observation::{FinalizedRecordProof, authenticate_finalized_record, decode_rent},
+    observation::{FinalizedRecordProof, authenticate_finalized_record},
     product_graph_observation_v3::{
         AuthenticatedProductGraphObservationV3, FinalizedProductGraphAccountsV3,
         authenticate_product_graph_observation_v3,
     },
 };
 use dclutch_account_profile_contract::v2::PhysicalAccountDataGeometryV2;
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
@@ -867,10 +868,7 @@ pub fn authenticate_direct_hot_chain_v4(
         return Err(Error::ZeroIdentity);
     }
     let observation = validate_frame(state, checked)?;
-    let rent_account = &fixed_account(state, HOT_RENT_SYSVAR_ACCOUNT_V3)?.account;
-    let rent = decode_rent(rent_account).map_err(|_| Error::ArtifactMismatch)?;
-    let (market, trading_semantic_release) =
-        authenticate_direct_market_release_v4(state, checked, &rent)?;
+    let (market, trading_semantic_release) = authenticate_direct_market_release_v4(state, checked)?;
     let product = authenticate_product_graph(state)?;
     let market_state =
         CoreState::decode(&fixed_account(state, HOT_MARKET_ACCOUNT_V3)?.account.data)
@@ -878,7 +876,7 @@ pub fn authenticate_direct_hot_chain_v4(
     if market_state.identity.product_record.to_bytes() != product.product_record {
         return Err(Error::ProductGraphMismatch);
     }
-    let linked_basis = authenticate_direct_linked_basis_v4(state, &rent, product)?;
+    let linked_basis = authenticate_direct_linked_basis_v4(state, product)?;
     let decoded = DirectExecutionRequestV3::decode(request, product.outcome_count)
         .map_err(|_| Error::EconomicMismatch)?;
     let bundle = authenticate_chain_artifacts_v4(state, request, product.outcome_count)?;
@@ -910,7 +908,6 @@ pub fn authenticate_direct_hot_chain_v4(
 
 fn authenticate_direct_linked_basis_v4(
     state: &DirectHotStateV4,
-    rent: &solana_program::rent::Rent,
     product: AuthenticatedProductGraphObservationV3,
 ) -> Result<AuthenticatedDirectLinkedBasisV4, Error> {
     let registry = fixed_account(state, HOT_REGISTRY_PROGRAM_ACCOUNT_V3)?
@@ -919,7 +916,6 @@ fn authenticate_direct_linked_basis_v4(
     let linked = finalized_record(
         state,
         registry,
-        rent,
         HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
         HOT_LINKED_BASIS_RAW_ACCOUNT_V3 + 1,
         GRADED_BASIS_RECORD_SCHEMA_ID_V3,
@@ -962,7 +958,6 @@ fn authenticate_direct_linked_basis_v4(
 fn authenticate_direct_market_release_v4(
     state: &DirectHotStateV4,
     checked: CheckedHotOuterReleaseV3,
-    rent: &solana_program::rent::Rent,
 ) -> Result<(Pubkey, [u8; 32]), Error> {
     let market_account = &fixed_account(state, HOT_MARKET_ACCOUNT_V3)?.account;
     let core_program = &fixed_account(state, HOT_CORE_PROGRAM_ACCOUNT_V3)?.account;
@@ -974,7 +969,7 @@ fn authenticate_direct_market_release_v4(
     if market_account.owner != core_program.key
         || market_account.executable
         || market_account.data.len() != STATE_BYTES
-        || !rent.is_exempt(market_account.lamports, market_account.data.len())
+        || !funded_rent_persists_v1(market_account.lamports)
         || registry_program.owner != bpf_loader_upgradeable::ID
         || !registry_program.executable
         || ProgramV3View::parse(&registry_program.data).is_err()
@@ -1004,7 +999,7 @@ fn authenticate_direct_market_release_v4(
     if activation.owner != registry_program.key
         || activation.executable
         || activation.data.len() != ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1
-        || !rent.is_exempt(activation.lamports, activation.data.len())
+        || !funded_rent_persists_v1(activation.lamports)
     {
         return Err(Error::ArtifactMismatch);
     }
@@ -1108,8 +1103,6 @@ fn authenticate_chain_artifacts_v4<'a>(
     let registry = fixed_account(state, HOT_REGISTRY_PROGRAM_ACCOUNT_V3)?
         .account
         .key;
-    let rent = decode_rent(&fixed_account(state, HOT_RENT_SYSVAR_ACCOUNT_V3)?.account)
-        .map_err(|_| Error::ArtifactMismatch)?;
     let root = &fixed_account(state, HOT_ROOT_ACCOUNT_V3)?.account;
     let header = CapabilityRootHeaderV1::decode(
         root.data
@@ -1136,7 +1129,6 @@ fn authenticate_chain_artifacts_v4<'a>(
     let manifest_data = finalized_record(
         state,
         registry,
-        &rent,
         HOT_MANIFEST_RAW_ACCOUNT_V3,
         HOT_MANIFEST_STAGING_ACCOUNT_V3,
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
@@ -1151,7 +1143,6 @@ fn authenticate_chain_artifacts_v4<'a>(
     let program_set_data = finalized_record(
         state,
         registry,
-        &rent,
         HOT_PROGRAM_SET_RAW_ACCOUNT_V3,
         HOT_PROGRAM_SET_STAGING_ACCOUNT_V3,
         CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
@@ -1172,7 +1163,6 @@ fn authenticate_chain_artifacts_v4<'a>(
     let descriptor_data = finalized_record(
         state,
         registry,
-        &rent,
         HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
         HOT_DESCRIPTOR_STAGING_ACCOUNT_V3,
         CAPABILITY_PROGRAM_SCHEMA_ID_V4,
@@ -1193,7 +1183,6 @@ fn authenticate_chain_artifacts_v4<'a>(
     let config = finalized_record(
         state,
         registry,
-        &rent,
         HOT_CONFIG_RAW_ACCOUNT_V3,
         HOT_CONFIG_STAGING_ACCOUNT_V3,
         descriptor.config_schema().to_bytes(),
@@ -1202,7 +1191,6 @@ fn authenticate_chain_artifacts_v4<'a>(
     let account_profile = finalized_artifact(
         state,
         registry,
-        &rent,
         HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
         HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
         descriptor.account_profile(),
@@ -1210,7 +1198,6 @@ fn authenticate_chain_artifacts_v4<'a>(
     let request_profile = finalized_artifact(
         state,
         registry,
-        &rent,
         HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3,
         HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3,
         descriptor.request_profile(),
@@ -1218,7 +1205,6 @@ fn authenticate_chain_artifacts_v4<'a>(
     let transition = finalized_artifact(
         state,
         registry,
-        &rent,
         HOT_TRANSITION_RAW_ACCOUNT_V3,
         HOT_TRANSITION_STAGING_ACCOUNT_V3,
         descriptor.transition(),
@@ -1226,7 +1212,6 @@ fn authenticate_chain_artifacts_v4<'a>(
     let effect = finalized_artifact(
         state,
         registry,
-        &rent,
         HOT_EFFECT_RAW_ACCOUNT_V3,
         HOT_EFFECT_STAGING_ACCOUNT_V3,
         descriptor.effect(),
@@ -1234,7 +1219,6 @@ fn authenticate_chain_artifacts_v4<'a>(
     let lifecycle_policy = finalized_artifact(
         state,
         registry,
-        &rent,
         HOT_LIFECYCLE_RAW_ACCOUNT_V3,
         HOT_LIFECYCLE_STAGING_ACCOUNT_V3,
         descriptor.lifecycle(),
@@ -1242,7 +1226,6 @@ fn authenticate_chain_artifacts_v4<'a>(
     let strategy = finalized_artifact(
         state,
         registry,
-        &rent,
         HOT_STRATEGY_RAW_ACCOUNT_V3,
         HOT_STRATEGY_STAGING_ACCOUNT_V3,
         descriptor.strategy(),
@@ -1272,7 +1255,6 @@ fn authenticate_chain_artifacts_v4<'a>(
 fn finalized_artifact<'a>(
     state: &'a DirectInlineHotStateV3,
     registry: Pubkey,
-    rent: &solana_program::rent::Rent,
     raw_coordinate: usize,
     staging_coordinate: usize,
     reference: ArtifactReferenceV4,
@@ -1280,7 +1262,6 @@ fn finalized_artifact<'a>(
     finalized_record(
         state,
         registry,
-        rent,
         raw_coordinate,
         staging_coordinate,
         reference.schema().to_bytes(),
@@ -1292,7 +1273,6 @@ fn finalized_artifact<'a>(
 fn finalized_record<'a>(
     state: &'a DirectInlineHotStateV3,
     registry: Pubkey,
-    rent: &solana_program::rent::Rent,
     raw_coordinate: usize,
     staging_coordinate: usize,
     schema: [u8; 32],
@@ -1302,7 +1282,6 @@ fn finalized_record<'a>(
     let staging = &fixed_account(state, staging_coordinate)?.account;
     authenticate_finalized_record(
         registry,
-        rent,
         raw,
         &FinalizedRecordProof {
             schema_release_id: schema,

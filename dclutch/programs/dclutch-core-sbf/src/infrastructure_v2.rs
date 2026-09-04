@@ -47,6 +47,7 @@
 
 use core::convert::TryFrom;
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_registry_contract::{
     ARTIFACT_RELEASE_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
     require_slot_pinned_release_v1,
@@ -94,8 +95,7 @@ pub(crate) fn process_initialize_v2(
     let rent = Rent::from_account_info(frame.rent).map_err(|_| CoreSbfError::Infrastructure)?;
 
     // Conjunct 2: the predecessor stands written and decodes.
-    let predecessor =
-        authenticate_predecessor_profile(program_id, frame.predecessor_profile, &rent)?;
+    let predecessor = authenticate_predecessor_profile(program_id, frame.predecessor_profile)?;
 
     // Conjunct 1, per binding. Whether a binding MOVED is decided by content:
     // the presented successor record's digest against the id V1 pinned. A
@@ -111,7 +111,6 @@ pub(crate) fn process_initialize_v2(
         frame.registry_artifact_staging,
         frame.registry_program,
         frame.registry_programdata,
-        &rent,
         admission(registry_moved),
     )?;
     let (rent_binding, rent_release) = authenticate_artifact_release(
@@ -120,7 +119,6 @@ pub(crate) fn process_initialize_v2(
         frame.rent_artifact_staging,
         frame.rent_program,
         frame.rent_programdata,
-        &rent,
         admission(rent_moved),
     )?;
     if frame.registry_program.key == program_id || frame.rent_program.key == program_id {
@@ -151,7 +149,6 @@ pub(crate) fn process_initialize_v2(
         frame.predecessor_registry_artifact_raw,
         frame.predecessor_registry_artifact_staging,
         frame.registry_consent_authority,
-        &rent,
     )?;
     authenticate_succession_arm(
         frame.registry_program.key,
@@ -161,7 +158,6 @@ pub(crate) fn process_initialize_v2(
         frame.predecessor_rent_artifact_raw,
         frame.predecessor_rent_artifact_staging,
         frame.rent_consent_authority,
-        &rent,
     )?;
 
     let profile = ProtocolInfrastructureProfileV2::new(
@@ -220,7 +216,6 @@ const fn admission(moved: bool) -> ArtifactAdmissionV1 {
 fn authenticate_predecessor_profile(
     program_id: &Pubkey,
     predecessor_profile: &AccountInfo<'_>,
-    rent: &Rent,
 ) -> Result<ProtocolInfrastructureProfileV1, CoreSbfError> {
     let expected =
         Pubkey::find_program_address(&[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1], program_id)
@@ -229,10 +224,7 @@ fn authenticate_predecessor_profile(
         || predecessor_profile.owner != program_id
         || predecessor_profile.data_len() != PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1
         || predecessor_profile.executable
-        || !rent.is_exempt(
-            predecessor_profile.lamports(),
-            PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1,
-        )
+        || !funded_rent_persists_v1(predecessor_profile.lamports())
     {
         return Err(CoreSbfError::InfrastructurePredecessorAbsent);
     }
@@ -260,7 +252,6 @@ fn authenticate_succession_arm(
     predecessor_raw: &AccountInfo<'_>,
     predecessor_staging: &AccountInfo<'_>,
     consent: &AccountInfo<'_>,
-    rent: &Rent,
 ) -> Result<(), CoreSbfError> {
     if !moved {
         // Nothing is being consented to, so nothing may stand in the slots
@@ -279,7 +270,6 @@ fn authenticate_succession_arm(
         predecessor_raw,
         predecessor_staging,
         predecessor_binding,
-        rent,
     )?;
     // Conjunct 4: under Loader V3 a ProgramData slot only moves forward, so
     // strictly greater is exactly "was upgraded after".
@@ -313,7 +303,6 @@ fn authenticate_predecessor_record(
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
     binding: ExecutionRoleBindingV1,
-    rent: &Rent,
 ) -> Result<ArtifactReleaseV1, CoreSbfError> {
     let bytes = raw
         .try_borrow_data()
@@ -331,7 +320,6 @@ fn authenticate_predecessor_record(
         registry,
         raw,
         staging,
-        rent,
         ARTIFACT_RELEASE_SCHEMA_ID_V1,
         digest,
         &bytes,

@@ -4537,3 +4537,20 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Cuts: `564086bc6`.
 - Started 07:20 EDT: RENT-FLOORS **`af72191b027481cab`** — the ~112 `is_exempt` floor sites over pre-existing accounts that a
   rate RISE would break, censused by class and fixed at the author under the rent ruling; a rate-rise program-test.
+
+### 2026-09-04 07:30 EDT — THE FIRST STRANGER PAID ON AN HONEST SELECTOR
+- COHORT-15F closed (seven commits: `afab02c25` `funded_rent_recovery_v1` — rate = (lamports − principal)/(128 + len), exact
+  division or `FundedRentUnrecoverable`, five accounts at five widths all derive 6,333; `ec373d90d` the session records the
+  recovered rate; `291e3e277`/`713a0f012` an inherited finalized prepay journal accounts for a successor session's seat;
+  `270f23a13` close-funding derives compartment ROLES from the material instead of the ledger's mask order — the third
+  instance of that misreading in the tree; `16dd0e917`): **market 3 admitted Terminal (UNQQiM29…, slot 492,976,283), the
+  custody replay at 91,911 CU, and the winning STRANGER paid 200 atoms into `EorpstZ…` (5K5Tqf1N…) — the first stranger
+  payout on an honest selector on any chain; the loser's zero twice; L1, L3 HOLD, L4 retires by name.** Market 1's
+  retirement moved from five walls to one: **CloseFund built, signed, and hit the 200,000-CU default meter — the terminal
+  sequence declares no ComputeBudget prefix and its durable message pins exactly one instruction; that, not the rent
+  guards, is why retirement has never completed on any chain**; the signed packet JGLMWwRM… is durable at `submitted` and
+  must never be re-signed. WITNESS-3's 2,152-byte route is the legacy aggregate builder nothing submits; the checkpoint
+  retirement's four instructions are 808/864/864/744 and the deployed Core routes all four. The `retire` row's phase-byte
+  offset corrected (10, not 280). Payer spent 0.0148 SOL. → COHORT-15G **`(spawned)`**: the durable message declares its
+  budget by name, the stuck packet superseded never re-signed, market 1 retired.
+- Cuts: `b9bea1c07`, `2831d5786`, `5d8f39c48`.

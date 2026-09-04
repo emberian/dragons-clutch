@@ -17,7 +17,7 @@ use dclutch_rational_representation_v2_kernel::{
     },
 };
 use dclutch_representation_composition_v3_kernel::COMPOSITION_EXPOSURE_SCHEMA_ID_V3;
-use solana_program::{account_info::AccountInfo, pubkey::Pubkey, rent::Rent};
+use solana_program::{account_info::AccountInfo, pubkey::Pubkey};
 
 use super::{
     AuthenticatedProductRuntimeV3, Error, FinalizedRecordFrameV2, ProductRuntimeFrameV3, Result,
@@ -83,22 +83,16 @@ pub struct AuthenticatedRepresentationRuntimeV3<'accounts, 'info> {
 /// All twelve Registry accounts must be distinct and read-only.
 pub fn authenticate_product_representation_v3<'accounts, 'info>(
     registry_program: &Pubkey,
-    rent: &Rent,
     expected_product_digest: ContentId,
     expected_descriptor_digest: ContentId,
     context: RepresentationRuntimeContextV3,
     frame: RepresentationRuntimeFrameV3<'accounts, 'info>,
 ) -> Result<AuthenticatedRepresentationRuntimeV3<'accounts, 'info>> {
     require_distinct(frame)?;
-    let product = authenticate_product_runtime_v3(
-        registry_program,
-        rent,
-        expected_product_digest,
-        frame.product,
-    )?;
+    let product =
+        authenticate_product_runtime_v3(registry_program, expected_product_digest, frame.product)?;
     let descriptor_record = authenticate_record(
         registry_program,
-        rent,
         frame.descriptor,
         REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
         expected_descriptor_digest,
@@ -134,7 +128,6 @@ pub fn authenticate_product_representation_v3<'accounts, 'info>(
     let graph_digest = content(graph_digest).map_err(|_| Error::RepresentationComposition)?;
     let graph_record = authenticate_record(
         registry_program,
-        rent,
         frame.graph,
         COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
         graph_digest,

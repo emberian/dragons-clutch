@@ -7,6 +7,7 @@ rust-version = "1.89"
 description = "Chain-derived unsigned instruction construction for Rational Representation V2"
 
 [dependencies]
+dclutch-capability-contract = { path = "../dclutch-capability-contract" }
 dclutch-claims-svm = { path = "../dclutch-claims-svm" }
 dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-custody-contract = { path = "../dclutch-custody-contract" }

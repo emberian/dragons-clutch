@@ -56,6 +56,7 @@ use dclutch_account_profile_contract::{
     ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1, AccountObservationV1, AccountProfileV1,
     ProjectionRegistersV2, derive_effect_permissions, project_atomic,
 };
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_capability_program_contract::{
     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1, CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityProgramV1,
     CapabilityRegistersV2, CapabilityRootHeaderV1,
@@ -92,7 +93,7 @@ use dclutch_release_set_contract::ExecutionRoleV1;
 use dclutch_transition_vm::v2::{RegisterInput, RegisterOutput};
 use solana_program::{
     account_info::AccountInfo, hash::hash, program::set_return_data, program_error::ProgramError,
-    pubkey::Pubkey, rent::Rent, sysvar::SysvarSerialize,
+    pubkey::Pubkey,
 };
 use solana_sdk_ids::{system_program, sysvar};
 
@@ -258,7 +259,6 @@ pub fn process_direct_close_maker_v1(
     let request = DirectCloseMakerRequestV1::decode(instruction_data)
         .map_err(|_| TradingSbfError::Content)?;
     let accounts = Accounts::parse(program_id, account_infos)?;
-    let rent = Rent::from_account_info(accounts.rent).map_err(|_| TradingSbfError::Content)?;
 
     let root_data = accounts
         .root
@@ -297,7 +297,7 @@ pub fn process_direct_close_maker_v1(
             .ok_or(TradingSbfError::Root)?,
     )
     .map_err(|_| TradingSbfError::Root)?;
-    let closed = authenticate_replay_close(program_id, &accounts, request, &rent, pre_root_state)?;
+    let closed = authenticate_replay_close(program_id, &accounts, request, pre_root_state)?;
     require_rent_owner_destination(&accounts, closed.plan.rent_owner)?;
     let direct_post = closed.root.encode();
 
@@ -308,7 +308,6 @@ pub fn process_direct_close_maker_v1(
     authenticate_persisted_raw(
         accounts.registry.key,
         accounts.manifest_raw,
-        &rent,
         dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         context.selection().manifest().to_bytes(),
         header.record_bumps().manifest_raw(),
@@ -323,7 +322,6 @@ pub fn process_direct_close_maker_v1(
         accounts.registry.key,
         accounts.program_set_raw,
         accounts.program_set_staging,
-        &rent,
         CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
         program_set_id,
         &program_set_data,
@@ -345,7 +343,6 @@ pub fn process_direct_close_maker_v1(
         accounts.registry.key,
         accounts.descriptor_raw,
         accounts.descriptor_staging,
-        &rent,
         selected.schema().to_bytes(),
         selected.program().to_bytes(),
         &descriptor_data,
@@ -358,7 +355,6 @@ pub fn process_direct_close_maker_v1(
         accounts.registry.key,
         accounts.config_raw,
         accounts.config_staging,
-        &rent,
         DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1,
         context.selection().config().to_bytes(),
         &config_data,
@@ -386,7 +382,6 @@ pub fn process_direct_close_maker_v1(
         accounts.registry.key,
         accounts.profile_raw,
         accounts.profile_staging,
-        &rent,
         ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1,
         descriptor.account_profile().to_bytes(),
         &profile_data,
@@ -405,7 +400,6 @@ pub fn process_direct_close_maker_v1(
         accounts.registry.key,
         accounts.effect_raw,
         accounts.effect_staging,
-        &rent,
         EFFECT_SCHEMA_RELEASE_ID_V2,
         descriptor.effect_schema().to_bytes(),
         &effect_data,
@@ -535,7 +529,6 @@ fn authenticate_replay_close(
     program_id: &Pubkey,
     accounts: &Accounts<'_, '_>,
     request: DirectCloseMakerRequestV1,
-    rent: &Rent,
     pre_root_state: DirectRootStateV1,
 ) -> Result<MakerReplayCloseResultV2, ProgramError> {
     let coordinates = DirectCoordinatesV1::new(request.market, request.generation)
@@ -558,7 +551,7 @@ fn authenticate_replay_close(
         || maker_root.market() != request.market
         || maker_root.generation() != request.generation
         || maker_root.maker() != request.maker
-        || !rent.is_exempt(replay.lamports(), data.len())
+        || !funded_rent_persists_v1(replay.lamports())
     {
         return Err(TradingSbfError::CloseMakerReplayAccount.into());
     }
@@ -873,7 +866,6 @@ fn authenticate_finalized_record(
     registry: &Pubkey,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
-    rent: &Rent,
     schema: [u8; 32],
     digest: [u8; 32],
     bytes: &[u8],
@@ -885,7 +877,7 @@ fn authenticate_finalized_record(
     if raw.key != &expected_raw
         || raw.owner != registry
         || hash(bytes).to_bytes() != digest
-        || !rent.is_exempt(raw.lamports(), bytes.len())
+        || !funded_rent_persists_v1(raw.lamports())
         || staging.key != &expected_staging
         || staging.owner != &system_program::ID
         || staging.data_len() != 0
@@ -899,7 +891,6 @@ fn authenticate_finalized_record(
 fn authenticate_persisted_raw(
     registry: &Pubkey,
     raw: &AccountInfo<'_>,
-    rent: &Rent,
     schema: [u8; 32],
     digest: [u8; 32],
     raw_bump: u8,
@@ -914,7 +905,7 @@ fn authenticate_persisted_raw(
     if raw.key != &expected
         || raw.owner != registry
         || hash(bytes).to_bytes() != digest
-        || !rent.is_exempt(raw.lamports(), bytes.len())
+        || !funded_rent_persists_v1(raw.lamports())
     {
         return Err(TradingSbfError::Content.into());
     }

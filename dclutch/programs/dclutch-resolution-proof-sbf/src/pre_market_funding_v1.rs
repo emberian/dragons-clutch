@@ -116,7 +116,6 @@ pub fn process_pre_market_funding_v2(
         *registry_program.key,
         manifest_raw,
         manifest_staging,
-        &rent,
         dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         request.manifest,
         &manifest_data,

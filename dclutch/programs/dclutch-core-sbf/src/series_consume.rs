@@ -11,6 +11,7 @@ use core::cmp::min;
 use dclutch_capability_contract::{
     CapabilityFundingDerivationV1, CapabilityManifestV1, ContentId as CapabilityContentId,
     FUNDING_STATE_BYTES, FundingCustodyObservationV1, FundingStateV1, FundingStatus,
+    funding::funded_rent_persists_v1,
 };
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
@@ -314,14 +315,14 @@ pub(crate) fn process(
     release_admissions.require(Role::Trading)?;
     authenticate_trading_caller(&frame, request, request_bytes)?;
 
-    let admitted = authenticate_series(&frame, request, proof_bytes, &rent, program_id, &prepared)?;
+    let admitted = authenticate_series(&frame, request, proof_bytes, program_id, &prepared)?;
     authenticate_root_and_replay(&frame, request, &admitted, program_id)?;
     let (funding_span, suffix_accounts) =
         split_funding_prefix(&frame, &admitted, request, &rent, &prepared)?;
     let suffix = SeriesFoundSuffix::parse(suffix_accounts)?;
     release_admissions.require(Role::Claims)?;
     release_admissions.require(Role::Custody)?;
-    authenticate_found_coordinates(&frame, request, &admitted, &rent, &prepared)?;
+    authenticate_found_coordinates(&frame, request, &admitted, &prepared)?;
     let permit_plan = prepare_permit(
         program_id,
         &frame,
@@ -501,7 +502,6 @@ fn authenticate_series(
     frame: &SeriesConsumeAccounts<'_, '_>,
     request: SeriesCoreRequestV1,
     proof_bytes: &[u8],
-    rent: &Rent,
     program_id: &Pubkey,
     prepared: &PreparedFound,
 ) -> Result<Box<AdmittedSeries>, CoreSbfError> {
@@ -513,7 +513,6 @@ fn authenticate_series(
         frame,
         frame.template_raw,
         frame.template_staging,
-        rent,
         SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
         &template_bytes,
     )?;
@@ -525,7 +524,6 @@ fn authenticate_series(
         frame,
         frame.occurrence_raw,
         frame.occurrence_staging,
-        rent,
         SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3,
         &occurrence_bytes,
     )?;
@@ -537,7 +535,6 @@ fn authenticate_series(
         frame,
         frame.ticket_raw,
         frame.ticket_staging,
-        rent,
         SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
         &ticket_bytes,
     )?;
@@ -600,7 +597,6 @@ fn authenticate_series_record(
     frame: &SeriesConsumeAccounts<'_, '_>,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
-    rent: &Rent,
     schema: [u8; 32],
     bytes: &[u8],
 ) -> Result<(), CoreSbfError> {
@@ -608,7 +604,6 @@ fn authenticate_series_record(
         frame.found.registry_program.key,
         raw,
         staging,
-        rent,
         schema,
         hash(bytes).to_bytes(),
         bytes,
@@ -817,7 +812,6 @@ fn authenticate_found_coordinates(
     frame: &SeriesConsumeAccounts<'_, '_>,
     request: SeriesCoreRequestV1,
     admitted: &AdmittedSeries,
-    rent: &Rent,
     prepared: &PreparedFound,
 ) -> Result<(), CoreSbfError> {
     let occurrence = admitted.occurrence.occurrence();
@@ -893,10 +887,7 @@ fn authenticate_found_coordinates(
                 .market_generation()
                 .ok_or(CoreSbfError::Instruction)?
         || frame.found.rent_credit.data_len() != LIFECYCLE_RENT_CREDIT_BYTES_V2
-        || !rent.is_exempt(
-            frame.found.rent_credit.lamports(),
-            LIFECYCLE_RENT_CREDIT_BYTES_V2,
-        )
+        || !funded_rent_persists_v1(frame.found.rent_credit.lamports())
     {
         return Err(CoreSbfError::RentCredit);
     }
@@ -925,7 +916,7 @@ fn prepare_permit<'accounts, 'info>(
     lock_receipt_bytes: &[u8],
     rent: &Rent,
 ) -> Result<GenericFoundingPermitPlanV1, CoreSbfError> {
-    let product = authenticate_product_facts(frame, prepared, rent)?;
+    let product = authenticate_product_facts(frame, prepared)?;
     let projected = authenticate_projected_facts(
         program_id,
         frame,
@@ -955,11 +946,9 @@ fn prepare_permit<'accounts, 'info>(
 fn authenticate_product_facts<'accounts, 'info>(
     frame: &SeriesConsumeAccounts<'accounts, 'info>,
     prepared: &PreparedFound,
-    rent: &Rent,
 ) -> Result<ProductFacts, CoreSbfError> {
     let product = authenticate_founding_product_basis_v3(
         frame.found.registry_program.key,
-        rent,
         *prepared.runtime,
         FinalizedRecordFrameV2 {
             raw: frame.found.linked_basis_raw,

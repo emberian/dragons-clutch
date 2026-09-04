@@ -17,6 +17,7 @@ custom-heap = []
 custom-panic = []
 
 [dependencies]
+dclutch-capability-contract = { path = "../../crates/dclutch-capability-contract" }
 dclutch-product-runtime-v2 = { path = "../../crates/dclutch-product-runtime-v2" }
 dclutch-product-runtime-v2-admission = { path = "../../crates/dclutch-product-runtime-v2-admission" }
 dclutch-product-runtime-v2-svm-reader = { path = "../../crates/dclutch-product-runtime-v2-svm-reader" }

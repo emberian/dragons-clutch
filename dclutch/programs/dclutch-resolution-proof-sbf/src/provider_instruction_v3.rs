@@ -10,6 +10,7 @@ use core::cell::Ref;
 
 use alloc::boxed::Box;
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_capability_program_contract::{
     set_v2::{
         CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityDescriptorReferenceV2,
@@ -139,10 +140,10 @@ pub(crate) fn process_provider_resolution_v3(
 
     let rent = authenticate_rent(frame.rent())?;
     let clock = authenticate_clock(frame.clock())?;
-    let market = authenticate_market_and_infrastructure(program_id, &request, frame, &rent)?;
+    let market = authenticate_market_and_infrastructure(program_id, &request, frame)?;
     authenticate_activation_and_caller(program_id, &request, frame)?;
-    let source_records = boxed_source_records(&request, frame, &rent)?;
-    let product_runtime = boxed_product_runtime(&request, frame, &rent)?;
+    let source_records = boxed_source_records(&request, frame)?;
+    let product_runtime = boxed_product_runtime(&request, frame)?;
     if market.identity.product_record.to_bytes() != request.product_record
         || product_runtime.product_record.content_digest.to_bytes() != request.product_record
         || product_runtime
@@ -154,12 +155,12 @@ pub(crate) fn process_provider_resolution_v3(
         return Err(ResolutionError::ProductDomain.into());
     }
 
-    let pyth_release = boxed_pyth_release(&request, frame, &rent)?;
+    let pyth_release = boxed_pyth_release(&request, frame)?;
     let update_data = frame
         .update()
         .try_borrow_data()
         .map_err(|_| ResolutionError::ProviderObservation)?;
-    let lifecycle = boxed_provider_lifecycle(program_id, &request, frame, &rent, &update_data)?;
+    let lifecycle = boxed_provider_lifecycle(program_id, &request, frame, &update_data)?;
     let result_domain_data = frame
         .account(33)
         .try_borrow_data()
@@ -206,21 +207,18 @@ const fn map_provider_join_error(error: ProviderJoinErrorV3) -> ResolutionError 
 fn boxed_source_records(
     request: &ProviderExecutionRequestV3,
     frame: ProviderFrameV3<'_, '_>,
-    rent: &Rent,
 ) -> Result<Box<AuthenticatedSourceRecordsV3>, ProgramError> {
-    Ok(Box::new(authenticate_source_records(request, frame, rent)?))
+    Ok(Box::new(authenticate_source_records(request, frame)?))
 }
 
 fn boxed_product_runtime(
     request: &ProviderExecutionRequestV3,
     frame: ProviderFrameV3<'_, '_>,
-    rent: &Rent,
 ) -> Result<Box<dclutch_product_runtime_v2_svm_reader::AuthenticatedProductRuntimeV2>, ProgramError>
 {
     Ok(Box::new(
         authenticate_product_runtime_v2(
             frame.registry_program().key,
-            rent,
             ProductContentId::new(request.product_record)
                 .map_err(|_| ResolutionError::ProductDomain)?,
             ProductRuntimeFrameV2 {
@@ -236,9 +234,8 @@ fn boxed_product_runtime(
 fn boxed_pyth_release(
     request: &ProviderExecutionRequestV3,
     frame: ProviderFrameV3<'_, '_>,
-    rent: &Rent,
 ) -> Result<Box<PythReleaseV1>, ProgramError> {
-    Ok(Box::new(authenticate_pyth_release(request, frame, rent)?))
+    Ok(Box::new(authenticate_pyth_release(request, frame)?))
 }
 
 fn boxed_source_state(bytes: &[u8]) -> Result<Box<SourceResolutionStateV2>, ProgramError> {
@@ -251,7 +248,6 @@ fn boxed_provider_lifecycle(
     program_id: &Pubkey,
     request: &ProviderExecutionRequestV3,
     frame: ProviderFrameV3<'_, '_>,
-    rent: &Rent,
     update_bytes: &[u8],
 ) -> Result<Box<ProviderUpdateLifecycleV3>, ProgramError> {
     let lifecycle_account = frame.lifecycle();
@@ -278,7 +274,7 @@ fn boxed_provider_lifecycle(
         || lifecycle_account.owner != program_id
         || lifecycle_account.executable
         || lifecycle_data.len() != PROVIDER_UPDATE_LIFECYCLE_BYTES_V3
-        || !rent.is_exempt(lifecycle_account.lamports(), lifecycle_data.len())
+        || !funded_rent_persists_v1(lifecycle_account.lamports())
     {
         return Err(ResolutionError::ProviderObservation.into());
     }
@@ -500,7 +496,6 @@ fn authenticate_market_and_infrastructure(
     program_id: &Pubkey,
     request: &ProviderExecutionRequestV3,
     frame: ProviderFrameV3<'_, '_>,
-    rent: &Rent,
 ) -> Result<CoreState, ProgramError> {
     let market_account = frame.account(4);
     if market_account.owner != frame.account(11).key || market_account.executable {
@@ -539,7 +534,7 @@ fn authenticate_market_and_infrastructure(
         || infrastructure.owner != frame.account(11).key
         || infrastructure.executable
         || infrastructure_data.len() != PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2
-        || !rent.is_exempt(infrastructure.lamports(), infrastructure_data.len())
+        || !funded_rent_persists_v1(infrastructure.lamports())
     {
         return Err(ResolutionError::InfrastructureProfile.into());
     }
@@ -557,7 +552,6 @@ fn authenticate_market_and_infrastructure(
         frame.registry_program().key,
         frame.account(9),
         frame.account(10),
-        rent,
         ARTIFACT_RELEASE_SCHEMA_ID_V1,
         profile.registry().artifact_release().to_bytes(),
         &artifact_data,
@@ -690,7 +684,6 @@ fn authenticate_activation_and_caller(
             frame.account(38),
             frame.account(39),
             frame.account(40),
-            &authenticate_rent(frame.rent())?,
             request,
         )?;
     }
@@ -727,7 +720,6 @@ fn authenticate_trading_capability_records(
     set_staging: &AccountInfo<'_>,
     descriptor_raw: &AccountInfo<'_>,
     descriptor_staging: &AccountInfo<'_>,
-    rent: &Rent,
     request: &ProviderExecutionRequestV3,
 ) -> ProgramResult {
     let set_data = set_raw
@@ -737,7 +729,6 @@ fn authenticate_trading_capability_records(
         registry,
         set_raw,
         set_staging,
-        rent,
         CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
         request.capability_program_set,
         &set_data,
@@ -778,7 +769,6 @@ fn authenticate_trading_capability_records(
         registry,
         descriptor_raw,
         descriptor_staging,
-        rent,
         CAPABILITY_PROGRAM_SCHEMA_ID_V4,
         request.selected_capability_program,
         &descriptor_data,
@@ -816,11 +806,9 @@ const fn caller_executes_role(caller: ProviderCallerV3, role: ExecutionRoleV1) -
 fn authenticate_source_records(
     request: &ProviderExecutionRequestV3,
     frame: ProviderFrameV3<'_, '_>,
-    rent: &Rent,
 ) -> Result<AuthenticatedSourceRecordsV3, ProgramError> {
     let material_data = borrow_record(
         frame,
-        rent,
         17,
         SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         request.source_material,
@@ -830,7 +818,6 @@ fn authenticate_source_records(
         SourceMaterialV3::decode(&material_data).map_err(|_| ResolutionError::SourceMaterial)?;
     let source_data = borrow_record(
         frame,
-        rent,
         19,
         SOURCE_SPEC_SCHEMA_ID_V1,
         request.source_spec,
@@ -840,7 +827,6 @@ fn authenticate_source_records(
     let provider_id = source.provider_release_id();
     let provider_data = borrow_record(
         frame,
-        rent,
         21,
         PROVIDER_RELEASE_SCHEMA_ID_V1,
         provider_id.to_bytes(),
@@ -851,7 +837,6 @@ fn authenticate_source_records(
     let adapter_id = source.adapter_config_id();
     let adapter_data = borrow_record(
         frame,
-        rent,
         23,
         PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1,
         adapter_id.to_bytes(),
@@ -862,7 +847,6 @@ fn authenticate_source_records(
     let window_id = material.window_spec();
     let window_data = borrow_record(
         frame,
-        rent,
         25,
         WINDOW_SPEC_SCHEMA_ID_V1,
         window_id.to_bytes(),
@@ -872,7 +856,6 @@ fn authenticate_source_records(
     let statistic_id = material.statistic_spec();
     let statistic_data = borrow_record(
         frame,
-        rent,
         27,
         STATISTIC_SPEC_SCHEMA_ID_V1,
         statistic_id.to_bytes(),
@@ -903,11 +886,9 @@ fn authenticate_source_records(
 fn authenticate_pyth_release(
     request: &ProviderExecutionRequestV3,
     frame: ProviderFrameV3<'_, '_>,
-    rent: &Rent,
 ) -> Result<PythReleaseV1, ProgramError> {
     let bytes = borrow_record(
         frame,
-        rent,
         29,
         PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
         request.provider_release,
@@ -941,7 +922,7 @@ fn authenticate_pyth_release(
         .try_borrow_data()
         .map_err(|_| ResolutionError::ProviderObservation)?;
     if hash(&config_data).to_bytes() != release.config_digest()
-        || !rent.is_exempt(frame.receiver_config().lamports(), config_data.len())
+        || !funded_rent_persists_v1(frame.receiver_config().lamports())
     {
         return Err(ResolutionError::ProviderObservation.into());
     }
@@ -999,7 +980,6 @@ fn record_frame<'accounts, 'info>(
 
 fn borrow_record<'a>(
     frame: ProviderFrameV3<'a, '_>,
-    rent: &Rent,
     index: usize,
     schema: [u8; 32],
     digest: [u8; 32],
@@ -1013,7 +993,6 @@ fn borrow_record<'a>(
         frame.registry_program().key,
         frame.account(index),
         frame.account(index + 1),
-        rent,
         schema,
         digest,
         &data,
@@ -1027,7 +1006,6 @@ pub(crate) fn authenticate_record(
     registry: &Pubkey,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
-    rent: &Rent,
     schema: [u8; 32],
     digest: [u8; 32],
     bytes: &[u8],
@@ -1043,7 +1021,7 @@ pub(crate) fn authenticate_record(
         || raw.owner != registry
         || raw.executable
         || hash(bytes).to_bytes() != digest
-        || !rent.is_exempt(raw.lamports(), bytes.len())
+        || !funded_rent_persists_v1(raw.lamports())
         || staging.key != &expected_staging
         || staging.owner != &system_program::ID
         || staging.executable
@@ -1250,11 +1228,10 @@ mod tests {
                 &registry,
                 &raw,
                 &staging,
-                &rent,
                 schema,
                 digest,
                 &artifact_bytes,
-                ARTIFACT_RELEASE_BYTES_V1,
+                ARTIFACT_RELEASE_BYTES_V1
             ),
             Ok(()),
         );
@@ -1265,11 +1242,10 @@ mod tests {
                 &registry,
                 &raw,
                 &staging,
-                &rent,
                 schema,
                 substituted_profile_release,
                 &artifact_bytes,
-                ARTIFACT_RELEASE_BYTES_V1,
+                ARTIFACT_RELEASE_BYTES_V1
             ),
             Err(ProgramError::Custom(
                 ResolutionError::FinalizedRecord as u32
@@ -1401,7 +1377,6 @@ mod tests {
     #[test]
     fn a_trading_caller_authenticates_the_schema_bound_records_common_hot_produces() {
         let registry = Pubkey::new_from_array([0xd7; 32]);
-        let rent = Rent::default();
         let descriptor_bytes = trading_descriptor(PROVIDER_EXECUTION_REQUEST_SCHEMA_ID_V3);
         let descriptor_id = hash(&descriptor_bytes).to_bytes();
         let descriptor_schema =
@@ -1438,7 +1413,6 @@ mod tests {
                 &set_staging,
                 &descriptor_raw,
                 &descriptor_staging,
-                &rent,
                 &trading_request(set_id, descriptor_id),
             ),
             Ok(()),
@@ -1458,7 +1432,6 @@ mod tests {
                 &set_staging,
                 &stranger_raw,
                 &stranger_staging,
-                &rent,
                 &trading_request(set_id, stranger_id),
             ),
             Err(ProgramError::Custom(
@@ -1496,7 +1469,6 @@ mod tests {
                 &wrong_set_staging,
                 &wrong_raw,
                 &wrong_staging,
-                &rent,
                 &trading_request(wrong_schema_set_id, wrong_schema_id),
             ),
             Err(ProgramError::Custom(

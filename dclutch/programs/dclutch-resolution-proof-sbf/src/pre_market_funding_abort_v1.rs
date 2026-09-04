@@ -77,7 +77,6 @@ pub fn process_pre_market_funding_abort_v1(
         *registry.key,
         manifest_raw,
         manifest_staging,
-        &rent,
         dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         request.manifest,
         &manifest_data,

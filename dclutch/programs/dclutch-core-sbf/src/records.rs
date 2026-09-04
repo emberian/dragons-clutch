@@ -1,7 +1,8 @@
 //! Exact finalized-record authentication shared by Core actions.
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use solana_program::{account_info::AccountInfo, hash::hash, pubkey::Pubkey, rent::Rent};
+use solana_program::{account_info::AccountInfo, hash::hash, pubkey::Pubkey};
 use solana_sdk_ids::system_program;
 
 use crate::CoreSbfError;
@@ -46,7 +47,6 @@ pub(crate) fn authenticate_finalized_record<'a>(
     registry_program: &Pubkey,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
-    rent: &Rent,
     schema: [u8; 32],
     expected_digest: [u8; 32],
     bytes: &'a [u8],
@@ -55,7 +55,6 @@ pub(crate) fn authenticate_finalized_record<'a>(
         registry_program,
         raw,
         staging,
-        rent,
         schema,
         expected_digest,
         bytes,
@@ -71,7 +70,6 @@ pub(crate) fn authenticate_finalized_record_with_bumps<'a>(
     registry_program: &Pubkey,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
-    rent: &Rent,
     schema: [u8; 32],
     expected_digest: [u8; 32],
     bytes: &'a [u8],
@@ -81,7 +79,7 @@ pub(crate) fn authenticate_finalized_record_with_bumps<'a>(
         || raw.is_signer
         || raw.is_writable
         || hash(bytes).to_bytes() != expected_digest
-        || !rent.is_exempt(raw.lamports(), bytes.len())
+        || !funded_rent_persists_v1(raw.lamports())
     {
         return Err(CoreSbfError::FinalizedRecord);
     }
@@ -105,7 +103,6 @@ pub(crate) fn authenticate_content_addressed_record<'a>(
     registry_program: &Pubkey,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
-    rent: &Rent,
     schema: [u8; 32],
     bytes: &'a [u8],
 ) -> Result<([u8; 32], &'a [u8], RecordPdaBumpsV1), CoreSbfError> {
@@ -114,7 +111,6 @@ pub(crate) fn authenticate_content_addressed_record<'a>(
         registry_program,
         raw,
         staging,
-        rent,
         schema,
         digest,
         bytes,

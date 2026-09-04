@@ -149,7 +149,6 @@ pub(crate) fn execute_rational_terminal_v3<'accounts, 'info>(
             resolution_program: frame.resolution_program,
             resolution_programdata: frame.resolution_programdata,
             certificate: frame.terminal_certificate,
-            rent: frame.rent,
         },
         header.release_set,
         authenticated.core,

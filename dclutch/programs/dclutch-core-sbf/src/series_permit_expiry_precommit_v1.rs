@@ -85,28 +85,24 @@ pub(crate) fn process(
         frame.rent_artifact_staging,
         frame.rent_program,
         frame.rent_programdata,
-        &rent,
     )?;
     let template_bytes = finalized_series_record(
         &frame,
         frame.template_raw,
         frame.template_staging,
         SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
-        &rent,
     )?;
     let occurrence_bytes = finalized_series_record(
         &frame,
         frame.occurrence_raw,
         frame.occurrence_staging,
         SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3,
-        &rent,
     )?;
     let ticket_bytes = finalized_series_record(
         &frame,
         frame.ticket_raw,
         frame.ticket_staging,
         SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
-        &rent,
     )?;
     let admitted = admit_occurrence_bytes(&template_bytes, &occurrence_bytes, proof_bytes)
         .map_err(|_| CoreSbfError::Reference)?;

@@ -587,7 +587,7 @@ fn process_authenticated(
         projected_receipt_digest,
     )?;
     claims_cu_checkpoint!("found-custody");
-    let market = authenticate_product_core(program_id, accounts, &request, custody_context, &rent)?;
+    let market = authenticate_product_core(program_id, accounts, &request, custody_context)?;
     claims_cu_checkpoint!("found-product-core");
     authenticate_rent_and_vacancy(program_id, accounts, &request, market, &rent)?;
     claims_cu_checkpoint!("found-rent-vacancy");
@@ -1488,7 +1488,6 @@ fn authenticate_product_core(
     accounts: FoundingAccounts<'_, '_>,
     request: &ClaimsFoundingRequestV5,
     custody_context: [u8; 32],
-    rent: &Rent,
 ) -> Result<MarketViewV2, ProgramError> {
     if accounts.core_market.key.to_bytes() != request.market()
         || accounts.core_market.owner != accounts.core_program.key
@@ -1531,7 +1530,6 @@ fn authenticate_product_core(
     };
     authenticate_runtime_product_basis_core_with_rent_v3(
         accounts.registry,
-        rent,
         accounts.core_market,
         accounts.core_program,
         ProductRuntimeFrameV3 {

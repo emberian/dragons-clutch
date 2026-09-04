@@ -19,6 +19,7 @@ custom-panic = []
 
 [dependencies]
 dclutch-account-profile-contract = { path = "../../crates/dclutch-account-profile-contract" }
+dclutch-capability-contract = { path = "../../crates/dclutch-capability-contract" }
 dclutch-capability-program-contract = { path = "../../crates/dclutch-capability-program-contract" }
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
 dclutch-effect-kernel = { path = "../../crates/dclutch-effect-kernel" }

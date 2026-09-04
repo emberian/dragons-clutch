@@ -30,7 +30,8 @@ use dclutch_account_profile_contract::{
 use dclutch_capability_contract::{
     CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingLedgerDerivationV2,
     CapabilityManifestV1, ContentId, FundingLedgerCloseCustodyV2, FundingLedgerStatusV2,
-    FundingLedgerV2, manifest_entry_for_ledger_row_v2, validate_funding_ledger_masks_v2,
+    FundingLedgerV2, funding::funded_rent_persists_v1, manifest_entry_for_ledger_row_v2,
+    validate_funding_ledger_masks_v2,
 };
 use dclutch_capability_program_contract::{
     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1, CapabilityProgramV1, CapabilityRegistersV2,
@@ -280,7 +281,6 @@ pub fn process_activation(
         suffix.registry.key,
         suffix.release_raw,
         suffix.release_staging,
-        &rent,
         capability_release,
         &release_data,
         release_raw_coordinate.0,
@@ -289,7 +289,6 @@ pub fn process_activation(
     let set_descriptor_data = authenticate_set_descriptor(
         &suffix,
         generation,
-        &rent,
         capability_release,
         release_data.as_ref(),
         request.family_request(),
@@ -387,7 +386,6 @@ pub fn process_activation(
         suffix.registry.key,
         suffix.config_raw,
         suffix.config_staging,
-        &rent,
         request.selection().config().to_bytes(),
         &config_data,
         config_raw_coordinate.0,
@@ -409,7 +407,6 @@ pub fn process_activation(
         suffix.registry.key,
         suffix.profile_raw,
         suffix.profile_staging,
-        &rent,
         ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1,
         descriptor.account_profile().to_bytes(),
         &profile_data,
@@ -429,7 +426,6 @@ pub fn process_activation(
         suffix.registry.key,
         suffix.effect_raw,
         suffix.effect_staging,
-        &rent,
         SCHEMA_RELEASE_ID,
         descriptor.effect_schema().to_bytes(),
         &effect_data,
@@ -587,7 +583,6 @@ pub fn process_close(
         suffix.registry.key,
         suffix.release_raw,
         suffix.release_staging,
-        &rent,
         capability_release,
         &release_data,
         release_raw_coordinate.0,
@@ -596,7 +591,6 @@ pub fn process_close(
     let set_descriptor_data = authenticate_set_descriptor(
         &suffix,
         generation,
-        &rent,
         capability_release,
         release_data.as_ref(),
         request.family_request(),
@@ -657,7 +651,6 @@ pub fn process_close(
         suffix.registry.key,
         suffix.config_raw,
         suffix.config_staging,
-        &rent,
         context.selection().config().to_bytes(),
         &config_data,
         config_raw_coordinate.0,
@@ -679,7 +672,6 @@ pub fn process_close(
         suffix.registry.key,
         suffix.profile_raw,
         suffix.profile_staging,
-        &rent,
         ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1,
         descriptor.account_profile().to_bytes(),
         &profile_data,
@@ -698,7 +690,6 @@ pub fn process_close(
         suffix.registry.key,
         suffix.effect_raw,
         suffix.effect_staging,
-        &rent,
         SCHEMA_RELEASE_ID,
         descriptor.effect_schema().to_bytes(),
         &effect_data,
@@ -710,7 +701,7 @@ pub fn process_close(
     )
     .map_err(|_| TradingSbfError::Content)?;
 
-    let credit = authenticate_close_rent_credit(&suffix, market_state, &rent)?;
+    let credit = authenticate_close_rent_credit(&suffix, market_state)?;
     // The Rent Program authenticates the credit's owner/PDA but is not a
     // family runtime account: no CPI executes and no profile may grant it an
     // effect. The RentCredit and any later validation observations are the
@@ -907,7 +898,6 @@ impl<'accounts, 'info> AuthenticatedSuffixV2<'accounts, 'info> {
 fn authenticate_set_descriptor<'accounts, 'info>(
     suffix: &AuthenticatedSuffixV2<'accounts, 'info>,
     generation: CapabilityReleaseGenerationV1,
-    rent: &Rent,
     capability_release: [u8; 32],
     release_data: &[u8],
     family_request: &[u8],
@@ -943,7 +933,6 @@ fn authenticate_set_descriptor<'accounts, 'info>(
         suffix.registry.key,
         raw,
         staging,
-        rent,
         selected.schema().to_bytes(),
         selected.program().to_bytes(),
         data.as_ref(),
@@ -1149,7 +1138,6 @@ struct AuthenticatedCloseRentCreditV2 {
 fn authenticate_close_rent_credit(
     suffix: &AuthenticatedSuffixV2<'_, '_>,
     market: CoreState,
-    rent: &Rent,
 ) -> Result<AuthenticatedCloseRentCreditV2, ProgramError> {
     if suffix.effect_accounts.len() < CLOSE_RUNTIME_PREFIX_ACCOUNTS_V2 {
         return Err(TradingSbfError::Content.into());
@@ -1164,7 +1152,7 @@ fn authenticate_close_rent_credit(
         || credit_account.owner != rent_program.key
         || credit_account.data_len() != LIFECYCLE_RENT_CREDIT_BYTES_V2
         || credit_account.key.to_bytes() != market.rent_beneficiary.to_bytes()
-        || !rent.is_exempt(credit_account.lamports(), LIFECYCLE_RENT_CREDIT_BYTES_V2)
+        || !funded_rent_persists_v1(credit_account.lamports())
     {
         return Err(TradingSbfError::Content.into());
     }
@@ -1257,7 +1245,6 @@ fn authenticate_finalized_record_against(
     registry: &Pubkey,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
-    rent: &Rent,
     digest: [u8; 32],
     bytes: &[u8],
     expected_raw: Pubkey,
@@ -1268,7 +1255,7 @@ fn authenticate_finalized_record_against(
         || raw.is_writable
         || raw.executable
         || hash(bytes).to_bytes() != digest
-        || !rent.is_exempt(raw.lamports(), bytes.len())
+        || !funded_rent_persists_v1(raw.lamports())
         || staging.key != &expected_staging
         || staging.owner != &system_program::ID
         || staging.data_len() != 0
@@ -1289,7 +1276,6 @@ fn authenticate_finalized_record(
     registry: &Pubkey,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
-    rent: &Rent,
     schema: [u8; 32],
     digest: [u8; 32],
     bytes: &[u8],
@@ -1300,7 +1286,6 @@ fn authenticate_finalized_record(
         registry,
         raw,
         staging,
-        rent,
         digest,
         bytes,
         raw_coordinate.0,

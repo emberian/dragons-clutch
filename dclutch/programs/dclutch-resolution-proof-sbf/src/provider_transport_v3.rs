@@ -2,6 +2,7 @@
 
 use alloc::{boxed::Box, vec::Vec};
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2};
 use dclutch_pyth_svm::{
     FullPriceUpdateV2, GuardianSetV1, PostUpdateParamsView, PythReleaseV1, ReceiverConfigV2View,
@@ -134,13 +135,12 @@ fn process_submit(
     }
     let rent = authenticate_rent(frame.account(36))?;
     let clock = authenticate_clock(frame.account(35))?;
-    authenticate_current_submission(program_id, &request, frame, &rent)?;
-    let (release, config) = authenticate_submission_records(&request, frame, &rent)?;
+    authenticate_current_submission(program_id, &request, frame)?;
+    let (release, config) = authenticate_submission_records(&request, frame)?;
     if release.activation_time() > clock.unix_timestamp {
         return Err(ResolutionError::ProviderRelease.into());
     }
-    let authority =
-        authenticate_submission_provider(program_id, &request, frame, &rent, release, config)?;
+    let authority = authenticate_submission_provider(program_id, &request, frame, release, config)?;
     preflight_submit_outputs(program_id, &request, frame, &rent, authority)?;
 
     let submitter_before = frame.account(0).lamports();
@@ -240,11 +240,9 @@ fn process_reclaim(
     {
         return Err(ResolutionError::AccountFrame.into());
     }
-    let rent = authenticate_rent(frame.account(16))?;
     let clock = authenticate_clock(frame.account(15))?;
-    let lifecycle =
-        authenticate_reclaim_state(program_id, &request, frame, &rent, clock.unix_timestamp)?;
-    authenticate_reclaim_release(program_id, request.release_set, frame, &rent, lifecycle)?;
+    let lifecycle = authenticate_reclaim_state(program_id, &request, frame, clock.unix_timestamp)?;
+    authenticate_reclaim_release(program_id, request.release_set, frame, lifecycle)?;
 
     let authority_before = frame.account(3).lamports();
     let refund_before = frame.account(4).lamports();
@@ -339,11 +337,9 @@ fn process_abandon(
     {
         return Err(ResolutionError::AccountFrame.into());
     }
-    let rent = authenticate_rent(frame.account(16))?;
     let clock = authenticate_clock(frame.account(15))?;
-    let lifecycle =
-        authenticate_abandon_state(program_id, &request, frame, &rent, clock.unix_timestamp)?;
-    authenticate_reclaim_release(program_id, request.release_set, frame, &rent, lifecycle)?;
+    let lifecycle = authenticate_abandon_state(program_id, &request, frame, clock.unix_timestamp)?;
+    authenticate_reclaim_release(program_id, request.release_set, frame, lifecycle)?;
 
     let authority_before = frame.account(3).lamports();
     let refund_before = frame.account(4).lamports();
@@ -393,7 +389,6 @@ fn authenticate_abandon_state(
     program_id: &Pubkey,
     request: &ProviderAbandonRequestV3,
     frame: ReclaimFrameV3<'_, '_>,
-    rent: &Rent,
     current_unix_seconds: i64,
 ) -> Result<ProviderUpdateLifecycleV3, ProgramError> {
     let data = frame
@@ -426,7 +421,7 @@ fn authenticate_abandon_state(
     // route's entire admissibility rests on that statement.
     if frame.account(1).key != &expected_lifecycle
         || frame.account(1).owner != program_id
-        || !rent.is_exempt(frame.account(1).lamports(), data.len())
+        || !funded_rent_persists_v1(frame.account(1).lamports())
         || lifecycle.status != ProviderUpdateStatusV3::Submitted
         || lifecycle.terminal_sequence != 0
         || lifecycle.certificate != [0; 32]
@@ -574,7 +569,6 @@ fn authenticate_current_submission(
     program_id: &Pubkey,
     request: &ProviderSubmitRequestV3,
     frame: SubmitFrameV3<'_, '_>,
-    rent: &Rent,
 ) -> ProgramResult {
     let market_data = frame
         .account(5)
@@ -625,7 +619,6 @@ fn authenticate_current_submission(
         frame.account(14),
         frame.account(15),
         frame.account(6),
-        rent,
     )
 }
 
@@ -643,7 +636,6 @@ fn authenticate_infrastructure<'info>(
     resolution: &AccountInfo<'info>,
     resolution_programdata: &AccountInfo<'info>,
     activation: &AccountInfo<'info>,
-    rent: &Rent,
 ) -> ProgramResult {
     let profile_data = infrastructure
         .try_borrow_data()
@@ -656,7 +648,7 @@ fn authenticate_infrastructure<'info>(
             )
             .0
         || profile_data.len() != PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2
-        || !rent.is_exempt(infrastructure.lamports(), profile_data.len())
+        || !funded_rent_persists_v1(infrastructure.lamports())
     {
         return Err(ResolutionError::InfrastructureProfile.into());
     }
@@ -673,7 +665,6 @@ fn authenticate_infrastructure<'info>(
         registry.key,
         registry_artifact,
         registry_staging,
-        rent,
         ARTIFACT_RELEASE_SCHEMA_ID_V1,
         profile.registry().artifact_release().to_bytes(),
         &artifact_data,
@@ -763,7 +754,6 @@ struct ReceiverConfigFactsV3 {
 fn authenticate_submission_records(
     request: &ProviderSubmitRequestV3,
     frame: SubmitFrameV3<'_, '_>,
-    rent: &Rent,
 ) -> Result<(PythReleaseV1, ReceiverConfigFactsV3), ProgramError> {
     let material_data = frame
         .account(17)
@@ -773,7 +763,6 @@ fn authenticate_submission_records(
         frame.account(8).key,
         frame.account(17),
         frame.account(18),
-        rent,
         SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         request.source_material,
         &material_data,
@@ -790,7 +779,6 @@ fn authenticate_submission_records(
         frame.account(8).key,
         frame.account(19),
         frame.account(20),
-        rent,
         SOURCE_SPEC_SCHEMA_ID_V1,
         material.primary_source_spec().to_bytes(),
         &source_data,
@@ -806,7 +794,6 @@ fn authenticate_submission_records(
         frame.account(8).key,
         frame.account(21),
         frame.account(22),
-        rent,
         PROVIDER_RELEASE_SCHEMA_ID_V1,
         source.provider_release_id().to_bytes(),
         &provider_data,
@@ -823,7 +810,6 @@ fn authenticate_submission_records(
         frame.account(8).key,
         frame.account(23),
         frame.account(24),
-        rent,
         PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
         request.provider_release,
         &release_data,
@@ -840,7 +826,6 @@ fn authenticate_submission_records(
         frame.account(8).key,
         frame.account(25),
         frame.account(26),
-        rent,
         WINDOW_SPEC_SCHEMA_ID_V1,
         material.window_spec().to_bytes(),
         &window_data,
@@ -879,7 +864,6 @@ fn authenticate_submission_provider(
     program_id: &Pubkey,
     request: &ProviderSubmitRequestV3,
     frame: SubmitFrameV3<'_, '_>,
-    rent: &Rent,
     release: PythReleaseV1,
     config: ReceiverConfigFactsV3,
 ) -> Result<Pubkey, ProgramError> {
@@ -893,9 +877,9 @@ fn authenticate_submission_provider(
         || frame.account(29).owner != frame.account(27).key
         || frame.account(32).owner != frame.account(30).key
         || frame.account(33).owner != frame.account(30).key
-        || !rent.is_exempt(frame.account(29).lamports(), frame.account(29).data_len())
-        || !rent.is_exempt(frame.account(32).lamports(), frame.account(32).data_len())
-        || !rent.is_exempt(frame.account(33).lamports(), frame.account(33).data_len())
+        || !funded_rent_persists_v1(frame.account(29).lamports())
+        || !funded_rent_persists_v1(frame.account(32).lamports())
+        || !funded_rent_persists_v1(frame.account(33).lamports())
     {
         return Err(ResolutionError::ProviderRelease.into());
     }
@@ -1130,7 +1114,6 @@ fn authenticate_reclaim_state(
     program_id: &Pubkey,
     request: &ProviderReclaimRequestV3,
     frame: ReclaimFrameV3<'_, '_>,
-    rent: &Rent,
     current_unix_seconds: i64,
 ) -> Result<ProviderUpdateLifecycleV3, ProgramError> {
     let data = frame
@@ -1158,7 +1141,7 @@ fn authenticate_reclaim_state(
     .0;
     if frame.account(1).key != &expected_lifecycle
         || frame.account(1).owner != program_id
-        || !rent.is_exempt(frame.account(1).lamports(), data.len())
+        || !funded_rent_persists_v1(frame.account(1).lamports())
         || lifecycle.status != ProviderUpdateStatusV3::Consumed
         || lifecycle.bump != bump
         || lifecycle.generation != request.generation
@@ -1210,7 +1193,6 @@ fn authenticate_reclaim_release(
     program_id: &Pubkey,
     release_set: [u8; 32],
     frame: ReclaimFrameV3<'_, '_>,
-    rent: &Rent,
     lifecycle: ProviderUpdateLifecycleV3,
 ) -> ProgramResult {
     if frame.account(7).key.to_bytes() != lifecycle.registry_program {
@@ -1293,7 +1275,6 @@ fn authenticate_reclaim_release(
         frame.account(7).key,
         frame.account(11),
         frame.account(12),
-        rent,
         PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
         lifecycle.provider_release,
         &release_data,

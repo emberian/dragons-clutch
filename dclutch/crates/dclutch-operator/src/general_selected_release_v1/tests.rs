@@ -104,7 +104,7 @@ fn every_current_action_compiles_into_one_release_the_family_verifier_accepts() 
     for action in GENERAL_ACTIONS_V5 {
         encode_account_profile(input().external_widths, action)
             .unwrap_or_else(|error| panic!("{action:?} account profile refused: {error:?}"));
-        encode_lifecycle(input(), action)
+        encode_lifecycle(input())
             .unwrap_or_else(|error| panic!("{action:?} lifecycle refused: {error:?}"));
         encode_transition(action)
             .unwrap_or_else(|error| panic!("{action:?} transition refused: {error:?}"));
@@ -112,8 +112,12 @@ fn every_current_action_compiles_into_one_release_the_family_verifier_accepts() 
             .unwrap_or_else(|error| panic!("{action:?} effect refused: {error:?}"));
         canonical_request(action)
             .unwrap_or_else(|error| panic!("{action:?} request refused: {error:?}"));
-        compile_bundle(input(), action)
-            .unwrap_or_else(|error| panic!("{action:?} bundle refused: {error:?}"));
+        compile_bundle(
+            input(),
+            action,
+            &encode_lifecycle(input()).expect("family policy"),
+        )
+        .unwrap_or_else(|error| panic!("{action:?} bundle refused: {error:?}"));
     }
     let release = general_selected_release_v1(input()).expect("General release");
 
@@ -382,10 +386,36 @@ fn a_substituted_bundle_program_set_or_config_refuses() {
         Some(GeneralSelectedReleaseErrorV1::Release)
     );
 
-    // A bundle whose ACTION tag is right but whose lifecycle policy came from a
-    // different action -- the substitution a wrong-seed release would make.
+    // A bundle whose ACTION tag is right but whose lifecycle policy is one
+    // ACTION'S rather than the family's -- the substitution a wrong-seed release
+    // would make, and the exact artifact cohort-15 was founded on.
+    //
+    // Swapping bundle 0's policy for bundle 2's used to be this case and is now
+    // a no-op the release cannot see, because all fifteen bundles publish ONE
+    // policy. That is the property being crossed, not a check being dropped: the
+    // substitution that remains possible is a policy from OUTSIDE the family
+    // catalogue, and it is the one that matters.
     let mut relifecycled = canonical.clone();
-    relifecycled.bundles[0].lifecycle_policy = canonical.bundles[2].lifecycle_policy.clone();
+    let action = GENERAL_ACTIONS_V5[2];
+    let bytes =
+        dclutch_general_adapter_contract::state_artifacts_v3::general_state_lifecycle_bytes_v5(
+            action,
+        )
+        .expect("per-action width");
+    let mut scratch = vec![0_u8; bytes];
+    let mut per_action = vec![0_u8; bytes];
+    dclutch_general_adapter_contract::state_artifacts_v3::encode_general_state_lifecycle_v5_atomic(
+        action,
+        Some(
+            GeneralChildRentWidthsV5::new(input().outcome_count, input().token_account_bytes)
+                .expect("child widths"),
+        ),
+        &mut scratch,
+        &mut per_action,
+    )
+    .expect("per-action policy");
+    assert_ne!(per_action, canonical.bundles[0].lifecycle_policy);
+    relifecycled.bundles[0].lifecycle_policy = per_action;
     assert_eq!(
         validate_general_selected_release_v1(&relifecycled, input()).err(),
         Some(GeneralSelectedReleaseErrorV1::Release)
@@ -736,7 +766,7 @@ fn a_substituted_activation_record_refuses() {
     );
 }
 
-/// FIFTEEN ACTIONS, FIFTEEN DERIVATION POLICIES, AND A MANIFEST ENTRY HOLDS ONE.
+/// FIFTEEN ACTIONS, ONE DERIVATION POLICY, AND A MANIFEST ENTRY HOLDS ONE.
 ///
 /// `CapabilityProgramV4::validate_selection` — the function
 /// `reauthenticate_top_level_root_roles_v3` runs over the SELECTED action's
@@ -745,26 +775,26 @@ fn a_substituted_activation_record_refuses() {
 /// entry.child_derivation_id()`. A Market's capability manifest carries ONE
 /// entry per capability root, so it can hold exactly one such id.
 ///
-/// `compile_bundle` sets each action descriptor's `derivation_policy` to
-/// `digest(lifecycle_policy)`, and `encode_lifecycle` compiles the lifecycle
-/// PER ACTION because the child rent widths are per action. The General
-/// family's own `validate_descriptor` then pins `derivation_policy ==
-/// lifecycle().program()`, so the per-action value is not incidental — it is
-/// required. The two rules are jointly satisfiable for one action at a time.
+/// This test used to assert the OPPOSITE of what it asserts now, and the
+/// inversion is the wall being crossed rather than a test being relaxed.
+/// `compile_bundle` used to set each action descriptor's `derivation_policy` to
+/// the digest of a policy compiled PER ACTION, because the child rent widths are
+/// per action; the family's own `validate_descriptor` pins `derivation_policy ==
+/// lifecycle().program()`, so the fifteen values were not incidental but
+/// required, and the two rules were jointly satisfiable for one action at a
+/// time.
 ///
 /// Measured on devnet 2026-09-04: cohort-15's General market activated (the
-/// activation descriptor carries the FIRST action's policy, and so does the
+/// activation descriptor carries the first action's policy, and so did the
 /// manifest entry the founding compiled from `bundles.first()`) and its
 /// OpenBatch simulation refused `0x4015` after 128,724 CU, on this conjunct
-/// alone. Re-founding cannot repair it; it can only choose which single action
-/// the Market is able to run. The Direct family does not have this shape: its
-/// non-ordinary bundles carry `ordinary.derivation_policy()`, so one entry binds
-/// every Direct action.
-/// WHAT THE REPAIR IS NOT, MEASURED 2026-09-04 BEFORE ANYONE BUILT IT.
+/// alone. Re-founding could not repair it; it could only choose which single
+/// action the Market was able to run.
 ///
-/// The obvious reading of this wall is "give the manifest an entry per action".
-/// It is unbuildable, at three independent layers, and each one refuses before a
-/// per-action entry could exist:
+/// WHAT THE REPAIR IS NOT, and why the obvious one is unbuildable.
+///
+/// "Give the manifest an entry per action" is refused at three independent
+/// layers, each before a per-action entry could exist:
 ///
 /// 1. A manifest is KEYED BY `kind_id` and strictly ascending in it
 ///    (`dclutch-capability-contract/src/lib.rs` `validate_manifest` and
@@ -780,36 +810,26 @@ fn a_substituted_activation_record_refuses() {
 ///    and read on every hot action. Fifteen entries with one persisted index buy
 ///    nothing.
 ///
-/// AND DIRECT DOES NOT HAVE PER-ACTION ENTRIES EITHER. Its non-ordinary bundles
-/// carry `ordinary.derivation_policy()` -- `begin_retiring_bundle_v1.rs:131`,
-/// `native_close_bundle_v1.rs:187`, `close_maker_bundle_v1.rs:137`,
-/// `activation_bundle_v1.rs:231`, each re-pinned by its own validator. That is
-/// FIFTEEN DESCRIPTORS SHARING ONE POLICY, which is the shape General owes, and
-/// it leaves `artifacts_v3.rs:522` untouched because all fifteen would then name
-/// the same lifecycle record.
+/// WHAT THE REPAIR IS. Direct's shape: fifteen descriptors sharing ONE policy.
+/// Its non-ordinary bundles carry `ordinary.derivation_policy()` --
+/// `begin_retiring_bundle_v1.rs:131`, `native_close_bundle_v1.rs:187`,
+/// `close_maker_bundle_v1.rs:137`, `activation_bundle_v1.rs:231` -- and its
+/// registered Sell and Buy go further and share one lifecycle ARTIFACT, which is
+/// the half General needed, because General's fifteen descriptors are all V4 and
+/// all pin `derivation_policy == lifecycle().program()`.
 ///
-/// The lever already exists and is already `None` for every General quote:
-/// `LifecycleCurrentRentQuoteInputV5.action: Option<u32>`
-/// (`dclutch-account-profile-contract/src/lifecycle_v3/encode.rs`), which Direct
-/// used to make one policy serve its registered Sell and Buy -- the third way
-/// its own record at
-/// `programs/dclutch-trading-sbf/program-test/tests/direct_registered_creation_hot.rs`
-/// says it found after rejecting both of the two this comment used to offer.
-/// What General owes beyond that is the rest of the policy: `lifecycle_counts`
-/// (`general-adapter-contract/src/state_artifacts_v3.rs`) gives each action a
-/// different `(recipes, seeds, plans)` triple, so the fifteen policies differ in
-/// WIDTH and not only in content, and a unified one is their union.
-///
-/// A second thing this test cannot see, and the reason devnet found the wall
-/// before the ladder did: the General program-test builds its manifest entry
-/// FROM the OpenBatch bundle
-/// (`programs/dclutch-trading-sbf/program-test/general-hot/tests/open_batch.rs`),
-/// while the founding tool builds it from `bundles.first()` and lets the action
-/// come later. The ladder picks the action first and derives the entry; the
-/// founding picks the entry and hopes. Until they agree, a green ladder says
-/// nothing about a founded market.
+/// So `encode_general_family_state_lifecycle_v5_atomic` publishes one policy
+/// whose tables are the UNION of the fifteen actions' declarations -- 20
+/// recipes, 94 seeds, 20 plans, 30 immutable identity bindings and 9 current-Rent
+/// quotes, 5,864 bytes -- and `artifacts_v3.rs:522`'s pin is now true for every
+/// action by construction rather than repaired for one. The two levers Direct
+/// named are both used: `LifecycleCurrentRentQuoteInputV5.action`, which was
+/// `None` for every General quote, now scopes each declaration so that fourteen
+/// register banks are unchanged by the policy existing; and
+/// `validate_account_profile_for_action`, which is the only sound reading of a
+/// policy whose actions present frames from 9 to 103 fixed accounts.
 #[test]
-fn every_action_descriptor_carries_its_own_derivation_policy() {
+fn every_action_descriptor_carries_the_one_family_derivation_policy() {
     let release = general_selected_release_v1(input()).expect("release");
     let policies: Vec<[u8; 32]> = release
         .bundles
@@ -822,19 +842,17 @@ fn every_action_descriptor_carries_its_own_derivation_policy() {
         })
         .collect();
     assert_eq!(policies.len(), GENERAL_SELECTED_ACTION_COUNT_V1);
-    for (left, left_policy) in policies.iter().enumerate() {
-        for (right, right_policy) in policies.iter().enumerate() {
-            if left != right {
-                assert_ne!(
-                    left_policy, right_policy,
-                    "actions {:?} and {:?} share a derivation policy",
-                    release.bundles[left].action, release.bundles[right].action
-                );
-            }
-        }
+    let family = policies[0];
+    for (index, policy) in policies.iter().enumerate() {
+        assert_eq!(
+            *policy, family,
+            "action {:?} does not carry the family derivation policy",
+            release.bundles[index].action
+        );
     }
 
     // The pair cohort-15 measured, by name rather than by index arithmetic.
+    // This assertion was `assert_ne!` and was the wall.
     let policy_for = |wanted: Action| {
         release
             .bundles
@@ -843,15 +861,226 @@ fn every_action_descriptor_carries_its_own_derivation_policy() {
             .map(|index| policies[index])
             .expect("the release carries this action")
     };
-    assert_ne!(
+    assert_eq!(
         policy_for(GENERAL_ACTIONS_V5[0]),
         policy_for(Action::OpenBatch),
-        "a manifest entry compiled from the first bundle cannot bind OpenBatch"
+        "an entry compiled from the first bundle must bind OpenBatch"
     );
 
-    // That the activation descriptor carries the FIRST bundle's policy — which
-    // is why the Market activated and its OpenBatch could not — is already
-    // pinned by `the_three_activation_records_close_the_triangle_the_seam_authenticates`
-    // above (`CapabilityProgramV1`, not V4 — the activation descriptor carries
-    // its own schema); this test is the other half: no second action shares it.
+    // ANTI-VACUITY. Equal descriptors would satisfy the loop above for the wrong
+    // reason, so the artifacts that are still per-action must still differ.
+    for action in [Action::OpenBatch, Action::VerifyCandidateRow, Action::Close] {
+        let index = release
+            .bundles
+            .iter()
+            .position(|bundle| bundle.action == action)
+            .expect("action");
+        assert_ne!(
+            release.bundles[index].descriptor,
+            release.bundles[0].descriptor
+        );
+        assert_ne!(
+            release.bundles[index].account_profile,
+            release.bundles[0].account_profile
+        );
+    }
+
+    // And the one policy every descriptor names is the family artifact, not one
+    // action's -- read off the descriptor rather than assumed from the compiler.
+    let lifecycle = CapabilityProgramV4::decode(&release.bundles[0].descriptor)
+        .expect("descriptor")
+        .lifecycle()
+        .program()
+        .to_bytes();
+    assert_eq!(lifecycle, family, "artifacts_v3.rs:522's pin, read back");
+    assert_eq!(
+        release.bundles[0].lifecycle_policy.len(),
+        general_family_state_lifecycle_bytes_v5()
+    );
+    for bundle in &release.bundles {
+        assert_eq!(
+            bundle.lifecycle_policy, release.bundles[0].lifecycle_policy,
+            "{:?} publishes a different lifecycle artifact",
+            bundle.action
+        );
+    }
+}
+
+/// THE HOSTILE: a manifest entry carrying a PER-ACTION policy refuses.
+///
+/// This is cohort-15's founded entry, rebuilt from the artifact that Market was
+/// founded on -- one action's own lifecycle policy -- and joined to every
+/// action's descriptor the way `authenticate_descriptor_root_selection` joins
+/// them. `CapabilityProgramError::ManifestEntryMismatch` is the exact variant,
+/// and `programs/dclutch-trading-sbf/src/hot_v3.rs` maps every non-
+/// `SelectionMismatch` variant of this call to `TradingSbfError`
+/// `DescriptorManifestEntry`, which is the `0x4015` devnet published. The code
+/// is not spelled here: this crate cannot depend on the program, and a literal
+/// would be a second author for it.
+///
+/// The control is the adjacent `Ok(())`: the SAME join, with the family policy
+/// in the entry, admits all fifteen. Without it this test would pass on an entry
+/// that refuses everything.
+#[test]
+fn a_per_action_derivation_policy_in_the_entry_refuses_every_action() {
+    use dclutch_capability_contract::{
+        ActivationPolicy, CapabilityEntryV1, CompartmentFundingV1,
+        ContentId as CapabilityContentId, FundingAmountsV1, FundingQuoteV1,
+        MAX_DEPENDENCIES_PER_CAPABILITY,
+    };
+    use dclutch_capability_program_contract::Error as CapabilityProgramError;
+    use dclutch_general_adapter_contract::state_artifacts_v3::{
+        encode_general_state_lifecycle_v5_atomic, general_state_lifecycle_bytes_v5,
+    };
+    use dclutch_release_set_contract::CapabilityExecutionSelectionV1;
+
+    let release = general_selected_release_v1(input()).expect("release");
+    let program_set_id = hash(&release.program_set).to_bytes();
+    let config_id = release.publication.config_id;
+    let first = CapabilityProgramV4::decode(&release.bundles[0].descriptor).expect("descriptor");
+
+    let none = CompartmentFundingV1::not_applicable();
+    let amounts = FundingAmountsV1::new(
+        CompartmentFundingV1::native_lamports(1).expect("root rent quote"),
+        none,
+        none,
+        none,
+        none,
+        none,
+        none,
+    )
+    .expect("funding amounts");
+    let entry_for = |derivation: [u8; 32]| {
+        CapabilityEntryV1::new(
+            CapabilityContentId::new(first.kind().to_bytes()).expect("kind"),
+            CapabilityContentId::new(program_set_id).expect("release"),
+            CapabilityContentId::new(config_id).expect("config"),
+            CapabilityContentId::new(first.capacity_profile().to_bytes()).expect("capacity"),
+            CapabilityContentId::new(first.root_schema().to_bytes()).expect("root schema"),
+            CapabilityContentId::new(derivation).expect("derivation"),
+            ActivationPolicy::PrepaidLazy,
+            1_000,
+            0,
+            [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+            FundingQuoteV1::new(amounts, None).expect("funding quote"),
+        )
+        .expect("manifest entry")
+    };
+    let selection = CapabilityExecutionSelectionV1::new(
+        0,
+        release_content(first.kind().to_bytes()),
+        release_content(first.kind().to_bytes()),
+        release_content(program_set_id),
+        release_content(config_id),
+    )
+    .expect("selection");
+
+    // cohort-15's entry: the FIRST action's own policy, which is what the
+    // per-action compiler published and the founding read off `bundles.first()`.
+    let cohort_fifteen = {
+        let action = GENERAL_ACTIONS_V5[0];
+        let bytes = general_state_lifecycle_bytes_v5(action).expect("per-action width");
+        let mut scratch = vec![0_u8; bytes];
+        let mut output = vec![0_u8; bytes];
+        encode_general_state_lifecycle_v5_atomic(action, None, &mut scratch, &mut output)
+            .expect("per-action policy");
+        hash(&output).to_bytes()
+    };
+    let family = first.derivation_policy().to_bytes();
+    assert_ne!(
+        cohort_fifteen, family,
+        "the hostile must really be a different policy, or it proves nothing"
+    );
+
+    let hostile = entry_for(cohort_fifteen);
+    let canonical = entry_for(family);
+    for bundle in &release.bundles {
+        let descriptor = CapabilityProgramV4::decode(&bundle.descriptor).expect("descriptor");
+        assert_eq!(
+            descriptor.validate_selection(selection, hostile),
+            Err(CapabilityProgramError::ManifestEntryMismatch),
+            "{:?} must refuse a per-action derivation policy",
+            bundle.action
+        );
+        assert_eq!(
+            descriptor.validate_selection(selection, canonical),
+            Ok(()),
+            "{:?} must be admitted by the family entry",
+            bundle.action
+        );
+    }
+}
+
+/// One release identity, one config identity: what a re-founding would carry.
+fn release_content(bytes: [u8; 32]) -> dclutch_core_contract::ContentId {
+    dclutch_core_contract::ContentId::new(bytes).expect("content identity")
+}
+
+/// ONE ACTION OUT OF FIFTEEN DISAGREEING IS REFUSED BY NAME, BY THE FAMILY.
+///
+/// This is the conjunct that makes `first_action_descriptor`'s "any member may
+/// stand for the set" a proved statement instead of a comment, and it is the
+/// release-level counterpart of the manifest-entry hostile above: that one
+/// checks what the CHAIN does with a disagreeing entry, this one checks that a
+/// disagreeing release never reaches a chain.
+///
+/// The hostile is built the way cohort-15's release actually was -- one action
+/// compiled against its OWN lifecycle policy rather than the family's -- and it
+/// is reachable because `compile_bundle` takes the policy. Without a producer
+/// this refusal would be a code with no way to occur, which is the shape that
+/// gets written, never exercised, and believed.
+#[test]
+fn one_action_compiled_against_its_own_lifecycle_policy_refuses_the_release() {
+    use dclutch_general_adapter_contract::state_artifacts_v3::{
+        encode_general_state_lifecycle_v5_atomic, general_state_lifecycle_bytes_v5,
+    };
+
+    let family = encode_lifecycle(input()).expect("family policy");
+    let hostile_action = Action::OpenBatch;
+    let bytes = general_state_lifecycle_bytes_v5(hostile_action).expect("per-action width");
+    let mut scratch = vec![0_u8; bytes];
+    let mut per_action = vec![0_u8; bytes];
+    encode_general_state_lifecycle_v5_atomic(hostile_action, None, &mut scratch, &mut per_action)
+        .expect("per-action policy");
+    assert_ne!(per_action, family, "the hostile must really differ");
+
+    let mut hostile = general_selected_release_v1(input()).expect("release");
+    let index = hostile
+        .bundles
+        .iter()
+        .position(|bundle| bundle.action == hostile_action)
+        .expect("OpenBatch bundle");
+    hostile.bundles[index] =
+        compile_bundle(input(), hostile_action, &per_action).expect("hostile bundle");
+    // The set names descriptor digests, so it moves with the bundle; rebuild it
+    // and the config from the hostile's own descriptors, or the release would be
+    // refused for a ProgramSet mismatch before the verifier ever ran.
+    let mut descriptors = [[0_u8; 32]; GENERAL_SELECTED_ACTION_COUNT_V1];
+    for (slot, bundle) in hostile.bundles.iter().enumerate() {
+        descriptors[slot] = digest(&bundle.descriptor);
+    }
+    hostile.program_set =
+        encode_program_set(&descriptors, hostile.activation.descriptor_id).expect("hostile set");
+    hostile.config = encode_config(input(), digest(&hostile.program_set)).expect("hostile config");
+
+    assert_eq!(
+        authenticate_release(&hostile, input()).err(),
+        Some(GeneralSelectedReleaseErrorV1::ReleaseAdmission(
+            GeneralReleaseErrorV3::EntryCoordinateMismatch
+        )),
+        "a release whose actions disagree about the entry coordinates must say so"
+    );
+
+    // ANTI-VACUITY: the same assembly with the family policy is admitted, so the
+    // refusal above is about the disagreement and not about the reassembly.
+    let mut control = general_selected_release_v1(input()).expect("release");
+    control.bundles[index] =
+        compile_bundle(input(), hostile_action, &family).expect("control bundle");
+    for (slot, bundle) in control.bundles.iter().enumerate() {
+        descriptors[slot] = digest(&bundle.descriptor);
+    }
+    control.program_set =
+        encode_program_set(&descriptors, control.activation.descriptor_id).expect("control set");
+    control.config = encode_config(input(), digest(&control.program_set)).expect("control config");
+    assert_eq!(authenticate_release(&control, input()), Ok(()));
 }

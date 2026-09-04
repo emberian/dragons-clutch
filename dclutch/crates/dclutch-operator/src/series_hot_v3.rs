@@ -248,7 +248,7 @@ fn build_series_occurrence_hot_v3(
         .ok_or(SeriesHotOperatorErrorV3::CheckedReleaseUnavailable)?;
     require_checked_outer(outer)?;
     let frame = authenticate_frame(state, outer)?;
-    authenticate_occurrence_records(state, frame.registry_program, &frame.rent)?;
+    authenticate_occurrence_records(state, frame.registry_program)?;
     let request = build_family_request(state, action, frame.series, frame.clock_slot, outer)?;
     let artifacts = artifacts_from_frame(state)?;
     let selection = SeriesArtifactSelectionV3 {
@@ -262,7 +262,7 @@ fn build_series_occurrence_hot_v3(
     }
     validate_runtime_profile(state, bundle)?;
     let accelerator_artifact_release =
-        validate_strategy_selection(state, outer, frame.registry_program, &frame.rent, bundle)?;
+        validate_strategy_selection(state, outer, frame.registry_program, bundle)?;
 
     let envelope = HotExecutionEnvelopeV3::new(
         u32::try_from(request.as_bytes().len())
@@ -329,7 +329,6 @@ struct AuthenticatedFrameV3<'a> {
     header: CapabilityRootHeaderV1,
     root: &'a ObservedAccount,
     registry_program: Pubkey,
-    rent: solana_program::rent::Rent,
     series: SeriesStateV3,
     clock_slot: u64,
 }
@@ -383,8 +382,6 @@ fn authenticate_frame<'a>(
     validate_injected_runtime(state)?;
     let observation = market.account.observation;
     validate_observation_set(state, observation)?;
-    let rent = decode_rent(&rent_account.account)
-        .map_err(|_| SeriesHotOperatorErrorV3::FixedFrameMismatch)?;
     let template = TemplateV3::decode(&fixed(state, HOT_CONFIG_RAW_ACCOUNT_V3)?.account.data)
         .map_err(|_| SeriesHotOperatorErrorV3::RecordMismatch)?;
     let series = SeriesStateV3::decode(
@@ -403,7 +400,6 @@ fn authenticate_frame<'a>(
         header,
         root: &root_meta.account,
         registry_program: registry.account.key,
-        rent,
         series,
         clock_slot: clock.slot,
     })
@@ -412,7 +408,6 @@ fn authenticate_frame<'a>(
 fn authenticate_occurrence_records(
     state: &SeriesOccurrenceHotStateV3,
     registry_program: Pubkey,
-    rent: &solana_program::rent::Rent,
 ) -> Result<(), SeriesHotOperatorErrorV3> {
     let template = fixed(state, HOT_CONFIG_RAW_ACCOUNT_V3)?;
     let template_staging = fixed(state, HOT_CONFIG_STAGING_ACCOUNT_V3)?;
@@ -420,13 +415,8 @@ fn authenticate_occurrence_records(
         schema_release_id: SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
         staging_cursor: template_staging.account.clone(),
     };
-    authenticate_finalized_record(
-        registry_program,
-        rent,
-        &template.account,
-        &template_finalization,
-    )
-    .map_err(|_| SeriesHotOperatorErrorV3::RecordMismatch)?;
+    authenticate_finalized_record(registry_program, &template.account, &template_finalization)
+        .map_err(|_| SeriesHotOperatorErrorV3::RecordMismatch)?;
     for (record, schema) in [
         (&state.occurrence, SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3),
         (&state.ticket, SERIES_TICKET_SCHEMA_RELEASE_ID_V3),
@@ -434,7 +424,7 @@ fn authenticate_occurrence_records(
         if record.finalization.schema_release_id != schema {
             return Err(SeriesHotOperatorErrorV3::RecordMismatch);
         }
-        authenticate_finalized_record(registry_program, rent, &record.raw, &record.finalization)
+        authenticate_finalized_record(registry_program, &record.raw, &record.finalization)
             .map_err(|_| SeriesHotOperatorErrorV3::RecordMismatch)?;
         require_runtime_account_once(state, &record.raw)?;
         require_runtime_account_once(state, &record.finalization.staging_cursor)?;
@@ -555,7 +545,6 @@ fn validate_strategy_selection(
     state: &SeriesOccurrenceHotStateV3,
     outer: CheckedHotOuterReleaseV3,
     registry_program: Pubkey,
-    rent: &solana_program::rent::Rent,
     bundle: SeriesArtifactBundleV3<'_>,
 ) -> Result<Option<[u8; 32]>, SeriesHotOperatorErrorV3> {
     match bundle.strategy.disposition() {
@@ -601,7 +590,6 @@ fn validate_strategy_selection(
     ] {
         authenticate_finalized_record(
             registry_program,
-            rent,
             account,
             &FinalizedRecordProof {
                 schema_release_id: schema,

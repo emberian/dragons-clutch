@@ -5010,3 +5010,197 @@ async fn a_donated_lamport_still_refuses_the_admission_across_the_same_rent_chan
         .await
         .expect("Core does not re-price the funding ledger on a terminal admission");
 }
+
+/// A RISEN RATE NO LONGER STRANDS A MARKET THE CLUSTER ALREADY FUNDED EITHER.
+///
+/// The two tests above take the direction devnet actually took, and the doc
+/// comment on the first of them says the other direction is safe: *"every OTHER
+/// rent check on the admission frame is a floor (`rent.is_exempt`), which a
+/// falling rate cannot break."* True, and exactly half the story. A RISING rate
+/// breaks every one of those floors, and it breaks them on the accounts nobody
+/// touched -- which is the same complaint the epoch test makes about exactness,
+/// one comparison operator over.
+///
+/// The census behind this test found 106 `rent.is_exempt` floors in `programs/`
+/// and `crates/` outside tests, and 104 of them read an account the enclosing
+/// function did not create. A pre-existing account's rent was fixed when it was
+/// funded; comparing it to today's minimum asks a question about the cluster.
+///
+/// **The runtime is the authority, and it grandfathers.** `solana-svm`
+/// `rent_calculator.rs` has no rent-collection path at all, `transition_allowed`
+/// refuses `RentExempt -> RentPaying`, and under SIMD-0392
+/// `get_pre_exec_account_rent_state` reads an account the rate left behind as
+/// `RentExempt` anyway. So the floors could only ever refuse a live account.
+/// See `dclutch_capability_contract::funding::funded_rent_persists_v1`.
+///
+/// PROVEN RED BY CONSTRUCTION. The loop below is the positive control and it is
+/// two-sided on every account the admission frame floors: each one must be
+/// exempt at the rate it was funded at AND under the risen minimum, so a rate
+/// that did not really move for these widths could not let this test pass. Run
+/// against the floors as they stood before this lane, the submission refused.
+#[tokio::test]
+async fn a_risen_rent_rate_no_longer_strands_a_market_the_cluster_already_funded() {
+    let mut fixture = fixture(MarketPrestateV1::Terminal);
+    let mut context = fixture
+        .test
+        .take()
+        .expect("unstarted ProgramTest")
+        .start_with_context()
+        .await;
+    let mut clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("ProgramTest Clock");
+    clock.unix_timestamp = TERMINAL_TIME + 1;
+    context.set_sysvar(&clock);
+
+    let cluster: solana_rent::Rent = context
+        .banks_client
+        .get_sysvar()
+        .await
+        .expect("ProgramTest Rent");
+
+    // Built while the cluster still charges what it charged when it funded the
+    // fixture, so the planner is not what this test is about. The floors under
+    // test live in the deployed Core ELF and are reached by the submission.
+    let admit = build_resolution_admit_terminal_v3(&admit_snapshot(&mut context, &fixture).await)
+        .expect("chain-derived AdmitTerminal at the funding rate");
+
+    let floored = [
+        ("market", fixture.market),
+        ("funding ledger", fixture.funding),
+        ("certificate", fixture.certificate),
+        ("source state", fixture.source),
+        ("activation cache", fixture.activation),
+        (
+            "capability manifest record",
+            fixture.capability_manifest.raw,
+        ),
+        ("source material record", fixture.source_material.raw),
+        ("product record", fixture.product.raw),
+        ("result domain record", fixture.domain.raw),
+        ("portfolio record", fixture.portfolio.raw),
+    ];
+    let mut before = Vec::new();
+    for (label, key) in floored {
+        before.push((
+            label,
+            key,
+            observed(&mut context, key)
+                .await
+                .unwrap_or_else(|| panic!("{label} must exist before the rate moves")),
+        ));
+    }
+
+    // THE EPOCH BOUNDARY, IN THE OTHER DIRECTION. Doubling is not a cosmetic
+    // choice: it puts every account the frame floors strictly under the new
+    // minimum, which is what the assertions below require and what a smaller
+    // move would not guarantee for the narrowest of them.
+    let mut raised = cluster;
+    raised.lamports_per_byte = cluster
+        .lamports_per_byte
+        .checked_mul(2)
+        .expect("a doubled rate");
+    context.set_sysvar(&raised);
+
+    for (label, _, account) in &before {
+        let funded_minimum = cluster.minimum_balance(account.data.len());
+        let repriced_minimum = raised.minimum_balance(account.data.len());
+        assert!(
+            account.lamports >= funded_minimum,
+            "{label}: the fixture must have funded this at the rate the bank then charged \
+             ({} lamports over {} bytes, wanted {funded_minimum})",
+            account.lamports,
+            account.data.len()
+        );
+        assert!(
+            account.lamports < repriced_minimum,
+            "{label}: the risen rate must actually put this account under the old floor, or \
+             this test proves nothing ({} lamports over {} bytes, repriced {repriced_minimum})",
+            account.lamports,
+            account.data.len()
+        );
+    }
+
+    submit(&mut context, &[admit.instruction])
+        .await
+        .expect("Core admits a Market every one of whose accounts is under today's minimum");
+
+    let admitted = CoreState::decode(
+        &observed(&mut context, fixture.market)
+            .await
+            .expect("Market")
+            .data,
+    )
+    .expect("Core state");
+    assert_eq!(admitted.phase, Phase::Terminal);
+    assert_eq!(
+        admitted.terminal_receipt.map(|value| value.to_bytes()),
+        Some(fixture.certificate.to_bytes())
+    );
+    for (label, key, account) in &before {
+        let after = observed(&mut context, *key)
+            .await
+            .unwrap_or_else(|| panic!("{label} must still exist after the admission"));
+        assert_eq!(
+            after.lamports, account.lamports,
+            "{label}: the admission moved no lamport across the rate change"
+        );
+    }
+}
+
+/// THE REPAIR IS NOT A RELAXATION IN THIS DIRECTION EITHER.
+///
+/// The floors became rate-free; the EXACTNESS did not. A donated lamport on the
+/// funding ledger must still refuse across a risen rate exactly as it does
+/// across the fallen one, and for the same reason: the ledger's recorded rate
+/// prices it, so the comparison stays exact instead of becoming a `>=` that
+/// would admit a stranger's donation as custody.
+///
+/// The positive control is the pair: the submission built against the honest
+/// ledger commits on the same fixture at the same risen rate (the test above),
+/// and the planner refuses this one before a transaction exists.
+#[tokio::test]
+async fn a_donated_lamport_still_refuses_the_admission_across_a_risen_rent_rate() {
+    let mut fixture = fixture(MarketPrestateV1::Terminal);
+    let mut context = fixture
+        .test
+        .take()
+        .expect("unstarted ProgramTest")
+        .start_with_context()
+        .await;
+    let mut clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("ProgramTest Clock");
+    clock.unix_timestamp = TERMINAL_TIME + 1;
+    context.set_sysvar(&clock);
+
+    let cluster: solana_rent::Rent = context
+        .banks_client
+        .get_sysvar()
+        .await
+        .expect("ProgramTest Rent");
+    let mut raised = cluster;
+    raised.lamports_per_byte = cluster
+        .lamports_per_byte
+        .checked_mul(2)
+        .expect("a doubled rate");
+    context.set_sysvar(&raised);
+
+    let mut donated = observed(&mut context, fixture.funding)
+        .await
+        .expect("the Active funding ledger");
+    donated.lamports += 1;
+    context.set_account(
+        &fixture.funding,
+        &solana_account::AccountSharedData::from(donated),
+    );
+
+    assert!(
+        build_resolution_admit_terminal_v3(&admit_snapshot(&mut context, &fixture).await).is_err(),
+        "one donated lamport must refuse the admission the planner would build, at any rate"
+    );
+}

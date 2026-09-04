@@ -267,7 +267,7 @@ pub(crate) fn prepare(
     request: Request,
     rent: &Rent,
 ) -> Result<Box<PreparedFound>, solana_program::program_error::ProgramError> {
-    let (references, runtime) = authenticate_prepare_context(program_id, frame, rent)?;
+    let (references, runtime) = authenticate_prepare_context(program_id, frame)?;
     let common = FoundCommonAccounts::ordinary(frame);
     authenticate_rent_credit(&common, request.generation, references.release_set_id)?;
     let admission = authenticate_role(
@@ -294,7 +294,7 @@ pub(crate) fn prepare_with_admission(
     rent: &Rent,
     admission: Admission,
 ) -> Result<Box<PreparedFound>, solana_program::program_error::ProgramError> {
-    let (references, runtime) = authenticate_prepare_context(program_id, frame, rent)?;
+    let (references, runtime) = authenticate_prepare_context(program_id, frame)?;
     let common = FoundCommonAccounts::ordinary(frame);
     authenticate_rent_credit(&common, request.generation, references.release_set_id)?;
     finish_prepare(
@@ -313,12 +313,12 @@ pub(crate) fn prepare_projected_with_admission(
     admission: Admission,
     authority: ProjectedFoundAuthorityV2,
 ) -> Result<Box<PreparedFound>, solana_program::program_error::ProgramError> {
-    authenticate_projected_found(program_id, frame, rent)?;
+    authenticate_projected_found(program_id, frame)?;
     let release_set_id =
         observe_activation_release_set_id(frame.activation_cache, frame.registry_program)?;
     authenticate_projected_immutable_core_release(frame, release_set_id)?;
     let (references, runtime) =
-        authenticate_projected_references(frame, rent, release_set_id, authority)?;
+        authenticate_projected_references(frame, release_set_id, authority)?;
     let common = FoundCommonAccounts::projected(frame);
     authenticate_rent_credit(&common, request.generation, release_set_id)?;
     finish_prepare(
@@ -330,19 +330,18 @@ pub(crate) fn prepare_projected_with_admission(
 fn authenticate_prepare_context(
     program_id: &Pubkey,
     frame: &FoundAccounts<'_, '_>,
-    rent: &Rent,
 ) -> Result<
     (References, Box<AuthenticatedProductRuntimeV2>),
     solana_program::program_error::ProgramError,
 > {
-    authenticate_found(program_id, frame, rent)?;
+    authenticate_found(program_id, frame)?;
     // The complete Registry activation cache is the exact release projection.
     // Its canonical PDA supplies the release-set identity; Found does not
     // redundantly re-read the release-set raw/staging pair.
     let release_set_id =
         observe_activation_release_set_id(frame.activation_cache, frame.registry_program)?;
     authenticate_immutable_core_release(frame, release_set_id)?;
-    let (references, runtime) = authenticate_references(frame, rent, release_set_id)?;
+    let (references, runtime) = authenticate_references(frame, release_set_id)?;
     Ok((references, runtime))
 }
 
@@ -503,7 +502,6 @@ fn price_gate_refusal(error: ProductRuntimeReaderError) -> CoreSbfError {
 #[inline(never)]
 fn authenticate_references(
     frame: &FoundAccounts<'_, '_>,
-    rent: &Rent,
     expected_release_set_id: [u8; 32],
 ) -> Result<(References, Box<AuthenticatedProductRuntimeV2>), CoreSbfError> {
     let registry = frame.registry_program.key;
@@ -518,7 +516,6 @@ fn authenticate_references(
         registry,
         frame.realm_raw,
         frame.realm_staging,
-        rent,
         REALM_SCHEMA_RELEASE_ID_V1,
         &realm_data,
     )?;
@@ -526,7 +523,6 @@ fn authenticate_references(
 
     let runtime = Box::new(authenticate_product_runtime_v2(
         registry,
-        rent,
         ProductRuntimeFrameV2 {
             product: FinalizedRecordFrameV2 {
                 raw: frame.product_raw,
@@ -548,7 +544,6 @@ fn authenticate_references(
 
     let basis = authenticate_founding_product_basis_v3(
         registry,
-        rent,
         *runtime,
         FinalizedRecordFrameV2 {
             raw: frame.linked_basis_raw,
@@ -580,7 +575,6 @@ fn authenticate_references(
         registry,
         frame.resolution_raw,
         frame.resolution_staging,
-        rent,
         SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         &resolution_data,
     )?;
@@ -596,7 +590,6 @@ fn authenticate_references(
         registry,
         frame.source_spec_raw,
         frame.source_spec_staging,
-        rent,
         SOURCE_SPEC_SCHEMA_ID_V1,
         SOURCE_SPEC_BYTES,
         SourceSpecV1::decode,
@@ -605,7 +598,6 @@ fn authenticate_references(
         registry,
         frame.capacity_profile_raw,
         frame.capacity_profile_staging,
-        rent,
         SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1,
         SOURCE_CAPACITY_PROFILE_BYTES,
         SourceCapacityProfileV1::decode,
@@ -625,7 +617,6 @@ fn authenticate_references(
                 registry,
                 frame.manipulation_floor_raw,
                 frame.manipulation_floor_staging,
-                rent,
                 MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
                 MANIPULATION_FLOOR_V1_BYTES,
                 ManipulationFloorV1::decode,
@@ -657,7 +648,6 @@ fn authenticate_references(
         registry,
         frame.manifest_raw,
         frame.manifest_staging,
-        rent,
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         &manifest_data,
     )?;
@@ -688,7 +678,6 @@ fn authenticate_references(
 #[inline(never)]
 fn authenticate_projected_references(
     frame: &ProjectedFoundAccountsV2<'_, '_>,
-    rent: &Rent,
     release_set_id: [u8; 32],
     authority: ProjectedFoundAuthorityV2,
 ) -> Result<(References, Box<AuthenticatedProductRuntimeV2>), CoreSbfError> {
@@ -703,7 +692,6 @@ fn authenticate_projected_references(
         derive_record_pdas(registry, REALM_SCHEMA_RELEASE_ID_V1, authority.realm_id);
     let runtime = Box::new(authenticate_product_runtime_v2(
         registry,
-        rent,
         ProductRuntimeFrameV2 {
             product: FinalizedRecordFrameV2 {
                 raw: frame.product_raw,
@@ -731,7 +719,6 @@ fn authenticate_projected_references(
         registry,
         frame.manifest_raw,
         frame.manifest_staging,
-        rent,
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         &manifest_data,
     )?;
@@ -784,7 +771,6 @@ fn authenticate_source_record<T, E>(
     registry: &Pubkey,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
-    rent: &Rent,
     schema: [u8; 32],
     expected_width: usize,
     decode: fn(&[u8]) -> Result<T, E>,
@@ -796,7 +782,7 @@ fn authenticate_source_record<T, E>(
         return Err(CoreSbfError::Reference);
     }
     let (digest, bytes, _) =
-        authenticate_content_addressed_record(registry, raw, staging, rent, schema, &data)?;
+        authenticate_content_addressed_record(registry, raw, staging, schema, &data)?;
     let identity = SourceContentId::new(digest).map_err(|_| CoreSbfError::Reference)?;
     let value = decode(bytes).map_err(|_| CoreSbfError::Reference)?;
     Ok((identity, value))

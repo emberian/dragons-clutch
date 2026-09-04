@@ -195,14 +195,14 @@ pub(crate) fn process_direct_funding_activation_v1(
     }
     let state = authenticate_direct_market(direct, request.as_ref())?;
     authenticate_direct_activation(program_id, direct, request.as_ref())?;
-    authenticate_direct_source_records(direct, request.as_ref(), &rent)?;
+    authenticate_direct_source_records(direct, request.as_ref())?;
     let manifest_data = direct
         .capability_manifest
         .try_borrow_data()
         .map_err(|_| ResolutionError::Funding)?;
     let manifest =
         CapabilityManifestV1::decode(&manifest_data).map_err(|_| ResolutionError::Funding)?;
-    authenticate_direct_material_and_funding(direct, accounts, request.as_ref(), manifest, &rent)?;
+    authenticate_direct_material_and_funding(direct, accounts, request.as_ref(), manifest)?;
     authenticate_direct_source(program_id, direct, request.as_ref(), state)?;
     let manifest_id = CapabilityContentId::new(request.role.capability_manifest)
         .map_err(|_| ResolutionError::Funding)?;
@@ -256,7 +256,6 @@ fn authenticate_direct_material_and_funding(
     accounts: &[AccountInfo<'_>],
     request: &FundingActivationRequestV1,
     manifest: CapabilityManifestV1<'_>,
-    rent: &Rent,
 ) -> ProgramResult {
     let material_data = direct
         .source_material
@@ -264,13 +263,8 @@ fn authenticate_direct_material_and_funding(
         .map_err(|_| ResolutionError::SourceMaterial)?;
     let material =
         SourceMaterialV3::decode(&material_data).map_err(|_| ResolutionError::SourceMaterial)?;
-    let recovery_policy = authenticate_direct_recovery_policy(
-        direct,
-        accounts.get(18),
-        accounts.get(19),
-        material,
-        rent,
-    )?;
+    let recovery_policy =
+        authenticate_direct_recovery_policy(direct, accounts.get(18), accounts.get(19), material)?;
     authenticate_funding_entries(material, recovery_policy, manifest, request.role)
 }
 
@@ -439,7 +433,7 @@ pub(crate) fn process_direct_funding_close_v1(
     }
     let market = authenticate_direct_close_market(direct, request.as_ref())?;
     authenticate_direct_close_release(program_id, direct, request.as_ref())?;
-    authenticate_direct_close_records(direct, request.as_ref(), &rent)?;
+    authenticate_direct_close_records(direct, request.as_ref())?;
     let material_data = direct
         .source_material
         .try_borrow_data()
@@ -451,7 +445,6 @@ pub(crate) fn process_direct_funding_close_v1(
         accounts.get(19),
         accounts.get(20),
         material,
-        &rent,
     )?;
     let manifest_data = direct
         .capability_manifest
@@ -990,7 +983,6 @@ fn authenticate_direct_close_release(
 fn authenticate_direct_close_records(
     direct: DirectCloseAccounts<'_, '_>,
     request: &DirectFundingCloseRequestV1,
-    rent: &Rent,
 ) -> ProgramResult {
     let material_data = direct
         .source_material
@@ -1000,7 +992,6 @@ fn authenticate_direct_close_records(
         *direct.registry_program.key,
         direct.source_material,
         direct.source_material_staging,
-        rent,
         SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         request.role.source_material,
         &material_data,
@@ -1014,7 +1005,6 @@ fn authenticate_direct_close_records(
         *direct.registry_program.key,
         direct.capability_manifest,
         direct.capability_manifest_staging,
-        rent,
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         request.role.capability_manifest,
         &manifest_data,
@@ -1027,7 +1017,6 @@ fn authenticate_direct_close_recovery_policy(
     raw: Option<&AccountInfo<'_>>,
     staging: Option<&AccountInfo<'_>>,
     material: SourceMaterialV3,
-    rent: &Rent,
 ) -> Result<Option<RecoveryPolicyV2>, ProgramError> {
     match (material.recovery_policy(), raw, staging) {
         (Some(policy_id), Some(raw), Some(staging)) => {
@@ -1038,7 +1027,6 @@ fn authenticate_direct_close_recovery_policy(
                 *direct.registry_program.key,
                 raw,
                 staging,
-                rent,
                 RECOVERY_POLICY_SCHEMA_ID_V2,
                 policy_id.to_bytes(),
                 &policy_data,
@@ -1182,7 +1170,6 @@ fn authenticate_direct_activation(
 fn authenticate_direct_source_records(
     direct: DirectFundingAccounts<'_, '_>,
     request: &FundingActivationRequestV1,
-    rent: &Rent,
 ) -> ProgramResult {
     let material_data = direct
         .source_material
@@ -1192,7 +1179,6 @@ fn authenticate_direct_source_records(
         *direct.registry_program.key,
         direct.source_material,
         direct.source_material_staging,
-        rent,
         SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         request.role.source_material,
         &material_data,
@@ -1206,7 +1192,6 @@ fn authenticate_direct_source_records(
         *direct.registry_program.key,
         direct.capability_manifest,
         direct.capability_manifest_staging,
-        rent,
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         request.role.capability_manifest,
         &manifest_data,
@@ -1219,7 +1204,6 @@ fn authenticate_direct_recovery_policy(
     raw: Option<&AccountInfo<'_>>,
     staging: Option<&AccountInfo<'_>>,
     material: SourceMaterialV3,
-    rent: &Rent,
 ) -> Result<Option<RecoveryPolicyV2>, ProgramError> {
     match (material.recovery_policy(), raw, staging) {
         (Some(policy_id), Some(raw), Some(staging)) => {
@@ -1230,7 +1214,6 @@ fn authenticate_direct_recovery_policy(
                 *direct.registry_program.key,
                 raw,
                 staging,
-                rent,
                 RECOVERY_POLICY_SCHEMA_ID_V2,
                 policy_id.to_bytes(),
                 &policy_data,
@@ -1502,7 +1485,6 @@ pub(crate) fn process_core_effect(
         request,
         envelope_bytes,
         role_bytes,
-        &rent,
     )?;
     match request.action {
         ResolutionCoreActionV1::CreateFund => process_create(
@@ -1707,7 +1689,6 @@ fn authenticate_core(
     request: ResolutionRoleRequestV2,
     envelope_bytes: &[u8],
     role_bytes: &[u8],
-    rent: &Rent,
 ) -> Result<AuthenticatedCore, ProgramError> {
     let request_digest =
         Identity::new(hash(role_bytes).to_bytes()).map_err(|_| ResolutionError::Instruction)?;
@@ -1790,7 +1771,7 @@ fn authenticate_core(
     }
 
     authenticate_activation(program_id, common, envelope)?;
-    authenticate_source_records(common, state, request, rent)?;
+    authenticate_source_records(common, state, request)?;
     let envelope_len = u32::try_from(envelope_bytes.len())
         .map_err(|_| ResolutionError::Arithmetic)?
         .to_le_bytes();
@@ -1881,7 +1862,6 @@ fn authenticate_source_records(
     common: CommonAccounts<'_, '_>,
     state: CoreState,
     request: ResolutionRoleRequestV2,
-    rent: &Rent,
 ) -> ProgramResult {
     let material_data = common
         .source_material
@@ -1891,7 +1871,6 @@ fn authenticate_source_records(
         *common.registry_program.key,
         common.source_material,
         common.source_material_staging,
-        rent,
         SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         request.source_material,
         &material_data,
@@ -1910,7 +1889,6 @@ fn authenticate_source_records(
         *common.registry_program.key,
         common.capability_manifest,
         common.capability_manifest_staging,
-        rent,
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         request.capability_manifest,
         &manifest_data,
@@ -1946,7 +1924,7 @@ fn process_create<'info>(
     let material =
         SourceMaterialV3::decode(&material_data).map_err(|_| ResolutionError::SourceMaterial)?;
     let recovery_policy =
-        authenticate_recovery_policy(common, accounts.get(16), accounts.get(17), material, rent)?;
+        authenticate_recovery_policy(common, accounts.get(16), accounts.get(17), material)?;
     let manifest_data = common
         .capability_manifest
         .try_borrow_data()
@@ -2072,7 +2050,7 @@ fn process_verify(
     let material =
         SourceMaterialV3::decode(&material_data).map_err(|_| ResolutionError::SourceMaterial)?;
     let recovery_policy =
-        authenticate_recovery_policy(common, accounts.get(17), accounts.get(18), material, rent)?;
+        authenticate_recovery_policy(common, accounts.get(17), accounts.get(18), material)?;
     let manifest_data = common
         .capability_manifest
         .try_borrow_data()
@@ -2199,7 +2177,7 @@ fn process_admit(
     let material =
         SourceMaterialV3::decode(&material_data).map_err(|_| ResolutionError::SourceMaterial)?;
     let product_runtime =
-        authenticate_admit_product_runtime(common, &authenticated.state, material, accounts, rent)?;
+        authenticate_admit_product_runtime(common, &authenticated.state, material, accounts)?;
     let manifest_data = common
         .capability_manifest
         .try_borrow_data()
@@ -2315,13 +2293,7 @@ fn process_close<'info>(
     if clock.unix_timestamp <= 0 {
         return Err(ResolutionError::Sysvar.into());
     }
-    authenticate_finalized_funding_policy(
-        common,
-        accounts.get(20),
-        accounts.get(21),
-        request,
-        rent,
-    )?;
+    authenticate_finalized_funding_policy(common, accounts.get(20), accounts.get(21), request)?;
     let manifest_data = common
         .capability_manifest
         .try_borrow_data()
@@ -2620,7 +2592,6 @@ fn authenticate_finalized_funding_policy(
     raw: Option<&AccountInfo<'_>>,
     staging: Option<&AccountInfo<'_>>,
     request: &ResolutionRoleRequestV2,
-    rent: &Rent,
 ) -> ProgramResult {
     let material_data = common
         .source_material
@@ -2628,7 +2599,7 @@ fn authenticate_finalized_funding_policy(
         .map_err(|_| ResolutionError::SourceMaterial)?;
     let material =
         SourceMaterialV3::decode(&material_data).map_err(|_| ResolutionError::SourceMaterial)?;
-    let recovery_policy = authenticate_recovery_policy(common, raw, staging, material, rent)?;
+    let recovery_policy = authenticate_recovery_policy(common, raw, staging, material)?;
     let manifest_data = common
         .capability_manifest
         .try_borrow_data()
@@ -2643,7 +2614,6 @@ fn authenticate_recovery_policy(
     raw: Option<&AccountInfo<'_>>,
     staging: Option<&AccountInfo<'_>>,
     material: SourceMaterialV3,
-    rent: &Rent,
 ) -> Result<Option<RecoveryPolicyV2>, ProgramError> {
     match (material.recovery_policy(), raw, staging) {
         (Some(policy_id), Some(raw), Some(staging)) => {
@@ -2654,7 +2624,6 @@ fn authenticate_recovery_policy(
                 *common.registry_program.key,
                 raw,
                 staging,
-                rent,
                 RECOVERY_POLICY_SCHEMA_ID_V2,
                 policy_id.to_bytes(),
                 &policy_data,
@@ -3017,7 +2986,6 @@ fn authenticate_admit_product_runtime(
     state: &CoreState,
     material: SourceMaterialV3,
     accounts: &[AccountInfo<'_>],
-    rent: &Rent,
 ) -> Result<AuthenticatedProductRuntimeV2, ProgramError> {
     let product = FinalizedRecordFrameV2 {
         raw: accounts.get(16).ok_or(ResolutionError::AccountFrame)?,
@@ -3035,7 +3003,6 @@ fn authenticate_admit_product_runtime(
         .map_err(|_| ResolutionError::SourceMaterial)?;
     let runtime = authenticate_product_runtime_v2(
         common.registry_program.key,
-        rent,
         expected_product,
         ProductRuntimeFrameV2 {
             product,

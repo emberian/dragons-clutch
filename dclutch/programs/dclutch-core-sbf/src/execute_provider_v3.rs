@@ -8,6 +8,7 @@
 
 use alloc::{boxed::Box, vec::Vec};
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_market_core_codec::{
     Action, CoreState, MarketAdmissionV1, Phase, Product, Readiness, Request, Role, STATE_BYTES,
 };
@@ -33,10 +34,8 @@ use solana_program::{
     program::{get_return_data, invoke_signed},
     program_error::ProgramError,
     pubkey::Pubkey,
-    rent::Rent,
-    sysvar::SysvarSerialize,
 };
-use solana_sdk_ids::{system_program, sysvar};
+use solana_sdk_ids::system_program;
 
 use crate::{
     CoreSbfError,
@@ -76,7 +75,6 @@ const RESULT_DOMAIN: usize = 33;
 const PORTFOLIO: usize = 35;
 const LIFECYCLE: usize = PROVIDER_RESOLUTION_CORE_TAIL_START_V3 - 1;
 const UPDATE: usize = PROVIDER_RESOLUTION_CORE_TAIL_START_V3;
-const RENT: usize = PROVIDER_RESOLUTION_CORE_TAIL_START_V3 + 7;
 const SYSTEM: usize = PROVIDER_RESOLUTION_CORE_TAIL_START_V3 + 8;
 
 /// Invoke one provider request under Core's request-bound caller PDA.
@@ -134,8 +132,7 @@ pub(crate) fn process(
         ],
     )?;
 
-    let rent = read_rent(account(accounts, RENT)?)?;
-    let product = Box::new(authenticate_product(accounts, &state, &provider, &rent)?);
+    let product = Box::new(authenticate_product(accounts, &state, &provider)?);
 
     invoke_resolution(
         accounts,
@@ -146,7 +143,7 @@ pub(crate) fn process(
     )?;
     require_unchanged_market(account(accounts, MARKET)?, &state_bytes)?;
     let receipt = boxed_immediate_receipt(account(accounts, RESOLUTION_PROGRAM)?, &provider)?;
-    authenticate_terminal_poststate(accounts, &state, &provider, &receipt, &product, &rent)?;
+    authenticate_terminal_poststate(accounts, &state, &provider, &receipt, &product)?;
     Ok(())
 }
 
@@ -291,11 +288,9 @@ fn authenticate_product(
     accounts: &[AccountInfo<'_>],
     state: &CoreState,
     request: &ProviderExecutionRequestV3,
-    rent: &Rent,
 ) -> Result<Product, CoreSbfError> {
     let runtime = authenticate_selected_runtime_v2(
         account(accounts, REGISTRY)?.key,
-        rent,
         state.identity.product_record.to_bytes(),
         ProductRuntimeFrameV2 {
             product: record_frame(accounts, PRODUCT)?,
@@ -319,7 +314,6 @@ fn authenticate_terminal_poststate(
     request: &ProviderExecutionRequestV3,
     receipt: &ProviderExecutionReceiptV3,
     product: &Product,
-    rent: &Rent,
 ) -> Result<(), CoreSbfError> {
     if receipt.outcome_count != product.outcome_count || receipt.selector >= product.outcome_count {
         return Err(CoreSbfError::ChildAck);
@@ -364,15 +358,14 @@ fn authenticate_terminal_poststate(
     {
         return Err(CoreSbfError::ChildAck);
     }
-    authenticate_lifecycle(accounts, request, receipt, rent)?;
-    authenticate_certificate(accounts, state, request, receipt, product, rent)
+    authenticate_lifecycle(accounts, request, receipt)?;
+    authenticate_certificate(accounts, state, request, receipt, product)
 }
 
 fn authenticate_lifecycle(
     accounts: &[AccountInfo<'_>],
     request: &ProviderExecutionRequestV3,
     receipt: &ProviderExecutionReceiptV3,
-    rent: &Rent,
 ) -> Result<(), CoreSbfError> {
     let resolution_program = account(accounts, RESOLUTION_PROGRAM)?.key;
     let lifecycle_account = account(accounts, LIFECYCLE)?;
@@ -403,7 +396,7 @@ fn authenticate_lifecycle(
     if lifecycle_account.key != &expected
         || lifecycle_account.owner != resolution_program
         || lifecycle_account.executable
-        || !rent.is_exempt(lifecycle_account.lamports(), lifecycle_account.data_len())
+        || !funded_rent_persists_v1(lifecycle_account.lamports())
         || lifecycle.status != ProviderUpdateStatusV3::Consumed
         || lifecycle.generation != request.generation
         || lifecycle.terminal_sequence != request.terminal_sequence
@@ -434,7 +427,6 @@ fn authenticate_certificate(
     request: &ProviderExecutionRequestV3,
     receipt: &ProviderExecutionReceiptV3,
     product: &Product,
-    rent: &Rent,
 ) -> Result<(), CoreSbfError> {
     let resolution_program = account(accounts, RESOLUTION_PROGRAM)?.key;
     let certificate_account = account(accounts, CERTIFICATE)?;
@@ -458,10 +450,7 @@ fn authenticate_certificate(
     if certificate_account.key != &expected
         || certificate_account.owner != resolution_program
         || certificate_account.executable
-        || !rent.is_exempt(
-            certificate_account.lamports(),
-            certificate_account.data_len(),
-        )
+        || !funded_rent_persists_v1(certificate_account.lamports())
         || certificate.kind != ResolutionCertificateKindV2::ResolutionSuccess
         || certificate.market != request.market
         || certificate.route != request.provider_release
@@ -528,18 +517,6 @@ fn require_unchanged_market(
     } else {
         Err(CoreSbfError::Market)
     }
-}
-
-fn read_rent(account: &AccountInfo<'_>) -> Result<Rent, CoreSbfError> {
-    if account.key != &sysvar::rent::ID
-        || account.owner != &sysvar::ID
-        || account.is_signer
-        || account.is_writable
-        || account.executable
-    {
-        return Err(CoreSbfError::AccountFrame);
-    }
-    Rent::from_account_info(account).map_err(|_| CoreSbfError::AccountFrame)
 }
 
 fn record_frame<'accounts, 'info>(

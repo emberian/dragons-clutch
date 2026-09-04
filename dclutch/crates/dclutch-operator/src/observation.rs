@@ -9,6 +9,7 @@
 //! were. A shared fact does not belong to the first module that happened to
 //! need it.
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_record_contract::{
     ContentDigest, RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1, SchemaReleaseId,
 };
@@ -33,8 +34,11 @@ pub enum ObservationError {
     InvalidRent,
     /// Clock sysvar bytes or identity were invalid.
     InvalidClock,
-    /// An existing immutable account was not rent exempt.
-    AccountNotRentExempt,
+    /// An existing immutable account held no lamports, so it is residue an
+    /// earlier instruction drained and the runtime reaps at this transaction's
+    /// end. Its rent-exemption at TODAY's rate is deliberately not asserted:
+    /// see `dclutch_capability_contract::funding::funded_rent_persists_v1`.
+    AccountDrained,
     /// A content digest or cross-record semantic link differed.
     ContentLinkMismatch,
 }
@@ -61,14 +65,13 @@ pub struct FinalizedRecordProof {
 /// an arbitrary program-owned address as finalized evidence.
 pub fn authenticate_finalized_record(
     program_id: Pubkey,
-    rent: &Rent,
     account: &ObservedAccount,
     proof: &FinalizedRecordProof,
 ) -> Result<(), ObservationError> {
     if account.owner != program_id || account.executable {
         return Err(ObservationError::InvalidOwner);
     }
-    require_rent_exempt(rent, account)?;
+    require_funded_rent_persists(account)?;
     let schema = SchemaReleaseId::new(proof.schema_release_id)
         .map_err(|_| ObservationError::AddressMismatch)?;
     let digest = ContentDigest::new(hash(&account.data).to_bytes())
@@ -160,9 +163,16 @@ pub fn decode_clock(account: &ObservedAccount) -> Result<Clock, ObservationError
     Clock::from_account_info(&info).map_err(|_| ObservationError::InvalidClock)
 }
 
-fn require_rent_exempt(rent: &Rent, account: &ObservedAccount) -> Result<(), ObservationError> {
-    if !rent.is_exempt(account.lamports, account.data.len()) {
-        return Err(ObservationError::AccountNotRentExempt);
+/// Require a pre-existing observed account to still exist.
+///
+/// This asked the live Rent sysvar for today's minimum until 2026-09-04, which
+/// made every observation of a record funded at a cheaper rate refuse the
+/// moment the cluster raised one. The rent a funded account carries is the rate
+/// it was funded at, and the runtime never collects against it; what is left to
+/// refuse is residue.
+fn require_funded_rent_persists(account: &ObservedAccount) -> Result<(), ObservationError> {
+    if !funded_rent_persists_v1(account.lamports) {
+        return Err(ObservationError::AccountDrained);
     }
     Ok(())
 }

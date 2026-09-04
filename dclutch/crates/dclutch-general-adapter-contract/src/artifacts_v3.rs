@@ -338,8 +338,15 @@ pub fn authenticate_general_artifacts_v3<'a>(
         artifacts.lifecycle_policy,
     )
     .map_err(|_| GeneralArtifactErrorV3::LifecyclePolicy)?;
+    // FOR THE ACTION, not for the policy as a whole. General publishes ONE
+    // lifecycle policy for fifteen actions -- a manifest entry pins one
+    // `child_derivation_id` and cannot hold fifteen -- and those fifteen actions
+    // present fifteen different frames, from nine fixed accounts to a hundred
+    // and three. The whole-policy form asks whether a sibling action's plans fit
+    // a frame that was never built for them, which is a category error and not
+    // strictness; the Dealer LP family reached the same conclusion first.
     lifecycle_policy
-        .validate_account_profile(account_profile)
+        .validate_account_profile_for_action(account_profile, request.action as u32)
         .map_err(|_| GeneralArtifactErrorV3::LifecyclePolicy)?;
     if lifecycle_policy
         .action_plan_count(request.action as u32)

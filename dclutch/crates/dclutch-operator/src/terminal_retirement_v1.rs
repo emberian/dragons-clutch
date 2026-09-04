@@ -738,7 +738,6 @@ pub fn build_direct_native_close_v1(
     authenticate_close_system(snapshot)?;
     authenticate_finalized_record(
         snapshot.registry_program.key,
-        &rent,
         &snapshot.realm,
         &FinalizedRecordProof {
             schema_release_id: REALM_SCHEMA_RELEASE_ID_V1,
@@ -748,7 +747,6 @@ pub fn build_direct_native_close_v1(
     .map_err(|_| TerminalRetirementErrorV1::Record)?;
     authenticate_finalized_record(
         snapshot.registry_program.key,
-        &rent,
         &snapshot.manifest,
         &FinalizedRecordProof {
             schema_release_id: CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
@@ -765,7 +763,7 @@ pub fn build_direct_native_close_v1(
     let manifest = CapabilityManifestV1::decode(&snapshot.manifest.data)
         .map_err(|_| TerminalRetirementErrorV1::Record)?;
     let (root_header, root_state) = authenticate_close_root(snapshot, market, manifest)?;
-    authenticate_close_records(snapshot, &rent, root_header, manifest)?;
+    authenticate_close_records(snapshot, root_header, manifest)?;
     let selection = root_header.selection();
     let entry_index = selection.entry_index();
     let entry = manifest
@@ -783,7 +781,8 @@ pub fn build_direct_native_close_v1(
     {
         return Err(TerminalRetirementErrorV1::Projection);
     }
-    let funding = authenticate_close_funding(snapshot, market, manifest, selected_bit, required_union)?;
+    let funding =
+        authenticate_close_funding(snapshot, market, manifest, selected_bit, required_union)?;
     if snapshot.root.lamports < rent.minimum_balance(snapshot.root.data.len()) {
         return Err(TerminalRetirementErrorV1::Projection);
     }
@@ -1135,14 +1134,12 @@ fn authenticate_close_root(
 
 fn authenticate_close_records(
     snapshot: &DirectNativeCloseSnapshotV1,
-    rent: &solana_program::rent::Rent,
     header: CapabilityRootHeaderV1,
     manifest: CapabilityManifestV1<'_>,
 ) -> Result<(), TerminalRetirementErrorV1> {
     let selection = header.selection();
     authenticate_record(
         snapshot,
-        rent,
         &snapshot.program_set,
         &snapshot.program_set_staging,
         CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
@@ -1159,7 +1156,6 @@ fn authenticate_close_records(
         .map_err(|_| TerminalRetirementErrorV1::Record)?;
     authenticate_record(
         snapshot,
-        rent,
         &snapshot.close_descriptor,
         &snapshot.close_descriptor_staging,
         CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1,
@@ -1175,7 +1171,6 @@ fn authenticate_close_records(
         .map_err(|_| TerminalRetirementErrorV1::Record)?;
     authenticate_record(
         snapshot,
-        rent,
         &snapshot.config,
         &snapshot.config_staging,
         descriptor.config_schema().to_bytes(),
@@ -1183,7 +1178,6 @@ fn authenticate_close_records(
     )?;
     authenticate_record(
         snapshot,
-        rent,
         &snapshot.close_profile,
         &snapshot.close_profile_staging,
         direct_native_close_account_profile_schema_v1(),
@@ -1191,7 +1185,6 @@ fn authenticate_close_records(
     )?;
     authenticate_record(
         snapshot,
-        rent,
         &snapshot.close_effect,
         &snapshot.close_effect_staging,
         direct_native_close_effect_schema_v1(),
@@ -1223,7 +1216,6 @@ fn authenticate_close_records(
 
 fn authenticate_record(
     snapshot: &DirectNativeCloseSnapshotV1,
-    rent: &solana_program::rent::Rent,
     record: &ObservedAccount,
     staging: &ObservedAccount,
     schema: [u8; 32],
@@ -1231,7 +1223,6 @@ fn authenticate_record(
 ) -> Result<(), TerminalRetirementErrorV1> {
     authenticate_finalized_record(
         snapshot.registry_program.key,
-        rent,
         record,
         &FinalizedRecordProof {
             schema_release_id: schema,
@@ -1844,10 +1835,8 @@ fn authenticate_handoff_records(
     {
         return Err(TerminalRetirementErrorV1::Record);
     }
-    let rent = decode_rent(&snapshot.rent_sysvar).map_err(|_| TerminalRetirementErrorV1::Record)?;
     authenticate_finalized_record(
         snapshot.registry_program.key,
-        &rent,
         &snapshot.realm,
         &FinalizedRecordProof {
             schema_release_id: REALM_SCHEMA_RELEASE_ID_V1,

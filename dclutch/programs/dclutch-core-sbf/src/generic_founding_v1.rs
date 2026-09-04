@@ -8,8 +8,8 @@ use alloc::boxed::Box;
 
 use dclutch_capability_contract::{
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
-    FundingLedgerStatusV2, FundingLedgerV2, funding_ledger_bytes_v2,
-    validate_funding_ledger_masks_v2,
+    FundingLedgerStatusV2, FundingLedgerV2, funding::funded_rent_persists_v1,
+    funding_ledger_bytes_v2, validate_funding_ledger_masks_v2,
 };
 use dclutch_capability_program_contract::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
 use dclutch_claims_svm::founding_v5::{
@@ -574,7 +574,7 @@ fn prepare_generic_claims_permit(
     rent: &Rent,
 ) -> Result<GenericFoundingPermitPlanV1, CoreSbfError> {
     let lock_receipt = decode_lock_receipt(lock_receipt_bytes)?;
-    let product = authenticate_generic_product(frame, prepared, rent)?;
+    let product = authenticate_generic_product(frame, prepared)?;
     let projected =
         authenticate_generic_projected(program_id, frame, request, prepared, &lock_receipt)?;
     build_generic_found_permit(
@@ -633,7 +633,6 @@ fn process_open(
     claims_receipt_bytes: &[u8],
 ) -> Result<(), solana_program::program_error::ProgramError> {
     let frame = GenericOpenFrame::parse(program_id, accounts)?;
-    let rent = Rent::get().map_err(|_| CoreSbfError::Creation)?;
     let clock = Clock::get().map_err(|_| CoreSbfError::Creation)?;
     let roles = authenticate_generic_open_roles(&frame, request)?;
     let mut state = authenticate_generic_market(program_id, &frame, request)?;
@@ -649,7 +648,6 @@ fn process_open(
         &common,
         request.context().to_bytes(),
         request.founder().to_bytes(),
-        &rent,
         clock.slot,
         *state,
     )?;
@@ -659,7 +657,6 @@ fn process_open(
         request.beneficiary().to_bytes(),
         request.release_set().to_bytes(),
         request.generation(),
-        &rent,
     )?;
     let claims = decode_claims_receipt(claims_receipt_bytes)?;
     authenticate_claims_and_custody(&common, &permit, &claims, *state)?;
@@ -1072,11 +1069,9 @@ fn founding_controller_masks(
 fn authenticate_generic_product(
     frame: &GenericFoundAccounts<'_, '_>,
     prepared: &PreparedFound,
-    rent: &Rent,
 ) -> Result<GenericProductFacts, CoreSbfError> {
     let product = authenticate_founding_product_basis_v3(
         frame.found.registry_program.key,
-        rent,
         *prepared.runtime,
         FinalizedRecordFrameV2 {
             raw: frame.suffix.linked_basis_raw,
@@ -1764,13 +1759,12 @@ pub(crate) fn authenticate_permit(
     frame: &GenericFoundingOpenAccounts<'_, '_>,
     context: [u8; 32],
     founder: [u8; 32],
-    rent: &Rent,
     _current_slot: u64,
     state: CoreState,
 ) -> Result<Box<SeriesFoundingPermitV1>, CoreSbfError> {
     if frame.permit.owner != program_id
         || frame.permit.data_len() != SERIES_FOUNDING_PERMIT_BYTES_V1
-        || !rent.is_exempt(frame.permit.lamports(), SERIES_FOUNDING_PERMIT_BYTES_V1)
+        || !funded_rent_persists_v1(frame.permit.lamports())
     {
         return Err(CoreSbfError::Reference);
     }
@@ -1908,11 +1902,10 @@ pub(crate) fn authenticate_rent_credit(
     beneficiary: [u8; 32],
     release_set: [u8; 32],
     generation: u64,
-    rent: &Rent,
 ) -> Result<(), CoreSbfError> {
     if frame.rent_credit.owner != frame.rent_program.key
         || frame.rent_credit.data_len() != LIFECYCLE_RENT_CREDIT_BYTES_V2
-        || !rent.is_exempt(frame.rent_credit.lamports(), LIFECYCLE_RENT_CREDIT_BYTES_V2)
+        || !funded_rent_persists_v1(frame.rent_credit.lamports())
     {
         return Err(CoreSbfError::RentCredit);
     }

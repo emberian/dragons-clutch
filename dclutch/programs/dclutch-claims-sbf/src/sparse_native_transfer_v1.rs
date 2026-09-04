@@ -39,7 +39,7 @@ use dclutch_registry_activation_auth_v1::{
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo, hash::hash, program::set_return_data, program_error::ProgramError,
-    pubkey::Pubkey, rent::Rent, sysvar::SysvarSerialize,
+    pubkey::Pubkey,
 };
 use solana_sdk_ids::sysvar;
 
@@ -610,11 +610,8 @@ fn authenticate_product_and_core(
     market: LiabilityBasisMarketViewV2,
 ) -> Result<(), ProgramError> {
     let input = request.input();
-    let rent = Rent::from_account_info(accounts.rent)
-        .map_err(|_| SparseNativeTransferSbfErrorV1::Accounts)?;
     let product = authenticate_product_runtime_v3(
         accounts.registry.key,
-        &rent,
         ProductContentId::new(input.product_record_digest)
             .map_err(|_| SparseNativeTransferSbfErrorV1::Product)?,
         ProductRuntimeFrameV3 {

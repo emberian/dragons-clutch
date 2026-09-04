@@ -47,6 +47,7 @@ extern crate alloc;
 
 use alloc::{boxed::Box, vec, vec::Vec};
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_claims_svm::{
     CallerRole,
     liability_basis_state_v2::LiabilityBasisMarketViewV2,
@@ -98,8 +99,6 @@ use solana_program::{
     program::set_return_data,
     program_error::ProgramError,
     pubkey::Pubkey,
-    rent::Rent,
-    sysvar::SysvarSerialize,
 };
 use solana_sdk_ids::system_program;
 
@@ -286,10 +285,8 @@ fn authenticate_and_prepare(
     if terminal_digest != input.terminal_record_digest {
         return Err(ClaimsSbfError::Identity.into());
     }
-    let rent = Rent::from_account_info(&accounts[10]).map_err(|_| ClaimsSbfError::Accounts)?;
     let runtime = authenticate_product_runtime_v3(
         accounts[13].key,
-        &rent,
         ProductContentId::new(input.product_record_digest).map_err(|_| ClaimsSbfError::Identity)?,
         ProductRuntimeFrameV3 {
             product: record(&accounts[4], &accounts[5]),
@@ -316,7 +313,6 @@ fn authenticate_and_prepare(
         &accounts[EXPOSURE_RAW],
         &accounts[EXPOSURE_STAGING],
         accounts[13].key,
-        &rent,
         COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
         input.exposure_digest,
     )?;
@@ -327,7 +323,6 @@ fn authenticate_and_prepare(
             resolution_program: &accounts[RESOLUTION_PROGRAM],
             resolution_programdata: &accounts[RESOLUTION_PROGRAMDATA],
             certificate: &accounts[CERTIFICATE],
-            rent: &accounts[10],
         },
         input.release_set,
         core,
@@ -810,7 +805,6 @@ fn authenticate_finalized_record(
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
     owner: &Pubkey,
-    rent: &Rent,
     schema: [u8; 32],
     digest: [u8; 32],
 ) -> Result<(), ProgramError> {
@@ -827,7 +821,7 @@ fn authenticate_finalized_record(
         || raw.is_writable
         || raw.executable
         || hash(&bytes).to_bytes() != digest
-        || !rent.is_exempt(raw.lamports(), bytes.len())
+        || !funded_rent_persists_v1(raw.lamports())
         || staging.key != &expected_staging
         || staging.owner != &system_program::ID
         || staging.data_len() != 0
@@ -888,12 +882,10 @@ fn authenticate_zero_custody_accounts(
     {
         return Err(ClaimsSbfError::Identity.into());
     }
-    let rent = Rent::from_account_info(&accounts[10]).map_err(|_| ClaimsSbfError::Accounts)?;
     authenticate_finalized_record(
         &accounts[REALM],
         &accounts[REALM_STAGING],
         accounts[13].key,
-        &rent,
         REALM_SCHEMA_RELEASE_ID_V1,
         input.realm,
     )?;

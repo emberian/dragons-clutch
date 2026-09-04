@@ -67,6 +67,50 @@ pub fn derive_funded_rent_rate_v2(
     Ok(rate)
 }
 
+/// Whether a PRE-EXISTING account's funded rent still holds it, without asking
+/// the cluster what a byte costs today.
+///
+/// A floor written `lamports >= Rent::minimum_balance(len)` over an account
+/// some EARLIER transaction funded is not a statement about that account. It is
+/// a statement about the rate of the moment, and it refuses a live account the
+/// instant that rate rises. Devnet fell 6,333 -> 5,080 at the epoch-1141
+/// boundary with cohort-15 live on it and the fall broke every exactness check
+/// (`c0a1586b1`); a RISE breaks every floor the same way, in the other
+/// direction, and there is no direction a cluster is forbidden to move.
+///
+/// The runtime, not the program, is the authority on what a pre-existing
+/// account's rent buys, and `solana-svm 4.3.0-beta.2` `src/rent_calculator.rs`
+/// states it in three parts:
+///
+/// - **Rent is never collected.** The module carries no collection path at all,
+///   and `RENT_EXEMPT_RENT_EPOCH` exists so the field can be deleted. Nothing
+///   debits an account for its own storage, so no passage of time and no change
+///   of rate can move a funded account's balance.
+/// - **A raised rate cannot make a funded account rent-paying.** Under
+///   SIMD-0392 `get_pre_exec_account_rent_state` reads a `RentPaying` account as
+///   `RentExempt`, and `get_post_exec_account_rent_state` keeps it exempt for
+///   any balance that did not fall. An account funded at yesterday's cheaper
+///   rate is GRANDFATHERED by the runtime, not merely tolerated by it.
+/// - **No transaction can leave a live account under-rented.**
+///   `transition_allowed` refuses `RentExempt -> RentPaying` outright, so
+///   neither this program nor a stranger's can drain a funded account to a
+///   partial balance. The only exit the runtime permits is to zero.
+///
+/// So over a pre-existing account the rate-scaled floor decides exactly one
+/// case the runtime has not already decided, and this predicate is that case:
+/// `lamports == 0`, an account an earlier instruction of THIS transaction has
+/// already drained, whose data is residue the runtime reaps at the
+/// transaction's end. Rate-free, which is the whole point.
+///
+/// This is NOT the check for an account being created NOW. A creation must be
+/// exempt at today's rate or the runtime refuses the transaction outright, so a
+/// creating site reads the sysvar, funds against it, and records what it paid --
+/// see [`derive_funded_rent_rate_v2`].
+#[must_use]
+pub const fn funded_rent_persists_v1(account_lamports: u64) -> bool {
+    account_lamports != 0
+}
+
 /// Exact width of one typed compartment allocation.
 pub const FUNDING_ALLOCATION_BYTES: usize = generated_abi::CAPABILITY_FUNDING_ALLOCATION_BYTES_V1;
 /// Exact width of seven typed compartments plus two independent totals.

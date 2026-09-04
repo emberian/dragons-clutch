@@ -461,7 +461,6 @@ fn process_admit(
     let linked_digest = account_digest(accounts.basis_record)?;
     authenticate_runtime_product_basis_core_v3(
         accounts.registry,
-        accounts.rent,
         accounts.core_market,
         accounts.core_program,
         ProductRuntimeFrameV3 {

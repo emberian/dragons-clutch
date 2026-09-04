@@ -1467,7 +1467,6 @@ fn registry_owned_records_refuse_digest_keys_core_owner_and_substituted_registry
         registry_program,
         &registry_raw,
         &registry_staging,
-        &rent,
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         manifest_digest,
         &manifest_data,
@@ -1488,11 +1487,10 @@ fn registry_owned_records_refuse_digest_keys_core_owner_and_substituted_registry
             registry_program,
             &digest_as_key,
             &registry_staging,
-            &rent,
             CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
             manifest_digest,
             &manifest_data,
-            RecordKind::CapabilityManifest,
+            RecordKind::CapabilityManifest
         ),
         Err(ProgramError::Custom(
             ResolutionError::FinalizedRecord as u32
@@ -1511,11 +1509,10 @@ fn registry_owned_records_refuse_digest_keys_core_owner_and_substituted_registry
             registry_program,
             &core_raw,
             &core_staging,
-            &rent,
             CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
             manifest_digest,
             &manifest_data,
-            RecordKind::CapabilityManifest,
+            RecordKind::CapabilityManifest
         ),
         Err(ProgramError::Custom(
             ResolutionError::FinalizedRecord as u32
@@ -1526,11 +1523,10 @@ fn registry_owned_records_refuse_digest_keys_core_owner_and_substituted_registry
             substituted_registry,
             &registry_raw,
             &registry_staging,
-            &rent,
             CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
             manifest_digest,
             &manifest_data,
-            RecordKind::CapabilityManifest,
+            RecordKind::CapabilityManifest
         ),
         Err(ProgramError::Custom(
             ResolutionError::FinalizedRecord as u32

@@ -10,6 +10,7 @@
 //! seed contracts, and emits the exact child instruction. The onchain Claims
 //! adapter reauthenticates every observation.
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_claims_svm::{
     CallerRole, NO_POSITION_REVISION,
     liability_basis_state_v2::{
@@ -551,7 +552,6 @@ fn authenticate_common<'a>(
         observation.registry_program,
         REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
         descriptor_id,
-        observation.rent,
     )?;
     let representation_authority = Pubkey::find_program_address(
         &[RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2, &descriptor_id],
@@ -576,7 +576,6 @@ fn authenticate_common<'a>(
         observation.registry_program,
         dclutch_representation_composition_v3_kernel::COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
         descriptor.graph_digest(),
-        observation.rent,
     )?;
     let exposure = CompositionExposureBundleV3::decode(
         observation.graph.raw.data,
@@ -598,7 +597,7 @@ fn authenticate_common<'a>(
         observation.product_evidence.result_domain,
         observation.product_evidence.portfolio,
     ] {
-        authenticate_observed_record(record, observation.registry_program, observation.rent)?;
+        authenticate_observed_record(record, observation.registry_program)?;
     }
 
     let (roles, release_set) = authenticate_activation(observation, descriptor)?;
@@ -774,7 +773,6 @@ fn authenticate_product_representation_observation_v3(
     let graph_staging = graph_staging.info();
     let authenticated = authenticate_product_representation_v3(
         &observation.registry_program,
-        observation.rent,
         ProductContentId::new(product_digest).map_err(|_| Error::InvalidRepresentation)?,
         ProductContentId::new(descriptor_digest).map_err(|_| Error::InvalidRepresentation)?,
         RepresentationRuntimeContextV3 {
@@ -937,12 +935,11 @@ fn authenticate_record(
     registry_program: Pubkey,
     schema: [u8; 32],
     digest: [u8; 32],
-    rent: &Rent,
 ) -> Result<()> {
     if observation.schema_id != schema {
         return Err(Error::InvalidFinalizedRecord);
     }
-    authenticate_observed_record(observation, registry_program, rent)?;
+    authenticate_observed_record(observation, registry_program)?;
     if hash(observation.raw.data).to_bytes() != digest {
         return Err(Error::InvalidFinalizedRecord);
     }
@@ -952,7 +949,6 @@ fn authenticate_record(
 fn authenticate_observed_record(
     observation: FinalizedRecordObservationV2<'_>,
     registry_program: Pubkey,
-    rent: &Rent,
 ) -> Result<()> {
     require_nonzero(observation.schema_id)?;
     let digest = hash(observation.raw.data).to_bytes();
@@ -970,7 +966,7 @@ fn authenticate_observed_record(
         || observation.raw.owner != registry_program
         || observation.raw.executable
         || observation.raw.data.is_empty()
-        || !rent.is_exempt(observation.raw.lamports, observation.raw.data.len())
+        || !funded_rent_persists_v1(observation.raw.lamports)
         || observation.staging.key != staging
         || observation.staging.owner != system_program::ID
         || observation.staging.executable
@@ -1378,7 +1374,6 @@ fn authenticate_terminal_context(
         common.observation.registry_program,
         REALM_SCHEMA_RELEASE_ID_V1,
         realm_digest,
-        common.observation.rent,
     )?;
     if common.core.identity.realm_id.to_bytes() != realm_digest {
         return Err(Error::InvalidTerminal("realm-identity"));
@@ -1443,10 +1438,7 @@ fn authenticate_terminal_scenario(
         || observed.owner != common.roles.resolution
         || observed.executable
         || observed.data.len() != RESOLUTION_CERTIFICATE_BYTES_V2
-        || !common
-            .observation
-            .rent
-            .is_exempt(observed.lamports, observed.data.len())
+        || !funded_rent_persists_v1(observed.lamports)
     {
         return Err(Error::InvalidTerminal("certificate-frame"));
     }

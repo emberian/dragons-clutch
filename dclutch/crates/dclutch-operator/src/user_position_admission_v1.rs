@@ -6,6 +6,7 @@
 //! instruction plan. The two funding transfers and the Trading outer belong in
 //! one transaction so any Claims refusal rolls the entire admission back.
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_claims_svm::{
     liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_SEED_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
@@ -196,8 +197,8 @@ pub fn plan_user_position_admission_v1(
     let observation = same_finalized_observation(snapshot)?;
     let rent = decode_rent(&snapshot.rent_sysvar)
         .map_err(|_| UserPositionAdmissionPlanErrorV1::InvalidInfrastructure)?;
-    authenticate_infrastructure(snapshot, &rent)?;
-    let activated = authenticate_release_cache(snapshot, &rent)?;
+    authenticate_infrastructure(snapshot)?;
+    let activated = authenticate_release_cache(snapshot)?;
     for (role, program, programdata) in [
         (
             ExecutionRoleV1::Trading,
@@ -218,10 +219,10 @@ pub fn plan_user_position_admission_v1(
         authenticate_role_deployment(activated, role, program, programdata)?;
     }
 
-    let market = authenticate_claims_market(snapshot, &rent, activated)?;
-    let product = authenticate_product_graph(snapshot, &rent)?;
-    authenticate_core_market(snapshot, market, product, &rent)?;
-    authenticate_rent_credit(snapshot, market, &rent)?;
+    let market = authenticate_claims_market(snapshot, activated)?;
+    let product = authenticate_product_graph(snapshot)?;
+    authenticate_core_market(snapshot, market, product)?;
+    authenticate_rent_credit(snapshot, market)?;
     authenticate_vacancy(snapshot)?;
     assemble_plan(snapshot, observation, rent, market, product)
 }
@@ -270,7 +271,6 @@ fn same_finalized_observation(
 
 fn authenticate_infrastructure(
     snapshot: &UserPositionAdmissionSnapshotV1,
-    rent: &Rent,
 ) -> Result<(), UserPositionAdmissionPlanErrorV1> {
     if snapshot.system_program.key != system_program::ID
         || snapshot.system_program.owner != native_loader::ID
@@ -291,10 +291,7 @@ fn authenticate_infrastructure(
     }
     if snapshot.rent_credit.owner != snapshot.rent_program.key
         || snapshot.rent_credit.executable
-        || !rent.is_exempt(
-            snapshot.rent_credit.lamports,
-            snapshot.rent_credit.data.len(),
-        )
+        || !funded_rent_persists_v1(snapshot.rent_credit.lamports)
     {
         return Err(UserPositionAdmissionPlanErrorV1::InvalidRentCredit);
     }
@@ -303,13 +300,12 @@ fn authenticate_infrastructure(
 
 fn authenticate_release_cache<'a>(
     snapshot: &'a UserPositionAdmissionSnapshotV1,
-    rent: &Rent,
 ) -> Result<ActivatedExecutionReleaseSetViewV1<'a>, UserPositionAdmissionPlanErrorV1> {
     let cache = &snapshot.activation_cache;
     if cache.owner != snapshot.registry_program.key
         || cache.executable
         || cache.data.len() != ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1
-        || !rent.is_exempt(cache.lamports, cache.data.len())
+        || !funded_rent_persists_v1(cache.lamports)
     {
         return Err(UserPositionAdmissionPlanErrorV1::InvalidRelease);
     }
@@ -386,13 +382,12 @@ pub(crate) fn deployment_observation(
 
 fn authenticate_claims_market(
     snapshot: &UserPositionAdmissionSnapshotV1,
-    rent: &Rent,
     activated: ActivatedExecutionReleaseSetViewV1<'_>,
 ) -> Result<LiabilityBasisMarketViewV2, UserPositionAdmissionPlanErrorV1> {
     let account = &snapshot.claims_market;
     if account.owner != snapshot.claims_program.key
         || account.executable
-        || !rent.is_exempt(account.lamports, account.data.len())
+        || !funded_rent_persists_v1(account.lamports)
     {
         return Err(UserPositionAdmissionPlanErrorV1::InvalidClaimsMarket);
     }
@@ -420,7 +415,6 @@ fn authenticate_claims_market(
 
 fn authenticate_product_graph(
     snapshot: &UserPositionAdmissionSnapshotV1,
-    rent: &Rent,
 ) -> Result<ProductFactsV1, UserPositionAdmissionPlanErrorV1> {
     for (raw, staging, schema) in [
         (
@@ -446,7 +440,6 @@ fn authenticate_product_graph(
     ] {
         authenticate_finalized_record(
             snapshot.registry_program.key,
-            rent,
             raw,
             &FinalizedRecordProof {
                 schema_release_id: schema,
@@ -532,12 +525,11 @@ fn authenticate_core_market(
     snapshot: &UserPositionAdmissionSnapshotV1,
     market: LiabilityBasisMarketViewV2,
     product: ProductFactsV1,
-    rent: &Rent,
 ) -> Result<(), UserPositionAdmissionPlanErrorV1> {
     let account = &snapshot.core_market;
     if account.owner != snapshot.core_program.key
         || account.executable
-        || !rent.is_exempt(account.lamports, account.data.len())
+        || !funded_rent_persists_v1(account.lamports)
     {
         return Err(UserPositionAdmissionPlanErrorV1::InvalidCoreMarket);
     }
@@ -571,16 +563,12 @@ fn authenticate_core_market(
 fn authenticate_rent_credit(
     snapshot: &UserPositionAdmissionSnapshotV1,
     market: LiabilityBasisMarketViewV2,
-    rent: &Rent,
 ) -> Result<(), UserPositionAdmissionPlanErrorV1> {
     let credit = LifecycleRentCreditV2::decode(&snapshot.rent_credit.data)
         .map_err(|_| UserPositionAdmissionPlanErrorV1::InvalidRentCredit)?;
     if snapshot.rent_credit.owner != snapshot.rent_program.key
         || snapshot.rent_credit.executable
-        || !rent.is_exempt(
-            snapshot.rent_credit.lamports,
-            snapshot.rent_credit.data.len(),
-        )
+        || !funded_rent_persists_v1(snapshot.rent_credit.lamports)
         || credit.market().to_bytes() != market.logical_market
         || credit.release_set().to_bytes() != market.release_set
         || credit.generation() != market.generation

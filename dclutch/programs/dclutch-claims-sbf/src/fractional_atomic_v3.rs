@@ -51,8 +51,6 @@ use solana_program::{
     program::{invoke, set_return_data},
     program_error::ProgramError,
     pubkey::Pubkey,
-    rent::Rent,
-    sysvar::SysvarSerialize,
 };
 use spl_token_2022_interface::{
     extension::permissioned_burn::instruction as permissioned_burn_instruction,
@@ -70,7 +68,6 @@ use crate::{
 };
 
 const MARKET: usize = 1;
-const RENT: usize = 10;
 const REGISTRY: usize = 13;
 const TRADING_PROGRAM: usize = 14;
 const CLAIMS_PROGRAM: usize = 16;
@@ -167,8 +164,6 @@ fn authenticate_open_inputs(
     accounts: &[AccountInfo<'_>],
     request: &FractionalExposureRequestV2,
 ) -> Result<(), ProgramError> {
-    let rent =
-        Rent::from_account_info(account(accounts, RENT)?).map_err(|_| ClaimsSbfError::Accounts)?;
     let registry = account(accounts, REGISTRY)?;
 
     let terms_raw = account(accounts, FRACTIONAL_ATOMIC_TERMS_RAW_V3)?;
@@ -178,7 +173,6 @@ fn authenticate_open_inputs(
         .map_err(|_| ClaimsSbfError::Accounts)?;
     authenticate_finalized_rational_record(
         registry.key,
-        &rent,
         terms_raw,
         terms_staging,
         FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
@@ -218,7 +212,6 @@ fn authenticate_open_inputs(
         .map_err(|_| ClaimsSbfError::Accounts)?;
     authenticate_finalized_rational_record(
         registry.key,
-        &rent,
         behavior_raw,
         behavior_staging,
         TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
@@ -648,8 +641,6 @@ fn process_terminal(
         return Err(ClaimsSbfError::Accounts.into());
     }
     authenticate_terminal_tail_privileges(program_id, accounts, *request)?;
-    let rent =
-        Rent::from_account_info(account(accounts, RENT)?).map_err(|_| ClaimsSbfError::Accounts)?;
     let registry = account(accounts, REGISTRY)?;
     let terms_raw = account(accounts, FRACTIONAL_TERMINAL_TERMS_RAW_V3)?;
     let terms_staging = account(accounts, FRACTIONAL_TERMINAL_TERMS_STAGING_V3)?;
@@ -658,7 +649,6 @@ fn process_terminal(
         .map_err(|_| ClaimsSbfError::Accounts)?;
     authenticate_finalized_rational_record(
         registry.key,
-        &rent,
         terms_raw,
         terms_staging,
         FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
@@ -700,7 +690,6 @@ fn process_terminal(
         .map_err(|_| ClaimsSbfError::Accounts)?;
     authenticate_finalized_rational_record(
         registry.key,
-        &rent,
         behavior_raw,
         behavior_staging,
         TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,

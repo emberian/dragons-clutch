@@ -8,6 +8,7 @@ extern crate alloc;
 extern crate std;
 
 use dclutch_capability_contract::CapabilityManifestV1;
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_activation_auth_v1::{
     ActivationAuthErrorV1, cached_role_deployment_observation_v1,
@@ -435,7 +436,6 @@ pub(crate) fn authenticate_finalized_record(
     core_program: Pubkey,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
-    rent: &Rent,
     schema_id: [u8; 32],
     expected_digest: [u8; 32],
     bytes: &[u8],
@@ -444,7 +444,7 @@ pub(crate) fn authenticate_finalized_record(
     if raw.owner != &core_program
         || raw.executable
         || hash(bytes).to_bytes() != expected_digest
-        || !rent.is_exempt(raw.lamports(), bytes.len())
+        || !funded_rent_persists_v1(raw.lamports())
     {
         return Err(ResolutionError::FinalizedRecord.into());
     }

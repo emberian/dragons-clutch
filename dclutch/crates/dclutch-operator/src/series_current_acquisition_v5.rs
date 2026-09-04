@@ -50,7 +50,7 @@ use crate::{
     Finality, Observation, ObservedAccount,
     direct_inline_route_v3::{DirectHotFixedRouteV3, FinalizedRecordRouteV3},
     direct_inline_v3::ObservedAccountMetaV3,
-    observation::{FinalizedRecordProof, authenticate_finalized_record, decode_rent},
+    observation::{FinalizedRecordProof, authenticate_finalized_record},
     series_hot_v3::{
         CheckedSeriesShadowAcceleratorV3, SeriesCurrentHotStateV5, SeriesSelectedRoleKeysV5,
         authenticate_expire_permit_v5,
@@ -433,8 +433,6 @@ fn authenticate_fixed_release(
     {
         return Err(SeriesCurrentAcquisitionErrorV5::FixedFrame);
     }
-    let rent = decode_rent(&fixed.rent_sysvar)
-        .map_err(|_| SeriesCurrentAcquisitionErrorV5::FinalizedRecord)?;
     for (record, schema, digest) in [
         (
             &fixed.manifest,
@@ -487,14 +485,13 @@ fn authenticate_fixed_release(
             selected.artifact_ids.strategy,
         ),
     ] {
-        authenticate_record(fixed.registry_program.key, &rent, record, schema, digest)?;
+        authenticate_record(fixed.registry_program.key, record, schema, digest)?;
     }
     Ok(())
 }
 
 fn authenticate_record(
     registry: Pubkey,
-    rent: &solana_program::rent::Rent,
     record: &FinalizedRecordRouteV3,
     schema: [u8; 32],
     expected_digest: [u8; 32],
@@ -504,7 +501,6 @@ fn authenticate_record(
     }
     authenticate_finalized_record(
         registry,
-        rent,
         &record.raw,
         &FinalizedRecordProof {
             schema_release_id: schema,
@@ -687,8 +683,6 @@ fn assemble_strategy_accounts(
         accounts.into_iter().map(|account| account.key),
         SeriesCurrentAcquisitionErrorV5::Strategy,
     )?;
-    let rent =
-        decode_rent(&fixed.rent_sysvar).map_err(|_| SeriesCurrentAcquisitionErrorV5::Strategy)?;
     let strategy = ExecutionStrategyProgramV2::decode(&selected.artifacts.strategy)
         .map_err(|_| SeriesCurrentAcquisitionErrorV5::Strategy)?;
     let descriptor = CapabilityProgramV4::decode(&selected.descriptor)
@@ -702,7 +696,6 @@ fn assemble_strategy_accounts(
     }
     authenticate_record(
         fixed.registry_program.key,
-        &rent,
         shadow.certificate,
         EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
         certificate_id.to_bytes(),
@@ -735,7 +728,6 @@ fn assemble_strategy_accounts(
     }
     authenticate_record(
         fixed.registry_program.key,
-        &rent,
         shadow.artifact,
         ARTIFACT_RELEASE_SCHEMA_ID_V1,
         artifact_digest,
@@ -864,8 +856,6 @@ fn authenticate_selected_records(
     role_keys: SeriesSelectedRoleKeysV5,
     observation: Observation,
 ) -> Result<SeriesAcquiredRoleObservationsV5, SeriesCurrentAcquisitionErrorV5> {
-    let rent = decode_rent(&fixed.rent_sysvar)
-        .map_err(|_| SeriesCurrentAcquisitionErrorV5::FinalizedRecord)?;
     let occurrence_bound = matches!(
         selected.action,
         SeriesActionV3::Prepare | SeriesActionV3::Consume | SeriesActionV3::Expire
@@ -889,7 +879,6 @@ fn authenticate_selected_records(
         (Some(record), Some(expected)) if record.raw.data.as_slice() == expected => {
             authenticate_record(
                 fixed.registry_program.key,
-                &rent,
                 record,
                 SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3,
                 hash(expected).to_bytes(),
@@ -904,7 +893,6 @@ fn authenticate_selected_records(
         (Some(record), Some(expected)) if record.raw.data.as_slice() == expected => {
             authenticate_record(
                 fixed.registry_program.key,
-                &rent,
                 record,
                 SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
                 hash(expected).to_bytes(),

@@ -22,6 +22,7 @@
 extern crate alloc;
 
 use alloc::{boxed::Box, vec::Vec};
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_claims_svm::{
     liability_basis_state_v2::{
         LiabilityBasisMarketSeedsV2, LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
@@ -358,14 +359,12 @@ fn authenticate_terms_and_market(
     request: &FractionalRetirementRequestV3,
 ) -> Result<MarketFactsV3, ProgramError> {
     let input = request.input();
-    let rent = Rent::from_account_info(shared.rent).map_err(|_| ClaimsSbfError::Accounts)?;
     let terms_data = shared
         .terms_raw
         .try_borrow_data()
         .map_err(|_| ClaimsSbfError::Accounts)?;
     authenticate_finalized_rational_record(
         shared.registry.key,
-        &rent,
         shared.terms_raw,
         shared.terms_staging,
         FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
@@ -441,7 +440,6 @@ fn authenticated_cursor(
     shared: SharedFrameV3<'_, '_>,
     cursor_account: &AccountInfo<'_>,
 ) -> Result<FractionalRetirementCursorV3, ProgramError> {
-    let rent = Rent::from_account_info(shared.rent).map_err(|_| ClaimsSbfError::Accounts)?;
     let cursor_data = cursor_account
         .try_borrow_data()
         .map_err(|_| ClaimsSbfError::Accounts)?;
@@ -462,10 +460,7 @@ fn authenticated_cursor(
         || cursor_account.owner != program_id
         || cursor_account.data_len() != FRACTIONAL_RETIREMENT_CURSOR_BYTES_V3
         || cursor_account.lamports() < cursor.historical_rent_principal()
-        || !rent.is_exempt(
-            cursor.historical_rent_principal(),
-            FRACTIONAL_RETIREMENT_CURSOR_BYTES_V3,
-        )
+        || !funded_rent_persists_v1(cursor.historical_rent_principal())
     {
         return Err(ClaimsSbfError::Representation.into());
     }
@@ -538,14 +533,12 @@ fn authenticate_behavior(
     request: &FractionalRetirementRequestV3,
 ) -> Result<(), ProgramError> {
     let input = request.input();
-    let rent = Rent::from_account_info(shared.rent).map_err(|_| ClaimsSbfError::Accounts)?;
     let behavior_data = shared
         .token_behavior_raw
         .try_borrow_data()
         .map_err(|_| ClaimsSbfError::Accounts)?;
     authenticate_finalized_rational_record(
         shared.registry.key,
-        &rent,
         shared.token_behavior_raw,
         shared.token_behavior_staging,
         TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,

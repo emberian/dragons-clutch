@@ -8,6 +8,7 @@
 
 use core::convert::TryFrom;
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_product_runtime_v2_admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
 };
@@ -519,12 +520,11 @@ fn build_complete(
     digest: [u8; 32],
     slot: u64,
 ) -> Result<RecordPublicationPlanV1, PublicationErrorV1> {
-    let rent = decode_rent(state.rent)?;
     if state.raw_record.owner != registry_program
         || state.raw_record.executable
         || state.raw_record.data != content.content
         || hash(state.raw_record.data).to_bytes() != digest
-        || !rent.is_exempt(state.raw_record.lamports, state.raw_record.data.len())
+        || !funded_rent_persists_v1(state.raw_record.lamports)
     {
         return Err(PublicationErrorV1::Record);
     }

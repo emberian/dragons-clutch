@@ -37,6 +37,7 @@
 /// Exact Product/representation Registry authentication.
 pub mod representation_v3;
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_product_payoff_v2_codec::price_gate_v1::verify_price_gate_v1;
 use dclutch_product_payoff_v2_codec::registry_v3::PRICE_GATE_RECORD_SCHEMA_ID_V1;
 pub use dclutch_product_payoff_v2_codec::runtime_v3::BASIS_WIDTH_OFFSET_V3;
@@ -57,7 +58,6 @@ use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
     pubkey::Pubkey,
-    rent::Rent,
 };
 use solana_sdk_ids::system_program;
 
@@ -291,7 +291,6 @@ impl AuthenticatedProductRuntimeV2 {
 /// form because creation selects a new content-addressed Product graph.
 pub fn authenticate_content_addressed_product_runtime_v2<'accounts, 'info>(
     registry_program: &Pubkey,
-    rent: &Rent,
     frame: ProductRuntimeFrameV2<'accounts, 'info>,
 ) -> Result<AuthenticatedProductRuntimeV2> {
     let product_data = frame
@@ -301,7 +300,7 @@ pub fn authenticate_content_addressed_product_runtime_v2<'accounts, 'info>(
         .map_err(|_| Error::Borrow)?;
     let digest = content(hash(&product_data).to_bytes())?;
     drop(product_data);
-    authenticate_product_runtime_v2(registry_program, rent, digest, frame)
+    authenticate_product_runtime_v2(registry_program, digest, frame)
 }
 
 /// Authenticate and decode the exact Product graph already selected by a
@@ -310,7 +309,6 @@ pub fn authenticate_content_addressed_product_runtime_v2<'accounts, 'info>(
 /// authenticated Product record.
 pub fn authenticate_product_runtime_v2<'accounts, 'info>(
     registry_program: &Pubkey,
-    rent: &Rent,
     expected_product_digest: ContentId,
     frame: ProductRuntimeFrameV2<'accounts, 'info>,
 ) -> Result<AuthenticatedProductRuntimeV2> {
@@ -325,7 +323,6 @@ pub fn authenticate_product_runtime_v2<'accounts, 'info>(
     let mut derived = ProductRecordBumpsV3::ABSENT;
     authenticate_product_runtime_v2_hinted(
         registry_program,
-        rent,
         expected_product_digest,
         frame,
         ProductRecordBumpsV3::ABSENT,
@@ -340,7 +337,6 @@ pub fn authenticate_product_runtime_v2<'accounts, 'info>(
 /// the measurement that made this worth threading.
 pub fn authenticate_product_runtime_v2_hinted<'accounts, 'info>(
     registry_program: &Pubkey,
-    rent: &Rent,
     expected_product_digest: ContentId,
     frame: ProductRuntimeFrameV2<'accounts, 'info>,
     hints: ProductRecordBumpsV3,
@@ -349,7 +345,6 @@ pub fn authenticate_product_runtime_v2_hinted<'accounts, 'info>(
     require_distinct(frame)?;
     let (product_record, product_bumps) = authenticate_record_hinted(
         registry_program,
-        rent,
         frame.product,
         PRODUCT_RECORD_SCHEMA_ID_V2,
         expected_product_digest,
@@ -365,7 +360,6 @@ pub fn authenticate_product_runtime_v2_hinted<'accounts, 'info>(
     let product = ProductRecordV2::decode(&product_data).map_err(|_| Error::Composition)?;
     let (result_domain_record, domain_bumps) = authenticate_record_hinted(
         registry_program,
-        rent,
         frame.result_domain,
         RESULT_DOMAIN_SCHEMA_ID_V2,
         product.result_domain_digest(),
@@ -375,7 +369,6 @@ pub fn authenticate_product_runtime_v2_hinted<'accounts, 'info>(
     derived.set(1, domain_bumps.raw, domain_bumps.staging);
     let (portfolio_record, portfolio_bumps) = authenticate_record_hinted(
         registry_program,
-        rent,
         frame.portfolio,
         PORTFOLIO_SCHEMA_ID_V2,
         product.portfolio_digest(),
@@ -431,7 +424,6 @@ pub fn authenticate_product_runtime_v2_hinted<'accounts, 'info>(
 /// complete ephemeral projection.
 pub fn authenticate_content_addressed_product_runtime_v3<'accounts, 'info>(
     registry_program: &Pubkey,
-    rent: &Rent,
     frame: ProductRuntimeFrameV3<'accounts, 'info>,
 ) -> Result<AuthenticatedProductRuntimeV3<'accounts, 'info>> {
     let product_data = frame
@@ -441,7 +433,7 @@ pub fn authenticate_content_addressed_product_runtime_v3<'accounts, 'info>(
         .map_err(|_| Error::Borrow)?;
     let digest = content(hash(&product_data).to_bytes())?;
     drop(product_data);
-    authenticate_product_runtime_v3(registry_program, rent, digest, frame)
+    authenticate_product_runtime_v3(registry_program, digest, frame)
 }
 
 /// Authenticate a Product-selected graph and an independently finalized,
@@ -455,13 +447,11 @@ pub fn authenticate_content_addressed_product_runtime_v3<'accounts, 'info>(
 #[inline(never)]
 pub fn authenticate_product_runtime_v3<'accounts, 'info>(
     registry_program: &Pubkey,
-    rent: &Rent,
     expected_product_digest: ContentId,
     frame: ProductRuntimeFrameV3<'accounts, 'info>,
 ) -> Result<AuthenticatedProductRuntimeV3<'accounts, 'info>> {
     authenticate_product_runtime_v3_hinted(
         registry_program,
-        rent,
         expected_product_digest,
         frame,
         ProductRecordBumpsV3::ABSENT,
@@ -481,7 +471,6 @@ pub fn authenticate_product_runtime_v3<'accounts, 'info>(
 /// [`authenticate_record_hinted`].
 pub fn authenticate_product_runtime_v3_hinted<'accounts, 'info>(
     registry_program: &Pubkey,
-    rent: &Rent,
     expected_product_digest: ContentId,
     frame: ProductRuntimeFrameV3<'accounts, 'info>,
     hints: ProductRecordBumpsV3,
@@ -497,7 +486,6 @@ pub fn authenticate_product_runtime_v3_hinted<'accounts, 'info>(
     let derived = &mut bank;
     let runtime = authenticate_product_runtime_v2_hinted(
         registry_program,
-        rent,
         expected_product_digest,
         ProductRuntimeFrameV2 {
             product: frame.product,
@@ -512,7 +500,6 @@ pub fn authenticate_product_runtime_v3_hinted<'accounts, 'info>(
     // founding-only no-arbitrage conjunct does not.
     authenticate_product_basis_v3_with_admission(
         registry_program,
-        rent,
         runtime,
         frame.linked_basis,
         PreviouslyAdmittedBasisV3,
@@ -532,7 +519,6 @@ pub fn authenticate_product_runtime_v3_hinted<'accounts, 'info>(
 #[inline(always)]
 pub fn authenticate_product_basis_v3<'accounts, 'info>(
     registry_program: &Pubkey,
-    rent: &Rent,
     runtime: AuthenticatedProductRuntimeV2,
     linked_basis: FinalizedRecordFrameV2<'accounts, 'info>,
 ) -> Result<AuthenticatedProductRuntimeV3<'accounts, 'info>> {
@@ -543,7 +529,6 @@ pub fn authenticate_product_basis_v3<'accounts, 'info>(
     let mut derived = runtime.record_bumps;
     authenticate_product_basis_v3_with_admission(
         registry_program,
-        rent,
         runtime,
         linked_basis,
         PreviouslyAdmittedBasisV3,
@@ -563,7 +548,6 @@ pub fn authenticate_product_basis_v3<'accounts, 'info>(
 #[inline(always)]
 pub fn authenticate_founding_product_basis_v3<'accounts, 'info>(
     registry_program: &Pubkey,
-    rent: &Rent,
     runtime: AuthenticatedProductRuntimeV2,
     linked_basis: FinalizedRecordFrameV2<'accounts, 'info>,
     price_gate: Option<FinalizedRecordFrameV2<'accounts, 'info>>,
@@ -574,7 +558,6 @@ pub fn authenticate_founding_product_basis_v3<'accounts, 'info>(
     let mut derived = runtime.record_bumps;
     authenticate_product_basis_v3_with_admission(
         registry_program,
-        rent,
         runtime,
         linked_basis,
         FoundingBasisAdmissionV3 { price_gate },
@@ -590,30 +573,19 @@ struct FoundingBasisAdmissionV3<'accounts, 'info> {
 }
 
 trait BasisAdmissionBoundaryV3 {
-    fn admit(self, registry_program: &Pubkey, rent: &Rent, basis: ProductBasisV3<'_>)
-    -> Result<()>;
+    fn admit(self, registry_program: &Pubkey, basis: ProductBasisV3<'_>) -> Result<()>;
 }
 
 impl BasisAdmissionBoundaryV3 for PreviouslyAdmittedBasisV3 {
     #[inline(always)]
-    fn admit(
-        self,
-        _registry_program: &Pubkey,
-        _rent: &Rent,
-        _basis: ProductBasisV3<'_>,
-    ) -> Result<()> {
+    fn admit(self, _registry_program: &Pubkey, _basis: ProductBasisV3<'_>) -> Result<()> {
         Ok(())
     }
 }
 
 impl BasisAdmissionBoundaryV3 for FoundingBasisAdmissionV3<'_, '_> {
     #[inline(always)]
-    fn admit(
-        self,
-        registry_program: &Pubkey,
-        rent: &Rent,
-        basis: ProductBasisV3<'_>,
-    ) -> Result<()> {
+    fn admit(self, registry_program: &Pubkey, basis: ProductBasisV3<'_>) -> Result<()> {
         basis
             .admit_selection_v3()
             .map_err(|_| Error::LinkedBasisComposition)?;
@@ -624,7 +596,6 @@ impl BasisAdmissionBoundaryV3 for FoundingBasisAdmissionV3<'_, '_> {
         let frame = self.price_gate.ok_or(Error::PriceGateRequired)?;
         authenticate_record(
             registry_program,
-            rent,
             frame,
             PRICE_GATE_RECORD_SCHEMA_ID_V1,
             content(certificate_digest).map_err(|_| Error::PriceGateBasisMismatch)?,
@@ -671,7 +642,6 @@ impl BasisAdmissionBoundaryV3 for FoundingBasisAdmissionV3<'_, '_> {
 #[allow(clippy::too_many_arguments)]
 fn authenticate_product_basis_v3_with_admission<'accounts, 'info, Admission>(
     registry_program: &Pubkey,
-    rent: &Rent,
     runtime: AuthenticatedProductRuntimeV2,
     linked_basis: FinalizedRecordFrameV2<'accounts, 'info>,
     admission: Admission,
@@ -690,7 +660,6 @@ where
     drop(basis_data);
     let (linked_basis_record, basis_bumps) = authenticate_record_hinted(
         registry_program,
-        rent,
         linked_basis,
         GRADED_BASIS_RECORD_SCHEMA_ID_V3,
         basis_digest,
@@ -703,7 +672,7 @@ where
         .try_borrow_data()
         .map_err(|_| Error::Borrow)?;
     let basis = ProductBasisV3::decode(&basis_data).map_err(|_| Error::LinkedBasisComposition)?;
-    admission.admit(registry_program, rent, basis)?;
+    admission.admit(registry_program, basis)?;
     let semantic = basis
         .semantic_preimage_v3()
         .map_err(|_| Error::LinkedBasisComposition)?;
@@ -742,7 +711,6 @@ where
 #[inline(never)]
 fn authenticate_record(
     registry_program: &Pubkey,
-    rent: &Rent,
     frame: FinalizedRecordFrameV2<'_, '_>,
     schema: [u8; 32],
     expected_digest: ContentId,
@@ -750,7 +718,6 @@ fn authenticate_record(
 ) -> Result<AuthenticatedRecordV2> {
     authenticate_record_hinted(
         registry_program,
-        rent,
         frame,
         schema,
         expected_digest,
@@ -828,7 +795,6 @@ impl ProductRecordBumpsV3 {
 #[allow(clippy::too_many_arguments)]
 fn authenticate_record_hinted(
     registry_program: &Pubkey,
-    rent: &Rent,
     frame: FinalizedRecordFrameV2<'_, '_>,
     schema: [u8; 32],
     expected_digest: ContentId,
@@ -859,7 +825,7 @@ fn authenticate_record_hinted(
         || frame.raw.is_writable
         || frame.raw.executable
         || hash(&raw_data).to_bytes() != digest
-        || !rent.is_exempt(frame.raw.lamports(), raw_data.len())
+        || !funded_rent_persists_v1(frame.raw.lamports())
         || frame.staging.key != &expected_staging
         || frame.staging.owner != &system_program::ID
         || frame.staging.is_signer

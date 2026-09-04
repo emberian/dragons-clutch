@@ -36,7 +36,7 @@
 use dclutch_capability_program_contract::{
     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1,
     set_v2::{CapabilityProgramSetV2, SelectorWidthV2},
-    v4::SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID,
+    v4::{CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID},
 };
 use dclutch_core_contract::ContentId;
 use dclutch_general_codec::Action;
@@ -239,6 +239,18 @@ pub enum GeneralReleaseErrorV3 {
     ActionMismatch,
     /// The set's profile declares coordinates this admission cannot join.
     UnjoinedProfile,
+    /// Two action descriptors disagree on a coordinate the manifest entry holds.
+    ///
+    /// A Market's capability manifest carries ONE entry per capability root, and
+    /// the founding seam authors it from ONE descriptor. Fifteen descriptors
+    /// that disagree about `kind`, `capacity_profile`, `root_schema`,
+    /// `derivation_policy` or `root_state_bytes` therefore publish a release in
+    /// which the action a founding happens to read decides which actions the
+    /// Market can ever execute. Cohort-15 shipped exactly that and its OpenBatch
+    /// refused `0x4015` after 128,724 CU; this is the conjunct that makes the
+    /// seam's "any member may stand for the set" a proved statement rather than
+    /// a hope.
+    EntryCoordinateMismatch,
     /// One complete action artifact join refused.
     Artifact(GeneralArtifactErrorV3),
 }
@@ -356,6 +368,7 @@ pub fn authenticate_general_release_v3(
     let mut descriptors = [ContentId::new([1; 32])
         .map_err(|_| GeneralReleaseErrorV3::ProgramSet)?;
         GENERAL_ACTION_PROGRAM_COUNT_V5];
+    let mut entry_coordinates: Option<EntryCoordinatesV1> = None;
     let mut index = 0_usize;
     while index < GENERAL_ACTION_PROGRAM_COUNT_V5 {
         let action_artifacts = release.actions[index];
@@ -385,6 +398,11 @@ pub fn authenticate_general_release_v3(
             return Err(GeneralReleaseErrorV3::ActionMismatch);
         }
         descriptors[index] = descriptor;
+        if index == 0 {
+            entry_coordinates = Some(EntryCoordinatesV1::of(bundle.descriptor));
+        } else if entry_coordinates != Some(EntryCoordinatesV1::of(bundle.descriptor)) {
+            return Err(GeneralReleaseErrorV3::EntryCoordinateMismatch);
+        }
         index = index
             .checked_add(1)
             .ok_or(GeneralReleaseErrorV3::ProgramSet)?;
@@ -395,6 +413,36 @@ pub fn authenticate_general_release_v3(
         descriptors,
         tail_count,
     })
+}
+
+/// Exactly the descriptor coordinates a capability manifest entry holds.
+///
+/// `tools/local-validator/bootstrap/successor/src/selected_capability.rs` reads
+/// four of these off one descriptor and takes the other two off the ProgramSet
+/// and config bytes, which this admission has already joined for every action.
+/// The fifth field here is not an entry field: `root_state_bytes` is what
+/// `authenticate_descriptor_root_selection` compares against the persisted root
+/// immediately after `validate_selection`, so a release whose actions disagree
+/// about it has the same defect one conjunct later.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct EntryCoordinatesV1 {
+    kind: ContentId,
+    capacity_profile: ContentId,
+    root_schema: ContentId,
+    derivation_policy: ContentId,
+    root_state_bytes: u32,
+}
+
+impl EntryCoordinatesV1 {
+    fn of(descriptor: CapabilityProgramV4) -> Self {
+        Self {
+            kind: descriptor.kind(),
+            capacity_profile: descriptor.capacity_profile(),
+            root_schema: descriptor.root_schema(),
+            derivation_policy: descriptor.derivation_policy(),
+            root_state_bytes: descriptor.root_state_bytes(),
+        }
+    }
 }
 
 fn content(bytes: &[u8]) -> Result<ContentId> {

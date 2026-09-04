@@ -68,14 +68,15 @@ use dclutch_general_adapter_contract::{
     runtime_width::{CandidateV2, SettlementCursorV2, VerifiedCandidateV2, settlement_cursor_len},
     state_artifacts_v3::{
         GENERAL_CLOSE_PAYER_ACCOUNT_V3, GENERAL_CLOSE_RENT_CREDIT_ACCOUNT_V3,
-        GENERAL_PRIMARY_PAYER_ACCOUNT_V3, GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3,
-        GENERAL_PRIMARY_STATE_ACCOUNT_V3, GENERAL_TERMINAL_STATE_ACCOUNT_V3,
-        GENERAL_VERIFY_PAYER_ACCOUNT_V3, GENERAL_VERIFY_RENT_CREDIT_ACCOUNT_V3,
-        GENERAL_VERIFY_RESULT_STATE_ACCOUNT_V3, GENERAL_VERIFY_VERIFIER_STATE_ACCOUNT_V3,
-        GeneralChildRentWidthsV5, GeneralReadonlyEvidenceKindV3,
-        encode_general_state_lifecycle_v5_atomic, general_child_account_start_v3,
+        GENERAL_FAMILY_QUOTE_COUNT_V5, GENERAL_PRIMARY_PAYER_ACCOUNT_V3,
+        GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3, GENERAL_PRIMARY_STATE_ACCOUNT_V3,
+        GENERAL_TERMINAL_STATE_ACCOUNT_V3, GENERAL_VERIFY_PAYER_ACCOUNT_V3,
+        GENERAL_VERIFY_RENT_CREDIT_ACCOUNT_V3, GENERAL_VERIFY_RESULT_STATE_ACCOUNT_V3,
+        GENERAL_VERIFY_VERIFIER_STATE_ACCOUNT_V3, GeneralChildRentWidthsV5,
+        GeneralReadonlyEvidenceKindV3, encode_general_family_state_lifecycle_v5_atomic,
+        general_child_account_start_v3, general_family_state_lifecycle_bytes_v5,
         general_readonly_evidence_count_v3, general_readonly_evidence_start_v3,
-        general_readonly_evidence_v3, general_state_lifecycle_bytes_v5,
+        general_readonly_evidence_v3,
     },
     state_seeds_v3::GeneralStateRecipeV3,
 };
@@ -2259,18 +2260,17 @@ fn project_general_lifecycle_v5(
     request: GeneralDecodedRequestV3,
     trading_program: Pubkey,
 ) -> Result<GeneralLifecycleProjectionV3, GeneralHotOperatorErrorV3> {
-    let policy_bytes = general_state_lifecycle_bytes_v5(request.action)
-        .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
+    // ONE POLICY FOR THE FAMILY, rebuilt without reference to the executing
+    // action. The action still selects its plans out of it below; what it no
+    // longer selects is a different artifact, because a Market's capability
+    // manifest binds one `child_derivation_id` and fifteen artifacts have
+    // fifteen digests.
+    let policy_bytes = general_family_state_lifecycle_bytes_v5();
     let mut scratch = vec![0_u8; policy_bytes];
     let mut canonical = vec![0_u8; policy_bytes];
     let child_widths = selected_child_rent_widths_v5(bundle)?;
-    encode_general_state_lifecycle_v5_atomic(
-        request.action,
-        child_widths,
-        &mut scratch,
-        &mut canonical,
-    )
-    .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
+    encode_general_family_state_lifecycle_v5_atomic(child_widths, &mut scratch, &mut canonical)
+        .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
     if bundle.lifecycle_policy.bytes() != canonical.as_slice() {
         return Err(GeneralHotOperatorErrorV3::Lifecycle);
     }
@@ -2576,78 +2576,51 @@ fn local_state_kind_for_recipe_v5(
     }
 }
 
+/// Recover the sole release-variable input to the family lifecycle policy.
+///
+/// Everything else the family encoder derives: Product N comes from the
+/// authenticated tail count, and the three fixed child widths come from their
+/// semantic owners. The selected Token or Token-2022 vault width does not --
+/// a release chooses it -- so it is read back off the policy's own
+/// InitializeSettlement custody-vault quote and never from the family request
+/// or from GeneralConfig.
+///
+/// This function used to also re-assert the whole quote table by ordinal, per
+/// action. It no longer does, and that is not a weakening: the caller rebuilds
+/// the ENTIRE policy from this one width and compares it byte for byte, which
+/// subsumes every conjunct that was here and holds for all fifteen actions
+/// rather than for the three that declare quotes.
 fn selected_child_rent_widths_v5(
     bundle: dclutch_general_adapter_contract::artifacts_v3::GeneralArtifactBundleV3<'_>,
-) -> Result<Option<GeneralChildRentWidthsV5>, GeneralHotOperatorErrorV3> {
-    if bundle.request.action == Action::VerifyCandidateRow {
-        let widths = GeneralChildRentWidthsV5::new(bundle.tail_count, 1)
-            .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
-        if bundle.lifecycle_policy.current_rent_quote_count() != 1 {
-            return Err(GeneralHotOperatorErrorV3::Lifecycle);
-        }
-        let quote = bundle
-            .lifecycle_policy
-            .current_rent_quote(0)
-            .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
-        let destination = quote.scalar_destination();
-        if destination.kind() != LifecycleRegisterKindV3::Scalar
-            || destination.scope() != CoordinateScopeV3::Fixed
-            || u32::from(destination.index()) != general_scalar::RESULT_PRINCIPAL_OBSERVATION
-            || quote.exact_data_len() != widths.verified_candidate
-        {
-            return Err(GeneralHotOperatorErrorV3::Lifecycle);
-        }
-        return Ok(Some(widths));
-    }
-    if !matches!(
-        bundle.request.action,
-        Action::InitializeSettlement | Action::PlaceOrder
-    ) {
-        if bundle.lifecycle_policy.current_rent_quote_count() != 0 {
-            return Err(GeneralHotOperatorErrorV3::Lifecycle);
-        }
-        return Ok(None);
-    }
-    let expected_destinations = [
-        general_scalar::POSITION_RENT_PRINCIPAL,
-        general_scalar::ADMISSION_RENT_PRINCIPAL,
-        general_scalar::CUSTODY_REPLAY_RENT_LAMPORTS,
-        general_scalar::CUSTODY_VAULT_RENT_LAMPORTS,
-    ];
+) -> Result<GeneralChildRentWidthsV5, GeneralHotOperatorErrorV3> {
     if usize::from(bundle.lifecycle_policy.current_rent_quote_count())
-        != expected_destinations.len()
+        != GENERAL_FAMILY_QUOTE_COUNT_V5
     {
         return Err(GeneralHotOperatorErrorV3::Lifecycle);
     }
-    // Product N and the semantic-owner fixed child widths are regenerated by
-    // `GeneralChildRentWidthsV5` and the canonical V5 encoder below. The sole
-    // release-variable input is the selected vault width committed by the V5
-    // policy; it is never taken from the family request or GeneralConfig.
     let mut vault_width = None;
-    for (ordinal, expected_destination) in expected_destinations.into_iter().enumerate() {
+    for ordinal in 0..bundle.lifecycle_policy.current_rent_quote_count() {
         let quote = bundle
             .lifecycle_policy
-            .current_rent_quote(
-                u16::try_from(ordinal).map_err(|_| GeneralHotOperatorErrorV3::Arithmetic)?,
-            )
+            .current_rent_quote(ordinal)
             .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
         let destination = quote.scalar_destination();
         if destination.kind() != LifecycleRegisterKindV3::Scalar
             || destination.scope() != CoordinateScopeV3::Fixed
-            || u32::from(destination.index()) != expected_destination
-            || quote.exact_data_len() == 0
+            || u32::from(destination.index()) != general_scalar::CUSTODY_VAULT_RENT_LAMPORTS
+            || !quote.applies_to(Action::InitializeSettlement as u32)
         {
+            continue;
+        }
+        if vault_width.is_some() || quote.exact_data_len() == 0 {
             return Err(GeneralHotOperatorErrorV3::Lifecycle);
         }
-        if ordinal == 3 {
-            vault_width = Some(quote.exact_data_len());
-        }
+        vault_width = Some(quote.exact_data_len());
     }
     GeneralChildRentWidthsV5::new(
         bundle.tail_count,
         vault_width.ok_or(GeneralHotOperatorErrorV3::Lifecycle)?,
     )
-    .map(Some)
     .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)
 }
 

@@ -7,6 +7,7 @@
 //! Upgradeable Loader V3 Program/ProgramData/complete-ELF observation. This
 //! module is read-only: it grants no accelerator state or effect write authority.
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_capability_program_contract::v4::{
     CAPABILITY_PROGRAM_V4_BYTES, CapabilityProgramV4,
     SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
@@ -28,9 +29,7 @@ use dclutch_registry_contract::{
 };
 use dclutch_release_set_contract::ArtifactReleaseIdV1;
 use dclutch_shadow_accelerator_auth_v4::{ShadowAcceleratorAuthErrorV4, deployment};
-use solana_program::{
-    account_info::AccountInfo, hash::hash, pubkey::Pubkey, rent::Rent, sysvar::SysvarSerialize,
-};
+use solana_program::{account_info::AccountInfo, hash::hash, pubkey::Pubkey};
 use solana_sdk_ids::{system_program, sysvar};
 
 use crate::{
@@ -328,17 +327,14 @@ pub fn authenticate_execution_strategy_v2(
     selected_capability_program_schema: ContentId,
     selected_capability_program_id: ContentId,
     registry_program: &AccountInfo<'_>,
-    rent_sysvar: &AccountInfo<'_>,
     accounts: &[AccountInfo<'_>],
 ) -> Result<AuthenticatedExecutionStrategyV2, TradingSbfError> {
-    let rent = authenticate_common_frame(registry_program, rent_sysvar, accounts)?;
     if accounts.len() < INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2 {
         return Err(TradingSbfError::Content);
     }
     let capability_program_id = selected_capability_program_id;
     let (capability_program, capability_bumps) = authenticate_capability_program(
         registry_program.key,
-        &rent,
         account(accounts, CAPABILITY_RAW)?,
         account(accounts, CAPABILITY_STAGING)?,
         selected_capability_program_schema,
@@ -350,7 +346,6 @@ pub fn authenticate_execution_strategy_v2(
         &capability_program,
         capability_bumps,
         registry_program.key,
-        &rent,
         accounts,
         CurrentDeploymentAuthenticationV2::SlotPinnedRelease,
     )
@@ -374,7 +369,7 @@ pub(crate) fn authenticate_execution_strategy_from_sealed_capability_v2(
     rent_sysvar: &AccountInfo<'_>,
     accounts: &[AccountInfo<'_>],
 ) -> Result<AuthenticatedExecutionStrategyV2, TradingSbfError> {
-    let (rent, capability_bumps) = authenticate_common_frame_with_sealed_capability_pair(
+    let capability_bumps = authenticate_common_frame_with_sealed_capability_pair(
         registry_program,
         rent_sysvar,
         accounts,
@@ -387,7 +382,6 @@ pub(crate) fn authenticate_execution_strategy_from_sealed_capability_v2(
         capability_program,
         capability_bumps,
         registry_program.key,
-        &rent,
         accounts,
         CurrentDeploymentAuthenticationV2::SlotPinnedRelease,
     )
@@ -400,7 +394,6 @@ fn authenticate_selected_execution_strategy_v2(
     capability_program: &CapabilityProgramV4,
     capability_bumps: RecordPairBumpsV2,
     registry_program: &Pubkey,
-    rent: &Rent,
     accounts: &[AccountInfo<'_>],
     deployment_authentication: CurrentDeploymentAuthenticationV2,
 ) -> Result<AuthenticatedExecutionStrategyV2, TradingSbfError> {
@@ -424,7 +417,6 @@ fn authenticate_selected_execution_strategy_v2(
     let strategy_program_id = capability_program.strategy().program();
     let (strategy, strategy_bumps) = authenticate_strategy_program(
         registry_program,
-        rent,
         account(accounts, STRATEGY_RAW)?,
         account(accounts, STRATEGY_STAGING)?,
         strategy_program_id,
@@ -470,7 +462,6 @@ fn authenticate_selected_execution_strategy_v2(
             }
             authenticate_shadow_aot(
                 registry_program,
-                rent,
                 accounts,
                 capability_program_id,
                 *capability_program,
@@ -481,7 +472,6 @@ fn authenticate_selected_execution_strategy_v2(
         }
         StrategyDispositionV2::AdmittedAot => authenticate_admitted_aot(
             registry_program,
-            rent,
             accounts,
             capability_program_id,
             *capability_program,
@@ -496,7 +486,6 @@ fn authenticate_selected_execution_strategy_v2(
 #[allow(clippy::too_many_arguments)]
 fn authenticate_shadow_aot(
     registry_program: &Pubkey,
-    rent: &Rent,
     accounts: &[AccountInfo<'_>],
     capability_program_id: ContentId,
     capability_program: CapabilityProgramV4,
@@ -510,7 +499,6 @@ fn authenticate_shadow_aot(
         .ok_or(TradingSbfError::Content)?;
     let (certificate, certificate_bumps) = authenticate_certificate(
         registry_program,
-        rent,
         account(accounts, CERTIFICATE_RAW)?,
         account(accounts, CERTIFICATE_STAGING)?,
         certificate_program_id,
@@ -531,7 +519,6 @@ fn authenticate_shadow_aot(
     record_bumps.certificate = certificate_bumps;
     let (artifact_release_id, artifact_release, artifact_bumps) = authenticate_pinned_artifact(
         registry_program,
-        rent,
         account(accounts, SHADOW_ARTIFACT_RAW)?,
         account(accounts, SHADOW_ARTIFACT_STAGING)?,
         binding,
@@ -563,7 +550,6 @@ fn authenticate_shadow_aot(
 #[allow(clippy::too_many_arguments)]
 fn authenticate_admitted_aot(
     registry_program: &Pubkey,
-    rent: &Rent,
     accounts: &[AccountInfo<'_>],
     capability_program_id: ContentId,
     capability_program: CapabilityProgramV4,
@@ -578,7 +564,6 @@ fn authenticate_admitted_aot(
         .ok_or(TradingSbfError::Content)?;
     let (certificate, certificate_bumps) = authenticate_certificate(
         registry_program,
-        rent,
         account(accounts, CERTIFICATE_RAW)?,
         account(accounts, CERTIFICATE_STAGING)?,
         certificate_program_id,
@@ -588,7 +573,6 @@ fn authenticate_admitted_aot(
         .ok_or(TradingSbfError::Content)?;
     let (admission, admission_bumps) = authenticate_admission(
         registry_program,
-        rent,
         account(accounts, ADMITTED_ADMISSION_RAW)?,
         account(accounts, ADMITTED_ADMISSION_STAGING)?,
         admission_program_id,
@@ -604,7 +588,6 @@ fn authenticate_admitted_aot(
     record_bumps.admission = admission_bumps;
     let (_, artifact_release, artifact_bumps) = authenticate_pinned_artifact(
         registry_program,
-        rent,
         account(accounts, ADMITTED_ARTIFACT_RAW)?,
         account(accounts, ADMITTED_ARTIFACT_STAGING)?,
         CertificateArtifactBindingV2::Release(artifact_release_id),
@@ -655,7 +638,6 @@ fn authenticated_interpreter_artifacts(
 
 fn authenticate_capability_program(
     registry_program: &Pubkey,
-    rent: &Rent,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
     expected_schema: ContentId,
@@ -669,7 +651,6 @@ fn authenticate_capability_program(
         .map_err(|_| TradingSbfError::Content)?;
     let bumps = authenticate_finalized_record(
         registry_program,
-        rent,
         raw,
         staging,
         CAPABILITY_PROGRAM_SCHEMA_ID_V4,
@@ -682,7 +663,6 @@ fn authenticate_capability_program(
 
 fn authenticate_strategy_program(
     registry_program: &Pubkey,
-    rent: &Rent,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
     expected: ContentId,
@@ -695,7 +675,6 @@ fn authenticate_strategy_program(
     }
     let bumps = authenticate_finalized_record(
         registry_program,
-        rent,
         raw,
         staging,
         EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
@@ -709,7 +688,6 @@ fn authenticate_strategy_program(
 
 fn authenticate_certificate(
     registry_program: &Pubkey,
-    rent: &Rent,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
     expected: ContentId,
@@ -722,7 +700,6 @@ fn authenticate_certificate(
     }
     let bumps = authenticate_finalized_record(
         registry_program,
-        rent,
         raw,
         staging,
         EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
@@ -736,7 +713,6 @@ fn authenticate_certificate(
 
 fn authenticate_admission(
     registry_program: &Pubkey,
-    rent: &Rent,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
     expected: ContentId,
@@ -749,7 +725,6 @@ fn authenticate_admission(
     }
     let bumps = authenticate_finalized_record(
         registry_program,
-        rent,
         raw,
         staging,
         EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2,
@@ -790,7 +765,6 @@ fn authenticate_admission(
 #[allow(clippy::too_many_arguments)]
 fn authenticate_pinned_artifact(
     registry_program: &Pubkey,
-    rent: &Rent,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
     binding: CertificateArtifactBindingV2,
@@ -815,7 +789,6 @@ fn authenticate_pinned_artifact(
     };
     let bumps = authenticate_finalized_record(
         registry_program,
-        rent,
         raw,
         staging,
         ARTIFACT_RELEASE_SCHEMA_ID_V1,
@@ -916,37 +889,6 @@ pub(crate) fn authenticate_activated_current_deployment(
         .map_err(TradingSbfError::from)
 }
 
-fn authenticate_common_frame(
-    registry_program: &AccountInfo<'_>,
-    rent_sysvar: &AccountInfo<'_>,
-    accounts: &[AccountInfo<'_>],
-) -> Result<Rent, TradingSbfError> {
-    if registry_program.is_signer
-        || registry_program.is_writable
-        || !registry_program.executable
-        || rent_sysvar.key != &sysvar::rent::ID
-        || rent_sysvar.owner != &sysvar::ID
-        || rent_sysvar.is_signer
-        || rent_sysvar.is_writable
-        || rent_sysvar.executable
-    {
-        return Err(TradingSbfError::Content);
-    }
-    for (index, current) in accounts.iter().enumerate() {
-        if current.key == registry_program.key
-            || current.key == rent_sysvar.key
-            || accounts
-                .get(index.saturating_add(1)..)
-                .ok_or(TradingSbfError::Content)?
-                .iter()
-                .any(|other| current.key == other.key)
-        {
-            return Err(TradingSbfError::Content);
-        }
-    }
-    Rent::from_account_info(rent_sysvar).map_err(|_| TradingSbfError::Content)
-}
-
 #[inline(never)]
 fn authenticate_common_frame_with_sealed_capability_pair(
     registry_program: &AccountInfo<'_>,
@@ -954,7 +896,7 @@ fn authenticate_common_frame_with_sealed_capability_pair(
     accounts: &[AccountInfo<'_>],
     capability_program_id: ContentId,
     capability_program: &CapabilityProgramV4,
-) -> Result<(Rent, RecordPairBumpsV2), TradingSbfError> {
+) -> Result<RecordPairBumpsV2, TradingSbfError> {
     if accounts.len() < INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2
         || registry_program.is_signer
         || registry_program.is_writable
@@ -985,12 +927,11 @@ fn authenticate_common_frame_with_sealed_capability_pair(
     {
         return Err(TradingSbfError::Content);
     }
-    let rent = Rent::from_account_info(rent_sysvar).map_err(|_| TradingSbfError::Content)?;
     let data = raw
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Content)?;
     if data.len() != CAPABILITY_PROGRAM_V4_BYTES
-        || !rent.is_exempt(raw.lamports(), data.len())
+        || !funded_rent_persists_v1(raw.lamports())
         || hash(&data).to_bytes() != capability_program_id.to_bytes()
         || CapabilityProgramV4::decode(&data).map_err(|_| TradingSbfError::Content)?
             != *capability_program
@@ -1050,12 +991,11 @@ fn authenticate_common_frame_with_sealed_capability_pair(
             return Err(TradingSbfError::Content);
         }
     }
-    Ok((rent, bumps))
+    Ok(bumps)
 }
 
 fn authenticate_finalized_record(
     registry_program: &Pubkey,
-    rent: &Rent,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
     schema: [u8; 32],
@@ -1076,7 +1016,7 @@ fn authenticate_finalized_record(
         || raw.is_writable
         || raw.executable
         || hash(exact_content).to_bytes() != digest
-        || !rent.is_exempt(raw.lamports(), exact_content.len())
+        || !funded_rent_persists_v1(raw.lamports())
         || staging.key != &expected_staging
         || staging.owner != &system_program::ID
         || staging.is_signer

@@ -11,6 +11,7 @@ use dclutch_account_profile_contract::{
     lifecycle_v3::StateLifecyclePolicyV5,
     v2::{AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2},
 };
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
     hot_v3::{HOT_FIXED_ACCOUNT_COUNT_V3, HotExecutionEnvelopeV3},
@@ -157,7 +158,7 @@ pub fn process_capability_seal_v1(
         return Err(TradingSbfError::Content.into());
     }
 
-    let rows = validate_descriptor_closure_v1(&frame, &rent, key, request.action())?;
+    let rows = validate_descriptor_closure_v1(&frame, key, request.action())?;
 
     let space = u64::try_from(CAPABILITY_SEAL_BYTES_V1).map_err(|_| TradingSbfError::Commit)?;
     let minimum = rent.minimum_balance(CAPABILITY_SEAL_BYTES_V1);
@@ -345,8 +346,6 @@ pub fn process_capability_seal_close_v1(
     {
         return Err(TradingSbfError::CloseSealFrame.into());
     }
-    let rent =
-        Rent::from_account_info(rent_account).map_err(|_| TradingSbfError::CloseSealFrame)?;
     // Absence lands here, and it is what a second close of the same seal meets:
     // the account is System-owned and empty, so it is not this Program's seal.
     if seal.owner != program_id
@@ -354,7 +353,7 @@ pub fn process_capability_seal_close_v1(
         || seal.is_signer
         || seal.executable
         || seal.data_len() != CAPABILITY_SEAL_BYTES_V1
-        || !rent.is_exempt(seal.lamports(), CAPABILITY_SEAL_BYTES_V1)
+        || !funded_rent_persists_v1(seal.lamports())
     {
         return Err(TradingSbfError::CloseSealAccount.into());
     }
@@ -574,7 +573,6 @@ fn live_trading_semantic_release_v1(
 #[inline(never)]
 fn validate_descriptor_closure_v1<'info>(
     frame: &HotFrameV3<'_, 'info>,
-    rent: &Rent,
     key: CapabilitySealKeyV1,
     action: u32,
 ) -> Result<[SealedRecordRowV1; CAPABILITY_SEAL_ROW_COUNT_V1], ProgramError> {
@@ -582,7 +580,6 @@ fn validate_descriptor_closure_v1<'info>(
         *frame,
         frame.descriptor_raw,
         frame.descriptor_staging,
-        rent,
         PROGRAM_SCHEMA_ID_V4,
         key.descriptor_digest(),
     )?;
@@ -595,7 +592,6 @@ fn validate_descriptor_closure_v1<'info>(
         *frame,
         frame.lifecycle_raw,
         frame.lifecycle_staging,
-        rent,
         descriptor.lifecycle().schema().to_bytes(),
         descriptor.lifecycle().program().to_bytes(),
     )?;
@@ -616,7 +612,6 @@ fn validate_descriptor_closure_v1<'info>(
         *frame,
         frame.account_profile_raw,
         frame.account_profile_staging,
-        rent,
         descriptor.account_profile().schema().to_bytes(),
         descriptor.account_profile().program().to_bytes(),
     )?;
@@ -646,7 +641,6 @@ fn validate_descriptor_closure_v1<'info>(
         *frame,
         frame.request_profile_raw,
         frame.request_profile_staging,
-        rent,
         descriptor.request_profile().schema().to_bytes(),
         descriptor.request_profile().program().to_bytes(),
     )?;
@@ -656,7 +650,6 @@ fn validate_descriptor_closure_v1<'info>(
         *frame,
         frame.transition_raw,
         frame.transition_staging,
-        rent,
         descriptor.transition().schema().to_bytes(),
         descriptor.transition().program().to_bytes(),
     )?;
@@ -670,7 +663,6 @@ fn validate_descriptor_closure_v1<'info>(
         *frame,
         frame.effect_raw,
         frame.effect_staging,
-        rent,
         descriptor.effect().schema().to_bytes(),
         descriptor.effect().program().to_bytes(),
     )?;
@@ -789,7 +781,6 @@ fn seal_row_v1(
 pub(super) fn authenticate_capability_seal_v3<'a>(
     program_id: &Pubkey,
     frame: HotFrameV3<'_, '_>,
-    rent: &Rent,
     descriptor_schema: [u8; 32],
     descriptor_digest: [u8; 32],
     action: u32,
@@ -811,7 +802,7 @@ pub(super) fn authenticate_capability_seal_v3<'a>(
         || seal.executable
         || seal.data_len() != CAPABILITY_SEAL_BYTES_V1
         || bytes.len() != CAPABILITY_SEAL_BYTES_V1
-        || !rent.is_exempt(seal.lamports(), CAPABILITY_SEAL_BYTES_V1)
+        || !funded_rent_persists_v1(seal.lamports())
     {
         return Err(TradingSbfError::Content.into());
     }
@@ -852,7 +843,6 @@ pub(super) fn borrow_sealed_record<'a, 'info>(
     role: SealedRoleV1,
     raw: &'a AccountInfo<'info>,
     staging: &AccountInfo<'info>,
-    rent: &Rent,
     schema: [u8; 32],
     digest: [u8; 32],
 ) -> Result<core::cell::Ref<'a, [u8]>, ProgramError> {
@@ -875,7 +865,7 @@ pub(super) fn borrow_sealed_record<'a, 'info>(
         || usize::try_from(row.exact_data_length()).map_err(|_| TradingSbfError::Content)?
             != data.len()
         || solana_program::hash::hash(&data).to_bytes() != digest
-        || !rent.is_exempt(raw.lamports(), data.len())
+        || !funded_rent_persists_v1(raw.lamports())
     {
         return Err(TradingSbfError::Content.into());
     }

@@ -12,6 +12,7 @@ extern crate alloc;
 
 use alloc::{boxed::Box, vec::Vec};
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_claims_svm::market_closure_v1::{
     CLAIMS_MARKET_CLOSURE_POST_RESOURCE_DIGEST_DOMAIN_V1,
     CLAIMS_MARKET_CLOSURE_PRE_RESOURCE_DIGEST_DOMAIN_V1, CLAIMS_MARKET_CLOSURE_RECEIPT_BYTES_V1,
@@ -61,8 +62,6 @@ use solana_program::{
     instruction::{AccountMeta, Instruction},
     program::{get_return_data, invoke_signed, set_return_data},
     pubkey::Pubkey,
-    rent::Rent,
-    sysvar::SysvarSerialize,
 };
 use solana_sdk_ids::{system_program, sysvar};
 
@@ -418,7 +417,6 @@ pub fn process_checkpoint_prepare(
     }
     let frame = RetirementAccounts::parse_direct(accounts)?;
     authenticate_direct_privileges(program_id, frame)?;
-    let rent = Rent::from_account_info(frame.rent).map_err(|_| CoreSbfError::Infrastructure)?;
     infrastructure::authenticate_profile(
         program_id,
         frame.infrastructure_profile,
@@ -430,7 +428,6 @@ pub fn process_checkpoint_prepare(
         frame.rent_artifact_staging,
         frame.rent_program,
         frame.rent_programdata,
-        &rent,
     )?;
     let bundle = decode_retirement_bundle(bundle_bytes)?;
     let bundle_input = bundle.input_ref();
@@ -466,7 +463,7 @@ pub fn process_checkpoint_prepare(
         admissions,
         bundle_input.expected_core_lamports,
     )?;
-    let source = authenticate_source_receipt(frame, state, bundle_input, &rent)?;
+    let source = authenticate_source_receipt(frame, state, bundle_input)?;
     let handoff = execute_claims_checkpoint_handoff(
         program_id,
         frame,
@@ -664,7 +661,6 @@ pub fn process_checkpoint_suffix(
         .map_err(|_| CoreSbfError::Instruction)?;
     let frame = RetirementAccounts::parse_direct(accounts)?;
     authenticate_direct_privileges(program_id, frame)?;
-    let rent = Rent::from_account_info(frame.rent).map_err(|_| CoreSbfError::Infrastructure)?;
     infrastructure::authenticate_profile(
         program_id,
         frame.infrastructure_profile,
@@ -676,9 +672,8 @@ pub fn process_checkpoint_suffix(
         frame.rent_artifact_staging,
         frame.rent_program,
         frame.rent_programdata,
-        &rent,
     )?;
-    let (state, checkpoint) = authenticate_checkpoint(program_id, frame, suffix, &rent)?;
+    let (state, checkpoint) = authenticate_checkpoint(program_id, frame, suffix)?;
     let _admissions = authenticate_roles(
         frame.cache,
         frame.registry,
@@ -774,7 +769,6 @@ fn authenticate_checkpoint(
     program_id: &Pubkey,
     frame: RetirementAccounts<'_, '_>,
     suffix: AggregateRetirementSuffixRequestV1,
-    rent: &Rent,
 ) -> Result<(CoreState, AggregateRetirementCheckpointV1), CoreSbfError> {
     let market_bytes = frame
         .market
@@ -823,10 +817,7 @@ fn authenticate_checkpoint(
     let source =
         SourceClosureReceiptV3::decode(&source_bytes).map_err(|_| CoreSbfError::ChildAck)?;
     if frame.source_receipt.owner != frame.resolution_program.key
-        || !rent.is_exempt(
-            frame.source_receipt.lamports(),
-            SOURCE_CLOSURE_RECEIPT_BYTES_V3,
-        )
+        || !funded_rent_persists_v1(frame.source_receipt.lamports())
         || hash(&source_bytes).to_bytes() != suffix.source_receipt_digest
         || source.market != frame.market.key.to_bytes()
         || source.receipt_account != frame.source_receipt.key.to_bytes()
@@ -1240,8 +1231,7 @@ fn finish_checkpoint_retirement(
     {
         return Err(CoreSbfError::Instruction.into());
     }
-    let rent = Rent::from_account_info(frame.rent).map_err(|_| CoreSbfError::Infrastructure)?;
-    let source = authenticate_source_receipt(frame, state, input, &rent)?;
+    let source = authenticate_source_receipt(frame, state, input)?;
     source.authenticate_refund()?;
     let transition =
         plan_retired_transition(request, state, admissions, input.expected_core_lamports)?;
@@ -1460,7 +1450,6 @@ pub fn process(
 ) -> ProgramResult {
     let frame = RetirementAccounts::parse(accounts)?;
     authenticate_privileges(program_id, frame)?;
-    let rent = Rent::from_account_info(frame.rent).map_err(|_| CoreSbfError::Infrastructure)?;
     infrastructure::authenticate_profile(
         program_id,
         frame.infrastructure_profile,
@@ -1472,7 +1461,6 @@ pub fn process(
         frame.rent_artifact_staging,
         frame.rent_program,
         frame.rent_programdata,
-        &rent,
     )?;
     process_authenticated(
         program_id,
@@ -1483,7 +1471,6 @@ pub fn process(
         claims_request_bytes,
         close_vault_request_bytes,
         close_replay_request_bytes,
-        &rent,
     )
 }
 
@@ -1498,7 +1485,6 @@ fn process_authenticated(
     claims_request_bytes: &[u8],
     close_vault_request_bytes: &[u8],
     close_replay_request_bytes: &[u8],
-    rent: &Rent,
 ) -> ProgramResult {
     let bundle = decode_retirement_bundle(bundle_bytes)?;
     let bundle_input = bundle.input_ref();
@@ -1552,7 +1538,7 @@ fn process_authenticated(
         bundle_input.expected_core_lamports,
     )?;
     let parent_digest = hash(request_bytes).to_bytes();
-    let source = authenticate_source_receipt(frame, state, bundle_input, rent)?;
+    let source = authenticate_source_receipt(frame, state, bundle_input)?;
     let rent_before = frame.rent_credit.lamports();
     let claims = execute_claims(
         program_id,
@@ -1755,15 +1741,11 @@ fn authenticate_source_receipt(
     frame: RetirementAccounts<'_, '_>,
     state: CoreState,
     bundle: &dclutch_market_core_codec::RetirementBundleInputV1,
-    rent: &Rent,
 ) -> Result<SourceClosureEvidenceV3, CoreSbfError> {
     if frame.source_receipt.owner != frame.resolution_program.key
         || frame.source_receipt.key.to_bytes() != bundle.source_receipt_account
         || frame.source_receipt.data_len() != SOURCE_CLOSURE_RECEIPT_BYTES_V3
-        || !rent.is_exempt(
-            frame.source_receipt.lamports(),
-            SOURCE_CLOSURE_RECEIPT_BYTES_V3,
-        )
+        || !funded_rent_persists_v1(frame.source_receipt.lamports())
     {
         return Err(CoreSbfError::ChildAck);
     }

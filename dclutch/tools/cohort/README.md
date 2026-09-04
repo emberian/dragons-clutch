@@ -217,7 +217,18 @@ rate from 6,333 to 5,080 at the epoch-1141 boundary mid-cohort and stranded
 three walls, each refusing by exactly the rate difference times the account's
 own footprint, on accounts nobody had touched. Run this immediately after the
 census and before `admit-terminal`, because a zero here means the deployed image
-predates the schema and every terminal check will refuse `FundedRent`.
+predates the schema.
+
+A zero is not a dead end for a cohort already on chain. The rate a ledger was
+funded at is recoverable from the ledger's own bytes --
+`rate = (lamports - remaining native principal) / (128 + len)`, accepted only
+when the division is exact and only when every sibling account of the same
+founding derives the same rate -- and
+`dclutch-resolution-core-v3-operator::funded_rent_recovery_v1` is the host that
+does it. The recovery is for a HOST planning against accounts that already
+exist; the programs still fail closed on a zero, and a founding still records
+what it paid. Cohort-15's own ledgers recover 6,333 and are corroborated at five
+widths by five accounts of the same founding.
 
 ### retire
 
@@ -228,7 +239,27 @@ keeps its own durable journal, so a crash resumes rather than inventing a second
 transaction identity. Rerun until every journal reads finalized. Cohort-15's
 market 1 got as far as phase 3 `Retiring` and stopped five rent-exactness guards
 deep; those five now price against `funded-rent-recorded`'s figure, which is
-what makes this row runnable at all.
+necessary and is not sufficient.
+
+**One wall is still open and it is not a refusal.** `ResolutionCloseFund` --
+which the terminal sequence must land before this row's first packet, because it
+is what takes `outstanding_capabilities` to 0 -- exceeds the default compute
+budget. Driven on devnet 2026-09-04 against cohort-15's market 1 it consumed
+**200,000 of 200,000 compute units and returned `ProgramFailedToComplete`,
+"exceeded CUs meter at BPF instruction"**. The terminal sequence declares no
+`ComputeBudget` prefix at all -- the only driver in this tree that does not,
+while the wallet payout path routinely spends 235,003 CU -- and
+`authenticate_terminal_message_decompilation_v1` pins the durable message at
+exactly ONE instruction, so the prefix is a change to the durability schema, the
+v0 placement authenticator and the completion expectations together, not a flag.
+Until it lands, no market can reach this row, and that is why retirement has
+never completed on any chain. The four packets themselves are drivable: they are
+808, 864, 864 and 744 bytes against a 1,232-byte packet, and the DEPLOYED Core
+routes all four (`Action::Retire` at
+`RETIREMENT_CHECKPOINT_PREPARE_INSTRUCTION_BYTES_V1` for the prepare, and the
+three suffix magics at `dclutch-core-sbf/src/lib.rs:392`). The 2,152-byte
+`RETIREMENT_INSTRUCTION_BYTES_V1` aggregate route is the legacy builder's and
+nothing in this row submits it.
 
 ### route-witness
 

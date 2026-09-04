@@ -13,6 +13,7 @@ use dclutch_account_profile_contract::{
     AccountObservationV1,
     v2::{AccountPrestateV2, AccountProfileV2},
 };
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_execution_strategy_contract::{
     shadow_digest_v3::ShadowRuntimeObservationV3,
     shadow_v3::{ShadowAckV3, ShadowRequestV3},
@@ -35,8 +36,7 @@ use dclutch_shadow_accelerator_auth_v4::{
 };
 use solana_program::{
     account_info::AccountInfo, clock::Clock, entrypoint::ProgramResult, hash::hash,
-    program::set_return_data, program_error::ProgramError, pubkey::Pubkey, rent::Rent,
-    sysvar::SysvarSerialize,
+    program::set_return_data, program_error::ProgramError, pubkey::Pubkey, sysvar::SysvarSerialize,
 };
 use solana_sdk_ids::system_program;
 
@@ -44,11 +44,11 @@ use crate::{
     evaluator::{
         SERIES_CLOCK_COORDINATE_V4, SERIES_LINKED_BASIS_STAGING_COORDINATE_V4,
         SERIES_OCCURRENCE_RAW_COORDINATE_V4, SERIES_OCCURRENCE_STAGING_COORDINATE_V4,
-        SERIES_RENT_SYSVAR_COORDINATE_V4, SERIES_SHADOW_LOGICAL_ACCOUNT_BASE_V4,
-        SERIES_SHADOW_MAXIMUM_FUNDING_COUNT_V4, SERIES_SHADOW_MINIMUM_FUNDING_COUNT_V4,
-        SERIES_TEMPLATE_RAW_COORDINATE_V4, SERIES_TEMPLATE_STAGING_COORDINATE_V4,
-        SERIES_TICKET_RAW_COORDINATE_V4, SERIES_TICKET_STAGING_COORDINATE_V4,
-        SeriesShadowAuthenticatedFactsV4, SeriesShadowEvaluationV4, evaluate_series_shadow_aot_v4,
+        SERIES_SHADOW_LOGICAL_ACCOUNT_BASE_V4, SERIES_SHADOW_MAXIMUM_FUNDING_COUNT_V4,
+        SERIES_SHADOW_MINIMUM_FUNDING_COUNT_V4, SERIES_TEMPLATE_RAW_COORDINATE_V4,
+        SERIES_TEMPLATE_STAGING_COORDINATE_V4, SERIES_TICKET_RAW_COORDINATE_V4,
+        SERIES_TICKET_STAGING_COORDINATE_V4, SeriesShadowAuthenticatedFactsV4,
+        SeriesShadowEvaluationV4, evaluate_series_shadow_aot_v4,
     },
     release::{SelectedSeriesShadowReleaseV1, selected_series_shadow_release_v1},
 };
@@ -227,8 +227,6 @@ fn evaluate_authenticated_invocation(
         return Err(SeriesShadowSbfErrorV4::Runtime);
     }
 
-    let rent = Rent::from_account_info(account(runtime, SERIES_RENT_SYSVAR_COORDINATE_V4)?)
-        .map_err(|_| SeriesShadowSbfErrorV4::FinalizedRecord)?;
     let series_request = SeriesActionRequestV3::decode(request.family_request)
         .map_err(|_| SeriesShadowSbfErrorV4::Runtime)?;
     if series_request.action() != SeriesActionV3::Consume
@@ -236,8 +234,8 @@ fn evaluate_authenticated_invocation(
     {
         return Err(SeriesShadowSbfErrorV4::Runtime);
     }
-    authenticate_series_records(runtime, invocation.registry().key, &rent, series_request)?;
-    let product_runtime = authenticate_product(runtime, invocation.registry().key, &rent)?;
+    authenticate_series_records(runtime, invocation.registry().key, series_request)?;
+    let product_runtime = authenticate_product(runtime, invocation.registry().key)?;
     let product = AuthenticatedProductProjectionV2::new(
         core_content_id(
             product_runtime
@@ -399,14 +397,12 @@ fn funding_count(request: ShadowRequestV3<'_>) -> Result<usize, SeriesShadowSbfE
 fn authenticate_product<'accounts, 'info>(
     runtime: &'accounts [AccountInfo<'info>],
     registry: &Pubkey,
-    rent: &Rent,
 ) -> Result<
     dclutch_product_runtime_v2_svm_reader::AuthenticatedProductRuntimeV3<'accounts, 'info>,
     SeriesShadowSbfErrorV4,
 > {
     authenticate_content_addressed_product_runtime_v3(
         registry,
-        rent,
         ProductRuntimeFrameV3 {
             product: FinalizedRecordFrameV2 {
                 raw: account(runtime, PRODUCT_RAW_COORDINATE)?,
@@ -432,7 +428,6 @@ fn authenticate_product<'accounts, 'info>(
 fn authenticate_series_records(
     runtime: &[AccountInfo<'_>],
     registry: &Pubkey,
-    rent: &Rent,
     request: SeriesActionRequestV3<'_>,
 ) -> Result<(), SeriesShadowSbfErrorV4> {
     let occurrence = request
@@ -463,7 +458,6 @@ fn authenticate_series_records(
     ] {
         authenticate_finalized_record(
             registry,
-            rent,
             account(runtime, raw_coordinate)?,
             account(runtime, staging_coordinate)?,
             schema,
@@ -475,7 +469,6 @@ fn authenticate_series_records(
 
 fn authenticate_finalized_record(
     registry: &Pubkey,
-    rent: &Rent,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
     schema: [u8; 32],
@@ -494,7 +487,7 @@ fn authenticate_finalized_record(
         || raw.is_writable
         || raw.executable
         || hash(&data).to_bytes() != digest
-        || !rent.is_exempt(raw.lamports(), data.len())
+        || !funded_rent_persists_v1(raw.lamports())
         || staging.key != &expected_staging
         || staging.owner != &system_program::ID
         || staging.is_signer

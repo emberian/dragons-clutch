@@ -116,6 +116,9 @@ pub const QUOTE_SCOPE_EVERY_ACTION_V5: u8 = 0;
 /// A current-Rent quote only one action projects.
 pub const QUOTE_SCOPE_ONE_ACTION_V5: u8 = 1;
 
+/// Canonical order key of an unscoped quote: before every scoped one.
+const QUOTE_ORDER_KEY_EVERY_ACTION_V5: u64 = 0;
+
 const SEED_LITERAL: u8 = 0;
 const SEED_COMMON_IDENTITY: u8 = 1;
 const SEED_ITEM_IDENTITY: u8 = 2;
@@ -299,6 +302,26 @@ impl LifecycleCurrentRentQuoteV5 {
         match self.scope {
             QUOTE_SCOPE_ONE_ACTION_V5 => self.action == action,
             _ => true,
+        }
+    }
+
+    /// The scope half of this declaration's canonical order key.
+    ///
+    /// Unscoped sorts first, so a policy that quotes one register for every
+    /// action and then again for one of them is refused by the adjacent
+    /// conjunct rather than by an ordering accident.
+    const fn order_key(self) -> u64 {
+        match self.scope {
+            QUOTE_SCOPE_ONE_ACTION_V5 => self.action as u64 + 1,
+            _ => QUOTE_ORDER_KEY_EVERY_ACTION_V5,
+        }
+    }
+
+    /// The executing action this declaration is quoted for, or every action.
+    pub const fn action(self) -> Option<u32> {
+        match self.scope {
+            QUOTE_SCOPE_ONE_ACTION_V5 => Some(self.action),
+            _ => None,
         }
     }
 }
@@ -1673,7 +1696,7 @@ impl<'a> StateLifecyclePolicyV3<'a> {
         }
         self.validate_current_rent_quotes_against_profile(profile)?;
         self.validate_external_funding_exclusion(external_funding)?;
-        self.validate_lifecycle_prestates(profile, external_funding)
+        self.validate_lifecycle_prestates(profile, external_funding, only_action)
     }
 
     fn validate_external_funding_exclusion(
@@ -1838,10 +1861,26 @@ impl<'a> StateLifecyclePolicyV3<'a> {
         Ok(())
     }
 
+    /// Require every lifecycle-bound coordinate to have one recipe and one create.
+    ///
+    /// `only_action` carries the same notion the plan loop in
+    /// [`Self::validate_account_profile_inner`] already carries, and for the
+    /// identical reason: when the profile describes ONE action's frame, a
+    /// sibling action's recipe is not a candidate for this frame's coordinates
+    /// and a sibling action's plan is not a create for them. Without it a
+    /// family whose actions share one policy cannot exist, because the "exactly
+    /// one recipe names this coordinate" rule below counts every action's
+    /// recipe at the same fixed slot -- General's Selection, Settlement, Batch,
+    /// Order and Candidate recipes all name fixed slot 5 -- and refuses a
+    /// policy that is correct for each action taken separately.
+    ///
+    /// `None` keeps the whole-policy reading byte for byte, so no family that
+    /// publishes one profile for every action sees a different answer.
     fn validate_lifecycle_prestates(
         self,
         profile: AccountProfileV2<'_>,
         external_funding: Option<AccountProfileV3<'_>>,
+        only_action: Option<u32>,
     ) -> Result<()> {
         let mut fixed = 0_u16;
         while fixed < profile.fixed_account_count() {
@@ -1852,6 +1891,7 @@ impl<'a> StateLifecyclePolicyV3<'a> {
                     index: fixed,
                 },
                 external_funding,
+                only_action,
             )?;
             fixed = fixed.checked_add(1).ok_or(Error::Arithmetic)?;
         }
@@ -1869,12 +1909,17 @@ impl<'a> StateLifecyclePolicyV3<'a> {
                     index: item,
                 },
                 external_funding,
+                only_action,
             )?;
             item = item.checked_add(1).ok_or(Error::Arithmetic)?;
         }
         let mut plan_index = 0_u16;
         while plan_index < self.plans {
             let plan = self.plan(plan_index)?;
+            if only_action.is_some_and(|action| plan.action != action) {
+                plan_index = plan_index.checked_add(1).ok_or(Error::Arithmetic)?;
+                continue;
+            }
             if plan.operation == LifecycleOperationV3::AuthenticateOrCreate {
                 let recipe = self.recipe(plan.recipe)?;
                 if rule_for_coordinate(profile, recipe.account)?.prestate()
@@ -1889,11 +1934,33 @@ impl<'a> StateLifecyclePolicyV3<'a> {
         Ok(())
     }
 
+    /// Whether one recipe is reachable from the plans this join is asked about.
+    ///
+    /// A recipe no plan of the selected action names is not part of that
+    /// action's frame, so it cannot be the "one recipe" a lifecycle-bound
+    /// coordinate is required to have. Under `None` every recipe is reachable,
+    /// which is the whole-policy reading unchanged.
+    fn recipe_is_reachable(self, recipe_index: u16, only_action: Option<u32>) -> Result<bool> {
+        let Some(action) = only_action else {
+            return Ok(true);
+        };
+        let mut plan_index = 0_u16;
+        while plan_index < self.plans {
+            let plan = self.plan(plan_index)?;
+            if plan.action == action && plan.recipe == recipe_index {
+                return Ok(true);
+            }
+            plan_index = plan_index.checked_add(1).ok_or(Error::Arithmetic)?;
+        }
+        Ok(false)
+    }
+
     fn validate_lifecycle_prestate_coordinate(
         self,
         profile: AccountProfileV2<'_>,
         coordinate: AccountCoordinateV3,
         external_funding: Option<AccountProfileV3<'_>>,
+        only_action: Option<u32>,
     ) -> Result<()> {
         let rule = rule_for_coordinate(profile, coordinate)?;
         if rule.prestate() != AccountPrestateV2::LifecycleBound {
@@ -1908,7 +1975,9 @@ impl<'a> StateLifecyclePolicyV3<'a> {
         let mut recipe_index = 0_u16;
         while recipe_index < self.recipes {
             let recipe = self.recipe(recipe_index)?;
-            if recipe.account == coordinate {
+            if recipe.account == coordinate
+                && self.recipe_is_reachable(recipe_index, only_action)?
+            {
                 if matching_recipe.is_some()
                     || recipe.data_base != rule.data_length()
                     || recipe.data_stride != rule.data_item_stride()
@@ -1924,6 +1993,10 @@ impl<'a> StateLifecyclePolicyV3<'a> {
         let mut plan_index = 0_u16;
         while plan_index < self.plans {
             let plan = self.plan(plan_index)?;
+            if only_action.is_some_and(|action| plan.action != action) {
+                plan_index = plan_index.checked_add(1).ok_or(Error::Arithmetic)?;
+                continue;
+            }
             if plan.recipe == recipe_index
                 && matches!(
                     plan.operation,
@@ -2111,14 +2184,36 @@ impl<'a> StateLifecyclePolicyV3<'a> {
             previous_binding = Some(order);
             binding_index = binding_index.checked_add(1).ok_or(Error::Arithmetic)?;
         }
-        let mut previous_destination = None;
+        // QUOTE ORDER IS (destination, action scope), not destination alone.
+        //
+        // The rule this replaces -- destinations strictly ascending -- said one
+        // register may be quoted once in a policy, which is right for a family
+        // whose actions each get their own policy and false for one whose
+        // actions share a root. General's InitializeSettlement and PlaceOrder
+        // create the same four rent-bearing children and quote the same four
+        // registers; under the old rule their two declarations could not coexist
+        // in one artifact, so the two actions could not share a manifest entry,
+        // which is the wall cohort-15's General market died on.
+        //
+        // What made the old rule sound is preserved exactly: for any ONE
+        // executing action, at most one quote writes a given register. An
+        // unscoped quote applies to every action, so it may not share a
+        // destination with anything; scoped quotes may, because their scopes are
+        // disjoint. Both conjuncts are checked below rather than argued.
+        let mut previous_quote: Option<(u16, u64)> = None;
         let mut quote_index = 0_u16;
         while quote_index < self.current_rent_quotes {
             let quote = self.current_rent_quote(quote_index)?;
-            if previous_destination.is_some_and(|previous| previous >= quote.scalar_destination) {
+            let order = (quote.scalar_destination, quote.order_key());
+            if previous_quote.is_some_and(|previous| previous >= order) {
                 return Err(Error::InvalidRentQuote);
             }
-            previous_destination = Some(quote.scalar_destination);
+            if previous_quote.is_some_and(|(destination, key)| {
+                destination == quote.scalar_destination && key == QUOTE_ORDER_KEY_EVERY_ACTION_V5
+            }) {
+                return Err(Error::InvalidRentQuote);
+            }
+            previous_quote = Some(order);
             quote_index = quote_index.checked_add(1).ok_or(Error::Arithmetic)?;
         }
         Ok(())

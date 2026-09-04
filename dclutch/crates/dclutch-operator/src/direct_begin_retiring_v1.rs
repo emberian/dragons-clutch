@@ -7,6 +7,7 @@
 //! instruction or reports that the exact Retiring/zero-maker poststate is
 //! already present.
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
 use dclutch_capability_program_contract::{
     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1, CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityProgramV1,
@@ -42,13 +43,12 @@ use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
-    rent::Rent,
 };
 use solana_sdk_ids::bpf_loader_upgradeable;
 
 use crate::{
     Finality, Observation, ObservedAccount,
-    observation::{FinalizedRecordProof, authenticate_finalized_record, decode_rent},
+    observation::{FinalizedRecordProof, authenticate_finalized_record},
 };
 
 /// Canonical persisted evidence label for the three-selector ProgramSet.
@@ -413,11 +413,9 @@ pub fn plan_direct_begin_retiring_v1(
         return Err(DirectBeginRetiringPlanErrorV1::DevnetOnly);
     }
     let observation = same_finalized_observation(snapshot)?;
-    let rent = decode_rent(&snapshot.rent_sysvar)
-        .map_err(|_| DirectBeginRetiringPlanErrorV1::InvalidInfrastructure)?;
     authenticate_infrastructure(snapshot)?;
-    let market = authenticate_market_and_release(snapshot, &rent)?;
-    let (header, root_state) = authenticate_root_and_artifacts(snapshot, &rent, market)?;
+    let market = authenticate_market_and_release(snapshot)?;
+    let (header, root_state) = authenticate_root_and_artifacts(snapshot, market)?;
     assemble_plan(
         snapshot,
         AuthenticatedLifecycleV1 {
@@ -504,11 +502,10 @@ fn authenticate_infrastructure(
 
 fn authenticate_market_and_release(
     snapshot: &DirectBeginRetiringSnapshotV1,
-    rent: &Rent,
 ) -> Result<CoreState, DirectBeginRetiringPlanErrorV1> {
     if snapshot.market.owner != snapshot.core_program.key
         || snapshot.market.data.len() != STATE_BYTES
-        || !rent.is_exempt(snapshot.market.lamports, snapshot.market.data.len())
+        || !funded_rent_persists_v1(snapshot.market.lamports)
     {
         return Err(DirectBeginRetiringPlanErrorV1::InvalidMarket);
     }
@@ -536,10 +533,7 @@ fn authenticate_market_and_release(
     if snapshot.activation_cache.owner != snapshot.registry_program.key
         || snapshot.activation_cache.executable
         || snapshot.activation_cache.data.len() != ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1
-        || !rent.is_exempt(
-            snapshot.activation_cache.lamports,
-            snapshot.activation_cache.data.len(),
-        )
+        || !funded_rent_persists_v1(snapshot.activation_cache.lamports)
     {
         return Err(DirectBeginRetiringPlanErrorV1::InvalidRelease);
     }
@@ -635,7 +629,6 @@ fn deployment_observation(
 
 fn authenticate_root_and_artifacts(
     snapshot: &DirectBeginRetiringSnapshotV1,
-    rent: &Rent,
     market: CoreState,
 ) -> Result<(CapabilityRootHeaderV1, DirectRootStateV1), DirectBeginRetiringPlanErrorV1> {
     let root_width = CAPABILITY_ROOT_HEADER_BYTES_V1
@@ -643,7 +636,7 @@ fn authenticate_root_and_artifacts(
         .ok_or(DirectBeginRetiringPlanErrorV1::InvalidRoot)?;
     if snapshot.root.owner != snapshot.trading_program.key
         || snapshot.root.data.len() != root_width
-        || !rent.is_exempt(snapshot.root.lamports, snapshot.root.data.len())
+        || !funded_rent_persists_v1(snapshot.root.lamports)
     {
         return Err(DirectBeginRetiringPlanErrorV1::InvalidRoot);
     }
@@ -689,7 +682,6 @@ fn authenticate_root_and_artifacts(
     let selection = header.selection();
     authenticate_persisted_raw(
         snapshot.registry_program.key,
-        rent,
         &snapshot.capability_manifest,
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         selection.manifest().to_bytes(),
@@ -736,7 +728,6 @@ fn authenticate_root_and_artifacts(
     ] {
         authenticate_finalized_record(
             snapshot.registry_program.key,
-            rent,
             raw,
             &FinalizedRecordProof {
                 schema_release_id: schema,
@@ -808,7 +799,6 @@ fn authenticate_root_and_artifacts(
 
 fn authenticate_persisted_raw(
     registry: Pubkey,
-    rent: &Rent,
     raw: &ObservedAccount,
     schema: [u8; 32],
     digest: [u8; 32],
@@ -824,7 +814,7 @@ fn authenticate_persisted_raw(
         || raw.owner != registry
         || raw.executable
         || hash(&raw.data).to_bytes() != digest
-        || !rent.is_exempt(raw.lamports, raw.data.len())
+        || !funded_rent_persists_v1(raw.lamports)
     {
         return Err(DirectBeginRetiringPlanErrorV1::InvalidManifest);
     }

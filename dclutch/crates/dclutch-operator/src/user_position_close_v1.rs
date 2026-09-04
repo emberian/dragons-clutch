@@ -7,6 +7,7 @@
 //! baselines. The predicted receipt carries authenticated live balances, so a
 //! third-party donation cannot veto close or disappear during reclamation.
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_claims_svm::{
     liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
@@ -147,8 +148,8 @@ pub fn plan_user_position_close_v1(
     let observation = same_finalized_observation(snapshot)?;
     let rent = decode_rent(&snapshot.rent_sysvar)
         .map_err(|_| UserPositionClosePlanErrorV1::InvalidInfrastructure)?;
-    authenticate_infrastructure(snapshot, &rent)?;
-    let activated = authenticate_release_cache(snapshot, &rent)?;
+    authenticate_infrastructure(snapshot)?;
+    let activated = authenticate_release_cache(snapshot)?;
     for (role, program, programdata) in [
         (
             ExecutionRoleV1::Trading,
@@ -164,9 +165,9 @@ pub fn plan_user_position_close_v1(
         authenticate_role_deployment(activated, role, program, programdata)
             .map_err(|_| UserPositionClosePlanErrorV1::InvalidRelease)?;
     }
-    let market = authenticate_claims_market(snapshot, &rent, activated)?;
+    let market = authenticate_claims_market(snapshot, activated)?;
     let admission = authenticate_position(snapshot, &rent, market)?;
-    authenticate_rent_credit(snapshot, market, &rent)?;
+    authenticate_rent_credit(snapshot, market)?;
     assemble_plan(snapshot, observation, market, admission)
 }
 
@@ -203,7 +204,6 @@ fn same_finalized_observation(
 
 fn authenticate_infrastructure(
     snapshot: &UserPositionCloseSnapshotV1,
-    rent: &Rent,
 ) -> Result<(), UserPositionClosePlanErrorV1> {
     if snapshot.system_program.key != system_program::ID
         || snapshot.system_program.owner != native_loader::ID
@@ -224,10 +224,7 @@ fn authenticate_infrastructure(
     }
     if snapshot.rent_credit.owner != snapshot.rent_program.key
         || snapshot.rent_credit.executable
-        || !rent.is_exempt(
-            snapshot.rent_credit.lamports,
-            snapshot.rent_credit.data.len(),
-        )
+        || !funded_rent_persists_v1(snapshot.rent_credit.lamports)
     {
         return Err(UserPositionClosePlanErrorV1::InvalidRentCredit);
     }
@@ -236,13 +233,12 @@ fn authenticate_infrastructure(
 
 fn authenticate_release_cache<'a>(
     snapshot: &'a UserPositionCloseSnapshotV1,
-    rent: &Rent,
 ) -> Result<ActivatedExecutionReleaseSetViewV1<'a>, UserPositionClosePlanErrorV1> {
     let cache = &snapshot.activation_cache;
     if cache.owner != snapshot.registry_program.key
         || cache.executable
         || cache.data.len() != ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1
-        || !rent.is_exempt(cache.lamports, cache.data.len())
+        || !funded_rent_persists_v1(cache.lamports)
     {
         return Err(UserPositionClosePlanErrorV1::InvalidRelease);
     }
@@ -264,13 +260,12 @@ fn authenticate_release_cache<'a>(
 
 fn authenticate_claims_market(
     snapshot: &UserPositionCloseSnapshotV1,
-    rent: &Rent,
     activated: ActivatedExecutionReleaseSetViewV1<'_>,
 ) -> Result<LiabilityBasisMarketViewV2, UserPositionClosePlanErrorV1> {
     let account = &snapshot.claims_market;
     if account.owner != snapshot.claims_program.key
         || account.executable
-        || !rent.is_exempt(account.lamports, account.data.len())
+        || !funded_rent_persists_v1(account.lamports)
     {
         return Err(UserPositionClosePlanErrorV1::InvalidClaimsMarket);
     }
@@ -322,8 +317,8 @@ fn authenticate_position(
         || snapshot.position.executable
         || snapshot.admission.executable
         || snapshot.admission.data.len() != PROTOCOL_POSITION_ADMISSION_BYTES_V2
-        || !rent.is_exempt(snapshot.position.lamports, snapshot.position.data.len())
-        || !rent.is_exempt(snapshot.admission.lamports, snapshot.admission.data.len())
+        || !funded_rent_persists_v1(snapshot.position.lamports)
+        || !funded_rent_persists_v1(snapshot.admission.lamports)
     {
         return Err(UserPositionClosePlanErrorV1::InvalidPosition);
     }
@@ -372,14 +367,10 @@ fn authenticate_position(
 fn authenticate_rent_credit(
     snapshot: &UserPositionCloseSnapshotV1,
     market: LiabilityBasisMarketViewV2,
-    rent: &Rent,
 ) -> Result<(), UserPositionClosePlanErrorV1> {
     if snapshot.rent_credit.owner != snapshot.rent_program.key
         || snapshot.rent_credit.executable
-        || !rent.is_exempt(
-            snapshot.rent_credit.lamports,
-            snapshot.rent_credit.data.len(),
-        )
+        || !funded_rent_persists_v1(snapshot.rent_credit.lamports)
     {
         return Err(UserPositionClosePlanErrorV1::InvalidRentCredit);
     }

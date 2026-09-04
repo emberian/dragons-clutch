@@ -23,6 +23,7 @@ extern crate std;
 
 use core::convert::TryFrom;
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_core_contract::ContentId;
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_activation_auth_v1::{
@@ -423,12 +424,8 @@ fn process_activate_role(
     let rent_sysvar = next(&mut iterator)?;
     validate_activate_role_privileges(payer, cache, system, rent_sysvar, frame)?;
     let rent = authenticate_rent_and_system(system, rent_sysvar)?;
-    let (release_set_id, release_set) = authenticate_release_set_record(
-        program_id,
-        release_set_record,
-        release_set_staging,
-        &rent,
-    )?;
+    let (release_set_id, release_set) =
+        authenticate_release_set_record(program_id, release_set_record, release_set_staging)?;
     let (created, cache_bump) =
         ensure_activation_cache_account(program_id, payer, cache, system, &rent, release_set_id)?;
     let mut output = cache
@@ -452,7 +449,6 @@ fn process_activate_role(
         &mut output,
         release_set_id,
         &release_set,
-        &rent,
         role,
         frame,
     )?;
@@ -523,7 +519,6 @@ fn authenticate_release_set_record(
     program_id: &Pubkey,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
-    rent: &Rent,
 ) -> Result<(ContentId, ExecutionReleaseSetV1), ProgramError> {
     let data = raw.try_borrow_data().map_err(|_| RegistryError::Borrow)?;
     if data.len() != EXECUTION_RELEASE_SET_BYTES_V1 {
@@ -534,7 +529,6 @@ fn authenticate_release_set_record(
         program_id,
         raw,
         staging,
-        rent,
         EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1,
         digest,
         &data,
@@ -547,7 +541,6 @@ fn authenticate_release_set_record(
 fn authenticate_artifact_role(
     program_id: &Pubkey,
     expected: ExecutionRoleBindingV1,
-    rent: &Rent,
     frame: RoleFrame<'_, '_>,
 ) -> Result<ArtifactActivationInputV1, ProgramError> {
     let data = frame
@@ -563,7 +556,6 @@ fn authenticate_artifact_role(
         program_id,
         frame.artifact_record,
         frame.artifact_staging,
-        rent,
         ARTIFACT_RELEASE_SCHEMA_ID_V1,
         expected.artifact_release().to_bytes(),
         &data,
@@ -669,14 +661,13 @@ fn authenticate_finalized_record(
     program_id: &Pubkey,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
-    rent: &Rent,
     schema_id: [u8; 32],
     digest: [u8; 32],
     exact_content: &[u8],
 ) -> ProgramResult {
     if raw.owner != program_id
         || raw.executable
-        || !rent.is_exempt(raw.lamports(), exact_content.len())
+        || !funded_rent_persists_v1(raw.lamports())
         || hash(exact_content).to_bytes() != digest
     {
         return Err(RegistryError::FinalizedRecord.into());
@@ -706,11 +697,10 @@ fn activate_and_write_role(
     output: &mut [u8],
     release_set_id: ContentId,
     release_set: &ExecutionReleaseSetV1,
-    rent: &Rent,
     role: ExecutionRoleV1,
     frame: RoleFrame<'_, '_>,
 ) -> ProgramResult {
-    let input = authenticate_artifact_role(program_id, release_set.binding(role), rent, frame)?;
+    let input = authenticate_artifact_role(program_id, release_set.binding(role), frame)?;
     activate_execution_role_into_v1(output, release_set_id, release_set, role, &input)
         .map_err(|_| RegistryError::Release.into())
 }
@@ -782,7 +772,7 @@ fn ensure_activation_cache_account<'a>(
     if cache.owner == program_id {
         if cache.executable
             || cache.data_len() != ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1
-            || !rent.is_exempt(cache.lamports(), cache.data_len())
+            || !funded_rent_persists_v1(cache.lamports())
         {
             return Err(RegistryError::ActivationCache.into());
         }

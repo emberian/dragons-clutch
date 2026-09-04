@@ -6,6 +6,7 @@
 //! returning an instruction. They never perform RPC, access keys, sign, or
 //! submit a transaction.
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_core_contract::ContentId;
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
@@ -371,35 +372,30 @@ pub fn build_registry_activation_v1(
     authenticate_system_program(&state.system_program)?;
     let rent = decode_rent(&state.rent_sysvar)?;
     let (release_set_id, release_set) =
-        authenticate_release_set(registry_program, &rent, &state.execution_release_set)?;
+        authenticate_release_set(registry_program, &state.execution_release_set)?;
 
     let core = authenticate_role(
         registry_program,
-        &rent,
         release_set.binding(ExecutionRoleV1::Core),
         &state.roles.core,
     )?;
     let claims = authenticate_role(
         registry_program,
-        &rent,
         release_set.binding(ExecutionRoleV1::Claims),
         &state.roles.claims,
     )?;
     let trading = authenticate_role(
         registry_program,
-        &rent,
         release_set.binding(ExecutionRoleV1::Trading),
         &state.roles.trading,
     )?;
     let resolution = authenticate_role(
         registry_program,
-        &rent,
         release_set.binding(ExecutionRoleV1::Resolution),
         &state.roles.resolution,
     )?;
     let custody = authenticate_role(
         registry_program,
-        &rent,
         release_set.binding(ExecutionRoleV1::Custody),
         &state.roles.custody,
     )?;
@@ -613,12 +609,10 @@ struct AuthenticatedRoleInput {
 
 fn authenticate_release_set(
     registry_program: Pubkey,
-    rent: &Rent,
     state: &RegistryFinalizedRecordState,
 ) -> Result<(ContentId, ExecutionReleaseSetV1), Error> {
     let digest = authenticate_finalized_record(
         registry_program,
-        rent,
         EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1,
         None,
         state,
@@ -631,14 +625,12 @@ fn authenticate_release_set(
 
 fn authenticate_role(
     registry_program: Pubkey,
-    rent: &Rent,
     expected: ExecutionRoleBindingV1,
     state: &RegistryRoleState,
 ) -> Result<AuthenticatedRoleInput, Error> {
     let expected_digest = expected.artifact_release().to_bytes();
     authenticate_finalized_record(
         registry_program,
-        rent,
         ARTIFACT_RELEASE_SCHEMA_ID_V1,
         Some(expected_digest),
         &state.artifact_release,
@@ -664,7 +656,6 @@ fn authenticate_role(
 
 fn authenticate_finalized_record(
     registry_program: Pubkey,
-    rent: &Rent,
     schema: [u8; 32],
     expected_digest: Option<[u8; 32]>,
     state: &RegistryFinalizedRecordState,
@@ -675,7 +666,7 @@ fn authenticate_finalized_record(
     if expected_digest.is_some_and(|expected| expected != digest)
         || record.owner != registry_program
         || record.executable
-        || !rent.is_exempt(record.lamports, record.data.len())
+        || !funded_rent_persists_v1(record.lamports)
     {
         return Err(Error::InvalidFinalizedRecord);
     }
@@ -782,7 +773,7 @@ fn authenticate_activation_cache(
     if cache.owner != registry_program
         || cache.executable
         || cache.data.len() != ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1
-        || !rent.is_exempt(cache.lamports, cache.data.len())
+        || !funded_rent_persists_v1(cache.lamports)
         || !activation_cache_body_matches(&cache.data, expected, expected_cache_bump)
     {
         return Err(Error::InvalidActivationCache);

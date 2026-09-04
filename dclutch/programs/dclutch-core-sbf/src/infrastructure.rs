@@ -2,6 +2,7 @@
 
 use core::convert::TryFrom;
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_registry_contract::{
     ARTIFACT_RELEASE_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
     DeploymentObservationV1, require_slot_pinned_release_v1, slot_pinned_release_elf_digest_v1,
@@ -49,7 +50,6 @@ pub(crate) fn process_initialize(
         frame.registry_artifact_staging,
         frame.registry_program,
         frame.registry_programdata,
-        &rent,
         ArtifactAdmissionV1::FirstAdmission,
     )?;
     let rent_binding = authenticate_artifact(
@@ -58,7 +58,6 @@ pub(crate) fn process_initialize(
         frame.rent_artifact_staging,
         frame.rent_program,
         frame.rent_programdata,
-        &rent,
         ArtifactAdmissionV1::FirstAdmission,
     )?;
     if frame.registry_program.key == program_id || frame.rent_program.key == program_id {
@@ -174,7 +173,6 @@ fn create_genesis_profile_v2(
 pub(crate) fn authenticate_found(
     program_id: &Pubkey,
     frame: &FoundAccounts<'_, '_>,
-    rent: &Rent,
 ) -> Result<(), CoreSbfError> {
     authenticate_profile(
         program_id,
@@ -187,7 +185,6 @@ pub(crate) fn authenticate_found(
         frame.rent_artifact_staging,
         frame.rent_program,
         frame.rent_programdata,
-        rent,
     )?;
     Ok(())
 }
@@ -197,7 +194,6 @@ pub(crate) fn authenticate_found(
 pub(crate) fn authenticate_projected_found(
     program_id: &Pubkey,
     frame: &ProjectedFoundAccountsV2<'_, '_>,
-    rent: &Rent,
 ) -> Result<(), CoreSbfError> {
     authenticate_profile(
         program_id,
@@ -210,7 +206,6 @@ pub(crate) fn authenticate_projected_found(
         frame.rent_artifact_staging,
         frame.rent_program,
         frame.rent_programdata,
-        rent,
     )?;
     Ok(())
 }
@@ -251,7 +246,6 @@ pub(crate) fn authenticate_profile(
     rent_artifact_staging: &AccountInfo<'_>,
     rent_program: &AccountInfo<'_>,
     rent_programdata: &AccountInfo<'_>,
-    rent: &Rent,
 ) -> Result<ProtocolInfrastructureProfileV2, CoreSbfError> {
     let expected =
         Pubkey::find_program_address(&[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2], program_id)
@@ -260,10 +254,7 @@ pub(crate) fn authenticate_profile(
         || infrastructure_profile.owner != program_id
         || infrastructure_profile.data_len() != PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2
         || infrastructure_profile.executable
-        || !rent.is_exempt(
-            infrastructure_profile.lamports(),
-            PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2,
-        )
+        || !funded_rent_persists_v1(infrastructure_profile.lamports())
     {
         return Err(CoreSbfError::Infrastructure);
     }
@@ -283,7 +274,6 @@ pub(crate) fn authenticate_profile(
         registry_artifact_staging,
         registry_program,
         registry_programdata,
-        rent,
         ArtifactAdmissionV1::AlreadyPinned,
     )?;
     let rent_binding = authenticate_artifact(
@@ -292,7 +282,6 @@ pub(crate) fn authenticate_profile(
         rent_artifact_staging,
         rent_program,
         rent_programdata,
-        rent,
         ArtifactAdmissionV1::AlreadyPinned,
     )?;
     if registry != profile.registry() || rent_binding != profile.rent() {
@@ -435,18 +424,10 @@ fn authenticate_artifact(
     staging: &AccountInfo<'_>,
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
-    rent: &Rent,
     admission: ArtifactAdmissionV1,
 ) -> Result<ExecutionRoleBindingV1, CoreSbfError> {
-    let (binding, _) = authenticate_artifact_release(
-        registry,
-        raw,
-        staging,
-        program,
-        programdata,
-        rent,
-        admission,
-    )?;
+    let (binding, _) =
+        authenticate_artifact_release(registry, raw, staging, program, programdata, admission)?;
     Ok(binding)
 }
 
@@ -462,7 +443,6 @@ pub(crate) fn authenticate_artifact_release(
     staging: &AccountInfo<'_>,
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
-    rent: &Rent,
     admission: ArtifactAdmissionV1,
 ) -> Result<(ExecutionRoleBindingV1, ArtifactReleaseV1), CoreSbfError> {
     let bytes = raw
@@ -476,7 +456,6 @@ pub(crate) fn authenticate_artifact_release(
         registry,
         raw,
         staging,
-        rent,
         ARTIFACT_RELEASE_SCHEMA_ID_V1,
         digest,
         &bytes,

@@ -14,7 +14,7 @@ use dclutch_account_profile_contract::lifecycle_v3::{
         LifecycleAccountCoordinateV3, LifecycleCurrentRentQuoteInputV5, LifecycleGuardInputV3,
         LifecycleImmutableIdentityBindingInputV4, LifecycleOperationInputV3, LifecyclePlanInputV3,
         LifecycleProtectedOutputsInputV3, LifecycleRecipeInputV3, LifecycleRefundSourceInputV3,
-        LifecycleRegisterCoordinateV3, encode_lifecycle_policy_v4_atomic,
+        LifecycleRegisterCoordinateV3, LifecycleSeedInputV3, encode_lifecycle_policy_v4_atomic,
         encode_lifecycle_policy_v5_atomic,
     },
 };
@@ -33,6 +33,7 @@ use crate::{
     },
     hot_candidate_v3::{identity, scalar},
     local_state_v3::{GENERAL_LOCAL_STATE_HEADER_BYTES_V3, GeneralLocalStateLayoutV3},
+    release_v3::GENERAL_ACTIONS_V5,
     runtime_selection::{RUNTIME_SELECTION_CURSOR_BYTES_V2, RuntimeSelectionLayoutV2},
     runtime_verify::{RUNTIME_VERIFIER_HEADER_BYTES_V2, RuntimeVerifierLayoutV2},
     runtime_width::{
@@ -363,6 +364,156 @@ pub const fn general_child_account_start_v3(action: Action) -> u16 {
     general_readonly_evidence_start_v3(action) + general_readonly_evidence_count_v3(action)
 }
 
+/// The most recipes, plans or protected outputs one General action declares.
+///
+/// VerifyCandidateRow sets all three: Candidate, Verifier and the raw result.
+pub const GENERAL_ACTION_MAX_RECIPES_V5: usize = 3;
+
+/// The most immutable identity bindings one General action declares.
+///
+/// Consider and Freeze set it, at five apiece.
+pub const GENERAL_ACTION_MAX_BINDINGS_V5: usize = 5;
+
+/// The most current-Rent quotes one General action declares.
+///
+/// InitializeSettlement and PlaceOrder set it, at four apiece -- the escrow
+/// Position, its admission record, the Custody replay, and the vault.
+pub const GENERAL_ACTION_MAX_QUOTES_V5: usize = 4;
+
+/// One General action's complete lifecycle declaration, before it is encoded.
+///
+/// WHY THIS TYPE EXISTS. Each of the five builders below used to encode the
+/// arrays it had just built and return bytes, so the only way to ask what an
+/// action declares was to encode a whole policy and decode it again. That was
+/// adequate while every action had its own artifact; it is not adequate now,
+/// because the family publishes ONE policy and the family builder has to
+/// CONCATENATE fifteen of these with their table indices rebased. Returning the
+/// declaration rather than its encoding keeps the per-action builders the sole
+/// author of every value and gives the family builder something to join.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralActionLifecycleShapeV5 {
+    recipes: [LifecycleRecipeInputV3; GENERAL_ACTION_MAX_RECIPES_V5],
+    recipe_count: usize,
+    seeds: &'static [LifecycleSeedInputV3<'static>],
+    plans: [LifecyclePlanInputV3; GENERAL_ACTION_MAX_RECIPES_V5],
+    protected: [Option<LifecycleProtectedOutputsInputV3>; GENERAL_ACTION_MAX_RECIPES_V5],
+    plan_count: usize,
+    bindings: [LifecycleImmutableIdentityBindingInputV4; GENERAL_ACTION_MAX_BINDINGS_V5],
+    binding_count: usize,
+}
+
+impl GeneralActionLifecycleShapeV5 {
+    /// The action's PDA recipes, in canonical order.
+    #[must_use]
+    pub fn recipes(&self) -> &[LifecycleRecipeInputV3] {
+        self.recipes.get(..self.recipe_count).unwrap_or(&[])
+    }
+
+    /// The action's sole seed table, whose windows its recipes index.
+    #[must_use]
+    pub const fn seeds(&self) -> &'static [LifecycleSeedInputV3<'static>] {
+        self.seeds
+    }
+
+    /// The action's lifecycle plans, in canonical order.
+    #[must_use]
+    pub fn plans(&self) -> &[LifecyclePlanInputV3] {
+        self.plans.get(..self.plan_count).unwrap_or(&[])
+    }
+
+    /// The protected outputs, one slot per plan.
+    #[must_use]
+    pub fn protected(&self) -> &[Option<LifecycleProtectedOutputsInputV3>] {
+        self.protected.get(..self.plan_count).unwrap_or(&[])
+    }
+
+    /// The action's immutable identity bindings, in canonical order.
+    #[must_use]
+    pub fn bindings(&self) -> &[LifecycleImmutableIdentityBindingInputV4] {
+        self.bindings.get(..self.binding_count).unwrap_or(&[])
+    }
+}
+
+/// Collect one builder's arrays into the shape the family policy joins.
+fn action_shape(
+    recipes: &[LifecycleRecipeInputV3],
+    seeds: &'static [LifecycleSeedInputV3<'static>],
+    plans: &[LifecyclePlanInputV3],
+    protected: &[Option<LifecycleProtectedOutputsInputV3>],
+    bindings: &[LifecycleImmutableIdentityBindingInputV4],
+) -> Result<GeneralActionLifecycleShapeV5> {
+    let first_recipe = *recipes
+        .first()
+        .ok_or(GeneralStateArtifactErrorV3::Geometry)?;
+    let first_plan = *plans.first().ok_or(GeneralStateArtifactErrorV3::Geometry)?;
+    if recipes.len() > GENERAL_ACTION_MAX_RECIPES_V5
+        || plans.len() > GENERAL_ACTION_MAX_RECIPES_V5
+        || protected.len() != plans.len()
+        || bindings.len() > GENERAL_ACTION_MAX_BINDINGS_V5
+    {
+        return Err(GeneralStateArtifactErrorV3::Geometry);
+    }
+    let mut shape = GeneralActionLifecycleShapeV5 {
+        recipes: [first_recipe; GENERAL_ACTION_MAX_RECIPES_V5],
+        recipe_count: recipes.len(),
+        seeds,
+        plans: [first_plan; GENERAL_ACTION_MAX_RECIPES_V5],
+        protected: [None; GENERAL_ACTION_MAX_RECIPES_V5],
+        plan_count: plans.len(),
+        bindings: [EMPTY_BINDING_V4; GENERAL_ACTION_MAX_BINDINGS_V5],
+        binding_count: bindings.len(),
+    };
+    for (slot, recipe) in recipes.iter().enumerate() {
+        *shape
+            .recipes
+            .get_mut(slot)
+            .ok_or(GeneralStateArtifactErrorV3::Geometry)? = *recipe;
+    }
+    for (slot, plan) in plans.iter().enumerate() {
+        *shape
+            .plans
+            .get_mut(slot)
+            .ok_or(GeneralStateArtifactErrorV3::Geometry)? = *plan;
+        *shape
+            .protected
+            .get_mut(slot)
+            .ok_or(GeneralStateArtifactErrorV3::Geometry)? = *protected
+            .get(slot)
+            .ok_or(GeneralStateArtifactErrorV3::Geometry)?;
+    }
+    for (slot, binding) in bindings.iter().enumerate() {
+        *shape
+            .bindings
+            .get_mut(slot)
+            .ok_or(GeneralStateArtifactErrorV3::Geometry)? = *binding;
+    }
+    Ok(shape)
+}
+
+/// The placeholder an unused binding slot holds; never encoded.
+const EMPTY_BINDING_V4: LifecycleImmutableIdentityBindingInputV4 =
+    LifecycleImmutableIdentityBindingInputV4 {
+        plan: 0,
+        data_offset: 0,
+        canonical: LifecycleRegisterCoordinateV3::common(0),
+    };
+
+/// Read one General action's complete lifecycle declaration.
+pub fn general_action_lifecycle_shape_v5(action: Action) -> Result<GeneralActionLifecycleShapeV5> {
+    require_authored(action)?;
+    if action == Action::Close {
+        close_shape(action)
+    } else if action == Action::CloseCandidate {
+        close_candidate_shape(action)
+    } else if action == Action::VerifyCandidateRow {
+        verify_candidate_row_shape(action)
+    } else if matches!(action, Action::PlaceOrder | Action::CancelOrder) {
+        batch_and_order_shape(action)
+    } else {
+        primary_shape(action)
+    }
+}
+
 /// Generate one complete protected-output lifecycle policy atomically.
 pub fn encode_general_state_lifecycle_v3_atomic(
     action: Action,
@@ -373,17 +524,20 @@ pub fn encode_general_state_lifecycle_v3_atomic(
     if scratch.len() != expected || output.len() != expected {
         return Err(GeneralStateArtifactErrorV3::Geometry);
     }
-    if action == Action::Close {
-        encode_close(action, None, scratch, output)
-    } else if action == Action::CloseCandidate {
-        encode_close_candidate(action, None, scratch, output)
-    } else if action == Action::VerifyCandidateRow {
-        encode_verify_candidate_row(action, None, scratch, output)
-    } else if matches!(action, Action::PlaceOrder | Action::CancelOrder) {
-        encode_batch_and_order(action, None, scratch, output)
-    } else {
-        encode_primary(action, None, scratch, output)
-    }
+    let shape = general_action_lifecycle_shape_v5(action)?;
+    encode_lifecycle_policy_v4_atomic(
+        shape.recipes(),
+        shape.seeds(),
+        shape.plans(),
+        shape.protected(),
+        shape.bindings(),
+        scratch,
+        output,
+    )
+    .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
+    StateLifecyclePolicyV4::decode_selected([1; 32], [1; 32], output)
+        .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
+    Ok(())
 }
 
 /// Generate one complete General Lifecycle V5 policy with current-Rent quotes.
@@ -391,6 +545,13 @@ pub fn encode_general_state_lifecycle_v3_atomic(
 /// Only Initialize declares child-creation quotes. Other actions still select
 /// the V5 schema with an empty quote table, preventing a V4 fallback in the
 /// successor artifact chain.
+///
+/// THIS IS THE PER-ACTION ARTIFACT AND IT IS NO LONGER WHAT A RELEASE PUBLISHES.
+/// It remains the single author of every value the family policy carries -- and
+/// the control the family builder is proved against, action by action -- but a
+/// Market selects [`encode_general_family_state_lifecycle_v5_atomic`], because a
+/// capability manifest entry pins ONE `child_derivation_id` and fifteen policies
+/// have fifteen digests.
 pub fn encode_general_state_lifecycle_v5_atomic(
     action: Action,
     child_widths: Option<GeneralChildRentWidthsV5>,
@@ -402,26 +563,300 @@ pub fn encode_general_state_lifecycle_v5_atomic(
         return Err(GeneralStateArtifactErrorV3::Geometry);
     }
     let quotes = general_current_rent_quotes_v5(action, child_widths)?;
-    let selected = quotes.as_slice(action);
-    if action == Action::Close {
-        encode_close(action, Some(selected), scratch, output)
-    } else if action == Action::CloseCandidate {
-        encode_close_candidate(action, Some(selected), scratch, output)
-    } else if action == Action::VerifyCandidateRow {
-        encode_verify_candidate_row(action, Some(selected), scratch, output)
-    } else if matches!(action, Action::PlaceOrder | Action::CancelOrder) {
-        encode_batch_and_order(action, Some(selected), scratch, output)
-    } else {
-        encode_primary(action, Some(selected), scratch, output)
-    }
+    let shape = general_action_lifecycle_shape_v5(action)?;
+    encode_lifecycle_policy_v5_atomic(
+        shape.recipes(),
+        shape.seeds(),
+        shape.plans(),
+        shape.protected(),
+        shape.bindings(),
+        quotes.as_slice(action),
+        scratch,
+        output,
+    )
+    .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
+    StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], output)
+        .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
+    Ok(())
 }
 
-fn encode_primary(
-    action: Action,
-    current_rent_quotes: Option<&[LifecycleCurrentRentQuoteInputV5]>,
+/// Recipes, seeds, plans, bindings and quotes the ONE family policy carries.
+///
+/// The union over the fifteen actions, read off the same two count functions
+/// each action's own artifact is sized from, so a policy width and a family
+/// width can never disagree about what an action declares.
+const fn general_family_lifecycle_counts_v5() -> (usize, usize, usize, usize, usize) {
+    let mut recipes = 0;
+    let mut seeds = 0;
+    let mut plans = 0;
+    let mut bindings = 0;
+    let mut quotes = 0;
+    let mut index = 0;
+    while index < GENERAL_ACTIONS_V5.len() {
+        let action = GENERAL_ACTIONS_V5[index];
+        let (action_recipes, action_seeds, action_plans) = lifecycle_counts(action);
+        recipes += action_recipes;
+        seeds += action_seeds;
+        plans += action_plans;
+        bindings += lifecycle_binding_count(action);
+        quotes += lifecycle_current_rent_quote_count(action);
+        index += 1;
+    }
+    (recipes, seeds, plans, bindings, quotes)
+}
+
+/// Recipes in the family policy.
+pub const GENERAL_FAMILY_RECIPE_COUNT_V5: usize = general_family_lifecycle_counts_v5().0;
+
+/// Seeds in the family policy.
+pub const GENERAL_FAMILY_SEED_COUNT_V5: usize = general_family_lifecycle_counts_v5().1;
+
+/// Plans -- and therefore protected-output slots -- in the family policy.
+pub const GENERAL_FAMILY_PLAN_COUNT_V5: usize = general_family_lifecycle_counts_v5().2;
+
+/// Immutable identity bindings in the family policy.
+pub const GENERAL_FAMILY_BINDING_COUNT_V5: usize = general_family_lifecycle_counts_v5().3;
+
+/// Current-Rent quote declarations in the family policy.
+pub const GENERAL_FAMILY_QUOTE_COUNT_V5: usize = general_family_lifecycle_counts_v5().4;
+
+/// Exact width of the one lifecycle policy the General family publishes.
+#[must_use]
+pub const fn general_family_state_lifecycle_bytes_v5() -> usize {
+    HEADER_BYTES
+        + GENERAL_FAMILY_RECIPE_COUNT_V5 * RECIPE_BYTES
+        + GENERAL_FAMILY_SEED_COUNT_V5 * SEED_BYTES
+        + GENERAL_FAMILY_PLAN_COUNT_V5 * (ACTION_PLAN_BYTES + PROTECTED_OUTPUT_BYTES)
+        + GENERAL_FAMILY_BINDING_COUNT_V5 * IMMUTABLE_IDENTITY_BINDING_BYTES
+        + GENERAL_FAMILY_QUOTE_COUNT_V5 * CURRENT_RENT_QUOTE_BYTES_V5
+}
+
+/// One quote declaration together with the action that authored it.
+#[cfg(not(target_os = "solana"))]
+#[derive(Clone, Copy)]
+struct FamilyQuoteV5 {
+    value: LifecycleCurrentRentQuoteInputV5,
+    order: (u16, u32),
+}
+
+/// Generate THE General family lifecycle policy: one artifact, fifteen actions.
+///
+/// # Off-chain only, and not by preference
+///
+/// A release compiler is authored by tooling and never by a program: the hot
+/// path DECODES this artifact against the digest its descriptor names and has no
+/// reason to build one. Compiling it for SBF anyway is not free -- the union's
+/// six tables are about 5.9 KiB of stack in one frame, and `cargo-build-sbf`
+/// emitted a stack-frame overwrite diagnostic for exactly this symbol, which the
+/// frameguard ratchet refuses. `activation_bundle_v1` is gated for the same
+/// reason one level up, at the manifest.
+///
+/// # Why one policy and not fifteen
+///
+/// `CapabilityProgramV4::validate_selection` requires the selected descriptor's
+/// `derivation_policy` to equal the manifest entry's `child_derivation_id`, and
+/// `artifacts_v3::validate_descriptor` requires that same `derivation_policy` to
+/// be the digest of the descriptor's own lifecycle policy. A Market's capability
+/// manifest holds ONE entry per capability root -- it is keyed by `kind_id` and
+/// strictly ascending in it, `MAX_CAPABILITIES_V1` is 16, and
+/// `CapabilityRootHeaderV1` persists ONE `entry_index` fixed at activation -- so
+/// a root can bind exactly one such identity. Fifteen per-action policies have
+/// fifteen digests, so a founded General Market could execute exactly one
+/// action: cohort-15's activated, and its OpenBatch refused
+/// `0x4015 DescriptorManifestEntry` after 128,724 CU on that conjunct alone.
+///
+/// This is the union of what the fifteen actions declare, joined the way Direct
+/// joined its registered Sell and Buy. Every table is CONCATENATED with its
+/// indices rebased rather than merged: an action's recipes keep their own seed
+/// window, its plans keep their own recipes, its bindings keep their own plans.
+/// Nothing here decides what an action declares; the per-action builders above
+/// remain the sole author, and `general_action_lifecycle_shape_v5` is what this
+/// reads.
+///
+/// # The two joins that are not concatenation
+///
+/// The quote table is sorted by `(destination, action)`, not by action, because
+/// InitializeSettlement and PlaceOrder create the same four rent-bearing
+/// children and therefore quote the same four registers. Each declaration
+/// carries its action, so no other action projects rent for a child it never
+/// opens and fourteen register banks are unchanged by this policy existing.
+///
+/// The per-action AccountProfile join is the caller's:
+/// `StateLifecyclePolicyV5::validate_account_profile_for_action` is the only
+/// sound reading of a policy whose actions present different frames, and General
+/// presents fifteen -- fixed account counts run from 9 to 103.
+#[cfg(not(target_os = "solana"))]
+pub fn encode_general_family_state_lifecycle_v5_atomic(
+    child_widths: GeneralChildRentWidthsV5,
     scratch: &mut [u8],
     output: &mut [u8],
 ) -> Result<()> {
+    let expected = general_family_state_lifecycle_bytes_v5();
+    if scratch.len() != expected || output.len() != expected {
+        return Err(GeneralStateArtifactErrorV3::Geometry);
+    }
+    let seed_placeholder = LifecycleSeedInputV3::CanonicalBump;
+    let first = general_action_lifecycle_shape_v5(
+        *GENERAL_ACTIONS_V5
+            .first()
+            .ok_or(GeneralStateArtifactErrorV3::Geometry)?,
+    )?;
+    let mut recipes = [*first
+        .recipes()
+        .first()
+        .ok_or(GeneralStateArtifactErrorV3::Geometry)?;
+        GENERAL_FAMILY_RECIPE_COUNT_V5];
+    let mut seeds = [seed_placeholder; GENERAL_FAMILY_SEED_COUNT_V5];
+    let mut plans = [*first
+        .plans()
+        .first()
+        .ok_or(GeneralStateArtifactErrorV3::Geometry)?;
+        GENERAL_FAMILY_PLAN_COUNT_V5];
+    let mut protected = [None; GENERAL_FAMILY_PLAN_COUNT_V5];
+    let mut bindings = [EMPTY_BINDING_V4; GENERAL_FAMILY_BINDING_COUNT_V5];
+    let mut quotes = [FamilyQuoteV5 {
+        value: LifecycleCurrentRentQuoteInputV5 {
+            exact_data_len: 0,
+            scalar_destination: 0,
+            action: None,
+        },
+        order: (0, 0),
+    }; GENERAL_FAMILY_QUOTE_COUNT_V5];
+    let (mut recipe_next, mut seed_next, mut plan_next, mut binding_next, mut quote_next) =
+        (0_usize, 0_usize, 0_usize, 0_usize, 0_usize);
+
+    for action in GENERAL_ACTIONS_V5 {
+        let shape = general_action_lifecycle_shape_v5(action)?;
+        let recipe_base = narrow_table_index(recipe_next)?;
+        let seed_base = narrow_table_index(seed_next)?;
+        let plan_base = narrow_table_index(plan_next)?;
+        for recipe in shape.recipes() {
+            let mut rebased = *recipe;
+            rebased.seed_start = rebased
+                .seed_start
+                .checked_add(seed_base)
+                .ok_or(GeneralStateArtifactErrorV3::Geometry)?;
+            *recipes
+                .get_mut(recipe_next)
+                .ok_or(GeneralStateArtifactErrorV3::Geometry)? = rebased;
+            recipe_next += 1;
+        }
+        for seed in shape.seeds() {
+            *seeds
+                .get_mut(seed_next)
+                .ok_or(GeneralStateArtifactErrorV3::Geometry)? = *seed;
+            seed_next += 1;
+        }
+        for (slot, plan) in shape.plans().iter().enumerate() {
+            let mut rebased = *plan;
+            rebased.recipe = rebased
+                .recipe
+                .checked_add(recipe_base)
+                .ok_or(GeneralStateArtifactErrorV3::Geometry)?;
+            *plans
+                .get_mut(plan_next)
+                .ok_or(GeneralStateArtifactErrorV3::Geometry)? = rebased;
+            *protected
+                .get_mut(plan_next)
+                .ok_or(GeneralStateArtifactErrorV3::Geometry)? = *shape
+                .protected()
+                .get(slot)
+                .ok_or(GeneralStateArtifactErrorV3::Geometry)?;
+            plan_next += 1;
+        }
+        for binding in shape.bindings() {
+            let mut rebased = *binding;
+            rebased.plan = rebased
+                .plan
+                .checked_add(plan_base)
+                .ok_or(GeneralStateArtifactErrorV3::Geometry)?;
+            *bindings
+                .get_mut(binding_next)
+                .ok_or(GeneralStateArtifactErrorV3::Geometry)? = rebased;
+            binding_next += 1;
+        }
+        let selected_widths = if matches!(
+            action,
+            Action::InitializeSettlement | Action::PlaceOrder | Action::VerifyCandidateRow
+        ) {
+            Some(child_widths)
+        } else {
+            None
+        };
+        let action_quotes = general_current_rent_quotes_v5(action, selected_widths)?;
+        for quote in action_quotes.as_slice(action) {
+            let mut scoped = *quote;
+            scoped.action = Some(action as u32);
+            *quotes
+                .get_mut(quote_next)
+                .ok_or(GeneralStateArtifactErrorV3::Geometry)? = FamilyQuoteV5 {
+                value: scoped,
+                order: (scoped.scalar_destination, action as u32),
+            };
+            quote_next += 1;
+        }
+    }
+    if recipe_next != GENERAL_FAMILY_RECIPE_COUNT_V5
+        || seed_next != GENERAL_FAMILY_SEED_COUNT_V5
+        || plan_next != GENERAL_FAMILY_PLAN_COUNT_V5
+        || binding_next != GENERAL_FAMILY_BINDING_COUNT_V5
+        || quote_next != GENERAL_FAMILY_QUOTE_COUNT_V5
+    {
+        return Err(GeneralStateArtifactErrorV3::Geometry);
+    }
+    sort_family_quotes(&mut quotes);
+    let mut quote_values = [LifecycleCurrentRentQuoteInputV5 {
+        exact_data_len: 0,
+        scalar_destination: 0,
+        action: None,
+    }; GENERAL_FAMILY_QUOTE_COUNT_V5];
+    for (slot, quote) in quotes.iter().enumerate() {
+        *quote_values
+            .get_mut(slot)
+            .ok_or(GeneralStateArtifactErrorV3::Geometry)? = quote.value;
+    }
+    encode_lifecycle_policy_v5_atomic(
+        &recipes,
+        &seeds,
+        &plans,
+        &protected,
+        &bindings,
+        &quote_values,
+        scratch,
+        output,
+    )
+    .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
+    StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], output)
+        .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
+    Ok(())
+}
+
+/// Order the family quote table by `(destination, action)`, in place.
+#[cfg(not(target_os = "solana"))]
+///
+/// An insertion sort over nine entries, written out because this crate allocates
+/// nothing and because the canonical order is a property of the artifact rather
+/// than of whatever a library sort happens to do with equal keys -- there are no
+/// equal keys, and the encoder refuses the policy if two ever appear.
+fn sort_family_quotes(quotes: &mut [FamilyQuoteV5; GENERAL_FAMILY_QUOTE_COUNT_V5]) {
+    let mut index = 1;
+    while index < quotes.len() {
+        let mut position = index;
+        while position > 0 && quotes[position - 1].order > quotes[position].order {
+            quotes.swap(position - 1, position);
+            position -= 1;
+        }
+        index += 1;
+    }
+}
+
+/// Narrow a family table offset to the width one encoded index declares.
+#[cfg(not(target_os = "solana"))]
+fn narrow_table_index(value: usize) -> Result<u16> {
+    u16::try_from(value).map_err(|_| GeneralStateArtifactErrorV3::Geometry)
+}
+
+fn primary_shape(action: Action) -> Result<GeneralActionLifecycleShapeV5> {
     let state_recipe = GeneralStateRecipeV3::primary_for_action(action);
     // `data_base` is the account's fixed byte width; the stride is the
     // per-outcome tail past it. A fixed-width state carries a zero stride.
@@ -486,35 +921,7 @@ fn encode_primary(
     let protected = [Some(primary_protected()?)];
     let bindings = selection_or_settlement_bindings(action)?;
     let seeds = state_recipe.lifecycle_seeds();
-    if let Some(quotes) = current_rent_quotes {
-        encode_lifecycle_policy_v5_atomic(
-            &recipe,
-            seeds,
-            &plan,
-            &protected,
-            bindings.as_slice(),
-            quotes,
-            scratch,
-            output,
-        )
-        .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
-        StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], output)
-            .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
-    } else {
-        encode_lifecycle_policy_v4_atomic(
-            &recipe,
-            seeds,
-            &plan,
-            &protected,
-            bindings.as_slice(),
-            scratch,
-            output,
-        )
-        .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
-        StateLifecyclePolicyV4::decode_selected([1; 32], [1; 32], output)
-            .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
-    }
-    Ok(())
+    action_shape(&recipe, seeds, &plan, &protected, bindings.as_slice())
 }
 
 /// VerifyCandidateRow's three-state policy.
@@ -523,12 +930,7 @@ fn encode_primary(
 /// and Result is a raw immutable `VerifiedCandidateV2`. The result plan is the
 /// only guarded plan: a nonterminal row cannot allocate it, while a terminal
 /// row must create it at the exact current-Rent width declared by Lifecycle V5.
-fn encode_verify_candidate_row(
-    action: Action,
-    current_rent_quotes: Option<&[LifecycleCurrentRentQuoteInputV5]>,
-    scratch: &mut [u8],
-    output: &mut [u8],
-) -> Result<()> {
+fn verify_candidate_row_shape(action: Action) -> Result<GeneralActionLifecycleShapeV5> {
     let candidate_recipe = GeneralStateRecipeV3::Candidate;
     let verifier_recipe = GeneralStateRecipeV3::Verifier;
     let result_recipe = GeneralStateRecipeV3::VerifiedCandidate;
@@ -639,35 +1041,13 @@ fn encode_verify_candidate_row(
         RuntimeVerifierLayoutV2::candidate_id(),
         identity::CANDIDATE,
     )?];
-    if let Some(quotes) = current_rent_quotes {
-        encode_lifecycle_policy_v5_atomic(
-            &recipes,
-            &GENERAL_VERIFY_STATE_SEED_TABLE_V3,
-            &plans,
-            &protected,
-            &bindings,
-            quotes,
-            scratch,
-            output,
-        )
-        .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
-        StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], output)
-            .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
-    } else {
-        encode_lifecycle_policy_v4_atomic(
-            &recipes,
-            &GENERAL_VERIFY_STATE_SEED_TABLE_V3,
-            &plans,
-            &protected,
-            &bindings,
-            scratch,
-            output,
-        )
-        .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
-        StateLifecyclePolicyV4::decode_selected([1; 32], [1; 32], output)
-            .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
-    }
-    Ok(())
+    action_shape(
+        &recipes,
+        &GENERAL_VERIFY_STATE_SEED_TABLE_V3,
+        &plans,
+        &protected,
+        &bindings,
+    )
 }
 
 /// CloseCandidate's single-state close policy.
@@ -676,12 +1056,7 @@ fn encode_verify_candidate_row(
 /// the cleanup crank and return the unspent verification compartment first;
 /// this Close plan then returns only the historical rent principal to that
 /// same solver and leaves the Candidate account vacant.
-fn encode_close_candidate(
-    action: Action,
-    current_rent_quotes: Option<&[LifecycleCurrentRentQuoteInputV5]>,
-    scratch: &mut [u8],
-    output: &mut [u8],
-) -> Result<()> {
+fn close_candidate_shape(action: Action) -> Result<GeneralActionLifecycleShapeV5> {
     let recipe_kind = GeneralStateRecipeV3::Candidate;
     let data_base = u32::try_from(
         GENERAL_LOCAL_STATE_HEADER_BYTES_V3
@@ -725,43 +1100,16 @@ fn encode_close_candidate(
     // projections and semantic transition before this plan runs, while its PDA
     // identity is rederived from the canonical seed table here.
     let bindings = [];
-    if let Some(quotes) = current_rent_quotes {
-        encode_lifecycle_policy_v5_atomic(
-            &recipes,
-            recipe_kind.lifecycle_seeds(),
-            &plans,
-            &protected,
-            &bindings,
-            quotes,
-            scratch,
-            output,
-        )
-        .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
-        StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], output)
-            .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
-    } else {
-        encode_lifecycle_policy_v4_atomic(
-            &recipes,
-            recipe_kind.lifecycle_seeds(),
-            &plans,
-            &protected,
-            &bindings,
-            scratch,
-            output,
-        )
-        .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
-        StateLifecyclePolicyV4::decode_selected([1; 32], [1; 32], output)
-            .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
-    }
-    Ok(())
+    action_shape(
+        &recipes,
+        recipe_kind.lifecycle_seeds(),
+        &plans,
+        &protected,
+        &bindings,
+    )
 }
 
-fn encode_close(
-    action: Action,
-    current_rent_quotes: Option<&[LifecycleCurrentRentQuoteInputV5]>,
-    scratch: &mut [u8],
-    output: &mut [u8],
-) -> Result<()> {
+fn close_shape(action: Action) -> Result<GeneralActionLifecycleShapeV5> {
     let settlement_base = u32::try_from(
         GENERAL_LOCAL_STATE_HEADER_BYTES_V3
             .checked_add(SETTLEMENT_CURSOR_HEADER_BYTES_V2)
@@ -793,7 +1141,6 @@ fn encode_close(
             data_stride: SettlementCursorLayoutV2::inventory_stride(),
         },
     ];
-    let seeds = GENERAL_CLOSE_STATE_SEED_TABLE_V3;
     // Same action entries remain canonical by operation tag: Close precedes
     // AuthenticateOrCreate. Creation is nevertheless applied before Effects
     // by the generic Trading lifecycle adapter.
@@ -837,22 +1184,13 @@ fn encode_close(
     ];
     let protected = [None, Some(terminal_protected()?)];
     let bindings = close_bindings()?;
-    if let Some(quotes) = current_rent_quotes {
-        encode_lifecycle_policy_v5_atomic(
-            &recipes, &seeds, &plans, &protected, &bindings, quotes, scratch, output,
-        )
-        .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
-        StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], output)
-            .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
-    } else {
-        encode_lifecycle_policy_v4_atomic(
-            &recipes, &seeds, &plans, &protected, &bindings, scratch, output,
-        )
-        .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
-        StateLifecyclePolicyV4::decode_selected([1; 32], [1; 32], output)
-            .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
-    }
-    Ok(())
+    action_shape(
+        &recipes,
+        &GENERAL_CLOSE_STATE_SEED_TABLE_V3,
+        &plans,
+        &protected,
+        &bindings,
+    )
 }
 
 /// CancelOrder's two-recipe policy: the batch window and the order record.
@@ -861,12 +1199,7 @@ fn encode_close(
 /// closing: recipe zero is the batch at the primary coordinate, recipe one the
 /// order at the secondary, over one combined ten-entry seed table so neither
 /// window's order can be restated.
-fn encode_batch_and_order(
-    action: Action,
-    current_rent_quotes: Option<&[LifecycleCurrentRentQuoteInputV5]>,
-    scratch: &mut [u8],
-    output: &mut [u8],
-) -> Result<()> {
+fn batch_and_order_shape(action: Action) -> Result<GeneralActionLifecycleShapeV5> {
     let batch_recipe = GeneralStateRecipeV3::Batch;
     let order_recipe = GeneralStateRecipeV3::Order;
     let batch_base = u32::try_from(
@@ -941,36 +1274,13 @@ fn encode_batch_and_order(
     ];
     let protected = [Some(primary_protected()?), Some(terminal_protected()?)];
     let bindings = selection_or_settlement_bindings(action)?;
-    let seeds = GENERAL_CANCEL_STATE_SEED_TABLE_V3;
-    if let Some(quotes) = current_rent_quotes {
-        encode_lifecycle_policy_v5_atomic(
-            &recipes,
-            &seeds,
-            &plans,
-            &protected,
-            bindings.as_slice(),
-            quotes,
-            scratch,
-            output,
-        )
-        .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
-        StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], output)
-            .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
-    } else {
-        encode_lifecycle_policy_v4_atomic(
-            &recipes,
-            &seeds,
-            &plans,
-            &protected,
-            bindings.as_slice(),
-            scratch,
-            output,
-        )
-        .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
-        StateLifecyclePolicyV4::decode_selected([1; 32], [1; 32], output)
-            .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
-    }
-    Ok(())
+    action_shape(
+        &recipes,
+        &GENERAL_CANCEL_STATE_SEED_TABLE_V3,
+        &plans,
+        &protected,
+        bindings.as_slice(),
+    )
 }
 
 struct CurrentRentQuoteBufferV5 {

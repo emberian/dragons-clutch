@@ -9,6 +9,7 @@
 
 extern crate alloc;
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
 };
@@ -127,7 +128,7 @@ pub fn process_direct_token_setup_v1(
         Rent::from_account_info(account(accounts, RENT)?).map_err(|_| TradingSbfError::Content)?;
     let request_digest = hash(instruction_data).to_bytes();
     let frame_digest = authenticated_frame_digest_v1(accounts)?;
-    let authenticated = authenticate_semantics(program_id, accounts, request, &rent)?;
+    let authenticated = authenticate_semantics(program_id, accounts, request)?;
 
     // Preflight every checked delta before the first CPI. Transaction rollback
     // remains the outer atomicity boundary, but arithmetic is never discovered
@@ -281,7 +282,6 @@ fn authenticate_semantics(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     request: DirectTokenSetupRequestV1,
-    rent: &Rent,
 ) -> Result<AuthenticatedSetupV1, ProgramError> {
     let market = authenticate_market(accounts, request)?;
     let (trading_release, claims_release) = authenticate_activation(accounts, market)?;
@@ -297,9 +297,8 @@ fn authenticate_semantics(
         account(accounts, CLAIMS_PROGRAMDATA)?,
     )
     .map_err(ProgramError::from)?;
-    let (config_id, config) =
-        authenticate_root_and_config(program_id, accounts, request, market, rent)?;
-    let realm = authenticate_realm(accounts, market, rent)?;
+    let (config_id, config) = authenticate_root_and_config(program_id, accounts, request, market)?;
+    let realm = authenticate_realm(accounts, market)?;
     authenticate_mint(accounts, realm)?;
     let (_aggregate, position) = authenticate_seller_position(accounts, request, market)?;
     let seller_seeds = DirectTokenAccountSeedsV1::new(
@@ -436,7 +435,6 @@ fn authenticate_root_and_config(
     accounts: &[AccountInfo<'_>],
     request: DirectTokenSetupRequestV1,
     market: CoreState,
-    rent: &Rent,
 ) -> Result<([u8; 32], DirectExecutionConfigV1), ProgramError> {
     let root = account(accounts, DIRECT_ROOT)?;
     let data = root
@@ -463,7 +461,7 @@ fn authenticate_root_and_config(
     let config_id = selection.config().to_bytes();
     if root.owner != program_id
         || root.key != &expected_root
-        || !rent.is_exempt(root.lamports(), data.len())
+        || !funded_rent_persists_v1(root.lamports())
         || header.market() != request.market
         || header.generation() != request.generation
         || header.release_set().to_bytes() != market.identity.selected_release_set.to_bytes()
@@ -477,7 +475,6 @@ fn authenticate_root_and_config(
         accounts,
         CONFIG_RAW,
         CONFIG_STAGING,
-        rent,
         DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1,
         config_id,
     )?;
@@ -508,14 +505,12 @@ fn authenticate_root_and_config(
 fn authenticate_realm(
     accounts: &[AccountInfo<'_>],
     market: CoreState,
-    rent: &Rent,
 ) -> Result<RealmV1, ProgramError> {
     let realm_id = market.identity.realm_id.to_bytes();
     let data = borrow_finalized_record(
         accounts,
         REALM_RAW,
         REALM_STAGING,
-        rent,
         REALM_SCHEMA_RELEASE_ID_V1,
         realm_id,
     )?;
@@ -628,7 +623,6 @@ fn borrow_finalized_record<'a, 'info>(
     accounts: &'a [AccountInfo<'info>],
     raw_index: usize,
     staging_index: usize,
-    rent: &Rent,
     schema: [u8; 32],
     digest: [u8; 32],
 ) -> Result<core::cell::Ref<'a, [u8]>, ProgramError> {
@@ -655,7 +649,7 @@ fn borrow_finalized_record<'a, 'info>(
     if raw.key != &expected_raw
         || raw.owner != registry.key
         || hash(&data).to_bytes() != digest
-        || !rent.is_exempt(raw.lamports(), data.len())
+        || !funded_rent_persists_v1(raw.lamports())
         || staging.key != &expected_staging
         || staging.owner != &system_program::ID
         || staging.data_len() != 0

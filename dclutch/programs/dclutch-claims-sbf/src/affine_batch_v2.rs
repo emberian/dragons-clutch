@@ -38,8 +38,6 @@ use solana_program::{
     program::set_return_data,
     program_error::ProgramError,
     pubkey::Pubkey,
-    rent::Rent,
-    sysvar::SysvarSerialize,
 };
 use solana_sdk_ids::sysvar;
 
@@ -602,7 +600,6 @@ fn authenticate_product_and_basis(
 ) -> Result<u64, ProgramError> {
     authenticate_runtime_product_basis_core_v3(
         accounts.registry,
-        accounts.rent,
         accounts.core_market,
         accounts.core_program,
         ProductRuntimeFrameV3 {
@@ -643,7 +640,6 @@ fn authenticate_product_and_basis(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn authenticate_runtime_product_basis_core_v3(
     registry: &AccountInfo<'_>,
-    rent_account: &AccountInfo<'_>,
     core_market: &AccountInfo<'_>,
     core_program: &AccountInfo<'_>,
     product_frame: ProductRuntimeFrameV3<'_, '_>,
@@ -652,11 +648,8 @@ pub(crate) fn authenticate_runtime_product_basis_core_v3(
     expected_linked_basis_record_digest: [u8; 32],
     admission: MarketAdmissionV1,
 ) -> Result<u64, ProgramError> {
-    let rent =
-        Rent::from_account_info(rent_account).map_err(|_| AffineBatchSbfErrorV2::Accounts)?;
     authenticate_runtime_product_basis_core_with_rent_v3(
         registry,
-        &rent,
         core_market,
         core_program,
         product_frame,
@@ -670,7 +663,6 @@ pub(crate) fn authenticate_runtime_product_basis_core_v3(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn authenticate_runtime_product_basis_core_with_rent_v3(
     registry: &AccountInfo<'_>,
-    rent: &Rent,
     core_market: &AccountInfo<'_>,
     core_program: &AccountInfo<'_>,
     product_frame: ProductRuntimeFrameV3<'_, '_>,
@@ -681,7 +673,6 @@ pub(crate) fn authenticate_runtime_product_basis_core_with_rent_v3(
 ) -> Result<u64, ProgramError> {
     let runtime = authenticate_product_runtime_v2(
         registry.key,
-        rent,
         expected_product_record_digest,
         None,
         ProductRuntimeFrameV2 {
@@ -694,9 +685,8 @@ pub(crate) fn authenticate_runtime_product_basis_core_with_rent_v3(
     // Core's founding permit authenticates the immutable basis digest and runs
     // the price gate once. Claims re-authenticates that exact record and its
     // Product joins here without repeating the founding-only conjunct.
-    let product =
-        authenticate_product_basis_v3(registry.key, rent, runtime, product_frame.linked_basis)
-            .map_err(|_| AffineBatchSbfErrorV2::ProductBasis)?;
+    let product = authenticate_product_basis_v3(registry.key, runtime, product_frame.linked_basis)
+        .map_err(|_| AffineBatchSbfErrorV2::ProductBasis)?;
     if product.runtime.product_record.content_digest.to_bytes() != expected_product_record_digest
         || product.runtime.product_id.to_bytes() != market.product_instance_id
         || product.runtime.liability_basis_id.to_bytes() != market.basis_id

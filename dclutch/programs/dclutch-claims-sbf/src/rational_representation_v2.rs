@@ -6,6 +6,7 @@
 //! only one per-descriptor/actor replay revision and commits it after every
 //! Claims, Token, and Custody postcondition has passed.
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_claims_svm::{
     affine_batch_v2::{AffineBatchPlanV2, AffineBatchReceiptV2},
     protocol_position_v2::{ProtocolPositionClaimsCapabilitySeedsV2, ProtocolPositionSeedsV2},
@@ -219,7 +220,6 @@ const fn rational_product_frame<'accounts, 'info>(
         graph_staging: base.graph_staging,
         receipt_mint: base.receipt_mint,
         token_program: base.token_program,
-        rent: base.rent,
         registry: base.registry,
         core_market: base.core_market,
         core_program: base.core_program,
@@ -815,7 +815,6 @@ fn authenticate_base(
 /// executor and its lifecycle route; callers still own semantic decoding.
 pub(crate) fn authenticate_finalized_rational_record(
     registry: &Pubkey,
-    rent: &Rent,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
     schema: [u8; 32],
@@ -838,7 +837,7 @@ pub(crate) fn authenticate_finalized_rational_record(
         || raw.is_writable
         || raw.is_signer
         || hash(bytes).to_bytes() != expected_digest
-        || !rent.is_exempt(raw.lamports(), bytes.len())
+        || !funded_rent_persists_v1(raw.lamports())
         || staging.key != &staging_key
         || staging.owner != &system_program::ID
         || staging.data_len() != 0

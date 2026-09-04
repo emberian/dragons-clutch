@@ -2,6 +2,7 @@
 
 use alloc::{boxed::Box, vec::Vec};
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
     CUSTODY_POSTSTATE_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CUSTODY_REQUEST_BYTES_V1, CallerRoleV1,
@@ -241,7 +242,6 @@ fn authenticate_open<'accounts, 'info>(
         frame.registry().key,
         account(accounts, REALM_RAW)?,
         account(accounts, REALM_STAGING)?,
-        &rent,
         REALM_SCHEMA_RELEASE_ID_V1,
         state.identity.realm_id.to_bytes(),
         &realm_data,
@@ -514,7 +514,7 @@ fn authenticate_receipt_and_poststate(
     let replay_account = account(accounts, REPLAY)?;
     if replay_account.owner != frame.target_program().key
         || replay_account.data_len() != CUSTODY_REPLAY_BYTES_V1
-        || !rent.is_exempt(replay_account.lamports(), CUSTODY_REPLAY_BYTES_V1)
+        || !funded_rent_persists_v1(replay_account.lamports())
     {
         return Err(CoreSbfError::ChildAck);
     }

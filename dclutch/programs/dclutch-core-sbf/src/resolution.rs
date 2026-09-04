@@ -4,6 +4,7 @@ use dclutch_capability_contract::{
     CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingLedgerDerivationV2,
     CapabilityManifestV1, ContentId as CapabilityContentId, FUNDING_LEDGER_HEADER_BYTES_V2,
     FUNDING_LEDGER_SLOT_BYTES_V2, FundingLedgerStatusV2, FundingLedgerV2,
+    funding::funded_rent_persists_v1,
 };
 use dclutch_market_core_codec::{
     Action, CAPABILITY_FUNDING_HEADER_BYTES_V2, CapabilityFundingHeaderV2, ChildEffectObservation,
@@ -484,7 +485,6 @@ fn authenticate_activation_accept(
         state,
         request,
         ComposedResolutionActionV1::VerifyFundReady,
-        &rent,
     )?;
     let receipt_account = account(accounts, VERIFY_ACTIVATION_RECEIPT)?;
     let generation_seed = state.identity.generation.to_le_bytes();
@@ -500,10 +500,7 @@ fn authenticate_activation_accept(
     if receipt_account.key != &expected_receipt
         || receipt_account.owner != frame.target_program().key
         || receipt_account.data_len() != FUNDING_ACTIVATION_RECEIPT_BYTES_V1
-        || !rent.is_exempt(
-            receipt_account.lamports(),
-            FUNDING_ACTIVATION_RECEIPT_BYTES_V1,
-        )
+        || !funded_rent_persists_v1(receipt_account.lamports())
         || target_admission
             .receipt
             .observed
@@ -713,7 +710,6 @@ fn authenticate_recovery_policy(
     action: ComposedResolutionActionV1,
 ) -> Result<(), CoreSbfError> {
     let (policy_index, staging_index) = recovery_policy_indices(action)?;
-    let rent = read_rent(account(accounts, rent_index(action))?)?;
     let material_account = account(accounts, SOURCE_MATERIAL)?;
     let material_data = material_account
         .try_borrow_data()
@@ -725,7 +721,6 @@ fn authenticate_recovery_policy(
         frame.registry().key,
         material_account,
         account(accounts, SOURCE_MATERIAL_STAGING)?,
-        &rent,
         SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         request.source_material,
         &material_data,
@@ -759,7 +754,6 @@ fn authenticate_recovery_policy(
                 frame.registry().key,
                 policy_account,
                 account(accounts, staging_index)?,
-                &rent,
                 RECOVERY_POLICY_SCHEMA_ID_V2,
                 recovery_id.to_bytes(),
                 &policy_data,
@@ -792,7 +786,6 @@ fn authenticate_recovery_policy(
         frame.registry().key,
         account(accounts, CAPABILITY_MANIFEST)?,
         account(accounts, CAPABILITY_MANIFEST_STAGING)?,
-        &rent,
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         request.capability_manifest,
         &manifest_data,
@@ -955,7 +948,6 @@ fn authenticate_admit_projection(
     state: CoreState,
     request: ResolutionRoleRequestV2,
 ) -> Result<AdmitProjection, CoreSbfError> {
-    let rent = read_rent(account(accounts, ADMIT_RENT)?)?;
     let registry = frame.registry().key;
     let material_account = account(accounts, SOURCE_MATERIAL)?;
     let material_data = material_account
@@ -968,7 +960,6 @@ fn authenticate_admit_projection(
         registry,
         material_account,
         account(accounts, SOURCE_MATERIAL_STAGING)?,
-        &rent,
         SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         request.source_material,
         &material_data,
@@ -977,7 +968,6 @@ fn authenticate_admit_projection(
 
     let runtime = authenticate_selected_runtime_v2(
         registry,
-        &rent,
         state.identity.product_record.to_bytes(),
         ProductRuntimeFrameV2 {
             product: FinalizedRecordFrameV2 {
@@ -1045,7 +1035,6 @@ fn authenticate_admit_projection(
         decision.selector(),
         product.outcome_count,
         &certificate_data,
-        &rent,
     )?;
     Ok(AdmitProjection {
         product,
@@ -1071,7 +1060,6 @@ fn authenticate_terminal_certificate(
     selector: u32,
     outcome_count: u32,
     bytes: &[u8],
-    rent: &Rent,
 ) -> Result<ResolutionCertificateV2, CoreSbfError> {
     let (expected_kind, kind_tag) = match request.receipt_kind {
         ResolutionCoreReceiptKindV1::TerminalSuccess => {
@@ -1087,10 +1075,7 @@ fn authenticate_terminal_certificate(
     if certificate_account.key.to_bytes() != request.receipt
         || certificate_account.owner != resolution_program
         || certificate_account.data_len() != RESOLUTION_CERTIFICATE_BYTES_V2
-        || !rent.is_exempt(
-            certificate_account.lamports(),
-            RESOLUTION_CERTIFICATE_BYTES_V2,
-        )
+        || !funded_rent_persists_v1(certificate_account.lamports())
     {
         return Err(CoreSbfError::Reference);
     }
@@ -1136,10 +1121,9 @@ fn authenticate_poststate(
     acknowledgement: CoreEffectAckV1,
     action: ComposedResolutionActionV1,
 ) -> Result<(), CoreSbfError> {
-    let rent = read_rent(account(accounts, rent_index(action))?)?;
     let observed_digest = {
         {
-            authenticate_live_poststate(frame, accounts, state, request, action, &rent)?;
+            authenticate_live_poststate(frame, accounts, state, request, action)?;
             let source = account(accounts, SOURCE_STATE)?
                 .try_borrow_data()
                 .map_err(|_| CoreSbfError::ChildAck)?;
@@ -1177,7 +1161,6 @@ fn authenticate_live_poststate(
     state: CoreState,
     request: ResolutionRoleRequestV2,
     action: ComposedResolutionActionV1,
-    rent: &Rent,
 ) -> Result<(), CoreSbfError> {
     let source_account = account(accounts, SOURCE_STATE)?;
     if source_account.owner != frame.target_program().key
@@ -1216,7 +1199,6 @@ fn authenticate_live_poststate(
         frame.registry().key,
         manifest_account,
         account(accounts, CAPABILITY_MANIFEST_STAGING)?,
-        rent,
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         request.capability_manifest,
         &manifest_data,
@@ -1281,9 +1263,7 @@ fn authenticate_live_poststate(
         )
         .map_err(|error| match error {
             dclutch_capability_contract::Error::FundedRentNotEvidenced
-            | dclutch_capability_contract::Error::FundedRentRateMissing => {
-                CoreSbfError::FundedRent
-            }
+            | dclutch_capability_contract::Error::FundedRentRateMissing => CoreSbfError::FundedRent,
             _ => CoreSbfError::Funding,
         })?;
     let derivation = CapabilityFundingLedgerDerivationV2::new(
@@ -1390,14 +1370,6 @@ const fn outer_account_count(action: ComposedResolutionActionV1) -> usize {
         ComposedResolutionActionV1::CreateFund => RESOLUTION_CREATE_OUTER_ACCOUNT_COUNT_V1,
         ComposedResolutionActionV1::VerifyFundReady => RESOLUTION_VERIFY_OUTER_ACCOUNT_COUNT_V1,
         ComposedResolutionActionV1::AdmitTerminal => RESOLUTION_ADMIT_OUTER_ACCOUNT_COUNT_V1,
-    }
-}
-
-const fn rent_index(action: ComposedResolutionActionV1) -> usize {
-    match action {
-        ComposedResolutionActionV1::CreateFund => CREATE_RENT,
-        ComposedResolutionActionV1::VerifyFundReady => VERIFY_RENT,
-        ComposedResolutionActionV1::AdmitTerminal => ADMIT_RENT,
     }
 }
 

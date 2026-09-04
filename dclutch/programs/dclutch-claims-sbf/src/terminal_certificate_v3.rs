@@ -5,6 +5,7 @@
 //! slot-pinned Resolution role and consumes the certificate's typed result;
 //! it never synthesizes a second Core-owned terminal fact.
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_market_core_codec::CoreState;
 use dclutch_product_payoff_v2_codec::runtime_v3::BasisKindV3;
 use dclutch_rational_representation_v2_kernel::product_v3::TerminalScenarioV3;
@@ -12,9 +13,7 @@ use dclutch_release_set_contract::ExecutionRoleV1;
 use dclutch_resolution_codec::{
     RESOLUTION_CERTIFICATE_BYTES_V2, ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
-use solana_program::{
-    account_info::AccountInfo, program_error::ProgramError, rent::Rent, sysvar::SysvarSerialize,
-};
+use solana_program::{account_info::AccountInfo, program_error::ProgramError};
 
 use super::ClaimsSbfError;
 
@@ -26,7 +25,6 @@ pub(crate) struct TerminalCertificateFrameV3<'accounts, 'info> {
     pub(crate) resolution_program: &'accounts AccountInfo<'info>,
     pub(crate) resolution_programdata: &'accounts AccountInfo<'info>,
     pub(crate) certificate: &'accounts AccountInfo<'info>,
-    pub(crate) rent: &'accounts AccountInfo<'info>,
 }
 
 /// Authenticate Core's exact certificate and project one Claims terminal case.
@@ -50,17 +48,13 @@ pub(crate) fn authenticate_terminal_certificate_scenario_v3(
         .terminal_receipt
         .ok_or(ClaimsSbfError::Identity)?
         .to_bytes();
-    let rent = Rent::from_account_info(frame.rent).map_err(|_| ClaimsSbfError::Accounts)?;
     if frame.certificate.key.to_bytes() != expected_certificate
         || frame.certificate.owner != frame.resolution_program.key
         || frame.certificate.data_len() != RESOLUTION_CERTIFICATE_BYTES_V2
         || frame.certificate.is_signer
         || frame.certificate.is_writable
         || frame.certificate.executable
-        || !rent.is_exempt(
-            frame.certificate.lamports(),
-            RESOLUTION_CERTIFICATE_BYTES_V2,
-        )
+        || !funded_rent_persists_v1(frame.certificate.lamports())
     {
         return Err(ClaimsSbfError::Identity.into());
     }

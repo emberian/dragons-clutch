@@ -18,7 +18,8 @@
 //! fixed-point pin.
 
 use dclutch_operator::general_selected_release_v1::{
-    GeneralSelectedReleaseInputV1, general_selected_release_v1,
+    GeneralSelectedReleaseInputV1, general_selected_entry_descriptor_v1,
+    general_selected_release_v1,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -39,12 +40,20 @@ pub(crate) struct GeneralSelectedRecordV1 {
 /// One compiled General closure in the byte shape the neutral seam and the
 /// record publisher consume.
 pub(crate) struct GeneralSelectedClosureBytesV1 {
-    /// Exact eight-entry `CapabilityProgramSetV2` bytes: the seven settlement
+    /// Exact sixteen-entry `CapabilityProgramSetV2` bytes: the fifteen current
     /// actions and the activation coordinate that lets the Market create the
-    /// root all seven execute against.
+    /// root all fifteen execute against.
     pub(crate) program_set: Vec<u8>,
-    /// The first bundle's descriptor; all seven agree on every entry-authored
-    /// coordinate, so any member may stand for the set.
+    /// The descriptor every entry-authored coordinate is read from.
+    ///
+    /// All fifteen agree, and the agreement is CHECKED rather than assumed:
+    /// `general_selected_entry_descriptor_v1` re-states it over the compiled
+    /// bundles, and `authenticate_general_release_v3` refuses a release where it
+    /// does not hold (`EntryCoordinateMismatch`). This field's doc used to say
+    /// "all seven agree, so any member may stand for the set" and that was the
+    /// claim cohort-15 was founded on: the fifteen descriptors carried fifteen
+    /// derivation policies, the entry bound the one this seam happened to read,
+    /// and every other action refused `0x4015` forever.
     pub(crate) selected_descriptor: Vec<u8>,
     /// Exact immutable `GeneralConfigV3` bytes — market-free by construction.
     pub(crate) config: Vec<u8>,
@@ -76,12 +85,8 @@ pub(crate) fn general_selected_closure_v1(
             body: record.body.to_vec(),
         })
         .collect();
-    let selected_descriptor = release
-        .bundles
-        .first()
-        .ok_or_else(|| Error::new("General release carried no bundles"))?
-        .descriptor
-        .clone();
+    let selected_descriptor = general_selected_entry_descriptor_v1(&release)
+        .map_err(|error| Error::new(format!("General entry descriptor: {error:?}")))?;
     let publication = release.publication.to_bytes().to_vec();
     Ok(GeneralSelectedClosureBytesV1 {
         program_set: release.program_set,

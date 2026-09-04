@@ -535,7 +535,7 @@ pub fn build_direct_hot_chain_fixture_v5(
     let config = DirectExecutionConfigV1::new(PRICE_SCALE, FEE_BPS, input.payer.to_bytes())
         .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?
         .encode();
-    let product = product_fixture(input, &rent)?;
+    let product = product_fixture(input)?;
     let manifest = capability_manifest(input, &artifacts, &config)?;
     let state = market_and_claims(input, &product, &manifest, &rent)?;
     let intents = intents(input, state.market, product.collateral_accounts)?;
@@ -679,7 +679,7 @@ pub fn build_direct_registered_creation_chain_fixture_v4(
     let config_value = DirectExecutionConfigV1::new(PRICE_SCALE, FEE_BPS, input.payer.to_bytes())
         .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
     let config = config_value.encode();
-    let product = product_fixture(input, &rent)?;
+    let product = product_fixture(input)?;
     let artifacts = registered_creation_artifacts_v4(input)?;
     let manifest = capability_manifest_selected(input, artifacts.sell(), &config)?;
     let state = market_and_claims(input, &product, &manifest, &rent)?;
@@ -1433,7 +1433,6 @@ fn validate_input(input: DirectHotChainInputV5) -> Result<(), DirectHotChainFixt
 
 fn product_fixture(
     input: DirectHotChainInputV5,
-    _rent: &Rent,
 ) -> Result<ProductFixture, DirectHotChainFixtureErrorV5> {
     let product_id = product_content([0x51; 32])?;
     let coordinate_domain = product_content([0x52; 32])?;
@@ -2951,7 +2950,7 @@ pub fn direct_hot_custody_legs_v1(
 ) -> Result<[DirectCustodyLegV1; 4], DirectHotChainFixtureErrorV5> {
     validate_input(input)?;
     let rent = Rent::default();
-    let product = product_fixture(input, &rent)?;
+    let product = product_fixture(input)?;
     let artifacts = build_direct_hot_artifact_fixture_v5(input.deployment_widths, input.geometry)
         .map_err(DirectHotChainFixtureErrorV5::Artifact)?;
     let config = DirectExecutionConfigV1::new(PRICE_SCALE, FEE_BPS, input.payer.to_bytes())
@@ -4311,7 +4310,7 @@ mod tests {
         let config = DirectExecutionConfigV1::new(PRICE_SCALE, FEE_BPS, input.payer.to_bytes())
             .expect("config")
             .encode();
-        let product = product_fixture(input, &rent).expect("product");
+        let product = product_fixture(input).expect("product");
         let manifest = capability_manifest(input, &artifacts, &config).expect("manifest");
         let state = market_and_claims(input, &product, &manifest, &rent).expect("state");
         let intents = intents(input, state.market, product.collateral_accounts).expect("intents");
@@ -4443,7 +4442,7 @@ mod tests {
         let config = DirectExecutionConfigV1::new(PRICE_SCALE, FEE_BPS, input.payer.to_bytes())
             .expect("config")
             .encode();
-        let product = product_fixture(input, &rent).expect("product");
+        let product = product_fixture(input).expect("product");
         let manifest = capability_manifest(input, &artifacts, &config).expect("manifest");
         let market = market_and_claims(input, &product, &manifest, &rent)
             .expect("state")
@@ -4791,7 +4790,7 @@ mod tests {
             DirectExecutionConfigV1::new(PRICE_SCALE, FEE_BPS, input.payer.to_bytes())
                 .expect("config");
         let config = config_value.encode();
-        let product = product_fixture(input, &rent).expect("product");
+        let product = product_fixture(input).expect("product");
         let artifacts = registered_creation_artifacts_v4(input).expect("artifacts");
         let manifest =
             capability_manifest_selected(input, artifacts.sell(), &config).expect("manifest");
@@ -5136,7 +5135,7 @@ pub mod via_builder {
         let config = DirectExecutionConfigV1::new(PRICE_SCALE, FEE_BPS, input.payer.to_bytes())
             .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?
             .encode();
-        let product = product_fixture(input, &rent)?;
+        let product = product_fixture(input)?;
         let manifest = capability_manifest(input, &artifacts, &config)?;
         let state = market_and_claims(input, &product, &manifest, &rent)?;
         let intents = intents(input, state.market, product.collateral_accounts)?;

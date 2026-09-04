@@ -10,7 +10,7 @@ use dclutch_product_runtime_v2_svm_reader::{
     authenticate_content_addressed_product_runtime_v2,
     authenticate_product_runtime_v2 as authenticate_selected_product_runtime_v2,
 };
-use solana_program::{pubkey::Pubkey, rent::Rent};
+use solana_program::pubkey::Pubkey;
 
 use crate::{CoreSbfError, release::identity};
 
@@ -19,22 +19,20 @@ use crate::{CoreSbfError, release::identity};
 /// fields or a receipt.
 pub(crate) fn authenticate_product_runtime_v2(
     registry_program: &Pubkey,
-    rent: &Rent,
     frame: ProductRuntimeFrameV2<'_, '_>,
 ) -> Result<AuthenticatedProductRuntimeV2, CoreSbfError> {
-    authenticate_content_addressed_product_runtime_v2(registry_program, rent, frame)
+    authenticate_content_addressed_product_runtime_v2(registry_program, frame)
         .map_err(|_| CoreSbfError::Reference)
 }
 
 /// Reauthenticate the exact Product graph already persisted by a Core Market.
 pub(crate) fn authenticate_selected_runtime_v2(
     registry_program: &Pubkey,
-    rent: &Rent,
     expected_product_record: [u8; 32],
     frame: ProductRuntimeFrameV2<'_, '_>,
 ) -> Result<AuthenticatedProductRuntimeV2, CoreSbfError> {
     let expected = ContentId::new(expected_product_record).map_err(|_| CoreSbfError::Reference)?;
-    authenticate_selected_product_runtime_v2(registry_program, rent, expected, frame)
+    authenticate_selected_product_runtime_v2(registry_program, expected, frame)
         .map_err(|_| CoreSbfError::Reference)
 }
 

@@ -332,7 +332,6 @@ pub(crate) fn authenticate_market(
 fn release_facts(
     registry: &Pubkey,
     accounts: &[AccountInfo<'_>],
-    rent: &Rent,
     material_id: [u8; 32],
     source_spec_id: [u8; 32],
 ) -> Result<ReleaseFacts, ProgramError> {
@@ -343,7 +342,6 @@ fn release_facts(
         registry,
         account(accounts, 5)?,
         account(accounts, 6)?,
-        rent,
         SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         material_id,
         &material_data,
@@ -364,7 +362,6 @@ fn release_facts(
         registry,
         account(accounts, 7)?,
         account(accounts, 8)?,
-        rent,
         SOURCE_SPEC_SCHEMA_ID_V1,
         source_spec_id,
         &spec_data,
@@ -384,7 +381,6 @@ fn release_facts(
         registry,
         account(accounts, 9)?,
         account(accounts, 10)?,
-        rent,
         PROVIDER_RELEASE_SCHEMA_ID_V1,
         provider_release_id,
         &provider_data,
@@ -408,7 +404,6 @@ fn release_facts(
         registry,
         account(accounts, 11)?,
         account(accounts, 12)?,
-        rent,
         WINDOW_SPEC_SCHEMA_ID_V1,
         window_spec_id,
         &window_data,
@@ -431,7 +426,6 @@ fn release_facts(
         registry,
         account(accounts, 13)?,
         account(accounts, 14)?,
-        rent,
         RELAYER_KEY_SET_SCHEMA_RELEASE_ID_V1,
         relayer_key_set_id,
         &key_set_data,
@@ -448,7 +442,6 @@ fn release_facts(
         registry,
         account(accounts, 15)?,
         account(accounts, 16)?,
-        rent,
         RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_ID_V1,
         decoding_rules_id,
         &config_data,
@@ -598,7 +591,6 @@ fn process_create_record(
     let facts = release_facts(
         &market.registry_program,
         accounts,
-        &rent,
         request.source_material_id(),
         request.source_spec_id(),
     )?;
@@ -684,10 +676,8 @@ fn process_append(
     let record_account = account(accounts, 2)?;
     let key_set_raw = account(accounts, 3)?;
     let key_set_staging = account(accounts, 4)?;
-    let rent_sysvar = account(accounts, 5)?;
     let instructions = account(accounts, 6)?;
     let clock_account = account(accounts, 7)?;
-    let rent = authenticate_rent(rent_sysvar)?;
     authenticate_clock(clock_account)?;
     authenticate_record_account(program_id, record_account, market_account)?;
 
@@ -707,7 +697,6 @@ fn process_append(
         record_account,
         key_set_raw,
         key_set_staging,
-        &rent,
         request.generation(),
         request.observed_slot(),
     )?;
@@ -761,10 +750,8 @@ fn process_seal(
     let record_account = account(accounts, 2)?;
     let key_set_raw = account(accounts, 3)?;
     let key_set_staging = account(accounts, 4)?;
-    let rent_sysvar = account(accounts, 5)?;
     let instructions = account(accounts, 6)?;
     let clock_account = account(accounts, 7)?;
-    let rent = authenticate_rent(rent_sysvar)?;
     let clock = authenticate_clock(clock_account)?;
     authenticate_record_account(program_id, record_account, market_account)?;
 
@@ -784,7 +771,6 @@ fn process_seal(
         record_account,
         key_set_raw,
         key_set_staging,
-        &rent,
         request.generation(),
         request.observed_slot(),
     )?;
@@ -926,13 +912,11 @@ fn process_consume(
     let records = boxed_consume_source_records(
         &market,
         accounts,
-        &rent,
         request.source_material_id(),
         request.source_spec_id(),
     )?;
     let product_runtime = boxed_product_runtime(
         &market.registry_program,
-        &rent,
         ProductContentId::new(market.product_record).map_err(|_| ResolutionError::ProductDomain)?,
         ProductRuntimeFrameV2 {
             product: FinalizedRecordFrameV2 {
@@ -1124,12 +1108,10 @@ pub(crate) fn process_deadline_failure_coordinates(
     let walk_source = Box::new(deadline_walk_source(
         &market.registry_program,
         accounts,
-        &rent,
         material_id,
     )?);
     let product_runtime = boxed_product_runtime(
         &market.registry_program,
-        &rent,
         ProductContentId::new(market.product_record).map_err(|_| ResolutionError::ProductDomain)?,
         ProductRuntimeFrameV2 {
             product: FinalizedRecordFrameV2 {
@@ -1154,7 +1136,6 @@ pub(crate) fn process_deadline_failure_coordinates(
         market.registry_program,
         account(accounts, 16)?,
         account(accounts, 17)?,
-        &rent,
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         market.capability_manifest,
         &manifest_data,
@@ -1311,7 +1292,6 @@ const fn map_funded_walk_error(error: FundedWalkErrorV1) -> ResolutionError {
 fn deadline_walk_source(
     registry: &Pubkey,
     accounts: &[AccountInfo<'_>],
-    rent: &Rent,
     material_id: dclutch_source_contract::ContentId,
 ) -> Result<AuthenticatedWalkSourceV1, ProgramError> {
     let material_data = account(accounts, 6)?
@@ -1321,7 +1301,6 @@ fn deadline_walk_source(
         registry,
         account(accounts, 6)?,
         account(accounts, 7)?,
-        rent,
         SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         material_id.to_bytes(),
         &material_data,
@@ -1339,7 +1318,6 @@ fn deadline_walk_source(
         registry,
         account(accounts, 8)?,
         account(accounts, 9)?,
-        rent,
         WINDOW_SPEC_SCHEMA_ID_V1,
         window_spec_id.to_bytes(),
         &window_data,
@@ -1552,12 +1530,11 @@ const fn map_relay_join_error(error: RelayJoinErrorV1) -> ResolutionError {
 #[inline(never)]
 pub(crate) fn boxed_product_runtime(
     registry: &Pubkey,
-    rent: &Rent,
     product_record: ProductContentId,
     frame: ProductRuntimeFrameV2<'_, '_>,
 ) -> Result<Box<AuthenticatedProductRuntimeV2>, ProgramError> {
     Ok(Box::new(
-        authenticate_product_runtime_v2(registry, rent, product_record, frame)
+        authenticate_product_runtime_v2(registry, product_record, frame)
             .map_err(|_| ResolutionError::ProductDomain)?,
     ))
 }
@@ -1566,14 +1543,12 @@ pub(crate) fn boxed_product_runtime(
 fn boxed_consume_source_records(
     market: &MarketFacts,
     accounts: &[AccountInfo<'_>],
-    rent: &Rent,
     material_id: [u8; 32],
     source_spec_id: [u8; 32],
 ) -> Result<Box<AuthenticatedRelaySourceRecordsV1>, ProgramError> {
     Ok(Box::new(consume_source_records(
         market,
         accounts,
-        rent,
         material_id,
         source_spec_id,
     )?))
@@ -1583,7 +1558,6 @@ fn boxed_consume_source_records(
 fn consume_source_records(
     market: &MarketFacts,
     accounts: &[AccountInfo<'_>],
-    rent: &Rent,
     material_id: [u8; 32],
     source_spec_id: [u8; 32],
 ) -> Result<AuthenticatedRelaySourceRecordsV1, ProgramError> {
@@ -1595,7 +1569,6 @@ fn consume_source_records(
         registry,
         account(accounts, 7)?,
         account(accounts, 8)?,
-        rent,
         SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         material_id,
         &material_data,
@@ -1613,7 +1586,6 @@ fn consume_source_records(
         registry,
         account(accounts, 9)?,
         account(accounts, 10)?,
-        rent,
         SOURCE_SPEC_SCHEMA_ID_V1,
         source_spec_id,
         &spec_data,
@@ -1634,7 +1606,6 @@ fn consume_source_records(
         registry,
         account(accounts, 11)?,
         account(accounts, 12)?,
-        rent,
         PROVIDER_RELEASE_SCHEMA_ID_V1,
         provider_release_id,
         &provider_data,
@@ -1657,7 +1628,6 @@ fn consume_source_records(
         registry,
         account(accounts, 13)?,
         account(accounts, 14)?,
-        rent,
         WINDOW_SPEC_SCHEMA_ID_V1,
         window_spec_id,
         &window_data,
@@ -1678,7 +1648,6 @@ fn consume_source_records(
         registry,
         account(accounts, 15)?,
         account(accounts, 16)?,
-        rent,
         STATISTIC_SPEC_SCHEMA_ID_V1,
         statistic_spec_id,
         &statistic_data,
@@ -1695,7 +1664,6 @@ fn consume_source_records(
         registry,
         account(accounts, 17)?,
         account(accounts, 18)?,
-        rent,
         RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_ID_V1,
         decoding_rules_id,
         &config_data,
@@ -1715,7 +1683,6 @@ fn consume_source_records(
         registry,
         account(accounts, 19)?,
         account(accounts, 20)?,
-        rent,
         ARTIFACT_RELEASE_SCHEMA_ID_V1,
         venue_release_id,
         &venue_data,
@@ -2027,7 +1994,6 @@ fn persisted_binding(
     record: &AccountInfo<'_>,
     key_set_raw: &AccountInfo<'_>,
     key_set_staging: &AccountInfo<'_>,
-    rent: &Rent,
     generation: u64,
     observed_slot: u64,
 ) -> Result<PersistedBindingV1, ProgramError> {
@@ -2059,7 +2025,6 @@ fn persisted_binding(
         &registry,
         key_set_raw,
         key_set_staging,
-        rent,
         RELAYER_KEY_SET_SCHEMA_RELEASE_ID_V1,
         binding.relayer_key_set_id,
         &key_set_data,

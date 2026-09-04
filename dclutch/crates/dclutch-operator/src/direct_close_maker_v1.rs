@@ -50,6 +50,7 @@
 //! beneficiary gets [`DirectCloseMakerPlanErrorV1::InvalidRentOwner`], not a
 //! redirected refund.
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
 use dclutch_capability_program_contract::{
     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1, CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityProgramV1,
@@ -88,13 +89,12 @@ use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
-    rent::Rent,
 };
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
 
 use crate::{
     Finality, Observation, ObservedAccount,
-    observation::{FinalizedRecordProof, authenticate_finalized_record, decode_rent},
+    observation::{FinalizedRecordProof, authenticate_finalized_record},
 };
 
 /// Canonical persisted evidence label for the close-maker descriptor.
@@ -631,14 +631,11 @@ pub fn plan_direct_close_maker_v1(
 ) -> Result<DirectCloseMakerPlanV1, DirectCloseMakerPlanErrorV1> {
     snapshot.cluster.admit(snapshot.genesis_hash)?;
     let observation = same_finalized_observation(snapshot)?;
-    let rent = decode_rent(&snapshot.rent_sysvar)
-        .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidInfrastructure)?;
     authenticate_infrastructure(snapshot)?;
-    let market = authenticate_market_and_release(snapshot, &rent)?;
-    let (header, root_state) = authenticate_root_and_artifacts(snapshot, &rent, market)?;
+    let market = authenticate_market_and_release(snapshot)?;
+    let (header, root_state) = authenticate_root_and_artifacts(snapshot, market)?;
     assemble_plan(
         snapshot,
-        &rent,
         AuthenticatedCloseV1 {
             observation,
             market,
@@ -726,11 +723,10 @@ fn authenticate_infrastructure(
 
 fn authenticate_market_and_release(
     snapshot: &DirectCloseMakerSnapshotV1,
-    rent: &Rent,
 ) -> Result<CoreState, DirectCloseMakerPlanErrorV1> {
     if snapshot.market.owner != snapshot.core_program.key
         || snapshot.market.data.len() != STATE_BYTES
-        || !rent.is_exempt(snapshot.market.lamports, snapshot.market.data.len())
+        || !funded_rent_persists_v1(snapshot.market.lamports)
     {
         return Err(DirectCloseMakerPlanErrorV1::InvalidMarket);
     }
@@ -758,10 +754,7 @@ fn authenticate_market_and_release(
     if snapshot.activation_cache.owner != snapshot.registry_program.key
         || snapshot.activation_cache.executable
         || snapshot.activation_cache.data.len() != ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1
-        || !rent.is_exempt(
-            snapshot.activation_cache.lamports,
-            snapshot.activation_cache.data.len(),
-        )
+        || !funded_rent_persists_v1(snapshot.activation_cache.lamports)
     {
         return Err(DirectCloseMakerPlanErrorV1::InvalidRelease);
     }
@@ -857,7 +850,6 @@ fn deployment_observation(
 
 fn authenticate_root_and_artifacts(
     snapshot: &DirectCloseMakerSnapshotV1,
-    rent: &Rent,
     market: CoreState,
 ) -> Result<(CapabilityRootHeaderV1, DirectRootStateV1), DirectCloseMakerPlanErrorV1> {
     let root_width = CAPABILITY_ROOT_HEADER_BYTES_V1
@@ -865,7 +857,7 @@ fn authenticate_root_and_artifacts(
         .ok_or(DirectCloseMakerPlanErrorV1::InvalidRoot)?;
     if snapshot.root.owner != snapshot.trading_program.key
         || snapshot.root.data.len() != root_width
-        || !rent.is_exempt(snapshot.root.lamports, snapshot.root.data.len())
+        || !funded_rent_persists_v1(snapshot.root.lamports)
     {
         return Err(DirectCloseMakerPlanErrorV1::InvalidRoot);
     }
@@ -902,7 +894,6 @@ fn authenticate_root_and_artifacts(
     let selection = header.selection();
     authenticate_persisted_raw(
         snapshot.registry_program.key,
-        rent,
         &snapshot.capability_manifest,
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         selection.manifest().to_bytes(),
@@ -949,7 +940,6 @@ fn authenticate_root_and_artifacts(
     ] {
         authenticate_finalized_record(
             snapshot.registry_program.key,
-            rent,
             raw,
             &FinalizedRecordProof {
                 schema_release_id: schema,
@@ -1040,7 +1030,6 @@ fn record_address_at_bump(
 
 fn authenticate_persisted_raw(
     registry: Pubkey,
-    rent: &Rent,
     account: &ObservedAccount,
     schema: [u8; 32],
     digest: [u8; 32],
@@ -1052,7 +1041,7 @@ fn authenticate_persisted_raw(
         || account.owner != registry
         || account.executable
         || hash(&account.data).to_bytes() != digest
-        || !rent.is_exempt(account.lamports, account.data.len())
+        || !funded_rent_persists_v1(account.lamports)
     {
         return Err(DirectCloseMakerPlanErrorV1::InvalidRecord);
     }
@@ -1101,7 +1090,6 @@ fn replay_is_vacant(account: &ObservedAccount) -> Result<bool, DirectCloseMakerP
 
 fn assemble_plan(
     snapshot: &DirectCloseMakerSnapshotV1,
-    rent: &Rent,
     authenticated: AuthenticatedCloseV1,
 ) -> Result<DirectCloseMakerPlanV1, DirectCloseMakerPlanErrorV1> {
     let selection = authenticated.header.selection();
@@ -1160,10 +1148,7 @@ fn assemble_plan(
         // what says whose it is. Disagreement is a refusal, never a silent
         // adoption of the caller's answer.
         || maker_root.maker() != snapshot.maker.to_bytes()
-        || !rent.is_exempt(
-            snapshot.maker_replay.lamports,
-            snapshot.maker_replay.data.len(),
-        )
+        || !funded_rent_persists_v1(snapshot.maker_replay.lamports)
     {
         return Err(DirectCloseMakerPlanErrorV1::InvalidReplay);
     }
@@ -1310,6 +1295,8 @@ fn assemble_plan(
 
 #[cfg(test)]
 mod tests {
+    use solana_program::rent::Rent;
+
     use dclutch_capability_program_contract::SelectedRecordBumpsV1;
     use dclutch_core_contract::ContentId;
     use dclutch_direct_codec::successor::{
@@ -1436,7 +1423,6 @@ mod tests {
     struct Fixture {
         snapshot: DirectCloseMakerSnapshotV1,
         authenticated: AuthenticatedCloseV1,
-        rent: Rent,
         donation: u64,
         rent_principal: u64,
     }
@@ -1619,7 +1605,6 @@ mod tests {
                 header,
                 root_state,
             },
-            rent,
             donation,
             rent_principal,
         }
@@ -1630,7 +1615,6 @@ mod tests {
     ) -> Result<Box<DirectCloseMakerSubmitV1>, DirectCloseMakerPlanErrorV1> {
         match assemble_plan(
             &fixture.snapshot,
-            &fixture.rent,
             AuthenticatedCloseV1 {
                 ..fixture.authenticated
             },
@@ -1785,7 +1769,6 @@ mod tests {
         fixture.snapshot.maker_replay.data = Vec::new();
         match assemble_plan(
             &fixture.snapshot,
-            &fixture.rent,
             AuthenticatedCloseV1 {
                 ..fixture.authenticated
             },
@@ -1877,7 +1860,6 @@ mod tests {
         fixture.snapshot.maker_replay.data = Vec::new();
         match assemble_plan(
             &fixture.snapshot,
-            &fixture.rent,
             AuthenticatedCloseV1 {
                 ..fixture.authenticated
             },

@@ -9,6 +9,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::convert::TryFrom;
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
     CUSTODY_BUMP_RELAY_BYTES_V1, CUSTODY_RECEIPT_BYTES_V1, CUSTODY_REPLAY_BYTES_V1,
@@ -77,7 +78,7 @@ use solana_program::{
     program_error::ProgramError,
     pubkey::Pubkey,
     rent::Rent,
-    sysvar::{Sysvar, SysvarSerialize},
+    sysvar::SysvarSerialize,
 };
 use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign, create_account, transfer};
@@ -1108,9 +1109,7 @@ fn authenticate_realm(
         || market.identity.registry_program.to_bytes() != registry.key.to_bytes()
         || realm_account.owner != registry.key
         || realm_account.data_len() != REALM_BYTES
-        || !Rent::get()
-            .map_err(|_| CustodySbfError::Realm)?
-            .is_exempt(realm_account.lamports(), REALM_BYTES)
+        || !funded_rent_persists_v1(realm_account.lamports())
     {
         return Err(CustodySbfError::Realm.into());
     }
@@ -1201,9 +1200,7 @@ fn authenticate_premarket_realm(
 
     if realm_account.owner != registry.key
         || realm_account.data_len() != REALM_BYTES
-        || !Rent::get()
-            .map_err(|_| CustodySbfError::Realm)?
-            .is_exempt(realm_account.lamports(), REALM_BYTES)
+        || !funded_rent_persists_v1(realm_account.lamports())
     {
         return Err(CustodySbfError::Realm.into());
     }

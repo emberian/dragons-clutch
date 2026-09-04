@@ -29,6 +29,7 @@ use dclutch_account_profile_contract::{
     },
     v3::{AccountProfileV3, SCHEMA_RELEASE_ID_V3 as ACCOUNT_PROFILE_SCHEMA_ID_V3},
 };
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, Error as CapabilityProgramError,
@@ -1111,8 +1112,6 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     {
         return Err(TradingSbfError::Root.into());
     }
-    let rent =
-        Rent::from_account_info(frame.rent).map_err(|_| TradingSbfError::AcceleratorRelease)?;
     hot_cu_checkpoint!("acc-release-waist");
     // The caller's record bumps are read AHEAD of the witness's own decode,
     // because the Product walk below is the first thing on this route that
@@ -1120,7 +1119,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     // `accelerator_record_bump_hints_v4`.
     let record_bumps = accelerator_record_bump_hints_v4(request.witness());
     let product_runtime =
-        authenticate_product_runtime_hinted_boxed_v3(&frame, &rent, &market, record_bumps)
+        authenticate_product_runtime_hinted_boxed_v3(&frame, &market, record_bumps)
             .map_err(|_| TradingSbfError::AcceleratorArtifact)?;
     hot_cu_checkpoint!("acc-product-runtime");
 
@@ -1209,7 +1208,6 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     let seal = authenticate_capability_seal_v3(
         frame.trading_program.key,
         frame,
-        &rent,
         PROGRAM_SCHEMA_ID_V4,
         request.capability_program().to_bytes(),
         selected_action,
@@ -1224,7 +1222,6 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         SealedRoleV1::Descriptor,
         frame.descriptor_raw,
         frame.descriptor_staging,
-        &rent,
         PROGRAM_SCHEMA_ID_V4,
         request.capability_program().to_bytes(),
     )
@@ -2539,7 +2536,7 @@ pub fn process_hot_execution_v3(
         invocation.role_authentication,
     )?;
     let rent = Rent::from_account_info(frame.rent).map_err(|_| TradingSbfError::Content)?;
-    let product_runtime_v3 = authenticate_product_runtime_boxed_v3(&frame, &rent, &market)?;
+    let product_runtime_v3 = authenticate_product_runtime_boxed_v3(&frame, &market)?;
     let authenticated_series_expiry_rent_credit = try_authenticate_series_expiry_premarket_v1(
         program_id,
         accounts,
@@ -2690,7 +2687,7 @@ fn try_authenticate_series_expiry_premarket_v1<'accounts, 'info>(
     // negative classification, not a new public refusal path. Ordinary Hot
     // repeats these checks in its historical order in the common tail.
     let Some((descriptor, selected_program, selected_action)) =
-        authenticate_series_expiry_selection_v1(program_id, family_request, frame, rent, root)
+        authenticate_series_expiry_selection_v1(program_id, family_request, frame, root)
             .ok()
             .flatten()
     else {
@@ -2739,7 +2736,6 @@ fn authenticate_selected_series_expiry_premarket_v1<'accounts, 'info>(
         accounts,
         invocation,
         frame,
-        rent,
         root,
         descriptor,
         selected_program,
@@ -2763,7 +2759,6 @@ fn authenticate_series_expiry_execution_artifacts_v1<'accounts, 'info>(
     accounts: &'accounts [AccountInfo<'info>],
     invocation: AuthenticatedHotInvocationV3,
     frame: &HotFrameV3<'accounts, 'info>,
-    rent: &Rent,
     root: &AuthenticatedRootV3,
     descriptor: CapabilityProgramV4,
     selected_program: ContentId,
@@ -2780,7 +2775,6 @@ fn authenticate_series_expiry_execution_artifacts_v1<'accounts, 'info>(
     let seal = authenticate_capability_seal_v3(
         program_id,
         *frame,
-        &rent,
         PROGRAM_SCHEMA_ID_V4,
         selected_program.to_bytes(),
         selected_action,
@@ -2794,7 +2788,6 @@ fn authenticate_series_expiry_execution_artifacts_v1<'accounts, 'info>(
         SealedRoleV1::AccountProfile,
         frame.account_profile_raw,
         frame.account_profile_staging,
-        &rent,
         descriptor.account_profile().schema().to_bytes(),
         descriptor.account_profile().program().to_bytes(),
     )?;
@@ -2819,7 +2812,6 @@ fn authenticate_series_expiry_execution_artifacts_v1<'accounts, 'info>(
         SealedRoleV1::EffectProgram,
         frame.effect_raw,
         frame.effect_staging,
-        &rent,
         descriptor.effect().schema().to_bytes(),
         descriptor.effect().program().to_bytes(),
     )?;
@@ -2931,21 +2923,18 @@ fn authenticate_series_expiry_records_and_projection_v1<'accounts, 'info>(
         *frame,
         template_raw,
         template_staging,
-        &rent,
         SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
     )?;
     let occurrence_bytes = borrow_series_finalized_record_v1(
         *frame,
         occurrence_raw,
         occurrence_staging,
-        &rent,
         SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3,
     )?;
     let ticket_bytes = borrow_series_finalized_record_v1(
         *frame,
         ticket_raw,
         ticket_staging,
-        &rent,
         SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
     )?;
     let future = derive_series_expiry_future_projection_from_records_v1(
@@ -3052,7 +3041,6 @@ fn authenticate_series_expiry_selection_v1(
     program_id: &Pubkey,
     family_request: &[u8],
     frame: &HotFrameV3<'_, '_>,
-    rent: &Rent,
     root: &AuthenticatedRootV3,
 ) -> Result<Option<(CapabilityProgramV4, ContentId, u32)>, ProgramError> {
     let context = root.context;
@@ -3061,7 +3049,6 @@ fn authenticate_series_expiry_selection_v1(
         *frame,
         frame.manifest_raw,
         frame.manifest_staging,
-        rent,
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         context.selection().manifest().to_bytes(),
         bumps.manifest_raw(),
@@ -3073,7 +3060,6 @@ fn authenticate_series_expiry_selection_v1(
         *frame,
         frame.program_set_raw,
         frame.program_set_staging,
-        rent,
         CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
         release,
         context.selection().capability_release_raw_bump(),
@@ -3097,7 +3083,6 @@ fn authenticate_series_expiry_selection_v1(
     let seal = authenticate_capability_seal_v3(
         program_id,
         *frame,
-        rent,
         reference.schema().to_bytes(),
         selected_program.to_bytes(),
         selected_action,
@@ -3110,7 +3095,6 @@ fn authenticate_series_expiry_selection_v1(
         SealedRoleV1::Descriptor,
         frame.descriptor_raw,
         frame.descriptor_staging,
-        rent,
         reference.schema().to_bytes(),
         selected_program.to_bytes(),
     )?;
@@ -3137,7 +3121,6 @@ fn borrow_series_finalized_record_v1<'a, 'info>(
     frame: HotFrameV3<'_, 'info>,
     raw: &'a AccountInfo<'info>,
     staging: &AccountInfo<'info>,
-    rent: &Rent,
     schema: [u8; 32],
 ) -> Result<core::cell::Ref<'a, [u8]>, ProgramError> {
     let digest = {
@@ -3146,7 +3129,7 @@ fn borrow_series_finalized_record_v1<'a, 'info>(
             .map_err(|_| TradingSbfError::Content)?;
         hash(&data).to_bytes()
     };
-    borrow_finalized_record(frame, raw, staging, rent, schema, digest)
+    borrow_finalized_record(frame, raw, staging, schema, digest)
 }
 
 fn require_series_expiry_future_market_vacancy_v1(
@@ -3373,7 +3356,7 @@ fn authenticate_series_expiry_vacant_permit_request_v1(
     if rent_credit.key != &expected_credit
         || rent_credit.owner != rent_program.key
         || rent_credit.data_len() != LIFECYCLE_RENT_CREDIT_BYTES_V2
-        || !rent.is_exempt(rent_credit.lamports(), LIFECYCLE_RENT_CREDIT_BYTES_V2)
+        || !funded_rent_persists_v1(rent_credit.lamports())
         || !rent_program.executable
         || rent_program.is_signer
         || rent_program.is_writable
@@ -3423,7 +3406,6 @@ fn authenticate_and_execute_hot_v3(
         *frame,
         frame.manifest_raw,
         frame.manifest_staging,
-        rent,
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         context.selection().manifest().to_bytes(),
         record_bumps.manifest_raw(),
@@ -3436,7 +3418,6 @@ fn authenticate_and_execute_hot_v3(
         *frame,
         frame.program_set_raw,
         frame.program_set_staging,
-        rent,
         CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
         capability_release,
         context.selection().capability_release_raw_bump(),
@@ -3496,7 +3477,6 @@ fn authenticate_and_execute_hot_v3(
     let seal = authenticate_capability_seal_v3(
         program_id,
         *frame,
-        rent,
         selected_descriptor.schema().to_bytes(),
         selected_program.to_bytes(),
         selected_action,
@@ -3510,7 +3490,6 @@ fn authenticate_and_execute_hot_v3(
         SealedRoleV1::Descriptor,
         frame.descriptor_raw,
         frame.descriptor_staging,
-        rent,
         selected_descriptor.schema().to_bytes(),
         selected_program.to_bytes(),
     )?;
@@ -3524,7 +3503,6 @@ fn authenticate_and_execute_hot_v3(
         *frame,
         frame.config_raw,
         frame.config_staging,
-        rent,
         descriptor.config_schema().to_bytes(),
         context.selection().config().to_bytes(),
         record_bumps.config_raw(),
@@ -3565,7 +3543,6 @@ fn authenticate_and_execute_hot_v3(
         SealedRoleV1::LifecyclePolicy,
         frame.lifecycle_raw,
         frame.lifecycle_staging,
-        rent,
         descriptor.lifecycle().schema().to_bytes(),
         descriptor.lifecycle().program().to_bytes(),
     )?;
@@ -3609,7 +3586,6 @@ fn authenticate_and_execute_hot_v3(
         SealedRoleV1::AccountProfile,
         frame.account_profile_raw,
         frame.account_profile_staging,
-        rent,
         descriptor.account_profile().schema().to_bytes(),
         descriptor.account_profile().program().to_bytes(),
     )?;
@@ -3659,7 +3635,6 @@ fn authenticate_and_execute_hot_v3(
         SealedRoleV1::RequestProfile,
         frame.request_profile_raw,
         frame.request_profile_staging,
-        rent,
         descriptor.request_profile().schema().to_bytes(),
         descriptor.request_profile().program().to_bytes(),
     )?;
@@ -3688,7 +3663,6 @@ fn authenticate_and_execute_hot_v3(
         SealedRoleV1::TransitionProgram,
         frame.transition_raw,
         frame.transition_staging,
-        rent,
         descriptor.transition().schema().to_bytes(),
         descriptor.transition().program().to_bytes(),
     )?;
@@ -3714,7 +3688,6 @@ fn authenticate_and_execute_hot_v3(
         SealedRoleV1::EffectProgram,
         frame.effect_raw,
         frame.effect_staging,
-        rent,
         descriptor.effect().schema().to_bytes(),
         descriptor.effect().program().to_bytes(),
     )?;
@@ -4612,7 +4585,6 @@ fn execute_authenticated_hot_v3(
             root_lifecycle_close,
             aliases: &aliases,
             output_lamports: &output_lamports,
-            rent: &rent,
             immutable_root_header,
             root_prestate,
             strategy_execution_digest,
@@ -4661,7 +4633,6 @@ struct PreparedHotCommitV3<'a, 'accounts, 'info, 'artifact> {
     // reached. `None` when the Effect declares no child route at all, which is
     // exactly when the plan IS the sole authority.
     participation: Option<&'a [CoordinateParticipationV3]>,
-    rent: &'a Rent,
     immutable_root_header: &'a [u8; CAPABILITY_ROOT_HEADER_BYTES_V1],
     root_prestate: [u8; 32],
     strategy_execution_digest: [u8; 32],
@@ -4813,7 +4784,6 @@ fn commit_prepared_post_children_v3(
         prepared.market.rent_beneficiary.to_bytes(),
         prepared.lifecycle_plans,
         prepared.runtime_accounts,
-        prepared.rent,
     )?;
     apply_funding_closes_v5(
         prepared.program_id,
@@ -4824,7 +4794,6 @@ fn commit_prepared_post_children_v3(
         prepared.scalars,
         prepared.identities,
         prepared.runtime_accounts,
-        prepared.rent,
         prepared.envelope.market(),
         prepared.envelope.release_set(),
         prepared.envelope.generation(),
@@ -4840,7 +4809,6 @@ fn commit_prepared_post_children_v3(
         prepared.aliases,
         prepared.output_lamports,
         prepared.participation,
-        prepared.rent,
         &mut prepared.root_commit_plan,
     )?;
     hot_cu_checkpoint!("commit-non-root");
@@ -4858,7 +4826,6 @@ fn commit_prepared_post_children_v3(
             prepared.aliases,
             prepared.output_lamports,
             prepared.participation,
-            prepared.rent,
             &prepared.root_commit_plan,
         )?;
     }
@@ -5364,12 +5331,10 @@ fn authenticate_continuation_root_roles_v3(
 #[inline(never)]
 fn authenticate_product_runtime_boxed_v3<'accounts, 'info>(
     frame: &HotFrameV3<'accounts, 'info>,
-    rent: &Rent,
     market: &CoreState,
 ) -> Result<Box<AuthenticatedProductRuntimeV3<'accounts, 'info>>, ProgramError> {
     authenticate_product_runtime_hinted_boxed_v3(
         frame,
-        rent,
         market,
         ProductRecordBumpsV3(market.bumps.product_graph.bumps()),
     )
@@ -5394,13 +5359,11 @@ fn authenticate_product_runtime_boxed_v3<'accounts, 'info>(
 #[inline(never)]
 fn authenticate_product_runtime_hinted_boxed_v3<'accounts, 'info>(
     frame: &HotFrameV3<'accounts, 'info>,
-    rent: &Rent,
     market: &CoreState,
     hints: ProductRecordBumpsV3,
 ) -> Result<Box<AuthenticatedProductRuntimeV3<'accounts, 'info>>, ProgramError> {
     authenticate_product_runtime_v3_hinted(
         frame.registry.key,
-        rent,
         ProductContentId::new(market.identity.product_record.to_bytes())
             .map_err(|_| TradingSbfError::Content)?,
         ProductRuntimeFrameV3 {
@@ -5430,12 +5393,10 @@ fn authenticate_product_runtime_hinted_boxed_v3<'accounts, 'info>(
 #[inline(never)]
 fn authenticate_product_runtime_for_record_boxed_v3<'accounts, 'info>(
     frame: &HotFrameV3<'accounts, 'info>,
-    rent: &Rent,
     product_record: ProductContentId,
 ) -> Result<Box<AuthenticatedProductRuntimeV3<'accounts, 'info>>, ProgramError> {
     authenticate_product_runtime_v3(
         frame.registry.key,
-        rent,
         product_record,
         ProductRuntimeFrameV3 {
             product: ProductRecordFrameV2 {
@@ -9502,7 +9463,6 @@ fn prepare_lifecycle_v4<'a, 'region>(
                         *planned_lamports
                             .get(index)
                             .ok_or(TradingSbfError::Content)?,
-                        rent,
                         expected_market,
                         expected_release_set,
                         expected_generation,
@@ -9915,7 +9875,6 @@ fn authenticate_lifecycle_credit_v3(
     owner_program: &AccountInfo<'_>,
     index: usize,
     observed_lamports: u64,
-    rent: &Rent,
     expected_market: [u8; 32],
     expected_release_set: [u8; 32],
     expected_generation: u64,
@@ -9954,7 +9913,7 @@ fn authenticate_lifecycle_credit_v3(
         || !account.is_writable
         || account.executable
         || account.data_len() != LIFECYCLE_RENT_CREDIT_BYTES_V2
-        || !rent.is_exempt(observed_lamports, LIFECYCLE_RENT_CREDIT_BYTES_V2)
+        || !funded_rent_persists_v1(observed_lamports)
     {
         return Err(TradingSbfError::Content.into());
     }
@@ -10399,7 +10358,6 @@ fn apply_lifecycle_closes_v3(
     expected_rent_credit: [u8; 32],
     plans: &[PreparedLifecycleInvocationV3],
     accounts: &[&AccountInfo<'_>],
-    rent: &Rent,
 ) -> Result<(), ProgramError> {
     for prepared in plans {
         let StateLifecyclePlanV3::Close(plan) = prepared.plan else {
@@ -10418,7 +10376,6 @@ fn apply_lifecycle_closes_v3(
             lifecycle_owner_program,
             prepared.rent_credit.ok_or(TradingSbfError::Commit)?,
             credit.lamports(),
-            rent,
             expected_market,
             expected_release_set,
             expected_generation,
@@ -10468,7 +10425,6 @@ fn apply_funding_closes_v5(
     scalars: &[u64],
     identities: &[[u8; 32]],
     accounts: &[&AccountInfo<'_>],
-    rent: &Rent,
     market: [u8; 32],
     release_set: [u8; 32],
     generation: u64,
@@ -10514,7 +10470,6 @@ fn apply_funding_closes_v5(
             lifecycle_owner_program,
             credit_index,
             credit.lamports(),
-            rent,
             market,
             release_set,
             generation,
@@ -12121,7 +12076,7 @@ enum CommittedLamportsV3 {
 /// first in the protocol whose child CPI CREATES AND FUNDS a frame account --
 /// Custody's replay and its vault -- and until this existed the commit wrote the
 /// observed-vacant zero back over the child's rent and then refused its own
-/// postcondition, `require_committed_rent_exemption_v3`, on the account it had
+/// postcondition, `require_committed_accounts_persist_v3`, on the account it had
 /// just emptied. Measured on real ELFs 2026-09-01: coordinate 20, 0 lamports
 /// against 288 bytes needing 2,895,360, `Commit` 0x4005 at 1,205,519 CU.
 ///
@@ -13338,7 +13293,6 @@ fn require_funding_runtime_v5(
                     lifecycle_owner_program,
                     counterparty_index,
                     counterparty.lamports(),
-                    rent,
                     market,
                     release_set,
                     generation,
@@ -14523,7 +14477,6 @@ fn commit_non_root_effects_into_v3(
     aliases: &[usize],
     output_lamports: &[u64],
     participation: Option<&[CoordinateParticipationV3]>,
-    rent: &Rent,
     plan: &mut RootCommitPlanV3,
 ) -> Result<(), ProgramError> {
     if plan.ordinals != root_commit_ordinal_count_v3(effect, tail_count)?
@@ -14566,7 +14519,7 @@ fn commit_non_root_effects_into_v3(
         }
         item = item.checked_add(1).ok_or(TradingSbfError::Commit)?;
     }
-    require_committed_rent_exemption_v3(accounts, aliases, rent, false)?;
+    require_committed_accounts_persist_v3(accounts, aliases, false)?;
     Ok(())
 }
 
@@ -14581,7 +14534,6 @@ fn commit_non_root_effects_v3(
     aliases: &[usize],
     output_lamports: &[u64],
     participation: Option<&[CoordinateParticipationV3]>,
-    rent: &Rent,
 ) -> Result<RootCommitPlanV3, ProgramError> {
     let mut plan = RootCommitPlanV3::for_geometry(effect, tail_count)?;
     commit_non_root_effects_into_v3(
@@ -14593,7 +14545,6 @@ fn commit_non_root_effects_v3(
         aliases,
         output_lamports,
         participation,
-        rent,
         &mut plan,
     )?;
     Ok(plan)
@@ -14610,7 +14561,6 @@ fn commit_root_effects_v3(
     aliases: &[usize],
     output_lamports: &[u64],
     participation: Option<&[CoordinateParticipationV3]>,
-    rent: &Rent,
     plan: &RootCommitPlanV3,
 ) -> Result<(), ProgramError> {
     if plan.ordinals != root_commit_ordinal_count_v3(effect, tail_count)? {
@@ -14663,7 +14613,7 @@ fn commit_root_effects_v3(
             commit_data_effect(resolved, accounts, aliases, true)?;
         }
     }
-    require_committed_rent_exemption_v3(accounts, aliases, rent, true)
+    require_committed_accounts_persist_v3(accounts, aliases, true)
 }
 
 /// Land the planned lamports, and leave a declared child route's poststate alone.
@@ -14712,7 +14662,7 @@ fn commit_output_lamports_v3(
     Ok(())
 }
 
-/// Require every account this commit could have changed to be left rent-exempt.
+/// Require every account this commit could have changed to still exist.
 ///
 /// **Only the writable ones.** This is a POSTCONDITION of the commit, and the
 /// commit can only reach an account the transaction made writable: both writes
@@ -14730,10 +14680,20 @@ fn commit_output_lamports_v3(
 /// carries the collateral token program, four child program records and the
 /// loader's ProgramData accounts, none of them writable and none of them this
 /// instruction's to underwrite.
-fn require_committed_rent_exemption_v3(
+///
+/// **It asked for EXEMPTION at the live rate until 2026-09-04, and that was a
+/// question about the cluster rather than about this commit.** The runtime
+/// already forbids the transition this wanted to prevent -- `transition_allowed`
+/// refuses `RentExempt -> RentPaying`, and a creation from `Uninitialized` must
+/// land exempt -- so a writable account this commit wrote either ends exempt,
+/// ends at zero, or the transaction fails with `InsufficientFundsForRent`
+/// without reaching any refusal of ours. What exemption at TODAY's rate added
+/// on top of that was a refusal of the one account nobody had touched: one
+/// funded when a byte cost less. So the postcondition kept here is the part
+/// this commit is answerable for -- that it drained nothing it wrote.
+fn require_committed_accounts_persist_v3(
     accounts: &[&AccountInfo<'_>],
     aliases: &[usize],
-    rent: &Rent,
     root_only: bool,
 ) -> Result<(), ProgramError> {
     for (coordinate, account) in accounts.iter().enumerate() {
@@ -14741,7 +14701,7 @@ fn require_committed_rent_exemption_v3(
             && (coordinate == 0) == root_only
             && account.is_writable
             && account.data_len() != 0
-            && !rent.is_exempt(account.lamports(), account.data_len())
+            && !funded_rent_persists_v1(account.lamports())
         {
             return Err(TradingSbfError::Commit.into());
         }
@@ -15018,7 +14978,6 @@ fn borrow_finalized_record_at<'a, 'info>(
     frame: HotFrameV3<'_, 'info>,
     raw: &'a AccountInfo<'info>,
     staging: &AccountInfo<'info>,
-    rent: &Rent,
     schema: [u8; 32],
     digest: [u8; 32],
     raw_bump: u8,
@@ -15039,15 +14998,7 @@ fn borrow_finalized_record_at<'a, 'info>(
         frame.registry.key,
     )
     .map_err(|_| TradingSbfError::Content)?;
-    borrow_record_against(
-        frame,
-        raw,
-        staging,
-        rent,
-        digest,
-        expected_raw,
-        expected_staging,
-    )
+    borrow_record_against(frame, raw, staging, digest, expected_raw, expected_staging)
 }
 
 /// Borrow one finalized record, searching for both of its addresses.
@@ -15060,7 +15011,6 @@ fn borrow_finalized_record<'a, 'info>(
     frame: HotFrameV3<'_, 'info>,
     raw: &'a AccountInfo<'info>,
     staging: &AccountInfo<'info>,
-    rent: &Rent,
     schema: [u8; 32],
     digest: [u8; 32],
 ) -> Result<core::cell::Ref<'a, [u8]>, ProgramError> {
@@ -15074,22 +15024,13 @@ fn borrow_finalized_record<'a, 'info>(
         frame.registry.key,
     )
     .0;
-    borrow_record_against(
-        frame,
-        raw,
-        staging,
-        rent,
-        digest,
-        expected_raw,
-        expected_staging,
-    )
+    borrow_record_against(frame, raw, staging, digest, expected_raw, expected_staging)
 }
 
 fn borrow_record_against<'a, 'info>(
     frame: HotFrameV3<'_, 'info>,
     raw: &'a AccountInfo<'info>,
     staging: &AccountInfo<'info>,
-    rent: &Rent,
     digest: [u8; 32],
     expected_raw: Pubkey,
     expected_staging: Pubkey,
@@ -15103,7 +15044,7 @@ fn borrow_record_against<'a, 'info>(
         || raw.is_writable
         || raw.executable
         || hash(&data).to_bytes() != digest
-        || !rent.is_exempt(raw.lamports(), data.len())
+        || !funded_rent_persists_v1(raw.lamports())
         || staging.key != &expected_staging
         || staging.owner != &system_program::ID
         || staging.data_len() != 0
@@ -16363,7 +16304,6 @@ mod tests {
             &owner,
             0,
             floor,
-            &rent,
             market.to_bytes(),
             release.to_bytes(),
             generation,
@@ -16409,11 +16349,10 @@ mod tests {
                 &unrelated_executable_owner,
                 0,
                 floor,
-                &rent,
                 market.to_bytes(),
                 release.to_bytes(),
                 generation,
-                credit_key.to_bytes(),
+                credit_key.to_bytes()
             )
             .is_ok(),
             "the owner-program argument carries privileges, not identity",
@@ -16441,11 +16380,10 @@ mod tests {
                 &owner,
                 0,
                 floor,
-                &rent,
                 market.to_bytes(),
                 release.to_bytes(),
                 generation,
-                credit_key.to_bytes(),
+                credit_key.to_bytes()
             ),
             Err(TradingSbfError::Content.into()),
             "a credit under a substituted owner must never authenticate",
@@ -16462,11 +16400,10 @@ mod tests {
                     hostile_owner,
                     0,
                     floor,
-                    &rent,
                     market.to_bytes(),
                     release.to_bytes(),
                     generation,
-                    credit_key.to_bytes(),
+                    credit_key.to_bytes()
                 ),
                 Err(TradingSbfError::Content.into()),
                 "{name} owner substitution or privilege widening must refuse",
@@ -16480,11 +16417,10 @@ mod tests {
                 &owner,
                 0,
                 floor,
-                &rent,
                 market.to_bytes(),
                 release.to_bytes(),
                 generation,
-                credit_key.to_bytes(),
+                credit_key.to_bytes()
             )
             .is_ok(),
             "runtime contents neither supply nor replace the fixed owner fact",
@@ -16495,11 +16431,10 @@ mod tests {
                 &owner,
                 0,
                 floor,
-                &rent,
                 market.to_bytes(),
                 release.to_bytes(),
                 generation,
-                Pubkey::new_unique().to_bytes(),
+                Pubkey::new_unique().to_bytes()
             ),
             Err(TradingSbfError::Content.into()),
         );
@@ -16509,11 +16444,10 @@ mod tests {
                 &owner,
                 0,
                 floor,
-                &rent,
                 Pubkey::new_unique().to_bytes(),
                 release.to_bytes(),
                 generation,
-                credit_key.to_bytes(),
+                credit_key.to_bytes()
             ),
             Err(TradingSbfError::Content.into()),
         );
@@ -16523,11 +16457,10 @@ mod tests {
                 &owner,
                 0,
                 floor,
-                &rent,
                 market.to_bytes(),
                 Pubkey::new_unique().to_bytes(),
                 generation,
-                credit_key.to_bytes(),
+                credit_key.to_bytes()
             ),
             Err(TradingSbfError::Content.into()),
         );
@@ -16537,11 +16470,10 @@ mod tests {
                 &owner,
                 0,
                 floor,
-                &rent,
                 market.to_bytes(),
                 release.to_bytes(),
                 generation + 1,
-                credit_key.to_bytes(),
+                credit_key.to_bytes()
             ),
             Err(TradingSbfError::Content.into()),
         );
@@ -16562,11 +16494,10 @@ mod tests {
                 &owner,
                 0,
                 stale_v1.lamports(),
-                &rent,
                 market.to_bytes(),
                 release.to_bytes(),
                 generation,
-                credit_key.to_bytes(),
+                credit_key.to_bytes()
             ),
             Err(TradingSbfError::Content.into()),
         );
@@ -18390,7 +18321,6 @@ mod tests {
             &aliases,
             &output_lamports,
             None,
-            &rent,
         )
         .expect("non-root commit pass");
         // Two of the five ordinals belong to the commit-last pass: the root's
@@ -18435,7 +18365,6 @@ mod tests {
             &aliases,
             &output_lamports,
             None,
-            &rent,
             &plan,
         )
         .expect("root commit pass");
@@ -18487,7 +18416,6 @@ mod tests {
             &aliases,
             &output_lamports,
             None,
-            &rent,
         )
         .expect("non-root commit pass");
         assert_eq!(
@@ -18500,7 +18428,6 @@ mod tests {
                 &aliases,
                 &output_lamports,
                 None,
-                &rent,
                 &plan,
             ),
             Err(TradingSbfError::Commit.into())
@@ -18534,7 +18461,6 @@ mod tests {
             &aliases,
             &output_lamports,
             None,
-            &rent,
         )
         .expect("non-root commit pass at tail one");
         assert_eq!(plan.ordinals, 3);
@@ -18548,7 +18474,6 @@ mod tests {
                 &aliases,
                 &output_lamports,
                 None,
-                &rent,
                 &plan,
             ),
             Err(TradingSbfError::Commit.into())

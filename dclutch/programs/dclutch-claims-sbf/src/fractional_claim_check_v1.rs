@@ -78,7 +78,7 @@ use solana_program::{
     program_error::ProgramError,
     pubkey::Pubkey,
     rent::Rent,
-    sysvar::{Sysvar, SysvarSerialize},
+    sysvar::Sysvar,
 };
 use solana_sdk_ids::system_program;
 use spl_token_2022_interface::{
@@ -965,8 +965,6 @@ pub const fn owner_kind_may_open_a_fractional_claim_check(
 mod terminal {
     /// The Claims aggregate: the escrow's and the record's sole shared seed.
     pub(super) const AGGREGATE: usize = 1;
-    /// The Rent sysvar the terminal frame already carries.
-    pub(super) const RENT_SYSVAR: usize = 10;
     /// The Registry program owning every finalized record pair.
     pub(super) const REGISTRY: usize = 13;
     /// The Core Market state whose phase entitles a compaction at all.
@@ -1469,15 +1467,12 @@ fn authenticate_fractional_compaction(
     // authors the denominator every holder's payout is divided by, carrying only
     // the raw half would leave a route that still looks authenticated and is
     // reading a number mid-rewrite (design §17.7 finding 1).
-    let rent = Rent::from_account_info(at(terminal::RENT_SYSVAR)?)
-        .map_err(|_| FractionalClaimCheckCompactionSbfErrorV1::Accounts)?;
     let registry = at(terminal::REGISTRY)?;
     let terms_bytes = terms_raw
         .try_borrow_data()
         .map_err(|_| FractionalClaimCheckCompactionSbfErrorV1::Accounts)?;
     authenticate_finalized_rational_record(
         registry.key,
-        &rent,
         terms_raw,
         terms_staging,
         FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
@@ -1524,7 +1519,6 @@ fn authenticate_fractional_compaction(
         .map_err(|_| FractionalClaimCheckCompactionSbfErrorV1::Accounts)?;
     authenticate_finalized_rational_record(
         registry.key,
-        &rent,
         behavior_raw,
         behavior_staging,
         TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,

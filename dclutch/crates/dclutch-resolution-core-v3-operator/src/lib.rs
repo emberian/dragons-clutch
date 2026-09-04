@@ -3350,7 +3350,7 @@ fn authenticate_close_funding(
         .map_err(|_| refuse("manifest identity"))?;
     let manifest = CapabilityManifestV1::decode(&snapshot.capability_manifest.data)
         .map_err(|_| refuse("manifest decode"))?;
-    let indices = authenticate_active_funding_ledger(
+    let ledger_indices = authenticate_active_funding_ledger(
         snapshot.market.key,
         snapshot.resolution_program.key,
         &snapshot.funding_ledger,
@@ -3359,6 +3359,37 @@ fn authenticate_close_funding(
         manifest,
         true,
     )?;
+    // TWO AUTHORS OF ONE LIST, AND THE ROLES BELONG TO THE MATERIAL.
+    //
+    // `funding_entries_from_mask` walks the selected mask's ascending bits, so
+    // it says WHICH three manifest entries this ledger funds and nothing about
+    // what each one is FOR. The roles are a fact of the material:
+    // `select_resolution_funding_entries` is the one author of them, is what
+    // CreateFund selected by, and returns `[recovery, exhaustion, failure]`.
+    //
+    // This function used to read the mask-ordered list as if it were the
+    // role-ordered one -- twice. Once to check the three configs positionally,
+    // where it refused market 1's retirement on the way to the first completed
+    // retirement on any chain (its failure compartment is the MIDDLE entry of
+    // its mask, not the last, and Core folds entries into a mask at CreateFund
+    // so nothing on chain ever required otherwise); and once to fill
+    // `recovery_entry_index` / `exhaustion_entry_index` / `failure_entry_index`
+    // in the retirement facts, which is the same mistake building a WRONG
+    // instruction rather than refusing. The positional config check was right
+    // to fire and the repair is the author, not the check. Third instance of
+    // this exact defect: `0c26bba0` fixed it at verify-fund-ready and the
+    // activation-receipt arm fixed it again, both by comparing MEMBERSHIP.
+    let entries = select_resolution_funding_entries(material, recovery_policy, manifest)
+        .map_err(|_| refuse("compartment roles are not derivable from this material"))?;
+    let mut canonical_ledger = ledger_indices;
+    canonical_ledger.sort_unstable();
+    let mut canonical_roles = entries;
+    canonical_roles.sort_unstable();
+    if canonical_ledger != canonical_roles {
+        return Err(refuse(&format!(
+            "the ledger funds entries {ledger_indices:?} and the material's roles name              {entries:?}; the sets differ"
+        )));
+    }
     // The rent to REFUND is the rent that was PAID. Reading the sysvar here
     // refunded today's price for an account bought at yesterday's, and the
     // difference then showed up as an unclassified surplus. A pre-cohort-16
@@ -3382,7 +3413,8 @@ fn authenticate_close_funding(
     let mut ledger_remaining_native_principal = 0_u64;
     let mut ledger_rent_lamports = 0_u64;
     let mut ledger_lamport_surplus = 0_u64;
-    for entry_index in indices {
+    // Physical iteration, so it follows the LEDGER's own row order.
+    for entry_index in ledger_indices {
         let close = FundingLedgerV2::close_slot_in_place(
             &mut planned,
             manifest_id,
@@ -3449,68 +3481,8 @@ fn authenticate_close_funding(
     let refund_lamports = source_refund_lamports
         .checked_add(classified_ledger_lamports)
         .ok_or_else(|| refuse("refund lamports overflow"))?;
-    match (material.recovery_policy(), recovery_policy) {
-        (Some(recovery_policy_id), Some(recovery_policy)) => {
-            let recovery_allocation = recovery_policy
-                .attempt(0)
-                .map_err(|_| refuse("recovery policy attempt 0"))?
-                .funding_allocation_id()
-                .to_bytes();
-            for (index, expected_config) in [
-                (indices[0], recovery_allocation),
-                (indices[1], recovery_policy_id.to_bytes()),
-                (indices[2], market.identity.resolution_policy.to_bytes()),
-            ] {
-                let entry = manifest
-                    .entry(index)
-                    .map_err(|_| refuse("recovery manifest entry"))?;
-                if entry.config_id().to_bytes() != expected_config
-                    || entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V7
-                {
-                    return Err(refuse("recovery entry config or release"));
-                }
-            }
-        }
-        // The no-recovery material: the failure compartment is configured by
-        // this market's own Source material and the two others are any other
-        // Resolution-controller entries — the same structural rule the
-        // programs enforce at CreateFund.
-        (None, None) => {
-            let mut configs = [[0_u8; 32]; 3];
-            for (slot, index) in indices.into_iter().enumerate() {
-                let entry = manifest
-                    .entry(index)
-                    .map_err(|_| refuse("no-recovery manifest entry"))?;
-                if entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V7 {
-                    return Err(refuse("no-recovery entry release"));
-                }
-                let config = configs
-                    .get_mut(slot)
-                    .ok_or_else(|| refuse("no-recovery config slot"))?;
-                *config = entry.config_id().to_bytes();
-            }
-            let material_id = market.identity.resolution_policy.to_bytes();
-            let [recovery_config, exhaustion_config, failure_config] = configs;
-            if failure_config != material_id
-                || recovery_config == material_id
-                || exhaustion_config == material_id
-                || recovery_config == exhaustion_config
-            {
-                return Err(refuse("no-recovery compartment configs"));
-            }
-        }
-        // The material and the observed account disagree about whether this
-        // Market HAS a recovery policy: one is Some and the other None.
-        (material_side, observed_side) => {
-            return Err(refuse(&format!(
-                "recovery policy presence: material {}, observed {}",
-                material_side.is_some(),
-                observed_side.is_some()
-            )));
-        }
-    }
     ResolutionCloseFundingPlanV3 {
-        entries: indices,
+        entries,
         source_refund_lamports,
         ledger_remaining_native_principal,
         ledger_rent_lamports,
@@ -4920,6 +4892,58 @@ mod tests {
     }
 
     #[test]
+    /// THE MASK SAYS WHICH THREE ENTRIES; THE MATERIAL SAYS WHAT EACH IS FOR.
+    ///
+    /// `funding_entries_from_mask` walks the selected mask's ascending bits and
+    /// `select_resolution_funding_entries` returns `[recovery, exhaustion,
+    /// failure]`. When the entry configured by the market's own material is not
+    /// the highest selected index, the two lists agree on MEMBERSHIP and differ
+    /// on ORDER -- and anything that reads the mask-ordered list positionally
+    /// then puts the failure compartment in the exhaustion slot.
+    ///
+    /// That is not hypothetical: cohort-15's market 1 is founded exactly this
+    /// way, and `authenticate_close_funding` read the mask list as the role
+    /// list twice -- once refusing the retirement outright, once filling the
+    /// retirement facts' three entry indices with the wrong ones.
+    #[test]
+    fn the_ledger_mask_order_and_the_material_role_order_are_two_different_lists() {
+        let material_id = hash(&readiness_material()).to_bytes();
+        // The material's own entry is the MIDDLE one, which is market 1's shape.
+        let entries = [
+            readiness_entry(1, [31; 32]),
+            readiness_entry(2, material_id),
+            readiness_entry(3, [33; 32]),
+        ];
+        let (_, _, _, _, _, material_bytes, manifest_bytes) =
+            readiness_coordinate_fixture(&entries);
+        let material = SourceMaterialV3::decode(&material_bytes).expect("material decodes");
+        let manifest = CapabilityManifestV1::decode(&manifest_bytes).expect("manifest decodes");
+        let roles = select_resolution_funding_entries(material, None, manifest)
+            .expect("a no-recovery material derives its three compartments");
+        assert_eq!(
+            roles,
+            [0, 2, 1],
+            "failure is the material's entry, and it is index 1"
+        );
+
+        let mask = funding_entry_mask(roles).expect("three distinct entries make a mask");
+        let by_mask = funding_entries_from_mask(mask).expect("the mask yields three entries");
+        assert_eq!(by_mask, [0, 1, 2], "the ledger's list is ascending, always");
+
+        let mut sorted_roles = roles;
+        sorted_roles.sort_unstable();
+        assert_eq!(sorted_roles, by_mask, "the two authors agree on membership");
+        assert_ne!(
+            roles, by_mask,
+            "and disagree on order, which is the whole defect"
+        );
+
+        // Stated as the consequence, so this test names the harm and not just
+        // the difference: read positionally, the mask list calls index 1 the
+        // exhaustion compartment when index 1 IS the failure compartment.
+        assert_eq!(roles[2], by_mask[1]);
+    }
+
     fn public_funding_coordinates_bind_market_owner_programs_and_exact_records() {
         let material_id = hash(&readiness_material()).to_bytes();
         let entries = [

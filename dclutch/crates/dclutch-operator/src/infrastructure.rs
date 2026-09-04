@@ -5,6 +5,7 @@
 //! an explicit checked manifest supplied by the caller. There is no embedded
 //! official-program list and this module performs no RPC, signing, or mutation.
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_core_contract::ContentId;
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
@@ -19,10 +20,8 @@ use dclutch_release_set_contract::{
     ProtocolInfrastructureProfileV2,
 };
 use dclutch_release_tool::CheckedInfrastructureV1;
-use solana_program::{
-    account_info::AccountInfo, hash::hash, pubkey::Pubkey, rent::Rent, sysvar::SysvarSerialize,
-};
-use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
+use solana_program::{hash::hash, pubkey::Pubkey};
+use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
 
 use crate::{Finality, Observation, ObservedAccount, registry::RegistryFinalizedRecordState};
 
@@ -240,7 +239,6 @@ fn inspect_infrastructure_under_class(
 ) -> Result<ProtocolInfrastructureReportV1, InfrastructureInspectionErrorV1> {
     let observation = same_finalized_observation(state)?;
     require_distinct_keys(state)?;
-    let rent = decode_rent(&state.rent_sysvar)?;
 
     let profile = ProtocolInfrastructureProfileV2::decode(&state.profile.data)
         .map_err(|_| InfrastructureInspectionErrorV1::InvalidProfile)?;
@@ -255,7 +253,6 @@ fn inspect_infrastructure_under_class(
         state.registry_program.key,
         &state.registry_program,
         &state.registry_programdata,
-        &rent,
         class,
     )?;
     let (rent_release, rent_evidence) = authenticate_artifact_component(
@@ -264,12 +261,10 @@ fn inspect_infrastructure_under_class(
         state.registry_program.key,
         &state.rent_program,
         &state.rent_programdata,
-        &rent,
         class,
     )?;
 
-    let activated =
-        authenticate_activation_cache(state, profile, &rent, state.registry_program.key)?;
+    let activated = authenticate_activation_cache(state, profile, state.registry_program.key)?;
     let core_role = activated
         .role(ExecutionRoleV1::Core)
         .map_err(|_| InfrastructureInspectionErrorV1::InvalidActivationCache)?;
@@ -281,7 +276,7 @@ fn inspect_infrastructure_under_class(
         &state.core_program,
         &state.core_programdata,
     )?;
-    authenticate_profile_account(state, profile, core.program, &rent)?;
+    authenticate_profile_account(state, profile, core.program)?;
     if core.program == registry.program
         || core.program == rent_evidence.program
         || registry.program == rent_evidence.program
@@ -316,7 +311,6 @@ fn authenticate_profile_account(
     state: &ProtocolInfrastructureStateV1,
     profile: ProtocolInfrastructureProfileV2,
     core_program: Pubkey,
-    rent: &Rent,
 ) -> Result<(), InfrastructureInspectionErrorV1> {
     let expected = Pubkey::find_program_address(
         &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
@@ -327,7 +321,7 @@ fn authenticate_profile_account(
         || state.profile.owner != core_program
         || state.profile.executable
         || state.profile.data.len() != PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2
-        || !rent.is_exempt(state.profile.lamports, state.profile.data.len())
+        || !funded_rent_persists_v1(state.profile.lamports)
         || profile.registry().program().to_bytes() != state.registry_program.key.to_bytes()
         || profile.rent().program().to_bytes() != state.rent_program.key.to_bytes()
     {
@@ -339,16 +333,12 @@ fn authenticate_profile_account(
 fn authenticate_activation_cache<'a>(
     state: &'a ProtocolInfrastructureStateV1,
     profile: ProtocolInfrastructureProfileV2,
-    rent: &Rent,
     registry_program: Pubkey,
 ) -> Result<ActivatedExecutionReleaseSetViewV1<'a>, InfrastructureInspectionErrorV1> {
     if state.activation_cache.owner != registry_program
         || state.activation_cache.executable
         || state.activation_cache.data.len() != ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1
-        || !rent.is_exempt(
-            state.activation_cache.lamports,
-            state.activation_cache.data.len(),
-        )
+        || !funded_rent_persists_v1(state.activation_cache.lamports)
         || profile.registry().program().to_bytes() != registry_program.to_bytes()
     {
         return Err(InfrastructureInspectionErrorV1::InvalidActivationCache);
@@ -375,7 +365,6 @@ fn authenticate_artifact_component(
     registry_program: Pubkey,
     program: &ObservedAccount,
     programdata: &ObservedAccount,
-    rent: &Rent,
     class: SubstrateClassV1,
 ) -> Result<(ArtifactReleaseV1, InfrastructureComponentEvidenceV1), InfrastructureInspectionErrorV1>
 {
@@ -411,7 +400,7 @@ fn authenticate_artifact_component(
     if record.record.key != expected_raw
         || record.record.owner != registry_program
         || record.record.executable
-        || !rent.is_exempt(record.record.lamports, record.record.data.len())
+        || !funded_rent_persists_v1(record.record.lamports)
         || record.staging_cursor.key != expected_staging
         || record.staging_cursor.owner != system_program::ID
         || record.staging_cursor.executable
@@ -555,28 +544,6 @@ fn recognize_checked_manifest(
             .checked_infrastructure_id()
             .map_err(|_| InfrastructureInspectionErrorV1::CheckedManifestMismatch)?,
     })
-}
-
-fn decode_rent(account: &ObservedAccount) -> Result<Rent, InfrastructureInspectionErrorV1> {
-    if account.key != sysvar::rent::ID
-        || account.owner != sysvar::ID
-        || account.executable
-        || account.data.len() != Rent::size_of()
-    {
-        return Err(InfrastructureInspectionErrorV1::InvalidRentSysvar);
-    }
-    let mut lamports = account.lamports;
-    let mut data = account.data.clone();
-    let info = AccountInfo::new(
-        &account.key,
-        false,
-        false,
-        &mut lamports,
-        &mut data,
-        &account.owner,
-        false,
-    );
-    Rent::from_account_info(&info).map_err(|_| InfrastructureInspectionErrorV1::InvalidRentSysvar)
 }
 
 fn same_finalized_observation(
@@ -736,7 +703,10 @@ mod tests {
         build_checked_execution_release_set, build_checked_infrastructure_v1,
         build_checked_release,
     };
+    use solana_program::account_info::AccountInfo;
+    use solana_program::rent::Rent;
     use solana_program::sysvar::SysvarSerialize;
+    use solana_sdk_ids::sysvar;
 
     use super::*;
 

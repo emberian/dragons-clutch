@@ -69,6 +69,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
 };
@@ -100,8 +101,6 @@ use solana_program::{
     program::{get_return_data, invoke_signed, set_return_data},
     program_error::ProgramError,
     pubkey::Pubkey,
-    rent::Rent,
-    sysvar::Sysvar,
 };
 use solana_sdk_ids::system_program;
 
@@ -331,7 +330,6 @@ fn authenticate_obligation(
     accounts: &[AccountInfo<'_>],
     request: DirectFeeSettlementRequestV1,
 ) -> Result<ObligationV1, ProgramError> {
-    let rent = Rent::get().map_err(|_| TradingSbfError::Content)?;
     let coordinates = DirectCoordinatesV1::new(request.market, request.generation)
         .map_err(|_| TradingSbfError::Content)?;
 
@@ -353,7 +351,7 @@ fn authenticate_obligation(
             || root.market() != request.market
             || root.generation() != request.generation
             || root.maker() != request.maker
-            || !rent.is_exempt(replay_account.lamports(), data.len())
+            || !funded_rent_persists_v1(replay_account.lamports())
         {
             return Err(TradingSbfError::Content.into());
         }
@@ -370,7 +368,7 @@ fn authenticate_obligation(
         return Err(TradingSbfError::FeeNotOwed.into());
     }
 
-    let fee_recipient = authenticate_config(program_id, accounts, request, &rent)?;
+    let fee_recipient = authenticate_config(program_id, accounts, request)?;
     Ok(ObligationV1 {
         maker_root: *replay_account.key,
         fee_owed,
@@ -391,7 +389,6 @@ fn authenticate_config(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     request: DirectFeeSettlementRequestV1,
-    rent: &Rent,
 ) -> Result<[u8; 32], ProgramError> {
     let root = account(accounts, DIRECT_ROOT)?;
     let config_id = {
@@ -416,7 +413,7 @@ fn authenticate_config(
         )
         .map_err(|_| TradingSbfError::Root)?;
         if root.key != &Pubkey::find_program_address(&header.seeds().as_slices(), program_id).0
-            || !rent.is_exempt(root.lamports(), data.len())
+            || !funded_rent_persists_v1(root.lamports())
             || header.market() != request.market
             || header.generation() != request.generation
             || header.selection().kind().to_bytes() != DIRECT_SUCCESSOR_KIND_ID_V3
@@ -426,7 +423,6 @@ fn authenticate_config(
         let bumps = header.record_bumps();
         authenticate_finalized_config_record(
             accounts,
-            rent,
             header.selection().config().to_bytes(),
             bumps.config_raw(),
             bumps.config_staging(),
@@ -451,7 +447,6 @@ fn authenticate_config(
 #[inline(never)]
 fn authenticate_finalized_config_record(
     accounts: &[AccountInfo<'_>],
-    rent: &Rent,
     config_id: [u8; 32],
     raw_bump: u8,
     staging_bump: u8,
@@ -487,7 +482,7 @@ fn authenticate_finalized_config_record(
     if raw.key != &expected_raw
         || raw.owner != registry.key
         || hash(&data).to_bytes() != config_id
-        || !rent.is_exempt(raw.lamports(), data.len())
+        || !funded_rent_persists_v1(raw.lamports())
         || staging.key != &expected_staging
         || staging.owner != &system_program::ID
         || staging.data_len() != 0

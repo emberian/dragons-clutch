@@ -24,10 +24,7 @@ use dclutch_rational_representation_v2_contract::{
     RepresentationActionV2, RepresentationRequestV2,
 };
 use dclutch_rational_representation_v2_kernel::product_v3::RepresentationAdmissionV3;
-use solana_program::{
-    account_info::AccountInfo, program_error::ProgramError, pubkey::Pubkey, rent::Rent,
-    sysvar::SysvarSerialize,
-};
+use solana_program::{account_info::AccountInfo, program_error::ProgramError, pubkey::Pubkey};
 
 use super::{
     ClaimsSbfError,
@@ -55,7 +52,6 @@ pub(crate) struct RationalProductFrameV3<'accounts, 'info> {
     pub(crate) graph_staging: &'accounts AccountInfo<'info>,
     pub(crate) receipt_mint: &'accounts AccountInfo<'info>,
     pub(crate) token_program: &'accounts AccountInfo<'info>,
-    pub(crate) rent: &'accounts AccountInfo<'info>,
     pub(crate) registry: &'accounts AccountInfo<'info>,
     pub(crate) core_market: &'accounts AccountInfo<'info>,
     pub(crate) core_program: &'accounts AccountInfo<'info>,
@@ -120,10 +116,8 @@ pub(crate) fn authenticate_rational_product_v3(
         }
     }
     let core = authenticate_core(frame, market, header.action)?;
-    let rent = Rent::from_account_info(frame.rent).map_err(|_| ClaimsSbfError::Accounts)?;
     let authenticated = authenticate_product_representation_v3(
         frame.registry.key,
-        &rent,
         ContentId::new(core.identity.product_record.to_bytes())
             .map_err(|_| ClaimsSbfError::Identity)?,
         ContentId::new(header.descriptor_id).map_err(|_| ClaimsSbfError::Identity)?,

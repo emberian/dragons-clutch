@@ -37,7 +37,7 @@
 //! # The seed order is not an input here, and that is the point
 //!
 //! Each bundle's lifecycle policy comes from
-//! `encode_general_state_lifecycle_v5_atomic`, which reads its seed order from
+//! `encode_general_family_state_lifecycle_v5_atomic`, which reads its seed order from
 //! `dclutch_general_adapter_contract::state_seeds_v3`. This module never names a
 //! seed, a domain, or a bump ordinal. A release compiler that restated the seed
 //! order would be the failure mode the whole exercise exists to prevent: a
@@ -106,12 +106,13 @@ use dclutch_general_adapter_contract::{
     },
     release_v3::{
         GENERAL_ACTION_PROGRAM_COUNT_V5, GENERAL_ACTIONS_V5, GeneralActionArtifactsV3,
-        GeneralArtifactReleaseBytesV3, GeneralReleaseProfileV1, authenticate_general_release_v3,
+        GeneralArtifactReleaseBytesV3, GeneralReleaseErrorV3, GeneralReleaseProfileV1,
+        authenticate_general_release_v3,
     },
     specialization::general_request_profile_bytes_v1,
     state_artifacts_v3::{
-        GeneralChildRentWidthsV5, encode_general_state_lifecycle_v5_atomic,
-        general_state_lifecycle_bytes_v5,
+        GeneralChildRentWidthsV5, encode_general_family_state_lifecycle_v5_atomic,
+        general_family_state_lifecycle_bytes_v5,
     },
     transition_artifacts_v3::{
         GENERAL_TRANSITION_INSTRUCTION_PLACEHOLDER_V3, encode_general_transition_program_v3_atomic,
@@ -672,8 +673,17 @@ pub enum GeneralSelectedReleaseErrorV1 {
     Encoding,
     /// ProgramSet encoding, decoding, or selection refused.
     ProgramSet,
-    /// The complete fifteen-action release join refused.
+    /// The compiled release did not rebuild byte for byte from its input.
     Release,
+    /// The family's own complete-catalogue admission refused, and with what.
+    ///
+    /// The cause is CARRIED rather than discarded. This was
+    /// `map_err(|_| Release)` over the one call in this module that already
+    /// knows which of six things went wrong, and the cost of that shape is
+    /// exactly what `AGENTS.md` describes: a hostile that reaches the verifier
+    /// has no word for what it found, and every refusal from a fifteen-action
+    /// join reads as the same code as a one-byte rebuild mismatch.
+    ReleaseAdmission(GeneralReleaseErrorV3),
     /// The activation triple refused to build, or the release carried another.
     ///
     /// Building it runs the real effect kernel over the effect it composes, so
@@ -699,10 +709,15 @@ pub fn general_selected_release_v1(
 ) -> Result<GeneralSelectedReleaseV1> {
     validate_input(input)?;
 
+    // ONE POLICY, COMPILED ONCE, for all fifteen bundles. Compiling it inside
+    // the loop would produce fifteen equal artifacts and re-derive one digest
+    // fifteen times; it would also leave the family property looking incidental
+    // rather than structural.
+    let lifecycle_policy = encode_lifecycle(input)?;
     let mut bundles = Vec::with_capacity(GENERAL_SELECTED_ACTION_COUNT_V1);
     let mut descriptors = [[0_u8; 32]; GENERAL_SELECTED_ACTION_COUNT_V1];
     for (index, action) in GENERAL_ACTIONS_V5.into_iter().enumerate() {
-        let bundle = compile_bundle(input, action)?;
+        let bundle = compile_bundle(input, action, &lifecycle_policy)?;
         *descriptors
             .get_mut(index)
             .ok_or(GeneralSelectedReleaseErrorV1::Input)? = digest(&bundle.descriptor);
@@ -762,6 +777,7 @@ pub fn validate_general_selected_release_v1(
         return Err(GeneralSelectedReleaseErrorV1::Release);
     }
 
+    let lifecycle_policy = encode_lifecycle(input)?;
     let mut descriptors = [[0_u8; 32]; GENERAL_SELECTED_ACTION_COUNT_V1];
     for (index, action) in GENERAL_ACTIONS_V5.into_iter().enumerate() {
         let bundle = release
@@ -771,7 +787,7 @@ pub fn validate_general_selected_release_v1(
         if bundle.action != action {
             return Err(GeneralSelectedReleaseErrorV1::Release);
         }
-        let expected = compile_bundle(input, action)?;
+        let expected = compile_bundle(input, action, &lifecycle_policy)?;
         if *bundle != expected {
             return Err(GeneralSelectedReleaseErrorV1::Release);
         }
@@ -918,7 +934,7 @@ fn authenticate_release(
         },
         input.outcome_count,
     )
-    .map_err(|_| GeneralSelectedReleaseErrorV1::Release)?;
+    .map_err(GeneralSelectedReleaseErrorV1::ReleaseAdmission)?;
     // The verifier reports the descriptor identities it joined; they must be the
     // ones the publication names, or the publication describes another release.
     for (index, descriptor) in joined.descriptors.into_iter().enumerate() {
@@ -1015,11 +1031,50 @@ fn encode_program_set(
         .map_err(|_| GeneralSelectedReleaseErrorV1::ProgramSet)
 }
 
-/// The one descriptor the activation triple inherits its coordinates from.
+/// The ONE descriptor every entry-authored coordinate may be read from.
 ///
-/// Any action would do -- `authenticate_general_release_v3` has already
-/// required all fifteen to agree on every entry-authored coordinate -- so the
-/// first is taken and the choice is stated rather than hidden.
+/// Both consumers go through here: the activation triple, which inherits five
+/// coordinates from an action descriptor, and the founding seam
+/// (`tools/local-validator/bootstrap/successor/src/selected_capability.rs`),
+/// which authors the capability manifest entry from four of them. Two callers
+/// reaching into `bundles.first()` separately is two authors for one choice, and
+/// it is how the harness came to compile its entry from OpenBatch while the
+/// founding compiled it from Consider.
+///
+/// The choice is now CHECKED, not asserted. This function used to carry a
+/// comment saying `authenticate_general_release_v3` had already required all
+/// fifteen descriptors to agree on every entry-authored coordinate; that was
+/// false, and its falseness is the whole reason cohort-15's General market
+/// activated under one action and could execute no other. The verifier enforces
+/// it now (`GeneralReleaseErrorV3::EntryCoordinateMismatch`), and this re-states
+/// it over the compiled bundles so that a caller holding a release built by some
+/// other path -- a harness, a fixture, a future compiler -- cannot silently pick
+/// an action instead of a family.
+pub fn general_selected_entry_descriptor_v1(release: &GeneralSelectedReleaseV1) -> Result<Vec<u8>> {
+    let first = release
+        .bundles
+        .first()
+        .ok_or(GeneralSelectedReleaseErrorV1::Release)?;
+    let decoded = CapabilityProgramV4::decode(&first.descriptor)
+        .map_err(|_| GeneralSelectedReleaseErrorV1::Release)?;
+    for bundle in &release.bundles {
+        let other = CapabilityProgramV4::decode(&bundle.descriptor)
+            .map_err(|_| GeneralSelectedReleaseErrorV1::Release)?;
+        if other.kind() != decoded.kind()
+            || other.capacity_profile() != decoded.capacity_profile()
+            || other.root_schema() != decoded.root_schema()
+            || other.derivation_policy() != decoded.derivation_policy()
+            || other.root_state_bytes() != decoded.root_state_bytes()
+        {
+            return Err(GeneralSelectedReleaseErrorV1::ReleaseAdmission(
+                GeneralReleaseErrorV3::EntryCoordinateMismatch,
+            ));
+        }
+    }
+    Ok(first.descriptor.clone())
+}
+
+/// The same descriptor, during compilation, when only the bundles exist yet.
 fn first_action_descriptor(bundles: &[GeneralSelectedBundleV1]) -> Result<Vec<u8>> {
     Ok(bundles
         .first()
@@ -1078,9 +1133,10 @@ fn encode_config(
 fn compile_bundle(
     input: GeneralSelectedReleaseInputV1,
     action: Action,
+    lifecycle_policy: &[u8],
 ) -> Result<GeneralSelectedBundleV1> {
     let account_profile = encode_account_profile(input.external_widths, action)?;
-    let lifecycle_policy = encode_lifecycle(input, action)?;
+    let lifecycle_policy = lifecycle_policy.to_vec();
     let request_profile = general_request_profile_bytes_v1(action).to_vec();
     let transition = encode_transition(action)?;
     let effect = encode_effect(action)?;
@@ -1187,27 +1243,29 @@ fn encode_account_profile(
     Ok(output)
 }
 
-/// Encode one action's lifecycle policy.
+/// Encode THE family lifecycle policy -- one artifact, all fifteen actions.
 ///
 /// The seed order is NOT named here. It comes from `state_seeds_v3` through the
 /// encoder, which is the single-author property this whole release depends on.
-fn encode_lifecycle(input: GeneralSelectedReleaseInputV1, action: Action) -> Result<Vec<u8>> {
-    let bytes = general_state_lifecycle_bytes_v5(action)
-        .map_err(|_| GeneralSelectedReleaseErrorV1::Encoding)?;
+///
+/// THE ACTION IS NOT A PARAMETER, and that is the repair. This function used to
+/// take one and produce fifteen distinct artifacts with fifteen distinct
+/// digests; `compile_bundle` then set each descriptor's `derivation_policy` to
+/// its own digest, and a founded Market -- whose capability manifest holds ONE
+/// entry, with ONE `child_derivation_id` -- could bind exactly one of them. That
+/// is the wall cohort-15's General market died on: it activated under the first
+/// bundle's policy and its OpenBatch refused `0x4015 DescriptorManifestEntry`.
+/// One policy for the family makes the fifteen descriptors agree by
+/// construction, and leaves `artifacts_v3.rs:522` -- `derivation_policy ==
+/// lifecycle().program()` -- true for every action rather than repaired for one.
+fn encode_lifecycle(input: GeneralSelectedReleaseInputV1) -> Result<Vec<u8>> {
+    let bytes = general_family_state_lifecycle_bytes_v5();
     let mut scratch = vec![0_u8; bytes];
     let mut output = vec![0_u8; bytes];
-    let child_widths = if matches!(
-        action,
-        Action::InitializeSettlement | Action::PlaceOrder | Action::VerifyCandidateRow
-    ) {
-        Some(
-            GeneralChildRentWidthsV5::new(input.outcome_count, input.token_account_bytes)
-                .map_err(|_| GeneralSelectedReleaseErrorV1::Encoding)?,
-        )
-    } else {
-        None
-    };
-    encode_general_state_lifecycle_v5_atomic(action, child_widths, &mut scratch, &mut output)
+    let child_widths =
+        GeneralChildRentWidthsV5::new(input.outcome_count, input.token_account_bytes)
+            .map_err(|_| GeneralSelectedReleaseErrorV1::Encoding)?;
+    encode_general_family_state_lifecycle_v5_atomic(child_widths, &mut scratch, &mut output)
         .map_err(|_| GeneralSelectedReleaseErrorV1::Encoding)?;
     Ok(output)
 }

@@ -31,7 +31,6 @@ use solana_program::{
     hash::{hash, hashv},
     program::set_return_data,
     pubkey::Pubkey,
-    rent::Rent,
     sysvar::SysvarSerialize,
 };
 use solana_sdk_ids::{system_program, sysvar};
@@ -263,11 +262,10 @@ pub(crate) fn process(
         return Err(CoreSbfError::Instruction.into());
     }
     let frame = SeriesOpenAccounts::parse(program_id, accounts)?;
-    let rent = Rent::from_account_info(frame.rent).map_err(|_| CoreSbfError::Creation)?;
     let clock = Clock::from_account_info(frame.clock).map_err(|_| CoreSbfError::Creation)?;
     let mut state = authenticate_market_and_roles(program_id, &frame, request)?;
     let (ticket_context, replay_candidates) =
-        authenticate_series(&frame, request, proof_bytes, &rent, *state)?;
+        authenticate_series(&frame, request, proof_bytes, *state)?;
     authenticate_caller(&frame, request, request_bytes, ticket_context)?;
     let generic = frame.generic();
     let permit = authenticate_generic_permit(
@@ -278,7 +276,6 @@ pub(crate) fn process(
             .founder()
             .ok_or(CoreSbfError::Instruction)?
             .to_bytes(),
-        &rent,
         clock.slot,
         *state,
     )?;
@@ -289,7 +286,6 @@ pub(crate) fn process(
         request
             .market_generation()
             .ok_or(CoreSbfError::Instruction)?,
-        &rent,
     )?;
     let claims_receipt = decode_generic_claims_receipt(claims_receipt_bytes)?;
     authenticate_claims_and_custody(&generic, &permit, &claims_receipt, *state)?;
@@ -443,7 +439,6 @@ fn authenticate_series(
     frame: &SeriesOpenAccounts<'_, '_>,
     request: SeriesCoreRequestV1,
     proof_bytes: &[u8],
-    rent: &Rent,
     state: CoreState,
 ) -> Result<([u8; 32], Box<ReplayCandidates>), CoreSbfError> {
     for (raw, staging, schema) in [
@@ -470,7 +465,6 @@ fn authenticate_series(
             frame.registry_program.key,
             raw,
             staging,
-            rent,
             schema,
             hash(&bytes).to_bytes(),
             &bytes,
@@ -511,7 +505,6 @@ fn authenticate_series(
     }
     let product = authenticate_product_runtime_v2(
         frame.registry_program.key,
-        rent,
         dclutch_product_runtime_v2::ContentId::new(state.identity.product_record.to_bytes())
             .map_err(|_| CoreSbfError::Reference)?,
         ProductRuntimeFrameV2 {

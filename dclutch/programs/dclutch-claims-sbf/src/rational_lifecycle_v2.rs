@@ -355,7 +355,6 @@ pub(crate) fn process(
         Rent::from_account_info(common.rent).map_err(|_| RationalLifecycleSbfErrorV2::Rent)?;
     authenticate_finalized_rational_record(
         common.registry.key,
-        &rent,
         common.descriptor_raw,
         common.descriptor_staging,
         REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,

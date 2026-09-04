@@ -8,6 +8,7 @@
 
 use alloc::boxed::Box;
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_product_runtime_v2::{ContentId as ProductContentId, ResultDomainV2};
 use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV2};
 use dclutch_pyth_svm::{
@@ -121,9 +122,9 @@ fn process_capture(
     if !RESOLUTION_PRIMARY_SOURCE_ADMISSIBLE_STATES_V1.admits(source_state.phase()) {
         return Err(ResolutionError::Transition.into());
     }
-    let records = boxed_source_records(accounts, &market, &rent, &source_state, 7)?;
-    let sponsored = authenticate_sponsored_release(accounts, &market, &rent, &records, 7)?;
-    let update = authenticate_live_update(accounts, &rent, &clock, sponsored, &records)?;
+    let records = boxed_source_records(accounts, &market, &source_state, 7)?;
+    let sponsored = authenticate_sponsored_release(accounts, &market, &records, 7)?;
+    let update = authenticate_live_update(accounts, &clock, sponsored, &records)?;
     let primary_deadline = records
         .window
         .end_unix_seconds()
@@ -190,7 +191,6 @@ fn process_capture(
         head_account,
         candidate_account,
         candidate,
-        &rent,
         payer.key.to_bytes(),
     )?;
     if initialize_head {
@@ -273,14 +273,12 @@ struct SponsoredSourceRecordsV1 {
 fn boxed_source_records(
     accounts: &[AccountInfo<'_>],
     market: &MarketFacts,
-    rent: &Rent,
     source_state: &SourceResolutionStateV2,
     record_base: usize,
 ) -> Result<Box<SponsoredSourceRecordsV1>, ProgramError> {
     Ok(Box::new(capture_records(
         accounts,
         market,
-        rent,
         source_state,
         record_base,
     )?))
@@ -289,7 +287,6 @@ fn boxed_source_records(
 fn capture_records(
     accounts: &[AccountInfo<'_>],
     market: &MarketFacts,
-    rent: &Rent,
     source_state: &SourceResolutionStateV2,
     record_base: usize,
 ) -> Result<SponsoredSourceRecordsV1, ProgramError> {
@@ -298,7 +295,6 @@ fn capture_records(
         accounts,
         record_base,
         &market.registry_program,
-        rent,
         SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         material_id.to_bytes(),
         SOURCE_MATERIAL_V3_BYTES,
@@ -315,7 +311,6 @@ fn capture_records(
         accounts,
         record_base + 2,
         &market.registry_program,
-        rent,
         SOURCE_SPEC_SCHEMA_ID_V1,
         source_spec_id.to_bytes(),
         SOURCE_SPEC_BYTES,
@@ -331,7 +326,6 @@ fn capture_records(
         accounts,
         record_base + 4,
         &market.registry_program,
-        rent,
         PROVIDER_RELEASE_SCHEMA_ID_V1,
         provider_release_id.to_bytes(),
         PROVIDER_RELEASE_BYTES,
@@ -345,7 +339,6 @@ fn capture_records(
         accounts,
         record_base + 6,
         &market.registry_program,
-        rent,
         PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1,
         adapter_config_id.to_bytes(),
         PYTH_ADAPTER_CONFIG_BYTES,
@@ -359,7 +352,6 @@ fn capture_records(
         accounts,
         record_base + 8,
         &market.registry_program,
-        rent,
         WINDOW_SPEC_SCHEMA_ID_V1,
         window_spec_id.to_bytes(),
         WINDOW_SPEC_BYTES,
@@ -372,7 +364,6 @@ fn capture_records(
         accounts,
         record_base + 10,
         &market.registry_program,
-        rent,
         STATISTIC_SPEC_SCHEMA_ID_V1,
         statistic_spec_id.to_bytes(),
         STATISTIC_SPEC_BYTES,
@@ -418,7 +409,6 @@ fn borrow_record<'a>(
     accounts: &'a [AccountInfo<'_>],
     index: usize,
     registry: &Pubkey,
-    rent: &Rent,
     schema: [u8; 32],
     digest: [u8; 32],
     len: usize,
@@ -430,7 +420,6 @@ fn borrow_record<'a>(
         registry,
         account(accounts, index)?,
         account(accounts, index + 1)?,
-        rent,
         schema,
         digest,
         &data,
@@ -443,7 +432,6 @@ fn borrow_record<'a>(
 fn authenticate_sponsored_release(
     accounts: &[AccountInfo<'_>],
     market: &MarketFacts,
-    rent: &Rent,
     records: &SponsoredSourceRecordsV1,
     record_base: usize,
 ) -> Result<PythSponsoredPushReleaseV1, ProgramError> {
@@ -455,7 +443,6 @@ fn authenticate_sponsored_release(
         accounts,
         record_base + 12,
         &market.registry_program,
-        rent,
         PYTH_SPONSORED_PUSH_RELEASE_SCHEMA_ID_V1,
         release_id,
         PYTH_SPONSORED_PUSH_RELEASE_V1_ENCODED_LEN,
@@ -477,7 +464,6 @@ fn authenticate_sponsored_release(
 
 fn authenticate_live_update(
     accounts: &[AccountInfo<'_>],
-    rent: &Rent,
     clock: &Clock,
     release: PythSponsoredPushReleaseV1,
     records: &SponsoredSourceRecordsV1,
@@ -492,7 +478,7 @@ fn authenticate_live_update(
         || price.owner != receiver.key
         || price.executable
         || price.data_len() != FULL_PRICE_UPDATE_V2_LEN
-        || !rent.is_exempt(price.lamports(), price.data_len())
+        || !funded_rent_persists_v1(price.lamports())
         || receiver.key.to_bytes() != release.receiver_program()
         || receiver_programdata.key.to_bytes() != release.receiver_programdata()
         || push.key.to_bytes() != release.push_oracle_program()
@@ -501,7 +487,7 @@ fn authenticate_live_update(
         || receiver_config.owner != receiver.key
         || receiver_config.executable
         || receiver_config.data_len() != RECEIVER_CONFIG_V2_LEN
-        || !rent.is_exempt(receiver_config.lamports(), receiver_config.data_len())
+        || !funded_rent_persists_v1(receiver_config.lamports())
         || release.activation_time() > clock.unix_timestamp
     {
         return Err(ResolutionError::ProviderRelease.into());
@@ -699,7 +685,6 @@ fn boxed_next_head(
     head: &AccountInfo<'_>,
     candidate_account: &AccountInfo<'_>,
     candidate: SponsoredPushCandidateV1,
-    rent: &Rent,
     first_head_refund_recipient: [u8; 32],
 ) -> Result<(Box<[u8; SPONSORED_PUSH_HEAD_BYTES_V1]>, bool), ProgramError> {
     let generation = candidate.generation.to_le_bytes();
@@ -738,7 +723,7 @@ fn boxed_next_head(
     if head.owner != program_id
         || head.executable
         || head.data_len() != SPONSORED_PUSH_HEAD_BYTES_V1
-        || !rent.is_exempt(head.lamports(), head.data_len())
+        || !funded_rent_persists_v1(head.lamports())
     {
         return Err(ResolutionError::SponsoredPush.into());
     }
@@ -870,8 +855,8 @@ fn process_settle(
     if !RESOLUTION_PRIMARY_SOURCE_ADMISSIBLE_STATES_V1.admits(source_state.phase()) {
         return Err(ResolutionError::Transition.into());
     }
-    let records = boxed_source_records(accounts, &market, &rent, &source_state, 9)?;
-    let sponsored = authenticate_sponsored_release(accounts, &market, &rent, &records, 9)?;
+    let records = boxed_source_records(accounts, &market, &source_state, 9)?;
+    let sponsored = authenticate_sponsored_release(accounts, &market, &records, 9)?;
     let deadline = primary_deadline(records.window)?;
     if clock.unix_timestamp <= deadline {
         return Err(ResolutionError::ProviderFreshness.into());
@@ -886,12 +871,10 @@ fn process_settle(
         request.generation,
         sponsored,
         &records,
-        &rent,
         &clock,
     )?;
     let product_runtime = boxed_product_runtime(
         &market.registry_program,
-        &rent,
         ProductContentId::new(market.product_record).map_err(|_| ResolutionError::ProductDomain)?,
         ProductRuntimeFrameV2 {
             product: FinalizedRecordFrameV2 {
@@ -1022,20 +1005,16 @@ fn boxed_sealed_candidate(
     generation: u64,
     sponsored: PythSponsoredPushReleaseV1,
     records: &SponsoredSourceRecordsV1,
-    rent: &Rent,
     clock: &Clock,
 ) -> Result<Box<SealedSponsoredCandidateV1>, ProgramError> {
     if head_account.owner != program_id
         || head_account.executable
         || head_account.data_len() != SPONSORED_PUSH_HEAD_BYTES_V1
-        || !rent.is_exempt(head_account.lamports(), SPONSORED_PUSH_HEAD_BYTES_V1)
+        || !funded_rent_persists_v1(head_account.lamports())
         || candidate_account.owner != program_id
         || candidate_account.executable
         || candidate_account.data_len() != SPONSORED_PUSH_CANDIDATE_BYTES_V1
-        || !rent.is_exempt(
-            candidate_account.lamports(),
-            SPONSORED_PUSH_CANDIDATE_BYTES_V1,
-        )
+        || !funded_rent_persists_v1(candidate_account.lamports())
     {
         return Err(ResolutionError::SponsoredPush.into());
     }
@@ -1578,13 +1557,11 @@ fn process_commit_failure(
         request.generation,
         source_state.material_id().to_bytes(),
     )?;
-    let rent = authenticate_rent(account(accounts, 20)?)?;
 
     let material_data = borrow_record(
         accounts,
         6,
         &market.registry_program,
-        &rent,
         SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         source_state.material_id().to_bytes(),
         SOURCE_MATERIAL_V3_BYTES,
@@ -1601,7 +1578,6 @@ fn process_commit_failure(
         accounts,
         23,
         &market.registry_program,
-        &rent,
         SOURCE_SPEC_SCHEMA_ID_V1,
         source_spec_id.to_bytes(),
         SOURCE_SPEC_BYTES,
@@ -1617,7 +1593,6 @@ fn process_commit_failure(
         accounts,
         25,
         &market.registry_program,
-        &rent,
         PROVIDER_RELEASE_SCHEMA_ID_V1,
         provider_release_id.to_bytes(),
         PROVIDER_RELEASE_BYTES,
@@ -1631,7 +1606,6 @@ fn process_commit_failure(
         accounts,
         27,
         &market.registry_program,
-        &rent,
         PYTH_SPONSORED_PUSH_RELEASE_SCHEMA_ID_V1,
         sponsored_release_id,
         PYTH_SPONSORED_PUSH_RELEASE_V1_ENCODED_LEN,
