@@ -4618,3 +4618,13 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   closes; `render_fixpoint_debt` hardcodes "the other forty-two guards" beside a count the census computes. Three files
   other lanes had committed unformatted took the pinned form (ace5d24e9).
 - Cuts: `231f1f633`.
+- RELEASE-PREFLIGHT closed (`1fd3e3c3f`, `e73aca142`, `1973f4bd1`, `61105d8c2`): the deploy preflight inverted — cohort-15's
+  fourteen program accounts hold exactly (128+len) × 6,333 while devnet quotes 5,080 and `Rent::default()` says 6,960 ("one
+  cohort, three rates, one of them funded it"); the fee payer keeps a live floor because a fee moves its balance; **genuine
+  pre-existing floors 122 → 9, all in the resolution-core operator**; 13 floors converted (three were permit-expiry refunds
+  the floor stranded permanently), 9 kept as creating with the runtime's precondition cited, the user-position exactness
+  recovers the rate from one recorded principal; a third spelling the census could not see (a field holding today's
+  minimum) — two fixed, one owed in the immutable registry; two reds the ruling left closed (a dead Rent parameter had
+  taken a live refusal with it). Frames recaptured at 1973f4bd1 (two shrank 64 bytes). Owed: the expiry family's ELF
+  red-proof (blocked on the Series contradiction); three `dealer::` unit tests red with ProfileMismatch/Geometry — not rent.
+- Cuts: `ace5d24e9`, `a10d5af4f`.

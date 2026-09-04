@@ -113,6 +113,10 @@ use crate::{
         self, CampaignTerminalEvidenceV1, parse_campaign_terminal_evidence_v1,
         parse_campaign_terminal_evidence_with_expected_cluster_v1,
     },
+    closure_receipt_projection::{
+        ClosureRentPartitionV1, DeployedClosureRentRuleV1, deployed_closure_rent_rule_v1,
+        project_closure_rent_partition_v1,
+    },
     cluster::{
         ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG, DEVNET_GENESIS_HASH, ExpectedClusterV1,
     },
@@ -157,6 +161,20 @@ const TERMINAL_COMPLETION_SCHEMA_V1: &str = "dclutch-devnet-terminal-sequence-co
 const OWNED_LOOPBACK_TERMINAL_COMPLETION_SCHEMA_V1: &str =
     "dclutch-owned-loopback-terminal-sequence-completion-v1";
 const TERMINAL_FINALITY_WAIT: Duration = Duration::from_secs(300);
+
+/// The widest gap this sequence certifies between the Clock a stage PLANNED
+/// against and the Clock its EXECUTION wrote into a receipt.
+///
+/// Derived, not chosen, and derived from the sequence's own deadline. Two
+/// independent facts bound how late a planned packet's execution can be, and
+/// this is the looser of them, so it refuses nothing the other admits: the
+/// packet's blockhash is fetched at plan time and dies 150 blocks later, about
+/// 60 seconds at devnet's cadence; and this driver stops waiting for its own
+/// signature after `TERMINAL_FINALITY_WAIT`, so an execution later than that is
+/// not one this pass can be certifying. Measured on devnet 2026-09-04: market
+/// 1's first `ResolutionCloseFund` planned at 1,788,522,293 and executed at
+/// 1,788,522,302 -- nine seconds, 3% of this interval.
+const TERMINAL_EXECUTION_CLOCK_CEILING_SECONDS: u64 = TERMINAL_FINALITY_WAIT.as_secs();
 
 const fn terminal_journal_schema_v1(expected: ExpectedClusterV1) -> &'static str {
     match expected {
@@ -1087,6 +1105,35 @@ fn aggregate_caller_authority(
 pub(crate) struct ExpectedReturnDataV1 {
     pub(crate) producer: Pubkey,
     pub(crate) body: Vec<u8>,
+    /// The one field of `body` the EXECUTION writes and no plan can bind.
+    pub(crate) execution_clock: Option<ExecutionClockFieldV1>,
+}
+
+/// A poststate field the executing runtime stamps, and the interval it must
+/// land in.
+///
+/// `prestate_is_slot_bound_runtime_account_v1` learned this one level down --
+/// the Clock is not a PRESTATE, because its bytes are redefined every 400ms and
+/// a guard nothing can satisfy protects nothing. `closed_at` is the same fact
+/// one level up: Resolution stamps its closure receipt with the Clock AT
+/// EXECUTION while the plan carries the Clock at PLANNING. The clock is not a
+/// poststate either.
+///
+/// Measured on devnet 2026-09-04: market 1's first `ResolutionCloseFund`
+/// (`3rDH7V5X...`, slot 493,003,631) wrote a 416-byte receipt whose every byte
+/// matched its plan except this field, nine seconds late.
+///
+/// So the plan states an INTERVAL for this field and every other byte exactly.
+/// It is a named set with exactly one member, and the member carries the
+/// measurement that says why -- the same discipline the prestate exemption
+/// carries. The lower bound is the plan's own Clock: a receipt stamped BEFORE
+/// the observation its plan was built on describes an execution that preceded
+/// its own inputs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ExecutionClockFieldV1 {
+    pub(crate) offset: usize,
+    pub(crate) planned_unix_timestamp: u64,
+    pub(crate) ceiling_unix_timestamp: u64,
 }
 
 /// One account poststate owned by a semantic stage builder.
@@ -1098,6 +1145,8 @@ pub(crate) struct ExpectedAccountPoststateV1 {
     pub(crate) executable: bool,
     pub(crate) data: Vec<u8>,
     pub(crate) data_digest: [u8; 32],
+    /// The one field of `data` the EXECUTION writes and no plan can bind.
+    pub(crate) execution_clock: Option<ExecutionClockFieldV1>,
 }
 
 impl ExpectedAccountPoststateV1 {
@@ -1110,7 +1159,14 @@ impl ExpectedAccountPoststateV1 {
             executable,
             data,
             data_digest,
+            execution_clock: None,
         }
+    }
+
+    /// Every byte exact except one interval-bound execution clock.
+    fn with_execution_clock(mut self, clock: ExecutionClockFieldV1) -> Self {
+        self.execution_clock = Some(clock);
+        self
     }
 }
 
@@ -1208,6 +1264,32 @@ struct DurableExpectedAccountV1 {
     data_sha256: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     lookup_table: Option<DurableLookupTablePoststateV1>,
+    /// Absent from the JSON unless the stage has such a field, so every journal
+    /// written before this rule existed still parses and still hashes to the
+    /// digest it was written with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    execution_clock: Option<DurableExecutionClockFieldV1>,
+}
+
+impl DurableExpectedAccountV1 {
+    /// Does this poststate predict exactly these bytes.
+    fn body_matches(&self, body: &[u8]) -> bool {
+        self.lookup_table.is_none() && self.data_base64 == BASE64.encode(body)
+    }
+}
+
+/// The persisted twin of `ExecutionClockFieldV1`.
+///
+/// `ceiling_unix_timestamp` is recorded rather than recomputed on every read,
+/// for the reason `bbd01bbeb` records the compute budget it planned with: a
+/// later re-pin of the derived ceiling must never retroactively refuse a
+/// journal that was already written, signed, and landed under the old one.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct DurableExecutionClockFieldV1 {
+    offset: usize,
+    planned_unix_timestamp: u64,
+    ceiling_unix_timestamp: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1238,6 +1320,8 @@ struct DurableReturnDataV1 {
     producer: String,
     body_base64: String,
     body_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    execution_clock: Option<DurableExecutionClockFieldV1>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1531,6 +1615,7 @@ pub(crate) fn build_protocol_stage_journal_v1(
                     data_base64: BASE64.encode(&account.data),
                     data_sha256: sha256_hex(&account.data),
                     lookup_table: None,
+                    execution_clock: account.execution_clock.map(durable_execution_clock_v1),
                 },
             )
             .is_some()
@@ -1549,6 +1634,7 @@ pub(crate) fn build_protocol_stage_journal_v1(
             data_base64: BASE64.encode(&payer_pre.data),
             data_sha256: sha256_hex(&payer_pre.data),
             lookup_table: None,
+            execution_clock: None,
         });
     if expected_accounts
         .get(&payer.to_string())
@@ -1662,6 +1748,7 @@ pub(crate) fn build_protocol_stage_journal_v1(
                 producer: expected.producer.to_string(),
                 body_base64: BASE64.encode(&expected.body),
                 body_sha256: sha256_hex(&expected.body),
+                execution_clock: expected.execution_clock.map(durable_execution_clock_v1),
             }
         }),
         protocol_lamport_deltas: mutation
@@ -1929,6 +2016,7 @@ fn authenticate_planned_protocol_owner_v1(
             producer: value.producer.to_string(),
             body_base64: BASE64.encode(&value.body),
             body_sha256: sha256_hex(&value.body),
+            execution_clock: value.execution_clock.map(durable_execution_clock_v1),
         });
     if journal.intent.expected_return_data != expected_return {
         return Err(refusal(
@@ -1982,6 +2070,7 @@ fn authenticate_planned_protocol_owner_v1(
             data_base64: BASE64.encode(&expected.data),
             data_sha256: sha256_hex(&expected.data),
             lookup_table: None,
+            execution_clock: expected.execution_clock.map(durable_execution_clock_v1),
         };
         if expected_accounts
             .insert(expected.key.to_string(), durable)
@@ -2016,6 +2105,7 @@ fn authenticate_planned_protocol_owner_v1(
             data_base64: BASE64.encode(&payer_pre.data),
             data_sha256: sha256_hex(&payer_pre.data),
             lookup_table: None,
+            execution_clock: None,
         });
     }
     let deltas = mutation
@@ -2898,6 +2988,14 @@ fn authenticate_terminal_intent_arithmetic_v1(intent: &DurableTerminalIntentV1) 
                 if sha256_hex(&data) != expected.data_sha256 {
                     return Err(refusal("terminal expected account byte digest changed"));
                 }
+                if let Some(clock) = &expected.execution_clock {
+                    authenticate_execution_clock_shape_v1(
+                        &format!("terminal durable poststate {key}"),
+                        clock,
+                        data.len(),
+                        intent.observation_unix_timestamp,
+                    )?;
+                }
                 true
             }
             Some(table) => {
@@ -2912,6 +3010,7 @@ fn authenticate_terminal_intent_arithmetic_v1(intent: &DurableTerminalIntentV1) 
                     .collect::<Result<Vec<_>>>()?;
                 if !expected.data_base64.is_empty()
                     || !expected.data_sha256.is_empty()
+                    || expected.execution_clock.is_some()
                     || expected.owner != lookup_table_program::id().to_string()
                     || expected.executable
                     || addresses.iter().copied().collect::<BTreeSet<_>>().len() != addresses.len()
@@ -2976,6 +3075,49 @@ fn authenticate_terminal_intent_arithmetic_v1(intent: &DurableTerminalIntentV1) 
             return Err(refusal(
                 "terminal durable post-balance disagreed with protocol delta or expected account",
             ));
+        }
+    }
+    if let Some(expected) = &intent.expected_return_data {
+        let body = BASE64
+            .decode(&expected.body_base64)
+            .map_err(|error| Error::new(format!("terminal expected return base64: {error}")))?;
+        if sha256_hex(&body) != expected.body_sha256 {
+            return Err(refusal("terminal expected return-data digest changed"));
+        }
+        if let Some(clock) = &expected.execution_clock {
+            authenticate_execution_clock_shape_v1(
+                "terminal durable return data",
+                clock,
+                body.len(),
+                intent.observation_unix_timestamp,
+            )?;
+            // STATED ONCE AND SPENT TWICE.
+            //
+            // `b00dcad96` made the closure receipt one statement of bytes that
+            // the route both WRITES and RETURNS, because a plan that says them
+            // twice can disagree with itself on top of disagreeing with the
+            // chain. A field the plan cannot bind is the case where that
+            // matters most, so a return body carrying such a field must be the
+            // exact bytes of exactly one declared account poststate, and that
+            // account's rule must be the same rule.
+            let twins = intent
+                .expected_accounts
+                .iter()
+                .filter(|(_, account)| account.body_matches(&body))
+                .collect::<Vec<_>>();
+            let [(address, account)] = twins.as_slice() else {
+                return Err(refusal(&format!(
+                    "terminal durable return data declares an execution clock but {} \
+                     declared account poststates carry those exact bytes; it must be exactly one",
+                    twins.len(),
+                )));
+            };
+            if account.execution_clock.as_ref() != Some(clock) {
+                return Err(refusal(&format!(
+                    "terminal durable return data and the account {address} it is written \
+                     to state different execution-clock rules for one set of bytes"
+                )));
+            }
         }
     }
     let pre_total = intent
@@ -3529,17 +3671,157 @@ fn authenticate_terminal_return_data_v1(
             let body = BASE64
                 .decode(encoded)
                 .map_err(|error| Error::new(format!("terminal return data base64: {error}")))?;
-            if producer != expected.producer
-                || BASE64.encode(&body) != expected.body_base64
-                || sha256_hex(&body) != expected.body_sha256
-            {
+            let planned = BASE64.decode(&expected.body_base64).map_err(|error| {
+                Error::new(format!("terminal expected return base64: {error}"))
+            })?;
+            if producer != expected.producer || sha256_hex(&planned) != expected.body_sha256 {
                 return Err(refusal(
                     "finalized terminal return producer or body differed from semantic prediction",
                 ));
             }
-            Ok(())
+            authenticate_execution_clock_bytes_v1(
+                "finalized terminal return data",
+                &body,
+                &planned,
+                expected.execution_clock.as_ref(),
+            )
         }
     }
+}
+
+fn durable_execution_clock_v1(clock: ExecutionClockFieldV1) -> DurableExecutionClockFieldV1 {
+    DurableExecutionClockFieldV1 {
+        offset: clock.offset,
+        planned_unix_timestamp: clock.planned_unix_timestamp,
+        ceiling_unix_timestamp: clock.ceiling_unix_timestamp,
+    }
+}
+
+/// Compare finalized bytes to a plan that binds every byte but one interval.
+///
+/// With no rule this is byte equality, which is what five of the six stages'
+/// poststates are and stay. With a rule it is byte equality EVERYWHERE ELSE
+/// plus an interval on the eight bytes the executing runtime stamps -- so a
+/// stage that declares such a field weakens exactly one field of one account
+/// and nothing else, and the declaration is in the journal where a reader can
+/// see it.
+fn authenticate_execution_clock_bytes_v1(
+    label: &str,
+    observed: &[u8],
+    planned: &[u8],
+    rule: Option<&DurableExecutionClockFieldV1>,
+) -> Result<()> {
+    let Some(rule) = rule else {
+        if observed != planned {
+            return Err(refusal(&format!(
+                "{label} differed from exact poststate"
+            )));
+        }
+        return Ok(());
+    };
+    if observed.len() != planned.len() {
+        return Err(refusal(&format!(
+            "{label} was {} bytes against the {} its plan predicted",
+            observed.len(),
+            planned.len(),
+        )));
+    }
+    let end = rule
+        .offset
+        .checked_add(8)
+        .filter(|end| *end <= planned.len())
+        .ok_or_else(|| {
+            refusal(&format!(
+                "{label} is too short to carry the execution clock its plan declares at offset {}",
+                rule.offset,
+            ))
+        })?;
+    if observed[..rule.offset] != planned[..rule.offset] || observed[end..] != planned[end..] {
+        return Err(refusal(&format!(
+            "{label} differed from exact poststate outside the one field its plan cannot bind"
+        )));
+    }
+    let field = |bytes: &[u8]| -> u64 {
+        let mut value = [0_u8; 8];
+        value.copy_from_slice(&bytes[rule.offset..end]);
+        u64::from_le_bytes(value)
+    };
+    let planned_clock = field(planned);
+    if planned_clock != rule.planned_unix_timestamp {
+        return Err(refusal(&format!(
+            "{label}'s own predicted bytes carry execution clock {planned_clock} while the \
+             rule beside them declares the plan observed {}",
+            rule.planned_unix_timestamp,
+        )));
+    }
+    let observed_clock = field(observed);
+    if observed_clock < rule.planned_unix_timestamp {
+        return Err(refusal(&format!(
+            "{label} carries execution clock {observed_clock}, BEFORE the {} its plan was \
+             built on; an execution cannot precede its own inputs",
+            rule.planned_unix_timestamp,
+        )));
+    }
+    if observed_clock > rule.ceiling_unix_timestamp {
+        return Err(refusal(&format!(
+            "{label} carries execution clock {observed_clock}, past the {} this sequence \
+             will certify as its own execution of a packet planned at {}",
+            rule.ceiling_unix_timestamp, rule.planned_unix_timestamp,
+        )));
+    }
+    Ok(())
+}
+
+/// The shape a declared execution-clock field must have to be readable at all.
+fn authenticate_execution_clock_shape_v1(
+    label: &str,
+    rule: &DurableExecutionClockFieldV1,
+    data_len: usize,
+    observation_unix_timestamp: i64,
+) -> Result<()> {
+    let planned = u64::try_from(observation_unix_timestamp)
+        .map_err(|_| refusal("terminal durable intent carries a negative observation clock"))?;
+    if rule.offset.checked_add(8).is_none_or(|end| end > data_len) {
+        return Err(refusal(&format!(
+            "{label} declares an execution clock at offset {} that does not fit its \
+             {data_len} predicted bytes",
+            rule.offset,
+        )));
+    }
+    if rule.planned_unix_timestamp != planned {
+        return Err(refusal(&format!(
+            "{label} declares an execution clock planned at {} while its intent observed {planned}",
+            rule.planned_unix_timestamp,
+        )));
+    }
+    if rule.ceiling_unix_timestamp < rule.planned_unix_timestamp {
+        return Err(refusal(&format!(
+            "{label} declares an execution-clock ceiling {} below the {} it planned at",
+            rule.ceiling_unix_timestamp, rule.planned_unix_timestamp,
+        )));
+    }
+    Ok(())
+}
+
+/// The ceiling a NEW durable obligation must carry.
+///
+/// Placed at the doors that create one -- the plan site and the reconciliation
+/// that rewrites a prediction -- and never on a read, for the reason
+/// `450cc2222` moved the compute-budget requirement there: a journal already
+/// written under an earlier derivation must stay readable, or its own remedy
+/// becomes unreachable.
+fn require_derived_execution_clock_ceiling_v1(clock: ExecutionClockFieldV1) -> Result<()> {
+    let derived = clock
+        .planned_unix_timestamp
+        .checked_add(TERMINAL_EXECUTION_CLOCK_CEILING_SECONDS)
+        .ok_or_else(|| refusal("terminal execution-clock ceiling overflowed"))?;
+    if clock.ceiling_unix_timestamp != derived {
+        return Err(refusal(&format!(
+            "a new terminal execution-clock obligation must carry this sequence's derived ceiling              {derived} ({} plus {TERMINAL_EXECUTION_CLOCK_CEILING_SECONDS} seconds), not {}",
+            clock.planned_unix_timestamp, clock.ceiling_unix_timestamp,
+        )));
+    }
+    Ok(())
 }
 
 fn authenticate_finalized_terminal_balance_vector_v1(
@@ -3666,14 +3948,17 @@ fn terminal_expected_poststate_v1(
                 let data = BASE64.decode(&expected.data_base64).map_err(|error| {
                     Error::new(format!("terminal expected data base64: {error}"))
                 })?;
-                if state.data_len != data.len()
-                    || state.data_sha256 != expected.data_sha256
-                    || state.data_sha256 != sha256_hex(&data)
-                {
+                if state.data_len != data.len() || sha256_hex(&data) != expected.data_sha256 {
                     return Err(refusal(
                         "finalized terminal bytes differed from exact poststate",
                     ));
                 }
+                authenticate_execution_clock_bytes_v1(
+                    &format!("finalized terminal account {key}"),
+                    value.as_ref().map_or(&[][..], |account| &account.data),
+                    &data,
+                    expected.execution_clock.as_ref(),
+                )?;
             }
             Some(rule) => {
                 let account = value.as_ref().ok_or_else(|| {
@@ -4692,7 +4977,11 @@ pub(crate) fn plan_resolution_close_from_chain_v1(
         recovery_policy: explicit_recovery
             .then_some((recovery_policy.raw, recovery_policy.staging)),
     })?;
-    let mutation = plan_resolution_close_caller_v1(&close_snapshot, &closure)?;
+    let mutation = plan_resolution_close_caller_v1(
+        &close_snapshot,
+        &closure,
+        deployed_closure_rent_rule_v1(&plan.resolution, plan.checked_local_mutable_set.as_ref())?,
+    )?;
     Ok(ChainResolutionCloseV1::Submit {
         stage: ChainDerivedTerminalMutationV1 {
             mutation,
@@ -4745,6 +5034,7 @@ pub(crate) fn plan_direct_begin_retiring_caller_v1(
                     expected_return_data: Some(ExpectedReturnDataV1 {
                         producer: report.expected_receipt_producer,
                         body: report.expected_receipt_body.to_vec(),
+                        execution_clock: None,
                     }),
                     expected_accounts: vec![root],
                     protocol_lamport_deltas: BTreeMap::new(),
@@ -4792,11 +5082,13 @@ fn resolution_close_receipt_poststate_v1(
     resolution_program: Pubkey,
     destination: &ObservedAccount,
     receipt: Vec<u8>,
+    execution_clock: ExecutionClockFieldV1,
 ) -> (ExpectedReturnDataV1, ExpectedAccountPoststateV1) {
     (
         ExpectedReturnDataV1 {
             producer: resolution_program,
             body: receipt.clone(),
+            execution_clock: Some(execution_clock),
         },
         ExpectedAccountPoststateV1::exact(
             destination.key,
@@ -4804,17 +5096,94 @@ fn resolution_close_receipt_poststate_v1(
             destination.lamports,
             false,
             receipt,
-        ),
+        )
+        .with_execution_clock(execution_clock),
     )
+}
+
+/// Where `closed_at` sits inside an encoded closure receipt.
+///
+/// Never written here as a number. `source_closure_receipt_v3.rs` owns the
+/// layout and keeps its offsets private, so this asks the encoder instead: two
+/// receipts identical except for `closed_at` differ in exactly one contiguous
+/// eight-byte window, and that window reads back the little-endian value. A
+/// layout that moves the field moves this answer with it; a layout where the
+/// field is not one contiguous little-endian u64 refuses rather than letting a
+/// poststate rule bind the wrong bytes.
+fn closure_receipt_closed_at_offset_v1(receipt: &SourceClosureReceiptV3) -> Result<usize> {
+    let encode = |closed_at: u64| -> Result<Vec<u8>> {
+        let mut probe = receipt.clone();
+        probe.closed_at = closed_at;
+        Ok(probe
+            .to_bytes()
+            .map_err(|error| Error::new(format!("closure receipt probe: {error:?}")))?
+            .to_vec())
+    };
+    // 1 and u64::MAX, not 0 and u64::MAX: the codec refuses a zero coordinate,
+    // and these two still differ in every one of the eight bytes.
+    let low = encode(1)?;
+    let high = encode(u64::MAX)?;
+    if low.len() != high.len() {
+        return Err(refusal(
+            "closure receipt encoding changed width with its closed_at",
+        ));
+    }
+    let differing = (0..low.len())
+        .filter(|index| low[*index] != high[*index])
+        .collect::<Vec<_>>();
+    let offset = match differing.as_slice() {
+        [first, ..] if differing.len() == 8 && differing.last() == Some(&(first + 7)) => *first,
+        _ => {
+            return Err(refusal(&format!(
+                "closure receipt closed_at is not one contiguous eight-byte window: it moves                  {} bytes",
+                differing.len(),
+            )));
+        }
+    };
+    let exact = encode(receipt.closed_at)?;
+    if low[offset..offset + 8] != 1_u64.to_le_bytes()
+        || high[offset..offset + 8] != u64::MAX.to_le_bytes()
+        || exact[offset..offset + 8] != receipt.closed_at.to_le_bytes()
+    {
+        return Err(refusal(
+            "closure receipt closed_at window is not the little-endian value it encodes",
+        ));
+    }
+    Ok(offset)
 }
 
 pub(crate) fn plan_resolution_close_caller_v1(
     snapshot: &ResolutionCloseFundSnapshotV3,
     persisted_closure: &TerminalMetaClosureV1,
+    rent_rule: DeployedClosureRentRuleV1,
 ) -> Result<TerminalSemanticMutationV1> {
     let report = build_resolution_direct_close_fund_v1(snapshot)
         .map_err(|error| Error::new(format!("Resolution CloseFund: {error:?}")))?;
     let facts = report.expected_retirement_facts;
+    // THE PARTITION IS THE DEPLOYED PROGRAM'S, THE SUM IS EVERYONE'S.
+    //
+    // `facts` answers "what rent did this ledger already pay" with the rate it
+    // was FUNDED at, which is right for every guard on an account a founding
+    // already bought. What the receipt will SAY is a different question, and
+    // its answer belongs to the Resolution that will execute.
+    let live_rent: Rent = bincode::deserialize(&snapshot.rent_sysvar.data)
+        .map_err(|error| Error::new(format!("Resolution close Rent sysvar: {error}")))?;
+    let partition = project_closure_rent_partition_v1(
+        rent_rule,
+        snapshot.funding_ledger.data.len(),
+        &live_rent,
+        ClosureRentPartitionV1 {
+            ledger_rent_lamports: facts.ledger_rent_lamports,
+            ledger_lamport_surplus: facts.ledger_lamport_surplus,
+        },
+    )?;
+    // The plan's own recorded observation clock, which is the number the
+    // durable intent states and therefore the one the rule's lower bound must
+    // be built from. `facts.closed_at` reads the Clock sysvar of the same
+    // finalized snapshot; either is a plan-time reading of a field the
+    // execution redefines, and one of them has to be the single author.
+    let planned_unix_timestamp = u64::try_from(report.observation.unix_timestamp)
+        .map_err(|_| refusal("Resolution close observed a negative clock"))?;
     let receipt = SourceClosureReceiptV3 {
         market: facts.market,
         source_state: facts.source_state,
@@ -4831,14 +5200,23 @@ pub(crate) fn plan_resolution_close_caller_v1(
         selector: facts.selector,
         source_refund_lamports: facts.source_refund_lamports,
         ledger_remaining_native_principal: facts.ledger_remaining_native_principal,
-        ledger_rent_lamports: facts.ledger_rent_lamports,
-        ledger_lamport_surplus: facts.ledger_lamport_surplus,
+        ledger_rent_lamports: partition.ledger_rent_lamports,
+        ledger_lamport_surplus: partition.ledger_lamport_surplus,
         refund_lamports: facts.refund_lamports,
-        closed_at: facts.closed_at,
-    }
-    .to_bytes()
-    .map_err(|error| Error::new(format!("Resolution closure receipt: {error:?}")))?
-    .to_vec();
+        closed_at: planned_unix_timestamp,
+    };
+    let execution_clock = ExecutionClockFieldV1 {
+        offset: closure_receipt_closed_at_offset_v1(&receipt)?,
+        planned_unix_timestamp,
+        ceiling_unix_timestamp: planned_unix_timestamp
+            .checked_add(TERMINAL_EXECUTION_CLOCK_CEILING_SECONDS)
+            .ok_or_else(|| refusal("Resolution close execution-clock ceiling overflowed"))?,
+    };
+    require_derived_execution_clock_ceiling_v1(execution_clock)?;
+    let receipt = receipt
+        .to_bytes()
+        .map_err(|error| Error::new(format!("Resolution closure receipt: {error:?}")))?
+        .to_vec();
     if report.closure_receipt != snapshot.closure_destination.key
         || snapshot
             .beneficiary
@@ -4876,6 +5254,7 @@ pub(crate) fn plan_resolution_close_caller_v1(
         snapshot.resolution_program.key,
         &snapshot.closure_destination,
         receipt,
+        execution_clock,
     );
     Ok(TerminalSemanticMutationV1 {
         stage: TerminalStageV1::ResolutionCloseFund,
@@ -5373,6 +5752,7 @@ pub(crate) fn plan_retirement_replay_handoff_caller_v1(
         expected_return_data: Some(ExpectedReturnDataV1 {
             producer: snapshot.custody_program.key,
             body: report.expected_receipt_body.to_vec(),
+            execution_clock: None,
         }),
         expected_accounts: vec![
             ExpectedAccountPoststateV1::exact(
@@ -6941,6 +7321,7 @@ pub(crate) fn build_lookup_infrastructure_journal_v1(
                 data_base64: BASE64.encode(&payer.data),
                 data_sha256: sha256_hex(&payer.data),
                 lookup_table: None,
+                execution_clock: None,
             },
         ),
         (
@@ -6960,6 +7341,7 @@ pub(crate) fn build_lookup_infrastructure_journal_v1(
                     last_extended_slot: last_slot,
                     last_extended_slot_start_index: start_index,
                 }),
+                execution_clock: None,
             },
         ),
     ]);
@@ -7190,6 +7572,7 @@ pub(crate) fn authenticate_lookup_infrastructure_planned_journal_v1(
                 data_base64: BASE64.encode(&payer.data),
                 data_sha256: sha256_hex(&payer.data),
                 lookup_table: None,
+                execution_clock: None,
             },
         ),
         (
@@ -7209,6 +7592,7 @@ pub(crate) fn authenticate_lookup_infrastructure_planned_journal_v1(
                     last_extended_slot: last_slot,
                     last_extended_slot_start_index: start_index,
                 }),
+                execution_clock: None,
             },
         ),
     ]);
@@ -10130,6 +10514,7 @@ mod tests {
                     data_base64: String::new(),
                     data_sha256: sha256_hex(&[]),
                     lookup_table: None,
+                    execution_clock: None,
                 },
             ),
             (
@@ -10143,6 +10528,7 @@ mod tests {
                     data_base64: String::new(),
                     data_sha256: sha256_hex(&[]),
                     lookup_table: None,
+                    execution_clock: None,
                 },
             ),
         ]);
@@ -10308,6 +10694,7 @@ mod tests {
                     data_base64: String::new(),
                     data_sha256: sha256_hex(&[]),
                     lookup_table: None,
+                    execution_clock: None,
                 },
             ),
             (
@@ -10321,6 +10708,7 @@ mod tests {
                     data_base64: String::new(),
                     data_sha256: sha256_hex(&[]),
                     lookup_table: None,
+                    execution_clock: None,
                 },
             ),
         ]);
@@ -10803,8 +11191,18 @@ mod tests {
         let program = key(15);
         let destination = test_account(key(24), program, 3_445_152, false);
         let receipt = b"DCSRCLS3 and then four hundred and eight more".to_vec();
+        let clock = ExecutionClockFieldV1 {
+            offset: 8,
+            planned_unix_timestamp: 1_788_522_293,
+            ceiling_unix_timestamp: 1_788_522_293 + TERMINAL_EXECUTION_CLOCK_CEILING_SECONDS,
+        };
         let (returned, account) =
-            resolution_close_receipt_poststate_v1(program, &destination, receipt.clone());
+            resolution_close_receipt_poststate_v1(program, &destination, receipt.clone(), clock);
+        assert_eq!(
+            (returned.execution_clock, account.execution_clock),
+            (Some(clock), Some(clock)),
+            "one statement of the unbindable field, spent in both halves"
+        );
         assert_eq!(returned.producer, program, "the producer is Resolution");
         assert_eq!(returned.body, receipt);
         assert_eq!(
@@ -10830,9 +11228,183 @@ mod tests {
                 producer: program.to_string(),
                 body_base64: BASE64.encode(&receipt),
                 body_sha256: sha256_hex(&receipt),
+                execution_clock: None,
             }),
         )
         .expect("the declared receipt certifies");
+    }
+
+    /// A closure receipt whose only interesting field is its clock.
+    fn clock_test_receipt(closed_at: u64) -> SourceClosureReceiptV3 {
+        SourceClosureReceiptV3 {
+            market: [1; 32],
+            source_state: [2; 32],
+            source_material: [3; 32],
+            capability_manifest: [4; 32],
+            terminal_certificate: [5; 32],
+            receipt_account: [6; 32],
+            beneficiary: [7; 32],
+            source_state_digest: [8; 32],
+            terminal_certificate_digest: [9; 32],
+            funding_set_digest: [10; 32],
+            generation: 2,
+            terminal_sequence: 1,
+            selector: 1,
+            source_refund_lamports: 2_763_520,
+            ledger_remaining_native_principal: 3,
+            ledger_rent_lamports: 1_991_360,
+            ledger_lamport_surplus: 491_176,
+            refund_lamports: 2_763_520 + 3 + 1_991_360 + 491_176,
+            closed_at,
+        }
+    }
+
+    fn clock_test_bytes(closed_at: u64) -> Vec<u8> {
+        clock_test_receipt(closed_at)
+            .to_bytes()
+            .expect("the fixture receipt encodes")
+            .to_vec()
+    }
+
+    /// THE OFFSET IS ASKED OF THE CODEC, NEVER WRITTEN DOWN.
+    ///
+    /// The recovered window has to be the one the encoder actually uses, and
+    /// the proof is that writing a value through the typed field puts it there.
+    #[test]
+    fn the_closure_receipts_execution_clock_offset_is_derived_from_its_encoder() {
+        let receipt = clock_test_receipt(1_788_522_302);
+        let offset = closure_receipt_closed_at_offset_v1(&receipt)
+            .expect("closed_at is one contiguous little-endian window");
+        let bytes = clock_test_bytes(1_788_522_302);
+        assert_eq!(
+            &bytes[offset..offset + 8],
+            &1_788_522_302_u64.to_le_bytes(),
+            "the derived window reads back the value the field was set to"
+        );
+        assert!(offset + 8 <= SOURCE_CLOSURE_RECEIPT_BYTES_V3);
+    }
+
+    fn clock_rule(planned: u64) -> DurableExecutionClockFieldV1 {
+        DurableExecutionClockFieldV1 {
+            offset: closure_receipt_closed_at_offset_v1(&clock_test_receipt(planned))
+                .expect("the fixture has a derivable clock offset"),
+            planned_unix_timestamp: planned,
+            ceiling_unix_timestamp: planned + TERMINAL_EXECUTION_CLOCK_CEILING_SECONDS,
+        }
+    }
+
+    /// MARKET 1'S RECEIPT, NINE SECONDS LATE, CERTIFIES -- AND NOTHING ELSE
+    /// ABOUT IT IS WEAKENED.
+    #[test]
+    fn an_execution_clock_inside_the_interval_certifies_and_only_that_field_moves() {
+        let planned = 1_788_522_293;
+        let rule = clock_rule(planned);
+        let plan = clock_test_bytes(planned);
+
+        authenticate_execution_clock_bytes_v1(
+            "receipt",
+            &clock_test_bytes(planned + 9),
+            &plan,
+            Some(&rule),
+        )
+        .expect("the clock devnet actually stamped is inside the interval");
+        authenticate_execution_clock_bytes_v1("receipt", &plan, &plan, Some(&rule))
+            .expect("an execution at exactly the planned clock is admissible");
+
+        // A byte OUTSIDE the declared field still refuses, which is what makes
+        // this a weakening of one field rather than of the poststate.
+        let mut elsewhere = clock_test_bytes(planned + 9);
+        let rent_offset = elsewhere
+            .windows(8)
+            .position(|window| window == 1_991_360_u64.to_le_bytes())
+            .expect("the fixture's rent reserve is findable");
+        elsewhere[rent_offset..rent_offset + 8].copy_from_slice(&1_991_361_u64.to_le_bytes());
+        let error = authenticate_execution_clock_bytes_v1("receipt", &elsewhere, &plan, Some(&rule))
+            .expect_err("one lamport elsewhere is still a refusal");
+        assert!(
+            error
+                .to_string()
+                .contains("outside the one field its plan cannot bind"),
+            "{error}"
+        );
+    }
+
+    /// A RECEIPT WITH A CLOCK BEFORE THE PLAN REFUSES.
+    #[test]
+    fn an_execution_clock_before_its_plan_refuses() {
+        let planned = 1_788_522_293;
+        let error = authenticate_execution_clock_bytes_v1(
+            "receipt",
+            &clock_test_bytes(planned - 1),
+            &clock_test_bytes(planned),
+            Some(&clock_rule(planned)),
+        )
+        .expect_err("an execution cannot precede its own inputs");
+        assert!(
+            error.to_string().contains("an execution cannot precede"),
+            "{error}"
+        );
+    }
+
+    /// And one past the sequence's own deadline is not this sequence's.
+    #[test]
+    fn an_execution_clock_past_the_sequence_deadline_refuses() {
+        let planned = 1_788_522_293;
+        let rule = clock_rule(planned);
+        let late = planned + TERMINAL_EXECUTION_CLOCK_CEILING_SECONDS + 1;
+        let error = authenticate_execution_clock_bytes_v1(
+            "receipt",
+            &clock_test_bytes(late),
+            &clock_test_bytes(planned),
+            Some(&rule),
+        )
+        .expect_err("past the ceiling is a refusal");
+        assert!(
+            error.to_string().contains("as its own execution"),
+            "{error}"
+        );
+        authenticate_execution_clock_bytes_v1(
+            "receipt",
+            &clock_test_bytes(late - 1),
+            &clock_test_bytes(planned),
+            Some(&rule),
+        )
+        .expect("the last admissible second still certifies");
+    }
+
+    /// With NO rule the comparison is byte equality, which is what the other
+    /// five poststates of this sequence are and stay.
+    #[test]
+    fn a_poststate_with_no_declared_clock_is_still_exact() {
+        let plan = clock_test_bytes(1_788_522_293);
+        authenticate_execution_clock_bytes_v1("receipt", &plan, &plan, None)
+            .expect("identical bytes certify");
+        authenticate_execution_clock_bytes_v1(
+            "receipt",
+            &clock_test_bytes(1_788_522_294),
+            &plan,
+            None,
+        )
+        .expect_err("one second's difference is a refusal with no rule");
+    }
+
+    /// A NEW OBLIGATION CARRIES THE SEQUENCE'S DERIVED CEILING AND NO OTHER.
+    #[test]
+    fn a_new_execution_clock_obligation_must_carry_the_derived_ceiling() {
+        let planned = 1_788_522_293;
+        require_derived_execution_clock_ceiling_v1(ExecutionClockFieldV1 {
+            offset: 400,
+            planned_unix_timestamp: planned,
+            ceiling_unix_timestamp: planned + TERMINAL_EXECUTION_CLOCK_CEILING_SECONDS,
+        })
+        .expect("the derived ceiling is admissible");
+        let error = require_derived_execution_clock_ceiling_v1(ExecutionClockFieldV1 {
+            offset: 400,
+            planned_unix_timestamp: planned,
+            ceiling_unix_timestamp: planned + TERMINAL_EXECUTION_CLOCK_CEILING_SECONDS + 1,
+        })
+        .expect_err("a widened ceiling is not this sequence's");
+        assert!(error.to_string().contains("derived ceiling"), "{error}");
     }
 
     fn unique_test_path(label: &str) -> PathBuf {

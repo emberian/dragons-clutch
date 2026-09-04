@@ -12,6 +12,7 @@ mod capability_seal_close;
 mod capability_seal_devnet;
 mod chaos_fault;
 mod claims_custody_replay;
+mod closure_receipt_projection;
 mod cluster;
 mod collateral_release;
 mod core_bump_projection;
