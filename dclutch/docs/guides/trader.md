@@ -112,6 +112,29 @@ The web app shows whether the connected address has a Position, what it holds,
 what joining creates, and the exact command for its selected endpoint.
 Admission itself currently runs through the CLI, not a browser wallet request.
 
+## Who gets the trading fee
+
+Every Direct market has one venue rate, set when it is created, immutable
+after, and charged **per side**: a rate of 50 basis points takes 50 from the
+seller and 50 from the buyer, so a fill at that rate moves 1% of the gross.
+The seller nets the gross less their side; the buyer is debited the gross plus
+theirs. Rounding goes toward the makers, never toward the venue.
+
+**The protocol takes none of it.** There is no protocol treasury, no protocol
+beneficiary, and no instruction anywhere that lets the protocol sweep a market's
+fees. The whole fee goes to the market's own `fee_recipient` — a pubkey the
+founder fixed at creation — and it gets there by an ordinary token transfer that
+anybody may submit. That transfer is a second transaction: permissionless,
+unsigned by the venue, unrewarded, and with no deadline.
+
+The rate can be anything from zero up to **500 basis points a side**, and no
+higher: the protocol refuses a market founded above that, and the ceiling lives
+in the deployed program rather than in a setting. Inside that band the rate is
+the founder's choice and it is shown to you before you trade — on the market
+page, on the ticket you sign, and copied into the signed terms where the trade
+form cannot change it. A market's rate is a fact about that market, disclosed;
+it is not a number the protocol collects.
+
 ## How the market resolves
 
 Every market pins its source when it is created — a specific price feed,

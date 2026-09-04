@@ -536,3 +536,27 @@ ZeroBump-class recovery bounties.
 4. **`COMPACTION_CRANK_REWARD_LAMPORTS_V1` as a literal.** §2, named as debt.
 5. **The escrow-close residue.** §5, unimplemented, and until it lands the
    single-crank opener eats the whole shortfall.
+
+## 9. The frame cost, measured, and the ratchet left red
+
+`tools/frameguard/run.sh --at 2812fc00` against baseline `a062dc65`, twelve
+links, 1,863 rows. **Exactly one row is this lane's:**
+
+| link | function | before | after | delta |
+| --- | --- | ---: | ---: | ---: |
+| `dclutch-trading-sbf` | `direct_close_maker_v1::process_direct_close_maker_v1` | 3,008 | **3,072** | **+64** |
+
+That is the closer-carve argument plus the receipt's eight extra bytes, and it
+leaves 1,024 bytes of headroom under SBPF v0's 4,096-byte wall. The custody
+sweep cost nothing: `8ed7f242` predates the baseline's own commit, so its rows
+are already captured.
+
+**The ratchet is left RED, deliberately and by the rule
+`tools/frameguard/README.md` states.** The same capture carries eleven rows this
+lane did not write — `process_relay_transport_v1` +64 and four new
+resolution-proof functions from RECOVERY, five zero-frame Series functions from
+SERIES — and `frameguard.py owed` names all three lanes. An exact ratchet cannot
+be recaptured by a bystander: admitting eleven rows to land one is the mistake
+that document records being made three times on 2026-09-02. The recapture
+belongs to whichever lane can hold a quiet tree long enough to take two captures
+at one commit.

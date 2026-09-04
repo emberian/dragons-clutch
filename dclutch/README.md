@@ -97,6 +97,17 @@ whole transaction rolls back and your funds stay where they were. Every
 refusal carries a code naming the program that refused and why; the full
 list is in [the refusal reference](docs/reference/refusals.md).
 
+**Who gets the trading fee: the market, and never the protocol.** A Direct
+market's rate is fixed when it is created, immutable after, and charged per
+side — 50 basis points takes 50 from each side, so 1% of the gross moves on a
+fill. All of it goes to that market's own `fee_recipient`, a pubkey the founder
+named at creation, delivered by an ordinary token transfer anybody may submit.
+There is no protocol treasury, no protocol beneficiary and no instruction that
+lets the protocol sweep a market's fees. The rate may be anything from zero up
+to 500 basis points a side and no higher; the ceiling is in the deployed
+program, not in a setting. See [the trader guide](docs/guides/trader.md) and
+[decision 0014](docs/decisions/0014-the-fee-rate.md).
+
 ## The seven programs
 
 The protocol is split across seven on-chain programs, each with one job.

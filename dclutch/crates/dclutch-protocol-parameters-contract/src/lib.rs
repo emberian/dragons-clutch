@@ -44,6 +44,18 @@
 //! `dclutch-custody-contract` takes the caller's compartment claim rather than
 //! deriving it. Which key an authority is, is an authentication question a
 //! record cannot be wrong about.
+//!
+//! **And no program creates or writes one yet.** Said plainly here because the
+//! alternative is a reader finding out: this crate is a decoder, an encoder, a
+//! band predicate and a procedure, with hostiles that exercise all four, and
+//! every one of them runs against records built in a test. The consumers that
+//! would read it -- the Direct fee band, the closer carve ceiling, the crank
+//! reward cap -- currently project [`ProtocolParametersV1::genesis`]'s values as
+//! constants, which makes the record their single AUTHOR without making it
+//! their runtime SOURCE. What is owed is a PDA at
+//! [`PROTOCOL_PARAMETERS_PDA_DOMAIN_V1`], a dispatcher owning the refusal
+//! sub-band, and each consumer taking the value out of its frame. Until that
+//! lands, nothing here has ever been exercised by a caller that was not a test.
 
 #![no_std]
 
