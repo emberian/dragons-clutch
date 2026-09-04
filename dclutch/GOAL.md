@@ -4779,3 +4779,7 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   Noted: `tools/devnet-reconcile/reconcile.py:54` holds the same stale literal and nothing runs it; 89 frame diagnostics in
   the resolution-proof program from RECOVERY-2's in-flight files (theirs to clear before committing).
 - Cuts: `286138234`.
+- Started 12:30 EDT: ESCROW-2 **`(spawned)`** under a provisional ruling — merge over the ORDINARY coordinates for a
+  refunding market (the failure coordinate carries no value on the refunding scale); the escrow seated; the refunding
+  failure walk on real ELFs. TIDY **`(spawned)`** — the reconcile tool's stale schema literal derives; the runbooks tier's
+  two unprobed commands.
