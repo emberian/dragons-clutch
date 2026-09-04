@@ -146,7 +146,21 @@ theorem PriceVector.coordinate_bounded
 
 /-- One immutable signed portfolio order. `receivePerLot` and `deliverPerLot`
 are nonnegative claim vectors; their difference is the signed payoff change.
-`maxQuoteDebitPerLot` is the trader's exact limit. -/
+
+THE LIMIT IS A PAIR, and until 2026-09-04 it was only its first half.
+`maxQuoteDebitPerLot` bounds what the maker can be CHARGED per filled lot;
+`minQuoteCreditPerLot` bounds below what the maker must be PAID per filled lot.
+A fill is priced in exactly one of the two directions (`roundedQuoteFor` returns
+`(debit, 0)` or `(0, credit)`), so at most one half of the pair can bind on any
+one fill, and a net seller with no floor accepted whatever price the winning
+candidate chose, down to zero.
+
+`MECHANISM_JOINT_CLEARING_2026_09_04.md` models the same fact as one SIGNED
+limit, a seller's floor being a negative one. The unsigned pair is strictly more
+expressive and embeds it -- `L ≥ 0` is `(L, 0)` and `L < 0` is `(0, -L)` -- and
+the pair also states the two combinations the signed scalar cannot. Zero is "no
+floor", so an order written before this field existed says exactly what it always
+said: see `floor_of_zero_is_the_predicate_that_shipped`. -/
 structure Order where
   orderId : Nat
   ownerId : Nat
@@ -155,6 +169,7 @@ structure Order where
   deliverPerLot : List Nat
   maxLots : Nat
   maxQuoteDebitPerLot : Nat
+  minQuoteCreditPerLot : Nat
   deriving DecidableEq, Repr
 
 def Order.validFor (order : Order) (outcomeCount : Nat) : Bool :=
@@ -240,7 +255,8 @@ def Candidate.quotesCanonical (candidate : Candidate) : Bool :=
     let lots := candidate.filledLots orderId
     roundedQuoteFor candidate.prices execution.order lots =
       (candidate.quoteDebitFor orderId, candidate.quoteCreditFor orderId) &&
-    candidate.quoteDebitFor orderId ≤ execution.order.maxQuoteDebitPerLot * lots
+    candidate.quoteDebitFor orderId ≤ execution.order.maxQuoteDebitPerLot * lots &&
+    execution.order.minQuoteCreditPerLot * lots ≤ candidate.quoteCreditFor orderId
 
 def claimInputs (candidate : Candidate) : List Nat :=
   (List.range candidate.outcomeCount).map fun outcome =>
@@ -634,6 +650,72 @@ theorem close_routes_all_quote
     (closePost state).quoteSurplusPaid =
       state.quoteSurplusPaid + state.quoteInventory := by
   exact ⟨rfl, rfl⟩
+
+/-! ## The seller's floor -/
+
+/-- NO ADMITTED CANDIDATE PAYS A MAKER LESS THAN THEIR FLOOR.
+
+The conjunct is inside `quotesCanonical`, which `valid` requires, and it is
+stated per filled order over the CANDIDATE-WIDE credit -- the same aggregation
+`maxQuoteDebitPerLot` is checked against -- so a submitter cannot fragment one
+order across pages to slip under it. -/
+theorem valid_candidate_honours_every_sellers_floor
+    (candidate : Candidate) (execution : Execution)
+    (valid : candidate.valid = true)
+    (present : execution ∈ candidate.executions) :
+    execution.order.minQuoteCreditPerLot * candidate.filledLots execution.order.orderId ≤
+      candidate.quoteCreditFor execution.order.orderId := by
+  -- `Candidate.valid` is eleven `&&` conjuncts and `&&` is left-associative, so
+  -- the ninth -- `quotesCanonical` -- is the right projection of two peels.
+  simp only [Candidate.valid, Bool.and_eq_true] at valid
+  have canonical : candidate.quotesCanonical = true := valid.1.1.2
+  simp only [Candidate.quotesCanonical, List.all_eq_true] at canonical
+  have row := canonical execution present
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at row
+  exact row.2
+
+/-- A ZERO FLOOR IS THE PREDICATE THAT SHIPPED.
+
+`0 * lots = 0 ≤ credit` holds for every credit and every fill, so the added
+conjunct is vacuous on exactly the orders written before the field existed. This
+is the Lean half of the record's byte-level statement: the eight bytes the floor
+occupies were reserved zero, so a floorless order keeps its bytes, its
+`order_id`, and now its admission. -/
+theorem floor_of_zero_is_the_predicate_that_shipped
+    (candidate : Candidate) (execution : Execution)
+    (noFloor : execution.order.minQuoteCreditPerLot = 0) :
+    execution.order.minQuoteCreditPerLot * candidate.filledLots execution.order.orderId ≤
+      candidate.quoteCreditFor execution.order.orderId := by
+  simp [noFloor]
+
+/-- THE FLOOR IS A REAL REFUSAL AND NOT ONLY A VACUOUS ONE.
+
+The witness is a single-order candidate whose fill is priced in the credit
+direction: at a floor of two per lot over two lots it is admitted, and at a floor
+of three it is not. Without this, both theorems above would be satisfied by a
+conjunct nothing can fail. -/
+def sellerFloorWitness (floor : Nat) : Candidate :=
+  let order : Order := {
+    orderId := 1
+    ownerId := 1
+    receivePerLot := [0, 0]
+    deliverPerLot := [1, 0]
+    nonce := 1
+    maxLots := 2
+    maxQuoteDebitPerLot := 0
+    minQuoteCreditPerLot := floor
+  }
+  { candidateId := 1
+    productId := 1
+    batchId := 1
+    outcomeCount := 2
+    prices := { coordinates := [50, 50], scale := 100 }
+    pages := [{ executions := [{ order, lots := 2, quoteDebit := 0, quoteCredit := 1 }] }] }
+
+theorem the_floor_refuses_a_fill_below_it :
+    (sellerFloorWitness 0).quotesCanonical = true ∧
+    (sellerFloorWitness 1).quotesCanonical = false := by
+  native_decide
 
 theorem materialize_has_one_exact_direction
     (candidate : Candidate) (state : SettlementState) :

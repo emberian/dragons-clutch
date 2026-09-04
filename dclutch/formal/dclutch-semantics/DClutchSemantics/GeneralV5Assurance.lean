@@ -443,7 +443,14 @@ def certificateCandidate (certificate : SubmittedCertificate) : Candidate := {
       receivePerLot := certificate.receivePerLot
       deliverPerLot := certificate.deliverPerLot
       maxLots := certificate.lots
-      maxQuoteDebitPerLot := certificate.quoteDebit }
+      maxQuoteDebitPerLot := certificate.quoteDebit
+      -- THE CERTIFICATE CARRIES NO FLOOR, so neither does the order this
+      -- reconstruction builds from it. `VerifiedCandidateV2` persists the
+      -- candidate-wide aggregate, and `minQuoteCreditPerLot` is a per-order
+      -- term the row-by-row verifier checked against the record while it was
+      -- still reading it. Zero here says "this reconstruction imposes no floor
+      -- of its own", which is exactly true and not a defaulted unknown.
+      minQuoteCreditPerLot := 0 }
     lots := certificate.lots
     quoteDebit := certificate.quoteDebit
     quoteCredit := certificate.quoteCredit }] }]

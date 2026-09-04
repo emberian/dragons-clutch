@@ -54,6 +54,9 @@ def receiveOutcomeZero : Order := {
   deliverPerLot := [0, 0]
   maxLots := 1
   maxQuoteDebitPerLot := 1
+  -- A pure buyer: it is never paid, so its floor is the only value that can
+  -- hold, and zero is what every order written before the field existed says.
+  minQuoteCreditPerLot := 0
 }
 
 def receiveOutcomeOne : Order := {
@@ -64,6 +67,9 @@ def receiveOutcomeOne : Order := {
   deliverPerLot := [0, 0]
   maxLots := 1
   maxQuoteDebitPerLot := 1
+  -- A pure buyer: it is never paid, so its floor is the only value that can
+  -- hold, and zero is what every order written before the field existed says.
+  minQuoteCreditPerLot := 0
 }
 
 def mintPage : Page := {

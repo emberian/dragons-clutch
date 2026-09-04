@@ -250,6 +250,7 @@ fn place(batch: &mut GeneralBatchV1, owner: u8, nonce: u64) -> Vec<u8> {
             generation: 7,
             max_lots: MAX_LOTS,
             max_quote_debit_per_lot: MAX_QUOTE_DEBIT_PER_LOT,
+            min_quote_credit_per_lot: 0,
             valid_until_slot: SETTLEMENT_CLOSE,
         },
         &[1, 0, 0],

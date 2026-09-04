@@ -63,6 +63,36 @@ fn order_bytes(
     receive: &[u64],
     deliver: &[u64],
 ) -> Vec<u8> {
+    order_bytes_with_floor(
+        batch_id,
+        owner,
+        nonce,
+        max_lots,
+        max_quote_debit_per_lot,
+        0,
+        receive,
+        deliver,
+    )
+}
+
+/// One order carrying a SELLER'S FLOOR, which `order_bytes` leaves at zero.
+///
+/// Written as a sibling rather than a ninth parameter on `order_bytes` so that
+/// every existing caller keeps saying exactly what it said: a zero floor is the
+/// record's reserved-zero bytes and its old `order_id`, and a test that had to
+/// pass `0` to keep its meaning would be evidence that the field was not
+/// additive after all.
+#[allow(clippy::too_many_arguments)]
+fn order_bytes_with_floor(
+    batch_id: [u8; 32],
+    owner: u8,
+    nonce: u64,
+    max_lots: u64,
+    max_quote_debit_per_lot: u64,
+    min_quote_credit_per_lot: u64,
+    receive: &[u64],
+    deliver: &[u64],
+) -> Vec<u8> {
     let mut bytes = vec![0_u8; general_order_len_v1(WIDTH).expect("order width")];
     GeneralOrderV1::encode_into(
         GeneralOrderHeaderV1 {
@@ -74,6 +104,7 @@ fn order_bytes(
             generation: 7,
             max_lots,
             max_quote_debit_per_lot,
+            min_quote_credit_per_lot,
             valid_until_slot: SETTLEMENT_CLOSE,
         },
         receive,
@@ -303,12 +334,16 @@ fn atomic_physical_admission_matches_funded_semantics_and_refuses_a_closed_windo
         GeneralSignedOrderTermsV1::decode(&signed_bytes[..signed_bytes.len() - 1]),
         Err(GeneralCollectionErrorV1::InvalidLength)
     );
-    let mut noncanonical = signed_bytes.clone();
-    noncanonical[24] = 1;
-    assert_eq!(
-        GeneralSignedOrderTermsV1::decode(&noncanonical),
-        Err(GeneralCollectionErrorV1::InvalidHeader)
-    );
+    // Byte 24 was the reserved window and refused nonzero; since 2026-09-04 it
+    // is the low byte of the seller's floor, so it decodes and takes the
+    // identity with it. The signed image is what the maker signs, so a floor
+    // that could be attached to it without moving `order_id` would be a term
+    // the maker never agreed to.
+    let mut floored = signed_bytes.clone();
+    floored[GeneralOrderLayoutV1::MIN_QUOTE_CREDIT_PER_LOT] = 1;
+    let floored_terms = GeneralSignedOrderTermsV1::decode(&floored).expect("floored signed terms");
+    assert_eq!(floored_terms.header().min_quote_credit_per_lot, 1);
+    assert_ne!(floored_terms.order_id(), order.order_id());
     let mut substituted_row = signed_bytes.clone();
     let last = substituted_row.len() - 1;
     substituted_row[last] ^= 1;
@@ -362,6 +397,7 @@ fn a_degenerate_order_moving_no_claim_is_refused() {
         generation: 7,
         max_lots: 10,
         max_quote_debit_per_lot: 5,
+        min_quote_credit_per_lot: 0,
         valid_until_slot: SETTLEMENT_CLOSE,
     };
     let mut bytes = vec![0_u8; general_order_len_v1(WIDTH).expect("order width")];
@@ -826,6 +862,62 @@ fn an_execution_row_projects_the_terms_the_verifier_consumes() {
     assert_eq!(terms.order_id, order.order_id());
     assert_eq!(terms.max_lots, 10);
     assert_eq!(terms.max_quote_debit_per_lot, 5);
+}
+
+/// THE SELLER'S FLOOR IS INSIDE THE ORDER'S OWN IDENTITY, and a floorless order
+/// is the bytes it always was.
+///
+/// Two statements, and the second is what makes the first additive rather than
+/// a wire break. (a) The eight bytes at `MIN_QUOTE_CREDIT_PER_LOT` were
+/// `require_zero(24, 8)` from the day this record was written, so an order with
+/// no floor writes the same zeros the reserved window held and keeps its
+/// `order_id` -- every order signed before 2026-09-04 authenticates unchanged.
+/// (b) An order that DOES carry a floor has a different `order_id`, because the
+/// identity digest covers the whole header, so the floor cannot be attached to
+/// or stripped from a record without the row that names it ceasing to match.
+/// That is the whole authentication story for this field: it needs no register
+/// and no profile operation, only the digest the row already binds.
+#[test]
+fn the_sellers_floor_rides_the_order_identity_and_a_floorless_order_is_unmoved() {
+    let mut root = active_root();
+    let batch = open_batch(&mut root);
+    let identity = batch.batch_id();
+
+    let floorless = order_bytes(identity, 9, 1, 10, 5, &[1, 0, 0], &[0, 2, 0]);
+    assert_eq!(
+        floorless
+            .get(
+                GeneralOrderLayoutV1::MIN_QUOTE_CREDIT_PER_LOT
+                    ..GeneralOrderLayoutV1::MIN_QUOTE_CREDIT_PER_LOT + 8
+            )
+            .expect("floor window"),
+        &[0; 8],
+        "a zero floor must write the bytes the reserved window held",
+    );
+    let without = GeneralOrderV1::decode(&floorless).expect("floorless order");
+    assert_eq!(without.header().min_quote_credit_per_lot, 0);
+    assert_eq!(without.terms().min_quote_credit_per_lot, 0);
+
+    let floored = order_bytes_with_floor(identity, 9, 1, 10, 5, 3, &[1, 0, 0], &[0, 2, 0]);
+    let with = GeneralOrderV1::decode(&floored).expect("floored order");
+    assert_eq!(with.header().min_quote_credit_per_lot, 3);
+    assert_eq!(with.terms().min_quote_credit_per_lot, 3);
+    assert_ne!(
+        with.order_id(),
+        without.order_id(),
+        "the floor is not covered by the identity the row binds",
+    );
+
+    // And the signed image the maker actually signs carries it too: the signed
+    // terms ARE the record's header plus its rows, so a floor stated to the
+    // chain and a floor stated to the maker cannot differ.
+    let mut signed =
+        vec![0_u8; general_signed_order_terms_len_v1(WIDTH).expect("signed terms width")];
+    with.encode_signed_terms_into(&mut signed)
+        .expect("signed terms");
+    let terms = GeneralSignedOrderTermsV1::decode(&signed).expect("signed terms decode");
+    assert_eq!(terms.header().min_quote_credit_per_lot, 3);
+    assert_eq!(terms.order_id(), with.order_id());
 }
 
 #[test]
@@ -1390,19 +1482,26 @@ fn the_order_identity_masks_exactly_the_mutable_window() {
     );
 }
 
-/// The reserved range behind the nonce is canonical now.
+/// The range behind the nonce is a FIELD now, and still not a free byte.
 ///
 /// Before the wire repair bytes 24..32 were never checked, so two encodings of
-/// one signed order could carry two identities. A content-addressed record may
-/// not have a free byte.
+/// one signed order could carry two identities; the repair made them reserved
+/// zero and refused any other content. On 2026-09-04 they became
+/// `MIN_QUOTE_CREDIT_PER_LOT`, and the property this test was written for is
+/// unchanged and stronger: a content-addressed record may not have a free byte,
+/// so a byte that changes must change the identity. What moved is only the
+/// verdict -- these bytes now DECODE instead of refusing, and the record they
+/// decode to is a different order.
 #[test]
-fn a_nonzero_reserved_range_refuses_to_decode() {
-    let mut bytes = order_bytes(id(9), 4, 5, 6, 7, &[1, 0, 0], &[0, 2, 0]);
-    bytes[24] = 1;
-    assert_eq!(
-        GeneralOrderV1::decode(&bytes),
-        Err(GeneralCollectionErrorV1::InvalidHeader)
-    );
+fn the_range_behind_the_nonce_is_the_floor_and_moves_the_identity() {
+    let bytes = order_bytes(id(9), 4, 5, 6, 7, &[1, 0, 0], &[0, 2, 0]);
+    let mut floored = bytes.clone();
+    floored[GeneralOrderLayoutV1::MIN_QUOTE_CREDIT_PER_LOT] = 1;
+    let without = GeneralOrderV1::decode(&bytes).expect("floorless order");
+    let with = GeneralOrderV1::decode(&floored).expect("floored order");
+    assert_eq!(without.header().min_quote_credit_per_lot, 0);
+    assert_eq!(with.header().min_quote_credit_per_lot, 1);
+    assert_ne!(with.order_id(), without.order_id());
 }
 
 #[test]

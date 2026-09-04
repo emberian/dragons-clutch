@@ -208,6 +208,18 @@ impl GeneralOrderLayoutV1 {
     pub const OUTCOME_COUNT: usize = 12;
     /// Owner-scoped replay nonce.
     pub const NONCE: usize = 16;
+    /// Candidate-wide minimum derived quote credit per filled lot.
+    ///
+    /// THE EIGHT RESERVED-ZERO BYTES, spent. `decode` required 24..32 zero from
+    /// the day this record was written, which is what makes the field additive
+    /// in the strongest sense available: a floor of zero is not merely the old
+    /// BEHAVIOUR, it is the old BYTES, so every order already signed keeps its
+    /// `order_id` and every fixture that spells the record keeps passing. A
+    /// reserved window becoming an authenticated field is the only way to spend
+    /// one -- AGENTS.md's rule is that an unused byte must not become an
+    /// UNAUTHENTICATED extension point, and this one is covered by the record's
+    /// own digest.
+    pub const MIN_QUOTE_CREDIT_PER_LOT: usize = 24;
     /// Maker identity; the account that must sign the placement.
     pub const OWNER_ID: usize = 32;
     /// Canonical Core Market key.
@@ -1164,6 +1176,11 @@ pub struct GeneralOrderHeaderV1 {
     pub max_lots: u64,
     /// Candidate-wide maximum derived quote debit per filled lot.
     pub max_quote_debit_per_lot: u64,
+    /// Candidate-wide minimum derived quote credit per filled lot.
+    ///
+    /// The seller's floor. Zero is no floor and is what every order signed
+    /// before 2026-09-04 says. See [`GeneralOrderLayoutV1::MIN_QUOTE_CREDIT_PER_LOT`].
+    pub min_quote_credit_per_lot: u64,
     /// Last slot at which this order may still be settled.
     pub valid_until_slot: u64,
 }
@@ -1184,7 +1201,6 @@ impl<'a> GeneralOrderV1<'a> {
             return Err(GeneralCollectionErrorV1::InvalidLength);
         }
         require_header(bytes, &ORDER_MAGIC, ORDER_PHASE)?;
-        require_zero(bytes, 24, 8)?;
         let header = decode_order_header(bytes)?;
         if bytes.len() != general_order_len_v1(header.outcome_count)? {
             return Err(GeneralCollectionErrorV1::InvalidLength);
@@ -1279,6 +1295,11 @@ impl<'a> GeneralOrderV1<'a> {
             output,
             GeneralOrderLayoutV1::NONCE,
             &header.nonce.to_le_bytes(),
+        );
+        put(
+            output,
+            GeneralOrderLayoutV1::MIN_QUOTE_CREDIT_PER_LOT,
+            &header.min_quote_credit_per_lot.to_le_bytes(),
         );
         put(output, GeneralOrderLayoutV1::OWNER_ID, &header.owner_id);
         put(output, GeneralOrderLayoutV1::MARKET, &header.market);
@@ -1443,6 +1464,7 @@ impl<'a> GeneralOrderV1<'a> {
             nonce: self.header.nonce,
             max_lots: self.header.max_lots,
             max_quote_debit_per_lot: self.header.max_quote_debit_per_lot,
+            min_quote_credit_per_lot: self.header.min_quote_credit_per_lot,
         }
     }
 
@@ -1525,7 +1547,6 @@ impl<'a> GeneralSignedOrderTermsV1<'a> {
             return Err(GeneralCollectionErrorV1::InvalidLength);
         }
         require_header(bytes, &ORDER_MAGIC, ORDER_PHASE)?;
-        require_zero(bytes, 24, 8)?;
         let header = decode_order_header(bytes)?;
         validate_order_header(header)?;
         if bytes.len() != general_signed_order_terms_len_v1(header.outcome_count)? {
@@ -1778,6 +1799,7 @@ fn decode_order_header(bytes: &[u8]) -> GeneralCollectionResultV1<GeneralOrderHe
         generation: read_u64(bytes, GeneralOrderLayoutV1::GENERATION)?,
         max_lots: read_u64(bytes, GeneralOrderLayoutV1::MAX_LOTS)?,
         max_quote_debit_per_lot: read_u64(bytes, GeneralOrderLayoutV1::MAX_QUOTE_DEBIT_PER_LOT)?,
+        min_quote_credit_per_lot: read_u64(bytes, GeneralOrderLayoutV1::MIN_QUOTE_CREDIT_PER_LOT)?,
         valid_until_slot: read_u64(bytes, GeneralOrderLayoutV1::VALID_UNTIL_SLOT)?,
     })
 }

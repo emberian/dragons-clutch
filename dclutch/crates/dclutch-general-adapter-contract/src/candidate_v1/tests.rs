@@ -107,6 +107,7 @@ fn place(
             generation: 7,
             max_lots: 10,
             max_quote_debit_per_lot: 5,
+            min_quote_credit_per_lot: 0,
             valid_until_slot: SETTLEMENT_CLOSE,
         },
         receive,

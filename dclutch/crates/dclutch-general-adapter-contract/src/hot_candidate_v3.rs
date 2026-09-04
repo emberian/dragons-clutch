@@ -278,8 +278,24 @@ pub mod scalar {
     pub const SELECTION_BEST_FILLED_LOTS: u32 = 84;
     /// Quote-surplus component of the best submitted candidate comparison key.
     pub const SELECTION_BEST_QUOTE_SURPLUS: u32 = 85;
-    /// Trusted canonical input scratch-page count derived from bank geometry.
-    pub const INPUT_SCRATCH_PAGE_COUNT: u32 = 86;
+    /// Candidate-wide minimum derived quote credit per filled lot.
+    ///
+    /// THE ONE COORDINATE THAT WAS FREE. This was
+    /// `INPUT_SCRATCH_PAGE_COUNT`, the selector for a dynamic span General
+    /// declared and then stopped declaring when the input bank moved inline; it
+    /// was kept rather than removed so the 151 common scalars would not
+    /// renumber, and it has been a hole in the bank ever since. The seller's
+    /// floor needed exactly one u64 and the alternative was a 152nd coordinate,
+    /// which renumbers nothing but does move every General profile's declared
+    /// scalar count and therefore every artifact digest in the family.
+    ///
+    /// STILL WRITTEN BY NO PROFILE, which is the property the two bundle-builder
+    /// tests assert about this index and the reason they keep asserting it: the
+    /// floor reaches this register from the ACCELERATOR's own projection of the
+    /// verifier cursor, exactly as `ORDER_MAX_QUOTE_DEBIT_PER_LOT` does beside
+    /// it, and no AccountProfile operation and no RequestProfile coordinate
+    /// touches either.
+    pub const ORDER_MIN_QUOTE_CREDIT_PER_LOT: u32 = 86;
     /// Verifier-emitted settlement-manifest row ordinal selected by the request.
     pub const MANIFEST_ORDER_INDEX: u32 = 87;
     /// AccountProfile-projected capability-root lifecycle byte.
@@ -2313,16 +2329,18 @@ fn project_general_verify_candidate_summary_into_bank_v3(
         current_nonce,
         current_max_lots,
         current_quote_limit,
+        current_credit_floor,
         current_lots,
         current_source_page,
         current_source_row,
-    ) = current.map_or(([0; 32], [0; 32], 0, 0, 0, 0, 0, 0), |value| {
+    ) = current.map_or(([0; 32], [0; 32], 0, 0, 0, 0, 0, 0, 0), |value| {
         (
             value.order_id,
             value.owner_id,
             value.nonce,
             value.max_lots,
             value.max_quote_debit_per_lot,
+            value.min_quote_credit_per_lot,
             value.lots,
             value.source_page_index,
             value.source_execution_index,
@@ -2388,6 +2406,14 @@ fn project_general_verify_candidate_summary_into_bank_v3(
         (scalar::ORDER_NONCE, current_nonce),
         (scalar::ORDER_MAX_LOTS, current_max_lots),
         (scalar::ORDER_MAX_QUOTE_DEBIT_PER_LOT, current_quote_limit),
+        // THE SELLER'S HALF OF THE LIMIT, and it has to ride a register for the
+        // same reason the buyer's half does: the group the floor bounds may be
+        // closed in a LATER transaction than the one that opened it, so the
+        // conjunct reads the cursor's persisted copy and the cursor is written
+        // by Trading's Effect out of this bank. A floor computed here and left
+        // out of the bank would persist as zero and the group's second fragment
+        // would refuse `OrderSubstitution` against a term nobody changed.
+        (scalar::ORDER_MIN_QUOTE_CREDIT_PER_LOT, current_credit_floor),
         (scalar::ORDER_VALID_UNTIL_SLOT, current_lots),
         (scalar::PAGE_INDEX, u64::from(current_source_page)),
         (scalar::EXECUTION_INDEX, u64::from(current_source_row)),
@@ -4188,6 +4214,7 @@ mod tests {
                 generation: environment.generation,
                 max_lots: 2,
                 max_quote_debit_per_lot: 3,
+                min_quote_credit_per_lot: 0,
                 valid_until_slot: batch.opening().settlement_close_slot,
             },
             &vec![1; count],

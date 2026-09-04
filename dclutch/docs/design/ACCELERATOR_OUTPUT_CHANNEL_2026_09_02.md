@@ -489,3 +489,11 @@ transport's, and named rather than left in a log:
 so both hostile-candidate assertions in the Dealer accepted campaign fail before
 it reaches its first submission. Every Dealer figure above was taken with those
 two assertions relaxed in the measuring worktree only.
+
+**Closed at `7aede3847`, and the propagation was the right half.** A projector's
+own cause is what a reader needs -- the General half alone publishes seven
+projector stages that the wrapper rendered as one string -- so the assertions
+were the stale side, and each now names the word its own closure chose. Nothing
+else in the tree consumed `Projection("admitted-candidate")`. The two arms were
+proven red separately, because the scenario one is reachable only past the
+equity one and a single run can show only the first.

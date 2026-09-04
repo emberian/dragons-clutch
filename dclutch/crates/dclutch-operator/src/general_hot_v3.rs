@@ -2189,8 +2189,8 @@ fn validate_runtime_geometry(
             .ok_or(GeneralHotOperatorErrorV3::Arithmetic)?;
     }
     // The span's own conjuncts are gone with the span: there is no selector to
-    // pin to `INPUT_SCRATCH_PAGE_COUNT` and no insertion coordinate to add a
-    // width to. `logical_account_count_with_dynamic_spans` above already
+    // pin to coordinate 86 -- which is the seller's floor since 2026-09-04 --
+    // and no insertion coordinate to add a width to. `logical_account_count_with_dynamic_spans` above already
     // refuses a width vector this profile does not declare.
     Ok(())
 }
@@ -3478,6 +3478,7 @@ mod tests {
                 generation: 7,
                 max_lots: 5,
                 max_quote_debit_per_lot: 3,
+                min_quote_credit_per_lot: 0,
                 valid_until_slot: 100,
             },
             GeneralOrderStateV1 {
@@ -3550,6 +3551,7 @@ mod tests {
                     generation: 7,
                     max_lots: 10,
                     max_quote_debit_per_lot: 5,
+                    min_quote_credit_per_lot: 0,
                     valid_until_slot: 2_000,
                 },
                 receive,
@@ -4148,6 +4150,7 @@ mod tests {
                 generation: root.generation(),
                 max_lots: 5,
                 max_quote_debit_per_lot: 3,
+                min_quote_credit_per_lot: 0,
                 valid_until_slot: 100,
             },
             GeneralOrderStateV1 {

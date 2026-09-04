@@ -1076,6 +1076,7 @@ mod tests {
             nonce: u64::from(order_low),
             max_lots: 10,
             max_quote_debit_per_lot: debit_limit,
+            min_quote_credit_per_lot: 0,
         };
         let mut bytes = vec![0; execution_len(width).expect("execution length")];
         ExecutionV2::encode_into(

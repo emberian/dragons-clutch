@@ -4864,3 +4864,16 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   `advance-recovery` command (specified in market.rs); the gauntlet binding needs a tier run; the Trading caller cannot reach
   a rung capture (a hard account count, correct refusal). genref converged by the orchestrator.
 - Cuts: `3743a8f8a`, `63580acbe`.
+- ESCROW-2 closed (eight commits: `e37116b03` the refunding complete-set law — 21 declarations, zero sorry, the foreclosure
+  PROVED against `commandAccepts` on a cohort-13-shaped state; `faacc7ba8`/`4ea72c87e`/`d9801aab6` the kernel actions
+  `Mint/MergeRefundingCompleteSet`, `authenticate_failure_escrow`, codes `0x5010/0x5011`; `bca1a7c2c`/`7801c4c54` the browser's
+  second author of "scale must be 1" fixed; `c4dd78ff8` frames, one row; `70d495181` the seating note): **who an outage pays
+  is the payout SCALE, not the seating — a refunding basis pays the failure coordinate nothing whoever holds it, so cohort-16
+  REFUNDS with the founder still holding the column**; the escrow's job is the narrower "worth-nothing-but-sellable";
+  **L3 forecloses "no Position at all" (an equality at ledger.rs:828), so the escrow Position is mandatory**; **split and
+  merge are UNIMPLEMENTED as user acts — the generic route is migration-only with no ELF test and a mint that transfers
+  nothing**; thirteen hostiles, no bare `is_err()`. Owed: founding v6 to seat the escrow (shape A: a wider request and
+  escrow rent, founding-time immutability kept; shape B: seat in the founding transaction, no wire change — the lane
+  declined; **the orchestrator picks A for cohort-17**); a Claims-owned split/merge that moves collateral; the real-ELF
+  refunding walk after (1).
+- Cuts: `2ae1f29f8`.

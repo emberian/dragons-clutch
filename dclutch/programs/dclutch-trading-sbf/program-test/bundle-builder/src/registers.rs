@@ -1965,13 +1965,16 @@ mod tests {
         )
         .expect("host usize");
         let selector =
-            usize::try_from(scalar::INPUT_SCRATCH_PAGE_COUNT).expect("selector coordinate");
+            usize::try_from(scalar::ORDER_MIN_QUOTE_CREDIT_PER_LOT).expect("selector coordinate");
         let mut scalars = vec![0_u64; scalar_count];
         scalars[0] = 0x55;
         // GENERAL DECLARES NO SPAN, so the only admitted width vector is the
-        // empty one and it seeds nothing. `INPUT_SCRATCH_PAGE_COUNT` survives
-        // as a reserved coordinate, which is why it is asserted still zero:
-        // the seeder must not write a register no span selects.
+        // empty one and it seeds nothing. Coordinate 86 was
+        // `INPUT_SCRATCH_PAGE_COUNT`, the selector that span used, and on
+        // 2026-09-04 it became the seller's floor -- which changes nothing this
+        // asserts: the seeder must not write a register no span selects, and
+        // the coordinate having acquired a meaning makes a stray write worse
+        // rather than better.
         seed_authenticated_dynamic_span_counts(profile, &[], &mut scalars)
             .expect("a span-free profile seeds no selector");
         assert_eq!(scalars[selector], 0);

@@ -248,15 +248,20 @@ fn derive(
 /// from a request projection -- nothing in the request reaches that register --
 /// and the transport it selected has no producer a chain transaction can be, so
 /// the bank rides inline in the CPI instruction data and the span is gone.
-/// `scalar::INPUT_SCRATCH_PAGE_COUNT` survives as a reserved coordinate, so the
-/// 151 common scalars do not renumber; this asserts that nothing writes it, in
-/// the request or in the profile.
+/// Coordinate 86 survived the span's removal so the 151 common scalars would
+/// not renumber, and on 2026-09-04 it stopped being a hole and became
+/// `scalar::ORDER_MIN_QUOTE_CREDIT_PER_LOT`, the seller's floor. What this
+/// asserts is UNCHANGED and now load-bearing for a different reason: no
+/// AccountProfile operation and no RequestProfile coordinate writes it. The
+/// floor reaches it from the accelerator's own projection of the verifier
+/// cursor, so a profile that wrote it would be a second author for a term the
+/// signed order record owns.
 #[test]
 fn general_declares_no_span_and_nothing_writes_its_former_selector() {
     let target = ProjectionTargetV1 {
         kind: ProjectionRegisterKindV1::Scalar,
         space: ProjectionRegisterSpaceV1::Common,
-        index: u16::try_from(scalar::INPUT_SCRATCH_PAGE_COUNT).expect("selector index"),
+        index: u16::try_from(scalar::ORDER_MIN_QUOTE_CREDIT_PER_LOT).expect("selector index"),
     };
     for action in GENERAL_ACTIONS_V3 {
         let bytes = account_profile(action);

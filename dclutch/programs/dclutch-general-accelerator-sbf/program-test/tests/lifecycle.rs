@@ -1854,6 +1854,15 @@ fn order_record(width: u32, batch_id: [u8; 32], spec: &OrderSpec) -> Vec<u8> {
             generation: GENERATION,
             max_lots: 10,
             max_quote_debit_per_lot: spec.debit_limit,
+            // NO FLOOR IN THIS FIXTURE YET, and that is a debt rather than a
+            // choice. A floorless order is byte-identical to what this fixture
+            // encoded before 2026-09-04, so `real_sbf_verify_candidate_...`
+            // does exercise the Effect's new write of the cursor's floor
+            // coordinate on a real ELF -- with the value zero. What is owed is
+            // the FLOORED walk: a seller whose fill clears the floor and one
+            // whose fill does not, refused by the accelerator with
+            // `RuntimeVerifyErrorV2::CreditLimit` named.
+            min_quote_credit_per_lot: 0,
             valid_until_slot: SETTLEMENT_CLOSE_SLOT,
         },
         &spec.receive,
@@ -3045,6 +3054,7 @@ async fn real_sbf_place_order_admits_canonical_signed_terms_at_runtime_widths() 
                 generation: root.generation(),
                 max_lots: 2,
                 max_quote_debit_per_lot: 3,
+                min_quote_credit_per_lot: 0,
                 valid_until_slot: batch.opening().settlement_close_slot,
             },
             &receive,

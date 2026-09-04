@@ -176,6 +176,9 @@ fn order_record_v1(width: u32, batch_id: [u8; 32], spec: &OrderSpecV1) -> Result
             generation: FIXTURE_GENERATION_V1,
             max_lots: 10,
             max_quote_debit_per_lot: spec.debit_limit,
+            // The seller's floor, zero in this fixture: see the same note in
+            // the accelerator program-test's `order_record`.
+            min_quote_credit_per_lot: 0,
             valid_until_slot: FIXTURE_SETTLEMENT_CLOSE_SLOT_V1,
         },
         &spec.receive,

@@ -364,7 +364,10 @@ pub const GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3: EffectInstructionV3 =
 pub const fn general_effect_instruction_count_v3(action: Action) -> (usize, usize) {
     match action {
         Action::SubmitCandidate => (23, 0),
-        Action::VerifyCandidateRow => (53, 7),
+        // 54 since 2026-09-04: the verifier cursor's current-order window gained
+        // the seller's floor at offset 280, and every field of that window is
+        // written here out of the accelerator's register bank.
+        Action::VerifyCandidateRow => (54, 7),
         Action::CloseCandidate => (3, 0),
         Action::OpenBatch => (24, 0),
         Action::CloseBatch => (4, 0),
@@ -1993,6 +1996,10 @@ fn append_verify_candidate_patches(
             scalar::ORDER_MAX_QUOTE_DEBIT_PER_LOT,
         ),
         (
+            RuntimeVerifierLayoutV2::current_min_quote_credit_per_lot(),
+            scalar::ORDER_MIN_QUOTE_CREDIT_PER_LOT,
+        ),
+        (
             RuntimeVerifierLayoutV2::current_lots(),
             scalar::ORDER_VALID_UNTIL_SLOT,
         ),
@@ -3583,7 +3590,8 @@ mod tests {
         assert_eq!(program.route_count(), 0);
         // 15 until the System program became an account; see SubmitCandidate.
         assert_eq!(program.fixed_account_count(), 16);
-        assert_eq!(program.fixed_operation_count(), 53);
+        // 53 until the seller's floor joined the current-order window.
+        assert_eq!(program.fixed_operation_count(), 54);
         assert_eq!(program.item_operation_count(), 7);
 
         for count in [1_u32, 258] {
@@ -3624,11 +3632,15 @@ mod tests {
             // Disabled Result creation is a true no-op: all verifier writes
             // still resolve, but neither the fixed result header nor either
             // result tail touches the vacant account.
-            for operation in 0..53_u16 {
+            // 0..53 and 37..=50 until 2026-09-04: the seller's floor is one more
+            // fixed write in the current-order window, which sits ahead of the
+            // Result block, so the disabled-Result span moved up by exactly one
+            // and nothing else about it changed.
+            for operation in 0..54_u16 {
                 let resolved = program
                     .resolved_fixed_effect(operation, count, &scalars, &identities)
                     .expect("every disabled fixed effect resolves");
-                if (37..=50).contains(&operation) {
+                if (38..=51).contains(&operation) {
                     assert_eq!(resolved, dclutch_effect_kernel::v3::ResolvedEffectV3::Noop);
                 }
             }

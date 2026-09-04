@@ -2747,9 +2747,11 @@ mod tests {
                 Err(GeneralAccountRuleErrorV3::Geometry)
             );
             // NO SPAN, asserted through the encoded artifact rather than
-            // through a builder that no longer exists. `scalar::INPUT_SCRATCH_PAGE_COUNT`
-            // survives as a reserved coordinate so the 151 common scalars do
-            // not renumber; nothing writes it and nothing reads it.
+            // through a builder that no longer exists. Coordinate 86 survived
+            // the span's removal so the 151 common scalars would not renumber;
+            // since 2026-09-04 it is `scalar::ORDER_MIN_QUOTE_CREDIT_PER_LOT`,
+            // written by the accelerator and read by the Effect, and still by
+            // no AccountProfile operation.
             let bytes = general_account_profile_bytes_v3(action).expect("profile width");
             let mut encoded = vec![0_u8; bytes];
             let mut scratch = vec![0_u8; bytes];
