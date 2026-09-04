@@ -38,6 +38,8 @@
 //!   takes, and taking it moved the refusal from `NativeSignature` to a Trading
 //!   prelude conjunct 29,000 CU further in.
 //!
+//! Two more came out after those, and they are items 3 and 4 below.
+//!
 //! The Series Expire ARTIFACT SET no longer contradicts itself:
 //! `97ce7a748` keyed the family's proof geometry on the Template that owns it,
 //! so the Expire RequestProfile pins `series_action_request_bytes_v3(count)`
@@ -61,26 +63,77 @@
 //!    `activated_custody_program_v1` read nothing out of it and the operator
 //!    honestly mined an absent hint. Repaired here by giving the operator the
 //!    account the bank actually holds (`Releases::activation_data`).
-//! 3. Where it stops today, measured on chain and localized with the tree's own
-//!    `hot-cu-profile` checkpoints: Trading consumes 53,491 CU and refuses
-//!    `Content` (`0x4003`) inside `authenticate_market`, ~230 CU past its
-//!    entry, which is its first conjunct --
-//!    `frame.market.owner != frame.core_program.key || data_len() != STATE_BYTES`.
-//!    `build_controller_corpus_v1` builds the controller as
-//!    `market: vacant(controller_market)`, and `process_hot_execution_v3` says
-//!    in its own comment why that cannot stand: "the fixed Market is always the
-//!    live Series controller ... the occurrence's distinct future Market is a
-//!    route-local account, never a substitute for the fixed controller
-//!    coordinate." Pre-Market names the FUTURE Market, which is correctly
-//!    vacant; the controller is a live founded Market and this fixture has
-//!    never staged one. The next unit is to build it the way a founding writes
-//!    it -- `direct-hot/src/fixture.rs::market_and_claims` is the worked
-//!    example, bumps and all -- at its canonical
-//!    `market_core_state_address_v2`, which cascades into the root header, the
-//!    Ticket state PDA, and the permit and caller seeds that derive from it.
-//!    A second fixture gap is queued behind it and is separate: the
-//!    below-minimum row needs a `RentCredit` prestate in the bank, which
-//!    `capture_series_account_snapshots_v1` cannot find today.
+//! 3. The controller Market was staged VACANT, and `authenticate_market`
+//!    refuses that on its first conjunct. `process_hot_execution_v3` says why
+//!    in its own words: "the fixed Market is always the live Series controller
+//!    ... the occurrence's distinct future Market is a route-local account,
+//!    never a substitute for the fixed controller coordinate." Pre-Market is a
+//!    claim about the FUTURE Market, which stays vacant; the controller has
+//!    been founded and open for as long as the root has existed. It is founded
+//!    here the way a founding writes it, `market_and_claims` in
+//!    `direct-hot/src/fixture.rs` being the worked example, recorded bumps and
+//!    all.
+//! 4. The transaction carried no `RequestHeapFrame`. Every `DCLTHOT3` route
+//!    declares the extended heap profile and both arms of
+//!    `authenticate_root_against_market_boxed_v3` refuse `HeapFrame` by name
+//!    when the declaration is not matched by a grant. Declaring makes a grant
+//!    admissible; only asking for one makes it arrive.
+//!
+//! # WHERE IT STOPS TODAY, AND IT IS NO LONGER THE FIXTURE
+//!
+//! Trading consumes 289,328 CU of 1,318,152 and refuses `Content` (`0x4003`).
+//! Checkpoints along the pre-Market chain put it exactly: selection, execution
+//! artifacts, records-and-projection, the future projection, the future-Market
+//! vacancy proof and the replay authentication ALL PASS, and it stops inside
+//! `authenticate_series_expiry_core_request_from_records_v1`, which is three
+//! comparisons long and refuses on the revisions.
+//!
+//! `request` there is the Expire artifact's own Core route template, and
+//! `expire_funding_artifacts_v5.rs:847` emits it as
+//! `SeriesUnallocatedPermitExpiryRequestV1::new(0, 0)` -- a literal, frozen at
+//! release-emission time. `family` is the submitted request, and this fixture's
+//! carries `expected_series_revision = 1` because its staged state is
+//! `SeriesStateV3::new(close_rent).prepare_ticket(0)`: ONE occurrence has been
+//! prepared, so the revision is 1. Both are internally consistent and they
+//! cannot both be right.
+//!
+//! The fixture is not the author of this one, and the emitter says so in its
+//! own words. `encode_request_bank`, four lines above the literal:
+//!
+//! > The hashed release artifact carries the distinct transient transport with
+//! > ZERO PLACEHOLDERS; authenticated RequestProfile scalars patch both
+//! > revisions immediately before the Core CPI.
+//!
+//! So `(0, 0)` is a placeholder by design, not a claim about any Series. The
+//! artifact set carries the machinery to prove it:
+//! `SERIES_EXPIRE_EXPECTED_ROOT_REVISION_SCALAR_V5` (8) and
+//! `SERIES_EXPIRE_EXPECTED_TICKET_REVISION_SCALAR_V5` (9) are documented as
+//! "request-projected", their observed counterparts are 10 and 11, and
+//! `expire_funding_artifacts_v5.rs:621-626` compares expected against observed
+//! at runtime. The revisions are runtime scalars projected from the family
+//! request, exactly as they should be -- a revision is not immutable Template
+//! config and no release could be keyed on one.
+//!
+//! `authenticate_series_expiry_core_request_from_records_v1` is therefore
+//! reading the UN-PATCHED placeholder and demanding it equal the live request.
+//! It can only pass when both live revisions are zero, and a Series root that
+//! has never prepared anything has no unallocated permit to expire -- so the
+//! conjunct admits no reachable state and this route has never been reachable.
+//! That is the same SHAPE as the defect `97ce7a748` repaired: a value that is
+//! not a per-release constant, read as though it were one.
+//!
+//! THE REPAIR IS ONE FUNCTION IN `hot_v3.rs`, and it is queued rather than
+//! taken here because it moves the Trading ELF and therefore digests and owed
+//! frameguard rows, which is not a program-test fixture's commit to make. What
+//! the conjunct should assert is what the emitter promises: that the template
+//! carries the ZERO placeholder, so no stale revision can ride in on an
+//! artifact. The live agreement is already enforced twice downstream -- by the
+//! RequestProfile projection that patches the request, and by Core's own
+//! expected-revision checks against live state.
+//!
+//! Queued behind it and unrelated: the below-minimum row wants a `RentCredit`
+//! prestate the bank does not hold, so `capture_series_account_snapshots_v1`
+//! cannot find it.
 //!
 //! # WHAT THE ARTIFACT REPAIR ACTUALLY WAS, kept because it is not obvious
 //!
@@ -130,11 +183,12 @@ use solana_program::{instruction::InstructionError, pubkey::Pubkey, rent::Rent};
 use solana_program_test::BanksClientError;
 use solana_sdk::transaction::TransactionError;
 
+use dclutch_capability_program_contract::hot_v3::DIRECT_HOT_HEAP_FRAME_BYTES_V1;
 use dclutch_direct_hot_program_test_support::waist::{
-    CLAIMS_PROGRAM_ID, CORE_PROGRAM_ID, CUSTODY_PROGRAM_ID, REGISTRY_PROGRAM_ID, RENT_PROGRAM_ID,
-    TRADING_PROGRAM_ID, add_lookup_table, add_release_waist, canonical_lookup_addresses, elves,
-    fixture_substrate, program_test_without_forced_budget, start_with_substrate,
-    submit_v0_observed,
+    CLAIMS_PROGRAM_ID, COMPUTE_LIMIT, CORE_PROGRAM_ID, CUSTODY_PROGRAM_ID, REGISTRY_PROGRAM_ID,
+    RENT_PROGRAM_ID, TRADING_PROGRAM_ID, add_lookup_table, add_release_waist,
+    canonical_lookup_addresses, elves, fixture_substrate, program_test_without_forced_budget,
+    start_with_substrate, submit_v0_observed,
 };
 
 fn build_chain(
@@ -204,6 +258,54 @@ fn physical_report(
     assert_eq!(operator.roles.refund, None);
     assert_eq!(operator.roles.system_program, None);
     report
+}
+
+/// The complete transaction a Series Expire caller sends: compute limit, heap
+/// request, then the transparent Registry continuation.
+///
+/// The heap request is not optional and is not a tuning knob. Every `DCLTHOT3`
+/// route declares the extended heap profile
+/// (`entrypoint_adapter::declares_extended_heap_profile_v1`), and BOTH arms of
+/// `authenticate_root_against_market_boxed_v3` call
+/// `require_declared_heap_ceiling_above_default_v1`, which refuses `HeapFrame`
+/// by name when the declaration is not matched by a grant. Declaring makes a
+/// grant admissible; only asking for one makes it arrive. A fixture that omits
+/// it is refused before it reads a single Series byte -- which is exactly what
+/// this one did, and it is the same absence that was the whole of
+/// `registry_hot_continuation`'s five reds.
+///
+/// The outer goes LAST: the runtime clears return data at the start of every
+/// top-level instruction, so a trailing ComputeBudget instruction would erase
+/// the commit-last acknowledgement the Hot execution just produced. This route
+/// carries no ed25519 native evidence -- a Series occurrence action is
+/// authorized by its finalized records, not by maker signatures -- so nothing
+/// here pins an instruction index the way a Direct trade's evidence does.
+fn series_expire_transaction_v1(
+    fixture: &SeriesPremarketExpiryChainFixtureV1,
+) -> [solana_program::instruction::Instruction; 3] {
+    [
+        compute_budget_instruction_v1(
+            2,
+            &u32::try_from(COMPUTE_LIMIT)
+                .expect("compute limit width")
+                .to_le_bytes(),
+        ),
+        compute_budget_instruction_v1(1, &DIRECT_HOT_HEAP_FRAME_BYTES_V1.to_le_bytes()),
+        fixture.top_level_instruction.clone(),
+    ]
+}
+
+fn compute_budget_instruction_v1(
+    discriminant: u8,
+    argument: &[u8],
+) -> solana_program::instruction::Instruction {
+    let mut data = vec![discriminant];
+    data.extend_from_slice(argument);
+    solana_program::instruction::Instruction {
+        program_id: solana_sdk_ids::compute_budget::ID,
+        accounts: Vec::new(),
+        data,
+    }
 }
 
 fn refusal_code(error: &BanksClientError) -> Option<u32> {
@@ -306,7 +408,7 @@ async fn current_source_series_expire_lands_before_the_future_market_exists() {
         &fixture.externally_installed,
     )
     .expect("install Series chain accounts");
-    let instructions = [fixture.top_level_instruction.clone()];
+    let instructions = series_expire_transaction_v1(&fixture);
     let addresses =
         canonical_lookup_addresses(&instructions, solana_program::pubkey::Pubkey::default());
     add_lookup_table(&mut test, &addresses);
@@ -390,7 +492,7 @@ async fn a_permit_prepaid_below_todays_minimum_still_expires_on_the_deployed_elf
         &fixture.externally_installed,
     )
     .expect("install hostile Series chain accounts");
-    let instructions = [fixture.top_level_instruction.clone()];
+    let instructions = series_expire_transaction_v1(&fixture);
     let addresses =
         canonical_lookup_addresses(&instructions, solana_program::pubkey::Pubkey::default());
     add_lookup_table(&mut test, &addresses);
@@ -475,7 +577,7 @@ async fn precommit_caller_substitutions_refuse_with_exact_state_reversion() {
             &fixture.externally_installed,
         )
         .expect("install hostile caller chain accounts");
-        let instructions = [fixture.top_level_instruction.clone()];
+        let instructions = series_expire_transaction_v1(&fixture);
         let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
         add_lookup_table(&mut test, &addresses);
         let mut context = start_with_substrate(test, fixture_substrate()).await;

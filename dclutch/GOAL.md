@@ -4795,3 +4795,14 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - The six designs synthesized for ember as one page (the mechanism cohort: composition, proofs, prices, the six defects found
   in the tree we have, the sequence, and the eight rulings): https://claude.ai/code/artifact/76181478-cf24-4c03-8370-c09f56cf9156
   The root Lean module imports all five mechanism modules (b31b35a21; 145 jobs green, four stated sorries in ScoringRuleV1).
+- SERIES-2 closed (`c70ddef27`, `96055c100`, `e569af120`, `05b15ffac`): **the candidate builds at HEAD again** (the occurrence
+  count joins the campaign's source corpus, refused if it disagrees with the live Template; the successor builds
+  `--locked --offline` from an archive; the Product handoff green — a full candidate still needs the Linux builder);
+  **the "five missing accounts" were a five-slot OFFSET the fixture read wrong** — four walls repaired (the physical vector
+  rebuilt from the runtime's own table; the transparent continuation seam; the controller Market founded; the heap frame);
+  **the first Series Hot transaction ever submitted to a bank: Trading 289,328 CU, six checkpoints passing** — it stops at
+  `authenticate_series_expiry_core_request_from_records_v1`, which reads a revision PLACEHOLDER the profile scalars were
+  documented to patch: **the Expire route has never been reachable** (one function; a program repair, queued). The Shadow
+  callback still uncommitted upstream of the three builders; no substrates row (nothing completed). The resolution-proof
+  ELF at HEAD emits zero diagnostics — the 89 are RECOVERY-2's uncommitted edits (misrouted message corrected).
+- Cuts: `d435467eb`, `b31b35a21`, `653a71a0d`.

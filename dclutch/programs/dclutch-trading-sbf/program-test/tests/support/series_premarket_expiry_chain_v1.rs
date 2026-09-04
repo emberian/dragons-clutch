@@ -54,10 +54,11 @@ use dclutch_direct_hot_program_test_support::waist::{
     registry_hot_instruction, release_v2,
 };
 use dclutch_market_core_codec::{
-    Action as CoreAction, FoundingIntentV5, Identity, MarketCoreStateSeedsV2, MarketIdentity,
-    ProjectFoundReceiptV2, Request as CoreRequest, SERIES_FOUNDING_PERMIT_BYTES_V1,
-    SeriesCoreActionV1, SeriesCoreRequestV1, SeriesFoundingPermitSeedsV1, SeriesFoundingPermitV1,
-    SeriesPermitExpiryRequestV1, SeriesUnallocatedPermitExpiryRequestV1,
+    Action as CoreAction, CoreState, FoundingIntentV5, Identity, MarketCoreStateSeedsV2,
+    MarketIdentity, PRODUCT_GRAPH_BUMP_COUNT, Phase, ProductGraphBumpsV1, ProjectFoundReceiptV2,
+    Readiness, Request as CoreRequest, SERIES_FOUNDING_PERMIT_BYTES_V1, SeriesCoreActionV1,
+    SeriesCoreRequestV1, SeriesFoundingPermitSeedsV1, SeriesFoundingPermitV1,
+    SeriesPermitExpiryRequestV1, SeriesUnallocatedPermitExpiryRequestV1, StateBumpsV1,
 };
 use dclutch_operator::{Finality, Observation, ObservedAccount};
 use dclutch_operator::{
@@ -376,8 +377,13 @@ pub fn build_series_premarket_expiry_chain_v1(
         &input.rent,
         input.registry_program,
         input.trading_program,
+        input.core_program,
+        input.rent_program,
         input.releases.release_set,
+        refund_beneficiary,
         &records,
+        &substrate.finalized,
+        product.product_id,
         &substrate.replay,
         &provisional_release,
     )?;
@@ -814,12 +820,18 @@ struct ControllerCorpusV1 {
 /// controller. The controller manifest selects the current ProgramSet, while
 /// the occurrence record independently selects the canonical empty manifest
 /// for its still-vacant child Market.
+#[allow(clippy::too_many_arguments)]
 fn build_controller_corpus_v1(
     rent: &Rent,
     registry_program: Pubkey,
     trading_program: Pubkey,
+    core_program: Pubkey,
+    rent_program: Pubkey,
     release_set: [u8; 32],
+    refund_beneficiary: Pubkey,
     records: &SeriesRecordCorpusV1,
+    finalized: &FinalizedRecordCorpusV1,
+    product_id: [u8; 32],
     replay: &RootIndependentReplayCorpusV1,
     release: &SeriesReleaseV5,
 ) -> Result<ControllerCorpusV1, SeriesPremarketExpiryChainErrorV1> {
@@ -902,14 +914,120 @@ fn build_controller_corpus_v1(
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         manifest.digest,
     );
-    let controller_market = derived_fixture_key_v1(
-        b"dclutch/test/series-expire/controller-market",
-        trading_program,
-        release.program_set_id,
-    );
+    // THE CONTROLLER IS A LIVE FOUNDED MARKET, NOT A VACANT KEY.
+    //
+    // It was `vacant(derived_fixture_key_v1(...))`, and `authenticate_market`'s
+    // very first conjunct refuses that: the fixed Market must be Core-owned and
+    // exactly `STATE_BYTES` wide. `process_hot_execution_v3` says why in its own
+    // words -- "the fixed Market is always the live Series controller ... the
+    // occurrence's distinct future Market is a route-local account, never a
+    // substitute for the fixed controller coordinate." Pre-Market is a claim
+    // about the FUTURE Market, which stays vacant; the controller that owns the
+    // Series capability root has been founded and open for as long as the root
+    // has existed.
+    //
+    // Built the way a founding writes it, with `direct-hot/src/fixture.rs`'s
+    // `market_and_claims` as the worked example: a provisional identity fixes
+    // the address, the final identity carries that address, and both derive the
+    // same pair because `MarketCoreStateSeedsV2` projects the identity
+    // EXCLUDING the derived key. The recorded bumps are not decoration --
+    // `market_core_state_address_v2` takes the recorded bump over the caller's
+    // hint, and every Market reader reproduces the address from it and refuses
+    // a wrong one, so an UNRECORDED tail would stage a market no founding
+    // produces and quietly move all three readers onto their search arm.
+    const CONTROLLER_RESOLUTION_POLICY: [u8; 32] = [0x77; 32];
+    let provisional_identity = MarketIdentity {
+        market_id: identity([0x78; 32])?,
+        realm_id: identity(finalized.realm.digest)?,
+        product_record: identity(finalized.product.digest)?,
+        product_id: identity(product_id)?,
+        resolution_policy: identity(CONTROLLER_RESOLUTION_POLICY)?,
+        capability_manifest: identity(manifest.digest)?,
+        selected_release_set: identity(release_set)?,
+        registry_program: identity(registry_program.to_bytes())?,
+        generation: CONTROLLER_GENERATION,
+    };
+    let controller_market = Pubkey::find_program_address(
+        &MarketCoreStateSeedsV2::new(provisional_identity).as_slices(),
+        &core_program,
+    )
+    .0;
     if controller_market == records.future_market {
         return Err(SeriesPremarketExpiryChainErrorV1::Identity);
     }
+    let controller_identity = MarketIdentity {
+        market_id: identity(controller_market.to_bytes())?,
+        ..provisional_identity
+    };
+    let (founding_market, market_bump) = Pubkey::find_program_address(
+        &MarketCoreStateSeedsV2::new(controller_identity).as_slices(),
+        &core_program,
+    );
+    if founding_market != controller_market {
+        return Err(SeriesPremarketExpiryChainErrorV1::Identity);
+    }
+    let realm_record_bumps = record_bumps_v1(
+        registry_program,
+        REALM_SCHEMA_RELEASE_ID_V1,
+        finalized.realm.digest,
+    );
+    let product_graph_bumps = {
+        let mut bumps = [0_u8; PRODUCT_GRAPH_BUMP_COUNT];
+        for (slot, record) in [
+            &finalized.product,
+            &finalized.result_domain,
+            &finalized.portfolio,
+            &finalized.linked_basis,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (raw, staging) = record_bumps_v1(registry_program, record.schema, record.digest);
+            *bumps
+                .get_mut(slot * 2)
+                .ok_or(SeriesPremarketExpiryChainErrorV1::Record)? = raw;
+            *bumps
+                .get_mut(slot * 2 + 1)
+                .ok_or(SeriesPremarketExpiryChainErrorV1::Record)? = staging;
+        }
+        bumps
+    };
+    // One credit per Market lifecycle. This route never reads the controller's
+    // own credit -- Expire refunds through the FUTURE Market's -- so the
+    // account is not installed; the identity is derived rather than invented so
+    // the state is one a founding could have written.
+    let (controller_rent_credit, _) = build_lifecycle_rent_credit_v1(
+        rent_program,
+        controller_market,
+        release_set,
+        CONTROLLER_GENERATION,
+        refund_beneficiary,
+    )?;
+    let controller_state = CoreState {
+        phase: Phase::Open,
+        readiness: Readiness::Consumed,
+        terminal_winner: 0,
+        identity: controller_identity,
+        outstanding_capabilities: 1,
+        principal_cap_sets: u64::MAX,
+        rent_beneficiary: identity(controller_rent_credit.to_bytes())?,
+        terminal_receipt: None,
+        bumps: StateBumpsV1 {
+            market: StateBumpsV1::record(market_bump),
+            realm_raw_record: StateBumpsV1::record(realm_record_bumps.0),
+            realm_staging_record: StateBumpsV1::record(realm_record_bumps.1),
+            product_graph: ProductGraphBumpsV1::record(product_graph_bumps),
+        },
+    };
+    let controller_market_account = data_account(
+        rent,
+        controller_market,
+        core_program,
+        controller_state
+            .encode()
+            .map_err(|_| SeriesPremarketExpiryChainErrorV1::Record)?
+            .to_vec(),
+    );
     let header = CapabilityRootHeaderV1::new(
         dclutch_core_contract::ContentId::new(release_set)
             .map_err(|_| SeriesPremarketExpiryChainErrorV1::Identity)?,
@@ -942,7 +1060,7 @@ fn build_controller_corpus_v1(
         replay.ticket_before.clone(),
     );
     Ok(ControllerCorpusV1 {
-        market: vacant(controller_market),
+        market: controller_market_account,
         manifest,
         root,
         ticket_state,

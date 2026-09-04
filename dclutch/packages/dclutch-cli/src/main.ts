@@ -124,10 +124,16 @@ export const FLAG_OPTIONS = {
  * `FLAG_OPTIONS`, which is the table `parseArgs` actually parses with, and a
  * flag added there appears here in the same edit or not at all.
  * `test/cli.test.ts` holds the two to each other.
+ *
+ * `--help` is on the list like every other flag, and it used to be filtered
+ * out. A help page that does not name its own help flag is the same defect one
+ * turn tighter -- and it was load-bearing outside this file: `tools/doc-commands`
+ * holds every published command to the words its program's `--help` prints, so
+ * `node packages/dclutch-cli/bin/dclutch-terminal.mjs --help`, which
+ * `docs/guides/two-clients.md` publishes, named a flag this page denied.
  */
 function acceptedFlagsV1(): string {
   const names = Object.keys(FLAG_OPTIONS)
-    .filter((name) => name !== 'help')
     .sort()
     .map((name) => `--${name}`);
   const lines: string[] = [];

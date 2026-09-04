@@ -156,13 +156,17 @@ describe('public Direct mutation boundary', () => {
    * The repair was to render the list from the parser's own table. This is the
    * gate that keeps it rendered: a flag the parser accepts and the help omits
    * fails here, in the tree, rather than in front of a stranger.
+   *
+   * `help` itself is no longer excused from that. `two-clients.md` publishes
+   * `dclutch-terminal --help`, and until this line went `--help` was the one
+   * flag the page rendered by `--help` did not name -- which is exactly the
+   * finding above, with the checker's own flag as its subject.
    */
   it('names every flag its parser accepts, so no flag is discoverable only from a guide', async () => {
     const out: string[] = [];
     await run(['--help'], {}, { out: (line) => out.push(line), err: () => undefined });
     const help = out.join('\n');
     const undocumented = Object.keys(FLAG_OPTIONS)
-      .filter((name) => name !== 'help')
       .filter((name) => !help.includes(`--${name}`));
     expect(undocumented, 'these flags are accepted and --help never mentions them').toEqual([]);
     // And the reverse direction has a witness, so this cannot pass by the help
