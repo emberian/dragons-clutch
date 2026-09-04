@@ -15,7 +15,6 @@ import {
 } from './directInlineV3';
 import { HOT_FIXED_ACCOUNT_COUNT_V3, HOT_ROOT_ACCOUNT_V3 } from './generated/directInlineV3';
 import { CHECKED_INFRASTRUCTURE_BYTES_V1 } from './infrastructure';
-import { type SolanaRpcClient } from './rpc';
 
 /** The only public JSON envelope admitted for one Direct InlineOrdinary route. */
 export const DIRECT_HOT_ROUTE_MANIFEST_FORMAT_V3 = 'dclutch-direct-hot-route-manifest-v3' as const;

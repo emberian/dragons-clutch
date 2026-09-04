@@ -128,18 +128,18 @@ describe('the render map itself', () => {
   it('depends on a table the SDK actually gates', () => {
     const manifest = JSON.parse(readFileSync(join(webRoot, '..', '..', 'packages', 'dclutch-sdk', 'package.json'), 'utf8')) as
       Readonly<{ scripts: Readonly<Record<string, string>> }>;
-    const module = 'lib/generated/stateMachinesV1.ts';
+    const modulePath = 'lib/generated/stateMachinesV1.ts';
     const writer = Object.entries(manifest.scripts).find(([name, command]) =>
       name.startsWith('abi:') && !name.endsWith(':verify') && command.includes('generate-state-machines'));
     const verifier = Object.entries(manifest.scripts).find(([name, command]) =>
       name.endsWith(':verify') && command.includes('generate-state-machines') && command.includes('--check'));
-    expect(writer, `no SDK script writes ${module}`).toBeDefined();
-    expect(verifier, `nothing byte-checks ${module}, so the eight machine magics have no authority behind them`).toBeDefined();
+    expect(writer, `no SDK script writes ${modulePath}`).toBeDefined();
+    expect(verifier, `nothing byte-checks ${modulePath}, so the eight machine magics have no authority behind them`).toBeDefined();
     // The generator names its own output, which is what makes the verifier
     // above a check on THIS module rather than on some other one.
     const generator = readFileSync(
       join(webRoot, '..', '..', 'packages', 'dclutch-sdk', 'scripts', 'generate-state-machines-v1.mjs'), 'utf8');
-    expect(generator).toContain(module);
+    expect(generator).toContain(modulePath);
   });
 
   it('renders every persisted state machine the generated table declares', () => {

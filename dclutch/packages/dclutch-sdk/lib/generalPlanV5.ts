@@ -17,7 +17,6 @@ const ACTIONS = [
   'open-batch', 'place-order', 'cancel-order', 'close-batch', 'submit-candidate',
   'verify-candidate-row', 'release-order', 'close-candidate',
 ] as const;
-const PLAN_ACTIONS: ReadonlyArray<GeneralSuccessorActionV5> = ACTIONS;
 const ARTIFACT_KEYS = ['programSet', 'descriptor', 'config', 'accountProfile', 'lifecyclePolicy', 'requestProfile', 'strategy', 'certificate', 'admission', 'transition', 'effect'] as const;
 
 export type GeneralSuccessorActionV5 = (typeof ACTIONS)[number];

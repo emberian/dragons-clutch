@@ -4377,3 +4377,9 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   regression pin. Started 03:45 EDT: LINT-CLIENTS (ten standing lint errors, fixed at the author; lint in a tier) and
   MAGIC-NAMES (the dealer/general `REQUEST_MAGIC` collision; a one-to-one name → bytes check).
 - Cuts: `744d8b30d`, `658f8930a`.
+- LINT-CLIENTS closed (`fd6848c46`): ten lint errors fixed at the author (a tautological type annotation, three dead imports,
+  two unescaped apostrophes, a `module` local); wasm-bindgen's own output ignored by directory with the reason (it stamps
+  the .d.ts and omits the .js); **lint had run nowhere — neither tier nor wrapper job; the web tier runs it now (~12 s)**;
+  four hand-edited files were unlisted twins and landed in both trees. Found: an empty newline-named directory nest under
+  lib/generated/ — the orchestrator's (a file list split as one word fed `mkdir -p`); removed.
+- Cuts: `363943dec`.

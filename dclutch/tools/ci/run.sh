@@ -419,7 +419,7 @@ tier_seam() {
 # env-gated off by default and reach no network.
 # ---------------------------------------------------------------------------
 tier_web() {
-  say "web -- web + SDK vitest suites"
+  say "web -- web + SDK eslint and vitest suites"
   if ! have npx; then
     record web $EXIT_PREREQ_MISSING "node/npx not on PATH"
     return
@@ -459,6 +459,27 @@ tier_web() {
     }
     ran=$((ran + 1))
     note "$dir"
+    # ESLINT RAN NOWHERE UNTIL NOW. Both trees carry an `eslint.config.mjs` and
+    # a `lint` script, and on 2026-09-04 neither was executed by any tier here
+    # or by any job in the wrapper's `.github/workflows/` -- `checks.yml`'s
+    # `suites` job installs and runs vitest only. So the rule set was advisory:
+    # the two `react/no-unescaped-entities` errors and the
+    # `@next/next/no-assign-module-variable` error this comment ships with had
+    # been red in the working tree with nothing to report them, and the SDK
+    # config's stated policy -- generated modules are linted, findings are
+    # fixed at the generator -- had no instrument behind it.
+    #
+    # Cost, measured on this laptop at 93eb55ed0, warm: 8.6-9.8s for
+    # `apps/dclutch-web` and 2.2-2.5s for `packages/dclutch-sdk`, ~12s for the
+    # tier. That is under a tenth of the vitest half it sits beside, needs no
+    # toolchain the suites do not already need, and buys a gate on every hand
+    # -written client file in both trees.
+    #
+    # It runs BEFORE vitest deliberately: a lint error is cheaper to read than
+    # a suite failure, and `|| failed=1` rather than an early return so a red
+    # lint in the web tree still lets the SDK half report its own result --
+    # "failed" and "never ran" stay distinct.
+    (cd "$full" && npm run --silent lint) || failed=1
     (cd "$full" && npx vitest run --config vitest.config.ts \
       --exclude 'lib/abiVerification.test.ts' \
       --exclude 'lib/sbomVerify.test.ts') || failed=1

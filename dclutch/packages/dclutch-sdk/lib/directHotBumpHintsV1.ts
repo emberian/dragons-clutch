@@ -2,7 +2,6 @@ import { PublicKey } from '@solana/web3.js';
 
 import { slice, u16 } from './bytes';
 import {
-  HOT_BUMP_HINTS_OFFSET_V1,
   HOT_BUMP_HINT_COUNT_V1,
   HOT_BUMP_HINT_SLOT_NAMES_V1,
 } from './generated/hotBumpHintSlotsV1';

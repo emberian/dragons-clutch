@@ -3362,6 +3362,28 @@ fn require_terminal_prestate_unchanged_v1(
         .zip(values.iter())
         .zip(journal.intent.prestate.values())
     {
+        // THE CLOCK IS NOT A PRESTATE. IT IS THE CLOCK.
+        //
+        // `resolution-receipt-prepay` carries the Clock sysvar in its frame,
+        // so it lands in the durable prestate map like every other account --
+        // and its bytes change every slot BY CONSTRUCTION. Requiring it
+        // unchanged between planning and key load makes this stage
+        // structurally unreachable: measured on devnet 2026-09-04, eight
+        // consecutive plan-then-execute passes refused, and the only account
+        // that moved across all eight was `SysvarC1ock…` (observation slot
+        // 492,898,149 to 492,900,125, everything else byte-identical).
+        //
+        // Presence is still required. What is dropped is the equality, because
+        // no plan can bind a value the runtime redefines every 400ms, and a
+        // guard nothing can satisfy protects nothing.
+        if prestate_is_slot_bound_runtime_account_v1(key) {
+            if value.is_none() {
+                return Err(refusal(
+                    "terminal prestate lost a slot-bound runtime account between planning and key load",
+                ));
+            }
+            continue;
+        }
         if durable_rpc_state(key, value.as_ref()) != *expected {
             return Err(refusal(
                 "terminal finalized prestate changed after durable planning",
@@ -3369,6 +3391,17 @@ fn require_terminal_prestate_unchanged_v1(
         }
     }
     Ok(())
+}
+
+/// Accounts whose CONTENT is a function of the executing slot.
+///
+/// Exactly one today. The Rent and Instructions sysvars are also in terminal
+/// frames and neither belongs here: Rent's bytes are a cluster parameter that
+/// does not move per slot, and the Instructions sysvar reads as zero-length
+/// off chain. A future addition to this set is a claim that a plan cannot bind
+/// that account either, and it should carry the measurement that says so.
+fn prestate_is_slot_bound_runtime_account_v1(key: Pubkey) -> bool {
+    key == sysvar::clock::ID
 }
 
 fn terminal_latest_blockhash(rpc: &mut Rpc) -> Result<(Hash, u64)> {
@@ -9119,6 +9152,29 @@ pub(crate) fn owned_loopback_usage() -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    /// ONLY THE CLOCK, AND THE OTHER TWO SYSVARS IN THE SAME FRAMES ARE NOT IT.
+    ///
+    /// The exemption is a hole in a durability guard, so its shape is worth
+    /// pinning: widening it to the Rent or Instructions sysvar would drop a
+    /// prestate a plan CAN bind, and the next stage to refuse would then refuse
+    /// somewhere else entirely.
+    #[test]
+    fn only_the_clock_is_exempt_from_the_durable_prestate_equality() {
+        assert!(super::prestate_is_slot_bound_runtime_account_v1(
+            super::sysvar::clock::ID
+        ));
+        for other in [
+            super::sysvar::rent::ID,
+            super::sysvar::instructions::ID,
+            super::Pubkey::new_from_array([7_u8; 32]),
+        ] {
+            assert!(
+                !super::prestate_is_slot_bound_runtime_account_v1(other),
+                "{other} must still be bound by its durable prestate"
+            );
+        }
+    }
+
     use std::{
         borrow::Cow,
         fs,

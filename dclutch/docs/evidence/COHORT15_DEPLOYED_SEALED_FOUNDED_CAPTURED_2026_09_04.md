@@ -1610,3 +1610,57 @@ into a simulation.
 **OpenBatch N=2 on a real chain is therefore still owed, and its remaining
 blocker is a market, not a route.** Every producer between the frame and the
 chain now exists and every one of them has been exercised against devnet.
+
+## D7. The terminal lifecycle, driven; and two coarse codes that are one wall
+
+Market 1 (`3QytL1bB…`) was Terminal and had never been retired. Driving it named
+its own order, one refusal at a time:
+
+    custody replay -> ATA -> a wallet payout for EVERY claim index
+      -> core-begin-retiring -> direct-begin-retiring
+      -> resolution-receipt-prepay -> Resolution CloseFund
+
+`BeginRetiring is blocked: Claims supply at index N is 500000000; produce and
+execute wallet terminal payouts first` names each index in turn; market 1 needed
+four. Three paid **zero** and one paid **500,000,000** — the certificate selected
+cell 1, and the payouts agree with it:
+
+| index | signature | payout | CU |
+| ---: | --- | ---: | ---: |
+| 0 | `2R3e5YoZa44HhgekfRA3aiAe3VAnKLxiPfsFguvbo58mDYbd46r6TJqwSezxPSdPG8DSrVtSiapkbgNMidgL9cDT` | **0** | 165,591 |
+| **1** | `5ktVXiodjkHt5VkJKycTr9c4wqTCfMKyHwxyPym8Br9hhmbx5b7MQMyMQjdCRBaTrbMGqRzKAU9LmVLoHDynxLue` | **500,000,000** | 235,003 |
+| 2 | `3LLhLeiuPRX3W74j7FMowXtZ4w6vQyCFoE68aMwrzGVumQuoKZmrXX7KcMzykFHUM39fBGrPUaebYAYwuA23ZGDq` | 0 | — |
+| 3 | `MNFkHGPeXoijgYD6dxz3RRjxLqNmo6JaWJ19RCkk6tQDezCzDmepJQAJMtgWomU2UAZtkfcKaAdJrCZhn8YdPk7` | 0 | — |
+
+`core-begin-retiring` and `direct-begin-retiring` then landed and the Market's
+phase byte at offset 10 reads **3, Retiring**, off the chain. That is
+`direct_begin_retiring_v1` driven on a public cluster for the first time.
+
+### The Clock is not a prestate
+
+`resolution-receipt-prepay` refused eight consecutive plan-then-execute passes
+with `terminal finalized prestate changed after durable planning`. Diffing the
+eight preserved plans account by account: exactly one moved across all of them,
+`SysvarC1ock11111111111111111111111111111111`, observation slot 492,898,149 to
+492,900,125, everything else byte-identical. The Clock is in that stage's frame,
+so it lands in the durable prestate map, and its bytes change every slot by
+construction — no plan can bind it, and the stage was structurally unreachable.
+Presence is still required; the equality is not. The stage advanced immediately
+after.
+
+### `Resolution CloseFund: Funding`, and why retirement is not a second wall
+
+The sequence then stops at `ResolutionCoreOperatorErrorV3::Funding` — a code
+whose own documentation covers *"funding state, manifest binding, or physical
+custody"* and which is raised from two `_ =>` catch-alls
+(`resolution-core-v3-operator/src/lib.rs:2558`, `:3456`). It is the idiom
+`AGENTS.md` names as the most expensive in this tree, and localizing it needs the
+inner distinction surfaced, not a retry.
+
+`devnet-aggregate-retirement-v1` refuses separately with `checkpoint
+AggregateRetirement: Market`, which is another ten-site coarse code. **They are
+one wall.** Read off the chain rather than inferred: market 1's
+`outstanding_capabilities` at CoreState offset 280 is **1**, and the conjunction
+at `market-retirement-v1-operator/src/lib.rs:751` requires **0**. The capability
+is retired by the rest of the terminal sequence. Retirement is downstream of
+CloseFund, and CloseFund is the whole remedy.

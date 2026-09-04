@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import { REFUSAL_BANDS_V1, REFUSAL_BAND_SPAN } from './generated/refusalBandsV1';
-import type { RefusalBandV1 } from './generated/refusalBandsV1';
 import { REFUSAL_CODES_V1 } from './generated/refusalRegistryV1';
 import { customCodeFromTransactionError, refusalBand, refusalCode, releaseSupersededMeaningV1, renderRefusal } from './refusals';
 
