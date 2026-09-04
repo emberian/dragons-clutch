@@ -432,7 +432,11 @@ SCHEMA_OWNERS: tuple[tuple[str, str], ...] = (
     ("RESOLUTION_TABLE_SCHEMA", f"{SUCCESSOR}/flagship_resolution.rs"),
     ("RESOLUTION_INPUT_SCHEMA", f"{SUCCESSOR}/flagship_resolution.rs"),
     ("RESOLUTION_CHECKPOINT_SCHEMA", f"{SUCCESSOR}/flagship_resolution.rs"),
-    ("PAYOUT_INPUT_SCHEMA", f"{SUCCESSOR}/terminal_lifecycle.rs"),
+    # The successor DESERIALIZES this one (`wallet_terminal.rs` reads a
+    # `PlanInputV1` off disk) and names it only inside a usage blurb, which a
+    # substring check accepted for as long as the blurb existed. The wire crate
+    # below is where it is declared.
+    ("PAYOUT_INPUT_SCHEMA", "crates/dclutch-wallet-terminal-payout-operator/src/wire.rs"),
     ("PAYOUT_EVIDENCE_SCHEMA", f"{SUCCESSOR}/wallet_terminal_payout_exterior.rs"),
     ("TERMINAL_SESSION_SCHEMA", f"{SUCCESSOR}/terminal_sequence.rs"),
     ("TERMINAL_JOURNAL_SCHEMA", f"{SUCCESSOR}/terminal_sequence.rs"),
@@ -696,6 +700,17 @@ def rust_usize(source: str, name: str, label: str) -> int:
     return int(matches[0].replace("_", ""))
 
 
+def rust_str_const(source: str, name: str, label: str) -> str:
+    matches = re.findall(
+        rf"(?m)^\s*(?:pub(?:\([a-z]+\))?\s+)?const\s+{re.escape(name)}"
+        rf"\s*:\s*&(?:'static\s+)?str\s*=\s*(?:\r?\n\s*)?\"([^\"]*)\"\s*;",
+        source,
+    )
+    if len(matches) != 1 or not matches[0]:
+        raise Refusal(f"{label} must own exactly one non-empty &str {name}")
+    return matches[0]
+
+
 def require_fragments(source: str, fragments: Iterable[str], label: str) -> None:
     missing = [fragment for fragment in fragments if fragment not in source]
     if missing:
@@ -856,16 +871,85 @@ def validate_exposures(repo: Path, constants: dict[str, Any], through: str) -> l
     ]
 
 
-def validate_schemas(repo: Path, constants: dict[str, Any]) -> list[dict[str, str]]:
+def runner_schema_derivations(source: str) -> dict[str, tuple[str, str]]:
+    """Which Rust constant each runner schema name says it is read from.
+
+    Every accepted row is a top-level ``NAME = rust_schema_constant(dir, file,
+    CONST)``. An assignment in any other shape -- above all a plain string
+    literal -- is not a derivation and is simply absent from this map, which is
+    what `validate_schemas` refuses on.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as error:
+        raise Refusal(f"private lifecycle runner is not valid Python: {error}") from error
+    values = python_constants(source)
+    found: dict[str, tuple[str, str]] = {}
+    for row in tree.body:
+        if not (
+            isinstance(row, ast.Assign)
+            and len(row.targets) == 1
+            and isinstance(row.targets[0], ast.Name)
+            and isinstance(row.value, ast.Call)
+            and isinstance(row.value.func, ast.Name)
+            and row.value.func.id == "rust_schema_constant"
+        ):
+            continue
+        if row.value.keywords or len(row.value.args) != 3:
+            raise Refusal(
+                f"runner {row.targets[0].id} calls rust_schema_constant with an "
+                "unreadable argument list"
+            )
+        try:
+            directory, file_name, constant = (
+                _python_value(argument, values) for argument in row.value.args
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise Refusal(
+                f"runner {row.targets[0].id} names a schema owner this reader "
+                f"cannot resolve: {error}"
+            ) from error
+        if not all(isinstance(part, str) and part for part in (directory, file_name, constant)):
+            raise Refusal(f"runner {row.targets[0].id} names an empty schema owner")
+        found[row.targets[0].id] = (f"{directory}/{file_name}", constant)
+    return found
+
+
+def validate_schemas(repo: Path, runner_source: str) -> list[dict[str, str]]:
+    """The runner reads each shared schema from the Rust; this checks the wiring.
+
+    It used to compare a Python copy of the string against its owner file, and
+    that is the check whose absence of a copy now makes it unnecessary: the value
+    has one author. What is left to go wrong is the WIRING -- the runner reading
+    a file that is not the semantic owner, the owner declaring the constant twice
+    or not at all, or a derivation quietly reverting to a literal -- and each of
+    those is refused here by name.
+    """
+    derivations = runner_schema_derivations(runner_source)
     report = []
     for name, owner in SCHEMA_OWNERS:
-        value = constants.get(name)
-        if not isinstance(value, str) or not value:
-            raise Refusal(f"runner omitted schema constant {name}")
-        source = read_source(repo, owner)
-        if value not in source:
-            raise Refusal(f"runner {name} differs from semantic owner {owner}")
-        report.append({"runner_constant": name, "schema": value, "owner": owner})
+        declared = derivations.get(name)
+        if declared is None:
+            raise Refusal(
+                f"runner {name} is not read from its semantic owner {owner}; a "
+                "restated schema string is a second author for a value that has one"
+            )
+        declared_owner, constant = declared
+        if declared_owner != owner:
+            raise Refusal(
+                f"runner {name} reads {declared_owner}, not semantic owner {owner}"
+            )
+        value = rust_str_const(read_source(repo, owner), constant, owner)
+        if not value.startswith("dclutch-"):
+            raise Refusal(f"{owner} {constant} is not a dclutch schema string")
+        report.append(
+            {
+                "runner_constant": name,
+                "schema": value,
+                "owner": owner,
+                "owner_constant": constant,
+            }
+        )
     return report
 
 
@@ -1356,7 +1440,7 @@ def run_preflight(
         constants = python_constants(runner_source)
         constant_report = validate_constants(constants)
         exposures = validate_exposures(repo, constants, through)
-        schemas = validate_schemas(repo, constants)
+        schemas = validate_schemas(repo, runner_source)
         vocabulary = validate_stage_vocabulary(repo)
         founding = validate_founding_geometry(repo, constants)
         geometry = validate_geometry_and_state(repo)

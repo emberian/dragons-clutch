@@ -117,6 +117,19 @@ class OfflinePreflightTests(unittest.TestCase):
         self.assertFalse(report["keys_read"])
         self.assertFalse(report["build_run"])
         self.assertEqual(len(report["model_sha256"]), 64)
+        # Every shared schema is DERIVED, and all sixteen rows survive the walk.
+        # The values are deliberately not restated here: a test that spells the
+        # string is the copy this fix deleted, one layer out.
+        self.assertEqual(
+            [row["runner_constant"] for row in report["schema_handoffs"]],
+            [name for name, _ in preflight.SCHEMA_OWNERS],
+        )
+        self.assertTrue(
+            all(
+                row["schema"].startswith("dclutch-") and row["owner_constant"]
+                for row in report["schema_handoffs"]
+            )
+        )
 
     def test_participant_mode_excludes_terminal_commands_and_stages(self) -> None:
         report = preflight.run_preflight(self.repo, "participant")
@@ -165,13 +178,40 @@ class OfflinePreflightTests(unittest.TestCase):
         )
         self.assert_refuses("SourceAbort semantic owner")
 
-    def test_runner_owner_schema_drift_refuses(self) -> None:
+    def test_runner_restating_a_schema_string_refuses(self) -> None:
+        # The hostile this replaces bumped a Python copy of a schema string to v9
+        # and expected the copy/owner comparison to catch it. That comparison is
+        # gone because the copy is: what a runner can still do wrong is stop
+        # deriving. COHORT-15F/15G is why -- the terminal session went v1 to v3
+        # under a copy that stayed v1, and the parity refusal then landed ahead
+        # of every other contract, so fifteen failures and three errors here all
+        # named a check none of them was about.
         self.mutate(
             preflight.RUNNER,
-            'DIRECT_FINALIZED_SCHEMA = "dclutch-owned-loopback-direct-trade-finalized-v1"',
+            "DIRECT_FINALIZED_SCHEMA = rust_schema_constant(\n"
+            '    SUCCESSOR_SRC, "direct_trade.rs", "OWNED_EVIDENCE_SCHEMA_V1"\n'
+            ")",
             'DIRECT_FINALIZED_SCHEMA = "dclutch-owned-loopback-direct-trade-finalized-v9"',
         )
-        self.assert_refuses("DIRECT_FINALIZED_SCHEMA differs from semantic owner")
+        self.assert_refuses("DIRECT_FINALIZED_SCHEMA is not read from its semantic owner")
+
+    def test_runner_reading_an_absent_owner_constant_refuses(self) -> None:
+        self.mutate(
+            preflight.RUNNER,
+            '"terminal_sequence.rs", "OWNED_LOOPBACK_TERMINAL_SESSION_SCHEMA_V1"',
+            '"terminal_sequence.rs", "OWNED_LOOPBACK_TERMINAL_SESSION_SCHEMA_V9"',
+        )
+        self.assert_refuses(
+            "must own exactly one non-empty &str OWNED_LOOPBACK_TERMINAL_SESSION_SCHEMA_V9"
+        )
+
+    def test_runner_reading_the_wrong_owner_file_refuses(self) -> None:
+        self.mutate(
+            preflight.RUNNER,
+            'SUCCESSOR_SRC, "terminal_sequence.rs", "OWNED_LOOPBACK_TERMINAL_SESSION_SCHEMA_V1"',
+            'SUCCESSOR_SRC, "market.rs", "OWNED_LOOPBACK_TERMINAL_SESSION_SCHEMA_V1"',
+        )
+        self.assert_refuses("TERMINAL_SESSION_SCHEMA reads .*market.rs, not semantic owner")
 
     def test_private_activity_old_retirement_consumer_refuses(self) -> None:
         self.mutate(

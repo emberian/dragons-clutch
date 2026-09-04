@@ -4753,3 +4753,11 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   omissions, the freeze deadline, the per-batch selection, the seller's floor); RELEASE-REDS (test_preflight, the stale
   rent hostile, the cohort-16 README heading).
 - Cuts: `6963de51c`.
+- BOND closed (`86d38a203`, `9365be226`; MECHANISM_FOUNDER_BOND note + `FounderBondV1.lean`, 34 theorems, 0 sorry): the bond
+  B = seat prepay + first-crank shortfall + Σ rung bounties at the founding's RECORDED rate — **cohort-15: 4,031,465
+  lamports = 0.004 SOL, 1.75% of a market lane**, decided in Lean; no compartment — the bond holds no atom, its law is L7,
+  its account is the failure escrow's own; exact pro-rata redemption over any partition in any order (last draws the rest);
+  the bond leaves by exactly one exit, never while live; the bond does NOT repay the opener's first crank (0024 item 3
+  stands). Cohort-17 (founding frame, payout frame, close route). Question for ember: mandatory at the size rule, or a
+  founder's choice the page derives from the escrow's lamports.
+- Cuts: `80fd54186`, `26683ee71`.

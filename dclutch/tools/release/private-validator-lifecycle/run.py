@@ -130,34 +130,14 @@ FINAL_LIFECYCLE_DESCRIPTOR_ROLES = (
     "activity-session",
     "chaos-session",
 )
-DIRECT_PRODUCER_SCHEMA = "dclutch-owned-loopback-direct-trade-producer-receipt-v1"
-DIRECT_FINALIZED_SCHEMA = "dclutch-owned-loopback-direct-trade-finalized-v1"
-DIRECT_PAYOUT_SCHEDULE_SCHEMA = "dclutch-owned-loopback-direct-payout-schedule-v1"
+# The four schema strings below are the ones this runner does not read from a
+# Rust `const`, because their owners spell them inline in a `json!` body and
+# there is nothing to read. Every other schema this runner shares with the Rust
+# exterior is derived, further down, from the owner that declares it.
 DIRECT_FEE_SETTLEMENT_SCHEMA = "dclutch-direct-fee-settlement-evidence-v1"
 DIRECT_TERMINAL_CHILDREN_SCHEMA = "dclutch-owned-loopback-direct-terminal-children-v1"
 USER_POSITION_CLOSE_SCHEMA = "dclutch-user-position-close-evidence-v1"
 DIRECT_CLOSE_MAKER_SCHEMA = "dclutch-direct-close-maker-evidence-v1"
-PYTH_JOURNAL_SCHEMA = "dclutch-owned-loopback-pyth-prerequisite-transaction-v1"
-RESOLUTION_PRODUCER_SCHEMA = "dclutch-owned-loopback-flagship-resolution-producer-v1"
-RESOLUTION_TABLE_SCHEMA = "dclutch-owned-loopback-flagship-resolution-alt-journal-v3"
-RESOLUTION_INPUT_SCHEMA = "dclutch-owned-loopback-flagship-resolution-input-v1"
-RESOLUTION_CHECKPOINT_SCHEMA = (
-    "dclutch-owned-loopback-flagship-resolution-checkpoint-v3"
-)
-PAYOUT_INPUT_SCHEMA = "dclutch-wallet-terminal-payout-plan-input-v1"
-PAYOUT_EVIDENCE_SCHEMA = (
-    "dclutch-local-private-validator-wallet-terminal-payout-evidence-v1"
-)
-TERMINAL_SESSION_SCHEMA = "dclutch-owned-loopback-terminal-sequence-session-v1"
-TERMINAL_JOURNAL_SCHEMA = "dclutch-owned-loopback-terminal-sequence-journal-v1"
-TERMINAL_COMPLETION_SCHEMA = (
-    "dclutch-owned-loopback-aggregate-retirement-completion-v1"
-)
-TERMINAL_CAMPAIGN_SCHEMA = "dclutch-owned-loopback-aggregate-retirement-campaign-v1"
-TERMINAL_AGGREGATE_JOURNAL_SCHEMA = (
-    "dclutch-owned-loopback-aggregate-retirement-journal-v1"
-)
-TERMINAL_PROGRESS_SCHEMA = "dclutch-owned-loopback-aggregate-retirement-progress-v1"
 TERMINAL_AGGREGATE_OPERATIONS = (
     "prepare",
     "close-vault",
@@ -310,6 +290,126 @@ BANISHED_RESOLUTION_ELF_BYTES = 9_034_536
 
 class Refusal(RuntimeError):
     """A fail-closed release refusal with a stable operator-facing reason."""
+
+
+# ---------------------------------------------------------------------------
+# The schema strings this runner shares with the Rust exterior, READ FROM THE
+# RUST that declares them.
+#
+# They used to be Python literals here, with `preflight.py` comparing each
+# against its owner file to catch the drift that arrangement invites. The
+# comparison worked; it just could not be right in advance. COHORT-15F/15G took
+# the terminal session from v1 to v3 -- v2 when the session began recording the
+# rent rate it was funded at, v3 when it began recording the ComputeBudget
+# limits its driver declares -- and the copy here stayed v1. The parity check
+# then refused BEFORE every other contract the preflight states, so ONE stale
+# string read as fifteen failures and three errors in `test_preflight.py`, not
+# one of which was about that string.
+#
+# A copy plus a checker is two authors, and one of them is always about to be
+# wrong. The value now has exactly one author: the Rust `const` that also writes
+# it into the artifact this runner then reads back. What the preflight checks is
+# the WIRING -- that this file names the owner the preflight independently
+# expects, and that the owner declares that constant exactly once. The path is
+# cross-checked because a path is stable; the version-suffixed string is not
+# restated at all, because it is not.
+SUCCESSOR_SRC = "tools/local-validator/bootstrap/successor/src"
+WALLET_TERMINAL_PAYOUT_OPERATOR_SRC = "crates/dclutch-wallet-terminal-payout-operator/src"
+
+
+def rust_schema_constant(directory: str, file_name: str, constant: str) -> str:
+    """One Rust `&str` constant, read from the file that declares it.
+
+    Resolved against the tree this runner is executing from, which
+    `authenticate_offline_preflight` already pins to `--repo`: it refuses with
+    "executing lifecycle runner is outside the clean target source" when the two
+    differ, so there is no second tree for this read to disagree with.
+
+    Exactly one declaration is accepted. Zero means the constant was renamed or
+    the owner moved; two means the file has stopped having one answer -- and a
+    runner that guessed between them would be back to holding an opinion about a
+    value it does not own.
+    """
+    path = Path(__file__).resolve().parents[3] / directory / file_name
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise Refusal(
+            f"cannot read schema owner {directory}/{file_name}: {error}"
+        ) from error
+    matches = re.findall(
+        r"(?m)^\s*(?:pub(?:\([a-z]+\))?\s+)?const\s+"
+        + re.escape(constant)
+        + r"\s*:\s*&(?:'static\s+)?str\s*=\s*(?:\r?\n\s*)?\"([^\"]*)\"\s*;",
+        source,
+    )
+    if len(matches) != 1 or not matches[0]:
+        raise Refusal(
+            f"{directory}/{file_name} must declare exactly one non-empty &str "
+            f"{constant}; found {len(matches)}"
+        )
+    return matches[0]
+
+
+DIRECT_PRODUCER_SCHEMA = rust_schema_constant(
+    SUCCESSOR_SRC, "direct_trade_producer.rs", "OWNED_PRODUCER_RECEIPT_SCHEMA_V1"
+)
+DIRECT_FINALIZED_SCHEMA = rust_schema_constant(
+    SUCCESSOR_SRC, "direct_trade.rs", "OWNED_EVIDENCE_SCHEMA_V1"
+)
+DIRECT_PAYOUT_SCHEDULE_SCHEMA = rust_schema_constant(
+    SUCCESSOR_SRC, "private_lifecycle.rs", "DIRECT_PAYOUT_SCHEDULE_SCHEMA_V1"
+)
+PYTH_JOURNAL_SCHEMA = rust_schema_constant(
+    SUCCESSOR_SRC, "terminal_exterior_pyth.rs", "JOURNAL_SCHEMA_V1"
+)
+RESOLUTION_PRODUCER_SCHEMA = rust_schema_constant(
+    SUCCESSOR_SRC, "flagship_resolution.rs", "LOCAL_PRODUCER_CHECKPOINT_FORMAT"
+)
+RESOLUTION_TABLE_SCHEMA = rust_schema_constant(
+    SUCCESSOR_SRC, "flagship_resolution.rs", "LOCAL_TABLE_PROVISION_JOURNAL_FORMAT"
+)
+RESOLUTION_INPUT_SCHEMA = rust_schema_constant(
+    SUCCESSOR_SRC, "flagship_resolution.rs", "LOCAL_INPUT_FORMAT"
+)
+RESOLUTION_CHECKPOINT_SCHEMA = rust_schema_constant(
+    SUCCESSOR_SRC, "flagship_resolution.rs", "LOCAL_CHECKPOINT_FORMAT"
+)
+# The payout plan input is the one schema on this list whose owner is not the
+# successor crate. The successor DESERIALIZES it (`wallet_terminal.rs` takes a
+# `PlanInputV1` off disk); the crate below is where the wire declares its own
+# name, and where the browser that produces one reads it from.
+PAYOUT_INPUT_SCHEMA = rust_schema_constant(
+    WALLET_TERMINAL_PAYOUT_OPERATOR_SRC, "wire.rs", "INPUT_FORMAT"
+)
+PAYOUT_EVIDENCE_SCHEMA = rust_schema_constant(
+    SUCCESSOR_SRC, "wallet_terminal_payout_exterior.rs", "EVIDENCE_SCHEMA_V1"
+)
+TERMINAL_SESSION_SCHEMA = rust_schema_constant(
+    SUCCESSOR_SRC, "terminal_sequence.rs", "OWNED_LOOPBACK_TERMINAL_SESSION_SCHEMA_V1"
+)
+TERMINAL_JOURNAL_SCHEMA = rust_schema_constant(
+    SUCCESSOR_SRC, "terminal_sequence.rs", "OWNED_LOOPBACK_TERMINAL_JOURNAL_SCHEMA_V1"
+)
+TERMINAL_COMPLETION_SCHEMA = rust_schema_constant(
+    SUCCESSOR_SRC,
+    "aggregate_retirement_journal.rs",
+    "AGGREGATE_RETIREMENT_COMPLETION_SCHEMA_V1",
+)
+TERMINAL_CAMPAIGN_SCHEMA = rust_schema_constant(
+    SUCCESSOR_SRC,
+    "aggregate_retirement_journal.rs",
+    "AGGREGATE_RETIREMENT_CAMPAIGN_SCHEMA_V1",
+)
+TERMINAL_AGGREGATE_JOURNAL_SCHEMA = rust_schema_constant(
+    SUCCESSOR_SRC,
+    "aggregate_retirement_journal.rs",
+    "AGGREGATE_RETIREMENT_JOURNAL_SCHEMA_V1",
+)
+TERMINAL_PROGRESS_SCHEMA = rust_schema_constant(
+    SUCCESSOR_SRC, "aggregate_retirement_exterior.rs", "PROGRESS_SCHEMA_V1"
+)
+# ---------------------------------------------------------------------------
 
 
 @dataclasses.dataclass(frozen=True)
