@@ -315,12 +315,32 @@ fn require_terminal_composition_evidence(evidence: &CampaignTerminalEvidenceV1) 
     Ok(())
 }
 
-/// Accounts the Direct exterior creates permissionlessly ON FIRST USE.
+/// Accounts a founded Direct market acquires AFTER its founding campaign.
 ///
-/// Since f581af6b made the Direct exterior callable, nothing at founding
-/// creates these two: the first trade does. Their ADDRESSES are known at
-/// founding and are carried in the checkpoint, but no account exists to
-/// collect evidence from until the route that creates them has run.
+/// The name is older than the measurement, and the measurement corrects it.
+/// Read off devnet on 2026-09-04, from cohort-15's first market
+/// `3QytL1bBMtCvRoXWR5h7MgutRBZqtv7emUVubEo5a4T2`, which has never traded:
+///
+/// * `direct_trading_funding_ledger` `J4nR8mhJ...` was created by the FOUNDING
+///   campaign at slot 492,763,282 -- `3brogqWJ...`, top-level program Trading,
+///   its lamports 0 -> 4,002,456. The first trade did not create it.
+/// * the ACTIVATION at slot 492,765,919 -- `zrLHfHLX...`, top-level program
+///   Core -- debited that same ledger to 1,570,584, carrying its parked rent
+///   quote out, and created the execution capability root `FUJ9pNuk...` in the
+///   same transaction. That is what `ADVANCEABLE_FOUNDING_LABELS_V1` means by
+///   "Activation carries the parked rent quote out of it".
+///
+/// So the pair is real and the cause is not the first trade. And the label
+/// `direct_capability_root` means the EXECUTION root here, which only an
+/// evidence refresh emits (`evidence_refresh::DIRECT_EXECUTION_ROOT_LABEL_V1`)
+/// and the founding campaign never does: the checkpoint scalar of the same
+/// name is the founding-permit address at which no account can ever exist.
+///
+/// The pairing rule is kept, because half a set is still a dropped
+/// observation. OWED, and named rather than quietly fixed: for a market
+/// founded and never activated the ledger is present and the root cannot be,
+/// so `present.is_empty()` is unreachable and such a market cannot satisfy
+/// this check at all. No market has yet needed to retire from that state.
 const DIRECT_FIRST_USE_LABELS_V1: [&str; 2] =
     ["direct_capability_root", "direct_trading_funding_ledger"];
 

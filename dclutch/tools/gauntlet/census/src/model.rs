@@ -102,6 +102,25 @@ pub struct Route {
     /// unite before they intersect with the rest.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub admissible_prestates: Vec<PhaseAdmission>,
+    /// Gates that lie behind a SELECTION this route makes, which the route as
+    /// a whole therefore does not pass.
+    ///
+    /// One route may be the entry for several families. Trading's
+    /// `process_hot_execution_v3` is the whole Hot surface -- Direct, General,
+    /// Dealer and Series all arrive on `DCLTHOT3` -- and each family's own
+    /// prelude declines the others by returning a non-error before it reads
+    /// anything. The Series ticket's `Prepared` set really is enforced on that
+    /// route, and it is not a necessary condition OF the route: a General plan
+    /// never reaches the function that checks it. Written into
+    /// `admissible_prestates` it would tell four acts they need a ticket
+    /// nobody in their execution has, which is exactly the false READY TO
+    /// PREFLIGHT the phase gates were built to remove, inverted.
+    ///
+    /// So the census carries it here instead, with the classifier that selects
+    /// it named in each entry's `selected_by`. A consumer may publish one of
+    /// these only against an execution it can show takes that selection.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selected_prestates: Vec<PhaseAdmission>,
 }
 
 /// One named admissible-prestate constant, as the guard declares it.
@@ -142,6 +161,16 @@ pub struct PhaseAdmission {
     /// admits three phases reads as admitting none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alternative: Option<u32>,
+    /// The classifier whose selection this gate is behind, for an entry in
+    /// [`Route::selected_prestates`]. `None` on every necessary gate.
+    ///
+    /// It is the function that DECLINES: `hot_v3::try_authenticate_series_
+    /// expiry_premarket_v1` returns `Ok(None)` for a request that is not a
+    /// Series Expire, so everything past that point is the Expire family's
+    /// alone. Naming it is what lets a consumer decide whether its own
+    /// execution is inside the selection instead of guessing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_by: Option<String>,
 }
 
 /// Whether a constant names exact prestates or whole phases.

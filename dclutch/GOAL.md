@@ -4282,3 +4282,11 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Started 01:20 EDT: WEB-SUCCESSOR **`adf0b6d1fd9ea1532`** (DCLTSRS1/DCLTCFS1 decoders with zero live instances — dead or
   producer-missing, decided by reading; the client's magics swept against both cohorts) and LEAN-TAGS **`ab1397843061a83c5`**
   (Lean owners for the four machines' tags; emission census 96 → 100; the SDK generator's Rust-scrape arm retired).
+- WEB-SUCCESSOR closed (`3d41f8f85`): DCLTSRS1 is a superseded generation (seven writers, all in its own tests);
+  DCLTCFS1 is the producer-missing pattern one level up — its one allocator `stage_pending_funding` has no caller, links
+  into the Trading ELF, and GENERIC_FOUNDING_REACHABILITY already named it structural while core-sbf still reads the record;
+  DCLTCAT1/DCLTROOT were a full layout for a record with no declaration anywhere (a5e16cd6's banishment missed this copy).
+  `localSuccessor.ts` 4 magics / 23 offsets → 1 / 16; the committed checkpoint refuses as SupersededRecordGeneration by the
+  magic read from its bytes. Sweep: 84 client magics — ~49 live, 8 dead, 27 undecided. Owed → WEB-DEAD **`(spawned)`**:
+  DCLTPOS1's explorer arm, DCSRCER1, the magic census counts only DCLT/DCLR prefixes.
+- Cuts: `646fe0ba5`, `465735155`.

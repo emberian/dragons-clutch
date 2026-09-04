@@ -695,6 +695,16 @@ function phaseGate(route, program) {
       const sel = r.selectors
         .map((s) => {
           if (s.kind === "magic") {
+            // A magic the census NAMED but could not evaluate. `4b2519c3a`
+            // began resolving a predicate selector to the magic its body
+            // compares, and three of Trading's do so through a constant this
+            // reader cannot fold, so the row carries the name and no bytes.
+            // Rendering the name is the honest cell; reading `.length` off it
+            // threw, and a generator that throws takes the whole reference
+            // down rather than one cell.
+            if (!s.bytes) {
+              return `magic \`${s.constant ?? "?"}\` (bytes unresolved)`;
+            }
             const bytes = [];
             for (let i = 0; i < s.bytes.length; i += 2) {
               bytes.push(parseInt(s.bytes.slice(i, i + 2), 16));
@@ -738,6 +748,49 @@ function phaseGate(route, program) {
 the current code. Each one is stale or a gap; it is listed here so it gets
 fixed rather than dropped.\n\n` +
       table(["reference", "bindings file", "binding label"], rows);
+  }
+
+  // Gates that are real, enforced, and NOT the route's own.
+  //
+  // One route may be the entry for several families -- Trading's
+  // `process_hot_execution_v3` is the whole Hot surface -- and each family's
+  // prelude declines the others by returning a non-error before it reads
+  // anything. What such a prelude gates is necessary to ITS family and to no
+  // other, so it cannot go in the phase column: written there it would tell
+  // four General and Dealer acts they need a Series ticket nobody in their
+  // execution has, which is the false READY TO PREFLIGHT the phase column
+  // exists to remove, inverted. It is printed here instead, with the
+  // classifier that selects it named, so a consumer may publish one only
+  // against an execution it can show takes that selection.
+  let selected = "";
+  const selectedRows = [];
+  for (const p of programs) {
+    for (const r of [...p.routes].sort((a, b) => (a.id < b.id ? -1 : 1))) {
+      for (const g of r.selected_prestates ?? []) {
+        const body =
+          g.prestates && g.prestates.length > 0
+            ? g.prestates.map((s) => `${s.phase}+${s.readiness}`).join(", ")
+            : g.phases.join(", ");
+        selectedRows.push([
+          `\`${r.id}\``,
+          `\`${g.selected_by}\``,
+          `\`${g.machine}: ${body}\``,
+          `\`${g.provenance}\``,
+        ]);
+      }
+    }
+  }
+  if (selectedRows.length > 0) {
+    selected =
+      `\n\n## Gates behind a selection\n\n` +
+      `These sets are enforced on the route named, and they are **not** that
+route's admissible prestates. The classifier column names the function that
+DECLINES -- it returns \`Ok(None)\` for a request outside its family, which is
+not a refusal -- so everything past it runs for one family alone. A consumer
+may check one of these only against an execution it can show reaches that
+classifier; against the route as a whole it states a condition three quarters
+of the route's callers do not have.\n\n` +
+      table(["route", "classifier", "set", "provenance"], selectedRows);
   }
 
   pages.set(
@@ -832,6 +885,7 @@ ${noMachine}
 ` +
       sections.join("\n\n") +
       unknown +
+      selected +
       "\n",
   );
 }

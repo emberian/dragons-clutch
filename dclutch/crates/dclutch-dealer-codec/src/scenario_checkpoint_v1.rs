@@ -26,14 +26,29 @@ use crate::{
     scenario_reservation_receipt_v1::DEALER_SCENARIO_MAX_RESERVATIONS_V1,
 };
 
-/// Maximum canonical preparation pages for one Dealer scenario.
-pub const DEALER_SCENARIO_PREPARATION_PAGES_V1: usize = 6;
 /// Exact checkpoint account-data width.
-pub const DEALER_SCENARIO_CHECKPOINT_BYTES_V1: usize = 944;
+pub use crate::generated_scenario_checkpoint_v1::DEALER_SCENARIO_CHECKPOINT_BYTES_V1;
 /// Canonical checkpoint magic.
-pub const DEALER_SCENARIO_CHECKPOINT_MAGIC_V1: [u8; 8] = *b"DCLTDSC1";
+pub use crate::generated_scenario_checkpoint_v1::DEALER_SCENARIO_CHECKPOINT_MAGIC_V1;
 /// Implemented checkpoint schema version.
-pub const DEALER_SCENARIO_CHECKPOINT_VERSION_V1: u16 = 1;
+pub use crate::generated_scenario_checkpoint_v1::DEALER_SCENARIO_CHECKPOINT_VERSION_V1;
+/// Maximum canonical preparation pages for one Dealer scenario.
+///
+/// Re-exported from the Lean emission rather than restated: this record's
+/// magic, width, version, five wire tags and every coordinate now have one
+/// author, `DClutchSemantics.DealerScenarioCheckpointV1Abi`.
+pub use crate::generated_scenario_checkpoint_v1::DEALER_SCENARIO_PREPARATION_PAGES_V1;
+
+/// The reservation receipt run's length is this record's, and the slot bound
+/// every reservation route checks is `scenario_reservation_receipt_v1`'s. They
+/// are the same number and neither file is the other's author, so this is what
+/// says so: the emitted run length is what makes the record 944 bytes wide, and
+/// if the two ever part a compiler says which.
+const _: () = assert!(
+    crate::generated_scenario_checkpoint_v1::DEALER_SCENARIO_CHECKPOINT_RESERVATION_SLOTS_V1
+        == DEALER_SCENARIO_MAX_RESERVATIONS_V1,
+    "the checkpoint's reservation receipt run stopped matching the reservation slot bound"
+);
 /// Trading PDA domain for one request-scoped checkpoint.
 pub const DEALER_SCENARIO_CHECKPOINT_PDA_DOMAIN_V1: &[u8] = b"dclutch:dealer-checkpoint:v1";
 
@@ -109,62 +124,78 @@ impl DealerScenarioPageBumpsV1 {
     }
 }
 
-const VERSION_OFFSET: usize = 8;
-const PHASE_OFFSET: usize = 10;
-const PAGE_COUNT_OFFSET: usize = 11;
-const NEXT_PAGE_OFFSET: usize = 12;
-const EFFECT_COUNT_OFFSET: usize = 13;
-const RESERVATION_COUNT_OFFSET: usize = 14;
-const ROLLBACK_COUNT_OFFSET: usize = 15;
-const REVISION_OFFSET: usize = 16;
-const GENERATION_OFFSET: usize = 24;
-const CREATED_SLOT_OFFSET: usize = 32;
-const EXPIRES_AT_OFFSET: usize = 40;
-const RELEASE_SET_OFFSET: usize = 48;
-const MARKET_OFFSET: usize = 80;
-const CHILD_ROOT_OFFSET: usize = 112;
-const OBLIGATION_OFFSET: usize = 144;
-const REFUND_BENEFICIARY_OFFSET: usize = 176;
-const REQUEST_DIGEST_OFFSET: usize = 208;
-const ROOT_PRESTATE_DIGEST_OFFSET: usize = 240;
-const CLAIMS_PRESTATE_DIGEST_OFFSET: usize = 272;
-const OBLIGATION_PRESTATE_DIGEST_OFFSET: usize = 304;
-const CUSTODY_PRESTATE_DIGEST_OFFSET: usize = 336;
-const LAST_CHECKPOINT_PRESTATE_DIGEST_OFFSET: usize = 368;
-const PAGE_RECEIPT_DIGESTS_OFFSET: usize = 400;
-const EVALUATION_RECEIPT_DIGEST_OFFSET: usize = 592;
-const CANDIDATE_BANK_DIGEST_OFFSET: usize = 624;
-const CANDIDATE_OBLIGATION_DIGEST_OFFSET: usize = 656;
-const CLAIMS_DELTA_DIGEST_OFFSET: usize = 688;
-const EFFECTS_DIGEST_OFFSET: usize = 720;
-const MEMBERSHIP_MANIFEST_DIGEST_OFFSET: usize = 752;
-const LAST_MEMBERSHIP_KEY_OFFSET: usize = 784;
-const RESERVATION_RECEIPT_DIGESTS_OFFSET: usize = 816;
+/// Every coordinate in this record, under the short local names its
+/// encoder and hostile decoder have always used.
+///
+/// The block this replaces was thirty-one file-private `const *_OFFSET:
+/// usize` declarations -- a second offset table that agreed with the record
+/// only by inspection. `DClutchSemantics.DealerScenarioCheckpointV1Abi`
+/// places them, so the aliases below carry a derived number rather than a
+/// typed one and every call site reads exactly as it did.
+use crate::generated_scenario_checkpoint_v1::{
+    DEALER_SCENARIO_CHECKPOINT_CANDIDATE_BANK_DIGEST_OFFSET_V1 as CANDIDATE_BANK_DIGEST_OFFSET,
+    DEALER_SCENARIO_CHECKPOINT_CANDIDATE_OBLIGATION_DIGEST_OFFSET_V1 as CANDIDATE_OBLIGATION_DIGEST_OFFSET,
+    DEALER_SCENARIO_CHECKPOINT_CHILD_ROOT_OFFSET_V1 as CHILD_ROOT_OFFSET,
+    DEALER_SCENARIO_CHECKPOINT_CLAIMS_DELTA_DIGEST_OFFSET_V1 as CLAIMS_DELTA_DIGEST_OFFSET,
+    DEALER_SCENARIO_CHECKPOINT_CLAIMS_PRESTATE_DIGEST_OFFSET_V1 as CLAIMS_PRESTATE_DIGEST_OFFSET,
+    DEALER_SCENARIO_CHECKPOINT_CREATED_SLOT_OFFSET_V1 as CREATED_SLOT_OFFSET,
+    DEALER_SCENARIO_CHECKPOINT_CUSTODY_PRESTATE_DIGEST_OFFSET_V1 as CUSTODY_PRESTATE_DIGEST_OFFSET,
+    DEALER_SCENARIO_CHECKPOINT_EFFECT_COUNT_OFFSET_V1 as EFFECT_COUNT_OFFSET,
+    DEALER_SCENARIO_CHECKPOINT_EFFECTS_DIGEST_OFFSET_V1 as EFFECTS_DIGEST_OFFSET,
+    DEALER_SCENARIO_CHECKPOINT_EVALUATION_RECEIPT_DIGEST_OFFSET_V1 as EVALUATION_RECEIPT_DIGEST_OFFSET,
+    DEALER_SCENARIO_CHECKPOINT_EXPIRES_AT_OFFSET_V1 as EXPIRES_AT_OFFSET,
+    DEALER_SCENARIO_CHECKPOINT_GENERATION_OFFSET_V1 as GENERATION_OFFSET,
+    DEALER_SCENARIO_CHECKPOINT_LAST_MEMBERSHIP_KEY_OFFSET_V1 as LAST_MEMBERSHIP_KEY_OFFSET,
+    DEALER_SCENARIO_CHECKPOINT_LAST_PRESTATE_DIGEST_OFFSET_V1 as LAST_CHECKPOINT_PRESTATE_DIGEST_OFFSET,
+    DEALER_SCENARIO_CHECKPOINT_MAGIC_OFFSET_V1 as MAGIC_OFFSET,
+    DEALER_SCENARIO_CHECKPOINT_MARKET_OFFSET_V1 as MARKET_OFFSET,
+    DEALER_SCENARIO_CHECKPOINT_MEMBERSHIP_MANIFEST_DIGEST_OFFSET_V1 as MEMBERSHIP_MANIFEST_DIGEST_OFFSET,
+    DEALER_SCENARIO_CHECKPOINT_NEXT_PAGE_OFFSET_V1 as NEXT_PAGE_OFFSET,
+    DEALER_SCENARIO_CHECKPOINT_OBLIGATION_OFFSET_V1 as OBLIGATION_OFFSET,
+    DEALER_SCENARIO_CHECKPOINT_OBLIGATION_PRESTATE_DIGEST_OFFSET_V1 as OBLIGATION_PRESTATE_DIGEST_OFFSET,
+    DEALER_SCENARIO_CHECKPOINT_PAGE_COUNT_OFFSET_V1 as PAGE_COUNT_OFFSET,
+    DEALER_SCENARIO_CHECKPOINT_PAGE_RECEIPT_DIGESTS_OFFSET_V1 as PAGE_RECEIPT_DIGESTS_OFFSET,
+    DEALER_SCENARIO_CHECKPOINT_PHASE_OFFSET_V1 as PHASE_OFFSET,
+    DEALER_SCENARIO_CHECKPOINT_REFUND_BENEFICIARY_OFFSET_V1 as REFUND_BENEFICIARY_OFFSET,
+    DEALER_SCENARIO_CHECKPOINT_RELEASE_SET_OFFSET_V1 as RELEASE_SET_OFFSET,
+    DEALER_SCENARIO_CHECKPOINT_REQUEST_DIGEST_OFFSET_V1 as REQUEST_DIGEST_OFFSET,
+    DEALER_SCENARIO_CHECKPOINT_RESERVATION_COUNT_OFFSET_V1 as RESERVATION_COUNT_OFFSET,
+    DEALER_SCENARIO_CHECKPOINT_RESERVATION_RECEIPT_DIGESTS_OFFSET_V1 as RESERVATION_RECEIPT_DIGESTS_OFFSET,
+    DEALER_SCENARIO_CHECKPOINT_REVISION_OFFSET_V1 as REVISION_OFFSET,
+    DEALER_SCENARIO_CHECKPOINT_ROLLBACK_COUNT_OFFSET_V1 as ROLLBACK_COUNT_OFFSET,
+    DEALER_SCENARIO_CHECKPOINT_ROOT_PRESTATE_DIGEST_OFFSET_V1 as ROOT_PRESTATE_DIGEST_OFFSET,
+    DEALER_SCENARIO_CHECKPOINT_VERSION_OFFSET_V1 as VERSION_OFFSET,
+};
+use crate::generated_scenario_checkpoint_v1::{
+    DEALER_SCENARIO_CHECKPOINT_PHASE_COLLECTING_V1, DEALER_SCENARIO_CHECKPOINT_PHASE_COMMITTED_V1,
+    DEALER_SCENARIO_CHECKPOINT_PHASE_EVALUATED_V1, DEALER_SCENARIO_CHECKPOINT_PHASE_RESERVED_V1,
+    DEALER_SCENARIO_CHECKPOINT_PHASE_ROLLING_BACK_V1,
+};
 
 /// Durable checkpoint phase.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DealerScenarioCheckpointPhaseV1 {
     /// Authenticated page receipts are still being collected.
-    Collecting = 1,
+    Collecting = DEALER_SCENARIO_CHECKPOINT_PHASE_COLLECTING_V1,
     /// One admitted evaluation sealed the candidate and effect commitments.
-    Evaluated = 2,
+    Evaluated = DEALER_SCENARIO_CHECKPOINT_PHASE_EVALUATED_V1,
     /// Every selected Custody effect has a durable reservation receipt.
-    Reserved = 3,
+    Reserved = DEALER_SCENARIO_CHECKPOINT_PHASE_RESERVED_V1,
     /// Expired reservations are being released in reverse order.
-    RollingBack = 4,
+    RollingBack = DEALER_SCENARIO_CHECKPOINT_PHASE_ROLLING_BACK_V1,
     /// Claims and obligation liabilities committed against locked Custody value.
-    Committed = 5,
+    Committed = DEALER_SCENARIO_CHECKPOINT_PHASE_COMMITTED_V1,
 }
 
 impl DealerScenarioCheckpointPhaseV1 {
     fn decode(value: u8) -> CheckpointResultV1<Self> {
         match value {
-            1 => Ok(Self::Collecting),
-            2 => Ok(Self::Evaluated),
-            3 => Ok(Self::Reserved),
-            4 => Ok(Self::RollingBack),
-            5 => Ok(Self::Committed),
+            DEALER_SCENARIO_CHECKPOINT_PHASE_COLLECTING_V1 => Ok(Self::Collecting),
+            DEALER_SCENARIO_CHECKPOINT_PHASE_EVALUATED_V1 => Ok(Self::Evaluated),
+            DEALER_SCENARIO_CHECKPOINT_PHASE_RESERVED_V1 => Ok(Self::Reserved),
+            DEALER_SCENARIO_CHECKPOINT_PHASE_ROLLING_BACK_V1 => Ok(Self::RollingBack),
+            DEALER_SCENARIO_CHECKPOINT_PHASE_COMMITTED_V1 => Ok(Self::Committed),
             _ => Err(DealerScenarioCheckpointErrorV1::Phase),
         }
     }
@@ -409,7 +440,7 @@ impl DealerScenarioCheckpointV1 {
             ));
         }
         bytes.fill(0);
-        put(bytes, 0, &DEALER_SCENARIO_CHECKPOINT_MAGIC_V1)?;
+        put(bytes, MAGIC_OFFSET, &DEALER_SCENARIO_CHECKPOINT_MAGIC_V1)?;
         put(
             bytes,
             VERSION_OFFSET,

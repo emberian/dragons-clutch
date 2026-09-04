@@ -2,34 +2,10 @@ import { PublicKey } from '@solana/web3.js';
 
 import checkpointJson from '../fixtures/successor-checkpoint.json';
 import { ascii, decodeBase64, hex, requireZero, sha256, slice, u16, u64 } from './bytes';
-import {
-  CAPABILITY_FUNDING_ALLOCATION_AMOUNT_OFFSET_V1,
-  CAPABILITY_FUNDING_AMOUNTS_NATIVE_TOTAL_OFFSET_V1,
-  CAPABILITY_FUNDING_STATE_ACTIVATION_SLOT_OFFSET_V1,
-  CAPABILITY_FUNDING_STATE_BODY_RESERVED_BYTES_V1,
-  CAPABILITY_FUNDING_STATE_BODY_RESERVED_OFFSET_V1,
-  CAPABILITY_FUNDING_STATE_BYTES_V1,
-  CAPABILITY_FUNDING_STATE_ENTRY_INDEX_OFFSET_V1,
-  CAPABILITY_FUNDING_STATE_HEADER_RESERVED_BYTES_V1,
-  CAPABILITY_FUNDING_STATE_HEADER_RESERVED_OFFSET_V1,
-  CAPABILITY_FUNDING_STATE_MAGIC_V1,
-  CAPABILITY_FUNDING_STATE_MANIFEST_ID_OFFSET_V1,
-  CAPABILITY_FUNDING_STATE_RELEASED_OFFSET_V1,
-  CAPABILITY_FUNDING_STATE_REMAINING_OFFSET_V1,
-  CAPABILITY_FUNDING_STATE_SCHEMA_OFFSET_V1,
-  CAPABILITY_FUNDING_STATE_SCHEMA_VERSION_V1,
-  CAPABILITY_FUNDING_STATE_STATUS_OFFSET_V1,
-  FUNDING_COMPARTMENTS_V1,
-} from './generated/capabilityManifestV1';
+import { stateMachineRecordV1, type StateMachineV1 } from '@dclutch/sdk/generated/stateMachinesV1';
+import { decodeMachineStateV1 } from '@dclutch/sdk/stateMachines';
 import { releaseSupersededMeaningV1 } from './refusals';
 import { SolanaRpcClient, type ConnectionFacts, type RpcAccount } from './rpc';
-
-/** Offset of one remaining compartment's amount inside a `DCLTCFS1` account. */
-function remainingAmount(compartment: (typeof FUNDING_COMPARTMENTS_V1)[number]['name']): number {
-  const entry = FUNDING_COMPARTMENTS_V1.find((candidate) => candidate.name === compartment);
-  if (entry === undefined) throw new Error(`${compartment} is not a canonical funding compartment`);
-  return CAPABILITY_FUNDING_STATE_REMAINING_OFFSET_V1 + entry.offset + CAPABILITY_FUNDING_ALLOCATION_AMOUNT_OFFSET_V1;
-}
 
 const MAX_HISTORY = 64;
 const MAX_RPC_BYTES = 2 * 1024 * 1024;
@@ -88,7 +64,6 @@ function digest(value: unknown, field: string): string { const parsed = text(val
 function commit(value: unknown, field: string): string { const parsed = text(value, field, 40); if (!/^[0-9a-f]{40}$/.test(parsed)) throw new Error(`${field} is not a full lowercase git commit`); return parsed; }
 function flag(value: unknown, field: string): boolean { if (typeof value !== 'boolean') throw new Error(`${field} is not Boolean`); return value; }
 function same(left: unknown, right: unknown): boolean { return JSON.stringify(left) === JSON.stringify(right); }
-function readI64(bytes: Uint8Array, offset: number): bigint { return new DataView(bytes.buffer, bytes.byteOffset + offset, 8).getBigInt64(0, true); }
 function readI128(bytes: Uint8Array, offset: number): bigint { let value = 0n; for (let index = 15; index >= 0; index -= 1) value = (value << 8n) | BigInt(bytes[offset + index]); return value >= (1n << 127n) ? value - (1n << 128n) : value; }
 function pubkey(bytes: Uint8Array, offset: number): string { return new PublicKey(slice(bytes, offset, 32)).toBase58(); }
 function fact(label: string, value: string | number | bigint | boolean) { return Object.freeze({ label, value: String(value) }); }
@@ -174,15 +149,111 @@ function decodeLoader(name: string, bytes: Uint8Array, expected: ExpectedAccount
   return Object.freeze({ kind: `${substrateClass(program)} Loader ProgramData`, headline: programName, facts: Object.freeze([fact('deployment slot', slot), fact('upgrade authority', authority ?? 'none'), fact('ELF bytes', bytes.length - 45), fact('ELF SHA-256', program.elf_sha256)]) });
 }
 
+/**
+ * The checkpoint's Source and funding bodies, read through the derived decoder.
+ *
+ * WHAT WAS HERE AND WHY IT IS GONE. Two hand-written arms: a 224-byte
+ * `DCLTSRS1` carrying its own field map at 10/11/12/13/16/48/184/192, and a
+ * 320-byte `DCLTCFS1` reading eleven named funding constants. Neither magic
+ * has a producer, measured rather than assumed:
+ *
+ *   * `SourceResolutionStateV1::to_bytes`
+ *     (`crates/dclutch-source-contract/src/lib.rs:3589`) is called only from
+ *     that file's own `#[cfg(test)] mod tests`, which opens at line 6025.
+ *     Outside the crate the type survives in one program-test caller and one
+ *     `tests.rs`. Every program, and the successor bootstrap's own founding,
+ *     writes `SourceResolutionStateV2`.
+ *   * `FundingStateV1::to_bytes`
+ *     (`crates/dclutch-capability-contract/src/funding.rs:1089`) has exactly
+ *     one allocator anywhere, `stage_pending_funding`
+ *     (`programs/dclutch-trading-sbf/src/series/accounts.rs:224`), and that
+ *     function HAS NO CALLER -- the same measurement
+ *     `docs/evidence/GENERIC_FOUNDING_REACHABILITY_2026_08_26.md:1067` already
+ *     wrote down. `core-sbf`'s Series route still READS the record, so this is
+ *     a reader whose writer was never dispatched, not a live wire. What the
+ *     protocol writes today is `FundingLedgerV2`.
+ *
+ * So a page that promises to read a live validator held the last decoder for
+ * two layouts nothing can write, and rendered them as current state. Both
+ * records now go through `stateMachines`, which takes its magic, width, header
+ * words and admitted tags from each machine's own Rust decoder, so nothing
+ * below states a layout in its own words.
+ *
+ * WHAT THE COMMITTED CHECKPOINT DOES NOW. It was captured on 2026-08-25
+ * against a program pair this tree no longer builds -- its two program ids
+ * appear nowhere but the fixture itself -- so its Source and funding bodies
+ * really are the superseded generation, and they now refuse BY NAME instead of
+ * rendering as current. That is the honest reading of a frozen capture, and it
+ * is not a permanent state of this surface: a checkpoint recaptured from
+ * today's bootstrap carries `DCLTSRS2` and `DCLTFL02` and decodes.
+ *
+ * WHAT LEFT WITH THE FIELD MAP, named as debt: the Source card used to print
+ * market, generation, active attempt, terminal route, selector and terminal
+ * sequence. Those were literal offsets with no owner. Neither client tree has
+ * an emitted `SourceResolutionStateV2` offsets module yet, and hand-writing
+ * one here would recreate exactly the defect this deletes, so the card shows
+ * what the derived table can source and no more.
+ */
+function checkpointMachine(name: string): StateMachineV1 | null {
+  if (name.endsWith('.state')) return 'source';
+  if (name.includes('.funding.')) return 'funding-ledger';
+  return null;
+}
+
+function decodeStateMachineAccount(name: string, bytes: Uint8Array): ParsedSuccessorAccount | null {
+  const machine = checkpointMachine(name);
+  if (machine === null) return null;
+  const record = stateMachineRecordV1(machine);
+  if (record === null) throw new Error(`${machine} is not a persisted state machine`);
+  const rows = record.headerBytes === null || record.rowBytes === null ? null : Math.floor((bytes.length - record.headerBytes) / record.rowBytes);
+  const decoded = decodeMachineStateV1(machine, bytes, rows === null ? null : 0);
+  if (decoded.status === 'refused') {
+    // A refusal whose FIRST cause is the generation, said as the generation.
+    // The derived decoder is right to report the width or the magic it was
+    // given, but "opens with DCLTSRS1 and not DCLTSRS2" on a card reads as a
+    // corrupt account; what actually happened is that this capture predates
+    // the successor. The observed magic is read from the bytes rather than
+    // written down, so no superseded magic is stated anywhere in this client.
+    let observed: string | null = null;
+    try { observed = ascii(bytes, 0, 8); } catch { observed = null; }
+    if (observed !== null && observed !== record.magic && /^DC[A-Z0-9]{6}$/.test(observed)) {
+      throw new Error(`SupersededRecordGeneration: ${name} opens with ${observed}, and the record this client reads is ${record.record} (${record.magic}). No program in this tree writes ${observed}, so this body was captured from a superseded generation and is not current state.`);
+    }
+    throw new Error(`${record.record}: ${decoded.reason}`);
+  }
+  return Object.freeze({
+    kind: machine === 'source' ? 'Source resolution state' : 'capability funding ledger',
+    headline: decoded.state,
+    facts: Object.freeze([
+      fact('record', record.record),
+      fact('magic', record.magic),
+      fact('wire tag', decoded.tag),
+      ...(rows === null ? [] : [fact('slots', rows), fact('slot read', 0)]),
+      fact('bytes', bytes.length),
+      ...Object.entries(decoded.counters).map(([field, value]) => fact(field, value)),
+    ]),
+  });
+}
+
 export function parseSuccessorAccount(name: string, account: RpcAccount, checkpoint = LOCAL_SUCCESSOR_CHECKPOINT): ParsedSuccessorAccount {
   const bytes = account.data; const loader = decodeLoader(name, bytes, checkpoint.expected_accounts[name], checkpoint); if (loader) return loader;
   if (name.endsWith('.occupied')) { if (bytes.length !== 312 || !bytes.every((byte) => byte === 0xa5)) throw new Error('hostile certificate sentinel is not the exact occupied pattern'); return Object.freeze({ kind: 'hostile preoccupied certificate', headline: 'deliberately malformed', facts: Object.freeze([fact('bytes', bytes.length), fact('purpose', 'late output-gate refusal')]) }); }
+  const machine = decodeStateMachineAccount(name, bytes); if (machine !== null) return machine;
   const magic = bytes.length >= 8 ? ascii(bytes, 0, 8) : '';
   if (magic === 'DCLTACT1') { if (bytes.length !== 1288 || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 1) throw new Error('activation cache has the wrong exact profile'); requireZero(bytes, 13, 3, 'activation cache'); return Object.freeze({ kind: 'Registry activation cache', headline: 'five checked roles', facts: Object.freeze([fact('release set', hex(slice(bytes, 16, 32))), fact('roles', 5), fact('origin', 'transaction-created')]) }); }
   if (magic === 'DCSRCER1') { if (bytes.length !== 312 || u16(bytes, 8) !== 1 || bytes[10] < 1 || bytes[10] > 4) throw new Error('Resolution certificate has the wrong exact layout'); requireZero(bytes, 11, 5, 'Resolution certificate header'); requireZero(bytes, 260, 4, 'Resolution certificate body'); const kinds = ['unknown', 'primary success', 'recovery advanced', 'exhausted', 'failure committed']; return Object.freeze({ kind: 'signed Resolution certificate', headline: kinds[bytes[10]], facts: Object.freeze([fact('market', pubkey(bytes, 16)), fact('generation', u64(bytes, 240)), fact('attempt / schedule', `${new DataView(bytes.buffer, bytes.byteOffset + 248, 4).getUint32(0, true)} / ${new DataView(bytes.buffer, bytes.byteOffset + 252, 4).getUint32(0, true)}`), fact('selector', new DataView(bytes.buffer, bytes.byteOffset + 256, 4).getUint32(0, true)), fact('work paid', u64(bytes, 264)), fact('funding remaining', u64(bytes, 272)), fact('result', `${readI128(bytes, 280)}/${u64(bytes, 296)}`), fact('observed at', u64(bytes, 304))]) }); }
-  if (magic === 'DCLTSRS1') { if (bytes.length !== 224 || u16(bytes, 8) !== 1 || bytes[10] > 5 || bytes[12] > 3) throw new Error('Source resolution state has the wrong exact layout'); requireZero(bytes, 15, 1, 'Source state header'); requireZero(bytes, 208, 16, 'Source state tail'); const phases = ['primary', 'recovery', 'resolved', 'exhausted', 'failure committed', 'retired']; const routes = ['none', 'primary', 'recovery', 'failure']; return Object.freeze({ kind: 'Source resolution state', headline: phases[bytes[10]], facts: Object.freeze([fact('market', pubkey(bytes, 16)), fact('generation', u64(bytes, 48)), fact('active attempt', bytes[11]), fact('terminal route', routes[bytes[12]]), fact('selector', bytes[13]), fact('terminal sequence', u64(bytes, 184)), fact('resolved at', readI64(bytes, 192))]) }); }
-  if (magic === CAPABILITY_FUNDING_STATE_MAGIC_V1) { const status = bytes[CAPABILITY_FUNDING_STATE_STATUS_OFFSET_V1]; if (bytes.length !== CAPABILITY_FUNDING_STATE_BYTES_V1 || u16(bytes, CAPABILITY_FUNDING_STATE_SCHEMA_OFFSET_V1) !== CAPABILITY_FUNDING_STATE_SCHEMA_VERSION_V1 || status > 1) throw new Error('capability funding state has the wrong exact layout'); requireZero(bytes, CAPABILITY_FUNDING_STATE_HEADER_RESERVED_OFFSET_V1, CAPABILITY_FUNDING_STATE_HEADER_RESERVED_BYTES_V1, 'funding state header'); requireZero(bytes, CAPABILITY_FUNDING_STATE_BODY_RESERVED_OFFSET_V1, CAPABILITY_FUNDING_STATE_BODY_RESERVED_BYTES_V1, 'funding state body'); return Object.freeze({ kind: 'typed capability funding', headline: status === 1 ? 'active' : 'pending', facts: Object.freeze([fact('manifest', hex(slice(bytes, CAPABILITY_FUNDING_STATE_MANIFEST_ID_OFFSET_V1, 32))), fact('entry', u16(bytes, CAPABILITY_FUNDING_STATE_ENTRY_INDEX_OFFSET_V1)), fact('activation slot', u64(bytes, CAPABILITY_FUNDING_STATE_ACTIVATION_SLOT_OFFSET_V1)), fact('remaining work', u64(bytes, remainingAmount('Work'))), fact('remaining bounty', u64(bytes, remainingAmount('Bounty'))), fact('remaining native total', u64(bytes, CAPABILITY_FUNDING_STATE_REMAINING_OFFSET_V1 + CAPABILITY_FUNDING_AMOUNTS_NATIVE_TOTAL_OFFSET_V1)), fact('released native total', u64(bytes, CAPABILITY_FUNDING_STATE_RELEASED_OFFSET_V1 + CAPABILITY_FUNDING_AMOUNTS_NATIVE_TOTAL_OFFSET_V1))]) }); }
-  if (magic === 'DCLTCAT1') { if (bytes.length < 336 || u16(bytes, 8) !== 1 || bytes[11] !== 1 || bytes.length !== 320 + bytes[10] * 8 || ascii(bytes, 16, 8) !== 'DCLTROOT') throw new Error('categorical Market has the wrong exact profile'); return Object.freeze({ kind: 'categorical Market root', headline: `${bytes[10]} outcomes`, facts: Object.freeze([fact('generation', u64(bytes, 192)), fact('phase byte', bytes[200]), fact('origin', 'genesis-prepared')]) }); }
+  // No `DCLTCAT1` arm. It decoded a "categorical Market root", asserting a
+  // nested `DCLTROOT` at 16 and reading a phase byte and a generation -- and
+  // NEITHER magic is declared anywhere in Rust or Lean. `a5e16cd6` banished
+  // the DCLTCAT1 stratum and this file was the copy the sweep missed, so the
+  // browser went on being the last authority for a buried representation while
+  // its own sibling `decoders.test.ts` asserted the opposite in the same tree
+  // ("classifies no DCLTCAT1 or DCLTPOS1 header, because nothing writes them").
+  // `MARKET_ROOT_MAGIC`'s encoder (`crates/dclutch-core-contract/src/lib.rs:347`)
+  // has no caller in any program or in the bootstrap either. The checkpoint's
+  // three Market bodies now fall to the generic arm below, which states the
+  // magic and claims no layout -- which is all anyone can honestly say about
+  // bytes whose schema no longer exists.
   if (/^DCLT[A-Z0-9]{4}$/.test(magic)) return Object.freeze({ kind: 'finalized semantic record', headline: magic, facts: Object.freeze([fact('bytes', bytes.length), fact('origin', 'genesis-prepared')]) });
   throw new Error(`unrecognized exact successor account magic ${hex(bytes.slice(0, Math.min(bytes.length, 8)))}`);
 }

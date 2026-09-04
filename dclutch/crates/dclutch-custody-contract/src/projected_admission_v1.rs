@@ -23,9 +23,14 @@
 //! `states`, `admits` and `is_empty` -- so the route census reads it with one
 //! enumerator parameterized by machine rather than one parser per machine.
 //!
-//! The discriminants are not Lean-emitted: [`ProjectedCustodyPhaseV1`]'s
-//! `decode` match in this crate is their author, so the bit index is the
-//! enum's own discriminant and `the_bit_index_is_the_wire_tag` pins it.
+//! The discriminants ARE Lean-emitted, since
+//! `DClutchSemantics.ProjectedCustodyStateV2Abi`:
+//! [`ProjectedCustodyPhaseV1`] names `PROJECTED_CUSTODY_PHASE_INITIALIZED_V1`
+//! and its three siblings rather than writing `1`, `2`, `3`, `4`, and its
+//! `decode` match admits them by the same names. So the bit index below is
+//! still the enum's own discriminant, which is now the emitted authority
+//! reached one step later rather than a second numbering;
+//! `the_bit_index_is_the_wire_tag` pins the pair.
 //!
 //! Every set is a NECESSARY condition and never a sufficient one. A projection
 //! admitted by its phase still has its request digest, its revision, its
@@ -34,7 +39,11 @@
 use crate::projected::ProjectedCustodyPhaseV1;
 
 /// One past the greatest `ProjectedCustodyPhaseV1` discriminant.
-const PHASE_LIMIT: u8 = 5;
+///
+/// Emitted, because it is a fact about the tags and not about this bitset: the
+/// machine numbers from one, so bit zero is never occupied and the bound is one
+/// past the last variant rather than the number of variants.
+use crate::generated_projected_state_v2::PROJECTED_CUSTODY_PHASE_LIMIT_V1 as PHASE_LIMIT;
 
 /// The wire tag of one projected phase, as a bit index.
 const fn phase_tag(phase: ProjectedCustodyPhaseV1) -> u8 {

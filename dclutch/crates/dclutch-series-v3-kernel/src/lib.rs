@@ -27,6 +27,10 @@ pub mod escrow;
 #[allow(dead_code, missing_docs)]
 #[doc(hidden)]
 pub mod generated;
+/// Lean-generated occurrence-ticket replay-state tag ABI.
+#[allow(missing_docs)]
+#[doc(hidden)]
+pub mod generated_ticket_state_v3;
 /// Stateless joint root/Ticket replay-plan evaluator.
 pub mod plan;
 /// Total fixed-layout Series/Ticket replay evaluator.

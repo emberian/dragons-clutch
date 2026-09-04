@@ -40,3 +40,26 @@ grep -q '^pub const SERIES_TEMPLATE_SCHEMA_V3: u16 = 3;$' "$candidate"
 grep -q '^pub const SERIES_TEMPLATE_BYTES_V3: usize = 400;$' "$candidate"
 grep -q '^pub const SERIES_OCCURRENCE_BYTES_V3: usize = 288;$' "$candidate"
 verify EmitSeriesOccurrenceV3Rust.lean generated.rs 70
+
+# The occurrence-ticket replay state's tag ABI. Its three wire tags were
+# `replay.rs`'s alone and its phase coordinate had no name in any language:
+# `encode` wrote `output[12]` and `decode` read `read_u8(bytes, 12)`, and the
+# SDK generator recovered the offset by matching those two expressions and
+# requiring them to agree -- against an encode line that belongs to
+# `SeriesStateV3`, not to this record. The pins below are the width, the phase
+# coordinate, the tag a zeroed account decodes as, and the two canonical-zero
+# spans, because a tag that silently moved would let a client render a consumed
+# ticket as retryable.
+(
+  cd "$formal_dir"
+  lake build DClutchSemantics.SeriesTicketStateV3Abi >/dev/null
+  lake env lean --run EmitSeriesTicketStateV3Rust.lean >"$candidate"
+)
+grep -q '^pub const SERIES_TICKET_STATE_BYTES_V3: usize = 64;$' "$candidate"
+grep -q '^pub const SERIES_TICKET_STATE_PHASE_OFFSET_V3: usize = 12;$' "$candidate"
+grep -q '^pub const SERIES_TICKET_PHASE_PREPARED_V3: u8 = 0;$' "$candidate"
+grep -q '^pub const SERIES_TICKET_PHASE_CONSUMED_V3: u8 = 1;$' "$candidate"
+grep -q '^pub const SERIES_TICKET_PHASE_EXPIRED_V3: u8 = 2;$' "$candidate"
+grep -q '^pub const SERIES_TICKET_STATE_HEAD_RESERVED_OFFSET_V3: usize = 13;$' "$candidate"
+grep -q '^pub const SERIES_TICKET_STATE_TAIL_RESERVED_OFFSET_V3: usize = 56;$' "$candidate"
+verify EmitSeriesTicketStateV3Rust.lean generated_ticket_state_v3.rs 30

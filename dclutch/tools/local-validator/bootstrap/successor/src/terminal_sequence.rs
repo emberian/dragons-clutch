@@ -3508,7 +3508,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 /// The two row shapes are field-identical; only their owning modules differ.
-fn terminal_rows_as_model_v1(
+pub(crate) fn terminal_rows_as_model_v1(
     rows: &BTreeMap<String, crate::campaign::CampaignAccountEvidenceV1>,
 ) -> BTreeMap<String, crate::model::AccountEvidence> {
     rows.iter()
@@ -3529,7 +3529,7 @@ fn terminal_rows_as_model_v1(
         .collect()
 }
 
-fn model_rows_as_terminal_v1(
+pub(crate) fn model_rows_as_terminal_v1(
     rows: BTreeMap<String, crate::model::AccountEvidence>,
 ) -> BTreeMap<String, crate::campaign::CampaignAccountEvidenceV1> {
     rows.into_iter()

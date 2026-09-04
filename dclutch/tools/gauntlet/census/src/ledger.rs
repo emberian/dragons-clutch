@@ -508,6 +508,7 @@ mod tests {
                     provenance: "programs/dclutch-core-sbf/src/lib.rs:252".into(),
                     cfg: Vec::new(),
                     admissible_prestates: Vec::new(),
+                    selected_prestates: Vec::new(),
                 }],
                 refusals: vec![Refusal {
                     id: "core/CoreSbfError::RentCredit".into(),

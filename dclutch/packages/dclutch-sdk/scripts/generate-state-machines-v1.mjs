@@ -10,17 +10,21 @@
 // that persists its discriminant, the byte the discriminant sits at, and the
 // exact wire tag of every state its own hostile decoder admits.
 //
-// WHY IT SCRAPES RUST RATHER THAN LEAN. Because the Rust is the author. Four
-// of the eight machines have no Lean module at all -- `dealer-checkpoint`,
-// `dealer-reservation`, `projected-custody`, and the ticket phase -- and two
-// more have Lean-emitted OFFSETS with hand-written TAGS, which their own
-// modules say out loud: `direct_root_admission_v1.rs` opens with
-// "`DirectRootPhaseV1`'s discriminants are not Lean-emitted", and
-// `scenario_admission_v1.rs` and `projected_admission_v1.rs` say the same of
-// theirs. Where a fact IS Lean-emitted this reads the emission
+// WHERE EACH FACT'S AUTHOR IS. Every one of these machines persists its
+// record at Lean-emitted offsets, and this file reads the emission for those
 // (`generated_successor.rs`, `generated_source_resolution_state_v2.rs`,
-// `generated_abi.rs`, `generated_dealer_*.rs`) and never the hand-written
-// mirror beside it.
+// `generated_abi.rs`, `generated_dealer_*.rs`,
+// `generated_ticket_state_v3.rs`) and never the hand-written mirror beside
+// it. The TAGS are a separate question with a separate answer per machine:
+// `dealer-root`, `dealer-checkpoint`, `series-ticket` and `projected-custody`
+// have Lean-emitted discriminants, and three of the eight still author theirs
+// in Rust -- `direct-root`, whose
+// `DirectRootPhaseV1` declares none at all and whose decoder is therefore the
+// sole author, `funding-ledger`, and `source`. Their own admission modules say
+// so out loud; `direct_root_admission_v1.rs` opens with
+// "`DirectRootPhaseV1`'s discriminants are not Lean-emitted". The reader
+// below takes each machine's tags from whichever of the two actually authors
+// them.
 //
 // THE TAGS COME FROM THE HOSTILE DECODER, not from the enum declaration. Three
 // of these enums carry no `#[repr(u8)]` discriminants at all, one resolves its
@@ -50,12 +54,15 @@ const sources = Object.freeze({
   dealerLiquidityGenerated: readFileSync(new URL('crates/dclutch-dealer-codec/src/generated_dealer_liquidity.rs', root), 'utf8'),
   dealerProfileGenerated: readFileSync(new URL('crates/dclutch-dealer-codec/src/generated_dealer_trading_profile.rs', root), 'utf8'),
   dealerCheckpoint: readFileSync(new URL('crates/dclutch-dealer-codec/src/scenario_checkpoint_v1.rs', root), 'utf8'),
+  dealerCheckpointGenerated: readFileSync(new URL('crates/dclutch-dealer-codec/src/generated_scenario_checkpoint_v1.rs', root), 'utf8'),
   dealerReservation: readFileSync(new URL('crates/dclutch-dealer-codec/src/scenario_custody_reservation_v1.rs', root), 'utf8'),
 
   projectedCustody: readFileSync(new URL('crates/dclutch-custody-contract/src/projected.rs', root), 'utf8'),
+  projectedCustodyGenerated: readFileSync(new URL('crates/dclutch-custody-contract/src/generated_projected_state_v2.rs', root), 'utf8'),
 
   seriesReplay: readFileSync(new URL('crates/dclutch-series-v3-kernel/src/replay.rs', root), 'utf8'),
   seriesGenerated: readFileSync(new URL('crates/dclutch-series-v3-kernel/src/generated.rs', root), 'utf8'),
+  seriesTicketGenerated: readFileSync(new URL('crates/dclutch-series-v3-kernel/src/generated_ticket_state_v3.rs', root), 'utf8'),
 
   funding: readFileSync(new URL('crates/dclutch-capability-contract/src/funding.rs', root), 'utf8'),
   fundingGenerated: readFileSync(new URL('crates/dclutch-capability-contract/src/generated_abi.rs', root), 'utf8'),
@@ -110,16 +117,31 @@ function enumBody(source, name) {
   return body[1];
 }
 
-/** Explicit `Variant = N,` discriminants, or null when the enum declares none. */
-function declaredDiscriminants(source, name) {
-  const declared = [...enumBody(source, name).matchAll(/\n\s*([A-Z][A-Za-z0-9]*) = ([0-9_]+),/g)];
+/**
+ * Explicit discriminants, or null when the enum declares none.
+ *
+ * A discriminant is either a byte literal or, once a machine's tags are
+ * Lean-emitted, the NAME of an emitted constant -- `Prepared =
+ * SERIES_TICKET_PHASE_PREPARED_V3,`. Both are read, because the regex that saw
+ * only literals would have returned null for the second and silently dropped
+ * the one cross-check this file has: it would have called an enum that names
+ * its tags "an enum that declares none".
+ */
+function declaredDiscriminants(source, name, resolve = null) {
+  const declared = [...enumBody(source, name).matchAll(/\n\s*([A-Z][A-Za-z0-9]*) = ([A-Za-z0-9_:]+),/g)];
   if (declared.length === 0) return null;
-  return declared.map((match) => [match[1], Number(match[2].replaceAll('_', ''))]);
+  return declared.map(([, variant, value]) => {
+    if (/^[0-9_]+$/.test(value)) return [variant, Number(value.replaceAll('_', ''))];
+    if (resolve === null) {
+      throw new Error(`${name}::${variant} declares ${value} and this machine names no resolver`);
+    }
+    return [variant, resolve(value)];
+  });
 }
 
 /** Every `Variant,` an enum declares, in declaration order. */
 function declaredVariants(source, name) {
-  return [...enumBody(source, name).matchAll(/\n\s*([A-Z][A-Za-z0-9]*)(?:\s*=\s*[0-9_]+)?,/g)].map((match) => match[1]);
+  return [...enumBody(source, name).matchAll(/\n\s*([A-Z][A-Za-z0-9]*)(?:\s*=\s*[A-Za-z0-9_:]+)?,/g)].map((match) => match[1]);
 }
 
 /**
@@ -171,6 +193,18 @@ const literalTag = (head) => {
   if (!/^[0-9_]+$/.test(head)) throw new Error(`a decoder arm head is not a byte literal: ${head}`);
   return Number(head.replaceAll('_', ''));
 };
+
+/**
+ * A decoder arm head that NAMES its tag, resolved in the Lean emission.
+ *
+ * A machine whose discriminants are emitted writes its decoder as
+ * `SERIES_TICKET_PHASE_PREPARED_V3 => Ok(Self::Prepared)` rather than
+ * `0 => ..`, so the arm head is a constant name and the number comes from the
+ * generated module. The module path prefix is stripped because a crate may
+ * reach the constant either way (`generated::PHASE_OPEN` or a bare import) and
+ * which spelling it picked is not an ABI fact.
+ */
+const emittedTag = (source) => (head) => scalar(source, head.replace(/^[A-Za-z0-9_]+::/, ''));
 
 /**
  * A tag offset that no Rust constant names, taken from the two expressions
@@ -250,7 +284,7 @@ const machines = [
     // and the numbers come from the emitted module.
     states: decodedTags(
       block('dealerLib', 'impl Phase {'),
-      (head) => scalar('dealerLiquidityGenerated', head.replace(/^generated::/, '')),
+      emittedTag('dealerLiquidityGenerated'),
     ),
     declared: declaredDiscriminants('dealerLib', 'Phase'),
     variants: declaredVariants('dealerLib', 'Phase'),
@@ -259,10 +293,13 @@ const machines = [
   {
     label: 'dealer-checkpoint',
     record: 'DealerScenarioCheckpointV1',
-    magic: magic('dealerCheckpoint', 'DEALER_SCENARIO_CHECKPOINT_MAGIC_V1'),
-    bytes: scalar('dealerCheckpoint', 'DEALER_SCENARIO_CHECKPOINT_BYTES_V1'),
-    header: [[scalar('dealerCheckpoint', 'VERSION_OFFSET'), scalar('dealerCheckpoint', 'DEALER_SCENARIO_CHECKPOINT_VERSION_V1')]],
-    tagOffset: scalar('dealerCheckpoint', 'PHASE_OFFSET'),
+    magic: magic('dealerCheckpointGenerated', 'DEALER_SCENARIO_CHECKPOINT_MAGIC_V1'),
+    bytes: scalar('dealerCheckpointGenerated', 'DEALER_SCENARIO_CHECKPOINT_BYTES_V1'),
+    header: [[
+      scalar('dealerCheckpointGenerated', 'DEALER_SCENARIO_CHECKPOINT_VERSION_OFFSET_V1'),
+      scalar('dealerCheckpointGenerated', 'DEALER_SCENARIO_CHECKPOINT_VERSION_V1'),
+    ]],
+    tagOffset: scalar('dealerCheckpointGenerated', 'DEALER_SCENARIO_CHECKPOINT_PHASE_OFFSET_V1'),
     rowBytes: null,
     headerBytes: null,
     counters: [],
@@ -270,11 +307,15 @@ const machines = [
     discriminant: 'DealerScenarioCheckpointPhaseV1',
     states: decodedTags(
       block('dealerCheckpoint', 'impl DealerScenarioCheckpointPhaseV1 {'),
-      literalTag,
+      emittedTag('dealerCheckpointGenerated'),
     ),
-    declared: declaredDiscriminants('dealerCheckpoint', 'DealerScenarioCheckpointPhaseV1'),
+    declared: declaredDiscriminants(
+      'dealerCheckpoint',
+      'DealerScenarioCheckpointPhaseV1',
+      emittedTag('dealerCheckpointGenerated'),
+    ),
     variants: declaredVariants('dealerCheckpoint', 'DealerScenarioCheckpointPhaseV1'),
-    authority: 'crates/dclutch-dealer-codec/src/scenario_checkpoint_v1.rs',
+    authority: 'crates/dclutch-dealer-codec/src/{scenario_checkpoint_v1,generated_scenario_checkpoint_v1}.rs',
   },
   {
     label: 'dealer-reservation',
@@ -299,15 +340,14 @@ const machines = [
   {
     label: 'projected-custody',
     record: 'ProjectedCustodyStateV2',
-    magic: magic('projectedCustody', 'PROJECTED_CUSTODY_STATE_MAGIC_V2'),
-    bytes: scalar('projectedCustody', 'PROJECTED_CUSTODY_STATE_BYTES_V2'),
-    header: [[8, scalar('projectedCustody', 'VERSION_V2')]],
-    tagOffset: agreedOffset(
-      'projectedCustody',
-      /let phase = match read_u8\(input, (\d+)\)\? \{/,
-      /put_u8\(&mut output, (\d+), self\.phase as u8\)\?;/,
-      'projected-custody',
-    ),
+    magic: magic('projectedCustodyGenerated', 'PROJECTED_CUSTODY_STATE_MAGIC_V2'),
+    bytes: scalar('projectedCustodyGenerated', 'PROJECTED_CUSTODY_STATE_BYTES_V2'),
+    header: [[
+      scalar('projectedCustodyGenerated', 'PROJECTED_CUSTODY_STATE_VERSION_OFFSET_V2'),
+      scalar('projectedCustodyGenerated', 'PROJECTED_CUSTODY_STATE_SCHEMA_VERSION_V2'),
+    ]],
+    // Emitted, where it used to be inferred from two bare expressions agreeing.
+    tagOffset: scalar('projectedCustodyGenerated', 'PROJECTED_CUSTODY_STATE_PHASE_OFFSET_V2'),
     rowBytes: null,
     headerBytes: null,
     counters: [],
@@ -318,24 +358,33 @@ const machines = [
     // `impl`.
     states: decodedTags(
       block('projectedCustody', 'let phase = match read_u8(input,'),
-      literalTag,
+      emittedTag('projectedCustodyGenerated'),
     ),
-    declared: declaredDiscriminants('projectedCustody', 'ProjectedCustodyPhaseV1'),
+    declared: declaredDiscriminants(
+      'projectedCustody',
+      'ProjectedCustodyPhaseV1',
+      emittedTag('projectedCustodyGenerated'),
+    ),
     variants: declaredVariants('projectedCustody', 'ProjectedCustodyPhaseV1'),
-    authority: 'crates/dclutch-custody-contract/src/projected.rs',
+    authority: 'crates/dclutch-custody-contract/src/{projected,generated_projected_state_v2}.rs',
   },
   {
     label: 'series-ticket',
     record: 'TicketStateV3',
     magic: magic('seriesGenerated', 'SERIES_TICKET_STATE_MAGIC_V3'),
-    bytes: scalar('seriesReplay', 'SERIES_TICKET_STATE_BYTES_V3'),
-    header: [[8, scalar('seriesReplay', 'SCHEMA_V3')], [10, scalar('seriesReplay', 'PROFILE_V3')]],
-    tagOffset: agreedOffset(
-      'seriesReplay',
-      /phase: TicketPhaseV3::decode\(read_u8\(bytes, (\d+)\)\?\)\?,/,
-      /output\[(\d+)\] = self\.phase as u8;/,
-      'series-ticket',
-    ),
+    bytes: scalar('seriesTicketGenerated', 'SERIES_TICKET_STATE_BYTES_V3'),
+    // The two header words' VALUES are the Series family's and stay in
+    // `replay.rs`; the coordinates they are written at belong to this record
+    // and are emitted.
+    header: [
+      [scalar('seriesTicketGenerated', 'SERIES_TICKET_STATE_SCHEMA_OFFSET_V3'), scalar('seriesReplay', 'SCHEMA_V3')],
+      [scalar('seriesTicketGenerated', 'SERIES_TICKET_STATE_PROFILE_OFFSET_V3'), scalar('seriesReplay', 'PROFILE_V3')],
+    ],
+    // Emitted, where it used to be inferred from two bare expressions agreeing
+    // -- and one of the two belonged to `SeriesStateV3`, whose `encode` writes
+    // the identical `output[12] = self.phase as u8;` line two hundred lines
+    // earlier and which a first-match regex reads instead.
+    tagOffset: scalar('seriesTicketGenerated', 'SERIES_TICKET_STATE_PHASE_OFFSET_V3'),
     rowBytes: null,
     headerBytes: null,
     counters: [],
@@ -343,11 +392,11 @@ const machines = [
     discriminant: 'TicketPhaseV3',
     states: decodedTags(
       block('seriesReplay', 'impl TicketPhaseV3 {'),
-      literalTag,
+      emittedTag('seriesTicketGenerated'),
     ),
-    declared: declaredDiscriminants('seriesReplay', 'TicketPhaseV3'),
+    declared: declaredDiscriminants('seriesReplay', 'TicketPhaseV3', emittedTag('seriesTicketGenerated')),
     variants: declaredVariants('seriesReplay', 'TicketPhaseV3'),
-    authority: 'crates/dclutch-series-v3-kernel/src/{replay,generated}.rs',
+    authority: 'crates/dclutch-series-v3-kernel/src/{replay,generated,generated_ticket_state_v3}.rs',
   },
   {
     label: 'funding-ledger',

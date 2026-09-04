@@ -18,6 +18,8 @@ mod delegated;
 mod frame_spec_v1;
 #[allow(missing_docs)]
 mod generated;
+#[allow(dead_code)]
+mod generated_projected_state_v2;
 mod projected;
 mod projected_admission_v1;
 mod request_layout;

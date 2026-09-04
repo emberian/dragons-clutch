@@ -401,3 +401,15 @@ root = "EmitTransitionVMV2Rust"
 [[lean_exe]]
 name = "emit-vectors"
 root = "EmitVectors"
+
+[[lean_exe]]
+name = "emit-series-ticket-state-v3-rust"
+root = "EmitSeriesTicketStateV3Rust"
+
+[[lean_exe]]
+name = "emit-projected-custody-state-v2-rust"
+root = "EmitProjectedCustodyStateV2Rust"
+
+[[lean_exe]]
+name = "emit-dealer-scenario-checkpoint-v1-rust"
+root = "EmitDealerScenarioCheckpointV1Rust"

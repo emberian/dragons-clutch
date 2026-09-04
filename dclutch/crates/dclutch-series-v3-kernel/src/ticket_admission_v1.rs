@@ -18,13 +18,18 @@
 //! is no ticket left to ask about. Two machines, and one observation window
 //! each.
 //!
-//! ## The tags are the enum's, and the enum is the encoder
+//! ## The tags are Lean's now, and the enum still is the encoder
 //!
-//! `TicketPhaseV3` carries `#[repr(u8)]` with explicit discriminants and
+//! `TicketPhaseV3` carries `#[repr(u8)]` and
 //! [`crate::replay::TicketStateV3::encode`] writes `self.phase as u8`
-//! directly, so the discriminant IS the wire tag with no emitted constant in
-//! between. `the_bit_index_is_the_wire_tag` pins the index against `decode`,
-//! which is the other half of that pair.
+//! directly, so the discriminant IS the wire tag. What changed is who authors
+//! the discriminant: `DClutchSemantics.SeriesTicketStateV3Abi` does, through
+//! `SERIES_TICKET_PHASE_PREPARED_V3` and its two siblings in
+//! [`crate::generated_ticket_state_v3`], and the enum names them rather than
+//! writing `0`, `1`, `2`. So `state as u8` below is still the emitted
+//! authority reached one step later, not a second numbering placed beside it.
+//! `the_bit_index_is_the_wire_tag` pins the index against `decode`, which is
+//! the other half of that pair.
 //!
 //! ## What is deliberately NOT a set here
 //!

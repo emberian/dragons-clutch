@@ -13,6 +13,14 @@ use crate::generated::{
     SERIES_OCCURRENCE_MAGIC_V3, SERIES_STATE_MAGIC_V3, SERIES_TEMPLATE_MAGIC_V3,
     SERIES_TICKET_MAGIC_V3, SERIES_TICKET_STATE_MAGIC_V3,
 };
+use crate::generated_ticket_state_v3::{
+    SERIES_TICKET_PHASE_CONSUMED_V3, SERIES_TICKET_PHASE_EXPIRED_V3,
+    SERIES_TICKET_PHASE_PREPARED_V3, SERIES_TICKET_STATE_HEAD_RESERVED_BYTES_V3,
+    SERIES_TICKET_STATE_HEAD_RESERVED_OFFSET_V3, SERIES_TICKET_STATE_PHASE_OFFSET_V3,
+    SERIES_TICKET_STATE_PROFILE_OFFSET_V3, SERIES_TICKET_STATE_RECORD_ID_OFFSET_V3,
+    SERIES_TICKET_STATE_REVISION_OFFSET_V3, SERIES_TICKET_STATE_SCHEMA_OFFSET_V3,
+    SERIES_TICKET_STATE_TAIL_RESERVED_BYTES_V3, SERIES_TICKET_STATE_TAIL_RESERVED_OFFSET_V3,
+};
 
 /// Every Series V3 magic is distinct, and a compiler says so.
 ///
@@ -46,7 +54,11 @@ const _: () = {
 /// Exact width of the mutable Series tail inside the composite Trading root.
 pub const SERIES_STATE_BYTES_V3: usize = 64;
 /// Exact width of one Trading-owned mutable occurrence-ticket state.
-pub const SERIES_TICKET_STATE_BYTES_V3: usize = 64;
+///
+/// Re-exported from the Lean emission rather than restated: the width, the
+/// phase coordinate and the three wire tags now have one author,
+/// `DClutchSemantics.SeriesTicketStateV3Abi`.
+pub use crate::generated_ticket_state_v3::SERIES_TICKET_STATE_BYTES_V3;
 /// PDA domain for a mutable ticket state under the selected Trading program.
 pub const SERIES_TICKET_STATE_PDA_DOMAIN_V3: &[u8] = b"dclutch:series-ticket:v3";
 
@@ -290,11 +302,11 @@ impl SeriesStateV3 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TicketPhaseV3 {
     /// Exact custody is prepared and the occurrence remains retryable.
-    Prepared = 0,
+    Prepared = SERIES_TICKET_PHASE_PREPARED_V3,
     /// The ticket was atomically consumed into its exact Found Market.
-    Consumed = 1,
+    Consumed = SERIES_TICKET_PHASE_CONSUMED_V3,
     /// The retry window elapsed and every compartment was refunded.
-    Expired = 2,
+    Expired = SERIES_TICKET_PHASE_EXPIRED_V3,
 }
 
 impl TicketPhaseV3 {
@@ -305,9 +317,9 @@ impl TicketPhaseV3 {
     /// against a second hand-written numbering.
     pub(crate) fn decode(value: u8) -> Result<Self, SeriesStateError> {
         match value {
-            0 => Ok(Self::Prepared),
-            1 => Ok(Self::Consumed),
-            2 => Ok(Self::Expired),
+            SERIES_TICKET_PHASE_PREPARED_V3 => Ok(Self::Prepared),
+            SERIES_TICKET_PHASE_CONSUMED_V3 => Ok(Self::Consumed),
+            SERIES_TICKET_PHASE_EXPIRED_V3 => Ok(Self::Expired),
             _ => Err(SeriesStateError::Phase),
         }
     }
@@ -372,18 +384,29 @@ impl TicketStateV3 {
     pub fn decode(bytes: &[u8]) -> Result<Self, SeriesStateError> {
         if bytes.len() != SERIES_TICKET_STATE_BYTES_V3
             || bytes.get(..8) != Some(SERIES_TICKET_STATE_MAGIC_V3.as_slice())
-            || read_u16(bytes, 8)? != SCHEMA_V3
-            || read_u16(bytes, 10)? != PROFILE_V3
-            || !all_zero(bytes, 13, 3)?
-            || !all_zero(bytes, 56, 8)?
+            || read_u16(bytes, SERIES_TICKET_STATE_SCHEMA_OFFSET_V3)? != SCHEMA_V3
+            || read_u16(bytes, SERIES_TICKET_STATE_PROFILE_OFFSET_V3)? != PROFILE_V3
+            || !all_zero(
+                bytes,
+                SERIES_TICKET_STATE_HEAD_RESERVED_OFFSET_V3,
+                SERIES_TICKET_STATE_HEAD_RESERVED_BYTES_V3,
+            )?
+            || !all_zero(
+                bytes,
+                SERIES_TICKET_STATE_TAIL_RESERVED_OFFSET_V3,
+                SERIES_TICKET_STATE_TAIL_RESERVED_BYTES_V3,
+            )?
         {
             return Err(SeriesStateError::Encoding);
         }
-        let id =
-            ContentId::new(read_array::<32>(bytes, 24)?).map_err(|_| SeriesStateError::Identity)?;
+        let id = ContentId::new(read_array::<32>(
+            bytes,
+            SERIES_TICKET_STATE_RECORD_ID_OFFSET_V3,
+        )?)
+        .map_err(|_| SeriesStateError::Identity)?;
         Ok(Self {
-            phase: TicketPhaseV3::decode(read_u8(bytes, 12)?)?,
-            revision: read_u64(bytes, 16)?,
+            phase: TicketPhaseV3::decode(read_u8(bytes, SERIES_TICKET_STATE_PHASE_OFFSET_V3)?)?,
+            revision: read_u64(bytes, SERIES_TICKET_STATE_REVISION_OFFSET_V3)?,
             ticket_record_id: id,
         })
     }
@@ -392,11 +415,16 @@ impl TicketStateV3 {
     pub fn encode(self) -> [u8; SERIES_TICKET_STATE_BYTES_V3] {
         let mut output = [0_u8; SERIES_TICKET_STATE_BYTES_V3];
         output[..8].copy_from_slice(&SERIES_TICKET_STATE_MAGIC_V3);
-        output[8..10].copy_from_slice(&SCHEMA_V3.to_le_bytes());
-        output[10..12].copy_from_slice(&PROFILE_V3.to_le_bytes());
-        output[12] = self.phase as u8;
-        output[16..24].copy_from_slice(&self.revision.to_le_bytes());
-        output[24..56].copy_from_slice(&self.ticket_record_id.to_bytes());
+        output[SERIES_TICKET_STATE_SCHEMA_OFFSET_V3..SERIES_TICKET_STATE_PROFILE_OFFSET_V3]
+            .copy_from_slice(&SCHEMA_V3.to_le_bytes());
+        output[SERIES_TICKET_STATE_PROFILE_OFFSET_V3..SERIES_TICKET_STATE_PHASE_OFFSET_V3]
+            .copy_from_slice(&PROFILE_V3.to_le_bytes());
+        output[SERIES_TICKET_STATE_PHASE_OFFSET_V3] = self.phase as u8;
+        output[SERIES_TICKET_STATE_REVISION_OFFSET_V3..SERIES_TICKET_STATE_RECORD_ID_OFFSET_V3]
+            .copy_from_slice(&self.revision.to_le_bytes());
+        output
+            [SERIES_TICKET_STATE_RECORD_ID_OFFSET_V3..SERIES_TICKET_STATE_TAIL_RESERVED_OFFSET_V3]
+            .copy_from_slice(&self.ticket_record_id.to_bytes());
         output
     }
 

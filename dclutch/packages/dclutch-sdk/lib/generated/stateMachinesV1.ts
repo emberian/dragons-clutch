@@ -4,10 +4,10 @@
 // Machine labels and admission types: tools/gauntlet/census/src/phases.rs.
 // direct-root: crates/dclutch-direct-codec/src/{successor,generated_successor}.rs
 // dealer-root: crates/dclutch-dealer-codec/src/{lib,generated_dealer_liquidity,generated_dealer_trading_profile}.rs
-// dealer-checkpoint: crates/dclutch-dealer-codec/src/scenario_checkpoint_v1.rs
+// dealer-checkpoint: crates/dclutch-dealer-codec/src/{scenario_checkpoint_v1,generated_scenario_checkpoint_v1}.rs
 // dealer-reservation: crates/dclutch-dealer-codec/src/scenario_custody_reservation_v1.rs
-// projected-custody: crates/dclutch-custody-contract/src/projected.rs
-// series-ticket: crates/dclutch-series-v3-kernel/src/{replay,generated}.rs
+// projected-custody: crates/dclutch-custody-contract/src/{projected,generated_projected_state_v2}.rs
+// series-ticket: crates/dclutch-series-v3-kernel/src/{replay,generated,generated_ticket_state_v3}.rs
 // funding-ledger: crates/dclutch-capability-contract/src/{funding,generated_abi}.rs
 // source: crates/dclutch-source-contract/src/{lib,generated_source_resolution_state_v2}.rs
 
@@ -129,7 +129,7 @@ export const STATE_MACHINE_RECORDS_V1: ReadonlyArray<StateMachineRecordV1> = [
     pdaDomain: null,
     counters: [],
     states: [{ state: 'Collecting', tag: 1 }, { state: 'Evaluated', tag: 2 }, { state: 'Reserved', tag: 3 }, { state: 'RollingBack', tag: 4 }, { state: 'Committed', tag: 5 }],
-    authority: 'crates/dclutch-dealer-codec/src/scenario_checkpoint_v1.rs',
+    authority: 'crates/dclutch-dealer-codec/src/{scenario_checkpoint_v1,generated_scenario_checkpoint_v1}.rs',
   },
   {
     machine: 'dealer-reservation',
@@ -161,7 +161,7 @@ export const STATE_MACHINE_RECORDS_V1: ReadonlyArray<StateMachineRecordV1> = [
     pdaDomain: null,
     counters: [],
     states: [{ state: 'Initialized', tag: 1 }, { state: 'HoardOpen', tag: 2 }, { state: 'HoardLocked', tag: 3 }, { state: 'SourceFunded', tag: 4 }],
-    authority: 'crates/dclutch-custody-contract/src/projected.rs',
+    authority: 'crates/dclutch-custody-contract/src/{projected,generated_projected_state_v2}.rs',
   },
   {
     machine: 'series-ticket',
@@ -177,7 +177,7 @@ export const STATE_MACHINE_RECORDS_V1: ReadonlyArray<StateMachineRecordV1> = [
     pdaDomain: null,
     counters: [],
     states: [{ state: 'Prepared', tag: 0 }, { state: 'Consumed', tag: 1 }, { state: 'Expired', tag: 2 }],
-    authority: 'crates/dclutch-series-v3-kernel/src/{replay,generated}.rs',
+    authority: 'crates/dclutch-series-v3-kernel/src/{replay,generated,generated_ticket_state_v3}.rs',
   },
   {
     machine: 'funding-ledger',

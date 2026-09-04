@@ -889,6 +889,14 @@ fn doc_text(attributes: &[Attribute]) -> (Option<String>, Option<String>) {
 struct DispatchWalk<'a> {
     label: &'a str,
     index: &'a CrateIndex,
+    /// This program's crate PLUS every first-party crate it depends on.
+    ///
+    /// The dispatch walk itself deliberately reads only the program's own
+    /// crate (an ambiguous entrypoint name is refused rather than guessed at),
+    /// and that is unchanged. This wider namespace is used for exactly one
+    /// thing: resolving an `is_*(data)` guard to the body that states which
+    /// bytes it matches on.
+    predicates: &'a CrateIndex,
     constants: &'a ConstantIndex,
     routes: Vec<Route>,
     unclassified: Vec<Unclassified>,
@@ -1206,6 +1214,7 @@ impl DispatchWalk<'_> {
             provenance: format!("{}:1", dispatch.relative),
             cfg: Vec::new(),
             admissible_prestates: Vec::new(),
+            selected_prestates: Vec::new(),
         });
     }
 
@@ -1249,6 +1258,7 @@ impl DispatchWalk<'_> {
             provenance: at(relative, span),
             cfg: cfg.to_vec(),
             admissible_prestates: Vec::new(),
+            selected_prestates: Vec::new(),
         });
     }
 
@@ -1309,6 +1319,7 @@ impl DispatchWalk<'_> {
             provenance: at(relative, span),
             cfg: cfg.to_vec(),
             admissible_prestates: Vec::new(),
+            selected_prestates: Vec::new(),
         });
         id
     }
@@ -1432,6 +1443,7 @@ impl DispatchWalk<'_> {
                         out.push(Selector::Predicate {
                             function: target.clone(),
                         });
+                        self.scan_predicate_body(&target, out);
                     }
                 }
                 for argument in &call.args {
@@ -1457,6 +1469,61 @@ impl DispatchWalk<'_> {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Read the wire discriminant OUT of an `is_*` guard, one hop deep.
+    ///
+    /// A predicate is a real selector and naming it was right, but naming it
+    /// was ALL the census did, so a route selected by one carried no bytes at
+    /// all. Measured 2026-09-04: `DCLTPUA1`, `DCLTSPI1` and `DCLTDFS1` each
+    /// executed on devnet across three cohorts and occurred zero times in the
+    /// whole inventory, so `corroborate.py --discover` could resolve no
+    /// transaction that carried them and the devnet witness count sat at 22
+    /// while real routes ran. The routes were never missing; their bytes were.
+    /// Trading, whose entire top-level surface is predicate-selected, reported
+    /// zero magics -- `DCLTHOT3` included.
+    ///
+    /// Exactly one hop, and only the constants: the predicate's own body is
+    /// scanned for `MAGIC`/width constants and any nested `Predicate` or
+    /// `Literal` it finds is dropped. Following further would make an
+    /// entrypoint's selector set a function of arbitrary call depth, which is
+    /// the ambiguity `index` exists to refuse. A predicate that cannot be
+    /// resolved, or that states no constant, leaves the row exactly as it was.
+    fn scan_predicate_body(&self, target: &str, out: &mut Vec<Selector>) {
+        // A crate-qualified call names a CRATE, and a crate root's module path
+        // is empty, so `resolve` cannot match `dclutch_x_contract` against it.
+        // The bare name is the fallback and it is still cautious: `resolve`
+        // refuses two same-named functions rather than guessing between them.
+        let resolved = self.predicates.resolve(target).or_else(|| {
+            let name = target.rsplit("::").next().unwrap_or(target);
+            self.predicates.resolve(name)
+        });
+        let Some(function) = resolved else {
+            return;
+        };
+        let mut found = Vec::new();
+        for statement in &function.block.stmts {
+            match statement {
+                syn::Stmt::Expr(expr, _) => self.scan_condition(expr, &mut found),
+                syn::Stmt::Local(local) => {
+                    if let Some(initializer) = &local.init {
+                        self.scan_condition(&initializer.expr, &mut found);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for selector in found {
+            if !matches!(selector, Selector::Magic { .. } | Selector::Length { .. }) {
+                continue;
+            }
+            if !out
+                .iter()
+                .any(|existing| existing.render() == selector.render())
+            {
+                out.push(selector);
+            }
         }
     }
 
@@ -1718,6 +1785,7 @@ pub fn enumerate(
         let mut walk = DispatchWalk {
             label: &target.label,
             index: &index,
+            predicates: &guard_index,
             constants,
             routes: Vec::new(),
             unclassified: Vec::new(),
@@ -1787,10 +1855,12 @@ pub fn enumerate(
         // route boundary. A route the walk finds no constant for carries none,
         // and the census says exactly that rather than inferring one.
         let mut guards = GuardMap::new(admissions, &guard_index, &routes);
-        let attributed: Vec<Vec<crate::model::PhaseAdmission>> =
+        type Attributed = Vec<crate::model::PhaseAdmission>;
+        let attributed: Vec<(Attributed, Attributed)> =
             routes.iter().map(|route| guards.for_route(route)).collect();
-        for (route, admissible) in routes.iter_mut().zip(attributed) {
+        for (route, (admissible, selected)) in routes.iter_mut().zip(attributed) {
             route.admissible_prestates = admissible;
+            route.selected_prestates = selected;
         }
 
         let mut unclassified = walk.unclassified;
@@ -2050,6 +2120,138 @@ fn specific_tag(selectors: &[Selector]) -> String {
 }
 
 #[cfg(test)]
+mod predicate_body_tests {
+    use super::{
+        ConstantFact, ConstantIndex, ConstantValue, CrateIndex, DispatchWalk, Selector,
+        index_source,
+    };
+    use std::collections::{BTreeMap, BTreeSet};
+
+    /// A route selected by `is_x(data)` used to carry the predicate's NAME and
+    /// nothing else, so its wire bytes were absent from the whole inventory
+    /// even though the constant is one unambiguous declaration away.
+    fn selectors_for(guard: &str, predicate_source: &str, magic: Option<&str>) -> Vec<String> {
+        let mut facts: BTreeMap<String, Vec<ConstantFact>> = BTreeMap::new();
+        if let Some(ascii) = magic {
+            facts.insert(
+                "EXAMPLE_MAGIC_V1".to_string(),
+                vec![ConstantFact {
+                    value: ConstantValue::Bytes {
+                        hex: hex_of(ascii),
+                        ascii: Some(ascii.to_string()),
+                    },
+                    provenance: "crates/example/src/lib.rs:1".to_string(),
+                }],
+            );
+        }
+        let constants = ConstantIndex { facts };
+        let predicates = index_source("", predicate_source);
+        let index = CrateIndex::default();
+        let walk = DispatchWalk {
+            label: "trading",
+            index: &index,
+            predicates: &predicates,
+            constants: &constants,
+            routes: Vec::new(),
+            unclassified: Vec::new(),
+            visited: BTreeSet::new(),
+        };
+        let condition: syn::Expr = syn::parse_str(guard).expect("guard parses");
+        walk.selectors_from(&condition)
+            .iter()
+            .map(Selector::render)
+            .collect()
+    }
+
+    fn hex_of(ascii: &str) -> String {
+        ascii.bytes().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    const PREDICATE_SOURCE: &str = r#"
+        pub fn is_example_v1(input: &[u8]) -> bool {
+            input.get(..8) == Some(EXAMPLE_MAGIC_V1.as_slice())
+        }
+    "#;
+
+    #[test]
+    fn a_predicate_guard_carries_the_bytes_its_body_matches_on() {
+        let rendered = selectors_for(
+            "dclutch_example_contract::is_example_v1(instruction_data)",
+            PREDICATE_SOURCE,
+            Some("DCLTEXA1"),
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|text| text == "predicate dclutch_example_contract::is_example_v1()"),
+            "the predicate must still be named: {rendered:?}"
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|text| text.contains("magic EXAMPLE_MAGIC_V1") && text.contains("DCLTEXA1")),
+            "the predicate's own bytes must reach the row: {rendered:?}"
+        );
+    }
+
+    /// The hop is exactly one deep and takes only constants: a predicate that
+    /// calls another predicate contributes no second `Predicate` selector, so
+    /// a row's selector set never becomes a function of call depth.
+    #[test]
+    fn the_hop_is_one_deep_and_carries_no_nested_predicate() {
+        let source = r#"
+            pub fn is_outer_v1(input: &[u8]) -> bool {
+                is_inner_v1(input) && input.get(..8) == Some(EXAMPLE_MAGIC_V1.as_slice())
+            }
+            pub fn is_inner_v1(input: &[u8]) -> bool {
+                input.len() == 8
+            }
+        "#;
+        let rendered = selectors_for("is_outer_v1(instruction_data)", source, Some("DCLTEXA1"));
+        assert_eq!(
+            rendered
+                .iter()
+                .filter(|text| text.starts_with("predicate "))
+                .count(),
+            1,
+            "only the guard's own predicate may be named: {rendered:?}"
+        );
+    }
+
+    /// An unresolvable predicate leaves the row exactly as it was, which is
+    /// the property that makes this change incapable of losing a route.
+    #[test]
+    fn an_unresolvable_predicate_leaves_the_row_unchanged() {
+        let rendered = selectors_for(
+            "somewhere::is_not_indexed_v1(instruction_data)",
+            "pub fn unrelated() {}",
+            Some("DCLTEXA1"),
+        );
+        assert_eq!(
+            rendered,
+            vec!["predicate somewhere::is_not_indexed_v1()".to_string()],
+        );
+    }
+
+    /// A magic the constant index cannot resolve is still reported, unresolved,
+    /// rather than dropped -- the same rule an in-guard constant already had.
+    #[test]
+    fn an_unresolved_constant_is_reported_rather_than_dropped() {
+        let rendered = selectors_for(
+            "dclutch_example_contract::is_example_v1(instruction_data)",
+            PREDICATE_SOURCE,
+            None,
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|text| text.contains("magic EXAMPLE_MAGIC_V1")),
+            "an unresolved magic is still a named selector: {rendered:?}"
+        );
+    }
+}
+
+#[cfg(test)]
 mod local_initialiser_tests {
     use super::{ConstantIndex, CrateIndex, DispatchWalk};
     use std::collections::{BTreeMap, BTreeSet};
@@ -2064,6 +2266,7 @@ mod local_initialiser_tests {
         let mut walk = DispatchWalk {
             label: "core",
             index: &index,
+            predicates: &index,
             constants: &constants,
             routes: Vec::new(),
             unclassified: Vec::new(),

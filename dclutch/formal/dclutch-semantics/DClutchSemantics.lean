@@ -151,3 +151,6 @@ import DClutchSemantics.RefusalBandsV1
 import DClutchSemantics.SourceWindowSpecV1Abi
 import DClutchSemantics.SourceStatisticSpecV1Abi
 import DClutchSemantics.ProductAdmissionV2Abi
+import DClutchSemantics.SeriesTicketStateV3Abi
+import DClutchSemantics.ProjectedCustodyStateV2Abi
+import DClutchSemantics.DealerScenarioCheckpointV1Abi

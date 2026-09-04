@@ -1,6 +1,7 @@
 import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
+import machineVectors from '../fixtures/state-machines.devnet.json';
 import checkpointJson from '../fixtures/successor-checkpoint.json';
 import {
   LOCAL_SUCCESSOR_CHECKPOINT,
@@ -65,14 +66,10 @@ describe('immutable localhost successor checkpoint', () => {
   it('decodes representative live RPC bodies through exact account layouts', () => {
     const activation = parseSuccessorAccount('registry.activation', fixture('registry.activation'));
     const certificate = parseSuccessorAccount('primary.certificate.success', fixture('primary.certificate.success'));
-    const state = parseSuccessorAccount('lifecycle.state', fixture('lifecycle.state'));
-    const funding = parseSuccessorAccount('lifecycle.funding.failure', fixture('lifecycle.funding.failure'));
     const hostile = parseSuccessorAccount('rollback.certificate.failure.occupied', fixture('rollback.certificate.failure.occupied'));
 
     expect([activation.kind, activation.headline]).toEqual(['Registry activation cache', 'five checked roles']);
     expect([certificate.kind, certificate.headline]).toEqual(['signed Resolution certificate', 'primary success']);
-    expect([state.kind, state.headline]).toEqual(['Source resolution state', 'failure committed']);
-    expect([funding.kind, funding.headline]).toEqual(['typed capability funding', 'active']);
     expect([hostile.kind, hostile.headline]).toEqual(['hostile preoccupied certificate', 'deliberately malformed']);
   });
 
@@ -88,6 +85,24 @@ describe('immutable localhost successor checkpoint', () => {
     expect(() => parseSuccessorAccount('registry.activation', mutate(fixture('registry.activation'), 12, 254))).not.toThrow();
     expect(() => parseSuccessorAccount('primary.certificate.success', mutate(fixture('primary.certificate.success'), 10, 0))).toThrow('certificate');
     expect(() => parseSuccessorAccount('rollback.certificate.failure.occupied', mutate(fixture('rollback.certificate.failure.occupied'), 311, 0))).toThrow('occupied pattern');
+  });
+
+  it('does not decode the buried categorical Market representation', () => {
+    // `decoders.test.ts` already asserts that nothing writes DCLTCAT1. This
+    // file decoded it anyway, all the way down to a nested DCLTROOT at 16 --
+    // two client surfaces in one tree disagreeing about the same magic, and
+    // the one with a layout was the wrong one. The generic arm is the honest
+    // reading: name the magic, claim no schema.
+    // A body that satisfied the deleted arm exactly: 344 bytes, schema 1,
+    // three outcomes, the nested DCLTROOT at 16. It reads as an undecoded
+    // record now, which is the point.
+    const encoder = new TextEncoder();
+    const data = new Uint8Array(344);
+    data.set(encoder.encode('DCLTCAT1'), 0);
+    data[8] = 1; data[10] = 3; data[11] = 1;
+    data.set(encoder.encode('DCLTROOT'), 16);
+    const market = parseSuccessorAccount('primary.market', Object.freeze({ owner: UPGRADEABLE_LOADER_ID, executable: false, data, space: data.length, lamports: '1' }));
+    expect([market.kind, market.headline]).toEqual(['finalized semantic record', 'DCLTCAT1']);
   });
 
   it('refuses a checkpoint that promotes localhost evidence into a release claim', () => {
@@ -111,6 +126,86 @@ describe('immutable localhost successor checkpoint', () => {
     for (const hostile of ['https://127.0.0.1:20890/', 'http://example.com:20890/', 'http://8.8.8.8:20890/', 'http://localhost:20890/', 'http://127.0.0.1/']) {
       expect(() => decodeLocalSuccessorCheckpoint(relocate(hostile))).toThrow('loopback explicit-port profile');
     }
+  });
+});
+
+/**
+ * The two records this surface used to decode in its own words.
+ *
+ * `localSuccessor.ts` carried a hand-written `DCLTSRS1` arm and a hand-written
+ * `DCLTCFS1` arm. Neither magic has a producer:
+ * `SourceResolutionStateV1::to_bytes` is reachable only from its own crate's
+ * `#[cfg(test)] mod tests`, and `FundingStateV1`'s only allocator anywhere,
+ * `stage_pending_funding`, has no caller. Both are now read through
+ * `stateMachines`, whose table is emitted from the machines' own Rust
+ * decoders, and the two cases below are the pair that makes that real: what
+ * the LIVE records decode to, and what the frozen checkpoint's superseded
+ * bodies say now that nothing pretends they are current.
+ */
+describe('Source and funding read through the derived decoder', () => {
+  type MachineVector = Readonly<{ machine: string; address: string; owner: string; accountBytes: number; recordOffset: number; recordHex: string }>;
+  const VECTORS = machineVectors.records as ReadonlyArray<MachineVector>;
+  const vector = (machine: string, index: number): RpcAccount => {
+    const entries = VECTORS.filter((entry) => entry.machine === machine);
+    const entry = entries[index];
+    if (entry === undefined) throw new Error(`cohort-15 vector ${machine}[${index}] is absent`);
+    const data = Uint8Array.from(entry.recordHex.match(/../g) ?? [], (byte) => Number.parseInt(byte, 16));
+    if (data.length !== entry.accountBytes || entry.recordOffset !== 0) throw new Error(`${machine}[${index}] is not a whole account`);
+    return Object.freeze({ owner: entry.owner, executable: false, data, space: data.length, lamports: '1' });
+  };
+
+  // Read off devnet cohort-15 at slot 492837406 and committed as
+  // `fixtures/state-machines.devnet.json`; these are the records the chain
+  // actually holds, against the decoders this surface now uses.
+  it('reads cohort-15 Source bodies the chain actually holds', () => {
+    const unresolved = parseSuccessorAccount('lifecycle.state', vector('source', 0));
+    const resolved = parseSuccessorAccount('lifecycle.state', vector('source', 1));
+
+    expect([unresolved.kind, unresolved.headline]).toEqual(['Source resolution state', 'Primary']);
+    expect([resolved.kind, resolved.headline]).toEqual(['Source resolution state', 'Resolved']);
+    // The record identity is sourced, not stated: it comes from the generated
+    // table, so a machine renamed in Rust moves this line by regenerating.
+    expect(resolved.facts.map((entry) => [entry.label, entry.value])).toContainEqual(['record', 'SourceResolutionStateV2']);
+    expect(resolved.facts.map((entry) => [entry.label, entry.value])).toContainEqual(['magic', 'DCLTSRS2']);
+    expect(resolved.facts.map((entry) => [entry.label, entry.value])).toContainEqual(['wire tag', '2']);
+  });
+
+  it('reads a cohort-15 funding ledger, including its slot count', () => {
+    const single = parseSuccessorAccount('lifecycle.funding.failure', vector('funding-ledger', 0));
+    const three = parseSuccessorAccount('lifecycle.funding.failure', vector('funding-ledger', 1));
+
+    expect([single.kind, single.headline]).toEqual(['capability funding ledger', 'Active']);
+    expect([three.kind, three.headline]).toEqual(['capability funding ledger', 'Active']);
+    // A ledger's width is a function of how many manifest entries were
+    // selected, so the slot count is the one fact that separates these two.
+    expect(single.facts.map((entry) => [entry.label, entry.value])).toContainEqual(['slots', '1']);
+    expect(three.facts.map((entry) => [entry.label, entry.value])).toContainEqual(['slots', '3']);
+    expect(three.facts.map((entry) => [entry.label, entry.value])).toContainEqual(['record', 'FundingLedgerV2']);
+  });
+
+  it('names the committed checkpoint as a superseded generation instead of rendering it', () => {
+    // The checkpoint was captured on 2026-08-25 against a program pair whose
+    // ids appear nowhere in this tree but the fixture. Its Source and funding
+    // bodies are real bytes of a generation nothing writes any more, and the
+    // refusal has to say THAT and not "corrupt account" -- which is what the
+    // derived decoder's own words ("opens with X and not Y") would read as on
+    // a card.
+    expect(() => parseSuccessorAccount('lifecycle.state', fixture('lifecycle.state')))
+      .toThrow(/SupersededRecordGeneration: lifecycle.state opens with DCLTSRS1, and the record this client reads is SourceResolutionStateV2 \(DCLTSRS2\)/);
+    expect(() => parseSuccessorAccount('lifecycle.funding.failure', fixture('lifecycle.funding.failure')))
+      .toThrow(/SupersededRecordGeneration: lifecycle.funding.failure opens with DCLTCFS1, and the record this client reads is FundingLedgerV2 \(DCLTFL02\)/);
+  });
+
+  // The refusal above is about the GENERATION, and it must not swallow the
+  // ordinary case. A body carrying the live magic and a byte its own Rust enum
+  // admits no state for is a different accusation, and it keeps the derived
+  // decoder's words.
+  it('keeps an undecodable live record distinct from a superseded one', () => {
+    const live = vector('source', 1);
+    const corrupted = Object.freeze({ ...live, data: live.data.slice() });
+    corrupted.data[10] = 9;
+    expect(() => parseSuccessorAccount('lifecycle.state', corrupted))
+      .toThrow('SourceResolutionStateV2: SourceResolutionPhaseV1 admits no state for byte 9');
   });
 });
 

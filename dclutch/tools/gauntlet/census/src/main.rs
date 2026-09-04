@@ -313,6 +313,27 @@ fn command_inventory(options: &Options) -> Result<(), String> {
         "census: {gated} routes carry a named phase gate, {} carry none",
         routes.saturating_sub(gated)
     );
+    // A selected gate is real and is NOT a gate of the route, so it is counted
+    // out loud and separately. Printed inside one number it would read as
+    // coverage; printed nowhere it would be a fact the census holds and never
+    // says, which is the shape the phase gates were in before `2b0046fb`.
+    let selected: Vec<&crate::model::PhaseAdmission> = inventory
+        .programs
+        .iter()
+        .flat_map(|program| &program.routes)
+        .flat_map(|route| &route.selected_prestates)
+        .collect();
+    if !selected.is_empty() {
+        let classifiers: std::collections::BTreeSet<&str> = selected
+            .iter()
+            .filter_map(|entry| entry.selected_by.as_deref())
+            .collect();
+        eprintln!(
+            "census: {} gates lie behind {} selection(s), necessary to a family and not to a route",
+            selected.len(),
+            classifiers.len()
+        );
+    }
 
     let mut bytes = serde_json::to_vec_pretty(&inventory)
         .map_err(|error| format!("encode inventory: {error}"))?;

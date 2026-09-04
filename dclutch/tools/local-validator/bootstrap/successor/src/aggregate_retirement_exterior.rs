@@ -91,6 +91,9 @@ struct ArgumentsV1 {
     origin: ClusterOriginV1,
     plan: PathBuf,
     evidence: PathBuf,
+    /// The finalized-slot refresh that carries the Direct EXECUTION capability
+    /// root. Optional, and a market that never activated needs none.
+    refreshed_evidence: Option<PathBuf>,
     market: Pubkey,
     source_receipt: Pubkey,
     payer: Pubkey,
@@ -136,11 +139,14 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
     let plan_source = read_bounded(&arguments.plan, "successor plan")?;
     let evidence_source = read_bounded(&arguments.evidence, "terminal evidence")?;
     let plan: SuccessorPlan = serde_json::from_slice(&plan_source)?;
-    let evidence =
+    let founding_evidence =
         parse_campaign_terminal_evidence_with_expected_cluster_v1(&evidence_source, expected)?;
-    authenticate_plan_source(&plan_source, &evidence.plan_sha256)?;
-    require_direct_retirement_evidence(&evidence)?;
-    authenticate_campaign_market_v1(&evidence, arguments.market)?;
+    authenticate_plan_source(&plan_source, &founding_evidence.plan_sha256)?;
+    let refreshed_source = arguments
+        .refreshed_evidence
+        .as_ref()
+        .map(|path| read_bounded(path, "refreshed terminal evidence"))
+        .transpose()?;
 
     let mut rpc = Rpc::connect_cluster(
         &arguments.origin,
@@ -156,6 +162,45 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
         .ok_or_else(|| refusal("getGenesisHash returned a non-string"))?
         .to_owned();
     arguments.origin.authenticate_genesis(&genesis_hash)?;
+    // `direct_capability_root` names two different addresses, and the founding
+    // campaign carries the wrong one for this stage: the founding checkpoint's
+    // scalar is the founding-PERMIT root, at which no account can ever exist,
+    // while the terminal sequence means the EXECUTION root that activation
+    // creates. Only an evidence refresh emits the second under that label
+    // (`docs/design/EVIDENCE_REFRESH_V1.md` §3), which is why
+    // `terminal_sequence.rs` already takes one and why retirement -- the last
+    // stage of the same lifecycle -- could not run without it.
+    //
+    // The refresh widens WHICH DOCUMENT MAY CARRY A ROW and nothing else: the
+    // two checks below run unchanged against the effective map, and with no
+    // refresh supplied the sequence is byte-for-byte what it was. They moved
+    // below the cluster connect because a refresh has to be admitted against a
+    // finalized slot before the evidence it produces can be judged.
+    let evidence = match refreshed_source.as_deref() {
+        None => founding_evidence,
+        Some(bytes) => {
+            let refresh = crate::evidence_refresh::parse_refresh_v1(bytes)?;
+            let effective = crate::evidence_refresh::effective_accounts_v1(
+                &refresh,
+                &evidence_source,
+                &crate::terminal_sequence::terminal_rows_as_model_v1(&founding_evidence.accounts),
+                &founding_evidence.plan_sha256,
+                expected,
+                rpc.finalized_slot()?,
+            )?;
+            let founding_custody_context = crate::evidence_refresh::effective_custody_context_v1(
+                Some(&refresh),
+                &founding_evidence.founding_custody_context,
+            )?;
+            CampaignTerminalEvidenceV1 {
+                accounts: crate::terminal_sequence::model_rows_as_terminal_v1(effective),
+                founding_custody_context,
+                ..founding_evidence
+            }
+        }
+    };
+    require_direct_retirement_evidence(&evidence)?;
+    authenticate_campaign_market_v1(&evidence, arguments.market)?;
 
     let campaign = load_or_create_campaign_v1(
         &mut rpc,
@@ -880,9 +925,7 @@ fn parse_arguments_v1(arguments: Vec<String>, expected: ExpectedClusterV1) -> Re
         // does take it.
         if argument == DEVNET_ACKNOWLEDGMENT_FLAG && expected == ExpectedClusterV1::Devnet {
             if acknowledgment.replace(value).is_some() {
-                return Err(Error::new(format!(
-                    "{argument} may be supplied only once"
-                )));
+                return Err(Error::new(format!("{argument} may be supplied only once")));
             }
             continue;
         }
@@ -891,6 +934,7 @@ fn parse_arguments_v1(arguments: Vec<String>, expected: ExpectedClusterV1) -> Re
             "--rpc-url"
                 | "--plan"
                 | "--evidence"
+                | "--refreshed-evidence"
                 | "--market"
                 | "--source-receipt"
                 | "--fee-payer"
@@ -934,6 +978,10 @@ fn parse_arguments_v1(arguments: Vec<String>, expected: ExpectedClusterV1) -> Re
         origin: ClusterOriginV1::parse(&rpc_url, acknowledgment.as_deref())?,
         plan: absolute(take(&mut values, "--plan")?, "--plan")?,
         evidence: absolute(take(&mut values, "--evidence")?, "--evidence")?,
+        refreshed_evidence: values
+            .remove("--refreshed-evidence")
+            .map(|value| absolute(value, "--refreshed-evidence"))
+            .transpose()?,
         market: parse_key(take(&mut values, "--market")?, "--market")?,
         source_receipt: parse_key(take(&mut values, "--source-receipt")?, "--source-receipt")?,
         payer: parse_key(take(&mut values, "--fee-payer")?, "--fee-payer")?,
@@ -953,7 +1001,7 @@ pub(crate) fn devnet_usage() -> &'static str {
     "\n  dclutch-local-successor-bootstrap devnet-aggregate-retirement-v1 \\\n     \
      --rpc-url https://api.devnet.solana.com --i-mean-devnet DEVNET_GENESIS \\\n     \
      --plan ABSOLUTE_JSON \\\n     \
-     --evidence ABSOLUTE_JSON --market PUBKEY --source-receipt PUBKEY \\\n     \
+     --evidence ABSOLUTE_JSON [--refreshed-evidence ABSOLUTE_JSON] --market PUBKEY --source-receipt PUBKEY \\\n     \
      --fee-payer PUBKEY --fee-payer-keypair ABSOLUTE_KEYPAIR \\\n     \
      --lookup-table PUBKEY --campaign ABSOLUTE_JSON \\\n     \
      --journal-dir ABSOLUTE_DIRECTORY --completion ABSOLUTE_JSON [--execute]\n\nThe same \
@@ -963,7 +1011,7 @@ pub(crate) fn devnet_usage() -> &'static str {
 }
 
 pub(crate) fn usage() -> &'static str {
-    "\n  dclutch-local-successor-bootstrap local-private-validator-aggregate-retirement-v1 \\\n     --rpc-url http://127.0.0.1:PORT --plan ABSOLUTE_JSON \\\n     --evidence ABSOLUTE_JSON --market PUBKEY --source-receipt PUBKEY \\\n     --fee-payer PUBKEY --fee-payer-keypair ABSOLUTE_KEYPAIR \\\n     --lookup-table PUBKEY --campaign ABSOLUTE_JSON \\\n     --journal-dir ABSOLUTE_DIRECTORY --completion ABSOLUTE_JSON [--execute]\n\nWithout \\
+    "\n  dclutch-local-successor-bootstrap local-private-validator-aggregate-retirement-v1 \\\n     --rpc-url http://127.0.0.1:PORT --plan ABSOLUTE_JSON \\\n     --evidence ABSOLUTE_JSON [--refreshed-evidence ABSOLUTE_JSON] --market PUBKEY --source-receipt PUBKEY \\\n     --fee-payer PUBKEY --fee-payer-keypair ABSOLUTE_KEYPAIR \\\n     --lookup-table PUBKEY --campaign ABSOLUTE_JSON \\\n     --journal-dir ABSOLUTE_DIRECTORY --completion ABSOLUTE_JSON [--execute]\n\nWithout \\
      --execute this command performs finalized owned-loopback reads, creates or authenticates the \\
      immutable four-packet campaign, and persists only the next unsigned Planned journal. Execute \\
      reads the named payer key only from Prepared, fsyncs Dispatching before the first send, polls \\
@@ -1213,6 +1261,63 @@ mod tests {
         argv
     }
 
+    /// A refresh is optional and absolute, and both arms take it.
+    ///
+    /// Retirement is the last stage of the same lifecycle `terminal_sequence`
+    /// runs, and it consumes the same document for the same reason: the
+    /// founding campaign carries the founding-PERMIT capability root, at which
+    /// no account can ever exist, and only a refresh emits the EXECUTION root
+    /// under that label.
+    #[test]
+    fn retirement_takes_an_optional_absolute_refreshed_evidence_document() {
+        let parsed = parse_arguments_v1(
+            retirement_arguments(&["--refreshed-evidence", "/tmp/refresh.json"]),
+            ExpectedClusterV1::OwnedLoopback,
+        )
+        .expect("a refresh is an accepted argument");
+        assert_eq!(
+            parsed.refreshed_evidence.as_deref(),
+            Some(std::path::Path::new("/tmp/refresh.json")),
+        );
+        let parsed =
+            parse_arguments_v1(retirement_arguments(&[]), ExpectedClusterV1::OwnedLoopback)
+                .expect("a refresh is optional");
+        assert_eq!(parsed.refreshed_evidence, None);
+    }
+
+    #[test]
+    fn a_relative_refresh_is_refused_by_name() {
+        let Err(refusal) = parse_arguments_v1(
+            retirement_arguments(&["--refreshed-evidence", "refresh.json"]),
+            ExpectedClusterV1::OwnedLoopback,
+        ) else {
+            panic!("a relative refresh path must be refused");
+        };
+        assert!(
+            refusal.to_string().contains("--refreshed-evidence"),
+            "the refusal must name the flag: {refusal}"
+        );
+    }
+
+    #[test]
+    fn a_repeated_refresh_is_refused() {
+        let Err(refusal) = parse_arguments_v1(
+            retirement_arguments(&[
+                "--refreshed-evidence",
+                "/tmp/a.json",
+                "--refreshed-evidence",
+                "/tmp/b.json",
+            ]),
+            ExpectedClusterV1::OwnedLoopback,
+        ) else {
+            panic!("two refreshes must be refused");
+        };
+        assert!(
+            refusal.to_string().contains("only once"),
+            "unexpected refusal: {refusal}"
+        );
+    }
+
     /// The devnet acknowledgment belongs to the public arm alone, and the
     /// loopback arm names the command that does take it rather than refusing
     /// it as an anonymous unknown argument.
@@ -1241,8 +1346,7 @@ mod tests {
     /// requires it.
     #[test]
     fn the_public_retirement_arm_requires_the_devnet_acknowledgment() {
-        let Err(refusal) =
-            parse_arguments_v1(retirement_arguments(&[]), ExpectedClusterV1::Devnet)
+        let Err(refusal) = parse_arguments_v1(retirement_arguments(&[]), ExpectedClusterV1::Devnet)
         else {
             panic!("the devnet arm must not run unacknowledged");
         };
@@ -1266,7 +1370,9 @@ mod tests {
             panic!("a loopback socket must not be acknowledged as devnet");
         };
         assert!(
-            refusal.to_string().contains("was given for the loopback origin"),
+            refusal
+                .to_string()
+                .contains("was given for the loopback origin"),
             "expected the origin parser's loopback refusal, got: {refusal}"
         );
     }
@@ -1411,15 +1517,19 @@ mod tests {
 
     #[test]
     fn argv_freezes_exact_private_exterior_surface() {
-        let parsed =
-            parse_arguments_v1(
-                argv("/private/tmp/aggregate-retirement"),
-                ExpectedClusterV1::OwnedLoopback,
-            ).expect("exact argv");
+        let parsed = parse_arguments_v1(
+            argv("/private/tmp/aggregate-retirement"),
+            ExpectedClusterV1::OwnedLoopback,
+        )
+        .expect("exact argv");
         assert!(!parsed.execute);
         let mut execute = argv("/private/tmp/aggregate-retirement");
         execute.push("--execute".into());
-        assert!(parse_arguments_v1(execute, ExpectedClusterV1::OwnedLoopback).expect("execute argv").execute);
+        assert!(
+            parse_arguments_v1(execute, ExpectedClusterV1::OwnedLoopback)
+                .expect("execute argv")
+                .execute
+        );
     }
 
     #[test]

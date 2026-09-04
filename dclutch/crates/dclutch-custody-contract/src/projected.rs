@@ -5,6 +5,28 @@ use dclutch_release_set_contract::ExecutionRoleV1;
 
 use crate::{
     CompartmentV1, CustodyReplayV1,
+    generated_projected_state_v2::{
+        PROJECTED_CUSTODY_PHASE_HOARD_LOCKED_V1, PROJECTED_CUSTODY_PHASE_HOARD_OPEN_V1,
+        PROJECTED_CUSTODY_PHASE_INITIALIZED_V1, PROJECTED_CUSTODY_PHASE_SOURCE_FUNDED_V1,
+        PROJECTED_CUSTODY_STATE_BUMP_OFFSET_V2, PROJECTED_CUSTODY_STATE_CAP_RESERVED_BYTES_V2,
+        PROJECTED_CUSTODY_STATE_CAP_RESERVED_OFFSET_V2,
+        PROJECTED_CUSTODY_STATE_EXPIRY_SLOT_OFFSET_V2,
+        PROJECTED_CUSTODY_STATE_FUNDING_SOURCE_COMPARTMENT_OFFSET_V2,
+        PROJECTED_CUSTODY_STATE_GENERATION_OFFSET_V2,
+        PROJECTED_CUSTODY_STATE_HEAD_RESERVED_BYTES_V2,
+        PROJECTED_CUSTODY_STATE_HEAD_RESERVED_OFFSET_V2,
+        PROJECTED_CUSTODY_STATE_IDENTITIES_OFFSET_V2, PROJECTED_CUSTODY_STATE_IDENTITY_COUNT_V2,
+        PROJECTED_CUSTODY_STATE_LAST_REQUEST_DIGEST_OFFSET_V2,
+        PROJECTED_CUSTODY_STATE_LOCKED_AMOUNT_OFFSET_V2,
+        PROJECTED_CUSTODY_STATE_NEXT_REVISION_OFFSET_V2, PROJECTED_CUSTODY_STATE_PHASE_OFFSET_V2,
+        PROJECTED_CUSTODY_STATE_PRINCIPAL_CAP_SETS_OFFSET_V2,
+        PROJECTED_CUSTODY_STATE_SCHEMA_VERSION_V2,
+        PROJECTED_CUSTODY_STATE_SOURCE_REPLAY_REVISION_OFFSET_V2,
+        PROJECTED_CUSTODY_STATE_SOURCE_STATE_RENT_OFFSET_V2,
+        PROJECTED_CUSTODY_STATE_SOURCE_VAULT_RENT_OFFSET_V2,
+        PROJECTED_CUSTODY_STATE_STATE_RENT_OFFSET_V2, PROJECTED_CUSTODY_STATE_VAULT_RENT_OFFSET_V2,
+        PROJECTED_CUSTODY_STATE_VERSION_OFFSET_V2,
+    },
     projected_admission_v1::{
         PROJECTED_CUSTODY_FOUNDING_LOCK_ADMISSIBLE_STATES_V1,
         PROJECTED_CUSTODY_HOARD_OPEN_ADMISSIBLE_STATES_V1,
@@ -17,7 +39,11 @@ use crate::{
 /// Projected-custody request magic.
 pub const PROJECTED_CUSTODY_REQUEST_MAGIC_V1: [u8; 8] = *b"DCLPCQ01";
 /// Projected-custody state magic.
-pub const PROJECTED_CUSTODY_STATE_MAGIC_V2: [u8; 8] = *b"DCLPCS02";
+///
+/// Re-exported from the Lean emission rather than restated: this record's
+/// magic, width, phase coordinate, four wire tags and every other coordinate
+/// now have one author, `DClutchSemantics.ProjectedCustodyStateV2Abi`.
+pub use crate::generated_projected_state_v2::PROJECTED_CUSTODY_STATE_MAGIC_V2;
 /// Projected-custody terminal receipt magic.
 pub const PROJECTED_CUSTODY_RECEIPT_MAGIC_V1: [u8; 8] = *b"DCLPCR01";
 /// Exact request width.
@@ -38,7 +64,7 @@ impl ProjectedCustodyRequestLayoutV1 {
 }
 
 /// Exact persisted-state width.
-pub const PROJECTED_CUSTODY_STATE_BYTES_V2: usize = 808;
+pub use crate::generated_projected_state_v2::PROJECTED_CUSTODY_STATE_BYTES_V2;
 /// Exact terminal receipt width.
 pub const PROJECTED_CUSTODY_RECEIPT_BYTES_V1: usize = 320;
 /// Exact projected-Custody replay-creation physical frame width.
@@ -85,7 +111,17 @@ const _: () = assert!(
 /// Lock-and-close receipt magic.
 pub const PROJECTED_CUSTODY_LOCK_RECEIPT_MAGIC_V1: [u8; 8] = *b"DCLPCL01";
 const VERSION_V1: u16 = 1;
-const VERSION_V2: u16 = 2;
+const VERSION_V2: u16 = PROJECTED_CUSTODY_STATE_SCHEMA_VERSION_V2;
+
+/// `header_version` reads the ABI version at a literal `8` for every record in
+/// this module, which is the custody family's shared header shape and not this
+/// record's to re-own. The projected STATE's own version coordinate is emitted,
+/// so this pins the two together: if Lean ever moves it, the shared helper
+/// stops reading this record's version and a compiler says so.
+const _: () = assert!(
+    PROJECTED_CUSTODY_STATE_VERSION_OFFSET_V2 == 8,
+    "the projected state's emitted version coordinate left the family header"
+);
 
 /// Stable refusal from projected pre-founding custody.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -173,11 +209,11 @@ impl ProjectedCustodyOperationV1 {
 #[repr(u8)]
 pub enum ProjectedCustodyPhaseV1 {
     /// Projection state exists; vault is not created.
-    Initialized = 1,
+    Initialized = PROJECTED_CUSTODY_PHASE_INITIALIZED_V1,
     /// Empty projected Hoard vault exists.
-    HoardOpen = 2,
+    HoardOpen = PROJECTED_CUSTODY_PHASE_HOARD_OPEN_V1,
     /// Exact principal has been credited into the projected Hoard.
-    HoardLocked = 3,
+    HoardLocked = PROJECTED_CUSTODY_PHASE_HOARD_LOCKED_V1,
     /// The normal source compartment exists and holds the exact principal.
     ///
     /// Reached only through [`ProjectedCustodyOperationV1::OpenSourceCompartment`],
@@ -199,7 +235,7 @@ pub enum ProjectedCustodyPhaseV1 {
     /// `expiry_slot` has passed, so a projection that reached this phase and
     /// did not found in time held principal **no route could ever move**. The
     /// abort is what makes the forward direction safe to enter.
-    SourceFunded = 4,
+    SourceFunded = PROJECTED_CUSTODY_PHASE_SOURCE_FUNDED_V1,
 }
 
 /// Canonical projected-state PDA seeds under Custody.
@@ -749,38 +785,86 @@ impl ProjectedCustodyStateV2 {
         }
         let mut output = [0; PROJECTED_CUSTODY_STATE_BYTES_V2];
         output[..8].copy_from_slice(&PROJECTED_CUSTODY_STATE_MAGIC_V2);
-        put_u16(&mut output, 8, VERSION_V2)?;
-        put_u8(&mut output, 10, self.phase as u8)?;
-        put_u8(&mut output, 11, self.bump)?;
+        put_u16(
+            &mut output,
+            PROJECTED_CUSTODY_STATE_VERSION_OFFSET_V2,
+            VERSION_V2,
+        )?;
         put_u8(
             &mut output,
-            12,
+            PROJECTED_CUSTODY_STATE_PHASE_OFFSET_V2,
+            self.phase as u8,
+        )?;
+        put_u8(
+            &mut output,
+            PROJECTED_CUSTODY_STATE_BUMP_OFFSET_V2,
+            self.bump,
+        )?;
+        put_u8(
+            &mut output,
+            PROJECTED_CUSTODY_STATE_FUNDING_SOURCE_COMPARTMENT_OFFSET_V2,
             self.request.funding_source_compartment.tag(),
         )?;
-        put_u64(&mut output, 16, self.principal_cap_sets)?;
-        write_identities(&mut output, 32, &self.request.identities())?;
-        put_u64(&mut output, 704, self.request.generation)?;
-        put_u64(&mut output, 712, self.request.expiry_slot)?;
-        put_u64(&mut output, 720, self.next_revision)?;
-        put_u64(&mut output, 728, self.locked_amount)?;
-        put_u64(&mut output, 736, self.request.state_rent_lamports)?;
-        put_u64(&mut output, 744, self.request.vault_rent_lamports)?;
         put_u64(
             &mut output,
-            752,
+            PROJECTED_CUSTODY_STATE_PRINCIPAL_CAP_SETS_OFFSET_V2,
+            self.principal_cap_sets,
+        )?;
+        write_identities(
+            &mut output,
+            PROJECTED_CUSTODY_STATE_IDENTITIES_OFFSET_V2,
+            &self.request.identities(),
+        )?;
+        put_u64(
+            &mut output,
+            PROJECTED_CUSTODY_STATE_GENERATION_OFFSET_V2,
+            self.request.generation,
+        )?;
+        put_u64(
+            &mut output,
+            PROJECTED_CUSTODY_STATE_EXPIRY_SLOT_OFFSET_V2,
+            self.request.expiry_slot,
+        )?;
+        put_u64(
+            &mut output,
+            PROJECTED_CUSTODY_STATE_NEXT_REVISION_OFFSET_V2,
+            self.next_revision,
+        )?;
+        put_u64(
+            &mut output,
+            PROJECTED_CUSTODY_STATE_LOCKED_AMOUNT_OFFSET_V2,
+            self.locked_amount,
+        )?;
+        put_u64(
+            &mut output,
+            PROJECTED_CUSTODY_STATE_STATE_RENT_OFFSET_V2,
+            self.request.state_rent_lamports,
+        )?;
+        put_u64(
+            &mut output,
+            PROJECTED_CUSTODY_STATE_VAULT_RENT_OFFSET_V2,
+            self.request.vault_rent_lamports,
+        )?;
+        put_u64(
+            &mut output,
+            PROJECTED_CUSTODY_STATE_SOURCE_REPLAY_REVISION_OFFSET_V2,
             self.request.funding_source_replay_revision,
         )?;
         put_u64(
             &mut output,
-            760,
+            PROJECTED_CUSTODY_STATE_SOURCE_STATE_RENT_OFFSET_V2,
             self.request.funding_source_state_rent_lamports,
         )?;
         put_u64(
             &mut output,
-            768,
+            PROJECTED_CUSTODY_STATE_SOURCE_VAULT_RENT_OFFSET_V2,
             self.request.funding_source_vault_rent_lamports,
         )?;
-        put(&mut output, 776, &self.last_request_digest)?;
+        put(
+            &mut output,
+            PROJECTED_CUSTODY_STATE_LAST_REQUEST_DIGEST_OFFSET_V2,
+            &self.last_request_digest,
+        )?;
         Ok(output)
     }
 
@@ -792,20 +876,32 @@ impl ProjectedCustodyStateV2 {
             PROJECTED_CUSTODY_STATE_BYTES_V2,
             VERSION_V2,
         )?;
-        if any_nonzero(input, 13, 3)? || any_nonzero(input, 24, 8)? {
+        if any_nonzero(
+            input,
+            PROJECTED_CUSTODY_STATE_HEAD_RESERVED_OFFSET_V2,
+            PROJECTED_CUSTODY_STATE_HEAD_RESERVED_BYTES_V2,
+        )? || any_nonzero(
+            input,
+            PROJECTED_CUSTODY_STATE_CAP_RESERVED_OFFSET_V2,
+            PROJECTED_CUSTODY_STATE_CAP_RESERVED_BYTES_V2,
+        )? {
             return Err(ProjectedCustodyError::NonCanonical);
         }
-        let ids = read_identities::<21>(input, 32)?;
-        let phase = match read_u8(input, 10)? {
-            1 => ProjectedCustodyPhaseV1::Initialized,
-            2 => ProjectedCustodyPhaseV1::HoardOpen,
-            3 => ProjectedCustodyPhaseV1::HoardLocked,
-            4 => ProjectedCustodyPhaseV1::SourceFunded,
+        let ids = read_identities::<PROJECTED_CUSTODY_STATE_IDENTITY_COUNT_V2>(
+            input,
+            PROJECTED_CUSTODY_STATE_IDENTITIES_OFFSET_V2,
+        )?;
+        let phase = match read_u8(input, PROJECTED_CUSTODY_STATE_PHASE_OFFSET_V2)? {
+            PROJECTED_CUSTODY_PHASE_INITIALIZED_V1 => ProjectedCustodyPhaseV1::Initialized,
+            PROJECTED_CUSTODY_PHASE_HOARD_OPEN_V1 => ProjectedCustodyPhaseV1::HoardOpen,
+            PROJECTED_CUSTODY_PHASE_HOARD_LOCKED_V1 => ProjectedCustodyPhaseV1::HoardLocked,
+            PROJECTED_CUSTODY_PHASE_SOURCE_FUNDED_V1 => ProjectedCustodyPhaseV1::SourceFunded,
             _ => return Err(ProjectedCustodyError::Phase),
         };
-        let next_revision = read_u64(input, 720)?;
-        let locked_amount = read_u64(input, 728)?;
-        let principal_cap_sets = read_u64(input, 16)?;
+        let next_revision = read_u64(input, PROJECTED_CUSTODY_STATE_NEXT_REVISION_OFFSET_V2)?;
+        let locked_amount = read_u64(input, PROJECTED_CUSTODY_STATE_LOCKED_AMOUNT_OFFSET_V2)?;
+        let principal_cap_sets =
+            read_u64(input, PROJECTED_CUSTODY_STATE_PRINCIPAL_CAP_SETS_OFFSET_V2)?;
         // `custodied_amount` is the principal this authority holds, wherever it
         // currently sits: in the funded source compartment before Lock, in the
         // Hoard after it. Both phases must carry a nonzero one and no other
@@ -847,21 +943,33 @@ impl ProjectedCustodyStateV2 {
             hoard_vault: ids[15],
             funding_source_vault: ids[16],
             funding_source_context: ids[17],
-            funding_source_compartment: CompartmentV1::decode(read_u8(input, 12)?)
-                .map_err(|_| ProjectedCustodyError::NonCanonical)?,
+            funding_source_compartment: CompartmentV1::decode(read_u8(
+                input,
+                PROJECTED_CUSTODY_STATE_FUNDING_SOURCE_COMPARTMENT_OFFSET_V2,
+            )?)
+            .map_err(|_| ProjectedCustodyError::NonCanonical)?,
             mint: ids[18],
             token_program: ids[19],
             collateral_release: ids[20],
-            generation: read_u64(input, 704)?,
-            expiry_slot: read_u64(input, 712)?,
+            generation: read_u64(input, PROJECTED_CUSTODY_STATE_GENERATION_OFFSET_V2)?,
+            expiry_slot: read_u64(input, PROJECTED_CUSTODY_STATE_EXPIRY_SLOT_OFFSET_V2)?,
             expected_revision: next_revision.saturating_sub(1),
             resulting_revision: next_revision,
             amount: if custodied_amount { locked_amount } else { 0 },
-            state_rent_lamports: read_u64(input, 736)?,
-            vault_rent_lamports: read_u64(input, 744)?,
-            funding_source_replay_revision: read_u64(input, 752)?,
-            funding_source_state_rent_lamports: read_u64(input, 760)?,
-            funding_source_vault_rent_lamports: read_u64(input, 768)?,
+            state_rent_lamports: read_u64(input, PROJECTED_CUSTODY_STATE_STATE_RENT_OFFSET_V2)?,
+            vault_rent_lamports: read_u64(input, PROJECTED_CUSTODY_STATE_VAULT_RENT_OFFSET_V2)?,
+            funding_source_replay_revision: read_u64(
+                input,
+                PROJECTED_CUSTODY_STATE_SOURCE_REPLAY_REVISION_OFFSET_V2,
+            )?,
+            funding_source_state_rent_lamports: read_u64(
+                input,
+                PROJECTED_CUSTODY_STATE_SOURCE_STATE_RENT_OFFSET_V2,
+            )?,
+            funding_source_vault_rent_lamports: read_u64(
+                input,
+                PROJECTED_CUSTODY_STATE_SOURCE_VAULT_RENT_OFFSET_V2,
+            )?,
         };
         immutable.validate()?;
         Ok(Self {
@@ -870,10 +978,14 @@ impl ProjectedCustodyStateV2 {
             next_revision,
             locked_amount,
             principal_cap_sets,
-            last_request_digest: slice(input, 776, 32)?
-                .try_into()
-                .map_err(|_| ProjectedCustodyError::InvalidLength)?,
-            bump: read_u8(input, 11)?,
+            last_request_digest: slice(
+                input,
+                PROJECTED_CUSTODY_STATE_LAST_REQUEST_DIGEST_OFFSET_V2,
+                32,
+            )?
+            .try_into()
+            .map_err(|_| ProjectedCustodyError::InvalidLength)?,
+            bump: read_u8(input, PROJECTED_CUSTODY_STATE_BUMP_OFFSET_V2)?,
         })
     }
 

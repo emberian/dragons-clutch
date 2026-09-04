@@ -209,11 +209,42 @@ fn machine(admission_type: &str) -> Option<&'static Machine> {
 
 /// How many function bodies deep the scan follows a route's own calls.
 ///
-/// Three is what the deepest real guard needs: `retire_v1::process` ->
-/// `process_authenticated` -> `authenticate_market`. The descent stops at any
-/// function that is itself another route's handler, so the bound is a cycle
-/// guard rather than the thing that keeps one route's gates out of another's.
-const MAX_GUARD_DEPTH: usize = 3;
+/// The descent stops at any function that is itself another route's handler,
+/// and at any [`declines_first`] classifier, and it never revisits a function
+/// it has already scanned -- so this is a bound on REACH, not a cycle guard,
+/// and the number has to be the deepest chain the tree actually writes.
+///
+/// Three was that number when it was chosen, against `retire_v1::process` ->
+/// `process_authenticated` -> `authenticate_market`, and the comment saying so
+/// went stale without anything going red: the bound truncates in silence, and
+/// a truncated route reads exactly like an ungated one. Four is what the tree
+/// writes today, in two places measured at `87c8065f5` and read by hand --
+/// Resolution's `process_deadline_failure_coordinates` ->
+/// `plan_and_encode_deadline_failure` -> `plan_deadline_failure_v1` ->
+/// `plan_funding_release`, which requires the funding ledger `Active`, and the
+/// same shape one route over. Beyond four the descent adds NOTHING to any
+/// necessary gate in this tree: unbounded, the only further row it reaches is
+/// `successor::consume_nonce_v2` at nine, behind the Direct crosscheck's own
+/// decline -- which the classifier rule now catches by name rather than by
+/// running out of budget.
+const MAX_GUARD_DEPTH: usize = 4;
+
+/// How deep a SELECTION's own descent runs, from the classifier that opens it.
+///
+/// Deliberately looser than the necessary bound, because the two bounds pay
+/// for different mistakes. A necessary gate is a publishable refutation -- a
+/// client may tell a person their act cannot succeed -- so reaching one frame
+/// too far there states a falsehood, and the bound is held to the deepest
+/// chain read by hand. A SELECTED gate refutes nothing until its consumer has
+/// shown its own execution takes the selection; reaching too far there costs a
+/// row somebody has to dismiss, while reaching too short costs the row
+/// silently, which is the defect this whole pass exists to remove.
+///
+/// Measured at `87c8065f5`: the deepest selected chain in the tree is six --
+/// `prepare_direct_inline_hot_crosscheck_v3` down to
+/// `successor::consume_nonce_v2`, which requires the Direct root `Open` -- and
+/// the descent SATURATES there. Raised to twenty it finds the same two rows.
+const MAX_SELECTION_DEPTH: usize = 8;
 
 /// One constant's declared set, with where it was written.
 #[derive(Clone, Debug)]
@@ -516,6 +547,10 @@ struct GuardScan {
     /// `if foundational`, and descending into it unconditionally published
     /// `Founding` as the admissible set of the REDEEM route.
     conditional: BTreeSet<String>,
+    /// This function DECLINES before it does anything else -- see
+    /// [`declines_first`]. Everything it reaches belongs to the family it
+    /// selected, not to every execution that called it.
+    declines: bool,
 }
 
 /// One side of an `if`: the gates written there, and the calls that may carry
@@ -990,6 +1025,105 @@ fn pattern_variants(pattern: &Pat) -> BTreeSet<String> {
     }
 }
 
+/// Whether a function's FIRST act is to decline without refusing.
+///
+/// `if !matches!(request.action, Expire) { return Ok(None); }` and
+/// `let Some(x) = classify(..) else { return Ok(None); };` say the same thing:
+/// *this is not my family, and nothing is wrong*. The tree writes it at the
+/// head of every per-family prelude on the shared Hot route --
+/// `try_authenticate_series_expiry_premarket_v1` and
+/// `prepare_direct_inline_hot_crosscheck_v3` both open with exactly this --
+/// and the whole remainder of such a body runs for one family alone.
+///
+/// The distinction that carries the weight is DECLINE against REFUSE, and it
+/// is the return VALUE that draws it. `if bad { return Err(..); }` is the
+/// ordinary guard idiom: every execution that gets past it has passed the
+/// check, so the rest of the body is unconditional and the census has always
+/// been right to walk it that way. `return Ok(None)` passes no judgement at
+/// all; the caller carries on with the ordinary path. Reading the two the same
+/// way is how a Series ticket's `Prepared` set becomes the published gate of a
+/// General settlement plan.
+///
+/// Deliberately only the FIRST statement. A function that declines halfway
+/// through has already done work every caller pays for, and that work's gates
+/// are the caller's; a classifier declines before it reads anything, which is
+/// what makes the remainder attributable to the selection alone.
+fn declines_first(block: &syn::Block) -> bool {
+    match block.stmts.first() {
+        Some(syn::Stmt::Expr(Expr::If(branch), _)) => {
+            branch.else_branch.is_none() && block_declines(&branch.then_branch)
+        }
+        Some(syn::Stmt::Local(local)) => local
+            .init
+            .as_ref()
+            .and_then(|init| init.diverge.as_ref())
+            .is_some_and(|(_, diverge)| match strip(diverge) {
+                Expr::Block(inner) => block_declines(&inner.block),
+                other => matches!(other, Expr::Return(ret) if ret
+                    .expr
+                    .as_ref()
+                    .is_some_and(|value| declines(value))),
+            }),
+        _ => false,
+    }
+}
+
+/// Whether a block's last statement returns a non-error.
+fn block_declines(block: &syn::Block) -> bool {
+    let Some(last) = block.stmts.last() else {
+        return false;
+    };
+    let Some(returned) = (match last {
+        syn::Stmt::Expr(Expr::Return(ret), _) => ret.expr.as_deref(),
+        _ => None,
+    }) else {
+        return false;
+    };
+    declines(returned)
+}
+
+/// `Ok(None)`, `Ok(false)` and a bare `None`: every way this tree spells "not
+/// mine, and nothing is wrong". `Ok(Some(..))` is a positive classification
+/// and `Err(..)` is a refusal; neither is a decline.
+fn declines(expr: &Expr) -> bool {
+    match strip(expr) {
+        Expr::Path(path) => path
+            .path
+            .segments
+            .last()
+            .is_some_and(|last| last.ident == "None"),
+        Expr::Call(call) => {
+            let Expr::Path(func) = call.func.as_ref() else {
+                return false;
+            };
+            if func
+                .path
+                .segments
+                .last()
+                .is_none_or(|last| last.ident != "Ok")
+            {
+                return false;
+            }
+            let [only] = &call.args.iter().collect::<Vec<_>>()[..] else {
+                return false;
+            };
+            match strip(only) {
+                Expr::Path(inner) => inner
+                    .path
+                    .segments
+                    .last()
+                    .is_some_and(|last| last.ident == "None"),
+                Expr::Lit(literal) => matches!(
+                    &literal.lit,
+                    syn::Lit::Bool(boolean) if !boolean.value
+                ),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
 /// Read the admissible-prestate gates each route in one program passes.
 pub struct GuardMap<'a> {
     index: &'a AdmissionIndex,
@@ -1063,6 +1197,7 @@ impl<'a> GuardMap<'a> {
                 bindings: function.inputs.iter().cloned().collect(),
             };
             visitor.visit_block(&function.block);
+            visitor.scan.declines = declines_first(&function.block);
             self.scans.insert(key.clone(), visitor.scan);
         }
         let scan = self.scans.get(&key)?;
@@ -1142,12 +1277,14 @@ impl<'a> GuardMap<'a> {
         handlers
     }
 
-    /// The gates `route` passes, as declared constants.
-    pub fn for_route(&mut self, route: &Route) -> Vec<PhaseAdmission> {
+    /// The gates `route` passes, as declared constants, and separately the
+    /// gates that lie behind a selection it makes.
+    pub fn for_route(&mut self, route: &Route) -> (Vec<PhaseAdmission>, Vec<PhaseAdmission>) {
         let selected = route_variant(route);
         let mut names: BTreeSet<String> = BTreeSet::new();
         let mut groups: Vec<BTreeSet<String>> = Vec::new();
         let mut pending: Vec<(String, [BranchSide; 2], usize)> = Vec::new();
+        let mut classifiers: Vec<(String, String, String)> = Vec::new();
         let mut seen: BTreeSet<String> = BTreeSet::new();
         // The route's own handler and every ancestor's, all at depth 0: a
         // parent's gates are not one call away from the child, they are on the
@@ -1169,6 +1306,15 @@ impl<'a> GuardMap<'a> {
                 continue;
             };
             if !seen.insert(key.clone()) {
+                continue;
+            }
+            // A classifier that declines is not part of this route's own
+            // execution past the point it declines, so the descent hands it to
+            // the selection pass rather than reading its body as a gate every
+            // caller passes. The route's own handler is never one: whatever it
+            // declines, it declines as itself.
+            if depth > 0 && scan.declines {
+                classifiers.push((key.clone(), module.clone(), path.clone()));
                 continue;
             }
             names.extend(scan.unconditional.iter().cloned());
@@ -1221,6 +1367,7 @@ impl<'a> GuardMap<'a> {
                     prestates: fact.prestates.clone(),
                     provenance: fact.provenance.clone(),
                     alternative,
+                    selected_by: None,
                 });
             }
         };
@@ -1236,6 +1383,93 @@ impl<'a> GuardMap<'a> {
         admissions.sort_by(|left, right| {
             (left.alternative, &left.machine, &left.constant).cmp(&(
                 right.alternative,
+                &right.machine,
+                &right.constant,
+            ))
+        });
+        (admissions, self.behind_selections(classifiers))
+    }
+
+    /// Every gate the selections this route makes reach, named by classifier.
+    ///
+    /// Each classifier is re-rooted at depth zero: it is the first frame of
+    /// its family's execution, not the fourth of the route's, and counting it
+    /// as the fourth is why `SERIES_TICKET_PREPARED_ADMISSIBLE_STATES_V1` --
+    /// four ordinary calls past `try_authenticate_series_expiry_premarket_v1`,
+    /// every one of them a frame this tree splits with `#[inline(never)]` to
+    /// fit an SBPF stack -- was reachable by no budget the necessary descent
+    /// could honestly afford.
+    ///
+    /// A classifier reached inside a selection re-roots again under its own
+    /// name: the innermost decline is the most specific thing a consumer can
+    /// be asked to show it takes. Only unconditional names are collected; a
+    /// branch inside a selection is conditional twice over and the census has
+    /// no word for that yet.
+    fn behind_selections(
+        &mut self,
+        classifiers: Vec<(String, String, String)>,
+    ) -> Vec<PhaseAdmission> {
+        let mut found: Vec<(String, String)> = Vec::new();
+        let mut rooted: BTreeSet<String> = BTreeSet::new();
+        let mut queue = classifiers;
+        while let Some((tag, module, path)) = queue.pop() {
+            if !rooted.insert(tag.clone()) {
+                continue;
+            }
+            let mut seen: BTreeSet<String> = BTreeSet::new();
+            let mut frontier: Vec<(String, String, usize)> = vec![(module, path, 0usize)];
+            while let Some((module, path, depth)) = frontier.pop() {
+                if depth > MAX_SELECTION_DEPTH {
+                    continue;
+                }
+                if depth > 0 && self.boundaries.contains(&path) {
+                    continue;
+                }
+                let Some((key, here, scan)) = self.scan(&module, &path) else {
+                    continue;
+                };
+                if !seen.insert(key.clone()) {
+                    continue;
+                }
+                if depth > 0 && scan.declines {
+                    let (key, here, path) = (key.clone(), here.clone(), path.clone());
+                    queue.push((key, here, path));
+                    continue;
+                }
+                let names: Vec<String> = scan.unconditional.iter().cloned().collect();
+                let calls: Vec<String> = scan.calls.iter().cloned().collect();
+                let here = here.clone();
+                found.extend(names.into_iter().map(|name| (tag.clone(), name)));
+                for call in calls {
+                    frontier.push((here.clone(), call, depth + 1));
+                }
+            }
+        }
+        let mut admissions: Vec<PhaseAdmission> = Vec::new();
+        for (tag, name) in found {
+            let Some(fact) = self.index.resolve(&name) else {
+                continue;
+            };
+            if admissions
+                .iter()
+                .any(|held| held.constant == name && held.selected_by.as_deref() == Some(&tag))
+            {
+                continue;
+            }
+            admissions.push(PhaseAdmission {
+                constant: name,
+                machine: fact.machine.to_string(),
+                kind: fact.kind,
+                phases: fact.phases.clone(),
+                prestates: fact.prestates.clone(),
+                provenance: fact.provenance.clone(),
+                alternative: None,
+                selected_by: Some(tag),
+            });
+        }
+        admissions.sort_by(|left, right| {
+            (&left.selected_by, &left.machine, &left.constant).cmp(&(
+                &right.selected_by,
                 &right.machine,
                 &right.constant,
             ))
@@ -1799,6 +2033,7 @@ mod tests {
             provenance: "x:1".into(),
             cfg: Vec::new(),
             admissible_prestates: Vec::new(),
+            selected_prestates: Vec::new(),
         };
         let entry = route("r/entry", "entry", None);
         let child = route("r/child#Create", "create", Some("r/entry"));
@@ -1820,6 +2055,7 @@ mod tests {
             provenance: "x:1".into(),
             cfg: Vec::new(),
             admissible_prestates: Vec::new(),
+            selected_prestates: Vec::new(),
         };
         let left = route("r/left", "left", "r/right");
         let right = route("r/right", "right", "r/left");
@@ -1842,6 +2078,7 @@ mod tests {
             provenance: "x:1".into(),
             cfg: Vec::new(),
             admissible_prestates: Vec::new(),
+            selected_prestates: Vec::new(),
         };
         assert_eq!(
             route_variant(&route("core/m::process#AdmitTerminal")),
@@ -1849,6 +2086,183 @@ mod tests {
         );
         assert_eq!(route_variant(&route("core/m::process")), None);
         assert_eq!(route_variant(&route("core/m::process#(A::X,B::Y)")), None);
+    }
+
+    /// A route, for a test that needs one and cares about nothing else.
+    fn plain_route(id: &str, handler: &str) -> Route {
+        Route {
+            id: id.to_string(),
+            kind: crate::model::RouteKind::Entry,
+            parent: None,
+            handler: handler.to_string(),
+            selectors: Vec::new(),
+            provenance: "x:1".into(),
+            cfg: Vec::new(),
+            admissible_prestates: Vec::new(),
+            selected_prestates: Vec::new(),
+        }
+    }
+
+    /// Attribute one source's routes, returning `(necessary, selected)` names
+    /// for the first of them.
+    fn attribute(source: &str, declared: &[&str], routes: &[Route]) -> (Vec<String>, Vec<String>) {
+        let mut index = AdmissionIndex::default();
+        for name in declared {
+            index.insert(
+                (*name).to_string(),
+                AdmissionFact {
+                    machine: "market",
+                    kind: AdmissionKind::Phases,
+                    phases: vec!["Open".into()],
+                    prestates: Vec::new(),
+                    provenance: "programs/a/src/one.rs:1".into(),
+                },
+            );
+        }
+        let crate_index = crate::enumerate::index_source("m", source);
+        let mut map = GuardMap::new(&index, &crate_index, routes);
+        let (necessary, selected) = map.for_route(&routes[0]);
+        (
+            necessary.into_iter().map(|one| one.constant).collect(),
+            selected
+                .into_iter()
+                .map(|one| format!("{}@{}", one.constant, one.selected_by.unwrap_or_default()))
+                .collect(),
+        )
+    }
+
+    /// THE SHAPE, and the row it moves.
+    ///
+    /// `hot_v3::process_hot_execution_v3` is the entry for every Hot family,
+    /// and `SERIES_TICKET_PREPARED_ADMISSIBLE_STATES_V1` is enforced four
+    /// ordinary calls past a prelude that returns `Ok(None)` for anything that
+    /// is not a Series Expire. The census reported the route ungated, so the
+    /// intersection of the routes acts declare with the routes gated on a
+    /// machine other than the Market was EMPTY and no other-machine verdict
+    /// could derive anywhere.
+    ///
+    /// Both halves are the test. The gate must be FOUND -- the flat descent
+    /// cannot afford it, and the selection descent re-roots at the classifier
+    /// so it can -- and it must be found as SELECTED, because the five acts
+    /// that declare that route are four General/Dealer plans and one Direct
+    /// fill, and not one of them is a Series Expire.
+    #[test]
+    fn a_gate_behind_a_declining_classifier_is_the_selections_and_not_the_routes() {
+        let source = "
+            fn process() { classify(); }
+            fn classify() {
+                if !matches!(request.action, Action::Expire) { return Ok(None); }
+                stage_one()
+            }
+            fn stage_one() { stage_two() }
+            fn stage_two() { stage_three() }
+            fn stage_three() { check(TICKET_PREPARED_V1); }
+        ";
+        let (necessary, selected) = attribute(
+            source,
+            &["TICKET_PREPARED_V1"],
+            &[plain_route("t/process", "process")],
+        );
+        assert!(
+            necessary.is_empty(),
+            "a family's gate is not the route's: {necessary:?}"
+        );
+        assert_eq!(selected, vec!["TICKET_PREPARED_V1@m::classify".to_string()]);
+    }
+
+    /// THE CONTROL that keeps the rule from eating the ordinary guard idiom.
+    ///
+    /// `if bad { return Err(..); }` at the head of a body is the most common
+    /// shape in this tree, and everything after it IS unconditional: an
+    /// execution that reached the rest passed the check. Only a return that
+    /// DECLINES -- `Ok(None)`, `Ok(false)`, a bare `None` -- makes the
+    /// remainder one family's. Read the two the same way and every guarded
+    /// function in the tree stops contributing a gate.
+    #[test]
+    fn an_early_refusal_leaves_the_rest_of_its_body_unconditional() {
+        let source = "
+            fn process() { guarded(); }
+            fn guarded() {
+                if bad { return Err(Error::Content.into()); }
+                check(TICKET_PREPARED_V1);
+            }
+        ";
+        let (necessary, selected) = attribute(
+            source,
+            &["TICKET_PREPARED_V1"],
+            &[plain_route("t/process", "process")],
+        );
+        assert_eq!(necessary, vec!["TICKET_PREPARED_V1".to_string()]);
+        assert!(selected.is_empty(), "{selected:?}");
+    }
+
+    /// A selection stops at the next route handler, exactly as the necessary
+    /// descent does.
+    ///
+    /// Otherwise one family's classifier would collect the gates of every
+    /// route its own program dispatches to, and a selected row would be no
+    /// more attributable than the unconditional row this replaced.
+    #[test]
+    fn a_selection_does_not_reach_past_another_routes_handler() {
+        let source = "
+            fn process() { classify(); }
+            fn classify() {
+                if !mine { return Ok(None); }
+                sibling()
+            }
+            fn sibling() { check(TICKET_PREPARED_V1); }
+        ";
+        let (necessary, selected) = attribute(
+            source,
+            &["TICKET_PREPARED_V1"],
+            &[
+                plain_route("t/process", "process"),
+                plain_route("t/sibling", "sibling"),
+            ],
+        );
+        assert!(necessary.is_empty(), "{necessary:?}");
+        assert!(
+            selected.is_empty(),
+            "another route owns its own gates, selected or not: {selected:?}"
+        );
+    }
+
+    /// Every spelling of a decline, and the two positive returns that are not
+    /// one.
+    #[test]
+    fn only_a_non_error_return_declines() {
+        let declining = [
+            "fn f() { if x { return Ok(None); } rest(); }",
+            "fn f() { if x { return Ok(false); } rest(); }",
+            "fn f() { if x { return None; } rest(); }",
+            "fn f() { let Some(y) = classify() else { return Ok(None); }; rest(); }",
+        ];
+        for source in declining {
+            let file = syn::parse_file(source).expect("parses");
+            let Item::Fn(function) = &file.items[0] else {
+                panic!("not a fn")
+            };
+            assert!(declines_first(&function.block), "{source}");
+        }
+        let deciding = [
+            "fn f() { if x { return Err(Error::Content.into()); } rest(); }",
+            "fn f() { if x { return Ok(Some(value)); } rest(); }",
+            "fn f() { if x { return Ok(true); } rest(); }",
+            "fn f() { if x { return Ok(()); } rest(); }",
+            // An `else` makes it a selection the census already reads as a
+            // pair of alternatives, not a prelude that declines.
+            "fn f() { if x { return Ok(None); } else { other(); } rest(); }",
+            // Declining halfway through is not declining first: every caller
+            // has already paid for `authenticate`, so its gates are theirs.
+            "fn f() { authenticate(); if x { return Ok(None); } rest(); }",
+        ];
+        for source in deciding {
+            let file = syn::parse_file(source).expect("parses");
+            let Item::Fn(function) = &file.items[0] else {
+                panic!("not a fn")
+            };
+            assert!(!declines_first(&function.block), "{source}");
+        }
     }
 
     #[test]
@@ -1862,6 +2276,7 @@ mod tests {
             provenance: "x:1".into(),
             cfg: Vec::new(),
             admissible_prestates: Vec::new(),
+            selected_prestates: Vec::new(),
         };
         assert_eq!(handler_path(&route), "m::process");
     }

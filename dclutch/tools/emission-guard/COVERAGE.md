@@ -3,7 +3,7 @@
 
 Which generated files a byte-identity guard actually re-runs and compares, and which are generated with nothing watching them. Regenerate with `tools/emission-guard/emission_guard.py --write`; byte-gate with `--verify`. This census is cheap — it reads first lines, shell scripts, `package.json` scripts and Rust integration tests, and never runs Lean.
 
-**96 generated files from 90 emitters. 96 guarded (90 emitters), 0 unguarded (0 emitters).**
+**99 generated files from 93 emitters. 99 guarded (93 emitters), 0 unguarded (0 emitters).**
 
 An unguarded row is not a bug in itself — it is a file that can be hand-edited, or drift behind the Lean source it claims to come from, with nothing in the repository noticing. The number above is the thing to drive down, and this file being byte-gated is what stops it drifting up unremarked: a new emission with no check script changes this census and reds `--verify` until someone decides, on purpose, which it is going to be.
 
@@ -31,7 +31,8 @@ Each runs its emitter and compares the output against the committed bytes. All o
 | `crates/dclutch-capability-program-contract/tests/v3_generator_fresh.rs` | cargo-test | `EmitCapabilityProgramV3AbiRust.lean` |
 | `crates/dclutch-capability-program-contract/tests/v4_generator_fresh.rs` | cargo-test | `EmitCapabilityProgramV4AbiRust.lean` |
 | `crates/dclutch-claims-svm/check-generated.sh` | shell | `EmitClaimsLiabilityBasisStateV2Rust.lean`, `EmitClaimsMarketClosureV1Rust.lean` |
-| `crates/dclutch-dealer-codec/tests/generator_fresh.rs` | cargo-test | `EmitDealerLiquidityAbiRust.lean`, `EmitDealerScenarioTradeV4Rust.lean`, `EmitDealerTradingProfileRust.lean` |
+| `crates/dclutch-custody-contract/check-generated.sh` | shell | `EmitProjectedCustodyStateV2Rust.lean` |
+| `crates/dclutch-dealer-codec/tests/generator_fresh.rs` | cargo-test | `EmitDealerLiquidityAbiRust.lean`, `EmitDealerScenarioCheckpointV1Rust.lean`, `EmitDealerScenarioTradeV4Rust.lean`, `EmitDealerTradingProfileRust.lean` |
 | `crates/dclutch-dealer-scenario-kernel/tests/netting_corpus_generator_fresh.rs` | cargo-test | `EmitDealerScenarioNettingCorpusRust.lean` |
 | `crates/dclutch-direct-aot-contract/check-generated.sh` | shell | `EmitDirectProgramV2Rust.lean` |
 | `crates/dclutch-direct-codec/check-generated.sh` | shell | `EmitDirectCodecRust.lean`, `EmitDirectLifecycleAbiRust.lean`, `EmitRegisteredControllerAbiRust.lean` |
@@ -73,7 +74,7 @@ Each runs its emitter and compares the output against the committed bytes. All o
 | `crates/dclutch-representation-composition-v3-kernel/tests/lean_generator_fresh.rs` | cargo-test | `EmitRepresentationCompositionV3AbiRust.lean` |
 | `crates/dclutch-request-profile-contract/check-generated.sh` | shell | `EmitRequestProfileAbiRust.lean`, `EmitRequestProfileV4AbiRust.lean` |
 | `crates/dclutch-resolution-codec/check-generated.sh` | shell | `EmitSourceResolutionControllerAbiRust.lean`, `EmitSourceResolutionTerminalV2AbiRust.lean` |
-| `crates/dclutch-series-v3-kernel/check-generated.sh` | shell | `EmitSeriesOccurrenceV3Rust.lean` |
+| `crates/dclutch-series-v3-kernel/check-generated.sh` | shell | `EmitSeriesOccurrenceV3Rust.lean`, `EmitSeriesTicketStateV3Rust.lean` |
 | `crates/dclutch-source-contract/check-generated.sh` | shell | `EmitSourceMaterialV2AbiRust.lean`, `EmitSourceMaterialV3AbiRust.lean`, `EmitSourcePrincipalCapacityV1Rust.lean`, `EmitSourceRecoveryPolicyV2AbiRust.lean`, `EmitSourceResolutionStateV2AbiRust.lean`, `EmitSourceScheduledMedianV1Rust.lean`, `EmitSourceStatisticSpecV1Rust.lean`, `EmitSourceWindowSpecV1Rust.lean` |
 | `crates/dclutch-structured-v2-kernel/check-generated.sh` | shell | `EmitStructuredV2AbiRust.lean` |
 | `crates/dclutch-structured-v2-kernel/tests/lean_generator_fresh.rs` | cargo-test | `EmitStructuredV2AbiRust.lean` |
@@ -114,8 +115,10 @@ Each runs its emitter and compares the output against the committed bytes. All o
 | `crates/dclutch-claims-svm/src/generated_liability_basis_state_v2.rs` | `EmitClaimsLiabilityBasisStateV2Rust.lean` |
 | `crates/dclutch-claims-svm/src/generated_market_closure_v1.rs` | `EmitClaimsMarketClosureV1Rust.lean` |
 | `crates/dclutch-custody-contract/src/generated.rs` | `EmitCustodyAbiRust.lean` |
+| `crates/dclutch-custody-contract/src/generated_projected_state_v2.rs` | `EmitProjectedCustodyStateV2Rust.lean` |
 | `crates/dclutch-dealer-codec/src/generated_dealer_liquidity.rs` | `EmitDealerLiquidityAbiRust.lean` |
 | `crates/dclutch-dealer-codec/src/generated_dealer_trading_profile.rs` | `EmitDealerTradingProfileRust.lean` |
+| `crates/dclutch-dealer-codec/src/generated_scenario_checkpoint_v1.rs` | `EmitDealerScenarioCheckpointV1Rust.lean` |
 | `crates/dclutch-dealer-codec/src/generated_scenario_trade_v4.rs` | `EmitDealerScenarioTradeV4Rust.lean` |
 | `crates/dclutch-dealer-scenario-kernel/src/generated_netting_corpus.rs` | `EmitDealerScenarioNettingCorpusRust.lean` |
 | `crates/dclutch-direct-aot-contract/src/generated.rs` | `EmitDirectProgramV2Rust.lean` |
@@ -171,6 +174,7 @@ Each runs its emitter and compares the output against the committed bytes. All o
 | `crates/dclutch-resolution-codec/src/generated_source_resolution.rs` | `EmitSourceResolutionControllerAbiRust.lean` |
 | `crates/dclutch-resolution-codec/src/generated_v2.rs` | `EmitSourceResolutionTerminalV2AbiRust.lean` |
 | `crates/dclutch-series-v3-kernel/src/generated.rs` | `EmitSeriesOccurrenceV3Rust.lean` |
+| `crates/dclutch-series-v3-kernel/src/generated_ticket_state_v3.rs` | `EmitSeriesTicketStateV3Rust.lean` |
 | `crates/dclutch-source-contract/src/generated_principal_capacity_v1.rs` | `EmitSourcePrincipalCapacityV1Rust.lean` |
 | `crates/dclutch-source-contract/src/generated_scheduled_median_v1.rs` | `EmitSourceScheduledMedianV1Rust.lean` |
 | `crates/dclutch-source-contract/src/generated_source_material_v2.rs` | `EmitSourceMaterialV2AbiRust.lean` |
