@@ -9,7 +9,7 @@
 //!
 //! The transaction reaches the bank on every row, the Registry continuation
 //! lands, Trading is invoked at depth two, and all three rows refuse the same
-//! way at the same place: **Trading consumes 337,005 CU of 1,316,655 and
+//! way at the same place: **Trading consumes 330,987 CU of 1,318,157 and
 //! refuses `Content` (`0x4003`) inside the FAMILY-NEUTRAL config-record
 //! borrow** -- `borrow_finalized_record_at(descriptor.config_schema(),
 //! context.selection().config(), ..)` in `authenticate_and_execute_hot_v3`.
@@ -43,10 +43,11 @@
 //!
 //! `sha256(t)` and `sha256(domain || 0x00 || t)` are different values, so no
 //! Series root satisfies both and no fixture can stage one. Measured from the
-//! other end too: staging the record digest instead moves the refusal 217,000
-//! CU EARLIER, to the Series artifact selection, because the family request's
-//! template field no longer matches the root -- the same contradiction seen
-//! from its opposite side. This is why nothing Series has ever executed through
+//! other end too: staging the record digest instead moves the refusal to the
+//! Series artifact selection, BEFORE the Series expiry prelude engages at all
+//! -- 119,620 CU against that same ELF's 337,005 -- because the family
+//! request's template field no longer matches the root. The same contradiction
+//! seen from its opposite side. This is why nothing Series has ever executed through
 //! the family-neutral Hot path, and it is a program ruling with two candidate
 //! repairs, both of which move two ELFs and a witnessed route's convention:
 //! either the Series sites read the record digest, or the Series Template's
@@ -410,7 +411,7 @@ async fn current_source_series_expire_lands_before_the_future_market_exists() {
 /// IT IS ALSO ONE OF THE THREE RED ROWS THIS FILE'S HEADER DESCRIBES. It is no
 /// longer red for a reason of its own: this row builds its chain, installs its
 /// accounts, submits, and refuses at the shared config-identity wall with the
-/// other two, at the identical 337,005 CU. Its own positive control -- that the
+/// other two, at the identical 330,987 CU. Its own positive control -- that the
 /// permit really is one lamport under today's floor -- runs and holds before
 /// the submission, so what is OWED is a parent-ELF green, not a diagnosis. The
 /// inversion itself is proved on the native side by

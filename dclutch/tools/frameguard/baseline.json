@@ -1,6 +1,6 @@
 {
   "bound_bytes": 4096,
-  "commit": "4ea72c87e85c7b331e063ed7cb52affffa06c40b",
+  "commit": "0d2035c9c6495c8c17e6d7aa1e86ff9a40b93490",
   "link_count": 12,
   "links": [
     {
@@ -10204,6 +10204,12 @@
         },
         {
           "frames_bytes": [
+            64
+          ],
+          "symbol": "_ZN19dclutch_trading_sbf6hot_v343authenticate_series_expiry_core_template_v117h<hash>E"
+        },
+        {
+          "frames_bytes": [
             2560
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v343try_authenticate_series_expiry_premarket_v117h<hash>E"
@@ -10339,12 +10345,6 @@
             2304
           ],
           "symbol": "_ZN19dclutch_trading_sbf6hot_v354derive_series_expiry_future_projection_from_records_v117h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            192
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf6hot_v355authenticate_series_expiry_core_request_from_records_v117h<hash>E"
         },
         {
           "frames_bytes": [
