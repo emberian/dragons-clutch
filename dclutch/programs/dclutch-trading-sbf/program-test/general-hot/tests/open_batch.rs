@@ -28,8 +28,8 @@ use dclutch_chain_bundle_builder::{
         program_with_view, system_program_builtin, vacant,
     },
     general::{
-        GeneralActionPrestateV1, GeneralRequestInputV1, build_general_action_bundle_v1,
-        derive_general_request_v1,
+        GeneralActionPrestateV1, GeneralRequestEvidenceV1, GeneralRequestInputV1,
+        build_general_action_bundle_v1, derive_general_request_v1,
     },
 };
 use dclutch_core_contract::ContentId;
@@ -737,6 +737,9 @@ fn build_action_case(
             .primary_state
             .as_ref()
             .map(|state| state.account.data.as_slice()),
+        // The two batch actions read no record their primary state does not
+        // carry. Every other action's evidence is this campaign's next unit.
+        evidence: GeneralRequestEvidenceV1::default(),
     })
     .expect("chain-derived General request");
     let mut bindings = vec![
@@ -825,6 +828,7 @@ fn build_action_case(
                 .primary_state
                 .as_ref()
                 .map(|state| state.account.data.as_slice()),
+            evidence: GeneralRequestEvidenceV1::default(),
         },
     )
     .expect("complete admitted General bundle");
@@ -1996,13 +2000,19 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     // at a different address and the market opens it after the first has
     // closed. That is measured here rather than argued.
     //
-    // The SELECTION half is not: `GENERAL_SELECTION_STATE_RECIPE_V3` is keyed
-    // by the root ALONE -- its own doc says "One per General root" -- and
-    // nothing reopens it, so `Consider`/`Freeze` can run against exactly one
-    // selection for the life of the capability. A second batch can be opened,
-    // filled and closed; it cannot be SELECTED. Keying that recipe by a batch
-    // ordinal is a lifecycle-policy change and therefore a re-founding, and it
-    // is not in this campaign.
+    // The SELECTION half WAS not, and this comment said so until `6ce8929ed`
+    // landed: `GENERAL_SELECTION_STATE_RECIPE_V3` was keyed by the root ALONE,
+    // nothing writes a frozen selection back to `Open`, and a market could
+    // therefore open, fill and close as many batches as it liked and could
+    // CLEAR in exactly one. The recipe carries the batch identity now, so "one
+    // clearing per batch" is a property of an address. What this campaign still
+    // cannot show is the second batch SELECTING: `Consider` needs a verified
+    // certificate on the bank, which needs a submission, which needs an
+    // escrowed order, and none of the three has an installed account here yet.
+    // `a_second_batch_on_one_market_derives_its_own_selection_cursor` in the
+    // bundle builder's suite is how far that is executed today -- two batches,
+    // two cursor addresses, derived rather than argued -- and the on-chain half
+    // is owed.
     // READ THE CLOCK, DO NOT PREDICT IT. `warp_to_slot` refuses a slot the bank
     // has already reached, and by this point four transactions and a warp have
     // advanced it by an amount this campaign does not own.

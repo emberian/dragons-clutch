@@ -60,6 +60,7 @@ mod private_activity;
 mod private_lifecycle;
 mod pyth_vaa_provisioning;
 mod rational_market;
+mod recovery_crank;
 mod relayed;
 mod release_capture;
 mod release_identity;
@@ -241,6 +242,12 @@ fn run() -> Result<()> {
         }
         Some(command) if command == family_hot_campaign::SERIES_COMMAND_V1 => {
             family_hot_campaign::run(arguments.collect(), family_hot_campaign::FamilyV1::Series)
+        }
+        Some(command) if command == recovery_crank::COMMAND_V1 => {
+            recovery_crank::run_owned_loopback_v1(arguments.collect())
+        }
+        Some(command) if command == recovery_crank::COMMAND_DEVNET_V1 => {
+            recovery_crank::run_devnet_v1(arguments.collect())
         }
         Some(command) if command == claims_custody_replay::COMMAND_V1 => {
             claims_custody_replay::run_owned_loopback_v1(arguments.collect())

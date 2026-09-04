@@ -38,26 +38,41 @@ use dclutch_execution_strategy_contract::{decode_register_bank_into, encode_regi
 use dclutch_general_adapter_contract::{
     artifacts_v3::{GeneralDecodedRequestV3, GeneralRequestWireV3, decode_general_request_v3},
     candidate_v1::GeneralCandidateV1,
+    candidate_v1::{CandidateVerifyRowViewV1, candidate_verifier_len_v1},
     collection_v1::{
         GeneralBatchOccurrenceTermsV1, GeneralBatchOpeningV1, GeneralBatchV1, GeneralOrderV1,
         GeneralSignedOrderTermsV1,
     },
     hot_candidate_v3::{
-        general_hot_candidate_bank_len_v3, general_hot_environment_from_bank_v3,
+        GeneralHotCandidateErrorV3, GeneralHotEnvironmentV3,
+        authenticate_general_close_candidate_v3, general_hot_candidate_bank_len_v3,
+        general_hot_environment_from_bank_v3, project_general_cancel_order_candidate_in_place_v3,
         project_general_close_batch_candidate_in_place_v3,
+        project_general_hot_candidate_in_place_v3,
+        project_general_initialize_candidate_in_place_v3,
         project_general_open_batch_candidate_in_place_v3,
+        project_general_place_order_candidate_in_place_v3,
+        project_general_release_order_candidate_in_place_v3,
+        project_general_selection_candidate_in_place_v3,
+        project_general_submit_candidate_in_place_v3,
+        project_general_verify_candidate_workspace_v3,
     },
     local_state_v3::{GeneralLocalStateKindV3, GeneralLocalStateV3},
     runtime_manifest::SettlementManifestV2,
-    runtime_selection::RuntimeSelectionCursorV2,
+    runtime_selection::{
+        RUNTIME_SELECTION_CURSOR_BYTES_V2, RuntimeSelectionCursorV2,
+        consider_verified_candidate_v2, freeze_selection_v2,
+    },
+    runtime_settlement::{
+        RuntimeSettlementActionV2, RuntimeSettlementViewV2,
+        evaluate_runtime_settlement_in_place_v2, initialize_runtime_settlement_in_place_v2,
+        runtime_settlement_effect_len_v2,
+    },
     runtime_verify::RuntimeCandidateVerifierV2,
-    runtime_width::{CandidateV2, SettlementCursorV2, VerifiedCandidateV2},
+    runtime_width::{CandidateV2, SettlementCursorV2, VerifiedCandidateV2, settlement_cursor_len},
     state_seeds_v3::{GeneralStateAddressSeedsV3, GeneralStateRecipeV3},
 };
-use dclutch_general_codec::{
-    Action,
-    successor_request_v3::{ControllerActionV3, ControllerRequestV3},
-};
+use dclutch_general_codec::{Action, SelectionPolicyV1};
 use dclutch_general_config_contract::{GeneralRootV2, v3::GeneralConfigV3};
 use solana_program::pubkey::Pubkey;
 
@@ -125,8 +140,21 @@ pub struct GeneralRequestEvidenceV1<'a> {
     /// Live verifier-cursor lifecycle account (`VerifyCandidateRow`); `None`
     /// is the vacant cursor, which is that candidate's first row.
     pub verifier_account: Option<&'a [u8]>,
-    /// Exact verifier-emitted settlement manifest (`Collect`, `Distribute`).
+    /// Exact verifier-emitted settlement manifest (`Collect`, `Distribute`),
+    /// and the manifest chunk `VerifyCandidateRow` is required to emit.
     pub settlement_manifest: Option<&'a [u8]>,
+    /// Live Batch lifecycle account, for the four actions that read a closed
+    /// batch as EVIDENCE rather than as their primary state
+    /// (`SubmitCandidate`, `VerifyCandidateRow`, `CloseCandidate`).
+    pub batch_account: Option<&'a [u8]>,
+    /// Exact canonical submission record this execution writes
+    /// (`SubmitCandidate`).
+    pub submitted_candidate: Option<&'a [u8]>,
+    /// Exact immutable candidate Page holding the next row
+    /// (`VerifyCandidateRow`).
+    pub candidate_page: Option<&'a [u8]>,
+    /// Exact immutable selection-policy record (`Consider`).
+    pub selection_policy: Option<&'a [u8]>,
 }
 
 /// Exact subject, lifecycle coordinates and V3 request derived for one action.
@@ -767,13 +795,20 @@ pub fn derive_general_request_v1(
 ///
 /// A campaign supplies the exact bytes the bank holds; the projector's semantic
 /// owner decodes them. Nothing here is optional in the sense of "may be
-/// omitted": each action requires exactly what it names, and an action handed
-/// the wrong shape refuses at a named line.
+/// omitted": each action requires exactly what its own AccountProfile declares,
+/// and an action handed the wrong shape refuses at a named line.
+///
+/// The evidence is the SAME value the request derivation takes, because it is
+/// the same question -- which records does this action read -- asked at the two
+/// ends of one execution. A campaign builds it once.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct GeneralActionPrestateV1<'a> {
     /// Exact account data of the primary state this action operates on, as the
     /// chain holds it, or `None` where this execution creates it.
     pub primary_state_account: Option<&'a [u8]>,
+    /// The authenticated records this action reads that are not its primary
+    /// state.
+    pub evidence: GeneralRequestEvidenceV1<'a>,
 }
 
 /// Build one admitted-AOT General Hot instruction from current artifacts.
@@ -784,17 +819,28 @@ pub struct GeneralActionPrestateV1<'a> {
 /// campaign helper from silently being used for another catalogue row, and the
 /// action it derives is the one the request asks for rather than one this
 /// module names.
+///
+/// ## The projector is the accelerator's, not a second interpreter
+///
+/// Every arm below calls the SAME `hot_candidate_v3` entry point
+/// `dclutch-general-accelerator-sbf` calls, over the same semantic transitions,
+/// with the campaign's chain corpus in place of the runtime's `AccountInfo`s.
+/// Nothing here recomputes a candidate: where the accelerator runs
+/// `consider_verified_candidate_v2` before projecting, so does this, and where
+/// it declines to write the bank at all -- `CloseCandidate` authenticates and
+/// returns -- so does this.
 pub fn build_general_action_bundle_v1(
     input: &BundleInputV1<'_>,
     admitted: AdmittedAotInputV1<'_>,
     prestate: GeneralActionPrestateV1<'_>,
 ) -> Result<BuiltAdmittedBundleV1, BuilderError> {
-    let request = ControllerRequestV3::decode(input.scenario.family_request)
+    // THE READER IS THE CHAIN'S, AND IT SELECTS THE GENERATION. Seven actions
+    // kept the `DCGREQ02` wire; decoding every family request as V3 refused
+    // them all at `Artifact` with no word for which half of the catalogue the
+    // caller was in.
+    let request = decode_general_request_v3(input.scenario.family_request)
         .map_err(|_| BuilderError::Artifact)?;
-    let action = request
-        .action
-        .legacy()
-        .ok_or(BuilderError::Binding(line!()))?;
+    let action = request.action;
     let config = GeneralConfigV3::decode(input.set.config).map_err(|_| BuilderError::Artifact)?;
     let root_tail = input
         .fixed
@@ -810,74 +856,572 @@ pub fn build_general_action_bundle_v1(
     // The semantic prestate is decoded ONCE, outside the projector closure: the
     // adoption loop runs the projector up to four times and a body re-decoded
     // per round would make a corpus refusal look like a divergence.
-    let batch_body = match action {
-        Action::OpenBatch => {
-            if prestate.primary_state_account.is_some() {
-                return Err(BuilderError::Binding(line!()));
-            }
-            None
-        }
-        Action::CloseBatch => {
-            let account = prestate
-                .primary_state_account
-                .ok_or(BuilderError::Binding(line!()))?;
-            Some(live_batch(account)?.0.body())
-        }
-        _ => return Err(BuilderError::UnsupportedRoute(line!())),
-    };
-    let projector = |scalars: &mut [u64],
-                     identities: &mut [[u8; 32]]|
-     -> Result<(), BuilderError> {
-        let mut bank = vec![0_u8; bank_len];
-        encode_register_bank_into(scalars, identities, &mut bank)
-            .map_err(|_| BuilderError::Projection("general-bank-encode"))?;
-        let environment = general_hot_environment_from_bank_v3(action, &bank, outcome_count)
-            .map_err(|_| BuilderError::Projection("general-environment"))?;
-        // THE WIRE CANNOT CARRY THE CAUSE AND THE LOG CAN.
-        // `BuilderError::Projection` is one `&'static str`, so the
-        // accelerator's own `GeneralHotCandidateErrorV3` -- which
-        // distinguishes a capacity, a stride, a coordinate and a plan --
-        // would otherwise be discarded at the one boundary where it is the
-        // whole answer. `pack_frame` already prints its width refusal for
-        // the same reason. A campaign reads a validator log first.
-        let refused = |stage: &'static str| {
-            move |error: dclutch_general_adapter_contract::hot_candidate_v3::GeneralHotCandidateErrorV3| {
-                    std::eprintln!(
-                        "general candidate projection refused at {stage} for {action:?}: {error:?}"
-                    );
-                    BuilderError::Projection(stage)
-                }
+    let corpus = GeneralActionCorpusV1::decode(action, prestate)?;
+    let projector =
+        |scalars: &mut [u64], identities: &mut [[u8; 32]]| -> Result<(), BuilderError> {
+            let mut bank = vec![0_u8; bank_len];
+            encode_register_bank_into(scalars, identities, &mut bank)
+                .map_err(|_| BuilderError::Projection("general-bank-encode"))?;
+            let environment = general_hot_environment_from_bank_v3(action, &bank, outcome_count)
+                .map_err(|_| BuilderError::Projection("general-environment"))?;
+            corpus.project(
+                GeneralProjectionInputV1 {
+                    action,
+                    root_tail,
+                    config,
+                    outcome_count,
+                    environment,
+                    expected_revision: request.expected_revision,
+                    subject_id: request.candidate_id,
+                    manifest_order_index: u32::from(request.manifest_order_index),
+                    page_index: request.page_index,
+                    execution_index: u32::from(request.execution_index),
+                    family_request: input.scenario.family_request,
+                },
+                &mut bank,
+            )?;
+            decode_register_bank_into(&bank, scalars, identities)
+                .map_err(|_| BuilderError::Projection("general-bank-decode"))
         };
-        match action {
-            Action::OpenBatch => project_general_open_batch_candidate_in_place_v3(
-                root_tail,
-                config,
-                outcome_count,
-                environment,
-                request.expected_revision,
-                request.subject_id,
-                &mut bank,
-            )
-            .map_err(refused("general-open-batch")),
-            Action::CloseBatch => project_general_close_batch_candidate_in_place_v3(
-                root_tail,
-                batch_body.ok_or(BuilderError::Projection("general-close-batch-prestate"))?,
-                config,
-                outcome_count,
-                environment,
-                request.expected_revision,
-                request.subject_id,
-                &mut bank,
-            )
-            .map_err(refused("general-close-batch")),
-            _ => Err(BuilderError::UnsupportedRoute(line!())),
-        }?;
-        decode_register_bank_into(&bank, scalars, identities)
-            .map_err(|_| BuilderError::Projection("general-bank-decode"))
-    };
     let built = build_admitted_bundle_with_candidate_v1(input, admitted, &projector)?;
     if built.bundle.artifacts.action != u32::from(action as u8) {
         return Err(BuilderError::Artifact);
     }
     Ok(built)
+}
+
+/// The request coordinates and joins every projector arm shares.
+#[derive(Clone, Copy)]
+struct GeneralProjectionInputV1<'a> {
+    action: Action,
+    root_tail: &'a [u8],
+    config: GeneralConfigV3,
+    outcome_count: u32,
+    environment: GeneralHotEnvironmentV3,
+    expected_revision: u64,
+    subject_id: Option<[u8; 32]>,
+    manifest_order_index: u32,
+    page_index: u32,
+    execution_index: u32,
+    family_request: &'a [u8],
+}
+
+/// One action's decoded semantic corpus, decoded once before the adoption loop.
+///
+/// The variants are the shapes the fifteen actions actually have, not fifteen
+/// arms: five of them read a Batch body, four read a settlement cursor and a
+/// certificate, and two read a selection cursor. An action handed a record its
+/// own profile does not declare never reaches its projector.
+#[derive(Clone, Copy)]
+enum GeneralActionCorpusV1<'a> {
+    /// `OpenBatch`: creates every state it names.
+    OpenBatch,
+    /// `CloseBatch`: the live Batch body.
+    CloseBatch { batch: &'a [u8] },
+    /// `PlaceOrder`: the live Batch body and the exact signed order terms.
+    PlaceOrder { batch: &'a [u8], terms: &'a [u8] },
+    /// `CancelOrder`: the live Batch body and the live Order body.
+    CancelOrder { batch: &'a [u8], order: &'a [u8] },
+    /// `ReleaseOrder`: the live Order body alone.
+    ReleaseOrder { order: &'a [u8] },
+    /// `SubmitCandidate`: the closed Batch, the candidate image, and the exact
+    /// submission record this execution writes.
+    SubmitCandidate {
+        batch: &'a [u8],
+        image: &'a [u8],
+        submission: &'a [u8],
+    },
+    /// `VerifyCandidateRow`: the whole row-verification view's corpus.
+    VerifyCandidateRow {
+        batch: GeneralBatchV1,
+        submission: GeneralCandidateV1,
+        image: &'a [u8],
+        page: &'a [u8],
+        order: &'a [u8],
+        cursor_before: &'a [u8],
+        manifest: &'a [u8],
+    },
+    /// `CloseCandidate`: the live Candidate and the closed Batch it settles.
+    CloseCandidate {
+        batch: GeneralBatchV1,
+        submission: GeneralCandidateV1,
+    },
+    /// `Consider`: the selection policy, the submitted certificate, and the
+    /// cursor prestate -- vacant for the first consideration of a batch.
+    Consider {
+        policy: SelectionPolicyV1,
+        verified: &'a [u8],
+        cursor_before: Option<&'a [u8]>,
+    },
+    /// `Freeze`: the live selection cursor.
+    Freeze { cursor_before: &'a [u8] },
+    /// `InitializeSettlement`: the completed verifier and its certificate.
+    InitializeSettlement {
+        verifier: &'a [u8],
+        verified: &'a [u8],
+    },
+    /// The settlement four: the live cursor, the certificate, and the manifest
+    /// the two row actions select from.
+    Settlement {
+        cursor_before: &'a [u8],
+        verified: &'a [u8],
+        manifest: Option<&'a [u8]>,
+    },
+}
+
+/// Borrow one live state account's semantic body, checking its kind.
+fn live_body(
+    account: Option<&[u8]>,
+    kind: GeneralLocalStateKindV3,
+    line: u32,
+) -> Result<&[u8], BuilderError> {
+    let account = account.ok_or(BuilderError::Binding(line))?;
+    Ok(live_state(account, kind)?.body())
+}
+
+impl<'a> GeneralActionCorpusV1<'a> {
+    /// Decode exactly what this action names, once, before any projection.
+    fn decode(action: Action, prestate: GeneralActionPrestateV1<'a>) -> Result<Self, BuilderError> {
+        let evidence = prestate.evidence;
+        let primary = prestate.primary_state_account;
+        let created = |account: Option<&[u8]>| -> Result<(), BuilderError> {
+            if account.is_some() {
+                return Err(BuilderError::Binding(line!()));
+            }
+            Ok(())
+        };
+        Ok(match action {
+            Action::OpenBatch => {
+                created(primary)?;
+                Self::OpenBatch
+            }
+            Action::CloseBatch => Self::CloseBatch {
+                batch: live_body(primary, GeneralLocalStateKindV3::Batch, line!())?,
+            },
+            Action::PlaceOrder => Self::PlaceOrder {
+                batch: live_body(primary, GeneralLocalStateKindV3::Batch, line!())?,
+                terms: evidence
+                    .signed_order_terms
+                    .ok_or(BuilderError::Binding(line!()))?,
+            },
+            Action::CancelOrder => Self::CancelOrder {
+                batch: live_body(primary, GeneralLocalStateKindV3::Batch, line!())?,
+                order: live_body(
+                    evidence.order_account,
+                    GeneralLocalStateKindV3::Order,
+                    line!(),
+                )?,
+            },
+            Action::ReleaseOrder => Self::ReleaseOrder {
+                order: live_body(primary, GeneralLocalStateKindV3::Order, line!())?,
+            },
+            Action::SubmitCandidate => {
+                created(primary)?;
+                Self::SubmitCandidate {
+                    batch: live_body(
+                        evidence.batch_account,
+                        GeneralLocalStateKindV3::Batch,
+                        line!(),
+                    )?,
+                    image: evidence
+                        .candidate_image
+                        .ok_or(BuilderError::Binding(line!()))?,
+                    submission: evidence
+                        .submitted_candidate
+                        .ok_or(BuilderError::Binding(line!()))?,
+                }
+            }
+            Action::VerifyCandidateRow => Self::VerifyCandidateRow {
+                batch: GeneralBatchV1::decode(live_body(
+                    evidence.batch_account,
+                    GeneralLocalStateKindV3::Batch,
+                    line!(),
+                )?)
+                .map_err(|_| BuilderError::Artifact)?,
+                submission: GeneralCandidateV1::decode(live_body(
+                    primary,
+                    GeneralLocalStateKindV3::Candidate,
+                    line!(),
+                )?)
+                .map_err(|_| BuilderError::Artifact)?,
+                image: evidence
+                    .candidate_image
+                    .ok_or(BuilderError::Binding(line!()))?,
+                page: evidence
+                    .candidate_page
+                    .ok_or(BuilderError::Binding(line!()))?,
+                order: live_body(
+                    evidence.order_account,
+                    GeneralLocalStateKindV3::Order,
+                    line!(),
+                )?,
+                // A VACANT verifier is this candidate's first row, and the
+                // empty slice is exactly what the runtime reads for one.
+                cursor_before: match evidence.verifier_account {
+                    None => &[],
+                    Some(account) => live_state(account, GeneralLocalStateKindV3::Verifier)?.body(),
+                },
+                manifest: evidence
+                    .settlement_manifest
+                    .ok_or(BuilderError::Binding(line!()))?,
+            },
+            Action::CloseCandidate => Self::CloseCandidate {
+                batch: GeneralBatchV1::decode(live_body(
+                    evidence.batch_account,
+                    GeneralLocalStateKindV3::Batch,
+                    line!(),
+                )?)
+                .map_err(|_| BuilderError::Artifact)?,
+                submission: GeneralCandidateV1::decode(live_body(
+                    primary,
+                    GeneralLocalStateKindV3::Candidate,
+                    line!(),
+                )?)
+                .map_err(|_| BuilderError::Artifact)?,
+            },
+            Action::Consider => Self::Consider {
+                policy: SelectionPolicyV1::decode(
+                    evidence
+                        .selection_policy
+                        .ok_or(BuilderError::Binding(line!()))?,
+                )
+                .map_err(|_| BuilderError::Artifact)?,
+                verified: evidence
+                    .verified_candidate
+                    .ok_or(BuilderError::Binding(line!()))?,
+                cursor_before: match primary {
+                    None => None,
+                    Some(account) => {
+                        Some(live_state(account, GeneralLocalStateKindV3::Selection)?.body())
+                    }
+                },
+            },
+            Action::Freeze => Self::Freeze {
+                cursor_before: live_body(primary, GeneralLocalStateKindV3::Selection, line!())?,
+            },
+            Action::InitializeSettlement => {
+                created(primary)?;
+                Self::InitializeSettlement {
+                    verifier: live_body(
+                        evidence.verifier_account,
+                        GeneralLocalStateKindV3::Verifier,
+                        line!(),
+                    )?,
+                    verified: evidence
+                        .verified_candidate
+                        .ok_or(BuilderError::Binding(line!()))?,
+                }
+            }
+            Action::Collect | Action::Materialize | Action::Distribute | Action::Close => {
+                // The row actions read a manifest and the other two must not
+                // present one: `runtime_settlement` refuses the mismatch, and
+                // stating it here means a campaign that supplied one anyway is
+                // told which action it named rather than which conjunct failed.
+                let row = matches!(action, Action::Collect | Action::Distribute);
+                if row != evidence.settlement_manifest.is_some() {
+                    return Err(BuilderError::Binding(line!()));
+                }
+                Self::Settlement {
+                    cursor_before: live_body(
+                        primary,
+                        GeneralLocalStateKindV3::Settlement,
+                        line!(),
+                    )?,
+                    verified: evidence
+                        .verified_candidate
+                        .ok_or(BuilderError::Binding(line!()))?,
+                    manifest: evidence.settlement_manifest,
+                }
+            }
+        })
+    }
+
+    /// Run this action's own accelerator-owned projector over the bank.
+    ///
+    /// One arm per shape, each calling exactly what
+    /// `dclutch-general-accelerator-sbf` calls for that action, in the same
+    /// order and over the same semantic transitions.
+    #[allow(clippy::too_many_lines)]
+    fn project(
+        self,
+        input: GeneralProjectionInputV1<'_>,
+        bank: &mut [u8],
+    ) -> Result<(), BuilderError> {
+        let action = input.action;
+        let outcome_count = input.outcome_count;
+        let environment = input.environment;
+        match self {
+            Self::OpenBatch => project_general_open_batch_candidate_in_place_v3(
+                input.root_tail,
+                input.config,
+                outcome_count,
+                environment,
+                input.expected_revision,
+                input.subject_id,
+                bank,
+            )
+            .map_err(projection_refusal("general-open-batch", action)),
+            Self::CloseBatch { batch } => project_general_close_batch_candidate_in_place_v3(
+                input.root_tail,
+                batch,
+                input.config,
+                outcome_count,
+                environment,
+                input.expected_revision,
+                input.subject_id,
+                bank,
+            )
+            .map_err(projection_refusal("general-close-batch", action)),
+            Self::PlaceOrder { batch, terms } => project_general_place_order_candidate_in_place_v3(
+                input.root_tail,
+                batch,
+                input.config,
+                outcome_count,
+                environment,
+                input.subject_id,
+                terms,
+                bank,
+            )
+            .map_err(projection_refusal("general-place-order", action)),
+            Self::CancelOrder { batch, order } => {
+                project_general_cancel_order_candidate_in_place_v3(
+                    input.root_tail,
+                    batch,
+                    order,
+                    input.config,
+                    outcome_count,
+                    environment,
+                    input.subject_id,
+                    bank,
+                )
+                .map_err(projection_refusal("general-cancel-order", action))
+            }
+            Self::ReleaseOrder { order } => project_general_release_order_candidate_in_place_v3(
+                input.root_tail,
+                order,
+                input.config,
+                outcome_count,
+                environment,
+                input.subject_id,
+                bank,
+            )
+            .map_err(projection_refusal("general-release-order", action)),
+            Self::SubmitCandidate {
+                batch,
+                image,
+                submission,
+            } => project_general_submit_candidate_in_place_v3(
+                input.root_tail,
+                batch,
+                input.config,
+                image,
+                submission,
+                outcome_count,
+                environment,
+                input.subject_id,
+                bank,
+            )
+            .map_err(projection_refusal("general-submit-candidate", action)),
+            Self::VerifyCandidateRow {
+                batch,
+                submission,
+                image,
+                page,
+                order,
+                cursor_before,
+                manifest,
+            } => {
+                let verifier_len = candidate_verifier_len_v1(submission)
+                    .map_err(|_| BuilderError::Projection("general-verify-width"))?;
+                let mut cursor_workspace = vec![0_u8; verifier_len];
+                project_general_verify_candidate_workspace_v3(
+                    CandidateVerifyRowViewV1 {
+                        batch,
+                        submission,
+                        candidate: image,
+                        page,
+                        order,
+                        cursor_before,
+                        verified_before: &[],
+                        expected_page_index: input.page_index,
+                        expected_row_index: input.execution_index,
+                        expected_revision: input.expected_revision,
+                    },
+                    outcome_count,
+                    bank,
+                    &mut cursor_workspace,
+                    manifest,
+                )
+                .map(|_| ())
+                .map_err(projection_refusal("general-verify-candidate-row", action))
+            }
+            // THE ONE ACTION THAT WRITES NO CANDIDATE. `CloseCandidate`
+            // authenticates its lamport poststate against the hostile-decoded
+            // Candidate and Batch and returns a plan the generic Effect spends;
+            // the accelerator leaves the bank exactly as Trading presented it,
+            // and a projector that wrote here would be inventing a divergence.
+            Self::CloseCandidate { batch, submission } => authenticate_general_close_candidate_v3(
+                input.family_request,
+                batch,
+                submission,
+                outcome_count,
+                environment,
+                bank,
+            )
+            .map(|_| ())
+            .map_err(projection_refusal("general-close-candidate", action)),
+            Self::Consider {
+                policy,
+                verified,
+                cursor_before,
+            } => {
+                let submitted = VerifiedCandidateV2::decode(verified)
+                    .map_err(|_| BuilderError::Projection("general-consider-certificate"))?;
+                let header = submitted.header();
+                if policy.policy_id != input.config.selection_policy_id()
+                    || input.subject_id != Some(header.candidate_id)
+                    || input.page_index != header.candidate_coordinate
+                    || header.outcome_count != outcome_count
+                    || header.product_id != environment.product_record_digest
+                    || header.price_scale != input.config.price_scale()
+                {
+                    return Err(BuilderError::Projection("general-consider-state"));
+                }
+                let vacant = [0_u8; RUNTIME_SELECTION_CURSOR_BYTES_V2];
+                let mut scratch = [0_u8; RUNTIME_SELECTION_CURSOR_BYTES_V2];
+                let mut output = [0_u8; RUNTIME_SELECTION_CURSOR_BYTES_V2];
+                consider_verified_candidate_v2(
+                    policy,
+                    cursor_before.unwrap_or(&vacant),
+                    verified,
+                    input.expected_revision,
+                    &mut scratch,
+                    &mut output,
+                )
+                .map_err(|_| BuilderError::Projection("general-consider-transition"))?;
+                project_general_selection_candidate_in_place_v3(
+                    action,
+                    &output,
+                    outcome_count,
+                    bank,
+                )
+                .map_err(projection_refusal("general-consider", action))
+            }
+            Self::Freeze { cursor_before } => {
+                let selected = RuntimeSelectionCursorV2::decode(cursor_before)
+                    .map_err(|_| BuilderError::Projection("general-freeze-cursor"))?;
+                let header = selected.header();
+                if header.outcome_count != outcome_count
+                    || header.policy_id != input.config.selection_policy_id()
+                    || header.product_id != environment.product_record_digest
+                    || header.price_scale != input.config.price_scale()
+                {
+                    return Err(BuilderError::Projection("general-freeze-state"));
+                }
+                let mut scratch = [0_u8; RUNTIME_SELECTION_CURSOR_BYTES_V2];
+                let mut output = [0_u8; RUNTIME_SELECTION_CURSOR_BYTES_V2];
+                freeze_selection_v2(
+                    cursor_before,
+                    input.expected_revision,
+                    &mut scratch,
+                    &mut output,
+                )
+                .map_err(|_| BuilderError::Projection("general-freeze-transition"))?;
+                project_general_selection_candidate_in_place_v3(
+                    action,
+                    &output,
+                    outcome_count,
+                    bank,
+                )
+                .map_err(projection_refusal("general-freeze", action))
+            }
+            Self::InitializeSettlement { verifier, verified } => {
+                let cursor_bytes = settlement_cursor_len(outcome_count)
+                    .map_err(|_| BuilderError::Projection("general-initialize-width"))?;
+                let mut cursor_output = vec![0_u8; cursor_bytes];
+                initialize_runtime_settlement_in_place_v2(
+                    verifier,
+                    verified,
+                    input.expected_revision,
+                    &mut cursor_output,
+                )
+                .map_err(|_| BuilderError::Projection("general-initialize-transition"))?;
+                project_general_initialize_candidate_in_place_v3(
+                    &cursor_output,
+                    outcome_count,
+                    environment,
+                    bank,
+                )
+                .map_err(projection_refusal("general-initialize-settlement", action))
+            }
+            Self::Settlement {
+                cursor_before,
+                verified,
+                manifest,
+            } => {
+                let settlement_action = match action {
+                    Action::Collect => RuntimeSettlementActionV2::Collect,
+                    Action::Materialize => RuntimeSettlementActionV2::Materialize,
+                    Action::Distribute => RuntimeSettlementActionV2::Distribute,
+                    Action::Close => RuntimeSettlementActionV2::Close,
+                    _ => return Err(BuilderError::Binding(line!())),
+                };
+                let cursor_bytes = cursor_before.len();
+                let effect_bytes = runtime_settlement_effect_len_v2(outcome_count)
+                    .map_err(|_| BuilderError::Projection("general-settlement-width"))?;
+                let inventory_bytes = usize::try_from(outcome_count)
+                    .ok()
+                    .and_then(|count| count.checked_mul(8))
+                    .ok_or(BuilderError::Arithmetic)?;
+                let mut cursor_workspace = vec![0_u8; cursor_bytes];
+                let mut inventory_workspace = vec![0_u8; inventory_bytes];
+                let mut effect_workspace = vec![0_u8; effect_bytes];
+                evaluate_runtime_settlement_in_place_v2(
+                    RuntimeSettlementViewV2 {
+                        action: settlement_action,
+                        cursor_before,
+                        verified,
+                        manifest,
+                        manifest_order_index: input.manifest_order_index,
+                        expected_revision: input.expected_revision,
+                        // The beneficiary is the config's, and only `Close` may
+                        // name one at all.
+                        surplus_beneficiary: (settlement_action
+                            == RuntimeSettlementActionV2::Close)
+                            .then(|| input.config.quote_surplus_beneficiary()),
+                    },
+                    &mut cursor_workspace,
+                    &mut inventory_workspace,
+                    &mut effect_workspace,
+                )
+                .map_err(|_| BuilderError::Projection("general-settlement-transition"))?;
+                project_general_hot_candidate_in_place_v3(
+                    action,
+                    &effect_workspace,
+                    &cursor_workspace,
+                    outcome_count,
+                    environment,
+                    bank,
+                )
+                .map_err(projection_refusal("general-settlement", action))
+            }
+        }
+    }
+}
+
+/// Surface the accelerator's own projector refusal into the validator log.
+///
+/// THE WIRE CANNOT CARRY THE CAUSE AND THE LOG CAN. `BuilderError::Projection`
+/// is one `&'static str`, so `GeneralHotCandidateErrorV3` -- which
+/// distinguishes a capacity, a stride, a coordinate and a plan -- would
+/// otherwise be discarded at the one boundary where it is the whole answer.
+/// A campaign reads a validator log first.
+fn projection_refusal(
+    stage: &'static str,
+    action: Action,
+) -> impl Fn(GeneralHotCandidateErrorV3) -> BuilderError {
+    move |error| {
+        std::eprintln!("general candidate projection refused at {stage} for {action:?}: {error:?}");
+        BuilderError::Projection(stage)
+    }
 }

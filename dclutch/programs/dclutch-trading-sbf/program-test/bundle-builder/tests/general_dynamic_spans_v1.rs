@@ -1635,3 +1635,56 @@ fn each_action_refuses_the_evidence_shape_another_one_needs() {
 fn swapped_result(input: GeneralRequestInputV1<'_>) -> Result<GeneralRequestV1, BuilderError> {
     derive_general_request_v1(input)
 }
+
+/// TWO BATCHES ON ONE MARKET SELECT SEPARATELY, and the address is what says so.
+///
+/// Until `6ce8929ed` `GENERAL_SELECTION_STATE_RECIPE_V3` was keyed by the root
+/// ALONE -- "one per General root" -- and nothing writes a frozen selection back
+/// to `Open`, so after the first `Freeze` a market could open, fill and close as
+/// many batches as it liked and could CLEAR in exactly one. General as built was
+/// one call auction per Market. The recipe carries the batch identity now, and
+/// this is its first exercise: the builder is where a campaign learns which
+/// cursor an action names, and until this commit it could not derive one at all.
+///
+/// `Consider` takes its batch coordinate from the certificate it considers --
+/// the first consideration of a batch CREATES the cursor, so it cannot come from
+/// the cursor -- and `Freeze` takes it from the cursor itself. Both derivations
+/// have to land on the same address for the same batch and on different
+/// addresses for different ones, which is the whole property.
+#[test]
+fn a_second_batch_on_one_market_derives_its_own_selection_cursor() {
+    let (mut market, first) = live_market();
+    let second = live_records(&mut market);
+    assert_ne!(
+        first.batch_id, second.batch_id,
+        "the second occurrence is a different batch identity",
+    );
+    let derive = |action, records: &LiveRecordsV1| {
+        derive_general_request_v1(action_input(&market, action, records))
+            .unwrap_or_else(|error| panic!("derive {action:?}: {error:?}"))
+    };
+    let first_consider = derive(Action::Consider, &first);
+    let second_consider = derive(Action::Consider, &second);
+    let first_freeze = derive(Action::Freeze, &first);
+    let second_freeze = derive(Action::Freeze, &second);
+    assert_eq!(
+        first_freeze.primary_state, first_consider.primary_state,
+        "the freeze must close the cursor the consideration opened",
+    );
+    assert_eq!(
+        second_freeze.primary_state, second_consider.primary_state,
+        "the freeze must close the cursor the consideration opened",
+    );
+    assert_ne!(
+        first_consider.primary_state, second_consider.primary_state,
+        "two batches on one market would clear into one cursor",
+    );
+    // The subjects move for the ordinary reason -- two batches carry two
+    // candidates -- and the point is that the STATE moves as well. A recipe
+    // that reverted to the root alone would keep both subjects and collapse
+    // both addresses, which is exactly the shape the assertion above forbids
+    // and the shape a subject-only assertion would have missed.
+    assert_ne!(first_consider.subject_id, second_consider.subject_id);
+    assert_eq!(first_freeze.subject_id, None);
+    assert_eq!(second_freeze.subject_id, None);
+}
