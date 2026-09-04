@@ -4302,3 +4302,17 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Cuts: `532a14cc7`, `c09512d2b`.
 - Started 02:00 EDT: ACTS-2 **`afd405d24ebcbe84e`** — acts declare their family from the builder compile; the selected-gate
   arm answers only when the family selects the classifier's branch; the first derived other-machine verdict, live.
+
+### 2026-09-04 02:15 EDT — A THIRD MARKET FILLED AT 1,137,522 CU; THE STRANGER'S PAYOUT IS NEXT
+- COHORT-15C closed (seven commits: `13eda4e48` the founding plan bound by whole-file digest — every re-admission moves it;
+  the producer now measures the twenty leaves that move (all candidate paths and digests, no id or body); `f86b1df78`
+  retirement's evidence refreshed from the chain; `4b2519c3a` magic selectors 46 → 76, distinct magics 40 → 64 — the four
+  "missing" routes were routes with no BYTES): **re-admitted at 0 SOL with the reproducible gate predicted before the run;
+  market 3 `C9dLhWj7…` founded from the re-admitted plan, filled at 1,137,522 CU (vs 1,281,582), DCLTDFS1 settled at 95,583,
+  captured on attempt ONE (a tool authored the input)**; the Terminal market refuses a fill by phase — correct; OpenBatch's
+  seam is one missing document (`GeneralSuccessorRouteV1` has no writer; the seal has no host caller); retirement refuses
+  `phase != Retiring` — the sequence precondition; `0x4003` at 12,231 CU on plan-then-execute is cohort-12's defect,
+  unrepaired for the bare command. Devnet witnesses 22 → 26 (converged by the orchestrator). Settle legal 06:01:35 UTC.
+  → COHORT-15D **`(spawned)`**: the settle, the winning stranger paid, retirement, the route document + the seal caller +
+  OpenBatch.
+- Cuts: `9c1a0dce1`, `ce2e38227`.
