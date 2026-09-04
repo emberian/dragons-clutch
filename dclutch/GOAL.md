@@ -4434,3 +4434,17 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   founded-not-activated sibling → needs-chain, never a state. Orchestrator: the three wasm-derived fact modules regenerated
   at HEAD. Started 05:00 EDT: TESTS-CORE (two tests that expect Core to select no routes derive instead).
 - Cuts: `ffbe02e3c`.
+
+### 2026-09-04 05:20 EDT — THE SECOND WALK
+- C16-REHEARSAL-2 closed (`35f8ba5cc`, `c9f3edda4`; docs/evidence/C16_REHEARSAL_2026_09_04.md, 236 commits since the first
+  walk): **C-16 not met; the shortest honest path is six items, two ember's (D1; what `supported_builders` means), four
+  scoped engineering — no research question left.** Counts yesterday → today: never-executed 16/50 → **0/40** (register
+  vocabulary vs the honest formula); inaccessible 65 of 78 → 71 of 85 (denominator by census now — an instrument, not
+  movement; 5 of 85 act-offered and correctly built); stale claims 47 → 58; unowned flows 12 of 80, line-identical;
+  authority 121 unadjudicated, 0 adjudicated; material gaps 15 of 17. Verified on chain: **both cohort-15 certificates —
+  selector 1 = the cell both readings fall in; the scale repair holds twice on a public chain.** New gaps: **the browser
+  pins cohort-14 again (ProgramData vacant) and nothing goes red when a cohort closes**; DCLTDBR1 executed on devnet
+  (51xXs3Zq…) but the witness tool drops every DCLTCRQ2 transaction; **an epoch-1141 rent change (6,333 → 5,080/byte) is
+  the Funding refusal blocking both markets' terminal paths**; two register pages pass --check and disagree; C-14's nine of
+  ten non-reproducing roles. → WEB-COHORT15 **`(spawned)`**, WITNESS-2 **`(spawned)`**, COHORT-15E told the rent conviction.
+- Cuts: `7416a31ee`.

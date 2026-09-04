@@ -11,7 +11,7 @@ use super::*;
 use dclutch_general_adapter_contract::activation_bundle_v1::build_general_activation_capable_program_set_v1;
 use dclutch_general_adapter_contract::artifacts_v3::authenticate_general_artifacts_v3;
 use dclutch_general_adapter_contract::release_v3::{
-    GENERAL_ACTIONS_V3, authenticate_general_program_set_v3,
+    GENERAL_ACTIONS_V3, GENERAL_ACTIONS_V5, authenticate_general_program_set_v3,
 };
 
 /// Widths a release selects for the external accounts Profile13 names.
@@ -734,4 +734,76 @@ fn a_substituted_activation_record_refuses() {
         validate_general_selected_release_v1(&narrowed, input()).err(),
         Some(GeneralSelectedReleaseErrorV1::ProgramSet)
     );
+}
+
+/// FIFTEEN ACTIONS, FIFTEEN DERIVATION POLICIES, AND A MANIFEST ENTRY HOLDS ONE.
+///
+/// `CapabilityProgramV4::validate_selection` — the function
+/// `reauthenticate_top_level_root_roles_v3` runs over the SELECTED action's
+/// descriptor, and the one behind `TradingSbfError::DescriptorManifestEntry`
+/// `0x4015` — requires `descriptor.derivation_policy() ==
+/// entry.child_derivation_id()`. A Market's capability manifest carries ONE
+/// entry per capability root, so it can hold exactly one such id.
+///
+/// `compile_bundle` sets each action descriptor's `derivation_policy` to
+/// `digest(lifecycle_policy)`, and `encode_lifecycle` compiles the lifecycle
+/// PER ACTION because the child rent widths are per action. The General
+/// family's own `validate_descriptor` then pins `derivation_policy ==
+/// lifecycle().program()`, so the per-action value is not incidental — it is
+/// required. The two rules are jointly satisfiable for one action at a time.
+///
+/// Measured on devnet 2026-09-04: cohort-15's General market activated (the
+/// activation descriptor carries the FIRST action's policy, and so does the
+/// manifest entry the founding compiled from `bundles.first()`) and its
+/// OpenBatch simulation refused `0x4015` after 128,724 CU, on this conjunct
+/// alone. Re-founding cannot repair it; it can only choose which single action
+/// the Market is able to run. The Direct family does not have this shape: its
+/// non-ordinary bundles carry `ordinary.derivation_policy()`, so one entry binds
+/// every Direct action.
+#[test]
+fn every_action_descriptor_carries_its_own_derivation_policy() {
+    let release = general_selected_release_v1(input()).expect("release");
+    let policies: Vec<[u8; 32]> = release
+        .bundles
+        .iter()
+        .map(|bundle| {
+            CapabilityProgramV4::decode(&bundle.descriptor)
+                .expect("action descriptor")
+                .derivation_policy()
+                .to_bytes()
+        })
+        .collect();
+    assert_eq!(policies.len(), GENERAL_SELECTED_ACTION_COUNT_V1);
+    for (left, left_policy) in policies.iter().enumerate() {
+        for (right, right_policy) in policies.iter().enumerate() {
+            if left != right {
+                assert_ne!(
+                    left_policy, right_policy,
+                    "actions {:?} and {:?} share a derivation policy",
+                    release.bundles[left].action, release.bundles[right].action
+                );
+            }
+        }
+    }
+
+    // The pair cohort-15 measured, by name rather than by index arithmetic.
+    let policy_for = |wanted: Action| {
+        release
+            .bundles
+            .iter()
+            .position(|bundle| bundle.action == wanted)
+            .map(|index| policies[index])
+            .expect("the release carries this action")
+    };
+    assert_ne!(
+        policy_for(GENERAL_ACTIONS_V5[0]),
+        policy_for(Action::OpenBatch),
+        "a manifest entry compiled from the first bundle cannot bind OpenBatch"
+    );
+
+    // That the activation descriptor carries the FIRST bundle's policy — which
+    // is why the Market activated and its OpenBatch could not — is already
+    // pinned by `the_three_activation_records_close_the_triangle_the_seam_authenticates`
+    // above (`CapabilityProgramV1`, not V4 — the activation descriptor carries
+    // its own schema); this test is the other half: no second action shares it.
 }

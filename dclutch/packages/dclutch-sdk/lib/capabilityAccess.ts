@@ -14,9 +14,11 @@
  * is every route a program selects from an instruction's first eight bytes,
  * across both dispatch styles -- the arms that compare the bytes inline and
  * the arms that compare them inside a predicate. That is the same population
- * the rehearsal counted by hand (it found 78 arms / 77 magics; the census
- * finds 75 routes over 72 program-and-magic keys), and it is regenerated with
- * the tree.
+ * the rehearsal counted by hand (it found 78 arms / 77 magics), and it is
+ * regenerated with the tree. What it finds TODAY is not written down here:
+ * a live count typed into prose is the rehearsal's defect one layer up, so
+ * `capabilityAccess.test.ts` derives every figure from the census's own
+ * tables and this file states only the rule.
  *
  * THE NUMERATOR IS NARROWER THAN THE REHEARSAL'S, on purpose. The rehearsal
  * scored a route reachable when ANY client module encoded its bytes. That
@@ -28,11 +30,26 @@
  * `capabilityAccess.test.ts` names it per route.
  *
  * WHAT IS OUTSIDE THE DENOMINATOR ENTIRELY, said out loud because a count with
- * a silent exclusion is the defect this file exists to retire. Core dispatches
- * on a decoded `Action` variant, so its whole request family -- including the
- * four routes that carry the only Market phase gates an act reads today -- can
- * never appear here. `declaredOutsideTheDenominator` lists exactly which
- * declared routes that costs, rather than dropping them.
+ * a silent exclusion is the defect this file exists to retire. This paragraph
+ * used to say that Core's whole request family could never appear here, on the
+ * ground that Core dispatches on a decoded `Action` variant. That was never a
+ * property of Core's wire -- every Core instruction opens with `DCLTCRQ2` --
+ * but of where the check was written, and since it moved into the dispatch
+ * guard the census selects eleven Core routes by that magic. Core is IN the
+ * denominator now, and two of its routes are reachable through it.
+ *
+ * What remains outside is an ACTION route: a route BELOW an entry, reached
+ * only by a variant that entry decodes after the leading bytes have already
+ * chosen it. No eight-byte view names one, whoever writes the bytes.
+ * `declaredOutsideTheDenominator` lists exactly which declared routes that
+ * costs, rather than dropping them, and `capabilityAccess.test.ts` checks
+ * every one of them against the kind the census publishes for it.
+ *
+ * WHAT BEING IN THE DENOMINATOR DOES NOT SETTLE. `DCLTCRQ2` selects eleven
+ * routes, so a Core row is credited to the route an act DECLARES, not to one
+ * the bytes alone prove. That declaration is checked against the act's own
+ * compiled `Action` tag in `capabilityRouteDerivation.test.ts`; this file
+ * counts, and is not where a candidate set is narrowed.
  */
 
 import { CAPABILITY_ACTIONS_V1, type CapabilityStandingV1 } from './capabilityModel';
@@ -61,9 +78,10 @@ export type CapabilityAccessCensusV1 = Readonly<{
   /**
    * Declared routes no leading-byte view can name, so no count can hold them.
    *
-   * Every one is a Core `Action` route or an action route below an entry. They
-   * are not inaccessible and they are not counted; they are the part of the
-   * catalogue this instrument cannot see, listed so that nobody reads the
+   * Every one is an ACTION route: a route below an entry, selected by a
+   * variant the entry decodes once the leading bytes have already chosen it.
+   * They are not inaccessible and they are not counted; they are the part of
+   * the catalogue this instrument cannot see, listed so that nobody reads the
    * denominator as the protocol.
    */
   declaredOutsideTheDenominator: ReadonlyArray<string>;

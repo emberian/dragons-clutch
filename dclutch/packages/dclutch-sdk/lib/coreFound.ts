@@ -779,12 +779,29 @@ export function compileLifecycleRentCreateTransactionV2(input: Readonly<{
   return Object.freeze({ rentCredit: rentCredit.toBase58(), requestBytes, transaction, wireBytes, requiredSigners });
 }
 
+/**
+ * Where Core's `Action` tag sits in a request body.
+ *
+ * Core's dispatch is TWO coordinates, not one: `CORE_REQUEST_MAGIC` says the
+ * instruction is a Core request, and this byte narrows the eleven routes that
+ * magic selects -- narrows, not resolves, since `Action::Retire` alone reaches
+ * four of them. The magic reaches the browser generated; this
+ * coordinate does not, because `dclutch-market-core-codec`'s
+ * `REQUEST_ACTION_OFFSET` is crate-private and `generate-core-found.mjs` emits
+ * no Core counterpart to `LIFECYCLE_RENT_INSTRUCTION_ACTION_OFFSET_V2`. It was
+ * a bare `output[10]` in the encoder below; naming it is not the fix, it is
+ * what makes the missing emission visible and lets a reader of a compiled
+ * instruction find the tag the same way the encoder wrote it. THE FIX is one
+ * line in that generator, and it belongs to the generator's owner.
+ */
+export const CORE_REQUEST_ACTION_OFFSET = 10;
+
 function foundRequest(generation: bigint, market: PublicKey): Uint8Array {
   if (generation < 0n || generation > 0xffff_ffff_ffff_ffffn) throw new Error('Market generation is outside u64');
   const output = new Uint8Array(CORE_REQUEST_BYTES);
   output.set(CORE_REQUEST_MAGIC, 0);
   putU16(output, 8, CORE_VERSION);
-  output[10] = CORE_ACTION_FOUND_TAG;
+  output[CORE_REQUEST_ACTION_OFFSET] = CORE_ACTION_FOUND_TAG;
   putU64(output, 32, generation);
   output.set(market.toBytes(), 40);
   return output;

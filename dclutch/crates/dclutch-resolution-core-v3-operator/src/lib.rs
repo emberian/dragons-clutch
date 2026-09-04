@@ -3324,10 +3324,20 @@ fn authenticate_close_funding(
     recovery_policy: Option<RecoveryPolicyV2>,
     rent: &solana_program::rent::Rent,
 ) -> Result<ResolutionCloseFundingPlanV3, ResolutionCoreOperatorErrorV3> {
+    // Twelve sites in this function publish one `Funding`, six of them through
+    // `map_err(|_| ...)` and two through a `_ =>` arm. Cohort-15D read the
+    // resulting `Resolution CloseFund: Funding` and could say only that the
+    // wall was somewhere in "funding state, manifest binding, or physical
+    // custody". Each site now says which it is; the code on the wire is
+    // unchanged.
+    let refuse = |conjunct: &str| {
+        eprintln!("close-funding refused: {conjunct}");
+        ResolutionCoreOperatorErrorV3::Funding
+    };
     let manifest_id = CapabilityContentId::new(market.identity.capability_manifest.to_bytes())
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+        .map_err(|_| refuse("manifest identity"))?;
     let manifest = CapabilityManifestV1::decode(&snapshot.capability_manifest.data)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+        .map_err(|_| refuse("manifest decode"))?;
     let indices = authenticate_active_funding_ledger(
         snapshot.market.key,
         snapshot.resolution_program.key,
@@ -3356,9 +3366,9 @@ fn authenticate_close_funding(
                 ledger_rent,
                 snapshot.beneficiary.key.to_bytes(),
             )
-            .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?,
+            .map_err(|_| refuse("close custody shape"))?,
         )
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+        .map_err(|_| refuse("close slot in place"))?;
         if close.native_rent_credit() != snapshot.beneficiary.key.to_bytes()
             || close.realm_token_beneficiary().is_some()
             || close.remaining_realm_collateral() != 0
@@ -3366,16 +3376,16 @@ fn authenticate_close_funding(
             || close.vault_rent_lamports() != 0
             || close.vault_lamport_donation() != 0
         {
-            return Err(ResolutionCoreOperatorErrorV3::Funding);
+            return Err(refuse("close classified realm or vault custody"));
         }
         ledger_remaining_native_principal = ledger_remaining_native_principal
             .checked_add(close.remaining_native_lamports())
-            .ok_or(ResolutionCoreOperatorErrorV3::Funding)?;
+            .ok_or_else(|| refuse("remaining native principal overflow"))?;
         if close.ledger_can_close() {
             ledger_rent_lamports = close.ledger_rent_lamports();
             ledger_lamport_surplus = close.ledger_lamport_donation();
         } else if close.ledger_rent_lamports() != 0 || close.ledger_lamport_donation() != 0 {
-            return Err(ResolutionCoreOperatorErrorV3::Funding);
+            return Err(refuse("a non-final row liberated ledger rent"));
         }
         planned_lamports = close.expected_post_ledger_lamports();
         ledger_can_close = close.ledger_can_close();
@@ -3384,30 +3394,39 @@ fn authenticate_close_funding(
         || planned_lamports != 0
         || !FundingLedgerV2::decode(&planned)
             .and_then(|ledger| ledger.authenticate(manifest_id, manifest))
-            .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?
+            .map_err(|_| refuse("planned ledger does not re-authenticate"))?
             .all_closed()
     {
-        return Err(ResolutionCoreOperatorErrorV3::Funding);
+        return Err(refuse(&format!(
+            "planned close leaves the ledger open (can_close {ledger_can_close}, \
+             post lamports {planned_lamports})"
+        )));
     }
     let classified_ledger_lamports = ledger_remaining_native_principal
         .checked_add(ledger_rent_lamports)
         .and_then(|value| value.checked_add(ledger_lamport_surplus))
-        .ok_or(ResolutionCoreOperatorErrorV3::Funding)?;
+        .ok_or_else(|| refuse("classified ledger lamports overflow"))?;
     if classified_ledger_lamports != snapshot.funding_ledger.lamports {
-        return Err(ResolutionCoreOperatorErrorV3::Funding);
+        return Err(refuse(&format!(
+            "classified {classified_ledger_lamports} against ledger lamports {}",
+            snapshot.funding_ledger.lamports
+        )));
     }
     let source_refund_lamports = snapshot.source_state.lamports;
     if source_refund_lamports < rent.minimum_balance(SOURCE_RESOLUTION_STATE_BYTES_V2) {
-        return Err(ResolutionCoreOperatorErrorV3::Funding);
+        return Err(refuse(&format!(
+            "Source refund {source_refund_lamports} below its rent minimum {}",
+            rent.minimum_balance(SOURCE_RESOLUTION_STATE_BYTES_V2)
+        )));
     }
     let refund_lamports = source_refund_lamports
         .checked_add(classified_ledger_lamports)
-        .ok_or(ResolutionCoreOperatorErrorV3::Funding)?;
+        .ok_or_else(|| refuse("refund lamports overflow"))?;
     match (material.recovery_policy(), recovery_policy) {
         (Some(recovery_policy_id), Some(recovery_policy)) => {
             let recovery_allocation = recovery_policy
                 .attempt(0)
-                .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?
+                .map_err(|_| refuse("recovery policy attempt 0"))?
                 .funding_allocation_id()
                 .to_bytes();
             for (index, expected_config) in [
@@ -3417,11 +3436,11 @@ fn authenticate_close_funding(
             ] {
                 let entry = manifest
                     .entry(index)
-                    .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+                    .map_err(|_| refuse("recovery manifest entry"))?;
                 if entry.config_id().to_bytes() != expected_config
                     || entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V7
                 {
-                    return Err(ResolutionCoreOperatorErrorV3::Funding);
+                    return Err(refuse("recovery entry config or release"));
                 }
             }
         }
@@ -3434,13 +3453,13 @@ fn authenticate_close_funding(
             for (slot, index) in indices.into_iter().enumerate() {
                 let entry = manifest
                     .entry(index)
-                    .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+                    .map_err(|_| refuse("no-recovery manifest entry"))?;
                 if entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V7 {
-                    return Err(ResolutionCoreOperatorErrorV3::Funding);
+                    return Err(refuse("no-recovery entry release"));
                 }
                 let config = configs
                     .get_mut(slot)
-                    .ok_or(ResolutionCoreOperatorErrorV3::Funding)?;
+                    .ok_or_else(|| refuse("no-recovery config slot"))?;
                 *config = entry.config_id().to_bytes();
             }
             let material_id = market.identity.resolution_policy.to_bytes();
@@ -3450,10 +3469,18 @@ fn authenticate_close_funding(
                 || exhaustion_config == material_id
                 || recovery_config == exhaustion_config
             {
-                return Err(ResolutionCoreOperatorErrorV3::Funding);
+                return Err(refuse("no-recovery compartment configs"));
             }
         }
-        _ => return Err(ResolutionCoreOperatorErrorV3::Funding),
+        // The material and the observed account disagree about whether this
+        // Market HAS a recovery policy: one is Some and the other None.
+        (material_side, observed_side) => {
+            return Err(refuse(&format!(
+                "recovery policy presence: material {}, observed {}",
+                material_side.is_some(),
+                observed_side.is_some()
+            )));
+        }
     }
     ResolutionCloseFundingPlanV3 {
         entries: indices,
@@ -3508,13 +3535,40 @@ fn authenticate_active_funding_ledger(
             return Err(refuse("realm-collateral quote"));
         }
     }
+    // The arithmetic, not just its name. `rent.minimum_balance` is a CHAIN
+    // parameter read at the moment of the check, while the account was funded
+    // at whatever the parameter was when it was created -- so this conjunct can
+    // refuse a ledger nothing has touched, and "native custody arithmetic"
+    // alone sends the reader to diff two ledgers that are equal. Cohort-15
+    // spent a lane on exactly that: devnet's rent-exempt rate fell from 6,333
+    // to 5,080 lamports per byte at an epoch boundary, and a Market whose
+    // sibling had been admitted four hours earlier refused with every byte of
+    // its ledger unchanged.
+    let ledger_rent_minimum = rent.minimum_balance(account.data.len());
     authenticated
-        .validate_native_custody(
-            account.lamports,
-            rent.minimum_balance(account.data.len()),
-            allow_lamport_surplus,
-        )
-        .map_err(|_| refuse("native custody arithmetic"))?;
+        .validate_native_custody(account.lamports, ledger_rent_minimum, allow_lamport_surplus)
+        .map_err(|_| {
+            let remaining = authenticated.remaining_native_lamports_total().ok();
+            match remaining {
+                Some(remaining) => eprintln!(
+                    "active-funding-ledger custody: lamports {} against rent minimum {} \
+                     + remaining native principal {} = {} over {} bytes (surplus {}, \
+                     allow_lamport_surplus {allow_lamport_surplus})",
+                    account.lamports,
+                    ledger_rent_minimum,
+                    remaining,
+                    ledger_rent_minimum.saturating_add(remaining),
+                    account.data.len(),
+                    account
+                        .lamports
+                        .saturating_sub(ledger_rent_minimum.saturating_add(remaining)),
+                ),
+                None => eprintln!(
+                    "active-funding-ledger custody: remaining native principal did not sum"
+                ),
+            }
+            refuse("native custody arithmetic")
+        })?;
     let derivation = CapabilityFundingLedgerDerivationV2::new(
         resolution_program.to_bytes(),
         market.to_bytes(),

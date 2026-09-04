@@ -1772,3 +1772,236 @@ the ledger's own lamports, and the next question is whether
 `allow_lamport_surplus` differs between the settle path and the admission path,
 or whether market 1 passed while its surplus was still zero. That is one
 instrumented re-run away and is not guessed here.
+
+---
+
+# ADDENDUM E — COHORT-15E, 2026-09-04
+
+**Devnet evidence. Not mainnet evidence.** Tree root `/Users/ember/dev/dclutch`,
+HEAD `5f9cd1ca3` at the start, `08fe86470` at the stop. **No transaction was
+signed or submitted by this lane, no program was changed, and no market was
+founded.** Deployer `23.890559434` and campaign payer `1.304204301` at both ends
+of it.
+
+Two walls arrived here named by code and unexplained by cause. Both are convicted
+to one field. In both the field belongs to a deployed program, so under this
+cohort's standing rule — no program change under the live cohort — the decision
+is recorded and not made.
+
+## E1. THE FIELD THAT MOVED IS NOT IN EITHER LEDGER: DEVNET CHANGED ITS RENT
+
+D10 left `active-funding-ledger refused: native custody arithmetic` with market
+1's and market 3's funding ledgers byte-diffed and equal in everything the
+conjunct reads, and asked whether `allow_lamport_surplus` differed between the
+paths or whether market 1 passed while its surplus was still zero. **Neither.**
+The two accounts are equivalent, the flag is `false` on both paths, and the
+answer was never in the accounts.
+
+Read off the chain, in this order:
+
+1. **Market 1's ledger was READONLY in its own admission transaction**
+   (`64jEDVT6…`, slot 492,829,917) — it appears in that transaction's lookup-table
+   readonly span — so nothing rewrote it afterwards, and its bytes at 03:44:45 UTC
+   are its bytes now. Its whole lamport history is two entries: `0 → 2,482,545`
+   at the CreateFund (slot 492,763,282) and `2,482,545 → 2,482,539` at the
+   activation (slot 492,765,121). Market 3's is the same two entries at slots
+   492,859,368 and 492,861,217.
+2. **Both ledgers authenticate and report identically.** Selected mask `0x000e`,
+   three rows at manifest entries 1/2/3, each `Active`, each carrying one lamport
+   of Bounty principal and two released, against a quote of three:
+   `remaining_native_lamports_total = 3` for both.
+3. **Every account cohort-15 created reads back at 6,333 lamports per byte over
+   the 128-byte overhead** — both certificate seats at 312 B (2,786,520), both
+   payout ATAs at 170 B (1,887,234), both Markets at 368 B (3,141,168), both
+   capability manifests at 2,128 B (14,287,248), both funding ledgers' rent
+   component at 264 B (2,482,536).
+4. **The cluster now says 5,080.** `getMinimumBalanceForRentExemption` returns
+   1,991,360 for 264 B and 650,240 for 0 B; the Rent sysvar reads
+   `lamports_per_byte_year 5080, exemption_threshold 1.0` — the shape SIMD-0194
+   prescribes. An account created at finalized slot 492,933,968 holds exactly
+   650,240.
+
+`validate_native_custody(account.lamports, rent.minimum_balance(len),
+allow_lamport_surplus = false)` asks for **exact** equality between what the
+account holds and `rent.minimum_balance(len) + remaining principal`. The first
+term is read from the Rent sysvar AT THE MOMENT OF THE CHECK; the account was
+funded at whatever that term was when it was created; and nothing in the ledger
+records which. So:
+
+| | market 1, 03:44:45 UTC | market 3, after 08:07:58 UTC |
+| --- | ---: | ---: |
+| ledger lamports | 2,482,539 | 2,482,539 |
+| `rent.minimum_balance(264)` | **2,482,536** | **1,991,360** |
+| remaining native principal | 3 | 3 |
+| expected | 2,482,539 | 1,991,363 |
+| verdict | **exact** | **PresentNativeLamportsMismatch** |
+
+**Epoch 1141 began at slot 492,912,000 = 07:31:40 UTC**, between market 1's
+admission (03:44:45 UTC, epoch 1140) and market 3's settle (slot 492,925,112,
+08:07:58 UTC). A rent-exempt minimum is a per-epoch cluster parameter; that
+boundary is the only point at which it can move, and it is inside the bracket.
+
+### The instrument now says the arithmetic, not its name
+
+`authenticate_active_funding_ledger` prints the six numbers on the refusing path.
+Verified on the live refusal, against a prediction made from the account bytes
+before the instrument existed:
+
+    active-funding-ledger custody: lamports 2482539 against rent minimum 1991360
+      + remaining native principal 3 = 1991363 over 264 bytes
+      (surplus 491176, allow_lamport_surplus false)
+
+**491,176 is the whole of the rent difference** — `2,482,536 − 1,991,360` — to
+the lamport. Not one lamport left the account; the cluster reclassified it from
+rent into surplus.
+
+### The author is a program
+
+`programs/dclutch-core-sbf/src/resolution.rs:1270` runs the same call with the
+same `false`. A host relaxation would build a transaction the deployed Core
+refuses with `CoreSbfError::Funding`, so nothing host-side lands the admission.
+
+**Decided by reading, not made.** The close path already anticipates a surplus
+and classifies it (`allow_lamport_surplus = true`, then `ledger_lamport_surplus`
+folded into the refund); the admission paths do not. The parsimonious repair is
+to **persist the rent the account was funded at and compare against that**, which
+keeps the refusal exact rather than widening it to `>=`. Widening admits a real
+donation as custody; the recorded figure does not. The ledger header's four
+reserved bytes cannot hold a `u64`, so this is a v3 schema question, not an edit.
+
+**So the first stranger payout on an honest selector is not blocked by anything
+in cohort-15.** The ATA `EorpstZuhLHkXXraUHm32zN8kzP8YedEfnVuXG4it9ew` is created
+and waiting, market 3's certificate reads kind 1 with selector 1, and the buyer
+holds outcome 1. What stands between them is one conjunct in a deployed program
+and a cluster parameter that changed under a live cohort.
+
+### Three tests, over the two ledgers' real bytes
+
+`crates/dclutch-resolution-core-v3-operator/tests/funding_ledger_rent_parameter_v1.rs`,
+with both ledgers and both manifests committed as fixtures read off devnet at
+finalized commitment (each manifest's sha256 is the manifest id its ledger's
+header binds, which is the fixtures' own self-check):
+
+* everything the conjunct reads is equal across the two markets;
+* the verdict flips on the rate alone, identically for both;
+* the stranded amount is exactly the difference between the two minimum balances.
+
+Proven red by declaring the post-change rate to be the creation rate: two of the
+three fail, one on `Ok(())` where `Err(PresentNativeLamportsMismatch)` was
+expected.
+
+## E2. THE GENERAL FIELD IS NOT A COMPILER WRITING ONE ID TWO WAYS
+
+D6 convicted OpenBatch's `0x4015` to `derivation_policy 68b51371… !=
+child_derivation_id 7fe9b22d…` and called it a founding input one compiler wrote
+inconsistently. **One author writes both, and it writes them consistently.**
+
+    selected_capability.rs:112   entry.child_derivation_id = descriptor.derivation_policy()
+    general_market.rs:79         descriptor = release.bundles.first()
+    release_v3.rs:99             GENERAL_ACTIONS_V5[0] = Action::Consider
+    general_selected_release_v1.rs:1042  the activation bundle takes the same first descriptor
+    general_selected_release_v1.rs:1129  descriptor.derivation_policy = digest(lifecycle_policy)
+    general_selected_release_v1.rs:1194  encode_lifecycle compiles PER ACTION
+
+So the manifest entry binds `Consider`'s policy, the activation descriptor
+carries `Consider`'s policy — which is exactly why the market activated — and
+OpenBatch's descriptor carries its own.
+
+**The inconsistency is structural, and both halves are required.** The General
+family's `validate_descriptor` pins `derivation_policy ==
+lifecycle().program()` (`dclutch-general-adapter-contract/src/artifacts_v3.rs:522`),
+and the lifecycle is per action because `GeneralChildRentWidthsV5` is per action.
+Fifteen actions therefore mint fifteen policies by requirement. A Market's
+capability manifest carries ONE entry per capability root and therefore one
+`child_derivation_id`, and `CapabilityProgramV4::validate_selection` compares
+them. **A General market can execute exactly one action**, and re-founding
+chooses which one rather than repairing anything — which is why this lane did
+NOT re-found it. Binding OpenBatch would strand the other fourteen and buy one
+transaction with a wall moved sideways.
+
+The Direct family does not have this shape: its non-ordinary bundles carry
+`ordinary.derivation_policy()` (`begin_retiring_bundle_v1.rs:131`,
+`native_close_bundle_v1.rs:187`, `close_maker_bundle_v1.rs:137`,
+`activation_bundle_v1.rs:231`), so one entry binds every Direct action. That is
+the shape General owes. Moving to it changes
+`dclutch-general-adapter-contract`, which is linked into the accelerator —
+**a program is the author again.**
+
+`every_action_descriptor_carries_its_own_derivation_policy` pins it: fifteen
+pairwise-distinct policies, with the Consider/OpenBatch pair named rather than
+indexed. Proven red by making `encode_lifecycle` ignore its action.
+
+## E3. MARKET 1'S RETIREMENT IS BEHIND THE SAME CLUSTER PARAMETER
+
+`Resolution CloseFund: Funding` publishes one code from twelve sites in
+`authenticate_close_funding`, six of them `map_err(|_| …)` and one a `_ =>` arm
+that discarded which side of a pair disagreed. Every site now names its conjunct
+and the four that compare numbers print both numbers.
+
+**They are not exercised on a live refusal, and the reason is E1.** Market 1's
+sequence no longer reaches CloseFund. Run plan-only against a COPY of the durable
+journal in this lane's own scratch — nothing signed, no other lane's session
+touched:
+
+    dclutch-local-successor-bootstrap devnet-terminal-sequence-v1 \
+      --plan $JOB/backups/cohort15c/plan-seal.json.nonce-bound \
+      --market-input $JOB/market/market.json \
+      --evidence $JOB/market/campaign-open.json \
+      --refreshed-evidence $JOB/retirement/refresh.json \
+      --market 3QytL1bBMtCvRoXWR5h7MgutRBZqtv7emUVubEo5a4T2 \
+      --session <copy>/session.json --journal-dir <copy>/journal
+
+    Error: terminal session receipt rent no longer rederived from the canonical
+           Rent sysvar
+
+`authenticate_terminal_receipt_funding_v1`
+(`tools/local-validator/bootstrap/successor/src/terminal_sequence.rs:8115`) holds
+the session's `receipt_rent_lamports` — **3,445,152**, the figure its prepay
+finalized with at 07:01 UTC, pre-flip — against `rent.minimum_balance(416)`,
+which now rederives **2,763,520**. With that one guard opened in an UNCOMMITTED
+probe build, the next refusal is `terminal ALT data width, rent, or canonical
+prefix refused`: the lookup table `4a3S6qTKmXAGF5qPcWpDMsgbQiDCHjZdmhExA262NpMT`
+holds 13,729,944 lamports and was funded at the old rate too.
+
+So market 1's remaining wall is **at least two rent-exactness guards deep**, and
+every one of them makes the same mistake as the program conjunct in E1: it treats
+`rent.minimum_balance(len)` as a constant of an account rather than as the
+reading it was at creation. In the exterior the repair is cheap and needs no
+program — the session already RECORDS the figure it was funded at; the guard
+should compare the account against that and require only exemption against
+today's. This lane did not make that change, because a guard that is opened to
+reach a wall behind it should be opened deliberately and not under the pressure
+of an act.
+
+Market 1 reads phase byte 3 `Retiring` and `outstanding_capabilities` 1 at
+CoreState offset 280; market 3 reads phase 1 `Open` and outstanding 1. Both are
+correct for where their sequences stopped.
+
+**The runbook's `retire` row stays owed**, and this lane deliberately did not add
+one: `tools/cohort/steps.tsv` has 25 rows and no retirement row, and a row
+asserting a step that has never completed on any chain would be a runbook
+claiming what the evidence does not.
+
+## E4. WHAT COHORT-15 NOW KNOWS THAT IT DID NOT
+
+A cohort is funded at the rent-exempt rate in force when it is founded, and every
+later check that re-derives that rate is a check against a number the cohort
+never agreed to. Devnet moved the rate mid-cohort and stranded three walls in one
+epoch. **The lesson is not "devnet is unstable"** — it is that a fixed bound this
+tree would label *chain-derived* has been treated everywhere as *mathematical*,
+and AGENTS.md already requires a bound to be labeled. The account's own funded
+rent is the fact; the sysvar is a reading of it at a moment.
+
+Two acts remain owed and neither is blocked by anything cohort-15 built: the
+first stranger payout on an honest selector, and the first General OpenBatch on a
+real chain. Both wait on one rule inside a deployed program.
+
+## E5. COMMITS FROM THIS LANE
+
+    260684fad  funding custody: the conjunct that reads a chain parameter, and
+               the fifteen policies one entry cannot hold
+    08fe86470  close-funding: twelve sites, one code, and now twelve sentences
+
+Both carry `Lane: COHORT-15E`. Every new test was proven red against a real
+regression and green when restored. No crate in an SBF link was changed, so no
+frameguard rows are owed.
