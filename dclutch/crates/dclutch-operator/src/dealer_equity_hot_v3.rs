@@ -5,6 +5,38 @@
 //! selects its `CapabilityProgram`, joins the three Dealer artifacts, and
 //! emits exactly one unsigned Trading instruction.  It neither signs nor
 //! submits and it does not introduce a Dealer-specific child instruction wire.
+//!
+//! # This builder has no caller, and the missing piece is the CONSUMER
+//!
+//! [`build_dealer_equity_hot_instruction_v3`] is not reached from anywhere in
+//! the tree. That is a gap to close, not dead code to cut, because the same
+//! instruction is already being produced by something less trustworthy.
+//!
+//! The accepted-transition campaign that executes equity Adds and Removes
+//! against the real Trading ELF
+//! (`programs/dclutch-dealer-accelerator-sbf/program-test/tests/accepted.rs`)
+//! reaches the route through `dclutch-chain-bundle-builder`, which derives the
+//! frame from the emitted artifacts and stages its own prestate. That is a
+//! program-test workspace crate: it proves the route executes, and it can never
+//! be a submit path.
+//!
+//! The submit path that does exist is a hand-written TypeScript mirror --
+//! `compileDealerEquityTransactionV3` in `apps/dclutch-web/lib/dealerEquityV3.ts`
+//! and its byte-identical `packages/dclutch-sdk` twin, live on `/liquidity` via
+//! `DealerLiquidityWorkspace.tsx`. Its constants are generated from the Trading
+//! program, but its Hot envelope and its fixed/strategy/runtime account split
+//! are written out by hand and pinned to nothing on this side. Deleting this
+//! module would make that mirror the last authority on the wire it mirrors, and
+//! nothing would go red.
+//!
+//! So the consumer this builder needs is either of:
+//!
+//! - a host caller on the submit path -- a successor devnet driver, the way
+//!   `general_session.rs` drives General; or
+//! - a vector test pinning the browser's assembled instruction to this
+//!   builder's, the shape `dealer_scenario_profile_vector` already has for
+//!   `dealerAccountProfileV3` (which covers the AccountProfile, not the
+//!   instruction).
 
 use crate::{
     Finality, Observation,

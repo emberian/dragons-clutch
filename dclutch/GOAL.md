@@ -4160,3 +4160,12 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   campaign that executes it — dead ones deleted by reading, producer-missing ones named in their crate doc
   (PARSIMONY **`(spawned)`** with a blind defend before any cut).
 - Cuts: `01fbe6a4b`, `903cb6f8e`, `f610fadc9`.
+- PARSIMONY closed (`aaa40f931`, 69 doc lines, zero deletions — the right outcome): the Dealer equity builder is
+  PRODUCER-MISSING (the accepted campaign reaches the route through the bundle builder, a program-test crate that can never
+  submit; the real submit path is the browser's hand-written `compileDealerEquityTransactionV3`, pinned to nothing on the
+  Rust side — deleting the builder would make the mirror the last authority); the three Series builders are the only public
+  door to ~600 private lines and wait on D7; `build_general_hot_instruction_v3` is LOAD-BEARING (five callers since a517d27cc
+  — ASPIRATION_LEDGER M-40 and d2d342573's "zero callers" are stale, already recorded by the rehearsal). Found in the wrapper's
+  clients.yml: the web job installed no Rust toolchain while `tier_web` already calls cargo — fixed and pushed (0895f5004);
+  `checks.yml`'s `suites` job stays because `clients.yml` is path-filtered and self-gates.
+- Cuts: `799466d08`.

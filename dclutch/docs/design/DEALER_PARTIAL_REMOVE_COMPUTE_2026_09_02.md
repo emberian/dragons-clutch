@@ -1,5 +1,71 @@
 # The partial equity Remove's compute wall, priced
 
+**Head current at `82465e00b` (2026-09-03), tree root `/Users/ember/dev/dclutch`; program-test evidence on real SBF ELFs, not devnet and not mainnet evidence.**
+The nine addenda are kept verbatim below `## History`, several of them correcting each other; this head states only the survivors.
+
+## What it costs now
+
+The post-trade partial equity Remove — `accepted_equity_selector_one_executes_real_custody_and_rolls_back_late_evidence_refusal`
+in `programs/dclutch-dealer-accelerator-sbf/program-test`, the first Dealer action carrying a nonzero `signed_position_count` —
+opened this note **short of the 1,399,700 CU ceiling by about 367,000**. It now commits, and so do both LP final Removes behind it: worst
+headroom over eight filtered runs at `82465e00b` is **74,637** for the partial Remove and **76,165** / **74,647** for the two final Removes,
+with `accepted` at **31 passed / 0 failed** on three consecutive full runs. That is a property of ONE artifact set and eight payer draws, never
+a fixed number — the campaign's `ArtifactRelease` records hash the ELFs they name, so rebuilding any program redraws every Registry-record
+search depth, and ~45,000 CU moved between two commits with no code between them (eighth addendum). One build earlier, at `98113142b`, the
+worst headroom was **20,024** and run 3 of 8 died at `exceeded CUs meter`.
+
+## The three rulings this route spent
+
+- **0022** (`docs/decisions/0022-pda-signed-caller-facts.md`): a callee invoked by a PDA-signed CPI from Trading takes the facts the signer's
+  seeds pin as established. Spent in Claims `0aa70478e`, Custody `9b5de611e`, the accelerator prelude `742d7b7be`. Its OWN contribution in all
+  three was only the per-role deployment observation it drops — decision 0012's `ReleaseSuperseded`, now inherited from the caller; the larger
+  half was a redundant decode a reading would have found without any ruling.
+- **0023** (`docs/decisions/0023-slot-free-caller-authority-seed.md`, `3a8ac205d`): a caller authority's address is a function of
+  the signed instruction alone. `accelerator_caller_authority_digest_v1` (`crates/dclutch-execution-strategy-contract/src/shadow_digest_v3.rs:107`)
+  is why the accelerator's caller-authority bump is minable in principle — `derive_admitted_authorities_v1`
+  (`programs/dclutch-trading-sbf/program-test/bundle-builder/src/admitted.rs:225`) computes it off chain and discards it at `find_program_address(..).0`.
+- **The seal** (decision 0005; `authenticate_capability_seal_v3`, `programs/dclutch-trading-sbf/src/hot_v3/seal.rs:789`): at `742d7b7be` it became
+  the accelerator's joint rather than a shortcut through one. Its key is (descriptor schema, descriptor digest, action, Trading semantic release,
+  Registry), so a request naming an action this release never sealed has no seal account at all — which retired the manifest and program-set walk.
+
+## What is still draw, and who could carry it
+
+| term | spread over the eight runs | carrier |
+|---|---:|---|
+| `cx-accelerator-frame` + `acc-caller-authority` | 7,500 + 7,500 | Trading's half, the bump above — but `HotBumpHintsV1`'s slots are ROLES and none names the accelerator's own caller authority (`crates/dclutch-capability-program-contract/src/hot_v3.rs:275-280`); the accelerator's half is a process-local relay |
+| `cx-accelerator-returned` | 9,000 | not located |
+| `cu-transfer-validated`, twice | 6,000 + 6,000 | **none** — `validate_vault_key` (`programs/dclutch-custody-sbf/src/lib.rs:1897`) searches both vaults, `CustodyBumpRelayV1` is three bytes all spoken for, and a token account cannot carry its own bump |
+| `cu-common-frame`, twice | 4,500 + 4,500 | the replay cursor, which needs the child projection the campaign builder does not do |
+| `pf-invocation-preflighted` | 6,000 + 3,000 | **none** — child-caller seeds end in `hash(child_request_bytes)`, projected on chain |
+| `cx-claims-frame` + `sd-authority` | 3,000 + 3,000 | Claims' half only: a three-byte relay in the shape `split_caller_authority_bump_v1` (`programs/dclutch-custody-sbf/src/lib.rs:469`) already has |
+
+The largest **draw-free** debt is `execution_strategy_v2`'s own record walk — 82,308 CU, flat to 6 CU across eight runs, with no carrier left:
+`HotBumpHintsV1` is full, `StateBumpsV1` has one reserved byte, `SelectedRecordBumpsV1` fills the capability root's four, and the seal is keyed
+by descriptor. It is also **no longer priced**, per the third corollary below.
+
+## The design law
+
+**The expensive thing was never the check; it was a fact re-derived by someone who already had it.** Every cut here is that shape
+at a different joint: a callee re-authenticating what its PDA-signing caller established (0022); one immutable Registry-owned
+activation account hostile-decoded three times per invocation, with `validate_projection` running twenty-five `decode_role` calls
+for five values (`crates/dclutch-registry-contract/src/activation.rs:252`, repaired `5709672aa`, −12,021 CU per decode site); a producer that
+derived an address in order to NAME the account and then let the program search for it again (`dclutch-chain-bundle-builder` mined no
+`HotBumpHintsV1` slot until `82465e00b`); and one program walking ten Registry addresses twice, in `execution_strategy_v2` and again in
+`validate_authenticated_frame`. **The repair is always a CARRIER for the fact, never a weakening of the check** — nothing authenticated
+changed, and the residual is `create_program_address` at ~1,500 CU a call.
+
+Three measurement corollaries, each paid for by asserting its opposite first: **draw-free is not search-free** (wrong three times before a doubling
+probe settled it); **a span measured on the neighbour is an estimate** (the commit tail taken on the equity Add put the shortfall a third too low);
+and **a doubling probe over seeds that include an ELF digest is not a probe** — it rebuilds the program and redraws every depth, which is how 37,640
+was read for a span whose total was 73,308.
+
+## History
+
+*Everything below is this note as written between 2026-09-02 and 2026-09-03, unchanged and in order. Where an
+addendum contradicts the head above, the head is the current truth.*
+
+# The partial equity Remove's compute wall, priced
+
 Measured 2026-09-02, tree root `/Users/ember/dev/dclutch`, at `a0d556b9e`.
 Real SBF ELFs built in this lane's own worktree with its own target directory;
 zero SBF stack-frame-overwrite diagnostics on every link built for this note.

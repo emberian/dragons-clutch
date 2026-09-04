@@ -5,6 +5,43 @@
 //! finalized observation. It never performs RPC, signs, submits, or treats a
 //! client projection as onchain authority. The canonical Trading interpreter
 //! and its child receipt chain remain authoritative at execution time.
+//!
+//! # The three occurrence builders have no caller, and the blocker is upstream
+//!
+//! [`build_series_prepare_hot_v3`], [`build_series_consume_hot_v3`] and
+//! [`build_series_expire_hot_v3`] are not reached from anywhere in the tree.
+//! They are also the ONLY public door to the private
+//! `build_series_occurrence_hot_v3` behind them, so they are not three
+//! wrappers that could be dropped cheaply: everything from the frame
+//! authentication to the strategy selection is reachable through them and
+//! through nothing else.
+//!
+//! `tools/local-validator/bootstrap/successor/src/family_hot_campaign.rs`
+//! compiles all three exact family requests and then refuses, and states why in
+//! its own words: Series is a ShadowAot family, the common authenticated Shadow
+//! callback is not committed (see
+//! `programs/dclutch-series-shadow-sbf/program-test/README.md`), so no Series
+//! action has a dispatched Hot route to enter Trading through. The absent
+//! caller is downstream of that; writing one now would be a caller that ran
+//! against nothing.
+//!
+//! Series expiry carries a second, independent blocker. `6f258cf5e` convicted
+//! the artifact set rather than the fixture: route 4 declares a borrowed range
+//! while `proof_height(1) = 0` makes the canonical single-occurrence proof
+//! empty, and both spellings of "a borrowed thing is here" refuse a zero
+//! length. The repair moves shipped artifact digests and has a second author at
+//! `hot_v3.rs:12251`, so it was not taken.
+//!
+//! Whether Series is built or cut is D7's ruling and it is pending. A cut takes
+//! this module whole; a build enters through exactly these three symbols. Until
+//! it lands, neither the builders nor the occurrence path behind them should be
+//! deleted for want of a caller.
+//!
+//! None of this applies to the selected-V5 path further down. That one is live:
+//! [`inspect_current_series_hot_v5`] is consumed by
+//! [`crate::series_current_acquisition_v5`], the Trading program-test's
+//! `series_premarket_expiry_chain_v1` support, and the successor's
+//! `series_terminal_campaign`.
 
 use crate::series_lifecycle_v3::{
     SeriesLifecycleSnapshotV3, SeriesNextActV3, inspect_series_lifecycle_v3,

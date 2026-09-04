@@ -2222,6 +2222,10 @@ pub(crate) fn publication_state(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<S
 /// that half-succeeded: it is the pre-`c60b25e8` shape, and nothing on chain
 /// would found against it, so reporting Complete on the V1 alone would report
 /// an unfoundable cohort as ready.
+///
+/// The V1 is the sealed historical record and is never rewritten, so its bytes
+/// are compared exactly. The V2 is not: this plan's own succession stage
+/// overwrites it in place. See [`observed_genesis_v2_state_v1`].
 pub(crate) fn initialize_state(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<StageStateV1> {
     let v1 = observed_profile_state_v1(
         rpc,
@@ -2229,12 +2233,7 @@ pub(crate) fn initialize_state(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<St
         &plan.infrastructure_profile.address,
         &plan.infrastructure_profile.body_hex,
     )?;
-    let v2 = observed_profile_state_v1(
-        rpc,
-        "genesis V2 infrastructure profile",
-        &plan.genesis_infrastructure_profile.address,
-        &plan.genesis_infrastructure_profile.body_hex,
-    )?;
+    let v2 = observed_genesis_v2_state_v1(rpc, plan)?;
     Ok(match (v1, v2) {
         (ObservedProfileV1::Matches, ObservedProfileV1::Matches) => StageStateV1::Complete,
         (ObservedProfileV1::Absent, ObservedProfileV1::Absent) => StageStateV1::Absent,
@@ -2249,6 +2248,73 @@ pub(crate) fn initialize_state(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<St
             "the genesis V2 infrastructure profile is committed but the sealed V1 is not".into(),
         ),
     })
+}
+
+/// The V2 domain's answer to the question INITIALIZATION asks of it.
+///
+/// The genesis body is the answer right up until this plan's own succession
+/// stage supersedes it, and then it is not: the ceremony overwrites the genesis
+/// V2 in place with the two real predecessor ids read out of the live V1
+/// (`c60b25e8`). Byte-comparing against the genesis body alone therefore
+/// reports a cohort that completed BOTH its stages as one whose initialization
+/// conflicts — which is what stopped the cold machine's loopback at its founding
+/// stage, one stage past the succession wall, with `--founding-only requires
+/// initialize Complete`.
+///
+/// A superseded V2 counts as initialized only where a succession is what could
+/// have superseded it: the plan has to carry the ceremony. WHICH bytes the
+/// ceremony left is not re-adjudicated here — `complete_succession_state`
+/// compares them against the exact chain-derived selection and is the one
+/// semantic owner of that question. The founding-only gate requires both stages
+/// Complete, so a succession this plan does not describe is still refused; it is
+/// refused by the stage that can name what is wrong with it.
+fn observed_genesis_v2_state_v1(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<ObservedProfileV1> {
+    let observed = observed_profile_state_v1(
+        rpc,
+        "genesis V2 infrastructure profile",
+        &plan.genesis_infrastructure_profile.address,
+        &plan.genesis_infrastructure_profile.body_hex,
+    )?;
+    let ObservedProfileV1::Conflict(detail) = observed else {
+        return Ok(observed);
+    };
+    if plan.infrastructure_succession.is_none() {
+        return Ok(ObservedProfileV1::Conflict(detail));
+    }
+    let address = pubkey(&plan.genesis_infrastructure_profile.address)?;
+    let core = pubkey(&plan.core.program_id)?;
+    let Some(account) = rpc.account(address)? else {
+        return Ok(ObservedProfileV1::Conflict(detail));
+    };
+    Ok(
+        match genesis_v2_was_superseded_v1(core, account.owner, account.executable, &account.data) {
+            true => ObservedProfileV1::Matches,
+            false => ObservedProfileV1::Conflict(detail),
+        },
+    )
+}
+
+/// Is what stands at the V2 domain a SUCCEEDED profile of this plan's Core?
+///
+/// The pure half of [`observed_genesis_v2_state_v1`], so every arm can be
+/// asserted without a cluster. Only this Core's own decodable V2 that has spent
+/// its succession counts; a foreign owner, an executable, the wrong width,
+/// bytes that do not decode, and a profile still naming the two genesis
+/// sentinels are all "not superseded", and the caller then reports the
+/// byte-comparison conflict it already had.
+fn genesis_v2_was_superseded_v1(
+    core: Pubkey,
+    owner: Pubkey,
+    executable: bool,
+    data: &[u8],
+) -> bool {
+    if owner != core || executable {
+        return false;
+    }
+    matches!(
+        ProtocolInfrastructureProfileV2::decode(data),
+        Ok(profile) if !profile.born_at_v2()
+    )
 }
 
 enum ObservedProfileV1 {
@@ -5230,6 +5296,67 @@ mod tests {
             Some(&v2_profile_account(Pubkey::new_unique(), genesis.clone()))
         ));
         assert!(!v2_profile_is_the_genesis_body_v1(core, &genesis, None));
+    }
+
+    fn v2_bindings() -> (
+        dclutch_release_set_contract::ExecutionRoleBindingV1,
+        dclutch_release_set_contract::ExecutionRoleBindingV1,
+    ) {
+        let binding = |program: u8, artifact: u8| {
+            dclutch_release_set_contract::ExecutionRoleBindingV1::new(
+                dclutch_release_set_contract::ProgramIdentityV1::new([program; 32])
+                    .expect("program identity"),
+                ArtifactReleaseIdV1::new([artifact; 32]).expect("artifact identity"),
+            )
+        };
+        (binding(0x31, 0x41), binding(0x32, 0x42))
+    }
+
+    /// AND A SUPERSEDED V2 IS STILL PROOF THAT INITIALIZATION RAN.
+    ///
+    /// The wall one stage past the succession: `--founding-only` requires the
+    /// initialize stage Complete, and the plan's own ceremony had by then
+    /// overwritten the genesis V2 in place, so the byte comparison called a
+    /// finished cohort a conflict. Only this Core's decodable, SPENT V2 counts.
+    #[test]
+    fn a_superseded_v2_is_initialization_and_a_strangers_is_not() {
+        let core = Pubkey::new_unique();
+        let (registry, rent) = v2_bindings();
+        let genesis = ProtocolInfrastructureProfileV2::genesis(registry, rent)
+            .expect("genesis V2")
+            .to_bytes()
+            .to_vec();
+        let succeeded = ProtocolInfrastructureProfileV2::new(
+            registry,
+            rent,
+            ArtifactReleaseIdV1::new([0x51; 32]).expect("predecessor registry"),
+            ArtifactReleaseIdV1::new([0x52; 32]).expect("predecessor rent"),
+        )
+        .expect("succeeded V2")
+        .to_bytes()
+        .to_vec();
+
+        assert!(genesis_v2_was_superseded_v1(core, core, false, &succeeded));
+        // A profile still naming both sentinels has not been superseded; it is
+        // the genesis body, and the byte comparison already accepts it.
+        assert!(!genesis_v2_was_superseded_v1(core, core, false, &genesis));
+        // Nothing a stranger can put at that address is initialization.
+        assert!(!genesis_v2_was_superseded_v1(
+            core,
+            Pubkey::new_unique(),
+            false,
+            &succeeded
+        ));
+        assert!(!genesis_v2_was_superseded_v1(core, core, true, &succeeded));
+        assert!(!genesis_v2_was_superseded_v1(
+            core,
+            core,
+            false,
+            &succeeded[..succeeded.len() - 1]
+        ));
+        let mut corrupt = succeeded.clone();
+        corrupt[0] ^= 0xff;
+        assert!(!genesis_v2_was_superseded_v1(core, core, false, &corrupt));
     }
 
     use dclutch_core_contract::ContentId;
