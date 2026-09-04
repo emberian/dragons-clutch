@@ -203,11 +203,13 @@ repository runs on.
 
 The first markets have lived whole lives on devnet: on 2026-09-02 a SOL/USD
 Market took two stranger admissions and a fee-bearing fill with the ledger
-census holding every law across the crossing, and on 2026-09-03 a second
+census holding every law across the crossing, on 2026-09-03 a second
 Market observed its price inside its own window, resolved on the honest
-certificate, and paid its winner into an ordinary wallet's token account.
-The next milestone is a Market asking a question about the state of Solana
-mainnet, and the General family executing on a real chain. Pyth's devnet feeds carry the
+certificate, and paid its winner into an ordinary wallet's token account, and
+on 2026-09-04 a stranger who bought the right answer was paid for it, with
+the chain's selector and the reading naming the same cell. The next milestone
+is a Market asking a question about the state of Solana mainnet, and the
+General family executing on a real chain. Pyth's devnet feeds carry the
 major prices directly, and a disclosed relayer carries everything else.
 dClutch grew out of Dragon's Clutch; the first generation lives in the
 neighboring `dragons-clutch` repository as an archive.
