@@ -335,3 +335,110 @@ jobs:
               exit 1
               ;;
           esac
+
+  # The emission tier runs every Lean-emission guard (77 today, 86 s warm /
+  # 195 s cold, plus lake) and had never been run by any job: the census job
+  # counts guards, this one asks them. Same install as the abi job, minus the
+  # wasm toolchain the guards never touch.
+  emission:
+    name: 53 generated client modules against their authorities (tools/ci/run.sh emission)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Is the emission tier in the published subtree yet?
+        id: probe
+        run: |
+          if [ -x dclutch/tools/ci/run.sh ] && dclutch/tools/ci/run.sh --list | grep -qE '^abi[[:space:]]'; then
+            echo "present=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=0" >> "$GITHUB_OUTPUT"
+            echo "::warning::dclutch/tools/ci/ does not publish an emission tier yet, so NO generated client module was checked against its authority. This is a statement about what is published, not about the live tree. Refresh the subtree to make this job real."
+            {
+              echo "### emission tier: not run"
+              echo
+              echo "\`tools/ci/run.sh\` in the vendored subtree lists no \`abi\` tier."
+              echo "None of the 53 \`abi:*:verify\` scripts ran."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.probe.outputs.present == '1'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            dclutch/apps/dclutch-web/package-lock.json
+            dclutch/packages/dclutch-sdk/package-lock.json
+
+      - uses: actions/cache@v4
+        if: steps.probe.outputs.present == '1'
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cargo/bin/wasm-bindgen
+            ~/.elan
+            dclutch/formal/dclutch-semantics/.lake
+            ${{ runner.temp }}/dclutch-abi-wasm-target
+          key: clients-abi-${{ hashFiles('dclutch/Cargo.lock', 'dclutch/rust-toolchain.toml', 'dclutch/formal/dclutch-semantics/lean-toolchain') }}
+          restore-keys: clients-abi-
+
+
+      - name: Lean, at the channel the semantics name
+        if: steps.probe.outputs.present == '1'
+        run: |
+          if ! command -v lake >/dev/null 2>&1; then
+            curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o elan-init.sh
+            sh elan-init.sh -y --default-toolchain none
+          fi
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Install both client trees
+        if: steps.probe.outputs.present == '1'
+        run: |
+          (cd dclutch/apps/dclutch-web && npm ci)
+          (cd dclutch/packages/dclutch-sdk && npm ci)
+          # Same reason as the web job: `tier_abi` skips a tree with no
+          # node_modules and only reports a missing prerequisite when BOTH are
+          # absent, so a half-installed runner could report a pass over 28
+          # verifiers instead of 53.
+          for dir in dclutch/apps/dclutch-web dclutch/packages/dclutch-sdk; do
+            [ -d "$dir/node_modules" ] || { echo "::error::$dir has no node_modules; the tier would have skipped its verifiers and still passed"; exit 1; }
+          done
+
+      - name: Run the emission tier
+        if: steps.probe.outputs.present == '1'
+        working-directory: dclutch
+        env:
+          # One shared target directory for the eight wasm generators, OUTSIDE
+          # the checkout so it is neither committed nor a lock shared with a
+          # lane's own by-hand run, and inside the runner temp so the cache
+          # above can carry it. Absent this the tier makes its own and deletes
+          # it, which is right for a laptop and wasteful for a runner.
+          DCLUTCH_WASM_TARGET_DIR: ${{ runner.temp }}/dclutch-abi-wasm-target
+        run: |
+          lake --version
+          set +e
+          tools/ci/run.sh emission
+          code=$?
+          set -e
+          case "$code" in
+            0) echo "emission tier: 53 generated modules agree with their authorities" | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            2)
+              echo "::warning::the emission tier could not run -- lake, cargo, wasm-bindgen or the wasm32 target is missing. The verifiers FAIL rather than skip without a toolchain, so the tier refuses to start instead of reporting red surfaces that are not red. Nothing was proven either way."
+              echo "emission tier: NOT RUN (missing prerequisite)" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            64)
+              echo "::error::tools/ci/run.sh rejected 'abi' as a tier name. The probe above said the tier was listed, so the runner's table and its dispatch disagree -- that is a defect in run.sh, not in this workflow."
+              echo "emission tier: USAGE ERROR" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+              ;;
+            *)
+              echo "::error::a generated client module no longer matches the Rust or Lean that printed it. The log names which surface. The fix is to REGENERATE from a detached worktree at HEAD in the live tree and read the diff -- never to relax the check, and never to regenerate from a shared working tree, which bakes another lane's half-written source into a committed digest."
+              echo "emission tier: FAILED" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+              ;;
+          esac
