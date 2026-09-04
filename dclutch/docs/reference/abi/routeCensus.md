@@ -17,7 +17,7 @@ Sources:
   tools/gauntlet/census                        (the route/refusal enumeration)
   crates/dclutch-refusal-registry/src/generated_bands.rs   (the band allocation)
 
-12 programs, 46 magic-selected routes, 350 refusal codes.
+12 programs, 46 magic-selected routes, 33 predicate-selected routes, 350 refusal codes.
 ```
 
 ## Unrendered exports (verbatim)
@@ -75,6 +75,32 @@ export type UnselectedEntryRoute = Readonly<{
   handler: string;
   selectors: ReadonlyArray<string>;
   provenance: string;
+}>;
+
+/**
+ * A route a `fn is_x(instruction_data) -> bool` predicate selects, with the
+ * magic that predicate compares resolved from its own Rust.
+ */
+```
+```ts
+export type PredicateSelectedRoute = Readonly<{
+  magic: string;
+  constant: string;
+  program: string;
+  routeId: string;
+  handler: string;
+  predicate: string;
+  provenance: string;
+}>;
+
+/** A predicate arm whose selector is not a leading magic at all. */
+```
+```ts
+export type UnresolvedPredicateArm = Readonly<{
+  routeId: string;
+  program: string;
+  predicate: string;
+  reason: string;
 }>;
 
 /** Width of one refusal band, in codes. */
@@ -597,5 +623,72 @@ export const UNSELECTED_ENTRY_ROUTES: ReadonlyArray<UnselectedEntryRoute> = Obje
   Object.freeze({ routeId: "trading/projected_custody_bootstrap_v1::process_projected_custody_abort_v1", program: "trading", handler: "projected_custody_bootstrap_v1::process_projected_custody_abort_v1", selectors: Object.freeze(["predicate projected_custody_bootstrap_v1::is_projected_custody_abort_v1()"]), provenance: "programs/dclutch-trading-sbf/src/lib.rs:961" }),
   Object.freeze({ routeId: "trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2", program: "trading", handler: "projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2", selectors: Object.freeze(["predicate projected_custody_bootstrap_v1::is_projected_custody_bootstrap_v2()"]), provenance: "programs/dclutch-trading-sbf/src/lib.rs:932" }),
   Object.freeze({ routeId: "trading/user_position_admission_v1::process_user_position_admission_v1", program: "trading", handler: "user_position_admission_v1::process_user_position_admission_v1", selectors: Object.freeze(["predicate dclutch_user_position_admission_contract::is_user_position_admission_v1()"]), provenance: "programs/dclutch-trading-sbf/src/lib.rs:842" }),
+]);
+
+/**
+ * Every route a dispatch predicate selects, and the magic it compares.
+ *
+ * `INSTRUCTION_MAGICS` above carries the arms whose dispatch compares the
+ * leading bytes INLINE. Trading compares them inside `fn is_x()` instead, and
+ * so does Resolution -- so a consumer holding a compiled instruction could
+ * name the route behind `DCLTSQ03` and not the one behind `DCLTHOT3`, which is
+ * the route this browser actually builds. The predicate is a magic comparison
+ * written as a function; this table is that function resolved, with the file
+ * it was resolved from as provenance. Read the two tables together: an
+ * instruction is named by its program and its first eight bytes either way.
+ */
+```
+```ts
+export const PREDICATE_SELECTED_ROUTES: ReadonlyArray<PredicateSelectedRoute> = Object.freeze([
+  Object.freeze({ magic: "DCLRFAQ1", constant: "FUNDING_ACTIVATION_REQUEST_MAGIC_V1", program: "resolution", routeId: "resolution/core_effect::process_direct_funding_activation_v1", handler: "core_effect::process_direct_funding_activation_v1", predicate: "core_effect::is_direct_funding_activation_v1", provenance: "programs/dclutch-resolution-proof-sbf/src/core_effect.rs" }),
+  Object.freeze({ magic: "DCLRFCQ1", constant: "DIRECT_FUNDING_CLOSE_REQUEST_MAGIC_V1", program: "resolution", routeId: "resolution/core_effect::process_direct_funding_close_v1", handler: "core_effect::process_direct_funding_close_v1", predicate: "core_effect::is_direct_funding_close_v1", provenance: "programs/dclutch-resolution-proof-sbf/src/core_effect.rs" }),
+  Object.freeze({ magic: "DCLRPAQ1", constant: "PRE_MARKET_FUNDING_ABORT_REQUEST_MAGIC_V1", program: "resolution", routeId: "resolution/pre_market_funding_abort_v1::process_pre_market_funding_abort_v1", handler: "pre_market_funding_abort_v1::process_pre_market_funding_abort_v1", predicate: "pre_market_funding_abort_v1::is_pre_market_funding_abort_v1", provenance: "programs/dclutch-resolution-proof-sbf/src/pre_market_funding_abort_v1.rs" }),
+  Object.freeze({ magic: "DCLRPFQ2", constant: "PRE_MARKET_FUNDING_REQUEST_MAGIC_V2", program: "resolution", routeId: "resolution/pre_market_funding_v1::process_pre_market_funding_v2", handler: "pre_market_funding_v1::process_pre_market_funding_v2", predicate: "pre_market_funding_v1::is_pre_market_funding_v2", provenance: "programs/dclutch-resolution-proof-sbf/src/pre_market_funding_v1.rs" }),
+  Object.freeze({ magic: "DCLTCEF1", constant: "dclutch_market_core_codec::CORE_EFFECT_MAGIC_V1", program: "resolution", routeId: "resolution/core_effect::process_core_effect", handler: "core_effect::process_core_effect", predicate: "core_effect::is_core_effect", provenance: "programs/dclutch-resolution-proof-sbf/src/core_effect.rs" }),
+  Object.freeze({ magic: "DCLTCF1A", constant: "CONTROLLER_FUNDING_CLEANUP_STEP1_MAGIC_V1", program: "trading", routeId: "trading/projected_custody_bootstrap_v1::process_controller_funding_cleanup_step1_v1", handler: "projected_custody_bootstrap_v1::process_controller_funding_cleanup_step1_v1", predicate: "projected_custody_bootstrap_v1::is_controller_funding_cleanup_step1_v1", provenance: "programs/dclutch-trading-sbf/src/projected_custody_bootstrap_v1.rs" }),
+  Object.freeze({ magic: "DCLTCF2A", constant: "CONTROLLER_FUNDING_CLEANUP_STEP2_MAGIC_V1", program: "trading", routeId: "trading/projected_custody_bootstrap_v1::process_controller_funding_cleanup_step2_v1", handler: "projected_custody_bootstrap_v1::process_controller_funding_cleanup_step2_v1", predicate: "projected_custody_bootstrap_v1::is_controller_funding_cleanup_step2_v1", provenance: "programs/dclutch-trading-sbf/src/projected_custody_bootstrap_v1.rs" }),
+  Object.freeze({ magic: "DCLTCFQ1", constant: "CONTROLLER_FUNDING_PREPARE_MAGIC_V1", program: "trading", routeId: "trading/projected_custody_bootstrap_v1::process_controller_funding_prepare_v1", handler: "projected_custody_bootstrap_v1::process_controller_funding_prepare_v1", predicate: "projected_custody_bootstrap_v1::is_controller_funding_prepare_v1", provenance: "programs/dclutch-trading-sbf/src/projected_custody_bootstrap_v1.rs" }),
+  Object.freeze({ magic: "DCLTCSX1", constant: "CAPABILITY_SEAL_CLOSE_REQUEST_MAGIC_V1", program: "trading", routeId: "trading/hot_v3::process_capability_seal_close_v1", handler: "hot_v3::process_capability_seal_close_v1", predicate: "dclutch_capability_seal_contract::is_capability_seal_close_request_v1", provenance: "crates/dclutch-capability-seal-contract/src/lib.rs" }),
+  Object.freeze({ magic: "DCLTDBR1", constant: "DIRECT_BEGIN_RETIRING_REQUEST_MAGIC_V1", program: "trading", routeId: "trading/direct_begin_retiring_v1::process_direct_begin_retiring_v1", handler: "direct_begin_retiring_v1::process_direct_begin_retiring_v1", predicate: "dclutch_direct_codec::retirement_v1::is_direct_begin_retiring_v1", provenance: "crates/dclutch-direct-codec/src/retirement_v1.rs" }),
+  Object.freeze({ magic: "DCLTDCL1", constant: "DEALER_SCENARIO_CHECKPOINT_CLEANUP_MAGIC_V1", program: "trading", routeId: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_cleanup_v1", handler: "dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_cleanup_v1", predicate: "dealer_scenario_checkpoint_v1::is_dealer_scenario_checkpoint_cleanup_v1", provenance: "programs/dclutch-trading-sbf/src/dealer_scenario_checkpoint_v1.rs" }),
+  Object.freeze({ magic: "DCLTDCM1", constant: "DEALER_SCENARIO_CHECKPOINT_COMMIT_MAGIC_V1", program: "trading", routeId: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_commit_v1", handler: "dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_commit_v1", predicate: "dealer_scenario_checkpoint_v1::is_dealer_scenario_checkpoint_commit_v1", provenance: "programs/dclutch-trading-sbf/src/dealer_scenario_checkpoint_v1.rs" }),
+  Object.freeze({ magic: "DCLTDCP1", constant: "DEALER_SCENARIO_CHECKPOINT_CREATE_MAGIC_V1", program: "trading", routeId: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_create_v1", handler: "dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_create_v1", predicate: "dealer_scenario_checkpoint_v1::is_dealer_scenario_checkpoint_create_v1", provenance: "programs/dclutch-trading-sbf/src/dealer_scenario_checkpoint_v1.rs" }),
+  Object.freeze({ magic: "DCLTDEV1", constant: "DEALER_SCENARIO_CHECKPOINT_EVALUATE_MAGIC_V1", program: "trading", routeId: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_evaluate_v1", handler: "dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_evaluate_v1", predicate: "dealer_scenario_checkpoint_v1::is_dealer_scenario_checkpoint_evaluate_v1", provenance: "programs/dclutch-trading-sbf/src/dealer_scenario_checkpoint_v1.rs" }),
+  Object.freeze({ magic: "DCLTDFS1", constant: "DIRECT_FEE_SETTLEMENT_REQUEST_MAGIC_V1", program: "trading", routeId: "trading/direct_fee_settlement_v1::process_direct_fee_settlement_v1", handler: "direct_fee_settlement_v1::process_direct_fee_settlement_v1", predicate: "dclutch_direct_codec::fee_settlement_v1::is_direct_fee_settlement_v1", provenance: "crates/dclutch-direct-codec/src/fee_settlement_v1.rs" }),
+  Object.freeze({ magic: "DCLTDMC1", constant: "DIRECT_CLOSE_MAKER_REQUEST_MAGIC_V1", program: "trading", routeId: "trading/direct_close_maker_v1::process_direct_close_maker_v1", handler: "direct_close_maker_v1::process_direct_close_maker_v1", predicate: "dclutch_direct_codec::close_maker_v1::is_direct_close_maker_v1", provenance: "crates/dclutch-direct-codec/src/close_maker_v1.rs" }),
+  Object.freeze({ magic: "DCLTDPG1", constant: "DEALER_SCENARIO_CHECKPOINT_PAGE_MAGIC_V1", program: "trading", routeId: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_page_v1", handler: "dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_page_v1", predicate: "dealer_scenario_checkpoint_v1::is_dealer_scenario_checkpoint_page_v1", provenance: "programs/dclutch-trading-sbf/src/dealer_scenario_checkpoint_v1.rs" }),
+  Object.freeze({ magic: "DCLTDRB1", constant: "DEALER_SCENARIO_CHECKPOINT_ROLLBACK_MAGIC_V1", program: "trading", routeId: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_rollback_v1", handler: "dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_rollback_v1", predicate: "dealer_scenario_checkpoint_v1::is_dealer_scenario_checkpoint_rollback_v1", provenance: "programs/dclutch-trading-sbf/src/dealer_scenario_checkpoint_v1.rs" }),
+  Object.freeze({ magic: "DCLTDRS1", constant: "DIRECT_REPLAY_SETUP_REQUEST_MAGIC_V1", program: "trading", routeId: "trading/direct_replay_setup_v1::process_direct_replay_setup_v1", handler: "direct_replay_setup_v1::process_direct_replay_setup_v1", predicate: "dclutch_direct_codec::replay_setup_v1::is_direct_replay_setup_v1", provenance: "crates/dclutch-direct-codec/src/replay_setup_v1.rs" }),
+  Object.freeze({ magic: "DCLTDRV1", constant: "DEALER_SCENARIO_CHECKPOINT_RESERVE_MAGIC_V1", program: "trading", routeId: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_reserve_v1", handler: "dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_reserve_v1", predicate: "dealer_scenario_checkpoint_v1::is_dealer_scenario_checkpoint_reserve_v1", provenance: "programs/dclutch-trading-sbf/src/dealer_scenario_checkpoint_v1.rs" }),
+  Object.freeze({ magic: "DCLTDTS1", constant: "DIRECT_TOKEN_SETUP_REQUEST_MAGIC_V1", program: "trading", routeId: "trading/direct_token_setup_v1::process_direct_token_setup_v1", handler: "direct_token_setup_v1::process_direct_token_setup_v1", predicate: "dclutch_direct_codec::token_setup_v1::is_direct_token_setup_v1", provenance: "crates/dclutch-direct-codec/src/token_setup_v1.rs" }),
+  Object.freeze({ magic: "DCLTGMO1", constant: "GENERIC_MARKET_OPEN_MAGIC_V1", program: "trading", routeId: "trading/generic_founding_stages_v1::process_generic_market_open_v1", handler: "generic_founding_stages_v1::process_generic_market_open_v1", predicate: "generic_founding_stages_v1::is_generic_market_open_v1", provenance: "programs/dclutch-trading-sbf/src/generic_founding_stages_v1.rs" }),
+  Object.freeze({ magic: "DCLTHOT3", constant: "HOT_EXECUTION_MAGIC_V3", program: "trading", routeId: "trading/hot_v3::process_hot_execution_v3", handler: "hot_v3::process_hot_execution_v3", predicate: "hot_v3::is_hot_execution_v3", provenance: "programs/dclutch-trading-sbf/src/hot_v3.rs" }),
+  Object.freeze({ magic: "DCLTPAB3", constant: "PROVIDER_ABANDON_REQUEST_MAGIC_V3", program: "resolution", routeId: "resolution/provider_transport_v3::process_provider_transport_v3", handler: "provider_transport_v3::process_provider_transport_v3", predicate: "provider_transport_v3::is_provider_transport_v3", provenance: "programs/dclutch-resolution-proof-sbf/src/provider_transport_v3.rs" }),
+  Object.freeze({ magic: "DCLTPCA1", constant: "PROJECTED_CUSTODY_ABORT_MAGIC_V1", program: "trading", routeId: "trading/projected_custody_bootstrap_v1::process_projected_custody_abort_v1", handler: "projected_custody_bootstrap_v1::process_projected_custody_abort_v1", predicate: "projected_custody_bootstrap_v1::is_projected_custody_abort_v1", provenance: "programs/dclutch-trading-sbf/src/projected_custody_bootstrap_v1.rs" }),
+  Object.freeze({ magic: "DCLTPCB2", constant: "PROJECTED_CUSTODY_BOOTSTRAP_MAGIC_V2", program: "trading", routeId: "trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2", handler: "projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2", predicate: "projected_custody_bootstrap_v1::is_projected_custody_bootstrap_v2", provenance: "programs/dclutch-trading-sbf/src/projected_custody_bootstrap_v1.rs" }),
+  Object.freeze({ magic: "DCLTPRL3", constant: "PROVIDER_RECLAIM_REQUEST_MAGIC_V3", program: "resolution", routeId: "resolution/provider_transport_v3::process_provider_transport_v3", handler: "provider_transport_v3::process_provider_transport_v3", predicate: "provider_transport_v3::is_provider_transport_v3", provenance: "programs/dclutch-resolution-proof-sbf/src/provider_transport_v3.rs" }),
+  Object.freeze({ magic: "DCLTPRQ3", constant: "PROVIDER_EXECUTION_REQUEST_MAGIC_V3", program: "resolution", routeId: "resolution/provider_instruction_v3::process_provider_resolution_v3", handler: "provider_instruction_v3::process_provider_resolution_v3", predicate: "provider_instruction_v3::is_provider_resolution_v3", provenance: "programs/dclutch-resolution-proof-sbf/src/provider_instruction_v3.rs" }),
+  Object.freeze({ magic: "DCLTPSB3", constant: "PROVIDER_SUBMIT_REQUEST_MAGIC_V3", program: "resolution", routeId: "resolution/provider_transport_v3::process_provider_transport_v3", handler: "provider_transport_v3::process_provider_transport_v3", predicate: "provider_transport_v3::is_provider_transport_v3", provenance: "programs/dclutch-resolution-proof-sbf/src/provider_transport_v3.rs" }),
+  Object.freeze({ magic: "DCLTPUA1", constant: "USER_POSITION_ADMISSION_MAGIC_V1", program: "trading", routeId: "trading/user_position_admission_v1::process_user_position_admission_v1", handler: "user_position_admission_v1::process_user_position_admission_v1", predicate: "dclutch_user_position_admission_contract::is_user_position_admission_v1", provenance: "crates/dclutch-user-position-admission-contract/src/lib.rs" }),
+  Object.freeze({ magic: "DCLTRIX1", constant: "RELAY_INSTRUCTION_MAGIC", program: "resolution", routeId: "resolution/relay_transport_v1::process_relay_transport_v1", handler: "relay_transport_v1::process_relay_transport_v1", predicate: "relay_transport_v1::is_relay_transport_v1", provenance: "programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs" }),
+  Object.freeze({ magic: "DCLTSEL1", constant: "CAPABILITY_SEAL_REQUEST_MAGIC_V1", program: "trading", routeId: "trading/hot_v3::process_capability_seal_v1", handler: "hot_v3::process_capability_seal_v1", predicate: "dclutch_capability_seal_contract::is_capability_seal_request_v1", provenance: "crates/dclutch-capability-seal-contract/src/lib.rs" }),
+  Object.freeze({ magic: "DCLTSPI1", constant: "SPONSORED_PUSH_INSTRUCTION_MAGIC_V1", program: "resolution", routeId: "resolution/sponsored_push_v1::process_sponsored_push_v1", handler: "sponsored_push_v1::process_sponsored_push_v1", predicate: "sponsored_push_v1::is_sponsored_push_v1", provenance: "programs/dclutch-resolution-proof-sbf/src/sponsored_push_v1.rs" }),
+]);
+
+/**
+ * Predicate arms that no leading-byte view can ever name, and why.
+ *
+ * A predicate that decodes a whole struct rather than comparing a magic
+ * (`GenericMarketFoundingCallerBumpsV3::decode(..).is_ok()`) selects a real
+ * route on bytes no eight-byte prefix distinguishes. That is a fact about the
+ * program, not a failure of this scrape, and it is carried by name so a
+ * consumer can tell it from a resolution that merely did not happen.
+ */
+```
+```ts
+export const UNRESOLVED_PREDICATE_ARMS_V1: ReadonlyArray<UnresolvedPredicateArm> = Object.freeze([
+  Object.freeze({ routeId: "custody/dealer_reservation_v1::process", program: "custody", predicate: "dealer_reservation_v1::is_instruction", reason: "is_instruction compares no leading magic: decode_dealer_scenario_reservation_instruction_v1(data).is_ok()" }),
+  Object.freeze({ routeId: "trading/generic_founding_stages_v1::process_generic_found_and_permit_v1", program: "trading", predicate: "generic_founding_stages_v1::is_generic_found_and_permit_v1", reason: "is_generic_found_and_permit_v1 compares no leading magic: GenericFoundAndPermitCallerBumpsV1::decode(instruction_data).is_ok()" }),
+  Object.freeze({ routeId: "trading/generic_market_founding_v1::process_generic_market_founding_v3", program: "trading", predicate: "generic_market_founding_v1::is_generic_market_founding_v3", reason: "is_generic_market_founding_v3 compares no leading magic: GenericMarketFoundingCallerBumpsV3::decode(instruction_data).is_ok()" }),
 ]);
 ```

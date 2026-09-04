@@ -1,0 +1,86 @@
+{
+  "campaign": "source-abort-programtest",
+  "note": "The expired-source abort suffix, DCLTPCA1 -> DCLTCF1A -> DCLTCF2A, against the real Trading and Custody ELFs. This campaign exists because tier 1's DCLTPCA1 lane left the campaign when the founding was split (e8591ab67), taking with it the ONLY witness `custody/abort_source_and_close#AbortSourceAndClose` and `trading/projected_custody_bootstrap_v1::process_projected_custody_abort_v1` had in any campaign. The driver never left: `real_custody_source_abort_then_controller_suffix_is_exact_and_resumable` in crates/dclutch-svm-harness/tests/controller_funding_split_abort.rs had been executing the whole suffix on real ELFs the entire time and recording nothing, so the census could not see it. Four hostiles ride along, and they are the point rather than decoration: an unwind route that let anyone empty a live founding would be a worse defect than the stranding it was written to fix, so the boundary is what this route is judged on and not the happy path. THREE of the four refuse with one code -- `trading/TradingSbfError::Content` covers pre-expiry, a substituted Custody anchor, and a replay of a finalized prefix, because `authenticate_expired_checkpoint_v1` flattens every conjunct it distinguishes into one discriminant. Read that as the register does: three hostiles, one word. The fourth is the one that gets past Trading, because Trading authenticates the sub-frame's PROGRAMS and not its refund destination.",
+  "bindings": [
+    {
+      "label": "DCLTPCA1 refuses to abort a funded source before expiry",
+      "routes": [
+        "trading/projected_custody_bootstrap_v1::process_projected_custody_abort_v1",
+        "trading/process_instruction"
+      ],
+      "program": "trading",
+      "outcome": "refused",
+      "refusal": "trading/TradingSbfError::Content",
+      "note": "While a founding is still satisfiable the authority over funded principal may not be destroyed. Trading's `authenticate_expired_checkpoint_v1` runs before the Custody CPI, so this never reaches Custody and nothing rolls back because nothing happened."
+    },
+    {
+      "label": "DCLTPCA1 refuses an unrelated Custody anchor after expiry",
+      "routes": [
+        "trading/projected_custody_bootstrap_v1::process_projected_custody_abort_v1",
+        "trading/process_instruction"
+      ],
+      "program": "trading",
+      "outcome": "refused",
+      "refusal": "trading/TradingSbfError::Release",
+      "note": "The staged-abort anchor is a PDA over the checkpoint and its digest. Substituting the instructions sysvar for it must not enter Custody or advance the checkpoint. It refuses with `Release`, not `Content`: the anchor is authenticated inside the release-and-deployment half of `authenticate_expired_checkpoint_v1`, which is the one place in this route that distinguishes its cause from every other conjunct."
+    },
+    {
+      "label": "DCLTPCA1 refuses to route the refund into the Hoard it is closing",
+      "routes": [
+        "trading/projected_custody_bootstrap_v1::process_projected_custody_abort_v1",
+        "trading/process_instruction",
+        "custody/process_instruction",
+        "custody/projected::process",
+        "custody/abort_source_and_close#AbortSourceAndClose"
+      ],
+      "program": "custody",
+      "outcome": "refused",
+      "refusal": "custody/CustodySbfError::AccountFrame",
+      "note": "The only hostile here that Trading ADMITS, and therefore the campaign's only evidence that the child was really entered: `authenticate_abort_programs_v1` authenticates the Custody program, its ProgramData and the activated release set, and leaves where the principal lands to the program that moves it. Custody's `abort_source_and_close` refuses `destination.key == hoard.key` by name -- routing the refund into the vault the abort is closing would conserve the lamports and lose the principal. The chain reports CUSTODY's code from depth two and Trading surfaces it unchanged. Measured control, 2026-09-03: a destination the token program does not own is refused by TRADING before the CPI with its own `Content`, so it would have read as coverage of a route it never reached."
+    },
+    {
+      "label": "unwind an expired founding's funded source compartment (DCLTPCA1)",
+      "routes": [
+        "trading/projected_custody_bootstrap_v1::process_projected_custody_abort_v1",
+        "trading/process_instruction",
+        "custody/process_instruction",
+        "custody/projected::process",
+        "custody/abort_source_and_close#AbortSourceAndClose"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "The route this campaign exists for. The only way out of a funded projection whose founding expired: the source principal returns to the party that supplied it and the source vault, source replay, empty Hoard vault and projection all close to the lifecycle credit. The label is the successor bootstrap's own, verbatim, so one vocabulary names this transaction whether a validator or a bank ran it."
+    },
+    {
+      "label": "DCLTPCA1 refuses to replay a finalized Custody prefix",
+      "routes": [
+        "trading/projected_custody_bootstrap_v1::process_projected_custody_abort_v1",
+        "trading/process_instruction"
+      ],
+      "program": "trading",
+      "outcome": "refused",
+      "refusal": "trading/TradingSbfError::Content",
+      "note": "The checkpoint is the crash-recovery phase owner. Once it reads CustodyAborted the abort is not the next action, and re-sending it must not disturb the phase."
+    },
+    {
+      "label": "DCLTCF1A closes the canonical first controller ledger",
+      "routes": [
+        "trading/projected_custody_bootstrap_v1::process_controller_funding_cleanup_step1_v1",
+        "trading/process_instruction"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "A NEW process resumes the authenticated suffix from finalized checkpoint state alone. Resolution alone consumes most of the compute ceiling, so the two ledger closes are not one transaction and pretending they were would strand every expired founding."
+    },
+    {
+      "label": "DCLTCF2A closes the authenticated remaining suffix",
+      "routes": [
+        "trading/projected_custody_bootstrap_v1::process_controller_funding_cleanup_step2_v1",
+        "trading/process_instruction"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "The terminal close. Checkpoint, Resolution ledger and Trading ledger are all gone; controller-native principal is back with its immutable source and every rent with the lifecycle credit."
+    }
+  ]
+}

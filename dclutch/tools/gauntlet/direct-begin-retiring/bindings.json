@@ -1,0 +1,85 @@
+{
+  "campaign": "direct-begin-retiring-programtest",
+  "note": "The Direct BeginRetiring route (DCLTDBR1) on five REAL role ELFs under solana-program-test: one top-level execution that retires the Direct child root, its replay, five hostile frames and the not-Retiring prestate boundary. WHY THIS CAMPAIGN EXISTS: the route executed against the real Trading ELF in a green four-test binary and was NEVER-EXECUTED to the census the whole time, because no bindings.json named it. The gap was the campaign wrapper, never the route -- the same finding tools/gauntlet/direct-fee-pair/ was written for, one binary along, and the producer needed no change at all: every submission already goes through `submit_v0_observed` -> `record_campaign_transaction`, which records when DCLUTCH_PROGRAM_TEST_EVIDENCE_DIR is set and stays silent when it is not. EVERY ROW IS AUTHORED FROM FOLDED EVIDENCE, never from what the campaign ought to touch: the label is the libtest thread name plus that test's submission ordinal plus a disposition read back from the runtime. WHAT THE SHAPE OF THIS FILE SAYS OUT LOUD: six of the eight transactions refuse, and five of those six refuse with one code. `trading/TradingSbfError::Content` covers a malformed frame, a frame refused before any state is read, a frame refused after 33k CU of authentication, and a Market in the wrong phase -- four different accusations wearing one word. Only `Root` distinguishes itself. Trading is the sole program in every log; BeginRetiring drives no CPI.",
+  "bindings": [
+    {
+      "label": "direct: direct_begin_retiring_v1_executes_and_retires_the_root #1 -- executed",
+      "routes": [
+        "trading/direct_begin_retiring_v1::process_direct_begin_retiring_v1"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "The route this campaign exists for: the real DCLTDBR1 top-level execution, which retires the Direct child root. Trading is the only program in the log -- BeginRetiring drives no CPI. Measured here: 89,658 CU in a 605-byte packet against the 1,232-byte legacy maximum. Authored from this campaign's own folded evidence; the disposition is read back from what the runtime reported, never asserted."
+    },
+    {
+      "label": "direct: direct_begin_retiring_v1_executes_and_retires_the_root #2 -- refused 0x4002",
+      "routes": [
+        "trading/direct_begin_retiring_v1::process_direct_begin_retiring_v1"
+      ],
+      "program": "trading",
+      "outcome": "refused",
+      "refusal": "trading/TradingSbfError::Root",
+      "note": "The replay. Once the root is retired the same frame refuses at the immutable Direct child root, which is `Root` and not `Content` -- the one refusal in this campaign that names its own conjunct. Measured here: 27,082 CU in a 605-byte packet against the 1,232-byte legacy maximum. Authored from this campaign's own folded evidence; the disposition is read back from what the runtime reported, never asserted."
+    },
+    {
+      "label": "direct: direct_begin_retiring_v1_refuses_a_market_that_is_not_retiring #1 -- refused 0x4003",
+      "routes": [
+        "trading/direct_begin_retiring_v1::process_direct_begin_retiring_v1"
+      ],
+      "program": "trading",
+      "outcome": "refused",
+      "refusal": "trading/TradingSbfError::Content",
+      "note": "The prestate boundary: a Market that is not Retiring cannot begin retiring its Direct root. It refuses with the same undifferentiated `Content` as a malformed frame, which is what this campaign's note is about. Measured here: 26,537 CU in a 605-byte packet against the 1,232-byte legacy maximum. Authored from this campaign's own folded evidence; the disposition is read back from what the runtime reported, never asserted."
+    },
+    {
+      "label": "direct: direct_begin_retiring_v1_refuses_hostile_frames #1 -- refused 0x4002",
+      "routes": [
+        "trading/direct_begin_retiring_v1::process_direct_begin_retiring_v1"
+      ],
+      "program": "trading",
+      "outcome": "refused",
+      "refusal": "trading/TradingSbfError::Root",
+      "note": "A hostile frame that reaches the child root before anything else refuses it. Measured here: 30,774 CU in a 605-byte packet against the 1,232-byte legacy maximum. Authored from this campaign's own folded evidence; the disposition is read back from what the runtime reported, never asserted."
+    },
+    {
+      "label": "direct: direct_begin_retiring_v1_refuses_hostile_frames #2 -- refused 0x4003",
+      "routes": [
+        "trading/direct_begin_retiring_v1::process_direct_begin_retiring_v1"
+      ],
+      "program": "trading",
+      "outcome": "refused",
+      "refusal": "trading/TradingSbfError::Content",
+      "note": "A hostile frame refused on shape, in the 700-byte case -- the widest packet this campaign submits. Measured here: 7,429 CU in a 700-byte packet against the 1,232-byte legacy maximum. Authored from this campaign's own folded evidence; the disposition is read back from what the runtime reported, never asserted."
+    },
+    {
+      "label": "direct: direct_begin_retiring_v1_refuses_hostile_frames #3 -- refused 0x4003",
+      "routes": [
+        "trading/direct_begin_retiring_v1::process_direct_begin_retiring_v1"
+      ],
+      "program": "trading",
+      "outcome": "refused",
+      "refusal": "trading/TradingSbfError::Content",
+      "note": "A hostile frame refused after 33,379 CU of authentication, so it got further in than the two cheap ones below. Measured here: 33,379 CU in a 636-byte packet against the 1,232-byte legacy maximum. Authored from this campaign's own folded evidence; the disposition is read back from what the runtime reported, never asserted."
+    },
+    {
+      "label": "direct: direct_begin_retiring_v1_refuses_hostile_frames #4 -- refused 0x4003",
+      "routes": [
+        "trading/direct_begin_retiring_v1::process_direct_begin_retiring_v1"
+      ],
+      "program": "trading",
+      "outcome": "refused",
+      "refusal": "trading/TradingSbfError::Content",
+      "note": "A hostile frame refused in 6,777 CU, before any state was read. Measured here: 6,777 CU in a 604-byte packet against the 1,232-byte legacy maximum. Authored from this campaign's own folded evidence; the disposition is read back from what the runtime reported, never asserted."
+    },
+    {
+      "label": "direct: direct_begin_retiring_v1_refuses_hostile_frames #5 -- refused 0x4003",
+      "routes": [
+        "trading/direct_begin_retiring_v1::process_direct_begin_retiring_v1"
+      ],
+      "program": "trading",
+      "outcome": "refused",
+      "refusal": "trading/TradingSbfError::Content",
+      "note": "A hostile frame refused in 6,792 CU, before any state was read. Measured here: 6,792 CU in a 605-byte packet against the 1,232-byte legacy maximum. Authored from this campaign's own folded evidence; the disposition is read back from what the runtime reported, never asserted."
+    }
+  ]
+}

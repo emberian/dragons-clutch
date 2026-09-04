@@ -21,7 +21,7 @@ Regenerate with: npm run abi:wallet-terminal-payout
 | `WALLET_TERMINAL_PAYOUT_SNAPSHOT_FORMAT_V1` | `dclutch-wallet-terminal-payout-snapshot-v1` |
 | `WALLET_TERMINAL_PAYOUT_ADDRESSES_FORMAT_V1` | `dclutch-wallet-terminal-payout-addresses-v1` |
 | `WALLET_TERMINAL_PAYOUT_INPUT_FORMAT_V1` | `dclutch-wallet-terminal-payout-plan-input-v1` |
-| `WALLET_TERMINAL_PAYOUT_WASM_SHA256_V1` | `515639d64b28731e5580980b2f674e610a3c7b2e6fbfce852ee1af7395146472` |
+| `WALLET_TERMINAL_PAYOUT_WASM_SHA256_V1` | `1d6adbb3f1d9c3f431d77ceae43538409c4660b8cbcdac8d7410553f620d33d4` |
 
 ## Numeric constants (widths, offsets, counts, tags)
 
@@ -29,4 +29,4 @@ Regenerate with: npm run abi:wallet-terminal-payout
 | --- | ---: |
 | `TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3` | 36 |
 | `TERMINAL_SETTLEMENT_REQUEST_BYTES_V3` | 640 |
-| `WALLET_TERMINAL_PAYOUT_WASM_BYTES_V1` | 723,739 |
+| `WALLET_TERMINAL_PAYOUT_WASM_BYTES_V1` | 723,750 |

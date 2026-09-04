@@ -2,6 +2,7 @@ import PageShell from '@/components/PageShell';
 import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
 import { Card, CardContent } from '@/components/ui/card';
+import { capabilityAccessSentenceV1, capabilityRouteAccessV1 } from '@dclutch/sdk/capabilityAccess';
 import { capabilityVenueTextV1, type CapabilityStage, type CapabilityStandingV1 } from '@/lib/capabilityModel';
 import { browserActPrerequisitesV1, BROWSER_CAPABILITY_STANDINGS_V1, capabilityWorkspaceV1 } from '@/lib/capabilitySurface';
 import { docsHrefV1 } from '@/lib/flags';
@@ -94,6 +95,17 @@ function standingsForStageV1(stage: CapabilityStage): ReadonlyArray<CapabilitySt
 /** Acts whose venue is elsewhere, counted rather than hidden. */
 const WALLED_V1 = Object.freeze(BROWSER_CAPABILITY_STANDINGS_V1.filter((candidate) => candidate.venue === 'no-venue'));
 
+/**
+ * How much of the protocol this page does NOT reach, in its own words.
+ *
+ * A directory that lists what it has and never says what it lacks reads as a
+ * complete one. `docs/evidence/C16_REHEARSAL_2026_09_03.md` measured that gap
+ * by hand twice and got two answers an order of magnitude apart; this is the
+ * same question asked of the route census, and nothing in the sentence is
+ * typed.
+ */
+const ACCESS_SENTENCE_V1 = capabilityAccessSentenceV1(capabilityRouteAccessV1(BROWSER_CAPABILITY_STANDINGS_V1));
+
 export default function ConsoleDirectory() {
   return <PageShell className="product-shell trade-v3-shell" header={<Nav current="/console" status="operator tools" />}>
 
@@ -111,6 +123,14 @@ export default function ConsoleDirectory() {
         yet; each names its wall on the <Anchor href="/operate">operations console</Anchor>.
         Artifact inputs name their producer, and the complete provenance table
         is <a href={docsHrefV1('readme.html', 'README.md')}>“The artifacts, and where they come from”</a>.</p>
+        <p><strong>And here is what is not on this page.</strong> {ACCESS_SENTENCE_V1} That
+        count is the route census’s own: every route a program selects from an
+        instruction’s first eight bytes, matched against the acts above and the
+        venue each one actually has. It is computed on every render from the
+        same tables the cards are, so it cannot drift from them — and it is
+        deliberately the harsher of the two readings, because a route some
+        module can encode but no act offers is not a capability a person can
+        perform.</p>
       </div>
     </section>
 

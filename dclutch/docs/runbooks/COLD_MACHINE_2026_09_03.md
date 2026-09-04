@@ -7,7 +7,8 @@ contain only commands their campaigns actually replayed. This is that campaign.
 
 **Every command below was run.** Nothing here is transcribed from another
 document, and where a command refused, its exact refusal is quoted rather than
-paraphrased. What was NOT reached is in §6, by name.
+paraphrased. What was NOT reached is named twice, at the two points the
+campaign stopped: §6 for the first pass, §8 for the second.
 
 The machine is **hbox** (Linux x86-64, 24 cores, co-tenant with codex's HOL
 build). Everything the campaign created lives under
@@ -24,6 +25,10 @@ The comparison host is the laptop (macOS arm64, `--builder local`).
 | `6eb4123cc` | + `run.py` counts the shipped links (§4, defect 1) | third pair; first loopback attempt |
 | `fe70f0769` | + the loopback Core projection (§4, defect 6) | **the pair reported in §3** |
 | `d532bf6d1` | + the V2-domain succession detector (§4, defect 7) | the loopback run that reached §6's wall |
+| `204233776` | + conjunct 6 in the host builder reads the installed profile (§7) | the run that got the succession on chain |
+| `34fa44b81` | + the shape assembler keeps the fixture's stated band (§7) | the run that compiled a market |
+| `5fa069093` | + the initialize stage admits a superseded V2 (§7) | |
+| `48ad76992` | + the rent estimate admits one too (§7) | **the run that founded and opened a market** |
 
 ---
 
@@ -290,7 +295,191 @@ states as "a cohort born at V2 has NO ceremony" — or the ceremony is deleted a
 superseded. It is not resolved here, because both choices change what the
 loopback profile proves.
 
+**Resolved in §7, and neither of those two was the answer.** The record below
+stands as the campaign that found the wall; §7 is the one that read the design
+and got past it.
+
 Everything downstream of a founded market — the fill, the fee settlement, the
 ledger census, retirement, the deliberate interruption and its recovery through
 `--recover-finalized-founding`, and `dclutch market show` / `capability show`
-against a live root — waits on that decision. Nothing about them is claimed.
+against a live root — waits on that decision. Nothing about them is claimed
+here; §7 founds the market and §8 says where they stop now.
+
+---
+
+## 7. The decision, and the four walls behind the first founding
+
+**Resolved, 2026-09-03, and it was not the architectural contradiction §6 took
+it for.** §6 asked whether succession's conjunct 6 should read the installed
+profile or whether `c60b25e8` was wrong to fill the V2 PDA. Neither: `c60b25e8`
+had ALREADY made conjunct 6 read the installed profile, in the program, and said
+so — *"Conjunct 6 becomes ONE SUCCESSION PER DOMAIN rather than one V2 per
+domain"*, because raw vacancy *"would now refuse the first real succession of
+every cohort that started clean, reinstating P-008 for exactly the cohorts that
+never carried the defect."* `programs/dclutch-core-sbf/src/infrastructure_v2.rs`
+has implemented that since. `crates/dclutch-operator` RESTATES that conjunct
+rather than importing it — a host builder crate cannot link Core — and the
+restatement was left behind. The chain would have taken the ceremony; the host
+refused it before composing a frame.
+
+The alternative is refused twice over. By the design:
+`PROFILE_UPGRADE_RULING_2026_08_31` §6 is *"V2-only in redeployed consumers. No
+fallback"*, so a cohort with a vacant V2 stands up complete and can never found
+— measured on cohort-9. And by the chain: cohort-14's Core on devnet,
+`9JW1qqJVeFo9ZRvzzVzNvqrwzt7QvyHpGafTJmj2hBFB`, carries at
+`5Z4wVRnQiit72FpXAN6zKvosS1mmHTmbYdv4iwv1sQFt` a Core-owned 224-byte `DCLTINF2`
+whose two predecessor ids are `6c5e6d81…8f06` and `3ff5e1b5…b938` — the two
+genesis sentinels, byte for byte — beside a sealed 144-byte `DCLTINF1` at
+`4AyDeALHegigfa7yGDgdR7ZnfKicMghwutGxxoUfekKE`. Read finalized off devnet,
+read-only, nothing written. Every cohort standing is born at V2 with its
+succession unspent, which is the state option (b) would make unfoundable.
+
+The ruling now carries that amendment inline instead of contradicting the code
+it governs.
+
+### The four walls, each replayed
+
+| # | commit | where the loopback died | what it was |
+| --- | --- | --- | --- |
+| 1 | `d532bf6d1` | administration, 24 tx in | `dclutch-operator` conjunct 6 demanded raw vacancy — §6 |
+| 2 | `204233776` | market-input | `founding_band is required to compile a Pyth market` — the shape assembler passed "the caller stated no band" through as "this market has no band", for the one flag of six with no readable value |
+| 3 | `34fa44b81` | founding | `--founding-only requires initialize Complete`: `initialize_state` byte-compared the V2 domain against the plan's GENESIS body, which this plan's own ceremony had by then overwritten in place |
+| 4 | `5fa069093` | founding | `existing infrastructure profile conflicts with the exact plan coordinate`: the same stale premise in `wallet_arithmetic`'s rent estimate |
+
+Walls 3 and 4 are the same shape as `d532bf6d1`'s and as wall 1's: **a reader
+that treats `plan.genesis_infrastructure_profile.body_hex` as "the body at the
+V2 domain" when it is only "the body initialization writes."** The remaining
+readers were audited: `runtime.rs` verifies that poststate immediately after
+initialize, where the genesis body IS the body; `market.rs` routes a plan
+carrying a ceremony to `PlannedSuccessor` and reaches the born-at-V2 check only
+on the no-succession arm; `terminal_sequence.rs` takes the address, not the
+bytes.
+
+### The replay, on hbox, in `/tank/dclutch-cold-1788448080`
+
+Same cold `HOME`/`CARGO_HOME`/`RUSTUP_HOME` as §1, `src7` fetched from a bundle
+of each commit, everything through `swarm-build`.
+
+```sh
+export COLD=/tank/dclutch-cold-1788448080
+export HOME="$COLD/home" CARGO_HOME="$COLD/toolchain/cargo" RUSTUP_HOME="$COLD/toolchain/rustup"
+export PATH="$CARGO_HOME/bin:$HOME/.local/share/solana/install/active_release/bin:$PATH"
+git -C "$COLD/src7" fetch "$COLD/bundle/<bundle>" 'refs/heads/*:refs/remotes/<name>/*'
+git -C "$COLD/src7" checkout <commit>
+
+SWARM_MEM_MAX=32G CARGO_BUILD_JOBS=4 swarm-build \
+    "$COLD/src7/tools/release/checked-release-candidate.sh" \
+    --repo "$COLD/src7" --work "$COLD/work/candidate-N" --commit <commit> \
+    --genesis-cohort \
+    --node "$COLD/toolchain/node-v26.4.0-linux-x64/bin/node" \
+    --node-archive "$COLD/toolchain/node-v26.4.0-linux-x64.tar.xz" \
+    --builder hbox
+
+SWARM_MEM_MAX=32G CARGO_BUILD_JOBS=4 swarm-build \
+    python3 "$COLD/src7/tools/release/private-validator-lifecycle/run.py" \
+    --repo "$COLD/src7" --release-root "$COLD/work/candidate-N" \
+    --validator "$HOME/.local/share/solana/install/active_release/bin/solana-test-validator" \
+    --solana  "$HOME/.local/share/solana/install/active_release/bin/solana" \
+    --work "$COLD/work/lifecycleN-full-probe" --through full-probe --seeds 1
+```
+
+A new candidate per commit, because `run.py` refuses a gate whose
+`source_revision` differs from the clean source. Four of them, `CANDIDATE_EXIT=0`
+every time: **491, 470, 528 and 454 seconds** — inside §2's 415-460s band.
+
+| lifecycle | commit | exit | elapsed | last stage reached |
+| --- | --- | --- | --- | --- |
+| 7 | `204233776` | 1 | 275 s | 05-market-input |
+| 9 | `34fa44b81` | 1 | 272 s | 06-founding |
+| 10 | `5fa069093` | 1 | 283 s | 06-founding |
+| 11 | `48ad76992` | 1 | **956 s** | 07-participant-bankroll |
+
+### What the last one actually did
+
+| stage | elapsed | transactions |
+| --- | --- | --- |
+| 01-prepare-mutable | 2.3 s | — |
+| 02-authenticate-mutable | 0.1 s | — |
+| 03-local-test-bankroll | 4.0 s | — |
+| **04-administration** | **139.6 s** | **38** |
+| 05-market-input | 0.3 s | — |
+| **06-founding** | **695.0 s** | **189** |
+| 07-participant-bankroll | 4.0 s | — |
+
+The two transactions §6 could not reach, and the five that follow them:
+
+```
+campaign transaction: slot=909  fee=75000 compute_units=241895 initialize Core infrastructure profile
+campaign transaction: slot=1069 fee=80000 compute_units=166767 infrastructure-succession
+campaign transaction: slot=1101 fee=75000 compute_units=644826 activate immutable release-set role: Core
+campaign transaction: slot=1133 fee=75000 compute_units=729227 activate immutable release-set role: Claims
+campaign transaction: slot=1165 fee=75000 compute_units=1203491 activate immutable release-set role: Trading
+campaign transaction: slot=1197 fee=75000 compute_units=449656 activate immutable release-set role: Resolution
+campaign transaction: slot=1229 fee=75000 compute_units=331178 activate immutable release-set role: Custody
+```
+
+and the founding, which had never run on this profile:
+
+```
+campaign transaction: slot=7173 fee=75000 compute_units=30660 DCLTGMF3 refuses a substituted Claims request and rolls the whole founding back
+campaign stage founding: Open Market QK2Tcr6Z46HH555u8yiUbmL973iZ7DctJGqB9H6WJy3 (23 steps)
+```
+
+**A loopback market is founded and Open.** The outer hostile — a substituted
+Claims request against the atomic founding — refused and rolled the whole
+founding back, on chain, inside that stage.
+
+---
+
+## 8. The fifth wall, which is not this one's
+
+Admissions stop before the first one is composed:
+
+```
+Error: the founding's frozen DCLTGMF3 routing table could not be identified on
+this chain: 3 frozen lookup tables contain QK2Tcr6Z46HH555u8yiUbmL973iZ7DctJGqB9H6WJy3
+and the admission message does not fit a legacy transaction without exactly one
+```
+
+`run.py`'s `frozen_founding_routing_table` identifies that table by the only two
+facts it believed were on the chain already: the table is frozen, and its
+address list contains the market. Its docstring states the premise —
+*"The founding creates five routing tables and freezes exactly one"* — and
+declines to ask the campaign *"to start writing a sixth thing down."*
+
+**The premise has expired.** `publish_routing_table` now freezes at **eleven**
+call sites, and says so in its own docstring: *"Nine call sites took that shape
+and two took the frozen one, which is two answers to one question"* — resolved in
+favour of freezing all of them, for a good reason (a mutable table is a second
+authority over a signed v0 message). Three of those tables contain the market,
+so "frozen, and contains the market" no longer names one table, and no
+tiebreaker available to `run.py` is a fact rather than a heuristic: last-extended
+slot orders them but does not identify them.
+
+So the sixth thing does have to be written down: the founding campaign must
+record WHICH frozen table is DCLTGMF3's, and `run.py` must read it instead of
+inferring it. That is a change to the founding evidence — the surface the
+cohort-15 lane owns — and it is not made here.
+
+Downstream of a first admission the fill, the fee settlement, the ledger census
+and retirement (begin → coordinate → finish) are unclaimed, exactly as §6 left
+them. The deliberate interruption is further out still and its distance is worth
+stating: the chaos matrix is `--through full --seeds 20` only (`run.py` refuses
+any other seed count for it) and its seventeen cases run only after all twenty
+seeds pass, so no probe-sized run reaches it, and `--recover-finalized-founding`
+has no caller in `run.py` at all.
+
+## 9. C-13, stated honestly
+
+**Met.** A cold machine builds checked release candidates (eleven now, four in
+this campaign), bootstraps, drives administration end to end — record
+publication, initialization, the Registry upgrade, the infrastructure
+succession, and all five immutable role activations — compiles a market, and
+**founds and opens one**, with its outer hostile refusing and rolling back on
+chain. Inspect/export/sign/submit and the twelve-for-twelve signature census are
+§5. Every command in this runbook was replayed by the campaign that reports it.
+
+**Not met.** No admission, fill, settlement, census or retirement, blocked at the
+routing-table identification above. No interruption was injected or recovered.
+`--through full` (twenty seeds plus seventeen chaos cases) has never been run on
+any host.

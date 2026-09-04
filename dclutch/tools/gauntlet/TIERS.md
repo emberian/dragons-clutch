@@ -49,10 +49,26 @@ measurement and it is quoted as an upper bound, not a figure: the two
 diagnostic runs that preceded it took 42m48s and shared the machine with each
 other. The last uncontended measurement is the 25-31 minutes below, taken when
 the campaign was 195 transactions and stopped at the founding; the completing
-campaign is six transactions longer and does strictly more. **A clean end-to-end
-timing on an idle machine is owed.** For reference, that earlier figure: 18m01s
-of campaign after 7m of archive, build, tool and inventory against a warm
-`--work`, and a cold `--work` adds about 6m of SBF builds.
+campaign is six transactions longer and does strictly more. For reference, that
+earlier figure: 18m01s of campaign after 7m of archive, build, tool and inventory
+against a warm `--work`, and a cold `--work` adds about 6m of SBF builds.
+
+**THE CLEAN TIMING, and it is inside the budget: 19m33s.** Measured 2026-09-03 at
+`7dc962c7f` on the twelve-core laptop, one-minute load average 5.03 at start, into
+a fresh private `--work`: exit 0, 199 campaign transactions, 515 census
+observations, 21 witnesses checked and 0 failed, every CU budget under. It splits
+3m26s of archive/ELF/tool/inventory and 16m13s of campaign, census and witnesses.
+
+Three things that figure is not, said here so nobody quotes it as more than it is.
+It is not an IDLE machine: three other lanes were live in the same checkout (a
+devnet cohort, a Registry/Core lane, a web lane) and the measuring lane itself ran
+two `cargo check --tests` during it; the load average sat between 8 and 16 through
+the campaign. It is not a cold BUILD: the `--work` directory was cold but
+`~/.cargo` and the SBF caches were warm, so the seven ELFs rebuilt in about two
+minutes rather than the six a cold cache costs -- a genuinely cold machine is
+slower and this number does not cover it. And it is one run, not a band; the
+figure above it was taken under a load average of 137, so the spread between them
+is the machine, not the campaign.
 
 ## The three files a tier needs
 

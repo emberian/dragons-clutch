@@ -98,6 +98,14 @@
       "reproducible": true
     },
     {
+      "campaign": "direct-begin-retiring-programtest",
+      "substrate": "program-test",
+      "runner": "tools/gauntlet/direct-begin-retiring/run-direct-begin-retiring.sh",
+      "producer": "programs/dclutch-trading-sbf/program-test/tests/direct_begin_retiring_on_chain.rs",
+      "note": "DCLTDBR1 on five real role ELFs: one top-level execution that retires the Direct child root, its replay, five hostile frames, and the not-Retiring prestate boundary. The producer needed NO CHANGE -- the Trading program-test surface already funnels every submission through `record_campaign_transaction`, so the whole delta was a runner that sets DCLUTCH_PROGRAM_TEST_EVIDENCE_DIR, a bindings file authored from the folded evidence, and this row. That is the second time the same one-line gap has been found in this family (direct-fee-pair-programtest was the first) and there are seventeen more binaries in `programs/dclutch-trading-sbf/program-test/run-direct-surface.sh` that nobody has looked at this way. FAST LANE: nothing here was refused for packet size, leader schedule or finality, and the 700-byte maximum this campaign records is measured against Solana's 1,232 rather than enforced by the runtime.",
+      "reproducible": true
+    },
+    {
       "campaign": "general-accelerator-programtest",
       "substrate": "program-test",
       "runner": "tools/gauntlet/general/run-general.sh",
@@ -167,6 +175,14 @@
       "runner": "tools/gauntlet/retirement-replay-handoff/run-retirement-replay-handoff.sh",
       "producer": "programs/dclutch-core-sbf/tests/retirement_replay_handoff_program_test.rs",
       "note": "Retirement replay handoff.",
+      "reproducible": true
+    },
+    {
+      "campaign": "source-abort-programtest",
+      "substrate": "program-test",
+      "runner": "tools/gauntlet/source-abort/run-source-abort.sh",
+      "producer": "crates/dclutch-svm-harness/tests/controller_funding_split_abort.rs",
+      "note": "The expired-source abort suffix DCLTPCA1 -> DCLTCF1A -> DCLTCF2A on the real Trading and Custody ELFs, with four hostiles. It exists to pay back what e8591ab67 recorded as owed: tier 1's abort lane left that campaign when the founding was split, and it took the ONLY witness `custody/abort_source_and_close#AbortSourceAndClose` and `trading/projected_custody_bootstrap_v1::process_projected_custody_abort_v1` had in any campaign. This is a FAST LANE and not a replacement for that lane: a bank warps to the expiry slot in one call where a validator has to wait out hundreds of real ones, which is why the route is cheap to witness here and expensive there -- and it is also why nothing here has been refused for packet size, leader schedule or finality. The `wire_bytes` this campaign records is measured against Solana's legacy maximum rather than enforced by the runtime, because ProgramTest submits no packet. Restoring the lane in a campaign that DOES submit one is still owed by whoever owns tier 1's shape.",
       "reproducible": true
     },
     {

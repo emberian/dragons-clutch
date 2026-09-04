@@ -171,6 +171,14 @@ describe('the phase gate refuses by name and never asserts readiness', () => {
       'source.ready',
       'source.provider',
       'source.admit-terminal',
+      // Gained a gate by gaining a DECLARATION, not by anyone naming a new
+      // guard: `resolution/core_effect::process_direct_funding_close_v1`
+      // admits `Retiring+Consumed` and has for as long as the census has read
+      // it, while this act declared nothing and so reported READY TO
+      // PREFLIGHT on every Market in every other phase.
+      // `capabilityRouteDerivation.test.ts` is where the declaration comes
+      // from.
+      'source.close-fund',
       'claims.redeem',
     ]);
     expect(ungated).toHaveLength(CAPABILITY_ACTIONS_V1.length - gated.length);

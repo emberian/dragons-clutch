@@ -1,0 +1,19 @@
+{
+  "campaign": "direct-begin-retiring-programtest",
+  "witnesses": [
+    {
+      "id": "exactly-one-begin-retiring-really-executed-and-its-replay-did-not",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.error == null) | .label] | tostring",
+      "expect": "[\"direct: direct_begin_retiring_v1_executes_and_retires_the_root #1 -- executed\"]",
+      "provenance": "Retiring a Direct child root is a once-per-root act: the root it retires is immutable and gone afterwards, so a second success would mean the route had retired something twice. The campaign submits the identical frame again and the chain must refuse it. One executed transaction in the whole document, and that one, is the shape that says both halves happened -- a run where nothing executed, or where the replay also succeeded, fails here rather than reporting a route it did not drive."
+    },
+    {
+      "id": "every-begin-retiring-frame-fits-a-legacy-packet",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | .wire_bytes] | max | tostring",
+      "expect": "700",
+      "provenance": "Solana's legacy packet maximum is PACKET_DATA_SIZE = 1,232 bytes, a runtime limit this tree does not define. The widest frame this campaign submits is 700 bytes, so DCLTDBR1 fits the wire inline with 532 bytes to spare -- it needs no address lookup table, which is a real property of the route and not an accident of the fixture. ProgramTest submits no packet and would not have refused an overrun, so the extent is MEASURED here rather than enforced; that is the fast-lane hole Found31 fell through. The contrast worth reading beside it: tools/gauntlet/source-abort/ measures the same way and its DCLTPCA1 frame comes out at 1,237, five bytes OVER the same maximum."
+    }
+  ]
+}

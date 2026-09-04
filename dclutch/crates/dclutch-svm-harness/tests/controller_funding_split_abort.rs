@@ -31,6 +31,7 @@ use dclutch_custody_contract::{
     ProjectedCustodyStateSeedsV2, ProjectedCustodyStateV2, SOURCE_COMPARTMENT_REPLAY_REVISION_V1,
 };
 use dclutch_market_core_codec::{Identity, generic_founding_funding_list_id_v1};
+use dclutch_program_test_evidence::TransactionEvidence;
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ArtifactActivationInputV1,
@@ -55,6 +56,7 @@ use dclutch_resolution_codec::{
 use dclutch_token_svm::{ACCOUNT_BYTES, PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID};
 use solana_account::{Account, AccountSharedData};
 use solana_program::{
+    clock::Clock,
     hash::{hash, hashv},
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
@@ -798,6 +800,83 @@ async fn process_with_signers(
         .process_transaction(transaction)
         .await
         .is_ok()
+}
+
+/// Submit one labelled step, record what the chain did, and say whether it
+/// succeeded.
+///
+/// The plain `process_with_signers` above is deliberately left alone. Only the
+/// steps `tools/gauntlet/source-abort/bindings.json` names come through here,
+/// and each label names exactly one transaction -- which is what lets a binding
+/// carry one outcome and one refusal code. Every other test in this file stays
+/// an ordinary test and records nothing, so a campaign run that folds this
+/// binary cannot pick up a transaction no binding owns.
+///
+/// The evidence is written BEFORE the caller asserts anything, so a step that
+/// fails its own assertion still leaves behind what the chain did.
+///
+/// `wire_bytes` is MEASURED, not enforced. ProgramTest submits no packet, so it
+/// cannot refuse a frame that overruns Solana's legacy maximum -- Found31 was
+/// exactly that defect and it survived every fixture test in the tree. Recording
+/// the extent is what lets a witness ask the question the runtime here cannot.
+async fn process_recorded(
+    context: &mut ProgramTestContext,
+    instruction: Instruction,
+    signers: &[&Keypair],
+    label: &str,
+) -> bool {
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    let mut all_signers = Vec::with_capacity(signers.len() + 1);
+    all_signers.push(&context.payer);
+    all_signers.extend_from_slice(signers);
+    let transaction = Transaction::new_signed_with_payer(
+        &[instruction],
+        Some(&context.payer.pubkey()),
+        &all_signers,
+        blockhash,
+    );
+    let signature = transaction
+        .signatures
+        .first()
+        .expect("signed transaction")
+        .to_string();
+    let wire_bytes = 1 + transaction.signatures.len() * 64 + transaction.message.serialize().len();
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
+    let processed = context
+        .banks_client
+        .process_transaction_with_metadata(transaction)
+        .await
+        .expect("Banks RPC");
+    let outcome = processed.result;
+    let failure = outcome.as_ref().err().map(|error| format!("{error:?}"));
+    let logs = processed
+        .metadata
+        .as_ref()
+        .map(|value| value.log_messages.clone())
+        .unwrap_or_default();
+    let units = processed
+        .metadata
+        .as_ref()
+        .map_or(0, |value| value.compute_units_consumed);
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: Some(units),
+        wire_bytes: Some(wire_bytes),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
+    outcome.is_ok()
 }
 
 fn token_mint_data(supply: u64) -> Vec<u8> {
@@ -1567,10 +1646,11 @@ async fn real_custody_source_abort_then_controller_suffix_is_exact_and_resumable
     );
 
     assert!(
-        !process_with_signers(
+        !process_recorded(
             &mut context,
             fixture.instruction.clone(),
             &[&fixture.beneficiary],
+            "DCLTPCA1 refuses to abort a funded source before expiry",
         )
         .await,
         "DCLTPCA1 must refuse while the founding is still satisfiable"
@@ -1589,7 +1669,13 @@ async fn real_custody_source_abort_then_controller_suffix_is_exact_and_resumable
     wrong_anchor.accounts[PROJECTED_CUSTODY_ABORT_ACCOUNT_COUNT_V1].pubkey =
         sysvar::instructions::ID;
     assert!(
-        !process_with_signers(&mut context, wrong_anchor, &[&fixture.beneficiary]).await,
+        !process_recorded(
+            &mut context,
+            wrong_anchor,
+            &[&fixture.beneficiary],
+            "DCLTPCA1 refuses an unrelated Custody anchor after expiry",
+        )
+        .await,
         "DCLTPCA1 refuses an unrelated phase-2 anchor"
     );
     assert_eq!(
@@ -1597,11 +1683,51 @@ async fn real_custody_source_abort_then_controller_suffix_is_exact_and_resumable
         expired,
         "anchor substitution cannot enter Custody or advance the checkpoint"
     );
+    // The one hostile here that Trading ADMITS. Trading authenticates the Custody
+    // sub-frame's programs, its ProgramData and the activated release set; where
+    // the principal lands is Custody's to guard, and `abort_source_and_close`
+    // refuses `destination.key == hoard.key` by name. So this is the campaign's
+    // only evidence that the child was really entered rather than rejected on the
+    // way in -- the chain must report CUSTODY's code, at depth two, not Trading's.
+    //
+    // A destination the token program does not own was tried first and is NOT what
+    // this asserts: measured 2026-09-03, Trading refuses that one before the CPI
+    // with its own `Content`, so it proves nothing about Custody. The Hoard is the
+    // substitution that gets through, and it is the better accusation anyway --
+    // routing the refund into the vault the abort is closing would conserve the
+    // lamports and lose the principal.
+    //
+    // The index is found rather than written down: a literal here would silently
+    // follow the frame if it moved.
+    let destination_index = fixture
+        .instruction
+        .accounts
+        .iter()
+        .position(|meta| meta.pubkey == fixture.destination)
+        .expect("the refund destination is a physical meta of the DCLTPCA1 frame");
+    let mut hoard_destination = fixture.instruction.clone();
+    hoard_destination.accounts[destination_index].pubkey = fixture.hoard_vault;
     assert!(
-        process_with_signers(
+        !process_recorded(
+            &mut context,
+            hoard_destination,
+            &[&fixture.beneficiary],
+            "DCLTPCA1 refuses to route the refund into the Hoard it is closing",
+        )
+        .await,
+        "Custody must refuse a refund destination that is the Hoard being closed"
+    );
+    assert_eq!(
+        source_abort_snapshot(&mut context, &fixture).await,
+        expired,
+        "a refused Custody CPI leaves the funded projection exactly as it was"
+    );
+    assert!(
+        process_recorded(
             &mut context,
             fixture.instruction.clone(),
             &[&fixture.beneficiary],
+            "unwind an expired founding's funded source compartment (DCLTPCA1)",
         )
         .await,
         "real Custody abort persists before controller cleanup"
@@ -1638,10 +1764,11 @@ async fn real_custody_source_abort_then_controller_suffix_is_exact_and_resumable
     assert_eq!(source_abort_lamport_total(&after_abort), initial_total);
 
     assert!(
-        !process_with_signers(
+        !process_recorded(
             &mut context,
             fixture.instruction.clone(),
             &[&fixture.beneficiary],
+            "DCLTPCA1 refuses to replay a finalized Custody prefix",
         )
         .await,
         "a finalized Custody prefix is not replayable"
@@ -1659,7 +1786,13 @@ async fn real_custody_source_abort_then_controller_suffix_is_exact_and_resumable
         CONTROLLER_FUNDING_CLEANUP_STEP1_MAGIC_V1,
     );
     assert!(
-        process(&mut context, first).await,
+        process_recorded(
+            &mut context,
+            first,
+            &[],
+            "DCLTCF1A closes the canonical first controller ledger",
+        )
+        .await,
         "a new process may resume the canonical first ledger close"
     );
     let first_closed = source_abort_snapshot(&mut context, &fixture).await;
@@ -1684,7 +1817,13 @@ async fn real_custody_source_abort_then_controller_suffix_is_exact_and_resumable
         CONTROLLER_FUNDING_CLEANUP_STEP2_MAGIC_V1,
     );
     assert!(
-        process(&mut context, second).await,
+        process_recorded(
+            &mut context,
+            second,
+            &[],
+            "DCLTCF2A closes the authenticated remaining suffix",
+        )
+        .await,
         "a second restart closes only the authenticated remaining suffix"
     );
     let terminal = source_abort_snapshot(&mut context, &fixture).await;

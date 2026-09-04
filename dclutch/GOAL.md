@@ -4176,3 +4176,11 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Started 22:00 EDT: ACTS **`ae47a56bcd96728d6`** (every capability act declares its routes, derived from its compiler; the
   verdicts derive from the machines; the strict accessibility count regenerated) and ABORT-WITNESS **`aeef8d6505f7fc27d`**
   (the expired-source abort lane witnessed again; the remaining never-executed routes dispositioned; a clean tier-1 timing).
+- ABORT-WITNESS closed (`b58669143`, `95b5e905c`, `048728ecc`, genref `a22901ee2`/`271923486`): **never-executed 12 → 7**; the
+  abort suffix's driver had been executing daily and recording nothing (a producer gap) — now `source-abort-programtest`
+  (7 tx, 5 witnesses; `controller_funding_cleanup_step2` executed for the first time in any campaign) and
+  `direct-begin-retiring-programtest`; a blocked row for `series_permit_expiry_precommit_v1` (three in-tree blockers);
+  **DCLTPCA1 is 1,237 wire bytes against 1,232 — the abort frame misses the legacy packet by five**, only a validator can
+  refuse it; Custody `0x6001` fired for the first time in any campaign; tier 1 timed at **19m33s** (not idle). The seven
+  remaining are each a campaign away with recipes → SEVEN **`(spawned)`**. Owed: no CI tier runs any family campaign runner.
+- Cuts: `a43626d88`, `d1c74e34c`, `9a4189fa6`.

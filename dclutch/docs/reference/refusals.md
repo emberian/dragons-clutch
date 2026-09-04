@@ -23,7 +23,7 @@ from the source code's own documentation.
 
 ## Which of these have actually fired
 
-**75 of 350** codes have been observed refusing a real
+**76 of 350** codes have been observed refusing a real
 transaction against a compiled ELF.
 
 The `observed firing` column names the campaign that saw each one. It is
@@ -59,8 +59,8 @@ The tree as a whole declares more -- the census reports its own, larger figure
 across every package it indexes -- and the difference is codes in packages that
 have no enumerated program, so no campaign could observe them through a route.
 
-The 22 campaigns contributing:
-`claims-affine-batch-programtest`, `claims-claim-check-programtest`, `claims-family-programtest`, `claims-fractional-atomic-programtest`, `claims-fractional-signed-delta-programtest`, `claims-rational-lifecycle-programtest`, `claims-rational-representation-v2-programtest`, `custody-family-programtest`, `dealer-checkpoint-programtest`, `direct-aot-programtest`, `direct-fee-pair-programtest`, `general-accelerator-programtest`, `journey`, `resolution-core-v3-programtest`, `resolution-pre-market-funding-programtest`, `resolution-relayed-programtest`, `resolution-sponsored-programtest`, `retirement-checkpoint-programtest`, `retirement-replay-handoff-programtest`, `structured-v2-programtest`, `tier1`, `tier4-series-occurrence-programtest`.
+The 24 campaigns contributing:
+`claims-affine-batch-programtest`, `claims-claim-check-programtest`, `claims-family-programtest`, `claims-fractional-atomic-programtest`, `claims-fractional-signed-delta-programtest`, `claims-rational-lifecycle-programtest`, `claims-rational-representation-v2-programtest`, `custody-family-programtest`, `dealer-checkpoint-programtest`, `direct-aot-programtest`, `direct-begin-retiring-programtest`, `direct-fee-pair-programtest`, `general-accelerator-programtest`, `journey`, `resolution-core-v3-programtest`, `resolution-pre-market-funding-programtest`, `resolution-relayed-programtest`, `resolution-sponsored-programtest`, `retirement-checkpoint-programtest`, `retirement-replay-handoff-programtest`, `source-abort-programtest`, `structured-v2-programtest`, `tier1`, `tier4-series-occurrence-programtest`.
 
 ## Band allocation
 
@@ -254,7 +254,7 @@ The 22 campaigns contributing:
 | code | refusal | meaning | observed firing | provenance |
 | --- | --- | --- | --- | --- |
 | `0x6000` | `CustodySbfError::Instruction` | Instruction bytes did not decode as the one generated request. | custody-family-programtest | `programs/dclutch-custody-sbf/src/lib.rs:119` |
-| `0x6001` | `CustodySbfError::AccountFrame` | Account count, order, privileges, or aliases were not exact. | -- | `programs/dclutch-custody-sbf/src/lib.rs:121` |
+| `0x6001` | `CustodySbfError::AccountFrame` | Account count, order, privileges, or aliases were not exact. | source-abort-programtest | `programs/dclutch-custody-sbf/src/lib.rs:121` |
 | `0x6002` | `CustodySbfError::Release` | Registry CPI, producer, receipt, release, role, or caller refused. | -- | `programs/dclutch-custody-sbf/src/lib.rs:123` |
 | `0x6003` | `CustodySbfError::CallerAuthority` | Caller authority was not the release-pinned role PDA signer. | -- | `programs/dclutch-custody-sbf/src/lib.rs:125` |
 | `0x6004` | `CustodySbfError::Realm` | Realm content, PDA, owner, Mint, token program, or adapter release refused. | -- | `programs/dclutch-custody-sbf/src/lib.rs:127` |
@@ -431,9 +431,9 @@ The 22 campaigns contributing:
 | code | refusal | meaning | observed firing | provenance |
 | --- | --- | --- | --- | --- |
 | `0x4000` | `TradingSbfError::UnsupportedContent` | The instruction is not supported by an admitted content profile. | -- | `programs/dclutch-trading-sbf/src/lib.rs:142` |
-| `0x4001` | `TradingSbfError::Release` | The Registry receipt did not authenticate this Program as current Trading. | claims-rational-representation-v2-programtest; dealer-checkpoint-programtest | `programs/dclutch-trading-sbf/src/lib.rs:144` |
-| `0x4002` | `TradingSbfError::Root` | The immutable Trading child root or its PDA refused. | direct-fee-pair-programtest | `programs/dclutch-trading-sbf/src/lib.rs:146` |
-| `0x4003` | `TradingSbfError::Content` | Manifest, selected entry, descriptor, or config content refused. | dealer-checkpoint-programtest; direct-fee-pair-programtest; tier1 | `programs/dclutch-trading-sbf/src/lib.rs:148` |
+| `0x4001` | `TradingSbfError::Release` | The Registry receipt did not authenticate this Program as current Trading. | claims-rational-representation-v2-programtest; dealer-checkpoint-programtest; source-abort-programtest | `programs/dclutch-trading-sbf/src/lib.rs:144` |
+| `0x4002` | `TradingSbfError::Root` | The immutable Trading child root or its PDA refused. | direct-begin-retiring-programtest; direct-fee-pair-programtest | `programs/dclutch-trading-sbf/src/lib.rs:146` |
+| `0x4003` | `TradingSbfError::Content` | Manifest, selected entry, descriptor, or config content refused. | dealer-checkpoint-programtest; direct-begin-retiring-programtest; direct-fee-pair-programtest; source-abort-programtest; tier1 | `programs/dclutch-trading-sbf/src/lib.rs:148` |
 | `0x4004` | `TradingSbfError::Transition` | The checked data-defined transition refused. | dealer-checkpoint-programtest | `programs/dclutch-trading-sbf/src/lib.rs:150` |
 | `0x4005` | `TradingSbfError::Commit` | A projected physical mutation or account write could not commit. | dealer-checkpoint-programtest | `programs/dclutch-trading-sbf/src/lib.rs:152` |
 | `0x4006` | `TradingSbfError::NativeSignature` | Instructions-sysvar or native-signature evidence was not exact. | -- | `programs/dclutch-trading-sbf/src/lib.rs:154` |

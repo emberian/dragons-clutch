@@ -156,19 +156,42 @@ export type CapabilityActionV1 = Readonly<{
   subject: CapabilityMarketSubjectV1;
   anchors: CapabilityAnchorsV1;
   /**
-   * Census route ids this act's builder drives, if any are established.
+   * Census route ids this act's submit path reaches.
    *
    * REQUIRED, and empty is a real answer: an act cannot be added to this
    * catalogue without someone deciding what it drives, which is the only
    * structure that keeps a per-act phase declaration from being partial by
-   * accident. Every id is checked against
-   * `lib/generated/marketPhaseAdmissionV1.ts` by `capabilityModel.test.ts`, so
-   * a name that no route carries is red rather than silently ungated.
+   * accident. Every id is checked against the census's published route list by
+   * `apps/dclutch-web/lib/capabilityPhaseGate.test.ts`, so a name that no
+   * route carries is red rather than silently ungated.
+   *
+   * THAT CHECK IS NOT ENOUGH ON ITS OWN, and for a while it was the only one.
+   * A route id that EXISTS passes it whatever the act's builder emits — so an
+   * act declaring a route its transaction never reaches, and an act reaching a
+   * route it declares nothing about, both read as correct. The second is the
+   * dangerous direction: an undeclared route is an unread phase gate, and an
+   * unread gate renders as READY TO PREFLIGHT. Two acts were in exactly that
+   * state (`dealer.liquidity` had been building a `DCLTHOT3` Trading
+   * instruction since `/liquidity` shipped, and `release.activate` a
+   * `DCLTRIX1` Registry one) and a third, `source.close-fund`, declared
+   * nothing while its planner emits `DCLRFCQ1`, whose guard admits
+   * `Retiring+Consumed` alone.
+   *
+   * So the second check is `apps/dclutch-web/lib/capabilityRouteDerivation.test.ts`:
+   * for every act whose builder AUTHORS its instruction bytes, it runs the
+   * builder against a fixture and puts the compiled instruction through
+   * `routeSelector.ts`, which reads the census's own selector tables — the
+   * route id comes out of (program, leading eight bytes), and the declaration
+   * must contain every route those bytes select. What that check cannot cover
+   * is stated there rather than assumed: Core dispatches on a decoded `Action`
+   * variant that no leading-byte view can name, and nine acts do not author
+   * their bytes at all — a Rust planner does, and their declarations are cited
+   * to it.
    *
    * An empty list means NO ROUTE IS ESTABLISHED, never "no phase constrains
    * it". Most acts here are authoring acts with no Market to consult; some
-   * reach routes in the eleven programs whose guards are still written inline
-   * and which the census therefore reads no constant for. Both print as
+   * reach routes in the programs whose guards are still written inline and
+   * which the census therefore reads no constant for. Both print as
    * `no phase gate`, and a consumer must not read either as admission.
    */
   routes: ReadonlyArray<string>;
@@ -218,7 +241,7 @@ const NO_ROUTE: ReadonlyArray<string> = Object.freeze([]);
 export const CAPABILITY_ACTIONS_V1: ReadonlyArray<CapabilityActionV1> = Object.freeze([
   action('release.activate', 'author', 'Release', 'Activate a checked multiprogram release', '/release', 'no-market',
     anchors('components/ReleaseWorkspace.tsx', 'lib/releaseRegistry.ts'),
-    NO_ROUTE,
+    ['registry/record_v1::dispatch'],
     'Each role packet is signed on its own and leaves as a file; this page never sends one.'),
   action('product.compile', 'author', 'Creation', 'Compile a Product record and its admission request', '/product-v2', 'no-market',
     anchors('components/ProductV2Studio.tsx', 'lib/productV2.ts', 'components/ProductV2Studio.tsx'),
@@ -234,7 +257,8 @@ export const CAPABILITY_ACTIONS_V1: ReadonlyArray<CapabilityActionV1> = Object.f
     'The browser exports unsigned bytes and asks for no key; the published campaign records devnet authorization before any child may sign.'),
   action('market.join', 'author', 'Creation', 'Admit another participant', 'market-detail', 'observed-market',
     anchors('components/JoinPanel.tsx', 'lib/userPositionAdmissionOperation.ts'),
-    ['trading/user_position_admission_v1::process_user_position_admission_v1#Admit'],
+    ['trading/user_position_admission_v1::process_user_position_admission_v1',
+     'trading/user_position_admission_v1::process_user_position_admission_v1#Admit'],
     'The compiled Rust planner derives all 27 accounts from one finalized observation; the exact packet is saved before your wallet sees it, sent once, and cleared only after the chain confirms it, so reloading resumes and never resubmits.'),
   action('source.create-fund', 'author', 'Source', 'Create the resolution fund', '/resolution', 'observed-market',
     anchors('components/ResolutionWorkspace.tsx', 'lib/sourceReadinessV1.ts'),
@@ -271,11 +295,11 @@ export const CAPABILITY_ACTIONS_V1: ReadonlyArray<CapabilityActionV1> = Object.f
     [wall('A Template with nonzero close rent describes a root activation may not fund and Close can never open; the activation funding seam is jointly unsatisfiable.', 'WAVE.md')]),
   action('general.consider', 'trade', 'General', 'Check a candidate plan and export its exact packet', '/general', 'observed-market',
     anchors('components/GeneralWorkspace.tsx', 'lib/generalPlanV5.ts'),
-    NO_ROUTE,
+    ['trading/hot_v3::process_hot_execution_v3'],
     'The plan is authored elsewhere; this page authenticates it against finalized state and hands back the same bytes. No key is asked for.'),
   action('dealer.liquidity', 'trade', 'Dealer', 'Contribute or redeem dealer equity', '/liquidity', 'observed-market',
     anchors('components/DealerLiquidityWorkspace.tsx', 'lib/dealerEquityV3.ts'),
-    NO_ROUTE,
+    ['trading/hot_v3::process_hot_execution_v3'],
     'The packet is signed here and downloaded; this page submits nothing, so an external submitter is the only thing that can send it.',
     [wall('Exactly one selector can satisfy validate_selection: derivation_policy is pinned per descriptor to its own lifecycle digest and per root to a single manifest entry.', 'WAVE.md')]),
   action('dealer.trade', 'trade', 'Dealer', 'Take an inventory-bounded immediate trade', null, 'observed-market',
@@ -298,11 +322,11 @@ export const CAPABILITY_ACTIONS_V1: ReadonlyArray<CapabilityActionV1> = Object.f
     'The signed record is saved before one submission and kept until the finalized Terminal receipt is read back; a reload resumes the same signature.'),
   action('source.close-fund', 'resolve', 'Source', 'Close the resolution fund', '/resolution', 'observed-market',
     anchors('components/ResolutionWorkspace.tsx', 'lib/sourceCloseFundV1.ts'),
-    NO_ROUTE,
+    ['resolution/core_effect::process_direct_funding_close_v1'],
     'Prepay and close are separate signed acts; each is saved before submission and confirmed against the finalized typed receipt.'),
   action('general.settle', 'resolve', 'General', 'Check a settlement plan and export its exact packet', '/general', 'observed-market',
     anchors('components/GeneralWorkspace.tsx', 'lib/generalPlanV5.ts'),
-    NO_ROUTE,
+    ['trading/hot_v3::process_hot_execution_v3'],
     'The plan is authored elsewhere; this page authenticates it against finalized state and hands back the same bytes. No key is asked for.'),
 
   action('claims.conserve', 'claim', 'Claims', 'Split or merge conservative claims', null, 'observed-market',
@@ -333,7 +357,7 @@ export const CAPABILITY_ACTIONS_V1: ReadonlyArray<CapabilityActionV1> = Object.f
      wall('Expire refused on a real ELF at custom code 16387 with the permit account absent.', 'docs/evidence/SERIES_PERMIT_EXPIRY_HOT_WALL_2026_08_31.json')]),
   action('general.close', 'claim', 'General', 'Check a close plan and export its exact packet', '/general', 'observed-market',
     anchors('components/GeneralWorkspace.tsx', 'lib/generalPlanV5.ts'),
-    NO_ROUTE,
+    ['trading/hot_v3::process_hot_execution_v3'],
     'The plan is authored elsewhere; this page authenticates it against finalized state and hands back the same bytes. No key is asked for.'),
   action('dealer.close', 'claim', 'Dealer', 'Reset the ladder, close an LP, or retire the pool', null, 'observed-market',
     NO_ANCHORS,
@@ -565,18 +589,20 @@ export type CapabilityMarketSnapshotV1 = Readonly<{
  * this file states a phase; it looks one up, and a name it looks up that no
  * route carries is a red test rather than a silent miss.
  *
- * WHAT IT REACHES TODAY. Forty-eight of 169 routes carry a named gate, across
- * five programs -- Core, Custody, Claims, Resolution and Trading, the last
- * four having named their guards after Core did -- and nine of the
- * twenty-seven acts below declare a route at all. FIVE acts therefore have a
+ * WHAT IT REACHES TODAY. Seventy-two of 162 routes carry a named gate, and
+ * fifteen of the twenty-seven acts below declare a route at all -- up from
+ * nine, because the declarations stopped being typed and started being read
+ * off what each builder emits (see `routes` below). SIX acts therefore have a
  * phase gate: `source.create-fund`, `source.ready`, `source.provider`,
- * `source.admit-terminal`, and now `claims.redeem`, whose
+ * `source.admit-terminal`, `claims.redeem`, whose
  * `claims/terminal_settlement_v3::process` admits `Terminal` and `Retiring`
  * and refuses every other phase -- so a redemption card beside a Founding or
- * an Open Market now says WRONG PHASE instead of READY TO PREFLIGHT. The
- * other twenty-two report `no-phase-gate` BY NAME in the verdict, which is the
- * whole difference from the state this replaced: a reader can now tell a
- * checked admission from an unchecked one, which is the thing a partial
+ * an Open Market says WRONG PHASE instead of READY TO PREFLIGHT -- and now
+ * `source.close-fund`, whose `DCLRFCQ1` route admits `Retiring+Consumed`
+ * alone and which had been reporting READY TO PREFLIGHT on every Market in
+ * every other phase. The rest report `no-phase-gate` BY NAME in the verdict,
+ * which is the whole difference from the state this replaced: a reader can
+ * tell a checked admission from an unchecked one, which is the thing a partial
  * mapping alone cannot give them.
  *
  * THE CARD THE UX WALK COMPLAINED ABOUT IS A DIFFERENT DEFECT, and it is

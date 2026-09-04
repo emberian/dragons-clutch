@@ -83,9 +83,19 @@ Regenerate with: npm run abi:found
 | `STATISTIC_SPEC_BYTES_V1` | 176 |
 | `STATISTIC_SPEC_MAGIC_OFFSET_V1` | 0 |
 | `STATISTIC_SPEC_MAGIC_BYTES_V1` | 8 |
+| `STATISTIC_SPEC_SCHEMA_VERSION_OFFSET_V1` | 8 |
+| `STATISTIC_SPEC_KIND_OFFSET_V1` | 10 |
+| `STATISTIC_SPEC_ROUNDING_OFFSET_V1` | 11 |
 | `STATISTIC_SPEC_SOURCE_SCALE_EXPONENT_OFFSET_V1` | 12 |
+| `STATISTIC_SPEC_SOURCE_SCALE_EXPONENT_BYTES_V1` | 4 |
 | `STATISTIC_SPEC_SOURCE_UNIT_ID_OFFSET_V1` | 16 |
 | `STATISTIC_SPEC_RESULT_UNIT_ID_OFFSET_V1` | 48 |
+| `STATISTIC_SPEC_REQUIRED_SAMPLES_OFFSET_V1` | 80 |
+| `STATISTIC_SPEC_BODY_RESERVED_OFFSET_V1` | 82 |
+| `STATISTIC_SPEC_BODY_RESERVED_BYTES_V1` | 14 |
+| `STATISTIC_SPEC_THRESHOLD_ATOMS_OFFSET_V1` | 96 |
+| `STATISTIC_SPEC_CAPACITY_PROFILE_ID_OFFSET_V1` | 112 |
+| `STATISTIC_SPEC_EVALUATOR_RELEASE_ID_OFFSET_V1` | 144 |
 | `LIFECYCLE_RENT_CREDIT_MAGIC_OFFSET_V2` | 0 |
 | `LIFECYCLE_RENT_INSTRUCTION_ACTION_OFFSET_V2` | 10 |
 | `LIFECYCLE_RENT_ACTION_CREATE_V2` | 1 |
@@ -220,3 +230,57 @@ Regenerate with: npm run abi:found
 | 36 | Rent ProgramData |  |  |
 | 37 | price-gate certificate raw |  |  |
 | 38 | price-gate certificate staging |  |  |
+
+## `STATISTIC_SPEC_KIND_TAGS_V1`
+
+```json
+[
+ {
+  "tag": 1,
+  "name": "Terminal sample"
+ },
+ {
+  "tag": 2,
+  "name": "Exact scheduled average"
+ },
+ {
+  "tag": 3,
+  "name": "Minimum"
+ },
+ {
+  "tag": 4,
+  "name": "Maximum"
+ },
+ {
+  "tag": 5,
+  "name": "At least threshold"
+ },
+ {
+  "tag": 6,
+  "name": "At most threshold"
+ },
+ {
+  "tag": 7,
+  "name": "Odd scheduled median"
+ }
+]
+```
+
+## `STATISTIC_SPEC_ROUNDING_TAGS_V1`
+
+```json
+[
+ {
+  "tag": 1,
+  "name": "Exact rational"
+ },
+ {
+  "tag": 2,
+  "name": "Floor"
+ },
+ {
+  "tag": 3,
+  "name": "Ceiling"
+ }
+]
+```
