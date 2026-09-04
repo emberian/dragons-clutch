@@ -58,7 +58,8 @@ use solana_system_interface::instruction::transfer;
 use dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1;
 use dclutch_relay_contract::{
     frame::{
-        RelayAccountPrivilegeV1, RelayFrameKindV1, relay_frame_roles_v1, validate_relay_frame_v1,
+        RelayAccountNameV1, RelayAccountPrivilegeV1, RelayFrameKindV1, relay_frame_roles_v1,
+        validate_relay_frame_v1,
     },
     instruction::AdvanceRecoveryInstructionV1,
 };
@@ -81,6 +82,7 @@ use crate::plan::pubkey;
 use crate::rpc::{Rpc, WritePolicyV1};
 use crate::sponsored_schedule::wait_until_unix_seconds_v1;
 use crate::terminal_lifecycle::routed_record;
+use crate::wallet_terminal::RecordPairV1;
 use crate::{Error, Result};
 
 /// The owned-loopback command name.
@@ -478,34 +480,42 @@ fn plan(rpc: &mut Rpc, arguments: &ArgumentsV1, expected: ExpectedClusterV1) -> 
     // `validate_relay_frame_v1` then checks the count, every privilege and the
     // complete no-alias policy offline -- so a frame that would refuse as
     // `InvalidAccountFrame` refuses here instead.
-    let keys = [
-        arguments.worker,
+    let filled = advance_recovery_keys_v1(&AdvanceRecoveryCoordinatesV1 {
+        worker: arguments.worker,
         market,
         core,
         activation,
         source_state,
         certificate,
-        material.raw,
-        material.staging,
-        window.raw,
-        window.staging,
-        policy_pair.raw,
-        policy_pair.staging,
-        manifest.raw,
-        manifest.staging,
+        material,
+        window,
+        policy: policy_pair,
+        manifest,
         funding_ledger,
-        sysvar::clock::ID,
-        sysvar::rent::ID,
-        system_program::ID,
-    ];
+    });
     let roles = relay_frame_roles_v1(RelayFrameKindV1::AdvanceRecovery);
-    if roles.len() != FRAME_ACCOUNTS_V1 || keys.len() != FRAME_ACCOUNTS_V1 {
+    if roles.len() != FRAME_ACCOUNTS_V1 {
         return Err(Error::new(format!(
-            "the AdvanceRecovery frame declares {} positions and this driver names {}",
-            roles.len(),
-            keys.len()
+            "the AdvanceRecovery frame declares {} positions and this driver fills {FRAME_ACCOUNTS_V1}",
+            roles.len()
         )));
     }
+    // EVERY POSITION SAYS WHAT IT IS, and the contract is asked whether it
+    // agrees. Privileges and the no-alias rule below would pass a frame whose
+    // eighteen keys were in the wrong order -- the recovery policy where the
+    // window belongs would still be readonly and still distinct -- so the
+    // ordering is checked against the frame's own role NAMES rather than
+    // trusted to the order they were typed in.
+    for (index, (role, (name, _))) in roles.iter().zip(filled.iter()).enumerate() {
+        if role.name() != *name {
+            return Err(Error::new(format!(
+                "position {index} of the AdvanceRecovery frame is {:?} and this driver filled it \
+                 with {name:?}",
+                role.name()
+            )));
+        }
+    }
+    let keys: Vec<Pubkey> = filled.iter().map(|(_, key)| *key).collect();
     let privileges: Vec<RelayAccountPrivilegeV1> = roles
         .iter()
         .zip(keys.iter())
@@ -552,6 +562,78 @@ fn plan(rpc: &mut Rpc, arguments: &ArgumentsV1, expected: ExpectedClusterV1) -> 
         observed_unix_seconds: observed,
         seat_shortfall_lamports,
     })
+}
+
+/// Everything the eighteen positions are filled from.
+struct AdvanceRecoveryCoordinatesV1 {
+    worker: Pubkey,
+    market: Pubkey,
+    core: Pubkey,
+    activation: Pubkey,
+    source_state: Pubkey,
+    certificate: Pubkey,
+    material: RecordPairV1,
+    window: RecordPairV1,
+    policy: RecordPairV1,
+    manifest: RecordPairV1,
+    funding_ledger: Pubkey,
+}
+
+/// The frame's eighteen keys, each carrying the role name it claims to be.
+///
+/// One author for the order, so the check against `relay_frame_roles_v1` and
+/// the metas that are actually sent cannot drift apart -- and so a test can ask
+/// the same question without a chain.
+fn advance_recovery_keys_v1(
+    coordinates: &AdvanceRecoveryCoordinatesV1,
+) -> [(RelayAccountNameV1, Pubkey); FRAME_ACCOUNTS_V1] {
+    [
+        (RelayAccountNameV1::Worker, coordinates.worker),
+        (RelayAccountNameV1::Market, coordinates.market),
+        (RelayAccountNameV1::CoreProgram, coordinates.core),
+        (
+            RelayAccountNameV1::RegistryActivation,
+            coordinates.activation,
+        ),
+        (
+            RelayAccountNameV1::SourceResolutionState,
+            coordinates.source_state,
+        ),
+        (
+            RelayAccountNameV1::ResolutionCertificate,
+            coordinates.certificate,
+        ),
+        (RelayAccountNameV1::SourceMaterial, coordinates.material.raw),
+        (
+            RelayAccountNameV1::SourceMaterialStagingVacancy,
+            coordinates.material.staging,
+        ),
+        (RelayAccountNameV1::WindowSpec, coordinates.window.raw),
+        (
+            RelayAccountNameV1::WindowSpecStagingVacancy,
+            coordinates.window.staging,
+        ),
+        (RelayAccountNameV1::RecoveryPolicy, coordinates.policy.raw),
+        (
+            RelayAccountNameV1::RecoveryPolicyStagingVacancy,
+            coordinates.policy.staging,
+        ),
+        (
+            RelayAccountNameV1::CapabilityManifest,
+            coordinates.manifest.raw,
+        ),
+        (
+            RelayAccountNameV1::CapabilityManifestStagingVacancy,
+            coordinates.manifest.staging,
+        ),
+        (
+            RelayAccountNameV1::ResolutionFunding,
+            coordinates.funding_ledger,
+        ),
+        (RelayAccountNameV1::ClockSysvar, sysvar::clock::ID),
+        (RelayAccountNameV1::RentSysvar, sysvar::rent::ID),
+        (RelayAccountNameV1::SystemProgram, system_program::ID),
+    ]
 }
 
 fn report(plan: &PlanV1) {
@@ -774,6 +856,45 @@ mod tests {
             roles.iter().filter(|role| role.is_signer()).count(),
             1,
             "a permissionless crank has exactly one signer, and it is the worker it pays"
+        );
+    }
+
+    /// Every key this driver fills is checked against the role the contract
+    /// declares for that position, so an ordering slip cannot hide behind
+    /// privileges that happen to match.
+    #[test]
+    fn every_filled_position_is_the_role_the_contract_declares() {
+        let pair = |seed: u8| RecordPairV1 {
+            schema: [seed; 32],
+            digest: [seed.wrapping_add(2); 32],
+            raw: Pubkey::new_from_array([seed; 32]),
+            staging: Pubkey::new_from_array([seed.wrapping_add(1); 32]),
+        };
+        let filled = advance_recovery_keys_v1(&AdvanceRecoveryCoordinatesV1 {
+            worker: Pubkey::new_from_array([0x01; 32]),
+            market: Pubkey::new_from_array([0x02; 32]),
+            core: Pubkey::new_from_array([0x03; 32]),
+            activation: Pubkey::new_from_array([0x04; 32]),
+            source_state: Pubkey::new_from_array([0x05; 32]),
+            certificate: Pubkey::new_from_array([0x06; 32]),
+            material: pair(0x10),
+            window: pair(0x20),
+            policy: pair(0x30),
+            manifest: pair(0x40),
+            funding_ledger: Pubkey::new_from_array([0x50; 32]),
+        });
+        let roles = relay_frame_roles_v1(RelayFrameKindV1::AdvanceRecovery);
+        assert_eq!(roles.len(), filled.len());
+        for (index, (role, (name, _))) in roles.iter().zip(filled.iter()).enumerate() {
+            assert_eq!(role.name(), *name, "position {index}");
+        }
+        // The two record pairs a rung frame carries that the failure walk does
+        // not, named rather than counted: without them a crank has no policy to
+        // read and no proof the record it read is finalized.
+        assert_eq!(filled[10].0, RelayAccountNameV1::RecoveryPolicy);
+        assert_eq!(
+            filled[11].0,
+            RelayAccountNameV1::RecoveryPolicyStagingVacancy
         );
     }
 

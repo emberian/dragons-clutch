@@ -208,3 +208,104 @@ sibling choice, and this lane does not take it.
    check at all. Decision 0025 section 6 named this route for the immobility
    shape; under the escrow shape it is the hole the complete-set gate does not
    cover.
+
+## 8. What shape A actually cost, and where it landed
+
+Added by lane CLAIMS-17 on 2026-09-04, after the orchestrator ruled shape A.
+Section 6 above priced shape A; three of its four estimates were wrong in the
+same direction, and the fourth was wrong in the other.
+
+**The wire did not move at all.** Not the request magic, version, width or any
+field; not the receipt. Section 6 priced "a wider request than the fixed 832
+bytes to carry the escrow Position and admission addresses, their rent
+principals, observed lamports and revisions" — and five of those six are
+DERIVED. Both addresses come from the Market and its runtime width. Both rent
+principals are the founder's own, because the escrow's Position and admission
+have the founder's widths. Both revisions are the vacant-zero-to-live-one every
+founding writes. Only the observed lamports would have needed a field, and they
+are deliberately not pinned: nothing upstream joins them, and pinning them would
+hand anyone who can read a derivation a founding-time denial by sending one
+lamport to the address first. `ClaimsFoundingRequestV5` is unchanged.
+
+**The receipt did not move either, and the transcript domain stayed at v5 on
+purpose.** The post-resource transcript now hashes five Claims accounts instead
+of three. A categorical founding allocates neither escrow account, so both
+contribute zero bytes and the digest is exactly what three accounts produced
+before the escrow existed. That is what makes a categorical founding
+byte-identical across the change — aggregate, Position, admission, request,
+receipt and transcript alike — and a fresh domain would have destroyed it for no
+reader's benefit.
+
+**The shape is fixed by the RECORD, not by a wire bit.** `refunds_on_failure`
+is carried out of the Market-wide basis admission, which already decoded the
+authenticated `ProductBasisV3` and threw the answer away. No caller states the
+shape; no second author spells the rule.
+
+**What did move is the account frame, in five places rather than one, and that
+is the part section 6 under-priced.** Claims founding goes 31 → 33 with both
+escrow accounts APPENDED, so no existing index moves. Core's generic Open
+window goes 21 → 23 and its Series Open window 37 → 39, both read-only, because
+both re-verify a receipt whose transcript now covers five accounts. Trading
+mirrors that transcript on both founding routes. The host driver derives,
+pre-funds and supplies the pair. Five frames, four of them outside Claims.
+
+**Two costs section 6 did not name.**
+
+- **Two account locks.** The composed `DCLTGMF3` message compiles to 60 locks
+  where it compiled to 58, against an unchanged devnet limit of 64. A founding
+  that could carry six physical funding entries now carries four. The SDK and
+  browser tests state both numbers rather than leaving a cohort to discover it.
+- **A narrowing.** Every founding names its Market's escrow even when the record
+  is categorical, so the economic slice kernel's width-two structural floor
+  becomes founding's: a width-one market can no longer be founded. Nothing in
+  the tree founds one, and a one-outcome market is not a partition, but it is a
+  narrowing and not a no-op.
+
+**Where it landed.** `ebbccbd4e` (the five program frames, the layout, the
+hostiles) and `266c1d687` (the host driver). `FailureEscrowIdentityV1::derive`
+in `programs/dclutch-claims-sbf/src/lib.rs` is now the sole author of a Market's
+escrow identity, called by the founding that SEATS it and by the complete-set
+gate that requires it to STAY seated; a founding whose escrow account is not the
+derived one refuses `0x5010 FailureEscrow`, the same code and the same
+accusation as the routed split's, one stage earlier.
+`refunding_founding_vectors_v1` in `founding_v5.rs` is the layout alone,
+extracted so a test can read it without an account frame.
+
+**What this section does NOT claim.** There is no ELF evidence. The tree has no
+program-test that executes a Claims founding at all — the only founding ELF test
+is Core's Found stage (`programs/dclutch-core-sbf/tests/found_program_test.rs`),
+which stops before Claims — so founding v5's Claims half was never covered
+either, and v6 inherits that hole rather than opening it. The evidence level for
+this change is: unit tests over the layout and the derivation, a green build of
+every affected crate and SBF link, and green SDK and browser frame suites.
+Cohort-17 is the first evidence that it founds, and `escrow-seated` in
+`tools/cohort/steps.tsv` is the row that says what to read off the chain.
+
+**The frame ratchet is red** for the Claims, Core and Trading links as of
+`ebbccbd4e`, which says so in its own message. It was left red rather than
+recaptured because three other lanes were landing program commits in the same
+hour and a recapture riding one of them names the wrong commit — the exact
+failure `tools/frameguard/run.sh` documents from 2026-09-02.
+
+## 9. What section 7 still owes, restated with what is now known
+
+Item 1 is done. The rest, sharpened:
+
+2. **A Claims-owned split/merge route that moves collateral.** The gap is
+   NARROWER than section 3 made it sound, and worth stating exactly, because
+   what is missing is one layer rather than a subsystem:
+   `dclutch-claims-conservation-contract` is written, total and tested;
+   `crates/dclutch-operator/src/claims_conservation_v1.rs` BUILDS a conservation
+   request and derives every address; `rational_terminal_v3.rs` is the working
+   author of a Claims-role Custody transfer. What does not exist is the
+   dispatcher — nothing routes `DCLCNS01` — and the ELF test that would make one
+   trustworthy. The contract also does not yet know the refunding shape: it
+   writes UNIFORM quantities, so a refunding split needs the escrow's coordinate
+   seated the way `MintRefundingCompleteSet` seats it, which is a contract
+   change and not only an adapter one.
+3. **The refunding failure walk on real ELFs.** Still owed and now blocked on
+   item 2 as well as on a founded refunding market; and, as above, on a Claims
+   founding program-test that does not exist.
+4. **Threading `refundsOnFailure` to the market page.** Still owed.
+5. **The `signed_delta_v3` waist.** Still owed and untouched: it can write a
+   refunding split with no escrow check at all.

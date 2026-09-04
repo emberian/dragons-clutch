@@ -1688,3 +1688,51 @@ fn a_second_batch_on_one_market_derives_its_own_selection_cursor() {
     assert_eq!(first_freeze.subject_id, None);
     assert_eq!(second_freeze.subject_id, None);
 }
+
+/// THE VACANT ACCOUNT IS A COORDINATE, NOT A MISSING INPUT.
+///
+/// Two of the fifteen name a state that does not exist until they run: the
+/// FIRST `Consider` of a batch creates its selection cursor, and the FIRST
+/// `VerifyCandidateRow` of a candidate creates its verifier. Both are the
+/// common case -- every batch and every candidate has exactly one of them --
+/// and both were unexercised, because the campaign table hands each action the
+/// live record its own market already holds.
+///
+/// What the vacancy fixes is the REVISION, and getting it wrong is silent:
+/// `consider_verified_candidate_v2` refuses a nonzero `expected_revision`
+/// against an all-zero cursor, and `verify_candidate_row` accepts `(0, 0, 0)`
+/// only there. A deriver that read a revision from somewhere else would build a
+/// request the runtime refuses with a revision mismatch, which reads like a
+/// concurrent write rather than like a first execution.
+#[test]
+fn the_first_consideration_and_the_first_row_derive_from_a_vacant_account() {
+    let (market, records) = live_market();
+    let mut first_consider = action_input(&market, Action::Consider, &records);
+    first_consider.primary_state_account = None;
+    let derived = derive_general_request_v1(first_consider).expect("first Consider of a batch");
+    let decoded = decode_general_request_v3(&derived.request).expect("canonical request");
+    assert_eq!(decoded.expected_revision, 0);
+    assert_eq!(
+        derived.primary_state,
+        derive_general_request_v1(action_input(&market, Action::Consider, &records))
+            .expect("later Consider")
+            .primary_state,
+        "the cursor a first consideration creates is the one a later consideration reads",
+    );
+
+    let mut first_row = action_input(&market, Action::VerifyCandidateRow, &records);
+    first_row.evidence.verifier_account = None;
+    let derived = derive_general_request_v1(first_row).expect("first row of a candidate");
+    let decoded = decode_general_request_v3(&derived.request).expect("canonical request");
+    assert_eq!(decoded.expected_revision, 0);
+    assert_eq!(decoded.page_index, 0);
+    assert_eq!(decoded.execution_index, 0);
+    // The live verifier this market holds already consumed its one row, so the
+    // pair is a real contrast and not two spellings of zero.
+    let after =
+        derive_general_request_v1(action_input(&market, Action::VerifyCandidateRow, &records))
+            .expect("row against the live verifier");
+    let after = decode_general_request_v3(&after.request).expect("canonical request");
+    assert_eq!(after.expected_revision, 1);
+    assert_eq!(after.page_index, 1);
+}
