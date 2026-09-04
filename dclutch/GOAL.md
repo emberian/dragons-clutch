@@ -4245,3 +4245,6 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   `build-sim-config.py`). → RELEASE-GATE **`(spawned)`**: the gate digest over reproducible bytes only, the admission
   re-bindable host-side at 0 SOL, the job dir self-contained, the credential out of the file. COHORT-15C follows it.
 - Cuts: `f81ccac89`, `42ccadedf`.
+- Credential sweep 00:20 EDT: the Helius key was in nine local job-dir files back to cohorts 7/8/11 (execute scripts, a
+  validator log, sim configs); all redacted; zero remain under ~/jobs; never in the repo, its history or the cut. The
+  author fix (sim config reads the key at use time) is in RELEASE-GATE's unit. Rotation is ember's call.
