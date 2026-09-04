@@ -4836,3 +4836,5 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   by splitting lines, so they can disagree with the reader; the one control that matters — owner at v2 with an AGREEING
   literal beside it — goes red at the authorship case. Release tier PASS.
 - Cuts: `f715296f6`.
+- Started 13:50 EDT: LEAN-SCORING **`(spawned)`** — the scoring rule's four stated sorries closed by decision over the finite
+  63-entry table within the admitted range.
