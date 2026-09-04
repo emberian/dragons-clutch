@@ -4933,3 +4933,11 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   not enforced (no witness names the campaign). Owed → PROGRAMS-16G **`(spawned)`**: the real sequence on a bank (the
   no-escrow five first), escrow accounts installed for the rest, the second batch's selection on chain, the floored walk.
 - Cuts: `577d37a8e`, `687238ed2`, `765bb8565`.
+- LEAN-SCORING closed (`1f755edc4`): the two log bounds PROVEN by bounded induction over the 62-step squaring loop (slack
+  128 pays exactly 65; no new native_decide; 4.7 s); **two of the four sorries were FALSE as stated** — `exp2Neg_below` needs
+  `b ≤ 2^62` (the admitted range caps b at 2^40) and **`exp2Neg_near`'s tolerance moves from 2^-50 to 2^-19** (smallest
+  counterexample b=2, d=27; holds at 2^-22 over 12,363 samples, fails at 2^-25) — the 2^-50 had been measured on the
+  fraction and attributed to Ê, which also divides by 2^n; both restated, still sorry (their proofs hit kernel deep
+  recursion, artifacts kept). **The Dealer's sealed τ must carry 2^-19.** A measurement failure recorded: `timeout … | head`
+  reports head's exit, so a killed Lean read as clean — capture the status inside the subshell before any pipe.
+- Cuts: `9e8c23e2e`.

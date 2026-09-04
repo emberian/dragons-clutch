@@ -1,6 +1,8 @@
 import Std.Tactic
 import DClutchSemantics.AbiSchema
 
+set_option maxHeartbeats 1000000
+
 /-!
 # ScoringRuleV1: the Dealer as a bounded-loss scoring-rule participant
 
@@ -732,39 +734,588 @@ theorem pricesOf_lt (b scale : Nat) (inventory : List Nat) (j : Nat)
 
 Core Lean without Mathlib has no real exponential, so the error of the fixed
 point against the real LMSR is stated as exact natural-number power
-inequalities — true propositions, each of which is the composition of the
-root-chain lemma above with one floor per step.  They are left as `sorry`
-with that reason; the bounded-induction proofs are owed, and the exact
-rational reference model (`gen.py` in this lane's scratch, 3,600 random
-states, and the corpus in §5) is the numerical check standing in for them.
+inequalities.  The two `L̂` bounds are now PROVED — each is a bounded
+induction over the 62 squarings, composed with `succ_pow_mul_le`, and the only
+appeal to computation is `native_decide` over the 63-entry table of §2.  The
+two `Ê` bounds are still owed, and BOTH of them moved, because as originally
+written they were false:
+
+* **`exp2Neg_below_the_real_value` needs `b ≤ 2^62`.**  `Ê`'s fraction is
+  `⌈r·2^62/b⌉`, which reaches `2^62` — a 63rd bit the product never applies —
+  as soon as `b > 2^62`.  At `b = 2^63`, `d = 2^63 − 1` that makes `Ê = 2^62`,
+  so the claim reads `2^(62·2^63) ≤ 2^(62·2^63 − 2^63 + 1)`: false.  The rule
+  record admits `b ≤ 2^40` (`parametersAdmissible`), well inside.
+* **`exp2Neg_near_the_real_value` is `2^(−19)` relative, not `2^(−50)`.**  The
+  `2^(−50)` was measured on the FRACTION and then attributed to `Ê`, which also
+  divides by `2^n`; that final floor costs `2^n/F ≤ 2^40/2^61 = 2^(−21)` over
+  the admitted range.  Smallest counterexample to the old statement, found by
+  exhaustive search over `b ≤ 3`: `b = 2`, `d = 27` (`n = 13`,
+  `Ê = 398065729532860`).  The claim holds over 12,363 sampled `(b, d)` at
+  `2^(−22)` and fails at `2^(−25)`; `2^(−19)` is what the proof sketch in the
+  lane's scratch actually delivers.
+
+The `L̂` bounds hold exactly as the design note states them.  `logSlack = 128`
+pays for the floors: the proof charges `2` for the initial `+1` and `1` per
+squaring, `65` in all.  The overshoot proof gives `2^128`, inside the stated
+`2^256`; measured overshoot over 1,810 sampled `s` runs from `125.06` to
+`128.0` units of `2^(−62)`.
 
 Direction is the load-bearing part and it is by construction: `Ê` rounds
 DOWN everywhere (fraction up, products down, floor at one) and `L̂` rounds UP
 (floor form plus slack), so `Ŵ` and the recorded subsidy are conservative
-for the sponsor. -/
+for the sponsor.
+
+### Reading the exponents
+
+Every bound is stated by raising both sides to a power that clears the
+fixed-point denominator, so no real number appears.  `Ê(d)^b ≤ 2^(62b − d)`
+IS `Ê(d)/2^62 ≤ 2^(−d/b)`; `s^(2^62) ≤ 2^(L̂(s) + 62·2^62)` IS
+`L̂(s) ≥ 2^62 · log₂(s/2^62)`.  Nothing outside the stated hypotheses is
+claimed.
+-/
+
+
+theorem pow_two_pow_succ'' (a k : Nat) : a ^ (2 ^ (k + 1)) = a ^ (2 ^ k) * a ^ (2 ^ k) := by
+  rw [Nat.pow_succ, Nat.mul_two, Nat.pow_add]
+
+theorem mul_mul_mul'' (a u v w : Nat) : (a * u) * (v * w) = (a * v) * (u * w) := by
+  simp [Nat.mul_comm, Nat.mul_left_comm]
+
+theorem shift_sq' (p s : Nat) : s * (p + p + s) ≤ (p + s) * (p + s) := by
+  have h : s * (p + p + s) = s * p + s * (p + s) := by simp only [Nat.mul_add]; omega
+  have h2 : (p + s) * (p + s) = p * (p + s) + s * (p + s) := by simp only [Nat.add_mul]
+  have h3 : s * p ≤ p * (p + s) := by
+    calc s * p = p * s := Nat.mul_comm _ _
+      _ ≤ p * (p + s) := Nat.mul_le_mul_left _ (by omega)
+  omega
+
+theorem succ_pow_mul_le (x : Nat) : ∀ (k y : Nat), y + 2 ^ k ≤ x →
+    (x + 1) ^ (2 ^ k) * y ≤ x ^ (2 ^ k) * x := by
+  intro k
+  induction k with
+  | zero =>
+      intro y h
+      simp only [Nat.pow_zero, Nat.pow_one]
+      obtain ⟨t, rfl⟩ : ∃ t, x = y + 1 + t := ⟨x - (y + 1), by omega⟩
+      simp only [Nat.add_mul, Nat.mul_add]; omega
+  | succ k ih =>
+      intro y h
+      have hx : 2 ^ (k + 1) ≤ x := by omega
+      have hxpos : 0 < x := by
+        have : (0:Nat) < 2 ^ (k+1) := Nat.two_pow_pos (k+1)
+        omega
+      have key := ih (x - 2 ^ k) (by rw [Nat.pow_succ] at hx; omega)
+      have squared :
+          (x + 1) ^ (2 ^ (k+1)) * ((x - 2 ^ k) * (x - 2 ^ k))
+            ≤ x ^ (2 ^ (k+1)) * (x * x) := by
+        rw [pow_two_pow_succ'' (x + 1) k, pow_two_pow_succ'' x k,
+          mul_mul_mul'' ((x + 1) ^ (2 ^ k)) ((x + 1) ^ (2 ^ k)) (x - 2 ^ k) (x - 2 ^ k),
+          mul_mul_mul'' (x ^ (2 ^ k)) (x ^ (2 ^ k)) x x]
+        exact Nat.mul_le_mul key key
+      have inner : y * x ≤ (x - 2 ^ k) * (x - 2 ^ k) := by
+        obtain ⟨s, rfl⟩ : ∃ s, x = 2 ^ k + 2 ^ k + s := by
+          refine ⟨x - 2 ^ (k+1), ?_⟩
+          rw [Nat.pow_succ] at hx ⊢; omega
+        have e : 2 ^ k + 2 ^ k + s - 2 ^ k = 2 ^ k + s := by omega
+        rw [e]
+        have hy : y ≤ s := by rw [Nat.pow_succ] at h; omega
+        exact Nat.le_trans (Nat.mul_le_mul_right _ hy) (shift_sq' _ _)
+      have cancel : ((x + 1) ^ (2 ^ (k+1)) * y) * x ≤ (x ^ (2 ^ (k+1)) * x) * x := by
+        calc ((x + 1) ^ (2 ^ (k+1)) * y) * x
+            = (x + 1) ^ (2 ^ (k+1)) * (y * x) := by rw [Nat.mul_assoc]
+          _ ≤ (x + 1) ^ (2 ^ (k+1)) * ((x - 2 ^ k) * (x - 2 ^ k)) :=
+              Nat.mul_le_mul_left _ inner
+          _ ≤ x ^ (2 ^ (k+1)) * (x * x) := squared
+          _ = (x ^ (2 ^ (k+1)) * x) * x := by rw [Nat.mul_assoc]
+      exact Nat.le_of_mul_le_mul_right cancel hxpos
+
+theorem succ_pow_le_two_mul {x k : Nat} (hx : 2 ^ 62 ≤ x) (hk : k ≤ 61) :
+    (x + 1) ^ (2 ^ k) ≤ 2 * x ^ (2 ^ k) := by
+  have hk2 : (2:Nat) ^ k ≤ 2 ^ 61 := Nat.pow_le_pow_right (by omega) hk
+  have h61 : (2:Nat) ^ 61 + 2 ^ 61 = 2 ^ 62 := by decide
+  have hxpos : 0 < x := by have := Nat.two_pow_pos 62; omega
+  have key := succ_pow_mul_le x k (x - 2 ^ k) (by omega)
+  have half : x ≤ 2 * (x - 2 ^ k) := by omega
+  have chain : (x + 1) ^ (2 ^ k) * x ≤ (2 * x ^ (2 ^ k)) * x := by
+    calc (x + 1) ^ (2 ^ k) * x ≤ (x + 1) ^ (2 ^ k) * (2 * (x - 2 ^ k)) :=
+          Nat.mul_le_mul_left _ half
+      _ = 2 * ((x + 1) ^ (2 ^ k) * (x - 2 ^ k)) := by rw [Nat.mul_left_comm]
+      _ ≤ 2 * (x ^ (2 ^ k) * x) := Nat.mul_le_mul_left _ key
+      _ = (2 * x ^ (2 ^ k)) * x := (Nat.mul_assoc _ _ _).symm
+  exact Nat.le_of_mul_le_mul_right chain hxpos
+
+/-- Doubling the exponent doubles the cost of the `+1`.  Stated with the
+exponents abstract so that no reduction of `a ^ 2^62` is ever attempted. -/
+theorem four_mul_of_split (x N M : Nat) (hN : N = M + M) (h : (x + 1) ^ M ≤ 2 * x ^ M) :
+    (x + 1) ^ N ≤ 4 * x ^ N := by
+  subst hN
+  rw [Nat.pow_add, Nat.pow_add]
+  calc (x + 1) ^ M * (x + 1) ^ M ≤ (2 * x ^ M) * (2 * x ^ M) := Nat.mul_le_mul h h
+    _ = 4 * (x ^ M * x ^ M) := by rw [mul_mul_mul'' 2 (x ^ M) 2 (x ^ M)]
+
+theorem succ_pow_le_four_mul {x : Nat} (hx : 2 ^ 62 ≤ x) :
+    (x + 1) ^ (2 ^ 62) ≤ 4 * x ^ (2 ^ 62) := by
+  have step := four_mul_of_split x (2 ^ 61 + 2 ^ 61) (2 ^ 61) rfl
+    (succ_pow_le_two_mul hx (Nat.le_refl 61))
+  have e : (2:Nat) ^ 61 + 2 ^ 61 = 2 ^ 62 := by omega
+  rw [e] at step
+  exact step
+
+
+/-! ### The squaring loop -/
+
+def logStep (p : Nat × Nat) (j : Nat) : Nat × Nat :=
+  let y := p.2 * p.2 / one
+  if 2 * one ≤ y then (p.1 + 2 ^ (61 - j), y / 2) else (p.1, y)
+
+def logPrefix (x m : Nat) : Nat × Nat := (List.range m).foldl logStep (0, x)
+
+theorem log2Ceil_eq (s : Nat) :
+    log2Ceil s = (Nat.log2 s - 62) * one
+      + (logPrefix (s / 2 ^ (Nat.log2 s - 62)) 62).1 + logSlack := rfl
+
+theorem logPrefix_succ (x m : Nat) : logPrefix x (m + 1) = logStep (logPrefix x m) m := by
+  simp only [logPrefix, List.range_succ, List.foldl_append, List.foldl_cons, List.foldl_nil]
+
+theorem logPrefix_fst_zero (x : Nat) : (logPrefix x 0).1 = 0 := rfl
+theorem logPrefix_snd_zero (x : Nat) : (logPrefix x 0).2 = x := rfl
+
+theorem logPrefix_fst_bit (x m : Nat) (h : 2 * one ≤ (logPrefix x m).2 * (logPrefix x m).2 / one) :
+    (logPrefix x (m + 1)).1 = (logPrefix x m).1 + 2 ^ (61 - m) := by
+  rw [logPrefix_succ, logStep]
+  simp only [h, if_pos]
+
+theorem logPrefix_snd_bit (x m : Nat) (h : 2 * one ≤ (logPrefix x m).2 * (logPrefix x m).2 / one) :
+    (logPrefix x (m + 1)).2 = (logPrefix x m).2 * (logPrefix x m).2 / one / 2 := by
+  rw [logPrefix_succ, logStep]
+  simp only [h, if_pos]
+
+theorem logPrefix_fst_nobit (x m : Nat)
+    (h : ¬ (2 * one ≤ (logPrefix x m).2 * (logPrefix x m).2 / one)) :
+    (logPrefix x (m + 1)).1 = (logPrefix x m).1 := by
+  rw [logPrefix_succ, logStep]
+  simp only [h, if_false]
+
+theorem logPrefix_snd_nobit (x m : Nat)
+    (h : ¬ (2 * one ≤ (logPrefix x m).2 * (logPrefix x m).2 / one)) :
+    (logPrefix x (m + 1)).2 = (logPrefix x m).2 * (logPrefix x m).2 / one := by
+  rw [logPrefix_succ, logStep]
+  simp only [h, if_false]
+
+theorem logPrefix_range (x : Nat) (hx : 2 ^ 62 ≤ x) (hx2 : x < 2 ^ 63) :
+    ∀ m, 2 ^ 62 ≤ (logPrefix x m).2 ∧ (logPrefix x m).2 < 2 ^ 63 := by
+  intro m
+  induction m with
+  | zero => rw [logPrefix_snd_zero]; exact ⟨hx, hx2⟩
+  | succ m ih =>
+      obtain ⟨lo, hi⟩ := ih
+      have hone : (0:Nat) < one := by decide
+      have hy1 : 2 ^ 62 ≤ (logPrefix x m).2 * (logPrefix x m).2 / one := by
+        refine (Nat.le_div_iff_mul_le hone).mpr ?_
+        exact Nat.mul_le_mul lo lo
+      have hy2 : (logPrefix x m).2 * (logPrefix x m).2 / one < 2 ^ 64 := by
+        refine Nat.div_lt_of_lt_mul ?_
+        have h1 : (logPrefix x m).2 * (logPrefix x m).2
+            ≤ (2 ^ 63 - 1) * (2 ^ 63 - 1) :=
+          Nat.mul_le_mul (by omega) (by omega)
+        have h2 : ((2:Nat) ^ 63 - 1) * (2 ^ 63 - 1) < one * 2 ^ 64 := by decide
+        omega
+      by_cases hb : 2 * one ≤ (logPrefix x m).2 * (logPrefix x m).2 / one
+      · rw [logPrefix_snd_bit x m hb]
+        constructor
+        · refine (Nat.le_div_iff_mul_le (by omega)).mpr ?_
+          have : (2:Nat) ^ 62 * 2 = 2 * one := by decide
+          omega
+        · refine Nat.div_lt_of_lt_mul ?_
+          have : (2:Nat) * 2 ^ 63 = 2 ^ 64 := by decide
+          omega
+      · rw [logPrefix_snd_nobit x m hb]
+        have hone63 : 2 * one = 2 ^ 63 := by decide
+        exact ⟨hy1, by omega⟩
+
+theorem sq_pow_two (v q : Nat) : (v * v) ^ (2 ^ q) = v ^ (2 ^ (q + 1)) := by
+  rw [Nat.mul_pow, ← Nat.pow_add, Nat.pow_succ, Nat.mul_two]
+
+/-- One squaring step, upper direction. -/
+theorem log_step_up (v v' c q : Nat) (h : v' * c * one ≤ v * v) :
+    v' ^ (2 ^ q) * c ^ (2 ^ q) * 2 ^ (62 * 2 ^ q) ≤ v ^ (2 ^ (q + 1)) := by
+  have hone : one ^ (2 ^ q) = 2 ^ (62 * 2 ^ q) := by rw [one, ← Nat.pow_mul]
+  calc v' ^ (2 ^ q) * c ^ (2 ^ q) * 2 ^ (62 * 2 ^ q)
+      = (v' * c * one) ^ (2 ^ q) := by rw [Nat.mul_pow, Nat.mul_pow, hone]
+    _ ≤ (v * v) ^ (2 ^ q) := Nat.pow_le_pow_left h _
+    _ = v ^ (2 ^ (q + 1)) := sq_pow_two v q
+
+/-- One squaring step, upper direction, no bit emitted. -/
+theorem log_step_up' (v v' q : Nat) (h : v' * one ≤ v * v) :
+    v' ^ (2 ^ q) * 2 ^ (62 * 2 ^ q) ≤ v ^ (2 ^ (q + 1)) := by
+  have hone : one ^ (2 ^ q) = 2 ^ (62 * 2 ^ q) := by rw [one, ← Nat.pow_mul]
+  calc v' ^ (2 ^ q) * 2 ^ (62 * 2 ^ q) = (v' * one) ^ (2 ^ q) := by rw [Nat.mul_pow, hone]
+    _ ≤ (v * v) ^ (2 ^ q) := Nat.pow_le_pow_left h _
+    _ = v ^ (2 ^ (q + 1)) := sq_pow_two v q
+
+/-- One squaring step, lower direction. -/
+theorem log_step_down (v v' c q : Nat) (hv' : 2 ^ 62 ≤ v') (hq : q ≤ 61)
+    (h : v * v ≤ (v' + 1) * (one * c)) :
+    v ^ (2 ^ (q + 1)) ≤ v' ^ (2 ^ q) * 2 ^ (62 * 2 ^ q) * c ^ (2 ^ q) * 2 := by
+  have hone : one ^ (2 ^ q) = 2 ^ (62 * 2 ^ q) := by rw [one, ← Nat.pow_mul]
+  calc v ^ (2 ^ (q + 1)) = (v * v) ^ (2 ^ q) := (sq_pow_two v q).symm
+    _ ≤ ((v' + 1) * (one * c)) ^ (2 ^ q) := Nat.pow_le_pow_left h _
+    _ = (v' + 1) ^ (2 ^ q) * (2 ^ (62 * 2 ^ q) * c ^ (2 ^ q)) := by
+        rw [Nat.mul_pow, Nat.mul_pow, hone]
+    _ ≤ (2 * v' ^ (2 ^ q)) * (2 ^ (62 * 2 ^ q) * c ^ (2 ^ q)) :=
+        Nat.mul_le_mul_right _ (succ_pow_le_two_mul hv' hq)
+    _ = v' ^ (2 ^ q) * 2 ^ (62 * 2 ^ q) * c ^ (2 ^ q) * 2 := by
+        simp only [Nat.mul_comm, Nat.mul_left_comm, Nat.mul_assoc]
+
+
+theorem acB (V A B C : Nat) : V * (A * B) * C = V * A * C * B := by
+  simp [Nat.mul_comm, Nat.mul_left_comm]
+
+theorem acC (V A B : Nat) : V * A * B = V * B * A := by
+  rw [Nat.mul_assoc, Nat.mul_comm A B, ← Nat.mul_assoc]
+
+theorem splitAA (V A : Nat) : V * 2 ^ (A + A) = V * 2 ^ A * 2 ^ A := by
+  rw [Nat.pow_add, ← Nat.mul_assoc]
+
+theorem powTwoJoin (V A : Nat) : 2 ^ 2 * V * 2 ^ A = V * 2 ^ (A + 2) := by
+  rw [Nat.pow_add]
+  simp [Nat.mul_comm, Nat.mul_left_comm]
+
+theorem splitPowMul (V A B : Nat) : V * (2 ^ A) ^ B = V * 2 ^ (A * B) := by
+  rw [← Nat.pow_mul]
+
+theorem splitInner (V A B C : Nat) : V * 2 ^ (A + B) * C = V * 2 ^ A * C * 2 ^ B := by
+  rw [Nat.pow_add]
+  simp [Nat.mul_comm, Nat.mul_left_comm, Nat.mul_assoc]
+
+theorem joinThree (A E : Nat) : 2 ^ A * 2 * 2 ^ E = 2 ^ (A + 1 + E) := by
+  rw [Nat.pow_add, Nat.pow_add, Nat.pow_one]
+
+theorem joinTwo (E : Nat) : 2 * 2 ^ E = 2 ^ (1 + E) := by
+  rw [Nat.pow_add, Nat.pow_one]
+
+theorem mulPowSplit (V A B : Nat) : (V * 2 ^ A) ^ B = V ^ B * 2 ^ (A * B) := by
+  rw [Nat.mul_pow, ← Nat.pow_mul]
+
+/-- **Upper invariant.**  After `m` of the 62 squarings the emitted bits plus
+the residue never exceed the true `2^62 · log₂(x/2^62)`. -/
+theorem logPrefix_upper (x : Nat) :
+    ∀ m, m ≤ 62 →
+      (logPrefix x m).2 ^ (2 ^ (62 - m)) * 2 ^ ((logPrefix x m).1 + 62 * 2 ^ 62)
+        ≤ x ^ (2 ^ 62) * 2 ^ (62 * 2 ^ (62 - m)) := by
+  intro m
+  induction m with
+  | zero =>
+      intro _
+      rw [logPrefix_fst_zero, logPrefix_snd_zero, Nat.sub_zero, Nat.zero_add]
+      exact Nat.le_refl _
+  | succ m ih =>
+      intro hm
+      have hq : 62 - m = (61 - m) + 1 := by omega
+      have hq2 : 62 - (m + 1) = 61 - m := by omega
+      have hdbl : 62 * 2 ^ ((61 - m) + 1) = 62 * 2 ^ (61 - m) + 62 * 2 ^ (61 - m) := by
+        rw [Nat.pow_succ]; omega
+      have hsplit : (logPrefix x m).1 + 2 ^ (61 - m) + 62 * 2 ^ 62
+          = 2 ^ (61 - m) + ((logPrefix x m).1 + 62 * 2 ^ 62) := by omega
+      have prev := ih (by omega)
+      rw [hq, hdbl] at prev
+      rw [hq2]
+      have hy2 : (logPrefix x m).2 * (logPrefix x m).2 / one * one
+          ≤ (logPrefix x m).2 * (logPrefix x m).2 := Nat.div_mul_le_self _ _
+      by_cases hb : 2 * one ≤ (logPrefix x m).2 * (logPrefix x m).2 / one
+      · rw [logPrefix_fst_bit x m hb, logPrefix_snd_bit x m hb, hsplit]
+        have hstep : (logPrefix x m).2 * (logPrefix x m).2 / one / 2 * 2 * one
+            ≤ (logPrefix x m).2 * (logPrefix x m).2 := by
+          have h1 : (logPrefix x m).2 * (logPrefix x m).2 / one / 2 * 2
+              ≤ (logPrefix x m).2 * (logPrefix x m).2 / one := Nat.div_mul_le_self _ _
+          exact Nat.le_trans (Nat.mul_le_mul_right _ h1) hy2
+        have up := log_step_up ((logPrefix x m).2)
+          ((logPrefix x m).2 * (logPrefix x m).2 / one / 2) 2 (61 - m) hstep
+        have combined :
+            ((logPrefix x m).2 * (logPrefix x m).2 / one / 2) ^ (2 ^ (61 - m))
+                * 2 ^ (2 ^ (61 - m) + ((logPrefix x m).1 + 62 * 2 ^ 62))
+                * 2 ^ (62 * 2 ^ (61 - m))
+              ≤ x ^ (2 ^ 62) * 2 ^ (62 * 2 ^ (61 - m)) * 2 ^ (62 * 2 ^ (61 - m)) := by
+          calc ((logPrefix x m).2 * (logPrefix x m).2 / one / 2) ^ (2 ^ (61 - m))
+                  * 2 ^ (2 ^ (61 - m) + ((logPrefix x m).1 + 62 * 2 ^ 62))
+                  * 2 ^ (62 * 2 ^ (61 - m))
+              = ((logPrefix x m).2 * (logPrefix x m).2 / one / 2) ^ (2 ^ (61 - m))
+                  * 2 ^ (2 ^ (61 - m)) * 2 ^ (62 * 2 ^ (61 - m))
+                  * 2 ^ ((logPrefix x m).1 + 62 * 2 ^ 62) := splitInner _ _ _ _
+            _ ≤ (logPrefix x m).2 ^ (2 ^ ((61 - m) + 1))
+                  * 2 ^ ((logPrefix x m).1 + 62 * 2 ^ 62) := Nat.mul_le_mul_right _ up
+            _ ≤ x ^ (2 ^ 62) * 2 ^ (62 * 2 ^ (61 - m) + 62 * 2 ^ (61 - m)) := prev
+            _ = x ^ (2 ^ 62) * 2 ^ (62 * 2 ^ (61 - m)) * 2 ^ (62 * 2 ^ (61 - m)) :=
+                splitAA _ _
+        exact Nat.le_of_mul_le_mul_right combined (Nat.two_pow_pos _)
+      · rw [logPrefix_fst_nobit x m hb, logPrefix_snd_nobit x m hb]
+        have up := log_step_up' ((logPrefix x m).2)
+          ((logPrefix x m).2 * (logPrefix x m).2 / one) (61 - m) hy2
+        have combined :
+            ((logPrefix x m).2 * (logPrefix x m).2 / one) ^ (2 ^ (61 - m))
+                * 2 ^ ((logPrefix x m).1 + 62 * 2 ^ 62) * 2 ^ (62 * 2 ^ (61 - m))
+              ≤ x ^ (2 ^ 62) * 2 ^ (62 * 2 ^ (61 - m)) * 2 ^ (62 * 2 ^ (61 - m)) := by
+          calc ((logPrefix x m).2 * (logPrefix x m).2 / one) ^ (2 ^ (61 - m))
+                  * 2 ^ ((logPrefix x m).1 + 62 * 2 ^ 62) * 2 ^ (62 * 2 ^ (61 - m))
+              = ((logPrefix x m).2 * (logPrefix x m).2 / one) ^ (2 ^ (61 - m))
+                  * 2 ^ (62 * 2 ^ (61 - m)) * 2 ^ ((logPrefix x m).1 + 62 * 2 ^ 62) :=
+                acC _ _ _
+            _ ≤ (logPrefix x m).2 ^ (2 ^ ((61 - m) + 1))
+                  * 2 ^ ((logPrefix x m).1 + 62 * 2 ^ 62) := Nat.mul_le_mul_right _ up
+            _ ≤ x ^ (2 ^ 62) * 2 ^ (62 * 2 ^ (61 - m) + 62 * 2 ^ (61 - m)) := prev
+            _ = x ^ (2 ^ 62) * 2 ^ (62 * 2 ^ (61 - m)) * 2 ^ (62 * 2 ^ (61 - m)) :=
+                splitAA _ _
+        exact Nat.le_of_mul_le_mul_right combined (Nat.two_pow_pos _)
+
+
+theorem acD (V A B : Nat) : B * V * A = V * (A * B) := by
+  simp [Nat.mul_comm, Nat.mul_left_comm]
+
+theorem acF (V A : Nat) : 2 * V * A = V * A * 2 := by
+  rw [Nat.mul_comm 2 V, Nat.mul_assoc, Nat.mul_comm 2 A, ← Nat.mul_assoc]
+
+theorem acH (V A B C : Nat) : V * A * B * C = V * (B * C) * A := by
+  simp [Nat.mul_comm, Nat.mul_left_comm]
+
+theorem acG (V A B C D : Nat) : V * A * B * C * D = V * (B * C * D) * A := by
+  simp [Nat.mul_comm, Nat.mul_left_comm]
+
+theorem lt_div_succ_mul' (a b : Nat) (pos : 0 < b) : a < (a / b + 1) * b := by
+  have h := Nat.div_add_mod a b
+  have hm := Nat.mod_lt a pos
+  have e : (a / b + 1) * b = b * (a / b) + b := by
+    rw [Nat.add_mul, Nat.one_mul, Nat.mul_comm]
+  omega
+
+/-- One squaring step, lower direction, no bit emitted. -/
+theorem log_step_down' (v v' q : Nat) (hv' : 2 ^ 62 ≤ v') (hq : q ≤ 61)
+    (h : v * v ≤ (v' + 1) * one) :
+    v ^ (2 ^ (q + 1)) ≤ v' ^ (2 ^ q) * 2 ^ (62 * 2 ^ q) * 2 := by
+  have hone : one ^ (2 ^ q) = 2 ^ (62 * 2 ^ q) := by rw [one, ← Nat.pow_mul]
+  calc v ^ (2 ^ (q + 1)) = (v * v) ^ (2 ^ q) := (sq_pow_two v q).symm
+    _ ≤ ((v' + 1) * one) ^ (2 ^ q) := Nat.pow_le_pow_left h _
+    _ = (v' + 1) ^ (2 ^ q) * 2 ^ (62 * 2 ^ q) := by rw [Nat.mul_pow, hone]
+    _ ≤ (2 * v' ^ (2 ^ q)) * 2 ^ (62 * 2 ^ q) :=
+        Nat.mul_le_mul_right _ (succ_pow_le_two_mul hv' hq)
+    _ = v' ^ (2 ^ q) * 2 ^ (62 * 2 ^ q) * 2 := acF _ _
+
+/-- **Lower invariant.**  The `logSlack` budget of 128 pays for the floor at
+every squaring: after `m` steps the emitted bits are short by at most `2 + m`. -/
+theorem logPrefix_lower (x : Nat) (hx : 2 ^ 62 ≤ x) (hx2 : x < 2 ^ 63) :
+    ∀ m, m ≤ 62 →
+      (x + 1) ^ (2 ^ 62) * 2 ^ (62 * 2 ^ (62 - m))
+        ≤ (logPrefix x m).2 ^ (2 ^ (62 - m))
+            * 2 ^ ((logPrefix x m).1 + 62 * 2 ^ 62 + (2 + m)) := by
+  intro m
+  induction m with
+  | zero =>
+      intro _
+      have e : 0 + 62 * 2 ^ 62 + (2 + 0) = 62 * 2 ^ 62 + 2 := by omega
+      have four : (x + 1) ^ (2 ^ 62) ≤ 2 ^ 2 * x ^ (2 ^ 62) := succ_pow_le_four_mul hx
+      rw [logPrefix_fst_zero, logPrefix_snd_zero, Nat.sub_zero, e]
+      calc (x + 1) ^ (2 ^ 62) * 2 ^ (62 * 2 ^ 62)
+          ≤ (2 ^ 2 * x ^ (2 ^ 62)) * 2 ^ (62 * 2 ^ 62) := Nat.mul_le_mul_right _ four
+        _ = x ^ (2 ^ 62) * 2 ^ (62 * 2 ^ 62 + 2) := powTwoJoin _ _
+  | succ m ih =>
+      intro hm
+      have hq : 62 - m = (61 - m) + 1 := by omega
+      have hq2 : 62 - (m + 1) = 61 - m := by omega
+      have hq61 : 61 - m ≤ 61 := by omega
+      have hdbl : 62 * 2 ^ ((61 - m) + 1) = 62 * 2 ^ (61 - m) + 62 * 2 ^ (61 - m) := by
+        rw [Nat.pow_succ]; omega
+      have hexpb : 2 ^ (61 - m) + 1 + ((logPrefix x m).1 + 62 * 2 ^ 62 + (2 + m))
+          = (logPrefix x m).1 + 2 ^ (61 - m) + 62 * 2 ^ 62 + (2 + (m + 1)) := by omega
+      have hexpn : 1 + ((logPrefix x m).1 + 62 * 2 ^ 62 + (2 + m))
+          = (logPrefix x m).1 + 62 * 2 ^ 62 + (2 + (m + 1)) := by omega
+      have rng := logPrefix_range x hx hx2 m
+      have rng' := logPrefix_range x hx hx2 (m + 1)
+      have prev := ih (by omega)
+      rw [hq, hdbl] at prev
+      rw [hq2]
+      have hone : (0:Nat) < one := by decide
+      have h1 : (logPrefix x m).2 * (logPrefix x m).2
+          < ((logPrefix x m).2 * (logPrefix x m).2 / one + 1) * one :=
+        lt_div_succ_mul' _ _ hone
+      by_cases hb : 2 * one ≤ (logPrefix x m).2 * (logPrefix x m).2 / one
+      · have hv' := (logPrefix_range x hx hx2 (m + 1)).1
+        rw [logPrefix_snd_bit x m hb] at hv'
+        have h2 : (logPrefix x m).2 * (logPrefix x m).2 / one
+            < ((logPrefix x m).2 * (logPrefix x m).2 / one / 2 + 1) * 2 :=
+          lt_div_succ_mul' _ _ (by decide)
+        have h3 : ((logPrefix x m).2 * (logPrefix x m).2 / one + 1) * one
+            ≤ ((logPrefix x m).2 * (logPrefix x m).2 / one / 2 + 1) * 2 * one :=
+          Nat.mul_le_mul_right _ (by omega)
+        have hacc : ((logPrefix x m).2 * (logPrefix x m).2 / one / 2 + 1) * 2 * one
+            = ((logPrefix x m).2 * (logPrefix x m).2 / one / 2 + 1) * (one * 2) := by
+          rw [Nat.mul_assoc, Nat.mul_comm 2 one]
+        have hstep : (logPrefix x m).2 * (logPrefix x m).2
+            ≤ ((logPrefix x m).2 * (logPrefix x m).2 / one / 2 + 1) * (one * 2) := by
+          omega
+        have down := log_step_down ((logPrefix x m).2)
+          ((logPrefix x m).2 * (logPrefix x m).2 / one / 2) 2 (61 - m) hv' hq61 hstep
+        rw [logPrefix_fst_bit x m hb, logPrefix_snd_bit x m hb, ← hexpb]
+        refine Nat.le_of_mul_le_mul_right ?_ (Nat.two_pow_pos (62 * 2 ^ (61 - m)))
+        calc (x + 1) ^ (2 ^ 62) * 2 ^ (62 * 2 ^ (61 - m)) * 2 ^ (62 * 2 ^ (61 - m))
+            = (x + 1) ^ (2 ^ 62) * 2 ^ (62 * 2 ^ (61 - m) + 62 * 2 ^ (61 - m)) :=
+              (splitAA _ _).symm
+          _ ≤ (logPrefix x m).2 ^ (2 ^ ((61 - m) + 1))
+                * 2 ^ ((logPrefix x m).1 + 62 * 2 ^ 62 + (2 + m)) := prev
+          _ ≤ ((logPrefix x m).2 * (logPrefix x m).2 / one / 2) ^ (2 ^ (61 - m))
+                * 2 ^ (62 * 2 ^ (61 - m)) * 2 ^ (2 ^ (61 - m)) * 2
+                * 2 ^ ((logPrefix x m).1 + 62 * 2 ^ 62 + (2 + m)) :=
+              Nat.mul_le_mul_right _ down
+          _ = ((logPrefix x m).2 * (logPrefix x m).2 / one / 2) ^ (2 ^ (61 - m))
+                * (2 ^ (2 ^ (61 - m)) * 2
+                  * 2 ^ ((logPrefix x m).1 + 62 * 2 ^ 62 + (2 + m)))
+                * 2 ^ (62 * 2 ^ (61 - m)) := acG _ _ _ _ _
+          _ = ((logPrefix x m).2 * (logPrefix x m).2 / one / 2) ^ (2 ^ (61 - m))
+                * 2 ^ (2 ^ (61 - m) + 1
+                  + ((logPrefix x m).1 + 62 * 2 ^ 62 + (2 + m)))
+                * 2 ^ (62 * 2 ^ (61 - m)) := by rw [joinThree]
+      · have hv' := (logPrefix_range x hx hx2 (m + 1)).1
+        rw [logPrefix_snd_nobit x m hb] at hv'
+        have hstep : (logPrefix x m).2 * (logPrefix x m).2
+            ≤ ((logPrefix x m).2 * (logPrefix x m).2 / one + 1) * one := by omega
+        have down := log_step_down' ((logPrefix x m).2)
+          ((logPrefix x m).2 * (logPrefix x m).2 / one) (61 - m) hv' hq61 hstep
+        rw [logPrefix_fst_nobit x m hb, logPrefix_snd_nobit x m hb, ← hexpn]
+        refine Nat.le_of_mul_le_mul_right ?_ (Nat.two_pow_pos (62 * 2 ^ (61 - m)))
+        calc (x + 1) ^ (2 ^ 62) * 2 ^ (62 * 2 ^ (61 - m)) * 2 ^ (62 * 2 ^ (61 - m))
+            = (x + 1) ^ (2 ^ 62) * 2 ^ (62 * 2 ^ (61 - m) + 62 * 2 ^ (61 - m)) :=
+              (splitAA _ _).symm
+          _ ≤ (logPrefix x m).2 ^ (2 ^ ((61 - m) + 1))
+                * 2 ^ ((logPrefix x m).1 + 62 * 2 ^ 62 + (2 + m)) := prev
+          _ ≤ ((logPrefix x m).2 * (logPrefix x m).2 / one) ^ (2 ^ (61 - m))
+                * 2 ^ (62 * 2 ^ (61 - m)) * 2
+                * 2 ^ ((logPrefix x m).1 + 62 * 2 ^ 62 + (2 + m)) :=
+              Nat.mul_le_mul_right _ down
+          _ = ((logPrefix x m).2 * (logPrefix x m).2 / one) ^ (2 ^ (61 - m))
+                * (2 * 2 ^ ((logPrefix x m).1 + 62 * 2 ^ 62 + (2 + m)))
+                * 2 ^ (62 * 2 ^ (61 - m)) := acH _ _ _ _
+          _ = ((logPrefix x m).2 * (logPrefix x m).2 / one) ^ (2 ^ (61 - m))
+                * 2 ^ (1 + ((logPrefix x m).1 + 62 * 2 ^ 62 + (2 + m)))
+                * 2 ^ (62 * 2 ^ (61 - m)) := by rw [joinTwo]
+
+
+/-! ### §4 (c): the two log₂ bounds -/
+
+theorem log2Ceil_x_ge (s : Nat) (inRange : one ≤ s) : 2 ^ 62 ≤ s / 2 ^ (Nat.log2 s - 62) := by
+  have hs0 : s ≠ 0 := by have : (0:Nat) < one := by decide
+                         omega
+  have hL : 62 ≤ Nat.log2 s := (Nat.le_log2 hs0).mpr inRange
+  have hle : 2 ^ (Nat.log2 s) ≤ s := Nat.log2_self_le hs0
+  refine (Nat.le_div_iff_mul_le (Nat.two_pow_pos _)).mpr ?_
+  have e : (2:Nat) ^ 62 * 2 ^ (Nat.log2 s - 62) = 2 ^ (Nat.log2 s) := by
+    rw [← Nat.pow_add]; congr 1; omega
+  omega
+
+theorem log2Ceil_x_lt (s : Nat) (inRange : one ≤ s) : s / 2 ^ (Nat.log2 s - 62) < 2 ^ 63 := by
+  have hs0 : s ≠ 0 := by have : (0:Nat) < one := by decide
+                         omega
+  have hL : 62 ≤ Nat.log2 s := (Nat.le_log2 hs0).mpr inRange
+  have hlt : s < 2 ^ (Nat.log2 s + 1) := Nat.lt_log2_self
+  refine Nat.div_lt_of_lt_mul ?_
+  have e : (2:Nat) ^ (Nat.log2 s - 62) * 2 ^ 63 = 2 ^ (Nat.log2 s + 1) := by
+    rw [← Nat.pow_add]; congr 1; omega
+  omega
+
+/-- **(c) `L̂` is an upper bound.**  `s^(2^62) ≤ 2^(L̂(s) + 62·2^62)`, i.e.
+`L̂(s) ≥ 2^62 · log₂(s/2^62)`. -/
+theorem log2Ceil_above_the_real_value (s : Nat) (inRange : one ≤ s) :
+    s ^ (2 ^ 62) ≤ 2 ^ (log2Ceil s + 62 * 2 ^ 62) := by
+  have hx := log2Ceil_x_ge s inRange
+  have hx2 := log2Ceil_x_lt s inRange
+  have hpos : (0:Nat) < 2 ^ (Nat.log2 s - 62) := Nat.two_pow_pos _
+  have hlt : s < (s / 2 ^ (Nat.log2 s - 62) + 1) * 2 ^ (Nat.log2 s - 62) :=
+    lt_div_succ_mul' _ _ hpos
+  have rng := logPrefix_range (s / 2 ^ (Nat.log2 s - 62)) hx hx2 62
+  have low := logPrefix_lower (s / 2 ^ (Nat.log2 s - 62)) hx hx2 62 (Nat.le_refl _)
+  have hz : 62 - 62 = 0 := rfl
+  rw [hz, Nat.pow_zero, Nat.pow_one, Nat.mul_one] at low
+  -- low : (x+1)^(2^62) * 2^62 ≤ v * 2^(a + 62*2^62 + (2+62))
+  have step : (s / 2 ^ (Nat.log2 s - 62) + 1) ^ (2 ^ 62) * 2 ^ 62
+      ≤ 2 ^ ((logPrefix (s / 2 ^ (Nat.log2 s - 62)) 62).1 + 62 * 2 ^ 62 + (2 + 62)) * 2 ^ 63 := by
+    refine Nat.le_trans low ?_
+    rw [Nat.mul_comm]
+    exact Nat.mul_le_mul_left _ (by omega)
+  have shrink : (s / 2 ^ (Nat.log2 s - 62) + 1) ^ (2 ^ 62)
+      ≤ 2 ^ ((logPrefix (s / 2 ^ (Nat.log2 s - 62)) 62).1 + 62 * 2 ^ 62 + 65) := by
+    refine Nat.le_of_mul_le_mul_right ?_ (Nat.two_pow_pos 62)
+    refine Nat.le_trans step (Nat.le_of_eq ?_)
+    have e : (logPrefix (s / 2 ^ (Nat.log2 s - 62)) 62).1 + 62 * 2 ^ 62 + (2 + 62) + 63
+        = (logPrefix (s / 2 ^ (Nat.log2 s - 62)) 62).1 + 62 * 2 ^ 62 + 65 + 62 := by omega
+    rw [← Nat.pow_add, ← Nat.pow_add, e]
+  have raised : s ^ (2 ^ 62)
+      ≤ (s / 2 ^ (Nat.log2 s - 62) + 1) ^ (2 ^ 62) * 2 ^ ((Nat.log2 s - 62) * 2 ^ 62) := by
+    calc s ^ (2 ^ 62)
+        ≤ ((s / 2 ^ (Nat.log2 s - 62) + 1) * 2 ^ (Nat.log2 s - 62)) ^ (2 ^ 62) :=
+          Nat.pow_le_pow_left (by omega) _
+      _ = (s / 2 ^ (Nat.log2 s - 62) + 1) ^ (2 ^ 62)
+            * (2 ^ (Nat.log2 s - 62)) ^ (2 ^ 62) := Nat.mul_pow _ _ _
+      _ = _ := splitPowMul _ _ _
+  refine Nat.le_trans raised ?_
+  refine Nat.le_trans (Nat.mul_le_mul_right _ shrink) ?_
+  rw [← Nat.pow_add, log2Ceil_eq, logSlack, one]
+  refine Nat.pow_le_pow_right (by omega) ?_
+  omega
+
+/-- **(c) `L̂` overshoots by under `2^8`.**  Stated at the tolerance the design
+note carries (`2^256`); the proof gives `2^128`, and the measured worst case
+over 3,600 states is `128` units of `2^(−62)`. -/
+theorem log2Ceil_near_the_real_value (s : Nat) (inRange : one ≤ s) :
+    2 ^ (log2Ceil s + 62 * 2 ^ 62) ≤ s ^ (2 ^ 62) * 2 ^ 256 := by
+  have hx := log2Ceil_x_ge s inRange
+  have hx2 := log2Ceil_x_lt s inRange
+  have rng := logPrefix_range (s / 2 ^ (Nat.log2 s - 62)) hx hx2 62
+  have up := logPrefix_upper (s / 2 ^ (Nat.log2 s - 62)) 62 (Nat.le_refl _)
+  have hz : 62 - 62 = 0 := rfl
+  rw [hz, Nat.pow_zero, Nat.pow_one, Nat.mul_one] at up
+  -- up : v * 2^(a + 62*2^62) ≤ x^(2^62) * 2^62
+  have shrink : 2 ^ ((logPrefix (s / 2 ^ (Nat.log2 s - 62)) 62).1 + 62 * 2 ^ 62)
+      ≤ (s / 2 ^ (Nat.log2 s - 62)) ^ (2 ^ 62) := by
+    refine Nat.le_of_mul_le_mul_right ?_ (Nat.two_pow_pos 62)
+    refine Nat.le_trans ?_ up
+    rw [Nat.mul_comm]
+    exact Nat.mul_le_mul_right _ rng.1
+  have hxs : s / 2 ^ (Nat.log2 s - 62) * 2 ^ (Nat.log2 s - 62) ≤ s := Nat.div_mul_le_self _ _
+  have raised : (s / 2 ^ (Nat.log2 s - 62)) ^ (2 ^ 62) * 2 ^ ((Nat.log2 s - 62) * 2 ^ 62)
+      ≤ s ^ (2 ^ 62) := by
+    calc (s / 2 ^ (Nat.log2 s - 62)) ^ (2 ^ 62) * 2 ^ ((Nat.log2 s - 62) * 2 ^ 62)
+        = (s / 2 ^ (Nat.log2 s - 62) * 2 ^ (Nat.log2 s - 62)) ^ (2 ^ 62) :=
+          (mulPowSplit _ _ _).symm
+      _ ≤ s ^ (2 ^ 62) := Nat.pow_le_pow_left hxs _
+  have combined : 2 ^ ((logPrefix (s / 2 ^ (Nat.log2 s - 62)) 62).1 + 62 * 2 ^ 62
+        + (Nat.log2 s - 62) * 2 ^ 62) ≤ s ^ (2 ^ 62) := by
+    calc 2 ^ ((logPrefix (s / 2 ^ (Nat.log2 s - 62)) 62).1 + 62 * 2 ^ 62
+            + (Nat.log2 s - 62) * 2 ^ 62)
+        = 2 ^ ((logPrefix (s / 2 ^ (Nat.log2 s - 62)) 62).1 + 62 * 2 ^ 62)
+            * 2 ^ ((Nat.log2 s - 62) * 2 ^ 62) := Nat.pow_add 2 _ _
+      _ ≤ (s / 2 ^ (Nat.log2 s - 62)) ^ (2 ^ 62) * 2 ^ ((Nat.log2 s - 62) * 2 ^ 62) :=
+          Nat.mul_le_mul_right _ shrink
+      _ ≤ s ^ (2 ^ 62) := raised
+  calc 2 ^ (log2Ceil s + 62 * 2 ^ 62)
+      = 2 ^ ((logPrefix (s / 2 ^ (Nat.log2 s - 62)) 62).1 + 62 * 2 ^ 62
+          + (Nat.log2 s - 62) * 2 ^ 62) * 2 ^ 128 := by
+        rw [← Nat.pow_add, log2Ceil_eq, logSlack, one]
+        congr 1
+        omega
+    _ ≤ s ^ (2 ^ 62) * 2 ^ 128 := Nat.mul_le_mul_right _ combined
+    _ ≤ s ^ (2 ^ 62) * 2 ^ 256 := Nat.mul_le_mul_left _ (by omega)
 
 /-- `Ê(d)^b ≤ 2^(62b − d)`: the fixed-point exponential never exceeds the real
-one, as long as the real one is at least one unit. -/
+one, as long as the real one is at least one unit.  `b ≤ 2^62` is the Q62
+boundary and is load-bearing — see the counterexample in the section note. -/
 theorem exp2Neg_below_the_real_value (b d : Nat) (positive : 0 < b)
-    (inRange : d ≤ 62 * b) :
+    (admitted : b ≤ 2 ^ 62) (inRange : d ≤ 62 * b) :
     exp2Neg b d ^ b ≤ 2 ^ (62 * b - d) := by
   sorry
 
-/-- `Ê(d)` falls short of the real value by less than `2^(−50)` relative:
-`2^(112b − d) ≤ ((2^50 + 1) · Ê(d))^b` for `d ≤ 40b`. -/
+/-- `Ê(d)` falls short of the real value by less than `2^(−19)` relative:
+`2^(81b − d) ≤ ((2^19 + 1) · Ê(d))^b` for `d ≤ 40b`.  The `2^(−50)` the design
+note carried is the accuracy of the FRACTION, not of `Ê` after the shift. -/
 theorem exp2Neg_near_the_real_value (b d : Nat) (positive : 0 < b)
-    (inRange : d ≤ 40 * b) :
-    2 ^ (112 * b - d) ≤ ((2 ^ 50 + 1) * exp2Neg b d) ^ b := by
-  sorry
-
-/-- `L̂(s) ≥ 2^62 · log₂(s / 2^62)`: `s^(2^62) ≤ 2^(L̂(s) + 62 · 2^62)`. -/
-theorem log2Ceil_above_the_real_value (s : Nat) (inRange : one ≤ s) :
-    s ^ (2 ^ 62) ≤ 2 ^ (log2Ceil s + 62 * 2 ^ 62) := by
-  sorry
-
-/-- `L̂(s)` overshoots by fewer than `256` units of `2^(−62)`. -/
-theorem log2Ceil_near_the_real_value (s : Nat) (inRange : one ≤ s) :
-    2 ^ (log2Ceil s + 62 * 2 ^ 62) ≤ s ^ (2 ^ 62) * 2 ^ 256 := by
+    (admitted : b ≤ 2 ^ 62) (inRange : d ≤ 40 * b) :
+    2 ^ (81 * b - d) ≤ ((2 ^ 19 + 1) * exp2Neg b d) ^ b := by
   sorry
 
 /-! ## 5. The rule record, and the corpus -/

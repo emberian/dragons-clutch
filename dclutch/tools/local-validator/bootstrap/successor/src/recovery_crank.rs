@@ -389,45 +389,9 @@ fn plan(rpc: &mut Rpc, arguments: &ArgumentsV1, expected: ExpectedClusterV1) -> 
     let window_spec = WindowSpecV1::decode(&window_account.data)
         .map_err(|error| Error::new(format!("WindowSpecV1 record: {error:?}")))?;
 
-    // THE SAME TWO ARITHMETIC FACTS THE TRANSITION COMPUTES, and neither is a
-    // choice: `entering` is zero on the primary leg and one past the active
-    // attempt on a recovery leg, and `due` is the primary window's own closing
-    // plus its liveness grace, or the active attempt's committed deadline.
-    let (entering, due) = match source.phase() {
-        SourceResolutionPhaseV1::Primary => (
-            0_u8,
-            window_spec
-                .end_unix_seconds()
-                .checked_add(i64::from(window_spec.max_age_seconds()))
-                .ok_or_else(|| Error::new("primary window end + max_age overflows"))?,
-        ),
-        SourceResolutionPhaseV1::Recovery => (
-            source
-                .active_attempt()
-                .checked_add(1)
-                .ok_or_else(|| Error::new("recovery attempt index overflows"))?,
-            policy
-                .attempt(source.active_attempt())
-                .map_err(|error| {
-                    Error::new(format!(
-                        "the market stands on attempt {} and the policy does not fund it: {error:?}",
-                        source.active_attempt()
-                    ))
-                })?
-                .deadline_unix_seconds(),
-        ),
-        other => {
-            return Err(Error::new(format!(
-                "market {market} stands at {other:?}: a ladder is cranked only from Primary or \
-                 Recovery, and every other phase is a market that has already reached a terminal"
-            )));
-        }
-    };
-    let arm = if policy.attempt(entering).is_ok() {
-        CrankArmV1::Advance
-    } else {
-        CrankArmV1::Exhaust
-    };
+    let CrankDecisionV1 { entering, due, arm } =
+        crank_decision_v1(source.phase(), source.active_attempt(), window_spec, policy)
+            .map_err(|error| Error::new(format!("market {market}: {error}")))?;
 
     // THE WAIT, or the refusal. A crank is admissible strictly after the leg's
     // deadline, so the target is one second past it.
@@ -561,6 +525,77 @@ fn plan(rpc: &mut Rpc, arguments: &ArgumentsV1, expected: ExpectedClusterV1) -> 
         due_unix_seconds: due,
         observed_unix_seconds: observed,
         seat_shortfall_lamports,
+    })
+}
+
+/// The whole of what this driver decides, and it decides none of it freely.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CrankDecisionV1 {
+    /// The attempt index this crank enters.
+    entering: u8,
+    /// The last second at which the current leg is still answerable honestly.
+    due: i64,
+    /// Whether entering that index advances the ladder or ends it.
+    arm: CrankArmV1,
+}
+
+/// Reproduce `SourceResolutionStateV2::crank_recovery_ladder`'s two arithmetic
+/// facts and its arm, off chain.
+///
+/// NEITHER FACT IS A CHOICE. `entering` is zero on the primary leg and one past
+/// the active attempt on a recovery leg. `due` is the primary window's own
+/// closing plus its liveness grace, or the active attempt's committed deadline
+/// -- "on `Primary` it is the market's own; on `Recovery` it is the active
+/// attempt's, which is why an attempt index nothing funds has no window and can
+/// never close." And the arm is the exact complement the transition takes:
+/// funded and enterable are one word, so `policy.attempt(entering)` succeeding
+/// IS the advance arm and its failing IS the exhaustion arm.
+///
+/// Pulled out of `plan` so the one thing this driver computes can be checked
+/// without a chain, a validator or a key.
+fn crank_decision_v1(
+    phase: SourceResolutionPhaseV1,
+    active_attempt: u8,
+    window: WindowSpecV1,
+    policy: RecoveryPolicyV2,
+) -> Result<CrankDecisionV1> {
+    let (entering, due) = match phase {
+        SourceResolutionPhaseV1::Primary => (
+            0_u8,
+            window
+                .end_unix_seconds()
+                .checked_add(i64::from(window.max_age_seconds()))
+                .ok_or_else(|| Error::new("primary window end + max_age overflows"))?,
+        ),
+        SourceResolutionPhaseV1::Recovery => (
+            active_attempt
+                .checked_add(1)
+                .ok_or_else(|| Error::new("recovery attempt index overflows"))?,
+            policy
+                .attempt(active_attempt)
+                .map_err(|error| {
+                    Error::new(format!(
+                        "the market stands on attempt {active_attempt} and the policy does not \
+                         fund it: {error:?}"
+                    ))
+                })?
+                .deadline_unix_seconds(),
+        ),
+        other => {
+            return Err(Error::new(format!(
+                "the market stands at {other:?}: a ladder is cranked only from Primary or \
+                 Recovery, and every other phase is a market that has already reached a terminal"
+            )));
+        }
+    };
+    Ok(CrankDecisionV1 {
+        entering,
+        due,
+        arm: if policy.attempt(entering).is_ok() {
+            CrankArmV1::Advance
+        } else {
+            CrankArmV1::Exhaust
+        },
     })
 }
 
@@ -913,6 +948,91 @@ mod tests {
         assert_eq!(
             CrankArmV1::Exhaust.certificate_kind(),
             ResolutionCertificateKindV2::Exhausted
+        );
+    }
+
+    /// Both arms of a two-rung ladder, and the third phase that is neither.
+    ///
+    /// The whole decision this driver makes, checked with no chain: which
+    /// index a crank enters, which second it becomes admissible, and whether
+    /// entering that index advances the ladder or ends it.
+    #[test]
+    fn the_decision_walks_a_two_rung_ladder_and_then_ends_it() {
+        use dclutch_source_contract::{ContentId, RecoveryAttemptV2, WindowKind};
+
+        let id = |tag: u8| ContentId::new([tag; 32]).expect("nonzero");
+        // The window's own source link is inert to this decision -- what the
+        // primary leg contributes is its closing second and its liveness grace,
+        // and nothing else.
+        let window = WindowSpecV1::new(
+            id(0x07),
+            WindowKind::Terminal,
+            1_000,
+            2_000,
+            300,
+            1,
+            id(0x06),
+        )
+        .expect("terminal window");
+        let policy = RecoveryPolicyV2::new(
+            id(0x05),
+            [
+                Some(RecoveryAttemptV2::new(id(0x11), id(0x03), 5_000, id(0x21)).expect("rung 0")),
+                Some(RecoveryAttemptV2::new(id(0x12), id(0x03), 9_000, id(0x22)).expect("rung 1")),
+                None,
+                None,
+            ],
+            2,
+        )
+        .expect("two-rung ladder");
+
+        // PRIMARY. The crank enters rung zero and is admissible one second
+        // after the window's own closing plus its liveness grace -- 2,000 + 300
+        // -- which is a fact about the MARKET's window and not about any rung.
+        assert_eq!(
+            crank_decision_v1(SourceResolutionPhaseV1::Primary, 0, window, policy)
+                .expect("primary decision"),
+            CrankDecisionV1 {
+                entering: 0,
+                due: 2_300,
+                arm: CrankArmV1::Advance,
+            }
+        );
+
+        // RUNG ZERO. The due second is now the ATTEMPT's own committed deadline
+        // rather than the window's, which is the whole difference between the
+        // two legs' clock rules, and the ladder still has a rung to enter.
+        assert_eq!(
+            crank_decision_v1(SourceResolutionPhaseV1::Recovery, 0, window, policy)
+                .expect("first rung decision"),
+            CrankDecisionV1 {
+                entering: 1,
+                due: 5_000,
+                arm: CrankArmV1::Advance,
+            }
+        );
+
+        // RUNG ONE, THE LAST. Entering index two is a leg nobody paid for, so
+        // the exhaustion arm is the advance arm's exact complement and the
+        // crank writes the other certificate kind.
+        assert_eq!(
+            crank_decision_v1(SourceResolutionPhaseV1::Recovery, 1, window, policy)
+                .expect("last rung decision"),
+            CrankDecisionV1 {
+                entering: 2,
+                due: 9_000,
+                arm: CrankArmV1::Exhaust,
+            }
+        );
+
+        // A market that has already reached a terminal is not cranked at all,
+        // and the refusal names the phase rather than reporting a frame it
+        // could not build.
+        let refusal = crank_decision_v1(SourceResolutionPhaseV1::Exhausted, 0, window, policy)
+            .expect_err("an exhausted market is not crankable");
+        assert!(
+            format!("{refusal}").contains("already reached a terminal"),
+            "got {refusal}"
         );
     }
 
