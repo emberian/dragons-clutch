@@ -4300,3 +4300,5 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   HEAD (a magic the census named but could not fold) — fixed; the web suite is red on 24 unrendered INSTRUCTION magics
   (COHORT-15C's census rows) → routed to WEB-DEAD.
 - Cuts: `532a14cc7`, `c09512d2b`.
+- Started 02:00 EDT: ACTS-2 **`afd405d24ebcbe84e`** — acts declare their family from the builder compile; the selected-gate
+  arm answers only when the family selects the classifier's branch; the first derived other-machine verdict, live.
