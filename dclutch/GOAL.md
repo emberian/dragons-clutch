@@ -4916,3 +4916,8 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   and in force; "overall reasonable" is taken as confirmation → DECISIONS-4 **`(spawned)`** records it on the fourteen
   provisional records with the quote (status CONFIRMED, reversible on request). Still genuinely ember's: the flagship
   conditional market's feature gate, slot and metric (0029's tenth item, OPEN).
+- DECISIONS-4 closed (`1fc53f93c`, `d4d2aa1fd`, `50de895fe`): eleven records CONFIRMED with ember's sentence blockquoted; the
+  index derives 11 CONFIRMED / 5 PROVISIONAL / 0 OPEN with a legend for the third status; 0029's tenth item stays the one
+  open question. The orchestrator confirmed 0019–0023 the same way (the docket listed them as M1–M5) and renamed 0028's
+  heading. Two lanes stalled on the stream watchdog mid-write and were resumed, not relaunched.
+- Cuts: `6fc7b2c03`, `dc5fa1c61`.

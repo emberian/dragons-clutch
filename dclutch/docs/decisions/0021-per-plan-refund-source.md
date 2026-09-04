@@ -1,6 +1,6 @@
 # Decision 0021: whose rent a state carries is a per-plan declaration, not one global rule about lamport flow
 
-Status: **PROVISIONAL — ruled by the orchestrator on 2026-09-03, REFUTED the
+Status: **CONFIRMED (ember, 2026-09-04 15:50 EDT, in conversation; reversible on request).** Previously: PROVISIONAL — ruled by the orchestrator on 2026-09-03, REFUTED the**
 same day by the lane it was given to, re-made as the declaration below, and
 reversible by ember at the cost §8 states**. Both the first ruling and its
 refutation carry the standing formula *"RULING (under the standing goal; ember
@@ -179,3 +179,5 @@ confused:
 `programs/dclutch-trading-sbf/src/lib.rs:152` (`Commit 0x4005`);
 `docs/decisions/0020-finalization-observes-the-deployment.md` (which made the
 defect reachable).
+
+**Confirmed, 2026-09-04 15:50 EDT.** Ember, having read the docket that listed this ruling under "M1–M6: a word if any should be reversed; silence is not a ruling": "you aren't waiting on me for rulings are you? i was reading the docket and contemplating it, but overall find your takes reasonable." Taken as confirmation; reversible on request.

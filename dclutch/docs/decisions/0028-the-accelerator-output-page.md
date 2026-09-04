@@ -1,4 +1,4 @@
-# Decision 0028: the accelerator output page — open, with a read
+# Decision 0028: the accelerator output page — a pooled page, cohort-17
 
 Status: **CONFIRMED (ember, 2026-09-04 15:50 EDT, in conversation; reversible
 on request) — option (a), the client-provisioned pooled output page, ruled

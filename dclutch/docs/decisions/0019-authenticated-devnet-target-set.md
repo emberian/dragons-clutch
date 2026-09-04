@@ -1,6 +1,6 @@
 # Decision 0019: the devnet upgrade target set is an authenticated input, not a constant in our source
 
-Status: **PROVISIONAL — ruled by the orchestrator on 2026-09-02 under ember's
+Status: **CONFIRMED (ember, 2026-09-04 15:50 EDT, in conversation; reversible on request).** Previously: PROVISIONAL — ruled by the orchestrator on 2026-09-02 under ember's**
 standing goal, landed the same morning, and reversible by ember at the cost §7
 states**. The ruling is `GOAL.md:2996-2999`, carrying the standing formula
 *"RULING (under the standing goal; ember may reverse)"*. It amends decision
@@ -113,3 +113,5 @@ have to be relaxed in the same act, because the two cannot both hold.
 `:257`, `:9941-9948`; commits `8e1f98507`, `615c243f8`;
 `docs/evidence/COHORT13_SEALED_FOUNDED_2026_09_02.md`,
 `docs/evidence/COHORT14_SEALED_FOUNDED_FILLED_2026_09_03.md`.
+
+**Confirmed, 2026-09-04 15:50 EDT.** Ember, having read the docket that listed this ruling under "M1–M6: a word if any should be reversed; silence is not a ruling": "you aren't waiting on me for rulings are you? i was reading the docket and contemplating it, but overall find your takes reasonable." Taken as confirmation; reversible on request.

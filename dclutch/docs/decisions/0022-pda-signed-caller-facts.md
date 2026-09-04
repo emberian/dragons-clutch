@@ -1,6 +1,6 @@
 # Decision 0022: a callee invoked by a PDA-signed CPI from Trading takes the facts the signer's seeds pin as established
 
-Status: **PROVISIONAL — ruled by the orchestrator on 2026-09-02 under ember's
+Status: **CONFIRMED (ember, 2026-09-04 15:50 EDT, in conversation; reversible on request).** Previously: PROVISIONAL — ruled by the orchestrator on 2026-09-02 under ember's**
 standing goal, spent the same day in Claims, Custody and the accelerator
 prelude, and reversible by ember at the cost §7 states**. The ruling is
 `GOAL.md:3678-3681`, carrying the standing formula *"RULING (under the standing
@@ -148,3 +148,5 @@ on its own.
 `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:132`, `:134`, `:414`;
 `crates/dclutch-cu-checkpoint`;
 `docs/decisions/0012-devnet-iteration-substrate.md`.
+
+**Confirmed, 2026-09-04 15:50 EDT.** Ember, having read the docket that listed this ruling under "M1–M6: a word if any should be reversed; silence is not a ruling": "you aren't waiting on me for rulings are you? i was reading the docket and contemplating it, but overall find your takes reasonable." Taken as confirmation; reversible on request.

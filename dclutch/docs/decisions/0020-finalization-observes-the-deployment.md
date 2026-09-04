@@ -1,6 +1,6 @@
 # Decision 0020: an ArtifactRelease is bound to its deployment once, at finalization, and hot routes authenticate by slot pin
 
-Status: **PROVISIONAL — ruled by the orchestrator on 2026-09-02 under ember's
+Status: **CONFIRMED (ember, 2026-09-04 15:50 EDT, in conversation; reversible on request).** Previously: PROVISIONAL — ruled by the orchestrator on 2026-09-02 under ember's**
 standing goal, landed the same morning in two halves, and reversible by ember at
 the cost §7 states**. The ruling is `GOAL.md:3103-3105`, carrying the standing
 formula *"RULING (under the standing goal; ember may reverse)"*. It is decision
@@ -139,3 +139,5 @@ corpus — and four refusal discriminants withdrawn from an append-only band.
 `formal/dclutch-semantics/DClutchSemantics/ProtocolInfrastructure.lean:447-475`;
 `tools/local-validator/bootstrap/successor/src/runtime.rs:1437`, `:2590`;
 `docs/decisions/0012-devnet-iteration-substrate.md`.
+
+**Confirmed, 2026-09-04 15:50 EDT.** Ember, having read the docket that listed this ruling under "M1–M6: a word if any should be reversed; silence is not a ruling": "you aren't waiting on me for rulings are you? i was reading the docket and contemplating it, but overall find your takes reasonable." Taken as confirmation; reversible on request.

@@ -45,8 +45,8 @@ Sources, in the order the wire is assembled:
 | `PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1` | 12 |
 | `GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1` | 26 |
 | `GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1` | 15 |
-| `CLAIMS_FOUNDING_ACCOUNT_COUNT_V5` | 31 |
-| `GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3` | 125 |
+| `CLAIMS_FOUNDING_ACCOUNT_COUNT_V6` | 33 |
+| `GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3` | 129 |
 | `CORE_FOUND_MARKET_INDEX_V1` | 1 |
 | `CORE_FOUND_CORE_PROGRAM_INDEX_V1` | 13 |
 | `CORE_FOUND_TRADING_PROGRAM_INDEX_V1` | 24 |
@@ -90,7 +90,7 @@ export const GENERIC_FOUNDING_CLAIMS_RAW_INDEX_V1 = 3 as const;
 /** Stage account widths. The frame is exactly the concatenation of these. */
 ```
 ```ts
-export const GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1 = 21 as const;
+export const GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1 = 23 as const;
 
 /**
  * Frame width at `funding_count = 0`, restated by the reference client.
@@ -106,7 +106,7 @@ export const PROJECTED_FOUND_ACCOUNT_COUNT_V2 = 24 as const;
 /** Exact distinct writable keys the outer requires, asserted by the client. */
 ```
 ```ts
-export const GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3 = 12 as const;
+export const GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3 = 14 as const;
 
 /** Devnet transaction account-lock limit without the raise feature. */
 ```
