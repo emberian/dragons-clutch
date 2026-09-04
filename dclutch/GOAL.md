@@ -4409,3 +4409,5 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   row exists** though market 1 began retiring; 15 tests red-proven, three of the proofs' own defects fixed. Owed: CI wiring
   (after COHORT-15D releases run.sh), the flags, the retire row, the General market address in the manifest.
 - Cuts: `753997831`, `81ffef323`.
+- Started 03:50 EDT: WORKBENCH-ROOT **`aa11e02bc97de498f`** — the workbench derives the Direct root's address from the Market
+  and reads it, so direct.inline's verdict derives on the card; the funding ledger the same way if derivable.
