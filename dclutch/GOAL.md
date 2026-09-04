@@ -4877,3 +4877,11 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   declined; **the orchestrator picks A for cohort-17**); a Claims-owned split/merge that moves collateral; the real-ELF
   refunding walk after (1).
 - Cuts: `2ae1f29f8`.
+- DEALER-FIX closed (`7aede3847`, `6bd2d171f`): the mover was PROGRAMS-16C's a062dc653 removing a `map_err` that had been the
+  wrapper's one word for every projector refusal; the propagation is the right surface — the two assertions now match the
+  closure's own names (strictly stronger; red-proven one arm at a time since the second is reachable only past the first);
+  **the campaign 31/31 on three draws at a named sha on hbox, worst headroom 110,675 CU, ELFs reproduced byte-identically,
+  zero diagnostics, no rows owed.** Noted: a stale `green.log` reading "31 failed" sat beside a chain that had failed at step
+  one — the silent-success shape, caught by checking the build log existed; the laptop could not fit the campaign (target
+  78G + 19G).
+- Cuts: `6cba95019`, `227040db0`, `64cc6dc53`.
