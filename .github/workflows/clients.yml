@@ -85,7 +85,7 @@ jobs:
   # one fixture that can go stale in both directions at once.
   #
   # About a minute of tests behind a few minutes of install. It installs Rust
-  # even though today's published `tier_web` never invokes cargo, and that is
+  # even though today's published `tier_web` invokes cargo for one encoder vector, and that is
   # deliberate: the live tree's version runs `cargo test -p dclutch-trading-sbf
   # --test dealer_scenario_profile_vector`, and that step reports a MISSING
   # CARGO as a failed gate rather than as an absent prerequisite. Without a
@@ -133,6 +133,15 @@ jobs:
           key: clients-web-${{ hashFiles('dclutch/Cargo.lock', 'dclutch/rust-toolchain.toml') }}
           restore-keys: clients-web-
 
+      # tier_web already invokes cargo (the dealer_scenario_profile_vector
+      # encoder check), and a missing toolchain must fail as a toolchain
+      # problem, not be scored as "the ENCODER moved and the fixture did not".
+      - name: Rust toolchain, at the tree's own pin
+        if: steps.probe.outputs.present == '1'
+        working-directory: dclutch
+        run: |
+          rustup show active-toolchain || rustup toolchain install "$(grep -E '^channel' rust-toolchain.toml | sed -E 's/.*"(.*)"/\1/')" --profile minimal
+          cargo --version
       - name: Install both client trees
         if: steps.probe.outputs.present == '1'
         run: |
