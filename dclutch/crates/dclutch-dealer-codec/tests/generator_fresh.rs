@@ -165,3 +165,69 @@ fn checked_in_scenario_checkpoint_is_exact_lean_generator_output() {
         "regenerate the Dealer scenario checkpoint ABI module"
     );
 }
+
+/// The Dealer scenario reservation state's layout and tag ABI.
+///
+/// The last of the four machines the route census gates on that had no Lean
+/// owner at all. Three discriminants and twenty-five coordinates authored by
+/// `scenario_custody_reservation_v1.rs` alone, in a file where four records
+/// share one header shape through four constants none of them owns.
+#[test]
+fn checked_in_scenario_reservation_state_is_exact_lean_generator_output() {
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let formal = manifest.join("../../formal/dclutch-semantics");
+    let build = Command::new("lake")
+        .args([
+            "build",
+            "DClutchSemantics.DealerScenarioReservationStateV1Abi",
+        ])
+        .current_dir(&formal)
+        .output()
+        .expect("build Dealer scenario reservation state ABI");
+    assert!(
+        build.status.success(),
+        "Dealer scenario reservation state ABI build failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let output = Command::new("lake")
+        .args([
+            "env",
+            "lean",
+            "--run",
+            "EmitDealerScenarioReservationStateV1Rust.lean",
+        ])
+        .current_dir(&formal)
+        .output()
+        .expect("run Dealer scenario reservation state generator");
+    assert!(
+        output.status.success(),
+        "Dealer scenario reservation state generator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let emitted = String::from_utf8(output.stdout).expect("generator emitted UTF-8");
+    // Pinned before the compare: a status tag that silently moved would let a
+    // client call an escrowed reservation delivered, and a moved reserved span
+    // would make every reservation opened before it non-canonical.
+    for pin in [
+        "pub const DEALER_SCENARIO_RESERVATION_STATE_BYTES_V1: usize = 512;",
+        "pub const DEALER_SCENARIO_RESERVATION_STATE_STATUS_OFFSET_V1: usize = 10;",
+        "pub const DEALER_SCENARIO_RESERVATION_STATUS_ACTIVE_V1: u8 = 1;",
+        "pub const DEALER_SCENARIO_RESERVATION_STATUS_ROLLED_BACK_V1: u8 = 2;",
+        "pub const DEALER_SCENARIO_RESERVATION_STATUS_ACTIVATED_V1: u8 = 3;",
+        "pub const DEALER_SCENARIO_RESERVATION_STATE_HEAD_RESERVED_OFFSET_V1: usize = 13;",
+        "pub const DEALER_SCENARIO_RESERVATION_STATE_RESERVED_OFFSET_V1: usize = 496;",
+        "pub const DEALER_SCENARIO_RESERVATION_STATE_AMOUNT_OFFSET_V1: usize = 464;",
+    ] {
+        assert!(
+            emitted.lines().any(|line| line == pin),
+            "the emitted reservation state ABI no longer states `{pin}`"
+        );
+    }
+    let checked_in =
+        std::fs::read_to_string(manifest.join("src/generated_scenario_reservation_state_v1.rs"))
+            .expect("read checked-in generated Dealer scenario reservation state module");
+    assert_eq!(
+        emitted, checked_in,
+        "regenerate the Dealer scenario reservation state ABI module"
+    );
+}

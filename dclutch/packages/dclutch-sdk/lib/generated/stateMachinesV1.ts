@@ -5,7 +5,7 @@
 // direct-root: crates/dclutch-direct-codec/src/{successor,generated_successor}.rs
 // dealer-root: crates/dclutch-dealer-codec/src/{lib,generated_dealer_liquidity,generated_dealer_trading_profile}.rs
 // dealer-checkpoint: crates/dclutch-dealer-codec/src/{scenario_checkpoint_v1,generated_scenario_checkpoint_v1}.rs
-// dealer-reservation: crates/dclutch-dealer-codec/src/scenario_custody_reservation_v1.rs
+// dealer-reservation: crates/dclutch-dealer-codec/src/{scenario_custody_reservation_v1,generated_scenario_reservation_state_v1}.rs
 // projected-custody: crates/dclutch-custody-contract/src/{projected,generated_projected_state_v2}.rs
 // series-ticket: crates/dclutch-series-v3-kernel/src/{replay,generated,generated_ticket_state_v3}.rs
 // funding-ledger: crates/dclutch-capability-contract/src/{funding,generated_abi}.rs
@@ -145,7 +145,7 @@ export const STATE_MACHINE_RECORDS_V1: ReadonlyArray<StateMachineRecordV1> = [
     pdaDomain: null,
     counters: [],
     states: [{ state: 'Active', tag: 1 }, { state: 'RolledBack', tag: 2 }, { state: 'Activated', tag: 3 }],
-    authority: 'crates/dclutch-dealer-codec/src/scenario_custody_reservation_v1.rs',
+    authority: 'crates/dclutch-dealer-codec/src/{scenario_custody_reservation_v1,generated_scenario_reservation_state_v1}.rs',
   },
   {
     machine: 'projected-custody',

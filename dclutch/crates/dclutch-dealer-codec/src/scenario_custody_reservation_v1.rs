@@ -102,7 +102,11 @@ pub const DEALER_SCENARIO_CUSTODY_EFFECT_MANIFEST_BYTES_V1: usize = 384;
 /// Exact Custody-owned reservation-batch width.
 pub const DEALER_SCENARIO_RESERVATION_BATCH_BYTES_V1: usize = 640;
 /// Exact Custody-owned per-effect reservation-state width.
-pub const DEALER_SCENARIO_RESERVATION_STATE_BYTES_V1: usize = 512;
+///
+/// Re-exported from the Lean emission rather than restated: this record's
+/// magic, width, version, three wire tags and every coordinate now have one
+/// author, `DClutchSemantics.DealerScenarioReservationStateV1Abi`.
+pub use crate::generated_scenario_reservation_state_v1::DEALER_SCENARIO_RESERVATION_STATE_BYTES_V1;
 /// Exact final batch-activation receipt width.
 pub const DEALER_SCENARIO_ACTIVATION_RECEIPT_BYTES_V1: usize = 336;
 
@@ -113,11 +117,14 @@ pub const DEALER_SCENARIO_CUSTODY_EFFECT_MANIFEST_MAGIC_V1: [u8; 8] = *b"DCLTDCM
 /// Reservation-batch magic.
 pub const DEALER_SCENARIO_RESERVATION_BATCH_MAGIC_V1: [u8; 8] = *b"DCLTDBT1";
 /// Reservation-state magic.
-pub const DEALER_SCENARIO_RESERVATION_STATE_MAGIC_V1: [u8; 8] = *b"DCLTDST1";
+pub use crate::generated_scenario_reservation_state_v1::DEALER_SCENARIO_RESERVATION_STATE_MAGIC_V1;
 /// Batch-activation receipt magic.
 pub const DEALER_SCENARIO_ACTIVATION_RECEIPT_MAGIC_V1: [u8; 8] = *b"DCLTDAC1";
 /// Shared schema version.
-pub const DEALER_SCENARIO_CUSTODY_STATE_VERSION_V1: u16 = 1;
+///
+/// One value for all four records in this file, emitted with the one that has
+/// a Lean owner.
+pub use crate::generated_scenario_reservation_state_v1::DEALER_SCENARIO_CUSTODY_STATE_VERSION_V1;
 
 /// Solana's maximum length for a single program-derived-address seed.
 ///
@@ -137,8 +144,7 @@ pub const DEALER_SCENARIO_RESERVATION_ESCROW_PDA_DOMAIN_V1: &[u8] = b"dclutch:de
 /// Domain for one request-specific Trading caller authority.
 pub const DEALER_SCENARIO_RESERVATION_CALL_DOMAIN_V1: &[u8] = b"dclutch:dealer-call:v1";
 /// Custody-owned durable activation-receipt PDA domain.
-pub const DEALER_SCENARIO_ACTIVATION_RECEIPT_PDA_DOMAIN_V1: &[u8] =
-    b"dclutch:dealer-activation:v1";
+pub const DEALER_SCENARIO_ACTIVATION_RECEIPT_PDA_DOMAIN_V1: &[u8] = b"dclutch:dealer-activation:v1";
 
 // These four domains were each 35 or 36 bytes, so every address in the Custody
 // reservation, escrow and activation families was underivable by construction:
@@ -211,26 +217,68 @@ const BATCH_STATES_OFFSET: usize = 352;
 const BATCH_RECEIPTS_OFFSET: usize = 480;
 const BATCH_LAST_PRESTATE_OFFSET: usize = 608;
 
-const STATE_BATCH_OFFSET: usize = 16;
-const STATE_CHECKPOINT_OFFSET: usize = 48;
-const STATE_REQUEST_OFFSET: usize = 80;
-const STATE_EFFECTS_OFFSET: usize = 112;
-const STATE_EFFECT_DIGEST_OFFSET: usize = 144;
-const STATE_SOURCE_OFFSET: usize = 176;
-const STATE_DESTINATION_OFFSET: usize = 208;
-const STATE_ESCROW_OFFSET: usize = 240;
-const STATE_MINT_OFFSET: usize = 272;
-const STATE_TOKEN_PROGRAM_OFFSET: usize = 304;
-const STATE_SOURCE_PRESTATE_OFFSET: usize = 336;
-const STATE_DESTINATION_PRESTATE_OFFSET: usize = 368;
-const STATE_ESCROW_POSTSTATE_OFFSET: usize = 400;
-const STATE_SOURCE_POSTSTATE_OFFSET: usize = 432;
-const STATE_AMOUNT_OFFSET: usize = 464;
-const STATE_SOURCE_AFTER_OFFSET: usize = 472;
-const STATE_DESTINATION_BEFORE_OFFSET: usize = 480;
-const STATE_ESCROW_AFTER_OFFSET: usize = 488;
-const STATE_RESERVED_OFFSET: usize = 496;
-const STATE_RESERVED_BYTES: usize = 16;
+/// Every coordinate of the reservation STATE, under the short local names
+/// its encoder and hostile decoder have always used.
+///
+/// The `STATE_*` block this replaces was nineteen file-private constants
+/// that agreed with the record only by inspection.
+/// `DClutchSemantics.DealerScenarioReservationStateV1Abi` places them, and
+/// the three coordinates this record used to reach through the family's
+/// shared `TAG_OFFSET`, `ORDINAL_OFFSET` and `COUNT_OFFSET` now have names
+/// of their own -- because those three constants are read by three other
+/// records in this file that have no Lean owner, so a shared name cannot be
+/// any one record's author.
+use crate::generated_scenario_reservation_state_v1::{
+    DEALER_SCENARIO_RESERVATION_STATE_AMOUNT_OFFSET_V1 as STATE_AMOUNT_OFFSET,
+    DEALER_SCENARIO_RESERVATION_STATE_BATCH_OFFSET_V1 as STATE_BATCH_OFFSET,
+    DEALER_SCENARIO_RESERVATION_STATE_CHECKPOINT_OFFSET_V1 as STATE_CHECKPOINT_OFFSET,
+    DEALER_SCENARIO_RESERVATION_STATE_DESTINATION_BEFORE_OFFSET_V1 as STATE_DESTINATION_BEFORE_OFFSET,
+    DEALER_SCENARIO_RESERVATION_STATE_DESTINATION_OFFSET_V1 as STATE_DESTINATION_OFFSET,
+    DEALER_SCENARIO_RESERVATION_STATE_DESTINATION_PRESTATE_OFFSET_V1 as STATE_DESTINATION_PRESTATE_OFFSET,
+    DEALER_SCENARIO_RESERVATION_STATE_EFFECT_COUNT_OFFSET_V1 as STATE_EFFECT_COUNT_OFFSET,
+    DEALER_SCENARIO_RESERVATION_STATE_EFFECT_DIGEST_OFFSET_V1 as STATE_EFFECT_DIGEST_OFFSET,
+    DEALER_SCENARIO_RESERVATION_STATE_EFFECTS_OFFSET_V1 as STATE_EFFECTS_OFFSET,
+    DEALER_SCENARIO_RESERVATION_STATE_ESCROW_AFTER_OFFSET_V1 as STATE_ESCROW_AFTER_OFFSET,
+    DEALER_SCENARIO_RESERVATION_STATE_ESCROW_OFFSET_V1 as STATE_ESCROW_OFFSET,
+    DEALER_SCENARIO_RESERVATION_STATE_ESCROW_POSTSTATE_OFFSET_V1 as STATE_ESCROW_POSTSTATE_OFFSET,
+    DEALER_SCENARIO_RESERVATION_STATE_HEAD_RESERVED_BYTES_V1 as STATE_HEAD_RESERVED_BYTES,
+    DEALER_SCENARIO_RESERVATION_STATE_HEAD_RESERVED_OFFSET_V1 as STATE_HEAD_RESERVED_OFFSET,
+    DEALER_SCENARIO_RESERVATION_STATE_MINT_OFFSET_V1 as STATE_MINT_OFFSET,
+    DEALER_SCENARIO_RESERVATION_STATE_ORDINAL_OFFSET_V1 as STATE_ORDINAL_OFFSET,
+    DEALER_SCENARIO_RESERVATION_STATE_REQUEST_OFFSET_V1 as STATE_REQUEST_OFFSET,
+    DEALER_SCENARIO_RESERVATION_STATE_RESERVED_BYTES_V1 as STATE_RESERVED_BYTES,
+    DEALER_SCENARIO_RESERVATION_STATE_RESERVED_OFFSET_V1 as STATE_RESERVED_OFFSET,
+    DEALER_SCENARIO_RESERVATION_STATE_SOURCE_AFTER_OFFSET_V1 as STATE_SOURCE_AFTER_OFFSET,
+    DEALER_SCENARIO_RESERVATION_STATE_SOURCE_OFFSET_V1 as STATE_SOURCE_OFFSET,
+    DEALER_SCENARIO_RESERVATION_STATE_SOURCE_POSTSTATE_OFFSET_V1 as STATE_SOURCE_POSTSTATE_OFFSET,
+    DEALER_SCENARIO_RESERVATION_STATE_SOURCE_PRESTATE_OFFSET_V1 as STATE_SOURCE_PRESTATE_OFFSET,
+    DEALER_SCENARIO_RESERVATION_STATE_STATUS_OFFSET_V1 as STATE_STATUS_OFFSET,
+    DEALER_SCENARIO_RESERVATION_STATE_TOKEN_PROGRAM_OFFSET_V1 as STATE_TOKEN_PROGRAM_OFFSET,
+};
+use crate::generated_scenario_reservation_state_v1::{
+    DEALER_SCENARIO_RESERVATION_STATE_VERSION_OFFSET_V1,
+    DEALER_SCENARIO_RESERVATION_STATUS_ACTIVATED_V1, DEALER_SCENARIO_RESERVATION_STATUS_ACTIVE_V1,
+    DEALER_SCENARIO_RESERVATION_STATUS_ROLLED_BACK_V1,
+};
+
+/// The family header three other records in this file still author.
+///
+/// `VERSION_OFFSET`, `TAG_OFFSET`, `ORDINAL_OFFSET` and `COUNT_OFFSET` are
+/// read by the custody effect, the effect manifest and the reservation
+/// batch as well as by this state, and `require_header`/`put_header` read
+/// the version through the first of them for all four. None of those three
+/// records has a Lean module yet, so the shared block stays where they need
+/// it and this pins it to the one record that does: if Lean ever moves a
+/// coordinate of the reservation state, the shared header stops describing
+/// it and a compiler says which. That is named debt, and the next lane to
+/// own one of the other three can take the block apart.
+const _: () = assert!(
+    VERSION_OFFSET == DEALER_SCENARIO_RESERVATION_STATE_VERSION_OFFSET_V1
+        && TAG_OFFSET == STATE_STATUS_OFFSET
+        && ORDINAL_OFFSET == STATE_ORDINAL_OFFSET
+        && COUNT_OFFSET == STATE_EFFECT_COUNT_OFFSET,
+    "the shared scenario-custody header stopped describing the reservation state"
+);
 
 const ACTIVATION_PRODUCER_OFFSET: usize = 16;
 const ACTIVATION_CHECKPOINT_OFFSET: usize = 48;
@@ -872,19 +920,19 @@ pub struct DealerScenarioReservationStateV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DealerScenarioReservationStateStatusV1 {
     /// Value is held in escrow.
-    Active = 1,
+    Active = DEALER_SCENARIO_RESERVATION_STATUS_ACTIVE_V1,
     /// Value returned to the original source after expiry.
-    RolledBack = 2,
+    RolledBack = DEALER_SCENARIO_RESERVATION_STATUS_ROLLED_BACK_V1,
     /// Value delivered to the original destination.
-    Activated = 3,
+    Activated = DEALER_SCENARIO_RESERVATION_STATUS_ACTIVATED_V1,
 }
 
 impl DealerScenarioReservationStateStatusV1 {
     fn decode(value: u8) -> Result<Self> {
         match value {
-            1 => Ok(Self::Active),
-            2 => Ok(Self::RolledBack),
-            3 => Ok(Self::Activated),
+            DEALER_SCENARIO_RESERVATION_STATUS_ACTIVE_V1 => Ok(Self::Active),
+            DEALER_SCENARIO_RESERVATION_STATUS_ROLLED_BACK_V1 => Ok(Self::RolledBack),
+            DEALER_SCENARIO_RESERVATION_STATUS_ACTIVATED_V1 => Ok(Self::Activated),
             _ => Err(Error::UnknownTag),
         }
     }
@@ -898,12 +946,15 @@ impl DealerScenarioReservationStateV1 {
             DEALER_SCENARIO_RESERVATION_STATE_BYTES_V1,
             &DEALER_SCENARIO_RESERVATION_STATE_MAGIC_V1,
         )?;
-        require_zero(bytes, 13, 3)?;
+        require_zero(bytes, STATE_HEAD_RESERVED_OFFSET, STATE_HEAD_RESERVED_BYTES)?;
         require_zero(bytes, STATE_RESERVED_OFFSET, STATE_RESERVED_BYTES)?;
         let value = Self {
-            status: DealerScenarioReservationStateStatusV1::decode(byte_at(bytes, TAG_OFFSET)?)?,
-            ordinal: byte_at(bytes, ORDINAL_OFFSET)?,
-            effect_count: byte_at(bytes, COUNT_OFFSET)?,
+            status: DealerScenarioReservationStateStatusV1::decode(byte_at(
+                bytes,
+                STATE_STATUS_OFFSET,
+            )?)?,
+            ordinal: byte_at(bytes, STATE_ORDINAL_OFFSET)?,
+            effect_count: byte_at(bytes, STATE_EFFECT_COUNT_OFFSET)?,
             batch: array_at(bytes, STATE_BATCH_OFFSET)?,
             checkpoint: array_at(bytes, STATE_CHECKPOINT_OFFSET)?,
             request_digest: array_at(bytes, STATE_REQUEST_OFFSET)?,
@@ -932,9 +983,9 @@ impl DealerScenarioReservationStateV1 {
         self.validate()?;
         let mut bytes = [0_u8; DEALER_SCENARIO_RESERVATION_STATE_BYTES_V1];
         put_header(&mut bytes, &DEALER_SCENARIO_RESERVATION_STATE_MAGIC_V1)?;
-        put_byte(&mut bytes, TAG_OFFSET, self.status as u8)?;
-        put_byte(&mut bytes, ORDINAL_OFFSET, self.ordinal)?;
-        put_byte(&mut bytes, COUNT_OFFSET, self.effect_count)?;
+        put_byte(&mut bytes, STATE_STATUS_OFFSET, self.status as u8)?;
+        put_byte(&mut bytes, STATE_ORDINAL_OFFSET, self.ordinal)?;
+        put_byte(&mut bytes, STATE_EFFECT_COUNT_OFFSET, self.effect_count)?;
         for (offset, value) in [
             (STATE_BATCH_OFFSET, self.batch),
             (STATE_CHECKPOINT_OFFSET, self.checkpoint),

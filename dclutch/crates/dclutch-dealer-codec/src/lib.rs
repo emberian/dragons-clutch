@@ -29,6 +29,12 @@ pub mod scenario_membership_manifest_v1;
 /// Custody reservation and reverse-order rollback receipt.
 pub mod scenario_reservation_receipt_v1;
 
+/// Lean-generated Dealer scenario reservation-state layout and tag ABI.
+///
+/// No `#[rustfmt::skip]`, for the same reason as its sibling below.
+#[allow(dead_code)]
+mod generated_scenario_reservation_state_v1;
+
 /// Lean-generated Dealer scenario checkpoint layout and tag ABI.
 ///
 /// No `#[rustfmt::skip]`: this emitter's raw output is already rustfmt-stable,

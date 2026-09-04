@@ -89,7 +89,7 @@ describe('the intersection of declared routes and machine-gated routes', () => {
    * act finally declares such a route the count moves and this case says so
    * instead of quietly continuing to pass.
    */
-  it('is empty, over 33 gated routes and 12 declared ones', () => {
+  it('is empty, over 32 gated routes and 12 declared ones', () => {
     const coverage = machineGateCoverageV1(BROWSER_CAPABILITY_STANDINGS_V1.map((one) => one.action));
     expect(coverage.gatedRoutes).toBe(ROUTES_GATED_ON_ANOTHER_MACHINE_V1.length);
     expect(coverage.declaredRoutes).toBeGreaterThan(0);

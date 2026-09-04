@@ -10,21 +10,30 @@
 // that persists its discriminant, the byte the discriminant sits at, and the
 // exact wire tag of every state its own hostile decoder admits.
 //
-// WHERE EACH FACT'S AUTHOR IS. Every one of these machines persists its
+// WHERE EACH FACT'S AUTHOR IS. Every one of these eight machines persists its
 // record at Lean-emitted offsets, and this file reads the emission for those
 // (`generated_successor.rs`, `generated_source_resolution_state_v2.rs`,
 // `generated_abi.rs`, `generated_dealer_*.rs`,
-// `generated_ticket_state_v3.rs`) and never the hand-written mirror beside
-// it. The TAGS are a separate question with a separate answer per machine:
-// `dealer-root`, `dealer-checkpoint`, `series-ticket` and `projected-custody`
-// have Lean-emitted discriminants, and three of the eight still author theirs
-// in Rust -- `direct-root`, whose
-// `DirectRootPhaseV1` declares none at all and whose decoder is therefore the
-// sole author, `funding-ledger`, and `source`. Their own admission modules say
-// so out loud; `direct_root_admission_v1.rs` opens with
-// "`DirectRootPhaseV1`'s discriminants are not Lean-emitted". The reader
-// below takes each machine's tags from whichever of the two actually authors
-// them.
+// `generated_scenario_checkpoint_v1.rs`,
+// `generated_scenario_reservation_state_v1.rs`,
+// `generated_projected_state_v2.rs`, `generated_ticket_state_v3.rs`) and never
+// the hand-written mirror beside it. That is new: until the LEAN-TAGS lane,
+// FOUR of the eight had no Lean module at all -- `dealer-checkpoint`,
+// `dealer-reservation`, `projected-custody` and the ticket phase -- and this
+// file scraped their layouts out of Rust because there was nothing else to
+// read.
+//
+// The TAGS are a separate question with a separate answer per machine. Five
+// have Lean-emitted discriminants: `dealer-root`, `dealer-checkpoint`,
+// `dealer-reservation`, `projected-custody` and `series-ticket`. Three still
+// author theirs in Rust -- `direct-root`, whose `DirectRootPhaseV1` declares
+// none at all and whose decoder is therefore the sole author,
+// `funding-ledger`, and `source`. Their own admission modules say so out loud;
+// `direct_root_admission_v1.rs` opens with "`DirectRootPhaseV1`'s
+// discriminants are not Lean-emitted". So the Rust-scrape arm below is not
+// dead: it is what those three still need, and `literalTag` is exactly it.
+// The reader takes each machine's tags from whichever of the two authors them,
+// and `emittedTag` is the other arm.
 //
 // THE TAGS COME FROM THE HOSTILE DECODER, not from the enum declaration. Three
 // of these enums carry no `#[repr(u8)]` discriminants at all, one resolves its
@@ -56,6 +65,7 @@ const sources = Object.freeze({
   dealerCheckpoint: readFileSync(new URL('crates/dclutch-dealer-codec/src/scenario_checkpoint_v1.rs', root), 'utf8'),
   dealerCheckpointGenerated: readFileSync(new URL('crates/dclutch-dealer-codec/src/generated_scenario_checkpoint_v1.rs', root), 'utf8'),
   dealerReservation: readFileSync(new URL('crates/dclutch-dealer-codec/src/scenario_custody_reservation_v1.rs', root), 'utf8'),
+  dealerReservationGenerated: readFileSync(new URL('crates/dclutch-dealer-codec/src/generated_scenario_reservation_state_v1.rs', root), 'utf8'),
 
   projectedCustody: readFileSync(new URL('crates/dclutch-custody-contract/src/projected.rs', root), 'utf8'),
   projectedCustodyGenerated: readFileSync(new URL('crates/dclutch-custody-contract/src/generated_projected_state_v2.rs', root), 'utf8'),
@@ -206,26 +216,15 @@ const literalTag = (head) => {
  */
 const emittedTag = (source) => (head) => scalar(source, head.replace(/^[A-Za-z0-9_]+::/, ''));
 
-/**
- * A tag offset that no Rust constant names, taken from the two expressions
- * that state it.
- *
- * `projected.rs` and `replay.rs` both write their phase byte at a bare
- * literal. A pin against one number would be a hand copy; reading BOTH the
- * encode and the decode site and refusing when they disagree is the strongest
- * statement available, and it moves with the Rust instead of aging against it.
- */
-function agreedOffset(source, readPattern, writePattern, label) {
-  const read = sources[source].match(readPattern);
-  const write = sources[source].match(writePattern);
-  if (!read || !write) throw new Error(`${label}: could not read the phase byte's encode and decode sites`);
-  const readOffset = Number(read[1]);
-  const writeOffset = Number(write[1]);
-  if (readOffset !== writeOffset) {
-    throw new Error(`${label}: encodes its phase at ${writeOffset} and decodes it at ${readOffset}`);
-  }
-  return readOffset;
-}
+// `agreedOffset` used to live here: `projected.rs` and `replay.rs` each wrote
+// their phase byte at a bare literal, so the offset was recovered by reading
+// BOTH the encode and the decode expression and refusing when they disagreed.
+// It is deleted rather than kept, because both machines now emit that
+// coordinate and a second authority for a fact is what this file exists to
+// remove. It is also worth recording WHY it was never as strong as it read:
+// the encode expression it matched for `series-ticket` belonged to
+// `SeriesStateV3`, two hundred lines above `TicketStateV3`'s identical line,
+// and a first-match regex takes the former. The two agreed, so nothing noticed.
 
 // The Source state's PDA seed ORDER, which no constant can express. A reorder
 // here would move every Source address while every emitted constant stayed
@@ -320,10 +319,17 @@ const machines = [
   {
     label: 'dealer-reservation',
     record: 'DealerScenarioReservationStateV1',
-    magic: magic('dealerReservation', 'DEALER_SCENARIO_RESERVATION_STATE_MAGIC_V1'),
-    bytes: scalar('dealerReservation', 'DEALER_SCENARIO_RESERVATION_STATE_BYTES_V1'),
-    header: [[scalar('dealerReservation', 'VERSION_OFFSET'), scalar('dealerReservation', 'DEALER_SCENARIO_CUSTODY_STATE_VERSION_V1')]],
-    tagOffset: scalar('dealerReservation', 'TAG_OFFSET'),
+    magic: magic('dealerReservationGenerated', 'DEALER_SCENARIO_RESERVATION_STATE_MAGIC_V1'),
+    bytes: scalar('dealerReservationGenerated', 'DEALER_SCENARIO_RESERVATION_STATE_BYTES_V1'),
+    // This record's OWN version coordinate, not the four-record family header
+    // constant that used to be read here. `VERSION_OFFSET` and `TAG_OFFSET` are
+    // the spelling four records in that file share, and the regex that found
+    // them takes the first.
+    header: [[
+      scalar('dealerReservationGenerated', 'DEALER_SCENARIO_RESERVATION_STATE_VERSION_OFFSET_V1'),
+      scalar('dealerReservationGenerated', 'DEALER_SCENARIO_CUSTODY_STATE_VERSION_V1'),
+    ]],
+    tagOffset: scalar('dealerReservationGenerated', 'DEALER_SCENARIO_RESERVATION_STATE_STATUS_OFFSET_V1'),
     rowBytes: null,
     headerBytes: null,
     counters: [],
@@ -331,11 +337,15 @@ const machines = [
     discriminant: 'DealerScenarioReservationStateStatusV1',
     states: decodedTags(
       block('dealerReservation', 'impl DealerScenarioReservationStateStatusV1 {'),
-      literalTag,
+      emittedTag('dealerReservationGenerated'),
     ),
-    declared: declaredDiscriminants('dealerReservation', 'DealerScenarioReservationStateStatusV1'),
+    declared: declaredDiscriminants(
+      'dealerReservation',
+      'DealerScenarioReservationStateStatusV1',
+      emittedTag('dealerReservationGenerated'),
+    ),
     variants: declaredVariants('dealerReservation', 'DealerScenarioReservationStateStatusV1'),
-    authority: 'crates/dclutch-dealer-codec/src/scenario_custody_reservation_v1.rs',
+    authority: 'crates/dclutch-dealer-codec/src/{scenario_custody_reservation_v1,generated_scenario_reservation_state_v1}.rs',
   },
   {
     label: 'projected-custody',

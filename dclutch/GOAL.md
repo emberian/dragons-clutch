@@ -4290,3 +4290,13 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   magic read from its bytes. Sweep: 84 client magics — ~49 live, 8 dead, 27 undecided. Owed → WEB-DEAD **`(spawned)`**:
   DCLTPOS1's explorer arm, DCSRCER1, the magic census counts only DCLT/DCLR prefixes.
 - Cuts: `646fe0ba5`, `465735155`.
+- CENSUS-BRANCH closed (`083ac44eb` and eight more): the lever was two things — the guard sits at descent depth 4 with
+  `MAX_GUARD_DEPTH = 3` truncating in silence (now 4, both chains read by hand), AND under a DECLINE (`return Ok(None)`), not
+  a refusal: publishing it as necessary would have told four of the five declaring acts they need a Series ticket their
+  execution never touches. New category: **selected gates** (a classifier's first statement declines; `selected_by` names it)
+  — two rows, incl. `direct.inline`'s real gate six frames down, which an unbounded necessary descent had been reaching
+  wrongly; two necessary rows gained for Resolution's commit-failure routes. **The intersection stays empty and that is
+  correct**; the honest producer is acts declaring their FAMILY from the same builder compile. genref had been crashing at
+  HEAD (a magic the census named but could not fold) — fixed; the web suite is red on 24 unrendered INSTRUCTION magics
+  (COHORT-15C's census rows) → routed to WEB-DEAD.
+- Cuts: `532a14cc7`, `c09512d2b`.

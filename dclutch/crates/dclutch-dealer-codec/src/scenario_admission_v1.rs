@@ -26,20 +26,19 @@
 //!
 //! ## The tags are the wire discriminants
 //!
-//! The checkpoint's discriminants ARE Lean-emitted, since
-//! `DClutchSemantics.DealerScenarioCheckpointV1Abi`:
+//! Both machines' discriminants are Lean-emitted, since
+//! `DClutchSemantics.DealerScenarioCheckpointV1Abi` and
+//! `DClutchSemantics.DealerScenarioReservationStateV1Abi`:
 //! [`DealerScenarioCheckpointPhaseV1`] names
-//! `DEALER_SCENARIO_CHECKPOINT_PHASE_COLLECTING_V1` and its four siblings
-//! rather than writing `1` through `5`, and its `decode` match admits them by
-//! the same names. The reservation status's are still
-//! `scenario_custody_reservation_v1`'s own — that machine has no Lean module
-//! yet — so for it the Rust enum remains the author.
+//! `DEALER_SCENARIO_CHECKPOINT_PHASE_COLLECTING_V1` and its four siblings,
+//! [`DealerScenarioReservationStateStatusV1`] names
+//! `DEALER_SCENARIO_RESERVATION_STATUS_ACTIVE_V1` and its two, and both
+//! `decode` matches admit them by the same names rather than by `1`, `2`, `3`.
 //!
-//! Either way the bit index is the enum's discriminant, which for the
-//! checkpoint is now the emitted authority reached one step later rather than
-//! a second numbering. `every_state_has_its_own_bit` and
-//! `the_bit_index_is_the_wire_tag` are what stop a variant added upstream from
-//! silently aliasing.
+//! The bit index is still the enum's discriminant, which is now the emitted
+//! authority reached one step later rather than a second numbering.
+//! `every_state_has_its_own_bit` and `the_bit_index_is_the_wire_tag` are what
+//! stop a variant added upstream from silently aliasing.
 //!
 //! Every set here is a NECESSARY condition and never a sufficient one: a
 //! checkpoint admitted by its phase still has its slot window, its ordinals,
@@ -57,7 +56,9 @@ use crate::{
 /// past the last variant rather than the number of variants.
 use crate::generated_scenario_checkpoint_v1::DEALER_SCENARIO_CHECKPOINT_PHASE_LIMIT_V1 as CHECKPOINT_PHASE_LIMIT;
 /// One past the greatest `DealerScenarioReservationStateStatusV1` discriminant.
-const RESERVATION_STATUS_LIMIT: u8 = 4;
+///
+/// Emitted, for the same reason as the checkpoint's above.
+use crate::generated_scenario_reservation_state_v1::DEALER_SCENARIO_RESERVATION_STATUS_LIMIT_V1 as RESERVATION_STATUS_LIMIT;
 
 /// The wire tag of one checkpoint phase, as a bit index.
 const fn checkpoint_tag(phase: DealerScenarioCheckpointPhaseV1) -> u8 {

@@ -413,3 +413,7 @@ root = "EmitProjectedCustodyStateV2Rust"
 [[lean_exe]]
 name = "emit-dealer-scenario-checkpoint-v1-rust"
 root = "EmitDealerScenarioCheckpointV1Rust"
+
+[[lean_exe]]
+name = "emit-dealer-scenario-reservation-state-v1-rust"
+root = "EmitDealerScenarioReservationStateV1Rust"

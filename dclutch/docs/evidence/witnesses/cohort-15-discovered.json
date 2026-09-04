@@ -15,26 +15,236 @@
   },
   "skipped": [
     {
-      "signature": "2wqT3rjHAvUxXpJh76rK7uLNGnPmY4NUQCX152aUWRhHGVfizAhRR6cL8hL8pJbqM6uvtkqL3wVjHPMcQfhSsJFT",
-      "reason": "DCLTPUA1 to trading resolves to no trading route (0 route(s) elsewhere)"
-    },
-    {
-      "signature": "2yRSDsSs3oRCcjzb4LhyjhWVr9XcuKZJgeQ792Rq2CecUdsiit41AepmUs8ujz7WHkYwdfjqNhPesZXHxofdBp4u",
-      "reason": "DCLTPUA1 to trading resolves to no trading route (0 route(s) elsewhere)"
-    },
-    {
-      "signature": "3VsB7dNppiq6uM7QGCpd4G4WGJjJSGaDxyvyct5UZFJN9Fik67NgUswbzNhebDSeCb5tNxyKTsiGhxLnyKbD6AeM",
-      "reason": "DCLTSPI1 to resolution resolves to no resolution route (0 route(s) elsewhere)"
-    },
-    {
-      "signature": "2Mqxghzc6Uwtpjndnvhw22QrcH3rbmuBxdSDbxV9ixa6hEwwxgbxbgvyd3qaoCyGjEe1cH6LLSAfWZ4DLyLGk4t7",
-      "reason": "DCLTSPI1 to resolution resolves to no resolution route (0 route(s) elsewhere)"
-    },
-    {
       "signature": "64jEDVT6ZbdUBxhHnUzeAktSfZY4TunWZcHWLxnxWNoUe8yxYXWVnPmtajBjFcWhLN6m9X2Y5G8d14M6ebuzp5PK",
       "reason": "DCLTCRQ2 to core resolves to no core route (0 route(s) elsewhere)"
     }
   ],
-  "records": [],
-  "corroborated_route_count": 0
+  "records": [
+    {
+      "stage": "dcltpua1-492767048",
+      "magic": "DCLTPUA1",
+      "program": "trading",
+      "outcome": "executed",
+      "signature": "2wqT3rjHAvUxXpJh76rK7uLNGnPmY4NUQCX152aUWRhHGVfizAhRR6cL8hL8pJbqM6uvtkqL3wVjHPMcQfhSsJFT",
+      "instruction_data_len": 328,
+      "routes": [
+        "claims/process_instruction",
+        "trading/process_instruction",
+        "trading/user_position_admission_v1::process_user_position_admission_v1"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to trading begins with DCLTPUA1, and the tree dispatches trading/user_position_admission_v1::process_user_position_admission_v1 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 492767048,
+      "compute_units": 168538,
+      "programs_invoked": [
+        "claims",
+        "trading"
+      ],
+      "routes_corroborated": [
+        "claims/process_instruction",
+        "trading/process_instruction",
+        "trading/user_position_admission_v1::process_user_position_admission_v1"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltpua1-492767229",
+      "magic": "DCLTPUA1",
+      "program": "trading",
+      "outcome": "executed",
+      "signature": "2yRSDsSs3oRCcjzb4LhyjhWVr9XcuKZJgeQ792Rq2CecUdsiit41AepmUs8ujz7WHkYwdfjqNhPesZXHxofdBp4u",
+      "instruction_data_len": 328,
+      "routes": [
+        "claims/process_instruction",
+        "trading/process_instruction",
+        "trading/user_position_admission_v1::process_user_position_admission_v1"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to trading begins with DCLTPUA1, and the tree dispatches trading/user_position_admission_v1::process_user_position_admission_v1 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 492767229,
+      "compute_units": 174534,
+      "programs_invoked": [
+        "claims",
+        "trading"
+      ],
+      "routes_corroborated": [
+        "claims/process_instruction",
+        "trading/process_instruction",
+        "trading/user_position_admission_v1::process_user_position_admission_v1"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltspi1-492775238",
+      "magic": "DCLTSPI1",
+      "program": "resolution",
+      "outcome": "executed",
+      "signature": "3VsB7dNppiq6uM7QGCpd4G4WGJjJSGaDxyvyct5UZFJN9Fik67NgUswbzNhebDSeCb5tNxyKTsiGhxLnyKbD6AeM",
+      "instruction_data_len": 32,
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/sponsored_push_v1::process_sponsored_push_v1"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to resolution begins with DCLTSPI1, and the tree dispatches resolution/sponsored_push_v1::process_sponsored_push_v1 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 492775238,
+      "compute_units": 106810,
+      "programs_invoked": [
+        "resolution"
+      ],
+      "routes_corroborated": [
+        "resolution/process_instruction",
+        "resolution/sponsored_push_v1::process_sponsored_push_v1"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltspi1-492829232",
+      "magic": "DCLTSPI1",
+      "program": "resolution",
+      "outcome": "executed",
+      "signature": "2Mqxghzc6Uwtpjndnvhw22QrcH3rbmuBxdSDbxV9ixa6hEwwxgbxbgvyd3qaoCyGjEe1cH6LLSAfWZ4DLyLGk4t7",
+      "instruction_data_len": 32,
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/sponsored_push_v1::process_sponsored_push_v1"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to resolution begins with DCLTSPI1, and the tree dispatches resolution/sponsored_push_v1::process_sponsored_push_v1 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 492829232,
+      "compute_units": 140902,
+      "programs_invoked": [
+        "resolution"
+      ],
+      "routes_corroborated": [
+        "resolution/process_instruction",
+        "resolution/sponsored_push_v1::process_sponsored_push_v1"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltpua1-492863447",
+      "magic": "DCLTPUA1",
+      "program": "trading",
+      "outcome": "executed",
+      "signature": "2CabHYSLTdKeaAqqagPB42QkH7PGX8UmYE1yL3o19EgGZkssACMBAvuKBM9PdJU6eFgHnQ5zm1EcXMydfUx7SazG",
+      "instruction_data_len": 328,
+      "routes": [
+        "claims/process_instruction",
+        "trading/process_instruction",
+        "trading/user_position_admission_v1::process_user_position_admission_v1"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to trading begins with DCLTPUA1, and the tree dispatches trading/user_position_admission_v1::process_user_position_admission_v1 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 492863447,
+      "compute_units": 179038,
+      "programs_invoked": [
+        "claims",
+        "trading"
+      ],
+      "routes_corroborated": [
+        "claims/process_instruction",
+        "trading/process_instruction",
+        "trading/user_position_admission_v1::process_user_position_admission_v1"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltsel1-492865103",
+      "magic": "DCLTSEL1",
+      "program": "trading",
+      "outcome": "executed",
+      "signature": "5wPF5SbftvtBotLRP34Lupp2WfC8dLcHMCSssHi2FAeR94vDg5fZUmBfMoHLqivW3D1MQSMN3KEgYgPG2cKGFVeL",
+      "instruction_data_len": 56,
+      "routes": [
+        "trading/hot_v3::process_capability_seal_v1",
+        "trading/process_instruction"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to trading begins with DCLTSEL1, and the tree dispatches trading/hot_v3::process_capability_seal_v1 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 492865103,
+      "compute_units": 722044,
+      "programs_invoked": [
+        "trading"
+      ],
+      "routes_corroborated": [
+        "trading/hot_v3::process_capability_seal_v1",
+        "trading/process_instruction"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dclthot3-492865197",
+      "magic": "DCLTHOT3",
+      "program": "trading",
+      "outcome": "executed",
+      "signature": "3eKAiD9T13wgqeQBiVBpnGgrTo65N7Ck2gcyNGmdz41HEcKVFP6xTTK7LLsKxo7rR6z51GVgfdXAWWxcSukMe5qw",
+      "instruction_data_len": 584,
+      "routes": [
+        "claims/process_instruction",
+        "custody/process_instruction",
+        "trading/hot_v3::process_hot_execution_v3",
+        "trading/process_instruction"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to trading begins with DCLTHOT3, and the tree dispatches trading/hot_v3::process_hot_execution_v3 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 492865197,
+      "compute_units": 1137522,
+      "programs_invoked": [
+        "claims",
+        "custody",
+        "trading"
+      ],
+      "routes_corroborated": [
+        "claims/process_instruction",
+        "custody/process_instruction",
+        "trading/hot_v3::process_hot_execution_v3",
+        "trading/process_instruction"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltdfs1-492865496",
+      "magic": "DCLTDFS1",
+      "program": "trading",
+      "outcome": "executed",
+      "signature": "5yVEK542AE4oStiHD3yuRSnBgDtkrvn16GTmQweEipF2a9MSjJF2AkoTmJzK3wqJMAvUw3frWwjf4wGGukhjpu11",
+      "instruction_data_len": 96,
+      "routes": [
+        "custody/process_instruction",
+        "trading/direct_fee_settlement_v1::process_direct_fee_settlement_v1",
+        "trading/process_instruction"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to trading begins with DCLTDFS1, and the tree dispatches trading/direct_fee_settlement_v1::process_direct_fee_settlement_v1 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 492865496,
+      "compute_units": 95583,
+      "programs_invoked": [
+        "custody",
+        "trading"
+      ],
+      "routes_corroborated": [
+        "custody/process_instruction",
+        "trading/direct_fee_settlement_v1::process_direct_fee_settlement_v1",
+        "trading/process_instruction"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltspi1-492868986",
+      "magic": "DCLTSPI1",
+      "program": "resolution",
+      "outcome": "executed",
+      "signature": "2p5urmVAjSDrfjZUz9jL7yChRVFd3tYaHTTejvs4bH7jLNjBe5h5vKXbM86sbXjpUT2gW4HPNXzfZkv5zZ7AKxtX",
+      "instruction_data_len": 32,
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/sponsored_push_v1::process_sponsored_push_v1"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to resolution begins with DCLTSPI1, and the tree dispatches resolution/sponsored_push_v1::process_sponsored_push_v1 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 492868986,
+      "compute_units": 103810,
+      "programs_invoked": [
+        "resolution"
+      ],
+      "routes_corroborated": [
+        "resolution/process_instruction",
+        "resolution/sponsored_push_v1::process_sponsored_push_v1"
+      ],
+      "not_corroborated": []
+    }
+  ],
+  "corroborated_route_count": 9
 }

@@ -154,3 +154,4 @@ import DClutchSemantics.ProductAdmissionV2Abi
 import DClutchSemantics.SeriesTicketStateV3Abi
 import DClutchSemantics.ProjectedCustodyStateV2Abi
 import DClutchSemantics.DealerScenarioCheckpointV1Abi
+import DClutchSemantics.DealerScenarioReservationStateV1Abi
