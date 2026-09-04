@@ -5,9 +5,9 @@
 //! `dclutch_trading_sbf::series::release_v5`, and the physical evidence joins
 //! remain owned by the adjacent support module.
 //!
-//! # THREE ROWS ARE STILL RED, AND THE WALL IS 196,211 CU FURTHER IN
+//! # THREE ROWS ARE STILL RED, AND THE WALL IS 202,211 CU FURTHER IN
 //!
-//! All three rows refuse identically: **Trading consumes 527,198 CU of
+//! All three rows refuse identically: **Trading consumes 533,198 CU of
 //! 1,316,619 and refuses `Release` (`0x4001`)** in the preflight child
 //! composition, after `p7-local-effect-discipline` and before
 //! `preflight-children`. Before this lane they refused `Content` (`0x4003`) at
@@ -104,6 +104,20 @@
 //! artifact ranges strayed, with both lengths and both pointers. Each turned a
 //! refusal with 2,126 candidate sites into a named line in one run. Nothing
 //! here is compiled into a production ELF.
+//!
+//! ## THE NUMBER NAMES AN ELF
+//!
+//! 533,198 is measured on the Trading ELF built from the sources this file is
+//! committed beside, not on the one the repair was developed against. Those are
+//! different ELFs and they consume different CU: the same three rows read
+//! 527,198 on the build that first cleared the sealed-ownership wall, and
+//! adding the preflight checkpoints and the role-carrier diagnostics moved it
+//! to 533,198 -- 6,000 CU, in a PLAIN build, from code that is entirely behind
+//! `hot-cu-profile` and therefore absent. The frame manifest did not move at
+//! all, so this is a codegen difference and not a new binding; the honest
+//! reading is that the diagnostic scaffolding is not free even when it compiles
+//! to nothing, and that a CU figure is a measurement of one artifact or it is
+//! decoration.
 //!
 //! ## WHAT IS OWED
 //!
@@ -455,7 +469,7 @@ async fn current_source_series_expire_lands_before_the_future_market_exists() {
 /// IT IS ALSO ONE OF THE THREE RED ROWS THIS FILE'S HEADER DESCRIBES. It is no
 /// longer red for a reason of its own: this row builds its chain, installs its
 /// accounts, submits, and refuses at the shared preflight-composition wall
-/// with the other two, at the identical 527,198 CU and `Release` (`0x4001`).
+/// with the other two, at the identical 533,198 CU and `Release` (`0x4001`).
 /// Its own positive control -- that the permit really is one lamport under
 /// today's floor -- runs and holds before the submission, so what is OWED is a
 /// parent-ELF green, not a diagnosis. The inversion itself is proved on the

@@ -291,21 +291,42 @@ failure `tools/frameguard/run.sh` documents from 2026-09-02.
 
 Item 1 is done. The rest, sharpened:
 
-2. **A Claims-owned split/merge route that moves collateral.** The gap is
-   NARROWER than section 3 made it sound, and worth stating exactly, because
-   what is missing is one layer rather than a subsystem:
-   `dclutch-claims-conservation-contract` is written, total and tested;
-   `crates/dclutch-operator/src/claims_conservation_v1.rs` BUILDS a conservation
-   request and derives every address; `rational_terminal_v3.rs` is the working
-   author of a Claims-role Custody transfer. What does not exist is the
-   dispatcher — nothing routes `DCLCNS01` — and the ELF test that would make one
-   trustworthy. The contract also does not yet know the refunding shape: it
-   writes UNIFORM quantities, so a refunding split needs the escrow's coordinate
-   seated the way `MintRefundingCompleteSet` seats it, which is a contract
-   change and not only an adapter one.
+2. **A Claims-owned split/merge route that moves collateral.** ~~Owed.~~
+   **The dispatcher landed at `4f847be64`**, and one sentence of this item was
+   wrong when it was written: it said the contract "does not yet know the
+   refunding shape" and needed changing. It did not.
+   `MintRefundingCompleteSet` and `MergeRefundingCompleteSet` take the SAME
+   uniform vector the categorical actions take and seat the coordinates
+   themselves, so `write_uniform_quantities` was already right for both shapes
+   and `dclutch-claims-conservation-contract` is untouched. The route picks its
+   action from the RECORD, through `categorical_refunds_on_failure_v3`, exactly
+   as founding does.
+
+   What the route still owes is the half that matters: **there is no ELF test.**
+   The Claims program-tests carry no Custody-plus-Token-2022 fixture over a
+   founded market's Hoard — `affine-batch` has the record set and no Custody,
+   `fractional-atomic` has Token-2022 and Custody and no founded Hoard — so the
+   route today has a compiling link, a census row (165 routes), unit hostiles
+   over its pure decisions, and no execution against a real Custody or a real
+   mint. Building that fixture is the next commit.
+
+   Two things the SBF build caught that no unit test would have, recorded
+   because the next arm added to this route will hit them: `move_collateral`'s
+   first draft built at a **6,528-byte frame against a 4,096 maximum** with four
+   "overwrites values in the frame" diagnostics, which is undefined behaviour at
+   execution; boxing brought it to 4,544, still over, because both Custody wire
+   arms' locals were live in one function; splitting them into their own
+   `#[inline(never)]` frames brought it under.
 3. **The refunding failure walk on real ELFs.** Still owed and now blocked on
    item 2 as well as on a founded refunding market; and, as above, on a Claims
    founding program-test that does not exist.
 4. **Threading `refundsOnFailure` to the market page.** Still owed.
-5. **The `signed_delta_v3` waist.** Still owed and untouched: it can write a
-   refunding split with no escrow check at all.
+5. **The `signed_delta_v3` waist.** ~~Owed.~~ **Closed at `fd2cb0905`.** A
+   refunding Market's failure coordinate may now only be CREDITED to the
+   Market's own escrow, and the asymmetry is the rule rather than a gap in it:
+   the hazard is worthless claims in somebody's hands, and only a credit puts
+   them there. Refusing debits too would have frozen the failure column of every
+   cohort-16 market — refunding by record, unseated because the seating rides
+   cohort-17 — and a market that cannot retire leaks rent forever. The gate
+   costs the route nothing on the common path: a plan touching no coordinate at
+   the runtime width's last index reads no account and derives no address.

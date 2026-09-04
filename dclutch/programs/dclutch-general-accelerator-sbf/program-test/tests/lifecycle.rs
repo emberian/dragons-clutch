@@ -25,9 +25,10 @@ use dclutch_general_adapter_contract::{
     account_rules_v3::general_account_profile_fixed_count_v3,
     artifacts_v3::decode_general_request_v3,
     candidate_v1::{
-        CandidateVerifyRowBuffersV1, CandidateVerifyRowViewV1, GeneralCandidateLayoutV1,
-        GeneralCandidateOpeningV1, GeneralCandidateStatusV1, GeneralCandidateV1,
-        authenticate_candidate_identity_v1, general_candidate_identity_v1, verify_candidate_row_v1,
+        CandidateVerifyRowBuffersV1, CandidateVerifyRowViewV1, GeneralCandidateErrorV1,
+        GeneralCandidateLayoutV1, GeneralCandidateOpeningV1, GeneralCandidateStatusV1,
+        GeneralCandidateV1, authenticate_candidate_identity_v1, general_candidate_identity_v1,
+        verify_candidate_row_v1,
     },
     collection_v1::{
         BatchStatusV1, EscrowDirectionV1, GENERAL_ORDER_ROW_BASE_V1, GeneralBatchOpeningV1,
@@ -60,7 +61,10 @@ use dclutch_general_adapter_contract::{
         RuntimeSettlementViewV2, evaluate_runtime_settlement_v2, initialize_runtime_settlement_v2,
         runtime_settlement_effect_len_v2,
     },
-    runtime_verify::{AuthenticatedOrderTermsV2, runtime_verifier_len_v2},
+    runtime_verify::{
+        AuthenticatedOrderTermsV2, RuntimeCandidateVerifierV2, RuntimeVerifyErrorV2,
+        runtime_manifest_orders_for_row_v2, runtime_verifier_len_v2,
+    },
     runtime_width::{
         CandidateHeaderV2, CandidateV2, ExecutionHeaderV2, ExecutionV2, PageHeaderV2, PageV2,
         SettlementCursorV2, VerifiedCandidateHeaderV2, VerifiedCandidateV2, candidate_len,
@@ -1840,6 +1844,14 @@ struct OrderSpec {
     receive: Vec<u64>,
     deliver: Vec<u64>,
     debit_limit: u64,
+    /// The quote per lot this maker signed as the LEAST they may be paid.
+    ///
+    /// Zero is no floor and is what every order in this fixture carried before
+    /// 2026-09-04. It is a per-order field rather than a fixture constant
+    /// because only one of the three orders below is priced in the credit
+    /// direction at all, and a floor on a buyer is a conjunct that can never
+    /// fire.
+    credit_floor: u64,
 }
 
 fn order_record(width: u32, batch_id: [u8; 32], spec: &OrderSpec) -> Vec<u8> {
@@ -1854,15 +1866,14 @@ fn order_record(width: u32, batch_id: [u8; 32], spec: &OrderSpec) -> Vec<u8> {
             generation: GENERATION,
             max_lots: 10,
             max_quote_debit_per_lot: spec.debit_limit,
-            // NO FLOOR IN THIS FIXTURE YET, and that is a debt rather than a
-            // choice. A floorless order is byte-identical to what this fixture
-            // encoded before 2026-09-04, so `real_sbf_verify_candidate_...`
-            // does exercise the Effect's new write of the cursor's floor
-            // coordinate on a real ELF -- with the value zero. What is owed is
-            // the FLOORED walk: a seller whose fill clears the floor and one
-            // whose fill does not, refused by the accelerator with
-            // `RuntimeVerifyErrorV2::CreditLimit` named.
-            min_quote_credit_per_lot: 0,
+            // THE FLOOR IS THE MAKER'S, and it is part of what they signed.
+            // `order_id` is the digest of these bytes, so changing this field
+            // moves the order's identity -- and the candidate's rows are sorted
+            // by identity, so it moves the row order too. Nothing downstream may
+            // be typed: `terminal_fixture` re-derives the sort, the candidate's
+            // own digest, and every manifest width from the records this
+            // produces.
+            min_quote_credit_per_lot: spec.credit_floor,
             valid_until_slot: SETTLEMENT_CLOSE_SLOT,
         },
         &spec.receive,
@@ -1923,7 +1934,83 @@ fn execution_row(
     (bytes, terms)
 }
 
+/// The floor order 2 signs in every walk this file runs, in quote per lot.
+///
+/// It is one because the fill is one. Order 2 is the fixture's only pure
+/// seller: it delivers one of each outcome per lot and receives nothing, the
+/// candidate prices every outcome at one on a scale of `width`, and its single
+/// lot is therefore paid `width / width = 1` at EVERY runtime width this file
+/// runs. So a floor of one is the floor exactly AT the fill -- the boundary,
+/// where a conjunct that is off by one in either direction shows -- and it
+/// clears.
+const SELLER_CREDIT_FLOOR_CLEARS: u64 = 1;
+/// One step past the fill, which is what a fill below the floor means here.
+const SELLER_CREDIT_FLOOR_REFUSES: u64 = SELLER_CREDIT_FLOOR_CLEARS + 1;
+
+/// The exact row a floored walk refused, as the chain would be handed it.
+///
+/// A refusing walk has no terminal certificate, no completed verifier and no
+/// escrow poststate, so it cannot be a [`TerminalFixture`] with some fields
+/// left empty -- that shape would let a later reader take a zero for a measured
+/// value. It carries the one row's prestate and nothing else.
+struct RefusedRowV1 {
+    /// The closed batch every row of this walk names.
+    batch: GeneralBatchV1,
+    /// The immutable candidate image, carrying its own digest.
+    candidate: Vec<u8>,
+    /// That digest.
+    candidate_id: [u8; 32],
+    /// Zero-based page index of the refusing row.
+    page_index: u32,
+    /// The submission record as it stood before this row.
+    submission_before: GeneralCandidateV1,
+    /// The verifier cursor as it stood before this row; empty for row zero.
+    verifier_before: Vec<u8>,
+    /// The immutable page holding the refusing row.
+    page: Vec<u8>,
+    /// The escrowed order record the row names.
+    order: Vec<u8>,
+    /// A manifest bank at the width this row is required to emit.
+    ///
+    /// Its BYTES are never compared: `project_general_verify_candidate_workspace_v3`
+    /// runs the verifier first and only then asks whether the emitted manifest
+    /// equals this account, so a row that refuses never reaches the comparison.
+    /// Its WIDTH is load-bearing -- the evaluator writes into a workspace this
+    /// long -- and it is derived from `runtime_manifest_orders_for_row_v2`
+    /// rather than counted by hand.
+    manifest: Vec<u8>,
+    /// What the protocol's own verifier said about this row, natively.
+    cause: GeneralCandidateErrorV1,
+    /// Every row of this same walk that verified BEFORE the refusing one.
+    ///
+    /// This is the walk's own positive control and it is carried rather than
+    /// rebuilt: running these on the real ELF is what says the fixture REACHED
+    /// the conjunct under test. Without them a refusal at row zero and a
+    /// refusal from a fixture too malformed to execute at all log identically.
+    /// It is empty whenever the seller's row sorts first, which is a property
+    /// of three digests and not something this file may assume either way.
+    cleared_before: Vec<VerifyStepFixture>,
+}
+
+/// The complete three-row walk, at whatever floor order 2 signed.
+///
+/// One function for both arms on purpose. The clearing walk and the refusing
+/// walk differ in one signed field, and every other byte -- the batch, the
+/// candidate's own digest, the row sort, the escrow ledger -- is produced by
+/// the same code from that one difference. A second fixture written for the
+/// refusal could agree with this one about everything except the thing under
+/// test and nobody would know.
 fn terminal_fixture(width: u32) -> TerminalFixture {
+    match walk_at_seller_floor(width, SELLER_CREDIT_FLOOR_CLEARS) {
+        Ok(fixture) => fixture,
+        Err(refused) => unreachable!(
+            "the fixture's own floor must clear its own fill; row {} refused {:?}",
+            refused.page_index, refused.cause,
+        ),
+    }
+}
+
+fn walk_at_seller_floor(width: u32, seller_floor: u64) -> Result<TerminalFixture, RefusedRowV1> {
     let count = usize::try_from(width).expect("test width");
     let ones = vec![1; count];
     let zeros = vec![0; count];
@@ -1939,6 +2026,7 @@ fn terminal_fixture(width: u32) -> TerminalFixture {
             receive: ones.clone(),
             deliver: zeros.clone(),
             debit_limit: 2,
+            credit_floor: 0,
         },
         OrderSpec {
             nonce: 2,
@@ -1946,6 +2034,7 @@ fn terminal_fixture(width: u32) -> TerminalFixture {
             receive: zeros.clone(),
             deliver: ones.clone(),
             debit_limit: 0,
+            credit_floor: seller_floor,
         },
         OrderSpec {
             nonce: 3,
@@ -1953,6 +2042,7 @@ fn terminal_fixture(width: u32) -> TerminalFixture {
             receive: ones.clone(),
             deliver: zeros.clone(),
             debit_limit: 2,
+            credit_floor: 0,
         },
     ];
     let identity = batch.batch_id();
@@ -2122,7 +2212,6 @@ fn terminal_fixture(width: u32) -> TerminalFixture {
             *lots,
         )
     });
-    let manifest_counts = [0_u32, 1, 2];
     let cursor_len = runtime_verifier_len_v2(width).expect("verifier width");
     let verified_len = verified_candidate_len(width).expect("verified width");
     let zero_verified = vec![0_u8; verified_len];
@@ -2149,7 +2238,23 @@ fn terminal_fixture(width: u32) -> TerminalFixture {
         let mut cursor_output = vec![0xa5; cursor_len];
         let mut verified_scratch = vec![0_u8; verified_len];
         let mut verified_output = zero_verified.clone();
-        let manifest_count = *manifest_counts.get(index).expect("manifest count");
+        // THE MANIFEST'S WIDTH IS THE VERIFIER'S, NOT THE FIXTURE'S. This was
+        // the literal `[0, 1, 2]` until 2026-09-04, which was right for this
+        // walk and right for no other: the count is a function of the cursor's
+        // open order and whether this is the terminal step, and
+        // `runtime_manifest_orders_for_row_v2` is exported so a caller can size
+        // the bank before evaluating instead of rediscovering it from a
+        // refusal. Moving order 2's signed floor moves every `order_id` and so
+        // the row sort, and a hand-counted table would have gone on agreeing
+        // with a walk it no longer described.
+        let manifest_count = runtime_manifest_orders_for_row_v2(
+            &cursor,
+            GeneralOrderV1::decode(order_bytes_for(&placed, index))
+                .expect("order")
+                .order_id(),
+            index == 2,
+        )
+        .expect("manifest orders for this row");
         let manifest_len =
             settlement_manifest_len_v2(width, manifest_count).expect("manifest width");
         let mut manifest_scratch = vec![0_u8; manifest_len];
@@ -2185,8 +2290,30 @@ fn terminal_fixture(width: u32) -> TerminalFixture {
                 manifest_scratch: &mut manifest_scratch,
                 manifest_output: &mut manifest_output,
             },
-        )
-        .expect("verified row");
+        );
+        // A REFUSING ROW IS AN OUTCOME, NOT A PANIC. At the clearing floor this
+        // is always `Ok` and the `unreachable!` in `terminal_fixture` says so;
+        // at a floor above the fill the verifier refuses here, and what the
+        // caller needs is the prestate the chain would be handed for exactly
+        // this row.
+        let summary = match summary {
+            Ok(summary) => summary,
+            Err(cause) => {
+                return Err(RefusedRowV1 {
+                    batch,
+                    candidate: candidate.clone(),
+                    candidate_id,
+                    page_index: u32::try_from(index).expect("page index"),
+                    submission_before,
+                    verifier_before,
+                    page,
+                    order,
+                    manifest: vec![0_u8; manifest_len],
+                    cause,
+                    cleared_before: verify_steps,
+                });
+            }
+        };
         assert_eq!(summary.complete, index == 2);
         assert_eq!(summary.reward.lamports, CRANK_REWARD_LAMPORTS);
         // EVERY CRANK IS PAID, and paid out of a balance the candidate already
@@ -2251,7 +2378,7 @@ fn terminal_fixture(width: u32) -> TerminalFixture {
     // against the account rather than against the record's own arithmetic.
     authenticate_work_escrow_v1(submission, 3, ledger.work_observation(ledger.cranked))
         .expect("the verified submission still holds exactly what it owes");
-    TerminalFixture {
+    Ok(TerminalFixture {
         width,
         candidate,
         verifier: cursor,
@@ -2263,7 +2390,7 @@ fn terminal_fixture(width: u32) -> TerminalFixture {
         orders: placed.iter().map(|(bytes, _)| bytes.clone()).collect(),
         verify_steps,
         escrow: ledger,
-    }
+    })
 }
 
 /// The order record one candidate row names, in the candidate's own row order.
@@ -3776,6 +3903,304 @@ async fn real_sbf_verify_candidate_executes_every_row_and_terminal_result_at_run
             assert_eq!(refused.disposition(), AcceleratorDispositionV2::Refused);
         }
     }
+}
+
+/// One real-ELF verification row, returning the log beside the disposition.
+///
+/// `execute` cannot answer this question. Every semantic refusal the
+/// accelerator can raise publishes the SAME canonical refused acknowledgement
+/// -- that is deliberate, so Trading can tell a transport fault from a
+/// failure-atomic refusal -- so the ack carries no word for which conjunct
+/// refused and the validator log is the only place the cause can live.
+async fn execute_named(fixture: RealSbfFixture) -> (AcceleratorDispositionV2, Vec<String>) {
+    let mut context = fixture.test.start_with_context().await;
+    let (processed, _, _) = submit(
+        &mut context,
+        fixture.instruction,
+        &fixture.label,
+        false,
+        TopLevelPreludeV3::HeapThenLimit,
+    )
+    .await
+    .expect("ProgramTest processing");
+    assert!(
+        processed.result.is_ok(),
+        "an authenticated transport must execute, refusal or not: {:?}",
+        processed.result,
+    );
+    let metadata = processed.metadata.expect("transaction metadata");
+    let logs = metadata.log_messages.clone();
+    let returned = metadata.return_data.expect("typed accelerator ack");
+    let disposition = AcceleratorAckV2::decode(&returned.data)
+        .expect("ack decode")
+        .disposition();
+    (disposition, logs)
+}
+
+/// Assemble the runtime accounts one VerifyCandidateRow row is executed with.
+///
+/// One author for the ten coordinates, because the floored walk and the
+/// clearing walk must present the SAME frame or the comparison between them is
+/// not about the floor.
+fn verify_runtime_accounts(
+    width: u32,
+    batch: GeneralBatchV1,
+    candidate: &[u8],
+    page_index: u32,
+    submission_before: GeneralCandidateV1,
+    verifier_before: &[u8],
+    page: &[u8],
+    order: &[u8],
+    manifest: &[u8],
+) -> BTreeMap<u16, Vec<u8>> {
+    let mut runtime = BTreeMap::new();
+    runtime.insert(1, config(width));
+    runtime.insert(2, PRODUCT_RECORD.to_vec());
+    runtime.insert(
+        GENERAL_PRIMARY_STATE_ACCOUNT_V3,
+        local_state(
+            GeneralLocalStateKindV3::Candidate,
+            width,
+            &submission_before.to_bytes(),
+        ),
+    );
+    // A VACANT CURSOR IS ROW ZERO, and the bank presents it as no account at
+    // all rather than as a zeroed one.
+    runtime.insert(
+        GENERAL_VERIFY_VERIFIER_STATE_ACCOUNT_V3,
+        if page_index == 0 {
+            Vec::new()
+        } else {
+            local_state(GeneralLocalStateKindV3::Verifier, width, verifier_before)
+        },
+    );
+    runtime.insert(GENERAL_VERIFY_RESULT_STATE_ACCOUNT_V3, Vec::new());
+    runtime.insert(GENERAL_VERIFY_PAYER_ACCOUNT_V3, Vec::new());
+    runtime.insert(GENERAL_VERIFY_RENT_CREDIT_ACCOUNT_V3, Vec::new());
+    for (kind, bytes) in [
+        (
+            GeneralReadonlyEvidenceKindV3::ClosedBatch,
+            local_state(GeneralLocalStateKindV3::Batch, width, &batch.to_bytes()),
+        ),
+        (
+            GeneralReadonlyEvidenceKindV3::CandidateImage,
+            candidate.to_vec(),
+        ),
+        (GeneralReadonlyEvidenceKindV3::CandidatePage, page.to_vec()),
+        (
+            GeneralReadonlyEvidenceKindV3::EscrowedOrder,
+            local_state(GeneralLocalStateKindV3::Order, width, order),
+        ),
+        (
+            GeneralReadonlyEvidenceKindV3::SettlementManifest,
+            manifest.to_vec(),
+        ),
+    ] {
+        runtime.insert(evidence_coordinate(Action::VerifyCandidateRow, kind), bytes);
+    }
+    runtime
+}
+
+/// The controller request one VerifyCandidateRow row asks the chain for.
+fn verify_controller(candidate_id: [u8; 32], page_index: u32) -> ControllerRequestV3 {
+    ControllerRequestV3 {
+        action: ControllerActionV3::VerifyCandidateRow,
+        expected_revision: u64::from(page_index),
+        subject_id: Some(candidate_id),
+        page_index,
+        execution_index: 0,
+        manifest_order_index: 0,
+        primary_state_bump: 1,
+        secondary_state_bump: 1,
+        result_state_bump: 1,
+    }
+}
+
+/// The signed floor a maker carries on the record the row names.
+fn signed_floor_of(order: &[u8]) -> u64 {
+    GeneralOrderV1::decode(order)
+        .expect("escrowed order record")
+        .header()
+        .min_quote_credit_per_lot
+}
+
+/// THE SELLER'S FLOOR ON A REAL ELF, AT ITS BOUNDARY AND ONE STEP PAST IT.
+///
+/// `a_fill_below_the_sellers_floor_refuses_by_name_and_at_the_floor_admits`
+/// settled the arithmetic natively, on a hand-built row. What it could not say
+/// is whether the conjunct is REACHABLE through the accelerator: the floor is a
+/// term of the signed order record, it travels to the chain as the
+/// `EscrowedOrder` evidence account, and the Effect writes it into the cursor's
+/// current-order window. Each of those is a place a floor can be dropped
+/// silently, and until 2026-09-04 the whole real-ELF verify walk ran with the
+/// value zero -- where `0 * lots` is zero for every `lots`, so the comparison
+/// passes whether or not the term ever arrived.
+///
+/// The two walks differ in ONE signed field. Order 2 -- the only pure seller,
+/// paid exactly one quote per lot at every runtime width -- signs a floor of one
+/// in the clearing walk and two in the refusing one. Everything else follows:
+/// `order_id` is the digest of the signed terms, so the floor moves the seller's
+/// identity, and rows are sorted by identity, so it moves the row sort too.
+/// Nothing below is typed; at width 1 the seller sorts LAST and at width 258 it
+/// sorts SECOND, which is a property of three digests and not a choice.
+///
+/// WHICH ROW REFUSES IS NOT THE ROW THAT FILLS, and this walk is what taught it.
+/// The verifier is streaming: it accumulates a fill into the cursor's open order
+/// and checks that order's quote conjuncts when the order CLOSES -- at the row
+/// that names a different order, or at the terminal step for the last one. So at
+/// width 258 the seller's own row is ACCEPTED on chain and the refusal arrives
+/// one row later, when the next order displaces it. A test that asserted "the
+/// seller's row refuses" would have been asserting a coincidence of the width it
+/// happened to be written at.
+///
+/// THREE CONTROLS, because a refusal on its own is a test of nothing:
+///
+/// 1. the protocol's own verifier names `CreditLimit` NATIVELY for this exact
+///    walk, so the fixture is not merely failing somewhere;
+/// 2. every row of the SAME refusing walk that precedes the refusal executes and
+///    is `Accepted` on the ELF, so the walk reaches the conjunct;
+/// 3. the clearing walk's every row executes, is `Accepted`, and NO log carries
+///    the line -- without this the test would pass on an accelerator that
+///    printed the seller's floor for everything it refused.
+#[tokio::test]
+async fn real_sbf_verify_candidate_refuses_a_fill_below_the_sellers_floor_at_runtime_widths() {
+    let named = RuntimeVerifyErrorV2::CreditLimit.log_line();
+    for width in [1_u32, 258] {
+        let refused = walk_at_seller_floor(width, SELLER_CREDIT_FLOOR_REFUSES)
+            .err()
+            .expect("a floor one step above the fill must refuse this walk");
+        // CONTROL 1: the semantic owner says which conjunct, before any ELF.
+        assert_eq!(
+            refused.cause,
+            GeneralCandidateErrorV1::Verify(RuntimeVerifyErrorV2::CreditLimit),
+            "width {width}",
+        );
+        // THE ACCUSED ORDER IS IN PLAY AT THIS ROW, and it is one of exactly
+        // two: the order this row names, or the one the cursor still held open
+        // when this row displaced it. Both are read out of records rather than
+        // predicted from an index the sort may have moved.
+        let row_floor = signed_floor_of(&refused.order);
+        let open_floor = RuntimeCandidateVerifierV2::decode(&refused.verifier_before)
+            .ok()
+            .and_then(|cursor| cursor.current_order().ok().flatten())
+            .map_or(0, |order| order.min_quote_credit_per_lot);
+        assert!(
+            row_floor == SELLER_CREDIT_FLOOR_REFUSES || open_floor == SELLER_CREDIT_FLOOR_REFUSES,
+            "width {width}: the refusal accuses no floored order \
+             (this row {row_floor}, cursor's open order {open_floor})",
+        );
+
+        // CONTROL 2: every row before it commits on the real ELF.
+        for (index, step) in refused.cleared_before.iter().enumerate() {
+            let page_index = u32::try_from(index).expect("page index");
+            let (disposition, logs) = execute_verify_row(
+                width,
+                refused.batch,
+                &refused.candidate,
+                refused.candidate_id,
+                page_index,
+                step,
+            )
+            .await;
+            assert_eq!(
+                disposition,
+                AcceleratorDispositionV2::Accepted,
+                "the refusing walk's row {page_index} at width {width} must commit: {logs:?}",
+            );
+            assert!(
+                !logs.iter().any(|line| line.contains(named)),
+                "row {page_index} at width {width} committed and named a floor refusal: {logs:?}",
+            );
+        }
+
+        // THE ROW UNDER TEST, on the real ELF.
+        let (disposition, logs) = execute_named(real_sbf_fixture_v3(
+            width,
+            verify_controller(refused.candidate_id, refused.page_index),
+            verify_candidate_bank(width, refused.submission_before, refused.page_index, 0),
+            verify_runtime_accounts(
+                width,
+                refused.batch,
+                &refused.candidate,
+                refused.page_index,
+                refused.submission_before,
+                &refused.verifier_before,
+                &refused.page,
+                &refused.order,
+                &refused.manifest,
+            ),
+        ))
+        .await;
+        assert_eq!(
+            disposition,
+            AcceleratorDispositionV2::Refused,
+            "width {width}: {logs:?}",
+        );
+        assert!(
+            logs.iter().any(|line| line.contains(named)),
+            "the accelerator refused without naming the seller's floor: {logs:?}",
+        );
+
+        // CONTROL 3: the same walk one floor lower commits every row, and no
+        // row says anything about a floor.
+        let cleared = terminal_fixture(width);
+        assert!(
+            cleared
+                .verify_steps
+                .iter()
+                .any(|step| signed_floor_of(&step.order) == SELLER_CREDIT_FLOOR_CLEARS),
+            "the clearing walk must carry a floored seller, or it controls nothing",
+        );
+        for (index, step) in cleared.verify_steps.iter().enumerate() {
+            let page_index = u32::try_from(index).expect("page index");
+            let (disposition, logs) = execute_verify_row(
+                width,
+                cleared.batch,
+                &cleared.candidate,
+                cleared.candidate_id,
+                page_index,
+                step,
+            )
+            .await;
+            assert_eq!(
+                disposition,
+                AcceleratorDispositionV2::Accepted,
+                "a walk at the floor must commit row {page_index} at width {width}: {logs:?}",
+            );
+            assert!(
+                !logs.iter().any(|line| line.contains(named)),
+                "the accelerator names a floor refusal on a row that committed: {logs:?}",
+            );
+        }
+    }
+}
+
+/// Execute one verified-row step on the real ELF, returning disposition and log.
+async fn execute_verify_row(
+    width: u32,
+    batch: GeneralBatchV1,
+    candidate: &[u8],
+    candidate_id: [u8; 32],
+    page_index: u32,
+    step: &VerifyStepFixture,
+) -> (AcceleratorDispositionV2, Vec<String>) {
+    execute_named(real_sbf_fixture_v3(
+        width,
+        verify_controller(candidate_id, page_index),
+        verify_candidate_bank(width, step.submission_before, page_index, 0),
+        verify_runtime_accounts(
+            width,
+            batch,
+            candidate,
+            page_index,
+            step.submission_before,
+            &step.verifier_before,
+            &step.page,
+            &step.order,
+            &step.manifest,
+        ),
+    ))
+    .await
 }
 
 #[tokio::test]

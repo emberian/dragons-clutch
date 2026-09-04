@@ -228,6 +228,52 @@ pub enum RuntimeVerifyErrorV2 {
     ComparisonDomain,
 }
 
+impl RuntimeVerifyErrorV2 {
+    /// The exact line a program writes to the validator log for this refusal.
+    ///
+    /// The accelerator publishes ONE canonical refused acknowledgement for every
+    /// semantic refusal it can raise, on purpose, so that Trading can tell a
+    /// transport fault from a failure-atomic refusal. The consequence is that
+    /// the wire cannot carry which conjunct of row verification refused, and
+    /// until 2026-09-04 nothing else did either: a `CreditLimit` and a
+    /// `NonCanonicalOrder` reached a reader as the same six words, and the only
+    /// way to tell them apart was to re-derive the fill by hand. That is the
+    /// `map_err` that discards its cause, one CPI boundary out.
+    ///
+    /// A `&'static str` per variant rather than a `{:?}`: the caller is a
+    /// `no_std` program whose peak heap already binds at runtime width 258, and
+    /// `sol_log` takes a `&str` with no allocation at all. The match is
+    /// exhaustive, so a seventeenth variant does not compile until its author
+    /// says what a reader should see.
+    ///
+    /// It lives here, beside the enum, rather than in the program: a second
+    /// module that spelled these lines would be a second author for what each
+    /// refusal means, and would silently keep the old wording when a variant is
+    /// split.
+    #[must_use]
+    pub const fn log_line(self) -> &'static str {
+        match self {
+            Self::Codec => "general-verify: refused, a record did not decode",
+            Self::InvalidLength => "general-verify: refused, a bank had another exact width",
+            Self::ArithmeticOverflow => "general-verify: refused, checked arithmetic overflowed",
+            Self::CoordinateMismatch => "general-verify: refused, page/row/revision coordinates",
+            Self::AuthenticatedOrderMismatch => {
+                "general-verify: refused, the row is not the order it names"
+            }
+            Self::NonCanonicalOrder => "general-verify: refused, rows are not in identity order",
+            Self::OrderSubstitution => "general-verify: refused, two fragments, two terms",
+            Self::TooManyOrders => "general-verify: refused, more orders than the batch admits",
+            Self::ExcessLots => "general-verify: refused, fill exceeds the signed maximum lots",
+            Self::QuoteLimit => "general-verify: refused, buyer charged above the signed cap",
+            Self::CreditLimit => "general-verify: refused, seller paid below the signed floor",
+            Self::ClaimImbalance => "general-verify: refused, no uniform complete-set delta",
+            Self::QuoteImbalance => "general-verify: refused, quote inventory does not fund it",
+            Self::InvalidCursor => "general-verify: refused, the persisted cursor is hostile",
+            Self::ComparisonDomain => "general-verify: refused, candidates from another domain",
+        }
+    }
+}
+
 /// Result alias for runtime-width candidate verification.
 pub type RuntimeVerifyResultV2<T> = core::result::Result<T, RuntimeVerifyErrorV2>;
 

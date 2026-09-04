@@ -25,6 +25,18 @@ pub const CLAIMS_FOUNDING_REQUEST_BYTES_V5: usize = 832;
 /// and produces a byte-identical aggregate, Position, admission, request and
 /// receipt.
 pub const CLAIMS_FOUNDING_ACCOUNT_COUNT_V6: usize = 33;
+
+/// How many accounts the failure-escrow seating APPENDED to the founding frame.
+///
+/// Declared here, beside the count it is part of, because it is what a caller
+/// building the frame has to know beyond the total: both of these accounts are
+/// writable and neither was in the frame before, so a host's distinct-writable
+/// census moves by exactly this much. Measured 2026-09-04: the composed
+/// `DCLTGMF3` census pinned twelve writable keys as a BARE LITERAL and refused
+/// every founding the moment the frame grew, while the split route's census --
+/// which read a constant -- passed. One literal, six failing host tests, and a
+/// program change that had nothing to answer for.
+pub const CLAIMS_FOUNDING_ESCROW_ACCOUNT_COUNT_V6: usize = 2;
 /// Exact fixed founding receipt width.
 pub const CLAIMS_FOUNDING_RECEIPT_BYTES_V5: usize = 1008;
 /// Founding request wire magic.

@@ -1647,6 +1647,7 @@ dependencies = [
  "dclutch-capability-contract",
  "dclutch-capability-program-contract",
  "dclutch-chain-bundle-builder",
+ "dclutch-claims-conservation-contract",
  "dclutch-claims-svm",
  "dclutch-core-contract",
  "dclutch-cu-checkpoint",

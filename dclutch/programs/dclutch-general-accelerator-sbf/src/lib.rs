@@ -39,12 +39,16 @@ use dclutch_general_adapter_contract::{
     account_rules_v3::general_account_profile_fixed_count_v3,
     admitted_accelerator_v3::authenticate_frozen_selection_v3,
     artifacts_v3::{GeneralDecodedRequestV3, decode_general_request_v3},
-    candidate_v1::{CandidateVerifyRowViewV1, GeneralCandidateV1, candidate_verifier_len_v1},
+    candidate_v1::{
+        CandidateVerifyRowViewV1, GeneralCandidateErrorV1, GeneralCandidateV1,
+        candidate_verifier_len_v1,
+    },
     collection_v1::GeneralBatchV1,
     hot_candidate_v3::{
-        GENERAL_HOT_COMMON_IDENTITIES_V3, authenticate_general_close_candidate_v3,
-        general_hot_candidate_bank_len_v3, general_hot_environment_from_bank_v3,
-        general_hot_scalar_count_v3, project_general_cancel_order_candidate_in_place_v3,
+        GENERAL_HOT_COMMON_IDENTITIES_V3, GeneralHotCandidateErrorV3,
+        authenticate_general_close_candidate_v3, general_hot_candidate_bank_len_v3,
+        general_hot_environment_from_bank_v3, general_hot_scalar_count_v3,
+        project_general_cancel_order_candidate_in_place_v3,
         project_general_close_batch_candidate_in_place_v3,
         project_general_hot_candidate_in_place_v3,
         project_general_initialize_candidate_in_place_v3,
@@ -1353,8 +1357,35 @@ fn evaluate_verify_candidate(
         &mut cursor_workspace,
         &manifest_data,
     )
-    .map_err(|_| GeneralAcceleratorSemanticErrorV3::Candidate)?;
+    .map_err(verify_cause)?;
     Ok(())
+}
+
+/// Name the row verifier's own conjunct before publishing the coarse ack.
+///
+/// [`GeneralAcceleratorSemanticErrorV3::Candidate`] covers every way candidate
+/// projection can refuse, and the wire deliberately carries no more than that.
+/// The ROW VERIFIER, though, already computed which conjunct failed and carries
+/// it all the way to this line as
+/// `GeneralHotCandidateErrorV3::Verify(GeneralCandidateErrorV1::Verify(..))` --
+/// and `map_err(|_| Candidate)` threw it away at the last place that could see
+/// it. A reader was then left to re-derive a fill by hand to learn whether a
+/// candidate had charged a buyer above their signed cap or paid a seller below
+/// their signed floor, which are opposite accusations against opposite parties.
+///
+/// The line is [`RuntimeVerifyErrorV2::log_line`]'s, not this program's: the
+/// enum's own module says what each of its refusals means, so a variant that is
+/// later split cannot leave a stale sentence behind here.
+///
+/// Only the verifier's cause is surfaced. The other arms of
+/// `GeneralHotCandidateErrorV3` are widths and coordinates the physical frame
+/// already refuses by name, so adding them would cost heap for a distinction
+/// the reader has elsewhere.
+fn verify_cause(error: GeneralHotCandidateErrorV3) -> GeneralAcceleratorSemanticErrorV3 {
+    if let GeneralHotCandidateErrorV3::Verify(GeneralCandidateErrorV1::Verify(cause)) = error {
+        sol_log(cause.log_line());
+    }
+    GeneralAcceleratorSemanticErrorV3::Candidate
 }
 
 fn evaluate_release_order(

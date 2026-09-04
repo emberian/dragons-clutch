@@ -37,6 +37,27 @@ function scalar(source, name, seen = new Set()) {
       const token = factor.trim();
       if (/^[0-9_]+$/.test(token)) return product * Number(token.replaceAll('_', ''));
       if (/^[A-Z][A-Z0-9_]*$/.test(token)) return product * scalar(source, token, seen);
+      // A FULLY QUALIFIED CROSS-CRATE CONSTANT. One author for a number two
+      // crates share is the point, not an accident, so the emitter follows the
+      // path instead of refusing it: the host's writable-key census is
+      // `<its own base> + dclutch_claims_svm::...::CLAIMS_FOUNDING_ESCROW_ACCOUNT_COUNT_V6`
+      // precisely so the escrow's share of it is the PROGRAM'S declaration.
+      // The trailing name must define in exactly one of the sources read
+      // above; two definitions is an ambiguity this may not silently pick a
+      // side in.
+      const qualified = /^(?:[A-Za-z_][A-Za-z0-9_]*::)+([A-Z][A-Z0-9_]*)$/.exec(token);
+      if (qualified) {
+        const target = qualified[1];
+        const owners = Object.keys(sources).filter((candidate) => new RegExp(
+          `(?:pub )?const ${target}: (?:usize|u8|u16|u32|u64|i64) =`,
+        ).test(sources[candidate]));
+        if (owners.length !== 1) {
+          throw new Error(
+            `cross-crate Rust const ${token} defines in ${owners.length} of the read sources, not exactly one`,
+          );
+        }
+        return product * scalar(owners[0], target, seen);
+      }
       throw new Error(`unparsable Rust const ${source}.${name}: ${expression}`);
     }, 1)
   ), 0);

@@ -4953,3 +4953,15 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Cuts: `4153bd0eb`.
 - Started 17:50 EDT: RECOVERY-4 **`(spawned)`** — a `ladder` family tier on one live validator (found two-source → advance →
   the rung captured → settle; and the exhausted path), the four labels bound from folded evidence, the first loopback CU.
+- CLAIMS-17 closed (eleven commits: `ebbccbd4e`/`266c1d687` founding v6, `4f847be64`/`058021af4` the conservation route,
+  `fd2cb0905` the signed-delta gate, `c23ce243d` the host census, + rows/docs): **founding v6 seats the escrow and the wire
+  did not move** — five of six escrow facts derive, the sixth (observed lamports) deliberately unpinned (pinning it hands
+  anyone a founding-time denial for one lamport); the shape is the RECORD's (`refunds_on_failure` carried out of the
+  authenticated basis); the account frame +2 in five places (60 of 64 locks; a width-one market no longer foundable);
+  **the conservation route dispatched on `DCLCNS01`** — its `move_collateral` built at a 6,528-byte frame (UB) and its CPI
+  had the Hoard as the account to DEBIT on a split, copied from the payout — both caught by the ELF and a desk-check;
+  the signed-delta waist gated credits-only (debits would freeze cohort-16's unseated failure column); a bare `12` in
+  the host census derived. 165 routes / 357 codes. Owed → CLAIMS-18 **`(spawned)`**: **no program-test in the tree executes
+  a Claims founding at all**; the conservation route has no ELF test; the refunding walk needs a joined fixture; frames red
+  on three links (three lanes landing at once). `refundsOnFailure` on the page is a browser-architecture question.
+- Cuts: `f030f4470`, `db5045975`.

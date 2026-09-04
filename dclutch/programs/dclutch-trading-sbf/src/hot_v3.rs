@@ -798,6 +798,32 @@ macro_rules! hot_cu_sealed_ownership_ranges {
     ($verdict:expr, $action:expr, $observed:expr) => {};
 }
 
+/// Name which conjunct of the role-carrier resolution refused.
+///
+/// `resolve_carrier_by_representative_v3` has SIX `TradingSbfError::Release`
+/// exits and the wire carries one code for all of them, so a role that fails to
+/// resolve is a five-way guess: the tables disagreed in length, a carrier
+/// arrived signing or writable or non-executable, two distinct physical
+/// accounts carried the key, or the key is not in the frame at all. The first
+/// logged word is the case; the rest are its operands. Diagnostic-only.
+#[cfg(feature = "hot-cu-profile")]
+pub(crate) fn log_role_carrier_refusal_v1(case: u64, first: u64, second: u64, third: u64) {
+    solana_program::log::sol_log("dclutch-hot-why:role-carrier case/first/second/third");
+    solana_program::log::sol_log_64(case, first, second, third, 0);
+}
+
+#[cfg(feature = "hot-cu-profile")]
+macro_rules! hot_cu_role_carrier {
+    ($case:expr, $first:expr, $second:expr, $third:expr) => {
+        crate::hot_v3::log_role_carrier_refusal_v1($case, $first, $second, $third)
+    };
+}
+
+#[cfg(not(feature = "hot-cu-profile"))]
+macro_rules! hot_cu_role_carrier {
+    ($case:expr, $first:expr, $second:expr, $third:expr) => {};
+}
+
 #[cfg(feature = "hot-cu-profile")]
 macro_rules! hot_cu_reason {
     ($label:literal, $error:expr) => {{
@@ -4607,6 +4633,7 @@ fn execute_authenticated_hot_v3(
             &aliases,
         )?;
     }
+    hot_cu_checkpoint!("pf-close-separation");
     // One byte per logical coordinate, decoded once, whole frame checked here.
     let effect_privileges = child_route_privileges_v3(
         account_profile,
@@ -4614,8 +4641,10 @@ fn execute_authenticated_hot_v3(
         &dynamic_spans.widths,
         &runtime_accounts,
     )?;
+    hot_cu_checkpoint!("pf-child-privileges");
     let effect_accounts = downgraded_effect_accounts_v3(&runtime_accounts, &effect_privileges)?;
     hot_heap_mark!("downgraded-effects");
+    hot_cu_checkpoint!("pf-downgraded-effects");
     // Resolved ONCE for the preflight walk and the execution walk both. See
     // `ChildWalkResolutionV3` for what each walk was paying to re-derive.
     let child_walk = resolve_child_walk_v3(
@@ -12941,6 +12970,7 @@ fn resolve_carrier_by_representative_v3<'info>(
     view: impl Fn(usize) -> Result<AccountInfo<'info>, ProgramError>,
 ) -> Result<AccountInfo<'info>, ProgramError> {
     if len != aliases.len() {
+        hot_cu_role_carrier!(0, len as u64, aliases.len() as u64, 0);
         return Err(TradingSbfError::Release.into());
     }
     let mut found: Option<(usize, AccountInfo<'info>)> = None;
@@ -12955,11 +12985,18 @@ fn resolve_carrier_by_representative_v3<'info>(
         // signing is refused on its own terms, never absorbed into a
         // representative that happens to be clean.
         if !account.executable || account.is_signer || account.is_writable {
+            hot_cu_role_carrier!(
+                1,
+                coordinate as u64,
+                u64::from(account.executable),
+                u64::from(account.is_signer) | (u64::from(account.is_writable) << 1)
+            );
             return Err(TradingSbfError::Release.into());
         }
         let representative = representative_v3(coordinate, aliases)?;
         match found {
             Some((seen, _)) if seen != representative => {
+                hot_cu_role_carrier!(2, coordinate as u64, seen as u64, representative as u64);
                 return Err(TradingSbfError::Release.into());
             }
             Some(_) => {}
@@ -12967,9 +13004,23 @@ fn resolve_carrier_by_representative_v3<'info>(
         }
         coordinate = coordinate.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
-    found
-        .map(|(_, account)| account)
-        .ok_or_else(|| TradingSbfError::Release.into())
+    found.map(|(_, account)| account).ok_or_else(|| {
+        // The role's activated program is not in the child frame AT ALL. The
+        // first four bytes of the key it looked for are enough to say which
+        // program went missing without logging thirty-two.
+        hot_cu_role_carrier!(
+            3,
+            u64::from(u32::from_be_bytes([
+                expected[0],
+                expected[1],
+                expected[2],
+                expected[3]
+            ])),
+            len as u64,
+            0
+        );
+        TradingSbfError::Release.into()
+    })
 }
 
 /// Execute one Claims route and return ONLY the digest of what it produced.

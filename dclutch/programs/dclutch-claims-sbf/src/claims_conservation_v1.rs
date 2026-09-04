@@ -790,6 +790,10 @@ fn authenticate_custody_frame(
     let replay = CustodyReplaySeedsV1::from_request(*custody);
     let authority = CustodyAuthoritySeedsV1::from_request(*custody);
     let vault = CustodyVaultSeedsV1::from_request(*custody, true);
+    // The pair, before anything is invoked: a request whose source and
+    // destination are not this frame's two token accounts, in one order or the
+    // other, is refused here rather than at the CPI boundary.
+    transfer_pair(accounts, custody)?;
     if accounts.custody_caller_authority.key
         != &Pubkey::find_program_address(&caller.as_slices(), program_id).0
         || accounts.custody_replay.key
@@ -804,6 +808,37 @@ fn authenticate_custody_frame(
     Ok(())
 }
 
+/// The two token accounts Custody's Transfer frame names, IN ITS ORDER.
+///
+/// Coordinate 10 is `TransferSource` and 11 is `TransferDestination`
+/// (`dclutch-custody-contract`'s `frame_spec_v1`), and which of the Hoard and
+/// the actor's own account stands at each depends on the DIRECTION. The
+/// terminal payout next door is always a Hoard-to-holder transfer and can
+/// therefore write the pair down; this route cannot, and writing it down
+/// anyway is how a split would have handed Custody the Hoard as the account to
+/// debit. The order is taken from the request Custody itself will decode, so
+/// the frame and the wire cannot disagree.
+fn transfer_pair<'accounts, 'info>(
+    accounts: ConservationAccounts<'accounts, 'info>,
+    custody: &CustodyRequestV1,
+) -> Result<
+    (
+        &'accounts AccountInfo<'info>,
+        &'accounts AccountInfo<'info>,
+    ),
+    ProgramError,
+> {
+    let hoard = accounts.hoard_vault.key.to_bytes();
+    let external = accounts.external_collateral.key.to_bytes();
+    if custody.source == external && custody.destination == hoard {
+        return Ok((accounts.external_collateral, accounts.hoard_vault));
+    }
+    if custody.source == hoard && custody.destination == external {
+        return Ok((accounts.hoard_vault, accounts.external_collateral));
+    }
+    Err(ClaimsSbfError::Identity.into())
+}
+
 #[inline(never)]
 fn invoke_custody(
     program_id: &Pubkey,
@@ -811,6 +846,7 @@ fn invoke_custody(
     custody: &CustodyRequestV1,
     request_bytes: &[u8],
 ) -> Result<(), ProgramError> {
+    let (source, destination) = transfer_pair(accounts, custody)?;
     let instruction = Instruction {
         program_id: *accounts.custody_program.key,
         accounts: Vec::from([
@@ -824,8 +860,8 @@ fn invoke_custody(
             AccountMeta::new_readonly(*accounts.realm_staging.key, false),
             AccountMeta::new(*accounts.custody_replay.key, false),
             AccountMeta::new_readonly(*accounts.collateral_mint.key, false),
-            AccountMeta::new(*accounts.hoard_vault.key, false),
-            AccountMeta::new(*accounts.external_collateral.key, false),
+            AccountMeta::new(*source.key, false),
+            AccountMeta::new(*destination.key, false),
             AccountMeta::new_readonly(*accounts.custody_authority.key, false),
             AccountMeta::new_readonly(*accounts.token_program.key, false),
         ]),
@@ -854,8 +890,8 @@ fn invoke_custody(
             accounts.realm_staging.clone(),
             accounts.custody_replay.clone(),
             accounts.collateral_mint.clone(),
-            accounts.hoard_vault.clone(),
-            accounts.external_collateral.clone(),
+            source.clone(),
+            destination.clone(),
             accounts.custody_authority.clone(),
             accounts.token_program.clone(),
             accounts.custody_program.clone(),
@@ -879,6 +915,14 @@ mod tests {
     }
 
     fn request(direction: ClaimsConservationDirectionV1) -> ClaimsConservationRequestV1 {
+        // The balances move opposite ways, and the fixture has to say so: a
+        // split takes 77 atoms out of the actor and puts them in the Hoard, a
+        // merge does the reverse. A fixture that stated the split's balances
+        // for both directions would have made every merge assertion pass or
+        // fail for the wrong reason.
+        let split = matches!(direction, ClaimsConservationDirectionV1::Split);
+        let (pre_external, post_external) = if split { (100, 23) } else { (23, 100) };
+        let (pre_hoard, post_hoard) = if split { (0, 77) } else { (77, 0) };
         ClaimsConservationRequestV1 {
             direction,
             realm: id(1),
@@ -903,10 +947,10 @@ mod tests {
             expected_market_revision: 4,
             expected_position_revision: 2,
             expected_custody_revision: 3,
-            pre_external_amount: 100,
-            post_external_amount: 23,
-            pre_hoard_amount: 0,
-            post_hoard_amount: 77,
+            pre_external_amount: pre_external,
+            post_external_amount: post_external,
+            pre_hoard_amount: pre_hoard,
+            post_hoard_amount: post_hoard,
             claim_count: 3,
         }
     }
@@ -989,6 +1033,36 @@ mod tests {
         assert_eq!(
             hostile.validate().unwrap_err(),
             ConservationError::CollateralMismatch,
+        );
+    }
+
+    /// WHICH TOKEN ACCOUNT CUSTODY DEBITS depends on the direction, and this
+    /// route may not write the pair down.
+    ///
+    /// Custody's Transfer frame names coordinate 10 `TransferSource` and 11
+    /// `TransferDestination`. The terminal payout next door is always a
+    /// Hoard-to-holder transfer and can therefore hardcode the pair; the first
+    /// draft of this route copied that and would have handed Custody the HOARD
+    /// as the account to debit on a split -- a working merge and a split that
+    /// drains the Market. `transfer_pair` now orders the two by reading the
+    /// request Custody itself will decode, and this is that request's own
+    /// answer for both directions.
+    #[test]
+    fn a_split_debits_the_actor_and_a_merge_debits_the_hoard() {
+        let digest = id(0x9d);
+        let split = request(ClaimsConservationDirectionV1::Split)
+            .custody_request(digest)
+            .expect("split custody request");
+        assert_eq!(split.source, id(8), "a split debits the actor's own account");
+        assert_eq!(split.destination, id(9), "a split credits the Hoard");
+        let merge = request(ClaimsConservationDirectionV1::Merge)
+            .custody_request(digest)
+            .expect("merge custody request");
+        assert_eq!(merge.source, id(9), "a merge debits the Hoard");
+        assert_eq!(
+            merge.destination,
+            id(8),
+            "a merge credits the actor's own account"
         );
     }
 

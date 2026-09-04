@@ -9482,7 +9482,29 @@ const GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3: usize = 129;
 const GENERIC_MARKET_FOUNDING_PRICE_GATE_FIXED_ACCOUNTS_V4: usize =
     GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3 + 2;
 const GENERIC_MARKET_FOUNDING_PHYSICAL_FUNDING_ACCOUNTS_V3: usize = 2;
-const GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3: usize = 14;
+/// Distinct writable keys the composed founding frame carries.
+///
+/// TWO AUTHORS IS ONE TOO MANY, and this constant is the survivor. Until
+/// 2026-09-04 the composed route compared against a BARE LITERAL twelve while
+/// the split route compared against this constant, so seating the failure
+/// escrow -- which appends two writable accounts and nothing else -- moved one
+/// and not the other, and six host tests refused a founding the program was
+/// perfectly happy with. The escrow's contribution is now read from the
+/// PROGRAM'S own declaration rather than counted again here, so the next frame
+/// change moves this number by construction.
+const GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3: usize =
+    GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_BEFORE_ESCROW_V3
+        + dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_ESCROW_ACCOUNT_COUNT_V6;
+
+/// Message keys no address-lookup table can move: the payer, the invoked
+/// program and the ComputeBudget program.
+const GENERIC_MARKET_FOUNDING_CENSUS_STATIC_KEYS_V3: usize = 3;
+
+/// The twelve this frame carried before the failure escrow was seated: the
+/// Found authority, the Market, the RentCredit, the permit, both Custody
+/// replays, both vaults, the Claims aggregate, the founder Position, its
+/// admission, and the controller funding checkpoint.
+const GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_BEFORE_ESCROW_V3: usize = 12;
 const GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3: usize = 60;
 const GENERIC_MARKET_FOUNDING_PRICE_GATE_COMPLETE_KEYS_V4: usize =
     GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3 + 2;
@@ -10865,10 +10887,11 @@ fn build_generic_market_founding_v3(
     // Transaction admission is checked from the compiled bounded-v0 message,
     // after payer, ComputeBudget, and canonical ALT placement are known. A
     // frame-only `distinct + 2` estimate is not an admission proof.
-    if distinct_writable.len() != 12 {
+    if distinct_writable.len() != GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3 {
         return Err(Error::new(format!(
-            "the founding frame declared {} writable keys, not the twelve the outer requires",
-            distinct_writable.len()
+            "the founding frame declared {} writable keys, not the {} the outer requires",
+            distinct_writable.len(),
+            GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3,
         )));
     }
     let mut data = Vec::with_capacity(GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V3);
@@ -11105,13 +11128,14 @@ fn build_generic_found_and_permit_v3(
             distinct_writable.push(*key);
         }
     }
-    // The same twelve keys as the composed route: removing the Open window
-    // removes no writable key. A different count here means the shared
-    // windows drifted, not that this assertion needs adjusting.
+    // The same keys as the composed route: removing the Open window removes no
+    // writable key. A different count here means the shared windows drifted,
+    // not that this assertion needs adjusting.
     if distinct_writable.len() != GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3 {
         return Err(Error::new(format!(
-            "the DCLTGFP1 frame declared {} writable keys, not the twelve the outer requires",
-            distinct_writable.len()
+            "the DCLTGFP1 frame declared {} writable keys, not the {} the outer requires",
+            distinct_writable.len(),
+            GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3,
         )));
     }
     let mut data = Vec::with_capacity(GENERIC_FOUND_AND_PERMIT_INSTRUCTION_BYTES_V1);
@@ -16268,14 +16292,24 @@ mod tests {
     fn generic_market_founding_census_fixture_v3() -> (Pubkey, PreparedGenericMarketFoundingV3) {
         let payer = Pubkey::new_from_array([0xf1; 32]);
         let program_id = Pubkey::new_from_array([0xf2; 32]);
-        let distinct = (0_u8..55)
-            .map(|index| Pubkey::new_from_array([index.saturating_add(1); 32]))
+        // THE GEOMETRY IS DERIVED, NEVER TYPED. This fixture used to declare
+        // 55 distinct keys with a 12-writable prefix as literals and then PAD
+        // to the frame width by repeating them, so a frame that grew by two
+        // writable accounts grew only in repeated indexes and the census read
+        // an unchanged 58/12. Seating the failure escrow is exactly that
+        // change, and it made this fixture model a frame nobody builds.
+        let loaded = GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3
+            .saturating_sub(GENERIC_MARKET_FOUNDING_CENSUS_STATIC_KEYS_V3);
+        let distinct = (0..loaded)
+            .map(|index| {
+                Pubkey::new_from_array([u8::try_from(index).unwrap_or(u8::MAX).saturating_add(1); 32])
+            })
             .collect::<Vec<_>>();
         let mut accounts = distinct
             .iter()
             .enumerate()
             .map(|(index, key)| {
-                if index < 12 {
+                if index < GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3 {
                     AccountMeta::new(*key, false)
                 } else {
                     AccountMeta::new_readonly(*key, false)
@@ -17726,18 +17760,21 @@ mod tests {
     }
 
     #[test]
-    fn generic_founding_final_compiler_census_pins_the_58_key_shape() {
+    fn generic_founding_final_compiler_census_pins_the_60_key_shape() {
         let (payer, prepared) = generic_market_founding_census_fixture_v3();
         let census = authenticate_generic_market_founding_lock_census_v3(payer, &prepared)
             .expect("canonical DCLTGMF3 census");
-        assert_eq!(census.complete_keys, 58);
+        // Sixty and fourteen since the failure escrow was seated at founding:
+        // its Position and its admission are two more writable keys, and the
+        // readonly count did not move.
+        assert_eq!(census.complete_keys, 60);
         assert_eq!(census.required_signatures, 1);
         assert_eq!(census.static_keys, 3);
-        assert_eq!(census.loaded_writable, 12);
+        assert_eq!(census.loaded_writable, 14);
         assert_eq!(census.loaded_readonly, 43);
         assert_eq!(
             hex(&census.key_privilege_digest),
-            "8fb27f15c8509350a0702a1c6e3208ade60d6c16b48bb6d324cc721a08186561"
+            "10e652f8a26ead25d6d08a99590e4eaa465ed2c12e2f73584bd5657ad6eb29cc"
         );
         assert_eq!(
             census,
@@ -17799,38 +17836,51 @@ mod tests {
         let routed_bytes =
             1 + routed_signatures * 64 + VersionedMessage::V0(routed).serialize().len();
 
-        // 2,129 as a legacy message, 897 over the maximum, so this frame was
-        // never submittable inline and the table is not an optimisation. 55 of
-        // its 58 coordinates become one-byte indexes; the three that stay are
+        // 2,198 as a legacy message, 966 over the maximum, so this frame was
+        // never submittable inline and the table is not an optimisation. 57 of
+        // its 60 coordinates become one-byte indexes; the three that stay are
         // the payer, the invoked program and the ComputeBudget program, none of
-        // which a table can move. 55 x 31 saved, less the 36 the lookup entry
-        // costs, is the 1,669 between the two figures.
-        assert_eq!(legacy_bytes, 2_129);
-        assert_eq!(routed_bytes, 460);
+        // which a table can move.
+        //
+        // It was 2,129 over 55 coordinates until the failure escrow was seated
+        // at founding: two more keys is 64 bytes of key plus four index bytes
+        // plus one compact-u16 step, which is exactly the 69 between them. The
+        // table absorbs the keys, so the ROUTED figure moves by five rather
+        // than sixty-nine.
+        assert_eq!(legacy_bytes, 2_198);
+        assert_eq!(routed_bytes, 467);
         assert_eq!(static_keys, 3);
-        assert_eq!(loaded, 55);
+        assert_eq!(loaded, 57);
         assert!(
             legacy_bytes > 1_232,
             "a route that already fit would need no table"
         );
         assert!(routed_bytes <= 1_232, "the table did not close the overrun");
-        // The same 58 the neighbouring census pins as `complete_keys`. Two
+        // The same 60 the neighbouring census pins as `complete_keys`. Two
         // instruments, one number: if they ever disagree, one of them is
         // measuring a frame the producer does not send.
-        assert_eq!(static_keys + loaded, 58);
+        assert_eq!(
+            static_keys + loaded,
+            GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3
+        );
     }
 
     #[test]
     fn generic_founding_complete_key_census_enforces_the_64_65_wall() {
         let (payer, prepared) = generic_market_founding_census_fixture_v3();
+        // FOUR, WHERE IT WAS SIX. The frame's own sixty keys leave four before
+        // the devnet limit, and that headroom is what the failure escrow's two
+        // accounts were bought with. The limit did not move; the frame did.
+        let headroom = DEVNET_ACCOUNT_LOCK_LIMIT_V1 - GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3;
+        assert_eq!(headroom, 4);
         let admitted = compiled_complete_lock_census_v1(
             payer,
-            &append_distinct_census_accounts_v1(&prepared.instruction, 6),
+            &append_distinct_census_accounts_v1(&prepared.instruction, headroom),
         )
         .expect("64-key census");
         let refused = compiled_complete_lock_census_v1(
             payer,
-            &append_distinct_census_accounts_v1(&prepared.instruction, 7),
+            &append_distinct_census_accounts_v1(&prepared.instruction, headroom + 1),
         )
         .expect("65-key census");
         assert_eq!(admitted.complete_keys, DEVNET_ACCOUNT_LOCK_LIMIT_V1);
@@ -17843,9 +17893,13 @@ mod tests {
     fn generic_founding_65_key_drift_plans_zero_writes_or_transactions() {
         let (payer, mut prepared) = generic_market_founding_census_fixture_v3();
         let width = prepared.instruction.accounts.len();
-        for offset in 0_u8..7 {
-            prepared.instruction.accounts[width - 1 - usize::from(offset)].pubkey =
-                Pubkey::new_from_array([0xa0 + offset; 32]);
+        // One more distinct key than the frame's own headroom, so the drifted
+        // frame lands exactly one past the limit at unchanged width.
+        let drift = DEVNET_ACCOUNT_LOCK_LIMIT_V1 - GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3 + 1;
+        for offset in 0..drift {
+            prepared.instruction.accounts[width - 1 - offset].pubkey = Pubkey::new_from_array(
+                [0xa0_u8.saturating_add(u8::try_from(offset).unwrap_or(0)); 32],
+            );
         }
         prepared.lock_expectation.frame_digest =
             exact_instruction_frame_digest_v1(&prepared.instruction);
@@ -17874,9 +17928,14 @@ mod tests {
         substituted.instruction.accounts[0].pubkey = Pubkey::new_from_array([0xe1; 32]);
         assert!(authenticate_generic_market_founding_lock_census_v3(payer, &substituted).is_err());
 
+        // The last two DISTINCT coordinates, derived rather than indexed by
+        // hand: the fixture repeats keys past that point, so a literal index
+        // silently stops naming a distinct key the moment the frame widens.
+        let distinct_keys = GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3
+            - GENERIC_MARKET_FOUNDING_CENSUS_STATIC_KEYS_V3;
         let mut duplicate = prepared.clone();
-        let removed = duplicate.instruction.accounts[55].pubkey;
-        let retained = duplicate.instruction.accounts[54].pubkey;
+        let removed = duplicate.instruction.accounts[distinct_keys - 1].pubkey;
+        let retained = duplicate.instruction.accounts[distinct_keys - 2].pubkey;
         for meta in &mut duplicate.instruction.accounts {
             if meta.pubkey == removed {
                 meta.pubkey = retained;
@@ -17891,8 +17950,13 @@ mod tests {
         reordered.instruction.accounts.swap(0, 1);
         assert!(authenticate_generic_market_founding_lock_census_v3(payer, &reordered).is_err());
 
+        // The FIRST READONLY coordinate, which is the writable prefix's width.
+        // It was written as a literal twelve and stopped being readonly the
+        // moment the failure escrow's two writable accounts joined the frame,
+        // so the privilege drift this asserts became no drift at all.
         let mut privilege = prepared.clone();
-        privilege.instruction.accounts[12].is_writable = true;
+        privilege.instruction.accounts[GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3].is_writable =
+            true;
         assert!(authenticate_generic_market_founding_lock_census_v3(payer, &privilege).is_err());
         privilege.lock_expectation.frame_digest =
             exact_instruction_frame_digest_v1(&privilege.instruction);
