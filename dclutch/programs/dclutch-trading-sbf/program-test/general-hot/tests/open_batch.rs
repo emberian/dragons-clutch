@@ -19,7 +19,7 @@ use dclutch_capability_program_contract::{
 };
 use dclutch_capability_seal_contract::{CAPABILITY_SEAL_BYTES_V1, SealedDescriptorClosureV1};
 use dclutch_chain_bundle_builder::{
-    WaistFactsV1,
+    BuilderError, WaistFactsV1,
     admitted::AdmittedAotInputV1,
     artifacts::{ArtifactSetV1, DerivedRecordV1, derive_record, digest},
     bundle::{BundleInputV1, FixedCorpusV1, ScenarioV1},
@@ -30,19 +30,30 @@ use dclutch_chain_bundle_builder::{
     general::{
         GeneralActionPrestateV1, GeneralRequestEvidenceV1, GeneralRequestInputV1,
         build_general_action_bundle_v1, derive_general_request_v1,
+        general_action_prestate_shape_v1,
     },
 };
 use dclutch_core_contract::ContentId;
 use dclutch_direct_hot_program_test_support::waist;
 use dclutch_general_adapter_contract::{
-    collection_v1::{BatchStatusV1, GeneralBatchOccurrenceTermsV1, GeneralBatchV1},
+    candidate_v1::{
+        GeneralCandidateOpeningV1, GeneralCandidateStatusV1, GeneralCandidateV1,
+        authenticate_candidate_identity_v1, general_candidate_identity_v1,
+    },
+    collection_v1::{
+        BatchStatusV1, GeneralBatchOccurrenceTermsV1, GeneralBatchV1,
+        authenticate_batch_candidate_v1,
+    },
     local_state_v3::{GeneralLocalStateKindV3, GeneralLocalStateV3},
+    runtime_width::{CandidateHeaderV2, CandidateV2, candidate_len},
     state_artifacts_v3::{
         GENERAL_PRIMARY_PAYER_ACCOUNT_V3, GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3,
-        GENERAL_PRIMARY_STATE_ACCOUNT_V3, general_system_program_account_v3,
+        GENERAL_PRIMARY_STATE_ACCOUNT_V3, GeneralReadonlyEvidenceKindV3,
+        general_readonly_evidence_v3, general_system_program_account_v3,
     },
 };
 use dclutch_general_codec::Action;
+use dclutch_general_config_contract::v3::GeneralConfigV3;
 use dclutch_general_config_contract::{GENERAL_ROOT_BYTES_V2, GeneralRootV2};
 use dclutch_market_core_codec::{
     CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
@@ -101,6 +112,12 @@ const GENERATION: u64 = 9;
 /// and the frame control compares the two against the live bank.
 const GENESIS_PAYER_LAMPORTS: u64 = 10_000_000_000;
 const PRICE_SCALE: u64 = 1_000_000;
+/// The solver that funds and endorses the campaign's one candidate.
+const SOLVER: [u8; 32] = [0xc3; 32];
+/// Revision the candidate's pages are pinned at.
+const CANDIDATE_PAGE_REVISION: u64 = 11;
+/// Lamports one verification crank pays out of the candidate's work escrow.
+const CRANK_REWARD_LAMPORTS: u64 = 5_000;
 const CLAIM_BASIS: [u8; 32] = [0x56; 32];
 
 #[derive(Clone)]
@@ -695,6 +712,120 @@ fn genesis_prestate(campaign: &CampaignV1) -> ChainPrestateV1 {
     }
 }
 
+/// The coordinate this action's own profile declares for one evidence kind.
+fn evidence_coordinate(action: Action, kind: GeneralReadonlyEvidenceKindV3) -> u16 {
+    let mut index = 0_u16;
+    loop {
+        let evidence = general_readonly_evidence_v3(action, index)
+            .expect("this action declares evidence of that kind");
+        if evidence.kind == kind {
+            return evidence.coordinate;
+        }
+        index = index.checked_add(1).expect("bounded evidence table");
+    }
+}
+
+/// The authenticated records one action reads that are not its primary state.
+///
+/// Every entry is a record the bank really holds: one of them is read back out
+/// of an earlier action's poststate and the rest are installed at genesis --
+/// which is a debt with a name, not a shortcut. The two batch actions read
+/// nothing but their primary state, so `OpenBatch` and `CloseBatch` pass the
+/// default and the campaign below is unchanged for them.
+///
+/// It is ONE value for both ends of the execution: the request derivation and
+/// the candidate projector are the same question -- which records does this
+/// action read -- asked at the two ends, and a campaign that built two lists
+/// could answer it differently in each.
+#[derive(Clone, Default)]
+struct EvidenceCorpusV1 {
+    /// The closed Batch a candidate action names, exactly as the bank holds it.
+    closed_batch: Option<BuiltAccountV1>,
+    /// The immutable runtime-width candidate image, carrying its own digest.
+    candidate_image: Option<BuiltAccountV1>,
+    /// The exact submission record this execution writes.
+    submitted_candidate: Option<BuiltAccountV1>,
+}
+
+impl EvidenceCorpusV1 {
+    /// The records the REQUEST derivation reads, per action.
+    fn request(&self) -> GeneralRequestEvidenceV1<'_> {
+        GeneralRequestEvidenceV1 {
+            candidate_image: self.candidate_image.as_ref().map(built_bytes),
+            ..GeneralRequestEvidenceV1::default()
+        }
+    }
+
+    /// The records the PROJECTOR reads, which is a strict superset.
+    fn projector(&self) -> GeneralRequestEvidenceV1<'_> {
+        GeneralRequestEvidenceV1 {
+            batch_account: self.closed_batch.as_ref().map(built_bytes),
+            submitted_candidate: self.submitted_candidate.as_ref().map(built_bytes),
+            ..self.request()
+        }
+    }
+
+    /// Bind each present record at the coordinate its action's profile declares.
+    fn bindings(&self, action: Action) -> Vec<(usize, BuiltAccountV1)> {
+        [
+            (
+                GeneralReadonlyEvidenceKindV3::ClosedBatch,
+                &self.closed_batch,
+            ),
+            (
+                GeneralReadonlyEvidenceKindV3::CandidateImage,
+                &self.candidate_image,
+            ),
+            (
+                GeneralReadonlyEvidenceKindV3::SubmittedCandidate,
+                &self.submitted_candidate,
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(kind, value)| {
+            let account = value.as_ref()?;
+            Some((
+                usize::from(evidence_coordinate(action, kind)),
+                account.clone(),
+            ))
+        })
+        .collect()
+    }
+}
+
+/// One immutable evidence record, installed at the address of its own digest.
+///
+/// CONTENT-ADDRESSED ON PURPOSE. The AccountProfile authenticates an evidence
+/// coordinate by privileges, width and prestate and says nothing about its
+/// owner or address -- the digest joins are inside the projector -- so the
+/// campaign is free to choose, and the digest is the choice that cannot
+/// silently drift: a substituted record is a DIFFERENT account rather than the
+/// same account holding other bytes.
+///
+/// The owner is the Registry because these are content records with no other
+/// author yet. That is a stand-in and it is the honest one: the two records
+/// staged this way have real producers -- a solver publishes the candidate
+/// image, the Effect writes the submission -- and neither producer has an
+/// executable route in this campaign.
+fn staged_record(rent: &Rent, bytes: Vec<u8>) -> BuiltAccountV1 {
+    let key = Pubkey::new_from_array(digest(&bytes));
+    data_account(rent, key, waist::REGISTRY_PROGRAM_ID, bytes)
+}
+
+/// One identity, short enough to read in a campaign row.
+fn hex32(value: [u8; 32]) -> String {
+    value
+        .iter()
+        .take(8)
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Borrow one bound account's exact bytes, which is what both ends read.
+fn built_bytes(account: &BuiltAccountV1) -> &[u8] {
+    account.account.data.as_slice()
+}
+
 /// Build one action's complete admitted bundle against one chain prestate.
 ///
 /// `clock_slot` is the slot this transaction will EXECUTE at, and it is a
@@ -710,6 +841,26 @@ fn build_action_case(
     clock_slot: u64,
     fee_payer: Pubkey,
 ) -> HostCase {
+    build_action_case_with_evidence(
+        campaign,
+        action,
+        chain,
+        clock_slot,
+        fee_payer,
+        &EvidenceCorpusV1::default(),
+    )
+    .expect("complete admitted General bundle")
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_action_case_with_evidence(
+    campaign: &CampaignV1,
+    action: Action,
+    chain: &ChainPrestateV1,
+    clock_slot: u64,
+    fee_payer: Pubkey,
+    evidence: &EvidenceCorpusV1,
+) -> Result<HostCase, dclutch_chain_bundle_builder::BuilderError> {
     let selected = campaign
         .release
         .bundles
@@ -737,9 +888,7 @@ fn build_action_case(
             .primary_state
             .as_ref()
             .map(|state| state.account.data.as_slice()),
-        // The two batch actions read no record their primary state does not
-        // carry. Every other action's evidence is this campaign's next unit.
-        evidence: GeneralRequestEvidenceV1::default(),
+        evidence: evidence.request(),
     })
     .expect("chain-derived General request");
     let mut bindings = vec![
@@ -765,6 +914,7 @@ fn build_action_case(
             system_program_builtin(),
         ),
     ];
+    bindings.extend(evidence.bindings(action));
     if let Some(primary) = chain.primary_state.as_ref() {
         // THE LIVE STATE IS A CORPUS BINDING, and the lifecycle preplan is an
         // independent author for its ADDRESS. `build_bundle` refuses when a
@@ -828,10 +978,9 @@ fn build_action_case(
                 .primary_state
                 .as_ref()
                 .map(|state| state.account.data.as_slice()),
-            evidence: GeneralRequestEvidenceV1::default(),
+            evidence: evidence.projector(),
         },
-    )
-    .expect("complete admitted General bundle");
+    )?;
     // NO SPAN AND NO TRANSPORT SPAN. General's bank rides inline in the CPI
     // instruction data; the four input scratch pages it used to carry are gone
     // from the frame and there is no width for the builder to derive.
@@ -861,7 +1010,7 @@ fn build_action_case(
         built.bundle.hot_instruction.clone(),
     ];
     let lookup_addresses = waist::canonical_lookup_addresses(&instructions, fee_payer);
-    HostCase {
+    Ok(HostCase {
         action,
         built,
         primary_state: request.primary_state,
@@ -870,7 +1019,7 @@ fn build_action_case(
         trading_semantic_release: campaign.waist_facts.trading_semantic_release,
         instructions,
         lookup_addresses,
-    }
+    })
 }
 
 /// The account the bank presents for a coordinate it holds nothing at.
@@ -2083,6 +2232,194 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         "opening a second batch leaves the closed one byte-for-byte"
     );
 
+    // ---- ACTION FOUR: A CANDIDATE SUBMITTED AGAINST THE CLOSED BATCH ----
+    //
+    // THE FIRST GENERAL ACTION THAT READS A RECORD ITS PRIMARY STATE DOES NOT
+    // CARRY. `OpenBatch` and `CloseBatch` are the two of the fifteen whose
+    // evidence table is empty; every other action names readonly evidence
+    // coordinates its AccountProfile declares, and until this ran nothing in the
+    // tree had ever bound one -- `build_general_action_bundle_v1` had exactly one
+    // caller and it passed `GeneralRequestEvidenceV1::default()`.
+    //
+    // ONE OF THE THREE EVIDENCE RECORDS IS THIS CAMPAIGN'S OWN POSTSTATE. The
+    // `ClosedBatch` coordinate is bound to the Batch account the CloseBatch two
+    // actions ago wrote, read back out of the bank -- so the candidate is
+    // submitted against a batch that was really opened, really filled with
+    // nothing, and really closed, at an identity no line here types.
+    //
+    // THE OTHER TWO ARE STAGED, AND THAT IS A DEBT WITH A NAME. The candidate
+    // image is a solver's immutable publication and the submission record is
+    // what this execution writes; on a real chain a solver publishes the first
+    // and the Effect produces the second. Here both are installed by
+    // `install_absent` out of the bundle's own account list, which exercises
+    // every reader and neither writer.
+    let config = GeneralConfigV3::decode(&campaign.release.config).expect("General config");
+    let submitted_slot = context
+        .banks_client
+        .get_sysvar::<solana_program::clock::Clock>()
+        .await
+        .expect("clock sysvar")
+        .slot;
+    // The submission window is the BATCH's, read off the record the chain wrote.
+    assert!(submitted_slot >= closed_batch.opening().collection_close_slot);
+    assert!(submitted_slot < closed_batch.opening().settlement_close_slot);
+
+    // The candidate carries its OWN digest as its identity, so it is encoded
+    // twice: once to fix every other byte, then again with the digest those
+    // bytes produce. A literal here would be a candidate that could name any
+    // identity at all, including one already verified under other prices.
+    // THE PRICES ARE A SIMPLEX AND THE SCALE IS THE MARKET'S. `CandidateV2`
+    // refuses `InvalidSimplex` unless they sum to exactly the config's price
+    // scale, which is a million here and not the runtime width the accelerator's
+    // own fixture uses -- so a price vector of ones, copied from that fixture,
+    // refuses. Derived from the two numbers the founding already fixed.
+    let outcomes = usize::try_from(OUTCOME_COUNT).expect("runtime width");
+    let per_outcome = config.price_scale() / u64::from(OUTCOME_COUNT);
+    let mut uniform_price = vec![per_outcome; outcomes];
+    uniform_price[0] += config
+        .price_scale()
+        .checked_sub(per_outcome * u64::from(OUTCOME_COUNT))
+        .expect("the split never exceeds the scale");
+    assert_eq!(uniform_price.iter().sum::<u64>(), config.price_scale());
+    let draft = CandidateHeaderV2 {
+        outcome_count: OUTCOME_COUNT,
+        page_count: 1,
+        // The candidate's own ordinal among this batch's submissions, and the
+        // coordinate a later `Consider` reads out of the certificate. One-based:
+        // `CandidateV2` refuses `ZeroCoordinate`, which is how this line stopped
+        // being a zero.
+        candidate_coordinate: 1,
+        price_scale: config.price_scale(),
+        candidate_id: [0x7c; 32],
+        product_id: campaign.product.product_id,
+        batch_id: closed_batch.batch_id(),
+    };
+    let mut candidate_image = vec![0_u8; candidate_len(OUTCOME_COUNT).expect("candidate width")];
+    CandidateV2::encode_into(draft, &uniform_price, &mut candidate_image).expect("draft candidate");
+    let candidate_id = general_candidate_identity_v1(&candidate_image).expect("candidate identity");
+    CandidateV2::encode_into(
+        CandidateHeaderV2 {
+            candidate_id,
+            ..draft
+        },
+        &uniform_price,
+        &mut candidate_image,
+    )
+    .expect("addressed candidate");
+    let decoded_candidate = CandidateV2::decode(&candidate_image).expect("candidate");
+    authenticate_candidate_identity_v1(decoded_candidate).expect("the candidate is its own digest");
+    authenticate_batch_candidate_v1(closed_batch, decoded_candidate.header())
+        .expect("the candidate authenticates against the batch this market closed");
+
+    // The submission record the execution writes, produced by the protocol's own
+    // verb rather than assembled here: it fixes the work capacity, and the
+    // escrow is exact in both directions.
+    let submission_opening = GeneralCandidateOpeningV1 {
+        outcome_count: OUTCOME_COUNT,
+        page_count: 1,
+        page_revision: CANDIDATE_PAGE_REVISION,
+        submitted_slot,
+        candidate_id,
+        batch_id: closed_batch.batch_id(),
+        solver_id: SOLVER,
+        row_count: 1,
+        reward_rate_lamports: CRANK_REWARD_LAMPORTS,
+    };
+    let submission = GeneralCandidateV1::submit(
+        closed_batch,
+        decoded_candidate,
+        CANDIDATE_PAGE_REVISION,
+        1,
+        CRANK_REWARD_LAMPORTS,
+        SOLVER,
+        submission_opening.work_capacity().expect("work capacity"),
+        submitted_slot,
+    )
+    .expect("submit the candidate against the closed batch");
+    assert_eq!(
+        submission.state().status,
+        GeneralCandidateStatusV1::Submitted
+    );
+
+    let evidence = EvidenceCorpusV1 {
+        closed_batch: Some(observed_binding(&mut context, open.primary_state).await),
+        candidate_image: Some(staged_record(&campaign.rent, candidate_image.clone())),
+        submitted_candidate: Some(staged_record(
+            &campaign.rent,
+            submission.to_bytes().to_vec(),
+        )),
+    };
+    let submit_chain = ChainPrestateV1 {
+        market: observed_binding(&mut context, campaign.state.market.key).await,
+        root: observed_binding(&mut context, open.root).await,
+        rent_credit: observed_binding(&mut context, open.rent_credit).await,
+        payer: observed_binding(&mut context, payer.pubkey()).await,
+        primary_state: None,
+    };
+
+    // THE CORPUS IS THE SHAPE THE ACTION READS, and that is asserted FIRST so
+    // the refusal below cannot be a malformed record wearing a register's name.
+    // `general_action_prestate_shape_v1` is the same decode
+    // `build_general_action_bundle_v1` runs before it builds anything: which
+    // record reaches which projector parameter, for this action, with these
+    // bytes.
+    general_action_prestate_shape_v1(
+        Action::SubmitCandidate,
+        GeneralActionPrestateV1 {
+            primary_state_account: None,
+            evidence: evidence.projector(),
+        },
+    )
+    .expect("the campaign's candidate corpus is the shape SubmitCandidate reads");
+
+    // AND THE BUNDLE STILL CANNOT BE BUILT. This is the candidate half's wall,
+    // and it is two registers wide.
+    //
+    // `project_general_submit_candidate_in_place_v3` requires the input bank to
+    // carry `identity::CANDIDATE == candidate_id` and
+    // `identity::PRIMARY_BENEFICIARY == solver_id`
+    // (`hot_candidate_v3.rs:1107` and `:1115`, inside one forty-five-clause
+    // conjunct that publishes a single `InvalidCoordinate`). SubmitCandidate's
+    // own AccountProfile projects neither: its thirty-three operations
+    // (`account_rules_v3.rs:628-795`) write `BEST_VERIFIED_DIGEST`, `ORDER`,
+    // `SELECTION_POLICY`, `RESULT_BENEFICIARY_OBSERVATION`, `BENEFICIARY`,
+    // `OWNER` and `PAYER`, and `identity::CANDIDATE` is projected only by
+    // `PlaceOrder`, `CancelOrder` and `ReleaseOrder`. Measured, not inferred:
+    // an instrumented replay of this exact bundle printed every coordinate the
+    // conjunct reads, and thirty-seven of the thirty-nine matched -- the two
+    // that did not were `CANDIDATE`, which was thirty-two zero bytes, and
+    // `PRIMARY_BENEFICIARY`, which held the lifecycle's own beneficiary rather
+    // than the solver.
+    //
+    // The first inference from the same refusal was WRONG and worth recording:
+    // the conjunct's first clause checks the per-item `OUTCOME` column, so
+    // "nothing projects the item outcomes" was the obvious reading. The probe
+    // showed the bank carrying `[0, 1]` exactly as required. A forty-five-clause
+    // conjunct behind one code is why that cost a measurement instead of a
+    // glance.
+    //
+    // THE HARNESS IS THE MISSING PRODUCER TODAY. The accelerator's own
+    // program-test executes SubmitCandidate on a real ELF because
+    // `submit_candidate_bank` writes both registers by hand, so the projector
+    // has never been asked for them by a route that assembles its own bank.
+    // Nothing here works around it: when the two producers exist, this
+    // assertion becomes the execution the campaign owes, and the corpus above
+    // is already the one it needs.
+    let wall = build_action_case_with_evidence(
+        &campaign,
+        Action::SubmitCandidate,
+        &submit_chain,
+        submitted_slot,
+        fee_payer.pubkey(),
+        &evidence,
+    )
+    .err();
+    assert_eq!(
+        wall,
+        Some(BuilderError::Projection("general-submit-candidate")),
+        "SubmitCandidate no longer refuses at the projector; the campaign owes its execution",
+    );
+
     eprintln!(
         "general-campaign N={OUTCOME_COUNT} market={} root={} batch={}",
         campaign.state.market.key, open.root, open.primary_state,
@@ -2110,6 +2447,13 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
     eprintln!(
         "general-campaign out-of-sequence-close cu={} code=0x{TRADING_ROOT:04X}",
         replay.compute_units_consumed,
+    );
+    eprintln!(
+        "general-campaign submit-candidate-wall candidate={} batch={} refusal={:?} \
+         missing=identity::CANDIDATE,identity::PRIMARY_BENEFICIARY",
+        hex32(candidate_id),
+        hex32(closed_batch.batch_id()),
+        wall,
     );
 }
 
