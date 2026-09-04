@@ -565,7 +565,11 @@ fn seal_probe(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), String> {
         "seal_bytes",
         &CAPABILITY_SEAL_BYTES_V1.to_string(),
     );
-    push_line(&mut text, "rent_exempt", yes_no(verdict.rent_exempt));
+    push_line(
+        &mut text,
+        "funded_rent_persists",
+        yes_no(verdict.funded_rent_persists),
+    );
     push_line(
         &mut text,
         "decode",

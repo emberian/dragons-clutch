@@ -54,7 +54,8 @@ use dclutch_operator::capability_seal_v1::{
 };
 use dclutch_operator::general_selected_release_v1::{
     GeneralConfigWindowsV1, GeneralDeploymentFactsV1, GeneralSelectedReleaseInputV1,
-    GeneralSelectedReleaseV1, general_external_account_widths_v3, general_selected_release_v1,
+    GeneralSelectedReleaseV1, general_external_account_widths_v3,
+    general_selected_entry_descriptor_v1, general_selected_release_v1,
 };
 use dclutch_product_payoff_v2_codec::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
@@ -480,8 +481,35 @@ fn build_host_case(
         .find(|bundle| bundle.action == Action::OpenBatch)
         .expect("OpenBatch bundle");
     let descriptor = CapabilityProgramV4::decode(&selected.descriptor).expect("descriptor");
+    // THE ENTRY IS FOUNDED THE WAY A FOUNDING FOUNDS IT, not from the action
+    // this harness happens to execute.
+    //
+    // This used to read `descriptor` -- the OpenBatch bundle's -- while
+    // `tools/local-validator/bootstrap/successor/src/general_market.rs` read
+    // `bundles.first()`, which is Consider. So the ladder picked the action and
+    // derived the entry while the founding picked the entry and hoped, and until
+    // they agreed a green run here said nothing about a founded market: devnet
+    // found the wall first, `0x4015 DescriptorManifestEntry` after 128,724 CU.
+    // Both now go through `general_selected_entry_descriptor_v1`, which refuses
+    // a release whose fifteen descriptors disagree about what an entry holds.
+    let entry_descriptor_bytes =
+        general_selected_entry_descriptor_v1(&release).expect("family entry descriptor");
+    let entry_descriptor =
+        CapabilityProgramV4::decode(&entry_descriptor_bytes).expect("entry descriptor");
+    // The two are different objects that agree on exactly the coordinates the
+    // entry holds -- which is the property this harness is now exercising on the
+    // founding's behalf, and is stated here rather than assumed by the run.
+    assert_ne!(
+        entry_descriptor_bytes, selected.descriptor,
+        "the founding's descriptor and the executing action's must really differ"
+    );
+    assert_eq!(
+        entry_descriptor.derivation_policy(),
+        descriptor.derivation_policy(),
+        "the entry the founding authors must bind the action this harness runs"
+    );
     let clock_slot = substrate.bank_slot();
-    let manifest = manifest_selection(&release, descriptor, clock_slot);
+    let manifest = manifest_selection(&release, entry_descriptor, clock_slot);
     let state = state_corpus(
         rent,
         payer,

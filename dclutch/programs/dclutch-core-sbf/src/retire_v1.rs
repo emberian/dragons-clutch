@@ -765,6 +765,12 @@ pub fn process_checkpoint_suffix(
     }
 }
 
+// `#[inline(never)]` because losing its Rent parameter made it cheap enough for
+// LLVM to inline into `process_checkpoint_suffix`, and the merged frame then
+// drew 27 `overwrites values in the frame` diagnostics on the Core link that
+// the same tree emitted none of one commit earlier. The parameter drop shrank
+// this function and grew its caller past the wall; the barrier keeps the win.
+#[inline(never)]
 fn authenticate_checkpoint(
     program_id: &Pubkey,
     frame: RetirementAccounts<'_, '_>,

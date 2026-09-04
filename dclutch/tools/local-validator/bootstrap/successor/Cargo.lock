@@ -1132,6 +1132,7 @@ name = "dclutch-release-tool"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "dclutch-capability-contract",
  "dclutch-capability-program-contract",
  "dclutch-capability-seal-contract",
  "dclutch-core-contract",

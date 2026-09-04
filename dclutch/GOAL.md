@@ -4554,3 +4554,17 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   offset corrected (10, not 280). Payer spent 0.0148 SOL. → COHORT-15G **`(spawned)`**: the durable message declares its
   budget by name, the stuck packet superseded never re-signed, market 1 retired.
 - Cuts: `b9bea1c07`, `2831d5786`, `5d8f39c48`.
+- PROGRAMS-16B closed (`ae026955d`, `04db9d734`, `f1a7f4d8b`, `5b25b8e9a`, `8365ece25`): **one lifecycle policy for the
+  General family — the union of fifteen actions' widths (5,864 bytes: 20 recipes, 94 seeds, 20 plans, 30 bindings, 9 quotes)
+  compiled once and bound to one manifest entry; the accelerator admits all fifteen** (the per-action-policy hostile refuses
+  every one); three shared contracts learned the action notion (a prestate rule that counted every action's recipe at one
+  slot; rent quotes ordered by (destination, action); the profile join per action); `authenticate_general_release_v3` now
+  REQUIRES the fifteen descriptors to agree — the compiler's comment had claimed it did; the family compiler gated off SBF
+  (5.9 KiB in one frame); a whole-policy join fallthrough the harness had hidden. Ladder 674,333 / 666,011 / 680,789 CU;
+  two-slot proof green; rows byte-identical. **Cohort-16 required: cohort-15's deployed contract refuses the family policy
+  at decode** — runbook row `found-general-family` since 16. Owed: the four-action run on one market (now merely unbuilt);
+  three nested locks unresolvable under --locked (RENT-FLOORS's dependency, partially updated); `checked_in_general_
+  transition_programs_are_exact_lean_output` red at HEAD in a clean worktree (Lean emitter vs checked-in drift — a guard
+  the emission census counts as guarded is red); 27 frame diagnostics in core-sbf's retire checkpoint suffix from
+  RENT-FLOORS' first commit (it has since landed f1fb4f735).
+- Cuts: `c374cb080`, `4f8d2b0d0`.

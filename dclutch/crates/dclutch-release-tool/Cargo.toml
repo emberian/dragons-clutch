@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 base64 = "=0.22.1"
+dclutch-capability-contract = { path = "../dclutch-capability-contract" }
 dclutch-capability-program-contract = { path = "../dclutch-capability-program-contract" }
 # The seal probe reads a dumped account with the SAME decoder the chain runs;
 # it lays out no byte of a seal itself.

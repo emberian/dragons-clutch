@@ -149,7 +149,7 @@ fn close_v1(mut rpc: Rpc, arguments: &ArgumentsV1, cluster: &str) -> Result<()> 
     println!("lamports             {}", account.lamports);
     println!("width                {} bytes", account.data.len());
     println!("owned by program     {}", yes_no(verdict.owner_is_program));
-    println!("rent exempt          {}", yes_no(verdict.rent_exempt));
+    println!("funded rent persists {}", yes_no(verdict.funded_rent_persists));
     println!("defunct-canonical    {}", yes_no(verdict.defunct.is_ok()));
     println!(
         "bump candidate       {}",

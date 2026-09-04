@@ -2333,10 +2333,23 @@ fn project_general_lifecycle_v5(
         scalars: &scalars,
         identities: &identities,
     };
+    // THE JOIN IS RECORDED, AND IT IS THE ACTION'S.
+    //
+    // Every seed materialization below asks `require_join` whether this policy
+    // and this AccountProfile were already proved to fit, and re-derives the
+    // join when no evidence is attached -- with the WHOLE-POLICY form, which for
+    // a family policy asks whether fifteen actions' plans fit one action's
+    // frame. Attaching the action-scoped evidence once is what makes the
+    // fallback unreachable rather than merely unused.
+    let join = bundle
+        .lifecycle_policy
+        .validate_account_profile_join_for_action(bundle.account_profile, request.action as u32)
+        .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
     let primary_plan = bundle
         .lifecycle_policy
         .action_plan(request.action as u32, 0)
-        .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
+        .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?
+        .with_validated_join(join);
     let primary_close = matches!(request.action, Action::Close | Action::CloseCandidate);
     let primary_expected_operation = if verify {
         LifecycleOperationV3::Authenticate
@@ -2381,7 +2394,8 @@ fn project_general_lifecycle_v5(
         let plan = bundle
             .lifecycle_policy
             .action_plan(request.action as u32, 2)
-            .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
+            .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?
+            .with_validated_join(join);
         Some(derive_lifecycle_state_v3(
             state,
             bundle.account_profile,
@@ -2399,7 +2413,8 @@ fn project_general_lifecycle_v5(
         let plan = bundle
             .lifecycle_policy
             .action_plan(request.action as u32, 1)
-            .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
+            .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?
+            .with_validated_join(join);
         let terminal = derive_lifecycle_state_v3(
             state,
             bundle.account_profile,
@@ -2425,7 +2440,8 @@ fn project_general_lifecycle_v5(
         let plan = bundle
             .lifecycle_policy
             .action_plan(request.action as u32, 1)
-            .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
+            .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?
+            .with_validated_join(join);
         Some(derive_lifecycle_state_v3(
             state,
             bundle.account_profile,

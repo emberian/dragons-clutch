@@ -5033,11 +5033,17 @@ async fn a_donated_lamport_still_refuses_the_admission_across_the_same_rent_chan
 /// `RentExempt` anyway. So the floors could only ever refuse a live account.
 /// See `dclutch_capability_contract::funding::funded_rent_persists_v1`.
 ///
-/// PROVEN RED BY CONSTRUCTION. The loop below is the positive control and it is
-/// two-sided on every account the admission frame floors: each one must be
+/// PROVEN RED, not by construction. The loop below is a positive control and it
+/// is two-sided on every account the admission frame floors -- each must be
 /// exempt at the rate it was funded at AND under the risen minimum, so a rate
-/// that did not really move for these widths could not let this test pass. Run
-/// against the floors as they stood before this lane, the submission refused.
+/// that did not really move for these widths could not let this test pass. But
+/// the load-bearing control is the ELF: run unchanged against the Core built at
+/// this lane's PARENT commit, with the other five ELFs held fixed, the
+/// submission below refuses `CoreSbfError::FinalizedRecord` (`0x3002`, whose own
+/// doc comment lists Rent among its causes) -- the floor in
+/// `records::authenticate_finalized_record_with_bumps`, reached on a record
+/// nobody had touched. The donation twin passes under both ELFs, which is what
+/// says the difference is the floors and not the fixture.
 #[tokio::test]
 async fn a_risen_rent_rate_no_longer_strands_a_market_the_cluster_already_funded() {
     let mut fixture = fixture(MarketPrestateV1::Terminal);
@@ -5097,7 +5103,7 @@ async fn a_risen_rent_rate_no_longer_strands_a_market_the_cluster_already_funded
     // choice: it puts every account the frame floors strictly under the new
     // minimum, which is what the assertions below require and what a smaller
     // move would not guarantee for the narrowest of them.
-    let mut raised = cluster;
+    let mut raised = cluster.clone();
     raised.lamports_per_byte = cluster
         .lamports_per_byte
         .checked_mul(2)
@@ -5183,7 +5189,7 @@ async fn a_donated_lamport_still_refuses_the_admission_across_a_risen_rent_rate(
         .get_sysvar()
         .await
         .expect("ProgramTest Rent");
-    let mut raised = cluster;
+    let mut raised = cluster.clone();
     raised.lamports_per_byte = cluster
         .lamports_per_byte
         .checked_mul(2)

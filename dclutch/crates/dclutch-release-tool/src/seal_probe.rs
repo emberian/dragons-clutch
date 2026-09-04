@@ -15,11 +15,11 @@
 //! rather than the body: that this Program owns it, and that the release it is
 //! sealed under is not the one that will be live at the cut.
 
+use dclutch_capability_contract::funding::funded_rent_persists_v1;
 use dclutch_capability_seal_contract::{
-    CAPABILITY_SEAL_BYTES_V1, CapabilitySealKeyV1, Error as CapabilitySealError,
-    SealedDescriptorClosureV1,
+    CapabilitySealKeyV1, Error as CapabilitySealError, SealedDescriptorClosureV1,
 };
-use solana_program::{pubkey::Pubkey, rent::Rent};
+use solana_program::pubkey::Pubkey;
 
 /// One account as `solana account --output json` writes it.
 ///
@@ -151,8 +151,12 @@ pub struct SealProbeVerdictV1 {
     pub bump_candidate: Option<u8>,
     /// Whether the owning program is the one the address was derived under.
     pub owner_is_program: bool,
-    /// Whether the balance is rent-exempt at the exact seal width.
-    pub rent_exempt: bool,
+    /// Whether the seal's funded rent still holds it: nonzero lamports, which
+    /// is what `CloseSeal` asks since 2026-09-04. It asked for exemption at the
+    /// LIVE rate until then, and this probe mirrored that -- against
+    /// `Rent::default()`, which is a third answer again. A seal funded before a
+    /// rate rise would have been reported unclosable while the route closed it.
+    pub funded_rent_persists: bool,
     /// Whether the sealed release is the one that will be live at the cut.
     pub release_is_live: Option<bool>,
 }
@@ -160,14 +164,13 @@ pub struct SealProbeVerdictV1 {
 impl SealProbeVerdictV1 {
     /// Whether the ZeroBump arm would close this account at the cut.
     ///
-    /// Every conjunct, and they are the route's own: this Program owns it, it
-    /// is rent-exempt at the exact width, the body is defunct-canonical, some
-    /// candidate reproduces the address, and the release it is sealed under is
-    /// not live.
+    /// Every conjunct, and they are the route's own: this Program owns it, its
+    /// funded rent still holds it, the body is defunct-canonical, some candidate
+    /// reproduces the address, and the release it is sealed under is not live.
     #[must_use]
     pub fn closable(&self) -> bool {
         self.owner_is_program
-            && self.rent_exempt
+            && self.funded_rent_persists
             && self.defunct.is_ok()
             && self.bump_candidate.is_some()
             && self.release_is_live == Some(false)
@@ -183,11 +186,12 @@ impl SealProbeVerdictV1 {
                     .to_owned(),
             );
         }
-        if !self.rent_exempt {
-            return Some(format!(
-                "the balance is not rent-exempt at {CAPABILITY_SEAL_BYTES_V1} bytes, which \
-                 `CloseSeal` refuses as `CloseSealAccount`"
-            ));
+        if !self.funded_rent_persists {
+            return Some(
+                "the account holds no lamports, so it is residue an earlier instruction \
+                 drained and `CloseSeal` refuses it as `CloseSealAccount`"
+                    .to_owned(),
+            );
         }
         if let Err(error) = self.defunct {
             return Some(format!(
@@ -243,12 +247,12 @@ pub fn probe_defunct_seal_v1(
         bump_candidate: key
             .and_then(|key| mine_bump_candidate_v1(key, program_id, account.address())),
         owner_is_program: account.owner() == program_id,
-        // The route's own conjunct, at the route's own width: exemption is
-        // required for a canonical seal, not for whatever width the dump
-        // happens to carry, and a body of another width has already been
-        // refused by the decoder above. `Rent::default()` is the schedule every
-        // Solana cluster this protocol runs on is configured with.
-        rent_exempt: Rent::default().is_exempt(account.lamports(), CAPABILITY_SEAL_BYTES_V1),
+        // The route's own conjunct, re-sourced from the route's own author. It
+        // read `Rent::default()` -- a source literal for a number the cluster
+        // owns -- against a seal some earlier transaction funded, so it answered
+        // for a schedule no cluster need be running and reported a live seal
+        // unclosable the moment a rate rose above the genesis default.
+        funded_rent_persists: funded_rent_persists_v1(account.lamports()),
         release_is_live: key.map(|key| key.trading_semantic_release() == live_trading_release),
     }
 }

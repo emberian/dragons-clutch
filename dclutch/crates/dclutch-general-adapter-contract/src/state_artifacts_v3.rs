@@ -1701,6 +1701,112 @@ mod tests {
         }
     }
 
+    /// THE FAMILY POLICY IS THE UNION, AND ONLY THE PER-ACTION JOIN READS IT.
+    ///
+    /// Two facts, stated together because either alone is misleading. The union
+    /// carries every action's declaration -- so its per-action plan and quote
+    /// counts must equal exactly what that action's own artifact declares, or
+    /// the union changed something on the way in. And the WHOLE-POLICY join must
+    /// REFUSE it: General's Selection, Settlement, Batch, Order and Candidate
+    /// recipes all name fixed slot 5, so asking whether all twenty recipes fit
+    /// one action's frame is a question with no true answer, and a join that
+    /// said yes would be a check that cannot fail.
+    ///
+    /// The second half is why `artifacts_v3` and `hot_v3/seal.rs` use
+    /// `validate_account_profile_for_action`, and why a caller that selects a
+    /// plan without attaching the action-scoped evidence gets the wrong answer
+    /// from `require_join`'s fallback rather than no answer.
+    #[test]
+    fn the_family_policy_joins_per_action_and_the_whole_policy_form_refuses_it() {
+        use dclutch_account_profile_contract::v2::AccountProfileV2;
+
+        use crate::account_rules_v3::{
+            GeneralExternalAccountWidthsV3, encode_general_account_profile_v3_atomic,
+            general_account_profile_bytes_v3,
+        };
+
+        // The eleven widths a release publishes, as the compiler derives them;
+        // this test cares only that they are the same for every action.
+        let widths = GeneralExternalAccountWidthsV3 {
+            linked_basis_prefix: 256,
+            result_domain: 192,
+            rent_sysvar: 17,
+            core_market: 368,
+            activation_cache: 1_288,
+            upgradeable_program: 36,
+            trading_programdata_prefix: 45,
+            claims_programdata_prefix: 45,
+            core_programdata_prefix: 45,
+            realm_record: 112,
+            rent_credit: 128,
+        };
+        let child = GeneralChildRentWidthsV5::new(4, 165).expect("child widths");
+        let family_width = general_family_state_lifecycle_bytes_v5();
+        let mut scratch = vec![0_u8; family_width];
+        let mut family = vec![0_u8; family_width];
+        encode_general_family_state_lifecycle_v5_atomic(child, &mut scratch, &mut family)
+            .expect("family policy");
+        let policy =
+            StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], &family).expect("decode");
+
+        let mut refused = 0_usize;
+        for action in ACTIONS {
+            let profile_width = general_account_profile_bytes_v3(action).expect("profile width");
+            let mut profile_scratch = vec![0_u8; profile_width];
+            let mut profile_bytes = vec![0_u8; profile_width];
+            encode_general_account_profile_v3_atomic(
+                action,
+                widths,
+                &mut profile_scratch,
+                &mut profile_bytes,
+            )
+            .expect("account profile");
+            let profile = AccountProfileV2::decode(&profile_bytes).expect("profile");
+
+            assert_eq!(
+                policy.validate_account_profile_for_action(profile, action as u32),
+                Ok(()),
+                "{action:?} must join the family policy for its own frame"
+            );
+            if policy.validate_account_profile(profile).is_err() {
+                refused += 1;
+            }
+
+            // The union declares exactly what this action's own artifact does.
+            let own_width = general_state_lifecycle_bytes_v5(action).expect("per-action width");
+            let mut own_scratch = vec![0_u8; own_width];
+            let mut own = vec![0_u8; own_width];
+            let selected = if matches!(
+                action,
+                Action::InitializeSettlement | Action::PlaceOrder | Action::VerifyCandidateRow
+            ) {
+                Some(child)
+            } else {
+                None
+            };
+            encode_general_state_lifecycle_v5_atomic(action, selected, &mut own_scratch, &mut own)
+                .expect("per-action policy");
+            let per_action =
+                StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], &own).expect("decode");
+            assert_eq!(
+                policy.action_plan_count(action as u32),
+                per_action.action_plan_count(action as u32),
+                "{action:?} plan count moved in the union"
+            );
+            assert_eq!(
+                policy.action_current_rent_quote_count(action as u32),
+                Ok(per_action.current_rent_quote_count()),
+                "{action:?} rent quote count moved in the union"
+            );
+            assert_ne!(family, own, "{action:?} must not BE the family policy");
+        }
+        assert_eq!(
+            refused,
+            ACTIONS.len(),
+            "the whole-policy join must refuse the family policy for every action"
+        );
+    }
+
     #[test]
     fn submit_candidate_lifecycle_is_one_fixed_candidate_recipe_at_runtime_widths() {
         let action = Action::SubmitCandidate;
