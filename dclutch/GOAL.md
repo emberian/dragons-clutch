@@ -4666,3 +4666,16 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   55 sites / 6 enums; `ResolutionCoreOperatorErrorV3::Encoding` 54; `TerminalRetirementErrorV1::Projection` 42). ELFs
   byte-identical. Note: the SERIES lane's uncommitted series files do not compile in the shared tree at this moment.
 - Cuts: `600a776b0`.
+
+### 2026-09-04 11:40 EDT — THE MECHANISM AGENDA (ember: "we need to explore all these directions")
+- Six directions, ranked by property per unit of change: (1) the frequent batch auction as the clearing spine of every
+  family (no speed race; the price series is the forecast); (2) joint clearing of all outcomes with complete-set minting
+  inside the batch (arbitrage-free across outcomes by construction, liquidity with no inventory); (3) the Dealer as a
+  bounded-loss scoring-rule participant (LMSR: always a price, myopic IC, loss ≤ b·log K funded at founding); (4) resolution
+  by observed median over an ensemble of declared sources, the funded ladder as fallback; (5) a founder bond paid to holders
+  on exhaustion; (6) conditional and product markets as the combinatorial layer (the Product runtime). Design first: notes,
+  Lean statements, CU prices, hostiles; no program moves under cohort-16. Wave one (Fable makers, my briefs): JOINT-CLEARING
+  **`aa4c3a55536643030`**, SCORING-DEALER **`ac6f817b85af60a7a`**, BATCH-SPINE **`a75d8fac13d2a5c63`**; wave two (ensemble,
+  bond, conditional) after the clearing rule is stated. The explainer page for ember: failure/recovery, the output page's
+  best course, the coherently extrapolated product (artifact 34ac3161…).
+- Cuts: `5a2b8d425`.
