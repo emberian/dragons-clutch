@@ -4194,3 +4194,17 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   reachable, computed on every render (no typed number). Owed: client decoders for the machines (a product unit); Core's
   Action family has no leading-byte selector; three predicate arms compare no magic.
 - Cuts: `21197b305`.
+
+### 2026-09-03 22:45 EDT — COHORT-15 DEPLOYED, SEALED, FOUNDED, CAPTURED
+- COHORT-15 closed at a clean line (deploy commit **1cae26fd6** — 8599cfc69 could not build a candidate: 1c49ecac2 had
+  missed two lockfiles and the Product-handoff gate aborted silently at 50 min (`8f9e53b19` names the step now; the guards
+  under `set -e` were dead code); `9c943d4f2`/`fc6ed37a6` the Core digest RECORDED before any transaction; evidence
+  `f88a7bc83`, `2af9f8ee1`): close 14 exact (+42.2049); redeploy 42.546438683 against a 42.546563 projection; ladder ten
+  records at cohort-14's lamport; **seal 0 SOL**; Direct market founded twice (the first died at tx 146 on
+  BlockhashNotFound and neither resume door opened — cohort-14's owed item 2 from a second cause) with cuts 10200,10600/100
+  and the statistic's exponent −8; General market with observed widths (**cohort-14's Exact(48) wall closed**); activated;
+  admitted; **captured inside the window on attempt 5**. Found: `general_session.rs` pushes the caller-authority wall
+  UNCONDITIONALLY with a pre-3a8ac205d detail — a hardcoded verdict that cannot go red. Settle legal 23:42:08 EDT.
+  → COHORT-15B **`(spawned)`**: the fill, the derived verdict + the General seal + OpenBatch on chain, the settle with the
+  honest selector, the winning stranger paid, retirement on devnet, the cohort's witnesses.
+- Cuts: `cd398c23f`.

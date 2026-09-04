@@ -563,3 +563,94 @@ one commit ahead of nothing — it IS the deploy commit — and it is the build 
 knows what the deployed Core writes.
 
 Devnet evidence. Not mainnet evidence.
+
+---
+
+## Addendum: THE GENERAL MARKET IS FOUNDED AND ACTIVATED, AND THE WIDTH THAT MADE COHORT-15 NECESSARY IS 128
+
+Written the same night, after the capture. **Devnet evidence. Not mainnet
+evidence.**
+
+`FOUND_GENERAL_EXIT=0`, **576 campaign transactions**.
+
+| | |
+| --- | --- |
+| General Open Market | **`6aqy89GhhXFtDbawC5ors4HLkGvzdHC4R26TXTaaXRKj`** |
+| Found31 / abort Market | `3ydLR6LHDSqoAcpYZkLdH9QT5BMDerYJueamZtXQZ9mr` / `BwLRGqjgWwXN1hx7Ve9hznuTGZjDZjLgdtiiNvN5wmY4` |
+| realm record | `HFybHWZPGRfmuD2ZYhWgVWCugZzhSajJWmZye65dmBDD` |
+| collateral mint | `6pzxjdrt7pWKUoFNVizWo4UH11CyaiAXVDSg78UTrpuU` |
+| Product / ResultDomain / Portfolio records | `A8228FSecWKd3bXUFxEk6UYyksUMxLFDsRKceDSpxaVn` / `8aqkKLNGqzaBkr1rU6WfEEEskpM5eYr2upb3F7a98AYA` / `2yGx2PJn2H8m8iqFhuifF8pvUPFoyF5AHNnjg4PxqDx4` |
+| graded liability-basis record | `D7CBjC9f2m7GpTWGZF7UwbZbKv3idzE26JBFNXFnnptT` |
+| activation | verdict **`ACTIVATED`**, root `96FQ72xmJKN2RY1jbZJVmQfo8fBaWahef2awVqMWE6qr`, entry index 3, generation 2, deadline slot 492,984,927 |
+
+It was founded with the SAME `founding-source-funder.json` and
+`founding-projection-witness.json` files the two Direct foundings used: **one key
+file, three foundings, three funders** — `3ba991025` exercised by a lane that
+needed it.
+
+### THE VERIFIER, AND BOTH ITS CONJUNCTS
+
+`tools/cohort15/steps.tsv` row `02` asks for two things, and requires the width
+to be recovered **off the chain** rather than read out of the file that produced
+it. `devnet-general-session` encodes the `OpenBatch` `AccountProfile` twice
+differing in exactly that one width, locates its little-endian offset, reads the
+value out of the finalized record, and refuses unless the recovered set
+re-encodes to those exact bytes.
+
+```
+schema      dclutch-devnet-general-session-frame-report-v1
+rentCredit  128
+```
+
+**128, against cohort-14's `Exact(48)`.** And the second conjunct, read off the
+chain independently: this market's own lifecycle RentCredit
+`64mXYRdxPFUCjCVBXgsdopQ2rZZwwPWw5Ne3hqEWVucD` is **128 bytes, `DCLRNTL2`** —
+and its founding sibling `4BA8NTaEBrij2MXu4Si1zF9aw8AFtUntchL3rGxqCvNz` is 128
+bytes too. Two independent authors agree, and the policy file is no longer
+either of them: `dclutch-general-devnet-policy-v2` states no account width at
+all.
+
+**Cohort-14's first wall is closed.**
+
+### AND THE COMMAND STILL REPORTS THE SECOND WALL, WHICH NO LONGER EXISTS
+
+```
+REFUSED: [session/caller-authority-slot-binding] OpenBatch is not deliverable
+against market 6aqy89GhhXFtDbawC5ors4HLkGvzdHC4R26TXTaaXRKj:
+1 unsatisfiable conjunct(s)
+```
+
+Exactly one, and the rent-credit wall is not it — so the report is the width
+verifier passing and the caller-authority row is the only thing left. But that
+row is **stale, not observed**. `general_session.rs` pushes it unconditionally:
+
+```rust
+walls.push(json!({ "code": "session/caller-authority-slot-binding", … }));
+```
+
+and its `detail` still describes the pre-`3a8ac205d` preimage —
+*"role_request_digest is sha256(accelerator request header ‖ inline bank) …
+each address is therefore a function of the slot"*. `3a8ac205d` moved the
+derivation to `accelerator_caller_authority_digest_v1(kind,
+parent_request_digest, index)`, proved it with
+`one_signed_account_list_opens_the_same_batch_at_two_execution_slots` (one
+signed frame, two banks 47 slots apart, 55-entry account list byte-identical),
+and **did not touch this file** — its diff names 23 paths and
+`general_session.rs` is not among them.
+
+So the command reports a wall the deployed bytes no longer have, and it reports
+it with a `detail` describing bytes that are not on the chain. **This is the
+mirror shape `AGENTS.md` warns about**, met from the other side: a hex constant
+typed into a checker agrees right up until the tree changes, and then it agrees
+with what the tree USED to say. Here it is not a constant but a hardcoded
+verdict, which is worse, because it cannot go red.
+
+**Owed, and it is the last thing between this cohort and OpenBatch:** delete the
+unconditional push, derive the four caller authorities from the new preimage,
+and let the row appear only when a derivation actually disagrees. Then the
+executor — `build_general_successor_instruction_v5` into
+`compile_general_successor_v0` over a frozen table — is a producer with nothing
+in front of it, and `0948b0224` already reports the General-hot suite GREEN
+through the real ELFs.
+
+Devnet evidence. Not mainnet evidence.
