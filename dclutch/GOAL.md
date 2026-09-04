@@ -4909,3 +4909,10 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   zero moved, seven debtor commits discharged, `owed` clean. Owed: the thirteen General actions the bundle builder still
   refuses → PROGRAMS-16F **`(spawned)`** (the real sequence and a second batch on one market); the floored real-ELF walk.
 - Cuts: `da7f3e028`.
+
+### 2026-09-04 15:50 EDT — EMBER CONFIRMS
+- Ember, having read the docket and the mechanism cohort: "you aren't waiting on me for rulings are you? i was reading the
+  docket and contemplating it, but overall find your takes reasonable". Nothing was waiting; the rulings were provisional
+  and in force; "overall reasonable" is taken as confirmation → DECISIONS-4 **`(spawned)`** records it on the fourteen
+  provisional records with the quote (status CONFIRMED, reversible on request). Still genuinely ember's: the flagship
+  conditional market's feature gate, slot and metric (0029's tenth item, OPEN).
