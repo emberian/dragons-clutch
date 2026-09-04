@@ -334,6 +334,7 @@ struct SeriesAcquiredAddressFrameV2 {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct SeriesCurrentSourceCorpusV1 {
+    template_occurrence_count: u32,
     consume_shadow_certificate_program: String,
     prepare_fixed_data_lengths: Vec<u32>,
     prepare_ticket_rent_lamports: u64,
@@ -463,6 +464,7 @@ const SERIES_RETIREMENT_ROLES_V1: [&str; 31] = [
 /// Host-decoded current-source corpus. Fixed arrays are exact-width so no
 /// runtime slice can silently alter one emitter's geometry.
 struct DecodedSeriesCurrentSourceV1 {
+    template_occurrence_count: u32,
     consume_shadow_certificate_program: ContentId,
     prepare_fixed_data_lengths: [u32; SERIES_PREPARE_FIXED_ACCOUNT_COUNT_V5 as usize],
     prepare_ticket_rent_lamports: u64,
@@ -755,7 +757,13 @@ impl DecodedSeriesCurrentSourceV1 {
                 "Series Consume funding span or Prepare Ticket rent was zero",
             ));
         }
+        if candidate.template_occurrence_count == 0 {
+            return Err(refusal(
+                "Series current-source Template occurrence count was zero",
+            ));
+        }
         Ok(Self {
+            template_occurrence_count: candidate.template_occurrence_count,
             consume_shadow_certificate_program,
             prepare_fixed_data_lengths,
             prepare_ticket_rent_lamports: candidate.prepare_ticket_rent_lamports,
@@ -822,6 +830,7 @@ impl DecodedSeriesCurrentSourceV1 {
     fn input(&self, template: ContentId) -> SeriesCurrentReleaseInputV5<'_> {
         SeriesCurrentReleaseInputV5 {
             template,
+            template_occurrence_count: self.template_occurrence_count,
             consume_shadow_certificate_program: self.consume_shadow_certificate_program,
             prepare_profile: SeriesPrepareAccountProfileInputV5 {
                 fixed_data_lengths: &self.prepare_fixed_data_lengths,
@@ -1090,6 +1099,19 @@ fn acquire_current_series_selected_v1(
         return Err(refusal(
             "Series current-source Ticket rent differed from same-slot Rent",
         ));
+    }
+    // The count is release GEOMETRY: every occurrence action's family request
+    // is exactly `series_action_request_bytes_v3(count)` wide and its Effect
+    // declares a borrowed proof range only when that width exceeds the header.
+    // The corpus states the count the candidate artifacts were compiled for;
+    // the live finalized Template is its only author, so a disagreement is
+    // named here rather than discovered as an artifact-shaped refusal later.
+    if source.template_occurrence_count != template.occurrence_count() {
+        return Err(refusal(format!(
+            "Series current-source occurrence count {} differed from the live Template's {}",
+            source.template_occurrence_count,
+            template.occurrence_count(),
+        )));
     }
     let current_source = source.input(template_id);
     let planned = match lifecycle.next() {
