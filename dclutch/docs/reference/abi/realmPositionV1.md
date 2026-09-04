@@ -20,7 +20,6 @@ Regenerate with: npm run abi:realm-position
 | --- | --- |
 | `REALM_MAGIC_V1` | `DCLTRLM1` |
 | `REALM_PDA_DOMAIN_V1` | `dclutch/realm/v1` |
-| `POSITION_MAGIC_V1` | `DCLTPOS1` |
 | `POSITION_PDA_DOMAIN_V1` | `dclutch/position/v1` |
 
 ## Numeric constants (widths, offsets, counts, tags)
@@ -39,32 +38,3 @@ Regenerate with: npm run abi:realm-position
 | `REALM_TOKEN_PROGRAM_OFFSET_V1` | 16 |
 | `REALM_COLLATERAL_MINT_OFFSET_V1` | 48 |
 | `REALM_ADAPTER_RELEASE_ID_OFFSET_V1` | 80 |
-| `POSITION_SCHEMA_VERSION_V1` | 1 |
-| `POSITION_BASE_BYTES_V1` | 88 |
-| `POSITION_RESERVED_BYTES_V1` | 5 |
-| `POSITION_OUTCOME_BALANCE_BYTES_V1` | 8 |
-| `MIN_OUTCOMES_V1` | 2 |
-| `MAX_OUTCOMES_V1` | 16 |
-| `BINARY_POSITION_BYTES_V1` | 104 |
-| `MAX_POSITION_BYTES_V1` | 216 |
-| `POSITION_MAGIC_OFFSET_V1` | 0 |
-| `POSITION_SCHEMA_VERSION_OFFSET_V1` | 8 |
-| `POSITION_OUTCOME_COUNT_OFFSET_V1` | 10 |
-| `POSITION_RESERVED_OFFSET_V1` | 11 |
-| `POSITION_MARKET_OFFSET_V1` | 16 |
-| `POSITION_OWNER_OFFSET_V1` | 48 |
-
-## Functions (see the source module)
-
-- `positionBytesV1`
-
-## Unrendered exports (verbatim)
-
-The renderer did not recognize these statement shapes, so they are
-shown verbatim rather than dropped.
-
-```ts
-export const POSITION_GENERATION_OFFSET_V1 = 80 as const;
-
-/** Exact width of a Position of a given categorical width. */
-```

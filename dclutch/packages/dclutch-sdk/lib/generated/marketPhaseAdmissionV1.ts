@@ -20,7 +20,7 @@ export interface RoutePhaseGateV1 {
 }
 
 /** Routes enumerated by the census, gated or not. */
-export const ROUTE_COUNT_V1 = 162 as const;
+export const ROUTE_COUNT_V1 = 163 as const;
 
 export const ROUTE_PHASE_GATES_V1: ReadonlyArray<RoutePhaseGateV1> = [
   { route: "claims/affine_batch_v2::process", phases: ["Open"], prestates: [] },
@@ -190,7 +190,7 @@ export interface RouteSelectedGateV1 {
 }
 
 export const ROUTE_SELECTED_GATES_V1: ReadonlyArray<RouteSelectedGateV1> = [
-  { route: "trading/hot_v3::process_hot_execution_v3", selectedBy: "hot_v3::prepare_direct_inline_hot_crosscheck_v3", machine: "direct-root", states: ["Open"], provenance: "crates/dclutch-direct-codec/src/direct_root_admission_v1.rs:104" },
+  { route: "trading/hot_v3::process_hot_execution_v3", selectedBy: "hot_v3::prepare_direct_inline_hot_crosscheck_v3", machine: "direct-root", states: ["Open"], provenance: "crates/dclutch-direct-codec/src/direct_root_admission_v1.rs:107" },
   { route: "trading/hot_v3::process_hot_execution_v3", selectedBy: "hot_v3::try_authenticate_series_expiry_premarket_v1", machine: "series-ticket", states: ["Prepared"], provenance: "crates/dclutch-series-v3-kernel/src/ticket_admission_v1.rs:115" },
 ];
 

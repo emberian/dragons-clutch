@@ -38,7 +38,7 @@ stands:
 - **NEVER-EXECUTED** -- no campaign binding names it and no reason is
   recorded yet.
 
-Currently **0** of **162**
+Currently **0** of **163**
 routes are in that last group.
 
 The **phase** column is the route's own guard, not a summary of one. It is
@@ -72,7 +72,7 @@ only under a boolean branch or inside a loop that may not be entered, a guard
 in a crate this program's dispatch does not reach, or a route the enumerator
 could not follow into. It does not mean the route admits every phase, and a
 consumer that treats the two alike is repeating the defect this column was
-added to close. **72** of **162** routes
+added to close. **72** of **163** routes
 carry a gate today.
 
 **no state machine** is a DIFFERENT fact, and it is the program's own
@@ -130,33 +130,34 @@ instead:
 | --- | --- | --- | --- | --- | --- |
 | `core/activate_capability_child#ActivateCapability` | action | variant `Action::ActivateCapability` | `funding-ledger: Active` or `funding-ledger: Pending` | blocked by rule `core/activate_capability_child#ActivateCapability`: Capability child activation; needs an activated capability root first. | `programs/dclutch-core-sbf/src/capability.rs:188` |
 | `core/authenticate_no_recovery_entries#None` | action | tag `` | no phase gate | executed (resolution-core-v3-programtest) | `programs/dclutch-core-sbf/src/resolution.rs:824` |
-| `core/begin_retiring::process#BeginRetiring` | entry | variant `Action::BeginRetiring`; length `REQUEST_BYTES` | no phase gate | executed (claims-rational-representation-v2-programtest); executed (journey) | `programs/dclutch-core-sbf/src/lib.rs:575` |
+| `core/begin_retiring::process#BeginRetiring` | entry | magic `DCLTCRQ2`; variant `Action::BeginRetiring`; length `REQUEST_BYTES` | no phase gate | executed (claims-rational-representation-v2-programtest); executed (journey) | `programs/dclutch-core-sbf/src/lib.rs:586` |
 | `core/capability::process#ActivateCapability` | action | variant `Action::ActivateCapability` | `funding-ledger: Active` or `funding-ledger: Pending` | blocked by rule `core/capability::process#ActivateCapability`: ADR 0004 makes the founding capability root DERIVED at founding and created afterwards by the ordinary activation route. | `programs/dclutch-core-sbf/src/capability.rs:203` |
-| `core/capability::process#CloseCapability` | entry | variant `Action::ActivateCapability`; variant `Action::CloseCapability` | `funding-ledger: Active` or `funding-ledger: Pending` | blocked by rule `core/capability::process#CloseCapability`: Capability closure; needs an activated capability root first. | `programs/dclutch-core-sbf/src/lib.rs:682` |
+| `core/capability::process#CloseCapability` | entry | magic `DCLTCRQ2`; variant `Action::ActivateCapability`; variant `Action::CloseCapability` | `funding-ledger: Active` or `funding-ledger: Pending` | blocked by rule `core/capability::process#CloseCapability`: Capability closure; needs an activated capability root first. | `programs/dclutch-core-sbf/src/lib.rs:696` |
 | `core/close_capability_child#CloseCapability` | action | variant `Action::CloseCapability` | `funding-ledger: Active` or `funding-ledger: Pending` | blocked by rule `core/close_capability_child#CloseCapability`: Capability child closure; needs an activated capability child first. | `programs/dclutch-core-sbf/src/capability.rs:192` |
 | `core/commit_checkpoint#AGGREGATE_RETIREMENT_CLOSE_REPLAY_MAGIC_V1` | action | tag ``; length `RETIREMENT_CHECKPOINT_CUSTODY_SUFFIX_BYTES_V1` | `market: Retiring` | executed (retirement-checkpoint-programtest) | `programs/dclutch-core-sbf/src/retire_v1.rs:746` |
 | `core/commit_checkpoint#AGGREGATE_RETIREMENT_CLOSE_VAULT_MAGIC_V1` | action | tag ``; length `RETIREMENT_CHECKPOINT_CUSTODY_SUFFIX_BYTES_V1` | `market: Retiring` | executed (retirement-checkpoint-programtest) | `programs/dclutch-core-sbf/src/retire_v1.rs:726` |
-| `core/execute_provider_v3::process#ExecuteProvider` | entry | variant `Action::ExecuteProvider`; length `execute_provider_v3::EXECUTE_PROVIDER_PREFIX_BYTES_V3` | `market: Open+Consumed` | executed (journey) | `programs/dclutch-core-sbf/src/lib.rs:583` |
+| `core/execute_provider_v3::process#ExecuteProvider` | entry | magic `DCLTCRQ2`; variant `Action::ExecuteProvider`; length `execute_provider_v3::EXECUTE_PROVIDER_PREFIX_BYTES_V3` | `market: Open+Consumed` | executed (journey) | `programs/dclutch-core-sbf/src/lib.rs:595` |
 | `core/finish_checkpoint_retirement#AGGREGATE_RETIREMENT_FINISH_MAGIC_V1` | action | tag ``; length `RETIREMENT_CHECKPOINT_FINISH_BYTES_V1` | `market: Retiring` | executed (retirement-checkpoint-programtest) | `programs/dclutch-core-sbf/src/retire_v1.rs:759` |
-| `core/found::process#Found` | entry | variant `Action::Found`; length `REQUEST_BYTES` | no phase gate | executed (tier1); refused (tier1) | `programs/dclutch-core-sbf/src/lib.rs:572` |
+| `core/found::process#Found` | entry | magic `DCLTCRQ2`; variant `Action::Found`; length `REQUEST_BYTES` | no phase gate | executed (tier1); refused (tier1) | `programs/dclutch-core-sbf/src/lib.rs:583` |
 | `core/found::project` | entry | length `PROJECT_FOUND_REQUEST_BYTES_V2`; magic `DCLTPFQ2` | no phase gate | executed (tier1) | `programs/dclutch-core-sbf/src/lib.rs:564` |
 | `core/generic_founding_v1::process` | entry | length `GENERIC_FOUNDING_REQUEST_BYTES_V1`; magic `DCLTGFQ1` | no phase gate | executed (tier1) | `programs/dclutch-core-sbf/src/lib.rs:487` |
 | `core/infrastructure::process_initialize` | entry | length `INITIALIZE_PROTOCOL_INFRASTRUCTURE_BYTES_V1` | no phase gate | executed (tier1); refused (tier1) | `programs/dclutch-core-sbf/src/lib.rs:432` |
 | `core/infrastructure_v2::process_initialize_v2` | entry | length `INITIALIZE_PROTOCOL_INFRASTRUCTURE_BYTES_V1`; magic `DCLTIIN2` | no phase gate | blocked by rule `core/infrastructure_v2::process_initialize_v2`: The V1 -> V2 infrastructure succession ceremony. | `programs/dclutch-core-sbf/src/lib.rs:428` |
-| `core/open_market::process#OpenMarket` | entry | variant `Action::OpenMarket`; length `open_market::OPEN_MARKET_INSTRUCTION_BYTES_V1` | `market: Founding+Ready` | blocked by rule `core/open_market::process#OpenMarket`: The standalone `Action::OpenMarket` route. | `programs/dclutch-core-sbf/src/lib.rs:597` |
+| `core/open_market::process#OpenMarket` | entry | magic `DCLTCRQ2`; variant `Action::OpenMarket`; length `open_market::OPEN_MARKET_INSTRUCTION_BYTES_V1` | `market: Founding+Ready` | blocked by rule `core/open_market::process#OpenMarket`: The standalone `Action::OpenMarket` route. | `programs/dclutch-core-sbf/src/lib.rs:609` |
 | `core/process_found#FoundAndPermit` | action | variant `GenericFoundingStageV1::FoundAndPermit` | `projected-custody: HoardLocked` | executed (tier1) | `programs/dclutch-core-sbf/src/generic_founding_v1.rs:401` |
 | `core/process_instruction` | entry | -- | no phase gate | executed (claims-rational-representation-v2-programtest); executed (journey); executed (resolution-core-v3-programtest); executed (tier1); refused (journey); refused (tier1) | `programs/dclutch-core-sbf/src/lib.rs:1` |
-| `core/process_instruction#CloseCapability` | entry | variant `Action::ActivateCapability`; variant `Action::CloseCapability` | no phase gate | blocked by rule `core/process_instruction#CloseCapability`: The inline arm of Core's capability dispatch. | `programs/dclutch-core-sbf/src/lib.rs:673` |
-| `core/process_instruction#Retire` | entry | variant `Action::Retire`; length `retire_v1::RETIREMENT_CHECKPOINT_PREPARE_INSTRUCTION_BYTES_V1`; magic `DCLTCRQ1` | no phase gate | executed (retirement-checkpoint-programtest); refused (retirement-checkpoint-programtest) | `programs/dclutch-core-sbf/src/lib.rs:639` |
+| `core/process_instruction#CloseCapability` | entry | magic `DCLTCRQ2`; variant `Action::ActivateCapability`; variant `Action::CloseCapability` | no phase gate | blocked by rule `core/process_instruction#CloseCapability`: The inline arm of Core's capability dispatch. | `programs/dclutch-core-sbf/src/lib.rs:687` |
+| `core/process_instruction#Retire` | entry | magic `DCLTCRQ2`; variant `Action::Retire`; length `retire_v1::RETIREMENT_CHECKPOINT_PREPARE_INSTRUCTION_BYTES_V1`; magic `DCLTCRQ1` | no phase gate | executed (retirement-checkpoint-programtest); refused (retirement-checkpoint-programtest) | `programs/dclutch-core-sbf/src/lib.rs:653` |
+| `core/process_instruction#else` | action | magic `DCLTCRQ2`; fallthrough `` | no phase gate | blocked by rule `core/process_instruction#else`: The wildcard refusal arm of Core's `Action` dispatch, and a route the census could not see until `DCLTCRQ2` was read at the dispatch guard rather than only inside `Request::decode`. | `programs/dclutch-core-sbf/src/lib.rs:728` |
 | `core/process_open#Open` | action | variant `GenericFoundingStageV1::Open` | `market: Founding+Prepaid` | executed (tier1) | `programs/dclutch-core-sbf/src/generic_founding_v1.rs:408` |
 | `core/resolution::authenticate_recovery_policy#(recovery_id,policy)` | action | tag `` | no phase gate | blocked by rule `core/resolution::authenticate_recovery_policy#(recovery_id,policy)`: STRUCTURALLY UNDRIVABLE, and the emptiness is convicted rather than asserted. | `programs/dclutch-core-sbf/src/resolution.rs:803` |
 | `core/resolution::process#AdmitTerminal` | action | variant `ResolutionCoreActionV1::AdmitTerminal` | `market: Open+Consumed, Terminal+Consumed` | executed (resolution-core-v3-programtest) | `programs/dclutch-core-sbf/src/resolution.rs:228` |
 | `core/resolution::process#CloseFund` | action | variant `ResolutionCoreActionV1::CloseFund` | no phase gate | blocked by rule `core/resolution::process#CloseFund`: NOT a dead arm any more, and no longer a coverage gap of the kind this file usually records. | `programs/dclutch-core-sbf/src/resolution.rs:221` |
 | `core/resolution::process#CreateFund` | action | variant `ResolutionCoreActionV1::CreateFund` | `market: Founding+Prepaid, Open+Consumed` | executed (journey); executed (resolution-core-v3-programtest); executed (tier1); refused (journey) | `programs/dclutch-core-sbf/src/resolution.rs:226` |
-| `core/resolution::process#Retire` | entry | variant `Action::VerifyReadiness`; variant `Action::AdmitTerminal`; variant `Action::Retire`; length `resolution::RESOLUTION_CORE_INSTRUCTION_BYTES_V1` | no phase gate | executed (resolution-core-v3-programtest) | `programs/dclutch-core-sbf/src/lib.rs:705` |
+| `core/resolution::process#Retire` | entry | magic `DCLTCRQ2`; variant `Action::VerifyReadiness`; variant `Action::AdmitTerminal`; variant `Action::Retire`; length `resolution::RESOLUTION_CORE_INSTRUCTION_BYTES_V1` | no phase gate | executed (resolution-core-v3-programtest) | `programs/dclutch-core-sbf/src/lib.rs:719` |
 | `core/resolution::process#VerifyFundReady` | action | variant `ResolutionCoreActionV1::VerifyFundReady` | `market: Founding+Prepaid, Founding+Ready, Open+Consumed` | executed (journey); executed (tier1) | `programs/dclutch-core-sbf/src/resolution.rs:227` |
-| `core/retire_v1::process#Retire` | entry | variant `Action::Retire`; length `retire_v1::RETIREMENT_INSTRUCTION_BYTES_V1` | `market: Retiring` | blocked by rule `core/retire_v1::process#Retire`: Market retirement; needs an open, then terminal, Market. | `programs/dclutch-core-sbf/src/lib.rs:616` |
-| `core/retire_v1::process_checkpoint_prepare#Retire` | entry | variant `Action::Retire`; length `retire_v1::RETIREMENT_CHECKPOINT_PREPARE_INSTRUCTION_BYTES_V1` | `market: Retiring` | executed (retirement-checkpoint-programtest); refused (retirement-checkpoint-programtest) | `programs/dclutch-core-sbf/src/lib.rs:646` |
+| `core/retire_v1::process#Retire` | entry | magic `DCLTCRQ2`; variant `Action::Retire`; length `retire_v1::RETIREMENT_INSTRUCTION_BYTES_V1` | `market: Retiring` | blocked by rule `core/retire_v1::process#Retire`: Market retirement; needs an open, then terminal, Market. | `programs/dclutch-core-sbf/src/lib.rs:630` |
+| `core/retire_v1::process_checkpoint_prepare#Retire` | entry | magic `DCLTCRQ2`; variant `Action::Retire`; length `retire_v1::RETIREMENT_CHECKPOINT_PREPARE_INSTRUCTION_BYTES_V1` | `market: Retiring` | executed (retirement-checkpoint-programtest); refused (retirement-checkpoint-programtest) | `programs/dclutch-core-sbf/src/lib.rs:660` |
 | `core/retire_v1::process_checkpoint_suffix` | entry | length `AGGREGATE_RETIREMENT_SUFFIX_REQUEST_BYTES_V1` | `market: Retiring` | executed (retirement-checkpoint-programtest); refused (retirement-checkpoint-programtest) | `programs/dclutch-core-sbf/src/lib.rs:401` |
 | `core/retirement_replay_handoff_v1::process` | entry | length `dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1`; magic `DCLCRH01` | `market: Retiring` | executed (retirement-replay-handoff-programtest); refused (retirement-replay-handoff-programtest) | `programs/dclutch-core-sbf/src/lib.rs:412` |
 | `core/series_consume::process` | entry | length `SERIES_CORE_REQUEST_BYTES_V1`; magic `DCLTCSR1`; magic `DCLPCL01` | `projected-custody: HoardLocked`; `series-ticket: Prepared` | executed (tier4-series-occurrence-programtest); refused (tier4-series-occurrence-programtest) | `programs/dclutch-core-sbf/src/lib.rs:542` |
@@ -342,5 +343,5 @@ of the route's callers do not have.
 
 | route | classifier | set | provenance |
 | --- | --- | --- | --- |
-| `trading/hot_v3::process_hot_execution_v3` | `hot_v3::prepare_direct_inline_hot_crosscheck_v3` | `direct-root: Open` | `crates/dclutch-direct-codec/src/direct_root_admission_v1.rs:104` |
+| `trading/hot_v3::process_hot_execution_v3` | `hot_v3::prepare_direct_inline_hot_crosscheck_v3` | `direct-root: Open` | `crates/dclutch-direct-codec/src/direct_root_admission_v1.rs:107` |
 | `trading/hot_v3::process_hot_execution_v3` | `hot_v3::try_authenticate_series_expiry_premarket_v1` | `series-ticket: Prepared` | `crates/dclutch-series-v3-kernel/src/ticket_admission_v1.rs:115` |

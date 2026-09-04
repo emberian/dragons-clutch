@@ -32,6 +32,7 @@ byte-checked against the Rust or Lean source that defines its layout, and
 | [productRuntimeV2Admission](productRuntimeV2Admission.md) | from the live Rust Product Runtime V2 admission ABI; do not edit. | npm run abi:product-runtime-v2-admission |
 | [productV2Payoff](productV2Payoff.md) | from the canonical Rust Product V2 payoff ABI; do not edit. | npm run abi:product-v2-payoff |
 | [protocolInfrastructure](protocolInfrastructure.md) | by formal/dclutch-semantics/EmitProtocolInfrastructureTs.lean; do not edit. | npm run abi:infrastructure |
+| [rationalRepresentationGraphV2](rationalRepresentationGraphV2.md) | by scripts/generate-rational-representation-graph-v2.mjs; do not edit. |  |
 | [rationalTerminalHotV3](rationalTerminalHotV3.md) | by formal/dclutch-semantics/EmitRationalTerminalHotV3Ts.lean; do not edit. | npm run abi:rational-terminal-v3 |
 | [realmPositionV1](realmPositionV1.md) | by formal/dclutch-semantics/EmitRealmPositionAbiTs.lean; do not edit. | npm run abi:realm-position |
 | [refusalBandsV1](refusalBandsV1.md) | by formal/dclutch-semantics/EmitRefusalBandsV1Ts.lean; do not edit. | npm run abi:refusal-bands |
@@ -41,6 +42,7 @@ byte-checked against the Rust or Lean source that defines its layout, and
 | [sbfRuntimeV1](sbfRuntimeV1.md) | from the pinned solana-sbpf, solana-syscalls and solana-program-entrypoint | npm run abi:sbf-runtime |
 | [sourceProviderWasmV1](sourceProviderWasmV1.md) | from the authoritative Rust Source-provider owner and WASM artifact; do not edit. |  |
 | [sourceReadinessWasmV1](sourceReadinessWasmV1.md) | from the authoritative Rust Source-readiness owner and WASM artifact; do not edit. |  |
+| [sourceResolutionStateV2](sourceResolutionStateV2.md) | by scripts/generate-source-resolution-state-v2.mjs; do not edit. |  |
 | [userPositionAdmissionWasmV1](userPositionAdmissionWasmV1.md) | from the authoritative Rust admission planner and WASM artifact; do not edit. | npm run abi:user-position-admission |
 | [walletTerminalInputWasmV1](walletTerminalInputWasmV1.md) | from the authoritative Rust payout input derivation and WASM artifact; do not edit. | npm run abi:wallet-terminal-input |
 | [walletTerminalPayoutV3](walletTerminalPayoutV3.md) | by scripts/generate-wallet-terminal-payout-v3.mjs; do not edit. |  |

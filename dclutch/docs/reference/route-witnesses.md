@@ -21,11 +21,11 @@ SHA-256, so a reviewer can verify a claim without re-running a gauntlet.
 | **devnet** | **26** | a finalized transaction on Solana devnet, named by signature and slot, and corroborated against the chain's own logs |
 | **local validator** | 32 | `solana-test-validator`: a real Agave runtime, real slots, real finalization, on localhost |
 | **ProgramTest only** | 55 | an in-process `solana-program-test` bank. It runs the REAL SBF ELFs -- which is why it is evidence -- but it is not a validator: no packet limit, no leader schedule, no finalization, no fee market |
-| **blocked** | 49 | no campaign; `tools/gauntlet/blocked.json` records a reason and an owner |
+| **blocked** | 50 | no campaign; `tools/gauntlet/blocked.json` records a reason and an owner |
 | **never-executed** | 0 | no campaign and no reason recorded |
 
 **A real Agave runtime drives 58 of the
-162.** `docs/MASTER_COMPLETION_CONTRACT.md` item 5 asks for a local
+163.** `docs/MASTER_COMPLETION_CONTRACT.md` item 5 asks for a local
 validator or devnet transaction where the route is chain-facing; those are the
 rows that meet it. The ProgramTest column is not a lesser version of the same
 thing -- `tools/gauntlet/DESIGN.md` admits that substrate only as a labelled
@@ -201,6 +201,7 @@ route now executes.
 | `core/process_instruction` | devnet | cohort 13 `DCLTCFQ1` slot 491,961,396; cohort 13 `DCLTGMF3` slot 491,963,072; cohort 13 `DCLTPCB2` slot 491,962,044; also bound by `claims-rational-representation-v2-programtest`, `journey`, `resolution-core-v3-programtest`, `tier1` | `docs/evidence/witnesses/cohort-13-discovered.json`<br>`docs/evidence/witnesses/cohort-13-founding.json` |
 | `core/process_instruction#CloseCapability` | blocked | blocked by rule `core/process_instruction#CloseCapability` | `tools/gauntlet/blocked.json` |
 | `core/process_instruction#Retire` | program-test | `retirement-checkpoint-programtest` | `tools/gauntlet/retirement-checkpoint/bindings.json` |
+| `core/process_instruction#else` | blocked | blocked by rule `core/process_instruction#else` | `tools/gauntlet/blocked.json` |
 | `core/process_open#Open` | devnet | cohort 13 `DCLTGMF3` slot 491,963,072; also bound by `tier1` | `docs/evidence/witnesses/cohort-13-founding.json` |
 | `core/resolution::authenticate_recovery_policy#(recovery_id,policy)` | blocked | blocked by rule `core/resolution::authenticate_recovery_policy#(recovery_id,policy)` | `tools/gauntlet/blocked.json` |
 | `core/resolution::process#AdmitTerminal` | program-test | `resolution-core-v3-programtest` | `tools/gauntlet/resolution-core-v3/bindings.json` |
