@@ -1963,15 +1963,38 @@ probe build, the next refusal is `terminal ALT data width, rent, or canonical
 prefix refused`: the lookup table `4a3S6qTKmXAGF5qPcWpDMsgbQiDCHjZdmhExA262NpMT`
 holds 13,729,944 lamports and was funded at the old rate too.
 
-So market 1's remaining wall is **at least two rent-exactness guards deep**, and
-every one of them makes the same mistake as the program conjunct in E1: it treats
-`rent.minimum_balance(len)` as a constant of an account rather than as the
-reading it was at creation. In the exterior the repair is cheap and needs no
-program — the session already RECORDS the figure it was funded at; the guard
-should compare the account against that and require only exemption against
-today's. This lane did not make that change, because a guard that is opened to
-reach a wall behind it should be opened deliberately and not under the pressure
-of an act.
+Driven to the end, market 1's remaining path is **five rent-exactness guards
+deep**, each opened in turn in an UNCOMMITTED probe build to see the next:
+
+| | guard | the two numbers |
+| ---: | --- | --- |
+| 1 | terminal session receipt rent | 3,445,152 against a rederived 2,763,520 |
+| 2 | live terminal ALT rent | 11,703,384 against 9,387,840 |
+| 3 | frozen terminal ALT final rent | the plan's, rederived today |
+| 4 | supplied frozen-union ALT rent | the same, on the supplied table |
+| 5 | `Resolution closure receipt was not the exact vacant at-most-rent destination` | the seat holds its prepaid 3,445,152; today's bound is 2,763,520 |
+
+Guards 1–4 now split into one sentence per conjunct and print both numbers
+(`69e0de7f4`); the live refusal reads *"terminal session receipt rent 3445152 is
+no longer what the canonical Rent sysvar rederives (2763520) for 416 bytes"*.
+
+**Not one verdict moved, and the reason is a test.** The two ALT rent comparisons
+were first made floors, on the reasoning that the program they mirror,
+`require_prepaid_output`, asks `lamports < minimum`, so a table holding more than
+today's minimum is still exempt. The tree refused it:
+`terminal_alt_refuses_divergence_partial_freeze_surplus_and_wrong_boundary` is
+written about ONE extra lamport on the table, so the exactness is deliberate and
+it is what refuses a table carrying lamports nobody can account for. The floors
+were reverted; only the sentences were kept. **A guard a test defends is not a
+guard to loosen on the way to a wall behind it** — which is also why guard 5,
+an upper bound on custody rather than a mirror of a program floor, was left
+exactly as it is.
+
+Every one of the five makes the same mistake as the program conjunct in E1: it
+compares an account funded at one reading of a cluster parameter against another
+reading of it. The fact each of them wants is the rent the account was funded at.
+The session already records that figure; the ALT plan does not; the ledger
+cannot.
 
 Market 1 reads phase byte 3 `Retiring` and `outstanding_capabilities` 1 at
 CoreState offset 280; market 3 reads phase 1 `Open` and outstanding 1. Both are
@@ -2001,7 +2024,10 @@ real chain. Both wait on one rule inside a deployed program.
     260684fad  funding custody: the conjunct that reads a chain parameter, and
                the fifteen policies one entry cannot hold
     08fe86470  close-funding: twelve sites, one code, and now twelve sentences
+    fce9b7b76  evidence: addendum E, the field that moved was the cluster's rent
+    69e0de7f4  terminal sequence: four rent guards that said "refused" and now
+               say which number
 
-Both carry `Lane: COHORT-15E`. Every new test was proven red against a real
+All carry `Lane: COHORT-15E`. Every new test was proven red against a real
 regression and green when restored. No crate in an SBF link was changed, so no
 frameguard rows are owed.

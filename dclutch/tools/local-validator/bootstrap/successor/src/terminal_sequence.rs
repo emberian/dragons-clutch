@@ -6024,16 +6024,32 @@ pub(crate) fn authenticate_supplied_terminal_lookup_table_v1(
     let decoded = AddressLookupTable::deserialize(&table.data)
         .map_err(|_| Error::new("supplied terminal ALT bytes refused"))?;
     let final_data_len = lookup_table_data_len(canonical.len())?;
+    // Six conjuncts, one sentence, and the sixth is the cluster's rent rather
+    // than the table's shape. Split so a reader is told which; no verdict moves.
+    let final_rent_minimum = rent.minimum_balance(final_data_len);
+    if table.lamports != final_rent_minimum {
+        return Err(Error::new(format!(
+            "supplied terminal ALT holds {} against the rederived rent minimum \
+             {final_rent_minimum} for {final_data_len} bytes",
+            table.lamports
+        )));
+    }
     if decoded.meta.authority.is_some()
         || decoded.meta.deactivation_slot != u64::MAX
         || decoded.meta.last_extended_slot >= table.observation.slot
         || decoded.addresses.as_ref() != canonical.as_slice()
         || table.data.len() != final_data_len
-        || table.lamports != rent.minimum_balance(final_data_len)
     {
-        return Err(Error::new(
-            "supplied terminal ALT is not the exact activated frozen union",
-        ));
+        return Err(Error::new(format!(
+            "supplied terminal ALT is not the exact activated frozen union              (authority {}, deactivating {}, extended at {} against observation {},              addresses {} of {}, width {} against {final_data_len})",
+            decoded.meta.authority.is_some(),
+            decoded.meta.deactivation_slot != u64::MAX,
+            decoded.meta.last_extended_slot,
+            table.observation.slot,
+            decoded.addresses.as_ref().len(),
+            canonical.len(),
+            table.data.len(),
+        )));
     }
     Ok(())
 }
@@ -6065,14 +6081,33 @@ pub(crate) fn route_terminal_lookup_table_v1(
     }
     let addresses = decoded.addresses.as_ref();
     let expected_data_len = lookup_table_data_len(addresses.len())?;
-    if table.data.len() != expected_data_len
-        || table.lamports != rent.minimum_balance(expected_data_len)
-        || addresses.len() > plan.addresses.len()
-        || addresses != &plan.addresses[..addresses.len()]
-    {
-        return Err(Error::new(
-            "terminal ALT data width, rent, or canonical prefix refused",
-        ));
+    // Four conjuncts that used to share one sentence, and three of them are
+    // properties of the table while the rent one is a property of the CLUSTER at
+    // the moment of the read. The surplus case is refused ON PURPOSE --
+    // `terminal_alt_refuses_divergence_partial_freeze_surplus_and_wrong_boundary`
+    // is written about one extra lamport -- so nothing here is loosened; a
+    // reader is only told which of the four it hit and what the two numbers are.
+    let table_rent_minimum = rent.minimum_balance(expected_data_len);
+    if table.data.len() != expected_data_len {
+        return Err(Error::new(format!(
+            "terminal ALT data width {} is not the {expected_data_len} its {} addresses need",
+            table.data.len(),
+            addresses.len()
+        )));
+    }
+    if table.lamports != table_rent_minimum {
+        return Err(Error::new(format!(
+            "terminal ALT holds {} against the rederived rent minimum {table_rent_minimum} \
+             for {expected_data_len} bytes",
+            table.lamports
+        )));
+    }
+    if addresses.len() > plan.addresses.len() || addresses != &plan.addresses[..addresses.len()] {
+        return Err(Error::new(format!(
+            "terminal ALT carries {} addresses that are not a canonical prefix of the plan's {}",
+            addresses.len(),
+            plan.addresses.len()
+        )));
     }
     let complete = addresses.len() == plan.addresses.len();
     if !addresses.is_empty() {
@@ -6088,11 +6123,21 @@ pub(crate) fn route_terminal_lookup_table_v1(
     }
     match decoded.meta.authority {
         None if complete => {
-            if table.data.len() != plan.final_data_len || table.lamports != plan.final_rent_lamports
-            {
-                return Err(Error::new(
-                    "frozen terminal ALT has wrong final width or rent",
-                ));
+            // Same split, same verdicts: the width is the table's and the rent
+            // minimum is the cluster's, and only one of them can move under an
+            // account that is already frozen.
+            if table.data.len() != plan.final_data_len {
+                return Err(Error::new(format!(
+                    "frozen terminal ALT width {} is not the planned {}",
+                    table.data.len(),
+                    plan.final_data_len
+                )));
+            }
+            if table.lamports != plan.final_rent_lamports {
+                return Err(Error::new(format!(
+                    "frozen terminal ALT holds {} against the planned rent minimum {}",
+                    table.lamports, plan.final_rent_lamports
+                )));
             }
             Ok(TerminalLookupTableRouteV1::Complete)
         }
@@ -8112,10 +8157,25 @@ fn authenticate_terminal_receipt_funding_v1(
     let rent_snapshot = finalized_snapshot(rpc, &[sysvar::rent::ID])?;
     let rent: Rent = bincode::deserialize(&rent_snapshot.account(sysvar::rent::ID)?.data)
         .map_err(|error| Error::new(format!("terminal session Rent sysvar: {error}")))?;
-    if rent.minimum_balance(SOURCE_CLOSURE_RECEIPT_BYTES_V3) != session.receipt_rent_lamports {
-        return Err(refusal(
-            "terminal session receipt rent no longer rederived from the canonical Rent sysvar",
-        ));
+    // THE REFUSAL IS UNCHANGED; ONLY ITS SENTENCE IS. A rent-exempt minimum is a
+    // CLUSTER parameter read at the moment of the check, and the session
+    // recorded the reading it planned against. Devnet lowered its rent-exempt
+    // rate from 6,333 to 5,080 lamports per byte at the epoch-1141 boundary
+    // (slot 492,912,000, 2026-09-04 07:31:40 UTC), and market 1's sequence then
+    // refused here with a correctly prepaid seat on chain and no word for why.
+    // Saying both numbers is the difference between "this session is corrupt"
+    // and "the cluster moved under it", and only one of those is actionable.
+    // Whether a session should be allowed to continue across such a change is a
+    // design question with an owed answer, not a comparison to loosen in
+    // passing: the exactness is also what refuses a seat carrying lamports
+    // nobody can account for.
+    let rederived = rent.minimum_balance(SOURCE_CLOSURE_RECEIPT_BYTES_V3);
+    if rederived != session.receipt_rent_lamports {
+        return Err(refusal(&format!(
+            "terminal session receipt rent {} is no longer what the canonical Rent sysvar \
+             rederives ({rederived}) for {SOURCE_CLOSURE_RECEIPT_BYTES_V3} bytes",
+            session.receipt_rent_lamports
+        )));
     }
     let prepay_path = arguments
         .journal_dir

@@ -4456,3 +4456,21 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   (the test reads them from routes.md meanwhile); `CORE_REQUEST_ACTION_OFFSET` is a browser copy of a crate-private offset
   (one line in generate-core-found.mjs).
 - Cuts: `4fbc06803`.
+
+### 2026-09-04 05:50 EDT — BOTH WALLS BELONG TO PROGRAMS; A RULING ON RENT
+- COHORT-15E closed (`260684fad`, `08fe86470`, `69e0de7f4`, `fce9b7b76`, `bce3cb32d`; nothing signed, balances unmoved):
+  **the Funding refusal is exact rent equality against the LIVE sysvar after devnet's rate fell 6,333 → 5,080/byte at
+  epoch 1141 (slot 492,912,000)** — every account the cohort funded reads 6,333, the check computes 5,080, the surplus is
+  the rent difference to the lamport (491,176 on 264 bytes); the operator already reads the live sysvar (the brief's
+  "founding-time constant" was wrong — the instrument proved it); `resolution.rs:1270` makes the same call, so no host change
+  lands the payout; widening to ≥ would admit a donation as custody. **The General field: fifteen policies, one manifest
+  entry — a General market executes exactly one action by construction** (the compiler is consistent; the contract's shape
+  is Direct's minus the per-action entries); a program again. Market 1's retirement is five exact rent guards deep (a test
+  defends the exactness; the lane loosened two, went red, and reverted). The stranger's payout on market 3 is ONE program
+  conjunct away (ATA created, kind 1, selector 1, the buyer holds outcome 1).
+- **RULING (under the standing goal; ember may reverse): an account's rent is fixed when it is funded, and every exactness
+  check compares against the rent it was funded at, never the sysvar of the moment** — persisted in the account's own
+  record (Lean-first), the live sysvar read only for accounts created now. → PROGRAMS-16 **`(spawned)`**: the funded rent
+  persisted across the five guards with an epoch-change program-test end to end; one manifest entry per General action;
+  cohort-16's runbook rows and the `retire` row.
+- Cuts: `61c8978b0`.
