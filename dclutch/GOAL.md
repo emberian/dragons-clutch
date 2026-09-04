@@ -4353,3 +4353,5 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   instance exists (fixture cases). Owed: no cross-boundary fixture for the lifecycle child (a Rust-emitted example would make
   the digest pin an authority); `sync-from-web` vs `twinIdentity` disagree on three files; the graph layout owes a Lean schema.
 - Cuts: `d144bf55d`.
+- Started 03:10 EDT: TWINS **`ac0cc0469cb7d5966`** — one classification table for sync-from-web and twinIdentity; a Rust-emitted
+  example child makes the lifecycle digest pin an authority.
