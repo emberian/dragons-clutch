@@ -4227,3 +4227,6 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   NEGATIVE — the draw, not a regression. Tier 1: 207 tx, 24/24 witnesses, 0 diagnostics. Owed: CU budgets for eight new
   transactions; the abort suffix on a validator (PACKET_LIMIT §10); genref's local-validator control is a text search.
 - Cuts: `621446d5e`, `2c026d3bd`, `d070b1dfa`.
+- Started 23:50 EDT: BUDGETS **`ad45a74651219788a`** (eight tier-1 CU rows over three draws; the 5.8×-stale reauthentication
+  pin; genref's validator control made structural) and DECODERS **`a85802400c254b7f5`** (six machine decoders derived from
+  the emitted layouts; the other-machine verdicts derive; the console shows the machine's state).
