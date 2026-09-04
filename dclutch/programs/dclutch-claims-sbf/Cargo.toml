@@ -45,6 +45,7 @@ claims-founding-probe = []
 
 [dependencies]
 dclutch-capability-contract = { path = "../../crates/dclutch-capability-contract" }
+dclutch-claims-conservation-contract = { path = "../../crates/dclutch-claims-conservation-contract" }
 dclutch-claims-svm = { path = "../../crates/dclutch-claims-svm" }
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
 dclutch-cu-checkpoint = { path = "../../crates/dclutch-cu-checkpoint", optional = true }

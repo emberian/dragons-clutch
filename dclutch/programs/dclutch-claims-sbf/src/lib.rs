@@ -41,6 +41,7 @@ use solana_system_interface::instruction::{allocate, assign};
 
 pub mod affine_batch_v2;
 pub mod claim_check_compaction_v1;
+pub mod claims_conservation_v1;
 pub mod claim_check_redemption_v1;
 pub mod custody_replay_v1;
 pub mod founding_v5;
@@ -700,6 +701,14 @@ fn process_remaining_instruction(
                 instruction_data,
             ),
         };
+    }
+
+    // The one user act that moves collateral: split and merge, decision 0029
+    // item 5. It is dispatched before the migration-only generic route below
+    // because it is the route a HOLDER can reach, and the one that route was
+    // never able to be.
+    if claims_conservation_v1::is_claims_conservation_v1(instruction_data) {
+        return claims_conservation_v1::process(program_id, accounts, instruction_data);
     }
 
     // ECONOMIC_SLICE_MIGRATION_ONLY: this generic ClaimsPlanV1 route remains

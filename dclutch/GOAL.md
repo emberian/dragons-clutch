@@ -4941,3 +4941,13 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   recursion, artifacts kept). **The Dealer's sealed τ must carry 2^-19.** A measurement failure recorded: `timeout … | head`
   reports head's exit, so a killed Lean read as clean — capture the status inside the subshell before any pipe.
 - Cuts: `9e8c23e2e`.
+- RECOVERY-3 closed (`6a3079454`, `61706bc9a`, `533c33711`, `8875255a5`, `16afc727c`, `6818c2123`): the successor bootstrap had
+  not compiled at HEAD since RECOVERY-2's field (nothing in CI builds that workspace between program commits) — fixed; **the
+  successor founds a market that bought a named alternative** (the ladder authored from the primary spec, so the graph
+  validates by construction; the one-source founding byte-identical); **`advance-recovery`** builds the relay contract's
+  own frame, refuses before the deadline by name, waits bounded — never a warp — predicts the arm and reads the Source back;
+  cohort-16 rows `found-two-source → crank-ladder → capture-rung` with verifiers written against the failure each hides;
+  **no loopback run: tier 1 founds and resolves inside ONE process (the validator dies with it), so a three-command ladder
+  needs a family tier on the relayed pattern — a lane**; the gauntlet binding cannot be authored without a tier run.
+  Six successor tests red at HEAD are CLAIMS-17's widened frame vs the host's pinned twelve keys (routed).
+- Cuts: `4153bd0eb`.
