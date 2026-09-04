@@ -1,6 +1,6 @@
 # Decision 0028: the accelerator output page — open, with a read
 
-Status: **OPEN — ember asked at 10:15 EDT 2026-09-04 for the best architectural
+Status: **PROVISIONAL — ruled 2026-09-04 14:10 EDT by the orchestrator under the standing goal (option (a), cohort-17; see the addendum); ember may reverse. Originally OPEN: ember asked at 10:15 EDT 2026-09-04 for the best architectural
 course rather than for a switch, so this record carries a READ and not a ruling,
 and decision 0003 stays unamended until ember rules**. Docket item D6. Ember's
 words are at `GOAL.md:4655`. The question itself is stated in
