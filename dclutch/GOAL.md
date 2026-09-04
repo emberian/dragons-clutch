@@ -4568,3 +4568,6 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   the emission census counts as guarded is red); 27 frame diagnostics in core-sbf's retire checkpoint suffix from
   RENT-FLOORS' first commit (it has since landed f1fb4f735).
 - Cuts: `c374cb080`, `4f8d2b0d0`.
+- Started 08:00 EDT: LEAN-DRIFT **`abec5fd737833b71a`** — a guard the emission census counts as guarded is red
+  (`generated_transition_programs_v3.rs` vs its emitter): convict the side, realign at the author, and make the census RUN
+  the guards it counts.
