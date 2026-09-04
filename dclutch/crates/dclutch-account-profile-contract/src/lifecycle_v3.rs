@@ -1864,15 +1864,26 @@ impl<'a> StateLifecyclePolicyV3<'a> {
     /// Require every lifecycle-bound coordinate to have one recipe and one create.
     ///
     /// `only_action` carries the same notion the plan loop in
-    /// [`Self::validate_account_profile_inner`] already carries, and for the
-    /// identical reason: when the profile describes ONE action's frame, a
-    /// sibling action's recipe is not a candidate for this frame's coordinates
-    /// and a sibling action's plan is not a create for them. Without it a
-    /// family whose actions share one policy cannot exist, because the "exactly
-    /// one recipe names this coordinate" rule below counts every action's
-    /// recipe at the same fixed slot -- General's Selection, Settlement, Batch,
-    /// Order and Candidate recipes all name fixed slot 5 -- and refuses a
-    /// policy that is correct for each action taken separately.
+    /// [`Self::validate_account_profile_inner`] already carries: when the
+    /// profile describes ONE action's frame, a sibling action's recipe is not a
+    /// candidate for this frame's coordinates. Without it a family whose
+    /// actions share one policy cannot exist, because the "exactly one recipe
+    /// names this coordinate" rule below counts every action's recipe at the
+    /// same fixed slot -- General's Selection, Settlement, Batch, Order and
+    /// Candidate recipes all name fixed slot 5 -- and refuses a policy that is
+    /// correct for each action taken separately.
+    ///
+    /// THE TWO CONJUNCTS HAVE DIFFERENT SCOPES, and conflating them is a
+    /// regression this function has already made once. "Exactly one recipe
+    /// derives this coordinate" is a question about THIS frame, so it is
+    /// action-scoped. "The policy creates this coordinate" is a question about
+    /// the POLICY, because the vacancy a `LifecycleBound` prestate admits is a
+    /// property of the account over the family's whole life, not of the action
+    /// that happens to be executing. Dealer LP is the type case: one recipe,
+    /// an Open plan that creates the position and a Close plan that closes it,
+    /// so an action-scoped create search asks the Close frame to contain its
+    /// own create and refuses `ProfileMismatch` on a policy that is correct.
+    /// See [`Self::validate_lifecycle_prestate_coordinate`].
     ///
     /// `None` keeps the whole-policy reading byte for byte, so no family that
     /// publishes one profile for every action sees a different answer.
@@ -1989,14 +2000,22 @@ impl<'a> StateLifecyclePolicyV3<'a> {
             recipe_index = recipe_index.checked_add(1).ok_or(Error::Arithmetic)?;
         }
         let recipe_index = matching_recipe.ok_or(Error::ProfileMismatch)?;
+        // WHOLE-POLICY, DELIBERATELY, while the recipe search above is
+        // action-scoped. Whether this coordinate has one unambiguous derivation
+        // is a question about the frame in hand; whether the policy is the
+        // author of the account's existence is not. A `LifecycleBound` prestate
+        // admits a vacancy, and the create that justifies it belongs to
+        // whichever action of the family opens the state -- Dealer LP's one
+        // recipe is created by its Open plan and closed by its Close plan, so
+        // scoping this search to the executing action asks the Close frame to
+        // create what it is closing. The per-action coverage this join owes is
+        // already carried, in full, by `recipe_is_reachable` above: a
+        // coordinate no plan of the selected action names has no reachable
+        // recipe and is refused before this loop runs.
         let mut found_lifecycle_plan = false;
         let mut plan_index = 0_u16;
         while plan_index < self.plans {
             let plan = self.plan(plan_index)?;
-            if only_action.is_some_and(|action| plan.action != action) {
-                plan_index = plan_index.checked_add(1).ok_or(Error::Arithmetic)?;
-                continue;
-            }
             if plan.recipe == recipe_index
                 && matches!(
                     plan.operation,
@@ -4371,6 +4390,217 @@ mod tests {
     const SYSTEM: [u8; 32] = [0; 32];
     const PRODUCT_DATA: [u8; 4] = 3_u32.to_le_bytes();
     const CLOSED_STATE_DATA: [u8; 148] = [0x55; 148];
+
+    /// One recipe, an Open that creates it and a Close that closes it.
+    ///
+    /// This is the Dealer LP shape, and it is why the create search in
+    /// [`StateLifecyclePolicyV3::validate_lifecycle_prestate_coordinate`] is
+    /// whole-policy while the recipe search beside it is action-scoped. A
+    /// family that shares one capability root shares one policy; the vacancy a
+    /// `LifecycleBound` prestate admits is authored by whichever action opens
+    /// the state, so asking the Close frame to contain its own create refuses a
+    /// policy that is correct for each action taken separately.
+    ///
+    /// `ae026955d` asked exactly that, and the Dealer LP family went red at
+    /// three call sites with one cause. The per-action coverage the join owes
+    /// is carried instead by recipe reachability, and the uncreated family at
+    /// the end is what keeps the repair from being a deletion: with no plan in
+    /// the policy creating the recipe, BOTH actions are still refused.
+    #[test]
+    fn a_close_action_joins_a_policy_whose_create_belongs_to_its_sibling() {
+        const OPEN: u32 = 7;
+        const CLOSE: u32 = 8;
+        const CREATING: PlanEffectPermissionsV3 =
+            LifecycleOperationV3::AuthenticateOrCreate.plan_effect_permissions();
+        const CLOSING: PlanEffectPermissionsV3 =
+            LifecycleOperationV3::Close.plan_effect_permissions();
+
+        // The two frames collide at slot 1, which is the Open payer in one and
+        // the Close RentCredit in the other. A payer must be debitable and a
+        // RentCredit creditable, so no single frame answers for both -- the
+        // reason the per-action join exists at all.
+        assert_eq!(
+            CREATING.payer & CLOSING.rent_credit,
+            0,
+            "slot 1's two roles must want disjoint permissions, or this fixture \
+             is not the shape it claims to be",
+        );
+        // A `LifecycleBound` rule is required by `v2` to grant credit and
+        // write; the Close additionally debits it. The shared state coordinate
+        // therefore carries the union in BOTH frames, which is what every
+        // producer in the tree emits, so the two frames differ only where the
+        // actions genuinely differ.
+        let state_rule = || AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: AccountPrivilegesV2::new(false, true, false),
+                effect_permissions: AccountEffectPermissionsV2::granting(
+                    CREATING.state | CLOSING.state,
+                ),
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length: 152,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::LifecycleBound,
+        };
+        let funding_rule = |signer: bool, mask: u8| AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: AccountPrivilegesV2::new(signer, true, false),
+                effect_permissions: AccountEffectPermissionsV2::granting(mask),
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length: 0,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::Exact,
+        };
+        // A debitable Exact coordinate must have its owner anchored; the
+        // LifecycleBound state and the credit-only RentCredit need none.
+        let anchor = [AccountOperationInputV2::RequireOwner {
+            account: AccountCoordinateV2::fixed(1),
+            expected: IdentityCoordinateV2::common(1),
+        }];
+        let frame = |rules: &[AccountRuleWithPrestateInputV2],
+                     operations: &[AccountOperationInputV2]| {
+            let width = v2::HEADER_BYTES
+                + rules.len() * v2::RULE_BYTES
+                + operations.len() * v2::OPERATION_BYTES;
+            let mut scratch = vec![0_u8; width];
+            let mut bytes = vec![0_u8; width];
+            encode_account_profile_with_lifecycle_v2_atomic(
+                TrustedEnvironmentV2::None,
+                rules,
+                &[],
+                operations,
+                &[],
+                RegisterGeometryV2 {
+                    common_scalars: 3,
+                    item_scalar_stride: 0,
+                    common_identities: 2,
+                    item_identity_stride: 0,
+                },
+                &mut scratch,
+                &mut bytes,
+            )
+            .expect("frame");
+            bytes
+        };
+        let open_bytes = frame(
+            &[
+                state_rule(),
+                funding_rule(true, CREATING.payer),
+                funding_rule(false, 0),
+            ],
+            &anchor,
+        );
+        let close_bytes = frame(
+            &[state_rule(), funding_rule(false, CLOSING.rent_credit)],
+            &[],
+        );
+        let open_frame = AccountProfileV2::decode(&open_bytes).expect("Open frame");
+        let close_frame = AccountProfileV2::decode(&close_bytes).expect("Close frame");
+
+        let recipes = [encode::LifecycleRecipeInputV3 {
+            state: encode::LifecycleAccountCoordinateV3::fixed(0),
+            seed_start: 0,
+            seed_count: 2,
+            bump_offset: 1,
+            data_base: 152,
+            data_stride: 0,
+        }];
+        let seeds = [
+            encode::LifecycleSeedInputV3::Literal(b"shared-root"),
+            encode::LifecycleSeedInputV3::CommonScalar { index: 0, width: 1 },
+        ];
+        // An `Authenticate` moves no rent, so the encoder requires it to name
+        // no funding at all -- which is why the uncreated family below is the
+        // same policy with the Open plan's funding removed, not the same plan
+        // with one tag changed.
+        let open_plan = |operation| match operation {
+            encode::LifecycleOperationInputV3::Authenticate => encode::LifecyclePlanInputV3 {
+                action: OPEN,
+                operation,
+                recipe: 0,
+                payer: None,
+                rent_credit: None,
+                principal: None,
+                beneficiary: None,
+                refund_source: encode::LifecycleRefundSourceInputV3::Credit,
+                guard: encode::LifecycleGuardInputV3::Always,
+            },
+            _ => encode::LifecyclePlanInputV3 {
+                action: OPEN,
+                operation,
+                recipe: 0,
+                payer: Some(encode::LifecycleAccountCoordinateV3::fixed(1)),
+                rent_credit: Some(encode::LifecycleAccountCoordinateV3::fixed(2)),
+                principal: Some(encode::LifecycleRegisterCoordinateV3::common(1)),
+                beneficiary: Some(encode::LifecycleRegisterCoordinateV3::common(0)),
+                refund_source: encode::LifecycleRefundSourceInputV3::Credit,
+                guard: encode::LifecycleGuardInputV3::Always,
+            },
+        };
+        let close_plan = encode::LifecyclePlanInputV3 {
+            action: CLOSE,
+            operation: encode::LifecycleOperationInputV3::Close,
+            recipe: 0,
+            payer: None,
+            rent_credit: Some(encode::LifecycleAccountCoordinateV3::fixed(1)),
+            principal: Some(encode::LifecycleRegisterCoordinateV3::common(1)),
+            beneficiary: Some(encode::LifecycleRegisterCoordinateV3::common(0)),
+            refund_source: encode::LifecycleRefundSourceInputV3::Credit,
+            guard: encode::LifecycleGuardInputV3::Always,
+        };
+        let family = |creating: encode::LifecycleOperationInputV3| {
+            let plans = [open_plan(creating), close_plan];
+            let width = HEADER_BYTES
+                + recipes.len() * RECIPE_BYTES
+                + seeds.len() * SEED_BYTES
+                + plans.len() * ACTION_PLAN_BYTES;
+            let mut scratch = vec![0_u8; width];
+            let mut bytes = vec![0_u8; width];
+            encode::encode_lifecycle_policy_v3_atomic(
+                &recipes,
+                &seeds,
+                &plans,
+                &mut scratch,
+                &mut bytes,
+            )
+            .expect("family policy");
+            bytes
+        };
+
+        let bytes = family(encode::LifecycleOperationInputV3::AuthenticateOrCreate);
+        let policy = StateLifecyclePolicyV3::decode(&bytes).expect("family decode");
+        policy
+            .validate_account_profile_for_action(open_frame, OPEN)
+            .expect("the Open frame joins its own plan");
+        policy
+            .validate_account_profile_for_action(close_frame, CLOSE)
+            .expect("the Close frame joins a policy whose create is the Open's");
+
+        // Not vacuous, three ways. The whole-policy form is the category error
+        // the per-action form was introduced to stop making; naming an action
+        // the policy carries no plan for leaves no reachable recipe; and a
+        // family whose plans never create the recipe is still refused for
+        // EVERY action, which is the conjunct the repair kept.
+        assert_eq!(
+            policy.validate_account_profile(close_frame),
+            Err(Error::ProfileMismatch)
+        );
+        assert_eq!(
+            policy.validate_account_profile_for_action(close_frame, 99),
+            Err(Error::ProfileMismatch)
+        );
+        let uncreated_bytes = family(encode::LifecycleOperationInputV3::Authenticate);
+        let uncreated = StateLifecyclePolicyV3::decode(&uncreated_bytes).expect("uncreated decode");
+        assert_eq!(
+            uncreated.validate_account_profile_for_action(open_frame, OPEN),
+            Err(Error::ProfileMismatch)
+        );
+        assert_eq!(
+            uncreated.validate_account_profile_for_action(close_frame, CLOSE),
+            Err(Error::ProfileMismatch)
+        );
+    }
 
     #[test]
     fn lifecycle_bound_prestate_authenticates_live_or_creates_vacant_only() {

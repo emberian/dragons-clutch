@@ -4630,3 +4630,10 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
 - Cuts: `ace5d24e9`, `a10d5af4f`.
 - Started 09:50 EDT: DEALER-TESTS **`a246c134c61daeed1`** — the three `dealer::` unit tests red with ProfileMismatch/Geometry,
   convicted to a commit (the shared-contract change is the likeliest) and fixed at the author.
+- DEALER-TESTS closed (`77eb79062`, frames `2b206595b`, locks `72a0e8fbc`): a real regression from ae026955d — the
+  lifecycle prestate's "the policy CREATES it" search had been scoped to one action like the "exactly one recipe" search,
+  so a Close frame was asked to create what it closes (Dealer LP: one recipe, an Open that creates, a Close that closes);
+  the create search is whole-policy again, the recipe search stays per action, red-proven; trading-sbf 439/0; campaign
+  31/31 ×3, worst headroom 125,759 CU; frames identical. Owed: two `map_err(|_| Geometry)` sites that discarded the cause.
+  The general-hot nested lock resolved and committed by the orchestrator.
+- Cuts: `f6bd0d7a1`, `f512da0ec`.

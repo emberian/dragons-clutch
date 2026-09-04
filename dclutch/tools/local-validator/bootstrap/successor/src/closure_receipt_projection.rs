@@ -201,9 +201,8 @@ pub(crate) fn project_closure_rent_partition_v1(
         DeployedClosureRentRuleV1::FundedRate => funded,
         DeployedClosureRentRuleV1::LiveRentSysvar => {
             let ledger_rent_lamports = live_rent.minimum_balance(ledger_data_len);
-            let ledger_lamport_surplus = invariant
-                .checked_sub(ledger_rent_lamports)
-                .ok_or_else(|| {
+            let ledger_lamport_surplus =
+                invariant.checked_sub(ledger_rent_lamports).ok_or_else(|| {
                     Error::new(format!(
                         "REFUSED: the deployed Resolution prices {ledger_data_len} bytes at \
                          {ledger_rent_lamports} lamports off the live Rent sysvar, which is more \

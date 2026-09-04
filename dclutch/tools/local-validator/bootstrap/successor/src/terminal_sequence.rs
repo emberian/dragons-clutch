@@ -298,6 +298,7 @@ struct TerminalSequenceArgumentsV1 {
     /// and a later pass that did not repeat the flag must still reproduce the
     /// same completion.
     supersede_unlandable: Option<String>,
+    reconcile_landed: Option<String>,
     execute: bool,
 }
 
@@ -1373,6 +1374,17 @@ struct DurableFinalizedEvidenceV1 {
     compute_units_consumed: Option<u64>,
     packet_sha256: String,
     poststate: BTreeMap<String, DurableAccountStateV1>,
+    /// The value each interval-bound execution-clock field actually carried.
+    ///
+    /// A persisted poststate holds digests, not bytes, so a re-verification of
+    /// an archived journal has nothing to substitute into the plan's prediction
+    /// unless the certification WROTE DOWN what it admitted. This is that
+    /// record: certification checks the interval against the chain, stores the
+    /// value it found, and every later re-verification is exact again -- and
+    /// checks the interval a second time, against the number in front of it.
+    /// Absent from the JSON when no stage in this journal has such a field.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    execution_clocks: BTreeMap<String, u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1394,6 +1406,11 @@ pub(crate) struct DurableTerminalJournalV1 {
     finalized: Option<DurableFinalizedEvidenceV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     superseded: Option<DurableSupersededEvidenceV1>,
+    /// Present only on a journal whose PREDICTIONS were re-derived after its
+    /// packet landed. Never on one that has not been signed, and never on a
+    /// retired one: a packet cannot both have landed and be unlandable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reconciled: Option<DurableReconciledEvidenceV1>,
 }
 
 /// Reauthenticated Resolution-fund closure facts handed to the complete-life
@@ -1771,6 +1788,7 @@ pub(crate) fn build_protocol_stage_journal_v1(
         expected_signature: None,
         finalized: None,
         superseded: None,
+        reconciled: None,
     };
     refresh_terminal_journal_digest_v1(&mut journal)?;
     // A BUILDER MAY NOT WRITE A JOURNAL ITS OWN AUTHORITY WOULD REFUSE.
@@ -2222,7 +2240,10 @@ pub(crate) fn read_terminal_journal_v1(path: &Path) -> Result<DurableTerminalJou
         ))
     })?;
     let journal: DurableTerminalJournalV1 = serde_json::from_slice(&source)?;
-    authenticate_terminal_journal_v1(&journal)?;
+    // A refusal that does not name the file converts a located defect into a
+    // search, and this reader is called over a whole directory of journals.
+    authenticate_terminal_journal_v1(&journal)
+        .map_err(|error| Error::new(format!("{}: {error}", path.display())))?;
     Ok(journal)
 }
 
@@ -2647,6 +2668,383 @@ fn submit_terminal_packet_once_v1(
 
 /// Retire one ambiguous submission that can never be included.
 ///
+/// Durable proof that a landed packet's PREDICTIONS were re-derived, and that
+/// nothing the chain saw was touched.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct DurableReconciledEvidenceV1 {
+    reason: String,
+    landed_signature: String,
+    slot: u64,
+    /// The Resolution whose rule was applied, and the rule it names.
+    deployment_program_id: String,
+    deployment_elf_sha256: String,
+    rule: String,
+    /// The Rent sysvar the execution read, authenticated against this journal's
+    /// own recorded prestate digest for that account.
+    rent_sysvar_sha256: String,
+    receipt_account: String,
+    prior_ledger_rent_lamports: u64,
+    prior_ledger_lamport_surplus: u64,
+    ledger_rent_lamports: u64,
+    ledger_lamport_surplus: u64,
+    execution_clock_offset: usize,
+    declared_return_data: bool,
+}
+
+/// Re-derive one landed packet's predictions under the current model.
+///
+/// `--supersede-unlandable` is the exit for a submission that can never land.
+/// This is the other one, and market 1 is why it exists: the first
+/// `ResolutionCloseFund` ever to execute LANDED, and its journal could not
+/// certify it, because the driver that planned it modelled the receipt wrong in
+/// three fields. Superseding refuses that packet by name -- "is known to
+/// transaction history and must be reconciled, not retired" -- and there was no
+/// reconciliation to send it to.
+///
+/// What may move and what may not is the whole of this act. A journal's intent
+/// holds two kinds of thing: BYTES THE CHAIN SAW -- the message, the packet,
+/// the signature, the instruction, the resolved keys, the balance vectors, the
+/// prestate -- and PREDICTIONS derived from them. The first kind is never
+/// touched here, and the proof is not a promise: every field of the intent is
+/// compared before and after against a copy with only the re-derived fields
+/// restored, so a reconciliation that moved anything else refuses itself.
+///
+/// The re-derivation is from RECORDED INPUTS, never from the chain's answer,
+/// which would be fitting the prediction to the observation. The rent partition
+/// needs the Rent sysvar the program executed against; the journal recorded that
+/// account's digest in its prestate, so the live sysvar is read and required to
+/// hash to it. A cluster that has moved its rate again fails that check and the
+/// reconciliation refuses, correctly: the input can no longer be reconstructed.
+///
+/// It certifies nothing. Writing the journal reauthenticates it, and the next
+/// ordinary pass polls the signature and certifies against the chain exactly as
+/// it would for a packet planned right the first time.
+fn operate_terminal_reconcile_landed_v1(
+    rpc: &mut Rpc,
+    arguments: &TerminalSequenceArgumentsV1,
+    plan: &SuccessorPlan,
+    landed: &str,
+) -> Result<()> {
+    if !arguments.execute {
+        return Err(refusal(
+            "--reconcile-landed rewrites a durable journal's predictions and requires --execute",
+        ));
+    }
+    let (path, mut journal) =
+        find_terminal_journal_by_signature_v1(&arguments.journal_dir, landed)?;
+    match journal.phase {
+        StageJournalPhaseV1::SignedNotSubmitted | StageJournalPhaseV1::Submitted => {}
+        StageJournalPhaseV1::Finalized => {
+            return Err(refusal(&format!(
+                "terminal packet {landed} is already certified against its own predictions; there \
+                 is nothing to reconcile"
+            )));
+        }
+        StageJournalPhaseV1::Planned | StageJournalPhaseV1::Superseded => {
+            return Err(refusal(&format!(
+                "terminal packet {landed} is in phase {:?}, which carries no landed execution to \
+                 reconcile a prediction against",
+                journal.phase,
+            )));
+        }
+    }
+    if journal.reconciled.is_some() {
+        return Err(refusal(&format!(
+            "terminal packet {landed} has already been reconciled once; a second rewrite of a \
+             durable prediction is not expressible"
+        )));
+    }
+
+    // IT LANDED, AND IT IS THIS PACKET. Superseding proves the opposite pair.
+    let transaction = finalized_terminal_transaction_v1(rpc, landed)?.ok_or_else(|| {
+        refusal(&format!(
+            "terminal packet {landed} is not finalized on chain, so there is no execution to \
+             reconcile its prediction against"
+        ))
+    })?;
+    let meta = transaction
+        .get("meta")
+        .ok_or_else(|| refusal("finalized terminal transaction omitted meta"))?;
+    if !meta.get("err").is_none_or(Value::is_null) {
+        return Err(refusal(&format!(
+            "terminal packet {landed} landed with an error; a failed execution wrote no poststate \
+             to reconcile against"
+        )));
+    }
+    let slot = transaction
+        .get("slot")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| refusal("finalized terminal transaction omitted slot"))?;
+    let observed_packet = transaction
+        .get("transaction")
+        .and_then(Value::as_array)
+        .and_then(|wire| wire.first())
+        .and_then(Value::as_str)
+        .ok_or_else(|| refusal("finalized terminal history omitted base64 packet"))?;
+    if Some(observed_packet) != journal.signed_packet_base64.as_deref() {
+        return Err(refusal(&format!(
+            "the finalized packet for {landed} differs from this journal's signed packet; nothing \
+             about a reconciliation may be inferred across two different transactions"
+        )));
+    }
+
+    let unchanged = journal.intent.clone();
+    let resolution = Pubkey::from_str(&journal.intent.program_id)
+        .map_err(|error| Error::new(format!("terminal journal program: {error}")))?;
+    let rule =
+        deployed_closure_rent_rule_v1(&plan.resolution, plan.checked_local_mutable_set.as_ref())?;
+    if pubkey(&plan.resolution.program_id)? != resolution {
+        return Err(refusal(&format!(
+            "this journal's first-party program is {resolution}, which is not the Resolution \
+             {} the plan pins, so the plan's deployment rule does not describe it",
+            plan.resolution.program_id,
+        )));
+    }
+
+    // THE RENT SYSVAR THE EXECUTION READ, AUTHENTICATED BY THE JOURNAL'S OWN
+    // RECORD OF IT. Reading it live is not circular; adopting the chain's
+    // answer for the field being predicted would be.
+    let recorded_rent = journal
+        .intent
+        .prestate
+        .get(&sysvar::rent::ID.to_string())
+        .ok_or_else(|| {
+            refusal("this journal's frame carries no Rent sysvar, so its rent rule cannot be rerun")
+        })?
+        .clone();
+    let live = finalized_snapshot(rpc, &[sysvar::rent::ID])?;
+    let live_rent_account = live.account(sysvar::rent::ID)?;
+    if durable_observed_state(live_rent_account) != recorded_rent {
+        return Err(refusal(&format!(
+            "the Rent sysvar has moved since this packet executed (recorded {}, live {}), so the \
+             input its rent partition was computed from can no longer be reconstructed",
+            recorded_rent.data_sha256,
+            durable_observed_state(live_rent_account).data_sha256,
+        )));
+    }
+    let live_rent: Rent = bincode::deserialize(&live_rent_account.data)
+        .map_err(|error| Error::new(format!("reconciled Rent sysvar: {error}")))?;
+
+    // THE CLOSURE RECEIPT, IDENTIFIED BY DECODING RATHER THAN BY POSITION.
+    let mut receipts = journal
+        .intent
+        .expected_accounts
+        .iter()
+        .filter_map(|(address, expected)| {
+            let data = BASE64.decode(&expected.data_base64).ok()?;
+            let receipt = SourceClosureReceiptV3::decode(&data).ok()?;
+            (Pubkey::new_from_array(receipt.receipt_account).to_string() == *address)
+                .then_some((address.clone(), receipt))
+        })
+        .collect::<Vec<_>>();
+    let (receipt_address, receipt) = match receipts.len() {
+        1 => receipts.remove(0),
+        count => {
+            return Err(refusal(&format!(
+                "this journal predicts {count} self-naming Source closure receipts; a \
+                 reconciliation of the closure rent partition needs exactly one"
+            )));
+        }
+    };
+
+    // THE CLOSING LEDGER, IDENTIFIED BY ITS OWN ARITHMETIC. Its width is what
+    // the deployed program prices, and the receipt already states the three
+    // classes that add up to its balance.
+    let ledger_lamports = receipt
+        .ledger_remaining_native_principal
+        .checked_add(receipt.ledger_rent_lamports)
+        .and_then(|value| value.checked_add(receipt.ledger_lamport_surplus))
+        .ok_or_else(|| refusal("reconciled closure receipt ledger classes overflowed"))?;
+    let mut ledgers = journal
+        .intent
+        .prestate
+        .iter()
+        .filter(|(address, state)| {
+            state.lamports == ledger_lamports
+                && state.data_len > 0
+                && journal
+                    .intent
+                    .expected_accounts
+                    .get(*address)
+                    .is_some_and(|expected| {
+                        expected.lamports_after_protocol == 0 && expected.data_base64.is_empty()
+                    })
+        })
+        .map(|(address, state)| (address.clone(), state.data_len))
+        .collect::<Vec<_>>();
+    let (ledger_address, ledger_data_len) = match ledgers.len() {
+        1 => ledgers.remove(0),
+        count => {
+            return Err(refusal(&format!(
+                "{count} accounts in this frame close from exactly the {ledger_lamports} lamports \
+                 the receipt classifies; the closing funding ledger must be exactly one"
+            )));
+        }
+    };
+
+    let partition = project_closure_rent_partition_v1(
+        rule,
+        ledger_data_len,
+        &live_rent,
+        ClosureRentPartitionV1 {
+            ledger_rent_lamports: receipt.ledger_rent_lamports,
+            ledger_lamport_surplus: receipt.ledger_lamport_surplus,
+        },
+    )?;
+    let mut reconciled_receipt = receipt;
+    reconciled_receipt.ledger_rent_lamports = partition.ledger_rent_lamports;
+    reconciled_receipt.ledger_lamport_surplus = partition.ledger_lamport_surplus;
+    let execution_clock = ExecutionClockFieldV1 {
+        offset: closure_receipt_closed_at_offset_v1(&reconciled_receipt)?,
+        planned_unix_timestamp: u64::try_from(journal.intent.observation_unix_timestamp)
+            .map_err(|_| refusal("this journal records a negative observation clock"))?,
+        ceiling_unix_timestamp: u64::try_from(journal.intent.observation_unix_timestamp)
+            .map_err(|_| refusal("this journal records a negative observation clock"))?
+            .checked_add(TERMINAL_EXECUTION_CLOCK_CEILING_SECONDS)
+            .ok_or_else(|| refusal("reconciled execution-clock ceiling overflowed"))?,
+    };
+    require_derived_execution_clock_ceiling_v1(execution_clock)?;
+    // The codec re-runs its own arithmetic on the repriced body, so a partition
+    // that broke the receipt's exhaustive refund equation refuses here rather
+    // than reaching a journal.
+    let body = reconciled_receipt
+        .to_bytes()
+        .map_err(|error| Error::new(format!("reconciled closure receipt: {error:?}")))?
+        .to_vec();
+
+    let expected = journal
+        .intent
+        .expected_accounts
+        .get_mut(&receipt_address)
+        .ok_or_else(|| refusal("the reconciled receipt poststate disappeared from its own map"))?;
+    if expected.owner != resolution.to_string() {
+        return Err(refusal(
+            "the reconciled closure receipt is not predicted to be Resolution-owned",
+        ));
+    }
+    expected.data_base64 = BASE64.encode(&body);
+    expected.data_sha256 = sha256_hex(&body);
+    expected.execution_clock = Some(durable_execution_clock_v1(execution_clock));
+    journal.intent.expected_return_data = Some(DurableReturnDataV1 {
+        producer: resolution.to_string(),
+        body_base64: BASE64.encode(&body),
+        body_sha256: sha256_hex(&body),
+        execution_clock: Some(durable_execution_clock_v1(execution_clock)),
+    });
+
+    authenticate_terminal_reconciliation_scope_v1(&unchanged, &journal.intent, &receipt_address)?;
+
+    journal.reconciled = Some(DurableReconciledEvidenceV1 {
+        reason: format!(
+            "the packet landed and its plan modelled the deployed Resolution's closure receipt \
+             with the rate the ledger was FUNDED at; {} prices {ledger_data_len} bytes from {} \
+             instead, and the plan declared no return data for a route that always returns the \
+             same bytes it writes",
+            plan.resolution.program_id,
+            match rule {
+                DeployedClosureRentRuleV1::LiveRentSysvar => "the live Rent sysvar",
+                DeployedClosureRentRuleV1::FundedRate => "the rate the ledger was funded at",
+            },
+        ),
+        landed_signature: landed.into(),
+        slot,
+        deployment_program_id: plan.resolution.program_id.clone(),
+        deployment_elf_sha256: plan.resolution.checked_candidate_elf_sha256.clone(),
+        rule: format!("{rule:?}"),
+        rent_sysvar_sha256: recorded_rent.data_sha256.clone(),
+        receipt_account: receipt_address.clone(),
+        prior_ledger_rent_lamports: receipt.ledger_rent_lamports,
+        prior_ledger_lamport_surplus: receipt.ledger_lamport_surplus,
+        ledger_rent_lamports: partition.ledger_rent_lamports,
+        ledger_lamport_surplus: partition.ledger_lamport_surplus,
+        execution_clock_offset: execution_clock.offset,
+        declared_return_data: unchanged.expected_return_data.is_none(),
+    });
+    // The writer refreshes the STATE digest and authenticates what it
+    // publishes; the intent digest belongs to whoever changed the intent, which
+    // is this act. Getting that wrong is caught rather than shipped: the
+    // writer's own reauthentication refused the first attempt at this.
+    journal.intent_sha256 = sha256_hex(&serde_json::to_vec(&journal.intent)?);
+    // The writer owns the state-digest refresh and authenticates what it
+    // publishes, so the reconciled intent is proven canonical -- rule shapes,
+    // the stated-once return body and all -- before it reaches disk.
+    write_terminal_journal_v1(&path, &mut journal, false)?;
+    terminal_stdout_v1(json!({
+        "status": "reconciled",
+        "landedSignature": landed,
+        "slot": slot,
+        "journal": path.display().to_string(),
+        "receipt": receipt_address,
+        "fundingLedger": ledger_address,
+        "ledgerRentLamports": partition.ledger_rent_lamports,
+        "ledgerLamportSurplus": partition.ledger_lamport_surplus,
+        "executionClockOffset": execution_clock.offset,
+        "message": "The landed packet's predictions were re-derived from its own recorded inputs; nothing signed moved. Resume the sequence to certify it."
+    }))
+}
+
+/// NOTHING ELSE MOVED, AND THIS IS THE PROOF RATHER THAN THE CLAIM.
+///
+/// A journal's intent holds bytes the chain saw and predictions derived from
+/// them. A reconciliation may re-derive exactly one account poststate and the
+/// return data stated from those same bytes; every other field -- the message,
+/// the packet, the instruction, the resolved keys, the balance vectors, the
+/// prestate, the deltas, every other poststate -- must come back identical.
+/// Restoring the two re-derived fields and demanding equality proves that in
+/// one comparison, with no field of the intent left unchecked and no list here
+/// to fall behind the struct.
+fn authenticate_terminal_reconciliation_scope_v1(
+    unchanged: &DurableTerminalIntentV1,
+    reconciled: &DurableTerminalIntentV1,
+    receipt_address: &str,
+) -> Result<()> {
+    let mut restored = reconciled.clone();
+    restored.expected_return_data = unchanged.expected_return_data.clone();
+    let before = unchanged
+        .expected_accounts
+        .get(receipt_address)
+        .ok_or_else(|| {
+            refusal("a terminal reconciliation names a poststate its journal never declared")
+        })?
+        .clone();
+    restored
+        .expected_accounts
+        .insert(receipt_address.to_owned(), before);
+    if restored != *unchanged {
+        return Err(refusal(
+            "a terminal reconciliation moved something other than the one poststate it \
+             re-derived; nothing the chain saw may change",
+        ));
+    }
+    Ok(())
+}
+
+/// The canonical journal in this directory carrying one exact signature.
+fn find_terminal_journal_by_signature_v1(
+    journal_dir: &Path,
+    signature: &str,
+) -> Result<(PathBuf, DurableTerminalJournalV1)> {
+    let mut candidates = vec![journal_dir.join("12-resolution-receipt-prepay.json")];
+    candidates.extend(
+        TerminalStageV1::ORDERED
+            .into_iter()
+            .map(|stage| journal_dir.join(stage_journal_name_v1(stage))),
+    );
+    for path in candidates {
+        if !path.exists() {
+            continue;
+        }
+        let journal = read_terminal_journal_v1(&path)?;
+        if journal.expected_signature.as_deref() == Some(signature) {
+            return Ok((path, journal));
+        }
+    }
+    Err(refusal(&format!(
+        "no canonical terminal journal in this directory carries the signature {signature}"
+    )))
+}
+
 /// This is the only exit from `Submitted` other than finality, and it is
 /// deliberately explicit: the caller names the exact signature it means, so
 /// nothing here can retire a packet by inference, by timeout, or in bulk. Two
@@ -2673,32 +3071,8 @@ fn operate_terminal_supersede_v1(
             "--supersede-unlandable changes a durable journal and requires --execute",
         ));
     }
-    let mut candidates = vec![
-        arguments
-            .journal_dir
-            .join("12-resolution-receipt-prepay.json"),
-    ];
-    candidates.extend(
-        TerminalStageV1::ORDERED
-            .into_iter()
-            .map(|stage| arguments.journal_dir.join(stage_journal_name_v1(stage))),
-    );
-    let mut found = None;
-    for path in candidates {
-        if !path.exists() {
-            continue;
-        }
-        let journal = read_terminal_journal_v1(&path)?;
-        if journal.expected_signature.as_deref() == Some(retired) {
-            found = Some((path, journal));
-            break;
-        }
-    }
-    let (path, mut journal) = found.ok_or_else(|| {
-        refusal(&format!(
-            "no canonical terminal journal in this directory carries the signature {retired}"
-        ))
-    })?;
+    let (path, mut journal) =
+        find_terminal_journal_by_signature_v1(&arguments.journal_dir, retired)?;
     match journal.phase {
         StageJournalPhaseV1::SignedNotSubmitted | StageJournalPhaseV1::Submitted => {}
         StageJournalPhaseV1::Finalized => {
@@ -2830,7 +3204,8 @@ fn authenticate_terminal_journal_v1(journal: &DurableTerminalJournalV1) -> Resul
             if journal.signed_packet_base64.is_none()
                 && journal.expected_signature.is_none()
                 && journal.finalized.is_none()
-                && journal.superseded.is_none() => {}
+                && journal.superseded.is_none()
+                && journal.reconciled.is_none() => {}
         StageJournalPhaseV1::SignedNotSubmitted | StageJournalPhaseV1::Submitted
             if journal.signed_packet_base64.is_some()
                 && journal.expected_signature.is_some()
@@ -2850,6 +3225,7 @@ fn authenticate_terminal_journal_v1(journal: &DurableTerminalJournalV1) -> Resul
             if journal.signed_packet_base64.is_some()
                 && journal.expected_signature.is_some()
                 && journal.finalized.is_none()
+                && journal.reconciled.is_none()
                 && journal.superseded.as_ref().is_some_and(|evidence| {
                     journal.expected_signature.as_deref()
                         == Some(evidence.retired_signature.as_str())
@@ -2863,6 +3239,13 @@ fn authenticate_terminal_journal_v1(journal: &DurableTerminalJournalV1) -> Resul
                 "terminal journal phase/evidence shape is noncanonical",
             ));
         }
+    }
+    if let Some(evidence) = &journal.reconciled
+        && journal.expected_signature.as_deref() != Some(evidence.landed_signature.as_str())
+    {
+        return Err(refusal(
+            "terminal reconciliation evidence names another signature than the journal it sits in",
+        ));
     }
     if journal.phase != StageJournalPhaseV1::Planned {
         if !journal.authorized_mutation {
@@ -3527,7 +3910,7 @@ fn finalize_terminal_signature_v1(
     signature: &str,
 ) -> Result<()> {
     let history = authenticate_finalized_terminal_history_v1(rpc, journal, signature)?;
-    let poststate =
+    let (poststate, execution_clocks) =
         terminal_expected_poststate_v1(rpc, &journal.intent.expected_accounts, history.slot)?;
     journal.finalized = Some(DurableFinalizedEvidenceV1 {
         signature: signature.into(),
@@ -3536,6 +3919,7 @@ fn finalize_terminal_signature_v1(
         compute_units_consumed: history.compute_units_consumed,
         packet_sha256: history.packet_sha256,
         poststate,
+        execution_clocks,
     });
     journal.phase = StageJournalPhaseV1::Finalized;
     Ok(())
@@ -3671,9 +4055,9 @@ fn authenticate_terminal_return_data_v1(
             let body = BASE64
                 .decode(encoded)
                 .map_err(|error| Error::new(format!("terminal return data base64: {error}")))?;
-            let planned = BASE64.decode(&expected.body_base64).map_err(|error| {
-                Error::new(format!("terminal expected return base64: {error}"))
-            })?;
+            let planned = BASE64
+                .decode(&expected.body_base64)
+                .map_err(|error| Error::new(format!("terminal expected return base64: {error}")))?;
             if producer != expected.producer || sha256_hex(&planned) != expected.body_sha256 {
                 return Err(refusal(
                     "finalized terminal return producer or body differed from semantic prediction",
@@ -3685,6 +4069,7 @@ fn authenticate_terminal_return_data_v1(
                 &planned,
                 expected.execution_clock.as_ref(),
             )
+            .map(|_| ())
         }
     }
 }
@@ -3710,14 +4095,12 @@ fn authenticate_execution_clock_bytes_v1(
     observed: &[u8],
     planned: &[u8],
     rule: Option<&DurableExecutionClockFieldV1>,
-) -> Result<()> {
+) -> Result<Option<u64>> {
     let Some(rule) = rule else {
         if observed != planned {
-            return Err(refusal(&format!(
-                "{label} differed from exact poststate"
-            )));
+            return Err(refusal(&format!("{label} differed from exact poststate")));
         }
-        return Ok(());
+        return Ok(None);
     };
     if observed.len() != planned.len() {
         return Err(refusal(&format!(
@@ -3769,7 +4152,7 @@ fn authenticate_execution_clock_bytes_v1(
             rule.ceiling_unix_timestamp, rule.planned_unix_timestamp,
         )));
     }
-    Ok(())
+    Ok(Some(observed_clock))
 }
 
 /// The shape a declared execution-clock field must have to be readable at all.
@@ -3914,11 +4297,16 @@ fn authenticate_finalized_terminal_balance_vector_v1(
     Ok(())
 }
 
+type TerminalObservedPoststateV1 = (
+    BTreeMap<String, DurableAccountStateV1>,
+    BTreeMap<String, u64>,
+);
+
 fn terminal_expected_poststate_v1(
     rpc: &mut Rpc,
     expected: &BTreeMap<String, DurableExpectedAccountV1>,
     minimum_slot: u64,
-) -> Result<BTreeMap<String, DurableAccountStateV1>> {
+) -> Result<TerminalObservedPoststateV1> {
     let keys = expected
         .values()
         .map(|account| {
@@ -3933,6 +4321,7 @@ fn terminal_expected_poststate_v1(
         ));
     }
     let mut states = BTreeMap::new();
+    let mut execution_clocks = BTreeMap::new();
     for ((key, value), expected) in keys.into_iter().zip(values.iter()).zip(expected.values()) {
         let state = durable_rpc_state(key, value.as_ref());
         if state.owner != expected.owner
@@ -3953,12 +4342,14 @@ fn terminal_expected_poststate_v1(
                         "finalized terminal bytes differed from exact poststate",
                     ));
                 }
-                authenticate_execution_clock_bytes_v1(
+                if let Some(clock) = authenticate_execution_clock_bytes_v1(
                     &format!("finalized terminal account {key}"),
                     value.as_ref().map_or(&[][..], |account| &account.data),
                     &data,
                     expected.execution_clock.as_ref(),
-                )?;
+                )? {
+                    execution_clocks.insert(key.to_string(), clock);
+                }
             }
             Some(rule) => {
                 let account = value.as_ref().ok_or_else(|| {
@@ -3969,7 +4360,7 @@ fn terminal_expected_poststate_v1(
         }
         states.insert(key.to_string(), state);
     }
-    Ok(states)
+    Ok((states, execution_clocks))
 }
 
 fn authenticate_lookup_poststate_rule_v1(
@@ -4076,12 +4467,39 @@ fn authenticate_persisted_terminal_poststate_v1(
             .map_err(|error| Error::new(format!("terminal persisted address: {error}")))?;
         let owner = Pubkey::from_str(&expected.owner)
             .map_err(|error| Error::new(format!("terminal persisted owner: {error}")))?;
-        let data = match &expected.lookup_table {
+        let mut data = match &expected.lookup_table {
             None => BASE64.decode(&expected.data_base64).map_err(|error| {
                 Error::new(format!("terminal expected persisted data base64: {error}"))
             })?,
             Some(rule) => canonical_lookup_poststate_bytes_v1(rule, finalized.slot)?,
         };
+        if let Some(clock) = &expected.execution_clock {
+            let observed = finalized
+                .execution_clocks
+                .get(key)
+                .copied()
+                .ok_or_else(|| {
+                    refusal(&format!(
+                        "the finalized evidence for {key} records no execution clock, so the one \
+                     field its plan could not bind cannot be reconstructed"
+                    ))
+                })?;
+            if observed < clock.planned_unix_timestamp || observed > clock.ceiling_unix_timestamp {
+                return Err(refusal(&format!(
+                    "the execution clock recorded for {key} is {observed}, outside the [{}, {}] \
+                     its plan declared",
+                    clock.planned_unix_timestamp, clock.ceiling_unix_timestamp,
+                )));
+            }
+            let end = clock
+                .offset
+                .checked_add(8)
+                .filter(|end| *end <= data.len())
+                .ok_or_else(|| {
+                    refusal("a persisted execution-clock field does not fit its poststate bytes")
+                })?;
+            data[clock.offset..end].copy_from_slice(&observed.to_le_bytes());
+        }
         let exact = durable_state(
             address,
             owner,
@@ -5112,7 +5530,7 @@ fn resolution_close_receipt_poststate_v1(
 /// poststate rule bind the wrong bytes.
 fn closure_receipt_closed_at_offset_v1(receipt: &SourceClosureReceiptV3) -> Result<usize> {
     let encode = |closed_at: u64| -> Result<Vec<u8>> {
-        let mut probe = receipt.clone();
+        let mut probe = *receipt;
         probe.closed_at = closed_at;
         Ok(probe
             .to_bytes()
@@ -7420,6 +7838,7 @@ pub(crate) fn build_lookup_infrastructure_journal_v1(
         expected_signature: None,
         finalized: None,
         superseded: None,
+        reconciled: None,
     };
     refresh_terminal_journal_digest_v1(&mut journal)?;
     authenticate_terminal_journal_v1(&journal)?;
@@ -8171,7 +8590,19 @@ fn run_terminal_sequence_with_expected_cluster_v1(
     // that changed -- so it runs before the session is touched and returns
     // rather than continuing into a pass that would plan a stage.
     if let Some(retired) = arguments.supersede_unlandable.as_deref() {
+        if arguments.reconcile_landed.is_some() {
+            return Err(refusal(
+                "--supersede-unlandable and --reconcile-landed are the two opposite answers to \
+                 one question and may not be asked together",
+            ));
+        }
         return operate_terminal_supersede_v1(&mut rpc, &arguments, retired);
+    }
+    // The other exit from Submitted, and it needs the session no more than the
+    // first does: a prediction that cannot certify is exactly what stops a
+    // sequence from loading past the stage that holds it.
+    if let Some(landed) = arguments.reconcile_landed.as_deref() {
+        return operate_terminal_reconcile_landed_v1(&mut rpc, &arguments, &plan, landed);
     }
     // The refresh widens *which document may carry a row*, never what is then
     // demanded of the row: `require_direct_retirement_evidence` and
@@ -10180,6 +10611,7 @@ fn parse_terminal_sequence_arguments_v1(
     let mut completion = None;
     let mut supplied_lookup_table = None;
     let mut supersede_unlandable = None;
+    let mut reconcile_landed = None;
     let mut execute = false;
     let mut iterator = arguments.into_iter();
     while let Some(argument) = iterator.next() {
@@ -10208,6 +10640,7 @@ fn parse_terminal_sequence_arguments_v1(
             "--completion" => &mut completion,
             "--lookup-table" => &mut supplied_lookup_table,
             "--supersede-unlandable" => &mut supersede_unlandable,
+            "--reconcile-landed" => &mut reconcile_landed,
             _ => {
                 return Err(Error::new(format!(
                     "unknown {} argument: {argument}",
@@ -10261,6 +10694,14 @@ fn parse_terminal_sequence_arguments_v1(
                     .map_err(|error| Error::new(format!("--supersede-unlandable: {error}")))
             })
             .transpose()?,
+        reconcile_landed: reconcile_landed
+            .map(|value| {
+                value
+                    .parse::<Signature>()
+                    .map(|signature| signature.to_string())
+                    .map_err(|error| Error::new(format!("--reconcile-landed: {error}")))
+            })
+            .transpose()?,
         execute,
     })
 }
@@ -10280,7 +10721,8 @@ pub(crate) fn usage() -> &'static str {
      --fee-payer PUBKEY --fee-payer-keypair ABSOLUTE_KEYPAIR \\
      --session ABSOLUTE_JSON --journal-dir ABSOLUTE_DIRECTORY \\
      --completion ABSOLUTE_JSON \\
-     [--lookup-table PUBKEY] [--supersede-unlandable SIGNATURE] [--execute]\n\nWithout --execute \
+     [--lookup-table PUBKEY] [--supersede-unlandable SIGNATURE] \
+     [--reconcile-landed SIGNATURE] [--execute]\n\nWithout --execute \
      this command performs bounded \
      finalized devnet reads and persists exactly one unsigned durable next action before any key \
      can be opened. With --execute it reauthenticates that Planned intent through its stage's \
@@ -10290,7 +10732,10 @@ pub(crate) fn usage() -> &'static str {
      journal machinery creates, extends, activates, and freezes a dedicated exact-union ALT before \
      protocol stage one. --supersede-unlandable retires ONE named ambiguous submission, and only \
      after proving on chain that its blockhash has expired and that transaction history still \
-     does not know the signature; it performs that one act and returns. Mainnet-beta is refused \
+     does not know the signature; it performs that one act and returns. --reconcile-landed is its \
+     opposite: for a packet that DID land whose journal predicted its poststate under a model \
+     since corrected, it re-derives that prediction from the journal's own recorded inputs, \
+     proves nothing the chain saw moved, and returns without certifying. Mainnet-beta is refused \
      unconditionally."
 }
 
@@ -10309,7 +10754,8 @@ pub(crate) fn owned_loopback_usage() -> &'static str {
      --fee-payer PUBKEY --fee-payer-keypair ABSOLUTE_KEYPAIR \
      --session ABSOLUTE_JSON --journal-dir ABSOLUTE_DIRECTORY \
      --completion ABSOLUTE_JSON \\
-     [--lookup-table PUBKEY] [--supersede-unlandable SIGNATURE] [--execute]\n\nWithout --execute \
+     [--lookup-table PUBKEY] [--supersede-unlandable SIGNATURE] \
+     [--reconcile-landed SIGNATURE] [--execute]\n\nWithout --execute \
      this command performs bounded \
      finalized reads from a validator launched and owned by the private lifecycle runner, then \
      persists exactly one unsigned durable next action before any key can be opened. With \
@@ -10617,6 +11063,7 @@ mod tests {
             expected_signature: None,
             finalized: None,
             superseded: None,
+            reconciled: None,
         };
         refresh_terminal_journal_digest_v1(&mut journal).expect("journal digest");
         (journal, mutation, closure, prestate)
@@ -10777,6 +11224,7 @@ mod tests {
             expected_signature: None,
             finalized: None,
             superseded: None,
+            reconciled: None,
         };
         refresh_terminal_journal_digest_v1(&mut journal).expect("journal digest");
         journal
@@ -11319,8 +11767,9 @@ mod tests {
             .position(|window| window == 1_991_360_u64.to_le_bytes())
             .expect("the fixture's rent reserve is findable");
         elsewhere[rent_offset..rent_offset + 8].copy_from_slice(&1_991_361_u64.to_le_bytes());
-        let error = authenticate_execution_clock_bytes_v1("receipt", &elsewhere, &plan, Some(&rule))
-            .expect_err("one lamport elsewhere is still a refusal");
+        let error =
+            authenticate_execution_clock_bytes_v1("receipt", &elsewhere, &plan, Some(&rule))
+                .expect_err("one lamport elsewhere is still a refusal");
         assert!(
             error
                 .to_string()
@@ -11405,6 +11854,224 @@ mod tests {
         })
         .expect_err("a widened ceiling is not this sequence's");
         assert!(error.to_string().contains("derived ceiling"), "{error}");
+    }
+
+    /// A LANDED PACKET'S PREDICTION MAY BE RE-DERIVED; NOTHING SIGNED MAY MOVE.
+    ///
+    /// Market 1's `13-resolution-close-fund.json` is the case: the packet
+    /// landed, and its journal predicted the closure receipt under a model
+    /// since corrected in three fields. `--supersede-unlandable` refuses it by
+    /// name, correctly -- it is not unlandable -- so the scope of the other
+    /// exit is what has to be exact.
+    #[test]
+    fn a_reconciliation_may_move_only_the_poststate_it_rederived() {
+        let journal = synthetic_close_fund_journal_v1(
+            &[
+                ComputeBudgetInstruction::set_compute_unit_limit(
+                    RESOLUTION_CLOSE_FUND_COMPUTE_UNIT_LIMIT_V1,
+                ),
+                close_fund_first_party_v1(),
+            ],
+            Some(RESOLUTION_CLOSE_FUND_COMPUTE_UNIT_LIMIT_V1),
+        );
+        let unchanged = journal.intent.clone();
+        let receipt = key(2).to_string();
+
+        // The permitted move: one poststate's bytes and the return data stated
+        // from them.
+        let mut reconciled = unchanged.clone();
+        let body = b"a re-derived closure receipt".to_vec();
+        let entry = reconciled
+            .expected_accounts
+            .get_mut(&receipt)
+            .expect("the fixture declares that poststate");
+        entry.data_base64 = BASE64.encode(&body);
+        entry.data_sha256 = sha256_hex(&body);
+        reconciled.expected_return_data = Some(DurableReturnDataV1 {
+            producer: key(9).to_string(),
+            body_base64: BASE64.encode(&body),
+            body_sha256: sha256_hex(&body),
+            execution_clock: None,
+        });
+        authenticate_terminal_reconciliation_scope_v1(&unchanged, &reconciled, &receipt)
+            .expect("re-deriving one poststate and its return is the whole permitted act");
+
+        // A SECOND poststate moved, and it refuses -- this is the guard that
+        // separates a reconciliation from an edit.
+        let mut widened = reconciled.clone();
+        widened
+            .expected_accounts
+            .get_mut(&key(1).to_string())
+            .expect("the fixture declares the payer poststate")
+            .lamports_after_fee -= 1;
+        let error = authenticate_terminal_reconciliation_scope_v1(&unchanged, &widened, &receipt)
+            .expect_err("a second poststate is outside the act");
+        assert!(
+            error
+                .to_string()
+                .contains("nothing the chain saw may change"),
+            "{error}"
+        );
+
+        // And so does a message byte, which is the half that was signed.
+        let mut resigned = reconciled;
+        resigned.message_sha256 = sha256_hex(b"another message");
+        authenticate_terminal_reconciliation_scope_v1(&unchanged, &resigned, &receipt)
+            .expect_err("the signed message is never a prediction");
+    }
+
+    /// Reconciliation evidence belongs to a signed journal, names that
+    /// journal's own signature, and never sits beside a retirement: a packet
+    /// cannot both have landed and be unlandable.
+    #[test]
+    fn reconciliation_evidence_has_exactly_one_admissible_shape() {
+        let (signed, _) = signed_synthetic_system_transfer_journal();
+        let evidence = |signature: &str| DurableReconciledEvidenceV1 {
+            reason: "the plan modelled the receipt with the wrong rate".into(),
+            landed_signature: signature.into(),
+            slot: 493_003_631,
+            deployment_program_id: key(3).to_string(),
+            deployment_elf_sha256: "24af8504".into(),
+            rule: "LiveRentSysvar".into(),
+            rent_sysvar_sha256: "f00d".into(),
+            receipt_account: key(4).to_string(),
+            prior_ledger_rent_lamports: 2_482_536,
+            prior_ledger_lamport_surplus: 0,
+            ledger_rent_lamports: 1_991_360,
+            ledger_lamport_surplus: 491_176,
+            execution_clock_offset: 400,
+            declared_return_data: true,
+        };
+        let own = signed
+            .expected_signature
+            .clone()
+            .expect("the fixture is signed");
+
+        let mut sound = signed.clone();
+        sound.reconciled = Some(evidence(&own));
+        refresh_terminal_journal_digest_v1(&mut sound).expect("digest");
+        authenticate_terminal_journal_v1(&sound)
+            .expect("a signed journal may carry its own reconciliation");
+
+        let mut mismatched = signed.clone();
+        mismatched.reconciled = Some(evidence(&Signature::default().to_string()));
+        refresh_terminal_journal_digest_v1(&mut mismatched).expect("digest");
+        authenticate_terminal_journal_v1(&mismatched)
+            .expect_err("reconciliation evidence must name this journal's own signature");
+
+        let mut planned = signed;
+        planned.phase = StageJournalPhaseV1::Planned;
+        planned.signed_packet_base64 = None;
+        planned.expected_signature = None;
+        planned.reconciled = Some(evidence(&own));
+        refresh_terminal_journal_digest_v1(&mut planned).expect("digest");
+        authenticate_terminal_journal_v1(&planned)
+            .expect_err("an entry that was never signed has no landed execution to reconcile");
+    }
+
+    /// A PERSISTED POSTSTATE HOLDS DIGESTS, NOT BYTES, SO CERTIFICATION HAS TO
+    /// WRITE DOWN THE EXECUTION FACT IT ADMITTED.
+    ///
+    /// Measured on devnet 2026-09-04: with the interval checked and the value
+    /// discarded, the very next pass over market 1's certified CloseFund
+    /// refused with "persisted finalized poststate differed from exact intent
+    /// bytes" -- the plan's prediction and the chain's receipt differ by nine
+    /// seconds forever, and nothing in an archived journal could bridge them.
+    #[test]
+    fn a_certified_execution_clock_is_recorded_and_rechecked_on_every_reverification() {
+        let journal = synthetic_close_fund_journal_v1(
+            &[
+                ComputeBudgetInstruction::set_compute_unit_limit(
+                    RESOLUTION_CLOSE_FUND_COMPUTE_UNIT_LIMIT_V1,
+                ),
+                close_fund_first_party_v1(),
+            ],
+            Some(RESOLUTION_CLOSE_FUND_COMPUTE_UNIT_LIMIT_V1),
+        );
+        let planned = 1_788_522_293_u64;
+        let executed = planned + 9;
+        let address = key(2);
+        let body = |clock: u64| {
+            let mut data = vec![0_u8; 24];
+            data[8..16].copy_from_slice(&clock.to_le_bytes());
+            data
+        };
+        let mut intent = journal.intent;
+        intent.observation_unix_timestamp = i64::try_from(planned).expect("fixture clock");
+        let expected = intent
+            .expected_accounts
+            .get_mut(&address.to_string())
+            .expect("the fixture declares that poststate");
+        expected.data_base64 = BASE64.encode(body(planned));
+        expected.data_sha256 = sha256_hex(&body(planned));
+        expected.execution_clock = Some(DurableExecutionClockFieldV1 {
+            offset: 8,
+            planned_unix_timestamp: planned,
+            ceiling_unix_timestamp: planned + TERMINAL_EXECUTION_CLOCK_CEILING_SECONDS,
+        });
+        let owner = Pubkey::from_str(&expected.owner).expect("fixture owner");
+        let lamports = expected.lamports_after_fee;
+        let executable = expected.executable;
+        let mut poststate = BTreeMap::new();
+        for (key, account) in &intent.expected_accounts {
+            let data = if *key == address.to_string() {
+                body(executed)
+            } else {
+                BASE64.decode(&account.data_base64).expect("fixture bytes")
+            };
+            poststate.insert(
+                key.clone(),
+                durable_state(
+                    Pubkey::from_str(key).expect("fixture address"),
+                    Pubkey::from_str(&account.owner).expect("fixture owner"),
+                    account.lamports_after_fee,
+                    account.executable,
+                    &data,
+                ),
+            );
+        }
+        let _ = (owner, lamports, executable);
+        let evidence = |clocks: BTreeMap<String, u64>| DurableFinalizedEvidenceV1 {
+            signature: Signature::default().to_string(),
+            slot: 493_003_631,
+            fee_lamports: 5_000,
+            compute_units_consumed: Some(252_368),
+            packet_sha256: sha256_hex(b"packet"),
+            poststate: poststate.clone(),
+            execution_clocks: clocks,
+        };
+
+        authenticate_persisted_terminal_poststate_v1(
+            &intent,
+            &evidence(BTreeMap::from([(address.to_string(), executed)])),
+        )
+        .expect("the recorded execution fact reconstructs the exact poststate");
+
+        // Certification that checked the interval and threw the value away.
+        let error =
+            authenticate_persisted_terminal_poststate_v1(&intent, &evidence(BTreeMap::new()))
+                .expect_err("an unrecorded execution clock cannot be reconstructed");
+        assert!(
+            error.to_string().contains("records no execution clock"),
+            "{error}"
+        );
+
+        // A recorded value outside the declared interval, and one that simply
+        // is not what the chain wrote.
+        let outside = executed + TERMINAL_EXECUTION_CLOCK_CEILING_SECONDS;
+        let error = authenticate_persisted_terminal_poststate_v1(
+            &intent,
+            &evidence(BTreeMap::from([(address.to_string(), outside)])),
+        )
+        .expect_err("the interval is checked again on every re-verification");
+        assert!(error.to_string().contains("outside the ["), "{error}");
+        authenticate_persisted_terminal_poststate_v1(
+            &intent,
+            &evidence(BTreeMap::from([(address.to_string(), executed + 1)])),
+        )
+        .expect_err(
+            "a value inside the interval that is not the one the chain wrote still refuses",
+        );
     }
 
     fn unique_test_path(label: &str) -> PathBuf {
