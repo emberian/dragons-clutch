@@ -451,7 +451,7 @@ fn encode_account_profile(logical_data_lengths: &[u32], product_basis: &[u8]) ->
     if logical_data_lengths.len() != usize::from(RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3) {
         return Err(Error::AccountProfileInput);
     }
-    let basis = ProductBasisV3::decode(product_basis).map_err(|_| Error::AccountProfileInput)?;
+    let basis = ProductBasisV3::decode(product_basis).map_err(Error::ProductBasis)?;
     if basis.kind() != BasisKindV3::CategoricalQ1 || basis.basis_width() < 2 {
         return Err(Error::AccountProfileInput);
     }

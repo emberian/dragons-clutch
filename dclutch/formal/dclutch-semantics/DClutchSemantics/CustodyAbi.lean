@@ -137,6 +137,60 @@ theorem compartment_tags_are_pairwise_distinct :
 theorem compartment_names_are_unique :
     (Compartment.all.map Compartment.rustName).Nodup := by native_decide
 
+/-- Whether the Transfer wire admits one ORDERED pair of compartments.
+
+Two refusals, and they are different in kind.  `none` on either side is not a
+transfer at all -- the tag exists for the sides an `OpenVault` or a `CloseReplay`
+leaves inactive.  `hoardPrincipal -> feeVault` is a transfer the wire understands
+perfectly and refuses anyway: the Hoard is the collateral every outstanding claim
+is redeemed against, a fee is revenue, and paying the second out of the first is
+the cross-subsidy `AGENTS.md` states as an invariant ("Hoard principal is never
+fees, rent, bounty, insurance, work funding, reserve, or treasury capital") and
+C-10 exists to forbid.
+
+Until 2026-09-04 this rule lived only in the calling programs, and the atom
+census said so out loud: sixty-four ordered pairs were shape-admissible and this
+one was among them.  Every FeeVault-funding site in the tree sources
+`tradingPrincipal`, so nothing legitimate moves -- but "no caller does it" and
+"the wire will not carry it" are different claims, and only the second survives a
+caller nobody has written yet. -/
+def transferPairAdmissible : Compartment -> Compartment -> Bool
+  | .none, _ => false
+  | _, .none => false
+  | .hoardPrincipal, .feeVault => false
+  | _, _ => true
+
+/-- The law itself, named so a reader looking for it finds it here. -/
+theorem hoard_principal_never_funds_the_fee_vault :
+    transferPairAdmissible .hoardPrincipal .feeVault = false := by decide
+
+/-- And it is exactly one pair, not a family: every other ordered pair of live
+compartments is still carried, including `feeVault -> hoardPrincipal`, which is
+a different movement with a different argument and is not ruled here. -/
+theorem only_the_named_pair_is_refused
+    (source destination : Compartment)
+    (liveSource : source ≠ .none) (liveDestination : destination ≠ .none)
+    (unnamed : ¬(source = .hoardPrincipal ∧ destination = .feeVault)) :
+    transferPairAdmissible source destination = true := by
+  cases source <;> cases destination <;> simp_all [transferPairAdmissible]
+
+/-- Every ordered pair the census walks: nine compartments each way. -/
+def orderedCompartmentPairs : List (Compartment × Compartment) :=
+  Compartment.all.flatMap fun source =>
+    Compartment.all.map fun destination => (source, destination)
+
+theorem ordered_compartment_pairs_are_eighty_one :
+    orderedCompartmentPairs.length = 81 := by native_decide
+
+/-- THE COUNT, stated where the rule is stated.  Eight live compartments each
+way is sixty-four; one named refusal leaves sixty-three.  The Rust census
+asserts the same number against `CustodyRequestV1::validate`, so the two authors
+have to agree or one of them goes red. -/
+theorem admissible_ordered_pairs_are_sixty_three :
+    (orderedCompartmentPairs.filter
+      (fun pair => transferPairAdmissible pair.1 pair.2)).length = 63 := by
+  native_decide
+
 inductive RequestField where
   | magic | version | operation | callerRole | sourceCompartment
   | destinationCompartment | transferIndex | releaseSet | market | realm

@@ -315,8 +315,7 @@ pub fn build_rational_open_structured_selected_bundle_v6(
     ) {
         return Err(Error::ArtifactGeometry);
     }
-    let basis =
-        ProductBasisV3::decode(input.product_basis).map_err(|_| Error::AccountProfileInput)?;
+    let basis = ProductBasisV3::decode(input.product_basis).map_err(Error::ProductBasis)?;
     let representation_width = usize::try_from(input.representation_outcome_count)
         .map_err(|_| Error::AccountProfileInput)?;
     if input.representation_outcome_count > RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3 {
@@ -1237,8 +1236,7 @@ fn structured_request_bytes(representation_outcome_count: usize) -> Result<usize
 }
 
 fn require_representation_width(input: RationalOpenStructuredHotBundleInputV3<'_>) -> Result<u32> {
-    let basis =
-        ProductBasisV3::decode(input.product_basis).map_err(|_| Error::AccountProfileInput)?;
+    let basis = ProductBasisV3::decode(input.product_basis).map_err(Error::ProductBasis)?;
     let representation_outcome_count = input.representation_descriptor.outcome_count();
     let representation_width =
         usize::try_from(representation_outcome_count).map_err(|_| Error::AccountProfileInput)?;

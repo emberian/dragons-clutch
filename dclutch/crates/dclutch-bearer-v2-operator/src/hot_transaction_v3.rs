@@ -207,7 +207,7 @@ fn build_hot_instruction_from_claims_child_inner_v3(
     }
 
     let child = RepresentationRequestV2::decode(&claims_child.instruction.data)
-        .map_err(|_| Error::HotInstruction)?;
+        .map_err(Error::HotContract)?;
     let header = child.header();
     if header.release_set != state.release_set
         || header.market != state.market.to_bytes()
@@ -250,7 +250,7 @@ fn build_hot_instruction_from_claims_child_inner_v3(
         state.generation,
         hash(state.root_data).to_bytes(),
     )
-    .map_err(|_| Error::HotInstruction)?
+    .map_err(Error::HotEnvelope)?
     .with_bump_hints(mine_hot_bump_hints_v1(&HotBumpCorpusV1 {
         market_key: state.market,
         market_data: state.market_data,

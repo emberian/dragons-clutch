@@ -166,6 +166,23 @@ pub enum Error {
     BalanceArithmetic,
     /// A receipt did not acknowledge the exact request and poststate.
     ReceiptMismatch,
+    /// A Transfer named `HoardPrincipal -> FeeVault`.
+    ///
+    /// The Hoard is the collateral every outstanding claim is redeemed
+    /// against; a fee is revenue. Paying the second out of the first is the
+    /// cross-subsidy `AGENTS.md` states as an invariant -- *"Hoard principal is
+    /// never fees, rent, bounty, insurance, work funding, reserve, or treasury
+    /// capital"* -- and C-10 exists to forbid.
+    ///
+    /// Until 2026-09-04 the rule lived only in the calling programs and this
+    /// wire carried the pair: the atom census recorded sixty-four
+    /// shape-admissible ordered pairs with this one among them. Every
+    /// FeeVault-funding site in the tree sources `TradingPrincipal`, so nothing
+    /// legitimate moved -- but *"no caller does it"* and *"the wire will not
+    /// carry it"* are different claims and only the second survives a caller
+    /// nobody has written yet. Lean twin:
+    /// `hoard_principal_never_funds_the_fee_vault` in `CustodyAbi.lean`.
+    ForbiddenCompartmentPair,
 }
 
 /// Result alias for Custody contract operations.
@@ -789,6 +806,17 @@ impl CustodyRequestV1 {
                     || self.rent_lamports != 0
                 {
                     return Err(Error::InvalidOperationShape);
+                }
+                // The one ordered pair this wire refuses on economic grounds
+                // rather than shape grounds, and it is named rather than
+                // folded into `InvalidOperationShape` so a reader of the log
+                // learns which invariant stopped them. Exactly one pair: the
+                // opposite direction, and every other pair of live
+                // compartments, still cross.
+                if self.source_compartment == CompartmentV1::HoardPrincipal
+                    && self.destination_compartment == CompartmentV1::FeeVault
+                {
+                    return Err(Error::ForbiddenCompartmentPair);
                 }
                 if (self.source_compartment == CompartmentV1::External)
                     != is_zero(&self.source_vault_context)
@@ -1977,31 +2005,43 @@ mod tests {
     /// honest scope: not what the protocol DOES, but what this contract PERMITS,
     /// which is the surface every caller-side rule is measured against.
     ///
-    /// The answer is that it permits everything except a `None` side. Sixty-four
-    /// ordered pairs are shape-admissible, `HoardPrincipal -> FeeVault` among
-    /// them -- principal paying a fee, which is the movement C-10 forbids and
-    /// `AGENTS.md` states as an invariant. **This contract does not enforce that
-    /// invariant and was never the place it lived**; the Transfer arm asks only
-    /// that neither side be `None`, plus the `External` conjuncts about
-    /// accompanying fields. Every compartment rule in this protocol lives in a
-    /// calling program.
+    /// The answer used to be that it permits everything except a `None` side:
+    /// sixty-four ordered pairs shape-admissible, `HoardPrincipal -> FeeVault`
+    /// among them -- principal paying a fee, the movement C-10 forbids and
+    /// `AGENTS.md` states as an invariant. This contract did not enforce that
+    /// and the census said so out loud, so that a reviewer asking *"what stops
+    /// the Hoard funding the fee vault"* was sent to the callers immediately
+    /// rather than discovering by reading that the answer was never here.
     ///
-    /// That is deliberate and it is not a defect, but it was undocumented and
-    /// unmeasured, which is what made it worth a test rather than a comment. A
-    /// reviewer asking "what stops the Hoard funding the fee vault" needs to be
-    /// sent to the callers immediately, not to discover by reading that the
-    /// answer was never here. If a compartment rule is ever added HERE, this
-    /// census goes red and whoever adds it says so on purpose.
+    /// **On 2026-09-04 the answer changed, by ruling (C-11 D1 item 5).** The
+    /// pair is now refused HERE, by name, and the count is SIXTY-THREE. What
+    /// moved is not the truth of the invariant -- every FeeVault-funding site
+    /// in the tree already sourced `TradingPrincipal` -- but who owns it: an
+    /// invariant that holds because no caller violates it stops holding the
+    /// moment somebody writes a caller, and nothing goes red. The wire now
+    /// carries the refusal, so a caller that names the pair cannot compile a
+    /// transaction that crosses it.
+    ///
+    /// Everything else about the census stands, including its scope: this
+    /// measures what the contract PERMITS, not what the protocol DOES. Every
+    /// OTHER compartment rule still lives in a calling program, and if one is
+    /// ever added here this test goes red and whoever adds it says so on
+    /// purpose. Lean twin: `admissible_ordered_pairs_are_sixty_three` and
+    /// `only_the_named_pair_is_refused` in `CustodyAbi.lean`.
     #[test]
-    fn the_transfer_wire_permits_every_pair_but_none_and_owns_no_compartment_rule() {
+    fn the_transfer_wire_refuses_a_none_side_and_the_one_ruled_pair() {
         let mut admitted = 0_usize;
         let mut principal_to_fee = false;
         for source in CENSUS_COMPARTMENTS {
             for destination in CENSUS_COMPARTMENTS {
                 let admissible = transfer_between(source, destination).validate().is_ok();
-                // The whole pair rule, stated as one equivalence: a side being
-                // `None` is the only thing this wire refuses about a pair.
-                let expected = source != CompartmentV1::None && destination != CompartmentV1::None;
+                // The whole pair rule, stated as one equivalence: a `None` side
+                // and the one ruled pair are the only things this wire refuses
+                // about a pair.
+                let expected = source != CompartmentV1::None
+                    && destination != CompartmentV1::None
+                    && !(source == CompartmentV1::HoardPrincipal
+                        && destination == CompartmentV1::FeeVault);
                 assert_eq!(
                     admissible, expected,
                     "pair {source:?} -> {destination:?} was {admissible}, expected {expected}",
@@ -2016,20 +2056,62 @@ mod tests {
                 }
             }
         }
-        // Eight non-`None` compartments each way.
-        assert_eq!(admitted, 64);
-        // The exact discriminant a `None` side carries, named rather than
-        // counted, so this cannot pass on some other refusal.
+        // Eight non-`None` compartments each way, less the one ruled pair. The
+        // Lean twin proves the same number over the same nine-compartment
+        // enumeration, so the two authors have to agree or one of them is red.
+        assert_eq!(admitted, 63);
+        // Exact discriminants, named rather than counted, so neither refusal
+        // can pass on the other's account.
         assert_eq!(
             transfer_between(CompartmentV1::None, CompartmentV1::FeeVault).validate(),
             Err(Error::InvalidOperationShape),
         );
-        // Named because it is the pair a reviewer will look for, and because a
-        // count of sixty-four does not say which sixty-four.
-        assert!(
-            principal_to_fee,
-            "the census must state that principal-to-fee is shape-admissible here, \
-             so that its refusal is looked for in the callers where it lives",
+        assert_eq!(
+            transfer_between(CompartmentV1::HoardPrincipal, CompartmentV1::FeeVault).validate(),
+            Err(Error::ForbiddenCompartmentPair),
         );
+        // A hostile that could reach the subject: the pair refuses even though
+        // every other conjunct of the Transfer shape is satisfied, which is
+        // what makes the refusal a statement about the PAIR and not about a
+        // malformed request. `transfer_between` builds exactly that request.
+        assert!(
+            !principal_to_fee,
+            "the ruled pair must not be admitted; if this fires the refusal was \
+             removed or the fixture stopped reaching it",
+        );
+        // And it is one pair, not a family: the opposite direction is a
+        // different movement with a different argument and is NOT ruled here.
+        assert!(
+            transfer_between(CompartmentV1::FeeVault, CompartmentV1::HoardPrincipal)
+                .validate()
+                .is_ok(),
+        );
+    }
+
+    /// The hostile the ruling names: a WIRE that spells the forbidden pair.
+    ///
+    /// The census above walks constructed requests. This one goes through
+    /// `decode`, which is the surface a hostile actually reaches -- bytes
+    /// arriving from a calling program -- and asserts the exact discriminant
+    /// rather than `is_err()`, which during any wall era accepts whatever the
+    /// transaction refuses first.
+    #[test]
+    fn a_wire_naming_hoard_principal_into_the_fee_vault_refuses_by_name() {
+        let honest = transfer_between(CompartmentV1::TradingPrincipal, CompartmentV1::FeeVault)
+            .to_bytes()
+            .expect("the funded pair every FeeVault site in the tree actually uses");
+        assert!(CustodyRequestV1::decode(&honest).is_ok());
+
+        // One byte apart: the source compartment tag, and nothing else.
+        let mut hostile = honest;
+        hostile[REQUEST_SOURCE_COMPARTMENT_OFFSET] = CompartmentV1::HoardPrincipal.tag();
+        assert_eq!(
+            CustodyRequestV1::decode(&hostile),
+            Err(Error::ForbiddenCompartmentPair),
+        );
+        // The control that makes the one-byte claim mean something: the same
+        // wire with the tag put back decodes.
+        hostile[REQUEST_SOURCE_COMPARTMENT_OFFSET] = CompartmentV1::TradingPrincipal.tag();
+        assert!(CustodyRequestV1::decode(&hostile).is_ok());
     }
 }

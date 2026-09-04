@@ -65,8 +65,7 @@ pub fn encode_rational_terminal_account_profile_v3(
     if input.logical_data_lengths.len() != LOGICAL_ACCOUNT_COUNT {
         return Err(Error::AccountProfileInput);
     }
-    let basis =
-        ProductBasisV3::decode(input.product_basis).map_err(|_| Error::AccountProfileInput)?;
+    let basis = ProductBasisV3::decode(input.product_basis).map_err(Error::ProductBasis)?;
     let basis_coordinate = logical_index(LogicalCoordinateV3::Injected(
         InjectedCoordinateV3::LinkedProductBasis,
     ))
@@ -391,7 +390,8 @@ mod tests {
         v2::{AccountProfileV2, ProjectionRegistersV2, project_tail_count_atomic},
     };
     use dclutch_product_payoff_v2_codec::runtime_v3::{
-        BASIS_HEADER_BYTES_V3, BasisInputV3, BasisKindV3, compile_basis_v3,
+        BASIS_HEADER_BYTES_V3, BasisInputV3, BasisKindV3, Error as ProductBasisErrorV3,
+        compile_basis_v3,
     };
 
     fn id(value: u8) -> [u8; 32] {
@@ -632,12 +632,16 @@ mod tests {
         *lengths.get_mut(4).expect("basis logical coordinate") += 1;
         let mut hostile = basis;
         *hostile.get_mut(0).expect("basis magic") ^= 1;
+        // The two halves of this test's name are two different accusations, and
+        // until the basis decode carried its cause they were one code: a frame
+        // whose declared width is wrong read exactly like an artifact that is
+        // not a ProductBasis at all. The codec knew it was the magic.
         assert_eq!(
             encode_rational_terminal_account_profile_v3(RationalTerminalAccountProfileInputV3 {
                 logical_data_lengths: &lengths,
                 product_basis: &hostile,
             }),
-            Err(Error::AccountProfileInput)
+            Err(Error::ProductBasis(ProductBasisErrorV3::InvalidMagic))
         );
     }
 }

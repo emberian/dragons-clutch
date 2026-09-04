@@ -195,6 +195,20 @@ pub enum CustodySbfError {
     /// reservation published against a poststate the chain does not hold --
     /// which is neither a substituted frame nor a wrong activation.
     ReservationEscrowPrestate = 0x6010,
+    /// A Transfer named `HoardPrincipal -> FeeVault`.
+    ///
+    /// Split out of [`Self::Instruction`], which means "these bytes did not
+    /// decode" -- and this wire decodes perfectly. It is refused because the
+    /// Hoard is the collateral every outstanding claim is redeemed against and
+    /// a fee is revenue, which is the cross-subsidy C-10 forbids and
+    /// `AGENTS.md` states as an invariant. A reader who sees `Instruction` goes
+    /// looking for a malformed request and finds a well-formed one; a reader
+    /// who sees this code is told which invariant stopped them.
+    ///
+    /// Ruled 2026-09-04 (C-11 D1 item 5). Contract twin:
+    /// `dclutch_custody_contract::Error::ForbiddenCompartmentPair`; Lean twin:
+    /// `hoard_principal_never_funds_the_fee_vault` in `CustodyAbi.lean`.
+    ForbiddenCompartmentPair = 0x6011,
 }
 
 impl CustodySbfError {
@@ -204,7 +218,7 @@ impl CustodySbfError {
     /// [`CustodySbfError::ordinal`], whose match is exhaustive: a variant added to the
     /// enum does not compile until its author writes an arm here, and the only
     /// arm that satisfies the assertions is its own index in this array.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::Instruction,
         Self::AccountFrame,
         Self::Release,
@@ -222,12 +236,13 @@ impl CustodySbfError {
         Self::ReservationIdentity,
         Self::ReservationFrame,
         Self::ReservationEscrowPrestate,
+        Self::ForbiddenCompartmentPair,
     ];
 
     /// This refusal's position in [`CustodySbfError::ALL`].
     ///
     /// The match is exhaustive on purpose, and that is the whole mechanism:
-    /// an eighteenth variant is a COMPILE ERROR here rather than a discriminant no
+    /// a nineteenth variant is a COMPILE ERROR here rather than a discriminant no
     /// assertion ever looks at.
     const fn ordinal(self) -> usize {
         match self {
@@ -248,6 +263,7 @@ impl CustodySbfError {
             Self::ReservationIdentity => 14,
             Self::ReservationFrame => 15,
             Self::ReservationEscrowPrestate => 16,
+            Self::ForbiddenCompartmentPair => 17,
         }
     }
 }
@@ -364,8 +380,16 @@ pub fn process_instruction(
         return projected::process(program_id, accounts, request, instruction_data);
     }
     let (request_bytes, continuation) = split_registry_continuation(instruction_data)?;
-    let request =
-        CustodyRequestV1::decode(request_bytes).map_err(|_| CustodySbfError::Instruction)?;
+    let request = CustodyRequestV1::decode(request_bytes).map_err(|error| match error {
+        // The one refusal in `validate` that is an economic verdict rather
+        // than a decode failure keeps its own word on the wire. Every other
+        // cause is genuinely "these bytes are not the request", which is
+        // what `Instruction` says.
+        dclutch_custody_contract::Error::ForbiddenCompartmentPair => {
+            CustodySbfError::ForbiddenCompartmentPair
+        }
+        _ => CustodySbfError::Instruction,
+    })?;
     require_account_count(accounts, request.operation, continuation.is_some())?;
     let request_digest = hash(request_bytes).to_bytes();
     custody_cu_checkpoint!("cu-decoded");

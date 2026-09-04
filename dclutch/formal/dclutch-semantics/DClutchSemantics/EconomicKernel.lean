@@ -633,4 +633,458 @@ theorem complete_set_effect_count
     (completeSetEffects credit party count quantity).length = count := by
   simp [completeSetEffects]
 
+/-! ## The failure escrow, and what an outage refunds
+
+A runtime Product's claim vector is `ordinaryCount` ordinary regions followed by
+exactly one explicit failure coordinate, so `failureSelector` is `ordinaryCount`
+and the width is `ordinaryCount + 1`.  Founding mints one equal complete set,
+and the escrow ruling changes only *where the failure coordinate lands*: the
+ordinary coordinates go to the founder and the failure coordinate to an
+identity the founding derives.  The aggregate is untouched --
+`escrowed_founding_is_a_complete_set_split_in_the_aggregate` -- so every law
+proved above about supply, backing and the native/materialized partition still
+governs the escrowed founding, and the escrow is one more Position in the
+supply-vector census rather than a hole in it.
+
+An outage then refunds rather than paying whoever minted the failure claims.
+Supply is uniform across every coordinate for as long as a Market is open --
+the complete-set actions are the only ones that move it and both refuse a
+non-uniform vector -- so with `supply` sets outstanding the escrow stands
+against `ordinaryCount * supply` ordinary claims and the pro-rata share of one
+ordinary claim is a CONSTANT the Market header alone determines.  Pro rata
+needs no holder census, and the founder is paid for the ordinary claims they
+still hold and for nothing else.
+
+The remainder is not routed anywhere; it is made impossible.  A floored atom
+would land in no declared compartment, so `foundingRefundExact` refuses at
+founding, at the founder's own basis scale, rather than at a stranger's
+redemption -- and under an admitted founding
+`an_admitted_failure_walk_leaves_no_remainder` holds for EVERY partition of the
+ordinary claims with no divisibility hypothesis left in it.
+-/
+
+def failureSelector (ordinaryCount : Nat) : Nat := ordinaryCount
+
+def outcomeWidth (ordinaryCount : Nat) : Nat := ordinaryCount + 1
+
+def addBelow : Nat → List Nat → Nat → List Nat
+  | 0, values, _ => values
+  | _, [], _ => []
+  | bound + 1, value :: rest, quantity =>
+      (value + quantity) :: addBelow bound rest quantity
+
+theorem length_addBelow (bound : Nat) (values : List Nat) (quantity : Nat) :
+    (addBelow bound values quantity).length = values.length := by
+  induction bound generalizing values with
+  | zero => simp [addBelow]
+  | succ bound ih =>
+      cases values with
+      | nil => simp [addBelow]
+      | cons value rest => simp [addBelow, ih]
+
+theorem valueAt_addBelow_ordinary
+    (bound : Nat) (values : List Nat) (quantity index : Nat)
+    (ordinary : index < bound) (present : index < values.length) :
+    valueAt (addBelow bound values quantity) index
+      = valueAt values index + quantity := by
+  induction bound generalizing values index with
+  | zero => omega
+  | succ bound ih =>
+      cases values with
+      | nil => simp at present
+      | cons value rest =>
+          cases index with
+          | zero => simp [addBelow, valueAt]
+          | succ index =>
+              have inner : index < bound := by omega
+              have shorter : index < rest.length := by simpa using present
+              simpa [addBelow, valueAt] using ih rest index inner shorter
+
+theorem valueAt_addBelow_failure
+    (bound : Nat) (values : List Nat) (quantity index : Nat)
+    (failure : bound ≤ index) :
+    valueAt (addBelow bound values quantity) index = valueAt values index := by
+  induction bound generalizing values index with
+  | zero => simp [addBelow]
+  | succ bound ih =>
+      cases values with
+      | nil => simp [addBelow]
+      | cons value rest =>
+          cases index with
+          | zero => omega
+          | succ index =>
+              have inner : bound ≤ index := by omega
+              simpa [addBelow, valueAt] using ih rest index inner
+
+theorem valueAt_replicate_zero (count index : Nat) :
+    valueAt (List.replicate count 0) index = 0 := by
+  unfold valueAt
+  cases h : (List.replicate count 0)[index]? with
+  | none => simp
+  | some value =>
+      obtain ⟨_, hv⟩ := List.getElem?_eq_some_iff.mp h
+      simp [hv.symm]
+
+
+theorem valueAt_addAt_ne
+    (values : List Nat) (index other quantity : Nat) (distinct : other ≠ index) :
+    valueAt (addAt values index quantity) other = valueAt values other := by
+  simp [addAt, setAt, valueAt, Ne.symm distinct]
+
+/-- Founding under the escrow ruling: one complete set, the ordinary
+coordinates credited to the founder (`destination`) and the failure coordinate
+credited to the market-derived escrow (`source`). -/
+def escrowedFoundingPost (ordinaryCount : Nat) (pre : State) (quantity : Nat) : State :=
+  { pre with
+    hoard := pre.hoard + quantity
+    supply := addEvery pre.supply quantity
+    nativeSupply := addEvery pre.nativeSupply quantity
+    destinationNative := addBelow ordinaryCount pre.destinationNative quantity
+    sourceNative := addAt pre.sourceNative (failureSelector ordinaryCount) quantity }
+
+/-- The vacant pre-state founding runs against. -/
+def vacantFounding (ordinaryCount : Nat) (pre : State) : Prop :=
+  pre.sourceNative = List.replicate (outcomeWidth ordinaryCount) 0 ∧
+  pre.destinationNative = List.replicate (outcomeWidth ordinaryCount) 0
+
+theorem escrowed_founding_is_a_complete_set_split_in_the_aggregate
+    (ordinaryCount : Nat) (pre : State) (quantity : Nat) :
+    (escrowedFoundingPost ordinaryCount pre quantity).hoard =
+      (splitPost pre .destination .native quantity).hoard ∧
+    (escrowedFoundingPost ordinaryCount pre quantity).supply =
+      (splitPost pre .destination .native quantity).supply ∧
+    (escrowedFoundingPost ordinaryCount pre quantity).nativeSupply =
+      (splitPost pre .destination .native quantity).nativeSupply ∧
+    (escrowedFoundingPost ordinaryCount pre quantity).materializedSupply =
+      (splitPost pre .destination .native quantity).materializedSupply := by
+  simp [escrowedFoundingPost, splitPost, State.withRepresentationSupply,
+    State.withHolderClaims, State.representationSupply, State.holderClaims]
+
+theorem escrowed_founding_mints_ordinary_claims_to_the_founder
+    (ordinaryCount : Nat) (pre : State) (quantity outcome : Nat)
+    (vacant : vacantFounding ordinaryCount pre)
+    (ordinary : outcome < ordinaryCount) :
+    valueAt (escrowedFoundingPost ordinaryCount pre quantity).destinationNative outcome
+      = quantity := by
+  obtain ⟨_, founder⟩ := vacant
+  have present : outcome < pre.destinationNative.length := by
+    rw [founder]; simp [outcomeWidth]; omega
+  simp only [escrowedFoundingPost]
+  rw [valueAt_addBelow_ordinary ordinaryCount pre.destinationNative quantity outcome
+      ordinary present, founder, valueAt_replicate_zero]
+  simp
+
+theorem escrowed_founding_seats_the_failure_coordinate_in_the_escrow
+    (ordinaryCount : Nat) (pre : State) (quantity : Nat)
+    (vacant : vacantFounding ordinaryCount pre) :
+    valueAt (escrowedFoundingPost ordinaryCount pre quantity).destinationNative
+        (failureSelector ordinaryCount) = 0 ∧
+    valueAt (escrowedFoundingPost ordinaryCount pre quantity).sourceNative
+        (failureSelector ordinaryCount) = quantity := by
+  obtain ⟨escrow, founder⟩ := vacant
+  have present : failureSelector ordinaryCount < pre.sourceNative.length := by
+    rw [escrow]; simp [outcomeWidth, failureSelector]
+  simp only [escrowedFoundingPost]
+  constructor
+  · rw [valueAt_addBelow_failure ordinaryCount pre.destinationNative quantity
+      (failureSelector ordinaryCount) (Nat.le_refl _), founder, valueAt_replicate_zero]
+  · rw [valueAt_addAt_eq _ _ _ present, escrow, valueAt_replicate_zero]
+    simp
+
+theorem escrowed_founding_gives_the_escrow_no_ordinary_claims
+    (ordinaryCount : Nat) (pre : State) (quantity outcome : Nat)
+    (vacant : vacantFounding ordinaryCount pre)
+    (ordinary : outcome < ordinaryCount) :
+    valueAt (escrowedFoundingPost ordinaryCount pre quantity).sourceNative outcome = 0 := by
+  obtain ⟨escrow, _⟩ := vacant
+  have distinct : outcome ≠ failureSelector ordinaryCount := by
+    simp [failureSelector]; omega
+  simp only [escrowedFoundingPost]
+  rw [valueAt_addAt_ne _ _ _ _ distinct, escrow, valueAt_replicate_zero]
+
+/-- Collateral one holder draws from the escrow for `quantity` ordinary claims
+when the failure selector resolves the Market.  Supply is uniform across every
+coordinate for as long as the Market is open, so with `supply` complete sets
+outstanding the escrow holds `supply * multiplier` collateral against
+`ordinaryCount * supply` ordinary claims and the rate is `multiplier` per
+`ordinaryCount` claims -- a constant the Market header alone determines, with
+no holder census anywhere in it. -/
+def failureRefund (ordinaryCount quantity multiplier : Nat) : Nat :=
+  quantity * multiplier / ordinaryCount
+
+/-- The founding-time admission that makes every failure refund exact.  A
+floored atom would land in no declared compartment -- the census names nine and
+none of them is an upkeep vault, and creating one is an economic ruling this
+lane does not own -- so the remainder is made IMPOSSIBLE rather than housed,
+and the refusal sits at the founder's own basis scale rather than at a
+stranger's redemption. -/
+def foundingRefundExact (ordinaryCount multiplier : Nat) : Bool :=
+  0 < ordinaryCount && multiplier % ordinaryCount == 0
+
+/-- Why the founding constraint exists.  Without it a holder can present only
+the largest divisible part of their claims, and what they cannot present is
+worth strictly less than one collateral atom -- small, but with nowhere
+declared to go. -/
+theorem the_unredeemable_residue_is_smaller_than_one_atom
+    (ordinaryCount quantity multiplier : Nat) (positive : 0 < ordinaryCount) :
+    quantity * multiplier
+        - ordinaryCount * failureRefund ordinaryCount quantity multiplier
+      < ordinaryCount := by
+  have split := Nat.div_add_mod (quantity * multiplier) ordinaryCount
+  have bound := Nat.mod_lt (quantity * multiplier) positive
+  unfold failureRefund
+  omega
+
+def refundTotal (ordinaryCount multiplier : Nat) (holdings : List Nat) : Nat :=
+  (holdings.map fun quantity => failureRefund ordinaryCount quantity multiplier).sum
+
+/-- Every ordinary claim outstanding redeems for exactly the escrow's whole
+collateral: `supply * multiplier` out, and nothing left behind. -/
+theorem failure_refund_exhausts_the_escrow
+    (ordinaryCount supply multiplier : Nat) (positive : 0 < ordinaryCount) :
+    failureRefund ordinaryCount (ordinaryCount * supply) multiplier
+      = supply * multiplier := by
+  unfold failureRefund
+  rw [Nat.mul_assoc]
+  exact Nat.mul_div_cancel_left _ positive
+
+theorem ordinary_shares_divide_their_sum
+    (ordinaryCount multiplier : Nat) (holdings : List Nat)
+    (exact : ∀ quantity ∈ holdings, ordinaryCount ∣ quantity * multiplier) :
+    ordinaryCount ∣ holdings.sum * multiplier := by
+  induction holdings with
+  | nil => simp
+  | cons quantity rest ih =>
+      have head := exact quantity (by simp)
+      have tail : ∀ q ∈ rest, ordinaryCount ∣ q * multiplier :=
+        fun q hq => exact q (by simp [hq])
+      have rest := ih tail
+      simpa [List.sum_cons, Nat.add_mul] using Nat.dvd_add head rest
+
+/-- Pro rata is holder-count independent: splitting the same ordinary claims
+across more holders pays out exactly the same total.  This is why the founder's
+own ordinary claims pay like anyone else's -- the refund reads a claim balance
+and nothing else about who holds it. -/
+theorem failure_refund_is_additive_over_holders
+    (ordinaryCount multiplier : Nat) (positive : 0 < ordinaryCount)
+    (holdings : List Nat)
+    (exact : ∀ quantity ∈ holdings, ordinaryCount ∣ quantity * multiplier) :
+    refundTotal ordinaryCount multiplier holdings
+      = failureRefund ordinaryCount holdings.sum multiplier := by
+  induction holdings with
+  | nil => simp [refundTotal, failureRefund]
+  | cons quantity rest ih =>
+      have head := exact quantity (by simp)
+      have tail : ∀ q ∈ rest, ordinaryCount ∣ q * multiplier :=
+        fun q hq => exact q (by simp [hq])
+      obtain ⟨a, ha⟩ := head
+      obtain ⟨b, hb⟩ := ordinary_shares_divide_their_sum ordinaryCount multiplier rest tail
+      have sum : (quantity + rest.sum) * multiplier = ordinaryCount * (a + b) := by
+        rw [Nat.add_mul, ha, hb, Nat.mul_add]
+      simp only [refundTotal, List.map_cons, List.sum_cons] at *
+      rw [ih tail]
+      unfold failureRefund
+      rw [ha, hb, sum, Nat.mul_div_cancel_left _ positive,
+        Nat.mul_div_cancel_left _ positive, Nat.mul_div_cancel_left _ positive]
+
+/-- The headline conservation.  When the ordinary claims outstanding are held
+in any partition whatever, and every holder's share is exact, the escrow's
+collateral minus the sum of the shares is ZERO. -/
+theorem failure_refund_leaves_no_remainder
+    (ordinaryCount supply multiplier : Nat) (positive : 0 < ordinaryCount)
+    (holdings : List Nat)
+    (exact : ∀ quantity ∈ holdings, ordinaryCount ∣ quantity * multiplier)
+    (partition : holdings.sum = ordinaryCount * supply) :
+    refundTotal ordinaryCount multiplier holdings = supply * multiplier ∧
+    supply * multiplier - refundTotal ordinaryCount multiplier holdings = 0 := by
+  have paid : refundTotal ordinaryCount multiplier holdings = supply * multiplier := by
+    rw [failure_refund_is_additive_over_holders ordinaryCount multiplier positive
+      holdings exact, partition,
+      failure_refund_exhausts_the_escrow ordinaryCount supply multiplier positive]
+  exact ⟨paid, by omega⟩
+
+theorem failure_refund_never_exceeds_the_escrow
+    (ordinaryCount supply multiplier quantity : Nat) (positive : 0 < ordinaryCount)
+    (held : quantity ≤ ordinaryCount * supply) :
+    failureRefund ordinaryCount quantity multiplier ≤ supply * multiplier := by
+  have scaled : quantity * multiplier ≤ ordinaryCount * supply * multiplier :=
+    Nat.mul_le_mul_right multiplier held
+  have divided : quantity * multiplier / ordinaryCount
+      ≤ ordinaryCount * supply * multiplier / ordinaryCount :=
+    Nat.div_le_div_right scaled
+  have collapse : ordinaryCount * supply * multiplier / ordinaryCount = supply * multiplier := by
+    rw [Nat.mul_assoc]; exact Nat.mul_div_cancel_left _ positive
+  unfold failureRefund
+  omega
+
+/-- A founder who holds no ordinary claims is paid nothing by an outage. -/
+theorem a_founder_holding_no_ordinary_claims_is_paid_nothing
+    (ordinaryCount multiplier : Nat) :
+    failureRefund ordinaryCount 0 multiplier = 0 := by
+  simp [failureRefund]
+
+/-- A stranger holding half the ordinary claims draws half the escrow. -/
+theorem half_the_ordinary_claims_draw_half_the_escrow
+    (ordinaryCount supply multiplier : Nat) (positive : 0 < ordinaryCount) :
+    2 * failureRefund ordinaryCount (ordinaryCount * supply) multiplier
+      = failureRefund ordinaryCount (ordinaryCount * (2 * supply)) multiplier := by
+  rw [failure_refund_exhausts_the_escrow ordinaryCount supply multiplier positive,
+    failure_refund_exhausts_the_escrow ordinaryCount (2 * supply) multiplier positive]
+  exact (Nat.mul_assoc 2 supply multiplier).symm
+
+/-- Aggregate supply is uniform across every coordinate for as long as a Market
+is open: the complete-set actions are the only ones that move it and both
+refuse a non-uniform vector. -/
+def uniformSupply (ordinaryCount : Nat) (state : State) (supply : Nat) : Prop :=
+  ∀ outcome, outcome < outcomeWidth ordinaryCount → valueAt state.supply outcome = supply
+
+/-- The failure coordinate's supply, valued in collateral, is exactly the sum
+of the ordinary claims' pro-rata shares at resolution. -/
+theorem the_failure_supply_equals_the_sum_of_ordinary_shares
+    (ordinaryCount supply multiplier : Nat) (state : State)
+    (positive : 0 < ordinaryCount)
+    (uniform : uniformSupply ordinaryCount state supply)
+    (holdings : List Nat)
+    (exact : ∀ quantity ∈ holdings, ordinaryCount ∣ quantity * multiplier)
+    (partition : holdings.sum = ordinaryCount * supply) :
+    valueAt state.supply (failureSelector ordinaryCount) * multiplier
+      = refundTotal ordinaryCount multiplier holdings := by
+  rw [uniform (failureSelector ordinaryCount) (by simp [failureSelector, outcomeWidth]),
+    (failure_refund_leaves_no_remainder ordinaryCount supply multiplier positive
+      holdings exact partition).left]
+
+/-- Terminal payout under the escrowed founding.  Off the failure walk this is
+the kernel's own categorical payout scaled by the basis multiplier.  On the
+failure walk the ordinary claims draw the escrow pro rata and the failure
+claims -- which only the escrow holds -- draw nothing, so the Hoard is paid out
+exactly once. -/
+def escrowedRedemptionPayout
+    (ordinaryCount : Nat) (phase : Phase) (outcome quantity multiplier : Nat) : Nat :=
+  match terminalWinner? phase with
+  | none => 0
+  | some winner =>
+      if winner = failureSelector ordinaryCount then
+        if outcome < ordinaryCount then failureRefund ordinaryCount quantity multiplier
+        else 0
+      else if winner = outcome then quantity * multiplier
+      else 0
+
+/-- The honest walk is untouched: on any terminal that is not the failure
+selector the escrowed payout is the kernel's existing categorical payout. -/
+theorem escrowed_payout_agrees_with_the_kernel_off_the_failure_walk
+    (ordinaryCount : Nat) (phase : Phase) (outcome quantity : Nat)
+    (honest : ∀ winner, terminalWinner? phase = some winner →
+      winner ≠ failureSelector ordinaryCount) :
+    escrowedRedemptionPayout ordinaryCount phase outcome quantity 1
+      = redemptionPayout phase outcome quantity := by
+  unfold escrowedRedemptionPayout redemptionPayout
+  cases h : terminalWinner? phase with
+  | none => simp
+  | some winner =>
+      simp only [honest winner h, if_false, Option.some.injEq]
+      by_cases hw : winner = outcome <;> simp [hw]
+
+/-- The escrow's own failure claims pay nobody, so the escrow's collateral
+leaves through the ordinary claims exactly once. -/
+theorem the_escrow_pays_nobody_for_the_failure_coordinate
+    (ordinaryCount quantity multiplier : Nat) :
+    escrowedRedemptionPayout ordinaryCount
+        (Phase.terminal (failureSelector ordinaryCount))
+        (failureSelector ordinaryCount) quantity multiplier = 0 := by
+  simp [escrowedRedemptionPayout, terminalWinner?, failureSelector]
+
+/-- The failure walk pays out the escrow exactly: no more (solvency) and no
+less (no remainder). -/
+theorem the_failure_walk_pays_out_the_escrow_exactly
+    (ordinaryCount supply multiplier outcome : Nat) (positive : 0 < ordinaryCount)
+    (ordinary : outcome < ordinaryCount)
+    (holdings : List Nat)
+    (exact : ∀ quantity ∈ holdings, ordinaryCount ∣ quantity * multiplier)
+    (partition : holdings.sum = ordinaryCount * supply) :
+    (holdings.map fun quantity =>
+        escrowedRedemptionPayout ordinaryCount
+          (Phase.terminal (failureSelector ordinaryCount)) outcome quantity multiplier).sum
+      = supply * multiplier := by
+  have collapse : ∀ quantity : Nat,
+      escrowedRedemptionPayout ordinaryCount
+          (Phase.terminal (failureSelector ordinaryCount)) outcome quantity multiplier
+        = failureRefund ordinaryCount quantity multiplier := by
+    intro quantity
+    simp [escrowedRedemptionPayout, terminalWinner?, ordinary]
+  simp only [collapse]
+  exact (failure_refund_leaves_no_remainder ordinaryCount supply multiplier positive
+    holdings exact partition).left
+
+/-- Under the founding admission every holder's share is exact, whatever they
+hold: one ordinary claim redeems for exactly `unit` collateral atoms. -/
+theorem an_admitted_founding_makes_every_refund_exact
+    (ordinaryCount unit quantity : Nat) (positive : 0 < ordinaryCount) :
+    failureRefund ordinaryCount quantity (ordinaryCount * unit) = quantity * unit := by
+  unfold failureRefund
+  rw [Nat.mul_comm quantity (ordinaryCount * unit), Nat.mul_assoc,
+    Nat.mul_div_cancel_left _ positive, Nat.mul_comm]
+
+/-- The unconditional conservation.  Under an admitted founding the failure
+walk pays the escrow out to the last atom, for EVERY partition of the ordinary
+claims among holders -- no divisibility hypothesis survives, so no holder can
+be left with an unredeemable residue and no atom is left in the Hoard. -/
+theorem an_admitted_failure_walk_leaves_no_remainder
+    (ordinaryCount unit supply : Nat) (positive : 0 < ordinaryCount)
+    (holdings : List Nat) (partition : holdings.sum = ordinaryCount * supply) :
+    refundTotal ordinaryCount (ordinaryCount * unit) holdings
+      = supply * (ordinaryCount * unit) ∧
+    supply * (ordinaryCount * unit)
+        - refundTotal ordinaryCount (ordinaryCount * unit) holdings = 0 := by
+  have exact : ∀ quantity ∈ holdings, ordinaryCount ∣ quantity * (ordinaryCount * unit) :=
+    fun quantity _ => ⟨quantity * unit, by
+      rw [Nat.mul_comm quantity (ordinaryCount * unit), Nat.mul_assoc,
+        Nat.mul_comm unit quantity]⟩
+  exact failure_refund_leaves_no_remainder ordinaryCount supply (ordinaryCount * unit)
+    positive holdings exact partition
+
+/-- The failure terminal's payout vector: one collateral `unit` at every
+ordinary column and nothing at the failure column.  The escrow's own claims pay
+nobody, which is what lets the ordinary columns draw the whole Hoard exactly
+once. -/
+def failurePayoutVector (ordinaryCount unit : Nat) : List Nat :=
+  List.replicate ordinaryCount unit ++ [0]
+
+/-- The success terminal's payout vector for the same Market: the whole scale
+at the winner and nothing anywhere else. -/
+def successPayoutVector (ordinaryCount unit winner : Nat) : List Nat :=
+  setAt (List.replicate (outcomeWidth ordinaryCount) 0) winner (ordinaryCount * unit)
+
+theorem sum_set_replicate_zero (count index value : Nat) (present : index < count) :
+    ((List.replicate count 0).set index value).sum = value := by
+  induction count generalizing index with
+  | zero => omega
+  | succ count ih =>
+      cases index with
+      | zero => simp [List.replicate_succ]
+      | succ index =>
+          have inner : index < count := by omega
+          simp [List.replicate_succ, ih index inner]
+
+theorem failure_payout_vector_has_the_runtime_width (ordinaryCount unit : Nat) :
+    (failurePayoutVector ordinaryCount unit).length = outcomeWidth ordinaryCount := by
+  simp [failurePayoutVector, outcomeWidth]
+
+theorem success_payout_vector_has_the_runtime_width
+    (ordinaryCount unit winner : Nat) :
+    (successPayoutVector ordinaryCount unit winner).length = outcomeWidth ordinaryCount := by
+  simp [successPayoutVector, setAt]
+
+/-- Both terminal arms partition the SAME payout scale, so the conservation
+gate the terminal route already runs on every payout vector -- the vector must
+sum to the scale -- admits the failure arm with nothing added to it. -/
+theorem both_terminal_arms_partition_the_same_scale
+    (ordinaryCount unit winner : Nat) (inRange : winner < outcomeWidth ordinaryCount) :
+    (failurePayoutVector ordinaryCount unit).sum = ordinaryCount * unit ∧
+    (successPayoutVector ordinaryCount unit winner).sum = ordinaryCount * unit := by
+  constructor
+  · simp [failurePayoutVector]
+  · simp only [successPayoutVector, setAt]
+    exact sum_set_replicate_zero (outcomeWidth ordinaryCount) winner
+      (ordinaryCount * unit) inRange
+
 end DClutch.Economic

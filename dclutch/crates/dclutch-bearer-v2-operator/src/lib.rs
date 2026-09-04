@@ -147,8 +147,17 @@ pub enum Error {
     EffectArtifactV4(dclutch_effect_kernel::v4::ErrorV4),
     /// Typed terminal AccountProfile artifact encoding refused.
     AccountProfileArtifact(dclutch_account_profile_contract::v2::Error),
-    /// ProductBasisV3 bytes or logical account observations differed.
+    /// Logical account observations differed from the declared frame.
     AccountProfileInput,
+    /// Hostile decoding of the injected ProductBasisV3 artifact refused.
+    ///
+    /// Split out of `AccountProfileInput`, whose own sentence used to name two
+    /// unrelated accusations -- "ProductBasisV3 bytes OR logical account
+    /// observations" -- and published one code for both. Four sites decode the
+    /// basis and the codec already tells them whether it was width, magic,
+    /// schema or a zero identity; they threw that away and left the reader
+    /// unable to tell a malformed artifact from a miscounted frame.
+    ProductBasis(dclutch_product_payoff_v2_codec::runtime_v3::Error),
     /// The canonical Token-2022 behavior selection was not exact.
     TokenBehavior(dclutch_token_svm::Error),
     /// A semantic coordinate or computed artifact digest was zero.
@@ -196,6 +205,9 @@ pub enum Error {
     },
     /// Checked Hot envelope or exact physical account construction refused.
     HotInstruction,
+    /// The common Hot ABI refused the envelope, and says which of its four
+    /// causes it was: width, magic, profile, or a zero identity.
+    HotEnvelope(dclutch_capability_program_contract::hot_v3::HotExecutionErrorV3),
     /// The finalized descriptor bytes or their graph join refused.
     BearerDescriptor(dclutch_rational_representation_v2_kernel::Error),
     /// The finalized composition exposure bundle refused.

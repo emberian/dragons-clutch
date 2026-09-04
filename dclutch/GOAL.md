@@ -4658,3 +4658,11 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   refund), SERIES (D7 A), RECOVERY (D5's funded ladder), REPRO (cross-host bytes; supported_builders defined), plus
   PROGRAMS-16C, CAUSES, DECISIONS-2 live. The explainers ember asked for follow as a page.
 - Cuts: `824aaef0d`.
+- CAUSES closed (`5f18cbea3`, `784c98e91`): the two Dealer release joins carry `ProfileJoin(lifecycle_v3::Error)` (only V3's
+  can fire — V4 pins both operands before joining, verified by sweeping every caller-controlled length); the class censused
+  with a TYPE ORACLE (rewrite `|_|` → `|_: ()|` one crate at a time and read rustc's E0631): **1,768 discard sites in 16
+  host-only operator crates, 1,517 discarding a typed contract enum, exactly ONE with a carrying variant already**; seven
+  fixed (2 Dealer + 5 bearer); the largest collapses named for their crates' lanes (`GeneralHotOperatorErrorV3::ChainState`
+  55 sites / 6 enums; `ResolutionCoreOperatorErrorV3::Encoding` 54; `TerminalRetirementErrorV1::Projection` 42). ELFs
+  byte-identical. Note: the SERIES lane's uncommitted series files do not compile in the shared tree at this moment.
+- Cuts: `600a776b0`.
