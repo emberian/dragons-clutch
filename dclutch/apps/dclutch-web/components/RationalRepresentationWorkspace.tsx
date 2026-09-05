@@ -10,12 +10,12 @@ import {
   buildUnsignedBearerTransferV2,
   inspectBearerTransferV2,
   tokenBehaviorSummaryV2,
-} from '@/lib/rationalTokenV2';
-import { SolanaRpcClient } from '@/lib/rpc';
+} from '@dclutch/sdk/rationalTokenV2';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 import {
   type WalletSignedTransactionV1,
   requestWalletTransactionSignatureV1,
-} from '@/lib/walletHandoff';
+} from '@dclutch/sdk/walletHandoff';
 
 import WalletDirectory, { useWalletDirectoryV1 } from './WalletDirectory';
 import RationalRetireReceiptPanel from './RationalRetireReceiptPanel';

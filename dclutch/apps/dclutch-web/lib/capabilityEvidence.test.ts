@@ -10,7 +10,7 @@ import {
   capabilityRequiresMarketV1,
   capabilityStandingV1,
   type CapabilityActionV1,
-} from './capabilityModel';
+} from '@dclutch/sdk/capabilityModel';
 import {
   browserActPrerequisitesV1,
   BROWSER_CAPABILITY_SURFACE_V1,
@@ -142,7 +142,11 @@ describe('the capability model carries no status anyone can type', () => {
     const publishing = new Set(BROWSER_CAPABILITY_SURFACE_V1.runbooks.map((entry) => entry.module));
     for (const candidate of CAPABILITY_ACTIONS_V1) {
       for (const path of anchorPaths(candidate)) {
-        expect(existsSync(join(webRoot, path)), `${candidate.id} anchors ${path}, which is not a file`).toBe(true);
+        // An anchor is a web-relative file, or the SDK module the browser imports it as.
+        const anchorFile = path.startsWith('@dclutch/sdk/')
+          ? join(webRoot, '..', '..', 'packages', 'dclutch-sdk', 'lib', `${path.slice('@dclutch/sdk/'.length)}.ts`)
+          : join(webRoot, path);
+        expect(existsSync(anchorFile), `${candidate.id} anchors ${path}, which is not a file`).toBe(true);
         expect(
           surveyed.has(path),
           `${candidate.id} anchors ${path}, which no route reaches. An anchor the surface has never seen makes this act silently lose its venue rather than fail; route the module or drop the anchor.`,

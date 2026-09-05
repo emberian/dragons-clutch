@@ -55,6 +55,9 @@ import { decodeCoreFoundProductGraphV2 } from './coreFound';
 import { decodeCheckedInfrastructureV1 } from './infrastructure';
 import { ARTIFACT_RELEASE_BYTES, SYSTEM_PROGRAM_ID, authenticateArtifactDeploymentV1, deriveFinalizedRecordAddressesV1 } from './releaseRegistry';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
+import {
+  ACTIVATION_CACHE_MAGIC_V1,
+} from './generated/protocolConstantsV1';
 
 const MARKET_PRODUCT_RECORD_OFFSET = 80;
 const MARKET_MANIFEST_OFFSET = 176;
@@ -433,7 +436,7 @@ export async function inspectDealerEquityRouteV3(
       required(observation.accounts, fixed[HotAbi.HOT_CORE_PROGRAMDATA_ACCOUNT_V3]?.address ?? '', 'Core ProgramData'), fixed[HotAbi.HOT_CORE_PROGRAMDATA_ACCOUNT_V3]?.address ?? '', core);
     const cache = required(observation.accounts, fixed[HotAbi.HOT_ACTIVATION_CACHE_ACCOUNT_V3]?.address ?? '', 'activation cache');
     const tradingArtifact = Uint8Array.from((checked.execution.releaseSet.roles.trading.artifactReleaseId.match(/../g) ?? []).map((value) => Number.parseInt(value, 16)));
-    if (cache.owner !== registryProgram || cache.executable || ascii(cache.data, 0, 8) !== 'DCLTACT1'
+    if (cache.owner !== registryProgram || cache.executable || ascii(cache.data, 0, 8) !== ACTIVATION_CACHE_MAGIC_V1
         || !same(slice(cache.data, 16, 32), releaseSet) || !same(slice(cache.data, ACTIVATION_CACHE_TRADING_OFFSET, 32), tradingArtifact)) {
       throw new Error('Registry activation cache does not recognize this Trading release');
     }

@@ -66,7 +66,7 @@ width and seven offsets. `EmitGeneralControllerRequestV3Rust.lean` now prints
 both generations into the module it already owned, and the V2 codec reads
 every one of those facts from it (the five `pub const CONTROLLER_REQUEST_*_V2`
 names other crates import survive as aliases). Control: the V3 half of the
-emission is byte-identical; `cargo check --tests` in `dclutch-general-codec`
+emission is byte-identical; `cargo check --tests` in `dclutch-trading::general_codec`
 green. The map's §4 item 3 (unify the two wires) is the General maker's; this
 is the half that has one author either way.
 

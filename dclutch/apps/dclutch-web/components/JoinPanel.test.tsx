@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
 import JoinPanel, { JoinStanding, joiningClosedForPhaseV1 } from '@/components/JoinPanel';
-import { type DirectParticipantReadinessV1 } from '@/lib/directParticipant';
+import { type DirectParticipantReadinessV1 } from '@dclutch/sdk/directParticipant';
 
 const WALLET = '5oGySWQAKZ3fLmAwUbG6WifP7dCF6FRtriawtgxoCZXf';
 const DEVNET = 'https://api.devnet.solana.com';

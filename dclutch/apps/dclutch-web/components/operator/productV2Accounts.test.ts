@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { PublicKey } from '@solana/web3.js';
 
 import { deriveProductV2AccountsV1, effectiveAccountV1 } from './productV2Accounts';
-import { buildAdmissionInstructionV2 } from '@/lib/productRuntimeV2Admission';
-import { fromHex } from '@/lib/bytes';
+import { buildAdmissionInstructionV2 } from '@dclutch/sdk/productRuntimeV2Admission';
+import { fromHex } from '@dclutch/sdk/bytes';
 
 const REGISTRY = new PublicKey(new Uint8Array(32).fill(7)).toBase58();
 const DIGESTS = {

@@ -18,7 +18,7 @@ import {
 } from '@dclutch/sdk/walletTerminalPayoutV3';
 import { inspectAggregateRetirementV1 } from '@dclutch/sdk/aggregateRetirement';
 
-import { hex, sha256 } from './bytes';
+import { hex, sha256 } from '@dclutch/sdk/bytes';
 import {
   type ColdClientAdapterV1,
   type ColdClientChainStepV1,

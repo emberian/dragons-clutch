@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { DEVNET_DEPLOYMENT_V1 } from './deployments';
-import { inspectMarketDetailV1 } from './marketDetail';
-import { formatWindowInstantV1, inspectMarketQuestionV1 } from './marketQuestion';
-import { marketEditorialV1, marketNarrativeV1 } from './marketRegistry';
-import { PUBLIC_DEVNET_CUT_V1 } from './publicCutStaging';
-import { SolanaRpcClient } from './rpc';
+import { DEVNET_DEPLOYMENT_V1 } from '@dclutch/sdk/deployments';
+import { inspectMarketDetailV1 } from '@dclutch/sdk/marketDetail';
+import { formatWindowInstantV1, inspectMarketQuestionV1 } from '@dclutch/sdk/marketQuestion';
+import { marketEditorialV1, marketNarrativeV1 } from '@dclutch/sdk/marketRegistry';
+import { PUBLIC_DEVNET_CUT_V1 } from '@dclutch/sdk/publicCutStaging';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 
 const featured = PUBLIC_DEVNET_CUT_V1.market;
 const live = process.env.DCLUTCH_LIVE_DEVNET === '1' && featured !== null ? it : it.skip;

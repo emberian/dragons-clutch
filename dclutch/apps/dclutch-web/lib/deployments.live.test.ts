@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { DEVNET_DEPLOYMENT_V1, DEVNET_PROGRAM_EVIDENCE_V1, PROTOCOL_ROLES_V1 } from './deployments';
-import { SolanaRpcClient } from './rpc';
+import { DEVNET_DEPLOYMENT_V1, DEVNET_PROGRAM_EVIDENCE_V1, PROTOCOL_ROLES_V1 } from '@dclutch/sdk/deployments';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 
 const live = process.env.DCLUTCH_LIVE_DEVNET === '1' ? it : it.skip;
 

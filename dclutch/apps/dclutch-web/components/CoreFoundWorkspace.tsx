@@ -5,10 +5,10 @@ import Anchor from '@/components/Anchor';
 import ConsoleHeader from '@/components/ConsoleHeader';
 import { FormEvent, useState } from 'react';
 
-import { deriveCoreFoundRecordsV2, prepareCoreFoundV2, type CoreFoundInputV2, type CoreFoundPlanV2 } from '@/lib/coreFound';
-import { CORE_FOUND_ACCOUNT_LABELS_V3, CORE_FOUND_ACCOUNT_ROLES_V3 } from '@/lib/generated/coreFound';
+import { deriveCoreFoundRecordsV2, prepareCoreFoundV2, type CoreFoundInputV2, type CoreFoundPlanV2 } from '@dclutch/sdk/coreFound';
+import { CORE_FOUND_ACCOUNT_LABELS_V3, CORE_FOUND_ACCOUNT_ROLES_V3 } from '@dclutch/sdk/generated/coreFound';
 import { useDeploymentFieldV1, useDeploymentV1 } from '@/lib/deploymentStore';
-import { SolanaRpcClient } from '@/lib/rpc';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 import {
   DerivedProvenance,
   EndpointField,

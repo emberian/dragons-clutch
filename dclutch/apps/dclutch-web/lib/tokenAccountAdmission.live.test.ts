@@ -1,15 +1,15 @@
 import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
-import { DEVNET_DEPLOYMENT_V1 } from './deployments';
+import { DEVNET_DEPLOYMENT_V1 } from '@dclutch/sdk/deployments';
 import {
   TOKEN_ACCOUNT_BYTES_V1,
   TOKEN_ACCOUNT_IMMUTABLE_OWNER_BYTES_V1,
   TOKEN_ACCOUNT_IMMUTABLE_OWNER_SUFFIX_V1,
-} from './generated/walletTerminalPayoutV3';
-import { TOKEN_2022_PROGRAM_ID, decodeToken2022BehaviorAccountV2 } from './rationalTokenV2';
-import { SolanaRpcClient } from './rpc';
-import { admitBaseOrImmutableOwnerTokenAccountV1 } from './tokenAccountAdmissionV1';
+} from '@dclutch/sdk/generated/walletTerminalPayoutV3';
+import { TOKEN_2022_PROGRAM_ID, decodeToken2022BehaviorAccountV2 } from '@dclutch/sdk/rationalTokenV2';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
+import { admitBaseOrImmutableOwnerTokenAccountV1 } from '@dclutch/sdk/tokenAccountAdmissionV1';
 
 /**
  * THE ACCOUNT COHORT-14 EXISTS TO BE ABLE TO PAY, read by the browser.

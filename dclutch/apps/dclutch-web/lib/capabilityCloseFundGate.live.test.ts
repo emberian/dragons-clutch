@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { capabilityActPhaseGatesV1, evaluateCapabilityV1, type CapabilityMarketSnapshotV1 } from './capabilityModel';
+import { capabilityActPhaseGatesV1, evaluateCapabilityV1, type CapabilityMarketSnapshotV1 } from '@dclutch/sdk/capabilityModel';
 import { BROWSER_CAPABILITY_STANDINGS_V1 } from './capabilitySurface';
-import { decodeMarketCoreStateV2 } from './marketCoreV2';
-import { DEVNET_DEPLOYMENT_V1 } from './deployments';
-import { PUBLIC_DEVNET_CUT_V1 } from './publicCutStaging';
-import { SolanaRpcClient } from './rpc';
+import { decodeMarketCoreStateV2 } from '@dclutch/sdk/marketCoreV2';
+import { DEVNET_DEPLOYMENT_V1 } from '@dclutch/sdk/deployments';
+import { PUBLIC_DEVNET_CUT_V1 } from '@dclutch/sdk/publicCutStaging';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 
 /**
  * The refusal `source.close-fund` gained by gaining a declaration, run live.

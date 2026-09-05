@@ -11,7 +11,7 @@ import {
   capabilityRequiresMarketV1,
   evaluateCapabilityV1,
   type CapabilityMarketSnapshotV1,
-} from './capabilityModel';
+} from '@dclutch/sdk/capabilityModel';
 import { BROWSER_CAPABILITY_STANDINGS_V1 } from './capabilitySurface';
 import {
   ROUTE_PHASE_GATES_V1,

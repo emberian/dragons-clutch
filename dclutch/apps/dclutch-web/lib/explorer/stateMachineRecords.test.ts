@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import { STATE_MACHINE_RECORDS_V1 } from '@dclutch/sdk/generated/stateMachinesV1';
 
-import vector from '../../fixtures/state-machines.devnet.json';
-import { CAPABILITY_ROOT_HEADER_BYTES_V1, CAPABILITY_ROOT_MAGIC_V1 } from '../generated/directInlineV3';
+import vector from '@dclutch/sdk/fixtures/state-machines.devnet.json';
+import { CAPABILITY_ROOT_HEADER_BYTES_V1, CAPABILITY_ROOT_MAGIC_V1 } from '@dclutch/sdk/generated/directInlineV3';
 import {
   decodeAgainstSpec,
   magicText,

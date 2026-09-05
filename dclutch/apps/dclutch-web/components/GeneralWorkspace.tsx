@@ -24,10 +24,10 @@ import {
   type GeneralSuccessorActionV5,
   type GeneralVerifiedCandidateStatusV2,
   type GeneralVerifierStatusV2,
-} from '@/lib/generalPlanV5';
-import { SolanaRpcClient } from '@/lib/rpc';
+} from '@dclutch/sdk/generalPlanV5';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 import { useDeploymentFieldV1 } from '@/lib/deploymentStore';
-import { GENERAL_HOT_FIXED_ACCOUNT_COUNT_V3 } from '@/lib/generated/generalSuccessorV5';
+import { GENERAL_HOT_FIXED_ACCOUNT_COUNT_V3 } from '@dclutch/sdk/generated/generalSuccessorV5';
 
 function message(error: unknown): string { return error instanceof Error ? error.message : 'General workflow failed without a usable refusal reason.'; }
 function compact(value: string): string { return `${value.slice(0, 8)}…${value.slice(-8)}`; }

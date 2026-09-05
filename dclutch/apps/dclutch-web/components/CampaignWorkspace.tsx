@@ -6,7 +6,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import Nav from '@/components/Nav';
 import LawBand from '@/components/charts/LawBand';
 import Sparkline from '@/components/charts/Sparkline';
-import { marketEditorialV1 } from '@/lib/marketRegistry';
+import { marketEditorialV1 } from '@dclutch/sdk/marketRegistry';
 import {
   CAMPAIGN_LOCAL_CAVEAT_V1,
   CAMPAIGN_SERIES_URL_V1,

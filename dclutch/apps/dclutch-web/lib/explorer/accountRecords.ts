@@ -68,7 +68,7 @@ import {
   CAPABILITY_MANIFEST_SCHEMA_OFFSET_V1,
   MARKET_OPENING_READINESS_BYTES_V1,
   MARKET_OPENING_READINESS_MAGIC_V1,
-} from '../generated/capabilityManifestV1';
+} from '@dclutch/sdk/generated/capabilityManifestV1';
 import {
   CORE_PHASE_FOUNDING_TAG,
   CORE_PHASE_OPEN_TAG,
@@ -144,7 +144,7 @@ import {
   WINDOW_SPEC_END_UNIX_SECONDS_OFFSET_V1,
   WINDOW_SPEC_MAGIC,
   WINDOW_SPEC_START_UNIX_SECONDS_OFFSET_V1,
-} from '../generated/coreFound';
+} from '@dclutch/sdk/generated/coreFound';
 import {
   ACCOUNT_PROFILE_HEADER_BYTES_V2,
   ACCOUNT_PROFILE_MAGIC_V2,
@@ -164,7 +164,7 @@ import {
   DEALER_OBLIGATION_MAGIC_V3,
   SIGNED_DELTA_PLAN_HEADER_BYTES_V3,
   SIGNED_DELTA_PLAN_MAGIC_V3,
-} from '../generated/dealerEquityV3';
+} from '@dclutch/sdk/generated/dealerEquityV3';
 import {
   BASIS_HEADER_BYTES_V3,
   BASIS_MAGIC_V3,
@@ -287,7 +287,7 @@ import {
   STRATEGY_DISPOSITION_OFFSET_V2,
   STRATEGY_TRANSITION_PROGRAM_OFFSET_V2,
   STRATEGY_TRANSITION_SCHEMA_OFFSET_V2,
-} from '../generated/directInlineV3';
+} from '@dclutch/sdk/generated/directInlineV3';
 import {
   ACTION_CANCEL_ORDER_V3,
   ACTION_CLOSE_BATCH_V3,
@@ -520,7 +520,7 @@ import {
   GENERAL_VERIFIER_REVISION_OFFSET_V2,
   GENERAL_VERIFIER_TAIL_ITEM_STRIDE_V2,
   GENERAL_VERIFIER_VERSION_OFFSET_V2,
-} from '../generated/generalSuccessorV5';
+} from '@dclutch/sdk/generated/generalSuccessorV5';
 import {
   GENERIC_FOUNDING_ACK_BYTES_V1,
   GENERIC_FOUNDING_ACK_IDENTITIES_OFFSET_V1,
@@ -541,7 +541,7 @@ import {
   GENERIC_FOUNDING_STAGES_V1,
   GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V3,
   GENERIC_MARKET_FOUNDING_MAGIC_V3,
-} from '../generated/genericFoundingV1';
+} from '@dclutch/sdk/generated/genericFoundingV1';
 import {
   ADMISSION_MAGIC_BYTES_V2,
   ADMISSION_RECEIPT_MAGIC_V2,
@@ -562,13 +562,13 @@ import {
   REQUEST_PORTFOLIO_DIGEST_OFFSET_V2,
   REQUEST_PRODUCT_DIGEST_OFFSET_V2,
   REQUEST_RESERVED_OFFSET_V2,
-} from '../generated/productRuntimeV2Admission';
+} from '@dclutch/sdk/generated/productRuntimeV2Admission';
 import {
   PRODUCT_V2_BYTES,
   PRODUCT_V2_KNOTS_OFFSET,
   PRODUCT_V2_MAGIC,
   PRODUCT_V2_TERMS_OFFSET,
-} from '../generated/productV2Payoff';
+} from '@dclutch/sdk/generated/productV2Payoff';
 import {
   PROTOCOL_INFRASTRUCTURE_PROFILE_ARTIFACT_PROFILE_OFFSET_V1,
   PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1,
@@ -591,7 +591,7 @@ import {
   PROTOCOL_INFRASTRUCTURE_PROFILE_RESERVED_OFFSET_V2,
   PROTOCOL_INFRASTRUCTURE_PROFILE_RESERVED_TAIL_OFFSET_V2,
   PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_VERSION_OFFSET_V2,
-} from '../generated/protocolInfrastructure';
+} from '@dclutch/sdk/generated/protocolInfrastructure';
 import {
   RATIONAL_TERMINAL_HOT_ACTION_OFFSET_V3,
   RATIONAL_TERMINAL_HOT_CALLER_ROLE_OFFSET_V3,
@@ -643,7 +643,38 @@ import {
   TERMINAL_REQUEST_REALM_OFFSET_V3,
   TERMINAL_REQUEST_RESERVED_TAIL_OFFSET_V3,
   TERMINAL_REQUEST_SELECTED_OUTCOME_OFFSET_V3,
-} from '../generated/rationalTerminalHotV3';
+} from '@dclutch/sdk/generated/rationalTerminalHotV3';
+import {
+  LIFECYCLE_ACTION_ACTIVATE_COORDINATE_V2,
+  LIFECYCLE_ACTION_ACTIVATE_RECEIPT_V2,
+  LIFECYCLE_ACTION_OFFSET,
+  LIFECYCLE_ACTION_RETIRE_COORDINATE_V2,
+  LIFECYCLE_ACTION_RETIRE_RECEIPT_V2,
+  LIFECYCLE_COORDINATE_BYTES_V2,
+  LIFECYCLE_COORDINATE_COUNT_OFFSET,
+  LIFECYCLE_DESCRIPTOR_ID_OFFSET,
+  LIFECYCLE_EXPECTED_MARKET_REVISION_OFFSET,
+  LIFECYCLE_EXPECTED_RECEIPT_SUPPLY_OFFSET,
+  LIFECYCLE_GENERATION_OFFSET,
+  LIFECYCLE_GRAPH_ID_OFFSET,
+  LIFECYCLE_HEADER_BYTES_V2,
+  LIFECYCLE_HEADER_RESERVED_OFFSET,
+  LIFECYCLE_MARKET_OFFSET,
+  LIFECYCLE_OBSERVED_RECEIPT_LAMPORTS_OFFSET,
+  LIFECYCLE_OUTCOME_COUNT_OFFSET,
+  LIFECYCLE_PARENT_CONTEXT_OFFSET,
+  LIFECYCLE_RECEIPT_MINT_OFFSET,
+  LIFECYCLE_RECEIPT_RENT_PRINCIPAL_OFFSET,
+  LIFECYCLE_RELEASE_SET_OFFSET,
+  LIFECYCLE_RENT_CREDIT_AFTER_OFFSET,
+  LIFECYCLE_RENT_CREDIT_BEFORE_OFFSET,
+  LIFECYCLE_RENT_CREDIT_OFFSET,
+  LIFECYCLE_RENT_PROGRAM_OFFSET,
+  LIFECYCLE_REPRESENTATION_AUTHORITY_OFFSET,
+  LIFECYCLE_REQUEST_MAGIC_V2,
+  LIFECYCLE_TOKEN_PROGRAM_OFFSET,
+  LIFECYCLE_VERSION_OFFSET,
+} from '@dclutch/sdk/generated/rationalLifecycleRequestV2';
 import {
   GRAPH_EDGE_COUNT_OFFSET,
   GRAPH_HEADER_BYTES,
@@ -656,7 +687,7 @@ import {
   GRAPH_ROOT_ID_OFFSET,
   GRAPH_SCALE_OFFSET,
   GRAPH_VERSION_OFFSET,
-} from '../generated/rationalRepresentationGraphV2';
+} from '@dclutch/sdk/generated/rationalRepresentationGraphV2';
 import {
   REALM_ADAPTER_RELEASE_ID_OFFSET_V1,
   REALM_BYTES_V1,
@@ -667,54 +698,7 @@ import {
   REALM_RESERVED_OFFSET_V1,
   REALM_SCHEMA_VERSION_OFFSET_V1,
   REALM_TOKEN_PROGRAM_OFFSET_V1,
-} from '../generated/realmPositionV1';
-import {
-  REGISTERED_BUYER_POSITION_BUMP_OFFSET,
-  REGISTERED_BUYER_REGISTRATION_BUMP_OFFSET,
-  REGISTERED_CONTROLLER_BUMP_OFFSET,
-  REGISTERED_CONTROLLER_BYTES_VALUE,
-  REGISTERED_CONTROLLER_EXECUTION_PRICE_OFFSET,
-  REGISTERED_CONTROLLER_FILL_OFFSET,
-  REGISTERED_CONTROLLER_MAGIC_BYTES,
-  REGISTERED_CONTROLLER_RESERVED_OFFSET,
-  REGISTERED_CONTROLLER_VERSION_OFFSET,
-  REGISTERED_CREATE_BYTES_VALUE,
-  REGISTERED_CREATE_CONTROLLER_BUMP_OFFSET,
-  REGISTERED_CREATE_INTENT_OFFSET,
-  REGISTERED_CREATE_MAGIC_BYTES,
-  REGISTERED_CREATE_REGISTRATION_BUMP_OFFSET,
-  REGISTERED_CREATE_REPLAY_BUMP_OFFSET,
-  REGISTERED_CREATE_RESERVED_OFFSET,
-  REGISTERED_CREATE_VERSION_OFFSET,
-  REGISTERED_RETIRE_BYTES_VALUE,
-  REGISTERED_RETIRE_CONTROLLER_BUMP_OFFSET,
-  REGISTERED_RETIRE_MAGIC_BYTES,
-  REGISTERED_RETIRE_REGISTRATION_BUMP_OFFSET,
-  REGISTERED_RETIRE_RESERVED_OFFSET,
-  REGISTERED_RETIRE_VERSION_OFFSET,
-  REGISTERED_SELLER_POSITION_BUMP_OFFSET,
-  REGISTERED_SELLER_REGISTRATION_BUMP_OFFSET,
-  REGISTERED_STATE_BYTES_VALUE,
-  REGISTERED_STATE_CONTROLLER_OFFSET,
-  REGISTERED_STATE_INTENT_OFFSET,
-  REGISTERED_STATE_MAGIC_BYTES,
-  REGISTERED_STATE_MAKER_OFFSET,
-  REGISTERED_STATE_PHASE_OFFSET,
-  REGISTERED_STATE_REMAINING_OFFSET,
-  REGISTERED_STATE_RESERVED_OFFSET,
-  REGISTERED_STATE_SEQUENCE_OFFSET,
-  REGISTERED_STATE_VERSION_OFFSET,
-  REGISTERED_TERMINAL_ACTION_OFFSET,
-  REGISTERED_TERMINAL_BYTES_VALUE,
-  REGISTERED_TERMINAL_CANCEL,
-  REGISTERED_TERMINAL_CONTROLLER_BUMP_OFFSET,
-  REGISTERED_TERMINAL_EXPECTED_SEQUENCE_OFFSET,
-  REGISTERED_TERMINAL_EXPIRE,
-  REGISTERED_TERMINAL_MAGIC_BYTES,
-  REGISTERED_TERMINAL_REGISTRATION_BUMP_OFFSET,
-  REGISTERED_TERMINAL_RESERVED_OFFSET,
-  REGISTERED_TERMINAL_VERSION_OFFSET,
-} from '../generated/registeredDirect';
+} from '@dclutch/sdk/generated/realmPositionV1';
 import {
   MANIPULATION_FLOOR_V1_ADAPTER_CONFIG_OFFSET,
   MANIPULATION_FLOOR_V1_BASIS_OFFSET,
@@ -729,7 +713,7 @@ import {
   MANIPULATION_FLOOR_V1_SOURCE_SPEC_OFFSET,
   MANIPULATION_FLOOR_V1_TAIL_RESERVED_OFFSET,
   MANIPULATION_FLOOR_V1_VERSION_OFFSET,
-} from '../generated/principalCapacityV1';
+} from '@dclutch/sdk/generated/principalCapacityV1';
 
 /** Width of the canonical eight-byte ASCII magic every dClutch record opens with. */
 export const RECORD_MAGIC_BYTES = ADMISSION_MAGIC_BYTES_V2;
@@ -1602,96 +1586,42 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
     note: 'No field layout is published for this header.',
   },
 
-  // -------------------------------------------------------- Registered Direct
   {
-    magic: REGISTERED_STATE_MAGIC_BYTES,
-    name: 'Registered intent state',
-    family: 'Direct',
-    summary: 'An order waiting on chain to be filled: who placed it, what it asks, and how much is left.',
-    width: { kind: 'fixed', bytes: REGISTERED_STATE_BYTES_VALUE },
+    magic: LIFECYCLE_REQUEST_MAGIC_V2,
+    name: 'Rational lifecycle request',
+    family: 'Rational',
+    summary: 'Activates or retires a rational representation: its receipt, or one of its coordinates.',
+    width: { kind: 'header-only', headerBytes: LIFECYCLE_HEADER_BYTES_V2, note: `one ${LIFECYCLE_COORDINATE_BYTES_V2}-byte coordinate row per declared coordinate follows the header` },
     fields: [
-      version(REGISTERED_STATE_VERSION_OFFSET),
-      field('Phase', REGISTERED_STATE_PHASE_OFFSET, 'u8'),
-      field('Reserved', REGISTERED_STATE_RESERVED_OFFSET, 'reserved'),
-      field('Controller', REGISTERED_STATE_CONTROLLER_OFFSET, 'pubkey'),
-      field('Maker', REGISTERED_STATE_MAKER_OFFSET, 'pubkey'),
-      field('Registered intent', REGISTERED_STATE_INTENT_OFFSET, 'span', {
-        note: 'a signed order embedded in place',
-      }),
-      field('Remaining', REGISTERED_STATE_REMAINING_OFFSET, 'u64'),
-      field('Sequence', REGISTERED_STATE_SEQUENCE_OFFSET, 'u64'),
-    ],
-    note: null,
-  },
-  {
-    magic: REGISTERED_CONTROLLER_MAGIC_BYTES,
-    name: 'Registered fill instruction',
-    family: 'Direct',
-    summary: 'Fills two resting orders against each other.',
-    width: { kind: 'fixed', bytes: REGISTERED_CONTROLLER_BYTES_VALUE },
-    fields: [
-      version(REGISTERED_CONTROLLER_VERSION_OFFSET),
-      field('Controller bump', REGISTERED_CONTROLLER_BUMP_OFFSET, 'u8'),
-      field('Seller registration bump', REGISTERED_SELLER_REGISTRATION_BUMP_OFFSET, 'u8'),
-      field('Buyer registration bump', REGISTERED_BUYER_REGISTRATION_BUMP_OFFSET, 'u8'),
-      field('Seller position bump', REGISTERED_SELLER_POSITION_BUMP_OFFSET, 'u8'),
-      field('Buyer position bump', REGISTERED_BUYER_POSITION_BUMP_OFFSET, 'u8'),
-      field('Reserved', REGISTERED_CONTROLLER_RESERVED_OFFSET, 'reserved'),
-      field('Fill', REGISTERED_CONTROLLER_FILL_OFFSET, 'u64'),
-      field('Execution price', REGISTERED_CONTROLLER_EXECUTION_PRICE_OFFSET, 'u64'),
-    ],
-    note: null,
-  },
-  {
-    magic: REGISTERED_CREATE_MAGIC_BYTES,
-    name: 'Registered create instruction',
-    family: 'Direct',
-    summary: 'Puts a signed order on chain to rest until something fills it.',
-    width: { kind: 'fixed', bytes: REGISTERED_CREATE_BYTES_VALUE },
-    fields: [
-      version(REGISTERED_CREATE_VERSION_OFFSET),
-      field('Controller bump', REGISTERED_CREATE_CONTROLLER_BUMP_OFFSET, 'u8'),
-      field('Replay bump', REGISTERED_CREATE_REPLAY_BUMP_OFFSET, 'u8'),
-      field('Registration bump', REGISTERED_CREATE_REGISTRATION_BUMP_OFFSET, 'u8'),
-      field('Reserved', REGISTERED_CREATE_RESERVED_OFFSET, 'reserved'),
-      field('Intent', REGISTERED_CREATE_INTENT_OFFSET, 'span', {
-        note: 'a signed order embedded in place',
-      }),
-    ],
-    note: null,
-  },
-  {
-    magic: REGISTERED_TERMINAL_MAGIC_BYTES,
-    name: 'Registered terminal instruction',
-    family: 'Direct',
-    summary: 'Cancels or expires a resting order, at the exact version it expects to find.',
-    width: { kind: 'fixed', bytes: REGISTERED_TERMINAL_BYTES_VALUE },
-    fields: [
-      version(REGISTERED_TERMINAL_VERSION_OFFSET),
-      field('Action', REGISTERED_TERMINAL_ACTION_OFFSET, 'enum', {
+      version(LIFECYCLE_VERSION_OFFSET),
+      field('Action', LIFECYCLE_ACTION_OFFSET, 'enum', {
         tags: [
-          { tag: REGISTERED_TERMINAL_CANCEL, name: 'Cancel' },
-          { tag: REGISTERED_TERMINAL_EXPIRE, name: 'Expire' },
+          { tag: LIFECYCLE_ACTION_ACTIVATE_RECEIPT_V2, name: 'Activate receipt' },
+          { tag: LIFECYCLE_ACTION_ACTIVATE_COORDINATE_V2, name: 'Activate coordinate' },
+          { tag: LIFECYCLE_ACTION_RETIRE_COORDINATE_V2, name: 'Retire coordinate' },
+          { tag: LIFECYCLE_ACTION_RETIRE_RECEIPT_V2, name: 'Retire receipt' },
         ],
       }),
-      field('Controller bump', REGISTERED_TERMINAL_CONTROLLER_BUMP_OFFSET, 'u8'),
-      field('Registration bump', REGISTERED_TERMINAL_REGISTRATION_BUMP_OFFSET, 'u8'),
-      field('Reserved', REGISTERED_TERMINAL_RESERVED_OFFSET, 'reserved'),
-      field('Expected sequence', REGISTERED_TERMINAL_EXPECTED_SEQUENCE_OFFSET, 'u64'),
-    ],
-    note: null,
-  },
-  {
-    magic: REGISTERED_RETIRE_MAGIC_BYTES,
-    name: 'Registered retire instruction',
-    family: 'Direct',
-    summary: 'Closes a finished order and returns the rent it held.',
-    width: { kind: 'fixed', bytes: REGISTERED_RETIRE_BYTES_VALUE },
-    fields: [
-      version(REGISTERED_RETIRE_VERSION_OFFSET),
-      field('Controller bump', REGISTERED_RETIRE_CONTROLLER_BUMP_OFFSET, 'u8'),
-      field('Registration bump', REGISTERED_RETIRE_REGISTRATION_BUMP_OFFSET, 'u8'),
-      field('Reserved', REGISTERED_RETIRE_RESERVED_OFFSET, 'reserved'),
+      field('Reserved', LIFECYCLE_HEADER_RESERVED_OFFSET, 'reserved'),
+      field('Release set', LIFECYCLE_RELEASE_SET_OFFSET, 'identity'),
+      field('Market', LIFECYCLE_MARKET_OFFSET, 'pubkey'),
+      field('Graph', LIFECYCLE_GRAPH_ID_OFFSET, 'identity'),
+      field('Descriptor', LIFECYCLE_DESCRIPTOR_ID_OFFSET, 'identity'),
+      field('Parent context', LIFECYCLE_PARENT_CONTEXT_OFFSET, 'identity'),
+      field('Representation authority', LIFECYCLE_REPRESENTATION_AUTHORITY_OFFSET, 'pubkey'),
+      field('Receipt mint', LIFECYCLE_RECEIPT_MINT_OFFSET, 'pubkey'),
+      field('Token program', LIFECYCLE_TOKEN_PROGRAM_OFFSET, 'pubkey'),
+      field('Rent credit', LIFECYCLE_RENT_CREDIT_OFFSET, 'pubkey'),
+      field('Rent program', LIFECYCLE_RENT_PROGRAM_OFFSET, 'pubkey'),
+      field('Generation', LIFECYCLE_GENERATION_OFFSET, 'u64'),
+      field('Expected market revision', LIFECYCLE_EXPECTED_MARKET_REVISION_OFFSET, 'u64'),
+      field('Observed receipt lamports', LIFECYCLE_OBSERVED_RECEIPT_LAMPORTS_OFFSET, 'u64'),
+      field('Receipt rent principal', LIFECYCLE_RECEIPT_RENT_PRINCIPAL_OFFSET, 'u64'),
+      field('Expected receipt supply', LIFECYCLE_EXPECTED_RECEIPT_SUPPLY_OFFSET, 'u64'),
+      field('Outcome count', LIFECYCLE_OUTCOME_COUNT_OFFSET, 'u32'),
+      field('Coordinate count', LIFECYCLE_COORDINATE_COUNT_OFFSET, 'u32'),
+      field('Rent credit before', LIFECYCLE_RENT_CREDIT_BEFORE_OFFSET, 'u64'),
+      field('Rent credit after', LIFECYCLE_RENT_CREDIT_AFTER_OFFSET, 'u64'),
     ],
     note: null,
   },

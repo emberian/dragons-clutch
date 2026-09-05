@@ -7,13 +7,13 @@ import {
 } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
-import { hex, sha256 } from './bytes';
+import { hex, sha256 } from '@dclutch/sdk/bytes';
 import {
   writeUnsignedClientOperationJournalV1,
   type ClientOperationJournalStorageV1,
   type ClientOperationJournalV1,
 } from './clientOperationJournal';
-import { SOURCE_PROVIDER_PLAN_FORMAT_V1 } from './generated/sourceProviderWasmV1';
+import { SOURCE_PROVIDER_PLAN_FORMAT_V1 } from '@dclutch/sdk/generated/sourceProviderWasmV1';
 import {
   restoreSourceProviderJournalV1,
   sourceProviderJournalInputV1,

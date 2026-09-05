@@ -14,7 +14,7 @@ import {
   PubkeyField,
 } from './OperatorFields';
 import { FieldRefusalV1 } from './fieldReadings';
-import type { DenominationV1 } from '@/lib/quantity';
+import type { DenominationV1 } from '@dclutch/sdk/quantity';
 
 const noop = () => undefined;
 function key(seed: number): string {

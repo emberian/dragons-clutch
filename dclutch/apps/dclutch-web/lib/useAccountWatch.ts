@@ -7,7 +7,7 @@ import {
   type AccountChangeV1,
   type SocketFactoryV1,
   type WatchStateV1,
-} from '@/lib/rpcSubscribe';
+} from '@dclutch/sdk/rpcSubscribe';
 
 /**
  * One watch per surface, torn down with it.

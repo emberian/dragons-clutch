@@ -123,6 +123,13 @@ import {
 } from './releaseRegistry';
 import { MAX_RPC_RESPONSE_BYTES, type RpcAccount, type SolanaRpcClient } from './rpc';
 import { ascii, hex, isZero, requireNonzero, requireZero, sha256, slice, u16, u64 } from './bytes';
+import {
+  PRODUCT_RUNTIME_DOMAIN_MAGIC_V2,
+  PRODUCT_RUNTIME_PORTFOLIO_MAGIC_V2,
+} from './generated/protocolConstantsV1';
+import {
+  PRODUCT_RECORD_MAGIC_V2,
+} from './generated/productRuntimeV2Admission';
 
 const PRODUCT_RECORD_BYTES = 112;
 const DOMAIN_HEADER_BYTES = 240;
@@ -608,7 +615,7 @@ export function validateCoreFoundCapabilityManifestV1(bytes: Uint8Array): void {
  * and refuses; it caught exactly that when the derivation was first written.
  */
 function validateProductRootHeaderV2(product: Uint8Array): void {
-  if (product.length !== PRODUCT_RECORD_BYTES || ascii(product, 0, 8) !== 'DCLTPRM2' || u16(product, 8) !== 2) throw new Error('Product Runtime V2 root has the wrong exact ABI');
+  if (product.length !== PRODUCT_RECORD_BYTES || ascii(product, 0, 8) !== PRODUCT_RECORD_MAGIC_V2 || u16(product, 8) !== 2) throw new Error('Product Runtime V2 root has the wrong exact ABI');
   requireZero(product, 10, 6, 'Product Runtime V2 root');
 }
 
@@ -641,7 +648,7 @@ export type ResultDomainV2 = Readonly<{
  * now instead of discarded.
  */
 export function decodeResultDomainV2(domain: Uint8Array): ResultDomainV2 {
-  if (domain.length < DOMAIN_HEADER_BYTES || ascii(domain, 0, 8) !== 'DCLTPRD2' || u16(domain, 8) !== 2 || u16(domain, 10) !== DOMAIN_HEADER_BYTES || u32(domain, 12) !== domain.length) throw new Error('Product result domain has the wrong exact ABI');
+  if (domain.length < DOMAIN_HEADER_BYTES || ascii(domain, 0, 8) !== PRODUCT_RUNTIME_DOMAIN_MAGIC_V2 || u16(domain, 8) !== 2 || u16(domain, 10) !== DOMAIN_HEADER_BYTES || u32(domain, 12) !== domain.length) throw new Error('Product result domain has the wrong exact ABI');
   requireZero(domain, 24, 8, 'Product result-domain header');
   requireZero(domain, 232, 8, 'Product result-domain tail');
   const regionCount = u32(domain, 16);
@@ -671,7 +678,7 @@ export function decodeCoreFoundProductGraphV2(product: Uint8Array, domain: Uint8
   if (!same(slice(domain, 32, 32), productId)) throw new Error('Product result-domain identity or denominator differs');
   const regions = partition.regionCount;
 
-  if (portfolio.length < PORTFOLIO_HEADER_BYTES || ascii(portfolio, 0, 8) !== 'DCLTPRF2' || u16(portfolio, 8) !== 2 || u16(portfolio, 10) !== PORTFOLIO_HEADER_BYTES || u32(portfolio, 12) !== portfolio.length) throw new Error('Product portfolio has the wrong exact ABI');
+  if (portfolio.length < PORTFOLIO_HEADER_BYTES || ascii(portfolio, 0, 8) !== PRODUCT_RUNTIME_PORTFOLIO_MAGIC_V2 || u16(portfolio, 8) !== 2 || u16(portfolio, 10) !== PORTFOLIO_HEADER_BYTES || u32(portfolio, 12) !== portfolio.length) throw new Error('Product portfolio has the wrong exact ABI');
   const coefficientCount = u32(portfolio, 16);
   if (coefficientCount === 0 || coefficientCount !== regions + 1 || portfolio.length !== PORTFOLIO_HEADER_BYTES + coefficientCount * 8 || portfolio[20] !== 1) throw new Error('Product portfolio width or rounding boundary is inconsistent');
   requireZero(portfolio, 21, 11, 'Product portfolio header');

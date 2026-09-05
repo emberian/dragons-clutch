@@ -15,9 +15,9 @@ import {
   TICKET_BOARD_HONESTY_LINE_V1,
   TICKET_BOARD_UNREACHABLE_MESSAGE_V1,
   type TicketBoardListingV1,
-} from '@/lib/ticketBoard';
-import { type DenominationV1 } from '@/lib/quantity';
-import { type SlotClockV1 } from '@/lib/slotClock';
+} from '@/lib/deploymentTicketBoard';
+import { type DenominationV1 } from '@dclutch/sdk/quantity';
+import { type SlotClockV1 } from '@dclutch/sdk/slotClock';
 import { type TicketState } from '@/lib/tradeFlowMachine';
 
 /**

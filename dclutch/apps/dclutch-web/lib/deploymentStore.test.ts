@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { DEVNET_DEPLOYMENT_V1, LOCAL_DEPLOYMENT_V1 } from './deployments';
+import { DEVNET_DEPLOYMENT_V1, LOCAL_DEPLOYMENT_V1 } from '@dclutch/sdk/deployments';
 import {
   activeDeploymentV1,
   chooseClusterV1,

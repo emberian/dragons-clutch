@@ -8,9 +8,9 @@ import {
   buildRationalRetireReceiptCandidateV4,
   compactRetireReceiptSummaryV4,
   inspectRationalRetireReceiptV4,
-} from '@/lib/rationalRetireReceiptV4';
-import { SolanaRpcClient } from '@/lib/rpc';
-import { requestWalletTransactionSignatureV1, submitSignedTransactionV1, type WalletSignedTransactionV1 } from '@/lib/walletHandoff';
+} from '@dclutch/sdk/rationalRetireReceiptV4';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
+import { requestWalletTransactionSignatureV1, submitSignedTransactionV1, type WalletSignedTransactionV1 } from '@dclutch/sdk/walletHandoff';
 
 import Anchor from './Anchor';
 import WalletDirectory, { useWalletDirectoryV1 } from './WalletDirectory';

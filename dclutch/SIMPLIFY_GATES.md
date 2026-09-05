@@ -106,7 +106,7 @@ journey root-targets programs suites witness. `workspaces` stays outside `all`.
 
 ## Findings at `main`, not port defects (each controlled against the old tool)
 
-- `emission`: `crates/dclutch-protocol-parameters-contract/src/generated.rs` is
+- `emission`: `crates/dclutch-market/src/protocol_parameters/generated.rs` is
   raw-compared and rustfmt reflows it; one `lane.sh fmt` from red. The debt file
   is empty; the owning lane repairs the guard or the emitter.
 - `fmt`: 7 files outside the baseline (claims-svm, economic-slice-kernel,

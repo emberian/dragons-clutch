@@ -7,7 +7,7 @@ import {
   writeUnsignedClientOperationJournalV1,
   type ClientOperationJournalStorageV1,
 } from './clientOperationJournal';
-import { SOURCE_READINESS_PLAN_FORMAT_V1 } from './generated/sourceReadinessWasmV1';
+import { SOURCE_READINESS_PLAN_FORMAT_V1 } from '@dclutch/sdk/generated/sourceReadinessWasmV1';
 import {
   restoreSourceReadinessJournalV1,
   sourceReadinessJournalInputV1,

@@ -7,7 +7,7 @@ import {
   LOCAL_DEPLOYMENT_V1,
   PROTOCOL_ROLES_V1,
   type ProtocolRoleV1,
-} from '@/lib/deployments';
+} from '@dclutch/sdk/deployments';
 import {
   chooseClusterV1,
   storeCustomDeploymentV1,

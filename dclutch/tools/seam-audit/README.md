@@ -132,7 +132,7 @@ every verdict tag in it. The gate refuses a tag with no written reason, so an
 exception cannot be accepted by editing JSON alone.
 
 The ratchet turns **both ways**, following
-`packages/dclutch-sdk/scripts/abi-coverage.mjs`:
+`tools/abi-coverage/abi-coverage.mjs`:
 
 - a finding not in the baseline fails as `NEW`;
 - a baseline entry that no longer reproduces fails as `GONE`, because a defect

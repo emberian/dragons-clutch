@@ -8,9 +8,9 @@ import {
   buildRationalOpenCandidateV4,
   inspectRationalOpenChainV4,
   rationalOpenChainSummaryV4,
-} from '@/lib/rationalOpenChainV4';
-import { type RationalOpenActionV3 } from '@/lib/rationalOpenHotV3';
-import { SolanaRpcClient } from '@/lib/rpc';
+} from '@dclutch/sdk/rationalOpenChainV4';
+import { type RationalOpenActionV3 } from '@dclutch/sdk/rationalOpenHotV3';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 
 import WalletDirectory, { useWalletDirectoryV1 } from './WalletDirectory';
 import { useDeploymentFieldV1 } from '@/lib/deploymentStore';

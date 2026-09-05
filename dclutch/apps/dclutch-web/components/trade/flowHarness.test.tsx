@@ -11,10 +11,10 @@ import TicketCard from './TicketCard';
 import SignStep from './steps/SignStep';
 import { assignRefusalV1 } from '@/lib/tradeFlowRefusals';
 import { marketGateV1, tradeFlowStepsV1, type MarketGateV1 } from '@/lib/tradeFlowSteps';
-import { type DenominationV1 } from '@/lib/quantity';
-import { type SignedDirectIntentV3 } from '@/lib/directInlineV3';
+import { type DenominationV1 } from '@dclutch/sdk/quantity';
+import { type SignedDirectIntentV3 } from '@dclutch/sdk/directInlineV3';
 import { type DirectCrossingPlanV1 } from '@dclutch/sdk/directTicket';
-import { type DirectParticipantCrossingAdmissionV1 } from '@/lib/directParticipant';
+import { type DirectParticipantCrossingAdmissionV1 } from '@dclutch/sdk/directParticipant';
 
 /**
  * A LAYOUT HARNESS, not a behaviour test.

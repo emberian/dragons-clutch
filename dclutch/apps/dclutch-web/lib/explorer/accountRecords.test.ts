@@ -18,10 +18,10 @@ import {
   STATISTIC_SPEC_ROUNDING_OFFSET_V1,
   STATISTIC_SPEC_SOURCE_SCALE_EXPONENT_OFFSET_V1,
   STATISTIC_SPEC_THRESHOLD_ATOMS_OFFSET_V1,
-} from '../generated/coreFound';
-import { REALM_BYTES_V1, REALM_MAGIC_V1 } from '../generated/realmPositionV1';
+} from '@dclutch/sdk/generated/coreFound';
+import { REALM_BYTES_V1, REALM_MAGIC_V1 } from '@dclutch/sdk/generated/realmPositionV1';
 import statisticFixture from '../../fixtures/cohort14-statistic-spec.devnet.json';
-import { deriveClaimsAggregateAddressV2, deriveMarketCoreAddressV2 } from '../marketCoreV2';
+import { deriveClaimsAggregateAddressV2, deriveMarketCoreAddressV2 } from '@dclutch/sdk/marketCoreV2';
 import {
   decodeAgainstSpec,
   leadingMagic,

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import DealerLiquidityWorkspace, { dealerRouteManifestScaffoldV3 } from './DealerLiquidityWorkspace';
 import { DIRECT_HOT_FIXED_ROLE_LABELS_V3 } from '@dclutch/sdk/directHotRouteManifest';
-import { HOT_FIXED_ACCOUNT_COUNT_V3, HOT_ROOT_ACCOUNT_V3 } from '@/lib/generated/directInlineV3';
+import { HOT_FIXED_ACCOUNT_COUNT_V3, HOT_ROOT_ACCOUNT_V3 } from '@dclutch/sdk/generated/directInlineV3';
 
 describe('Dealer V3 liquidity workbench', () => {
   it('exposes only executable chain-derived equity routes and the explicit wallet boundary', () => {

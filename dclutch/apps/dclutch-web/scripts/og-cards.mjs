@@ -45,7 +45,7 @@ import { readFileSync } from 'node:fs';
 export const OG_CARD_FACTS_SCHEMA_V1 = 'dclutch-og-card-facts-v1';
 
 const APP = new URL('../', import.meta.url);
-const REGISTRY_URL = new URL('fixtures/market-registry.devnet.json', APP);
+const REGISTRY_URL = new URL('../../packages/dclutch-sdk/fixtures/market-registry.devnet.json', APP);
 const FACTS_URL = new URL('fixtures/og-card-facts.devnet.json', APP);
 
 /**

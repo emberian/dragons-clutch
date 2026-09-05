@@ -1,7 +1,7 @@
 import { PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
-import { requestWalletTransactionSignatureV1 } from './walletHandoff';
+import { requestWalletTransactionSignatureV1 } from '@dclutch/sdk/walletHandoff';
 import {
   browserWalletRegistryV1,
   connectWalletIdentityV1,

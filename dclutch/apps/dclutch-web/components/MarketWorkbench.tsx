@@ -9,7 +9,7 @@ import {
   acquireOperatorSurfaceV1,
   type OperatorCoordinatesV1,
   type OperatorSurfaceSnapshotV1,
-} from '@/lib/operatorSurface';
+} from '@dclutch/sdk/operatorSurface';
 import {
   capabilityActContractV1,
   capabilityPhaseGateTextV1,
@@ -17,16 +17,16 @@ import {
   machineTextV1,
   selectedTextV1,
   type CapabilityStage,
-} from '@/lib/capabilityModel';
+} from '@dclutch/sdk/capabilityModel';
 import {
   acquireMachineObservationsV1,
   type MachineObservationV1,
 } from '@dclutch/sdk/stateMachines';
-import { decodeMarketCoreStateV2 } from '@/lib/marketCoreV2';
+import { decodeMarketCoreStateV2 } from '@dclutch/sdk/marketCoreV2';
 import { browserCapabilityStandingsForStageV1, capabilityWorkspaceV1 } from '@/lib/capabilitySurface';
 import ConsoleHeader from '@/components/ConsoleHeader';
 import { smokeStoryEnabledV1 } from '@/lib/flags';
-import { SolanaRpcClient } from '@/lib/rpc';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 import { useDeploymentFieldV1, useDeploymentV1 } from '@/lib/deploymentStore';
 import {
   DerivedProvenance,

@@ -1780,7 +1780,7 @@
           "frames_bytes": [
             0
           ],
-          "symbol": "_ZN125_$LT$dclutch_market_core_codec..retirement_checkpoint_v1..AggregateRetirementCheckpointV1$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
+          "symbol": "_ZN125_$LT$dclutch_market..retirement_checkpoint_v1..AggregateRetirementCheckpointV1$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -3305,13 +3305,13 @@
           "frames_bytes": [
             0
           ],
-          "symbol": "_ZN90_$LT$dclutch_resolution_codec..ResolutionRoleRequestV2$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
+          "symbol": "_ZN90_$LT$dclutch_source..ResolutionRoleRequestV2$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
         },
         {
           "frames_bytes": [
             0
           ],
-          "symbol": "_ZN91_$LT$dclutch_market_core_codec..generated..StateBumpsV1$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
+          "symbol": "_ZN91_$LT$dclutch_market..generated..StateBumpsV1$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -4216,25 +4216,25 @@
           "frames_bytes": [
             64
           ],
-          "symbol": "_ZN110_$LT$dclutch_registry_sbf..record_v1..SbfRecordAdapter$u20$as$u20$dclutch_record_contract..RecordAdapterV1$GT$19validate_raw_record17h<hash>E"
+          "symbol": "_ZN110_$LT$dclutch_registry_sbf..record_v1..SbfRecordAdapter$u20$as$u20$dclutch_registry..RecordAdapterV1$GT$19validate_raw_record17h<hash>E"
         },
         {
           "frames_bytes": [
             0
           ],
-          "symbol": "_ZN110_$LT$dclutch_registry_sbf..record_v1..SbfRecordAdapter$u20$as$u20$dclutch_record_contract..RecordAdapterV1$GT$22validate_page_envelope17h<hash>E"
+          "symbol": "_ZN110_$LT$dclutch_registry_sbf..record_v1..SbfRecordAdapter$u20$as$u20$dclutch_registry..RecordAdapterV1$GT$22validate_page_envelope17h<hash>E"
         },
         {
           "frames_bytes": [
             192
           ],
-          "symbol": "_ZN110_$LT$dclutch_registry_sbf..record_v1..SbfRecordAdapter$u20$as$u20$dclutch_record_contract..RecordAdapterV1$GT$28validate_canonical_addresses17h<hash>E"
+          "symbol": "_ZN110_$LT$dclutch_registry_sbf..record_v1..SbfRecordAdapter$u20$as$u20$dclutch_registry..RecordAdapterV1$GT$28validate_canonical_addresses17h<hash>E"
         },
         {
           "frames_bytes": [
             0
           ],
-          "symbol": "_ZN110_$LT$dclutch_registry_sbf..record_v1..SbfRecordAdapter$u20$as$u20$dclutch_record_contract..RecordAdapterV1$GT$32validate_staging_liveness_policy17h<hash>E"
+          "symbol": "_ZN110_$LT$dclutch_registry_sbf..record_v1..SbfRecordAdapter$u20$as$u20$dclutch_registry..RecordAdapterV1$GT$32validate_staging_liveness_policy17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -4517,7 +4517,7 @@
           "frames_bytes": [
             0
           ],
-          "symbol": "_ZN81_$LT$dclutch_record_contract..StagingCursorV1$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
+          "symbol": "_ZN81_$LT$dclutch_registry..StagingCursorV1$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -4535,7 +4535,7 @@
           "frames_bytes": [
             0
           ],
-          "symbol": "_ZN92_$LT$dclutch_release_set_contract..ExecutionReleaseSetV1$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
+          "symbol": "_ZN92_$LT$dclutch_registry..ExecutionReleaseSetV1$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -5750,7 +5750,7 @@
           "frames_bytes": [
             0
           ],
-          "symbol": "_ZN90_$LT$dclutch_resolution_codec..ResolutionRoleRequestV2$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
+          "symbol": "_ZN90_$LT$dclutch_source..ResolutionRoleRequestV2$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -5798,13 +5798,13 @@
           "frames_bytes": [
             0
           ],
-          "symbol": "_ZN101_$LT$dclutch_capability_program_contract..v4..CapabilityProgramV4$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
+          "symbol": "_ZN101_$LT$dclutch_market..v4..CapabilityProgramV4$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
         },
         {
           "frames_bytes": [
             0
           ],
-          "symbol": "_ZN101_$LT$dclutch_release_set_contract..CapabilityExecutionSelectionV1$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
+          "symbol": "_ZN101_$LT$dclutch_registry..CapabilityExecutionSelectionV1$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -5816,19 +5816,19 @@
           "frames_bytes": [
             0
           ],
-          "symbol": "_ZN103_$LT$dclutch_capability_program_contract..hot_v3..HotExecutionAckV3$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
+          "symbol": "_ZN103_$LT$dclutch_market..hot_v3..HotExecutionAckV3$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
         },
         {
           "frames_bytes": [
             0
           ],
-          "symbol": "_ZN103_$LT$dclutch_capability_program_contract..v4..CapabilityArtifactsV4$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
+          "symbol": "_ZN103_$LT$dclutch_market..v4..CapabilityArtifactsV4$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
         },
         {
           "frames_bytes": [
             0
           ],
-          "symbol": "_ZN103_$LT$dclutch_custody_contract..projected..ProjectedCustodyRequestV1$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
+          "symbol": "_ZN103_$LT$dclutch_custody..projected..ProjectedCustodyRequestV1$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -5841,19 +5841,19 @@
           "frames_bytes": [
             0
           ],
-          "symbol": "_ZN113_$LT$dclutch_dealer_codec..scenario_checkpoint_v1..DealerScenarioCheckpointV1$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
+          "symbol": "_ZN113_$LT$dclutch_trading..scenario_checkpoint_v1..DealerScenarioCheckpointV1$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
         },
         {
           "frames_bytes": [
             0
           ],
-          "symbol": "_ZN113_$LT$dclutch_dealer_codec..scenario_checkpoint_v1..DealerScenarioEvaluationV1$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
+          "symbol": "_ZN113_$LT$dclutch_trading..scenario_checkpoint_v1..DealerScenarioEvaluationV1$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
         },
         {
           "frames_bytes": [
             0
           ],
-          "symbol": "_ZN115_$LT$dclutch_resolution_codec..pre_market_funding_v1..PreMarketFundingReceiptV2$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
+          "symbol": "_ZN115_$LT$dclutch_source..pre_market_funding_v1..PreMarketFundingReceiptV2$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -5865,13 +5865,13 @@
           "frames_bytes": [
             0
           ],
-          "symbol": "_ZN127_$LT$dclutch_capability_contract..controller_funding_checkpoint..ControllerFundingCleanupV1$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
+          "symbol": "_ZN127_$LT$dclutch_market..controller_funding_checkpoint..ControllerFundingCleanupV1$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
         },
         {
           "frames_bytes": [
             0
           ],
-          "symbol": "_ZN130_$LT$dclutch_capability_contract..controller_funding_checkpoint..ControllerFundingCheckpointV1$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
+          "symbol": "_ZN130_$LT$dclutch_market..controller_funding_checkpoint..ControllerFundingCheckpointV1$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -5883,7 +5883,7 @@
           "frames_bytes": [
             0
           ],
-          "symbol": "_ZN135_$LT$dclutch_capability_contract..controller_funding_checkpoint..ControllerFundingCheckpointInputV1$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
+          "symbol": "_ZN135_$LT$dclutch_market..controller_funding_checkpoint..ControllerFundingCheckpointInputV1$u20$as$u20$core..cmp..PartialEq$GT$2eq17h<hash>E"
         },
         {
           "frames_bytes": [

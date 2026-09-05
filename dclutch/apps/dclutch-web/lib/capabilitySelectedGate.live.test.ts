@@ -2,16 +2,16 @@ import { describe, expect, it } from 'vitest';
 
 import { ROUTE_SELECTED_GATES_V1 } from '@dclutch/sdk/generated/marketPhaseAdmissionV1';
 import { decodeDirectRootStateV1, machineObservationV1 } from '@dclutch/sdk/stateMachines';
-import { CAPABILITY_ROOT_HEADER_BYTES_V1 } from './generated/directInlineV3';
+import { CAPABILITY_ROOT_HEADER_BYTES_V1 } from '@dclutch/sdk/generated/directInlineV3';
 import {
   HOT_FAMILY_CLASSIFIERS_V1,
   evaluateCapabilityV1,
   selectedTextV1,
   type CapabilityMarketSnapshotV1,
-} from './capabilityModel';
+} from '@dclutch/sdk/capabilityModel';
 import { BROWSER_CAPABILITY_STANDINGS_V1 } from './capabilitySurface';
-import { decodeMarketCoreStateV2 } from './marketCoreV2';
-import { SolanaRpcClient } from './rpc';
+import { decodeMarketCoreStateV2 } from '@dclutch/sdk/marketCoreV2';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 
 /**
  * The first verdict this browser derives from a machine that is not the Market.

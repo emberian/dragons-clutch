@@ -1,7 +1,7 @@
 import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
-import { SOURCE_CLOSE_PLAN_FORMAT_V1 } from './generated/sourceReadinessWasmV1';
+import { SOURCE_CLOSE_PLAN_FORMAT_V1 } from '@dclutch/sdk/generated/sourceReadinessWasmV1';
 import { buildSourceCloseFundTransactionV1, parseSourceCloseFundPlanV1 } from './sourceCloseFundV1';
 
 const address = (byte: number) => new PublicKey(new Uint8Array(32).fill(byte)).toBase58();

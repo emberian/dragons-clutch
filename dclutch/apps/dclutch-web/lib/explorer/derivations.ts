@@ -22,7 +22,7 @@
  */
 import { PublicKey } from '@solana/web3.js';
 
-import { sha256 } from '../bytes';
+import { sha256 } from '@dclutch/sdk/bytes';
 import {
   ARTIFACT_RELEASE_SCHEMA_ID_V1,
   CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
@@ -35,7 +35,7 @@ import {
   REALM_SCHEMA_RELEASE_ID_V1,
   RESULT_DOMAIN_SCHEMA_ID_V2,
   SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
-} from '../generated/coreFound';
+} from '@dclutch/sdk/generated/coreFound';
 import {
   CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V1,
   CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
@@ -52,13 +52,13 @@ import {
   REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID,
   SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
   TRANSITION_SCHEMA_RELEASE_ID,
-} from '../generated/directInlineV3';
+} from '@dclutch/sdk/generated/directInlineV3';
 import {
   PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
   PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2,
-} from '../generated/protocolInfrastructure';
-import { REALM_PDA_DOMAIN_V1 } from '../generated/realmPositionV1';
-import { deriveFinalizedRecordAddressesV1 } from '../releaseRegistry';
+} from '@dclutch/sdk/generated/protocolInfrastructure';
+import { REALM_PDA_DOMAIN_V1 } from '@dclutch/sdk/generated/realmPositionV1';
+import { deriveFinalizedRecordAddressesV1 } from '@dclutch/sdk/releaseRegistry';
 import { magicText, type DecodedRecord } from './accountRecords';
 
 /** One derivation the explorer checked against the address in hand. */

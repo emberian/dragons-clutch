@@ -1,13 +1,13 @@
-import { type SignedDirectIntentV3 } from '@/lib/directInlineV3';
+import { type SignedDirectIntentV3 } from '@dclutch/sdk/directInlineV3';
 import {
   denominationUnitV1,
   exactTwinV1,
   formatClaimPriceV1,
   formatQuantityV1,
   type DenominationV1,
-} from '@/lib/quantity';
-import { shortAddressV1 } from '@/lib/marketDiscovery';
-import { deadlineMomentPhraseV1, type SlotClockV1 } from '@/lib/slotClock';
+} from '@dclutch/sdk/quantity';
+import { shortAddressV1 } from '@dclutch/sdk/marketDiscovery';
+import { deadlineMomentPhraseV1, type SlotClockV1 } from '@dclutch/sdk/slotClock';
 
 /**
  * A ticket, as the thing it is rather than the thing it arrived in.

@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 
-import { formatBasisPointsV1, issuedSupplySharesV1 } from '@/lib/supplyShares';
+import { formatBasisPointsV1, issuedSupplySharesV1 } from '@dclutch/sdk/supplyShares';
 
 import { FIGURE_LABEL_PX, useFigureScale } from './useFigureScale';
 

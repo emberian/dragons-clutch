@@ -2,9 +2,9 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-import { GRADED_BASIS_RECORD_SCHEMA_ID_V3 } from './generated/coreFound';
-import { deriveFinalizedRecordAddressesV1 } from './releaseRegistry';
-import { SolanaRpcClient } from './rpc';
+import { GRADED_BASIS_RECORD_SCHEMA_ID_V3 } from '@dclutch/sdk/generated/coreFound';
+import { deriveFinalizedRecordAddressesV1 } from '@dclutch/sdk/releaseRegistry';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 import { loadUserPositionAdmissionWasmV1 } from './userPositionAdmissionV1';
 
 const live = process.env.DCLUTCH_LIVE_DEVNET === '1' ? it : it.skip;

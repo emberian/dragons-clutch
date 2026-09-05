@@ -6,9 +6,9 @@ import {
   inspectRationalTerminalReadinessV4,
   rationalTerminalReadinessSummaryV4,
   type RationalTerminalReadinessV4,
-} from '@/lib/rationalTerminalChainV4';
-import { SolanaRpcClient } from '@/lib/rpc';
-import { HOT_FIXED_ACCOUNT_COUNT_V3 } from '@/lib/generated/directInlineV3';
+} from '@dclutch/sdk/rationalTerminalChainV4';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
+import { HOT_FIXED_ACCOUNT_COUNT_V3 } from '@dclutch/sdk/generated/directInlineV3';
 
 import WalletDirectory, { useWalletDirectoryV1 } from './WalletDirectory';
 import { useDeploymentFieldV1 } from '@/lib/deploymentStore';

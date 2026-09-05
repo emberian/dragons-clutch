@@ -3,7 +3,7 @@
 import {
   MARKET_SORT_CHOICES_V1,
   type MarketSortOrderV1,
-} from '@/lib/marketFiltering';
+} from '@dclutch/sdk/marketFiltering';
 
 /**
  * The one control this page has ever grown, and the rule that let it.

@@ -14,7 +14,7 @@ import {
   type EvidenceReadingV1,
   type FieldReadingV1,
 } from './fieldReadings';
-import type { DenominationV1 } from '@/lib/quantity';
+import type { DenominationV1 } from '@dclutch/sdk/quantity';
 
 function key(seed: number): string {
   return new PublicKey(new Uint8Array(32).fill(seed)).toBase58();

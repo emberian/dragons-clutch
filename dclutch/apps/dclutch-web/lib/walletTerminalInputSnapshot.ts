@@ -1,6 +1,6 @@
 import { WALLET_TERMINAL_INPUT_REQUEST_FORMAT_V1, WALLET_TERMINAL_INPUT_SNAPSHOT_FORMAT_V1 } from './generated/walletTerminalInputWasmV1';
 import { observedSnapshotJsonV1 } from './observedSnapshotV1';
-import { type SolanaRpcClient } from './rpc';
+import { type SolanaRpcClient } from '@dclutch/sdk/rpc';
 import {
   parseWalletTerminalInputAddressesV1,
   requireWalletTerminalInputRoundNamesMarketV1,

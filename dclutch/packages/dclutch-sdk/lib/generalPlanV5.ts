@@ -10,6 +10,9 @@ import {
   type UnsignedTransactionChainReportV1,
   type UnsignedTransactionInspectionV1,
 } from './walletHandoff';
+import {
+  GENERAL_SUCCESSOR_PLAN_FORMAT_V5,
+} from './generated/protocolConstantsV1';
 
 const MAX_U64 = 18_446_744_073_709_551_615n;
 const ACTIONS = [
@@ -57,7 +60,7 @@ export type GeneralLifecycleStateV5 = Readonly<{
 }>;
 
 export type GeneralSuccessorPlanDocumentV5 = Readonly<{
-  format: 'dclutch/general-successor-plan/v5';
+  format: typeof GENERAL_SUCCESSOR_PLAN_FORMAT_V5;
   action: GeneralSuccessorActionV5;
   transactionBase64: string;
   observedSlot: bigint;
@@ -453,7 +456,7 @@ export function decodeGeneralSuccessorPlanDocumentV5(input: string): GeneralSucc
   try { raw = JSON.parse(input); } catch { throw new Error('General operator plan is not JSON'); }
   const value = object(raw, 'General operator plan');
   exactKeys(value, ['format', 'action', 'transactionBase64', 'observedSlot', 'outcomeCount', 'admittedInvocationCount', 'heapFrameBytes', 'tradingProgram', 'lookupTable', 'payer', 'requiredSigners', 'market', 'root', 'generation', 'releaseSet', 'rootPrestateDigest', 'familyRequestDigest', 'checkedManifestDigest', 'tradingArtifactRelease', 'generalArtifactRelease', 'productRecord', 'artifacts', 'lifecycle', 'childRoutes'], 'General operator plan');
-  if (value.format !== 'dclutch/general-successor-plan/v5') throw new Error('General operator plan format is not V5');
+  if (value.format !== GENERAL_SUCCESSOR_PLAN_FORMAT_V5) throw new Error('General operator plan format is not V5');
   const selectedAction = action(value.action);
   const outcomeCount = integer(value.outcomeCount, 'outcomeCount');
   const admittedInvocationCount = integer(value.admittedInvocationCount, 'admittedInvocationCount');
@@ -1089,7 +1092,7 @@ export function decodeGeneralHotReceiptV3(base64: string, inspection: GeneralPla
 
 export function generalPlanTemplateV5(): string {
   return JSON.stringify({
-    format: 'dclutch/general-successor-plan/v5', action: 'consider', transactionBase64: '', observedSlot: '0', outcomeCount: 1, admittedInvocationCount: 1, heapFrameBytes: Abi.GENERAL_HOT_HEAP_FRAME_BYTES_V3,
+    format: GENERAL_SUCCESSOR_PLAN_FORMAT_V5, action: 'consider', transactionBase64: '', observedSlot: '0', outcomeCount: 1, admittedInvocationCount: 1, heapFrameBytes: Abi.GENERAL_HOT_HEAP_FRAME_BYTES_V3,
     tradingProgram: '', lookupTable: '', payer: '', requiredSigners: [], market: '', root: '', generation: '0', releaseSet: '', rootPrestateDigest: '',
     familyRequestDigest: '', checkedManifestDigest: '', tradingArtifactRelease: '', generalArtifactRelease: '', productRecord: '',
     artifacts: Object.fromEntries(ARTIFACT_KEYS.map((key) => [key, ''])),

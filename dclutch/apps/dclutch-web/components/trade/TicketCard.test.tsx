@@ -2,8 +2,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
 import TicketCard, { ticketGrossAtomsV1 } from './TicketCard';
-import { type SignedDirectIntentV3 } from '@/lib/directInlineV3';
-import { type DenominationV1 } from '@/lib/quantity';
+import { type SignedDirectIntentV3 } from '@dclutch/sdk/directInlineV3';
+import { type DenominationV1 } from '@dclutch/sdk/quantity';
 
 const MAKER_V1 = '8bcRzB3v6PxbbtkVCiX9ceW2whwakA6gX7qvSYbeMHLq';
 const MARKET_V1 = '5F8wMRFMdYGMkjWQUye6WfbgRVWEo9yyKo9aFPk2TLaD';

@@ -1,7 +1,7 @@
 import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
-import { SOURCE_TERMINAL_PLAN_FORMAT_V1 } from './generated/sourceReadinessWasmV1';
+import { SOURCE_TERMINAL_PLAN_FORMAT_V1 } from '@dclutch/sdk/generated/sourceReadinessWasmV1';
 import { buildSourceTerminalTransactionV1, parseSourceTerminalPlanV1 } from './sourceTerminalV1';
 
 const address = (byte: number) => new PublicKey(new Uint8Array(32).fill(byte)).toBase58();

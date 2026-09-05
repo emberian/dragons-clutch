@@ -7,7 +7,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 ACTIVITY_PATH = Path(__file__).with_name("activity.py")
-OUT = ROOT / "apps/dclutch-web/fixtures/public-cut.devnet.json"
+OUT = ROOT / "packages/dclutch-sdk/fixtures/public-cut.devnet.json"
 
 spec = importlib.util.spec_from_file_location("public_cut_activity", ACTIVITY_PATH)
 assert spec and spec.loader

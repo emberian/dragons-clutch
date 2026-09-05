@@ -3,7 +3,7 @@ import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
 
 import { SMOKE_MARKETS_V1, smokeIsLiveV1 } from '@/lib/smokeMarkets';
-import { marketDetailHrefV1 } from '@/lib/marketHref';
+import { marketDetailHrefV1 } from '@dclutch/sdk/marketHref';
 
 /**
  * The three-markets story, written for the reader.

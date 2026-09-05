@@ -4,13 +4,13 @@ import {
   capabilityActPhaseGatesV1,
   evaluateCapabilityV1,
   type CapabilityMarketSnapshotV1,
-} from './capabilityModel';
+} from '@dclutch/sdk/capabilityModel';
 import { routeOtherMachineGateV1, routePhaseGateV1 } from '@dclutch/sdk/generated/marketPhaseAdmissionV1';
 import { BROWSER_CAPABILITY_STANDINGS_V1 } from './capabilitySurface';
-import { decodeMarketCoreStateV2 } from './marketCoreV2';
-import { DEVNET_DEPLOYMENT_V1 } from './deployments';
-import { PUBLIC_DEVNET_CUT_V1 } from './publicCutStaging';
-import { SolanaRpcClient } from './rpc';
+import { decodeMarketCoreStateV2 } from '@dclutch/sdk/marketCoreV2';
+import { DEVNET_DEPLOYMENT_V1 } from '@dclutch/sdk/deployments';
+import { PUBLIC_DEVNET_CUT_V1 } from '@dclutch/sdk/publicCutStaging';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 
 /**
  * The settled Market, which resolved and paid and is now retiring.

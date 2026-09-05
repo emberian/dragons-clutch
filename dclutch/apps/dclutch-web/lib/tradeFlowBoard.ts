@@ -1,4 +1,4 @@
-import { type BoardOfferV1, type TicketBoardListingV1 } from '@/lib/ticketBoard';
+import { type BoardOfferV1, type TicketBoardListingV1 } from '@/lib/deploymentTicketBoard';
 
 /**
  * The screen the board must pass before it renders.

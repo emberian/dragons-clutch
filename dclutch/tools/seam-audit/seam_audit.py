@@ -44,7 +44,7 @@ The six classes, each with the 2026-08-29 finding that is its negative control:
                 or a readonly pin on a coordinate a partner instruction must
                 write.  Control: SEAM_AUDIT #13b.
 
-Gate semantics, following ``packages/dclutch-sdk/scripts/abi-coverage.mjs``:
+Gate semantics, following ``tools/abi-coverage/abi-coverage.mjs``:
 the baseline is an exact set and the ratchet turns **both** ways.  A finding
 absent from the baseline fails the gate as new; a baseline entry that no longer
 reproduces also fails, because a defect that was fixed must leave the register

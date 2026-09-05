@@ -11,9 +11,12 @@ import {
 import { type MarketCorePhaseV2 } from './marketCoreV2';
 import { type RequiredBackingBasisV2 } from './marketDiscovery';
 import { type SolanaRpcClient } from './rpc';
+import {
+  PROTOCOL_POSITION_CLAIMS_CAPABILITY_SEED_V2,
+} from './generated/protocolConstantsV1';
 
 /** Claims `ClaimsCapability` Position-owner seed domain (`protocol_position_v2.rs`). */
-const CLAIMS_CAPABILITY_OWNER_SEED_V2 = new TextEncoder().encode('dclutch:rational-claims:v2');
+const CLAIMS_CAPABILITY_OWNER_SEED_V2 = PROTOCOL_POSITION_CLAIMS_CAPABILITY_SEED_V2;
 
 /**
  * One Market's detail projection.

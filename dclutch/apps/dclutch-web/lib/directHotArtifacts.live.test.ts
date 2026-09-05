@@ -2,20 +2,20 @@ import { appendFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-import { hex, sha256 } from './bytes';
-import { decodeCapabilityManifestV1 } from './capabilityManifest';
-import { DEVNET_DEPLOYMENT_V1 } from './deployments';
+import { hex, sha256 } from '@dclutch/sdk/bytes';
+import { decodeCapabilityManifestV1 } from '@dclutch/sdk/capabilityManifest';
+import { DEVNET_DEPLOYMENT_V1 } from '@dclutch/sdk/deployments';
 import {
   decodeDirectDescriptorV4,
   decodeDirectProgramSetV2,
   validateDirectSignedRequestProfileV2,
-} from './directHotChain';
-import { CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1 } from './generated/coreFound';
-import * as DirectAbi from './generated/directInlineV3';
-import { decodeMarketCoreStateV2 } from './marketCoreV2';
-import { deriveFinalizedRecordAddressesV1 } from './releaseRegistry';
-import { PUBLIC_DEVNET_CUT_V1 } from './publicCutStaging';
-import { SolanaRpcClient } from './rpc';
+} from '@dclutch/sdk/directHotChain';
+import { CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1 } from '@dclutch/sdk/generated/coreFound';
+import * as DirectAbi from '@dclutch/sdk/generated/directInlineV3';
+import { decodeMarketCoreStateV2 } from '@dclutch/sdk/marketCoreV2';
+import { deriveFinalizedRecordAddressesV1 } from '@dclutch/sdk/releaseRegistry';
+import { PUBLIC_DEVNET_CUT_V1 } from '@dclutch/sdk/publicCutStaging';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 
 const report = (line: string) => {
   const out = process.env.DCLUTCH_LIVE_REPORT;

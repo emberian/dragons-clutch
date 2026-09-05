@@ -21,7 +21,7 @@ import {
   evaluateCapabilityV1,
   machineTextV1,
   type CapabilityMarketSnapshotV1,
-} from './capabilityModel';
+} from '@dclutch/sdk/capabilityModel';
 import { BROWSER_CAPABILITY_STANDINGS_V1 } from './capabilitySurface';
 
 /**

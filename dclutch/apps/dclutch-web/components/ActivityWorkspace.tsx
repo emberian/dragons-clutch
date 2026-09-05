@@ -12,11 +12,11 @@ import {
   inspectActivityV1,
   type ActivityEntryV1,
   type ActivityV1,
-} from '@/lib/activity';
-import { PUBLIC_DEVNET_CUT_V1 } from '@/lib/publicCutStaging';
-import { parseMarketAddressListV1, shortAddressV1 } from '@/lib/marketDiscovery';
-import { parsePortfolioOwnerV1 } from '@/lib/portfolio';
-import { SolanaRpcClient, type ConnectionFacts } from '@/lib/rpc';
+} from '@dclutch/sdk/activity';
+import { PUBLIC_DEVNET_CUT_V1 } from '@dclutch/sdk/publicCutStaging';
+import { parseMarketAddressListV1, shortAddressV1 } from '@dclutch/sdk/marketDiscovery';
+import { parsePortfolioOwnerV1 } from '@dclutch/sdk/portfolio';
+import { SolanaRpcClient, type ConnectionFacts } from '@dclutch/sdk/rpc';
 import { useDeploymentFieldV1 } from '@/lib/deploymentStore';
 import { clusterNameV1 } from '@/lib/rpcDefault';
 

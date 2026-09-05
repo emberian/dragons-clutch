@@ -7,7 +7,7 @@ import {
   writeUnsignedClientOperationJournalV1,
   type ClientOperationJournalStorageV1,
 } from './clientOperationJournal';
-import { SOURCE_TERMINAL_PLAN_FORMAT_V1 } from './generated/sourceReadinessWasmV1';
+import { SOURCE_TERMINAL_PLAN_FORMAT_V1 } from '@dclutch/sdk/generated/sourceReadinessWasmV1';
 import { restoreSourceTerminalJournalV1, sourceTerminalJournalInputV1 } from './sourceTerminalOperationV1';
 import { buildSourceTerminalTransactionV1, type SourceTerminalAcquisitionV1, type SourceTerminalPlanV1, type SourceTerminalTransactionV1 } from './sourceTerminalV1';
 

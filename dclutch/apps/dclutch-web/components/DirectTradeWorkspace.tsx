@@ -10,15 +10,15 @@ import {
   type DirectHotRouteInspectionV3,
   type DirectHotRouteManifestV3,
   inspectDirectHotRouteV3,
-} from '@/lib/directHotChain';
+} from '@dclutch/sdk/directHotChain';
 import {
   type CompactIntentV2Input,
   previewDirectInlineV3,
-} from '@/lib/directInlineV3';
-import { CHECKED_INFRASTRUCTURE_BYTES_V1 } from '@/lib/infrastructure';
-import { SolanaRpcClient } from '@/lib/rpc';
+} from '@dclutch/sdk/directInlineV3';
+import { CHECKED_INFRASTRUCTURE_BYTES_V1 } from '@dclutch/sdk/infrastructure';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 import { DIRECT_HOT_FIXED_ROLE_LABELS_V3 } from '@dclutch/sdk/directHotRouteManifest';
-import { HOT_ROOT_ACCOUNT_V3 } from '@/lib/generated/directInlineV3';
+import { HOT_ROOT_ACCOUNT_V3 } from '@dclutch/sdk/generated/directInlineV3';
 
 import { useDeploymentFieldV1 } from '@/lib/deploymentStore';
 

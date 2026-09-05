@@ -2,8 +2,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
 import PreviewReceipt from './PreviewReceipt';
-import { type DirectParticipantCrossingAdmissionV1 } from '@/lib/directParticipant';
-import { type DenominationV1 } from '@/lib/quantity';
+import { type DirectParticipantCrossingAdmissionV1 } from '@dclutch/sdk/directParticipant';
+import { type DenominationV1 } from '@dclutch/sdk/quantity';
 import { type DirectCrossingPlanV1 } from '@dclutch/sdk/directTicket';
 
 const SIX_DECIMALS_V1: DenominationV1 = Object.freeze({ decimals: 6, unit: 'USDC', mint: 'mint' });

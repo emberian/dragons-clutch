@@ -7,7 +7,7 @@ import {
   parseCustomDeploymentV1,
   type ClusterIdV1,
   type DeploymentV1,
-} from './deployments';
+} from '@dclutch/sdk/deployments';
 
 /**
  * The ACTIVE deployment — one browser-wide selection, read everywhere.

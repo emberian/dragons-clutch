@@ -29,7 +29,11 @@ const MAX_LOG_MESSAGE_BYTES = 512;
 const MAX_PROGRAM_ACCOUNTS = 256;
 const MAX_REACQUIRED_ACCOUNTS = 128;
 const MAX_MULTIPLE_ACCOUNTS = 32;
+const MAX_INNER_INSTRUCTION_SETS = 64;
+const MAX_INNER_INSTRUCTIONS = 64;
 const RPC_TIMEOUT_MS = 15_000;
+/** The largest packet a Solana node accepts. */
+const SOLANA_PACKET_BYTES = 1_232;
 
 /** Solana devnet's chain identity, not an endpoint-name heuristic. */
 export const SOLANA_DEVNET_GENESIS_HASH_V1 = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
@@ -101,17 +105,40 @@ export type SignatureStatusObservation = Readonly<{
   errorText: string | null;
 }>;
 
+/** One instruction a program invoked from inside another, as the chain reports it. */
+export type InnerInstructionObservation = Readonly<{
+  /** Index of the outer instruction this ran under. */
+  outerIndex: number;
+  programIdIndex: number;
+  /** Account indexes into the transaction's expanded address list. */
+  accounts: ReadonlyArray<number>;
+  /** Base58 instruction data, exactly as `getTransaction` returns it. */
+  data: string;
+  /** Invocation depth, when the node reports one. */
+  stackHeight: number | null;
+}>;
+
 export type TransactionMetaObservation = Readonly<{
   signature: string;
   slot: string;
   blockTime: string | null;
   succeeded: boolean;
   errorText: string | null;
+  /**
+   * The structured `meta.err`, unmodified.
+   *
+   * `errorText` is a truncated JSON rendering for display; this is the value a
+   * reader has to walk to find the `Custom` code, and truncating it can cut the
+   * code off. Both are carried because they answer different questions.
+   */
+  error: unknown;
   feeLamports: string;
+  computeUnits: string | null;
   accountAddresses: ReadonlyArray<string>;
   preBalances: ReadonlyArray<string>;
   postBalances: ReadonlyArray<string>;
   logMessages: ReadonlyArray<string>;
+  innerInstructions: ReadonlyArray<InnerInstructionObservation>;
   /** Exact final program return data, or explicit absence. */
   returnData: TransactionReturnDataObservationV1 | null;
   transactionBytes: Uint8Array;
@@ -153,6 +180,39 @@ function exactText(value: unknown, field: string, maximum = 512): string {
  */
 function boundedLogMessage(value: unknown): string {
   return typeof value === 'string' ? value.slice(0, MAX_LOG_MESSAGE_BYTES) : '';
+}
+
+/**
+ * The CPI frames the chain reports, flattened with the outer index they ran
+ * under. Data stays base58 — that is how `getTransaction` encodes it under a
+ * base64 request, and re-encoding it here would be a second representation.
+ */
+function readInnerInstructions(value: unknown): InnerInstructionObservation[] {
+  if (!Array.isArray(value)) return [];
+  const found: InnerInstructionObservation[] = [];
+  for (const set of value.slice(0, MAX_INNER_INSTRUCTION_SETS)) {
+    if (!plain(set) || !Array.isArray(set.instructions)) continue;
+    const outerIndex = exactUnsigned(set.index, 'inner instruction set index');
+    for (const instruction of set.instructions.slice(0, MAX_INNER_INSTRUCTIONS)) {
+      if (!plain(instruction)) continue;
+      if (typeof instruction.data !== 'string') continue;
+      found.push(Object.freeze({
+        outerIndex,
+        programIdIndex: exactUnsigned(instruction.programIdIndex, 'inner instruction program index'),
+        accounts: Object.freeze(
+          Array.isArray(instruction.accounts)
+            ? instruction.accounts.map((entry, index) => exactUnsigned(entry, `inner instruction account ${index}`))
+            : [],
+        ),
+        data: instruction.data.slice(0, SOLANA_PACKET_BYTES * 2),
+        stackHeight:
+          typeof instruction.stackHeight === 'number' && Number.isSafeInteger(instruction.stackHeight)
+            ? instruction.stackHeight
+            : null,
+      }));
+    }
+  }
+  return found;
 }
 
 function plain(value: unknown): value is Record<string, unknown> {
@@ -538,6 +598,25 @@ export class SolanaRpcClient {
     return String(exactUnsigned(await this.#request('getSlot', [{ commitment: 'finalized' }]), 'finalized slot'));
   }
 
+  /**
+   * The cluster's own wall-clock stamp for one slot, in unix seconds, or null.
+   *
+   * Null covers every way the node can decline — a skipped slot, history the
+   * node no longer retains, or a transport refusal — because every caller of
+   * this read is estimating for display and must fall back to a labelled
+   * assumption rather than distinguish absences. Nothing that gates a write
+   * may depend on this method.
+   */
+  async blockTime(slot: string): Promise<string | null> {
+    try {
+      const raw = await this.#request('getBlockTime', [exactUnsigned(Number(slot), 'block time slot')]);
+      if (raw === null) return null;
+      return String(exactUnsigned(raw, 'block time'));
+    } catch {
+      return null;
+    }
+  }
+
   /** Read the finalized block height used by recent-blockhash expiry. */
   async blockHeight(minimumContextSlot?: string): Promise<string> {
     const configuration: Record<string, unknown> = { commitment: 'finalized' };
@@ -662,19 +741,74 @@ export class SolanaRpcClient {
       blockTime: typeof raw.blockTime === 'number' && Number.isSafeInteger(raw.blockTime) ? String(raw.blockTime) : null,
       succeeded: meta.err === null || meta.err === undefined,
       errorText: meta.err === null || meta.err === undefined ? null : JSON.stringify(meta.err).slice(0, 240),
+      error: meta.err ?? null,
       feeLamports: String(exactUnsigned(meta.fee, 'transaction fee')),
+      computeUnits: typeof meta.computeUnitsConsumed === 'number' && Number.isSafeInteger(meta.computeUnitsConsumed)
+        ? String(meta.computeUnitsConsumed)
+        : null,
       accountAddresses: Object.freeze(accountAddresses),
       preBalances: Object.freeze(meta.preBalances.map((value, index) => String(exactUnsigned(value, `pre-balance ${index}`)))),
       postBalances: Object.freeze(meta.postBalances.map((value, index) => String(exactUnsigned(value, `post-balance ${index}`)))),
       logMessages: Object.freeze(Array.isArray(meta.logMessages)
         ? meta.logMessages.slice(0, MAX_LOG_MESSAGES).map(boundedLogMessage)
         : []),
+      innerInstructions: Object.freeze(readInnerInstructions(meta.innerInstructions)),
       returnData: decodeTransactionReturnDataV1(meta.returnData),
       transactionBytes: bytes,
     });
   }
 
+  /**
+   * Read one submitted signature's confirmation status.
+   *
+   * Submission is not landing. A route whose next transaction depends on the
+   * previous one's effect -- a lifecycle credit before Found37, a lookup table
+   * before anything routes through it -- has to observe that effect rather than
+   * assume it, and a lookup table specifically is usable only strictly after
+   * the slot that last extended it.
+   */
+  async signatureStatus(signature: string): Promise<Readonly<{ slot: string; confirmation: string | null; err: unknown }> | null> {
+    exactText(signature, 'signature', 96);
+    const result = await this.#request('getSignatureStatuses', [[signature], { searchTransactionHistory: false }]);
+    if (!plain(result) || !Array.isArray(result.value)) throw new Error('getSignatureStatuses returned an invalid envelope');
+    const entry = result.value[0];
+    if (entry === null || entry === undefined) return null;
+    if (!plain(entry)) throw new Error('getSignatureStatuses returned an invalid status');
+    return Object.freeze({
+      slot: String(exactUnsigned(entry.slot, 'status slot')),
+      confirmation: entry.confirmationStatus === undefined || entry.confirmationStatus === null ? null : exactText(entry.confirmationStatus, 'confirmation status', 32),
+      err: entry.err ?? null,
+    });
+  }
+
+  /**
+   * Submit one caller-signed packet after an explicit user action.
+   *
+   * This method never signs, mutates, retries in a loop, or skips preflight.
+   */
+  async sendRawTransaction(
+    bytes: Uint8Array,
+    options: Readonly<{ maxRetries?: 0 | 3 }> = {},
+  ): Promise<string> {
+    if (!(bytes instanceof Uint8Array) || bytes.length === 0 || bytes.length > SOLANA_PACKET_BYTES) {
+      throw new Error(`signed transaction must contain 1..${SOLANA_PACKET_BYTES} bytes`);
+    }
+    let binary = '';
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    await this.assertMutationCluster();
+    const result = exactText(await this.#request('sendTransaction', [btoa(binary), {
+      encoding: 'base64',
+      skipPreflight: false,
+      preflightCommitment: 'confirmed',
+      maxRetries: options.maxRetries ?? 3,
+    }]), 'transaction signature', 96);
+    if (result.length < 64 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(result)) {
+      throw new Error('sendTransaction returned a noncanonical base58 signature');
+    }
+    return result;
+  }
 }
+
 
 async function concurrentMap<T, U>(values: ReadonlyArray<T>, limit: number, mapper: (value: T) => Promise<U>): Promise<U[]> {
   const output = new Array<U>(values.length);

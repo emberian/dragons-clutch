@@ -16,29 +16,29 @@ import {
   type CompiledProtocolInstructionV1,
 } from '@dclutch/sdk/routeSelector';
 import { INSTRUCTION_MAGICS, PREDICATE_SELECTED_ROUTES } from '@dclutch/sdk/generated/routeCensus';
-import { CAPABILITY_ACTIONS_V1 } from './capabilityModel';
+import { CAPABILITY_ACTIONS_V1 } from '@dclutch/sdk/capabilityModel';
 import {
   CORE_REQUEST_ACTION_OFFSET,
   compileCoreFoundTransactionV2,
   compileLifecycleRentCreateTransactionV2,
-} from './coreFound';
-import { compileDealerEquityTransactionV3, type DealerEquityHotRouteV3 } from './dealerEquityV3';
+} from '@dclutch/sdk/coreFound';
+import { compileDealerEquityTransactionV3, type DealerEquityHotRouteV3 } from '@dclutch/sdk/dealerEquityV3';
 import {
   encodeDirectInlineOrdinaryRequestV3,
   type DirectHotAccountMetaV3,
   type SignedDirectIntentV3,
-} from './directInlineV3';
-import { encodeClaimsCustodyReplayRequestV1 } from './claimsCustodyReplay';
-import { encodeWalletTerminalPayoutRequestV3 } from './walletTerminalPayoutV3';
-import { compileRegistryReauthenticationTransaction, compileRegistryRoleActivationTransaction } from './releaseRegistry';
-import { CORE_ACTION_FOUND_TAG, CORE_FOUND_ACCOUNT_COUNT_V3 } from './generated/coreFound';
+} from '@dclutch/sdk/directInlineV3';
+import { encodeClaimsCustodyReplayRequestV1 } from '@dclutch/sdk/claimsCustodyReplay';
+import { encodeWalletTerminalPayoutRequestV3 } from '@dclutch/sdk/walletTerminalPayoutV3';
+import { compileRegistryReauthenticationTransaction, compileRegistryRoleActivationTransaction } from '@dclutch/sdk/releaseRegistry';
+import { CORE_ACTION_FOUND_TAG, CORE_FOUND_ACCOUNT_COUNT_V3 } from '@dclutch/sdk/generated/coreFound';
 import {
   DEALER_EQUITY_HEADER_BYTES_V3,
   DEALER_EQUITY_REQUEST_MAGIC_V3,
   DEALER_LP_POSITION_PDA_DOMAIN_V3,
   DEALER_OBLIGATION_PDA_DOMAIN_V3,
-} from './generated/dealerEquityV3';
-import { GENERAL_REQUEST_MAGIC_V3 } from './generated/generalSuccessorV5';
+} from '@dclutch/sdk/generated/dealerEquityV3';
+import { GENERAL_REQUEST_MAGIC_V3 } from '@dclutch/sdk/generated/generalSuccessorV5';
 import {
   DIRECT_EXECUTION_REQUEST_MAGIC_V3,
   HOT_FAMILY_REQUEST_OFFSET_V3,
@@ -48,7 +48,7 @@ import {
   HOT_RENT_SYSVAR_ACCOUNT_V3,
   HOT_ROOT_ACCOUNT_V3,
   HOT_TRADING_PROGRAM_ACCOUNT_V3,
-} from './generated/directInlineV3';
+} from '@dclutch/sdk/generated/directInlineV3';
 
 /**
  * The routes an act declares, checked against the routes its builder EMITS.

@@ -1,16 +1,16 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 
-import { CORE_STATE_BYTES } from '@/lib/generated/coreFound';
-import { SUPERSEDED_CORE_STATE_WIDTHS } from '@/lib/marketCoreV2';
+import { CORE_STATE_BYTES } from '@dclutch/sdk/generated/coreFound';
+import { SUPERSEDED_CORE_STATE_WIDTHS } from '@dclutch/sdk/marketCoreV2';
 import { describe, expect, it } from 'vitest';
 
-import { DEVNET_DEPLOYMENT_V1 } from '@/lib/deployments';
-import { type CapabilityFundingQuoteV1 } from '@/lib/capabilityManifest';
+import { DEVNET_DEPLOYMENT_V1 } from '@dclutch/sdk/deployments';
+import { type CapabilityFundingQuoteV1 } from '@dclutch/sdk/capabilityManifest';
 import {
   curateMarketListingV1,
   type MarketDiscoveryCardV1,
   type MarketHoardV1,
-} from '@/lib/marketDiscovery';
+} from '@dclutch/sdk/marketDiscovery';
 
 import MarketFilterBar from './MarketFilterBar';
 import MarketDiscoveryWorkspace, { EmptyMarkets, RestOfTheRecord } from './MarketDiscoveryWorkspace';

@@ -5,8 +5,8 @@ import { describe, expect, it, vi } from 'vitest';
 // the published fixture names a Market. Its companion,
 // SiteLanding.opened.test.tsx, renders the same page with a market named.
 
-vi.mock('@/lib/publicCutStaging', async () => {
-  const actual = await vi.importActual<typeof import('@/lib/publicCutStaging')>('@/lib/publicCutStaging');
+vi.mock('@dclutch/sdk/publicCutStaging', async () => {
+  const actual = await vi.importActual<typeof import('@dclutch/sdk/publicCutStaging')>('@/lib/publicCutStaging');
   const cut = actual.parsePublicDevnetCutV1({
     schema: 'dclutch-public-cut-v1',
     cluster: 'devnet',

@@ -32,6 +32,10 @@ import {
 } from './releaseRegistry';
 import { SOLANA_DEVNET_GENESIS_HASH_V1 } from './rpc';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
+import {
+  ACTIVATION_CACHE_MAGIC_V1,
+  EXECUTION_RELEASE_SET_MAGIC_V1,
+} from './generated/protocolConstantsV1';
 
 export const OPERATOR_ROLES = ['registry', 'core', 'trading', 'claims', 'custody', 'resolution'] as const;
 export type OperatorRole = (typeof OPERATOR_ROLES)[number];
@@ -259,7 +263,7 @@ async function exactActivationCache(
     throw new Error('release activation cache is absent, partial, executable, or not the exact Registry-owned account');
   }
   const bytes = account.data;
-  if (ascii(bytes, 0, 8) !== 'DCLTACT1' || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 1) {
+  if (ascii(bytes, 0, 8) !== ACTIVATION_CACHE_MAGIC_V1 || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 1) {
     throw new Error('release activation cache has the wrong exact magic, schema, or profile');
   }
   // Byte 12 is the cache's own PDA bump (`ACTIVATION_CACHE_BUMP_OFFSET_V1`),
@@ -275,7 +279,7 @@ async function exactActivationCache(
   if (expectedCache !== cacheAddress) throw new Error('release activation cache is not the release-derived Registry PDA');
 
   const releaseBytes = new Uint8Array(EXECUTION_RELEASE_SET_BYTES);
-  releaseBytes.set(new TextEncoder().encode('DCLTRLS1'));
+  releaseBytes.set(new TextEncoder().encode(EXECUTION_RELEASE_SET_MAGIC_V1));
   const releaseView = new DataView(releaseBytes.buffer);
   releaseView.setUint16(8, 1, true);
   releaseView.setUint16(10, 1, true);

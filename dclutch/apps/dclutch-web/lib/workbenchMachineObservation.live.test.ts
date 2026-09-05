@@ -7,9 +7,9 @@ import {
 } from '@dclutch/sdk/stateMachines';
 import { routeSelectedGatesV1 } from '@dclutch/sdk/generated/marketPhaseAdmissionV1';
 import { BROWSER_CAPABILITY_STANDINGS_V1 } from './capabilitySurface';
-import { evaluateCapabilityV1, type CapabilityMarketSnapshotV1 } from './capabilityModel';
-import { decodeMarketCoreStateV2 } from './marketCoreV2';
-import { SolanaRpcClient } from './rpc';
+import { evaluateCapabilityV1, type CapabilityMarketSnapshotV1 } from '@dclutch/sdk/capabilityModel';
+import { decodeMarketCoreStateV2 } from '@dclutch/sdk/marketCoreV2';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 
 /**
  * `/workbench`'s own acquisition, against the chain that wrote the accounts.

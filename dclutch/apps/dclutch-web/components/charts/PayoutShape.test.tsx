@@ -9,7 +9,7 @@ import {
   payoutCurveKnotsV1,
   type PayoutCurveKnotV1,
 } from '@/lib/productPayoffV2Evaluation';
-import { compileProductV2, parseProductKnots, parseProductTerms, type CompiledProductV2 } from '@/lib/productV2';
+import { compileProductV2, parseProductKnots, parseProductTerms, type CompiledProductV2 } from '@dclutch/sdk/productV2';
 
 import PayoutShape from './PayoutShape';
 

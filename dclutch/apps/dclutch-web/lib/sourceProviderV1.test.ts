@@ -1,7 +1,7 @@
 import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
-import { SOURCE_PROVIDER_PLAN_FORMAT_V1, SOURCE_PROVIDER_SUBMIT_PLAN_FORMAT_V1 } from './generated/sourceProviderWasmV1';
+import { SOURCE_PROVIDER_PLAN_FORMAT_V1, SOURCE_PROVIDER_SUBMIT_PLAN_FORMAT_V1 } from '@dclutch/sdk/generated/sourceProviderWasmV1';
 import {
   parseSourceProviderReclaimPlanV1,
   parseSourceProviderSubmitPlanV1,

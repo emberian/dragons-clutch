@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 
 import MarketDetailWorkspace from '@/components/MarketDetailWorkspace';
-import { MARKET_REGISTRY_V1, marketEditorialV1 } from '@/lib/marketRegistry';
+import { MARKET_REGISTRY_V1, marketEditorialV1 } from '@dclutch/sdk/marketRegistry';
 
 // The static export (DCLUTCH_PAGES_EXPORT=1, the GitHub Pages artifact) has
 // no server to render per-address pages, and an arbitrary Market address is

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import * as coverage from '../scripts/abi-coverage.mjs';
+import * as coverage from '../../../tools/abi-coverage/abi-coverage.mjs';
 
 /** What the survey reports for one category of source file. */
 type Inventory = Readonly<{
@@ -35,8 +35,8 @@ const auditAuthorities = coverage.auditGeneratedAuthorities as (
  * without someone deciding to grow it, and that a surface converted to a
  * Lean-emitted module leaves the list for good.
  *
- * Run `node scripts/abi-coverage.mjs` to read the inventory, and
- * `node scripts/abi-coverage.mjs --write` to record a baseline that shrank.
+ * Run `npm run abi:coverage` to read the inventory, and
+ * `npm run abi:coverage -- --write` to record a baseline that shrank.
  */
 describe('ABI coverage', () => {
   it('states no magic, domain or offset the baseline does not already record', () => {

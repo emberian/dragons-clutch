@@ -11,8 +11,8 @@ import { describe, expect, it, vi } from 'vitest';
 const MARKET = 'GtmpRvSL9y6RpqMth73VSdb9h1XRe7zqQZkhJkfgxKrA';
 const FOUND = '3K6ik9Ah7xzBtYgvm6ZuaNs7C3GCNnPiwP5XX1b9gDG1EyjbU9AEN7ei8kYk4umPt3dXCXqiFwLEecBjunFVKtwF';
 
-vi.mock('@/lib/publicCutStaging', async () => {
-  const actual = await vi.importActual<typeof import('@/lib/publicCutStaging')>('@/lib/publicCutStaging');
+vi.mock('@dclutch/sdk/publicCutStaging', async () => {
+  const actual = await vi.importActual<typeof import('@dclutch/sdk/publicCutStaging')>('@/lib/publicCutStaging');
   const cut = actual.parsePublicDevnetCutV1({
     schema: 'dclutch-public-cut-v1',
     cluster: 'devnet',

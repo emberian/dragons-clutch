@@ -12,7 +12,7 @@ import {
   writeUnsignedClientOperationJournalV1,
   type ClientOperationJournalStorageV1,
 } from './clientOperationJournal';
-import { SOURCE_PROVIDER_SUBMIT_PLAN_FORMAT_V1 } from './generated/sourceProviderWasmV1';
+import { SOURCE_PROVIDER_SUBMIT_PLAN_FORMAT_V1 } from '@dclutch/sdk/generated/sourceProviderWasmV1';
 import {
   restoreSourceProviderSubmitJournalV1,
   sourceProviderSubmitJournalInputV1,

@@ -3,8 +3,8 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { DEVNET_DEPLOYMENT_V1 } from './deployments';
-import { SolanaRpcClient } from './rpc';
+import { DEVNET_DEPLOYMENT_V1 } from '@dclutch/sdk/deployments';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 import { readSponsoredPriceV1 } from './sourceProviderV1';
 
 const live = process.env.DCLUTCH_LIVE_DEVNET === '1' ? it : it.skip;

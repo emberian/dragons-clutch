@@ -5,8 +5,8 @@ import { describe, expect, it, vi } from 'vitest';
 // fixture names a Market. Its companion, LaunchStory.opened.test.tsx, renders
 // the open face the same way; between them both states stay guarded whatever
 // the fixture currently says.
-vi.mock('@/lib/publicCutStaging', async () => {
-  const actual = await vi.importActual<typeof import('@/lib/publicCutStaging')>('@/lib/publicCutStaging');
+vi.mock('@dclutch/sdk/publicCutStaging', async () => {
+  const actual = await vi.importActual<typeof import('@dclutch/sdk/publicCutStaging')>('@/lib/publicCutStaging');
   const cut = actual.parsePublicDevnetCutV1({
     schema: 'dclutch-public-cut-v1',
     cluster: 'devnet',
@@ -17,7 +17,7 @@ vi.mock('@/lib/publicCutStaging', async () => {
   return { ...actual, PUBLIC_DEVNET_CUT_V1: cut };
 });
 
-const { DEVNET_DEPLOYMENT_V1 } = await import('@/lib/deployments');
+const { DEVNET_DEPLOYMENT_V1 } = await import('@dclutch/sdk/deployments');
 const { default: LaunchStory } = await import('./LaunchStory');
 
 describe('launch story', () => {

@@ -30,7 +30,7 @@ import {
   REFUSAL_BANDS,
   type ProtocolRefusal,
   type RefusalBand,
-} from '../generated/routeCensus';
+} from '@dclutch/sdk/generated/routeCensus';
 
 const BY_CODE: ReadonlyMap<number, ProtocolRefusal> = new Map(
   PROTOCOL_REFUSALS.map((refusal) => [refusal.code, refusal]),

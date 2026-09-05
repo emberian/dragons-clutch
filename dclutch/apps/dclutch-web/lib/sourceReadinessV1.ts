@@ -6,7 +6,7 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js';
 
-import { hex, sha256 } from './bytes';
+import { hex, sha256 } from '@dclutch/sdk/bytes';
 import {
   SOURCE_READINESS_MARKET_FORMAT_V1,
   SOURCE_READINESS_PLAN_FORMAT_V1,
@@ -15,15 +15,15 @@ import {
   SOURCE_READINESS_SOURCE_FORMAT_V1,
   SOURCE_READINESS_WASM_BYTES_V1,
   SOURCE_READINESS_WASM_SHA256_V1,
-} from './generated/sourceReadinessWasmV1';
+} from '@dclutch/sdk/generated/sourceReadinessWasmV1';
 import type {
   AccountInfoObservation,
   LatestBlockhashObservation,
   MultipleAccountObservation,
   RpcAccount,
   SolanaRpcClient,
-} from './rpc';
-import { SOLANA_PACKET_BYTES_V1 } from './solanaLimits';
+} from '@dclutch/sdk/rpc';
+import { SOLANA_PACKET_BYTES_V1 } from '@dclutch/sdk/solanaLimits';
 
 const MAX_JSON_CHARACTERS = 64 * 1024 * 1024;
 const MAX_OBSERVATION_ACCOUNTS = 20;

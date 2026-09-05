@@ -16,6 +16,7 @@ import {
   type MarketCoreReadinessV2,
 } from './marketCoreV2';
 import {
+  CALLER_AUTHORITY_PDA_DOMAIN_V1,
   EXECUTION_ROLE_CLAIMS_V1,
   EXECUTION_ROLE_CORE_V1,
   EXECUTION_ROLE_CUSTODY_V1,
@@ -80,6 +81,18 @@ import {
 } from './rationalTerminalHotV3';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
 import { SOLANA_PACKET_BYTES_V1 } from './solanaLimits';
+import {
+  ACTIVATION_CACHE_MAGIC_V1,
+  EXECUTION_RELEASE_SET_MAGIC_V1,
+  PROTOCOL_POSITION_CLAIMS_CAPABILITY_SEED_V2,
+  RATIONAL_RECEIPT_MINT_SEED_V2,
+  RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
+  RATIONAL_SHARD_MINT_SEED_V2,
+  RATIONAL_STRUCTURED_CUSTODY_SEED_V2,
+} from './generated/protocolConstantsV1';
+import {
+  PROTOCOL_POSITION_ADMISSION_SEED_V2,
+} from './generated/directParticipantV1';
 
 export const RATIONAL_LIFECYCLE_COMPACT_REQUEST_BYTES_V4 = Lifecycle.RATIONAL_LIFECYCLE_COMPACT_HOT_REQUEST_BYTES_V4;
 export const RATIONAL_LIFECYCLE_COMPACT_OUTER_BYTES_V4 = Hot.HOT_EXECUTION_ENVELOPE_BYTES_V3 + RATIONAL_LIFECYCLE_COMPACT_REQUEST_BYTES_V4;
@@ -103,13 +116,13 @@ export const CAPABILITY_PROGRAM_V4_SCHEMA = Uint8Array.from([
 
 const MAX_U64 = 18_446_744_073_709_551_615n;
 const SYSTEM_INSTRUCTIONS_SYSVAR = 'Sysvar1nstructions1111111111111111111111111';
-const CALLER_AUTHORITY_SEED = new TextEncoder().encode('dclutch:role-authority:v1');
-const REPRESENTATION_AUTHORITY_SEED = new TextEncoder().encode('dclutch:rational-authority:v2');
-const RECEIPT_MINT_SEED = new TextEncoder().encode('dclutch:rational-receipt:v2');
-const SHARD_MINT_SEED = new TextEncoder().encode('dclutch:rational-shard-mint:v2');
-const STRUCTURED_CUSTODY_SEED = new TextEncoder().encode('dclutch:rational-structured:v2');
-const CLAIMS_CUSTODY_OWNER_SEED = new TextEncoder().encode('dclutch:rational-claims:v2');
-const ADMISSION_SEED = new TextEncoder().encode('dclutch:protocol-position:v2');
+const CALLER_AUTHORITY_SEED = CALLER_AUTHORITY_PDA_DOMAIN_V1;
+const REPRESENTATION_AUTHORITY_SEED = RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2;
+const RECEIPT_MINT_SEED = RATIONAL_RECEIPT_MINT_SEED_V2;
+const SHARD_MINT_SEED = RATIONAL_SHARD_MINT_SEED_V2;
+const STRUCTURED_CUSTODY_SEED = RATIONAL_STRUCTURED_CUSTODY_SEED_V2;
+const CLAIMS_CUSTODY_OWNER_SEED = PROTOCOL_POSITION_CLAIMS_CAPABILITY_SEED_V2;
+const ADMISSION_SEED = PROTOCOL_POSITION_ADMISSION_SEED_V2;
 const SEMANTIC_BASIS_CONTENT_DOMAIN_V3 = new TextEncoder().encode('dclutch/product-basis/semantic/v3');
 
 export type RationalHotAccountMetaV4 = Readonly<{ address: string; isSigner: boolean; isWritable: boolean }>;
@@ -694,14 +707,14 @@ export async function authenticateRationalHotActivationV4(
   custody: string; custodyProgramData: string;
   resolution: string; resolutionProgramData: string;
 }>> {
-  if (cache.owner !== registry || cache.executable || cache.data.length !== ACTIVATION_CACHE_BYTES || ascii(cache.data, 0, 8) !== 'DCLTACT1' || u16(cache.data, 8) !== 1 || u16(cache.data, 10) !== 1) {
+  if (cache.owner !== registry || cache.executable || cache.data.length !== ACTIVATION_CACHE_BYTES || ascii(cache.data, 0, 8) !== ACTIVATION_CACHE_MAGIC_V1 || u16(cache.data, 8) !== 1 || u16(cache.data, 10) !== 1) {
     throw new Error('activation cache has the wrong Registry owner or exact ABI');
   }
   requireZero(cache.data, 12, 4, 'activation cache');
   if (!same(slice(cache.data, 16, 32), releaseSet)) throw new Error('activation cache selects another execution release set');
   const expectedCache = PublicKey.findProgramAddressSync([ACTIVATION_SEED, releaseSet], key(registry, 'Registry program'))[0].toBase58();
   if (expectedCache !== cacheAddress) throw new Error('activation cache is not the release-derived Registry PDA');
-  const releaseBytes = new Uint8Array(336); releaseBytes.set(new TextEncoder().encode('DCLTRLS1'), 0);
+  const releaseBytes = new Uint8Array(336); releaseBytes.set(new TextEncoder().encode(EXECUTION_RELEASE_SET_MAGIC_V1), 0);
   putU16(releaseBytes, 8, 1); putU16(releaseBytes, 10, 1);
   const artifacts = [];
   for (let role = 0; role < 5; role += 1) {

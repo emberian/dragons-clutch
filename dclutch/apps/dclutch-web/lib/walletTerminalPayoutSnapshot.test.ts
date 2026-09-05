@@ -9,7 +9,7 @@ import {
   acquireWalletTerminalPayoutSnapshotV1,
   deriveWalletTerminalPayoutManifestV1,
 } from './walletTerminalPayoutSnapshot';
-import { type SolanaRpcClient } from './rpc';
+import { type SolanaRpcClient } from '@dclutch/sdk/rpc';
 import { type WalletTerminalPayoutWasmV1 } from './walletTerminalPayoutV1';
 
 /**

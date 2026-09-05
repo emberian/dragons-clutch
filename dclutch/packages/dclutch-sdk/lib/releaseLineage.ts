@@ -3,6 +3,10 @@ import { PublicKey } from '@solana/web3.js';
 import { ascii, hex, isZero, requireZero, slice, u16 } from './bytes';
 import { REGISTRY_ROLES, type RegistryRole } from './releaseRegistry';
 import { type SolanaRpcClient } from './rpc';
+import {
+  RELEASE_LINEAGE_MAGIC_V1,
+  RELEASE_LINEAGE_PDA_DOMAIN_V1,
+} from './generated/protocolConstantsV1';
 
 /**
  * Release-set lineage, read side.
@@ -27,7 +31,7 @@ import { type SolanaRpcClient } from './rpc';
 /** Bytes in one complete release-set lineage record. */
 export const RELEASE_LINEAGE_BYTES = 248;
 /** Canonical release-set lineage magic. */
-export const RELEASE_LINEAGE_MAGIC = 'DCLTRLN1';
+export const RELEASE_LINEAGE_MAGIC = RELEASE_LINEAGE_MAGIC_V1;
 /** Implemented release-set lineage schema. */
 export const RELEASE_LINEAGE_SCHEMA_VERSION = 1;
 /** Implemented release-set lineage fixed-layout profile. */
@@ -39,7 +43,7 @@ export const RELEASE_LINEAGE_PROFILE = 1;
  * A seed domain is a consensus coordinate. `releaseRegistry.ts` records what it
  * cost to keep three copies of the activation domain; this one starts with one.
  */
-export const RELEASE_LINEAGE_PDA_SEED_V1 = new TextEncoder().encode('dclutch:release-lineage:v1');
+export const RELEASE_LINEAGE_PDA_SEED_V1 = RELEASE_LINEAGE_PDA_DOMAIN_V1;
 
 const SCHEMA_OFFSET = 8;
 const PROFILE_OFFSET = 10;

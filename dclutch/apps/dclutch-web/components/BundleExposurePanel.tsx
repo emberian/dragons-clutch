@@ -1,9 +1,9 @@
 import Anchor from '@/components/Anchor';
 import ExposureBand, { type ExposureBandRowV1 } from '@/components/charts/ExposureBand';
 import NumberStrip, { type NumberStripStatV1 } from '@/components/charts/NumberStrip';
-import { type BundleV1, type BundleExposureV1 } from '@/lib/bundleExposure';
-import { shortAddressV1 } from '@/lib/marketDiscovery';
-import { marketDetailHrefV1 } from '@/lib/marketHref';
+import { type BundleV1, type BundleExposureV1 } from '@dclutch/sdk/bundleExposure';
+import { shortAddressV1 } from '@dclutch/sdk/marketDiscovery';
+import { marketDetailHrefV1 } from '@dclutch/sdk/marketHref';
 
 /**
  * What the positions above can pay, taken together.

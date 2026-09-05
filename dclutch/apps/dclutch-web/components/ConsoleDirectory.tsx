@@ -10,7 +10,7 @@ import {
   capabilityVenueTextV1,
   type CapabilityStage,
   type CapabilityStandingV1,
-} from '@/lib/capabilityModel';
+} from '@dclutch/sdk/capabilityModel';
 import { browserActPrerequisitesV1, BROWSER_CAPABILITY_STANDINGS_V1, capabilityWorkspaceV1 } from '@/lib/capabilitySurface';
 import { docsHrefV1 } from '@/lib/flags';
 
@@ -77,12 +77,6 @@ const SUPPORT_CONSOLES_V1: ReadonlyArray<SupportConsoleV1> = Object.freeze([
     outcome: 'Read the remaining lifecycle work for one market',
     venue: 'This browser · no key, no signature',
     guarantee: 'Finalized reads only. It produces a readiness map and no transaction.',
-  }),
-  Object.freeze({
-    href: '/local',
-    outcome: 'Rejoin a checkpointed local validator to its published evidence',
-    venue: 'This browser · no key, no signature',
-    guarantee: 'Local files and finalized reads only. It produces a byte-for-byte comparison.',
   }),
 ]);
 

@@ -2,10 +2,10 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import { directTicketStateV1, type TicketState } from './tradeFlowMachine';
-import { type DirectTradeSpineV1 } from './directTradeSpine';
+import { type DirectTradeSpineV1 } from '@dclutch/sdk/directTradeSpine';
 import { type WalletDirectoryHandleV1 } from '@/components/WalletDirectory';
 
-const VECTOR = JSON.parse(readFileSync(new URL('../fixtures/direct-intent-ticket.json', import.meta.url), 'utf8'));
+const VECTOR = JSON.parse(readFileSync(new URL('../../../packages/dclutch-sdk/fixtures/direct-intent-ticket.json', import.meta.url), 'utf8'));
 
 /** Only `inspected === null` is read here, so the shape is all this needs. */
 const INSPECTED = { status: 'inspected' } as unknown as Extract<DirectTradeSpineV1, { status: 'inspected' }>;

@@ -9,24 +9,24 @@ import BundleExposurePanel from '@/components/BundleExposurePanel';
 import PositionBars from '@/components/charts/PositionBars';
 import RedeemFlow from '@/components/RedeemFlow';
 import WalletDirectory, { useWalletDirectoryV1, type WalletDirectoryHandleV1 } from '@/components/WalletDirectory';
-import { bundleExposureV1 } from '@/lib/bundleExposure';
+import { bundleExposureV1 } from '@dclutch/sdk/bundleExposure';
 import { useDeploymentV1 } from '@/lib/deploymentStore';
 import {
   enumerateCoreMarketAddressesV1,
   provenanceChipV1,
   shortAddressV1,
   type MarketDiscoveryCardV1,
-} from '@/lib/marketDiscovery';
+} from '@dclutch/sdk/marketDiscovery';
 import {
   inspectPortfolioV1,
   parsePortfolioOwnerV1,
   PORTFOLIO_MAX_MARKETS,
   type PortfolioEntryV1,
   type PortfolioV1,
-} from '@/lib/portfolio';
-import { SolanaRpcClient, type ConnectionFacts } from '@/lib/rpc';
+} from '@dclutch/sdk/portfolio';
+import { SolanaRpcClient, type ConnectionFacts } from '@dclutch/sdk/rpc';
 import { clusterNameV1 } from '@/lib/rpcDefault';
-import { marketDetailHrefV1 } from '@/lib/marketHref';
+import { marketDetailHrefV1 } from '@dclutch/sdk/marketHref';
 
 type State =
   | Readonly<{ kind: 'idle' | 'loading' | 'refused'; message: string }>

@@ -3,6 +3,9 @@ import { PublicKey } from '@solana/web3.js';
 import { isZero, requireZero, slice, u16, u64 } from './bytes';
 import { SYSTEM_PROGRAM_ID } from './releaseRegistry';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
+import {
+  DIRECT_MAKER_REPLAY_PDA_DOMAIN_V1,
+} from './generated/protocolConstantsV1';
 
 /**
  * Exact MakerReplayRootV1 authority mirrored from
@@ -16,7 +19,7 @@ export const DIRECT_MAKER_REPLAY_BYTES_V1 = 160;
  * legacy width, so an exterior reader never has to know which one it holds.
  */
 export const DIRECT_MAKER_REPLAY_LEGACY_BYTES_V1 = 152;
-export const DIRECT_MAKER_REPLAY_PDA_DOMAIN_V1 = new TextEncoder().encode('dclutch:direct-maker:v1');
+export { DIRECT_MAKER_REPLAY_PDA_DOMAIN_V1 };
 
 const DIRECT_MAKER_MAGIC_V1 = new TextEncoder().encode('DCLTDMR1');
 const DIRECT_MAKER_VERSION_V1 = 1;

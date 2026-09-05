@@ -1,19 +1,19 @@
 import {
   encodeCompactIntentSigningMessageV2,
   type SignedDirectIntentV3,
-} from '@/lib/directInlineV3';
-import { decodeDirectIntentTicketV1, encodeDirectIntentTicketV1 } from '@/lib/directTicket';
+} from '@dclutch/sdk/directInlineV3';
+import { decodeDirectIntentTicketV1, encodeDirectIntentTicketV1 } from '@dclutch/sdk/directTicket';
 import {
   admitDirectParticipantCrossingV1,
   inspectDirectParticipantReadinessV1,
   inspectDirectSellerReadinessV1,
   type DirectParticipantCrossingAdmissionV1,
   type DirectParticipantReadinessV1,
-} from '@/lib/directParticipant';
+} from '@dclutch/sdk/directParticipant';
 import {
   inspectDirectTradeSpineV1,
   type DirectTradeSpineV1,
-} from '@/lib/directTradeSpine';
+} from '@dclutch/sdk/directTradeSpine';
 import {
   clearFinalizedClientOperationJournalV1,
   discardUnsignedClientOperationJournalV1,
@@ -31,12 +31,12 @@ import {
   directTradeFinalizedCompletionV1,
   type DirectTradeBalanceSnapshotV1,
 } from '@/lib/directTradeJournal';
-import { parseQuantityV1, type DenominationV1 } from '@/lib/quantity';
+import { parseQuantityV1, type DenominationV1 } from '@dclutch/sdk/quantity';
 import {
   requestWalletMessageSignatureV1,
   requestWalletTransactionSignatureV1,
   submitSignedTransactionV1,
-} from '@/lib/walletHandoff';
+} from '@dclutch/sdk/walletHandoff';
 import { type WalletDirectoryHandleV1 } from '@/components/WalletDirectory';
 import { inspectDirectHotRouteManifestJsonV3 } from '@dclutch/sdk/directHotRouteManifest';
 import {
@@ -60,7 +60,7 @@ import {
 // trade could be signed and never sent. The only sign was a type error nobody
 // owned, and adding the method to the package instead would have broken the
 // invariant rather than the habit.
-import { SolanaRpcClient } from '@/lib/rpc';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 import { planDirectCrossingV1, type DirectCrossingPlanV1 } from '@dclutch/sdk/directTicket';
 import {
   prepareDirectWalletTransactionV1,

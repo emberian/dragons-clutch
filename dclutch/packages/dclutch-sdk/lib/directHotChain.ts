@@ -110,6 +110,14 @@ import {
 } from './releaseRegistry';
 import { decodeCheckedInfrastructureV1 } from './infrastructure';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
+import {
+  ACTIVATION_CACHE_MAGIC_V1,
+  CAPABILITY_SEAL_MAGIC_V1,
+  CAPABILITY_SEAL_PDA_DOMAIN_V1,
+} from './generated/protocolConstantsV1';
+import {
+  PRODUCT_RECORD_MAGIC_V2,
+} from './generated/productRuntimeV2Admission';
 
 const MARKET_RELEASE_SET_OFFSET = 208;
 const MARKET_REGISTRY_OFFSET = 240;
@@ -123,7 +131,6 @@ const BASIS_SEMANTIC_DOMAIN_V3 = new TextEncoder().encode('dclutch/product-basis
 const CAPABILITY_SEAL_BYTES_V1 = 968;
 const CAPABILITY_SEAL_HEADER_BYTES_V1 = 152;
 const CAPABILITY_SEAL_ROW_BYTES_V1 = 136;
-const CAPABILITY_SEAL_PDA_DOMAIN_V1 = new TextEncoder().encode('dclutch:capability-seal:v1');
 
 export type DirectHotRouteCoordinateV3 = Readonly<{ address: string; isSigner: boolean; isWritable: boolean }>;
 
@@ -920,7 +927,7 @@ export async function authenticateDirectCapabilitySealV1(
   if (coordinate === undefined) throw new Error('Direct capability seal coordinate is absent');
   const seal = required(accounts, coordinate.address, 'Direct capability seal');
   if (seal.owner !== tradingProgram || seal.executable || seal.data.length !== CAPABILITY_SEAL_BYTES_V1
-      || ascii(seal.data, 0, 8) !== 'DCLTCSL1' || u16(seal.data, 8) !== 1 || u16(seal.data, 10) !== 1
+      || ascii(seal.data, 0, 8) !== CAPABILITY_SEAL_MAGIC_V1 || u16(seal.data, 8) !== 1 || u16(seal.data, 10) !== 1
       || u16(seal.data, 12) !== 6 || u16(seal.data, 14) !== 0x00ff || readU32(seal.data, 16) !== 1) {
     throw new Error('Direct capability seal has the wrong exact owner, header, or width');
   }
@@ -1045,7 +1052,7 @@ export async function inspectDirectHotRouteV3(
   const productRaw = await finalizedRecord(client, observation.accounts, registryProgram,
     fixed[HOT_PRODUCT_RAW_ACCOUNT_V3].address, fixed[HOT_PRODUCT_STAGING_ACCOUNT_V3].address,
     PRODUCT_RECORD_SCHEMA_ID_V2, productDigest, 'Product Runtime V2 root');
-  if (productRaw.data.length !== 112 || ascii(productRaw.data, 0, 8) !== 'DCLTPRM2' || u16(productRaw.data, 8) !== 2) {
+  if (productRaw.data.length !== 112 || ascii(productRaw.data, 0, 8) !== PRODUCT_RECORD_MAGIC_V2 || u16(productRaw.data, 8) !== 2) {
     throw new Error('Product Runtime V2 root has the wrong exact ABI');
   }
   const resultDomainDigest = slice(productRaw.data, 48, 32);
@@ -1135,7 +1142,7 @@ export async function inspectDirectHotRouteV3(
       Object.freeze({ artifact: core, programAddress: coreProgram, program: coreProgramAccount, programDataAddress: fixed[HOT_CORE_PROGRAMDATA_ACCOUNT_V3].address, programData: coreProgramData }),
     );
     const cache = required(observation.accounts, fixed[HOT_ACTIVATION_CACHE_ACCOUNT_V3].address, 'activation cache');
-    if (cache.owner !== registryProgram || cache.executable || ascii(cache.data, 0, 8) !== 'DCLTACT1' || !same(slice(cache.data, 16, 32), releaseSet)) throw new Error('Registry activation cache does not select this Market release set');
+    if (cache.owner !== registryProgram || cache.executable || ascii(cache.data, 0, 8) !== ACTIVATION_CACHE_MAGIC_V1 || !same(slice(cache.data, 16, 32), releaseSet)) throw new Error('Registry activation cache does not select this Market release set');
     if (!same(slice(cache.data, ACTIVATION_CACHE_TRADING_OFFSET, 32), Uint8Array.from((checked.execution.releaseSet.roles.trading.artifactReleaseId.match(/../g) ?? []).map((value) => Number.parseInt(value, 16))))) throw new Error('activation cache Trading artifact differs from checked release evidence');
     checkedOuter = Object.freeze({ status: 'checked', tradingArtifactRelease: checked.execution.releaseSet.roles.trading.artifactReleaseId, checkedManifestDigest: checked.checkedInfrastructureId });
     tradingSemanticRelease = trading.semanticReleaseId;

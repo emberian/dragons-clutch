@@ -1,5 +1,5 @@
-import { acquireFinalizedAccountsInChunksV1 } from './coreFound';
-import { type RpcAccount, type SolanaRpcClient } from './rpc';
+import { acquireFinalizedAccountsInChunksV1 } from '@dclutch/sdk/coreFound';
+import { type RpcAccount, type SolanaRpcClient } from '@dclutch/sdk/rpc';
 
 /**
  * ONE finalized observation, in the shape every compiled derivation here reads.

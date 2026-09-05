@@ -1,10 +1,10 @@
-import { hex, sha256 } from './bytes';
-import type { CompiledProductV2 } from './productV2';
+import { hex, sha256 } from '@dclutch/sdk/bytes';
+import type { CompiledProductV2 } from '@dclutch/sdk/productV2';
 import {
   PRODUCT_V2_BYTES,
   PRODUCT_V2_MAGIC,
   PRODUCT_V2_VERSION,
-} from './generated/productV2Payoff';
+} from '@dclutch/sdk/generated/productV2Payoff';
 import {
   PRODUCT_PAYOFF_V2_MAX_COORDINATES_V1,
   PRODUCT_PAYOFF_V2_REQUEST_FORMAT_V1,

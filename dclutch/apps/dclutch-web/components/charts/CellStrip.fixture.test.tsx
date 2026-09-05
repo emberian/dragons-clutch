@@ -1,13 +1,13 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
-import { currentCoreMarketV3, LIVE, liveRpcAccount } from '@/fixtures/liveOpenMarket';
-import { sha256 } from '@/lib/bytes';
-import { REALM_SCHEMA_RELEASE_ID_V1 } from '@/lib/generated/coreFound';
-import { requiredBackingMeaningV1 } from '@/lib/marketDetail';
-import { inspectMarketDiscoveryV1 } from '@/lib/marketDiscovery';
-import { deriveFinalizedRecordAddressesV1 } from '@/lib/releaseRegistry';
-import { type RpcAccount, type SolanaRpcClient } from '@/lib/rpc';
+import { currentCoreMarketV3, LIVE, liveRpcAccount } from '@dclutch/sdk/fixtures/liveOpenMarket';
+import { sha256 } from '@dclutch/sdk/bytes';
+import { REALM_SCHEMA_RELEASE_ID_V1 } from '@dclutch/sdk/generated/coreFound';
+import { requiredBackingMeaningV1 } from '@dclutch/sdk/marketDetail';
+import { inspectMarketDiscoveryV1 } from '@dclutch/sdk/marketDiscovery';
+import { deriveFinalizedRecordAddressesV1 } from '@dclutch/sdk/releaseRegistry';
+import { type RpcAccount, type SolanaRpcClient } from '@dclutch/sdk/rpc';
 
 import CellStrip from './CellStrip';
 

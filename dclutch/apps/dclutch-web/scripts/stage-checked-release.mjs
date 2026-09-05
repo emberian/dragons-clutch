@@ -31,7 +31,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const fixture = fileURLToPath(new URL('../fixtures/public-cut.devnet.json', import.meta.url));
+const fixture = fileURLToPath(new URL('../../../packages/dclutch-sdk/fixtures/public-cut.devnet.json', import.meta.url));
 const [fragmentPath, ...rest] = process.argv.slice(2);
 const flag = rest.indexOf('--release-set');
 const releaseSet = flag < 0 ? null : rest[flag + 1];

@@ -8,8 +8,8 @@ import {
 
 import Anchor from '@/components/Anchor';
 import OpenerFirstCrankTerms from '@/components/OpenerFirstCrankTerms';
-import { type MarketCorePhaseV2 } from '@/lib/marketCoreV2';
-import { SolanaRpcClient } from '@/lib/rpc';
+import { type MarketCorePhaseV2 } from '@dclutch/sdk/marketCoreV2';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 
 type State =
   | Readonly<{ kind: 'loading' | 'refused'; message: string }>

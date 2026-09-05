@@ -5,7 +5,7 @@ import {
   type MarketDiscoveryCardV1,
   type MarketDiscoveryV1,
   type MarketHoardV1,
-} from '@/lib/marketDiscovery';
+} from '@dclutch/sdk/marketDiscovery';
 
 import LandingPulse, {
   collateralTileV1,

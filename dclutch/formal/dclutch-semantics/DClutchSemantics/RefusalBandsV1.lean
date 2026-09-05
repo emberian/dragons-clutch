@@ -136,11 +136,11 @@ def bands : List Band := [
 
 theorem band_span_is_two_to_the_shift : bandSpan = 2 ^ bandShift := by native_decide
 
-/-- Twenty-six allocations: twelve on-chain programs and fourteen test-only
+/-- Twenty-two allocations: eight on-chain programs and fourteen test-only
 callers. -/
 theorem band_population_is_exact :
-    bands.length = 26 ∧
-      (bands.filter (fun band => band.tier == .program)).length = 12 ∧
+    bands.length = 22 ∧
+      (bands.filter (fun band => band.tier == .program)).length = 8 ∧
       (bands.filter (fun band => band.tier == .testCaller)).length = 14 := by
   native_decide
 

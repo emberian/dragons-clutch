@@ -6,7 +6,7 @@ import {
   directTradeBalanceChangesV1,
   directTradeFinalizedCompletionV1,
 } from '@/lib/directTradeJournal';
-import { type SignatureStatusObservation } from '@/lib/rpc';
+import { type SignatureStatusObservation } from '@dclutch/sdk/rpc';
 
 const SCOPE = Object.freeze({
   clusterGenesis: 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG',

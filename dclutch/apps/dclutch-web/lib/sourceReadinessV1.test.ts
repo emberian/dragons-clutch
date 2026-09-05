@@ -7,7 +7,7 @@ import {
   SOURCE_READINESS_RECORDS_FORMAT_V1,
   SOURCE_READINESS_SNAPSHOT_FORMAT_V1,
   SOURCE_READINESS_SOURCE_FORMAT_V1,
-} from './generated/sourceReadinessWasmV1';
+} from '@dclutch/sdk/generated/sourceReadinessWasmV1';
 import {
   acquireSourceReadinessV1,
   buildSourceReadinessTransactionV1,

@@ -6,12 +6,12 @@ import WalletDirectory, { useWalletDirectoryV1 } from '@/components/WalletDirect
 import {
   inspectDirectParticipantReadinessV1,
   type DirectParticipantReadinessV1,
-} from '@/lib/directParticipant';
+} from '@dclutch/sdk/directParticipant';
 import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 // The admission planner is typed against this app's own RPC client. The two
 // classes are structurally identical and nominally distinct; importing the one
 // the callee expects is smaller than widening a signature to paper over it.
-import { SolanaRpcClient as WebSolanaRpcClient } from '@/lib/rpc';
+import { SolanaRpcClient as WebSolanaRpcClient } from '@dclutch/sdk/rpc';
 import { prepareUserPositionAdmissionV1, type PreparedAdmissionV1 } from '@/lib/userPositionAdmissionOperation';
 import {
   clearFinalizedClientOperationJournalV1,
@@ -22,8 +22,8 @@ import {
   writeUnsignedClientOperationJournalV1,
   type ClientOperationJournalV1,
 } from '@/lib/clientOperationJournal';
-import { requestWalletTransactionSignatureV1, submitSignedTransactionV1 } from '@/lib/walletHandoff';
-import { hex, sha256 } from '@/lib/bytes';
+import { requestWalletTransactionSignatureV1, submitSignedTransactionV1 } from '@dclutch/sdk/walletHandoff';
+import { hex, sha256 } from '@dclutch/sdk/bytes';
 import { type WalletDirectoryHandleV1 } from '@/components/WalletDirectory';
 import { type UserPositionAdmissionRequestV1 } from '@/lib/userPositionAdmissionSnapshot';
 

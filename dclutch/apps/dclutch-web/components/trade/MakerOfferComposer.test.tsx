@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
 import { type WalletDirectoryHandleV1 } from '@/components/WalletDirectory';
-import { type DenominationV1 } from '@/lib/quantity';
+import { type DenominationV1 } from '@dclutch/sdk/quantity';
 
 import MakerOfferComposer from './MakerOfferComposer';
 

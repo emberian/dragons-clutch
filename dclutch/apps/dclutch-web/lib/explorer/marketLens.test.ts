@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
-import { currentCoreMarketV3, LIVE, liveRpcAccount, mutate } from '@/fixtures/liveOpenMarket';
-import { sha256 } from '../bytes';
+import { currentCoreMarketV3, LIVE, liveRpcAccount, mutate } from '@dclutch/sdk/fixtures/liveOpenMarket';
+import { sha256 } from '@dclutch/sdk/bytes';
 import {
   CORE_STATE_PHASE_OFFSET,
   CORE_STATE_TERMINAL_RECEIPT_OFFSET,
   CORE_STATE_TERMINAL_WINNER_OFFSET,
   REALM_SCHEMA_RELEASE_ID_V1,
-} from '../generated/coreFound';
-import { deriveFinalizedRecordAddressesV1 } from '../releaseRegistry';
-import type { RpcAccount, SolanaRpcClient } from '../rpc';
+} from '@dclutch/sdk/generated/coreFound';
+import { deriveFinalizedRecordAddressesV1 } from '@dclutch/sdk/releaseRegistry';
+import type { RpcAccount, SolanaRpcClient } from '@dclutch/sdk/rpc';
 import { inspectMarketLens, type LensNode } from './marketLens';
 
 /**

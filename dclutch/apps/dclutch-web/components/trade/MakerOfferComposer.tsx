@@ -4,14 +4,14 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { type WalletDirectoryHandleV1 } from '@/components/WalletDirectory';
 import TicketCard from '@/components/trade/TicketCard';
-import { inspectDirectMakerNonceV1 } from '@/lib/directMakerReplay';
+import { inspectDirectMakerNonceV1 } from '@dclutch/sdk/directMakerReplay';
 import {
   composeDirectSellOfferV1,
   sealDirectSellOfferV1,
   type AuthoredDirectSellOfferV1,
   type DirectSellOfferDraftV1,
-} from '@/lib/directOfferAuthoring';
-import { inspectDirectSellerReadinessV1 } from '@/lib/directParticipant';
+} from '@dclutch/sdk/directOfferAuthoring';
+import { inspectDirectSellerReadinessV1 } from '@dclutch/sdk/directParticipant';
 import {
   exactTwinV1,
   formatClaimPriceV1,
@@ -19,14 +19,14 @@ import {
   parseClaimPriceV1,
   parseQuantityV1,
   type DenominationV1,
-} from '@/lib/quantity';
-import { SolanaRpcClient } from '@/lib/rpc';
-import { type SlotClockV1 } from '@/lib/slotClock';
+} from '@dclutch/sdk/quantity';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
+import { type SlotClockV1 } from '@dclutch/sdk/slotClock';
 import {
   postConfiguredBoardOfferV1,
   type TicketBoardConfigV1,
-} from '@/lib/ticketBoard';
-import { requestWalletMessageSignatureV1 } from '@/lib/walletHandoff';
+} from '@/lib/deploymentTicketBoard';
+import { requestWalletMessageSignatureV1 } from '@dclutch/sdk/walletHandoff';
 
 const U64_MAX_V1 = BigInt('18446744073709551615');
 

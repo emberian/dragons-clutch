@@ -2,14 +2,14 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-import { decodeMarketCoreStateV2 } from './marketCoreV2';
-import { DEVNET_DEPLOYMENT_V1 } from './deployments';
-import { SolanaRpcClient } from './rpc';
+import { decodeMarketCoreStateV2 } from '@dclutch/sdk/marketCoreV2';
+import { DEVNET_DEPLOYMENT_V1 } from '@dclutch/sdk/deployments';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 import { deriveWalletTerminalPayoutInputV1 } from './walletTerminalInputSnapshot';
 import { loadWalletTerminalInputWasmV1 } from './walletTerminalInputV1';
 import { deriveWalletTerminalPayoutManifestV1 } from './walletTerminalPayoutSnapshot';
 import { loadWalletTerminalPayoutWasmV1 } from './walletTerminalPayoutV1';
-import { importRustWalletTerminalPayoutArtifactV3 } from './walletTerminalPayoutV3';
+import { importRustWalletTerminalPayoutArtifactV3 } from '@dclutch/sdk/walletTerminalPayoutV3';
 
 /**
  * THE ZERO-CLI REDEMPTION, end to end, on a market that has actually resolved.

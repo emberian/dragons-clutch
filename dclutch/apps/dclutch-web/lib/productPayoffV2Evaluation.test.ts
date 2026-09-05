@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { compileProductV2 } from './productV2';
+import { compileProductV2 } from '@dclutch/sdk/productV2';
 import {
   evaluateProductPayoffV2WasmV1,
   loadProductPayoffV2WasmV1,

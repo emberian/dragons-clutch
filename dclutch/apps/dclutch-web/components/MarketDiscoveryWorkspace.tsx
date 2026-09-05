@@ -8,12 +8,12 @@ import MarketIssuanceHistory from '@/components/charts/MarketIssuanceHistory';
 import SupplyShareStrip from '@/components/charts/SupplyShareStrip';
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 
-import { CORE_STATE_BYTES } from '@/lib/generated/coreFound';
-import { type DeploymentV1 } from '@/lib/deployments';
-import { SUPERSEDED_CORE_STATE_WIDTHS } from '@/lib/marketCoreV2';
-import { collateralDenominationV1 } from '@/lib/marketDenomination';
-import { inspectMarketQuestionsV1, type MarketQuestionV1 } from '@/lib/marketQuestion';
-import { formatQuantityV1 } from '@/lib/quantity';
+import { CORE_STATE_BYTES } from '@dclutch/sdk/generated/coreFound';
+import { type DeploymentV1 } from '@dclutch/sdk/deployments';
+import { SUPERSEDED_CORE_STATE_WIDTHS } from '@dclutch/sdk/marketCoreV2';
+import { collateralDenominationV1 } from '@dclutch/sdk/marketDenomination';
+import { inspectMarketQuestionsV1, type MarketQuestionV1 } from '@dclutch/sdk/marketQuestion';
+import { formatQuantityV1 } from '@dclutch/sdk/quantity';
 import { useDeploymentV1 } from '@/lib/deploymentStore';
 import { docsHrefV1 } from '@/lib/flags';
 import {
@@ -29,20 +29,20 @@ import {
   type MarketDiscoveryV1,
   type MarketEnumerationV1,
   type MarketListingV1,
-} from '@/lib/marketDiscovery';
+} from '@dclutch/sdk/marketDiscovery';
 import {
   filterMarketCardsV1,
   noMatchSentenceV1,
   sortMarketCardsV1,
   type MarketSortOrderV1,
-} from '@/lib/marketFiltering';
-import { marketDetailHrefV1 } from '@/lib/marketHref';
-import { marketEditorialV1, marketNarrativeV1 } from '@/lib/marketRegistry';
-import { PUBLIC_DEVNET_CUT_V1 } from '@/lib/publicCutStaging';
-import { SolanaRpcClient, type ConnectionFacts } from '@/lib/rpc';
+} from '@dclutch/sdk/marketFiltering';
+import { marketDetailHrefV1 } from '@dclutch/sdk/marketHref';
+import { marketEditorialV1, marketNarrativeV1 } from '@dclutch/sdk/marketRegistry';
+import { PUBLIC_DEVNET_CUT_V1 } from '@dclutch/sdk/publicCutStaging';
+import { SolanaRpcClient, type ConnectionFacts } from '@dclutch/sdk/rpc';
 import { clusterNameV1 } from '@/lib/rpcDefault';
-import { deadlineMomentPhraseV1, readSlotClockV1, type SlotClockV1 } from '@/lib/slotClock';
-import { SUPPLY_SHARE_MEANING_V1 } from '@/lib/supplyShares';
+import { deadlineMomentPhraseV1, readSlotClockV1, type SlotClockV1 } from '@dclutch/sdk/slotClock';
+import { SUPPLY_SHARE_MEANING_V1 } from '@dclutch/sdk/supplyShares';
 
 type State =
   | Readonly<{ kind: 'loading' | 'refused'; message: string }>

@@ -25,7 +25,7 @@
  * fact about the chain, and the explorer says the number rather than deciding
  * what it means.
  */
-import type { SolanaRpcClient } from '../rpc';
+import type { SolanaRpcClient } from '@dclutch/sdk/rpc';
 import {
   decodeAgainstSpec,
   leadingMagic,

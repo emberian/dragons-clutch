@@ -664,7 +664,7 @@ describe('CLI payout completion boundary', () => {
       const post = addresses.map((_, index) => index === ownerIndex
         ? String(10_000n - fixture.rent - 5n) : index === replayIndex ? fixture.rent.toString() : '1');
       const meta: TransactionMetaObservation = Object.freeze({
-        signature: signed.signature, slot: '50', blockTime: null, succeeded: true, errorText: null,
+        signature: signed.signature, slot: '50', blockTime: null, succeeded: true, errorText: null, error: null, computeUnits: null, innerInstructions: Object.freeze([]),
         feeLamports: '5', accountAddresses: Object.freeze(addresses),
         preBalances: Object.freeze(pre), postBalances: Object.freeze(post), logMessages: Object.freeze([]),
         returnData: Object.freeze({ programId: fixture.programs.custody, data: fixture.receipt }),
@@ -722,7 +722,7 @@ describe('CLI payout completion boundary', () => {
       ...plan.transaction.message.staticAccountKeys.slice(1).map((address) => address.toBase58()),
     ];
     const meta: TransactionMetaObservation = Object.freeze({
-      signature: signed.signature, slot: '50', blockTime: null, succeeded: true, errorText: null,
+      signature: signed.signature, slot: '50', blockTime: null, succeeded: true, errorText: null, error: null, computeUnits: null, innerInstructions: Object.freeze([]),
       feeLamports: '5', accountAddresses: Object.freeze(addresses),
       preBalances: Object.freeze(addresses.map((_, index) => index === 0 ? '100' : '1')),
       postBalances: Object.freeze(addresses.map((_, index) => index === 0 ? '95' : '1')),

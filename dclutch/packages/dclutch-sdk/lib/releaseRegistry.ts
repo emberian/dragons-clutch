@@ -10,6 +10,17 @@ import { ascii, hex, isZero, requireNonzero, requireZero, sha256, slice, u16, u6
 import { SOLANA_PACKET_BYTES_V1 } from './solanaLimits';
 import { releaseSupersededMeaningV1 } from './refusals';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
+import {
+  ACTIVATION_CACHE_MAGIC_V1,
+  ARTIFACT_RELEASE_MAGIC_V1,
+  CHECKED_MULTIPROGRAM_MAGIC_V1,
+  CHECKED_RELEASE_MAGIC_V1,
+  EXECUTION_RELEASE_SET_MAGIC_V1,
+  REGISTRY_INSTRUCTION_MAGIC_V1,
+} from './generated/protocolConstantsV1';
+import {
+  REGISTRY_ACTIVATION_PDA_DOMAIN_V1,
+} from './generated/claimsCustodyReplayV1';
 
 export const CHECKED_MULTIPROGRAM_BYTES = 1_592;
 export const CHECKED_RELEASE_FIXED_BYTES = 388;
@@ -81,7 +92,7 @@ const STAGING_RECORD_SEED = new TextEncoder().encode('dclutch-record-stage-v1');
 /// of the same string until 2026-08-29. A seed domain is a consensus
 /// coordinate: two copies that disagree by one byte derive two different PDAs
 /// and one of them silently stops finding the account it is authenticating.
-export const REGISTRY_ACTIVATION_PDA_SEED_V1 = new TextEncoder().encode('dclutch:release-activation:v1');
+export const REGISTRY_ACTIVATION_PDA_SEED_V1 = REGISTRY_ACTIVATION_PDA_DOMAIN_V1;
 
 const ACTIVATION_SEED = REGISTRY_ACTIVATION_PDA_SEED_V1;
 export const EXECUTION_RELEASE_SET_SCHEMA_ID_V1 = Uint8Array.from([
@@ -363,7 +374,7 @@ function asciiText(bytes: Uint8Array, offset: number, field: string): Readonly<{
 
 function artifactBytesFromChecked(bytes: Uint8Array): Uint8Array {
   const output = new Uint8Array(ARTIFACT_RELEASE_BYTES);
-  output.set(new TextEncoder().encode('DCLTARF1'), 0);
+  output.set(new TextEncoder().encode(ARTIFACT_RELEASE_MAGIC_V1), 0);
   new DataView(output.buffer).setUint16(8, 1, true);
   new DataView(output.buffer).setUint16(10, 1, true);
   output[12] = bytes[12] === 0 ? 0 : 1;
@@ -378,7 +389,7 @@ function artifactBytesFromChecked(bytes: Uint8Array): Uint8Array {
 }
 
 export function decodeArtifactReleaseV1(bytes: Uint8Array): ArtifactReleaseV1 {
-  if (bytes.length !== ARTIFACT_RELEASE_BYTES || ascii(bytes, 0, 8) !== 'DCLTARF1' || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 1) {
+  if (bytes.length !== ARTIFACT_RELEASE_BYTES || ascii(bytes, 0, 8) !== ARTIFACT_RELEASE_MAGIC_V1 || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 1) {
     throw new Error('artifact release has the wrong exact width, magic, schema, or profile');
   }
   requireZero(bytes, 13, 3, 'artifact release header');
@@ -402,7 +413,7 @@ export function decodeArtifactReleaseV1(bytes: Uint8Array): ArtifactReleaseV1 {
 }
 
 export async function decodeCheckedReleaseV1(bytes: Uint8Array): Promise<CheckedReleaseV1> {
-  if (bytes.length < CHECKED_RELEASE_FIXED_BYTES || ascii(bytes, 0, 8) !== 'DCLTREL1' || u16(bytes, 8) !== 1) throw new Error('checked release has the wrong fixed header');
+  if (bytes.length < CHECKED_RELEASE_FIXED_BYTES || ascii(bytes, 0, 8) !== CHECKED_RELEASE_MAGIC_V1 || u16(bytes, 8) !== 1) throw new Error('checked release has the wrong fixed header');
   // Semantic kind 2 is `unowned`, which is what EVERY checked release the
   // pipeline produces for the seven role programs carries — no first-party
   // contract decodes a role-program release preimage, so no other kind is
@@ -435,7 +446,7 @@ export async function decodeCheckedReleaseV1(bytes: Uint8Array): Promise<Checked
 }
 
 export async function decodeExecutionReleaseSetV1(bytes: Uint8Array): Promise<ExecutionReleaseSetV1> {
-  if (bytes.length !== EXECUTION_RELEASE_SET_BYTES || ascii(bytes, 0, 8) !== 'DCLTRLS1' || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 1) throw new Error('execution release set has the wrong exact header');
+  if (bytes.length !== EXECUTION_RELEASE_SET_BYTES || ascii(bytes, 0, 8) !== EXECUTION_RELEASE_SET_MAGIC_V1 || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 1) throw new Error('execution release set has the wrong exact header');
   requireZero(bytes, 12, 4, 'execution release set header');
   const bindings = REGISTRY_ROLES.map((role, index) => {
     const program = slice(bytes, 16 + index * 64, 32); const artifact = slice(bytes, 48 + index * 64, 32);
@@ -450,7 +461,7 @@ export async function decodeExecutionReleaseSetV1(bytes: Uint8Array): Promise<Ex
 }
 
 export async function decodeCheckedMultiprogramV1(bytes: Uint8Array, checkedBytes: Readonly<Record<RegistryRole, Uint8Array>>): Promise<CheckedMultiprogramV1> {
-  if (bytes.length !== CHECKED_MULTIPROGRAM_BYTES || ascii(bytes, 0, 8) !== 'DCLTMPR1' || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 5) throw new Error('checked multiprogram has the wrong exact header');
+  if (bytes.length !== CHECKED_MULTIPROGRAM_BYTES || ascii(bytes, 0, 8) !== CHECKED_MULTIPROGRAM_MAGIC_V1 || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 5) throw new Error('checked multiprogram has the wrong exact header');
   requireZero(bytes, 12, 4, 'checked multiprogram header');
   const releaseSet = await decodeExecutionReleaseSetV1(slice(bytes, 16, EXECUTION_RELEASE_SET_BYTES));
   const artifacts: ArtifactReleaseV1[] = []; const checkedReleaseIds: string[] = [];
@@ -479,7 +490,7 @@ export function deriveFinalizedRecordAddressesV1(registryProgram: string, schema
 }
 
 function expectedCacheBytes(evidence: CheckedMultiprogramV1): Uint8Array {
-  const output = new Uint8Array(ACTIVATION_CACHE_BYTES); output.set(new TextEncoder().encode('DCLTACT1'));
+  const output = new Uint8Array(ACTIVATION_CACHE_BYTES); output.set(new TextEncoder().encode(ACTIVATION_CACHE_MAGIC_V1));
   const view = new DataView(output.buffer); view.setUint16(8, 1, true); view.setUint16(10, 1, true);
   output.set(Uint8Array.from(evidence.releaseSet.id.match(/../g) ?? [], (value) => Number.parseInt(value, 16)), 16);
   REGISTRY_ROLES.forEach((role, index) => {
@@ -497,7 +508,7 @@ function expectedCacheBytes(evidence: CheckedMultiprogramV1): Uint8Array {
 /// and refuses. This admits nothing; it reports what the account already holds.
 export function activationCacheProgressV1(observed: Uint8Array, expected: Uint8Array): ReadonlyArray<RegistryRole> {
   if (observed.length !== ACTIVATION_CACHE_BYTES || expected.length !== ACTIVATION_CACHE_BYTES) throw new Error('activation cache progress requires two exact 1,288-byte states');
-  if (ascii(observed, 0, 8) !== 'DCLTACT1' || u16(observed, 8) !== 1 || u16(observed, 10) !== 1) throw new Error('activation cache has the wrong exact header');
+  if (ascii(observed, 0, 8) !== ACTIVATION_CACHE_MAGIC_V1 || u16(observed, 8) !== 1 || u16(observed, 10) !== 1) throw new Error('activation cache has the wrong exact header');
   requireZero(observed, REGISTRY_ACTIVATION_CACHE_RESERVED_OFFSET_V1, REGISTRY_ACTIVATION_CACHE_RESERVED_BYTES_V1, 'activation cache header');
   // THE SELECTION COMPARISON SKIPS THE BUMP. `expectedCacheBytes` projects the
   // RELEASE SET, which has no field for a fact about an account ADDRESS and so
@@ -524,7 +535,7 @@ export function activationCacheProgressV1(observed: Uint8Array, expected: Uint8A
 }
 
 function requireActivationCacheHeader(bytes: Uint8Array): void {
-  if (bytes.length !== ACTIVATION_CACHE_BYTES || ascii(bytes, 0, 8) !== 'DCLTACT1' || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 1) throw new Error('activation cache has the wrong exact header');
+  if (bytes.length !== ACTIVATION_CACHE_BYTES || ascii(bytes, 0, 8) !== ACTIVATION_CACHE_MAGIC_V1 || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 1) throw new Error('activation cache has the wrong exact header');
   requireZero(bytes, REGISTRY_ACTIVATION_CACHE_RESERVED_OFFSET_V1, REGISTRY_ACTIVATION_CACHE_RESERVED_BYTES_V1, 'activation cache header');
 }
 
@@ -644,7 +655,7 @@ function compilePacket(payer: PublicKey, registry: PublicKey, accounts: Construc
 /// role in byte 11. There is no roleless variant: a zero role byte decodes as
 /// Core, so leaving it implicit chooses Core by accident rather than by intent.
 function registryInstruction(action: 0 | 1, role: RegistryRole): Uint8Array {
-  const bytes = new Uint8Array(REGISTRY_INSTRUCTION_BYTES); bytes.set(new TextEncoder().encode('DCLTRIX1')); new DataView(bytes.buffer).setUint16(8, 1, true);
+  const bytes = new Uint8Array(REGISTRY_INSTRUCTION_BYTES); bytes.set(new TextEncoder().encode(REGISTRY_INSTRUCTION_MAGIC_V1)); new DataView(bytes.buffer).setUint16(8, 1, true);
   bytes[10] = action; bytes[11] = REGISTRY_ROLES.indexOf(role);
   return bytes;
 }

@@ -255,10 +255,6 @@ describe('the portable ticket wire the Rust author has to match', () => {
     const body = `${JSON.stringify(produced, null, 2)}\n`;
     if (process.env.DCLUTCH_WRITE_TICKET_VECTOR === '1') writeFileSync(VECTOR_PATH, body);
     expect(readFileSync(VECTOR_PATH, 'utf8')).toBe(body);
-    // The two fixture copies are one artifact. `sync-from-web.mjs` already
-    // crosses this boundary; without this line the web mirror could silently
-    // fork and the Rust test, which reads only the SDK copy, would not notice.
-    expect(readFileSync(new URL('../../../apps/dclutch-web/fixtures/direct-intent-ticket.json', import.meta.url), 'utf8')).toBe(body);
     expect(ticketText.endsWith('\n')).toBe(false);
     expect(decodeDirectIntentTicketV1(ticketText).intent).toEqual(intent);
   });

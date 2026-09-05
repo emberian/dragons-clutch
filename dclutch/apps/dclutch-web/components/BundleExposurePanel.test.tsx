@@ -6,8 +6,8 @@ import {
   BUNDLE_TERMS_TWO_V1,
   bundleEntryV1,
   bundlePortfolioV1,
-} from '../fixtures/bundlePortfolio';
-import { bundleExposureV1 } from '../lib/bundleExposure';
+} from '@dclutch/sdk/fixtures/bundlePortfolio';
+import { bundleExposureV1 } from '@dclutch/sdk/bundleExposure';
 import BundleExposurePanel from './BundleExposurePanel';
 
 /**

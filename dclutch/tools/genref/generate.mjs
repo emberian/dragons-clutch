@@ -12,7 +12,7 @@
 //   - tools/gauntlet/CU_BUDGETS.json
 //   - crates/dclutch-refusal-registry/src/lib.rs (band allocation)
 //   - docs/decisions/*.md (ADR index)
-//   - apps/dclutch-web/lib/generated/*.ts (the Lean/Rust-emitted ABI modules,
+//   - packages/dclutch-sdk/lib/generated/*.ts (the Lean/Rust-emitted ABI modules,
 //     each byte-gated by its own `abi:*:verify`)
 //
 // Modes:
@@ -142,7 +142,7 @@ const decisionFiles = fs
   .filter((f) => f.endsWith(".md"))
   .sort();
 
-const generatedTsDir = path.join(REPO, "apps", "dclutch-web", "lib", "generated");
+const generatedTsDir = path.join(REPO, "packages", "dclutch-sdk", "lib", "generated");
 const tsModules = fs
   .readdirSync(generatedTsDir)
   .filter((f) => f.endsWith(".ts"))
@@ -634,7 +634,7 @@ const pages = new Map(); // relpath -> content
       "tools/gauntlet/CU_BUDGETS.json",
       "crates/dclutch-refusal-registry",
       "docs/decisions",
-      "apps/dclutch-web/lib/generated",
+      "packages/dclutch-sdk/lib/generated",
     ]) +
       `# dClutch protocol reference
 
@@ -1682,12 +1682,12 @@ the OPEN column above counts zero while a question is still owed.
     const parts = [];
     parts.push(
       generatedHeader([
-        `apps/dclutch-web/lib/generated/${mod.file} (which is itself generated -- see its header below)`,
+        `packages/dclutch-sdk/lib/generated/${mod.file} (which is itself generated -- see its header below)`,
       ]),
     );
     parts.push(`# ABI: ${base}\n`);
     parts.push(
-      `Source module: \`apps/dclutch-web/lib/generated/${mod.file}\`, whose own header reads:\n`,
+      `Source module: \`packages/dclutch-sdk/lib/generated/${mod.file}\`, whose own header reads:\n`,
     );
     parts.push("```");
     parts.push(...mod.header);
@@ -1789,15 +1789,15 @@ the OPEN column above counts zero while a question is still owed.
 
   pages.set(
     "abi/README.md",
-    generatedHeader(["apps/dclutch-web/lib/generated/*.ts"]) +
+    generatedHeader(["packages/dclutch-sdk/lib/generated/*.ts"]) +
       `# ABI surfaces
 
 The exact bytes the protocol speaks: instruction magics, PDA seed domains,
 record widths and field offsets, and account tables -- one page per
 surface.
 
-These pages are rendered from the same generated modules the web app uses
-to decode chain data (\`apps/dclutch-web/lib/generated/\`). Each module is
+These pages are rendered from the same generated modules the SDK, the web app and the CLI use
+to decode chain data (\`packages/dclutch-sdk/lib/generated/\`). Each module is
 byte-checked against the Rust or Lean source that defines its layout, and
 \`npm test\` runs every check.
 

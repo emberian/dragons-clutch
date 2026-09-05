@@ -3,11 +3,11 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { DEVNET_DEPLOYMENT_V1 } from './deployments';
-import { inspectMarketDetailV1 } from './marketDetail';
-import { inspectMarketQuestionV1 } from './marketQuestion';
-import { inspectMarketResolutionV1 } from './marketResolution';
-import { SolanaRpcClient } from './rpc';
+import { DEVNET_DEPLOYMENT_V1 } from '@dclutch/sdk/deployments';
+import { inspectMarketDetailV1 } from '@dclutch/sdk/marketDetail';
+import { inspectMarketQuestionV1 } from '@dclutch/sdk/marketQuestion';
+import { inspectMarketResolutionV1 } from '@dclutch/sdk/marketResolution';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 import { OG_CARD_FACTS_SCHEMA_V1, ogCardRowsV1, readOgCardFactsV1, readOgRegistryV1 } from '../scripts/og-cards.mjs';
 
 /**

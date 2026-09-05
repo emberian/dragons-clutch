@@ -1,9 +1,9 @@
-import { hex, sha256 } from './bytes';
+import { hex, sha256 } from '@dclutch/sdk/bytes';
 import {
   type ClientOperationScopeV1,
   type ClientOperationJournalV1,
 } from './clientOperationJournal';
-import { type SignatureStatusObservation } from './rpc';
+import { type SignatureStatusObservation } from '@dclutch/sdk/rpc';
 
 /**
  * The Direct crossing's durable-submission seam: the journal input that must

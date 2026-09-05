@@ -8,21 +8,21 @@ import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 
 import { useDeploymentV1 } from '@/lib/deploymentStore';
 
-import { type CapabilityFundingQuoteV1 } from '@/lib/capabilityManifest';
+import { type CapabilityFundingQuoteV1 } from '@dclutch/sdk/capabilityManifest';
 import {
   inspectMarketDetailV1,
   requiredBackingMeaningV1,
   terminalOutcomeMeaningV1,
   type MarketDetailV1,
-} from '@/lib/marketDetail';
-import { marketEditorialV1, marketNarrativeV1, type MarketNarrativeV1 } from '@/lib/marketRegistry';
-import { formatWindowInstantV1, inspectMarketQuestionV1, type MarketQuestionV1 } from '@/lib/marketQuestion';
+} from '@dclutch/sdk/marketDetail';
+import { marketEditorialV1, marketNarrativeV1, type MarketNarrativeV1 } from '@dclutch/sdk/marketRegistry';
+import { formatWindowInstantV1, inspectMarketQuestionV1, type MarketQuestionV1 } from '@dclutch/sdk/marketQuestion';
 import {
   inspectMarketResolutionV1,
   marketRedemptionStateV1,
   type MarketRedemptionStateV1,
   type MarketResolutionV1,
-} from '@/lib/marketResolution';
+} from '@dclutch/sdk/marketResolution';
 import {
   marketActivationOutlookV1,
   provenanceChipV1,
@@ -33,22 +33,22 @@ import {
   type MarketCollateralV1,
   type MarketDiscoveryCardV1,
   type MarketProvenanceV1,
-} from '@/lib/marketDiscovery';
-import { collateralDenominationV1 } from '@/lib/marketDenomination';
-import { ordinarySelectorJoinV1, type OrdinarySelectorJoinV1 } from '@/lib/ordinarySelectorV1';
-import { denominationUnitV1, formatQuantityV1, type DenominationV1 } from '@/lib/quantity';
+} from '@dclutch/sdk/marketDiscovery';
+import { collateralDenominationV1 } from '@dclutch/sdk/marketDenomination';
+import { ordinarySelectorJoinV1, type OrdinarySelectorJoinV1 } from '@dclutch/sdk/ordinarySelectorV1';
+import { denominationUnitV1, formatQuantityV1, type DenominationV1 } from '@dclutch/sdk/quantity';
 import CellStrip from '@/components/charts/CellStrip';
 import MarketIssuanceHistory from '@/components/charts/MarketIssuanceHistory';
 import SupplyShareStrip from '@/components/charts/SupplyShareStrip';
-import { formatBasisPointsV1, issuedSupplySharesV1, SUPPLY_SHARE_MEANING_V1 } from '@/lib/supplyShares';
+import { formatBasisPointsV1, issuedSupplySharesV1, SUPPLY_SHARE_MEANING_V1 } from '@dclutch/sdk/supplyShares';
 import AggregateRetirementStatus from '@/components/AggregateRetirementStatus';
 import MarketActivity from '@/components/MarketActivity';
 import MarketTradePanel from '@/components/MarketTradePanel';
 import RefusedMarketStory from '@/components/RefusedMarketStory';
-import { SolanaRpcClient, type ConnectionFacts } from '@/lib/rpc';
+import { SolanaRpcClient, type ConnectionFacts } from '@dclutch/sdk/rpc';
 import { clusterNameV1 } from '@/lib/rpcDefault';
-import { deadlineMomentPhraseV1, readSlotClockV1, slotClockCaveatV1, type SlotClockV1 } from '@/lib/slotClock';
-import { watchSentenceV1 } from '@/lib/rpcSubscribe';
+import { deadlineMomentPhraseV1, readSlotClockV1, slotClockCaveatV1, type SlotClockV1 } from '@dclutch/sdk/slotClock';
+import { watchSentenceV1 } from '@dclutch/sdk/rpcSubscribe';
 import { useAccountWatchV1 } from '@/lib/useAccountWatch';
 
 type State =

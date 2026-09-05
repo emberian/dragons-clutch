@@ -1,4 +1,4 @@
-import { parseQuantityV1, type DenominationV1 } from '@/lib/quantity';
+import { parseQuantityV1, type DenominationV1 } from '@dclutch/sdk/quantity';
 import { type FlowStepIndexV1 } from '@/lib/tradeFlowRefusals';
 
 /**

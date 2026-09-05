@@ -24,19 +24,16 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const webRoot = fileURLToPath(new URL('..', import.meta.url));
-const generatedDir = join(webRoot, 'lib', 'generated');
-const exemptPath = join(webRoot, 'scripts', 'explorer-coverage.exempt.json');
+const sdkRoot = join(webRoot, '..', '..', 'packages', 'dclutch-sdk');
 /**
- * The persisted state machines are emitted into the SDK, not into this tree.
- *
- * `packages/dclutch-sdk/lib/generated/stateMachinesV1.ts` is generated from
- * each machine's own Rust hostile decoder and byte-gated by the SDK's
- * `abi:state-machines:verify`. It is the second decode authority the browser
- * imports from, and the eight magics in it are declared nowhere under
- * `lib/generated/` — so a survey that read only this tree would call every one
- * of them an invention of the render map.
+ * The two decode authorities the explorer renders from: the SDK's generated
+ * modules (every record layout, the state machines, the route census), which
+ * the browser imports as `@dclutch/sdk/generated/*`, and this tree's own
+ * `lib/generated/`, which holds only what the web app regenerates itself.
  */
-const stateMachineModule = join(webRoot, '..', '..', 'packages', 'dclutch-sdk', 'lib', 'generated', 'stateMachinesV1.ts');
+const generatedDirs = [join(sdkRoot, 'lib', 'generated'), join(webRoot, 'lib', 'generated')];
+const exemptPath = join(webRoot, 'scripts', 'explorer-coverage.exempt.json');
+const stateMachineModule = join(sdkRoot, 'lib', 'generated', 'stateMachinesV1.ts');
 
 /**
  * The census module is emitted like the rest but declares INSTRUCTION magics,
@@ -56,6 +53,17 @@ function asciiFromBytes(text) {
   return String.fromCharCode(...bytes);
 }
 
+/** Every `.ts` module under either generated tree, as `[directory, entry]`, in a stable order. */
+function generatedEntries() {
+  const found = [];
+  for (const generatedDir of generatedDirs) {
+    for (const entry of readdirSync(generatedDir).sort()) {
+      if (entry.endsWith('.ts')) found.push([generatedDir, entry]);
+    }
+  }
+  return found;
+}
+
 /**
  * Every record magic the generated modules declare, as
  * `{ magic, constants: [{ module, constant }] }`. One magic can be declared by
@@ -64,8 +72,8 @@ function asciiFromBytes(text) {
  */
 export function surveyRecordMagics() {
   const found = new Map();
-  for (const entry of readdirSync(generatedDir).sort()) {
-    if (!entry.endsWith('.ts') || entry === CENSUS_MODULE) continue;
+  for (const [generatedDir, entry] of generatedEntries()) {
+    if (entry === CENSUS_MODULE) continue;
     const text = readFileSync(join(generatedDir, entry), 'utf8');
     const record = (constant, magic) => {
       if (magic === null) return;
@@ -112,8 +120,8 @@ export function surveyStateMachineMagics() {
  */
 export function surveyMagiclessLayouts() {
   const found = [];
-  for (const entry of readdirSync(generatedDir).sort()) {
-    if (!entry.endsWith('.ts') || entry === CENSUS_MODULE) continue;
+  for (const [generatedDir, entry] of generatedEntries()) {
+    if (entry === CENSUS_MODULE) continue;
     const text = readFileSync(join(generatedDir, entry), 'utf8');
     const declared = [...text.matchAll(/export const ([A-Z0-9_]*MAGIC[A-Z0-9_]*)\s*=/g)].map((match) => match[1]);
     if (declared.length === 0) continue;
@@ -126,7 +134,7 @@ export function surveyMagiclessLayouts() {
 
 /** Every instruction magic the route census emits, with the route it selects. */
 export function surveyInstructionMagics() {
-  const text = readFileSync(join(generatedDir, CENSUS_MODULE), 'utf8');
+  const text = readFileSync(join(sdkRoot, 'lib', 'generated', CENSUS_MODULE), 'utf8');
   const table = text.match(/export const INSTRUCTION_MAGICS[\s\S]*?\n\]\);/);
   if (!table) throw new Error('routeCensus.ts: INSTRUCTION_MAGICS table not found');
   const found = new Map();

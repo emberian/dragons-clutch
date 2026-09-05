@@ -6,9 +6,9 @@ import {
   PROTOCOL_ROLE_MEANING_V1,
   type DeploymentV1,
   type ProtocolRoleV1,
-} from '../deployments';
+} from '@dclutch/sdk/deployments';
 import { clusterNameV1 } from '../rpcDefault';
-import { type ConnectionFacts, type SolanaRpcClient } from '../rpc';
+import { type ConnectionFacts, type SolanaRpcClient } from '@dclutch/sdk/rpc';
 
 /**
  * The explorer's landing content: THE PROTOCOL, not a form.

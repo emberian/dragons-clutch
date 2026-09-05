@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { DEVNET_PROGRAM_EVIDENCE_V1, DEVNET_DEPLOYMENT_V1, LOCAL_DEPLOYMENT_V1, PROTOCOL_ROLES_V1 } from '../deployments';
-import { type MultipleAccountObservation, type RpcAccount, type SignatureRecordObservation } from '../rpc';
+import { DEVNET_PROGRAM_EVIDENCE_V1, DEVNET_DEPLOYMENT_V1, LOCAL_DEPLOYMENT_V1, PROTOCOL_ROLES_V1 } from '@dclutch/sdk/deployments';
+import { type MultipleAccountObservation, type RpcAccount, type SignatureRecordObservation } from '@dclutch/sdk/rpc';
 import { classifySearchV1, inspectProtocolHomeV1 } from './protocolHome';
 
 const FACTS = Object.freeze({

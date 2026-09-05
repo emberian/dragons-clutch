@@ -11,7 +11,7 @@ import {
   DEVNET_PROGRAM_EVIDENCE_V1,
   LOCAL_DEPLOYMENT_V1,
   PROTOCOL_ROLES_V1,
-} from '@/lib/deployments';
+} from '@dclutch/sdk/deployments';
 
 describe('public deployment evidence', () => {
   it('projects exactly the seven checked devnet Program and ProgramData coordinates', () => {

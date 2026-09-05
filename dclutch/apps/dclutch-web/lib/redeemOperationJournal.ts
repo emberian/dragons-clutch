@@ -4,7 +4,7 @@ import {
   type ClaimsCustodyReplayPlanV1,
   type ClaimsCustodyReplayRequestV1,
   type ClaimsCustodyReplayStateV1,
-} from './claimsCustodyReplay';
+} from '@dclutch/sdk/claimsCustodyReplay';
 import {
   type ClientOperationJournalV1,
   type ClientOperationScopeV1,
@@ -16,8 +16,8 @@ import {
   walletTerminalPayoutSummaryV3,
   type PreparedWalletTerminalPayoutV3,
   type WalletTerminalPayoutManifestV3,
-} from './walletTerminalPayoutV3';
-import { type SignatureStatusObservation } from './rpc';
+} from '@dclutch/sdk/walletTerminalPayoutV3';
+import { type SignatureStatusObservation } from '@dclutch/sdk/rpc';
 
 type UnsignedJournalInputV1 = ClientOperationScopeV1 & Readonly<{
   operation: 'claims-replay-create-v1' | 'wallet-terminal-payout-v3';

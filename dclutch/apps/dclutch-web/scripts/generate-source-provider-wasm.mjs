@@ -11,8 +11,8 @@ const root = resolve(app, '../..');
 const wire = join(root, 'crates/dclutch-source-provider-wasm/src/wire.rs');
 const crate = 'dclutch-source-provider-wasm';
 const output = join(app, 'lib/generated/sourceProviderWasm');
-const facts = join(app, 'lib/generated/sourceProviderWasmV1.ts');
-const sdkFacts = join(root, 'packages/dclutch-sdk/lib/generated/sourceProviderWasmV1.ts');
+// The facts module has one home, the SDK; the web imports it as `@dclutch/sdk/generated/sourceProviderWasmV1`.
+const facts = join(root, 'packages/dclutch-sdk/lib/generated/sourceProviderWasmV1.ts');
 const check = process.argv.includes('--check');
 const temporary = mkdtempSync(join(tmpdir(), 'dclutch-source-provider-wasm.'));
 
@@ -78,7 +78,6 @@ try {
     `export const SOURCE_PROVIDER_WASM_BYTES_V1 = ${wasm.length} as const;\n`;
   if (check) {
     if (readFileSync(facts, 'utf8') !== generatedFacts) throw new Error('generated Source-provider facts differ');
-    if (readFileSync(sdkFacts, 'utf8') !== generatedFacts) throw new Error('generated SDK Source-provider facts differ');
     for (const name of ['source_provider.js', 'source_provider.d.ts', 'source_provider_bg.wasm', 'source_provider_bg.wasm.d.ts']) {
       if (!readFileSync(join(output, name)).equals(readFileSync(join(generated, name)))) throw new Error(`generated ${name} differs`);
     }
@@ -88,8 +87,6 @@ try {
       writeFileSync(join(output, name), readFileSync(join(generated, name)));
     }
     writeFileSync(facts, generatedFacts);
-    mkdirSync(dirname(sdkFacts), { recursive: true });
-    writeFileSync(sdkFacts, generatedFacts);
   }
 } finally {
   rmSync(temporary, { recursive: true, force: true });

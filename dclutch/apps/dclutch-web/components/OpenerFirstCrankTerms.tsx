@@ -8,8 +8,8 @@ import {
   lamportsAsSolV1,
   openerFirstCrankV1,
   type OpenerFirstCrankV1,
-} from '@/lib/openerTerms';
-import { SolanaRpcClient } from '@/lib/rpc';
+} from '@dclutch/sdk/openerTerms';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 
 type State =
   | Readonly<{ kind: 'loading' | 'refused'; message: string }>

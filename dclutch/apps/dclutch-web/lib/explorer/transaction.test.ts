@@ -8,9 +8,9 @@ import {
 } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
-import { LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2 } from '../generated/coreFound';
-import { PROTOCOL_REFUSALS, REFUSAL_BANDS } from '../generated/routeCensus';
-import type { TransactionMetaObservation } from '../rpc';
+import { LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2 } from '@dclutch/sdk/generated/coreFound';
+import { PROTOCOL_REFUSALS, REFUSAL_BANDS } from '@dclutch/sdk/generated/routeCensus';
+import type { TransactionMetaObservation } from '@dclutch/sdk/rpc';
 import { magicText } from './accountRecords';
 import { inspectTransaction, projectTransaction } from './transaction';
 

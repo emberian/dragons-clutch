@@ -17,7 +17,7 @@ import {
   U64Field,
 } from './OperatorFields';
 import { FieldRefusalV1 } from './fieldReadings';
-import type { DenominationV1 } from '@/lib/quantity';
+import type { DenominationV1 } from '@dclutch/sdk/quantity';
 
 /**
  * The narrow-width guard for the operator field vocabulary, in two parts.

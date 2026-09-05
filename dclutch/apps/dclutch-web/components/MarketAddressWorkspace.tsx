@@ -6,7 +6,7 @@ import { useSyncExternalStore } from 'react';
 import Anchor from '@/components/Anchor';
 import MarketDetailWorkspace from '@/components/MarketDetailWorkspace';
 import Nav from '@/components/Nav';
-import { marketAddressQueryV1 } from '@/lib/marketHref';
+import { marketAddressQueryV1 } from '@dclutch/sdk/marketHref';
 
 function subscribeToLocation(onChange: () => void): () => void {
   window.addEventListener('popstate', onChange);

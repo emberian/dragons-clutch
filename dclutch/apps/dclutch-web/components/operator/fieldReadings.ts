@@ -1,6 +1,6 @@
 import { PublicKey } from '@solana/web3.js';
 
-import { denominationUnitV1, formatQuantityV1, type DenominationV1 } from '@/lib/quantity';
+import { denominationUnitV1, formatQuantityV1, type DenominationV1 } from '@dclutch/sdk/quantity';
 
 /**
  * What a console field knows about the text currently inside it.
@@ -66,8 +66,8 @@ export function compactAddressV1(address: string): string {
 /**
  * A 32-byte account address, base58.
  *
- * The parse is the one `lib/localSuccessor.ts` already runs on every address
- * it decodes. The refusals are this module's own, because a decoder throwing
+ * The parse is the one every SDK decoder already runs on an address it reads
+ * out of JSON. The refusals are this module's own, because a decoder throwing
  * "Invalid public key input" tells a reader nothing they can act on -- and
  * that exact string is what `/workbench` shows today for a mistyped program
  * address, straight out of web3.js.
@@ -107,8 +107,8 @@ export function readPubkeyV1(
   // No canonical-spelling refusal follows, and that is a measured claim rather
   // than an omission: base58's encoding of a FIXED 32-byte width is injective,
   // so a string that decodes to 32 bytes is already the only spelling of them.
-  // (`lib/localSuccessor.ts` and `lib/deployments.ts` do carry round-trip
-  // checks, correctly -- they decode values out of JSON, where the input may
+  // (`deployments.ts` does carry round-trip checks, correctly -- it decodes
+  // values out of JSON, where the input may
   // not be an address at all. A field bound to a text input has already been
   // narrowed.) The property is pinned in this module's test, so a future
   // decoder swap that weakens it fails loudly rather than silently admitting

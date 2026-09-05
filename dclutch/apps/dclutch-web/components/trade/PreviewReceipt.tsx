@@ -5,8 +5,8 @@ import {
   formatClaimPriceV1,
   formatQuantityV1,
   type DenominationV1,
-} from '@/lib/quantity';
-import { type DirectParticipantCrossingAdmissionV1 } from '@/lib/directParticipant';
+} from '@dclutch/sdk/quantity';
+import { type DirectParticipantCrossingAdmissionV1 } from '@dclutch/sdk/directParticipant';
 import { type DirectCrossingPlanV1 } from '@dclutch/sdk/directTicket';
 
 /**

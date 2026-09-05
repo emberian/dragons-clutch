@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState, type ChangeEvent } from 'react';
 
 import { type WalletDirectoryHandleV1 } from '@/components/WalletDirectory';
-import { inspectClaimsCustodyReplayV1, type ClaimsCustodyReplayRequestV1, type ClaimsCustodyReplayStateV1 } from '@/lib/claimsCustodyReplay';
+import { inspectClaimsCustodyReplayV1, type ClaimsCustodyReplayRequestV1, type ClaimsCustodyReplayStateV1 } from '@dclutch/sdk/claimsCustodyReplay';
 import {
   clearFinalizedClientOperationJournalV1,
   discardUnsignedClientOperationJournalV1,
@@ -25,15 +25,15 @@ import {
   restoreTerminalPayoutJournalV1,
   terminalPayoutJournalInputV1,
 } from '@/lib/redeemOperationJournal';
-import { SolanaRpcClient } from '@/lib/rpc';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 import {
   finalizeWalletTerminalPayoutV3,
   importRustWalletTerminalPayoutArtifactV3,
   prepareCheckedLiveDevnetWalletTerminalPayoutV3,
   walletTerminalPayoutSummaryV3,
   type PreparedWalletTerminalPayoutV3,
-} from '@/lib/walletTerminalPayoutV3';
-import { requestWalletTransactionSignatureV1, submitSignedTransactionV1 } from '@/lib/walletHandoff';
+} from '@dclutch/sdk/walletTerminalPayoutV3';
+import { requestWalletTransactionSignatureV1, submitSignedTransactionV1 } from '@dclutch/sdk/walletHandoff';
 import { WALLET_TERMINAL_PAYOUT_INPUT_FORMAT_V1 } from '@/lib/generated/walletTerminalPayoutWasmV1';
 import { deriveWalletTerminalPayoutManifestV1 } from '@/lib/walletTerminalPayoutSnapshot';
 import { loadWalletTerminalPayoutWasmV1 } from '@/lib/walletTerminalPayoutV1';

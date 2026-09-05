@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { DEVNET_DEPLOYMENT_V1 } from './deployments';
-import { PUBLIC_DEVNET_CUT_V1 } from './publicCutStaging';
-import { inspectMarketDetailV1 } from './marketDetail';
-import { derivedOutcomeLabelsV1, inspectMarketQuestionV1 } from './marketQuestion';
-import { inspectMarketResolutionV1 } from './marketResolution';
-import { ordinarySelectorJoinV1 } from './ordinarySelectorV1';
-import { SolanaRpcClient } from './rpc';
+import { DEVNET_DEPLOYMENT_V1 } from '@dclutch/sdk/deployments';
+import { PUBLIC_DEVNET_CUT_V1 } from '@dclutch/sdk/publicCutStaging';
+import { inspectMarketDetailV1 } from '@dclutch/sdk/marketDetail';
+import { derivedOutcomeLabelsV1, inspectMarketQuestionV1 } from '@dclutch/sdk/marketQuestion';
+import { inspectMarketResolutionV1 } from '@dclutch/sdk/marketResolution';
+import { ordinarySelectorJoinV1 } from '@dclutch/sdk/ordinarySelectorV1';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 
 /**
  * THE JOIN THAT WAS CALLED UNDECIDABLE, decided against the live chain.

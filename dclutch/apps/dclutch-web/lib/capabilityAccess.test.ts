@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { capabilityAccessSentenceV1, capabilityRouteAccessV1 } from '@dclutch/sdk/capabilityAccess';
 import { INSTRUCTION_MAGICS, PREDICATE_SELECTED_ROUTES } from '@dclutch/sdk/generated/routeCensus';
 import { magicIsAmbiguousV1 } from '@dclutch/sdk/routeSelector';
-import { CAPABILITY_ACTIONS_V1 } from './capabilityModel';
+import { CAPABILITY_ACTIONS_V1 } from '@dclutch/sdk/capabilityModel';
 import { BROWSER_CAPABILITY_STANDINGS_V1 } from './capabilitySurface';
 
 /**
@@ -255,17 +255,19 @@ describe('the delta against the rehearsal’s hand count, per capability', () =>
     const builtButUnoffered = REHEARSAL_REACHABLE_MAGICS_V1
       .filter((magic) => magicsHere.has(magic) && !reachableMagics.has(magic))
       .sort();
+    // `DCLTGMF3` joined this list when the census resolved Trading's
+    // whole-struct predicate to the magic it compares (2026-09-03): the
+    // browser builds a generic market founding and publishes no act for it.
     expect(builtButUnoffered).toEqual([
-      'DCFRRQ03', 'DCLRNCI2', 'DCLSDP03', 'DCLTGFQ1', 'DCLTPCB2', 'DCRRLC02', 'DCRRPRQ2',
+      'DCFRRQ03', 'DCLRNCI2', 'DCLSDP03', 'DCLTGFQ1', 'DCLTGMF3', 'DCLTPCB2', 'DCRRLC02', 'DCRRPRQ2',
     ]);
   });
 
   it('names the arms the rehearsal counted that this denominator cannot hold', () => {
-    // `DCLTGMF3`'s predicate decodes a whole struct rather than comparing a
-    // magic, and `DCLCUSR1` is a CPI-level Custody request no top-level arm
-    // selects — so neither is a route an instruction's first eight bytes can
-    // name, whoever builds the bytes.
+    // `DCLCUSR1` is a CPI-level Custody request no top-level arm selects — not
+    // a route an instruction's first eight bytes can name, whoever builds the
+    // bytes.
     const outsideHere = REHEARSAL_REACHABLE_MAGICS_V1.filter((magic) => !magicsHere.has(magic)).sort();
-    expect(outsideHere).toEqual(['DCLCUSR1', 'DCLTGMF3']);
+    expect(outsideHere).toEqual(['DCLCUSR1']);
   });
 });

@@ -30,8 +30,8 @@ import { ComputeBudgetProgram, VersionedTransaction } from '@solana/web3.js';
 import {
   REQUEST_HEAP_FRAME_DISCRIMINANT_V1,
   SET_COMPUTE_UNIT_LIMIT_DISCRIMINANT_V1,
-} from '../generated/genericFoundingV1';
-import type { SolanaRpcClient, TransactionMetaObservation } from '../rpc';
+} from '@dclutch/sdk/generated/genericFoundingV1';
+import type { SolanaRpcClient, TransactionMetaObservation } from '@dclutch/sdk/rpc';
 import {
   diagnoseAbort,
   readProgramAbort,

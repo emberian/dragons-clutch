@@ -6,7 +6,7 @@ import {
   DIRECT_PACKET_BUDGET_EVIDENCE_V1,
   DIRECT_PRESTATE_WALL_V1,
   directPacketWallV1,
-} from '@/lib/directTradeSpine';
+} from '@dclutch/sdk/directTradeSpine';
 
 describe('the market-detail trade panel', () => {
   const html = renderToStaticMarkup(<MarketTradePanel

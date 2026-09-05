@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   MARKET_GATE_WALL_ORDER_V1, marketGateV1, outcomeShareV1, sizeDecisionV1, tradeFlowStepsV1, type FlowProgressV1,
 } from './tradeFlowSteps';
-import { type DenominationV1 } from './quantity';
+import { type DenominationV1 } from '@dclutch/sdk/quantity';
 
 const NOTHING_DONE_V1: FlowProgressV1 = Object.freeze({
   participantReady: false,

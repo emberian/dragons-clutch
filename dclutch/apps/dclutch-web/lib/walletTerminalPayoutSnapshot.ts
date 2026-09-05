@@ -1,6 +1,6 @@
 import { WALLET_TERMINAL_PAYOUT_SNAPSHOT_FORMAT_V1 } from './generated/walletTerminalPayoutWasmV1';
 import { observedSnapshotJsonV1 } from './observedSnapshotV1';
-import { type SolanaRpcClient } from './rpc';
+import { type SolanaRpcClient } from '@dclutch/sdk/rpc';
 import {
   parseWalletTerminalPayoutAddressesV1,
   type WalletTerminalPayoutWasmV1,

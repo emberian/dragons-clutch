@@ -11,9 +11,9 @@ import {
   SOURCE_TERMINAL_PLAN_FORMAT_V1,
   SOURCE_TERMINAL_PRODUCT_FORMAT_V1,
   SOURCE_TERMINAL_SNAPSHOT_FORMAT_V1,
-} from './generated/sourceReadinessWasmV1';
-import type { LatestBlockhashObservation, RpcAccount, SolanaRpcClient } from './rpc';
-import { SOLANA_PACKET_BYTES_V1 } from './solanaLimits';
+} from '@dclutch/sdk/generated/sourceReadinessWasmV1';
+import type { LatestBlockhashObservation, RpcAccount, SolanaRpcClient } from '@dclutch/sdk/rpc';
+import { SOLANA_PACKET_BYTES_V1 } from '@dclutch/sdk/solanaLimits';
 import {
   acquireSourceReadinessV1,
   type SourceReadinessProgramsV1,

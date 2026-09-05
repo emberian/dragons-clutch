@@ -1,15 +1,15 @@
 import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
-import { capabilityActContractV1, evaluateCapabilityV1 } from './capabilityModel';
+import { capabilityActContractV1, evaluateCapabilityV1 } from '@dclutch/sdk/capabilityModel';
 import { BROWSER_CAPABILITY_STANDINGS_V1, capabilityWorkspaceV1 } from './capabilitySurface';
-import { DEVNET_DEPLOYMENT_V1, DEVNET_PROGRAM_EVIDENCE_V1 } from './deployments';
+import { DEVNET_DEPLOYMENT_V1, DEVNET_PROGRAM_EVIDENCE_V1 } from '@dclutch/sdk/deployments';
 import {
   liveDevnetOperatorPresetV1,
   checkedLiveDevnetOperatorPresetV1,
   type OperatorSurfaceSnapshotV1,
-} from './operatorSurface';
-import * as operatorSurfaceModule from './operatorSurface';
+} from '@dclutch/sdk/operatorSurface';
+import * as operatorSurfaceModule from '@dclutch/sdk/operatorSurface';
 
 function key(byte: number): string { return new PublicKey(new Uint8Array(32).fill(byte)).toBase58(); }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import * as coverage from '../scripts/abi-coverage.mjs';
+import * as coverage from '../../../tools/abi-coverage/abi-coverage.mjs';
 
 /** What the survey reports for one category of source file. */
 type Inventory = Readonly<{
@@ -35,8 +35,8 @@ const auditAuthorities = coverage.auditGeneratedAuthorities as (
  * without someone deciding to grow it, and that a surface converted to a
  * Lean-emitted module leaves the list for good.
  *
- * Run `node scripts/abi-coverage.mjs` to read the inventory, and
- * `node scripts/abi-coverage.mjs --write` to record a baseline that shrank.
+ * Run `npm run abi:coverage` to read the inventory, and
+ * `npm run abi:coverage -- --write` to record a baseline that shrank.
  */
 describe('ABI coverage', () => {
   it('states no magic, domain or offset the baseline does not already record', () => {
@@ -80,9 +80,12 @@ describe('generated modules have an authority', () => {
   it('walks lib/generated/ and finds the modules it is meant to speak about', () => {
     // A walk that silently matched nothing would make the assertion below
     // vacuous, which is the one way this test could lie.
+    // The web app regenerates only its own wasm wrappers, the capability
+    // surface and the SBF runtime table; every other generated module is
+    // imported from the SDK, whose copy of this test walks that tree.
     const rows = authorities();
-    expect(rows.length).toBeGreaterThanOrEqual(20);
-    expect(rows.map((row) => row.module)).toContain('lib/generated/routeCensus.ts');
+    expect(rows.length).toBeGreaterThanOrEqual(7);
+    expect(rows.map((row) => row.module)).toContain('lib/generated/capabilitySurfaceV1.ts');
   });
 
   it('pairs every generated module with a verify script', () => {

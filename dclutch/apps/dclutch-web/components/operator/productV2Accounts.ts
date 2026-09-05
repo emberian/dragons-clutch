@@ -2,8 +2,8 @@ import {
   PORTFOLIO_SCHEMA_ID_V2,
   PRODUCT_RECORD_SCHEMA_ID_V2,
   RESULT_DOMAIN_SCHEMA_ID_V2,
-} from '@/lib/generated/productRuntimeV2Admission';
-import { deriveFinalizedRecordAddressesV1 } from '@/lib/releaseRegistry';
+} from '@dclutch/sdk/generated/productRuntimeV2Admission';
+import { deriveFinalizedRecordAddressesV1 } from '@dclutch/sdk/releaseRegistry';
 
 import { readHex64V1, readPubkeyV1 } from './fieldReadings';
 

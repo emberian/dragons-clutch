@@ -22,13 +22,13 @@ import {
   CORE_STATE_SELECTED_RELEASE_SET_OFFSET,
   CORE_STATE_VERSION_OFFSET,
   CORE_VERSION,
-} from './generated/coreFound';
+} from '@dclutch/sdk/generated/coreFound';
 import { USER_POSITION_ADMISSION_SNAPSHOT_FORMAT_V1 } from './generated/userPositionAdmissionWasmV1';
 import {
   ADMISSION_SNAPSHOT_ACCOUNT_FIELDS_V1,
   acquireUserPositionAdmissionSnapshotV1,
 } from './userPositionAdmissionSnapshot';
-import { type SolanaRpcClient } from './rpc';
+import { type SolanaRpcClient } from '@dclutch/sdk/rpc';
 
 /**
  * THE LAST UNIT BETWEEN A WALLET AND A TRADE.

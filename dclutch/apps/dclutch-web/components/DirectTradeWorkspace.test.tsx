@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
 import DirectTradeWorkspace from './DirectTradeWorkspace';
-import { HOT_FIXED_ACCOUNT_COUNT_V3 } from '@/lib/generated/directInlineV3';
+import { HOT_FIXED_ACCOUNT_COUNT_V3 } from '@dclutch/sdk/generated/directInlineV3';
 
 describe('Direct V3 trade workbench', () => {
   it('presents a real chain-derived route and a read-only execution boundary', () => {

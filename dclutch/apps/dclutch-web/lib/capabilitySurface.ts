@@ -13,7 +13,7 @@ import {
   GENERATED_ABI_AUTHORITIES_V1,
   OPERATOR_RUNBOOKS_V1,
 } from './generated/capabilitySurfaceV1';
-import { marketDetailHrefV1 } from './marketHref';
+import { marketDetailHrefV1 } from '@dclutch/sdk/marketHref';
 
 /**
  * This browser's own evidence, handed to the SDK's capability rules.

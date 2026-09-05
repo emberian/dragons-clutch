@@ -4,10 +4,10 @@ import { useEffect, useState } from 'react';
 
 import Anchor from '@/components/Anchor';
 import { useDeploymentV1 } from '@/lib/deploymentStore';
-import { decodeMarketCoreStateV2, type MarketCorePhaseV2 } from '@/lib/marketCoreV2';
-import { PUBLIC_DEVNET_CUT_V1, publicCutMarketHrefV1 } from '@/lib/publicCutStaging';
-import { marketEditorialV1 } from '@/lib/marketRegistry';
-import { SolanaRpcClient } from '@/lib/rpc';
+import { decodeMarketCoreStateV2, type MarketCorePhaseV2 } from '@dclutch/sdk/marketCoreV2';
+import { PUBLIC_DEVNET_CUT_V1, publicCutMarketHrefV1 } from '@dclutch/sdk/publicCutStaging';
+import { marketEditorialV1 } from '@dclutch/sdk/marketRegistry';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 
 /**
  * THE FRONT DOOR'S ONE DATED SENTENCE, read instead of written.

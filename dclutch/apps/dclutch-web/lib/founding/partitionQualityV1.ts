@@ -1,4 +1,4 @@
-import { hex, sha256 } from '../bytes';
+import { hex, sha256 } from '@dclutch/sdk/bytes';
 import {
   PARTITION_QUALITY_MAX_CUTS_V1,
   PARTITION_QUALITY_REPORT_FORMAT_V1,

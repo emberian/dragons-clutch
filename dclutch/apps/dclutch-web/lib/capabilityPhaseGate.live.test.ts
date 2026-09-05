@@ -4,12 +4,12 @@ import {
   capabilityActPhaseGatesV1,
   evaluateCapabilityV1,
   type CapabilityMarketSnapshotV1,
-} from './capabilityModel';
+} from '@dclutch/sdk/capabilityModel';
 import { BROWSER_CAPABILITY_STANDINGS_V1 } from './capabilitySurface';
-import { decodeMarketCoreStateV2 } from './marketCoreV2';
-import { DEVNET_DEPLOYMENT_V1 } from './deployments';
-import { PUBLIC_DEVNET_CUT_V1 } from './publicCutStaging';
-import { SolanaRpcClient } from './rpc';
+import { decodeMarketCoreStateV2 } from '@dclutch/sdk/marketCoreV2';
+import { DEVNET_DEPLOYMENT_V1 } from '@dclutch/sdk/deployments';
+import { PUBLIC_DEVNET_CUT_V1 } from '@dclutch/sdk/publicCutStaging';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 
 const featured = PUBLIC_DEVNET_CUT_V1.market;
 const live = process.env.DCLUTCH_LIVE_DEVNET === '1' && featured !== null ? it : it.skip;

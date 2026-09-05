@@ -54,6 +54,12 @@ import {
   PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_VERSION_V2,
 } from './generated/protocolInfrastructure';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
+import {
+  ACTIVATION_CACHE_MAGIC_V1,
+  CHECKED_INFRASTRUCTURE_MAGIC_V1,
+  CHECKED_MULTIPROGRAM_MAGIC_V1,
+  EXECUTION_RELEASE_SET_MAGIC_V1,
+} from './generated/protocolConstantsV1';
 
 const CHECKED_INFRASTRUCTURE_HEADER_BYTES = 16;
 const CHECKED_INFRASTRUCTURE_PROFILE_OFFSET = CHECKED_INFRASTRUCTURE_HEADER_BYTES + CHECKED_MULTIPROGRAM_BYTES;
@@ -281,7 +287,7 @@ export function decodeProtocolInfrastructureProfileV2(bytes: Uint8Array): Protoc
 
 function releaseSetBytes(artifacts: Readonly<Record<RegistryRole, ArtifactReleaseV1>>, artifactIds: Readonly<Record<RegistryRole, string>>): Uint8Array {
   const output = new Uint8Array(336);
-  output.set(new TextEncoder().encode('DCLTRLS1'));
+  output.set(new TextEncoder().encode(EXECUTION_RELEASE_SET_MAGIC_V1));
   const view = new DataView(output.buffer);
   view.setUint16(8, 1, true);
   view.setUint16(10, 1, true);
@@ -293,7 +299,7 @@ function releaseSetBytes(artifacts: Readonly<Record<RegistryRole, ArtifactReleas
 }
 
 export async function decodeActivationCacheV1(bytes: Uint8Array, registryProgram: string, address: string): Promise<ActivatedProjectionV1> {
-  if (bytes.length !== ACTIVATION_CACHE_BYTES || ascii(bytes, 0, 8) !== 'DCLTACT1' || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 1) {
+  if (bytes.length !== ACTIVATION_CACHE_BYTES || ascii(bytes, 0, 8) !== ACTIVATION_CACHE_MAGIC_V1 || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 1) {
     throw new Error('activation cache has the wrong exact width, magic, schema, or profile');
   }
   requireZero(bytes, REGISTRY_ACTIVATION_CACHE_RESERVED_OFFSET_V1, REGISTRY_ACTIVATION_CACHE_RESERVED_BYTES_V1, 'activation cache header');
@@ -339,7 +345,7 @@ export async function decodeActivationCacheV1(bytes: Uint8Array, registryProgram
 }
 
 async function decodeEmbeddedCheckedMultiprogramV1(bytes: Uint8Array): Promise<CheckedMultiprogramV1> {
-  if (bytes.length !== CHECKED_MULTIPROGRAM_BYTES || ascii(bytes, 0, 8) !== 'DCLTMPR1' || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 5) {
+  if (bytes.length !== CHECKED_MULTIPROGRAM_BYTES || ascii(bytes, 0, 8) !== CHECKED_MULTIPROGRAM_MAGIC_V1 || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 5) {
     throw new Error('checked multiprogram has the wrong exact width, magic, schema, or role count');
   }
   requireZero(bytes, 12, 4, 'checked multiprogram header');
@@ -369,7 +375,7 @@ async function decodeEmbeddedCheckedMultiprogramV1(bytes: Uint8Array): Promise<C
 }
 
 export async function decodeCheckedInfrastructureV1(bytes: Uint8Array): Promise<CheckedInfrastructureV1> {
-  if (bytes.length !== CHECKED_INFRASTRUCTURE_BYTES_V1 || ascii(bytes, 0, 8) !== 'DCLTIEV1' || u16(bytes, 8) !== 2 || u16(bytes, 10) !== 3) {
+  if (bytes.length !== CHECKED_INFRASTRUCTURE_BYTES_V1 || ascii(bytes, 0, 8) !== CHECKED_INFRASTRUCTURE_MAGIC_V1 || u16(bytes, 8) !== 2 || u16(bytes, 10) !== 3) {
     throw new Error('checked infrastructure has the wrong exact width, magic, schema, or component count');
   }
   requireZero(bytes, 12, 4, 'checked infrastructure header');

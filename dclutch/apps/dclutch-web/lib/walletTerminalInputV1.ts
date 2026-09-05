@@ -1,4 +1,4 @@
-import { hex, sha256 } from './bytes';
+import { hex, sha256 } from '@dclutch/sdk/bytes';
 import {
   CORE_STATE_BYTES_V1,
   LIABILITY_BASIS_MARKET_HEADER_BYTES_V2,

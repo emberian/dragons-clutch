@@ -53,7 +53,6 @@ export const CONSOLE_PATHS: readonly string[] = [
   '/found',
   '/general',
   '/liquidity',
-  '/local',
   '/operate',
   '/product-v2',
   '/release',

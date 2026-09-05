@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-import { SolanaRpcClient } from './rpc';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 import { walletTerminalInputRequestJsonV1 } from './walletTerminalInputSnapshot';
 import {
   loadWalletTerminalInputWasmV1,

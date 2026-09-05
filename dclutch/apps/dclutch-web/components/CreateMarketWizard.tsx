@@ -4,38 +4,38 @@ import PageShell from '@/components/PageShell';
 import Nav from '@/components/Nav';
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 
-import { prepareCoreFoundV2, type CoreFoundInputV2, type CoreFoundPlanV2 } from '@/lib/coreFound';
+import { prepareCoreFoundV2, type CoreFoundInputV2, type CoreFoundPlanV2 } from '@dclutch/sdk/coreFound';
 import {
   FOUNDING_LADDER_V1,
   summarizeFoundingLadderV1,
   type FoundingRungStatusV1,
-} from '@/lib/founding/ladder';
+} from '@dclutch/sdk/founding/ladder';
 import {
   BONDING_CURVE_FLOOR_DERIVATION_ID_V1,
   BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1,
   MANIPULATION_FLOOR_V1_BYTES,
   MANIPULATION_FLOOR_V1_MAGIC,
-} from '@/lib/generated/principalCapacityV1';
+} from '@dclutch/sdk/generated/principalCapacityV1';
 import {
   DEFAULT_CHAIN_STATE_CAPACITY_V1,
   admitPrincipalCapacityV1,
   decodeManipulationFloorV1,
   formatCapacityV1,
   type PrincipalCapacityV1,
-} from '@/lib/founding/principalCapacity';
+} from '@dclutch/sdk/founding/principalCapacity';
 import {
   encodeCapabilityManifestV1,
   nativeLamportsV1,
   summarizeManifestFundingV1,
   type CapabilityEntryInputV1,
   type FundingCompartmentNameV1,
-} from '@/lib/founding/capabilityQuote';
-import { FUNDING_COMPARTMENTS_V1 } from '@/lib/generated/capabilityManifestV1';
+} from '@dclutch/sdk/founding/capabilityQuote';
+import { FUNDING_COMPARTMENTS_V1 } from '@dclutch/sdk/generated/capabilityManifestV1';
 import {
   composeRangeProtectionV1,
   formatTicksV1,
   rangeProtectionBackingV1,
-} from '@/lib/founding/rangeProtection';
+} from '@dclutch/sdk/founding/rangeProtection';
 import {
   loadPartitionQualityWasmV1,
   requireInterestingPartitionV1,
@@ -49,12 +49,12 @@ import {
   WINDOW_CADENCE_TABLE_V1,
   assessWindowWidthV1,
   resolutionDeadlineV1,
-} from '@/lib/founding/windowCadence';
-import { inspectMarketDetailV1 } from '@/lib/marketDetail';
+} from '@dclutch/sdk/founding/windowCadence';
+import { inspectMarketDetailV1 } from '@dclutch/sdk/marketDetail';
 import { readSponsoredPriceV1 } from '@/lib/sourceProviderV1';
-import { inspectMarketQuestionV1 } from '@/lib/marketQuestion';
-import { PUBLIC_DEVNET_CUT_V1 } from '@/lib/publicCutStaging';
-import { SolanaRpcClient } from '@/lib/rpc';
+import { inspectMarketQuestionV1 } from '@dclutch/sdk/marketQuestion';
+import { PUBLIC_DEVNET_CUT_V1 } from '@dclutch/sdk/publicCutStaging';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 import OpenerFirstCrankTerms from '@/components/OpenerFirstCrankTerms';
 import { useDeploymentFieldV1, useDeploymentV1 } from '@/lib/deploymentStore';
 

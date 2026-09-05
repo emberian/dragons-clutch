@@ -11,6 +11,9 @@ import {
   requireAuthenticatedDirectMakerNonceV1,
   type AuthenticatedDirectMakerNonceV1,
 } from './directMakerReplay';
+import {
+  DIRECT_TICKET_KIND_V1,
+} from './generated/protocolConstantsV1';
 
 /**
  * The counterparty ticket.
@@ -30,7 +33,7 @@ import {
  * different trade.
  */
 
-export const DIRECT_TICKET_KIND_V1 = 'dclutch/direct-intent-ticket/v1';
+export { DIRECT_TICKET_KIND_V1 };
 const MAX_U64 = 18_446_744_073_709_551_615n;
 
 function canonicalKey(value: unknown, field: string): string {

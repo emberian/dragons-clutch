@@ -5,7 +5,7 @@ import FeaturedMarketStanding from '@/components/FeaturedMarketStanding';
 import PublicDeploymentEvidence from '@/components/PublicDeploymentEvidence';
 import LandingPulse from '@/components/charts/LandingPulse';
 
-import { DEVNET_DEPLOYMENT_V1 } from '@/lib/deployments';
+import { DEVNET_DEPLOYMENT_V1 } from '@dclutch/sdk/deployments';
 import { docsHrefV1, repositoryHrefV1, smokeStoryEnabledV1 } from '@/lib/flags';
 
 /**

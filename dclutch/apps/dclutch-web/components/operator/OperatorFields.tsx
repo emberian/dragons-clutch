@@ -14,7 +14,7 @@ import {
   type EvidenceRowV1,
   type FieldReadingV1,
 } from './fieldReadings';
-import type { DenominationV1 } from '@/lib/quantity';
+import type { DenominationV1 } from '@dclutch/sdk/quantity';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 
 /**

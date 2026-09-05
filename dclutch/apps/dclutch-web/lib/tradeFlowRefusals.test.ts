@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import { assignRefusalV1, routedRefusalFragmentsV1 } from './tradeFlowRefusals';
-import { DIRECT_PRESTATE_WALL_V1, directPacketWallV1 } from './directTradeSpine';
+import { DIRECT_PRESTATE_WALL_V1, directPacketWallV1 } from '@dclutch/sdk/directTradeSpine';
 
 /**
  * The routing table's job is to send a refusal to the step that can act on it.

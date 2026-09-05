@@ -74,16 +74,26 @@ import {
 } from './releaseRegistry';
 import { type RpcAccount } from './rpc';
 import { inspectRationalCapabilityCommonV4 } from './rationalCapabilityChainV4';
+import {
+  PROTOCOL_POSITION_CLAIMS_CAPABILITY_SEED_V2,
+  RATIONAL_RECEIPT_MINT_SEED_V2,
+  RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
+  RATIONAL_SHARD_MINT_SEED_V2,
+  RATIONAL_STRUCTURED_CUSTODY_SEED_V2,
+} from './generated/protocolConstantsV1';
+import {
+  CALLER_AUTHORITY_PDA_DOMAIN_V1,
+} from './generated/claimsCustodyReplayV1';
 
 const MAX_U64 = 18_446_744_073_709_551_615n;
 const ASSOCIATED_TOKEN_PROGRAM = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
-const CUSTODY_OWNER_SEED = new TextEncoder().encode('dclutch:rational-claims:v2');
-const SHARD_MINT_SEED = new TextEncoder().encode('dclutch:rational-shard-mint:v2');
-const STRUCTURED_CUSTODY_SEED = new TextEncoder().encode('dclutch:rational-structured:v2');
-const RECEIPT_MINT_SEED = new TextEncoder().encode('dclutch:rational-receipt:v2');
-const REPRESENTATION_AUTHORITY_SEED = new TextEncoder().encode('dclutch:rational-authority:v2');
+const CUSTODY_OWNER_SEED = PROTOCOL_POSITION_CLAIMS_CAPABILITY_SEED_V2;
+const SHARD_MINT_SEED = RATIONAL_SHARD_MINT_SEED_V2;
+const STRUCTURED_CUSTODY_SEED = RATIONAL_STRUCTURED_CUSTODY_SEED_V2;
+const RECEIPT_MINT_SEED = RATIONAL_RECEIPT_MINT_SEED_V2;
+const REPRESENTATION_AUTHORITY_SEED = RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2;
 const REPLAY_SEED = new TextEncoder().encode(RATIONAL_REPLAY_SEED_V2);
-const CALLER_AUTHORITY_SEED = new TextEncoder().encode('dclutch:role-authority:v1');
+const CALLER_AUTHORITY_SEED = CALLER_AUTHORITY_PDA_DOMAIN_V1;
 const ACCOUNT_PROFILE_HEADER = 40;
 
 type Meta = RationalHotAccountMetaV4;

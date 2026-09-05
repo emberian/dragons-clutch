@@ -124,20 +124,21 @@ const ARTIFACT_IMPORT = /^import[A-Z][A-Za-z0-9]*Artifact[A-Za-z0-9]*$/;
  * absence.
  */
 const ARTIFACT_INTAKE_CANARY = join(webRoot, 'components', 'ArtifactInput.tsx');
-const ARTIFACT_IMPORT_CANARY = join(webRoot, 'lib', 'walletTerminalPayoutV3.ts');
+const ARTIFACT_IMPORT_CANARY = join(sdkRoot, 'lib', 'walletTerminalPayoutV3.ts');
+
+/** `packages/dclutch-sdk/package.json`'s exports map, honoured exactly. */
+const sdkPackage = JSON.parse(readFileSync(join(sdkRoot, 'package.json'), 'utf8'));
+const sdkExports = sdkPackage.exports;
 
 /**
- * `packages/dclutch-sdk/package.json`'s exports map, honoured exactly.
- *
- * `@dclutch/sdk/walletHandoff` resolves to the INSPECTION-ONLY facade, not to
- * the module above, and several subpaths are `null` -- deliberately unreachable
- * from outside the package. Resolving these by filename would credit a surface
- * with authority the package refuses to hand it.
+ * Each tree's `package.json` scripts, for pairing a generated module with the
+ * verifier that byte-checks it: the web's for the modules under its own
+ * `lib/generated/`, the SDK's for the modules the web imports from the package.
  */
-const sdkExports = JSON.parse(readFileSync(join(sdkRoot, 'package.json'), 'utf8')).exports;
-
-/** Web `package.json` scripts, for pairing each generated module with its verifier. */
 const webScripts = JSON.parse(readFileSync(join(webRoot, 'package.json'), 'utf8')).scripts;
+const sdkScripts = sdkPackage.scripts;
+
+const SDK_SPECIFIER = '@dclutch/sdk';
 
 /**
  * Every file git TRACKS, absolute.
@@ -151,8 +152,7 @@ const webScripts = JSON.parse(readFileSync(join(webRoot, 'package.json'), 'utf8'
  * `tools/genref/generate.sh` refuses a dirty tree for, in a surface that had no
  * refusal.
  *
- * Tracked is the line, exactly as `packages/dclutch-sdk/scripts/sync-from-web.mjs`
- * draws it: an untracked file is a lane's work in progress and is deliberately
+ * Tracked is the line: an untracked file is a lane's work in progress and is deliberately
  * invisible here, while a tracked file is read from the WORKING TREE, so a
  * lane's own edits to files that already exist still show up in its own run.
  *
@@ -339,18 +339,28 @@ function routes() {
 
 /** The `abi:<name>:verify` script that byte-checks one generated module, if any. */
 function verifierFor(generatedModule) {
-  const target = generatedModule.replace(/^lib\/generated\//, '').replace(/\.ts$/, '');
-  for (const [name, command] of Object.entries(webScripts)) {
-    if (!name.startsWith('abi:') || !name.endsWith(':verify')) continue;
-    if (command.includes(`lib/generated/${target}.ts`)) return name;
-  }
-  // Most generators name their output only inside the script file itself.
-  for (const [name, command] of Object.entries(webScripts)) {
-    if (!name.startsWith('abi:') || !name.endsWith(':verify')) continue;
-    const script = command.split(/\s+/)[1];
-    if (script === undefined || !script.startsWith('scripts/')) continue;
-    const path = join(webRoot, script);
-    if (exists(path) && sourceOf(path).includes(`lib/generated/${target}.ts`)) return name;
+  const sdkPrefix = `${SDK_SPECIFIER}/generated/`;
+  const fromSdk = generatedModule.startsWith(sdkPrefix);
+  const target = fromSdk
+    ? generatedModule.slice(sdkPrefix.length)
+    : generatedModule.replace(/^lib\/generated\//, '').replace(/\.ts$/, '');
+  // The module's own tree first; then the other, because the web's wasm
+  // generators write their facts module into the SDK (its one home) while the
+  // verify script that checks it stays beside the wasm build in the web.
+  const trees = fromSdk ? [[sdkScripts, sdkRoot], [webScripts, webRoot]] : [[webScripts, webRoot], [sdkScripts, sdkRoot]];
+  for (const [scripts, root] of trees) {
+    for (const [name, command] of Object.entries(scripts)) {
+      if (!name.startsWith('abi:') || !name.endsWith(':verify')) continue;
+      if (command.includes(`lib/generated/${target}.ts`)) return name;
+    }
+    // Most generators name their output only inside the script file itself.
+    for (const [name, command] of Object.entries(scripts)) {
+      if (!name.startsWith('abi:') || !name.endsWith(':verify')) continue;
+      const script = command.split(/\s+/)[1];
+      if (script === undefined || !script.startsWith('scripts/')) continue;
+      const path = join(root, script);
+      if (exists(path) && sourceOf(path).includes(`lib/generated/${target}.ts`)) return name;
+    }
   }
   return null;
 }
@@ -359,28 +369,30 @@ const web = (file) => relative(webRoot, file).split('\\').join('/');
 const inWeb = (file) => file.startsWith(webRoot);
 
 /**
- * The generated ABI a reachable module IS, following re-export shims into the
- * package.
+ * The import specifier a web module reaches an SDK file by -- which is how
+ * `capabilityModel.ts` anchors an act to a builder that lives in the package.
+ */
+function sdkName(file) {
+  const rel = relative(sdkRoot, file).split('\\').join('/');
+  if (rel === 'index.ts') return SDK_SPECIFIER;
+  return `${SDK_SPECIFIER}/${rel.replace(/^lib\//, '').replace(/\.tsx?$/, '')}`;
+}
+
+/** A module's name in the surface: web-relative for the app's own files, its specifier for the SDK's. */
+const moduleName = (file) => (inWeb(file) ? web(file) : sdkName(file));
+
+/**
+ * The generated ABI a reachable module IS.
  *
- * `apps/dclutch-web/lib/*.ts` is increasingly a two-line
- * `export * from '@dclutch/sdk/*'`, and this census resolves those specifiers
- * correctly -- but then credited a generated module only when the file it
- * landed on was under the WEB root. So the moment a surface's semantic owner
- * moved into the package, every generated ABI beneath it fell off the survey
- * and the route it serves looked like it depended on nothing.
- *
- * Measured on 2026-09-02, converging `lib/operatorSurface.ts` onto its SDK
- * owner: `/operate` and `/workbench` lost the infrastructure, refusal-band and
- * refusal-registry ABIs in one commit, and `lib/infrastructure.ts` lost both
- * routes. Nothing was less true about the browser; the instrument had stopped
- * being able to see. Ten shims already carried this blind spot.
- *
- * The two trees hold BYTE-IDENTICAL generated modules at the same relative
- * path -- `lib/twinIdentity.test.ts` is the gate, and it names every deliberate
- * exception -- and the web's `abi:*:verify` script is what checks the web copy.
- * So an SDK generated module is credited under its web-relative name, and only
- * when that web file actually exists; a package-only generated module is not
- * something a web verifier can speak for and is left uncredited.
+ * The web app's own `lib/generated/` holds the modules only it regenerates
+ * (its wasm wrappers, this surface, the SBF runtime table); everything else it
+ * decodes against is imported from the package, and the package's
+ * `abi:*:verify` script is what checks that module. A surface that credited
+ * only web-root files went blind the moment a semantic owner moved into the
+ * package (measured 2026-09-02: `/operate` and `/workbench` lost three ABIs in
+ * one commit while nothing was less true about the browser), so an SDK
+ * generated module is credited under its specifier and paired with the SDK's
+ * own verifier.
  */
 function generatedModuleName(file) {
   if (inWeb(file)) {
@@ -389,8 +401,7 @@ function generatedModuleName(file) {
   }
   if (!file.startsWith(sdkRoot)) return null;
   const name = relative(sdkRoot, file).split('\\').join('/');
-  if (!name.startsWith('lib/generated/')) return null;
-  return exists(join(webRoot, name)) ? name : null;
+  return name.startsWith('lib/generated/') ? sdkName(file) : null;
 }
 
 const routeEntries = routes();
@@ -402,7 +413,9 @@ function routesReaching(file) {
 }
 
 /**
- * The modules worth emitting a row for: every one a route can reach.
+ * The modules worth emitting a row for: every one a route can reach, in either
+ * tree -- an act's builder is as likely to be `@dclutch/sdk/coreFound` as a
+ * file under `lib/`.
  *
  * An earlier draft emitted only modules carrying a fact DIRECTLY -- a wallet
  * import, or a `lib/generated/` import of their own -- to keep the file small.
@@ -416,9 +429,9 @@ function routesReaching(file) {
 function surveyed() {
   const found = new Set(routeEntries.map((entry) => entry.file));
   for (const entry of routeClosures) {
-    for (const file of entry.files) if (inWeb(file)) found.add(file);
+    for (const file of entry.files) found.add(file);
   }
-  return [...found].sort((left, right) => web(left).localeCompare(web(right)));
+  return [...found].sort((left, right) => moduleName(left).localeCompare(moduleName(right)));
 }
 
 function surfaceRow(file) {
@@ -438,7 +451,7 @@ function surfaceRow(file) {
     if (generatedName !== null) generated.add(generatedName);
   }
   return {
-    module: web(file),
+    module: moduleName(file),
     routes: routesReaching(file),
     authority: transaction ? 'wallet-transaction' : message ? 'wallet-message' : 'none',
     submits,

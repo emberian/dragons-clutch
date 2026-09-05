@@ -5,7 +5,7 @@ import Nav from '@/components/Nav';
 import PublicDeploymentEvidence from '@/components/PublicDeploymentEvidence';
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
-import { deploymentProgramLabelsV1, type DeploymentV1 } from '@/lib/deployments';
+import { deploymentProgramLabelsV1, type DeploymentV1 } from '@dclutch/sdk/deployments';
 import { useDeploymentV1 } from '@/lib/deploymentStore';
 import { inspectAccount, type ExplorerAccountResult } from '@/lib/explorer/account';
 import type { DecodedField, DecodedRecord } from '@/lib/explorer/accountRecords';
@@ -26,8 +26,8 @@ import {
   type ExplorerInstruction,
   type ExplorerTransactionResult,
 } from '@/lib/explorer/transaction';
-import { inspectFinalizedRecord, type RecordObservation } from '@/lib/records';
-import { scanProgram, SolanaRpcClient, type ConnectionFacts, type ProgramSnapshot } from '@/lib/rpc';
+import { inspectFinalizedRecord, type RecordObservation } from '@dclutch/sdk/records';
+import { scanProgram, SolanaRpcClient, type ConnectionFacts, type ProgramSnapshot } from '@dclutch/sdk/rpc';
 
 type View = 'account' | 'transaction' | 'market' | 'scan' | 'record';
 

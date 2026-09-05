@@ -22,7 +22,7 @@ import {
   type ClientOperationJournalV1,
 } from '@/lib/clientOperationJournal';
 import { useDeploymentFieldV1, useDeploymentV1 } from '@/lib/deploymentStore';
-import { SolanaRpcClient } from '@/lib/rpc';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 import {
   acquireSourceReadinessV1,
   buildSourceReadinessTransactionV1,
@@ -73,7 +73,7 @@ import {
   requestWalletSubmitCosignTransactionV1,
   requestWalletTransactionSignatureV1,
   submitSignedTransactionV1,
-} from '@/lib/walletHandoff';
+} from '@dclutch/sdk/walletHandoff';
 
 type ResolutionStateV1 =
   | Readonly<{ kind: 'idle' | 'reading'; message: string }>

@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import Sparkline from '@/components/charts/Sparkline';
-import { inspectDirectTradeSpineV1, type DirectTradeSpineV1 } from '@/lib/directTradeSpine';
-import { formatWindowInstantV1 } from '@/lib/marketQuestion';
+import { inspectDirectTradeSpineV1, type DirectTradeSpineV1 } from '@dclutch/sdk/directTradeSpine';
+import { formatWindowInstantV1 } from '@dclutch/sdk/marketQuestion';
 import {
   inspectMarketActivityV1,
   MARKET_ACTIVITY_PROVENANCE_V1,
@@ -12,12 +12,12 @@ import {
   type MarketActivityRowV1,
   type MarketActivityV1,
   type MarketFillV1,
-} from '@/lib/marketActivity';
-import { failureEscrowOwnerV1, outageDisclosureV1 } from '@/lib/marketDetail';
-import { shortAddressV1 } from '@/lib/marketDiscovery';
-import { checkedReleaseSetIdsV1 } from '@/lib/publicCutStaging';
-import { denominationUnitV1, formatQuantityV1, type DenominationV1 } from '@/lib/quantity';
-import { SolanaRpcClient } from '@/lib/rpc';
+} from '@dclutch/sdk/marketActivity';
+import { failureEscrowOwnerV1, outageDisclosureV1 } from '@dclutch/sdk/marketDetail';
+import { shortAddressV1 } from '@dclutch/sdk/marketDiscovery';
+import { checkedReleaseSetIdsV1 } from '@dclutch/sdk/publicCutStaging';
+import { denominationUnitV1, formatQuantityV1, type DenominationV1 } from '@dclutch/sdk/quantity';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 
 /**
  * WHAT HAS HAPPENED ON THIS MARKET, and it is the page's only past tense.

@@ -5,7 +5,7 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js';
 
-import { hex, sha256 } from './bytes';
+import { hex, sha256 } from '@dclutch/sdk/bytes';
 import {
   SOURCE_PROVIDER_COORDINATES_FORMAT_V1,
   SOURCE_PROVIDER_COORDINATES_INPUT_FORMAT_V1,
@@ -32,14 +32,14 @@ import {
   SOURCE_PROVIDER_PRICE_FORMAT_V1,
   SOURCE_PROVIDER_PRICE_INPUT_FORMAT_V1,
   SOURCE_PROVIDER_WASM_SHA256_V1,
-} from './generated/sourceProviderWasmV1';
+} from '@dclutch/sdk/generated/sourceProviderWasmV1';
 import type {
   AccountInfoObservation,
   MultipleAccountObservation,
   RpcAccount,
   SolanaRpcClient,
-} from './rpc';
-import { SOLANA_PACKET_BYTES_V1 } from './solanaLimits';
+} from '@dclutch/sdk/rpc';
+import { SOLANA_PACKET_BYTES_V1 } from '@dclutch/sdk/solanaLimits';
 
 const MAX_JSON_CHARACTERS = 24 * 1024 * 1024;
 

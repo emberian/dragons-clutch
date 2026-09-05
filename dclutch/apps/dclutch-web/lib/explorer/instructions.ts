@@ -20,16 +20,16 @@
  * one of those programs renders as "this program's dispatch is not selected by
  * a leading magic", which is true, rather than as a guess.
  */
-import { LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2 } from '../generated/coreFound';
-import { HOT_EXECUTION_MAGIC_V3 } from '../generated/directInlineV3';
-import { GENERIC_FOUNDING_REQUEST_MAGIC_V1 } from '../generated/genericFoundingV1';
-import { REQUEST_MAGIC_V2 as RATIONAL_REQUEST_MAGIC_V2 } from '../generated/rationalTerminalHotV3';
+import { LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2 } from '@dclutch/sdk/generated/coreFound';
+import { HOT_EXECUTION_MAGIC_V3 } from '@dclutch/sdk/generated/directInlineV3';
+import { GENERIC_FOUNDING_REQUEST_MAGIC_V1 } from '@dclutch/sdk/generated/genericFoundingV1';
+import { REQUEST_MAGIC_V2 as RATIONAL_REQUEST_MAGIC_V2 } from '@dclutch/sdk/generated/rationalTerminalHotV3';
 import {
   INSTRUCTION_MAGICS,
   UNSELECTED_ENTRY_ROUTES,
   type InstructionMagic,
   type UnselectedEntryRoute,
-} from '../generated/routeCensus';
+} from '@dclutch/sdk/generated/routeCensus';
 import {
   decodeAgainstSpec,
   leadingMagic,
@@ -285,6 +285,16 @@ const INSTRUCTION_RENDERERS: ReadonlyArray<InstructionRenderer> = Object.freeze(
     routeId: 'trading/generic_founding_stages_v1::process_generic_market_open_v1',
     summary:
       'Opens the market a founding permit already paid for. The submitter supplies no economic truth of its own: the permit carries all of it, and expires on its own schedule.',
+  },
+  {
+    routeId: 'trading/generic_founding_stages_v1::process_generic_found_and_permit_v1',
+    summary:
+      'Founds a market in one rollback domain — Lock, Found, Realize, Claims — and escrows the permit that will open it. From this commit onward the escrowed permit, not the staged checkpoint, is the sole abort authority for the founding.',
+  },
+  {
+    routeId: 'trading/generic_market_founding_v1::process_generic_market_founding_v3',
+    summary:
+      'Founds and opens a market in one rollback domain — Lock, Found, Realize, Claims, Open — so a market that fails any stage leaves no record behind.',
   },
   {
     routeId: 'trading/projected_custody_bootstrap_v1::process_controller_funding_prepare_v1',

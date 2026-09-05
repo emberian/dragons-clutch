@@ -2,10 +2,10 @@ import { appendFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-import { DEVNET_DEPLOYMENT_V1 } from './deployments';
-import { inspectDirectTradeSpineV1 } from './directTradeSpine';
-import { checkedReleaseSetIdsV1, PUBLIC_DEVNET_CUT_V1 } from './publicCutStaging';
-import { SolanaRpcClient } from './rpc';
+import { DEVNET_DEPLOYMENT_V1 } from '@dclutch/sdk/deployments';
+import { inspectDirectTradeSpineV1 } from '@dclutch/sdk/directTradeSpine';
+import { checkedReleaseSetIdsV1, PUBLIC_DEVNET_CUT_V1 } from '@dclutch/sdk/publicCutStaging';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 
 const live = process.env.DCLUTCH_LIVE_DEVNET === '1' ? it : it.skip;
 

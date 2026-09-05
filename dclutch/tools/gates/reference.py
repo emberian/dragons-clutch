@@ -32,13 +32,13 @@ GENERATE = REPO / "tools" / "genref" / "generate.mjs"
 MAX_PASSES = 3
 # The emitters that close the loop: they read docs/reference and are mirrored back into it.
 REFERENCE_COUPLED = (
-    "apps/dclutch-web/scripts/generate-refusal-registry.mjs",
-    "apps/dclutch-web/scripts/generate-route-census.mjs",
     "packages/dclutch-sdk/scripts/generate-refusal-registry.mjs",
     "packages/dclutch-sdk/scripts/generate-route-census.mjs",
     "packages/dclutch-sdk/scripts/generate-market-phase-admission.mjs",
 )
-CONVERGE_TREES = ("docs/reference", "apps/dclutch-web/lib/generated", "packages/dclutch-sdk/lib/generated")
+# The reference and the one client mirror of it: the web app imports the SDK's
+# generated modules and carries no reference-coupled copy of its own.
+CONVERGE_TREES = ("docs/reference", "packages/dclutch-sdk/lib/generated")
 
 
 def inventory_for(root: Path, work: Path) -> Path:

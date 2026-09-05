@@ -1,9 +1,12 @@
 import { PublicKey } from '@solana/web3.js';
 
 import { ascii, fromHex, hex, pubkey, requireNonzero, requireZero, sha256, slice, u16, u64 } from './bytes';
+import {
+  PYTH_SPONSORED_PUSH_RELEASE_MAGIC_V1,
+} from './generated/protocolConstantsV1';
 
 export const PYTH_SPONSORED_PUSH_RELEASE_BYTES_V1 = 592;
-export const PYTH_SPONSORED_PUSH_RELEASE_MAGIC_V1 = 'DCLTPSP1';
+export { PYTH_SPONSORED_PUSH_RELEASE_MAGIC_V1 };
 export const PYTH_SPONSORED_PUSH_RELEASE_VERSION_V1 = 1;
 export const PYTH_SPONSORED_PUSH_RELEASE_SCHEMA_ID_V1 =
   'c843f534616a9bcad09c589ebfa80a3163584e5ef1cbf3fcbd6b13568c7ae182';

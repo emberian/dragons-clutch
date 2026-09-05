@@ -1,11 +1,9 @@
 # @dclutch/sdk
 
-The read-first client surface of the dClutch protocol: generated ABI modules,
-hostile decoders, exact arithmetic previews, and transaction surfaces only
-when their caller owns the complete journal and finalization boundary. The CLI
-imports this package. The web app still carries tracked mirrors while the
-consumer flip is unfinished; `scripts/sync-from-web.mjs` reports that drift and
-must be read before claiming the two surfaces have converged.
+The client surface of the dClutch protocol: generated ABI modules, hostile
+decoders, exact arithmetic previews, and the bounded transaction surfaces its
+two consumers submit through. `apps/dclutch-web` and `packages/dclutch-cli`
+import it as `@dclutch/sdk/<module>`; neither carries a copy of anything here.
 
 ## Contract
 
@@ -15,11 +13,12 @@ must be read before claiming the two surfaces have converged.
   as an argument. The package typechecks against the plain node lib set —
   `dom` is deliberately absent from `tsconfig.json`, so a browser dependency
   cannot land here silently.
-- **Caller-complete mutation only.** Direct exposes route authentication,
-  intent bytes, and exact arithmetic preview, not its internal unsigned packet
-  compiler. The wallet subpath exposes unsigned-packet inspection, not generic
-  signing or submission. A mutation surface opens only with its durable phase
-  journal, exact returned acknowledgement, and finalized poststate proof.
+- **One bounded submission primitive.** `SolanaRpcClient.sendRawTransaction`
+  sends one caller-signed packet with preflight on and the cluster's genesis
+  rechecked, and never loops. Every caller that reaches it owns a durable
+  journal around it: `walletHandoff.submitSignedTransactionV1` for a browser
+  wallet, the CLI's own transport for a terminal. The JSON-RPC dispatcher is a
+  private slot, so nothing can be coerced into another method by name.
 - **Generated truth.** `lib/generated/` is emitted from the protocol's own
   authorities — Lean schemas via `scripts/lean-emit.mjs`, Rust contract
   sources via the `scripts/generate-*.mjs` scrapers — and every module has a
@@ -140,9 +139,8 @@ step.
 
 ## Layout
 
-- `index.ts` — curated root exports. Public subpaths resolve through
-  `package.json`; `directInlineV3` and `walletHandoff` deliberately resolve to
-  read-only facades rather than their internal conformance modules.
+- `index.ts` — curated root exports. Every module under `lib/` is also a
+  subpath, `@dclutch/sdk/<module>`; filesystem-style deep imports are refused.
 - `lib/` — the modules and their tests, colocated.
 - `lib/generated/` — emitted ABI mirrors; regenerate with `npm run
   abi:<surface>`, never edit.
@@ -152,6 +150,6 @@ step.
   local-successor conformance check read.
 - `scripts/` — the generators, their verify gates, and the coverage ratchet.
 
-What stayed in the web app: `lib/walletStandard.ts` (browser wallet
-discovery is a browser concern), the React components and routes, and the
-repo-wide SBOM gate.
+What stays in the web app: its pages and components, the browser wallet
+discovery (`lib/walletStandard.ts` reads `window`), the flows and journals
+that are the app's own state, and the repo-wide SBOM gate.

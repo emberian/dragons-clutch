@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { PROTOCOL_REFUSALS, REFUSAL_BANDS } from '../generated/routeCensus';
+import { PROTOCOL_REFUSALS, REFUSAL_BANDS } from '@dclutch/sdk/generated/routeCensus';
 import {
   attributeCustomCode,
   attributionTitle,

@@ -33,10 +33,10 @@ import {
   PRODUCT_RECORD_SCHEMA_ID_V2,
   REALM_SCHEMA_RELEASE_ID_V1,
   SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
-} from '../generated/coreFound';
-import { inspectMarketDetailV1, type MarketDetailV1 } from '../marketDetail';
-import { deriveFinalizedRecordAddressesV1 } from '../releaseRegistry';
-import type { SolanaRpcClient } from '../rpc';
+} from '@dclutch/sdk/generated/coreFound';
+import { inspectMarketDetailV1, type MarketDetailV1 } from '@dclutch/sdk/marketDetail';
+import { deriveFinalizedRecordAddressesV1 } from '@dclutch/sdk/releaseRegistry';
+import type { SolanaRpcClient } from '@dclutch/sdk/rpc';
 
 /** Where a node's identity comes from, and how far it was checked. */
 export type NodeProvenance =

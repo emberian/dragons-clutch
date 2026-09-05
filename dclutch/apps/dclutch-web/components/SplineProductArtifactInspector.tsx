@@ -1,8 +1,8 @@
 'use client';
 
 import { useMemo, useState, type ChangeEvent } from 'react';
-import { decodeResultDomainV2, type ResultDomainV2 } from '@/lib/coreFound';
-import { formatTicksV1 } from '@/lib/founding/rangeProtection';
+import { decodeResultDomainV2, type ResultDomainV2 } from '@dclutch/sdk/coreFound';
+import { formatTicksV1 } from '@dclutch/sdk/founding/rangeProtection';
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';

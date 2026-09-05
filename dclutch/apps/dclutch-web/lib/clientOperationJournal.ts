@@ -1,6 +1,6 @@
 import { PublicKey, VersionedTransaction } from '@solana/web3.js';
 
-import { hex, sha256 } from './bytes';
+import { hex, sha256 } from '@dclutch/sdk/bytes';
 import { decodeBase58 } from './explorer/base58';
 
 /**

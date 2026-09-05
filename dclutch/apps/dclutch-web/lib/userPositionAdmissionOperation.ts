@@ -1,6 +1,6 @@
 import { PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 
-import { SOLANA_PACKET_BYTES_V1 } from './solanaLimits';
+import { SOLANA_PACKET_BYTES_V1 } from '@dclutch/sdk/solanaLimits';
 import {
   acquireUserPositionAdmissionSnapshotV1,
   type UserPositionAdmissionDerivedV1,
@@ -11,7 +11,7 @@ import {
   parseUserPositionAdmissionPlanV1,
   type UserPositionAdmissionPlanV1,
 } from './userPositionAdmissionV1';
-import { type SolanaRpcClient } from './rpc';
+import { type SolanaRpcClient } from '@dclutch/sdk/rpc';
 
 /**
  * The step between the planner's answer and a wallet signature.

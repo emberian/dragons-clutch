@@ -1,7 +1,7 @@
 import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
-import { SOLANA_PACKET_BYTES_V1 } from './solanaLimits';
+import { SOLANA_PACKET_BYTES_V1 } from '@dclutch/sdk/solanaLimits';
 import { USER_POSITION_ADMISSION_PLAN_FORMAT_V1, USER_POSITION_ADMISSION_ACCOUNT_COUNT_V1, USER_POSITION_ADMISSION_OWNER_ACCOUNT_V1 } from './generated/userPositionAdmissionWasmV1';
 import { compileUserPositionAdmissionTransactionV1 } from './userPositionAdmissionOperation';
 import { parseUserPositionAdmissionPlanV1 } from './userPositionAdmissionV1';

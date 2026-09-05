@@ -23,18 +23,18 @@ import {
   type RegistryActivationPlanV1,
   type RegistryReauthenticationPlanV1,
   type RegistryRole,
-} from '@/lib/releaseRegistry';
+} from '@dclutch/sdk/releaseRegistry';
 import {
   CHECKED_INFRASTRUCTURE_BYTES_V1,
   inspectProtocolInfrastructureV1,
   type ProtocolInfrastructureInspectionV1,
-} from '@/lib/infrastructure';
+} from '@dclutch/sdk/infrastructure';
 import {
   requestWalletTransactionSignatureV1,
   type WalletSignedTransactionV1,
-} from '@/lib/walletHandoff';
-import { releaseUngateV1 } from '@/lib/releaseUngate';
-import { SolanaRpcClient } from '@/lib/rpc';
+} from '@dclutch/sdk/walletHandoff';
+import { releaseUngateV1 } from '@dclutch/sdk/releaseUngate';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 import WalletDirectory, { useWalletDirectoryV1 } from './WalletDirectory';
 import { useDeploymentFieldV1, useDeploymentV1 } from '@/lib/deploymentStore';
 

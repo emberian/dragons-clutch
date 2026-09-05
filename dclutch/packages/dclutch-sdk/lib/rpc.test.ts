@@ -136,6 +136,45 @@ describe('bounded finalized RPC client', () => {
       .multipleAccountDataSlices(addresses, 0, 0, '44')).rejects.toThrow(/outside the bounded account profile/);
   });
 
+  it('submits only one bounded caller-signed packet with preflight enabled', async () => {
+    const signature = '2'.repeat(88);
+    const fetcher: typeof fetch = async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as { method: string; params: unknown[] };
+      if (request.method === 'getGenesisHash') return response(SOLANA_DEVNET_GENESIS_HASH_V1);
+      expect(request.method).toBe('sendTransaction');
+      expect(request.params).toEqual([btoa(String.fromCharCode(1, 2, 3)), {
+        encoding: 'base64', skipPreflight: false, preflightCommitment: 'confirmed', maxRetries: 3,
+      }]);
+      return response(signature);
+    };
+    await expect(new SolanaRpcClient('http://127.0.0.1:8899', fetcher).sendRawTransaction(Uint8Array.from([1, 2, 3]))).resolves.toBe(signature);
+    await expect(new SolanaRpcClient('http://127.0.0.1:8899', fetcher).sendRawTransaction(new Uint8Array(1_233))).rejects.toThrow(/1..1232/);
+  });
+
+  it('rechecks genesis at submit and closes a preparation-to-send cluster swap', async () => {
+    const blockhash = '11111111111111111111111111111111';
+    let genesisChecks = 0;
+    let sent = false;
+    const fetcher: typeof fetch = async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as { method: string };
+      if (request.method === 'getGenesisHash') {
+        genesisChecks += 1;
+        return response(genesisChecks === 1 ? SOLANA_DEVNET_GENESIS_HASH_V1 : MAINNET_GENESIS);
+      }
+      if (request.method === 'getLatestBlockhash') return response({ context: { slot: 45 }, value: { blockhash, lastValidBlockHeight: 72 } });
+      if (request.method === 'sendTransaction') {
+        sent = true;
+        return response('2'.repeat(88));
+      }
+      throw new Error(`unexpected method ${request.method}`);
+    };
+    const client = new SolanaRpcClient('https://custom.proxy.example/', fetcher);
+    await expect(client.latestMutationBlockhash()).resolves.toMatchObject({ blockhash });
+    await expect(client.sendRawTransaction(Uint8Array.from([1, 2, 3]))).rejects.toThrow(/mainnet-beta/);
+    expect(genesisChecks).toBe(2);
+    expect(sent).toBe(false);
+  });
+
   it('admits exact devnet and strict loopback local-validator identities only', async () => {
     const withGenesis = (genesis: string): typeof fetch => async () => response(genesis);
     await expect(new SolanaRpcClient('https://custom.proxy.example/solana', withGenesis(SOLANA_DEVNET_GENESIS_HASH_V1)).assertMutationCluster()).resolves.toEqual({
@@ -330,5 +369,22 @@ describe('bounded finalized RPC client', () => {
   it('reports an unserved transaction as null rather than inventing one', async () => {
     const fetcher: typeof fetch = async () => response(null);
     await expect(new SolanaRpcClient('http://127.0.0.1:8899', fetcher).transaction('9'.repeat(88))).resolves.toBeNull();
+  });
+
+  it('refuses malformed return data instead of treating transaction success as a receipt', async () => {
+    const fetcher: typeof fetch = async () => response({
+      slot: 92,
+      blockTime: null,
+      transaction: [btoa(String.fromCharCode(1, 2, 3, 4)), 'base64'],
+      meta: {
+        err: null,
+        fee: 5000,
+        preBalances: [],
+        postBalances: [],
+        logMessages: [],
+        returnData: { programId: 'not-a-program', data: ['YQ==', 'base64'] },
+      },
+    });
+    await expect(new SolanaRpcClient('http://127.0.0.1:8899', fetcher).transaction('8'.repeat(88))).rejects.toThrow('producer');
   });
 });

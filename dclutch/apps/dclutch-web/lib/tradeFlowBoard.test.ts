@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { screenBoardOffersV1, type BoardScreenContextV1 } from './tradeFlowBoard';
-import { type BoardOfferV1, type TicketBoardListingV1 } from './ticketBoard';
+import { type BoardOfferV1, type TicketBoardListingV1 } from './deploymentTicketBoard';
 
 const MAKER_V1 = '8bcRzB3v6PxbbtkVCiX9ceW2whwakA6gX7qvSYbeMHLq';
 const MARKET_V1 = '5F8wMRFMdYGMkjWQUye6WfbgRVWEo9yyKo9aFPk2TLaD';

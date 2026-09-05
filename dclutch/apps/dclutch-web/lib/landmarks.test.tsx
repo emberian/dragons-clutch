@@ -18,7 +18,6 @@ import DealerLiquidityWorkspace from '@/components/DealerLiquidityWorkspace';
 import DirectTradeWorkspace from '@/components/DirectTradeWorkspace';
 import GeneralWorkspace from '@/components/GeneralWorkspace';
 import LaunchStory from '@/components/LaunchStory';
-import LocalSuccessorWorkspace from '@/components/LocalSuccessorWorkspace';
 import MarketAddressWorkspace from '@/components/MarketAddressWorkspace';
 import MarketDetailWorkspace from '@/components/MarketDetailWorkspace';
 import MarketDiscoveryWorkspace from '@/components/MarketDiscoveryWorkspace';
@@ -116,7 +115,6 @@ const PAGE_SHELLS_V1: ReadonlyArray<Readonly<{ file: string; render: () => strin
   { file: 'components/DirectTradeWorkspace.tsx', render: () => renderToStaticMarkup(<DirectTradeWorkspace />) },
   { file: 'components/GeneralWorkspace.tsx', render: () => renderToStaticMarkup(<GeneralWorkspace />) },
   { file: 'components/LaunchStory.tsx', render: () => renderToStaticMarkup(<LaunchStory />) },
-  { file: 'components/LocalSuccessorWorkspace.tsx', render: () => renderToStaticMarkup(<LocalSuccessorWorkspace />) },
   { file: 'components/MarketAddressWorkspace.tsx', render: () => renderToStaticMarkup(<MarketAddressWorkspace />) },
   { file: 'components/MarketDetailWorkspace.tsx', render: () => renderToStaticMarkup(<MarketDetailWorkspace address={MARKET_V1} />) },
   { file: 'components/MarketDiscoveryWorkspace.tsx', render: () => renderToStaticMarkup(<MarketDiscoveryWorkspace />) },

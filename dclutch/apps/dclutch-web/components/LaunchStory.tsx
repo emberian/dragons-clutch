@@ -5,15 +5,15 @@ import {
   DEVNET_DEPLOYMENT_V1,
   PROTOCOL_ROLES_V1,
   PROTOCOL_ROLE_MEANING_V1,
-} from '@/lib/deployments';
+} from '@dclutch/sdk/deployments';
 import {
   PUBLIC_DEVNET_CUT_V1,
   publicCutExplorerHrefV1,
   publicCutMarketHrefV1,
   publicCutTransactionHrefV1,
   type PublicCutActivityStepV1,
-} from '@/lib/publicCutStaging';
-import { MAX_TX_ACCOUNT_LOCKS_V2 } from '@/lib/generated/genericFoundingV1';
+} from '@dclutch/sdk/publicCutStaging';
+import { MAX_TX_ACCOUNT_LOCKS_V2 } from '@dclutch/sdk/generated/genericFoundingV1';
 
 // Steps 01-03 are the chain that works today; a reader can do all three. 04 and
 // 05 are written in the future tense on purpose -- they are a later release, and

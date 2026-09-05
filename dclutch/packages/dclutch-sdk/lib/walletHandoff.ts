@@ -210,12 +210,7 @@ type HandoffWallet = Readonly<{
 }>;
 
 type MutationAdmissionClient = Pick<SolanaRpcClient, 'assertMutationCluster'>;
-type MutationSubmissionClient = MutationAdmissionClient & Readonly<{
-  sendRawTransaction(
-    bytes: Uint8Array,
-    options?: Readonly<{ maxRetries?: 0 | 3 }>,
-  ): Promise<string>;
-}>;
+type MutationSubmissionClient = Pick<SolanaRpcClient, 'assertMutationCluster' | 'sendRawTransaction'>;
 
 function handoff(candidate: unknown): HandoffWallet {
   if (candidate === null || typeof candidate !== 'object' || !('connect' in candidate) || typeof candidate.connect !== 'function') {

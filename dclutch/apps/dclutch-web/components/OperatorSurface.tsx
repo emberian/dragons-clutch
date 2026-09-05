@@ -14,20 +14,20 @@ import {
   type OperatorDeploymentPresetV1,
   type OperatorCoordinatesV1,
   type OperatorSurfaceSnapshotV1,
-} from '@/lib/operatorSurface';
+} from '@dclutch/sdk/operatorSurface';
 import {
   capabilityActContractV1,
   type CapabilityFamily,
   type CapabilityStandingV1,
-} from '@/lib/capabilityModel';
+} from '@dclutch/sdk/capabilityModel';
 import { browserActPrerequisitesV1, BROWSER_CAPABILITY_STANDINGS_V1, capabilityWorkspaceV1 } from '@/lib/capabilitySurface';
-import { SolanaRpcClient } from '@/lib/rpc';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 import {
   acquireUnsignedTransactionDependenciesV1,
   inspectUnsignedTransactionV1,
   type UnsignedTransactionChainReportV1,
   type UnsignedTransactionInspectionV1,
-} from '@/lib/walletHandoff';
+} from '@dclutch/sdk/walletHandoff';
 import CommandRunbook from '@/components/operator/CommandRunbook';
 
 import { useDeploymentFieldV1 } from '@/lib/deploymentStore';

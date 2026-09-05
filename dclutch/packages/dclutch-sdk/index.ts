@@ -11,10 +11,11 @@
  * from the protocol's Rust and Lean authorities and byte-gated by the
  * `abi:*:verify` scripts, which run inside `npm test`.
  *
- * This root re-exports the surfaces most clients start from. Public subpaths
- * are also importable as `@dclutch/sdk/<module>`. A module that can construct
- * a packet is not public until its exact durable journal, acknowledgement, and
- * finalized poststate proof are part of the same caller-backed surface.
+ * This root re-exports the surfaces most clients start from. Every module is
+ * also importable as `@dclutch/sdk/<module>`. Submission is one bounded
+ * primitive, `SolanaRpcClient.sendRawTransaction`, and every caller that
+ * reaches it owns a durable journal around it (`walletHandoff` for a browser
+ * wallet; the CLI's own transport for a terminal).
  */
 
 // Reading the chain: the bounded, hostile-decoding RPC client and the
@@ -52,7 +53,7 @@ export * from './lib/directParticipant';
 export * from './lib/directMakerReplay';
 export * from './lib/directTicket';
 export * from './lib/directOfferAuthoring';
-export * from './lib/directInlinePublicV3';
+export * from './lib/directInlineV3';
 export * from './lib/directHotRouteManifest';
 export * from './lib/directWalletPreparationV1';
 export * from './lib/solanaLimits';
@@ -72,7 +73,3 @@ export * from './lib/capabilityManifest';
 export * from './lib/founding/principalCapacity';
 export * from './lib/releaseRegistry';
 export * from './lib/rationalTerminalChainV4';
-
-// Local-validator conformance: verify a running successor byte-for-byte
-// against the committed checkpoint fixture.
-export * from './lib/localSuccessor';

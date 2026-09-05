@@ -6,26 +6,26 @@ import { FormEvent, useState } from 'react';
 
 import {
   type DirectHotRouteCoordinateV3,
-} from '@/lib/directHotChain';
+} from '@dclutch/sdk/directHotChain';
 import {
   type DealerEquityRouteInspectionV3,
   type DealerEquityRouteManifestV3,
   inspectDealerEquityRouteV3,
-} from '@/lib/dealerEquityChain';
-import { type DealerEquityTransactionPlanV3, compileDealerEquityTransactionV3 } from '@/lib/dealerEquityV3';
-import { CHECKED_INFRASTRUCTURE_BYTES_V1 } from '@/lib/infrastructure';
-import { SolanaRpcClient } from '@/lib/rpc';
+} from '@dclutch/sdk/dealerEquityChain';
+import { type DealerEquityTransactionPlanV3, compileDealerEquityTransactionV3 } from '@dclutch/sdk/dealerEquityV3';
+import { CHECKED_INFRASTRUCTURE_BYTES_V1 } from '@dclutch/sdk/infrastructure';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 import {
   DIRECT_HOT_FIXED_ROLE_LABELS_V3,
 } from '@dclutch/sdk/directHotRouteManifest';
 import {
   HOT_FIXED_ACCOUNT_COUNT_V3,
   HOT_ROOT_ACCOUNT_V3,
-} from '@/lib/generated/directInlineV3';
+} from '@dclutch/sdk/generated/directInlineV3';
 import {
   type WalletSignedTransactionV1,
   requestWalletTransactionSignatureV1,
-} from '@/lib/walletHandoff';
+} from '@dclutch/sdk/walletHandoff';
 
 import WalletDirectory, { useWalletDirectoryV1 } from './WalletDirectory';
 import { useDeploymentFieldV1 } from '@/lib/deploymentStore';

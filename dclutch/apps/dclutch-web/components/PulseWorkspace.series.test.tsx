@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import published from '@/public/simulator-series.json';
 import example from '@/fixtures/simulator-status.example.json';
-import { marketEditorialV1 } from '@/lib/marketRegistry';
+import { marketEditorialV1 } from '@dclutch/sdk/marketRegistry';
 import { holdingsReadingV1, isCompleteSetV1, lawBandCyclesV1, parseSimulatorSeriesV1 } from '@/lib/simulatorSeries';
 import { parseSimulatorStatusV1 } from '@/lib/simulatorStatus';
 

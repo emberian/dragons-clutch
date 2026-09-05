@@ -36,7 +36,7 @@ describe('the site nav', () => {
   });
 
   it('lights the Console entry from any console route', () => {
-    for (const path of ['/console', '/release', '/trade', '/workbench', '/local']) {
+    for (const path of ['/console', '/release', '/trade', '/workbench']) {
       const html = renderToStaticMarkup(<Nav current={path} />);
       expect(html).toContain('href="/console" class="active" aria-current="page"');
     }

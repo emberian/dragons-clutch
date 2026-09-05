@@ -1,7 +1,7 @@
 import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
-import { type ClaimsCustodyReplayPlanV1, type ClaimsCustodyReplayStateV1 } from './claimsCustodyReplay';
+import { type ClaimsCustodyReplayPlanV1, type ClaimsCustodyReplayStateV1 } from '@dclutch/sdk/claimsCustodyReplay';
 import { CLIENT_OPERATION_JOURNAL_FORMAT_V1, type ClientOperationJournalV1 } from './clientOperationJournal';
 import {
   authenticateClaimsReplayJournalV1,
@@ -9,8 +9,8 @@ import {
   claimsReplayJournalInputV1,
   requireTerminalPayoutRouteScopeV1,
 } from './redeemOperationJournal';
-import { type SignatureStatusObservation } from './rpc';
-import { type WalletTerminalPayoutManifestV3 } from './walletTerminalPayoutV3';
+import { type SignatureStatusObservation } from '@dclutch/sdk/rpc';
+import { type WalletTerminalPayoutManifestV3 } from '@dclutch/sdk/walletTerminalPayoutV3';
 
 const address = (byte: number) => new PublicKey(new Uint8Array(32).fill(byte)).toBase58();
 const digest = (byte: number) => byte.toString(16).padStart(2, '0').repeat(32);

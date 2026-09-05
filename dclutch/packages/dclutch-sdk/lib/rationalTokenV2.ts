@@ -21,6 +21,9 @@ import { SOLANA_PACKET_BYTES_V1 } from './solanaLimits';
 import { admitBaseOrImmutableOwnerTokenAccountV1 } from './tokenAccountAdmissionV1';
 import { deriveFinalizedRecordAddressesV1, SYSTEM_PROGRAM_ID } from './releaseRegistry';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
+import {
+  TOKEN_BEHAVIOR_SELECTION_MAGIC_V2,
+} from './generated/protocolConstantsV1';
 
 export const TOKEN_2022_PROGRAM_ID = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
 export const TOKEN_BEHAVIOR_SELECTION_BYTES_V2 = 144;
@@ -38,7 +41,7 @@ const TOKEN_MINT_BASE_BYTES = 82;
 const TOKEN_MINT_TLV_OFFSET = 166;
 const TOKEN_MINT_ACCOUNT_TYPE_OFFSET = 165;
 const TOKEN_MINT_ACCOUNT_TYPE = 1;
-const TOKEN_BEHAVIOR_MAGIC_V2 = new TextEncoder().encode('DCLTTBS2');
+const TOKEN_BEHAVIOR_MAGIC_V2 = new TextEncoder().encode(TOKEN_BEHAVIOR_SELECTION_MAGIC_V2);
 const TOKEN_BEHAVIOR_SCHEMA_V2 = 2;
 const TOKEN_TRANSFER_CHECKED_TAG = 12;
 const MINT_CLOSE_AUTHORITY_EXTENSION = 3;

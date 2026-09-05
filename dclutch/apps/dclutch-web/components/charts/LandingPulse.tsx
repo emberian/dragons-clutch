@@ -11,8 +11,8 @@ import {
   inspectMarketDiscoveryV1,
   type MarketDiscoveryV1,
   type MarketEnumerationV1,
-} from '@/lib/marketDiscovery';
-import { SolanaRpcClient } from '@/lib/rpc';
+} from '@dclutch/sdk/marketDiscovery';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 
 import NumberStrip, { type NumberStripStatV1 } from './NumberStrip';
 

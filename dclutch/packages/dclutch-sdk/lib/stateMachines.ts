@@ -242,9 +242,8 @@ export function decodeProjectedCustodyStateV2(bytes: Uint8Array): MachineDecodeV
  * One Source's resolution state.
  *
  * This decodes `SourceResolutionStateV2` (`DCLTSRS2`), which is what the
- * resolution-core operator reads off the chain. `localSuccessor.ts` carries a
- * decoder for the superseded `DCLTSRS1` record at a different field map; that
- * one is a different account shape and not this machine's current authority.
+ * resolution-core operator reads off the chain. The superseded `DCLTSRS1`
+ * record had a different field map; no client decodes it any more.
  */
 export function decodeSourceResolutionStateV2(bytes: Uint8Array): MachineDecodeV1 {
   return decodeMachineStateV1('source', bytes);

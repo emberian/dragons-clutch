@@ -14,18 +14,18 @@ import StepRefusal from '@/components/trade/StepRefusal';
 import TicketBoard from '@/components/trade/TicketBoard';
 import SignStep from '@/components/trade/steps/SignStep';
 import SendStep from '@/components/trade/steps/SendStep';
-import { type DirectParticipantReadinessV1 } from '@/lib/directParticipant';
-import { type DirectTradeSpineV1 } from '@/lib/directTradeSpine';
-import { type MarketLiabilityV1 } from '@/lib/marketDiscovery';
-import { checkedReleaseSetIdsV1 } from '@/lib/publicCutStaging';
+import { type DirectParticipantReadinessV1 } from '@dclutch/sdk/directParticipant';
+import { type DirectTradeSpineV1 } from '@dclutch/sdk/directTradeSpine';
+import { type MarketLiabilityV1 } from '@dclutch/sdk/marketDiscovery';
+import { checkedReleaseSetIdsV1 } from '@dclutch/sdk/publicCutStaging';
 import { publishedDirectRouteManifestV1 } from '@/lib/publishedRouteManifests';
-import { type SlotClockV1 } from '@/lib/slotClock';
+import { type SlotClockV1 } from '@dclutch/sdk/slotClock';
 import {
   denominationUnitV1,
   exactTwinV1,
   formatQuantityV1,
   type DenominationV1,
-} from '@/lib/quantity';
+} from '@dclutch/sdk/quantity';
 import { assignRefusalV1, type FlowStepIndexV1, type StepRefusalV1 } from '@/lib/tradeFlowRefusals';
 import { marketGateV1, outcomeShareV1, sizeDecisionV1, tradeFlowStepsV1 } from '@/lib/tradeFlowSteps';
 import {

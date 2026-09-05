@@ -1,4 +1,4 @@
-import { hex, sha256 } from './bytes';
+import { hex, sha256 } from '@dclutch/sdk/bytes';
 import {
   TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3,
   WALLET_TERMINAL_PAYOUT_ADDRESSES_FORMAT_V1,

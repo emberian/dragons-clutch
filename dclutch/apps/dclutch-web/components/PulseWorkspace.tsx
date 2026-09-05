@@ -8,8 +8,8 @@ import Nav from '@/components/Nav';
 import LawBand from '@/components/charts/LawBand';
 import NumberStrip, { type NumberStripStatV1 } from '@/components/charts/NumberStrip';
 import Sparkline from '@/components/charts/Sparkline';
-import { marketDetailHrefV1 } from '@/lib/marketHref';
-import { marketEditorialV1 } from '@/lib/marketRegistry';
+import { marketDetailHrefV1 } from '@dclutch/sdk/marketHref';
+import { marketEditorialV1 } from '@dclutch/sdk/marketRegistry';
 import {
   campaignSpendLineV1,
   campaignStageLabelsV1,

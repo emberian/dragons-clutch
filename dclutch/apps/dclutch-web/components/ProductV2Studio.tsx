@@ -4,7 +4,7 @@ import PageShell from '@/components/PageShell';
 import ConsoleHeader from '@/components/ConsoleHeader';
 import { FormEvent, useMemo, useState } from 'react';
 
-import { fromHex, hex } from '@/lib/bytes';
+import { fromHex, hex } from '@dclutch/sdk/bytes';
 import { useDeploymentFieldV1 } from '@/lib/deploymentStore';
 import {
   evaluateProductPayoffV2WasmV1,
@@ -20,8 +20,8 @@ import {
   productInteger,
   PRODUCT_V2_BYTES,
   type CompiledProductV2,
-} from '@/lib/productV2';
-import { buildAdmissionInstructionV2 } from '@/lib/productRuntimeV2Admission';
+} from '@dclutch/sdk/productV2';
+import { buildAdmissionInstructionV2 } from '@dclutch/sdk/productRuntimeV2Admission';
 import PayoutShape from '@/components/charts/PayoutShape';
 import {
   DerivedProvenance,

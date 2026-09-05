@@ -1,7 +1,7 @@
 import { PublicKey } from '@solana/web3.js';
 
-import { fromHex, slice } from './bytes';
-import { acquireFinalizedAccountsInChunksV1 } from './coreFound';
+import { fromHex, slice } from '@dclutch/sdk/bytes';
+import { acquireFinalizedAccountsInChunksV1 } from '@dclutch/sdk/coreFound';
 import { decodeBase58 } from './explorer/base58';
 import {
   GRADED_BASIS_RECORD_SCHEMA_ID_V3,
@@ -12,20 +12,20 @@ import {
   PRODUCT_RECORD_PORTFOLIO_DIGEST_OFFSET_V2,
   PRODUCT_RECORD_SCHEMA_ID_V2,
   RESULT_DOMAIN_SCHEMA_ID_V2,
-} from './generated/coreFound';
+} from '@dclutch/sdk/generated/coreFound';
 import {
   PROTOCOL_POSITION_ADMISSION_SEED_V2,
   PROTOCOL_POSITION_STATE_SEED_V2,
 } from '@dclutch/sdk/generated/directParticipantV1';
 import { USER_POSITION_ADMISSION_SNAPSHOT_FORMAT_V1 } from './generated/userPositionAdmissionWasmV1';
-import { decodeMarketCoreStateV2 } from './marketCoreV2';
+import { decodeMarketCoreStateV2 } from '@dclutch/sdk/marketCoreV2';
 import {
   deriveFinalizedRecordAddressesV1,
   RENT_SYSVAR_ID,
   SYSTEM_PROGRAM_ID,
   UPGRADEABLE_LOADER_ID,
-} from './releaseRegistry';
-import { type RpcAccount, type SolanaRpcClient } from './rpc';
+} from '@dclutch/sdk/releaseRegistry';
+import { type RpcAccount, type SolanaRpcClient } from '@dclutch/sdk/rpc';
 import { type UserPositionAdmissionWasmV1 } from './userPositionAdmissionV1';
 
 /**

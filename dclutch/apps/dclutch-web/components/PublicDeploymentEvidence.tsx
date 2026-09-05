@@ -3,7 +3,7 @@ import {
   DEVNET_PROGRAM_EVIDENCE_V1,
   PROTOCOL_ROLES_V1,
   type DeploymentV1,
-} from '@/lib/deployments';
+} from '@dclutch/sdk/deployments';
 import { docsHrefV1 } from '@/lib/flags';
 
 export const PUBLIC_DEPLOYMENT_EVIDENCE_FILENAME_V1 =

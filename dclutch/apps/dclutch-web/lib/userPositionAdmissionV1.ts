@@ -1,4 +1,4 @@
-import { hex, sha256 } from './bytes';
+import { hex, sha256 } from '@dclutch/sdk/bytes';
 import {
   USER_POSITION_ADMISSION_ACCOUNT_COUNT_V1,
   USER_POSITION_ADMISSION_OWNER_ACCOUNT_V1,
