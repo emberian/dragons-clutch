@@ -5063,3 +5063,14 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   halved; successor 95 → 89 commands; one cut reverted (the load simulator's keeper depended on it — it would have
   compiled green and stranded a keeper). Not started: market.rs as a caller of the operator (needs OPERATORS' surface).
   Seams named for GATES (five suite rows name deleted files) and DOCS (run.py still taught).
+- SIMPLIFY-GENERATIONS closed (branch `simplify/generations` at `ed11ebbca`, five commits, 113 files +301 / −40,761;
+  SIMPLIFY_GENERATIONS.md): crates −8,966 (economic-kernel, resolution-policy-kernel, direct-aot-v3-contract and seven
+  modules), programs −4,497 (**`dclutch-direct-aot-sbf` deleted; band 10 retired by theorem**; dispatch_v3, the dealer v3
+  lifecycle), tools −27,208 (three release runners, five scripts, two gauntlet campaigns, five nested workspaces); every
+  batch controlled by a 1,047,885-row tokenize-once join against 17,490 pub defs plus reverse deps over 55 workspaces and
+  `cargo check --workspace`. **Map corrections by reading**: lineage-loopback is a witnessed campaign (live); 8 not 22
+  release scripts were dead; direct-aot-contract + the translation validator are the checked release's evidence (kept);
+  `product-runtime-v2-sbf` deferred (the web generates its admission mirror from it); the eight .wasm blobs are live
+  loaders. Left with invariants: `general-adapter-contract/plan.rs` (the batch-spine note cites it — the citation is the
+  finding), the Series and Dealer producer-missing units, the registered-Direct V4 artifacts. Owed at convergence: genref
+  (164 → 163 routes), the mirrors, SBOM, Cargo.lock, the frame baseline's link count 12 → 11.
