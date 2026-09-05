@@ -273,3 +273,202 @@ only 48 were requested"*. The driver's exact-top-up arithmetic is unreachable fo
 every shortfall below 10,240 bytes, so the extension went through the pinned CLI
 at the Loader's minimum and Core's ProgramData is now 10,192 bytes wider than its
 ELF — which is where §3's padding comes from.
+
+---
+
+# Addendum, 2026-09-05 evening (lane COHORT-16D)
+
+**Devnet evidence. Not mainnet evidence.** Written after the acts below landed;
+the document above is unedited.
+
+## 1. The capture window was open, and the resume note was wrong about it
+
+The hold state left by COHORT-16C said the market's capture window was "long
+past" and told the next lane to expect to re-found. It was not past. Staging was
+18:22:29 local and `window_lead_seconds` is 2,400, so the window opened at
+**19:02:29** and closed at **19:32:29**; the market was decoded from its own
+`window_spec_hex` (`DCLTWIN1`; start at offset 48, end at offset 56) at 19:03 and
+the capture fired inside it. Nothing was re-founded and nothing was spent on a
+second founding.
+
+The lesson is narrow and worth keeping: a schedule estimate written into prose
+is not the schedule. The window record is, and the market carries it.
+
+## 2. `PacketTooLarge` was a missing producer, not a defect
+
+COHORT-16C recorded the admission refusing
+`admission message compilation: PacketTooLarge` and recovered six routing
+lookup-table addresses by hand from their creating transactions. The refusal is
+real and the recovery was correct, but the cause is one level up: the admission
+routes through the founding's own **frozen** routing address lookup table, the
+simulator reads that table from `sim-config.json`, and **no runbook row produced
+`sim-config.json`**. Every cohort from 12 on hand-wrote one in its job
+directory. That is the producer-missing pattern — a reader, a schema and a
+refusal, with the producer never written — inside the admission path.
+
+`tools/cohort/build-sim-config.py` is the producer, and `sim-config` is a
+runbook row that blocks `admissions`. It **derives** the table instead of
+accepting a list: `simlife_drivers.frozen_routing_table_for` reads the
+founding's own `create DCLTGMF3 frozen routing address lookup table` transaction
+out of `campaign-open.json`, asks `getTransaction` which table that
+`CreateLookupTable` created, and then authenticates the account — owned by the
+Address Lookup Table program, authority `None`, and routing this founding's own
+market — before any driver sees it. The derived answer equals the hand-recovered
+`9tVU5HiCrG5F6RhQ1nZrSRtAZrHU7bztKMizREXpkweH`, which turns the recovered list
+from an input into a check. The buyer's delegated allowance is derived the same
+way, `gross + floor(gross x bps / 10000)` = 201 atoms from the manifest's own
+economics, rather than restated a third time.
+
+One coordinate is worth stating because it costs a refusal to learn: the market
+address for the sponsored push and for the Direct tickets is the founding's
+`founding_market` (`3xoSXBVsAXENB1RPq4sqS8euCksT1qsnnz83eWQPEtgY`), not
+`market`. Passing `market` earns *"the Source resolution state derives to
+8Edj1rtp2axGNKwC3tumQmzUMUVEyrzJtHHdJmGsWSQ2, and the campaign recorded
+E9FiMWJRRAeFcBfhwsjAhFNNhSrrU1DbdJY4wCgNqfyZ"*.
+
+## 3. What landed
+
+| act | signature | slot | CU |
+| --- | --- | --- | --- |
+| relay capture | `64cuxbYamuTyj2r8dZLptYzi7Rq4zVLLB7DTGGkeyzv4W9DzaKupJxiPbAnVhcJm4aPc5bCahNBWDKgCLgGJDWsC` | 493,772,406 | 119,272 |
+| Direct fill (Hot) | `3xQCjpbc5bLjiVUcApjpitRm3CFqeG8wczjDdj5h4BTDeaEiU81rWjFkGqL8m3QxYmYXn7gSuWhqvZosYLzYHMNf` | 493,776,766 | **1,111,824** |
+| fee settlement | `1veFd4UPxt9nADLZvQzpCsJPFFPuWaZ8XF9BtWZ3yjD7SVChBLZ8viGiQtBFDDRAYdyx8ejnD4aaPv3VdcG9kz1` | 493,777,469 | 91,853 |
+
+The Hot figure is against a 1,400,000 CU ceiling and beside cohort-15's
+**1,137,522**: 25,698 CU lower on a larger release generation.
+
+Two participants were admitted through the routing table with no packet
+refusal — Positions `AV7T6Fgm…` and `CugxGD9L…` — and the buyer's delegated
+account `GHhzng5kxd1ESR1eaGjVigsrPtJN7rJnkLuzDmevLZBp` held **exactly 201 of 201
+atoms**, which is the `admissions` row's own verifier.
+
+The two Direct token PDAs were derived from the published seed domain
+(`dclutch:direct-token:v1` ‖ market ‖ generation_le ‖ owner ‖ role, under
+Trading), both at bump 255, and both were created in-session: seller
+`5aAVNVsnANhvY2DsQ9f34s2fzfssfKG2unLQMPCYxjth` holds 199, venue fee
+`ucnwPJBVxSV7omV3tGtVZKysy9fd2ZrGcNKjQDySjBC` holds 2 after settlement. The
+derivation's own instrument was checked before it was believed: three real
+wallet keys decode **on** the ed25519 curve and cohort-15's known Direct token
+PDA decodes **off** it.
+
+`0x8011 ProviderWindow` on capture attempts 1 through 3 is not a defect and its
+own doc says so — *"no answer rather than a wrong one, and the market is still
+live"*. The sponsored price account `7UVimffxr9ow…` is refreshed by a live
+pusher; its `publish_time` entered the window at 19:06:53 and attempt 4 landed
+at 19:08:18. Cohort-15 saw the identical sequence. **Nothing should be widened
+for this code.**
+
+## 4. THE DEFECT: the founding seats three of four outcomes
+
+    VIOLATED L3: Positions sum to [166666667, 166666667, 166666667, 0]
+                 but the aggregate owes [166666667, 166666667, 166666667, 166666667]
+
+The founder Position holds **nothing at outcome index 3** while the Claims
+aggregate owes a full complete set there. Four readings converge on this being a
+founding-time fact and not a measurement artifact:
+
+* nothing on the admission path mints or moves claims, and the two admitted
+  Positions read `[0,0,0,0]`, so the gap predates them;
+* the fill does not change it, because a transfer between two named Positions
+  preserves the sum;
+* it is not a naming gap — the census was re-run with every Position the
+  founding recorded, and `claims_admission` is not a Position at all
+  (`InvalidMagic`);
+* cohort-15's founding census, through the same code, reported
+  `HOLDS L3: 1 Positions sum to the aggregate supply vector [500000000 x4]`.
+
+**The fill's refusal is the same defect.** The Hot transaction LANDED — err
+`None`, 1,111,824 CU, finalized at slot 493,776,766 — and then
+`devnet-direct-trade-v1` refused
+
+    REFUSED: Direct terminal claim schedule is not the exact K+1 partition
+
+which is `authenticate_direct_claim_schedule_v1`
+(`tools/local-validator/bootstrap/successor/src/direct_trade.rs:3908`): it
+requires `claim_balances.len() == outcome_count + 1` = 5, and
+`direct_claim_balances_v1` collects only NONZERO balances, so the seller
+contributes 3 and the buyer 1. The seller cannot contribute a fourth row it
+never held. **The chain accepted the trade; the driver will not certify it**, and
+the certification is what the terminal path downstream consumes.
+
+Cohort-16.1 is the first cohort founded at **payout scale 3 over basis width 4**
+(reserve 1,000,000,002 atoms, budget 500,000,001, complete sets 166,666,667);
+cohort-15 ran scale 1 and held. That is where an owner should look first.
+
+## 5. The census, L1 through L8 by name
+
+Post-fill, chained to the post-admissions boundary:
+
+    HOLDS         L1  tracked 1000000002 atoms across 5 accounts == Mint supply 1000000002
+    HOLDS         L2  the Hoard moved 0 atoms since post-admissions, exactly as declared
+    VIOLATED      L3  §4
+    HOLDS         L4  Hoard 500000001 >= worst outcome 166666667 x unit 1
+    HOLDS         L5  tracked collateral moved 0 atoms, exactly as declared
+    HOLDS         L6  no watched account closed at this boundary
+    INAPPLICABLE  L7  three accounts admitted that the previous census did not watch
+    INAPPLICABLE  L8  external census; the compartments were not declared
+
+L7 and L8 are inapplicable **by name and for stated reasons**, not passed.
+
+## 6. The General market: the blocker was convicted, then removed
+
+`found-general-family` needs `general/translation-validation.bin`. Cohort-14
+minted `aa97c0c10a98248f9ada4dccc96a5a4e969073cb57ded04340efe21b6996f4f8` from a
+real run, and **cohort-15 reused that exact file**. Reusing it a third time is
+not available, and that is measured rather than assumed:
+`create-translation` hashes 21 named inputs and three of them moved after
+cohort-14 — `Cargo.lock` (34 commits since 2026-09-02),
+`crates/dclutch-trading/src/lib.rs` (3) and `crates/dclutch-vm/src/lib.rs` (4) —
+while every Lean source among them moved not at all.
+
+So it was re-minted rather than inherited.
+`tools/direct-translation-validator/check.sh` ran green against this tree —
+137 Lean jobs then 10, then *"translation validation passed: 91 Lean ABI values,
+7,280 single-byte ABI mutations, 3,318 hostile ABI widths, 521 Lean VM states
+(147 accepted, 374 refused with rollback), 514 Direct AOT states, registered
+creation corpus 14 ABIs / 2,128 mutations / 2,142 hostile widths, 19 registered
+terminal transitions, 4,096 deterministic Rust roundtrips"* — and
+`dclutch-release-tool create-translation` minted the canonical 688-byte
+`CheckedTranslationValidationV1`
+`84ddf2591716eb00bb43cec5f07543ad7629b70201a5412f5020ca05adc5f54f`.
+
+It remains **Direct-shaped**. There is no General translation-validation corpus,
+so this is evidence about a different program, and it is named here rather than
+quietly inherited — the third cohort running to have to say so.
+
+**The accelerator's source drift is gone, and that is measured.** Cohorts 14 and
+15 each had to record that the deployed accelerator's source had moved after its
+deploy. This cohort's own candidate ELF
+(`candidate/elf/accelerator.so`, 736,056 bytes) hashes
+`587181d9536d19f4ed40ddebb01ebac1d3e3544d28110c3d7e1ca04b4e4c87ab`, and the live
+ProgramData tail at `DfJLGB1W12cUYGpw3doG2DmMDe6ubR2UkmrrUsqosa9g` hashes **the
+same value over the same length**, with `live_elf_padding_bytes 0`. The
+accelerator's semantic release id was derived from that artifact rather than
+copied: `7c0a3cee0f643595da5970de505199e5cb4c4be313cecc25f096e3753e5b2fe6`.
+
+`devnet-general-market` then compiled a **398,024-byte** manifest against
+deployment slot **493,639,473**, and the founding campaign's preflight is green
+with `shortfall_lamports 0`. Two chain-owned facts moved under it and the
+sponsored release was re-minted against finalized slot 493,780,905:
+`receiver_deployment_slot` 487,855,452 → 491,006,444 and `receiver_config_digest`
+`bbbc324e…` → `f8aca67e…`. **That is the Pyth receiver redeploy again**, the same
+root cause behind every stale release pin this project has chased.
+
+The founding was **not executed**. A General founding campaign runs for the best
+part of an hour on one payer key, and the Direct market's settle — §7 — was due
+inside that window on the same payer. Two concurrent durable campaigns on one
+key is a collision this lane declined to create. Everything the execute needs is
+staged in `general/`.
+
+## 7. The settle is a clock
+
+`window.end` 19:32:29 plus `max_age_seconds` 7,200 makes the settle legal from
+**21:32:30** and due at **21:32:59**. Nothing downstream of it — admit-terminal,
+the payout, CloseFund, retirement — can begin earlier, so the first retired
+market on any chain was never reachable in this lane's earlier hours no matter
+what else was done. The certificate seat was prepaid at 19:10 and `settle.sh` is
+the bounded waiter: its guard exits rather than falling through, each attempt
+gets a fresh output path, and it reuses the prepaid `input-settle.json` because
+regenerating that document would move the certificate PDA off the seat that was
+paid for. Its ceiling **refused** a 7,716 s wait until the wait was stated
+deliberately, which is the ceiling working.

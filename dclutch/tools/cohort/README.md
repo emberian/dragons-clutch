@@ -290,6 +290,17 @@ Arm at **founding** time, not resolution time, and prepay the settle seat: the
 terminal route allocates and assigns the certificate but never funds it, and
 that rent is a caller obligation.
 
+### sim-config
+
+Derive the simulator's config from the founding's **own** records. Nothing here
+is transcribed: every address comes out of `campaign-open.json`'s accounts map,
+and the routing address lookup table comes from the founding's own
+`create DCLTGMF3 frozen routing address lookup table` transaction — one
+`getTransaction`, then the account is authenticated (frozen, and routing this
+founding's market) before any driver sees it. Cohort-16.1 stopped at
+`admission message compilation: PacketTooLarge` because no row produced this
+file and the table is the only thing that makes the admission packet fit.
+
 ### admissions
 
 Fund the participants so they pay their **own** PDA rent — a fee payer is
