@@ -672,3 +672,42 @@ The earlier candidate at `c38b26054` REFUSED at this same product handoff, which
 is how the sequencer's stale close-coordinate fields were found; the run above
 is the first at this revision, so the build-path control cohort-16 ran — two
 absolute `--work` roots on the same builder — has not been run here.
+
+---
+
+## Addendum, 2026-09-05, lane COHORT-16C: `GyD95eyE…` is stranded, and the release identity that matters is the one this document did not name
+
+**Devnet execution evidence.** Nothing above is edited; this reverses one
+sentence of the PROGRAMS-17A addendum and says what replaced it. The whole
+cohort-16.1 record is `COHORT161_UPGRADED_SEALED_2026_09_05.md`.
+
+The 17A addendum concluded, of `GyD95eyE…`: *"its release id, manifest entry and
+Market address are exactly what they were. A Trading link built from this commit
+activates it as it stands."* **The first sentence is true of the Direct
+capability release and false of the execution release set, and the second
+sentence is false.**
+
+A market pins the **execution release set id** — `Market.release_set_id`, offset
+208, read off chain as `85defd75b236…`. That id is `sha256` over five
+`(program_id, artifact_release_id)` bindings, and an artifact release id hashes
+its role's ELF digest **and its deployment slot**. So a Trading link that differs
+by one byte moves the set, and so does redeploying the identical bytes, because
+Loader V3 writes the current slot on every `Upgrade` and refuses one in the
+deployment's own slot. The field is written only by `initialize_market` into an
+all-zero account and by nothing else, ever; the activation cache is derived from
+it; and the one forward mechanism, `ReleaseLineageV1` with `lineage_walk`, has no
+consumer in any capability program.
+
+Cohort-16.1 upgraded Trading (and Core, which had moved at `17f1b6dec` — the
+deployed set differs from the 87eec1c3a candidate in **two** links, not one) and
+re-released. Both activation caches are live and distinct:
+`2xVxMvfypJyo9bacGz1FFeK4L2qgqcsHaGoR9cbun6wV` for `85defd75…` and
+`FCF1ggHcXoZaVx8PKS7YKnY166xL4E8N3ZaRsV29E11b` for `f533be49…`.
+`GyD95eyE…` names the first and cannot be moved to the second.
+
+**It lost nothing.** It could not be activated at cohort-16's release either
+(this document's own §"Blocker 2", `0x4003` at 108,180 CU), and a market that
+cannot activate cannot be retired. The market that carries the edges forward is
+`BMK3BY415TicG5nTf43ii7YncgMyVcGGySoKWeGXKLKG`, founded on the new generation
+and **activated at 521,895 CU with 36 accounts** — the first funding frame on any
+chain to carry a dependency ledger.

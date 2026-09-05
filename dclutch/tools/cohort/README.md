@@ -618,10 +618,38 @@ argument, and it re-founds everything, so `GyD95eyE…`'s survival buys nothing.
 A Trading-only upgrade in place — **16.1** — keeps that market's address and is
 the only way to reach the market that already carries the edges, but upgrading
 a program moves its Loader slot, which supersedes the release generation under
-decision 0012: every open market on cohort-16 refuses `ReleaseSuperseded`
-(`0x4007`) until a re-release re-pins the slot, and the re-release has to come
-before any execution. The row is satisfied by either; the operator states which
-and why in the cohort's own evidence.
+decision 0012.
+
+**And a re-release does NOT re-pin a market that already exists.** This was
+ruled the other way and measured on 2026-09-05
+(`docs/evidence/COHORT161_UPGRADED_SEALED_2026_09_05.md` §1): a market pins the
+EXECUTION RELEASE SET — `Market.release_set_id`, offset 208, written only by
+`initialize_market` into an all-zero account and by nothing else, ever — and
+that id is `sha256` over five `(program_id, artifact_release_id)` bindings whose
+records carry each role's ELF digest **and its deployment slot**. Any `Upgrade`
+moves it, and so does redeploying identical bytes, because Loader V3 writes the
+current slot and refuses an `Upgrade` in the deployment's own slot. The
+activation cache is derived from the set id, and `lineage_walk` — the one
+forward mechanism — has no consumer in any capability program. **So upgrading a
+link strands every market founded before it**, and the re-release is what lets
+the NEXT market found and execute, not a repair of the last one. Cohort-16.1
+took that path with its eyes open: `GyD95eyE…` could not be activated at
+cohort-16's release either, so it had no future to lose.
+
+The row is satisfied by either path; the operator states which and why in the
+cohort's own evidence.
+
+**The in-place path has no rows of its own yet, and three things block writing
+them**, all measured in cohort-16.1 and all in that document's §6: nothing binds
+a completed Upgrade row's receipt and dump into the deployment-set journal (the
+only journal writer is the AlreadyCurrent row); the checked-upgrade phase loop
+re-audits all seven roles per phase, so its blockhash-to-send gap is ~44 s
+against a devnet that was running a 24.5 s window, and only the Upgrade has an
+escape (`--adopt-existing-buffer` with `--adopt-finalized-cli-upgrade-signature`);
+and the Loader refuses any `ExtendProgram` below 10,240 bytes, which makes the
+driver's exact-top-up arithmetic unreachable for a small shortfall. Until those
+are repaired the sequence is operator-driven, and cohort-16.1's job directory
+carries it end to end.
 
 Measured in the same run: the selected entry sits at manifest index **0** on a
 real market, not the four-entry fixture's 3, so the funding slice's order is
