@@ -30,7 +30,7 @@ const BOOK_FIELDS: ReadonlyArray<keyof FailureWalkBookV1> = Object.freeze([
   'resolutionCertificate', 'sourceMaterial', 'sourceMaterialStagingVacancy', 'windowSpec',
   'windowSpecStagingVacancy', 'productRecord', 'productRecordStagingVacancy', 'resultDomain',
   'resultDomainStagingVacancy', 'portfolioRecord', 'portfolioRecordStagingVacancy',
-  'capabilityManifest', 'capabilityManifestStagingVacancy', 'failureFunding',
+  'capabilityManifest', 'capabilityManifestStagingVacancy', 'resolutionFunding',
 ]);
 
 export function decodeWalkBook(value: unknown): FailureWalkBookV1 {

@@ -34,6 +34,22 @@ const BOOK: FailureWalkBookV1 = Object.freeze({
   resolutionFunding: key(19),
 });
 
+/** The four addresses the walk module supplies itself, so no book states them. */
+const SUPPLIED_BY_THIS_MODULE: ReadonlySet<string> = new Set([
+  'Worker', 'ClockSysvar', 'RentSysvar', 'SystemProgram',
+]);
+
+describe('the book and the frame', () => {
+  it('names every slot the caller must supply, in the frame order, and nothing else', () => {
+    const owed = COMMIT_DEADLINE_FAILURE_FRAME_V1
+      .map((slot) => slot.name)
+      .filter((name) => !SUPPLIED_BY_THIS_MODULE.has(name))
+      .map((name) => `${name.slice(0, 1).toLowerCase()}${name.slice(1)}`);
+    // `resolutionProgram` is the instruction's program id, not one of its accounts.
+    expect(Object.keys(BOOK).filter((field) => field !== 'resolutionProgram')).toEqual(owed);
+  });
+});
+
 describe('CommitDeadlineFailure wire', () => {
   it('encodes the exact 32-byte layout: magic, schema, action 6, generation, terminal sequence', () => {
     const bytes = encodeCommitDeadlineFailureV1(7n, 1n);

@@ -92,7 +92,7 @@ describe('walk book', () => {
       'resolutionCertificate', 'sourceMaterial', 'sourceMaterialStagingVacancy', 'windowSpec',
       'windowSpecStagingVacancy', 'productRecord', 'productRecordStagingVacancy', 'resultDomain',
       'resultDomainStagingVacancy', 'portfolioRecord', 'portfolioRecordStagingVacancy',
-      'capabilityManifest', 'capabilityManifestStagingVacancy', 'failureFunding',
+      'capabilityManifest', 'capabilityManifestStagingVacancy', 'resolutionFunding',
     ]) book[field] = key(2);
     expect(decodeWalkBook(book).market).toBe(key(2));
   });

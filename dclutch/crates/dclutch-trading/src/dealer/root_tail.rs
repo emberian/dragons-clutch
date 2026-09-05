@@ -245,19 +245,17 @@ impl RootTail {
             .copy_from_slice(authority.inventory);
         let mut buy_quote_paid = [0_u64; MAX_OUTCOMES];
         let mut sell_quote_paid = [0_u64; MAX_OUTCOMES];
-        for outcome in 0..count {
-            buy_quote_paid[outcome] = active.cumulative_quote(
-                policy,
-                outcome,
-                super::Side::TakerBuys,
-                self.buy_used[outcome],
-            )?;
-            sell_quote_paid[outcome] = active.cumulative_quote(
-                policy,
-                outcome,
-                super::Side::TakerSells,
-                self.sell_used[outcome],
-            )?;
+        for (outcome, ((buy_paid, sell_paid), (buy_used, sell_used))) in buy_quote_paid
+            .iter_mut()
+            .zip(sell_quote_paid.iter_mut())
+            .zip(self.buy_used.iter().zip(self.sell_used.iter()))
+            .enumerate()
+            .take(count)
+        {
+            *buy_paid =
+                active.cumulative_quote(policy, outcome, super::Side::TakerBuys, *buy_used)?;
+            *sell_paid =
+                active.cumulative_quote(policy, outcome, super::Side::TakerSells, *sell_used)?;
         }
         let state = State {
             phase: self.phase,

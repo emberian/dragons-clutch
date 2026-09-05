@@ -311,18 +311,24 @@ pub fn encode_candidate(output: &mut [u8], input: CandidateInput<'_>) -> Result<
     ] {
         put_u64(output, offset, value)?;
     }
-    for outcome in 0..input.curves.len() {
+    for (outcome, ((minimum, maximum), curve)) in input
+        .minimum_inventory
+        .iter()
+        .zip(input.maximum_inventory.iter())
+        .zip(input.curves.iter())
+        .enumerate()
+    {
         put_u64(
             output,
             generated::CANDIDATE_MINIMUM_INVENTORY_OFFSET + outcome * 8,
-            input.minimum_inventory[outcome],
+            *minimum,
         )?;
         put_u64(
             output,
             generated::CANDIDATE_MAXIMUM_INVENTORY_OFFSET + outcome * 8,
-            input.maximum_inventory[outcome],
+            *maximum,
         )?;
-        encode_curve(output, outcome, input.curves[outcome])?;
+        encode_curve(output, outcome, *curve)?;
     }
     Ok(())
 }
@@ -348,11 +354,16 @@ fn validate_candidate_input(output_len: usize, input: CandidateInput<'_>) -> Res
     {
         return Err(Error::ZeroCoordinate);
     }
-    for outcome in 0..count {
-        if input.minimum_inventory[outcome] > input.maximum_inventory[outcome] {
+    for ((minimum, maximum), curve) in input
+        .minimum_inventory
+        .iter()
+        .zip(input.maximum_inventory.iter())
+        .zip(input.curves.iter())
+    {
+        if minimum > maximum {
             return Err(Error::InventoryRisk);
         }
-        validate_curve_input(input.curves[outcome])?;
+        validate_curve_input(*curve)?;
     }
     Ok(())
 }
@@ -367,14 +378,12 @@ fn validate_curve_input(curve: CurveInput<'_>) -> Result<()> {
             .iter()
             .chain(curve.asks.iter())
             .any(|band| band.capacity == 0 || band.price_numerator == 0)
-        || curve
+        || !curve
             .bids
-            .windows(2)
-            .any(|pair| pair[0].price_numerator < pair[1].price_numerator)
-        || curve
+            .is_sorted_by(|earlier, later| earlier.price_numerator >= later.price_numerator)
+        || !curve
             .asks
-            .windows(2)
-            .any(|pair| pair[0].price_numerator > pair[1].price_numerator)
+            .is_sorted_by(|earlier, later| earlier.price_numerator <= later.price_numerator)
         || curve.bids.iter().any(|bid| {
             curve
                 .asks
@@ -1593,41 +1602,42 @@ fn validate_state(
         return Err(Error::Underfunded);
     }
     let count = usize::from(policy.outcome_count);
-    for outcome in 0..MAX_OUTCOMES {
+    for (outcome, ((inventory, (buy_used, sell_used)), (buy_quote_paid, sell_quote_paid))) in state
+        .inventory
+        .iter()
+        .zip(state.buy_used.iter().zip(state.sell_used.iter()))
+        .zip(
+            state
+                .buy_quote_paid
+                .iter()
+                .zip(state.sell_quote_paid.iter()),
+        )
+        .enumerate()
+    {
         if outcome < count {
             let buy_capacity = active.capacity(outcome, Side::TakerBuys)?;
             let sell_capacity = active.capacity(outcome, Side::TakerSells)?;
-            if state.buy_used[outcome] > buy_capacity || state.sell_used[outcome] > sell_capacity {
+            if *buy_used > buy_capacity || *sell_used > sell_capacity {
                 return Err(Error::InvalidCurve);
             }
-            if state.buy_quote_paid[outcome]
-                != active.cumulative_quote(
-                    policy,
-                    outcome,
-                    Side::TakerBuys,
-                    state.buy_used[outcome],
-                )?
-                || state.sell_quote_paid[outcome]
-                    != active.cumulative_quote(
-                        policy,
-                        outcome,
-                        Side::TakerSells,
-                        state.sell_used[outcome],
-                    )?
+            if *buy_quote_paid
+                != active.cumulative_quote(policy, outcome, Side::TakerBuys, *buy_used)?
+                || *sell_quote_paid
+                    != active.cumulative_quote(policy, outcome, Side::TakerSells, *sell_used)?
             {
                 return Err(Error::InvalidCurve);
             }
             if state.phase == Phase::Open
-                && (state.inventory[outcome] < active.minimum_inventory(outcome)?
-                    || state.inventory[outcome] > active.maximum_inventory(outcome)?)
+                && (*inventory < active.minimum_inventory(outcome)?
+                    || *inventory > active.maximum_inventory(outcome)?)
             {
                 return Err(Error::InventoryRisk);
             }
-        } else if state.inventory[outcome] != 0
-            || state.buy_used[outcome] != 0
-            || state.sell_used[outcome] != 0
-            || state.buy_quote_paid[outcome] != 0
-            || state.sell_quote_paid[outcome] != 0
+        } else if *inventory != 0
+            || *buy_used != 0
+            || *sell_used != 0
+            || *buy_quote_paid != 0
+            || *sell_quote_paid != 0
         {
             return Err(Error::NonCanonicalPadding);
         }
@@ -1728,9 +1738,14 @@ fn activate(
     {
         return Err(Error::StaleCoordinate);
     }
-    for outcome in 0..usize::from(policy.outcome_count) {
-        if state.inventory[outcome] < pending.minimum_inventory(outcome)?
-            || state.inventory[outcome] > pending.maximum_inventory(outcome)?
+    for (outcome, inventory) in state
+        .inventory
+        .iter()
+        .enumerate()
+        .take(usize::from(policy.outcome_count))
+    {
+        if *inventory < pending.minimum_inventory(outcome)?
+            || *inventory > pending.maximum_inventory(outcome)?
         {
             return Err(Error::InventoryRisk);
         }
@@ -1774,8 +1789,14 @@ fn fill(
         return Err(Error::InvalidCurve);
     }
     let (used, paid) = match request.side {
-        Side::TakerBuys => (state.buy_used[outcome], state.buy_quote_paid[outcome]),
-        Side::TakerSells => (state.sell_used[outcome], state.sell_quote_paid[outcome]),
+        Side::TakerBuys => (
+            outcome_slot(&state.buy_used, outcome)?,
+            outcome_slot(&state.buy_quote_paid, outcome)?,
+        ),
+        Side::TakerSells => (
+            outcome_slot(&state.sell_used, outcome)?,
+            outcome_slot(&state.sell_quote_paid, outcome)?,
+        ),
     };
     let used_after = used
         .checked_add(request.quantity)
@@ -1796,11 +1817,12 @@ fn fill(
     let fee = fee_paid_after
         .checked_sub(state.fee_paid)
         .ok_or(Error::InvalidCurve)?;
+    let inventory_before = outcome_slot(&state.inventory, outcome)?;
     let inventory_after = match request.side {
-        Side::TakerBuys => state.inventory[outcome]
+        Side::TakerBuys => inventory_before
             .checked_sub(request.quantity)
             .ok_or(Error::InventoryRisk)?,
-        Side::TakerSells => state.inventory[outcome]
+        Side::TakerSells => inventory_before
             .checked_add(request.quantity)
             .ok_or(Error::ArithmeticOverflow)?,
     };
@@ -1821,8 +1843,8 @@ fn fill(
                 .quote_custody
                 .checked_add(gross)
                 .ok_or(Error::ArithmeticOverflow)?;
-            state.buy_used[outcome] = used_after;
-            state.buy_quote_paid[outcome] = due_after;
+            *outcome_slot_mut(&mut state.buy_used, outcome)? = used_after;
+            *outcome_slot_mut(&mut state.buy_quote_paid, outcome)? = due_after;
             plan.push(CustodyRole::TakerQuote, CustodyRole::DealerQuote, gross)?;
             plan.push(CustodyRole::TakerQuote, CustodyRole::FeeVault, fee)?;
         }
@@ -1835,8 +1857,8 @@ fn fill(
             if state.quote_custody < active.quote_reserve_floor {
                 return Err(Error::Underfunded);
             }
-            state.sell_used[outcome] = used_after;
-            state.sell_quote_paid[outcome] = due_after;
+            *outcome_slot_mut(&mut state.sell_used, outcome)? = used_after;
+            *outcome_slot_mut(&mut state.sell_quote_paid, outcome)? = due_after;
             plan.push(
                 CustodyRole::DealerQuote,
                 CustodyRole::TakerQuote,
@@ -1845,7 +1867,7 @@ fn fill(
             plan.push(CustodyRole::DealerQuote, CustodyRole::FeeVault, fee)?;
         }
     }
-    state.inventory[outcome] = inventory_after;
+    *outcome_slot_mut(&mut state.inventory, outcome)? = inventory_after;
     state.fee_base = fee_base_after;
     state.fee_paid = fee_paid_after;
     state.fee_custody = state
@@ -1921,12 +1943,13 @@ fn unwind(
     // so it cannot reach a transition. That is where `DealerLiquidity.lean`'s
     // `0 < unwind.quantity` is carried, and stating it twice would leave a dead
     // guard that reads as load-bearing.
-    if request.quantity != state.inventory[outcome] {
+    if request.quantity != outcome_slot(&state.inventory, outcome)? {
         return Err(Error::InventoryRisk);
     }
-    state.inventory[outcome] = state.inventory[outcome]
+    let remaining = outcome_slot(&state.inventory, outcome)?
         .checked_sub(request.quantity)
         .ok_or(Error::InventoryRisk)?;
+    *outcome_slot_mut(&mut state.inventory, outcome)? = remaining;
     let payout = if request.outcome == state.winner {
         request.quantity
     } else {
@@ -2034,7 +2057,7 @@ fn adjust_liquidity(
             )?;
         }
     } else if outcome < count {
-        let current = state.inventory[outcome];
+        let current = outcome_slot(&state.inventory, outcome)?;
         let post = if add {
             current
                 .checked_add(request.quantity)
@@ -2047,7 +2070,7 @@ fn adjust_liquidity(
         if post < active.minimum_inventory(outcome)? || post > active.maximum_inventory(outcome)? {
             return Err(Error::InventoryRisk);
         }
-        state.inventory[outcome] = post;
+        *outcome_slot_mut(&mut state.inventory, outcome)? = post;
         plan.claim = ClaimAction::AdjustLiquidity {
             add,
             outcome: request.outcome,
@@ -2163,6 +2186,14 @@ fn u64_array_at(input: &[u8], offset: usize) -> Result<[u64; MAX_OUTCOMES]> {
         *value = u64_at(input, offset + index * 8)?;
     }
     Ok(values)
+}
+
+fn outcome_slot(values: &[u64; MAX_OUTCOMES], outcome: usize) -> Result<u64> {
+    values.get(outcome).copied().ok_or(Error::InvalidCurve)
+}
+
+fn outcome_slot_mut(values: &mut [u64; MAX_OUTCOMES], outcome: usize) -> Result<&mut u64> {
+    values.get_mut(outcome).ok_or(Error::InvalidCurve)
 }
 
 fn put(output: &mut [u8], offset: usize, value: &[u8]) -> Result<()> {
