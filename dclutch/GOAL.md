@@ -5047,3 +5047,11 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   `dealer/v3_*/v4_*` modules renamed to concept names; 184 lines of dated narration out; 157 routes / 357 codes, none
   renumbered. Left: the registered-Direct V4 branch (C-04 wall, kept whole); the Series v3→v5 flatten; the `Content` split.
   Owed to convergence: frames (Trading, Custody, Dealer-accelerator ELFs move — cohort-16 carries), genref, the mirrors.
+- SIMPLIFY-FORMAL closed (branch `simplify/formal` at `3e5b220c2`, seven commits; SIMPLIFY_FORMAL.md): modules 143 → 138,
+  emitters 105 → 95; **`lakefile.toml` 423 → 11 lines — nothing ever ran a `lake exe`**; raw-compared guards 10 → 1;
+  census 101/101 guarded, fixpoint PASS; `DCGREQ02` emitted beside `DCGREQ03` from one emitter and `successor_request_v2.rs`
+  reads it; six records → one emitter each (13 → 6); `RustEmit.lean` as the Rust twin of `TsEmit`, 158 hand-copied helpers
+  out of 76 emitters; 108/108 emitter×target outputs byte-identical; the README 154 → 66 lines. Two cuts restored on the
+  survive list (SeriesEscrowV3, DealerScenarioCollateral — recommendations with controls). Touched outside formal/: 11
+  guard scripts, one codec file, two package.json + lean-emit.mjs, 19 generated files (provenance line only), the seam
+  baseline, COVERAGE.md.
