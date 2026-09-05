@@ -34,7 +34,7 @@
 # WHAT A YELLOW RESULT MEANS HERE, because it is a third thing and not a shade
 # of the other two.
 #
-# `run.sh` exits 0 pass, 1 a gate failed, 2 A PREREQUISITE WAS MISSING AND
+# `tools/gate` exits 0 pass, 1 a gate failed, 2 A PREREQUISITE WAS MISSING AND
 # NOTHING WAS PROVEN. The 2 is load-bearing: this repository's `dclutch/`
 # directory is a SUBTREE, vendored in waves, and it currently does not carry
 # `tools/gates/`, `tools/seam-audit/` or `tools/gate` at all. Until the

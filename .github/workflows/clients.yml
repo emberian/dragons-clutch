@@ -34,8 +34,8 @@
 # that exits 64 on an unknown tier and reads as a broken workflow.
 #
 # HOW EACH JOB DECIDES WHETHER ITS TIER EXISTS: it asks the runner, with
-# `run.sh --list`, rather than grepping for a shell function or keeping its own
-# list. `run.sh`'s own header argues exactly this about prerequisites -- "where
+# `tools/gate --list`, rather than grepping for a shell function or keeping its own
+# list. `tools/gate`'s own header argues exactly this about prerequisites -- "where
 # a gate already reports its own 2, THIS SCRIPT READS THAT ANSWER RATHER THAN
 # RE-DERIVING IT" -- and a workflow holding a second copy of the tier table is
 # the same defect one repository further out.
@@ -179,7 +179,7 @@ jobs:
               echo "web tier: NOT RUN (missing prerequisite)" >> "$GITHUB_STEP_SUMMARY"
               ;;
             64)
-              echo "::error::tools/gate rejected 'web' as a tier name. The probe above said the tier was listed, so the runner's table and its dispatch disagree -- that is a defect in run.sh, not in this workflow."
+              echo "::error::tools/gate rejected 'web' as a tier name. The probe above said the tier was listed, so the runner's table and its dispatch disagree -- that is a defect in tools/gate, not in this workflow."
               echo "web tier: USAGE ERROR" >> "$GITHUB_STEP_SUMMARY"
               exit 1
               ;;
@@ -327,7 +327,7 @@ jobs:
               echo "abi tier: NOT RUN (missing prerequisite)" >> "$GITHUB_STEP_SUMMARY"
               ;;
             64)
-              echo "::error::tools/gate rejected 'abi' as a tier name. The probe above said the tier was listed, so the runner's table and its dispatch disagree -- that is a defect in run.sh, not in this workflow."
+              echo "::error::tools/gate rejected 'abi' as a tier name. The probe above said the tier was listed, so the runner's table and its dispatch disagree -- that is a defect in tools/gate, not in this workflow."
               echo "abi tier: USAGE ERROR" >> "$GITHUB_STEP_SUMMARY"
               exit 1
               ;;
@@ -434,7 +434,7 @@ jobs:
               echo "emission tier: NOT RUN (missing prerequisite)" >> "$GITHUB_STEP_SUMMARY"
               ;;
             64)
-              echo "::error::tools/gate rejected 'abi' as a tier name. The probe above said the tier was listed, so the runner's table and its dispatch disagree -- that is a defect in run.sh, not in this workflow."
+              echo "::error::tools/gate rejected 'abi' as a tier name. The probe above said the tier was listed, so the runner's table and its dispatch disagree -- that is a defect in tools/gate, not in this workflow."
               echo "emission tier: USAGE ERROR" >> "$GITHUB_STEP_SUMMARY"
               exit 1
               ;;
