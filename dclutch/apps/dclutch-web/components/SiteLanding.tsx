@@ -91,7 +91,7 @@ export default function SiteLanding() {
           aside did: it went on saying no market was open after one was. It
           reads the same published cut, so opening a market is still one
           fixture edit and the front door still stops claiming otherwise. */}
-      <header><span>01</span><div><h2>Try it</h2><p>Seven programs, deployed on devnet.</p></div></header>
+      <header><span>01</span><div><h2>Try it</h2><p>Eight programs, deployed on devnet.</p></div></header>
       <div className="direct-actions">
         <Anchor className="secondary-action" href="/markets">Browse the markets →</Anchor>
         <Anchor className="secondary-action" href="/portfolio">See what a wallet holds →</Anchor>

@@ -2,10 +2,10 @@ import { PublicKey } from '@solana/web3.js';
 
 import {
   DEVNET_PROGRAM_EVIDENCE_V1,
-  PROTOCOL_ROLES_V1,
   PROTOCOL_ROLE_MEANING_V1,
+  deployedProgramRolesV1,
+  type DeployedProgramRoleV1,
   type DeploymentV1,
-  type ProtocolRoleV1,
 } from '@dclutch/sdk/deployments';
 import { clusterNameV1 } from '../rpcDefault';
 import { type ConnectionFacts, type SolanaRpcClient } from '@dclutch/sdk/rpc';
@@ -13,18 +13,26 @@ import { type ConnectionFacts, type SolanaRpcClient } from '@dclutch/sdk/rpc';
 /**
  * The explorer's landing content: THE PROTOCOL, not a form.
  *
- * The app knows its own deployment (`lib/deployments.ts`), so the first thing
- * the explorer shows is the seven role programs read LIVE off the active
- * cluster, plus the recent transactions the node's own per-address signature
- * history holds for them. Everything here is a finalized read or the node's
- * own history — the same provenance discipline as every other surface.
+ * The app knows its own deployment (`@dclutch/sdk/deployments`), so the first
+ * thing the explorer shows is that deployment's programs read LIVE off the
+ * active cluster, plus the recent transactions the node's own per-address
+ * signature history holds for them. Everything here is a finalized read or the
+ * node's own history — the same provenance discipline as every other surface.
+ *
+ * HOW MANY PROGRAMS IS THE DEPLOYMENT'S ANSWER, not this module's. Cohort-16
+ * deployed an eighth — the one merged accelerator — and its refusals are
+ * already rendered here by band (`lib/explorer/refusals.ts` reads the generated
+ * census, where the folded program owns 0xC000, 0xC100 and 0xC200 alike). What
+ * was missing was the program itself: a reader could be shown a refusal
+ * attributed to `dclutch-accelerator-sbf` and find no card, no address and no
+ * history for it anywhere on the page.
  */
 
 export const PROTOCOL_ACTIVITY_PER_PROGRAM = 8;
 export const PROTOCOL_ACTIVITY_MAX_ROWS = 12;
 
 export type ProtocolProgramCardV1 = Readonly<{
-  role: ProtocolRoleV1;
+  role: DeployedProgramRoleV1;
   address: string;
   meaning: string;
   status: 'live' | 'absent' | 'not-executable';
@@ -51,8 +59,8 @@ export type ProtocolActivityRowV1 = Readonly<{
   blockTime: string | null;
   succeeded: boolean;
   errorText: string | null;
-  /** Which role programs' histories list this signature — the decoded-by-name part. */
-  roles: ReadonlyArray<ProtocolRoleV1>;
+  /** Which programs' histories list this signature — the decoded-by-name part. */
+  roles: ReadonlyArray<DeployedProgramRoleV1>;
 }>;
 
 export type ProtocolHomeV1 = Readonly<{
@@ -82,9 +90,10 @@ export async function inspectProtocolHomeV1(client: ProtocolHomeRpc, deployment:
     ? 'unpinned'
     : facts.genesisHash === deployment.genesisHash ? 'match' : 'mismatch';
 
-  const addresses = PROTOCOL_ROLES_V1.map((role) => deployment.programs[role]);
+  const roles = deployedProgramRolesV1(deployment);
+  const addresses = roles.map((role) => deployment.programs[role] as string);
   const observation = await client.multipleAccounts(addresses);
-  const cards = PROTOCOL_ROLES_V1.map((role, index): ProtocolProgramCardV1 => {
+  const cards = roles.map((role, index): ProtocolProgramCardV1 => {
     const entry = observation.accounts[index];
     const account = entry.account;
     return Object.freeze({
@@ -95,15 +104,15 @@ export async function inspectProtocolHomeV1(client: ProtocolHomeRpc, deployment:
       owner: account?.owner ?? null,
       ownerLabel: account === null ? null : LOADER_LABELS.get(account.owner) ?? null,
       lamports: account?.lamports ?? null,
-      deploymentSlot: deployment.cluster === 'devnet' ? DEVNET_PROGRAM_EVIDENCE_V1[role].deploymentSlot : null,
+      deploymentSlot: deployment.cluster === 'devnet' ? DEVNET_PROGRAM_EVIDENCE_V1[role]?.deploymentSlot ?? null : null,
     });
   });
 
-  const bySignature = new Map<string, { row: Omit<ProtocolActivityRowV1, 'roles'>; roles: ProtocolRoleV1[] }>();
-  const refusedHistories: ProtocolRoleV1[] = [];
-  for (const role of PROTOCOL_ROLES_V1) {
+  const bySignature = new Map<string, { row: Omit<ProtocolActivityRowV1, 'roles'>; roles: DeployedProgramRoleV1[] }>();
+  const refusedHistories: DeployedProgramRoleV1[] = [];
+  for (const [index, role] of roles.entries()) {
     try {
-      const records = await client.signaturesForAddress(deployment.programs[role], PROTOCOL_ACTIVITY_PER_PROGRAM);
+      const records = await client.signaturesForAddress(addresses[index], PROTOCOL_ACTIVITY_PER_PROGRAM);
       for (const record of records) {
         const existing = bySignature.get(record.signature);
         if (existing === undefined) {
@@ -137,8 +146,8 @@ export async function inspectProtocolHomeV1(client: ProtocolHomeRpc, deployment:
   const activityNote = refusedHistories.length > 0
     ? `This node refused the signature history for ${refusedHistories.join(', ')}; only the programs it answered for appear here.`
     : activity.length === 0
-      ? 'This node lists no signature history for any of the seven programs. Another node may answer differently.'
-      : `Newest first, from this node’s own per-address signature history over the seven programs.`;
+      ? `This node lists no signature history for any of the ${roles.length} programs. Another node may answer differently.`
+      : `Newest first, from this node’s own per-address signature history over the ${roles.length} programs.`;
 
   return Object.freeze({
     facts,

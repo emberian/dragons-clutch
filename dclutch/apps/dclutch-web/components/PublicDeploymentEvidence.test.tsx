@@ -7,18 +7,21 @@ import PublicDeploymentEvidence, {
   publicDeploymentEvidenceDownloadHrefV1,
 } from './PublicDeploymentEvidence';
 import {
+  DEPLOYED_PROGRAM_ROLES_V1,
   DEVNET_DEPLOYMENT_V1,
   DEVNET_PROGRAM_EVIDENCE_V1,
   LOCAL_DEPLOYMENT_V1,
-  PROTOCOL_ROLES_V1,
 } from '@dclutch/sdk/deployments';
 
 describe('public deployment evidence', () => {
-  it('projects exactly the seven checked devnet Program and ProgramData coordinates', () => {
+  it('projects every devnet Program and ProgramData coordinate the manifest names', () => {
+    // EIGHT since cohort-16: the seven checked roles and the accelerator. A
+    // reader who downloads this to look a refusal up by program would find no
+    // address for the band the merged accelerator owns.
     const document = publicDeploymentEvidenceDocumentV1();
     const programs = document.programs as Record<string, Record<string, unknown>>;
-    expect(Object.keys(programs)).toEqual(PROTOCOL_ROLES_V1);
-    for (const role of PROTOCOL_ROLES_V1) {
+    expect(Object.keys(programs)).toEqual(DEPLOYED_PROGRAM_ROLES_V1);
+    for (const role of DEPLOYED_PROGRAM_ROLES_V1) {
       expect(programs[role]).toEqual({
         program: DEVNET_DEPLOYMENT_V1.programs[role],
         programData: DEVNET_PROGRAM_EVIDENCE_V1[role].programData,
@@ -51,10 +54,11 @@ describe('public deployment evidence', () => {
       <PublicDeploymentEvidence deployment={DEVNET_DEPLOYMENT_V1} />,
     );
     expect(devnet).toContain('Read the checked deployment record');
-    expect(devnet).toContain('Download the seven addresses and their first deployment slots');
-    // The slots are DEPLOY-1's. The programs have been upgraded in place twice
-    // since, keeping their addresses, so an unqualified "observed slot" reads
-    // as current chain state and is off by hundreds of thousands of slots.
+    expect(devnet).toContain('Download the eight addresses and the slots they were read at');
+    // The slots are the cohort's own deploy slots, read off its ProgramData
+    // headers. The programs are upgradeable in place, so an unqualified
+    // "observed slot" would read as current chain state and this document
+    // cannot observe a chain.
     expect(devnet).not.toContain('and observed slots');
     expect(devnet).toContain('download="dclutch-devnet-deployment-evidence-v1.json"');
 

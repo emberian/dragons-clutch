@@ -157,6 +157,39 @@ describe('the phase gate refuses by name and never asserts readiness', () => {
     expect(gate([named, machineless])).toContain('declares none');
   });
 
+  it('admits the one prestate close-fund declares, and refuses every other', () => {
+    // THE ADMIT BRANCH, OFFLINE, because it has no live subject any more.
+    // `capabilityCloseFundGate.live.test.ts` used to reach Retiring+Consumed on
+    // a real account; cohort-16's featured market is Open and cannot be
+    // activated at the deployed Direct release, so no market on this cohort
+    // reaches Retiring. A gate whose only exercised branch is the refusal is
+    // indistinguishable from a gate that refuses everything, and that is the
+    // hole this case fills while the live one has nothing to read.
+    const close = BROWSER_CAPABILITY_STANDINGS_V1.find((one) => one.action.id === 'source.close-fund');
+    expect(close, 'no standing for source.close-fund').toBeDefined();
+    const gates = capabilityActPhaseGatesV1(close!.action);
+    expect(gates).toHaveLength(1);
+    expect(gates[0]!.route).toBe('resolution/core_effect::process_direct_funding_close_v1');
+    expect(gates[0]!.prestates).toEqual([['Retiring', 'Consumed']]);
+
+    const admitted = evaluateCapabilityV1(close!, observed('Retiring', 'Consumed'), []);
+    expect(admitted.phaseGate.verdict).toBe('admitted');
+    expect(admitted.status).toBe('ready-to-preflight');
+
+    // And every other prestate the Market machine can be in is excluded, so
+    // "admitted" above is the gate agreeing with one declaration rather than
+    // the evaluator saying yes.
+    for (const [phase, readiness] of [
+      ['Founding', 'Prepaid'], ['Open', 'Consumed'], ['Terminal', 'Consumed'],
+      ['Retiring', 'Ready'], ['Retired', 'Consumed'],
+    ] as const) {
+      const verdict = evaluateCapabilityV1(close!, observed(phase, readiness), []);
+      expect(verdict.phaseGate.verdict, `${phase}+${readiness}`).toBe('excluded');
+      expect(verdict.status, `${phase}+${readiness}`).toBe('wrong-phase');
+      expect(verdict.reason).toContain('admits only Retiring+Consumed');
+    }
+  });
+
   it('publishes no route as both gated and machineless', () => {
     for (const route of ROUTES_WITHOUT_A_STATE_MACHINE_V1) {
       expect(routePhaseGateV1(route)).toBeNull();

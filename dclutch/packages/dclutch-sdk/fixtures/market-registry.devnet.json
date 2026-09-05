@@ -3,32 +3,41 @@
   "cluster": "devnet",
   "provenance": "Coordinate names and stories are site-side editorial, because the chain carries no words for them. A LIVE market's row carries nothing else: its title, question, outcome names and boundaries are derived from its own records, and every number, phase, address and settlement time beside them is read from the chain — a title written here would restate boundaries the records already carry and would go stale the moment the market was re-founded on different cuts, while a coordinate's common name never does. The rows for markets whose programs have been CLOSED keep their words, because those records can no longer be read and nothing would derive in their place; a closed row is written once, when the cohort is retired, and says what the market turned out to be rather than what it was hoped to be.",
   "markets": {
-    "3QytL1bBMtCvRoXWR5h7MgutRBZqtv7emUVubEo5a4T2": {
+    "GyD95eyERwRfwj8fSFNhWjKF2eaDg5XcREidPKex65zY": {
       "title": null,
+      "coordinate": {
+        "label": "SOL/USD",
+        "unitPrefix": "$"
+      },
+      "resolution": "Settles from the sponsored devnet Pyth SOL/USD feed over the window this market's own source records stamp. If the feed cannot answer, it resolves to the source-failure outcome — and here that outcome pays the ordinary holders back rather than paying whoever minted the failure claim. This page derives that from the market's own authenticated basis record; it is not a promise made here.",
+      "story": "The first market here that refunds. If the feed never reports, the collateral goes back to whoever holds an ordinary outcome, and nobody is paid for having chosen the oracle. Trading is not switched on."
+    },
+    "3QytL1bBMtCvRoXWR5h7MgutRBZqtv7emUVubEo5a4T2": {
+      "title": "SOL/USD — asked, answered, and paid",
       "coordinate": {
         "label": "SOL/USD",
         "unitPrefix": "$"
       },
       "resolution": "Settled from the sponsored devnet Pyth SOL/USD feed over the window its own source records stamp. Had the feed been unable to answer, it would have resolved to the source-failure outcome.",
-      "story": "The first market here whose two answers are one answer: the cell the chain committed is the cell its own boundaries put the reading in. The winning claim was paid, and it is now retiring."
+      "story": "The first market here whose two answers were one answer: the cell the chain committed is the cell its own boundaries imply. The winning claim was paid. Its programs are closed; it stays readable."
     },
     "C9dLhWj7yi76RtQhhHV13gKuudAbV8qio8TZVEn3CjAT": {
-      "title": null,
+      "title": "SOL/USD — the first paid fill, never admitted",
       "coordinate": {
         "label": "SOL/USD",
         "unitPrefix": "$"
       },
-      "resolution": "Settles from the sponsored devnet Pyth SOL/USD feed over the window this market's own source records stamp. If the feed cannot answer, it resolves to the source-failure outcome.",
-      "story": "It carries the first fee-bearing fill this protocol has taken on a public chain, and its settlement certificate is written. Nothing has admitted that answer into the market itself, so it still reads Open."
+      "resolution": "Settled from the sponsored devnet Pyth SOL/USD feed over the window its own source records stamp. Had the feed been unable to answer, it would have resolved to the source-failure outcome.",
+      "story": "It carried the first fee-bearing fill this protocol has taken on a public chain, and its settlement certificate was written. Nothing admitted that answer into the market. Its programs are closed."
     },
     "6aqy89GhhXFtDbawC5ors4HLkGvzdHC4R26TXTaaXRKj": {
-      "title": null,
+      "title": "SOL/USD — the batch market nothing ran against",
       "coordinate": {
         "label": "SOL/USD",
         "unitPrefix": "$"
       },
-      "resolution": "Settles from the sponsored devnet Pyth SOL/USD feed over the window this market's own source records stamp. If the feed cannot answer, it resolves to the source-failure outcome.",
-      "story": "The first market here whose trades are chosen in batches rather than one at a time: participants submit candidates and the best valid one wins, with no claim that it is optimal. Nothing has run against it."
+      "resolution": "Settled from the sponsored devnet Pyth SOL/USD feed over the window its own source records stamp. Had the feed been unable to answer, it would have resolved to the source-failure outcome.",
+      "story": "The first market here meant to choose trades in batches rather than one at a time, with no claim that the winner is optimal. Nothing ever ran against it. Its programs are closed."
     },
     "DUVcCGfjXzp1fBktTCjsAomgrn9S6sxSDziQHoyRiu8A": {
       "title": "SOL/USD — the first answer, and the wrong cell",

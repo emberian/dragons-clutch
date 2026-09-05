@@ -15,11 +15,13 @@
  *
  * WHAT IS DERIVED, AND FROM WHERE:
  *
- * - the seven program ids are the `program_id` each role carries in the SEALED
+ * - the eight program ids are the `program_id` each role carries in the SEALED
  *   plan (`dclutch-local-successor-infrastructure-plan-v3`) -- the same document
  *   the deploy itself was driven from. Not typed, and not read out of an
  *   evidence markdown file, which is a transcription of the plan and not a
- *   second source.
+ *   second source. The eighth is the accelerator, which the plan calls
+ *   `general_accelerator`; it is a DEPLOYED program and not a checked role, and
+ *   the distinction is kept in `lib/deployments.ts` rather than flattened here.
  * - the ProgramData address beside each id is READ: the 32 bytes the Program
  *   account itself names at offset 4. It is NOT derived from the program id,
  *   even though it could be -- a derivation cannot tell a live cohort from a
@@ -46,11 +48,25 @@ import { fileURLToPath } from 'node:url';
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const manifestPath = fileURLToPath(new URL('../lib/deployments.ts', import.meta.url));
 
-/** The manifest's role order, and the plan's key for each role. */
-const ROLES = Object.freeze(['registry', 'rent', 'custody', 'resolution', 'claims', 'trading', 'core']);
+/**
+ * The manifest's role order, and the plan's key for each role.
+ *
+ * EIGHT SINCE COHORT-16, and the eighth is not a checked role. The
+ * simplification swarm folded the General accelerator, the Dealer accelerator
+ * and the Series shadow into one `dclutch-accelerator-sbf`, and cohort-16 is
+ * the first cohort that DEPLOYED it -- through cohort-15 a one-off job put it
+ * on the chain and the runbook merely observed it. The deployment-set journal
+ * still owns exactly the seven checked roles and names no accelerator, so this
+ * table carries the eighth as a deployed program and not as a role any account
+ * derivation or owner check consults. It is `general_accelerator` in the plan,
+ * which is the name the plan schema has had since before the fold, and it is
+ * OPTIONAL there: a genesis plan carries none.
+ */
+const ROLES = Object.freeze(['registry', 'rent', 'custody', 'resolution', 'claims', 'trading', 'core', 'accelerator']);
 const PLAN_KEY = Object.freeze({
   registry: 'registry', rent: 'rent_credit', custody: 'custody',
   resolution: 'resolution', claims: 'claims', trading: 'trading', core: 'core',
+  accelerator: 'general_accelerator',
 });
 const PLAN_SCHEMA = 'dclutch-local-successor-infrastructure-plan-v3';
 const UPGRADEABLE_LOADER = 'BPFLoaderUpgradeab1e11111111111111111111111';
@@ -171,7 +187,7 @@ const programsBlock = [
   '  }),',
 ].join('\n');
 const evidenceBlock = [
-  'export const DEVNET_PROGRAM_EVIDENCE_V1: Readonly<Record<ProtocolRoleV1, ProgramEvidenceV1>> = Object.freeze({',
+  'export const DEVNET_PROGRAM_EVIDENCE_V1: Readonly<Record<DeployedProgramRoleV1, ProgramEvidenceV1>> = Object.freeze({',
   ...ROLES.map((role) => `  ${role}: Object.freeze({ programData: '${evidence[role].programData}', deploymentSlot: '${evidence[role].deploymentSlot}' }),`),
   '});',
 ].join('\n');

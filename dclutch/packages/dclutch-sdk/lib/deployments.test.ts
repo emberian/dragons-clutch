@@ -3,10 +3,12 @@ import { describe, expect, it } from 'vitest';
 
 import liveOpenMarket from '../fixtures/live-open-market.json';
 import {
+  DEPLOYED_PROGRAM_ROLES_V1,
   DEVNET_DEPLOYMENT_V1,
   DEVNET_PROGRAM_EVIDENCE_V1,
   LOCAL_DEPLOYMENT_V1,
   PROTOCOL_ROLES_V1,
+  deployedProgramRolesV1,
   deploymentProgramLabelsV1,
   importDeploymentDocumentV1,
   parseCustomDeploymentV1,
@@ -21,7 +23,7 @@ import {
  * "correction" to one table without the other is a red test, not a drift.
  */
 describe('the deployment manifest', () => {
-  it('bakes the seven devnet addresses of the cohort that is actually running', () => {
+  it('bakes the eight devnet addresses of the cohort that is actually running', () => {
     // NOT "permanent". They were called that -- DEPLOY_1.md §2 says
     // "these are the durable protocol addresses" -- and then devnet was ruled
     // disposable, and cohorts 9 through 15 each replaced the whole set and
@@ -34,27 +36,35 @@ describe('the deployment manifest', () => {
     // them. These literals are the review copy, so the table cannot move
     // without a reviewer seeing which cohort it moved to.
     expect(DEVNET_DEPLOYMENT_V1.programs).toEqual({
-      registry: '8ci2LojrUPtVZoByaAmoNCj8244DTdxkUkHRVA9JiHdV',
-      rent: 'EQ61nrN71xaTsDMSrrH9FzMeqc27ghRex9abyjKu8vC4',
-      custody: '4sCbUV6f8iZaaVDkp3qAJtxiLY1cfBcKrVc5wpAFjpzM',
-      resolution: '24AkUjtXg61La45u7KTge8u4dKpVqkzirmzycVyckFgn',
-      claims: '595PExHje1GnbryQtXvpxSfxK72snpMcrG1Sj8VpPLEe',
-      trading: '3gBSSjYwSC4phutpGKRkMhrnCDVzHu6kfQ3L4jLf2UmG',
-      core: '7hGerMC6Wj742FVTyiF9PhRnGSBzbee7TMZ6sUytsmFr',
+      registry: '6gRRiB9BtQFN6AquyLXXjuiX1GYN2xyW8nqCTc3xJzkV',
+      rent: '42xN9ULoMpULmeDbdGCtyAo82FRJved6sojUun6NSKdt',
+      custody: '8UkoNCPD4JuWBiHWdc7WaM3j7Fj9jbf8Fe926Q1CDceo',
+      resolution: 'jrjXw2Rph15VyJB3ztbRgoHUPJrcvMSHV6svRUYtUw3',
+      claims: '8JfHfBBGaoUP1yV6VzXcvWwhQSZNV8eQmDAiYmCpNQJk',
+      trading: 'ESQhDyV7obS4oNp7abjn7sSYChxtGrHru4TzvPuybJi3',
+      core: '4wv7JxoAad6JMQi2vHJyByLXasWS8RzJSTdvEEmpCjpe',
+      // The eighth, and the first cohort ever to deploy one from the runbook.
+      // It is in `programs` and NOT in `PROTOCOL_ROLES_V1`, which is the whole
+      // distinction: a program a reader can look up and a liveness gate must
+      // ask about, and not a role any PDA derivation or owner check consults.
+      accelerator: '6v1c2Go2h1rxkTN2EmzC5xGC35MTbaHPCHrKF6kTvg4y',
     });
+    expect(deployedProgramRolesV1(DEVNET_DEPLOYMENT_V1)).toEqual([...DEPLOYED_PROGRAM_ROLES_V1]);
+    expect(deployedProgramRolesV1(LOCAL_DEPLOYMENT_V1)).toEqual([...PROTOCOL_ROLES_V1]);
     // Generated, not typed: `scripts/derive-activation-hint.mjs --write` moves
     // this and the manifest together. Pinned here so the value cannot change
     // without a reviewer seeing it — but it is a HINT the session follows past,
     // so a cohort making it stale costs a reader accuracy, not a session.
-    expect(DEVNET_DEPLOYMENT_V1.activationCache).toBe('3hFTU9ka7fryKrVY7s8Lm5ZMCHsnq5bxEGcgSCd6TSiu');
+    expect(DEVNET_DEPLOYMENT_V1.activationCache).toBe('2xVxMvfypJyo9bacGz1FFeK4L2qgqcsHaGoR9cbun6wV');
     expect(DEVNET_DEPLOYMENT_V1.genesisHash).toBe('EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG');
     expect(DEVNET_DEPLOYMENT_V1.endpoint).toBe('https://api.devnet.solana.com');
   });
 
-  it('carries the Loader-derived ProgramData and deployment slot for every devnet role', () => {
-    expect(DEVNET_PROGRAM_EVIDENCE_V1.registry).toEqual({ programData: '2Xvmiz5kBseLAeCCgJsuJmK7UHQ1fzzbaSm7FqHF8Eat', deploymentSlot: '492745516' });
-    expect(DEVNET_PROGRAM_EVIDENCE_V1.core).toEqual({ programData: 'DrT1XF1qDgbTs8WCkhk1yjxFyehPSBM1VQrrowipmDyt', deploymentSlot: '492746271' });
-    for (const role of PROTOCOL_ROLES_V1) {
+  it('carries the Loader-derived ProgramData and deployment slot for every devnet program', () => {
+    expect(DEVNET_PROGRAM_EVIDENCE_V1.registry).toEqual({ programData: '68Jh5pD42XWmYq5ViWoX3MKHMeENCRbgdxdGb8B7UY6k', deploymentSlot: '493638685' });
+    expect(DEVNET_PROGRAM_EVIDENCE_V1.core).toEqual({ programData: 'BbyZZAwbz37VwLR6zMQMm2bJAhfqbJVFAxr9HbFRQ5AU', deploymentSlot: '493639301' });
+    expect(DEVNET_PROGRAM_EVIDENCE_V1.accelerator).toEqual({ programData: 'DfJLGB1W12cUYGpw3doG2DmMDe6ubR2UkmrrUsqosa9g', deploymentSlot: '493639473' });
+    for (const role of DEPLOYED_PROGRAM_ROLES_V1) {
       const evidence = DEVNET_PROGRAM_EVIDENCE_V1[role];
       expect(new PublicKey(evidence.programData).toBase58()).toBe(evidence.programData);
       expect(BigInt(evidence.deploymentSlot)).toBeGreaterThan(489_100_000n);
@@ -64,7 +74,7 @@ describe('the deployment manifest', () => {
       // exactly the shape a hand-copied evidence table fails in. This makes the
       // whole table checkable offline against `programs` beside it.
       const [derived] = PublicKey.findProgramAddressSync(
-        [new PublicKey(DEVNET_DEPLOYMENT_V1.programs[role]).toBytes()],
+        [new PublicKey(DEVNET_DEPLOYMENT_V1.programs[role] as string).toBytes()],
         new PublicKey('BPFLoaderUpgradeab1e11111111111111111111111'),
       );
       expect(derived.toBase58(), `${role} ProgramData`).toBe(evidence.programData);
@@ -76,23 +86,29 @@ describe('the deployment manifest', () => {
     for (const role of PROTOCOL_ROLES_V1) {
       expect(LOCAL_DEPLOYMENT_V1.programs[role], `local ${role} program`).toBe(fixture[role]);
     }
+    // The gauntlet's tier-1 campaign deploys seven programs and no accelerator,
+    // so the manifest says so rather than carrying an address nothing deploys.
+    expect(LOCAL_DEPLOYMENT_V1.programs.accelerator).toBeUndefined();
     expect(LOCAL_DEPLOYMENT_V1.endpoint).toBe('http://127.0.0.1:8899');
     expect(LOCAL_DEPLOYMENT_V1.genesisHash).toBeNull();
   });
 
-  it('keeps every address canonical and every role distinct, in both clusters', () => {
+  it('keeps every address canonical and every program distinct, in both clusters', () => {
     for (const deployment of [DEVNET_DEPLOYMENT_V1, LOCAL_DEPLOYMENT_V1]) {
-      const addresses = PROTOCOL_ROLES_V1.map((role) => deployment.programs[role]);
-      expect(new Set(addresses).size).toBe(PROTOCOL_ROLES_V1.length);
+      const roles = deployedProgramRolesV1(deployment);
+      const addresses = roles.map((role) => deployment.programs[role] as string);
+      expect(new Set(addresses).size).toBe(roles.length);
       for (const address of addresses) expect(new PublicKey(address).toBase58()).toBe(address);
     }
   });
 
-  it('labels all seven role programs of a deployment by role and cluster', () => {
+  it('labels every program of a deployment by role and cluster', () => {
     const labels = deploymentProgramLabelsV1(DEVNET_DEPLOYMENT_V1);
-    expect(Object.keys(labels)).toHaveLength(7);
+    expect(Object.keys(labels)).toHaveLength(8);
     expect(labels[DEVNET_DEPLOYMENT_V1.programs.core]).toBe('dClutch Core · Devnet');
     expect(labels[DEVNET_DEPLOYMENT_V1.programs.registry]).toBe('dClutch Registry · Devnet');
+    expect(labels[DEVNET_DEPLOYMENT_V1.programs.accelerator as string]).toBe('dClutch Accelerator · Devnet');
+    expect(Object.keys(deploymentProgramLabelsV1(LOCAL_DEPLOYMENT_V1))).toHaveLength(7);
   });
 });
 
@@ -115,6 +131,28 @@ describe('custom deployment parsing', () => {
     const missingCore: Record<string, unknown> = { ...LOCAL_DEPLOYMENT_V1.programs };
     delete missingCore.core;
     expect(() => parseCustomDeploymentV1({ ...valid, programs: missingCore })).toThrow('core program is required');
+  });
+
+  it('admits an accelerator when one is named, and never demands one', () => {
+    // An operator running a local successor has seven programs. A form that
+    // required an eighth would refuse the deployment they actually have; a form
+    // that silently dropped a named one would lose the program three route
+    // families CPI into.
+    expect(parseCustomDeploymentV1(valid).programs.accelerator).toBeUndefined();
+    const withAccelerator = parseCustomDeploymentV1({
+      ...valid,
+      programs: { ...LOCAL_DEPLOYMENT_V1.programs, accelerator: DEVNET_DEPLOYMENT_V1.programs.accelerator },
+    });
+    expect(withAccelerator.programs.accelerator).toBe(DEVNET_DEPLOYMENT_V1.programs.accelerator);
+    expect(Object.keys(deploymentProgramLabelsV1(withAccelerator))).toHaveLength(8);
+    expect(() => parseCustomDeploymentV1({
+      ...valid,
+      programs: { ...LOCAL_DEPLOYMENT_V1.programs, accelerator: LOCAL_DEPLOYMENT_V1.programs.trading },
+    })).toThrow('distinct from the seven');
+    expect(() => parseCustomDeploymentV1({
+      ...valid,
+      programs: { ...LOCAL_DEPLOYMENT_V1.programs, accelerator: 'not-an-address' },
+    })).toThrow('accelerator program is not a Solana address');
   });
 
   it('refuses a noncanonical address, an aliased role pair, and a non-http endpoint', () => {
@@ -153,6 +191,20 @@ describe('operator document import', () => {
     }));
     expect(imported.endpoint).toBeNull();
     expect(imported.programs.trading).toBe(LOCAL_DEPLOYMENT_V1.programs.trading);
+  });
+
+  it('carries the plan’s general_accelerator when it names one, and no eighth when it does not', () => {
+    // `general_accelerator` is OPTIONAL in the plan schema and every genesis
+    // plan carries none, so its absence is an absence and not a missing role.
+    expect(importDeploymentDocumentV1(JSON.stringify({
+      schema: 'dclutch-local-successor-infrastructure-plan-v3', ...roles,
+    })).programs.accelerator).toBeUndefined();
+    const imported = importDeploymentDocumentV1(JSON.stringify({
+      schema: 'dclutch-local-successor-infrastructure-plan-v3',
+      ...roles,
+      general_accelerator: { program_id: DEVNET_DEPLOYMENT_V1.programs.accelerator },
+    }));
+    expect(imported.programs.accelerator).toBe(DEVNET_DEPLOYMENT_V1.programs.accelerator);
   });
 
   it('names a retired v2 plan rather than calling it a foreign document', () => {

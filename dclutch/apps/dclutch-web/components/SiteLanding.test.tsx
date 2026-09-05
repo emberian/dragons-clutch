@@ -45,7 +45,7 @@ describe('the front door', () => {
     // needing an open market "will tell you plainly that there is not one yet,
     // instead of failing quietly". Deleted -- the pages do it, they no longer
     // announce that they will.
-    expect(html).toContain('Seven programs, deployed on devnet');
+    expect(html).toContain('Eight programs, deployed on devnet');
     expect(html).not.toContain('failing quietly');
   });
 

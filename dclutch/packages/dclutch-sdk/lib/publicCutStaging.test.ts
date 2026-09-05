@@ -60,22 +60,23 @@ describe('public devnet cut staging', () => {
     // chain, never because a step is expected to have happened. A pending cut
     // may not name one at all; the parser refuses that shape.
     //
-    // THIS USED TO PIN ALL FOUR TO NULL, and that was an assertion about the
-    // protocol's history rather than about the cut: no step had ever been read
-    // back, so "null" and "unread" were the same value and the case could not
-    // tell them apart. The featured market has now been settled and its winning
-    // claim paid, both signatures read back off devnet before they were written
-    // here -- finalized, `err: null`, and each naming this market in its own
-    // account keys. So the shape is what is pinned, and `trade` stays null
-    // because this market never took a fill: its first attempt arrived after it
-    // was already Terminal and was refused by phase.
-    expect(PUBLIC_DEVNET_CUT_V1.activity.found).toBeNull();
-    expect(PUBLIC_DEVNET_CUT_V1.activity.trade).toBeNull();
-    for (const step of ['resolve', 'redeem'] as const) {
+    // THE SHAPE IS WHAT IS PINNED, whichever steps have been read: any value
+    // present is a canonical signature, and none is written because a step was
+    // expected to have happened.
+    for (const step of ['found', 'trade', 'resolve', 'redeem'] as const) {
       const signature = PUBLIC_DEVNET_CUT_V1.activity[step];
-      expect(signature, `the live cut names no ${step}`).not.toBeNull();
-      expect(signature).toMatch(/^[1-9A-HJ-NP-Za-km-z]{64,88}$/);
+      if (signature !== null) expect(signature).toMatch(/^[1-9A-HJ-NP-Za-km-z]{64,88}$/);
     }
+    // And today none of them is. The market featured before this one had been
+    // settled and its winning claim paid, and both signatures were read back
+    // off devnet before they were written here. The market featured now is
+    // OPEN AND CANNOT BE TRADED: activation at this release wants a funding
+    // frame two accounts wide, and a market carrying correct capability
+    // dependency edges needs a wider one, so there is no fill, no settlement
+    // and no redemption to name. Pinned rather than left loose, so that the
+    // first market that does trade has to move this line by hand instead of
+    // shipping an empty activity strip nobody notices.
+    expect(Object.values(PUBLIC_DEVNET_CUT_V1.activity).every((value) => value === null)).toBe(true);
     expect(checkedReleaseSetIdsV1(pending)).toBeNull();
   });
 

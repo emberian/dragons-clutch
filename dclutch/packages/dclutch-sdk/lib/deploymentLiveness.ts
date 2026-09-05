@@ -4,10 +4,10 @@ import { checkedReleaseSetIdsV1, PUBLIC_DEVNET_CUT_V1 } from './publicCutStaging
 import {
   DEVNET_DEPLOYMENT_V1,
   DEVNET_PROGRAM_EVIDENCE_V1,
-  PROTOCOL_ROLES_V1,
+  deployedProgramRolesV1,
+  type DeployedProgramRoleV1,
   type DeploymentV1,
   type ProgramEvidenceV1,
-  type ProtocolRoleV1,
 } from './deployments';
 import { decodeMarketCoreStateV2 } from './marketCoreV2';
 import type { SolanaRpcClient } from './rpc';
@@ -48,6 +48,16 @@ import type { SolanaRpcClient } from './rpc';
  * So: the featured Market must be owned by THIS deployment's Core program, and
  * the release set it carries in its own bytes must be one the cut says was
  * checked. Both halves are read; neither is asserted from a document.
+ *
+ * ## Eight programs since cohort-16
+ *
+ * The reading asks whatever `deployedProgramRolesV1` says the deployment has,
+ * which is the seven checked roles plus the accelerator wherever one was
+ * deployed. That eighth is not a role any derivation here consults -- it owns
+ * no account -- but General batches, the Dealer's first market and the whole
+ * Series family CPI into it, so a cohort whose accelerator has been closed is a
+ * cohort three route families cannot run, and this gate would have called it
+ * alive.
  */
 
 /** The upgradeable loader, which owns every Program and ProgramData account. */
@@ -59,7 +69,7 @@ export const LOADER_STATE_PROGRAM_DATA_V1 = 3;
 export const PROGRAM_DATA_HEADER_BYTES_V1 = 45;
 
 export type ProgramLivenessRowV1 = Readonly<{
-  role: ProtocolRoleV1;
+  role: DeployedProgramRoleV1;
   programId: string;
   /** What the Program stub names at offset 4, READ rather than derived. */
   programData: string;
@@ -83,8 +93,8 @@ export type DeploymentLivenessV1 =
     status: 'closed';
     observedSlot: string;
     roles: ReadonlyArray<ProgramLivenessRowV1>;
-    /** Every role whose ProgramData is vacant, named. */
-    closedRoles: ReadonlyArray<ProtocolRoleV1>;
+    /** Every program whose ProgramData is vacant, named. */
+    closedRoles: ReadonlyArray<DeployedProgramRoleV1>;
     reason: string;
   }>
   | Readonly<{ status: 'refused'; reason: string }>;
@@ -102,7 +112,12 @@ export async function readDeploymentLivenessV1(
   client: Pick<SolanaRpcClient, 'multipleAccounts' | 'multipleAccountDataSlices' | 'accountInfo'>,
   request: Readonly<{
     deployment: DeploymentV1;
-    evidence: Readonly<Record<ProtocolRoleV1, ProgramEvidenceV1>>;
+    /**
+     * The manifest's evidence rows. PARTIAL by type, because a deployment names
+     * the programs it has and this table has to be able to say it carries no
+     * row for one of them -- which is a refusal, not a silent skip.
+     */
+    evidence: Readonly<Partial<Record<DeployedProgramRoleV1, ProgramEvidenceV1>>>;
     /** The featured Market, and the release sets the cut says were checked. */
     market: string | null;
     checkedReleaseSetIds: ReadonlyArray<string> | null;
@@ -110,29 +125,41 @@ export async function readDeploymentLivenessV1(
 ): Promise<DeploymentLivenessV1> {
   const refuse = (reason: string): DeploymentLivenessV1 => Object.freeze({ status: 'refused' as const, reason });
   const { deployment, evidence } = request;
+  // SEVEN OR EIGHT, ASKED OF THE DEPLOYMENT ITSELF. Cohort-16 put an
+  // accelerator on a chain for the first time and three route families depend
+  // on it, so a reading that stopped at the seven would call a cohort alive
+  // with the program its General and Series routes need already closed.
+  const roles = deployedProgramRolesV1(deployment);
+  const programs = roles.map((role) => {
+    const address = deployment.programs[role];
+    if (address === undefined) throw new Error(`the deployment names no ${role} program`);
+    return address;
+  });
 
   let stubs;
   try {
-    stubs = await client.multipleAccounts(PROTOCOL_ROLES_V1.map((role) => deployment.programs[role]));
+    stubs = await client.multipleAccounts(programs);
   } catch (error) {
-    return refuse(`The seven Program accounts did not read: ${error instanceof Error ? error.message : String(error)}`);
+    return refuse(`The ${roles.length} Program accounts did not read: ${error instanceof Error ? error.message : String(error)}`);
   }
   const observedSlot = stubs.slot;
   const named: string[] = [];
-  for (const [index, role] of PROTOCOL_ROLES_V1.entries()) {
+  for (const [index, role] of roles.entries()) {
     const account = stubs.accounts[index].account;
-    if (account === null) return refuse(`The ${role} Program account ${deployment.programs[role]} does not exist on ${deployment.endpoint}.`);
+    if (account === null) return refuse(`The ${role} Program account ${programs[index]} does not exist on ${deployment.endpoint}.`);
     if (account.owner !== UPGRADEABLE_LOADER_V1) return refuse(`The ${role} Program account is owned by ${account.owner}, not the upgradeable loader.`);
     if (!account.executable) return refuse(`The ${role} Program account is not executable.`);
     if (account.data.length !== 36) return refuse(`The ${role} Program account is ${account.data.length} bytes, not the 36 of a Loader-v3 Program.`);
     const tag = new DataView(account.data.buffer, account.data.byteOffset, account.data.byteLength).getUint32(0, true);
     if (tag !== LOADER_STATE_PROGRAM_V1) return refuse(`The ${role} Program account's Loader state tag is ${tag}, not ${LOADER_STATE_PROGRAM_V1}.`);
     const programData = new PublicKey(account.data.slice(4)).toBase58();
+    const row = evidence[role];
+    if (row === undefined) return refuse(`The manifest carries no ProgramData evidence row for the ${role} program, so nothing here can be checked against it.`);
     // The manifest's evidence row is a SECOND statement about the same fact, so
     // a disagreement is a refusal rather than something to paper over with the
     // chain's answer: one of the two is a row from another cohort.
-    if (programData !== evidence[role].programData) {
-      return refuse(`The ${role} Program account names ProgramData ${programData} and the manifest records ${evidence[role].programData}.`);
+    if (programData !== row.programData) {
+      return refuse(`The ${role} Program account names ProgramData ${programData} and the manifest records ${row.programData}.`);
     }
     named.push(programData);
   }
@@ -141,17 +168,17 @@ export async function readDeploymentLivenessV1(
   try {
     headers = await client.multipleAccountDataSlices(named, 0, PROGRAM_DATA_HEADER_BYTES_V1);
   } catch (error) {
-    return refuse(`The seven ProgramData headers did not read: ${error instanceof Error ? error.message : String(error)}`);
+    return refuse(`The ${roles.length} ProgramData headers did not read: ${error instanceof Error ? error.message : String(error)}`);
   }
   const rows: ProgramLivenessRowV1[] = [];
-  const closedRoles: ProtocolRoleV1[] = [];
-  for (const [index, role] of PROTOCOL_ROLES_V1.entries()) {
+  const closedRoles: DeployedProgramRoleV1[] = [];
+  for (const [index, role] of roles.entries()) {
     const account = headers.accounts[index].account;
     // THE ONE QUESTION A CLOSED COHORT ANSWERS DIFFERENTLY. `solana program
     // close` deletes this account and leaves everything checked above intact.
     if (account === null) {
       closedRoles.push(role);
-      rows.push(Object.freeze({ role, programId: deployment.programs[role], programData: named[index], deploymentSlot: null, live: false }));
+      rows.push(Object.freeze({ role, programId: programs[index], programData: named[index], deploymentSlot: null, live: false }));
       continue;
     }
     if (account.owner !== UPGRADEABLE_LOADER_V1) return refuse(`The ${role} ProgramData account is owned by ${account.owner}, not the upgradeable loader.`);
@@ -162,7 +189,7 @@ export async function readDeploymentLivenessV1(
     if (account.space <= PROGRAM_DATA_HEADER_BYTES_V1) return refuse(`The ${role} ProgramData account is ${account.space} bytes and carries no ELF.`);
     rows.push(Object.freeze({
       role,
-      programId: deployment.programs[role],
+      programId: programs[index],
       programData: named[index],
       deploymentSlot: view.getBigUint64(4, true).toString(),
       live: true,
@@ -229,7 +256,7 @@ export function describeDeploymentLivenessV1(liveness: DeploymentLivenessV1): st
   const rows = liveness.roles.map((row) => `  ${row.role.padEnd(11)} ${row.programId}  ${row.live ? `slot ${row.deploymentSlot}` : 'ProgramData VACANT'}`);
   if (liveness.status === 'closed') return [`CLOSED   ${liveness.reason}`, ...rows].join('\n');
   return [
-    `ALIVE    seven programs, read finalized at slot ${liveness.observedSlot}`,
+    `ALIVE    ${liveness.roles.length} programs, read finalized at slot ${liveness.observedSlot}`,
     ...rows,
     `  market      ${liveness.market}  ${liveness.marketPhase}`,
     `  release set ${liveness.marketReleaseSetId}  (checked, per the public cut)`,

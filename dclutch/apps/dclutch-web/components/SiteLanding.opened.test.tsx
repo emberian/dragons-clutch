@@ -55,7 +55,7 @@ describe('the front door, once a market is open', () => {
     // Renegotiated 2026-08-31 with the sibling test: both arms of the old
     // conditional blurb are deleted, so neither can go stale. What this file
     // still pins is the OTHER dated sentence -- the hero aside -- switching.
-    expect(html).toContain('Seven programs, deployed on devnet');
+    expect(html).toContain('Eight programs, deployed on devnet');
     expect(html).not.toContain('will tell you plainly that there is not one yet');
   });
 

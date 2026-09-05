@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { DEVNET_DEPLOYMENT_V1, PROTOCOL_ROLES_V1 } from './deployments';
+import { DEPLOYED_PROGRAM_ROLES_V1, DEVNET_DEPLOYMENT_V1 } from './deployments';
 import { describeDeploymentLivenessV1, readShippedDeploymentLivenessV1 } from './deploymentLiveness';
 import { PUBLIC_DEVNET_CUT_V1, checkedReleaseSetIdsV1 } from './publicCutStaging';
 import { SolanaRpcClient } from './rpc';
@@ -33,7 +33,11 @@ describe('the shipped deployment, against devnet itself', () => {
     expect(describeDeploymentLivenessV1(liveness), describeDeploymentLivenessV1(liveness)).toContain('ALIVE');
     expect(liveness.status).toBe('alive');
     if (liveness.status !== 'alive') return;
-    expect(liveness.roles).toHaveLength(PROTOCOL_ROLES_V1.length);
+    // EIGHT since cohort-16, and the eighth is the one no other check here
+    // asks about: the accelerator owns no account, so every owner check in this
+    // client goes on passing with it closed.
+    expect(liveness.roles).toHaveLength(DEPLOYED_PROGRAM_ROLES_V1.length);
+    expect(liveness.roles.map((row) => row.role)).toEqual([...DEPLOYED_PROGRAM_ROLES_V1]);
     for (const row of liveness.roles) {
       expect(row.live, `${row.role} ProgramData ${row.programData}`).toBe(true);
       expect(BigInt(row.deploymentSlot ?? '0'), `${row.role} deployment slot`).toBeGreaterThan(0n);

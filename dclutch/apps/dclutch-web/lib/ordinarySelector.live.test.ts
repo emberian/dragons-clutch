@@ -46,20 +46,46 @@ import { SolanaRpcClient } from '@dclutch/sdk/rpc';
  * must land on a DIFFERENT cell, or this market's factor is doing no work and
  * the agreement proves nothing.
  *
+ * AND THE CUT DECIDES WHETHER THERE IS A SUBJECT AT ALL, offline. A market has
+ * settled when a settlement was READ BACK OFF THE CHAIN and written into the
+ * cut as its `resolve` signature; a cut that names none is naming a deployment
+ * whose market has not settled. Cohort-16's has not and cannot: it is Open, and
+ * activation at the deployed Direct release refuses the wider funding frame its
+ * capability dependency edges require. So this file states that as a fact about
+ * the cut rather than reading the chain and failing on `open`, which is a
+ * failure about the deployment reported as a failure of the join.
+ *
+ * THAT IS A REAL LOSS AND IT IS NAMED. The join derivation keeps its offline
+ * cases (`ordinarySelectorV1.test.ts`), and the claim only this file can make
+ * -- that the cell derived from a market's own partition IS the cell the chain
+ * committed -- goes unmade on this cohort. The first case below is what makes
+ * that visible instead of a green suite with one fewer assertion in it.
+ *
  * `DCLUTCH_RESOLVED_MARKET` still overrides, so a later cohort can be pointed
  * at one market without editing this file.
  */
 const SETTLED_MARKETS_V1: ReadonlyArray<Readonly<{ name: string; address: string }>> =
   process.env.DCLUTCH_RESOLVED_MARKET
     ? [{ name: 'the market named by DCLUTCH_RESOLVED_MARKET', address: process.env.DCLUTCH_RESOLVED_MARKET }]
-    : PUBLIC_DEVNET_CUT_V1.market === null
+    : PUBLIC_DEVNET_CUT_V1.market === null || PUBLIC_DEVNET_CUT_V1.activity.resolve === null
       ? []
       : [{ name: 'the featured market', address: PUBLIC_DEVNET_CUT_V1.market }];
 
 const live = process.env.DCLUTCH_LIVE_DEVNET === '1' ? it : it.skip;
 
 describe('live devnet: the certificate-to-partition join', () => {
-  it('has a settled market to read', () => { expect(SETTLED_MARKETS_V1.length, 'the public cut names no market, so this whole file asserts nothing').toBeGreaterThan(0); });
+  it('either has a settled market to read, or says the cut names none', () => {
+    if (SETTLED_MARKETS_V1.length > 0) {
+      // A subject exists only because a settlement was read back off the chain
+      // and written into the cut. The case below then reads the market itself.
+      expect(process.env.DCLUTCH_RESOLVED_MARKET ?? PUBLIC_DEVNET_CUT_V1.activity.resolve).not.toBeNull();
+      return;
+    }
+    // NO SUBJECT, and the reason is the cut's own. This must not be a silent
+    // skip: the day a market settles, the cut gains its resolve signature and
+    // the case above starts running with no edit here.
+    expect(PUBLIC_DEVNET_CUT_V1.activity.resolve, 'the cut names a resolve signature, so a settled market exists and this file must read it').toBeNull();
+  });
 
   for (const market of SETTLED_MARKETS_V1) live(`derives the very cell the chain committed for ${market.name}, from that market’s own records`, async () => {
     const client = new SolanaRpcClient(process.env.DCLUTCH_LIVE_ENDPOINT ?? DEVNET_DEPLOYMENT_V1.endpoint);

@@ -39,21 +39,27 @@ if (fragmentPath === undefined || releaseSet === undefined || releaseSet === nul
   throw new Error('usage: node scripts/stage-checked-release.mjs <fragment.json> --release-set HEX64');
 }
 
-// The staging rules have ONE owner -- `lib/publicCutStaging.ts`, which is what
-// the tests exercise -- and this script must not restate them. Node cannot
-// import that module directly: it is TypeScript and it resolves the `@/` alias
-// the app's bundler owns. So it is bundled here, with esbuild (already present
-// for the dev server), into a temporary module beside the app so its
-// `node_modules` resolve, imported, and deleted.
+// The staging rules have ONE owner -- `packages/dclutch-sdk/lib/publicCutStaging.ts`,
+// which is what the tests exercise -- and this script must not restate them.
+// Node cannot import that module directly: it is TypeScript. So it is bundled
+// here, with esbuild (already present for the dev server), into a temporary
+// module beside the app so its `node_modules` resolve, imported, and deleted.
 //
 // This is the step that was missing when this script first shipped: it was
 // written, its LIBRARY was tested, and the script itself had never been run
 // once. It failed on its first real invocation with ERR_MODULE_NOT_FOUND.
+//
+// IT FAILED THE SAME WAY A SECOND TIME, ON THE COHORT-16 CUT. When the web/SDK
+// twins were merged the module moved to the SDK and the app's copy was deleted;
+// this line still named the app's copy, so the only producer of the cut's rows
+// had been unrunnable since that commit and nothing said so. A script that
+// exists to keep one fact from being typed by hand is a script whose absence
+// is invisible until the next cohort. Every path below is the SDK's.
+const stagingModule = fileURLToPath(new URL('../../../packages/dclutch-sdk/lib/publicCutStaging.ts', import.meta.url));
 const bundle = fileURLToPath(new URL('../.stage-checked-release.bundle.mjs', import.meta.url));
 execFileSync(fileURLToPath(new URL('../node_modules/.bin/esbuild', import.meta.url)), [
-  fileURLToPath(new URL('../lib/publicCutStaging.ts', import.meta.url)),
+  stagingModule,
   '--bundle', '--format=esm', '--platform=node',
-  `--alias:@=${fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '')}`,
   '--external:@solana/web3.js', '--log-level=silent',
   `--outfile=${bundle}`,
 ], { stdio: ['ignore', 'ignore', 'inherit'] });

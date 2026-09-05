@@ -15,13 +15,14 @@ import { SOLANA_DEVNET_GENESIS_HASH_V1 } from './rpc';
  *
  * Provenance, per cluster:
  *
- * - `devnet` — DEPLOY-1's durable substrate, deployed 2026-08-27 and byte-
- *   verified buffer-side and dump-side (`docs/evidence/DEPLOY_1.md` §2, "The
- *   substrate — PERMANENT ADDRESSES"). Mutable under the retained deployer
- *   authority per decision 0012; a moved deployment slot is named
- *   `ReleaseSupersededByUpgrade` by the release layer, so baking these
+ * - `devnet` — the CURRENT cohort's substrate, redeployed whole at fresh
+ *   identities each time and byte-verified dump-side per program
+ *   (`docs/evidence/COHORT16_DEPLOYED_SEALED_2026_09_05.md` §2). Mutable under
+ *   the retained deployer authority per decision 0012; a moved deployment slot
+ *   is named `ReleaseSupersededByUpgrade` by the release layer, so baking these
  *   addresses does not assert immutability — the slot-pinned admission still
- *   decides what counts as the released artifact.
+ *   decides what counts as the released artifact. Since cohort-16 there are
+ *   EIGHT of them: the seven checked roles and the accelerator.
  * - `local` — the gauntlet campaign's fixed-seed layout. Tier-1 campaigns
  *   derive every signing key from the hashed preimage
  *   `dclutch/gauntlet/tier1/keypair-seed/v1` (tools/gauntlet/run.sh), so every
@@ -39,8 +40,43 @@ export const PROTOCOL_ROLES_V1 = ['registry', 'rent', 'custody', 'resolution', '
 
 export type ProtocolRoleV1 = (typeof PROTOCOL_ROLES_V1)[number];
 
-/** One sentence per role, for surfaces that introduce the programs by name. */
-export const PROTOCOL_ROLE_MEANING_V1: Readonly<Record<ProtocolRoleV1, string>> = Object.freeze({
+/**
+ * The eighth program, which is DEPLOYED and is not a checked role.
+ *
+ * Cohort-16 is the first cohort that put an accelerator on a chain from its own
+ * runbook: the simplification swarm folded `dclutch-general-accelerator-sbf`,
+ * `dclutch-dealer-accelerator-sbf` and `dclutch-series-shadow-sbf` into one
+ * `dclutch-accelerator-sbf`, and General batches, the Dealer's first market and
+ * the whole Series family became dependent on a binary nothing had deployed.
+ *
+ * IT IS DELIBERATELY NOT A MEMBER OF `PROTOCOL_ROLES_V1`. The seven are the
+ * checked roles: the deployment-set journal owns exactly those, every PDA in
+ * this client is derived under one of them, and every owner check names one.
+ * The accelerator owns no account and is never an account's owner — it is a
+ * callback the Trading routes invoke — so widening the seven would have made
+ * every custom deployment demand an address that answers no question, and would
+ * have made the local fixed-seed layout, which deploys seven programs, unable
+ * to be stated. What it IS is a program a reader can look up, whose liveness
+ * decides whether a General or Series route can run at all, so it belongs in
+ * the manifest and in the liveness reading beside the seven.
+ */
+export const ACCELERATOR_ROLE_V1 = 'accelerator' as const;
+
+/** The seven checked roles and the accelerator: every program a cohort deploys. */
+export const DEPLOYED_PROGRAM_ROLES_V1 = [...PROTOCOL_ROLES_V1, ACCELERATOR_ROLE_V1] as const;
+
+export type DeployedProgramRoleV1 = (typeof DEPLOYED_PROGRAM_ROLES_V1)[number];
+
+/**
+ * A deployment's program addresses: the seven, and the accelerator when one is
+ * deployed. `undefined` is a real answer — the gauntlet's local layout deploys
+ * no accelerator — and a surface that iterates must ask
+ * `deployedProgramRolesV1`, never assume eight.
+ */
+export type DeploymentProgramsV1 = Readonly<Record<ProtocolRoleV1, string>> & Readonly<{ accelerator?: string }>;
+
+/** One sentence per program, for surfaces that introduce them by name. */
+export const PROTOCOL_ROLE_MEANING_V1: Readonly<Record<DeployedProgramRoleV1, string>> = Object.freeze({
   registry: 'Finalized records and release activation — the content-addressed record layer.',
   rent: 'Rent credits and beneficiaries for protocol accounts.',
   custody: 'Collateral custody — the Hoards that physically back every liability.',
@@ -48,6 +84,7 @@ export const PROTOCOL_ROLE_MEANING_V1: Readonly<Record<ProtocolRoleV1, string>> 
   claims: 'Claim liabilities and Positions — who is owed what, exactly.',
   trading: 'Trading — the routes that move claims against collateral.',
   core: 'Market roots — founding, phase, generation, and the identities a market commits to.',
+  accelerator: 'The accelerator — one merged callback the Trading routes invoke to compute General batches, Dealer candidates and Series shadows inside a lifted heap frame. It owns no account.',
 });
 
 export type ClusterIdV1 = 'devnet' | 'local' | 'custom';
@@ -59,8 +96,8 @@ export type DeploymentV1 = Readonly<{
   endpoint: string;
   /** Expected genesis hash, or null when the chain's identity varies (local ledgers, custom). */
   genesisHash: string | null;
-  /** The seven role program ids. */
-  programs: Readonly<Record<ProtocolRoleV1, string>>;
+  /** The seven checked role programs, and the accelerator where one is deployed. */
+  programs: DeploymentProgramsV1;
   /**
    * A BOOTSTRAP HINT for the Registry activation cache — never the answer.
    *
@@ -80,24 +117,38 @@ export type DeploymentV1 = Readonly<{
   provenance: string;
 }>;
 
-/** Per-role deployment evidence beyond the id — devnet only, from DEPLOY_1.md §2. */
+/** Per-program deployment evidence beyond the id — devnet only. */
 export type ProgramEvidenceV1 = Readonly<{
   programData: string;
   deploymentSlot: string;
 }>;
+
+/**
+ * Which programs this deployment actually names, in manifest order.
+ *
+ * The one place a surface asks "seven or eight". A deployment that carries no
+ * accelerator answers seven, and nothing downstream renders an empty card or
+ * reads an undefined address.
+ */
+export function deployedProgramRolesV1(deployment: DeploymentV1): ReadonlyArray<DeployedProgramRoleV1> {
+  return deployment.programs.accelerator === undefined ? PROTOCOL_ROLES_V1 : DEPLOYED_PROGRAM_ROLES_V1;
+}
 
 export const DEVNET_DEPLOYMENT_V1: DeploymentV1 = Object.freeze({
   cluster: 'devnet',
   label: 'Devnet',
   endpoint: 'https://api.devnet.solana.com',
   genesisHash: SOLANA_DEVNET_GENESIS_HASH_V1,
-  // COHORT-15, deployed 2026-09-04 from commit 1cae26fd6 and byte-identical on
-  // read-back three ways: the dump compares equal per role, the byte count
-  // matches, and a hostile decode of each live ProgramData answers MATCH for
-  // all seven. Devnet is disposable by ruling: each cohort is a full redeploy
-  // with fresh identities and the previous one is abandoned in place and then
-  // CLOSED, which returns its rent to pay for the next. These ids are not
-  // permanent and nothing here should say they are.
+  // COHORT-16, deployed 2026-09-05 from commit f2ae6bf75 on the named release
+  // builder (platform-tools v1.53, Linux/x86_64, through `swarm-build`), and
+  // dumped back and compared to its candidate ELF role by role before the next
+  // role spent. EIGHT rows, and the eighth had never been on any chain: the
+  // simplification swarm folded three accelerator links into one
+  // `dclutch-accelerator-sbf`, and cohort-16 is the cohort that deployed it.
+  // Devnet is disposable by ruling: each cohort is a full redeploy with fresh
+  // identities and the previous one is abandoned in place and then CLOSED,
+  // which returns its rent to pay for the next. These ids are not permanent and
+  // nothing here should say they are.
   //
   // NOT TYPED, AND NOT MOVED BY HAND EITHER. Each id is the `program_id` the
   // sealed plan `plan-seal.json` names for its role, and the two facts beside
@@ -109,41 +160,44 @@ export const DEVNET_DEPLOYMENT_V1: DeploymentV1 = Object.freeze({
   // landed -- and both times the derivation that could have said so had been
   // performed in a scratch directory and thrown away. It refuses to emit a row
   // for a role whose ProgramData is vacant, so a closed cohort cannot be
-  // written here at all: proven against cohort-14's own sealed plan, which it
-  // refuses by naming all seven vacant addresses.
+  // written here at all: run against COHORT-15's own sealed plan on 2026-09-05
+  // it refuses by naming all EIGHT vacant addresses, which is the reading that
+  // retired the rows this table used to carry.
   programs: Object.freeze({
-    registry: '8ci2LojrUPtVZoByaAmoNCj8244DTdxkUkHRVA9JiHdV',
-    rent: 'EQ61nrN71xaTsDMSrrH9FzMeqc27ghRex9abyjKu8vC4',
-    custody: '4sCbUV6f8iZaaVDkp3qAJtxiLY1cfBcKrVc5wpAFjpzM',
-    resolution: '24AkUjtXg61La45u7KTge8u4dKpVqkzirmzycVyckFgn',
-    claims: '595PExHje1GnbryQtXvpxSfxK72snpMcrG1Sj8VpPLEe',
-    trading: '3gBSSjYwSC4phutpGKRkMhrnCDVzHu6kfQ3L4jLf2UmG',
-    core: '7hGerMC6Wj742FVTyiF9PhRnGSBzbee7TMZ6sUytsmFr',
+    registry: '6gRRiB9BtQFN6AquyLXXjuiX1GYN2xyW8nqCTc3xJzkV',
+    rent: '42xN9ULoMpULmeDbdGCtyAo82FRJved6sojUun6NSKdt',
+    custody: '8UkoNCPD4JuWBiHWdc7WaM3j7Fj9jbf8Fe926Q1CDceo',
+    resolution: 'jrjXw2Rph15VyJB3ztbRgoHUPJrcvMSHV6svRUYtUw3',
+    claims: '8JfHfBBGaoUP1yV6VzXcvWwhQSZNV8eQmDAiYmCpNQJk',
+    trading: 'ESQhDyV7obS4oNp7abjn7sSYChxtGrHru4TzvPuybJi3',
+    core: '4wv7JxoAad6JMQi2vHJyByLXasWS8RzJSTdvEEmpCjpe',
+    accelerator: '6v1c2Go2h1rxkTN2EmzC5xGC35MTbaHPCHrKF6kTvg4y',
   }),
   // Bootstrap hint, GENERATED — do not hand-edit. Regenerate with
   // `node packages/dclutch-sdk/scripts/derive-activation-hint.mjs --write`.
   //
   // The one cache of those the Registry owns whose five pinned deployment
   // slots equalled the five live ProgramData slots in a single reading.
-  // Release set 9895faee8f7f6a1926df18302f1b003afcf4b6c56518ba7bba2614c86eea8a22,
-  // pinning Core at deployment slot 492746271.
+  // Release set 85defd75b236b191de00b48e673cdc4a4bcc2408b2248c4504895815b04cc69f,
+  // pinning Core at deployment slot 493639301.
   // A session follows past this when it ages out; a reader cannot.
-  activationCache: '3hFTU9ka7fryKrVY7s8Lm5ZMCHsnq5bxEGcgSCd6TSiu',
-  provenance: 'Cohort-15’s devnet substrate, deployed 2026-09-04 from commit 1cae26fd6 and byte-identical on read-back; cohort-14 was closed the same day and the 42.20 SOL its rent returned paid for this one, which cost 42.55 against a 42.55 projection. Its founding, its checked seal and the Market account itself all carry one release-set identity — and the third of those is the one a browser can check for itself, because it is 32 bytes at offset 208 of a Market this site reads. It is also the first cohort whose statistic carries the source-to-result scale factor, which is why a market page here can now reproduce the cell the chain committed instead of assuming the shift is zero.',
+  activationCache: '2xVxMvfypJyo9bacGz1FFeK4L2qgqcsHaGoR9cbun6wV',
+  provenance: 'Cohort-16’s devnet substrate, deployed 2026-09-05 from commit f2ae6bf75 on one named release builder, every ProgramData balance equal to (128 + 45 + elf_bytes) × 5,080 lamports exactly and every live image compared to its candidate ELF before the next role spent. Cohort-15 was closed the same morning — all eight of its ProgramData accounts read AccountNotFound while its Program stubs stayed executable and kept naming them — and the 44.42 SOL its rent returned paid for this one, which cost 36.50. It is the first cohort with EIGHT programs on the chain: the three accelerator links became one, and General batches, the Dealer’s first market and the whole Series family depend on a binary that until now nothing had deployed. It is also the first cohort to found a REFUNDING market: an oracle outage on GyD95eyERwRfwj8fSFNhWjKF2eaDg5XcREidPKex65zY pays one atom to every ordinary claim and nothing at all to the failure coordinate, which this site derives from that market’s own authenticated basis record rather than being told.',
 });
 
 /**
- * Cohort-15's ProgramData addresses and deployment slots.
+ * Cohort-16's ProgramData addresses and deployment slots.
  *
  * READ, not copied from a record, and not derived either: each address is the
  * 32 bytes the Program account itself names at offset 4, and each slot is the
  * u64 at offset 4 of that ProgramData account's own Loader-v3 header. Read
- * finalized at slot 492,944,410 -- hours after the deploy rather than the
+ * finalized at slot 493,692,510 -- hours after the deploy rather than the
  * minute after it, which is the stronger reading: these slots are what the
- * chain still says, not what the deploy reported. They run 492,745,516 through
- * 492,746,271, one per role in the order the seven were deployed, and they
- * reproduce COHORT15_DEPLOYED_SEALED_FOUNDED_CAPTURED_2026_09_04.md §3 without
- * reading it.
+ * chain still says, not what the deploy reported. They run 493,638,685 through
+ * 493,639,473, one per program in the order the eight were deployed, and they
+ * reproduce COHORT16_DEPLOYED_SEALED_2026_09_05.md §2 without reading it --
+ * including the accelerator's, which no prior cohort's table could carry
+ * because no prior runbook deployed it.
  *
  * THAT LAST CHECK IS THE ONE THAT MATTERS. A closed program keeps its 36-byte
  * Program account, its executable flag and the ProgramData address it names --
@@ -153,16 +207,19 @@ export const DEVNET_DEPLOYMENT_V1: DeploymentV1 = Object.freeze({
  * alive, and none asked the account that holds the code.
  * `deployments.live.test.ts` asks, `deploymentLiveness.live.test.ts` makes the
  * refusal a gate rather than an env-gated skip, and the derivation that wrote
- * these rows refuses to emit one for a role whose ProgramData is vacant.
+ * these rows refuses to emit one for a role whose ProgramData is vacant --
+ * which is how cohort-15's eight rows left this table on 2026-09-05 rather than
+ * being noticed missing later.
  */
-export const DEVNET_PROGRAM_EVIDENCE_V1: Readonly<Record<ProtocolRoleV1, ProgramEvidenceV1>> = Object.freeze({
-  registry: Object.freeze({ programData: '2Xvmiz5kBseLAeCCgJsuJmK7UHQ1fzzbaSm7FqHF8Eat', deploymentSlot: '492745516' }),
-  rent: Object.freeze({ programData: '6jqwvw8jPSqomLLir3rNohLHAm5awrkcx4b3WvjxVmSm', deploymentSlot: '492745574' }),
-  custody: Object.freeze({ programData: 'D7X4Wximtu9BwHXdrWgWpXkjMCFS7xPtV3UevgMVXhKB', deploymentSlot: '492745658' }),
-  resolution: Object.freeze({ programData: 'B8N72QJgwKypTfgr9TsLDtKWjrCFeJ9n7FjsjV1xgB71', deploymentSlot: '492745773' }),
-  claims: Object.freeze({ programData: '7RLeuS5vDph1VpgG3NGYwZnjnTxvwmwJE2FfgWNUDWPG', deploymentSlot: '492745957' }),
-  trading: Object.freeze({ programData: 'CnER99tNi7gz24g7sFEzoUoxa9Q3cZe8FMJTdu9iEfxG', deploymentSlot: '492746142' }),
-  core: Object.freeze({ programData: 'DrT1XF1qDgbTs8WCkhk1yjxFyehPSBM1VQrrowipmDyt', deploymentSlot: '492746271' }),
+export const DEVNET_PROGRAM_EVIDENCE_V1: Readonly<Record<DeployedProgramRoleV1, ProgramEvidenceV1>> = Object.freeze({
+  registry: Object.freeze({ programData: '68Jh5pD42XWmYq5ViWoX3MKHMeENCRbgdxdGb8B7UY6k', deploymentSlot: '493638685' }),
+  rent: Object.freeze({ programData: '8KG9NGFoMRCh4dngeAGNkP7kCmtQ68KthSbk8V883x5v', deploymentSlot: '493638731' }),
+  custody: Object.freeze({ programData: 'AjYb8Ss7E3ruHppSCDcqxJLErwGhHikTcHQymKZu6BG1', deploymentSlot: '493638796' }),
+  resolution: Object.freeze({ programData: 'PpzTFUiPbyj4MKbLoUzCxh4cAeLrZ52PBdvN8byxR1n', deploymentSlot: '493638882' }),
+  claims: Object.freeze({ programData: '14EYxVmGJuSKX9iizPaLQQRj8ae3XiJJqWHdnAnCcv33', deploymentSlot: '493639017' }),
+  trading: Object.freeze({ programData: '7RxAyfAUd3hEENzog4Faq4tqpzFfA6riM1jnYVLEgSwx', deploymentSlot: '493639190' }),
+  core: Object.freeze({ programData: 'BbyZZAwbz37VwLR6zMQMm2bJAhfqbJVFAxr9HbFRQ5AU', deploymentSlot: '493639301' }),
+  accelerator: Object.freeze({ programData: 'DfJLGB1W12cUYGpw3doG2DmMDe6ubR2UkmrrUsqosa9g', deploymentSlot: '493639473' }),
 });
 
 export const LOCAL_DEPLOYMENT_V1: DeploymentV1 = Object.freeze({
@@ -185,11 +242,13 @@ export const LOCAL_DEPLOYMENT_V1: DeploymentV1 = Object.freeze({
 
 export const DEFAULT_DEPLOYMENT_V1: DeploymentV1 = DEVNET_DEPLOYMENT_V1;
 
-/** Labels for the seven role programs of one deployment, keyed by address. */
+/** Labels for the programs of one deployment, keyed by address. */
 export function deploymentProgramLabelsV1(deployment: DeploymentV1): Readonly<Record<string, string>> {
   const labels: Record<string, string> = {};
-  for (const role of PROTOCOL_ROLES_V1) {
-    labels[deployment.programs[role]] = `dClutch ${role[0].toUpperCase()}${role.slice(1)} · ${deployment.label}`;
+  for (const role of deployedProgramRolesV1(deployment)) {
+    const address = deployment.programs[role];
+    if (address === undefined) continue;
+    labels[address] = `dClutch ${role[0].toUpperCase()}${role.slice(1)} · ${deployment.label}`;
   }
   return Object.freeze(labels);
 }
@@ -216,7 +275,7 @@ function canonicalAddress(value: unknown, field: string): string {
  */
 export function importDeploymentDocumentV1(text: string): Readonly<{
   endpoint: string | null;
-  programs: Readonly<Record<ProtocolRoleV1, string>>;
+  programs: DeploymentProgramsV1;
 }> {
   let raw: unknown;
   try {
@@ -257,9 +316,22 @@ export function importDeploymentDocumentV1(text: string): Readonly<{
   if (missing.length > 0) {
     throw new Error(`the document names no program for: ${missing.join(', ')} — a browser deployment needs all seven roles`);
   }
+  // The accelerator is OPTIONAL in the plan schema and absent from every genesis
+  // plan, so its absence is read as an absence and never as a missing role. A
+  // document that names one has it admitted the same way the seven are.
+  const acceleratorEntry = record.general_accelerator;
+  const acceleratorId = acceleratorEntry !== null && typeof acceleratorEntry === 'object' && !Array.isArray(acceleratorEntry)
+    ? (acceleratorEntry as Record<string, unknown>).program_id
+    : undefined;
+  const accelerator = typeof acceleratorId === 'string' && acceleratorId !== ''
+    ? canonicalAddress(acceleratorId, 'general_accelerator program')
+    : undefined;
   const rpc = record.rpc_url;
   const endpoint = typeof rpc === 'string' && rpc.trim() !== '' ? rpc.trim() : null;
-  return Object.freeze({ endpoint, programs: Object.freeze(programs) });
+  return Object.freeze({
+    endpoint,
+    programs: Object.freeze(accelerator === undefined ? programs : { ...programs, accelerator }),
+  });
 }
 
 /**
@@ -280,12 +352,22 @@ export function parseCustomDeploymentV1(raw: unknown): DeploymentV1 {
     programs[role] = canonicalAddress((programsRaw as Record<string, unknown>)[role], `${role} program`);
   }
   if (new Set(Object.values(programs)).size !== PROTOCOL_ROLES_V1.length) throw new Error('the seven role programs must be distinct addresses');
+  // The accelerator is admitted when it is named and required never: an
+  // operator running a local successor has seven programs, and a form that
+  // demanded an eighth would refuse the deployment they actually have.
+  const acceleratorRaw = (programsRaw as Record<string, unknown>)[ACCELERATOR_ROLE_V1];
+  const accelerator = acceleratorRaw === undefined || acceleratorRaw === null || acceleratorRaw === ''
+    ? undefined
+    : canonicalAddress(acceleratorRaw, 'accelerator program');
+  if (accelerator !== undefined && Object.values(programs).includes(accelerator)) {
+    throw new Error('the accelerator program must be distinct from the seven role programs');
+  }
   return Object.freeze({
     cluster: 'custom',
     label: 'Custom',
     endpoint: url.toString(),
     genesisHash: null,
-    programs: Object.freeze(programs),
+    programs: Object.freeze(accelerator === undefined ? programs : { ...programs, accelerator }),
     activationCache: record.activationCache === undefined || record.activationCache === null || record.activationCache === ''
       ? null
       : canonicalAddress(record.activationCache, 'activation cache'),

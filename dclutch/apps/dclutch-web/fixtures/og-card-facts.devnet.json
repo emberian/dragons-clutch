@@ -2,20 +2,10 @@
   "schema": "dclutch-og-card-facts-v1",
   "cluster": "devnet",
   "markets": {
-    "3QytL1bBMtCvRoXWR5h7MgutRBZqtv7emUVubEo5a4T2": {
-      "phase": "Retiring",
-      "settledAtUnixSeconds": "1788484406",
-      "windowEndUnixSeconds": "1788486128"
-    },
-    "C9dLhWj7yi76RtQhhHV13gKuudAbV8qio8TZVEn3CjAT": {
+    "GyD95eyERwRfwj8fSFNhWjKF2eaDg5XcREidPKex65zY": {
       "phase": "Open",
       "settledAtUnixSeconds": null,
-      "windowEndUnixSeconds": "1788501695"
-    },
-    "6aqy89GhhXFtDbawC5ors4HLkGvzdHC4R26TXTaaXRKj": {
-      "phase": "Open",
-      "settledAtUnixSeconds": null,
-      "windowEndUnixSeconds": "1788490573"
+      "windowEndUnixSeconds": "1788638030"
     }
   }
 }

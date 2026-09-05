@@ -5,7 +5,7 @@ import Nav from '@/components/Nav';
 import PublicDeploymentEvidence from '@/components/PublicDeploymentEvidence';
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
-import { deploymentProgramLabelsV1, type DeploymentV1 } from '@dclutch/sdk/deployments';
+import { deployedProgramRolesV1, deploymentProgramLabelsV1, type DeploymentV1 } from '@dclutch/sdk/deployments';
 import { useDeploymentV1 } from '@/lib/deploymentStore';
 import { inspectAccount, type ExplorerAccountResult } from '@/lib/explorer/account';
 import type { DecodedField, DecodedRecord } from '@/lib/explorer/accountRecords';
@@ -708,10 +708,10 @@ function ActivityRows({ rows }: Readonly<{ rows: ReadonlyArray<ProtocolActivityR
 
 function ProtocolHomeView({ state, deployment }: Readonly<{ state: Async<ProtocolHomeV1>; deployment: DeploymentV1 }>) {
   if (state.kind === 'idle' || state.kind === 'loading') {
-    return <Notice kind="loading" title={`Reading the ${deployment.label} deployment`} message="Probing the endpoint, then reading the seven role programs at one finalized observation and the node’s recent signature history for them…" />;
+    return <Notice kind="loading" title={`Reading the ${deployment.label} deployment`} message={`Probing the endpoint, then reading the ${deployedProgramRolesV1(deployment).length} programs at one finalized observation and the node’s recent signature history for them…`} />;
   }
   if (state.kind === 'error') {
-    return <Notice kind="error" title="The deployment read refused" message={`${state.message} — the seven baked addresses are still shown in the cluster picker’s deployment; nothing about the protocol is inferred from a failed read.`} />;
+    return <Notice kind="error" title="The deployment read refused" message={`${state.message} — the ${deployedProgramRolesV1(deployment).length} baked addresses are still shown in the cluster picker’s deployment; nothing about the protocol is inferred from a failed read.`} />;
   }
   const home = state.value;
   return (
@@ -729,7 +729,7 @@ function ProtocolHomeView({ state, deployment }: Readonly<{ state: Async<Protoco
 
       <section className="xp-panel">
         <p className="eyebrow">
-          The seven role programs · read live at finalized slot {home.observedSlot} · {home.clusterName} · solana {home.facts.solanaCore}
+          The {home.cards.length} programs · read live at finalized slot {home.observedSlot} · {home.clusterName} · solana {home.facts.solanaCore}
         </p>
         <div className="xp-node-grid">
           {home.cards.map((card) => <ProgramCard key={card.role} card={card} />)}
@@ -858,7 +858,7 @@ export default function ChainExplorer() {
     let cancelled = false;
     queueMicrotask(() => {
       if (cancelled) return;
-      setHome({ kind: 'loading', message: 'Reading the seven role programs…' });
+      setHome({ kind: 'loading', message: `Reading the ${deployedProgramRolesV1(deployment).length} programs…` });
       void (async () => {
         try {
           const client = new SolanaRpcClient(deployment.endpoint);
@@ -965,10 +965,10 @@ export default function ChainExplorer() {
     <PageShell className="shell xp" header={<Nav current="/explorer" status="read-only projection" />} onClick={onJump}>
 
       <section className="xp-hero">
-        <p className="eyebrow">Seven devnet programs, live · no wallet, no setup</p>
+        <p className="eyebrow">{deployedProgramRolesV1(deployment).length} devnet programs, live · no wallet, no setup</p>
         <h1>Every record the protocol writes, decoded by its own schema.</h1>
         <p className="lede">
-          Paste an address, a signature, or a program ID. The seven {deployment.label} programs are below.
+          Paste an address, a signature, or a program ID. The {deployedProgramRolesV1(deployment).length} {deployment.label} programs are below.
         </p>
         <PublicDeploymentEvidence deployment={deployment} />
       </section>

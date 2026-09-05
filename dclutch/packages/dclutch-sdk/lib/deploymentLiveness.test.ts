@@ -2,10 +2,10 @@ import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
 import {
+  DEPLOYED_PROGRAM_ROLES_V1,
   DEVNET_DEPLOYMENT_V1,
   DEVNET_PROGRAM_EVIDENCE_V1,
-  PROTOCOL_ROLES_V1,
-  type ProtocolRoleV1,
+  type DeployedProgramRoleV1,
 } from './deployments';
 import {
   LOADER_STATE_PROGRAM_DATA_V1,
@@ -18,7 +18,7 @@ import {
 import { PUBLIC_DEVNET_CUT_V1, checkedReleaseSetIdsV1 } from './publicCutStaging';
 import type { AccountInfoObservation, MultipleAccountObservation, RpcAccount } from './rpc';
 
-import featuredMarket from '../fixtures/cohort15-featured-market.devnet.json';
+import featuredMarket from '../fixtures/cohort16-featured-market.devnet.json';
 
 /**
  * THE SHAPE `solana program close` LEAVES BEHIND, built by hand.
@@ -32,7 +32,7 @@ import featuredMarket from '../fixtures/cohort15-featured-market.devnet.json';
  * apart, and for two cohorts none of ours could.
  *
  * The market bytes are the REAL featured Market's, off devnet and unmodified
- * (`fixtures/cohort15-featured-market.devnet.json`). A synthetic 368-byte
+ * (`fixtures/cohort16-featured-market.devnet.json`). A synthetic 368-byte
  * DCLTCOR3 would mean forging the six nonzero identities, the phase/receipt
  * agreement and the principal cap that `decodeMarketCoreStateV2` refuses
  * without -- which is to say, forging the invariants the decoder exists to
@@ -69,8 +69,8 @@ function marketBytes(releaseSetIdHex: string | null): Uint8Array {
 }
 
 type StubReads = Readonly<{
-  /** null for a role means its ProgramData account is vacant. */
-  vacant?: ReadonlyArray<ProtocolRoleV1>;
+  /** null for a program means its ProgramData account is vacant. */
+  vacant?: ReadonlyArray<DeployedProgramRoleV1>;
   marketOwner?: string;
   marketReleaseSetId?: string;
   marketAbsent?: boolean;
@@ -81,26 +81,26 @@ function stubClient(reads: StubReads) {
   return {
     async multipleAccounts(addresses: ReadonlyArray<string>): Promise<MultipleAccountObservation> {
       return Object.freeze({
-        slot: '492944410',
+        slot: '493694050',
         accounts: Object.freeze(addresses.map((address, index) => Object.freeze({
           address,
-          account: stub(DEVNET_PROGRAM_EVIDENCE_V1[PROTOCOL_ROLES_V1[index]].programData),
+          account: stub(DEVNET_PROGRAM_EVIDENCE_V1[DEPLOYED_PROGRAM_ROLES_V1[index]].programData),
         }))),
       });
     },
     async multipleAccountDataSlices(addresses: ReadonlyArray<string>): Promise<MultipleAccountObservation> {
       return Object.freeze({
-        slot: '492944410',
+        slot: '493694050',
         accounts: Object.freeze(addresses.map((address, index) => Object.freeze({
           address,
-          account: (reads.vacant ?? []).includes(PROTOCOL_ROLES_V1[index]) ? null : programDataHeader(492_745_516n + BigInt(index)),
+          account: (reads.vacant ?? []).includes(DEPLOYED_PROGRAM_ROLES_V1[index]) ? null : programDataHeader(493_638_685n + BigInt(index)),
         }))),
       });
     },
     async accountInfo(_address: string): Promise<AccountInfoObservation> {
       if (reads.marketAbsent === true) return Object.freeze({ slot: '492944410', account: null });
       return Object.freeze({
-        slot: '492944410',
+        slot: '493694050',
         account: Object.freeze({
           data: marketBytes(releaseSetId),
           executable: false,
@@ -121,13 +121,18 @@ const shipped = {
 } as const;
 
 describe('the deployment liveness gate', () => {
-  it('reads seven live programs and the release set the featured market itself carries', async () => {
+  it('reads eight live programs and the release set the featured market itself carries', async () => {
     const liveness = await readDeploymentLivenessV1(stubClient({}), shipped);
     expect(liveness.status).toBe('alive');
     if (liveness.status !== 'alive') return;
-    expect(liveness.roles).toHaveLength(PROTOCOL_ROLES_V1.length);
+    // EIGHT since cohort-16. The accelerator owns no account and is nobody's
+    // owner, and General batches, the Dealer's first market and every Series
+    // route CPI into it -- so a gate that stopped at the seven would call a
+    // cohort alive with three route families unable to run.
+    expect(liveness.roles).toHaveLength(DEPLOYED_PROGRAM_ROLES_V1.length);
+    expect(liveness.roles.at(-1)?.role).toBe('accelerator');
     expect(liveness.roles.every((row) => row.live)).toBe(true);
-    expect(liveness.roles[0].deploymentSlot).toBe('492745516');
+    expect(liveness.roles[0].deploymentSlot).toBe('493638685');
     // NOT a literal, and not the fixture's word either: the release set is read
     // out of the captured Market's own bytes, and the cut is what says it was
     // checked. The two meeting is the assertion.
@@ -136,12 +141,13 @@ describe('the deployment liveness gate', () => {
   });
 
   it('CALLS A CLOSED COHORT CLOSED, on stubs that answer every other question correctly', async () => {
-    // This is the exact reading taken off devnet on 2026-09-02 and again on
-    // 2026-09-04: all seven Program accounts alive and every ProgramData gone.
-    const liveness = await readDeploymentLivenessV1(stubClient({ vacant: PROTOCOL_ROLES_V1 }), shipped);
+    // This is the exact reading taken off devnet on 2026-09-02, on 2026-09-04,
+    // and on 2026-09-05 against cohort-15's own sealed plan: every Program
+    // account alive and every ProgramData gone.
+    const liveness = await readDeploymentLivenessV1(stubClient({ vacant: DEPLOYED_PROGRAM_ROLES_V1 }), shipped);
     expect(liveness.status).toBe('closed');
     if (liveness.status !== 'closed') return;
-    expect(liveness.closedRoles).toEqual([...PROTOCOL_ROLES_V1]);
+    expect(liveness.closedRoles).toEqual([...DEPLOYED_PROGRAM_ROLES_V1]);
     expect(liveness.roles.every((row) => row.live)).toBe(false);
     expect(liveness.reason).toContain('CLOSED');
     expect(describeDeploymentLivenessV1(liveness)).toContain('ProgramData VACANT');
@@ -153,6 +159,26 @@ describe('the deployment liveness gate', () => {
     if (liveness.status !== 'closed') return;
     expect(liveness.closedRoles).toEqual(['core']);
     expect(liveness.reason).toContain('core');
+  });
+
+  it('calls a cohort with a closed ACCELERATOR closed, though all seven roles answer', async () => {
+    // The shape cohort-16 made possible: the eighth is deployed separately, is
+    // closed separately, and no owner check anywhere would notice it going.
+    const liveness = await readDeploymentLivenessV1(stubClient({ vacant: ['accelerator'] }), shipped);
+    expect(liveness.status).toBe('closed');
+    if (liveness.status !== 'closed') return;
+    expect(liveness.closedRoles).toEqual(['accelerator']);
+    expect(liveness.roles.filter((row) => row.live)).toHaveLength(7);
+  });
+
+  it('refuses when the manifest carries no evidence row for a program the deployment names', async () => {
+    const withoutAccelerator = Object.fromEntries(
+      Object.entries(DEVNET_PROGRAM_EVIDENCE_V1).filter(([role]) => role !== 'accelerator'),
+    );
+    const liveness = await readDeploymentLivenessV1(stubClient({}), { ...shipped, evidence: withoutAccelerator });
+    expect(liveness.status).toBe('refused');
+    if (liveness.status !== 'refused') return;
+    expect(liveness.reason).toContain('no ProgramData evidence row for the accelerator');
   });
 
   it('names a featured market that belongs to another cohort by its owner', async () => {

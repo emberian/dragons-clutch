@@ -1,0 +1,11 @@
+{
+  "format": "dclutch-web/core-market-reading/v1",
+  "provenance": "Read off devnet at finalized slot 493,694,050, from cohort-16's first Direct market GyD95eyERwRfwj8fSFNhWjKF2eaDg5XcREidPKex65zY -- the first market this protocol has founded that REFUNDS on an oracle outage. Unmodified: the whole 368-byte account as `getAccountInfo` returned it. It is here so the liveness gate's cases run against a record a program actually wrote; forging a DCLTCOR3 would mean forging the six nonzero identities, the phase/receipt agreement and the principal cap the decoder exists to check.",
+  "market": "GyD95eyERwRfwj8fSFNhWjKF2eaDg5XcREidPKex65zY",
+  "owner": "4wv7JxoAad6JMQi2vHJyByLXasWS8RzJSTdvEEmpCjpe",
+  "lamports": "2519680",
+  "space": 368,
+  "slot": 493694050,
+  "reading": "Phase byte 1 Open, readiness 2 Consumed, generation 2, outstanding capabilities 0, no terminal receipt; selected release set 85defd75b236b191de00b48e673cdc4a4bcc2408b2248c4504895815b04cc69f at offset 208, which is the identity cohort-16's sealed plan carries. Decoded by `decodeMarketCoreStateV2`, not by hand.",
+  "dataHex": "44434c54434f52330300010200000000ed458e1fa554b3fbe8d72fdc647dea5877e09d638625501793726cb4e87a1c716f594ab23887f5b30c5410c8d5bc3cc7b260bf52ddffb002093ec8477035b46ebd203b38bf2b9f321f4f9c77ee7c28c09313459fd1504f77dfa40d5dfd87919ff75122013991db195170ad9e2ead52ed9491a09727c5ea574c262347ff427f0ef9579b1ea9fd52e8aca33ae2633b37023545cd5cd83113f118e3ff4de69d38896251be84732cceb2883a9b2d9b805f367a7ce9a1202dee5c20afed658abd52bc85defd75b236b191de00b48e673cdc4a4bcc2408b2248c4504895815b04cc69f5463b46d1092fca493aef1f6a9ba1fc429d6a3b255a1dcdb87765ab17d647ff602000000000000000000000000000000ffffffffffffffff69088ce3cd9696c8fae0823510ec909ee8d0d0dfbd2e14728deb73e5fa4662090000000000000000000000000000000000000000000000000000000000000000fffdfd2111120000"
+}

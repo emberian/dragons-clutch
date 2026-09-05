@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { DEVNET_PROGRAM_EVIDENCE_V1, DEVNET_DEPLOYMENT_V1, LOCAL_DEPLOYMENT_V1, PROTOCOL_ROLES_V1 } from '@dclutch/sdk/deployments';
+import { DEPLOYED_PROGRAM_ROLES_V1, DEVNET_PROGRAM_EVIDENCE_V1, DEVNET_DEPLOYMENT_V1, LOCAL_DEPLOYMENT_V1, PROTOCOL_ROLES_V1 } from '@dclutch/sdk/deployments';
 import { type MultipleAccountObservation, type RpcAccount, type SignatureRecordObservation } from '@dclutch/sdk/rpc';
 import { classifySearchV1, inspectProtocolHomeV1 } from './protocolHome';
 
@@ -58,10 +58,14 @@ function fakeClient(overrides?: Readonly<{
 }
 
 describe('the explorer protocol home', () => {
-  it('reads all seven programs live at one observation and names the cluster from its genesis', async () => {
+  it('reads every program the deployment names live at one observation and names the cluster from its genesis', async () => {
     const home = await inspectProtocolHomeV1(fakeClient(), DEVNET_DEPLOYMENT_V1);
-    expect(home.cards).toHaveLength(7);
-    expect(home.cards.map((card) => card.role)).toEqual([...PROTOCOL_ROLES_V1]);
+    // EIGHT since cohort-16, and the count is the manifest's rather than this
+    // test's: a card per program the deployment names, in manifest order, with
+    // the accelerator last because it is the one that is not a checked role.
+    expect(home.cards).toHaveLength(8);
+    expect(home.cards.map((card) => card.role)).toEqual([...DEPLOYED_PROGRAM_ROLES_V1]);
+    expect(home.cards.at(-1)?.address).toBe(DEVNET_DEPLOYMENT_V1.programs.accelerator);
     expect(home.cards.every((card) => card.status === 'live')).toBe(true);
     expect(home.cards.every((card) => card.ownerLabel === 'upgradeable loader')).toBe(true);
     expect(home.clusterName).toBe('devnet');
@@ -81,7 +85,7 @@ describe('the explorer protocol home', () => {
       DEVNET_DEPLOYMENT_V1,
     );
     expect(home.cards.find((card) => card.role === 'trading')?.status).toBe('absent');
-    expect(home.cards.filter((card) => card.status === 'live')).toHaveLength(6);
+    expect(home.cards.filter((card) => card.status === 'live')).toHaveLength(7);
   });
 
   it('merges per-program histories by signature, newest first, naming every touching role', async () => {
@@ -91,7 +95,7 @@ describe('the explorer protocol home', () => {
     ]);
     const home = await inspectProtocolHomeV1(fakeClient({ histories }), DEVNET_DEPLOYMENT_V1);
     expect(home.activity.map((row) => row.slot)).toEqual(['300', '200', '100']);
-    // Roles arrive in the canonical seven-role order the merge walks.
+    // Roles arrive in the manifest order the merge walks.
     expect(home.activity[0].roles).toEqual(['claims', 'core']);
     expect(home.activity[1].succeeded).toBe(false);
     expect(home.activityNote).toContain('this node’s own per-address signature history');
@@ -103,6 +107,16 @@ describe('the explorer protocol home', () => {
       DEVNET_DEPLOYMENT_V1,
     );
     expect(home.activityNote).toContain('refused the signature history for registry');
+  });
+
+  it('renders seven cards for a deployment that deploys no accelerator', async () => {
+    // The local fixed-seed layout has seven programs and no eighth. A page that
+    // rendered an eighth card for it would be inventing an address.
+    const local = await inspectProtocolHomeV1(fakeClient(), LOCAL_DEPLOYMENT_V1);
+    expect(local.cards).toHaveLength(7);
+    expect(local.cards.map((card) => card.role)).toEqual([...PROTOCOL_ROLES_V1]);
+    expect(local.cards.every((card) => card.deploymentSlot === null)).toBe(true);
+    expect(local.activityNote).toContain('any of the 7 programs');
   });
 
   it('marks the cluster check unpinned for a deployment with no expected genesis, and mismatch for the wrong one', async () => {

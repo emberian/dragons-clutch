@@ -28,7 +28,10 @@ export default function ClusterPicker() {
   const deployment = useDeploymentV1();
   const [editing, setEditing] = useState(false);
   const [draftEndpoint, setDraftEndpoint] = useState('');
-  const [draftPrograms, setDraftPrograms] = useState<Record<ProtocolRoleV1, string>>({ ...LOCAL_DEPLOYMENT_V1.programs });
+  // The seven the form types, plus an accelerator only a pasted plan can carry:
+  // no field derives an address under it, and dropping one a plan named would
+  // silently hand back a deployment its General and Series routes cannot use.
+  const [draftPrograms, setDraftPrograms] = useState<Record<ProtocolRoleV1, string> & { accelerator?: string }>({ ...LOCAL_DEPLOYMENT_V1.programs });
   const [problem, setProblem] = useState<string | null>(null);
   const [importText, setImportText] = useState('');
   const [importNote, setImportNote] = useState<string | null>(null);
@@ -80,9 +83,10 @@ export default function ClusterPicker() {
       setDraftPrograms({ ...imported.programs });
       if (imported.endpoint !== null) setDraftEndpoint(imported.endpoint);
       setProblem(null);
+      const accelerator = imported.programs.accelerator === undefined ? '' : ' Its accelerator came with them and is kept, though the form has no field for it.';
       setImportNote(imported.endpoint !== null
-        ? 'Seven programs and the endpoint filled from your run spec. Review below, then use it.'
-        : 'Seven programs filled from your plan. It names no endpoint — set the RPC URL yourself.');
+        ? `Seven programs and the endpoint filled from your run spec. Review below, then use it.${accelerator}`
+        : `Seven programs filled from your plan. It names no endpoint — set the RPC URL yourself.${accelerator}`);
     } catch (error) {
       setImportNote(error instanceof Error ? error.message : 'the document did not import');
     }
@@ -138,7 +142,9 @@ export default function ClusterPicker() {
           <h2 id="cluster-dialog-title">Your own deployment</h2>
           <p id="cluster-dialog-description">
             An endpoint and the seven role programs. Stored only in this browser; every surface
-            reads them from here. The named clusters need none of this.
+            reads them from here. The named clusters need none of this. A pasted plan that also
+            names an accelerator carries it through — there is no field for it, because nothing
+            here derives an address under it.
           </p>
           <label><span>Running the local successor bootstrap? Paste its run spec or plan and the form fills itself</span>
             <textarea

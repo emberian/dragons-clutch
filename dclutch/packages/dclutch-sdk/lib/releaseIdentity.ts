@@ -178,7 +178,9 @@ export const DEVNET_COHORT_5_ABI_RELEASE_V1: AbiReleaseTableV1 = Object.freeze({
 });
 
 /**
- * The release identity public devnet is running now.
+ * Cohort-15's release identity. Its programs were CLOSED on 2026-09-05 and its
+ * activation cache no longer reads; the row stays because this table is
+ * append-only observations and this one was observed.
  *
  * The five ids are OBSERVED, by the same call this module exports: they were
  * decoded from the live Registry activation cache
@@ -218,10 +220,51 @@ export const DEVNET_COHORT_15_ABI_RELEASE_V1: AbiReleaseTableV1 = Object.freeze(
   abi: CURRENT_ABI_FRAME_FACTS_V1,
 });
 
+/**
+ * The release identity public devnet is running now.
+ *
+ * OBSERVED, by the same call this module exports. The five ids were decoded
+ * from the live Registry activation cache
+ * `2xVxMvfypJyo9bacGz1FFeK4L2qgqcsHaGoR9cbun6wV` (release set
+ * `85defd75b236b191de00b48e673cdc4a4bcc2408b2248c4504895815b04cc69f`) at
+ * finalized slot 493,696,122 on 2026-09-05, and the reading corroborates the
+ * cohort twice over rather than once: the five deployment slots that cache pins
+ * equal the five the deployment manifest records, AND the five ELF digests it
+ * pins equal the five candidate digests the cohort's own release gate produced.
+ * The second of those is the check a slot comparison cannot make — a slot says
+ * WHEN something was deployed and a digest says WHAT.
+ *
+ * TRADING AND RESOLUTION ARE STILL BYTE-IDENTICAL TO COHORT-5'S. Eleven cohorts
+ * and one whole simplification fold later, those two roles' semantics have not
+ * moved. Core, Claims and Custody all did.
+ *
+ * THE FRAME FACTS ARE AN OBSERVATION TOO, and this row states its own gap.
+ * `CURRENT_ABI_FRAME_FACTS_V1` is whatever THIS build generated; cohort-16 was
+ * deployed from `f2ae6bf75`, and all nine counts are byte-identical between
+ * that commit's generated modules and this build's. Two generated files did
+ * move in the window — `refusalRegistryV1.ts` and `routeCensus.ts` — and both
+ * moved by adding refusal codes and rewording meanings. That changes what a
+ * browser can NAME when a program refuses; it changes no frame this table
+ * offers, which is why the row is an observation and not a hope.
+ */
+export const DEVNET_COHORT_16_ABI_RELEASE_V1: AbiReleaseTableV1 = Object.freeze({
+  label: 'devnet cohort-16',
+  provenance: 'Decoded from the live Registry activation cache 2xVxMvfypJyo9bacGz1FFeK4L2qgqcsHaGoR9cbun6wV on public devnet at finalized slot 493696122 (2026-09-05) by readExecutionReleaseIdentityV1; in the same reading its five pinned deployment slots equalled the five the deployment manifest records and its five pinned ELF digests equalled the five the cohort\u2019s release gate produced. The frame facts are this build\u2019s own generated modules, whose nine counts are byte-identical to those at f2ae6bf75, the commit cohort-16 was deployed from.',
+  semanticReleaseIds: Object.freeze({
+    core: '6bb057c6a51c36d7f48ab59ee3214499dad60bdcb5a4eb418fba707c7223334f',
+    claims: 'da69a8e361e5ccb7191161b87cb5203d4a0cbf71d07805f41e22a93800ffc99d',
+    trading: '79fad2f04f8d9ce07d76c809fe116db8ef9374adbeb15e62f603235c3a2b96b9',
+    resolution: '6e4b9a545277cf68731108fe1729ff047affe72e16d79c3930acadc8016f554a',
+    custody: 'e1acb649d4898e9adb8c16a1fa8ef56526a60720184047bd8db21e5c1f0bc06b',
+  }),
+  abi: CURRENT_ABI_FRAME_FACTS_V1,
+});
+
 /** Every release identity this build carries an ABI table for. */
 export const KNOWN_ABI_RELEASES_V1: ReadonlyArray<AbiReleaseTableV1> = Object.freeze([
   DEVNET_COHORT_5_ABI_RELEASE_V1,
   DEVNET_COHORT_15_ABI_RELEASE_V1,
+  DEVNET_COHORT_16_ABI_RELEASE_V1,
 ]);
 
 function shortId(value: string): string {

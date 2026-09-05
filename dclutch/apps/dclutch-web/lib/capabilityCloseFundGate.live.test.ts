@@ -24,29 +24,34 @@ import { SolanaRpcClient } from '@dclutch/sdk/rpc';
  * cohort literal: a Market that reaches `Retiring` makes its case admit and
  * says so instead of failing.
  *
- * BOTH MARKETS ARE NOW ON ONE LIVE COHORT, and that is the repair rather than
- * a simplification. The Open half used to be cohort-15's Market beside a
- * cohort-14 Market for the phase that has left Open -- and this file asserts
- * that each account is owned by `DEVNET_DEPLOYMENT_V1.programs.core`, so the
- * cohort-14 coordinate went red at the owner check the morning cohort-15
- * landed. A dead cohort's accounts are readable; they are not owned by the
- * program this manifest names, and every case here reads through that manifest.
+ * NO MARKET LITERAL SURVIVES HERE, and each removal was paid for. The Open half
+ * was a cohort-14 coordinate until cohort-15 landed, then a cohort-15
+ * coordinate until cohort-16 landed, and both times it went red at the owner
+ * check this file makes: a dead cohort's accounts are still readable, they are
+ * just not owned by the program `DEVNET_DEPLOYMENT_V1` names. The address is
+ * the cut's now, so a cohort boundary moves it and nothing here needs editing.
  *
- *   * the OPEN one is cohort-15's third Direct market, which took the first
- *     fee-bearing fill on a public chain and has not admitted its answer:
- *     Open + Consumed, 368 bytes of `DCLTCOR3`.
- *   * the one that has LEFT Open is the featured market, read out of the cut:
- *     settled, paid, and now Retiring + Consumed -- which is the ONE prestate
- *     this act admits, so the admit branch below is now exercised on a real
- *     account instead of only ever being described.
+ * BOTH CASES READ THE SAME ACCOUNT, ON PURPOSE, and they must still disagree.
+ * A file that only ever sees a refusal cannot tell a working gate from a gate
+ * that refuses everything, so the second case evaluates two acts against one
+ * snapshot and asserts opposite verdicts: whichever phase the featured market
+ * is in, exactly one of `source.close-fund` (Retiring+Consumed) and
+ * `source.provider` (Open+Consumed) can admit it.
+ *
+ * WHAT COHORT-16 COSTS THIS FILE, stated rather than hidden: its featured
+ * market is Open and cannot be activated at the deployed Direct release, so no
+ * market on this cohort reaches Retiring and the ADMIT branch of
+ * `source.close-fund` has no live subject. It is exercised offline instead --
+ * `capabilityPhaseGate.test.ts`, "admits the one prestate close-fund declares"
+ * -- which is a weaker evidence level than a real account and is named as one.
  *
  * Gated on `DCLUTCH_LIVE_DEVNET=1`. Two account reads.
  */
 
-const OPEN_MARKET = 'C9dLhWj7yi76RtQhhHV13gKuudAbV8qio8TZVEn3CjAT';
-const SETTLED_MARKET = PUBLIC_DEVNET_CUT_V1.market ?? '';
+/** The featured market, read out of the cut. Never a literal. */
+const FEATURED_MARKET = PUBLIC_DEVNET_CUT_V1.market ?? '';
 
-const live = process.env.DCLUTCH_LIVE_DEVNET === '1' && SETTLED_MARKET !== '' ? it : it.skip;
+const live = process.env.DCLUTCH_LIVE_DEVNET === '1' && FEATURED_MARKET !== '' ? it : it.skip;
 
 const standing = (id: string) => {
   const found = BROWSER_CAPABILITY_STANDINGS_V1.find((one) => one.action.id === id);
@@ -64,8 +69,8 @@ async function readMarket(address: string, owner: string): Promise<CapabilityMar
 }
 
 describe('live devnet close-fund gate', () => {
-  live('refuses closing the fund of an Open Market, by the route that refuses it', async () => {
-    const snapshot = await readMarket(OPEN_MARKET, DEVNET_DEPLOYMENT_V1.programs.core);
+  live('refuses closing the fund of a Market outside Retiring+Consumed, by the route that refuses it', async () => {
+    const snapshot = await readMarket(FEATURED_MARKET, DEVNET_DEPLOYMENT_V1.programs.core);
     const close = standing('source.close-fund');
     const gates = capabilityActPhaseGatesV1(close.action);
     expect(gates).toHaveLength(1);
@@ -85,13 +90,14 @@ describe('live devnet close-fund gate', () => {
     expect(verdict.reason).toContain(phase!);
   }, 60_000);
 
-  live('reaches the one prestate this act admits, and refuses the act that Market no longer admits', async () => {
+  live('admits exactly one of the two acts this Market’s phase can admit, and refuses the other', async () => {
     // Two verdicts off ONE read, and they must disagree. A test that only ever
     // sees a refusal cannot tell a working gate from a gate that refuses
-    // everything. This Market is Retiring + Consumed, which is exactly what
-    // `source.close-fund` admits and exactly what `source.provider` does not,
-    // so the pair runs in both directions on one account.
-    const snapshot = await readMarket(SETTLED_MARKET, DEVNET_DEPLOYMENT_V1.programs.core);
+    // everything. `source.close-fund` admits Retiring+Consumed and
+    // `source.provider` admits Open+Consumed, so at most one of them can admit
+    // any Market and the pair runs in both directions on one account whichever
+    // phase the featured market is in.
+    const snapshot = await readMarket(FEATURED_MARKET, DEVNET_DEPLOYMENT_V1.programs.core);
     const phase = snapshot.market!.phase;
     const readiness = snapshot.market!.readiness;
 
