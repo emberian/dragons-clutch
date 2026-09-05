@@ -5124,3 +5124,11 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   un-inverted with no mechanism change. Owed (cohort-17, after convergence): the funding action; CloseCandidate's same
   beneficiary shape; the escrow corpus; the other projectors' single codes.
 - Cuts: `c43462bbe` … `656200ed9`.
+- SIMPLIFY-OPERATORS closed (branch `simplify/operators` at `5cc4a261d`; the one-crate merge scripted as
+  `tools/lane/merge-operator-crates.py` and parked on `simplify/operators-merge-wip` at `32e9ed2cb` for after the program
+  merges; SIMPLIFY_OPERATORS.md): **discard sites 1,750 → 417 — 1,452 now carry their typed cause through 368 new carrying
+  variants across 45 enums; 28 coarse unit variants deleted; the 417 left are named classes** (202 `TryFromIntError`, 45
+  one-cause `ContentId::new`, non-Copy foreign errors, 40 struct-variant refusals that already name their conjunct);
+  `dclutch-operator` 894 → 160; 64 test assertions moved from the coarse code to the printed conjunct; −2,200 lines of dead
+  modules with the census control. Named for CRATES: the restated program counts (three authors of `PROVIDER_*_ACCOUNT_COUNT`,
+  the 64-lock limits) belong in a contract crate. Ten of eleven branches landed; CRATES still merging.
