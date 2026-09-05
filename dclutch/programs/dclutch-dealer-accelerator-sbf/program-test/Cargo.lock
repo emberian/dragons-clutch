@@ -1665,6 +1665,7 @@ name = "dclutch-claims-sbf"
 version = "0.1.0"
 dependencies = [
  "dclutch-capability-contract",
+ "dclutch-claims-conservation-contract",
  "dclutch-claims-svm",
  "dclutch-core-contract",
  "dclutch-custody-contract",

@@ -3,7 +3,7 @@
 
 Which generated files a byte-identity guard actually re-runs and compares, and which are generated with nothing watching them. Regenerate with `tools/emission-guard/emission_guard.py --write`; byte-gate with `--verify`. This census is cheap — it reads first lines, shell scripts, `package.json` scripts and Rust integration tests, and never runs Lean.
 
-**100 generated files from 94 emitters. 100 guarded (94 emitters), 0 unguarded (0 emitters).**
+**98 generated files from 92 emitters. 98 guarded (92 emitters), 0 unguarded (0 emitters).**
 
 An unguarded row is not a bug in itself — it is a file that can be hand-edited, or drift behind the Lean source it claims to come from, with nothing in the repository noticing. The number above is the thing to drive down, and this file being byte-gated is what stops it drifting up unremarked: a new emission with no check script changes this census and reds `--verify` until someone decides, on purpose, which it is going to be.
 
@@ -13,7 +13,7 @@ An unguarded row is not a bug in itself — it is a file that can be hand-edited
 
 An inventory of guards that exist, not a record of guards that passed — each of these re-runs its emitter and compares the output against the committed bytes WHEN SOMEBODY RUNS IT. All of them need `lake`, which is why they are not on a cheap CI tier. A guard is a comparison, never a build: three kinds qualify — a `check*.sh` script, a `package.json` script passing `--check`, and a Rust integration test that reads the committed artifact back and asserts equality.
 
-**Normalises** says whether the guard runs `rustfmt --edition 2024` over the emission before comparing. It decides whether the guard can survive somebody formatting the committed file — which `cargo fmt` will not do (every generated module is behind `#[rustfmt::skip]` or an `include!`) but `tools/lane.sh fmt <path>` will, because a direct rustfmt never sees that attribute: of the 65 guards over Rust emissions, 55 do and 10 compare raw emitter stdout — green only while the emission is already a rustfmt fixpoint. `n/a` is the TypeScript half, which rustfmt does not format. `tools/emission-guard/fixpoint-debt.tsv` is the list of files where the raw comparison is not safe, and `--fixpoint` is the gate that keeps it honest.
+**Normalises** says whether the guard runs `rustfmt --edition 2024` over the emission before comparing. It decides whether the guard can survive somebody formatting the committed file — which `cargo fmt` will not do (every generated module is behind `#[rustfmt::skip]` or an `include!`) but `tools/lane.sh fmt <path>` will, because a direct rustfmt never sees that attribute: of the 66 guards over Rust emissions, 55 do and 11 compare raw emitter stdout — green only while the emission is already a rustfmt fixpoint. `n/a` is the TypeScript half, which rustfmt does not format. `tools/emission-guard/fixpoint-debt.tsv` is the list of files where the raw comparison is not safe, and `--fixpoint` is the gate that keeps it honest.
 
 | Guard | Kind | Normalises | Emitters re-run |
 |---|---|---|---|
@@ -36,7 +36,7 @@ An inventory of guards that exist, not a record of guards that passed — each o
 | `crates/dclutch-capability-program-contract/tests/v4_generator_fresh.rs` | cargo-test | yes | `EmitCapabilityProgramV4AbiRust.lean` |
 | `crates/dclutch-claims-svm/check-generated.sh` | shell | yes | `EmitClaimsLiabilityBasisStateV2Rust.lean`, `EmitClaimsMarketClosureV1Rust.lean` |
 | `crates/dclutch-custody-contract/check-generated.sh` | shell | yes | `EmitProjectedCustodyStateV2Rust.lean` |
-| `crates/dclutch-dealer-codec/tests/generator_fresh.rs` | cargo-test | yes | `EmitDealerLiquidityAbiRust.lean`, `EmitDealerScenarioCheckpointV1Rust.lean`, `EmitDealerScenarioReservationStateV1Rust.lean`, `EmitDealerScenarioTradeV4Rust.lean`, `EmitDealerTradingProfileRust.lean` |
+| `crates/dclutch-dealer-codec/tests/generator_fresh.rs` | cargo-test | yes | `EmitDealerLiquidityAbiRust.lean`, `EmitDealerTradingProfileRust.lean` |
 | `crates/dclutch-dealer-scenario-kernel/tests/netting_corpus_generator_fresh.rs` | cargo-test | yes | `EmitDealerScenarioNettingCorpusRust.lean` |
 | `crates/dclutch-direct-aot-contract/check-generated.sh` | shell | yes | `EmitDirectProgramV2Rust.lean` |
 | `crates/dclutch-direct-codec/check-generated.sh` | shell | yes | `EmitDirectCodecRust.lean`, `EmitDirectLifecycleAbiRust.lean`, `EmitRegisteredControllerAbiRust.lean` |
@@ -64,6 +64,7 @@ An inventory of guards that exist, not a record of guards that passed — each o
 | `crates/dclutch-product-payoff-v2-codec/check-generated-v3.sh` | shell | yes | `EmitProductGradedBasisAdmissionV3AbiRust.lean` |
 | `crates/dclutch-product-runtime-v2-admission/check-generated.sh` | shell | yes | `EmitProductAdmissionV2Rust.lean` |
 | `crates/dclutch-product-runtime-v2/check-generated.sh` | shell | yes | `EmitProductRuntimeV2Rust.lean` |
+| `crates/dclutch-protocol-parameters-contract/check-generated.sh` | shell | raw | `EmitProtocolParametersV1Rust.lean` |
 | `crates/dclutch-rational-representation-v2-contract/tests/hot_v3_generator_fresh.rs` | cargo-test | raw | `EmitRationalTerminalHotV3Rust.lean` |
 | `crates/dclutch-rational-representation-v2-contract/tests/rational_cross_domain_v3_lean_generator_fresh.rs` | cargo-test | yes | `EmitRationalCrossDomainV3Rust.lean` |
 | `crates/dclutch-rational-representation-v2-kernel/tests/generator_fresh.rs` | cargo-test | raw | `EmitRationalRepresentationV2DescriptorRust.lean` |
@@ -122,9 +123,6 @@ An inventory of guards that exist, not a record of guards that passed — each o
 | `crates/dclutch-custody-contract/src/generated_projected_state_v2.rs` | `EmitProjectedCustodyStateV2Rust.lean` |
 | `crates/dclutch-dealer-codec/src/generated_dealer_liquidity.rs` | `EmitDealerLiquidityAbiRust.lean` |
 | `crates/dclutch-dealer-codec/src/generated_dealer_trading_profile.rs` | `EmitDealerTradingProfileRust.lean` |
-| `crates/dclutch-dealer-codec/src/generated_scenario_checkpoint_v1.rs` | `EmitDealerScenarioCheckpointV1Rust.lean` |
-| `crates/dclutch-dealer-codec/src/generated_scenario_reservation_state_v1.rs` | `EmitDealerScenarioReservationStateV1Rust.lean` |
-| `crates/dclutch-dealer-codec/src/generated_scenario_trade_v4.rs` | `EmitDealerScenarioTradeV4Rust.lean` |
 | `crates/dclutch-dealer-scenario-kernel/src/generated_netting_corpus.rs` | `EmitDealerScenarioNettingCorpusRust.lean` |
 | `crates/dclutch-direct-aot-contract/src/generated.rs` | `EmitDirectProgramV2Rust.lean` |
 | `crates/dclutch-direct-codec/src/generated_intent_v2.rs` | `EmitDirectIntentV2Rust.lean` |
@@ -160,6 +158,7 @@ An inventory of guards that exist, not a record of guards that passed — each o
 | `crates/dclutch-product-payoff-v2-codec/tests/generated/basis_corpus_v3.rs` | `EmitProductBasisV3CorpusRust.lean` |
 | `crates/dclutch-product-runtime-v2-admission/src/generated_admission_v2.rs` | `EmitProductAdmissionV2Rust.lean` |
 | `crates/dclutch-product-runtime-v2/src/generated.rs` | `EmitProductRuntimeV2Rust.lean` |
+| `crates/dclutch-protocol-parameters-contract/src/generated.rs` | `EmitProtocolParametersV1Rust.lean` |
 | `crates/dclutch-rational-representation-v2-contract/src/generated_hot_v3.rs` | `EmitRationalTerminalHotV3Rust.lean` |
 | `crates/dclutch-rational-representation-v2-contract/tests/support/generated_rational_cross_domain_v3.rs` | `EmitRationalCrossDomainV3Rust.lean` |
 | `crates/dclutch-rational-representation-v2-kernel/src/generated_descriptor.rs` | `EmitRationalRepresentationV2DescriptorRust.lean` |

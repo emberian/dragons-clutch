@@ -153,7 +153,7 @@ export default function ConsoleDirectory() {
         perform.</p>
         <p><strong>And the gates that are not the Market&rsquo;s phase.</strong> {MACHINE_SENTENCE_V1} {SELECTED_SENTENCE_V1} A
         Direct root, a Series ticket, a funding-ledger slot, a projected-custody
-        ladder, a Dealer scenario checkpoint and a Source resolution state are
+        ladder and a Source resolution state are
         separate discriminants in separate accounts, and a Market is
         <em> Open</em> for the whole span in which several of them move. Every
         figure here is computed on each render from the census table and the

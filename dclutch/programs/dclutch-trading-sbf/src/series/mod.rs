@@ -35,8 +35,6 @@ pub mod consume_artifacts_v4;
 pub mod custody_v3;
 /// Global five-route Consume Effect V4 topology and route-window admission.
 pub mod effect_v4;
-/// Exact Core-to-Custody call staging behind the common Hot V3 outer.
-pub mod execute_v3;
 /// Canonical current-source Expire ProfileV3/EffectV5 artifacts.
 pub mod expire_funding_artifacts_v5;
 /// Canonical AccountProfileV3/EffectV5 funding-owned action artifacts.
@@ -54,8 +52,6 @@ pub mod operator;
 pub mod prepare_funding_artifacts_v5;
 /// Canonical projected-Hoard Custody request construction.
 pub mod projected_custody_v3;
-/// Exact content/replay projector behind the canonical Trading hot outer.
-pub mod projector;
 /// Chain-derived Shadow-AOT release selection and generic request construction.
 /// Self-consistent Series Consume capability release assembly.
 ///

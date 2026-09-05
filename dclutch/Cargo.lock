@@ -1801,7 +1801,6 @@ dependencies = [
  "dclutch-core-contract",
  "dclutch-cu-checkpoint",
  "dclutch-custody-contract",
- "dclutch-dealer-codec",
  "dclutch-market-core-codec",
  "dclutch-operator",
  "dclutch-program-test-evidence",

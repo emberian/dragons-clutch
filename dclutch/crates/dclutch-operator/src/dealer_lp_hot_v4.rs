@@ -49,14 +49,14 @@ use dclutch_request_profile_contract::SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEM
 use dclutch_trading_sbf::{
     admitted_composition_v3::admitted_caller_authority_count_v3,
     dealer::{
-        v3_lp_artifacts::{
+        lp_artifacts::{
             DEALER_LP_IDENTITY_COUNT_V3, DEALER_LP_SCALAR_COUNT_V3, dealer_lp_account_count_v3,
         },
-        v3_operator::{
+        lp_request::{
             DEALER_MULTI_LP_ACTION_SELECTOR_OFFSET_V3, DealerMultiLpRequestV3,
             MultiLpRequestActionV3,
         },
-        v3_release::dealer_request_schema_v3,
+        release::dealer_request_schema_v3,
     },
 };
 use solana_program::{
@@ -306,7 +306,7 @@ fn validate_request_coordinates(
     let market = fixed(state, HOT_MARKET_ACCOUNT_V3)?.account.key;
     let expected_obligation = Pubkey::find_program_address(
         &[
-            dclutch_trading_sbf::dealer::v3_obligation::DEALER_OBLIGATION_PDA_DOMAIN_V3,
+            dclutch_trading_sbf::dealer::obligation::DEALER_OBLIGATION_PDA_DOMAIN_V3,
             root.as_ref(),
         ],
         &outer.trading_program,
@@ -314,7 +314,7 @@ fn validate_request_coordinates(
     .0;
     let expected_lp = Pubkey::find_program_address(
         &[
-            dclutch_trading_sbf::dealer::v3_multi_lp::DEALER_LP_POSITION_PDA_DOMAIN_V3,
+            dclutch_trading_sbf::dealer::multi_lp::DEALER_LP_POSITION_PDA_DOMAIN_V3,
             root.as_ref(),
             &request.lp_owner,
         ],

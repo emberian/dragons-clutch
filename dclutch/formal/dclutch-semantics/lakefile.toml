@@ -91,10 +91,6 @@ name = "emit-dealer-trading-profile-rust"
 root = "EmitDealerTradingProfileRust"
 
 [[lean_exe]]
-name = "emit-dealer-scenario-trade-v4-rust"
-root = "EmitDealerScenarioTradeV4Rust"
-
-[[lean_exe]]
 name = "emit-direct-codec-rust"
 root = "EmitDirectCodecRust"
 
@@ -413,11 +409,3 @@ root = "EmitSeriesTicketStateV3Rust"
 [[lean_exe]]
 name = "emit-projected-custody-state-v2-rust"
 root = "EmitProjectedCustodyStateV2Rust"
-
-[[lean_exe]]
-name = "emit-dealer-scenario-checkpoint-v1-rust"
-root = "EmitDealerScenarioCheckpointV1Rust"
-
-[[lean_exe]]
-name = "emit-dealer-scenario-reservation-state-v1-rust"
-root = "EmitDealerScenarioReservationStateV1Rust"

@@ -7,32 +7,29 @@ use dclutch_custody_contract::{
     DELEGATED_CUSTODY_REQUEST_MAGIC_V2,
 };
 use dclutch_dealer_codec::scenario::ClaimsInventoryObservation;
-use dclutch_effect_kernel::v3::ProgramV3 as EffectProgramV3;
 use dclutch_trading_sbf::dealer::{
-    v3_equity_operator::{
+    equity_request::{
         DEALER_EQUITY_CONTRIBUTE_P2_SELECTOR_V3, DEALER_EQUITY_HEADER_BYTES_V3,
         DEALER_EQUITY_SELECTOR_OFFSET_V3, DealerEquityBumpBankV3, DealerEquityRequestV3,
         EquityOperatorErrorV3, EquityPoolChainProjectionV3, EquityRequestActionV3,
         EquityRequestIntentV3, build_equity_request_v3, materialize_equity_intent_v3,
         prepare_equity_request_v3,
     },
-    v3_hot_artifact::{
-        dealer_equity_effect_program_bytes_v3, dealer_equity_evidence_owner_identity_register_v3,
-        dealer_equity_identity_count_v3, dealer_equity_scalar_count_v3,
-        encode_dealer_equity_effect_program_v3, project_dealer_equity_hot_registers_v3,
+    equity_effect::{
+        dealer_equity_evidence_owner_identity_register_v3, dealer_equity_identity_count_v3,
+        dealer_equity_scalar_count_v3, project_dealer_equity_hot_registers_v3,
     },
-    v3_multi_lp::{
+    multi_lp::{
         DEALER_LP_POSITION_BYTES_V3, DEALER_LP_POSITION_PDA_DOMAIN_V3,
         DealerLpAccountObservationV3, DealerLpPositionV3, MAX_MULTI_LP_CUSTODY_EFFECTS_V3,
         MultiLpActionV3, MultiLpBumpHintsV3, MultiLpCollateralFrameV3, MultiLpContextV3,
         MultiLpCustodyRequestV3, MultiLpIntentV3, prepare_multi_lp_v3,
     },
-    v3_obligation::{
+    obligation::{
         DEALER_OBLIGATION_HEADER_BYTES_V3, DEALER_OBLIGATION_MAGIC_V3,
         DEALER_OBLIGATION_PDA_DOMAIN_V3, DEALER_OBLIGATION_VERSION_V3,
         DealerObligationProjectionV3,
     },
-    v3_route::authenticate_dealer_equity_routes_v3,
 };
 use solana_program::{hash::hash, pubkey::Pubkey};
 
@@ -230,27 +227,6 @@ fn inactive_merge_template(cash: MultiLpCustodyRequestV3, f: &Fixture) -> Custod
     merge
 }
 
-fn equity_effect(
-    cash: MultiLpCustodyRequestV3,
-    merge: CustodyRequestV1,
-    signed_position_count: u32,
-) -> Vec<u8> {
-    let templates = [cash, MultiLpCustodyRequestV3::Canonical(merge)];
-    let width = dealer_equity_effect_program_bytes_v3(MultiLpActionV3::Add, signed_position_count)
-        .expect("Dealer effect width");
-    let mut scratch = vec![0; width];
-    let mut output = vec![0; width];
-    encode_dealer_equity_effect_program_v3(
-        MultiLpActionV3::Add,
-        signed_position_count,
-        &templates,
-        &mut scratch,
-        &mut output,
-    )
-    .expect("Dealer effect");
-    output
-}
-
 #[test]
 fn runtime_width_equity_request_is_chain_derived_and_rejoins_physical_intent() {
     let f = fixture();
@@ -428,44 +404,10 @@ fn runtime_width_equity_request_is_chain_derived_and_rejoins_physical_intent() {
         claims_program,
         "TransitionVM preserves the AccountProfile-authenticated Claims owner"
     );
-    let effect_bytes = equity_effect(cash, merge, 2);
-    let effect = EffectProgramV3::decode(&effect_bytes).expect("Dealer Hot effect");
-    let composition = authenticate_dealer_equity_routes_v3(
-        effect,
-        3,
-        &scalars,
-        &identities,
-        &request_bank,
-        request_bytes,
-        request,
-        &physical,
-        &custody_effects,
-    )
-    .expect("cash then Claims route order");
-    assert_eq!(composition.claims_route(), Some(1));
-    assert_eq!(composition.custody().count(), 1);
-
-    let mut reversed = effect_bytes.clone();
-    *reversed.get_mut(32).expect("effect offset in bounds") = 1;
-    assert!(
-        authenticate_dealer_equity_routes_v3(
-            EffectProgramV3::decode(&reversed).expect("reversed structural effect"),
-            3,
-            &scalars,
-            &identities,
-            &request_bank,
-            request_bytes,
-            request,
-            &physical,
-            &custody_effects,
-        )
-        .is_err()
-    );
-
     let mut stale = chain;
     stale.collateral.principal_balance = 21;
     assert_eq!(
-        dclutch_trading_sbf::dealer::v3_equity_operator::authenticate_equity_request_v3(
+        dclutch_trading_sbf::dealer::equity_request::authenticate_equity_request_v3(
             &request, &stale,
         ),
         Err(EquityOperatorErrorV3::InvalidProjection)

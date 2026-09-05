@@ -31,12 +31,6 @@ pub mod dealer_equity_hot_v3;
 /// Chain-derived unsigned Dealer LP Open/Close Hot construction.
 #[cfg(feature = "dealer-series")]
 pub mod dealer_lp_hot_v4;
-/// Lock-bounded Dealer checkpoint callers and crash-safe journal.
-#[cfg(feature = "dealer-series")]
-pub mod dealer_scenario_checkpoint_v1;
-/// Chain-derived Dealer scenario exact-fill physical-account projection.
-#[cfg(feature = "dealer-series")]
-pub mod dealer_scenario_hot_v4;
 /// Exact delegated-allowance Custody successor CPI construction.
 pub mod delegated_custody;
 /// Chain-derived unsigned Direct root retirement construction.

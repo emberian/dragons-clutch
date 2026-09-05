@@ -807,12 +807,11 @@ def class_derivation(survey: Survey) -> list[Finding]:
         if derivation.domain not in owner:
             continue
         # This tree pins a *wrong* spelling on purpose, as an `assert_ne!`
-        # against the right one -- `admitted_composition_v3.rs:829` and
-        # `dealer_scenario_checkpoint_v1.rs:2767` both say "this is not the
-        # address the other program signs", and both were added as the
-        # regression guard for the very defect this reader hunts.  Counting a
-        # deliberate counterexample as a second spelling would make the
-        # checker refuse its own fix.
+        # against the right one -- `admitted_composition_v3.rs` says "this is
+        # not the address the other program signs" as the regression guard for
+        # the very defect this reader hunts.  Counting a deliberate
+        # counterexample as a second spelling would make the checker refuse
+        # its own fix.
         function = survey.enclosing(derivation.path, derivation.line)
         if function is not None and "assert_ne!" in function.text:
             continue

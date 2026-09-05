@@ -21,7 +21,7 @@
 //! are not independent coordinates, so what an LP moved in scenario `s` is
 //! `collateral + claims_transferred[s]`, per scenario.
 
-use dclutch_trading_sbf::dealer::v3_equity::{
+use dclutch_trading_sbf::dealer::equity::{
     PoolEquityActionV3, PoolEquityContributionV3, PoolEquityInputV3, PoolEquityPlanV3,
     PoolEquityRedemptionV3, plan_pool_equity_v3,
 };

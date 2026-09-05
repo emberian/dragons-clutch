@@ -336,37 +336,6 @@ const INSTRUCTION_RENDERERS: ReadonlyArray<InstructionRenderer> = Object.freeze(
     summary:
       'Closes one drained, settled maker and returns its rent to whoever paid it. This is the only route that lowers a market’s open-maker count, and it refuses while a fee is still owed.',
   },
-
-  // The seven stages of one durable Dealer scenario, in the order they run.
-  // Each is its own transaction because the work does not fit in one.
-  {
-    routeId: 'trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_create_v1',
-    summary: 'Starts one Dealer scenario: creates the checkpoint everything below is written into.',
-  },
-  {
-    routeId: 'trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_page_v1',
-    summary: 'Appends one page of a scenario’s transcript. Six pages, in order, and each is read-only afterwards.',
-  },
-  {
-    routeId: 'trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_evaluate_v1',
-    summary: 'Seals the producer’s evaluation of a scenario, once all six transcript pages exist.',
-  },
-  {
-    routeId: 'trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_reserve_v1',
-    summary: 'Records the collateral reservation an evaluated scenario needs before it can commit.',
-  },
-  {
-    routeId: 'trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_rollback_v1',
-    summary: 'Records the reverse of a reservation, for a scenario that expired instead of committing.',
-  },
-  {
-    routeId: 'trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_commit_v1',
-    summary: 'Commits an evaluated scenario: applies its claim changes and writes its obligation, in one step.',
-  },
-  {
-    routeId: 'trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_cleanup_v1',
-    summary: 'Closes an expired scenario checkpoint and returns its rent to the wallet named when it was created. Anyone may submit it.',
-  },
 ]);
 
 const RENDERER_BY_ROUTE: ReadonlyMap<string, InstructionRenderer> = new Map(

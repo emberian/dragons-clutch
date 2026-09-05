@@ -6,7 +6,7 @@
 //! cross-multiplication equality and has no rounding at all. Everything a
 //! floor-rounded pro-rata pool can be attacked with therefore lands here.
 //!
-//! The existing corpus (`v3_equity.rs`'s four unit tests and
+//! The existing corpus (`equity.rs`'s four unit tests and
 //! `dealer_v3_multi_lp.rs`'s five) covers a single redemption and the dust it
 //! leaves. It does not cover what an LP can do with MANY redemptions, which is
 //! the shape that actually drains pools: floor rounding is applied per call, so
@@ -20,7 +20,7 @@
 //! `floor(b * r / s)` and asserted the planner agreed would be asserting that
 //! one copy of the formula equals another copy of the formula.
 
-use dclutch_trading_sbf::dealer::v3_equity::{
+use dclutch_trading_sbf::dealer::equity::{
     POOL_EQUITY_REDEMPTION_ROUNDING_V3, PoolEquityActionV3, PoolEquityContributionV3,
     PoolEquityInputV3, PoolEquityPlanV3, PoolEquityRedemptionV3, plan_pool_equity_v3,
 };

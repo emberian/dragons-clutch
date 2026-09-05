@@ -74,14 +74,6 @@
       "reproducible": true
     },
     {
-      "campaign": "dealer-checkpoint-programtest",
-      "substrate": "program-test",
-      "runner": "tools/gauntlet/dealer-checkpoint/run-dealer-checkpoint.sh",
-      "producer": "programs/dclutch-dealer-accelerator-sbf/program-test",
-      "note": "The only campaign of the twenty-three whose binding notes carry a mechanically-derived observation string rather than authored prose.",
-      "reproducible": true
-    },
-    {
       "campaign": "direct-fee-pair-programtest",
       "substrate": "program-test",
       "runner": "tools/gauntlet/direct-fee-pair/run-direct-fee-pair.sh",

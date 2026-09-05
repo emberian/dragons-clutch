@@ -8,7 +8,7 @@
 //! execution artifacts, exact request, Profile13 account expansion, and input
 //! register bank. This program independently rejoins every Dealer semantic
 //! account through that public view, evaluates the selected LP-lifecycle or
-//! scenario-solvency transition, and returns one canonical candidate-bank
+//! junior-equity transition, and returns one canonical candidate-bank
 //! chunk. It never writes an account, invokes a child, or owns protocol state.
 
 extern crate alloc;
@@ -16,7 +16,6 @@ extern crate std;
 
 use alloc::vec;
 
-use dclutch_capability_program_contract::hot_v3::HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3;
 use dclutch_core_contract::ContentId;
 use dclutch_execution_strategy_contract::v2::{
     ACCELERATOR_ACK_HEADER_BYTES_V2, ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2,
@@ -25,22 +24,16 @@ use dclutch_execution_strategy_contract::v2::{
 };
 use dclutch_trading_sbf::{
     TradingSbfError,
-    admitted_composition_v3::ADMITTED_ACCELERATOR_HOT_FIXED_START_V4,
     dealer::{
-        v3_accelerator_accounts::{
-            DealerScenarioAcceleratorErrorV4, evaluate_authenticated_dealer_scenario_v4,
-        },
-        v3_equity_operator::DEALER_EQUITY_REQUEST_MAGIC_V3,
-        v3_operator::DEALER_MULTI_LP_REQUEST_MAGIC_V3,
-        v3_trade::{DEALER_SCENARIO_TRADE_ACTION_V3, DEALER_SCENARIO_TRADE_MAGIC_V3},
-        v4_equity_accelerator_accounts::{
+        equity_request::DEALER_EQUITY_REQUEST_MAGIC_V3,
+        lp_request::DEALER_MULTI_LP_REQUEST_MAGIC_V3,
+        equity_accelerator::{
             DealerEquityAcceleratorErrorV4, evaluate_authenticated_dealer_equity_v4,
         },
-        v4_lp_accelerator_accounts::{
+        lp_accelerator::{
             DealerLpAcceleratorErrorV4, evaluate_authenticated_dealer_lp_v4,
         },
     },
-    entrypoint_adapter::admitted_heap_frame_bytes_v1,
     hot_v3::{AuthenticatedAcceleratorInvocationV4, authenticate_accelerator_invocation_v4},
 };
 use solana_program::{
@@ -430,13 +423,6 @@ fn evaluate_selected_family_v4(
         accepted_or_named_v4(
             evaluate_authenticated_dealer_equity_v4(invocation, candidate)
                 .map_err(DealerEquityAcceleratorErrorV4::refusal_name),
-        )
-    } else if family_magic == Some(DEALER_SCENARIO_TRADE_MAGIC_V3.as_slice())
-        && selected_action == u32::from(DEALER_SCENARIO_TRADE_ACTION_V3)
-    {
-        accepted_or_named_v4(
-            evaluate_authenticated_dealer_scenario_v4(invocation, candidate)
-                .map_err(DealerScenarioAcceleratorErrorV4::refusal_name),
         )
     } else {
         solana_program::log::sol_log(FAMILY_REFUSAL_LOG_PREFIX_V4);

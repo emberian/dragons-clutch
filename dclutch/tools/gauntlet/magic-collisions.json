@@ -41,33 +41,6 @@
       "owner": "Core + Registry (naming)"
     },
     {
-      "magic": "DCLTDAC1",
-      "constants": [
-        "DEALER_SCENARIO_ACTIVATION_RECEIPT_MAGIC_V1",
-        "DIRECT_ACTIVATION_REQUEST_MAGIC_V1"
-      ],
-      "verdict": "REQUEST PAIRED WITH RECEIPT, different channels. DIRECT_ACTIVATION_REQUEST_MAGIC_V1 heads an instruction; DEALER_SCENARIO_ACTIVATION_RECEIPT_MAGIC_V1 heads a receipt read back from account data. A receipt magic is never tested against instruction_data by any dispatcher, so the two cannot select each other's handler.",
-      "owner": "Dealer + Direct (naming)"
-    },
-    {
-      "magic": "DCLTDCM1",
-      "constants": [
-        "DEALER_SCENARIO_CHECKPOINT_COMMIT_MAGIC_V1",
-        "DEALER_SCENARIO_CUSTODY_EFFECT_MANIFEST_MAGIC_V1"
-      ],
-      "verdict": "ONE DISPATCH SELECTOR, ONE RECORD, inside the same family. The commit magic is a top-level Trading selector (is_dealer_scenario_checkpoint_commit_v1); the custody-effect manifest magic heads persisted account data and is never compared against instruction_data. Only one of the two is ever reachable from a dispatcher, so there is no arm for the other to be mistaken for. Note this is the closest of the eight to a real hazard: if the manifest ever became instruction-carried inside the Trading ELF, this entry must be deleted and the magic re-lettered.",
-      "owner": "Dealer"
-    },
-    {
-      "magic": "DCLTDRR1",
-      "constants": [
-        "DEALER_SCENARIO_RESERVATION_RECEIPT_MAGIC_V1",
-        "DIRECT_BEGIN_RETIRING_RECEIPT_MAGIC_V1"
-      ],
-      "verdict": "TWO RECEIPTS, neither a dispatch selector. Both head data read back and authenticated against an expected magic the reader already knows from context -- the reader is looking for one specific receipt, not choosing between families. No dispatcher compares either against instruction_data, so no wrong-handler path exists.",
-      "owner": "Dealer + Direct (naming)"
-    },
-    {
       "magic": "DCLTSA03",
       "constants": [
         "SHADOW_ACK_MAGIC_V3",

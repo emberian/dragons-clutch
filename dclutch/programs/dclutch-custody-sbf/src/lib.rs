@@ -20,7 +20,6 @@ use dclutch_custody_contract::{
     ProjectedCustodyRequestV1, ReceiptEvidenceV1, classify_premarket_series_escrow_v1,
 };
 
-mod dealer_reservation_v1;
 mod delegated;
 mod projected;
 mod retirement_replay_handoff_v1;
@@ -50,7 +49,6 @@ macro_rules! custody_cu_checkpoint {
     ($phase:literal) => {};
 }
 
-pub(crate) use custody_cu_checkpoint;
 use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1,
@@ -155,45 +153,17 @@ pub enum CustodySbfError {
     /// upgrade authority the release names shipped new bytes, so the cached
     /// authentication no longer describes what is deployed.
     ReleaseSuperseded = 0x600C,
-    /// The account at the reservation coordinate is not an activatable reservation.
-    ///
-    /// Split out of [`CustodySbfError::Replay`], whose own doc comment says it
-    /// means "Replay PDA, owner, bytes, or revision" -- and the reservation
-    /// join is none of those. `activate_one_effect` published `Replay` from a
-    /// FIFTEEN-conjunct disjunction plus two decodes, so an account this
-    /// program does not own, a reservation already activated, and a cursor at
-    /// the wrong revision were one code with one reader.
-    ///
-    /// This is the shallowest of the four: the bytes at the coordinate are not
-    /// this program's, do not decode as a reservation state, or decode as one
-    /// whose status is not activatable.
+    /// Withdrawn with the Dealer scenario reservation route. Never raised;
+    /// the discriminant is not reused.
     ReservationRecord = 0x600D,
-    /// The reservation is a valid one, but not the one this effect names.
-    ///
-    /// Split out of [`CustodySbfError::Replay`]. Ordinal, effect count, batch,
-    /// checkpoint, parent request digest, effects-manifest digest, or effect
-    /// digest: every one of them says the record found is a real reservation
-    /// belonging to a DIFFERENT activation, which is a different investigation
-    /// from a malformed record and a different one again from a frame that
-    /// does not match.
+    /// Withdrawn with the Dealer scenario reservation route. Never raised;
+    /// the discriminant is not reused.
     ReservationIdentity = 0x600E,
-    /// The accounts handed in are not the ones the reservation recorded.
-    ///
-    /// Split out of [`CustodySbfError::Replay`]. Source, destination, escrow,
-    /// mint or token program: the reservation is the right one and its frame
-    /// was substituted, which is the hostile shape this join exists to refuse
-    /// and the one that most deserves its own word.
+    /// Withdrawn with the Dealer scenario reservation route. Never raised;
+    /// the discriminant is not reused.
     ReservationFrame = 0x600F,
-    /// The escrow the chain holds is not the poststate the reservation published.
-    ///
-    /// Split out of [`CustodySbfError::Replay`], and it is the conjunct that
-    /// cost the most to find: on 2026-09-02 a scenario SPLIT off a live
-    /// campaign reached this comparison with an escrow that had never been
-    /// created by anything, and locating it took a throwaway instrumented
-    /// build because fifteen conjuncts shared one code. It says the
-    /// reservation and the chain disagree about the escrow itself -- a
-    /// reservation published against a poststate the chain does not hold --
-    /// which is neither a substituted frame nor a wrong activation.
+    /// Withdrawn with the Dealer scenario reservation route. Never raised;
+    /// the discriminant is not reused.
     ReservationEscrowPrestate = 0x6010,
     /// A Transfer named `HoardPrincipal -> FeeVault`.
     ///
@@ -345,9 +315,6 @@ pub fn process_instruction(
     instruction_data: &[u8],
 ) -> ProgramResult {
     custody_cu_checkpoint!("cu-enter");
-    if dealer_reservation_v1::is_instruction(instruction_data) {
-        return dealer_reservation_v1::process(program_id, accounts, instruction_data);
-    }
     let (instruction_data, relay) = split_caller_authority_bump_v1(instruction_data);
     if instruction_data.len()
         == dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1
@@ -1046,60 +1013,6 @@ fn authenticate_registry_continuation(
 struct RealmFacts {
     realm: RealmV1,
     profile: ExactTransferProfileV1,
-}
-
-/// Borrow, decode and identify the activation cache once for one Dealer
-/// reservation frame, and authenticate everything that reads it under that one
-/// view.
-///
-/// ONE borrow, ONE decode, ONE identity, for the whole route. This used to be
-/// three wrappers -- `authenticate_market_from_cache`,
-/// `authenticate_calling_release_from_cache` and
-/// `authenticate_realm_from_cache` -- each of which borrowed the same immutable
-/// Registry-owned account and each of which ran
-/// `ActivatedExecutionReleaseSetViewV1::decode`, the complete five-role
-/// projection and every aliasing pair, twenty-five `decode_role` calls, to
-/// answer one question about one role. `process_instruction` took exactly this
-/// repair at `5709672aa` and left these routes at the shape they had; this is
-/// the same repair, applied to them.
-///
-/// It is also what makes the cache's provenance legible to a reader of ONE
-/// function. Under three wrappers the identity was established in the first of
-/// them and the other two decoded an account whose owner and address nothing in
-/// their own bodies had checked -- true on every path, but true by CALL ORDER
-/// inside each caller, which is not a thing the type system or any static
-/// reader holds. `tools/seam-audit`'s `AUTHORITY_CACHE_UNDERIVED` named both.
-///
-/// `calling_release` is the one axis the five call sites differ on: the two
-/// release routes authenticate the calling program's activated release, the
-/// three realm-only routes do not name it.
-#[inline(never)]
-fn authenticate_reservation_frame_v1(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
-    request: CustodyRequestV1,
-    calling_release: bool,
-) -> Result<RealmFacts, ProgramError> {
-    let registry = account(accounts, REGISTRY_PROGRAM)?;
-    let cache_account = account(accounts, ACTIVATION_CACHE)?;
-    require_cache_account(registry.key, cache_account).map_err(CustodySbfError::from)?;
-    let cache_data = cache_account
-        .try_borrow_data()
-        .map_err(|_| CustodySbfError::Release)?;
-    let activated = ActivatedExecutionReleaseSetViewV1::decode(&cache_data)
-        .map_err(|_| CustodySbfError::Release)?;
-    authenticate_activation_cache_identity_v1(
-        registry,
-        cache_account,
-        &request.release_set,
-        activated,
-    )
-    .map_err(CustodySbfError::from)?;
-    let market = authenticate_market(accounts, request, activated)?;
-    if calling_release {
-        authenticate_calling_release(program_id, accounts, request, None, activated)?;
-    }
-    authenticate_realm(program_id, accounts, request, market.state, activated)
 }
 
 #[inline(never)]

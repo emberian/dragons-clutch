@@ -16,46 +16,11 @@ pub mod config_v4;
 
 /// Runtime-width finite-scenario collateral planning for the V2 successor.
 pub mod scenario;
-/// Named admissible states for the two Dealer scenario state machines.
-pub mod scenario_admission_v1;
-/// Durable lock-bounded preparation checkpoint for Dealer scenario commits.
-pub mod scenario_checkpoint_v1;
-/// Custody-owned effect, batch, and reservation state for staged acceptance.
-pub mod scenario_custody_reservation_v1;
-/// Producer-bound receipt for sealing one paged scenario evaluation.
-pub mod scenario_evaluation_receipt_v1;
-/// Canonical account-membership manifest for paged scenario evaluation.
-pub mod scenario_membership_manifest_v1;
-/// Custody reservation and reverse-order rollback receipt.
-pub mod scenario_reservation_receipt_v1;
-
-/// Lean-generated Dealer scenario reservation-state layout and tag ABI.
-///
-/// No `#[rustfmt::skip]`, for the same reason as its sibling below.
-#[allow(dead_code)]
-mod generated_scenario_reservation_state_v1;
-
-/// Lean-generated Dealer scenario checkpoint layout and tag ABI.
-///
-/// No `#[rustfmt::skip]`: this emitter's raw output is already rustfmt-stable,
-/// which is what lets its guard byte-compare the emitter's stdout directly.
-#[allow(dead_code)]
-mod generated_scenario_checkpoint_v1;
-
 #[rustfmt::skip]
 mod generated_dealer_liquidity;
 
 #[rustfmt::skip]
 mod generated_dealer_trading_profile;
-
-/// Lean-owned selector-9 Dealer scenario trade request header ABI.
-///
-/// The executor is `programs/dclutch-trading-sbf/src/dealer/v3_trade.rs`; this
-/// is the layout it executes against. It lives in the codec rather than in the
-/// program because the header is a wire object with consumers in three crates,
-/// and a program is not a good place to keep one.
-#[rustfmt::skip]
-pub mod generated_scenario_trade_v4;
 
 /// Named admissible states for the Dealer root's own lifecycle.
 pub mod root_admission_v1;

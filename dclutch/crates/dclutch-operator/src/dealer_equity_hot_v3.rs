@@ -70,15 +70,15 @@ use dclutch_hot_bump_miner_v1::{
 use dclutch_trading_sbf::{
     admitted_composition_v3::admitted_caller_authority_count_v3,
     dealer::{
-        v3_artifacts::authenticate_dealer_equity_artifacts_v3,
-        v3_equity_operator::{
+        equity_artifacts::authenticate_dealer_equity_artifacts_v3,
+        equity_request::{
             DEALER_EQUITY_SELECTOR_OFFSET_V3, DealerEquityRequestV3, EquityRequestActionV3,
         },
-        v3_hot_artifact::{
+        equity_effect::{
             DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3, dealer_current_slot_scalar_register_v3,
             dealer_equity_identity_count_v3, dealer_equity_scalar_count_v3,
         },
-        v3_multi_lp::MultiLpActionV3,
+        multi_lp::MultiLpActionV3,
     },
 };
 use solana_program::{
@@ -343,7 +343,7 @@ fn validate_request_coordinates(
     }
     let expected_obligation = Pubkey::find_program_address(
         &[
-            dclutch_trading_sbf::dealer::v3_obligation::DEALER_OBLIGATION_PDA_DOMAIN_V3,
+            dclutch_trading_sbf::dealer::obligation::DEALER_OBLIGATION_PDA_DOMAIN_V3,
             root.as_ref(),
         ],
         &outer.trading_program,
@@ -351,7 +351,7 @@ fn validate_request_coordinates(
     .0;
     let expected_lp = Pubkey::find_program_address(
         &[
-            dclutch_trading_sbf::dealer::v3_multi_lp::DEALER_LP_POSITION_PDA_DOMAIN_V3,
+            dclutch_trading_sbf::dealer::multi_lp::DEALER_LP_POSITION_PDA_DOMAIN_V3,
             root.as_ref(),
             request.lp_owner.as_ref(),
         ],
@@ -427,7 +427,7 @@ fn validate_strategy_geometry(
 
 fn validate_runtime_geometry(
     state: &DealerEquityHotStateV3,
-    bundle: dclutch_trading_sbf::dealer::v3_artifacts::DealerEquityArtifactBundleV3<'_>,
+    bundle: dclutch_trading_sbf::dealer::equity_artifacts::DealerEquityArtifactBundleV3<'_>,
     action: MultiLpActionV3,
     position_count: u32,
 ) -> Result<(), DealerEquityHotOperatorErrorV3> {
@@ -701,7 +701,7 @@ mod tests {
     fn p0_request(program: Pubkey, root: Pubkey, market: Pubkey, owner: Pubkey) -> [u8; 480] {
         let obligation = Pubkey::find_program_address(
             &[
-                dclutch_trading_sbf::dealer::v3_obligation::DEALER_OBLIGATION_PDA_DOMAIN_V3,
+                dclutch_trading_sbf::dealer::obligation::DEALER_OBLIGATION_PDA_DOMAIN_V3,
                 root.as_ref(),
             ],
             &program,
@@ -709,7 +709,7 @@ mod tests {
         .0;
         let lp = Pubkey::find_program_address(
             &[
-                dclutch_trading_sbf::dealer::v3_multi_lp::DEALER_LP_POSITION_PDA_DOMAIN_V3,
+                dclutch_trading_sbf::dealer::multi_lp::DEALER_LP_POSITION_PDA_DOMAIN_V3,
                 root.as_ref(),
                 owner.as_ref(),
             ],
@@ -798,7 +798,7 @@ mod tests {
         let owner = Pubkey::new_from_array([3; 32]);
         let obligation = Pubkey::find_program_address(
             &[
-                dclutch_trading_sbf::dealer::v3_obligation::DEALER_OBLIGATION_PDA_DOMAIN_V3,
+                dclutch_trading_sbf::dealer::obligation::DEALER_OBLIGATION_PDA_DOMAIN_V3,
                 root.as_ref(),
             ],
             &program,
@@ -806,7 +806,7 @@ mod tests {
         .0;
         let lp = Pubkey::find_program_address(
             &[
-                dclutch_trading_sbf::dealer::v3_multi_lp::DEALER_LP_POSITION_PDA_DOMAIN_V3,
+                dclutch_trading_sbf::dealer::multi_lp::DEALER_LP_POSITION_PDA_DOMAIN_V3,
                 root.as_ref(),
                 owner.as_ref(),
             ],
@@ -817,7 +817,7 @@ mod tests {
         let other_owner = Pubkey::new_from_array([4; 32]);
         let other_lp = Pubkey::find_program_address(
             &[
-                dclutch_trading_sbf::dealer::v3_multi_lp::DEALER_LP_POSITION_PDA_DOMAIN_V3,
+                dclutch_trading_sbf::dealer::multi_lp::DEALER_LP_POSITION_PDA_DOMAIN_V3,
                 root.as_ref(),
                 other_owner.as_ref(),
             ],

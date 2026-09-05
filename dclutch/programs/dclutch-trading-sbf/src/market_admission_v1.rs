@@ -83,7 +83,7 @@ mod tests {
     fn admissible_prestates() {
         // direct_token_setup_v1, direct_replay_setup_v1:
         // `state.phase != Phase::Open`.
-        // dealer/v3_accelerator_accounts, dealer/v4_equity_accelerator_accounts:
+        // dealer/equity_accelerator:
         // `core.phase != CorePhase::Open`.
         agrees(
             "TRADING_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1",

@@ -73,20 +73,6 @@ const MACHINES: &[Machine] = &[
         secondary: None,
     },
     Machine {
-        admission_type: "DealerScenarioCheckpointAdmissionV1",
-        label: "dealer-checkpoint",
-        primary: "DealerScenarioCheckpointPhaseV1",
-        primary_constructor: "states",
-        secondary: None,
-    },
-    Machine {
-        admission_type: "DealerScenarioReservationAdmissionV1",
-        label: "dealer-reservation",
-        primary: "DealerScenarioReservationStateStatusV1",
-        primary_constructor: "states",
-        secondary: None,
-    },
-    Machine {
         admission_type: "ProjectedCustodyAdmissionV1",
         label: "projected-custody",
         primary: "ProjectedCustodyPhaseV1",
