@@ -5110,3 +5110,17 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   deleted with their campaign and mirrors (−11,866); routes 164 → 156, codes 357 → 344 (the two retired bands' thirteen).
   Not done: the Rent → Core fold (needs the infrastructure-profile Lean ABI, cohort-17; a six-step seam written); a
   griefable zero-lamport staging check in Registry/Resolution vs Core's dust-tolerant rule (one author, for CRATES).
+- PROGRAMS-16H closed (`1999e4e07`, `58aa22e53`, `de2e96a62`, `3616e5e59`, `e3c914b6e`): the candidate wall was three registers
+  and one plan byte — `identity::CANDIDATE` a real producer gap (every candidate under one root derived one address from
+  32 zero bytes); **`PRIMARY_BENEFICIARY` the profile is FORBIDDEN to project — it is a lifecycle protected output whose
+  value is decision 0021's byte five; the Candidate recipe now declares `Payer`, so the solver is the beneficiary by the
+  refund-source law**; `MARKET` and `GENERAL_CONFIG_ID` were literals on five actions and absent from ten — derived; a
+  guard whose two sides moved together replaced; **SubmitCandidate assembles, seals, invokes the accelerator four times
+  and commits at 678,245 CU — then the runtime refuses `ExternalAccountLamportSpend`: the Effect funds the work escrow with
+  a local transfer from a System-owned account, never applied by anything before — the repair is a `FundingActionV5`**;
+  PlaceOrder's payer/credit coordinates were the primary shape's (fixed) and fourteen escrow coordinates hold nothing — a
+  founding corpus; **`InvalidCoordinate` was 58 disjuncts, now 57 named variants with log lines**, paying for itself three
+  times before its commit; frames: one symbol moved then zero, both debtors discharged, `owed` clean; the width ladder
+  un-inverted with no mechanism change. Owed (cohort-17, after convergence): the funding action; CloseCandidate's same
+  beneficiary shape; the escrow corpus; the other projectors' single codes.
+- Cuts: `c43462bbe` … `656200ed9`.
