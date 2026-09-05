@@ -5030,3 +5030,12 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   is live). Convergence order: generations → programs → crates → gates/successor → clients → docs; one build-and-gate
   pass with every ELF's sha256 against pre-swarm (byte-identical links owe no rows). §1.7 lists what cohort-17 must keep.
 - Cuts: `bbc825dc4`.
+
+### 2026-09-04 21:05 EDT — THE SECOND WALL, AND THE RESUME
+- Twelve lanes hit the session limit at ~20:40 (ten simplification makers, RECOVERY-4, PROGRAMS-16H); all twelve resumed
+  by message at 21:00 after the reset (ember paused the parallel project). Branch commit counts at the resume: architect 3,
+  clients 5, crates 7, docs 4, drivers 1, formal 6, gates 4, generations 3, operators 2, programs 3, trading 2.
+- Correction: the 18:00 entry recorded SERIES-5 as spawned; it was never launched (the Custody-coordinate wall in the Expire
+  frame is unowned) — deferred to after the convergence, since SIMPLIFY-TRADING is restructuring the Series arm.
+- Disk at 25–27 GiB under twelve lanes' check targets; closed lanes' directories reclaimed; the live tree's 78 GB target is
+  ember's and untouched.
