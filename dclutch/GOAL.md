@@ -5074,3 +5074,11 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   loaders. Left with invariants: `general-adapter-contract/plan.rs` (the batch-spine note cites it — the citation is the
   finding), the Series and Dealer producer-missing units, the registered-Direct V4 artifacts. Owed at convergence: genref
   (164 → 163 routes), the mirrors, SBOM, Cargo.lock, the frame baseline's link count 12 → 11.
+- SIMPLIFY-DOCS closed (branch `simplify/docs` at `4060a387e`; SIMPLIFY_DOCS.md): **GOAL.md 4,992 → 100 lines — an index**
+  (the project, the standing goal, the attractor, one dated-delta row each linking its ledger line and its store);
+  WAVE.md 7,112 → 11 (a tombstone); AGENTS.md 348 → 201 (rules only); 31,782 lines of root history moved verbatim under
+  `docs/ledger/` with all 261 `GOAL.md:NNN`/`WAVE.md:NNN` citations rewritten to land on the same lines; eight more design
+  notes' heads state the current truth (bodies byte-identical under `## History`); the README, guides, contract register
+  and omission index corrected for every rehearsal-found stale claim in this domain; genref's fixpoint holds on the branch
+  as at base. **Every GOAL.md line appended on main since the branch's base (330bbfaba) is convergence work: it goes into
+  the ledger, not the index.**
