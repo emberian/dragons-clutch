@@ -19,7 +19,7 @@ import { SolanaRpcClient } from '@dclutch/sdk/rpc';
  * Until the families were declared, every act on
  * `trading/hot_v3::process_hot_execution_v3` answered from the Market phase
  * alone, because the census reads no gate on that route: the Direct root's
- * `Open` set sits behind `hot_v3::prepare_direct_inline_hot_crosscheck_v3`,
+ * `Open` set sits behind `hot_v3::direct::prepare_direct_inline_hot_crosscheck_v3`,
  * which declines every request that is not a Direct successor. So the gate
  * existed, the decoder existed, the account existed, and no card asked.
  *

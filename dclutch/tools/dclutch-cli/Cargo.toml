@@ -9,14 +9,12 @@ repository = "https://github.com/emberian/dragons-clutch"
 readme = "README.md"
 publish = false
 
-# Its own workspace, like every other host tool under `tools/`. The protocol
-# workspace is `no_std` kernel and contract crates; this binary needs `std`, a
-# TLS stack and an HTTP client, and adding that tree to the root `members` list
-# is an integration decision this crate does not get to make for everyone else.
-[workspace]
-
-# The released binary is `dclutch`. The package is `dclutch-cli` because the
-# name `dclutch` belongs to the protocol, not to one program that reads it.
+# A member of the one workspace, like every other host tool under `tools/`.
+# This binary needs `std`, a TLS stack and an HTTP client; the integration
+# decision this crate once declined to make for everyone else was made on
+# 2026-09-05, and the whole host tree resolves against one lock. The `dist`
+# profile it is built with lives in the root manifest, where cargo reads
+# profiles from.
 [[bin]]
 name = "dclutch"
 path = "src/main.rs"
@@ -32,10 +30,6 @@ dist = true
 # than beside the release configuration, because `dist-workspace.toml` at the
 # repository root names this crate as a member and cargo profiles are only read
 # from a Cargo workspace root -- which, for this crate, is this file.
-[profile.dist]
-inherits = "release"
-lto = "thin"
-
 [dependencies]
 dclutch-operator = { path = "../../crates/dclutch-operator" }
 # The three decoders. Every byte this binary interprets is interpreted by one
@@ -64,7 +58,7 @@ reqwest = { version = "=0.12.28", default-features = false, features = [
     "rustls-tls",
 ] }
 serde_json = "=1.0.151"
-serde = { version = "=1.0.228", features = ["derive"] }
+serde = { version = "=1.0.229", features = ["derive"] }
 # Base58 addresses, parsed and printed by the same implementation the cluster
 # uses. Nothing here re-derives an address.
 solana-program = { version = "=3.0.0", default-features = false }

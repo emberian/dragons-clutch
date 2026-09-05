@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
@@ -106,17 +106,40 @@ function stateOutsideV1(machine: string, states: ReadonlyArray<string>): string 
 }
 
 describe('every classifier the census names is bound to one family, at its own source', () => {
-  const hotV3 = readFileSync(new URL('programs/dclutch-trading-sbf/src/hot_v3.rs', REPO), 'utf8');
+  const PROGRAM_SRC = new URL('programs/dclutch-trading-sbf/src/', REPO);
+
+  /**
+   * The file one census classifier names, resolved from its module path.
+   *
+   * The census writes `selected_by` as it walks the AST, so the name carries
+   * every module segment between the crate root and the function. Reading one
+   * fixed file instead was what this did while `hot_v3.rs` was one file, and
+   * the trading split (`hot_v3/direct.rs`, `hot_v3/series_expiry.rs`) made
+   * that reading find nothing -- silently, because a classifier bound to no
+   * source is not distinguishable here from one whose file moved. Resolving
+   * the path makes a module move red at the classifier that moved.
+   */
+  function sourceOf(classifier: string): string {
+    const segments = classifier.split('::').slice(0, -1);
+    expect(segments.length, `${classifier} names no module path`).toBeGreaterThan(0);
+    const stem = segments.join('/');
+    for (const candidate of [`${stem}.rs`, `${stem}/mod.rs`]) {
+      const path = fileURLToPath(new URL(candidate, PROGRAM_SRC));
+      if (existsSync(path)) return readFileSync(path, 'utf8');
+    }
+    throw new Error(`${classifier}: no ${stem}.rs or ${stem}/mod.rs under the trading program`);
+  }
 
   /** The classifier's text from its signature to the decline it opens with. */
   function declineOf(classifier: string): string {
     const bare = classifier.slice(classifier.lastIndexOf(':') + 1);
-    const start = hotV3.indexOf(`fn ${bare}`);
-    expect(start, `${bare} is not a function in hot_v3.rs`).toBeGreaterThan(-1);
-    const decline = hotV3.indexOf('return Ok(None)', start);
+    const source = sourceOf(classifier);
+    const start = source.indexOf(`fn ${bare}`);
+    expect(start, `${bare} is not a function in the module ${classifier} names`).toBeGreaterThan(-1);
+    const decline = source.indexOf('return Ok(None)', start);
     expect(decline, `${bare} never declines; a selected gate behind it would be unconditional`)
       .toBeGreaterThan(start);
-    return hotV3.slice(start, decline);
+    return source.slice(start, decline);
   }
 
   it('reads a decline, not a refusal, at the head of every bound classifier', () => {

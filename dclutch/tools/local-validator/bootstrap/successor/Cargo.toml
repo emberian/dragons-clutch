@@ -6,10 +6,9 @@ license = "AGPL-3.0-or-later"
 rust-version = "1.89"
 publish = false
 
-# This localhost-only host utility deliberately resolves independently from the
-# protocol workspace and the older provider bootstrap package.
-[workspace]
-
+# This localhost-only host utility is a member of the one workspace. It used to
+# resolve independently, which is how it spent a day not compiling at HEAD:
+# nothing built its workspace between program commits.
 [dependencies]
 base64 = "=0.22.1"
 bincode = "=1.3.3"
@@ -46,7 +45,7 @@ dclutch-resolution-core-v3-operator = { path = "../../../../crates/dclutch-resol
 dclutch-trading-sbf = { path = "../../../../programs/dclutch-trading-sbf", default-features = false, features = ["no-entrypoint", "series-family"] }
 dclutch-versioned-message-operator = { path = "../../../../crates/dclutch-versioned-message-operator" }
 reqwest = { version = "=0.12.28", default-features = false, features = ["blocking", "json", "rustls-tls"] }
-serde = { version = "=1.0.228", features = ["derive"] }
+serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 sha2 = "=0.10.9"
 solana-hash = "=4.6.0"

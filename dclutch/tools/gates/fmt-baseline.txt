@@ -37,3 +37,157 @@ crates/dclutch-rational-open-wasm/src/wire.rs
 # --- Direct lane -----------------------------------------------------------
 
 # --- Redemption lane -------------------------------------------------------
+
+# --- The fold of 2026-09-05 (WORKSPACE-ONE) --------------------------------
+# These 126 files are not new drift. Until 2026-09-05 the tree was 55 Cargo
+# workspaces and `cargo fmt --all` reached only the 41 members of the root one,
+# so `tools/gate fmt` had never once looked at a program-test suite, a gauntlet
+# campaign or the successor. Folding the tree into one workspace did not change
+# a byte of any of them; it changed what the gate can see.
+#
+# They are a HANDOFF, not an exemption, and the admissible reason this file
+# names is the one they carry: two lanes are live in this territory (SUITES-
+# REPAIR in the program-test suites, WEB-REDS in apps/ and packages/) and
+# several of these files are dirty in the shared tree as this is written.
+# Reformatting them under a live repair lane destroys work to fix whitespace.
+# Whoever next owns an area below clears its lines with it.
+#
+# Rows are the NORMALISED path: a `#[path]`-linked successor module is one
+# file here however many campaigns compile it.
+#
+# The whole block is owed. It is the largest single debt in this file and it
+# should be the shortest-lived.
+
+# the successor and the gauntlet campaigns (tools/) -- 62 file(s)
+tools/dclutch-cli/src/capability.rs
+tools/fractional-exterior/src/narrow_fixture.rs
+tools/fractional-exterior/src/stage.rs
+tools/gauntlet/census/src/magics.rs
+tools/gauntlet/census/src/main.rs
+tools/gauntlet/census/src/preimages.rs
+tools/gauntlet/journey/src/ledger.rs
+tools/gauntlet/journey/src/main.rs
+tools/gauntlet/journey/src/provider.rs
+tools/gauntlet/journey/src/resolution.rs
+tools/gauntlet/journey/src/stages.rs
+tools/gauntlet/ladder/src/ladder.rs
+tools/gauntlet/ladder/src/main.rs
+tools/gauntlet/relayed-vertical/src/input.rs
+tools/gauntlet/relayed-vertical/src/main.rs
+tools/gauntlet/relayed-vertical/src/substrate.rs
+tools/gauntlet/relayed-vertical/src/vertical.rs
+tools/lineage-loopback/src/main.rs
+tools/local-validator/bootstrap/successor/src/campaign.rs
+tools/local-validator/bootstrap/successor/src/capability_seal_close.rs
+tools/local-validator/bootstrap/successor/src/capability_seal_devnet.rs
+tools/local-validator/bootstrap/successor/src/claims_custody_replay.rs
+tools/local-validator/bootstrap/successor/src/direct_capability_activation.rs
+tools/local-validator/bootstrap/successor/src/direct_close_maker.rs
+tools/local-validator/bootstrap/successor/src/direct_fee_settlement.rs
+tools/local-validator/bootstrap/successor/src/direct_hot_route_manifest.rs
+tools/local-validator/bootstrap/successor/src/direct_market.rs
+tools/local-validator/bootstrap/successor/src/direct_ticket.rs
+tools/local-validator/bootstrap/successor/src/direct_trade.rs
+tools/local-validator/bootstrap/successor/src/direct_trade_producer.rs
+tools/local-validator/bootstrap/successor/src/direct_trade_setup.rs
+tools/local-validator/bootstrap/successor/src/direct_trade_token_setup.rs
+tools/local-validator/bootstrap/successor/src/family_hot_campaign.rs
+tools/local-validator/bootstrap/successor/src/flagship_resolution.rs
+tools/local-validator/bootstrap/successor/src/funding_readiness.rs
+tools/local-validator/bootstrap/successor/src/general_capability_activation.rs
+tools/local-validator/bootstrap/successor/src/general_devnet_market.rs
+tools/local-validator/bootstrap/successor/src/general_market.rs
+tools/local-validator/bootstrap/successor/src/general_session.rs
+tools/local-validator/bootstrap/successor/src/general_successor_plan.rs
+tools/local-validator/bootstrap/successor/src/infrastructure_succession.rs
+tools/local-validator/bootstrap/successor/src/local_mutable.rs
+tools/local-validator/bootstrap/successor/src/market.rs
+tools/local-validator/bootstrap/successor/src/plan.rs
+tools/local-validator/bootstrap/successor/src/relayed.rs
+tools/local-validator/bootstrap/successor/src/release_capture.rs
+tools/local-validator/bootstrap/successor/src/release_identity.rs
+tools/local-validator/bootstrap/successor/src/release_lineage.rs
+tools/local-validator/bootstrap/successor/src/runtime.rs
+tools/local-validator/bootstrap/successor/src/selected_capability.rs
+tools/local-validator/bootstrap/successor/src/series_terminal_campaign.rs
+tools/local-validator/bootstrap/successor/src/spline_product.rs
+tools/local-validator/bootstrap/successor/src/sponsored_push.rs
+tools/local-validator/bootstrap/successor/src/sponsored_release_observation.rs
+tools/local-validator/bootstrap/successor/src/terminal_sequence.rs
+tools/local-validator/bootstrap/successor/src/upgrade.rs
+tools/local-validator/bootstrap/successor/src/user_position_admission.rs
+tools/local-validator/bootstrap/successor/src/user_position_close.rs
+tools/relayer/src/chain.rs
+tools/relayer/src/keeper.rs
+tools/relayer/tests/offline_end_to_end.rs
+tools/ticket-board/tests/board_v1.rs
+
+# the SBF program-test suites (programs/) -- 56 file(s)
+programs/dclutch-accelerator-sbf/dealer-program-test/src/lib.rs
+programs/dclutch-accelerator-sbf/dealer-program-test/tests/frontier.rs
+programs/dclutch-accelerator-sbf/dealer-program-test/tests/physical.rs
+programs/dclutch-accelerator-sbf/generator/src/bin/series_shadow_lab_include.rs
+programs/dclutch-accelerator-sbf/generator/src/lib.rs
+programs/dclutch-accelerator-sbf/generator/src/manifest.rs
+programs/dclutch-accelerator-sbf/generator/src/manifest/tests.rs
+programs/dclutch-accelerator-sbf/generator/src/source_operator.rs
+programs/dclutch-accelerator-sbf/generator/src/source_operator/tests.rs
+programs/dclutch-accelerator-sbf/program-test/src/joined_artifacts.rs
+programs/dclutch-accelerator-sbf/program-test/tests/freeze.rs
+programs/dclutch-accelerator-sbf/program-test/tests/hot_instruction_v3.rs
+programs/dclutch-accelerator-sbf/program-test/tests/lifecycle.rs
+programs/dclutch-accelerator-sbf/test-programs/dealer-caller/src/lib.rs
+programs/dclutch-claims-sbf/program-test/affine-batch/src/fixture.rs
+programs/dclutch-claims-sbf/program-test/affine-batch/src/lib.rs
+programs/dclutch-claims-sbf/program-test/affine-batch/tests/affine_batch_v2.rs
+programs/dclutch-claims-sbf/program-test/fractional-atomic/src/campaign_support.rs
+programs/dclutch-claims-sbf/program-test/fractional-atomic/src/narrow_fixture.rs
+programs/dclutch-claims-sbf/program-test/fractional-atomic/tests/claims_conservation.rs
+programs/dclutch-claims-sbf/program-test/fractional-atomic/tests/claims_founding.rs
+programs/dclutch-claims-sbf/program-test/fractional-atomic/tests/fractional_atomic.rs
+programs/dclutch-claims-sbf/program-test/fractional-atomic/tests/fractional_compaction.rs
+programs/dclutch-claims-sbf/program-test/fractional-signed-delta/tests/fractional_signed_delta.rs
+programs/dclutch-claims-sbf/program-test/protocol-position/tests/lifecycle.rs
+programs/dclutch-claims-sbf/program-test/rational-lifecycle/tests/lifecycle.rs
+programs/dclutch-claims-sbf/program-test/sparse-chain/tests/sparse_chain.rs
+programs/dclutch-claims-sbf/src/lib.rs
+programs/dclutch-claims-sbf/test-programs/fractional-atomic-caller/src/lib.rs
+programs/dclutch-claims-sbf/test-programs/fractional-compaction-caller/src/lib.rs
+programs/dclutch-claims-sbf/test-programs/fractional-signed-delta-caller/src/lib.rs
+programs/dclutch-claims-sbf/test-programs/liability-basis-caller/src/lib.rs
+programs/dclutch-claims-sbf/test-programs/rational-v2-caller/src/lib.rs
+programs/dclutch-core-sbf/test-programs/series-consume-caller/src/lib.rs
+programs/dclutch-trading-sbf/program-test/general-hot/tests/open_batch.rs
+programs/dclutch-trading-sbf/program-test/test-programs/registry/src/lib.rs
+programs/dclutch-trading-sbf/program-test/tests/activation.rs
+programs/dclutch-trading-sbf/program-test/tests/capability_seal_close.rs
+programs/dclutch-trading-sbf/program-test/tests/direct_begin_retiring_on_chain.rs
+programs/dclutch-trading-sbf/program-test/tests/direct_close_maker_on_chain.rs
+programs/dclutch-trading-sbf/program-test/tests/direct_hot_bump_hints.rs
+programs/dclutch-trading-sbf/program-test/tests/direct_hot_fee_bearing_margin_gate.rs
+programs/dclutch-trading-sbf/program-test/tests/direct_hot_fee_pair.rs
+programs/dclutch-trading-sbf/program-test/tests/direct_hot_fee_second_transaction.rs
+programs/dclutch-trading-sbf/program-test/tests/direct_hot_record_depth_census.rs
+programs/dclutch-trading-sbf/program-test/tests/direct_hot_top_level.rs
+programs/dclutch-trading-sbf/program-test/tests/direct_hot_top_level_margin_gate.rs
+programs/dclutch-trading-sbf/program-test/tests/direct_registered_creation_hot.rs
+programs/dclutch-trading-sbf/program-test/tests/registry_hot_continuation.rs
+programs/dclutch-trading-sbf/program-test/tests/series_permit_expiry_hot_wall.rs
+programs/dclutch-trading-sbf/program-test/tests/series_pre_market_expiry_program_test.rs
+programs/dclutch-trading-sbf/program-test/tests/slot_pin_supersession.rs
+programs/dclutch-trading-sbf/program-test/tests/support/series_premarket_expiry_chain_v1.rs
+programs/dclutch-trading-sbf/program-test/tests/support/series_premarket_expiry_v1.rs
+programs/dclutch-trading-sbf/program-test/tests/ticket_authored_intents_execute_top_level.rs
+programs/dclutch-trading-sbf/program-test/user-position-admission/tests/lifecycle.rs
+
+# the real-ELF harness and the crates beside it -- 7 file(s)
+crates/dclutch-product/src/svm_reader/mod.rs
+crates/dclutch-svm-harness/tests/controller_funding_split_abort.rs
+crates/dclutch-svm-harness/tests/pre_market_resolution_funding.rs
+crates/dclutch-svm-harness/tests/relayed_mainnet_state.rs
+crates/dclutch-svm-harness/tests/resolution_core_v3_lifecycle.rs
+crates/dclutch-svm-harness/tests/resolution_successor.rs
+crates/dclutch-svm-harness/tests/sponsored_push_lifecycle.rs
+
+# the web's Rust fixture generator -- 1 file(s)
+apps/dclutch-web/fixtures/founding/generator/src/main.rs

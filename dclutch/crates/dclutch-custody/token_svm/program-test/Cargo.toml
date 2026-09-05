@@ -8,16 +8,13 @@ rust-version = "1.89"
 [dependencies]
 dclutch-custody = { path = "../.." }
 solana-program = "=3.0.0"
-solana-program-test = { version = "=4.2.1", features = ["agave-unstable-api"] }
+solana-program-test = { version = "=4.3.0-beta.2", features = ["agave-unstable-api"] }
 solana-sdk = "=3.0.0"
-solana-system-interface = { version = "=3.2.0", features = ["bincode"] }
-solana-transaction = "=4.1.6"
+solana-system-interface = { version = "=3.3.0", features = ["bincode"] }
+solana-transaction = "=4.2.0"
 spl-token-2022 = { version = "=11.0.0", features = ["no-entrypoint"] }
 spl-token-2022-interface = { version = "=3.1.1", default-features = false }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-
-[workspace]
-
 [lints.rust]
 missing_docs = "deny"
 unsafe_code = "forbid"

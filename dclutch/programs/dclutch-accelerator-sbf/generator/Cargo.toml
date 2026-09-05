@@ -20,9 +20,6 @@ dclutch-registry = { path = "../../../crates/dclutch-registry" }
 dclutch-trading = { path = "../../../crates/dclutch-trading" }
 dclutch-trading-sbf = { path = "../../dclutch-trading-sbf", default-features = false, features = ["series-family", "no-entrypoint"] }
 sha2 = "0.10"
-
-[workspace]
-
 [lints.rust]
 missing_docs = "deny"
 unsafe_code = "forbid"

@@ -95,7 +95,7 @@ cargo run --quiet -p dclutch-program-test-evidence \
 
 if [ ! -f "$inventory" ]; then
     echo "fractional-atomic: no inventory at $inventory; produce one first with" >&2
-    echo "  tools/gauntlet/census/target/release/dclutch-route-census inventory --root . --out $inventory" >&2
+    echo "  cargo run --release -p dclutch-route-census -- inventory --root . --out $inventory" >&2
     exit 1
 fi
 

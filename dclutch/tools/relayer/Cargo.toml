@@ -7,13 +7,10 @@ rust-version = "1.89"
 publish = false
 description = "RelayedMainnetStateV1 observation daemon: signs observations of a foreign cluster's account bytes, never interpretations."
 
-# Deliberately its own workspace.  This service needs `std`, tokio, an HTTP
-# stack and Solana message construction; the protocol workspace is `no_std`
-# kernel/contract crates whose lock is being realigned by other lanes, and a
-# heavy dependency tree added there would collide.  Adding this crate to the
-# root `members` list is a separate integration decision, not this lane's.
-[workspace]
-
+# A member of the one workspace.  This service needs `std`, tokio, an HTTP
+# stack and Solana message construction; that tree resolves beside the `no_std`
+# kernel and contract crates without a conflict, which is what the 2026-09-05
+# fold measured rather than assumed.
 [lib]
 name = "dclutch_relayer"
 path = "src/lib.rs"
@@ -53,10 +50,10 @@ toml = "0.8"
 solana-address = { version = "2", features = ["curve25519"] }
 solana-hash = "4"
 solana-instruction = { version = "3", default-features = false, features = ["std"] }
-solana-message = { version = "=4.4.1", features = ["serde", "wincode"] }
+solana-message = { version = "=4.5.0", features = ["serde", "wincode"] }
 solana-rent = { version = "=3.1.0", features = ["serde"] }
 solana-signature = "3"
-solana-transaction = { version = "=4.1.6", features = ["serde"] }
+solana-transaction = { version = "=4.2.0", features = ["serde"] }
 
 [dev-dependencies]
 tempfile = "3"

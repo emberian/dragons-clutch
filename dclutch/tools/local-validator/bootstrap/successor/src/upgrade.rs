@@ -13420,8 +13420,11 @@ mod tests {
         assert!(runner.calls.is_empty());
     }
 
+    /// The count is READ from `SHIPPED_LINKS`, never written down twice. It
+    /// was `12` here until the accelerator fold (`3bee5f3f1`) made it eight,
+    /// and the literal went red in the only build that compiles this module.
     #[test]
-    fn canonical_generated_gate_validates_all_twelve_links() {
+    fn canonical_generated_gate_validates_every_shipped_link() {
         let fixture = Fixture::new();
         let gate = validate_checked_release_gate(&fixture.args).expect("canonical gate");
         assert_eq!(gate.raw_elf, fixture.raw_elf);
@@ -13429,7 +13432,7 @@ mod tests {
             gate.gate_sha256,
             fixture.args.expected_checked_release_gate_sha256
         );
-        assert_eq!(fixture.gate.links.len(), 12);
+        assert_eq!(fixture.gate.links.len(), SHIPPED_LINKS.len());
     }
 
     #[test]
@@ -13925,7 +13928,7 @@ mod tests {
             validate_checked_release_gate(&missing.args)
                 .expect_err("missing link")
                 .to_string()
-                .contains("all 12 shipped links")
+                .contains(&format!("all {} shipped links", SHIPPED_LINKS.len()))
         );
 
         let mut duplicate = Fixture::new();

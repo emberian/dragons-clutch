@@ -53,9 +53,13 @@ and the dated ledger it links to.
 - **Backticks in a double-quoted shell message are command-substituted**, in
   `git commit -m` and in `lane.sh board` alike. Write the message to a file
   and use `-F`, then read back what landed.
-- Never point a nested program-test workspace at the root `CARGO_TARGET_DIR`;
-  each is its own workspace with its own `target/`. `cargo metadata` is the
-  discriminator when a link fails with "multiple different versions".
+- **One workspace, one `Cargo.lock`, one `target/`** (2026-09-05). Build and
+  test by package name (`cargo check -p <pkg>`, `cargo build --release -p
+  <pkg>`), never by `cd`-ing into a directory that used to be its own
+  workspace root, and never write a `target/` path relative to a package.
+  A new `[workspace]` table is a claim that some dependency cannot be
+  unified; name it in the commit or do not add one. `cargo metadata` is still
+  the discriminator when a link fails with "multiple different versions".
 - Run `cargo check` on the touched workspace before any SBF build. Heavy
   Linux builds go to hbox through `swarm-build`, never bare `taskset`.
 

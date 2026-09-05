@@ -22,9 +22,9 @@ page](https://github.com/emberian/dragons-clutch/releases). When a release
 stops being a prerelease, `latest` starts working and this line can lose its
 version.
 
-macOS (Apple Silicon and Intel) and Linux x86-64. Or build it from this
-directory with `cargo build --release`; the binary lands at
-`target/release/dclutch`.
+macOS (Apple Silicon and Intel) and Linux x86-64. Or build it from the
+repository root with `cargo build --release -p dclutch-cli`; the binary lands
+at `target/release/dclutch`.
 
 ## What it does
 

@@ -37,16 +37,18 @@ author = ["dep:solana-keypair", "dep:solana-signer"]
 # `CompactIntentV2::signed_preimage()` and lays out no byte of its own.
 dclutch-trading = { path = "../dclutch-trading" }
 
-# NOT `=` PINNED, and this is the one crate in the tree where that is correct.
+# NOT `=` PINNED, and it stays that way.
 #
-# Three INDEPENDENT workspaces resolve this crate -- the protocol root, the
-# released `tools/dclutch-cli`, and the operator's successor bootstrap -- and
-# they do not agree on serde: the root is dragged to 1.0.229 by
-# `solana-program-test`, while the successor pins `=1.0.228`. An `=` requirement
-# here would make the shared author unusable in at least one workspace, which is
-# exactly the wall this crate exists to tear down. The pinning still happens,
-# where pinning actually reproduces a build: in each workspace's committed
-# `Cargo.lock`, including the one `dist` builds the release from.
+# The reason used to be a disagreement: three independent workspaces resolved
+# this crate -- the protocol root, the released `tools/dclutch-cli` and the
+# operator's successor bootstrap -- and did not agree on serde, the root
+# dragged to 1.0.229 by `solana-program-test` while the successor pinned
+# `=1.0.228`. On 2026-09-05 the tree became one workspace and the disagreement
+# had nowhere left to live: `=1.0.228` was raised to `=1.0.229` in all six
+# manifests that carried it. A caret requirement here is still the right shape
+# for a crate three consumers share -- an `=` in a shared author is a pin that
+# propagates -- and the pinning happens where it reproduces a build: the one
+# committed `Cargo.lock`, which is also the one `dist` builds the release from.
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"

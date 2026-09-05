@@ -117,8 +117,15 @@ def tier_fmt(ctx: Context):
     if count:
         note(f"{count} uncommitted .rs file(s): a finding below may be a neighbouring lane's to format")
     result = _run(ctx, ["cargo", "fmt", "--all", "--check"], cwd=REPO, capture=True)
+    # ONE FILE, ONE ROW. A `#[path = "../.."]` link makes rustfmt name the same
+    # source under every package that compiles it: since the 2026-09-05 fold put
+    # the three gauntlet campaigns in the same workspace as the successor they
+    # link, `successor/src/upgrade.rs` arrives here four times under four
+    # spellings. A baseline cannot be stable against that, so the path is
+    # normalised before it is compared -- and a baseline row is written the one
+    # way the file actually lives on disk.
     found = sorted({
-        re.sub(r":\d+:$", "", line[len("Diff in "):]).removeprefix(str(REPO) + "/")
+        os.path.normpath(re.sub(r":\d+:$", "", line[len("Diff in "):])).removeprefix(str(REPO) + "/")
         for line in result.stdout.splitlines() if line.startswith("Diff in ")
     })
     expected = sorted({fields[0] for _, fields in read_tsv(baseline, 1)})
@@ -484,6 +491,15 @@ def tier_sbfcontracts(ctx: Context):
 CLIENT_TREES = ("apps/dclutch-web", "packages/dclutch-sdk")
 
 
+# The cohort-liveness suite, in the tree that owns it. ONE author: the web
+# imports `@dclutch/sdk`, so the SDK's answer about the shipped cohort is the
+# web's answer too, and the web's copy went with the twins (`dcaba4770`). The
+# tier kept asking both trees for it and read "no test files found" — exit 1 —
+# as a dead cohort, which is the `twins` tier's red one shape over: a check
+# whose subject was deleted reports on the checker, not on the protocol.
+LIVENESS_SUITE = "lib/deploymentLiveness.live.test.ts"
+
+
 def tier_web(ctx: Context):
     if not have("npx"):
         raise Prereq("node/npx is not on PATH")
@@ -500,16 +516,30 @@ def tier_web(ctx: Context):
         if _run(ctx, ["npx", "vitest", "run", "--config", "vitest.config.ts",
                       "--exclude", "lib/abiVerification.test.ts", "--exclude", "lib/sbomVerify.test.ts"], cwd=full).returncode:
             failed += 1
-        # The cohort-liveness gate, with its positive control: a cluster that does not answer is NEVER RAN, not red.
+    # The cohort-liveness gate, with its positive control: a cluster that does
+    # not answer is NEVER RAN, not red. Asked once, of the trees that carry the
+    # suite -- and a tree that carries none is said out loud rather than run.
+    carriers = [tree for tree in CLIENT_TREES
+                if (REPO / tree / "node_modules").is_dir() and (REPO / tree / LIVENESS_SUITE).is_file()]
+    for tree in CLIENT_TREES:
+        if tree not in carriers:
+            note(f"{tree}: carries no {LIVENESS_SUITE}; the cohort-liveness question has one author")
+    if ran and not carriers:
+        # Not a skip. The tier's own headline is "a shipped cohort that does not
+        # answer", and with the suite gone from every tree it would pass while
+        # asking nothing.
+        return EXIT_FAIL, f"no client tree carries {LIVENESS_SUITE}; the cohort-liveness gate has no subject"
+    if carriers:
         health = _run(ctx, ["curl", "-fsS", "-m", "10", "-X", "POST", "-H", "content-type: application/json",
                             "-d", '{"jsonrpc":"2.0","id":1,"method":"getHealth"}', "https://api.devnet.solana.com"], capture=True)
         if '"result":"ok"' in (health.stdout or "") or ctx.dry_run:
-            if _run(ctx, ["npx", "vitest", "run", "--config", "vitest.config.ts", "lib/deploymentLiveness.live.test.ts"],
-                    cwd=full, env=_env(DCLUTCH_LIVE_DEVNET="1")).returncode:
-                note(f"{tree}: THE SHIPPED COHORT DID NOT ANSWER")
-                failed += 1
+            for tree in carriers:
+                if _run(ctx, ["npx", "vitest", "run", "--config", "vitest.config.ts", LIVENESS_SUITE],
+                        cwd=REPO / tree, env=_env(DCLUTCH_LIVE_DEVNET="1")).returncode:
+                    note(f"{tree}: THE SHIPPED COHORT DID NOT ANSWER")
+                    failed += 1
         else:
-            note(f"{tree}: devnet did not answer getHealth; the cohort-liveness gate NEVER RAN")
+            note("devnet did not answer getHealth; the cohort-liveness gate NEVER RAN")
     if ran == 0:
         return EXIT_PREREQ, "no client tree had its dependencies installed"
     return (EXIT_FAIL, f"{failed} check(s) failed") if failed else (EXIT_PASS, "")
@@ -550,6 +580,26 @@ def tier_abi(ctx: Context):
 
 # --------------------------------------------------------------------------- journey
 
+def _tool_packages(ctx: Context, root: Path) -> list[tuple[str, str]]:
+    """Every first-party package under `tools/`, as (package name, directory)."""
+    result = _run(ctx, ["cargo", "metadata", "--no-deps", "--offline", "--format-version", "1"],
+                  cwd=root, capture=True)
+    if result.returncode:
+        raise Prereq("cargo metadata could not enumerate the workspace's tools/ packages")
+    found = []
+    for package in json.loads(result.stdout)["packages"]:
+        directory = Path(package["manifest_path"]).parent
+        try:
+            relative = directory.relative_to(root).as_posix()
+        except ValueError:
+            continue
+        if relative.startswith("tools/"):
+            found.append((package["name"], relative))
+    if not found:
+        raise Prereq("the workspace declares no tools/ package; the #[path] tripwire would measure nothing")
+    return sorted(found)
+
+
 def tier_journey(ctx: Context):
     if not have("cargo"):
         raise Prereq("cargo is not on PATH")
@@ -561,14 +611,19 @@ def tier_journey(ctx: Context):
                     env=_env(CARGO_BUILD_JOBS=ctx.jobs)).returncode
         if code:
             note("the journey does not compile or a host test failed; most often the #[path] tripwire: a successor module moved. Fix the journey to match its upstream, never fork the module.")
+        # The tripwire is every `tools/` PACKAGE, named, not every `tools/`
+        # WORKSPACE. Until 2026-09-05 each of these carried its own
+        # `[workspace]` table and this loop found them by that table; folding
+        # the tree into one workspace would have left the loop matching
+        # nothing and passing on an empty set -- a gate that measures an
+        # absence reports the same green as a gate that measures a pass.
+        # `cargo metadata` is the enumerator now, and a `tools/` package with
+        # no row is a package this tier never checked.
         rotted, declined = [], []
-        for candidate in sorted((root / "tools").rglob("Cargo.toml")):
-            if "target" in candidate.parts or candidate == manifest:
-                continue
-            if not re.search(r"^\[workspace\]", candidate.read_text(), re.M):
-                continue
-            relative = str(candidate.relative_to(root))
-            result = _run(ctx, ["cargo", "check", "--manifest-path", relative], cwd=root,
+        for name, relative in _tool_packages(ctx, root):
+            if relative == "tools/gauntlet/journey":
+                continue  # `cargo test --bins` above already compiled it
+            result = _run(ctx, ["cargo", "check", "-p", name, "--all-targets"], cwd=root,
                           env=_env(CARGO_BUILD_JOBS=ctx.jobs), capture=True)
             if result.returncode:
                 print(result.stdout + result.stderr)
@@ -870,7 +925,7 @@ TIERS: tuple[Tier, ...] = (
     Tier("census", "~25s warm, ~50s cold (2026-09-04)", "cargo", "routes, refusal codes, magics and schema identities enumerated from the AST; a code outside its band, a duplicated magic, an identity that is not its label's digest", tier_census),
     Tier("emission", "~2s (2026-09-04)", "python3, rustfmt", "a generated file with no byte-identity guard, or one rustfmt would move out from under a raw-comparing guard; a two-sided wire vector whose reviewed digest moved", tier_emission),
     Tier("budgets", "<1s (2026-09-04)", "python3", "a CU budget that is not measured+tolerance, above the 1,400,000 ceiling, or naming a campaign no register knows", tier_budgets),
-    Tier("fmt", "~10s (2026-09-03)", "cargo, rustfmt", "rustfmt disagreeing with a file outside fmt-baseline.txt, or a baseline line no longer true (root workspace only)", tier_fmt),
+    Tier("fmt", "~10s (2026-09-03)", "cargo, rustfmt", "rustfmt disagreeing with a file outside fmt-baseline.txt, or a baseline line no longer true (every package: one workspace since 2026-09-05)", tier_fmt),
     Tier("locks", "~30s (2026-09-02)", "cargo", "a tracked Cargo.lock that no longer resolves under --locked --offline", tier_locks),
     Tier("seam", "~20s (2026-09-01)", "ast-grep", "a new structural seam finding against tools/seam-audit's triaged baseline", tier_seam),
     Tier("commands", "~15s (2026-09-04)", "python3", "a runbook command whose program is absent, whose flags its own --help does not name, or which omits a required argument", tier_commands),

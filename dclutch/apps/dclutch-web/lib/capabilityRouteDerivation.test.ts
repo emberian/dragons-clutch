@@ -368,9 +368,9 @@ describe('every act with a declared route says who authored its bytes', () => {
  * family's prelude returns a non-error for every request that is not its own
  * before it reads anything. So the route is not enough to decide what a given
  * act is subject to -- five acts declare it, and the Direct root's `Open` set
- * behind `hot_v3::prepare_direct_inline_hot_crosscheck_v3` binds exactly one
- * of them. The family is the missing coordinate, and it is derived the same
- * way the route is: from the builder's own compiled bytes.
+ * behind `hot_v3::direct::prepare_direct_inline_hot_crosscheck_v3` binds
+ * exactly one of them. The family is the missing coordinate, and it is
+ * derived the same way the route is: from the builder's own compiled bytes.
  *
  * WHERE THE DISCRIMINANT IS. `HotExecutionEnvelopeV3::split_instruction` cuts
  * the instruction at `HOT_FAMILY_REQUEST_OFFSET_V3`, and everything past that

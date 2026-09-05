@@ -69,6 +69,13 @@ for (const entry of entries) {
   generated += `  { name: ${ts(role.name)}, signer: ${role.signer}, writable: ${role.writable} },\n`;
 }
 generated += '];\n';
+// The kind column, in the spelling `generate-protocol-constants.mjs` uses and
+// the explorer's coverage survey reads: `RELAY_INSTRUCTION_MAGIC` selects the
+// relay transport route and identifies no record, and a survey with only the
+// declaration to go on would otherwise ask the explorer to render a record
+// under it.
+generated += '\n// Of the magics above, the ones that select an INSTRUCTION rather than identify a record.\n';
+generated += "export const INSTRUCTION_MAGIC_EXPORTS_V1: ReadonlyArray<string> = ['RELAY_INSTRUCTION_MAGIC'];\n";
 
 if (process.argv.includes('--check')) {
   const current = readFileSync(outputUrl, 'utf8');

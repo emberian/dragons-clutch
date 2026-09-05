@@ -167,7 +167,7 @@ campaign passed this control on a sentence in its header.
 | `retirement-replay-handoff-programtest` | program-test | yes | 2 | `tools/gauntlet/retirement-replay-handoff/run-retirement-replay-handoff.sh` | `950b33db1915d0c0` |
 | `source-abort-programtest` | program-test | yes | 7 | `tools/gauntlet/source-abort/run-source-abort.sh` | `eedde83f5554eea7` |
 | `structured-v2-programtest` | program-test | yes | 2 | `tools/gauntlet/structured/run-structured.sh` | `98937647cc92d70f` |
-| `tier1` | local-validator | yes | 37 | `tools/gauntlet/run.sh` | `0739195671e165e4` |
+| `tier1` | local-validator | yes | 37 | `tools/gauntlet/run.sh` | `e0fb1577786cf31f` |
 | `tier4-series-occurrence-programtest` | program-test | yes | 1 | `tools/gauntlet/tier4/run-campaign.sh` | `eccd05c0e5ba3d38` |
 | cohort 13 (devnet) | devnet | yes | 19 | `tools/gauntlet/devnet-witness/corroborate.py` | `c61810ea2a1c32c0` |
 | cohort 13 (devnet) | devnet | yes | 19 | `tools/gauntlet/devnet-witness/corroborate.py` | `95ae567618473e63` |

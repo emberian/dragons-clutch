@@ -1,3 +1,9 @@
+import { execFileSync } from 'node:child_process';
+import { cpSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join as joinPath } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { decodeDirectIntentTicketV1 } from '@dclutch/sdk/directTicket';
 import { encodeCompactIntentSigningMessageV2 } from '@dclutch/sdk/directInlineV3';
 import { inspectDirectMakerNonceV1 } from '@dclutch/sdk/directMakerReplay';
@@ -15,6 +21,7 @@ import {
   tradeCommand,
 } from '../src/commands/trade';
 import { FLAG_OPTIONS, run } from '../src/main';
+import { USAGE } from '../src/usage';
 
 function key(byte: number): string {
   return new PublicKey(new Uint8Array(32).fill(byte)).toBase58();
@@ -277,5 +284,66 @@ describe('public Direct mutation boundary', () => {
       ticket.signature,
       signer.publicKey.toBytes(),
     )).toBe(true);
+  });
+});
+
+describe('the launcher, in a checkout with no built bundle', () => {
+  /**
+   * `--help` answered before anything is built, from the one command list.
+   *
+   * NOT a source assertion. The launcher is copied into a scratch tree where
+   * `dist/` does not exist and `src/` is the real one, and run: what it prints
+   * is compared against the page `run(['--help'])` prints from the same
+   * module. A launcher that answered with a build notice, a stale copy of the
+   * list, or nothing at all fails here.
+   *
+   * WHY. `--help` is what a reader types BEFORE building, and
+   * `docs/guides/two-clients.md` and `docs/guides/trencher.md` publish
+   * eighteen commands that `tools/gate commands` replays as `--help`. In a
+   * fresh checkout every one of them was reported as rejected by its own
+   * program, because the launcher answered with three build commands and no
+   * verb -- the list was there, and nothing a reader could type reached it.
+   */
+  it('prints the client’s own usage page, not a notice standing in for one', () => {
+    const scratch = mkdtempSync(joinPath(tmpdir(), 'dclutch-terminal-launcher-'));
+    try {
+      const cli = fileURLToPath(new URL('..', import.meta.url));
+      cpSync(joinPath(cli, 'bin'), joinPath(scratch, 'bin'), { recursive: true });
+      symlinkSync(joinPath(cli, 'src'), joinPath(scratch, 'src'), 'dir');
+      const launcher = joinPath(scratch, 'bin', 'dclutch-terminal.mjs');
+      const printed = execFileSync(process.execPath, [launcher, '--help'], { encoding: 'utf8' });
+      expect(printed.trim()).toBe(USAGE.trim());
+      // The same page for a subcommand, which is what the built client does:
+      // `run()` answers `--help` before it dispatches.
+      expect(execFileSync(process.execPath, [launcher, 'markets', '--help'], { encoding: 'utf8' }).trim())
+        .toBe(USAGE.trim());
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
+  it('still refuses to RUN a command with no bundle, and says how to build one', () => {
+    // The control the case above needs: a launcher that fell through to the
+    // source for everything would be running an unbuilt client.
+    const scratch = mkdtempSync(joinPath(tmpdir(), 'dclutch-terminal-launcher-'));
+    try {
+      const cli = fileURLToPath(new URL('..', import.meta.url));
+      cpSync(joinPath(cli, 'bin'), joinPath(scratch, 'bin'), { recursive: true });
+      symlinkSync(joinPath(cli, 'src'), joinPath(scratch, 'src'), 'dir');
+      let refused = '';
+      let status = 0;
+      try {
+        execFileSync(process.execPath, [joinPath(scratch, 'bin', 'dclutch-terminal.mjs'), 'markets', 'ls'],
+          { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      } catch (error) {
+        const failure = error as { status?: number; stderr?: string };
+        status = failure.status ?? 0;
+        refused = failure.stderr ?? '';
+      }
+      expect(status).toBe(1);
+      expect(refused).toContain('not built yet');
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
   });
 });

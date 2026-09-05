@@ -1893,15 +1893,19 @@ mod tests {
 
     /// Omitting every shape flag compiles the fixture's own market, band included.
     ///
-    /// The band is the only one of the six that could regress silently: the
-    /// other five have values a caller can read back off the shape, while an
+    /// The band is the only one of the seven that could regress silently: the
+    /// other six have values a caller can read back off the shape, while an
     /// absent band is not visible until a Pyth compile refuses. It regressed,
     /// and cost the cold machine's loopback a whole stage.
+    ///
+    /// The ladder joined the flags in `6a3079454` and is read back the same
+    /// way: a caller that buys no rung founds the market it always founded.
     #[test]
     fn omitting_every_shape_flag_keeps_the_fixtures_own_stated_band() {
         let default = crate::market::LocalMarketShapeV1::default();
-        let shape = market_shape_from_arguments_v1(None, None, None, None, None, None, None, None)
-            .expect("no flags is the fixture's own shape");
+        let shape =
+            market_shape_from_arguments_v1(None, None, None, None, None, None, None, None, None)
+                .expect("no flags is the fixture's own shape");
         let inherited = shape
             .founding_band
             .as_ref()
@@ -1911,12 +1915,17 @@ mod tests {
         assert_eq!(shape.cuts, default.cuts);
         assert_eq!(shape.coefficients, default.coefficients);
         assert_eq!(shape.cut_denominator, default.cut_denominator);
+        assert!(
+            shape.recovery.is_none(),
+            "a caller that states no rung buys no ladder"
+        );
     }
 
-    /// A caller that means something else states something else — all five.
+    /// A caller that means something else states something else — all six.
     #[test]
     fn a_stated_band_replaces_the_fixtures_and_a_partial_one_refuses_by_name() {
         let stated = market_shape_from_arguments_v1(
+            None,
             None,
             None,
             None,

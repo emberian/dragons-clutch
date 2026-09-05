@@ -280,7 +280,7 @@ fi
 # staging market C put the live Helius key into its own log on line one. The
 # build carries no credential on its command line, so this split is the fix.
 cargo build --locked --manifest-path "$BOOT/Cargo.toml" >&2
-BOOT_BIN="$BOOT/target/debug/dclutch-local-successor-bootstrap"
+BOOT_BIN="${CARGO_TARGET_DIR:-$REPO/target}/debug/dclutch-local-successor-bootstrap"
 [ -x "$BOOT_BIN" ] || { echo "the successor bootstrap binary is missing at $BOOT_BIN" >&2; exit 2; }
 
 # The compiler is the semantic owner of the sponsored provider release, four
@@ -321,7 +321,7 @@ esac
 
 # THE JOB DIRECTORY IS THE UNIT, AND A PATH INTO A BUILD SCRATCH IS NOT IN IT.
 #
-# This generator used to resolve the driver as `$BOOT/target/debug/...` from its
+# This generator used to resolve the driver as `<successor>/target/debug/...` from its
 # own location and freeze that absolute path into the script it wrote. When the
 # generator was invoked from a detached worktree under /private/tmp -- which is
 # how every cohort has run it -- the emitted job directory named a scratch it
@@ -333,9 +333,10 @@ esac
 # nothing in the wrapper is absolute, relocatable as one tree.
 mkdir -m 700 "$WORK/bin"
 cargo build --locked --manifest-path "$BOOT/Cargo.toml" >&2
-cp "$BOOT/target/debug/dclutch-local-successor-bootstrap" \
+DRIVER_BUILD="${CARGO_TARGET_DIR:-$REPO/target}/debug/dclutch-local-successor-bootstrap"
+cp "$DRIVER_BUILD" \
     "$WORK/bin/dclutch-local-successor-bootstrap"
-cmp -s "$BOOT/target/debug/dclutch-local-successor-bootstrap" \
+cmp -s "$DRIVER_BUILD" \
     "$WORK/bin/dclutch-local-successor-bootstrap" \
     || { echo "copied driver differs from the build it was taken from" >&2; exit 1; }
 chmod 700 "$WORK/bin/dclutch-local-successor-bootstrap"

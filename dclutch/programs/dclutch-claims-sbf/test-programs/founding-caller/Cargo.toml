@@ -20,9 +20,6 @@ dclutch-claims = { path = "../../../../crates/dclutch-claims" }
 dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
 dclutch-registry = { path = "../../../../crates/dclutch-registry" }
 solana-program = { version = "=3.0.0", default-features = false }
-
-[workspace]
-
 [lints.rust]
 missing_docs = "deny"
 unsafe_code = "forbid"

@@ -20,9 +20,6 @@ dclutch-claims = { path = "../../../../crates/dclutch-claims" }
 dclutch-fractional-atomic-test-caller-sbf = { path = "../fractional-atomic-caller", features = ["no-entrypoint"] }
 dclutch-refusal-registry = { path = "../../../../crates/dclutch-refusal-registry" }
 solana-program = { version = "=3.0.0", default-features = false }
-
-[workspace]
-
 [lints.rust]
 missing_docs = "deny"
 unsafe_code = "forbid"

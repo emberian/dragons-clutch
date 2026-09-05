@@ -7,13 +7,9 @@ rust-version = "1.89"
 description = "A relay that holds bearer-signed Direct intent tickets so a taker can find one: no keys, no custody, no authority"
 publish = false
 
-# Its own workspace, like every other host tool under `tools/`. The protocol
-# workspace is `no_std` kernel and contract crates; this binary needs `std`, an
-# async runtime and an HTTP server, and adding that tree to the root `members`
-# list is an integration decision this crate does not get to make for everyone
-# else.
-[workspace]
-
+# A member of the one workspace, like every other host tool under `tools/`.
+# This binary needs `std`, an async runtime and an HTTP server; that tree
+# resolves beside the `no_std` kernel and contract crates without a conflict.
 [lib]
 name = "dclutch_ticket_board"
 path = "src/lib.rs"
@@ -55,9 +51,9 @@ http-body-util = "=0.1.5"
 tokio = { version = "=1.53.1", features = ["rt-multi-thread", "net", "macros"] }
 
 # NOT `=` PINNED, for the reason `dclutch-direct-ticket` states in its own
-# manifest: three independent workspaces resolve that shared crate and they do
-# not agree on a serde patch version. The pinning happens in this crate's
-# committed `Cargo.lock`, where pinning actually reproduces a build.
+# manifest: an `=` in a crate three consumers share is a pin that propagates.
+# The pinning happens in the one committed `Cargo.lock`, where pinning actually
+# reproduces a build.
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 

@@ -459,7 +459,14 @@ def survey(root: Path, roots: tuple[str, ...], run_probes: bool) -> tuple[list[F
                 "rejected by its own program", command.source, command.line,
                 f"{command.program} --help names none of: {' '.join(missing)}",
             ))
-        omitted = sorted(required_flags(pages[-1]) - set(command.words))
+        # A command that ASKS FOR USAGE cannot be incomplete. `--help` is the
+        # one argument every program answers before its own requirements
+        # apply, so holding `run-ladder.sh --help` to the
+        # `--checked-release-gate` its usage line names bare would report a
+        # defect in the one command a reader types precisely because they do
+        # not yet know what to pass.
+        asks_for_usage = bool({"--help", "-h"} & set(command.words))
+        omitted = [] if asks_for_usage else sorted(required_flags(pages[-1]) - set(command.words))
         if omitted:
             findings.append(Finding(
                 "incomplete as published", command.source, command.line,

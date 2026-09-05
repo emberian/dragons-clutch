@@ -30,6 +30,9 @@ const surveyInstructionMagics = coverage.surveyInstructionMagics as () => Readon
 const surveyStateMachineMagics = coverage.surveyStateMachineMagics as () => ReadonlyArray<
   Readonly<{ machine: string; magic: string }>
 >;
+const surveyDeclaredInstructionMagics = coverage.surveyDeclaredInstructionMagics as () => ReadonlyArray<
+  Readonly<{ module: string; constant: string; magic: string }>
+>;
 
 /**
  * The explorer's done-criterion.
@@ -83,6 +86,26 @@ describe('explorer coverage', () => {
       if (row.state !== 'exempt') continue;
       expect(row.reason, `${row.magic} is exempt with no reason`).toBeTruthy();
       expect((row.reason ?? '').length, `${row.magic}'s exemption reason is too short to be one`).toBeGreaterThan(24);
+    }
+  });
+
+  it('claims an instruction kind only for magics the census enumerates as one', () => {
+    // The control on the kind column, and the reason excluding a constant from
+    // the record survey is not a hole in it. A module says which of its magics
+    // SELECT a route rather than identify a record
+    // (`INSTRUCTION_MAGIC_EXPORTS_V1`), and the record survey then skips those
+    // constants. A module that marked a record magic as an instruction would
+    // otherwise have removed it from both surveys at once — the silence this
+    // gate exists to refuse — so every declared instruction magic is held to
+    // the census's own instruction table, which is the authority on what
+    // selects a route.
+    const declared = surveyDeclaredInstructionMagics();
+    // A survey that found nothing would make the loop below vacuous.
+    expect(declared.length).toBeGreaterThan(0);
+    const census = new Set(surveyInstructionMagics().map((entry) => entry.magic));
+    for (const entry of declared) {
+      expect(census.has(entry.magic), `${entry.module}:${entry.constant} declares ${entry.magic} an instruction magic and the census enumerates no route it selects`)
+        .toBe(true);
     }
   });
 

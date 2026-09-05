@@ -20,9 +20,6 @@ dclutch-market = { path = "../../../dclutch-market" }
 dclutch-refusal-registry = { path = "../../../dclutch-refusal-registry" }
 dclutch-source = { path = "../../../dclutch-source" }
 solana-program = { version = "=3.0.0", default-features = false }
-
-[workspace]
-
 [lints.rust]
 missing_docs = "deny"
 unsafe_code = "forbid"

@@ -834,6 +834,13 @@ fn execute_snapshot(
         product: at(11)?,
         result_domain: at(12)?,
         portfolio: at(13)?,
+        // `None` is what a primary capture has always sent: this journey founds
+        // through `local-private-validator-market-v1` with no `--recovery-rungs`,
+        // so the market buys no ladder and there is no `RecoveryPolicyV2` record
+        // pair to bring. A journey that founds a rung-bearing market would
+        // observe the policy and its staging cursor here, and the three
+        // finalized-record positions above would carry the RUNG's source.
+        recovery_ladder: None,
     })
 }
 

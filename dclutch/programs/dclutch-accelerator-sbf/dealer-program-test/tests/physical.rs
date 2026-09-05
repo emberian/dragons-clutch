@@ -5,18 +5,15 @@
 //! geometry-complete frame all the way through the real caller ELF into the
 //! real accelerator ELF, and pins which side of the CPI now owns the refusal.
 //!
-//! Neither is an acceptance test. `AcceleratorDispositionV2::Accepted` on the
-//! admitted-AOT path requires a complete Dealer scenario chain -- activation
-//! cache, Market, finalized records, Claims aggregate, Custody replay, Realm
-//! and collateral -- staged in `crate::dealer_chain`. What these pin is the
+//! Neither is an acceptance test, and this tree no longer holds one. The
+//! accepted transition was executed in `tests/accepted.rs` over the
+//! lock-bounded checkpoint routes -- the unsplit admitted instruction resolves
+//! 121 account locks against a 64-lock ceiling, so the split, not this frame,
+//! is what a caller could ever send -- and the programs merge (`3bee5f3f1`)
+//! deleted that campaign with the checkpoint chain it drove, along with its
+//! `dealer_chain` and `custody_delivery` drivers. What these two pin is the
 //! depth the lane actually reaches, so a regression toward the two
 //! always-refuses frame bugs cannot pass unnoticed again.
-//!
-//! The accepted transition itself is executed in `tests/accepted.rs`, over the
-//! lock-bounded checkpoint routes rather than this unsplit frame. That is not a
-//! second story: the unsplit admitted instruction resolves 121 account locks
-//! against a 64-lock ceiling, so it is the split, not this frame, that a caller
-//! can ever send.
 
 use std::vec::Vec;
 
@@ -36,6 +33,7 @@ use dclutch_market::execution_strategy::v2::{
 };
 use dclutch_refusal_registry::ACCELERATOR_REFUSAL_BASE;
 use dclutch_trading_sbf::admitted_composition_v3::ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4;
+use dclutch_trading_sbf::dealer::equity_request::DEALER_EQUITY_REQUEST_MAGIC_V3;
 use solana_account::Account;
 use solana_program::{
     hash::hash,
@@ -256,7 +254,15 @@ fn geometry_complete_fixture() -> (ProgramTest, Instruction) {
         })
         .collect::<Vec<_>>();
 
-    let family = [7_u8; 4];
+    // THE FAMILY IS WHAT SELECTS THE ARM. Since the accelerator fold
+    // (`5b4fe2313`) one program id carries General, the Dealer families and the
+    // Series shadow, and `dealer_family_selected` reads the family magic out of
+    // the top-level Trading instruction the Instructions sysvar exposes. A
+    // placeholder family is not a Dealer frame at all: it is General's, whose
+    // authenticator refuses `HeapFrameNotRequested` before any Dealer conjunct
+    // runs. This frame says which family it is, so the arm this file is about
+    // is the arm that receives it.
+    let family = DEALER_EQUITY_REQUEST_MAGIC_V3;
     let envelope = HotExecutionEnvelopeV3::new(
         u32::try_from(family.len()).expect("family width"),
         [3; 32],
@@ -392,13 +398,17 @@ async fn real_elf_rejects_a_truncated_hot_frame_without_mutation() {
 ///
 /// The load-bearing assertion is *which program* refuses. A canonical admitted
 /// frame must be forwarded: the caller must not stop it on its own frame check
-/// (0x108000) or authority check (0x108001), and the code that comes back must
-/// be the accelerator's own `InvalidInvocation` (0xD001), raised at CPI depth
-/// two after `AcceleratorRequestV2::decode` succeeded.
+/// or authority check, and the code that comes back must be the Dealer arm's
+/// own `InvalidInvocation`, raised at CPI depth two after
+/// `AcceleratorRequestV2::decode` succeeded. Every code here is derived from
+/// the registry base or the caller's enum rather than written down.
 ///
 /// It is deliberately NOT a claim about which authentication stage refuses.
-/// The accelerator maps every `TradingSbfError` to that one code, so no
-/// ProgramTest can tell them apart; `tests/frontier.rs` owns stage attribution
+/// `InvalidInvocation` is what the Dealer arm's
+/// `accelerator_invocation_refusal_v4` returns for every `TradingSbfError` it
+/// has no split code for -- `InvalidFrame`, `InvalidRelease`, `InvalidArtifact`
+/// and `InvalidRuntimeView` are the four carved out of it -- so a ProgramTest
+/// cannot tell the remainder apart; `tests/frontier.rs` owns stage attribution
 /// and measures it in-process.
 #[tokio::test]
 async fn real_elf_forwards_a_geometry_complete_frame_into_accelerator_authentication() {

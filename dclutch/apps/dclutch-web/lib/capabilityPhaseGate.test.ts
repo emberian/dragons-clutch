@@ -173,10 +173,10 @@ describe('the phase gate refuses by name and never asserts readiness', () => {
       // `direct.inline` declares `trading/hot_v3::process_hot_execution_v3`
       // together with four other acts, and the census reads NO gate on that
       // route -- the Direct root's `Open` set sits behind
-      // `hot_v3::prepare_direct_inline_hot_crosscheck_v3`, which returns
-      // `Ok(None)` for every request that is not a Direct successor. So the
-      // gate belongs to this act's declared FAMILY, and to none of the other
-      // four; before the family was derived it belonged to nobody and this
+      // `hot_v3::direct::prepare_direct_inline_hot_crosscheck_v3`, which
+      // returns `Ok(None)` for every request that is not a Direct successor.
+      // So the gate belongs to this act's declared FAMILY, and to none of the
+      // other four; before the family was derived it belonged to nobody and this
       // card read READY TO PREFLIGHT with a root state nobody had read.
       'direct.inline',
       'source.ready',

@@ -52,9 +52,6 @@ spl-token-2022-interface = { version = "=3.1.1", default-features = false }
 solana-sdk = "=3.0.0"
 solana-transaction = "=4.2.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-
-[workspace]
-
 [lints.rust]
 missing_docs = "deny"
 unsafe_code = "forbid"

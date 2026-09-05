@@ -272,9 +272,16 @@ mod tests {
     /// become a hole if that file is renamed away.
     #[test]
     fn the_funding_readiness_planner_has_no_observation_clock_consumer_v1() {
-        let root = crate::model::repository_root_v1()
-            .join("crates/dclutch-source-readiness-operator/src");
-        let mut sources = Vec::new();
+        // `ef7e1c868` folded dclutch-source-readiness-operator into
+        // dclutch-operator: the planner is `src/source_readiness.rs` and the
+        // excluded serializer `src/source_readiness/wire.rs`. The merge script
+        // rewrote this file's `use` paths and not this string, and nothing in
+        // the tree compiles this module except the journey campaign, so the
+        // control read an absent directory and panicked rather than measuring.
+        let operator = crate::model::repository_root_v1().join("crates/dclutch-operator/src");
+        let planner = operator.join("source_readiness.rs");
+        let root = operator.join("source_readiness");
+        let mut sources = vec![planner];
         let mut pending = vec![root.clone()];
         while let Some(directory) = pending.pop() {
             for entry in std::fs::read_dir(&directory)
@@ -297,8 +304,8 @@ mod tests {
         assert!(
             sources
                 .iter()
-                .any(|path| path.file_name().is_some_and(|name| name == "lib.rs")),
-            "the readiness planner source was not found under {}",
+                .any(|path| path.file_name().is_some_and(|name| name == "source_readiness.rs")),
+            "the readiness planner source was not found beside {}",
             root.display()
         );
         let carriers = sources

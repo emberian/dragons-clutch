@@ -10,19 +10,15 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 cd "$repo_root"
-# tests/accepted.rs drives the real Trading ELF directly over the lock-bounded
-# checkpoint routes, so Trading is staged here alongside the accelerator and its
-# caller. Custody joins them because the reservation route authenticates the
-# Custody role out of a real activated release set, pinned to that artifact's
-# exact deployment. Without these the accepted campaign has no artifact to be
-# evidence about.
+# Exactly the two ELFs the surviving targets load. Trading, Custody, Claims and
+# Core were built here for tests/accepted.rs, which drove the real Trading ELF
+# over the lock-bounded checkpoint routes; the programs merge (3bee5f3f1)
+# deleted that campaign with the routes it drove, and four SBF links kept being
+# built for a suite that no longer reads them. tests/frontier.rs loads no ELF at
+# all and tests/physical.rs adds these two.
 for manifest in \
   programs/dclutch-accelerator-sbf/Cargo.toml \
-  programs/dclutch-accelerator-sbf/test-programs/dealer-caller/Cargo.toml \
-  programs/dclutch-trading-sbf/Cargo.toml \
-  programs/dclutch-custody-sbf/Cargo.toml \
-  programs/dclutch-claims-sbf/Cargo.toml \
-  programs/dclutch-core-sbf/Cargo.toml
+  programs/dclutch-accelerator-sbf/test-programs/dealer-caller/Cargo.toml
 do
   cargo build-sbf --manifest-path "$manifest" --sbf-out-dir "$sbf_out"
 done

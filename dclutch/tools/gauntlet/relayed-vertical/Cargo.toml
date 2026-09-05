@@ -6,15 +6,8 @@ license = "AGPL-3.0-or-later"
 rust-version = "1.89"
 publish = false
 
-# Like the journey it stands beside, this localhost-only host utility resolves
-# independently from the protocol workspace.
-[workspace]
-
-# The tier-1 producer's modules are compiled into this binary VERBATIM by
-# `#[path]`, exactly as the journey does, and so is the journey's own
-# conservation ledger. Nothing is forked: a change to the founding or to the
-# ledger reaches this campaign by recompilation, and a change that breaks this
-# campaign breaks this build — the intended tripwire.
+# Like the journey it stands beside, this localhost-only host utility is a
+# member of the one workspace.
 [dependencies]
 base64 = "=0.22.1"
 bincode = "=1.3.3"
@@ -37,7 +30,7 @@ dclutch-release-tool = { path = "../../../crates/dclutch-release-tool" }
 dclutch-resolution-core-v3-operator = { path = "../../../crates/dclutch-resolution-core-v3-operator" }
 dclutch-versioned-message-operator = { path = "../../../crates/dclutch-versioned-message-operator" }
 reqwest = { version = "=0.12.28", default-features = false, features = ["blocking", "json", "rustls-tls"] }
-serde = { version = "=1.0.228", features = ["derive"] }
+serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 sha2 = "=0.10.9"
 solana-hash = "=4.6.0"

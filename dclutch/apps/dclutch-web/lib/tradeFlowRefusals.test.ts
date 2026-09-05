@@ -99,9 +99,28 @@ describe('the refusal routing table', () => {
     const prestate = assignRefusalV1(DIRECT_PRESTATE_WALL_V1.detail, 5);
     expect(prestate.step).toBe(1);
     expect(prestate.detail).toBe(DIRECT_PRESTATE_WALL_V1.detail);
-    // The remedy in the wall's own second sentence survives verbatim: a devnet
-    // admission command exists and this page will not pretend to run it.
-    expect(prestate.detail).toContain('this public page does not create or sign one');
+
+    // The fragment the table matched is only PART of the wall, and everything
+    // after it survives the routing -- the sentence saying a devnet admission
+    // command now exists and this client will neither create nor sign one.
+    //
+    // Read off the SDK's wall, never typed. This test typed that sentence
+    // while the web kept its own twin of `directTradeSpine.ts`, and the twin
+    // said "public page" where the SDK's copy says "public client"; when the
+    // twins went and the web began importing `@dclutch/sdk/directTradeSpine`,
+    // the wall this assertion pinned was no longer the wall the flow shows.
+    // A string a client types about another module's words is a copy of it,
+    // and a copy is a second author.
+    const matched = routedRefusalFragmentsV1().find((one) => DIRECT_PRESTATE_WALL_V1.detail.includes(one));
+    expect(matched, 'no fragment routes the prestate wall').toBeDefined();
+    const tail = DIRECT_PRESTATE_WALL_V1.detail.slice(
+      DIRECT_PRESTATE_WALL_V1.detail.indexOf(matched!) + matched!.length,
+    );
+    // A table matching the wall's whole text would leave nothing here and
+    // would break on the wall's next rewording; a router that carried only
+    // what it matched would drop this tail.
+    expect(tail.trim().length, 'the routing fragment covers the whole wall').toBeGreaterThan(0);
+    expect(prestate.detail).toContain(tail);
 
     const packet = directPacketWallV1(1_400)!;
     const routedPacket = assignRefusalV1(packet.detail, 1);

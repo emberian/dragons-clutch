@@ -93,6 +93,7 @@ use dclutch_operator::general_hot_v3::{
     build_general_hot_instruction_v3, canonical_general_lookup_addresses_v3,
     compile_general_hot_v0,
 };
+use dclutch_operator::resolution_core_v3::product_graph_observation_v3::ProductGraphObservationErrorV3;
 use dclutch_operator::versioned::PACKET_DATA_BYTES;
 use dclutch_operator::{Finality, Observation, ObservedAccount};
 use dclutch_product::{
@@ -1498,6 +1499,13 @@ fn an_action_state_at_a_foreign_address_refuses() {
 }
 
 /// A Product staging cursor holding data is not a finalized coordinate.
+///
+/// The accusation is the Product-graph observation's own, not the builder's:
+/// `0c9811bc6` stopped discarding it (`map_err(|_| ...::Product)` became
+/// `map_err(...::ProductGraphObservation)`), so the cause the observation had
+/// already computed now reaches the caller. `InvalidRecord` is still one code
+/// over the eight disjuncts of `finalized_coordinate`; the one this fixture
+/// trips is `!staging.data.is_empty()`.
 #[test]
 fn a_nonvacant_product_staging_cursor_refuses() {
     assert_eq!(
@@ -1507,7 +1515,9 @@ fn a_nonvacant_product_staging_cursor_refuses() {
                 .data
                 .push(0);
         }),
-        GeneralHotOperatorErrorV3::Product
+        GeneralHotOperatorErrorV3::ProductGraphObservation(
+            ProductGraphObservationErrorV3::InvalidRecord
+        )
     );
 }
 

@@ -4,18 +4,9 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
-# This crate is deliberately its own workspace: adding it to the protocol
-# workspace is a separate integration decision.
-[workspace]
-# The test-only caller programs declare their own workspaces (5c663da's
-# precedent for nested program-test harnesses); excluding them lets this
-# harness take one as a path dependency, which is what lets a campaign name
-# the caller's refusal instead of typing its number.
-exclude = [
-    "test-programs/pre-market-funding-caller",
-    "test-programs/resolution-receipt-caller",
-]
-
+# A member of the one workspace since 2026-09-05. The integration decision it
+# deferred cost it a lockfile pinned two `solana-program-test` releases behind
+# the root's, which is the drift the fold deleted.
 [dev-dependencies]
 dclutch-core-sbf = { path = "../../programs/dclutch-core-sbf", features = ["no-entrypoint"] }
 dclutch-resolution-proof-sbf = { path = "../../programs/dclutch-resolution-proof-sbf", features = ["no-entrypoint"] }
@@ -62,21 +53,21 @@ solana-program-pack = "=3.1.0"
 # `dclutch-versioned-message-operator`, so the four converted packet campaigns
 # state the packet maximum themselves and reach the canonical lookup-address
 # derivation by mirroring it rather than by calling it.
-solana-program-test = { version = "=4.2.1", features = ["agave-unstable-api"] }
-solana-rpc-client = { version = "=4.2.1", default-features = false }
-solana-address-lookup-table-interface = { version = "=3.1.0", features = ["bincode", "bytemuck"] }
+solana-program-test = { version = "=4.3.0-beta.2", features = ["agave-unstable-api"] }
+solana-rpc-client = { version = "=4.3.0-beta.2", default-features = false }
+solana-address-lookup-table-interface = { version = "=3.2.0", features = ["bincode", "bytemuck"] }
 solana-commitment-config = "=3.1.1"
-solana-message = "=4.4.1"
-solana-account = "=4.3.2"
+solana-message = "=4.5.0"
+solana-account = "=4.6.0"
 # The 4.x Rent, which is the one `ProgramTestContext::set_sysvar` accepts --
 # `solana-program`'s is the 3.x line and does not implement `SysvarSerialize`.
 # Pinned to the version solana-program-test =4.2.1 already resolves, so this adds
 # no node to the graph; it only names one the tests could not otherwise spell.
-solana-rent = "=4.3.0"
+solana-rent = "=4.4.0"
 solana-sdk = "=3.0.0"
 solana-sdk-ids = "=3.1.0"
 solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
-solana-transaction = "=4.1.6"
+solana-transaction = "=4.2.0"
 spl-token-interface = "=3.0.0"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

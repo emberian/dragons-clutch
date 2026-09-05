@@ -6,12 +6,13 @@ license = "AGPL-3.0-or-later"
 rust-version = "1.89"
 publish = false
 
-# The gauntlet's census is a host analysis tool. It deliberately resolves
-# independently of the protocol workspace: it must be able to read a source tree
-# it does not build, including a `git archive` snapshot of a commit whose
-# manifests differ from the checkout's.
-[workspace]
-
+# The gauntlet's census is a host analysis tool: it READS a source tree it does
+# not build, including a `git archive` snapshot of a commit whose manifests
+# differ from the checkout's. That is a property of its `--root` argument, not
+# of its own resolution, so it resolves in the one workspace with everything
+# else. Its `[profile.release] panic = "abort"` went with the fold: cargo reads
+# profiles only from a workspace root, and hoisting that key to the root would
+# have changed the release profile every SBF link is built under.
 [[bin]]
 name = "dclutch-route-census"
 path = "src/main.rs"
@@ -19,13 +20,10 @@ path = "src/main.rs"
 [dependencies]
 proc-macro2 = { version = "=1.0.107", features = ["span-locations"] }
 quote = "=1.0.47"
-serde = { version = "=1.0.228", features = ["derive"] }
-serde_json = "=1.0.149"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
 sha2 = "=0.10.9"
 syn = { version = "=2.0.119", features = ["full", "parsing", "printing", "extra-traits", "visit"] }
 
 [lints.rust]
 unsafe_code = "forbid"
-
-[profile.release]
-panic = "abort"

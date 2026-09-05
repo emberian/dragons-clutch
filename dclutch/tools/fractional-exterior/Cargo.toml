@@ -6,10 +6,10 @@ license = "AGPL-3.0-or-later"
 rust-version = "1.89"
 publish = false
 
-# Localhost-only host utility. Resolves independently of the protocol workspace,
-# like every other tool under tools/local-validator/.
-[workspace]
-
+# Localhost-only host utility, and the one member still on the Solana 2.1
+# lineage: `solana-sdk = "=2.1.0"` below drags ~90 packages of an obsolete
+# major into the single lock. Bumping it to the 3.x the rest of the tree runs
+# is owed work, not a conflict.
 [dependencies]
 dclutch-operator = { path = "../../crates/dclutch-operator" }
 dclutch-market = { path = "../../crates/dclutch-market" }

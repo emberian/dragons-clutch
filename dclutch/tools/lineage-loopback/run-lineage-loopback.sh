@@ -66,15 +66,18 @@ echo "== building the Registry link, the stager and the caller"
   --manifest-path programs/dclutch-registry-sbf/Cargo.toml \
   --sbf-out-dir "$work/elf") >"$work/build-sbf.log" 2>&1 \
   || { tail -n 60 "$work/build-sbf.log" >&2; exit 1; }
-(cd "$here" && cargo build --release) >"$work/build-stager.log" 2>&1 \
+# One workspace, one target directory: both binaries land under the repository
+# root, so they are built and named by package rather than by directory.
+target="${CARGO_TARGET_DIR:-$workspace/target}"
+(cd "$workspace" && cargo build --release -p dclutch-lineage-loopback) >"$work/build-stager.log" 2>&1 \
   || { tail -n 40 "$work/build-stager.log" >&2; exit 1; }
-(cd "$workspace/tools/local-validator/bootstrap/successor" && cargo build --release) \
+(cd "$workspace" && cargo build --release -p dclutch-local-successor-bootstrap) \
   >"$work/build-caller.log" 2>&1 || { tail -n 40 "$work/build-caller.log" >&2; exit 1; }
 
-caller="$workspace/tools/local-validator/bootstrap/successor/target/release/dclutch-local-successor-bootstrap"
+caller="$target/release/dclutch-local-successor-bootstrap"
 
 echo "== staging two activation caches and the Registry into a genesis"
-"$here/target/release/dclutch-lineage-loopback" \
+"$target/release/dclutch-lineage-loopback" \
   --work "$work" --registry-elf "$work/elf/dclutch_registry_sbf.so" >"$work/genesis.env"
 cat "$work/genesis.env"
 # shellcheck disable=SC1090

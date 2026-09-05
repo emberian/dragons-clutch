@@ -41,8 +41,34 @@ const stateMachineModule = join(sdkRoot, 'lib', 'generated', 'stateMachinesV1.ts
  */
 const CENSUS_MODULE = 'routeCensus.ts';
 
-/** `export const NAME_MAGIC... = 'DCLTXXXX'` — the string form. */
-const STRING_MAGIC = /export const ([A-Z0-9_]*MAGIC[A-Z0-9_]*)\s*=\s*'([A-Z0-9]{8})'/g;
+/**
+ * `export const NAME_MAGIC... = 'DCLTXXXX'` — the string form, either quote.
+ *
+ * Both quotes, because the generators do not agree on one and the survey has
+ * no business caring: `relayTransportV1.ts` writes its magic through
+ * `JSON.stringify` and was invisible here for as long as this pattern
+ * demanded a single quote — which is the gate's own blind spot, not a fact
+ * about the module, and the exact shape of failure this gate exists to catch
+ * (a declared magic going quietly unsurveyed).
+ */
+const STRING_MAGIC = /export const ([A-Z0-9_]*MAGIC[A-Z0-9_]*)\s*=\s*['"]([A-Z0-9]{8})['"]/g;
+
+/**
+ * The KIND column a generated module publishes for the magics it declares.
+ *
+ * A magic identifies a persisted record or selects an instruction, and the
+ * eight bytes do not say which. A module that declares an instruction magic
+ * names it here (`generate-protocol-constants.mjs` and
+ * `generate-relay-transport.mjs` both emit this list), and those constants are
+ * surveyed against the census's instruction table rather than against the
+ * explorer's record renderers. Without it, `DCLTRIX1` — the Registry
+ * instruction magic, which the explorer renders as an instruction and under
+ * which nothing persists a record — was reported as an unrendered record, and
+ * the only two ways to clear it were both wrong: writing a record decoder for
+ * a record that does not exist, or exempting a magic the explorer already
+ * renders.
+ */
+const INSTRUCTION_KINDS = /export const INSTRUCTION_MAGIC_EXPORTS_V1[^=]*=\s*\[([^\]]*)\]/;
 /** `export const NAME_MAGIC... = Uint8Array.from([0x44, ...])` — the byte form. */
 const BYTES_MAGIC = /export const ([A-Z0-9_]*MAGIC[A-Z0-9_]*)\s*=\s*Uint8Array\.from\(\[([^\]]*)\]\)/g;
 
@@ -65,18 +91,29 @@ function generatedEntries() {
 }
 
 /**
- * Every record magic the generated modules declare, as
+ * Every RECORD magic the generated modules declare, as
  * `{ magic, constants: [{ module, constant }] }`. One magic can be declared by
  * more than one module — `DCLTAP02` is exported by two — and that is a fact
  * about the emission, not a duplicate to collapse away.
+ *
+ * A constant the declaring module names in `INSTRUCTION_MAGIC_EXPORTS_V1` is
+ * not a record declaration and is skipped; a magic left with no record
+ * declaration is not a row here at all. It is not dropped from the report —
+ * every instruction magic the protocol has is enumerated by the census and
+ * surveyed by `surveyInstructionMagics` against the routes the explorer
+ * renders.
  */
 export function surveyRecordMagics() {
   const found = new Map();
   for (const [generatedDir, entry] of generatedEntries()) {
     if (entry === CENSUS_MODULE) continue;
     const text = readFileSync(join(generatedDir, entry), 'utf8');
+    const declaredKinds = text.match(INSTRUCTION_KINDS);
+    const instructionConstants = new Set(
+      declaredKinds === null ? [] : [...declaredKinds[1].matchAll(/['"]([A-Z0-9_]+)['"]/g)].map((match) => match[1]),
+    );
     const record = (constant, magic) => {
-      if (magic === null) return;
+      if (magic === null || instructionConstants.has(constant)) return;
       const held = found.get(magic) ?? [];
       held.push({ module: entry, constant });
       found.set(magic, held);
@@ -87,6 +124,36 @@ export function surveyRecordMagics() {
   return [...found.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([magic, constants]) => ({ magic, constants }));
+}
+
+/**
+ * Every INSTRUCTION magic a generated module declares as one, by constant.
+ *
+ * The other side of the kind column, and the reason the exclusion above is not
+ * a hole: a constant excluded from the record survey is named here, so a module
+ * that marked a record magic as an instruction is visible rather than silently
+ * unsurveyed. `explorerCoverage.test.ts` holds every one of these to a census
+ * instruction magic.
+ */
+export function surveyDeclaredInstructionMagics() {
+  const found = [];
+  for (const [generatedDir, entry] of generatedEntries()) {
+    if (entry === CENSUS_MODULE) continue;
+    const text = readFileSync(join(generatedDir, entry), 'utf8');
+    const declaredKinds = text.match(INSTRUCTION_KINDS);
+    if (declaredKinds === null) continue;
+    const names = new Set([...declaredKinds[1].matchAll(/['"]([A-Z0-9_]+)['"]/g)].map((match) => match[1]));
+    if (names.size === 0) throw new Error(`${entry}: INSTRUCTION_MAGIC_EXPORTS_V1 is empty; omit it instead`);
+    const values = new Map();
+    for (const match of text.matchAll(STRING_MAGIC)) values.set(match[1], match[2]);
+    for (const match of text.matchAll(BYTES_MAGIC)) values.set(match[1], asciiFromBytes(match[2]));
+    for (const name of [...names].sort()) {
+      const magic = values.get(name) ?? null;
+      if (magic === null) throw new Error(`${entry}: INSTRUCTION_MAGIC_EXPORTS_V1 names ${name}, which declares no magic`);
+      found.push({ module: entry, constant: name, magic });
+    }
+  }
+  return found;
 }
 
 /**

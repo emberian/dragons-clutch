@@ -42,8 +42,11 @@ cd "$here"
 
 # Debug build on purpose: this is devnet-grade infrastructure and a board is
 # bounded by its network, not by its parser. `--release` if you disagree.
-cargo build --quiet
+# One workspace, one target directory: build by package name from the root.
+repo="$(cd -- "$here/../.." && pwd)"
+target="${CARGO_TARGET_DIR:-$repo/target}"
+(cd "$repo" && cargo build --quiet -p dclutch-ticket-board)
 
-exec ./target/debug/dclutch-ticket-board \
+exec "$target/debug/dclutch-ticket-board" \
   --snapshot "${DCLUTCH_TICKET_BOARD_SNAPSHOT:-$here/ticket-board-snapshot.json}" \
   "$@"

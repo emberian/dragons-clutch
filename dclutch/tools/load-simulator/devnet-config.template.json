@@ -6,7 +6,7 @@
     "rpc_url": "https://api.devnet.solana.com",
     "devnet_genesis": "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG"
   },
-  "bootstrap_bin": "/Users/ember/dev/dclutch/tools/local-validator/bootstrap/successor/target/debug/dclutch-local-successor-bootstrap",
+  "bootstrap_bin": "/Users/ember/dev/dclutch/target/debug/dclutch-local-successor-bootstrap",
   "work_dir": "/private/tmp/dclutch-sim-devnet-01",
   "_routing_table_comment": "The founding's own FROZEN DCLTGMF3 address lookup table. The admission packet does not fit a legacy message and the driver refuses PacketTooLarge without one. NEVER SCAN FOR IT: getProgramAccounts over devnet's AddressLookupTable program answers nothing usable, and the address list holds the founding_market rather than the Core Market, so a scan given the wrong one answers a confident None. campaign-open.json records the create transaction under the label 'create DCLTGMF3 frozen routing address lookup table'; getTransaction on that signature names the table at account index 0 of its own instruction. simlife_drivers.frozen_routing_table_for does exactly that and then authenticates the account (owned by the ALT program, authority None, routing this founding's market). Per-admission `routing_table` overrides this.",
   "routing_table": "<founding frozen DCLTGMF3 lookup table>",

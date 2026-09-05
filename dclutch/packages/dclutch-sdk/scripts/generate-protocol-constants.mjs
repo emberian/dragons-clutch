@@ -4,12 +4,23 @@
  * constant that owns each one.
  *
  * One table, one scrape, one module. A row names the TypeScript export, the
- * Rust source file and the Rust constant; the generator reads the constant's
- * literal out of that file (`*b"..."`, `b"..."` or `"..."`, any visibility)
- * and refuses when the constant is missing, when a magic is not eight
- * uppercase alphanumerics, or when two rows disagree about one value. Seeds
- * are emitted as the bytes a PDA derivation takes; kinds and formats as the
- * text a JSON envelope carries.
+ * Rust source file, the Rust constant and its KIND; the generator reads the
+ * constant's literal out of that file (`*b"..."`, `b"..."` or `"..."`, any
+ * visibility) and refuses when the constant is missing, when a magic is not
+ * eight uppercase alphanumerics, or when two rows disagree about one value.
+ * Seeds are emitted as the bytes a PDA derivation takes; kinds and formats as
+ * the text a JSON envelope carries.
+ *
+ * WHY `record` AND `instruction` ARE TWO KINDS AND NOT ONE `magic`. An eight
+ * byte magic identifies a persisted RECORD or selects an INSTRUCTION, and the
+ * value alone does not say which: `DCLTRIX1` is the Registry's instruction
+ * magic and nothing in this tree persists a record under it. A consumer that
+ * cannot tell them apart classifies by the only thing it has, which is the
+ * declaration -- and that is how the explorer's coverage survey came to
+ * report `DCLTRIX1` as a record the explorer refuses to render, while the
+ * explorer was rendering it as the Registry instruction it is. The kind is
+ * emitted, not inferred from the export's name, so a survey reads it instead
+ * of guessing.
  *
  * A fact an existing generated module already emits is NOT repeated here --
  * one author per fact -- so `PRODUCT_RECORD_MAGIC_V2`,
@@ -26,22 +37,29 @@ import { fileURLToPath } from 'node:url';
 const root = new URL('../../../', import.meta.url);
 const outputUrl = new URL('../lib/generated/protocolConstantsV1.ts', import.meta.url);
 
-/** `[export name, Rust source (repo-relative), Rust constant, form]`. */
+/**
+ * `[export name, Rust source (repo-relative), Rust constant, kind]`.
+ *
+ * `kind` is one of `record`, `instruction`, `seed` or `text`, and rows are
+ * grouped by it: the emitted module carries one section comment per kind, in
+ * this order.
+ */
 const ROWS = [
-  // --- record and instruction magics ---------------------------------------
-  ['ACTIVATION_CACHE_MAGIC_V1', 'crates/dclutch-registry/src/activation.rs', 'ACTIVATED_EXECUTION_RELEASE_SET_MAGIC_V1', 'magic'],
-  ['ARTIFACT_RELEASE_MAGIC_V1', 'crates/dclutch-registry/src/artifact.rs', 'ARTIFACT_RELEASE_MAGIC_V1', 'magic'],
-  ['CAPABILITY_SEAL_MAGIC_V1', 'crates/dclutch-vm/src/capability_seal/mod.rs', 'CAPABILITY_SEAL_MAGIC_V1', 'magic'],
-  ['CHECKED_INFRASTRUCTURE_MAGIC_V1', 'crates/dclutch-release-tool/src/infrastructure.rs', 'CHECKED_INFRASTRUCTURE_MAGIC_V1', 'magic'],
-  ['CHECKED_MULTIPROGRAM_MAGIC_V1', 'crates/dclutch-release-tool/src/multiprogram.rs', 'CHECKED_MULTIPROGRAM_MAGIC_V1', 'magic'],
-  ['CHECKED_RELEASE_MAGIC_V1', 'crates/dclutch-release-tool/src/lib.rs', 'CHECKED_RELEASE_MAGIC_V1', 'magic'],
-  ['EXECUTION_RELEASE_SET_MAGIC_V1', 'crates/dclutch-registry/src/release_set/mod.rs', 'EXECUTION_RELEASE_SET_MAGIC_V1', 'magic'],
-  ['PRODUCT_RUNTIME_DOMAIN_MAGIC_V2', 'crates/dclutch-product/src/generated.rs', 'DOMAIN_MAGIC', 'magic'],
-  ['PRODUCT_RUNTIME_PORTFOLIO_MAGIC_V2', 'crates/dclutch-product/src/generated.rs', 'PORTFOLIO_MAGIC', 'magic'],
-  ['PYTH_SPONSORED_PUSH_RELEASE_MAGIC_V1', 'crates/dclutch-source/src/pyth/sponsored_push.rs', 'PYTH_SPONSORED_PUSH_RELEASE_V1_MAGIC', 'magic'],
-  ['REGISTRY_INSTRUCTION_MAGIC_V1', 'crates/dclutch-registry/src/svm/mod.rs', 'REGISTRY_INSTRUCTION_MAGIC_V1', 'magic'],
-  ['RELEASE_LINEAGE_MAGIC_V1', 'crates/dclutch-registry/src/lineage.rs', 'RELEASE_LINEAGE_MAGIC_V1', 'magic'],
-  ['TOKEN_BEHAVIOR_SELECTION_MAGIC_V2', 'crates/dclutch-custody/src/token_svm/behavior_binding_v2.rs', 'TOKEN_BEHAVIOR_SELECTION_MAGIC_V2', 'magic'],
+  // --- record magics -------------------------------------------------------
+  ['ACTIVATION_CACHE_MAGIC_V1', 'crates/dclutch-registry/src/activation.rs', 'ACTIVATED_EXECUTION_RELEASE_SET_MAGIC_V1', 'record'],
+  ['ARTIFACT_RELEASE_MAGIC_V1', 'crates/dclutch-registry/src/artifact.rs', 'ARTIFACT_RELEASE_MAGIC_V1', 'record'],
+  ['CAPABILITY_SEAL_MAGIC_V1', 'crates/dclutch-vm/src/capability_seal/mod.rs', 'CAPABILITY_SEAL_MAGIC_V1', 'record'],
+  ['CHECKED_INFRASTRUCTURE_MAGIC_V1', 'crates/dclutch-release-tool/src/infrastructure.rs', 'CHECKED_INFRASTRUCTURE_MAGIC_V1', 'record'],
+  ['CHECKED_MULTIPROGRAM_MAGIC_V1', 'crates/dclutch-release-tool/src/multiprogram.rs', 'CHECKED_MULTIPROGRAM_MAGIC_V1', 'record'],
+  ['CHECKED_RELEASE_MAGIC_V1', 'crates/dclutch-release-tool/src/lib.rs', 'CHECKED_RELEASE_MAGIC_V1', 'record'],
+  ['EXECUTION_RELEASE_SET_MAGIC_V1', 'crates/dclutch-registry/src/release_set/mod.rs', 'EXECUTION_RELEASE_SET_MAGIC_V1', 'record'],
+  ['PRODUCT_RUNTIME_DOMAIN_MAGIC_V2', 'crates/dclutch-product/src/generated.rs', 'DOMAIN_MAGIC', 'record'],
+  ['PRODUCT_RUNTIME_PORTFOLIO_MAGIC_V2', 'crates/dclutch-product/src/generated.rs', 'PORTFOLIO_MAGIC', 'record'],
+  ['PYTH_SPONSORED_PUSH_RELEASE_MAGIC_V1', 'crates/dclutch-source/src/pyth/sponsored_push.rs', 'PYTH_SPONSORED_PUSH_RELEASE_V1_MAGIC', 'record'],
+  ['RELEASE_LINEAGE_MAGIC_V1', 'crates/dclutch-registry/src/lineage.rs', 'RELEASE_LINEAGE_MAGIC_V1', 'record'],
+  ['TOKEN_BEHAVIOR_SELECTION_MAGIC_V2', 'crates/dclutch-custody/src/token_svm/behavior_binding_v2.rs', 'TOKEN_BEHAVIOR_SELECTION_MAGIC_V2', 'record'],
+  // --- instruction magics: these SELECT a route, they identify no record ---
+  ['REGISTRY_INSTRUCTION_MAGIC_V1', 'crates/dclutch-registry/src/svm/mod.rs', 'REGISTRY_INSTRUCTION_MAGIC_V1', 'instruction'],
   // --- PDA seed domains, as the bytes a derivation takes -------------------
   ['CAPABILITY_SEAL_PDA_DOMAIN_V1', 'crates/dclutch-vm/src/capability_seal/mod.rs', 'CAPABILITY_SEAL_PDA_DOMAIN_V1', 'seed'],
   ['DIRECT_MAKER_REPLAY_PDA_DOMAIN_V1', 'crates/dclutch-trading/src/successor.rs', 'DIRECT_MAKER_REPLAY_PDA_DOMAIN_V1', 'seed'],
@@ -74,24 +92,51 @@ function rustLiteral(path, name) {
 /** A single-quoted TypeScript string, the spelling every other generated module uses. */
 const ts = (value) => `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
 
+/** The section comment each kind opens with, and the order the kinds are emitted in. */
+const SECTIONS = new Map([
+  ['record', 'Record magics: each identifies a persisted record.'],
+  ['instruction', 'Instruction magics: each SELECTS a route and identifies no record.'],
+  ['seed', 'PDA seed domains, as the bytes a derivation takes.'],
+  ['text', 'Envelope kinds and formats, as the text a JSON document carries.'],
+]);
+
 const seen = new Map();
+const instructionMagics = [];
 let generated = '// @generated by scripts/generate-protocol-constants.mjs from the Rust constants its table names; do not edit.\n';
-generated += '// Regenerate with: npm run abi:protocol-constants\n\n';
+generated += '// Regenerate with: npm run abi:protocol-constants\n';
 let section = null;
-for (const [name, path, rust, form] of ROWS) {
+for (const [name, path, rust, kind] of ROWS) {
+  if (!SECTIONS.has(kind)) throw new Error(`${name} declares kind ${ts(kind)}, which is not one of ${[...SECTIONS.keys()].join(', ')}`);
   const value = rustLiteral(path, rust);
-  if (form === 'magic' && !/^[A-Z0-9]{8}$/.test(value)) throw new Error(`${rust} in ${path} is ${ts(value)}, not an eight-character magic`);
+  const magic = kind === 'record' || kind === 'instruction';
+  if (magic && !/^[A-Z0-9]{8}$/.test(value)) throw new Error(`${rust} in ${path} is ${ts(value)}, not an eight-character magic`);
   if (seen.has(name)) throw new Error(`${name} is emitted twice`);
   seen.set(name, value);
-  if (section !== form) {
-    section = form;
-    generated += form === 'magic' ? '// Record and instruction magics.\n' : form === 'seed' ? '\n// PDA seed domains, as the bytes a derivation takes.\n' : '\n// Envelope kinds and formats, as the text a JSON document carries.\n';
+  if (section !== kind) {
+    // Rows are grouped by kind, and a kind that opens twice would emit its
+    // section comment twice -- which is the table having lost its grouping,
+    // not a formatting slip: a consumer reading kinds by section would then
+    // read some of them under the wrong heading.
+    if (SECTIONS.get(kind) === null) throw new Error(`the ${kind} rows are not contiguous; group the table by kind`);
+    section = kind;
+    generated += `\n// ${SECTIONS.get(kind)}\n`;
+    SECTIONS.set(kind, null);
   }
+  if (kind === 'instruction') instructionMagics.push(name);
   const provenance = `${path}::${rust}`;
-  generated += form === 'seed'
+  generated += kind === 'seed'
     ? `export const ${name} = new TextEncoder().encode(${ts(value)}); // ${provenance}\n`
     : `export const ${name} = ${ts(value)} as const; // ${provenance}\n`;
 }
+
+// The kind column, in the one form a consumer that does not load TypeScript
+// can read: the export names above whose value SELECTS a route. The explorer's
+// coverage survey joins declared magics against what the explorer renders, and
+// without this it has only the declaration to classify by -- which is how
+// `DCLTRIX1`, rendered by the explorer as the Registry instruction it is, was
+// reported as an unrendered record.
+generated += '\n// Of the magics above, the ones that select an INSTRUCTION rather than identify a record.\n';
+generated += `export const INSTRUCTION_MAGIC_EXPORTS_V1: ReadonlyArray<string> = ${JSON.stringify(instructionMagics).replace(/","/g, "', '").replace(/^\["/, "['").replace(/"\]$/, "']")};\n`;
 
 if (process.argv.includes('--check')) {
   if (readFileSync(outputUrl, 'utf8') !== generated) {

@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """Check every tracked Cargo workspace from one exact archived revision.
 
-The root workspace is not an inventory of this repository: program-test,
-fixture, generator, and operator tools deliberately carry independent
-``[workspace]`` tables.  This release gate discovers those roots from the
-archived source itself, gives each one a fresh target directory, and runs the
-same locked/offline check over all targets.  It also proves that no Cargo
-invocation added, removed, or changed any lockfile in the archive.
+Since 2026-09-05 that is one workspace and one lockfile: the 54 nested
+``[workspace]`` tables under ``programs/``, ``crates/``, ``tools/`` and
+``apps/`` were folded into the root.  The tool still DISCOVERS its roots from
+the archived source rather than assuming that, so a workspace re-introduced
+without this gate hearing about it is checked too, and so a tree that
+discovers none refuses rather than reporting a vacuous pass.
+
+What it adds over ``cargo check --workspace`` is the archive: a fresh target
+directory, a locked/offline check over all targets at one exact revision, and
+a proof that no Cargo invocation added, removed, or changed any lockfile in
+the archive.
 
 This is local evidence only.  It does not sign, submit, publish, or contact a
 cluster.

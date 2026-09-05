@@ -227,7 +227,7 @@ export type CapabilityActionV1 = Readonly<{
    * the question has to be decided per act rather than defaulted. It is
    * decided the same way too — by COMPILING the act's builder and reading the
    * family request the envelope carries, in
-   * `apps/dclutch-web/lib/capabilityFamilyDerivation.test.ts`, so nothing here
+   * `apps/dclutch-web/lib/capabilityRouteDerivation.test.ts`, so nothing here
    * is a name somebody typed.
    *
    * WHY IT EXISTS. `evaluateCapabilityV1` may answer a gate that lies behind a
@@ -847,13 +847,21 @@ export function capabilityActMachineGatesV1(
  * The census names the function that declines (`selected_by`) and nothing
  * more, because the function's own family is not a fact the AST reading
  * produces. It is a fact about two lines of Rust, and it is PINNED to those
- * two lines rather than asserted: `capabilityFamilyDerivation.test.ts` reads
- * `programs/dclutch-trading-sbf/src/hot_v3.rs`, finds each classifier below,
- * and fails unless the classifier's own decline compares `discriminant` and
- * unless `discriminant` is defined in the crate that owns the family's wire.
- * A classifier renamed, moved, or repointed at another family's discriminant
- * is red; a THIRD selected gate the census starts publishing is red too,
- * because every `selectedBy` must resolve here.
+ * two lines rather than asserted: `capabilitySelectedGate.test.ts` resolves
+ * each `classifier` below to the file its module path names under
+ * `programs/dclutch-trading-sbf/src/`, and fails unless the classifier's own
+ * decline compares `discriminant` and unless `discriminant` is defined in the
+ * crate that owns the family's wire. A classifier renamed, moved, or
+ * repointed at another family's discriminant is red; a THIRD selected gate
+ * the census starts publishing is red too, because every `selectedBy` must
+ * resolve here.
+ *
+ * THE NAME IS THE CENSUS'S, MODULE PATH AND ALL. `selected_by` is written as
+ * the enumerator walks the AST, so splitting `hot_v3.rs` into `hot_v3/`
+ * submodules (the trading split) moved both names by one segment. Typing the
+ * bare function name here binds nothing, and an unbound classifier is not an
+ * error anywhere in the model -- it is a gate answered for nobody, which is
+ * exactly how `direct.inline` silently went back to reporting no gate at all.
  *
  * Direct declines on the descriptor's successor kind and Series on the
  * decoded action, and the difference does not matter to a consumer: both are
@@ -872,13 +880,13 @@ export type HotFamilyClassifierV1 = Readonly<{
 
 export const HOT_FAMILY_CLASSIFIERS_V1: ReadonlyArray<HotFamilyClassifierV1> = Object.freeze([
   Object.freeze({
-    classifier: 'hot_v3::prepare_direct_inline_hot_crosscheck_v3',
+    classifier: 'hot_v3::direct::prepare_direct_inline_hot_crosscheck_v3',
     family: 'Direct' as const,
     discriminant: 'DIRECT_SUCCESSOR_KIND_ID_V3',
     crate: 'crates/dclutch-trading',
   }),
   Object.freeze({
-    classifier: 'hot_v3::try_authenticate_series_expiry_premarket_v1',
+    classifier: 'hot_v3::series_expiry::try_authenticate_series_expiry_premarket_v1',
     family: 'Series' as const,
     discriminant: 'SeriesActionV3::Expire',
     crate: 'crates/dclutch-trading',

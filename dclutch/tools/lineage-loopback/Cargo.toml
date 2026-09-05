@@ -6,10 +6,8 @@ license = "AGPL-3.0-or-later"
 rust-version = "1.89"
 publish = false
 
-# Localhost-only host utility. Resolves independently of the protocol workspace,
-# like every other tool under tools/.
-[workspace]
-
+# Localhost-only host utility, a member of the one workspace like every other
+# tool under tools/.
 [dependencies]
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
 dclutch-registry = { path = "../../crates/dclutch-registry", features = ["svm"] }

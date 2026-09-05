@@ -39,3 +39,6 @@ export const COMMIT_DEADLINE_FAILURE_FRAME_V1: ReadonlyArray<RelayFrameSlotV1> =
   { name: "RentSysvar", signer: false, writable: false },
   { name: "SystemProgram", signer: false, writable: false },
 ];
+
+// Of the magics above, the ones that select an INSTRUCTION rather than identify a record.
+export const INSTRUCTION_MAGIC_EXPORTS_V1: ReadonlyArray<string> = ['RELAY_INSTRUCTION_MAGIC'];

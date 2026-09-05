@@ -48,6 +48,11 @@ usage: tools/gauntlet/ladder/run-ladder.sh --checked-release-gate PATH [options]
   --census              fold this run's evidence into the shared census ledger
   --gauntlet-work PATH  the shared gauntlet root whose inventory and ledger the
                         census fold reads (default: /private/tmp/dclutch-gauntlet)
+  -h, --help            this page, and nothing else runs. Named here because a
+                        help page that does not admit its own help flag is a
+                        page a reader cannot verify they typed correctly, and
+                        because `docs/operators/found-a-market.md` publishes
+                        exactly this command.
 USAGE
 }
 

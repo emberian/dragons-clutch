@@ -1016,12 +1016,20 @@ fn series_fixture(fault: SeriesFault) -> SeriesFixture {
         base.market
     );
 
+    // ONE AUTHOR FOR THE ROOT'S CONFIG IDENTITY (`2cf96117a`). A root's
+    // `selection().config()` is the Registry RECORD DIGEST of its config
+    // record, and for Series that config record IS this Template record. The
+    // domain-separated `template_id` is a different value with a different job
+    // -- the family request's `template()`, the occurrence proof and the Ticket
+    // derivation, all of which still carry it -- and it names a coordinate at
+    // which no Registry record can exist, so a root that carried it could never
+    // clear the family-neutral Hot prelude's `borrow_record_against`.
     let selection = CapabilityExecutionSelectionV1::from_bytes(
         0,
         base.manifest.digest,
         [0x97; 32],
         [0x98; 32],
-        template_id.to_bytes(),
+        hash(&template_bytes).to_bytes(),
     )
     .expect("root selection");
     let header = CapabilityRootHeaderV1::new(
@@ -2423,8 +2431,8 @@ fn series_expiry_fixture(
     );
     assert_eq!(
         header.selection().config().to_bytes(),
-        admitted.template_id().to_bytes(),
-        "root/template selector"
+        fixture.template.digest,
+        "root/template selector is the Template RECORD DIGEST (2cf96117a)"
     );
     let terminal_series = SeriesStateV3::decode(
         fixture

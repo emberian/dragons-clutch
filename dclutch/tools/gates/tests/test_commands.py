@@ -72,6 +72,25 @@ class CommandsTests(unittest.TestCase):
         code, _ = self.survey("--check")
         self.assertEqual(code, 2)
 
+    def test_a_command_that_only_asks_for_usage_is_not_incomplete(self):
+        """`--help` is answerable before a program's own requirements apply.
+
+        `needy.py` requires `--must`. A runbook publishing `needy.py --help` is
+        publishing the one command a reader types precisely because they do not
+        yet know what to pass, and holding it to `--must` reports a defect in
+        the escape hatch. The second half is the control: the same program
+        without `--help` is still incomplete, so this exemption cannot be the
+        check quietly going away.
+        """
+        self.write("docs/guides/asking.md", "# asking\n\n```sh\npython3 tools/needy.py --help\n```\n")
+        code, report = self.survey("--check")
+        self.assertEqual(code, 0, report)
+        self.assertNotIn("incomplete as published", report)
+        self.write("docs/guides/asking.md", "# asking\n\n```sh\npython3 tools/needy.py --maybe no\n```\n")
+        code, report = self.survey("--check")
+        self.assertEqual(code, 1)
+        self.assertIn("incomplete as published", report)
+
     def test_descends_into_a_subcommand_page_without_swallowing_an_unknown_flag(self):
         self.write("tools/nested.sh", NESTED, executable=True)
         self.write("docs/guides/nested.md", "# nested\n\n```sh\ntools/nested.sh inner --deep 3\n```\n")

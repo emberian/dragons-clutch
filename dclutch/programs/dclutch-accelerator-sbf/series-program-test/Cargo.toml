@@ -4,9 +4,6 @@ version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 publish = false
-
-[workspace]
-
 [dependencies]
 dclutch-core-contract = { path = "../../../crates/dclutch-core-contract" }
 dclutch-series-shadow-bundle-generator = { path = "../generator" }
