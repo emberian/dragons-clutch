@@ -5055,3 +5055,11 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   survive list (SeriesEscrowV3, DealerScenarioCollateral — recommendations with controls). Touched outside formal/: 11
   guard scripts, one codec file, two package.json + lean-emit.mjs, 19 generated files (provenance line only), the seam
   baseline, COVERAGE.md.
+- SIMPLIFY-DRIVERS closed (branch `simplify/drivers` at `364ed9546`, four commits; SIMPLIFY_DRIVERS.md): **cohort runbooks
+  3 dirs → 1** (the frozen tables kept as fixtures, `--prove-frozen` byte-identical; `shape` and `args` columns — the 134
+  flags as `{field}` references; the four hand-script shapes are the generator's; **33 hand scripts → 0, 32 generated for
+  cohort-15 with 0 absolute paths and 0 credentials**); `tools/release` 32,121 → 14,002 lines (the lifecycle runner that
+  cannot found deleted with lifecycle-chaos, private_validator_upgrade, devnet-flight — 18,119 lines); devnet-reconcile
+  halved; successor 95 → 89 commands; one cut reverted (the load simulator's keeper depended on it — it would have
+  compiled green and stranded a keeper). Not started: market.rs as a caller of the operator (needs OPERATORS' surface).
+  Seams named for GATES (five suite rows name deleted files) and DOCS (run.py still taught).
