@@ -5082,3 +5082,13 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   and omission index corrected for every rehearsal-found stale claim in this domain; genref's fixpoint holds on the branch
   as at base. **Every GOAL.md line appended on main since the branch's base (330bbfaba) is convergence work: it goes into
   the ledger, not the index.**
+- SIMPLIFY-CLIENTS closed (branch `simplify/clients` at `a2a883c61`, eight commits; SIMPLIFY_CLIENTS.md): **web 547 files /
+  107,883 lines → 348 / 61,750**; SDK 65,860 → 64,931; **twins 202 shared paths → 3 deliberate gates** — `tools/twins`,
+  `sync-from-web.mjs`, `twinIdentity` and `vendoredPairIdentity` deleted (nothing is twinned); 157 importers rewritten to
+  `@dclutch/sdk/*`; generators 74 → 47, verify gates 53 → 42 each module checked once by its owner; a table-driven
+  `generate-protocol-constants.mjs` replaces 23 hand-written magics/domains (web census 26 → 0 magics); the `/local`
+  checkpoint surface, the retired Direct trio, the Registered Direct explorer arms deleted by reading; the CLI's third
+  transport folded onto the SDK's one. **A ruling reversed and defended: the SDK's read-only public RPC contract (three
+  undocumented 08-28 commits) — the measured cause of an 826-line rpc.ts fork.** Owed to others: an emitter with no
+  consumer (FORMAL), two magics with two declarers, 433 literal offsets in 20 SDK files that want emitters, four magics with
+  no author but the client, the wrapper's clients.yml may name deleted script paths.
