@@ -49,8 +49,12 @@ BASELINE_SCHEMA = "dclutch-sbf-frame-baseline-v1"
 # ratcheted this gate since `8c050751`. The count is pinned rather than
 # discovered on purpose (a link silently dropping out of the measurement is the
 # failure this guard exists to catch), so it moves by hand, with a reason, in
-# BOTH halves.
-EXPECTED_LINK_COUNT = 12
+# BOTH halves. Ten since 2026-09-04, when `dclutch-direct-aot-sbf` and
+# `dclutch-product-runtime-v2-sbf` -- both `false` in SHIPPED_LINKS, in no
+# cohort, their bands retired -- were deleted; eight from the same day, when
+# `dclutch-general-accelerator-sbf`, `dclutch-dealer-accelerator-sbf` and
+# `dclutch-series-shadow-sbf` became the one `dclutch-accelerator-sbf`.
+EXPECTED_LINK_COUNT = 8
 SBPF_V0_FRAME_BYTES = 4096
 # A manifest names the commit whose sources it measured. It is metadata, not
 # frame content: `check` compares the function map with this field REMOVED, so

@@ -68,7 +68,6 @@ use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},
     program::{get_return_data, invoke_signed},
-    program_error::ProgramError,
     pubkey::Pubkey,
 };
 
@@ -152,66 +151,17 @@ pub enum FractionalCompactionTestCallerError {
     DeliberateLateFailure = 0x10_D004,
 }
 
-impl FractionalCompactionTestCallerError {
-    /// Every refusal this caller can raise, in discriminant order.
-    pub const ALL: [Self; 5] = [
-        Self::Instruction,
-        Self::AccountFrame,
-        Self::Root,
-        Self::ClaimsCpi,
-        Self::DeliberateLateFailure,
-    ];
-
-    /// This refusal's position in [`FractionalCompactionTestCallerError::ALL`].
-    ///
-    /// Exhaustive on purpose: a sixth variant is a COMPILE ERROR here rather
-    /// than a discriminant no assertion ever looks at.
-    const fn ordinal(self) -> usize {
-        match self {
-            Self::Instruction => 0,
-            Self::AccountFrame => 1,
-            Self::Root => 2,
-            Self::ClaimsCpi => 3,
-            Self::DeliberateLateFailure => 4,
-        }
-    }
-}
-
-// The registered band, checked element by element against `ALL` for the reason
-// the production tables are: a hand-named ceiling says nothing about the
-// variants after it and goes stale silently every time the family grows.
-const _: () = {
-    const SUB_BAND: u32 = dclutch_refusal_registry::TEST_CLAIMS_FRACTIONAL_COMPACTION_CALLER_BASE;
-    assert!(
-        FractionalCompactionTestCallerError::ALL[0] as u32 == SUB_BAND,
-        "FractionalCompactionTestCallerError must start at its registered band"
-    );
-    let mut index: u32 = 0;
-    let mut rest = FractionalCompactionTestCallerError::ALL.as_slice();
-    while let [variant, tail @ ..] = rest {
-        let variant = *variant;
-        assert!(
-            variant.ordinal() == index as usize,
-            "FractionalCompactionTestCallerError::ALL repeats a variant, skips one, or is out of order"
-        );
-        assert!(
-            variant as u32 == SUB_BAND + index,
-            "FractionalCompactionTestCallerError discriminants are not the contiguous run ALL claims"
-        );
-        assert!(
-            (variant as u32) < SUB_BAND + dclutch_refusal_registry::BAND_SPAN,
-            "FractionalCompactionTestCallerError must not run past its registered band"
-        );
-        index += 1;
-        rest = tail;
-    }
-};
-
-impl From<FractionalCompactionTestCallerError> for ProgramError {
-    fn from(value: FractionalCompactionTestCallerError) -> Self {
-        Self::Custom(value as u32)
-    }
-}
+dclutch_refusal_registry::pin_refusal_band!(
+    FractionalCompactionTestCallerError,
+    dclutch_refusal_registry::TEST_CLAIMS_FRACTIONAL_COMPACTION_CALLER_BASE,
+    [
+        Instruction,
+        AccountFrame,
+        Root,
+        ClaimsCpi,
+        DeliberateLateFailure
+    ]
+);
 
 #[cfg(not(feature = "no-entrypoint"))]
 solana_program::entrypoint!(process_instruction);

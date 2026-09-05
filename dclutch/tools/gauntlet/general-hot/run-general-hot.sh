@@ -89,7 +89,7 @@ trading:dclutch_trading_sbf
 core:dclutch_core_sbf
 claims:dclutch_claims_sbf
 custody:dclutch_custody_sbf
-general-accelerator:dclutch_general_accelerator_sbf"
+accelerator:dclutch_accelerator_sbf"
 
 say "elves at $REVISION"
 diagnostics=0

@@ -21,7 +21,7 @@ use solana_sdk_ids::{system_program, sysvar};
 
 use crate::{
     RecordKind, ResolutionError, authenticate_clock, authenticate_finalized_record,
-    authenticate_rent, slot_pinned_deployment_observation,
+    authenticate_rent, cached_deployment_observation,
 };
 
 /// Exact expiry-close account count.
@@ -410,14 +410,14 @@ fn authenticate_release_and_caller(
         return Err(ResolutionError::ResolutionRelease.into());
     }
     trading
-        .authenticate_current_deployment(slot_pinned_deployment_observation(
+        .authenticate_current_deployment(cached_deployment_observation(
             caller,
             account(accounts, CALLER_PROGRAMDATA)?,
             trading.release(),
         )?)
         .map_err(|_| ResolutionError::ResolutionDeployment)?;
     resolution
-        .authenticate_current_deployment(slot_pinned_deployment_observation(
+        .authenticate_current_deployment(cached_deployment_observation(
             account(accounts, RESOLUTION_PROGRAM)?,
             account(accounts, RESOLUTION_PROGRAMDATA)?,
             resolution.release(),

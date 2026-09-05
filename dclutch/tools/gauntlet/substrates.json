@@ -93,7 +93,7 @@
       "campaign": "general-accelerator-programtest",
       "substrate": "program-test",
       "runner": "tools/gauntlet/general/run-general.sh",
-      "producer": "programs/dclutch-general-accelerator-sbf/program-test",
+      "producer": "programs/dclutch-accelerator-sbf/program-test",
       "note": "A declared fast lane restricted to runtime width 1: at N=258 six of its seven actions do not fit a Solana packet and the bank does not notice. The four fast-lane clauses ride the evidence document (tools/gauntlet/general/fast-lane.json).",
       "reproducible": true
     },
@@ -197,7 +197,7 @@
       "campaign": "tier4-series-occurrence-programtest",
       "substrate": "program-test",
       "runner": "tools/gauntlet/tier4/run-campaign.sh",
-      "producer": "programs/dclutch-series-shadow-sbf",
+      "producer": "programs/dclutch-accelerator-sbf/series-program-test",
       "note": "Series occurrence shadow.",
       "reproducible": true
     },

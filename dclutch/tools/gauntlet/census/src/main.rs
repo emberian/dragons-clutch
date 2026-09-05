@@ -45,13 +45,10 @@ const TARGETS: &[(&str, &str)] = &[
     ("dclutch-claims-sbf", "claims"),
     ("dclutch-core-sbf", "core"),
     ("dclutch-custody-sbf", "custody"),
-    ("dclutch-dealer-accelerator-sbf", "dealer-accelerator"),
-    ("dclutch-general-accelerator-sbf", "general-accelerator"),
-    ("dclutch-product-runtime-v2-sbf", "product-runtime-v2"),
+    ("dclutch-accelerator-sbf", "accelerator"),
     ("dclutch-registry-sbf", "registry"),
     ("dclutch-rent-sbf", "rent"),
     ("dclutch-resolution-proof-sbf", "resolution"),
-    ("dclutch-series-shadow-sbf", "series-shadow"),
     ("dclutch-trading-sbf", "trading"),
 ];
 

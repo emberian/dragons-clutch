@@ -38,7 +38,10 @@ readonly EXIT_PREREQ_MISSING=2
 # whose only consumer was its own program-test. The count is pinned rather than
 # discovered on purpose -- a link silently dropping out of the measurement is
 # the failure this guard exists to catch -- so it moves by hand, with a reason.
-readonly EXPECTED_LINK_COUNT=12
+# Ten since 2026-09-04: `dclutch-direct-aot-sbf` and
+# `dclutch-product-runtime-v2-sbf` deleted (unshipped, in no cohort); eight
+# since the three accelerators became `dclutch-accelerator-sbf`.
+readonly EXPECTED_LINK_COUNT=8
 readonly DIAGNOSTIC_PATTERN='overwrites values in the frame'
 
 here="$(cd "$(dirname "$0")" && pwd)"

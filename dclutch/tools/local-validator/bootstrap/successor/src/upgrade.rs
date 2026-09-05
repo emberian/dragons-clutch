@@ -281,21 +281,10 @@ const SHIPPED_LINKS: &[(&str, &str, bool)] = &[
     ("claims", "dclutch-claims-sbf", true),
     ("core", "dclutch-core-sbf", true),
     ("custody", "dclutch-custody-sbf", true),
-    ("dealer-accelerator", "dclutch-dealer-accelerator-sbf", true),
-    (
-        "general-accelerator",
-        "dclutch-general-accelerator-sbf",
-        true,
-    ),
-    (
-        "dclutch-product-runtime-v2-sbf",
-        "dclutch-product-runtime-v2-sbf",
-        false,
-    ),
+    ("accelerator", "dclutch-accelerator-sbf", true),
     ("registry", "dclutch-registry-sbf", true),
     ("rent", "dclutch-rent-sbf", true),
     ("resolution", "dclutch-resolution-proof-sbf", true),
-    ("series-shadow", "dclutch-series-shadow-sbf", true),
     ("trading", "dclutch-trading-sbf", true),
 ];
 

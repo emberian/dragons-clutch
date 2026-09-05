@@ -132,7 +132,14 @@ impl RefusalBand {
 // belonged to `dclutch-dealer-sbf`, deleted 2026-09-02, a standalone
 // measurement prototype its own header disclaimed as "not a second accepted
 // Trading release identity", marked `false` in the release tool's
-// SHIPPED_LINKS, and with no consumer but its own program-test. Bands 14, 15
+// SHIPPED_LINKS, and with no consumer but its own program-test. Bands 9 and
+// 10 are RETIRED the same way: `dclutch-product-runtime-v2-sbf` (an admission
+// receipt no program read) and `dclutch-direct-aot-sbf` (an accelerator for
+// the superseded Direct V2 descriptor), both `false` in SHIPPED_LINKS, in no
+// cohort, deleted 2026-09-04. Bands 11 and 13 (`dclutch-series-shadow-sbf`,
+// `dclutch-dealer-accelerator-sbf`) were folded into `dclutch-accelerator-sbf`
+// on band 12 the same day; their refusals live on as sub-bands 0xC200 and
+// 0xC100 of it, so the two indices are retired, not moved. Bands 14, 15
 // and 16 were drafted for `dclutch-controller-proof-sbf`,
 // `dclutch-custody-proof-sbf` and `dclutch-claims-proof-sbf` and are NOT
 // allocated: `11ca28b` banished all three DCLTCAT1 proof programs while this
@@ -145,18 +152,18 @@ impl RefusalBand {
 mod generated_bands;
 
 pub use generated_bands::{
-    BAND_COUNT, BAND_SHIFT, BAND_SPAN, BANDS, CLAIMS_REFUSAL_BASE, CORE_REFUSAL_BASE,
-    CUSTODY_REFUSAL_BASE, DEALER_ACCELERATOR_REFUSAL_BASE, FIRST_PROGRAM_BAND, FIRST_TEST_BAND,
-    GENERAL_ACCELERATOR_REFUSAL_BASE, PRODUCT_RUNTIME_V2_REFUSAL_BASE, PROGRAM_BAND_COUNT,
-    REGISTRY_REFUSAL_BASE, RENT_REFUSAL_BASE, RESOLUTION_REFUSAL_BASE, SERIES_SHADOW_REFUSAL_BASE,
-    TEST_CALLER_BAND_COUNT, TEST_CLAIMS_AFFINE_BATCH_CALLER_BASE,
-    TEST_CLAIMS_CLAIM_CHECK_ESCROW_SIGNER_BASE, TEST_CLAIMS_FRACTIONAL_ATOMIC_CALLER_BASE,
-    TEST_CLAIMS_FRACTIONAL_COMPACTION_CALLER_BASE, TEST_CLAIMS_FRACTIONAL_SIGNED_DELTA_CALLER_BASE,
-    TEST_CLAIMS_LIABILITY_BASIS_CALLER_BASE, TEST_CLAIMS_RATIONAL_LIFECYCLE_CALLER_BASE,
-    TEST_CLAIMS_RATIONAL_V2_CALLER_BASE, TEST_CLAIMS_SPARSE_CHAIN_CALLER_BASE,
-    TEST_CLAIMS_TERMINAL_SETTLEMENT_CALLER_BASE, TEST_CUSTODY_CALLER_BASE,
-    TEST_DEALER_ACCELERATOR_CALLER_BASE, TEST_GENERAL_ACCELERATOR_CALLER_BASE,
-    TEST_RESOLUTION_RECEIPT_CALLER_BASE, TRADING_REFUSAL_BASE,
+    ACCELERATOR_REFUSAL_BASE, BAND_COUNT, BAND_SHIFT, BAND_SPAN, BANDS, CLAIMS_REFUSAL_BASE,
+    CORE_REFUSAL_BASE, CUSTODY_REFUSAL_BASE, FIRST_PROGRAM_BAND, FIRST_TEST_BAND,
+    PROGRAM_BAND_COUNT, REGISTRY_REFUSAL_BASE, RENT_REFUSAL_BASE,
+    RESOLUTION_REFUSAL_BASE, TEST_CALLER_BAND_COUNT,
+    TEST_CLAIMS_AFFINE_BATCH_CALLER_BASE, TEST_CLAIMS_CLAIM_CHECK_ESCROW_SIGNER_BASE,
+    TEST_CLAIMS_FRACTIONAL_ATOMIC_CALLER_BASE, TEST_CLAIMS_FRACTIONAL_COMPACTION_CALLER_BASE,
+    TEST_CLAIMS_FRACTIONAL_SIGNED_DELTA_CALLER_BASE, TEST_CLAIMS_LIABILITY_BASIS_CALLER_BASE,
+    TEST_CLAIMS_RATIONAL_LIFECYCLE_CALLER_BASE, TEST_CLAIMS_RATIONAL_V2_CALLER_BASE,
+    TEST_CLAIMS_SPARSE_CHAIN_CALLER_BASE, TEST_CLAIMS_TERMINAL_SETTLEMENT_CALLER_BASE,
+    TEST_CUSTODY_CALLER_BASE, TEST_DEALER_ACCELERATOR_CALLER_BASE,
+    TEST_GENERAL_ACCELERATOR_CALLER_BASE, TEST_RESOLUTION_RECEIPT_CALLER_BASE,
+    TRADING_REFUSAL_BASE,
 };
 
 // -------------------------------------------------------------- deliberate aliases
@@ -206,6 +213,95 @@ pub fn band_for_label(label: &str) -> Option<&'static RefusalBand> {
 #[must_use]
 pub fn band_for_package(package: &str) -> Option<&'static RefusalBand> {
     BANDS.iter().find(|band| band.package == package)
+}
+
+// ------------------------------------------ pinning an enum to its band
+
+/// The base of the band that contains `code`: `code` with its offset cleared.
+#[must_use]
+pub const fn band_base_of(code: u32) -> u32 {
+    (code >> BAND_SHIFT) << BAND_SHIFT
+}
+
+/// Count identifiers at compile time. Support for [`pin_refusal_band!`].
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __count_idents {
+    () => { 0_usize };
+    ($head:ident $($tail:ident)*) => { 1_usize + $crate::__count_idents!($($tail)*) };
+}
+
+/// Pin a `#[repr(u32)]` refusal enum to its registered band, or to a sub-band
+/// inside it.
+///
+/// ```ignore
+/// dclutch_refusal_registry::pin_refusal_band!(
+///     CoreSbfError,
+///     dclutch_refusal_registry::CORE_REFUSAL_BASE,
+///     [Instruction, AccountFrame, /* … every variant, in discriminant order */]
+/// );
+/// ```
+///
+/// The enum keeps its literal hexadecimal discriminants -- they are what a
+/// reader greps for after seeing a code in a validator log, and what the
+/// route census reads (`tools/gauntlet/census` walks the enum item itself, so
+/// the enum must stay a plain item and never move inside this macro). The
+/// macro supplies everything else the binding needs, once:
+///
+/// - `ALL`, every variant in discriminant order;
+/// - `From<Enum> for ProgramError` as `Custom(code)`;
+/// - the compile-time proof that the listed discriminants are the contiguous
+///   run `base, base + 1, …` and never leave the band `base` sits in.
+///
+/// **Why a list and not two endpoints.** A ceiling assertion that names one
+/// variant by hand as "the last one" says nothing about the variants after
+/// it and goes stale silently every time the enum grows: Claims' bound went
+/// on naming `ReleaseSuperseded` after a later variant landed, and for as
+/// long as it stood the newest refusal in the program was checked by nothing.
+/// So the band is checked over the whole list, element by element, and the
+/// list is welded to the enum by an exhaustive match: a variant that is not
+/// listed is a non-exhaustive match and does not compile, so a new refusal
+/// cannot join quietly -- its author has to say where in the run it sits.
+#[macro_export]
+macro_rules! pin_refusal_band {
+    ($refusal:ident, $base:expr, [$($variant:ident),+ $(,)?]) => {
+        impl $refusal {
+            /// Every refusal this enum can raise, in discriminant order.
+            pub const ALL: [Self; $crate::__count_idents!($($variant)+)] = [$(Self::$variant),+];
+        }
+
+        const _: () = {
+            // Exhaustive on purpose: a variant absent from the list is a
+            // compile error here, not a discriminant nothing checks.
+            const fn listed(refusal: $refusal) {
+                match refusal {
+                    $($refusal::$variant => {}),+
+                }
+            }
+            const BASE: u32 = $base;
+            const CEILING: u32 = $crate::band_base_of(BASE) + $crate::BAND_SPAN;
+            let mut index: u32 = 0;
+            while (index as usize) < $refusal::ALL.len() {
+                let variant = $refusal::ALL[index as usize];
+                listed(variant);
+                assert!(
+                    variant as u32 == BASE + index,
+                    "refusal discriminants are not the contiguous run from the band base that ALL lists"
+                );
+                assert!(
+                    (variant as u32) < CEILING,
+                    "refusal enum runs past its registered band"
+                );
+                index += 1;
+            }
+        };
+
+        impl From<$refusal> for ::solana_program::program_error::ProgramError {
+            fn from(value: $refusal) -> Self {
+                Self::Custom(value as u32)
+            }
+        }
+    };
 }
 
 // ------------------------------------------------- compile-time band proofs
@@ -304,10 +400,7 @@ mod tests {
             CLAIMS_REFUSAL_BASE,
             CUSTODY_REFUSAL_BASE,
             RESOLUTION_REFUSAL_BASE,
-            PRODUCT_RUNTIME_V2_REFUSAL_BASE,
-            SERIES_SHADOW_REFUSAL_BASE,
-            GENERAL_ACCELERATOR_REFUSAL_BASE,
-            DEALER_ACCELERATOR_REFUSAL_BASE,
+            ACCELERATOR_REFUSAL_BASE,
             TEST_CLAIMS_AFFINE_BATCH_CALLER_BASE,
             TEST_CLAIMS_FRACTIONAL_SIGNED_DELTA_CALLER_BASE,
             TEST_CLAIMS_LIABILITY_BASIS_CALLER_BASE,

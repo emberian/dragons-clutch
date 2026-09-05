@@ -139,7 +139,6 @@ mod tests {
             |phase| phase == Phase::Open,
         );
         // founding_v5: `CorePhaseGateV3::Exactly(Phase::Founding)`.
-        // lib.rs prepare_foundational_split: `core.phase != Phase::Founding`.
         agrees(
             "CLAIMS_FOUNDING_MARKET_ADMISSIBLE_PRESTATES_V1",
             CLAIMS_FOUNDING_MARKET_ADMISSIBLE_PRESTATES_V1,

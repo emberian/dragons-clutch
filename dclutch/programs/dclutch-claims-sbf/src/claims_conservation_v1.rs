@@ -63,8 +63,7 @@ use dclutch_claims_conservation_contract::{
 };
 use dclutch_claims_svm::{
     liability_basis_state_v2::{
-        LiabilityBasisMarketViewV2 as MarketViewV2,
-        LiabilityBasisPositionViewV2 as PositionViewV2,
+        LiabilityBasisMarketViewV2 as MarketViewV2, LiabilityBasisPositionViewV2 as PositionViewV2,
     },
     protocol_position_v2::ProtocolPositionSeedsV2,
 };
@@ -210,11 +209,12 @@ impl<'accounts, 'info> ConservationAccounts<'accounts, 'info> {
 /// Whether this instruction selects the conservation family.
 pub fn is_claims_conservation_v1(instruction_data: &[u8]) -> bool {
     instruction_data.len() == CLAIMS_CONSERVATION_REQUEST_BYTES_V1
-        && instruction_data.get(
-            ..dclutch_claims_conservation_contract::CLAIMS_CONSERVATION_REQUEST_MAGIC_V1.len(),
-        ) == Some(
-            dclutch_claims_conservation_contract::CLAIMS_CONSERVATION_REQUEST_MAGIC_V1.as_slice(),
-        )
+        && instruction_data
+            .get(..dclutch_claims_conservation_contract::CLAIMS_CONSERVATION_REQUEST_MAGIC_V1.len())
+            == Some(
+                dclutch_claims_conservation_contract::CLAIMS_CONSERVATION_REQUEST_MAGIC_V1
+                    .as_slice(),
+            )
 }
 
 /// Execute one conservative complete-set act signed by its own Position owner.
@@ -227,7 +227,9 @@ pub fn process(
     claims_cu_checkpoint!("conserve-enter");
     let request = ClaimsConservationRequestV1::decode(instruction_data)
         .map_err(|_| ClaimsSbfError::Instruction)?;
-    request.validate().map_err(|_| ClaimsSbfError::Instruction)?;
+    request
+        .validate()
+        .map_err(|_| ClaimsSbfError::Instruction)?;
     let accounts = ConservationAccounts::parse(account_infos)?;
     authenticate_privileges(program_id, accounts, request)?;
     claims_cu_checkpoint!("conserve-privileges");
@@ -468,12 +470,9 @@ fn authenticate_positions_and_escrow(
         market.view,
         Some(request.expected_position_revision),
     )?;
-    let derived = FailureEscrowIdentityV1::derive(
-        program_id,
-        request.market,
-        market.view.claim_count,
-    )
-    .map_err(|_| ClaimsSbfError::FailureEscrow)?;
+    let derived =
+        FailureEscrowIdentityV1::derive(program_id, request.market, market.view.claim_count)
+            .map_err(|_| ClaimsSbfError::FailureEscrow)?;
     let escrow_seeds =
         ProtocolPositionSeedsV2::new(accounts.aggregate.key.to_bytes(), derived.owner)
             .map_err(|_| ClaimsSbfError::FailureEscrow)?;
@@ -710,9 +709,7 @@ fn move_collateral(
 /// The digest of this request's own canonical bytes, which every derived
 /// Custody request carries as its parent.
 #[inline(never)]
-fn parent_request_digest(
-    request: ClaimsConservationRequestV1,
-) -> Result<[u8; 32], ProgramError> {
+fn parent_request_digest(request: ClaimsConservationRequestV1) -> Result<[u8; 32], ProgramError> {
     let bytes = Box::new(
         request
             .to_bytes()
@@ -821,13 +818,7 @@ fn authenticate_custody_frame(
 fn transfer_pair<'accounts, 'info>(
     accounts: ConservationAccounts<'accounts, 'info>,
     custody: &CustodyRequestV1,
-) -> Result<
-    (
-        &'accounts AccountInfo<'info>,
-        &'accounts AccountInfo<'info>,
-    ),
-    ProgramError,
-> {
+) -> Result<(&'accounts AccountInfo<'info>, &'accounts AccountInfo<'info>), ProgramError> {
     let hoard = accounts.hoard_vault.key.to_bytes();
     let external = accounts.external_collateral.key.to_bytes();
     if custody.source == external && custody.destination == hoard {
@@ -901,7 +892,6 @@ fn invoke_custody(
     .map_err(|_| ClaimsSbfError::CustodyRequired)?;
     Ok(())
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1053,7 +1043,11 @@ mod tests {
         let split = request(ClaimsConservationDirectionV1::Split)
             .custody_request(digest)
             .expect("split custody request");
-        assert_eq!(split.source, id(8), "a split debits the actor's own account");
+        assert_eq!(
+            split.source,
+            id(8),
+            "a split debits the actor's own account"
+        );
         assert_eq!(split.destination, id(9), "a split credits the Hoard");
         let merge = request(ClaimsConservationDirectionV1::Merge)
             .custody_request(digest)

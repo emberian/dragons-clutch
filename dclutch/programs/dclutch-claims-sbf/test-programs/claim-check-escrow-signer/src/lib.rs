@@ -36,7 +36,6 @@ use solana_program::{
     entrypoint::ProgramResult,
     instruction::{AccountMeta, Instruction},
     program::invoke_signed,
-    program_error::ProgramError,
     pubkey::Pubkey,
 };
 use spl_token_2022_interface::{
@@ -158,68 +157,17 @@ pub enum ClaimCheckEscrowSignerError {
     TokenCpi = 0x10_C004,
 }
 
-impl ClaimCheckEscrowSignerError {
-    /// Every refusal this program can raise, in discriminant order.
-    ///
-    /// The band assertions read this rather than a variant somebody named as
-    /// "the last one" -- Claims' own ceiling assertion went on naming a stale
-    /// variant after a newer one landed, and for as long as it stood the newest
-    /// refusal in that program was checked by nothing. The commit that fixed it
-    /// named the test callers as one stale variant away from the same hole;
-    /// this enum is new enough to be born without it.
-    pub const ALL: [Self; 5] = [
-        Self::Instruction,
-        Self::AccountFrame,
-        Self::Derivation,
-        Self::TokenInstruction,
-        Self::TokenCpi,
-    ];
-
-    /// This refusal's position in [`ClaimCheckEscrowSignerError::ALL`].
-    ///
-    /// Exhaustive on purpose, and that is the whole mechanism: a sixth variant
-    /// is a COMPILE ERROR here rather than a discriminant no assertion looks at.
-    const fn ordinal(self) -> usize {
-        match self {
-            Self::Instruction => 0,
-            Self::AccountFrame => 1,
-            Self::Derivation => 2,
-            Self::TokenInstruction => 3,
-            Self::TokenCpi => 4,
-        }
-    }
-}
-
-// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
-const _: () = {
-    let mut index = 0;
-    while index < ClaimCheckEscrowSignerError::ALL.len() {
-        let code = ClaimCheckEscrowSignerError::ALL[index];
-        assert!(
-            code.ordinal() == index,
-            "ClaimCheckEscrowSignerError::ALL must be in discriminant order"
-        );
-        assert!(
-            code as u32
-                == dclutch_refusal_registry::TEST_CLAIMS_CLAIM_CHECK_ESCROW_SIGNER_BASE
-                    + index as u32,
-            "every ClaimCheckEscrowSignerError must be contiguous from its band base"
-        );
-        assert!(
-            (code as u32)
-                < dclutch_refusal_registry::TEST_CLAIMS_CLAIM_CHECK_ESCROW_SIGNER_BASE
-                    + dclutch_refusal_registry::BAND_SPAN,
-            "no ClaimCheckEscrowSignerError may run past its registered refusal band"
-        );
-        index += 1;
-    }
-};
-
-impl From<ClaimCheckEscrowSignerError> for ProgramError {
-    fn from(value: ClaimCheckEscrowSignerError) -> Self {
-        Self::Custom(value as u32)
-    }
-}
+dclutch_refusal_registry::pin_refusal_band!(
+    ClaimCheckEscrowSignerError,
+    dclutch_refusal_registry::TEST_CLAIMS_CLAIM_CHECK_ESCROW_SIGNER_BASE,
+    [
+        Instruction,
+        AccountFrame,
+        Derivation,
+        TokenInstruction,
+        TokenCpi
+    ]
+);
 
 /// The claim-check escrow address for one aggregate, under one program.
 ///

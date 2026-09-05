@@ -63,8 +63,8 @@ build() {
 # script existed, that was a human reading build output.
 diagnostics=0
 for manifest in \
-    programs/dclutch-general-accelerator-sbf/Cargo.toml \
-    programs/dclutch-general-accelerator-sbf/test-programs/general-caller/Cargo.toml
+    programs/dclutch-accelerator-sbf/Cargo.toml \
+    programs/dclutch-accelerator-sbf/test-programs/general-caller/Cargo.toml
 do
     log="$work/build-$(basename "$(dirname "$manifest")").log"
     build "$manifest" > "$log" 2>&1 || { tail -n 40 "$log" >&2; exit 1; }
@@ -82,7 +82,7 @@ fi
 # what made the campaign unrunnable from a checkout of main until 31eca2fa.
 SBF_OUT_DIR="$sbf_out" DCLUTCH_PROGRAM_TEST_EVIDENCE_DIR="$evidence_dir" \
     cargo test --locked \
-    --manifest-path programs/dclutch-general-accelerator-sbf/program-test/Cargo.toml \
+    --manifest-path programs/dclutch-accelerator-sbf/program-test/Cargo.toml \
     --tests -- --nocapture
 
 cargo run --quiet -p dclutch-program-test-evidence \

@@ -210,58 +210,6 @@ pub enum ClaimsFoundingSbfErrorV5 {
 }
 
 impl ClaimsFoundingSbfErrorV5 {
-    /// Every refusal this request family can raise, in discriminant order.
-    ///
-    /// This is what the sub-band assertions below read. It is kept honest by
-    /// [`ClaimsFoundingSbfErrorV5::ordinal`], whose match is exhaustive: a variant added to the
-    /// enum does not compile until its author writes an arm here, and the only arm that satisfies
-    /// the assertions is its own index in this array.
-    pub const ALL: [Self; 17] = [
-        Self::Instruction,
-        Self::Accounts,
-        Self::Release,
-        Self::Custody,
-        Self::ProductBasis,
-        Self::ClaimsState,
-        Self::Rent,
-        Self::Allocation,
-        Self::Receipt,
-        Self::Commit,
-        Self::PrincipalCapacity,
-        Self::CallerAuthority,
-        Self::Permit,
-        Self::PermitBody,
-        Self::ActivationCache,
-        Self::RoleDeployment,
-        Self::ReleaseSuperseded,
-    ];
-
-    /// This refusal's position in [`ClaimsFoundingSbfErrorV5::ALL`].
-    ///
-    /// The match is exhaustive on purpose, and that is the whole mechanism: a twelfth variant is
-    /// a COMPILE ERROR here rather than a discriminant no assertion ever looks at.
-    const fn ordinal(self) -> usize {
-        match self {
-            Self::Instruction => 0,
-            Self::Accounts => 1,
-            Self::Release => 2,
-            Self::Custody => 3,
-            Self::ProductBasis => 4,
-            Self::ClaimsState => 5,
-            Self::Rent => 6,
-            Self::Allocation => 7,
-            Self::Receipt => 8,
-            Self::Commit => 9,
-            Self::PrincipalCapacity => 10,
-            Self::CallerAuthority => 11,
-            Self::Permit => 12,
-            Self::PermitBody => 13,
-            Self::ActivationCache => 14,
-            Self::RoleDeployment => 15,
-            Self::ReleaseSuperseded => 16,
-        }
-    }
-
     /// The exact line this refusal writes to the validator log.
     ///
     /// A `&'static str` per variant rather than a `{:?}` format: `sol_log` takes
@@ -369,56 +317,29 @@ fn refuse_activated_role(role: ExecutionRoleV1, error: ActivationAuthErrorV1) ->
     refuse(ClaimsFoundingSbfErrorV5::from(error), role_log_line(role))
 }
 
-// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
-// The discriminants stay literal so a code seen in a validator log is greppable;
-// these assertions are what stops them drifting out of the allocated band.
-//
-// WHY THIS IS A LIST AND NOT TWO ENDPOINTS. The ceiling assertion used to name
-// one variant BY HAND as "the last one". A hand-named ceiling says nothing about
-// the variants after it and goes stale silently every single time the family
-// grows -- the failure is not that the name is wrong, it is that nothing can
-// notice. Claims' own top-level band proved it the expensive way: its bound went
-// on naming `ReleaseSuperseded` after a later variant landed, so for as long as
-// that stood, the newest refusal in the program was checked by nothing.
-//
-// So the sub-band is now checked over `ALL`, element by element, and `ALL` is
-// welded to the enum by the exhaustive `ordinal` match. A new variant cannot
-// join quietly: it does not compile until its author answers for it, and the
-// answer they must give is its index here.
-const _: () = {
-    const SUB_BAND: u32 = dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x180;
-    assert!(
-        ClaimsFoundingSbfErrorV5::ALL[0] as u32 == SUB_BAND,
-        "ClaimsFoundingSbfErrorV5 must start at its registered sub-band offset"
-    );
-    let mut index: u32 = 0;
-    let mut rest = ClaimsFoundingSbfErrorV5::ALL.as_slice();
-    while let [variant, tail @ ..] = rest {
-        let variant = *variant;
-        assert!(
-            variant.ordinal() == index as usize,
-            "ClaimsFoundingSbfErrorV5::ALL repeats a variant, skips one, or is out of discriminant order"
-        );
-        assert!(
-            variant as u32 == SUB_BAND + index,
-            "ClaimsFoundingSbfErrorV5 discriminants are not the contiguous run from the sub-band offset that ALL claims"
-        );
-        assert!(
-            (variant as u32)
-                < dclutch_refusal_registry::CLAIMS_REFUSAL_BASE
-                    + dclutch_refusal_registry::BAND_SPAN,
-            "ClaimsFoundingSbfErrorV5 must not run past its registered refusal band"
-        );
-        index += 1;
-        rest = tail;
-    }
-};
-
-impl From<ClaimsFoundingSbfErrorV5> for ProgramError {
-    fn from(value: ClaimsFoundingSbfErrorV5) -> Self {
-        Self::Custom(value as u32)
-    }
-}
+dclutch_refusal_registry::pin_refusal_band!(
+    ClaimsFoundingSbfErrorV5,
+    dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x180,
+    [
+        Instruction,
+        Accounts,
+        Release,
+        Custody,
+        ProductBasis,
+        ClaimsState,
+        Rent,
+        Allocation,
+        Receipt,
+        Commit,
+        PrincipalCapacity,
+        CallerAuthority,
+        Permit,
+        PermitBody,
+        ActivationCache,
+        RoleDeployment,
+        ReleaseSuperseded
+    ]
+);
 
 #[derive(Clone, Copy)]
 struct FoundingAccounts<'accounts, 'info> {
@@ -607,8 +528,14 @@ fn process_authenticated(
         authenticate_escrow_seating(program_id, accounts, &request, refunds_on_failure, &rent)?;
     claims_cu_checkpoint!("found-rent-vacancy");
 
-    let candidates =
-        build_candidates_boxed(program_id, accounts, &request, market, request_digest, escrow)?;
+    let candidates = build_candidates_boxed(
+        program_id,
+        accounts,
+        &request,
+        market,
+        request_digest,
+        escrow,
+    )?;
     let receipt = build_receipt(&request, request_digest, &candidates)?;
     claims_cu_checkpoint!("found-candidates");
 
@@ -1669,17 +1596,14 @@ fn authenticate_escrow_seating(
     refunds_on_failure: bool,
     rent: &Rent,
 ) -> Result<FoundingEscrowSeatingV1, ProgramError> {
-    let derived = crate::FailureEscrowIdentityV1::derive(
-        program_id,
-        request.market(),
-        request.claim_count(),
-    )
-    .map_err(|_| {
-        refuse(
-            ClaimsFoundingSbfErrorV5::ClaimsState,
-            "no failure escrow is derivable at this runtime width",
-        )
-    })?;
+    let derived =
+        crate::FailureEscrowIdentityV1::derive(program_id, request.market(), request.claim_count())
+            .map_err(|_| {
+                refuse(
+                    ClaimsFoundingSbfErrorV5::ClaimsState,
+                    "no failure escrow is derivable at this runtime width",
+                )
+            })?;
     let position_seeds =
         ProtocolPositionSeedsV2::new(accounts.aggregate.key.to_bytes(), derived.owner)
             .map_err(|_| ClaimsFoundingSbfErrorV5::ClaimsState)?;

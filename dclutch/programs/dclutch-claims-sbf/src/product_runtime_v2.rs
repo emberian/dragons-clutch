@@ -1,8 +1,4 @@
-//! Product Runtime V2 reader prepared for Claims admission consumers.
-//!
-//! This module deliberately has no dispatch. It will be exported only when
-//! the current Claims tranche converges, then replaces the V1 Product Instance
-//! decoder in LBV2 and protocol-position admission.
+//! The Claims-side authentication of a Market-selected Product Runtime V2 graph.
 
 use dclutch_product_runtime_v2::ContentId;
 use dclutch_product_runtime_v2_svm_reader::{
@@ -13,22 +9,13 @@ use solana_program::pubkey::Pubkey;
 
 use crate::ClaimsSbfError;
 
-/// Independently authenticate a Market-selected Product graph and only then
-/// cross-check the optional admission receipt as a non-authoritative cache.
+/// Independently authenticate a Market-selected Product graph.
 pub(crate) fn authenticate_product_runtime_v2(
     registry_program: &Pubkey,
     expected_product_record_digest: [u8; 32],
-    admission_receipt_bytes: Option<&[u8]>,
     frame: ProductRuntimeFrameV2<'_, '_>,
 ) -> Result<AuthenticatedProductRuntimeV2, ClaimsSbfError> {
     let expected =
         ContentId::new(expected_product_record_digest).map_err(|_| ClaimsSbfError::Accounts)?;
-    let authenticated = authenticate_graph(registry_program, expected, frame)
-        .map_err(|_| ClaimsSbfError::Accounts)?;
-    if let Some(receipt) = admission_receipt_bytes {
-        authenticated
-            .recheck_reference_receipt(receipt)
-            .map_err(|_| ClaimsSbfError::Accounts)?;
-    }
-    Ok(authenticated)
+    authenticate_graph(registry_program, expected, frame).map_err(|_| ClaimsSbfError::Accounts)
 }

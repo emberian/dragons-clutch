@@ -290,65 +290,11 @@ pub enum RationalReplayCloseSbfErrorV1 {
     Replay = 0x5683,
 }
 
-impl RationalReplayCloseSbfErrorV1 {
-    /// Every refusal this route can raise, in discriminant order.
-    pub const ALL: [Self; 4] = [
-        Self::Accounts,
-        Self::Authority,
-        Self::Identity,
-        Self::Replay,
-    ];
-
-    /// This refusal's position in [`RationalReplayCloseSbfErrorV1::ALL`].
-    ///
-    /// Exhaustive on purpose: a fifth variant is a compile error here rather
-    /// than a discriminant no assertion ever looks at.
-    const fn ordinal(self) -> usize {
-        match self {
-            Self::Accounts => 0,
-            Self::Authority => 1,
-            Self::Identity => 2,
-            Self::Replay => 3,
-        }
-    }
-}
-
-// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`),
-// checked element by element over `ALL` rather than at two hand-named
-// endpoints, which is the form `fractional_claim_check_v1` arrived at after a
-// hand-named ceiling went stale silently.
-const _: () = {
-    const SUB_BAND: u32 = dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x680;
-    assert!(
-        RationalReplayCloseSbfErrorV1::ALL[0] as u32 == SUB_BAND,
-        "RationalReplayCloseSbfErrorV1 must start at its registered sub-band offset"
-    );
-    let mut index = 0;
-    while index < RationalReplayCloseSbfErrorV1::ALL.len() {
-        let variant = RationalReplayCloseSbfErrorV1::ALL[index];
-        assert!(
-            variant.ordinal() == index,
-            "RationalReplayCloseSbfErrorV1::ALL repeats a variant, skips one, or is out of order"
-        );
-        assert!(
-            variant as u32 == SUB_BAND + index as u32,
-            "RationalReplayCloseSbfErrorV1 discriminants are not the contiguous run from its offset"
-        );
-        assert!(
-            (variant as u32)
-                < dclutch_refusal_registry::CLAIMS_REFUSAL_BASE
-                    + dclutch_refusal_registry::BAND_SPAN,
-            "RationalReplayCloseSbfErrorV1 must not run past its registered refusal band"
-        );
-        index += 1;
-    }
-};
-
-impl From<RationalReplayCloseSbfErrorV1> for ProgramError {
-    fn from(value: RationalReplayCloseSbfErrorV1) -> Self {
-        Self::Custom(value as u32)
-    }
-}
+dclutch_refusal_registry::pin_refusal_band!(
+    RationalReplayCloseSbfErrorV1,
+    dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x680,
+    [Accounts, Authority, Identity, Replay]
+);
 
 /// Close one spent Rational replay cursor and return its rent to the actor.
 ///

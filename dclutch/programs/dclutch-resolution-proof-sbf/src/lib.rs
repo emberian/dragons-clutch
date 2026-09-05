@@ -227,136 +227,42 @@ pub enum ResolutionError {
     SourceLadder = 0x801D,
 }
 
-impl ResolutionError {
-    /// Every refusal this program can raise, in discriminant order.
-    ///
-    /// This is what the band assertions below read. It is kept honest by
-    /// [`ResolutionError::ordinal`], whose match is exhaustive: a variant added to the
-    /// enum does not compile until its author writes an arm here, and the only
-    /// arm that satisfies the assertions is its own index in this array.
-    pub const ALL: [Self; 30] = [
-        Self::AccountFrame,
-        Self::Instruction,
-        Self::OutputState,
-        Self::MarketAuthority,
-        Self::FinalizedRecord,
-        Self::ResolutionRelease,
-        Self::ResolutionDeployment,
-        Self::SourceMaterial,
-        Self::ProductDomain,
-        Self::ProviderRelease,
-        Self::ProviderObservation,
-        Self::Sysvar,
-        Self::Transition,
-        Self::Arithmetic,
-        Self::Funding,
-        Self::RelayedRecord,
-        Self::RelayedWindow,
-        Self::ProviderWindow,
-        Self::ProviderFreshness,
-        Self::ProviderConfiguration,
-        Self::ReleaseSuperseded,
-        Self::SponsoredPush,
-        Self::RecordStillConsumable,
-        Self::SubmissionStillConsumable,
-        Self::ActivationCache,
-        Self::ActivatedRole,
-        Self::CallerAuthority,
-        Self::InfrastructureProfile,
-        Self::ProviderScale,
-        Self::SourceLadder,
-    ];
-
-    /// This refusal's position in [`ResolutionError::ALL`].
-    ///
-    /// The match is exhaustive on purpose, and that is the whole mechanism:
-    /// a twenty-fifth variant is a COMPILE ERROR here rather than a discriminant no
-    /// assertion ever looks at.
-    const fn ordinal(self) -> usize {
-        match self {
-            Self::AccountFrame => 0,
-            Self::Instruction => 1,
-            Self::OutputState => 2,
-            Self::MarketAuthority => 3,
-            Self::FinalizedRecord => 4,
-            Self::ResolutionRelease => 5,
-            Self::ResolutionDeployment => 6,
-            Self::SourceMaterial => 7,
-            Self::ProductDomain => 8,
-            Self::ProviderRelease => 9,
-            Self::ProviderObservation => 10,
-            Self::Sysvar => 11,
-            Self::Transition => 12,
-            Self::Arithmetic => 13,
-            Self::Funding => 14,
-            Self::RelayedRecord => 15,
-            Self::RelayedWindow => 16,
-            Self::ProviderWindow => 17,
-            Self::ProviderFreshness => 18,
-            Self::ProviderConfiguration => 19,
-            Self::ReleaseSuperseded => 20,
-            Self::SponsoredPush => 21,
-            Self::RecordStillConsumable => 22,
-            Self::SubmissionStillConsumable => 23,
-            Self::ActivationCache => 24,
-            Self::ActivatedRole => 25,
-            Self::CallerAuthority => 26,
-            Self::InfrastructureProfile => 27,
-            Self::ProviderScale => 28,
-            Self::SourceLadder => 29,
-        }
-    }
-}
-
-// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
-// The discriminants stay literal so a code seen in a validator log is greppable;
-// these assertions are what stops them drifting out of the allocated band.
-//
-// WHY THIS IS A LIST AND NOT TWO ENDPOINTS. The ceiling assertion used to name
-// one variant BY HAND as "the last one". A hand-named ceiling says nothing
-// about the variants after it and goes stale silently every single time the
-// enum grows -- the failure is not that the name is wrong, it is that nothing
-// can notice. Claims proved it the expensive way: its bound went on naming
-// `ReleaseSuperseded` after a later variant landed, so for as long as that
-// stood, the newest refusal in the program was checked by nothing.
-//
-// So the band is now checked over `ALL`, element by element, and `ALL` is
-// welded to the enum by the exhaustive `ordinal` match. A new variant cannot
-// join quietly: it does not compile until its author answers for it, and the
-// answer they must give is its index here.
-const _: () = {
-    assert!(
-        ResolutionError::ALL[0] as u32 == dclutch_refusal_registry::RESOLUTION_REFUSAL_BASE,
-        "ResolutionError must start at its registered refusal band base"
-    );
-    let mut index: u32 = 0;
-    let mut rest = ResolutionError::ALL.as_slice();
-    while let [variant, tail @ ..] = rest {
-        let variant = *variant;
-        assert!(
-            variant.ordinal() == index as usize,
-            "ResolutionError::ALL repeats a variant, skips one, or is out of discriminant order"
-        );
-        assert!(
-            variant as u32 == dclutch_refusal_registry::RESOLUTION_REFUSAL_BASE + index,
-            "ResolutionError discriminants are not the contiguous run from the band base that ALL claims"
-        );
-        assert!(
-            (variant as u32)
-                < dclutch_refusal_registry::RESOLUTION_REFUSAL_BASE
-                    + dclutch_refusal_registry::BAND_SPAN,
-            "ResolutionError must not run past its registered refusal band"
-        );
-        index += 1;
-        rest = tail;
-    }
-};
-
-impl From<ResolutionError> for ProgramError {
-    fn from(value: ResolutionError) -> Self {
-        Self::Custom(value as u32)
-    }
-}
+dclutch_refusal_registry::pin_refusal_band!(
+    ResolutionError,
+    dclutch_refusal_registry::RESOLUTION_REFUSAL_BASE,
+    [
+        AccountFrame,
+        Instruction,
+        OutputState,
+        MarketAuthority,
+        FinalizedRecord,
+        ResolutionRelease,
+        ResolutionDeployment,
+        SourceMaterial,
+        ProductDomain,
+        ProviderRelease,
+        ProviderObservation,
+        Sysvar,
+        Transition,
+        Arithmetic,
+        Funding,
+        RelayedRecord,
+        RelayedWindow,
+        ProviderWindow,
+        ProviderFreshness,
+        ProviderConfiguration,
+        ReleaseSuperseded,
+        SponsoredPush,
+        RecordStillConsumable,
+        SubmissionStillConsumable,
+        ActivationCache,
+        ActivatedRole,
+        CallerAuthority,
+        InfrastructureProfile,
+        ProviderScale,
+        SourceLadder
+    ]
+);
 
 pub(crate) enum RecordKind {
     CapabilityManifest,
@@ -542,24 +448,6 @@ pub(crate) fn cached_deployment_observation(
         }
         .into()
     })
-}
-
-/// Observe one Loader V3 deployment through decision 0012's admitted slot pin.
-///
-/// Registry activation already authenticated and persisted the full ELF
-/// digest. Loader V3 changes the ProgramData deployment slot whenever an
-/// upgrade changes those bytes, so equality with the activated release's slot
-/// proves that admitted digest is still current. This recurring-use path still
-/// parses the actual Program and ProgramData accounts and binds their exact
-/// identity, owner, executable disposition, Program→ProgramData link, slot,
-/// and upgrade authority; it merely avoids re-hashing two large immutable ELF
-/// tails during controller cleanup.
-pub(crate) fn slot_pinned_deployment_observation(
-    program: &AccountInfo<'_>,
-    programdata: &AccountInfo<'_>,
-    release: ArtifactReleaseV1,
-) -> Result<DeploymentObservationV1, ProgramError> {
-    cached_deployment_observation(program, programdata, release)
 }
 
 #[cfg(test)]

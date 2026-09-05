@@ -1,7 +1,5 @@
-//! Product Runtime V2 reader prepared for canonical Core Found replacement.
-//!
-//! This module deliberately has no parallel dispatch. It is exported only in
-//! the coordinated Found ABI migration that deletes the V1 fixed-domain path.
+//! The Core-side authentication of a Product Runtime V2 graph, at founding and
+//! on every later route that re-reads the selected Product.
 
 use dclutch_market_core_codec::Product;
 use dclutch_product_runtime_v2::ContentId;

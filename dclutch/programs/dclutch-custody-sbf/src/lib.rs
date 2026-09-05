@@ -181,112 +181,30 @@ pub enum CustodySbfError {
     ForbiddenCompartmentPair = 0x6011,
 }
 
-impl CustodySbfError {
-    /// Every refusal this program can raise, in discriminant order.
-    ///
-    /// This is what the band assertions below read. It is kept honest by
-    /// [`CustodySbfError::ordinal`], whose match is exhaustive: a variant added to the
-    /// enum does not compile until its author writes an arm here, and the only
-    /// arm that satisfies the assertions is its own index in this array.
-    pub const ALL: [Self; 18] = [
-        Self::Instruction,
-        Self::AccountFrame,
-        Self::Release,
-        Self::CallerAuthority,
-        Self::Realm,
-        Self::Replay,
-        Self::TokenState,
-        Self::Create,
-        Self::TokenCpi,
-        Self::Postcondition,
-        Self::Commit,
-        Self::Expiry,
-        Self::ReleaseSuperseded,
-        Self::ReservationRecord,
-        Self::ReservationIdentity,
-        Self::ReservationFrame,
-        Self::ReservationEscrowPrestate,
-        Self::ForbiddenCompartmentPair,
-    ];
-
-    /// This refusal's position in [`CustodySbfError::ALL`].
-    ///
-    /// The match is exhaustive on purpose, and that is the whole mechanism:
-    /// a nineteenth variant is a COMPILE ERROR here rather than a discriminant no
-    /// assertion ever looks at.
-    const fn ordinal(self) -> usize {
-        match self {
-            Self::Instruction => 0,
-            Self::AccountFrame => 1,
-            Self::Release => 2,
-            Self::CallerAuthority => 3,
-            Self::Realm => 4,
-            Self::Replay => 5,
-            Self::TokenState => 6,
-            Self::Create => 7,
-            Self::TokenCpi => 8,
-            Self::Postcondition => 9,
-            Self::Commit => 10,
-            Self::Expiry => 11,
-            Self::ReleaseSuperseded => 12,
-            Self::ReservationRecord => 13,
-            Self::ReservationIdentity => 14,
-            Self::ReservationFrame => 15,
-            Self::ReservationEscrowPrestate => 16,
-            Self::ForbiddenCompartmentPair => 17,
-        }
-    }
-}
-
-// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
-// The discriminants stay literal so a code seen in a validator log is greppable;
-// these assertions are what stops them drifting out of the allocated band.
-//
-// WHY THIS IS A LIST AND NOT TWO ENDPOINTS. The ceiling assertion used to name
-// one variant BY HAND as "the last one". A hand-named ceiling says nothing
-// about the variants after it and goes stale silently every single time the
-// enum grows -- the failure is not that the name is wrong, it is that nothing
-// can notice. Claims proved it the expensive way: its bound went on naming
-// `ReleaseSuperseded` after a later variant landed, so for as long as that
-// stood, the newest refusal in the program was checked by nothing.
-//
-// So the band is now checked over `ALL`, element by element, and `ALL` is
-// welded to the enum by the exhaustive `ordinal` match. A new variant cannot
-// join quietly: it does not compile until its author answers for it, and the
-// answer they must give is its index here.
-const _: () = {
-    assert!(
-        CustodySbfError::ALL[0] as u32 == dclutch_refusal_registry::CUSTODY_REFUSAL_BASE,
-        "CustodySbfError must start at its registered refusal band base"
-    );
-    let mut index: u32 = 0;
-    let mut rest = CustodySbfError::ALL.as_slice();
-    while let [variant, tail @ ..] = rest {
-        let variant = *variant;
-        assert!(
-            variant.ordinal() == index as usize,
-            "CustodySbfError::ALL repeats a variant, skips one, or is out of discriminant order"
-        );
-        assert!(
-            variant as u32 == dclutch_refusal_registry::CUSTODY_REFUSAL_BASE + index,
-            "CustodySbfError discriminants are not the contiguous run from the band base that ALL claims"
-        );
-        assert!(
-            (variant as u32)
-                < dclutch_refusal_registry::CUSTODY_REFUSAL_BASE
-                    + dclutch_refusal_registry::BAND_SPAN,
-            "CustodySbfError must not run past its registered refusal band"
-        );
-        index += 1;
-        rest = tail;
-    }
-};
-
-impl From<CustodySbfError> for ProgramError {
-    fn from(value: CustodySbfError) -> Self {
-        Self::Custom(value as u32)
-    }
-}
+dclutch_refusal_registry::pin_refusal_band!(
+    CustodySbfError,
+    dclutch_refusal_registry::CUSTODY_REFUSAL_BASE,
+    [
+        Instruction,
+        AccountFrame,
+        Release,
+        CallerAuthority,
+        Realm,
+        Replay,
+        TokenState,
+        Create,
+        TokenCpi,
+        Postcondition,
+        Commit,
+        Expiry,
+        ReleaseSuperseded,
+        ReservationRecord,
+        ReservationIdentity,
+        ReservationFrame,
+        ReservationEscrowPrestate,
+        ForbiddenCompartmentPair
+    ]
+);
 
 /// Name an activation-cache refusal, keeping the superseded case actionable.
 ///
@@ -360,23 +278,13 @@ pub fn process_instruction(
     require_account_count(accounts, request.operation, continuation.is_some())?;
     let request_digest = hash(request_bytes).to_bytes();
     custody_cu_checkpoint!("cu-decoded");
-    // ONE borrow and ONE decode of the activation cache, for the whole
-    // invocation. It used to be three: `authenticate_market`,
-    // `authenticate_calling_release` and `authenticate_realm` each borrowed the
-    // same immutable Registry-owned account and each ran
-    // `ActivatedExecutionReleaseSetViewV1::decode` -- the complete five-role
-    // projection and every aliasing pair, twenty-five `decode_role` calls -- to
-    // answer one question about one role. Measured on real ELFs 2026-09-03,
-    // one decode with its identity conjuncts is 25,000 to 31,000 CU, so the
-    // Remove was paying for two of them twice over per transaction and had
-    // never executed the merge leg that needed the budget.
-    //
-    // `dclutch-registry-activation-auth-v1`'s own doc names the pair that does
-    // this -- `authenticate_activation_cache_identity_v1` once, then the role
-    // reads out of the SAME view -- and Claims made exactly this repair at
-    // `0aa70478e`. The guard is held across the frame and the realm and dropped
-    // before dispatch, so nothing below reads a view whose bytes could have
-    // moved underneath it.
+    // ONE borrow and ONE decode of the activation cache for the whole
+    // invocation: a decode with its identity conjuncts costs 25,000 to 31,000
+    // CU, and `authenticate_activation_cache_identity_v1` once, then every
+    // role read out of the SAME view, is the pair
+    // `dclutch-registry-activation-auth-v1` names. The guard is held across
+    // the frame and the realm and dropped before dispatch, so nothing below
+    // reads a view whose bytes could have moved underneath it.
     let registry = account(accounts, REGISTRY_PROGRAM)?;
     let cache_account = account(accounts, ACTIVATION_CACHE)?;
     require_cache_account(registry.key, cache_account).map_err(CustodySbfError::from)?;

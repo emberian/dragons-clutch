@@ -24,10 +24,10 @@ pub const FIRST_TEST_BAND: u32 = 0x0000_0100;
 ///
 /// Lean-authored, so a table that gained or lost an entry cannot pass a
 /// count written down beside it by hand.
-pub const BAND_COUNT: usize = 25;
+pub const BAND_COUNT: usize = 22;
 
 /// Number of allocated on-chain protocol bands.
-pub const PROGRAM_BAND_COUNT: usize = 11;
+pub const PROGRAM_BAND_COUNT: usize = 8;
 
 /// Number of allocated test-only caller bands.
 pub const TEST_CALLER_BAND_COUNT: usize = 14;
@@ -46,14 +46,8 @@ pub const CLAIMS_REFUSAL_BASE: u32 = 0x0000_5000;
 pub const CUSTODY_REFUSAL_BASE: u32 = 0x0000_6000;
 /// Band 8 -- `dclutch-resolution-proof-sbf`.
 pub const RESOLUTION_REFUSAL_BASE: u32 = 0x0000_8000;
-/// Band 9 -- `dclutch-product-runtime-v2-sbf`.
-pub const PRODUCT_RUNTIME_V2_REFUSAL_BASE: u32 = 0x0000_9000;
-/// Band 11 -- `dclutch-series-shadow-sbf`.
-pub const SERIES_SHADOW_REFUSAL_BASE: u32 = 0x0000_B000;
-/// Band 12 -- `dclutch-general-accelerator-sbf`.
-pub const GENERAL_ACCELERATOR_REFUSAL_BASE: u32 = 0x0000_C000;
-/// Band 13 -- `dclutch-dealer-accelerator-sbf`.
-pub const DEALER_ACCELERATOR_REFUSAL_BASE: u32 = 0x0000_D000;
+/// Band 12 -- `dclutch-accelerator-sbf`.
+pub const ACCELERATOR_REFUSAL_BASE: u32 = 0x0000_C000;
 /// Band 0x100 -- `dclutch-claims-affine-batch-test-caller-sbf`.
 pub const TEST_CLAIMS_AFFINE_BATCH_CALLER_BASE: u32 = 0x0010_0000;
 /// Band 0x101 -- `dclutch-fractional-signed-delta-test-caller-sbf`.
@@ -138,30 +132,9 @@ pub const BANDS: &[RefusalBand] = &[
         tier: BandTier::Program,
     },
     RefusalBand {
-        label: "product-runtime-v2",
-        package: "dclutch-product-runtime-v2-sbf",
-        base: PRODUCT_RUNTIME_V2_REFUSAL_BASE,
-        span: BAND_SPAN,
-        tier: BandTier::Program,
-    },
-    RefusalBand {
-        label: "series-shadow",
-        package: "dclutch-series-shadow-sbf",
-        base: SERIES_SHADOW_REFUSAL_BASE,
-        span: BAND_SPAN,
-        tier: BandTier::Program,
-    },
-    RefusalBand {
-        label: "general-accelerator",
-        package: "dclutch-general-accelerator-sbf",
-        base: GENERAL_ACCELERATOR_REFUSAL_BASE,
-        span: BAND_SPAN,
-        tier: BandTier::Program,
-    },
-    RefusalBand {
-        label: "dealer-accelerator",
-        package: "dclutch-dealer-accelerator-sbf",
-        base: DEALER_ACCELERATOR_REFUSAL_BASE,
+        label: "accelerator",
+        package: "dclutch-accelerator-sbf",
+        base: ACCELERATOR_REFUSAL_BASE,
         span: BAND_SPAN,
         tier: BandTier::Program,
     },

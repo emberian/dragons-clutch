@@ -288,9 +288,7 @@ resolution:dclutch-resolution-proof-sbf:dclutch_resolution_proof_sbf
 custody:dclutch-custody-sbf:dclutch_custody_sbf
 registry:dclutch-registry-sbf:dclutch_registry_sbf
 rent:dclutch-rent-sbf:dclutch_rent_sbf
-general-accelerator:dclutch-general-accelerator-sbf:dclutch_general_accelerator_sbf
-dealer-accelerator:dclutch-dealer-accelerator-sbf:dclutch_dealer_accelerator_sbf
-series-shadow:dclutch-series-shadow-sbf:dclutch_series_shadow_sbf"
+accelerator:dclutch-accelerator-sbf:dclutch_accelerator_sbf"
 
 # Diagnostic-only Trading build profile.  Keep this as one package-scoped
 # suffix so the command recorded in every evidence surface is the command that

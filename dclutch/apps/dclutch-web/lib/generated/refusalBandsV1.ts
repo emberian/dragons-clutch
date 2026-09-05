@@ -3,7 +3,7 @@
 
 export const REFUSAL_BAND_SHIFT = 12 as const;
 export const REFUSAL_BAND_SPAN = 4096 as const;
-export const REFUSAL_BAND_COUNT = 25 as const;
+export const REFUSAL_BAND_COUNT = 22 as const;
 export const REFUSAL_FIRST_PROGRAM_BAND = 1 as const;
 export const REFUSAL_FIRST_TEST_BAND = 256 as const;
 
@@ -22,10 +22,7 @@ export const REFUSAL_BANDS_V1: ReadonlyArray<RefusalBandV1> = [
   { label: 'claims', package: 'dclutch-claims-sbf', base: 0x5000, tier: 'program' },
   { label: 'custody', package: 'dclutch-custody-sbf', base: 0x6000, tier: 'program' },
   { label: 'resolution', package: 'dclutch-resolution-proof-sbf', base: 0x8000, tier: 'program' },
-  { label: 'product-runtime-v2', package: 'dclutch-product-runtime-v2-sbf', base: 0x9000, tier: 'program' },
-  { label: 'series-shadow', package: 'dclutch-series-shadow-sbf', base: 0xB000, tier: 'program' },
-  { label: 'general-accelerator', package: 'dclutch-general-accelerator-sbf', base: 0xC000, tier: 'program' },
-  { label: 'dealer-accelerator', package: 'dclutch-dealer-accelerator-sbf', base: 0xD000, tier: 'program' },
+  { label: 'accelerator', package: 'dclutch-accelerator-sbf', base: 0xC000, tier: 'program' },
   { label: 'test/claims-affine-batch-caller', package: 'dclutch-claims-affine-batch-test-caller-sbf', base: 0x100000, tier: 'test-caller' },
   { label: 'test/claims-fractional-signed-delta-caller', package: 'dclutch-fractional-signed-delta-test-caller-sbf', base: 0x101000, tier: 'test-caller' },
   { label: 'test/claims-liability-basis-caller', package: 'dclutch-claims-liability-basis-test-caller-sbf', base: 0x102000, tier: 'test-caller' },

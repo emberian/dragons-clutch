@@ -76,13 +76,10 @@ SHIPPED_LINKS = (
     ("claims", "dclutch-claims-sbf", True),
     ("core", "dclutch-core-sbf", True),
     ("custody", "dclutch-custody-sbf", True),
-    ("dealer-accelerator", "dclutch-dealer-accelerator-sbf", True),
-    ("general-accelerator", "dclutch-general-accelerator-sbf", True),
-    ("dclutch-product-runtime-v2-sbf", "dclutch-product-runtime-v2-sbf", False),
+    ("accelerator", "dclutch-accelerator-sbf", True),
     ("registry", "dclutch-registry-sbf", True),
     ("rent", "dclutch-rent-sbf", True),
     ("resolution", "dclutch-resolution-proof-sbf", True),
-    ("series-shadow", "dclutch-series-shadow-sbf", True),
     ("trading", "dclutch-trading-sbf", True),
 )
 MAX_JSON_BYTES = 16 * 1024 * 1024

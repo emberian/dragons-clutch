@@ -131,98 +131,23 @@ pub enum ProtocolPositionSbfErrorV2 {
     Receipt = 0x514A,
 }
 
-impl ProtocolPositionSbfErrorV2 {
-    /// Every refusal this request family can raise, in discriminant order.
-    ///
-    /// This is what the sub-band assertions below read. It is kept honest by
-    /// [`ProtocolPositionSbfErrorV2::ordinal`], whose match is exhaustive: a variant added to the
-    /// enum does not compile until its author writes an arm here, and the only arm that satisfies
-    /// the assertions is its own index in this array.
-    pub const ALL: [Self; 11] = [
-        Self::Instruction,
-        Self::Accounts,
-        Self::Release,
-        Self::Market,
-        Self::ProductBasis,
-        Self::Position,
-        Self::Rent,
-        Self::Allocation,
-        Self::Admission,
-        Self::Commit,
-        Self::Receipt,
-    ];
-
-    /// This refusal's position in [`ProtocolPositionSbfErrorV2::ALL`].
-    ///
-    /// The match is exhaustive on purpose, and that is the whole mechanism: a twelfth variant is a
-    /// COMPILE ERROR here rather than a discriminant no assertion ever looks at.
-    const fn ordinal(self) -> usize {
-        match self {
-            Self::Instruction => 0,
-            Self::Accounts => 1,
-            Self::Release => 2,
-            Self::Market => 3,
-            Self::ProductBasis => 4,
-            Self::Position => 5,
-            Self::Rent => 6,
-            Self::Allocation => 7,
-            Self::Admission => 8,
-            Self::Commit => 9,
-            Self::Receipt => 10,
-        }
-    }
-}
-
-// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
-// The discriminants stay literal so a code seen in a validator log is greppable;
-// these assertions are what stops them drifting out of the allocated band.
-//
-// WHY THIS IS A LIST AND NOT TWO ENDPOINTS. The ceiling assertion used to name
-// one variant BY HAND as "the last one". A hand-named ceiling says nothing about
-// the variants after it and goes stale silently every single time the family
-// grows -- the failure is not that the name is wrong, it is that nothing can
-// notice. Claims' own top-level band proved it the expensive way: its bound went
-// on naming `ReleaseSuperseded` after a later variant landed, so for as long as
-// that stood, the newest refusal in the program was checked by nothing.
-//
-// So the sub-band is now checked over `ALL`, element by element, and `ALL` is
-// welded to the enum by the exhaustive `ordinal` match. A new variant cannot
-// join quietly: it does not compile until its author answers for it, and the
-// answer they must give is its index here.
-const _: () = {
-    const SUB_BAND: u32 = dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x140;
-    assert!(
-        ProtocolPositionSbfErrorV2::ALL[0] as u32 == SUB_BAND,
-        "ProtocolPositionSbfErrorV2 must start at its registered sub-band offset"
-    );
-    let mut index: u32 = 0;
-    let mut rest = ProtocolPositionSbfErrorV2::ALL.as_slice();
-    while let [variant, tail @ ..] = rest {
-        let variant = *variant;
-        assert!(
-            variant.ordinal() == index as usize,
-            "ProtocolPositionSbfErrorV2::ALL repeats a variant, skips one, or is out of discriminant order"
-        );
-        assert!(
-            variant as u32 == SUB_BAND + index,
-            "ProtocolPositionSbfErrorV2 discriminants are not the contiguous run from the sub-band offset that ALL claims"
-        );
-        assert!(
-            (variant as u32)
-                < dclutch_refusal_registry::CLAIMS_REFUSAL_BASE
-                    + dclutch_refusal_registry::BAND_SPAN,
-            "ProtocolPositionSbfErrorV2 must not run past its registered refusal band"
-        );
-        index += 1;
-        rest = tail;
-    }
-};
-
-impl From<ProtocolPositionSbfErrorV2> for ProgramError {
-    fn from(value: ProtocolPositionSbfErrorV2) -> Self {
-        Self::Custom(value as u32)
-    }
-}
+dclutch_refusal_registry::pin_refusal_band!(
+    ProtocolPositionSbfErrorV2,
+    dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x140,
+    [
+        Instruction,
+        Accounts,
+        Release,
+        Market,
+        ProductBasis,
+        Position,
+        Rent,
+        Allocation,
+        Admission,
+        Commit,
+        Receipt
+    ]
+);
 
 #[derive(Clone, Copy)]
 struct CommonAccounts<'accounts, 'info> {

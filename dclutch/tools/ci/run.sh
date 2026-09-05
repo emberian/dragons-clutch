@@ -1671,8 +1671,7 @@ tier_root-targets() {
 # STILL EXCLUDED, BY REASON, and named here so the exclusion is a decision
 # rather than an oversight:
 #
-#   * `dclutch-direct-aot-sbf`, `dclutch-product-runtime-v2-sbf` and
-#     `crates/dclutch-token-svm/program-test` -- cheap, but each needs a runner
+#   * `crates/dclutch-token-svm/program-test` -- cheap, but it needs a runner
 #     WRITTEN first. Wiring a bare `cargo test` here would put this file back in
 #     the business of restating other lanes' prerequisites, which is exactly
 #     what `PROGRAM_MANIFESTS` got wrong.
@@ -1699,8 +1698,8 @@ claims-fractional|programs/dclutch-claims-sbf/program-test/fractional-atomic/run
 sparse-chain|programs/dclutch-claims-sbf/program-test/sparse-chain/run-program-test.sh|the sparse native transfer chain
 affine-batch|programs/dclutch-claims-sbf/program-test/affine-batch/run-program-test.sh|the affine batch V2 lowering
 signed-delta|programs/dclutch-claims-sbf/program-test/fractional-signed-delta/run-program-test.sh|the fractional signed-delta route
-dealer|programs/dclutch-dealer-accelerator-sbf/program-test/run-program-test.sh|the dealer accelerator link and its family tests
-general|programs/dclutch-general-accelerator-sbf/program-test/run-program-test.sh|the general accelerator link, its freeze wall and its hot instruction
+dealer|programs/dclutch-accelerator-sbf/dealer-program-test/run-program-test.sh|the accelerator link, driven through its Dealer arm and the Dealer family tests
+general|programs/dclutch-accelerator-sbf/program-test/run-program-test.sh|the accelerator link through its General arm, its freeze wall and its hot instruction
 userposition|programs/dclutch-trading-sbf/program-test/user-position-admission/run-program-test.sh|user position admission across the lifecycle
 registry|programs/dclutch-registry-sbf/run-lineage-program-test.sh|the release-set successor declaration and the walk that follows the hop
 fee2tx|programs/dclutch-trading-sbf/program-test/run-fee-second-transaction.sh|the Direct fee leg in a transaction of its own, against real Custody

@@ -38,19 +38,11 @@ ARTIFACT_ROLES = {
     "custody": ("dclutch-custody-sbf", "dclutch_custody_sbf"),
     "registry": ("dclutch-registry-sbf", "dclutch_registry_sbf"),
     "rent": ("dclutch-rent-sbf", "dclutch_rent_sbf"),
-    "dealer-accelerator": (
-        "dclutch-dealer-accelerator-sbf",
-        "dclutch_dealer_accelerator_sbf",
-    ),
-    "general-accelerator": (
-        "dclutch-general-accelerator-sbf",
-        "dclutch_general_accelerator_sbf",
-    ),
-    "series-shadow": ("dclutch-series-shadow-sbf", "dclutch_series_shadow_sbf"),
+    "accelerator": ("dclutch-accelerator-sbf", "dclutch_accelerator_sbf"),
 }
-FRAME_GATE_ONLY_PACKAGES = (
-    "dclutch-product-runtime-v2-sbf",
-)
+# Empty since 2026-09-04: the two frame-gate-only links (`dclutch-direct-aot-sbf`,
+# `dclutch-product-runtime-v2-sbf`) were deleted with their bands retired.
+FRAME_GATE_ONLY_PACKAGES: tuple[str, ...] = ()
 EXPECTED_LINK_COUNT = len(ARTIFACT_ROLES) + len(FRAME_GATE_ONLY_PACKAGES)
 GLOBAL_INPUTS = {
     "Cargo.toml",

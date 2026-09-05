@@ -531,7 +531,7 @@ fn recurring_resolution_deployment_auth_caller_census_is_exact() {
     );
     assert_eq!(
         pre_market_abort
-            .matches("slot_pinned_deployment_observation(")
+            .matches("cached_deployment_observation(")
             .count(),
         2,
         "funding retirement binds Trading and Resolution through the shared cached path",
