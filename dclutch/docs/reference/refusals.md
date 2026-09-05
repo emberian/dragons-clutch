@@ -18,12 +18,12 @@ never used, meaning a code below `0x1000` came from some other program in
 your transaction, not from dClutch. Bands at `0x100000` and above belong
 to test-only programs that are never deployed.
 
-The tables below carry all **350** codes, with meanings taken
+The tables below carry all **351** codes, with meanings taken
 from the source code's own documentation.
 
 ## Which of these have actually fired
 
-**70 of 350** codes have been observed refusing a real
+**70 of 351** codes have been observed refusing a real
 transaction against a compiled ELF.
 
 The `observed firing` column names the campaign that saw each one. It is
@@ -54,7 +54,7 @@ frame that invoked it, most often. Those are real refusals and are deliberately
 not counted above.
 
 **And the denominator is the narrower of two.** These tables carry the
-350 codes belonging to the programs the route census enumerates.
+351 codes belonging to the programs the route census enumerates.
 The tree as a whole declares more -- the census reports its own, larger figure
 across every package it indexes -- and the difference is codes in packages that
 have no enumerated program, so no campaign could observe them through a route.
@@ -473,6 +473,7 @@ The 22 campaigns contributing:
 | `0x4028` | `TradingSbfError::ShadowTrustedEnvironment` | A `ShadowAot` strategy was paired with a slot-declaring AccountProfile. | -- | `programs/dclutch-trading-sbf/src/lib.rs:525` |
 | `0x4029` | `TradingSbfError::FundedRent` | The rent a funding ledger was FUNDED at did not price its balance. | -- | `programs/dclutch-trading-sbf/src/lib.rs:532` |
 | `0x402A` | `TradingSbfError::SeriesExpireCoreTemplate` | The Expire artifact's Core route template is not the zero placeholder. | -- | `programs/dclutch-trading-sbf/src/lib.rs:554` |
+| `0x402B` | `TradingSbfError::ActivationLedgerCount` | The physical funding ledgers are not the selected entry's closure. | -- | `programs/dclutch-trading-sbf/src/lib.rs:586` |
 | `0x4100` | `SeriesAccountErrorV3::State` | Owner, width, key, phase, or canonical bytes refused. | -- | `programs/dclutch-trading-sbf/src/series/accounts.rs:44` |
 | `0x4101` | `SeriesAccountErrorV3::Frame` | Signer, writable, executable, System, or alias contract refused. | -- | `programs/dclutch-trading-sbf/src/series/accounts.rs:46` |
 | `0x4102` | `SeriesAccountErrorV3::Funding` | Exact native funding or checked arithmetic refused. | -- | `programs/dclutch-trading-sbf/src/series/accounts.rs:48` |

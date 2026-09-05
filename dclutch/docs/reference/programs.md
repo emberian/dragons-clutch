@@ -20,4 +20,4 @@ reachable inside an entry route's request.
 | `registry` | `dclutch-registry-sbf` | 0x1 | 7 | 4 | 22 | `process_instruction` (programs/dclutch-registry-sbf/src/lib.rs:244) |
 | `rent` | `dclutch-rent-sbf` | 0x2 | 4 | 0 | 12 | `process_instruction` (programs/dclutch-rent-sbf/src/lib.rs:128) |
 | `resolution` | `dclutch-resolution-proof-sbf` | 0x8 | 10 | 20 | 30 | `process_instruction` (programs/dclutch-resolution-proof-sbf/src/lib.rs:274) |
-| `trading` | `dclutch-trading-sbf` | 0x4 | 19 | 2 | 48 | `entrypoint` (programs/dclutch-trading-sbf/src/entrypoint_adapter.rs:1609) |
+| `trading` | `dclutch-trading-sbf` | 0x4 | 19 | 2 | 49 | `entrypoint` (programs/dclutch-trading-sbf/src/entrypoint_adapter.rs:1609) |

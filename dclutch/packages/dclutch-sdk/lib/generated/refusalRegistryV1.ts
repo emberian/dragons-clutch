@@ -118,6 +118,7 @@ export const REFUSAL_CODES_V1: ReadonlyArray<RefusalCodeV1> = [
   { code: 0x4028, name: "TradingSbfError::ShadowTrustedEnvironment", meaning: "A `ShadowAot` strategy was paired with a slot-declaring AccountProfile.", band: "trading" },
   { code: 0x4029, name: "TradingSbfError::FundedRent", meaning: "The rent a funding ledger was FUNDED at did not price its balance.", band: "trading" },
   { code: 0x402A, name: "TradingSbfError::SeriesExpireCoreTemplate", meaning: "The Expire artifact's Core route template is not the zero placeholder.", band: "trading" },
+  { code: 0x402B, name: "TradingSbfError::ActivationLedgerCount", meaning: "The physical funding ledgers are not the selected entry's closure.", band: "trading" },
   { code: 0x4100, name: "SeriesAccountErrorV3::State", meaning: "Owner, width, key, phase, or canonical bytes refused.", band: "trading" },
   { code: 0x4101, name: "SeriesAccountErrorV3::Frame", meaning: "Signer, writable, executable, System, or alias contract refused.", band: "trading" },
   { code: 0x4102, name: "SeriesAccountErrorV3::Funding", meaning: "Exact native funding or checked arithmetic refused.", band: "trading" },
