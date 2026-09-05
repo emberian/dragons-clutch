@@ -12332,23 +12332,45 @@ fn execute_generic_market_founding(
     )?;
     let initial_founding_census =
         authenticate_generic_market_founding_lock_census_v3(payer.pubkey(), &prepared_founding)?;
+    // THE OFFSETS ARE DERIVED, NOT TYPED. This is a BOUNDARY test -- the frame
+    // plus exactly its headroom is the devnet lock limit, and one more is over
+    // it -- so the quantity worth pinning is the BASE, and the headroom is the
+    // limit minus the base. A typed headroom is a second author for the frame
+    // width, and it drifted the moment the failure escrow bought two writable
+    // keys: base 58 became 60, the probe went on adding six, and the census
+    // reported 66/67 against a 64 limit and refused a founding the chain would
+    // have taken. Measured 2026-09-04 by the `ladder` gauntlet tier, on two
+    // loopback validators, at the last stage of the founding.
+    let founding_headroom = DEVNET_ACCOUNT_LOCK_LIMIT_V1
+        .checked_sub(initial_founding_census.complete_keys)
+        .ok_or_else(|| {
+            Error::new(format!(
+                "the DCLTGMF3 founding message already holds {} complete keys, past the {} \
+                 devnet lock limit",
+                initial_founding_census.complete_keys, DEVNET_ACCOUNT_LOCK_LIMIT_V1,
+            ))
+        })?;
     let open_admitted = compiled_complete_lock_census_v1(
         payer.pubkey(),
-        &append_distinct_census_accounts_v1(&prepared_founding.instruction, 6),
+        &append_distinct_census_accounts_v1(&prepared_founding.instruction, founding_headroom),
     )?;
     let open_refused = compiled_complete_lock_census_v1(
         payer.pubkey(),
-        &append_distinct_census_accounts_v1(&prepared_founding.instruction, 7),
+        &append_distinct_census_accounts_v1(&prepared_founding.instruction, founding_headroom + 1),
     )?;
-    if open_admitted.complete_keys != DEVNET_ACCOUNT_LOCK_LIMIT_V1
+    if initial_founding_census.complete_keys != GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3
+        || open_admitted.complete_keys != DEVNET_ACCOUNT_LOCK_LIMIT_V1
         || open_refused.complete_keys != DEVNET_ACCOUNT_LOCK_LIMIT_V1 + 1
         || require_devnet_complete_key_limit_v1(open_admitted).is_err()
         || require_devnet_complete_key_limit_v1(open_refused).is_ok()
     {
         return Err(Error::new(format!(
-            "DCLTGMF3 boundary census refused: base {}, +6 {}, +7 {}",
+            "DCLTGMF3 boundary census refused: base {} (expected {}), +{} {}, +{} {}",
             initial_founding_census.complete_keys,
+            GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3,
+            founding_headroom,
             open_admitted.complete_keys,
+            founding_headroom + 1,
             open_refused.complete_keys,
         )));
     }
@@ -13760,6 +13782,33 @@ pub(crate) struct LocalMarketShapeV1 {
     /// alternative sources, which is the only shape `advance-recovery` has
     /// anything to crank.
     pub(crate) recovery: Option<Vec<RelativeRecoveryRungV1>>,
+    /// How stale the captured publication may be, in seconds, or `None` for
+    /// the fixture's own declared shelf life.
+    ///
+    /// THIS IS THE ONE NUMBER A LADDER ON THIS FIXTURE CANNOT LEAVE ALONE, and
+    /// the reason is arithmetic rather than taste. The primary leg's deadline
+    /// is `window.end + max_age`, `window.end` IS the captured publication
+    /// instant, and `FIXTURE_SHELF_LIFE_SECONDS` is one year -- so every rung
+    /// a loopback market buys is anchored a year past the capture, and
+    /// `advance-recovery` can only ever refuse `DeadlineNotReached` in any
+    /// bounded lab run. Measured, not inferred: the `ladder` gauntlet tier
+    /// founded a two-source market on a live validator and its crank reported
+    /// the leg due 30,406,xxx seconds away.
+    ///
+    /// `None` is the default and is byte-for-byte what every caller founded
+    /// before this field existed. `Some` is a caller stating the shelf life
+    /// its own campaign needs, which is the honest alternative to warping a
+    /// validator's clock -- and it is exactly as much of a lab setting as the
+    /// one it replaces, because a frozen publication's staleness grows by
+    /// 86,400 every day and is a fact about the LAB, never about a market.
+    ///
+    /// What it does not buy is a rung CAPTURE. `max_age` governs both the
+    /// crank's admissibility and the publication's freshness, so a shelf life
+    /// short enough for the primary leg to close in a lab is one under which
+    /// the frozen publication is already stale for every rung after it. A rung
+    /// answered on this fixture needs a publication the lab can refresh, which
+    /// is a fixture question and not a parameter.
+    pub(crate) terminal_max_age_seconds: Option<u32>,
     /// The author's founding band, or `None`.
     ///
     /// `Option` rather than a plain field so `Default` stays constructible
@@ -13838,6 +13887,8 @@ impl Default for LocalMarketShapeV1 {
             founding_band: Some(crate::model::FoundingBandInputV1::spot_band(
                 15_000, 200, 10_000, 3, 9_000,
             )),
+            // The fixture's own declared shelf life, unchanged.
+            terminal_max_age_seconds: None,
             // NO LADDER BY DEFAULT, which is what every fixture and campaign
             // that takes this shape has founded since there was a shape to
             // take. A ladder is prepaid at founding -- one extra compartment
@@ -13957,6 +14008,13 @@ pub(crate) fn demo_market_input_base_shaped(
     // publication (TWIN's finding: a window forced to one instant is a market
     // nobody can resolve), and `max_age_seconds` is the fixture's declared
     // shelf life, not a market parameter — see the shared core for both.
+    // The fixture's declared shelf life unless the caller stated one. Both the
+    // window record and the ladder's anchor read the SAME value: a market whose
+    // rungs were anchored on one number and whose crank read another off the
+    // published window would be a ladder nobody could walk.
+    let max_age_seconds = shape
+        .terminal_max_age_seconds
+        .unwrap_or(FIXTURE_SHELF_LIFE_SECONDS);
     pyth_market_input_base(
         PythMarketParamsV1 {
             founding_band: shape.founding_band.clone(),
@@ -13964,7 +14022,7 @@ pub(crate) fn demo_market_input_base_shaped(
                 shape.recovery.as_deref(),
                 update
                     .publish_time()
-                    .checked_add(i64::from(FIXTURE_SHELF_LIFE_SECONDS))
+                    .checked_add(i64::from(max_age_seconds))
                     .ok_or_else(|| Error::new("fixture primary deadline overflowed"))?,
             )?,
             registry,
@@ -13979,7 +14037,7 @@ pub(crate) fn demo_market_input_base_shaped(
                 .checked_sub(shape.terminal_window_width_seconds)
                 .ok_or_else(|| Error::new("terminal window start underflowed"))?,
             window_end: update.publish_time(),
-            max_age_seconds: FIXTURE_SHELF_LIFE_SECONDS,
+            max_age_seconds,
             // The adapter's ceiling — the widest the type admits. A LAB setting:
             // this Market resolves against a single captured publication whose
             // confidence is whatever it was on the day it was captured, and

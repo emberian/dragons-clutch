@@ -1449,6 +1449,7 @@ pub(crate) fn run_market(arguments: Vec<String>) -> Result<()> {
     let mut window_width_raw = None;
     let mut generation_raw = None;
     let mut recovery_rungs_raw = None;
+    let mut terminal_max_age_raw = None;
     let mut band_anchor_raw = None;
     let mut band_volatility_raw = None;
     let mut band_window_slots_raw = None;
@@ -1471,6 +1472,7 @@ pub(crate) fn run_market(arguments: Vec<String>) -> Result<()> {
             "--terminal-window-width-seconds" => &mut window_width_raw,
             "--generation" => &mut generation_raw,
             "--recovery-rungs" => &mut recovery_rungs_raw,
+            "--terminal-max-age-seconds" => &mut terminal_max_age_raw,
             "--band-anchor" => &mut band_anchor_raw,
             "--band-volatility-bps" => &mut band_volatility_raw,
             "--band-window-slots" => &mut band_window_slots_raw,
@@ -1522,6 +1524,7 @@ pub(crate) fn run_market(arguments: Vec<String>) -> Result<()> {
         window_width_raw,
         generation_raw,
         recovery_rungs_raw,
+        terminal_max_age_raw,
         band,
     )?;
     // Capability selection follows the split-founding precedent: an
@@ -1687,6 +1690,7 @@ fn market_shape_from_arguments_v1(
     terminal_window_width_seconds: Option<String>,
     generation: Option<String>,
     recovery_rungs: Option<String>,
+    terminal_max_age_seconds: Option<String>,
     band: Option<crate::model::FoundingBandInputV1>,
 ) -> Result<crate::market::LocalMarketShapeV1> {
     let default = crate::market::LocalMarketShapeV1::default();
@@ -1753,6 +1757,18 @@ fn market_shape_from_arguments_v1(
             "--initial-collateral-atoms",
             default.initial_collateral_atoms,
         )?,
+        // ABSENT IS THE FIXTURE'S OWN DECLARED SHELF LIFE, unchanged, so every
+        // command line written before this flag existed compiles the market it
+        // always did. Stated, it is the number a campaign needs so its market's
+        // primary leg closes inside a bounded run -- the honest alternative to
+        // warping a validator's clock, and no more of a lab setting than the
+        // constant it replaces.
+        terminal_max_age_seconds: match terminal_max_age_seconds {
+            None => default.terminal_max_age_seconds,
+            Some(raw) => Some(raw.parse::<u32>().map_err(|_| {
+                Error::new("--terminal-max-age-seconds must be a decimal u32")
+            })?),
+        },
         terminal_window_width_seconds: match terminal_window_width_seconds {
             None => default.terminal_window_width_seconds,
             Some(raw) => raw
