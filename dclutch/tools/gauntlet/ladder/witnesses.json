@@ -1,0 +1,41 @@
+{
+  "campaign": "ladder",
+  "note": "The context file this tier hands the shared evaluator is its own transcript, so a `plan-jq` witness here queries the transcript and an `evidence-jq` witness queries the campaign evidence.",
+  "witnesses": [
+    {
+      "id": "the-market-bought-a-named-alternative",
+      "kind": "plan-jq",
+      "query": "if (.recovery_policy_record | length) > 0 then \"bought\" else \"none\" end",
+      "expect": "bought",
+      "provenance": "The verifier cohort-16's `found-two-source` row states for exactly this failure (tools/cohort/steps.tsv): a market compiled WITHOUT `--recovery-rungs` reads a ZERO recovery link and is a different market, so a zero link means the flag never reached the compiler. The address checked here is the RecoveryPolicyV2 record the FOUNDING published on chain, read out of the founding campaign's own evidence, not out of the input this tier compiled."
+    },
+    {
+      "id": "every-crank-frame-is-the-relay-contract-eighteen",
+      "kind": "plan-jq",
+      "query": "[.cranks[] | .frameAccounts] | unique | map(tostring) | join(\",\")",
+      "expect": "18",
+      "provenance": "`dclutch-relay-contract`'s `relay_frame_roles_v1(RelayFrameKindV1::AdvanceRecovery)` declares the frame's positions, and the AdvanceRecovery frame the deployed Resolution program parses is 18 accounts wide. The driver builds its metas FROM those roles and never from a typed list; this counts what it built and compares it against the contract's own width, so a frame that grew or shrank on either side is caught rather than assumed."
+    },
+    {
+      "id": "no-clock-was-warped",
+      "kind": "plan-jq",
+      "query": "if ([.cranks[] | select(.observedUnixSeconds != null) | select(.observedUnixSeconds >= .started_unix_seconds)] | length) == ([.cranks[] | select(.observedUnixSeconds != null)] | length) then \"chain-clock-inside-the-run\" else \"chain-clock-outside-the-run\" end",
+      "expect": "chain-clock-inside-the-run",
+      "provenance": "TWO INDEPENDENT CLOCKS. `started_unix_seconds` is this campaign's own HOST wall clock at the moment it began; `observedUnixSeconds` is what the CLUSTER's clock said when the crank driver planned. A validator whose clock had been moved to make a deadline pass would report a second outside the interval the campaign itself occupied, and the whole ladder rests on a wall-clock comparison (`SourceResolutionStateV2::crank_recovery_ladder` refuses while `current_unix_seconds <= due`), so a campaign that could warp its own clock could not honestly assert its own hostile."
+    },
+    {
+      "id": "a-crank-runs-strictly-after-its-legs-deadline",
+      "kind": "plan-jq",
+      "query": "if ([.cranks[] | select(.outcome == \"executed\") | select(.observedUnixSeconds <= .dueUnixSeconds)] | length) == 0 and ([.cranks[] | select(.outcome == \"not-yet-due\") | select(.observedUnixSeconds > .dueUnixSeconds)] | length) == 0 then \"consistent\" else \"inconsistent\" end",
+      "expect": "consistent",
+      "provenance": "`SourceResolutionStateV2::crank_recovery_ladder` refuses while `current_unix_seconds <= due`, so the last second at which an honest observation may still land and the first second at which a crank may run are DIFFERENT seconds. That single conjunct is what stops the funded failure walk from being a shortcut around a leg the market's holders paid for, and it is asserted in both directions here: nothing that executed stood on or before its deadline, and nothing reported as not-yet-due was actually past it."
+    },
+    {
+      "id": "every-refusal-says-so-in-its-own-label",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.error != null) | select((.label | test(\"refuse\"; \"i\")) | not)] | length | tostring",
+      "expect": "0",
+      "provenance": "The successor campaign this tier drives submits deliberate expected-failure transactions -- 'Found37 refuses a substituted Market coordinate and rolls the transaction back' is one -- and every one of them SAYS SO in its own label, which is the campaign's own convention and not this tier's. So a finalized transaction carrying a structured InstructionError whose label does not say it refuses is an UNPLANNED refusal, and this counts them. It is not a claim that nothing refused; it is a claim that nothing refused by surprise."
+    }
+  ]
+}

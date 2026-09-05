@@ -122,6 +122,14 @@
       "reproducible": true
     },
     {
+      "campaign": "ladder",
+      "substrate": "local-validator",
+      "runner": "tools/gauntlet/ladder/run-ladder.sh",
+      "producer": "tools/gauntlet/ladder",
+      "note": "The funded ordered recovery ladder on ONE validator: the checked-mutable substrate stood up once (the relayed vertical's own `substrate.rs`, linked and not forked), a two-source market compiled through the shipped `--recovery-rungs` parser and founded, and then the shipped `advance-recovery` driver run against the market that founding just produced. It warps no clock, so a leg that is not yet due is RECORDED as not yet due rather than reached.",
+      "reproducible": true
+    },
+    {
       "campaign": "relayed-vertical",
       "substrate": "local-validator",
       "runner": "tools/gauntlet/relayed-vertical/run-relayed-vertical.sh",

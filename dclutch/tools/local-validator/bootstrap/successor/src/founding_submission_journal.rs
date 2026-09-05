@@ -61,19 +61,37 @@ impl FoundingSubmissionOperationV1 {
     /// The exact unique-account width of one operation's compiled message.
     ///
     /// `recovery_policy` says whether this market was founded WITH a recovery
-    /// policy. Only the three founding legs are shape-invariant; the post-Open
-    /// funding-readiness frames carry the recovery record's raw/staging pair,
-    /// and a market founded without a recovery policy publishes no such record,
-    /// so its frame is exactly two accounts narrower. `funding_readiness.rs`
-    /// measures both widths directly against the frame it builds
+    /// policy. A market that bought one publishes a `RecoveryPolicyV2` record,
+    /// and every frame that authenticates that record carries its raw/staging
+    /// PAIR, so those frames are exactly two accounts wider. A market founded
+    /// without one publishes no such record and its frames are the narrower
+    /// shape. `funding_readiness.rs` measures both widths directly against the
+    /// frame it builds
     /// (`every_observed_semantic_position_is_nonaliased_and_bounded`); this pin
     /// exists to catch drift, so it has to know the same two shapes rather than
-    /// refuse the narrower one as drift.
+    /// refuse either one as drift.
+    ///
+    /// THE ATOMIC FOUNDING IS ONE OF THOSE FRAMES, and this table said it was
+    /// not. `DCLTGMF3` was pinned at a flat 58 under the belief that "the three
+    /// founding legs are shape-invariant", which was true of every market that
+    /// had ever been founded because none of them had bought a ladder: Core's
+    /// `authenticate_recovery_policy` runs on every composed resolution action
+    /// but the `Some` arm had never executed. The first recovery-bearing
+    /// founding attempted on a chain -- 2026-09-04, the `ladder` gauntlet tier,
+    /// a loopback validator -- compiled a 60-account DCLTGMF3 and was refused by
+    /// this pin, three transactions from Open. The frame was right and the pin
+    /// was a mirror; the two shapes are now both stated.
     pub(crate) const fn exact_unique_accounts(self, recovery_policy: bool) -> usize {
         match self {
             Self::Dcltcfq1 => 49,
             Self::Dcltpcb2 => 60,
-            Self::Dcltgmf3 => 58,
+            Self::Dcltgmf3 => {
+                if recovery_policy {
+                    60
+                } else {
+                    58
+                }
+            }
             // Canonical V7 frames are pairwise distinct and carry their own
             // program key as a frame account. The bounded inline v0 packet
             // adds exactly the disposable payer and ComputeBudget program.
@@ -1265,23 +1283,33 @@ mod tests {
     }
 
     /// A market founded with NO recovery policy publishes no recovery record,
-    /// so the post-Open funding-readiness frames lose that record's raw and
-    /// staging accounts and nothing else. The three founding legs are
-    /// shape-invariant. Pinning both widths here is what stops the narrower
-    /// frame being read as drift and refused, which is exactly what happened to
-    /// the first market ever founded without one.
+    /// so every frame that authenticates that record loses its raw and staging
+    /// accounts and nothing else. Pinning BOTH widths is what stops either
+    /// shape being read as drift and refused -- which has now happened twice,
+    /// once to the first market ever founded WITHOUT a policy and once to the
+    /// first market ever founded WITH one.
+    ///
+    /// THE SET OF FRAMES THAT NARROW IS MEASURED, NOT ASSUMED. This test used
+    /// to assert that all three founding legs were shape-invariant, and two of
+    /// them are: DCLTCFQ1 and DCLTPCB2 run before the Source exists. DCLTGMF3
+    /// does not -- it composes Core resolution actions, every one of which
+    /// authenticates the policy pair -- and the belief survived only because no
+    /// market had ever bought a ladder. The `ladder` gauntlet tier founded one
+    /// on a loopback validator on 2026-09-04 and compiled a 60-account
+    /// DCLTGMF3 against this table's flat 58.
     #[test]
-    fn only_the_post_open_funding_frames_narrow_without_a_recovery_policy() {
+    fn only_the_pre_source_founding_legs_ignore_the_recovery_policy() {
         use FoundingSubmissionOperationV1 as Op;
-        for operation in [Op::Dcltcfq1, Op::Dcltpcb2, Op::Dcltgmf3] {
+        for operation in [Op::Dcltcfq1, Op::Dcltpcb2] {
             assert_eq!(
                 operation.exact_unique_accounts(true),
                 operation.exact_unique_accounts(false),
-                "{} must not depend on the recovery policy",
+                "{} runs before the Source exists and must not depend on the recovery policy",
                 operation.label()
             );
         }
         for operation in [
+            Op::Dcltgmf3,
             Op::CoreFundingCreateV1,
             Op::ResolutionFundingActivateV1,
             Op::CoreFundingAcceptV1,
@@ -1289,12 +1317,16 @@ mod tests {
             assert_eq!(
                 operation.exact_unique_accounts(true) - operation.exact_unique_accounts(false),
                 2,
-                "{} must lose exactly the recovery record's raw/staging pair",
+                "{} must lose exactly the recovery record's raw/staging pair when the market \
+                 bought no ladder",
                 operation.label()
             );
         }
         assert_eq!(Op::CoreFundingCreateV1.exact_unique_accounts(false), 18);
         assert_eq!(Op::CoreFundingCreateV1.exact_unique_accounts(true), 20);
+        // The measured pair, from the first recovery-bearing founding.
+        assert_eq!(Op::Dcltgmf3.exact_unique_accounts(false), 58);
+        assert_eq!(Op::Dcltgmf3.exact_unique_accounts(true), 60);
     }
 
     fn message(signers: &[Pubkey], operation: FoundingSubmissionOperationV1) -> VersionedMessage {
