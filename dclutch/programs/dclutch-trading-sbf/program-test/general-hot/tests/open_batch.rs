@@ -41,15 +41,17 @@ use dclutch_general_adapter_contract::{
         authenticate_candidate_identity_v1, general_candidate_identity_v1,
     },
     collection_v1::{
-        BatchStatusV1, GeneralBatchOccurrenceTermsV1, GeneralBatchV1,
-        authenticate_batch_candidate_v1,
+        BatchStatusV1, GeneralBatchOccurrenceTermsV1, GeneralBatchV1, GeneralOrderHeaderV1,
+        GeneralOrderPhaseV1, GeneralOrderStateV1, GeneralOrderV1, authenticate_batch_candidate_v1,
+        general_order_len_v1, general_signed_order_terms_len_v1,
     },
     local_state_v3::{GeneralLocalStateKindV3, GeneralLocalStateV3},
     runtime_width::{CandidateHeaderV2, CandidateV2, candidate_len},
     state_artifacts_v3::{
-        GENERAL_PRIMARY_PAYER_ACCOUNT_V3, GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3,
-        GENERAL_PRIMARY_STATE_ACCOUNT_V3, GeneralReadonlyEvidenceKindV3,
-        general_readonly_evidence_v3, general_system_program_account_v3,
+        GENERAL_PRIMARY_PAYER_ACCOUNT_V3, GENERAL_PRIMARY_STATE_ACCOUNT_V3,
+        GeneralReadonlyEvidenceKindV3, general_create_payer_account_v3,
+        general_readonly_evidence_v3, general_rent_credit_account_v3,
+        general_system_program_account_v3,
     },
 };
 use dclutch_general_codec::Action;
@@ -752,6 +754,8 @@ struct EvidenceCorpusV1 {
     candidate_image: Option<BuiltAccountV1>,
     /// The exact submission record this execution writes.
     submitted_candidate: Option<BuiltAccountV1>,
+    /// The exact immutable bytes a maker signed (`PlaceOrder`'s sole evidence).
+    order_terms: Option<BuiltAccountV1>,
 }
 
 impl EvidenceCorpusV1 {
@@ -759,6 +763,7 @@ impl EvidenceCorpusV1 {
     fn request(&self) -> GeneralRequestEvidenceV1<'_> {
         GeneralRequestEvidenceV1 {
             candidate_image: self.candidate_image.as_ref().map(built_bytes),
+            signed_order_terms: self.order_terms.as_ref().map(built_bytes),
             ..GeneralRequestEvidenceV1::default()
         }
     }
@@ -787,6 +792,7 @@ impl EvidenceCorpusV1 {
                 GeneralReadonlyEvidenceKindV3::SubmittedCandidate,
                 &self.submitted_candidate,
             ),
+            (GeneralReadonlyEvidenceKindV3::OrderTerms, &self.order_terms),
         ]
         .into_iter()
         .filter_map(|(kind, value)| {
@@ -898,13 +904,30 @@ fn build_action_case_with_evidence(
         evidence: evidence.request(),
     })
     .expect("chain-derived General request");
+    // THE PAYER AND THE CREDIT SIT WHERE THE ACTION PUTS THEM, NOT AT 6 AND 7.
+    //
+    // Those two literals are the primary shape's coordinates and are right for
+    // nine of the fifteen actions. `PlaceOrder`, `CancelOrder` and `Close` put
+    // the payer at 7 and the credit at 8; `VerifyCandidateRow` puts them at 8
+    // and 9. Bound at the literals, `PlaceOrder` presented a 128-byte RentCredit
+    // record at coordinate 7 -- whose rule for that action declares nothing --
+    // and its order state at 6, and the account-projection kernel refused
+    // `DataLengthMismatch` over a fifty-coordinate frame. `state_artifacts_v3`
+    // is the one author of both coordinates and the emitted plans now take
+    // theirs from the same functions.
+    //
+    // `CloseCandidate` alone declares no create payer, and its profile still
+    // names a payer ACCOUNT at the primary coordinate for the Effect to read,
+    // so the fallback is that coordinate rather than no binding.
     let mut bindings = vec![
         (
-            usize::from(GENERAL_PRIMARY_PAYER_ACCOUNT_V3),
+            usize::from(
+                general_create_payer_account_v3(action).unwrap_or(GENERAL_PRIMARY_PAYER_ACCOUNT_V3),
+            ),
             chain.payer.clone(),
         ),
         (
-            usize::from(GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3),
+            usize::from(general_rent_credit_account_v3(action)),
             chain.rent_credit.clone(),
         ),
         // The System program itself, not an account owned by it. The commit
@@ -2001,6 +2024,117 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
         primary_state: Some(observed_binding(&mut context, open.primary_state).await),
     };
 
+    // ---- THE ORDER HALF, PROBED WHILE THE BATCH IS STILL COLLECTING ----
+    //
+    // `PlaceOrder` is the one action whose readonly-evidence table holds a
+    // single record -- `OrderTerms`, the exact immutable bytes a maker signs --
+    // and it is the only action reachable in a Collecting batch, so this is
+    // where the escrow half of the fifteen begins. The terms are PROJECTED out
+    // of a canonical order record rather than typed: `encode_signed_terms_into`
+    // omits the mutable escrow window and re-derives the identity, so a record
+    // and the bytes its maker signed cannot disagree here by construction.
+    //
+    // The maker is the campaign's own `payer`, because the transition carries
+    // `identity_eq(PAYER, OWNER)`: whoever signs the placement IS the maker the
+    // record names, exactly as SubmitCandidate's solver is the account that
+    // funds the candidate.
+    let order_header = GeneralOrderHeaderV1 {
+        outcome_count: OUTCOME_COUNT,
+        nonce: 1,
+        owner_id: payer.pubkey().to_bytes(),
+        market: campaign.state.market.key.to_bytes(),
+        batch_id: opened_batch.batch_id(),
+        generation: GENERATION,
+        max_lots: 1,
+        max_quote_debit_per_lot: opened_batch.opening().price_scale,
+        min_quote_credit_per_lot: 0,
+        valid_until_slot: opened_batch.opening().settlement_close_slot,
+    };
+    // One lot of outcome zero received against one lot of outcome one
+    // delivered: the smallest order `GeneralOrderV1::decode` admits, since a
+    // record that moves no claim in either direction is refused `ZeroIdentity`.
+    let mut receive_per_lot = vec![0_u64; usize::try_from(OUTCOME_COUNT).expect("width")];
+    let mut deliver_per_lot = receive_per_lot.clone();
+    receive_per_lot[0] = 1;
+    deliver_per_lot[1] = 1;
+    let mut order_bytes = vec![0_u8; general_order_len_v1(OUTCOME_COUNT).expect("order width")];
+    GeneralOrderV1::encode_into(
+        order_header,
+        &receive_per_lot,
+        &deliver_per_lot,
+        GeneralOrderStateV1 {
+            phase: GeneralOrderPhaseV1::Placed,
+            admitted_slot: substrate.bank_slot(),
+            released_slot: 0,
+        },
+        &mut order_bytes,
+    )
+    .expect("canonical maker order against the open batch");
+    let order_record = GeneralOrderV1::decode(&order_bytes).expect("order record");
+    let mut signed_terms =
+        vec![0_u8; general_signed_order_terms_len_v1(OUTCOME_COUNT).expect("terms width")];
+    order_record
+        .encode_signed_terms_into(&mut signed_terms)
+        .expect("the signed projection keeps the record identity");
+
+    let place_evidence = EvidenceCorpusV1 {
+        order_terms: Some(staged_record(&campaign.rent, signed_terms.clone())),
+        ..EvidenceCorpusV1::default()
+    };
+    // THE CORPUS IS THE SHAPE THE ACTION READS, asserted before the build, so a
+    // refusal below cannot be a malformed record wearing a register's name.
+    general_action_prestate_shape_v1(
+        Action::PlaceOrder,
+        GeneralActionPrestateV1 {
+            primary_state_account: Some(built_bytes(
+                chain.primary_state.as_ref().expect("the open batch"),
+            )),
+            evidence: place_evidence.projector(),
+        },
+    )
+    .expect("the campaign's order corpus is the shape PlaceOrder reads");
+
+    // AND THE ESCROW HALF'S WALL, WHICH IS A CORPUS AND NOT A CONTRACT.
+    //
+    // Everything this campaign owns is in place: the request derives, the
+    // prestate shape decodes, the payer and the credit sit at the coordinates
+    // `PlaceOrder` declares rather than the primary shape's, and the signed
+    // terms are bound at the evidence coordinate its own profile names. The
+    // build refuses in the ACCOUNT-PROJECTION pass, and the reporter this lane
+    // added to `registers.rs` says exactly why: FOURTEEN coordinates carry an
+    // `Exact` rule and hold nothing. Their widths name what they are -- 1,288
+    // and 368 and 240-byte records, a 272-byte `256 + 8N` request, two
+    // `128 + 8N` positions, a 112, a 17 and five 36-byte token-shaped accounts.
+    // They are the escrow children a placement admits: the Position pair, the
+    // Custody replay, the vault and its mint, and the admission record.
+    //
+    // NONE OF THAT IS GENERAL'S TO PRODUCE. The founding installs those
+    // accounts, and this campaign founds a market without them because until
+    // now no General action needed one. That is the corpus the escrow half
+    // owes, and it is named here with its measured coordinate list rather than
+    // left as `PlaceOrder` "not attempted": an action with no corpus and an
+    // action with no route look identical in a campaign that only runs what
+    // already works.
+    let place_attempt = build_action_case_with_evidence(
+        &campaign,
+        Action::PlaceOrder,
+        &chain,
+        substrate.bank_slot(),
+        fee_payer.pubkey(),
+        &place_evidence,
+    );
+    assert_eq!(
+        place_attempt.as_ref().err(),
+        Some(&BuilderError::Projection("account-projection")),
+        "PlaceOrder no longer refuses at the account projection; the campaign owes its execution",
+    );
+    eprintln!(
+        "general-campaign place-order-corpus order={} batch={} refusal=account-projection \
+         missing=14-exact-coordinates",
+        hex32(order_record.order_id()),
+        hex32(opened_batch.batch_id()),
+    );
+
     // THE WINDOW IS THE PROTOCOL'S, NOT THE HARNESS'S. `close_is_permissionless`
     // admits an early close only for a FULL batch; this one holds zero orders,
     // so the config-derived collection window has to elapse and the campaign
@@ -2373,6 +2507,7 @@ async fn one_founded_market_opens_and_then_closes_its_batch_in_one_bank() {
             &campaign.rent,
             submission.to_bytes().to_vec(),
         )),
+        order_terms: None,
     };
     let submit_chain = ChainPrestateV1 {
         market: observed_binding(&mut context, campaign.state.market.key).await,

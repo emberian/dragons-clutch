@@ -5101,3 +5101,12 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   the bands (26 rows again)**; every output byte-identical to the old tools' (inventory, fmt findings, emission counts,
   coverage). Deviation from the map: Python not Rust, because the wrapper's cheap lane runs with no Rust toolchain. Two
   three-line shims kept for the wrapper's workflows; convergence deletes them once the wrapper calls `tools/gate`.
+- SIMPLIFY-PROGRAMS closed (branch `simplify/programs` at `c1a689692`, five commits, 145 files +2,298 / −22,075;
+  SIMPLIFY_PROGRAMS.md): **programs 12 → 8** — registry, core, claims, custody, resolution, rent, trading, and ONE
+  `dclutch-accelerator-sbf` (general + dealer + series-shadow; band 0xC with every General code unchanged, Dealer 0xC100,
+  Series 0xC200 — never on chain; a census-readable guard-chain dispatcher; the Dealer predicate reads the family magic
+  from the Instructions sysvar without allocating); **one `pin_refusal_band!` macro replaces the forty-copy band block
+  (−2,647)**; Claims' `process_core_effect` had zero producers (−510, six blocked rows); direct-aot and product-runtime-v2
+  deleted with their campaign and mirrors (−11,866); routes 164 → 156, codes 357 → 344 (the two retired bands' thirteen).
+  Not done: the Rent → Core fold (needs the infrastructure-profile Lean ABI, cohort-17; a six-step seam written); a
+  griefable zero-lamport staging check in Registry/Resolution vs Core's dust-tolerant rule (one author, for CRATES).

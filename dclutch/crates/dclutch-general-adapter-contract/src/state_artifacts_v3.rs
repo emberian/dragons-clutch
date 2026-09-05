@@ -319,6 +319,51 @@ pub const fn general_system_program_account_v3(action: Action) -> Option<u16> {
     }
 }
 
+/// The account every non-Close lifecycle plan of this action debits.
+///
+/// THREE COORDINATES, FIVE SHAPES, AND EVERY CONSUMER HAD A LITERAL. The
+/// payer is `GENERAL_PRIMARY_PAYER_ACCOUNT_V3` for the primary shape,
+/// `GENERAL_VERIFY_PAYER_ACCOUNT_V3` for `VerifyCandidateRow`,
+/// `GENERAL_CLOSE_PAYER_ACCOUNT_V3` for the batch-and-order pair and for
+/// `Close`, and NOTHING for `CloseCandidate`, whose only plan is a close.
+///
+/// Measured 2026-09-04: the General Hot campaign bound the payer and the rent
+/// credit at coordinates 6 and 7 for every action, which is right for the nine
+/// that take the primary shape and wrong for the six that do not. `PlaceOrder`
+/// therefore presented a 128-byte RentCredit record at a coordinate whose rule
+/// declares the ORDER state, and the account-projection kernel refused
+/// `DataLengthMismatch` -- one word, over a fifty-coordinate frame, on the
+/// first bundle any harness had ever built for that action. A caller that asks
+/// this function cannot make that mistake for a sixteenth action either.
+#[must_use]
+pub const fn general_create_payer_account_v3(action: Action) -> Option<u16> {
+    match action {
+        Action::CloseCandidate => None,
+        Action::VerifyCandidateRow => Some(GENERAL_VERIFY_PAYER_ACCOUNT_V3),
+        Action::PlaceOrder | Action::CancelOrder | Action::Close => {
+            Some(GENERAL_CLOSE_PAYER_ACCOUNT_V3)
+        }
+        _ => Some(GENERAL_PRIMARY_PAYER_ACCOUNT_V3),
+    }
+}
+
+/// The RentCredit account every lifecycle plan of this action names.
+///
+/// Every action names one -- a close credits it the principal it returns and a
+/// create authenticates it -- so unlike the payer this is total. The split is
+/// the same three coordinates; see [`general_create_payer_account_v3`] for the
+/// incident that made both of these functions rather than literals.
+#[must_use]
+pub const fn general_rent_credit_account_v3(action: Action) -> u16 {
+    match action {
+        Action::VerifyCandidateRow => GENERAL_VERIFY_RENT_CREDIT_ACCOUNT_V3,
+        Action::PlaceOrder | Action::CancelOrder | Action::Close => {
+            GENERAL_CLOSE_RENT_CREDIT_ACCOUNT_V3
+        }
+        _ => GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3,
+    }
+}
+
 /// The System program, as an ACCOUNT rather than only as an identity.
 ///
 /// WHY THIS COORDINATE EXISTS. `apply_lifecycle_creates_v3` invokes System to
@@ -957,11 +1002,9 @@ fn primary_shape(action: Action) -> Result<GeneralActionLifecycleShapeV5> {
         action: action as u32,
         operation: LifecycleOperationInputV3::AuthenticateOrCreate,
         recipe: 0,
-        payer: Some(LifecycleAccountCoordinateV3::fixed(
-            GENERAL_PRIMARY_PAYER_ACCOUNT_V3,
-        )),
+        payer: general_create_payer_account_v3(action).map(LifecycleAccountCoordinateV3::fixed),
         rent_credit: Some(LifecycleAccountCoordinateV3::fixed(
-            GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3,
+            general_rent_credit_account_v3(action),
         )),
         principal: Some(LifecycleRegisterCoordinateV3::common(scalar_u16(
             scalar::PRIMARY_PRINCIPAL_OBSERVATION,
@@ -1044,11 +1087,9 @@ fn verify_candidate_row_shape(action: Action) -> Result<GeneralActionLifecycleSh
             action: action as u32,
             operation: LifecycleOperationInputV3::Create,
             recipe: 2,
-            payer: Some(LifecycleAccountCoordinateV3::fixed(
-                GENERAL_VERIFY_PAYER_ACCOUNT_V3,
-            )),
+            payer: general_create_payer_account_v3(action).map(LifecycleAccountCoordinateV3::fixed),
             rent_credit: Some(LifecycleAccountCoordinateV3::fixed(
-                GENERAL_VERIFY_RENT_CREDIT_ACCOUNT_V3,
+                general_rent_credit_account_v3(action),
             )),
             principal: Some(LifecycleRegisterCoordinateV3::common(scalar_u16(
                 scalar::RESULT_PRINCIPAL_OBSERVATION,
@@ -1066,11 +1107,9 @@ fn verify_candidate_row_shape(action: Action) -> Result<GeneralActionLifecycleSh
             action: action as u32,
             operation: LifecycleOperationInputV3::AuthenticateOrCreate,
             recipe: 1,
-            payer: Some(LifecycleAccountCoordinateV3::fixed(
-                GENERAL_VERIFY_PAYER_ACCOUNT_V3,
-            )),
+            payer: general_create_payer_account_v3(action).map(LifecycleAccountCoordinateV3::fixed),
             rent_credit: Some(LifecycleAccountCoordinateV3::fixed(
-                GENERAL_VERIFY_RENT_CREDIT_ACCOUNT_V3,
+                general_rent_credit_account_v3(action),
             )),
             principal: Some(LifecycleRegisterCoordinateV3::common(scalar_u16(
                 scalar::TERMINAL_PRINCIPAL_OBSERVATION,
@@ -1130,9 +1169,9 @@ fn close_candidate_shape(action: Action) -> Result<GeneralActionLifecycleShapeV5
         action: action as u32,
         operation: LifecycleOperationInputV3::Close,
         recipe: 0,
-        payer: None,
+        payer: general_create_payer_account_v3(action).map(LifecycleAccountCoordinateV3::fixed),
         rent_credit: Some(LifecycleAccountCoordinateV3::fixed(
-            GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3,
+            general_rent_credit_account_v3(action),
         )),
         principal: Some(LifecycleRegisterCoordinateV3::common(scalar_u16(
             scalar::PRIMARY_PRINCIPAL_OBSERVATION,
@@ -1220,11 +1259,9 @@ fn close_shape(action: Action) -> Result<GeneralActionLifecycleShapeV5> {
             action: action as u32,
             operation: LifecycleOperationInputV3::AuthenticateOrCreate,
             recipe: 1,
-            payer: Some(LifecycleAccountCoordinateV3::fixed(
-                GENERAL_CLOSE_PAYER_ACCOUNT_V3,
-            )),
+            payer: general_create_payer_account_v3(action).map(LifecycleAccountCoordinateV3::fixed),
             rent_credit: Some(LifecycleAccountCoordinateV3::fixed(
-                GENERAL_CLOSE_RENT_CREDIT_ACCOUNT_V3,
+                general_rent_credit_account_v3(action),
             )),
             principal: Some(LifecycleRegisterCoordinateV3::common(scalar_u16(
                 scalar::TERMINAL_PRINCIPAL_OBSERVATION,
@@ -1291,11 +1328,9 @@ fn batch_and_order_shape(action: Action) -> Result<GeneralActionLifecycleShapeV5
             action: action as u32,
             operation: LifecycleOperationInputV3::AuthenticateOrCreate,
             recipe: 0,
-            payer: Some(LifecycleAccountCoordinateV3::fixed(
-                GENERAL_CLOSE_PAYER_ACCOUNT_V3,
-            )),
+            payer: general_create_payer_account_v3(action).map(LifecycleAccountCoordinateV3::fixed),
             rent_credit: Some(LifecycleAccountCoordinateV3::fixed(
-                GENERAL_CLOSE_RENT_CREDIT_ACCOUNT_V3,
+                general_rent_credit_account_v3(action),
             )),
             principal: Some(LifecycleRegisterCoordinateV3::common(scalar_u16(
                 scalar::PRIMARY_PRINCIPAL_OBSERVATION,
@@ -1310,11 +1345,9 @@ fn batch_and_order_shape(action: Action) -> Result<GeneralActionLifecycleShapeV5
             action: action as u32,
             operation: LifecycleOperationInputV3::AuthenticateOrCreate,
             recipe: 1,
-            payer: Some(LifecycleAccountCoordinateV3::fixed(
-                GENERAL_CLOSE_PAYER_ACCOUNT_V3,
-            )),
+            payer: general_create_payer_account_v3(action).map(LifecycleAccountCoordinateV3::fixed),
             rent_credit: Some(LifecycleAccountCoordinateV3::fixed(
-                GENERAL_CLOSE_RENT_CREDIT_ACCOUNT_V3,
+                general_rent_credit_account_v3(action),
             )),
             principal: Some(LifecycleRegisterCoordinateV3::common(scalar_u16(
                 scalar::TERMINAL_PRINCIPAL_OBSERVATION,

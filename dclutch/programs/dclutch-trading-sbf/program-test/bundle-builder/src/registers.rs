@@ -459,6 +459,7 @@ pub(crate) fn run_engine_with_admitted_candidate(
             // coordinates wide. Re-deriving the partition costs nothing on the
             // host and turns one word into a pair of coordinates.
             report_alias_partition_collisions(profile, tail_count, span_counts, &observations);
+            report_data_length_mismatches(profile, tail_count, &observations);
             BuilderError::Projection("account-projection")
         })?;
     }
@@ -789,6 +790,85 @@ fn report_alias_partition_collisions(
     if !found {
         std::eprintln!(
             "no two distinct representatives share a key; the refusal is another alias rule"
+        );
+    }
+}
+
+/// Name every FIXED coordinate whose observed data width is not the one its
+/// own rule declares.
+///
+/// `DataLengthMismatch` is the same shape `CrossItemAlias` was before the
+/// partition reporter above: the kernel names the RULE it broke and not the
+/// coordinate that broke it, and a General frame is fifty-odd coordinates wide.
+/// Measured 2026-09-04: `PlaceOrder` refused it on the first bundle any harness
+/// had ever built for that action, and one word said nothing about which of its
+/// escrow children was unbound. Re-deriving the comparison costs nothing on the
+/// host -- the rule and the observation are both in hand -- and turns one word
+/// into a list of coordinates with both widths beside each.
+///
+/// It reports the FIXED prefix only. An item-template coordinate's width is a
+/// function of `tail_count` and of the span partition, so a mismatch there is a
+/// geometry question rather than a binding one, and reporting it as a binding
+/// gap would be a second wrong answer rather than no answer.
+fn report_data_length_mismatches(
+    profile: AccountProfileV2<'_>,
+    tail_count: u32,
+    observations: &[AccountObservationV1<'_>],
+) {
+    let mut found = false;
+    let mut index = 0_u16;
+    while index < profile.fixed_account_count() {
+        let coordinate = usize::from(index);
+        index = match index.checked_add(1) {
+            Some(next) => next,
+            None => return,
+        };
+        let Ok(rule) = profile.rule(false, index.saturating_sub(1)) else {
+            continue;
+        };
+        let Some(account) = observations.get(coordinate) else {
+            continue;
+        };
+        // ONLY THE PRESTATES THAT ASSERT A WIDTH. `AuthenticatedRouteAlias` and
+        // the two adapter-authenticated variable forms declare `data_length`
+        // zero and mean "this rule holds no opinion", so comparing their
+        // observation against zero reports four healthy coordinates as broken
+        // -- which the first draft of this reporter did, on the run that found
+        // it useful. A reporter whose output has to be filtered by its reader
+        // is a second wrong answer rather than no answer.
+        if !matches!(
+            rule.prestate(),
+            AccountPrestateV2::Exact | AccountPrestateV2::LifecycleBound
+        ) {
+            continue;
+        }
+        // A `LifecycleBound` coordinate ADMITS a vacancy -- that is its create
+        // branch, and the account this bundle is about to allocate is empty by
+        // definition. Only a LIVE one of the wrong width is a finding.
+        if rule.prestate() == AccountPrestateV2::LifecycleBound && account.data().is_empty() {
+            continue;
+        }
+        let declared = u64::from(rule.data_length()).saturating_add(
+            u64::from(rule.data_item_stride()).saturating_mul(u64::from(tail_count)),
+        );
+        let observed = account.data().len() as u64;
+        if declared == observed {
+            continue;
+        }
+        found = true;
+        std::eprintln!(
+            "data-length mismatch: coordinate {coordinate} declares {declared} bytes \
+             ({} fixed + {} per outcome x {tail_count}) and holds {observed}, prestate {:?}, key {:?}",
+            rule.data_length(),
+            rule.data_item_stride(),
+            rule.prestate(),
+            account.key(),
+        );
+    }
+    if !found {
+        std::eprintln!(
+            "every fixed coordinate holds the width its rule declares; the refusal is in the \
+             item templates or the span partition"
         );
     }
 }
