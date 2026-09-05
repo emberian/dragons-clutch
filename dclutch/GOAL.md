@@ -5132,3 +5132,15 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   `dclutch-operator` 894 → 160; 64 test assertions moved from the coarse code to the printed conjunct; −2,200 lines of dead
   modules with the census control. Named for CRATES: the restated program counts (three authors of `PROVIDER_*_ACCOUNT_COUNT`,
   the 64-lock limits) belong in a contract crate. Ten of eleven branches landed; CRATES still merging.
+- RECOVERY-4 closed (`f252507c8`, `e104fa9e7`, `8ea4abd9a`, `9b9c31926`, `6020b09a9`, `ad55bdb5d`, `cfa9088fb`, `4435dbce5`):
+  **`tools/gauntlet/ladder` — one loopback validator on hbox, 1,780 s end to end: the first market on any chain to buy a
+  named alternative (`DjrPYbnV…`), advanced one second after its deadline at 204,690 CU, exhausted one second after the
+  next at 197,216; refused by name 761 s and 115 s early; a witness compares the host's clock to the cluster's**; two of
+  four labels bound (advance, exhaust — one route, two arms); the rung CAPTURE is structurally unreachable on this fixture
+  because one `max_age` governs both the crank and the publication's freshness (a refreshable publication is a fixture
+  question); local-validator witnesses 23 → 24, real-Agave 65 → 66 of 165; run.py CAN found now (204233776 cleared the wall
+  eight hours after the runbook recorded it). Owed, routed to CONVERGE: a shelf-life field (patch saved); **the DCLTGMF3
+  boundary census refuses EVERY founding at HEAD (headroom typed as 6, the base moved 58 → 60 with the escrow)** (patch
+  saved); **HEAD's strict release gate cannot be built — 5 diagnostics in hot_v3 from SERIES-3's commits.**
+- CONVERGE **`(spawned, Fable)`** on the ten landed branches in the map's order; the crates branch when its maker reports.
+- Cuts: `d23d9a56c`, `0cd6a7e09`, `03eeea3c1`.
