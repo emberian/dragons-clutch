@@ -15,16 +15,15 @@ use std::{
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
+use solana_address_lookup_table_interface::instruction::{
+    create_lookup_table, extend_lookup_table,
+};
 use solana_client::rpc_client::RpcClient;
+use solana_commitment_config::CommitmentConfig;
+use solana_compute_budget_interface::ComputeBudgetInstruction;
+use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
 use solana_sdk::{
-    address_lookup_table::{
-        AddressLookupTableAccount,
-        instruction::{create_lookup_table, extend_lookup_table},
-    },
-    commitment_config::CommitmentConfig,
-    compute_budget::ComputeBudgetInstruction,
     instruction::{AccountMeta, Instruction},
-    message::{VersionedMessage, v0},
     pubkey::Pubkey as RpcPubkey,
     signature::{Keypair, Signer, keypair_from_seed},
     transaction::{Transaction, VersionedTransaction},

@@ -22,11 +22,11 @@ use dclutch_fractional_exterior::bridge::{
 };
 use serde_json::{Value, json};
 use solana_client::rpc_client::RpcClient;
+use solana_commitment_config::CommitmentConfig;
+use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_program::pubkey::Pubkey as ProgramPubkey;
 use solana_sdk::{
     account::Account,
-    commitment_config::CommitmentConfig,
-    compute_budget::ComputeBudgetInstruction,
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
     signature::{Keypair, Signer, keypair_from_seed},

@@ -2992,11 +2992,11 @@ mod tests {
         // before either can borrow its otherwise valid InlineOrdinary family.
         assert_eq!(
             build_direct_registered_cancel_hot_v4(&state, terminal, seller.signature),
-            Err(Error::ProductGraphObservation(dclutch_resolution_core_v3_operator::product_graph_observation_v3::ProductGraphObservationErrorV3::InvalidRecord))
+            Err(Error::ProductGraphObservation(dclutch_resolution_core_v3_operator::product_graph_observation_v3::ProductGraphObservationErrorV3::RawRecordAddress))
         );
         assert_eq!(
             build_direct_registered_expire_hot_v4(&state),
-            Err(Error::ProductGraphObservation(dclutch_resolution_core_v3_operator::product_graph_observation_v3::ProductGraphObservationErrorV3::InvalidRecord))
+            Err(Error::ProductGraphObservation(dclutch_resolution_core_v3_operator::product_graph_observation_v3::ProductGraphObservationErrorV3::RawRecordAddress))
         );
     }
 

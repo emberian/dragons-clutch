@@ -1503,9 +1503,10 @@ fn an_action_state_at_a_foreign_address_refuses() {
 /// The accusation is the Product-graph observation's own, not the builder's:
 /// `0c9811bc6` stopped discarding it (`map_err(|_| ...::Product)` became
 /// `map_err(...::ProductGraphObservation)`), so the cause the observation had
-/// already computed now reaches the caller. `InvalidRecord` is still one code
-/// over the eight disjuncts of `finalized_coordinate`; the one this fixture
-/// trips is `!staging.data.is_empty()`.
+/// already computed now reaches the caller. The disjunct this fixture trips is
+/// `!staging.data.is_empty()`, and since the eight-way `InvalidRecord` was
+/// split (2026-09-05) the refusal says so by name -- a fixture that corrupted
+/// nothing, or corrupted the raw record instead, no longer answers green.
 #[test]
 fn a_nonvacant_product_staging_cursor_refuses() {
     assert_eq!(
@@ -1516,7 +1517,7 @@ fn a_nonvacant_product_staging_cursor_refuses() {
                 .push(0);
         }),
         GeneralHotOperatorErrorV3::ProductGraphObservation(
-            ProductGraphObservationErrorV3::InvalidRecord
+            ProductGraphObservationErrorV3::StagingCursorNotVacant
         )
     );
 }

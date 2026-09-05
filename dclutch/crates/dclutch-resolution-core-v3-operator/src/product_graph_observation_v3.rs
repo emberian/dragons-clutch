@@ -45,10 +45,41 @@ pub struct FinalizedProductGraphAccountsV3<'a> {
 }
 
 /// Refusal from a malformed finalized coordinate or inconsistent Product graph.
+///
+/// The eight coordinate causes below were one `InvalidRecord` until 2026-09-05.
+/// One code over eight disjuncts makes every test that names it a test of
+/// "something about this coordinate was wrong", which is the bare `is_err()`
+/// the refusal vocabulary forbids wearing a name: a fixture written to corrupt
+/// the staging cursor passes just as green when it corrupts nothing and the
+/// raw address is what refuses. Each disjunct is a different accusation --
+/// wrong address, foreign owner, a program where a record should be, an empty
+/// record, a cursor that is not vacant -- so each gets its own name.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProductGraphObservationErrorV3 {
-    /// At least one raw/staging coordinate was not finalized and canonical.
-    InvalidRecord,
+    /// The raw record is not at the address its own content digest derives
+    /// under the Registry program.
+    RawRecordAddress,
+    /// The raw record is not owned by the Registry program.
+    RawRecordOwner,
+    /// The raw record account is executable, so it is a program and not a
+    /// finalized record.
+    RawRecordExecutable,
+    /// The raw record carries no bytes, so nothing is finalized at this
+    /// coordinate.
+    RawRecordEmpty,
+    /// The staging cursor is not at the address this record's digest derives
+    /// under the Registry program.
+    StagingCursorAddress,
+    /// The staging cursor is not system-owned, so this record's staging was
+    /// never returned.
+    StagingCursorOwner,
+    /// The staging cursor account is executable.
+    StagingCursorExecutable,
+    /// The staging cursor still holds bytes, so this record is still being
+    /// staged and is not finalized.
+    StagingCursorNotVacant,
+    /// A content identity this route derives is not a valid `ContentId`.
+    ContentIdentity,
     /// `dclutch_product::admission` refused; the cause is its own.
     ProductRuntimeV2Admission(dclutch_product::admission::Error),
 }
@@ -102,7 +133,7 @@ fn finalized_coordinate(
     schema: [u8; 32],
 ) -> Result<FinalizedRecordCoordinateV2, ProductGraphObservationErrorV3> {
     let digest = ContentId::new(hash(&raw.data).to_bytes())
-        .map_err(|_| ProductGraphObservationErrorV3::InvalidRecord)?;
+        .map_err(|_| ProductGraphObservationErrorV3::ContentIdentity)?;
     let (expected_raw, _) = Pubkey::find_program_address(
         &[RAW_RECORD_PDA_SEED_V1, &schema, &digest.to_bytes()],
         &registry,
@@ -111,24 +142,38 @@ fn finalized_coordinate(
         &[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest.to_bytes()],
         &registry,
     );
-    if raw.key != expected_raw
-        || raw.owner != registry
-        || raw.executable
-        || raw.data.is_empty()
-        || staging.key != expected_staging
-        || staging.owner != system_program::ID
-        || staging.executable
-        || !staging.data.is_empty()
-    {
-        return Err(ProductGraphObservationErrorV3::InvalidRecord);
+    // ONE DISJUNCT, ONE NAME, in the order the conjunction was written.
+    if raw.key != expected_raw {
+        return Err(ProductGraphObservationErrorV3::RawRecordAddress);
+    }
+    if raw.owner != registry {
+        return Err(ProductGraphObservationErrorV3::RawRecordOwner);
+    }
+    if raw.executable {
+        return Err(ProductGraphObservationErrorV3::RawRecordExecutable);
+    }
+    if raw.data.is_empty() {
+        return Err(ProductGraphObservationErrorV3::RawRecordEmpty);
+    }
+    if staging.key != expected_staging {
+        return Err(ProductGraphObservationErrorV3::StagingCursorAddress);
+    }
+    if staging.owner != system_program::ID {
+        return Err(ProductGraphObservationErrorV3::StagingCursorOwner);
+    }
+    if staging.executable {
+        return Err(ProductGraphObservationErrorV3::StagingCursorExecutable);
+    }
+    if !staging.data.is_empty() {
+        return Err(ProductGraphObservationErrorV3::StagingCursorNotVacant);
     }
     Ok(FinalizedRecordCoordinateV2 {
         schema_id: ContentId::new(schema)
-            .map_err(|_| ProductGraphObservationErrorV3::InvalidRecord)?,
+            .map_err(|_| ProductGraphObservationErrorV3::ContentIdentity)?,
         content_digest: digest,
         raw_account: ContentId::new(expected_raw.to_bytes())
-            .map_err(|_| ProductGraphObservationErrorV3::InvalidRecord)?,
+            .map_err(|_| ProductGraphObservationErrorV3::ContentIdentity)?,
         staging_account: ContentId::new(expected_staging.to_bytes())
-            .map_err(|_| ProductGraphObservationErrorV3::InvalidRecord)?,
+            .map_err(|_| ProductGraphObservationErrorV3::ContentIdentity)?,
     })
 }

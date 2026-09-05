@@ -66,7 +66,9 @@ use solana_program::{
     pubkey::Pubkey,
     rent::Rent,
 };
-use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
+use solana_program_test::{
+    BanksClientError, ProgramTest, ProgramTestBanksClientExt, ProgramTestContext,
+};
 use solana_sdk::signature::{Keypair, Signer};
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 use solana_system_interface::instruction::transfer;
@@ -996,7 +998,33 @@ async fn submit(
     addresses: &[Pubkey],
     label: &str,
 ) -> Result<(bool, Vec<String>, Option<(Pubkey, Vec<u8>)>, u64), BanksClientError> {
-    let blockhash = context.banks_client.get_latest_blockhash().await?;
+    // ONE SUBMISSION IS ONE TRANSACTION, and a blockhash is what makes it one.
+    // Two of this suite's requests are byte-identical by construction --
+    // `replay_receipt` IS `activate_receipt.clone()`, and the honest
+    // `RetireCoordinate` is the same instruction the nonzero-supply hostile
+    // submits against a mutated Mint -- so on the same recent blockhash they
+    // compile to the same v0 message and sign to the same signature, and the
+    // bank refuses the second as `AlreadyProcessed` without running the program
+    // at all: no logs, no compute units, no refusal code. That is the ledger's
+    // replay protection answering, not Claims, and it is exactly the bare
+    // `is_err()` the refusal vocabulary forbids, one layer down.
+    //
+    // It also made `claims-lifecycle` a coin flip. `ProgramTest` registers a new
+    // blockhash from a background task on a WALL-CLOCK timer
+    // (`target_tick_duration` 100us x 64 ticks per slot = 6.4ms); the hostile
+    // and the honest retirement land about 4ms apart, so whether a tick fell
+    // between them decided the verdict -- 5 of 8 draws collided, measured on
+    // hbox 2026-09-05 against one binary and one ELF.
+    //
+    // Taking a blockhash strictly NEWER than the one visible on entry makes
+    // every submission its own transaction, so every acceptance and every
+    // refusal this suite reads is the program's own. The wait is the tick, and
+    // `get_new_latest_blockhash` polls at 200ms, which is the whole added cost.
+    let visible = context.banks_client.get_latest_blockhash().await?;
+    let blockhash = context
+        .banks_client
+        .get_new_latest_blockhash(&visible)
+        .await?;
     let message = VersionedMessage::V0(
         v0::Message::try_compile(
             &context.payer.pubkey(),
@@ -1445,17 +1473,21 @@ async fn real_token_2022_lifecycle_refuses_ata_substitution_and_rolls_back_every
     )
     .await
     .expect("retire coordinate");
-    // A NAMED WALL, not a bare boolean. THIS ROW IS NONDETERMINISTIC: the same
-    // binary against the same `dclutch_claims_sbf.so` passes 4 of 8 draws at
-    // HEAD and 3 of 8 at 330bbfaba, so a single run of this suite -- including
-    // the one `tools/gate suites` performs -- decides nothing. When it fails,
-    // the honest `RetireCoordinate` refuses `RationalLifecycleSbfErrorV2::Token`
-    // (0x5216) at 79,632 CU with no Token-2022 invocation in the transaction.
-    // The nondeterminism is unexplained; the first suspect is ProgramTest's
-    // per-run random payer keypair, the only input that differs between two
-    // runs of one binary. Anything measured here needs N draws and a rate.
-    // docs/evidence/CLAIMS_LIFECYCLE_LAYOUT_WALL_2026_09_05.md, and above all
-    // its addendum, carries the draws and what is owed.
+    // THE SAME REQUEST, ON A CHAIN THE HOSTILE LEFT UNCHANGED. This is the
+    // whole point of the hostile above: the retirement it lied about is not a
+    // different request, it is this one, and once the Mint carries the supply
+    // it always carried, it must commit.
+    //
+    // That identity is also what made this row a coin flip until 2026-09-05:
+    // being the same instruction with the same payer, it signed to the SAME
+    // SIGNATURE as the hostile whenever both drew the same recent blockhash,
+    // and the bank then refused it as `AlreadyProcessed` with no logs and no
+    // refusal code at all. `submit` now takes a strictly newer blockhash for
+    // every submission, which is where that defect belonged; the reading it
+    // produced -- `RationalLifecycleSbfErrorV2::Token` at 79,632 CU -- was the
+    // HOSTILE's own correct refusal, read off an interleaved log.
+    // docs/evidence/CLAIMS_LIFECYCLE_LAYOUT_WALL_2026_09_05.md carries both
+    // withdrawn verdicts and the draws that convicted the blockhash.
     assert!(
         accepted,
         "the honest RetireCoordinate must commit after the hostile that precedes it; \

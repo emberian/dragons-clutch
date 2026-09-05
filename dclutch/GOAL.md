@@ -99,6 +99,7 @@ the tail; the pre-2026-09-01 ledger starts at line 289), and before it
 | 2026-09-04 | the convergence: eleven branches merged in the map's order, one build-and-gate pass, the ELF table | [2026-09-04 L165](docs/ledger/2026-09-04.md#L165) | `docs/evidence/SIMPLIFICATION_CONVERGENCE_2026_09_04.md` |
 | 2026-09-05 | the convergence closed: the gates re-measured, the gauntlet run with controls, the frames function by function, twelve repairs | [2026-09-04 L175](docs/ledger/2026-09-04.md#L175) | `docs/evidence/SIMPLIFICATION_CONVERGENCE_2026_09_04.md` §7–8 |
 | 2026-09-05 | the repair wave after the convergence: the suite reds by column, the four web tests, one Cargo workspace for the 55 | [2026-09-05](docs/ledger/2026-09-05.md) | `docs/evidence/SIMPLIFICATION_CONVERGENCE_2026_09_04.md` §8 |
+| 2026-09-05 | a handoff for the next orchestrator, human or model: the state, the rules, the path, the pitfalls | [handoff](docs/HANDOFF_2026_09_05.md) | `docs/HANDOFF_2026_09_05.md` |
 
 A new delta is one new row here and one entry in the store it names. The
 GOAL ledger file is closed; the entries main appended during the swarm are

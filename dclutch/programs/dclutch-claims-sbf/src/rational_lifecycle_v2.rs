@@ -194,12 +194,27 @@ pub enum RationalLifecycleSbfErrorV2 {
     Market = 0x5214,
     /// Prepaid or reclaimed native rent accounting refused.
     Rent = 0x5215,
-    /// Token-2022 resource state or effect refused.
+    /// Token-2022 refused an effect this route asked for, or the instruction
+    /// that would ask it could not be built. The cause is Token-2022's own and
+    /// is in the transaction log, on its own `Program ... failed` line.
     Token = 0x5216,
     /// Canonical protocol Position lifecycle refused.
     Position = 0x5217,
     /// Final resource observation or typed receipt refused.
     Receipt = 0x5218,
+    /// The lifecycle Mint this route holds is not the closeable profile the
+    /// family requires: program owner, mint/close/burn authority, decimals,
+    /// extension set, or the SUPPLY the action declared.
+    MintProfile = 0x5219,
+    /// The structured custody account's bytes are not a Token-2022 account.
+    CustodyLayout = 0x521A,
+    /// The structured custody account parses and is not the one this route
+    /// requires: program owner, mint, owner, amount, initialization state,
+    /// delegate, delegated amount, native reserve or close authority.
+    CustodyState = 0x521B,
+    /// A resource this program allocates for itself was refused by the System
+    /// program, or came back with the wrong owner or width.
+    Allocation = 0x521C,
 }
 
 dclutch_refusal_registry::pin_refusal_band!(
@@ -214,7 +229,11 @@ dclutch_refusal_registry::pin_refusal_band!(
         Rent,
         Token,
         Position,
-        Receipt
+        Receipt,
+        MintProfile,
+        CustodyLayout,
+        CustodyState,
+        Allocation
     ]
 );
 
@@ -1191,7 +1210,7 @@ fn authenticate_closeable_mint(
         expected_supply,
         0,
     )
-    .map_err(|_| RationalLifecycleSbfErrorV2::Token)?;
+    .map_err(|_| RationalLifecycleSbfErrorV2::MintProfile)?;
     Ok(())
 }
 
@@ -1203,7 +1222,8 @@ fn authenticate_structured_custody(
         .structured_custody
         .try_borrow_data()
         .map_err(|_| RationalLifecycleSbfErrorV2::Accounts)?;
-    let token = TokenAccount::parse(&data).map_err(|_| RationalLifecycleSbfErrorV2::Token)?;
+    let token =
+        TokenAccount::parse(&data).map_err(|_| RationalLifecycleSbfErrorV2::CustodyLayout)?;
     if accounts.structured_custody.owner != accounts.common.token_program.key
         || token.mint != accounts.shard_mint.key.to_bytes()
         || token.owner != accounts.common.representation_authority.key.to_bytes()
@@ -1214,7 +1234,7 @@ fn authenticate_structured_custody(
         || !token.native_reserve.is_none()
         || !token.close_authority.is_none()
     {
-        return Err(RationalLifecycleSbfErrorV2::Token.into());
+        return Err(RationalLifecycleSbfErrorV2::CustodyState.into());
     }
     Ok(())
 }
@@ -1281,10 +1301,10 @@ fn allocate_and_assign<'info>(
             &[resource.clone(), system.clone()],
             &[signer],
         )
-        .map_err(|_| RationalLifecycleSbfErrorV2::Token)?;
+        .map_err(|_| RationalLifecycleSbfErrorV2::Allocation)?;
     }
     if resource.owner != owner || resource.data_len() != width {
-        return Err(RationalLifecycleSbfErrorV2::Token.into());
+        return Err(RationalLifecycleSbfErrorV2::Allocation.into());
     }
     Ok(())
 }
@@ -1520,6 +1540,10 @@ mod tests {
         assert_eq!(
             ProgramError::from(RationalLifecycleSbfErrorV2::Receipt),
             ProgramError::Custom(BASE + 8)
+        );
+        assert_eq!(
+            ProgramError::from(RationalLifecycleSbfErrorV2::Allocation),
+            ProgramError::Custom(BASE + 12)
         );
     }
 
