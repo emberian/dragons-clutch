@@ -1403,7 +1403,10 @@ pub(crate) fn subslice<'accounts, 'info>(
 
 #[cfg(test)]
 mod tests {
-    use dclutch_market::{GenericFoundingStageV1, Identity};
+    use dclutch_claims::founding_v5::CLAIMS_FOUNDING_ESCROW_ACCOUNT_COUNT_V6;
+    use dclutch_market::{
+        GENERIC_FOUNDING_MAX_FUNDING_STATES_V1, GenericFoundingStageV1, Identity,
+    };
 
     use super::*;
 
@@ -1452,7 +1455,12 @@ mod tests {
         assert!(!is_generic_market_founding_v3(
             &GENERIC_MARKET_FOUNDING_MAGIC_V3
         ));
-        assert!(!is_generic_market_founding_v3(&[0; 13]));
+        // Exactly the route's width and none of its magic: spelled, this
+        // buffer stops being the wrong-magic case the moment the bump count
+        // moves, and starts passing as a wrong-width refusal instead.
+        assert!(!is_generic_market_founding_v3(
+            &[0; GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V3]
+        ));
         let mut trailing = instruction.to_vec();
         trailing.push(0);
         assert!(!is_generic_market_founding_v3(&trailing));
@@ -1888,29 +1896,62 @@ mod tests {
         // and the Open frame; the root is derived, never read. The one account
         // above that width is the instructions sysvar the heap-frame admission
         // reads back. Projected Found V2 consumes the authenticated Custody
-        // projection instead of repeating three finalized record pairs, so
-        // the three-ledger frame is exactly 128 after runtime Rent/Clock access
-        // removes five repeated child metas.
-        assert_eq!(count(3), 128);
-        assert_eq!(count(16), 141);
+        // projection instead of repeating three finalized record pairs.
+        //
+        // The total is never spelled here. Until 2026-09-05 this test pinned a
+        // bare 128 and a bare 141, and decision 0025 item 2's escrow seating
+        // -- which appends the escrow's declared accounts to the Claims
+        // founding window and to Core's commit-last Open window, and nothing
+        // else -- moved the frame while both literals stayed put. Two authors
+        // for one number is the same defect that cost six host tests when the
+        // composed census spelled its twelve writable keys; the survivor is
+        // the declaration, and what the frame owes the escrow is read from it.
+        assert_eq!(
+            CLAIMS_ESCROW_POSITION,
+            CLAIMS_FOUNDING_ACCOUNT_COUNT_V6 - CLAIMS_FOUNDING_ESCROW_ACCOUNT_COUNT_V6
+        );
+        assert_eq!(
+            CLAIMS_ESCROW_ADMISSION,
+            CLAIMS_FOUNDING_ACCOUNT_COUNT_V6 - 1
+        );
+        // Polymorphic in the runtime funding count alone: at every admitted
+        // count the selector reads the same bare Found span out of the exact
+        // total, takes the append-only price-gated span at the gate extension
+        // above it, and refuses every width in between as a partial extension.
         let found_start = GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V3
             + PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1;
-        assert_eq!(
-            select_generic_found_count_v4(count(3), found_start, 3),
-            Ok(GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1
-                + 3
-                + GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1)
-        );
-        assert_eq!(
-            select_generic_found_count_v4(count(3) + 2, found_start, 3),
-            Ok(GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1
-                + 3
-                + GENERIC_FOUNDING_FOUND_PRICE_GATE_SUFFIX_ACCOUNT_COUNT_V2)
-        );
-        assert_eq!(
-            select_generic_found_count_v4(count(3) + 1, found_start, 3),
-            Err(TradingSbfError::Content.into())
-        );
+        let gate_extension = GENERIC_FOUNDING_FOUND_PRICE_GATE_SUFFIX_ACCOUNT_COUNT_V2
+            - GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1;
+        for funding in [0, 3, GENERIC_FOUNDING_MAX_FUNDING_STATES_V1] {
+            assert_eq!(
+                select_generic_found_count_v4(count(funding), found_start, funding),
+                Ok(GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1
+                    + funding
+                    + GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1)
+            );
+            assert_eq!(
+                select_generic_found_count_v4(
+                    count(funding) + gate_extension,
+                    found_start,
+                    funding
+                ),
+                Ok(GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1
+                    + funding
+                    + GENERIC_FOUNDING_FOUND_PRICE_GATE_SUFFIX_ACCOUNT_COUNT_V2)
+            );
+            for partial in 1..gate_extension {
+                assert_eq!(
+                    select_generic_found_count_v4(count(funding) + partial, found_start, funding),
+                    Err(TradingSbfError::Content.into())
+                );
+            }
+            // A frame sized for a different funding count is not a third shape
+            // either: the selector reads the total, so the two must agree.
+            assert_eq!(
+                select_generic_found_count_v4(count(funding), found_start, funding + 1),
+                Err(TradingSbfError::Content.into())
+            );
+        }
         assert_eq!(
             GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V3,
             GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V3 + 1

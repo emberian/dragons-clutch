@@ -569,6 +569,8 @@ fn authenticate_open_ack_v1(
 
 #[cfg(test)]
 mod tests {
+    use dclutch_claims::founding_v5::CLAIMS_FOUNDING_ESCROW_ACCOUNT_COUNT_V6;
+
     use super::*;
 
     #[test]
@@ -631,10 +633,26 @@ mod tests {
     fn stage2_frame_width_is_the_raw_prefix_plus_the_codec_open_count() {
         // Core sizes its Open frame from the same codec constant, so the two
         // programs cannot drift about the window width.
-        assert_eq!(GENERIC_MARKET_OPEN_ACCOUNT_COUNT_V1, 2 + 21);
+        //
+        // Nothing here spells that width. Until 2026-09-05 this test opened
+        // with a bare `2 + 21`, and decision 0025 item 2's escrow seating
+        // moved the codec count to twenty-three while the literal stayed put:
+        // the mirror refused a frame both programs were perfectly happy with.
+        // What follows is what the width has to satisfy instead.
         assert_eq!(
             GENERIC_MARKET_OPEN_ACCOUNT_COUNT_V1,
             GENERIC_MARKET_OPEN_RAW_ACCOUNT_COUNT_V1 + GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1
+        );
+        // The seating appended the failure escrow's pair immediately after the
+        // founder's admission and nowhere else, so the codec's Open count is
+        // the pre-escrow window plus exactly the accounts `dclutch-claims`
+        // declares the escrow to be. Both facts have one author each: the
+        // layout table above, and `CLAIMS_FOUNDING_ESCROW_ACCOUNT_COUNT_V6`.
+        assert_eq!(OPEN_ESCROW_POSITION, OPEN_ADMISSION + 1);
+        assert_eq!(OPEN_ESCROW_ADMISSION, OPEN_ESCROW_POSITION + 1);
+        assert_eq!(
+            GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1 - OPEN_ESCROW_POSITION,
+            CLAIMS_FOUNDING_ESCROW_ACCOUNT_COUNT_V6
         );
         assert!(OPEN_ESCROW_ADMISSION < GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1);
     }
