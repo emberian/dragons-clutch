@@ -25,7 +25,7 @@
 #     external dependencies at all — but it is minutes, and it belongs on a
 #     tier that has earned it rather than in the first CI this repo has ever
 #     had. In the live tree it runs as a pre-push hook instead; see
-#     `dclutch/tools/emission-guard/README.md`.
+#     `dclutch/tools/gates/README.md`.
 #   - No SBF/cargo-build job, no validator, no devnet traffic. Nothing here
 #     signs, submits, deploys, or publishes anything.
 #
@@ -211,10 +211,10 @@ jobs:
       - name: Lean emission census
         working-directory: dclutch
         run: |
-          if [ -f tools/emission-guard/emission_guard.py ]; then
-            python3 tools/emission-guard/emission_guard.py --verify
+          if [ -x tools/gate ]; then
+            tools/gate emission
           else
-            echo "::warning::tools/emission-guard is not in the published subtree yet — refresh the subtree to gate the generated-file census here"
+            echo "::warning::tools/gate is not in the published subtree yet — refresh the subtree to gate the generated-file census here"
           fi
 
       - name: Seam audit
@@ -242,7 +242,7 @@ jobs:
   # test that never runs cannot be told apart from a tool that has quietly
   # stopped refusing.
   #
-  # Like the Rust jobs this calls `tools/ci/run.sh` rather than listing the four
+  # Like the Rust jobs this calls `tools/gate` rather than listing the four
   # scripts here. One definition, two callers — a list in this file would be a
   # second inventory to keep in sync, and it would go stale silently.
   # -------------------------------------------------------------------------
@@ -263,8 +263,8 @@ jobs:
       - name: Is the release tier in the published subtree yet?
         id: probe
         run: |
-          if [ -x dclutch/tools/ci/run.sh ] \
-            && dclutch/tools/ci/run.sh --list 2>/dev/null | grep -q '^release '; then
+          if [ -x dclutch/tools/gate ] \
+            && dclutch/tools/gate --list 2>/dev/null | grep -q '^release '; then
             echo "present=1" >> "$GITHUB_OUTPUT"
           else
             echo "present=0" >> "$GITHUB_OUTPUT"
@@ -277,7 +277,7 @@ jobs:
         working-directory: dclutch
         run: |
           set +e
-          tools/ci/run.sh release
+          tools/gate release
           code=$?
           set -e
           case "$code" in

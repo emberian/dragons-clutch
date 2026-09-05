@@ -15,7 +15,7 @@
 # ---------------------------------------------------------------------------
 # WHERE THE TIERING IS DEFINED, AND IT IS NOT HERE.
 #
-# The jobs below call `dclutch/tools/ci/run.sh`, which lives in the live tree
+# The jobs below call `dclutch/tools/gate`, which lives in the live tree
 # beside the gates it runs. That indirection is the point. Before it, the only
 # written answer to "which of this project's gates run automatically" was a
 # YAML file in THIS repository -- which a lane working in the live tree cannot
@@ -37,13 +37,13 @@
 # `run.sh` exits 0 pass, 1 a gate failed, 2 A PREREQUISITE WAS MISSING AND
 # NOTHING WAS PROVEN. The 2 is load-bearing: this repository's `dclutch/`
 # directory is a SUBTREE, vendored in waves, and it currently does not carry
-# `tools/ci/`, `tools/seam-audit/` or `tools/emission-guard/` at all. Until the
+# `tools/gates/`, `tools/seam-audit/` or `tools/gate` at all. Until the
 # next subtree cut lands, the steps below will say "not in the published
 # subtree" and report it rather than inventing a pass. A gate that cannot run
 # has not passed; saying so out loud is the only way the gap stays visible
 # instead of becoming a green check nobody questions.
 #
-# HONESTY ABOUT WHAT HAS BEEN VERIFIED: `tools/ci/run.sh` was exercised in the
+# HONESTY ABOUT WHAT HAS BEEN VERIFIED: `tools/gate` was exercised in the
 # live tree, and each gate it wires was observed BOTH failing AND declining to
 # run, with distinct exit codes each time -- a planted unguarded emission, a
 # planted over-length seed domain, a genuine compute overrun at 8d3ca1f9, a
@@ -64,7 +64,8 @@ on:
     paths:
       - "dclutch/programs/**"
       - "dclutch/crates/**"
-      - "dclutch/tools/ci/**"
+      - "dclutch/tools/gate"
+      - "dclutch/tools/gates/**"
       - "dclutch/**/Cargo.toml"
       - "dclutch/**/Cargo.lock"
       - "dclutch/rust-toolchain.toml"
@@ -73,7 +74,8 @@ on:
     paths:
       - "dclutch/programs/**"
       - "dclutch/crates/**"
-      - "dclutch/tools/ci/**"
+      - "dclutch/tools/gate"
+      - "dclutch/tools/gates/**"
       - "dclutch/**/Cargo.toml"
       - "dclutch/**/Cargo.lock"
       - "dclutch/rust-toolchain.toml"
@@ -117,15 +119,15 @@ jobs:
       - name: Is the Rust tier in the published subtree yet?
         id: probe
         run: |
-          if [ -x dclutch/tools/ci/run.sh ]; then
+          if [ -x dclutch/tools/gate ]; then
             echo "present=1" >> "$GITHUB_OUTPUT"
           else
             echo "present=0" >> "$GITHUB_OUTPUT"
-            echo "::warning::dclutch/tools/ci/ is not in the published subtree yet, so NO Rust gate ran. This is a statement about what is published, not about the live tree. Refresh the subtree to make this job real."
+            echo "::warning::dclutch/tools/gate is not in the published subtree yet, so NO Rust gate ran. This is a statement about what is published, not about the live tree. Refresh the subtree to make this job real."
             {
               echo "### Rust tier: not run"
               echo
-              echo "\`dclutch/tools/ci/run.sh\` is absent from the vendored subtree."
+              echo "\`dclutch/tools/gate\` is absent from the vendored subtree."
               echo "Nothing was built and no compute measurement was taken."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -172,7 +174,7 @@ jobs:
         working-directory: dclutch
         run: |
           set +e
-          tools/ci/run.sh programs --commit HEAD
+          tools/gate programs --commit HEAD
           code=$?
           set -e
           case "$code" in
@@ -223,11 +225,11 @@ jobs:
       - name: Is the Rust tier in the published subtree yet?
         id: probe
         run: |
-          if [ -x dclutch/tools/ci/run.sh ]; then
+          if [ -x dclutch/tools/gate ]; then
             echo "present=1" >> "$GITHUB_OUTPUT"
           else
             echo "present=0" >> "$GITHUB_OUTPUT"
-            echo "::warning::dclutch/tools/ci/ is not in the published subtree yet, so the journey compile check did not run."
+            echo "::warning::dclutch/tools/gate is not in the published subtree yet, so the journey compile check did not run."
           fi
 
       - uses: actions/cache@v4
@@ -247,7 +249,7 @@ jobs:
           CARGO_BUILD_JOBS: 4
         run: |
           set +e
-          tools/ci/run.sh journey --commit HEAD
+          tools/gate journey --commit HEAD
           code=$?
           set -e
           case "$code" in
@@ -285,11 +287,11 @@ jobs:
       - name: Is the Rust tier in the published subtree yet?
         id: probe
         run: |
-          if [ -x dclutch/tools/ci/run.sh ]; then
+          if [ -x dclutch/tools/gate ]; then
             echo "present=1" >> "$GITHUB_OUTPUT"
           else
             echo "present=0" >> "$GITHUB_OUTPUT"
-            echo "::warning::dclutch/tools/ci/ is not in the published subtree yet, so no program-test suite ran."
+            echo "::warning::dclutch/tools/gate is not in the published subtree yet, so no program-test suite ran."
           fi
 
       - uses: actions/cache@v4
@@ -316,7 +318,7 @@ jobs:
           CARGO_BUILD_JOBS: 4
         run: |
           set +e
-          tools/ci/run.sh suites
+          tools/gate suites
           code=$?
           set -e
           case "$code" in
@@ -369,11 +371,11 @@ jobs:
       - name: Is the Rust tier in the published subtree yet?
         id: probe
         run: |
-          if [ -x dclutch/tools/ci/run.sh ]; then
+          if [ -x dclutch/tools/gate ]; then
             echo "present=1" >> "$GITHUB_OUTPUT"
           else
             echo "present=0" >> "$GITHUB_OUTPUT"
-            echo "::warning::dclutch/tools/ci/ is not in the published subtree yet."
+            echo "::warning::dclutch/tools/gate is not in the published subtree yet."
           fi
 
       - name: check every workspace
@@ -383,7 +385,7 @@ jobs:
           CARGO_BUILD_JOBS: 4
         run: |
           set +e
-          tools/ci/run.sh workspaces --commit HEAD
+          tools/gate workspaces --commit HEAD
           code=$?
           set -e
           case "$code" in
@@ -419,11 +421,11 @@ jobs:
       - name: Is the Rust tier in the published subtree yet?
         id: probe
         run: |
-          if [ -x dclutch/tools/ci/run.sh ]; then
+          if [ -x dclutch/tools/gate ]; then
             echo "present=1" >> "$GITHUB_OUTPUT"
           else
             echo "present=0" >> "$GITHUB_OUTPUT"
-            echo "::warning::dclutch/tools/ci/ is not in the published subtree yet; checks.yml's own if-present steps still cover these two gates."
+            echo "::warning::dclutch/tools/gate is not in the published subtree yet; checks.yml's own if-present steps still cover these two gates."
           fi
 
       # The seam audit's one prerequisite. Installed from npm because it needs
@@ -454,7 +456,7 @@ jobs:
       # than each paying for their own.
       #
       # The tier itself was ALSO taught to tell the two apart (dclutch
-      # `tools/ci/run.sh`, tier_locks): a workspace that refuses with cargo's
+      # `tools/gate`, tier_locks): a workspace that refuses with cargo's
       # "offline mode (via --offline)" is now reported as NOT PROVEN and
       # exits 2, while "because --locked was passed to prevent this" stays a
       # failure. So this step is what makes the gate RUN; the tree's change
@@ -501,7 +503,7 @@ jobs:
         run: |
           export PATH="$PWD/../node_modules/.bin:$PATH"
           set +e
-          tools/ci/run.sh cheap
+          tools/gate cheap
           code=$?
           set -e
           case "$code" in

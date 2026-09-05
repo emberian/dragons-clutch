@@ -1,6 +1,6 @@
 # The two client tiers, which until now ran in no CI at all.
 #
-# `tools/ci/run.sh` defines nine tiers. This repository's workflows called five
+# `tools/gate` defines nine tiers. This repository's workflows called five
 # of them -- `programs`, `journey`, `suites`, `workspaces`, `cheap` -- and the
 # two that gate the BROWSER, `web` and `abi`, ran nowhere. That gap has the
 # shape this project keeps finding in itself: `checks.yml`'s `suites` job runs
@@ -27,7 +27,7 @@
 # deleted -- by whoever reads that result, not in advance of it.
 #
 # WHAT THE PUBLISHED SUBTREE CARRIES RIGHT NOW, measured 2026-09-03 against
-# `dclutch/` at this commit and not assumed: `tools/ci/run.sh` is present and
+# `dclutch/` at this commit and not assumed: `tools/gate` is present and
 # lists a `web` tier, and does NOT list an `abi` tier -- that tier landed in the
 # live tree after the last cut. So the `abi` job below will report NOT RUN until
 # the next subtree refresh. That is stated here because the alternative is a job
@@ -54,7 +54,8 @@ on:
       - "dclutch/crates/**"
       - "dclutch/programs/**"
       - "dclutch/formal/**"
-      - "dclutch/tools/ci/**"
+      - "dclutch/tools/gate"
+      - "dclutch/tools/gates/**"
       - ".github/workflows/clients.yml"
   pull_request:
     paths:
@@ -63,7 +64,8 @@ on:
       - "dclutch/crates/**"
       - "dclutch/programs/**"
       - "dclutch/formal/**"
-      - "dclutch/tools/ci/**"
+      - "dclutch/tools/gate"
+      - "dclutch/tools/gates/**"
       - ".github/workflows/clients.yml"
   # The `abi` tier compiles eight crates to wasm and shells out to `lake`, so a
   # toolchain release or a yanked dependency can turn it red with no diff at
@@ -93,7 +95,7 @@ jobs:
   # job red and the log would blame the fixture.
   # -------------------------------------------------------------------------
   web:
-    name: web + SDK suites (tools/ci/run.sh web)
+    name: web + SDK suites (tools/gate web)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -102,11 +104,11 @@ jobs:
       - name: Is the web tier in the published subtree yet?
         id: probe
         run: |
-          if [ -x dclutch/tools/ci/run.sh ] && dclutch/tools/ci/run.sh --list | grep -qE '^web[[:space:]]'; then
+          if [ -x dclutch/tools/gate ] && dclutch/tools/gate --list | grep -qE '^web[[:space:]]'; then
             echo "present=1" >> "$GITHUB_OUTPUT"
           else
             echo "present=0" >> "$GITHUB_OUTPUT"
-            echo "::warning::dclutch/tools/ci/ does not publish a web tier yet, so no client suite ran from the tiering. checks.yml's suites job still runs the two vitest suites."
+            echo "::warning::dclutch/tools/gate does not publish a web tier yet, so no client suite ran from the tiering. checks.yml's suites job still runs the two vitest suites."
             echo "web tier: NOT RUN (not in the published subtree)" >> "$GITHUB_STEP_SUMMARY"
           fi
 
@@ -167,7 +169,7 @@ jobs:
         working-directory: dclutch
         run: |
           set +e
-          tools/ci/run.sh web
+          tools/gate web
           code=$?
           set -e
           case "$code" in
@@ -177,7 +179,7 @@ jobs:
               echo "web tier: NOT RUN (missing prerequisite)" >> "$GITHUB_STEP_SUMMARY"
               ;;
             64)
-              echo "::error::tools/ci/run.sh rejected 'web' as a tier name. The probe above said the tier was listed, so the runner's table and its dispatch disagree -- that is a defect in run.sh, not in this workflow."
+              echo "::error::tools/gate rejected 'web' as a tier name. The probe above said the tier was listed, so the runner's table and its dispatch disagree -- that is a defect in run.sh, not in this workflow."
               echo "web tier: USAGE ERROR" >> "$GITHUB_STEP_SUMMARY"
               exit 1
               ;;
@@ -217,7 +219,7 @@ jobs:
   # a second owner for a version the tree already states.
   # -------------------------------------------------------------------------
   abi:
-    name: 53 generated client modules against their authorities (tools/ci/run.sh abi)
+    name: 53 generated client modules against their authorities (tools/gate abi)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -226,15 +228,15 @@ jobs:
       - name: Is the abi tier in the published subtree yet?
         id: probe
         run: |
-          if [ -x dclutch/tools/ci/run.sh ] && dclutch/tools/ci/run.sh --list | grep -qE '^abi[[:space:]]'; then
+          if [ -x dclutch/tools/gate ] && dclutch/tools/gate --list | grep -qE '^abi[[:space:]]'; then
             echo "present=1" >> "$GITHUB_OUTPUT"
           else
             echo "present=0" >> "$GITHUB_OUTPUT"
-            echo "::warning::dclutch/tools/ci/ does not publish an abi tier yet, so NO generated client module was checked against its authority. This is a statement about what is published, not about the live tree. Refresh the subtree to make this job real."
+            echo "::warning::dclutch/tools/gate does not publish an abi tier yet, so NO generated client module was checked against its authority. This is a statement about what is published, not about the live tree. Refresh the subtree to make this job real."
             {
               echo "### abi tier: not run"
               echo
-              echo "\`tools/ci/run.sh\` in the vendored subtree lists no \`abi\` tier."
+              echo "\`tools/gate\` in the vendored subtree lists no \`abi\` tier."
               echo "None of the 53 \`abi:*:verify\` scripts ran."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -315,7 +317,7 @@ jobs:
         run: |
           lake --version
           set +e
-          tools/ci/run.sh abi
+          tools/gate abi
           code=$?
           set -e
           case "$code" in
@@ -325,7 +327,7 @@ jobs:
               echo "abi tier: NOT RUN (missing prerequisite)" >> "$GITHUB_STEP_SUMMARY"
               ;;
             64)
-              echo "::error::tools/ci/run.sh rejected 'abi' as a tier name. The probe above said the tier was listed, so the runner's table and its dispatch disagree -- that is a defect in run.sh, not in this workflow."
+              echo "::error::tools/gate rejected 'abi' as a tier name. The probe above said the tier was listed, so the runner's table and its dispatch disagree -- that is a defect in run.sh, not in this workflow."
               echo "abi tier: USAGE ERROR" >> "$GITHUB_STEP_SUMMARY"
               exit 1
               ;;
@@ -341,7 +343,7 @@ jobs:
   # counts guards, this one asks them. Same install as the abi job, minus the
   # wasm toolchain the guards never touch.
   emission:
-    name: 53 generated client modules against their authorities (tools/ci/run.sh emission)
+    name: 53 generated client modules against their authorities (tools/gate guards)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -350,15 +352,15 @@ jobs:
       - name: Is the emission tier in the published subtree yet?
         id: probe
         run: |
-          if [ -x dclutch/tools/ci/run.sh ] && dclutch/tools/ci/run.sh --list | grep -qE '^abi[[:space:]]'; then
+          if [ -x dclutch/tools/gate ] && dclutch/tools/gate --list | grep -qE '^abi[[:space:]]'; then
             echo "present=1" >> "$GITHUB_OUTPUT"
           else
             echo "present=0" >> "$GITHUB_OUTPUT"
-            echo "::warning::dclutch/tools/ci/ does not publish an emission tier yet, so NO generated client module was checked against its authority. This is a statement about what is published, not about the live tree. Refresh the subtree to make this job real."
+            echo "::warning::dclutch/tools/gate does not publish an emission tier yet, so NO generated client module was checked against its authority. This is a statement about what is published, not about the live tree. Refresh the subtree to make this job real."
             {
               echo "### emission tier: not run"
               echo
-              echo "\`tools/ci/run.sh\` in the vendored subtree lists no \`abi\` tier."
+              echo "\`tools/gate\` in the vendored subtree lists no \`abi\` tier."
               echo "None of the 53 \`abi:*:verify\` scripts ran."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -422,7 +424,7 @@ jobs:
         run: |
           lake --version
           set +e
-          tools/ci/run.sh emission
+          tools/gate guards
           code=$?
           set -e
           case "$code" in
@@ -432,7 +434,7 @@ jobs:
               echo "emission tier: NOT RUN (missing prerequisite)" >> "$GITHUB_STEP_SUMMARY"
               ;;
             64)
-              echo "::error::tools/ci/run.sh rejected 'abi' as a tier name. The probe above said the tier was listed, so the runner's table and its dispatch disagree -- that is a defect in run.sh, not in this workflow."
+              echo "::error::tools/gate rejected 'abi' as a tier name. The probe above said the tier was listed, so the runner's table and its dispatch disagree -- that is a defect in run.sh, not in this workflow."
               echo "emission tier: USAGE ERROR" >> "$GITHUB_STEP_SUMMARY"
               exit 1
               ;;
