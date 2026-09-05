@@ -2,16 +2,6 @@
 
 use std::{env, fs, path::PathBuf, vec, vec::Vec};
 
-use dclutch_market::capability_manifest::{
-    ActivationPolicy, CAPABILITY_ENTRY_BYTES, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
-    CapabilityEntryV1, CapabilityFundingDerivationV1, CapabilityManifestV1, CompartmentFundingV1,
-    ContentId as CapabilityContentId, FUNDING_STATE_BYTES, FundingAmountsV1,
-    FundingCustodyObservationV1, FundingQuoteV1, FundingStateV1, MANIFEST_HEADER_BYTES,
-    MAX_DEPENDENCIES_PER_CAPABILITY,
-};
-use dclutch_market::capability_program::{
-    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
-};
 use dclutch_claims::{
     founding_v5::ClaimsFoundingAggregateSeedsV5,
     liability_basis_state_v2::{
@@ -30,11 +20,31 @@ use dclutch_custody::{
     ProjectedCustodyPhaseV1, ProjectedCustodyRequestV1, ProjectedCustodyStateSeedsV2,
     ProjectedCustodyStateV2,
 };
+use dclutch_market::capability_manifest::{
+    ActivationPolicy, CAPABILITY_ENTRY_BYTES, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+    CapabilityEntryV1, CapabilityFundingDerivationV1, CapabilityManifestV1, CompartmentFundingV1,
+    ContentId as CapabilityContentId, FUNDING_STATE_BYTES, FundingAmountsV1,
+    FundingCustodyObservationV1, FundingQuoteV1, FundingStateV1, MANIFEST_HEADER_BYTES,
+    MAX_DEPENDENCIES_PER_CAPABILITY,
+};
+use dclutch_market::capability_program::{
+    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
+};
+use dclutch_market::realm::{
+    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
+};
+use dclutch_market::rent::{
+    RefundAuthority,
+    lifecycle_v2::{
+        LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
+    },
+};
 use dclutch_market::{
     Action, CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase,
     ProjectFoundRequestV2, Readiness, Request, SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES,
     SeriesFoundingPermitSeedsV1, SeriesFoundingPermitV1, SeriesPermitExpiryRequestV1,
 };
+use dclutch_product::admission::{FinalizedRecordCoordinateV2, PRODUCT_RECORD_BYTES_V2};
 use dclutch_product::payoff::{
     registry_v3::{GRADED_BASIS_RECORD_SCHEMA_ID_V3, PRICE_GATE_RECORD_SCHEMA_ID_V1},
     runtime_v3::{
@@ -43,18 +53,8 @@ use dclutch_product::payoff::{
     },
 };
 use dclutch_product::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
-use dclutch_product::admission::{FinalizedRecordCoordinateV2, PRODUCT_RECORD_BYTES_V2};
 use dclutch_product_runtime_v2_operator::{ProductCompilationInputV2, compile_product_records_v2};
-use dclutch_market::realm::{
-    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
-};
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry::{
-    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
-    ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactActivationInputV1, ArtifactReleaseV1,
-    ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
-    initialize_activation_cache_v1,
-};
 use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1,
     EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
@@ -62,11 +62,17 @@ use dclutch_registry::release_set::{
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProgramIdentityV1,
     ProtocolInfrastructureProfileV1, ProtocolInfrastructureProfileV2,
 };
-use dclutch_market::rent::{
-    RefundAuthority,
-    lifecycle_v2::{
-        LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
-    },
+use dclutch_registry::{
+    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
+    ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactActivationInputV1, ArtifactReleaseV1,
+    ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
+    initialize_activation_cache_v1,
+};
+use dclutch_source::{
+    CapacityEnvelope, ContentId as SourceContentId, MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
+    ManipulationFloorBasis, ManipulationFloorV1, SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1,
+    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_SPEC_SCHEMA_ID_V1, SourceAccessProfile,
+    SourceCapacityProfileV1, SourceMaterialV3, SourceSpecV1,
 };
 use dclutch_trading::series::{
     AccountKeyV3, AuthenticatedProductProjectionV2, SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3,
@@ -95,12 +101,6 @@ use dclutch_trading::series::{
     occurrence_content_id,
     replay::{SeriesStateV3, TicketPhaseV3, TicketStateSeedsV3, TicketStateV3},
     series_core_consume_request, template_content_id, ticket_content_id,
-};
-use dclutch_source::{
-    CapacityEnvelope, ContentId as SourceContentId, MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
-    ManipulationFloorBasis, ManipulationFloorV1, SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1,
-    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_SPEC_SCHEMA_ID_V1, SourceAccessProfile,
-    SourceCapacityProfileV1, SourceMaterialV3, SourceSpecV1,
 };
 use solana_account::Account;
 use solana_address_lookup_table_interface::{
@@ -135,7 +135,8 @@ const TRADING_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc4; 32]);
 const CLAIMS_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc5; 32]);
 const CUSTODY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc6; 32]);
 const RESOLUTION_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc7; 32]);
-const TOKEN_PROGRAM_ID: Pubkey = Pubkey::new_from_array(dclutch_custody::token_svm::LEGACY_TOKEN_PROGRAM_ID);
+const TOKEN_PROGRAM_ID: Pubkey =
+    Pubkey::new_from_array(dclutch_custody::token_svm::LEGACY_TOKEN_PROGRAM_ID);
 const COLLATERAL_MINT: Pubkey = Pubkey::new_from_array([0xb2; 32]);
 const LOOKUP_TABLE: Pubkey = Pubkey::new_from_array([0xb8; 32]);
 const GENERATION: u64 = 1;

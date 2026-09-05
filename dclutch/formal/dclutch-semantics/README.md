@@ -54,7 +54,7 @@ decides what `lake build` compiles.
 4. Delete whatever the crate or the browser was hand-stating.
 
 `tools/emission-guard/COVERAGE.md` is the census of which generated file has
-which guard; `tools/ci/run.sh emission` runs every guard for real.
+which guard; `tools/gate guards` runs every guard for real.
 
 ## Building
 

@@ -1,5 +1,19 @@
 //! Hostile chain-observation and exact-frame tests for the Rational V2 operator.
 
+use dclutch_claims::composition::{
+    COMPOSITION_EXPOSURE_SCHEMA_ID_V3, CompositionExposureInputV3, CompositionExposureRowInputV3,
+    CompositionExposureTermV3, composition_exposure_bytes_v3,
+    encode_composition_exposure_v3_atomic,
+};
+use dclutch_claims::rational::{
+    ABSENT_REVISION, CallerRoleV2, RATIONAL_REPLAY_SEED_V2,
+    RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2, RATIONAL_SHARD_MINT_SEED_V2,
+    RATIONAL_STRUCTURED_CUSTODY_SEED_V2, RepresentationActionV2, RepresentationRequestV2,
+};
+use dclutch_claims::rational_kernel::{
+    DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3,
+    REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
+};
 use dclutch_claims::{
     liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
@@ -11,14 +25,29 @@ use dclutch_claims::{
     signed_delta_v3::SignedDeltaPlanV3,
 };
 use dclutch_core_contract::ContentId;
+use dclutch_custody::token_svm::{TOKEN_2022_PROGRAM_ID, state::MintLayoutV1};
 use dclutch_custody::{
     CUSTODY_REPLAY_BYTES_V1, CallerRoleV1 as CustodyCallerRoleV1, CompartmentV1, ContextV1,
     CustodyAuthoritySeedsV1, CustodyReplaySeedsV1, CustodyReplayV1, CustodyRequestV1,
     CustodyVaultSeedsV1, OperationV1,
 };
+use dclutch_market::realm::{
+    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
+};
 use dclutch_market::{
     CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase as CorePhase, Readiness,
     StateBumpsV1,
+};
+use dclutch_operator::rational_representation::{
+    AssetObservationV2, Error, FinalizedRecordObservationV2, ObservedAccountV2,
+    ProductEvidenceObservationV2, RationalObservationV2, ReplayObservationV2,
+    SelectedActionInputV2, StructuredActionInputV2, TerminalObservationV2, construct_denominate,
+    construct_issue_structured, construct_reconstitute, construct_redeem_terminal,
+    construct_unwrap_structured,
+};
+use dclutch_product::admission::{
+    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
+    RESULT_DOMAIN_SCHEMA_ID_V2,
 };
 use dclutch_product::payoff::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
@@ -31,46 +60,17 @@ use dclutch_product::{
     ContentId as ProductContentId, PortfolioInputV2, ResultDomainInputV2, compile_portfolio_v2,
     compile_result_domain_v2, portfolio_record_bytes, result_domain_record_bytes,
 };
-use dclutch_product::admission::{
-    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
-    RESULT_DOMAIN_SCHEMA_ID_V2,
-};
-use dclutch_claims::rational::{
-    ABSENT_REVISION, CallerRoleV2, RATIONAL_REPLAY_SEED_V2,
-    RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2, RATIONAL_SHARD_MINT_SEED_V2,
-    RATIONAL_STRUCTURED_CUSTODY_SEED_V2, RepresentationActionV2, RepresentationRequestV2,
-};
-use dclutch_claims::rational_kernel::{
-    DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3,
-    REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
-};
-use dclutch_operator::rational_representation::{
-    AssetObservationV2, Error, FinalizedRecordObservationV2, ObservedAccountV2,
-    ProductEvidenceObservationV2, RationalObservationV2, ReplayObservationV2,
-    SelectedActionInputV2, StructuredActionInputV2, TerminalObservationV2, construct_denominate,
-    construct_issue_structured, construct_reconstitute, construct_redeem_terminal,
-    construct_unwrap_structured,
-};
-use dclutch_market::realm::{
-    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
-};
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::release_set::{
+    ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
+    ProgramIdentityV1,
+};
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ArtifactActivationInputV1,
     ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
     activate_execution_role_into_v1, initialize_activation_cache_v1,
 };
-use dclutch_registry::release_set::{
-    ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
-    ProgramIdentityV1,
-};
-use dclutch_claims::composition::{
-    COMPOSITION_EXPOSURE_SCHEMA_ID_V3, CompositionExposureInputV3, CompositionExposureRowInputV3,
-    CompositionExposureTermV3, composition_exposure_bytes_v3,
-    encode_composition_exposure_v3_atomic,
-};
 use dclutch_source::resolution::{ResolutionCertificateKindV2, ResolutionCertificateV2};
-use dclutch_custody::token_svm::{TOKEN_2022_PROGRAM_ID, state::MintLayoutV1};
 use solana_program::{
     hash::{hash, hashv},
     instruction::AccountMeta,
@@ -1371,18 +1371,14 @@ fn nonzero_display_decimals_still_refuse_every_mint_authentication_failure() {
     wrong_owner.receipt_mint.owner = CLAIMS;
     assert_eq!(
         issue(wrong_owner),
-        Error::ProductRuntimeReader(
-            dclutch_product::svm_reader::Error::RepresentationComposition
-        )
+        Error::ProductRuntimeReader(dclutch_product::svm_reader::Error::RepresentationComposition)
     );
 
     let mut wrong_key = fixture.observation(&assets, Mode::Structured);
     wrong_key.receipt_mint.key = Pubkey::new_from_array([0x5a; 32]);
     assert_eq!(
         issue(wrong_key),
-        Error::ProductRuntimeReader(
-            dclutch_product::svm_reader::Error::RepresentationComposition
-        )
+        Error::ProductRuntimeReader(dclutch_product::svm_reader::Error::RepresentationComposition)
     );
 
     // Executability is carried by no record, so this one is `authenticate_mint`

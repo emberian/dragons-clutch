@@ -4,7 +4,17 @@
 //! the persisted authority graph, and emit unsigned instructions plus complete
 //! expected poststate. They perform no RPC, signing, or submission.
 
-use dclutch_vm::account_profile::AccountProfileV1;
+use dclutch_claims::liability_basis_state_v2::{
+    LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2,
+};
+use dclutch_core_contract::ContentId;
+use dclutch_custody::token_svm::{AccountState, COption, TokenAccount};
+use dclutch_custody::{
+    CUSTODY_REPLAY_BYTES_V1, CompartmentV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1,
+    CustodyReplayV1, CustodyVaultSeedsV1, RetirementReplayHandoffAccountLayoutV1,
+    RetirementReplayHandoffObservationV1, RetirementReplayHandoffPlanV1,
+    RetirementReplayHandoffReceiptV1, RetirementReplayHandoffRequestV1,
+};
 use dclutch_market::capability_manifest::{
     CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingLedgerDerivationV2,
     CapabilityManifestV1, FUNDING_LEDGER_ACTIVE_ADMISSIBLE_STATES_V2, FundingLedgerCloseCustodyV2,
@@ -16,15 +26,20 @@ use dclutch_market::capability_program::{
     CapabilityRootHeaderV1,
     set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
 };
-use dclutch_claims::liability_basis_state_v2::{
-    LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2,
+use dclutch_market::realm::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
+use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
+use dclutch_market::{
+    Action, CapabilityFundingHeaderV2, CapabilityRouteLayoutV1, CoreEffectActionV1,
+    CoreEffectEnvelopeV1, Request, Role,
 };
-use dclutch_core_contract::ContentId;
-use dclutch_custody::{
-    CUSTODY_REPLAY_BYTES_V1, CompartmentV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1,
-    CustodyReplayV1, CustodyVaultSeedsV1, RetirementReplayHandoffAccountLayoutV1,
-    RetirementReplayHandoffObservationV1, RetirementReplayHandoffPlanV1,
-    RetirementReplayHandoffReceiptV1, RetirementReplayHandoffRequestV1,
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2, Phase};
+use dclutch_registry::release_set::{
+    CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1, ExecutionRoleV1,
+};
+use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
+use dclutch_registry::{
+    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
+    ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1, DeploymentObservationV1,
 };
 use dclutch_trading::{
     native_close_bundle_v1::{
@@ -33,23 +48,8 @@ use dclutch_trading::{
     },
     successor::{DirectRootPhaseV1, DirectRootStateV1},
 };
+use dclutch_vm::account_profile::AccountProfileV1;
 use dclutch_vm::effect::v2::ProgramV2 as EffectProgramV2;
-use dclutch_market::{
-    Action, CapabilityFundingHeaderV2, CapabilityRouteLayoutV1, CoreEffectActionV1,
-    CoreEffectEnvelopeV1, Request, Role,
-};
-use dclutch_market::{CoreState, MarketCoreStateSeedsV2, Phase};
-use dclutch_market::realm::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
-use dclutch_registry::{
-    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
-    ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1, DeploymentObservationV1,
-};
-use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
-use dclutch_registry::release_set::{
-    CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1, ExecutionRoleV1,
-};
-use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
-use dclutch_custody::token_svm::{AccountState, COption, TokenAccount};
 use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},
@@ -878,8 +878,7 @@ pub fn build_direct_native_close_v1(
             .map_err(TerminalRetirementErrorV1::MarketCore)?,
         market.identity.selected_release_set,
         market.identity.market_id,
-        dclutch_market::Identity::new(context)
-            .map_err(TerminalRetirementErrorV1::MarketCore)?,
+        dclutch_market::Identity::new(context).map_err(TerminalRetirementErrorV1::MarketCore)?,
         dclutch_market::Identity::new(hash(&snapshot.market.data).to_bytes())
             .map_err(TerminalRetirementErrorV1::MarketCore)?,
         dclutch_market::Identity::new(role_request_digest)

@@ -23,9 +23,7 @@ use dclutch_claims::{
     protocol_position_v2::ProtocolPositionSeedsV2,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_market::{
-    CoreState, MarketAdmissionV1, MarketCoreStateSeedsV2, STATE_BYTES,
-};
+use dclutch_market::{CoreState, MarketAdmissionV1, MarketCoreStateSeedsV2, STATE_BYTES};
 use dclutch_product::svm_reader::{
     FinalizedRecordFrameV2, ProductRuntimeFrameV2, ProductRuntimeFrameV3,
     authenticate_product_basis_v3,
@@ -659,12 +657,11 @@ pub(crate) fn authenticate_runtime_product_basis_core_with_rent_v3(
         // the sole author of the rule -- which is exactly what that function's
         // own doc asks a mirror-holding consumer to do, and what the two
         // settlement call sites already do.
-        refunds_on_failure:
-            dclutch_product::payoff::runtime_v3::categorical_refunds_on_failure_v3(
-                product.basis_kind,
-                product.basis_width,
-                product.payout_scale,
-            ),
+        refunds_on_failure: dclutch_product::payoff::runtime_v3::categorical_refunds_on_failure_v3(
+            product.basis_kind,
+            product.basis_width,
+            product.payout_scale,
+        ),
     })
 }
 

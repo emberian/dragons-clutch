@@ -43,11 +43,6 @@
 
 #![allow(dead_code)]
 
-use dclutch_claims::fractional_kernel::{
-    FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FractionalExposureTermsAdmissionV2,
-    FractionalExposureTermsInputV2, FractionalExposureTermsV2, encode_fractional_exposure_terms_v2,
-    fractional_exposure_terms_bytes_v2,
-};
 use dclutch_claims::composition::{
     COMPOSITION_DESCRIPTOR_BYTES_V3, CanonicalTranslationInputV3, CompositionBundleV3,
     CompositionDescriptorInputV3, CompositionEdgeInputV3, CompositionExposureBundleV3,
@@ -57,6 +52,11 @@ use dclutch_claims::composition::{
     composition_translation_bytes_v3, decode_composition_bundle_v3,
     encode_canonical_translation_v3_atomic, encode_composition_descriptor_v3_atomic,
     encode_composition_exposure_v3_atomic, encode_composition_graph_v3_atomic,
+};
+use dclutch_claims::fractional_kernel::{
+    FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FractionalExposureTermsAdmissionV2,
+    FractionalExposureTermsInputV2, FractionalExposureTermsV2, encode_fractional_exposure_terms_v2,
+    fractional_exposure_terms_bytes_v2,
 };
 use dclutch_claims::structured_kernel::{
     STRUCTURED_TERMS_SCHEMA_ID_V2, StructuredTermsAdmissionV2, StructuredTermsInputV2,

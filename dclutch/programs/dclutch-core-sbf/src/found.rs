@@ -1,7 +1,13 @@
 //! Exact finalized-record Found transition and prepaid Market creation.
 
 use alloc::boxed::Box;
-use dclutch_market::capability_manifest::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
+use dclutch_market::capability_manifest::{
+    CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1,
+};
+use dclutch_market::realm::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
+use dclutch_market::rent::lifecycle_v2::{
+    LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleRentCreditV2,
+};
 use dclutch_market::{
     Action, Admission, CoreState, FoundingAccounts, FoundingFrame, FoundingQuote,
     MarketCoreStateSeedsV2, MarketIdentity, PRODUCT_GRAPH_BUMP_COUNT, Product, ProductGraphBumpsV1,
@@ -11,12 +17,8 @@ use dclutch_product::svm_reader::{
     AuthenticatedProductRuntimeV2, Error as ProductRuntimeReaderError, FinalizedRecordFrameV2,
     ProductRuntimeFrameV2, authenticate_founding_product_basis_v3,
 };
-use dclutch_market::realm::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
-use dclutch_market::rent::lifecycle_v2::{
-    LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleRentCreditV2,
-};
 use dclutch_source::{
     ContentId as SourceContentId, MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
     MANIPULATION_FLOOR_V1_BYTES, ManipulationFloorV1, SOURCE_CAPACITY_PROFILE_BYTES,

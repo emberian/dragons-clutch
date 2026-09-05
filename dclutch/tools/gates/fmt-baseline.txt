@@ -27,21 +27,13 @@
 
 # --- Structured lane -------------------------------------------------------
 crates/dclutch-product/tests/payoff__basis_corpus_v3.rs
-crates/dclutch-operator/src/rational_lifecycle_hot/compact_operator_v4.rs
-crates/dclutch-operator/src/rational_lifecycle_hot/lifecycle_policy_v5.rs
-crates/dclutch-operator/src/rational_lifecycle_hot/release_v1.rs
 crates/dclutch-rational-open-wasm/src/wire.rs
 
 # --- Dealer lane -----------------------------------------------------------
 # dclutch-trading is the ONE package that declares edition 2021, so these
 # are the files the two formatters disagreed about most sharply. They are now
 # 2024-style everywhere; these four just have not been run through it yet.
-crates/dclutch-trading/src/dealer/root_tail.rs
-crates/dclutch-trading/src/dealer/scenario.rs
-crates/dclutch-trading/src/dealer/scenario_custody_reservation_v1.rs
-crates/dclutch-trading/src/dealer/trading_request.rs
 
 # --- Direct lane -----------------------------------------------------------
 
 # --- Redemption lane -------------------------------------------------------
-crates/dclutch-operator/src/wallet_terminal_payout/wire.rs

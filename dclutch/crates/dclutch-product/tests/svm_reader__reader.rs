@@ -2,6 +2,24 @@
 
 #![allow(clippy::panic)]
 
+use dclutch_claims::composition::{
+    COMPOSITION_EXPOSURE_SCHEMA_ID_V3, CompositionExposureInputV3, CompositionExposureRowInputV3,
+    CompositionExposureTermV3, composition_exposure_bytes_v3,
+    encode_composition_exposure_v3_atomic,
+};
+use dclutch_claims::product_representation_reader_v3::{
+    RepresentationRuntimeContextV3, RepresentationRuntimeFrameV3,
+    authenticate_product_representation_v3,
+};
+use dclutch_claims::rational_kernel::{
+    DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3,
+    REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
+};
+use dclutch_product::admission::{
+    ADMISSION_RECEIPT_BYTES_V2, AdmissionReceiptV2, FinalizedRecordCoordinateV2,
+    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
+    RESULT_DOMAIN_SCHEMA_ID_V2,
+};
 use dclutch_product::payoff::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
     runtime_v3::{
@@ -9,30 +27,12 @@ use dclutch_product::payoff::{
         basis_record_bytes_v3, compile_basis_v3, semantic_basis_preimage_v3,
     },
 };
+use dclutch_product::svm_reader::*;
 use dclutch_product::{
     ContentId, PortfolioInputV2, ResultDomainInputV2, compile_portfolio_v2,
     compile_result_domain_v2, portfolio_record_bytes, result_domain_record_bytes,
 };
-use dclutch_product::admission::{
-    ADMISSION_RECEIPT_BYTES_V2, AdmissionReceiptV2, FinalizedRecordCoordinateV2,
-    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
-    RESULT_DOMAIN_SCHEMA_ID_V2,
-};
-use dclutch_claims::product_representation_reader_v3::{
-    RepresentationRuntimeContextV3, RepresentationRuntimeFrameV3,
-    authenticate_product_representation_v3,
-};
-use dclutch_product::svm_reader::*;
-use dclutch_claims::rational_kernel::{
-    DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3,
-    REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
-};
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_claims::composition::{
-    COMPOSITION_EXPOSURE_SCHEMA_ID_V3, CompositionExposureInputV3, CompositionExposureRowInputV3,
-    CompositionExposureTermV3, composition_exposure_bytes_v3,
-    encode_composition_exposure_v3_atomic,
-};
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},

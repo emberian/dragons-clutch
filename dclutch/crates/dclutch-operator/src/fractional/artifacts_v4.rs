@@ -1,50 +1,5 @@
 //! Exact CapabilityV4/LifecycleV5/Profile13 artifacts for executable Fractional Claims actions.
 
-use dclutch_vm::account_profile::{
-    lifecycle_v3::{
-        CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5 as LIFECYCLE_SCHEMA_ID_V5,
-        HEADER_BYTES as LIFECYCLE_HEADER_BYTES, StateLifecyclePolicyV5,
-        encode::encode_lifecycle_policy_v5_atomic,
-    },
-    v2::{
-        AccountPrestateV2, AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE,
-        DYNAMIC_FIXED_SPAN_HEADER_BYTES, OPERATION_BYTES as ACCOUNT_OPERATION_BYTES,
-        RULE_BYTES as ACCOUNT_RULE_BYTES, TrustedBuiltinIdentityV2, TrustedEnvironmentV2,
-        TrustedIdentityEnvironmentV2,
-        encode::{
-            AccountAliasInputV2, AccountCoordinateV2, AccountEffectPermissionsV2,
-            AccountOperationInputV2, AccountPrivilegesV2, AccountRuleInputV2,
-            AccountRuleWithPrestateInputV2, IdentityCoordinateV2, RegisterGeometryV2,
-            ScalarCoordinateV2, encode_account_profile_with_dynamic_fixed_span_v2_atomic,
-        },
-    },
-};
-use dclutch_market::capability_program::v4::{
-    ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4, CapabilityProgramV4,
-};
-use dclutch_core_contract::ContentId;
-use dclutch_vm::effect::{
-    v2::FixedRole,
-    v3::{
-        HEADER_BYTES as EFFECT_HEADER_BYTES, OPERATION_BYTES as EFFECT_OPERATION_BYTES,
-        ROUTE_BYTES as EFFECT_ROUTE_BYTES, RouteKindV3,
-        encode::{
-            AccountCoordinateV3, EffectGeometryV3, EffectInstructionV3, IdentityCoordinateV3,
-            RequestSpaceV3, RouteInputV3, ScalarCoordinateV3, encode_effect_program_v3_atomic,
-        },
-    },
-    v4::{
-        BorrowedRangePolicyV4, HEADER_BYTES_V4 as EFFECT_V4_HEADER_BYTES,
-        ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4,
-        encode_program_v4_atomic,
-    },
-};
-use dclutch_market::execution_strategy::v2::{
-    ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
-    EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
-    EXECUTION_STRATEGY_PROGRAM_BYTES_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
-    ExecutionStrategyProgramV2, StrategyDispositionV2,
-};
 use dclutch_claims::fractional::{
     FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3, FRACTIONAL_ATOMIC_ROOT_V3,
     FRACTIONAL_CAPABILITY_KIND_ID_V1, FRACTIONAL_CAPABILITY_ROOT_BYTES_V4,
@@ -70,6 +25,51 @@ use dclutch_claims::fractional::{
     FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3, FRACTIONAL_TERMINAL_ROOT_V3, FractionalExposureActionV2,
 };
 use dclutch_claims::fractional_kernel::FRACTIONAL_SELECTION_CONFIG_SCHEMA_ID_V1;
+use dclutch_core_contract::ContentId;
+use dclutch_market::capability_program::v4::{
+    ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4, CapabilityProgramV4,
+};
+use dclutch_market::execution_strategy::v2::{
+    ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
+    EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
+    EXECUTION_STRATEGY_PROGRAM_BYTES_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
+    ExecutionStrategyProgramV2, StrategyDispositionV2,
+};
+use dclutch_vm::account_profile::{
+    lifecycle_v3::{
+        CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5 as LIFECYCLE_SCHEMA_ID_V5,
+        HEADER_BYTES as LIFECYCLE_HEADER_BYTES, StateLifecyclePolicyV5,
+        encode::encode_lifecycle_policy_v5_atomic,
+    },
+    v2::{
+        AccountPrestateV2, AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE,
+        DYNAMIC_FIXED_SPAN_HEADER_BYTES, OPERATION_BYTES as ACCOUNT_OPERATION_BYTES,
+        RULE_BYTES as ACCOUNT_RULE_BYTES, TrustedBuiltinIdentityV2, TrustedEnvironmentV2,
+        TrustedIdentityEnvironmentV2,
+        encode::{
+            AccountAliasInputV2, AccountCoordinateV2, AccountEffectPermissionsV2,
+            AccountOperationInputV2, AccountPrivilegesV2, AccountRuleInputV2,
+            AccountRuleWithPrestateInputV2, IdentityCoordinateV2, RegisterGeometryV2,
+            ScalarCoordinateV2, encode_account_profile_with_dynamic_fixed_span_v2_atomic,
+        },
+    },
+};
+use dclutch_vm::effect::{
+    v2::FixedRole,
+    v3::{
+        HEADER_BYTES as EFFECT_HEADER_BYTES, OPERATION_BYTES as EFFECT_OPERATION_BYTES,
+        ROUTE_BYTES as EFFECT_ROUTE_BYTES, RouteKindV3,
+        encode::{
+            AccountCoordinateV3, EffectGeometryV3, EffectInstructionV3, IdentityCoordinateV3,
+            RequestSpaceV3, RouteInputV3, ScalarCoordinateV3, encode_effect_program_v3_atomic,
+        },
+    },
+    v4::{
+        BorrowedRangePolicyV4, HEADER_BYTES_V4 as EFFECT_V4_HEADER_BYTES,
+        ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4,
+        encode_program_v4_atomic,
+    },
+};
 use dclutch_vm::request_profile::{
     HEADER_BYTES as REQUEST_HEADER_BYTES, OPERATION_BYTES as REQUEST_OPERATION_BYTES,
     RequestProfileV1,
@@ -320,10 +320,7 @@ fn build_fractional_selected_bundle_for_root_v4(
             )?,
             lifecycle: artifact(LIFECYCLE_SCHEMA_ID_V5, lifecycle_id)?,
             strategy: artifact(EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, digest(&strategy))?,
-            transition: artifact(
-                dclutch_vm::v3::SCHEMA_RELEASE_ID,
-                digest(&transition),
-            )?,
+            transition: artifact(dclutch_vm::v3::SCHEMA_RELEASE_ID, digest(&transition))?,
             effect: artifact(EFFECT_SCHEMA_ID_V4, digest(&effect))?,
         },
         u32::try_from(FRACTIONAL_ROOT_BYTES_V1)

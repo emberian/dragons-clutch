@@ -1,5 +1,12 @@
 //! Schema-bound five-action program set for Bearer and Structured routes.
 
+use dclutch_claims::rational::{AuthenticatedTokenBehaviorV2, RepresentationActionV2};
+use dclutch_claims::rational_request::generated::REQUEST_ACTION_OFFSET_V3;
+use dclutch_core_contract::ContentId;
+use dclutch_custody::token_svm::{
+    TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
+    TokenBehaviorSelectionV2,
+};
 use dclutch_market::capability_program::{
     set_v2::{
         CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, CapabilityProgramSetV2,
@@ -7,17 +14,8 @@ use dclutch_market::capability_program::{
     },
     v4::{CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4},
 };
-use dclutch_core_contract::ContentId;
 use dclutch_vm::effect::v4::{
     ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4,
-};
-use dclutch_claims::rational::{
-    AuthenticatedTokenBehaviorV2, RepresentationActionV2,
-};
-use dclutch_claims::rational_request::generated::REQUEST_ACTION_OFFSET_V3;
-use dclutch_custody::token_svm::{
-    TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
-    TokenBehaviorSelectionV2,
 };
 use solana_program::hash::hash;
 

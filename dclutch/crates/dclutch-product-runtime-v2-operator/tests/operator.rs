@@ -1,7 +1,7 @@
 //! Caller-buffer compilation and chain-derived unsigned instruction tests.
 
-use dclutch_product::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
 use dclutch_product::admission::{ADMISSION_RECEIPT_BYTES_V2, PRODUCT_RECORD_BYTES_V2};
+use dclutch_product::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
 use dclutch_product_runtime_v2_operator::*;
 use solana_program::pubkey::Pubkey;
 use solana_sdk_ids::{system_program, sysvar};
@@ -140,25 +140,26 @@ fn finalized_observations_build_one_unsigned_admission_frame() {
     let receipt_data = [0_u8; ADMISSION_RECEIPT_BYTES_V2];
     let empty: [u8; 0] = [];
     let slot = 99;
-    let raw = |coordinate: dclutch_product::admission::FinalizedRecordCoordinateV2,
-               data| FinalizedRecordObservationV2 {
-        raw: account(
-            slot,
-            Pubkey::new_from_array(coordinate.raw_account.to_bytes()),
-            registry_key,
-            false,
-            1_000_000,
-            data,
-        ),
-        staging: account(
-            slot,
-            Pubkey::new_from_array(coordinate.staging_account.to_bytes()),
-            system_program::ID,
-            false,
-            7,
-            &empty,
-        ),
-        raw_rent_minimum: 100,
+    let raw = |coordinate: dclutch_product::admission::FinalizedRecordCoordinateV2, data| {
+        FinalizedRecordObservationV2 {
+            raw: account(
+                slot,
+                Pubkey::new_from_array(coordinate.raw_account.to_bytes()),
+                registry_key,
+                false,
+                1_000_000,
+                data,
+            ),
+            staging: account(
+                slot,
+                Pubkey::new_from_array(coordinate.staging_account.to_bytes()),
+                system_program::ID,
+                false,
+                7,
+                &empty,
+            ),
+            raw_rent_minimum: 100,
+        }
     };
     let state = AdmissionStateV2 {
         registry: account(

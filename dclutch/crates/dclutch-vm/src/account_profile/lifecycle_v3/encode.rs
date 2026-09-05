@@ -792,7 +792,9 @@ mod tests {
         .expect("protected encode");
         StateLifecyclePolicyV3::decode(&output).expect("protected decode");
         assert_eq!(
-            crate::account_profile::lifecycle_v3::StateLifecyclePolicyV4::decode_selected([1; 32], [1; 32], &output,),
+            crate::account_profile::lifecycle_v3::StateLifecyclePolicyV4::decode_selected(
+                [1; 32], [1; 32], &output,
+            ),
             Err(Error::UnsupportedProfile)
         );
 

@@ -10,7 +10,8 @@ import {
 } from './foundRefusals';
 
 const ROOT = join(import.meta.dirname, '..', '..');
-const SOURCES = ['lib/coreFound.ts', 'lib/infrastructure.ts', 'lib/rpc.ts', 'components/CoreFoundWorkspace.tsx']
+// The three modules live in the SDK now; the workspace imports them whole.
+const SOURCES = ['../../packages/dclutch-sdk/lib/coreFound.ts', '../../packages/dclutch-sdk/lib/infrastructure.ts', '../../packages/dclutch-sdk/lib/rpc.ts', 'components/CoreFoundWorkspace.tsx']
   .map((path) => readFileSync(join(ROOT, path), 'utf8'))
   .join('\n');
 

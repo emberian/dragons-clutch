@@ -401,7 +401,9 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rational_request::{REPRESENTATION_FRAME_SPEC_V2, RepresentationCoordinateV2 as Coordinate};
+    use crate::rational_request::{
+        REPRESENTATION_FRAME_SPEC_V2, RepresentationCoordinateV2 as Coordinate,
+    };
 
     /// The single-asset terminal frame the Hot route builds, walked end to end.
     #[test]

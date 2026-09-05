@@ -9,7 +9,6 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::convert::TryFrom;
 
-use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
 use dclutch_core_contract::ContentId;
 use dclutch_custody::{
     CUSTODY_BUMP_RELAY_BYTES_V1, CUSTODY_RECEIPT_BYTES_V1, CUSTODY_REPLAY_BYTES_V1,
@@ -19,6 +18,7 @@ use dclutch_custody::{
     OperationV1, PROJECTED_CUSTODY_REQUEST_BYTES_V1, PROJECTED_CUSTODY_REQUEST_MAGIC_V1,
     ProjectedCustodyRequestV1, ReceiptEvidenceV1, classify_premarket_series_escrow_v1,
 };
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
 
 mod delegated;
 mod projected;
@@ -49,24 +49,24 @@ macro_rules! custody_cu_checkpoint {
     ($phase:literal) => {};
 }
 
-use dclutch_market::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
-use dclutch_market::realm::{
-    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1,
-};
-use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry::activation_auth_v1::{
-    authenticate_activation_cache_identity_v1, require_cache_account, require_readonly_frame,
-};
-use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
-use dclutch_registry::svm::continuation_v1::{
-    REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationAdmissionSeedsV1,
-    RegistryContinuationRequestV1,
-};
-use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_custody::token_svm::{
     AuthorityRole, COption, ExactTransferInput, ExactTransferProfileV1,
     PRODUCTION_ADAPTER_RELEASES, close_account, initialize_account3, transfer_checked,
 };
+use dclutch_market::realm::{
+    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1,
+};
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
+use dclutch_registry::activation_auth_v1::{
+    authenticate_activation_cache_identity_v1, require_cache_account, require_readonly_frame,
+};
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_registry::svm::continuation_v1::{
+    REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationAdmissionSeedsV1,
+    RegistryContinuationRequestV1,
+};
+use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,
@@ -91,8 +91,7 @@ pub const INITIALIZE_REPLAY_ACCOUNT_COUNT_V1: usize =
 pub const OPEN_VAULT_ACCOUNT_COUNT_V1: usize =
     dclutch_custody::OPEN_VAULT_ACCOUNT_COUNT_V1 as usize;
 /// Exact `Transfer` account count.
-pub const TRANSFER_ACCOUNT_COUNT_V1: usize =
-    dclutch_custody::TRANSFER_ACCOUNT_COUNT_V1 as usize;
+pub const TRANSFER_ACCOUNT_COUNT_V1: usize = dclutch_custody::TRANSFER_ACCOUNT_COUNT_V1 as usize;
 /// Exact `CloseVault` account count.
 pub const CLOSE_VAULT_ACCOUNT_COUNT_V1: usize =
     dclutch_custody::CLOSE_VAULT_ACCOUNT_COUNT_V1 as usize;
@@ -234,15 +233,12 @@ pub fn process_instruction(
 ) -> ProgramResult {
     custody_cu_checkpoint!("cu-enter");
     let (instruction_data, relay) = split_caller_authority_bump_v1(instruction_data);
-    if instruction_data.len()
-        == dclutch_custody::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1
-        && instruction_data
-            .get(..dclutch_custody::RETIREMENT_REPLAY_HANDOFF_REQUEST_MAGIC_V1.len())
+    if instruction_data.len() == dclutch_custody::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1
+        && instruction_data.get(..dclutch_custody::RETIREMENT_REPLAY_HANDOFF_REQUEST_MAGIC_V1.len())
             == Some(dclutch_custody::RETIREMENT_REPLAY_HANDOFF_REQUEST_MAGIC_V1.as_slice())
     {
-        let request =
-            dclutch_custody::RetirementReplayHandoffRequestV1::decode(instruction_data)
-                .map_err(|_| CustodySbfError::Instruction)?;
+        let request = dclutch_custody::RetirementReplayHandoffRequestV1::decode(instruction_data)
+            .map_err(|_| CustodySbfError::Instruction)?;
         return retirement_replay_handoff_v1::process(
             program_id,
             accounts,
@@ -1920,7 +1916,8 @@ fn create_vault<'a>(
         payer.key,
         vault.key,
         rent_lamports,
-        u64::try_from(dclutch_custody::token_svm::ACCOUNT_BYTES).map_err(|_| CustodySbfError::Create)?,
+        u64::try_from(dclutch_custody::token_svm::ACCOUNT_BYTES)
+            .map_err(|_| CustodySbfError::Create)?,
         token_program.key,
     );
     let vault_seeds = CustodyVaultSeedsV1::from_request(request, false);
@@ -2166,8 +2163,7 @@ mod tests {
     fn the_carried_suffix_never_collides_with_another_exact_length() {
         let carried_widths = [
             dclutch_custody::CUSTODY_REQUEST_BYTES_V1,
-            dclutch_custody::CUSTODY_REQUEST_BYTES_V1
-                + REGISTRY_CONTINUATION_REQUEST_BYTES_V1,
+            dclutch_custody::CUSTODY_REQUEST_BYTES_V1 + REGISTRY_CONTINUATION_REQUEST_BYTES_V1,
             DELEGATED_CUSTODY_REQUEST_BYTES_V2,
         ];
         // The two routes that do NOT read a carried bump. A byte after one of

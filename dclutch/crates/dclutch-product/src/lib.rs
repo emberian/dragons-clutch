@@ -901,14 +901,14 @@ fn gcd(mut left: u64, mut right: u64) -> u64 {
 }
 
 // Authorities merged into this crate; each module was one crate before.
-/// Formerly the `dclutch-product::contract` crate.
-pub mod contract;
 /// Formerly the `dclutch-product::admission` crate.
 pub mod admission;
-/// Formerly the `dclutch-product::payoff` crate.
-pub mod payoff;
+/// Formerly the `dclutch-product::contract` crate.
+pub mod contract;
 /// Formerly the `dclutch-product::economic_slice` crate.
 pub mod economic_slice;
+/// Formerly the `dclutch-product::payoff` crate.
+pub mod payoff;
 
 // Authorities merged into this crate; each module was one crate before.
 /// Formerly the `dclutch-product::svm_reader` crate.

@@ -256,7 +256,8 @@ fn fixture() -> Fixture {
         let right_id = GeneralOrderV1::decode(right).expect("right").order_id();
         if left_id == right_id {
             core::cmp::Ordering::Equal
-        } else if crate::general::runtime_verify::runtime_identity_precedes_v2(&left_id, &right_id) {
+        } else if crate::general::runtime_verify::runtime_identity_precedes_v2(&left_id, &right_id)
+        {
             core::cmp::Ordering::Less
         } else {
             core::cmp::Ordering::Greater

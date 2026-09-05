@@ -42,4 +42,4 @@ grep -q '^pub const CAPABILITY_FUNDING_LEDGER_STATUS_ACTIVE_V2: u8 = 1;$' "$gene
 grep -q '^pub const CAPABILITY_FUNDING_LEDGER_STATUS_CLOSED_V2: u8 = 2;$' "$generated"
 grep -q '^pub const CAPABILITY_FUNDING_LEDGER_STATUS_LIMIT_V2: u8 = 3;$' "$generated"
 rustfmt --edition 2024 "$generated"
-cmp "$generated" "$crate_dir/src/generated_abi.rs"
+cmp "$generated" "$crate_dir/src/capability_manifest/generated_abi.rs"

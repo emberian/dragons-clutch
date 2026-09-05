@@ -7,8 +7,8 @@ use dclutch_market::capability_manifest::{
 use dclutch_market::{
     PROJECT_FOUND_ACCOUNT_COUNT_V2, ProjectFoundReceiptV2, ProjectFoundRequestV2,
 };
-use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use dclutch_source::resolution::{
     PreMarketFundingReceiptV2, PreMarketFundingRequestV2, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
     pre_market_funding_prestate_digest_v1,
@@ -485,8 +485,8 @@ mod receipt_tests {
     use super::*;
     use crate::Observation;
     use dclutch_core_contract::ContentId;
-    use dclutch_registry::{ArtifactReleaseV1, ArtifactUpgradePolicyV1};
     use dclutch_registry::release_set::ProgramIdentityV1;
+    use dclutch_registry::{ArtifactReleaseV1, ArtifactUpgradePolicyV1};
     use solana_sdk_ids::bpf_loader_upgradeable;
 
     fn receipt() -> PreMarketFundingReceiptV2 {

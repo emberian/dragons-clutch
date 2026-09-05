@@ -17,7 +17,6 @@ use dclutch_claims::protocol_position_v2::{
     ProtocolPositionCloseReceiptV2, ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2,
     ProtocolPositionRequestV2, ProtocolPositionSeedsV2,
 };
-use dclutch_market::{CoreState, MarketCoreStateSeedsV2};
 use dclutch_claims::rational::{
     RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2, RATIONAL_SHARD_MINT_SEED_V2,
     RATIONAL_STRUCTURED_CUSTODY_SEED_V2, RationalReceiptMintSeedsV2,
@@ -31,12 +30,13 @@ use dclutch_claims::rational_lifecycle::{
     LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2, LifecycleActionV2, LifecycleCompletionEvidenceV2,
     LifecycleCoordinateV2, LifecycleRequestV2, finalize, prepare,
 };
-use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
 use dclutch_custody::token_svm::{
     ACCOUNT_BYTES, AccountState, TOKEN_2022_CLOSEABLE_MINT_BYTES_V2, TOKEN_2022_PROGRAM_ID,
     Token2022CloseableMintProfileV2, TokenAccount,
 };
+use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},

@@ -9,14 +9,14 @@
 use alloc::boxed::Box;
 
 use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
-use dclutch_product::{ContentId as ProductContentId, ResultDomainV2};
 use dclutch_product::svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV2};
+use dclutch_product::{ContentId as ProductContentId, ResultDomainV2};
+use dclutch_registry::svm::ProgramDataV3View;
 use dclutch_source::pyth::{
     DEVNET_CLUSTER_ID_V1, FULL_PRICE_UPDATE_V2_LEN, FullPriceUpdateV2,
     PYTH_SPONSORED_PUSH_RELEASE_SCHEMA_ID_V1, PYTH_SPONSORED_PUSH_RELEASE_V1_ENCODED_LEN,
     PythSponsoredPushReleaseV1, RECEIVER_CONFIG_V2_LEN,
 };
-use dclutch_registry::svm::ProgramDataV3View;
 use dclutch_source::relay::frame::RelayFrameKindV1;
 use dclutch_source::resolution::{
     RESOLUTION_CERTIFICATE_BYTES_V2, ResolutionCertificateKindV2, ResolutionCertificateV2,
@@ -562,15 +562,9 @@ fn authenticate_live_update(
         )
     })
     .map_err(|error| match error {
-        dclutch_source::Error::InvalidObservationSchedule => {
-            ResolutionError::ProviderWindow
-        }
-        dclutch_source::Error::InvalidPublicationTime => {
-            ResolutionError::ProviderFreshness
-        }
-        dclutch_source::Error::InvalidPythObservation => {
-            ResolutionError::ProviderConfiguration
-        }
+        dclutch_source::Error::InvalidObservationSchedule => ResolutionError::ProviderWindow,
+        dclutch_source::Error::InvalidPublicationTime => ResolutionError::ProviderFreshness,
+        dclutch_source::Error::InvalidPythObservation => ResolutionError::ProviderConfiguration,
         _ => ResolutionError::ProviderObservation,
     })?;
     Ok(update)
@@ -1127,12 +1121,8 @@ fn sponsored_normalized_observation(
     })
     .map(|normalized| normalized.atoms())
     .map_err(|error| match error {
-        dclutch_source::Error::InvalidObservationSchedule => {
-            ResolutionError::ProviderWindow.into()
-        }
-        dclutch_source::Error::InvalidPublicationTime => {
-            ResolutionError::ProviderFreshness.into()
-        }
+        dclutch_source::Error::InvalidObservationSchedule => ResolutionError::ProviderWindow.into(),
+        dclutch_source::Error::InvalidPublicationTime => ResolutionError::ProviderFreshness.into(),
         dclutch_source::Error::InvalidPythObservation => {
             ResolutionError::ProviderConfiguration.into()
         }

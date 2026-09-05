@@ -54,15 +54,13 @@
 //! every live `descriptor_id`, hence every shard Mint, custody account,
 //! Position and replay record of every representation.
 
+use dclutch_claims::composition::{CompositionBundleV3, CompositionExposureBundleV3};
 use dclutch_claims::rational_kernel::{
     RepresentationDescriptorV2,
     descriptor_v3::{
         RepresentationDescriptorInputV3, encode_representation_descriptor_v3_atomic,
         representation_descriptor_bytes_v3,
     },
-};
-use dclutch_claims::composition::{
-    CompositionBundleV3, CompositionExposureBundleV3,
 };
 use dclutch_claims::structured_kernel::StructuredTermsV2;
 

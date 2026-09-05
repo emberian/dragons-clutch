@@ -43,15 +43,15 @@ use dclutch_market::capability_manifest::{
 use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
 };
+use dclutch_market::{
+    CapabilityFundingHeaderV2, CoreState, MarketCoreStateSeedsV2, Phase, STATE_BYTES,
+};
+use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
 use dclutch_trading::general_config::{
     GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_ROOT_BYTES_V2, GENERAL_ROOT_SCHEMA_ID_V2,
     GeneralActivationDispositionV2, GeneralLifecycleV2, GeneralRootV2,
     v3::{GENERAL_CONFIG_BYTES_V3, GeneralConfigV3},
 };
-use dclutch_market::{
-    CapabilityFundingHeaderV2, CoreState, MarketCoreStateSeedsV2, Phase, STATE_BYTES,
-};
-use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
 use solana_program::{hash::hash, pubkey::Pubkey};
 use solana_sdk_ids::system_program;
 

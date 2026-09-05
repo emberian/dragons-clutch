@@ -49,16 +49,16 @@
 
 use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry::{
-    ARTIFACT_RELEASE_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
-    DeploymentObservationV1, require_slot_pinned_release_v1,
-};
-use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, ExecutionRoleBindingV1, InitializeProtocolInfrastructureV2,
     PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2,
     ProtocolInfrastructureProfileV1, ProtocolInfrastructureProfileV2,
+};
+use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
+use dclutch_registry::{
+    ARTIFACT_RELEASE_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
+    DeploymentObservationV1, require_slot_pinned_release_v1,
 };
 use solana_program::{
     account_info::AccountInfo,

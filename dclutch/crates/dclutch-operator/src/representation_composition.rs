@@ -18,15 +18,11 @@ pub mod hot_v6;
 /// Canonical Product-native categorical composition publication.
 pub mod native_categorical_v1;
 
-use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
-use dclutch_product::payoff::{
-    registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
-    runtime_v3::{ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, semantic_basis_preimage_v3},
-};
-use dclutch_product::ContentId;
-use dclutch_product::admission::{
-    AdmissionProjectionV2, AdmissionReceiptV2, FinalizedRecordCoordinateV2, PORTFOLIO_SCHEMA_ID_V2,
-    PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2, admit_authenticated_records_v2,
+use dclutch_claims::composition::{
+    COMPOSITION_DESCRIPTOR_SCHEMA_ID_V3, COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
+    COMPOSITION_GRAPH_SCHEMA_ID_V3, COMPOSITION_TRANSLATION_SCHEMA_ID_V3, CompositionBundleV3,
+    CompositionDescriptorV3, CompositionExposureBundleV3, CompositionExposureExpectedV3,
+    RecordAdmissionV3, decode_composition_bundle_v3,
 };
 use dclutch_claims::rational_kernel::{
     DescriptorAdmissionV2, RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
@@ -37,16 +33,20 @@ use dclutch_claims::rational_lifecycle::{
     LIFECYCLE_COORDINATE_BYTES_V2, LIFECYCLE_HEADER_BYTES_V2, LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2,
     LifecycleActionV2, LifecycleCoordinateV2, LifecycleHeaderV2, LifecycleRequestV2, prepare,
 };
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_product::ContentId;
+use dclutch_product::admission::{
+    AdmissionProjectionV2, AdmissionReceiptV2, FinalizedRecordCoordinateV2, PORTFOLIO_SCHEMA_ID_V2,
+    PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2, admit_authenticated_records_v2,
+};
+use dclutch_product::payoff::{
+    registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+    runtime_v3::{ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, semantic_basis_preimage_v3},
+};
 use dclutch_registry::record::{
     APPEND_PAGE_HEADER_BYTES_V1, AppendPageV1, BeginRecordV1,
     CANONICAL_RECORD_DEPLOYMENT_PROFILE_V1, ContentDigest, FinalizeRecordV1, RecordKeyV1,
     SchemaReleaseId,
-};
-use dclutch_claims::composition::{
-    COMPOSITION_DESCRIPTOR_SCHEMA_ID_V3, COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
-    COMPOSITION_GRAPH_SCHEMA_ID_V3, COMPOSITION_TRANSLATION_SCHEMA_ID_V3, CompositionBundleV3,
-    CompositionDescriptorV3, CompositionExposureBundleV3, CompositionExposureExpectedV3,
-    RecordAdmissionV3, decode_composition_bundle_v3,
 };
 use dclutch_versioned_message_operator::{
     Finality, Observation, ObservedAccount, VersionedMessagePlanV0,

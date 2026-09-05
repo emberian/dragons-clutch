@@ -67,20 +67,20 @@ pub use series_permit::*;
 pub use series_unallocated_expiry_v1::*;
 
 // Authorities merged into this crate; each module was one crate before.
-/// Formerly the `dclutch-market::capability_manifest` crate.
-pub mod capability_manifest;
-/// Formerly the `dclutch-market::capability_program` crate.
-pub mod capability_program;
 /// Formerly the `dclutch-market::capability_activation` crate. Off-chain only: an
 /// activation triple is authored by release tooling and never by a program, and
 /// the SBF artifact must not be able to reach it even by accident.
 #[cfg(not(target_os = "solana"))]
 pub mod capability_activation;
+/// Formerly the `dclutch-market::capability_manifest` crate.
+pub mod capability_manifest;
+/// Formerly the `dclutch-market::capability_program` crate.
+pub mod capability_program;
 /// Formerly the `dclutch-market::execution_strategy` crate.
 pub mod execution_strategy;
+/// Formerly the `dclutch-market::protocol_parameters` crate.
+pub mod protocol_parameters;
 /// Formerly the `dclutch-market::realm` crate.
 pub mod realm;
 /// Formerly the `dclutch-market::rent` crate.
 pub mod rent;
-/// Formerly the `dclutch-market::protocol_parameters` crate.
-pub mod protocol_parameters;

@@ -15,9 +15,9 @@
 use std::vec::Vec;
 
 use dclutch_core_contract::ContentId;
-use dclutch_registry::{ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1};
-use dclutch_registry::svm::batch_v2::{RoleBatchRequestV2, RoleDeploymentObservationV2};
 use dclutch_registry::release_set::ExecutionRoleV1;
+use dclutch_registry::svm::batch_v2::{RoleBatchRequestV2, RoleDeploymentObservationV2};
+use dclutch_registry::{ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1};
 use solana_program::{
     account_info::AccountInfo, entrypoint::ProgramResult, hash::hash, program_error::ProgramError,
     pubkey::Pubkey,

@@ -5,7 +5,7 @@
 # 2026-09-03, no runner that executed them together. `run-program-test.sh` runs
 # `activation`; `run-postjoin-hostiles.sh` runs three named cases of
 # `registry_hot_continuation`; `run-fee-pair.sh`, `run-fee-second-transaction.sh`,
-# `run-begin-retiring.sh` and `run-close-maker.sh` each run one. `tools/ci/run.sh`'s
+# `run-begin-retiring.sh` and `run-close-maker.sh` each run one. `tools/gate`'s
 # `programs` tier runs the package unfiltered, which is the closest thing there
 # was -- and it did not build every ELF the package reads, so two binaries
 # failed on a MISSING PREREQUISITE while looking exactly like a failing test:

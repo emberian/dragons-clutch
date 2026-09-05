@@ -9,10 +9,7 @@
 //! certificate or admission bytes. It never signs, uploads, finalizes, or
 //! submits a transaction.
 
-use dclutch_product_compiler::noncategorical_v3::{
-    CategoricalProjectionBoundaryV3, certify_categorical_approximation_v3,
-    recheck_categorical_approximation_v3,
-};
+use dclutch_product::admission::{FinalizedRecordCoordinateV2, RESULT_DOMAIN_SCHEMA_ID_V2};
 use dclutch_product::payoff::registry_v3::{
     APPROXIMATION_CERTIFICATE_BYTES_V3, GRADED_BASIS_ADMISSION_BYTES_V3,
     GRADED_BASIS_ADMISSION_SCHEMA_ID_V3, GRADED_BASIS_CERTIFICATE_SCHEMA_ID_V3,
@@ -20,8 +17,9 @@ use dclutch_product::payoff::registry_v3::{
     derive_graded_basis_admission_v3, raw_record_digest_v3,
 };
 use dclutch_product::{ContentId, ResultDomainV2};
-use dclutch_product::admission::{
-    FinalizedRecordCoordinateV2, RESULT_DOMAIN_SCHEMA_ID_V2,
+use dclutch_product_compiler::noncategorical_v3::{
+    CategoricalProjectionBoundaryV3, certify_categorical_approximation_v3,
+    recheck_categorical_approximation_v3,
 };
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use solana_program::pubkey::Pubkey;

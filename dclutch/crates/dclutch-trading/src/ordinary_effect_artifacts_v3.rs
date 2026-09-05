@@ -17,7 +17,6 @@
 //! Direct root and maker candidates are written only after all selected child
 //! receipts have been authenticated by the common Trading outer.
 
-use dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1;
 use dclutch_claims::{
     CallerRole as ClaimsCallerRole,
     sparse_native_transfer_v1::{
@@ -31,6 +30,7 @@ use dclutch_custody::{
     DelegatedCustodyRequestLayoutV2, DelegatedCustodyRequestV2, OperationV1,
     TRANSFER_ACCOUNT_COUNT_V1,
 };
+use dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1;
 use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{

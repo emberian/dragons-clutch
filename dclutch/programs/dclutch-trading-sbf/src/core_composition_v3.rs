@@ -11,10 +11,6 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use dclutch_core_contract::ContentId;
-use dclutch_vm::effect::{
-    v2::FixedRole,
-    v3::{ProgramV3 as EffectProgramV3, ResolvedInvocationV3, RouteKindV3},
-};
 use dclutch_market::{
     Identity, SERIES_CORE_REQUEST_MAGIC_V1, SERIES_PERMIT_EXPIRY_REQUEST_MAGIC_V1,
     SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_MAGIC_V1, SeriesCoreAckV1, SeriesCoreActionV1,
@@ -27,6 +23,10 @@ use dclutch_market::{
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_trading::series::request::{
     SERIES_ACTION_HEADER_BYTES_V3, SeriesActionRequestV3, SeriesActionV3,
+};
+use dclutch_vm::effect::{
+    v2::FixedRole,
+    v3::{ProgramV3 as EffectProgramV3, ResolvedInvocationV3, RouteKindV3},
 };
 use solana_program::{
     account_info::AccountInfo,
@@ -737,6 +737,7 @@ mod tests {
 
     use alloc::vec;
 
+    use dclutch_trading::series::request::encode_series_action_header_v3;
     use dclutch_vm::effect::v3::{
         RouteReceiptDependencyV3,
         encode::{
@@ -744,7 +745,6 @@ mod tests {
             ScalarCoordinateV3, encode_effect_program_v4_atomic,
         },
     };
-    use dclutch_trading::series::request::encode_series_action_header_v3;
 
     use super::*;
 
@@ -779,8 +779,7 @@ mod tests {
         )
         .expect("founding intent");
         SeriesPermitExpiryRequestV1::new(
-            dclutch_market::SeriesFoundingPermitV1::new(intent, id(16), id(17))
-                .expect("permit"),
+            dclutch_market::SeriesFoundingPermitV1::new(intent, id(16), id(17)).expect("permit"),
         )
     }
 

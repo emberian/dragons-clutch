@@ -1,10 +1,10 @@
 //! Reference-only Product admission agreement and substitution tests.
 
+use dclutch_product::admission::*;
 use dclutch_product::{
     ContentId, PortfolioInputV2, ResultDomainInputV2, compile_portfolio_v2,
     compile_result_domain_v2, portfolio_record_bytes, result_domain_record_bytes,
 };
-use dclutch_product::admission::*;
 
 fn id(byte: u8) -> ContentId {
     ContentId::new([byte; 32]).expect("identity")

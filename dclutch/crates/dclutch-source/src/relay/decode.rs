@@ -438,7 +438,8 @@ fn require_observed_clock(
     if crate::relay::u64_at(inline, OBSERVED_CLOCK_SLOT_OFFSET_V1)? != record.observed_slot()? {
         return Err(Error::ObservedSlotMismatch);
     }
-    let observed_unix_seconds = crate::relay::i64_at(inline, OBSERVED_CLOCK_UNIX_TIMESTAMP_OFFSET_V1)?;
+    let observed_unix_seconds =
+        crate::relay::i64_at(inline, OBSERVED_CLOCK_UNIX_TIMESTAMP_OFFSET_V1)?;
     if observed_unix_seconds <= 0 {
         return Err(Error::ObservedClockMismatch);
     }
@@ -467,10 +468,13 @@ fn read_dbc_graduation(venue: AccountObservationV1<'_>) -> Result<i128> {
         let _ = DBC_TRANSFER_HOOK_POOL_DISCRIMINATOR_V1;
         return Err(Error::VenueDiscriminatorMismatch);
     }
-    let progress =
-        MigrationProgressV1::from_byte(crate::relay::one(inline, DBC_MIGRATION_PROGRESS_OFFSET_V1)?)?;
+    let progress = MigrationProgressV1::from_byte(crate::relay::one(
+        inline,
+        DBC_MIGRATION_PROGRESS_OFFSET_V1,
+    )?)?;
     let is_migrated = crate::relay::one(inline, DBC_IS_MIGRATED_OFFSET_V1)?;
-    let finish_curve_timestamp = crate::relay::u64_at(inline, DBC_FINISH_CURVE_TIMESTAMP_OFFSET_V1)?;
+    let finish_curve_timestamp =
+        crate::relay::u64_at(inline, DBC_FINISH_CURVE_TIMESTAMP_OFFSET_V1)?;
     if is_migrated > 1 || (is_migrated == 1) != progress.is_terminal() {
         return Err(Error::IncoherentVenueBody);
     }
@@ -549,8 +553,10 @@ fn read_mint_authority_renounced(mint: AccountObservationV1<'_>) -> Result<i128>
         return Err(Error::InvalidInlineWidth);
     }
     let inline = mint.inline();
-    let state =
-        MintAuthorityStateV1::from_tag(crate::relay::u32_at(inline, MINT_AUTHORITY_TAG_OFFSET_V1)?)?;
+    let state = MintAuthorityStateV1::from_tag(crate::relay::u32_at(
+        inline,
+        MINT_AUTHORITY_TAG_OFFSET_V1,
+    )?)?;
     let is_initialized = crate::relay::one(inline, MINT_IS_INITIALIZED_OFFSET_V1)?;
     let freeze_authority_tag = crate::relay::u32_at(inline, MINT_FREEZE_AUTHORITY_TAG_OFFSET_V1)?;
     if is_initialized != 1 {
@@ -611,7 +617,10 @@ pub fn interpret_sealed_record_v1(
         // rather than silently scaled.
         return Err(Error::UnknownObservable);
     }
-    crate::relay::identity::require_observed_cluster(record.observed_cluster_id()?, pinned_cluster_id)?;
+    crate::relay::identity::require_observed_cluster(
+        record.observed_cluster_id()?,
+        pinned_cluster_id,
+    )?;
     require_pinned_set(
         record,
         config,

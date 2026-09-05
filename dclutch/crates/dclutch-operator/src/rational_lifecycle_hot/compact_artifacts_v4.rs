@@ -6,50 +6,8 @@
 //! immutable effect artifact synthesizes the sole runtime-width
 //! `DCRRLC02` Claims child; no wallet-supplied coordinate DTO survives.
 
-use dclutch_vm::account_profile::{
-    lifecycle_v3::{
-        CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5 as LIFECYCLE_SCHEMA_ID_V5, StateLifecyclePolicyV5,
-    },
-    v2::{
-        AccountPrestateV2, AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE,
-        DYNAMIC_FIXED_SPAN_HEADER_BYTES, OPERATION_BYTES as ACCOUNT_OPERATION_BYTES,
-        RULE_BYTES as ACCOUNT_RULE_BYTES, TrustedBuiltinIdentityV2, TrustedEnvironmentV2,
-        TrustedIdentityEnvironmentV2,
-        encode::{
-            AccountAliasInputV2, AccountCoordinateV2, AccountOperationInputV2,
-            AccountRuleWithPrestateInputV2, IdentityCoordinateV2, RegisterGeometryV2,
-            ScalarCoordinateV2, encode_account_profile_with_dynamic_fixed_span_v2_atomic,
-        },
-    },
-};
-use dclutch_market::capability_program::v4::{
-    ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4, CapabilityProgramV4,
-};
-use dclutch_core_contract::ContentId;
-use dclutch_vm::effect::{
-    v2::FixedRole,
-    v3::{
-        HEADER_BYTES as EFFECT_HEADER_BYTES, OPERATION_BYTES as EFFECT_OPERATION_BYTES,
-        ROUTE_BYTES as EFFECT_ROUTE_BYTES, RouteKindV3,
-        encode::{EffectGeometryV3, RouteInputV3, encode_effect_program_v3_atomic},
-    },
-    v4::{
-        BorrowedRangePolicyV4, HEADER_BYTES_V4 as EFFECT_V4_HEADER_BYTES,
-        ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4,
-        encode_program_v4_atomic,
-    },
-};
-use dclutch_market::execution_strategy::v2::{
-    ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
-    EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
-    EXECUTION_STRATEGY_PROGRAM_BYTES_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
-    ExecutionStrategyProgramV2, StrategyDispositionV2,
-};
-use dclutch_product::payoff::runtime_v3::{BASIS_WIDTH_OFFSET_V3, ProductBasisV3};
 use dclutch_claims::rational::AuthenticatedTokenBehaviorV2;
-use dclutch_claims::rational_kernel::{
-    DESCRIPTOR_HEADER_BYTES, RepresentationDescriptorV2,
-};
+use dclutch_claims::rational_kernel::{DESCRIPTOR_HEADER_BYTES, RepresentationDescriptorV2};
 use dclutch_claims::rational_lifecycle::{
     ABSENT_POSITION_REVISION_V2, LIFECYCLE_COMMON_ACCOUNT_COUNT_V2, LIFECYCLE_COORDINATE_BYTES_V2,
     LIFECYCLE_HEADER_BYTES_V2, LIFECYCLE_REQUEST_MAGIC_V2, LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2,
@@ -83,6 +41,50 @@ use dclutch_claims::rational_lifecycle::{
         RationalLifecycleHotLayoutV3,
     },
 };
+use dclutch_core_contract::ContentId;
+use dclutch_custody::token_svm::{
+    TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
+    TokenBehaviorSelectionV2,
+};
+use dclutch_market::capability_program::v4::{
+    ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4, CapabilityProgramV4,
+};
+use dclutch_market::execution_strategy::v2::{
+    ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
+    EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
+    EXECUTION_STRATEGY_PROGRAM_BYTES_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
+    ExecutionStrategyProgramV2, StrategyDispositionV2,
+};
+use dclutch_product::payoff::runtime_v3::{BASIS_WIDTH_OFFSET_V3, ProductBasisV3};
+use dclutch_vm::account_profile::{
+    lifecycle_v3::{
+        CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5 as LIFECYCLE_SCHEMA_ID_V5, StateLifecyclePolicyV5,
+    },
+    v2::{
+        AccountPrestateV2, AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE,
+        DYNAMIC_FIXED_SPAN_HEADER_BYTES, OPERATION_BYTES as ACCOUNT_OPERATION_BYTES,
+        RULE_BYTES as ACCOUNT_RULE_BYTES, TrustedBuiltinIdentityV2, TrustedEnvironmentV2,
+        TrustedIdentityEnvironmentV2,
+        encode::{
+            AccountAliasInputV2, AccountCoordinateV2, AccountOperationInputV2,
+            AccountRuleWithPrestateInputV2, IdentityCoordinateV2, RegisterGeometryV2,
+            ScalarCoordinateV2, encode_account_profile_with_dynamic_fixed_span_v2_atomic,
+        },
+    },
+};
+use dclutch_vm::effect::{
+    v2::FixedRole,
+    v3::{
+        HEADER_BYTES as EFFECT_HEADER_BYTES, OPERATION_BYTES as EFFECT_OPERATION_BYTES,
+        ROUTE_BYTES as EFFECT_ROUTE_BYTES, RouteKindV3,
+        encode::{EffectGeometryV3, RouteInputV3, encode_effect_program_v3_atomic},
+    },
+    v4::{
+        BorrowedRangePolicyV4, HEADER_BYTES_V4 as EFFECT_V4_HEADER_BYTES,
+        ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4,
+        encode_program_v4_atomic,
+    },
+};
 use dclutch_vm::request_profile::{
     HEADER_BYTES as REQUEST_HEADER_BYTES, OPERATION_BYTES as REQUEST_OPERATION_BYTES,
     RequestProfileV1,
@@ -90,10 +92,6 @@ use dclutch_vm::request_profile::{
         IdentityRegisterV1, RequestCoordinateV1, RequestGeometryV1, RequestInstructionV1,
         ScalarRegisterV1, encode_request_profile_v1_atomic,
     },
-};
-use dclutch_custody::token_svm::{
-    TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
-    TokenBehaviorSelectionV2,
 };
 use dclutch_vm::v3::{
     HEADER_BYTES as TRANSITION_HEADER_BYTES, INSTRUCTION_BYTES as TRANSITION_INSTRUCTION_BYTES,
@@ -451,8 +449,8 @@ pub fn validate_rational_lifecycle_compact_bundle_v4(
         &bundle.request_profile,
     )
     .map_err(Error::RequestProfile)?;
-    let transition = dclutch_vm::v3::ProgramV3::decode(&bundle.transition)
-        .map_err(Error::Transition)?;
+    let transition =
+        dclutch_vm::v3::ProgramV3::decode(&bundle.transition).map_err(Error::Transition)?;
     let strategy = ExecutionStrategyProgramV2::decode(&bundle.strategy).map_err(Error::Strategy)?;
     let lifecycle_id = digest(&bundle.lifecycle_policy)?;
     let lifecycle = StateLifecyclePolicyV5::decode_selected(
@@ -1254,16 +1252,6 @@ fn project_u64(offset: usize, register: usize) -> Result<RequestInstructionV1> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_vm::account_profile::{
-        lifecycle_v3::{
-            HEADER_BYTES as LIFECYCLE_HEADER_BYTES, encode::encode_lifecycle_policy_v5_atomic,
-        },
-        v2::{AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE},
-    };
-    use dclutch_vm::effect::v4::ProgramV4 as EffectProgramV4;
-    use dclutch_product::payoff::runtime_v3::{
-        BASIS_HEADER_BYTES_V3, BasisInputV3, BasisKindV3, compile_basis_v3,
-    };
     use dclutch_claims::rational::RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2;
     use dclutch_claims::rational::{
         TokenBehaviorRecordAdmissionV2, authenticate_token_behavior_v2,
@@ -1272,6 +1260,16 @@ mod tests {
         DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_MAGIC_V3, DESCRIPTOR_SCHEMA_VERSION_V3,
         DescriptorAdmissionV2,
     };
+    use dclutch_product::payoff::runtime_v3::{
+        BASIS_HEADER_BYTES_V3, BasisInputV3, BasisKindV3, compile_basis_v3,
+    };
+    use dclutch_vm::account_profile::{
+        lifecycle_v3::{
+            HEADER_BYTES as LIFECYCLE_HEADER_BYTES, encode::encode_lifecycle_policy_v5_atomic,
+        },
+        v2::{AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE},
+    };
+    use dclutch_vm::effect::v4::ProgramV4 as EffectProgramV4;
 
     /// Market coordinate inside a descriptor preimage.
     ///
@@ -1447,8 +1445,11 @@ mod tests {
     ) -> Vec<u32> {
         let coordinate_count = u32::from(action != LifecycleActionV2::ActivateReceipt);
         let count = usize::from(
-            crate::rational_lifecycle_hot::lifecycle_logical_account_count_v3(action, coordinate_count)
-                .expect("selected logical count"),
+            crate::rational_lifecycle_hot::lifecycle_logical_account_count_v3(
+                action,
+                coordinate_count,
+            )
+            .expect("selected logical count"),
         );
         let mut output = vec![0_u32; count];
         *output.get_mut(1).expect("Token selection") =
@@ -1810,8 +1811,10 @@ mod tests {
             retire_coordinate: &retire_coordinate,
             retire_receipt: &retire_receipt,
         };
-        let set = crate::rational_lifecycle_hot::build_rational_lifecycle_program_set_v5(input).expect("ProgramSet");
-        crate::rational_lifecycle_hot::validate_rational_lifecycle_program_set_v5(&set, input).expect("selected set");
+        let set = crate::rational_lifecycle_hot::build_rational_lifecycle_program_set_v5(input)
+            .expect("ProgramSet");
+        crate::rational_lifecycle_hot::validate_rational_lifecycle_program_set_v5(&set, input)
+            .expect("selected set");
 
         let mut substituted = set.clone();
         substituted
@@ -1820,7 +1823,10 @@ mod tests {
             .expect("descriptor identity")
             .clone_from(&99);
         assert_eq!(
-            crate::rational_lifecycle_hot::validate_rational_lifecycle_program_set_v5(&substituted, input),
+            crate::rational_lifecycle_hot::validate_rational_lifecycle_program_set_v5(
+                &substituted,
+                input
+            ),
             Err(Error::ContentIdentity)
         );
     }

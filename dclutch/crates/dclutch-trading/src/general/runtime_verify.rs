@@ -2507,8 +2507,11 @@ mod tests {
                             },
                         )
                         .expect("runtime comparison");
-                        let oracle =
-                            crate::general::candidate_better(&policy, &record(left), &record(right));
+                        let oracle = crate::general::candidate_better(
+                            &policy,
+                            &record(left),
+                            &record(right),
+                        );
                         assert_eq!(
                             runtime, oracle,
                             "the runtime and the oracle disagree at {count} criteria on \

@@ -1,17 +1,17 @@
 //! Family-neutral authenticated capability-program dispatch.
 
+use dclutch_core_contract::ContentId;
 use dclutch_market::capability_manifest::{CapabilityEntryV1, CapabilityManifestV1};
 use dclutch_market::capability_program::{
     CAPABILITY_ROOT_ACCOUNT_MAX_BYTES_V1, CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityProgramV1,
     CapabilityRootHeaderV1, Error as CapabilityProgramError, SelectedRecordBumpsV1,
     hot_v3::hot_bump_hint_v1,
 };
-use dclutch_core_contract::ContentId;
 use dclutch_market::{CAPABILITY_FUNDING_HEADER_BYTES_V2, CapabilityFundingHeaderV2};
-use dclutch_registry::svm::AuthenticatedRoleReceiptV1;
 use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, CapabilityExecutionSelectionV1, ExecutionRoleV1,
 };
+use dclutch_registry::svm::AuthenticatedRoleReceiptV1;
 use solana_program::{hash::hash, pubkey::Pubkey};
 
 use crate::TradingSbfError;

@@ -1,10 +1,10 @@
 //! Checked release-set activation and the derived Registry-owned cache.
 
-use dclutch_core_contract::ContentId;
 use crate::release_set::{
     ArtifactReleaseIdV1, EXECUTION_ROLE_COUNT_V1, EXECUTION_ROLE_ORDER_V1, ExecutionReleaseSetV1,
     ExecutionRoleBindingV1, ExecutionRoleV1,
 };
+use dclutch_core_contract::ContentId;
 
 use crate::{
     ARTIFACT_RELEASE_BYTES_V1, ArtifactReleaseV1, DeploymentObservationV1, Error, IDENTITY_BYTES,

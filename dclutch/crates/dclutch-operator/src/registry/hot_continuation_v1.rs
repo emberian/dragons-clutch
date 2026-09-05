@@ -6,17 +6,17 @@
 //! candidate at the fixed boundary immediately before strategy extras. It does
 //! not persist an admission account, sign, submit, or reinterpret Hot bytes.
 
+use dclutch_core_contract::ContentId;
 use dclutch_market::capability_program::hot_v3::{
     HOT_ACTIVATION_CACHE_ACCOUNT_V3, HOT_CORE_PROGRAM_ACCOUNT_V3, HOT_CORE_PROGRAMDATA_ACCOUNT_V3,
     HOT_FIXED_ACCOUNT_COUNT_V3, HOT_REGISTRY_PROGRAM_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
     HOT_TRADING_PROGRAMDATA_ACCOUNT_V3, HotExecutionEnvelopeV3,
 };
-use dclutch_core_contract::ContentId;
+use dclutch_registry::release_set::ExecutionRoleV1;
 use dclutch_registry::svm::continuation_v1::{
     REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationAdmissionSeedsV1,
     RegistryContinuationRequestV1,
 };
-use dclutch_registry::release_set::ExecutionRoleV1;
 use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},

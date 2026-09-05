@@ -39,11 +39,11 @@
 //! (`series_pre_market_expiry_program_test`, where the staged Market predates
 //! its own `CoreState` and the decode legitimately fails).
 
+use dclutch_custody::CustodyAuthoritySeedsV1;
 use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
     hot_v3::{HOT_BUMP_HINT_COUNT_V1, HOT_BUMP_HINTS_OFFSET_V1, HotBumpHintsV1},
 };
-use dclutch_custody::CustodyAuthoritySeedsV1;
 use dclutch_market::{CoreState, MarketCoreStateSeedsV2};
 use dclutch_registry::ActivatedExecutionReleaseSetViewV1;
 use dclutch_registry::release_set::ExecutionRoleV1;

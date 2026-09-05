@@ -2356,37 +2356,38 @@ mod tests {
             .expect("projected field")
             .copy_from_slice(&0x4433_2211_u32.to_le_bytes());
         let live_lifecycle = [0_u8; 152];
-        let project =
-            |variable: AccountObservationV1<'_>, output: &mut [u64; 3]| -> crate::account_profile::v2::Result<()> {
-                let accounts = [
-                    variable,
-                    AccountObservationV1::new(
-                        &[3; 32],
-                        &[4; 32],
-                        9,
-                        &live_lifecycle,
-                        false,
-                        true,
-                        false,
-                    ),
-                ];
-                let input = [0_u64, 77_777, 0];
-                let mut scratch = [0_u64; 3];
-                project_atomic(
-                    profile,
-                    0,
-                    &accounts,
-                    ProjectionRegistersV2 {
-                        input_scalars: &input,
-                        input_identities: &[],
-                        scratch_scalars: &mut scratch,
-                        scratch_identities: &mut [],
-                        output_scalars: output,
-                        output_identities: &mut [],
-                    },
-                    None,
-                )
-            };
+        let project = |variable: AccountObservationV1<'_>,
+                       output: &mut [u64; 3]|
+         -> crate::account_profile::v2::Result<()> {
+            let accounts = [
+                variable,
+                AccountObservationV1::new(
+                    &[3; 32],
+                    &[4; 32],
+                    9,
+                    &live_lifecycle,
+                    false,
+                    true,
+                    false,
+                ),
+            ];
+            let input = [0_u64, 77_777, 0];
+            let mut scratch = [0_u64; 3];
+            project_atomic(
+                profile,
+                0,
+                &accounts,
+                ProjectionRegistersV2 {
+                    input_scalars: &input,
+                    input_identities: &[],
+                    scratch_scalars: &mut scratch,
+                    scratch_identities: &mut [],
+                    output_scalars: output,
+                    output_identities: &mut [],
+                },
+                None,
+            )
+        };
 
         let trusted = AccountObservationV1::new_adapter_authenticated_variable_data(
             &[1; 32],
@@ -3086,11 +3087,21 @@ mod tests {
             .expect("typed u8 operation");
         assert_eq!(u8_bytes.first(), Some(&OP_PROJECT_DATA_U8));
         assert_eq!(
-            crate::account_profile::v2::encode_project_data_u8_operation_v2(&mut u8_bytes[..15], 0, 0, 11),
+            crate::account_profile::v2::encode_project_data_u8_operation_v2(
+                &mut u8_bytes[..15],
+                0,
+                0,
+                11
+            ),
             Err(Error::InvalidLength)
         );
         assert_eq!(
-            crate::account_profile::v2::encode_project_data_u8_operation_v2(&mut u8_bytes, 0, 0, u32::MAX,),
+            crate::account_profile::v2::encode_project_data_u8_operation_v2(
+                &mut u8_bytes,
+                0,
+                0,
+                u32::MAX,
+            ),
             Err(Error::InvalidLength)
         );
 

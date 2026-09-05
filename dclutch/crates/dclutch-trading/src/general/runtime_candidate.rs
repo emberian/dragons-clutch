@@ -9,7 +9,9 @@
 
 use dclutch_market::execution_strategy::v2::{ExecutionCandidateV2, register_bank_bytes_v2};
 
-use crate::general::runtime_settlement::{RuntimeSettlementActionV2, RuntimeSettlementEffectPlanV2};
+use crate::general::runtime_settlement::{
+    RuntimeSettlementActionV2, RuntimeSettlementEffectPlanV2,
+};
 use crate::general::runtime_verify::RuntimeCompleteSetMoveV2;
 
 /// Common scalar registers before one scalar quantity per Product outcome.

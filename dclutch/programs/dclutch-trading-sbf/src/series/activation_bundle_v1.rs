@@ -69,6 +69,7 @@ extern crate alloc;
 
 use alloc::{vec, vec::Vec};
 
+use dclutch_core_contract::ContentId;
 use dclutch_market::capability_activation::{
     ActivationBundleErrorV1, ActivationBundleInputV1, ActivationBundleV1, ActivationSeamImageV3,
     ActivationTailFieldV1, activation_descriptor_schema_v1, build_activation_bundle_v1,
@@ -83,7 +84,7 @@ use dclutch_market::capability_program::{
     },
     v4::{CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID},
 };
-use dclutch_core_contract::ContentId;
+use dclutch_sha256_adapter::digest;
 use dclutch_trading::series::{
     SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3, TemplateV3,
     activation::{
@@ -92,7 +93,6 @@ use dclutch_trading::series::{
     replay::{SERIES_STATE_BYTES_V3, SeriesStateV3},
     template_content_id,
 };
-use dclutch_sha256_adapter::digest;
 
 use super::{
     artifacts_v3::{

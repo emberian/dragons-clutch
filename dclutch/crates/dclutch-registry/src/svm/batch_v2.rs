@@ -9,10 +9,10 @@
 
 use core::convert::TryInto;
 
-use dclutch_core_contract::ContentId;
 use crate::release_set::{
     ArtifactReleaseIdV1, EXECUTION_ROLE_COUNT_V1, ExecutionRoleV1, ProgramIdentityV1,
 };
+use dclutch_core_contract::ContentId;
 
 /// Exact batched Registry instruction width.
 pub const ROLE_BATCH_REQUEST_BYTES_V2: usize = 96;

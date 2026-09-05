@@ -8,9 +8,6 @@
 //! only through exact backward typed-receipt dependencies. It introduces no
 //! balance mutation, family tag, seed rule, or parallel request DTO.
 
-use dclutch_vm::effect::v2::FixedRole;
-use dclutch_vm::effect::v3::{ProgramV3, RouteKindV3};
-use dclutch_vm::effect::v4::ProgramV4;
 use crate::rational_lifecycle::{
     LIFECYCLE_COMMON_ACCOUNT_COUNT_V2, LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2,
     LIFECYCLE_REQUEST_MAGIC_V2, LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2, LifecycleActionV2,
@@ -20,6 +17,9 @@ use crate::rational_request::{
     CallerRoleV2 as RepresentationCallerRoleV2,
     REQUEST_MAGIC_V2 as REPRESENTATION_REQUEST_MAGIC_V2, RepresentationRequestV2,
 };
+use dclutch_vm::effect::v2::FixedRole;
+use dclutch_vm::effect::v3::{ProgramV3, RouteKindV3};
+use dclutch_vm::effect::v4::ProgramV4;
 
 use crate::{
     CallerRole,
@@ -1075,13 +1075,6 @@ mod tests {
     use std::vec;
     use std::vec::Vec;
 
-    use dclutch_vm::effect::v3::{
-        RouteReceiptDependencyV3,
-        encode::{
-            EffectGeometryV3, RouteInputV3, encode_effect_program_v3_atomic,
-            encode_effect_program_v4_atomic,
-        },
-    };
     use crate::rational_lifecycle::{
         LIFECYCLE_COORDINATE_BYTES_V2, LIFECYCLE_HEADER_BYTES_V2, LifecycleCoordinateV2,
         LifecycleHeaderV2,
@@ -1091,6 +1084,13 @@ mod tests {
         RATIONAL_BASE_ACCOUNT_COUNT_V2, RepresentationActionV2, RepresentationRequestHeaderV2,
     };
     use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
+    use dclutch_vm::effect::v3::{
+        RouteReceiptDependencyV3,
+        encode::{
+            EffectGeometryV3, RouteInputV3, encode_effect_program_v3_atomic,
+            encode_effect_program_v4_atomic,
+        },
+    };
 
     use crate::{
         affine_batch_v2::{
@@ -1406,11 +1406,8 @@ mod tests {
         let mut family = vec![0; 480];
         family.extend_from_slice(&packet);
 
-        let mut effect = vec![
-            0;
-            dclutch_vm::effect::v3::HEADER_BYTES
-                + dclutch_vm::effect::v3::ROUTE_BYTES
-        ];
+        let mut effect =
+            vec![0; dclutch_vm::effect::v3::HEADER_BYTES + dclutch_vm::effect::v3::ROUTE_BYTES];
         put(&mut effect, 0, b"DCE4");
         put(&mut effect, 4, &[4, 0]);
         put(&mut effect, 6, &1_u16.to_le_bytes());
@@ -1983,9 +1980,8 @@ mod tests {
     /// and admitting it here would only have moved the wall two frames later.
     fn structured_affine_effect(request: &[u8]) -> Vec<u8> {
         // Structured is the only class this affine effect template builds.
-        let (fixed, items) = request.split_at(
-            crate::rational_request::REQUEST_STRUCTURED_HEADER_BYTES_V3,
-        );
+        let (fixed, items) =
+            request.split_at(crate::rational_request::REQUEST_STRUCTURED_HEADER_BYTES_V3);
         let item = items.get(..ASSET_BYTES_V3).expect("item template");
         let route = [RouteInputV3 {
             role: FixedRole::Claims,

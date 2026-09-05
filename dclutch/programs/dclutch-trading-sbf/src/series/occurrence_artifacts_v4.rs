@@ -12,6 +12,7 @@
 //! cleanup consumes the same exact proof bytes, so that range belongs to route
 //! four and is appended by the family-neutral Hot range seam.
 
+use dclutch_trading::series::request::SeriesActionV3;
 use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{
@@ -32,7 +33,6 @@ use dclutch_vm::request_profile::{
         encode_request_profile_v1_atomic,
     },
 };
-use dclutch_trading::series::request::SeriesActionV3;
 use dclutch_vm::v3::{
     HEADER_BYTES as TRANSITION_HEADER_BYTES_V4,
     INSTRUCTION_BYTES as TRANSITION_INSTRUCTION_BYTES_V4, InstructionV3, ProgramGeometryV3,
@@ -637,9 +637,7 @@ mod tests {
     use alloc::vec;
 
     use dclutch_vm::effect::v4::ProgramV4;
-    use dclutch_vm::request_profile::{
-        ProjectionRegistersV1, RequestProfileV1, project_atomic,
-    };
+    use dclutch_vm::request_profile::{ProjectionRegistersV1, RequestProfileV1, project_atomic};
     use dclutch_vm::v3::ProgramV3 as TransitionProgramV3;
 
     use super::*;
@@ -896,9 +894,7 @@ mod tests {
             dclutch_vm::request_profile::validate_request(profile, 0, &family)
                 .expect("exact terminal header");
             family[usize::try_from(PROOF_COUNT_OFFSET).expect("offset")] = 1;
-            assert!(
-                dclutch_vm::request_profile::validate_request(profile, 0, &family).is_err()
-            );
+            assert!(dclutch_vm::request_profile::validate_request(profile, 0, &family).is_err());
         }
 
         let mut transition_scratch = [0_u8; SERIES_TERMINAL_TRANSITION_BYTES_V4];

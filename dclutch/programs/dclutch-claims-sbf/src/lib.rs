@@ -9,18 +9,16 @@ use dclutch_claims::{
     ClaimsReceiptV1, NO_POSITION_REVISION,
 };
 use dclutch_core_contract::ContentId;
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, STATE_BYTES};
 use dclutch_product::economic_slice::{
     BasketAction, BasketFrame, Phase as EconomicPhase, execute_basket, market_hoard,
     market_identity, market_outcome_count, market_phase, market_registry_program,
     market_release_set_id, market_revision, market_supply, position_market_id, position_native,
     position_owner, position_revision, refunding_failure_index,
 };
-use dclutch_market::{
-    CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, STATE_BYTES,
-};
 use dclutch_registry::activation_auth_v1::authenticate_activated_role_v1;
-use dclutch_registry::svm::AuthenticatedRoleReceiptV1;
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_registry::svm::AuthenticatedRoleReceiptV1;
 use dclutch_source::MarketPrincipalCapSetsV1;
 use solana_program::{
     account_info::AccountInfo,
@@ -401,9 +399,7 @@ pub fn process_instruction(
     }
     if instruction_data
         .get(..dclutch_claims::fractional::FRACTIONAL_RETIREMENT_REQUEST_MAGIC_V3.len())
-        == Some(
-            dclutch_claims::fractional::FRACTIONAL_RETIREMENT_REQUEST_MAGIC_V3.as_slice(),
-        )
+        == Some(dclutch_claims::fractional::FRACTIONAL_RETIREMENT_REQUEST_MAGIC_V3.as_slice())
     {
         return fractional_retirement_v3::process(program_id, accounts, instruction_data);
     }
@@ -426,8 +422,7 @@ pub fn process_non_fractional_instruction(
     if instruction_data
         .get(..dclutch_claims::market_closure_v1::CLAIMS_MARKET_CLOSURE_REQUEST_MAGIC_V1.len())
         == Some(
-            dclutch_claims::market_closure_v1::CLAIMS_MARKET_CLOSURE_REQUEST_MAGIC_V1
-                .as_slice(),
+            dclutch_claims::market_closure_v1::CLAIMS_MARKET_CLOSURE_REQUEST_MAGIC_V1.as_slice(),
         )
     {
         return market_closure_v1::process(program_id, accounts, instruction_data);
@@ -442,11 +437,12 @@ pub fn process_non_fractional_instruction(
     {
         return signed_delta_v3::process(program_id, accounts, instruction_data);
     }
-    if instruction_data.get(
-        ..dclutch_claims::terminal_settlement_v3::TERMINAL_SETTLEMENT_REQUEST_MAGIC_V3.len(),
-    ) == Some(
-        dclutch_claims::terminal_settlement_v3::TERMINAL_SETTLEMENT_REQUEST_MAGIC_V3.as_slice(),
-    ) {
+    if instruction_data
+        .get(..dclutch_claims::terminal_settlement_v3::TERMINAL_SETTLEMENT_REQUEST_MAGIC_V3.len())
+        == Some(
+            dclutch_claims::terminal_settlement_v3::TERMINAL_SETTLEMENT_REQUEST_MAGIC_V3.as_slice(),
+        )
+    {
         return terminal_settlement_v3::process(program_id, accounts, instruction_data);
     }
     process_remaining_instruction(program_id, accounts, instruction_data)
@@ -461,26 +457,21 @@ fn process_remaining_instruction(
     if instruction_data
         .get(..dclutch_claims::sparse_native_transfer_v1::SPARSE_NATIVE_TRANSFER_MAGIC_V1.len())
         == Some(
-            dclutch_claims::sparse_native_transfer_v1::SPARSE_NATIVE_TRANSFER_MAGIC_V1
-                .as_slice(),
+            dclutch_claims::sparse_native_transfer_v1::SPARSE_NATIVE_TRANSFER_MAGIC_V1.as_slice(),
         )
     {
         return sparse_native_transfer_v1::process(program_id, accounts, instruction_data);
     }
-    if instruction_data
-        .get(
-            ..dclutch_claims::series_founding_transport_v1::SERIES_CLAIMS_FOUNDING_TRANSPORT_MAGIC_V1
-                .len(),
-        )
-        == Some(
-            dclutch_claims::series_founding_transport_v1::SERIES_CLAIMS_FOUNDING_TRANSPORT_MAGIC_V1
-                .as_slice(),
-        )
-    {
+    if instruction_data.get(
+        ..dclutch_claims::series_founding_transport_v1::SERIES_CLAIMS_FOUNDING_TRANSPORT_MAGIC_V1
+            .len(),
+    ) == Some(
+        dclutch_claims::series_founding_transport_v1::SERIES_CLAIMS_FOUNDING_TRANSPORT_MAGIC_V1
+            .as_slice(),
+    ) {
         return series_founding_transport_v1::process(program_id, accounts, instruction_data);
     }
-    if instruction_data
-        .get(..dclutch_claims::founding_v5::CLAIMS_FOUNDING_REQUEST_MAGIC_V5.len())
+    if instruction_data.get(..dclutch_claims::founding_v5::CLAIMS_FOUNDING_REQUEST_MAGIC_V5.len())
         == Some(dclutch_claims::founding_v5::CLAIMS_FOUNDING_REQUEST_MAGIC_V5.as_slice())
     {
         return founding_v5::process(program_id, accounts, instruction_data);
@@ -488,8 +479,7 @@ fn process_remaining_instruction(
     if instruction_data
         .get(..dclutch_claims::custody_replay_v1::CLAIMS_CUSTODY_REPLAY_REQUEST_MAGIC_V1.len())
         == Some(
-            dclutch_claims::custody_replay_v1::CLAIMS_CUSTODY_REPLAY_REQUEST_MAGIC_V1
-                .as_slice(),
+            dclutch_claims::custody_replay_v1::CLAIMS_CUSTODY_REPLAY_REQUEST_MAGIC_V1.as_slice(),
         )
     {
         return custody_replay_v1::process(program_id, accounts, instruction_data);
@@ -504,11 +494,8 @@ fn process_remaining_instruction(
     {
         return rational_representation_v2::process(program_id, accounts, instruction_data);
     }
-    if instruction_data
-        .get(..dclutch_claims::rational::RATIONAL_REPLAY_CLOSE_MAGIC_V1.len())
-        == Some(
-            dclutch_claims::rational::RATIONAL_REPLAY_CLOSE_MAGIC_V1.as_slice(),
-        )
+    if instruction_data.get(..dclutch_claims::rational::RATIONAL_REPLAY_CLOSE_MAGIC_V1.len())
+        == Some(dclutch_claims::rational::RATIONAL_REPLAY_CLOSE_MAGIC_V1.as_slice())
     {
         return rational_representation_v2::process_replay_close(
             program_id,
@@ -516,12 +503,9 @@ fn process_remaining_instruction(
             instruction_data,
         );
     }
-    if instruction_data.get(
-        ..dclutch_claims::rational_lifecycle::LIFECYCLE_REQUEST_MAGIC_V2.len(),
-    ) == Some(
-        dclutch_claims::rational_lifecycle::LIFECYCLE_REQUEST_MAGIC_V2
-            .as_slice(),
-    ) {
+    if instruction_data.get(..dclutch_claims::rational_lifecycle::LIFECYCLE_REQUEST_MAGIC_V2.len())
+        == Some(dclutch_claims::rational_lifecycle::LIFECYCLE_REQUEST_MAGIC_V2.as_slice())
+    {
         return rational_lifecycle_v2::process(program_id, accounts, instruction_data);
     }
     // The claim-check family. Its magics are matched before the generic plan
@@ -536,8 +520,7 @@ fn process_remaining_instruction(
             instruction_data,
         );
     }
-    if instruction_data
-        .get(..dclutch_claims::claim_check_v1::CLAIM_CHECK_COMPACT_MAGIC_V1.len())
+    if instruction_data.get(..dclutch_claims::claim_check_v1::CLAIM_CHECK_COMPACT_MAGIC_V1.len())
         == Some(dclutch_claims::claim_check_v1::CLAIM_CHECK_COMPACT_MAGIC_V1.as_slice())
     {
         return claim_check_compaction_v1::process_compaction(
@@ -555,8 +538,7 @@ fn process_remaining_instruction(
     // Fractional exposure and retirement magics stay where they are because they
     // are different families, not because dispatch order is load-bearing.
     if instruction_data.get(
-        ..dclutch_claims::fractional_claim_check_v1::FRACTIONAL_CLAIM_CHECK_COMPACT_MAGIC_V1
-            .len(),
+        ..dclutch_claims::fractional_claim_check_v1::FRACTIONAL_CLAIM_CHECK_COMPACT_MAGIC_V1.len(),
     ) == Some(
         dclutch_claims::fractional_claim_check_v1::FRACTIONAL_CLAIM_CHECK_COMPACT_MAGIC_V1
             .as_slice(),
@@ -568,8 +550,7 @@ fn process_remaining_instruction(
         );
     }
     if instruction_data.get(
-        ..dclutch_claims::fractional_claim_check_v1::FRACTIONAL_CLAIM_CHECK_REDEEM_MAGIC_V1
-            .len(),
+        ..dclutch_claims::fractional_claim_check_v1::FRACTIONAL_CLAIM_CHECK_REDEEM_MAGIC_V1.len(),
     ) == Some(
         dclutch_claims::fractional_claim_check_v1::FRACTIONAL_CLAIM_CHECK_REDEEM_MAGIC_V1
             .as_slice(),
@@ -585,9 +566,8 @@ fn process_remaining_instruction(
     if instruction_data.get(..dclutch_claims::claim_check_v1::CLAIM_CHECK_REDEEM_MAGIC_V1.len())
         == Some(dclutch_claims::claim_check_v1::CLAIM_CHECK_REDEEM_MAGIC_V1.as_slice())
     {
-        return match dclutch_claims::claim_check_request_v1::claim_check_action_of(
-            instruction_data,
-        ) {
+        return match dclutch_claims::claim_check_request_v1::claim_check_action_of(instruction_data)
+        {
             Ok(dclutch_claims::claim_check_request_v1::ClaimCheckActionV1::CloseEscrow) => {
                 claim_check_redemption_v1::process_escrow_close(
                     program_id,
@@ -1251,11 +1231,11 @@ fn resource_digest(
 mod tests {
     use std::{boxed::Box, vec::Vec};
 
+    use dclutch_market::{MarketIdentity, Readiness};
     use dclutch_product::economic_slice::{
         MARKET_HEADER_BYTES, POSITION_HEADER_BYTES, Phase, SCALAR_BYTES, initialize_market,
         initialize_position,
     };
-    use dclutch_market::{MarketIdentity, Readiness};
 
     use super::*;
     use dclutch_market::StateBumpsV1;

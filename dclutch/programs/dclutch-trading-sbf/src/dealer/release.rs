@@ -4,7 +4,7 @@
 //! junior equity occupies 1..=6, LP lifecycle 7..=8, and scenario exact-fill
 //! 9. The ProgramSet encoder owns that ordering and never admits legacy aliases.
 
-use dclutch_vm::account_profile::v2::AccountProfileV2;
+use dclutch_core_contract::ContentId;
 use dclutch_market::capability_program::{
     set_v1::{
         CAPABILITY_PROGRAM_SET_ARTIFACT_PROFILE_V1, CAPABILITY_PROGRAM_SET_ENTRY_BYTES_V1,
@@ -13,24 +13,24 @@ use dclutch_market::capability_program::{
     },
     v3::{CAPABILITY_PROGRAM_V3_BYTES, CapabilityProgramV3},
 };
-use dclutch_core_contract::ContentId;
-use dclutch_trading::dealer::config_v4::DEALER_CONFIG_SCHEMA_PREIMAGE_V4;
 use dclutch_market::execution_strategy::v2::{
     EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
+use dclutch_trading::dealer::config_v4::DEALER_CONFIG_SCHEMA_PREIMAGE_V4;
+use dclutch_vm::account_profile::v2::AccountProfileV2;
 use dclutch_vm::request_profile::v3::REQUEST_PROFILE_V3_SCHEMA_RELEASE_ID;
 use solana_program::hash::hash;
 
 use super::{
     DEALER_KIND_PREIMAGE_V2, DEALER_ROOT_SCHEMA_PREIMAGE_V2,
     equity_artifacts::{DealerEquityArtifactsErrorV3, authenticate_dealer_equity_artifacts_v3},
+    equity_effect::{dealer_equity_identity_count_v3, dealer_equity_scalar_count_v3},
     equity_request::{
         DEALER_EQUITY_CONTRIBUTE_P0_SELECTOR_V3, DEALER_EQUITY_CONTRIBUTE_P1_SELECTOR_V3,
         DEALER_EQUITY_CONTRIBUTE_P2_SELECTOR_V3, DEALER_EQUITY_REDEEM_P0_SELECTOR_V3,
         DEALER_EQUITY_REDEEM_P1_SELECTOR_V3, DEALER_EQUITY_REDEEM_P2_SELECTOR_V3,
         DEALER_EQUITY_SELECTOR_OFFSET_V3,
     },
-    equity_effect::{dealer_equity_identity_count_v3, dealer_equity_scalar_count_v3},
     multi_lp::MultiLpActionV3,
 };
 

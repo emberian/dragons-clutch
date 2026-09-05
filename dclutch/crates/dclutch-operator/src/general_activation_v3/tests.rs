@@ -26,8 +26,8 @@ use dclutch_market::capability_program::{
     CAPABILITY_PROGRAM_ROOT_SCHEMA_OFFSET, CAPABILITY_PROGRAM_ROOT_STATE_BYTES_OFFSET,
     CapabilityProgramV1, initialize_root_account_v1,
 };
-use dclutch_trading::general_config::v3::GeneralConfigV3Input;
 use dclutch_market::{Identity, MarketIdentity, Readiness, StateBumpsV1};
+use dclutch_trading::general_config::v3::GeneralConfigV3Input;
 use solana_program::rent::Rent;
 
 use super::*;

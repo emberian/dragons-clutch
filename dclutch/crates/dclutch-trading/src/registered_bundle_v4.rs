@@ -15,29 +15,29 @@
 //! side, because `e03a51fd` ruled that a Sell must REBASE on the Buy rather
 //! than copy it.
 
-use dclutch_vm::account_profile::{
-    lifecycle_v3::StateLifecyclePolicyV5,
-    v2::{AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2},
-};
+use dclutch_core_contract::ContentId;
 use dclutch_market::capability_program::v4::{
     ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4, CapabilityProgramV4,
     SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
-};
-use dclutch_core_contract::ContentId;
-use dclutch_vm::effect::{
-    v2::FixedRole,
-    v3::ProgramV3 as EffectProgramV3,
-    v4::{ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4},
 };
 use dclutch_market::execution_strategy::v2::{
     EXECUTION_STRATEGY_PROGRAM_BYTES_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
     ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
+use dclutch_sha256_adapter::digest;
+use dclutch_vm::account_profile::{
+    lifecycle_v3::StateLifecyclePolicyV5,
+    v2::{AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2},
+};
+use dclutch_vm::effect::{
+    v2::FixedRole,
+    v3::ProgramV3 as EffectProgramV3,
+    v4::{ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4},
+};
 use dclutch_vm::request_profile::{
     RequestProfileV1,
     v2::{REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID, RequestProfileV2},
 };
-use dclutch_sha256_adapter::digest;
 use dclutch_vm::v3::ProgramV3 as TransitionProgramV3;
 
 use crate::{
@@ -601,8 +601,7 @@ fn validate_creation_descriptor(
         || descriptor.lifecycle()
             != artifact(SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5, lifecycle_id)?
         || descriptor.strategy() != artifact(EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, strategy_id)?
-        || descriptor.transition()
-            != artifact(dclutch_vm::v3::SCHEMA_RELEASE_ID, transition_id)?
+        || descriptor.transition() != artifact(dclutch_vm::v3::SCHEMA_RELEASE_ID, transition_id)?
         || descriptor.effect() != artifact(EFFECT_SCHEMA_ID_V4, effect_id)?
         || descriptor.root_state_bytes()
             != u32::try_from(DIRECT_ROOT_STATE_BYTES_V1)
@@ -685,18 +684,18 @@ mod tests {
 
     extern crate std;
 
+    use dclutch_custody::{CustodyRequestV1, DelegatedCustodyRequestV2};
+    use dclutch_market::realm::REALM_BYTES;
+    use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
+    use dclutch_product::admission::PRODUCT_RECORD_BYTES_V2;
+    use dclutch_product::payoff::runtime_v3::BASIS_WIDTH_OFFSET_V3;
+    use dclutch_product::{PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_HEADER_BYTES};
+    use dclutch_registry::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
+    use dclutch_registry::svm::LOADER_V3_PROGRAM_BYTES;
     use dclutch_vm::account_profile::{
         lifecycle_v3::{CoordinateScopeV3, LifecycleRegisterKindV3},
         v2::{ProjectionRegisterKindV2, ProjectionRegisterSpaceV2, ProjectionTargetV2},
     };
-    use dclutch_custody::{CustodyRequestV1, DelegatedCustodyRequestV2};
-    use dclutch_product::payoff::runtime_v3::BASIS_WIDTH_OFFSET_V3;
-    use dclutch_product::{PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_HEADER_BYTES};
-    use dclutch_product::admission::PRODUCT_RECORD_BYTES_V2;
-    use dclutch_market::realm::REALM_BYTES;
-    use dclutch_registry::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
-    use dclutch_registry::svm::LOADER_V3_PROGRAM_BYTES;
-    use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
     use dclutch_vm::request_profile::{
         ProjectionRegisterKindV1, ProjectionRegisterSpaceV1, ProjectionTargetV1,
     };

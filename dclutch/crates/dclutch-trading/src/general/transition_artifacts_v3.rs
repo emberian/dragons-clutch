@@ -22,10 +22,10 @@
 //!
 //! Deleting the imperative builder in favour of the emitted arrays is remaining
 //! cleanup; the byte gate makes that change safe to take one action at a time.
-use dclutch_claims::affine_batch_v2::DeltaDirectionV2;
-use dclutch_custody::OperationV1;
 use crate::general_codec::Action;
 use crate::general_config::GeneralLifecycleV2;
+use dclutch_claims::affine_batch_v2::DeltaDirectionV2;
+use dclutch_custody::OperationV1;
 use dclutch_vm::v3::{
     HEADER_BYTES, INSTRUCTION_BYTES, IdentityRegisterV3, InstructionV3, ProgramGeometryV3,
     ProgramV3, ScalarRegisterV3, encode_program_atomic,

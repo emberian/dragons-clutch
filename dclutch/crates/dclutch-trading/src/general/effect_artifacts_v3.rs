@@ -7,8 +7,10 @@
 //! index enters the artifact.  Generic Trading remains the sole request
 //! projector, account writer, CPI authority, and atomic committer.
 
-use dclutch_market::capability_program::{
-    CAPABILITY_ROOT_HEADER_BYTES_V1, hot_v3::HOT_RUNTIME_ROOT_COORDINATE_V3,
+use crate::general_codec::{Action, CONTROLLER_REQUEST_BYTES};
+use crate::general_config::{
+    GENERAL_ROOT_NEXT_BATCH_SEQUENCE_OFFSET_V2, GENERAL_ROOT_OPEN_BATCHES_OFFSET_V2,
+    GENERAL_ROOT_REVISION_OFFSET_V2,
 };
 use dclutch_claims::{
     CallerRole as ClaimsCallerRole,
@@ -36,6 +38,9 @@ use dclutch_custody::{
     OPEN_VAULT_ACCOUNT_COUNT_V1 as CUSTODY_OPEN_VAULT_ACCOUNT_COUNT_V1, OperationV1,
     TRANSFER_ACCOUNT_COUNT_V1 as CUSTODY_TRANSFER_ACCOUNT_COUNT_V1,
 };
+use dclutch_market::capability_program::{
+    CAPABILITY_ROOT_HEADER_BYTES_V1, hot_v3::HOT_RUNTIME_ROOT_COORDINATE_V3,
+};
 use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{
@@ -51,11 +56,6 @@ use dclutch_vm::effect::{
         BorrowedRangePolicyV4, HEADER_BYTES_V4 as EFFECT_HEADER_BYTES_V4, ProgramV4,
         encode_program_v4_atomic,
     },
-};
-use crate::general_codec::{Action, CONTROLLER_REQUEST_BYTES};
-use crate::general_config::{
-    GENERAL_ROOT_NEXT_BATCH_SEQUENCE_OFFSET_V2, GENERAL_ROOT_OPEN_BATCHES_OFFSET_V2,
-    GENERAL_ROOT_REVISION_OFFSET_V2,
 };
 
 use crate::general::hot_candidate_v3::{
@@ -3536,7 +3536,8 @@ mod tests {
                 0_u64;
                 usize::try_from(
                     GENERAL_HOT_COMMON_SCALARS_V3
-                        + count * crate::general::hot_candidate_v3::GENERAL_HOT_ITEM_SCALAR_STRIDE_V3,
+                        + count
+                            * crate::general::hot_candidate_v3::GENERAL_HOT_ITEM_SCALAR_STRIDE_V3,
                 )
                 .expect("scalar width")
             ];
@@ -3563,13 +3564,11 @@ mod tests {
             }
             assert_eq!(
                 program.resolved_fixed_effect(21, count, &scalars, &identities),
-                Ok(
-                    dclutch_vm::effect::v3::ResolvedEffectV3::TransferLamports {
-                        source: usize::from(GENERAL_PRIMARY_PAYER_ACCOUNT_V3),
-                        destination: usize::from(GENERAL_STATE_ACCOUNT_COORDINATE_V3),
-                        amount: 777,
-                    }
-                ),
+                Ok(dclutch_vm::effect::v3::ResolvedEffectV3::TransferLamports {
+                    source: usize::from(GENERAL_PRIMARY_PAYER_ACCOUNT_V3),
+                    destination: usize::from(GENERAL_STATE_ACCOUNT_COORDINATE_V3),
+                    amount: 777,
+                }),
             );
             assert_eq!(
                 program.resolved_fixed_effect(22, count, &scalars, &identities),
@@ -3615,7 +3614,8 @@ mod tests {
             let selected_item = count - 1;
             let selected_base = usize::try_from(
                 GENERAL_HOT_COMMON_SCALARS_V3
-                    + selected_item * crate::general::hot_candidate_v3::GENERAL_HOT_ITEM_SCALAR_STRIDE_V3,
+                    + selected_item
+                        * crate::general::hot_candidate_v3::GENERAL_HOT_ITEM_SCALAR_STRIDE_V3,
             )
             .expect("selected item base");
             for (coordinate, value) in [

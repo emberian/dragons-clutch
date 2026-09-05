@@ -57,7 +57,9 @@ export type FailureWalkBookV1 = Readonly<{
   portfolioRecordStagingVacancy: string;
   capabilityManifest: string;
   capabilityManifestStagingVacancy: string;
-  failureFunding: string;
+  /// The Resolution funding ledger, which the frame names `ResolutionFunding`
+  /// (it was `FailureFunding` while only the failure walk debited it).
+  resolutionFunding: string;
 }>;
 
 /** Encode the exact 32-byte `CommitDeadlineFailure` instruction data. */
@@ -108,7 +110,7 @@ export function buildFailureWalkTransactionV1(
     PortfolioRecordStagingVacancy: book.portfolioRecordStagingVacancy,
     CapabilityManifest: book.capabilityManifest,
     CapabilityManifestStagingVacancy: book.capabilityManifestStagingVacancy,
-    FailureFunding: book.failureFunding,
+    ResolutionFunding: book.resolutionFunding,
     ClockSysvar: CLOCK_SYSVAR_ADDRESS,
     RentSysvar: RENT_SYSVAR_ADDRESS,
     SystemProgram: SYSTEM_PROGRAM_ADDRESS,

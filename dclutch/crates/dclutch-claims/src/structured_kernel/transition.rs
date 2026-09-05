@@ -4,7 +4,9 @@ use crate::fractional_kernel::{
     Error as FractionalError, FractionalExposureTermsV2, divide_exposure_shards_v2,
 };
 
-use crate::structured_kernel::abi::{Error, Result, StructuredPhaseV2, StructuredProjectionV2, StructuredTermsV2};
+use crate::structured_kernel::abi::{
+    Error, Result, StructuredPhaseV2, StructuredProjectionV2, StructuredTermsV2,
+};
 
 /// Exact movement of one coordinate's shard atoms into or out of Structured custody.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

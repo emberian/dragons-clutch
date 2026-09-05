@@ -3,9 +3,7 @@
 use std::io::{self, Read};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use dclutch_market::{
-    CoreState, Identity, MarketIdentity, Phase, Readiness, StateBumpsV1,
-};
+use dclutch_market::{CoreState, Identity, MarketIdentity, Phase, Readiness, StateBumpsV1};
 use dclutch_operator::source_readiness::{
     derive_source_close_detail_json_v1, derive_source_readiness_base_json_v1,
     derive_source_terminal_base_json_v1,

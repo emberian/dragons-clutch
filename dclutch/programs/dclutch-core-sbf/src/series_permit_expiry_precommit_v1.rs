@@ -8,10 +8,8 @@
 //! refund the still-unallocated permit before Trading persists the candidates;
 //! any later Trading failure rolls the CPI and refund back with the transaction.
 
-use dclutch_market::capability_program::{
-    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
-};
 use dclutch_market::SeriesUnallocatedPermitExpiryRequestV1;
+use dclutch_market::capability_program::{CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1};
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_trading::series::{
     SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3, SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,

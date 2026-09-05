@@ -5,19 +5,19 @@ use super::*;
 
 extern crate alloc;
 
-use dclutch_vm::account_profile::v3::SCHEMA_RELEASE_ID_V3 as ACCOUNT_PROFILE_SCHEMA_ID_V3;
+use dclutch_core_contract::ContentId;
 use dclutch_market::capability_program::v4::{
     CapabilityProgramV4, SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
 };
-use dclutch_core_contract::ContentId;
-use dclutch_vm::effect::v5::SCHEMA_RELEASE_ID_V5 as EFFECT_SCHEMA_ID_V5;
 use dclutch_market::execution_strategy::v2::EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2;
-use dclutch_vm::request_profile::SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1;
 use dclutch_trading::series::{
     generated::SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
     replay::SERIES_STATE_BYTES_V3,
     request::{SeriesActionRequestV3, SeriesActionV3},
 };
+use dclutch_vm::account_profile::v3::SCHEMA_RELEASE_ID_V3 as ACCOUNT_PROFILE_SCHEMA_ID_V3;
+use dclutch_vm::effect::v5::SCHEMA_RELEASE_ID_V5 as EFFECT_SCHEMA_ID_V5;
+use dclutch_vm::request_profile::SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1;
 use dclutch_vm::v3::SCHEMA_RELEASE_ID as TRANSITION_SCHEMA_ID_V3;
 use solana_program::hash::hash;
 

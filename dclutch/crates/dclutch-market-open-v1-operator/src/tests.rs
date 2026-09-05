@@ -1,11 +1,11 @@
 use dclutch_custody::{CompartmentV1, ContextV1};
 use dclutch_market::Identity;
+use dclutch_registry::release_set::{
+    ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ProgramIdentityV1,
+};
 use dclutch_registry::{
     ACTIVATION_PDA_DOMAIN_V1, ArtifactActivationInputV1, ArtifactReleaseV1,
     ArtifactUpgradePolicyV1, ExecutionReleaseActivationInputsV1, activate_execution_release_set_v1,
-};
-use dclutch_registry::release_set::{
-    ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ProgramIdentityV1,
 };
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 

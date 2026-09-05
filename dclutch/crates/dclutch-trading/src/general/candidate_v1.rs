@@ -47,7 +47,9 @@ use crate::general::runtime_verify::{
     evaluate_runtime_consider_row_with_manifest_workspace_v2, runtime_manifest_orders_for_row_v2,
     runtime_verifier_len_v2,
 };
-use crate::general::runtime_width::{CandidateV2, PageV2, VerifiedCandidateV2, verified_candidate_len};
+use crate::general::runtime_width::{
+    CandidateV2, PageV2, VerifiedCandidateV2, verified_candidate_len,
+};
 
 /// Exact width of one General candidate submission record.
 pub const GENERAL_CANDIDATE_BYTES_V1: usize = 224;

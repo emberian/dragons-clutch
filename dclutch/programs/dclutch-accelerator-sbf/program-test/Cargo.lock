@@ -1563,22 +1563,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-bearer-v2-operator"
-version = "0.1.0"
-dependencies = [
- "dclutch-claims",
- "dclutch-core-contract",
- "dclutch-custody",
- "dclutch-hot-bump-miner-v1",
- "dclutch-market",
- "dclutch-product",
- "dclutch-rational-representation-v2-operator",
- "dclutch-vm",
- "solana-program",
- "solana-sdk-ids",
-]
-
-[[package]]
 name = "dclutch-claims"
 version = "0.1.0"
 dependencies = [
@@ -1628,16 +1612,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-hot-bump-miner-v1"
-version = "0.1.0"
-dependencies = [
- "dclutch-custody",
- "dclutch-market",
- "dclutch-registry",
- "solana-program",
-]
-
-[[package]]
 name = "dclutch-market"
 version = "0.1.0"
 dependencies = [
@@ -1664,33 +1638,38 @@ dependencies = [
 name = "dclutch-operator"
 version = "0.1.0"
 dependencies = [
- "dclutch-bearer-v2-operator",
+ "base64 0.22.1",
+ "bincode",
  "dclutch-claims",
  "dclutch-core-contract",
  "dclutch-custody",
  "dclutch-direct-ticket",
- "dclutch-hot-bump-miner-v1",
  "dclutch-market",
  "dclutch-market-open-v1-operator",
  "dclutch-product",
  "dclutch-product-runtime-v2-operator",
  "dclutch-provider-transport-v3-operator",
- "dclutch-rational-lifecycle-hot-v3",
  "dclutch-registry",
  "dclutch-release-tool",
  "dclutch-resolution-core-v3-operator",
+ "dclutch-sha256-adapter",
  "dclutch-source",
  "dclutch-trading",
  "dclutch-trading-sbf",
  "dclutch-versioned-message-operator",
  "dclutch-vm",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
  "solana-address-lookup-table-interface",
  "solana-compute-budget-interface",
  "solana-hash 4.6.0",
  "solana-message 3.1.0",
  "solana-program",
+ "solana-sdk",
  "solana-sdk-ids",
  "solana-system-interface 2.0.0",
+ "spl-associated-token-account-interface",
  "spl-token-2022-interface",
 ]
 
@@ -1744,37 +1723,6 @@ dependencies = [
  "solana-program",
  "solana-sdk-ids",
  "solana-system-interface 2.0.0",
-]
-
-[[package]]
-name = "dclutch-rational-lifecycle-hot-v3"
-version = "0.1.0"
-dependencies = [
- "dclutch-claims",
- "dclutch-core-contract",
- "dclutch-custody",
- "dclutch-hot-bump-miner-v1",
- "dclutch-market",
- "dclutch-product",
- "dclutch-vm",
- "solana-program",
- "solana-sdk-ids",
-]
-
-[[package]]
-name = "dclutch-rational-representation-v2-operator"
-version = "0.1.0"
-dependencies = [
- "dclutch-claims",
- "dclutch-core-contract",
- "dclutch-custody",
- "dclutch-market",
- "dclutch-product",
- "dclutch-registry",
- "dclutch-source",
- "solana-program",
- "solana-sdk-ids",
- "spl-associated-token-account-interface",
 ]
 
 [[package]]

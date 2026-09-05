@@ -7,12 +7,12 @@
 //! Upgradeable Loader V3 Program/ProgramData/complete-ELF observation. This
 //! module is read-only: it grants no accelerator state or effect write authority.
 
+use dclutch_core_contract::ContentId;
 use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
 use dclutch_market::capability_program::v4::{
     CAPABILITY_PROGRAM_V4_BYTES, CapabilityProgramV4,
     SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
 };
-use dclutch_core_contract::ContentId;
 use dclutch_market::execution_strategy::v2::{
     AdmittedAotAuthorizationV2, AuthenticatedInterpreterArtifactsV2, CertificateArtifactBindingV2,
     EXECUTION_STRATEGY_ADMISSION_BYTES_V2, EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2,
@@ -21,13 +21,13 @@ use dclutch_market::execution_strategy::v2::{
     ExecutionStrategyAdmissionV2, ExecutionStrategyCertificateV2, ExecutionStrategyProgramV2,
     StrategyDispositionV2, validate_admitted_aot_v4,
 };
-use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry::activation_auth_v1::ActivationAuthErrorV1;
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::release_set::ArtifactReleaseIdV1;
 use dclutch_registry::{
     ARTIFACT_RELEASE_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
     require_slot_pinned_release_v1,
 };
-use dclutch_registry::release_set::ArtifactReleaseIdV1;
 use dclutch_trading::shadow_accelerator_auth::{ShadowAcceleratorAuthErrorV4, deployment};
 use solana_program::{account_info::AccountInfo, hash::hash, pubkey::Pubkey};
 use solana_sdk_ids::{system_program, sysvar};

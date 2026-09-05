@@ -2,6 +2,10 @@
 
 use std::{env, fs, path::PathBuf, vec, vec::Vec};
 
+use dclutch_claims::liability_basis_state_v2::{
+    LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+};
+use dclutch_custody::token_svm::{LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES};
 use dclutch_market::capability_manifest::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1,
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, CompartmentFundingV1, ContentId,
@@ -14,8 +18,36 @@ use dclutch_market::capability_program::{
     CapabilityRootHeaderV1, SelectedRecordBumpsV1,
     set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, v4::CapabilityProgramV4,
 };
-use dclutch_claims::liability_basis_state_v2::{
-    LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+use dclutch_market::realm::{
+    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1,
+    RealmV1Input,
+};
+use dclutch_market::rent::{
+    RefundAuthority,
+    lifecycle_v2::{
+        LIFECYCLE_RENT_CREDIT_BYTES_V2, LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2,
+        LifecycleRentCreditV2,
+    },
+};
+use dclutch_market::{
+    Action, CapabilityFundingHeaderV2, CapabilityRouteLayoutV1, CoreEffectActionV1,
+    CoreEffectEnvelopeV1, CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase,
+    Readiness, Request, Role, STATE_BYTES, StateBumpsV1,
+};
+use dclutch_product::admission::PRODUCT_RECORD_BYTES_V2;
+use dclutch_product::payoff::runtime_v3::BASIS_HEADER_BYTES_V3;
+use dclutch_product::{DOMAIN_CUT_BYTES, PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_HEADER_BYTES};
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::release_set::{
+    ArtifactReleaseIdV1, CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1,
+    ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1, ProgramIdentityV1,
+};
+use dclutch_registry::svm::LOADER_V3_PROGRAM_BYTES;
+use dclutch_registry::{
+    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
+    ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
+    ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
+    initialize_activation_cache_v1,
 };
 use dclutch_trading::{
     activation_bundle_v1::{
@@ -51,40 +83,6 @@ use dclutch_trading::{
         DirectExecutionConfigV1, DirectRootStateV1,
     },
 };
-use dclutch_market::{
-    Action, CapabilityFundingHeaderV2, CapabilityRouteLayoutV1, CoreEffectActionV1,
-    CoreEffectEnvelopeV1, CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase,
-    Readiness, Request, Role, STATE_BYTES, StateBumpsV1,
-};
-use dclutch_product::payoff::runtime_v3::BASIS_HEADER_BYTES_V3;
-use dclutch_product::{
-    DOMAIN_CUT_BYTES, PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_HEADER_BYTES,
-};
-use dclutch_product::admission::PRODUCT_RECORD_BYTES_V2;
-use dclutch_market::realm::{
-    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1,
-    RealmV1Input,
-};
-use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry::{
-    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
-    ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
-    ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
-    initialize_activation_cache_v1,
-};
-use dclutch_registry::svm::LOADER_V3_PROGRAM_BYTES;
-use dclutch_registry::release_set::{
-    ArtifactReleaseIdV1, CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1,
-    ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1, ProgramIdentityV1,
-};
-use dclutch_market::rent::{
-    RefundAuthority,
-    lifecycle_v2::{
-        LIFECYCLE_RENT_CREDIT_BYTES_V2, LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2,
-        LifecycleRentCreditV2,
-    },
-};
-use dclutch_custody::token_svm::{LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES};
 use solana_account::Account;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_program::{
@@ -405,8 +403,8 @@ fn ordinary_lengths() -> [u32; DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3 as usize
     output[38] = output[26];
     output[39] = output[27];
     output[40] = u32::try_from(REALM_BYTES).expect("Realm width");
-    output[42] = u32::try_from(dclutch_custody::CUSTODY_REPLAY_BYTES_V1)
-        .expect("Custody replay width");
+    output[42] =
+        u32::try_from(dclutch_custody::CUSTODY_REPLAY_BYTES_V1).expect("Custody replay width");
     output[43] = 82;
     output[44] = 165;
     output[45] = 165;

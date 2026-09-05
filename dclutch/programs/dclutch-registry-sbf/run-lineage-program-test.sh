@@ -46,7 +46,7 @@ fi
 # toolchain it panicked with "launch Lean build: No such file or directory".
 # That is a MISSING PREREQUISITE wearing a failing gate's clothes, and it made
 # the wrapper's SBF suites job red on every cut for a fact about the runner
-# rather than about this tree -- exactly the confusion tools/ci/run.sh's exit
+# rather than about this tree -- exactly the confusion tools/gate's exit
 # codes exist to prevent, and which that tier already honours per row.
 #
 # WHICH TARGETS NEED LEAN IS READ OFF THE TARGET, for the same reason the target

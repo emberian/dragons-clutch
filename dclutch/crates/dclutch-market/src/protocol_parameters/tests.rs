@@ -48,7 +48,11 @@ fn a_record_round_trips_and_refuses_reserved_bytes_and_a_short_wire() {
     let bytes = record.to_bytes();
     assert_eq!(ProtocolParametersRecordV1::decode(&bytes), Ok(record));
     assert_eq!(
-        ProtocolParametersRecordV1::decode(&bytes[..bytes.len() - 1]),
+        ProtocolParametersRecordV1::decode(
+            bytes
+                .get(..bytes.len() - 1)
+                .expect("one byte short of the record"),
+        ),
         Err(Error::InvalidLength),
     );
     for offset in [
@@ -56,7 +60,9 @@ fn a_record_round_trips_and_refuses_reserved_bytes_and_a_short_wire() {
         PROTOCOL_PARAMETERS_RECORD_RESERVED_TAIL_OFFSET,
     ] {
         let mut hostile = bytes;
-        hostile[offset] = 1;
+        *hostile
+            .get_mut(offset)
+            .expect("a reserved offset inside the record") = 1;
         assert_eq!(
             ProtocolParametersRecordV1::decode(&hostile),
             Err(Error::NonCanonical),

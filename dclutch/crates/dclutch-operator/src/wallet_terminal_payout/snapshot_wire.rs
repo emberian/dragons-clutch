@@ -13,7 +13,9 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::Deserialize;
 use solana_program::pubkey::Pubkey;
 
-use crate::wallet_terminal_payout::{Error, ObservedAccountValueV1, Result, pubkey, wire::FinalizedSnapshotV1};
+use crate::wallet_terminal_payout::{
+    Error, ObservedAccountValueV1, Result, pubkey, wire::FinalizedSnapshotV1,
+};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

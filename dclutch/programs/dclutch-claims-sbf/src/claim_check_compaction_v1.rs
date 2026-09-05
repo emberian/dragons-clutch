@@ -44,8 +44,8 @@ use dclutch_claims::terminal_settlement_v3::{
     TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3, TERMINAL_SETTLEMENT_HOARD_ACCOUNT_V3,
     TERMINAL_SETTLEMENT_RECIPIENT_ACCOUNT_V3,
 };
-use dclutch_market::{CoreState, MarketCoreStateSeedsV2};
 use dclutch_market::realm::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2};
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use solana_program::{
     account_info::AccountInfo,

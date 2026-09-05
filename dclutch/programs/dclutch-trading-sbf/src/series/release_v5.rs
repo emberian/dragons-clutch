@@ -9,13 +9,8 @@ extern crate alloc;
 
 use alloc::{vec, vec::Vec};
 
-use dclutch_vm::account_profile::{
-    lifecycle_v3::{CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5, StateLifecyclePolicyV5},
-    v3::{
-        AccountProfileV3, HEADER_BYTES_V3 as ACCOUNT_PROFILE_HEADER_BYTES_V3,
-        SCHEMA_RELEASE_ID_V3 as ACCOUNT_PROFILE_SCHEMA_ID_V3, encode_account_profile_v3_atomic,
-    },
-};
+use dclutch_core_contract::ContentId;
+use dclutch_custody::{ProjectedCustodyOperationV1, ProjectedCustodyRequestV1};
 use dclutch_market::capability_program::{
     set_v2::{
         CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, CapabilityProgramSetV2,
@@ -26,12 +21,6 @@ use dclutch_market::capability_program::{
         CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
     },
 };
-use dclutch_core_contract::ContentId;
-use dclutch_custody::{ProjectedCustodyOperationV1, ProjectedCustodyRequestV1};
-use dclutch_vm::effect::v5::{
-    FundingOperationV5, HEADER_BYTES_V5 as EFFECT_HEADER_BYTES_V5, ProgramV5 as EffectProgramV5,
-    encode_program_v5_atomic,
-};
 use dclutch_market::execution_strategy::v2::{
     ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
@@ -39,11 +28,22 @@ use dclutch_market::execution_strategy::v2::{
     ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
 use dclutch_market::{SeriesCoreActionV1, SeriesCoreRequestV1};
-use dclutch_vm::request_profile::RequestProfileV1;
 use dclutch_trading::series::{
     SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
     request::{SeriesActionRequestV3, SeriesActionV3},
 };
+use dclutch_vm::account_profile::{
+    lifecycle_v3::{CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5, StateLifecyclePolicyV5},
+    v3::{
+        AccountProfileV3, HEADER_BYTES_V3 as ACCOUNT_PROFILE_HEADER_BYTES_V3,
+        SCHEMA_RELEASE_ID_V3 as ACCOUNT_PROFILE_SCHEMA_ID_V3, encode_account_profile_v3_atomic,
+    },
+};
+use dclutch_vm::effect::v5::{
+    FundingOperationV5, HEADER_BYTES_V5 as EFFECT_HEADER_BYTES_V5, ProgramV5 as EffectProgramV5,
+    encode_program_v5_atomic,
+};
+use dclutch_vm::request_profile::RequestProfileV1;
 use dclutch_vm::v3::ProgramV3 as TransitionProgramV3;
 use solana_program::hash::hash;
 

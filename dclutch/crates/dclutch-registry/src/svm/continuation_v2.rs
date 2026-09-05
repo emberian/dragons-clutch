@@ -5,8 +5,8 @@
 //! every authority coordinate below from the authenticated activation cache
 //! and the byte-exact Hot body before creating the invocation-scoped signer.
 
-use dclutch_core_contract::ContentId;
 use crate::release_set::ExecutionRoleV1;
+use dclutch_core_contract::ContentId;
 
 use crate::svm::{
     batch_v2::{BatchErrorV2, RoleBatchRequestV2},

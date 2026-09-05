@@ -5,12 +5,6 @@
 //! verifies the supplied vacancy groups in that order, and relies on the
 //! content-addressed effect artifact to synthesize the full Claims child.
 
-use dclutch_vm::account_profile::v2::{AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE};
-use dclutch_market::capability_program::hot_v3::{
-    HOT_CONFIG_RAW_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
-    HOT_PORTFOLIO_RAW_ACCOUNT_V3, HOT_PRODUCT_RAW_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3,
-    HotExecutionEnvelopeV3,
-};
 use dclutch_claims::rational::{
     AuthenticatedTokenBehaviorV2, ProtocolPositionClaimsCapabilitySeedsV2,
     RATIONAL_SHARD_MINT_SEED_V2, RATIONAL_STRUCTURED_CUSTODY_SEED_V2,
@@ -22,6 +16,12 @@ use dclutch_claims::rational_lifecycle::{
         RATIONAL_LIFECYCLE_COMPACT_HOT_REQUEST_BYTES_V4, RationalLifecycleCompactHotRequestV4,
     },
 };
+use dclutch_market::capability_program::hot_v3::{
+    HOT_CONFIG_RAW_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
+    HOT_PORTFOLIO_RAW_ACCOUNT_V3, HOT_PRODUCT_RAW_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3,
+    HotExecutionEnvelopeV3,
+};
+use dclutch_vm::account_profile::v2::{AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE};
 use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},
@@ -409,17 +409,6 @@ fn validate_vacancy_group(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_vm::account_profile::lifecycle_v3::{
-        HEADER_BYTES as LIFECYCLE_HEADER_BYTES, encode::encode_lifecycle_policy_v5_atomic,
-    };
-    use dclutch_market::capability_program::hot_v3::{
-        HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
-        HOT_LINKED_BASIS_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3, HOT_RENT_SYSVAR_ACCOUNT_V3,
-        HOT_ROOT_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
-    };
-    use dclutch_product::payoff::runtime_v3::{
-        BASIS_HEADER_BYTES_V3, BasisInputV3, BasisKindV3, compile_basis_v3,
-    };
     use dclutch_claims::rational::{
         TokenBehaviorRecordAdmissionV2, authenticate_token_behavior_v2,
     };
@@ -430,6 +419,17 @@ mod tests {
     use dclutch_custody::token_svm::{
         TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_BYTES_V2,
         TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, TokenBehaviorSelectionV2,
+    };
+    use dclutch_market::capability_program::hot_v3::{
+        HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
+        HOT_LINKED_BASIS_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3, HOT_RENT_SYSVAR_ACCOUNT_V3,
+        HOT_ROOT_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
+    };
+    use dclutch_product::payoff::runtime_v3::{
+        BASIS_HEADER_BYTES_V3, BasisInputV3, BasisKindV3, compile_basis_v3,
+    };
+    use dclutch_vm::account_profile::lifecycle_v3::{
+        HEADER_BYTES as LIFECYCLE_HEADER_BYTES, encode::encode_lifecycle_policy_v5_atomic,
     };
     use solana_sdk_ids::{system_program, sysvar};
 
@@ -664,11 +664,13 @@ mod tests {
             market: key(14),
             generation: 14,
             finalized_slot: 99,
-            hot_outer: Some(crate::rational_lifecycle_hot::CheckedRationalLifecycleHotOuterV3 {
-                trading_program: key(60),
-                artifact_release: key(61).to_bytes(),
-                checked_manifest_digest: key(62).to_bytes(),
-            }),
+            hot_outer: Some(
+                crate::rational_lifecycle_hot::CheckedRationalLifecycleHotOuterV3 {
+                    trading_program: key(60),
+                    artifact_release: key(61).to_bytes(),
+                    checked_manifest_digest: key(62).to_bytes(),
+                },
+            ),
         }
     }
 

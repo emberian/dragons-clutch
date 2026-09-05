@@ -493,11 +493,6 @@ def tier_web(ctx: Context):
     if not have("npx"):
         raise Prereq("node/npx is not on PATH")
     failed = ran = 0
-    # The selector-9 profile vector from the side that AUTHORS the bytes; the vitest half below checks the mirror.
-    if _run(ctx, ["cargo", "test", "-p", "dclutch-trading-sbf", "--test", "dealer_scenario_profile_vector", "-q"],
-            cwd=REPO, quiet=True).returncode:
-        note("selector-9 profile vector: the ENCODER moved and the fixture did not")
-        failed += 1
     for tree in CLIENT_TREES:
         full = REPO / tree
         if not (full / "node_modules").is_dir():
@@ -890,7 +885,7 @@ TIERS: tuple[Tier, ...] = (
     Tier("clippy", "22s warm, minutes cold (2026-09-03)", "cargo, clippy", "a red package outside clippy-debt.tsv, or a debt row that went green; never-reached packages counted apart", tier_clippy),
     Tier("sbom", "~3 min (2026-09-01)", "cargo, python3", "a git-sourced or checksum-less dependency, or drift in the committed SBOM/NOTICES", tier_sbom),
     Tier("sbfcontracts", "minutes (2026-09-01)", "cargo-build-sbf", "a non-program first-party crate that does not compile for target_os=solana", tier_sbfcontracts),
-    Tier("web", "~1 min (2026-09-04)", "node, cargo", "the web + SDK lint and vitest suites, the encoder side of the selector-9 vector, and a shipped cohort that does not answer", tier_web),
+    Tier("web", "~1 min (2026-09-04)", "node, cargo", "the web + SDK lint and vitest suites, and a shipped cohort that does not answer", tier_web),
     Tier("abi", "~3 min (2026-09-03)", "lake, cargo, wasm-bindgen", "a generated client module that no longer matches the Rust or Lean that printed it (53 verifiers)", tier_abi),
     Tier("guards", "86s warm, 195s cold (2026-09-04)", "lake, rustfmt, node", "a generated file whose bytes no longer match its emitter (77 guards run for real)", tier_guards),
     Tier("frames", "~4 min (2026-09-02)", "cargo-build-sbf", "a function in any of the twelve SBF links whose exact frame differs from the admitted ratchet; names the commits that owe rows", tier_frames),

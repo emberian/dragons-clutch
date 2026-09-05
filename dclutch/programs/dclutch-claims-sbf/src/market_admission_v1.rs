@@ -174,13 +174,15 @@ mod tests {
         // `begin_retiring`. If someone narrows the join, this fails rather than
         // leaving redemption admitting a phase the model no longer joins.
         for phase in EVERY_PHASE {
-            let joins_a_winner_bearing_claims_phase =
-                crate::phases_join(phase, 7, dclutch_product::economic_slice::Phase::Terminal(7))
-                    || crate::phases_join(
-                        phase,
-                        7,
-                        dclutch_product::economic_slice::Phase::Retiring(7),
-                    );
+            let joins_a_winner_bearing_claims_phase = crate::phases_join(
+                phase,
+                7,
+                dclutch_product::economic_slice::Phase::Terminal(7),
+            ) || crate::phases_join(
+                phase,
+                7,
+                dclutch_product::economic_slice::Phase::Retiring(7),
+            );
             assert_eq!(
                 CLAIMS_SETTLED_MARKET_ADMISSIBLE_PRESTATES_V1.admits_phase(phase),
                 joins_a_winner_bearing_claims_phase,

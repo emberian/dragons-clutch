@@ -1,19 +1,17 @@
 //! Market-neutral CapabilityV4 bundle for Rational lifecycle Hot V6.
 
-use dclutch_vm::account_profile::{
-    lifecycle_v3::{
-        CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5 as LIFECYCLE_SCHEMA_ID_V5, StateLifecyclePolicyV5,
-    },
-    v2::{AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE},
+use dclutch_claims::rational_lifecycle::{
+    LifecycleActionV2,
+    hot_v3::RationalLifecycleHotLayoutV3,
+    hot_v6::{RATIONAL_LIFECYCLE_HOT_SCHEMA_RELEASE_ID_V6, RationalLifecycleHotRegisterLayoutV6},
+};
+use dclutch_core_contract::ContentId;
+use dclutch_custody::token_svm::{
+    TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
+    TokenBehaviorSelectionV2,
 };
 use dclutch_market::capability_program::v4::{
     ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4, CapabilityProgramV4,
-};
-use dclutch_core_contract::ContentId;
-use dclutch_vm::effect::{
-    v2::FixedRole,
-    v3::RouteKindV3,
-    v4::{ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4},
 };
 use dclutch_market::execution_strategy::v2::{
     ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
@@ -21,16 +19,18 @@ use dclutch_market::execution_strategy::v2::{
     EXECUTION_STRATEGY_PROGRAM_BYTES_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
     ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
-use dclutch_claims::rational_lifecycle::{
-    LifecycleActionV2,
-    hot_v3::RationalLifecycleHotLayoutV3,
-    hot_v6::{RATIONAL_LIFECYCLE_HOT_SCHEMA_RELEASE_ID_V6, RationalLifecycleHotRegisterLayoutV6},
+use dclutch_vm::account_profile::{
+    lifecycle_v3::{
+        CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5 as LIFECYCLE_SCHEMA_ID_V5, StateLifecyclePolicyV5,
+    },
+    v2::{AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE},
+};
+use dclutch_vm::effect::{
+    v2::FixedRole,
+    v3::RouteKindV3,
+    v4::{ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4},
 };
 use dclutch_vm::request_profile::RequestProfileV1;
-use dclutch_custody::token_svm::{
-    TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
-    TokenBehaviorSelectionV2,
-};
 use solana_program::hash::hash;
 
 use crate::rational_lifecycle_hot::{
@@ -195,8 +195,8 @@ pub fn validate_rational_lifecycle_selected_bundle_v6(
         &bundle.request_profile,
     )
     .map_err(Error::RequestProfile)?;
-    let transition = dclutch_vm::v3::ProgramV3::decode(&bundle.transition)
-        .map_err(Error::Transition)?;
+    let transition =
+        dclutch_vm::v3::ProgramV3::decode(&bundle.transition).map_err(Error::Transition)?;
     let strategy = ExecutionStrategyProgramV2::decode(&bundle.strategy).map_err(Error::Strategy)?;
     let effect = EffectProgramV4::decode(&bundle.effect).map_err(Error::EffectV4)?;
     let base = effect.base();
@@ -333,12 +333,6 @@ fn artifact(schema: [u8; 32], program: [u8; 32]) -> Result<ArtifactReferenceV4> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_vm::account_profile::lifecycle_v3::{
-        HEADER_BYTES as LIFECYCLE_HEADER_BYTES, encode::encode_lifecycle_policy_v5_atomic,
-    };
-    use dclutch_product::payoff::runtime_v3::{
-        BASIS_HEADER_BYTES_V3, BasisInputV3, BasisKindV3, compile_basis_v3,
-    };
     use dclutch_claims::rational_kernel::{
         DescriptorAdmissionV2, RepresentationDescriptorV2,
         descriptor_v3::{
@@ -350,8 +344,14 @@ mod tests {
         LIFECYCLE_HEADER_BYTES_V2, LifecycleHeaderV2, LifecycleRequestV2,
         hot_v3::RATIONAL_LIFECYCLE_IDENTITY_DESCRIPTOR_V3, hot_v6::RationalLifecycleHotRequestV6,
     };
-    use dclutch_vm::request_profile::{ProjectionRegistersV1, project_atomic};
     use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
+    use dclutch_product::payoff::runtime_v3::{
+        BASIS_HEADER_BYTES_V3, BasisInputV3, BasisKindV3, compile_basis_v3,
+    };
+    use dclutch_vm::account_profile::lifecycle_v3::{
+        HEADER_BYTES as LIFECYCLE_HEADER_BYTES, encode::encode_lifecycle_policy_v5_atomic,
+    };
+    use dclutch_vm::request_profile::{ProjectionRegistersV1, project_atomic};
     use dclutch_vm::v3::{
         Error as TransitionError, RegisterInput, RegisterOutput, execute_fold_atomic,
     };
@@ -554,8 +554,8 @@ mod tests {
         let mut family_bytes = vec![0_u8; child_bytes.len()];
         RationalLifecycleHotRequestV6::from_child_into(child, &mut family_bytes)
             .expect("V6 family");
-        let transition = dclutch_vm::v3::ProgramV3::decode(&first_bundle.transition)
-            .expect("transition");
+        let transition =
+            dclutch_vm::v3::ProgramV3::decode(&first_bundle.transition).expect("transition");
 
         let (scalars, identities) =
             project_request(&first_bundle, &family_bytes, first.descriptor_id());

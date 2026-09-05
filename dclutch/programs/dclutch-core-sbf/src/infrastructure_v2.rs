@@ -48,15 +48,15 @@
 use core::convert::TryFrom;
 
 use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
-use dclutch_registry::{
-    ARTIFACT_RELEASE_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
-    require_slot_pinned_release_v1,
-};
 use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, ExecutionRoleBindingV1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProtocolInfrastructureProfileV1,
     ProtocolInfrastructureProfileV2,
+};
+use dclutch_registry::{
+    ARTIFACT_RELEASE_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
+    require_slot_pinned_release_v1,
 };
 use solana_program::{
     account_info::AccountInfo,

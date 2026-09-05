@@ -7,7 +7,7 @@
 //! owns its runtime-width receipt recipe. Claims and Token account state remain
 //! a later physical adapter boundary.
 
-use dclutch_product::ContentId;
+use crate::composition::COMPOSITION_EXPOSURE_SCHEMA_ID_V3;
 use crate::rational_kernel::{
     ContentAdmissionV2, DescriptorAdmissionV2, RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
     REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3, RepresentationDescriptorV2,
@@ -16,7 +16,7 @@ use crate::rational_kernel::{
         RepresentationContextV3, admit_product_representation_v3,
     },
 };
-use crate::composition::COMPOSITION_EXPOSURE_SCHEMA_ID_V3;
+use dclutch_product::ContentId;
 use solana_program::{account_info::AccountInfo, pubkey::Pubkey};
 
 use dclutch_product::svm_reader::{

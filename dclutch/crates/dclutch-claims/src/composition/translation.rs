@@ -8,7 +8,9 @@ use crate::composition::abi::{
     COMPOSITION_TRANSLATION_MAGIC_V3, Error, RecordAdmissionV3, Result, array_at, gcd_u64,
     nonzero_array, put, require_zero, slice, u16_at, u32_at, u64_at, validate_record_admission,
 };
-use crate::composition::graph::{COMPOSITION_TERM_BYTES_V3, CompositionGraphV3, SparseTermV3, TermLayoutV3};
+use crate::composition::graph::{
+    COMPOSITION_TERM_BYTES_V3, CompositionGraphV3, SparseTermV3, TermLayoutV3,
+};
 
 /// Translation-header byte-layout authority.
 pub struct TranslationLayoutV3;

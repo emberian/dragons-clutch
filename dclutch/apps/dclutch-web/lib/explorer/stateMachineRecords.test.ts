@@ -82,7 +82,9 @@ function statesOf(record: FixtureRecord): ReadonlyArray<string | null> {
 describe('the persisted state machines, as records', () => {
   it('has machines to speak about at all', () => {
     // A table that came back empty would make every loop below vacuous.
-    expect(STATE_MACHINE_RECORDS_V1.length).toBeGreaterThanOrEqual(8);
+    // Six since 2026-09-04: the two Dealer scenario machines went with the
+    // checkpoint chain (simplify/trading).
+    expect(STATE_MACHINE_RECORDS_V1.length).toBeGreaterThanOrEqual(6);
   });
 
   it('renders a spec for every machine', () => {

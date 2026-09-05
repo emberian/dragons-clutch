@@ -19,7 +19,6 @@ export const PRODUCT_PORTFOLIO_DIGEST_OFFSET_V2 = 80 as const;
 export const RECEIPT_COUNT_OFFSET_V2 = 10 as const;
 export const RECEIPT_RECORDS_OFFSET_V2 = 16 as const;
 export const RECORD_COORDINATE_BYTES_V2 = 128 as const;
-export const ADMISSION_ACCOUNT_COUNT_V2 = 9 as const;
 export const ADMISSION_MAGIC_OFFSET_V2 = 0 as const;
 export const ADMISSION_MAGIC_BYTES_V2 = 8 as const;
 export const ADMISSION_VERSION_OFFSET_V2 = 8 as const;

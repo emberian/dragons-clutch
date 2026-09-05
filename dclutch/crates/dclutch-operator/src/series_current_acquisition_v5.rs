@@ -6,11 +6,7 @@
 //! existing [`SeriesCurrentHotStateV5`] consumed by the Series inspector.  It
 //! owns no action choice, artifact DTO, or persisted protocol fact.
 
-use dclutch_vm::account_profile::{
-    lifecycle_v3::CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5,
-    v2::PhysicalAccountDataGeometryV2,
-    v3::{AccountProfileV3, SCHEMA_RELEASE_ID_V3 as ACCOUNT_PROFILE_SCHEMA_ID_V3},
-};
+use dclutch_core_contract::ContentId;
 use dclutch_market::capability_manifest::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1;
 use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
@@ -18,8 +14,6 @@ use dclutch_market::capability_program::{
     set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
     v4::{CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4},
 };
-use dclutch_core_contract::ContentId;
-use dclutch_vm::effect::v5::SCHEMA_RELEASE_ID_V5 as EFFECT_SCHEMA_ID_V5;
 use dclutch_market::execution_strategy::{
     shadow_digest_v3::{
         AcceleratorCallerKindV1, accelerator_caller_authority_digest_v1, family_request_digest_v3,
@@ -31,9 +25,8 @@ use dclutch_market::execution_strategy::{
         ExecutionStrategyProgramV2, StrategyDispositionV2,
     },
 };
-use dclutch_registry::{ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1};
 use dclutch_registry::release_set::{ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_vm::request_profile::SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1;
+use dclutch_registry::{ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1};
 use dclutch_trading::series::{
     SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3, SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
     SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
@@ -42,6 +35,13 @@ use dclutch_trading_sbf::series::{
     instruction::SeriesActionV3,
     release_v5::{SeriesActionArtifactViewV5, SeriesOccurrenceAuthorityV5, SeriesSelectedActionV5},
 };
+use dclutch_vm::account_profile::{
+    lifecycle_v3::CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5,
+    v2::PhysicalAccountDataGeometryV2,
+    v3::{AccountProfileV3, SCHEMA_RELEASE_ID_V3 as ACCOUNT_PROFILE_SCHEMA_ID_V3},
+};
+use dclutch_vm::effect::v5::SCHEMA_RELEASE_ID_V5 as EFFECT_SCHEMA_ID_V5;
+use dclutch_vm::request_profile::SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1;
 use dclutch_vm::v3::SCHEMA_RELEASE_ID as TRANSITION_SCHEMA_ID_V3;
 use solana_program::{hash::hash, pubkey::Pubkey};
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
@@ -1135,6 +1135,10 @@ mod tests {
         CompartmentV1, ProjectedCallerRoleV1, ProjectedCustodyOperationV1,
         ProjectedCustodyRequestV1,
     };
+    use dclutch_market::rent::{
+        RefundAuthority,
+        lifecycle_v2::{LifecycleAccountIdV2, LifecycleRentCreditV2},
+    };
     use dclutch_market::{
         FoundingIntentV5, Identity as CoreIdentity, SERIES_FOUNDING_PERMIT_BYTES_V1,
         SeriesCoreActionV1, SeriesCoreRequestV1, SeriesFoundingPermitSeedsV1,
@@ -1142,10 +1146,6 @@ mod tests {
     };
     use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
     use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
-    use dclutch_market::rent::{
-        RefundAuthority,
-        lifecycle_v2::{LifecycleAccountIdV2, LifecycleRentCreditV2},
-    };
     use dclutch_trading::series::{
         AccountKeyV3, SERIES_OCCURRENCE_BYTES_V3, SERIES_TICKET_BYTES_V3, admit_occurrence,
         admit_ticket, generated, occurrence_content_id,
@@ -1979,10 +1979,8 @@ mod tests {
             SeriesSelectedActionV5 {
                 action: SeriesActionV3::Retire,
                 request_bytes: Vec::new(),
-                descriptor: [
-                    0;
-                    dclutch_market::capability_program::v4::CAPABILITY_PROGRAM_V4_BYTES
-                ],
+                descriptor: [0;
+                    dclutch_market::capability_program::v4::CAPABILITY_PROGRAM_V4_BYTES],
                 artifact_ids: SeriesActionArtifactIdsV5 {
                     account_profile: [1; 32],
                     request_profile: [2; 32],
@@ -2014,10 +2012,8 @@ mod tests {
                     account_profile: Vec::new(),
                     request_profile: Vec::new(),
                     lifecycle: Vec::new(),
-                    strategy: [
-                        0;
-                        dclutch_market::execution_strategy::v2::EXECUTION_STRATEGY_PROGRAM_BYTES_V2
-                    ],
+                    strategy: [0;
+                        dclutch_market::execution_strategy::v2::EXECUTION_STRATEGY_PROGRAM_BYTES_V2],
                     transition: Vec::new(),
                     effect: Vec::new(),
                 },

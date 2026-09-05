@@ -11,6 +11,14 @@ use dclutch_claims::fractional_kernel::{
     FractionalExposureTermsInputV2, FractionalExposureTermsV2, encode_fractional_exposure_terms_v2,
     fractional_exposure_terms_bytes_v2,
 };
+use dclutch_custody::token_svm::{
+    TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, TokenBehaviorSelectionV2,
+};
+use dclutch_market::rent::{
+    RefundAuthority,
+    lifecycle_v2::{LifecycleAccountIdV2, LifecycleRentCreditV2},
+};
+use dclutch_market::{RetirementReceiptInputV1, RetirementReceiptV1};
 use dclutch_operator::fractional::{
     Error, FractionalExposureMintSnapshotV2, FractionalExposureRentCloseObservationV2,
     FractionalExposureRetirementContextV2, FractionalExposureTokenEffectV2,
@@ -18,14 +26,6 @@ use dclutch_operator::fractional::{
     FractionalTokenBehaviorRecordAdmissionV2, authenticate_fractional_token_behavior_v2,
     plan_fractional_exposure_rent_close_v2, plan_fractional_exposure_retirement_v2,
     plan_fractional_exposure_token_effect_v2,
-};
-use dclutch_market::{RetirementReceiptInputV1, RetirementReceiptV1};
-use dclutch_market::rent::{
-    RefundAuthority,
-    lifecycle_v2::{LifecycleAccountIdV2, LifecycleRentCreditV2},
-};
-use dclutch_custody::token_svm::{
-    TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, TokenBehaviorSelectionV2,
 };
 use solana_program::pubkey::Pubkey;
 

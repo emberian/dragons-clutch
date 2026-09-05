@@ -41,7 +41,8 @@ fn quote() -> FundingQuoteV1 {
         dclutch_market::capability_manifest::funding::CompartmentFundingV1::native_lamports(value)
             .expect("positive lamports")
     };
-    let absent = dclutch_market::capability_manifest::funding::CompartmentFundingV1::not_applicable();
+    let absent =
+        dclutch_market::capability_manifest::funding::CompartmentFundingV1::not_applicable();
     FundingQuoteV1::new(
         FundingAmountsV1::new(
             native(1),

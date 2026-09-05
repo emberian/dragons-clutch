@@ -338,7 +338,11 @@ dependencies = [
 name = "dclutch-product"
 version = "0.1.0"
 dependencies = [
+ "dclutch-market",
+ "dclutch-registry",
  "dclutch-sha256-adapter",
+ "solana-program",
+ "solana-sdk-ids",
 ]
 
 [[package]]

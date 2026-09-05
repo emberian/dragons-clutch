@@ -1,23 +1,23 @@
 //! Adversarial integration coverage for canonical Dealer V3 multi-LP capital.
 
-use dclutch_market::capability_program::set_v1::CapabilityProgramSetV1;
 use dclutch_claims::affine_batch_v2::AFFINE_BATCH_PLAN_MAGIC_V2;
 use dclutch_custody::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CompartmentV1, CustodyRequestV1, CustodyVaultSeedsV1,
     DELEGATED_CUSTODY_REQUEST_MAGIC_V2,
 };
+use dclutch_market::capability_program::set_v1::CapabilityProgramSetV1;
 use dclutch_trading::dealer::scenario::ClaimsInventoryObservation;
 use dclutch_trading_sbf::dealer::{
+    equity_effect::{
+        dealer_equity_evidence_owner_identity_register_v3, dealer_equity_identity_count_v3,
+        dealer_equity_scalar_count_v3, project_dealer_equity_hot_registers_v3,
+    },
     equity_request::{
         DEALER_EQUITY_CONTRIBUTE_P2_SELECTOR_V3, DEALER_EQUITY_HEADER_BYTES_V3,
         DEALER_EQUITY_SELECTOR_OFFSET_V3, DealerEquityBumpBankV3, DealerEquityRequestV3,
         EquityOperatorErrorV3, EquityPoolChainProjectionV3, EquityRequestActionV3,
         EquityRequestIntentV3, build_equity_request_v3, materialize_equity_intent_v3,
         prepare_equity_request_v3,
-    },
-    equity_effect::{
-        dealer_equity_evidence_owner_identity_register_v3, dealer_equity_identity_count_v3,
-        dealer_equity_scalar_count_v3, project_dealer_equity_hot_registers_v3,
     },
     multi_lp::{
         DEALER_LP_POSITION_BYTES_V3, DEALER_LP_POSITION_PDA_DOMAIN_V3,

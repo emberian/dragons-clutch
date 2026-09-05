@@ -1016,7 +1016,9 @@ pub(super) fn lifecycle_request_target_v4(target: LifecycleRegisterTargetV3) -> 
     }
 }
 
-pub(super) fn lifecycle_transition_target_v4(target: LifecycleRegisterTargetV3) -> RegisterWriteTargetV3 {
+pub(super) fn lifecycle_transition_target_v4(
+    target: LifecycleRegisterTargetV3,
+) -> RegisterWriteTargetV3 {
     RegisterWriteTargetV3 {
         kind: match target.kind() {
             LifecycleRegisterKindV3::Scalar => RegisterKindV3::Scalar,

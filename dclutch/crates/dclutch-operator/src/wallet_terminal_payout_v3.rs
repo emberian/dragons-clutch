@@ -7,6 +7,7 @@
 //! exact 36-account frame, Custody caller PDA, sole canonical lookup sequence,
 //! unsigned v0 message, and independently checked postcondition.
 
+use dclutch_claims::rational_kernel::product_v3::TerminalScenarioV3;
 use dclutch_claims::{
     CallerRole,
     liability_basis_state_v2::{
@@ -29,6 +30,7 @@ use dclutch_claims::{
     },
 };
 use dclutch_core_contract::ContentId;
+use dclutch_custody::token_svm::{AccountState, TokenAccount, TokenProgram};
 use dclutch_custody::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_POSTSTATE_DOMAIN_V1,
     CallerRoleV1 as CustodyCallerRoleV1, CompartmentV1, ContextV1, CustodyReceiptV1,
@@ -36,9 +38,7 @@ use dclutch_custody::{
     ReceiptEvidenceV1,
 };
 use dclutch_product::payoff::runtime_v3::ProductBasisV3;
-use dclutch_claims::rational_kernel::product_v3::TerminalScenarioV3;
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_custody::token_svm::{AccountState, TokenAccount, TokenProgram};
 use solana_address_lookup_table_interface::{
     program as lookup_table_program, state::AddressLookupTable,
 };
@@ -145,8 +145,7 @@ pub struct WalletTerminalPayoutInputV3<'a> {
     /// Exact finalized Product-to-Claims exposure bytes.
     pub composition_exposure_bytes: &'a [u8],
     /// Finalized exposure record admission.
-    pub composition_exposure_admission:
-        dclutch_claims::composition::RecordAdmissionV3,
+    pub composition_exposure_admission: dclutch_claims::composition::RecordAdmissionV3,
     /// Finalized Product root digest.
     pub product_record_digest: [u8; 32],
     /// Exact Claims aggregate prestate bytes.
@@ -1111,6 +1110,10 @@ pub(crate) mod tests {
     use std::borrow::Cow;
 
     use super::*;
+    use dclutch_claims::composition::{
+        CompositionExposureInputV3, CompositionExposureRowInputV3, CompositionExposureTermV3,
+        RecordAdmissionV3, composition_exposure_bytes_v3, encode_composition_exposure_v3_atomic,
+    };
     use dclutch_claims::{
         liability_basis_state_v2::{
             LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
@@ -1122,10 +1125,6 @@ pub(crate) mod tests {
     };
     use dclutch_product::payoff::runtime_v3::{
         BasisInputV3, BasisKindV3, basis_record_bytes_v3, compile_basis_v3,
-    };
-    use dclutch_claims::composition::{
-        CompositionExposureInputV3, CompositionExposureRowInputV3, CompositionExposureTermV3,
-        RecordAdmissionV3, composition_exposure_bytes_v3, encode_composition_exposure_v3_atomic,
     };
     use solana_address_lookup_table_interface::state::LookupTableMeta;
 
@@ -1259,7 +1258,9 @@ pub(crate) mod tests {
             hoard,
             recipient: key(66),
             custody_authority,
-            token_program: Pubkey::new_from_array(dclutch_custody::token_svm::LEGACY_TOKEN_PROGRAM_ID),
+            token_program: Pubkey::new_from_array(
+                dclutch_custody::token_svm::LEGACY_TOKEN_PROGRAM_ID,
+            ),
         };
 
         let basis_bytes =

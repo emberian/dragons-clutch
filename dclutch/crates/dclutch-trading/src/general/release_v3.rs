@@ -33,13 +33,13 @@
 //! | [`GeneralReleaseProfileV1::CompleteV2`] | 15 | all fifteen first-class actions, including CloseCandidate |
 //! | [`GeneralReleaseProfileV1::CompleteV2WithActivation`] | 16 | all fifteen actions plus activation |
 
+use crate::general_codec::Action;
+use dclutch_core_contract::ContentId;
 use dclutch_market::capability_program::{
     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1,
     set_v2::{CapabilityProgramSetV2, SelectorWidthV2},
     v4::{CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID},
 };
-use dclutch_core_contract::ContentId;
-use crate::general_codec::Action;
 use dclutch_sha256_adapter::digest;
 
 use crate::general::artifacts_v3::{
@@ -288,7 +288,8 @@ pub fn authenticate_general_program_set_v3<'a>(
     } else {
         GeneralReleaseProfileV1::from_entry_count(entry_count)?
     };
-    if set.selector_offset() != crate::general::artifacts_v3::GENERAL_CONTROLLER_ACTION_SELECTOR_OFFSET_V3
+    if set.selector_offset()
+        != crate::general::artifacts_v3::GENERAL_CONTROLLER_ACTION_SELECTOR_OFFSET_V3
         || set.selector_width() != SelectorWidthV2::U8
     {
         return Err(GeneralReleaseErrorV3::ProgramSet);

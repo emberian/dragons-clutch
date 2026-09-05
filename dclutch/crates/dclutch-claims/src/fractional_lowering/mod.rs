@@ -11,6 +11,7 @@
 
 mod exposure_v2;
 
+use crate::fractional::{FractionalActionV1, FractionalFamilyRequestV1, NO_TERMINAL_OUTCOME_V1};
 use crate::{
     CallerRole,
     liability_basis_state_v2::{
@@ -25,9 +26,6 @@ use crate::{
         SignedDeltaPositionV3, SignedDeltaReceiptCommitmentV3, SignedDeltaReceiptV3, SignedDeltaV3,
         ValidatedSignedDeltaConstructionV3, plan_bytes,
     },
-};
-use crate::fractional::{
-    FractionalActionV1, FractionalFamilyRequestV1, NO_TERMINAL_OUTCOME_V1,
 };
 use sha2::{Digest, Sha256};
 

@@ -21,6 +21,11 @@
 //! is the authority pipeline with adoption in place of refusal; the on-chain
 //! gate then runs the refusing version over the adopted bundle.
 
+use dclutch_market::capability_program::hot_v3::HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3;
+use dclutch_market::execution_strategy::v2::{
+    BankTransportV2, ExecutionStrategyProgramV2, StrategyDispositionV2, classify_bank_transport_v2,
+};
+use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
 use dclutch_vm::account_profile::{
     AccountObservationV1,
     lifecycle_v3::{
@@ -37,7 +42,6 @@ use dclutch_vm::account_profile::{
         project_dynamic_fixed_spans_atomic,
     },
 };
-use dclutch_market::capability_program::hot_v3::HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3;
 use dclutch_vm::effect::{
     v2::{AccountInput, AccountPermission},
     v3::{ProgramV3 as EffectBaseV3, ProjectionV3, ResolvedInvocationV3},
@@ -47,10 +51,6 @@ use dclutch_vm::effect::{
     },
     v5::{ProgramV5 as EffectProgramV5, SCHEMA_RELEASE_ID_V5 as EFFECT_SCHEMA_RELEASE_ID_V5},
 };
-use dclutch_market::execution_strategy::v2::{
-    BankTransportV2, ExecutionStrategyProgramV2, StrategyDispositionV2, classify_bank_transport_v2,
-};
-use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
 use dclutch_vm::request_profile::{
     ProjectionRegisterKindV1, ProjectionRegisterSpaceV1, ProjectionRegistersV1, ProjectionTargetV1,
     RequestProfileV1, SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1,
@@ -1878,6 +1878,14 @@ fn resolve_invocations(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dclutch_trading::general::{
+        account_rules_v3::{
+            GeneralExternalAccountWidthsV3, encode_general_account_profile_v3_atomic,
+            general_account_profile_bytes_v3,
+        },
+        hot_candidate_v3::{general_hot_scalar_count_v3, scalar},
+    };
+    use dclutch_trading::general_codec::Action;
     use dclutch_vm::effect::{
         v2::FixedRole,
         v3::{
@@ -1887,14 +1895,6 @@ mod tests {
         v4::{BorrowedRangePolicyV4, HEADER_BYTES_V4, encode_program_v4_atomic},
         v5::{HEADER_BYTES_V5, encode_program_v5_atomic},
     };
-    use dclutch_trading::general::{
-        account_rules_v3::{
-            GeneralExternalAccountWidthsV3, encode_general_account_profile_v3_atomic,
-            general_account_profile_bytes_v3,
-        },
-        hot_candidate_v3::{general_hot_scalar_count_v3, scalar},
-    };
-    use dclutch_trading::general_codec::Action;
     use dclutch_vm::request_profile::{
         encode::{
             RequestCoordinateV1, RequestGeometryV1, RequestInstructionV1, ScalarRegisterV1,

@@ -10,6 +10,15 @@ extern crate alloc;
 
 use alloc::vec;
 
+use dclutch_core_contract::ContentId;
+use dclutch_market::capability_program::CAPABILITY_ROOT_DERIVATION_RELEASE_ID_V1;
+use dclutch_market::capability_program::v4::{
+    ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4, CapabilityProgramV4,
+};
+use dclutch_market::execution_strategy::v2::{
+    EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyProgramV2, StrategyDispositionV2,
+};
+use dclutch_trading::dealer::config_v4::DEALER_CONFIG_SCHEMA_PREIMAGE_V4;
 use dclutch_vm::account_profile::{
     lifecycle_v3::{
         CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5, HEADER_BYTES as LIFECYCLE_HEADER_BYTES_V5,
@@ -17,12 +26,6 @@ use dclutch_vm::account_profile::{
     },
     v2::{AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2},
 };
-use dclutch_market::capability_program::CAPABILITY_ROOT_DERIVATION_RELEASE_ID_V1;
-use dclutch_market::capability_program::v4::{
-    ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4, CapabilityProgramV4,
-};
-use dclutch_core_contract::ContentId;
-use dclutch_trading::dealer::config_v4::DEALER_CONFIG_SCHEMA_PREIMAGE_V4;
 use dclutch_vm::effect::{
     v3::ProgramV3 as EffectProgramV3,
     v4::{
@@ -30,9 +33,6 @@ use dclutch_vm::effect::{
         HEADER_BYTES_V4 as EFFECT_V4_HEADER_BYTES, ProgramV4, RequestCoordinateV4,
         SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4, encode_program_v4_atomic,
     },
-};
-use dclutch_market::execution_strategy::v2::{
-    EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
 use dclutch_vm::request_profile::{
     SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1, v3::REQUEST_PROFILE_V3_SCHEMA_RELEASE_ID,
@@ -47,18 +47,18 @@ use super::{
         dealer_equity_transition_bytes_v3, dealer_equity_witness_bounds_v3,
         encode_dealer_equity_request_profile_v3, encode_dealer_equity_transition_v3,
     },
-    equity_request::DEALER_EQUITY_HEADER_BYTES_V3,
     equity_effect::{
         DEALER_EQUITY_WITNESS_BYTES_SCALAR_V3, DEALER_EQUITY_WITNESS_OFFSET_SCALAR_V3,
         dealer_equity_effect_program_bytes_v3, dealer_equity_identity_count_v3,
         dealer_equity_scalar_count_v3, encode_dealer_equity_effect_base_for_v4,
         encode_dealer_equity_effect_program_v3,
     },
-    multi_lp::{MultiLpActionV3, MultiLpCustodyRequestV3},
     equity_profile::{
         DealerEquityAccountProfileInputV3, dealer_equity_logical_account_count_v3,
         encode_dealer_equity_account_profile_v3,
     },
+    equity_request::DEALER_EQUITY_HEADER_BYTES_V3,
+    multi_lp::{MultiLpActionV3, MultiLpCustodyRequestV3},
     release::dealer_request_schema_v3,
 };
 

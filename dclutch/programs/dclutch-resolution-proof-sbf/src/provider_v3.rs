@@ -67,15 +67,9 @@ pub enum ProviderJoinErrorV3 {
 /// 1,070,265 CU finding out which one refused. That workaround retires here.
 const fn map_normalization_error(error: dclutch_source::Error) -> ProviderJoinErrorV3 {
     match error {
-        dclutch_source::Error::InvalidObservationSchedule => {
-            ProviderJoinErrorV3::ProviderWindow
-        }
-        dclutch_source::Error::InvalidPublicationTime => {
-            ProviderJoinErrorV3::ProviderFreshness
-        }
-        dclutch_source::Error::InvalidPythObservation => {
-            ProviderJoinErrorV3::ProviderConfiguration
-        }
+        dclutch_source::Error::InvalidObservationSchedule => ProviderJoinErrorV3::ProviderWindow,
+        dclutch_source::Error::InvalidPublicationTime => ProviderJoinErrorV3::ProviderFreshness,
+        dclutch_source::Error::InvalidPythObservation => ProviderJoinErrorV3::ProviderConfiguration,
         dclutch_source::Error::SourceScaleMismatch => ProviderJoinErrorV3::ProviderScale,
         _ => ProviderJoinErrorV3::Provider,
     }
@@ -577,11 +571,11 @@ fn authenticate_provider_release(
 mod tests {
     use std::vec;
 
+    use dclutch_product::svm_reader::{AuthenticatedRecordV2, ProductRecordBumpsV3};
     use dclutch_product::{
         ContentId as ProductContentId, ResultDomainInputV2, compile_result_domain_v2,
         result_domain_record_bytes,
     };
-    use dclutch_product::svm_reader::{AuthenticatedRecordV2, ProductRecordBumpsV3};
     use dclutch_source::pyth::PythReleaseV1Input;
     use dclutch_source::resolution::ProviderCallerV3;
     use dclutch_source::{

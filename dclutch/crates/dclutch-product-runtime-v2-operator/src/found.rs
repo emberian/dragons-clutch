@@ -9,34 +9,34 @@ use dclutch_market::capability_manifest::{
     CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1,
     funding::funded_rent_persists_v1,
 };
+use dclutch_market::realm::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
+use dclutch_market::rent::lifecycle_v2::{
+    LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleRentCreditV2,
+};
 use dclutch_market::{
     Action, FOUND_ACCOUNT_ROLES_V3, FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3,
     FOUND_PRICE_GATE_RAW_INDEX_V3, Identity, MarketCoreStateSeedsV2, MarketIdentity, REQUEST_BYTES,
     Request, STATE_BYTES,
-};
-use dclutch_product::payoff::{
-    registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
-    runtime_v3::{ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, semantic_basis_preimage_v3},
 };
 use dclutch_product::ResultDomainV2;
 use dclutch_product::admission::{
     AdmissionProjectionV2, AdmissionReceiptV2, FinalizedRecordCoordinateV2, PORTFOLIO_SCHEMA_ID_V2,
     PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2, admit_authenticated_records_v2,
 };
-use dclutch_market::realm::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
-use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry::{
-    ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1,
-    ArtifactReleaseV1, DeploymentObservationV1, require_slot_pinned_release_v1,
+use dclutch_product::payoff::{
+    registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+    runtime_v3::{ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, semantic_basis_preimage_v3},
 };
-use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, ExecutionRoleBindingV1, ExecutionRoleV1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2,
     ProtocolInfrastructureProfileV2,
 };
-use dclutch_market::rent::lifecycle_v2::{
-    LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleRentCreditV2,
+use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
+use dclutch_registry::{
+    ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1,
+    ArtifactReleaseV1, DeploymentObservationV1, require_slot_pinned_release_v1,
 };
 use dclutch_source::{
     ContentId as SourceContentId, MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1, ManipulationFloorV1,

@@ -8,21 +8,14 @@
 //! physical executor and writer.
 
 use crate::general::escrow_v1::ActionCustodyTransferV1;
-use dclutch_vm::account_profile::{
-    lifecycle_v3::StateLifecyclePolicyV5,
-    v2::{AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE},
+use crate::general_codec::{
+    Action,
+    successor_request_v2::{CONTROLLER_REQUEST_BYTES_V2, ControllerRequestV2},
+    successor_request_v3::{ControllerActionV3, ControllerRequestV3},
 };
-use dclutch_market::capability_program::{
-    hot_v3::{
-        HOT_RUNTIME_CONFIG_COORDINATE_V3, HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3,
-        HOT_RUNTIME_LINKED_BASIS_COORDINATE_V3, HOT_RUNTIME_PORTFOLIO_COORDINATE_V3,
-        HOT_RUNTIME_PRODUCT_COORDINATE_V3, HOT_RUNTIME_ROOT_COORDINATE_V3,
-    },
-    set_v2::{CapabilityProgramSetV2, SelectorWidthV2},
-    v4::{
-        CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID,
-        SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
-    },
+use crate::general_config::{
+    GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_ROOT_BYTES_V2, GENERAL_ROOT_SCHEMA_ID_V2,
+    v3::{GENERAL_CONFIG_SCHEMA_ID_V3, GeneralConfigV3},
 };
 use dclutch_claims::{
     CallerRole as ClaimsCallerRole,
@@ -36,13 +29,18 @@ use dclutch_claims::{
     },
 };
 use dclutch_core_contract::ContentId;
-use dclutch_custody::{
-    CUSTODY_RECEIPT_BYTES_V1, CompartmentV1, CustodyRequestV1, OperationV1,
-};
-use dclutch_vm::effect::{
-    v2::FixedRole,
-    v3::{ProgramV3 as EffectProgramV3, RouteKindV3},
-    v4::ProgramV4 as EffectProgramV4,
+use dclutch_custody::{CUSTODY_RECEIPT_BYTES_V1, CompartmentV1, CustodyRequestV1, OperationV1};
+use dclutch_market::capability_program::{
+    hot_v3::{
+        HOT_RUNTIME_CONFIG_COORDINATE_V3, HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3,
+        HOT_RUNTIME_LINKED_BASIS_COORDINATE_V3, HOT_RUNTIME_PORTFOLIO_COORDINATE_V3,
+        HOT_RUNTIME_PRODUCT_COORDINATE_V3, HOT_RUNTIME_ROOT_COORDINATE_V3,
+    },
+    set_v2::{CapabilityProgramSetV2, SelectorWidthV2},
+    v4::{
+        CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID,
+        SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
+    },
 };
 use dclutch_market::execution_strategy::v2::{
     AdmittedAotAuthorizationV2, AuthenticatedInterpreterArtifactsV2,
@@ -51,22 +49,22 @@ use dclutch_market::execution_strategy::v2::{
     ExecutionStrategyCertificateV2, ExecutionStrategyProgramV2, StrategyDispositionV2,
     validate_admitted_aot_v4,
 };
-use crate::general_codec::{
-    Action,
-    successor_request_v2::{CONTROLLER_REQUEST_BYTES_V2, ControllerRequestV2},
-    successor_request_v3::{ControllerActionV3, ControllerRequestV3},
-};
-use crate::general_config::{
-    GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_ROOT_BYTES_V2, GENERAL_ROOT_SCHEMA_ID_V2,
-    v3::{GENERAL_CONFIG_SCHEMA_ID_V3, GeneralConfigV3},
-};
+use dclutch_product::admission::PRODUCT_RECORD_BYTES_V2;
 use dclutch_product::{
     PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_COEFFICIENT_COUNT_OFFSET, PORTFOLIO_HEADER_BYTES,
 };
-use dclutch_product::admission::PRODUCT_RECORD_BYTES_V2;
 use dclutch_registry::release_set::ArtifactReleaseIdV1;
-use dclutch_vm::request_profile::{RequestProfileV1, validate_request};
 use dclutch_sha256_adapter::digest;
+use dclutch_vm::account_profile::{
+    lifecycle_v3::StateLifecyclePolicyV5,
+    v2::{AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE},
+};
+use dclutch_vm::effect::{
+    v2::FixedRole,
+    v3::{ProgramV3 as EffectProgramV3, RouteKindV3},
+    v4::ProgramV4 as EffectProgramV4,
+};
+use dclutch_vm::request_profile::{RequestProfileV1, validate_request};
 use dclutch_vm::v3::ProgramV3 as TransitionProgramV3;
 
 use crate::general::{
@@ -533,10 +531,8 @@ fn validate_descriptor(descriptor: CapabilityProgramV4) -> Result<()> {
             != dclutch_vm::request_profile::SCHEMA_RELEASE_ID
         || descriptor.lifecycle().schema().to_bytes() != SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5
         || descriptor.strategy().schema().to_bytes() != EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2
-        || descriptor.transition().schema().to_bytes()
-            != dclutch_vm::v3::SCHEMA_RELEASE_ID
-        || descriptor.effect().schema().to_bytes()
-            != dclutch_vm::effect::v4::SCHEMA_RELEASE_ID_V4
+        || descriptor.transition().schema().to_bytes() != dclutch_vm::v3::SCHEMA_RELEASE_ID
+        || descriptor.effect().schema().to_bytes() != dclutch_vm::effect::v4::SCHEMA_RELEASE_ID_V4
         || usize::try_from(descriptor.root_state_bytes())
             .map_err(|_| GeneralArtifactErrorV3::Geometry)?
             != GENERAL_ROOT_BYTES_V2
@@ -712,8 +708,7 @@ fn validate_hot_account_profile(action: Action, account: AccountProfileV2<'_>) -
         };
         if rule.privileges() != privileges
             || rule.effect_permissions() != expected_effect_permissions
-            || rule.alias_kind()
-                != dclutch_vm::account_profile::v2::AliasKindV2::SelfCoordinate
+            || rule.alias_kind() != dclutch_vm::account_profile::v2::AliasKindV2::SelfCoordinate
             || rule.alias_index() != 0
             || rule.data_length() != data_length
             || rule.data_item_stride() != data_item_stride
@@ -734,8 +729,7 @@ fn validate_hot_account_profile(action: Action, account: AccountProfileV2<'_>) -
     // runtime term/knot tail whose width is independent of the outcome count.
     if linked_basis.privileges() != 0
         || linked_basis.effect_permissions() != 0
-        || linked_basis.alias_kind()
-            != dclutch_vm::account_profile::v2::AliasKindV2::SelfCoordinate
+        || linked_basis.alias_kind() != dclutch_vm::account_profile::v2::AliasKindV2::SelfCoordinate
         || linked_basis.alias_index() != 0
         || linked_basis.data_length() == 0
         || linked_basis.data_item_stride() != 0
@@ -1105,13 +1099,13 @@ fn content(value: [u8; 32]) -> Result<ContentId> {
 mod tests {
     extern crate std;
 
+    use crate::general_config::v3::{GENERAL_CONFIG_BYTES_V3, GeneralConfigV3Input};
     use dclutch_market::capability_program::v4::CAPABILITY_PROGRAM_V4_BYTES;
     use dclutch_market::execution_strategy::v2::{
         ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
         EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
         StrategyDispositionV2,
     };
-    use crate::general_config::v3::{GENERAL_CONFIG_BYTES_V3, GeneralConfigV3Input};
     use std::{vec, vec::Vec};
 
     use super::*;
@@ -1225,13 +1219,16 @@ mod tests {
 
     fn transition_for(action: Action) -> Vec<u8> {
         let (prelude, item, epilogue) =
-            crate::general::transition_artifacts_v3::general_transition_instruction_count_v3(action);
+            crate::general::transition_artifacts_v3::general_transition_instruction_count_v3(
+                action,
+            );
         let mut instructions = vec![
             crate::general::transition_artifacts_v3::GENERAL_TRANSITION_INSTRUCTION_PLACEHOLDER_V3;
             prelude + item + epilogue
         ];
-        let bytes = crate::general::transition_artifacts_v3::general_transition_program_bytes_v3(action)
-            .expect("transition width");
+        let bytes =
+            crate::general::transition_artifacts_v3::general_transition_program_bytes_v3(action)
+                .expect("transition width");
         let mut scratch = vec![0_u8; bytes];
         let mut output = vec![0x55_u8; bytes];
         crate::general::transition_artifacts_v3::encode_general_transition_program_v3_atomic(

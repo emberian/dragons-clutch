@@ -245,8 +245,7 @@ pub fn author_with_keypair_path_v1(
         limit_price: arguments.limit_price,
         fee_basis_points: arguments.fee_basis_points,
         collateral_account: arguments.collateral_account.to_string(),
-        signed_preimage_bytes:
-            dclutch_trading::intent_v2::COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2,
+        signed_preimage_bytes: dclutch_trading::intent_v2::COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2,
         signature_domain: String::from_utf8(
             dclutch_trading::intent_v2::COMPACT_INTENT_SIGNATURE_DOMAIN_PREIMAGE_V2.to_vec(),
         )

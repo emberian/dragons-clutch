@@ -1265,7 +1265,9 @@ fn authenticate_live_poststate(
         )
         .map_err(|error| match error {
             dclutch_market::capability_manifest::Error::FundedRentNotEvidenced
-            | dclutch_market::capability_manifest::Error::FundedRentRateMissing => CoreSbfError::FundedRent,
+            | dclutch_market::capability_manifest::Error::FundedRentRateMissing => {
+                CoreSbfError::FundedRent
+            }
             _ => CoreSbfError::Funding,
         })?;
     let derivation = CapabilityFundingLedgerDerivationV2::new(

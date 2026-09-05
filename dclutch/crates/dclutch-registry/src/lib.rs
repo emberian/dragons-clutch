@@ -186,8 +186,6 @@ pub(crate) fn put_u64(output: &mut [u8], offset: usize, value: u64) {
 mod tests;
 
 // Authorities merged into this crate; each module was one crate before.
-/// Formerly the `dclutch-registry::svm` crate.
-pub mod svm;
 /// Formerly the `dclutch-registry::activation_auth_v1` crate.
 #[cfg(feature = "svm")]
 pub mod activation_auth_v1;
@@ -195,3 +193,5 @@ pub mod activation_auth_v1;
 pub mod record;
 /// Formerly the `dclutch-registry::release_set` crate.
 pub mod release_set;
+/// Formerly the `dclutch-registry::svm` crate.
+pub mod svm;

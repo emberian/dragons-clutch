@@ -27,11 +27,11 @@ function withCrateNames(emitted, crateText) {
 }
 
 const sources = Object.freeze({
-  request: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/v3_equity_operator.rs', root), 'utf8'),
-  hot: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/v3_hot_artifact.rs', root), 'utf8'),
-  lp: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/v3_multi_lp.rs', root), 'utf8'),
-  obligation: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/v3_obligation.rs', root), 'utf8'),
-  release: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/v3_release.rs', root), 'utf8'),
+  request: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/equity_request.rs', root), 'utf8'),
+  hot: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/equity_effect.rs', root), 'utf8'),
+  lp: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/multi_lp.rs', root), 'utf8'),
+  obligation: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/obligation.rs', root), 'utf8'),
+  release: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/release.rs', root), 'utf8'),
   dealer: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/mod.rs', root), 'utf8'),
   config: readFileSync(new URL('crates/dclutch-trading/src/dealer/config_v4.rs', root), 'utf8'),
   delta: readFileSync(new URL('crates/dclutch-claims/src/signed_delta_v3.rs', root), 'utf8'),
@@ -46,9 +46,7 @@ const sources = Object.freeze({
     readFileSync(new URL('crates/dclutch-vm/src/account_profile/v2/generated_abi.rs', root), 'utf8'),
     readFileSync(new URL('crates/dclutch-vm/src/account_profile/v2.rs', root), 'utf8'),
   ),
-  lpProfile: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/v3_lp_artifacts.rs', root), 'utf8'),
-  scenarioProfile: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/v3_trade_profile.rs', root), 'utf8'),
-  scenarioArtifacts: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/v3_trade_artifacts.rs', root), 'utf8'),
+  lpProfile: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/lp_artifacts.rs', root), 'utf8'),
   // The `DCLTPAY3` layout scalars this generator scrapes are Lean-emitted
   // and live in `generated_runtime_v3.rs`; `runtime_v3.rs` `include!`s that
   // file and keeps only private aliases whose right-hand sides are names,
@@ -147,19 +145,6 @@ const scalars = Object.freeze([
   ['lpProfile', 'DEALER_LP_STATE_ACCOUNT_V3'],
   ['lpProfile', 'DEALER_LP_SCALAR_COUNT_V3'],
   ['lpProfile', 'DEALER_LP_IDENTITY_COUNT_V3'],
-  ['scenarioProfile', 'DEALER_SCENARIO_PROFILE_FIXED_RULES_V4'],
-  ['scenarioProfile', 'DEALER_SCENARIO_PROFILE_SPANS_V4'],
-  ['scenarioProfile', 'DEALER_SCENARIO_PROFILE_SPAN_RULES_V4'],
-  ['scenarioArtifacts', 'DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4'],
-  ['scenarioArtifacts', 'DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4'],
-  ['scenarioArtifacts', 'DEALER_SCENARIO_ITEM_SCALAR_STRIDE_V4'],
-  ['scenarioArtifacts', 'DEALER_SCENARIO_ITEM_IDENTITY_STRIDE_V4'],
-  ['scenarioArtifacts', 'DEALER_SCENARIO_CURRENT_SLOT_SCALAR_V4'],
-  ['scenarioArtifacts', 'DEALER_SCENARIO_MAX_POSITION_COUNT_SCALAR_V4'],
-  ['scenarioArtifacts', 'DEALER_SCENARIO_SCRATCH_PAGE_COUNT_SCALAR_V4'],
-  ['scenarioArtifacts', 'DEALER_SCENARIO_CURRENT_TRADING_IDENTITY_V4'],
-  ['scenarioArtifacts', 'DEALER_SCENARIO_OBLIGATION_IDENTITY_V4'],
-  ['scenarioArtifacts', 'DEALER_SCENARIO_OBSERVED_OBLIGATION_IDENTITY_V4'],
   ['basis', 'BASIS_WIDTH_OFFSET_V3'],
 ]);
 

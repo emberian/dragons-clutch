@@ -33,11 +33,11 @@ extern crate alloc;
 
 use alloc::{vec, vec::Vec};
 
+use dclutch_core_contract::ContentId;
 use dclutch_market::capability_program::{
     hot_v3::{HOT_FIXED_ACCOUNT_COUNT_V3, hot_frame_uses_sealed_execution_aliases_v3},
     v4::SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
 };
-use dclutch_core_contract::ContentId;
 use dclutch_market::execution_strategy::{
     admitted_v3::{
         ADMITTED_CALLER_AUTHORITY_ACCOUNT_V3, ADMITTED_HOT_FIXED_START_V3,
@@ -57,8 +57,8 @@ use dclutch_market::execution_strategy::{
         accelerator_invocation_count_v2, register_bank_bytes_v2, resolve_execution_candidate_v2,
     },
 };
-use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
 use dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1;
+use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,

@@ -38,10 +38,6 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-use dclutch_claims::liability_basis_state_v2::{
-    LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
-};
-use dclutch_market::CoreState;
 use crate::ObservedAccount;
 use crate::wallet_terminal_payout::{
     Error, Result, hex,
@@ -50,6 +46,10 @@ use crate::wallet_terminal_payout::{
         ProgramSelectorsV1, RecordSelectorsV1, SelectedInputV1, build_report,
     },
 };
+use dclutch_claims::liability_basis_state_v2::{
+    LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
+};
+use dclutch_market::CoreState;
 use sha2::{Digest, Sha256};
 use solana_program::{hash::hashv, pubkey::Pubkey};
 use spl_associated_token_account_interface::{
@@ -649,13 +649,13 @@ fn stable_parent_context_v1(
 
 #[cfg(test)]
 mod tests {
+    use crate::wallet_terminal_payout::{hex32, pubkey, wire::RecordPairV1};
+    use crate::{Finality, Observation};
     use dclutch_claims::liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LiabilityBasisMarketInputV2,
         encode_liability_basis_market_into_v2, liability_basis_vector_width_v2,
     };
     use dclutch_market::{Identity, MarketIdentity, Phase, Readiness, StateBumpsV1};
-    use crate::{Finality, Observation};
-    use crate::wallet_terminal_payout::{hex32, pubkey, wire::RecordPairV1};
     use solana_sdk_ids::system_program;
 
     use super::*;

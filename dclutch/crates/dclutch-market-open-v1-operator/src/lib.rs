@@ -11,12 +11,10 @@ use dclutch_custody::{
     CUSTODY_REQUEST_BYTES_V1, CallerRoleV1, CustodyAuthoritySeedsV1, CustodyFrameSpecV1,
     CustodyReplaySeedsV1, CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
 };
-use dclutch_market::{Action, REQUEST_BYTES, Request};
 use dclutch_market::realm::REALM_SCHEMA_RELEASE_ID_V1;
+use dclutch_market::{Action, REQUEST_BYTES, Request};
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry::{
-    ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1, DeploymentObservationV1,
-};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_registry::svm::{
     ProgramDataV3View, ProgramV3View,
     continuation_v1::{
@@ -24,7 +22,9 @@ use dclutch_registry::svm::{
         RegistryContinuationRequestV1,
     },
 };
-use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_registry::{
+    ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1, DeploymentObservationV1,
+};
 use dclutch_resolution_core_v3_operator::{Finality, Observation, ObservedAccount};
 use solana_program::{
     hash::hash,

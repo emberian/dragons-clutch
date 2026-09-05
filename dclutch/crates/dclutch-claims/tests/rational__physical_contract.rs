@@ -3,12 +3,10 @@
 #![allow(clippy::indexing_slicing)]
 
 use dclutch_claims::affine_batch_v2::{AffineBatchReceiptV2, DeltaDirectionV2};
-use dclutch_claims::{
-    CallerRole,
-    signed_delta_v3::{
-        DeltaDirectionV3, PositionDeltaInputV3, PositionDeltaV3, SignedDeltaPlanInputV3,
-        SignedDeltaPlanV3, SignedDeltaPositionV3, SignedDeltaReceiptV3, SignedDeltaV3, plan_bytes,
-    },
+use dclutch_claims::composition::{
+    CompositionExposureBundleV3, CompositionExposureInputV3, CompositionExposureRowInputV3,
+    CompositionExposureTermV3, RecordAdmissionV3, composition_exposure_bytes_v3,
+    encode_composition_exposure_v3_atomic,
 };
 use dclutch_claims::rational::{
     ABSENT_REVISION, ASSET_BYTES_V3, AffineBatchContextV2, AssetV2, CallerRoleV2,
@@ -23,10 +21,12 @@ use dclutch_claims::rational_kernel::{
     DescriptorAdmissionV2, RepresentationDescriptorV2, SCHEMA_VERSION_V2, STRUCTURED_HEADER_BYTES,
     STRUCTURED_MAGIC_V2, StructuredProjectionV2,
 };
-use dclutch_claims::composition::{
-    CompositionExposureBundleV3, CompositionExposureInputV3, CompositionExposureRowInputV3,
-    CompositionExposureTermV3, RecordAdmissionV3, composition_exposure_bytes_v3,
-    encode_composition_exposure_v3_atomic,
+use dclutch_claims::{
+    CallerRole,
+    signed_delta_v3::{
+        DeltaDirectionV3, PositionDeltaInputV3, PositionDeltaV3, SignedDeltaPlanInputV3,
+        SignedDeltaPlanV3, SignedDeltaPositionV3, SignedDeltaReceiptV3, SignedDeltaV3, plan_bytes,
+    },
 };
 use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
 

@@ -41,18 +41,6 @@
 //! program would authenticate under a digest-only check and fail at the first
 //! instruction that ran it.
 
-use dclutch_vm::account_profile::{
-    lifecycle_v3::StateLifecyclePolicyV5,
-    v2::AccountProfileV2,
-};
-use dclutch_market::capability_program::{
-    set_v2::{CapabilityProgramSetV2, SelectorWidthV2},
-    v4::{
-        CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
-    },
-};
-use dclutch_vm::effect::v4::ProgramV4 as EffectProgramV4;
-use dclutch_market::execution_strategy::v2::ExecutionStrategyProgramV2;
 use dclutch_claims::rational_lifecycle::{
     LifecycleActionV2, RATIONAL_LIFECYCLE_CAPABILITY_KIND_ID_V1,
     compact_hot_v4::{
@@ -61,8 +49,15 @@ use dclutch_claims::rational_lifecycle::{
     hot_v3::RationalLifecycleHotLayoutV3,
     hot_v6::RATIONAL_LIFECYCLE_HOT_SCHEMA_RELEASE_ID_V6,
 };
-use dclutch_vm::request_profile::RequestProfileV1;
 use dclutch_custody::token_svm::{TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, TokenBehaviorSelectionV2};
+use dclutch_market::capability_program::{
+    set_v2::{CapabilityProgramSetV2, SelectorWidthV2},
+    v4::{CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4},
+};
+use dclutch_market::execution_strategy::v2::ExecutionStrategyProgramV2;
+use dclutch_vm::account_profile::{lifecycle_v3::StateLifecyclePolicyV5, v2::AccountProfileV2};
+use dclutch_vm::effect::v4::ProgramV4 as EffectProgramV4;
+use dclutch_vm::request_profile::RequestProfileV1;
 use solana_program::hash::hash;
 
 use crate::rational_lifecycle_hot::{Error, RATIONAL_LIFECYCLE_SELECTED_ACTIONS_V6, Result};
@@ -154,11 +149,10 @@ pub fn authenticate_rational_release_v1(
 
     // The config is the record the descriptors name as `config_schema`, so it
     // must be a real one rather than 144 bytes that happen to digest correctly.
-    let config =
-        TokenBehaviorSelectionV2::decode(bytes.config).map_err(Error::TokenBehavior)?;
+    let config = TokenBehaviorSelectionV2::decode(bytes.config).map_err(Error::TokenBehavior)?;
 
-    let set = CapabilityProgramSetV2::decode(bytes.program_set)
-        .map_err(|_| Error::ArtifactGeometry)?;
+    let set =
+        CapabilityProgramSetV2::decode(bytes.program_set).map_err(|_| Error::ArtifactGeometry)?;
     let selector_offset =
         u32::try_from(RationalLifecycleHotLayoutV3::ACTION).map_err(|_| Error::ArtifactGeometry)?;
     if RationalLifecycleHotLayoutV3::ACTION != RationalLifecycleCompactHotLayoutV4::ACTION
@@ -171,11 +165,11 @@ pub fn authenticate_rational_release_v1(
 
     let mut descriptors = [[0_u8; 32]; 4];
     let mut agreed: Option<AgreedReleaseV1> = None;
-    for (ordinal, action) in RATIONAL_LIFECYCLE_SELECTED_ACTIONS_V6.into_iter().enumerate() {
-        let supplied = *bytes
-            .actions
-            .get(ordinal)
-            .ok_or(Error::ArtifactGeometry)?;
+    for (ordinal, action) in RATIONAL_LIFECYCLE_SELECTED_ACTIONS_V6
+        .into_iter()
+        .enumerate()
+    {
+        let supplied = *bytes.actions.get(ordinal).ok_or(Error::ArtifactGeometry)?;
         if supplied.action != action {
             return Err(Error::ActionGeometry);
         }
@@ -269,15 +263,10 @@ fn join_artifacts(
     AccountProfileV2::decode(supplied.account_profile).map_err(Error::AccountProfile)?;
     RequestProfileV1::decode(supplied.request_profile).map_err(Error::RequestProfile)?;
     let lifecycle_id = hash(supplied.lifecycle_policy).to_bytes();
-    StateLifecyclePolicyV5::decode_selected(
-        lifecycle_id,
-        lifecycle_id,
-        supplied.lifecycle_policy,
-    )
-    .map_err(Error::LifecycleArtifact)?;
+    StateLifecyclePolicyV5::decode_selected(lifecycle_id, lifecycle_id, supplied.lifecycle_policy)
+        .map_err(Error::LifecycleArtifact)?;
     ExecutionStrategyProgramV2::decode(supplied.strategy).map_err(Error::Strategy)?;
-    dclutch_vm::v3::ProgramV3::decode(supplied.transition)
-        .map_err(Error::Transition)?;
+    dclutch_vm::v3::ProgramV3::decode(supplied.transition).map_err(Error::Transition)?;
     EffectProgramV4::decode(supplied.effect).map_err(Error::EffectV4)?;
 
     let artifacts = descriptor.artifacts();

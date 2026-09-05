@@ -38,6 +38,7 @@ use dclutch_claims::claim_check_v1::{
     COMPACTION_CRANK_REWARD_LAMPORTS_V1, COMPACTION_DEADLINE_SLOTS_V1, ClaimCheckEscrowSeedsV1,
     ClaimCheckEscrowV1, ClaimCheckVaultSeedsV1,
 };
+use dclutch_claims::fractional::decode_fractional_capability_root_v4;
 use dclutch_claims::fractional_claim_check_compaction_receipt_v1::{
     FractionalClaimCheckCompactionReceiptInputV1, FractionalClaimCheckCompactionReceiptV1,
 };
@@ -53,23 +54,22 @@ use dclutch_claims::fractional_claim_check_v1::{
     FractionalClaimCheckRedemptionRoleV1, FractionalClaimCheckSeedsV1, FractionalClaimCheckV1,
     FractionalCompactionRoleV1, FractionalPayDownV1, FractionalRedeemClaimCheckRequestV1,
 };
+use dclutch_claims::fractional_kernel::{
+    FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FRACTIONAL_SELECTION_CONFIG_BYTES_V1,
+    FractionalExposureTermsAdmissionV2, FractionalExposureTermsV2,
+    encode_fractional_selection_config_v1, fractional_selection_config_from_terms_v1,
+};
 use dclutch_claims::protocol_position_v2::{
     ProtocolPositionAdmissionSeedsV2, ProtocolPositionAdmissionV2, ProtocolPositionOwnerKindV2,
 };
 use dclutch_claims::terminal_settlement_v3::{
     TERMINAL_SETTLEMENT_HOARD_ACCOUNT_V3, TERMINAL_SETTLEMENT_RECIPIENT_ACCOUNT_V3,
 };
-use dclutch_claims::fractional::decode_fractional_capability_root_v4;
-use dclutch_claims::fractional_kernel::{
-    FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FRACTIONAL_SELECTION_CONFIG_BYTES_V1,
-    FractionalExposureTermsAdmissionV2, FractionalExposureTermsV2,
-    encode_fractional_selection_config_v1, fractional_selection_config_from_terms_v1,
-};
-use dclutch_market::{CoreState, STATE_BYTES as CORE_STATE_BYTES};
-use dclutch_sha256_adapter::digest;
 use dclutch_custody::token_svm::{
     TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, Token2022BehaviorProfileV2, TokenBehaviorSelectionV2,
 };
+use dclutch_market::{CoreState, STATE_BYTES as CORE_STATE_BYTES};
+use dclutch_sha256_adapter::digest;
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,

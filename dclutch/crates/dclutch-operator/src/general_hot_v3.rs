@@ -7,12 +7,8 @@
 //! v0 message through one exact canonical lookup table. It performs no RPC,
 //! signing, submission, or account mutation.
 
-use dclutch_vm::account_profile::lifecycle_v3::{
-    CoordinateScopeV3, LifecycleOperationV3, LifecycleRegisterKindV3, LifecycleRegistersV3,
-    LifecycleSeedInputValueV3, SelectedLifecycleV3,
-};
-use dclutch_vm::account_profile::v2::{
-    DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE, PhysicalAccountDataGeometryV2,
+use crate::hot_bump_miner::{
+    HotBumpCorpusV1, activated_custody_program_v1, mine_hot_bump_hints_v1,
 };
 use dclutch_market::capability_program::hot_v3::{
     DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
@@ -27,7 +23,6 @@ use dclutch_market::capability_program::hot_v3::{
     HotExecutionEnvelopeV3,
 };
 use dclutch_market::capability_program::v4::{CapabilityProgramV4, CapabilityRootAccountV4};
-use dclutch_vm::effect::v2::FixedRole;
 use dclutch_market::execution_strategy::admitted_v3::{
     ADMITTED_ACCELERATOR_PROGRAM_ACCOUNT_V3, ADMITTED_ADMISSION_RAW_ACCOUNT_V3,
     ADMITTED_CERTIFICATE_RAW_ACCOUNT_V3, ADMITTED_STRATEGY_EVIDENCE_COUNT_V3,
@@ -88,9 +83,14 @@ use dclutch_trading::general_config::{
     root::{GeneralLifecycleV2, GeneralRootV2},
     v3::GeneralConfigV3,
 };
-use crate::hot_bump_miner::{
-    HotBumpCorpusV1, activated_custody_program_v1, mine_hot_bump_hints_v1,
+use dclutch_vm::account_profile::lifecycle_v3::{
+    CoordinateScopeV3, LifecycleOperationV3, LifecycleRegisterKindV3, LifecycleRegistersV3,
+    LifecycleSeedInputValueV3, SelectedLifecycleV3,
 };
+use dclutch_vm::account_profile::v2::{
+    DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE, PhysicalAccountDataGeometryV2,
+};
+use dclutch_vm::effect::v2::FixedRole;
 use solana_address_lookup_table_interface::{
     program as lookup_table_program, state::AddressLookupTable,
 };
@@ -2987,12 +2987,6 @@ fn signer_keys(accounts: &[AccountMeta]) -> Result<Vec<Pubkey>, GeneralHotOperat
 mod tests {
     use std::borrow::Cow;
 
-    use dclutch_vm::account_profile::lifecycle_v3::{
-        Error as LifecycleErrorV3, StateLifecyclePolicyV5,
-    };
-    use dclutch_vm::account_profile::v2::encode::{
-        AccountAliasInputV2, AccountPrivilegesV2, AccountRuleWithPrestateInputV2,
-    };
     use dclutch_market::execution_strategy::admitted_v3::ADMITTED_RUNTIME_ACCOUNTS_START_V3;
     use dclutch_trading::general::account_rules_v3::{
         GeneralExternalAccountWidthsV3, general_account_profile_fixed_count_v3,
@@ -3024,6 +3018,12 @@ mod tests {
     };
     use dclutch_trading::general_codec::{MAX_SELECTION_CRITERIA, SelectionCriterion};
     use dclutch_trading::general_config::v3::GeneralConfigV3Input;
+    use dclutch_vm::account_profile::lifecycle_v3::{
+        Error as LifecycleErrorV3, StateLifecyclePolicyV5,
+    };
+    use dclutch_vm::account_profile::v2::encode::{
+        AccountAliasInputV2, AccountPrivilegesV2, AccountRuleWithPrestateInputV2,
+    };
 
     use super::*;
     use solana_address_lookup_table_interface::state::LookupTableMeta;
@@ -3655,7 +3655,9 @@ mod tests {
         let mut orders = vec![first, second];
         orders.sort_by(|left, right| {
             let left = GeneralOrderV1::decode(left).expect("left order").order_id();
-            let right = GeneralOrderV1::decode(right).expect("right order").order_id();
+            let right = GeneralOrderV1::decode(right)
+                .expect("right order")
+                .order_id();
             if left == right {
                 core::cmp::Ordering::Equal
             } else if dclutch_trading::general::runtime_verify::runtime_identity_precedes_v2(
@@ -4307,7 +4309,9 @@ mod tests {
         unwrapped_batch.runtime_suffix_accounts[3].account.data = fixture.batch.to_bytes().to_vec();
         assert_eq!(
             derive(&unwrapped_batch, config),
-            Err(GeneralHotOperatorErrorV3::GeneralLocalState(dclutch_trading::general::local_state_v3::GeneralLocalStateErrorV3::InvalidEncoding))
+            Err(GeneralHotOperatorErrorV3::GeneralLocalState(
+                dclutch_trading::general::local_state_v3::GeneralLocalStateErrorV3::InvalidEncoding
+            ))
         );
 
         let mut substituted_candidate = state.clone();
@@ -4318,7 +4322,9 @@ mod tests {
             .expect("candidate byte") ^= 1;
         assert_eq!(
             derive(&substituted_candidate, config),
-            Err(GeneralHotOperatorErrorV3::RuntimeWidth(dclutch_trading::general::runtime_width::RuntimeWidthErrorV2::InvalidSimplex))
+            Err(GeneralHotOperatorErrorV3::RuntimeWidth(
+                dclutch_trading::general::runtime_width::RuntimeWidthErrorV2::InvalidSimplex
+            ))
         );
 
         assert_eq!(
@@ -4405,7 +4411,9 @@ mod tests {
         substituted_page.runtime_suffix_accounts[7].account.data[24] ^= 1;
         assert_eq!(
             derive(&substituted_page),
-            Err(GeneralHotOperatorErrorV3::GeneralCandidate(dclutch_trading::general::candidate_v1::GeneralCandidateErrorV1::Substitution))
+            Err(GeneralHotOperatorErrorV3::GeneralCandidate(
+                dclutch_trading::general::candidate_v1::GeneralCandidateErrorV1::Substitution
+            ))
         );
 
         assert_eq!(
@@ -4586,9 +4594,8 @@ mod tests {
             .get_mut(32..64)
             .expect("manifest offset in bounds")
             .copy_from_slice(&[51; 32]);
-        let row_bytes =
-            dclutch_trading::general::runtime_manifest::settlement_order_len_v2(width)
-                .expect("order width");
+        let row_bytes = dclutch_trading::general::runtime_manifest::settlement_order_len_v2(width)
+            .expect("order width");
         for (ordinal, (order_coordinate, source_page_index, source_execution_index)) in
             rows.iter().copied().enumerate()
         {

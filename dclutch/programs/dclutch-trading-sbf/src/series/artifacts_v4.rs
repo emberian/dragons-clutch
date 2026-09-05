@@ -7,6 +7,21 @@
 //! CPI, or state-write authority; the projected outer and common Hot executor
 //! retain those physical responsibilities.
 
+use dclutch_core_contract::ContentId;
+use dclutch_market::capability_program::{
+    set_v2::{CapabilityProgramSetV2, SelectorWidthV2},
+    v4::{
+        ArtifactReferenceV4, CapabilityProgramV4,
+        SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
+    },
+};
+use dclutch_market::execution_strategy::v2::{
+    EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyProgramV2,
+};
+use dclutch_trading::series::{
+    SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
+    request::{SeriesActionRequestV3, SeriesActionV3},
+};
 use dclutch_vm::account_profile::{
     lifecycle_v3::{
         CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5 as LIFECYCLE_SCHEMA_ID_V5, StateLifecyclePolicyV5,
@@ -16,22 +31,7 @@ use dclutch_vm::account_profile::{
         SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2,
     },
 };
-use dclutch_market::capability_program::{
-    set_v2::{CapabilityProgramSetV2, SelectorWidthV2},
-    v4::{
-        ArtifactReferenceV4, CapabilityProgramV4,
-        SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
-    },
-};
-use dclutch_core_contract::ContentId;
-use dclutch_market::execution_strategy::v2::{
-    EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyProgramV2,
-};
 use dclutch_vm::request_profile::{ProjectionRegistersV1, RequestProfileV1, project_atomic};
-use dclutch_trading::series::{
-    SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
-    request::{SeriesActionRequestV3, SeriesActionV3},
-};
 use dclutch_vm::{MAX_IDENTITIES, MAX_SCALARS, v3::ProgramV3 as TransitionProgramV3};
 use solana_program::hash::hash;
 
@@ -402,10 +402,8 @@ fn validate_descriptor(descriptor: CapabilityProgramV4) -> Result<()> {
             != dclutch_vm::request_profile::SCHEMA_RELEASE_ID
         || descriptor.lifecycle().schema().to_bytes() != LIFECYCLE_SCHEMA_ID_V5
         || descriptor.strategy().schema().to_bytes() != EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2
-        || descriptor.transition().schema().to_bytes()
-            != dclutch_vm::v3::SCHEMA_RELEASE_ID
-        || descriptor.effect().schema().to_bytes()
-            != dclutch_vm::effect::v4::SCHEMA_RELEASE_ID_V4
+        || descriptor.transition().schema().to_bytes() != dclutch_vm::v3::SCHEMA_RELEASE_ID
+        || descriptor.effect().schema().to_bytes() != dclutch_vm::effect::v4::SCHEMA_RELEASE_ID_V4
     {
         return Err(SeriesArtifactErrorV4::Descriptor);
     }

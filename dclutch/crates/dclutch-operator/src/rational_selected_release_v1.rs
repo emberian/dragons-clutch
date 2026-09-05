@@ -56,8 +56,8 @@ use dclutch_claims::rational_lifecycle::{
     LIFECYCLE_COMMON_ACCOUNT_COUNT_V2, LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2, LifecycleActionV2,
     RATIONAL_LIFECYCLE_CAPABILITY_KIND_ID_V1,
 };
-use dclutch_registry::release_set::ExecutionRoleV1;
 use dclutch_custody::token_svm::{TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TokenBehaviorSelectionV2};
+use dclutch_registry::release_set::ExecutionRoleV1;
 use solana_program::hash::hash;
 
 /// Number of action bundles one selectable Rational release compiles.

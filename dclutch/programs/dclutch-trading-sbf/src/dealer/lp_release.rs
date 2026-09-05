@@ -10,6 +10,15 @@ extern crate alloc;
 
 use alloc::vec;
 
+use dclutch_core_contract::ContentId;
+use dclutch_market::capability_program::CAPABILITY_ROOT_DERIVATION_RELEASE_ID_V1;
+use dclutch_market::capability_program::v4::{
+    ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4, CapabilityProgramV4,
+};
+use dclutch_market::execution_strategy::v2::{
+    EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyProgramV2, StrategyDispositionV2,
+};
+use dclutch_trading::dealer::config_v4::DEALER_CONFIG_SCHEMA_PREIMAGE_V4;
 use dclutch_vm::account_profile::{
     lifecycle_v3::{
         ACTION_PLAN_BYTES, CURRENT_RENT_QUOTE_BYTES_V5, CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5,
@@ -25,21 +34,12 @@ use dclutch_vm::account_profile::{
     },
     v2::{AccountPrestateV2, AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2},
 };
-use dclutch_market::capability_program::CAPABILITY_ROOT_DERIVATION_RELEASE_ID_V1;
-use dclutch_market::capability_program::v4::{
-    ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4, CapabilityProgramV4,
-};
-use dclutch_core_contract::ContentId;
-use dclutch_trading::dealer::config_v4::DEALER_CONFIG_SCHEMA_PREIMAGE_V4;
 use dclutch_vm::effect::{
     v3::ProgramV3 as EffectProgramV3,
     v4::{
         BorrowedRangePolicyV4, HEADER_BYTES_V4 as EFFECT_V4_HEADER_BYTES, ProgramV4,
         SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4, encode_program_v4_atomic,
     },
-};
-use dclutch_market::execution_strategy::v2::{
-    EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
 use dclutch_vm::request_profile::{
     RequestProfileV1, SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1,
@@ -63,8 +63,8 @@ use super::{
         encode_dealer_lp_account_profile_v3, encode_dealer_lp_effect_v3,
         encode_dealer_lp_request_profile_v3, encode_dealer_lp_transition_v3,
     },
-    multi_lp::{DEALER_LP_POSITION_BYTES_V3, DEALER_LP_POSITION_PDA_DOMAIN_V3},
     lp_request::{DEALER_MULTI_LP_REQUEST_BYTES_V3, MultiLpRequestActionV3},
+    multi_lp::{DEALER_LP_POSITION_BYTES_V3, DEALER_LP_POSITION_PDA_DOMAIN_V3},
     release::dealer_request_schema_v3,
 };
 

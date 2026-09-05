@@ -4,8 +4,6 @@
 // Machine labels and admission types: tools/gauntlet/census/src/phases.rs.
 // direct-root: crates/dclutch-trading/src/{successor,generated_successor}.rs
 // dealer-root: crates/dclutch-trading/src/dealer/{lib,generated_dealer_liquidity,generated_dealer_trading_profile}.rs
-// dealer-checkpoint: crates/dclutch-trading/src/dealer/{scenario_checkpoint_v1,generated_scenario_checkpoint_v1}.rs
-// dealer-reservation: crates/dclutch-trading/src/dealer/{scenario_custody_reservation_v1,generated_scenario_reservation_state_v1}.rs
 // projected-custody: crates/dclutch-custody/src/{projected,generated_projected_state_v2}.rs
 // series-ticket: crates/dclutch-trading/src/series/{replay,generated,generated_ticket_state_v3}.rs
 // funding-ledger: crates/dclutch-market/src/capability_manifest/{funding,generated_abi}.rs
@@ -23,8 +21,6 @@
 export type StateMachineV1 =
   | 'direct-root'
   | 'dealer-root'
-  | 'dealer-checkpoint'
-  | 'dealer-reservation'
   | 'projected-custody'
   | 'series-ticket'
   | 'funding-ledger'
@@ -117,38 +113,6 @@ export const STATE_MACHINE_RECORDS_V1: ReadonlyArray<StateMachineRecordV1> = [
     counters: [],
     states: [{ state: 'Open', tag: 0 }, { state: 'Terminal', tag: 1 }, { state: 'Retired', tag: 2 }],
     authority: 'crates/dclutch-trading/src/dealer/{lib,generated_dealer_liquidity,generated_dealer_trading_profile}.rs',
-  },
-  {
-    machine: 'dealer-checkpoint',
-    admission: 'DealerScenarioCheckpointAdmissionV1',
-    discriminant: 'DealerScenarioCheckpointPhaseV1',
-    record: 'DealerScenarioCheckpointV1',
-    magic: 'DCLTDSC1',
-    bytes: 944,
-    header: [[8, 1]],
-    tagOffset: 10,
-    headerBytes: null,
-    rowBytes: null,
-    pdaDomain: null,
-    counters: [],
-    states: [{ state: 'Collecting', tag: 1 }, { state: 'Evaluated', tag: 2 }, { state: 'Reserved', tag: 3 }, { state: 'RollingBack', tag: 4 }, { state: 'Committed', tag: 5 }],
-    authority: 'crates/dclutch-trading/src/dealer/{scenario_checkpoint_v1,generated_scenario_checkpoint_v1}.rs',
-  },
-  {
-    machine: 'dealer-reservation',
-    admission: 'DealerScenarioReservationAdmissionV1',
-    discriminant: 'DealerScenarioReservationStateStatusV1',
-    record: 'DealerScenarioReservationStateV1',
-    magic: 'DCLTDST1',
-    bytes: 512,
-    header: [[8, 1]],
-    tagOffset: 10,
-    headerBytes: null,
-    rowBytes: null,
-    pdaDomain: null,
-    counters: [],
-    states: [{ state: 'Active', tag: 1 }, { state: 'RolledBack', tag: 2 }, { state: 'Activated', tag: 3 }],
-    authority: 'crates/dclutch-trading/src/dealer/{scenario_custody_reservation_v1,generated_scenario_reservation_state_v1}.rs',
   },
   {
     machine: 'projected-custody',

@@ -42,12 +42,12 @@ use super::{
         LP_REQUEST_RENT_PRINCIPAL_SCALAR_V3, LP_VERSION_SCALAR_V3, LP_ZERO_SCALAR_V3,
         dealer_lp_account_count_v3,
     },
+    lp_request::{DealerMultiLpRequestV3, MultiLpRequestActionV3},
     multi_lp::{
         DEALER_LP_POSITION_MAGIC_V3, DEALER_LP_POSITION_PDA_DOMAIN_V3,
         DEALER_LP_POSITION_VERSION_V3, DealerLpPositionV3,
     },
     obligation::{DEALER_OBLIGATION_PDA_DOMAIN_V3, DealerObligationProjectionV3},
-    lp_request::{DealerMultiLpRequestV3, MultiLpRequestActionV3},
 };
 
 /// Stable refusal at selector 7/8's physical accelerator boundary.

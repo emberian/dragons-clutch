@@ -33,8 +33,11 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-
-use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use crate::admission::{
+    AdmissionReceiptV2, FinalizedRecordCoordinateV2, PORTFOLIO_SCHEMA_ID_V2,
+    PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2, RESULT_DOMAIN_SCHEMA_ID_V2,
+    admit_authenticated_views_v2,
+};
 use crate::payoff::price_gate_v1::verify_price_gate_v1;
 use crate::payoff::registry_v3::PRICE_GATE_RECORD_SCHEMA_ID_V1;
 pub use crate::payoff::runtime_v3::BASIS_WIDTH_OFFSET_V3;
@@ -45,11 +48,7 @@ use crate::payoff::{
     },
 };
 use crate::{ContentId, PortfolioV2, ResultDomainV2};
-use crate::admission::{
-    AdmissionReceiptV2, FinalizedRecordCoordinateV2, PORTFOLIO_SCHEMA_ID_V2,
-    PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2, RESULT_DOMAIN_SCHEMA_ID_V2,
-    admit_authenticated_views_v2,
-};
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use solana_program::{
     account_info::AccountInfo,

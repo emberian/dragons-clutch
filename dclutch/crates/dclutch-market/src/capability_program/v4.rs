@@ -8,13 +8,13 @@
 
 use core::convert::TryInto;
 
+use crate::capability_manifest::CapabilityEntryV1;
+use dclutch_core_contract::ContentId;
+use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
 pub use dclutch_vm::account_profile::lifecycle_v3::{
     CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5 as SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
     CURRENT_RENT_QUOTE_SCHEMA_RELEASE_PREIMAGE_V5 as SELECTED_LIFECYCLE_SCHEMA_RELEASE_PREIMAGE_V5,
 };
-use crate::capability_manifest::CapabilityEntryV1;
-use dclutch_core_contract::ContentId;
-use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
 
 use super::{CAPABILITY_ROOT_HEADER_BYTES_V1, CAPABILITY_ROOT_STATE_MAX_BYTES_V1, Error, Result};
 
@@ -686,10 +686,8 @@ mod tests {
     fn only_v5_lifecycle_schema_can_be_selected() {
         let mut legacy = artifacts();
         legacy.lifecycle = ArtifactReferenceV4::new(
-            ContentId::new(
-                dclutch_vm::account_profile::lifecycle_v3::SUCCESSOR_SCHEMA_RELEASE_ID,
-            )
-            .expect("legacy V4 lifecycle schema"),
+            ContentId::new(dclutch_vm::account_profile::lifecycle_v3::SUCCESSOR_SCHEMA_RELEASE_ID)
+                .expect("legacy V4 lifecycle schema"),
             id(12),
         );
         assert_eq!(

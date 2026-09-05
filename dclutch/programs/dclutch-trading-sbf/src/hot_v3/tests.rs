@@ -11,14 +11,13 @@ use dclutch_vm::account_profile::lifecycle_v3::{
 use dclutch_vm::account_profile::v2::{
     AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES, AccountPrestateV2, DYNAMIC_FIXED_SPAN_HEADER_BYTES,
     HEADER_BYTES as ACCOUNT_PROFILE_HEADER_BYTES,
-    OPERATION_BYTES as ACCOUNT_PROFILE_OPERATION_BYTES,
-    RULE_BYTES as ACCOUNT_PROFILE_RULE_BYTES, TrustedBuiltinIdentityV2, TrustedEnvironmentV2,
-    TrustedIdentityEnvironmentV2,
+    OPERATION_BYTES as ACCOUNT_PROFILE_OPERATION_BYTES, RULE_BYTES as ACCOUNT_PROFILE_RULE_BYTES,
+    TrustedBuiltinIdentityV2, TrustedEnvironmentV2, TrustedIdentityEnvironmentV2,
     encode::{
         AccountAliasInputV2, AccountCoordinateV2, AccountEffectPermissionsV2,
-        AccountOperationInputV2, AccountPrivilegesV2, AccountProfileArtifactV2,
-        AccountRuleInputV2, AccountRuleWithPrestateInputV2, DynamicFixedSpanInputV2,
-        RegisterGeometryV2, ScalarCoordinateV2, encode_account_profile_v2_atomic,
+        AccountOperationInputV2, AccountPrivilegesV2, AccountProfileArtifactV2, AccountRuleInputV2,
+        AccountRuleWithPrestateInputV2, DynamicFixedSpanInputV2, RegisterGeometryV2,
+        ScalarCoordinateV2, encode_account_profile_v2_atomic,
         encode_account_profile_with_authenticated_route_alias_v2_atomic,
         encode_account_profile_with_dynamic_fixed_span_v2_atomic,
     },
@@ -172,8 +171,7 @@ fn accelerator_caller_token_binds_request_context_and_immutable_deployment() {
         .expect("caller seeds")
     };
     let caller_seeds = seeds_for(parent_request_digest, 0, market, release_set);
-    let caller_key =
-        Pubkey::find_program_address(&caller_seeds.as_slices(), &trading_program).0;
+    let caller_key = Pubkey::find_program_address(&caller_seeds.as_slices(), &trading_program).0;
     let mut caller = readonly_info(caller_key);
     caller.is_signer = true;
     let program = readonly_info(accelerator_program);
@@ -221,12 +219,7 @@ fn accelerator_caller_token_binds_request_context_and_immutable_deployment() {
     )
     .expect("caller token");
     assert!(token.binds_context_parts(release_set, market.to_bytes(), root.to_bytes()));
-    assert!(token.binds_immutable_deployment(
-        artifact_release,
-        release,
-        &program,
-        &programdata,
-    ));
+    assert!(token.binds_immutable_deployment(artifact_release, release, &program, &programdata,));
 
     let mut nonsigner = caller.clone();
     nonsigner.is_signer = false;
@@ -311,9 +304,8 @@ fn accelerator_caller_token_binds_request_context_and_immutable_deployment() {
         hash(request).to_bytes(),
     )
     .expect("stale seeds");
-    let mut stale = readonly_info(
-        Pubkey::find_program_address(&stale_seeds.as_slices(), &trading_program).0,
-    );
+    let mut stale =
+        readonly_info(Pubkey::find_program_address(&stale_seeds.as_slices(), &trading_program).0);
     stale.is_signer = true;
     assert_ne!(stale.key, caller.key);
     assert_eq!(
@@ -424,8 +416,7 @@ fn alias_fixed_slot(accounts: &mut [AccountInfo<'static>], raw: usize, staging: 
 
 fn fractional_wrap_request() -> Vec<u8> {
     use dclutch_claims::fractional::{
-        FractionalExposureActionV2, FractionalExposureRequestInputV2,
-        FractionalExposureRequestV2,
+        FractionalExposureActionV2, FractionalExposureRequestInputV2, FractionalExposureRequestV2,
     };
 
     FractionalExposureRequestV2::new(
@@ -453,9 +444,7 @@ fn fractional_wrap_request() -> Vec<u8> {
     .to_vec()
 }
 
-fn fractional_wrap_invocation(
-    request_len: usize,
-) -> dclutch_vm::effect::v3::ResolvedInvocationV3 {
+fn fractional_wrap_invocation(request_len: usize) -> dclutch_vm::effect::v3::ResolvedInvocationV3 {
     dclutch_vm::effect::v3::ResolvedInvocationV3 {
         role: FixedRole::Claims,
         kind: dclutch_vm::effect::v3::RouteKindV3::Once,
@@ -481,8 +470,8 @@ fn fractional_wrap_invocation(
 fn only_exact_fractional_root_alias_may_cross_local_child_boundary() {
     let request = fractional_wrap_request();
     let invocation = fractional_wrap_invocation(request.len());
-    let logical_count = usize::from(invocation.fixed_account_start)
-        + usize::from(invocation.fixed_account_count);
+    let logical_count =
+        usize::from(invocation.fixed_account_start) + usize::from(invocation.fixed_account_count);
     let mut aliases = (0..logical_count).collect::<Vec<_>>();
     let root = usize::from(invocation.fixed_account_start)
         + dclutch_claims::fractional::FRACTIONAL_ATOMIC_ROOT_V3;
@@ -568,8 +557,7 @@ fn series_expiry_overlap_is_exactly_root_and_ticket_never_a_subset_or_superset()
         receipt_dependencies: dclutch_vm::effect::v3::ResolvedReceiptDependenciesV3::empty(),
         receipt_dependency: None,
     };
-    let mut aliases =
-        (0..series_expiry::SERIES_EXPIRE_LOGICAL_ACCOUNTS_V1).collect::<Vec<_>>();
+    let mut aliases = (0..series_expiry::SERIES_EXPIRE_LOGICAL_ACCOUNTS_V1).collect::<Vec<_>>();
     aliases[series_expiry::SERIES_EXPIRE_CORE_ROUTE_START_V1 + 14] = 0;
     aliases[series_expiry::SERIES_EXPIRE_CORE_ROUTE_START_V1 + 15] =
         series_expiry::SERIES_EXPIRE_TICKET_STATE_ACCOUNT_V1;
@@ -578,8 +566,7 @@ fn series_expiry_overlap_is_exactly_root_and_ticket_never_a_subset_or_superset()
         series_expiry::SERIES_EXPIRE_LOGICAL_ACCOUNTS_V1
     ];
     participation[0].mark_local_mutation();
-    participation[series_expiry::SERIES_EXPIRE_TICKET_STATE_ACCOUNT_V1]
-        .mark_local_mutation();
+    participation[series_expiry::SERIES_EXPIRE_TICKET_STATE_ACCOUNT_V1].mark_local_mutation();
     let exact = AllowedLocalOverlapV3::SeriesExpiryReplay { root: 0, ticket: 5 };
 
     record_child_reach_and_require_disjoint_from_local(
@@ -742,8 +729,7 @@ fn series_expiry_future_market_is_route_local_distinct_and_system_vacant() {
         false,
     );
     assert!(
-        require_series_expiry_future_market_vacancy_v1(&initialized, key, &controller,)
-            .is_err(),
+        require_series_expiry_future_market_vacancy_v1(&initialized, key, &controller,).is_err(),
         "System ownership alone is not vacancy",
     );
 
@@ -1312,8 +1298,7 @@ fn child_request_digest_helpers_pin_zero_range_and_range_topology() {
     let substituted = b"proog";
     assert_ne!(
         child_request_digest_v5(base, 1, |_| Some(proof.as_slice())).expect("proof"),
-        child_request_digest_v5(base, 1, |_| Some(substituted.as_slice()))
-            .expect("substitution")
+        child_request_digest_v5(base, 1, |_| Some(substituted.as_slice())).expect("substitution")
     );
     let first = b"pr";
     let second = b"oof";
@@ -1377,8 +1362,7 @@ fn borrowed_ranges_append_exactly_and_refuse_overlap_oob_without_mutation() {
         RequestCoordinateV4::Fixed(4),
         RequestCoordinateV4::Fixed(8),
     )];
-    let oob_bytes =
-        borrowed_range_effect_v4(BorrowedRangePolicyV4::DisjointExactCoverage, &oob);
+    let oob_bytes = borrowed_range_effect_v4(BorrowedRangePolicyV4::DisjointExactCoverage, &oob);
     let oob_program = ProgramV4::decode(&oob_bytes).expect("shape-decodable oob");
     assert_eq!(
         oob_program.validate_request_coverage(family_request.len(), 0, &[0], &[]),
@@ -1442,8 +1426,7 @@ fn authenticated_accelerator_inline_bank_is_exact_and_untruncated() {
     .map(AdmittedAcceleratorRequestV2::ChunkedBankV2)
     .expect("hostile request shape");
     assert!(
-        authenticate_accelerator_input_bank_v4(wrong_digest, &[], &Pubkey::new_unique())
-            .is_err()
+        authenticate_accelerator_input_bank_v4(wrong_digest, &[], &Pubkey::new_unique()).is_err()
     );
     assert!(
         decode_accelerator_register_bank_v4(
@@ -1478,12 +1461,7 @@ fn the_accelerator_top_level_frame_binds_every_fixed_meta_including_the_seal() {
     use solana_instructions_sysvar::construct_instructions_data;
     use solana_program::sysvar::instructions::{BorrowedAccountMeta, BorrowedInstruction};
 
-    fn info(
-        key: Pubkey,
-        owner: Pubkey,
-        executable: bool,
-        data: Vec<u8>,
-    ) -> AccountInfo<'static> {
+    fn info(key: Pubkey, owner: Pubkey, executable: bool, data: Vec<u8>) -> AccountInfo<'static> {
         // The accelerator frame is read-only by construction:
         // `parse_accelerator_readonly` refuses any signer or writable slot.
         AccountInfo::new(
@@ -1512,9 +1490,8 @@ fn the_accelerator_top_level_frame_binds_every_fixed_meta_including_the_seal() {
         HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
         sysvar::instructions::ID,
     );
-    let key_at = |keys: &[Pubkey], slot: usize| {
-        *keys.get(slot).expect("Hot fixed slot inside the frame")
-    };
+    let key_at =
+        |keys: &[Pubkey], slot: usize| *keys.get(slot).expect("Hot fixed slot inside the frame");
 
     let envelope = HotExecutionEnvelopeV3::new(
         1,
@@ -1719,9 +1696,8 @@ fn registry_continuation_authenticates_admission_and_market_union() {
     let mut keys = (0..=HOT_FIXED_ACCOUNT_COUNT_V3)
         .map(|_| Pubkey::new_unique())
         .collect::<Vec<_>>();
-    let key_at = |keys: &[Pubkey], slot: usize| {
-        *keys.get(slot).expect("Hot fixed slot inside the frame")
-    };
+    let key_at =
+        |keys: &[Pubkey], slot: usize| *keys.get(slot).expect("Hot fixed slot inside the frame");
     *keys
         .get_mut(HOT_TRADING_PROGRAM_ACCOUNT_V3)
         .expect("Hot fixed slot inside the frame") = program_id;
@@ -1757,8 +1733,7 @@ fn registry_continuation_authenticates_admission_and_market_union() {
     )
     .expect("continuation");
     let batch = continuation.role_batch_request().expect("batch");
-    let batch_digest =
-        ContentId::new(hash(&batch.to_bytes()).to_bytes()).expect("batch digest");
+    let batch_digest = ContentId::new(hash(&batch.to_bytes()).to_bytes()).expect("batch digest");
     let seeds = RegistryContinuationAdmissionSeedsV1::new(
         continuation,
         key_at(&keys, HOT_ACTIVATION_CACHE_ACCOUNT_V3).to_bytes(),
@@ -1891,9 +1866,7 @@ fn registry_continuation_authenticates_admission_and_market_union() {
         .try_borrow_mut_data()
         .expect("instructions data")
         .copy_from_slice(&substituted_instructions);
-    assert!(
-        authenticate_hot_invocation_v3(&program_id, &accounts, &hot_bytes, envelope).is_err()
-    );
+    assert!(authenticate_hot_invocation_v3(&program_id, &accounts, &hot_bytes, envelope).is_err());
     accounts
         .get(HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3)
         .expect("instructions sysvar slot inside the frame")
@@ -1905,9 +1878,7 @@ fn registry_continuation_authenticates_admission_and_market_union() {
         .get_mut(HOT_FIXED_ACCOUNT_COUNT_V3)
         .expect("admission slot inside the frame")
         .is_signer = false;
-    assert!(
-        authenticate_hot_invocation_v3(&program_id, &accounts, &hot_bytes, envelope).is_err()
-    );
+    assert!(authenticate_hot_invocation_v3(&program_id, &accounts, &hot_bytes, envelope).is_err());
 }
 
 #[test]
@@ -1916,10 +1887,9 @@ fn lifecycle_v5_quotes_are_derived_only_from_current_rent() {
         ACTION_PLAN_BYTES, CURRENT_RENT_QUOTE_BYTES_V5, HEADER_BYTES, PROTECTED_OUTPUT_BYTES,
         RECIPE_BYTES, SEED_BYTES,
         encode::{
-            LifecycleAccountCoordinateV3, LifecycleCurrentRentQuoteInputV5,
-            LifecycleGuardInputV3, LifecycleOperationInputV3, LifecyclePlanInputV3,
-            LifecycleRecipeInputV3, LifecycleRefundSourceInputV3, LifecycleSeedInputV3,
-            encode_lifecycle_policy_v5_atomic,
+            LifecycleAccountCoordinateV3, LifecycleCurrentRentQuoteInputV5, LifecycleGuardInputV3,
+            LifecycleOperationInputV3, LifecyclePlanInputV3, LifecycleRecipeInputV3,
+            LifecycleRefundSourceInputV3, LifecycleSeedInputV3, encode_lifecycle_policy_v5_atomic,
         },
     };
 
@@ -2095,8 +2065,7 @@ fn profile13_zero_spans_expand_aliases_and_downgrade_child_privileges() {
 
     let declared =
         child_route_privileges_v3(profile, 0, &[], &logical).expect("declared privileges");
-    let child =
-        downgraded_effect_accounts_v3(&logical, &declared).expect("downgrade route views");
+    let child = downgraded_effect_accounts_v3(&logical, &declared).expect("downgrade route views");
     // Coordinate 6 is an authenticated route alias of the writable
     // representative 4. An alias is emitted privilege-free, so it states
     // nothing at all, and a child CPI meta built from the alias would hand
@@ -3429,11 +3398,7 @@ fn lifecycle_immutable_binding_requires_one_exact_typed_write() {
     );
 }
 
-fn preplanned_invocation(
-    state: usize,
-    seed: u8,
-    canonical: u8,
-) -> PreparedLifecycleInvocationV3 {
+fn preplanned_invocation(state: usize, seed: u8, canonical: u8) -> PreparedLifecycleInvocationV3 {
     PreparedLifecycleInvocationV3 {
         plan: StateLifecyclePlanV3::Authenticate(AuthenticateStatePlanV3 {
             state: [seed; 32],
@@ -3681,9 +3646,8 @@ fn a_replan_that_skips_a_seed_or_a_binding_refuses() {
     let mut seeds = LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
     seeds.push(&[0x11, 0x11]).expect("first seed agrees");
     seeds.push(&[254]).expect("bump agrees");
-    let bindings =
-        LifecycleBindingsV4::new(Some(prior.immutable_identity_bindings.as_slice()), 1)
-            .expect("verify");
+    let bindings = LifecycleBindingsV4::new(Some(prior.immutable_identity_bindings.as_slice()), 1)
+        .expect("verify");
     assert!(
         sink.admit(prior.plan, 1, None, None, seeds, bindings)
             .is_err()
@@ -3980,9 +3944,8 @@ fn projected_product_tail_count_is_rechecked_after_atomic_account_projection() {
         destination: ScalarCoordinateV2::common(0),
         data_offset: 0,
     }];
-    let bytes = ACCOUNT_PROFILE_HEADER_BYTES
-        + ACCOUNT_PROFILE_RULE_BYTES
-        + ACCOUNT_PROFILE_OPERATION_BYTES;
+    let bytes =
+        ACCOUNT_PROFILE_HEADER_BYTES + ACCOUNT_PROFILE_RULE_BYTES + ACCOUNT_PROFILE_OPERATION_BYTES;
     let mut scratch = vec![0_u8; bytes];
     let mut encoded = vec![0_u8; bytes];
     encode_account_profile_v2_atomic(
@@ -4096,11 +4059,7 @@ fn admitted_runtime_follows_the_authority_vector_and_the_output_page() {
     assert!(hot_admitted_runtime_accounts_start_v3(OutputPageV3, 0, 0).is_err());
 }
 
-fn leaked_readonly_account(
-    key: [u8; 32],
-    owner: [u8; 32],
-    data: Vec<u8>,
-) -> AccountInfo<'static> {
+fn leaked_readonly_account(key: [u8; 32], owner: [u8; 32], data: Vec<u8>) -> AccountInfo<'static> {
     leaked_account_with_facts(key, owner, 1_000, data, false)
 }
 
@@ -4155,8 +4114,7 @@ fn test_runtime_transcript(
                 .expect("canonical coordinate")
         })
         .collect::<Vec<_>>();
-    runtime_transcript_digest_v3(&observations, &borrowed, &canonical)
-        .expect("runtime transcript")
+    runtime_transcript_digest_v3(&observations, &borrowed, &canonical).expect("runtime transcript")
 }
 
 #[test]

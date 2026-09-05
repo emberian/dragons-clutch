@@ -39,6 +39,10 @@ use dclutch_operator::{
 use dclutch_registry::activation_auth_v1::{
     activation_cache_address_v1, release_lineage_address_and_bump_v1,
 };
+use dclutch_registry::release_set::{
+    ArtifactReleaseIdV1, EXECUTION_ROLE_ORDER_V1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
+    ExecutionRoleV1, ProgramIdentityV1,
+};
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ArtifactActivationInputV1, ArtifactReleaseV1,
     ArtifactUpgradePolicyV1, DeploymentObservationV1, LineageAt, RELEASE_LINEAGE_BYTES_V1,
@@ -46,10 +50,6 @@ use dclutch_registry::{
     put_activation_cache_bump_v1, walk_lineage_to, walk_lineage_to_head,
 };
 use dclutch_registry_sbf::RegistryError;
-use dclutch_registry::release_set::{
-    ArtifactReleaseIdV1, EXECUTION_ROLE_ORDER_V1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
-    ExecutionRoleV1, ProgramIdentityV1,
-};
 use solana_account::Account;
 use solana_program_test::{ProgramTest, ProgramTestContext};
 use solana_sdk::{

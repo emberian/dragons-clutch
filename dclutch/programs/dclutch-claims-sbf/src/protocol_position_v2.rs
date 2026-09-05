@@ -30,9 +30,9 @@ use dclutch_claims::{
         SPARSE_NATIVE_TRANSFER_RECEIPT_BYTES_V1, SparseNativeTransferReceiptV1,
     },
 };
+use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
 use dclutch_product::svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV3};
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},

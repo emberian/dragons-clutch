@@ -36,8 +36,8 @@ fn generated_descriptor_is_exact() {
         String::from_utf8_lossy(&generated.stdout),
         String::from_utf8_lossy(&generated.stderr)
     );
-    let checked_in =
-        std::fs::read(manifest.join("src/rational_kernel/generated_descriptor.rs")).expect("read generated ABI");
+    let checked_in = std::fs::read(manifest.join("src/rational_kernel/generated_descriptor.rs"))
+        .expect("read generated ABI");
     // Normalise before comparing, as the other guards in this tree do: a raw
     // compare holds `committed == emission` and reds the first time anyone runs
     // `tools/lane.sh fmt` on a `do not edit` file, because a direct rustfmt never

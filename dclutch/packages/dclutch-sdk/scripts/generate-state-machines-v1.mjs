@@ -14,8 +14,7 @@
 // record at Lean-emitted offsets AND names its wire tags in the same emission,
 // and this file reads that emission for both (`generated_successor.rs`,
 // `generated_source_resolution_state_v2.rs`, `generated_abi.rs`,
-// `generated_dealer_*.rs`, `generated_scenario_checkpoint_v1.rs`,
-// `generated_scenario_reservation_state_v1.rs`,
+// `generated_dealer_*.rs`,
 // `generated_projected_state_v2.rs`, `generated_ticket_state_v3.rs`) and never
 // the hand-written mirror beside it. That is new twice over: until the
 // LEAN-TAGS lane FOUR of the eight had no Lean module at all, and until
@@ -56,10 +55,6 @@ const sources = Object.freeze({
   dealerLib: readFileSync(new URL('crates/dclutch-trading/src/dealer/mod.rs', root), 'utf8'),
   dealerLiquidityGenerated: readFileSync(new URL('crates/dclutch-trading/src/dealer/generated_dealer_liquidity.rs', root), 'utf8'),
   dealerProfileGenerated: readFileSync(new URL('crates/dclutch-trading/src/dealer/generated_dealer_trading_profile.rs', root), 'utf8'),
-  dealerCheckpoint: readFileSync(new URL('crates/dclutch-trading/src/dealer/scenario_checkpoint_v1.rs', root), 'utf8'),
-  dealerCheckpointGenerated: readFileSync(new URL('crates/dclutch-trading/src/dealer/generated_scenario_checkpoint_v1.rs', root), 'utf8'),
-  dealerReservation: readFileSync(new URL('crates/dclutch-trading/src/dealer/scenario_custody_reservation_v1.rs', root), 'utf8'),
-  dealerReservationGenerated: readFileSync(new URL('crates/dclutch-trading/src/dealer/generated_scenario_reservation_state_v1.rs', root), 'utf8'),
 
   projectedCustody: readFileSync(new URL('crates/dclutch-custody/src/projected.rs', root), 'utf8'),
   projectedCustodyGenerated: readFileSync(new URL('crates/dclutch-custody/src/generated_projected_state_v2.rs', root), 'utf8'),
@@ -294,64 +289,6 @@ const machines = [
     declared: declaredDiscriminants('dealerLib', 'Phase'),
     variants: declaredVariants('dealerLib', 'Phase'),
     authority: 'crates/dclutch-trading/src/dealer/{lib,generated_dealer_liquidity,generated_dealer_trading_profile}.rs',
-  },
-  {
-    label: 'dealer-checkpoint',
-    record: 'DealerScenarioCheckpointV1',
-    magic: magic('dealerCheckpointGenerated', 'DEALER_SCENARIO_CHECKPOINT_MAGIC_V1'),
-    bytes: scalar('dealerCheckpointGenerated', 'DEALER_SCENARIO_CHECKPOINT_BYTES_V1'),
-    header: [[
-      scalar('dealerCheckpointGenerated', 'DEALER_SCENARIO_CHECKPOINT_VERSION_OFFSET_V1'),
-      scalar('dealerCheckpointGenerated', 'DEALER_SCENARIO_CHECKPOINT_VERSION_V1'),
-    ]],
-    tagOffset: scalar('dealerCheckpointGenerated', 'DEALER_SCENARIO_CHECKPOINT_PHASE_OFFSET_V1'),
-    rowBytes: null,
-    headerBytes: null,
-    counters: [],
-    pdaDomain: null,
-    discriminant: 'DealerScenarioCheckpointPhaseV1',
-    states: decodedTags(
-      block('dealerCheckpoint', 'impl DealerScenarioCheckpointPhaseV1 {'),
-      emittedTag('dealerCheckpointGenerated'),
-    ),
-    declared: declaredDiscriminants(
-      'dealerCheckpoint',
-      'DealerScenarioCheckpointPhaseV1',
-      emittedTag('dealerCheckpointGenerated'),
-    ),
-    variants: declaredVariants('dealerCheckpoint', 'DealerScenarioCheckpointPhaseV1'),
-    authority: 'crates/dclutch-trading/src/dealer/{scenario_checkpoint_v1,generated_scenario_checkpoint_v1}.rs',
-  },
-  {
-    label: 'dealer-reservation',
-    record: 'DealerScenarioReservationStateV1',
-    magic: magic('dealerReservationGenerated', 'DEALER_SCENARIO_RESERVATION_STATE_MAGIC_V1'),
-    bytes: scalar('dealerReservationGenerated', 'DEALER_SCENARIO_RESERVATION_STATE_BYTES_V1'),
-    // This record's OWN version coordinate, not the four-record family header
-    // constant that used to be read here. `VERSION_OFFSET` and `TAG_OFFSET` are
-    // the spelling four records in that file share, and the regex that found
-    // them takes the first.
-    header: [[
-      scalar('dealerReservationGenerated', 'DEALER_SCENARIO_RESERVATION_STATE_VERSION_OFFSET_V1'),
-      scalar('dealerReservationGenerated', 'DEALER_SCENARIO_CUSTODY_STATE_VERSION_V1'),
-    ]],
-    tagOffset: scalar('dealerReservationGenerated', 'DEALER_SCENARIO_RESERVATION_STATE_STATUS_OFFSET_V1'),
-    rowBytes: null,
-    headerBytes: null,
-    counters: [],
-    pdaDomain: null,
-    discriminant: 'DealerScenarioReservationStateStatusV1',
-    states: decodedTags(
-      block('dealerReservation', 'impl DealerScenarioReservationStateStatusV1 {'),
-      emittedTag('dealerReservationGenerated'),
-    ),
-    declared: declaredDiscriminants(
-      'dealerReservation',
-      'DealerScenarioReservationStateStatusV1',
-      emittedTag('dealerReservationGenerated'),
-    ),
-    variants: declaredVariants('dealerReservation', 'DealerScenarioReservationStateStatusV1'),
-    authority: 'crates/dclutch-trading/src/dealer/{scenario_custody_reservation_v1,generated_scenario_reservation_state_v1}.rs',
   },
   {
     label: 'projected-custody',

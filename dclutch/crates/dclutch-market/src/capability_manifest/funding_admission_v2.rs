@@ -52,7 +52,8 @@ use crate::capability_manifest::funding::FundingLedgerStatusV2;
 
 /// Number of distinct `FundingLedgerStatusV2` values, from the emission
 /// rather than typed a second time beside it.
-const STATE_COUNT: u8 = crate::capability_manifest::generated_abi::CAPABILITY_FUNDING_LEDGER_STATUS_LIMIT_V2;
+const STATE_COUNT: u8 =
+    crate::capability_manifest::generated_abi::CAPABILITY_FUNDING_LEDGER_STATUS_LIMIT_V2;
 
 /// The wire tag of one slot status, as a bit index.
 const fn state_tag(state: FundingLedgerStatusV2) -> u8 {

@@ -2,33 +2,18 @@
 
 #![allow(clippy::indexing_slicing)]
 
-use dclutch_vm::account_profile::lifecycle_v3::{
-    HEADER_BYTES as LIFECYCLE_POLICY_BYTES_V5, encode::encode_lifecycle_policy_v5_atomic,
-};
-use dclutch_market::capability_program::hot_v3::{
-    HOT_CONFIG_RAW_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
-    HOT_MARKET_ACCOUNT_V3, HOT_RENT_SYSVAR_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3,
-    HOT_TRADING_PROGRAM_ACCOUNT_V3,
-};
-use dclutch_product::payoff::{
-    registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
-    runtime_v3::{
-        BasisInputV3, BasisKindV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, basis_record_bytes_v3,
-        compile_basis_v3, semantic_basis_preimage_v3,
-    },
-};
-use dclutch_product::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
-use dclutch_product::admission::{
-    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2,
-    RESULT_DOMAIN_SCHEMA_ID_V2,
-};
-use dclutch_product_runtime_v2_operator::{ProductCompilationInputV2, compile_product_records_v2};
-use dclutch_operator::rational_lifecycle_hot::{
-    CheckedRationalLifecycleHotOuterV3, RationalLifecycleHotStateV3,
-    RationalLifecycleSelectedAccountProfileInputV5, RationalLifecycleSelectedBundleInputV5,
-    RationalLifecycleSelectedBundleInputV6, RationalLifecycleSelectedSelectionV5,
-    RationalLifecycleSelectedSelectionV6, build_rational_lifecycle_selected_bundle_v5,
-    build_rational_lifecycle_selected_bundle_v6, lifecycle_logical_account_count_v3,
+use dclutch_claims::composition::{
+    COMPOSITION_DESCRIPTOR_BYTES_V3, COMPOSITION_DESCRIPTOR_SCHEMA_ID_V3,
+    COMPOSITION_EXPOSURE_HEADER_BYTES_V3, COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
+    COMPOSITION_GRAPH_HEADER_BYTES_V3, COMPOSITION_GRAPH_SCHEMA_ID_V3, COMPOSITION_NODE_BYTES_V3,
+    COMPOSITION_TRANSLATION_SCHEMA_ID_V3, CanonicalTranslationInputV3,
+    CompositionDescriptorInputV3, CompositionEdgeInputV3, CompositionExposureInputV3,
+    CompositionExposureLayoutV3, CompositionExposureRowInputV3, CompositionExposureRowLayoutV3,
+    CompositionExposureTermV3, CompositionGraphInputV3, CompositionNodeInputV3,
+    CompositionNodeKindV3, DescriptorLayoutV3, EdgeLayoutV3, SparseTermV3,
+    composition_exposure_bytes_v3, composition_graph_bytes_v3, composition_translation_bytes_v3,
+    encode_canonical_translation_v3_atomic, encode_composition_descriptor_v3_atomic,
+    encode_composition_exposure_v3_atomic, encode_composition_graph_v3_atomic,
 };
 use dclutch_claims::rational::{
     AuthenticatedTokenBehaviorV2, TokenBehaviorRecordAdmissionV2, authenticate_token_behavior_v2,
@@ -44,19 +29,21 @@ use dclutch_claims::rational_kernel::{
 use dclutch_claims::rational_lifecycle::{
     LIFECYCLE_COMMON_ACCOUNT_COUNT_V2, LifecycleActionV2, LifecycleHeaderV2,
 };
-use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_claims::composition::{
-    COMPOSITION_DESCRIPTOR_BYTES_V3, COMPOSITION_DESCRIPTOR_SCHEMA_ID_V3,
-    COMPOSITION_EXPOSURE_HEADER_BYTES_V3, COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
-    COMPOSITION_GRAPH_HEADER_BYTES_V3, COMPOSITION_GRAPH_SCHEMA_ID_V3, COMPOSITION_NODE_BYTES_V3,
-    COMPOSITION_TRANSLATION_SCHEMA_ID_V3, CanonicalTranslationInputV3,
-    CompositionDescriptorInputV3, CompositionEdgeInputV3, CompositionExposureInputV3,
-    CompositionExposureLayoutV3, CompositionExposureRowInputV3, CompositionExposureRowLayoutV3,
-    CompositionExposureTermV3, CompositionGraphInputV3, CompositionNodeInputV3,
-    CompositionNodeKindV3, DescriptorLayoutV3, EdgeLayoutV3, SparseTermV3,
-    composition_exposure_bytes_v3, composition_graph_bytes_v3, composition_translation_bytes_v3,
-    encode_canonical_translation_v3_atomic, encode_composition_descriptor_v3_atomic,
-    encode_composition_exposure_v3_atomic, encode_composition_graph_v3_atomic,
+use dclutch_custody::token_svm::{
+    TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_BYTES_V2,
+    TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, TokenBehaviorSelectionV2,
+};
+use dclutch_market::capability_program::hot_v3::{
+    HOT_CONFIG_RAW_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
+    HOT_MARKET_ACCOUNT_V3, HOT_RENT_SYSVAR_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3,
+    HOT_TRADING_PROGRAM_ACCOUNT_V3,
+};
+use dclutch_operator::rational_lifecycle_hot::{
+    CheckedRationalLifecycleHotOuterV3, RationalLifecycleHotStateV3,
+    RationalLifecycleSelectedAccountProfileInputV5, RationalLifecycleSelectedBundleInputV5,
+    RationalLifecycleSelectedBundleInputV6, RationalLifecycleSelectedSelectionV5,
+    RationalLifecycleSelectedSelectionV6, build_rational_lifecycle_selected_bundle_v5,
+    build_rational_lifecycle_selected_bundle_v6, lifecycle_logical_account_count_v3,
 };
 use dclutch_operator::representation_composition::{
     ClaimsLifecyclePlanV3, CompositionChainObservationV3, CompositionOnlyChainObservationV3,
@@ -68,11 +55,24 @@ use dclutch_operator::representation_composition::{
     hot_v3::build_composition_lifecycle_hot_plan_v3,
     hot_v6::build_composition_lifecycle_hot_plan_v6, validate_publication_candidates_v3,
 };
-use dclutch_custody::token_svm::{
-    TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_BYTES_V2,
-    TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, TokenBehaviorSelectionV2,
+use dclutch_product::admission::{
+    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2,
+    RESULT_DOMAIN_SCHEMA_ID_V2,
 };
+use dclutch_product::payoff::{
+    registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+    runtime_v3::{
+        BasisInputV3, BasisKindV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, basis_record_bytes_v3,
+        compile_basis_v3, semantic_basis_preimage_v3,
+    },
+};
+use dclutch_product::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
+use dclutch_product_runtime_v2_operator::{ProductCompilationInputV2, compile_product_records_v2};
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_versioned_message_operator::{Finality, Observation, ObservedAccount};
+use dclutch_vm::account_profile::lifecycle_v3::{
+    HEADER_BYTES as LIFECYCLE_POLICY_BYTES_V5, encode::encode_lifecycle_policy_v5_atomic,
+};
 use solana_address_lookup_table_interface::{
     program as address_lookup_program,
     state::{AddressLookupTable, LookupTableMeta},

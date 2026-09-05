@@ -1,5 +1,15 @@
 //! Exact logical AccountProfile for one lifecycle action/support geometry.
 
+#[cfg(test)]
+use dclutch_claims::rational_kernel::{DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES};
+use dclutch_claims::rational_lifecycle::LifecycleActionV2;
+#[cfg(test)]
+use dclutch_claims::rational_lifecycle::hot_v3::{
+    RATIONAL_LIFECYCLE_SCALAR_COORDINATE_COUNT_V3,
+    RATIONAL_LIFECYCLE_SCALAR_PRODUCT_OUTCOME_COUNT_V3, RationalLifecycleHotRegisterLayoutV3,
+};
+#[cfg(test)]
+use dclutch_product::payoff::runtime_v3::{BASIS_WIDTH_OFFSET_V3, ProductBasisV3};
 use dclutch_vm::account_profile::v2::encode::{
     AccountAliasInputV2, AccountEffectPermissionsV2, AccountPrivilegesV2, AccountRuleInputV2,
 };
@@ -14,18 +24,6 @@ use dclutch_vm::account_profile::v2::{
         encode_account_profile_v2_atomic,
         encode_account_profile_with_nonzero_u64_tail_count_v2_atomic,
     },
-};
-#[cfg(test)]
-use dclutch_product::payoff::runtime_v3::{BASIS_WIDTH_OFFSET_V3, ProductBasisV3};
-#[cfg(test)]
-use dclutch_claims::rational_kernel::{
-    DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES,
-};
-use dclutch_claims::rational_lifecycle::LifecycleActionV2;
-#[cfg(test)]
-use dclutch_claims::rational_lifecycle::hot_v3::{
-    RATIONAL_LIFECYCLE_SCALAR_COORDINATE_COUNT_V3,
-    RATIONAL_LIFECYCLE_SCALAR_PRODUCT_OUTCOME_COUNT_V3, RationalLifecycleHotRegisterLayoutV3,
 };
 
 use crate::rational_lifecycle_hot::{Error, Result};

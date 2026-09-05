@@ -4,7 +4,7 @@
 # THE TEST LIST IS DISCOVERED, NOT WRITTEN DOWN. Until 2026-08-30 this script
 # named three targets while `tests/` held five, so `capability_close_alias`
 # and `retirement_replay_handoff` were run by nothing at all -- not here, not
-# by `tools/ci/run.sh`, not by the gauntlet. A hand-maintained list is exactly
+# by `tools/gate`, not by the gauntlet. A hand-maintained list is exactly
 # the value-duplicated-instead-of-read defect that leaves a target unrun for
 # as long as nobody counts the directory. An unrun gate is not a passing gate:
 # `67e96e5b` found `open_market_program_test` submitting a frame that had been

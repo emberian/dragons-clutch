@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 // SiteLanding.opened.test.tsx, renders the same page with a market named.
 
 vi.mock('@dclutch/sdk/publicCutStaging', async () => {
-  const actual = await vi.importActual<typeof import('@dclutch/sdk/publicCutStaging')>('@/lib/publicCutStaging');
+  const actual = await vi.importActual<typeof import('@dclutch/sdk/publicCutStaging')>('@dclutch/sdk/publicCutStaging');
   const cut = actual.parsePublicDevnetCutV1({
     schema: 'dclutch-public-cut-v1',
     cluster: 'devnet',

@@ -10,8 +10,8 @@
 //! the register bank, a window-gated bank carries `Clock::get().slot`, and an
 //! address that moves every slot cannot be named in a signed account list.
 
-use dclutch_market::capability_program::v4::CapabilityProgramV4;
 use dclutch_core_contract::ContentId;
+use dclutch_market::capability_program::v4::CapabilityProgramV4;
 use dclutch_market::execution_strategy::{
     encode_register_bank_into,
     shadow_digest_v3::{AcceleratorCallerKindV1, accelerator_caller_authority_digest_v1},
@@ -24,12 +24,12 @@ use dclutch_market::execution_strategy::{
         validate_admitted_aot_v4,
     },
 };
+use dclutch_registry::release_set::{ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_registry::{
     ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1, DeploymentObservationV1,
     require_slot_pinned_release_v1,
 };
-use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
-use dclutch_registry::release_set::{ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionRoleV1};
 use sha2::{Digest, Sha256};
 use solana_program::{hash::hash, pubkey::Pubkey};
 use solana_sdk_ids::bpf_loader_upgradeable;

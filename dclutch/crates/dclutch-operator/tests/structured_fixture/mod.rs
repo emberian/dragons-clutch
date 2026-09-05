@@ -31,10 +31,10 @@ use dclutch_claims::structured_kernel::{
     StructuredTermsInputV2, StructuredTermsV2, encode_structured_terms_v2,
     structured_terms_bytes_v2,
 };
+use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
 use dclutch_operator::structured::{
     StructuredRepresentationDescriptorV2, derive_structured_representation_descriptor_v2,
 };
-use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
 
 use crate::support::{digest, identity, shard_mints, shard_terms, structured_admission};
 

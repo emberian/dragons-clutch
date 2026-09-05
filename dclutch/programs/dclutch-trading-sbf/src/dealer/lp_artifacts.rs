@@ -41,11 +41,11 @@ use dclutch_vm::account_profile::{
 };
 
 use super::{
+    lp_request::MultiLpRequestActionV3,
     multi_lp::{
         DEALER_LP_POSITION_MAGIC_V3, DEALER_LP_POSITION_PDA_DOMAIN_V3,
         DEALER_LP_POSITION_VERSION_V3,
     },
-    lp_request::MultiLpRequestActionV3,
 };
 
 #[cfg(not(target_os = "solana"))]

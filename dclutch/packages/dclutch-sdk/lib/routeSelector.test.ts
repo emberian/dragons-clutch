@@ -60,6 +60,10 @@ describe('the leading-byte derivation is the census’s own table', () => {
   });
 });
 
+function magicOf(routeId: string): string {
+  return INSTRUCTION_MAGICS.find((entry) => entry.routeId === routeId)?.magic ?? '';
+}
+
 describe('what the derivation refuses to answer', () => {
   it('reads Core’s request magic as the whole Action candidate set', () => {
     // `DCLTCRQ2` is the magic every Core `Action` instruction starts with, and
@@ -101,8 +105,12 @@ describe('what the derivation refuses to answer', () => {
     for (const arm of UNRESOLVED_PREDICATE_ARMS_V1) {
       expect(arm.reason.length).toBeGreaterThan(20);
       // Every one of them is a real route the census enumerates, so none may
-      // be silently absent from the leading-byte table without a reason.
-      expect(LEADING_BYTE_SELECTED_ROUTES_V1.some((entry) => entry.routeId === arm.routeId)).toBe(false);
+      // be silently absent from the leading-byte table without a reason. A
+      // route the magic table ALSO selects (the generic founding's two, since
+      // 2026-09-04: a magic arm and a stage predicate in one dispatch) is not
+      // absent; it is selected by its magic and refined by its predicate.
+      const magicSelected = censusRoutesForMagicV1(arm.program, magicOf(arm.routeId)).some((one) => one.routeId === arm.routeId);
+      if (!magicSelected) expect(LEADING_BYTE_SELECTED_ROUTES_V1.some((entry) => entry.routeId === arm.routeId)).toBe(false);
     }
   });
 

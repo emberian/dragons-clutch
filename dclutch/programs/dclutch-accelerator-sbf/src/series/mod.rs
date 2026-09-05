@@ -15,10 +15,6 @@ pub mod release;
 
 use alloc::vec::Vec;
 
-use dclutch_vm::account_profile::{
-    AccountObservationV1,
-    v2::{AccountPrestateV2, AccountProfileV2},
-};
 use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
 use dclutch_market::execution_strategy::{
     shadow_digest_v3::ShadowRuntimeObservationV3,
@@ -39,6 +35,10 @@ use dclutch_trading::series::{
 };
 use dclutch_trading::shadow_accelerator_auth::{
     AuthenticatedShadowAcceleratorInvocationV4, authenticate_shadow_accelerator_invocation_v4,
+};
+use dclutch_vm::account_profile::{
+    AccountObservationV1,
+    v2::{AccountPrestateV2, AccountProfileV2},
 };
 use solana_program::{
     account_info::AccountInfo, clock::Clock, entrypoint::ProgramResult, hash::hash,

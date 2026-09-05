@@ -38,7 +38,8 @@ pub const ADVANCE_RECOVERY_INSTRUCTION_BYTES: usize = 32;
 pub const CONSUME_RECORD_PREFIX_BYTES: usize = 112;
 /// Wire width of one inline account-set entry, identical to its contribution to
 /// the `account_set_id` preimage so the adapter re-derives rather than re-parses.
-pub const CONSUME_RECORD_ENTRY_BYTES: usize = crate::relay::release::ACCOUNT_SET_ENTRY_PREIMAGE_BYTES;
+pub const CONSUME_RECORD_ENTRY_BYTES: usize =
+    crate::relay::release::ACCOUNT_SET_ENTRY_PREIMAGE_BYTES;
 
 const ACTION_OFFSET: usize = 10;
 const HEADER_RESERVED_OFFSET: usize = 11;

@@ -1,19 +1,5 @@
 //! Generic Hot EffectProgram specialization for terminal Bearer redemption.
 
-use dclutch_vm::effect::{
-    v2::FixedRole,
-    v3::{
-        HEADER_BYTES as EFFECT_HEADER_BYTES, OPERATION_BYTES as EFFECT_OPERATION_BYTES,
-        ROUTE_BYTES as EFFECT_ROUTE_BYTES, RouteKindV3,
-        encode::{
-            EffectGeometryV3, EffectInstructionV3, IdentityCoordinateV3, RequestSpaceV3,
-            RouteInputV3, ScalarCoordinateV3, encode_effect_program_v3_atomic,
-        },
-    },
-    v4::{
-        BorrowedRangePolicyV4, HEADER_BYTES_V4 as EFFECT_V4_HEADER_BYTES, encode_program_v4_atomic,
-    },
-};
 use dclutch_claims::rational::{
     CallerRoleV2, PHYSICAL_ABI_VERSION_V3, RATIONAL_TERMINAL_HOT_ACTION_OFFSET_V3,
     RATIONAL_TERMINAL_HOT_ACTOR_OFFSET_V3,
@@ -55,6 +41,20 @@ use dclutch_claims::rational::{
     RATIONAL_TERMINAL_SCALAR_SELECTED_OUTCOME_V3, RATIONAL_TERMINAL_SCALAR_SHARD_SUPPLY_V3,
     RATIONAL_TERMINAL_SCALAR_STRUCTURED_SHARDS_V3, REPRESENTATION_FRAME_SPEC_V2, REQUEST_MAGIC_V2,
     RepresentationActionV2,
+};
+use dclutch_vm::effect::{
+    v2::FixedRole,
+    v3::{
+        HEADER_BYTES as EFFECT_HEADER_BYTES, OPERATION_BYTES as EFFECT_OPERATION_BYTES,
+        ROUTE_BYTES as EFFECT_ROUTE_BYTES, RouteKindV3,
+        encode::{
+            EffectGeometryV3, EffectInstructionV3, IdentityCoordinateV3, RequestSpaceV3,
+            RouteInputV3, ScalarCoordinateV3, encode_effect_program_v3_atomic,
+        },
+    },
+    v4::{
+        BorrowedRangePolicyV4, HEADER_BYTES_V4 as EFFECT_V4_HEADER_BYTES, encode_program_v4_atomic,
+    },
 };
 
 use crate::bearer::{Error, Result, hot_account_profile_v3::TERMINAL_ASSET_ROWS_V3};
@@ -357,15 +357,15 @@ fn put(output: &mut [u8], offset: usize, value: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dclutch_claims::rational::{
+        RATIONAL_TERMINAL_SCALAR_PRODUCT_OUTCOME_COUNT_V3, RepresentationRequestV2,
+    };
+    use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
     use dclutch_vm::effect::{
         v2::{AccountInput, AccountPermission},
         v3::{ProjectionV3, project_atomic},
         v4::ProgramV4,
     };
-    use dclutch_claims::rational::{
-        RATIONAL_TERMINAL_SCALAR_PRODUCT_OUTCOME_COUNT_V3, RepresentationRequestV2,
-    };
-    use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
 
     fn id(value: u8) -> [u8; 32] {
         [value; 32]

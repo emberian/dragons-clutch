@@ -26,16 +26,16 @@
 use core::convert::TryFrom;
 
 use dclutch_registry::activation_auth_v1::release_lineage_address_and_bump_v1;
-use dclutch_registry::{
-    ActivatedExecutionReleaseSetViewV1, IDENTITY_BYTES, RELEASE_LINEAGE_BYTES_V1,
-    RELEASE_LINEAGE_PDA_DOMAIN_V1, ReleaseLineageV1,
+use dclutch_registry::release_set::{
+    EXECUTION_ROLE_COUNT_V1, EXECUTION_ROLE_ORDER_V1, ExecutionRoleV1,
 };
 use dclutch_registry::svm::lineage_v1::{
     DECLARE_SUCCESSOR_ACCOUNT_COUNT_V1, DECLARE_SUCCESSOR_AUTHORITY_BASE_ACCOUNT_V1,
     DeclareSuccessorV1,
 };
-use dclutch_registry::release_set::{
-    EXECUTION_ROLE_COUNT_V1, EXECUTION_ROLE_ORDER_V1, ExecutionRoleV1,
+use dclutch_registry::{
+    ActivatedExecutionReleaseSetViewV1, IDENTITY_BYTES, RELEASE_LINEAGE_BYTES_V1,
+    RELEASE_LINEAGE_PDA_DOMAIN_V1, ReleaseLineageV1,
 };
 use solana_program::{
     account_info::AccountInfo, entrypoint::ProgramResult, program::invoke_signed,

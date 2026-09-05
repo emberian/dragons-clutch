@@ -5,22 +5,6 @@
 //! and ProductBasis records. Claims and Custody remain the sole owners of their
 //! account frames and state layouts.
 
-use dclutch_vm::account_profile::v2::{
-    AccountPrestateV2, AccountProfileV2, FIXED_DATA_PREDICATE_BYTES,
-    FIXED_DATA_PREDICATE_HEADER_BYTES, OPERATION_BYTES, RULE_BYTES, TrustedBuiltinIdentityV2,
-    TrustedEnvironmentV2, TrustedIdentityEnvironmentV2,
-    encode::{
-        AccountAliasInputV2, AccountCoordinateV2, AccountEffectPermissionsV2,
-        AccountOperationInputV2, AccountPrivilegesV2, AccountRuleInputV2,
-        AccountRuleWithPrestateInputV2, FixedDataPredicateInputV2, IdentityCoordinateV2,
-        RegisterGeometryV2, ScalarCoordinateV2,
-        encode_account_profile_with_fixed_data_predicates_v2_atomic,
-    },
-};
-use dclutch_market::capability_program::{
-    CAPABILITY_ROOT_GENERATION_OFFSET, CAPABILITY_ROOT_HEADER_BYTES_V1,
-    CAPABILITY_ROOT_MARKET_OFFSET, CAPABILITY_ROOT_RELEASE_SET_OFFSET,
-};
 use dclutch_claims::{
     frame_spec_v1::{
         ClaimsFrameDataV1, ClaimsFrameRoleV1, SPARSE_NATIVE_TRANSFER_ACCOUNT_COUNT_V1,
@@ -36,16 +20,32 @@ use dclutch_custody::{
     TRANSFER_ACCOUNT_COUNT_V1,
 };
 use dclutch_market::STATE_BYTES as CORE_STATE_BYTES;
+use dclutch_market::capability_program::{
+    CAPABILITY_ROOT_GENERATION_OFFSET, CAPABILITY_ROOT_HEADER_BYTES_V1,
+    CAPABILITY_ROOT_MARKET_OFFSET, CAPABILITY_ROOT_RELEASE_SET_OFFSET,
+};
+use dclutch_market::realm::{REALM_BYTES, RealmLayoutV1};
+use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
+use dclutch_product::admission::PRODUCT_RECORD_BYTES_V2;
 use dclutch_product::payoff::runtime_v3::BASIS_WIDTH_OFFSET_V3;
 use dclutch_product::{
     DOMAIN_CUT_BYTES, PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_HEADER_BYTES,
     PORTFOLIO_LIABILITY_BASIS_ID_OFFSET,
 };
-use dclutch_product::admission::PRODUCT_RECORD_BYTES_V2;
-use dclutch_market::realm::{REALM_BYTES, RealmLayoutV1};
 use dclutch_registry::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
 use dclutch_registry::svm::LOADER_V3_PROGRAM_BYTES;
-use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
+use dclutch_vm::account_profile::v2::{
+    AccountPrestateV2, AccountProfileV2, FIXED_DATA_PREDICATE_BYTES,
+    FIXED_DATA_PREDICATE_HEADER_BYTES, OPERATION_BYTES, RULE_BYTES, TrustedBuiltinIdentityV2,
+    TrustedEnvironmentV2, TrustedIdentityEnvironmentV2,
+    encode::{
+        AccountAliasInputV2, AccountCoordinateV2, AccountEffectPermissionsV2,
+        AccountOperationInputV2, AccountPrivilegesV2, AccountRuleInputV2,
+        AccountRuleWithPrestateInputV2, FixedDataPredicateInputV2, IdentityCoordinateV2,
+        RegisterGeometryV2, ScalarCoordinateV2,
+        encode_account_profile_with_fixed_data_predicates_v2_atomic,
+    },
+};
 
 use crate::{
     ordinary_effect_artifacts_v3::{
@@ -825,9 +825,7 @@ fn claims_privileges(
     AccountPrivilegesV2::new(value.signer(), value.writable(), value.executable())
 }
 
-fn custody_privileges(
-    value: dclutch_custody::CustodyFramePrivilegesV1,
-) -> AccountPrivilegesV2 {
+fn custody_privileges(value: dclutch_custody::CustodyFramePrivilegesV1) -> AccountPrivilegesV2 {
     AccountPrivilegesV2::new(value.signer(), value.writable(), value.executable())
 }
 

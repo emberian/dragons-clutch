@@ -1469,9 +1469,7 @@ mod tests {
         Ok(())
     }
 
-    fn refunding_fixture(
-        count: u32,
-    ) -> (std::vec::Vec<u8>, std::vec::Vec<u8>, std::vec::Vec<u8>) {
+    fn refunding_fixture(count: u32) -> (std::vec::Vec<u8>, std::vec::Vec<u8>, std::vec::Vec<u8>) {
         let (mut market, escrow, holder) = fixture(count);
         set_claim(&mut market, HOARD_OFFSET, 0);
         (market, escrow, holder)
@@ -1487,8 +1485,8 @@ mod tests {
     /// aggregate moves exactly as the categorical set moves it, and the merge's
     /// collateral reaches the HOLDER rather than the escrow.
     #[test]
-    fn refunding_complete_set_seats_the_failure_column_in_the_escrow_and_roundtrips()
-    -> Result<()> {
+    fn refunding_complete_set_seats_the_failure_column_in_the_escrow_and_roundtrips() -> Result<()>
+    {
         let count = 4;
         let (mut market, mut escrow, mut holder) = refunding_fixture(count);
         let quantities = uniform_vector(count, 5);

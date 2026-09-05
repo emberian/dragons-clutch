@@ -9,14 +9,8 @@ extern crate alloc;
 
 use alloc::{vec, vec::Vec};
 
-use dclutch_vm::account_profile::{
-    ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1, AccountProfileV1,
-    encode_v1::{
-        AccountAliasInputV1, AccountEffectPermissionsV1, AccountOperationInputV1,
-        AccountPrivilegesV1, AccountRuleInputV1, RegisterGeometryV1, account_profile_v1_bytes,
-        encode_account_profile_v1_atomic,
-    },
-};
+use dclutch_core_contract::ContentId;
+use dclutch_market::CoreEffectActionV1;
 use dclutch_market::capability_manifest::funding_ledger_bytes_v2;
 use dclutch_market::capability_program::{
     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1, CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityProgramV1,
@@ -31,7 +25,16 @@ use dclutch_market::capability_program::{
     },
     v4::CapabilityProgramV4,
 };
-use dclutch_core_contract::ContentId;
+use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
+use dclutch_sha256_adapter::digest;
+use dclutch_vm::account_profile::{
+    ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1, AccountProfileV1,
+    encode_v1::{
+        AccountAliasInputV1, AccountEffectPermissionsV1, AccountOperationInputV1,
+        AccountPrivilegesV1, AccountRuleInputV1, RegisterGeometryV1, account_profile_v1_bytes,
+        encode_account_profile_v1_atomic,
+    },
+};
 use dclutch_vm::effect::v2::{
     ProgramV2 as EffectProgramV2, SCHEMA_RELEASE_ID as EFFECT_PROGRAM_SCHEMA_ID_V2,
     encode::{
@@ -39,9 +42,6 @@ use dclutch_vm::effect::v2::{
         encode_effect_program_v2_atomic,
     },
 };
-use dclutch_market::CoreEffectActionV1;
-use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
-use dclutch_sha256_adapter::digest;
 use dclutch_vm::v2::{
     ProgramV2 as TransitionProgramV2,
     encode::{

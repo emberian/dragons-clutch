@@ -27,41 +27,6 @@ extern crate alloc;
 
 use alloc::{vec, vec::Vec};
 
-use dclutch_market::capability_activation::{
-    ActivationBundleErrorV1, ActivationBundleInputV1, ActivationBundleV1, ActivationTailFieldV1,
-    activation_account_profile_schema_v1, activation_descriptor_schema_v1,
-    activation_effect_schema_v1, build_activation_bundle_v1, validate_activation_bundle_v1,
-};
-use dclutch_market::capability_program::{
-    activation_registers_v2::{
-        ACTIVATION_CONFIG_IDENTITY_V2, ACTIVATION_CONTEXT_IDENTITY_V2,
-        ACTIVATION_MARKET_IDENTITY_V2,
-    },
-    set_v2::{
-        CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityDescriptorReferenceV2,
-        CapabilityProgramSetEntryV2, CapabilityProgramSetV2, SelectorWidthV2,
-        encode_program_set_v2, encoded_program_set_bytes_v2,
-    },
-    v4::{CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4},
-};
-use dclutch_claims::{
-    frame_spec_v1::{ClaimsFrameDataV1, SignedDeltaFrameSpecV3},
-    terminal_settlement_v3::{
-        TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3, TERMINAL_SETTLEMENT_CERTIFICATE_ACCOUNT_V3,
-        TERMINAL_SETTLEMENT_COLLATERAL_MINT_ACCOUNT_V3,
-        TERMINAL_SETTLEMENT_CUSTODY_AUTHORITY_ACCOUNT_V3,
-        TERMINAL_SETTLEMENT_CUSTODY_CALLER_ACCOUNT_V3,
-        TERMINAL_SETTLEMENT_CUSTODY_PROGRAM_ACCOUNT_V3,
-        TERMINAL_SETTLEMENT_CUSTODY_REPLAY_ACCOUNT_V3, TERMINAL_SETTLEMENT_EXPOSURE_RAW_ACCOUNT_V3,
-        TERMINAL_SETTLEMENT_EXPOSURE_STAGING_ACCOUNT_V3, TERMINAL_SETTLEMENT_HOARD_ACCOUNT_V3,
-        TERMINAL_SETTLEMENT_REALM_ACCOUNT_V3, TERMINAL_SETTLEMENT_REALM_STAGING_ACCOUNT_V3,
-        TERMINAL_SETTLEMENT_RECIPIENT_ACCOUNT_V3,
-        TERMINAL_SETTLEMENT_RESOLUTION_PROGRAM_ACCOUNT_V3,
-        TERMINAL_SETTLEMENT_RESOLUTION_PROGRAMDATA_ACCOUNT_V3,
-        TERMINAL_SETTLEMENT_TOKEN_PROGRAM_ACCOUNT_V3,
-    },
-};
-use dclutch_core_contract::ContentId;
 use dclutch_claims::fractional::{
     FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3, FRACTIONAL_ATOMIC_ACTOR_V3,
     FRACTIONAL_ATOMIC_HOLDER_TOKEN_V3, FRACTIONAL_ATOMIC_ROOT_V3, FRACTIONAL_ATOMIC_SHARD_MINT_V3,
@@ -84,6 +49,41 @@ use dclutch_claims::fractional_kernel::{
     FRACTIONAL_SELECTION_CONFIG_BYTES_V1, FRACTIONAL_SELECTION_CONFIG_SCHEMA_ID_V1,
     FractionalExposureTermsV2, FractionalSelectionConfigV1, encode_fractional_selection_config_v1,
     fractional_selection_config_from_terms_v1, join_fractional_selection_config_v1,
+};
+use dclutch_claims::{
+    frame_spec_v1::{ClaimsFrameDataV1, SignedDeltaFrameSpecV3},
+    terminal_settlement_v3::{
+        TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3, TERMINAL_SETTLEMENT_CERTIFICATE_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_COLLATERAL_MINT_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_CUSTODY_AUTHORITY_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_CUSTODY_CALLER_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_CUSTODY_PROGRAM_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_CUSTODY_REPLAY_ACCOUNT_V3, TERMINAL_SETTLEMENT_EXPOSURE_RAW_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_EXPOSURE_STAGING_ACCOUNT_V3, TERMINAL_SETTLEMENT_HOARD_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_REALM_ACCOUNT_V3, TERMINAL_SETTLEMENT_REALM_STAGING_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_RECIPIENT_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_RESOLUTION_PROGRAM_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_RESOLUTION_PROGRAMDATA_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_TOKEN_PROGRAM_ACCOUNT_V3,
+    },
+};
+use dclutch_core_contract::ContentId;
+use dclutch_market::capability_activation::{
+    ActivationBundleErrorV1, ActivationBundleInputV1, ActivationBundleV1, ActivationTailFieldV1,
+    activation_account_profile_schema_v1, activation_descriptor_schema_v1,
+    activation_effect_schema_v1, build_activation_bundle_v1, validate_activation_bundle_v1,
+};
+use dclutch_market::capability_program::{
+    activation_registers_v2::{
+        ACTIVATION_CONFIG_IDENTITY_V2, ACTIVATION_CONTEXT_IDENTITY_V2,
+        ACTIVATION_MARKET_IDENTITY_V2,
+    },
+    set_v2::{
+        CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityDescriptorReferenceV2,
+        CapabilityProgramSetEntryV2, CapabilityProgramSetV2, SelectorWidthV2,
+        encode_program_set_v2, encoded_program_set_bytes_v2,
+    },
+    v4::{CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4},
 };
 use sha2::{Digest, Sha256};
 
@@ -456,7 +456,9 @@ pub enum FractionalSelectedReleaseErrorV4 {
     /// `dclutch_market::capability_program` refused; the cause is its own.
     ProgramSetContract(dclutch_market::capability_program::set_v2::ProgramSetErrorV2),
     /// `crate::fractional` refused; the cause is its own.
-    FractionalActivationBundle(crate::fractional::selected_release_v4::FractionalActivationBundleErrorV1),
+    FractionalActivationBundle(
+        crate::fractional::selected_release_v4::FractionalActivationBundleErrorV1,
+    ),
     /// `dclutch_claims::fractional_kernel` refused; the cause is its own.
     FractionalClaim(dclutch_claims::fractional_kernel::Error),
     /// `dclutch_market::capability_program` refused; the cause is its own.

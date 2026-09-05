@@ -98,7 +98,7 @@ describe('the intersection of declared routes and machine-gated routes', () => {
     // before this lane the figure was zero of six.
     expect(coverage.decodable).toEqual(coverage.machines);
     expect(coverage.machines).toEqual([
-      'dealer-checkpoint', 'direct-root', 'funding-ledger', 'projected-custody', 'series-ticket', 'source',
+      'direct-root', 'funding-ledger', 'projected-custody', 'series-ticket', 'source',
     ]);
     // Every act's machine gate list is therefore empty, and that is the
     // consequence rather than a second assumption.

@@ -1306,7 +1306,8 @@ mod tests {
             body(0xa1),
         )
         .expect("append");
-        let padding = slot_offset(0).expect("offset") + crate::relay::RELAYED_OBSERVATION_HEAD_BYTES + 3;
+        let padding =
+            slot_offset(0).expect("offset") + crate::relay::RELAYED_OBSERVATION_HEAD_BYTES + 3;
         put(&mut record.bytes, padding, &[0x77]).expect("write");
         assert_eq!(
             RelayedObservationRecordViewV1::decode(&record.bytes),

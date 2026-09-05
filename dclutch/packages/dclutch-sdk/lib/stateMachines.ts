@@ -205,16 +205,6 @@ export function decodeDealerRootStateV1(tail: Uint8Array): MachineDecodeV1 {
   return decodeMachineStateV1('dealer-root', tail);
 }
 
-/** One durable Dealer scenario preparation checkpoint. */
-export function decodeDealerCheckpointStateV1(bytes: Uint8Array): MachineDecodeV1 {
-  return decodeMachineStateV1('dealer-checkpoint', bytes);
-}
-
-/** One per-effect Dealer scenario reservation. */
-export function decodeDealerReservationStateV1(bytes: Uint8Array): MachineDecodeV1 {
-  return decodeMachineStateV1('dealer-reservation', bytes);
-}
-
 /** One occurrence ticket's mutable replay state. */
 export function decodeSeriesTicketStateV3(bytes: Uint8Array): MachineDecodeV1 {
   return decodeMachineStateV1('series-ticket', bytes);

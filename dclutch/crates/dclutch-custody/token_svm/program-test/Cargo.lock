@@ -1531,21 +1531,23 @@ version = "0.1.0"
 name = "dclutch-custody"
 version = "0.1.0"
 dependencies = [
- "dclutch-market-core-codec",
- "dclutch-release-set-contract",
+ "dclutch-market",
+ "dclutch-registry",
  "dclutch-sha256-adapter",
 ]
 
 [[package]]
-name = "dclutch-market-core-codec"
+name = "dclutch-market"
 version = "0.1.0"
 dependencies = [
- "dclutch-release-set-contract",
+ "dclutch-core-contract",
+ "dclutch-registry",
  "dclutch-sha256-adapter",
+ "dclutch-vm",
 ]
 
 [[package]]
-name = "dclutch-release-set-contract"
+name = "dclutch-registry"
 version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
@@ -1573,6 +1575,10 @@ dependencies = [
  "spl-token-2022-interface",
  "tokio",
 ]
+
+[[package]]
+name = "dclutch-vm"
+version = "0.1.0"
 
 [[package]]
 name = "defmt"

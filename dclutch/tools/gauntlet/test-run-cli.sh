@@ -7,7 +7,7 @@
 # invoked. `c9eac1738` unparked the tier on 2026-09-03 and full mode builds and
 # campaigns again, so from that commit the file asserted a refusal the runner
 # deliberately stopped making -- and it went on "passing" for nobody, because
-# NOTHING RUNS IT. No tier calls it and no runner calls it; `tools/ci/run.sh`
+# NOTHING RUNS IT. No tier calls it and no runner calls it; `tools/gate`
 # has no row for it. It was red at 837818bc1 (`--mode full exited 97, expected
 # 1`) and the tree found out because a lane read it, which is the same way the
 # last three defects of this shape were found.

@@ -21,12 +21,6 @@ extern crate alloc;
 use alloc::{vec, vec::Vec};
 use core::cell::Ref;
 
-use dclutch_vm::account_profile::{
-    ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1, AccountObservationV1, AccountProfileV1,
-    EFFECT_PERMISSION_CREDIT_LAMPORTS, EFFECT_PERMISSION_DEBIT_LAMPORTS,
-    EFFECT_PERMISSION_WRITE_DATA, ProjectionRegistersV2, derive_effect_permissions,
-    project_atomic as project_accounts_atomic,
-};
 use dclutch_market::capability_manifest::{
     CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingLedgerDerivationV2,
     CapabilityManifestV1, ContentId, FundingLedgerCloseCustodyV2, FundingLedgerStatusV2,
@@ -53,24 +47,30 @@ use dclutch_market::capability_program::{
     initialize_root_account_v1,
     set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
 };
-use dclutch_vm::effect::v2::{
-    AccountInput, ProgramV2 as EffectProgramV2, ResolvedEffect, SCHEMA_RELEASE_ID,
-    project_with_aliases_and_requests_atomic,
-};
+use dclutch_market::rent::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
 use dclutch_market::{
     CORE_EFFECT_ACK_BYTES_V1, CORE_EFFECT_DIGEST_DOMAIN_V1, CORE_EFFECT_ENVELOPE_BYTES_V1,
     CoreEffectAckV1, CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState, Identity,
     MarketCoreStateSeedsV2, Role, STATE_BYTES,
 };
-use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::ActivatedExecutionReleaseSetViewV1;
 use dclutch_registry::activation_auth_v1::{
     authenticate_activated_role_in_frame_v1, authenticate_activation_cache_identity_v1,
     require_cache_account,
 };
-use dclutch_registry::ActivatedExecutionReleaseSetViewV1;
-use dclutch_registry::svm::AuthenticatedRoleReceiptV1;
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry::release_set::ExecutionRoleV1;
-use dclutch_market::rent::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
+use dclutch_registry::svm::AuthenticatedRoleReceiptV1;
+use dclutch_vm::account_profile::{
+    ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1, AccountObservationV1, AccountProfileV1,
+    EFFECT_PERMISSION_CREDIT_LAMPORTS, EFFECT_PERMISSION_DEBIT_LAMPORTS,
+    EFFECT_PERMISSION_WRITE_DATA, ProjectionRegistersV2, derive_effect_permissions,
+    project_atomic as project_accounts_atomic,
+};
+use dclutch_vm::effect::v2::{
+    AccountInput, ProgramV2 as EffectProgramV2, ResolvedEffect, SCHEMA_RELEASE_ID,
+    project_with_aliases_and_requests_atomic,
+};
 use dclutch_vm::v2::{RegisterInput, RegisterOutput};
 use solana_program::{
     account_info::AccountInfo,
@@ -2701,8 +2701,8 @@ mod funding_v2_tests {
             FundingLedgerStatusV2::Pending
         );
 
-        let header = dclutch_market::CapabilityFundingHeaderV2::new(2, 4, 0b1111)
-            .expect("funding header");
+        let header =
+            dclutch_market::CapabilityFundingHeaderV2::new(2, 4, 0b1111).expect("funding header");
         validate_funding_ledger_masks_v2(
             manifest.entry_count(),
             header.selected_mask(),

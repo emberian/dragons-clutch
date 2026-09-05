@@ -22,16 +22,6 @@
 extern crate alloc;
 
 use alloc::{boxed::Box, vec::Vec};
-use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
-use dclutch_claims::{
-    liability_basis_state_v2::{
-        LiabilityBasisMarketSeedsV2, LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
-    },
-    protocol_position_v2::{
-        ProtocolPositionActionV2, ProtocolPositionAdmissionV2, ProtocolPositionOwnerKindV2,
-        ProtocolPositionPresenceV2, ProtocolPositionRequestV2,
-    },
-};
 use dclutch_claims::fractional::{
     FRACTIONAL_RETIREMENT_BEGIN_ACCOUNT_COUNT_V3,
     FRACTIONAL_RETIREMENT_COORDINATE_ACCOUNT_COUNT_V3,
@@ -49,11 +39,21 @@ use dclutch_claims::fractional_kernel::{
     FractionalExposureTermsAdmissionV2, FractionalExposureTermsV2,
     encode_fractional_selection_config_v1, fractional_selection_config_from_terms_v1,
 };
-use dclutch_market::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
-use dclutch_sha256_adapter::digest;
+use dclutch_claims::{
+    liability_basis_state_v2::{
+        LiabilityBasisMarketSeedsV2, LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
+    },
+    protocol_position_v2::{
+        ProtocolPositionActionV2, ProtocolPositionAdmissionV2, ProtocolPositionOwnerKindV2,
+        ProtocolPositionPresenceV2, ProtocolPositionRequestV2,
+    },
+};
 use dclutch_custody::token_svm::{
     TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, Token2022BehaviorProfileV2, TokenBehaviorSelectionV2,
 };
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
+use dclutch_sha256_adapter::digest;
 use solana_program::{
     account_info::AccountInfo,
     instruction::Instruction,

@@ -5,6 +5,12 @@
 //! terminal request/receipt; it does not introduce a Fractional payout input or
 //! a second Claims/Custody wire authority.
 
+use dclutch_claims::composition::{CompositionExposureBundleV3, RecordAdmissionV3};
+use dclutch_claims::fractional::{FractionalExposureActionV2, FractionalExposureRequestV2};
+use dclutch_claims::fractional_kernel::{
+    ExposureShardDivisionV2, FractionalExposureTermsV2, check_fractional_exposure_bundle_v2,
+    divide_exposure_shards_v2,
+};
 use dclutch_claims::{
     CallerRole,
     product_basis_terminal_v3::{
@@ -19,22 +25,14 @@ use dclutch_claims::{
         TerminalSettlementRequestInputV3, TerminalSettlementRequestV3,
     },
 };
-use dclutch_claims::fractional::{FractionalExposureActionV2, FractionalExposureRequestV2};
-use dclutch_claims::fractional_kernel::{
-    ExposureShardDivisionV2, FractionalExposureTermsV2, check_fractional_exposure_bundle_v2,
-    divide_exposure_shards_v2,
+use dclutch_custody::token_svm::{
+    TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, Token2022BehaviorProfileV2, TokenAccount,
+    TokenBehaviorSelectionV2,
 };
 use dclutch_market::RetirementReceiptV1;
 use dclutch_market::rent::lifecycle_v2::{
     CloseLifecycleRentCreditV2, LifecycleAccountIdV2, LifecycleClosePlanV2,
     LifecycleRentCloseReceiptV2, LifecycleRentCreditV2,
-};
-use dclutch_claims::composition::{
-    CompositionExposureBundleV3, RecordAdmissionV3,
-};
-use dclutch_custody::token_svm::{
-    TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, Token2022BehaviorProfileV2, TokenAccount,
-    TokenBehaviorSelectionV2,
 };
 use sha2::{Digest, Sha256};
 use solana_program::{instruction::Instruction, pubkey::Pubkey};
@@ -1079,8 +1077,7 @@ mod terminal_postcondition_tests {
     fn receipt(
         candidate: &FractionalExposureTerminalCandidateV2,
         observed: FractionalExposureTerminalPostObservationV2,
-    ) -> [u8; dclutch_claims::terminal_settlement_v3::TERMINAL_SETTLEMENT_RECEIPT_BYTES_V3]
-    {
+    ) -> [u8; dclutch_claims::terminal_settlement_v3::TERMINAL_SETTLEMENT_RECEIPT_BYTES_V3] {
         TerminalSettlementReceiptV3::new(
             candidate.settlement_request,
             TerminalSettlementReceiptInputV3 {
@@ -1139,7 +1136,9 @@ mod terminal_postcondition_tests {
                 &receipt,
                 changed_post,
             ),
-            Err(Error::TerminalSettlement(dclutch_claims::terminal_settlement_v3::TerminalSettlementErrorV3::ReceiptMismatch))
+            Err(Error::TerminalSettlement(
+                dclutch_claims::terminal_settlement_v3::TerminalSettlementErrorV3::ReceiptMismatch
+            ))
         );
 
         let mut changed_receipt = receipt;

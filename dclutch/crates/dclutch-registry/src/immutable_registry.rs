@@ -8,8 +8,8 @@
 //! `authenticate_deployment`; the second refuses the instant an `Upgrade`
 //! moves the slot.
 
-use dclutch_core_contract::ContentId;
 use crate::release_set::{ArtifactReleaseIdV1, ProgramIdentityV1};
+use dclutch_core_contract::ContentId;
 
 use crate::{ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1, Error, Result};
 

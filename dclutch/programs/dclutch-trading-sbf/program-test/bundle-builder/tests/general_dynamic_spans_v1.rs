@@ -13,7 +13,6 @@
 //! admissible under exactly one strategy disposition. Both facts are executed
 //! below rather than asserted in prose.
 
-use dclutch_vm::account_profile::v2::AccountProfileV2;
 use dclutch_chain_bundle_builder::{
     BuilderError, WaistFactsV1,
     general::{
@@ -23,7 +22,6 @@ use dclutch_chain_bundle_builder::{
     profile_ops,
     registers::{SpanWidthInputV1, derive_dynamic_span_widths},
 };
-use dclutch_vm::effect::v4::ProgramV4 as EffectProgramV4;
 use dclutch_market::execution_strategy::shadow_v3::{
     SHADOW_ACK_SCHEMA_ID_V3, SHADOW_REQUEST_SCHEMA_ID_V3,
 };
@@ -77,6 +75,8 @@ use dclutch_trading::general_config::{
     GeneralRootV2,
     v3::{GeneralConfigV3, GeneralConfigV3Input},
 };
+use dclutch_vm::account_profile::v2::AccountProfileV2;
+use dclutch_vm::effect::v4::ProgramV4 as EffectProgramV4;
 use dclutch_vm::request_profile::{
     ProjectionRegisterKindV1, ProjectionRegisterSpaceV1, ProjectionTargetV1, RequestProfileV1,
     SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1, validate_request,
@@ -794,8 +794,7 @@ fn every_general_action_declares_one_register_geometry_across_its_four_artifacts
             dclutch_trading::general::transition_artifacts_v3::general_transition_program_bytes_lean_v3(
                 action,
             );
-        let transition =
-            dclutch_vm::v3::ProgramV3::decode(transition_bytes).expect("Transition");
+        let transition = dclutch_vm::v3::ProgramV3::decode(transition_bytes).expect("Transition");
         for (label, left, right) in [
             (
                 "fixed_account_count account/effect",

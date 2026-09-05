@@ -65,6 +65,8 @@
 //! that constructor returns; it neither restates a tail byte nor names a
 //! register.
 
+use dclutch_core_contract::ContentId;
+use dclutch_market::STATE_BYTES as CORE_MARKET_STATE_BYTES;
 use dclutch_market::capability_activation::{
     ActivationBundleV1, activation_account_profile_schema_v1, activation_effect_schema_v1,
 };
@@ -78,13 +80,17 @@ use dclutch_market::capability_program::{
         SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
     },
 };
-use dclutch_core_contract::ContentId;
 use dclutch_market::execution_strategy::v2::{
     ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyAdmissionV2,
     ExecutionStrategyCertificateV2, ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
+use dclutch_market::realm::REALM_BYTES;
+use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
+use dclutch_registry::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
+use dclutch_registry::release_set::{ArtifactReleaseIdV1, ExecutionRoleV1};
+use dclutch_registry::svm::{LOADER_V3_PROGRAM_BYTES, LOADER_V3_PROGRAMDATA_METADATA_BYTES};
 use dclutch_trading::general::{
     account_rules_v3::{
         GeneralExternalAccountWidthsV3, encode_general_account_profile_v3_atomic,
@@ -128,12 +134,6 @@ use dclutch_trading::general_config::{
     GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_ROOT_BYTES_V2, GENERAL_ROOT_SCHEMA_ID_V2,
     v3::{GENERAL_CONFIG_SCHEMA_ID_V3, GeneralConfigV3, GeneralConfigV3Input},
 };
-use dclutch_market::STATE_BYTES as CORE_MARKET_STATE_BYTES;
-use dclutch_market::realm::REALM_BYTES;
-use dclutch_registry::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
-use dclutch_registry::svm::{LOADER_V3_PROGRAM_BYTES, LOADER_V3_PROGRAMDATA_METADATA_BYTES};
-use dclutch_registry::release_set::{ArtifactReleaseIdV1, ExecutionRoleV1};
-use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
 use solana_program::hash::hash;
 
 /// Number of action bundles one selectable General release compiles.
@@ -707,13 +707,9 @@ pub enum GeneralSelectedReleaseErrorV1 {
     /// `dclutch_registry::release_set` refused; the cause is its own.
     ReleaseSet(dclutch_registry::release_set::Error),
     /// `dclutch_trading::general` refused; the cause is its own.
-    GeneralAccountRule(
-        dclutch_trading::general::account_rules_v3::GeneralAccountRuleErrorV3,
-    ),
+    GeneralAccountRule(dclutch_trading::general::account_rules_v3::GeneralAccountRuleErrorV3),
     /// `dclutch_trading::general` refused; the cause is its own.
-    GeneralStateArtifact(
-        dclutch_trading::general::state_artifacts_v3::GeneralStateArtifactErrorV3,
-    ),
+    GeneralStateArtifact(dclutch_trading::general::state_artifacts_v3::GeneralStateArtifactErrorV3),
     /// `dclutch_trading::general` refused; the cause is its own.
     GeneralTransitionArtifact(
         dclutch_trading::general::transition_artifacts_v3::GeneralTransitionArtifactErrorV3,

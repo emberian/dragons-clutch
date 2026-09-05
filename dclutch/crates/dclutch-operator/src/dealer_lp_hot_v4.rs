@@ -12,13 +12,14 @@
 //! kept for the successor driver that will call it; deleting it would leave
 //! the test builder as the wire's last author.
 
+use crate::hot_bump_miner::{
+    HotBumpCorpusV1, activated_custody_program_v1, mine_hot_bump_hints_v1,
+};
 use crate::{
     Finality, Observation,
     direct_inline_v3::{CheckedHotOuterReleaseV3, ObservedAccountMetaV3},
 };
-use dclutch_vm::account_profile::v2::{
-    AccountPrestateV2, AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2,
-};
+use dclutch_core_contract::ContentId;
 use dclutch_market::capability_program::{
     hot_v3::{
         HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACTIVATION_CACHE_ACCOUNT_V3,
@@ -38,8 +39,6 @@ use dclutch_market::capability_program::{
         SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
     },
 };
-use dclutch_core_contract::ContentId;
-use dclutch_vm::effect::v4::SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4;
 use dclutch_market::execution_strategy::admitted_v3::{
     ADMITTED_ACCELERATOR_PROGRAM_ACCOUNT_V3, ADMITTED_STRATEGY_EVIDENCE_COUNT_V3,
     ADMITTED_STRATEGY_EVIDENCE_START_V3,
@@ -48,10 +47,6 @@ use dclutch_market::execution_strategy::v2::{
     AcceleratorTransportProfileV2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
     ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
-use crate::hot_bump_miner::{
-    HotBumpCorpusV1, activated_custody_program_v1, mine_hot_bump_hints_v1,
-};
-use dclutch_vm::request_profile::SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1;
 use dclutch_trading_sbf::{
     admitted_composition_v3::admitted_caller_authority_count_v3,
     dealer::{
@@ -65,6 +60,11 @@ use dclutch_trading_sbf::{
         release::dealer_request_schema_v3,
     },
 };
+use dclutch_vm::account_profile::v2::{
+    AccountPrestateV2, AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2,
+};
+use dclutch_vm::effect::v4::SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4;
+use dclutch_vm::request_profile::SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1;
 use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},

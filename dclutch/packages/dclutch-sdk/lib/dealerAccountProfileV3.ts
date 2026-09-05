@@ -16,18 +16,6 @@ import {
   DEALER_LP_POSITION_BYTES_V3,
   DEALER_LP_SCALAR_COUNT_V3,
   DEALER_LP_STATE_ACCOUNT_V3,
-  DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4,
-  DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4,
-  DEALER_SCENARIO_CURRENT_SLOT_SCALAR_V4,
-  DEALER_SCENARIO_CURRENT_TRADING_IDENTITY_V4,
-  DEALER_SCENARIO_ITEM_IDENTITY_STRIDE_V4,
-  DEALER_SCENARIO_ITEM_SCALAR_STRIDE_V4,
-  DEALER_SCENARIO_MAX_POSITION_COUNT_SCALAR_V4,
-  DEALER_SCENARIO_OBSERVED_OBLIGATION_IDENTITY_V4,
-  DEALER_SCENARIO_PROFILE_FIXED_RULES_V4,
-  DEALER_SCENARIO_PROFILE_SPANS_V4,
-  DEALER_SCENARIO_PROFILE_SPAN_RULES_V4,
-  DEALER_SCENARIO_SCRATCH_PAGE_COUNT_SCALAR_V4,
   DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE,
   DYNAMIC_FIXED_SPAN_COUNT_OFFSET,
   DYNAMIC_FIXED_SPAN_ENTRY_BYTES,
@@ -40,7 +28,6 @@ import {
   DYNAMIC_FIXED_SPAN_ENTRY_STEP_OFFSET,
   DYNAMIC_FIXED_SPAN_HEADER_BYTES,
   DYNAMIC_FIXED_SPAN_RESERVED_OFFSET,
-  BASIS_WIDTH_OFFSET_V3,
   ACCOUNT_PROFILE_HEADER_BYTES_V2,
   LIFECYCLE_PRESTATE_ARTIFACT_PROFILE,
   ACCOUNT_PROFILE_MAGIC_V2,
@@ -60,11 +47,7 @@ import {
 export type DealerAccountProfileRouteV3 =
   | Readonly<{ kind: 'equity'; selector: 1 | 2 | 3 | 4 | 5 | 6 }>
   | Readonly<{ kind: 'lp-open' }>
-  | Readonly<{ kind: 'lp-close' }>
-  | Readonly<{
-    kind: 'scenario';
-    spanCounts: readonly [number, number, number, number, number, number, number, number, number];
-  }>;
+  | Readonly<{ kind: 'lp-close' }>;
 
 type Rule = Readonly<{
   privileges: number;
@@ -100,26 +83,6 @@ type Profile = Readonly<{
   rules: readonly Rule[];
   spans: readonly Span[];
 }>;
-
-/// Sole writable Trading obligation, and the Custody callee appended after it.
-/// The obligation is the last WRITE TARGET, not the last fixed coordinate.
-const DEALER_SCENARIO_OBLIGATION_ACCOUNT_V4 =
-  DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3 + DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3;
-const DEALER_SCENARIO_CUSTODY_PROGRAM_ACCOUNT_V4 = DEALER_SCENARIO_OBLIGATION_ACCOUNT_V4 + 1;
-
-const EXPECTED_SCENARIO_SPANS = Object.freeze([
-  [5, 7, 0, 14, 0, 14, 14],
-  [5, 8, 14, 14, 0, 14, 14],
-  [5, 9, 28, 14, 0, 14, 14],
-  [5, 10, 42, 14, 0, 14, 14],
-  [25, 0, 56, 1, 1, 2, 1],
-  [25, 11, 57, 14, 0, 14, 14],
-  [25, 12, 71, 14, 0, 14, 14],
-  // Both trailing spans insert after the Custody callee coordinate at 26, not
-  // after the obligation at 25.
-  [27, 99, 85, 1, 0, 3, 1],
-  [27, DEALER_SCENARIO_SCRATCH_PAGE_COUNT_SCALAR_V4, 86, 1, 6, 6, 1],
-] as const);
 
 function same(left: Uint8Array, right: Uint8Array): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
@@ -313,97 +276,6 @@ function expectedLpProfile(route: Extract<DealerAccountProfileRouteV3, { kind: '
   return output;
 }
 
-// Exported for `dealerAccountProfileV3.vector.test.ts`, which compares every
-// byte of this mirror against a fixture the Rust encoder produces. Until that
-// test existed this function was checked only by whoever read it.
-export function expectedScenarioProfile(lengths: readonly number[]): Uint8Array {
-  if (lengths.length < DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3) throw new Error('Dealer scenario common data-length vector is truncated');
-  const header = DYNAMIC_FIXED_SPAN_HEADER_BYTES + DEALER_SCENARIO_PROFILE_SPANS_V4 * DYNAMIC_FIXED_SPAN_ENTRY_BYTES;
-  const output = profileHeader(
-    DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE,
-    DEALER_SCENARIO_PROFILE_FIXED_RULES_V4,
-    DEALER_SCENARIO_PROFILE_SPAN_RULES_V4,
-    3,
-    DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4,
-    DEALER_SCENARIO_ITEM_SCALAR_STRIDE_V4,
-    DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4,
-    DEALER_SCENARIO_ITEM_IDENTITY_STRIDE_V4,
-    header + (DEALER_SCENARIO_PROFILE_FIXED_RULES_V4 + DEALER_SCENARIO_PROFILE_SPAN_RULES_V4) * ACCOUNT_PROFILE_RULE_BYTES_V2 + 3 * ACCOUNT_PROFILE_OPERATION_BYTES_V2,
-  );
-  putU16(output, TRUSTED_ENVIRONMENT_SCALAR_OFFSET, DEALER_SCENARIO_CURRENT_SLOT_SCALAR_V4);
-  output[TRUSTED_ENVIRONMENT_KIND_OFFSET] = 1;
-  putU16(output, TRUSTED_EXECUTING_PROGRAM_IDENTITY_OFFSET, DEALER_SCENARIO_CURRENT_TRADING_IDENTITY_V4);
-  output[TRUSTED_EXECUTING_PROGRAM_KIND_OFFSET] = 1;
-  putU16(output, DYNAMIC_FIXED_SPAN_COUNT_OFFSET, DEALER_SCENARIO_PROFILE_SPANS_V4);
-  EXPECTED_SCENARIO_SPANS.forEach((span, index) => {
-    const offset = DYNAMIC_FIXED_SPAN_HEADER_BYTES + index * DYNAMIC_FIXED_SPAN_ENTRY_BYTES;
-    [span[0], span[1], span[2], span[3]].forEach((value, field) => putU16(output, offset + field * 2, value));
-    [span[4], span[5], span[6]].forEach((value, field) => putU32(output, offset + 8 + field * 4, value));
-  });
-  for (let coordinate = 0; coordinate < DEALER_SCENARIO_PROFILE_FIXED_RULES_V4; coordinate += 1) {
-    let value = rule(coordinate === 0 ? 2 : 0, 0, coordinate < 5 ? (lengths[coordinate] ?? -1) : 0);
-    const claims = coordinate - DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3;
-    if (claims >= 0 && claims < DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3) {
-      // NOT a signer. `SignedDeltaFrameSpecV3` marks its caller authority a
-      // SIGNER, and `claims_privileges` drops that bit on the way into the
-      // profile -- a child caller authority is an outer NON-signer, which
-      // `child_caller_authorities_are_outer_nonsigners` asserts on the Rust
-      // side. Mirroring the frame spec instead of the encoder put a signer
-      // bit here that no emitted profile has ever carried.
-      const privileges = claims === 1 ? 2 : [13, 14, 16, 18].includes(claims) ? 4 : 0;
-      const alias = new Map<number, number>([[2, 4], [4, 2], [8, 3]]).get(claims) ?? null;
-      value = rule(privileges, 0, 0, alias === null ? 5 : 4, alias);
-    } else if (coordinate === DEALER_SCENARIO_OBLIGATION_ACCOUNT_V4) {
-      value = rule(2, 4, 192, 0, null, 8);
-    } else if (coordinate === DEALER_SCENARIO_CUSTODY_PROGRAM_ACCOUNT_V4) {
-      // The release-selected Custody program the six Custody routes are invoked
-      // through: readonly executable, no effect permission, no asserted width,
-      // opaque prestate.
-      value = rule(4, 0, 0, 5);
-    }
-    putRule(output, header + coordinate * ACCOUNT_PROFILE_RULE_BYTES_V2, value);
-  }
-  for (let coordinate = 0; coordinate < DEALER_SCENARIO_PROFILE_SPAN_RULES_V4; coordinate += 1) {
-    let privileges = 0;
-    // The cross-frame alias partition. A Custody transfer frame and the Claims
-    // fixed frame both name the Core Market, the activation cache, the Registry
-    // program, the caller program and its ProgramData -- `CustodyFrameSpecV1`
-    // at 1..=5, `SignedDeltaFrameSpecV3` at 11..=15 -- and in one execution
-    // each pair is ONE account. A route span DECLARES that rather than standing
-    // as a second representative, and the condition is read off the span table
-    // above, not hard-coded: a span borrows a Claims coordinate exactly when it
-    // is inserted past it, so routes 4 and 5 (insertion 25) do and routes 0
-    // through 3 (insertion 5) sit ahead of the frame they would borrow.
-    let borrowed: number | null = null;
-    for (const start of [0, 14, 28, 42, 57, 71]) {
-      const local = coordinate - start;
-      if (local < 0 || local >= 14) continue;
-      privileges = [8, 10, 11].includes(local) ? 2 : [3, 4, 13].includes(local) ? 4 : 0;
-      const insertion = EXPECTED_SCENARIO_SPANS.find((span) => span[2] === start)?.[0];
-      if (insertion === undefined) throw new Error('Dealer scenario span table has no entry for a route rule block');
-      const claims = new Map<number, number>([[1, 11], [2, 12], [3, 13], [4, 14], [5, 15]]).get(local);
-      if (claims === undefined) continue;
-      const representative = DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3 + claims;
-      if (representative < insertion) borrowed = representative;
-    }
-    if (coordinate === 56) privileges = 2;
-    const value = borrowed === null ? rule(privileges, 0, 0, 5) : rule(0, 0, 0, 4, borrowed);
-    putRule(output, header + (DEALER_SCENARIO_PROFILE_FIXED_RULES_V4 + coordinate) * ACCOUNT_PROFILE_RULE_BYTES_V2, value);
-  }
-  const operations = header + (DEALER_SCENARIO_PROFILE_FIXED_RULES_V4 + DEALER_SCENARIO_PROFILE_SPAN_RULES_V4) * ACCOUNT_PROFILE_RULE_BYTES_V2;
-  putOperation(output, operations, 8, 2, DEALER_SCENARIO_MAX_POSITION_COUNT_SCALAR_V4, BASIS_WIDTH_OFFSET_V3);
-  putOperation(output, operations + ACCOUNT_PROFILE_OPERATION_BYTES_V2, 1, 25, DEALER_SCENARIO_CURRENT_TRADING_IDENTITY_V4);
-  // ProjectKey into the OBSERVED obligation register, not RequireKey against
-  // the requested one. The guard this replaced compared the obligation key
-  // against 32 unwritten zero bytes -- `OP_REQUIRE_*` reads the INPUT identity
-  // bank while the request profile that writes that register runs AFTER this
-  // pass -- so selector 9 was unsatisfiable by any account list at all. The
-  // Rust encoder was repaired; this mirror still expected the broken shape,
-  // which means the browser would have refused every profile that works.
-  putOperation(output, operations + 2 * ACCOUNT_PROFILE_OPERATION_BYTES_V2, 2, 25, DEALER_SCENARIO_OBSERVED_OBLIGATION_IDENTITY_V4);
-  return output;
-}
-
 function decodeRule(bytes: Uint8Array, offset: number, artifact: number, item: boolean, index: number, fixed: number): Rule {
   const privileges = bytes[offset] ?? 0xff;
   const effectPermissions = bytes[offset + 1] ?? 0xff;
@@ -542,29 +414,7 @@ function requireProfileShape(profile: Profile, route: DealerAccountProfileRouteV
     }
     return [];
   }
-  if (profile.artifact !== DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
-      || profile.fixed !== DEALER_SCENARIO_PROFILE_FIXED_RULES_V4
-      || profile.itemStride !== DEALER_SCENARIO_PROFILE_SPAN_RULES_V4
-      || profile.fixedOperations !== 3 || profile.itemOperations !== 0
-      || profile.commonScalars !== DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4
-      || profile.itemScalarStride !== DEALER_SCENARIO_ITEM_SCALAR_STRIDE_V4
-      || profile.commonIdentities !== DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4
-      || profile.itemIdentityStride !== DEALER_SCENARIO_ITEM_IDENTITY_STRIDE_V4
-      || profile.spans.length !== DEALER_SCENARIO_PROFILE_SPANS_V4) {
-    throw new Error('Dealer scenario route did not select the exact Profile13 bank geometry');
-  }
-  profile.spans.forEach((span, index) => {
-    const expected = EXPECTED_SCENARIO_SPANS[index];
-    if (expected === undefined || [span.insertion, span.countScalar, span.ruleStart, span.ruleStride, span.minimum, span.maximum, span.step]
-      .some((value, field) => value !== expected[field])) {
-      throw new Error(`Dealer scenario Profile13 span ${index} differs from selector 9`);
-    }
-    const count = route.spanCounts[index];
-    if (!Number.isInteger(count) || count < span.minimum || count > span.maximum || (count - span.minimum) % span.step !== 0) {
-      throw new Error(`Dealer scenario span ${index} count is outside its protected range/congruence`);
-    }
-  });
-  return route.spanCounts;
+  throw new Error(`Dealer route ${(route as { kind: string }).kind} has no account profile to validate`);
 }
 
 function dynamicRules(profile: Profile, spanCounts: readonly number[]): readonly Readonly<{ rule: Rule; representative: number }>[] {
@@ -634,10 +484,9 @@ function dataLengthMatches(rule: Rule, tailCount: number, actual: number): boole
 }
 
 /**
- * Validate the exact Dealer-specific Profile5, Profile6, or Profile13 physical
- * account frame. This deliberately does not share Direct's fixed+stride-N
- * validator: selector 9 owns protected dynamic spans, while LP Open/Close own
- * lifecycle vacancy/live alternatives.
+ * Validate the exact Dealer-specific Profile5 or Profile6 physical account
+ * frame. This deliberately does not share Direct's fixed+stride-N validator:
+ * LP Open/Close own lifecycle vacancy/live alternatives.
  */
 export function validateDealerAccountProfileV3(
   profileBytes: Uint8Array,
@@ -656,9 +505,7 @@ export function validateDealerAccountProfileV3(
   const spanCounts = requireProfileShape(profile, route);
   const expected = route.kind === 'equity'
     ? expectedEquityProfile(route, accountData.map((data) => data.length))
-    : route.kind === 'lp-open' || route.kind === 'lp-close'
-      ? expectedLpProfile(route, accountData.map((data) => data.length))
-      : expectedScenarioProfile(accountData.map((data) => data.length));
+    : expectedLpProfile(route, accountData.map((data) => data.length));
   if (!same(profileBytes, expected)) throw new Error(`Dealer ${route.kind} route selected a noncanonical account profile artifact`);
   const logical = profile.artifact === DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
     ? dynamicRules(profile, spanCounts)

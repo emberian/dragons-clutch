@@ -12,13 +12,11 @@
 //! particular, `product_basis_bytes` must be the exact raw slice returned by
 //! the authenticated ProductRuntimeV3 reader that produced `representation`.
 
-use dclutch_product::payoff::runtime_v3::{BasisKindV3, ProductBasisV3};
-use crate::rational_kernel::product_v3::{
-    RepresentationAdmissionV3, TerminalScenarioV3,
-};
 use crate::composition::{
     CompositionExposureBundleV3, CompositionExposureExecutionExpectedV3, RecordAdmissionV3,
 };
+use crate::rational_kernel::product_v3::{RepresentationAdmissionV3, TerminalScenarioV3};
+use dclutch_product::payoff::runtime_v3::{BasisKindV3, ProductBasisV3};
 
 use crate::{
     CallerRole,
@@ -684,6 +682,18 @@ mod tests {
     extern crate std;
 
     use super::*;
+    use crate::composition::{
+        CompositionExposureInputV3, CompositionExposureRowInputV3, CompositionExposureTermV3,
+        composition_exposure_bytes_v3, encode_composition_exposure_v3_atomic,
+    };
+    use crate::rational_kernel::{
+        ContentAdmissionV2, DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES,
+        DESCRIPTOR_MAGIC_V3, DescriptorAdmissionV2,
+        product_v3::{
+            ProductRepresentationInputV3, ProductRuntimeProjectionV3, RepresentationContextV3,
+            admit_product_representation_v3,
+        },
+    };
     use crate::{
         liability_basis_state_v2::{
             LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
@@ -695,18 +705,6 @@ mod tests {
     };
     use dclutch_product::payoff::runtime_v3::{
         BasisInputV3, BasisShapeV3, BasisTermV3, basis_record_bytes_v3, compile_basis_v3,
-    };
-    use crate::rational_kernel::{
-        ContentAdmissionV2, DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES,
-        DESCRIPTOR_MAGIC_V3, DescriptorAdmissionV2,
-        product_v3::{
-            ProductRepresentationInputV3, ProductRuntimeProjectionV3, RepresentationContextV3,
-            admit_product_representation_v3,
-        },
-    };
-    use crate::composition::{
-        CompositionExposureInputV3, CompositionExposureRowInputV3, CompositionExposureTermV3,
-        composition_exposure_bytes_v3, encode_composition_exposure_v3_atomic,
     };
     use std::{vec, vec::Vec};
 

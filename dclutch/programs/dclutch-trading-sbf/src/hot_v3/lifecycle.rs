@@ -422,7 +422,10 @@ impl<'a> LifecycleBatchSinkV4<'a> {
     }
 
     /// The collected table, or an empty one when this pass only verified.
-    pub(super) fn finish(self, planned: usize) -> Result<Vec<PreparedLifecycleInvocationV3>, ProgramError> {
+    pub(super) fn finish(
+        self,
+        planned: usize,
+    ) -> Result<Vec<PreparedLifecycleInvocationV3>, ProgramError> {
         match self {
             Self::Collect(output) => {
                 if output.len() != planned {
@@ -461,7 +464,10 @@ pub(super) enum LifecycleCanonicalBumpV4 {
 }
 
 impl<'a> LifecycleSeedsV4<'a> {
-    pub(super) fn new(expected: Option<&'a [Vec<u8>]>, seed_count: u8) -> Result<Self, ProgramError> {
+    pub(super) fn new(
+        expected: Option<&'a [Vec<u8>]>,
+        seed_count: u8,
+    ) -> Result<Self, ProgramError> {
         match expected {
             None => Ok(Self::Collect(Vec::with_capacity(usize::from(seed_count)))),
             Some(expected) => {
@@ -594,7 +600,10 @@ impl<'a> LifecycleBindingsV4<'a> {
         }
     }
 
-    pub(super) fn push(&mut self, binding: PreparedImmutableIdentityBindingV4) -> Result<(), ProgramError> {
+    pub(super) fn push(
+        &mut self,
+        binding: PreparedImmutableIdentityBindingV4,
+    ) -> Result<(), ProgramError> {
         match self {
             Self::Collect(output) => {
                 output.push(binding);
@@ -1308,7 +1317,10 @@ pub(super) fn representative_v3(index: usize, aliases: &[usize]) -> Result<usize
         .ok_or_else(|| TradingSbfError::Content.into())
 }
 
-pub(super) fn reserve_lifecycle_state_v3(state: usize, used_states: &mut [bool]) -> Result<(), ProgramError> {
+pub(super) fn reserve_lifecycle_state_v3(
+    state: usize,
+    used_states: &mut [bool],
+) -> Result<(), ProgramError> {
     if used_states
         .get(state)
         .copied()

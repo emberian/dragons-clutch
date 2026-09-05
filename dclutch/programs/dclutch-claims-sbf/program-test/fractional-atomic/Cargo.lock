@@ -1599,6 +1599,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-direct-ticket"
+version = "0.1.0"
+dependencies = [
+ "dclutch-trading",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "solana-program",
+ "solana-signature",
+]
+
+[[package]]
 name = "dclutch-fractional-atomic-program-test"
 version = "0.1.0"
 dependencies = [
@@ -1612,8 +1624,8 @@ dependencies = [
  "dclutch-custody",
  "dclutch-fractional-atomic-test-caller-sbf",
  "dclutch-fractional-compaction-test-caller-sbf",
- "dclutch-fractional-cubic-life-evidence",
  "dclutch-market",
+ "dclutch-operator",
  "dclutch-product",
  "dclutch-product-runtime-v2-operator",
  "dclutch-program-test-evidence",
@@ -1654,15 +1666,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-fractional-cubic-life-evidence"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "sha2 0.10.9",
-]
-
-[[package]]
 name = "dclutch-market"
 version = "0.1.0"
 dependencies = [
@@ -1670,6 +1673,58 @@ dependencies = [
  "dclutch-registry",
  "dclutch-sha256-adapter",
  "dclutch-vm",
+]
+
+[[package]]
+name = "dclutch-market-open-v1-operator"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-custody",
+ "dclutch-market",
+ "dclutch-registry",
+ "dclutch-resolution-core-v3-operator",
+ "solana-program",
+ "solana-sdk-ids",
+]
+
+[[package]]
+name = "dclutch-operator"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "bincode",
+ "dclutch-claims",
+ "dclutch-core-contract",
+ "dclutch-custody",
+ "dclutch-direct-ticket",
+ "dclutch-market",
+ "dclutch-market-open-v1-operator",
+ "dclutch-product",
+ "dclutch-product-runtime-v2-operator",
+ "dclutch-provider-transport-v3-operator",
+ "dclutch-registry",
+ "dclutch-release-tool",
+ "dclutch-resolution-core-v3-operator",
+ "dclutch-sha256-adapter",
+ "dclutch-source",
+ "dclutch-trading",
+ "dclutch-trading-sbf",
+ "dclutch-versioned-message-operator",
+ "dclutch-vm",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "solana-address-lookup-table-interface",
+ "solana-compute-budget-interface",
+ "solana-hash 4.6.0",
+ "solana-message 3.1.0",
+ "solana-program",
+ "solana-sdk",
+ "solana-sdk-ids",
+ "solana-system-interface 2.0.0",
+ "spl-associated-token-account-interface",
+ "spl-token-2022-interface",
 ]
 
 [[package]]
@@ -1709,6 +1764,22 @@ name = "dclutch-program-test-evidence"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-provider-transport-v3-operator"
+version = "0.1.0"
+dependencies = [
+ "dclutch-market",
+ "dclutch-product",
+ "dclutch-registry",
+ "dclutch-resolution-core-v3-operator",
+ "dclutch-source",
+ "dclutch-versioned-message-operator",
+ "solana-hash 4.6.0",
+ "solana-program",
+ "solana-sdk-ids",
+ "solana-system-interface 2.0.0",
+]
+
+[[package]]
 name = "dclutch-refusal-registry"
 version = "0.1.0"
 
@@ -1719,6 +1790,40 @@ dependencies = [
  "dclutch-core-contract",
  "solana-program",
  "solana-sdk-ids",
+]
+
+[[package]]
+name = "dclutch-release-tool"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "dclutch-core-contract",
+ "dclutch-market",
+ "dclutch-registry",
+ "dclutch-source",
+ "dclutch-vm",
+ "serde_json",
+ "sha2 0.10.9",
+ "solana-program",
+]
+
+[[package]]
+name = "dclutch-resolution-core-v3-operator"
+version = "0.1.0"
+dependencies = [
+ "dclutch-market",
+ "dclutch-product",
+ "dclutch-registry",
+ "dclutch-source",
+ "solana-program",
+ "solana-sdk-ids",
+]
+
+[[package]]
+name = "dclutch-sbf-runtime"
+version = "0.1.0"
+dependencies = [
+ "solana-program",
 ]
 
 [[package]]
@@ -1738,6 +1843,55 @@ dependencies = [
  "dclutch-product",
  "dclutch-registry",
  "dclutch-sha256-adapter",
+]
+
+[[package]]
+name = "dclutch-trading"
+version = "0.1.0"
+dependencies = [
+ "dclutch-claims",
+ "dclutch-core-contract",
+ "dclutch-custody",
+ "dclutch-market",
+ "dclutch-product",
+ "dclutch-registry",
+ "dclutch-sha256-adapter",
+ "dclutch-vm",
+ "solana-program",
+ "solana-sdk-ids",
+]
+
+[[package]]
+name = "dclutch-trading-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-claims",
+ "dclutch-core-contract",
+ "dclutch-custody",
+ "dclutch-market",
+ "dclutch-product",
+ "dclutch-refusal-registry",
+ "dclutch-registry",
+ "dclutch-sbf-runtime",
+ "dclutch-sha256-adapter",
+ "dclutch-source",
+ "dclutch-trading",
+ "dclutch-vm",
+ "solana-instructions-sysvar 3.0.1",
+ "solana-program",
+ "solana-sdk-ids",
+ "solana-system-interface 2.0.0",
+]
+
+[[package]]
+name = "dclutch-versioned-message-operator"
+version = "0.1.0"
+dependencies = [
+ "dclutch-resolution-core-v3-operator",
+ "solana-address-lookup-table-interface",
+ "solana-hash 4.6.0",
+ "solana-message 3.1.0",
+ "solana-program",
 ]
 
 [[package]]

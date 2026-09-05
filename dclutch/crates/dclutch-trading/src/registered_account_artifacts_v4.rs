@@ -17,6 +17,24 @@
 //! Custody CPI, so mint and token-program authentication happens where it always
 //! does, at the fill's Custody route, whose semantic owner is Custody.
 
+use dclutch_custody::{
+    CustodyFrameDataV1, CustodyFrameRoleV1, CustodyFrameSpecV1, OperationV1,
+    TRANSFER_ACCOUNT_COUNT_V1,
+};
+use dclutch_market::capability_program::{
+    CAPABILITY_ROOT_GENERATION_OFFSET, CAPABILITY_ROOT_HEADER_BYTES_V1,
+    CAPABILITY_ROOT_MARKET_OFFSET, CAPABILITY_ROOT_RELEASE_SET_OFFSET,
+};
+use dclutch_market::realm::{REALM_BYTES, RealmLayoutV1};
+use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
+use dclutch_market::{CoreStateLayoutV2, STATE_BYTES as CORE_STATE_BYTES};
+use dclutch_product::admission::PRODUCT_RECORD_BYTES_V2;
+use dclutch_product::payoff::runtime_v3::BASIS_WIDTH_OFFSET_V3;
+use dclutch_product::{
+    PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_HEADER_BYTES, PORTFOLIO_LIABILITY_BASIS_ID_OFFSET,
+};
+use dclutch_registry::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
+use dclutch_registry::svm::LOADER_V3_PROGRAM_BYTES;
 use dclutch_vm::account_profile::v2::{
     AccountPrestateV2, AccountProfileV2, FIXED_DATA_PREDICATE_BYTES,
     FIXED_DATA_PREDICATE_HEADER_BYTES, OPERATION_BYTES, RULE_BYTES, TrustedBuiltinIdentityV2,
@@ -29,24 +47,6 @@ use dclutch_vm::account_profile::v2::{
         encode_account_profile_with_fixed_data_predicates_v2_atomic,
     },
 };
-use dclutch_market::capability_program::{
-    CAPABILITY_ROOT_GENERATION_OFFSET, CAPABILITY_ROOT_HEADER_BYTES_V1,
-    CAPABILITY_ROOT_MARKET_OFFSET, CAPABILITY_ROOT_RELEASE_SET_OFFSET,
-};
-use dclutch_custody::{
-    CustodyFrameDataV1, CustodyFrameRoleV1, CustodyFrameSpecV1, OperationV1,
-    TRANSFER_ACCOUNT_COUNT_V1,
-};
-use dclutch_market::{CoreStateLayoutV2, STATE_BYTES as CORE_STATE_BYTES};
-use dclutch_product::payoff::runtime_v3::BASIS_WIDTH_OFFSET_V3;
-use dclutch_product::{
-    PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_HEADER_BYTES, PORTFOLIO_LIABILITY_BASIS_ID_OFFSET,
-};
-use dclutch_product::admission::PRODUCT_RECORD_BYTES_V2;
-use dclutch_market::realm::{REALM_BYTES, RealmLayoutV1};
-use dclutch_registry::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
-use dclutch_registry::svm::LOADER_V3_PROGRAM_BYTES;
-use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
 
 use crate::{
     execution_v3::DirectExecutionActionV3,
@@ -1105,9 +1105,7 @@ const fn outer_child_authority_privileges() -> AccountPrivilegesV2 {
     AccountPrivilegesV2::new(false, false, false)
 }
 
-fn custody_privileges(
-    value: dclutch_custody::CustodyFramePrivilegesV1,
-) -> AccountPrivilegesV2 {
+fn custody_privileges(value: dclutch_custody::CustodyFramePrivilegesV1) -> AccountPrivilegesV2 {
     AccountPrivilegesV2::new(value.signer(), value.writable(), value.executable())
 }
 
@@ -1273,6 +1271,9 @@ mod tests {
         DirectRegisteredCreationChildRentWidthsV4,
         encode_direct_registered_creation_lifecycle_v5_atomic,
     };
+    use dclutch_custody::{
+        INITIALIZE_REPLAY_ACCOUNT_COUNT_V1, OPEN_VAULT_ACCOUNT_COUNT_V1, TRANSFER_ACCOUNT_COUNT_V1,
+    };
     use dclutch_vm::account_profile::{
         EFFECT_PERMISSION_CREDIT_LAMPORTS,
         lifecycle_v3::StateLifecyclePolicyV5,
@@ -1280,9 +1281,6 @@ mod tests {
             FixedDataPredicateKindV2, ProjectionRegisterKindV2, ProjectionRegisterSpaceV2,
             ProjectionTargetV2, derive_effect_permissions,
         },
-    };
-    use dclutch_custody::{
-        INITIALIZE_REPLAY_ACCOUNT_COUNT_V1, OPEN_VAULT_ACCOUNT_COUNT_V1, TRANSFER_ACCOUNT_COUNT_V1,
     };
     use dclutch_vm::effect::v2::AccountPermission;
     use dclutch_vm::effect::{v2::FixedRole, v4::ProgramV4 as EffectProgramV4};

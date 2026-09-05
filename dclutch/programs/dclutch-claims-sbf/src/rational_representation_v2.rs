@@ -6,14 +6,7 @@
 //! only one per-descriptor/actor replay revision and commits it after every
 //! Claims, Token, and Custody postcondition has passed.
 
-use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
-use dclutch_claims::{
-    affine_batch_v2::{AffineBatchPlanV2, AffineBatchReceiptV2},
-    protocol_position_v2::{ProtocolPositionClaimsCapabilitySeedsV2, ProtocolPositionSeedsV2},
-    signed_delta_v3::{SignedDeltaPlanV3, SignedDeltaReceiptV3},
-};
-use dclutch_core_contract::ContentId;
-use dclutch_custody::{CustodyReceiptV1, CustodyRequestV1};
+use dclutch_claims::composition::{CompositionExposureBundleV3, RecordAdmissionV3};
 use dclutch_claims::rational::{
     AffineBatchContextV2, CompletionEvidenceV2, CoordinateIdentitiesV3, PreparedRepresentationV2,
     RATIONAL_ASSET_ACCOUNT_COUNT_V2, RATIONAL_BASE_ACCOUNT_COUNT_V2,
@@ -25,16 +18,21 @@ use dclutch_claims::rational_kernel::{
     STRUCTURED_HEADER_BYTES, STRUCTURED_VECTOR_COUNT, StructuredProjectionHeaderV2,
     StructuredProjectionV2,
 };
-use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry::svm::batch_v2::RoleBatchRequestV2;
-use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_claims::composition::{
-    CompositionExposureBundleV3, RecordAdmissionV3,
+use dclutch_claims::{
+    affine_batch_v2::{AffineBatchPlanV2, AffineBatchReceiptV2},
+    protocol_position_v2::{ProtocolPositionClaimsCapabilitySeedsV2, ProtocolPositionSeedsV2},
+    signed_delta_v3::{SignedDeltaPlanV3, SignedDeltaReceiptV3},
 };
+use dclutch_core_contract::ContentId;
 use dclutch_custody::token_svm::{
     TOKEN_2022_PROGRAM_ID, Token2022BehaviorAccountFactsV2, Token2022BehaviorMintFactsV2,
     Token2022BehaviorProfileV2,
 };
+use dclutch_custody::{CustodyReceiptV1, CustodyRequestV1};
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_registry::svm::batch_v2::RoleBatchRequestV2;
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
@@ -2094,9 +2092,7 @@ fn account<'accounts, 'info>(
 fn caller_role(role: dclutch_claims::rational::CallerRoleV2) -> ExecutionRoleV1 {
     match role {
         dclutch_claims::rational::CallerRoleV2::Core => ExecutionRoleV1::Core,
-        dclutch_claims::rational::CallerRoleV2::Trading => {
-            ExecutionRoleV1::Trading
-        }
+        dclutch_claims::rational::CallerRoleV2::Trading => ExecutionRoleV1::Trading,
     }
 }
 

@@ -3,17 +3,17 @@ import { fileURLToPath } from 'node:url';
 
 import { requireGeneratorFollowsRoute } from './route-binding.mjs';
 
-// TWO live sources scraped, and only live ones -- plus one read to prove they
-// are the right ones.
+// ONE live source scraped, and only a live one -- plus one read to prove it
+// is the right one.
 //
 //   crates/dclutch-product/src/admission/mod.rs
 //     the wire: DCLTPRQ2 request, DCLTPRM2 Product record, DCLTPRA2 receipt,
 //     their exact widths, their reserved spans, and the three schema IDs the
 //     receipt decoder pins.
-//   programs/dclutch-product-runtime-v2-sbf/src/lib.rs
-//     the frame: the exact executable account count and the refusal band the
-//     adapter raises from. NOT the authority for any schema ID below -- it
-//     binds none of them, which is exactly why the gate reads a third file.
+//   (programs/dclutch-product-runtime-v2-sbf, the adapter that framed the
+//     admission instruction, was deleted on 2026-09-04 -- never shipped, in no
+//     cohort -- and its account count went with it. The wire above outlives it:
+//     Core and Claims read the same records through the SVM reader.)
 //   crates/dclutch-product/src/svm_reader/mod.rs
 //     the route: read, never scraped. It is where the three schema IDs
 //     actually key Registry records, so it is what the binding gate follows.
@@ -40,18 +40,14 @@ const ADMISSION_FILE = 'crates/dclutch-product/src/admission/generated_admission
 const readCrateFile = (file) => (existsSync(new URL(file, root)) ? readFileSync(new URL(file, root), 'utf8') : null);
 const sources = Object.freeze({
   admission: readCrateFile(ADMISSION_FILE),
-  adapter: readCrateFile('programs/dclutch-product-runtime-v2-sbf/src/lib.rs'),
 });
 
 // The route-binding gate (see scripts/route-binding.mjs for the conviction it
 // generalizes).
 //
-// The SBF program above is the FRAME -- it counts accounts and raises the
-// refusal band, and it binds none of the three schema IDs emitted below; it
-// delegates to `authenticate_product_runtime_v2`. So the file that would have
-// been read as this generator's route proves nothing about these values. The
-// actual binder is the SVM reader, where each ID keys a Registry record
-// against a digest. That is the file this gate follows.
+// The binder of the three schema IDs emitted below is the SVM reader, where
+// each ID keys a Registry record against a digest. That is the file this gate
+// follows.
 const ROUTE_FILE = 'crates/dclutch-product/src/svm_reader/mod.rs';
 const ROUTE_CRATE = 'dclutch_product';
 const routeText = readCrateFile(ROUTE_FILE);
@@ -181,7 +177,6 @@ for (const [name, rustName] of [
   ['RECEIPT_RECORDS_OFFSET_V2', 'ADMISSION_RECEIPT_RECORDS_OFFSET_V2'],
   ['RECORD_COORDINATE_BYTES_V2', 'RECORD_COORDINATE_BYTES'],
 ]) output += `export const ${name} = ${scalar('admission', rustName)} as const;\n`;
-output += `export const ADMISSION_ACCOUNT_COUNT_V2 = ${scalar('adapter', 'ADMISSION_ACCOUNT_COUNT_V2')} as const;\n`;
 output += `export const ADMISSION_MAGIC_OFFSET_V2 = ${header.magicOffset} as const;\n`;
 output += `export const ADMISSION_MAGIC_BYTES_V2 = ${header.magicBytes} as const;\n`;
 output += `export const ADMISSION_VERSION_OFFSET_V2 = ${header.versionOffset} as const;\n`;

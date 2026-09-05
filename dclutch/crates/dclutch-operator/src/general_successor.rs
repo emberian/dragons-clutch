@@ -18,13 +18,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use dclutch_market::capability_program::hot_v3::{
-    HOT_MARKET_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3, HotExecutionEnvelopeV3,
-};
-use dclutch_vm::effect::v2::FixedRole;
-use dclutch_trading::general::artifacts_v3::GeneralArtifactSelectionV3;
-use dclutch_trading::general_codec::Action;
 use crate::general_hot_v3::{
     CheckedGeneralHotReleaseV3, GENERAL_HOT_HEAP_FRAME_BYTES_V3, GeneralHotArtifactDigestsV3,
     GeneralHotStateV3, GeneralObservedAccountMetaV3, GeneralSuccessorInstructionV5,
@@ -32,7 +25,14 @@ use crate::general_hot_v3::{
     canonical_general_lookup_addresses_v3, compile_general_successor_v0,
     general_artifact_bytes_from_hot_state_v3,
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use dclutch_market::capability_program::hot_v3::{
+    HOT_MARKET_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3, HotExecutionEnvelopeV3,
+};
+use dclutch_trading::general::artifacts_v3::GeneralArtifactSelectionV3;
+use dclutch_trading::general_codec::Action;
 use dclutch_versioned_message_operator::{Finality, ObservedAccount};
+use dclutch_vm::effect::v2::FixedRole;
 use serde::{
     Deserialize, Serialize,
     de::{DeserializeSeed, MapAccess, SeqAccess, Visitor},
@@ -1109,14 +1109,12 @@ fn temporary_plan_path_v5(parent: &Path, bytes: &[u8]) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_market::capability_program::hot_v3::HOT_TRADING_PROGRAM_ACCOUNT_V3;
-    use dclutch_trading::general::artifacts_v3::{
-        GeneralDecodedRequestV3, GeneralRequestWireV3,
-    };
     use crate::general_hot_v3::{
         GeneralHotInstructionV3, GeneralHotTransactionPlanV3, GeneralLifecycleProjectionV3,
         GeneralLifecycleStateProjectionV3,
     };
+    use dclutch_market::capability_program::hot_v3::HOT_TRADING_PROGRAM_ACCOUNT_V3;
+    use dclutch_trading::general::artifacts_v3::{GeneralDecodedRequestV3, GeneralRequestWireV3};
     use dclutch_versioned_message_operator::{Finality, Observation, VersionedMessagePlanV0};
     use serde_json::{Value, json};
     use solana_sdk::{

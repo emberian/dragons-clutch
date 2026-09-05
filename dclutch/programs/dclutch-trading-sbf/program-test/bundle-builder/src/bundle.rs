@@ -1,10 +1,6 @@
 //! Bundle assembly: the fixed Hot frame, the adoption loop, and the final
 //! instruction and account set.
 
-use dclutch_vm::account_profile::{
-    v2::{AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V2},
-    v3::{AccountProfileV3, SCHEMA_RELEASE_ID_V3 as ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V3},
-};
 use dclutch_market::capability_program::hot_v3::{
     HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
     HOT_ACTIVATION_CACHE_ACCOUNT_V3, HOT_CAPABILITY_SEAL_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3,
@@ -27,6 +23,10 @@ use dclutch_market::capability_program::hot_v3::{
 };
 use dclutch_market::capability_program::v4::CapabilityProgramV4;
 use dclutch_operator::hot_bump_miner::{HotBumpCorpusV1, mine_hot_bump_hints_v1};
+use dclutch_vm::account_profile::{
+    v2::{AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V2},
+    v3::{AccountProfileV3, SCHEMA_RELEASE_ID_V3 as ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V3},
+};
 use sha2::{Digest, Sha256};
 use solana_account::Account;
 use solana_program::{

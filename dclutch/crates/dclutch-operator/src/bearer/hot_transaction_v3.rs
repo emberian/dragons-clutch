@@ -1,6 +1,13 @@
 //! Unsigned chain-derived Hot instruction construction for terminal redemption.
 
-use dclutch_vm::account_profile::v2::{AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE};
+use crate::hot_bump_miner::{
+    HotBumpCorpusV1, activated_custody_program_v1, mine_hot_bump_hints_v1,
+};
+use crate::rational_representation::ConstructedInstructionV2;
+use dclutch_claims::rational::{
+    AuthenticatedTokenBehaviorV2, RationalTerminalHotRequestV3, RepresentationActionV2,
+    RepresentationCoordinateV2, RepresentationRequestV2,
+};
 use dclutch_market::capability_program::hot_v3::{
     HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CORE_PROGRAM_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3,
     HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
@@ -8,14 +15,7 @@ use dclutch_market::capability_program::hot_v3::{
     HOT_PORTFOLIO_RAW_ACCOUNT_V3, HOT_PRODUCT_RAW_ACCOUNT_V3, HOT_RENT_SYSVAR_ACCOUNT_V3,
     HOT_ROOT_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3, HotExecutionEnvelopeV3,
 };
-use crate::hot_bump_miner::{
-    HotBumpCorpusV1, activated_custody_program_v1, mine_hot_bump_hints_v1,
-};
-use dclutch_claims::rational::{
-    AuthenticatedTokenBehaviorV2, RationalTerminalHotRequestV3, RepresentationActionV2,
-    RepresentationCoordinateV2, RepresentationRequestV2,
-};
-use crate::rational_representation::ConstructedInstructionV2;
+use dclutch_vm::account_profile::v2::{AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE};
 use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},
@@ -315,7 +315,8 @@ fn build_hot_instruction_from_claims_child_inner_v3(
     })
 }
 
-const INJECTED_ACCOUNTS: usize = crate::bearer::RATIONAL_TERMINAL_HOT_INJECTED_ACCOUNT_COUNT_V3 as usize;
+const INJECTED_ACCOUNTS: usize =
+    crate::bearer::RATIONAL_TERMINAL_HOT_INJECTED_ACCOUNT_COUNT_V3 as usize;
 
 fn compact_profile13_child_accounts_v3(
     state: &RationalTerminalHotStateV3<'_>,
@@ -435,7 +436,9 @@ fn physical_privileges_v3(
 fn child_frame_index(coordinate: RepresentationCoordinateV2) -> Result<usize> {
     logical_index(LogicalCoordinateV3::Child(coordinate))
         .and_then(|index| {
-            index.checked_sub(crate::bearer::RATIONAL_TERMINAL_HOT_INJECTED_ACCOUNT_COUNT_V3 as usize)
+            index.checked_sub(
+                crate::bearer::RATIONAL_TERMINAL_HOT_INJECTED_ACCOUNT_COUNT_V3 as usize,
+            )
         })
         .ok_or(Error::HotInstruction)
 }
@@ -534,16 +537,18 @@ fn validate_fixed_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rational_representation::ConstructedInstructionV2;
     use dclutch_claims::rational::{
         ABSENT_REVISION, ASSET_BYTES_V3, AssetV2, CallerRoleV2,
         RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3, RationalTerminalHotRequestV3,
         RepresentationActionV2, RepresentationRequestHeaderV2, RepresentationRequestV2,
     };
-    use crate::rational_representation::ConstructedInstructionV2;
     use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
     use solana_sdk_ids::system_program;
 
-    use crate::bearer::test_open_fixture_v3::{authenticated_token_behavior_v3, open_artifact_fixture_v3};
+    use crate::bearer::test_open_fixture_v3::{
+        authenticated_token_behavior_v3, open_artifact_fixture_v3,
+    };
 
     fn key(value: u8) -> Pubkey {
         Pubkey::new_from_array([value; 32])

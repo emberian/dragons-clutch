@@ -1284,7 +1284,7 @@ fixed" should keep asking.
 
 ### What was measured, and what was not
 
-`tools/ci/run.sh seam` PASS at `HEAD` from a detached worktree; the register
+`tools/gate seam` PASS at `HEAD` from a detached worktree; the register
 carries **zero** `untriaged`. `cargo check` green for `dclutch-custody-sbf`,
 `dclutch-registry::release_set`, and the `affine-batch` and `fractional-atomic`
 program-test workspaces in their own target directories. The seam-audit's 32

@@ -1,5 +1,9 @@
 //! Onchain-safe Fractional V2 execution candidate for common Trading Hot.
 
+use crate::fractional_kernel::{
+    FRACTIONAL_SELECTION_CONFIG_BYTES_V1, FractionalExposureTermsV2, divide_exposure_shards_v2,
+    encode_fractional_selection_config_v1, fractional_selection_config_from_terms_v1,
+};
 use crate::{
     CallerRole,
     frame_spec_v1::SignedDeltaFrameSpecV3,
@@ -11,10 +15,6 @@ use crate::{
         TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3, TerminalSettlementReceiptV3,
         TerminalSettlementRequestV3,
     },
-};
-use crate::fractional_kernel::{
-    FRACTIONAL_SELECTION_CONFIG_BYTES_V1, FractionalExposureTermsV2, divide_exposure_shards_v2,
-    encode_fractional_selection_config_v1, fractional_selection_config_from_terms_v1,
 };
 use sha2::{Digest, Sha256};
 

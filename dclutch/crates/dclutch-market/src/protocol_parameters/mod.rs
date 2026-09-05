@@ -57,7 +57,6 @@
 //! sub-band, and each consumer taking the value out of its frame. Until that
 //! lands, nothing here has ever been exercised by a caller that was not a test.
 
-
 // `rustfmt::skip` because the file is EMITTED and `check-generated.sh` diffs it
 // byte for byte against a fresh emission. rustfmt follows `mod` declarations, so
 // formatting this crate's root rewraps two long constants and the parity gate
@@ -225,6 +224,7 @@ impl ProtocolParametersV1 {
         let scaled = (donation_lamports as u128) * (self.closer_carve_basis_points as u128)
             / (PROTOCOL_BASIS_POINT_DENOMINATOR_V1 as u128);
         // The share is at most the whole donation, so the cast is exact.
+        #[allow(clippy::cast_possible_truncation)]
         let share = scaled as u64;
         if share < self.closer_reward_cap_lamports {
             share
@@ -407,25 +407,36 @@ impl ProtocolParametersRecordV1 {
         if input.len() != PROTOCOL_PARAMETERS_RECORD_BYTES_V1 {
             return Err(Error::InvalidLength);
         }
-        if input[..8] != PROTOCOL_PARAMETERS_RECORD_MAGIC_V1
+        if input.get(..8) != Some(PROTOCOL_PARAMETERS_RECORD_MAGIC_V1.as_slice())
             || u16_at(input, PROTOCOL_PARAMETERS_RECORD_VERSION_OFFSET)
                 != PROTOCOL_PARAMETERS_ABI_VERSION_V1
-            || input[PROTOCOL_PARAMETERS_RECORD_KIND_OFFSET] != PROTOCOL_PARAMETERS_RECORD_KIND_V1
+            || input.get(PROTOCOL_PARAMETERS_RECORD_KIND_OFFSET).copied()
+                != Some(PROTOCOL_PARAMETERS_RECORD_KIND_V1)
         {
             return Err(Error::InvalidHeader);
         }
         for span in [
-            &input[PROTOCOL_PARAMETERS_RECORD_RESERVED_HEADER_OFFSET
-                ..PROTOCOL_PARAMETERS_RECORD_RESERVED_HEADER_OFFSET + RESERVED_HEADER_BYTES],
-            &input[PROTOCOL_PARAMETERS_RECORD_RESERVED_TAIL_OFFSET
-                ..PROTOCOL_PARAMETERS_RECORD_RESERVED_TAIL_OFFSET + RESERVED_TAIL_BYTES],
+            input
+                .get(
+                    PROTOCOL_PARAMETERS_RECORD_RESERVED_HEADER_OFFSET
+                        ..PROTOCOL_PARAMETERS_RECORD_RESERVED_HEADER_OFFSET + RESERVED_HEADER_BYTES,
+                )
+                .ok_or(Error::InvalidLength)?,
+            input
+                .get(
+                    PROTOCOL_PARAMETERS_RECORD_RESERVED_TAIL_OFFSET
+                        ..PROTOCOL_PARAMETERS_RECORD_RESERVED_TAIL_OFFSET + RESERVED_TAIL_BYTES,
+                )
+                .ok_or(Error::InvalidLength)?,
         ] {
             if span.iter().any(|byte| *byte != 0) {
                 return Err(Error::NonCanonical);
             }
         }
         let value = Self {
-            bump: input[PROTOCOL_PARAMETERS_RECORD_BUMP_OFFSET],
+            bump: *input
+                .get(PROTOCOL_PARAMETERS_RECORD_BUMP_OFFSET)
+                .ok_or(Error::InvalidLength)?,
             parameters: ProtocolParametersV1 {
                 governance_authority: array_at(
                     input,
@@ -630,14 +641,19 @@ impl ProtocolParametersChangeReceiptV1 {
         if input.len() != PROTOCOL_PARAMETERS_RECEIPT_BYTES_V1 {
             return Err(Error::InvalidLength);
         }
-        if input[..8] != PROTOCOL_PARAMETERS_RECEIPT_MAGIC_V1
+        if input.get(..8) != Some(PROTOCOL_PARAMETERS_RECEIPT_MAGIC_V1.as_slice())
             || u16_at(input, PROTOCOL_PARAMETERS_RECEIPT_VERSION_OFFSET)
                 != PROTOCOL_PARAMETERS_ABI_VERSION_V1
         {
             return Err(Error::InvalidHeader);
         }
-        if input[PROTOCOL_PARAMETERS_RECEIPT_RESERVED_HEADER_OFFSET
-            ..PROTOCOL_PARAMETERS_RECEIPT_RESERVED_HEADER_OFFSET + RECEIPT_RESERVED_HEADER_BYTES]
+        if input
+            .get(
+                PROTOCOL_PARAMETERS_RECEIPT_RESERVED_HEADER_OFFSET
+                    ..PROTOCOL_PARAMETERS_RECEIPT_RESERVED_HEADER_OFFSET
+                        + RECEIPT_RESERVED_HEADER_BYTES,
+            )
+            .ok_or(Error::InvalidLength)?
             .iter()
             .any(|byte| *byte != 0)
         {
@@ -668,6 +684,9 @@ impl ProtocolParametersChangeReceiptV1 {
     }
 }
 
+// A `const fn` over an exact array with a bounded index: the same width fact as
+// the helpers below, stated once.
+#[allow(clippy::indexing_slicing)]
 const fn is_zero(value: &[u8; 32]) -> bool {
     let mut index = 0;
     while index < 32 {
@@ -679,30 +698,41 @@ const fn is_zero(value: &[u8; 32]) -> bool {
     true
 }
 
+// THE SIX HELPERS BELOW INDEX BY A CONSTANT OFFSET INTO AN EXACT-WIDTH RECORD.
+// Every caller is a decode that has already refused any other width, or an
+// encode into an array of exactly that width, and every offset is a `const`
+// of this module's own layout. A fallible read here would be a second width
+// check with a refusal nothing can reach; the allow is narrower than that.
+#[allow(clippy::indexing_slicing)]
 fn u16_at(input: &[u8], offset: usize) -> u16 {
     u16::from_le_bytes([input[offset], input[offset + 1]])
 }
 
+#[allow(clippy::indexing_slicing)]
 fn u64_at(input: &[u8], offset: usize) -> u64 {
     let mut bytes = [0_u8; 8];
     bytes.copy_from_slice(&input[offset..offset + 8]);
     u64::from_le_bytes(bytes)
 }
 
+#[allow(clippy::indexing_slicing)]
 fn array_at(input: &[u8], offset: usize) -> [u8; 32] {
     let mut bytes = [0_u8; 32];
     bytes.copy_from_slice(&input[offset..offset + 32]);
     bytes
 }
 
+#[allow(clippy::indexing_slicing)]
 fn put_u16(output: &mut [u8], offset: usize, value: u16) {
     output[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
 }
 
+#[allow(clippy::indexing_slicing)]
 fn put_u64(output: &mut [u8], offset: usize, value: u64) {
     output[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
 }
 
+#[allow(clippy::indexing_slicing)]
 fn put_array(output: &mut [u8], offset: usize, value: &[u8; 32]) {
     output[offset..offset + 32].copy_from_slice(value);
 }

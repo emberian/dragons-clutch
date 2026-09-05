@@ -10,10 +10,7 @@
 //! not authorize an AOT-only path: Trading still executes the selected
 //! Transition and Effect programs and commits once after fixed-role receipts.
 
-use dclutch_vm::account_profile::{
-    lifecycle_v3::StateLifecyclePolicyV5,
-    v2::{AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2},
-};
+use dclutch_core_contract::ContentId;
 use dclutch_market::capability_program::{
     hot_v3::HOT_FAMILY_REQUEST_OFFSET_V3,
     set_v2::{CapabilityProgramSetV2, SelectorWidthV2},
@@ -22,20 +19,23 @@ use dclutch_market::capability_program::{
         SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
     },
 };
-use dclutch_core_contract::ContentId;
+use dclutch_market::execution_strategy::v2::{
+    EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyProgramV2, StrategyDispositionV2,
+};
+use dclutch_sha256_adapter::digest;
+use dclutch_vm::account_profile::{
+    lifecycle_v3::StateLifecyclePolicyV5,
+    v2::{AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2},
+};
 use dclutch_vm::effect::{
     v2::FixedRole,
     v3::ProgramV3 as EffectProgramV3,
     v4::{ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4},
 };
-use dclutch_market::execution_strategy::v2::{
-    EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyProgramV2, StrategyDispositionV2,
-};
 use dclutch_vm::request_profile::{
     RequestProfileV1,
     v2::{REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID, RequestProfileV2},
 };
-use dclutch_sha256_adapter::digest;
 use dclutch_vm::v3::ProgramV3 as TransitionProgramV3;
 
 use crate::{
@@ -205,8 +205,7 @@ pub fn authenticate_direct_artifacts_v4<'a>(
         || descriptor.account_profile().schema().to_bytes() != ACCOUNT_PROFILE_SCHEMA_ID_V2
         || descriptor.lifecycle().schema().to_bytes() != SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5
         || descriptor.strategy().schema().to_bytes() != EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2
-        || descriptor.transition().schema().to_bytes()
-            != dclutch_vm::v3::SCHEMA_RELEASE_ID
+        || descriptor.transition().schema().to_bytes() != dclutch_vm::v3::SCHEMA_RELEASE_ID
         || descriptor.effect().schema().to_bytes() != EFFECT_SCHEMA_ID_V4
     {
         return Err(DirectArtifactErrorV4::Descriptor);
@@ -524,6 +523,7 @@ mod tests {
 
     extern crate std;
 
+    use dclutch_core_contract::ContentId;
     use dclutch_market::capability_program::{
         set_v2::{
             CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, SelectorWidthV2,
@@ -534,14 +534,13 @@ mod tests {
             CapabilityProgramV4,
         },
     };
-    use dclutch_core_contract::ContentId;
+    use dclutch_market::realm::REALM_BYTES;
+    use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
+    use dclutch_product::admission::PRODUCT_RECORD_BYTES_V2;
     use dclutch_product::payoff::runtime_v3::BASIS_WIDTH_OFFSET_V3;
     use dclutch_product::{PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_HEADER_BYTES};
-    use dclutch_product::admission::PRODUCT_RECORD_BYTES_V2;
-    use dclutch_market::realm::REALM_BYTES;
     use dclutch_registry::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
     use dclutch_registry::svm::LOADER_V3_PROGRAM_BYTES;
-    use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
     use std::{vec, vec::Vec};
 
     use super::*;
@@ -967,8 +966,7 @@ mod tests {
         put(
             &mut output,
             10,
-            &dclutch_vm::request_profile::v2::REQUEST_PROFILE_V2_ARTIFACT_PROFILE
-                .to_le_bytes(),
+            &dclutch_vm::request_profile::v2::REQUEST_PROFILE_V2_ARTIFACT_PROFILE.to_le_bytes(),
         );
         put(
             &mut output,
@@ -1057,13 +1055,9 @@ mod tests {
             StrategyDispositionV2::Interpreted,
             id(dclutch_vm::v3::SCHEMA_RELEASE_ID),
             id(digest(&transition)),
-            id(
-                dclutch_market::execution_strategy::v2::EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
-            ),
+            id(dclutch_market::execution_strategy::v2::EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2),
             None,
-            id(
-                dclutch_market::execution_strategy::v2::EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2,
-            ),
+            id(dclutch_market::execution_strategy::v2::EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2),
             None,
             id(dclutch_market::execution_strategy::v2::ACCELERATOR_REQUEST_SCHEMA_ID_V2),
             id(dclutch_market::execution_strategy::v2::ACCELERATOR_ACK_SCHEMA_ID_V2),

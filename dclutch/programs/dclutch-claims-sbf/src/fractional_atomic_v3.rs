@@ -10,12 +10,6 @@ extern crate alloc;
 
 use alloc::{boxed::Box, vec};
 
-use dclutch_claims::{
-    CallerRole,
-    liability_basis_state_v2::{LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2},
-    signed_delta_v3::{PositionDeltaV3, SignedDeltaReceiptV3, SignedDeltaV3},
-};
-use dclutch_custody::CustodyReplayV1;
 use dclutch_claims::fractional::{
     FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3, FRACTIONAL_ATOMIC_ACTOR_V3,
     FRACTIONAL_ATOMIC_HOLDER_TOKEN_V3, FRACTIONAL_ATOMIC_ROOT_V3, FRACTIONAL_ATOMIC_SHARD_MINT_V3,
@@ -41,11 +35,17 @@ use dclutch_claims::fractional_lowering::{
     fractional_exposure_signed_delta_shape_v2, prepare_fractional_exposure_signed_delta_v2,
     validate_fractional_exposure_signed_delta_postcondition_v2,
 };
-use dclutch_sha256_adapter::{digest, digestv};
+use dclutch_claims::{
+    CallerRole,
+    liability_basis_state_v2::{LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2},
+    signed_delta_v3::{PositionDeltaV3, SignedDeltaReceiptV3, SignedDeltaV3},
+};
+use dclutch_custody::CustodyReplayV1;
 use dclutch_custody::token_svm::{
     MINT_BYTES, Mint, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, Token2022BehaviorProfileV2,
     TokenBehaviorSelectionV2,
 };
+use dclutch_sha256_adapter::{digest, digestv};
 use solana_program::{
     account_info::AccountInfo,
     program::{invoke, set_return_data},
@@ -402,11 +402,8 @@ fn prepare_open_mutation(
         dclutch_claims::signed_delta_v3::PositionDeltaInputV3 {
             position_index: 0,
             outcome: 0,
-            delta: SignedDeltaV3::new(
-                dclutch_claims::signed_delta_v3::DeltaDirectionV3::Credit,
-                1,
-            )
-            .map_err(|_| ClaimsSbfError::Economic)?,
+            delta: SignedDeltaV3::new(dclutch_claims::signed_delta_v3::DeltaDirectionV3::Credit, 1)
+                .map_err(|_| ClaimsSbfError::Economic)?,
         },
         2,
         shape.claim_count(),
@@ -525,8 +522,8 @@ fn execute_prepared_open(
         expected_holder,
     )
     .map_err(|_| ClaimsSbfError::Token)?;
-    let exact_holder =
-        dclutch_custody::token_svm::TokenAccount::parse(&post_holder).map_err(|_| ClaimsSbfError::Token)?;
+    let exact_holder = dclutch_custody::token_svm::TokenAccount::parse(&post_holder)
+        .map_err(|_| ClaimsSbfError::Token)?;
     if exact_holder.amount != expected_holder {
         return Err(ClaimsSbfError::Token.into());
     }
@@ -934,10 +931,8 @@ fn execute_terminal_boxed(
     request: dclutch_claims::terminal_settlement_v3::TerminalSettlementRequestV3,
     outer_context: [u8; 32],
     outer_request_digest: [u8; 32],
-) -> Result<
-    Box<dclutch_claims::terminal_settlement_v3::TerminalSettlementReceiptV3>,
-    ProgramError,
-> {
+) -> Result<Box<dclutch_claims::terminal_settlement_v3::TerminalSettlementReceiptV3>, ProgramError>
+{
     Ok(Box::new(execute_terminal_enclosing(
         program_id,
         accounts,

@@ -79,17 +79,8 @@ pub const RATIONAL_LIFECYCLE_POLICY_BYTES_V5: usize = LIFECYCLE_HEADER_BYTES;
 pub fn encode_rational_lifecycle_policy_v5() -> Result<Vec<u8>> {
     let mut scratch = vec![0_u8; RATIONAL_LIFECYCLE_POLICY_BYTES_V5];
     let mut output = vec![0_u8; RATIONAL_LIFECYCLE_POLICY_BYTES_V5];
-    encode_lifecycle_policy_v5_atomic(
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &mut scratch,
-        &mut output,
-    )
-    .map_err(Error::LifecycleArtifact)?;
+    encode_lifecycle_policy_v5_atomic(&[], &[], &[], &[], &[], &[], &mut scratch, &mut output)
+        .map_err(Error::LifecycleArtifact)?;
     Ok(output)
 }
 
@@ -112,8 +103,8 @@ mod tests {
         // descriptor selects it by digest, exactly as the bundle validator
         // does with `descriptor.lifecycle().program()`.
         let identity = hash(&policy).to_bytes();
-        let decoded = StateLifecyclePolicyV5::decode_selected(identity, identity, &policy)
-            .expect("decode");
+        let decoded =
+            StateLifecyclePolicyV5::decode_selected(identity, identity, &policy).expect("decode");
         // All four lifecycle action tags, plus a tag no action uses: none of
         // them plans anything, so no action can be quietly carrying state.
         for action in 0..5_u32 {

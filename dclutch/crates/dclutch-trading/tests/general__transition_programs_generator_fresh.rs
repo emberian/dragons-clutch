@@ -74,8 +74,9 @@ fn checked_in_general_transition_programs_are_exact_lean_output() {
         .unwrap_or_else(|error| panic!("read formatted generated Rust: {error}"));
     std::fs::remove_file(&temporary)
         .unwrap_or_else(|error| panic!("remove generated Rust: {error}"));
-    let checked_in = std::fs::read(manifest.join("src/general/generated_transition_programs_v3.rs"))
-        .unwrap_or_else(|error| panic!("read generated Rust: {error}"));
+    let checked_in =
+        std::fs::read(manifest.join("src/general/generated_transition_programs_v3.rs"))
+            .unwrap_or_else(|error| panic!("read generated Rust: {error}"));
     if formatted != checked_in {
         // Printed before the assertion, because `assert_eq!` over two `Vec<u8>`
         // dumps both files as byte vectors and this is the line a reader wants.

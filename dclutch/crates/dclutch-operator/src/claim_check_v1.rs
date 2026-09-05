@@ -2103,7 +2103,8 @@ mod tests {
         let holder = Pubkey::new_from_array([11; 32]);
         let holder_collateral = Pubkey::new_from_array([12; 32]);
         let holder_shards = Pubkey::new_from_array([13; 32]);
-        let token_program = Pubkey::new_from_array(dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID);
+        let token_program =
+            Pubkey::new_from_array(dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID);
         let report = build_fractional_claim_check_redemption_v1(
             &claims(),
             &token_program,

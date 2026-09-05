@@ -387,7 +387,10 @@ mod tests {
             hostile.push(2);
             hostile.extend_from_slice(&extension_type.to_le_bytes());
             hostile.extend_from_slice(&0_u16.to_le_bytes());
-            assert_eq!(hostile.len(), crate::token_svm::IMMUTABLE_OWNER_ACCOUNT_BYTES);
+            assert_eq!(
+                hostile.len(),
+                crate::token_svm::IMMUTABLE_OWNER_ACCOUNT_BYTES
+            );
             assert_eq!(
                 profile.check_transfer_account(TOKEN_2022_PROGRAM_ID, &hostile),
                 Err(Error::InvalidExtensionLayout),

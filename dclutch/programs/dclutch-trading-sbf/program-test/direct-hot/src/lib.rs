@@ -11,6 +11,8 @@ pub mod chain;
 pub mod fixture;
 pub mod waist;
 
+use dclutch_core_contract::ContentId;
+use dclutch_custody::CustodyReplayLayoutV1;
 use dclutch_market::capability_program::{
     set_v2::{
         CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, SelectorWidthV2,
@@ -22,8 +24,10 @@ use dclutch_market::capability_program::{
         SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
     },
 };
-use dclutch_core_contract::ContentId;
-use dclutch_custody::CustodyReplayLayoutV1;
+use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
+use dclutch_product::admission::PRODUCT_RECORD_BYTES_V2;
+use dclutch_registry::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
+use dclutch_registry::svm::LOADER_V3_PROGRAM_BYTES;
 use dclutch_trading::{
     execution_v3::DirectExecutionActionV3,
     ordinary_account_artifacts_v3::DirectInlineOrdinaryAccountProfileInputV3,
@@ -37,10 +41,6 @@ use dclutch_trading::{
     },
     ordinary_geometry_v3::DirectOrdinaryGeometryV3,
 };
-use dclutch_product::admission::PRODUCT_RECORD_BYTES_V2;
-use dclutch_registry::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
-use dclutch_registry::svm::LOADER_V3_PROGRAM_BYTES;
-use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
 use sha2::{Digest, Sha256};
 
 /// Capacity-profile identity used only by this reproducible ProgramTest fixture.
@@ -400,7 +400,6 @@ fn copy32(output: &mut [u8], offset: usize, value: [u8; 32]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_vm::account_profile::v2::AccountProfileV2;
     use dclutch_trading::{
         ordinary_artifacts_v3::{
             DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_ID_V3, DIRECT_INLINE_ORDINARY_STRATEGY_ID_V3,
@@ -411,6 +410,7 @@ mod tests {
             DIRECT_INLINE_ORDINARY_LIFECYCLE_ID_V5,
         },
     };
+    use dclutch_vm::account_profile::v2::AccountProfileV2;
 
     fn real_widths() -> DirectHotDeploymentWidthsV5 {
         DirectHotDeploymentWidthsV5::new(1_141_117, 971_053, 934_037)

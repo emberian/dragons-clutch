@@ -62,8 +62,10 @@ fn checked_in_v3_request_geometry_is_exact_lean_generator_output() {
     );
     let formatted = std::fs::read(&temporary).expect("read formatted generated Rust");
     std::fs::remove_file(&temporary).expect("remove generated Rust");
-    let checked_in = std::fs::read(manifest.join("src/general_codec/generated_general_controller_request_v3.rs"))
-        .expect("read checked-in generated V3 request geometry");
+    let checked_in = std::fs::read(
+        manifest.join("src/general_codec/generated_general_controller_request_v3.rs"),
+    )
+    .expect("read checked-in generated V3 request geometry");
     if formatted != checked_in {
         // Printed before the assertion, because `assert_eq!` over two `Vec<u8>`
         // dumps both files as byte vectors and this is the line a reader wants.

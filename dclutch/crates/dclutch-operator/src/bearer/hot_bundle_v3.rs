@@ -1,19 +1,17 @@
 //! Content-addressed CapabilityProgram bundle for terminal Bearer redemption.
 
-use dclutch_vm::account_profile::{
-    lifecycle_v3::{
-        CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5 as LIFECYCLE_SCHEMA_ID_V5, StateLifecyclePolicyV5,
-    },
-    v2::{AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE},
+use dclutch_claims::rational::{
+    AuthenticatedTokenBehaviorV2, RATIONAL_TERMINAL_HOT_COMMON_IDENTITIES_V3,
+    RATIONAL_TERMINAL_HOT_COMMON_SCALARS_V3, RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3,
+    RATIONAL_TERMINAL_HOT_REQUEST_SCHEMA_ID_V3,
+};
+use dclutch_core_contract::ContentId;
+use dclutch_custody::token_svm::{
+    TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
+    TokenBehaviorSelectionV2,
 };
 use dclutch_market::capability_program::v4::{
     ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4, CapabilityProgramV4,
-};
-use dclutch_core_contract::ContentId;
-use dclutch_vm::effect::{
-    v2::FixedRole,
-    v3::{ProgramV3 as EffectProgramV3, RouteKindV3},
-    v4::{ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4},
 };
 use dclutch_market::execution_strategy::v2::{
     ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
@@ -21,16 +19,18 @@ use dclutch_market::execution_strategy::v2::{
     EXECUTION_STRATEGY_PROGRAM_BYTES_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
     ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
-use dclutch_claims::rational::{
-    AuthenticatedTokenBehaviorV2, RATIONAL_TERMINAL_HOT_COMMON_IDENTITIES_V3,
-    RATIONAL_TERMINAL_HOT_COMMON_SCALARS_V3, RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3,
-    RATIONAL_TERMINAL_HOT_REQUEST_SCHEMA_ID_V3,
+use dclutch_vm::account_profile::{
+    lifecycle_v3::{
+        CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5 as LIFECYCLE_SCHEMA_ID_V5, StateLifecyclePolicyV5,
+    },
+    v2::{AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE},
+};
+use dclutch_vm::effect::{
+    v2::FixedRole,
+    v3::{ProgramV3 as EffectProgramV3, RouteKindV3},
+    v4::{ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4},
 };
 use dclutch_vm::request_profile::RequestProfileV1;
-use dclutch_custody::token_svm::{
-    TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
-    TokenBehaviorSelectionV2,
-};
 use dclutch_vm::v3::ProgramV3 as TransitionProgramV3;
 use solana_program::hash::hash;
 

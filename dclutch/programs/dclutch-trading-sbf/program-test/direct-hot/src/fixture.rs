@@ -6,7 +6,27 @@
 //! [`AccountProfileV2`]. The parent Registry harness supplies only release-waist
 //! accounts which it already owns.
 
-use dclutch_vm::account_profile::v2::AccountProfileV2;
+use dclutch_claims::{
+    CallerRole as ClaimsCallerRole,
+    liability_basis_state_v2::{
+        LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
+        LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, LiabilityBasisMarketInputV2,
+        LiabilityBasisPositionInputV2, encode_liability_basis_market_into_v2,
+        encode_liability_basis_position_into_v2, put_liability_basis_market_bump_v2,
+        put_liability_basis_position_bump_v2,
+    },
+    protocol_position_v2::ProtocolPositionSeedsV2,
+    sparse_native_transfer_v1::{SparseNativeTransferInputV1, SparseNativeTransferV1},
+};
+use dclutch_core_contract::ContentId as CoreContentId;
+use dclutch_custody::token_svm::{LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES};
+use dclutch_custody::{
+    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1,
+    ContextV1, CustodyAuthoritySeedsV1, CustodyFrameRoleV1, CustodyFrameSpecV1,
+    CustodyReplaySeedsV1, CustodyReplayV1, CustodyRequestLayoutV1, CustodyRequestV1,
+    CustodyVaultSeedsV1, DELEGATED_CUSTODY_REQUEST_BYTES_V2, DelegatedCustodyRequestLayoutV2,
+    DelegatedCustodyRequestV2, OperationV1,
+};
 use dclutch_market::capability_manifest::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
     CompartmentFundingV1, ContentId as CapabilityContentId, FundingAmountsV1, FundingQuoteV1,
@@ -39,29 +59,38 @@ use dclutch_market::capability_program::{
     set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
     v4::{CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4},
 };
-use dclutch_vm::capability_seal::{
-    CAPABILITY_SEAL_BYTES_V1, CAPABILITY_SEAL_ROW_COUNT_V1, CapabilitySealKeyV1,
-    SealedDescriptorClosureV1, SealedRecordRowV1, SealedRoleV1,
+use dclutch_market::realm::{
+    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
 };
-use dclutch_claims::{
-    CallerRole as ClaimsCallerRole,
-    liability_basis_state_v2::{
-        LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
-        LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, LiabilityBasisMarketInputV2,
-        LiabilityBasisPositionInputV2, encode_liability_basis_market_into_v2,
-        encode_liability_basis_position_into_v2, put_liability_basis_market_bump_v2,
-        put_liability_basis_position_bump_v2,
+use dclutch_market::rent::{
+    RefundAuthority,
+    lifecycle_v2::{
+        LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
     },
-    protocol_position_v2::ProtocolPositionSeedsV2,
-    sparse_native_transfer_v1::{SparseNativeTransferInputV1, SparseNativeTransferV1},
 };
-use dclutch_core_contract::ContentId as CoreContentId;
-use dclutch_custody::{
-    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1,
-    ContextV1, CustodyAuthoritySeedsV1, CustodyFrameRoleV1, CustodyFrameSpecV1,
-    CustodyReplaySeedsV1, CustodyReplayV1, CustodyRequestLayoutV1, CustodyRequestV1,
-    CustodyVaultSeedsV1, DELEGATED_CUSTODY_REQUEST_BYTES_V2, DelegatedCustodyRequestLayoutV2,
-    DelegatedCustodyRequestV2, OperationV1,
+use dclutch_market::{
+    CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity,
+    PRODUCT_GRAPH_BUMP_COUNT, Phase, ProductGraphBumpsV1, Readiness, StateBumpsV1,
+};
+use dclutch_operator::hot_bump_miner::{
+    HotBumpCorpusV1, hot_bump_hint_slot_name_v1, mine_hot_bump_hints_v1,
+};
+use dclutch_product::admission::{
+    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2,
+    RESULT_DOMAIN_SCHEMA_ID_V2,
+};
+use dclutch_product::payoff::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3;
+use dclutch_product::payoff::runtime_v3::{
+    BasisInputV3, BasisKindV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, basis_record_bytes_v3,
+    compile_basis_v3, semantic_basis_preimage_v3,
+};
+use dclutch_product::{
+    ContentId as ProductContentId, portfolio_record_bytes, result_domain_record_bytes,
+};
+use dclutch_product_runtime_v2_operator::{ProductCompilationInputV2, compile_product_records_v2};
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::release_set::{
+    CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1, ExecutionRoleV1,
 };
 use dclutch_trading::{
     execution_v3::{
@@ -99,40 +128,11 @@ use dclutch_trading::{
         RegisteredIntentSeedsV2, RegisteredRecordFirstUseV2, register_intent_v2,
     },
 };
-use dclutch_operator::hot_bump_miner::{
-    HotBumpCorpusV1, hot_bump_hint_slot_name_v1, mine_hot_bump_hints_v1,
+use dclutch_vm::account_profile::v2::AccountProfileV2;
+use dclutch_vm::capability_seal::{
+    CAPABILITY_SEAL_BYTES_V1, CAPABILITY_SEAL_ROW_COUNT_V1, CapabilitySealKeyV1,
+    SealedDescriptorClosureV1, SealedRecordRowV1, SealedRoleV1,
 };
-use dclutch_market::{
-    CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity,
-    PRODUCT_GRAPH_BUMP_COUNT, Phase, ProductGraphBumpsV1, Readiness, StateBumpsV1,
-};
-use dclutch_product::payoff::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3;
-use dclutch_product::payoff::runtime_v3::{
-    BasisInputV3, BasisKindV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, basis_record_bytes_v3,
-    compile_basis_v3, semantic_basis_preimage_v3,
-};
-use dclutch_product::{
-    ContentId as ProductContentId, portfolio_record_bytes, result_domain_record_bytes,
-};
-use dclutch_product::admission::{
-    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2,
-    RESULT_DOMAIN_SCHEMA_ID_V2,
-};
-use dclutch_product_runtime_v2_operator::{ProductCompilationInputV2, compile_product_records_v2};
-use dclutch_market::realm::{
-    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
-};
-use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry::release_set::{
-    CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1, ExecutionRoleV1,
-};
-use dclutch_market::rent::{
-    RefundAuthority,
-    lifecycle_v2::{
-        LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
-    },
-};
-use dclutch_custody::token_svm::{LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES};
 use solana_account::Account;
 use solana_program::{
     hash::{hash, hashv},
@@ -1054,8 +1054,7 @@ fn registered_root_poststate_bytes_v4(
         .get(..CAPABILITY_ROOT_HEADER_BYTES_V1)
         .ok_or(DirectHotChainFixtureErrorV5::Encoding)?;
     let mut output = Vec::with_capacity(
-        CAPABILITY_ROOT_HEADER_BYTES_V1
-            + dclutch_trading::successor::DIRECT_ROOT_STATE_BYTES_V1,
+        CAPABILITY_ROOT_HEADER_BYTES_V1 + dclutch_trading::successor::DIRECT_ROOT_STATE_BYTES_V1,
     );
     output.extend_from_slice(header);
     output.extend_from_slice(&state.encode());
@@ -1347,9 +1346,8 @@ fn registered_creation_buy_lengths_v4(
     lengths[10] = loader_bytes;
     lengths[13] = u32::try_from(dclutch_market::STATE_BYTES)
         .map_err(|_| DirectHotChainFixtureErrorV5::Input)?;
-    lengths[14] =
-        u32::try_from(dclutch_registry::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1)
-            .map_err(|_| DirectHotChainFixtureErrorV5::Input)?;
+    lengths[14] = u32::try_from(dclutch_registry::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1)
+        .map_err(|_| DirectHotChainFixtureErrorV5::Input)?;
     lengths[15] = loader_bytes;
     lengths[16] = loader_bytes;
     lengths[17] = input.deployment_widths.trading_programdata_bytes;
@@ -2028,8 +2026,7 @@ fn capability_fixture(
     )
     .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
     let mut root_bytes = Vec::with_capacity(
-        CAPABILITY_ROOT_HEADER_BYTES_V1
-            + dclutch_trading::successor::DIRECT_ROOT_STATE_BYTES_V1,
+        CAPABILITY_ROOT_HEADER_BYTES_V1 + dclutch_trading::successor::DIRECT_ROOT_STATE_BYTES_V1,
     );
     root_bytes.extend_from_slice(&header.to_bytes());
     root_bytes.extend_from_slice(&DirectRootStateV1::new().encode());
@@ -4769,6 +4766,13 @@ mod tests {
     #[test]
     #[allow(clippy::indexing_slicing, clippy::too_many_lines)]
     fn both_registered_creation_profiles_project_a_real_frame() {
+        use dclutch_market::capability_program::hot_v3::HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3;
+        use dclutch_market::realm::RealmLayoutV1;
+        use dclutch_trading::registered_creation_artifacts_v4::{
+            DIRECT_REGISTERED_CREATION_COMMON_IDENTITIES_V4,
+            DIRECT_REGISTERED_CREATION_COMMON_SCALARS_V4, REGISTERED_IDENTITY_MINT_V4,
+            REGISTERED_IDENTITY_TOKEN_PROGRAM_V4,
+        };
         use dclutch_vm::account_profile::{
             AccountObservationV1,
             v2::{
@@ -4776,13 +4780,6 @@ mod tests {
                 project_atomic,
             },
         };
-        use dclutch_market::capability_program::hot_v3::HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3;
-        use dclutch_trading::registered_creation_artifacts_v4::{
-            DIRECT_REGISTERED_CREATION_COMMON_IDENTITIES_V4,
-            DIRECT_REGISTERED_CREATION_COMMON_SCALARS_V4, REGISTERED_IDENTITY_MINT_V4,
-            REGISTERED_IDENTITY_TOKEN_PROGRAM_V4,
-        };
-        use dclutch_market::realm::RealmLayoutV1;
 
         let input = input();
         let rent = Rent::default();
@@ -5111,14 +5108,14 @@ pub mod via_builder {
             program_with_view, rent_sysvar_bytes, vacant,
         },
     };
+    use dclutch_market::realm::REALM_SCHEMA_RELEASE_ID_V1;
+    use dclutch_product::admission::{
+        PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
+    };
     use dclutch_trading::native_evidence_v3::{
         DIRECT_NATIVE_EVIDENCE_BYTES_V3,
         encode_direct_headerless_registry_native_evidence_v4_atomic,
     };
-    use dclutch_product::admission::{
-        PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
-    };
-    use dclutch_market::realm::REALM_SCHEMA_RELEASE_ID_V1;
 
     use super::*;
 

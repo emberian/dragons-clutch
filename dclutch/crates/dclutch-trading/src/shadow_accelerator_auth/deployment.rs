@@ -5,11 +5,11 @@
 //! also link Trading's dispatch, strategy admission, and entrypoint modules.
 //! This is the single implementation; `dclutch-trading-sbf` calls into it.
 
+use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_registry::{
     ArtifactReleaseV1, DeploymentObservationV1, Error as RegistryContractError,
     require_slot_pinned_release_v1, slot_pinned_release_elf_digest_v1,
 };
-use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
 use solana_program::{account_info::AccountInfo, hash::hash};
 use solana_sdk_ids::bpf_loader_upgradeable;
 

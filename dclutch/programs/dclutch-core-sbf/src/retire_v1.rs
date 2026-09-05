@@ -12,7 +12,6 @@ extern crate alloc;
 
 use alloc::{boxed::Box, vec::Vec};
 
-use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
 use dclutch_claims::market_closure_v1::{
     CLAIMS_MARKET_CLOSURE_POST_RESOURCE_DIGEST_DOMAIN_V1,
     CLAIMS_MARKET_CLOSURE_PRE_RESOURCE_DIGEST_DOMAIN_V1, CLAIMS_MARKET_CLOSURE_RECEIPT_BYTES_V1,
@@ -34,6 +33,11 @@ use dclutch_custody::{
     CUSTODY_REQUEST_BYTES_V1, CallerRoleV1, CompartmentV1, CustodyReceiptV1, CustodyReplayV1,
     CustodyRequestV1, OperationV1,
 };
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_market::rent::lifecycle_v2::{
+    CloseLifecycleRentCreditV2, LIFECYCLE_RENT_CLOSE_RECEIPT_BYTES_V2, LifecycleAccountIdV2,
+    LifecycleRentCloseReceiptV2, LifecycleRentCoreCloseAuthoritySeedsV2, LifecycleRentCreditV2,
+};
 use dclutch_market::{
     AGGREGATE_RETIREMENT_CHECKPOINT_BYTES_V1, AGGREGATE_RETIREMENT_CLOSE_REPLAY_MAGIC_V1,
     AGGREGATE_RETIREMENT_CLOSE_VAULT_MAGIC_V1, AGGREGATE_RETIREMENT_CUSTODY_JOIN_DIGEST_DOMAIN_V1,
@@ -46,12 +50,8 @@ use dclutch_market::{
     RETIREMENT_RECEIPT_BYTES_V1, RETIREMENT_ROLE_COUNT_V1, Request, RetirementBundleV1,
     RetirementReceiptInputV1, RetirementReceiptV1, Role, STATE_BYTES, retire,
 };
-use dclutch_registry::svm::continuation_v1::RegistryContinuationRequestV1;
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_market::rent::lifecycle_v2::{
-    CloseLifecycleRentCreditV2, LIFECYCLE_RENT_CLOSE_RECEIPT_BYTES_V2, LifecycleAccountIdV2,
-    LifecycleRentCloseReceiptV2, LifecycleRentCoreCloseAuthoritySeedsV2, LifecycleRentCreditV2,
-};
+use dclutch_registry::svm::continuation_v1::RegistryContinuationRequestV1;
 use dclutch_source::resolution::{
     SOURCE_CLOSURE_RECEIPT_BYTES_V3, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SourceClosureReceiptV3,
 };

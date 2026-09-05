@@ -9,8 +9,8 @@
 //! It performs no RPC, publication, signing, deployment, or runtime admission;
 //! Registry-owned records remain onchain authority.
 
-use dclutch_market::capability_program::v4::{CAPABILITY_PROGRAM_V4_BYTES, CapabilityProgramV4};
 use dclutch_core_contract::ContentId;
+use dclutch_market::capability_program::v4::{CAPABILITY_PROGRAM_V4_BYTES, CapabilityProgramV4};
 use dclutch_market::execution_strategy::v2::{
     AuthenticatedInterpreterArtifactsV2, EXECUTION_STRATEGY_ADMISSION_BYTES_V2,
     EXECUTION_STRATEGY_CERTIFICATE_BYTES_V2, EXECUTION_STRATEGY_PROGRAM_BYTES_V2,
@@ -18,10 +18,8 @@ use dclutch_market::execution_strategy::v2::{
     ExecutionStrategyCertificateV2, ExecutionStrategyProgramV2, StrategyDispositionV2,
     validate_admitted_aot_v4,
 };
-use dclutch_registry::{
-    ARTIFACT_RELEASE_BYTES_V1, ArtifactReleaseV1, ArtifactUpgradePolicyV1,
-};
 use dclutch_registry::release_set::ArtifactReleaseIdV1;
+use dclutch_registry::{ARTIFACT_RELEASE_BYTES_V1, ArtifactReleaseV1, ArtifactUpgradePolicyV1};
 
 use crate::{CheckedReleaseV1, Error, Result, artifact_release_from_checked, encode_hex, sha256};
 

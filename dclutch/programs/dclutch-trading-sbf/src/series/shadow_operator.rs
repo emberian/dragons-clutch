@@ -7,8 +7,8 @@
 //! common Hot outer remains the sole interpreter, accelerator CPI caller, and
 //! state/effect authority.
 
-use dclutch_market::capability_program::hot_v3::HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3;
 use dclutch_core_contract::ContentId;
+use dclutch_market::capability_program::hot_v3::HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3;
 use dclutch_market::execution_strategy::{
     shadow_digest_v3::{
         ShadowEffectProjectionV3, ShadowInvocationContextV3, ShadowRuntimeObservationV3,

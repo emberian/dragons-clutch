@@ -10,7 +10,24 @@ extern crate alloc;
 
 use alloc::{boxed::Box, vec::Vec};
 
-use dclutch_market::capability_program::CapabilityRootSeedsV1;
+use dclutch_claims::fractional::{
+    FRACTIONAL_ATOMIC_RECEIPT_BYTES_V3, FRACTIONAL_ATOMIC_ROOT_V3,
+    FRACTIONAL_EXPOSURE_REQUEST_MAGIC_V2, FRACTIONAL_RETIREMENT_COORDINATE_RECEIPT_BYTES_V3,
+    FRACTIONAL_RETIREMENT_COORDINATE_ROOT_V3, FRACTIONAL_RETIREMENT_REQUEST_MAGIC_V3,
+    FRACTIONAL_TERMINAL_ATOMIC_RECEIPT_BYTES_V3, FRACTIONAL_TERMINAL_ROOT_V3,
+    FractionalAtomicReceiptV3, FractionalExposureActionV2, FractionalExposureRequestV2,
+    FractionalRetirementCoordinateReceiptV3, FractionalRetirementRequestV3,
+    FractionalTerminalAtomicReceiptV3, decode_fractional_capability_root_v4,
+};
+use dclutch_claims::rational::{
+    CallerRoleV2, RECEIPT_BYTES_V2 as REPRESENTATION_RECEIPT_BYTES_V2,
+    REQUEST_MAGIC_V2 as REPRESENTATION_REQUEST_MAGIC_V2, RepresentationReceiptV2,
+    RepresentationRequestV2,
+};
+use dclutch_claims::rational_lifecycle::{
+    LIFECYCLE_REQUEST_MAGIC_V2, LifecycleReceiptV2, LifecycleRequestV2,
+    hot_v3::verify_rational_lifecycle_hot_receipt_v3,
+};
 use dclutch_claims::{
     affine_batch_v2::{AFFINE_BATCH_PLAN_MAGIC_V2, AffineBatchPlanV2, AffineBatchReceiptV2},
     composition_v3::ClaimsCompositionV3,
@@ -40,29 +57,12 @@ use dclutch_claims::{
     },
 };
 use dclutch_core_contract::ContentId;
+use dclutch_market::capability_program::CapabilityRootSeedsV1;
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{ResolvedInvocationV3, RouteKindV3},
 };
-use dclutch_claims::fractional::{
-    FRACTIONAL_ATOMIC_RECEIPT_BYTES_V3, FRACTIONAL_ATOMIC_ROOT_V3,
-    FRACTIONAL_EXPOSURE_REQUEST_MAGIC_V2, FRACTIONAL_RETIREMENT_COORDINATE_RECEIPT_BYTES_V3,
-    FRACTIONAL_RETIREMENT_COORDINATE_ROOT_V3, FRACTIONAL_RETIREMENT_REQUEST_MAGIC_V3,
-    FRACTIONAL_TERMINAL_ATOMIC_RECEIPT_BYTES_V3, FRACTIONAL_TERMINAL_ROOT_V3,
-    FractionalAtomicReceiptV3, FractionalExposureActionV2, FractionalExposureRequestV2,
-    FractionalRetirementCoordinateReceiptV3, FractionalRetirementRequestV3,
-    FractionalTerminalAtomicReceiptV3, decode_fractional_capability_root_v4,
-};
-use dclutch_claims::rational::{
-    CallerRoleV2, RECEIPT_BYTES_V2 as REPRESENTATION_RECEIPT_BYTES_V2,
-    REQUEST_MAGIC_V2 as REPRESENTATION_REQUEST_MAGIC_V2, RepresentationReceiptV2,
-    RepresentationRequestV2,
-};
-use dclutch_claims::rational_lifecycle::{
-    LIFECYCLE_REQUEST_MAGIC_V2, LifecycleReceiptV2, LifecycleRequestV2,
-    hot_v3::verify_rational_lifecycle_hot_receipt_v3,
-};
-use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
@@ -1670,6 +1670,11 @@ fn founding_post_resource_digests(
 mod tests {
     use alloc::boxed::Box;
 
+    use dclutch_claims::rational::{
+        ABSENT_REVISION, ASSET_BYTES_V3, AssetV2, RepresentationActionV2,
+        RepresentationRequestHeaderV2,
+    };
+    use dclutch_claims::rational_request::generated as representation_wire;
     use dclutch_claims::{
         CallerRole,
         affine_batch_v2::{
@@ -1690,11 +1695,6 @@ mod tests {
             SparseNativeTransferV1,
         },
     };
-    use dclutch_claims::rational::{
-        ABSENT_REVISION, ASSET_BYTES_V3, AssetV2, RepresentationActionV2,
-        RepresentationRequestHeaderV2,
-    };
-    use dclutch_claims::rational_request::generated as representation_wire;
     use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
 
     use super::*;
@@ -1742,11 +1742,11 @@ mod tests {
         revision: u64,
         writable: bool,
     ) -> (AccountInfo<'static>, u8) {
-        use dclutch_market::capability_program::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
         use dclutch_claims::fractional::{
             FRACTIONAL_CAPABILITY_ROOT_BYTES_V4, FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4,
             FractionalRootInputV1, FractionalRootV1,
         };
+        use dclutch_market::capability_program::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
         use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
 
         let selection = CapabilityExecutionSelectionV1::new(

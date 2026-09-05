@@ -2,23 +2,9 @@
 
 use alloc::{vec, vec::Vec};
 
-use dclutch_vm::account_profile::{
-    AccountObservationV1,
-    v2::{
-        AccountProfileV2, ProjectionRegistersV2, derive_effect_permissions_with_dynamic_spans,
-        project_dynamic_fixed_spans_atomic,
-    },
-};
-use dclutch_market::capability_program::v4::CapabilityProgramV4;
 use dclutch_core_contract::ContentId;
-use dclutch_vm::effect::{
-    v2::{AccountInput, AccountPermission, FixedRole},
-    v3::{
-        ProjectionV3, ResolvedReceiptDependenciesV3, RouteKindV3,
-        project_atomic as project_effect_atomic,
-    },
-    v4::ProgramV4 as EffectProgramV4,
-};
+use dclutch_market::SERIES_CORE_REQUEST_BYTES_V1;
+use dclutch_market::capability_program::v4::CapabilityProgramV4;
 use dclutch_market::execution_strategy::{
     shadow_digest_v3::{
         ShadowEffectProjectionV3, ShadowReceiptDependencyV3, ShadowResolvedRouteV3,
@@ -29,17 +15,31 @@ use dclutch_market::execution_strategy::{
     shadow_v3::{ShadowAckV3, ShadowArtifactTupleV3, ShadowRequestV3},
     v2::{AcceleratorTransportProfileV2, ExecutionStrategyProgramV2, StrategyDispositionV2},
 };
-use dclutch_market::SERIES_CORE_REQUEST_BYTES_V1;
-use dclutch_vm::request_profile::{
-    ProjectionRegistersV1, RequestProfileV1, project_atomic as project_request_atomic,
-};
+use dclutch_sha256_adapter::digest;
 use dclutch_trading::series::{
     AccountKeyV3, AuthenticatedProductProjectionV2,
     request::SeriesActionV3,
     shadow::{SeriesShadowInputV3, SeriesShadowObservationsV3, evaluate_series_shadow_v3},
     template_content_id,
 };
-use dclutch_sha256_adapter::digest;
+use dclutch_vm::account_profile::{
+    AccountObservationV1,
+    v2::{
+        AccountProfileV2, ProjectionRegistersV2, derive_effect_permissions_with_dynamic_spans,
+        project_dynamic_fixed_spans_atomic,
+    },
+};
+use dclutch_vm::effect::{
+    v2::{AccountInput, AccountPermission, FixedRole},
+    v3::{
+        ProjectionV3, ResolvedReceiptDependenciesV3, RouteKindV3,
+        project_atomic as project_effect_atomic,
+    },
+    v4::ProgramV4 as EffectProgramV4,
+};
+use dclutch_vm::request_profile::{
+    ProjectionRegistersV1, RequestProfileV1, project_atomic as project_request_atomic,
+};
 use dclutch_vm::v3::{
     ProgramV3 as TransitionProgramV3, RegisterInput, RegisterOutput, execute_fold_atomic,
 };

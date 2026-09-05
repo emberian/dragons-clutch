@@ -44,9 +44,8 @@ fn permit_expiry_request(
         1,
     )
     .expect("canonical founding intent");
-    let permit =
-        dclutch_market::SeriesFoundingPermitV1::new(intent, core_id(110), core_id(111))
-            .expect("canonical permit");
+    let permit = dclutch_market::SeriesFoundingPermitV1::new(intent, core_id(110), core_id(111))
+        .expect("canonical permit");
     SeriesPermitExpiryRequestV1::new(permit)
 }
 

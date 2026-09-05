@@ -28,7 +28,6 @@
 //! mint a token. A seal that named the wrong bytes would therefore be inert
 //! rather than dangerous.
 
-
 /// Canonical PDA seed domain for one validated-artifact seal.
 pub const CAPABILITY_SEAL_PDA_DOMAIN_V1: &[u8] = b"dclutch:capability-seal:v1";
 

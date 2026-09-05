@@ -10,12 +10,12 @@ use dclutch_registry::activation_auth_v1::{
     authenticate_activated_role_in_frame_v1, authenticate_activation_cache_identity_v1,
     require_cache_account,
 };
-use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
+use dclutch_registry::release_set::ExecutionRoleV1;
 use dclutch_registry::svm::{
     batch_v2::RoleBatchRequestV2,
     continuation_v1::{RegistryContinuationAdmissionSeedsV1, RegistryContinuationRequestV1},
 };
-use dclutch_registry::release_set::ExecutionRoleV1;
+use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use solana_program::{account_info::AccountInfo, hash::hash, pubkey::Pubkey};
 use solana_sdk_ids::system_program;
 

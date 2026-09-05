@@ -49,7 +49,7 @@
 # What it will not do is measure against a base it has not checked.
 #
 # ---------------------------------------------------------------------------
-# EXIT CODES, following tools/ci/run.sh, which follows seam_audit.py:
+# EXIT CODES, following tools/gate, which follows seam_audit.py:
 #
 #   0  the census RAN. Branches may still need review; that is reported in the
 #      output, not in the status. This is a REPORT, not a gate -- a tree with

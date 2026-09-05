@@ -213,9 +213,11 @@ class SuccessorCampaignPackTests(unittest.TestCase):
     def test_resolution_identity_is_derived_from_source_preimage(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
-            source = root / "source/crates/dclutch-source/resolution/src"
+            source = root / "source/crates/dclutch-source/src/resolution"
             source.mkdir(parents=True)
-            source.joinpath("lib.rs").write_text(
+            # The Resolution codec is a module of dclutch-source since 2026-09-04, so
+            # its root file is mod.rs, which is what the pack tool reads.
+            source.joinpath("mod.rs").write_text(
                 'pub const RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V4: &[u8] =\n'
                 '    b"one/exact/release";\n'
             )

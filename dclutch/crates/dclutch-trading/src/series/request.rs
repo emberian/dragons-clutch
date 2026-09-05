@@ -700,7 +700,8 @@ mod tests {
             crate::series::generated::SERIES_OCCURRENCE_SCHEDULED_SLOT_OFFSET_V3,
             &100_u64.to_le_bytes(),
         );
-        let occurrence_id = crate::series::occurrence_content_id(&occurrence).expect("occurrence ID");
+        let occurrence_id =
+            crate::series::occurrence_content_id(&occurrence).expect("occurrence ID");
 
         let mut template = crate::series::generated::SERIES_EXAMPLE_TEMPLATE_V3;
         put(

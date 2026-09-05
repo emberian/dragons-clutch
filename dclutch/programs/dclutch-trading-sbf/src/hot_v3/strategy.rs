@@ -257,7 +257,10 @@ pub(super) fn runtime_transcript_digest_v3(
     .map_err(|_| TradingSbfError::Content.into())
 }
 
-pub(super) fn try_projection_bank_v3<T: Clone>(value: &T, len: usize) -> Result<Vec<T>, ProgramError> {
+pub(super) fn try_projection_bank_v3<T: Clone>(
+    value: &T,
+    len: usize,
+) -> Result<Vec<T>, ProgramError> {
     let mut bank = Vec::new();
     bank.try_reserve_exact(len)
         .map_err(|_| TradingSbfError::HeapExhausted)?;

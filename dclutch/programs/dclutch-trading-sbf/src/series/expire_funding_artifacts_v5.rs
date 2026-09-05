@@ -10,6 +10,27 @@ extern crate alloc;
 
 use alloc::{vec, vec::Vec};
 
+use dclutch_custody::ProjectedCustodyRequestLayoutV1;
+use dclutch_market::capability_program::{
+    CAPABILITY_ROOT_GENERATION_OFFSET, CAPABILITY_ROOT_HEADER_BYTES_V1,
+    CAPABILITY_ROOT_MARKET_OFFSET, CAPABILITY_ROOT_SELECTION_OFFSET,
+    hot_v3::{HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3, HOT_RUNTIME_PORTFOLIO_COORDINATE_V3},
+};
+use dclutch_market::{
+    SERIES_UNALLOCATED_PERMIT_EXPIRY_EXPECTED_SERIES_REVISION_OFFSET_V1,
+    SERIES_UNALLOCATED_PERMIT_EXPIRY_EXPECTED_TICKET_REVISION_OFFSET_V1,
+    SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_BYTES_V1, SeriesCoreRequestV1,
+    SeriesPermitExpiryRequestV1, SeriesUnallocatedPermitExpiryRequestV1,
+};
+use dclutch_product::{
+    PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_COEFFICIENT_COUNT_OFFSET, PORTFOLIO_HEADER_BYTES,
+};
+use dclutch_registry::release_set::{
+    CAPABILITY_EXECUTION_SELECTION_CONFIG_OFFSET,
+    CAPABILITY_EXECUTION_SELECTION_ENTRY_INDEX_OFFSET, CAPABILITY_EXECUTION_SELECTION_KIND_OFFSET,
+    CAPABILITY_EXECUTION_SELECTION_MANIFEST_OFFSET, CAPABILITY_EXECUTION_SELECTION_RELEASE_OFFSET,
+};
+use dclutch_trading::series::{series_action_request_bytes_v3, series_proof_count_v3};
 use dclutch_vm::account_profile::{
     v2::{
         AccountPrestateV2, AccountProfileV2, DYNAMIC_FIXED_SPAN_HEADER_BYTES, OPERATION_BYTES,
@@ -23,12 +44,6 @@ use dclutch_vm::account_profile::{
     },
     v3::{AccountProfileV3, HEADER_BYTES_V3, encode_account_profile_v3_atomic},
 };
-use dclutch_market::capability_program::{
-    CAPABILITY_ROOT_GENERATION_OFFSET, CAPABILITY_ROOT_HEADER_BYTES_V1,
-    CAPABILITY_ROOT_MARKET_OFFSET, CAPABILITY_ROOT_SELECTION_OFFSET,
-    hot_v3::{HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3, HOT_RUNTIME_PORTFOLIO_COORDINATE_V3},
-};
-use dclutch_custody::ProjectedCustodyRequestLayoutV1;
 use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{
@@ -46,21 +61,6 @@ use dclutch_vm::effect::{
     },
     v5::{HEADER_BYTES_V5 as EFFECT_HEADER_BYTES_V5, ProgramV5, encode_program_v5_atomic},
 };
-use dclutch_market::{
-    SERIES_UNALLOCATED_PERMIT_EXPIRY_EXPECTED_SERIES_REVISION_OFFSET_V1,
-    SERIES_UNALLOCATED_PERMIT_EXPIRY_EXPECTED_TICKET_REVISION_OFFSET_V1,
-    SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_BYTES_V1, SeriesCoreRequestV1,
-    SeriesPermitExpiryRequestV1, SeriesUnallocatedPermitExpiryRequestV1,
-};
-use dclutch_product::{
-    PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_COEFFICIENT_COUNT_OFFSET, PORTFOLIO_HEADER_BYTES,
-};
-use dclutch_registry::release_set::{
-    CAPABILITY_EXECUTION_SELECTION_CONFIG_OFFSET,
-    CAPABILITY_EXECUTION_SELECTION_ENTRY_INDEX_OFFSET, CAPABILITY_EXECUTION_SELECTION_KIND_OFFSET,
-    CAPABILITY_EXECUTION_SELECTION_MANIFEST_OFFSET, CAPABILITY_EXECUTION_SELECTION_RELEASE_OFFSET,
-};
-use dclutch_trading::series::{series_action_request_bytes_v3, series_proof_count_v3};
 
 use dclutch_vm::request_profile::{
     HEADER_BYTES as REQUEST_HEADER_BYTES, OPERATION_BYTES as REQUEST_OPERATION_BYTES,
@@ -1032,12 +1032,10 @@ fn alias_representative(coordinate: u16) -> Option<u16> {
 
 #[cfg(test)]
 mod tests {
-    use dclutch_vm::account_profile::v2::AccountPrestateV2;
     use dclutch_custody::{CustodyFrameRoleV1, CustodyFrameSpecV1, OperationV1};
+    use dclutch_market::{FoundingIntentV5, Identity, SeriesCoreActionV1, SeriesFoundingPermitV1};
+    use dclutch_vm::account_profile::v2::AccountPrestateV2;
     use dclutch_vm::effect::v2::AccountPermission;
-    use dclutch_market::{
-        FoundingIntentV5, Identity, SeriesCoreActionV1, SeriesFoundingPermitV1,
-    };
 
     use super::*;
 
@@ -1277,12 +1275,8 @@ mod tests {
         let profile = AccountProfileV3::decode(&bytes).expect("ProfileV3").base();
         let mut permissions =
             [AccountPermission::read_only(); SERIES_EXPIRE_FIXED_ACCOUNT_COUNT_V5 as usize];
-        dclutch_vm::account_profile::v2::derive_effect_permissions(
-            profile,
-            2,
-            &mut permissions,
-        )
-        .expect("permission geometry");
+        dclutch_vm::account_profile::v2::derive_effect_permissions(profile, 2, &mut permissions)
+            .expect("permission geometry");
         for permission in permissions.iter().take(5).skip(1) {
             assert_eq!(*permission, AccountPermission::read_only());
         }

@@ -70,14 +70,14 @@
 //! attacker-owned account could carry forged cache bytes, and both are refused
 //! by the same downstream Market join.
 
+use crate::release_set::ExecutionRoleV1;
+use crate::svm::{AuthenticatedRoleReceiptV1, ProgramDataV3View, ProgramV3View};
 use crate::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1, DeploymentObservationV1,
     Error as RegistryContractError, RELEASE_LINEAGE_BYTES_V1, RELEASE_LINEAGE_PDA_DOMAIN_V1,
     require_slot_pinned_release_v1, slot_pinned_release_elf_digest_v1,
 };
-use crate::svm::{AuthenticatedRoleReceiptV1, ProgramDataV3View, ProgramV3View};
-use crate::release_set::ExecutionRoleV1;
 use solana_program::{account_info::AccountInfo, program_error::ProgramError, pubkey::Pubkey};
 use solana_sdk_ids::bpf_loader_upgradeable;
 

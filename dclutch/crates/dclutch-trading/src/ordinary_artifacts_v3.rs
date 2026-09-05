@@ -5,8 +5,8 @@
 //! Ed25519 messages and places their signers in distinct registers. Transition
 //! semantics then require those signers to equal the request-carried makers.
 
-use dclutch_market::capability_program::hot_v3::HOT_FAMILY_REQUEST_OFFSET_V3;
 use dclutch_core_contract::ContentId;
+use dclutch_market::capability_program::hot_v3::HOT_FAMILY_REQUEST_OFFSET_V3;
 use dclutch_market::execution_strategy::v2::{
     ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,

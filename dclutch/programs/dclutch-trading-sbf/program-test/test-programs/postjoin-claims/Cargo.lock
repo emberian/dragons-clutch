@@ -299,6 +299,8 @@ dependencies = [
  "dclutch-source",
  "dclutch-vm",
  "sha2",
+ "solana-program",
+ "solana-sdk-ids",
 ]
 
 [[package]]
@@ -310,7 +312,6 @@ dependencies = [
  "dclutch-custody",
  "dclutch-market",
  "dclutch-product",
- "dclutch-product-runtime-v2-svm-reader",
  "dclutch-refusal-registry",
  "dclutch-registry",
  "dclutch-sha256-adapter",
@@ -358,17 +359,9 @@ dependencies = [
 name = "dclutch-product"
 version = "0.1.0"
 dependencies = [
- "dclutch-sha256-adapter",
-]
-
-[[package]]
-name = "dclutch-product-runtime-v2-svm-reader"
-version = "0.1.0"
-dependencies = [
- "dclutch-claims",
  "dclutch-market",
- "dclutch-product",
  "dclutch-registry",
+ "dclutch-sha256-adapter",
  "solana-program",
  "solana-sdk-ids",
 ]

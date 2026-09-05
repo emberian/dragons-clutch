@@ -29,8 +29,8 @@ use dclutch_claims::{
     },
 };
 use dclutch_core_contract::ContentId;
-use dclutch_registry::activation_auth_v1::authenticate_activation_cache_identity_v1;
 use dclutch_registry::ActivatedExecutionReleaseSetViewV1;
+use dclutch_registry::activation_auth_v1::authenticate_activation_cache_identity_v1;
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_source::MarketPrincipalCapSetsV1;
 use solana_program::{
@@ -836,10 +836,9 @@ fn authenticate_failure_escrow_deltas(
         .basis_record
         .try_borrow_data()
         .map_err(|_| SignedDeltaSbfErrorV3::Accounts)?;
-    let refunding =
-        dclutch_product::payoff::runtime_v3::ProductBasisV3::decode(&basis_bytes)
-            .map_err(|_| SignedDeltaSbfErrorV3::ProductBasis)?
-            .refunds_on_failure();
+    let refunding = dclutch_product::payoff::runtime_v3::ProductBasisV3::decode(&basis_bytes)
+        .map_err(|_| SignedDeltaSbfErrorV3::ProductBasis)?
+        .refunds_on_failure();
     drop(basis_bytes);
     if !refunding {
         return Ok(());

@@ -6,6 +6,12 @@
 //! state key, and Trading owner.  Family evaluation never supplies those
 //! protected values.
 
+use crate::general_codec::Action;
+use dclutch_claims::{
+    liability_basis_state_v2::LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+    protocol_position_v2::PROTOCOL_POSITION_ADMISSION_BYTES_V2,
+};
+use dclutch_custody::CUSTODY_REPLAY_BYTES_V1;
 use dclutch_vm::account_profile::lifecycle_v3::{
     ACTION_PLAN_BYTES, CURRENT_RENT_QUOTE_BYTES_V5, HEADER_BYTES, IMMUTABLE_IDENTITY_BINDING_BYTES,
     PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SEED_BYTES, StateLifecyclePolicyV4,
@@ -18,12 +24,6 @@ use dclutch_vm::account_profile::lifecycle_v3::{
         encode_lifecycle_policy_v5_atomic,
     },
 };
-use dclutch_claims::{
-    liability_basis_state_v2::LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
-    protocol_position_v2::PROTOCOL_POSITION_ADMISSION_BYTES_V2,
-};
-use dclutch_custody::CUSTODY_REPLAY_BYTES_V1;
-use crate::general_codec::Action;
 
 use crate::general::{
     candidate_v1::GENERAL_CANDIDATE_BYTES_V1,
@@ -313,7 +313,11 @@ pub const fn general_declares_system_program_v3(action: Action) -> bool {
 /// are counts, which is the smallest true statement of what this adds.
 pub const fn general_system_program_account_v3(action: Action) -> Option<u16> {
     if general_declares_system_program_v3(action) {
-        Some(crate::general::effect_artifacts_v3::general_effect_account_count_before_system_v3(action))
+        Some(
+            crate::general::effect_artifacts_v3::general_effect_account_count_before_system_v3(
+                action,
+            ),
+        )
     } else {
         None
     }

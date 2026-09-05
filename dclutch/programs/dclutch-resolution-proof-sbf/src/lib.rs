@@ -9,10 +9,10 @@ extern crate std;
 
 use dclutch_market::capability_manifest::CapabilityManifestV1;
 use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
-use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry::activation_auth_v1::{
     ActivationAuthErrorV1, cached_role_deployment_observation_v1,
 };
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry::{ArtifactReleaseV1, DeploymentObservationV1};
 use dclutch_source::{RecoveryPolicyV2, SourceMaterialV3};
 use solana_program::{
@@ -415,13 +415,9 @@ pub(crate) fn authenticate_finalized_record(
 /// upgrading the substrate, not a corrupted account, and its remedy is a
 /// re-release rather than an investigation. Every other reason folds into
 /// `ResolutionDeployment` exactly as before.
-pub(crate) const fn pinned_deployment_refusal(
-    error: dclutch_registry::Error,
-) -> ResolutionError {
+pub(crate) const fn pinned_deployment_refusal(error: dclutch_registry::Error) -> ResolutionError {
     match error {
-        dclutch_registry::Error::ReleaseSupersededByUpgrade => {
-            ResolutionError::ReleaseSuperseded
-        }
+        dclutch_registry::Error::ReleaseSupersededByUpgrade => ResolutionError::ReleaseSuperseded,
         _ => ResolutionError::ResolutionDeployment,
     }
 }

@@ -8,6 +8,7 @@
 
 use alloc::vec;
 
+use dclutch_core_contract::ContentId;
 use dclutch_market::capability_program::hot_v3::{
     DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_RUNTIME_CONFIG_COORDINATE_V3,
     HOT_RUNTIME_PRODUCT_COORDINATE_V3, HotExecutionEnvelopeV3,
@@ -15,7 +16,6 @@ use dclutch_market::capability_program::hot_v3::{
 use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, hot_v3::HOT_RUNTIME_ROOT_COORDINATE_V3,
 };
-use dclutch_core_contract::ContentId;
 use dclutch_market::execution_strategy::{
     admitted_v3::{
         ADMITTED_CALLER_AUTHORITY_ACCOUNT_V3, ADMITTED_INSTRUCTIONS_ACCOUNT_V3,

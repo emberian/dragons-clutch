@@ -9,7 +9,7 @@ the drift is invisible until somebody at a keyboard hits it.
 
 Measured 2026-09-01, the reasons this is a gate and not a lint:
 
-  - `tools/ci/run.sh`'s own header comment, which `--help` printed, listed six
+  - `tools/gate`'s own header comment, which `--help` printed, listed six
     tiers when the dispatch ran nine and described `cheap` as two tiers when it
     ran three. Its `--list` was correct the whole time; the duplicate rotted.
   - Five commands taught in `docs/` were stale in exactly this way, including

@@ -11,11 +11,11 @@
 //! and program deployment authentication remain adapter boundaries. No boolean
 //! or identity echo in this module substitutes for those checks.
 
-use dclutch_product::payoff::runtime_v3::{
-    BasisKindV3, Error as ProductBasisError, ProductBasisV3,
-};
 use crate::composition::{
     CompositionExposureBundleV3, CompositionExposureExecutionExpectedV3, RecordAdmissionV3,
+};
+use dclutch_product::payoff::runtime_v3::{
+    BasisKindV3, Error as ProductBasisError, ProductBasisV3,
 };
 
 use crate::rational_kernel::{
@@ -801,6 +801,10 @@ mod tests {
     extern crate std;
 
     use super::*;
+    use crate::composition::{
+        CompositionExposureInputV3, CompositionExposureRowInputV3, CompositionExposureTermV3,
+        composition_exposure_bytes_v3, encode_composition_exposure_v3_atomic,
+    };
     use crate::rational_kernel::{
         CoordinateObservation, SCALAR_BYTES, STRUCTURED_HEADER_BYTES, STRUCTURED_VECTOR_COUNT,
         StructuredProjectionHeaderV2,
@@ -816,10 +820,6 @@ mod tests {
     };
     use dclutch_product::payoff::runtime_v3::{
         BasisInputV3, BasisShapeV3, BasisTermV3, basis_record_bytes_v3, compile_basis_v3,
-    };
-    use crate::composition::{
-        CompositionExposureInputV3, CompositionExposureRowInputV3, CompositionExposureTermV3,
-        composition_exposure_bytes_v3, encode_composition_exposure_v3_atomic,
     };
     use std::{vec, vec::Vec};
 

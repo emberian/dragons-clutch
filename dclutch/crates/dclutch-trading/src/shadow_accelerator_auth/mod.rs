@@ -36,8 +36,8 @@ use dclutch_market::execution_strategy::{
         SHADOW_TRADING_PROGRAM_ACCOUNT_V3, SHADOW_TRADING_PROGRAMDATA_ACCOUNT_V3, ShadowRequestV3,
     },
 };
-use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use solana_program::{
     account_info::AccountInfo, hash::hash, program_error::ProgramError, pubkey::Pubkey,
 };

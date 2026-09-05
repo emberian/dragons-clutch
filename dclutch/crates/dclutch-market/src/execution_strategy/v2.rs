@@ -993,12 +993,12 @@ pub enum BankTransportV2 {
 /// width; now the excess is the witness, and a caller that supplies bytes no
 /// callee reads is refused by the callee that reads them, not here. The
 /// scratch-page arm has no bank at all, so its whole tail is witness.
-fn split_inline_bank<'a>(
-    bytes: &'a [u8],
+fn split_inline_bank(
+    bytes: &[u8],
     header_bytes: usize,
     transport: RequestTransportV2,
     total_bank_bytes: u64,
-) -> Result<(&'a [u8], &'a [u8])> {
+) -> Result<(&[u8], &[u8])> {
     let tail = bytes.get(header_bytes..).ok_or(Error::InvalidLength)?;
     match transport {
         RequestTransportV2::Inline => {

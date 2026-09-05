@@ -114,16 +114,12 @@ pub use open_structured_v3::{
     validate_rational_open_structured_hot_bundle_v3,
 };
 
-use dclutch_claims::bearer::{BearerBindingV2, BearerDescriptorV2};
-use dclutch_claims::rational_kernel::{
-    DescriptorAdmissionV2, RepresentationDescriptorV2,
-};
 use crate::rational_representation::{
     ConstructedInstructionV2, RationalObservationV2, SelectedActionInputV2, TerminalObservationV2,
 };
-use dclutch_claims::composition::{
-    CompositionExposureBundleV3, RecordAdmissionV3,
-};
+use dclutch_claims::bearer::{BearerBindingV2, BearerDescriptorV2};
+use dclutch_claims::composition::{CompositionExposureBundleV3, RecordAdmissionV3};
+use dclutch_claims::rational_kernel::{DescriptorAdmissionV2, RepresentationDescriptorV2};
 use solana_program::{hash::hash, pubkey::Pubkey};
 
 /// Stable operator construction refusal.
@@ -230,9 +226,8 @@ pub fn construct_chain_denominate(
     observation: RationalObservationV2<'_>,
     input: SelectedActionInputV2,
 ) -> Result<ConstructedInstructionV2> {
-    let built =
-        crate::rational_representation::construct_denominate(observation, input)
-            .map_err(Error::ChainOperator)?;
+    let built = crate::rational_representation::construct_denominate(observation, input)
+        .map_err(Error::ChainOperator)?;
     authenticate_chain_basis(observation, built.representation_authority, input.outcome)?;
     Ok(built)
 }
@@ -243,9 +238,8 @@ pub fn construct_chain_reconstitute(
     observation: RationalObservationV2<'_>,
     input: SelectedActionInputV2,
 ) -> Result<ConstructedInstructionV2> {
-    let built =
-        crate::rational_representation::construct_reconstitute(observation, input)
-            .map_err(Error::ChainOperator)?;
+    let built = crate::rational_representation::construct_reconstitute(observation, input)
+        .map_err(Error::ChainOperator)?;
     authenticate_chain_basis(observation, built.representation_authority, input.outcome)?;
     Ok(built)
 }
@@ -256,11 +250,8 @@ pub fn construct_chain_redeem_terminal(
     observation: RationalObservationV2<'_>,
     terminal: TerminalObservationV2<'_>,
 ) -> Result<ConstructedInstructionV2> {
-    let built = crate::rational_representation::construct_redeem_terminal(
-        observation,
-        terminal,
-    )
-    .map_err(Error::ChainOperator)?;
+    let built = crate::rational_representation::construct_redeem_terminal(observation, terminal)
+        .map_err(Error::ChainOperator)?;
     authenticate_chain_basis(
         observation,
         built.representation_authority,
@@ -383,13 +374,13 @@ fn authenticate_basis_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_claims::rational::RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2;
-    use dclutch_claims::rational_kernel::{
-        DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3,
-    };
     use dclutch_claims::composition::{
         CompositionExposureInputV3, CompositionExposureRowInputV3, CompositionExposureTermV3,
         composition_exposure_bytes_v3, encode_composition_exposure_v3_atomic,
+    };
+    use dclutch_claims::rational::RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2;
+    use dclutch_claims::rational_kernel::{
+        DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3,
     };
     use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
 

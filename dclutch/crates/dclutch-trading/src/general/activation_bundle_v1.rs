@@ -42,6 +42,14 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
+use crate::general_config::{
+    GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_ROOT_BYTES_V2, GENERAL_ROOT_SCHEMA_ID_V2,
+    root::{
+        GENERAL_ROOT_CONFIG_ID_OFFSET_V2, GENERAL_ROOT_GENERATION_OFFSET_V2,
+        GENERAL_ROOT_MARKET_OFFSET_V2, general_root_creation_tail_v2,
+    },
+};
+use dclutch_core_contract::ContentId;
 use dclutch_market::capability_activation::{
     ActivationBundleErrorV1, ActivationBundleInputV1, ActivationBundleV1, ActivationSeamImageV1,
     ActivationTailFieldV1, activation_descriptor_schema_v1, build_activation_bundle_v1,
@@ -54,14 +62,6 @@ use dclutch_market::capability_program::{
         ACTIVATION_MARKET_IDENTITY_V2,
     },
     v4::{CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID},
-};
-use dclutch_core_contract::ContentId;
-use crate::general_config::{
-    GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_ROOT_BYTES_V2, GENERAL_ROOT_SCHEMA_ID_V2,
-    root::{
-        GENERAL_ROOT_CONFIG_ID_OFFSET_V2, GENERAL_ROOT_GENERATION_OFFSET_V2,
-        GENERAL_ROOT_MARKET_OFFSET_V2, general_root_creation_tail_v2,
-    },
 };
 use dclutch_sha256_adapter::digest;
 
@@ -533,12 +533,12 @@ mod tests {
 
     use std::vec::Vec;
 
+    use crate::general_config::root::GeneralRootV2;
     use dclutch_market::capability_program::v4::{
         ArtifactReferenceV4, CapabilityArtifactsV4,
         SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID,
         SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
     };
-    use crate::general_config::root::GeneralRootV2;
 
     use super::*;
 

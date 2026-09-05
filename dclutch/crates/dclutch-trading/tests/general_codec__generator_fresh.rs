@@ -57,8 +57,9 @@ fn checked_in_rust_is_exact_lean_generator_output() {
     );
     let formatted = std::fs::read(&temporary).expect("read formatted generated Rust");
     std::fs::remove_file(&temporary).expect("remove generated Rust");
-    let checked_in = std::fs::read(manifest.join("src/general_codec/generated_general_controller.rs"))
-        .expect("read checked-in generated codec");
+    let checked_in =
+        std::fs::read(manifest.join("src/general_codec/generated_general_controller.rs"))
+            .expect("read checked-in generated codec");
     if formatted != checked_in {
         // Printed before the assertion, because `assert_eq!` over two `Vec<u8>`
         // dumps both files as byte vectors and this is the line a reader wants.

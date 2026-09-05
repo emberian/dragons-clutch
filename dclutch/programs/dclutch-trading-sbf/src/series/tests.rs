@@ -1,10 +1,10 @@
 use super::*;
 use dclutch_core_contract::ContentId;
-use dclutch_market::{MarketCoreStateSeedsV2, MarketIdentity, SeriesCoreActionV1};
 use dclutch_market::rent::{
     RefundAuthority,
     lifecycle_v2::{LifecycleAccountIdV2, LifecycleRentCreditV2},
 };
+use dclutch_market::{MarketCoreStateSeedsV2, MarketIdentity, SeriesCoreActionV1};
 use solana_program::{hash::hashv, pubkey::Pubkey};
 
 const HASH_SEPARATOR: [u8; 1] = [0];
@@ -601,12 +601,8 @@ fn prepare_and_expire_commit_under_controller_without_fabricating_core() {
     let post_digest =
         core_identity(ContentId::new([88; 32]).expect("post digest")).expect("Core post digest");
     let core_program = core_pubkey_identity(fixture.core_program).expect("Core program");
-    let ack = dclutch_market::SeriesCoreAckV1::new(
-        request,
-        core_program,
-        request_digest,
-        post_digest,
-    );
+    let ack =
+        dclutch_market::SeriesCoreAckV1::new(request, core_program, request_digest, post_digest);
     assert_eq!(
         expire.commit_after_ack(ack, core_program, request_digest, post_digest),
         Err(commit_plans::LifecycleErrorV3::CoreAck)

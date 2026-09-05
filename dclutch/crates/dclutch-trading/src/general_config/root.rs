@@ -7,11 +7,11 @@
 //! boundary, and call
 //! [`GeneralRootV2::require_hot_context`] before using any configuration field.
 
+use dclutch_core_contract::{ContentId, MarketRoot, Phase};
 use dclutch_market::capability_manifest::{
     ActivationPolicy, CapabilityManifestV1, FundingCustodyObservationV1, FundingStateV1,
     FundingStatus,
 };
-use dclutch_core_contract::{ContentId, MarketRoot, Phase};
 
 use crate::general_config::GeneralConfigV2;
 
@@ -24,7 +24,8 @@ pub const GENERAL_ROOT_BYTES_V2: usize = crate::general_config::generated::GENER
 /// decoding the whole tail, and without minting a second layout authority. The
 /// adapter's account-data offset is `CAPABILITY_ROOT_HEADER_BYTES_V1` plus this
 /// value.
-pub const GENERAL_ROOT_LIFECYCLE_OFFSET_V2: usize = crate::general_config::generated::ROOT_LIFECYCLE_OFFSET;
+pub const GENERAL_ROOT_LIFECYCLE_OFFSET_V2: usize =
+    crate::general_config::generated::ROOT_LIFECYCLE_OFFSET;
 
 /// Creation-time tail coordinates for a data-defined activation artifact.
 ///
@@ -48,23 +49,30 @@ pub const GENERAL_ROOT_MAGIC_OFFSET_V2: usize = 0;
 /// It spans the ABI version, the [`GeneralLifecycleV2::Active`] discriminant and
 /// the five reserved bytes the decoder requires to be zero, which is exactly one
 /// aligned scalar write.
-pub const GENERAL_ROOT_ACTIVE_HEADER_WORD_V2: u64 = (crate::general_config::generated::ABI_VERSION_V2 as u64)
-    | ((GeneralLifecycleV2::Active as u64) << ((GENERAL_ROOT_LIFECYCLE_OFFSET_V2 - 8) * 8));
+pub const GENERAL_ROOT_ACTIVE_HEADER_WORD_V2: u64 =
+    (crate::general_config::generated::ABI_VERSION_V2 as u64)
+        | ((GeneralLifecycleV2::Active as u64) << ((GENERAL_ROOT_LIFECYCLE_OFFSET_V2 - 8) * 8));
 /// Tail offset of [`GENERAL_ROOT_ACTIVE_HEADER_WORD_V2`].
-pub const GENERAL_ROOT_HEADER_WORD_OFFSET_V2: usize = crate::general_config::generated::ROOT_VERSION_OFFSET;
+pub const GENERAL_ROOT_HEADER_WORD_OFFSET_V2: usize =
+    crate::general_config::generated::ROOT_VERSION_OFFSET;
 /// Tail offset of the Market identity.
-pub const GENERAL_ROOT_MARKET_OFFSET_V2: usize = crate::general_config::generated::ROOT_MARKET_OFFSET;
+pub const GENERAL_ROOT_MARKET_OFFSET_V2: usize =
+    crate::general_config::generated::ROOT_MARKET_OFFSET;
 /// Tail offset of the config content identity.
-pub const GENERAL_ROOT_CONFIG_ID_OFFSET_V2: usize = crate::general_config::generated::ROOT_CONFIG_ID_OFFSET;
+pub const GENERAL_ROOT_CONFIG_ID_OFFSET_V2: usize =
+    crate::general_config::generated::ROOT_CONFIG_ID_OFFSET;
 /// Tail offset of the Market generation.
-pub const GENERAL_ROOT_GENERATION_OFFSET_V2: usize = crate::general_config::generated::ROOT_GENERATION_OFFSET;
+pub const GENERAL_ROOT_GENERATION_OFFSET_V2: usize =
+    crate::general_config::generated::ROOT_GENERATION_OFFSET;
 /// Tail offset of the root revision.
-pub const GENERAL_ROOT_REVISION_OFFSET_V2: usize = crate::general_config::generated::ROOT_REVISION_OFFSET;
+pub const GENERAL_ROOT_REVISION_OFFSET_V2: usize =
+    crate::general_config::generated::ROOT_REVISION_OFFSET;
 /// Tail offset of the mutable next-batch sequence.
 pub const GENERAL_ROOT_NEXT_BATCH_SEQUENCE_OFFSET_V2: usize =
     crate::general_config::generated::ROOT_NEXT_BATCH_SEQUENCE_OFFSET;
 /// Tail offset of the mutable open-batch count.
-pub const GENERAL_ROOT_OPEN_BATCHES_OFFSET_V2: usize = crate::general_config::generated::ROOT_OPEN_BATCHES_OFFSET;
+pub const GENERAL_ROOT_OPEN_BATCHES_OFFSET_V2: usize =
+    crate::general_config::generated::ROOT_OPEN_BATCHES_OFFSET;
 /// Revision [`GeneralRootV2::active`] starts at.
 pub const GENERAL_ROOT_INITIAL_REVISION_V2: u64 = 1;
 
@@ -242,22 +250,42 @@ impl GeneralRootV2 {
         {
             return Err(RootError::UnsupportedSchema);
         }
-        require_zero(bytes, crate::general_config::generated::ROOT_RESERVED_HEADER_OFFSET, 5)?;
-        require_zero(bytes, crate::general_config::generated::ROOT_RESERVED_TAIL_OFFSET, 16)?;
+        require_zero(
+            bytes,
+            crate::general_config::generated::ROOT_RESERVED_HEADER_OFFSET,
+            5,
+        )?;
+        require_zero(
+            bytes,
+            crate::general_config::generated::ROOT_RESERVED_TAIL_OFFSET,
+            16,
+        )?;
         let value = Self {
             lifecycle: GeneralLifecycleV2::decode(read_u8(
                 bytes,
                 crate::general_config::generated::ROOT_LIFECYCLE_OFFSET,
             )?)?,
             market: read_array(bytes, crate::general_config::generated::ROOT_MARKET_OFFSET)?,
-            config_id: read_array(bytes, crate::general_config::generated::ROOT_CONFIG_ID_OFFSET)?,
-            generation: read_u64(bytes, crate::general_config::generated::ROOT_GENERATION_OFFSET)?,
-            revision: read_u64(bytes, crate::general_config::generated::ROOT_REVISION_OFFSET)?,
+            config_id: read_array(
+                bytes,
+                crate::general_config::generated::ROOT_CONFIG_ID_OFFSET,
+            )?,
+            generation: read_u64(
+                bytes,
+                crate::general_config::generated::ROOT_GENERATION_OFFSET,
+            )?,
+            revision: read_u64(
+                bytes,
+                crate::general_config::generated::ROOT_REVISION_OFFSET,
+            )?,
             next_batch_sequence: read_u64(
                 bytes,
                 crate::general_config::generated::ROOT_NEXT_BATCH_SEQUENCE_OFFSET,
             )?,
-            open_batches: read_u64(bytes, crate::general_config::generated::ROOT_OPEN_BATCHES_OFFSET)?,
+            open_batches: read_u64(
+                bytes,
+                crate::general_config::generated::ROOT_OPEN_BATCHES_OFFSET,
+            )?,
         };
         value.validate()?;
         Ok(value)
@@ -267,7 +295,11 @@ impl GeneralRootV2 {
     #[must_use]
     pub fn to_bytes(self) -> [u8; GENERAL_ROOT_BYTES_V2] {
         let mut output = [0_u8; GENERAL_ROOT_BYTES_V2];
-        put(&mut output, 0, &crate::general_config::generated::GENERAL_ROOT_MAGIC_V2);
+        put(
+            &mut output,
+            0,
+            &crate::general_config::generated::GENERAL_ROOT_MAGIC_V2,
+        );
         put(
             &mut output,
             crate::general_config::generated::ROOT_VERSION_OFFSET,
@@ -289,8 +321,14 @@ impl GeneralRootV2 {
             &self.config_id,
         );
         for (offset, value) in [
-            (crate::general_config::generated::ROOT_GENERATION_OFFSET, self.generation),
-            (crate::general_config::generated::ROOT_REVISION_OFFSET, self.revision),
+            (
+                crate::general_config::generated::ROOT_GENERATION_OFFSET,
+                self.generation,
+            ),
+            (
+                crate::general_config::generated::ROOT_REVISION_OFFSET,
+                self.revision,
+            ),
             (
                 crate::general_config::generated::ROOT_NEXT_BATCH_SEQUENCE_OFFSET,
                 self.next_batch_sequence,
@@ -823,11 +861,11 @@ mod tests {
     #![allow(clippy::indexing_slicing, clippy::panic)]
 
     use super::*;
+    use dclutch_core_contract::MarketIdentity;
     use dclutch_market::capability_manifest::{
         CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1, FundingAmountsV1,
         FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
     };
-    use dclutch_core_contract::MarketIdentity;
     use sha2::{Digest, Sha256};
 
     fn id(low: u8) -> [u8; 32] {
@@ -977,7 +1015,10 @@ mod tests {
     #[test]
     fn lean_root_fixture_round_trips_exactly() {
         let root = root();
-        assert_eq!(root.to_bytes(), crate::general_config::generated::GENERAL_ROOT_EXAMPLE_V2);
+        assert_eq!(
+            root.to_bytes(),
+            crate::general_config::generated::GENERAL_ROOT_EXAMPLE_V2
+        );
         assert_eq!(GeneralRootV2::decode(&root.to_bytes()), Ok(root));
         assert_eq!(
             Sha256::digest(GENERAL_CAPABILITY_KIND_PREIMAGE_V1).as_slice(),

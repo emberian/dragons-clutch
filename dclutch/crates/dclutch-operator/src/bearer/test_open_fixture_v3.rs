@@ -1,14 +1,3 @@
-use dclutch_vm::account_profile::lifecycle_v3::{
-    ACTION_PLAN_BYTES, HEADER_BYTES, PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SEED_BYTES,
-    encode::{
-        LifecycleAccountCoordinateV3, LifecycleGuardInputV3, LifecycleOperationInputV3,
-        LifecyclePlanInputV3, LifecycleRecipeInputV3, LifecycleRefundSourceInputV3,
-        LifecycleSeedInputV3, encode_lifecycle_policy_v5_atomic,
-    },
-};
-use dclutch_product::payoff::runtime_v3::{
-    BASIS_HEADER_BYTES_V3, BasisInputV3, BasisKindV3, compile_basis_v3,
-};
 use dclutch_claims::rational::RepresentationActionV2;
 use dclutch_claims::rational::{
     AuthenticatedTokenBehaviorV2, TokenBehaviorRecordAdmissionV2, authenticate_token_behavior_v2,
@@ -20,6 +9,17 @@ use dclutch_claims::rational_kernel::{
 use dclutch_custody::token_svm::{
     TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_BYTES_V2,
     TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, TokenBehaviorSelectionV2,
+};
+use dclutch_product::payoff::runtime_v3::{
+    BASIS_HEADER_BYTES_V3, BasisInputV3, BasisKindV3, compile_basis_v3,
+};
+use dclutch_vm::account_profile::lifecycle_v3::{
+    ACTION_PLAN_BYTES, HEADER_BYTES, PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SEED_BYTES,
+    encode::{
+        LifecycleAccountCoordinateV3, LifecycleGuardInputV3, LifecycleOperationInputV3,
+        LifecyclePlanInputV3, LifecycleRecipeInputV3, LifecycleRefundSourceInputV3,
+        LifecycleSeedInputV3, encode_lifecycle_policy_v5_atomic,
+    },
 };
 use solana_program::hash::hash;
 

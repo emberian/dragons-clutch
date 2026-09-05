@@ -7,29 +7,14 @@ use dclutch_claims::liability_basis_state_v2::{
     LiabilityBasisMarketInputV2, encode_liability_basis_market_into_v2,
 };
 use dclutch_core_contract::ContentId;
+use dclutch_custody::token_svm::{LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES};
 use dclutch_custody::{
     CUSTODY_REPLAY_BYTES_V1, CompartmentV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1,
     CustodyReplayV1, CustodyVaultSeedsV1, RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1,
     RetirementReplayHandoffAccountLayoutV1 as Layout, RetirementReplayHandoffRequestV1,
 };
-use dclutch_market::{
-    CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
-    StateBumpsV1,
-};
-use dclutch_program_test_evidence::TransactionEvidence;
 use dclutch_market::realm::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
-};
-use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry::{
-    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
-    ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
-    ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
-    initialize_activation_cache_v1,
-};
-use dclutch_registry::release_set::{
-    ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
-    ExecutionRoleV1, ProgramIdentityV1,
 };
 use dclutch_market::rent::{
     RefundAuthority,
@@ -37,7 +22,22 @@ use dclutch_market::rent::{
         LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
     },
 };
-use dclutch_custody::token_svm::{LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES};
+use dclutch_market::{
+    CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
+    StateBumpsV1,
+};
+use dclutch_program_test_evidence::TransactionEvidence;
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::release_set::{
+    ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
+    ExecutionRoleV1, ProgramIdentityV1,
+};
+use dclutch_registry::{
+    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
+    ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
+    ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
+    initialize_activation_cache_v1,
+};
 use solana_account::Account;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_program::{

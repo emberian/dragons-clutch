@@ -1,7 +1,7 @@
 //! Generic Registry publication and Product graph join tests.
 
-use dclutch_product::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
 use dclutch_product::admission::PRODUCT_RECORD_BYTES_V2;
+use dclutch_product::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
 use dclutch_product_runtime_v2_operator::{
     AccountObservationV2, ProductCompilationInputV2, compile_product_records_v2,
     publication::{

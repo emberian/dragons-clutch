@@ -20,7 +20,7 @@ export interface RoutePhaseGateV1 {
 }
 
 /** Routes enumerated by the census, gated or not. */
-export const ROUTE_COUNT_V1 = 165 as const;
+export const ROUTE_COUNT_V1 = 148 as const;
 
 export const ROUTE_PHASE_GATES_V1: ReadonlyArray<RoutePhaseGateV1> = [
   { route: "claims/affine_batch_v2::process", phases: ["Open"], prestates: [] },
@@ -121,7 +121,6 @@ export const ROUTES_GATED_ON_ANOTHER_MACHINE_V1: ReadonlyArray<RouteOtherMachine
   { route: "core/series_permit_expiry_precommit_v1::process", machines: ["series-ticket"], gates: [{ machine: "series-ticket", states: ["Prepared"] }] },
   { route: "custody/abort_open_and_close#AbortOpenAndClose", machines: ["projected-custody"], gates: [{ machine: "projected-custody", states: ["HoardOpen"] }] },
   { route: "custody/abort_source_and_close#AbortSourceAndClose", machines: ["projected-custody"], gates: [{ machine: "projected-custody", states: ["SourceFunded"] }] },
-  { route: "custody/dealer_reservation_v1::process", machines: ["dealer-checkpoint"], gates: [{ machine: "dealer-checkpoint", states: ["Evaluated", "Reserved", "RollingBack"] }] },
   { route: "custody/lock_hoard#LockHoard", machines: ["projected-custody"], gates: [{ machine: "projected-custody", states: ["HoardOpen"] }] },
   { route: "custody/lock_hoard_and_close_source#LockHoardAndCloseSource", machines: ["projected-custody"], gates: [{ machine: "projected-custody", states: ["HoardOpen", "SourceFunded"] }] },
   { route: "custody/open_hoard#OpenHoard", machines: ["projected-custody"], gates: [{ machine: "projected-custody", states: ["Initialized"] }] },
@@ -135,13 +134,6 @@ export const ROUTES_GATED_ON_ANOTHER_MACHINE_V1: ReadonlyArray<RouteOtherMachine
   { route: "resolution/process_commit_failure#CommitFailure", machines: ["funding-ledger", "source"], gates: [{ machine: "funding-ledger", states: ["Active"] }, { machine: "source", states: ["Primary"] }] },
   { route: "resolution/process_settle#Settle", machines: ["source"], gates: [{ machine: "source", states: ["Primary"] }] },
   { route: "resolution/process_submit#magic", machines: ["source"], gates: [{ machine: "source", states: ["Primary", "Recovery"] }] },
-  { route: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_cleanup_v1", machines: ["dealer-checkpoint"], gates: [{ machine: "dealer-checkpoint", states: ["Collecting", "Evaluated", "Reserved", "RollingBack"] }] },
-  { route: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_commit_v1", machines: ["dealer-checkpoint"], gates: [{ machine: "dealer-checkpoint", states: ["Reserved"] }] },
-  { route: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_evaluate_v1", machines: ["dealer-checkpoint"], gates: [{ machine: "dealer-checkpoint", states: ["Collecting"] }] },
-  { route: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_page_v1", machines: ["dealer-checkpoint"], gates: [{ machine: "dealer-checkpoint", states: ["Collecting"] }] },
-  { route: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_reserve_v1", machines: ["dealer-checkpoint"], gates: [{ machine: "dealer-checkpoint", states: ["Evaluated", "Reserved", "RollingBack"] }] },
-  { route: "trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_rollback_v1", machines: ["dealer-checkpoint"], gates: [{ machine: "dealer-checkpoint", states: ["Evaluated", "Reserved", "RollingBack"] }] },
-  { route: "trading/direct_begin_retiring_v1::process_direct_begin_retiring_v1", machines: ["direct-root"], gates: [{ machine: "direct-root", states: ["Open"] }] },
   { route: "trading/direct_close_maker_v1::process_direct_close_maker_v1", machines: ["direct-root"], gates: [{ machine: "direct-root", states: ["Retiring"] }] },
   { route: "trading/direct_token_setup_v1::process_direct_token_setup_v1", machines: ["direct-root"], gates: [{ machine: "direct-root", states: ["Open"] }] },
 ];
@@ -194,8 +186,8 @@ export interface RouteSelectedGateV1 {
 }
 
 export const ROUTE_SELECTED_GATES_V1: ReadonlyArray<RouteSelectedGateV1> = [
-  { route: "trading/hot_v3::process_hot_execution_v3", selectedBy: "hot_v3::prepare_direct_inline_hot_crosscheck_v3", machine: "direct-root", states: ["Open"], provenance: "crates/dclutch-direct-codec/src/direct_root_admission_v1.rs:107" },
-  { route: "trading/hot_v3::process_hot_execution_v3", selectedBy: "hot_v3::try_authenticate_series_expiry_premarket_v1", machine: "series-ticket", states: ["Prepared"], provenance: "crates/dclutch-series-v3-kernel/src/ticket_admission_v1.rs:115" },
+  { route: "trading/hot_v3::process_hot_execution_v3", selectedBy: "hot_v3::direct::prepare_direct_inline_hot_crosscheck_v3", machine: "direct-root", states: ["Open"], provenance: "crates/dclutch-trading/src/direct_root_admission_v1.rs:107" },
+  { route: "trading/hot_v3::process_hot_execution_v3", selectedBy: "hot_v3::series_expiry::try_authenticate_series_expiry_premarket_v1", machine: "series-ticket", states: ["Prepared"], provenance: "crates/dclutch-trading/src/series/ticket_admission_v1.rs:115" },
 ];
 
 /** Every gate on one route that lies behind a classifier's decline. */

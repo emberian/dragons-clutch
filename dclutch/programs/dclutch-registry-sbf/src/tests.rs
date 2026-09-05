@@ -3,18 +3,18 @@ extern crate std;
 use std::{boxed::Box, vec, vec::Vec};
 
 use dclutch_core_contract::ContentId;
-use dclutch_registry::{
-    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
-    ActivatedExecutionReleaseSetV1, ArtifactReleaseV1, ArtifactUpgradePolicyV1,
-    initialize_activation_cache_v1,
+use dclutch_registry::release_set::{
+    ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
+    ProgramIdentityV1,
 };
 use dclutch_registry::svm::{
     AuthenticatedRoleReceiptV1, RegistryInstructionV1,
     batch_v2::{BatchErrorV2, ROLE_BATCH_REQUEST_MAGIC_V2, RoleBatchRequestV2},
 };
-use dclutch_registry::release_set::{
-    ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
-    ProgramIdentityV1,
+use dclutch_registry::{
+    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
+    ActivatedExecutionReleaseSetV1, ArtifactReleaseV1, ArtifactUpgradePolicyV1,
+    initialize_activation_cache_v1,
 };
 use solana_program::{
     account_info::AccountInfo, hash::hash, pubkey::Pubkey, rent::Rent, sysvar::SysvarSerialize,
@@ -998,12 +998,12 @@ fn role_activation_refuses_a_substituted_deployment() {
 use dclutch_registry::activation_auth_v1::{
     release_lineage_address_and_bump_v1, release_lineage_address_v1,
 };
+use dclutch_registry::release_set::{EXECUTION_ROLE_COUNT_V1, EXECUTION_ROLE_ORDER_V1};
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_MAGIC_V1, ACTIVATED_EXECUTION_RELEASE_SET_PROFILE_V1,
     ACTIVATED_EXECUTION_RELEASE_SET_SCHEMA_VERSION_V1, ACTIVATED_ROLE_BYTES_V1,
     RELEASE_LINEAGE_BYTES_V1, ReleaseLineageV1,
 };
-use dclutch_registry::release_set::{EXECUTION_ROLE_COUNT_V1, EXECUTION_ROLE_ORDER_V1};
 use solana_program::{entrypoint::ProgramResult, program_error::ProgramError};
 
 fn copied<T: Copy, const N: usize>(values: &[T; N], index: usize) -> T {
@@ -1276,10 +1276,9 @@ impl LineageFixture {
             .expect("successor cache")
             .try_borrow_data()
             .expect("successor bytes");
-        let predecessor = dclutch_registry::ActivatedExecutionReleaseSetViewV1::decode(
-            &predecessor_data,
-        )
-        .expect("predecessor cache decodes");
+        let predecessor =
+            dclutch_registry::ActivatedExecutionReleaseSetViewV1::decode(&predecessor_data)
+                .expect("predecessor cache decodes");
         let successor =
             dclutch_registry::ActivatedExecutionReleaseSetViewV1::decode(&successor_data)
                 .expect("successor cache decodes");

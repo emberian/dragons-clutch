@@ -11,17 +11,15 @@ use alloc::boxed::Box;
 use dclutch_claims::liability_basis_state_v2::{
     LiabilityBasisMarketViewV2 as MarketViewV2, LiabilityBasisPositionViewV2 as PositionViewV2,
 };
-use dclutch_market::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
-use dclutch_product::ContentId;
 use dclutch_claims::product_representation_reader_v3::{
     RepresentationRuntimeContextV3, RepresentationRuntimeFrameV3,
     authenticate_product_representation_v3,
 };
-use dclutch_product::svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV3};
-use dclutch_claims::rational::{
-    RepresentationActionV2, RepresentationRequestV2,
-};
+use dclutch_claims::rational::{RepresentationActionV2, RepresentationRequestV2};
 use dclutch_claims::rational_kernel::product_v3::RepresentationAdmissionV3;
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
+use dclutch_product::ContentId;
+use dclutch_product::svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV3};
 use solana_program::{account_info::AccountInfo, program_error::ProgramError, pubkey::Pubkey};
 
 use super::{

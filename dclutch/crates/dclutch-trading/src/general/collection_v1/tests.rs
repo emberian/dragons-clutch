@@ -149,8 +149,11 @@ fn execution_bytes_from(
     receive: &[u64],
     deliver: &[u64],
 ) -> Vec<u8> {
-    let mut bytes =
-        vec![0_u8; crate::general::runtime_width::execution_len(header.outcome_count).expect("row width")];
+    let mut bytes = vec![
+        0_u8;
+        crate::general::runtime_width::execution_len(header.outcome_count)
+            .expect("row width")
+    ];
     ExecutionV2::encode_into(header, receive, deliver, &mut bytes).expect("row bytes");
     bytes
 }
@@ -1041,7 +1044,8 @@ fn hostile_an_execution_row_overstating_max_lots_or_fill_is_refused() {
     // Two mutations are refused one level lower -- the Execution record itself
     // will not encode them -- so this states where each refusal actually lives
     // instead of asserting the same thing at two layers.
-    let mut buffer = vec![0_u8; crate::general::runtime_width::execution_len(WIDTH).expect("row width")];
+    let mut buffer =
+        vec![0_u8; crate::general::runtime_width::execution_len(WIDTH).expect("row width")];
     let mut zero_fill = base;
     zero_fill.lots = 0;
     assert_eq!(

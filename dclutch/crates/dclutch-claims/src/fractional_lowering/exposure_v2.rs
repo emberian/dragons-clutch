@@ -4,6 +4,8 @@
 //! synthesizes a categorical V1 request and never projects Product width `N`
 //! onto Claims width `K`.
 
+use crate::fractional::{FractionalExposureActionV2, FractionalExposureRequestV2};
+use crate::fractional_kernel::{FractionalExposureTermsV2, divide_exposure_shards_v2};
 use crate::{
     CallerRole,
     liability_basis_state_v2::{LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2},
@@ -13,8 +15,6 @@ use crate::{
         SignedDeltaReceiptV3, SignedDeltaV3, plan_bytes,
     },
 };
-use crate::fractional::{FractionalExposureActionV2, FractionalExposureRequestV2};
-use crate::fractional_kernel::{FractionalExposureTermsV2, divide_exposure_shards_v2};
 
 use crate::fractional_lowering::{Error, Result};
 

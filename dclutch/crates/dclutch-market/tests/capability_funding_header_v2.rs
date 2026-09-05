@@ -5,9 +5,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use dclutch_market::{
-    CAPABILITY_FUNDING_HEADER_BYTES_V2, CapabilityFundingHeaderV2, Error,
-};
+use dclutch_market::{CAPABILITY_FUNDING_HEADER_BYTES_V2, CapabilityFundingHeaderV2, Error};
 
 #[test]
 fn exact_header_roundtrips_at_logical_boundaries() {

@@ -323,9 +323,7 @@ pub fn encode_direct_ordinary_transition_v3(scratch: &mut [u8], output: &mut [u8
 mod tests {
     extern crate std;
 
-    use dclutch_vm::v3::{
-        ProgramV3, RegisterInput, RegisterOutput, execute_fold_atomic,
-    };
+    use dclutch_vm::v3::{ProgramV3, RegisterInput, RegisterOutput, execute_fold_atomic};
 
     use super::*;
     use crate::{
@@ -356,8 +354,7 @@ mod tests {
         assert_eq!(
             DIRECT_ORDINARY_TRANSITION_BYTES_V3,
             dclutch_vm::v3::HEADER_BYTES
-                + DIRECT_ORDINARY_TRANSITION_INSTRUCTIONS_V3
-                    * dclutch_vm::v3::INSTRUCTION_BYTES
+                + DIRECT_ORDINARY_TRANSITION_INSTRUCTIONS_V3 * dclutch_vm::v3::INSTRUCTION_BYTES
         );
         let program = ProgramV3::decode(&DIRECT_ORDINARY_TRANSITION_V3).expect("program decode");
         assert_eq!(

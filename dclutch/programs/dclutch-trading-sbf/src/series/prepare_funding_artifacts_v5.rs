@@ -11,6 +11,18 @@ extern crate alloc;
 
 use alloc::{vec, vec::Vec};
 
+use dclutch_custody::ProjectedCustodyRequestLayoutV1;
+use dclutch_market::capability_program::{
+    CAPABILITY_ROOT_GENERATION_OFFSET, CAPABILITY_ROOT_MARKET_OFFSET,
+    CAPABILITY_ROOT_SELECTION_OFFSET,
+    hot_v3::{HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3, HOT_RUNTIME_PORTFOLIO_COORDINATE_V3},
+};
+use dclutch_product::{PORTFOLIO_COEFFICIENT_COUNT_OFFSET, PORTFOLIO_HEADER_BYTES};
+use dclutch_registry::release_set::{
+    CAPABILITY_EXECUTION_SELECTION_CONFIG_OFFSET,
+    CAPABILITY_EXECUTION_SELECTION_ENTRY_INDEX_OFFSET, CAPABILITY_EXECUTION_SELECTION_KIND_OFFSET,
+    CAPABILITY_EXECUTION_SELECTION_MANIFEST_OFFSET, CAPABILITY_EXECUTION_SELECTION_RELEASE_OFFSET,
+};
 use dclutch_vm::account_profile::{
     lifecycle_v3::StateLifecyclePolicyV5,
     v2::{
@@ -28,12 +40,6 @@ use dclutch_vm::account_profile::{
         HEADER_BYTES_V3, encode_account_profile_v3_atomic,
     },
 };
-use dclutch_market::capability_program::{
-    CAPABILITY_ROOT_GENERATION_OFFSET, CAPABILITY_ROOT_MARKET_OFFSET,
-    CAPABILITY_ROOT_SELECTION_OFFSET,
-    hot_v3::{HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3, HOT_RUNTIME_PORTFOLIO_COORDINATE_V3},
-};
-use dclutch_custody::ProjectedCustodyRequestLayoutV1;
 use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{
@@ -54,12 +60,6 @@ use dclutch_vm::effect::{
         FundingSeedV5, HEADER_BYTES_V5 as EFFECT_HEADER_BYTES_V5, ProgramV5,
         encode_program_v5_atomic,
     },
-};
-use dclutch_product::{PORTFOLIO_COEFFICIENT_COUNT_OFFSET, PORTFOLIO_HEADER_BYTES};
-use dclutch_registry::release_set::{
-    CAPABILITY_EXECUTION_SELECTION_CONFIG_OFFSET,
-    CAPABILITY_EXECUTION_SELECTION_ENTRY_INDEX_OFFSET, CAPABILITY_EXECUTION_SELECTION_KIND_OFFSET,
-    CAPABILITY_EXECUTION_SELECTION_MANIFEST_OFFSET, CAPABILITY_EXECUTION_SELECTION_RELEASE_OFFSET,
 };
 use dclutch_vm::request_profile::{
     HEADER_BYTES as REQUEST_HEADER_BYTES, OPERATION_BYTES as REQUEST_OPERATION_BYTES,

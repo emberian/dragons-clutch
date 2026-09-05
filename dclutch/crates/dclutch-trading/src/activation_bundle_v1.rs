@@ -23,14 +23,7 @@ extern crate alloc;
 
 use alloc::{vec, vec::Vec};
 
-use dclutch_vm::account_profile::{
-    ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1, AccountProfileV1,
-    encode_v1::{
-        AccountAliasInputV1, AccountEffectPermissionsV1, AccountOperationInputV1,
-        AccountPrivilegesV1, AccountRuleInputV1, RegisterGeometryV1, account_profile_v1_bytes,
-        encode_account_profile_v1_atomic,
-    },
-};
+use dclutch_core_contract::ContentId;
 use dclutch_market::capability_manifest::{
     FundingCompartment, funding_ledger_bytes_v2, funding_ledger_remaining_offset_v2,
 };
@@ -46,7 +39,15 @@ use dclutch_market::capability_program::{
     },
     v4::CapabilityProgramV4,
 };
-use dclutch_core_contract::ContentId;
+use dclutch_sha256_adapter::digest;
+use dclutch_vm::account_profile::{
+    ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1, AccountProfileV1,
+    encode_v1::{
+        AccountAliasInputV1, AccountEffectPermissionsV1, AccountOperationInputV1,
+        AccountPrivilegesV1, AccountRuleInputV1, RegisterGeometryV1, account_profile_v1_bytes,
+        encode_account_profile_v1_atomic,
+    },
+};
 use dclutch_vm::effect::v2::{
     ProgramV2 as EffectProgramV2, SCHEMA_RELEASE_ID as EFFECT_PROGRAM_SCHEMA_ID_V2,
     encode::{
@@ -54,7 +55,6 @@ use dclutch_vm::effect::v2::{
         encode_effect_program_v2_atomic,
     },
 };
-use dclutch_sha256_adapter::digest;
 use dclutch_vm::v2::{
     ProgramV2 as TransitionProgramV2,
     encode::{
@@ -483,10 +483,10 @@ mod tests {
     #![allow(clippy::indexing_slicing)]
 
     use super::*;
+    use dclutch_market::capability_program::CAPABILITY_PROGRAM_ACCOUNT_PROFILE_OFFSET;
     use dclutch_vm::account_profile::{
         AccountObservationV1, ProjectionRegistersV2, project_atomic,
     };
-    use dclutch_market::capability_program::CAPABILITY_PROGRAM_ACCOUNT_PROFILE_OFFSET;
     use dclutch_vm::effect::v2::{
         AccountInput, AccountPermission, project_with_aliases_and_requests_atomic,
     };

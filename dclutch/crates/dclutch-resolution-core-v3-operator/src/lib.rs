@@ -33,12 +33,12 @@ use dclutch_product::admission::{
     RESULT_DOMAIN_SCHEMA_ID_V2,
 };
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1, DeploymentObservationV1,
 };
-use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
-use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_source::resolution::{
     DIRECT_FUNDING_CLOSE_REQUEST_BYTES_V1, DirectFundingCloseRequestV1,
     FUNDING_ACTIVATION_RECEIPT_BYTES_V1, FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
@@ -2178,9 +2178,7 @@ pub fn build_resolution_direct_close_fund_v1(
     let planned = build_resolution_close_fund_v3(snapshot)?;
     let role_offset = dclutch_market::REQUEST_BYTES
         .checked_add(dclutch_market::CORE_EFFECT_ENVELOPE_BYTES_V1)
-        .and_then(|value| {
-            value.checked_add(dclutch_market::CAPABILITY_FUNDING_HEADER_BYTES_V2)
-        })
+        .and_then(|value| value.checked_add(dclutch_market::CAPABILITY_FUNDING_HEADER_BYTES_V2))
         .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?;
     let role = ResolutionRoleRequestV2::decode(
         planned
@@ -4048,8 +4046,7 @@ pub fn validate_resolution_create_fund_report_v3(
                 .instruction
                 .data
                 .get(
-                    dclutch_market::REQUEST_BYTES
-                        + dclutch_market::CORE_EFFECT_ENVELOPE_BYTES_V1..,
+                    dclutch_market::REQUEST_BYTES + dclutch_market::CORE_EFFECT_ENVELOPE_BYTES_V1..,
                 )
                 .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?,
         )
@@ -4096,8 +4093,7 @@ pub fn validate_resolution_verify_fund_ready_report_v3(
                 .instruction
                 .data
                 .get(
-                    dclutch_market::REQUEST_BYTES
-                        + dclutch_market::CORE_EFFECT_ENVELOPE_BYTES_V1..,
+                    dclutch_market::REQUEST_BYTES + dclutch_market::CORE_EFFECT_ENVELOPE_BYTES_V1..,
                 )
                 .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?,
         )

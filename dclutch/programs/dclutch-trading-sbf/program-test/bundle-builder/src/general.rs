@@ -179,7 +179,8 @@ pub struct GeneralRequestV1 {
     /// Its canonical bump, zero where there is no result state.
     pub result_state_bump: u8,
     /// Exact canonical 64-byte V3 request.
-    pub request: [u8; dclutch_trading::general_codec::successor_request_v3::CONTROLLER_REQUEST_BYTES_V3],
+    pub request:
+        [u8; dclutch_trading::general_codec::successor_request_v3::CONTROLLER_REQUEST_BYTES_V3],
 }
 
 /// Decode one live General state account and check it is the kind expected.

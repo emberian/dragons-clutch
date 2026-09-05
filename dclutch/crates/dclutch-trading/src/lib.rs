@@ -4,9 +4,9 @@
 
 //! Fixed-layout codecs for Lean-owned compiled Direct data.
 
+extern crate alloc;
 #[cfg(test)]
 extern crate std;
-extern crate alloc;
 
 mod generated_layout;
 #[rustfmt::skip]
@@ -1270,16 +1270,16 @@ mod tests {
 }
 
 // Authorities merged into this crate; each module was one crate before.
-/// Formerly the `dclutch-trading::dealer_scenario` crate.
-pub mod dealer_scenario;
 /// Formerly the `dclutch-trading::dealer` crate.
 pub mod dealer;
+/// Formerly the `dclutch-trading::dealer_scenario` crate.
+pub mod dealer_scenario;
+/// Formerly the `dclutch-trading::general` crate.
+pub mod general;
 /// Formerly the `dclutch-trading::general_codec` crate.
 pub mod general_codec;
 /// Formerly the `dclutch-trading::general_config` crate.
 pub mod general_config;
-/// Formerly the `dclutch-trading::general` crate.
-pub mod general;
 /// Formerly the `dclutch-trading::series` crate.
 pub mod series;
 /// Formerly the `dclutch-trading::shadow_accelerator_auth` crate.

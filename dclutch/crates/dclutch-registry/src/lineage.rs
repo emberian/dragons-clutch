@@ -16,10 +16,8 @@
 //! in its frame, so `decode` refuses every internally incoherent record here
 //! rather than leaving that reader to re-derive the coherence it cannot see.
 
+use crate::release_set::{EXECUTION_ROLE_COUNT_V1, EXECUTION_ROLE_ORDER_V1, ExecutionRoleV1};
 use dclutch_core_contract::ContentId;
-use crate::release_set::{
-    EXECUTION_ROLE_COUNT_V1, EXECUTION_ROLE_ORDER_V1, ExecutionRoleV1,
-};
 
 use crate::{
     Error, IDENTITY_BYTES, Result, copy_infallible, put_u16, read_array, read_byte, read_u16,

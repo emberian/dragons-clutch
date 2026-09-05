@@ -2,6 +2,7 @@ extern crate std;
 
 use std::{boxed::Box, vec, vec::Vec};
 
+use dclutch_core_contract::ContentId;
 use dclutch_market::capability_program::{
     CapabilityRootHeaderV1, SelectedRecordBumpsV1,
     v4::{
@@ -10,7 +11,6 @@ use dclutch_market::capability_program::{
         SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
     },
 };
-use dclutch_core_contract::ContentId;
 use dclutch_market::execution_strategy::shadow_v3::{
     SHADOW_ACK_SCHEMA_ID_V3, SHADOW_REQUEST_SCHEMA_ID_V3,
 };
@@ -21,11 +21,11 @@ use dclutch_market::execution_strategy::v2::{
     ExecutionStrategyCertificateV2, ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry::{ArtifactReleaseV1, ArtifactUpgradePolicyV1};
-use dclutch_registry::svm::{LOADER_V3_PROGRAM_BYTES, LOADER_V3_PROGRAMDATA_METADATA_BYTES};
 use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, CapabilityExecutionSelectionV1, ExecutionRoleV1, ProgramIdentityV1,
 };
+use dclutch_registry::svm::{LOADER_V3_PROGRAM_BYTES, LOADER_V3_PROGRAMDATA_METADATA_BYTES};
+use dclutch_registry::{ArtifactReleaseV1, ArtifactUpgradePolicyV1};
 use solana_program::{
     account_info::AccountInfo, hash::hash, pubkey::Pubkey, rent::Rent, sysvar::SysvarSerialize,
 };

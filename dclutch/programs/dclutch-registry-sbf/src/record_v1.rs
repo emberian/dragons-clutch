@@ -25,10 +25,8 @@ use dclutch_registry::record::{
     STAGING_CURSOR_PDA_SEED_V1, StagingCursorV1, StagingLivenessPolicyV1, prepare_abort_v1,
     prepare_append_page_v1, prepare_begin_v1, prepare_finalize_v1,
 };
-use dclutch_registry::{
-    ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1, DeploymentObservationV1,
-};
 use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
+use dclutch_registry::{ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1, DeploymentObservationV1};
 use solana_program::{
     account_info::AccountInfo,
     clock::Clock,
@@ -1938,10 +1936,8 @@ mod release_finalization_corpus {
     extern crate std;
 
     use dclutch_core_contract::ContentId;
-    use dclutch_registry::{
-        ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
-    };
     use dclutch_registry::release_set::ProgramIdentityV1;
+    use dclutch_registry::{ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1};
     use solana_program::program_error::ProgramError;
     use solana_sdk_ids::bpf_loader_upgradeable;
 
@@ -2094,10 +2090,8 @@ mod devnet_general_accelerator_observation {
     extern crate std;
 
     use dclutch_core_contract::ContentId;
-    use dclutch_registry::{
-        ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
-    };
     use dclutch_registry::release_set::ProgramIdentityV1;
+    use dclutch_registry::{ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1};
     use solana_program::program_error::ProgramError;
     use solana_sdk_ids::bpf_loader_upgradeable;
 

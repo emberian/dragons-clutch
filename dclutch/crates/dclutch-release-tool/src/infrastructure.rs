@@ -15,15 +15,13 @@
 //! [`CheckedInfrastructureV1::evidence_class`].
 
 use dclutch_core_contract::ContentId;
-use dclutch_registry::{
-    ARTIFACT_RELEASE_BYTES_V1, ArtifactReleaseV1, ArtifactUpgradePolicyV1,
-};
 use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProtocolInfrastructureProfileV1,
     ProtocolInfrastructureProfileV2,
 };
+use dclutch_registry::{ARTIFACT_RELEASE_BYTES_V1, ArtifactReleaseV1, ArtifactUpgradePolicyV1};
 use solana_program::pubkey::Pubkey;
 
 use crate::{

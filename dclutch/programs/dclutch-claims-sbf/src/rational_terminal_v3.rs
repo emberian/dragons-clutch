@@ -9,6 +9,8 @@ extern crate alloc;
 
 use alloc::{boxed::Box, vec, vec::Vec};
 
+use dclutch_claims::composition::RecordAdmissionV3;
+use dclutch_claims::rational::{ABSENT_REVISION, CallerRoleV2, RepresentationRequestV2};
 use dclutch_claims::{
     CallerRole,
     product_basis_terminal_v3::{
@@ -19,19 +21,15 @@ use dclutch_claims::{
     signed_delta_v3::{SignedDeltaReceiptV3, SignedDeltaV3, plan_bytes},
 };
 use dclutch_core_contract::ContentId;
+use dclutch_custody::token_svm::TokenAccount;
 use dclutch_custody::{
     CUSTODY_RECEIPT_BYTES_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1, ContextV1,
     CustodyAuthoritySeedsV1, CustodyReceiptV1, CustodyReplaySeedsV1, CustodyReplayV1,
     CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
 };
-use dclutch_claims::rational::{
-    ABSENT_REVISION, CallerRoleV2, RepresentationRequestV2,
-};
 use dclutch_market::realm::REALM_SCHEMA_RELEASE_ID_V1;
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_claims::composition::RecordAdmissionV3;
-use dclutch_custody::token_svm::TokenAccount;
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},

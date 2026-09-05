@@ -62,8 +62,8 @@
 //! vault; the artifact builder, the artifact join and the packet builder all
 //! read it, so a future ruling moves one table and the three cannot drift again.
 
-use dclutch_custody::CompartmentV1;
 use crate::general_codec::Action;
+use dclutch_custody::CompartmentV1;
 
 use crate::general::GeneralChildEffectV1;
 use crate::general::candidate_v1::{

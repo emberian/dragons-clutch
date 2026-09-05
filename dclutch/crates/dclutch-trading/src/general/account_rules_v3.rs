@@ -7,6 +7,31 @@
 //! authenticated scratch-page bank; its count comes from the protected scalar
 //! derived from canonical register-bank geometry.
 
+use crate::general_codec::{Action, SELECTION_POLICY_BYTES};
+use crate::general_config::{
+    GENERAL_ROOT_CONFIG_ID_OFFSET_V2, GENERAL_ROOT_LIFECYCLE_OFFSET_V2,
+    GENERAL_ROOT_MARKET_OFFSET_V2, GENERAL_ROOT_NEXT_BATCH_SEQUENCE_OFFSET_V2,
+    GENERAL_ROOT_OPEN_BATCHES_OFFSET_V2, GENERAL_ROOT_REVISION_OFFSET_V2,
+    v3::{GENERAL_CONFIG_BYTES_V3, GeneralConfigV3Layout},
+};
+use dclutch_claims::frame_spec_v1::{
+    ClaimsFrameDataV1, ClaimsFrameRoleV1, ClaimsFrameSpecV1, FramePrivilegesV1,
+};
+use dclutch_custody::{
+    CustodyFrameDataV1, CustodyFramePrivilegesV1, CustodyFrameRoleV1, CustodyFrameSpecV1,
+};
+use dclutch_market::capability_program::{
+    CAPABILITY_ROOT_HEADER_BYTES_V1,
+    hot_v3::{
+        HOT_RUNTIME_CONFIG_COORDINATE_V3, HOT_RUNTIME_PORTFOLIO_COORDINATE_V3,
+        HOT_RUNTIME_PRODUCT_COORDINATE_V3, HOT_RUNTIME_ROOT_COORDINATE_V3,
+    },
+};
+use dclutch_product::admission::{PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_PRODUCT_ID_OFFSET_V2};
+use dclutch_product::{
+    PORTFOLIO_CLAIM_BASIS_ID_OFFSET, PORTFOLIO_COEFFICIENT_BYTES,
+    PORTFOLIO_COEFFICIENT_COUNT_OFFSET, PORTFOLIO_HEADER_BYTES,
+};
 use dclutch_vm::account_profile::v2::{
     AccountPrestateV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE, DYNAMIC_FIXED_SPAN_HEADER_BYTES,
     OPERATION_BYTES, RULE_BYTES, TrustedBuiltinIdentityV2, TrustedEnvironmentV2,
@@ -18,33 +43,6 @@ use dclutch_vm::account_profile::v2::{
         ScalarCoordinateV2,
         encode_account_profile_with_dynamic_fixed_span_v2_generated_atomic_with_item_operations,
     },
-};
-use dclutch_market::capability_program::{
-    CAPABILITY_ROOT_HEADER_BYTES_V1,
-    hot_v3::{
-        HOT_RUNTIME_CONFIG_COORDINATE_V3, HOT_RUNTIME_PORTFOLIO_COORDINATE_V3,
-        HOT_RUNTIME_PRODUCT_COORDINATE_V3, HOT_RUNTIME_ROOT_COORDINATE_V3,
-    },
-};
-use dclutch_claims::frame_spec_v1::{
-    ClaimsFrameDataV1, ClaimsFrameRoleV1, ClaimsFrameSpecV1, FramePrivilegesV1,
-};
-use dclutch_custody::{
-    CustodyFrameDataV1, CustodyFramePrivilegesV1, CustodyFrameRoleV1, CustodyFrameSpecV1,
-};
-use crate::general_codec::{Action, SELECTION_POLICY_BYTES};
-use crate::general_config::{
-    GENERAL_ROOT_CONFIG_ID_OFFSET_V2, GENERAL_ROOT_LIFECYCLE_OFFSET_V2,
-    GENERAL_ROOT_MARKET_OFFSET_V2, GENERAL_ROOT_NEXT_BATCH_SEQUENCE_OFFSET_V2,
-    GENERAL_ROOT_OPEN_BATCHES_OFFSET_V2, GENERAL_ROOT_REVISION_OFFSET_V2,
-    v3::{GENERAL_CONFIG_BYTES_V3, GeneralConfigV3Layout},
-};
-use dclutch_product::{
-    PORTFOLIO_CLAIM_BASIS_ID_OFFSET, PORTFOLIO_COEFFICIENT_BYTES,
-    PORTFOLIO_COEFFICIENT_COUNT_OFFSET, PORTFOLIO_HEADER_BYTES,
-};
-use dclutch_product::admission::{
-    PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_PRODUCT_ID_OFFSET_V2,
 };
 
 use crate::general::{
@@ -1808,7 +1806,9 @@ pub fn general_account_profile_rule_v3(
     // whose lifecycle creates a state and it costs nothing for the rest.
     // `AuthenticatedOpaqueReadonlyData` is the prestate Direct's ordinary
     // profile already uses for exactly this account.
-    if crate::general::state_artifacts_v3::general_system_program_account_v3(action) == Some(coordinate) {
+    if crate::general::state_artifacts_v3::general_system_program_account_v3(action)
+        == Some(coordinate)
+    {
         return Ok(AccountRuleWithPrestateInputV2 {
             rule: AccountRuleInputV2 {
                 privileges: AccountPrivilegesV2::new(false, false, true),
@@ -3330,15 +3330,16 @@ mod tests {
             // A role's callee: the Custody one is the appended coordinate, and
             // the Claims one is found by asking the frames themselves which
             // coordinate carries `ClaimsProgram`.
-            let claims_callee = (crate::general::state_artifacts_v3::general_child_account_start_v3(action)
-                ..general_child_frame_end_v3(action).expect("child end"))
-                .find(|coordinate| {
-                    child_coordinate(action, *coordinate)
-                        .and_then(|(frame, relative)| child_role(frame, relative))
-                        .is_ok_and(|role| {
-                            role == ChildRoleV3::Claims(ClaimsFrameRoleV1::ClaimsProgram)
-                        })
-                });
+            let claims_callee =
+                (crate::general::state_artifacts_v3::general_child_account_start_v3(action)
+                    ..general_child_frame_end_v3(action).expect("child end"))
+                    .find(|coordinate| {
+                        child_coordinate(action, *coordinate)
+                            .and_then(|(frame, relative)| child_role(frame, relative))
+                            .is_ok_and(|role| {
+                                role == ChildRoleV3::Claims(ClaimsFrameRoleV1::ClaimsProgram)
+                            })
+                    });
             let custody_callee =
                 general_custody_callee_coordinate_v3(action).expect("callee coordinate");
 
@@ -3482,7 +3483,8 @@ mod tests {
         let mut observed = 0_usize;
         for action in ACTIONS {
             let count = general_account_profile_fixed_count_v3(action).expect("fixed count");
-            let child_start = crate::general::state_artifacts_v3::general_child_account_start_v3(action);
+            let child_start =
+                crate::general::state_artifacts_v3::general_child_account_start_v3(action);
             for coordinate in child_start..count {
                 let (frame, relative) = match child_coordinate(action, coordinate) {
                     Ok(value) => value,

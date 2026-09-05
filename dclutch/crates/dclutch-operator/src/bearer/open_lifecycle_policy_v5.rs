@@ -94,8 +94,8 @@ pub fn encode_open_capability_lifecycle_policy_v5() -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_vm::account_profile::lifecycle_v3::StateLifecyclePolicyV5;
     use dclutch_claims::rational::RepresentationActionV2;
+    use dclutch_vm::account_profile::lifecycle_v3::StateLifecyclePolicyV5;
     use solana_program::hash::hash;
 
     fn decoded(policy: &[u8]) -> StateLifecyclePolicyV5<'_> {

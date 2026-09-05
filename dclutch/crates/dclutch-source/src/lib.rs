@@ -7629,9 +7629,9 @@ mod tests {
 }
 
 // Authorities merged into this crate; each module was one crate before.
-/// Formerly the `dclutch-source::resolution` crate.
-pub mod resolution;
-/// Formerly the `dclutch-source::relay` crate.
-pub mod relay;
 /// Formerly the `dclutch-source::pyth` crate.
 pub mod pyth;
+/// Formerly the `dclutch-source::relay` crate.
+pub mod relay;
+/// Formerly the `dclutch-source::resolution` crate.
+pub mod resolution;

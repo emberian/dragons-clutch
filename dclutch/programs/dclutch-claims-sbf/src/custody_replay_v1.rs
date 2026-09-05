@@ -85,8 +85,8 @@ use dclutch_custody::{
     CustodyReceiptV1, CustodyReplaySeedsV1, CustodyReplayV1, CustodyRequestV1, OperationV1,
 };
 use dclutch_market::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
-use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,

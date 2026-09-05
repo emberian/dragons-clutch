@@ -10,6 +10,7 @@ use core::cell::Ref;
 
 use alloc::boxed::Box;
 
+use dclutch_core_contract::ContentId as CapabilityContentId;
 use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
 use dclutch_market::capability_program::{
     set_v2::{
@@ -21,25 +22,24 @@ use dclutch_market::capability_program::{
         SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
     },
 };
-use dclutch_core_contract::ContentId as CapabilityContentId;
 use dclutch_market::{CoreState, MarketCoreStateSeedsV2};
 use dclutch_product::ContentId as ProductContentId;
 use dclutch_product::svm_reader::{
     FinalizedRecordFrameV2, ProductRuntimeFrameV2, authenticate_product_runtime_v2,
 };
-use dclutch_source::pyth::{
-    FullPriceUpdateV2, PostUpdateParamsView, PythReleaseV1, ReceiverConfigV2View,
-};
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::release_set::{
+    CallerAuthoritySeedsV1, ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProtocolInfrastructureProfileV2,
+};
+use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_BYTES_V1,
     ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1,
     require_slot_pinned_release_v1,
 };
-use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
-use dclutch_registry::release_set::{
-    CallerAuthoritySeedsV1, ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2,
-    PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProtocolInfrastructureProfileV2,
+use dclutch_source::pyth::{
+    FullPriceUpdateV2, PostUpdateParamsView, PythReleaseV1, ReceiverConfigV2View,
 };
 use dclutch_source::resolution::{
     PROVIDER_EXECUTION_REQUEST_BYTES_V3, PROVIDER_EXECUTION_REQUEST_MAGIC_V3,
@@ -234,8 +234,7 @@ fn boxed_source_records(
 fn boxed_product_runtime(
     request: &ProviderExecutionRequestV3,
     frame: ProviderFrameV3<'_, '_>,
-) -> Result<Box<dclutch_product::svm_reader::AuthenticatedProductRuntimeV2>, ProgramError>
-{
+) -> Result<Box<dclutch_product::svm_reader::AuthenticatedProductRuntimeV2>, ProgramError> {
     Ok(Box::new(
         authenticate_product_runtime_v2(
             frame.registry_program().key,

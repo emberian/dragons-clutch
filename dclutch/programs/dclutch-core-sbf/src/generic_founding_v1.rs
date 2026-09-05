@@ -6,12 +6,6 @@
 
 use alloc::boxed::Box;
 
-use dclutch_market::capability_manifest::{
-    CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
-    FundingLedgerStatusV2, FundingLedgerV2, funding::funded_rent_persists_v1,
-    funding_ledger_bytes_v2, validate_funding_ledger_masks_v2,
-};
-use dclutch_market::capability_program::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
 use dclutch_claims::founding_v5::{
     CLAIMS_FOUNDING_POST_RESOURCE_DIGEST_DOMAIN_V5, ClaimsFoundingAggregateSeedsV5,
     ClaimsFoundingReceiptV5, ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5,
@@ -26,12 +20,20 @@ use dclutch_claims::{
         ProtocolPositionSeedsV2,
     },
 };
+use dclutch_custody::token_svm::{AccountState, TokenAccount, TokenProgram};
 use dclutch_custody::{
     CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CustodyReplayV1,
     PROJECTED_CUSTODY_LOCKED_ADMISSIBLE_STATES_V1, PROJECTED_CUSTODY_STATE_BYTES_V2,
     PROJECTED_HOARD_CONTEXT_DOMAIN_V1, ProjectedCustodyLockReceiptV1, ProjectedCustodyOperationV1,
     ProjectedCustodyStateSeedsV2, ProjectedCustodyStateV2,
 };
+use dclutch_market::capability_manifest::{
+    CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
+    FundingLedgerStatusV2, FundingLedgerV2, funding::funded_rent_persists_v1,
+    funding_ledger_bytes_v2, validate_funding_ledger_masks_v2,
+};
+use dclutch_market::capability_program::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
+use dclutch_market::rent::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
 use dclutch_market::{
     Action, Admission, ChildEffectObservation, CoreState, FoundingIntentV5,
     GENERIC_FOUNDING_FOUND_POST_RESOURCE_DOMAIN_V1, GENERIC_FOUNDING_MAX_FUNDING_STATES_V1,
@@ -41,15 +43,11 @@ use dclutch_market::{
     SeriesFoundingPermitV1, SeriesOpenObservation, generic_founding_funding_list_id_v1,
     open_series_market,
 };
-use dclutch_product::svm_reader::{
-    FinalizedRecordFrameV2, authenticate_founding_product_basis_v3,
-};
+use dclutch_product::svm_reader::{FinalizedRecordFrameV2, authenticate_founding_product_basis_v3};
 use dclutch_registry::release_set::{
     CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1, ExecutionRoleV1,
 };
-use dclutch_market::rent::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
 use dclutch_source::MarketPrincipalCapSetsV1;
-use dclutch_custody::token_svm::{AccountState, TokenAccount, TokenProgram};
 use solana_program::{
     account_info::AccountInfo,
     clock::Clock,

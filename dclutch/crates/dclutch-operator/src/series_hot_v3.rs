@@ -43,6 +43,9 @@
 //! `series_premarket_expiry_chain_v1` support, and the successor's
 //! `series_terminal_campaign`.
 
+use crate::hot_bump_miner::{
+    HotBumpCorpusV1, activated_custody_program_v1, mine_hot_bump_hints_v1,
+};
 use crate::series_lifecycle_v3::{
     SeriesLifecycleSnapshotV3, SeriesNextActV3, inspect_series_lifecycle_v3,
 };
@@ -51,6 +54,7 @@ use crate::{
     direct_inline_v3::{CheckedHotOuterReleaseV3, ObservedAccountMetaV3},
     observation::{FinalizedRecordProof, authenticate_finalized_record, decode_clock, decode_rent},
 };
+use dclutch_core_contract::ContentId;
 use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
 use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
@@ -69,18 +73,14 @@ use dclutch_market::capability_program::{
         HotExecutionEnvelopeV3,
     },
 };
-use dclutch_core_contract::ContentId;
 use dclutch_market::execution_strategy::v2::{
     AcceleratorTransportProfileV2, AuthenticatedInterpreterArtifactsV2,
     EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2, ExecutionStrategyCertificateV2,
     ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
-use crate::hot_bump_miner::{
-    HotBumpCorpusV1, activated_custody_program_v1, mine_hot_bump_hints_v1,
-};
 use dclutch_market::{Identity as CoreIdentity, SeriesFoundingPermitSeedsV1};
-use dclutch_registry::{ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1};
 use dclutch_registry::release_set::{ArtifactReleaseIdV1, ExecutionRoleV1};
+use dclutch_registry::{ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1};
 use dclutch_trading::series::{
     SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3, SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
     SERIES_TICKET_SCHEMA_RELEASE_ID_V3, TemplateV3, admit_ticket,

@@ -279,7 +279,7 @@ version = "0.1.0"
 name = "dclutch-custody"
 version = "0.1.0"
 dependencies = [
- "dclutch-market-core-codec",
+ "dclutch-market",
  "dclutch-registry",
  "dclutch-sha256-adapter",
 ]
@@ -296,11 +296,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-market-core-codec"
+name = "dclutch-market"
 version = "0.1.0"
 dependencies = [
+ "dclutch-core-contract",
  "dclutch-registry",
  "dclutch-sha256-adapter",
+ "dclutch-vm",
 ]
 
 [[package]]
@@ -321,6 +323,10 @@ dependencies = [
  "sha2",
  "solana-sha256-hasher",
 ]
+
+[[package]]
+name = "dclutch-vm"
+version = "0.1.0"
 
 [[package]]
 name = "der"

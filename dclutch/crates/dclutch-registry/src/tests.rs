@@ -2,11 +2,11 @@
 
 extern crate std;
 
-use dclutch_core_contract::ContentId;
 use crate::release_set::{
     ArtifactReleaseIdV1, EXECUTION_ROLE_COUNT_V1, EXECUTION_ROLE_ORDER_V1, ExecutionReleaseSetV1,
     ExecutionRoleBindingV1, ExecutionRoleV1, ProgramIdentityV1,
 };
+use dclutch_core_contract::ContentId;
 
 use crate::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATED_EXECUTION_RELEASE_SET_MAGIC_V1,

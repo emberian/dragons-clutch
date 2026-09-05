@@ -711,7 +711,9 @@ fn is_sealed_execution_fixed_alias_v3(left: usize, right: usize) -> bool {
 /// Admit either the old fully-distinct frame or all six canonical seal-backed
 /// aliases. Partial, wrong-pair, or seventh aliases refuse before any account
 /// body is trusted.
-pub(super) fn validate_hot_fixed_alias_shape_v3(accounts: &[AccountInfo<'_>]) -> Result<bool, ProgramError> {
+pub(super) fn validate_hot_fixed_alias_shape_v3(
+    accounts: &[AccountInfo<'_>],
+) -> Result<bool, ProgramError> {
     let fixed = accounts
         .get(..HOT_FIXED_ACCOUNT_COUNT_V3)
         .ok_or(TradingSbfError::Content)?;

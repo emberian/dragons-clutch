@@ -45,7 +45,7 @@ dclutch-trading = { path = "../dclutch-trading" }
 # feature and with it every signer: this crate goes on linking nothing that can
 # sign, which is a claim its module documentation makes out loud.
 dclutch-direct-ticket = { path = "../dclutch-direct-ticket", default-features = false }
-dclutch-product = { path = "../dclutch-product" }
+dclutch-product = { path = "../dclutch-product", features = ["svm"] }
 dclutch-market-open-v1-operator = { path = "../dclutch-market-open-v1-operator" }
 dclutch-product-runtime-v2-operator = { path = "../dclutch-product-runtime-v2-operator" }
 dclutch-provider-transport-v3-operator = { path = "../dclutch-provider-transport-v3-operator" }

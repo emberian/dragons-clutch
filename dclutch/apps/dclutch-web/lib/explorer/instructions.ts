@@ -79,7 +79,7 @@ const INSTRUCTION_RENDERERS: ReadonlyArray<InstructionRenderer> = Object.freeze(
     summary: 'Closes a retired market’s claim state and releases what it held.',
   },
   {
-    routeId: 'claims/process_core_effect',
+    routeId: 'resolution/core_effect::process_core_effect',
     summary: 'Applies a change the Core program asked for to claim balances.',
   },
   {

@@ -23,6 +23,7 @@ use dclutch_claims::structured_kernel::{
     ShardMovementV2, StructuredTermsInputV2, StructuredTermsV2, encode_structured_terms_v2,
     structured_terms_bytes_v2,
 };
+use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
 use dclutch_operator::structured::{
     Error, STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2, StructuredChildActorV2,
     StructuredChildCoordinateV2, StructuredChildDescriptorV2, StructuredChildWireV2,
@@ -30,7 +31,6 @@ use dclutch_operator::structured::{
     structured_child_effect_order_v2, structured_child_lifecycle_action_v2,
     structured_child_request_bytes_v2, structured_child_token_style_v2, structured_child_wire_v2,
 };
-use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
 
 use support::{digest, identity, shard_mints, shard_terms, structured_admission};
 

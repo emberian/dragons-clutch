@@ -5,9 +5,9 @@ import { describe, expect, it } from 'vitest';
 
 describe('Core Found ABI generator', () => {
   it('parses the Rust-owned Found frame and reproduces the checked-in bytes', () => {
-    const app = fileURLToPath(new URL('..', import.meta.url));
+    const pkg = fileURLToPath(new URL('..', import.meta.url));
     expect(() => execFileSync(process.execPath, ['scripts/generate-core-found.mjs', '--check'], {
-      cwd: app,
+      cwd: pkg,
       encoding: 'utf8',
       stdio: 'pipe',
     })).not.toThrow();

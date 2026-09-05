@@ -727,11 +727,11 @@ mod tests {
 }
 
 // Authorities merged into this crate; each module was one crate before.
-/// Formerly the `dclutch-vm::effect` crate.
-pub mod effect;
 /// Formerly the `dclutch-vm::account_profile` crate.
 pub mod account_profile;
-/// Formerly the `dclutch-vm::request_profile` crate.
-pub mod request_profile;
 /// Formerly the `dclutch-vm::capability_seal` crate.
 pub mod capability_seal;
+/// Formerly the `dclutch-vm::effect` crate.
+pub mod effect;
+/// Formerly the `dclutch-vm::request_profile` crate.
+pub mod request_profile;

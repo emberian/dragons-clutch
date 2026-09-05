@@ -59,9 +59,9 @@ const TRADE_SURFACES = [
   'components/trade/TicketBoard.tsx',
   'components/trade/MakerOfferComposer.tsx',
   'components/trade/PreviewReceipt.tsx',
-  'lib/directTicket.ts',
+  // The ticket vocabulary lives in the SDK now; the browser imports it whole.
+  '../../packages/dclutch-sdk/lib/directTicket.ts',
   'lib/tradeFlowSteps.ts',
-  'lib/registeredDirect.ts',
 ];
 
 /**

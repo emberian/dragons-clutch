@@ -22,13 +22,14 @@ import { DIRECT_PRESTATE_WALL_V1, directPacketWallV1 } from '@dclutch/sdk/direct
  */
 
 /** The modules that actually produce the refusals this table routes. */
+// Four of the five live in the SDK now; the flow imports them whole.
 const REFUSAL_SOURCES_V1 = [
-  'tradeFlowMachine.ts',
-  'quantity.ts',
-  'directTradeSpine.ts',
-  'directTicket.ts',
-  'directParticipant.ts',
-].map((name) => readFileSync(new URL(`./${name}`, import.meta.url), 'utf8')).join('\n');
+  './tradeFlowMachine.ts',
+  '../../../packages/dclutch-sdk/lib/quantity.ts',
+  '../../../packages/dclutch-sdk/lib/directTradeSpine.ts',
+  '../../../packages/dclutch-sdk/lib/directTicket.ts',
+  '../../../packages/dclutch-sdk/lib/directParticipant.ts',
+].map((name) => readFileSync(new URL(name, import.meta.url), 'utf8')).join('\n');
 
 describe('the refusal routing table', () => {
   it('matches on fragments that really exist in the modules that raise them', () => {

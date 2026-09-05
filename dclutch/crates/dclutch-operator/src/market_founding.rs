@@ -16,9 +16,9 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+use dclutch_core_contract::ContentId;
 use dclutch_market::capability_manifest::CapabilityManifestV1;
 use dclutch_market::capability_program::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
-use dclutch_core_contract::ContentId;
 use dclutch_market::{
     GENERIC_FOUNDING_REQUEST_BYTES_V1, GenericFoundingRequestV1, GenericFoundingStageV1, Identity,
     SeriesFoundingPermitSeedsV1,
@@ -304,11 +304,11 @@ fn content(bytes: [u8; 32]) -> Result<ContentId, GenericMarketFoundingOperatorEr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dclutch_market::Identity;
     use dclutch_market::capability_manifest::{
         ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1,
         FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
     };
-    use dclutch_market::Identity;
 
     const MANIFEST_ENTRIES: usize = 2;
     const MANIFEST_BYTES: usize = MANIFEST_HEADER_BYTES + MANIFEST_ENTRIES * CAPABILITY_ENTRY_BYTES;

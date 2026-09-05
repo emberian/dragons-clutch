@@ -7,7 +7,9 @@
 
 use core::convert::TryInto;
 
-use crate::token_svm::{Address, Error, Result, TOKEN_2022_BEHAVIOR_PROFILE_ID_V2, TOKEN_2022_PROGRAM_ID};
+use crate::token_svm::{
+    Address, Error, Result, TOKEN_2022_BEHAVIOR_PROFILE_ID_V2, TOKEN_2022_PROGRAM_ID,
+};
 
 /// Exact byte width of [`TokenBehaviorSelectionV2`].
 pub const TOKEN_BEHAVIOR_SELECTION_BYTES_V2: usize = 144;

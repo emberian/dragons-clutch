@@ -15,7 +15,7 @@ tools/gate reference --check --converge
 tools/gate selftest                  # the loop's own refusal tests, seconds, no build
 ```
 
-`tools/genref/generate.sh` is a shim to `tools/gate reference` (the generated
+`tools/gate reference` is a shim to `tools/gate reference` (the generated
 banners and `tools/release/final-generated-convergence.py` spell it).
 
 It refuses a dirty tree. `--allow-dirty` and `GENREF_ALLOW_DIRTY=1` are the same

@@ -15,7 +15,7 @@ tools/release/final-generated-convergence.py \
 
 The writer runs entirely offline and in this fixed order: every tracked Cargo
 workspace lock, every paired SDK/web `abi:*` writer, both ABI coverage
-ratchets, `tools/genref/generate.sh`, `tools/sbom/sbom_check.py`, then the full
+ratchets, `tools/gate reference`, `tools/sbom/sbom_check.py`, then the full
 read-only verification again. It refuses a moving or dirty source tree, a
 workspace without its adjacent tracked lock, an ABI writer without a matching
 byte verifier, and any generated change outside these owners:
@@ -724,7 +724,7 @@ still wants a human, and a new cohort may want a new ABI table in
 ## The cohort cut window
 
 The cut is manual. Nothing here updates itself, and the window is the only
-time the whole-tree generators may run: `tools/genref/generate.sh` swept
+time the whole-tree generators may run: `tools/gate reference` swept
 eighteen lanes' refusal codes into one reference when it was run casually, so
 the standing rule is that a lane runs it only inside an announced window on a
 quiet tree. This section is that window's checklist, written down because the
@@ -732,13 +732,13 @@ lane that executes it will not be the lane that discovered the items.
 
 **One command does the regeneration half**, and it is the one above:
 `final-generated-convergence.py --write --expected-head <sha>` runs
-`tools/genref/generate.sh` inside a fixed batch that refuses a dirty or moving
+`tools/gate reference` inside a fixed batch that refuses a dirty or moving
 tree and confines its writes to named owners. `--check` at the same head is the
 verifier. Do not hand-run the individual generators.
 
 ### Regenerate (quiet tree, announced first)
 
-`tools/genref/generate.sh --check` reports the whole backlog in one read; as of
+`tools/gate reference --check --converge` reports the whole backlog in one read; as of
 2026-08-30 it is **seven stale files, and they are one set, not three items**:
 
 ```

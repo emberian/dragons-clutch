@@ -19,11 +19,11 @@ use dclutch_product::svm_reader::{
     AuthenticatedProductRuntimeV2, FinalizedRecordFrameV2, ProductRuntimeFrameV2,
     authenticate_product_runtime_v2,
 };
+use dclutch_registry::release_set::ExecutionRoleV1;
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetViewV1,
 };
-use dclutch_registry::release_set::ExecutionRoleV1;
 use dclutch_source::resolution::{
     DIRECT_FUNDING_CLOSE_REQUEST_BYTES_V1, DIRECT_FUNDING_CLOSE_REQUEST_MAGIC_V1,
     DirectFundingCloseRequestV1, FUNDING_ACTIVATION_RECEIPT_BYTES_V1,
@@ -160,8 +160,7 @@ struct DirectCloseMarketFacts {
 /// Return whether bytes select the one canonical Core effect route.
 pub(crate) fn is_core_effect(instruction_data: &[u8]) -> bool {
     instruction_data.len() == CORE_EFFECT_INSTRUCTION_BYTES
-        && instruction_data.get(..8)
-            == Some(dclutch_market::CORE_EFFECT_MAGIC_V1.as_slice())
+        && instruction_data.get(..8) == Some(dclutch_market::CORE_EFFECT_MAGIC_V1.as_slice())
 }
 
 /// Return whether bytes select the V7 permissionless activation route.
@@ -3397,18 +3396,14 @@ mod tests {
     ) -> CoreEffectEnvelopeV1 {
         let role_bytes = role_bytes(action);
         let core_action = match action {
-            ResolutionCoreActionV1::CreateFund => {
-                dclutch_market::CoreEffectActionV1::CreateFund
-            }
+            ResolutionCoreActionV1::CreateFund => dclutch_market::CoreEffectActionV1::CreateFund,
             ResolutionCoreActionV1::VerifyFundReady => {
                 dclutch_market::CoreEffectActionV1::VerifyFundReady
             }
             ResolutionCoreActionV1::AdmitTerminal => {
                 dclutch_market::CoreEffectActionV1::AdmitTerminal
             }
-            ResolutionCoreActionV1::CloseFund => {
-                dclutch_market::CoreEffectActionV1::CloseFund
-            }
+            ResolutionCoreActionV1::CloseFund => dclutch_market::CoreEffectActionV1::CloseFund,
         };
         CoreEffectEnvelopeV1::new(
             core_action,

@@ -2,13 +2,6 @@
 
 #![allow(clippy::indexing_slicing, clippy::panic, clippy::unwrap_used)]
 
-use dclutch_claims::{
-    CallerRole,
-    signed_delta_v3::{
-        DeltaDirectionV3, PositionDeltaInputV3, PositionDeltaV3, SignedDeltaPlanInputV3,
-        SignedDeltaPlanV3, SignedDeltaPositionV3, SignedDeltaV3, plan_bytes,
-    },
-};
 use dclutch_claims::fractional::{
     FractionalExposureActionV2, FractionalExposureRequestInputV2, FractionalExposureRequestV2,
     FractionalHotAccountRefV2, FractionalHotCandidateInputV2, FractionalHotCandidateV2,
@@ -21,6 +14,13 @@ use dclutch_claims::fractional_kernel::{
     FractionalExposureTermsAdmissionV2, FractionalExposureTermsInputV2, FractionalExposureTermsV2,
     encode_fractional_exposure_terms_v2, encode_fractional_selection_config_v1,
     fractional_exposure_terms_bytes_v2, fractional_selection_config_from_terms_v1,
+};
+use dclutch_claims::{
+    CallerRole,
+    signed_delta_v3::{
+        DeltaDirectionV3, PositionDeltaInputV3, PositionDeltaV3, SignedDeltaPlanInputV3,
+        SignedDeltaPlanV3, SignedDeltaPositionV3, SignedDeltaV3, plan_bytes,
+    },
 };
 use sha2::{Digest, Sha256};
 

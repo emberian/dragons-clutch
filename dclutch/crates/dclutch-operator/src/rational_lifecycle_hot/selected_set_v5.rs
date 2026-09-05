@@ -1,5 +1,12 @@
 //! Schema-bound lifecycle ProgramSet for selected and compact actions.
 
+use dclutch_claims::rational::AuthenticatedTokenBehaviorV2;
+use dclutch_claims::rational_lifecycle::{
+    LifecycleActionV2, compact_hot_v4::RationalLifecycleCompactHotLayoutV4,
+    hot_v3::RationalLifecycleHotLayoutV3,
+};
+use dclutch_core_contract::ContentId;
+use dclutch_custody::token_svm::TOKEN_BEHAVIOR_SELECTION_BYTES_V2;
 use dclutch_market::capability_program::{
     set_v2::{
         CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, CapabilityProgramSetV2,
@@ -7,13 +14,6 @@ use dclutch_market::capability_program::{
     },
     v4::SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
 };
-use dclutch_core_contract::ContentId;
-use dclutch_claims::rational::AuthenticatedTokenBehaviorV2;
-use dclutch_claims::rational_lifecycle::{
-    LifecycleActionV2, compact_hot_v4::RationalLifecycleCompactHotLayoutV4,
-    hot_v3::RationalLifecycleHotLayoutV3,
-};
-use dclutch_custody::token_svm::TOKEN_BEHAVIOR_SELECTION_BYTES_V2;
 use solana_program::hash::hash;
 
 use crate::rational_lifecycle_hot::{

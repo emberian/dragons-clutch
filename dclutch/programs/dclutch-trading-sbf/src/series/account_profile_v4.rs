@@ -7,6 +7,15 @@
 //! downgraded privileges while the physical representative supplies their
 //! union. Root and Ticket writes are outer-only commit-last authority.
 
+use dclutch_market::capability_program::{
+    CAPABILITY_ROOT_GENERATION_OFFSET, CAPABILITY_ROOT_MARKET_OFFSET,
+    CAPABILITY_ROOT_SELECTION_OFFSET,
+};
+use dclutch_registry::release_set::{
+    CAPABILITY_EXECUTION_SELECTION_CONFIG_OFFSET,
+    CAPABILITY_EXECUTION_SELECTION_ENTRY_INDEX_OFFSET, CAPABILITY_EXECUTION_SELECTION_KIND_OFFSET,
+    CAPABILITY_EXECUTION_SELECTION_MANIFEST_OFFSET, CAPABILITY_EXECUTION_SELECTION_RELEASE_OFFSET,
+};
 use dclutch_vm::account_profile::v2::{
     AccountPrestateV2, DYNAMIC_FIXED_SPAN_ENTRY_BYTES, DYNAMIC_FIXED_SPAN_HEADER_BYTES,
     OPERATION_BYTES, RULE_BYTES, TrustedBuiltinIdentityV2, TrustedEnvironmentV2,
@@ -18,15 +27,6 @@ use dclutch_vm::account_profile::v2::{
         RegisterGeometryV2, ScalarCoordinateV2,
         encode_account_profile_with_dynamic_fixed_span_v2_borrowed_generated_atomic,
     },
-};
-use dclutch_market::capability_program::{
-    CAPABILITY_ROOT_GENERATION_OFFSET, CAPABILITY_ROOT_MARKET_OFFSET,
-    CAPABILITY_ROOT_SELECTION_OFFSET,
-};
-use dclutch_registry::release_set::{
-    CAPABILITY_EXECUTION_SELECTION_CONFIG_OFFSET,
-    CAPABILITY_EXECUTION_SELECTION_ENTRY_INDEX_OFFSET, CAPABILITY_EXECUTION_SELECTION_KIND_OFFSET,
-    CAPABILITY_EXECUTION_SELECTION_MANIFEST_OFFSET, CAPABILITY_EXECUTION_SELECTION_RELEASE_OFFSET,
 };
 
 use super::{

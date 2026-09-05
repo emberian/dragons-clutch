@@ -24,11 +24,13 @@ use dclutch_claims::{
     },
     series_founding_transport_v1::SeriesClaimsFoundingTransportV1,
 };
+use dclutch_custody::token_svm::{AccountState, TokenAccount, TokenProgram};
 use dclutch_custody::{CallerRoleV1, CustodyReplayV1};
 use dclutch_custody::{
     PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1, PROJECTED_CUSTODY_RECEIPT_BYTES_V1,
     PROJECTED_HOARD_CONTEXT_DOMAIN_V1, ProjectedCustodyLockReceiptV1, ProjectedCustodyReceiptV1,
 };
+use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
 use dclutch_market::{
     CoreState, FoundingIntentV5, Identity, SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES,
     SeriesFoundingPermitV1, SeriesPermitJoinMismatchV1,
@@ -36,9 +38,7 @@ use dclutch_market::{
 use dclutch_product::svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV3};
 use dclutch_registry::activation_auth_v1::ActivationAuthErrorV1;
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
 use dclutch_source::MarketPrincipalCapSetsV1;
-use dclutch_custody::token_svm::{AccountState, TokenAccount, TokenProgram};
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
@@ -592,10 +592,8 @@ fn build_receipt(
     request: &ClaimsFoundingRequestV5,
     request_digest: [u8; 32],
     candidates: &FoundingCandidates,
-) -> Result<
-    Box<[u8; dclutch_claims::founding_v5::CLAIMS_FOUNDING_RECEIPT_BYTES_V5]>,
-    ProgramError,
-> {
+) -> Result<Box<[u8; dclutch_claims::founding_v5::CLAIMS_FOUNDING_RECEIPT_BYTES_V5]>, ProgramError>
+{
     let receipt = ClaimsFoundingReceiptV5::new(
         *request,
         request_digest,

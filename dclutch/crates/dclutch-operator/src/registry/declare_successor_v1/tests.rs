@@ -8,13 +8,13 @@
 
 use dclutch_core_contract::ContentId;
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry::{
-    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
-    ArtifactUpgradePolicyV1,
-};
 use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1, ExecutionReleaseSetV1,
     ExecutionRoleBindingV1, ProgramIdentityV1,
+};
+use dclutch_registry::{
+    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
+    ArtifactUpgradePolicyV1,
 };
 use solana_program::{account_info::AccountInfo, hash::hash, rent::Rent, sysvar::SysvarSerialize};
 use solana_sdk_ids::{bpf_loader_upgradeable, native_loader, sysvar};

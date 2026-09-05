@@ -10,13 +10,11 @@
 //! every lamport, exactly as it always did.
 
 use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
-use dclutch_market::capability_program::{
-    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
-};
+use dclutch_market::capability_program::{CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1};
+use dclutch_market::rent::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
 use dclutch_market::{
     Role, SeriesFoundingPermitSeedsV1, SeriesFoundingPermitV1, SeriesPermitExpiryRequestV1,
 };
-use dclutch_market::rent::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
 use dclutch_trading::series::{
     SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3, SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
     SERIES_TICKET_SCHEMA_RELEASE_ID_V3, admit_occurrence_bytes, admit_ticket,

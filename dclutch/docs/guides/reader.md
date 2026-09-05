@@ -61,16 +61,11 @@ demonstration, not a place to put money at risk.
 # build the programs and enumerate every route they accept (no chain):
 tools/gate census
 
-# found a market on a throwaway local validator and join it as a
-# participant. It builds its own chain and tears it down afterwards, and it
-# needs a clean committed checkout and a checked release root to bind to:
-python3 tools/release/private-validator-lifecycle/run.py \
-    --repo /absolute/clean/dclutch \
-    --release-root /absolute/checked/release \
-    --validator "$(command -v solana-test-validator)" \
-    --solana "$(command -v solana)" \
-    --work /absolute/scratch/outside/the/repo \
-    --through participant --seeds 1
+# found a market on a throwaway local validator and walk it: the `ladder`
+# gauntlet tier stands the validator up, founds, opens and completes (the
+# private-validator lifecycle runner it replaced was deleted on 2026-09-04;
+# SIMPLIFY_DRIVERS.md §3 says why). It needs a checked release gate to bind to:
+tools/gauntlet/ladder/run-ladder.sh --checked-release-gate /absolute/checked/CHECKED_UPGRADE_GATE.json
 
 # the web app's test suite:
 cd apps/dclutch-web && npm test

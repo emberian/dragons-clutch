@@ -108,8 +108,8 @@ mod tests {
     use super::*;
     use crate::relay::{SOLANA_DEVNET_GENESIS_HASH_V1, SOLANA_MAINNET_GENESIS_HASH_V1, put};
     use dclutch_core_contract::ContentId;
-    use dclutch_registry::{ArtifactReleaseV1, ArtifactUpgradePolicyV1};
     use dclutch_registry::release_set::ProgramIdentityV1;
+    use dclutch_registry::{ArtifactReleaseV1, ArtifactUpgradePolicyV1};
 
     const PROGRAMDATA_KEY: [u8; 32] = [0xf4; 32];
 

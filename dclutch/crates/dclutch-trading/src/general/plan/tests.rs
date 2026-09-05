@@ -403,7 +403,10 @@ fn freeze_initialize_and_settlement_emit_plans_without_child_authority() {
         u32::try_from(GENERAL_CHILD_PLAN_HEADER_BYTES_V2 + 8).expect("effect width")
     );
     assert_eq!(summary.second_effect_bytes, 0);
-    assert_eq!(&first_output[..8], &crate::general::GENERAL_CHILD_PLAN_MAGIC_V2);
+    assert_eq!(
+        &first_output[..8],
+        &crate::general::GENERAL_CHILD_PLAN_MAGIC_V2
+    );
 
     let outputs_before = (cursor_output, first_output, second_output);
     assert_eq!(

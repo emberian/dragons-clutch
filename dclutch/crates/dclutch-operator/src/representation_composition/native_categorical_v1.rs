@@ -11,14 +11,6 @@
 //! Rational receipt Mint or one aggregate receipt recipe, and inventing either
 //! would create a second semantic truth.
 
-use dclutch_product::payoff::{
-    price_gate_v1::verify_price_gate_v1,
-    runtime_v3::{
-        BasisKindV3, ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, semantic_basis_preimage_v3,
-    },
-};
-use dclutch_product::{PortfolioV2, ResultDomainV2, join_product_v2};
-use dclutch_product::admission::ProductRecordV2;
 use dclutch_claims::composition::{
     COMPOSITION_DESCRIPTOR_BYTES_V3, COMPOSITION_DESCRIPTOR_SCHEMA_ID_V3,
     COMPOSITION_EXPOSURE_SCHEMA_ID_V3, COMPOSITION_GRAPH_SCHEMA_ID_V3,
@@ -30,9 +22,19 @@ use dclutch_claims::composition::{
     encode_canonical_translation_v3_atomic, encode_composition_descriptor_v3_atomic,
     encode_composition_exposure_v3_atomic, encode_composition_graph_v3_atomic,
 };
+use dclutch_product::admission::ProductRecordV2;
+use dclutch_product::payoff::{
+    price_gate_v1::verify_price_gate_v1,
+    runtime_v3::{
+        BasisKindV3, ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, semantic_basis_preimage_v3,
+    },
+};
+use dclutch_product::{PortfolioV2, ResultDomainV2, join_product_v2};
 use solana_program::hash::{hash, hashv};
 
-use crate::representation_composition::{Error, PublicationTargetV3, Result, validate_publication_candidates_v3};
+use crate::representation_composition::{
+    Error, PublicationTargetV3, Result, validate_publication_candidates_v3,
+};
 
 const GRAPH_ID_DOMAIN_V1: &[u8] = b"dclutch/native-categorical-composition/graph/v1";
 const ROOT_ID_DOMAIN_V1: &[u8] = b"dclutch/native-categorical-composition/root/v1";
@@ -307,8 +309,7 @@ pub fn compile_native_basis_composition_v1(
         return Err(Error::Product);
     }
     let joined = join_product_v2(
-        dclutch_product::ContentId::new(result_domain_digest)
-            .map_err(|_| Error::Product)?,
+        dclutch_product::ContentId::new(result_domain_digest).map_err(|_| Error::Product)?,
         dclutch_product::ContentId::new(portfolio_digest).map_err(|_| Error::Product)?,
         result_domain,
         portfolio,
@@ -593,6 +594,13 @@ mod tests {
     #![allow(clippy::indexing_slicing)]
 
     use super::*;
+    use dclutch_claims::composition::{
+        COMPOSITION_EXPOSURE_HEADER_BYTES_V3, COMPOSITION_EXPOSURE_ROW_BYTES_V3,
+        COMPOSITION_EXPOSURE_TERM_BYTES_V3, COMPOSITION_GRAPH_HEADER_BYTES_V3,
+        COMPOSITION_NODE_BYTES_V3, CompositionExposureRowLayoutV3, CompositionExposureTermLayoutV3,
+        DescriptorLayoutV3, GraphLayoutV3, NodeLayoutV3,
+    };
+    use dclutch_product::admission::PRODUCT_RECORD_BYTES_V2;
     use dclutch_product::payoff::{
         price_gate_v1::{
             PRICE_GATE_ATOM_COUNT_OFFSET_V1, PRICE_GATE_DEGREE_OFFSET_V1,
@@ -604,22 +612,13 @@ mod tests {
         },
         runtime_v3::{BasisInputV3, basis_record_bytes_v3, compile_basis_v3},
     };
-    use dclutch_product::{
-        ContentId, portfolio_record_bytes, result_domain_record_bytes,
-    };
-    use dclutch_product::admission::PRODUCT_RECORD_BYTES_V2;
+    use dclutch_product::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
     use dclutch_product_runtime_v2_operator::{
         ProductCompilationInputV2, compile_product_records_v2,
         spline_basis_v3::{
             SplineProductCompilationInputV3, compile_spline_product_records_v3,
             spline_basis_output_bytes_v3,
         },
-    };
-    use dclutch_claims::composition::{
-        COMPOSITION_EXPOSURE_HEADER_BYTES_V3, COMPOSITION_EXPOSURE_ROW_BYTES_V3,
-        COMPOSITION_EXPOSURE_TERM_BYTES_V3, COMPOSITION_GRAPH_HEADER_BYTES_V3,
-        COMPOSITION_NODE_BYTES_V3, CompositionExposureRowLayoutV3, CompositionExposureTermLayoutV3,
-        DescriptorLayoutV3, GraphLayoutV3, NodeLayoutV3,
     };
     use solana_program::pubkey::Pubkey;
 
@@ -1045,9 +1044,7 @@ mod tests {
         substituted.result_domain_bytes = &bad_domain;
         assert_eq!(
             compile_native_categorical_composition_v1(substituted).err(),
-            Some(Error::ProductRuntime(
-                dclutch_product::Error::InvalidMagic
-            ))
+            Some(Error::ProductRuntime(dclutch_product::Error::InvalidMagic))
         );
 
         let mut scaled_basis = fixture.basis.clone();

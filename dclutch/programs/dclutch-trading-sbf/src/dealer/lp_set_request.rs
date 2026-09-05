@@ -93,10 +93,10 @@ fn build(
 
 #[cfg(test)]
 mod tests {
+    use dclutch_core_contract::ContentId;
     use dclutch_market::capability_program::set_v2::{
         CapabilityProgramSetEntryV2, encode_program_set_v2, encoded_program_set_bytes_v2,
     };
-    use dclutch_core_contract::ContentId;
     use solana_program::pubkey::Pubkey;
     use std::{vec, vec::Vec};
 

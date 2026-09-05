@@ -1902,24 +1902,20 @@ mod tests {
         .state();
         let release_set = key(149).to_bytes();
         let provider_release = key(150).to_bytes();
-        let registry_id =
-            dclutch_market::Identity::new(registry.to_bytes()).expect("registry");
-        let market_id =
-            dclutch_market::Identity::new(market_key.to_bytes()).expect("market");
+        let registry_id = dclutch_market::Identity::new(registry.to_bytes()).expect("registry");
+        let market_id = dclutch_market::Identity::new(market_key.to_bytes()).expect("market");
         let market = CoreState {
             phase: Phase::Open,
             readiness: Readiness::Consumed,
             terminal_winner: 0,
             identity: dclutch_market::MarketIdentity {
                 market_id,
-                realm_id: dclutch_market::Identity::new(key(151).to_bytes())
-                    .expect("realm"),
+                realm_id: dclutch_market::Identity::new(key(151).to_bytes()).expect("realm"),
                 product_record: dclutch_market::Identity::new(product_record.to_bytes())
                     .expect("product record"),
                 product_id: dclutch_market::Identity::new(product_identity.to_bytes())
                     .expect("product"),
-                resolution_policy: dclutch_market::Identity::new(material_id)
-                    .expect("material"),
+                resolution_policy: dclutch_market::Identity::new(material_id).expect("material"),
                 capability_manifest: dclutch_market::Identity::new(key(152).to_bytes())
                     .expect("manifest"),
                 selected_release_set: dclutch_market::Identity::new(release_set)

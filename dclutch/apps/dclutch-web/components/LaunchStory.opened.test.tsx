@@ -14,7 +14,7 @@ const MARKET = 'GtmpRvSL9y6RpqMth73VSdb9h1XRe7zqQZkhJkfgxKrA';
 const FOUND = '3K6ik9Ah7xzBtYgvm6ZuaNs7C3GCNnPiwP5XX1b9gDG1EyjbU9AEN7ei8kYk4umPt3dXCXqiFwLEecBjunFVKtwF';
 
 vi.mock('@dclutch/sdk/publicCutStaging', async () => {
-  const actual = await vi.importActual<typeof import('@dclutch/sdk/publicCutStaging')>('@/lib/publicCutStaging');
+  const actual = await vi.importActual<typeof import('@dclutch/sdk/publicCutStaging')>('@dclutch/sdk/publicCutStaging');
   // Built through the REAL parser, so this test also proves the shape the
   // public cut will actually carry is one the parser accepts.
   const cut = actual.parsePublicDevnetCutV1({

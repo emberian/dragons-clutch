@@ -12,6 +12,7 @@
 //! `context`; each Claims kind names its own field. Kinds not yet dispatched
 //! here are a named boundary, not a silent default.
 
+use dclutch_claims::rational::{CallerRoleV2, REQUEST_MAGIC_V2, RepresentationRequestV2};
 use dclutch_claims::{
     affine_batch_v2::{AFFINE_BATCH_PLAN_MAGIC_V2, AffineBatchPlanV2},
     founding_v5::{CLAIMS_FOUNDING_REQUEST_MAGIC_V5, ClaimsFoundingRequestV5},
@@ -25,11 +26,8 @@ use dclutch_custody::{
     PROJECTED_CUSTODY_REQUEST_BYTES_V1, PROJECTED_CUSTODY_REQUEST_MAGIC_V1,
     ProjectedCustodyCallerSeedsV1, ProjectedCustodyRequestV1,
 };
-use dclutch_vm::effect::v2::FixedRole;
-use dclutch_claims::rational::{
-    CallerRoleV2, REQUEST_MAGIC_V2, RepresentationRequestV2,
-};
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_vm::effect::v2::FixedRole;
 use sha2::{Digest, Sha256};
 use solana_program::pubkey::Pubkey;
 
@@ -96,15 +94,15 @@ pub fn derive_authority(
 
 #[cfg(test)]
 mod tests {
-    use dclutch_custody::{
-        CompartmentV1, ProjectedCallerRoleV1, ProjectedCustodyOperationV1,
-        ProjectedCustodyRequestV1,
-    };
     use dclutch_claims::rational::{
         ABSENT_REVISION, ASSET_BYTES_V3, AssetV2, CallerRoleV2, REQUEST_SELECTED_HEADER_BYTES_V3,
         RepresentationActionV2, RepresentationRequestHeaderV2, RepresentationRequestV2,
     };
     use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
+    use dclutch_custody::{
+        CompartmentV1, ProjectedCallerRoleV1, ProjectedCustodyOperationV1,
+        ProjectedCustodyRequestV1,
+    };
     use sha2::{Digest, Sha256};
     use solana_program::pubkey::Pubkey;
 

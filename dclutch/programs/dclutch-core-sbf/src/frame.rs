@@ -135,12 +135,11 @@ impl<'accounts, 'info> FoundAccounts<'accounts, 'info> {
             return Err(CoreSbfError::AccountFrame);
         }
         let ordinary = |index: usize| {
-            let physical =
-                if rent_elided && index > dclutch_market::FOUND_RENT_SYSVAR_INDEX_V3 {
-                    index - 1
-                } else {
-                    index
-                };
+            let physical = if rent_elided && index > dclutch_market::FOUND_RENT_SYSVAR_INDEX_V3 {
+                index - 1
+            } else {
+                index
+            };
             accounts.get(physical).ok_or(CoreSbfError::AccountFrame)
         };
         let payer = ordinary(0)?;
@@ -174,9 +173,7 @@ impl<'accounts, 'info> FoundAccounts<'accounts, 'info> {
         let rent = if rent_elided {
             None
         } else {
-            Some(ordinary(
-                dclutch_market::FOUND_RENT_SYSVAR_INDEX_V3,
-            )?)
+            Some(ordinary(dclutch_market::FOUND_RENT_SYSVAR_INDEX_V3)?)
         };
         let system = ordinary(29)?;
         let infrastructure_profile = ordinary(30)?;

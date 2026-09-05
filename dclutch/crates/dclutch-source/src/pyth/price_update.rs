@@ -318,8 +318,9 @@ mod tests {
     #[test]
     fn captured_upgraded_provider_account_matches_the_pinned_synthetic_message()
     -> PriceUpdateV2Result<()> {
-        let bytes =
-            include_bytes!("../../../../fixtures/pyth/local-upgraded-2026-08-22/price-update.account");
+        let bytes = include_bytes!(
+            "../../../../fixtures/pyth/local-upgraded-2026-08-22/price-update.account"
+        );
         let parsed = FullPriceUpdateV2::parse(bytes)?;
         assert_eq!(parsed.feed_id(), [0x2a; 32]);
         assert_eq!(parsed.price(), 100_000_000);

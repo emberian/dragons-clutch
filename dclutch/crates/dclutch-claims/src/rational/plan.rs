@@ -1,5 +1,7 @@
 //! Pure composition of canonical Claims and ordered Token effects.
 
+use crate::composition::CompositionExposureBundleV3;
+use crate::rational_kernel::{RepresentationDescriptorV2, StructuredProjectionV2};
 use crate::{
     CallerRole,
     affine_batch_v2::{
@@ -7,10 +9,6 @@ use crate::{
         AffineBatchRowV2, DeltaDirectionV2, SignedMagnitudeV2, plan_bytes,
     },
 };
-use crate::rational_kernel::{
-    RepresentationDescriptorV2, StructuredProjectionV2,
-};
-use crate::composition::CompositionExposureBundleV3;
 
 use crate::rational::{
     Error, Result,

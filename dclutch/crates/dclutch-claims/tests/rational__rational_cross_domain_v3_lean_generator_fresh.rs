@@ -54,8 +54,9 @@ fn checked_in_cross_domain_corpus_is_exact_lean_output() {
         std::fs::read(&temporary).unwrap_or_else(|error| panic!("read generated Rust: {error}"));
     std::fs::remove_file(&temporary)
         .unwrap_or_else(|error| panic!("remove generated Rust: {error}"));
-    let checked_in =
-        std::fs::read(manifest.join("tests/rational__support/generated_rational_cross_domain_v3.rs"))
-            .unwrap_or_else(|error| panic!("read checked-in generated Rust: {error}"));
+    let checked_in = std::fs::read(
+        manifest.join("tests/rational__support/generated_rational_cross_domain_v3.rs"),
+    )
+    .unwrap_or_else(|error| panic!("read checked-in generated Rust: {error}"));
     assert_eq!(formatted, checked_in);
 }

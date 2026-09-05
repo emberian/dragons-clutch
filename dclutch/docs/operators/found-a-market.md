@@ -83,9 +83,10 @@ Before spending a build or a validator launch, run the offline model. It
 performs no build, no RPC, no key read, and no validator action.
 
 ```sh
-python3 tools/release/private-validator-lifecycle/preflight.py \
-  --repo ~/work/src-45e7adc0 --through participant \
-  --output ~/work/PREFLIGHT.json
+# The offline model lived in the private-validator lifecycle runner, deleted on
+# 2026-09-04 (SIMPLIFY_DRIVERS.md §3); the ladder tier's own preflight reads the
+# cluster instead.
+tools/gauntlet/ladder/run-ladder.sh --help
 ```
 
 ```json
@@ -114,16 +115,7 @@ on the machine is reading.
 ## Run it
 
 ```sh
-python3 tools/release/private-validator-lifecycle/run.py \
-  --repo ~/work/src-45e7adc0 \
-  --release-root <RELEASE_ROOT> \
-  --expected-release-gate-sha256 42882616f1d5a0560ab8b4dd54e8ceedd290049c8661332cc9aa4cdab70db11d \
-  --expected-release-source-revision 45e7adc07f75b0553f4251335c07b2d1f0b607e6 \
-  --expected-release-source-tree-sha256 644db7f1728881918e4f22dffbfc526ae8f1c18da455e4ee70e2a052fbf20f67 \
-  --validator "$(command -v solana-test-validator)" \
-  --solana "$(command -v solana)" \
-  --work ~/work/found-probe \
-  --through participant --seeds 1
+tools/gauntlet/ladder/run-ladder.sh --checked-release-gate <RELEASE_ROOT>/CHECKED_UPGRADE_GATE.json
 ```
 
 The three `--expected-*` pins are optional and worth passing. Without them

@@ -13,5 +13,5 @@ export const SOURCE_CLOSE_DETAIL_FORMAT_V1 = 'dclutch-source-close-detail-v1' as
 export const SOURCE_CLOSE_SNAPSHOT_FORMAT_V1 = 'dclutch-source-close-snapshot-v1' as const;
 export const SOURCE_CLOSE_PLAN_FORMAT_V1 = 'dclutch-source-close-plan-v1' as const;
 export const SOURCE_CLOSE_VERIFY_FORMAT_V1 = 'dclutch-source-close-verify-v1' as const;
-export const SOURCE_READINESS_WASM_SHA256_V1 = 'bcbac6015ac0d2e61f8bca2a51d75ef684d135e5d23b5e180a814eece927e466' as const;
-export const SOURCE_READINESS_WASM_BYTES_V1 = 859511 as const;
+export const SOURCE_READINESS_WASM_SHA256_V1 = '2059d427c16bb564728903db349836ff8db7851e1d61ec55e1d6be746a60106d' as const;
+export const SOURCE_READINESS_WASM_BYTES_V1 = 874722 as const;

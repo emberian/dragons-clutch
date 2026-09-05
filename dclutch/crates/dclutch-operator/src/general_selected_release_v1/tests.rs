@@ -398,10 +398,8 @@ fn a_substituted_bundle_program_set_or_config_refuses() {
     let mut relifecycled = canonical.clone();
     let action = GENERAL_ACTIONS_V5[2];
     let bytes =
-        dclutch_trading::general::state_artifacts_v3::general_state_lifecycle_bytes_v5(
-            action,
-        )
-        .expect("per-action width");
+        dclutch_trading::general::state_artifacts_v3::general_state_lifecycle_bytes_v5(action)
+            .expect("per-action width");
     let mut scratch = vec![0_u8; bytes];
     let mut per_action = vec![0_u8; bytes];
     dclutch_trading::general::state_artifacts_v3::encode_general_state_lifecycle_v5_atomic(
@@ -929,10 +927,10 @@ fn a_per_action_derivation_policy_in_the_entry_refuses_every_action() {
         MAX_DEPENDENCIES_PER_CAPABILITY,
     };
     use dclutch_market::capability_program::Error as CapabilityProgramError;
+    use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
     use dclutch_trading::general::state_artifacts_v3::{
         encode_general_state_lifecycle_v5_atomic, general_state_lifecycle_bytes_v5,
     };
-    use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
 
     let release = general_selected_release_v1(input()).expect("release");
     let program_set_id = hash(&release.program_set).to_bytes();

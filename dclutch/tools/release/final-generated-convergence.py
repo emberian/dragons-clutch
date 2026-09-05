@@ -218,7 +218,7 @@ def run_abi(*, write: bool) -> None:
 
 
 def run_genref(*, write: bool) -> None:
-    command = ["tools/genref/generate.sh"]
+    command = ["tools/gate", "reference"]
     if not write:
         command.append("--check")
     run(command)

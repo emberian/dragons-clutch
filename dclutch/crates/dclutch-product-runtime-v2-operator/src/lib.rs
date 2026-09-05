@@ -9,21 +9,21 @@
 #![deny(missing_docs)]
 
 use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
-use dclutch_product_compiler::CompileError;
-pub use dclutch_product_compiler::partition_quality::{
-    BandProfileV1, FoundingBandV1, FoundingBeliefV1, MAX_CELL_EX_ANTE_SHARE_BPS_V1,
-    PartitionQualityModelV1, PartitionQualityReportV1, StatedPropositionV1, centred_cuts_v1,
-    require_interesting_partition_v1,
-};
-use dclutch_product::{
-    ContentId, PortfolioInputV2, ResultDomainInputV2, compile_portfolio_v2,
-    compile_result_domain_v2, portfolio_record_bytes, result_domain_record_bytes,
-};
 use dclutch_product::admission::{
     ADMISSION_RECEIPT_BYTES_V2, ADMISSION_RECEIPT_PDA_DOMAIN_V2, ADMISSION_REQUEST_BYTES_V2,
     AdmissionReceiptV2, AdmissionRequestV2, FinalizedRecordCoordinateV2, PORTFOLIO_SCHEMA_ID_V2,
     PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
     RESULT_DOMAIN_SCHEMA_ID_V2,
+};
+use dclutch_product::{
+    ContentId, PortfolioInputV2, ResultDomainInputV2, compile_portfolio_v2,
+    compile_result_domain_v2, portfolio_record_bytes, result_domain_record_bytes,
+};
+use dclutch_product_compiler::CompileError;
+pub use dclutch_product_compiler::partition_quality::{
+    BandProfileV1, FoundingBandV1, FoundingBeliefV1, MAX_CELL_EX_ANTE_SHARE_BPS_V1,
+    PartitionQualityModelV1, PartitionQualityReportV1, StatedPropositionV1, centred_cuts_v1,
+    require_interesting_partition_v1,
 };
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use solana_program::{

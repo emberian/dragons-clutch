@@ -43,7 +43,7 @@ program it cannot probe is reported as unprobed WITH THE REASON, never as
 passing. "Could not be checked" and "checked and fine" are different answers and
 this tool keeps them apart.
 
-EXIT CODES, the tree's own (`tools/ci/run.sh`, `tools/seam-audit`):
+EXIT CODES, the tree's own (`tools/gate`, `tools/seam-audit`):
   0  every command resolved, and every probe that ran agreed
   1  this tree has the defect -- a runbook publishes something that will not run
   2  a prerequisite is missing; nothing was proven either way

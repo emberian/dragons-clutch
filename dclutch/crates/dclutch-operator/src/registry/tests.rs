@@ -1,10 +1,10 @@
-use dclutch_registry::{
-    ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
-    ArtifactUpgradePolicyV1,
-};
 use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1, ExecutionReleaseSetV1,
     ExecutionRoleBindingV1, ExecutionRoleV1, ProgramIdentityV1,
+};
+use dclutch_registry::{
+    ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
+    ArtifactUpgradePolicyV1,
 };
 use solana_program::{hash::hash, pubkey::Pubkey, rent::Rent, sysvar::SysvarSerialize};
 use solana_sdk_ids::{bpf_loader_upgradeable, native_loader, system_program, sysvar};
@@ -388,9 +388,7 @@ fn activation_refuses_stale_loader_substitution_and_record_owner() {
     }
     assert_eq!(
         build_registry_activation_v1(substituted.registry, &substituted.state),
-        Err(Error::Registry(
-            dclutch_registry::Error::ElfDigestMismatch
-        ))
+        Err(Error::Registry(dclutch_registry::Error::ElfDigestMismatch))
     );
 
     let mut changed_upgrade_policy = Fixture::new();

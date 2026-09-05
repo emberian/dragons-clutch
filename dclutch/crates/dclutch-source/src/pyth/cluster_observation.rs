@@ -302,8 +302,9 @@ fn both_clusters_carry_the_same_feed_at_different_samples() {
 /// campaign's synthetic labelling would be wrong.
 #[test]
 fn lab_config_and_observed_config_are_not_the_same_bytes() {
-    const LAB_CONFIG: &[u8; RECEIVER_CONFIG_V2_LEN] =
-        include_bytes!("../../../../fixtures/pyth/local-upgraded-2026-08-22/receiver-config.account");
+    const LAB_CONFIG: &[u8; RECEIVER_CONFIG_V2_LEN] = include_bytes!(
+        "../../../../fixtures/pyth/local-upgraded-2026-08-22/receiver-config.account"
+    );
     assert_ne!(LAB_CONFIG.as_slice(), MAINNET_CONFIG.as_slice());
     assert_ne!(LAB_CONFIG.as_slice(), DEVNET_CONFIG.as_slice());
     let lab = ReceiverConfigV2View::parse(LAB_CONFIG).expect("lab config");

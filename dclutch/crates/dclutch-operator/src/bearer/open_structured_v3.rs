@@ -1,5 +1,30 @@
 //! Data-defined Hot artifacts for full-width Structured issue and unwrap.
 
+use dclutch_claims::rational::{
+    ASSET_BYTES_V3, AuthenticatedTokenBehaviorV2, CallerRoleV2, OPEN_REPRESENTATION_HOT_MAGIC_V3,
+    OPEN_REPRESENTATION_HOT_REQUEST_SCHEMA_ID_V3, OPEN_REPRESENTATION_HOT_VERSION_V3,
+    PHYSICAL_ABI_VERSION_V3, REQUEST_MAGIC_V2, REQUEST_STRUCTURED_HEADER_BYTES_V3,
+    RepresentationActionV2,
+};
+use dclutch_claims::rational_kernel::RepresentationDescriptorV2;
+use dclutch_claims::rational_request::generated as wire;
+use dclutch_core_contract::ContentId;
+use dclutch_custody::token_svm::{
+    TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
+    TokenBehaviorSelectionV2,
+};
+use dclutch_market::capability_program::v4::{
+    ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4, CapabilityProgramV4,
+};
+use dclutch_market::execution_strategy::v2::{
+    ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
+    EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
+    EXECUTION_STRATEGY_PROGRAM_BYTES_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
+    ExecutionStrategyProgramV2, StrategyDispositionV2,
+};
+use dclutch_product::payoff::runtime_v3::{
+    BASIS_HEADER_BYTES_V3, BASIS_WIDTH_OFFSET_V3, ProductBasisV3,
+};
 use dclutch_vm::account_profile::lifecycle_v3::{
     CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5 as LIFECYCLE_SCHEMA_ID_V5, StateLifecyclePolicyV5,
 };
@@ -15,10 +40,6 @@ use dclutch_vm::account_profile::v2::{
         encode_account_profile_with_dynamic_fixed_span_v2_atomic,
     },
 };
-use dclutch_market::capability_program::v4::{
-    ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4, CapabilityProgramV4,
-};
-use dclutch_core_contract::ContentId;
 use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{
@@ -35,23 +56,6 @@ use dclutch_vm::effect::{
         encode_program_v4_atomic,
     },
 };
-use dclutch_market::execution_strategy::v2::{
-    ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
-    EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
-    EXECUTION_STRATEGY_PROGRAM_BYTES_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
-    ExecutionStrategyProgramV2, StrategyDispositionV2,
-};
-use dclutch_product::payoff::runtime_v3::{
-    BASIS_HEADER_BYTES_V3, BASIS_WIDTH_OFFSET_V3, ProductBasisV3,
-};
-use dclutch_claims::rational::{
-    ASSET_BYTES_V3, AuthenticatedTokenBehaviorV2, CallerRoleV2, OPEN_REPRESENTATION_HOT_MAGIC_V3,
-    OPEN_REPRESENTATION_HOT_REQUEST_SCHEMA_ID_V3, OPEN_REPRESENTATION_HOT_VERSION_V3,
-    PHYSICAL_ABI_VERSION_V3, REQUEST_MAGIC_V2, REQUEST_STRUCTURED_HEADER_BYTES_V3,
-    RepresentationActionV2,
-};
-use dclutch_claims::rational_kernel::RepresentationDescriptorV2;
-use dclutch_claims::rational_request::generated as wire;
 use dclutch_vm::request_profile::{
     HEADER_BYTES as REQUEST_PROFILE_HEADER_BYTES, MAX_BYTES as REQUEST_PROFILE_MAX_BYTES,
     OPERATION_BYTES as REQUEST_OPERATION_BYTES, RequestProfileV1,
@@ -59,10 +63,6 @@ use dclutch_vm::request_profile::{
         IdentityRegisterV1, RequestCoordinateV1, RequestGeometryV1, RequestInstructionV1,
         ScalarRegisterV1, encode_request_profile_v1_atomic,
     },
-};
-use dclutch_custody::token_svm::{
-    TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
-    TokenBehaviorSelectionV2,
 };
 use dclutch_vm::v3::{
     HEADER_BYTES as TRANSITION_HEADER_BYTES, INSTRUCTION_BYTES as TRANSITION_INSTRUCTION_BYTES,
@@ -1308,14 +1308,12 @@ mod tests {
     use dclutch_claims::composition_v3::{
         ClaimsCompositionErrorV3, ClaimsCompositionParentV3, ClaimsCompositionV3,
     };
-    use dclutch_product::payoff::runtime_v3::{
-        BasisInputV3, BasisKindV3, compile_basis_v3,
-    };
     use dclutch_claims::rational::ABSENT_REVISION;
     use dclutch_claims::rational::{
         AssetV2, RepresentationRequestHeaderV2, RepresentationRequestV2,
     };
     use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
+    use dclutch_product::payoff::runtime_v3::{BasisInputV3, BasisKindV3, compile_basis_v3};
 
     fn id(value: u8) -> [u8; 32] {
         [value; 32]
@@ -1357,11 +1355,8 @@ mod tests {
             fixed_data_lengths: lengths,
             item_data_lengths: [64, 82, 165, 165],
             product_basis: basis,
-            representation_descriptor: crate::bearer::test_open_fixture_v3::representation_descriptor_v3(
-                id(4),
-                id(16),
-                3,
-            ),
+            representation_descriptor:
+                crate::bearer::test_open_fixture_v3::representation_descriptor_v3(id(4), id(16), 3),
             kind: id(10),
             authenticated_token_behavior:
                 crate::bearer::test_open_fixture_v3::authenticated_token_behavior_v3(

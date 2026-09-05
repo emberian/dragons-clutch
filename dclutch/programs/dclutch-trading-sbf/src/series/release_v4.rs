@@ -62,10 +62,7 @@ extern crate alloc;
 use alloc::boxed::Box;
 use alloc::{vec, vec::Vec};
 
-use dclutch_vm::account_profile::{
-    lifecycle_v3::CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5,
-    v2::SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2,
-};
+use dclutch_core_contract::ContentId;
 use dclutch_market::capability_program::{
     set_v2::{
         CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, SelectorWidthV2,
@@ -76,7 +73,6 @@ use dclutch_market::capability_program::{
         CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
     },
 };
-use dclutch_core_contract::ContentId;
 use dclutch_market::execution_strategy::{
     shadow_v3::{SHADOW_ACK_SCHEMA_ID_V3, SHADOW_REQUEST_SCHEMA_ID_V3},
     v2::{
@@ -87,6 +83,10 @@ use dclutch_market::execution_strategy::{
 };
 use dclutch_trading::series::generated::SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3;
 use dclutch_trading::series::request::SeriesActionV3;
+use dclutch_vm::account_profile::{
+    lifecycle_v3::CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5,
+    v2::SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2,
+};
 use solana_program::hash::hash;
 
 use super::{

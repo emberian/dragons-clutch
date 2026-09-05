@@ -9,14 +9,14 @@
 //! `CustodyRequestV1` packets.  Trading remains the sole writer and CPI
 //! authority.
 
-use dclutch_claims::affine_batch_v2::DeltaDirectionV2;
-use dclutch_custody::OperationV1;
-use dclutch_market::execution_strategy::v2::{ExecutionCandidateV2, register_bank_bytes_v2};
 use crate::general_codec::Action;
 use crate::general_config::{
     root::{GeneralLifecycleV2, GeneralRootV2},
     v3::GeneralConfigV3,
 };
+use dclutch_claims::affine_batch_v2::DeltaDirectionV2;
+use dclutch_custody::OperationV1;
+use dclutch_market::execution_strategy::v2::{ExecutionCandidateV2, register_bank_bytes_v2};
 
 use crate::general::{
     candidate_v1::{
@@ -4077,9 +4077,7 @@ mod tests {
     };
     use crate::general_codec::successor_request_v3::{ControllerActionV3, ControllerRequestV3};
     use crate::general_config::v3::GeneralConfigV3Input;
-    use dclutch_vm::v3::{
-        ProgramV3, RegisterInput, RegisterOutput, execute_fold_atomic,
-    };
+    use dclutch_vm::v3::{ProgramV3, RegisterInput, RegisterOutput, execute_fold_atomic};
 
     fn put_test(output: &mut [u8], offset: usize, value: &[u8]) {
         output[offset..offset + value.len()].copy_from_slice(value);

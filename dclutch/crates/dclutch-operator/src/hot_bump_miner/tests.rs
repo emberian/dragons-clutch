@@ -12,11 +12,11 @@
 //! `current_common_hot_executes_issue_and_selected_denominate_through_real_elves`
 //! reports the offset.
 
+use dclutch_core_contract::ContentId;
+use dclutch_custody::CustodyAuthoritySeedsV1;
 use dclutch_market::capability_program::{
     CapabilityRootHeaderV1, SelectedRecordBumpsV1, hot_v3::HotBumpHintsV1,
 };
-use dclutch_core_contract::ContentId;
-use dclutch_custody::CustodyAuthoritySeedsV1;
 use dclutch_market::{
     CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness, StateBumpsV1,
 };

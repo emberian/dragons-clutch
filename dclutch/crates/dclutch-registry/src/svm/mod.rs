@@ -9,8 +9,8 @@
 //! PDA derivation, hashing, CPI, and return-data provenance remain adapter
 //! obligations.
 
-use dclutch_core_contract::ContentId;
 use crate::release_set::{ArtifactReleaseIdV1, ExecutionRoleV1, ProgramIdentityV1};
+use dclutch_core_contract::ContentId;
 
 /// Canonical family-neutral batched role authentication wires.
 pub mod batch_v2;

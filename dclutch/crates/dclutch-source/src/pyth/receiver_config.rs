@@ -265,8 +265,9 @@ impl<'a> BorshCursor<'a> {
 mod tests {
     use super::*;
 
-    const CAPTURED_CONFIG: &[u8; RECEIVER_CONFIG_V2_LEN] =
-        include_bytes!("../../../../fixtures/pyth/local-upgraded-2026-08-22/receiver-config.account");
+    const CAPTURED_CONFIG: &[u8; RECEIVER_CONFIG_V2_LEN] = include_bytes!(
+        "../../../../fixtures/pyth/local-upgraded-2026-08-22/receiver-config.account"
+    );
 
     #[test]
     fn captured_config_exposes_real_router_fee_minimum_policy_and_source()

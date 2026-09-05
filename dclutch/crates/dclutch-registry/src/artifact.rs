@@ -1,7 +1,7 @@
 //! Canonical artifact-release facts and current deployment observations.
 
-use dclutch_core_contract::ContentId;
 use crate::release_set::ProgramIdentityV1;
+use dclutch_core_contract::ContentId;
 
 use crate::{
     Error, IDENTITY_BYTES, Result, copy_infallible, put_u16, put_u64, read_array, read_byte,

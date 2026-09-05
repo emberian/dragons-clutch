@@ -62,11 +62,12 @@ use dclutch_market::capability_manifest::{
     CapabilityManifestV1, ContentId as CapabilityContentId, FundingLedgerStatusV2, FundingLedgerV2,
 };
 use dclutch_market::{CoreState, MarketCoreStateSeedsV2};
-use dclutch_product::{ContentId as ProductContentId, ResultDomainV2};
 use dclutch_product::svm_reader::{
     AuthenticatedProductRuntimeV2, FinalizedRecordFrameV2, ProductRuntimeFrameV2,
     authenticate_product_runtime_v2,
 };
+use dclutch_product::{ContentId as ProductContentId, ResultDomainV2};
+use dclutch_registry::release_set::ExecutionRoleV1;
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_BYTES_V1,
     ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1,
@@ -100,7 +101,6 @@ use dclutch_source::relay::{
     },
     wire::{AttestationMessageV1, ObservationSetSealV1},
 };
-use dclutch_registry::release_set::ExecutionRoleV1;
 use dclutch_source::resolution::{
     RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
     RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateKindV2,

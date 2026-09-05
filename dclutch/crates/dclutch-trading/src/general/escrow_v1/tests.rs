@@ -8,9 +8,9 @@
 use std::vec;
 use std::vec::Vec;
 
+use crate::general_config::root::GeneralRootV2;
 use dclutch_custody::{CustodyRequestV1, OperationV1};
 use dclutch_vm::effect::v3::ProgramV3;
-use crate::general_config::root::GeneralRootV2;
 
 use super::*;
 use crate::general::candidate_v1::{GeneralCandidateStatusV1, GeneralCandidateV1};
@@ -294,8 +294,8 @@ fn candidate_bytes(batch_id: [u8; 32]) -> Vec<u8> {
     };
     let prices = [50_u64, 30, 20];
     CandidateV2::encode_into(header, &prices, &mut bytes).expect("draft candidate");
-    let identity =
-        crate::general::candidate_v1::general_candidate_identity_v1(&bytes).expect("candidate identity");
+    let identity = crate::general::candidate_v1::general_candidate_identity_v1(&bytes)
+        .expect("candidate identity");
     CandidateV2::encode_into(
         CandidateHeaderV2 {
             candidate_id: identity,

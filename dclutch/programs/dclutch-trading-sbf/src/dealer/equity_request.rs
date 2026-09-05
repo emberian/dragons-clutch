@@ -11,20 +11,20 @@ extern crate alloc;
 #[cfg(not(target_os = "solana"))]
 use alloc::{vec, vec::Vec};
 
-use dclutch_market::capability_program::set_v1::{CapabilityProgramSetV1, SelectorWidthV1};
 use dclutch_claims::signed_delta_v3::{DeltaDirectionV3, SignedDeltaPlanV3};
 use dclutch_core_contract::ContentId;
 #[cfg(not(target_os = "solana"))]
 use dclutch_custody::{
     CallerRoleV1, CompartmentV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1, CustodyVaultSeedsV1,
 };
-use dclutch_trading::dealer::scenario::ClaimsInventoryObservation;
-#[cfg(not(target_os = "solana"))]
-use dclutch_market::{MarketCoreStateSeedsV2, MarketIdentity};
+use dclutch_market::capability_program::set_v1::{CapabilityProgramSetV1, SelectorWidthV1};
 #[cfg(not(target_os = "solana"))]
 use dclutch_market::realm::REALM_SCHEMA_RELEASE_ID_V1;
 #[cfg(not(target_os = "solana"))]
+use dclutch_market::{MarketCoreStateSeedsV2, MarketIdentity};
+#[cfg(not(target_os = "solana"))]
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_trading::dealer::scenario::ClaimsInventoryObservation;
 use solana_program::{hash::hash, hash::hashv, pubkey::Pubkey};
 
 use super::{

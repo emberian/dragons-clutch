@@ -2217,7 +2217,10 @@ impl<'a> RequestProfileKindV3<'a> {
         }
     }
 
-    pub(super) fn writes_any_register(self, targets: &[ProjectionTargetV1]) -> Result<bool, ProgramError> {
+    pub(super) fn writes_any_register(
+        self,
+        targets: &[ProjectionTargetV1],
+    ) -> Result<bool, ProgramError> {
         match self {
             Self::RepeatedRows(profile) => profile
                 .writes_any_register(targets)

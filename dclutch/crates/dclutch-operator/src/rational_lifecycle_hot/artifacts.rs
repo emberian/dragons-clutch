@@ -854,9 +854,7 @@ fn narrow_u32(value: usize) -> Result<u32> {
 mod tests {
     use super::*;
     use dclutch_vm::request_profile::RequestProfileV1;
-    use dclutch_vm::v3::{
-        ProgramV3, RegisterInput, RegisterOutput, execute_fold_atomic,
-    };
+    use dclutch_vm::v3::{ProgramV3, RegisterInput, RegisterOutput, execute_fold_atomic};
 
     fn run_selected_transition(
         product_width: u64,

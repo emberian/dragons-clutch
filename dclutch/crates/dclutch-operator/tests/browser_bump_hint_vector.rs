@@ -48,13 +48,12 @@
 
 use std::{env, fs, path::PathBuf};
 
+use dclutch_core_contract::ContentId;
+use dclutch_custody::{CallerRoleV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1};
 use dclutch_market::capability_program::{
     CapabilityRootHeaderV1, SelectedRecordBumpsV1,
     hot_v3::{HOT_BUMP_HINT_COUNT_V1, HotBumpHintsV1},
 };
-use dclutch_core_contract::ContentId;
-use dclutch_custody::{CallerRoleV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1};
-use dclutch_trading::successor::{DirectCoordinatesV1, MakerReplaySeedsV1};
 use dclutch_market::{
     CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness, StateBumpsV1,
 };
@@ -62,6 +61,7 @@ use dclutch_registry::release_set::{
     CAPABILITY_EXECUTION_SELECTION_BYTES_V1, CallerAuthoritySeedsV1,
     CapabilityExecutionSelectionV1, ExecutionRoleV1,
 };
+use dclutch_trading::successor::{DirectCoordinatesV1, MakerReplaySeedsV1};
 use solana_program::pubkey::Pubkey;
 
 const NOTE: &str = "Two-sided vector for the caller-mined bump hints the V3 hot envelope carries at HOT_BUMP_HINTS_OFFSET_V1. Produced by crates/dclutch-operator/tests/browser_bump_hint_vector.rs through the same exported seed constructors direct_inline_hot_bump_hints_v1 mines through, and reproduced independently by the byte-identical TypeScript miner in packages/dclutch-sdk/lib/directHotBumpHintsV1.ts and apps/dclutch-web/lib/directHotBumpHintsV1.ts. The Rust crates are the authority: if a seed order moves, the Rust test fails first. Every identity is a distinct constant fill supplied as an encoder INPUT, never as an expected answer. The Market state and capability root are emitted as their real canonical account encodings because the browser reads those exact bodies at those exact offsets. childCaller carries the two Trading caller-authority bumps derived from the two pinned child request digests; the miner takes them as a parameter for the same reason build_direct_inline_hot_v4 does -- their seeds end in a digest over a PROJECTED child request, which no exterior caller rebuilds.";

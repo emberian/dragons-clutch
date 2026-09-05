@@ -1,18 +1,5 @@
 //! Content-addressed CapabilityProgram V3 bundle for one lifecycle action.
 
-use dclutch_vm::account_profile::v2::{AccountProfileV2, TYPED_SCALAR_ARTIFACT_PROFILE};
-use dclutch_market::capability_program::v3::{CAPABILITY_PROGRAM_V3_BYTES, CapabilityProgramV3};
-use dclutch_core_contract::ContentId;
-use dclutch_vm::effect::{
-    v2::FixedRole,
-    v3::{ProgramV3 as EffectProgramV3, RouteKindV3},
-};
-use dclutch_market::execution_strategy::v2::{
-    ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
-    EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
-    EXECUTION_STRATEGY_PROGRAM_BYTES_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
-    ExecutionStrategyProgramV2, StrategyDispositionV2,
-};
 use dclutch_claims::rational_kernel::REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3;
 use dclutch_claims::rational_lifecycle::{
     LifecycleActionV2,
@@ -20,6 +7,19 @@ use dclutch_claims::rational_lifecycle::{
         RATIONAL_LIFECYCLE_HOT_SCHEMA_RELEASE_ID_V3, RationalLifecycleHotLayoutV3,
         RationalLifecycleHotRegisterLayoutV3,
     },
+};
+use dclutch_core_contract::ContentId;
+use dclutch_market::capability_program::v3::{CAPABILITY_PROGRAM_V3_BYTES, CapabilityProgramV3};
+use dclutch_market::execution_strategy::v2::{
+    ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
+    EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
+    EXECUTION_STRATEGY_PROGRAM_BYTES_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
+    ExecutionStrategyProgramV2, StrategyDispositionV2,
+};
+use dclutch_vm::account_profile::v2::{AccountProfileV2, TYPED_SCALAR_ARTIFACT_PROFILE};
+use dclutch_vm::effect::{
+    v2::FixedRole,
+    v3::{ProgramV3 as EffectProgramV3, RouteKindV3},
 };
 use dclutch_vm::request_profile::RequestProfileV1;
 use dclutch_vm::v3::ProgramV3 as TransitionProgramV3;

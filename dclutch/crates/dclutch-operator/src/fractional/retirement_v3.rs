@@ -6,15 +6,6 @@
 //! `Finish`. The result is one unsigned, packet-safe v0 message and the exact
 //! production instruction it contains.
 
-use dclutch_claims::{
-    liability_basis_state_v2::{
-        LiabilityBasisMarketSeedsV2, LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
-    },
-    protocol_position_v2::{
-        ProtocolPositionAdmissionSeedsV2, ProtocolPositionAdmissionV2, ProtocolPositionOwnerKindV2,
-        ProtocolPositionSeedsV2,
-    },
-};
 use dclutch_claims::fractional::{
     FRACTIONAL_RETIREMENT_BEGIN_ACCOUNT_COUNT_V3,
     FRACTIONAL_RETIREMENT_COORDINATE_ACCOUNT_COUNT_V3, FRACTIONAL_RETIREMENT_CURSOR_BYTES_V3,
@@ -29,16 +20,27 @@ use dclutch_claims::fractional_kernel::{
     FractionalExposureTermsAdmissionV2, FractionalExposureTermsV2,
     encode_fractional_selection_config_v1, fractional_selection_config_from_terms_v1,
 };
+use dclutch_claims::{
+    liability_basis_state_v2::{
+        LiabilityBasisMarketSeedsV2, LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
+    },
+    protocol_position_v2::{
+        ProtocolPositionAdmissionSeedsV2, ProtocolPositionAdmissionV2, ProtocolPositionOwnerKindV2,
+        ProtocolPositionSeedsV2,
+    },
+};
+use dclutch_custody::token_svm::{
+    TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, Token2022BehaviorProfileV2,
+};
+use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
 use dclutch_market::{CoreState, MarketCoreStateSeedsV2, Phase};
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1, DeploymentObservationV1,
 };
-use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
-use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
-use dclutch_custody::token_svm::{TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, Token2022BehaviorProfileV2};
 use dclutch_versioned_message_operator::{
     Finality, Observation, ObservedAccount, VersionedMessagePlanV0,
     compile_v0_message_with_optional_tables,
@@ -626,7 +628,8 @@ fn authenticate_native_accounts(snapshot: &FractionalRetirementSnapshotV3) -> Re
         || snapshot.system_program.key != system_program::ID
         || snapshot.system_program.owner != native_loader::ID
         || !snapshot.system_program.executable
-        || snapshot.token_program.key.to_bytes() != dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID
+        || snapshot.token_program.key.to_bytes()
+            != dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID
         || !snapshot.token_program.executable
     {
         return Err(Error::ChainArtifacts);

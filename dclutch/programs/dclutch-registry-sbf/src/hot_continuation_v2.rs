@@ -7,6 +7,7 @@
 
 use std::vec::Vec;
 
+use dclutch_core_contract::ContentId;
 use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
     hot_v3::{
@@ -16,11 +17,10 @@ use dclutch_market::capability_program::{
         HOT_TRADING_PROGRAMDATA_ACCOUNT_V3, HotExecutionEnvelopeV3,
     },
 };
-use dclutch_core_contract::ContentId;
+use dclutch_registry::release_set::ExecutionRoleV1;
 use dclutch_registry::svm::continuation_v2::{
     TransparentHotAdmissionSeedsV2, TransparentHotContinuationV2,
 };
-use dclutch_registry::release_set::ExecutionRoleV1;
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,

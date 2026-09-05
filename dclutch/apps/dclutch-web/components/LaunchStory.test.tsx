@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 // the open face the same way; between them both states stay guarded whatever
 // the fixture currently says.
 vi.mock('@dclutch/sdk/publicCutStaging', async () => {
-  const actual = await vi.importActual<typeof import('@dclutch/sdk/publicCutStaging')>('@/lib/publicCutStaging');
+  const actual = await vi.importActual<typeof import('@dclutch/sdk/publicCutStaging')>('@dclutch/sdk/publicCutStaging');
   const cut = actual.parsePublicDevnetCutV1({
     schema: 'dclutch-public-cut-v1',
     cluster: 'devnet',

@@ -2,9 +2,7 @@
 
 use core::convert::TryInto;
 
-use dclutch_market::capability_program::{
-    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
-};
+use dclutch_market::capability_program::{CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1};
 
 /// Exact mutable root width.
 pub const FRACTIONAL_ROOT_BYTES_V1: usize = 128;

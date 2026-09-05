@@ -5,23 +5,9 @@
 //! program's two `invoke_signed` seed sets. It is not a directly submittable
 //! wallet instruction.
 
-use dclutch_claims::{
-    frame_spec_v1::SignedDeltaFrameSpecV3,
-    liability_basis_state_v2::LIABILITY_BASIS_MARKET_SEED_V2,
-    protocol_position_v2::ProtocolPositionSeedsV2,
-    terminal_settlement_v3::{
-        TERMINAL_SETTLEMENT_CERTIFICATE_ACCOUNT_V3, TERMINAL_SETTLEMENT_COLLATERAL_MINT_ACCOUNT_V3,
-        TERMINAL_SETTLEMENT_CUSTODY_AUTHORITY_ACCOUNT_V3,
-        TERMINAL_SETTLEMENT_CUSTODY_CALLER_ACCOUNT_V3,
-        TERMINAL_SETTLEMENT_CUSTODY_PROGRAM_ACCOUNT_V3,
-        TERMINAL_SETTLEMENT_CUSTODY_REPLAY_ACCOUNT_V3, TERMINAL_SETTLEMENT_EXPOSURE_RAW_ACCOUNT_V3,
-        TERMINAL_SETTLEMENT_EXPOSURE_STAGING_ACCOUNT_V3, TERMINAL_SETTLEMENT_HOARD_ACCOUNT_V3,
-        TERMINAL_SETTLEMENT_REALM_ACCOUNT_V3, TERMINAL_SETTLEMENT_REALM_STAGING_ACCOUNT_V3,
-        TERMINAL_SETTLEMENT_RECIPIENT_ACCOUNT_V3,
-        TERMINAL_SETTLEMENT_RESOLUTION_PROGRAM_ACCOUNT_V3,
-        TERMINAL_SETTLEMENT_RESOLUTION_PROGRAMDATA_ACCOUNT_V3,
-        TERMINAL_SETTLEMENT_TOKEN_PROGRAM_ACCOUNT_V3,
-    },
+use dclutch_claims::composition::{
+    COMPOSITION_EXPOSURE_SCHEMA_ID_V3, CompositionExposureBundleV3,
+    CompositionExposureExecutionExpectedV3, RecordAdmissionV3,
 };
 use dclutch_claims::fractional::{
     FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3, FRACTIONAL_ATOMIC_ACTOR_V3,
@@ -40,13 +26,27 @@ use dclutch_claims::fractional_kernel::{
     FractionalExposureTermsV2, encode_fractional_selection_config_v1,
     fractional_selection_config_from_terms_v1,
 };
-use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_claims::composition::{
-    COMPOSITION_EXPOSURE_SCHEMA_ID_V3, CompositionExposureBundleV3,
-    CompositionExposureExecutionExpectedV3, RecordAdmissionV3,
+use dclutch_claims::{
+    frame_spec_v1::SignedDeltaFrameSpecV3,
+    liability_basis_state_v2::LIABILITY_BASIS_MARKET_SEED_V2,
+    protocol_position_v2::ProtocolPositionSeedsV2,
+    terminal_settlement_v3::{
+        TERMINAL_SETTLEMENT_CERTIFICATE_ACCOUNT_V3, TERMINAL_SETTLEMENT_COLLATERAL_MINT_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_CUSTODY_AUTHORITY_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_CUSTODY_CALLER_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_CUSTODY_PROGRAM_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_CUSTODY_REPLAY_ACCOUNT_V3, TERMINAL_SETTLEMENT_EXPOSURE_RAW_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_EXPOSURE_STAGING_ACCOUNT_V3, TERMINAL_SETTLEMENT_HOARD_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_REALM_ACCOUNT_V3, TERMINAL_SETTLEMENT_REALM_STAGING_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_RECIPIENT_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_RESOLUTION_PROGRAM_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_RESOLUTION_PROGRAMDATA_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_TOKEN_PROGRAM_ACCOUNT_V3,
+    },
 };
 use dclutch_custody::token_svm::TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2;
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},
@@ -486,8 +486,10 @@ fn require_privilege(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_market::capability_program::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
-    use dclutch_core_contract::ContentId;
+    use dclutch_claims::composition::{
+        CompositionExposureInputV3, CompositionExposureRowInputV3, CompositionExposureTermV3,
+        composition_exposure_bytes_v3, encode_composition_exposure_v3_atomic,
+    };
     use dclutch_claims::fractional::{
         FRACTIONAL_CAPABILITY_ROOT_BYTES_V4, FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4,
         FractionalExposureRequestInputV2, FractionalRootInputV1, FractionalRootV1,
@@ -497,12 +499,10 @@ mod tests {
         FractionalExposureTermsAdmissionV2, FractionalExposureTermsInputV2,
         encode_fractional_exposure_terms_v2, fractional_exposure_terms_bytes_v2,
     };
-    use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
-    use dclutch_claims::composition::{
-        CompositionExposureInputV3, CompositionExposureRowInputV3, CompositionExposureTermV3,
-        composition_exposure_bytes_v3, encode_composition_exposure_v3_atomic,
-    };
+    use dclutch_core_contract::ContentId;
     use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
+    use dclutch_market::capability_program::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
+    use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
 
     fn id(value: u8) -> [u8; 32] {
         [value; 32]

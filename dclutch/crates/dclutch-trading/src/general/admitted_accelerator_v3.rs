@@ -7,11 +7,11 @@
 //! no child, and never commits a cursor or effect; common Trading remains the
 //! sole writer and CPI authority.
 
+use crate::general_codec::{Action, SelectionPolicyV1};
 use dclutch_core_contract::ContentId;
 use dclutch_market::execution_strategy::v2::{
     AcceleratorAckV2, ExecutionCandidateV2, StrategyDispositionV2, resolve_execution_candidate_v2,
 };
-use crate::general_codec::{Action, SelectionPolicyV1};
 use dclutch_sha256_adapter::digest;
 
 use crate::general::{
@@ -516,8 +516,8 @@ fn content(bytes: &[u8]) -> Result<ContentId> {
 
 #[cfg(test)]
 mod tests {
-    use dclutch_market::execution_strategy::v2::ExecutionCandidateV2;
     use crate::general_codec::{MAX_SELECTION_CRITERIA, SelectionCriterion};
+    use dclutch_market::execution_strategy::v2::ExecutionCandidateV2;
     use std::{vec, vec::Vec};
 
     use super::*;

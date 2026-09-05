@@ -13,12 +13,12 @@ extern crate alloc;
 #[cfg(not(target_os = "solana"))]
 use alloc::{vec, vec::Vec};
 
-use dclutch_market::capability_program::hot_v3::HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3;
 use dclutch_claims::signed_delta_v3::SIGNED_DELTA_RECEIPT_BYTES_V3;
 use dclutch_custody::{
     CUSTODY_REQUEST_BYTES_V1, CallerRoleV1, CompartmentV1, CustodyRequestLayoutV1,
     DELEGATED_CUSTODY_REQUEST_BYTES_V2, DelegatedCustodyRequestLayoutV2, OperationV1,
 };
+use dclutch_market::capability_program::hot_v3::HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3;
 use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{
@@ -34,9 +34,7 @@ use dclutch_vm::effect::{
 use solana_program::hash::hash;
 
 use super::{
-    equity_request::{
-        DEALER_EQUITY_HEADER_BYTES_V3, DealerEquityRequestV3, EquityRequestActionV3,
-    },
+    equity_request::{DEALER_EQUITY_HEADER_BYTES_V3, DealerEquityRequestV3, EquityRequestActionV3},
     multi_lp::{
         MAX_MULTI_LP_CUSTODY_EFFECTS_V3, MultiLpActionV3, MultiLpCustodyEffectV3,
         MultiLpCustodyRequestV3, MultiLpPlanV3, multi_lp_custody_digest_v3,

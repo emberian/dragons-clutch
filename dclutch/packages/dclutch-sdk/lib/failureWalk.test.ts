@@ -31,7 +31,7 @@ const BOOK: FailureWalkBookV1 = Object.freeze({
   portfolioRecordStagingVacancy: key(16),
   capabilityManifest: key(17),
   capabilityManifestStagingVacancy: key(18),
-  failureFunding: key(19),
+  resolutionFunding: key(19),
 });
 
 describe('CommitDeadlineFailure wire', () => {

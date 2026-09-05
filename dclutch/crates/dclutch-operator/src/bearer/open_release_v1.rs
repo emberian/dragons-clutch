@@ -67,19 +67,17 @@
 //! surface that carries a Market address, which is what makes the admission
 //! runnable against a release compiled before its Market exists.
 
-use dclutch_vm::account_profile::{
-    lifecycle_v3::StateLifecyclePolicyV5, v2::AccountProfileV2,
-};
+use dclutch_claims::rational::RepresentationActionV2;
+use dclutch_claims::rational_request::generated::REQUEST_ACTION_OFFSET_V3;
+use dclutch_custody::token_svm::{TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, TokenBehaviorSelectionV2};
 use dclutch_market::capability_program::{
     set_v2::{CapabilityProgramSetV2, SelectorWidthV2},
     v4::{CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4},
 };
-use dclutch_vm::effect::v4::ProgramV4 as EffectProgramV4;
 use dclutch_market::execution_strategy::v2::ExecutionStrategyProgramV2;
-use dclutch_claims::rational::RepresentationActionV2;
-use dclutch_claims::rational_request::generated::REQUEST_ACTION_OFFSET_V3;
+use dclutch_vm::account_profile::{lifecycle_v3::StateLifecyclePolicyV5, v2::AccountProfileV2};
+use dclutch_vm::effect::v4::ProgramV4 as EffectProgramV4;
 use dclutch_vm::request_profile::RequestProfileV1;
-use dclutch_custody::token_svm::{TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, TokenBehaviorSelectionV2};
 use solana_program::hash::hash;
 
 use crate::bearer::{Error, Result};
@@ -329,8 +327,7 @@ fn join_artifacts(
     StateLifecyclePolicyV5::decode_selected(lifecycle_id, lifecycle_id, supplied.lifecycle_policy)
         .map_err(Error::LifecycleArtifact)?;
     ExecutionStrategyProgramV2::decode(supplied.strategy).map_err(Error::ExecutionStrategy)?;
-    dclutch_vm::v3::ProgramV3::decode(supplied.transition)
-        .map_err(Error::TransitionArtifact)?;
+    dclutch_vm::v3::ProgramV3::decode(supplied.transition).map_err(Error::TransitionArtifact)?;
     let effect = EffectProgramV4::decode(supplied.effect).map_err(Error::EffectArtifactV4)?;
 
     let artifacts = descriptor.artifacts();

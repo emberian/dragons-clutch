@@ -16,12 +16,12 @@
 //! record no fill could ever admit, at any maximum, and nothing before the fill
 //! would refuse.
 
-use dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1;
 use dclutch_custody::{
     CUSTODY_RECEIPT_BYTES_V1, CallerRoleV1, CompartmentV1, ContextV1, CustodyRequestLayoutV1,
     CustodyRequestV1, DELEGATED_CUSTODY_REQUEST_BYTES_V2, DelegatedCustodyRequestLayoutV2,
     DelegatedCustodyRequestV2, OperationV1,
 };
+use dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1;
 use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{
@@ -722,19 +722,15 @@ fn push_common_request_at(
     )
 }
 
-fn initialize_template() -> Result<
-    [u8; dclutch_custody::CUSTODY_REQUEST_BYTES_V1],
-    DirectRegisteredEffectArtifactErrorV4,
-> {
+fn initialize_template()
+-> Result<[u8; dclutch_custody::CUSTODY_REQUEST_BYTES_V1], DirectRegisteredEffectArtifactErrorV4> {
     custody_template(OperationV1::InitializeReplay)
         .to_bytes()
         .map_err(|_| DirectRegisteredEffectArtifactErrorV4::ChildRequest)
 }
 
-fn open_template() -> Result<
-    [u8; dclutch_custody::CUSTODY_REQUEST_BYTES_V1],
-    DirectRegisteredEffectArtifactErrorV4,
-> {
+fn open_template()
+-> Result<[u8; dclutch_custody::CUSTODY_REQUEST_BYTES_V1], DirectRegisteredEffectArtifactErrorV4> {
     custody_template(OperationV1::OpenVault)
         .to_bytes()
         .map_err(|_| DirectRegisteredEffectArtifactErrorV4::ChildRequest)
@@ -954,10 +950,7 @@ mod tests {
         assert_eq!(base.route(0).expect("route0").receipt_dependency_count(), 0);
         assert_eq!(base.route(1).expect("route1").receipt_dependency_count(), 1);
         assert_eq!(base.route(2).expect("route2").receipt_dependency_count(), 2);
-        assert_eq!(
-            dclutch_custody::DELEGATED_CUSTODY_RECEIPT_BYTES_V2,
-            488
-        );
+        assert_eq!(dclutch_custody::DELEGATED_CUSTODY_RECEIPT_BYTES_V2, 488);
     }
 
     #[test]

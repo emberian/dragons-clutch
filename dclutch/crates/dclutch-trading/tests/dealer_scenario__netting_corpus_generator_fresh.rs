@@ -63,7 +63,8 @@ fn checked_in_dealer_netting_corpus_is_exact_lean_output() {
         .unwrap_or_else(|error| panic!("read formatted generated Rust: {error}"));
     std::fs::remove_file(&temporary)
         .unwrap_or_else(|error| panic!("remove generated Rust: {error}"));
-    let checked_in = std::fs::read(manifest.join("src/dealer_scenario/generated_netting_corpus.rs"))
-        .unwrap_or_else(|error| panic!("read checked-in generated Rust: {error}"));
+    let checked_in =
+        std::fs::read(manifest.join("src/dealer_scenario/generated_netting_corpus.rs"))
+            .unwrap_or_else(|error| panic!("read checked-in generated Rust: {error}"));
     assert_eq!(formatted, checked_in);
 }

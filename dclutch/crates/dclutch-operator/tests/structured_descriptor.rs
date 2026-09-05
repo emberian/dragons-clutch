@@ -13,11 +13,11 @@ mod fixture;
 mod support;
 
 use dclutch_claims::structured_kernel::StructuredTermsV2;
+use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
 use dclutch_operator::structured::{
     Error, StructuredDescriptorAuthorityV2, decode_derived_structured_descriptor_v2,
     derive_structured_representation_descriptor_v2, structured_child_descriptor_from_derivation_v2,
 };
-use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
 
 use fixture::{
     AUTHORITY, COEFFICIENTS, DENOMINATOR, GRAPH_ID, K, ROOT_ID, composition, decode_terms,

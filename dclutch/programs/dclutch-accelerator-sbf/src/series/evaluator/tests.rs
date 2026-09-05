@@ -2,7 +2,6 @@ extern crate std;
 
 use std::vec::Vec;
 
-use dclutch_vm::account_profile::AccountObservationV1;
 use dclutch_core_contract::ContentId;
 use dclutch_market::execution_strategy::shadow_v3::{
     ShadowArtifactTupleV3, ShadowExecutionDigestsV3, ShadowRequestV3, ShadowRuntimeShapeV3,
@@ -13,6 +12,7 @@ use dclutch_trading::series::{
     request::{SeriesActionV3, encode_series_action_header_v3},
     template_content_id, ticket_content_id,
 };
+use dclutch_vm::account_profile::AccountObservationV1;
 use sha2::{Digest, Sha256};
 
 use super::*;

@@ -45,7 +45,7 @@ tools/branch-census/census.sh --base origin/main --quiet
 `--live` takes an egrep pattern of branches known to belong to running lanes;
 they are listed under their own heading rather than nagged about as REVIEW.
 
-Exit codes follow `tools/ci/run.sh`: **0** the census ran, **2** a prerequisite
+Exit codes follow `tools/gate`: **0** the census ran, **2** a prerequisite
 is missing. There is deliberately no exit 1 — this is a report, not a gate. A
 tree with work in progress is healthy, and a check that failed CI for that would
 be uninstallable.

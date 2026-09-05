@@ -11,10 +11,6 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use dclutch_core_contract::ContentId;
-use dclutch_vm::effect::{
-    v2::FixedRole,
-    v3::{ProgramV3, ResolvedInvocationV3, RouteKindV3},
-};
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_source::resolution::{
     PROVIDER_EXECUTION_REQUEST_BYTES_V3, PROVIDER_RESOLUTION_TRADING_ACCOUNT_COUNT_V3,
@@ -22,6 +18,10 @@ use dclutch_source::resolution::{
     PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3, ProviderCallerV3,
     ProviderExecutionReceiptV3, ProviderExecutionRequestV3, ProviderUpdateLifecycleV3,
     ProviderUpdateStatusV3,
+};
+use dclutch_vm::effect::{
+    v2::FixedRole,
+    v3::{ProgramV3, ResolvedInvocationV3, RouteKindV3},
 };
 use solana_program::{
     account_info::AccountInfo,

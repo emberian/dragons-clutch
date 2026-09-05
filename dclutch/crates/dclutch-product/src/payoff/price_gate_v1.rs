@@ -51,7 +51,9 @@
 //! it. It is emitted from Lean alongside the offsets rather than chosen here.
 
 use crate::payoff::runtime_v3::{Error, Result};
-use crate::payoff::spline_eval_v3::{SplineKnotsV3, apportion_cumulative_v3, evaluate_spline_weights_v3};
+use crate::payoff::spline_eval_v3::{
+    SplineKnotsV3, apportion_cumulative_v3, evaluate_spline_weights_v3,
+};
 
 #[allow(missing_docs)]
 mod generated {

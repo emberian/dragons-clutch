@@ -5,6 +5,9 @@
 //! the mandatory compute limit plus adjacent native-Ed25519 and Trading batch. It never performs
 //! RPC, signs maker material, signs a transaction, or submits one.
 
+use crate::hot_bump_miner::{
+    HotBumpCorpusV1, activated_custody_program_v1, mine_hot_bump_hints_v1,
+};
 use crate::{
     Finality, Observation, ObservedAccount,
     observation::{FinalizedRecordProof, authenticate_finalized_record},
@@ -13,9 +16,11 @@ use crate::{
         authenticate_product_graph_observation_v3,
     },
 };
-use dclutch_vm::account_profile::v2::PhysicalAccountDataGeometryV2;
+use dclutch_custody::{CallerRoleV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1};
 use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
-use dclutch_market::capability_manifest::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
+use dclutch_market::capability_manifest::{
+    CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1,
+};
 use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
     hot_v3::{
@@ -43,7 +48,18 @@ use dclutch_market::capability_program::{
         SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
     },
 };
-use dclutch_custody::{CallerRoleV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1};
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2, Phase, STATE_BYTES};
+use dclutch_product::ResultDomainV2;
+use dclutch_product::payoff::{
+    registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+    runtime_v3::{ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, semantic_basis_preimage_v3},
+};
+use dclutch_registry::release_set::ExecutionRoleV1;
+use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
+use dclutch_registry::{
+    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
+    ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1, DeploymentObservationV1,
+};
 use dclutch_trading::{
     artifacts_v4::{
         DirectArtifactBundleV4, DirectArtifactBytesV4, DirectArtifactSelectionV4,
@@ -68,21 +84,7 @@ use dclutch_trading::{
     },
     successor::{DirectCoordinatesV1, MakerReplaySeedsV1},
 };
-use crate::hot_bump_miner::{
-    HotBumpCorpusV1, activated_custody_program_v1, mine_hot_bump_hints_v1,
-};
-use dclutch_market::{CoreState, MarketCoreStateSeedsV2, Phase, STATE_BYTES};
-use dclutch_product::payoff::{
-    registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
-    runtime_v3::{ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, semantic_basis_preimage_v3},
-};
-use dclutch_product::ResultDomainV2;
-use dclutch_registry::{
-    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
-    ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1, DeploymentObservationV1,
-};
-use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
-use dclutch_registry::release_set::ExecutionRoleV1;
+use dclutch_vm::account_profile::v2::PhysicalAccountDataGeometryV2;
 use solana_address_lookup_table_interface::{
     program as lookup_table_program, state::AddressLookupTable,
 };
@@ -1910,6 +1912,7 @@ mod tests {
     use std::borrow::Cow;
 
     use super::*;
+    use dclutch_custody::CustodyReplayLayoutV1;
     use dclutch_market::capability_manifest::{
         ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1,
         FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
@@ -1921,7 +1924,11 @@ mod tests {
             encode_program_set_v2, encoded_program_set_bytes_v2,
         },
     };
-    use dclutch_custody::CustodyReplayLayoutV1;
+    use dclutch_market::realm::REALM_BYTES;
+    use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
+    use dclutch_product::admission::PRODUCT_RECORD_BYTES_V2;
+    use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+    use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
     use dclutch_trading::{
         execution_v3::{
             DIRECT_REGISTRATION_REQUEST_BYTES_V3, DirectRegistrationRequestV3,
@@ -1946,11 +1953,6 @@ mod tests {
             DIRECT_ROOT_SCHEMA_ID_V1, DirectExecutionConfigV1, DirectRootStateV1,
         },
     };
-    use dclutch_product::admission::PRODUCT_RECORD_BYTES_V2;
-    use dclutch_market::realm::REALM_BYTES;
-    use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-    use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
-    use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
     use solana_address_lookup_table_interface::state::LookupTableMeta;
     use solana_program::{account_info::AccountInfo, rent::Rent, sysvar::SysvarSerialize};
     use solana_sdk_ids::system_program;
@@ -2345,7 +2347,8 @@ mod tests {
     }
 
     fn capability_id(bytes: [u8; 32]) -> dclutch_market::capability_manifest::ContentId {
-        dclutch_market::capability_manifest::ContentId::new(bytes).expect("nonzero capability content ID")
+        dclutch_market::capability_manifest::ContentId::new(bytes)
+            .expect("nonzero capability content ID")
     }
 
     fn chain_artifact_fixture() -> (DirectInlineHotStateV3, [u8; 456]) {
@@ -2798,7 +2801,9 @@ mod tests {
                 70_001,
                 &[],
             ),
-            Err(Error::DirectNativeEvidence(dclutch_trading::native_evidence_v3::DirectNativeEvidenceErrorV3::SignatureCount))
+            Err(Error::DirectNativeEvidence(
+                dclutch_trading::native_evidence_v3::DirectNativeEvidenceErrorV3::SignatureCount
+            ))
         );
         assert_eq!(registered_sequence, unchanged);
     }
@@ -3033,9 +3038,8 @@ mod tests {
             .account
             .data
             .clone();
-        let profile =
-            dclutch_vm::account_profile::v2::AccountProfileV2::decode(&profile_bytes)
-                .expect("AccountProfile");
+        let profile = dclutch_vm::account_profile::v2::AccountProfileV2::decode(&profile_bytes)
+            .expect("AccountProfile");
         state.runtime_accounts = packed_runtime_accounts(profile, 3);
         assert!(
             state.runtime_accounts.len() < profile.logical_account_count(3).expect("logical count")

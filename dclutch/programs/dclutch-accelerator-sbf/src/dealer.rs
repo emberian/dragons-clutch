@@ -18,14 +18,12 @@ use dclutch_market::execution_strategy::v2::{
 use dclutch_trading_sbf::{
     TradingSbfError,
     dealer::{
-        equity_request::DEALER_EQUITY_REQUEST_MAGIC_V3,
-        lp_request::DEALER_MULTI_LP_REQUEST_MAGIC_V3,
         equity_accelerator::{
             DealerEquityAcceleratorErrorV4, evaluate_authenticated_dealer_equity_v4,
         },
-        lp_accelerator::{
-            DealerLpAcceleratorErrorV4, evaluate_authenticated_dealer_lp_v4,
-        },
+        equity_request::DEALER_EQUITY_REQUEST_MAGIC_V3,
+        lp_accelerator::{DealerLpAcceleratorErrorV4, evaluate_authenticated_dealer_lp_v4},
+        lp_request::DEALER_MULTI_LP_REQUEST_MAGIC_V3,
     },
     hot_v3::{AuthenticatedAcceleratorInvocationV4, authenticate_accelerator_invocation_v4},
 };

@@ -1,11 +1,7 @@
 //! State-last completion and normalized composition receipt.
 
-use crate::affine_batch_v2::{
-    AffineBatchPlanV2, AffineBatchReceiptV2, DeltaDirectionV2,
-};
-use crate::signed_delta_v3::{
-    DeltaDirectionV3, SignedDeltaPlanV3, SignedDeltaReceiptV3,
-};
+use crate::affine_batch_v2::{AffineBatchPlanV2, AffineBatchReceiptV2, DeltaDirectionV2};
+use crate::signed_delta_v3::{DeltaDirectionV3, SignedDeltaPlanV3, SignedDeltaReceiptV3};
 use dclutch_custody::{
     CallerRoleV1 as CustodyCallerRoleV1, CompartmentV1, CustodyReceiptV1, CustodyRequestV1,
 };

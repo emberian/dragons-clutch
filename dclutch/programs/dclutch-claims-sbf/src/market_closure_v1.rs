@@ -20,16 +20,16 @@ use dclutch_claims::{
     },
 };
 use dclutch_core_contract::ContentId;
+use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
 use dclutch_market::{
     AGGREGATE_RETIREMENT_CHECKPOINT_BYTES_V1, CoreState, MarketCoreStateSeedsV2, STATE_BYTES,
 };
-use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_registry::svm::continuation_v1::{
     REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationAdmissionSeedsV1,
     RegistryContinuationRequestV1,
 };
-use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
+use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,

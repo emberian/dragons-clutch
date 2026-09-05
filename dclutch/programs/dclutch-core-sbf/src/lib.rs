@@ -314,15 +314,12 @@ pub fn process_instruction(
     {
         return retire_v1::process_checkpoint_suffix(program_id, accounts, instruction_data);
     }
-    if instruction_data.len()
-        == dclutch_custody::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1
-        && instruction_data
-            .get(..dclutch_custody::RETIREMENT_REPLAY_HANDOFF_REQUEST_MAGIC_V1.len())
+    if instruction_data.len() == dclutch_custody::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1
+        && instruction_data.get(..dclutch_custody::RETIREMENT_REPLAY_HANDOFF_REQUEST_MAGIC_V1.len())
             == Some(dclutch_custody::RETIREMENT_REPLAY_HANDOFF_REQUEST_MAGIC_V1.as_slice())
     {
-        let request =
-            dclutch_custody::RetirementReplayHandoffRequestV1::decode(instruction_data)
-                .map_err(|_| CoreSbfError::Instruction)?;
+        let request = dclutch_custody::RetirementReplayHandoffRequestV1::decode(instruction_data)
+            .map_err(|_| CoreSbfError::Instruction)?;
         return retirement_replay_handoff_v1::process(
             program_id,
             accounts,

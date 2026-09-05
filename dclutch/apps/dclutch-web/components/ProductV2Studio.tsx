@@ -21,7 +21,6 @@ import {
   PRODUCT_V2_BYTES,
   type CompiledProductV2,
 } from '@dclutch/sdk/productV2';
-import { buildAdmissionInstructionV2 } from '@dclutch/sdk/productRuntimeV2Admission';
 import PayoutShape from '@/components/charts/PayoutShape';
 import {
   DerivedProvenance,
@@ -30,14 +29,11 @@ import {
   PubkeyField,
   U64Field,
 } from '@/components/operator/OperatorFields';
-import { deriveProductV2AccountsV1, effectiveAccountV1 } from '@/components/operator/productV2Accounts';
 import CommandRunbook from '@/components/operator/CommandRunbook';
 import SplineProductArtifactInspector from '@/components/SplineProductArtifactInspector';
 
 function message(error: unknown): string { return error instanceof Error ? error.message : 'Product V2 operation failed without a usable refusal reason'; }
 function base64(bytes: Uint8Array): string { let binary = ''; for (let offset = 0; offset < bytes.length; offset += 16_384) binary += String.fromCharCode(...bytes.slice(offset, offset + 16_384)); return btoa(binary); }
-
-type AdmissionPreflight = Readonly<{ receipt: string; bump: number; requestHex: string; accounts: ReadonlyArray<string> }>;
 
 export const SPLINE_PRODUCT_RUNBOOK_V1 = `dclutch-terminal \\
   --bootstrap-bin "$SUCCESSOR" product spline \\
@@ -76,42 +72,6 @@ export default function ProductV2Studio() {
   const [payoffBoundary, setPayoffBoundary] = useState<ProductPayoffV2WasmV1 | null>(null);
   const [shapeKnots, setShapeKnots] = useState<ReadonlyArray<PayoutCurveKnotV1> | null>(null);
   const [sampleNumerator, setSampleNumerator] = useState(''); const [sampleDenominator, setSampleDenominator] = useState(''); const [sample, setSample] = useState<string | null>(null);
-  const [admissionProgram, setAdmissionProgram] = useState(''); const [registry, setRegistry] = useDeploymentFieldV1((d) => d.programs.registry);
-  const [deployedRegistry] = useDeploymentFieldV1((d) => d.programs.registry);
-  const [recordDigests, setRecordDigests] = useState({ product: '', domain: '', portfolio: '' });
-  const [accountOverrides, setAccountOverrides] = useState({ productRaw: '', productStaging: '', domainRaw: '', domainStaging: '', portfolioRaw: '', portfolioStaging: '' });
-  const [admission, setAdmission] = useState<AdmissionPreflight | null>(null); const [admissionStatus, setAdmissionStatus] = useState('No admission request has been composed.');
-
-  /**
-   * OPERATOR_FORMS_V1 §3.2. These six were six `required` inputs, and each one
-   * is `findProgramAddressSync([seed, pinned schema, digest], registry)` over
-   * fields already on this form -- so the console was asking for an answer it
-   * could compute, then refusing every mismatch. No chain read is involved.
-   */
-  const derivedAccounts = useMemo(
-    () => deriveProductV2AccountsV1(registry, recordDigests),
-    [registry, recordDigests],
-  );
-
-  function composeAdmission(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setAdmission(null);
-    try {
-      const account = (slot: keyof typeof accountOverrides) =>
-        effectiveAccountV1(derivedAccounts?.[slot] ?? null, accountOverrides[slot]);
-      const built = buildAdmissionInstructionV2({
-        programId: admissionProgram, registry,
-        productRaw: account('productRaw'), productStaging: account('productStaging'),
-        resultDomainRaw: account('domainRaw'), resultDomainStaging: account('domainStaging'),
-        portfolioRaw: account('portfolioRaw'), portfolioStaging: account('portfolioStaging'),
-      }, {
-        productDigest: fromHex(recordDigests.product, 'Product record digest'),
-        resultDomainDigest: fromHex(recordDigests.domain, 'result-domain record digest'),
-        portfolioDigest: fromHex(recordDigests.portfolio, 'portfolio record digest'),
-      });
-      setAdmission(Object.freeze({ receipt: built.receipt, bump: built.receiptBump, requestHex: hex(built.requestBytes), accounts: Object.freeze(built.instruction.keys.map((key) => `${key.pubkey.toBase58()}${key.isWritable ? ' · writable' : ''}`)) }));
-      setAdmissionStatus('Composed the admission request and the account frame the adapter validates. Nothing was read from a chain, allocated, signed, or submitted.');
-    } catch (error) { setAdmissionStatus(`Refused: ${message(error)}`); }
-  }
 
   /** Load the digest-pinned evaluator once, and keep it. */
   async function payoffEvaluator(): Promise<ProductPayoffV2WasmV1> {
@@ -173,61 +133,6 @@ export default function ProductV2Studio() {
 
     {compiled && <form className="direct-card" onSubmit={evaluate}><div className="direct-card-heading"><span>02</span><div><h2>Evaluate without quantizing the coordinate</h2><p>The compiled bytes’ exact rational semantics. Only the final nonnegative payout interpolation is floored.</p></div></div><div className="direct-form-grid"><label><span>Signed result numerator · i128</span><input required value={sampleNumerator} onChange={(event) => setSampleNumerator(event.target.value.trim())} spellCheck={false} /><small className="feed-forward">Signed, and wider than u64 — this one stays a plain field until the vocabulary carries an i128 type.</small></label><U64Field label="Positive result denominator · u64" value={sampleDenominator} onChange={setSampleDenominator} noun="result denominator" min={1n} required /></div><button type="submit">Evaluate exact coordinate</button><p className="direct-status" aria-live="polite">{sample ?? 'No coordinate has been evaluated.'}</p></form>}
 
-    <form className="direct-card" onSubmit={composeAdmission} aria-labelledby="runtime-v2-admission"><div className="direct-card-heading"><span>03</span><div><h2 id="runtime-v2-admission">Compose one Runtime V2 admission request</h2><p>The content digests of three Registry-finalized records — the Product record, its result domain, and its portfolio — which the adapter authenticates for owner, PDA, hash, rent exemption, and staging vacancy. These are <strong>not</strong> the payoff identity compiled in step 01. Nothing is read from a chain and nothing is submitted.</p></div></div>
-
-      <fieldset className="operator-act">
-        <legend>The two programs this request names</legend>
-        <div className="operator-act-grid">
-          <PubkeyField label="Admission program · dclutch-product-runtime-v2-sbf" value={admissionProgram} onChange={setAdmissionProgram} required
-            provenance="The deployed Product Runtime V2 adapter. It is not one of the seven protocol roles, so the deployment manifest cannot fill it — take it from your deployment plan." />
-          <PubkeyField label="Registry program" value={registry} onChange={setRegistry} required
-            identify={(address) => address === deployedRegistry ? 'the Registry of the deployment this browser is pointed at' : null}
-            provenance={<DerivedProvenance derived={deployedRegistry === '' ? null : deployedRegistry} value={registry}
-              source="the deployment this browser is pointed at"
-              absent="Pick a cluster in the header to fill this, or paste the Registry program address." />} />
-        </div>
-      </fieldset>
-
-      <fieldset className="operator-act">
-        <legend>The three record digests</legend>
-        <p>Each is the SHA-256 of a Registry-finalized record&rsquo;s account data — not the step 01 payoff identity. The six account addresses below are derived from these.</p>
-        <div className="operator-act-grid">
-          <Hex64Field label="Product record digest · 32 hex bytes" value={recordDigests.product} onChange={(next) => setRecordDigests({ ...recordDigests, product: next })} required />
-          <Hex64Field label="Result-domain record digest" value={recordDigests.domain} onChange={(next) => setRecordDigests({ ...recordDigests, domain: next })} required />
-          <Hex64Field label="Portfolio record digest" value={recordDigests.portfolio} onChange={(next) => setRecordDigests({ ...recordDigests, portfolio: next })} required />
-        </div>
-      </fieldset>
-
-      <fieldset className="operator-act">
-        <legend>The six record accounts, derived</legend>
-        <p>Each address is <code>findProgramAddressSync</code> over the Registry program, a schema identity pinned in this build, and one digest above — the same arithmetic the adapter runs on chain. Nothing here is read from a chain.</p>
-        <div className="operator-act-grid">
-          {RECORD_SLOTS_V1.map((record) => <DerivedValue
-            key={record.slot}
-            label={record.label}
-            value={derivedAccounts?.[record.slot] ?? null}
-            derivation={`Derived from the Registry program, ${record.schema}, and ${DIGEST_FOR_SLOT_V1[record.slot]}.`}
-          />)}
-        </div>
-        <details className="operator-override">
-          <summary>Override a derived account</summary>
-          <p>An operator is sometimes the person who knows a record moved. Anything set here replaces the derived address for that slot, and the request is composed from what you set. Leave a field empty to keep the derivation.</p>
-          <div className="operator-act-grid">
-            {RECORD_SLOTS_V1.map((record) => <PubkeyField
-              key={record.slot}
-              label={record.label}
-              value={accountOverrides[record.slot]}
-              onChange={(next) => setAccountOverrides({ ...accountOverrides, [record.slot]: next })}
-              provenance={accountOverrides[record.slot] === '' ? 'Empty — the derived address above is what will be sent.' : 'Set — this replaces the derived address above.'}
-            />)}
-          </div>
-        </details>
-      </fieldset>
-
-      <div className="registered-facts creation-boundary"><p><strong>One magic, two wires</strong> DCLTPRQ2 names both this live 112-byte admission request and a dead evaluator request of the same width. The dead one wrote 1 at byte 10; this decoder requires zero across bytes 10..16.</p><p><strong>Frame</strong> Exactly nine accounts, all distinct: a writable program-owned receipt, the executable Registry, six read-only record accounts, and the rent sysvar. A duplicate or a wrong count is refused.</p></div>
-      <button type="submit">Compose exact admission request</button><p className="direct-status" aria-live="polite">{admissionStatus}</p>
-      {admission && <div className="direct-output"><dl><div><dt>Derived receipt · bump</dt><dd>{admission.receipt} · {admission.bump}</dd></div><div><dt>Account frame</dt><dd>{admission.accounts.length} accounts</dd></div></dl><label><span>112-byte DCLTPRQ2 admission request · hex</span><textarea readOnly value={admission.requestHex} /></label><ol className="registered-refusals">{admission.accounts.map((entry, index) => <li key={entry}>{index}. {entry}</li>)}</ol><p className="direct-refusal">This is an instruction, not a transaction: no fee payer, no blockhash, no signature slot. The three records must be authenticated against the Registry before it is worth signing.</p></div>}
-    </form>
     <footer className="product-footer"><span>No private keys · no signing · no submission</span></footer>
   </PageShell>;
 }

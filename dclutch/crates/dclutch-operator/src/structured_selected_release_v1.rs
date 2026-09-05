@@ -62,11 +62,11 @@ use crate::bearer::{
     build_rational_open_selected_bundle_v6, build_rational_open_structured_selected_bundle_v6,
     build_rational_terminal_selected_bundle_v6, encode_open_capability_lifecycle_policy_v5,
 };
-use dclutch_registry::release_set::ExecutionRoleV1;
 use dclutch_claims::structured_kernel::{
     STRUCTURED_CAPABILITY_KIND_ID_V2, STRUCTURED_CAPACITY_PROFILE_ID_V2,
 };
 use dclutch_custody::token_svm::{TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TokenBehaviorSelectionV2};
+use dclutch_registry::release_set::ExecutionRoleV1;
 use solana_program::hash::hash;
 
 /// Number of action bundles one selectable Structured release compiles.

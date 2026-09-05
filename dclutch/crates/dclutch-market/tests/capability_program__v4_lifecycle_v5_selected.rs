@@ -2,16 +2,16 @@
 
 #![allow(clippy::panic)]
 
-use dclutch_vm::account_profile::lifecycle_v3::{
-    CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5, HEADER_BYTES, SUCCESSOR_SCHEMA_RELEASE_ID,
-    StateLifecyclePolicyV5, encode::encode_lifecycle_policy_v5_atomic,
-};
+use dclutch_core_contract::ContentId;
 use dclutch_market::capability_program::Error;
 use dclutch_market::capability_program::v4::{
     ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4, CapabilityProgramV4,
     SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
 };
-use dclutch_core_contract::ContentId;
+use dclutch_vm::account_profile::lifecycle_v3::{
+    CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5, HEADER_BYTES, SUCCESSOR_SCHEMA_RELEASE_ID,
+    StateLifecyclePolicyV5, encode::encode_lifecycle_policy_v5_atomic,
+};
 
 fn id(value: u8) -> ContentId {
     ContentId::new([value; 32]).expect("nonzero identity")

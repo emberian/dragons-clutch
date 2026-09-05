@@ -11,7 +11,6 @@ extern crate alloc;
 
 use alloc::{boxed::Box, vec, vec::Vec};
 
-use dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1;
 use dclutch_claims::{
     liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_BUMP_OFFSET_V2, LIABILITY_BASIS_MARKET_SEED_V2,
@@ -20,31 +19,27 @@ use dclutch_claims::{
     },
     protocol_position_v2::ProtocolPositionSeedsV2,
 };
+use dclutch_custody::token_svm::{ACCOUNT_BYTES, AccountState, COption, TokenAccount};
 use dclutch_custody::{
     CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1, CustodyAuthoritySeedsV1,
     CustodyReplaySeedsV1, CustodyReplayV1, CustodyVaultSeedsV1,
 };
+use dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1;
+use dclutch_market::realm::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_trading::dealer::{
     config_v4::{DEALER_CONFIG_SCHEMA_PREIMAGE_V4, DealerConfigV4},
     root_admission_v1::DEALER_ROOT_OPEN_ADMISSIBLE_STATES_V1,
     root_tail::{ROOT_TAIL_BYTES, RootTail},
     scenario::ClaimsInventoryObservation,
 };
-use dclutch_market::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
-use dclutch_market::realm::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
-use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_custody::token_svm::{ACCOUNT_BYTES, AccountState, COption, TokenAccount};
 use solana_program::{account_info::AccountInfo, hash::hash, pubkey::Pubkey};
 use solana_sdk_ids::system_program;
 
 use crate::hot_v3::AuthenticatedAcceleratorInvocationV4;
 
 use super::{
-    equity_request::{
-        DealerEquityBumpBankV3, DealerEquityRequestV3, EquityPoolChainProjectionV3,
-        EquityRequestActionV3, claims_projection_digest_v3, collateral_projection_digest_v3,
-        prepare_equity_request_v3,
-    },
     equity_effect::{
         DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3, DEALER_EQUITY_LP_REVISION_SCALAR_V3,
         DEALER_EQUITY_LP_SHARES_SCALAR_V3, DEALER_EQUITY_OBLIGATION_REVISION_SCALAR_V3,
@@ -59,6 +54,12 @@ use super::{
         dealer_equity_witness_offset_v3, dealer_expiry_scalar_register_v3,
         dealer_external_delegate_identity_register_v3,
     },
+    equity_profile::dealer_equity_logical_account_count_v3,
+    equity_request::{
+        DealerEquityBumpBankV3, DealerEquityRequestV3, EquityPoolChainProjectionV3,
+        EquityRequestActionV3, claims_projection_digest_v3, collateral_projection_digest_v3,
+        prepare_equity_request_v3,
+    },
     multi_lp::{
         DEALER_LP_POSITION_BYTES_V3, DEALER_LP_POSITION_PDA_DOMAIN_V3, DealerLpPositionV3,
         MAX_MULTI_LP_CUSTODY_EFFECTS_V3, MultiLpActionV3, MultiLpBumpHintsV3,
@@ -68,7 +69,6 @@ use super::{
     obligation::{
         DealerObligationProjectionV3, ObligationAccountObservationV3, ObligationExpectationV3,
     },
-    equity_profile::dealer_equity_logical_account_count_v3,
 };
 use crate::market_admission_v1::TRADING_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1;
 
@@ -1801,9 +1801,7 @@ fn encode_bank(
 
 #[cfg(test)]
 mod tests {
-    use dclutch_custody::{
-        ContextV1, CustodyRequestV1, DelegatedCustodyRequestV2, OperationV1,
-    };
+    use dclutch_custody::{ContextV1, CustodyRequestV1, DelegatedCustodyRequestV2, OperationV1};
     use dclutch_trading::dealer::scenario::ScenarioSolvencyReport;
 
     use super::*;

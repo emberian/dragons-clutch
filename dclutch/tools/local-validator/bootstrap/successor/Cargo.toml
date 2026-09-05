@@ -21,7 +21,7 @@ dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
 dclutch-claims-sbf = { path = "../../../../programs/dclutch-claims-sbf", features = ["no-entrypoint"] }
 dclutch-claims = { path = "../../../../crates/dclutch-claims" }
 dclutch-custody = { path = "../../../../crates/dclutch-custody" }
-dclutch-trading = { path = "../../../../crates/dclutch-trading" }
+dclutch-trading = { path = "../../../../crates/dclutch-trading", features = ["svm"] }
 # The Direct intent ticket author, which used to be `pub(crate)` in THIS crate
 # and is now shared with the released `dclutch` CLI. `direct_ticket.rs` is the
 # adapter that keeps this binary's subcommand and error type over it.

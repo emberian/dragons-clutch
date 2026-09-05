@@ -42,10 +42,10 @@
 //! adapter boundary -- the same line `dclutch-claims::structured::seeds`
 //! draws.
 
+use crate::general_codec::Action;
 use dclutch_vm::account_profile::lifecycle_v3::{
     MAX_SEED_BYTES, MAX_SEEDS, encode::LifecycleSeedInputV3,
 };
-use crate::general_codec::Action;
 
 use crate::general::{
     MAX_PDA_SEED_BYTES,

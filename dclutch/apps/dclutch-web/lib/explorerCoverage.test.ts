@@ -149,7 +149,9 @@ describe('the render map itself', () => {
     // carrying any of the others came back as an unknown magic.
     const rows = surveyStateMachineMagics();
     // A survey that matched nothing would make the loop below vacuous.
-    expect(rows.length).toBeGreaterThanOrEqual(8);
+    // Six since 2026-09-04: the two Dealer scenario machines went with the
+    // checkpoint chain (simplify/trading).
+    expect(rows.length).toBeGreaterThanOrEqual(6);
     const unrendered = rows.filter((row) => specForMagic(row.magic) === null).map((row) => row.machine);
     expect(unrendered, 'derive its spec from STATE_MACHINE_RECORDS_V1 in lib/explorer/accountRecords.ts').toEqual([]);
   });

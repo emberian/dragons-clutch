@@ -479,8 +479,7 @@ impl<'a> ClaimsPlanV1<'a> {
             // A refunding complete set names TWO Positions, and never the same
             // one twice: aliasing them would seat the failure coordinate right
             // back where decision 0025 took it from.
-            ClaimsAction::MintRefundingCompleteSet
-            | ClaimsAction::MergeRefundingCompleteSet => {
+            ClaimsAction::MintRefundingCompleteSet | ClaimsAction::MergeRefundingCompleteSet => {
                 source
                     && destination
                     && self.source_owner != self.destination_owner
@@ -1181,33 +1180,33 @@ mod tests {
 }
 
 // Authorities merged into this crate; each module was one crate before.
-/// Formerly the `dclutch-claims::conservation` crate.
-pub mod conservation;
-/// Formerly the `dclutch-claims::fractional_kernel` crate.
-pub mod fractional_kernel;
-/// Formerly the `dclutch-claims::fractional` crate.
-pub mod fractional;
-/// Formerly the `dclutch-claims::fractional_lowering` crate.
-pub mod fractional_lowering;
-/// Formerly the `dclutch-claims::rational_kernel` crate.
-pub mod rational_kernel;
-/// Formerly the `dclutch-claims::rational_request` crate.
-pub mod rational_request;
-/// Formerly the `dclutch-claims::rational` crate.
-pub mod rational;
-/// Formerly the `dclutch-claims::rational_lifecycle` crate.
-pub mod rational_lifecycle;
-/// Formerly the `dclutch-claims::composition` crate.
-pub mod composition;
 /// Formerly the `dclutch-claims::bearer` crate.
 pub mod bearer;
-/// Formerly the `dclutch-claims::structured_kernel` crate.
-pub mod structured_kernel;
-/// Formerly the `dclutch-claims::structured` crate.
-pub mod structured;
+/// Formerly the `dclutch-claims::composition` crate.
+pub mod composition;
+/// Formerly the `dclutch-claims::conservation` crate.
+pub mod conservation;
+/// Formerly the `dclutch-claims::fractional` crate.
+pub mod fractional;
+/// Formerly the `dclutch-claims::fractional_kernel` crate.
+pub mod fractional_kernel;
+/// Formerly the `dclutch-claims::fractional_lowering` crate.
+pub mod fractional_lowering;
 /// Formerly the `dclutch-claims::position_admission` crate.
 pub mod position_admission;
 /// The SVM reader that authenticates one Product graph together with its
 /// immutable representation descriptor and descriptor-selected exposure graph.
 #[cfg(feature = "svm")]
 pub mod product_representation_reader_v3;
+/// Formerly the `dclutch-claims::rational` crate.
+pub mod rational;
+/// Formerly the `dclutch-claims::rational_kernel` crate.
+pub mod rational_kernel;
+/// Formerly the `dclutch-claims::rational_lifecycle` crate.
+pub mod rational_lifecycle;
+/// Formerly the `dclutch-claims::rational_request` crate.
+pub mod rational_request;
+/// Formerly the `dclutch-claims::structured` crate.
+pub mod structured;
+/// Formerly the `dclutch-claims::structured_kernel` crate.
+pub mod structured_kernel;

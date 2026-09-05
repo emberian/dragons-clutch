@@ -3,20 +3,6 @@
 
 #![allow(clippy::indexing_slicing, clippy::panic, clippy::unwrap_used)]
 
-use dclutch_market::capability_program::{
-    set_v2::{CapabilityProgramSetV2, SelectorWidthV2},
-    v4::CapabilityProgramV4,
-};
-use dclutch_claims::{
-    frame_spec_v1::SignedDeltaFrameSpecV3,
-    terminal_settlement_v3::{
-        TERMINAL_SETTLEMENT_CUSTODY_PROGRAM_ACCOUNT_V3,
-        TERMINAL_SETTLEMENT_CUSTODY_REPLAY_ACCOUNT_V3, TERMINAL_SETTLEMENT_HOARD_ACCOUNT_V3,
-        TERMINAL_SETTLEMENT_RECIPIENT_ACCOUNT_V3,
-        TERMINAL_SETTLEMENT_RESOLUTION_PROGRAM_ACCOUNT_V3,
-        TERMINAL_SETTLEMENT_TOKEN_PROGRAM_ACCOUNT_V3,
-    },
-};
 use dclutch_claims::fractional::{
     FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3, FRACTIONAL_ATOMIC_ACTOR_V3,
     FRACTIONAL_ATOMIC_HOLDER_TOKEN_V3, FRACTIONAL_ATOMIC_ROOT_V3, FRACTIONAL_ATOMIC_SHARD_MINT_V3,
@@ -37,6 +23,21 @@ use dclutch_claims::fractional_kernel::{
     encode_fractional_selection_config_v1, fractional_exposure_terms_bytes_v2,
     fractional_selection_config_from_terms_v1, join_fractional_selection_config_v1,
 };
+use dclutch_claims::{
+    frame_spec_v1::SignedDeltaFrameSpecV3,
+    terminal_settlement_v3::{
+        TERMINAL_SETTLEMENT_CUSTODY_PROGRAM_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_CUSTODY_REPLAY_ACCOUNT_V3, TERMINAL_SETTLEMENT_HOARD_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_RECIPIENT_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_RESOLUTION_PROGRAM_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_TOKEN_PROGRAM_ACCOUNT_V3,
+    },
+};
+use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
+use dclutch_market::capability_program::{
+    set_v2::{CapabilityProgramSetV2, SelectorWidthV2},
+    v4::CapabilityProgramV4,
+};
 use dclutch_operator::fractional::{
     FRACTIONAL_ACTIVATION_SELECTOR_V1, FRACTIONAL_MAX_SETTLEABLE_WIDTH_V4,
     FRACTIONAL_SELECTED_ACTION_COUNT_V4, FRACTIONAL_SELECTED_ACTIONS_V4,
@@ -46,7 +47,6 @@ use dclutch_operator::fractional::{
     fractional_current_release_v4, fractional_selected_release_v4,
     validate_fractional_current_release_v4, validate_fractional_selected_release_v4,
 };
-use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
 
 const RELEASE: [u8; 32] = [1; 32];
 const MARKET: [u8; 32] = [2; 32];

@@ -79,7 +79,12 @@ impl AuthenticatedAcceleratorCallerV4 {
         )
     }
 
-    pub(super) fn binds_context_parts(self, release_set: [u8; 32], market: [u8; 32], root: [u8; 32]) -> bool {
+    pub(super) fn binds_context_parts(
+        self,
+        release_set: [u8; 32],
+        market: [u8; 32],
+        root: [u8; 32],
+    ) -> bool {
         self.release_set == release_set
             && self.market == market
             && self.root == root
@@ -164,9 +169,7 @@ impl<'request, 'accounts, 'info> AuthenticatedAcceleratorInvocationV4<'request, 
     }
 
     /// Independently authenticated Product-linked basis record coordinate.
-    pub const fn linked_basis_record(
-        &self,
-    ) -> dclutch_product::svm_reader::AuthenticatedRecordV2 {
+    pub const fn linked_basis_record(&self) -> dclutch_product::svm_reader::AuthenticatedRecordV2 {
         self.product_runtime.linked_basis_record
     }
 

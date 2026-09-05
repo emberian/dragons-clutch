@@ -2,23 +2,23 @@
 
 use alloc::{boxed::Box, vec::Vec};
 
-use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
 use dclutch_core_contract::ContentId;
+use dclutch_custody::token_svm::PRODUCTION_ADAPTER_RELEASES;
 use dclutch_custody::{
     CUSTODY_POSTSTATE_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CUSTODY_REQUEST_BYTES_V1, CallerRoleV1,
     CompartmentV1, CustodyAuthoritySeedsV1, CustodyReceiptV1, CustodyReplaySeedsV1,
     CustodyReplayV1, CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
 };
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_market::realm::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
 use dclutch_market::{
     Action, ChildEffectObservation, CollateralObservation, CoreState, MarketAdmissionV1, Phase,
     Readiness, Realm, Request, Role, VacantAccount, open_market,
 };
-use dclutch_market::realm::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
+use dclutch_registry::release_set::CallerAuthoritySeedsV1;
 use dclutch_registry::svm::continuation_v1::{
     REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationRequestV1,
 };
-use dclutch_registry::release_set::CallerAuthoritySeedsV1;
-use dclutch_custody::token_svm::PRODUCTION_ADAPTER_RELEASES;
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
@@ -337,7 +337,8 @@ fn authenticate_request_shape(
                 || request.expected_revision != 1
                 || request.resulting_revision != 2
                 || request.amount != 0
-                || request.rent_lamports != rent.minimum_balance(dclutch_custody::token_svm::ACCOUNT_BYTES)
+                || request.rent_lamports
+                    != rent.minimum_balance(dclutch_custody::token_svm::ACCOUNT_BYTES)
                 || account(accounts, OPEN_MINT)?.key.to_bytes() != request.mint
                 || account(accounts, OPEN_VAULT)?.key != &expected_vault
                 || account(accounts, OPEN_AUTHORITY)?.key != &expected_authority

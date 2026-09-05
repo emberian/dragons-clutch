@@ -1,7 +1,7 @@
 extern crate std;
 
-use dclutch_core_contract::ContentId;
 use crate::release_set::{ArtifactReleaseIdV1, ExecutionRoleV1, ProgramIdentityV1};
+use dclutch_core_contract::ContentId;
 use sha2::{Digest, Sha256};
 
 use crate::svm::{

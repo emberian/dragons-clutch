@@ -34,11 +34,6 @@ use dclutch_vm::v3::{
 };
 
 use super::{
-    equity_request::{
-        DEALER_EQUITY_CLAIMS_PACKET_BYTES_OFFSET_V3, DEALER_EQUITY_HEADER_BYTES_V3,
-        DEALER_EQUITY_REQUEST_MAGIC_V3, DEALER_EQUITY_REQUEST_VERSION_V3,
-        DEALER_EQUITY_SELECTOR_OFFSET_V3, EquityRequestActionV3, dealer_equity_selector_v3,
-    },
     equity_effect::{
         DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3, DEALER_EQUITY_CUSTODY_CALLEE_ACCOUNT_COUNT_V3,
         DEALER_EQUITY_LOCAL_ACCOUNT_COUNT_V3, DEALER_EQUITY_POSITION_EVIDENCE_ACCOUNT_COUNT_V3,
@@ -46,6 +41,11 @@ use super::{
         DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3, DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3,
         dealer_current_slot_scalar_register_v3, dealer_equity_identity_count_v3,
         dealer_equity_scalar_count_v3, dealer_expiry_scalar_register_v3,
+    },
+    equity_request::{
+        DEALER_EQUITY_CLAIMS_PACKET_BYTES_OFFSET_V3, DEALER_EQUITY_HEADER_BYTES_V3,
+        DEALER_EQUITY_REQUEST_MAGIC_V3, DEALER_EQUITY_REQUEST_VERSION_V3,
+        DEALER_EQUITY_SELECTOR_OFFSET_V3, EquityRequestActionV3, dealer_equity_selector_v3,
     },
     multi_lp::MultiLpActionV3,
 };
@@ -138,8 +138,7 @@ pub const fn dealer_equity_transition_bytes_v3(
         1 | 2 => DEALER_EQUITY_TRANSITION_WITNESS_OPERATIONS_V3,
         _ => return Err(DealerEquityArtifactsErrorV3::Shape),
     };
-    Ok(dclutch_vm::v3::HEADER_BYTES
-        + operations * dclutch_vm::v3::INSTRUCTION_BYTES)
+    Ok(dclutch_vm::v3::HEADER_BYTES + operations * dclutch_vm::v3::INSTRUCTION_BYTES)
 }
 
 /// Inclusive canonical SignedDelta packet bounds for a P1/P2 shape.

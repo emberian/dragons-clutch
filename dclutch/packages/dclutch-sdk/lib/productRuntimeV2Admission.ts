@@ -1,13 +1,12 @@
-import { PublicKey, SYSVAR_RENT_PUBKEY, TransactionInstruction, type AccountMeta } from '@solana/web3.js';
+import { PublicKey } from '@solana/web3.js';
+
 
 import { hex, isZero, requireZero, slice, u16 } from './bytes';
 import {
-  ADMISSION_ACCOUNT_COUNT_V2,
   ADMISSION_MAGIC_BYTES_V2,
   ADMISSION_MAGIC_OFFSET_V2,
   ADMISSION_RECEIPT_BYTES_V2,
   ADMISSION_RECEIPT_MAGIC_V2,
-  ADMISSION_RECEIPT_PDA_DOMAIN_V2,
   ADMISSION_RECORD_COUNT_V2,
   ADMISSION_REQUEST_BYTES_V2,
   ADMISSION_REQUEST_MAGIC_V2,
@@ -89,26 +88,6 @@ export type ProductRecordV2 = Readonly<{
   resultDomainDigest: Uint8Array;
   portfolioDigest: Uint8Array;
 }>;
-
-export type AdmissionAccountsV2 = Readonly<{
-  programId: string;
-  registry: string;
-  productRaw: string;
-  productStaging: string;
-  resultDomainRaw: string;
-  resultDomainStaging: string;
-  portfolioRaw: string;
-  portfolioStaging: string;
-}>;
-
-export type AdmissionInstructionV2 = Readonly<{
-  receipt: string;
-  receiptBump: number;
-  instruction: TransactionInstruction;
-  requestBytes: Uint8Array;
-}>;
-
-const RENT_SYSVAR_OWNER = 'Sysvar1111111111111111111111111111111111111';
 
 function ascii8(value: string): Uint8Array {
   return new TextEncoder().encode(value);
@@ -211,90 +190,3 @@ export function decodeAdmissionReceiptV2(bytes: Uint8Array): AdmissionReceiptV2 
     portfolio: decodeCoordinate(bytes, RECEIPT_RECORDS_OFFSET_V2 + 2 * RECORD_COORDINATE_BYTES_V2, PORTFOLIO_SCHEMA_ID_V2, 'portfolio record'),
   });
 }
-
-/**
- * Derive the receipt address the adapter recomputes in `validate_frame`.
- *
- * The seeds are the PDA domain and the three request digests in request order,
- * so a caller cannot pass a receipt for a different admission graph: the
- * program derives this same address and compares.
- */
-export function deriveAdmissionReceiptAddressV2(programId: string, digests: AdmissionDigestsV2): Readonly<{ address: string; bump: number }> {
-  const [address, bump] = PublicKey.findProgramAddressSync(
-    [
-      ascii8(ADMISSION_RECEIPT_PDA_DOMAIN_V2),
-      contentId(digests.productDigest, 'Product record digest'),
-      contentId(digests.resultDomainDigest, 'result-domain record digest'),
-      contentId(digests.portfolioDigest, 'portfolio record digest'),
-    ],
-    new PublicKey(programId),
-  );
-  return Object.freeze({ address: address.toBase58(), bump });
-}
-
-/**
- * Compose the exact 9-account admission instruction.
- *
- * The frame mirrors `validate_frame` and `require_distinct`: the receipt is the
- * only writable account, the Registry is the only executable one, the six
- * record accounts are read-only non-signers, the rent account is the rent
- * sysvar, and no two accounts may be the same key. Refusing here means the
- * browser never hands a wallet a transaction the program is going to reject
- * with `AccountFrame`.
- */
-export function buildAdmissionInstructionV2(accounts: AdmissionAccountsV2, digests: AdmissionDigestsV2): AdmissionInstructionV2 {
-  const requestBytes = encodeAdmissionRequestV2(digests);
-  const receipt = deriveAdmissionReceiptAddressV2(accounts.programId, digests);
-  const registry = new PublicKey(accounts.registry);
-  const readOnlyRecords = [
-    accounts.productRaw, accounts.productStaging,
-    accounts.resultDomainRaw, accounts.resultDomainStaging,
-    accounts.portfolioRaw, accounts.portfolioStaging,
-  ].map((address) => new PublicKey(address));
-
-  const keys: AccountMeta[] = [
-    { pubkey: new PublicKey(receipt.address), isSigner: false, isWritable: true },
-    { pubkey: registry, isSigner: false, isWritable: false },
-    ...readOnlyRecords.map((pubkey) => ({ pubkey, isSigner: false, isWritable: false })),
-    { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
-  ];
-  if (keys.length !== ADMISSION_ACCOUNT_COUNT_V2) {
-    throw new Error(`composed ${keys.length} accounts, not the program's exact ${ADMISSION_ACCOUNT_COUNT_V2} (AccountFrame)`);
-  }
-  const seen = new Set<string>();
-  for (const key of keys) {
-    const address = key.pubkey.toBase58();
-    if (seen.has(address)) throw new Error(`account ${address} appears twice; the program refuses any duplicate (AccountFrame)`);
-    seen.add(address);
-  }
-  return Object.freeze({
-    receipt: receipt.address,
-    receiptBump: receipt.bump,
-    instruction: new TransactionInstruction({ programId: new PublicKey(accounts.programId), keys, data: Buffer.from(requestBytes) }),
-    requestBytes,
-  });
-}
-
-/**
- * Check one observed receipt account against the frame the adapter requires
- * before it will write: program-owned, exactly `ADMISSION_RECEIPT_BYTES_V2`,
- * not executable, and wholly zero.
- *
- * A receipt that already holds bytes is refused by the program, so reporting
- * that here is the difference between "already admitted" and a wasted
- * signature.
- */
-export function requireVacantReceiptAccountV2(
-  programId: string,
-  observed: Readonly<{ owner: string; executable: boolean; data: Uint8Array }>,
-): void {
-  if (observed.owner !== programId) throw new Error(`receipt account is owned by ${observed.owner}, not the admission program (AccountFrame)`);
-  if (observed.executable) throw new Error('receipt account is executable (AccountFrame)');
-  if (observed.data.length !== ADMISSION_RECEIPT_BYTES_V2) {
-    throw new Error(`receipt account is ${observed.data.length} bytes, not the exact ${ADMISSION_RECEIPT_BYTES_V2} (AccountFrame)`);
-  }
-  if (!isZero(observed.data)) throw new Error('receipt account already holds bytes; the program refuses a non-vacant receipt (Receipt)');
-}
-
-/** The rent sysvar owner the adapter pins, exposed so a caller can pre-check an observation. */
-export const RENT_SYSVAR_OWNER_V2 = RENT_SYSVAR_OWNER;

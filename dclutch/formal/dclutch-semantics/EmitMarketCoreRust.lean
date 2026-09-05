@@ -303,7 +303,7 @@ pub enum Readiness {
 ///
 /// Product raw, Product staging, ResultDomain raw, ResultDomain staging,
 /// Portfolio raw, Portfolio staging, linked-basis raw, linked-basis staging --
-/// which is `dclutch_product_runtime_v2_svm_reader::ProductRecordBumpsV3`'s
+/// which is `dclutch_product::svm_reader::ProductRecordBumpsV3`'s
 /// order, because that is the reader these exist to feed.
 ///
 /// # Why nibbles

@@ -9,7 +9,9 @@
 
 use crate::capability_seal::{SealedArtifactV1, SealedRoleV1};
 
-use crate::account_profile::v2::{AccountPrestateV2, AccountProfileV2, AliasKindV2, Error as ErrorV2};
+use crate::account_profile::v2::{
+    AccountPrestateV2, AccountProfileV2, AliasKindV2, Error as ErrorV2,
+};
 
 /// Distinct successor magic.
 pub const MAGIC_V3: [u8; 8] = *b"DCLTAP03";
@@ -376,7 +378,9 @@ mod tests {
         AccountRuleWithPrestateInputV2, RegisterGeometryV2, ScalarCoordinateV2,
         encode_account_profile_v2_atomic, encode_account_profile_with_lifecycle_v2_atomic,
     };
-    use crate::account_profile::v2::{HEADER_BYTES, OPERATION_BYTES, RULE_BYTES, TrustedEnvironmentV2};
+    use crate::account_profile::v2::{
+        HEADER_BYTES, OPERATION_BYTES, RULE_BYTES, TrustedEnvironmentV2,
+    };
 
     use super::*;
 

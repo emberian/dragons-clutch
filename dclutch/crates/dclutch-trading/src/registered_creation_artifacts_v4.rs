@@ -6,8 +6,8 @@
 //! root/maker replay accounting.  Buy additionally derives the worst-case
 //! collateral reserve with the same floor boundaries as the pure successor.
 
-use dclutch_market::capability_program::hot_v3::HOT_FAMILY_REQUEST_OFFSET_V3;
 use dclutch_core_contract::ContentId;
+use dclutch_market::capability_program::hot_v3::HOT_FAMILY_REQUEST_OFFSET_V3;
 use dclutch_market::execution_strategy::v2::{
     ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
@@ -235,8 +235,7 @@ pub const DIRECT_REGISTERED_CREATION_REQUEST_PROFILE_V2_BYTES_V4: usize =
         + dclutch_vm::request_profile::v2::NATIVE_SIGNATURE_REQUIREMENT_BYTES_V1;
 /// Exact side-selected TransitionVMV3 width.
 pub const DIRECT_REGISTERED_CREATION_TRANSITION_BYTES_V4: usize =
-    dclutch_vm::v3::HEADER_BYTES
-        + TRANSITION_INSTRUCTIONS * dclutch_vm::v3::INSTRUCTION_BYTES;
+    dclutch_vm::v3::HEADER_BYTES + TRANSITION_INSTRUCTIONS * dclutch_vm::v3::INSTRUCTION_BYTES;
 
 /// Stable registered creation artifact refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -1,5 +1,10 @@
 //! Hostile corpus for exposure-bound Fractional V2 terms and terminal evaluation.
 
+use dclutch_claims::composition::{
+    CompositionExposureBundleV3, CompositionExposureInputV3, CompositionExposureRowInputV3,
+    CompositionExposureTermV3, RecordAdmissionV3, composition_exposure_bytes_v3,
+    encode_composition_exposure_v3_atomic,
+};
 use dclutch_claims::fractional_kernel::{
     Error, ExposureTranslationBuffersV2, FRACTIONAL_EXPOSURE_TERMS_HEADER_BYTES_V2,
     FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FRACTIONAL_EXPOSURE_TERMS_SCHEMA_PREIMAGE_V2,
@@ -7,11 +12,6 @@ use dclutch_claims::fractional_kernel::{
     check_fractional_exposure_bundle_v2, divide_exposure_shards_v2,
     encode_fractional_exposure_terms_v2, evaluate_exposure_terminal_v2,
     fractional_exposure_terms_bytes_v2, require_categorical_embedding_v2,
-};
-use dclutch_claims::composition::{
-    CompositionExposureBundleV3, CompositionExposureInputV3, CompositionExposureRowInputV3,
-    CompositionExposureTermV3, RecordAdmissionV3, composition_exposure_bytes_v3,
-    encode_composition_exposure_v3_atomic,
 };
 use sha2::{Digest, Sha256};
 

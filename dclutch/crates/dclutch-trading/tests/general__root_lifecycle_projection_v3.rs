@@ -23,19 +23,12 @@
 
 #![allow(clippy::panic)]
 
-use dclutch_vm::account_profile::{
-    AccountObservationV1,
-    v2::{
-        AccountProfileV2, PhysicalAccountDataGeometryV2, ProjectionRegistersV2,
-        encode::{AccountCoordinateV2, AccountOperationInputV2, IdentityCoordinateV2},
-        project_dynamic_fixed_spans_atomic,
-    },
-};
+use dclutch_core_contract::ContentId;
 use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityProgramV1, CapabilityRootHeaderV1,
     SelectedRecordBumpsV1, initialize_root_account_v1,
 };
-use dclutch_core_contract::ContentId;
+use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
 use dclutch_trading::general::{
     account_rules_v3::{
         GeneralExternalAccountWidthsV3, encode_general_account_profile_v3_atomic,
@@ -53,7 +46,14 @@ use dclutch_trading::general_codec::Action;
 use dclutch_trading::general_config::{
     GENERAL_ROOT_BYTES_V2, GeneralLifecycleV2, GeneralRootV2, root::general_root_creation_tail_v2,
 };
-use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
+use dclutch_vm::account_profile::{
+    AccountObservationV1,
+    v2::{
+        AccountProfileV2, PhysicalAccountDataGeometryV2, ProjectionRegistersV2,
+        encode::{AccountCoordinateV2, AccountOperationInputV2, IdentityCoordinateV2},
+        project_dynamic_fixed_spans_atomic,
+    },
+};
 use dclutch_vm::v3::{
     Error as TransitionErrorV3, ProgramV3, RegisterInput, RegisterOutput, execute_fold_atomic,
 };

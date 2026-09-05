@@ -18,7 +18,21 @@ use crate::{
     },
     observation::{FinalizedRecordProof, authenticate_finalized_record, decode_rent},
 };
-use dclutch_vm::account_profile::v2::{AccountProfileV2, PhysicalAccountDataGeometryV2};
+use dclutch_claims::frame_spec_v1::{
+    ClaimsFrameRoleV1, SPARSE_NATIVE_TRANSFER_ACCOUNT_COUNT_V1, SparseNativeTransferFrameSpecV1,
+};
+use dclutch_claims::{
+    liability_basis_state_v2::{
+        LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
+    },
+    protocol_position_v2::ProtocolPositionSeedsV2,
+};
+use dclutch_custody::token_svm::{AccountState, COption, Mint, TokenAccount};
+use dclutch_custody::{
+    CallerRoleV1, CustodyAuthoritySeedsV1, CustodyFrameRoleV1, CustodyFrameSpecV1,
+    CustodyReplaySeedsV1, CustodyReplayV1, OperationV1, TRANSFER_ACCOUNT_COUNT_V1,
+};
+use dclutch_market::CoreState;
 use dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1;
 use dclutch_market::capability_program::hot_v3::{
     HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
@@ -42,23 +56,12 @@ use dclutch_market::capability_program::hot_v3::{
 use dclutch_market::capability_program::v4::{
     CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
 };
-use dclutch_vm::capability_seal::{
-    CAPABILITY_SEAL_BYTES_V1, CapabilitySealKeyV1, CapabilitySealRequestV1,
-    SealedDescriptorClosureV1, SealedRecordRowV1, SealedRoleV1,
-};
-use dclutch_claims::frame_spec_v1::{
-    ClaimsFrameRoleV1, SPARSE_NATIVE_TRANSFER_ACCOUNT_COUNT_V1, SparseNativeTransferFrameSpecV1,
-};
-use dclutch_claims::{
-    liability_basis_state_v2::{
-        LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
-    },
-    protocol_position_v2::ProtocolPositionSeedsV2,
-};
-use dclutch_custody::{
-    CallerRoleV1, CustodyAuthoritySeedsV1, CustodyFrameRoleV1, CustodyFrameSpecV1,
-    CustodyReplaySeedsV1, CustodyReplayV1, OperationV1, TRANSFER_ACCOUNT_COUNT_V1,
-};
+use dclutch_market::execution_strategy::v2::{ExecutionStrategyProgramV2, StrategyDispositionV2};
+use dclutch_market::realm::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
+use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
+use dclutch_registry::ActivatedExecutionReleaseSetViewV1;
+use dclutch_registry::release_set::{ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_release_tool::{CHECKED_MULTIPROGRAM_BYTES_V1, CheckedExecutionReleaseSetV1};
 use dclutch_trading::{
     direct_finalization_v3::{
         DIRECT_INLINE_POSTSTATE_COUNT_V3, DirectFinalizationErrorV3, DirectInlineAccountPrestateV3,
@@ -98,14 +101,11 @@ use dclutch_trading::{
         MakerReplayObservationV1, MakerReplayRootV1, MakerReplaySeedsV1, MakerReplayVacancyV1,
     },
 };
-use dclutch_market::execution_strategy::v2::{ExecutionStrategyProgramV2, StrategyDispositionV2};
-use dclutch_market::CoreState;
-use dclutch_market::realm::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
-use dclutch_registry::ActivatedExecutionReleaseSetViewV1;
-use dclutch_registry::release_set::{ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_release_tool::{CHECKED_MULTIPROGRAM_BYTES_V1, CheckedExecutionReleaseSetV1};
-use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
-use dclutch_custody::token_svm::{AccountState, COption, Mint, TokenAccount};
+use dclutch_vm::account_profile::v2::{AccountProfileV2, PhysicalAccountDataGeometryV2};
+use dclutch_vm::capability_seal::{
+    CAPABILITY_SEAL_BYTES_V1, CapabilitySealKeyV1, CapabilitySealRequestV1,
+    SealedDescriptorClosureV1, SealedRecordRowV1, SealedRoleV1,
+};
 use solana_address_lookup_table_interface::{
     instruction::{create_lookup_table, extend_lookup_table, freeze_lookup_table},
     program as lookup_table_program,
@@ -332,7 +332,9 @@ pub enum DirectInlineRouteErrorV3 {
     /// `dclutch_trading` refused; the cause is its own.
     DirectExecutionRequest(dclutch_trading::execution_v3::DirectExecutionRequestErrorV3),
     /// `dclutch_trading` refused; the cause is its own.
-    DirectInlineOrdinaryChildProjection(dclutch_trading::ordinary_route_projection_v3::DirectInlineOrdinaryChildProjectionErrorV3),
+    DirectInlineOrdinaryChildProjection(
+        dclutch_trading::ordinary_route_projection_v3::DirectInlineOrdinaryChildProjectionErrorV3,
+    ),
     /// `dclutch_registry` refused; the cause is its own.
     Registry(dclutch_registry::Error),
     /// `dclutch_registry::release_set` refused; the cause is its own.
@@ -3987,7 +3989,16 @@ fn insert_once<T>(
 mod tests {
     use std::borrow::Cow;
 
-    use dclutch_vm::account_profile::v2::{AccountProfileV2, PhysicalAccountDataGeometryV2};
+    use dclutch_claims::liability_basis_state_v2::{
+        LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+        LiabilityBasisMarketInputV2, LiabilityBasisPositionInputV2,
+        encode_liability_basis_market_into_v2, encode_liability_basis_position_into_v2,
+    };
+    use dclutch_claims::protocol_position_v2::ProtocolPositionSeedsV2;
+    use dclutch_core_contract::ContentId as CoreContentId;
+    use dclutch_custody::CustodyReplayLayoutV1;
+    use dclutch_custody::token_svm::{AccountState, TokenAccount, state::TokenAccountLayoutV1};
+    use dclutch_custody::{CallerRoleV1, CustodyReplaySeedsV1, CustodyReplayV1};
     use dclutch_market::capability_manifest::{
         ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
         CompartmentFundingV1, FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES,
@@ -4003,15 +4014,47 @@ mod tests {
         HotExecutionEnvelopeV3,
     };
     use dclutch_market::capability_program::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
-    use dclutch_claims::liability_basis_state_v2::{
-        LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
-        LiabilityBasisMarketInputV2, LiabilityBasisPositionInputV2,
-        encode_liability_basis_market_into_v2, encode_liability_basis_position_into_v2,
+    use dclutch_market::realm::REALM_BYTES;
+    use dclutch_market::realm::{
+        FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1,
+        RealmV1Input,
     };
-    use dclutch_claims::protocol_position_v2::ProtocolPositionSeedsV2;
-    use dclutch_core_contract::ContentId as CoreContentId;
-    use dclutch_custody::CustodyReplayLayoutV1;
-    use dclutch_custody::{CallerRoleV1, CustodyReplaySeedsV1, CustodyReplayV1};
+    use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
+    use dclutch_market::{
+        CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
+        STATE_BYTES as CORE_STATE_BYTES,
+    };
+    use dclutch_product::admission::PRODUCT_RECORD_BYTES_V2;
+    use dclutch_product::admission::{
+        PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
+        RESULT_DOMAIN_SCHEMA_ID_V2,
+    };
+    use dclutch_product::payoff::{
+        registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+        runtime_v3::{
+            BASIS_WIDTH_OFFSET_V3, BasisInputV3, BasisKindV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
+            basis_record_bytes_v3, compile_basis_v3, semantic_basis_preimage_v3,
+        },
+    };
+    use dclutch_product::{
+        ContentId as ProductContentId, PortfolioInputV2, ResultDomainInputV2, compile_portfolio_v2,
+        compile_result_domain_v2, portfolio_record_bytes, result_domain_record_bytes,
+    };
+    use dclutch_registry::release_set::{
+        ArtifactReleaseIdV1, CapabilityExecutionSelectionV1, EXECUTION_RELEASE_SET_BYTES_V1,
+        ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1, ProgramIdentityV1,
+    };
+    use dclutch_registry::svm::LOADER_V3_PROGRAM_BYTES;
+    use dclutch_registry::{
+        ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
+        ARTIFACT_RELEASE_BYTES_V1, ArtifactActivationInputV1, ArtifactReleaseV1,
+        ArtifactUpgradePolicyV1, ExecutionReleaseActivationInputsV1,
+        activate_execution_release_set_v1,
+    };
+    use dclutch_release_tool::{
+        CHECKED_MULTIPROGRAM_BYTES_V1, CHECKED_MULTIPROGRAM_MAGIC_V1,
+        CHECKED_MULTIPROGRAM_SCHEMA_V1, CheckedExecutionReleaseSetV1,
+    };
     use dclutch_trading::{
         execution_v3::DirectExecutionActionV3,
         intent_v2::CompactIntentV2,
@@ -4035,48 +4078,7 @@ mod tests {
             DirectExecutionConfigV1, DirectRootStateV1,
         },
     };
-    use dclutch_market::{
-        CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
-        STATE_BYTES as CORE_STATE_BYTES,
-    };
-    use dclutch_product::payoff::{
-        registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
-        runtime_v3::{
-            BASIS_WIDTH_OFFSET_V3, BasisInputV3, BasisKindV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
-            basis_record_bytes_v3, compile_basis_v3, semantic_basis_preimage_v3,
-        },
-    };
-    use dclutch_product::{
-        ContentId as ProductContentId, PortfolioInputV2, ResultDomainInputV2, compile_portfolio_v2,
-        compile_result_domain_v2, portfolio_record_bytes, result_domain_record_bytes,
-    };
-    use dclutch_product::admission::PRODUCT_RECORD_BYTES_V2;
-    use dclutch_product::admission::{
-        PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
-        RESULT_DOMAIN_SCHEMA_ID_V2,
-    };
-    use dclutch_market::realm::REALM_BYTES;
-    use dclutch_market::realm::{
-        FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1,
-        RealmV1Input,
-    };
-    use dclutch_registry::{
-        ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
-        ARTIFACT_RELEASE_BYTES_V1, ArtifactActivationInputV1, ArtifactReleaseV1,
-        ArtifactUpgradePolicyV1, ExecutionReleaseActivationInputsV1,
-        activate_execution_release_set_v1,
-    };
-    use dclutch_registry::svm::LOADER_V3_PROGRAM_BYTES;
-    use dclutch_registry::release_set::{
-        ArtifactReleaseIdV1, CapabilityExecutionSelectionV1, EXECUTION_RELEASE_SET_BYTES_V1,
-        ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1, ProgramIdentityV1,
-    };
-    use dclutch_release_tool::{
-        CHECKED_MULTIPROGRAM_BYTES_V1, CHECKED_MULTIPROGRAM_MAGIC_V1,
-        CHECKED_MULTIPROGRAM_SCHEMA_V1, CheckedExecutionReleaseSetV1,
-    };
-    use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
-    use dclutch_custody::token_svm::{AccountState, TokenAccount, state::TokenAccountLayoutV1};
+    use dclutch_vm::account_profile::v2::{AccountProfileV2, PhysicalAccountDataGeometryV2};
     use solana_address_lookup_table_interface::state::{AddressLookupTable, LookupTableMeta};
     use solana_compute_budget_interface::ComputeBudgetInstruction;
     use solana_hash::Hash;
@@ -4119,10 +4121,10 @@ mod tests {
             compile_direct_inline_request_v3,
         },
     };
+    use dclutch_market::StateBumpsV1;
     use dclutch_market::capability_program::hot_v3::DIRECT_HOT_HEAP_FRAME_BYTES_V1;
     use dclutch_trading::direct_finalization_v3::DirectFinalizationErrorV3;
     use dclutch_trading::inline_candidate_v2::DirectInlineCandidateErrorV2;
-    use dclutch_market::StateBumpsV1;
 
     fn key(byte: u8) -> Pubkey {
         Pubkey::new_from_array([byte; 32])
@@ -4916,11 +4918,9 @@ mod tests {
             (&mut route.seller_maker, authentication.seller.maker),
             (&mut route.buyer_maker, authentication.buyer.maker),
         ] {
-            let seeds = dclutch_trading::successor::MakerReplaySeedsV1::new(
-                coordinates,
-                maker.to_bytes(),
-            )
-            .expect("maker seeds");
+            let seeds =
+                dclutch_trading::successor::MakerReplaySeedsV1::new(coordinates, maker.to_bytes())
+                    .expect("maker seeds");
             account.key = Pubkey::find_program_address(&seeds.as_slices(), &trading.program.key).0;
             account.owner = system_program::ID;
             account.lamports = 1;
@@ -5304,9 +5304,7 @@ mod tests {
         )
         .expect("decode family request")
         {
-            dclutch_trading::execution_v3::DirectExecutionRequestV3::InlineOrdinary(value) => {
-                value
-            }
+            dclutch_trading::execution_v3::DirectExecutionRequestV3::InlineOrdinary(value) => value,
             _ => unreachable!("ordinary request"),
         };
         dclutch_trading::ordinary_route_projection_v3::project_direct_inline_ordinary_child_requests_v3(
@@ -6031,10 +6029,9 @@ mod tests {
             .expect("System meta");
         assert_eq!(system_meta.pubkey, system_program::ID);
         assert!(!system_meta.is_signer && !system_meta.is_writable);
-        let closure = dclutch_vm::capability_seal::SealedDescriptorClosureV1::decode(
-            &plan.expected_body,
-        )
-        .expect("canonical expected seal");
+        let closure =
+            dclutch_vm::capability_seal::SealedDescriptorClosureV1::decode(&plan.expected_body)
+                .expect("canonical expected seal");
         closure.require_key(plan.key).expect("exact key");
 
         let mut materialized_route = route.clone();

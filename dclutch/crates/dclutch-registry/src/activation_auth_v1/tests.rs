@@ -10,14 +10,14 @@ extern crate std;
 
 use std::{boxed::Box, vec, vec::Vec};
 
-use dclutch_core_contract::ContentId;
+use crate::release_set::{
+    ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ProgramIdentityV1,
+};
 use crate::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ArtifactActivationInputV1, ArtifactUpgradePolicyV1,
     activate_execution_role_into_v1, initialize_activation_cache_v1,
 };
-use crate::release_set::{
-    ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ProgramIdentityV1,
-};
+use dclutch_core_contract::ContentId;
 
 use solana_program::hash::hash;
 

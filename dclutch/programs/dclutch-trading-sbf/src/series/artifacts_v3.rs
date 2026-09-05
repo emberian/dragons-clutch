@@ -8,27 +8,27 @@
 //! underlying TransitionVM records. This module authenticates and projects no
 //! state; the common Trading V3 outer remains the sole writer and CPI caller.
 
-use dclutch_vm::account_profile::v2::AccountProfileV2;
-use dclutch_market::capability_program::{
-    set_v1::{CapabilityProgramSetV1, SelectorWidthV1},
-    v3::CapabilityProgramV3,
-};
 use dclutch_core_contract::ContentId;
 use dclutch_custody::{
     INITIALIZE_REPLAY_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V2,
     PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1,
 };
+use dclutch_market::capability_program::{
+    set_v1::{CapabilityProgramSetV1, SelectorWidthV1},
+    v3::CapabilityProgramV3,
+};
+use dclutch_market::execution_strategy::v2::{
+    EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyProgramV2,
+};
+use dclutch_trading::series::{SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3, template_content_id};
+use dclutch_vm::account_profile::v2::AccountProfileV2;
 use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{
         ProgramV3 as EffectProgramV3, ResolvedInvocationV3, RouteKindV3, RouteReceiptDependencyV3,
     },
 };
-use dclutch_market::execution_strategy::v2::{
-    EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyProgramV2,
-};
 use dclutch_vm::request_profile::{ProjectionRegistersV1, RequestProfileV1, project_atomic};
-use dclutch_trading::series::{SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3, template_content_id};
 use dclutch_vm::{MAX_IDENTITIES, MAX_SCALARS, v3::ProgramV3 as TransitionProgramV3};
 use solana_program::hash::{hash, hashv};
 
@@ -117,8 +117,7 @@ pub const SERIES_CONSUME_CORE_OPEN_ACCOUNT_COUNT_V3: u16 = 37;
 /// Mathematical protocol bound on one occurrence's segregated funding list.
 pub const SERIES_CONSUME_MAXIMUM_FUNDING_STATES_V3: u16 = 16;
 /// Exact normal Custody request width for the prepared SeriesEscrow lifecycle.
-pub const SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3: usize =
-    dclutch_custody::CUSTODY_REQUEST_BYTES_V1;
+pub const SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3: usize = dclutch_custody::CUSTODY_REQUEST_BYTES_V1;
 /// Projected Initialize/Open plus normal replay/Open/Lock.
 pub const SERIES_PREPARE_ROUTE_COUNT_V3: usize = 5;
 /// Projected Initialize request-bank offset.
@@ -991,13 +990,13 @@ mod tests {
     extern crate std;
 
     use dclutch_market::capability_program::v3::CAPABILITY_PROGRAM_V3_BYTES;
-    use dclutch_vm::effect::v3::encode::{
-        EffectGeometryV3, RouteInputV3, encode_effect_program_v4_atomic,
-    };
     use dclutch_market::execution_strategy::v2::{
         ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
         EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
         StrategyDispositionV2,
+    };
+    use dclutch_vm::effect::v3::encode::{
+        EffectGeometryV3, RouteInputV3, encode_effect_program_v4_atomic,
     };
     use dclutch_vm::v3::{RegisterInput, RegisterOutput, execute_fold_atomic};
     use std::{vec, vec::Vec};
@@ -1014,8 +1013,7 @@ mod tests {
         descriptor: [u8; CAPABILITY_PROGRAM_V3_BYTES],
         account: Vec<u8>,
         request_profile: Vec<u8>,
-        strategy:
-            [u8; dclutch_market::execution_strategy::v2::EXECUTION_STRATEGY_PROGRAM_BYTES_V2],
+        strategy: [u8; dclutch_market::execution_strategy::v2::EXECUTION_STRATEGY_PROGRAM_BYTES_V2],
         transition: Vec<u8>,
         effect: Vec<u8>,
         request: Vec<u8>,
@@ -1088,12 +1086,8 @@ mod tests {
             1,
         )
         .expect("founding intent");
-        let permit = dclutch_market::SeriesFoundingPermitV1::new(
-            intent,
-            core_id(16),
-            core_id(17),
-        )
-        .expect("founding permit");
+        let permit = dclutch_market::SeriesFoundingPermitV1::new(intent, core_id(16), core_id(17))
+            .expect("founding permit");
         dclutch_market::SeriesPermitExpiryRequestV1::new(permit)
             .encode()
             .expect("permit expiry request")
@@ -1172,8 +1166,7 @@ mod tests {
             &u64::from(action as u8).to_le_bytes(),
         );
 
-        let project_proof_count =
-            require_action + dclutch_vm::request_profile::OPERATION_BYTES;
+        let project_proof_count = require_action + dclutch_vm::request_profile::OPERATION_BYTES;
         set_byte(&mut output, project_proof_count, 5);
         put(&mut output, project_proof_count + 4, &13_u32.to_le_bytes());
         put(&mut output, project_proof_count + 8, &2_u16.to_le_bytes());

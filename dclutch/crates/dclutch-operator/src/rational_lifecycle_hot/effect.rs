@@ -1,19 +1,5 @@
 //! One-route Claims EffectProgram for a descriptor/action-specific lifecycle.
 
-use dclutch_vm::effect::{
-    v2::FixedRole,
-    v3::{
-        HEADER_BYTES as EFFECT_HEADER_BYTES, OPERATION_BYTES as EFFECT_OPERATION_BYTES,
-        ROUTE_BYTES as EFFECT_ROUTE_BYTES, RouteKindV3,
-        encode::{
-            EffectGeometryV3, EffectInstructionV3, IdentityCoordinateV3, RequestSpaceV3,
-            RouteInputV3, ScalarCoordinateV3, encode_effect_program_v3_atomic,
-        },
-    },
-    v4::{
-        BorrowedRangePolicyV4, HEADER_BYTES_V4 as EFFECT_V4_HEADER_BYTES, encode_program_v4_atomic,
-    },
-};
 use dclutch_claims::rational_lifecycle::{
     LIFECYCLE_COMMON_ACCOUNT_COUNT_V2, LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2,
     LIFECYCLE_REQUEST_MAGIC_V2, LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2, LIFECYCLE_VERSION_V2,
@@ -49,6 +35,20 @@ use dclutch_claims::rational_lifecycle::{
         RationalLifecycleHotRegisterLayoutV3,
     },
     hot_v6::RationalLifecycleHotRegisterLayoutV6,
+};
+use dclutch_vm::effect::{
+    v2::FixedRole,
+    v3::{
+        HEADER_BYTES as EFFECT_HEADER_BYTES, OPERATION_BYTES as EFFECT_OPERATION_BYTES,
+        ROUTE_BYTES as EFFECT_ROUTE_BYTES, RouteKindV3,
+        encode::{
+            EffectGeometryV3, EffectInstructionV3, IdentityCoordinateV3, RequestSpaceV3,
+            RouteInputV3, ScalarCoordinateV3, encode_effect_program_v3_atomic,
+        },
+    },
+    v4::{
+        BorrowedRangePolicyV4, HEADER_BYTES_V4 as EFFECT_V4_HEADER_BYTES, encode_program_v4_atomic,
+    },
 };
 
 use crate::rational_lifecycle_hot::{Error, Result, validate_action_geometry};

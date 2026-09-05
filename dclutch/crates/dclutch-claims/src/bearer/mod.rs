@@ -10,6 +10,7 @@
 //! descriptor is exactly `denominator` at one selected outcome and zero at all
 //! other outcomes.
 
+use crate::composition::CompositionExposureBundleV3;
 use crate::rational::{
     AssetV2, CoordinateIdentitiesV3, Error as RepresentationError, PreparedRepresentationV2,
     RepresentationActionV2, RepresentationRequestV2, ResolvedRequestV2,
@@ -19,7 +20,6 @@ use crate::rational_kernel::{
     Coalescing, Error as KernelError, RepresentationDescriptorV2, ShardCoordinateSuccessor,
     StructuredProjectionV2, coalesce, prepare_denominate, prepare_reconstitute,
 };
-use crate::composition::CompositionExposureBundleV3;
 
 /// Exact immutable identities against which one finalized descriptor is used.
 ///

@@ -3648,9 +3648,18 @@ mod tests {
 
     #[test]
     fn derivation_domains_and_exact_seed_inputs_are_distinct() {
-        assert!(CAPABILITY_FUNDING_PDA_DOMAIN_V1.len() <= crate::capability_manifest::SVM_MAX_PDA_SEED_BYTES);
-        assert!(CAPABILITY_FUNDING_AUTHORITY_PDA_DOMAIN_V1.len() <= crate::capability_manifest::SVM_MAX_PDA_SEED_BYTES);
-        assert!(CAPABILITY_FUNDING_VAULT_PDA_DOMAIN_V1.len() <= crate::capability_manifest::SVM_MAX_PDA_SEED_BYTES);
+        assert!(
+            CAPABILITY_FUNDING_PDA_DOMAIN_V1.len()
+                <= crate::capability_manifest::SVM_MAX_PDA_SEED_BYTES
+        );
+        assert!(
+            CAPABILITY_FUNDING_AUTHORITY_PDA_DOMAIN_V1.len()
+                <= crate::capability_manifest::SVM_MAX_PDA_SEED_BYTES
+        );
+        assert!(
+            CAPABILITY_FUNDING_VAULT_PDA_DOMAIN_V1.len()
+                <= crate::capability_manifest::SVM_MAX_PDA_SEED_BYTES
+        );
         let authority = CapabilityFundingAuthorityDerivationV1::new([7; 32]).expect("authority");
         assert_eq!(
             authority.seed_components()[0],
@@ -4448,13 +4457,17 @@ mod tests {
 
     #[test]
     fn funding_ledger_v2_entry_authorities_do_not_collide_for_equal_mints() {
-        assert!(CAPABILITY_FUNDING_LEDGER_PDA_DOMAIN_V2.len() <= crate::capability_manifest::SVM_MAX_PDA_SEED_BYTES);
+        assert!(
+            CAPABILITY_FUNDING_LEDGER_PDA_DOMAIN_V2.len()
+                <= crate::capability_manifest::SVM_MAX_PDA_SEED_BYTES
+        );
         assert!(
             CAPABILITY_FUNDING_LEDGER_AUTHORITY_PDA_DOMAIN_V2.len()
                 <= crate::capability_manifest::SVM_MAX_PDA_SEED_BYTES
         );
         assert!(
-            CAPABILITY_FUNDING_LEDGER_VAULT_PDA_DOMAIN_V2.len() <= crate::capability_manifest::SVM_MAX_PDA_SEED_BYTES
+            CAPABILITY_FUNDING_LEDGER_VAULT_PDA_DOMAIN_V2.len()
+                <= crate::capability_manifest::SVM_MAX_PDA_SEED_BYTES
         );
         let first =
             CapabilityFundingLedgerAuthorityDerivationV2::new([7; 32], 0).expect("first authority");

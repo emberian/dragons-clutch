@@ -7,7 +7,6 @@
 //! is deliberately de-escalated before CPI because Claims' child ABI requires
 //! an immutable nonsigner owner-identity observation.
 
-use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_claims::position_admission::{
     ProtocolPositionActionV2, USER_POSITION_ADMISSION_ACCOUNT_COUNT_V1,
     USER_POSITION_ADMISSION_AUTHORITY_ACCOUNT_V1, USER_POSITION_ADMISSION_CHILD_ACCOUNT_COUNT_V1,
@@ -21,6 +20,7 @@ use dclutch_claims::position_admission::{
     USER_POSITION_CLOSE_TRADING_PROGRAM_ACCOUNT_V1, UserPositionAdmissionFrameV1,
     UserPositionAdmissionPrivilegesV1, UserPositionAdmissionRequestV1, UserPositionCloseFrameV1,
 };
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
     hash::hash,

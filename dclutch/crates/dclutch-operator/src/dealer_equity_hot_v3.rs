@@ -38,11 +38,14 @@
 //!   `dealerAccountProfileV3` (which covers the AccountProfile, not the
 //!   instruction).
 
+use crate::hot_bump_miner::{
+    HotBumpCorpusV1, activated_custody_program_v1, mine_hot_bump_hints_v1,
+};
 use crate::{
     Finality, Observation,
     direct_inline_v3::{CheckedHotOuterReleaseV3, ObservedAccountMetaV3},
 };
-use dclutch_vm::account_profile::v2::{AccountPrestateV2, AccountProfileV2};
+use dclutch_core_contract::ContentId;
 use dclutch_market::capability_program::{
     hot_v3::{
         HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACTIVATION_CACHE_ACCOUNT_V3,
@@ -56,7 +59,6 @@ use dclutch_market::capability_program::{
     },
     set_v1::{CapabilityProgramSetV1, SelectorWidthV1},
 };
-use dclutch_core_contract::ContentId;
 use dclutch_market::execution_strategy::admitted_v3::{
     ADMITTED_ACCELERATOR_PROGRAM_ACCOUNT_V3, ADMITTED_STRATEGY_EVIDENCE_COUNT_V3,
     ADMITTED_STRATEGY_EVIDENCE_START_V3,
@@ -64,23 +66,21 @@ use dclutch_market::execution_strategy::admitted_v3::{
 use dclutch_market::execution_strategy::v2::{
     AcceleratorTransportProfileV2, ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
-use crate::hot_bump_miner::{
-    HotBumpCorpusV1, activated_custody_program_v1, mine_hot_bump_hints_v1,
-};
 use dclutch_trading_sbf::{
     admitted_composition_v3::admitted_caller_authority_count_v3,
     dealer::{
         equity_artifacts::authenticate_dealer_equity_artifacts_v3,
-        equity_request::{
-            DEALER_EQUITY_SELECTOR_OFFSET_V3, DealerEquityRequestV3, EquityRequestActionV3,
-        },
         equity_effect::{
             DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3, dealer_current_slot_scalar_register_v3,
             dealer_equity_identity_count_v3, dealer_equity_scalar_count_v3,
         },
+        equity_request::{
+            DEALER_EQUITY_SELECTOR_OFFSET_V3, DealerEquityRequestV3, EquityRequestActionV3,
+        },
         multi_lp::MultiLpActionV3,
     },
 };
+use dclutch_vm::account_profile::v2::{AccountPrestateV2, AccountProfileV2};
 use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},
@@ -159,7 +159,9 @@ pub enum DealerEquityHotOperatorErrorV3 {
     /// `dclutch_trading_sbf` refused; the cause is its own.
     DealerEquityArtifact(dclutch_trading_sbf::dealer::equity_effect::DealerEquityArtifactErrorV3),
     /// `dclutch_trading_sbf` refused; the cause is its own.
-    DealerEquityArtifacts(dclutch_trading_sbf::dealer::equity_artifacts::DealerEquityArtifactsErrorV3),
+    DealerEquityArtifacts(
+        dclutch_trading_sbf::dealer::equity_artifacts::DealerEquityArtifactsErrorV3,
+    ),
     /// `dclutch_market::capability_program` refused; the cause is its own.
     HotExecution(dclutch_market::capability_program::hot_v3::HotExecutionErrorV3),
     /// `dclutch_market::execution_strategy` refused; the cause is its own.

@@ -250,9 +250,7 @@ pub fn encode_rational_terminal_transition_v3()
     let s = |index: usize| {
         u16::try_from(index)
             .map(ScalarRegisterV3::common)
-            .map_err(|_| {
-                Error::TransitionArtifact(dclutch_vm::v3::Error::InvalidRegister)
-            })
+            .map_err(|_| Error::TransitionArtifact(dclutch_vm::v3::Error::InvalidRegister))
     };
     let prelude: [InstructionV3; TRANSITION_INSTRUCTION_COUNT] = [
         InstructionV3::scalar_lt(
@@ -285,13 +283,11 @@ pub fn encode_rational_terminal_transition_v3()
         ),
     ];
     let geometry = ProgramGeometryV3 {
-        common_scalars: u16::try_from(RATIONAL_TERMINAL_HOT_COMMON_SCALARS_V3).map_err(|_| {
-            Error::TransitionArtifact(dclutch_vm::v3::Error::InvalidRegister)
-        })?,
+        common_scalars: u16::try_from(RATIONAL_TERMINAL_HOT_COMMON_SCALARS_V3)
+            .map_err(|_| Error::TransitionArtifact(dclutch_vm::v3::Error::InvalidRegister))?,
         item_scalar_stride: 0,
-        common_identities: u16::try_from(RATIONAL_TERMINAL_HOT_COMMON_IDENTITIES_V3).map_err(
-            |_| Error::TransitionArtifact(dclutch_vm::v3::Error::InvalidRegister),
-        )?,
+        common_identities: u16::try_from(RATIONAL_TERMINAL_HOT_COMMON_IDENTITIES_V3)
+            .map_err(|_| Error::TransitionArtifact(dclutch_vm::v3::Error::InvalidRegister))?,
         item_identity_stride: 0,
     };
     let mut scratch = [0_u8; RATIONAL_TERMINAL_TRANSITION_BYTES_V3];
@@ -354,13 +350,9 @@ mod tests {
         RATIONAL_TERMINAL_SCALAR_PRODUCT_OUTCOME_COUNT_V3, RationalTerminalHotRequestV3,
         RepresentationRequestHeaderV2, RepresentationRequestV2,
     };
-    use dclutch_vm::request_profile::{
-        ProjectionRegistersV1, RequestProfileV1, project_atomic,
-    };
     use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
-    use dclutch_vm::v3::{
-        ProgramV3, RegisterInput, RegisterOutput, execute_fold_atomic,
-    };
+    use dclutch_vm::request_profile::{ProjectionRegistersV1, RequestProfileV1, project_atomic};
+    use dclutch_vm::v3::{ProgramV3, RegisterInput, RegisterOutput, execute_fold_atomic};
 
     fn id(value: u8) -> [u8; 32] {
         [value; 32]

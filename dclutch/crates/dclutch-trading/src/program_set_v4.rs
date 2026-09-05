@@ -9,6 +9,7 @@ extern crate alloc;
 
 use alloc::{vec, vec::Vec};
 
+use dclutch_core_contract::ContentId;
 use dclutch_market::capability_program::{
     set_v2::{
         CAPABILITY_PROGRAM_SET_MAX_ENTRIES_V2, CapabilityDescriptorReferenceV2,
@@ -17,7 +18,6 @@ use dclutch_market::capability_program::{
     },
     v4::SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
 };
-use dclutch_core_contract::ContentId;
 use dclutch_sha256_adapter::digest;
 
 use crate::{

@@ -47,7 +47,9 @@ extern crate alloc;
 
 use alloc::{boxed::Box, vec, vec::Vec};
 
-use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_claims::composition::{
+    COMPOSITION_EXPOSURE_SCHEMA_ID_V3, CompositionExposureBundleV3, RecordAdmissionV3,
+};
 use dclutch_claims::{
     CallerRole,
     liability_basis_state_v2::LiabilityBasisMarketViewV2,
@@ -82,17 +84,15 @@ use dclutch_custody::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1,
     CustodyReplaySeedsV1, CustodyReplayV1, CustodyVaultSeedsV1,
 };
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_market::realm::REALM_SCHEMA_RELEASE_ID_V1;
 use dclutch_market::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
 use dclutch_product::ContentId as ProductContentId;
 use dclutch_product::svm_reader::{
     FinalizedRecordFrameV2, ProductRuntimeFrameV3, authenticate_product_runtime_v3,
 };
-use dclutch_market::realm::REALM_SCHEMA_RELEASE_ID_V1;
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_claims::composition::{
-    COMPOSITION_EXPOSURE_SCHEMA_ID_V3, CompositionExposureBundleV3, RecordAdmissionV3,
-};
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},

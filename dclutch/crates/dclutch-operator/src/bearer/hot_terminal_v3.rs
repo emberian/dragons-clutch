@@ -1,10 +1,10 @@
 //! Exact Hot V3 family projection for terminal Bearer redemption.
 
-use dclutch_claims::rational::{
-    RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3, RationalTerminalHotRequestV3, RepresentationRequestV2,
-};
 use crate::rational_representation::{
     ConstructedInstructionV2, RationalObservationV2, TerminalObservationV2,
+};
+use dclutch_claims::rational::{
+    RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3, RationalTerminalHotRequestV3, RepresentationRequestV2,
 };
 use solana_program::hash::hash;
 

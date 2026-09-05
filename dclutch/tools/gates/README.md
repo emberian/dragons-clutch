@@ -101,7 +101,7 @@ entry both fail.
 
 ## The wrapper
 
-The public repository's workflows call `tools/ci/run.sh <tier>`, which is a shim
-onto this entry point with the old tier names mapped (`census`→`emission`,
-`emission`→`guards`, `frameguard`→`frames`, `genref`→`reference`,
-`runbooks`→`commands`). Delete the shim once the workflows call `tools/gate`.
+The public repository's workflows (`dragons-clutch/.github/workflows/*.yml`)
+call `tools/gate <tier>` directly since 2026-09-04; the two shims kept for them
+(`tools/ci/run.sh`, `tools/genref/generate.sh`) went with that change, and every
+generated banner names `tools/gate reference --converge` as its regenerator.

@@ -211,10 +211,7 @@ pub fn is_claims_conservation_v1(instruction_data: &[u8]) -> bool {
     instruction_data.len() == CLAIMS_CONSERVATION_REQUEST_BYTES_V1
         && instruction_data
             .get(..dclutch_claims::conservation::CLAIMS_CONSERVATION_REQUEST_MAGIC_V1.len())
-            == Some(
-                dclutch_claims::conservation::CLAIMS_CONSERVATION_REQUEST_MAGIC_V1
-                    .as_slice(),
-            )
+            == Some(dclutch_claims::conservation::CLAIMS_CONSERVATION_REQUEST_MAGIC_V1.as_slice())
 }
 
 /// Execute one conservative complete-set act signed by its own Position owner.

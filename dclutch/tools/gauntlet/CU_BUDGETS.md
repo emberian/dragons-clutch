@@ -529,7 +529,7 @@ expensive is a refusal that can stop fitting.
 
 **RECORDED, not enforced, and the reason is structural rather than a deferral.**
 `check-witnesses.sh` evaluates a budget only for a campaign some witness names,
-and this campaign has none: `tools/ci/run.sh` records why, in the same note that
+and this campaign has none: `tools/gate` records why, in the same note that
 records that it HAS had a runner since 2026-09-04 — six SBF links built from an
 archive of a named commit plus a CU table is a campaign tier's shape and minutes
 of work, not a program-test suite, and what it is waiting on is a census

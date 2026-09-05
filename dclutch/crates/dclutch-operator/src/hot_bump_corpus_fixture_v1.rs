@@ -25,22 +25,22 @@
 //! builder decodes account bodies and re-derives; this side keeps what fell out
 //! of the `find_program_address` it made the fixture from.
 
+use dclutch_core_contract::ContentId;
+use dclutch_custody::CustodyAuthoritySeedsV1;
 use dclutch_market::capability_program::{
     CapabilityRootHeaderV1, SelectedRecordBumpsV1, hot_v3::HotBumpHintsV1,
 };
-use dclutch_core_contract::ContentId;
-use dclutch_custody::CustodyAuthoritySeedsV1;
 use dclutch_market::{
     CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness, StateBumpsV1,
+};
+use dclutch_registry::release_set::{
+    ArtifactReleaseIdV1, CapabilityExecutionSelectionV1, ExecutionReleaseSetV1,
+    ExecutionRoleBindingV1, ExecutionRoleV1, ProgramIdentityV1,
 };
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ArtifactActivationInputV1,
     ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
     activate_execution_role_into_v1, initialize_activation_cache_v1, put_activation_cache_bump_v1,
-};
-use dclutch_registry::release_set::{
-    ArtifactReleaseIdV1, CapabilityExecutionSelectionV1, ExecutionReleaseSetV1,
-    ExecutionRoleBindingV1, ExecutionRoleV1, ProgramIdentityV1,
 };
 use solana_program::{hash::hash, pubkey::Pubkey};
 

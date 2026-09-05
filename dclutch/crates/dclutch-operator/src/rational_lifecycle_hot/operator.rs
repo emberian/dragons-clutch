@@ -1,5 +1,10 @@
 //! Unsigned, chain-derived Hot instruction construction for lifecycle actions.
 
+use crate::hot_bump_miner::{HotBumpCorpusV1, mine_hot_bump_hints_v1};
+#[cfg(test)]
+use dclutch_claims::rational_lifecycle::{
+    LifecycleRequestV2, hot_v3::RationalLifecycleHotRequestV3,
+};
 use dclutch_market::capability_program::hot_v3::{
     HOT_CORE_PROGRAM_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
     HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_LINKED_BASIS_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3,
@@ -9,11 +14,6 @@ use dclutch_market::capability_program::hot_v3::{
 #[cfg(test)]
 use dclutch_market::capability_program::hot_v3::{
     HOT_FAMILY_REQUEST_OFFSET_V3, HotExecutionEnvelopeV3,
-};
-use crate::hot_bump_miner::{HotBumpCorpusV1, mine_hot_bump_hints_v1};
-#[cfg(test)]
-use dclutch_claims::rational_lifecycle::{
-    LifecycleRequestV2, hot_v3::RationalLifecycleHotRequestV3,
 };
 #[cfg(test)]
 use solana_program::hash::hash;
@@ -602,8 +602,8 @@ mod tests {
     /// re-derives.
     #[test]
     fn the_lifecycle_corpus_mines_this_frames_market_and_root() {
-        use dclutch_market::capability_program::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
         use dclutch_core_contract::ContentId;
+        use dclutch_market::capability_program::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
         use dclutch_market::{
             CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
             StateBumpsV1,

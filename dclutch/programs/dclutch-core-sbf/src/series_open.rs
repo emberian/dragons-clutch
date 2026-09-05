@@ -2,10 +2,8 @@
 
 use alloc::boxed::Box;
 
-use dclutch_market::capability_program::{
-    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
-};
 use dclutch_claims::founding_v5::ClaimsFoundingReceiptV5;
+use dclutch_market::capability_program::{CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1};
 use dclutch_market::{
     CoreState, MarketAdmissionV1, MarketCoreStateSeedsV2, Phase, Readiness, Role,
     SERIES_OPEN_POST_RESOURCE_DIGEST_DOMAIN_V1, STATE_BYTES, SeriesCoreAckV1, SeriesCoreActionV1,

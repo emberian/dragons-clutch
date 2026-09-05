@@ -3,20 +3,18 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-use dclutch_market::{
-    Action, CoreState, Identity, Phase as CorePhase, Readiness, Request,
-};
+use dclutch_market::{Action, CoreState, Identity, Phase as CorePhase, Readiness, Request};
 use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
     RESULT_DOMAIN_SCHEMA_ID_V2,
 };
-use dclutch_source::pyth::{PostUpdateParamsView, PythReleaseV1, VerifiedEncodedVaaV1};
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1};
 use dclutch_registry::release_set::{
     CallerAuthoritySeedsV1, ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2,
     ProtocolInfrastructureProfileV2,
 };
+use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1};
+use dclutch_source::pyth::{PostUpdateParamsView, PythReleaseV1, VerifiedEncodedVaaV1};
 #[cfg(feature = "transaction-planning")]
 use dclutch_source::resolution::{
     PROVIDER_EXECUTION_REQUEST_BYTES_V3, PROVIDER_RECLAIM_REQUEST_BYTES_V3,
@@ -1984,8 +1982,7 @@ mod tests {
         let core = Request::administrative(
             Action::ExecuteProvider,
             7,
-            dclutch_market::Identity::new(accounts[4].pubkey.to_bytes())
-                .expect("market identity"),
+            dclutch_market::Identity::new(accounts[4].pubkey.to_bytes()).expect("market identity"),
         );
         let core_bytes = core.encode().expect("Core request");
         // The captured Pyth post_update instruction is 102 bytes including its

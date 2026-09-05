@@ -5,8 +5,8 @@
 //! PDA is never an account or persistent capability: its signer privilege
 //! exists only in that nested invocation stack.
 
-use dclutch_core_contract::ContentId;
 use crate::release_set::{EXECUTION_ROLE_COUNT_V1, ExecutionRoleV1};
+use dclutch_core_contract::ContentId;
 
 use crate::svm::batch_v2::{BatchErrorV2, RoleBatchRequestV2};
 

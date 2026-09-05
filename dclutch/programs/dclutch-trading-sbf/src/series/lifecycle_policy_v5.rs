@@ -47,6 +47,10 @@
 //! join `TradingFamilyContextV1::authenticate` performs from the header
 //! directly.
 
+use dclutch_market::capability_program::{
+    CAPABILITY_ROOT_HEADER_BYTES_V1, CAPABILITY_ROOT_PDA_DOMAIN_V1,
+};
+use dclutch_trading::series::request::SeriesActionV3;
 use dclutch_vm::account_profile::lifecycle_v3::{
     ACTION_PLAN_BYTES, HEADER_BYTES, PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SEED_BYTES,
     StateLifecyclePolicyV5,
@@ -56,10 +60,6 @@ use dclutch_vm::account_profile::lifecycle_v3::{
         LifecycleRegisterCoordinateV3, LifecycleSeedInputV3, encode_lifecycle_policy_v5_atomic,
     },
 };
-use dclutch_market::capability_program::{
-    CAPABILITY_ROOT_HEADER_BYTES_V1, CAPABILITY_ROOT_PDA_DOMAIN_V1,
-};
-use dclutch_trading::series::request::SeriesActionV3;
 
 use super::{
     account_profile_v4::{
@@ -278,9 +278,7 @@ mod tests {
         SeriesConsumeAccountProfileInputV4, encode_series_consume_account_profile_v4_atomic,
     };
     use super::*;
-    use dclutch_vm::account_profile::lifecycle_v3::{
-        CoordinateScopeV3, LifecycleRegisterKindV3,
-    };
+    use dclutch_vm::account_profile::lifecycle_v3::{CoordinateScopeV3, LifecycleRegisterKindV3};
 
     fn policy_bytes() -> vec::Vec<u8> {
         let mut scratch = vec![0_u8; SERIES_CONSUME_STATE_LIFECYCLE_BYTES_V5];

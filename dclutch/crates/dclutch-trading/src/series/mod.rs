@@ -1190,9 +1190,8 @@ const _: () = assert!(series_proof_count_v3(5) == 3);
 const _: () = assert!(series_proof_count_v3(u32::MAX) == 32);
 const _: () = assert!(series_proof_count_v3(u32::MAX) as usize == SERIES_MAXIMUM_MERKLE_HEIGHT_V3);
 const _: () = assert!(series_action_request_bytes_v3(1) == request::SERIES_ACTION_HEADER_BYTES_V3);
-const _: () = assert!(
-    series_action_request_bytes_v3(u32::MAX) == request::SERIES_ACTION_MAXIMUM_BYTES_V3
-);
+const _: () =
+    assert!(series_action_request_bytes_v3(u32::MAX) == request::SERIES_ACTION_MAXIMUM_BYTES_V3);
 
 fn proof_height(count: u32) -> usize {
     series_proof_count_v3(count) as usize

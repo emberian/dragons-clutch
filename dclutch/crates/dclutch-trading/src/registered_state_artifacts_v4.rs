@@ -12,6 +12,7 @@
 //! The quote table is the sole writer of those scalars: nothing else in the
 //! family may target a lifecycle-protected destination.
 
+use dclutch_custody::CUSTODY_REPLAY_BYTES_V1;
 use dclutch_vm::account_profile::lifecycle_v3::{
     ACTION_PLAN_BYTES, CURRENT_RENT_QUOTE_BYTES_V5, HEADER_BYTES, IMMUTABLE_IDENTITY_BINDING_BYTES,
     PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SEED_BYTES, StateLifecyclePolicyV5,
@@ -22,7 +23,6 @@ use dclutch_vm::account_profile::lifecycle_v3::{
         LifecycleRegisterCoordinateV3, LifecycleSeedInputV3, encode_lifecycle_policy_v5_atomic,
     },
 };
-use dclutch_custody::CUSTODY_REPLAY_BYTES_V1;
 
 use crate::{
     execution_v3::DirectExecutionActionV3,
