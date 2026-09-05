@@ -1,18 +1,18 @@
 //! Resolution-role child composition through the canonical Core authority.
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingLedgerDerivationV2,
     CapabilityManifestV1, ContentId as CapabilityContentId, FUNDING_LEDGER_HEADER_BYTES_V2,
     FUNDING_LEDGER_SLOT_BYTES_V2, FundingLedgerStatusV2, FundingLedgerV2,
     funding::funded_rent_persists_v1,
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     Action, CAPABILITY_FUNDING_HEADER_BYTES_V2, CapabilityFundingHeaderV2, ChildEffectObservation,
     CoreEffectAckV1, CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState, MarketAdmissionV1, Phase,
     Product, Readiness, Request, Role, TerminalReceipt, admit_terminal, verify_readiness,
 };
-use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV2};
-use dclutch_resolution_codec::{
+use dclutch_product::svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV2};
+use dclutch_source::resolution::{
     FUNDING_ACTIVATION_RECEIPT_BYTES_V1, FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
     FundingActivationReceiptV1, FundingActivationRequestV1, RESOLUTION_CERTIFICATE_BYTES_V2,
     RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
@@ -20,7 +20,7 @@ use dclutch_resolution_codec::{
     ResolutionCertificateKindV2, ResolutionCertificateV2, ResolutionCoreActionV1,
     ResolutionCoreReceiptKindV1, ResolutionRoleRequestV2, funding_lifecycle_account_digest_v1,
 };
-use dclutch_source_contract::{
+use dclutch_source::{
     ContentId as SourceContentId, RECOVERY_POLICY_BYTES_V2, RECOVERY_POLICY_SCHEMA_ID_V2,
     RecoveryPolicyV2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_MATERIAL_V3_BYTES,
     SOURCE_RESOLUTION_STATE_BYTES_V2, SourceMaterialV3, SourceResolutionPhaseV1,
@@ -102,8 +102,8 @@ pub const ADMIT_TERMINAL_ADMISSIBLE_PRESTATES_V1: MarketAdmissionV1 =
 pub const RESOLUTION_ROLE_REQUEST_BYTES_V1: usize =
     CAPABILITY_FUNDING_HEADER_BYTES_V2 + RESOLUTION_CORE_ROLE_REQUEST_BYTES_V2;
 /// Exact top-level Core data width for a Resolution child effect.
-pub const RESOLUTION_CORE_INSTRUCTION_BYTES_V1: usize = dclutch_market_core_codec::REQUEST_BYTES
-    + dclutch_market_core_codec::CORE_EFFECT_ENVELOPE_BYTES_V1
+pub const RESOLUTION_CORE_INSTRUCTION_BYTES_V1: usize = dclutch_market::REQUEST_BYTES
+    + dclutch_market::CORE_EFFECT_ENVELOPE_BYTES_V1
     + RESOLUTION_ROLE_REQUEST_BYTES_V1;
 
 /// Exact outer account count for Source/Funding creation.
@@ -347,7 +347,7 @@ fn commit_verified_readiness(
     frame: &FixedRoleAccountsV1<'_, '_>,
     request: Request,
     state: CoreState,
-    core_admission: dclutch_market_core_codec::Admission,
+    core_admission: dclutch_market::Admission,
 ) -> Result<(), ProgramError> {
     if state.phase != Phase::Founding || state.readiness != Readiness::Prepaid {
         return Ok(());
@@ -476,7 +476,7 @@ fn authenticate_activation_accept(
     accounts: &[AccountInfo<'_>],
     state: CoreState,
     request: ResolutionRoleRequestV2,
-    target_admission: dclutch_market_core_codec::Admission,
+    target_admission: dclutch_market::Admission,
 ) -> Result<(), CoreSbfError> {
     let rent = read_rent(account(accounts, VERIFY_RENT)?)?;
     authenticate_live_poststate(
@@ -1264,8 +1264,8 @@ fn authenticate_live_poststate(
             false,
         )
         .map_err(|error| match error {
-            dclutch_capability_contract::Error::FundedRentNotEvidenced
-            | dclutch_capability_contract::Error::FundedRentRateMissing => CoreSbfError::FundedRent,
+            dclutch_market::capability_manifest::Error::FundedRentNotEvidenced
+            | dclutch_market::capability_manifest::Error::FundedRentRateMissing => CoreSbfError::FundedRent,
             _ => CoreSbfError::Funding,
         })?;
     let derivation = CapabilityFundingLedgerDerivationV2::new(
@@ -1312,7 +1312,7 @@ fn resolution_poststate_digest(
     source_or_closure: &[u8],
     funding_ledger: &[u8],
     certificate: Option<&[u8]>,
-) -> Result<dclutch_market_core_codec::Identity, CoreSbfError> {
+) -> Result<dclutch_market::Identity, CoreSbfError> {
     // The tag is still the WIRE effect byte, unchanged: the digest is a
     // cross-program agreement with Resolution, not a Core-internal encoding.
     let action_tag = [match action {
@@ -1407,7 +1407,7 @@ const _: usize = SOURCE_MATERIAL_V3_BYTES;
 
 #[cfg(test)]
 mod tests {
-    use dclutch_market_core_codec::Identity;
+    use dclutch_market::Identity;
 
     use super::*;
 

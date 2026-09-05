@@ -633,7 +633,7 @@ export function admitDirectParticipantCrossingV1(
   if (plan.takerSide === 'buy') {
     const required = plan.preview.buyerCollateralDebit;
     // The chain states these as two separate conditions, so this states them
-    // as two. `validate_collateral` in `dclutch-direct-codec`'s
+    // as two. `validate_collateral` in `dclutch-trading`'s
     // `inline_candidate_v2.rs` requires `buyer_source.balance >= debit` and
     // `buyer_source.delegated_amount == debit` -- an equality, not a ceiling.
     // The delegation is a single-use authorization sized to one crossing, so a

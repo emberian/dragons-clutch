@@ -8,17 +8,17 @@
 
 use core::convert::TryFrom;
 
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
-use dclutch_product_runtime_v2_admission::{
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
 };
-use dclutch_record_contract::{
+use dclutch_registry::record::{
     APPEND_PAGE_HEADER_BYTES_V1, AppendPageV1, BeginRecordV1,
     CANONICAL_RECORD_DEPLOYMENT_PROFILE_V1, ContentDigest, FinalizeRecordV1,
     RAW_RECORD_PDA_SEED_V1, RecordKeyV1, STAGING_CURSOR_BYTES_V1, STAGING_CURSOR_PDA_SEED_V1,
     SchemaReleaseId, StagingCursorV1,
 };
-use dclutch_registry_contract::{ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1};
+use dclutch_registry::{ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1};
 use solana_program::{
     account_info::AccountInfo,
     clock::Clock,
@@ -653,7 +653,7 @@ fn decode_clock(account: AccountObservationV2<'_>) -> Result<Clock, PublicationE
 }
 
 fn matches_coordinate(
-    coordinate: dclutch_product_runtime_v2_admission::FinalizedRecordCoordinateV2,
+    coordinate: dclutch_product::admission::FinalizedRecordCoordinateV2,
     derived: (Pubkey, Pubkey, [u8; 32]),
 ) -> bool {
     coordinate.raw_account.to_bytes() == derived.0.to_bytes()

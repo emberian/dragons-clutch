@@ -8,25 +8,18 @@ description = "Chain-derived effect planning for shard-backed Structured receipt
 publish = false
 
 [dependencies]
-dclutch-fractional-claim-kernel = { path = "../dclutch-fractional-claim-kernel" }
-dclutch-rational-representation-v2-contract = { path = "../dclutch-rational-representation-v2-contract" }
-dclutch-rational-representation-v2-kernel = { path = "../dclutch-rational-representation-v2-kernel" }
-dclutch-rational-representation-v2-lifecycle-contract = { path = "../dclutch-rational-representation-v2-lifecycle-contract" }
-dclutch-representation-composition-v3-kernel = { path = "../dclutch-representation-composition-v3-kernel" }
+dclutch-claims = { path = "../dclutch-claims" }
 dclutch-sha256-adapter = { path = "../dclutch-sha256-adapter" }
-dclutch-structured-v2-contract = { path = "../dclutch-structured-v2-contract" }
-dclutch-structured-v2-kernel = { path = "../dclutch-structured-v2-kernel" }
 
 [dev-dependencies]
 # The four Rational Hot bundle builders ARE Structured's artifacts (decision
 # 0011 §3c), so the tests drive them. It stays a DEV dependency: this crate's
 # root promises no Solana SDK types, and `dclutch-bearer-v2-operator` links
 # `solana-program`.
-dclutch-account-profile-contract = { path = "../dclutch-account-profile-contract" }
+dclutch-vm = { path = "../dclutch-vm" }
 dclutch-bearer-v2-operator = { path = "../dclutch-bearer-v2-operator" }
-dclutch-product-payoff-v2-codec = { path = "../dclutch-product-payoff-v2-codec" }
-dclutch-request-profile-contract = { path = "../dclutch-request-profile-contract" }
-dclutch-token-svm = { path = "../dclutch-token-svm" }
+dclutch-product = { path = "../dclutch-product" }
+dclutch-custody = { path = "../dclutch-custody" }
 sha2 = "=0.10.9"
 
 [lints]

@@ -11,7 +11,7 @@
 //! measured on them.
 #![allow(clippy::panic)]
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     CapabilityManifestV1, Error as CapabilityError, FundingLedgerV2,
 };
 use dclutch_resolution_core_v3_operator::ResolutionCoreOperatorErrorV3;
@@ -44,8 +44,8 @@ fn manifest(bytes: &[u8]) -> CapabilityManifestV1<'_> {
 /// test that reached into it at a hand-written offset would be a second author
 /// of a layout the ABI already owns. `authenticate` refuses any other identity,
 /// so this is checked by every call below rather than asserted here.
-fn manifest_id(manifest_bytes: &[u8]) -> dclutch_capability_contract::ContentId {
-    dclutch_capability_contract::ContentId::new(
+fn manifest_id(manifest_bytes: &[u8]) -> dclutch_market::capability_manifest::ContentId {
+    dclutch_market::capability_manifest::ContentId::new(
         solana_program::hash::hash(manifest_bytes).to_bytes(),
     )
     .expect("nonzero manifest identity")

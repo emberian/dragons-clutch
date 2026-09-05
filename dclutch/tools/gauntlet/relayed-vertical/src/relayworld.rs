@@ -1,7 +1,7 @@
 //! The devnet-side relay routes: record creation, consumption, and the funded
 //! deadline walk, built against the live successor validator.
 //!
-//! Account frames come from `dclutch_relay_contract::frame`, never from a
+//! Account frames come from `dclutch_source::relay::frame`, never from a
 //! table in this file, so the campaign cannot drift from the frame the
 //! program validates. The consumption rides a v0 message over the Market's
 //! address lookup table — it is one of the family's two known over-packet
@@ -15,8 +15,8 @@ use solana_sdk::signature::{Keypair, Signer};
 use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::transfer;
 
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_relay_contract::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_source::relay::{
     RELAYED_RECORD_PDA_DOMAIN_V1,
     frame::{RelayAccountNameV1, RelayFrameKindV1, relay_frame_roles_v1},
     instruction::{
@@ -24,11 +24,11 @@ use dclutch_relay_contract::{
     },
     release::AccountSetEntryV1,
 };
-use dclutch_resolution_codec::{
+use dclutch_source::resolution::{
     RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
     ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
-use dclutch_source_contract::{SourceResolutionPhaseV1, SourceResolutionStateV2};
+use dclutch_source::{SourceResolutionPhaseV1, SourceResolutionStateV2};
 use solana_address_lookup_table_interface::state::AddressLookupTable;
 
 use crate::model::TransactionEvidence;

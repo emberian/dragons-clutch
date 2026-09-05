@@ -1,46 +1,46 @@
 use std::{boxed::Box, vec, vec::Vec};
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
     CapabilityEntryV1, CapabilityFundingDerivationV1, CapabilityManifestV1, CompartmentFundingV1,
     FUNDING_STATE_BYTES, FundingAmountsV1, FundingCustodyObservationV1, FundingQuoteV1,
     FundingStateV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
 };
 use dclutch_core_contract::ContentId as CoreContentId;
-use dclutch_market_core_codec::{
+use dclutch_market::{
     CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2,
     MarketIdentity as CoreMarketIdentity, Phase as CorePhase, Readiness as CoreReadiness,
     StateBumpsV1,
 };
-use dclutch_product_contract::{
+use dclutch_product::contract::{
     ContentId as ProductContentId,
     capacity::CapacityProfileId,
     product::{InstanceV1, InstanceV1Input, PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1},
     result_domain::{FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1, FiniteResultDomainV1},
 };
-use dclutch_pyth_svm::{
+use dclutch_source::pyth::{
     FULL_PRICE_UPDATE_V2_LEN, PYTH_RELEASE_V1_ENCODED_LEN, PythReleaseV1, PythReleaseV1Input,
     RECEIVER_CONFIG_V2_DISCRIMINATOR, RECEIVER_CONFIG_V2_LEN,
     price_update::PRICE_UPDATE_V2_DISCRIMINATOR,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{
     ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1, ArtifactActivationInputV1,
     ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
     ExecutionReleaseActivationInputsV1, activate_execution_release_set_v1,
 };
-use dclutch_registry_svm::LOADER_V3_PROGRAMDATA_METADATA_BYTES;
-use dclutch_release_set_contract::{
+use dclutch_registry::svm::LOADER_V3_PROGRAMDATA_METADATA_BYTES;
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
     ProgramIdentityV1,
 };
-use dclutch_resolution_codec::{
+use dclutch_source::resolution::{
     ACCEPT_PYTH_REQUEST_BYTES, AcceptPythRequestV1, FUNDED_TRANSITION_REQUEST_BYTES,
     FundedTransitionActionV3, FundedTransitionRequestV3, PRIMARY_CERTIFICATE_SEQUENCE_V3,
     PYTH_RELEASE_RECORD_SCHEMA_ID_V1, RESOLUTION_CERTIFICATE_BYTES,
     RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
 };
-use dclutch_source_contract::{
+use dclutch_source::{
     CapacityEnvelope, ContentId as SourceContentId, PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1,
     ProviderReleaseV1, PythAdapterConfigV1, RecoveryAttemptV1, RecoveryMaterialSlotV1,
     RecoveryPolicyV1, ResolutionPolicyV1, RoundingBoundary, SOURCE_MATERIAL_BYTES,
@@ -1151,7 +1151,7 @@ fn funded_fixture(action: FundedTransitionActionV3, prepare_prior: bool) -> Fund
         let material_data = base.accounts[6]
             .try_borrow_data()
             .expect("Source material data");
-        let material = dclutch_source_contract::SourceMaterialViewV1::decode(&material_data)
+        let material = dclutch_source::SourceMaterialViewV1::decode(&material_data)
             .expect("Source material");
         let mut state_data = base.accounts[0]
             .try_borrow_mut_data()

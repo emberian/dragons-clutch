@@ -8,10 +8,10 @@
 //! in `dclutch-resolution-proof-sbf` and produce exact account bytes rather
 //! than accepting a poststate digest supplied by a caller.
 
-use dclutch_market_core_codec::{Action, CoreState, Phase, REQUEST_BYTES, Readiness, Request};
-use dclutch_product_runtime_v2::ResultDomainV2;
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_resolution_codec::{
+use dclutch_market::{Action, CoreState, Phase, REQUEST_BYTES, Readiness, Request};
+use dclutch_product::ResultDomainV2;
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_source::resolution::{
     PROVIDER_EXECUTION_REQUEST_BYTES_V3, PROVIDER_RECLAIM_REQUEST_BYTES_V3,
     PROVIDER_SUBMIT_REQUEST_BYTES_V3, PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3,
     PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3, ProviderCallerV3,
@@ -20,7 +20,7 @@ use dclutch_resolution_codec::{
     ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_BYTES_V2,
     RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
-use dclutch_source_contract::{
+use dclutch_source::{
     ContentId as SourceContentId, SourceMaterialV3, SourceResolutionPhaseV1,
     SourceResolutionRouteV1, SourceResolutionStateV2, StatisticSpecV1,
 };
@@ -1188,12 +1188,12 @@ fn state(
 #[allow(clippy::indexing_slicing)]
 mod tests {
     use super::*;
-    use dclutch_market_core_codec::StateBumpsV1;
-    use dclutch_product_runtime_v2::{
+    use dclutch_market::StateBumpsV1;
+    use dclutch_product::{
         ContentId as ProductContentId, ResultDomainInputV2, compile_result_domain_v2,
         result_domain_record_bytes,
     };
-    use dclutch_source_contract::{
+    use dclutch_source::{
         CapacityEnvelope, RoundingBoundary, SOURCE_FAILURE_POLICY_RELEASE_ID_V2,
         SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SourceCapacityProfileV1, StatisticKind,
     };
@@ -1893,33 +1893,33 @@ mod tests {
         let release_set = key(149).to_bytes();
         let provider_release = key(150).to_bytes();
         let registry_id =
-            dclutch_market_core_codec::Identity::new(registry.to_bytes()).expect("registry");
+            dclutch_market::Identity::new(registry.to_bytes()).expect("registry");
         let market_id =
-            dclutch_market_core_codec::Identity::new(market_key.to_bytes()).expect("market");
+            dclutch_market::Identity::new(market_key.to_bytes()).expect("market");
         let market = CoreState {
             phase: Phase::Open,
             readiness: Readiness::Consumed,
             terminal_winner: 0,
-            identity: dclutch_market_core_codec::MarketIdentity {
+            identity: dclutch_market::MarketIdentity {
                 market_id,
-                realm_id: dclutch_market_core_codec::Identity::new(key(151).to_bytes())
+                realm_id: dclutch_market::Identity::new(key(151).to_bytes())
                     .expect("realm"),
-                product_record: dclutch_market_core_codec::Identity::new(product_record.to_bytes())
+                product_record: dclutch_market::Identity::new(product_record.to_bytes())
                     .expect("product record"),
-                product_id: dclutch_market_core_codec::Identity::new(product_identity.to_bytes())
+                product_id: dclutch_market::Identity::new(product_identity.to_bytes())
                     .expect("product"),
-                resolution_policy: dclutch_market_core_codec::Identity::new(material_id)
+                resolution_policy: dclutch_market::Identity::new(material_id)
                     .expect("material"),
-                capability_manifest: dclutch_market_core_codec::Identity::new(key(152).to_bytes())
+                capability_manifest: dclutch_market::Identity::new(key(152).to_bytes())
                     .expect("manifest"),
-                selected_release_set: dclutch_market_core_codec::Identity::new(release_set)
+                selected_release_set: dclutch_market::Identity::new(release_set)
                     .expect("release set"),
                 registry_program: registry_id,
                 generation,
             },
             outstanding_capabilities: 0,
             principal_cap_sets: 1,
-            rent_beneficiary: dclutch_market_core_codec::Identity::new(key(153).to_bytes())
+            rent_beneficiary: dclutch_market::Identity::new(key(153).to_bytes())
                 .expect("beneficiary"),
             terminal_receipt: None,
             bumps: StateBumpsV1::UNRECORDED,

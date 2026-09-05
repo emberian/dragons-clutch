@@ -21,7 +21,7 @@ pub use wire::{
     verify_source_close_receipt_json_v1,
 };
 
-use dclutch_market_core_codec::{CoreState, Phase, Readiness};
+use dclutch_market::{CoreState, Phase, Readiness};
 use dclutch_resolution_core_v3_operator::{
     Finality, ObservedAccount, ResolutionActivateFundReportV1, ResolutionActivateFundSnapshotV1,
     ResolutionAdmitTerminalReportV3, ResolutionAdmitTerminalSnapshotV3,

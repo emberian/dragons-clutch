@@ -99,7 +99,7 @@
     "push_oracle": "8xAeURaAWExxyHUXJSgjsg5r96Ydr3G4cek2if7imQmz",
     "receiver_config": "DaWUKXCyXsnzcvLUyeJRWou8KTn7XtadgTsdhJ6RHS7b",
     "price_update": "7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE",
-    "declaration_source": "crates/dclutch-pyth-svm/src/sponsored_push.rs",
+    "declaration_source": "crates/dclutch-source/src/pyth/sponsored_push.rs",
     "config_bytes": "370",
     "config_discriminator": "9b0caae01efacc82"
   },

@@ -16,7 +16,7 @@ import { type SolanaRpcClient } from './rpc';
  *
  * One record is one hop. This module walks them into a history.
  *
- * The layout below mirrors `crates/dclutch-registry-contract/src/lineage.rs`
+ * The layout below mirrors `crates/dclutch-registry/src/lineage.rs`
  * and the walk mirrors `lineage_walk.rs`, refusal for refusal. Neither is
  * generated: no emitter covers this record yet, which is why
  * `apps/dclutch-web/scripts/explorer-coverage.exempt.json` still exempts

@@ -11,13 +11,13 @@ use std::time::Duration;
 use std::{fs::OpenOptions, io::Write};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, Phase, Readiness};
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2, Phase, Readiness};
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetViewV1,
 };
-use dclutch_relay_contract::{
+use dclutch_source::relay::{
     RELAYED_ADAPTER_CONFIG_BYTES, RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_ID_V1,
     RELAYED_ATTESTATION_HEAD_BYTES, RELAYED_FAMILY_RELEASE_ID_V1,
     RELAYED_RECORD_TRANSPORT_PROFILE_ID_V1, RELAYED_SEAL_BYTES, RELAYER_KEY_SET_BYTES,
@@ -35,8 +35,8 @@ use dclutch_relay_contract::{
     release::{SET_DIGEST_SEED_PREIMAGE_BYTES, encode_set_digest_seed_preimage_v1},
     wire::{AttestationMessageV1, ObservationSetSealV1},
 };
-use dclutch_release_set_contract::ExecutionRoleV1;
-use dclutch_source_contract::{
+use dclutch_registry::release_set::ExecutionRoleV1;
+use dclutch_source::{
     PROVIDER_RELEASE_BYTES, PROVIDER_RELEASE_SCHEMA_ID_V1, ProviderReleaseV1,
     SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_MATERIAL_V3_BYTES, SOURCE_SPEC_BYTES,
     SOURCE_SPEC_SCHEMA_ID_V1, SourceAccessProfile, SourceMaterialV3, SourceSpecV1,
@@ -892,7 +892,7 @@ async fn discover_and_authenticate(
         .map_err(|error| RelayerError::config(format!("WindowSpecV1 refused: {error:?}")))?;
     window_value
         .validate_source(
-            dclutch_source_contract::ContentId::new(source_spec_id)
+            dclutch_source::ContentId::new(source_spec_id)
                 .map_err(|error| RelayerError::config(format!("source identity: {error:?}")))?,
         )
         .map_err(|error| RelayerError::config(format!("Window/Source join: {error:?}")))?;
@@ -1425,7 +1425,7 @@ fn authenticate_final_frame(
         .map_err(|error| RelayerError::config(format!("WindowSpecV1 refused: {error:?}")))?;
     window
         .validate_source(
-            dclutch_source_contract::ContentId::new(source_spec_id)
+            dclutch_source::ContentId::new(source_spec_id)
                 .map_err(|error| RelayerError::config(format!("source identity: {error:?}")))?,
         )
         .map_err(|error| RelayerError::config(format!("Window/Source join refused: {error:?}")))?;
@@ -2131,7 +2131,7 @@ const fn role_name(name: RelayAccountNameV1) -> &'static str {
 mod tests {
     use super::*;
     use crate::config::PositionConfig;
-    use dclutch_relay_contract::{
+    use dclutch_source::relay::{
         SHA256_EMPTY_DIGEST,
         record::{
             RelayedRecordBindingV1, append_relayed_observation_in_place_v1,

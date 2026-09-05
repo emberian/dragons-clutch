@@ -5,16 +5,16 @@
 //! emits the sole admitted Trading instruction, and verifies return data plus
 //! every full token and immutable poststate.
 
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
 };
-use dclutch_claims_svm::{
+use dclutch_claims::{
     liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
     },
     protocol_position_v2::ProtocolPositionSeedsV2,
 };
-use dclutch_direct_codec::{
+use dclutch_trading::{
     execution_v3::DIRECT_SUCCESSOR_KIND_ID_V3,
     successor::{
         DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, DIRECT_ROOT_STATE_BYTES_V1, DirectExecutionConfigV1,
@@ -28,15 +28,15 @@ use dclutch_direct_codec::{
         direct_token_setup_frame_digest_v1,
     },
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, StateBumpsV1,
 };
-use dclutch_realm_contract::{
+use dclutch_market::realm::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::ACTIVATION_PDA_DOMAIN_V1;
-use dclutch_token_svm::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::ACTIVATION_PDA_DOMAIN_V1;
+use dclutch_custody::token_svm::{
     ACCOUNT_BYTES, COption, PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID, TokenAccount,
 };
 use solana_program::{hash::hash, rent::Rent};
@@ -673,11 +673,11 @@ fn refusal(message: impl Into<String>) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use dclutch_capability_program_contract::SelectedRecordBumpsV1;
+    use dclutch_market::capability_program::SelectedRecordBumpsV1;
     use dclutch_core_contract::ContentId;
-    use dclutch_market_core_codec::{Identity, MarketIdentity, Readiness};
-    use dclutch_realm_contract::{FreezeAuthorityPolicy, MintAuthorityPolicy, RealmV1Input};
-    use dclutch_release_set_contract::CapabilityExecutionSelectionV1;
+    use dclutch_market::{Identity, MarketIdentity, Readiness};
+    use dclutch_market::realm::{FreezeAuthorityPolicy, MintAuthorityPolicy, RealmV1Input};
+    use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
 
     use super::*;
 
@@ -816,8 +816,8 @@ mod tests {
         )
         .0;
         let mut aggregate = vec![0; 272];
-        dclutch_claims_svm::liability_basis_state_v2::encode_liability_basis_market_into_v2(
-            dclutch_claims_svm::liability_basis_state_v2::LiabilityBasisMarketInputV2 {
+        dclutch_claims::liability_basis_state_v2::encode_liability_basis_market_into_v2(
+            dclutch_claims::liability_basis_state_v2::LiabilityBasisMarketInputV2 {
                 revision: 1,
                 logical_market: market_key.to_bytes(),
                 release_set: id(7),
@@ -833,8 +833,8 @@ mod tests {
         )
         .expect("aggregate");
         let mut position = vec![0; 144];
-        dclutch_claims_svm::liability_basis_state_v2::encode_liability_basis_position_into_v2(
-            dclutch_claims_svm::liability_basis_state_v2::LiabilityBasisPositionInputV2 {
+        dclutch_claims::liability_basis_state_v2::encode_liability_basis_position_into_v2(
+            dclutch_claims::liability_basis_state_v2::LiabilityBasisPositionInputV2 {
                 revision: 1,
                 market_account: aggregate_key.to_bytes(),
                 owner: seller.to_bytes(),
@@ -896,7 +896,7 @@ mod tests {
         .0;
         let activation_cache =
             Pubkey::find_program_address(&[ACTIVATION_PDA_DOMAIN_V1, &id(7)], &registry).0;
-        let mut mint = vec![0; dclutch_token_svm::MINT_BYTES];
+        let mut mint = vec![0; dclutch_custody::token_svm::MINT_BYTES];
         mint[45] = 1;
         Fixture {
             market,
@@ -1018,7 +1018,7 @@ mod tests {
             .is_err()
         );
         let mut foreign_mint = fixture.input();
-        let hostile_mint = vec![0; dclutch_token_svm::MINT_BYTES];
+        let hostile_mint = vec![0; dclutch_custody::token_svm::MINT_BYTES];
         foreign_mint.collateral_mint_bytes = &hostile_mint;
         assert!(build_direct_trade_token_setup_v1(foreign_mint).is_err());
     }

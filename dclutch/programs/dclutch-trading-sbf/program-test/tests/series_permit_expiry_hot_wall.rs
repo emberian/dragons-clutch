@@ -12,16 +12,16 @@
 
 use std::{env, fs, path::Path};
 
-use dclutch_capability_program_contract::hot_v3::{
+use dclutch_market::capability_program::hot_v3::{
     HOT_EXECUTION_ENVELOPE_BYTES_V3, HotExecutionEnvelopeV3,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_market_core_codec::{
+use dclutch_market::{
     FoundingIntentV5, Identity, SERIES_FOUNDING_PERMIT_BYTES_V1,
     SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1, STATE_BYTES, SeriesFoundingPermitSeedsV1,
     SeriesFoundingPermitV1, SeriesPermitExpiryRequestV1,
 };
-use dclutch_rent_contract::{
+use dclutch_market::rent::{
     RefundAuthority,
     lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleAccountIdV2, LifecycleRentCreditV2},
 };

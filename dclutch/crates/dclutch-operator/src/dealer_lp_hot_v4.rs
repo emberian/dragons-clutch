@@ -10,10 +10,10 @@ use crate::{
     Finality, Observation,
     direct_inline_v3::{CheckedHotOuterReleaseV3, ObservedAccountMetaV3},
 };
-use dclutch_account_profile_contract::v2::{
+use dclutch_vm::account_profile::v2::{
     AccountPrestateV2, AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2,
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     hot_v3::{
         HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACTIVATION_CACHE_ACCOUNT_V3,
         HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CORE_PROGRAM_ACCOUNT_V3, HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
@@ -33,19 +33,19 @@ use dclutch_capability_program_contract::{
     },
 };
 use dclutch_core_contract::ContentId;
-use dclutch_effect_kernel::v4::SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4;
-use dclutch_execution_strategy_contract::admitted_v3::{
+use dclutch_vm::effect::v4::SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4;
+use dclutch_market::execution_strategy::admitted_v3::{
     ADMITTED_ACCELERATOR_PROGRAM_ACCOUNT_V3, ADMITTED_STRATEGY_EVIDENCE_COUNT_V3,
     ADMITTED_STRATEGY_EVIDENCE_START_V3,
 };
-use dclutch_execution_strategy_contract::v2::{
+use dclutch_market::execution_strategy::v2::{
     AcceleratorTransportProfileV2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
     ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
 use dclutch_hot_bump_miner_v1::{
     HotBumpCorpusV1, activated_custody_program_v1, mine_hot_bump_hints_v1,
 };
-use dclutch_request_profile_contract::SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1;
+use dclutch_vm::request_profile::SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1;
 use dclutch_trading_sbf::{
     admitted_composition_v3::admitted_caller_authority_count_v3,
     dealer::{
@@ -67,7 +67,7 @@ use solana_program::{
 use solana_sdk_ids::sysvar;
 
 // The admitted CPI frame's evidence suffix is owned by
-// `dclutch_execution_strategy_contract::admitted_v3`, which derives every slot
+// `dclutch_market::execution_strategy::admitted_v3`, which derives every slot
 // from `ADMITTED_STRATEGY_EVIDENCE_START_V3` and pins the span's length to its
 // last named account. The coordinates below are that table read relative to the
 // start of the suffix, because `strategy_accounts` is the suffix, not the whole
@@ -411,7 +411,7 @@ fn validate_root_and_artifacts(
                 HOT_STRATEGY_RAW_ACCOUNT_V3,
             )?,
             transition: reference(
-                dclutch_transition_vm::v3::SCHEMA_RELEASE_ID,
+                dclutch_vm::v3::SCHEMA_RELEASE_ID,
                 HOT_TRANSITION_RAW_ACCOUNT_V3,
             )?,
             effect: reference(EFFECT_SCHEMA_ID_V4, HOT_EFFECT_RAW_ACCOUNT_V3)?,
@@ -571,7 +571,7 @@ fn account_meta(value: &ObservedAccountMetaV3) -> AccountMeta {
 #[cfg(test)]
 mod tests {
     use crate::ObservedAccount;
-    use dclutch_capability_program_contract::set_v2::{
+    use dclutch_market::capability_program::set_v2::{
         CapabilityProgramSetEntryV2, encode_program_set_v2, encoded_program_set_bytes_v2,
     };
 

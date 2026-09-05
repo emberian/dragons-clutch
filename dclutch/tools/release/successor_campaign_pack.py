@@ -410,7 +410,7 @@ def authority_values(root: Path) -> tuple[str, int, int]:
 def resolution_semantic_id(root: Path) -> str:
     path = root_path(
         root,
-        "source/crates/dclutch-resolution-codec/src/lib.rs",
+        "source/crates/dclutch-source/src/resolution/mod.rs",
         "Resolution release authority",
     )
     text = path.read_text()
@@ -1184,7 +1184,7 @@ def emit(arguments: argparse.Namespace) -> None:
             ),
             "resolution_release_authority": evidence(
                 root,
-                "source/crates/dclutch-resolution-codec/src/lib.rs",
+                "source/crates/dclutch-source/src/resolution/mod.rs",
                 "Resolution release authority",
             ),
             "roles": campaign,

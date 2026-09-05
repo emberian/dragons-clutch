@@ -36,21 +36,21 @@ use std::collections::BTreeMap;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 #[cfg(any(test, feature = "test-fixtures"))]
-use dclutch_capability_contract::ContentId;
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
-use dclutch_claims_svm::{
+use dclutch_market::capability_manifest::ContentId;
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_claims::{
     claim_check_v1::{ClaimCheckEscrowSeedsV1, ClaimCheckVaultSeedsV1},
     liability_basis_state_v2::{LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2},
     product_basis_terminal_v3::ProductClaimsTerminalAdmissionV3,
     protocol_position_v2::ProtocolPositionSeedsV2,
 };
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CallerRoleV1 as CustodyCallerRoleV1, CompartmentV1,
     CustodyReplaySeedsV1, CustodyVaultSeedsV1,
 };
 #[cfg(any(test, feature = "test-fixtures"))]
-use dclutch_custody_contract::{ContextV1, CustodyRequestV1, OperationV1};
-use dclutch_market_core_codec::{
+use dclutch_custody::{ContextV1, CustodyRequestV1, OperationV1};
+use dclutch_market::{
     CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, STATE_BYTES, StateBumpsV1,
 };
 use dclutch_operator::{
@@ -61,22 +61,22 @@ use dclutch_operator::{
         compile_wallet_terminal_payout_v0,
     },
 };
-use dclutch_product_payoff_v2_codec::{
+use dclutch_product::payoff::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3, runtime_v3::BasisKindV3,
 };
-use dclutch_product_runtime_v2_admission::{
+use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
 };
-use dclutch_rational_representation_v2_kernel::product_v3::TerminalScenarioV3;
-use dclutch_realm_contract::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_activation_auth_v1::{
+use dclutch_claims::rational_kernel::product_v3::TerminalScenarioV3;
+use dclutch_market::realm::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::activation_auth_v1::{
     activation_cache_address_v1, authenticate_activated_role_v1,
 };
 #[cfg(any(test, feature = "test-fixtures"))]
-use dclutch_release_set_contract::CallerAuthoritySeedsV1;
-use dclutch_release_set_contract::ExecutionRoleV1;
-use dclutch_representation_composition_v3_kernel::{
+use dclutch_registry::release_set::CallerAuthoritySeedsV1;
+use dclutch_registry::release_set::ExecutionRoleV1;
+use dclutch_claims::composition::{
     COMPOSITION_DESCRIPTOR_SCHEMA_ID_V3, COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
     COMPOSITION_GRAPH_SCHEMA_ID_V3, COMPOSITION_TRANSLATION_SCHEMA_ID_V3, RecordAdmissionV3,
 };
@@ -84,10 +84,10 @@ use dclutch_representation_composition_v3_operator::{
     CompositionOnlyChainObservationV3, CompositionOnlyObservationV3, FinalizedRecordObservationV3,
     ProductCompositionObservationV3, authenticate_composition_only_v3,
 };
-use dclutch_resolution_codec::{
+use dclutch_source::resolution::{
     RESOLUTION_CERTIFICATE_BYTES_V2, ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
-use dclutch_token_svm::{Mint, TokenProgram};
+use dclutch_custody::token_svm::{Mint, TokenProgram};
 use serde::{Deserialize, Serialize};
 use solana_address_lookup_table_interface::instruction::{
     create_lookup_table, extend_lookup_table,
@@ -1349,7 +1349,7 @@ fn nonzero_hex(value: &str, label: &str) -> Result<[u8; 32]> {
 fn position_revision(bytes: &[u8]) -> Result<u64> {
     u64_at(
         bytes,
-        dclutch_claims_svm::liability_basis_state_v2::LiabilityBasisPositionLayoutV2::REVISION,
+        dclutch_claims::liability_basis_state_v2::LiabilityBasisPositionLayoutV2::REVISION,
     )
 }
 
@@ -1372,7 +1372,7 @@ fn array_at<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N]> {
 pub mod tests {
     use std::borrow::Cow;
 
-    use dclutch_claims_svm::{
+    use dclutch_claims::{
         CallerRole,
         terminal_settlement_v3::{TerminalSettlementRequestInputV3, TerminalSettlementRequestV3},
     };
@@ -1637,7 +1637,7 @@ pub mod tests {
     }
 
     fn terminal_core(winner: u32) -> CoreState {
-        use dclutch_market_core_codec::{Identity, MarketIdentity, Phase, Readiness};
+        use dclutch_market::{Identity, MarketIdentity, Phase, Readiness};
 
         let identity = |byte| Identity::new([byte; 32]).expect("nonzero identity");
         CoreState {

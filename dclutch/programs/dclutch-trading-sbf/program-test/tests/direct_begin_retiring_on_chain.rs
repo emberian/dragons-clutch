@@ -47,19 +47,19 @@
 //! route. What matters is that the figure EXISTS, because until this file it
 //! did not.
 
-use dclutch_account_profile_contract::ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1;
-use dclutch_capability_contract::{
+use dclutch_vm::account_profile::ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1;
+use dclutch_market::capability_manifest::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
     CapabilityEntryV1, CapabilityManifestV1, CompartmentFundingV1,
     ContentId as CapabilityContentId, FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES,
     MAX_DEPENDENCIES_PER_CAPABILITY,
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
     set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, v4::CapabilityProgramV4,
 };
 use dclutch_core_contract::ContentId as CoreContentId;
-use dclutch_direct_codec::{
+use dclutch_trading::{
     begin_retiring_bundle_v1::{
         direct_begin_retiring_account_profile_schema_v1,
         direct_begin_retiring_descriptor_schema_v1, direct_begin_retiring_effect_schema_v1,
@@ -103,12 +103,12 @@ use dclutch_direct_hot_program_test_support::{
         programdata_v2, start_with_substrate, submit_v0_observed,
     },
 };
-use dclutch_effect_kernel::v2::SCHEMA_RELEASE_ID as EFFECT_SCHEMA_RELEASE_ID_V2;
-use dclutch_market_core_codec::{
+use dclutch_vm::effect::v2::SCHEMA_RELEASE_ID as EFFECT_SCHEMA_RELEASE_ID_V2;
+use dclutch_market::{
     CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
     STATE_BYTES, StateBumpsV1,
 };
-use dclutch_record_contract::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
+use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
 use dclutch_trading_sbf::TradingSbfError;
 use solana_account::Account;
 use solana_program::{
@@ -193,7 +193,7 @@ struct Record {
 /// Derive one finalized record's raw/staging pair under the Registry, exactly
 /// the way `authenticate_finalized_record` re-derives it.
 ///
-/// The seed tuple is NOT restated here: `dclutch-record-contract` owns the
+/// The seed tuple is NOT restated here: `dclutch-registry::record` owns the
 /// domain constants and exports the constructors that place them, so this
 /// reader takes the domain from `seeds.domain()` rather than naming it. A
 /// second spelling is a second source of truth (`DOMAIN_RAW_RESTATEMENT`).
@@ -436,7 +436,7 @@ fn build_case(
         manifest,
     );
 
-    let selection = dclutch_release_set_contract::CapabilityExecutionSelectionV1::new(
+    let selection = dclutch_registry::release_set::CapabilityExecutionSelectionV1::new(
         ENTRY_INDEX,
         content(manifest_record.digest),
         content(ordinary.kind().to_bytes()),

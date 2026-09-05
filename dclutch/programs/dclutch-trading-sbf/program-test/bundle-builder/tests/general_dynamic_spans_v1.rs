@@ -13,7 +13,7 @@
 //! admissible under exactly one strategy disposition. Both facts are executed
 //! below rather than asserted in prose.
 
-use dclutch_account_profile_contract::v2::AccountProfileV2;
+use dclutch_vm::account_profile::v2::AccountProfileV2;
 use dclutch_chain_bundle_builder::{
     BuilderError, WaistFactsV1,
     general::{
@@ -23,16 +23,16 @@ use dclutch_chain_bundle_builder::{
     profile_ops,
     registers::{SpanWidthInputV1, derive_dynamic_span_widths},
 };
-use dclutch_effect_kernel::v4::ProgramV4 as EffectProgramV4;
-use dclutch_execution_strategy_contract::shadow_v3::{
+use dclutch_vm::effect::v4::ProgramV4 as EffectProgramV4;
+use dclutch_market::execution_strategy::shadow_v3::{
     SHADOW_ACK_SCHEMA_ID_V3, SHADOW_REQUEST_SCHEMA_ID_V3,
 };
-use dclutch_execution_strategy_contract::v2::{
+use dclutch_market::execution_strategy::v2::{
     ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2, BankTransportV2,
     EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
     ExecutionStrategyProgramV2, StrategyDispositionV2, classify_bank_transport_v2,
 };
-use dclutch_general_adapter_contract::{
+use dclutch_trading::general::{
     account_rules_v3::{
         GeneralExternalAccountWidthsV3, encode_general_account_profile_v3_atomic,
         general_account_profile_bytes_v3, general_account_profile_fixed_count_v3,
@@ -69,15 +69,15 @@ use dclutch_general_adapter_contract::{
     specialization::{general_request_profile_bytes_v1, general_request_profile_v1},
     state_seeds_v3::GeneralStateAddressSeedsV3,
 };
-use dclutch_general_codec::{
+use dclutch_trading::general_codec::{
     Action, MAX_SELECTION_CRITERIA, SelectionCriterion, SelectionPolicyV1,
     successor_request_v2::ControllerRequestV2, successor_request_v3::ControllerRequestV3,
 };
-use dclutch_general_config_contract::{
+use dclutch_trading::general_config::{
     GeneralRootV2,
     v3::{GeneralConfigV3, GeneralConfigV3Input},
 };
-use dclutch_request_profile_contract::{
+use dclutch_vm::request_profile::{
     ProjectionRegisterKindV1, ProjectionRegisterSpaceV1, ProjectionTargetV1, RequestProfileV1,
     SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1, validate_request,
 };
@@ -172,7 +172,7 @@ fn strategy(disposition: StrategyDispositionV2) -> Vec<u8> {
     };
     ExecutionStrategyProgramV2::new(
         disposition,
-        content(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID),
+        content(dclutch_vm::v3::SCHEMA_RELEASE_ID),
         content([0x41; 32]),
         content(EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2),
         (disposition != StrategyDispositionV2::Interpreted).then(|| content([0x42; 32])),
@@ -253,7 +253,7 @@ fn derive(
         request_profile_bytes: &set.request_profile,
         request_profile_schema: REQUEST_PROFILE_SCHEMA_ID_V1,
         effect_bytes: &set.effect,
-        effect_schema: dclutch_effect_kernel::v4::SCHEMA_RELEASE_ID_V4,
+        effect_schema: dclutch_vm::effect::v4::SCHEMA_RELEASE_ID_V4,
         strategy_bytes,
         waist: waist(),
         tail_count: outcome_count,
@@ -739,7 +739,7 @@ fn effect_v3(action: Action) -> Vec<u8> {
     let bytes = general_effect_program_bytes_v3(action).expect("base effect width");
     let mut scratch = vec![0_u8; bytes];
     let mut output = vec![0_u8; bytes];
-    dclutch_general_adapter_contract::effect_artifacts_v3::encode_general_effect_program_v3_atomic(
+    dclutch_trading::general::effect_artifacts_v3::encode_general_effect_program_v3_atomic(
         action,
         &mut instructions,
         &mut templates,
@@ -764,7 +764,7 @@ fn effect_v3(action: Action) -> Vec<u8> {
 /// THIS TEST IS CURRENTLY RED, and it is red because the protocol contradicts
 /// itself rather than because the check is wrong:
 ///
-/// - `dclutch_general_adapter_contract::artifacts_v3` admission REQUIRES
+/// - `dclutch_trading::general::artifacts_v3` admission REQUIRES
 ///   `account.item_account_stride() == GENERAL_SCRATCH_PAGE_RULE_STRIDE_V3`
 ///   (1) and `effect.item_account_stride() == 0`, because under Profile13 the
 ///   item-rule table is repurposed as the dynamic fixed-span template bank and
@@ -781,7 +781,7 @@ fn effect_v3(action: Action) -> Vec<u8> {
 #[test]
 fn every_general_action_declares_one_register_geometry_across_its_four_artifacts() {
     let mut mismatches = 0_usize;
-    for action in dclutch_general_adapter_contract::release_v3::GENERAL_ACTIONS_V4 {
+    for action in dclutch_trading::general::release_v3::GENERAL_ACTIONS_V4 {
         let account_profile_bytes = account_profile(action);
         let request_profile_bytes = general_request_profile_bytes_v1(action).to_vec();
         let effect_bytes = effect_v3(action);
@@ -789,13 +789,13 @@ fn every_general_action_declares_one_register_geometry_across_its_four_artifacts
         let request_profile =
             RequestProfileV1::decode(&request_profile_bytes).expect("RequestProfile");
         let effect =
-            dclutch_effect_kernel::v3::ProgramV3::decode(&effect_bytes).expect("EffectProgram V3");
+            dclutch_vm::effect::v3::ProgramV3::decode(&effect_bytes).expect("EffectProgram V3");
         let transition_bytes =
-            dclutch_general_adapter_contract::transition_artifacts_v3::general_transition_program_bytes_lean_v3(
+            dclutch_trading::general::transition_artifacts_v3::general_transition_program_bytes_lean_v3(
                 action,
             );
         let transition =
-            dclutch_transition_vm::v3::ProgramV3::decode(transition_bytes).expect("Transition");
+            dclutch_vm::v3::ProgramV3::decode(transition_bytes).expect("Transition");
         for (label, left, right) in [
             (
                 "fixed_account_count account/effect",

@@ -11,7 +11,7 @@ pub mod chain;
 pub mod fixture;
 pub mod waist;
 
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     set_v2::{
         CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, SelectorWidthV2,
         encode_program_set_v2, encoded_program_set_bytes_v2,
@@ -23,8 +23,8 @@ use dclutch_capability_program_contract::{
     },
 };
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::CustodyReplayLayoutV1;
-use dclutch_direct_codec::{
+use dclutch_custody::CustodyReplayLayoutV1;
+use dclutch_trading::{
     execution_v3::DirectExecutionActionV3,
     ordinary_account_artifacts_v3::DirectInlineOrdinaryAccountProfileInputV3,
     ordinary_bundle_v4::{
@@ -37,10 +37,10 @@ use dclutch_direct_codec::{
     },
     ordinary_geometry_v3::DirectOrdinaryGeometryV3,
 };
-use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
-use dclutch_registry_contract::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
-use dclutch_registry_svm::LOADER_V3_PROGRAM_BYTES;
-use dclutch_rent_contract::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
+use dclutch_product::admission::PRODUCT_RECORD_BYTES_V2;
+use dclutch_registry::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
+use dclutch_registry::svm::LOADER_V3_PROGRAM_BYTES;
+use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
 use sha2::{Digest, Sha256};
 
 /// Capacity-profile identity used only by this reproducible ProgramTest fixture.
@@ -183,7 +183,7 @@ pub fn with_stale_lifecycle_v4_schema(
     copy32(
         &mut bundle.descriptor,
         CAPABILITY_PROGRAM_V4_LIFECYCLE_SCHEMA_OFFSET,
-        dclutch_account_profile_contract::lifecycle_v3::SUCCESSOR_SCHEMA_RELEASE_ID,
+        dclutch_vm::account_profile::lifecycle_v3::SUCCESSOR_SCHEMA_RELEASE_ID,
     );
     bundle
 }
@@ -203,27 +203,27 @@ fn direct_logical_data_lengths_v5(
     put_width(
         &mut output,
         0,
-        dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1
-            .checked_add(dclutch_direct_codec::successor::DIRECT_ROOT_STATE_BYTES_V1)
+        dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1
+            .checked_add(dclutch_trading::successor::DIRECT_ROOT_STATE_BYTES_V1)
             .ok_or(DirectHotFixtureErrorV5::InvalidWidth)?,
     )?;
     put_width(
         &mut output,
         1,
-        dclutch_direct_codec::successor::DIRECT_EXECUTION_CONFIG_BYTES_V1,
+        dclutch_trading::successor::DIRECT_EXECUTION_CONFIG_BYTES_V1,
     )?;
     put_width(&mut output, 2, PRODUCT_RECORD_BYTES_V2)?;
     put_geometry_width(&mut output, 3, geometry.portfolio_record_bytes())?;
     put_width(
         &mut output,
         4,
-        dclutch_product_payoff_v2_codec::runtime_v3::BASIS_HEADER_BYTES_V3,
+        dclutch_product::payoff::runtime_v3::BASIS_HEADER_BYTES_V3,
     )?;
     for coordinate in [5_usize, 8] {
         put_width(
             &mut output,
             coordinate,
-            dclutch_direct_codec::successor::DIRECT_MAKER_REPLAY_BYTES_V1,
+            dclutch_trading::successor::DIRECT_MAKER_REPLAY_BYTES_V1,
         )?;
     }
     put_width(&mut output, 7, LIFECYCLE_RENT_CREDIT_BYTES_V2)?;
@@ -238,7 +238,7 @@ fn direct_logical_data_lengths_v5(
     *output
         .get_mut(22)
         .ok_or(DirectHotFixtureErrorV5::InvalidWidth)? = 17;
-    put_width(&mut output, 23, dclutch_market_core_codec::STATE_BYTES)?;
+    put_width(&mut output, 23, dclutch_market::STATE_BYTES)?;
     put_width(&mut output, 24, ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1)?;
     for coordinate in [25_usize, 26, 28, 30] {
         put_width(&mut output, coordinate, LOADER_V3_PROGRAM_BYTES)?;
@@ -264,7 +264,7 @@ fn direct_logical_data_lengths_v5(
     alias_width(&mut output, 37, 25)?;
     alias_width(&mut output, 38, 26)?;
     alias_width(&mut output, 39, 27)?;
-    put_width(&mut output, 40, dclutch_realm_contract::REALM_BYTES)?;
+    put_width(&mut output, 40, dclutch_market::realm::REALM_BYTES)?;
     put_width(&mut output, 42, CustodyReplayLayoutV1::BYTES)?;
     *output
         .get_mut(43)
@@ -360,7 +360,7 @@ fn put_width(
 fn put_geometry_width(
     output: &mut [u32],
     coordinate: usize,
-    value: Result<u32, dclutch_direct_codec::ordinary_geometry_v3::DirectOrdinaryGeometryErrorV3>,
+    value: Result<u32, dclutch_trading::ordinary_geometry_v3::DirectOrdinaryGeometryErrorV3>,
 ) -> Result<(), DirectHotFixtureErrorV5> {
     *output
         .get_mut(coordinate)
@@ -400,8 +400,8 @@ fn copy32(output: &mut [u8], offset: usize, value: [u8; 32]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_account_profile_contract::v2::AccountProfileV2;
-    use dclutch_direct_codec::{
+    use dclutch_vm::account_profile::v2::AccountProfileV2;
+    use dclutch_trading::{
         ordinary_artifacts_v3::{
             DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_ID_V3, DIRECT_INLINE_ORDINARY_STRATEGY_ID_V3,
             DIRECT_INLINE_ORDINARY_TRANSITION_ID_V3,

@@ -25,7 +25,7 @@
  *     format, which is what `SBF program panicked` actually is.
  *   - `solana-program-entrypoint/src/lib.rs` — `HEAP_START_ADDRESS` and
  *     `HEAP_LENGTH`, the heap a transaction gets without asking, plus
- *     `crates/dclutch-sbf-bump-heap/src/lib.rs` for the ceiling and
+ *     `crates/dclutch-sbf-runtime/src/lib.rs` for the ceiling and
  *     granularity of a `RequestHeapFrame`. The allocator owns those two, and
  *     `entrypoint_adapter.rs` re-exports them under its own long-standing
  *     names; reading the adapter got a name, not a number.
@@ -49,7 +49,7 @@ import { fileURLToPath } from 'node:url';
 const root = new URL('../../../', import.meta.url);
 const outputUrl = new URL('../lib/generated/sbfRuntimeV1.ts', import.meta.url);
 const lockSource = readFileSync(new URL('Cargo.lock', root), 'utf8');
-const heapSource = readFileSync(new URL('crates/dclutch-sbf-bump-heap/src/lib.rs', root), 'utf8');
+const heapSource = readFileSync(new URL('crates/dclutch-sbf-runtime/src/lib.rs', root), 'utf8');
 const adapterSource = readFileSync(
   new URL('programs/dclutch-trading-sbf/src/entrypoint_adapter.rs', root),
   'utf8',
@@ -169,7 +169,7 @@ for (const [adapterName, allocatorName] of [
   ['HEAP_FRAME_GRANULARITY_BYTES', 'HEAP_FRAME_GRANULARITY_BYTES_V1'],
   ['ADAPTER_DEFAULT_HEAP_BYTES', 'DEFAULT_HEAP_BYTES_V1'],
 ]) {
-  if (!adapterSource.includes(`const ${adapterName}: usize = dclutch_sbf_bump_heap::${allocatorName};`)) {
+  if (!adapterSource.includes(`const ${adapterName}: usize = dclutch_sbf_runtime::${allocatorName};`)) {
     throw new Error(`the Trading adapter no longer takes ${adapterName} from the allocator's ${allocatorName}`);
   }
 }
@@ -221,7 +221,7 @@ if (!syscallFormats.some((entry) => entry.variant === 'Abort')) throw new Error(
 const ts = (value) => JSON.stringify(value);
 const lines = [];
 lines.push('// @generated from the pinned solana-sbpf, solana-syscalls and solana-program-entrypoint');
-lines.push('// crates plus crates/dclutch-sbf-bump-heap/src/lib.rs; do not edit.');
+lines.push('// crates plus crates/dclutch-sbf-runtime/src/lib.rs; do not edit.');
 lines.push('// Regenerate with: npm run abi:sbf-runtime');
 lines.push('');
 lines.push('/** The runtime crate versions this vocabulary was read from. */');

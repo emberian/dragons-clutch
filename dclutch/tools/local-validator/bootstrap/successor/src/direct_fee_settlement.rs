@@ -46,13 +46,13 @@ use solana_sdk::{
 };
 
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::CustodyReplayV1;
-use dclutch_direct_codec::fee_settlement_v1::{
+use dclutch_custody::CustodyReplayV1;
+use dclutch_trading::fee_settlement_v1::{
     DirectFeeProjectionV1, DirectFeeSettlementRequestV1, project_direct_fee_request_v1,
 };
-use dclutch_direct_codec::successor::MakerReplayRootV1;
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_token_svm::TokenAccount;
+use dclutch_trading::successor::MakerReplayRootV1;
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_custody::token_svm::TokenAccount;
 
 use crate::campaign::read_keypair_file;
 use crate::cluster::ClusterOriginV1;
@@ -727,7 +727,7 @@ mod tests {
     /// rather than as an unaddressable PDA at send time.
     #[test]
     fn the_custody_transfer_coordinates_are_where_the_frame_spec_puts_them() {
-        use dclutch_custody_contract::{
+        use dclutch_custody::{
             CustodyFrameRoleV1, CustodyFrameSpecV1, OperationV1, TRANSFER_ACCOUNT_COUNT_V1,
         };
         let spec = CustodyFrameSpecV1::new(OperationV1::Transfer);

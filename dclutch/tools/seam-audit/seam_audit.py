@@ -429,8 +429,8 @@ def match_line(match: dict) -> int:
 def crate_of(path: str) -> str:
     """The owning unit of a source path: the crate root, not the file.
 
-    A domain declared in ``crates/dclutch-record-contract/src/lib.rs`` is owned
-    by ``crates/dclutch-record-contract``, and every module inside that crate is
+    A domain declared in ``crates/dclutch-registry/src/record/mod.rs`` is owned
+    by ``crates/dclutch-registry``, and every module inside that crate is
     a legitimate author of its seed tuples.
     """
 

@@ -11,8 +11,8 @@ extern crate alloc;
 use alloc::{vec, vec::Vec};
 use core::convert::TryFrom;
 
-use dclutch_claims_svm::frame_spec_v1::ClaimsFrameSpecV1;
-pub use dclutch_claims_svm::protocol_position_v2::{
+use dclutch_claims::frame_spec_v1::ClaimsFrameSpecV1;
+pub use dclutch_claims::protocol_position_v2::{
     PROTOCOL_POSITION_ADMISSION_BYTES_V2, PROTOCOL_POSITION_ADMISSION_MAGIC_V2,
     PROTOCOL_POSITION_ADMISSION_SEED_V2, PROTOCOL_POSITION_CLOSE_RECEIPT_BYTES_V2,
     PROTOCOL_POSITION_CLOSE_RECEIPT_MAGIC_V2, PROTOCOL_POSITION_CLOSE_RESOURCE_DOMAIN_V2,
@@ -23,16 +23,16 @@ pub use dclutch_claims_svm::protocol_position_v2::{
     ProtocolPositionCloseEvidenceV2, ProtocolPositionCloseReceiptV2, ProtocolPositionOwnerKindV2,
     ProtocolPositionPresenceV2, ProtocolPositionRequestV2, ProtocolPositionSeedsV2,
 };
-use dclutch_claims_svm::{
+use dclutch_claims::{
     composition_v3::validate_sparse_close_receipt_v3,
     liability_basis_state_v2::put_liability_basis_position_bump_v2,
     sparse_native_transfer_v1::{
         SPARSE_NATIVE_TRANSFER_RECEIPT_BYTES_V1, SparseNativeTransferReceiptV1,
     },
 };
-use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV3};
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_rent_contract::lifecycle_v2::LifecycleRentCreditV2;
+use dclutch_product::svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV3};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
@@ -58,10 +58,10 @@ use crate::liability_basis_v2::{
 
 /// Exact admission account count.
 pub const PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V2: usize =
-    dclutch_claims_svm::frame_spec_v1::PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V1 as usize;
+    dclutch_claims::frame_spec_v1::PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V1 as usize;
 /// Exact close account count.
 pub const PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V2: usize =
-    dclutch_claims_svm::frame_spec_v1::PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V1 as usize;
+    dclutch_claims::frame_spec_v1::PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V1 as usize;
 
 const AUTHORITY: usize = 0;
 const MARKET: usize = 1;
@@ -1094,7 +1094,7 @@ fn authenticate_vacancy(
         //
         // The floor is what the request already means. `ProtocolPositionRequestV2`
         // refuses `observed_* < *_rent_principal` on encode
-        // (`crates/dclutch-claims-svm/src/protocol_position_v2.rs:473-478`,
+        // (`crates/dclutch-claims/src/protocol_position_v2.rs:473-478`,
         // pinned by `prepaid_creation_is_dust_tolerant_but_never_underfunded`),
         // so `declared >= principal` already holds and `live >= declared` is the
         // only thing this site has to establish. Underfunding still refuses

@@ -175,7 +175,7 @@ export function rangeProtectionBackingV1(product: RangeProtectionProductV1, prin
  *
  * The shipped wizard sent `cutDenominator=100` with edges `12000/18000` — a
  * band at 120.00 to 180.00 — for a coordinate whose Source returns raw
- * provider price atoms unrescaled (`crates/dclutch-source-contract/src/lib.rs`
+ * provider price atoms unrescaled (`crates/dclutch-source/src/lib.rs`
  * line 612). A Pyth SOL/USD observation is on the order of 10^10 there, so the
  * whole band sits three orders of magnitude below anything the market can ever
  * observe. `crates/dclutch-product-compiler/src/partition_quality.rs` now

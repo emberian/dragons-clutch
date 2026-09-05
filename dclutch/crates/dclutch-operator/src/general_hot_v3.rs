@@ -7,14 +7,14 @@
 //! v0 message through one exact canonical lookup table. It performs no RPC,
 //! signing, submission, or account mutation.
 
-use dclutch_account_profile_contract::lifecycle_v3::{
+use dclutch_vm::account_profile::lifecycle_v3::{
     CoordinateScopeV3, LifecycleOperationV3, LifecycleRegisterKindV3, LifecycleRegistersV3,
     LifecycleSeedInputValueV3, SelectedLifecycleV3,
 };
-use dclutch_account_profile_contract::v2::{
+use dclutch_vm::account_profile::v2::{
     DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE, PhysicalAccountDataGeometryV2,
 };
-use dclutch_capability_program_contract::hot_v3::{
+use dclutch_market::capability_program::hot_v3::{
     DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
     HOT_ACTIVATION_CACHE_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CORE_PROGRAM_ACCOUNT_V3,
     HOT_DESCRIPTOR_RAW_ACCOUNT_V3, HOT_EFFECT_RAW_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3,
@@ -26,19 +26,19 @@ use dclutch_capability_program_contract::hot_v3::{
     HOT_TRADING_PROGRAM_ACCOUNT_V3, HOT_TRANSITION_RAW_ACCOUNT_V3, HotBumpHintsV1,
     HotExecutionEnvelopeV3,
 };
-use dclutch_capability_program_contract::v4::{CapabilityProgramV4, CapabilityRootAccountV4};
-use dclutch_effect_kernel::v2::FixedRole;
-use dclutch_execution_strategy_contract::admitted_v3::{
+use dclutch_market::capability_program::v4::{CapabilityProgramV4, CapabilityRootAccountV4};
+use dclutch_vm::effect::v2::FixedRole;
+use dclutch_market::execution_strategy::admitted_v3::{
     ADMITTED_ACCELERATOR_PROGRAM_ACCOUNT_V3, ADMITTED_ADMISSION_RAW_ACCOUNT_V3,
     ADMITTED_CERTIFICATE_RAW_ACCOUNT_V3, ADMITTED_STRATEGY_EVIDENCE_COUNT_V3,
     ADMITTED_STRATEGY_EVIDENCE_START_V3,
 };
-use dclutch_execution_strategy_contract::v2::{BankTransportV2, classify_bank_transport_v2};
-use dclutch_general_adapter_contract::artifacts_v3::{
+use dclutch_market::execution_strategy::v2::{BankTransportV2, classify_bank_transport_v2};
+use dclutch_trading::general::artifacts_v3::{
     GeneralArtifactBytesV3, GeneralArtifactSelectionV3, GeneralDecodedRequestV3,
     GeneralRequestWireV3, authenticate_general_artifacts_v3, decode_general_request_v3,
 };
-use dclutch_general_adapter_contract::{
+use dclutch_trading::general::{
     admitted_accelerator_v3::authenticate_frozen_selection_v3,
     candidate_v1::{
         CandidateVerifyRowBuffersV1, CandidateVerifyRowViewV1, GeneralCandidateV1,
@@ -80,11 +80,11 @@ use dclutch_general_adapter_contract::{
     },
     state_seeds_v3::GeneralStateRecipeV3,
 };
-use dclutch_general_codec::{
+use dclutch_trading::general_codec::{
     Action, SelectionPolicyV1,
     successor_request_v2::{CONTROLLER_REQUEST_BYTES_V2, ControllerRequestV2},
 };
-use dclutch_general_config_contract::{
+use dclutch_trading::general_config::{
     root::{GeneralLifecycleV2, GeneralRootV2},
     v3::GeneralConfigV3,
 };
@@ -114,7 +114,7 @@ use crate::{
 
 const HOT_RUNTIME_LOGICAL_PREFIX_V3: usize = 5;
 // The admitted CPI frame's evidence suffix is owned by
-// `dclutch_execution_strategy_contract::admitted_v3`, which derives every slot
+// `dclutch_market::execution_strategy::admitted_v3`, which derives every slot
 // from `ADMITTED_STRATEGY_EVIDENCE_START_V3` and pins the span's length to its
 // last named account. The coordinates below are that table read relative to the
 // start of the suffix, because `strategy_accounts` is the suffix, not the whole
@@ -1919,7 +1919,7 @@ fn readonly_local_state_body_v5(
 }
 
 fn project_child_routes_v5(
-    bundle: dclutch_general_adapter_contract::artifacts_v3::GeneralArtifactBundleV3<'_>,
+    bundle: dclutch_trading::general::artifacts_v3::GeneralArtifactBundleV3<'_>,
 ) -> Result<Vec<GeneralChildRouteV5>, GeneralHotOperatorErrorV3> {
     let mut output = Vec::with_capacity(usize::from(bundle.effect.route_count()));
     for route_index in 0..bundle.effect.route_count() {
@@ -2077,7 +2077,7 @@ fn authenticate_product_graph(
 
 fn validate_strategy_geometry(
     state: &GeneralHotStateV3,
-    bundle: dclutch_general_adapter_contract::artifacts_v3::GeneralArtifactBundleV3<'_>,
+    bundle: dclutch_trading::general::artifacts_v3::GeneralArtifactBundleV3<'_>,
 ) -> Result<(), GeneralHotOperatorErrorV3> {
     let caller_count = usize::try_from(selected_admitted_invocation_count_v3(bundle)?)
         .map_err(|_| GeneralHotOperatorErrorV3::Arithmetic)?;
@@ -2100,7 +2100,7 @@ fn validate_strategy_geometry(
 }
 
 fn selected_admitted_invocation_count_v3(
-    bundle: dclutch_general_adapter_contract::artifacts_v3::GeneralArtifactBundleV3<'_>,
+    bundle: dclutch_trading::general::artifacts_v3::GeneralArtifactBundleV3<'_>,
 ) -> Result<u32, GeneralHotOperatorErrorV3> {
     let scalar_count = bundle
         .effect
@@ -2131,7 +2131,7 @@ fn selected_admitted_invocation_count_v3(
 
 fn validate_runtime_geometry(
     state: &GeneralHotStateV3,
-    bundle: dclutch_general_adapter_contract::artifacts_v3::GeneralArtifactBundleV3<'_>,
+    bundle: dclutch_trading::general::artifacts_v3::GeneralArtifactBundleV3<'_>,
 ) -> Result<(), GeneralHotOperatorErrorV3> {
     let profile = bundle.account_profile;
     // ZERO SPANS. General's only dynamic span was the input scratch-page
@@ -2256,7 +2256,7 @@ fn logical_runtime_account(
 
 fn project_general_lifecycle_v5(
     state: &GeneralHotStateV3,
-    bundle: dclutch_general_adapter_contract::artifacts_v3::GeneralArtifactBundleV3<'_>,
+    bundle: dclutch_trading::general::artifacts_v3::GeneralArtifactBundleV3<'_>,
     request: GeneralDecodedRequestV3,
     trading_program: Pubkey,
 ) -> Result<GeneralLifecycleProjectionV3, GeneralHotOperatorErrorV3> {
@@ -2669,7 +2669,7 @@ fn local_state_kind_for_recipe_v5(
 /// subsumes every conjunct that was here and holds for all fifteen actions
 /// rather than for the three that declare quotes.
 fn selected_child_rent_widths_v5(
-    bundle: dclutch_general_adapter_contract::artifacts_v3::GeneralArtifactBundleV3<'_>,
+    bundle: dclutch_trading::general::artifacts_v3::GeneralArtifactBundleV3<'_>,
 ) -> Result<GeneralChildRentWidthsV5, GeneralHotOperatorErrorV3> {
     if usize::from(bundle.lifecycle_policy.current_rent_quote_count())
         != GENERAL_FAMILY_QUOTE_COUNT_V5
@@ -2724,7 +2724,7 @@ impl From<DerivedLifecycleStateV3> for GeneralLifecycleStateProjectionV3 {
 #[allow(clippy::too_many_arguments)]
 fn derive_lifecycle_state_v3(
     state: &GeneralHotStateV3,
-    profile: dclutch_account_profile_contract::v2::AccountProfileV2<'_>,
+    profile: dclutch_vm::account_profile::v2::AccountProfileV2<'_>,
     tail_count: u32,
     registers: LifecycleRegistersV3<'_>,
     selected: SelectedLifecycleV3<'_>,
@@ -2944,34 +2944,34 @@ fn signer_keys(accounts: &[AccountMeta]) -> Result<Vec<Pubkey>, GeneralHotOperat
 mod tests {
     use std::borrow::Cow;
 
-    use dclutch_account_profile_contract::lifecycle_v3::{
+    use dclutch_vm::account_profile::lifecycle_v3::{
         Error as LifecycleErrorV3, StateLifecyclePolicyV5,
     };
-    use dclutch_account_profile_contract::v2::encode::{
+    use dclutch_vm::account_profile::v2::encode::{
         AccountAliasInputV2, AccountPrivilegesV2, AccountRuleWithPrestateInputV2,
     };
-    use dclutch_execution_strategy_contract::admitted_v3::ADMITTED_RUNTIME_ACCOUNTS_START_V3;
-    use dclutch_general_adapter_contract::account_rules_v3::{
+    use dclutch_market::execution_strategy::admitted_v3::ADMITTED_RUNTIME_ACCOUNTS_START_V3;
+    use dclutch_trading::general::account_rules_v3::{
         GeneralExternalAccountWidthsV3, general_account_profile_fixed_count_v3,
         general_account_profile_rule_v3,
     };
-    use dclutch_general_adapter_contract::collection_v1::{
+    use dclutch_trading::general::collection_v1::{
         GeneralBatchOpeningV1, GeneralOrderHeaderV1, GeneralOrderStateV1, MakerFundingV1,
         general_order_len_v1, general_signed_order_terms_len_v1,
     };
-    use dclutch_general_adapter_contract::hot_candidate_v3::{
+    use dclutch_trading::general::hot_candidate_v3::{
         GENERAL_HOT_COMMON_IDENTITIES_V3, general_hot_scalar_count_v3,
     };
-    use dclutch_general_adapter_contract::release_v3::GENERAL_ACTIONS_V3;
-    use dclutch_general_adapter_contract::runtime_width::{
+    use dclutch_trading::general::release_v3::GENERAL_ACTIONS_V3;
+    use dclutch_trading::general::runtime_width::{
         CandidateHeaderV2, CandidateV2, ExecutionHeaderV2, ExecutionV2, PageHeaderV2, PageV2,
         SettlementCursorHeaderV2, SettlementPhaseV2, VerifiedCandidateHeaderV2, candidate_len,
         execution_len, page_len, settlement_cursor_len, verified_candidate_len,
     };
-    use dclutch_general_adapter_contract::state_artifacts_v3::{
+    use dclutch_trading::general::state_artifacts_v3::{
         encode_general_state_lifecycle_v3_atomic, general_state_lifecycle_bytes_v3,
     };
-    use dclutch_general_adapter_contract::{
+    use dclutch_trading::general::{
         candidate_v1::general_candidate_identity_v1,
         local_state_v3::{
             GeneralLocalStateHeaderV3, encode_general_local_state_v3_atomic,
@@ -2979,8 +2979,8 @@ mod tests {
         },
         runtime_manifest::settlement_manifest_len_v2,
     };
-    use dclutch_general_codec::{MAX_SELECTION_CRITERIA, SelectionCriterion};
-    use dclutch_general_config_contract::v3::GeneralConfigV3Input;
+    use dclutch_trading::general_codec::{MAX_SELECTION_CRITERIA, SelectionCriterion};
+    use dclutch_trading::general_config::v3::GeneralConfigV3Input;
 
     use super::*;
     use solana_address_lookup_table_interface::state::LookupTableMeta;
@@ -3615,7 +3615,7 @@ mod tests {
             let right = GeneralOrderV1::decode(right).expect("right order").order_id();
             if left == right {
                 core::cmp::Ordering::Equal
-            } else if dclutch_general_adapter_contract::runtime_verify::runtime_identity_precedes_v2(
+            } else if dclutch_trading::general::runtime_verify::runtime_identity_precedes_v2(
                 &left, &right,
             ) {
                 core::cmp::Ordering::Less
@@ -4544,7 +4544,7 @@ mod tests {
             .expect("manifest offset in bounds")
             .copy_from_slice(&[51; 32]);
         let row_bytes =
-            dclutch_general_adapter_contract::runtime_manifest::settlement_order_len_v2(width)
+            dclutch_trading::general::runtime_manifest::settlement_order_len_v2(width)
                 .expect("order width");
         for (ordinal, (order_coordinate, source_page_index, source_execution_index)) in
             rows.iter().copied().enumerate()

@@ -13,15 +13,11 @@ default = ["transaction-planning"]
 transaction-planning = ["dep:dclutch-versioned-message-operator", "dep:solana-hash"]
 
 [dependencies]
-dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
-dclutch-product-runtime-v2-admission = { path = "../dclutch-product-runtime-v2-admission" }
-dclutch-pyth-svm = { path = "../dclutch-pyth-svm" }
-dclutch-record-contract = { path = "../dclutch-record-contract" }
-dclutch-registry-contract = { path = "../dclutch-registry-contract" }
-dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
-dclutch-resolution-codec = { path = "../dclutch-resolution-codec" }
+dclutch-market = { path = "../dclutch-market" }
+dclutch-product = { path = "../dclutch-product" }
+dclutch-source = { path = "../dclutch-source" }
+dclutch-registry = { path = "../dclutch-registry" }
 dclutch-resolution-core-v3-operator = { path = "../dclutch-resolution-core-v3-operator" }
-dclutch-source-contract = { path = "../dclutch-source-contract" }
 dclutch-versioned-message-operator = { path = "../dclutch-versioned-message-operator", optional = true }
 solana-hash = { version = "=4.6.0", optional = true }
 solana-program = { version = "=3.0.0", default-features = false }

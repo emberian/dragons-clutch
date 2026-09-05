@@ -25,24 +25,16 @@ custom-panic = []
 # a 1,399,700 ceiling, spent to move 105 CU of tokens, and nothing in this tree
 # could say what the difference was. Today this instruments the Dealer scenario
 # reservation route only -- the leg that Remove actually calls.
-custody-cu-profile = ["dep:dclutch-cu-checkpoint"]
+custody-cu-profile = ["dep:dclutch-sbf-runtime"]
 
 [dependencies]
-dclutch-capability-contract = { path = "../../crates/dclutch-capability-contract" }
-dclutch-claims-svm = { path = "../../crates/dclutch-claims-svm" }
+dclutch-market = { path = "../../crates/dclutch-market" }
+dclutch-claims = { path = "../../crates/dclutch-claims" }
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
-dclutch-cu-checkpoint = { path = "../../crates/dclutch-cu-checkpoint", optional = true }
-dclutch-custody-contract = { path = "../../crates/dclutch-custody-contract" }
-dclutch-market-core-codec = { path = "../../crates/dclutch-market-core-codec" }
-dclutch-realm-contract = { path = "../../crates/dclutch-realm-contract" }
-dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }
+dclutch-sbf-runtime = { path = "../../crates/dclutch-sbf-runtime", optional = true }
+dclutch-custody = { path = "../../crates/dclutch-custody" }
+dclutch-registry = { path = "../../crates/dclutch-registry" }
 dclutch-refusal-registry = { path = "../../crates/dclutch-refusal-registry" }
-dclutch-registry-activation-auth-v1 = { path = "../../crates/dclutch-registry-activation-auth-v1" }
-dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }
-dclutch-registry-svm = { path = "../../crates/dclutch-registry-svm" }
-dclutch-release-set-contract = { path = "../../crates/dclutch-release-set-contract" }
-dclutch-rent-contract = { path = "../../crates/dclutch-rent-contract" }
-dclutch-token-svm = { path = "../../crates/dclutch-token-svm" }
 solana-program = { version = "=3.0.0", default-features = false }
 solana-sdk-ids = "=3.1.0"
 solana-system-interface = { version = "=2.0.0", features = ["bincode"] }

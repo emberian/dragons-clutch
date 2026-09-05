@@ -32,10 +32,10 @@
 
 use std::collections::HashMap;
 
-use dclutch_relay_contract::wire::{
+use dclutch_source::relay::wire::{
     AccountObservationV1, AttestationMessageV1, ObservationSetSealV1,
 };
-use dclutch_relay_contract::{RELAYED_SEAL_BYTES, SHA256_EMPTY_DIGEST};
+use dclutch_source::relay::{RELAYED_SEAL_BYTES, SHA256_EMPTY_DIGEST};
 
 use crate::chain::{is_loader_v3_programdata, programdata_deployment_slot};
 use crate::config::{AccountSetConfig, PositionConfig};
@@ -739,14 +739,14 @@ mod tests {
         };
         let config = AccountSetConfig {
             name: "dbc".to_owned(),
-            relay_family_id: dclutch_relay_contract::RELAYED_FAMILY_RELEASE_ID_V1,
-            decoding_rules_id: dclutch_relay_contract::RELAYED_DECODING_RULES_SCHEMA_RELEASE_ID_V1,
+            relay_family_id: dclutch_source::relay::RELAYED_FAMILY_RELEASE_ID_V1,
+            decoding_rules_id: dclutch_source::relay::RELAYED_DECODING_RULES_SCHEMA_RELEASE_ID_V1,
             positions: vec![position],
             account_set_id: [0x5a; ID_BYTES],
         };
         SetWatcher::new(
             config,
-            dclutch_relay_contract::SOLANA_MAINNET_GENESIS_HASH_V1,
+            dclutch_source::relay::SOLANA_MAINNET_GENESIS_HASH_V1,
             None,
             256 * 1024,
         )

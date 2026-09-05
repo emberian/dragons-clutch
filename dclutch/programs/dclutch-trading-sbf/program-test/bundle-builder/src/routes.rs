@@ -12,7 +12,7 @@
 //! `context`; each Claims kind names its own field. Kinds not yet dispatched
 //! here are a named boundary, not a silent default.
 
-use dclutch_claims_svm::{
+use dclutch_claims::{
     affine_batch_v2::{AFFINE_BATCH_PLAN_MAGIC_V2, AffineBatchPlanV2},
     founding_v5::{CLAIMS_FOUNDING_REQUEST_MAGIC_V5, ClaimsFoundingRequestV5},
     protocol_position_v2::{PROTOCOL_POSITION_REQUEST_MAGIC_V2, ProtocolPositionRequestV2},
@@ -20,16 +20,16 @@ use dclutch_claims_svm::{
     sparse_native_transfer_v1::{SPARSE_NATIVE_TRANSFER_MAGIC_V1, SparseNativeTransferV1},
 };
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CustodyRequestLayoutV1, DELEGATED_CUSTODY_REQUEST_MAGIC_V2, DelegatedCustodyRequestLayoutV2,
     PROJECTED_CUSTODY_REQUEST_BYTES_V1, PROJECTED_CUSTODY_REQUEST_MAGIC_V1,
     ProjectedCustodyCallerSeedsV1, ProjectedCustodyRequestV1,
 };
-use dclutch_effect_kernel::v2::FixedRole;
-use dclutch_rational_representation_v2_contract::{
+use dclutch_vm::effect::v2::FixedRole;
+use dclutch_claims::rational::{
     CallerRoleV2, REQUEST_MAGIC_V2, RepresentationRequestV2,
 };
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use sha2::{Digest, Sha256};
 use solana_program::pubkey::Pubkey;
 
@@ -96,15 +96,15 @@ pub fn derive_authority(
 
 #[cfg(test)]
 mod tests {
-    use dclutch_custody_contract::{
+    use dclutch_custody::{
         CompartmentV1, ProjectedCallerRoleV1, ProjectedCustodyOperationV1,
         ProjectedCustodyRequestV1,
     };
-    use dclutch_rational_representation_v2_contract::{
+    use dclutch_claims::rational::{
         ABSENT_REVISION, ASSET_BYTES_V3, AssetV2, CallerRoleV2, REQUEST_SELECTED_HEADER_BYTES_V3,
         RepresentationActionV2, RepresentationRequestHeaderV2, RepresentationRequestV2,
     };
-    use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
+    use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
     use sha2::{Digest, Sha256};
     use solana_program::pubkey::Pubkey;
 
@@ -112,8 +112,8 @@ mod tests {
         BuilderError, PROJECTED_CUSTODY_REQUEST_BYTES_V1, claims_context, derive_authority,
     };
     use crate::registers::DerivedInvocationV1;
-    use dclutch_effect_kernel::v2::FixedRole;
-    use dclutch_effect_kernel::v3::{
+    use dclutch_vm::effect::v2::FixedRole;
+    use dclutch_vm::effect::v3::{
         ResolvedInvocationV3, ResolvedReceiptDependenciesV3, RouteKindV3,
     };
 
@@ -243,7 +243,7 @@ mod tests {
         let derived = derive_authority(&invocation(bytes.to_vec()), id(7), trading_program)
             .expect("derive")
             .expect("authority");
-        let expected_seeds = dclutch_custody_contract::ProjectedCustodyCallerSeedsV1::new(
+        let expected_seeds = dclutch_custody::ProjectedCustodyCallerSeedsV1::new(
             request(trading_program),
             expected_digest,
         );

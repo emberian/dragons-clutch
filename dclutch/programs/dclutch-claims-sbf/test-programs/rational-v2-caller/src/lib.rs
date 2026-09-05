@@ -13,8 +13,8 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use dclutch_core_contract::ContentId;
-use dclutch_rational_representation_v2_contract::{CallerRoleV2, RepresentationRequestV2};
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_claims::rational::{CallerRoleV2, RepresentationRequestV2};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,

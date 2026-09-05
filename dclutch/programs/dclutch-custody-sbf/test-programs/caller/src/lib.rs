@@ -14,11 +14,11 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CUSTODY_REQUEST_BYTES_V1, CustodyRequestV1, DELEGATED_CUSTODY_REQUEST_BYTES_V2,
     DELEGATED_CUSTODY_REQUEST_MAGIC_V2, DelegatedCustodyRequestV2,
 };
-use dclutch_release_set_contract::CallerAuthoritySeedsV1;
+use dclutch_registry::release_set::CallerAuthoritySeedsV1;
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,

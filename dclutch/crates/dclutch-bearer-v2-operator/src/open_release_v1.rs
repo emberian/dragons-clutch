@@ -67,19 +67,19 @@
 //! surface that carries a Market address, which is what makes the admission
 //! runnable against a release compiled before its Market exists.
 
-use dclutch_account_profile_contract::{
+use dclutch_vm::account_profile::{
     lifecycle_v3::StateLifecyclePolicyV5, v2::AccountProfileV2,
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     set_v2::{CapabilityProgramSetV2, SelectorWidthV2},
     v4::{CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4},
 };
-use dclutch_effect_kernel::v4::ProgramV4 as EffectProgramV4;
-use dclutch_execution_strategy_contract::v2::ExecutionStrategyProgramV2;
-use dclutch_rational_representation_v2_contract::RepresentationActionV2;
-use dclutch_rational_representation_v2_request_contract::generated::REQUEST_ACTION_OFFSET_V3;
-use dclutch_request_profile_contract::RequestProfileV1;
-use dclutch_token_svm::{TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, TokenBehaviorSelectionV2};
+use dclutch_vm::effect::v4::ProgramV4 as EffectProgramV4;
+use dclutch_market::execution_strategy::v2::ExecutionStrategyProgramV2;
+use dclutch_claims::rational::RepresentationActionV2;
+use dclutch_claims::rational_request::generated::REQUEST_ACTION_OFFSET_V3;
+use dclutch_vm::request_profile::RequestProfileV1;
+use dclutch_custody::token_svm::{TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, TokenBehaviorSelectionV2};
 use solana_program::hash::hash;
 
 use crate::{Error, Result};
@@ -305,7 +305,7 @@ pub fn authenticate_open_capability_release_v1(
 
 /// Request schema the given action's Hot family actually dispatches through.
 fn request_schema(action: RepresentationActionV2) -> [u8; 32] {
-    use dclutch_rational_representation_v2_contract::{
+    use dclutch_claims::rational::{
         OPEN_REPRESENTATION_HOT_REQUEST_SCHEMA_ID_V3, RATIONAL_TERMINAL_HOT_REQUEST_SCHEMA_ID_V3,
     };
     match action {
@@ -329,7 +329,7 @@ fn join_artifacts(
     StateLifecyclePolicyV5::decode_selected(lifecycle_id, lifecycle_id, supplied.lifecycle_policy)
         .map_err(Error::LifecycleArtifact)?;
     ExecutionStrategyProgramV2::decode(supplied.strategy).map_err(Error::ExecutionStrategy)?;
-    dclutch_transition_vm::v3::ProgramV3::decode(supplied.transition)
+    dclutch_vm::v3::ProgramV3::decode(supplied.transition)
         .map_err(Error::TransitionArtifact)?;
     let effect = EffectProgramV4::decode(supplied.effect).map_err(Error::EffectArtifactV4)?;
 

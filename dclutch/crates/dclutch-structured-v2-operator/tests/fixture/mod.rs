@@ -17,7 +17,7 @@
 
 #![allow(dead_code)]
 
-use dclutch_representation_composition_v3_kernel::{
+use dclutch_claims::composition::{
     COMPOSITION_DESCRIPTOR_BYTES_V3, CanonicalTranslationInputV3, CompositionBundleV3,
     CompositionDescriptorInputV3, CompositionEdgeInputV3, CompositionExposureBundleV3,
     CompositionExposureInputV3, CompositionExposureRowInputV3, CompositionExposureTermV3,
@@ -27,14 +27,14 @@ use dclutch_representation_composition_v3_kernel::{
     encode_canonical_translation_v3_atomic, encode_composition_descriptor_v3_atomic,
     encode_composition_exposure_v3_atomic, encode_composition_graph_v3_atomic,
 };
-use dclutch_structured_v2_kernel::{
+use dclutch_claims::structured_kernel::{
     StructuredTermsInputV2, StructuredTermsV2, encode_structured_terms_v2,
     structured_terms_bytes_v2,
 };
 use dclutch_structured_v2_operator::{
     StructuredRepresentationDescriptorV2, derive_structured_representation_descriptor_v2,
 };
-use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
+use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
 
 use crate::support::{digest, identity, shard_mints, shard_terms, structured_admission};
 
@@ -368,7 +368,7 @@ pub fn shard_terms_bytes_scaled_for_market(
     denominator: u64,
     market: [u8; 32],
 ) -> Vec<u8> {
-    use dclutch_fractional_claim_kernel::{
+    use dclutch_claims::fractional_kernel::{
         FractionalExposureTermsInputV2, encode_fractional_exposure_terms_v2,
         fractional_exposure_terms_bytes_v2,
     };

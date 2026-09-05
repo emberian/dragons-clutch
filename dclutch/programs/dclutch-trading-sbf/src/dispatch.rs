@@ -1,15 +1,15 @@
 //! Family-neutral authenticated capability-program dispatch.
 
-use dclutch_capability_contract::{CapabilityEntryV1, CapabilityManifestV1};
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_manifest::{CapabilityEntryV1, CapabilityManifestV1};
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_ACCOUNT_MAX_BYTES_V1, CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityProgramV1,
     CapabilityRootHeaderV1, Error as CapabilityProgramError, SelectedRecordBumpsV1,
     hot_v3::hot_bump_hint_v1,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_market_core_codec::{CAPABILITY_FUNDING_HEADER_BYTES_V2, CapabilityFundingHeaderV2};
-use dclutch_registry_svm::AuthenticatedRoleReceiptV1;
-use dclutch_release_set_contract::{
+use dclutch_market::{CAPABILITY_FUNDING_HEADER_BYTES_V2, CapabilityFundingHeaderV2};
+use dclutch_registry::svm::AuthenticatedRoleReceiptV1;
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, CapabilityExecutionSelectionV1, ExecutionRoleV1,
 };
 use solana_program::{hash::hash, pubkey::Pubkey};
@@ -42,7 +42,7 @@ pub type TradingCloseRequestV2<'a> = TradingActivationRequestV2<'a>;
 impl<'a> TradingActivationRequestV2<'a> {
     /// Hostile-decode `selector(144) || funding-header(16) || family request`.
     pub fn decode(role_request: &'a [u8]) -> Result<Self, TradingSbfError> {
-        let funding_offset = dclutch_release_set_contract::CAPABILITY_EXECUTION_SELECTION_BYTES_V1;
+        let funding_offset = dclutch_registry::release_set::CAPABILITY_EXECUTION_SELECTION_BYTES_V1;
         let family_offset = funding_offset
             .checked_add(CAPABILITY_FUNDING_HEADER_BYTES_V2)
             .ok_or(TradingSbfError::Content)?;
@@ -548,11 +548,11 @@ mod tests {
 
     use std::{boxed::Box, vec};
 
-    use dclutch_capability_contract::{
+    use dclutch_market::capability_manifest::{
         ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityManifestV1, FundingAmountsV1,
         FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
     };
-    use dclutch_capability_program_contract::{
+    use dclutch_market::capability_program::{
         CAPABILITY_PROGRAM_ACCOUNT_PROFILE_OFFSET, CAPABILITY_PROGRAM_CAPACITY_PROFILE_OFFSET,
         CAPABILITY_PROGRAM_CONFIG_SCHEMA_OFFSET, CAPABILITY_PROGRAM_DERIVATION_POLICY_OFFSET,
         CAPABILITY_PROGRAM_EFFECT_SCHEMA_OFFSET, CAPABILITY_PROGRAM_HEADER_BYTES_V1,
@@ -564,15 +564,15 @@ mod tests {
         CAPABILITY_PROGRAM_TRANSITION_MAX_INSTRUCTIONS_V2, CAPABILITY_ROOT_HEADER_BYTES_V1,
         initialize_root_account_v1,
     };
-    use dclutch_market_core_codec::{
+    use dclutch_market::{
         CAPABILITY_FUNDING_HEADER_BYTES_V2, CORE_EFFECT_ENVELOPE_BYTES_V1, REQUEST_BYTES,
     };
-    use dclutch_record_contract::{
+    use dclutch_registry::record::{
         APPEND_PAGE_HEADER_BYTES_V1, BEGIN_RECORD_BYTES_V1, CANONICAL_RECORD_PAGE_BYTES_V1,
         UNIT_REQUEST_BYTES_V1,
     };
-    use dclutch_release_set_contract::CAPABILITY_EXECUTION_SELECTION_BYTES_V1;
-    use dclutch_release_set_contract::{ArtifactReleaseIdV1, ProgramIdentityV1};
+    use dclutch_registry::release_set::CAPABILITY_EXECUTION_SELECTION_BYTES_V1;
+    use dclutch_registry::release_set::{ArtifactReleaseIdV1, ProgramIdentityV1};
     use solana_hash::Hash;
     use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
     use solana_program::instruction::{AccountMeta, Instruction};

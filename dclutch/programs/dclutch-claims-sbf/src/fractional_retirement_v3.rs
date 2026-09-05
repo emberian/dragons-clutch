@@ -22,8 +22,8 @@
 extern crate alloc;
 
 use alloc::{boxed::Box, vec::Vec};
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
-use dclutch_claims_svm::{
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_claims::{
     liability_basis_state_v2::{
         LiabilityBasisMarketSeedsV2, LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
     },
@@ -32,7 +32,7 @@ use dclutch_claims_svm::{
         ProtocolPositionPresenceV2, ProtocolPositionRequestV2,
     },
 };
-use dclutch_fractional_claim_contract::{
+use dclutch_claims::fractional::{
     FRACTIONAL_RETIREMENT_BEGIN_ACCOUNT_COUNT_V3,
     FRACTIONAL_RETIREMENT_COORDINATE_ACCOUNT_COUNT_V3,
     FRACTIONAL_RETIREMENT_COORDINATE_RECEIPT_BYTES_V3, FRACTIONAL_RETIREMENT_CURSOR_BYTES_V3,
@@ -44,14 +44,14 @@ use dclutch_fractional_claim_contract::{
     FractionalRetirementLifecycleReceiptV3, FractionalRetirementRequestV3,
     decode_fractional_capability_root_v4,
 };
-use dclutch_fractional_claim_kernel::{
+use dclutch_claims::fractional_kernel::{
     FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FRACTIONAL_SELECTION_CONFIG_BYTES_V1,
     FractionalExposureTermsAdmissionV2, FractionalExposureTermsV2,
     encode_fractional_selection_config_v1, fractional_selection_config_from_terms_v1,
 };
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
 use dclutch_sha256_adapter::digest;
-use dclutch_token_svm::{
+use dclutch_custody::token_svm::{
     TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, Token2022BehaviorProfileV2, TokenBehaviorSelectionV2,
 };
 use solana_program::{

@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use dclutch_market_core_codec::CoreState;
+use dclutch_market::CoreState;
 use serde::Serialize;
 use solana_sdk::signature::Signer;
 

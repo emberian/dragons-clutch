@@ -99,7 +99,7 @@ describe('compact Rational RetireReceipt V4', () => {
      * while every client-side assertion stayed green.
      *
      * `fixtures/rational-retire-receipt-child-v4.json` is emitted by
-     * `crates/dclutch-rational-representation-v2-lifecycle-contract/examples/
+     * `crates/dclutch-claims/rational_lifecycle/examples/
      * compact_retire_child_v4.rs`, through the contract's own family,
      * child-header, row and request encoders — so the bytes below were laid out
      * by the owner of the layout, not by the code under test. Fixture evidence,

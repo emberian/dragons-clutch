@@ -5,16 +5,16 @@
 //! an explicit checked manifest supplied by the caller. There is no embedded
 //! official-program list and this module performs no RPC, signing, or mutation.
 
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
 use dclutch_core_contract::ContentId;
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1,
     ArtifactUpgradePolicyV1, DeploymentObservationV1, require_slot_pinned_release_v1,
 };
-use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
-use dclutch_release_set_contract::{
+use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, ExecutionRoleBindingV1, ExecutionRoleV1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2,
     ProtocolInfrastructureProfileV2,
@@ -658,8 +658,8 @@ mod tests {
     /// cannot end up trusting a mutable substrate without a call site saying so.
     #[test]
     fn the_mutable_substrate_is_admitted_only_under_the_named_class() {
-        use dclutch_registry_contract::ArtifactReleaseV1;
-        use dclutch_release_set_contract::ProgramIdentityV1;
+        use dclutch_registry::ArtifactReleaseV1;
+        use dclutch_registry::release_set::ProgramIdentityV1;
 
         let identity = |fill: u8| ProgramIdentityV1::decode(&[fill; 32]).expect("identity");
         let build = |policy, authority| {
@@ -692,11 +692,11 @@ mod tests {
         );
     }
 
-    use dclutch_registry_contract::{
+    use dclutch_registry::{
         ArtifactActivationInputV1, ExecutionReleaseActivationInputsV1,
         activate_execution_release_set_v1,
     };
-    use dclutch_release_set_contract::{ExecutionReleaseSetV1, ProgramIdentityV1};
+    use dclutch_registry::release_set::{ExecutionReleaseSetV1, ProgramIdentityV1};
     use dclutch_release_tool::{
         BuildMetadataV1, CheckedReleaseV1, LOADER_V3_PROGRAMDATA_METADATA_BYTES,
         RELEASE_METADATA_HEADER_V1, ReleaseEvidenceV1, artifact_release_from_checked,

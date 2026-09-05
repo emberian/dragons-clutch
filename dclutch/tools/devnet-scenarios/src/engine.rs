@@ -6,7 +6,7 @@ use std::{
     path::Path,
 };
 
-use dclutch_direct_codec::successor::DIRECT_FEE_DENOMINATOR_V1;
+use dclutch_trading::successor::DIRECT_FEE_DENOMINATOR_V1;
 use sha2::{Digest as _, Sha256};
 
 use crate::{

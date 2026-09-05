@@ -9,12 +9,12 @@ rust-version.workspace = true
 path = "src/lib.rs"
 crate-type = ["cdylib", "rlib"]
 
-# The codec and nothing else. It depends only on `dclutch-product-runtime-v2`
+# The codec and nothing else. It depends only on `dclutch-product`
 # and `dclutch-sha256-adapter`, both `no_std` kernels with no Solana SDK, no
 # signature verification and therefore no `getrandom` edge -- which is why this
 # boundary needs none of the wasm32 backend plumbing the admission planner does.
 [dependencies]
-dclutch-product-payoff-v2-codec = { path = "../dclutch-product-payoff-v2-codec" }
+dclutch-product = { path = "../dclutch-product" }
 base64 = "0.22.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

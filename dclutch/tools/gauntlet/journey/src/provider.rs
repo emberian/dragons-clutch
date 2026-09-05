@@ -20,20 +20,20 @@
 //! refuses when the fixture outlives that shelf life rather than letting anyone
 //! widen the number again.
 
-use dclutch_market_core_codec::{CoreState, Phase};
+use dclutch_market::{CoreState, Phase};
 use dclutch_provider_transport_v3_operator::{
     ProviderExecuteDeploymentV3, ProviderExecuteIntentV3, ProviderExecuteSnapshotV3,
     ProviderSubmitDeploymentV3, ProviderSubmitIntentV3, ProviderSubmitSnapshotV3,
     build_provider_execute_v3, build_provider_submit_v3,
 };
-use dclutch_pyth_svm::FullPriceUpdateV2;
-use dclutch_release_set_contract::PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2;
-use dclutch_resolution_codec::{
+use dclutch_source::pyth::FullPriceUpdateV2;
+use dclutch_registry::release_set::PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2;
+use dclutch_source::resolution::{
     PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
     RESOLUTION_CERTIFICATE_BYTES_V2, ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
 use dclutch_resolution_core_v3_operator::ObservedAccount;
-use dclutch_source_contract::{
+use dclutch_source::{
     PythAdapterConfigV1, SourceResolutionPhaseV1, SourceResolutionStateV2, WindowSpecV1,
 };
 use solana_program::hash::hash;
@@ -97,7 +97,7 @@ impl ProviderAddressesV1 {
     /// the day one of them moved the other two would keep working against a
     /// program that is not there.
     pub(crate) fn from_release(release: &[u8]) -> Result<Self> {
-        let release = dclutch_pyth_svm::PythReleaseV1::decode(release)
+        let release = dclutch_source::pyth::PythReleaseV1::decode(release)
             .map_err(|error| Error::new(format!("published Pyth release record: {error:?}")))?;
         let receiver = Pubkey::new_from_array(release.receiver_program());
         let router = Pubkey::new_from_array(release.router_program());

@@ -8,21 +8,21 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use dclutch_core_contract::ContentId as CoreContentId;
-use dclutch_pyth_svm::local_validator_release_v1;
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{
+use dclutch_source::pyth::local_validator_release_v1;
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{
     ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
     ArtifactUpgradePolicyV1,
 };
-use dclutch_registry_svm::ProgramDataV3View;
-use dclutch_release_set_contract::{
+use dclutch_registry::svm::ProgramDataV3View;
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1, ExecutionReleaseSetV1,
     ExecutionRoleBindingV1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V2, ProgramIdentityV1,
     ProtocolInfrastructureProfileV1, ProtocolInfrastructureProfileV2,
 };
-use dclutch_resolution_codec::{
+use dclutch_source::resolution::{
     PYTH_RELEASE_RECORD_SCHEMA_ID_V1, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
 };
 use serde::{Deserialize, Serialize};
@@ -2138,8 +2138,8 @@ pub(crate) fn deployment_observation_v1(
     deployment_slot: u64,
     elf_digest: [u8; 32],
     upgrade_authority: Option<[u8; 32]>,
-) -> Result<dclutch_registry_contract::DeploymentObservationV1> {
-    dclutch_registry_contract::DeploymentObservationV1::new(
+) -> Result<dclutch_registry::DeploymentObservationV1> {
+    dclutch_registry::DeploymentObservationV1::new(
         program.to_bytes(),
         program_owner.to_bytes(),
         program_executable,
@@ -2850,7 +2850,7 @@ mod tests {
         let (result, root) = prepared_plan_with_resolution_semantic(
             RecordPublicationV1::Transaction,
             RoleDeploymentsV1::default(),
-            dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V5,
+            dclutch_source::resolution::RESOLUTION_CONTROLLER_RELEASE_ID_V5,
         );
         let error = result.expect_err("Resolution V5 must not author a V6 successor plan");
         assert!(
@@ -2880,7 +2880,7 @@ mod tests {
     fn observe(input: &mut RoleDeploymentInputV1, root: &Path, name: &str, programdata: &[u8]) {
         input.observed_programdata = Some(write_observed(root, name, programdata));
         let live = programdata
-            .get(dclutch_registry_svm::LOADER_V3_PROGRAMDATA_METADATA_BYTES..)
+            .get(dclutch_registry::svm::LOADER_V3_PROGRAMDATA_METADATA_BYTES..)
             .unwrap_or(&[]);
         input.expected_live_elf_sha256 = Some(hex(&sha256_bytes(live)));
     }

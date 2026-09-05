@@ -9,8 +9,8 @@
 
 extern crate std;
 
-use dclutch_token_svm::state::TokenAccountLayoutV1;
-use dclutch_token_svm::{ACCOUNT_BYTES, COption, Mint, TokenAccount};
+use dclutch_custody::token_svm::state::TokenAccountLayoutV1;
+use dclutch_custody::token_svm::{ACCOUNT_BYTES, COption, Mint, TokenAccount};
 use solana_program::{
     account_info::AccountInfo, entrypoint::ProgramResult, program_error::ProgramError,
     pubkey::Pubkey,

@@ -18,12 +18,9 @@ custom-panic = []
 
 [dependencies]
 dclutch-refusal-registry = { path = "../../crates/dclutch-refusal-registry" }
-dclutch-rent-contract = { path = "../../crates/dclutch-rent-contract" }
+dclutch-market = { path = "../../crates/dclutch-market" }
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
-dclutch-registry-activation-auth-v1 = { path = "../../crates/dclutch-registry-activation-auth-v1" }
-dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }
-dclutch-registry-svm = { path = "../../crates/dclutch-registry-svm" }
-dclutch-release-set-contract = { path = "../../crates/dclutch-release-set-contract" }
+dclutch-registry = { path = "../../crates/dclutch-registry", features = ["svm"] }
 solana-program = { version = "=3.0.0", default-features = false }
 solana-sdk-ids = "=3.1.0"
 solana-system-interface = { version = "=2.0.0", features = ["bincode"] }

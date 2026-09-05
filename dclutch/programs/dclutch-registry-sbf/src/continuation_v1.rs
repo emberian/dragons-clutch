@@ -3,7 +3,7 @@
 use std::vec::Vec;
 
 use dclutch_core_contract::ContentId;
-use dclutch_registry_svm::continuation_v1::{
+use dclutch_registry::svm::continuation_v1::{
     REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationAdmissionSeedsV1,
     RegistryContinuationRequestV1,
 };

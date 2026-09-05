@@ -14,7 +14,7 @@ import { STATE_MACHINE_RECORDS_V1 } from '@dclutch/sdk/generated/stateMachinesV1
  * writes `reserved_claims = maximum_fill` into the record, and the Sell
  * `EffectProgramV4` has **no routes at all** — its own emitter says so:
  * "No routes: a Sell invokes no child program at all"
- * (`crates/dclutch-direct-codec/src/registered_effect_artifacts_v4.rs`). The
+ * (`crates/dclutch-trading/src/registered_effect_artifacts_v4.rs`). The
  * Sell profile's coordinates name neither a Claims Position nor the aggregate,
  * so nothing is moved and nothing is checked against a balance. A registered
  * BUY is genuinely different: it moves `reserved_collateral` into a

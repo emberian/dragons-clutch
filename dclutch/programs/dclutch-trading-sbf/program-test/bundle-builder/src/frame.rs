@@ -6,7 +6,7 @@
 //! checked against. Funding is derived (rent minimum at the account's exact
 //! width), never stated.
 
-use dclutch_account_profile_contract::v2::{AccountProfileV2, PhysicalAccountDataGeometryV2};
+use dclutch_vm::account_profile::v2::{AccountProfileV2, PhysicalAccountDataGeometryV2};
 
 use crate::profile_ops;
 use solana_account::Account;

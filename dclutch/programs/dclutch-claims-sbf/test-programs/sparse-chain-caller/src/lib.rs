@@ -5,7 +5,7 @@
 //! Test-only real-SBF caller for the composed Claims sparse-transfer chain.
 //!
 //! The program owns no protocol state and no production ABI. It exists to drive
-//! the one composition `crates/dclutch-claims-svm/src/composition_v3.rs`
+//! the one composition `crates/dclutch-claims/src/composition_v3.rs`
 //! describes and no live route can reach yet: Admit the destination Position,
 //! carry its exact typed receipt into a SparseNativeTransfer, carry THAT
 //! receipt into the Close of the drained source Position, all inside one
@@ -21,7 +21,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use dclutch_claims_svm::{
+use dclutch_claims::{
     CallerRole,
     frame_spec_v1::{ClaimsFrameSpecV1, SparseNativeTransferFrameSpecV1},
     protocol_position_v2::{
@@ -34,7 +34,7 @@ use dclutch_claims_svm::{
     },
 };
 use dclutch_core_contract::ContentId;
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,
@@ -47,13 +47,13 @@ use solana_program::{
 
 /// Exact Admit frame width this wrapper forwards.
 pub const ADMIT_ACCOUNT_COUNT: usize =
-    dclutch_claims_svm::frame_spec_v1::PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V1 as usize;
+    dclutch_claims::frame_spec_v1::PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V1 as usize;
 /// Exact SparseNativeTransfer frame width this wrapper forwards.
 pub const SPARSE_ACCOUNT_COUNT: usize =
-    dclutch_claims_svm::frame_spec_v1::SPARSE_NATIVE_TRANSFER_ACCOUNT_COUNT_V1 as usize;
+    dclutch_claims::frame_spec_v1::SPARSE_NATIVE_TRANSFER_ACCOUNT_COUNT_V1 as usize;
 /// Exact Close frame width this wrapper forwards.
 pub const CLOSE_ACCOUNT_COUNT: usize =
-    dclutch_claims_svm::frame_spec_v1::PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V1 as usize;
+    dclutch_claims::frame_spec_v1::PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V1 as usize;
 
 /// Chain the Close stage after the transfer.
 pub const FLAG_WITH_CLOSE: u8 = 0b0000_0001;

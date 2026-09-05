@@ -13,11 +13,11 @@
 //! after expiry anyone may abort an abandoned record set, is paid the disclosed
 //! bounty, and returns the remaining rent to the sponsor — so a half-published
 //! record can never strand its accounts or its prepaid bounty. The verb lives
-//! in `dclutch-record-contract::prepare_abort_v1`; this module drives it.
+//! in `dclutch-registry::prepare_abort_v1`; this module drives it.
 
 use core::convert::TryFrom;
 
-use dclutch_record_contract::{
+use dclutch_registry::record::{
     AbortObservationV1, AbortRecordV1, AccountCloseV1, AccountId, AddressDerivationObligationV1,
     AppendPageV1, BeginRecordV1, CANONICAL_RECORD_DEPLOYMENT_PROFILE_V1, FinalizeRecordV1,
     PageEnvelopeV1, RAW_RECORD_PDA_SEED_V1, RawRecordValidationModeV1,
@@ -25,10 +25,10 @@ use dclutch_record_contract::{
     STAGING_CURSOR_PDA_SEED_V1, StagingCursorV1, StagingLivenessPolicyV1, prepare_abort_v1,
     prepare_append_page_v1, prepare_begin_v1, prepare_finalize_v1,
 };
-use dclutch_registry_contract::{
+use dclutch_registry::{
     ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1, DeploymentObservationV1,
 };
-use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
+use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
 use solana_program::{
     account_info::AccountInfo,
     clock::Clock,
@@ -1078,7 +1078,7 @@ fn account_id(key: &Pubkey) -> Result<AccountId, ProgramError> {
 /// record proved `hash(bytes) == digest` about ITSELF, which says nothing about
 /// the address inside it. So every reader that needed the artifact to be the
 /// admitted one hashed the complete observed ELF, and
-/// `dclutch-shadow-accelerator-auth-v4`'s own doc said exactly why -- *"nothing
+/// `dclutch-trading::shadow_accelerator_auth`'s own doc said exactly why -- *"nothing
 /// has bound its `elf_digest` to the account being observed."*
 ///
 /// Measured on real ELFs 2026-09-02: that hash cost the Dealer equity Add
@@ -1169,8 +1169,8 @@ fn observe_artifact_release_deployment_v1(
 /// `ProtocolInfrastructure.lean`'s `ReleaseObservation.outcome` is the author
 /// of this partition; `generated_release_finalization_corpus.rs` replays every
 /// case through this function.
-const fn release_deployment_refusal_v1(error: dclutch_registry_contract::Error) -> ProgramError {
-    use dclutch_registry_contract::Error as ReleaseError;
+const fn release_deployment_refusal_v1(error: dclutch_registry::Error) -> ProgramError {
+    use dclutch_registry::Error as ReleaseError;
     match error {
         ReleaseError::DeploymentIdentityMismatch
         | ReleaseError::ProgramDataLinkMismatch
@@ -1192,7 +1192,7 @@ const fn not_deployed_error() -> ProgramError {
     ProgramError::Custom(RegistryError::ArtifactReleaseNotDeployed as u32)
 }
 
-fn map_record_error(_: dclutch_record_contract::Error) -> ProgramError {
+fn map_record_error(_: dclutch_registry::record::Error) -> ProgramError {
     record_error()
 }
 
@@ -1206,7 +1206,7 @@ mod tests {
 
     use std::{boxed::Box, vec, vec::Vec};
 
-    use dclutch_record_contract::{
+    use dclutch_registry::record::{
         AppendPageV1, BeginRecordV1, ContentDigest, FinalizeRecordV1, RecordKeyV1, SchemaReleaseId,
     };
     use solana_program::{clock::Clock, hash::hash};
@@ -1938,10 +1938,10 @@ mod release_finalization_corpus {
     extern crate std;
 
     use dclutch_core_contract::ContentId;
-    use dclutch_registry_contract::{
+    use dclutch_registry::{
         ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
     };
-    use dclutch_release_set_contract::ProgramIdentityV1;
+    use dclutch_registry::release_set::ProgramIdentityV1;
     use solana_program::program_error::ProgramError;
     use solana_sdk_ids::bpf_loader_upgradeable;
 
@@ -2094,10 +2094,10 @@ mod devnet_general_accelerator_observation {
     extern crate std;
 
     use dclutch_core_contract::ContentId;
-    use dclutch_registry_contract::{
+    use dclutch_registry::{
         ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
     };
-    use dclutch_release_set_contract::ProgramIdentityV1;
+    use dclutch_registry::release_set::ProgramIdentityV1;
     use solana_program::program_error::ProgramError;
     use solana_sdk_ids::bpf_loader_upgradeable;
 

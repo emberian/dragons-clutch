@@ -8,15 +8,15 @@
 
 use alloc::vec;
 
-use dclutch_capability_program_contract::hot_v3::{
+use dclutch_market::capability_program::hot_v3::{
     DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_RUNTIME_CONFIG_COORDINATE_V3,
     HOT_RUNTIME_PRODUCT_COORDINATE_V3, HotExecutionEnvelopeV3,
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, hot_v3::HOT_RUNTIME_ROOT_COORDINATE_V3,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_execution_strategy_contract::{
+use dclutch_market::execution_strategy::{
     admitted_v3::{
         ADMITTED_CALLER_AUTHORITY_ACCOUNT_V3, ADMITTED_INSTRUCTIONS_ACCOUNT_V3,
         ADMITTED_OUTPUT_PAGE_ACCOUNT_V3, ADMITTED_TRADING_PROGRAM_ACCOUNT_V3,
@@ -28,7 +28,7 @@ use dclutch_execution_strategy_contract::{
         AuthenticatedScratchPageV2, RequestTransportV2,
     },
 };
-use dclutch_general_adapter_contract::{
+use dclutch_trading::general::{
     account_rules_v3::general_account_profile_fixed_count_v3,
     admitted_accelerator_v3::authenticate_frozen_selection_v3,
     artifacts_v3::{GeneralDecodedRequestV3, decode_general_request_v3},
@@ -72,10 +72,10 @@ use dclutch_general_adapter_contract::{
         general_readonly_evidence_v3,
     },
 };
-use dclutch_general_codec::{
+use dclutch_trading::general_codec::{
     Action, SelectionPolicyV1, successor_request_v2::CONTROLLER_REQUEST_BYTES_V2,
 };
-use dclutch_general_config_contract::v3::GeneralConfigV3;
+use dclutch_trading::general_config::v3::GeneralConfigV3;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_instructions_sysvar::{load_current_index_checked, load_instruction_at_checked};
 use solana_program::{
@@ -246,16 +246,16 @@ const DIRECT_HOT_HEAP_FRAME_BYTES_V1_USIZE: usize = DIRECT_HOT_HEAP_FRAME_BYTES_
 ))]
 const _: () = {
     assert!(
-        DIRECT_HOT_HEAP_FRAME_BYTES_V1_USIZE >= dclutch_sbf_bump_heap::DEFAULT_HEAP_BYTES_V1,
+        DIRECT_HOT_HEAP_FRAME_BYTES_V1_USIZE >= dclutch_sbf_runtime::DEFAULT_HEAP_BYTES_V1,
         "the declared heap frame is below the protocol default the allocator starts at"
     );
     assert!(
-        DIRECT_HOT_HEAP_FRAME_BYTES_V1_USIZE <= dclutch_sbf_bump_heap::MAX_HEAP_BYTES_V1,
+        DIRECT_HOT_HEAP_FRAME_BYTES_V1_USIZE <= dclutch_sbf_runtime::MAX_HEAP_BYTES_V1,
         "the declared heap frame is above the largest frame the runtime will grant"
     );
     assert!(
         DIRECT_HOT_HEAP_FRAME_BYTES_V1_USIZE
-            .is_multiple_of(dclutch_sbf_bump_heap::HEAP_FRAME_GRANULARITY_BYTES_V1),
+            .is_multiple_of(dclutch_sbf_runtime::HEAP_FRAME_GRANULARITY_BYTES_V1),
         "the declared heap frame is not on the granularity the runtime sanitizes requests to"
     );
 };
@@ -541,7 +541,7 @@ pub fn process(
                 .checked_sub(start)
                 .ok_or(GeneralAcceleratorSbfErrorV3::InvalidAcknowledgement)?;
             let payload_len = remaining
-                .min(dclutch_execution_strategy_contract::v2::ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2);
+                .min(dclutch_market::execution_strategy::v2::ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2);
             let payload = candidate
                 .get(
                     start
@@ -577,7 +577,7 @@ pub fn process(
     // build.
     let mut output = [0_u8;
         ACCELERATOR_ACK_HEADER_BYTES_V2
-            + dclutch_execution_strategy_contract::v2::ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2];
+            + dclutch_market::execution_strategy::v2::ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2];
     let output = output
         .get_mut(..ack_len)
         .ok_or(GeneralAcceleratorSbfErrorV3::InvalidAcknowledgement)?;
@@ -990,7 +990,7 @@ fn evaluate_close_candidate(
     family_request: &[u8],
     runtime: &[AccountInfo<'_>],
     outcome_count: u32,
-    environment: dclutch_general_adapter_contract::hot_candidate_v3::GeneralHotEnvironmentV3,
+    environment: dclutch_trading::general::hot_candidate_v3::GeneralHotEnvironmentV3,
     candidate_bank: &[u8],
 ) -> Result<(), GeneralAcceleratorSemanticErrorV3> {
     let _ = authenticated_general_domain(runtime, environment)?;
@@ -1029,7 +1029,7 @@ fn evaluate_submit_candidate(
     request: GeneralDecodedRequestV3,
     runtime: &[AccountInfo<'_>],
     outcome_count: u32,
-    environment: dclutch_general_adapter_contract::hot_candidate_v3::GeneralHotEnvironmentV3,
+    environment: dclutch_trading::general::hot_candidate_v3::GeneralHotEnvironmentV3,
     candidate: &mut [u8],
 ) -> Result<(), GeneralAcceleratorSemanticErrorV3> {
     let (config, _) = authenticated_general_domain(runtime, environment)?;
@@ -1239,7 +1239,7 @@ fn evaluate_release_order(
     request: GeneralDecodedRequestV3,
     runtime: &[AccountInfo<'_>],
     outcome_count: u32,
-    environment: dclutch_general_adapter_contract::hot_candidate_v3::GeneralHotEnvironmentV3,
+    environment: dclutch_trading::general::hot_candidate_v3::GeneralHotEnvironmentV3,
     candidate: &mut [u8],
 ) -> Result<(), GeneralAcceleratorSemanticErrorV3> {
     let (config, _) = authenticated_general_domain(runtime, environment)?;
@@ -1271,7 +1271,7 @@ fn evaluate_cancel_order(
     request: GeneralDecodedRequestV3,
     runtime: &[AccountInfo<'_>],
     outcome_count: u32,
-    environment: dclutch_general_adapter_contract::hot_candidate_v3::GeneralHotEnvironmentV3,
+    environment: dclutch_trading::general::hot_candidate_v3::GeneralHotEnvironmentV3,
     candidate: &mut [u8],
 ) -> Result<(), GeneralAcceleratorSemanticErrorV3> {
     let (config, _) = authenticated_general_domain(runtime, environment)?;
@@ -1309,7 +1309,7 @@ fn evaluate_place_order(
     request: GeneralDecodedRequestV3,
     runtime: &[AccountInfo<'_>],
     outcome_count: u32,
-    environment: dclutch_general_adapter_contract::hot_candidate_v3::GeneralHotEnvironmentV3,
+    environment: dclutch_trading::general::hot_candidate_v3::GeneralHotEnvironmentV3,
     candidate: &mut [u8],
 ) -> Result<(), GeneralAcceleratorSemanticErrorV3> {
     let (config, _) = authenticated_general_domain(runtime, environment)?;
@@ -1348,7 +1348,7 @@ fn evaluate_close_batch(
     request: GeneralDecodedRequestV3,
     runtime: &[AccountInfo<'_>],
     outcome_count: u32,
-    environment: dclutch_general_adapter_contract::hot_candidate_v3::GeneralHotEnvironmentV3,
+    environment: dclutch_trading::general::hot_candidate_v3::GeneralHotEnvironmentV3,
     candidate: &mut [u8],
 ) -> Result<(), GeneralAcceleratorSemanticErrorV3> {
     let (config, _) = authenticated_general_domain(runtime, environment)?;
@@ -1381,7 +1381,7 @@ fn evaluate_open_batch(
     request: GeneralDecodedRequestV3,
     runtime: &[AccountInfo<'_>],
     outcome_count: u32,
-    environment: dclutch_general_adapter_contract::hot_candidate_v3::GeneralHotEnvironmentV3,
+    environment: dclutch_trading::general::hot_candidate_v3::GeneralHotEnvironmentV3,
     candidate: &mut [u8],
 ) -> Result<(), GeneralAcceleratorSemanticErrorV3> {
     let (config, _) = authenticated_general_domain(runtime, environment)?;
@@ -1410,7 +1410,7 @@ fn evaluate_selection(
     request: GeneralDecodedRequestV3,
     runtime: &[AccountInfo<'_>],
     outcome_count: u32,
-    environment: dclutch_general_adapter_contract::hot_candidate_v3::GeneralHotEnvironmentV3,
+    environment: dclutch_trading::general::hot_candidate_v3::GeneralHotEnvironmentV3,
     candidate: &mut [u8],
 ) -> Result<(), GeneralAcceleratorSemanticErrorV3> {
     let (config, product_record_digest) = authenticated_general_domain(runtime, environment)?;
@@ -1516,7 +1516,7 @@ fn evaluate_initialize(
     request: GeneralDecodedRequestV3,
     runtime: &[AccountInfo<'_>],
     outcome_count: u32,
-    environment: dclutch_general_adapter_contract::hot_candidate_v3::GeneralHotEnvironmentV3,
+    environment: dclutch_trading::general::hot_candidate_v3::GeneralHotEnvironmentV3,
     candidate: &mut [u8],
 ) -> Result<(), GeneralAcceleratorSemanticErrorV3> {
     let (config, product_record_digest) = authenticated_general_domain(runtime, environment)?;
@@ -1577,7 +1577,7 @@ fn evaluate_settlement(
     request: GeneralDecodedRequestV3,
     runtime: &[AccountInfo<'_>],
     outcome_count: u32,
-    environment: dclutch_general_adapter_contract::hot_candidate_v3::GeneralHotEnvironmentV3,
+    environment: dclutch_trading::general::hot_candidate_v3::GeneralHotEnvironmentV3,
     candidate: &mut [u8],
 ) -> Result<(), GeneralAcceleratorSemanticErrorV3> {
     let (config, product_record_digest) = authenticated_general_domain(runtime, environment)?;
@@ -1674,7 +1674,7 @@ fn evaluate_settlement(
 
 fn authenticated_general_domain(
     runtime: &[AccountInfo<'_>],
-    environment: dclutch_general_adapter_contract::hot_candidate_v3::GeneralHotEnvironmentV3,
+    environment: dclutch_trading::general::hot_candidate_v3::GeneralHotEnvironmentV3,
 ) -> Result<(GeneralConfigV3, [u8; 32]), GeneralAcceleratorSemanticErrorV3> {
     let config_coordinate = u16::try_from(HOT_RUNTIME_CONFIG_COORDINATE_V3)
         .map_err(|_| GeneralAcceleratorSemanticErrorV3::RuntimeAccount)?;
@@ -1760,7 +1760,7 @@ fn content(bytes: &[u8]) -> Result<ContentId, ProgramError> {
 
 #[cfg(test)]
 mod tests {
-    use dclutch_execution_strategy_contract::v2::AcceleratorRequestV2;
+    use dclutch_market::execution_strategy::v2::AcceleratorRequestV2;
 
     use super::*;
 

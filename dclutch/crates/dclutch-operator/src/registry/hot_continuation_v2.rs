@@ -5,9 +5,9 @@
 //! authority while proving that every formerly serialized coordinate is
 //! independently reconstructible from the checked release/cache/Hot state.
 
-use dclutch_capability_program_contract::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3;
+use dclutch_market::capability_program::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3;
 use dclutch_core_contract::ContentId;
-use dclutch_registry_svm::continuation_v2::{
+use dclutch_registry::svm::continuation_v2::{
     TransparentHotAdmissionSeedsV2, TransparentHotContinuationV2,
 };
 use solana_program::{

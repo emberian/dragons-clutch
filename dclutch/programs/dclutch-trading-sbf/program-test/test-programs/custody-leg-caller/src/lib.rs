@@ -33,8 +33,8 @@ extern crate alloc;
 extern crate std;
 
 use alloc::vec::Vec;
-use dclutch_custody_contract::{DELEGATED_CUSTODY_REQUEST_BYTES_V2, DelegatedCustodyRequestV2};
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_custody::{DELEGATED_CUSTODY_REQUEST_BYTES_V2, DelegatedCustodyRequestV2};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,

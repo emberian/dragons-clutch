@@ -48,17 +48,17 @@
 
 use std::{env, fs, path::PathBuf};
 
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CapabilityRootHeaderV1, SelectedRecordBumpsV1,
     hot_v3::{HOT_BUMP_HINT_COUNT_V1, HotBumpHintsV1},
 };
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{CallerRoleV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1};
-use dclutch_direct_codec::successor::{DirectCoordinatesV1, MakerReplaySeedsV1};
-use dclutch_market_core_codec::{
+use dclutch_custody::{CallerRoleV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1};
+use dclutch_trading::successor::{DirectCoordinatesV1, MakerReplaySeedsV1};
+use dclutch_market::{
     CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness, StateBumpsV1,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     CAPABILITY_EXECUTION_SELECTION_BYTES_V1, CallerAuthoritySeedsV1,
     CapabilityExecutionSelectionV1, ExecutionRoleV1,
 };

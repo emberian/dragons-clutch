@@ -27,18 +27,18 @@
 
 use std::collections::BTreeMap;
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
     FundingLedgerStatusV2, FundingLedgerV2, derive_funded_rent_rate_v2, funding_ledger_bytes_v2,
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     Action, CoreState, Identity as CoreIdentity, Phase, Readiness, Request,
 };
-use dclutch_product_runtime_v2_admission::{
+use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_resolution_codec::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_source::resolution::{
     FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
     RESOLUTION_CONTROLLER_RELEASE_ID_V7, SOURCE_CLOSURE_RECEIPT_BYTES_V3,
     SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SourceClosureReceiptV3,
@@ -50,7 +50,7 @@ use dclutch_resolution_core_v3_operator::{
     build_resolution_verify_fund_ready_v3, validate_resolution_close_fund_report_v3,
     validate_resolution_create_fund_report_v3, validate_resolution_verify_fund_ready_report_v3,
 };
-use dclutch_source_contract::{
+use dclutch_source::{
     PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, RECOVERY_POLICY_SCHEMA_ID_V2,
     RecoveryPolicyV2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
     SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1, SourceMaterialV3,
@@ -74,7 +74,7 @@ use crate::{
     stages::{MarketAddressesV1, StageReportV1},
 };
 
-use dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1;
+use dclutch_market::capability_manifest::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1;
 
 /// Every address the resolution ladder consumes, derived once from the
 /// founding's own evidence.
@@ -1088,7 +1088,7 @@ pub(crate) fn retire(
     let hoard_atoms = rpc
         .account(hoard)?
         .and_then(|account| {
-            dclutch_token_svm::TokenAccount::parse(&account.data)
+            dclutch_custody::token_svm::TokenAccount::parse(&account.data)
                 .ok()
                 .map(|parsed| parsed.amount)
         })

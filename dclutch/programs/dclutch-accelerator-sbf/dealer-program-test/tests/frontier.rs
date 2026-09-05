@@ -45,7 +45,7 @@
 
 use std::vec::Vec;
 
-use dclutch_capability_program_contract::hot_v3::{
+use dclutch_market::capability_program::hot_v3::{
     HOT_ACTIVATION_CACHE_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CORE_PROGRAM_ACCOUNT_V3,
     HOT_CORE_PROGRAMDATA_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
     HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3,
@@ -53,24 +53,24 @@ use dclutch_capability_program_contract::hot_v3::{
     HOT_RENT_SYSVAR_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
     HOT_TRADING_PROGRAMDATA_ACCOUNT_V3, HotExecutionEnvelopeV3,
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
 };
 use dclutch_core_contract::ContentId;
 use dclutch_dealer_accelerator_test_caller_sbf::dealer_accelerator_test_caller_authority_v1;
-use dclutch_execution_strategy_contract::v2::{
+use dclutch_market::execution_strategy::v2::{
     ACCELERATOR_REQUEST_HEADER_BYTES_V2, AcceleratorRequestV2, RequestTransportV2,
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
     STATE_BYTES, StateBumpsV1,
 };
-use dclutch_registry_contract::{
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ArtifactActivationInputV1,
     ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
     activate_execution_role_into_v1, initialize_activation_cache_v1,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, CapabilityExecutionSelectionV1, ExecutionReleaseSetV1,
     ExecutionRoleBindingV1, ExecutionRoleV1, ProgramIdentityV1,
 };

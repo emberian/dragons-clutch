@@ -5,7 +5,7 @@
 mod sponsored_campaign {
     use std::{env, fs, path::PathBuf};
 
-    use dclutch_capability_contract::{
+    use dclutch_market::capability_manifest::{
         ActivationPolicy, CAPABILITY_ENTRY_BYTES, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         CapabilityEntryV1, CapabilityFundingLedgerDerivationV2, CapabilityManifestV1,
         CompartmentFundingV1, ContentId as CapabilityContentId, FUNDING_STATE_BYTES,
@@ -13,20 +13,20 @@ mod sponsored_campaign {
         MAX_DEPENDENCIES_PER_CAPABILITY, derive_funded_rent_rate_v2, funding_ledger_bytes_v2,
     };
     use dclutch_core_contract::ContentId;
-    use dclutch_market_core_codec::{
+    use dclutch_market::{
         CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase,
         Readiness, StateBumpsV1,
     };
-    use dclutch_product_runtime_v2::{
+    use dclutch_product::{
         ContentId as ProductContentId, PortfolioInputV2, ResultDomainInputV2, compile_portfolio_v2,
         compile_result_domain_v2, portfolio_record_bytes, result_domain_record_bytes,
     };
-    use dclutch_product_runtime_v2_admission::{
+    use dclutch_product::admission::{
         PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2,
         ProductRecordV2, RESULT_DOMAIN_SCHEMA_ID_V2,
     };
     use dclutch_program_test_evidence::TransactionEvidence;
-    use dclutch_pyth_svm::{
+    use dclutch_source::pyth::{
         DEVNET_CLUSTER_ID_V1, FULL_PRICE_UPDATE_V2_LEN, PythSponsoredPushReleaseV1,
         PythSponsoredPushReleaseV1Input, RECEIVER_CONFIG_V2_LEN,
         price_update::PRICE_UPDATE_V2_DISCRIMINATOR,
@@ -35,18 +35,18 @@ mod sponsored_campaign {
             PYTH_SPONSORED_PUSH_TRANSPORT_PROFILE_ID_V1,
         },
     };
-    use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-    use dclutch_registry_contract::{
+    use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+    use dclutch_registry::{
         ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
         ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
         ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
         initialize_activation_cache_v1,
     };
-    use dclutch_release_set_contract::{
+    use dclutch_registry::release_set::{
         ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
         ProgramIdentityV1,
     };
-    use dclutch_resolution_codec::{
+    use dclutch_source::resolution::{
         RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
         RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateKindV2, ResolutionCertificateV2,
         SPONSORED_PUSH_CANDIDATE_BYTES_V1, SPONSORED_PUSH_CANDIDATE_PDA_DOMAIN_V1,
@@ -55,7 +55,7 @@ mod sponsored_campaign {
         SponsoredPushInstructionV1, SponsoredPushReceiptV1,
     };
     use dclutch_resolution_proof_sbf::ResolutionError;
-    use dclutch_source_contract::{
+    use dclutch_source::{
         CapacityEnvelope as SourceCapacityEnvelope, ContentId as SourceContentId,
         PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1,
         PYTH_SPONSORED_PUSH_PROVIDER_EXTENSION_RELEASE_ID_V1, ProviderReleaseV1,
@@ -645,7 +645,7 @@ mod sponsored_campaign {
         .expect("synthetic sponsored release");
         let (release_record, release_id) = add_record(
             test,
-            dclutch_pyth_svm::PYTH_SPONSORED_PUSH_RELEASE_SCHEMA_ID_V1,
+            dclutch_source::pyth::PYTH_SPONSORED_PUSH_RELEASE_SCHEMA_ID_V1,
             release.to_bytes().to_vec(),
         );
         let provider_value = ProviderReleaseV1::new(
@@ -693,7 +693,7 @@ mod sponsored_campaign {
         );
         let (spec, spec_id) = add_record(
             test,
-            dclutch_source_contract::SOURCE_SPEC_SCHEMA_ID_V1,
+            dclutch_source::SOURCE_SPEC_SCHEMA_ID_V1,
             spec_value.to_bytes().to_vec(),
         );
         let window_value = WindowSpecV1::new(
@@ -708,7 +708,7 @@ mod sponsored_campaign {
         .expect("sponsored terminal window");
         let (window, window_id) = add_record(
             test,
-            dclutch_source_contract::WINDOW_SPEC_SCHEMA_ID_V1,
+            dclutch_source::WINDOW_SPEC_SCHEMA_ID_V1,
             window_value.to_bytes().to_vec(),
         );
         let statistic_value = StatisticSpecV1::new(
@@ -843,7 +843,7 @@ mod sponsored_campaign {
         );
         let (source_state, source_bump) = Pubkey::find_program_address(
             &[
-                dclutch_source_contract::SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
+                dclutch_source::SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
                 market.as_ref(),
                 &GENERATION.to_le_bytes(),
             ],
@@ -908,7 +908,7 @@ mod sponsored_campaign {
         )
         .0;
         let candidate_of = |update: &[u8; FULL_PRICE_UPDATE_V2_LEN]| {
-            let parsed = dclutch_pyth_svm::FullPriceUpdateV2::parse(update).expect("price update");
+            let parsed = dclutch_source::pyth::FullPriceUpdateV2::parse(update).expect("price update");
             Pubkey::find_program_address(
                 &[
                     SPONSORED_PUSH_CANDIDATE_PDA_DOMAIN_V1,
@@ -1019,7 +1019,7 @@ mod sponsored_campaign {
             let (legacy_v5_manifest, legacy_v5_manifest_bytes) = add_sponsored_manifest(
                 test,
                 graph.material_id,
-                dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V5,
+                dclutch_source::resolution::RESOLUTION_CONTROLLER_RELEASE_ID_V5,
             );
             let legacy_v5_manifest_view = CapabilityManifestV1::decode(&legacy_v5_manifest_bytes)
                 .expect("legacy V5 sponsored manifest view");

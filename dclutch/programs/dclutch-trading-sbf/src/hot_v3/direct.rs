@@ -203,7 +203,7 @@ const REGISTERED_IDENTITY_TOKEN_PROGRAM_V4: usize = 25;
 
 #[cfg(not(target_os = "solana"))]
 const _: () = {
-    use dclutch_direct_codec::{
+    use dclutch_trading::{
         registered_account_artifacts_v4 as accounts, registered_creation_artifacts_v4 as creation,
         registered_state_artifacts_v4 as state,
     };
@@ -585,7 +585,7 @@ fn prepare_direct_registered_crosscheck_v3(
                 coordinate: DIRECT_REGISTER_BUY_OPEN_ACCOUNT_START_V4 + OPEN_VAULT_FRAME_VAULT_V3,
                 owner: direct_identity_v3(identities, REGISTERED_IDENTITY_TOKEN_PROGRAM_V4)?,
                 lamports: direct_scalar_v3(scalars, REGISTERED_SCALAR_VAULT_RENT_V4)?,
-                data_len: width_u32_v3(dclutch_token_svm::ACCOUNT_BYTES)?,
+                data_len: width_u32_v3(dclutch_custody::token_svm::ACCOUNT_BYTES)?,
             }),
         ]
     } else {
@@ -727,7 +727,7 @@ fn direct_account_prestate_v3<'a>(
 }
 
 fn prepare_direct_inline_input_v3(
-    request: dclutch_direct_codec::execution_v3::DirectInlineOrdinaryRequestV3,
+    request: dclutch_trading::execution_v3::DirectInlineOrdinaryRequestV3,
     config: DirectExecutionConfigV1,
     tail_count: u32,
     scalars: &[u64],
@@ -809,7 +809,7 @@ fn direct_identity_v3(identities: &[[u8; 32]], index: usize) -> Result<[u8; 32],
 }
 
 fn direct_inline_participant_v3(
-    request: dclutch_direct_codec::execution_v3::DirectSignedParticipantV3,
+    request: dclutch_trading::execution_v3::DirectSignedParticipantV3,
     logical_coordinate: usize,
     runtime_accounts: &[&AccountInfo<'_>],
     lifecycle_plans: &[PreparedLifecycleInvocationV3],
@@ -982,7 +982,7 @@ fn direct_inline_effect_dispatch_v3(
         .route(0)
         .map_err(|_| TradingSbfError::Content)?;
     if claims.role() != FixedRole::Claims
-        || claims.kind() != dclutch_effect_kernel::v3::RouteKindV3::Once
+        || claims.kind() != dclutch_vm::effect::v3::RouteKindV3::Once
         || claims.fixed_account_count() != SPARSE_NATIVE_TRANSFER_ACCOUNT_COUNT_V1
         || effect
             .invocation_count(0, tail_count, scalars, identities)
@@ -1006,7 +1006,7 @@ fn direct_inline_effect_dispatch_v3(
             .invocation_count(route_index, tail_count, scalars, identities)
             .map_err(|_| TradingSbfError::Content)?;
         if route.role() != FixedRole::Custody
-            || route.kind() != dclutch_effect_kernel::v3::RouteKindV3::Once
+            || route.kind() != dclutch_vm::effect::v3::RouteKindV3::Once
             || route.fixed_account_count() != TRANSFER_ACCOUNT_COUNT_V1
             || count > 1
         {

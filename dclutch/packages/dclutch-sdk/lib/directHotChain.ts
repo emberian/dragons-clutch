@@ -222,7 +222,7 @@ function concat(...parts: ReadonlyArray<Uint8Array>): Uint8Array {
  * ordinary regions plus the explicit failure coordinate.
  *
  * MATHEMATICAL, not a profile, and it mirrors
- * `dclutch_product_payoff_v2_codec::runtime_v3::CATEGORICAL_REFUND_MINIMUM_WIDTH_V3`.
+ * `dclutch_product::payoff::runtime_v3::CATEGORICAL_REFUND_MINIMUM_WIDTH_V3`.
  * At width 2 the legacy scale `1` and the refunding scale `basisWidth - 1` are
  * the same number, so the record would not say which shape it was founded
  * under, and a disclosure that cannot be derived is one that gets typed by
@@ -256,7 +256,7 @@ export function categoricalRefundsOnFailureV1(kind: number, basisWidth: number, 
  * client can reach: Core pins it at founding
  * (`programs/dclutch-core-sbf/src/generic_founding_v1.rs:1091,1099,1300`) and
  * the conservation contract names it outright
- * (`crates/dclutch-claims-conservation-contract/src/lib.rs:60-61`). Returning
+ * (`crates/dclutch-claims/src/conservation/mod.rs:60-61`). Returning
  * only the width left every downstream surface to assume 1 — which is true of
  * every categorical basis and of every fixture in this tree, and false of the
  * first graded market, where an under-collateralized `n(basis_scale - 1)` is
@@ -661,7 +661,7 @@ export function decodeDirectDescriptorV4(bytes: Uint8Array): Readonly<{
   const effect = artifact(DirectAbi.CAPABILITY_PROGRAM_V4_EFFECT_SCHEMA_OFFSET, DirectAbi.CAPABILITY_PROGRAM_V4_EFFECT_PROGRAM_OFFSET, 'Effect');
   const derivationPolicy = slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V4_DERIVATION_POLICY_OFFSET, 32);
   // The schema conjuncts mirror the live Rust authenticator
-  // (`authenticate_direct_artifacts_v4` in dclutch-direct-codec's
+  // (`authenticate_direct_artifacts_v4` in dclutch-trading's
   // `artifacts_v4.rs`): each artifact's SCHEMA is release identity, required
   // exactly. The artifact PROGRAM fields are content digests, and Rust
   // deliberately does NOT pin them -- it requires each named digest to match
@@ -748,7 +748,7 @@ export function validateDirectSignedRequestProfileV2(bytes: Uint8Array): void {
   // `common + stride * tail_count` -- so the two strides are geometry the
   // InlineOrdinary emitter carries as named constants
   // (`encode_inline_ordinary_request_profile_v3_atomic` in
-  // `dclutch-direct-codec`'s `ordinary_artifacts_v3.rs` passes them into
+  // `dclutch-trading`'s `ordinary_artifacts_v3.rs` passes them into
   // `RequestGeometryV1::new`). Pinning them as literal zero refused every
   // Market whose scalars grow per outcome; cohort-8's stride is 2.
   if (fixedRequestBytes !== DirectAbi.DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3

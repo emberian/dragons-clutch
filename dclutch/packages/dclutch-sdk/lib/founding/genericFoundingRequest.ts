@@ -13,7 +13,7 @@
  *
  * Every width, offset, and discriminant is imported from
  * `lib/generated/genericFoundingV1.ts`, which `scripts/generate-generic-founding.mjs`
- * emits by reading `crates/dclutch-market-core-codec/src/generic_founding_v1.rs`.
+ * emits by reading `crates/dclutch-market/src/generic_founding_v1.rs`.
  * Nothing in this file restates a number.
  */
 

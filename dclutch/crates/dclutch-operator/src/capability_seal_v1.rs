@@ -35,11 +35,11 @@
 //! a further job -- deciding whether an existing seal is already materialized --
 //! and that is a Direct concern, not a seal concern.
 
-use dclutch_capability_program_contract::hot_v3::{
+use dclutch_market::capability_program::hot_v3::{
     HOT_CAPABILITY_SEAL_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
 };
-use dclutch_capability_program_contract::v4::SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4;
-use dclutch_capability_seal_contract::{CapabilitySealKeyV1, CapabilitySealRequestV1};
+use dclutch_market::capability_program::v4::SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4;
+use dclutch_vm::capability_seal::{CapabilitySealKeyV1, CapabilitySealRequestV1};
 use solana_program::{
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,

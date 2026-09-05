@@ -9,16 +9,16 @@
 
 extern crate alloc;
 
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
 };
-use dclutch_claims_svm::liability_basis_state_v2::LIABILITY_BASIS_MARKET_SEED_V2;
-use dclutch_claims_svm::{
+use dclutch_claims::liability_basis_state_v2::LIABILITY_BASIS_MARKET_SEED_V2;
+use dclutch_claims::{
     liability_basis_state_v2::{LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2},
     protocol_position_v2::ProtocolPositionSeedsV2,
 };
-use dclutch_direct_codec::{
+use dclutch_trading::{
     direct_root_admission_v1::DIRECT_ROOT_OPEN_ADMISSIBLE_STATES_V1,
     execution_v3::DIRECT_SUCCESSOR_KIND_ID_V3,
     successor::{
@@ -32,14 +32,14 @@ use dclutch_direct_codec::{
         direct_token_setup_frame_digest_v1,
     },
 };
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
-use dclutch_realm_contract::{
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
+use dclutch_market::realm::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
-use dclutch_release_set_contract::ExecutionRoleV1;
-use dclutch_token_svm::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
+use dclutch_registry::release_set::ExecutionRoleV1;
+use dclutch_custody::token_svm::{
     ACCOUNT_BYTES, COption, PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID, TokenAccount,
     initialize_account3,
 };
@@ -389,8 +389,8 @@ fn authenticate_activation(
     market: CoreState,
 ) -> Result<
     (
-        dclutch_registry_contract::ArtifactReleaseV1,
-        dclutch_registry_contract::ArtifactReleaseV1,
+        dclutch_registry::ArtifactReleaseV1,
+        dclutch_registry::ArtifactReleaseV1,
     ),
     ProgramError,
 > {
@@ -832,9 +832,9 @@ fn account<'accounts, 'info>(
 
 #[cfg(test)]
 mod tests {
-    use dclutch_direct_codec::successor::DIRECT_MAX_FEE_BASIS_POINTS_V1;
+    use dclutch_trading::successor::DIRECT_MAX_FEE_BASIS_POINTS_V1;
 
-    use dclutch_claims_svm::liability_basis_state_v2::{
+    use dclutch_claims::liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
         LiabilityBasisMarketInputV2, LiabilityBasisPositionInputV2,
         encode_liability_basis_market_into_v2, encode_liability_basis_position_into_v2,

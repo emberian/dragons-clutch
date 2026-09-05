@@ -52,8 +52,8 @@ use dclutch_claim_check_escrow_signer_test_sbf::{
     ESCROW_SIGNER_ACCOUNT_COUNT, ESCROW_SIGNER_INSTRUCTION_BYTES, EscrowSignerActionV1,
     escrow_address, root_stand_in_address, stranger_address,
 };
-use dclutch_claims_svm::claim_check_v1::ClaimCheckEscrowSeedsV1;
-use dclutch_token_svm::{
+use dclutch_claims::claim_check_v1::ClaimCheckEscrowSeedsV1;
+use dclutch_custody::token_svm::{
     ACCOUNT_BYTES, Error as TokenSvmError, MINT_BYTES, Mint, TOKEN_2022_PROGRAM_ID,
     Token2022BehaviorProfileV2, TokenAccount,
 };
@@ -231,7 +231,7 @@ async fn build_fixture(context: &mut ProgramTestContext) -> Fixture {
     // silently testing some other address.
     //
     // Through the exported type, and NOT by spelling `[CLAIM_CHECK_ESCROW_SEED_V1,
-    // &AGGREGATE]` by hand: the seed ORDER belongs to `dclutch-claims-svm`, and a
+    // &AGGREGATE]` by hand: the seed ORDER belongs to `dclutch-claims`, and a
     // hand-written tuple here would be a second author for it. The seam register
     // caught the hand-written version, correctly — a cross-check that restates
     // what it is checking is not a cross-check.

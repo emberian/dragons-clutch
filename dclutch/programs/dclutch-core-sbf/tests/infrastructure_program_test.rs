@@ -4,11 +4,11 @@ use std::{env, fs, path::PathBuf, vec, vec::Vec};
 
 use dclutch_core_contract::ContentId;
 use dclutch_core_sbf::CoreSbfError;
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{
     ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1, ArtifactUpgradePolicyV1,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     INITIALIZE_PROTOCOL_INFRASTRUCTURE_BYTES_V1, InitializeProtocolInfrastructureV1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2,
     ProgramIdentityV1, ProtocolInfrastructureProfileV1, ProtocolInfrastructureProfileV2,
@@ -256,16 +256,16 @@ fn fixture_with_registry_authority(registry_authority: Option<Pubkey>) -> Fixtur
         registry_authority,
     );
     let rent_release = artifact_release(RENT_PROGRAM_ID, &artifacts.rent, 0xa2, None);
-    let registry_binding = dclutch_release_set_contract::ExecutionRoleBindingV1::new(
+    let registry_binding = dclutch_registry::release_set::ExecutionRoleBindingV1::new(
         registry_release.program(),
-        dclutch_release_set_contract::ArtifactReleaseIdV1::new(
+        dclutch_registry::release_set::ArtifactReleaseIdV1::new(
             hash(&registry_release.to_bytes()).to_bytes(),
         )
         .expect("Registry artifact ID"),
     );
-    let rent_binding = dclutch_release_set_contract::ExecutionRoleBindingV1::new(
+    let rent_binding = dclutch_registry::release_set::ExecutionRoleBindingV1::new(
         rent_release.program(),
-        dclutch_release_set_contract::ArtifactReleaseIdV1::new(
+        dclutch_registry::release_set::ArtifactReleaseIdV1::new(
             hash(&rent_release.to_bytes()).to_bytes(),
         )
         .expect("Rent artifact ID"),

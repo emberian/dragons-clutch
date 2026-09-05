@@ -3,7 +3,7 @@
 //! `apps/dclutch-web/lib/founding/genericFoundingRequest.ts` is a second
 //! implementation of `GenericFoundingRequestV1`'s wire, and a second
 //! implementation without an oracle is a guess. This binary runs the FIRST
-//! implementation -- `dclutch-market-core-codec`, the crate the on-chain
+//! implementation -- `dclutch-market`, the crate the on-chain
 //! `dclutch-trading-sbf` route itself decodes with -- over fully determined
 //! inputs and prints the exact bytes it produces.
 //!
@@ -28,12 +28,12 @@
 //! The output is checked in. `lib/founding/genericFoundingRequest.test.ts`
 //! re-encodes the same named inputs in TypeScript and byte-compares.
 
-use dclutch_source_contract::{
+use dclutch_source::{
     ContentId, ManipulationFloorBasis, ManipulationFloorV1, PrincipalCapacityV1,
     admit_founding_principal,
 };
 
-use dclutch_market_core_codec::{
+use dclutch_market::{
     GENERIC_FOUNDING_ACK_BYTES_V1, GENERIC_FOUNDING_REQUEST_BYTES_V1, GenericFoundingAckV1,
     GenericFoundingRequestV1, GenericFoundingStageV1, Identity,
     generic_founding_funding_list_id_v1,
@@ -130,7 +130,7 @@ fn main() {
     println!("{{");
     println!("  \"schema\": \"dclutch-web-generic-founding-vectors-v1\",");
     println!(
-        "  \"provenance\": \"emitted by apps/dclutch-web/fixtures/founding/generator over crates/dclutch-market-core-codec and crates/dclutch-source-contract; regenerate with `cargo run --locked --quiet` in that directory\","
+        "  \"provenance\": \"emitted by apps/dclutch-web/fixtures/founding/generator over crates/dclutch-market and crates/dclutch-source; regenerate with `cargo run --locked --quiet` in that directory\","
     );
     println!("  \"requests\": [");
     println!("{},", request_json("canonical-found-and-permit", found));
@@ -184,7 +184,7 @@ fn manipulation_floors() {
         (
             "curve-derived-graduation-floor",
             ManipulationFloorBasis::CurveDerived,
-            dclutch_source_contract::BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1,
+            dclutch_source::BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1,
         ),
         ("observed-depth", ManipulationFloorBasis::ObservedDepth, 1_000),
         // Representable, and it means "found nothing against this Source".

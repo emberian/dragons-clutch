@@ -85,13 +85,13 @@ pub(crate) struct RelayWindowV1 {
 impl RelayWindowV1 {
     /// Decode the 112-byte `DCLTWIN1` record this market resolves against.
     pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
-        let window = dclutch_source_contract::WindowSpecV1::decode(bytes)
+        let window = dclutch_source::WindowSpecV1::decode(bytes)
             .map_err(|error| Error::new(format!("window spec record: {error:?}")))?;
         Self::from_spec(window)
     }
 
     /// Project the record's own accessors, refusing a window nothing can hit.
-    pub(crate) fn from_spec(window: dclutch_source_contract::WindowSpecV1) -> Result<Self> {
+    pub(crate) fn from_spec(window: dclutch_source::WindowSpecV1) -> Result<Self> {
         let start = window.start_unix_seconds();
         let end = window.end_unix_seconds();
         if end <= start {

@@ -19,12 +19,12 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use dclutch_capability_program_contract::hot_v3::HotExecutionAckV3;
-use dclutch_claims_svm::{
+use dclutch_market::capability_program::hot_v3::HotExecutionAckV3;
+use dclutch_claims::{
     liability_basis_state_v2::LiabilityBasisPositionViewV2,
     protocol_position_v2::ProtocolPositionSeedsV2,
 };
-use dclutch_direct_codec::{
+use dclutch_trading::{
     intent_v2::CompactIntentV2,
     ordinary_v3::DirectOrdinaryAuthenticatedContextV3,
     replay_setup_v1::{DirectReplaySetupReceiptV1, DirectReplaySetupRequestV1},
@@ -58,7 +58,7 @@ use dclutch_operator::{
     },
 };
 use dclutch_release_tool::CheckedExecutionReleaseSetV1;
-use dclutch_token_svm::TokenAccount;
+use dclutch_custody::token_svm::TokenAccount;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
@@ -1111,7 +1111,7 @@ fn decode_signed_intent(
 /// they kept re-authoring. The refusal now says which program refuses and why,
 /// against the same constant that program uses.
 fn refusing_admitted_fee_rate_clause_v1(fee_basis_points: u16) -> Option<String> {
-    let admitted = dclutch_direct_codec::token_setup_v1::DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1;
+    let admitted = dclutch_trading::token_setup_v1::DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1;
     if fee_basis_points == admitted {
         return None;
     }
@@ -7203,7 +7203,7 @@ mod tests {
     /// here -- restating it as a literal is the whole defect this closes.
     #[test]
     fn the_admitted_direct_fee_rate_is_the_one_the_deployed_setup_takes() {
-        let admitted = dclutch_direct_codec::token_setup_v1::DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1;
+        let admitted = dclutch_trading::token_setup_v1::DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1;
         assert_eq!(
             refusing_admitted_fee_rate_clause_v1(admitted),
             None,
@@ -7223,7 +7223,7 @@ mod tests {
         assert!(clause.contains('0'), "{clause}");
         assert!(
             clause.contains(
-                &dclutch_direct_codec::token_setup_v1::DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1
+                &dclutch_trading::token_setup_v1::DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1
                     .to_string()
             ),
             "{clause}"
@@ -7235,7 +7235,7 @@ mod tests {
     /// basis-points value and differs only from the admitted one.
     #[test]
     fn a_merely_different_fee_rate_is_refused_the_same_way() {
-        let admitted = dclutch_direct_codec::token_setup_v1::DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1;
+        let admitted = dclutch_trading::token_setup_v1::DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1;
         let other = admitted.checked_add(1).expect("a neighbouring rate exists");
         let clause =
             refusing_admitted_fee_rate_clause_v1(other).expect("only one rate is admitted");

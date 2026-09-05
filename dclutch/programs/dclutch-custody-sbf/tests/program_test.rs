@@ -9,11 +9,11 @@ use std::{env, fs, path::PathBuf, vec::Vec};
 use dclutch_program_test_evidence::TransactionEvidence;
 
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CallerRoleV1, CompartmentV1, ContextV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1,
     CustodyReplayV1, CustodyRequestV1, CustodyVaultSeedsV1, DelegatedCustodyRequestV2, OperationV1,
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
     StateBumpsV1,
 };
@@ -21,21 +21,21 @@ use dclutch_operator::delegated_custody::{
     DelegatedCustodyInfrastructureV2, DelegatedCustodyOperatorErrorV2,
     delegated_custody_transfer_cpi_v2,
 };
-use dclutch_realm_contract::{
+use dclutch_market::realm::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
     ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
     initialize_activation_cache_v1,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
     ExecutionRoleV1, ProgramIdentityV1,
 };
-use dclutch_token_svm::{
+use dclutch_custody::token_svm::{
     COption as TokenCOption, LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES,
     TOKEN_2022_PROGRAM_ID, TokenAccount,
 };
@@ -643,7 +643,7 @@ fn initialize_request(fixture: &Fixture, payer: Pubkey) -> CustodyRequestV1 {
     request.mint = [0; 32];
     request.token_program = [0; 32];
     request.rent_lamports =
-        Rent::default().minimum_balance(dclutch_custody_contract::CUSTODY_REPLAY_BYTES_V1);
+        Rent::default().minimum_balance(dclutch_custody::CUSTODY_REPLAY_BYTES_V1);
     request
 }
 
@@ -663,7 +663,7 @@ fn open_request(fixture: &Fixture, payer: Pubkey) -> CustodyRequestV1 {
     request.rent_refund = fixture.rent_refund.to_bytes();
     request.expected_revision = 1;
     request.resulting_revision = 2;
-    request.rent_lamports = Rent::default().minimum_balance(dclutch_token_svm::ACCOUNT_BYTES);
+    request.rent_lamports = Rent::default().minimum_balance(dclutch_custody::token_svm::ACCOUNT_BYTES);
     request.semantic = semantic(2);
     request
 }
@@ -729,7 +729,7 @@ fn close_request(fixture: &Fixture) -> CustodyRequestV1 {
     request.rent_refund = fixture.rent_refund.to_bytes();
     request.expected_revision = 5;
     request.resulting_revision = 6;
-    request.rent_lamports = Rent::default().minimum_balance(dclutch_token_svm::ACCOUNT_BYTES);
+    request.rent_lamports = Rent::default().minimum_balance(dclutch_custody::token_svm::ACCOUNT_BYTES);
     request.semantic = semantic(5);
     request
 }
@@ -749,7 +749,7 @@ fn close_replay_request(fixture: &Fixture, expected_revision: u64) -> CustodyReq
     request.expected_revision = expected_revision;
     request.resulting_revision = expected_revision + 1;
     request.rent_lamports =
-        Rent::default().minimum_balance(dclutch_custody_contract::CUSTODY_REPLAY_BYTES_V1);
+        Rent::default().minimum_balance(dclutch_custody::CUSTODY_REPLAY_BYTES_V1);
     request.semantic = semantic(6);
     request
 }
@@ -862,7 +862,7 @@ fn wrapper_instruction(
             ));
         }
     }
-    let mut data = Vec::with_capacity(dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1 + 1);
+    let mut data = Vec::with_capacity(dclutch_custody::CUSTODY_REQUEST_BYTES_V1 + 1);
     data.push(u8::from(fail_after));
     data.extend_from_slice(&request.to_bytes().expect("request bytes"));
     Instruction {

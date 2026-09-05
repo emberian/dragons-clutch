@@ -22,8 +22,8 @@
 use std::path::Path;
 use std::time::Duration;
 
-use dclutch_relay_contract::wire::{AttestationMessageV1, ObservationSetSealV1};
-use dclutch_relay_contract::{RELAYED_SEAL_BYTES, SHA256_EMPTY_DIGEST};
+use dclutch_source::relay::wire::{AttestationMessageV1, ObservationSetSealV1};
+use dclutch_source::relay::{RELAYED_SEAL_BYTES, SHA256_EMPTY_DIGEST};
 use dclutch_relayer::artifacts::ArtifactWriter;
 use dclutch_relayer::chain::LOADER_V3_PROGRAM_ID;
 use dclutch_relayer::config::{AccountSetConfig, PositionConfig};
@@ -37,9 +37,9 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
-const CLUSTER: [u8; 32] = dclutch_relay_contract::SOLANA_MAINNET_GENESIS_HASH_V1;
-const FAMILY: [u8; 32] = dclutch_relay_contract::RELAYED_FAMILY_RELEASE_ID_V1;
-const RULES: [u8; 32] = dclutch_relay_contract::RELAYED_DECODING_RULES_SCHEMA_RELEASE_ID_V1;
+const CLUSTER: [u8; 32] = dclutch_source::relay::SOLANA_MAINNET_GENESIS_HASH_V1;
+const FAMILY: [u8; 32] = dclutch_source::relay::RELAYED_FAMILY_RELEASE_ID_V1;
+const RULES: [u8; 32] = dclutch_source::relay::RELAYED_DECODING_RULES_SCHEMA_RELEASE_ID_V1;
 
 const POOL_KEY: [u8; 32] = [0x11; 32];
 const POOL_OWNER: [u8; 32] = [0x22; 32];
@@ -247,7 +247,7 @@ fn account_set() -> AccountSetConfig {
     let entries = positions
         .iter()
         .map(
-            |position| dclutch_relay_contract::release::AccountSetEntryV1 {
+            |position| dclutch_source::relay::release::AccountSetEntryV1 {
                 key: position.key,
                 expected_owner: position.expected_owner,
                 inline_len: position.inline_len,
@@ -437,7 +437,7 @@ async fn a_cluster_that_is_not_the_pinned_cluster_refuses_before_anything_is_sig
     let url = spawn_mock().await;
     let rpc = RpcClient::new(&url, Duration::from_secs(5), None).expect("client");
     let error = rpc
-        .require_expected_genesis(dclutch_relay_contract::SOLANA_DEVNET_GENESIS_HASH_V1)
+        .require_expected_genesis(dclutch_source::relay::SOLANA_DEVNET_GENESIS_HASH_V1)
         .await
         .expect_err("the mock is mainnet, so a devnet pin must refuse");
     assert!(

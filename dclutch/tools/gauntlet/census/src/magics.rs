@@ -11,7 +11,7 @@
 //! gate is what keeps it fixed): `DEALER_SCENARIO_CHECKPOINT_RESERVE_MAGIC_V1`
 //! (`programs/dclutch-trading-sbf/src/dealer_scenario_checkpoint_v1.rs`) and
 //! `DIRECT_REPLAY_SETUP_REQUEST_MAGIC_V1`
-//! (`crates/dclutch-direct-codec/src/replay_setup_v1.rs`) were both `DCLTDRS1`,
+//! (`crates/dclutch-trading/src/replay_setup_v1.rs`) were both `DCLTDRS1`,
 //! and both are TOP-LEVEL SELECTORS OF THE SAME TRADING ELF. Nothing separated
 //! them but instruction length -- the dealer arm requires `data == MAGIC`,
 //! exactly 8 bytes; the Direct arm requires exactly 120 -- and dispatch order,
@@ -549,10 +549,10 @@ mod tests {
                 "programs/dclutch-trading-sbf/src/dealer_scenario_checkpoint_v1.rs:88",
             ),
             magic(
-                "dclutch-direct-codec",
+                "dclutch-trading",
                 "DIRECT_REPLAY_SETUP_REQUEST_MAGIC_V1",
                 "DCLTDRS1",
-                "crates/dclutch-direct-codec/src/replay_setup_v1.rs:13",
+                "crates/dclutch-trading/src/replay_setup_v1.rs:13",
             ),
         ];
         let (problems, summary) = check(&declared, &[]);
@@ -765,16 +765,16 @@ mod tests {
     fn two_magics_under_one_exported_name_is_a_collision() {
         let declared = [
             magic(
-                "dclutch-dealer-codec",
+                "dclutch-trading",
                 "REQUEST_MAGIC",
                 "DCDREQ01",
-                "crates/dclutch-dealer-codec/src/generated_dealer_liquidity.rs:25",
+                "crates/dclutch-trading/src/dealer/generated_dealer_liquidity.rs:25",
             ),
             magic(
-                "dclutch-general-codec",
+                "dclutch-trading",
                 "REQUEST_MAGIC",
                 "DCGREQ01",
-                "crates/dclutch-general-codec/src/generated_general_controller.rs:29",
+                "crates/dclutch-trading/src/general_codec/generated_general_controller.rs:29",
             ),
         ];
         let (value_problems, summary) = check(&declared, &[]);
@@ -802,23 +802,23 @@ mod tests {
     /// can reach it, so no import can carry the wrong bytes under it. Counted
     /// and printed, exactly as a mirror is, and NOT a gate failure. This test
     /// is the record of that decision -- `ORDER_MAGIC` (`DCGORD01`/`DCGORD02`,
-    /// both private, both in `dclutch-general-adapter-contract`) is the tree's
+    /// both private, both in `dclutch-trading::general`) is the tree's
     /// live instance, and anyone who makes this fail has to delete an
     /// assertion saying why it did not.
     #[test]
     fn a_name_shared_only_by_unexported_declarations_does_not_fail_the_gate() {
         let declared = [
             private(
-                "dclutch-general-adapter-contract",
+                "dclutch-trading",
                 "ORDER_MAGIC",
                 "DCGORD01",
-                "crates/dclutch-general-adapter-contract/src/collection_v1.rs:74",
+                "crates/dclutch-trading/src/general/collection_v1.rs:74",
             ),
             private(
-                "dclutch-general-adapter-contract",
+                "dclutch-trading",
                 "ORDER_MAGIC",
                 "DCGORD02",
-                "crates/dclutch-general-adapter-contract/src/runtime_manifest.rs:17",
+                "crates/dclutch-trading/src/general/runtime_manifest.rs:17",
             ),
         ];
         let (problems, unexported) = check_names(&declared);

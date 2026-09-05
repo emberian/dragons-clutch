@@ -36,7 +36,7 @@
  * `StatisticSpecV1`; no page does yet, and that is owed.
  *
  * THE ORDERING, from the program's own sentence
- * (crates/dclutch-product-runtime-v2/tests/partition.rs:45): region `0` is
+ * (crates/dclutch-product/tests/partition.rs:45): region `0` is
  * `x < c[0]/d`, interior region `i` is `c[i-1]/d <= x < c[i]/d`, and region
  * `R-1` is `x >= c[R-2]/d`. Ascending, left-closed, right-open. There is no
  * ordering tag anywhere; the ascending convention is enforced by the decoder
@@ -48,7 +48,7 @@
  * The largest absolute source-to-result decimal shift the protocol admits.
  *
  * Lean-owned, emitted to `MAX_SOURCE_SCALE_EXPONENT` in
- * `crates/dclutch-product-runtime-v2/src/generated.rs`. Restated here because
+ * `crates/dclutch-product/src/generated.rs`. Restated here because
  * this mirror has no build-time link to that constant; a value outside it is a
  * record the chain would refuse, so refusing it here keeps the two agreeing.
  */

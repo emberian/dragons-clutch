@@ -9,7 +9,7 @@
 //! the authenticated residual vector `capital + Claims - obligations`.
 //! Realized fees have no field in this account.
 
-use dclutch_dealer_codec::scenario::ScenarioSolvencyDescriptor;
+use dclutch_trading::dealer::scenario::ScenarioSolvencyDescriptor;
 use solana_program::{
     hash::{hash, hashv},
     pubkey::Pubkey,

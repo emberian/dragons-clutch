@@ -7,7 +7,7 @@
 //! downgraded privileges while the physical representative supplies their
 //! union. Root and Ticket writes are outer-only commit-last authority.
 
-use dclutch_account_profile_contract::v2::{
+use dclutch_vm::account_profile::v2::{
     AccountPrestateV2, DYNAMIC_FIXED_SPAN_ENTRY_BYTES, DYNAMIC_FIXED_SPAN_HEADER_BYTES,
     OPERATION_BYTES, RULE_BYTES, TrustedBuiltinIdentityV2, TrustedEnvironmentV2,
     TrustedIdentityEnvironmentV2,
@@ -19,11 +19,11 @@ use dclutch_account_profile_contract::v2::{
         encode_account_profile_with_dynamic_fixed_span_v2_borrowed_generated_atomic,
     },
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_GENERATION_OFFSET, CAPABILITY_ROOT_MARKET_OFFSET,
     CAPABILITY_ROOT_SELECTION_OFFSET,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     CAPABILITY_EXECUTION_SELECTION_CONFIG_OFFSET,
     CAPABILITY_EXECUTION_SELECTION_ENTRY_INDEX_OFFSET, CAPABILITY_EXECUTION_SELECTION_KIND_OFFSET,
     CAPABILITY_EXECUTION_SELECTION_MANIFEST_OFFSET, CAPABILITY_EXECUTION_SELECTION_RELEASE_OFFSET,
@@ -105,7 +105,7 @@ pub enum SeriesConsumeAccountProfileErrorV4 {
     /// Fixed geometry or an alias observation was inconsistent.
     Geometry,
     /// The neutral AccountProfile encoder or hostile decoder refused.
-    Profile(dclutch_account_profile_contract::v2::Error),
+    Profile(dclutch_vm::account_profile::v2::Error),
 }
 
 /// Encode one complete global Series Consume Profile13 atomically.
@@ -188,7 +188,7 @@ pub fn encode_series_consume_account_profile_v4_atomic(
     ];
     let mut project_fixed_rule = |coordinate| {
         fixed_rule(input.fixed_data_lengths, usize::from(coordinate))
-            .map_err(|_| dclutch_account_profile_contract::v2::Error::InvalidLength)
+            .map_err(|_| dclutch_vm::account_profile::v2::Error::InvalidLength)
     };
     encode_account_profile_with_dynamic_fixed_span_v2_borrowed_generated_atomic(
         TrustedEnvironmentV2::None,
@@ -488,7 +488,7 @@ mod tests {
     extern crate alloc;
 
     use alloc::vec;
-    use dclutch_account_profile_contract::{
+    use dclutch_vm::account_profile::{
         EFFECT_PERMISSION_WRITE_DATA,
         v2::{AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE},
     };

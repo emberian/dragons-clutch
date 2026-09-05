@@ -47,14 +47,14 @@
 //! names the signatures the frame will require; obtaining them is the caller's
 //! problem and deliberately not this crate's.
 
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{
     ARTIFACT_RELEASE_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
     DeploymentObservationV1, require_slot_pinned_release_v1,
 };
-use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
-use dclutch_release_set_contract::{
+use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, ExecutionRoleBindingV1, InitializeProtocolInfrastructureV2,
     PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2,
@@ -990,8 +990,8 @@ mod tests {
     //! behind Core's Loader authority and both infrastructure upgrades.
 
     use dclutch_core_contract::ContentId;
-    use dclutch_registry_contract::ArtifactUpgradePolicyV1;
-    use dclutch_release_set_contract::{
+    use dclutch_registry::ArtifactUpgradePolicyV1;
+    use dclutch_registry::release_set::{
         PROTOCOL_INFRASTRUCTURE_GENESIS_REGISTRY_ARTIFACT_V2,
         PROTOCOL_INFRASTRUCTURE_GENESIS_RENT_ARTIFACT_V2, ProgramIdentityV1,
     };

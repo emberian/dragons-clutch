@@ -272,31 +272,28 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-capability-seal-contract"
+name = "dclutch-claims"
 version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-custody",
+ "dclutch-market",
+ "dclutch-product",
+ "dclutch-sha256-adapter",
+ "dclutch-source",
+ "dclutch-vm",
+ "sha2",
+]
 
 [[package]]
 name = "dclutch-claims-sparse-chain-test-caller-sbf"
 version = "0.1.0"
 dependencies = [
- "dclutch-claims-svm",
+ "dclutch-claims",
  "dclutch-core-contract",
  "dclutch-refusal-registry",
- "dclutch-release-set-contract",
+ "dclutch-registry",
  "solana-program",
-]
-
-[[package]]
-name = "dclutch-claims-svm"
-version = "0.1.0"
-dependencies = [
- "dclutch-effect-kernel",
- "dclutch-product-payoff-v2-codec",
- "dclutch-rational-representation-v2-kernel",
- "dclutch-rational-representation-v2-lifecycle-contract",
- "dclutch-rational-representation-v2-request-contract",
- "dclutch-representation-composition-v3-kernel",
- "dclutch-sha256-adapter",
 ]
 
 [[package]]
@@ -304,45 +301,29 @@ name = "dclutch-core-contract"
 version = "0.1.0"
 
 [[package]]
-name = "dclutch-effect-kernel"
+name = "dclutch-custody"
 version = "0.1.0"
 dependencies = [
- "dclutch-capability-seal-contract",
-]
-
-[[package]]
-name = "dclutch-product-payoff-v2-codec"
-version = "0.1.0"
-dependencies = [
- "dclutch-product-runtime-v2",
+ "dclutch-market",
+ "dclutch-registry",
  "dclutch-sha256-adapter",
 ]
 
 [[package]]
-name = "dclutch-product-runtime-v2"
-version = "0.1.0"
-
-[[package]]
-name = "dclutch-rational-representation-v2-kernel"
+name = "dclutch-market"
 version = "0.1.0"
 dependencies = [
- "dclutch-product-payoff-v2-codec",
- "dclutch-representation-composition-v3-kernel",
+ "dclutch-core-contract",
+ "dclutch-registry",
+ "dclutch-sha256-adapter",
+ "dclutch-vm",
 ]
 
 [[package]]
-name = "dclutch-rational-representation-v2-lifecycle-contract"
+name = "dclutch-product"
 version = "0.1.0"
 dependencies = [
- "dclutch-rational-representation-v2-kernel",
- "dclutch-token-svm",
-]
-
-[[package]]
-name = "dclutch-rational-representation-v2-request-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-token-svm",
+ "dclutch-sha256-adapter",
 ]
 
 [[package]]
@@ -350,15 +331,11 @@ name = "dclutch-refusal-registry"
 version = "0.1.0"
 
 [[package]]
-name = "dclutch-release-set-contract"
+name = "dclutch-registry"
 version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
 ]
-
-[[package]]
-name = "dclutch-representation-composition-v3-kernel"
-version = "0.1.0"
 
 [[package]]
 name = "dclutch-sha256-adapter"
@@ -369,7 +346,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-token-svm"
+name = "dclutch-source"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-market",
+ "dclutch-product",
+ "dclutch-registry",
+ "dclutch-sha256-adapter",
+]
+
+[[package]]
+name = "dclutch-vm"
 version = "0.1.0"
 
 [[package]]

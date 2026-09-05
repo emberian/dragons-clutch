@@ -26,7 +26,7 @@ import {
 
 /**
  * These are witness tests, not coverage. Each one reproduces a refusal that
- * `crates/dclutch-product-runtime-v2-admission` and
+ * `crates/dclutch-product` and
  * `programs/dclutch-product-runtime-v2-sbf` actually raise, so that the browser
  * refuses precisely what the deployed program refuses -- no wider, and above
  * all no narrower.
@@ -64,7 +64,7 @@ function mutate(source: Uint8Array, offset: number, value: number): Uint8Array {
 describe('Product Runtime V2 admission wire — agreement with the live Rust encoders', () => {
   it('encodes the exact bytes the Rust crate encodes', () => {
     // The other side of this equality is
-    // crates/dclutch-product-runtime-v2-admission/tests/browser_wire_vector.rs.
+    // crates/dclutch-product/tests/admission__browser_wire_vector.rs.
     // One vector, two independent producers; the crate is the authority.
     expect(hex(encodeAdmissionRequestV2(DIGESTS))).toBe(vector.requestHex);
     expect(REQUEST.length).toBe(ADMISSION_REQUEST_BYTES_V2);

@@ -7,13 +7,13 @@
 //! return the floor-rounded pro-rata residual and leave rounding dust in the
 //! pool. Fees, future order flow, and Market Hoard principal are absent.
 
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CUSTODY_REQUEST_BYTES_V1, CallerRoleV1, CompartmentV1, ContextV1, CustodyAuthoritySeedsV1,
     CustodyReceiptV1, CustodyRequestV1, CustodyVaultSeedsV1, DELEGATED_CUSTODY_RECEIPT_BYTES_V2,
     DELEGATED_CUSTODY_REQUEST_BYTES_V2, DelegatedCustodyReceiptV2, DelegatedCustodyRequestV2,
     OperationV1, ReceiptEvidenceV1,
 };
-use dclutch_dealer_codec::scenario::{ClaimsInventoryObservation, ScenarioSolvencyReport};
+use dclutch_trading::dealer::scenario::{ClaimsInventoryObservation, ScenarioSolvencyReport};
 use solana_program::{
     hash::{hash, hashv},
     pubkey::Pubkey,
@@ -1594,7 +1594,7 @@ mod tests {
             lp_external_balance: 100,
             lp_external_delegate: Pubkey::find_program_address(
                 &[
-                    dclutch_custody_contract::CUSTODY_AUTHORITY_PDA_DOMAIN_V1,
+                    dclutch_custody::CUSTODY_AUTHORITY_PDA_DOMAIN_V1,
                     &context.market,
                     &context.release_set,
                 ],

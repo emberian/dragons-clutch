@@ -19,7 +19,7 @@
 
 use core::cell::Ref;
 
-use dclutch_request_profile_contract::v2::{
+use dclutch_vm::request_profile::v2::{
     NativeEd25519InstructionViewV1, NativeSignatureRegistersV1, RequestProfileV2,
     seed_authenticated_signers_atomic,
 };
@@ -375,7 +375,7 @@ mod tests {
 
     use alloc::{vec, vec::Vec};
 
-    use dclutch_request_profile_contract::v2::{
+    use dclutch_vm::request_profile::v2::{
         ED25519_PUBLIC_KEY_BYTES, ED25519_SELF_INSTRUCTION_INDEX, ED25519_SIGNATURE_BYTES,
         ED25519_SIGNATURE_OFFSETS_BYTES, ED25519_SIGNATURE_OFFSETS_START,
         NATIVE_SIGNATURE_REQUIREMENT_BYTES_V1, REQUEST_PROFILE_V2_ARTIFACT_PROFILE,
@@ -399,15 +399,15 @@ mod tests {
         bytes
             .get_mut(..8)
             .expect("magic")
-            .copy_from_slice(&dclutch_request_profile_contract::MAGIC);
+            .copy_from_slice(&dclutch_vm::request_profile::MAGIC);
         bytes
             .get_mut(8..10)
             .expect("version")
-            .copy_from_slice(&dclutch_request_profile_contract::VERSION.to_le_bytes());
+            .copy_from_slice(&dclutch_vm::request_profile::VERSION.to_le_bytes());
         bytes
             .get_mut(10..12)
             .expect("artifact profile")
-            .copy_from_slice(&dclutch_request_profile_contract::ARTIFACT_PROFILE.to_le_bytes());
+            .copy_from_slice(&dclutch_vm::request_profile::ARTIFACT_PROFILE.to_le_bytes());
         bytes
             .get_mut(12..16)
             .expect("request width")

@@ -3,28 +3,28 @@
 use alloc::boxed::Box;
 use core::convert::TryFrom;
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingLedgerDerivationV2,
     CapabilityManifestV1, ContentId as CapabilityContentId, FUNDING_LEDGER_HEADER_BYTES_V2,
     FUNDING_LEDGER_SLOT_BYTES_V2, FundingLedgerCloseCustodyV2, FundingLedgerStatusV2,
     FundingLedgerV2, funding::funded_rent_persists_v1, funding_ledger_bytes_v2,
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     CAPABILITY_FUNDING_HEADER_BYTES_V2, CORE_EFFECT_ACK_BYTES_V1, CORE_EFFECT_DIGEST_DOMAIN_V1,
     CORE_EFFECT_ENVELOPE_BYTES_V1, CapabilityFundingHeaderV2, CoreEffectAckV1, CoreEffectActionV1,
     CoreEffectEnvelopeV1, CoreState, Identity, MarketCoreStateSeedsV2, Role,
 };
-use dclutch_product_runtime_v2::ContentId as ProductContentId;
-use dclutch_product_runtime_v2_svm_reader::{
+use dclutch_product::ContentId as ProductContentId;
+use dclutch_product::svm_reader::{
     AuthenticatedProductRuntimeV2, FinalizedRecordFrameV2, ProductRuntimeFrameV2,
     authenticate_product_runtime_v2,
 };
-use dclutch_registry_contract::{
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetViewV1,
 };
-use dclutch_release_set_contract::ExecutionRoleV1;
-use dclutch_resolution_codec::{
+use dclutch_registry::release_set::ExecutionRoleV1;
+use dclutch_source::resolution::{
     DIRECT_FUNDING_CLOSE_REQUEST_BYTES_V1, DIRECT_FUNDING_CLOSE_REQUEST_MAGIC_V1,
     DirectFundingCloseRequestV1, FUNDING_ACTIVATION_RECEIPT_BYTES_V1,
     FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1, FUNDING_ACTIVATION_REQUEST_BYTES_V1,
@@ -37,7 +37,7 @@ use dclutch_resolution_codec::{
     SOURCE_FUNDING_SET_DIGEST_DOMAIN_V2, SourceClosureReceiptV3,
     funding_lifecycle_account_digest_v1,
 };
-use dclutch_source_contract::{
+use dclutch_source::{
     RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryPolicyV2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
     SOURCE_RESOLUTION_STATE_BYTES_V2, SourceMaterialV3, SourceResolutionPhaseV1,
     SourceResolutionRouteV1, SourceResolutionStateV2,
@@ -161,7 +161,7 @@ struct DirectCloseMarketFacts {
 pub(crate) fn is_core_effect(instruction_data: &[u8]) -> bool {
     instruction_data.len() == CORE_EFFECT_INSTRUCTION_BYTES
         && instruction_data.get(..8)
-            == Some(dclutch_market_core_codec::CORE_EFFECT_MAGIC_V1.as_slice())
+            == Some(dclutch_market::CORE_EFFECT_MAGIC_V1.as_slice())
 }
 
 /// Return whether bytes select the V7 permissionless activation route.
@@ -1936,7 +1936,7 @@ fn process_create<'info>(
 
     let (expected_source, source_bump) = Pubkey::find_program_address(
         &[
-            dclutch_source_contract::SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
+            dclutch_source::SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
             common.market.key.as_ref(),
             &authenticated.state.identity.generation.to_le_bytes(),
         ],
@@ -1952,7 +1952,7 @@ fn process_create<'info>(
     let source_plan = SourceResolutionStateV2::fresh(
         common.market.key.to_bytes(),
         authenticated.state.identity.generation,
-        dclutch_source_contract::ContentId::new(request.source_material)
+        dclutch_source::ContentId::new(request.source_material)
             .map_err(|_| ResolutionError::SourceMaterial)?,
         request.beneficiary,
         source_bump,
@@ -2876,7 +2876,7 @@ fn initialize_source_output<'info>(
     let generation_seed = generation.to_le_bytes();
     let bump_seed = [bump];
     let signer: [&[u8]; 4] = [
-        dclutch_source_contract::SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
+        dclutch_source::SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
         market.key.as_ref(),
         &generation_seed,
         &bump_seed,
@@ -3317,21 +3317,21 @@ fn next<'a, 'info>(
 
 #[cfg(test)]
 mod tests {
-    use dclutch_capability_contract::{
+    use dclutch_market::capability_manifest::{
         ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
         ContentId as CapabilityContentId, FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES,
         MAX_DEPENDENCIES_PER_CAPABILITY,
     };
-    use dclutch_market_core_codec::{
+    use dclutch_market::{
         CAPABILITY_FUNDING_HEADER_BYTES_V2, CapabilityFundingHeaderV2, CoreEffectAckV1,
         CoreEffectActionV1, CoreEffectEnvelopeV1, Identity, Role,
     };
-    use dclutch_resolution_codec::{
+    use dclutch_source::resolution::{
         RESOLUTION_CONTROLLER_RELEASE_ID_V6, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
         RESOLUTION_CORE_ROLE_REQUEST_BYTES_V2, RESOLUTION_POSTSTATE_DIGEST_DOMAIN_V2,
         ResolutionCoreActionV1, ResolutionCoreReceiptKindV1, ResolutionRoleRequestV2,
     };
-    use dclutch_source_contract::{
+    use dclutch_source::{
         ContentId as SourceContentId, RecoveryAttemptV2, RecoveryPolicyV2, SourceMaterialV3,
     };
     use solana_program::{
@@ -3398,16 +3398,16 @@ mod tests {
         let role_bytes = role_bytes(action);
         let core_action = match action {
             ResolutionCoreActionV1::CreateFund => {
-                dclutch_market_core_codec::CoreEffectActionV1::CreateFund
+                dclutch_market::CoreEffectActionV1::CreateFund
             }
             ResolutionCoreActionV1::VerifyFundReady => {
-                dclutch_market_core_codec::CoreEffectActionV1::VerifyFundReady
+                dclutch_market::CoreEffectActionV1::VerifyFundReady
             }
             ResolutionCoreActionV1::AdmitTerminal => {
-                dclutch_market_core_codec::CoreEffectActionV1::AdmitTerminal
+                dclutch_market::CoreEffectActionV1::AdmitTerminal
             }
             ResolutionCoreActionV1::CloseFund => {
-                dclutch_market_core_codec::CoreEffectActionV1::CloseFund
+                dclutch_market::CoreEffectActionV1::CloseFund
             }
         };
         CoreEffectEnvelopeV1::new(
@@ -3695,7 +3695,7 @@ mod tests {
             Some(recovery_policy_id),
             source_id(24),
         );
-        let ladder = |second: dclutch_source_contract::ContentId| {
+        let ladder = |second: dclutch_source::ContentId| {
             RecoveryPolicyV2::new(
                 source_id(25),
                 [
@@ -3722,7 +3722,7 @@ mod tests {
         // a leg it had already spent.
         assert_eq!(
             ladder(first_allocation).unwrap_err(),
-            dclutch_source_contract::Error::NonCanonicalRecoveryOrder,
+            dclutch_source::Error::NonCanonicalRecoveryOrder,
         );
 
         let quote = FundingQuoteV1::new(FundingAmountsV1::default(), None).expect("zero quote");

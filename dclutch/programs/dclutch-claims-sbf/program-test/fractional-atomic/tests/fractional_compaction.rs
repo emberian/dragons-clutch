@@ -67,8 +67,8 @@ use std::{env, fs, path::PathBuf};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 
-use dclutch_capability_program_contract::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
-use dclutch_claims_svm::{
+use dclutch_market::capability_program::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
+use dclutch_claims::{
     CallerRole,
     claim_check_request_v1::OpenClaimCheckEscrowRequestV1,
     claim_check_v1::{
@@ -82,7 +82,7 @@ use dclutch_claims_svm::{
     },
 };
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1,
     CustodyReplaySeedsV1, CustodyVaultSeedsV1,
 };
@@ -98,10 +98,10 @@ use dclutch_fractional_atomic_program_test::{
         compile_narrow_fixture_v3,
     },
 };
-use dclutch_fractional_claim_contract::{
+use dclutch_claims::fractional::{
     FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4, FractionalRootInputV1, FractionalRootV1,
 };
-use dclutch_fractional_claim_kernel::{
+use dclutch_claims::fractional_kernel::{
     FractionalExposureTermsInputV2, encode_fractional_exposure_terms_v2,
     fractional_exposure_terms_bytes_v2,
 };
@@ -109,7 +109,7 @@ use dclutch_fractional_cubic_life_evidence::{
     AccountImageV1, COMPACTION_SCHEMA_V1, CompactionBridgeV1, PreterminalBridgeV1, canonical_bytes,
     digest as bridge_digest, read_preterminal, write_atomic,
 };
-use dclutch_product_payoff_v2_codec::{
+use dclutch_product::payoff::{
     price_gate_v1::{
         PRICE_GATE_ATOM_COUNT_OFFSET_V1, PRICE_GATE_DEGREE_OFFSET_V1,
         PRICE_GATE_DENOMINATORS_OFFSET_V1, PRICE_GATE_MAGIC_OFFSET_V1, PRICE_GATE_MAGIC_V1,
@@ -120,16 +120,16 @@ use dclutch_product_payoff_v2_codec::{
     },
     runtime_v3::ProductBasisV3,
 };
-use dclutch_realm_contract::{
+use dclutch_market::realm::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
 };
-use dclutch_release_set_contract::CapabilityExecutionSelectionV1;
-use dclutch_rent_contract::RefundAuthority;
-use dclutch_rent_contract::lifecycle_v2::{
+use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
+use dclutch_market::rent::RefundAuthority;
+use dclutch_market::rent::lifecycle_v2::{
     LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
 };
-use dclutch_resolution_codec::{ResolutionCertificateKindV2, ResolutionCertificateV2};
-use dclutch_token_svm::{
+use dclutch_source::resolution::{ResolutionCertificateKindV2, ResolutionCertificateV2};
+use dclutch_custody::token_svm::{
     PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
     TokenBehaviorSelectionV2,
 };
@@ -282,7 +282,7 @@ fn artifacts() -> Artifacts {
 }
 
 fn selection_config_digest(terms_bytes: &[u8]) -> [u8; 32] {
-    use dclutch_fractional_claim_kernel::{
+    use dclutch_claims::fractional_kernel::{
         FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FRACTIONAL_SELECTION_CONFIG_BYTES_V1,
         FractionalExposureTermsAdmissionV2, FractionalExposureTermsV2,
         encode_fractional_selection_config_v1, fractional_selection_config_from_terms_v1,
@@ -604,7 +604,7 @@ fn campaign_fixture_basis(
     }
     let activation_cache_key = Pubkey::find_program_address(
         &[
-            dclutch_registry_contract::ACTIVATION_PDA_DOMAIN_V1,
+            dclutch_registry::ACTIVATION_PDA_DOMAIN_V1,
             &release_set,
         ],
         &REGISTRY_PROGRAM_ID,
@@ -791,7 +791,7 @@ fn campaign_fixture_basis(
     .expect("exact Fractional exposure terms");
     let terms_record = finalized(
         REGISTRY_PROGRAM_ID,
-        dclutch_fractional_claim_kernel::FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
+        dclutch_claims::fractional_kernel::FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
         terms_bytes,
     );
 
@@ -805,7 +805,7 @@ fn campaign_fixture_basis(
     let selection = CapabilityExecutionSelectionV1::new(
         0,
         ContentId::new([0x81; 32]).expect("manifest"),
-        ContentId::new(dclutch_fractional_claim_contract::FRACTIONAL_CAPABILITY_KIND_ID_V1)
+        ContentId::new(dclutch_claims::fractional::FRACTIONAL_CAPABILITY_KIND_ID_V1)
             .expect("kind"),
         ContentId::new([0x83; 32]).expect("capability release"),
         ContentId::new(selected_config).expect("config"),
@@ -909,7 +909,7 @@ fn campaign_fixture_basis(
     // authenticates it and reads the owner kind that admits this whole route.
     let position_principal = Rent::default().minimum_balance(shared.reserve_position.bytes.len());
     let admission_principal = Rent::default().minimum_balance(
-        dclutch_claims_svm::protocol_position_v2::PROTOCOL_POSITION_ADMISSION_BYTES_V2,
+        dclutch_claims::protocol_position_v2::PROTOCOL_POSITION_ADMISSION_BYTES_V2,
     );
     // Deliberately not the rent minimum. A fixture pinned to the minimum
     // silently excuses a route that recomputes the minimum instead of reading
@@ -1475,12 +1475,12 @@ async fn submit_holder_act(
 
 fn fractional_redemption_instruction(
     fixture: &CampaignFixture,
-    request: dclutch_claims_svm::fractional_claim_check_v1::FractionalRedeemClaimCheckRequestV1,
+    request: dclutch_claims::fractional_claim_check_v1::FractionalRedeemClaimCheckRequestV1,
     holder: Pubkey,
     holder_collateral_tokens: Pubkey,
     holder_shard_tokens: Pubkey,
 ) -> Instruction {
-    use dclutch_claims_svm::fractional_claim_check_v1::FractionalClaimCheckRedemptionRoleV1 as Role;
+    use dclutch_claims::fractional_claim_check_v1::FractionalClaimCheckRedemptionRoleV1 as Role;
     let accounts = Role::frame()
         .iter()
         .map(|role| {
@@ -1517,7 +1517,7 @@ fn fractional_redemption_instruction(
 }
 
 fn close_settled_escrow_instruction(fixture: &CampaignFixture) -> Instruction {
-    use dclutch_claims_svm::claim_check_request_v1::CloseClaimCheckEscrowRequestV1;
+    use dclutch_claims::claim_check_request_v1::CloseClaimCheckEscrowRequestV1;
     Instruction {
         program_id: CLAIMS_PROGRAM_ID,
         accounts: vec![
@@ -1684,8 +1684,8 @@ fn the_compaction_deadline_is_the_one_hundred_and_eighty_day_wait_the_design_sta
 fn crank_terminal_request(
     fixture: &CampaignFixture,
     market_revision: u64,
-) -> dclutch_claims_svm::terminal_settlement_v3::TerminalSettlementRequestV3 {
-    use dclutch_claims_svm::terminal_settlement_v3::{
+) -> dclutch_claims::terminal_settlement_v3::TerminalSettlementRequestV3 {
+    use dclutch_claims::terminal_settlement_v3::{
         TerminalSettlementRequestInputV3, TerminalSettlementRequestV3,
     };
     let shared = &fixture.shared;
@@ -1735,10 +1735,10 @@ fn crank_terminal_request(
 /// refuses, which is why this reproduction is a proof rather than a convenience.
 fn crank_payout_and_caller(
     fixture: &CampaignFixture,
-    request: dclutch_claims_svm::terminal_settlement_v3::TerminalSettlementRequestV3,
+    request: dclutch_claims::terminal_settlement_v3::TerminalSettlementRequestV3,
     market_revision: u64,
 ) -> (u64, Pubkey) {
-    use dclutch_claims_svm::{
+    use dclutch_claims::{
         product_basis_terminal_v3::{
             ProductClaimsTerminalAdmissionV3, ProductClaimsTerminalInputV3,
             encode_product_claims_terminal_signed_delta_v3,
@@ -1746,13 +1746,13 @@ fn crank_payout_and_caller(
         signed_delta_v3::{DeltaDirectionV3, SignedDeltaV3},
         terminal_settlement_v3::TERMINAL_SETTLEMENT_CANDIDATE_DOMAIN_V3,
     };
-    use dclutch_custody_contract::{ContextV1, CustodyRequestV1, OperationV1};
+    use dclutch_custody::{ContextV1, CustodyRequestV1, OperationV1};
     use dclutch_fractional_atomic_program_test::narrow_fixture::{
         COORDINATE_DOMAIN_ID, EVALUATOR_RELEASE_ID, RESULT_UNIT_ID,
     };
-    use dclutch_rational_representation_v2_kernel::product_v3::TerminalScenarioV3;
-    use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-    use dclutch_representation_composition_v3_kernel::RecordAdmissionV3;
+    use dclutch_claims::rational_kernel::product_v3::TerminalScenarioV3;
+    use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+    use dclutch_claims::composition::RecordAdmissionV3;
     use solana_program::hash::hashv;
 
     let shared = &fixture.shared;
@@ -1784,8 +1784,8 @@ fn crank_payout_and_caller(
     let mut aggregate_scratch = vec![neutral; width];
     let mut packet = vec![
         0_u8;
-        dclutch_claims_svm::signed_delta_v3::plan_bytes(
-            dclutch_claims_svm::liability_basis_state_v2::LiabilityBasisMarketViewV2::decode(
+        dclutch_claims::signed_delta_v3::plan_bytes(
+            dclutch_claims::liability_basis_state_v2::LiabilityBasisMarketViewV2::decode(
                 &shared.claims_market_bytes
             )
             .expect("aggregate decode")
@@ -2017,7 +2017,7 @@ fn terminal_prefix(fixture: &CampaignFixture, custody_caller: Pubkey) -> Vec<Acc
     ];
     assert_eq!(
         accounts.len(),
-        dclutch_claims_svm::terminal_settlement_v3::TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3
+        dclutch_claims::terminal_settlement_v3::TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3
     );
     accounts
 }
@@ -2032,7 +2032,7 @@ fn terminal_prefix(fixture: &CampaignFixture, custody_caller: Pubkey) -> Vec<Acc
 /// by hand here would have made the campaign a second opinion about the frame
 /// instead of a driver of it.
 fn compaction_accounts(fixture: &CampaignFixture, record: Pubkey) -> Vec<AccountMeta> {
-    use dclutch_claims_svm::fractional_claim_check_v1::FractionalCompactionRoleV1 as Role;
+    use dclutch_claims::fractional_claim_check_v1::FractionalCompactionRoleV1 as Role;
     Role::frame()
         .into_iter()
         .map(|role| {
@@ -2076,7 +2076,7 @@ fn compaction_accounts(fixture: &CampaignFixture, record: Pubkey) -> Vec<Account
 
 /// The fractional claim-check this crank mints, at its derived address.
 fn record_address(fixture: &CampaignFixture) -> Pubkey {
-    use dclutch_claims_svm::fractional_claim_check_v1::FractionalClaimCheckSeedsV1;
+    use dclutch_claims::fractional_claim_check_v1::FractionalClaimCheckSeedsV1;
     Pubkey::find_program_address(
         &FractionalClaimCheckSeedsV1::new(
             fixture.shared.claims_market.to_bytes(),
@@ -2092,11 +2092,11 @@ fn record_address(fixture: &CampaignFixture) -> Pubkey {
 /// One compaction instruction: the caller program, then the exact 50-account frame.
 fn compaction_instruction(
     fixture: &CampaignFixture,
-    request: &dclutch_claims_svm::fractional_claim_check_compaction_request_v1::FractionalCompactToClaimCheckRequestV1,
+    request: &dclutch_claims::fractional_claim_check_compaction_request_v1::FractionalCompactToClaimCheckRequestV1,
     custody_caller: Pubkey,
     action: dclutch_fractional_compaction_test_caller_sbf::FractionalCompactionCallerActionV1,
 ) -> Instruction {
-    use dclutch_claims_svm::fractional_claim_check_v1::FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1;
+    use dclutch_claims::fractional_claim_check_v1::FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1;
     let mut accounts = Vec::with_capacity(FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1 + 1);
     accounts.push(AccountMeta::new_readonly(CLAIMS_PROGRAM_ID, false));
     accounts.extend(terminal_prefix(fixture, custody_caller));
@@ -2128,7 +2128,7 @@ fn programdata_address(program: Pubkey) -> Pubkey {
 /// table computed from the plan would be the plan agreeing with itself.
 #[tokio::test]
 async fn a_stranger_compacts_a_sleeping_holders_reserve_and_nothing_leaks() {
-    use dclutch_claims_svm::{
+    use dclutch_claims::{
         fractional_claim_check_compaction_request_v1::{
             FractionalCompactToClaimCheckRequestV1, FractionalCompactionCoordinatesV1,
         },
@@ -2245,7 +2245,7 @@ async fn a_stranger_compacts_a_sleeping_holders_reserve_and_nothing_leaks() {
     // The three facts together are w7. Any one alone is weaker: the index being
     // `None` is a claim about the enum, the frame width is a claim about the
     // builder, and only the acceptance above is a claim about the route.
-    use dclutch_claims_svm::fractional_claim_check_v1::{
+    use dclutch_claims::fractional_claim_check_v1::{
         FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1, FractionalCompactionRoleV1,
     };
     assert_eq!(
@@ -2430,7 +2430,7 @@ async fn a_stranger_compacts_a_sleeping_holders_reserve_and_nothing_leaks() {
 /// same physical lifecycle can compare equal economics while changing the
 /// Product's exact evaluator and full partition.
 async fn drive_curve_holder_life(basis_profile: CampaignBasisV1, expected_partition: &[u64]) {
-    use dclutch_claims_svm::{
+    use dclutch_claims::{
         fractional_claim_check_compaction_request_v1::{
             FractionalCompactToClaimCheckRequestV1, FractionalCompactionCoordinatesV1,
         },
@@ -2586,7 +2586,7 @@ async fn drive_curve_holder_life(basis_profile: CampaignBasisV1, expected_partit
     assert_eq!(record_account.owner, CLAIMS_PROGRAM_ID);
     assert!(!record_account.data.is_empty());
 
-    use dclutch_claims_svm::fractional_claim_check_v1::{
+    use dclutch_claims::fractional_claim_check_v1::{
         FractionalClaimCheckV1, FractionalRedeemClaimCheckRequestV1,
     };
     let persisted =
@@ -2954,9 +2954,9 @@ async fn a_degree_three_curve_compacts_and_redeems_without_stranding() {
 /// stranger.
 async fn create_custody_replay(context: &mut ProgramTestContext, fixture: &CampaignFixture) {
     use dclutch_claims_sbf::custody_replay_v1::expected_request_v1;
-    use dclutch_claims_svm::custody_replay_v1::ClaimsCustodyReplayRequestV1;
-    use dclutch_claims_svm::liability_basis_state_v2::LiabilityBasisMarketViewV2;
-    use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+    use dclutch_claims::custody_replay_v1::ClaimsCustodyReplayRequestV1;
+    use dclutch_claims::liability_basis_state_v2::LiabilityBasisMarketViewV2;
+    use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 
     let aggregate = LiabilityBasisMarketViewV2::decode(&fixture.shared.claims_market_bytes)
         .expect("aggregate decode");
@@ -3052,7 +3052,7 @@ async fn run_to_the_crank_substituting(
     action: dclutch_fractional_compaction_test_caller_sbf::FractionalCompactionCallerActionV1,
     substitution: CrankSubstitutionV1,
 ) -> Outcome {
-    use dclutch_claims_svm::{
+    use dclutch_claims::{
         fractional_claim_check_compaction_request_v1::{
             FractionalCompactToClaimCheckRequestV1, FractionalCompactionCoordinatesV1,
         },
@@ -3091,7 +3091,7 @@ async fn run_to_the_crank_substituting(
         .warp_to_slot(escrow.opened_slot + COMPACTION_DEADLINE_SLOTS_V1)
         .expect("warp past the compaction deadline");
     if substitution == CrankSubstitutionV1::CoreMarketBeforeTerminal {
-        use dclutch_market_core_codec::{CoreState, Phase as CorePhase};
+        use dclutch_market::{CoreState, Phase as CorePhase};
         let mut core = CoreState::decode(&fixture.shared.core_state).expect("Core state decodes");
         core.phase = CorePhase::Open;
         core.terminal_winner = 0;
@@ -3359,7 +3359,7 @@ async fn a_compaction_before_terminal_is_refused_as_phase() {
 /// paying campaign never enters.
 #[tokio::test]
 async fn a_worthless_coordinate_mints_no_record_and_never_moves_the_burn_authority() {
-    use dclutch_claims_svm::{
+    use dclutch_claims::{
         fractional_claim_check_compaction_request_v1::{
             FractionalCompactToClaimCheckRequestV1, FractionalCompactionCoordinatesV1,
         },

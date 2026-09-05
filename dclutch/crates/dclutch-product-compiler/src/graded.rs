@@ -154,7 +154,7 @@ pub fn project_to_categorical_v1<const N: usize>(
         .ok_or(CompileError::OutcomeCountMismatch)? = reduce(failure_payout)?;
     if payouts.iter().all(|payout| payout.numerator == 0) {
         return Err(CompileError::Contract(
-            dclutch_product_contract::Error::EmptyPortfolioTemplate,
+            dclutch_product::contract::Error::EmptyPortfolioTemplate,
         ));
     }
     Ok(ProjectedCategoricalShapeV1 {
@@ -447,8 +447,8 @@ fn gcd_u128(mut left: u128, mut right: u128) -> u128 {
 
 #[cfg(test)]
 mod tests {
-    use dclutch_product_contract::ContentId;
-    use dclutch_product_contract::capacity::{
+    use dclutch_product::contract::ContentId;
+    use dclutch_product::contract::capacity::{
         CapacityEnvelope, CapacityProfileId, CapacityProfileV1, CapacityProfileV1Input,
     };
 
@@ -780,7 +780,7 @@ mod tests {
                 GradedRoundingBoundaryV1::CellMidpoint,
             ),
             Err(CompileError::Contract(
-                dclutch_product_contract::Error::EmptyPortfolioTemplate
+                dclutch_product::contract::Error::EmptyPortfolioTemplate
             ))
         );
         assert_eq!(

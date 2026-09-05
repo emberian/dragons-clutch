@@ -13,7 +13,7 @@
 //! Solana SDK types are deliberately absent: instruction construction, PDA
 //! derivation, AccountProfile expansion, and CPI belong to a physical adapter
 //! that does not exist yet, and that will not consume
-//! [`StructuredHotCandidateInputV2`](dclutch_structured_v2_contract::StructuredHotCandidateInputV2)
+//! [`StructuredHotCandidateInputV2`](dclutch_claims::structured::StructuredHotCandidateInputV2)
 //! when it does.  Decision 0011: the chain reaches a family through its sealed
 //! artifact closure, so the candidate is this crate's own adversary rather than
 //! the executor's.

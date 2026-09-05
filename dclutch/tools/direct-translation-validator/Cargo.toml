@@ -8,8 +8,8 @@ description = "Independent executable translation validator for Lean-owned Direc
 
 [dependencies]
 dclutch-direct-aot-contract = { path = "../../crates/dclutch-direct-aot-contract" }
-dclutch-direct-codec = { path = "../../crates/dclutch-direct-codec" }
-dclutch-transition-vm = { path = "../../crates/dclutch-transition-vm" }
+dclutch-trading = { path = "../../crates/dclutch-trading" }
+dclutch-vm = { path = "../../crates/dclutch-vm" }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }

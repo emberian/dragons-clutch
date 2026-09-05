@@ -13,7 +13,7 @@
  * That order is deliberate and the kernel argues for it in its own words: the
  * design's stated order paid the opener first, which does not close
  * arithmetically -- the first crank would pay itself exactly nothing, and an
- * unfunded crank is an unturned crank. `crates/dclutch-claims-svm/src/
+ * unfunded crank is an unturned crank. `crates/dclutch-claims/src/
  * claim_check_conservation_v1.rs`, `ClaimCheckCompactionPlanV1::new`.
  *
  * # Why the numbers are computed rather than quoted
@@ -31,7 +31,7 @@
  * the crank stops being paid first, this file goes red rather than drifting.
  */
 
-/** Account widths this crank moves, from `crates/dclutch-claims-svm`. */
+/** Account widths this crank moves, from `crates/dclutch-claims`. */
 export const OPENER_ACCOUNT_WIDTHS_V1 = Object.freeze({
   /** `CLAIM_CHECK_BYTES_V1` -- the record the crank mints. */
   claimCheck: 288,
@@ -55,7 +55,7 @@ export const OPENER_ACCOUNT_WIDTHS_V1 = Object.freeze({
  * door. It is also the one lamport magnitude in this family still written as a
  * source literal rather than derived from Rent, which
  * `docs/design/FUNDED_CRANK_V1.md` section 3 rules against; the governed record
- * `dclutch-protocol-parameters-contract` is where it moves to.
+ * `dclutch-market::protocol_parameters` is where it moves to.
  */
 export const COMPACTION_CRANK_REWARD_LAMPORTS_V1 = 200_000n;
 

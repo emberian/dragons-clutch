@@ -2,22 +2,22 @@
 
 use std::{env, fs, path::PathBuf, vec, vec::Vec};
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1,
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, CompartmentFundingV1, ContentId,
     FundingAmountsV1, FundingLedgerStatusV2, FundingLedgerV2, FundingQuoteV1,
     MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY, capability_dependency_closure_mask_v1,
     derive_funded_rent_rate_v2, funding_ledger_bytes_v2,
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1, CAPABILITY_ROOT_HEADER_BYTES_V1,
     CapabilityRootHeaderV1, SelectedRecordBumpsV1,
     set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, v4::CapabilityProgramV4,
 };
-use dclutch_claims_svm::liability_basis_state_v2::{
+use dclutch_claims::liability_basis_state_v2::{
     LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
 };
-use dclutch_direct_codec::{
+use dclutch_trading::{
     activation_bundle_v1::{
         DIRECT_ACTIVATION_SELECTOR_V1, direct_activation_account_profile_schema_v1,
         direct_activation_descriptor_schema_v1, direct_activation_effect_schema_v1,
@@ -51,40 +51,40 @@ use dclutch_direct_codec::{
         DirectExecutionConfigV1, DirectRootStateV1,
     },
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     Action, CapabilityFundingHeaderV2, CapabilityRouteLayoutV1, CoreEffectActionV1,
     CoreEffectEnvelopeV1, CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase,
     Readiness, Request, Role, STATE_BYTES, StateBumpsV1,
 };
-use dclutch_product_payoff_v2_codec::runtime_v3::BASIS_HEADER_BYTES_V3;
-use dclutch_product_runtime_v2::{
+use dclutch_product::payoff::runtime_v3::BASIS_HEADER_BYTES_V3;
+use dclutch_product::{
     DOMAIN_CUT_BYTES, PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_HEADER_BYTES,
 };
-use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
-use dclutch_realm_contract::{
+use dclutch_product::admission::PRODUCT_RECORD_BYTES_V2;
+use dclutch_market::realm::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1,
     RealmV1Input,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
     ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
     initialize_activation_cache_v1,
 };
-use dclutch_registry_svm::LOADER_V3_PROGRAM_BYTES;
-use dclutch_release_set_contract::{
+use dclutch_registry::svm::LOADER_V3_PROGRAM_BYTES;
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1,
     ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1, ProgramIdentityV1,
 };
-use dclutch_rent_contract::{
+use dclutch_market::rent::{
     RefundAuthority,
     lifecycle_v2::{
         LIFECYCLE_RENT_CREDIT_BYTES_V2, LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2,
         LifecycleRentCreditV2,
     },
 };
-use dclutch_token_svm::{LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES};
+use dclutch_custody::token_svm::{LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES};
 use solana_account::Account;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_program::{
@@ -382,7 +382,7 @@ fn ordinary_lengths() -> [u32; DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3 as usize
     output[14] = output[4];
     output[16] = output[2];
     output[18] = u32::try_from(
-        dclutch_direct_codec::ordinary_geometry_v3::DIRECT_ORDINARY_DOMAIN_AFFINE_BASE_BYTES_V3
+        dclutch_trading::ordinary_geometry_v3::DIRECT_ORDINARY_DOMAIN_AFFINE_BASE_BYTES_V3
             + outcomes * DOMAIN_CUT_BYTES,
     )
     .expect("domain width");
@@ -405,7 +405,7 @@ fn ordinary_lengths() -> [u32; DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3 as usize
     output[38] = output[26];
     output[39] = output[27];
     output[40] = u32::try_from(REALM_BYTES).expect("Realm width");
-    output[42] = u32::try_from(dclutch_custody_contract::CUSTODY_REPLAY_BYTES_V1)
+    output[42] = u32::try_from(dclutch_custody::CUSTODY_REPLAY_BYTES_V1)
         .expect("Custody replay width");
     output[43] = 82;
     output[44] = 165;
@@ -603,7 +603,7 @@ fn build_fixture(fault: Fault) -> (ProgramTest, Fixture) {
         add_record(&mut test, REALM_SCHEMA_RELEASE_ID_V1, realm_data);
     let (manifest_raw, manifest_staging, manifest_raw_bump, manifest_staging_bump) = add_record(
         &mut test,
-        dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        dclutch_market::capability_manifest::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         manifest.clone(),
     );
     let (program_set_raw, program_set_staging, release_raw_bump, release_staging_bump) = add_record(
@@ -1017,7 +1017,7 @@ fn build_begin_retiring_campaign() -> (ProgramTest, Vec<BeginRetiringRoute>, [u8
 
     let (manifest_raw, _, manifest_raw_bump, manifest_staging_bump) = add_record(
         &mut test,
-        dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        dclutch_market::capability_manifest::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         manifest,
     );
     let (program_set_raw, program_set_staging, release_raw_bump, release_staging_bump) = add_record(
@@ -1666,7 +1666,7 @@ fn build_activation_fixture() -> (ProgramTest, ActivationFixture) {
         add_record(&mut test, REALM_SCHEMA_RELEASE_ID_V1, realm_data);
     let (manifest_raw, manifest_staging, manifest_raw_bump, manifest_staging_bump) = add_record(
         &mut test,
-        dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        dclutch_market::capability_manifest::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         manifest.clone(),
     );
     let (program_set_raw, program_set_staging, release_raw_bump, release_staging_bump) = add_record(

@@ -1,6 +1,6 @@
 //! Profile13 account observations for fixed-cardinality lifecycle actions.
 
-use dclutch_account_profile_contract::v2::{
+use dclutch_vm::account_profile::v2::{
     AccountPrestateV2, DYNAMIC_FIXED_SPAN_HEADER_BYTES, OPERATION_BYTES as ACCOUNT_OPERATION_BYTES,
     RULE_BYTES as ACCOUNT_RULE_BYTES, TrustedBuiltinIdentityV2, TrustedEnvironmentV2,
     TrustedIdentityEnvironmentV2,
@@ -10,9 +10,9 @@ use dclutch_account_profile_contract::v2::{
         ScalarCoordinateV2, encode_account_profile_with_dynamic_fixed_span_v2_atomic,
     },
 };
-use dclutch_product_payoff_v2_codec::runtime_v3::{BASIS_WIDTH_OFFSET_V3, ProductBasisV3};
-use dclutch_rational_representation_v2_kernel::DESCRIPTOR_HEADER_BYTES;
-use dclutch_rational_representation_v2_lifecycle_contract::{
+use dclutch_product::payoff::runtime_v3::{BASIS_WIDTH_OFFSET_V3, ProductBasisV3};
+use dclutch_claims::rational_kernel::DESCRIPTOR_HEADER_BYTES;
+use dclutch_claims::rational_lifecycle::{
     LifecycleActionV2,
     hot_v3::{
         RATIONAL_LIFECYCLE_IDENTITY_DESCRIPTOR_V3,
@@ -20,7 +20,7 @@ use dclutch_rational_representation_v2_lifecycle_contract::{
     },
     hot_v6::RationalLifecycleHotRegisterLayoutV6,
 };
-use dclutch_token_svm::TOKEN_BEHAVIOR_SELECTION_BYTES_V2;
+use dclutch_custody::token_svm::TOKEN_BEHAVIOR_SELECTION_BYTES_V2;
 
 use crate::{
     Error, Result, account_profile::rule, lifecycle_logical_account_count_v3,
@@ -111,7 +111,7 @@ fn encode_rational_lifecycle_selected_account_profile(
         let prestate = match (index, alias, opaque) {
             (4, _, _) => {
                 value.data_length = u32::try_from(
-                    dclutch_product_payoff_v2_codec::runtime_v3::BASIS_HEADER_BYTES_V3,
+                    dclutch_product::payoff::runtime_v3::BASIS_HEADER_BYTES_V3,
                 )
                 .map_err(|_| Error::InvalidLength)?;
                 AccountPrestateV2::AdapterAuthenticatedVariableData

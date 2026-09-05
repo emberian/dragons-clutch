@@ -4,12 +4,12 @@
 
 use std::{env, fs, path::PathBuf};
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
     FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
     funding::{CompartmentFundingV1, FundingAmountsV1},
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
     hot_v3::{
         DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_CAPABILITY_SEAL_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
@@ -17,7 +17,7 @@ use dclutch_capability_program_contract::{
     set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
     v4::CapabilityProgramV4,
 };
-use dclutch_capability_seal_contract::{CAPABILITY_SEAL_BYTES_V1, SealedDescriptorClosureV1};
+use dclutch_vm::capability_seal::{CAPABILITY_SEAL_BYTES_V1, SealedDescriptorClosureV1};
 use dclutch_chain_bundle_builder::{
     BuilderError, WaistFactsV1,
     admitted::AdmittedAotInputV1,
@@ -35,7 +35,7 @@ use dclutch_chain_bundle_builder::{
 };
 use dclutch_core_contract::ContentId;
 use dclutch_direct_hot_program_test_support::waist;
-use dclutch_general_adapter_contract::{
+use dclutch_trading::general::{
     candidate_v1::{
         GeneralCandidateOpeningV1, GeneralCandidateStatusV1, GeneralCandidateV1,
         authenticate_candidate_identity_v1, general_candidate_identity_v1,
@@ -54,10 +54,10 @@ use dclutch_general_adapter_contract::{
         general_system_program_account_v3,
     },
 };
-use dclutch_general_codec::Action;
-use dclutch_general_config_contract::v3::GeneralConfigV3;
-use dclutch_general_config_contract::{GENERAL_ROOT_BYTES_V2, GeneralRootV2};
-use dclutch_market_core_codec::{
+use dclutch_trading::general_codec::Action;
+use dclutch_trading::general_config::v3::GeneralConfigV3;
+use dclutch_trading::general_config::{GENERAL_ROOT_BYTES_V2, GeneralRootV2};
+use dclutch_market::{
     CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
     StateBumpsV1,
 };
@@ -69,25 +69,25 @@ use dclutch_operator::general_selected_release_v1::{
     GeneralSelectedReleaseV1, general_external_account_widths_v3,
     general_selected_entry_descriptor_v1, general_selected_release_v1,
 };
-use dclutch_product_payoff_v2_codec::{
+use dclutch_product::payoff::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
     runtime_v3::{
         BasisInputV3, BasisKindV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, basis_record_bytes_v3,
         compile_basis_v3, semantic_basis_preimage_v3,
     },
 };
-use dclutch_product_runtime_v2::{
+use dclutch_product::{
     ContentId as ProductContentId, portfolio_record_bytes, result_domain_record_bytes,
 };
-use dclutch_product_runtime_v2_admission::{
+use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2,
     RESULT_DOMAIN_SCHEMA_ID_V2,
 };
 use dclutch_product_runtime_v2_operator::{ProductCompilationInputV2, compile_product_records_v2};
-use dclutch_realm_contract::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1};
-use dclutch_record_contract::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
-use dclutch_release_set_contract::{ArtifactReleaseIdV1, CapabilityExecutionSelectionV1};
-use dclutch_rent_contract::{
+use dclutch_market::realm::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1};
+use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
+use dclutch_registry::release_set::{ArtifactReleaseIdV1, CapabilityExecutionSelectionV1};
+use dclutch_market::rent::{
     RefundAuthority,
     lifecycle_v2::{
         LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
@@ -329,15 +329,15 @@ fn manifest_selection(
     )
     .expect("funding compartments");
     let entry = CapabilityEntryV1::new(
-        dclutch_capability_contract::ContentId::new(descriptor.kind().to_bytes()).expect("kind"),
-        dclutch_capability_contract::ContentId::new(digest(&release.program_set))
+        dclutch_market::capability_manifest::ContentId::new(descriptor.kind().to_bytes()).expect("kind"),
+        dclutch_market::capability_manifest::ContentId::new(digest(&release.program_set))
             .expect("ProgramSet"),
-        dclutch_capability_contract::ContentId::new(digest(&release.config)).expect("config"),
-        dclutch_capability_contract::ContentId::new(descriptor.capacity_profile().to_bytes())
+        dclutch_market::capability_manifest::ContentId::new(digest(&release.config)).expect("config"),
+        dclutch_market::capability_manifest::ContentId::new(descriptor.capacity_profile().to_bytes())
             .expect("capacity"),
-        dclutch_capability_contract::ContentId::new(descriptor.root_schema().to_bytes())
+        dclutch_market::capability_manifest::ContentId::new(descriptor.root_schema().to_bytes())
             .expect("root schema"),
-        dclutch_capability_contract::ContentId::new(descriptor.derivation_policy().to_bytes())
+        dclutch_market::capability_manifest::ContentId::new(descriptor.derivation_policy().to_bytes())
             .expect("lifecycle"),
         ActivationPolicy::PrepaidLazy,
         clock_slot.checked_add(100).expect("activation deadline"),
@@ -356,7 +356,7 @@ fn manifest_selection(
         program_set_digest,
     );
     let manifest_bumps = record_bumps(
-        dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        dclutch_market::capability_manifest::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         manifest_digest,
     );
     let config_bumps = record_bumps(descriptor.config_schema().to_bytes(), config_digest);
@@ -1356,7 +1356,7 @@ async fn execute_open_batch_at(outcome_count: u32, warp_to: Option<u64>) -> Open
     assert_eq!(
         local.header().bump,
         Pubkey::find_program_address(
-            dclutch_general_adapter_contract::state_seeds_v3::GeneralStateAddressSeedsV3::batch(
+            dclutch_trading::general::state_seeds_v3::GeneralStateAddressSeedsV3::batch(
                 case.root.to_bytes(),
                 occurrence,
             )

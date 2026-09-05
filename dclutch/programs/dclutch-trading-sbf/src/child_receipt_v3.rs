@@ -4,7 +4,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use dclutch_effect_kernel::{
+use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{ProgramV3, ResolvedInvocationV3, ResolvedReceiptDependencyV3},
 };
@@ -238,7 +238,7 @@ fn require_one_chain_receipt_width_v3(
 mod tests {
     use super::*;
     use alloc::vec;
-    use dclutch_effect_kernel::v3::RouteKindV3;
+    use dclutch_vm::effect::v3::RouteKindV3;
 
     fn invocation(dependency: Option<ResolvedReceiptDependencyV3>) -> ResolvedInvocationV3 {
         ResolvedInvocationV3 {
@@ -254,7 +254,7 @@ mod tests {
             request_offset: 0,
             request_len: 8,
             borrowed_witness: None,
-            receipt_dependencies: dclutch_effect_kernel::v3::ResolvedReceiptDependenciesV3::empty(),
+            receipt_dependencies: dclutch_vm::effect::v3::ResolvedReceiptDependenciesV3::empty(),
             receipt_dependency: dependency,
         }
     }

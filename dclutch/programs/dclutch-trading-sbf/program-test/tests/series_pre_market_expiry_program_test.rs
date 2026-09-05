@@ -235,7 +235,7 @@ mod series_premarket_expiry_chain_v1;
 #[path = "support/series_premarket_expiry_v1.rs"]
 mod series_premarket_expiry_v1;
 
-use dclutch_market_core_codec::SERIES_FOUNDING_PERMIT_BYTES_V1;
+use dclutch_market::SERIES_FOUNDING_PERMIT_BYTES_V1;
 use dclutch_trading_sbf::TradingSbfError;
 use series_premarket_expiry_chain_v1::{
     SeriesPremarketExpiryChainFixtureV1, SeriesPremarketExpiryChainInputV1,
@@ -252,7 +252,7 @@ use solana_program::{instruction::InstructionError, pubkey::Pubkey, rent::Rent};
 use solana_program_test::BanksClientError;
 use solana_sdk::transaction::TransactionError;
 
-use dclutch_capability_program_contract::hot_v3::DIRECT_HOT_HEAP_FRAME_BYTES_V1;
+use dclutch_market::capability_program::hot_v3::DIRECT_HOT_HEAP_FRAME_BYTES_V1;
 use dclutch_direct_hot_program_test_support::waist::{
     CLAIMS_PROGRAM_ID, COMPUTE_LIMIT, CORE_PROGRAM_ID, CUSTODY_PROGRAM_ID, REGISTRY_PROGRAM_ID,
     RENT_PROGRAM_ID, TRADING_PROGRAM_ID, add_lookup_table, add_release_waist,

@@ -1,6 +1,6 @@
 //! `dclutch market` — the Market Core account, decoded and read back plainly.
 
-use dclutch_market_core_codec::{CoreState, Identity, Phase, Readiness, STATE_BYTES, STATE_MAGIC};
+use dclutch_market::{CoreState, Identity, Phase, Readiness, STATE_BYTES, STATE_MAGIC};
 
 use crate::{Arguments, Error, Result, address, rpc};
 
@@ -261,7 +261,7 @@ fn render_json(
 #[cfg(test)]
 mod tests {
     use super::{decode, plain_reading, render, run};
-    use dclutch_market_core_codec::{
+    use dclutch_market::{
         CoreState, Identity, MarketIdentity, Phase, Readiness, STATE_BYTES, StateBumpsV1,
     };
 

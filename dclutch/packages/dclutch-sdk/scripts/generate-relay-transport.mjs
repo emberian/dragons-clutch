@@ -8,7 +8,7 @@
  * terminal needs to build it: the 32-byte instruction layout and the exact
  * 22-account frame with its per-slot privileges.
  *
- * Authority: `crates/dclutch-relay-contract/src/{instruction,frame}.rs` and
+ * Authority: `crates/dclutch-source/src/relay/{instruction,frame}.rs` and
  * the Lean-emitted `generated_relayed_abi.rs` for the schema version. The
  * frame order and privileges are scraped from `COMMIT_DEADLINE_FAILURE_FRAME_V1`
  * itself, never restated.
@@ -17,9 +17,9 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const root = new URL('../../../', import.meta.url);
-const instruction = readFileSync(new URL('crates/dclutch-relay-contract/src/instruction.rs', root), 'utf8');
-const frame = readFileSync(new URL('crates/dclutch-relay-contract/src/frame.rs', root), 'utf8');
-const abi = readFileSync(new URL('crates/dclutch-relay-contract/src/generated_relayed_abi.rs', root), 'utf8');
+const instruction = readFileSync(new URL('crates/dclutch-source/src/relay/instruction.rs', root), 'utf8');
+const frame = readFileSync(new URL('crates/dclutch-source/src/relay/frame.rs', root), 'utf8');
+const abi = readFileSync(new URL('crates/dclutch-source/src/relay/generated_relayed_abi.rs', root), 'utf8');
 const outputUrl = new URL('../lib/generated/relayTransportV1.ts', import.meta.url);
 
 function required(source, pattern, what) {
@@ -53,7 +53,7 @@ const entries = [...frameBody.matchAll(/\b([A-Z][A-Z_]*)\b/g)].map((match) => ma
 if (entries.length !== frameCount) throw new Error(`frame lists ${entries.length} parsed roles against a declared ${frameCount}`);
 
 const ts = (value) => JSON.stringify(value);
-let generated = '// @generated from crates/dclutch-relay-contract/src/{instruction,frame}.rs and generated_relayed_abi.rs; do not edit.\n';
+let generated = '// @generated from crates/dclutch-source/src/relay/{instruction,frame}.rs and generated_relayed_abi.rs; do not edit.\n';
 generated += '// Regenerate with: npm run abi:relay-transport\n\n';
 generated += `export const RELAY_INSTRUCTION_MAGIC = ${ts(magic)} as const;\n`;
 generated += `export const RELAYED_SCHEMA_VERSION = ${schemaVersion} as const;\n`;

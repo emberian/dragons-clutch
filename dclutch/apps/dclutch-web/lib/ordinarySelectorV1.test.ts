@@ -5,7 +5,7 @@ import { ordinarySelectorJoinV1, selectOrdinaryV1 } from './ordinarySelectorV1';
 /**
  * The program's own vectors, ported rather than invented.
  *
- * `crates/dclutch-product-runtime-v2/tests/{partition,runtime_width}.rs` prove
+ * `crates/dclutch-product/tests/{partition,runtime_width}.rs` prove
  * `select_ordinary` two ways: five literal points at the extremes of `i128` and
  * `u64`, and three exhaustive sweeps against an INDEPENDENTLY WRITTEN interval
  * predicate — one written from the convention sentence rather than from the
@@ -121,7 +121,7 @@ const WIDE_CUTS_V1 = Object.freeze(Array.from({ length: 300 }, (unused, index) =
 
 describe('the ordinary selector, mirrored from the Resolution program', () => {
   it('reproduces the five literal points runtime_width.rs probes', () => {
-    // crates/dclutch-product-runtime-v2/tests/runtime_width.rs:37-41. The last
+    // crates/dclutch-product/tests/runtime_width.rs:37-41. The last
     // two are the extremes the Rust needs a quotient-first comparison to
     // survive at all.
     const cuts = WIDE_CUTS_V1;

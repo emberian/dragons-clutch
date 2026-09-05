@@ -41,11 +41,11 @@ extern crate alloc;
 
 use alloc::{vec, vec::Vec};
 
-use dclutch_claims_svm::founding_v5::{
+use dclutch_claims::founding_v5::{
     CLAIMS_FOUNDING_ACCOUNT_COUNT_V6, CLAIMS_FOUNDING_REQUEST_BYTES_V5, ClaimsFoundingRequestV5,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,

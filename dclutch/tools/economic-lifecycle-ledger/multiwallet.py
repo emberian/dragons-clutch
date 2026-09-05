@@ -114,8 +114,8 @@ def authenticate_contract(value: Any) -> dict[str, Any]:
     authority = contract["sourceAuthority"]
     if not isinstance(authority, list) or authority != [
         "tools/release/private-validator-lifecycle/run.py::named_seed",
-        "crates/dclutch-direct-codec/src/successor.rs::consume_nonce_v2",
-        "crates/dclutch-direct-codec/src/successor.rs::settle_inline_ordinary_v2",
+        "crates/dclutch-trading/src/successor.rs::consume_nonce_v2",
+        "crates/dclutch-trading/src/successor.rs::settle_inline_ordinary_v2",
         "tools/economic-lifecycle-ledger/ledger.py",
     ]:
         raise economic.Refusal("multiwallet source authority changed")

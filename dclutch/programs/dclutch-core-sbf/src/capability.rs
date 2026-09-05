@@ -9,7 +9,7 @@
 
 use alloc::vec::Vec;
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     ActivationPolicy, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1,
     FUNDING_LEDGER_ACTIVE_ADMISSIBLE_STATES_V2, FUNDING_LEDGER_PENDING_ADMISSIBLE_STATES_V2,
@@ -17,13 +17,13 @@ use dclutch_capability_contract::{
     validate_funding_ledger_masks_v2,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_market_core_codec::{
+use dclutch_market::{
     Action, CapabilityChildObservation, CapabilityFundingHeaderV2, CapabilityRouteLayoutV1,
     CoreEffectAckV1, CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState, MarketCoreStateSeedsV2,
     Request, Role, STATE_BYTES, activate_capability_child, close_capability_child,
 };
-use dclutch_realm_contract::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
-use dclutch_release_set_contract::{
+use dclutch_market::realm::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
+use dclutch_registry::release_set::{
     CAPABILITY_EXECUTION_SELECTION_BYTES_V1, CapabilityExecutionSelectionV1,
 };
 use solana_program::{
@@ -252,7 +252,7 @@ pub(crate) fn process(
 /// duplicate check. Every other collision, including a third copy of an aliased
 /// account or a cross-pair swap, still refuses.
 ///
-/// (`CapabilityRouteLayoutV1::close_alias_pairs` in `dclutch-market-core-codec`
+/// (`CapabilityRouteLayoutV1::close_alias_pairs` in `dclutch-market`
 /// keeps its older name; the pairs it returns were never close-specific.)
 fn require_authenticated_suffix_aliases(
     accounts: &[AccountInfo<'_>],
@@ -490,8 +490,8 @@ fn validate_ledgers_pre(
                 action == Action::CloseCapability && selected_ledger,
             )
             .map_err(|error| match error {
-                dclutch_capability_contract::Error::FundedRentNotEvidenced
-                | dclutch_capability_contract::Error::FundedRentRateMissing => {
+                dclutch_market::capability_manifest::Error::FundedRentNotEvidenced
+                | dclutch_market::capability_manifest::Error::FundedRentRateMissing => {
                     CoreSbfError::FundedRent
                 }
                 _ => CoreSbfError::Funding,
@@ -740,7 +740,7 @@ fn validate_ledgers_post(
 }
 
 fn validate_realm_binding(
-    binding: Option<dclutch_capability_contract::RealmCollateralBindingV1>,
+    binding: Option<dclutch_market::capability_manifest::RealmCollateralBindingV1>,
     realm: RealmV1,
     state: CoreState,
 ) -> Result<(), CoreSbfError> {
@@ -921,7 +921,7 @@ fn authenticate_ack(
     let envelope_len = u32::try_from(envelope_bytes.len()).map_err(|_| CoreSbfError::Arithmetic)?;
     let role_len = u32::try_from(role_request.len()).map_err(|_| CoreSbfError::Arithmetic)?;
     let full_effect_digest = hashv(&[
-        &dclutch_market_core_codec::CORE_EFFECT_DIGEST_DOMAIN_V1,
+        &dclutch_market::CORE_EFFECT_DIGEST_DOMAIN_V1,
         &envelope_len.to_le_bytes(),
         envelope_bytes,
         &role_len.to_le_bytes(),
@@ -951,8 +951,8 @@ fn persist_state(account: &AccountInfo<'_>, state: CoreState) -> Result<(), Prog
     Ok(())
 }
 
-const fn complete_child_effect() -> dclutch_market_core_codec::ChildEffectObservation {
-    dclutch_market_core_codec::ChildEffectObservation {
+const fn complete_child_effect() -> dclutch_market::ChildEffectObservation {
+    dclutch_market::ChildEffectObservation {
         exact_request_authenticated: true,
         exact_receipt_authenticated: true,
         post_resource_authenticated: true,
@@ -973,7 +973,7 @@ mod tests {
     use alloc::boxed::Box;
 
     use super::*;
-    use dclutch_capability_contract::{
+    use dclutch_market::capability_manifest::{
         CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1, FundingAmountsV1,
         FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
     };

@@ -38,7 +38,7 @@
 //!
 //! Each bundle's lifecycle policy comes from
 //! `encode_general_family_state_lifecycle_v5_atomic`, which reads its seed order from
-//! `dclutch_general_adapter_contract::state_seeds_v3`. This module never names a
+//! `dclutch_trading::general::state_seeds_v3`. This module never names a
 //! seed, a domain, or a bump ordinal. A release compiler that restated the seed
 //! order would be the failure mode the whole exercise exists to prevent: a
 //! policy that AUTHENTICATES -- every digest agreeing with itself -- and derives
@@ -58,17 +58,17 @@
 //! it is an unfoundable one.
 //!
 //! The activation triple is not authored here. It comes from
-//! `dclutch_general_adapter_contract::activation_bundle_v1`, which composes it on
-//! the family-neutral `dclutch-capability-activation-codec` template and refuses
+//! `dclutch_trading::general::activation_bundle_v1`, which composes it on
+//! the family-neutral `dclutch-market::capability_activation` template and refuses
 //! -- rather than returning a bundle -- if the real effect kernel does not
 //! project exactly `general_root_creation_tail_v2`. This module publishes what
 //! that constructor returns; it neither restates a tail byte nor names a
 //! register.
 
-use dclutch_capability_activation_codec::{
+use dclutch_market::capability_activation::{
     ActivationBundleV1, activation_account_profile_schema_v1, activation_effect_schema_v1,
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     set_v2::{
         CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2, SelectorWidthV2,
     },
@@ -79,13 +79,13 @@ use dclutch_capability_program_contract::{
     },
 };
 use dclutch_core_contract::ContentId;
-use dclutch_execution_strategy_contract::v2::{
+use dclutch_market::execution_strategy::v2::{
     ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyAdmissionV2,
     ExecutionStrategyCertificateV2, ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
-use dclutch_general_adapter_contract::{
+use dclutch_trading::general::{
     account_rules_v3::{
         GeneralExternalAccountWidthsV3, encode_general_account_profile_v3_atomic,
         general_account_profile_bytes_v3,
@@ -119,21 +119,21 @@ use dclutch_general_adapter_contract::{
         general_transition_instruction_count_v3, general_transition_program_bytes_v3,
     },
 };
-use dclutch_general_codec::{
+use dclutch_trading::general_codec::{
     Action,
     successor_request_v2::{CONTROLLER_REQUEST_BYTES_V2, ControllerRequestV2},
     successor_request_v3::{ControllerActionV3, ControllerRequestV3},
 };
-use dclutch_general_config_contract::{
+use dclutch_trading::general_config::{
     GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_ROOT_BYTES_V2, GENERAL_ROOT_SCHEMA_ID_V2,
     v3::{GENERAL_CONFIG_SCHEMA_ID_V3, GeneralConfigV3, GeneralConfigV3Input},
 };
-use dclutch_market_core_codec::STATE_BYTES as CORE_MARKET_STATE_BYTES;
-use dclutch_realm_contract::REALM_BYTES;
-use dclutch_registry_contract::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
-use dclutch_registry_svm::{LOADER_V3_PROGRAM_BYTES, LOADER_V3_PROGRAMDATA_METADATA_BYTES};
-use dclutch_release_set_contract::{ArtifactReleaseIdV1, ExecutionRoleV1};
-use dclutch_rent_contract::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
+use dclutch_market::STATE_BYTES as CORE_MARKET_STATE_BYTES;
+use dclutch_market::realm::REALM_BYTES;
+use dclutch_registry::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
+use dclutch_registry::svm::{LOADER_V3_PROGRAM_BYTES, LOADER_V3_PROGRAMDATA_METADATA_BYTES};
+use dclutch_registry::release_set::{ArtifactReleaseIdV1, ExecutionRoleV1};
+use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
 use solana_program::hash::hash;
 
 /// Number of action bundles one selectable General release compiles.
@@ -953,13 +953,13 @@ fn authenticate_release(
 fn bundle_bytes(
     release: &GeneralSelectedReleaseV1,
     index: usize,
-) -> Result<dclutch_general_adapter_contract::artifacts_v3::GeneralArtifactBytesV3<'_>> {
+) -> Result<dclutch_trading::general::artifacts_v3::GeneralArtifactBytesV3<'_>> {
     let bundle = release
         .bundles
         .get(index)
         .ok_or(GeneralSelectedReleaseErrorV1::Release)?;
     Ok(
-        dclutch_general_adapter_contract::artifacts_v3::GeneralArtifactBytesV3 {
+        dclutch_trading::general::artifacts_v3::GeneralArtifactBytesV3 {
             program_set: &release.program_set,
             descriptor: &bundle.descriptor,
             config: &release.config,
@@ -1143,9 +1143,9 @@ fn compile_bundle(
 
     let certificate = ExecutionStrategyCertificateV2::new(
         content(digest(&account_profile))?,
-        content(dclutch_request_profile_contract::SCHEMA_RELEASE_ID)?,
+        content(dclutch_vm::request_profile::SCHEMA_RELEASE_ID)?,
         content(digest(&request_profile))?,
-        content(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID)?,
+        content(dclutch_vm::v3::SCHEMA_RELEASE_ID)?,
         content(digest(&transition))?,
         content(digest(&effect))?,
         ArtifactReleaseIdV1::new(input.deployment.accelerator_artifact_release)
@@ -1164,7 +1164,7 @@ fn compile_bundle(
     // real accelerator ELF must be deployed and admitted for this to execute.
     let strategy = ExecutionStrategyProgramV2::new(
         StrategyDispositionV2::AdmittedAot,
-        content(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID)?,
+        content(dclutch_vm::v3::SCHEMA_RELEASE_ID)?,
         content(digest(&transition))?,
         content(EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2)?,
         Some(content(digest(&certificate))?),
@@ -1186,11 +1186,11 @@ fn compile_bundle(
         content(input.capacity_profile)?,
         CapabilityArtifactsV4 {
             account_profile: ArtifactReferenceV4::new(
-                content(dclutch_account_profile_contract::v2::SCHEMA_RELEASE_ID)?,
+                content(dclutch_vm::account_profile::v2::SCHEMA_RELEASE_ID)?,
                 content(digest(&account_profile))?,
             ),
             request_profile: ArtifactReferenceV4::new(
-                content(dclutch_request_profile_contract::SCHEMA_RELEASE_ID)?,
+                content(dclutch_vm::request_profile::SCHEMA_RELEASE_ID)?,
                 content(digest(&request_profile))?,
             ),
             lifecycle: ArtifactReferenceV4::new(
@@ -1202,11 +1202,11 @@ fn compile_bundle(
                 content(digest(&strategy))?,
             ),
             transition: ArtifactReferenceV4::new(
-                content(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID)?,
+                content(dclutch_vm::v3::SCHEMA_RELEASE_ID)?,
                 content(digest(&transition))?,
             ),
             effect: ArtifactReferenceV4::new(
-                content(dclutch_effect_kernel::v4::SCHEMA_RELEASE_ID_V4)?,
+                content(dclutch_vm::effect::v4::SCHEMA_RELEASE_ID_V4)?,
                 content(digest(&effect))?,
             ),
         },

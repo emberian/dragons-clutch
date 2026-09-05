@@ -54,17 +54,17 @@
 //! every live `descriptor_id`, hence every shard Mint, custody account,
 //! Position and replay record of every representation.
 
-use dclutch_rational_representation_v2_kernel::{
+use dclutch_claims::rational_kernel::{
     RepresentationDescriptorV2,
     descriptor_v3::{
         RepresentationDescriptorInputV3, encode_representation_descriptor_v3_atomic,
         representation_descriptor_bytes_v3,
     },
 };
-use dclutch_representation_composition_v3_kernel::{
+use dclutch_claims::composition::{
     CompositionBundleV3, CompositionExposureBundleV3,
 };
-use dclutch_structured_v2_kernel::StructuredTermsV2;
+use dclutch_claims::structured_kernel::StructuredTermsV2;
 
 use crate::{Error, Result, child_request::STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2};
 
@@ -279,7 +279,7 @@ pub fn decode_derived_structured_descriptor_v2<'a>(
     }
     RepresentationDescriptorV2::decode(
         &derived.preimage,
-        dclutch_rational_representation_v2_kernel::DescriptorAdmissionV2 {
+        dclutch_claims::rational_kernel::DescriptorAdmissionV2 {
             selected_descriptor_id: derived.descriptor_id,
             finalized_descriptor_id: derived.descriptor_id,
             recomputed_descriptor_digest: derived.descriptor_id,

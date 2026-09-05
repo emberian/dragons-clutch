@@ -10,8 +10,8 @@ use core::cell::Ref;
 
 use alloc::boxed::Box;
 
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_market::capability_program::{
     set_v2::{
         CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityDescriptorReferenceV2,
         CapabilityProgramSetV2,
@@ -22,26 +22,26 @@ use dclutch_capability_program_contract::{
     },
 };
 use dclutch_core_contract::ContentId as CapabilityContentId;
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2};
-use dclutch_product_runtime_v2::ContentId as ProductContentId;
-use dclutch_product_runtime_v2_svm_reader::{
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2};
+use dclutch_product::ContentId as ProductContentId;
+use dclutch_product::svm_reader::{
     FinalizedRecordFrameV2, ProductRuntimeFrameV2, authenticate_product_runtime_v2,
 };
-use dclutch_pyth_svm::{
+use dclutch_source::pyth::{
     FullPriceUpdateV2, PostUpdateParamsView, PythReleaseV1, ReceiverConfigV2View,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_BYTES_V1,
     ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1,
     require_slot_pinned_release_v1,
 };
-use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
-use dclutch_release_set_contract::{
+use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
+use dclutch_registry::release_set::{
     CallerAuthoritySeedsV1, ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProtocolInfrastructureProfileV2,
 };
-use dclutch_resolution_codec::{
+use dclutch_source::resolution::{
     PROVIDER_EXECUTION_REQUEST_BYTES_V3, PROVIDER_EXECUTION_REQUEST_MAGIC_V3,
     PROVIDER_EXECUTION_REQUEST_SCHEMA_ID_V3, PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3,
     PROVIDER_RESOLUTION_CORE_TAIL_START_V3, PROVIDER_RESOLUTION_RECOVERY_TAIL_ACCOUNTS_V3,
@@ -52,7 +52,7 @@ use dclutch_resolution_codec::{
     RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
     RESOLUTION_CONTROLLER_RELEASE_ID_V7, provider_resolution_direct_intent_digest_v1,
 };
-use dclutch_source_contract::{
+use dclutch_source::{
     ContentId as SourceContentId, PROVIDER_RELEASE_BYTES, PROVIDER_RELEASE_SCHEMA_ID_V1,
     PYTH_ADAPTER_CONFIG_BYTES, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, ProviderReleaseV1,
     PythAdapterConfigV1, RECOVERY_POLICY_BYTES_V2, RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryPolicyV2,
@@ -234,7 +234,7 @@ fn boxed_source_records(
 fn boxed_product_runtime(
     request: &ProviderExecutionRequestV3,
     frame: ProviderFrameV3<'_, '_>,
-) -> Result<Box<dclutch_product_runtime_v2_svm_reader::AuthenticatedProductRuntimeV2>, ProgramError>
+) -> Result<Box<dclutch_product::svm_reader::AuthenticatedProductRuntimeV2>, ProgramError>
 {
     Ok(Box::new(
         authenticate_product_runtime_v2(
@@ -330,7 +330,7 @@ fn boxed_observation<'a>(
     request: &ProviderExecutionRequestV3,
     frame: ProviderFrameV3<'_, '_>,
     pyth_release: &PythReleaseV1,
-    product_runtime: &dclutch_product_runtime_v2_svm_reader::AuthenticatedProductRuntimeV2,
+    product_runtime: &dclutch_product::svm_reader::AuthenticatedProductRuntimeV2,
     result_domain_bytes: &'a [u8],
     update_bytes: &'a [u8],
     lifecycle: &ProviderUpdateLifecycleV3,
@@ -338,7 +338,7 @@ fn boxed_observation<'a>(
     clock: solana_program::clock::Clock,
 ) -> Result<Box<AuthenticatedProviderObservationV3<'a>>, ProgramError> {
     FullPriceUpdateV2::parse(update_bytes).map_err(|_| ResolutionError::ProviderObservation)?;
-    let result_domain = dclutch_product_runtime_v2::ResultDomainV2::decode(result_domain_bytes)
+    let result_domain = dclutch_product::ResultDomainV2::decode(result_domain_bytes)
         .map_err(|_| ResolutionError::ProductDomain)?;
     Ok(Box::new(AuthenticatedProviderObservationV3 {
         pyth_release_id: request.provider_release,
@@ -961,7 +961,7 @@ fn authenticate_pyth_release(
         29,
         PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
         request.provider_release,
-        dclutch_pyth_svm::PYTH_RELEASE_V1_ENCODED_LEN,
+        dclutch_source::pyth::PYTH_RELEASE_V1_ENCODED_LEN,
     )?;
     let release = PythReleaseV1::decode(&bytes).map_err(|_| ResolutionError::ProviderRelease)?;
     if release.receiver_program() != frame.receiver_program().key.to_bytes()
@@ -1233,15 +1233,15 @@ fn initialize_certificate<'info>(
 mod tests {
     use std::{boxed::Box, vec::Vec};
 
-    use dclutch_capability_program_contract::{
+    use dclutch_market::capability_program::{
         set_v2::{
             CapabilityProgramSetEntryV2, SelectorWidthV2, encode_program_set_v2,
             encoded_program_set_bytes_v2,
         },
         v4::{ArtifactReferenceV4, CapabilityArtifactsV4, SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5},
     };
-    use dclutch_resolution_codec::PROVIDER_EXECUTION_REQUEST_SCHEMA_PREIMAGE_V3;
-    use dclutch_source_contract::{
+    use dclutch_source::resolution::PROVIDER_EXECUTION_REQUEST_SCHEMA_PREIMAGE_V3;
+    use dclutch_source::{
         PROVIDER_RELEASE_SCHEMA_PREIMAGE_V1, PYTH_ADAPTER_CONFIG_SCHEMA_PREIMAGE_V1,
         SOURCE_MATERIAL_SCHEMA_RELEASE_PREIMAGE_V3, SOURCE_MATERIAL_V3_MAGIC,
         SOURCE_SPEC_SCHEMA_PREIMAGE_V1, STATISTIC_SPEC_SCHEMA_PREIMAGE_V1,
@@ -1570,10 +1570,10 @@ mod tests {
         };
         assert_ne!(
             under(CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2),
-            under(dclutch_capability_program_contract::set_v1::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V1),
+            under(dclutch_market::capability_program::set_v1::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V1),
         );
         assert_eq!(
-            dclutch_capability_program_contract::v3::CAPABILITY_PROGRAM_V3_BYTES,
+            dclutch_market::capability_program::v3::CAPABILITY_PROGRAM_V3_BYTES,
             408,
         );
         assert_eq!(CAPABILITY_PROGRAM_V4_BYTES, 600);

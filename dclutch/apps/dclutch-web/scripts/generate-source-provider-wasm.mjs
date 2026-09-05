@@ -23,12 +23,12 @@ function rustString(source, name) {
 }
 
 function rustNumber(source, name) {
-  const match = source.match(new RegExp(`const ${name}: usize\\s*=\\s*(?:dclutch_resolution_codec::PROVIDER_UPDATE_LIFECYCLE_BYTES_V3|([0-9_]+));`));
+  const match = source.match(new RegExp(`const ${name}: usize\\s*=\\s*(?:dclutch_source::resolution::PROVIDER_UPDATE_LIFECYCLE_BYTES_V3|([0-9_]+));`));
   if (match === null) throw new Error(`Rust Source-provider owner does not expose ${name}`);
   if (match[1] !== undefined) return Number(match[1].replaceAll('_', ''));
   // The protocol codec freezes this public constant; ask rustc's source owner
   // rather than maintaining a second literal here.
-  const codec = readFileSync(join(root, 'crates/dclutch-resolution-codec/src/provider_transport_v3.rs'), 'utf8');
+  const codec = readFileSync(join(root, 'crates/dclutch-source/src/resolution/provider_transport_v3.rs'), 'utf8');
   const value = codec.match(/pub const PROVIDER_UPDATE_LIFECYCLE_BYTES_V3: usize = ([0-9_]+);/);
   if (value === null) throw new Error('Resolution codec does not expose provider lifecycle bytes');
   return Number(value[1].replaceAll('_', ''));

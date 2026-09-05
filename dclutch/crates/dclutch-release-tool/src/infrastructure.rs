@@ -15,10 +15,10 @@
 //! [`CheckedInfrastructureV1::evidence_class`].
 
 use dclutch_core_contract::ContentId;
-use dclutch_registry_contract::{
+use dclutch_registry::{
     ARTIFACT_RELEASE_BYTES_V1, ArtifactReleaseV1, ArtifactUpgradePolicyV1,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProtocolInfrastructureProfileV1,
@@ -427,12 +427,12 @@ pub fn derive_protocol_infrastructure_profile_v2(
 
 fn binding_from_checked(
     checked: &CheckedReleaseV1,
-) -> Result<dclutch_release_set_contract::ExecutionRoleBindingV1> {
+) -> Result<dclutch_registry::release_set::ExecutionRoleBindingV1> {
     let artifact = artifact_release_from_checked(checked)?;
     require_pinned_component(artifact)?;
     let artifact_id = ArtifactReleaseIdV1::new(sha256(&artifact.to_bytes()))
         .map_err(|_| Error::InvalidArtifactRelease)?;
-    Ok(dclutch_release_set_contract::ExecutionRoleBindingV1::new(
+    Ok(dclutch_registry::release_set::ExecutionRoleBindingV1::new(
         artifact.program(),
         artifact_id,
     ))
@@ -468,7 +468,7 @@ pub fn verify_checked_infrastructure_v1(
 }
 
 fn validate_binding(
-    expected: dclutch_release_set_contract::ExecutionRoleBindingV1,
+    expected: dclutch_registry::release_set::ExecutionRoleBindingV1,
     artifact: ArtifactReleaseV1,
 ) -> Result<()> {
     let artifact_id = ArtifactReleaseIdV1::new(sha256(&artifact.to_bytes()))
@@ -485,7 +485,7 @@ fn validate_binding(
 /// which decision 0012 retired: a release the whole protocol now admits was
 /// refused here, so no checked manifest could describe the iteration substrate
 /// at all. What replaces it is
-/// [`dclutch_registry_contract::require_slot_pinned_release_v1`] — the SAME
+/// [`dclutch_registry::require_slot_pinned_release_v1`] — the SAME
 /// predicate every on-chain reader calls, not a second copy of the rule.
 ///
 /// The strictness that used to live in this function did not disappear; it
@@ -496,7 +496,7 @@ fn validate_binding(
 /// two things depending on who called, and then the manifest would no longer be
 /// evidence of anything on its own.
 fn require_pinned_component(artifact: ArtifactReleaseV1) -> Result<()> {
-    dclutch_registry_contract::require_slot_pinned_release_v1(artifact)
+    dclutch_registry::require_slot_pinned_release_v1(artifact)
         .map_err(|_| Error::InfrastructureMustBeImmutable)
 }
 
@@ -548,7 +548,7 @@ fn push_line(output: &mut String, key: &str, value: &str) {
 
 #[cfg(test)]
 mod tests {
-    use dclutch_release_set_contract::{
+    use dclutch_registry::release_set::{
         ExecutionReleaseSetV1, ExecutionRoleBindingV1, ProgramIdentityV1,
     };
 

@@ -1,4 +1,4 @@
-use dclutch_account_profile_contract::lifecycle_v3::{
+use dclutch_vm::account_profile::lifecycle_v3::{
     HEADER_BYTES as LIFECYCLE_HEADER_BYTES_V5, encode::encode_lifecycle_policy_v5_atomic,
 };
 use dclutch_core_contract::ContentId;

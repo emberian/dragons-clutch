@@ -296,7 +296,7 @@ assumption=<printable one-line value>
 
 `semantic_kind` is `capability` for a capability-owned exact preimage,
 `pyth-v1` for the canonical 440-byte `PythReleaseV1` preimage, or `unowned`.
-For `pyth-v1` this tool delegates semantic decoding to `dclutch-pyth-svm`; it
+For `pyth-v1` this tool delegates semantic decoding to `dclutch-source::pyth`; it
 does not reimplement or loosen the Pyth release schema.
 
 `unowned` is a **named absence**, not a schema. Every execution role, Registry,

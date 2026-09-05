@@ -4,52 +4,52 @@
 //! the persisted authority graph, and emit unsigned instructions plus complete
 //! expected poststate. They perform no RPC, signing, or submission.
 
-use dclutch_account_profile_contract::AccountProfileV1;
-use dclutch_capability_contract::{
+use dclutch_vm::account_profile::AccountProfileV1;
+use dclutch_market::capability_manifest::{
     CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingLedgerDerivationV2,
     CapabilityManifestV1, FUNDING_LEDGER_ACTIVE_ADMISSIBLE_STATES_V2, FundingLedgerCloseCustodyV2,
     FundingLedgerV2, capability_dependency_closure_mask_v1, funding::funded_rent_persists_v1,
     manifest_entry_for_ledger_row_v2, validate_funding_ledger_masks_v2,
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1, CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityProgramV1,
     CapabilityRootHeaderV1,
     set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
 };
-use dclutch_claims_svm::liability_basis_state_v2::{
+use dclutch_claims::liability_basis_state_v2::{
     LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CUSTODY_REPLAY_BYTES_V1, CompartmentV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1,
     CustodyReplayV1, CustodyVaultSeedsV1, RetirementReplayHandoffAccountLayoutV1,
     RetirementReplayHandoffObservationV1, RetirementReplayHandoffPlanV1,
     RetirementReplayHandoffReceiptV1, RetirementReplayHandoffRequestV1,
 };
-use dclutch_direct_codec::{
+use dclutch_trading::{
     native_close_bundle_v1::{
         DIRECT_NATIVE_CLOSE_SELECTOR_V1, direct_native_close_account_profile_schema_v1,
         direct_native_close_effect_schema_v1, direct_native_close_request_v1,
     },
     successor::{DirectRootPhaseV1, DirectRootStateV1},
 };
-use dclutch_effect_kernel::v2::ProgramV2 as EffectProgramV2;
-use dclutch_market_core_codec::{
+use dclutch_vm::effect::v2::ProgramV2 as EffectProgramV2;
+use dclutch_market::{
     Action, CapabilityFundingHeaderV2, CapabilityRouteLayoutV1, CoreEffectActionV1,
     CoreEffectEnvelopeV1, Request, Role,
 };
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, Phase};
-use dclutch_realm_contract::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
-use dclutch_registry_contract::{
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2, Phase};
+use dclutch_market::realm::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1, DeploymentObservationV1,
 };
-use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
-use dclutch_release_set_contract::{
+use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
+use dclutch_registry::release_set::{
     CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1, ExecutionRoleV1,
 };
-use dclutch_rent_contract::lifecycle_v2::LifecycleRentCreditV2;
-use dclutch_token_svm::{AccountState, COption, TokenAccount};
+use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
+use dclutch_custody::token_svm::{AccountState, COption, TokenAccount};
 use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},
@@ -838,17 +838,17 @@ pub fn build_direct_native_close_v1(
     let envelope = CoreEffectEnvelopeV1::new(
         CoreEffectActionV1::CloseCapability,
         Role::Trading,
-        dclutch_market_core_codec::Identity::new(snapshot.core_program.key.to_bytes())
+        dclutch_market::Identity::new(snapshot.core_program.key.to_bytes())
             .map_err(|_| TerminalRetirementErrorV1::Projection)?,
-        dclutch_market_core_codec::Identity::new(caller_authority.to_bytes())
+        dclutch_market::Identity::new(caller_authority.to_bytes())
             .map_err(|_| TerminalRetirementErrorV1::Projection)?,
         market.identity.selected_release_set,
         market.identity.market_id,
-        dclutch_market_core_codec::Identity::new(context)
+        dclutch_market::Identity::new(context)
             .map_err(|_| TerminalRetirementErrorV1::Projection)?,
-        dclutch_market_core_codec::Identity::new(hash(&snapshot.market.data).to_bytes())
+        dclutch_market::Identity::new(hash(&snapshot.market.data).to_bytes())
             .map_err(|_| TerminalRetirementErrorV1::Projection)?,
-        dclutch_market_core_codec::Identity::new(role_request_digest)
+        dclutch_market::Identity::new(role_request_digest)
             .map_err(|_| TerminalRetirementErrorV1::Projection)?,
         market.identity.generation,
         0,
@@ -1206,7 +1206,7 @@ fn authenticate_close_records(
     if descriptor.kind() != entry.kind_id()
         || descriptor.config_schema().to_bytes() == [0; 32]
         || descriptor.request_schema().to_bytes()
-            != dclutch_direct_codec::native_close_bundle_v1::DIRECT_NATIVE_CLOSE_REQUEST_SCHEMA_ID_V1
+            != dclutch_trading::native_close_bundle_v1::DIRECT_NATIVE_CLOSE_REQUEST_SCHEMA_ID_V1
         || descriptor.root_schema() != entry.child_schema_id()
         || descriptor.capacity_profile() != entry.capacity_profile_id()
         || descriptor.derivation_policy() != entry.child_derivation_id()

@@ -50,33 +50,33 @@ const root = new URL('../../../', import.meta.url);
 const sources = Object.freeze({
   census: readFileSync(new URL('tools/gauntlet/census/src/phases.rs', root), 'utf8'),
 
-  directSuccessor: readFileSync(new URL('crates/dclutch-direct-codec/src/successor.rs', root), 'utf8'),
-  directGenerated: readFileSync(new URL('crates/dclutch-direct-codec/src/generated_successor.rs', root), 'utf8'),
+  directSuccessor: readFileSync(new URL('crates/dclutch-trading/src/successor.rs', root), 'utf8'),
+  directGenerated: readFileSync(new URL('crates/dclutch-trading/src/generated_successor.rs', root), 'utf8'),
 
-  dealerLib: readFileSync(new URL('crates/dclutch-dealer-codec/src/lib.rs', root), 'utf8'),
-  dealerLiquidityGenerated: readFileSync(new URL('crates/dclutch-dealer-codec/src/generated_dealer_liquidity.rs', root), 'utf8'),
-  dealerProfileGenerated: readFileSync(new URL('crates/dclutch-dealer-codec/src/generated_dealer_trading_profile.rs', root), 'utf8'),
-  dealerCheckpoint: readFileSync(new URL('crates/dclutch-dealer-codec/src/scenario_checkpoint_v1.rs', root), 'utf8'),
-  dealerCheckpointGenerated: readFileSync(new URL('crates/dclutch-dealer-codec/src/generated_scenario_checkpoint_v1.rs', root), 'utf8'),
-  dealerReservation: readFileSync(new URL('crates/dclutch-dealer-codec/src/scenario_custody_reservation_v1.rs', root), 'utf8'),
-  dealerReservationGenerated: readFileSync(new URL('crates/dclutch-dealer-codec/src/generated_scenario_reservation_state_v1.rs', root), 'utf8'),
+  dealerLib: readFileSync(new URL('crates/dclutch-trading/src/dealer/mod.rs', root), 'utf8'),
+  dealerLiquidityGenerated: readFileSync(new URL('crates/dclutch-trading/src/dealer/generated_dealer_liquidity.rs', root), 'utf8'),
+  dealerProfileGenerated: readFileSync(new URL('crates/dclutch-trading/src/dealer/generated_dealer_trading_profile.rs', root), 'utf8'),
+  dealerCheckpoint: readFileSync(new URL('crates/dclutch-trading/src/dealer/scenario_checkpoint_v1.rs', root), 'utf8'),
+  dealerCheckpointGenerated: readFileSync(new URL('crates/dclutch-trading/src/dealer/generated_scenario_checkpoint_v1.rs', root), 'utf8'),
+  dealerReservation: readFileSync(new URL('crates/dclutch-trading/src/dealer/scenario_custody_reservation_v1.rs', root), 'utf8'),
+  dealerReservationGenerated: readFileSync(new URL('crates/dclutch-trading/src/dealer/generated_scenario_reservation_state_v1.rs', root), 'utf8'),
 
-  projectedCustody: readFileSync(new URL('crates/dclutch-custody-contract/src/projected.rs', root), 'utf8'),
-  projectedCustodyGenerated: readFileSync(new URL('crates/dclutch-custody-contract/src/generated_projected_state_v2.rs', root), 'utf8'),
+  projectedCustody: readFileSync(new URL('crates/dclutch-custody/src/projected.rs', root), 'utf8'),
+  projectedCustodyGenerated: readFileSync(new URL('crates/dclutch-custody/src/generated_projected_state_v2.rs', root), 'utf8'),
 
-  seriesReplay: readFileSync(new URL('crates/dclutch-series-v3-kernel/src/replay.rs', root), 'utf8'),
-  seriesGenerated: readFileSync(new URL('crates/dclutch-series-v3-kernel/src/generated.rs', root), 'utf8'),
-  seriesTicketGenerated: readFileSync(new URL('crates/dclutch-series-v3-kernel/src/generated_ticket_state_v3.rs', root), 'utf8'),
+  seriesReplay: readFileSync(new URL('crates/dclutch-trading/src/series/replay.rs', root), 'utf8'),
+  seriesGenerated: readFileSync(new URL('crates/dclutch-trading/src/series/generated.rs', root), 'utf8'),
+  seriesTicketGenerated: readFileSync(new URL('crates/dclutch-trading/src/series/generated_ticket_state_v3.rs', root), 'utf8'),
 
-  funding: readFileSync(new URL('crates/dclutch-capability-contract/src/funding.rs', root), 'utf8'),
-  fundingGenerated: readFileSync(new URL('crates/dclutch-capability-contract/src/generated_abi.rs', root), 'utf8'),
+  funding: readFileSync(new URL('crates/dclutch-market/src/capability_manifest/funding.rs', root), 'utf8'),
+  fundingGenerated: readFileSync(new URL('crates/dclutch-market/src/capability_manifest/generated_abi.rs', root), 'utf8'),
 
-  source: readFileSync(new URL('crates/dclutch-source-contract/src/lib.rs', root), 'utf8'),
+  source: readFileSync(new URL('crates/dclutch-source/src/lib.rs', root), 'utf8'),
   // The one place the Source state's ADDRESS is derived. A seed order is not a
   // constant, so the expression itself is pinned below, exactly as
   // `generate-direct-participant-v1.mjs` pins the Direct token PDA's.
   resolutionOperator: readFileSync(new URL('crates/dclutch-resolution-core-v3-operator/src/lib.rs', root), 'utf8'),
-  sourceGenerated: readFileSync(new URL('crates/dclutch-source-contract/src/generated_source_resolution_state_v2.rs', root), 'utf8'),
+  sourceGenerated: readFileSync(new URL('crates/dclutch-source/src/generated_source_resolution_state_v2.rs', root), 'utf8'),
 });
 const outputUrl = new URL('../lib/generated/stateMachinesV1.ts', import.meta.url);
 
@@ -270,7 +270,7 @@ const machines = [
     ),
     declared: declaredDiscriminants('directSuccessor', 'DirectRootPhaseV1', emittedTag('directGenerated')),
     variants: declaredVariants('directSuccessor', 'DirectRootPhaseV1'),
-    authority: 'crates/dclutch-direct-codec/src/{successor,generated_successor}.rs',
+    authority: 'crates/dclutch-trading/src/{successor,generated_successor}.rs',
   },
   {
     label: 'dealer-root',
@@ -293,7 +293,7 @@ const machines = [
     ),
     declared: declaredDiscriminants('dealerLib', 'Phase'),
     variants: declaredVariants('dealerLib', 'Phase'),
-    authority: 'crates/dclutch-dealer-codec/src/{lib,generated_dealer_liquidity,generated_dealer_trading_profile}.rs',
+    authority: 'crates/dclutch-trading/src/dealer/{lib,generated_dealer_liquidity,generated_dealer_trading_profile}.rs',
   },
   {
     label: 'dealer-checkpoint',
@@ -320,7 +320,7 @@ const machines = [
       emittedTag('dealerCheckpointGenerated'),
     ),
     variants: declaredVariants('dealerCheckpoint', 'DealerScenarioCheckpointPhaseV1'),
-    authority: 'crates/dclutch-dealer-codec/src/{scenario_checkpoint_v1,generated_scenario_checkpoint_v1}.rs',
+    authority: 'crates/dclutch-trading/src/dealer/{scenario_checkpoint_v1,generated_scenario_checkpoint_v1}.rs',
   },
   {
     label: 'dealer-reservation',
@@ -351,7 +351,7 @@ const machines = [
       emittedTag('dealerReservationGenerated'),
     ),
     variants: declaredVariants('dealerReservation', 'DealerScenarioReservationStateStatusV1'),
-    authority: 'crates/dclutch-dealer-codec/src/{scenario_custody_reservation_v1,generated_scenario_reservation_state_v1}.rs',
+    authority: 'crates/dclutch-trading/src/dealer/{scenario_custody_reservation_v1,generated_scenario_reservation_state_v1}.rs',
   },
   {
     label: 'projected-custody',
@@ -382,7 +382,7 @@ const machines = [
       emittedTag('projectedCustodyGenerated'),
     ),
     variants: declaredVariants('projectedCustody', 'ProjectedCustodyPhaseV1'),
-    authority: 'crates/dclutch-custody-contract/src/{projected,generated_projected_state_v2}.rs',
+    authority: 'crates/dclutch-custody/src/{projected,generated_projected_state_v2}.rs',
   },
   {
     label: 'series-ticket',
@@ -412,7 +412,7 @@ const machines = [
     ),
     declared: declaredDiscriminants('seriesReplay', 'TicketPhaseV3', emittedTag('seriesTicketGenerated')),
     variants: declaredVariants('seriesReplay', 'TicketPhaseV3'),
-    authority: 'crates/dclutch-series-v3-kernel/src/{replay,generated,generated_ticket_state_v3}.rs',
+    authority: 'crates/dclutch-trading/src/series/{replay,generated,generated_ticket_state_v3}.rs',
   },
   {
     label: 'funding-ledger',
@@ -435,7 +435,7 @@ const machines = [
     ),
     declared: declaredDiscriminants('funding', 'FundingLedgerStatusV2', emittedTag('fundingGenerated')),
     variants: declaredVariants('funding', 'FundingLedgerStatusV2'),
-    authority: 'crates/dclutch-capability-contract/src/{funding,generated_abi}.rs',
+    authority: 'crates/dclutch-market/src/capability_manifest/{funding,generated_abi}.rs',
   },
   {
     label: 'source',
@@ -457,7 +457,7 @@ const machines = [
     ),
     declared: declaredDiscriminants('source', 'SourceResolutionPhaseV1', emittedTag('sourceGenerated')),
     variants: declaredVariants('source', 'SourceResolutionPhaseV1'),
-    authority: 'crates/dclutch-source-contract/src/{lib,generated_source_resolution_state_v2}.rs',
+    authority: 'crates/dclutch-source/src/{lib,generated_source_resolution_state_v2}.rs',
   },
 ];
 

@@ -16,10 +16,9 @@ custom-heap = []
 custom-panic = []
 
 [dependencies]
-dclutch-capability-contract = { path = "../../../dclutch-capability-contract" }
+dclutch-market = { path = "../../../dclutch-market" }
 dclutch-refusal-registry = { path = "../../../dclutch-refusal-registry" }
-dclutch-resolution-codec = { path = "../../../dclutch-resolution-codec" }
-dclutch-source-contract = { path = "../../../dclutch-source-contract" }
+dclutch-source = { path = "../../../dclutch-source" }
 solana-program = { version = "=3.0.0", default-features = false }
 
 [workspace]

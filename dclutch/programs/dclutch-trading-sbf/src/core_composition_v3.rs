@@ -11,21 +11,21 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use dclutch_core_contract::ContentId;
-use dclutch_effect_kernel::{
+use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{ProgramV3 as EffectProgramV3, ResolvedInvocationV3, RouteKindV3},
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     Identity, SERIES_CORE_REQUEST_MAGIC_V1, SERIES_PERMIT_EXPIRY_REQUEST_MAGIC_V1,
     SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_MAGIC_V1, SeriesCoreAckV1, SeriesCoreActionV1,
     SeriesCoreRequestV1, SeriesPermitExpiryRequestV1, SeriesUnallocatedPermitExpiryRequestV1,
 };
 #[cfg(test)]
-use dclutch_market_core_codec::{
+use dclutch_market::{
     SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1, SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_BYTES_V1,
 };
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_series_v3_kernel::request::{
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_trading::series::request::{
     SERIES_ACTION_HEADER_BYTES_V3, SeriesActionRequestV3, SeriesActionV3,
 };
 use solana_program::{
@@ -737,14 +737,14 @@ mod tests {
 
     use alloc::vec;
 
-    use dclutch_effect_kernel::v3::{
+    use dclutch_vm::effect::v3::{
         RouteReceiptDependencyV3,
         encode::{
             AccountCoordinateV3, EffectGeometryV3, EffectInstructionV3, RouteInputV3,
             ScalarCoordinateV3, encode_effect_program_v4_atomic,
         },
     };
-    use dclutch_series_v3_kernel::request::encode_series_action_header_v3;
+    use dclutch_trading::series::request::encode_series_action_header_v3;
 
     use super::*;
 
@@ -753,7 +753,7 @@ mod tests {
     }
 
     fn expiry_request() -> SeriesPermitExpiryRequestV1 {
-        let intent = dclutch_market_core_codec::FoundingIntentV5::new(
+        let intent = dclutch_market::FoundingIntentV5::new(
             255,
             id(1),
             id(2),
@@ -779,7 +779,7 @@ mod tests {
         )
         .expect("founding intent");
         SeriesPermitExpiryRequestV1::new(
-            dclutch_market_core_codec::SeriesFoundingPermitV1::new(intent, id(16), id(17))
+            dclutch_market::SeriesFoundingPermitV1::new(intent, id(16), id(17))
                 .expect("permit"),
         )
     }
@@ -926,10 +926,10 @@ mod tests {
                 item_request: &[],
             }];
             let route_dependencies = [dependencies];
-            let width = dclutch_effect_kernel::v3::HEADER_BYTES
-                + dclutch_effect_kernel::v3::ROUTE_BYTES
-                + dependencies.len() * dclutch_effect_kernel::v3::RECEIPT_DEPENDENCY_BYTES
-                + dclutch_effect_kernel::v3::OPERATION_BYTES
+            let width = dclutch_vm::effect::v3::HEADER_BYTES
+                + dclutch_vm::effect::v3::ROUTE_BYTES
+                + dependencies.len() * dclutch_vm::effect::v3::RECEIPT_DEPENDENCY_BYTES
+                + dclutch_vm::effect::v3::OPERATION_BYTES
                 + request.len();
             let mut scratch = vec![0_u8; width];
             let mut output = vec![0_u8; width];
@@ -1179,9 +1179,9 @@ mod tests {
         ];
         let dependent = [RouteReceiptDependencyV3::new(FixedRole::Core, 0, 8)];
         let dependencies = [&[][..], &dependent[..]];
-        let width = dclutch_effect_kernel::v3::HEADER_BYTES
-            + 2 * dclutch_effect_kernel::v3::ROUTE_BYTES
-            + dclutch_effect_kernel::v3::RECEIPT_DEPENDENCY_BYTES
+        let width = dclutch_vm::effect::v3::HEADER_BYTES
+            + 2 * dclutch_vm::effect::v3::ROUTE_BYTES
+            + dclutch_vm::effect::v3::RECEIPT_DEPENDENCY_BYTES
             + 2 * request.len();
         let mut scratch = vec![0_u8; width];
         let mut output = vec![0_u8; width];

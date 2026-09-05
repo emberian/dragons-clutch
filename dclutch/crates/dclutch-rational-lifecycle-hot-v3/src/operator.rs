@@ -1,18 +1,18 @@
 //! Unsigned, chain-derived Hot instruction construction for lifecycle actions.
 
-use dclutch_capability_program_contract::hot_v3::{
+use dclutch_market::capability_program::hot_v3::{
     HOT_CORE_PROGRAM_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
     HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_LINKED_BASIS_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3,
     HOT_RENT_SYSVAR_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
     HotBumpHintsV1,
 };
 #[cfg(test)]
-use dclutch_capability_program_contract::hot_v3::{
+use dclutch_market::capability_program::hot_v3::{
     HOT_FAMILY_REQUEST_OFFSET_V3, HotExecutionEnvelopeV3,
 };
 use dclutch_hot_bump_miner_v1::{HotBumpCorpusV1, mine_hot_bump_hints_v1};
 #[cfg(test)]
-use dclutch_rational_representation_v2_lifecycle_contract::{
+use dclutch_claims::rational_lifecycle::{
     LifecycleRequestV2, hot_v3::RationalLifecycleHotRequestV3,
 };
 #[cfg(test)]
@@ -192,7 +192,7 @@ pub fn build_rational_lifecycle_hot_instruction_v3(
 
 pub(crate) fn validate_child_frame(
     claims_child: &Instruction,
-    action: dclutch_rational_representation_v2_lifecycle_contract::LifecycleActionV2,
+    action: dclutch_claims::rational_lifecycle::LifecycleActionV2,
 ) -> Result<()> {
     let accounts = &claims_child.accounts;
     if accounts
@@ -215,14 +215,14 @@ pub(crate) fn validate_child_frame(
         let writable = match index {
             12 => matches!(
                 action,
-                dclutch_rational_representation_v2_lifecycle_contract::LifecycleActionV2::ActivateReceipt
-                    | dclutch_rational_representation_v2_lifecycle_contract::LifecycleActionV2::RetireReceipt
+                dclutch_claims::rational_lifecycle::LifecycleActionV2::ActivateReceipt
+                    | dclutch_claims::rational_lifecycle::LifecycleActionV2::RetireReceipt
             ),
             14 => action.retires(),
             21..=24 => matches!(
                 action,
-                dclutch_rational_representation_v2_lifecycle_contract::LifecycleActionV2::ActivateCoordinate
-                    | dclutch_rational_representation_v2_lifecycle_contract::LifecycleActionV2::RetireCoordinate
+                dclutch_claims::rational_lifecycle::LifecycleActionV2::ActivateCoordinate
+                    | dclutch_claims::rational_lifecycle::LifecycleActionV2::RetireCoordinate
             ),
             _ => false,
         };
@@ -340,12 +340,12 @@ pub(crate) fn validate_fixed_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_rational_representation_v2_lifecycle_contract::{
+    use dclutch_claims::rational_lifecycle::{
         LIFECYCLE_COMMON_ACCOUNT_COUNT_V2, LIFECYCLE_COORDINATE_BYTES_V2,
         LIFECYCLE_HEADER_BYTES_V2, LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2, LifecycleActionV2,
         LifecycleCoordinateV2, LifecycleHeaderV2,
     };
-    use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
+    use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
     use solana_sdk_ids::{system_program, sysvar};
 
     fn key(value: u8) -> Pubkey {
@@ -602,13 +602,13 @@ mod tests {
     /// re-derives.
     #[test]
     fn the_lifecycle_corpus_mines_this_frames_market_and_root() {
-        use dclutch_capability_program_contract::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
+        use dclutch_market::capability_program::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
         use dclutch_core_contract::ContentId;
-        use dclutch_market_core_codec::{
+        use dclutch_market::{
             CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
             StateBumpsV1,
         };
-        use dclutch_release_set_contract::CapabilityExecutionSelectionV1;
+        use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
 
         let identity = |byte: u8| Identity::new([byte; 32]).expect("distinct nonzero fill");
         let market_state = CoreState {

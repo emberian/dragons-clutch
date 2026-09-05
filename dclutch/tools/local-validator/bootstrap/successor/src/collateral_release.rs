@@ -20,7 +20,7 @@
 //! the Realm's "exact Token-2022 no-authority profile" -- a true sentence about
 //! the wrong conjunct.
 
-use dclutch_token_svm::{
+use dclutch_custody::token_svm::{
     CollateralAdapterReleaseV1, PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID,
 };
 use sha2::{Digest, Sha256};
@@ -63,7 +63,7 @@ pub(crate) fn is_admitted_token_2022_collateral_release_v1(stored_id: &[u8; 32])
 
 #[cfg(test)]
 mod tests {
-    use dclutch_token_svm::ExactTransferProfileV1;
+    use dclutch_custody::token_svm::ExactTransferProfileV1;
 
     use super::*;
 

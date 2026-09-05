@@ -44,10 +44,10 @@
 //! sweep that reports `PASS n/20` and a MEAN against a named ELF digest is
 //! `tools/gauntlet/hot-cu/run-hot-cu.sh --substrate slot-pinned`.
 
-use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ArtifactUpgradePolicyV1};
+use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ArtifactUpgradePolicyV1};
 use dclutch_registry_sbf::RegistryError;
-use dclutch_registry_svm::ProgramDataV3View;
-use dclutch_token_svm::TokenAccount;
+use dclutch_registry::svm::ProgramDataV3View;
+use dclutch_custody::token_svm::TokenAccount;
 use solana_account::Account;
 use solana_program::{instruction::InstructionError, pubkey::Pubkey};
 use solana_program_test::{BanksClientError, ProgramTestContext};

@@ -301,7 +301,7 @@ name = "dclutch-core-contract"
 version = "0.1.0"
 
 [[package]]
-name = "dclutch-custody-contract"
+name = "dclutch-custody"
 version = "0.1.0"
 dependencies = [
  "dclutch-market-core-codec",
@@ -316,7 +316,7 @@ dependencies = [
  "dclutch-capability-contract",
  "dclutch-claims-svm",
  "dclutch-core-contract",
- "dclutch-custody-contract",
+ "dclutch-custody",
  "dclutch-dealer-codec",
  "dclutch-market-core-codec",
  "dclutch-realm-contract",
@@ -327,7 +327,6 @@ dependencies = [
  "dclutch-registry-svm",
  "dclutch-release-set-contract",
  "dclutch-rent-contract",
- "dclutch-token-svm",
  "solana-program",
  "solana-sdk-ids",
  "solana-system-interface",
@@ -363,7 +362,7 @@ dependencies = [
 name = "dclutch-postjoin-custody-hostile-sbf"
 version = "0.1.0"
 dependencies = [
- "dclutch-custody-contract",
+ "dclutch-custody",
  "dclutch-custody-sbf",
  "solana-program",
 ]
@@ -392,15 +391,15 @@ dependencies = [
 name = "dclutch-rational-representation-v2-lifecycle-contract"
 version = "0.1.0"
 dependencies = [
+ "dclutch-custody",
  "dclutch-rational-representation-v2-kernel",
- "dclutch-token-svm",
 ]
 
 [[package]]
 name = "dclutch-rational-representation-v2-request-contract"
 version = "0.1.0"
 dependencies = [
- "dclutch-token-svm",
+ "dclutch-custody",
 ]
 
 [[package]]
@@ -467,10 +466,6 @@ dependencies = [
  "sha2",
  "solana-sha256-hasher",
 ]
-
-[[package]]
-name = "dclutch-token-svm"
-version = "0.1.0"
 
 [[package]]
 name = "der"

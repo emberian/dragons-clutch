@@ -26,11 +26,11 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-use dclutch_claims_svm::liability_basis_state_v2::{
+use dclutch_claims::liability_basis_state_v2::{
     LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
     LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
 };
-use dclutch_market_core_codec::STATE_BYTES;
+use dclutch_market::STATE_BYTES;
 use dclutch_wallet_terminal_input_operator::{
     ProtocolCoordinatesV1, RoutedRecordV1, TerminalPayoutRequestV1, TerminalRecordRoutingV1,
     TerminalRoutingTableV1,

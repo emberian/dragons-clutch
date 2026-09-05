@@ -276,11 +276,11 @@ name = "dclutch-core-contract"
 version = "0.1.0"
 
 [[package]]
-name = "dclutch-custody-contract"
+name = "dclutch-custody"
 version = "0.1.0"
 dependencies = [
  "dclutch-market-core-codec",
- "dclutch-release-set-contract",
+ "dclutch-registry",
  "dclutch-sha256-adapter",
 ]
 
@@ -288,8 +288,8 @@ dependencies = [
 name = "dclutch-custody-leg-caller-test-program"
 version = "0.1.0"
 dependencies = [
- "dclutch-custody-contract",
- "dclutch-release-set-contract",
+ "dclutch-custody",
+ "dclutch-registry",
  "solana-program",
 ]
 
@@ -297,12 +297,12 @@ dependencies = [
 name = "dclutch-market-core-codec"
 version = "0.1.0"
 dependencies = [
- "dclutch-release-set-contract",
+ "dclutch-registry",
  "dclutch-sha256-adapter",
 ]
 
 [[package]]
-name = "dclutch-release-set-contract"
+name = "dclutch-registry"
 version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",

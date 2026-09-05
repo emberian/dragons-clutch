@@ -6,7 +6,7 @@
 //! and the layout does not.  Nothing in this file re-declares a byte offset, a
 //! domain string, or a separator.
 
-use dclutch_relay_contract::release::{
+use dclutch_source::relay::release::{
     AccountSetEntryV1, SET_DIGEST_SEED_PREIMAGE_BYTES, account_set_id_preimage_len_v1,
     encode_account_set_id_preimage_v1, encode_set_digest_seed_preimage_v1,
 };
@@ -122,7 +122,7 @@ impl TailHasher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_relay_contract::SHA256_EMPTY_DIGEST;
+    use dclutch_source::relay::SHA256_EMPTY_DIGEST;
 
     fn entry(key: u8, owner: u8, inline_len: u16) -> AccountSetEntryV1 {
         AccountSetEntryV1 {
@@ -137,8 +137,8 @@ mod tests {
     /// prove nothing; this is the check that the daemon and the document agree.
     #[test]
     fn the_account_set_id_preimage_is_the_one_the_design_document_spells() {
-        let observed_cluster_id = dclutch_relay_contract::SOLANA_MAINNET_GENESIS_HASH_V1;
-        let relay_family_id = dclutch_relay_contract::RELAYED_FAMILY_RELEASE_ID_V1;
+        let observed_cluster_id = dclutch_source::relay::SOLANA_MAINNET_GENESIS_HASH_V1;
+        let relay_family_id = dclutch_source::relay::RELAYED_FAMILY_RELEASE_ID_V1;
         let entries = [entry(1, 2, 36), entry(3, 4, 45), entry(5, 6, 416)];
 
         let mut hand = Vec::new();
@@ -175,8 +175,8 @@ mod tests {
 
     #[test]
     fn reordering_the_positions_changes_the_account_set_id() {
-        let cluster = dclutch_relay_contract::SOLANA_MAINNET_GENESIS_HASH_V1;
-        let family = dclutch_relay_contract::RELAYED_FAMILY_RELEASE_ID_V1;
+        let cluster = dclutch_source::relay::SOLANA_MAINNET_GENESIS_HASH_V1;
+        let family = dclutch_source::relay::RELAYED_FAMILY_RELEASE_ID_V1;
         let forward = [entry(1, 2, 36), entry(3, 4, 45)];
         let backward = [entry(3, 4, 45), entry(1, 2, 36)];
         assert_ne!(
@@ -187,8 +187,8 @@ mod tests {
 
     #[test]
     fn changing_only_an_inline_width_changes_the_account_set_id() {
-        let cluster = dclutch_relay_contract::SOLANA_MAINNET_GENESIS_HASH_V1;
-        let family = dclutch_relay_contract::RELAYED_FAMILY_RELEASE_ID_V1;
+        let cluster = dclutch_source::relay::SOLANA_MAINNET_GENESIS_HASH_V1;
+        let family = dclutch_source::relay::RELAYED_FAMILY_RELEASE_ID_V1;
         assert_ne!(
             derive_account_set_id(cluster, family, &[entry(1, 2, 36)]).expect("a"),
             derive_account_set_id(cluster, family, &[entry(1, 2, 37)]).expect("b")
@@ -197,17 +197,17 @@ mod tests {
 
     #[test]
     fn the_same_cluster_on_a_different_cluster_id_derives_a_different_set() {
-        let family = dclutch_relay_contract::RELAYED_FAMILY_RELEASE_ID_V1;
+        let family = dclutch_source::relay::RELAYED_FAMILY_RELEASE_ID_V1;
         let entries = [entry(1, 2, 36)];
         assert_ne!(
             derive_account_set_id(
-                dclutch_relay_contract::SOLANA_MAINNET_GENESIS_HASH_V1,
+                dclutch_source::relay::SOLANA_MAINNET_GENESIS_HASH_V1,
                 family,
                 &entries
             )
             .expect("mainnet"),
             derive_account_set_id(
-                dclutch_relay_contract::SOLANA_DEVNET_GENESIS_HASH_V1,
+                dclutch_source::relay::SOLANA_DEVNET_GENESIS_HASH_V1,
                 family,
                 &entries
             )
@@ -217,8 +217,8 @@ mod tests {
 
     #[test]
     fn a_set_wider_than_the_release_ceiling_refuses_rather_than_truncating() {
-        let cluster = dclutch_relay_contract::SOLANA_MAINNET_GENESIS_HASH_V1;
-        let family = dclutch_relay_contract::RELAYED_FAMILY_RELEASE_ID_V1;
+        let cluster = dclutch_source::relay::SOLANA_MAINNET_GENESIS_HASH_V1;
+        let family = dclutch_source::relay::RELAYED_FAMILY_RELEASE_ID_V1;
         let too_many: Vec<AccountSetEntryV1> = (1..=9).map(|i| entry(i, 2, 8)).collect();
         assert!(derive_account_set_id(cluster, family, &too_many).is_err());
         assert!(derive_account_set_id(cluster, family, &[]).is_err());

@@ -13,15 +13,15 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use dclutch_capability_contract::FundingStateV1;
-use dclutch_resolution_codec::{
+use dclutch_market::capability_manifest::FundingStateV1;
+use dclutch_source::resolution::{
     FUNDED_POSTSTATE_DIGEST_DOMAIN_V1, FUNDED_TRANSITION_RECEIPT_BYTES,
     FUNDED_TRANSITION_REQUEST_BYTES, FundedReceiptPostPhaseV1, FundedTerminalRefundPhaseV1,
     FundedTransitionActionV3, FundedTransitionReceiptV1, FundedTransitionRequestV3,
     RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V4,
     ResolutionCertificateKindV1, ResolutionCertificateV1,
 };
-use dclutch_source_contract::{SourceResolutionPhaseV1, SourceResolutionStateV1};
+use dclutch_source::{SourceResolutionPhaseV1, SourceResolutionStateV1};
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,

@@ -1,4 +1,4 @@
-// @generated from crates/dclutch-relay-contract/src/{instruction,frame}.rs and generated_relayed_abi.rs; do not edit.
+// @generated from crates/dclutch-source/src/relay/{instruction,frame}.rs and generated_relayed_abi.rs; do not edit.
 // Regenerate with: npm run abi:relay-transport
 
 export const RELAY_INSTRUCTION_MAGIC = "DCLTRIX1" as const;
@@ -34,7 +34,7 @@ export const COMMIT_DEADLINE_FAILURE_FRAME_V1: ReadonlyArray<RelayFrameSlotV1> =
   { name: "PortfolioRecordStagingVacancy", signer: false, writable: false },
   { name: "CapabilityManifest", signer: false, writable: false },
   { name: "CapabilityManifestStagingVacancy", signer: false, writable: false },
-  { name: "FailureFunding", signer: false, writable: true },
+  { name: "ResolutionFunding", signer: false, writable: true },
   { name: "ClockSysvar", signer: false, writable: false },
   { name: "RentSysvar", signer: false, writable: false },
   { name: "SystemProgram", signer: false, writable: false },

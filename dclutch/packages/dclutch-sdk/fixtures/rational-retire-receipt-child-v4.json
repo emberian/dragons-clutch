@@ -1,5 +1,5 @@
 {
-  "note": "EMITTED BY RUST. crates/dclutch-rational-representation-v2-lifecycle-contract/examples/compact_retire_child_v4.rs, through the contract's own family, child-header, row and request encoders. Regenerate with `npm run abi:rational-retire-child` from packages/dclutch-sdk; never edit by hand. Fixture evidence, not devnet: the identities are chosen constants.",
+  "note": "EMITTED BY RUST. crates/dclutch-claims/rational_lifecycle/examples/compact_retire_child_v4.rs, through the contract's own family, child-header, row and request encoders. Regenerate with `npm run abi:rational-retire-child` from packages/dclutch-sdk; never edit by hand. Fixture evidence, not devnet: the identities are chosen constants.",
   "familyInput": {
     "releaseSet": "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
     "market": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",

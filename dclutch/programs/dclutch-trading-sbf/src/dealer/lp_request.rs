@@ -4,7 +4,7 @@
 //! in `equity_request`; this fixed wire owns only vacant Open and quiescent
 //! Close. Every coordinate is copied from authenticated chain state.
 
-use dclutch_capability_program_contract::set_v1::CapabilityProgramSetV1;
+use dclutch_market::capability_program::set_v1::CapabilityProgramSetV1;
 use dclutch_core_contract::ContentId;
 use solana_program::{hash::hash, pubkey::Pubkey};
 

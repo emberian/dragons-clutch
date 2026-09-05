@@ -32,8 +32,8 @@ import {
 const repoRoot = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..');
 const read = (path: string) => readFileSync(join(repoRoot, path), 'utf8');
 
-const CLAIM_CHECK_V1 = 'crates/dclutch-claims-svm/src/claim_check_v1.rs';
-const CONSERVATION_V1 = 'crates/dclutch-claims-svm/src/claim_check_conservation_v1.rs';
+const CLAIM_CHECK_V1 = 'crates/dclutch-claims/src/claim_check_v1.rs';
+const CONSERVATION_V1 = 'crates/dclutch-claims/src/claim_check_conservation_v1.rs';
 
 const constant = (source: string, name: string) => {
   const match = source.match(new RegExp(`pub const ${name}: u(?:64|size) = ([0-9_]+);`));

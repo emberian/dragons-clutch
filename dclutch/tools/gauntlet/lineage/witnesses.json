@@ -21,7 +21,7 @@
       "kind": "evidence-jq",
       "query": "(.projected_record | length) | tostring",
       "expect": "496",
-      "provenance": "`RELEASE_LINEAGE_BYTES_V1 = 248` in crates/dclutch-registry-contract, hex-encoded here, so 496 characters. This is not the code asserting its own constant: the caller read the account back off the chain after the send and refused to write this document unless the landed bytes were byte-equal to `projected_record` and its on-chain length equalled that constant. So the number checked here is the length of an account a validator wrote, arriving through a document that could not have been produced if the chain had disagreed."
+      "provenance": "`RELEASE_LINEAGE_BYTES_V1 = 248` in crates/dclutch-registry, hex-encoded here, so 496 characters. This is not the code asserting its own constant: the caller read the account back off the chain after the send and refused to write this document unless the landed bytes were byte-equal to `projected_record` and its on-chain length equalled that constant. So the number checked here is the length of an account a validator wrote, arriving through a document that could not have been produced if the chain had disagreed."
     }
   ]
 }

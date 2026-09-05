@@ -7,13 +7,13 @@
 //! Upgradeable Loader V3 Program/ProgramData/complete-ELF observation. This
 //! module is read-only: it grants no accelerator state or effect write authority.
 
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
-use dclutch_capability_program_contract::v4::{
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_market::capability_program::v4::{
     CAPABILITY_PROGRAM_V4_BYTES, CapabilityProgramV4,
     SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_execution_strategy_contract::v2::{
+use dclutch_market::execution_strategy::v2::{
     AdmittedAotAuthorizationV2, AuthenticatedInterpreterArtifactsV2, CertificateArtifactBindingV2,
     EXECUTION_STRATEGY_ADMISSION_BYTES_V2, EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_CERTIFICATE_BYTES_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
@@ -21,14 +21,14 @@ use dclutch_execution_strategy_contract::v2::{
     ExecutionStrategyAdmissionV2, ExecutionStrategyCertificateV2, ExecutionStrategyProgramV2,
     StrategyDispositionV2, validate_admitted_aot_v4,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_activation_auth_v1::ActivationAuthErrorV1;
-use dclutch_registry_contract::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::activation_auth_v1::ActivationAuthErrorV1;
+use dclutch_registry::{
     ARTIFACT_RELEASE_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
     require_slot_pinned_release_v1,
 };
-use dclutch_release_set_contract::ArtifactReleaseIdV1;
-use dclutch_shadow_accelerator_auth_v4::{ShadowAcceleratorAuthErrorV4, deployment};
+use dclutch_registry::release_set::ArtifactReleaseIdV1;
+use dclutch_trading::shadow_accelerator_auth::{ShadowAcceleratorAuthErrorV4, deployment};
 use solana_program::{account_info::AccountInfo, hash::hash, pubkey::Pubkey};
 use solana_sdk_ids::{system_program, sysvar};
 
@@ -38,7 +38,7 @@ use crate::{
 
 /// The extracted callback boundary raises Trading's own refusal codes.
 ///
-/// `dclutch-shadow-accelerator-auth-v4` is Trading's published boundary, so its
+/// `dclutch-trading::shadow_accelerator_auth` is Trading's published boundary, so its
 /// refusals must be indistinguishable from the ones this crate would have
 /// raised. These assertions are the binding: the two definitions cannot drift
 /// apart without failing the build.
@@ -876,7 +876,7 @@ pub(crate) fn authenticate_slot_pinned_deployment(
 /// an `Immutable` Loader V3 deployment whose release and whose observed
 /// ProgramData both carry no upgrade authority, that admitted ELF can never be
 /// redeployed, so hashing a megabyte-scale ELF on every hot action recomputes
-/// an already-authenticated fact. `dclutch_registry_contract::immutable_registry`
+/// an already-authenticated fact. `dclutch_registry::immutable_registry`
 /// owns that argument and the Registry role batch already relies on it.
 /// Identity, ProgramData link, Loader ownership, executability, the exact
 /// deployment slot, and the absent upgrade authority are still checked here and

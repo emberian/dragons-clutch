@@ -5,7 +5,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use dclutch_rational_representation_v2_request_contract::{
+use dclutch_claims::rational_request::{
     AssetV2, CallerRoleV2, OpenRepresentationHotRequestV3, RepresentationActionV2,
     RepresentationRequestHeaderV2, RepresentationRequestV2, ABSENT_REVISION, ASSET_BYTES_V3,
 };
@@ -579,7 +579,7 @@ impl<'de> Visitor<'de> for ExactValueVisitorV1 {
 #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use dclutch_rational_representation_v2_request_contract::{
+    use dclutch_claims::rational_request::{
         OPEN_REPRESENTATION_HOT_MAGIC_V3, REQUEST_MAGIC_V2,
     };
     use serde_json::json;
@@ -614,7 +614,7 @@ mod tests {
             "receiptMint": key(6),
             "receiptAccount": structured.then(|| key(7)),
             "representationAuthority": key(8),
-            "tokenProgram": Pubkey::new_from_array(dclutch_token_svm::TOKEN_2022_PROGRAM_ID).to_string(),
+            "tokenProgram": Pubkey::new_from_array(dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID).to_string(),
             "expectedRepresentationRevision": "3",
             "expectedClaimsMarketRevision": (!structured).then_some("4"),
             "expectedActorPositionRevision": (!structured).then_some("5"),

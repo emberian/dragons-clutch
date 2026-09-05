@@ -29,7 +29,7 @@ named beside it. Six commits; each is one unit so a reversal is one revert.
 | the trading tests of that closure | `tests/dealer_v3_composer.rs`, `tests/dealer_scenario_profile_vector.rs`, one test in `hot_v3.rs`, two assertions in `tests/dealer_v3_multi_lp.rs` | 800 |
 | the accelerator's scenario arm and the program-test that drove the chain | `programs/dclutch-dealer-accelerator-sbf/src/lib.rs` (one arm), `program-test/tests/accepted.rs`, `program-test/src/{dealer_chain,custody_delivery}.rs` | 10,691 |
 | the operator's builders | `crates/dclutch-operator/src/dealer_scenario_{checkpoint_v1,hot_v4}.rs` | 4,543 |
-| the wire | `crates/dclutch-dealer-codec/src/scenario_{admission,checkpoint,custody_reservation,evaluation_receipt,membership_manifest,reservation_receipt}_v1.rs`, `generated_scenario_{checkpoint_v1,reservation_state_v1,trade_v4}.rs`, three guards in `tests/generator_fresh.rs` | 4,141 |
+| the wire | `crates/dclutch-trading/src/dealer/scenario_{admission,checkpoint,custody_reservation,evaluation_receipt,membership_manifest,reservation_receipt}_v1.rs`, `generated_scenario_{checkpoint_v1,reservation_state_v1,trade_v4}.rs`, three guards in `tests/generator_fresh.rs` | 4,141 |
 | the Lean ABIs and emitters | `DealerScenario{CheckpointV1,ReservationStateV1,TradeV4}Abi.lean`, `EmitDealerScenario{CheckpointV1,ReservationStateV1,TradeV4}Rust.lean`, three lakefile entries, three root imports | 1,486 |
 | the gauntlet tier and its rows | `tools/gauntlet/dealer-checkpoint/` (bindings, witnesses, programs, fast-lane, runner, README), the `substrates.json` entry, two `Machine` rows in `census/src/phases.rs`, three stale entries in `magic-collisions.json` | 1,290 |
 | the browser's seven explorer rows and one console sentence | `apps/dclutch-web/lib/explorer/instructions.ts`, `components/ConsoleDirectory.tsx` | 30 |
@@ -50,7 +50,7 @@ of the eight routes was witnessed only by `dealer-checkpoint-programtest`
   non-test consumers already; `v3_composer`, `v3_admitted`, the `v3_trade*`
   trio and the `v4_scenario_*` pair were consumed only by each other, the
   chain, the deleted operator/program-test files, and tests of themselves.
-  `scenario.rs` and `dclutch-dealer-scenario-kernel` stay: the LP lifecycle's
+  `scenario.rs` and `dclutch-trading::dealer_scenario` stay: the LP lifecycle's
   solvency planner reads them.
 - `dclutch-route-census inventory --check-unique` at `3ed848701`: **157
   routes, 357 refusal codes**, 375 magics declared, 5 adjudicated collisions,
@@ -73,7 +73,7 @@ of the eight routes was witnessed only by `dealer-checkpoint-programtest`
   census had missed).
 - `cargo check --offline --all-targets` green for `dclutch-trading-sbf`,
   `dclutch-dealer-accelerator-sbf`, `dclutch-operator`, `dclutch-custody-sbf`,
-  `dclutch-dealer-codec`, the accelerator program-test workspace and the
+  `dclutch-trading::dealer`, the accelerator program-test workspace and the
   census tool.
 
 **Owed.** `tools/frameguard/baseline.json` recapture (Trading, Custody and the
@@ -192,7 +192,7 @@ named here rather than hand-edited at this budget.
 ## 5. Deliberately left, and why
 
 - **The registered-Direct V4 branch** (`hot_v3/direct.rs`'s `RegisteredCreation`
-  arm, `crates/dclutch-direct-codec/src/registered_*_v4.rs`, 7,999 lines):
+  arm, `crates/dclutch-trading/src/registered_*_v4.rs`, 7,999 lines):
   the map §1.4(e) reads it as the open C-04 dispatch wall the contract says to
   dispatch, and the coordinator amended the brief to "amend to the batch
   spine's RFQ, not delete". Left whole.

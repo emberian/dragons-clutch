@@ -1,8 +1,8 @@
-use dclutch_account_profile_contract::lifecycle_v3::{
+use dclutch_vm::account_profile::lifecycle_v3::{
     CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5, HEADER_BYTES as LIFECYCLE_BYTES_V5,
     encode::encode_lifecycle_policy_v5_atomic,
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     set_v2::{
         CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityDescriptorReferenceV2,
         CapabilityProgramSetEntryV2, SelectorWidthV2, encode_program_set_v2,
@@ -10,25 +10,25 @@ use dclutch_capability_program_contract::{
     },
     v4::SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V4,
 };
-use dclutch_claims_svm::founding_v5::{ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5};
+use dclutch_claims::founding_v5::{ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5};
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CompartmentV1, ProjectedCallerRoleV1, ProjectedCustodyOperationV1, ProjectedCustodyRequestV1,
 };
-use dclutch_product_runtime_v2::{
+use dclutch_product::{
     ContentId as ProductContentId, PortfolioInputV2, ResultDomainInputV2, compile_portfolio_v2,
     compile_result_domain_v2, portfolio_record_bytes, result_domain_record_bytes,
 };
-use dclutch_product_runtime_v2_admission::{
+use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
     RESULT_DOMAIN_SCHEMA_ID_V2,
 };
-use dclutch_record_contract::{
+use dclutch_registry::record::{
     AccountId, AddressDerivationObligationV1, ContentDigest, PageEnvelopeV1,
     RawRecordValidationObligationV1, RecordAdapterV1, RecordKeyV1, SchemaReleaseId,
     StagingLivenessPolicyV1, authenticate_finalized_raw_record_v1,
 };
-use dclutch_series_v3_kernel::{
+use dclutch_trading::series::{
     AccountKeyV3, AuthenticatedProductProjectionV2, OccurrenceV3, TemplateV3,
     generated::{
         SERIES_EXAMPLE_OCCURRENCE_V3, SERIES_EXAMPLE_TEMPLATE_V3, SERIES_EXAMPLE_TICKET_V3,
@@ -79,9 +79,9 @@ impl RecordAdapterV1 for AcceptingRecordAdapter {
 
 struct Fixture {
     observation: ContentId,
-    template: [u8; dclutch_series_v3_kernel::generated::SERIES_TEMPLATE_BYTES_V3],
-    occurrence: [u8; dclutch_series_v3_kernel::generated::SERIES_OCCURRENCE_BYTES_V3],
-    ticket: [u8; dclutch_series_v3_kernel::generated::SERIES_TICKET_BYTES_V3],
+    template: [u8; dclutch_trading::series::generated::SERIES_TEMPLATE_BYTES_V3],
+    occurrence: [u8; dclutch_trading::series::generated::SERIES_OCCURRENCE_BYTES_V3],
+    ticket: [u8; dclutch_trading::series::generated::SERIES_TICKET_BYTES_V3],
     product: [u8; PRODUCT_RECORD_BYTES_V2],
     domain: Vec<u8>,
     portfolio: Vec<u8>,
@@ -89,10 +89,10 @@ struct Fixture {
     descriptor: Vec<u8>,
     lifecycle: [u8; LIFECYCLE_BYTES_V5],
     family_request: Vec<u8>,
-    lock: [u8; dclutch_custody_contract::PROJECTED_CUSTODY_REQUEST_BYTES_V1],
-    core: [u8; dclutch_market_core_codec::SERIES_CORE_REQUEST_BYTES_V1],
-    realize: [u8; dclutch_custody_contract::PROJECTED_CUSTODY_REQUEST_BYTES_V1],
-    claims: [u8; dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_REQUEST_BYTES_V5],
+    lock: [u8; dclutch_custody::PROJECTED_CUSTODY_REQUEST_BYTES_V1],
+    core: [u8; dclutch_market::SERIES_CORE_REQUEST_BYTES_V1],
+    realize: [u8; dclutch_custody::PROJECTED_CUSTODY_REQUEST_BYTES_V1],
+    claims: [u8; dclutch_claims::founding_v5::CLAIMS_FOUNDING_REQUEST_BYTES_V5],
     widths: [u32; SERIES_SHADOW_FIXED_ACCOUNT_COUNT_V4],
     checked_release: CheckedSeriesShadowReleaseV1,
     replay: SeriesShadowReplaySourceV1,
@@ -104,8 +104,8 @@ impl Fixture {
         let product_id = product_identity(40);
         let liability_basis = SERIES_EXAMPLE_OCCURRENCE_V3
             .get(
-                dclutch_series_v3_kernel::generated::SERIES_OCCURRENCE_LIABILITY_BASIS_OFFSET_V3
-                    ..dclutch_series_v3_kernel::generated::SERIES_OCCURRENCE_LIABILITY_BASIS_OFFSET_V3
+                dclutch_trading::series::generated::SERIES_OCCURRENCE_LIABILITY_BASIS_OFFSET_V3
+                    ..dclutch_trading::series::generated::SERIES_OCCURRENCE_LIABILITY_BASIS_OFFSET_V3
                         + 32,
             )
             .expect("fixed liability-basis field");
@@ -411,19 +411,19 @@ impl Fixture {
             records: SeriesShadowFinalizedRecordsV1 {
                 template: record(
                     self.observation,
-                    dclutch_series_v3_kernel::generated::SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
+                    dclutch_trading::series::generated::SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
                     &self.template,
                     1,
                 ),
                 occurrence: record(
                     self.observation,
-                    dclutch_series_v3_kernel::generated::SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3,
+                    dclutch_trading::series::generated::SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3,
                     &self.occurrence,
                     3,
                 ),
                 ticket: record(
                     self.observation,
-                    dclutch_series_v3_kernel::generated::SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
+                    dclutch_trading::series::generated::SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
                     &self.ticket,
                     5,
                 ),

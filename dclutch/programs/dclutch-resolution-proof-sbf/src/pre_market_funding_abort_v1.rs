@@ -1,14 +1,14 @@
 //! Expiry rollback for one Resolution-owned pre-Market funding ledger.
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
     ControllerFundingCheckpointAbortKindV1, ControllerFundingCheckpointDerivationV1,
     ControllerFundingCheckpointV1, ControllerFundingControllerV1, FundingLedgerStatusV2,
     FundingLedgerV2, controller_funding_ledger_account_digest_v1,
 };
-use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_resolution_codec::{
+use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_source::resolution::{
     PRE_MARKET_FUNDING_ABORT_REQUEST_BYTES_V1, PRE_MARKET_FUNDING_ABORT_REQUEST_MAGIC_V1,
     PreMarketFundingAbortReceiptV1, PreMarketFundingAbortRequestV1,
     RESOLUTION_CONTROLLER_RELEASE_ID_V7, pre_market_funding_ledger_account_digest_v1,
@@ -77,7 +77,7 @@ pub fn process_pre_market_funding_abort_v1(
         *registry.key,
         manifest_raw,
         manifest_staging,
-        dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        dclutch_market::capability_manifest::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         request.manifest,
         &manifest_data,
         RecordKind::CapabilityManifest,
@@ -493,7 +493,7 @@ fn account<'a, 'info>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_capability_contract::ControllerFundingCheckpointInputV1;
+    use dclutch_market::capability_manifest::ControllerFundingCheckpointInputV1;
 
     const EXPIRY_SLOT: u64 = 90;
 

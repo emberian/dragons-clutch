@@ -5,12 +5,12 @@
 //! slot-pinned Resolution role and consumes the certificate's typed result;
 //! it never synthesizes a second Core-owned terminal fact.
 
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
-use dclutch_market_core_codec::CoreState;
-use dclutch_product_payoff_v2_codec::runtime_v3::BasisKindV3;
-use dclutch_rational_representation_v2_kernel::product_v3::TerminalScenarioV3;
-use dclutch_release_set_contract::ExecutionRoleV1;
-use dclutch_resolution_codec::{
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_market::CoreState;
+use dclutch_product::payoff::runtime_v3::BasisKindV3;
+use dclutch_claims::rational_kernel::product_v3::TerminalScenarioV3;
+use dclutch_registry::release_set::ExecutionRoleV1;
+use dclutch_source::resolution::{
     RESOLUTION_CERTIFICATE_BYTES_V2, ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
 use solana_program::{account_info::AccountInfo, program_error::ProgramError};

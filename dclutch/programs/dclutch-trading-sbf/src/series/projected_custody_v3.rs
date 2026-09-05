@@ -5,11 +5,11 @@
 //! then emits the sole canonical [`ProjectedCustodyRequestV1`] wire.  It does
 //! not choose an amount, Market, revision, refund owner, or replay context.
 
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CompartmentV1, PROJECTED_HOARD_CONTEXT_DOMAIN_V1, ProjectedCallerRoleV1,
     ProjectedCustodyOperationV1, ProjectedCustodyRequestV1,
 };
-use dclutch_series_v3_kernel::escrow::ConsumeSeriesEscrowPlanV3;
+use dclutch_trading::series::escrow::ConsumeSeriesEscrowPlanV3;
 use solana_program::hash::hashv;
 
 /// Stable refusal from the Series projected-Custody boundary.
@@ -133,7 +133,7 @@ pub fn project_realize_and_close_v3(
 
 /// Project expiry cleanup of the prepared but still-empty projected Hoard.
 pub fn project_abort_v3(
-    escrow: dclutch_series_v3_kernel::PrefoundingSeriesEscrowV3,
+    escrow: dclutch_trading::series::PrefoundingSeriesEscrowV3,
     expiry_slot: u64,
     physical: SeriesProjectedCustodyPhysicalV3,
 ) -> Result<ProjectedCustodyRequestV1> {
@@ -146,7 +146,7 @@ pub fn project_abort_v3(
 }
 
 fn base_request(
-    escrow: dclutch_series_v3_kernel::PrefoundingSeriesEscrowV3,
+    escrow: dclutch_trading::series::PrefoundingSeriesEscrowV3,
     expiry_slot: u64,
     physical: SeriesProjectedCustodyPhysicalV3,
 ) -> Result<ProjectedCustodyRequestV1> {
@@ -256,8 +256,8 @@ fn with_transition(
 #[cfg(test)]
 mod tests {
     use dclutch_core_contract::ContentId;
-    use dclutch_series_v3_kernel::escrow::consume_series_escrow_v3;
-    use dclutch_series_v3_kernel::{
+    use dclutch_trading::series::escrow::consume_series_escrow_v3;
+    use dclutch_trading::series::{
         AccountKeyV3, AuthenticatedProductProjectionV2, SERIES_OCCURRENCE_BYTES_V3,
         SERIES_TEMPLATE_BYTES_V3, SERIES_TICKET_BYTES_V3, admit_occurrence, admit_ticket,
         generated, occurrence_content_id, pre_founding_series_escrow, template_content_id,
@@ -287,7 +287,7 @@ mod tests {
         .to_bytes()
     }
 
-    fn escrow() -> dclutch_series_v3_kernel::PrefoundingSeriesEscrowV3 {
+    fn escrow() -> dclutch_trading::series::PrefoundingSeriesEscrowV3 {
         let mut template: [u8; SERIES_TEMPLATE_BYTES_V3] = generated::SERIES_EXAMPLE_TEMPLATE_V3;
         let occurrence: [u8; SERIES_OCCURRENCE_BYTES_V3] = generated::SERIES_EXAMPLE_OCCURRENCE_V3;
         let mut ticket: [u8; SERIES_TICKET_BYTES_V3] = generated::SERIES_EXAMPLE_TICKET_V3;

@@ -11,7 +11,7 @@
 #                      manifest, and rustfmt derives `style_edition` from it.
 #
 # Those agree for the 108 packages that declare edition 2024 and disagree for
-# the one that does not: `dclutch-dealer-codec` declares `edition = "2021"`, so
+# the one that does not: `dclutch-trading` declares `edition = "2021"`, so
 # `cargo fmt` formatted it in 2021 style while `lane.sh fmt` formatted it in
 # 2024 style. Import sorting is where it shows -- 2021 sorts `Error` before
 # `array_at` (ASCII, uppercase first), 2024 sorts it after -- so the five
@@ -25,7 +25,7 @@
 #   --style-edition (CLI) > this file > --edition (CLI) > edition > 2015
 # so setting it here OVERRIDES the per-crate edition that cargo fmt passes, and
 # every invocation -- `cargo fmt`, `lane.sh fmt`, a bare `rustfmt file.rs` --
-# now produces identical bytes. Verified against `dclutch-dealer-codec`, the
+# now produces identical bytes. Verified against `dclutch-trading`, the
 # one crate where the two authorities disagreed.
 #
 # `edition` sets the PARSE edition for a bare `rustfmt file.rs`, which would

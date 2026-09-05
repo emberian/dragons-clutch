@@ -1,12 +1,12 @@
 //! Shared finalized Product-graph authentication for successor operators.
 
 use crate::ObservedAccount;
-use dclutch_product_runtime_v2::ContentId;
-use dclutch_product_runtime_v2_admission::{
+use dclutch_product::ContentId;
+use dclutch_product::admission::{
     AdmissionReceiptV2, FinalizedRecordCoordinateV2, PORTFOLIO_SCHEMA_ID_V2,
     PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2, admit_authenticated_records_v2,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use solana_program::{hash::hash, pubkey::Pubkey};
 use solana_sdk_ids::system_program;
 

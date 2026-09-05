@@ -276,15 +276,17 @@ name = "dclutch-core-contract"
 version = "0.1.0"
 
 [[package]]
-name = "dclutch-market-core-codec"
+name = "dclutch-market"
 version = "0.1.0"
 dependencies = [
- "dclutch-release-set-contract",
+ "dclutch-core-contract",
+ "dclutch-registry",
  "dclutch-sha256-adapter",
+ "dclutch-vm",
 ]
 
 [[package]]
-name = "dclutch-release-set-contract"
+name = "dclutch-registry"
 version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
@@ -302,9 +304,13 @@ dependencies = [
 name = "dclutch-trading-core-caller-test-program"
 version = "0.1.0"
 dependencies = [
- "dclutch-market-core-codec",
+ "dclutch-market",
  "solana-program",
 ]
+
+[[package]]
+name = "dclutch-vm"
+version = "0.1.0"
 
 [[package]]
 name = "der"

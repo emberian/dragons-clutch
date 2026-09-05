@@ -1,6 +1,6 @@
 //! Permissionless terminal-to-retiring transition under current Core release.
 
-use dclutch_market_core_codec::{CoreState, Request, Role, begin_retiring};
+use dclutch_market::{CoreState, Request, Role, begin_retiring};
 use solana_program::{account_info::AccountInfo, program_error::ProgramError, pubkey::Pubkey};
 
 use crate::{
@@ -90,13 +90,13 @@ fn account<'accounts, 'info>(
 
 #[cfg(test)]
 mod tests {
-    use dclutch_market_core_codec::{
+    use dclutch_market::{
         Admission, Binding, Identity, MarketIdentity, Phase, Readiness, ReleaseReceipt, ReleaseSet,
         Role,
     };
 
     use super::*;
-    use dclutch_market_core_codec::StateBumpsV1;
+    use dclutch_market::StateBumpsV1;
 
     fn id(value: u8) -> Identity {
         Identity::new([value; 32]).expect("nonzero identity")
@@ -177,7 +177,7 @@ mod tests {
     }
 
     fn request() -> Request {
-        Request::administrative(dclutch_market_core_codec::Action::BeginRetiring, 1, id(31))
+        Request::administrative(dclutch_market::Action::BeginRetiring, 1, id(31))
     }
 
     #[test]

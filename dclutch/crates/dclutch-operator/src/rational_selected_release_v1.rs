@@ -52,13 +52,13 @@ use dclutch_rational_lifecycle_hot_v3::{
     build_rational_lifecycle_selected_bundle_v6, encode_rational_lifecycle_policy_v5,
     lifecycle_logical_account_count_v3,
 };
-use dclutch_rational_representation_v2_kernel::DESCRIPTOR_HEADER_BYTES;
-use dclutch_rational_representation_v2_lifecycle_contract::{
+use dclutch_claims::rational_kernel::DESCRIPTOR_HEADER_BYTES;
+use dclutch_claims::rational_lifecycle::{
     LIFECYCLE_COMMON_ACCOUNT_COUNT_V2, LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2, LifecycleActionV2,
     RATIONAL_LIFECYCLE_CAPABILITY_KIND_ID_V1,
 };
-use dclutch_release_set_contract::ExecutionRoleV1;
-use dclutch_token_svm::{TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TokenBehaviorSelectionV2};
+use dclutch_registry::release_set::ExecutionRoleV1;
+use dclutch_custody::token_svm::{TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TokenBehaviorSelectionV2};
 use solana_program::hash::hash;
 
 /// Number of action bundles one selectable Rational release compiles.
@@ -397,7 +397,7 @@ impl RationalSelectedReleaseV1 {
     /// publication plan cannot finalize a record under a schema the release
     /// does not actually select.
     pub fn publication_records(&self) -> Result<Vec<RationalPublicationRecordV1<'_>>> {
-        use dclutch_capability_program_contract::{
+        use dclutch_market::capability_program::{
             set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
             v4::CapabilityProgramV4,
         };
@@ -493,7 +493,7 @@ fn publish(
     release: &RationalSelectedReleaseV1,
     input: RationalSelectedReleaseInputV1<'_>,
 ) -> Result<RationalSelectedPublicationV1> {
-    use dclutch_capability_program_contract::set_v2::{CapabilityProgramSetV2, SelectorWidthV2};
+    use dclutch_market::capability_program::set_v2::{CapabilityProgramSetV2, SelectorWidthV2};
 
     let bytes = release
         .artifact_bytes()
@@ -676,7 +676,7 @@ pub fn rational_selected_actions_v1() -> [LifecycleActionV2; RATIONAL_SELECTED_A
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_product_payoff_v2_codec::runtime_v3::{
+    use dclutch_product::payoff::runtime_v3::{
         BASIS_HEADER_BYTES_V3, BasisInputV3, BasisKindV3, compile_basis_v3,
     };
 
@@ -830,7 +830,7 @@ mod tests {
             .expect("config record");
         assert_eq!(
             config.schema,
-            dclutch_token_svm::TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2
+            dclutch_custody::token_svm::TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2
         );
         assert_eq!(config.content_id(), release.publication.config_id);
     }

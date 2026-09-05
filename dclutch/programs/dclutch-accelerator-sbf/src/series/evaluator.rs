@@ -2,16 +2,16 @@
 
 use alloc::{vec, vec::Vec};
 
-use dclutch_account_profile_contract::{
+use dclutch_vm::account_profile::{
     AccountObservationV1,
     v2::{
         AccountProfileV2, ProjectionRegistersV2, derive_effect_permissions_with_dynamic_spans,
         project_dynamic_fixed_spans_atomic,
     },
 };
-use dclutch_capability_program_contract::v4::CapabilityProgramV4;
+use dclutch_market::capability_program::v4::CapabilityProgramV4;
 use dclutch_core_contract::ContentId;
-use dclutch_effect_kernel::{
+use dclutch_vm::effect::{
     v2::{AccountInput, AccountPermission, FixedRole},
     v3::{
         ProjectionV3, ResolvedReceiptDependenciesV3, RouteKindV3,
@@ -19,7 +19,7 @@ use dclutch_effect_kernel::{
     },
     v4::ProgramV4 as EffectProgramV4,
 };
-use dclutch_execution_strategy_contract::{
+use dclutch_market::execution_strategy::{
     shadow_digest_v3::{
         ShadowEffectProjectionV3, ShadowReceiptDependencyV3, ShadowResolvedRouteV3,
         ShadowRouteKindV3, ShadowRouteRoleV3, ShadowRuntimeObservationV3, candidate_digest_v3,
@@ -29,18 +29,18 @@ use dclutch_execution_strategy_contract::{
     shadow_v3::{ShadowAckV3, ShadowArtifactTupleV3, ShadowRequestV3},
     v2::{AcceleratorTransportProfileV2, ExecutionStrategyProgramV2, StrategyDispositionV2},
 };
-use dclutch_market_core_codec::SERIES_CORE_REQUEST_BYTES_V1;
-use dclutch_request_profile_contract::{
+use dclutch_market::SERIES_CORE_REQUEST_BYTES_V1;
+use dclutch_vm::request_profile::{
     ProjectionRegistersV1, RequestProfileV1, project_atomic as project_request_atomic,
 };
-use dclutch_series_v3_kernel::{
+use dclutch_trading::series::{
     AccountKeyV3, AuthenticatedProductProjectionV2,
     request::SeriesActionV3,
     shadow::{SeriesShadowInputV3, SeriesShadowObservationsV3, evaluate_series_shadow_v3},
     template_content_id,
 };
 use dclutch_sha256_adapter::digest;
-use dclutch_transition_vm::v3::{
+use dclutch_vm::v3::{
     ProgramV3 as TransitionProgramV3, RegisterInput, RegisterOutput, execute_fold_atomic,
 };
 
@@ -661,7 +661,7 @@ fn shadow_routes(
 }
 
 fn shadow_dependencies(
-    effect: dclutch_effect_kernel::v3::ProgramV3<'_>,
+    effect: dclutch_vm::effect::v3::ProgramV3<'_>,
     dependencies: ResolvedReceiptDependenciesV3,
 ) -> Result<Vec<ShadowReceiptDependencyV3>> {
     let mut output = Vec::with_capacity(usize::from(dependencies.len()));

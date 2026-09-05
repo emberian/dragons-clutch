@@ -90,13 +90,13 @@ use solana_program::{instruction::InstructionError, pubkey::Pubkey};
 use solana_program_test::BanksClientError;
 use solana_sdk::{signature::Signer, transaction::TransactionError};
 
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{CallerRoleV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1};
-use dclutch_direct_codec::ordinary_geometry_v3::DirectOrdinaryGeometryV3;
-use dclutch_direct_codec::successor::{DirectCoordinatesV1, MakerReplaySeedsV1};
+use dclutch_custody::{CallerRoleV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1};
+use dclutch_trading::ordinary_geometry_v3::DirectOrdinaryGeometryV3;
+use dclutch_trading::successor::{DirectCoordinatesV1, MakerReplaySeedsV1};
 use dclutch_direct_hot_program_test_support::fixture::DirectTradeScenarioV1;
 use dclutch_direct_hot_program_test_support::waist::{
     CORE_PROGRAM_ID, CUSTODY_PROGRAM_ID, DirectCase, Releases, TRADING_PROGRAM_ID,
@@ -104,8 +104,8 @@ use dclutch_direct_hot_program_test_support::waist::{
     direct_top_level_instructions, elves, fixture_substrate, program_test_without_forced_budget,
     start_with_substrate, submit_v0_observed, with_fixture_seed,
 };
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2};
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 
 /// Fixture seeds swept per arm, matching `direct_hot_top_level_margin_gate.rs`.
 ///

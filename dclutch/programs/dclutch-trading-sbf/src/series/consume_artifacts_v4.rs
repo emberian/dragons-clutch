@@ -7,20 +7,20 @@
 //! All encoders are allocation-free and failure-atomic over caller buffers.
 
 #[cfg(not(target_os = "solana"))]
-use dclutch_claims_svm::{
+use dclutch_claims::{
     founding_v5::ClaimsFoundingRequestV5,
     series_founding_transport_v1::{
         SeriesClaimsFoundingTransportLayoutV1, SeriesClaimsFoundingTransportV1,
     },
 };
 #[cfg(not(target_os = "solana"))]
-use dclutch_custody_contract::ProjectedCustodyRequestLayoutV1;
-use dclutch_effect_kernel::v3::{
+use dclutch_custody::ProjectedCustodyRequestLayoutV1;
+use dclutch_vm::effect::v3::{
     HEADER_BYTES as EFFECT_HEADER_BYTES_V4, OPERATION_BYTES as EFFECT_OPERATION_BYTES_V4,
     RECEIPT_DEPENDENCY_BYTES, ROUTE_BYTES as EFFECT_ROUTE_BYTES_V4,
 };
 #[cfg(not(target_os = "solana"))]
-use dclutch_effect_kernel::{
+use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{
         RouteKindV3,
@@ -30,7 +30,7 @@ use dclutch_effect_kernel::{
         },
     },
 };
-use dclutch_request_profile_contract::{
+use dclutch_vm::request_profile::{
     HEADER_BYTES as REQUEST_PROFILE_HEADER_BYTES_V4,
     OPERATION_BYTES as REQUEST_PROFILE_OPERATION_BYTES_V4,
     encode::{
@@ -38,7 +38,7 @@ use dclutch_request_profile_contract::{
         encode_request_profile_v1_atomic,
     },
 };
-use dclutch_transition_vm::v3::{
+use dclutch_vm::v3::{
     HEADER_BYTES as TRANSITION_HEADER_BYTES_V4,
     INSTRUCTION_BYTES as TRANSITION_INSTRUCTION_BYTES_V4, InstructionV3, ProgramGeometryV3,
     ScalarRegisterV3, encode_program_atomic,
@@ -184,7 +184,7 @@ pub fn encode_series_consume_request_profile_v4_atomic(
     let instructions = [
         RequestInstructionV1::require_u8(
             RequestCoordinateV1::fixed(ACTION_SELECTOR_OFFSET),
-            dclutch_series_v3_kernel::request::SeriesActionV3::Consume as u8,
+            dclutch_trading::series::request::SeriesActionV3::Consume as u8,
         ),
         RequestInstructionV1::project_u8(
             RequestCoordinateV1::fixed(PROOF_COUNT_OFFSET),
@@ -489,11 +489,11 @@ pub(super) mod tests {
     extern crate alloc;
 
     use alloc::vec;
-    use dclutch_claims_svm::founding_v5::ClaimsFoundingRequestInputV5;
-    use dclutch_claims_svm::series_founding_transport_v1::SERIES_CLAIMS_FOUNDING_TRANSPORT_MAGIC_V1;
-    use dclutch_effect_kernel::v4::ProgramV4;
-    use dclutch_request_profile_contract::RequestProfileV1;
-    use dclutch_transition_vm::v3::ProgramV3 as TransitionProgramV3;
+    use dclutch_claims::founding_v5::ClaimsFoundingRequestInputV5;
+    use dclutch_claims::series_founding_transport_v1::SERIES_CLAIMS_FOUNDING_TRANSPORT_MAGIC_V1;
+    use dclutch_vm::effect::v4::ProgramV4;
+    use dclutch_vm::request_profile::RequestProfileV1;
+    use dclutch_vm::v3::ProgramV3 as TransitionProgramV3;
 
     use super::*;
 

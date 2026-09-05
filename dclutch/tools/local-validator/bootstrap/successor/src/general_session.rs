@@ -74,8 +74,8 @@
 
 use std::path::PathBuf;
 
-use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_manifest::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
     hot_v3::{
         HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACTIVATION_CACHE_ACCOUNT_V3,
@@ -96,10 +96,10 @@ use dclutch_capability_program_contract::{
     set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
     v4::{CapabilityProgramV4, CapabilityRootAccountV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4},
 };
-use dclutch_account_profile_contract::v2::AccountProfileV2;
-use dclutch_capability_seal_contract::CapabilitySealKeyV1;
+use dclutch_vm::account_profile::v2::AccountProfileV2;
+use dclutch_vm::capability_seal::CapabilitySealKeyV1;
 use dclutch_core_contract::ContentId;
-use dclutch_execution_strategy_contract::{
+use dclutch_market::execution_strategy::{
     admitted_v3::{
         ADMITTED_RUNTIME_ACCOUNTS_START_V3, ADMITTED_STRATEGY_EVIDENCE_COUNT_V3,
         ADMITTED_STRATEGY_EVIDENCE_START_V3,
@@ -110,7 +110,7 @@ use dclutch_execution_strategy_contract::{
         StrategyDispositionV2, classify_bank_transport_v2,
     },
 };
-use dclutch_general_adapter_contract::{
+use dclutch_trading::general::{
     account_rules_v3::{
         GeneralExternalAccountWidthsV3, encode_general_account_profile_v3_atomic,
         general_account_profile_bytes_v3, general_account_profile_fixed_count_v3,
@@ -126,32 +126,32 @@ use dclutch_general_adapter_contract::{
         GENERAL_PRIMARY_STATE_ACCOUNT_V3, general_system_program_account_v3,
     },
 };
-use dclutch_general_adapter_contract::{
+use dclutch_trading::general::{
     collection_v1::{GeneralBatchOccurrenceTermsV1, GeneralBatchOpeningV1},
     state_seeds_v3::GeneralStateAddressSeedsV3,
 };
-use dclutch_general_codec::{Action, successor_request_v2::CONTROLLER_REQUEST_BYTES_V2};
-use dclutch_general_config_contract::{
+use dclutch_trading::general_codec::{Action, successor_request_v2::CONTROLLER_REQUEST_BYTES_V2};
+use dclutch_trading::general_config::{
     GENERAL_CAPABILITY_KIND_ID_V1,
     root::GeneralRootV2,
     v3::GeneralConfigV3,
 };
 use dclutch_general_successor_operator::{self as successor, ROUTE_FORMAT_V1};
-use dclutch_market_core_codec::{CoreState, Phase as CorePhase};
+use dclutch_market::{CoreState, Phase as CorePhase};
 use dclutch_operator::resolution_core_v3::product_graph_observation_v3::{
     FinalizedProductGraphAccountsV3, authenticate_product_graph_observation_v3,
 };
 use dclutch_operator::{Finality, Observation, ObservedAccount};
-use dclutch_product_payoff_v2_codec::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3;
-use dclutch_product_runtime_v2_admission::{
+use dclutch_product::payoff::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3;
+use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
 };
-use dclutch_record_contract::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
+use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
 use dclutch_release_tool::CheckedExecutionReleaseSetV1;
-use dclutch_registry_contract::ARTIFACT_RELEASE_SCHEMA_ID_V1;
-use dclutch_registry_contract::ActivatedExecutionReleaseSetV1;
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_rent_contract::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
+use dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1;
+use dclutch_registry::ActivatedExecutionReleaseSetV1;
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use solana_program::pubkey::Pubkey;
@@ -379,7 +379,7 @@ fn content_id_from_hex_v1(value: &str) -> Result<ContentId> {
 
 /// The raw and staging coordinates of one finalized record.
 ///
-/// The two seed domains are not spelled here: `dclutch-record-contract` owns
+/// The two seed domains are not spelled here: `dclutch-registry::record` owns
 /// them and exports the constructors that place them, so a module that merely
 /// READS these addresses takes each domain from `seeds.domain()`.
 #[derive(Clone, Copy, Debug)]
@@ -698,7 +698,7 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
         entry.config_id().to_bytes(),
     )?;
     let artifact_record =
-        |reference: dclutch_capability_program_contract::v4::ArtifactReferenceV4| {
+        |reference: dclutch_market::capability_program::v4::ArtifactReferenceV4| {
             record_coordinate(
                 &registry,
                 reference.schema().to_bytes(),
@@ -726,7 +726,7 @@ pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
     )?;
 
     // ------------------------------------------------------------- the root
-    let selection = dclutch_release_set_contract::CapabilityExecutionSelectionV1::new(
+    let selection = dclutch_registry::release_set::CapabilityExecutionSelectionV1::new(
         entry_index,
         ContentId::new(manifest_id).map_err(|_| Error::new("manifest identity".to_string()))?,
         entry.kind_id(),

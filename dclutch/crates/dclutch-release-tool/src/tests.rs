@@ -1,4 +1,4 @@
-use dclutch_pyth_svm::{PYTH_RELEASE_V1_ENCODED_LEN, PythReleaseV1Input};
+use dclutch_source::pyth::{PYTH_RELEASE_V1_ENCODED_LEN, PythReleaseV1Input};
 
 use super::*;
 

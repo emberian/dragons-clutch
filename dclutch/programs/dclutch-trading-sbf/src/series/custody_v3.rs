@@ -6,10 +6,10 @@
 //! are adapter-authenticated observations; they never select the economic
 //! route or its amount.
 
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CallerRoleV1, CompartmentV1, ContextV1, CustodyReceiptV1, CustodyRequestV1, OperationV1,
 };
-use dclutch_series_v3_kernel::escrow::{
+use dclutch_trading::series::escrow::{
     PrepareSeriesEscrowPlanV3, SeriesEscrowEffectKindV3, SeriesEscrowEffectV3,
     TerminalSeriesEscrowPlanV3,
 };
@@ -261,11 +261,11 @@ const fn require_rent(value: u64) -> Result<(), SeriesCustodyProjectionErrorV3> 
 #[cfg(test)]
 mod tests {
     use dclutch_core_contract::ContentId;
-    use dclutch_custody_contract::ReceiptEvidenceV1;
-    use dclutch_series_v3_kernel::escrow::{
+    use dclutch_custody::ReceiptEvidenceV1;
+    use dclutch_trading::series::escrow::{
         consume_series_escrow_v3, expire_series_escrow_v3, prepare_series_escrow_v3,
     };
-    use dclutch_series_v3_kernel::{
+    use dclutch_trading::series::{
         AccountKeyV3, AuthenticatedProductProjectionV2, SERIES_OCCURRENCE_BYTES_V3,
         SERIES_TEMPLATE_BYTES_V3, SERIES_TICKET_BYTES_V3, admit_occurrence, admit_ticket,
         generated, occurrence_content_id, pre_founding_series_escrow, template_content_id,
@@ -297,7 +297,7 @@ mod tests {
         .to_bytes()
     }
 
-    fn escrow() -> dclutch_series_v3_kernel::PrefoundingSeriesEscrowV3 {
+    fn escrow() -> dclutch_trading::series::PrefoundingSeriesEscrowV3 {
         let mut template: [u8; SERIES_TEMPLATE_BYTES_V3] = generated::SERIES_EXAMPLE_TEMPLATE_V3;
         let occurrence: [u8; SERIES_OCCURRENCE_BYTES_V3] = generated::SERIES_EXAMPLE_OCCURRENCE_V3;
         let mut ticket: [u8; SERIES_TICKET_BYTES_V3] = generated::SERIES_EXAMPLE_TICKET_V3;

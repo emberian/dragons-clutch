@@ -23,7 +23,7 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use dclutch_pyth_svm::{
+use dclutch_source::pyth::{
     ENCODED_VAA_DISCRIMINATOR_V1, ENCODED_VAA_HEADER_BYTES_V1, ENCODED_VAA_VERIFIED_STATUS_V1,
     GuardianSetV1, PostUpdateParamsView, ProgramDataV3View, ProgramV3View, ReceiverConfigV2View,
     VerifiedEncodedVaaV1, local_validator_release_v1,

@@ -8,7 +8,7 @@
 extern crate alloc;
 
 use crate::market_admission_v1::CLAIMS_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1;
-use dclutch_claims_svm::{
+use dclutch_claims::{
     CallerRole,
     composition_v3::validate_sparse_admission_receipt_v3,
     frame_spec_v1::SparseNativeTransferFrameSpecV1,
@@ -28,15 +28,15 @@ use dclutch_claims_svm::{
     },
 };
 use dclutch_core_contract::ContentId as CoreContentId;
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
-use dclutch_product_runtime_v2::ContentId as ProductContentId;
-use dclutch_product_runtime_v2_svm_reader::{
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
+use dclutch_product::ContentId as ProductContentId;
+use dclutch_product::svm_reader::{
     FinalizedRecordFrameV2, ProductRuntimeFrameV3, authenticate_product_runtime_v3,
 };
-use dclutch_registry_activation_auth_v1::{
+use dclutch_registry::activation_auth_v1::{
     authenticate_activated_role_and_bump_v1, authenticate_activated_role_with_bump_v1,
 };
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo, hash::hash, program::set_return_data, program_error::ProgramError,
     pubkey::Pubkey,
@@ -45,7 +45,7 @@ use solana_sdk_ids::sysvar;
 
 /// Exact fixed account frame for one sparse transfer.
 pub const SPARSE_NATIVE_TRANSFER_ACCOUNT_COUNT_V1: usize =
-    dclutch_claims_svm::frame_spec_v1::SPARSE_NATIVE_TRANSFER_ACCOUNT_COUNT_V1 as usize;
+    dclutch_claims::frame_spec_v1::SPARSE_NATIVE_TRANSFER_ACCOUNT_COUNT_V1 as usize;
 
 const AUTHORITY: usize = 0;
 const MARKET: usize = 1;
@@ -822,7 +822,7 @@ fn account<'accounts, 'info>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_claims_svm::{
+    use dclutch_claims::{
         CallerRole,
         liability_basis_state_v2::{
             LiabilityBasisMarketInputV2, LiabilityBasisPositionInputV2,

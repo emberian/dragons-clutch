@@ -96,7 +96,7 @@ pub struct ConstantIndex {
     /// Every crate directory the walk saw, `-` normalised to `_`.
     ///
     /// A path's first segment is a crate only if it names one. `resolution::
-    /// RESOLUTION_CORE_INSTRUCTION_BYTES_V1` and `dclutch_market_core_codec::
+    /// RESOLUTION_CORE_INSTRUCTION_BYTES_V1` and `dclutch_market::
     /// REQUEST_BYTES` are both two segments, and only the second is qualified
     /// by a crate; without this set the first would be read as one.
     crates: BTreeSet<String>,
@@ -210,7 +210,7 @@ pub fn index_constants(root: &Path) -> Result<ConstantIndex, String> {
     Ok(index)
 }
 
-/// `crates/dclutch-market-core-codec/src/generated.rs` -> `dclutch_market_core_codec`.
+/// `crates/dclutch-market/src/generated.rs` -> `dclutch_market`.
 fn crate_of(relative: &str) -> String {
     relative
         .split('/')

@@ -67,7 +67,7 @@ serde_json = "1.0"
 # point: a hostile test that cannot produce a valid signature cannot prove that
 # a tampered one is refused.
 dclutch-direct-ticket = { path = "../../crates/dclutch-direct-ticket", features = ["author"] }
-dclutch-direct-codec = { path = "../../crates/dclutch-direct-codec" }
+dclutch-trading = { path = "../../crates/dclutch-trading" }
 solana-keypair = "=3.1.2"
 solana-signer = "=3.0.1"
 tempfile = "3"

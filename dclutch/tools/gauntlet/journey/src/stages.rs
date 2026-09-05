@@ -9,14 +9,14 @@
 
 use std::collections::BTreeMap;
 
-use dclutch_claims_svm::liability_basis_state_v2::LiabilityBasisMarketViewV2;
-use dclutch_custody_contract::{CompartmentV1, CustodyVaultSeedsV1};
-use dclutch_market_core_codec::{CoreState, Phase};
-use dclutch_product_payoff_v2_codec::runtime_v3::ProductBasisV3;
-use dclutch_rent_contract::lifecycle_v2::{
+use dclutch_claims::liability_basis_state_v2::LiabilityBasisMarketViewV2;
+use dclutch_custody::{CompartmentV1, CustodyVaultSeedsV1};
+use dclutch_market::{CoreState, Phase};
+use dclutch_product::payoff::runtime_v3::ProductBasisV3;
+use dclutch_market::rent::lifecycle_v2::{
     LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2, SweepLifecycleRentCreditV2,
 };
-use dclutch_token_svm::{ACCOUNT_BYTES, AccountState, TOKEN_2022_PROGRAM_ID, TokenAccount};
+use dclutch_custody::token_svm::{ACCOUNT_BYTES, AccountState, TOKEN_2022_PROGRAM_ID, TokenAccount};
 use serde::Serialize;
 use solana_sdk::{
     instruction::{AccountMeta, Instruction},
@@ -163,9 +163,9 @@ pub(crate) fn admit_open_market(
             return Err(Error::new("the founder's collateral wallet is not live"));
         }
         let mint = rpc.required_account(addresses.mint, "collateral Mint")?;
-        dclutch_token_svm::Mint::parse(
+        dclutch_custody::token_svm::Mint::parse(
             mint.data
-                .get(..dclutch_token_svm::MINT_BYTES)
+                .get(..dclutch_custody::token_svm::MINT_BYTES)
                 .ok_or_else(|| Error::new("collateral Mint is narrower than the base layout"))?,
         )
         .map_err(|error| Error::new(format!("collateral Mint: {error:?}")))?

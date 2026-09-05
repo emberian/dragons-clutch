@@ -272,23 +272,104 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-dealer-codec"
+name = "dclutch-claims"
 version = "0.1.0"
 dependencies = [
- "dclutch-dealer-scenario-kernel",
+ "dclutch-core-contract",
+ "dclutch-custody",
+ "dclutch-market",
+ "dclutch-product",
+ "dclutch-sha256-adapter",
+ "dclutch-source",
+ "dclutch-vm",
+ "sha2",
 ]
 
 [[package]]
-name = "dclutch-dealer-scenario-kernel"
+name = "dclutch-core-contract"
 version = "0.1.0"
+
+[[package]]
+name = "dclutch-custody"
+version = "0.1.0"
+dependencies = [
+ "dclutch-market",
+ "dclutch-registry",
+ "dclutch-sha256-adapter",
+]
+
+[[package]]
+name = "dclutch-market"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-registry",
+ "dclutch-sha256-adapter",
+ "dclutch-vm",
+]
+
+[[package]]
+name = "dclutch-product"
+version = "0.1.0"
+dependencies = [
+ "dclutch-market",
+ "dclutch-registry",
+ "dclutch-sha256-adapter",
+ "solana-program",
+ "solana-sdk-ids",
+]
+
+[[package]]
+name = "dclutch-registry"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+]
+
+[[package]]
+name = "dclutch-sha256-adapter"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+ "solana-sha256-hasher",
+]
+
+[[package]]
+name = "dclutch-source"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-market",
+ "dclutch-product",
+ "dclutch-registry",
+ "dclutch-sha256-adapter",
+]
+
+[[package]]
+name = "dclutch-trading"
+version = "0.1.0"
+dependencies = [
+ "dclutch-claims",
+ "dclutch-core-contract",
+ "dclutch-custody",
+ "dclutch-market",
+ "dclutch-product",
+ "dclutch-registry",
+ "dclutch-sha256-adapter",
+ "dclutch-vm",
+]
 
 [[package]]
 name = "dclutch-trading-dealer-wave-fixture"
 version = "0.1.0"
 dependencies = [
- "dclutch-dealer-codec",
+ "dclutch-trading",
  "solana-program",
 ]
+
+[[package]]
+name = "dclutch-vm"
+version = "0.1.0"
 
 [[package]]
 name = "der"

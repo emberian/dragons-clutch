@@ -42,18 +42,18 @@
 //! stronger claim than a refusal and is the one that makes accepting a hint
 //! from a stranger safe in the first place.
 
-use dclutch_capability_program_contract::hot_v3::{
+use dclutch_market::capability_program::hot_v3::{
     HOT_BUMP_HINT_COUNT_V1, HOT_BUMP_HINTS_OFFSET_V1, HotBumpHintsV1, HotExecutionEnvelopeV3,
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{CallerRoleV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1};
-use dclutch_direct_codec::successor::{DirectCoordinatesV1, MakerReplaySeedsV1};
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2};
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_token_svm::TokenAccount;
+use dclutch_custody::{CallerRoleV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1};
+use dclutch_trading::successor::{DirectCoordinatesV1, MakerReplaySeedsV1};
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_custody::token_svm::TokenAccount;
 use solana_program::instruction::Instruction;
 use solana_program::pubkey::Pubkey;
 use solana_program_test::ProgramTestContext;

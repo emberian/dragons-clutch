@@ -260,7 +260,7 @@ pub(crate) fn general_market_derivation_v1(
         )
         .map_err(|_| Error::new("General linked basis record width overflow"))?,
         result_domain: u32::try_from(
-            dclutch_product_runtime_v2::result_domain_record_bytes(input.cuts.len())
+            dclutch_product::result_domain_record_bytes(input.cuts.len())
                 .map_err(|error| Error::new(format!("General result-domain width: {error:?}")))?,
         )
         .map_err(|_| Error::new("General result-domain record width overflow"))?,
@@ -269,11 +269,11 @@ pub(crate) fn general_market_derivation_v1(
 
 /// The complete capability-root width the closure's own descriptor names.
 pub(crate) fn general_root_bytes_v1(closure: &GeneralSelectedClosureBytesV1) -> Result<usize> {
-    let descriptor = dclutch_capability_program_contract::v4::CapabilityProgramV4::decode(
+    let descriptor = dclutch_market::capability_program::v4::CapabilityProgramV4::decode(
         &closure.selected_descriptor,
     )
     .map_err(|error| Error::new(format!("General selected descriptor: {error:?}")))?;
-    dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1
+    dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1
         .checked_add(
             usize::try_from(descriptor.root_state_bytes())
                 .map_err(|_| Error::new("General root state width overflow"))?,
@@ -321,7 +321,7 @@ pub(crate) fn general_selected_payload_v1(
 /// cannot drift from the release it is a control for.
 #[cfg(test)]
 pub(crate) fn test_release_input_v1() -> GeneralSelectedReleaseInputV1 {
-    use dclutch_general_adapter_contract::account_rules_v3::GeneralExternalAccountWidthsV3;
+    use dclutch_trading::general::account_rules_v3::GeneralExternalAccountWidthsV3;
     use dclutch_operator::general_selected_release_v1::{
         GeneralConfigWindowsV1, GeneralDeploymentFactsV1,
     };
@@ -367,7 +367,7 @@ pub(crate) fn test_release_input_v1() -> GeneralSelectedReleaseInputV1 {
 
 #[cfg(test)]
 mod tests {
-    use dclutch_market_core_codec::{Identity, MarketCoreStateSeedsV2, MarketIdentity};
+    use dclutch_market::{Identity, MarketCoreStateSeedsV2, MarketIdentity};
     use dclutch_operator::general_selected_release_v1::{
         GeneralConfigWindowsV1, GeneralDeploymentFactsV1,
     };
@@ -392,7 +392,7 @@ mod tests {
     }
 
     fn base_manifest() -> Vec<u8> {
-        use dclutch_capability_contract::{
+        use dclutch_market::capability_manifest::{
             ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
             CompartmentFundingV1, ContentId, FundingAmountsV1, FundingQuoteV1,
             MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
@@ -560,7 +560,7 @@ mod tests {
         let registry = Pubkey::new_from_array([0x77; 32]);
         let mut input = crate::market::demo_market_input_base(
             registry,
-            dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V7,
+            dclutch_source::resolution::RESOLUTION_CONTROLLER_RELEASE_ID_V7,
         )
         .expect("demo market base");
 
@@ -585,7 +585,7 @@ mod tests {
         };
         let closure = general_selected_closure_v1(release_input).expect("General closure");
         let root_bytes = general_root_bytes_v1(&closure).expect("root width");
-        assert!(root_bytes > dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1);
+        assert!(root_bytes > dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1);
         let payload = general_selected_payload_v1(&closure, u64::MAX, 1_000_000);
 
         crate::selected_capability::attach_selected_capability_v1(&mut input, payload)

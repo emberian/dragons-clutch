@@ -10,7 +10,7 @@ path = "src/lib.rs"
 
 [dependencies]
 base64 = "0.22.1"
-dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
+dclutch-market = { path = "../dclutch-market" }
 dclutch-resolution-core-v3-operator = { path = "../dclutch-resolution-core-v3-operator" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

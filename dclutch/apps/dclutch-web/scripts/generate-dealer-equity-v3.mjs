@@ -33,18 +33,18 @@ const sources = Object.freeze({
   obligation: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/v3_obligation.rs', root), 'utf8'),
   release: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/v3_release.rs', root), 'utf8'),
   dealer: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/mod.rs', root), 'utf8'),
-  config: readFileSync(new URL('crates/dclutch-dealer-codec/src/config_v4.rs', root), 'utf8'),
-  delta: readFileSync(new URL('crates/dclutch-claims-svm/src/signed_delta_v3.rs', root), 'utf8'),
-  deltaFrame: readFileSync(new URL('crates/dclutch-claims-svm/src/frame_spec_v1.rs', root), 'utf8'),
-  strategy: readFileSync(new URL('crates/dclutch-execution-strategy-contract/src/generated_v2.rs', root), 'utf8'),
+  config: readFileSync(new URL('crates/dclutch-trading/src/dealer/config_v4.rs', root), 'utf8'),
+  delta: readFileSync(new URL('crates/dclutch-claims/src/signed_delta_v3.rs', root), 'utf8'),
+  deltaFrame: readFileSync(new URL('crates/dclutch-claims/src/frame_spec_v1.rs', root), 'utf8'),
+  strategy: readFileSync(new URL('crates/dclutch-market/src/execution_strategy/generated_v2.rs', root), 'utf8'),
   // The AccountProfile V2 coordinates are emitted by
   // `DClutchSemantics.AccountProfileV2Abi`; `v2.rs` kept its public names and
   // made every one of them a forward into that emission. This reads the
   // emission -- under the crate's names, taken from the crate's own forwarding
   // lines, so the mapping has no second copy here to go stale.
   accountProfile: withCrateNames(
-    readFileSync(new URL('crates/dclutch-account-profile-contract/src/v2/generated_abi.rs', root), 'utf8'),
-    readFileSync(new URL('crates/dclutch-account-profile-contract/src/v2.rs', root), 'utf8'),
+    readFileSync(new URL('crates/dclutch-vm/src/account_profile/v2/generated_abi.rs', root), 'utf8'),
+    readFileSync(new URL('crates/dclutch-vm/src/account_profile/v2.rs', root), 'utf8'),
   ),
   lpProfile: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/v3_lp_artifacts.rs', root), 'utf8'),
   scenarioProfile: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/v3_trade_profile.rs', root), 'utf8'),
@@ -56,7 +56,7 @@ const sources = Object.freeze({
   // the emitted file directly also points this mirror at the actual
   // authority rather than at a handwritten restatement of it.
   basis: readFileSync(
-    new URL('crates/dclutch-product-payoff-v2-codec/src/generated_runtime_v3.rs', root),
+    new URL('crates/dclutch-product/src/payoff/generated_runtime_v3.rs', root),
     'utf8',
   ),
 });

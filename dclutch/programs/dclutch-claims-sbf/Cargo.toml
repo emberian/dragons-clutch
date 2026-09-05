@@ -25,7 +25,7 @@ custom-panic = []
 # two are separate features rather than one shared crate because Trading's also
 # reports its bump allocator's outstanding heap, which this program does not
 # have. Today this instruments the SignedDelta route only.
-claims-cu-profile = ["dep:dclutch-cu-checkpoint"]
+claims-cu-profile = ["dep:dclutch-sbf-runtime"]
 
 # Diagnostic-only dump of the permit's own founding-intent PREIMAGE.
 #
@@ -39,42 +39,21 @@ claims-cu-profile = ["dep:dclutch-cu-checkpoint"]
 #
 # It is a separate feature from `claims-cu-profile` because it measures a
 # different thing and takes no dependency: `claims-cu-profile` needs
-# `dclutch-cu-checkpoint`, and a lane that wants the preimage should not have to
+# `dclutch-sbf-runtime::cu_checkpoint`, and a lane that wants the preimage should not have to
 # link a compute-unit instrument to get it.
 claims-founding-probe = []
 
 [dependencies]
-dclutch-capability-contract = { path = "../../crates/dclutch-capability-contract" }
-dclutch-claims-conservation-contract = { path = "../../crates/dclutch-claims-conservation-contract" }
-dclutch-claims-svm = { path = "../../crates/dclutch-claims-svm" }
+dclutch-market = { path = "../../crates/dclutch-market" }
+dclutch-claims = { path = "../../crates/dclutch-claims", features = ["svm"] }
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
-dclutch-cu-checkpoint = { path = "../../crates/dclutch-cu-checkpoint", optional = true }
-dclutch-custody-contract = { path = "../../crates/dclutch-custody-contract" }
-dclutch-economic-slice-kernel = { path = "../../crates/dclutch-economic-slice-kernel" }
-dclutch-fractional-claim-contract = { path = "../../crates/dclutch-fractional-claim-contract" }
-dclutch-fractional-claim-kernel = { path = "../../crates/dclutch-fractional-claim-kernel" }
-dclutch-fractional-claims-kernel = { path = "../../crates/dclutch-fractional-claims-kernel" }
-dclutch-market-core-codec = { path = "../../crates/dclutch-market-core-codec" }
-dclutch-product-contract = { path = "../../crates/dclutch-product-contract" }
-dclutch-product-payoff-v2-codec = { path = "../../crates/dclutch-product-payoff-v2-codec" }
-dclutch-product-runtime-v2 = { path = "../../crates/dclutch-product-runtime-v2" }
-dclutch-product-runtime-v2-svm-reader = { path = "../../crates/dclutch-product-runtime-v2-svm-reader" }
-dclutch-rational-representation-v2-contract = { path = "../../crates/dclutch-rational-representation-v2-contract" }
-dclutch-rational-representation-v2-kernel = { path = "../../crates/dclutch-rational-representation-v2-kernel" }
+dclutch-sbf-runtime = { path = "../../crates/dclutch-sbf-runtime", optional = true }
+dclutch-custody = { path = "../../crates/dclutch-custody" }
+dclutch-product = { path = "../../crates/dclutch-product", features = ["svm"] }
 dclutch-refusal-registry = { path = "../../crates/dclutch-refusal-registry" }
-dclutch-representation-composition-v3-kernel = { path = "../../crates/dclutch-representation-composition-v3-kernel" }
-dclutch-rational-representation-v2-lifecycle-contract = { path = "../../crates/dclutch-rational-representation-v2-lifecycle-contract" }
-dclutch-resolution-codec = { path = "../../crates/dclutch-resolution-codec" }
-dclutch-realm-contract = { path = "../../crates/dclutch-realm-contract" }
-dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }
-dclutch-registry-activation-auth-v1 = { path = "../../crates/dclutch-registry-activation-auth-v1" }
-dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }
-dclutch-registry-svm = { path = "../../crates/dclutch-registry-svm" }
-dclutch-rent-contract = { path = "../../crates/dclutch-rent-contract" }
-dclutch-release-set-contract = { path = "../../crates/dclutch-release-set-contract" }
+dclutch-source = { path = "../../crates/dclutch-source" }
+dclutch-registry = { path = "../../crates/dclutch-registry", features = ["svm"] }
 dclutch-sha256-adapter = { path = "../../crates/dclutch-sha256-adapter" }
-dclutch-source-contract = { path = "../../crates/dclutch-source-contract" }
-dclutch-token-svm = { path = "../../crates/dclutch-token-svm" }
 solana-program = { version = "=3.0.0", default-features = false }
 solana-sdk-ids = "=3.1.0"
 solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
@@ -82,13 +61,12 @@ spl-associated-token-account-interface = { version = "=2.0.0", default-features 
 spl-token-2022-interface = { version = "=3.1.1", default-features = false }
 
 [dev-dependencies]
-dclutch-account-profile-contract = { path = "../../crates/dclutch-account-profile-contract" }
+dclutch-vm = { path = "../../crates/dclutch-vm" }
 dclutch-bearer-v2-operator = { path = "../../crates/dclutch-bearer-v2-operator" }
-dclutch-capability-contract = { path = "../../crates/dclutch-capability-contract" }
-dclutch-capability-program-contract = { path = "../../crates/dclutch-capability-program-contract" }
+dclutch-market = { path = "../../crates/dclutch-market" }
 dclutch-chain-bundle-builder = { path = "../dclutch-trading-sbf/program-test/bundle-builder" }
 dclutch-hot-bump-miner-v1 = { path = "../../crates/dclutch-hot-bump-miner-v1" }
-dclutch-product-runtime-v2-admission = { path = "../../crates/dclutch-product-runtime-v2-admission" }
+dclutch-product = { path = "../../crates/dclutch-product" }
 dclutch-program-test-evidence = { path = "../../tools/gauntlet/program-test-evidence" }
 # The claim-check CLIENT. `claim_check_v1`'s builders are the tree's only
 # client-side statement of the redemption and escrow-close frames, and this
@@ -104,11 +82,8 @@ dclutch-operator = { path = "../../crates/dclutch-operator", default-features = 
 # Structured V2's founding-time lowering, so the campaign's execution descriptor
 # is DERIVED (decision 0011 §3c/§3d) rather than a sixth hand-written preimage.
 # DEV only: none of these reach the cdylib, and the ELF digest is the control.
-dclutch-fractional-claim-kernel = { path = "../../crates/dclutch-fractional-claim-kernel" }
+dclutch-claims = { path = "../../crates/dclutch-claims", features = ["svm"] }
 dclutch-rational-representation-v2-operator = { path = "../../crates/dclutch-rational-representation-v2-operator" }
-dclutch-rational-representation-v2-request-contract = { path = "../../crates/dclutch-rational-representation-v2-request-contract" }
-dclutch-structured-v2-kernel = { path = "../../crates/dclutch-structured-v2-kernel" }
-dclutch-structured-v2-contract = { path = "../../crates/dclutch-structured-v2-contract" }
 dclutch-structured-v2-operator = { path = "../../crates/dclutch-structured-v2-operator" }
 dclutch-trading-sbf = { path = "../dclutch-trading-sbf", features = ["no-entrypoint"] }
 solana-account = "=4.6.0"

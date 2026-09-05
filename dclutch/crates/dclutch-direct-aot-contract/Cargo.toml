@@ -7,7 +7,7 @@ rust-version.workspace = true
 description = "Stateless AOT implementation of the Lean-owned Direct V2 program"
 
 [dev-dependencies]
-dclutch-transition-vm = { path = "../dclutch-transition-vm" }
+dclutch-vm = { path = "../dclutch-vm" }
 
 [lints]
 workspace = true

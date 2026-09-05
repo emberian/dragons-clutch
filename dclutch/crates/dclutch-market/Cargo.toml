@@ -1,0 +1,35 @@
+[package]
+name = "dclutch-market"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The universal Market Core and its capability vocabulary: manifests, capability programs, activation artifacts, execution strategies, realm positions, rent, and governed protocol parameters"
+
+[features]
+# The allocating convenience forms of the Shadow transcript digests. OFF by
+# default: this crate is `no_std` and no_alloc for anyone who does not ask, and
+# the one-shot `*_in_v3` builders it always offers take caller-supplied scratch
+# precisely so an on-chain caller counting heap never needs this.
+alloc = []
+
+[dependencies]
+dclutch-registry = { path = "../dclutch-registry" }
+dclutch-sha256-adapter = { path = "../dclutch-sha256-adapter" }
+dclutch-core-contract = { path = "../dclutch-core-contract" }
+dclutch-vm = { path = "../dclutch-vm" }
+
+[dev-dependencies]
+# The integration test builds a manifest and must name its content identity the
+# same way every adapter does.
+dclutch-sha256-adapter = { path = "../dclutch-sha256-adapter" }
+dclutch-market = { path = ".", features = ["alloc"] }
+# TEST ONLY, and it must stay that way: this is the software SHA-256 the
+# shipped ELFs no longer link. It is here as the ORACLE the one-shot preimage
+# builders are differentially tested against -- comparing them to the
+# allocating wrappers would be tautological, since those wrappers ARE the
+# one-shot builders.
+sha2 = { version = "=0.10.9", default-features = false }
+
+[lints]
+workspace = true

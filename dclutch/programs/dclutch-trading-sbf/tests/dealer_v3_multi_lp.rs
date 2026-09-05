@@ -1,12 +1,12 @@
 //! Adversarial integration coverage for canonical Dealer V3 multi-LP capital.
 
-use dclutch_capability_program_contract::set_v1::CapabilityProgramSetV1;
-use dclutch_claims_svm::affine_batch_v2::AFFINE_BATCH_PLAN_MAGIC_V2;
-use dclutch_custody_contract::{
+use dclutch_market::capability_program::set_v1::CapabilityProgramSetV1;
+use dclutch_claims::affine_batch_v2::AFFINE_BATCH_PLAN_MAGIC_V2;
+use dclutch_custody::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CompartmentV1, CustodyRequestV1, CustodyVaultSeedsV1,
     DELEGATED_CUSTODY_REQUEST_MAGIC_V2,
 };
-use dclutch_dealer_codec::scenario::ClaimsInventoryObservation;
+use dclutch_trading::dealer::scenario::ClaimsInventoryObservation;
 use dclutch_trading_sbf::dealer::{
     equity_request::{
         DEALER_EQUITY_CONTRIBUTE_P2_SELECTOR_V3, DEALER_EQUITY_HEADER_BYTES_V3,

@@ -9,17 +9,17 @@ use dclutch_product_compiler::noncategorical_v3::{
     CategoricalProjectionBoundaryV3, certify_categorical_approximation_v3,
     recheck_categorical_approximation_v3,
 };
-use dclutch_product_payoff_v2_codec::registry_v3::{
+use dclutch_product::payoff::registry_v3::{
     APPROXIMATION_CERTIFICATE_BYTES_V3, GRADED_BASIS_ADMISSION_BYTES_V3,
     GRADED_BASIS_ADMISSION_SCHEMA_ID_V3, GRADED_BASIS_CERTIFICATE_SCHEMA_ID_V3,
     GRADED_BASIS_RECORD_SCHEMA_ID_V3, GradedBasisAdmissionV3, admit_authenticated_graded_basis_v3,
     derive_graded_basis_admission_v3, raw_record_digest_v3,
 };
-use dclutch_product_runtime_v2::{ContentId, ResultDomainV2};
-use dclutch_product_runtime_v2_admission::{
+use dclutch_product::{ContentId, ResultDomainV2};
+use dclutch_product::admission::{
     FinalizedRecordCoordinateV2, RESULT_DOMAIN_SCHEMA_ID_V2,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use solana_program::pubkey::Pubkey;
 
 use crate::{AccountObservationV2, Error, FinalizedRecordObservationV2, Result, validate_record};
@@ -216,16 +216,16 @@ fn coordinate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_product_payoff_v2_codec::registry_v3::{
+    use dclutch_product::payoff::registry_v3::{
         GRADED_BASIS_ADMISSION_CERTIFICATE_DIGEST_OFFSET_V3,
         GRADED_BASIS_ADMISSION_COMPILER_RELEASE_OFFSET_V3,
         GRADED_BASIS_ADMISSION_TOOLCHAIN_OFFSET_V3,
     };
-    use dclutch_product_payoff_v2_codec::runtime_v3::{
+    use dclutch_product::payoff::runtime_v3::{
         BasisInputV3, BasisKindV3, BasisShapeV3, BasisTermV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
         basis_record_bytes_v3, compile_basis_v3, semantic_basis_preimage_v3,
     };
-    use dclutch_product_runtime_v2::{
+    use dclutch_product::{
         ResultDomainInputV2, compile_result_domain_v2, result_domain_record_bytes,
     };
     use solana_program::hash::hashv;

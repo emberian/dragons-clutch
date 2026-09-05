@@ -14,7 +14,7 @@
       "kind": "plan-jq",
       "query": "[.cranks[] | .frameAccounts] | unique | map(tostring) | join(\",\")",
       "expect": "18",
-      "provenance": "`dclutch-relay-contract`'s `relay_frame_roles_v1(RelayFrameKindV1::AdvanceRecovery)` declares the frame's positions, and the AdvanceRecovery frame the deployed Resolution program parses is 18 accounts wide. The driver builds its metas FROM those roles and never from a typed list; this counts what it built and compares it against the contract's own width, so a frame that grew or shrank on either side is caught rather than assumed."
+      "provenance": "`dclutch-source`'s `relay_frame_roles_v1(RelayFrameKindV1::AdvanceRecovery)` declares the frame's positions, and the AdvanceRecovery frame the deployed Resolution program parses is 18 accounts wide. The driver builds its metas FROM those roles and never from a typed list; this counts what it built and compares it against the contract's own width, so a frame that grew or shrank on either side is caught rather than assumed."
     },
     {
       "id": "no-clock-was-warped",

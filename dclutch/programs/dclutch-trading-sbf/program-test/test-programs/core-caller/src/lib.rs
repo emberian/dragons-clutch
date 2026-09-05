@@ -8,7 +8,7 @@ extern crate alloc;
 extern crate std;
 
 use alloc::vec::Vec;
-use dclutch_market_core_codec::{CORE_EFFECT_ENVELOPE_BYTES_V1, CoreEffectEnvelopeV1};
+use dclutch_market::{CORE_EFFECT_ENVELOPE_BYTES_V1, CoreEffectEnvelopeV1};
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,

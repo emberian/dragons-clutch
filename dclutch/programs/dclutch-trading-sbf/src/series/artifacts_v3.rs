@@ -8,28 +8,28 @@
 //! underlying TransitionVM records. This module authenticates and projects no
 //! state; the common Trading V3 outer remains the sole writer and CPI caller.
 
-use dclutch_account_profile_contract::v2::AccountProfileV2;
-use dclutch_capability_program_contract::{
+use dclutch_vm::account_profile::v2::AccountProfileV2;
+use dclutch_market::capability_program::{
     set_v1::{CapabilityProgramSetV1, SelectorWidthV1},
     v3::CapabilityProgramV3,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{
+use dclutch_custody::{
     INITIALIZE_REPLAY_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V2,
     PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1,
 };
-use dclutch_effect_kernel::{
+use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{
         ProgramV3 as EffectProgramV3, ResolvedInvocationV3, RouteKindV3, RouteReceiptDependencyV3,
     },
 };
-use dclutch_execution_strategy_contract::v2::{
+use dclutch_market::execution_strategy::v2::{
     EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyProgramV2,
 };
-use dclutch_request_profile_contract::{ProjectionRegistersV1, RequestProfileV1, project_atomic};
-use dclutch_series_v3_kernel::{SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3, template_content_id};
-use dclutch_transition_vm::{MAX_IDENTITIES, MAX_SCALARS, v3::ProgramV3 as TransitionProgramV3};
+use dclutch_vm::request_profile::{ProjectionRegistersV1, RequestProfileV1, project_atomic};
+use dclutch_trading::series::{SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3, template_content_id};
+use dclutch_vm::{MAX_IDENTITIES, MAX_SCALARS, v3::ProgramV3 as TransitionProgramV3};
 use solana_program::hash::{hash, hashv};
 
 use super::{
@@ -43,22 +43,22 @@ pub const SERIES_ACTION_SELECTOR_OFFSET_V3: u32 = 12;
 pub const SERIES_WITNESS_ITEM_BYTES_V3: usize = 32;
 /// Exact IR-owned Core request width for Consume.
 pub const SERIES_CONSUME_CORE_REQUEST_BYTES_V3: usize =
-    dclutch_market_core_codec::SERIES_CORE_REQUEST_BYTES_V1;
+    dclutch_market::SERIES_CORE_REQUEST_BYTES_V1;
 /// Exact projected pre-founding Custody request width.
 pub const SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3: usize =
-    dclutch_custody_contract::PROJECTED_CUSTODY_REQUEST_BYTES_V1;
+    dclutch_custody::PROJECTED_CUSTODY_REQUEST_BYTES_V1;
 /// Exact Claims Founding V5 request width.
 pub const SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3: usize =
-    dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_REQUEST_BYTES_V5;
+    dclutch_claims::founding_v5::CLAIMS_FOUNDING_REQUEST_BYTES_V5;
 /// Exact projected Lock-and-close-source receipt appended to Core Found.
 pub const SERIES_CONSUME_LOCK_RECEIPT_BYTES_V3: u16 = 320;
 /// Exact projected realization receipt appended to Claims Founding V5.
 pub const SERIES_CONSUME_REALIZE_RECEIPT_BYTES_V3: u16 = 320;
 /// Exact Claims Founding V5 receipt appended to final Core Open.
 pub const SERIES_CONSUME_CLAIMS_RECEIPT_BYTES_V3: u16 = 1008;
-const _: () = assert!(dclutch_custody_contract::PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1 == 320);
-const _: () = assert!(dclutch_custody_contract::PROJECTED_CUSTODY_RECEIPT_BYTES_V1 == 320);
-const _: () = assert!(dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_RECEIPT_BYTES_V5 == 1008);
+const _: () = assert!(dclutch_custody::PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1 == 320);
+const _: () = assert!(dclutch_custody::PROJECTED_CUSTODY_RECEIPT_BYTES_V1 == 320);
+const _: () = assert!(dclutch_claims::founding_v5::CLAIMS_FOUNDING_RECEIPT_BYTES_V5 == 1008);
 pub(crate) const SERIES_NO_RECEIPT_DEPENDENCIES_V3: [RouteReceiptDependencyV3; 0] = [];
 pub(crate) const SERIES_CORE_FOUND_RECEIPT_DEPENDENCIES_V3: [RouteReceiptDependencyV3; 1] =
     [RouteReceiptDependencyV3::new(
@@ -118,7 +118,7 @@ pub const SERIES_CONSUME_CORE_OPEN_ACCOUNT_COUNT_V3: u16 = 37;
 pub const SERIES_CONSUME_MAXIMUM_FUNDING_STATES_V3: u16 = 16;
 /// Exact normal Custody request width for the prepared SeriesEscrow lifecycle.
 pub const SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3: usize =
-    dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1;
+    dclutch_custody::CUSTODY_REQUEST_BYTES_V1;
 /// Projected Initialize/Open plus normal replay/Open/Lock.
 pub const SERIES_PREPARE_ROUTE_COUNT_V3: usize = 5;
 /// Projected Initialize request-bank offset.
@@ -141,7 +141,7 @@ pub const SERIES_PREPARE_PROJECTED_INITIALIZE_ACCOUNT_COUNT_V3: u16 = 47;
 pub const SERIES_PREPARE_PROJECTED_OPEN_ACCOUNT_COUNT_V3: u16 = 15;
 
 const _: () = {
-    // These two widths belong to `dclutch-custody-contract`, which owns the
+    // These two widths belong to `dclutch-custody`, which owns the
     // frames. Series states them again only because the request-profile ABI is
     // u16-typed; the build fails if the two ever disagree.
     assert!(
@@ -174,7 +174,7 @@ pub const SERIES_EXPIRE_PERMIT_OFFSET_V3: usize =
     SERIES_EXPIRE_PROJECTED_ABORT_OFFSET_V3 + SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3;
 /// Exact Core permissionless permit-refund request width before proof.
 pub const SERIES_EXPIRE_PERMIT_REQUEST_BYTES_V3: usize =
-    dclutch_market_core_codec::SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1;
+    dclutch_market::SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1;
 /// Exact Expire request-bank width.
 pub const SERIES_EXPIRE_IR_REQUEST_BYTES_V3: usize = 3 * SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3
     + SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3
@@ -193,7 +193,7 @@ pub const SERIES_EXPIRE_PERMIT_ACCOUNT_COUNT_V3: u16 = 25;
 // outer can reach them without importing this feature-gated module. Re-exported
 // here so every Series-side user keeps its existing path and there is still
 // exactly one definition of each byte string.
-pub use dclutch_series_v3_kernel::{
+pub use dclutch_trading::series::{
     SERIES_ACTION_HEADER_SCHEMA_PREIMAGE_V3, SERIES_ROOT_SCHEMA_PREIMAGE_V3,
     SERIES_SUCCESSOR_KIND_PREIMAGE_V3, SERIES_TICKET_DERIVATION_PREIMAGE_V3,
 };
@@ -421,7 +421,7 @@ pub fn authenticate_series_artifacts_v3<'a>(
         strategy.transition_program().to_bytes(),
         artifacts.transition,
     )?;
-    if strategy.transition_schema().to_bytes() != dclutch_transition_vm::v3::SCHEMA_RELEASE_ID {
+    if strategy.transition_schema().to_bytes() != dclutch_vm::v3::SCHEMA_RELEASE_ID {
         return Err(SeriesArtifactErrorV3::Transition);
     }
     let transition = TransitionProgramV3::decode(artifacts.transition)
@@ -583,7 +583,7 @@ pub fn validate_series_expire_invocation_v3<'a>(
     let permit_request = ir_request_bank
         .get(invocation.request_offset..request_end)
         .ok_or(SeriesArtifactErrorV3::Effect)?;
-    dclutch_market_core_codec::SeriesPermitExpiryRequestV1::decode(permit_request)
+    dclutch_market::SeriesPermitExpiryRequestV1::decode(permit_request)
         .map_err(|_| SeriesArtifactErrorV3::Effect)?;
     let borrowed = invocation
         .borrowed_witness
@@ -637,7 +637,7 @@ fn validate_descriptor(descriptor: CapabilityProgramV3) -> Result<()> {
         || descriptor.root_schema().to_bytes() != digest(SERIES_ROOT_SCHEMA_PREIMAGE_V3)
         || descriptor.derivation_policy().to_bytes() != digest(SERIES_TICKET_DERIVATION_PREIMAGE_V3)
         || descriptor.request_profile_schema().to_bytes()
-            != dclutch_request_profile_contract::SCHEMA_RELEASE_ID
+            != dclutch_vm::request_profile::SCHEMA_RELEASE_ID
         || descriptor.transition_schema().to_bytes() != EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2
         || usize::try_from(descriptor.root_state_bytes())
             .map_err(|_| SeriesArtifactErrorV3::Geometry)?
@@ -886,7 +886,7 @@ fn validate_routes(action: SeriesActionV3, effect: EffectProgramV3<'_>) -> Resul
                 }
             };
         if route.role() != expected_role
-            || route.kind() != dclutch_effect_kernel::v3::RouteKindV3::Once
+            || route.kind() != dclutch_vm::effect::v3::RouteKindV3::Once
             || usize::try_from(route.fixed_request_bytes())
                 .map_err(|_| SeriesArtifactErrorV3::Geometry)?
                 != expected_width
@@ -921,7 +921,7 @@ fn route_dependencies_match(
             != expected
                 .get(usize::from(dependency_index))
                 .copied()
-                .ok_or(dclutch_effect_kernel::v3::Error::InvalidReceiptDependency)
+                .ok_or(dclutch_vm::effect::v3::Error::InvalidReceiptDependency)
         {
             return false;
         }
@@ -990,16 +990,16 @@ fn digest(bytes: &[u8]) -> [u8; 32] {
 mod tests {
     extern crate std;
 
-    use dclutch_capability_program_contract::v3::CAPABILITY_PROGRAM_V3_BYTES;
-    use dclutch_effect_kernel::v3::encode::{
+    use dclutch_market::capability_program::v3::CAPABILITY_PROGRAM_V3_BYTES;
+    use dclutch_vm::effect::v3::encode::{
         EffectGeometryV3, RouteInputV3, encode_effect_program_v4_atomic,
     };
-    use dclutch_execution_strategy_contract::v2::{
+    use dclutch_market::execution_strategy::v2::{
         ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
         EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
         StrategyDispositionV2,
     };
-    use dclutch_transition_vm::v3::{RegisterInput, RegisterOutput, execute_fold_atomic};
+    use dclutch_vm::v3::{RegisterInput, RegisterOutput, execute_fold_atomic};
     use std::{vec, vec::Vec};
 
     use super::*;
@@ -1015,7 +1015,7 @@ mod tests {
         account: Vec<u8>,
         request_profile: Vec<u8>,
         strategy:
-            [u8; dclutch_execution_strategy_contract::v2::EXECUTION_STRATEGY_PROGRAM_BYTES_V2],
+            [u8; dclutch_market::execution_strategy::v2::EXECUTION_STRATEGY_PROGRAM_BYTES_V2],
         transition: Vec<u8>,
         effect: Vec<u8>,
         request: Vec<u8>,
@@ -1058,12 +1058,12 @@ mod tests {
         ContentId::new(value).expect("nonzero fixture identity")
     }
 
-    fn core_id(value: u8) -> dclutch_market_core_codec::Identity {
-        dclutch_market_core_codec::Identity::new([value; 32]).expect("nonzero Core identity")
+    fn core_id(value: u8) -> dclutch_market::Identity {
+        dclutch_market::Identity::new([value; 32]).expect("nonzero Core identity")
     }
 
     fn permit_expiry_bytes() -> [u8; SERIES_EXPIRE_PERMIT_REQUEST_BYTES_V3] {
-        let intent = dclutch_market_core_codec::FoundingIntentV5::new(
+        let intent = dclutch_market::FoundingIntentV5::new(
             255,
             core_id(1),
             core_id(2),
@@ -1088,13 +1088,13 @@ mod tests {
             1,
         )
         .expect("founding intent");
-        let permit = dclutch_market_core_codec::SeriesFoundingPermitV1::new(
+        let permit = dclutch_market::SeriesFoundingPermitV1::new(
             intent,
             core_id(16),
             core_id(17),
         )
         .expect("founding permit");
-        dclutch_market_core_codec::SeriesPermitExpiryRequestV1::new(permit)
+        dclutch_market::SeriesPermitExpiryRequestV1::new(permit)
             .encode()
             .expect("permit expiry request")
     }
@@ -1111,20 +1111,20 @@ mod tests {
     fn account_profile_with_fixed_accounts(fixed_accounts: u16) -> Vec<u8> {
         let mut output = vec![
             0_u8;
-            dclutch_account_profile_contract::v2::HEADER_BYTES
+            dclutch_vm::account_profile::v2::HEADER_BYTES
                 + usize::from(fixed_accounts)
-                    * dclutch_account_profile_contract::v2::RULE_BYTES
+                    * dclutch_vm::account_profile::v2::RULE_BYTES
         ];
-        put(&mut output, 0, &dclutch_account_profile_contract::v2::MAGIC);
+        put(&mut output, 0, &dclutch_vm::account_profile::v2::MAGIC);
         put(
             &mut output,
             8,
-            &dclutch_account_profile_contract::v2::VERSION.to_le_bytes(),
+            &dclutch_vm::account_profile::v2::VERSION.to_le_bytes(),
         );
         put(
             &mut output,
             10,
-            &dclutch_account_profile_contract::v2::ARTIFACT_PROFILE.to_le_bytes(),
+            &dclutch_vm::account_profile::v2::ARTIFACT_PROFILE.to_le_bytes(),
         );
         put(&mut output, 12, &fixed_accounts.to_le_bytes());
         put(&mut output, 20, &FIXTURE_SCALARS.to_le_bytes());
@@ -1134,20 +1134,20 @@ mod tests {
     fn request_profile(action: SeriesActionV3) -> Vec<u8> {
         let mut output = vec![
             0_u8;
-            dclutch_request_profile_contract::HEADER_BYTES
+            dclutch_vm::request_profile::HEADER_BYTES
                 + usize::from(REQUEST_OPERATIONS)
-                    * dclutch_request_profile_contract::OPERATION_BYTES
+                    * dclutch_vm::request_profile::OPERATION_BYTES
         ];
-        put(&mut output, 0, &dclutch_request_profile_contract::MAGIC);
+        put(&mut output, 0, &dclutch_vm::request_profile::MAGIC);
         put(
             &mut output,
             8,
-            &dclutch_request_profile_contract::VERSION.to_le_bytes(),
+            &dclutch_vm::request_profile::VERSION.to_le_bytes(),
         );
         put(
             &mut output,
             10,
-            &dclutch_request_profile_contract::ARTIFACT_PROFILE.to_le_bytes(),
+            &dclutch_vm::request_profile::ARTIFACT_PROFILE.to_le_bytes(),
         );
         put(
             &mut output,
@@ -1159,7 +1159,7 @@ mod tests {
         put(&mut output, 20, &REQUEST_OPERATIONS.to_le_bytes());
         put(&mut output, 24, &FIXTURE_SCALARS.to_le_bytes());
 
-        let require_action = dclutch_request_profile_contract::HEADER_BYTES;
+        let require_action = dclutch_vm::request_profile::HEADER_BYTES;
         set_byte(&mut output, require_action, 0);
         put(
             &mut output,
@@ -1173,7 +1173,7 @@ mod tests {
         );
 
         let project_proof_count =
-            require_action + dclutch_request_profile_contract::OPERATION_BYTES;
+            require_action + dclutch_vm::request_profile::OPERATION_BYTES;
         set_byte(&mut output, project_proof_count, 5);
         put(&mut output, project_proof_count + 4, &13_u32.to_le_bytes());
         put(&mut output, project_proof_count + 8, &2_u16.to_le_bytes());
@@ -1183,16 +1183,16 @@ mod tests {
     fn transition() -> Vec<u8> {
         let mut output = vec![
             0_u8;
-            dclutch_transition_vm::v3::HEADER_BYTES
+            dclutch_vm::v3::HEADER_BYTES
                 + usize::from(TRANSITION_OPERATIONS)
-                    * dclutch_transition_vm::v3::INSTRUCTION_BYTES
+                    * dclutch_vm::v3::INSTRUCTION_BYTES
         ];
-        put(&mut output, 0, &dclutch_transition_vm::v3::MAGIC);
-        set_byte(&mut output, 4, dclutch_transition_vm::v3::VERSION);
+        put(&mut output, 0, &dclutch_vm::v3::MAGIC);
+        set_byte(&mut output, 4, dclutch_vm::v3::VERSION);
         put(&mut output, 6, &TRANSITION_OPERATIONS.to_le_bytes());
         put(&mut output, 12, &FIXTURE_SCALARS.to_le_bytes());
 
-        let load_offset = dclutch_transition_vm::v3::HEADER_BYTES;
+        let load_offset = dclutch_vm::v3::HEADER_BYTES;
         set_byte(&mut output, load_offset, 0);
         put(&mut output, load_offset + 2, &0_u16.to_le_bytes());
         put(
@@ -1203,7 +1203,7 @@ mod tests {
                 .to_le_bytes(),
         );
 
-        let load_multiplier = load_offset + dclutch_transition_vm::v3::INSTRUCTION_BYTES;
+        let load_multiplier = load_offset + dclutch_vm::v3::INSTRUCTION_BYTES;
         set_byte(&mut output, load_multiplier, 0);
         put(&mut output, load_multiplier + 2, &3_u16.to_le_bytes());
         put(
@@ -1214,7 +1214,7 @@ mod tests {
                 .to_le_bytes(),
         );
 
-        let multiply = load_multiplier + dclutch_transition_vm::v3::INSTRUCTION_BYTES;
+        let multiply = load_multiplier + dclutch_vm::v3::INSTRUCTION_BYTES;
         set_byte(&mut output, multiply, 17);
         put(&mut output, multiply + 2, &2_u16.to_le_bytes());
         put(&mut output, multiply + 4, &3_u16.to_le_bytes());
@@ -1371,9 +1371,9 @@ mod tests {
         }
         assert_eq!(cursor, request_bank.len());
         let dependency_count = dependencies.iter().map(|items| items.len()).sum::<usize>();
-        let output_bytes = dclutch_effect_kernel::v3::HEADER_BYTES
-            + routes.len() * dclutch_effect_kernel::v3::ROUTE_BYTES
-            + dependency_count * dclutch_effect_kernel::v3::RECEIPT_DEPENDENCY_BYTES
+        let output_bytes = dclutch_vm::effect::v3::HEADER_BYTES
+            + routes.len() * dclutch_vm::effect::v3::ROUTE_BYTES
+            + dependency_count * dclutch_vm::effect::v3::RECEIPT_DEPENDENCY_BYTES
             + request_bytes;
         let mut scratch = vec![0_u8; output_bytes];
         let mut output = vec![0_u8; output_bytes];
@@ -1476,7 +1476,7 @@ mod tests {
         let effect = effect_with_prepare_initialize_count(action, prepare_initialize_count);
         let strategy = ExecutionStrategyProgramV2::new(
             StrategyDispositionV2::Interpreted,
-            id(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID),
+            id(dclutch_vm::v3::SCHEMA_RELEASE_ID),
             id(digest(&transition)),
             id(EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2),
             None,
@@ -1496,7 +1496,7 @@ mod tests {
             id(digest(SERIES_TICKET_DERIVATION_PREIMAGE_V3)),
             id([90; 32]),
             id(digest(&effect)),
-            id(dclutch_request_profile_contract::SCHEMA_RELEASE_ID),
+            id(dclutch_vm::request_profile::SCHEMA_RELEASE_ID),
             id(digest(&request_profile)),
             id(EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2),
             id(digest(&strategy)),
@@ -1776,8 +1776,8 @@ mod tests {
             ))
         );
 
-        let dependency_table = dclutch_effect_kernel::v3::HEADER_BYTES
-            + SERIES_CONSUME_ROUTE_COUNT_V3 * dclutch_effect_kernel::v3::ROUTE_BYTES;
+        let dependency_table = dclutch_vm::effect::v3::HEADER_BYTES
+            + SERIES_CONSUME_ROUTE_COUNT_V3 * dclutch_vm::effect::v3::ROUTE_BYTES;
         let mut wrong_width = fixture.effect.clone();
         put(
             &mut wrong_width,
@@ -1793,7 +1793,7 @@ mod tests {
         let mut forward = fixture.effect.clone();
         put(
             &mut forward,
-            dependency_table + dclutch_effect_kernel::v3::RECEIPT_DEPENDENCY_BYTES + 2,
+            dependency_table + dclutch_vm::effect::v3::RECEIPT_DEPENDENCY_BYTES + 2,
             &4_u16.to_le_bytes(),
         );
         assert!(EffectProgramV3::decode(&forward).is_err());

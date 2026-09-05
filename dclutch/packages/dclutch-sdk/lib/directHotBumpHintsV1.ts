@@ -50,7 +50,7 @@ import {
  * browser-side miner that fills them.
  *
  * Mirrors `HotBumpHintsV1` and `direct_inline_hot_bump_hints_v1` in
- * `crates/dclutch-capability-program-contract/src/hot_v3.rs` and
+ * `crates/dclutch-market/src/capability_program/hot_v3.rs` and
  * `crates/dclutch-operator/src/direct_inline_v3.rs`.
  *
  * # Why a browser should mine them

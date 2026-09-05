@@ -284,17 +284,17 @@ pub const ADAPTER_STACK_SLOTS_V1: usize = 80;
 ///
 /// The allocator's own `DEFAULT_HEAP_BYTES_V1`, re-exported under this module's
 /// long-standing name rather than restated, so there is one author.
-pub const ADAPTER_DEFAULT_HEAP_BYTES: usize = dclutch_sbf_bump_heap::DEFAULT_HEAP_BYTES_V1;
+pub const ADAPTER_DEFAULT_HEAP_BYTES: usize = dclutch_sbf_runtime::DEFAULT_HEAP_BYTES_V1;
 
 /// Largest heap frame the runtime will grant.
 ///
 /// The allocator's own `MAX_HEAP_BYTES_V1`; see above.
-pub const ADAPTER_MAX_HEAP_BYTES: usize = dclutch_sbf_bump_heap::MAX_HEAP_BYTES_V1;
+pub const ADAPTER_MAX_HEAP_BYTES: usize = dclutch_sbf_runtime::MAX_HEAP_BYTES_V1;
 
 /// Granularity the runtime requires of a ComputeBudget heap-frame request.
 ///
 /// The allocator's own `HEAP_FRAME_GRANULARITY_BYTES_V1`; see above.
-const HEAP_FRAME_GRANULARITY_BYTES: usize = dclutch_sbf_bump_heap::HEAP_FRAME_GRANULARITY_BYTES_V1;
+const HEAP_FRAME_GRANULARITY_BYTES: usize = dclutch_sbf_runtime::HEAP_FRAME_GRANULARITY_BYTES_V1;
 
 /// Width of the eight-byte route magic every Trading instruction opens with.
 const HOT_EXECUTION_MAGIC_BYTES_V1: usize = 8;
@@ -311,7 +311,7 @@ const REQUEST_HEAP_FRAME_DISCRIMINANT: u8 = 1;
 /// stay private to it, because nothing outside the allocator may address the
 /// header. The loader's zero-fill of the heap (trust-surface assumption 5) is
 /// load-bearing for all three.
-const HEAP_HEADER_BYTES: usize = dclutch_sbf_bump_heap::HEAP_HEADER_BYTES;
+const HEAP_HEADER_BYTES: usize = dclutch_sbf_runtime::HEAP_HEADER_BYTES;
 
 /// Value the loader writes in place of an account record for a repeated account.
 ///
@@ -330,7 +330,7 @@ const UNUSED_RENT_EPOCH_BYTES: usize = 8;
 // ---------------------------------------------------------------------------
 
 /// The program heap allocator, and its full documentation, now live in
-/// `dclutch-sbf-bump-heap`.
+/// `dclutch-sbf-runtime`.
 ///
 /// It moved on 2026-09-01, unchanged, because a SECOND executable needs it:
 /// `dclutch-general-accelerator-sbf` declared the `custom-heap` feature and
@@ -341,13 +341,13 @@ const UNUSED_RENT_EPOCH_BYTES: usize = 8;
 ///
 /// What changed in the move and nothing else did: the two Trading refusal codes
 /// the allocator used to raise directly are now a
-/// `dclutch_sbf_bump_heap::HeapErrorV1`, mapped back to exactly the codes it
+/// `dclutch_sbf_runtime::HeapErrorV1`, mapped back to exactly the codes it
 /// raised before by `heap_error_v1` below -- an allocator is not a protocol
 /// surface and must not own registered discriminants. `lift_ceiling`,
 /// `open_scratch`, `release_scratch` and `alloc_scratch` became `pub` so this
 /// module can still reach them; their safety contracts are unchanged and are
 /// stated on the items themselves.
-pub use dclutch_sbf_bump_heap::{BumpHeapV1, HeapErrorV1};
+pub use dclutch_sbf_runtime::{BumpHeapV1, HeapErrorV1};
 
 /// Map an allocator refusal onto the Trading discriminant it always carried.
 ///
@@ -370,7 +370,7 @@ const fn heap_error_v1(error: HeapErrorV1) -> TradingSbfError {
     not(feature = "no-entrypoint")
 ))]
 #[global_allocator]
-static PROGRAM_HEAP_V1: BumpHeapV1 = dclutch_sbf_bump_heap::program_heap_v1();
+static PROGRAM_HEAP_V1: BumpHeapV1 = dclutch_sbf_runtime::program_heap_v1();
 
 /// Bytes of program heap consumed so far, including the allocator's header.
 #[cfg(all(
@@ -1022,7 +1022,7 @@ pub fn declares_extended_heap_profile_v1(instruction_data: &[u8]) -> bool {
     // now do, the continuation arm having carried no such call until the same
     // day.
     if instruction_data.get(..HOT_EXECUTION_MAGIC_BYTES_V1)
-        == Some(dclutch_capability_program_contract::hot_v3::HOT_EXECUTION_MAGIC_V3.as_slice())
+        == Some(dclutch_market::capability_program::hot_v3::HOT_EXECUTION_MAGIC_V3.as_slice())
     {
         return true;
     }
@@ -1045,7 +1045,7 @@ pub fn declares_extended_heap_profile_v1(instruction_data: &[u8]) -> bool {
     // rather than an unnamed abort. The seal outer's own peak is NOT measured
     // here; declaring is the conservative direction, and weakening the guard so
     // this route skips it would have been the other one.
-    if dclutch_capability_seal_contract::is_capability_seal_request_v1(instruction_data) {
+    if dclutch_vm::capability_seal::is_capability_seal_request_v1(instruction_data) {
         return true;
     }
     #[cfg(any(
@@ -2164,7 +2164,7 @@ mod tests {
 
     // `BumpHeapV1::alloc` is a `GlobalAlloc` method, not an inherent one. The
     // trait used to be in scope for the whole file; the extraction to
-    // `dclutch-sbf-bump-heap` narrowed that import to `Layout`, which is right
+    // `dclutch-sbf-runtime` narrowed that import to `Layout`, which is right
     // for the module and left these tests unable to name `alloc`. Scoped to the
     // tests that call it rather than restored file-wide.
     use core::{alloc::GlobalAlloc, ptr::null_mut};

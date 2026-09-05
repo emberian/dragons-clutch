@@ -297,7 +297,7 @@ construction belong outside the kernel in explicitly named adapters.
   workspace roots, so one path-dependency crate is compiled twice -- once with
   a relative source path and once absolute -- and the link fails with *"multiple
   different versions of crate `X`"* naming crates nobody touched. Measured
-  2026-09-01: it blamed `dclutch-operator` and `dclutch-direct-codec` for a
+  2026-09-01: it blamed `dclutch-operator` and `dclutch-trading` for a
   duplicate `dclutch-core-contract` while `cargo metadata` showed exactly ONE
   of it in the graph and uniform `../../../crates/...` spellings. Dropping the
   override built the same workspace in nineteen seconds. `cargo metadata`

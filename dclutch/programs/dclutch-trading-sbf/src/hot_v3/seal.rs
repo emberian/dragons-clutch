@@ -7,12 +7,12 @@
 //! 11,588-line execution module. Every item below is byte-for-byte what
 //! `hot_v3` held; the gate on this move is a byte-identical shipped ELF.
 
-use dclutch_account_profile_contract::{
+use dclutch_vm::account_profile::{
     lifecycle_v3::StateLifecyclePolicyV5,
     v2::{AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2},
 };
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
     hot_v3::{HOT_FIXED_ACCOUNT_COUNT_V3, HotExecutionEnvelopeV3},
     v4::{
@@ -20,18 +20,18 @@ use dclutch_capability_program_contract::{
         SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
     },
 };
-use dclutch_capability_seal_contract::{
+use dclutch_vm::capability_seal::{
     CAPABILITY_SEAL_BYTES_V1, CAPABILITY_SEAL_CLOSE_NO_BUMP_CANDIDATE_V1,
     CAPABILITY_SEAL_ROW_COUNT_V1, CapabilitySealCloseRequestV1, CapabilitySealKeyV1,
     CapabilitySealRequestV1, SealedArtifactV1, SealedDescriptorClosureV1, SealedRecordRowV1,
     SealedRoleV1,
 };
-use dclutch_registry_activation_auth_v1::{
+use dclutch_registry::activation_auth_v1::{
     authenticate_activated_role_in_frame_v1, authenticate_activation_cache_identity_v1,
 };
-use dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1;
-use dclutch_release_set_contract::ExecutionRoleV1;
-use dclutch_transition_vm::v3::{
+use dclutch_registry::ActivatedExecutionReleaseSetViewV1;
+use dclutch_registry::release_set::ExecutionRoleV1;
+use dclutch_vm::v3::{
     ProgramV3 as TransitionProgramV3, SCHEMA_RELEASE_ID as TRANSITION_SCHEMA_ID_V3,
 };
 use solana_program::{
@@ -442,7 +442,7 @@ fn require_own_seal_address_v1(
 /// The same reproduction for a seal whose body never recorded its own bump.
 ///
 /// A seal written before the bump moved into
-/// [`dclutch_capability_seal_contract::CAPABILITY_SEAL_BUMP_OFFSET_V1`] carries
+/// [`dclutch_vm::capability_seal::CAPABILITY_SEAL_BUMP_OFFSET_V1`] carries
 /// an unwritten zero there. `SealedDescriptorClosureV1::decode_defunct` reads
 /// exactly those bodies — every conjunct of `decode` except that the bump byte
 /// must be zero, so a well-formed seal offered here refuses with `NotDefunct`

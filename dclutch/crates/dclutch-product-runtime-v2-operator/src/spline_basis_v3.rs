@@ -10,7 +10,7 @@
 //! Product, ResultDomain, Portfolio, ProductBasisV3, and price-gate coordinates.
 //! It does not publish, sign, submit, fund, or mutate an account.
 
-use dclutch_product_payoff_v2_codec::{
+use dclutch_product::payoff::{
     price_gate_v1::{PriceGateCertificateV1, verify_price_gate_v1},
     registry_v3::{GRADED_BASIS_RECORD_SCHEMA_ID_V3, PRICE_GATE_RECORD_SCHEMA_ID_V1},
     runtime_v3::{
@@ -18,8 +18,8 @@ use dclutch_product_payoff_v2_codec::{
         basis_record_bytes_v3, compile_basis_v3, semantic_basis_preimage_v3,
     },
 };
-use dclutch_product_runtime_v2::ContentId;
-use dclutch_product_runtime_v2_admission::FinalizedRecordCoordinateV2;
+use dclutch_product::ContentId;
+use dclutch_product::admission::FinalizedRecordCoordinateV2;
 use solana_program::{hash::hashv, pubkey::Pubkey};
 
 use crate::{
@@ -249,7 +249,7 @@ mod tests {
     #![allow(clippy::indexing_slicing)]
 
     use super::*;
-    use dclutch_product_payoff_v2_codec::{
+    use dclutch_product::payoff::{
         price_gate_v1::{
             PRICE_GATE_ATOM_COUNT_OFFSET_V1, PRICE_GATE_DEGREE_OFFSET_V1,
             PRICE_GATE_DENOMINATORS_OFFSET_V1, PRICE_GATE_MAGIC_OFFSET_V1, PRICE_GATE_MAGIC_V1,
@@ -260,8 +260,8 @@ mod tests {
         },
         runtime_v3::ProductBasisV3,
     };
-    use dclutch_product_runtime_v2::{portfolio_record_bytes, result_domain_record_bytes};
-    use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
+    use dclutch_product::{portfolio_record_bytes, result_domain_record_bytes};
+    use dclutch_product::admission::PRODUCT_RECORD_BYTES_V2;
     use solana_program::hash::hash;
 
     fn content(fill: u8) -> ContentId {

@@ -18,7 +18,7 @@
 //! `--keypair-path` and `--secret-key` are refused at parse. That behaviour is
 //! the shared crate's and is tested there against both invocations.
 
-use dclutch_direct_codec::intent_v2::CompactIntentV2;
+use dclutch_trading::intent_v2::CompactIntentV2;
 use dclutch_direct_ticket::{
     DIRECT_TICKET_AUTHOR_COMMAND_V1 as SHARED_AUTHOR_COMMAND_V1, SignedDirectIntentV3,
 };

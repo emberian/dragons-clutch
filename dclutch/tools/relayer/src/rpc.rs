@@ -477,8 +477,8 @@ mod tests {
     fn a_cluster_that_is_not_the_pinned_cluster_refuses() {
         let error = require_expected_genesis(
             "api.devnet.solana.com",
-            dclutch_relay_contract::SOLANA_MAINNET_GENESIS_HASH_V1,
-            dclutch_relay_contract::SOLANA_DEVNET_GENESIS_HASH_V1,
+            dclutch_source::relay::SOLANA_MAINNET_GENESIS_HASH_V1,
+            dclutch_source::relay::SOLANA_DEVNET_GENESIS_HASH_V1,
         )
         .unwrap_err();
         match error {
@@ -499,8 +499,8 @@ mod tests {
     fn the_pinned_cluster_is_admitted() {
         require_expected_genesis(
             "localhost",
-            dclutch_relay_contract::SOLANA_MAINNET_GENESIS_HASH_V1,
-            dclutch_relay_contract::SOLANA_MAINNET_GENESIS_HASH_V1,
+            dclutch_source::relay::SOLANA_MAINNET_GENESIS_HASH_V1,
+            dclutch_source::relay::SOLANA_MAINNET_GENESIS_HASH_V1,
         )
         .expect("the pinned cluster is the observed cluster");
     }

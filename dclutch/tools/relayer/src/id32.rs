@@ -76,7 +76,7 @@ mod tests {
         // the byte array is the one the Lean-emitted ABI pins.  If these ever
         // disagree the daemon would refuse to run against real mainnet, so the
         // agreement is asserted rather than assumed.
-        let pinned = dclutch_relay_contract::SOLANA_MAINNET_GENESIS_HASH_V1;
+        let pinned = dclutch_source::relay::SOLANA_MAINNET_GENESIS_HASH_V1;
         assert_eq!(
             base58(&pinned),
             "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d"
@@ -90,7 +90,7 @@ mod tests {
     #[test]
     fn the_pinned_devnet_genesis_hash_round_trips_too() {
         assert_eq!(
-            base58(&dclutch_relay_contract::SOLANA_DEVNET_GENESIS_HASH_V1),
+            base58(&dclutch_source::relay::SOLANA_DEVNET_GENESIS_HASH_V1),
             "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG"
         );
     }

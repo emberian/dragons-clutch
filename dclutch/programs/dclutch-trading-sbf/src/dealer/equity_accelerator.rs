@@ -11,8 +11,8 @@ extern crate alloc;
 
 use alloc::{boxed::Box, vec, vec::Vec};
 
-use dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1;
-use dclutch_claims_svm::{
+use dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1;
+use dclutch_claims::{
     liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_BUMP_OFFSET_V2, LIABILITY_BASIS_MARKET_SEED_V2,
         LIABILITY_BASIS_POSITION_BUMP_OFFSET_V2, LiabilityBasisMarketViewV2,
@@ -20,20 +20,20 @@ use dclutch_claims_svm::{
     },
     protocol_position_v2::ProtocolPositionSeedsV2,
 };
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1, CustodyAuthoritySeedsV1,
     CustodyReplaySeedsV1, CustodyReplayV1, CustodyVaultSeedsV1,
 };
-use dclutch_dealer_codec::{
+use dclutch_trading::dealer::{
     config_v4::{DEALER_CONFIG_SCHEMA_PREIMAGE_V4, DealerConfigV4},
     root_admission_v1::DEALER_ROOT_OPEN_ADMISSIBLE_STATES_V1,
     root_tail::{ROOT_TAIL_BYTES, RootTail},
     scenario::ClaimsInventoryObservation,
 };
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
-use dclutch_realm_contract::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_token_svm::{ACCOUNT_BYTES, AccountState, COption, TokenAccount};
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
+use dclutch_market::realm::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_custody::token_svm::{ACCOUNT_BYTES, AccountState, COption, TokenAccount};
 use solana_program::{account_info::AccountInfo, hash::hash, pubkey::Pubkey};
 use solana_sdk_ids::system_program;
 
@@ -1801,10 +1801,10 @@ fn encode_bank(
 
 #[cfg(test)]
 mod tests {
-    use dclutch_custody_contract::{
+    use dclutch_custody::{
         ContextV1, CustodyRequestV1, DelegatedCustodyRequestV2, OperationV1,
     };
-    use dclutch_dealer_codec::scenario::ScenarioSolvencyReport;
+    use dclutch_trading::dealer::scenario::ScenarioSolvencyReport;
 
     use super::*;
     use super::{HINTED_SEED_CAPACITY_V4, derive_hinted};

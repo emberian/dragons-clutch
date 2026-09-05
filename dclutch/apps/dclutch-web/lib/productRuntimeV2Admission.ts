@@ -39,7 +39,7 @@ import {
  * The browser's Product Runtime V2 admission wire.
  *
  * AUTHORITY. `programs/dclutch-product-runtime-v2-sbf` is the deployed adapter;
- * `crates/dclutch-product-runtime-v2-admission` is the wire it decodes. Every
+ * `crates/dclutch-product` is the wire it decodes. Every
  * magic, width, offset, reserved span, account count and schema identity below
  * arrives through `lib/generated/productRuntimeV2Admission.ts`, which
  * `npm run abi:product-runtime-v2-admission` reads out of those two files. This

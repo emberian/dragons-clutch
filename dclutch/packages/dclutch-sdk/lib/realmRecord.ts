@@ -23,7 +23,7 @@ import {
  * says nothing about where it was found. The caller reacquires the record at its
  * derived PDA and re-hashes it against the identity the Market committed to;
  * this module owns only the layout, whose offsets are generated from
- * `crates/dclutch-realm-contract/src/lib.rs`.
+ * `crates/dclutch-market/src/realm/mod.rs`.
  */
 
 export type RealmAuthorityPolicy = 'Require absent' | 'Admit issuer control';

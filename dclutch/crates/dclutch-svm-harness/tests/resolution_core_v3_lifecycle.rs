@@ -14,41 +14,41 @@ use std::{env, fs, path::PathBuf};
 #[allow(dead_code)]
 mod pyth_provider;
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
     CapabilityEntryV1, CapabilityFundingLedgerDerivationV2, CapabilityManifestV1,
     CompartmentFundingV1, ContentId as CapabilityContentId, FUNDING_STATE_BYTES, FundingAmountsV1,
     FundingLedgerStatusV2, FundingLedgerV2, FundingQuoteV1, MANIFEST_HEADER_BYTES,
     MAX_DEPENDENCIES_PER_CAPABILITY, derive_funded_rent_rate_v2, funding_ledger_bytes_v2,
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
 };
 use dclutch_core_contract::ContentId as CoreContentId;
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CallerRoleV1, CompartmentV1, ContextV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1,
     CustodyReplayV1, CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
 };
-use dclutch_direct_codec::{
+use dclutch_trading::{
     execution_v3::DIRECT_SUCCESSOR_KIND_ID_V3,
     successor::{
         DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, DIRECT_ROOT_SCHEMA_ID_V1, DIRECT_ROOT_STATE_BYTES_V1,
         DirectExecutionConfigV1, DirectRootStateV1,
     },
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     Action, CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase,
     REQUEST_BYTES, Readiness, Request, StateBumpsV1,
 };
 use dclutch_market_open_v1_operator::{
     RegistryOpenMarketContinuationStateV1, build_registry_open_market_continuation_v1,
 };
-use dclutch_product_runtime_v2::{
+use dclutch_product::{
     ContentId as ProductContentId, PortfolioInputV2, ResultDomainInputV2, ResultDomainV2,
     compile_portfolio_v2, compile_result_domain_v2, portfolio_record_bytes,
     result_domain_record_bytes,
 };
-use dclutch_product_runtime_v2_admission::{
+use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
     RESULT_DOMAIN_SCHEMA_ID_V2,
 };
@@ -60,29 +60,29 @@ use dclutch_provider_transport_v3_operator::{
     build_provider_abandon_v3, build_provider_execute_v3, build_provider_reclaim_v3,
     build_provider_submit_v3,
 };
-use dclutch_pyth_svm::{
+use dclutch_source::pyth::{
     FullPriceUpdateV2, PYTH_RELEASE_V1_ENCODED_LEN, PythReleaseV1, VerifiedEncodedVaaV1,
 };
-use dclutch_realm_contract::{
+use dclutch_market::realm::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1,
     ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
     activate_execution_role_into_v1, initialize_activation_cache_v1,
 };
-use dclutch_relay_contract::instruction::{
+use dclutch_source::relay::instruction::{
     AdvanceRecoveryInstructionV1, CommitDeadlineFailureInstructionV1,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1,
     ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProgramIdentityV1,
     ProtocolInfrastructureProfileV2,
 };
-use dclutch_resolution_codec::{
+use dclutch_source::resolution::{
     FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1, PROVIDER_EXECUTION_REQUEST_SOURCE_INDEX_OFFSET_V3,
     PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
     ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_BYTES_V2,
@@ -101,7 +101,7 @@ use dclutch_resolution_core_v3_operator::{
     validate_resolution_verify_fund_ready_report_v3,
 };
 use dclutch_resolution_proof_sbf::ResolutionError;
-use dclutch_source_contract::{
+use dclutch_source::{
     CapacityEnvelope, ContentId as SourceContentId, PROVIDER_RELEASE_SCHEMA_ID_V1,
     PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, ProviderReleaseV1, PythAdapterConfigV1,
     RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryAttemptV2, RecoveryPolicyV2, RoundingBoundary,
@@ -112,7 +112,7 @@ use dclutch_source_contract::{
     SourceResolutionStateV2, SourceSpecV1, StatisticKind, StatisticSpecV1,
     WINDOW_SPEC_SCHEMA_ID_V1, WindowKind, WindowSpecV1,
 };
-use dclutch_token_svm::{LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES};
+use dclutch_custody::token_svm::{LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES};
 use solana_account::{Account, AccountSharedData};
 use solana_address_lookup_table_interface::instruction::{
     create_lookup_table, extend_lookup_table, freeze_lookup_table,
@@ -655,7 +655,7 @@ fn custody_request(
         resulting_revision: 1,
         amount: 0,
         rent_lamports: Rent::default()
-            .minimum_balance(dclutch_custody_contract::CUSTODY_REPLAY_BYTES_V1),
+            .minimum_balance(dclutch_custody::CUSTODY_REPLAY_BYTES_V1),
     };
     if operation == OperationV1::OpenVault {
         request.operation = operation;
@@ -665,7 +665,7 @@ fn custody_request(
         request.token_program = LEGACY_TOKEN_PROGRAM_ID;
         request.expected_revision = 1;
         request.resulting_revision = 2;
-        request.rent_lamports = Rent::default().minimum_balance(dclutch_token_svm::ACCOUNT_BYTES);
+        request.rent_lamports = Rent::default().minimum_balance(dclutch_custody::token_svm::ACCOUNT_BYTES);
         request.destination = Pubkey::find_program_address(
             &CustodyVaultSeedsV1::from_request(request, false).as_slices(),
             &CUSTODY_PROGRAM_ID,
@@ -1171,7 +1171,7 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
     // root in its manifest, at a row the Resolution funding subset does not
     // select, prepaid-lazy and funded by the Trading role rather than by the
     // walk. The identities below are the REAL ones
-    // (`dclutch-direct-codec`), not fixture bytes: `DIRECT_SUCCESSOR_KIND_ID_V3`
+    // (`dclutch-trading`), not fixture bytes: `DIRECT_SUCCESSOR_KIND_ID_V3`
     // is what a Direct capability IS and `DIRECT_ROOT_SCHEMA_ID_V1` is what its
     // child account is, and stating them from their owning crate is what makes
     // the manifest a Direct market's manifest rather than a fourth arbitrary
@@ -1889,7 +1889,7 @@ fn wire_extent(signatures: usize, message: &[u8]) -> usize {
 /// `market_retirement_v1_lifecycle.rs`, which `include!`s this file, states the
 /// same number a third time as `SOLANA_PACKET_BYTES`. Retiring that one belongs
 /// with converting the retirement checkpoint chain and is not done here: the
-/// crate that binary needs (`dclutch-representation-composition-v3-kernel`) does
+/// crate that binary needs (`dclutch-claims::composition`) does
 /// not compile at this moment, five files dirty under another lane mid-rename of
 /// `generated_abi`, so an edit to that file could not be proved.
 const PACKET_DATA_BYTES: usize = 1_232;
@@ -6044,7 +6044,7 @@ async fn a_donated_lamport_still_refuses_the_admission_across_the_same_rent_chan
 /// refuses `RentExempt -> RentPaying`, and under SIMD-0392
 /// `get_pre_exec_account_rent_state` reads an account the rate left behind as
 /// `RentExempt` anyway. So the floors could only ever refuse a live account.
-/// See `dclutch_capability_contract::funding::funded_rent_persists_v1`.
+/// See `dclutch_market::capability_manifest::funding::funded_rent_persists_v1`.
 ///
 /// PROVEN RED, not by construction. The loop below is a positive control and it
 /// is two-sided on every account the admission frame floors -- each must be

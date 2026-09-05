@@ -28,8 +28,8 @@
 //! job, but only for a plan carrying checked deployment evidence, and the
 //! supersession class bites plans that carry none.
 
-use dclutch_registry_contract::ActivatedExecutionReleaseSetV1;
-use dclutch_release_set_contract::ExecutionRoleV1;
+use dclutch_registry::ActivatedExecutionReleaseSetV1;
+use dclutch_registry::release_set::ExecutionRoleV1;
 
 use crate::{Error, Result, campaign::ObservedRoleV1, model::SuccessorPlan, plan::hex, runtime};
 
@@ -111,7 +111,7 @@ pub(crate) fn authenticate_activated_release_is_live_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_registry_contract::{
+    use dclutch_registry::{
         ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ARTIFACT_RELEASE_BYTES_V1,
     };
     use sha2::Digest as _;

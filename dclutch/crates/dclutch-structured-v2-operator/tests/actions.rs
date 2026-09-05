@@ -3,7 +3,7 @@
 
 mod support;
 
-use dclutch_structured_v2_contract::{
+use dclutch_claims::structured::{
     STRUCTURED_ACCOUNT_ACTOR_V2, STRUCTURED_ACCOUNT_RECEIPT_MINT_V2,
     STRUCTURED_ACCOUNT_RECEIPT_TOKEN_V2, STRUCTURED_ACCOUNT_RENT_CREDIT_V2,
     STRUCTURED_ACCOUNT_RENT_PROGRAM_V2, STRUCTURED_ACCOUNT_ROOT_V2,
@@ -11,7 +11,7 @@ use dclutch_structured_v2_contract::{
     StructuredHotAccountRefV2, StructuredHotCandidateInputV2, StructuredHotCandidateV2,
     StructuredHotRentCloseV2, StructuredHotTokenEffectV2, StructuredHotTokenKindV2,
 };
-use dclutch_structured_v2_kernel::{
+use dclutch_claims::structured_kernel::{
     STRUCTURED_NO_COORDINATE_V2, StructuredCoordinateObservationV2, StructuredPhaseV2,
     StructuredTermsV2,
 };
@@ -277,7 +277,7 @@ fn round_trip(action: StructuredActionV2, phase: StructuredPhaseV2, supply: u64,
 }
 
 fn root_state(terms_id: [u8; 32], revision: u64) -> Vec<u8> {
-    use dclutch_structured_v2_contract::{StructuredRootInputV2, StructuredRootV2};
+    use dclutch_claims::structured::{StructuredRootInputV2, StructuredRootV2};
     StructuredRootV2::new(StructuredRootInputV2 {
         bump: 254,
         terms: terms_id,

@@ -49,7 +49,7 @@ post-resource digest before committing its own state.
 
 `ClaimsPlanV1` and the EconomicSlice state it addresses are migration-only.
 The exact remaining producers are
-`crates/dclutch-general-adapter-contract/src/child_packets.rs`,
+`crates/dclutch-trading/src/general/child_packets.rs`,
 `programs/dclutch-trading-sbf/src/dealer/physical.rs`, and
 the deleted `dclutch-dealer-sbf` prototype. No new controller may use that route;
 removing those three producers permits deletion of the generic branch and its
@@ -58,7 +58,7 @@ EconomicSlice dependency.
 Rational Representation V2 instead consumes the canonical runtime-width
 LiabilityBasisV2 aggregate and ProtocolPositionV2 accounts. Its operator and
 onchain adapter share the SDK-free state layout from
-`dclutch-claims-svm::liability_basis_state_v2`; Core alone owns lifecycle and
+`dclutch-claims::liability_basis_state_v2`; Core alone owns lifecycle and
 winner. The obsolete `ActionV1` representation wire, its parallel state
 adapter, and its terminal caller harness are not dispatched or built.
 

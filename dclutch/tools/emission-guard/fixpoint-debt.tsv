@@ -21,3 +21,4 @@
 # still listed here. It only moves when somebody looks at it.
 #
 # path	emitter
+crates/dclutch-market/src/protocol_parameters/generated.rs	EmitProtocolParametersV1Rust.lean

@@ -6,28 +6,16 @@ license = "AGPL-3.0-or-later"
 publish = false
 
 [dependencies]
-dclutch-capability-contract = { path = "../../../../crates/dclutch-capability-contract" }
-dclutch-capability-program-contract = { path = "../../../../crates/dclutch-capability-program-contract" }
-dclutch-capability-seal-contract = { path = "../../../../crates/dclutch-capability-seal-contract" }
+dclutch-market = { path = "../../../../crates/dclutch-market", features = ["alloc"] }
+dclutch-vm = { path = "../../../../crates/dclutch-vm" }
 dclutch-chain-bundle-builder = { path = "../bundle-builder" }
 dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
-dclutch-direct-codec = { path = "../../../../crates/dclutch-direct-codec" }
+dclutch-trading = { path = "../../../../crates/dclutch-trading" }
 dclutch-direct-hot-program-test-support = { path = "../direct-hot" }
-dclutch-execution-strategy-contract = { path = "../../../../crates/dclutch-execution-strategy-contract", features = ["alloc"] }
-dclutch-general-adapter-contract = { path = "../../../../crates/dclutch-general-adapter-contract" }
-dclutch-general-codec = { path = "../../../../crates/dclutch-general-codec" }
-dclutch-general-config-contract = { path = "../../../../crates/dclutch-general-config-contract" }
-dclutch-market-core-codec = { path = "../../../../crates/dclutch-market-core-codec" }
 dclutch-operator = { path = "../../../../crates/dclutch-operator" }
-dclutch-product-payoff-v2-codec = { path = "../../../../crates/dclutch-product-payoff-v2-codec" }
-dclutch-product-runtime-v2 = { path = "../../../../crates/dclutch-product-runtime-v2" }
-dclutch-product-runtime-v2-admission = { path = "../../../../crates/dclutch-product-runtime-v2-admission" }
+dclutch-product = { path = "../../../../crates/dclutch-product" }
 dclutch-product-runtime-v2-operator = { path = "../../../../crates/dclutch-product-runtime-v2-operator" }
-dclutch-record-contract = { path = "../../../../crates/dclutch-record-contract" }
-dclutch-realm-contract = { path = "../../../../crates/dclutch-realm-contract" }
-dclutch-registry-contract = { path = "../../../../crates/dclutch-registry-contract" }
-dclutch-release-set-contract = { path = "../../../../crates/dclutch-release-set-contract" }
-dclutch-rent-contract = { path = "../../../../crates/dclutch-rent-contract" }
+dclutch-registry = { path = "../../../../crates/dclutch-registry" }
 # The refusal codes this campaign's hostiles name, derived from the REGISTERED
 # BAND rather than written out. Decision 0007 names this as the alternative to
 # the enum where taking a dependency on the program would be wrong, and here it

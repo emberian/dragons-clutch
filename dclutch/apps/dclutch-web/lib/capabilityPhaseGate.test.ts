@@ -29,7 +29,7 @@ import {
  * the phase is what a finalized read of its Core state decodes to, and it is
  * the observation the UX walk was looking at when `/workbench` reported READY
  * TO PREFLIGHT for acts about it. `Open` implies `Consumed`: `open_market`
- * sets both in one transition (`crates/dclutch-market-core-codec`), so no
+ * sets both in one transition (`crates/dclutch-market`), so no
  * Market is ever `Open + Ready`.
  */
 const COHORT_12 = 'EQnYCUMkzSG2pHnzkdEC7vxqYgabPgBserq9oS4VmGs1';

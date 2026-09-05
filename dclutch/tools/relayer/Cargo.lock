@@ -301,49 +301,27 @@ name = "dclutch-core-contract"
 version = "0.1.0"
 
 [[package]]
-name = "dclutch-market-core-codec"
+name = "dclutch-market"
 version = "0.1.0"
 dependencies = [
- "dclutch-release-set-contract",
+ "dclutch-core-contract",
+ "dclutch-registry",
+ "dclutch-sha256-adapter",
+ "dclutch-vm",
+]
+
+[[package]]
+name = "dclutch-product"
+version = "0.1.0"
+dependencies = [
  "dclutch-sha256-adapter",
 ]
 
 [[package]]
-name = "dclutch-product-contract"
-version = "0.1.0"
-
-[[package]]
-name = "dclutch-product-runtime-v2"
-version = "0.1.0"
-
-[[package]]
-name = "dclutch-record-contract"
-version = "0.1.0"
-
-[[package]]
-name = "dclutch-registry-contract"
+name = "dclutch-registry"
 version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
- "dclutch-release-set-contract",
-]
-
-[[package]]
-name = "dclutch-registry-svm"
-version = "0.1.0"
-dependencies = [
- "dclutch-core-contract",
- "dclutch-release-set-contract",
-]
-
-[[package]]
-name = "dclutch-relay-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-core-contract",
- "dclutch-registry-contract",
- "dclutch-registry-svm",
- "dclutch-release-set-contract",
 ]
 
 [[package]]
@@ -354,12 +332,9 @@ dependencies = [
  "bincode",
  "bs58",
  "clap",
- "dclutch-market-core-codec",
- "dclutch-record-contract",
- "dclutch-registry-contract",
- "dclutch-relay-contract",
- "dclutch-release-set-contract",
- "dclutch-source-contract",
+ "dclutch-market",
+ "dclutch-registry",
+ "dclutch-source",
  "ed25519-dalek",
  "hex",
  "rand_core 0.6.4",
@@ -381,13 +356,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-release-set-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-core-contract",
-]
-
-[[package]]
 name = "dclutch-sha256-adapter"
 version = "0.1.0"
 dependencies = [
@@ -396,12 +364,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-source-contract"
+name = "dclutch-source"
 version = "0.1.0"
 dependencies = [
- "dclutch-product-contract",
- "dclutch-product-runtime-v2",
+ "dclutch-core-contract",
+ "dclutch-market",
+ "dclutch-product",
+ "dclutch-registry",
+ "dclutch-sha256-adapter",
 ]
+
+[[package]]
+name = "dclutch-vm"
+version = "0.1.0"
 
 [[package]]
 name = "der"

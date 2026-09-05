@@ -43,13 +43,13 @@
 //! reachable in it (design §4.3), so a sweep here would be measuring a constant.
 
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{CustodyReplayV1, TRANSFER_ACCOUNT_COUNT_V1};
-use dclutch_direct_codec::fee_settlement_v1::{
+use dclutch_custody::{CustodyReplayV1, TRANSFER_ACCOUNT_COUNT_V1};
+use dclutch_trading::fee_settlement_v1::{
     DirectFeeProjectionV1, DirectFeeSettlementReceiptV1, DirectFeeSettlementRequestV1,
     project_direct_fee_request_v1,
 };
-use dclutch_direct_codec::ordinary_geometry_v3::DirectOrdinaryGeometryV3;
-use dclutch_direct_codec::successor::MakerReplayRootV1;
+use dclutch_trading::ordinary_geometry_v3::DirectOrdinaryGeometryV3;
+use dclutch_trading::successor::MakerReplayRootV1;
 use dclutch_direct_hot_program_test_support::fixture::{
     DirectTradeScenarioV1, direct_hot_config_record_v1, direct_hot_custody_legs_v1,
 };
@@ -60,8 +60,8 @@ use dclutch_direct_hot_program_test_support::waist::{
     program_test_without_forced_budget, start_with_substrate, submit_v0_observed,
     with_fixture_seed,
 };
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_token_svm::{ACCOUNT_BYTES, COption, TokenAccount};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_custody::token_svm::{ACCOUNT_BYTES, COption, TokenAccount};
 use dclutch_trading_sbf::TradingSbfError;
 use solana_account::Account;
 use solana_program::{

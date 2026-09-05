@@ -9,9 +9,9 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::convert::TryFrom;
 
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CUSTODY_BUMP_RELAY_BYTES_V1, CUSTODY_RECEIPT_BYTES_V1, CUSTODY_REPLAY_BYTES_V1,
     CUSTODY_REQUEST_BYTES_V1, CallerRoleV1, CompartmentV1, CustodyAuthoritySeedsV1,
     CustodyFrameSpecV1, CustodyReceiptV1, CustodyReplaySeedsV1, CustodyReplayV1, CustodyRequestV1,
@@ -35,12 +35,12 @@ mod retirement_replay_handoff_v1;
 /// `docs/design/DEALER_PARTIAL_REMOVE_COMPUTE_2026_09_02.md`.
 ///
 /// The syscalls and the `#[inline(never)]` that guards them live in
-/// `dclutch-cu-checkpoint`, which says why. What stays here is the feature name
+/// `dclutch-sbf-runtime::cu_checkpoint`, which says why. What stays here is the feature name
 /// a build line names and the domain prefix a log reader greps.
 #[cfg(feature = "custody-cu-profile")]
 macro_rules! custody_cu_checkpoint {
     ($phase:literal) => {
-        dclutch_cu_checkpoint::cu_checkpoint(concat!("dclutch-custody-cu:", $phase))
+        dclutch_sbf_runtime::cu_checkpoint::cu_checkpoint(concat!("dclutch-custody-cu:", $phase))
     };
 }
 
@@ -49,21 +49,21 @@ macro_rules! custody_cu_checkpoint {
     ($phase:literal) => {};
 }
 
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
-use dclutch_realm_contract::{
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
+use dclutch_market::realm::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_activation_auth_v1::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::activation_auth_v1::{
     authenticate_activation_cache_identity_v1, require_cache_account, require_readonly_frame,
 };
-use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
-use dclutch_registry_svm::continuation_v1::{
+use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
+use dclutch_registry::svm::continuation_v1::{
     REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationAdmissionSeedsV1,
     RegistryContinuationRequestV1,
 };
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_token_svm::{
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_custody::token_svm::{
     AuthorityRole, COption, ExactTransferInput, ExactTransferProfileV1,
     PRODUCTION_ADAPTER_RELEASES, close_account, initialize_account3, transfer_checked,
 };
@@ -83,22 +83,22 @@ use solana_system_interface::instruction::{allocate, assign, create_account, tra
 
 /// Exact common prefix length.
 pub const COMMON_ACCOUNT_COUNT_V1: usize =
-    dclutch_custody_contract::CUSTODY_COMMON_ACCOUNT_COUNT_V1 as usize;
+    dclutch_custody::CUSTODY_COMMON_ACCOUNT_COUNT_V1 as usize;
 /// Exact `InitializeReplay` account count.
 pub const INITIALIZE_REPLAY_ACCOUNT_COUNT_V1: usize =
-    dclutch_custody_contract::INITIALIZE_REPLAY_ACCOUNT_COUNT_V1 as usize;
+    dclutch_custody::INITIALIZE_REPLAY_ACCOUNT_COUNT_V1 as usize;
 /// Exact `OpenVault` account count.
 pub const OPEN_VAULT_ACCOUNT_COUNT_V1: usize =
-    dclutch_custody_contract::OPEN_VAULT_ACCOUNT_COUNT_V1 as usize;
+    dclutch_custody::OPEN_VAULT_ACCOUNT_COUNT_V1 as usize;
 /// Exact `Transfer` account count.
 pub const TRANSFER_ACCOUNT_COUNT_V1: usize =
-    dclutch_custody_contract::TRANSFER_ACCOUNT_COUNT_V1 as usize;
+    dclutch_custody::TRANSFER_ACCOUNT_COUNT_V1 as usize;
 /// Exact `CloseVault` account count.
 pub const CLOSE_VAULT_ACCOUNT_COUNT_V1: usize =
-    dclutch_custody_contract::CLOSE_VAULT_ACCOUNT_COUNT_V1 as usize;
+    dclutch_custody::CLOSE_VAULT_ACCOUNT_COUNT_V1 as usize;
 /// Exact `CloseReplay` account count.
 pub const CLOSE_REPLAY_ACCOUNT_COUNT_V1: usize =
-    dclutch_custody_contract::CLOSE_REPLAY_ACCOUNT_COUNT_V1 as usize;
+    dclutch_custody::CLOSE_REPLAY_ACCOUNT_COUNT_V1 as usize;
 
 const CALLER_AUTHORITY: usize = 0;
 const CORE_MARKET: usize = 1;
@@ -176,7 +176,7 @@ pub enum CustodySbfError {
     /// who sees this code is told which invariant stopped them.
     ///
     /// Ruled 2026-09-04 (C-11 D1 item 5). Contract twin:
-    /// `dclutch_custody_contract::Error::ForbiddenCompartmentPair`; Lean twin:
+    /// `dclutch_custody::Error::ForbiddenCompartmentPair`; Lean twin:
     /// `hoard_principal_never_funds_the_fee_vault` in `CustodyAbi.lean`.
     ForbiddenCompartmentPair = 0x6011,
 }
@@ -211,10 +211,10 @@ dclutch_refusal_registry::pin_refusal_band!(
 /// Decision 0012: a moved deployment slot means the substrate was upgraded and
 /// this release generation is finished. The remedy is a re-release, not an
 /// investigation, so it does not fold into the generic Release refusal.
-impl From<dclutch_registry_activation_auth_v1::ActivationAuthErrorV1> for CustodySbfError {
-    fn from(value: dclutch_registry_activation_auth_v1::ActivationAuthErrorV1) -> Self {
+impl From<dclutch_registry::activation_auth_v1::ActivationAuthErrorV1> for CustodySbfError {
+    fn from(value: dclutch_registry::activation_auth_v1::ActivationAuthErrorV1) -> Self {
         match value {
-            dclutch_registry_activation_auth_v1::ActivationAuthErrorV1::ReleaseSuperseded => {
+            dclutch_registry::activation_auth_v1::ActivationAuthErrorV1::ReleaseSuperseded => {
                 Self::ReleaseSuperseded
             }
             _ => Self::Release,
@@ -235,13 +235,13 @@ pub fn process_instruction(
     custody_cu_checkpoint!("cu-enter");
     let (instruction_data, relay) = split_caller_authority_bump_v1(instruction_data);
     if instruction_data.len()
-        == dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1
+        == dclutch_custody::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1
         && instruction_data
-            .get(..dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_MAGIC_V1.len())
-            == Some(dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_MAGIC_V1.as_slice())
+            .get(..dclutch_custody::RETIREMENT_REPLAY_HANDOFF_REQUEST_MAGIC_V1.len())
+            == Some(dclutch_custody::RETIREMENT_REPLAY_HANDOFF_REQUEST_MAGIC_V1.as_slice())
     {
         let request =
-            dclutch_custody_contract::RetirementReplayHandoffRequestV1::decode(instruction_data)
+            dclutch_custody::RetirementReplayHandoffRequestV1::decode(instruction_data)
                 .map_err(|_| CustodySbfError::Instruction)?;
         return retirement_replay_handoff_v1::process(
             program_id,
@@ -270,7 +270,7 @@ pub fn process_instruction(
         // than a decode failure keeps its own word on the wire. Every other
         // cause is genuinely "these bytes are not the request", which is
         // what `Instruction` says.
-        dclutch_custody_contract::Error::ForbiddenCompartmentPair => {
+        dclutch_custody::Error::ForbiddenCompartmentPair => {
             CustodySbfError::ForbiddenCompartmentPair
         }
         _ => CustodySbfError::Instruction,
@@ -282,7 +282,7 @@ pub fn process_instruction(
     // invocation: a decode with its identity conjuncts costs 25,000 to 31,000
     // CU, and `authenticate_activation_cache_identity_v1` once, then every
     // role read out of the SAME view, is the pair
-    // `dclutch-registry-activation-auth-v1` names. The guard is held across
+    // `dclutch-registry::activation_auth_v1` names. The guard is held across
     // the frame and the realm and dropped before dispatch, so nothing below
     // reads a view whose bytes could have moved underneath it.
     let registry = account(accounts, REGISTRY_PROGRAM)?;
@@ -367,11 +367,11 @@ pub fn process_instruction(
 /// byte reproduces a different address and refuses. A caller that sends no
 /// suffix gets the search this always used to do.
 fn split_caller_authority_bump_v1(instruction_data: &[u8]) -> (&[u8], CustodyBumpRelayV1) {
-    const V1: usize = dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1;
+    const V1: usize = dclutch_custody::CUSTODY_REQUEST_BYTES_V1;
     const CONTINUED: usize = V1 + REGISTRY_CONTINUATION_REQUEST_BYTES_V1;
     const DELEGATED: usize = DELEGATED_CUSTODY_REQUEST_BYTES_V2;
     const PROJECTED: usize = PROJECTED_CUSTODY_REQUEST_BYTES_V1;
-    const HANDOFF: usize = dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1;
+    const HANDOFF: usize = dclutch_custody::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1;
 
     /// The routes whose handler READS a carried bump. The projected and
     /// retirement-handoff routes derive their caller authority elsewhere and
@@ -491,10 +491,10 @@ impl CustodyBumpRelayV1 {
 fn split_registry_continuation(
     instruction_data: &[u8],
 ) -> Result<(&[u8], Option<RegistryContinuationRequestV1>), ProgramError> {
-    if instruction_data.len() == dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1 {
+    if instruction_data.len() == dclutch_custody::CUSTODY_REQUEST_BYTES_V1 {
         return Ok((instruction_data, None));
     }
-    let expected = dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1
+    let expected = dclutch_custody::CUSTODY_REQUEST_BYTES_V1
         .checked_add(REGISTRY_CONTINUATION_REQUEST_BYTES_V1)
         .ok_or(CustodySbfError::Instruction)?;
     if instruction_data.len() != expected {
@@ -1325,7 +1325,7 @@ fn open_vault(
         return Err(CustodySbfError::AccountFrame.into());
     }
     let rent = Rent::from_account_info(rent_account).map_err(|_| CustodySbfError::Create)?;
-    let exact_rent = rent.minimum_balance(dclutch_token_svm::ACCOUNT_BYTES);
+    let exact_rent = rent.minimum_balance(dclutch_custody::token_svm::ACCOUNT_BYTES);
     if request.rent_lamports != exact_rent {
         return Err(CustodySbfError::Create.into());
     }
@@ -1890,7 +1890,7 @@ fn read_custody_account(
     mint: &AccountInfo<'_>,
     authority: &AccountInfo<'_>,
     profile: ExactTransferProfileV1,
-) -> Result<dclutch_token_svm::TokenAccount, ProgramError> {
+) -> Result<dclutch_custody::token_svm::TokenAccount, ProgramError> {
     if account.owner != token_program.key {
         return Err(CustodySbfError::TokenState.into());
     }
@@ -1920,7 +1920,7 @@ fn create_vault<'a>(
         payer.key,
         vault.key,
         rent_lamports,
-        u64::try_from(dclutch_token_svm::ACCOUNT_BYTES).map_err(|_| CustodySbfError::Create)?,
+        u64::try_from(dclutch_custody::token_svm::ACCOUNT_BYTES).map_err(|_| CustodySbfError::Create)?,
         token_program.key,
     );
     let vault_seeds = CustodyVaultSeedsV1::from_request(request, false);
@@ -2024,7 +2024,7 @@ fn invoke_close<'a>(
 }
 
 fn token_instruction<const ACCOUNTS: usize, const DATA: usize>(
-    specification: &dclutch_token_svm::InstructionSpec<ACCOUNTS, DATA>,
+    specification: &dclutch_custody::token_svm::InstructionSpec<ACCOUNTS, DATA>,
 ) -> Instruction {
     let mut accounts = Vec::with_capacity(ACCOUNTS);
     for role in specification.accounts() {
@@ -2106,7 +2106,7 @@ struct PoststateProjection {
 
 fn poststate_commitment(projection: PoststateProjection) -> [u8; 32] {
     hashv(&[
-        dclutch_custody_contract::CUSTODY_POSTSTATE_DOMAIN_V1,
+        dclutch_custody::CUSTODY_POSTSTATE_DOMAIN_V1,
         &projection.request_digest,
         &projection.source,
         &projection.destination,
@@ -2141,7 +2141,7 @@ mod tests {
     /// `trading-sbf/src/custody_composition_v3.rs` in the same change.
     #[test]
     fn the_caller_authority_digest_covers_the_request_prefix_only() {
-        let request = alloc::vec![0x5a_u8; dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1];
+        let request = alloc::vec![0x5a_u8; dclutch_custody::CUSTODY_REQUEST_BYTES_V1];
         let bare = hash(&request).to_bytes();
 
         let mut carried = request.clone();
@@ -2165,8 +2165,8 @@ mod tests {
     #[test]
     fn the_carried_suffix_never_collides_with_another_exact_length() {
         let carried_widths = [
-            dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1,
-            dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1
+            dclutch_custody::CUSTODY_REQUEST_BYTES_V1,
+            dclutch_custody::CUSTODY_REQUEST_BYTES_V1
                 + REGISTRY_CONTINUATION_REQUEST_BYTES_V1,
             DELEGATED_CUSTODY_REQUEST_BYTES_V2,
         ];
@@ -2175,7 +2175,7 @@ mod tests {
         // did before this carrier existed rather than silently dropping it.
         let uncarried_widths = [
             PROJECTED_CUSTODY_REQUEST_BYTES_V1,
-            dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1,
+            dclutch_custody::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1,
         ];
         for width in carried_widths {
             // An exact width is handed on untouched -- no route loses its last
@@ -2260,13 +2260,13 @@ mod tests {
         // as absent rather than as a value certain to fail to reproduce -- in
         // every slot, so a partially mined caller relays what it has and the
         // rest searches.
-        let mut zeroed = alloc::vec![0x11_u8; dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1];
+        let mut zeroed = alloc::vec![0x11_u8; dclutch_custody::CUSTODY_REQUEST_BYTES_V1];
         zeroed.extend_from_slice(&[0, 0, 0]);
         assert_eq!(
             split_caller_authority_bump_v1(&zeroed).1,
             CustodyBumpRelayV1::ABSENT
         );
-        let mut partial = alloc::vec![0x11_u8; dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1];
+        let mut partial = alloc::vec![0x11_u8; dclutch_custody::CUSTODY_REQUEST_BYTES_V1];
         partial.extend_from_slice(&[0xfd, 0, 0xfb]);
         assert_eq!(
             split_caller_authority_bump_v1(&partial).1,
@@ -2346,7 +2346,7 @@ mod tests {
             realm: [0x13; 32],
             context: [0x14; 32],
             caller_program: [0x15; 32],
-            semantic: dclutch_custody_contract::ContextV1 {
+            semantic: dclutch_custody::ContextV1 {
                 candidate: [0x16; 32],
                 source_owner: [0; 32],
                 destination_owner: [0; 32],
@@ -2753,7 +2753,7 @@ mod tests {
             let encoded = release.to_bytes();
             assert_ne!(hash(&encoded).to_bytes(), [0; 32]);
             assert_eq!(
-                dclutch_token_svm::CollateralAdapterReleaseV1::decode(&encoded),
+                dclutch_custody::token_svm::CollateralAdapterReleaseV1::decode(&encoded),
                 Ok(release)
             );
         }

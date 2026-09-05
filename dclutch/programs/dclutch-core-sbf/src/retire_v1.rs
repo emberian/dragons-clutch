@@ -5,21 +5,21 @@
 //! and CloseReplay requests. The adapter authenticates the already-persisted
 //! Resolution closure, invokes Claims then both Custody closes, verifies every
 //! immediate typed receipt and physical poststate, runs the generated
-//! [`dclutch_market_core_codec::retire`] transition on a local candidate, and
+//! [`dclutch_market::retire`] transition on a local candidate, and
 //! closes the Core Market to RentCredit last.
 
 extern crate alloc;
 
 use alloc::{boxed::Box, vec::Vec};
 
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
-use dclutch_claims_svm::market_closure_v1::{
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_claims::market_closure_v1::{
     CLAIMS_MARKET_CLOSURE_POST_RESOURCE_DIGEST_DOMAIN_V1,
     CLAIMS_MARKET_CLOSURE_PRE_RESOURCE_DIGEST_DOMAIN_V1, CLAIMS_MARKET_CLOSURE_RECEIPT_BYTES_V1,
     CLAIMS_MARKET_CLOSURE_REQUEST_BYTES_V1, ClaimsMarketClosureReceiptV1,
     ClaimsMarketClosureRequestV1,
 };
-use dclutch_claims_svm::{
+use dclutch_claims::{
     liability_basis_state_v2::LiabilityBasisMarketViewV2,
     retirement_checkpoint_handoff_v1::{
         CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_POST_DIGEST_DOMAIN_V1,
@@ -29,12 +29,12 @@ use dclutch_claims_svm::{
     },
 };
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CUSTODY_POSTSTATE_DOMAIN_V1, CUSTODY_RECEIPT_BYTES_V1, CUSTODY_REPLAY_BYTES_V1,
     CUSTODY_REQUEST_BYTES_V1, CallerRoleV1, CompartmentV1, CustodyReceiptV1, CustodyReplayV1,
     CustodyRequestV1, OperationV1,
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     AGGREGATE_RETIREMENT_CHECKPOINT_BYTES_V1, AGGREGATE_RETIREMENT_CLOSE_REPLAY_MAGIC_V1,
     AGGREGATE_RETIREMENT_CLOSE_VAULT_MAGIC_V1, AGGREGATE_RETIREMENT_CUSTODY_JOIN_DIGEST_DOMAIN_V1,
     AGGREGATE_RETIREMENT_FINISH_MAGIC_V1, AGGREGATE_RETIREMENT_SUFFIX_REQUEST_BYTES_V1,
@@ -46,13 +46,13 @@ use dclutch_market_core_codec::{
     RETIREMENT_RECEIPT_BYTES_V1, RETIREMENT_ROLE_COUNT_V1, Request, RetirementBundleV1,
     RetirementReceiptInputV1, RetirementReceiptV1, Role, STATE_BYTES, retire,
 };
-use dclutch_registry_svm::continuation_v1::RegistryContinuationRequestV1;
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_rent_contract::lifecycle_v2::{
+use dclutch_registry::svm::continuation_v1::RegistryContinuationRequestV1;
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_market::rent::lifecycle_v2::{
     CloseLifecycleRentCreditV2, LIFECYCLE_RENT_CLOSE_RECEIPT_BYTES_V2, LifecycleAccountIdV2,
     LifecycleRentCloseReceiptV2, LifecycleRentCoreCloseAuthoritySeedsV2, LifecycleRentCreditV2,
 };
-use dclutch_resolution_codec::{
+use dclutch_source::resolution::{
     SOURCE_CLOSURE_RECEIPT_BYTES_V3, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SourceClosureReceiptV3,
 };
 use solana_program::{
@@ -524,7 +524,7 @@ struct ClaimsCheckpointHandoffEvidence {
 fn execute_claims_checkpoint_handoff(
     program_id: &Pubkey,
     frame: RetirementAccounts<'_, '_>,
-    bundle: &dclutch_market_core_codec::RetirementBundleInputV1,
+    bundle: &dclutch_market::RetirementBundleInputV1,
     request_bytes: &[u8],
     parent_digest: [u8; 32],
 ) -> Result<ClaimsCheckpointHandoffEvidence, CoreSbfError> {
@@ -789,7 +789,7 @@ fn authenticate_checkpoint(
         .map_err(|_| CoreSbfError::Market)?;
     let expected_checkpoint = Pubkey::find_program_address(
         &[
-            dclutch_claims_svm::liability_basis_state_v2::LIABILITY_BASIS_MARKET_SEED_V2,
+            dclutch_claims::liability_basis_state_v2::LIABILITY_BASIS_MARKET_SEED_V2,
             frame.market.key.as_ref(),
         ],
         frame.claims_program.key,
@@ -1216,7 +1216,7 @@ fn finish_checkpoint_retirement(
         return Err(CoreSbfError::Transition.into());
     }
     let request = Request::decode(request_bytes).map_err(|_| CoreSbfError::Instruction)?;
-    if request.action != dclutch_market_core_codec::Action::Retire {
+    if request.action != dclutch_market::Action::Retire {
         return Err(CoreSbfError::Instruction.into());
     }
     let bundle = decode_retirement_bundle(bundle_bytes)?;
@@ -1610,7 +1610,7 @@ fn authenticate_market(
     program_id: &Pubkey,
     frame: RetirementAccounts<'_, '_>,
     request: Request,
-    bundle: &dclutch_market_core_codec::RetirementBundleInputV1,
+    bundle: &dclutch_market::RetirementBundleInputV1,
 ) -> Result<CoreState, CoreSbfError> {
     if frame.market.owner != program_id
         || frame.market.data_len() != STATE_BYTES
@@ -1696,7 +1696,7 @@ fn require_custody_request(
     program_id: &Pubkey,
     frame: RetirementAccounts<'_, '_>,
     state: CoreState,
-    bundle: &dclutch_market_core_codec::RetirementBundleInputV1,
+    bundle: &dclutch_market::RetirementBundleInputV1,
     request: CustodyRequestV1,
     request_bytes: &[u8],
     operation: OperationV1,
@@ -1746,7 +1746,7 @@ fn require_custody_request(
 fn authenticate_source_receipt(
     frame: RetirementAccounts<'_, '_>,
     state: CoreState,
-    bundle: &dclutch_market_core_codec::RetirementBundleInputV1,
+    bundle: &dclutch_market::RetirementBundleInputV1,
 ) -> Result<SourceClosureEvidenceV3, CoreSbfError> {
     if frame.source_receipt.owner != frame.resolution_program.key
         || frame.source_receipt.key.to_bytes() != bundle.source_receipt_account
@@ -1808,7 +1808,7 @@ fn authenticate_source_receipt(
 fn execute_claims(
     program_id: &Pubkey,
     frame: RetirementAccounts<'_, '_>,
-    bundle: &dclutch_market_core_codec::RetirementBundleInputV1,
+    bundle: &dclutch_market::RetirementBundleInputV1,
     request_bytes: &[u8],
     parent_digest: [u8; 32],
     continuation: RegistryContinuationRequestV1,
@@ -1915,7 +1915,7 @@ fn execute_close_vault(
     program_id: &Pubkey,
     frame: RetirementAccounts<'_, '_>,
     state: CoreState,
-    bundle: &dclutch_market_core_codec::RetirementBundleInputV1,
+    bundle: &dclutch_market::RetirementBundleInputV1,
     request_bytes: &[u8],
     parent_digest: [u8; 32],
     continuation: RegistryContinuationRequestV1,
@@ -2028,7 +2028,7 @@ fn execute_close_replay(
     program_id: &Pubkey,
     frame: RetirementAccounts<'_, '_>,
     state: CoreState,
-    bundle: &dclutch_market_core_codec::RetirementBundleInputV1,
+    bundle: &dclutch_market::RetirementBundleInputV1,
     request_bytes: &[u8],
     parent_digest: [u8; 32],
     expected_join: CustodyRequestJoin,

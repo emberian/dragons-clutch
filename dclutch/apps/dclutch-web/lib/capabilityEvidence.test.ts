@@ -222,7 +222,7 @@ describe('walls are named and cited, never softened', () => {
 const CLAIMS_PROGRAM_SOURCE = join(repoRoot, 'programs', 'dclutch-claims-sbf', 'src');
 const OPERATOR_PLANNER = join(repoRoot, 'crates', 'dclutch-operator', 'src', 'claims_conservation_v1.rs');
 /** What a Claims-side conservation handler would have to name to exist at all. */
-const CONSERVATION_MARKER = /dclutch_claims_conservation_contract|CLAIMS_CONSERVATION_REQUEST_MAGIC_V1/;
+const CONSERVATION_MARKER = /dclutch_claims::conservation|CLAIMS_CONSERVATION_REQUEST_MAGIC_V1/;
 
 function namesTheConservationWire(path: string): boolean {
   return CONSERVATION_MARKER.test(readFileSync(path, 'utf8'));

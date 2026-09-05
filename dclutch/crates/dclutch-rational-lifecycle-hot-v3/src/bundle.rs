@@ -1,28 +1,28 @@
 //! Content-addressed CapabilityProgram V3 bundle for one lifecycle action.
 
-use dclutch_account_profile_contract::v2::{AccountProfileV2, TYPED_SCALAR_ARTIFACT_PROFILE};
-use dclutch_capability_program_contract::v3::{CAPABILITY_PROGRAM_V3_BYTES, CapabilityProgramV3};
+use dclutch_vm::account_profile::v2::{AccountProfileV2, TYPED_SCALAR_ARTIFACT_PROFILE};
+use dclutch_market::capability_program::v3::{CAPABILITY_PROGRAM_V3_BYTES, CapabilityProgramV3};
 use dclutch_core_contract::ContentId;
-use dclutch_effect_kernel::{
+use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{ProgramV3 as EffectProgramV3, RouteKindV3},
 };
-use dclutch_execution_strategy_contract::v2::{
+use dclutch_market::execution_strategy::v2::{
     ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_PROGRAM_BYTES_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
     ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
-use dclutch_rational_representation_v2_kernel::REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3;
-use dclutch_rational_representation_v2_lifecycle_contract::{
+use dclutch_claims::rational_kernel::REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3;
+use dclutch_claims::rational_lifecycle::{
     LifecycleActionV2,
     hot_v3::{
         RATIONAL_LIFECYCLE_HOT_SCHEMA_RELEASE_ID_V3, RationalLifecycleHotLayoutV3,
         RationalLifecycleHotRegisterLayoutV3,
     },
 };
-use dclutch_request_profile_contract::RequestProfileV1;
-use dclutch_transition_vm::v3::ProgramV3 as TransitionProgramV3;
+use dclutch_vm::request_profile::RequestProfileV1;
+use dclutch_vm::v3::ProgramV3 as TransitionProgramV3;
 use solana_program::hash::hash;
 
 use crate::{
@@ -107,7 +107,7 @@ pub fn build_rational_lifecycle_hot_bundle_v3(
     let transition_id = digest(&transition)?;
     let strategy_value = ExecutionStrategyProgramV2::new(
         StrategyDispositionV2::Interpreted,
-        content(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID)?,
+        content(dclutch_vm::v3::SCHEMA_RELEASE_ID)?,
         transition_id,
         content(EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2)?,
         None,
@@ -127,7 +127,7 @@ pub fn build_rational_lifecycle_hot_bundle_v3(
         content(input.derivation_policy)?,
         content(input.capacity_profile)?,
         digest(&effect)?,
-        content(dclutch_request_profile_contract::SCHEMA_RELEASE_ID)?,
+        content(dclutch_vm::request_profile::SCHEMA_RELEASE_ID)?,
         digest(&request_profile)?,
         content(EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2)?,
         digest(&strategy)?,
@@ -186,13 +186,13 @@ pub fn validate_rational_lifecycle_hot_bundle_v3(
         || descriptor.request_schema().to_bytes() != RATIONAL_LIFECYCLE_HOT_SCHEMA_RELEASE_ID_V3
         || descriptor.account_profile() != digest(&bundle.account_profile)?
         || descriptor.request_profile_schema().to_bytes()
-            != dclutch_request_profile_contract::SCHEMA_RELEASE_ID
+            != dclutch_vm::request_profile::SCHEMA_RELEASE_ID
         || descriptor.request_profile_program() != digest(&bundle.request_profile)?
         || descriptor.transition_schema().to_bytes() != EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2
         || descriptor.transition_program() != digest(&bundle.strategy)?
         || descriptor.effect_program() != digest(&bundle.effect)?
         || strategy.disposition() != StrategyDispositionV2::Interpreted
-        || strategy.transition_schema().to_bytes() != dclutch_transition_vm::v3::SCHEMA_RELEASE_ID
+        || strategy.transition_schema().to_bytes() != dclutch_vm::v3::SCHEMA_RELEASE_ID
         || strategy.transition_program() != digest(&bundle.transition)?
         || account.fixed_account_count() != logical_accounts
         || account.item_account_stride() != 0
@@ -237,9 +237,9 @@ fn account_profile_matches(account: AccountProfileV2<'_>) -> Result<bool> {
     };
     if product_width.account() != 4
         || usize::from(product_width.register())
-            != dclutch_rational_representation_v2_lifecycle_contract::hot_v3::RATIONAL_LIFECYCLE_SCALAR_PRODUCT_OUTCOME_COUNT_V3
+            != dclutch_claims::rational_lifecycle::hot_v3::RATIONAL_LIFECYCLE_SCALAR_PRODUCT_OUTCOME_COUNT_V3
         || usize::try_from(product_width.data_offset()).ok()
-            != Some(dclutch_product_payoff_v2_codec::runtime_v3::BASIS_WIDTH_OFFSET_V3)
+            != Some(dclutch_product::payoff::runtime_v3::BASIS_WIDTH_OFFSET_V3)
     {
         return Ok(false);
     }
@@ -291,7 +291,7 @@ fn narrow_u16(value: usize) -> Result<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_product_payoff_v2_codec::runtime_v3::{
+    use dclutch_product::payoff::runtime_v3::{
         BASIS_HEADER_BYTES_V3, BasisInputV3, BasisKindV3, compile_basis_v3,
     };
 

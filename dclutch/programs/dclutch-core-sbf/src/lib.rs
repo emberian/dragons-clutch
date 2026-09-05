@@ -11,15 +11,15 @@
 
 extern crate alloc;
 
-use dclutch_claims_svm::founding_v5::{
+use dclutch_claims::founding_v5::{
     CLAIMS_FOUNDING_RECEIPT_BYTES_V5, CLAIMS_FOUNDING_RECEIPT_MAGIC_V5,
 };
-use dclutch_claims_svm::market_closure_v1::CLAIMS_MARKET_CLOSURE_REQUEST_BYTES_V1;
-use dclutch_custody_contract::{
+use dclutch_claims::market_closure_v1::CLAIMS_MARKET_CLOSURE_REQUEST_BYTES_V1;
+use dclutch_custody::{
     CUSTODY_REQUEST_BYTES_V1, PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1,
     PROJECTED_CUSTODY_LOCK_RECEIPT_MAGIC_V1,
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     AGGREGATE_RETIREMENT_CLOSE_REPLAY_MAGIC_V1, AGGREGATE_RETIREMENT_CLOSE_VAULT_MAGIC_V1,
     AGGREGATE_RETIREMENT_FINISH_MAGIC_V1, AGGREGATE_RETIREMENT_SUFFIX_REQUEST_BYTES_V1, Action,
     CAPABILITY_FUNDING_HEADER_BYTES_V2, CORE_EFFECT_ENVELOPE_BYTES_V1, CORE_REQUEST_MAGIC,
@@ -32,7 +32,7 @@ use dclutch_market_core_codec::{
     SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_MAGIC_V1, SeriesCoreRequestV1,
     SeriesPermitExpiryRequestV1, SeriesUnallocatedPermitExpiryRequestV1,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     CAPABILITY_EXECUTION_SELECTION_BYTES_V1, CapabilityExecutionSelectionV1,
     INITIALIZE_PROTOCOL_INFRASTRUCTURE_BYTES_V1, INITIALIZE_PROTOCOL_INFRASTRUCTURE_BYTES_V2,
     INITIALIZE_PROTOCOL_INFRASTRUCTURE_MAGIC_V2, InitializeProtocolInfrastructureV1,
@@ -282,10 +282,10 @@ dclutch_refusal_registry::pin_refusal_band!(
 /// Decision 0012: a moved deployment slot means the substrate was upgraded and
 /// this release generation is finished. The remedy is a re-release, not an
 /// investigation, so it does not fold into the generic Release refusal.
-impl From<dclutch_registry_activation_auth_v1::ActivationAuthErrorV1> for CoreSbfError {
-    fn from(value: dclutch_registry_activation_auth_v1::ActivationAuthErrorV1) -> Self {
+impl From<dclutch_registry::activation_auth_v1::ActivationAuthErrorV1> for CoreSbfError {
+    fn from(value: dclutch_registry::activation_auth_v1::ActivationAuthErrorV1) -> Self {
         match value {
-            dclutch_registry_activation_auth_v1::ActivationAuthErrorV1::ReleaseSuperseded => {
+            dclutch_registry::activation_auth_v1::ActivationAuthErrorV1::ReleaseSuperseded => {
                 Self::ReleaseSuperseded
             }
             _ => Self::Release,
@@ -315,13 +315,13 @@ pub fn process_instruction(
         return retire_v1::process_checkpoint_suffix(program_id, accounts, instruction_data);
     }
     if instruction_data.len()
-        == dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1
+        == dclutch_custody::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1
         && instruction_data
-            .get(..dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_MAGIC_V1.len())
-            == Some(dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_MAGIC_V1.as_slice())
+            .get(..dclutch_custody::RETIREMENT_REPLAY_HANDOFF_REQUEST_MAGIC_V1.len())
+            == Some(dclutch_custody::RETIREMENT_REPLAY_HANDOFF_REQUEST_MAGIC_V1.as_slice())
     {
         let request =
-            dclutch_custody_contract::RetirementReplayHandoffRequestV1::decode(instruction_data)
+            dclutch_custody::RetirementReplayHandoffRequestV1::decode(instruction_data)
                 .map_err(|_| CoreSbfError::Instruction)?;
         return retirement_replay_handoff_v1::process(
             program_id,
@@ -565,9 +565,9 @@ pub fn process_instruction(
                     .get(claims_start..)
                     .ok_or(CoreSbfError::Instruction)?;
                 if claims_request_bytes.get(
-                    ..dclutch_claims_svm::retirement_checkpoint_handoff_v1::CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_REQUEST_MAGIC_V1.len(),
+                    ..dclutch_claims::retirement_checkpoint_handoff_v1::CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_REQUEST_MAGIC_V1.len(),
                 ) != Some(
-                    dclutch_claims_svm::retirement_checkpoint_handoff_v1::CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_REQUEST_MAGIC_V1.as_slice(),
+                    dclutch_claims::retirement_checkpoint_handoff_v1::CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_REQUEST_MAGIC_V1.as_slice(),
                 ) {
                     return Err(CoreSbfError::Instruction.into());
                 }

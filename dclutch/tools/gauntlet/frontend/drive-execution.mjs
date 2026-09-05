@@ -226,7 +226,7 @@ const facts = {
   owner: replayInfo.value.owner,
   bytes: replayBytes.length,
   magic: replayBytes.subarray(0, 8).toString('ascii'),
-  // dclutch-custody-contract/src/generated.rs: caller_role at 11, market at 48,
+  // dclutch-custody/src/generated.rs: caller_role at 11, market at 48,
   // rent_refund at 176, next_revision u64 LE at 208.
   callerRole: replayBytes[11],
   market: new PublicKey(replayBytes.subarray(48, 80)).toBase58(),

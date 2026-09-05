@@ -55,16 +55,16 @@
 //! owns and issues no CPI, so its cost is not interesting and a figure here
 //! would be one draw from a bump-search lottery either way.
 
-use dclutch_capability_program_contract::hot_v3::{
+use dclutch_market::capability_program::hot_v3::{
     DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_CAPABILITY_SEAL_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
 };
-use dclutch_capability_seal_contract::{
+use dclutch_vm::capability_seal::{
     CAPABILITY_SEAL_BUMP_OFFSET_V1, CAPABILITY_SEAL_BYTES_V1,
     CAPABILITY_SEAL_CLOSE_NO_BUMP_CANDIDATE_V1, CAPABILITY_SEAL_TRADING_RELEASE_OFFSET_V1,
     CapabilitySealCloseRequestV1, CapabilitySealKeyV1, CapabilitySealRequestV1,
     Error as CapabilitySealError, SealedDescriptorClosureV1,
 };
-use dclutch_direct_codec::execution_v3::DirectExecutionActionV3;
+use dclutch_trading::execution_v3::DirectExecutionActionV3;
 use dclutch_trading_sbf::TradingSbfError;
 use solana_account::{Account, AccountSharedData};
 use solana_compute_budget_interface::ComputeBudgetInstruction;

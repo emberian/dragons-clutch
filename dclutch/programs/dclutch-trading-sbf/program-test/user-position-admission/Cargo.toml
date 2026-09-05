@@ -7,12 +7,10 @@ rust-version = "1.89"
 
 [dependencies]
 dclutch-claims-affine-batch-program-test = { path = "../../../dclutch-claims-sbf/program-test/affine-batch" }
-dclutch-claims-svm = { path = "../../../../crates/dclutch-claims-svm" }
+dclutch-claims = { path = "../../../../crates/dclutch-claims" }
 dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
-dclutch-registry-contract = { path = "../../../../crates/dclutch-registry-contract" }
-dclutch-release-set-contract = { path = "../../../../crates/dclutch-release-set-contract" }
-dclutch-rent-contract = { path = "../../../../crates/dclutch-rent-contract" }
-dclutch-user-position-admission-contract = { path = "../../../../crates/dclutch-user-position-admission-contract" }
+dclutch-registry = { path = "../../../../crates/dclutch-registry" }
+dclutch-market = { path = "../../../../crates/dclutch-market" }
 solana-account = "=4.3.2"
 solana-address-lookup-table-interface = { version = "=3.1.0", features = ["bincode", "bytemuck"] }
 solana-message = "=4.4.1"

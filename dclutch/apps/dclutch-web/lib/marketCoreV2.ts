@@ -63,7 +63,7 @@ import {
  *
  * `DCLTCOR3` is the current Core state: `CORE_STATE_BYTES` fixed bytes emitted
  * by `formal/dclutch-semantics/EmitMarketCoreRust.lean` into
- * `crates/dclutch-market-core-codec/src/generated.rs`, from which every offset
+ * `crates/dclutch-market/src/generated.rs`, from which every offset
  * below is generated rather than retyped. It carries identity, lifecycle, and
  * the source-derived cap on complete principal sets. Earlier devnet Markets
  * were narrower and are incompatible with this generation; the widths they were
@@ -347,7 +347,7 @@ export function deriveClaimsAggregateAddressV2(claimsProgramId: string, marketAd
  * Where one owner's claim balances live.
  *
  * Keyed by the AGGREGATE, not by the Market: `ProtocolPositionSeedsV2` in
- * `dclutch-claims-svm` takes the aggregate account and the owner. Deriving from
+ * `dclutch-claims` takes the aggregate account and the owner. Deriving from
  * the Market instead produces a plausible address that never holds anything.
  */
 export function deriveClaimsPositionAddressV2(claimsProgramId: string, aggregateAddress: string, owner: string): string {

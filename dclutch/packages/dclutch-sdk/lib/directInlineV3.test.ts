@@ -462,7 +462,7 @@ describe('Direct V3 inline transaction construction', () => {
 
   it('pins the exact compact bias-zero native-evidence wire against the Rust codec vector', () => {
     // Expected bytes are the vector asserted by
-    // crates/dclutch-direct-codec/src/native_evidence_v3.rs, test
+    // crates/dclutch-trading/src/native_evidence_v3.rs, test
     // `direct_and_headerless_registry_use_exact_current_instruction_offsets`:
     // 158-byte evidence, Trading-referenced maker/message offsets, self-contained
     // signatures, and

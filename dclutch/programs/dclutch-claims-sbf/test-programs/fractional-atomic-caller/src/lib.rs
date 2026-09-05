@@ -20,14 +20,14 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use dclutch_capability_program_contract::CapabilityRootHeaderV1;
-use dclutch_fractional_claim_contract::{
+use dclutch_market::capability_program::CapabilityRootHeaderV1;
+use dclutch_claims::fractional::{
     FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3, FRACTIONAL_ATOMIC_ROOT_V3,
     FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4, FRACTIONAL_EXPOSURE_REQUEST_BYTES_V2,
     FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3, FRACTIONAL_TERMINAL_ROOT_V3, FractionalAtomicReceiptV3,
     FractionalExposureActionV2, FractionalExposureRequestV2, FractionalTerminalAtomicReceiptV3,
 };
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,

@@ -6,7 +6,7 @@ import { type RpcAccount, type SolanaRpcClient } from './rpc';
 
 /**
  * Exact MakerReplayRootV1 authority mirrored from
- * `crates/dclutch-direct-codec/src/successor.rs` and its generated ABI.
+ * `crates/dclutch-trading/src/successor.rs` and its generated ABI.
  */
 export const DIRECT_MAKER_REPLAY_BYTES_V1 = 160;
 /**

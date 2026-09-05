@@ -41,7 +41,7 @@
 //! more, so a fourth family cannot reintroduce the second search by copying a
 //! third.
 
-use dclutch_release_set_contract::CallerAuthoritySeedsV1;
+use dclutch_registry::release_set::CallerAuthoritySeedsV1;
 use solana_program::{program_error::ProgramError, pubkey::Pubkey};
 
 use crate::TradingSbfError;
@@ -81,7 +81,7 @@ mod tests {
     use super::*;
 
     use dclutch_core_contract::ContentId;
-    use dclutch_release_set_contract::ExecutionRoleV1;
+    use dclutch_registry::release_set::ExecutionRoleV1;
 
     /// A hint that is not this authority's canonical bump names a DIFFERENT
     /// address, which is what every composition's coordinate-0 equality

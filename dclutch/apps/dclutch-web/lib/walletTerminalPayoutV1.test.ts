@@ -25,7 +25,7 @@ import {
  */
 describe('the payout derivation reaches the browser as compiled Rust', () => {
   it('states the settlement frame width and request size from Claims, not from here', () => {
-    // Both are emitted from `dclutch-claims-svm` and pinned again inside the
+    // Both are emitted from `dclutch-claims` and pinned again inside the
     // WASM crate with `const _: () = assert!(...)`. If either moves, the Rust
     // build fails before this test can be wrong.
     expect(TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3).toBe(36);

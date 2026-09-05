@@ -2,13 +2,13 @@
 
 use core::convert::TryFrom;
 
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
-use dclutch_registry_contract::{
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_registry::{
     ARTIFACT_RELEASE_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
     DeploymentObservationV1, require_slot_pinned_release_v1, slot_pinned_release_elf_digest_v1,
 };
-use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
-use dclutch_release_set_contract::{
+use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, ExecutionRoleBindingV1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProtocolInfrastructureProfileV1,
@@ -325,8 +325,8 @@ fn authenticate_immutable_core_release_accounts(
     core_programdata: &AccountInfo<'_>,
     release_set_id: [u8; 32],
 ) -> Result<(), CoreSbfError> {
-    use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
-    use dclutch_release_set_contract::ExecutionRoleV1;
+    use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
+    use dclutch_registry::release_set::ExecutionRoleV1;
 
     let expected_cache = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, &release_set_id],
@@ -544,9 +544,9 @@ fn require_pinned_deployment(
 /// `infrastructure_v2.rs`: a new profile version at its own domain, naming the
 /// records it succeeded. So an operator reading `ReleaseSuperseded` from a
 /// profile-backed route should reach for that ceremony, not for a re-release.
-const fn pinned_deployment_refusal(error: dclutch_registry_contract::Error) -> CoreSbfError {
+const fn pinned_deployment_refusal(error: dclutch_registry::Error) -> CoreSbfError {
     match error {
-        dclutch_registry_contract::Error::ReleaseSupersededByUpgrade => {
+        dclutch_registry::Error::ReleaseSupersededByUpgrade => {
             CoreSbfError::ReleaseSuperseded
         }
         _ => CoreSbfError::Infrastructure,
@@ -753,7 +753,7 @@ mod tests {
     use dclutch_core_contract::ContentId;
 
     use super::*;
-    use dclutch_registry_contract::ArtifactUpgradePolicyV1;
+    use dclutch_registry::ArtifactUpgradePolicyV1;
 
     #[test]
     fn profile_pda_is_per_core_program_and_has_no_caller_seed() {
@@ -834,9 +834,9 @@ mod tests {
         let programdata_key =
             Pubkey::find_program_address(&[program_key.as_ref()], &bpf_loader_upgradeable::ID).0;
         let release = ArtifactReleaseV1::new(
-            dclutch_release_set_contract::ProgramIdentityV1::new(program_key.to_bytes())
+            dclutch_registry::release_set::ProgramIdentityV1::new(program_key.to_bytes())
                 .expect("program"),
-            dclutch_release_set_contract::ProgramIdentityV1::new(
+            dclutch_registry::release_set::ProgramIdentityV1::new(
                 bpf_loader_upgradeable::ID.to_bytes(),
             )
             .expect("loader"),
@@ -912,9 +912,9 @@ mod tests {
                 Pubkey::find_program_address(&[program_key.as_ref()], &bpf_loader_upgradeable::ID)
                     .0;
             let built = ArtifactReleaseV1::new(
-                dclutch_release_set_contract::ProgramIdentityV1::new(program_key.to_bytes())
+                dclutch_registry::release_set::ProgramIdentityV1::new(program_key.to_bytes())
                     .expect("program"),
-                dclutch_release_set_contract::ProgramIdentityV1::new(
+                dclutch_registry::release_set::ProgramIdentityV1::new(
                     bpf_loader_upgradeable::ID.to_bytes(),
                 )
                 .expect("loader"),
@@ -1122,8 +1122,8 @@ mod tests {
     #[test]
     fn immutable_policy_is_required_at_found() {
         let immutable = ArtifactReleaseV1::new(
-            dclutch_release_set_contract::ProgramIdentityV1::new([1; 32]).expect("program"),
-            dclutch_release_set_contract::ProgramIdentityV1::new(
+            dclutch_registry::release_set::ProgramIdentityV1::new([1; 32]).expect("program"),
+            dclutch_registry::release_set::ProgramIdentityV1::new(
                 bpf_loader_upgradeable::ID.to_bytes(),
             )
             .expect("loader"),

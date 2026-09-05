@@ -14,7 +14,7 @@
 //!
 //! WHO OWNS WHAT, so nothing here is an inferred layout:
 //!
-//! - The SIGNED MESSAGE is owned by `dclutch_direct_codec::intent_v2`, emitted
+//! - The SIGNED MESSAGE is owned by `dclutch_trading::intent_v2`, emitted
 //!   from `formal/dclutch-semantics/EmitDirectIntentV2Rust.lean`. This crate
 //!   calls `CompactIntentV2::signed_preimage()`; it does not lay out a byte.
 //! - The JSON ENVELOPE is owned by [`PortableDirectTicketV1`]. Its serde field

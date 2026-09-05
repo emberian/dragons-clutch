@@ -13,7 +13,7 @@ extern crate alloc;
 use alloc::{vec, vec::Vec};
 
 #[cfg(not(target_os = "solana"))]
-use dclutch_account_profile_contract::{
+use dclutch_vm::account_profile::{
     lifecycle_v3::{
         ACTION_PLAN_BYTES as LIFECYCLE_PLAN_BYTES, HEADER_BYTES as LIFECYCLE_HEADER_BYTES,
         IMMUTABLE_IDENTITY_BINDING_BYTES as LIFECYCLE_IDENTITY_BINDING_BYTES,
@@ -49,7 +49,7 @@ use super::{
 };
 
 #[cfg(not(target_os = "solana"))]
-use dclutch_effect_kernel::v3::{
+use dclutch_vm::effect::v3::{
     HEADER_BYTES as EFFECT_HEADER_BYTES, OPERATION_BYTES as EFFECT_OPERATION_BYTES,
     ProgramV3 as EffectProgramV3,
     encode::{
@@ -59,7 +59,7 @@ use dclutch_effect_kernel::v3::{
     },
 };
 #[cfg(not(target_os = "solana"))]
-use dclutch_request_profile_contract::{
+use dclutch_vm::request_profile::{
     HEADER_BYTES as REQUEST_HEADER_BYTES, OPERATION_BYTES as REQUEST_OPERATION_BYTES,
     RequestProfileV1,
     encode::{
@@ -68,7 +68,7 @@ use dclutch_request_profile_contract::{
     },
 };
 #[cfg(not(target_os = "solana"))]
-use dclutch_transition_vm::v3::{
+use dclutch_vm::v3::{
     HEADER_BYTES as TRANSITION_HEADER_BYTES, INSTRUCTION_BYTES as TRANSITION_INSTRUCTION_BYTES,
     IdentityRegisterV3, InstructionV3, ProgramGeometryV3, ProgramV3 as TransitionProgramV3,
     ScalarRegisterV3, encode_program_atomic,
@@ -80,10 +80,10 @@ use super::lp_request::{
 };
 
 #[cfg(not(target_os = "solana"))]
-use dclutch_product_runtime_v2::PORTFOLIO_COEFFICIENT_COUNT_OFFSET;
+use dclutch_product::PORTFOLIO_COEFFICIENT_COUNT_OFFSET;
 
 #[cfg(not(target_os = "solana"))]
-use dclutch_rent_contract::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
+use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
 
 /// Common Hot-injected account count: root/config/Product/portfolio/basis.
 pub const DEALER_LP_INJECTED_ACCOUNTS_V3: u16 = 5;
@@ -387,8 +387,8 @@ pub fn encode_dealer_lp_account_profile_v3(
     // lifecycle-bound state and a readonly opaque native-program body in one
     // semantic owner. No dynamic account coordinates are introduced here.
     let bytes = DYNAMIC_FIXED_SPAN_HEADER_BYTES
-        + usize::from(count) * dclutch_account_profile_contract::v2::RULE_BYTES
-        + operations.len() * dclutch_account_profile_contract::v2::OPERATION_BYTES;
+        + usize::from(count) * dclutch_vm::account_profile::v2::RULE_BYTES
+        + operations.len() * dclutch_vm::account_profile::v2::OPERATION_BYTES;
     let mut scratch = vec![0; bytes];
     let mut output = vec![0; bytes];
     encode_account_profile_with_dynamic_fixed_span_v2_atomic(
@@ -888,7 +888,7 @@ pub fn encode_dealer_lp_effect_v3(
 #[cfg(all(test, not(target_os = "solana")))]
 mod tests {
     use super::*;
-    use dclutch_account_profile_contract::v2::PhysicalAccountDataGeometryV2;
+    use dclutch_vm::account_profile::v2::PhysicalAccountDataGeometryV2;
 
     fn lengths(action: MultiLpRequestActionV3) -> Vec<u32> {
         let mut output = vec![0; usize::from(dealer_lp_account_count_v3(action))];
@@ -931,7 +931,7 @@ mod tests {
     /// shows up.
     #[test]
     fn the_lp_frame_reuses_slot_seven_with_disjoint_permissions() {
-        use dclutch_account_profile_contract::{
+        use dclutch_vm::account_profile::{
             EFFECT_PERMISSION_CREDIT_LAMPORTS, EFFECT_PERMISSION_DEBIT_LAMPORTS,
         };
         let decoded = |action: MultiLpRequestActionV3| {

@@ -32,8 +32,8 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use dclutch_registry_contract::{ARTIFACT_RELEASE_BYTES_V1, ActivatedExecutionReleaseSetV1};
-use dclutch_release_set_contract::{EXECUTION_RELEASE_SET_BYTES_V1, ExecutionRoleV1};
+use dclutch_registry::{ARTIFACT_RELEASE_BYTES_V1, ActivatedExecutionReleaseSetV1};
+use dclutch_registry::release_set::{EXECUTION_RELEASE_SET_BYTES_V1, ExecutionRoleV1};
 use dclutch_release_tool::{
     CHECKED_INFRASTRUCTURE_BYTES_V1, CHECKED_INFRASTRUCTURE_COMPONENTS_V1,
     CHECKED_INFRASTRUCTURE_HEADER_BYTES_V1, CHECKED_INFRASTRUCTURE_MAGIC_V1,
@@ -957,7 +957,7 @@ pub(crate) fn run_hot_route_manifest(arguments: Vec<String>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_capability_program_contract::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3;
+    use dclutch_market::capability_program::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3;
     use solana_program::pubkey::Pubkey;
 
     #[test]

@@ -399,7 +399,7 @@ The claim was: every route that can put a terminal receipt on a Market consumes
 a `SourceResolutionStateV2`; the **only** route that creates one is
 `core/resolution::process#CreateFund`; its phase gate admitted
 `Founding+Prepaid` and nothing else; and `DCLTGMF1`'s commit-last
-`open_series_market` (`crates/dclutch-market-core-codec/src/generated.rs:922`)
+`open_series_market` (`crates/dclutch-market/src/generated.rs:922`)
 goes `Founding+Prepaid -> Open+Consumed` in **one** transition, never passing
 through `Ready`. So the atomic founding closed the resolution door behind
 itself.

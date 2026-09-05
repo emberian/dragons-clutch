@@ -3,9 +3,9 @@
 use std::io::{self, Read};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use dclutch_pyth_svm::devnet_release_v1;
-use dclutch_record_contract::RAW_RECORD_PDA_SEED_V1;
-use dclutch_resolution_codec::{
+use dclutch_source::pyth::devnet_release_v1;
+use dclutch_registry::record::RAW_RECORD_PDA_SEED_V1;
+use dclutch_source::resolution::{
     PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
     ProviderSubmitRequestV3, ProviderUpdateLifecycleV3, ResolutionCertificateKindV2,
     ResolutionCertificateV2,

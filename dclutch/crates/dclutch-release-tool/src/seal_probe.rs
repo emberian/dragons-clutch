@@ -15,8 +15,8 @@
 //! rather than the body: that this Program owns it, and that the release it is
 //! sealed under is not the one that will be live at the cut.
 
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
-use dclutch_capability_seal_contract::{
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_vm::capability_seal::{
     CapabilitySealKeyV1, Error as CapabilitySealError, SealedDescriptorClosureV1,
 };
 use solana_program::pubkey::Pubkey;
@@ -326,7 +326,7 @@ fn parse_account_data_v1(account: &serde_json::Value) -> Result<Vec<u8>, String>
 mod tests {
     use super::{SealAccountDumpV1, probe_defunct_seal_v1};
     use base64::Engine as _;
-    use dclutch_capability_seal_contract::{
+    use dclutch_vm::capability_seal::{
         CAPABILITY_SEAL_BUMP_OFFSET_V1, CAPABILITY_SEAL_BYTES_V1, CapabilitySealKeyV1,
         Error as CapabilitySealError, SealedDescriptorClosureV1, SealedRecordRowV1, SealedRoleV1,
     };

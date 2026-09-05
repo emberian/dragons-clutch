@@ -50,8 +50,8 @@ use dclutch_operator::{
         build_registry_declare_successor_v1, declare_successor_frame_addresses_v1,
     },
 };
-use dclutch_registry_contract::{RELEASE_LINEAGE_BYTES_V1, ReleaseLineageV1};
-use dclutch_release_set_contract::EXECUTION_ROLE_ORDER_V1;
+use dclutch_registry::{RELEASE_LINEAGE_BYTES_V1, ReleaseLineageV1};
+use dclutch_registry::release_set::EXECUTION_ROLE_ORDER_V1;
 use serde_json::json;
 use solana_sdk::{pubkey::Pubkey, signature::Keypair, signer::Signer};
 use solana_sdk_ids::{system_program, sysvar};

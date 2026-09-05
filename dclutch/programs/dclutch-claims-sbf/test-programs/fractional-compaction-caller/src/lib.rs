@@ -53,15 +53,15 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use dclutch_capability_program_contract::CapabilityRootHeaderV1;
-use dclutch_claims_svm::fractional_claim_check_compaction_receipt_v1::FractionalClaimCheckCompactionReceiptV1;
-use dclutch_claims_svm::fractional_claim_check_compaction_request_v1::{
+use dclutch_market::capability_program::CapabilityRootHeaderV1;
+use dclutch_claims::fractional_claim_check_compaction_receipt_v1::FractionalClaimCheckCompactionReceiptV1;
+use dclutch_claims::fractional_claim_check_compaction_request_v1::{
     FRACTIONAL_COMPACT_TO_CLAIM_CHECK_BYTES_V1, FractionalCompactToClaimCheckRequestV1,
 };
-use dclutch_claims_svm::fractional_claim_check_v1::{
+use dclutch_claims::fractional_claim_check_v1::{
     FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1, FractionalCompactionRoleV1,
 };
-use dclutch_fractional_claim_contract::FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4;
+use dclutch_claims::fractional::FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4;
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,

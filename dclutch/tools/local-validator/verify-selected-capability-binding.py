@@ -53,7 +53,7 @@ MARKET_STATE_SEED = b"dclutch/market-core/state/v2"
 MARKET_MAGIC = b"DCLTCOR3"
 MANIFEST_MAGIC = b"DCLTCAP1"
 
-# DCLTCOR3, from crates/dclutch-market-core-codec/src/generated.rs.
+# DCLTCOR3, from crates/dclutch-market/src/generated.rs.
 MARKET_REALM = 48
 MARKET_PRODUCT_RECORD = 80
 MARKET_PRODUCT_ID = 112
@@ -63,7 +63,7 @@ MARKET_SELECTED_RELEASE_SET = 208
 MARKET_REGISTRY = 240
 MARKET_GENERATION = 272
 
-# CapabilityManifestV1, from crates/dclutch-capability-contract/src/generated_abi.rs.
+# CapabilityManifestV1, from crates/dclutch-market/src/capability_manifest/generated_abi.rs.
 MANIFEST_HEADER = 16
 MANIFEST_ENTRY_BYTES = 528
 ENTRY_KIND = 0
@@ -73,13 +73,13 @@ ENTRY_CAPACITY = 96
 ENTRY_CHILD_SCHEMA = 128
 ENTRY_CHILD_DERIVATION = 160
 
-# CapabilityProgramV4, from crates/dclutch-capability-program-contract/src/generated_v4.rs.
+# CapabilityProgramV4, from crates/dclutch-market/src/capability_program/generated_v4.rs.
 V4_KIND = 16
 V4_ROOT_SCHEMA = 112
 V4_DERIVATION_POLICY = 144
 V4_CAPACITY_PROFILE = 176
 
-# TokenBehaviorSelectionV2, from crates/dclutch-token-svm/src/behavior_binding_v2.rs.
+# TokenBehaviorSelectionV2, from crates/dclutch-custody/src/token_svm/behavior_binding_v2.rs.
 CONFIG_REALM = 16
 
 # Publication identity block: magic(8) + version(2) + pad, identities from 16.

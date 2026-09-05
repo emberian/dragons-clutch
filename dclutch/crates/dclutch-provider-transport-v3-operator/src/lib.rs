@@ -3,33 +3,33 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-use dclutch_market_core_codec::{
+use dclutch_market::{
     Action, CoreState, Identity, Phase as CorePhase, Readiness, Request,
 };
-use dclutch_product_runtime_v2_admission::{
+use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
     RESULT_DOMAIN_SCHEMA_ID_V2,
 };
-use dclutch_pyth_svm::{PostUpdateParamsView, PythReleaseV1, VerifiedEncodedVaaV1};
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1};
-use dclutch_release_set_contract::{
+use dclutch_source::pyth::{PostUpdateParamsView, PythReleaseV1, VerifiedEncodedVaaV1};
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1};
+use dclutch_registry::release_set::{
     CallerAuthoritySeedsV1, ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2,
     ProtocolInfrastructureProfileV2,
 };
 #[cfg(feature = "transaction-planning")]
-use dclutch_resolution_codec::{
+use dclutch_source::resolution::{
     PROVIDER_EXECUTION_REQUEST_BYTES_V3, PROVIDER_RECLAIM_REQUEST_BYTES_V3,
     PROVIDER_SUBMIT_REQUEST_BYTES_V3,
 };
-use dclutch_resolution_codec::{
+use dclutch_source::resolution::{
     PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3, PROVIDER_RESOLUTION_RECOVERY_TAIL_ACCOUNTS_V3,
     PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
     PYTH_RELEASE_RECORD_SCHEMA_ID_V1, ProviderAbandonRequestV3, ProviderCallerV3,
     ProviderExecutionRequestV3, ProviderReclaimRequestV3, ProviderSubmitRequestV3,
     ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
 };
-use dclutch_source_contract::{
+use dclutch_source::{
     PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, RECOVERY_POLICY_SCHEMA_ID_V2,
     RecoveryPolicyV2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_SPEC_SCHEMA_ID_V1,
     STATISTIC_SPEC_SCHEMA_ID_V1, SourceMaterialV3, SourceResolutionPhaseV1,
@@ -281,7 +281,7 @@ pub fn derive_provider_submit_pyth_release_coordinates_v3(
         PROVIDER_RELEASE_SCHEMA_ID_V1,
         hash(&provider_release.data).to_bytes(),
     )?;
-    let provider = dclutch_source_contract::ProviderReleaseV1::decode(&provider_release.data)
+    let provider = dclutch_source::ProviderReleaseV1::decode(&provider_release.data)
         .map_err(|_| ProviderTransportOperatorErrorV3::Record)?;
     Ok(record_pair(
         registry,
@@ -666,7 +666,7 @@ pub fn build_provider_submit_v3(
         source_spec.provider_release_id().to_bytes(),
     )?;
     let provider =
-        dclutch_source_contract::ProviderReleaseV1::decode(&snapshot.source_provider_release.data)
+        dclutch_source::ProviderReleaseV1::decode(&snapshot.source_provider_release.data)
             .map_err(|_| ProviderTransportOperatorErrorV3::Record)?;
     let pyth_id = provider.provider_deployment_release_id().to_bytes();
     authenticate_raw(
@@ -981,7 +981,7 @@ pub fn build_provider_execute_v3(
         source_spec.provider_release_id().to_bytes(),
     )?;
     let source_provider =
-        dclutch_source_contract::ProviderReleaseV1::decode(&snapshot.source_provider_release.data)
+        dclutch_source::ProviderReleaseV1::decode(&snapshot.source_provider_release.data)
             .map_err(|_| ProviderTransportOperatorErrorV3::Record)?;
     authenticate_raw(
         registry,
@@ -1684,7 +1684,7 @@ fn validate_execute_report(
     report: &ProviderTransportReportV3,
 ) -> Result<ProviderExecutionRequestV3, ProviderTransportTransactionErrorV3> {
     let accounts = &report.instruction.accounts;
-    let core_end = dclutch_market_core_codec::REQUEST_BYTES;
+    let core_end = dclutch_market::REQUEST_BYTES;
     let provider_end = core_end
         .checked_add(PROVIDER_EXECUTION_REQUEST_BYTES_V3)
         .ok_or(ProviderTransportTransactionErrorV3::Frame)?;
@@ -1962,7 +1962,7 @@ mod tests {
         let core = Request::administrative(
             Action::ExecuteProvider,
             7,
-            dclutch_market_core_codec::Identity::new(accounts[4].pubkey.to_bytes())
+            dclutch_market::Identity::new(accounts[4].pubkey.to_bytes())
                 .expect("market identity"),
         );
         let core_bytes = core.encode().expect("Core request");
@@ -2201,8 +2201,8 @@ mod tests {
     fn the_execute_caller_authority_is_derived_in_exactly_one_place() {
         let report = execute_report();
         let request = ProviderExecutionRequestV3::decode(
-            &report.instruction.data[dclutch_market_core_codec::REQUEST_BYTES
-                ..dclutch_market_core_codec::REQUEST_BYTES + PROVIDER_EXECUTION_REQUEST_BYTES_V3],
+            &report.instruction.data[dclutch_market::REQUEST_BYTES
+                ..dclutch_market::REQUEST_BYTES + PROVIDER_EXECUTION_REQUEST_BYTES_V3],
         )
         .expect("execution request");
         let (core_bytes, caller_authority) = provider_execute_caller_authority_v3(
@@ -2276,7 +2276,7 @@ mod tests {
             PROVIDER_EXECUTE_ACCOUNT_COUNT_V3
         );
         assert!(distinct(&report.instruction.accounts));
-        assert_eq!(dclutch_market_core_codec::REQUEST_BYTES, 72);
+        assert_eq!(dclutch_market::REQUEST_BYTES, 72);
         assert_eq!(PROVIDER_EXECUTION_REQUEST_BYTES_V3, 608);
         assert_eq!(report.instruction.data.len(), 774);
         assert_eq!(

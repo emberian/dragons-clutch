@@ -347,8 +347,8 @@ mod tests {
         ObservationCycle {
             set_name: "dbc".to_owned(),
             account_set_id: [0x5a; ID_BYTES],
-            observed_cluster_id: dclutch_relay_contract::SOLANA_MAINNET_GENESIS_HASH_V1,
-            relay_family_id: dclutch_relay_contract::RELAYED_FAMILY_RELEASE_ID_V1,
+            observed_cluster_id: dclutch_source::relay::SOLANA_MAINNET_GENESIS_HASH_V1,
+            relay_family_id: dclutch_source::relay::RELAYED_FAMILY_RELEASE_ID_V1,
             decoding_rules_id: [0x11; ID_BYTES],
             observed_slot: 423_941_138,
             set_count: 1,
@@ -361,13 +361,13 @@ mod tests {
                 data_len: 4,
                 inline: vec![1, 2, 3, 4],
                 executable: false,
-                tail_digest: dclutch_relay_contract::SHA256_EMPTY_DIGEST,
+                tail_digest: dclutch_source::relay::SHA256_EMPTY_DIGEST,
                 tail_digest_source: TailDigestSource::FullyInline,
                 body_bytes: vec![0xAA; 116],
                 message_bytes: vec![0xBB; 272],
                 signature: [0xCC; 64],
             }],
-            seal_bytes: [0xDD; dclutch_relay_contract::RELAYED_SEAL_BYTES],
+            seal_bytes: [0xDD; dclutch_source::relay::RELAYED_SEAL_BYTES],
             seal_signature: [0xEE; 64],
             signer: [0x99; ID_BYTES],
             raw_batch: serde_json::json!({"context": {"slot": 423_941_138}, "value": []}),
@@ -402,7 +402,7 @@ mod tests {
         );
         assert_eq!(
             std::fs::read(written.join("seal.bin")).expect("seal").len(),
-            dclutch_relay_contract::RELAYED_SEAL_BYTES
+            dclutch_source::relay::RELAYED_SEAL_BYTES
         );
         assert_eq!(
             std::fs::read_to_string(written.join("observed_slot.txt")).expect("slot"),

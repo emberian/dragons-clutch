@@ -44,8 +44,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use dclutch_claims_svm::liability_basis_state_v2::LiabilityBasisMarketViewV2;
-use dclutch_custody_contract::PROJECTED_HOARD_CONTEXT_DOMAIN_V1;
+use dclutch_claims::liability_basis_state_v2::LiabilityBasisMarketViewV2;
+use dclutch_custody::PROJECTED_HOARD_CONTEXT_DOMAIN_V1;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -589,7 +589,7 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
     // chain state. Nothing is taken from a flag, and the founding checkpoint's
     // permit scalar is carried for the record only.
     let market_account = rpc.required_account(market, "founding Market")?;
-    let market_state = dclutch_market_core_codec::CoreState::decode(&market_account.data)
+    let market_state = dclutch_market::CoreState::decode(&market_account.data)
         .map_err(|error| refusal("chain/market", format!("Core Market state: {error:?}")))?;
     if market_account.owner != pubkey(&plan.core.program_id)? {
         return Err(refusal(

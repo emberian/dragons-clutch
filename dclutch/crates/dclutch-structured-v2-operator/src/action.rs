@@ -1,10 +1,10 @@
 //! Chain-derived issue, unwrap, terminal-redeem, and retire planning.
 
-use dclutch_fractional_claim_kernel::FractionalExposureTermsV2;
-use dclutch_structured_v2_contract::{
+use dclutch_claims::fractional_kernel::FractionalExposureTermsV2;
+use dclutch_claims::structured::{
     StructuredActionV2, StructuredHotTokenKindV2, StructuredRequestInputV2, StructuredRequestV2,
 };
-use dclutch_structured_v2_kernel::{
+use dclutch_claims::structured_kernel::{
     ReceiptEffectV2, STRUCTURED_NO_COORDINATE_V2, ShardMovementV2,
     StructuredCoordinateObservationV2, StructuredPhaseV2, StructuredProjectionV2,
     StructuredSettlementRowV2, StructuredTermsV2, encode_structured_projection_v2,

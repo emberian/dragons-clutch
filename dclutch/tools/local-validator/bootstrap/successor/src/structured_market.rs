@@ -111,11 +111,11 @@ pub(crate) fn structured_selected_closure_v1(
 /// The complete capability-root width the closure's own descriptor names.
 #[cfg_attr(not(test), allow(dead_code))]
 fn structured_root_bytes_v1(closure: &StructuredSelectedClosureBytesV1) -> Result<usize> {
-    let descriptor = dclutch_capability_program_contract::v4::CapabilityProgramV4::decode(
+    let descriptor = dclutch_market::capability_program::v4::CapabilityProgramV4::decode(
         &closure.selected_descriptor,
     )
     .map_err(|error| Error::new(format!("Structured selected descriptor: {error:?}")))?;
-    dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1
+    dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1
         .checked_add(
             usize::try_from(descriptor.root_state_bytes())
                 .map_err(|_| Error::new("Structured root state width overflow"))?,
@@ -243,7 +243,7 @@ mod tests {
     }
 
     fn basis() -> Vec<u8> {
-        use dclutch_product_payoff_v2_codec::runtime_v3::{
+        use dclutch_product::payoff::runtime_v3::{
             BASIS_HEADER_BYTES_V3, BasisInputV3, BasisKindV3, compile_basis_v3,
         };
         let mut output = [0_u8; BASIS_HEADER_BYTES_V3];

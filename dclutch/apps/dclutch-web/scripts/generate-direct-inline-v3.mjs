@@ -53,53 +53,53 @@ function relabel(rust, aliases) {
 // below reads these same strings, so a source that moves cannot be checked
 // against a stale copy of where it used to live.
 const SOURCE_FILES = Object.freeze({
-  hot: 'crates/dclutch-capability-program-contract/src/hot_v3.rs',
-  descriptor: 'crates/dclutch-capability-program-contract/src/generated_v3.rs',
-  descriptorContract: 'crates/dclutch-capability-program-contract/src/v3.rs',
-  descriptorV4: 'crates/dclutch-capability-program-contract/src/generated_v4.rs',
-  descriptorContractV4: 'crates/dclutch-capability-program-contract/src/v4.rs',
-  root: 'crates/dclutch-capability-program-contract/src/generated.rs',
-  rootContract: 'crates/dclutch-capability-program-contract/src/lib.rs',
-  selection: 'crates/dclutch-release-set-contract/src/generated_capability_execution.rs',
-  manifest: 'crates/dclutch-capability-contract/src/generated_abi.rs',
-  set: 'crates/dclutch-capability-program-contract/src/generated_set_v1.rs',
-  setV2: 'crates/dclutch-capability-program-contract/src/generated_set_v2.rs',
-  direct: 'crates/dclutch-direct-codec/src/execution_v3.rs',
-  nativeEvidence: 'crates/dclutch-direct-codec/src/native_evidence_v3.rs',
-  intent: 'crates/dclutch-direct-codec/src/generated_intent_v2.rs',
-  ordinary: 'crates/dclutch-direct-codec/src/generated_ordinary_v3.rs',
-  ordinaryArtifacts: 'crates/dclutch-direct-codec/src/ordinary_artifacts_v3.rs',
-  ordinaryBundle: 'crates/dclutch-direct-codec/src/ordinary_bundle_v4.rs',
-  successor: 'crates/dclutch-direct-codec/src/successor.rs',
-  successorGenerated: 'crates/dclutch-direct-codec/src/generated_successor.rs',
-  account: 'crates/dclutch-account-profile-contract/src/v2.rs',
-  accountProfile14: 'crates/dclutch-account-profile-contract/src/v2/generated_profile14.rs',
-  request: 'crates/dclutch-request-profile-contract/src/v2.rs',
-  requestGenerated: 'crates/dclutch-request-profile-contract/src/generated.rs',
-  transition: 'crates/dclutch-transition-vm/src/v3.rs',
+  hot: 'crates/dclutch-market/src/capability_program/hot_v3.rs',
+  descriptor: 'crates/dclutch-market/src/capability_program/generated_v3.rs',
+  descriptorContract: 'crates/dclutch-market/src/capability_program/v3.rs',
+  descriptorV4: 'crates/dclutch-market/src/capability_program/generated_v4.rs',
+  descriptorContractV4: 'crates/dclutch-market/src/capability_program/v4.rs',
+  root: 'crates/dclutch-market/src/capability_program/generated.rs',
+  rootContract: 'crates/dclutch-market/src/capability_program/mod.rs',
+  selection: 'crates/dclutch-registry/src/release_set/generated_capability_execution.rs',
+  manifest: 'crates/dclutch-market/src/capability_manifest/generated_abi.rs',
+  set: 'crates/dclutch-market/src/capability_program/generated_set_v1.rs',
+  setV2: 'crates/dclutch-market/src/capability_program/generated_set_v2.rs',
+  direct: 'crates/dclutch-trading/src/execution_v3.rs',
+  nativeEvidence: 'crates/dclutch-trading/src/native_evidence_v3.rs',
+  intent: 'crates/dclutch-trading/src/generated_intent_v2.rs',
+  ordinary: 'crates/dclutch-trading/src/generated_ordinary_v3.rs',
+  ordinaryArtifacts: 'crates/dclutch-trading/src/ordinary_artifacts_v3.rs',
+  ordinaryBundle: 'crates/dclutch-trading/src/ordinary_bundle_v4.rs',
+  successor: 'crates/dclutch-trading/src/successor.rs',
+  successorGenerated: 'crates/dclutch-trading/src/generated_successor.rs',
+  account: 'crates/dclutch-vm/src/account_profile/v2.rs',
+  accountProfile14: 'crates/dclutch-vm/src/account_profile/v2/generated_profile14.rs',
+  request: 'crates/dclutch-vm/src/request_profile/v2.rs',
+  requestGenerated: 'crates/dclutch-vm/src/request_profile/generated.rs',
+  transition: 'crates/dclutch-vm/src/v3.rs',
   // The effect kernel has three live generations and their names do not track
   // their preimages: `v3.rs`'s schema preimage reads
   // `effect-program-v4-ordered-receipt-dependencies-v1`, while `v4.rs`'s reads
   // `effect-program-v5-...`. Both are emitted, under names that say which
   // generation they are, because the two are not interchangeable: every current
-  // authenticator binds V4 (`dclutch-direct-codec/src/artifacts_v4.rs`,
+  // authenticator binds V4 (`dclutch-trading/src/artifacts_v4.rs`,
   // `dclutch-rational-lifecycle-hot-v3/src/selected_bundle_v6.rs`), and V3 is
   // kept only so the explorer can still name records published before cohort-8.
   // Which of the two the route binds is no longer a comment's word: the gate
   // below walks the route's own use-tree to the defining file.
-  effect: 'crates/dclutch-effect-kernel/src/v3.rs',
-  effectV4: 'crates/dclutch-effect-kernel/src/v4.rs',
-  lifecycle: 'crates/dclutch-account-profile-contract/src/lifecycle_v3.rs',
-  strategy: 'crates/dclutch-execution-strategy-contract/src/v2.rs',
-  strategyGenerated: 'crates/dclutch-execution-strategy-contract/src/generated_v2.rs',
+  effect: 'crates/dclutch-vm/src/effect/v3.rs',
+  effectV4: 'crates/dclutch-vm/src/effect/v4.rs',
+  lifecycle: 'crates/dclutch-vm/src/account_profile/lifecycle_v3.rs',
+  strategy: 'crates/dclutch-market/src/execution_strategy/v2.rs',
+  strategyGenerated: 'crates/dclutch-market/src/execution_strategy/generated_v2.rs',
   // The `DCLTPAY3` layout scalars this generator scrapes are Lean-emitted
   // and live in `generated_runtime_v3.rs`; `runtime_v3.rs` `include!`s that
   // file and keeps only private aliases whose right-hand sides are names,
   // not numbers, so the scalar regex below cannot see them there. Reading
   // the emitted file directly also points this mirror at the actual
   // authority rather than at a handwritten restatement of it.
-  basis: 'crates/dclutch-product-payoff-v2-codec/src/generated_runtime_v3.rs',
-  basisGenerated: 'crates/dclutch-product-payoff-v2-codec/src/generated_admission_v3.rs',
+  basis: 'crates/dclutch-product/src/payoff/generated_runtime_v3.rs',
+  basisGenerated: 'crates/dclutch-product/src/payoff/generated_admission_v3.rs',
 });
 
 function readCrateFile(file) {
@@ -129,8 +129,8 @@ const sources = Object.freeze(Object.fromEntries(
  * constant to be the ones scraped here. Layout scalars need no gate: an
  * offset that moves breaks the byte gate loudly.
  */
-const ROUTE_FILE = 'crates/dclutch-direct-codec/src/artifacts_v4.rs';
-const ROUTE_CRATE = 'dclutch_direct_codec';
+const ROUTE_FILE = 'crates/dclutch-trading/src/artifacts_v4.rs';
+const ROUTE_CRATE = 'dclutch_trading';
 const routeText = readCrateFile(ROUTE_FILE);
 
 const ROUTE_BOUND_AUTHORITIES = Object.freeze([
@@ -181,8 +181,8 @@ const ROUTE_BOUND_AUTHORITIES = Object.freeze([
   {
     // The route spells this one as a full path in the conjunct rather than
     // binding it in a use-tree, so there is no alias to resolve.
-    qualified: 'dclutch_transition_vm::v3::SCHEMA_RELEASE_ID',
-    conjunct: 'descriptor.transition().schema().to_bytes() != dclutch_transition_vm::v3::SCHEMA_RELEASE_ID',
+    qualified: 'dclutch_vm::v3::SCHEMA_RELEASE_ID',
+    conjunct: 'descriptor.transition().schema().to_bytes() != dclutch_vm::v3::SCHEMA_RELEASE_ID',
     source: 'transition', sourceConstant: 'SCHEMA_RELEASE_ID',
   },
   {
@@ -251,8 +251,8 @@ function moduleFile(source, moduleName) {
   const file = sourcePath(source);
   const attributed = text.match(new RegExp(`#\\[path = "([^"]+)"\\][^;]*?\\bmod ${moduleName};`));
   if (attributed) return siblingOf(file, attributed[1]);
-  const renamed = text.match(new RegExp(`use crate::([a-z_0-9]+) as ${moduleName};`));
-  if (renamed) return `${file.slice(0, file.indexOf('/src/'))}/src/${renamed[1]}.rs`;
+  const renamed = text.match(new RegExp(`use crate::([a-z_0-9:]+) as ${moduleName};`));
+  if (renamed) return `${file.slice(0, file.indexOf('/src/'))}/src/${renamed[1].replace(/::/g, '/')}.rs`;
   if (new RegExp(`^[ \\t]*(?:pub(?:\\([^)]*\\))? )?mod ${moduleName};`, 'm').test(text)) {
     // A plain `mod m;` in `foo.rs` is `foo/m.rs`, and in a crate or directory
     // root it is the sibling `m.rs`. Getting this wrong reads a file that does

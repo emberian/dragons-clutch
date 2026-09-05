@@ -11,7 +11,7 @@ extern crate alloc;
 
 use alloc::{vec, vec::Vec};
 
-use dclutch_account_profile_contract::{
+use dclutch_vm::account_profile::{
     lifecycle_v3::StateLifecyclePolicyV5,
     v2::{
         AccountPrestateV2, AccountProfileV2, DYNAMIC_FIXED_SPAN_HEADER_BYTES, OPERATION_BYTES,
@@ -28,13 +28,13 @@ use dclutch_account_profile_contract::{
         HEADER_BYTES_V3, encode_account_profile_v3_atomic,
     },
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_GENERATION_OFFSET, CAPABILITY_ROOT_MARKET_OFFSET,
     CAPABILITY_ROOT_SELECTION_OFFSET,
     hot_v3::{HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3, HOT_RUNTIME_PORTFOLIO_COORDINATE_V3},
 };
-use dclutch_custody_contract::ProjectedCustodyRequestLayoutV1;
-use dclutch_effect_kernel::{
+use dclutch_custody::ProjectedCustodyRequestLayoutV1;
+use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{
         HEADER_BYTES as EFFECT_HEADER_BYTES_V3, OPERATION_BYTES as EFFECT_OPERATION_BYTES_V3,
@@ -55,13 +55,13 @@ use dclutch_effect_kernel::{
         encode_program_v5_atomic,
     },
 };
-use dclutch_product_runtime_v2::{PORTFOLIO_COEFFICIENT_COUNT_OFFSET, PORTFOLIO_HEADER_BYTES};
-use dclutch_release_set_contract::{
+use dclutch_product::{PORTFOLIO_COEFFICIENT_COUNT_OFFSET, PORTFOLIO_HEADER_BYTES};
+use dclutch_registry::release_set::{
     CAPABILITY_EXECUTION_SELECTION_CONFIG_OFFSET,
     CAPABILITY_EXECUTION_SELECTION_ENTRY_INDEX_OFFSET, CAPABILITY_EXECUTION_SELECTION_KIND_OFFSET,
     CAPABILITY_EXECUTION_SELECTION_MANIFEST_OFFSET, CAPABILITY_EXECUTION_SELECTION_RELEASE_OFFSET,
 };
-use dclutch_request_profile_contract::{
+use dclutch_vm::request_profile::{
     HEADER_BYTES as REQUEST_HEADER_BYTES, OPERATION_BYTES as REQUEST_OPERATION_BYTES,
     RequestProfileV1,
     encode::{
@@ -69,7 +69,7 @@ use dclutch_request_profile_contract::{
         ScalarRegisterV1, encode_request_profile_v1_atomic,
     },
 };
-use dclutch_transition_vm::v3::{
+use dclutch_vm::v3::{
     HEADER_BYTES as TRANSITION_HEADER_BYTES, INSTRUCTION_BYTES as TRANSITION_INSTRUCTION_BYTES,
     InstructionV3, ProgramGeometryV3, ProgramV3 as TransitionProgramV3, ScalarRegisterV3,
     encode_program_atomic,
@@ -295,13 +295,13 @@ fn account_rule(
             AccountPrestateV2::Exact,
         ),
         1 => (
-            dclutch_series_v3_kernel::SERIES_TEMPLATE_BYTES_V3 as u32,
+            dclutch_trading::series::SERIES_TEMPLATE_BYTES_V3 as u32,
             0,
             AccountPrestateV2::Exact,
         ),
         3 => (
             PORTFOLIO_HEADER_BYTES as u32,
-            dclutch_product_runtime_v2::PORTFOLIO_COEFFICIENT_BYTES as u32,
+            dclutch_product::PORTFOLIO_COEFFICIENT_BYTES as u32,
             AccountPrestateV2::Exact,
         ),
         SERIES_PREPARE_TICKET_COORDINATE_V5 => (
@@ -394,7 +394,7 @@ fn profile_operations() -> Result<[AccountOperationInputV2; PROFILE_OPERATIONS]>
         AccountOperationInputV2::ProjectDataIdentity {
             account: AccountCoordinateV2::fixed(1),
             destination: IdentityCoordinateV2::common(SERIES_PREPARE_REFUND_OWNER_IDENTITY_V5),
-            data_offset: dclutch_series_v3_kernel::generated::SERIES_TEMPLATE_REFUND_OWNER_OFFSET_V3
+            data_offset: dclutch_trading::series::generated::SERIES_TEMPLATE_REFUND_OWNER_OFFSET_V3
                 as u32,
         },
     ])
@@ -599,7 +599,7 @@ fn emit_effect(requests: SeriesPrepareChildRequestsV4<'_>) -> Result<Vec<u8>> {
 }
 
 fn clear_projected_parent_root(
-    request: &mut [u8; dclutch_custody_contract::PROJECTED_CUSTODY_REQUEST_BYTES_V1],
+    request: &mut [u8; dclutch_custody::PROJECTED_CUSTODY_REQUEST_BYTES_V1],
 ) -> Result<()> {
     request
         .get_mut(
@@ -735,8 +735,8 @@ fn alias_representative(coordinate: u16) -> Option<u16> {
 
 #[cfg(test)]
 mod tests {
-    use dclutch_account_profile_contract::v2::{AliasKindV2, Error as ProfileError};
-    use dclutch_effect_kernel::v5::ErrorV5;
+    use dclutch_vm::account_profile::v2::{AliasKindV2, Error as ProfileError};
+    use dclutch_vm::effect::v5::ErrorV5;
 
     use super::*;
     use crate::series::artifacts_v3::{

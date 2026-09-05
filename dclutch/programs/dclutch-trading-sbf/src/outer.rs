@@ -21,19 +21,19 @@ extern crate alloc;
 use alloc::{vec, vec::Vec};
 use core::cell::Ref;
 
-use dclutch_account_profile_contract::{
+use dclutch_vm::account_profile::{
     ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1, AccountObservationV1, AccountProfileV1,
     EFFECT_PERMISSION_CREDIT_LAMPORTS, EFFECT_PERMISSION_DEBIT_LAMPORTS,
     EFFECT_PERMISSION_WRITE_DATA, ProjectionRegistersV2, derive_effect_permissions,
     project_atomic as project_accounts_atomic,
 };
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingLedgerDerivationV2,
     CapabilityManifestV1, ContentId, FundingLedgerCloseCustodyV2, FundingLedgerStatusV2,
     FundingLedgerV2, funding::funded_rent_persists_v1, manifest_entry_for_ledger_row_v2,
     validate_funding_ledger_masks_v2,
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1, CapabilityProgramV1, CapabilityRegistersV2,
     CapabilityRootAccountV1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
     activation_registers_v2::{
@@ -53,25 +53,25 @@ use dclutch_capability_program_contract::{
     initialize_root_account_v1,
     set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
 };
-use dclutch_effect_kernel::v2::{
+use dclutch_vm::effect::v2::{
     AccountInput, ProgramV2 as EffectProgramV2, ResolvedEffect, SCHEMA_RELEASE_ID,
     project_with_aliases_and_requests_atomic,
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     CORE_EFFECT_ACK_BYTES_V1, CORE_EFFECT_DIGEST_DOMAIN_V1, CORE_EFFECT_ENVELOPE_BYTES_V1,
     CoreEffectAckV1, CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState, Identity,
     MarketCoreStateSeedsV2, Role, STATE_BYTES,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_activation_auth_v1::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::activation_auth_v1::{
     authenticate_activated_role_in_frame_v1, authenticate_activation_cache_identity_v1,
     require_cache_account,
 };
-use dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1;
-use dclutch_registry_svm::AuthenticatedRoleReceiptV1;
-use dclutch_release_set_contract::ExecutionRoleV1;
-use dclutch_rent_contract::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
-use dclutch_transition_vm::v2::{RegisterInput, RegisterOutput};
+use dclutch_registry::ActivatedExecutionReleaseSetViewV1;
+use dclutch_registry::svm::AuthenticatedRoleReceiptV1;
+use dclutch_registry::release_set::ExecutionRoleV1;
+use dclutch_market::rent::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
+use dclutch_vm::v2::{RegisterInput, RegisterOutput};
 use solana_program::{
     account_info::AccountInfo,
     clock::Clock,
@@ -121,7 +121,7 @@ const SET_DESCRIPTOR_STAGING: usize = 17;
 // coordinates they bound, so an off-chain activation builder can refuse an
 // oversized profile at authoring time against this seam's own numbers rather
 // than a second copy of them.
-use dclutch_capability_program_contract::activation_registers_v2::{
+use dclutch_market::capability_program::activation_registers_v2::{
     ACTIVATION_MAX_ROLE_REQUEST_BYTES_V2 as MAX_ROLE_REQUEST_BYTES_V2,
     ACTIVATION_MAX_RUNTIME_IDENTITIES_V2 as MAX_RUNTIME_IDENTITIES_V2,
     ACTIVATION_MAX_RUNTIME_SCALARS_V2 as MAX_RUNTIME_SCALARS_V2,
@@ -1087,7 +1087,7 @@ fn reauthenticate_roles<'info>(
     release_set: [u8; 32],
 ) -> Result<AuthenticatedRoleReceiptV1, ProgramError> {
     // Owner, non-executability and the exact width before a byte is read: the
-    // ordering `dclutch-registry-activation-auth-v1` documents, and the reason a
+    // ordering `dclutch-registry::activation_auth_v1` documents, and the reason a
     // stranger's account can never contribute the bump seed the identity check
     // reproduces the address from.
     require_cache_account(suffix.registry.key, suffix.cache).map_err(TradingSbfError::from)?;
@@ -1467,7 +1467,7 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
             })
             .collect::<Vec<_>>();
         let mut permissions =
-            vec![dclutch_effect_kernel::v2::AccountPermission::read_only(); self.accounts.len()];
+            vec![dclutch_vm::effect::v2::AccountPermission::read_only(); self.accounts.len()];
         derive_effect_permissions(profile, &mut permissions)
             .map_err(|_| TradingSbfError::Content)?;
         let mut scratch_lamports = vec![0_u64; self.accounts.len()];
@@ -1729,7 +1729,7 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
             })
             .collect::<Vec<_>>();
         let mut permissions =
-            vec![dclutch_effect_kernel::v2::AccountPermission::read_only(); self.accounts.len()];
+            vec![dclutch_vm::effect::v2::AccountPermission::read_only(); self.accounts.len()];
         derive_effect_permissions(profile, &mut permissions)
             .map_err(|_| TradingSbfError::Content)?;
         let aliases = (0..self.accounts.len())
@@ -1978,7 +1978,7 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
 }
 
 fn require_native_funding_row(
-    realm_collateral: Option<dclutch_capability_contract::RealmCollateralBindingV1>,
+    realm_collateral: Option<dclutch_market::capability_manifest::RealmCollateralBindingV1>,
 ) -> Result<(), ProgramError> {
     if realm_collateral.is_some() {
         return Err(TradingSbfError::UnsupportedContent.into());
@@ -2520,7 +2520,7 @@ fn get<'accounts, 'info>(
 #[cfg(test)]
 mod funding_v2_tests {
     use super::*;
-    use dclutch_capability_contract::{
+    use dclutch_market::capability_manifest::{
         ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1,
         FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
         RealmCollateralBindingV1, derive_funded_rent_rate_v2, funding_ledger_bytes_v2,
@@ -2701,7 +2701,7 @@ mod funding_v2_tests {
             FundingLedgerStatusV2::Pending
         );
 
-        let header = dclutch_market_core_codec::CapabilityFundingHeaderV2::new(2, 4, 0b1111)
+        let header = dclutch_market::CapabilityFundingHeaderV2::new(2, 4, 0b1111)
             .expect("funding header");
         validate_funding_ledger_masks_v2(
             manifest.entry_count(),

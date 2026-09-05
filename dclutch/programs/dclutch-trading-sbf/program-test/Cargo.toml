@@ -8,15 +8,12 @@ publish = false
 [workspace]
 
 [dependencies]
-dclutch-account-profile-contract = { path = "../../../crates/dclutch-account-profile-contract" }
-dclutch-capability-contract = { path = "../../../crates/dclutch-capability-contract" }
-dclutch-capability-program-contract = { path = "../../../crates/dclutch-capability-program-contract" }
-dclutch-execution-strategy-contract = { path = "../../../crates/dclutch-execution-strategy-contract" }
-dclutch-capability-seal-contract = { path = "../../../crates/dclutch-capability-seal-contract" }
+dclutch-vm = { path = "../../../crates/dclutch-vm" }
+dclutch-market = { path = "../../../crates/dclutch-market" }
 dclutch-chain-bundle-builder = { path = "bundle-builder" }
-dclutch-claims-svm = { path = "../../../crates/dclutch-claims-svm" }
+dclutch-claims = { path = "../../../crates/dclutch-claims" }
 dclutch-core-contract = { path = "../../../crates/dclutch-core-contract" }
-dclutch-custody-contract = { path = "../../../crates/dclutch-custody-contract" }
+dclutch-custody = { path = "../../../crates/dclutch-custody" }
 # `direct_hot_fee_second_transaction` asserts the exact Custody refusal codes
 # two hostile orderings carry, and decision 0007 forbids writing them as bare
 # numbers. Custody ships an rlib beside its cdylib for exactly this, the same
@@ -24,9 +21,7 @@ dclutch-custody-contract = { path = "../../../crates/dclutch-custody-contract" }
 dclutch-custody-sbf = { path = "../../dclutch-custody-sbf", features = [
     "no-entrypoint",
 ] }
-dclutch-capability-activation-codec = { path = "../../../crates/dclutch-capability-activation-codec" }
-dclutch-series-v3-kernel = { path = "../../../crates/dclutch-series-v3-kernel" }
-dclutch-direct-codec = { path = "../../../crates/dclutch-direct-codec" }
+dclutch-trading = { path = "../../../crates/dclutch-trading" }
 # The ONE author of a portable Direct ticket, taken with its signer so this
 # workspace can author a real ticket file rather than a second implementation of
 # the signing preimage. `ticket_authored_intents_execute_top_level` writes two
@@ -40,21 +35,13 @@ dclutch-direct-hot-program-test-support = { path = "direct-hot" }
 # the claims-extended budgets need the same arithmetic. One author, here,
 # because `direct-hot` above already depends on this crate.
 dclutch-program-test-evidence = { path = "../../../tools/gauntlet/program-test-evidence" }
-dclutch-effect-kernel = { path = "../../../crates/dclutch-effect-kernel" }
-dclutch-general-adapter-contract = { path = "../../../crates/dclutch-general-adapter-contract" }
-dclutch-general-config-contract = { path = "../../../crates/dclutch-general-config-contract" }
-dclutch-market-core-codec = { path = "../../../crates/dclutch-market-core-codec" }
 # `direct_close_maker_on_chain` drives the operator's close plan builder against
 # the real ELFs. A builder tested only against its own hand-written fixture
 # proves that it agrees with itself; the question worth answering is whether the
 # instruction it emits is one the deployed program actually accepts.
 dclutch-operator = { path = "../../../crates/dclutch-operator" }
-dclutch-product-payoff-v2-codec = { path = "../../../crates/dclutch-product-payoff-v2-codec" }
-dclutch-product-runtime-v2 = { path = "../../../crates/dclutch-product-runtime-v2" }
-dclutch-product-runtime-v2-admission = { path = "../../../crates/dclutch-product-runtime-v2-admission" }
-dclutch-realm-contract = { path = "../../../crates/dclutch-realm-contract" }
-dclutch-record-contract = { path = "../../../crates/dclutch-record-contract" }
-dclutch-registry-contract = { path = "../../../crates/dclutch-registry-contract" }
+dclutch-product = { path = "../../../crates/dclutch-product" }
+dclutch-registry = { path = "../../../crates/dclutch-registry" }
 # Several `registry_hot_continuation` cases refuse inside the Registry program
 # rather than in Trading, so their refusal codes must be derived from
 # `RegistryError` itself and never written as bare numbers (AGENTS.md "Refusal
@@ -63,11 +50,6 @@ dclutch-registry-contract = { path = "../../../crates/dclutch-registry-contract"
 dclutch-registry-sbf = { path = "../../dclutch-registry-sbf", features = [
     "no-entrypoint",
 ] }
-dclutch-registry-svm = { path = "../../../crates/dclutch-registry-svm" }
-dclutch-release-set-contract = { path = "../../../crates/dclutch-release-set-contract" }
-dclutch-rent-contract = { path = "../../../crates/dclutch-rent-contract" }
-dclutch-token-svm = { path = "../../../crates/dclutch-token-svm" }
-dclutch-transition-vm = { path = "../../../crates/dclutch-transition-vm" }
 dclutch-trading-sbf = { path = "..", features = ["no-entrypoint"] }
 solana-account = "=4.6.0"
 solana-address-lookup-table-interface = { version = "=3.2.0", features = ["bincode", "bytemuck"] }

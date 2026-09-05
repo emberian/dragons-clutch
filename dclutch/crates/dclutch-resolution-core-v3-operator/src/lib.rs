@@ -17,29 +17,29 @@ pub mod product_graph_observation_v3;
 /// Exact stage-specific projections for finalized provider transactions.
 pub mod provider_finalized_projection_v3;
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     CAPABILITY_FUNDING_LEDGER_PDA_DOMAIN_V2, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
     FUNDING_LEDGER_ACTIVE_ADMISSIBLE_STATES_V2, FUNDING_LEDGER_PENDING_ADMISSIBLE_STATES_V2,
     FundingLedgerCloseCustodyV2, FundingLedgerV2, funding_ledger_bytes_v2,
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     Action, CapabilityFundingHeaderV2, CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState,
     Identity, Phase, Readiness, Request, Role,
 };
-use dclutch_product_runtime_v2::ResultDomainV2;
-use dclutch_product_runtime_v2_admission::{
+use dclutch_product::ResultDomainV2;
+use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
     RESULT_DOMAIN_SCHEMA_ID_V2,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1, DeploymentObservationV1,
 };
-use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_resolution_codec::{
+use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_source::resolution::{
     DIRECT_FUNDING_CLOSE_REQUEST_BYTES_V1, DirectFundingCloseRequestV1,
     FUNDING_ACTIVATION_RECEIPT_BYTES_V1, FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
     FundingActivationReceiptV1, FundingActivationRequestV1, RESOLUTION_CERTIFICATE_BYTES_V2,
@@ -49,7 +49,7 @@ use dclutch_resolution_codec::{
     SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SOURCE_FUNDING_SET_DIGEST_DOMAIN_V2,
     SourceClosureReceiptV3, funding_lifecycle_account_digest_v1,
 };
-use dclutch_source_contract::{
+use dclutch_source::{
     RECOVERY_POLICY_BYTES_V2, RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryPolicyV2,
     SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_RESOLUTION_STATE_BYTES_V2,
     SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SourceMaterialV3, SourceResolutionPhaseV1,
@@ -1986,7 +1986,7 @@ pub fn build_resolution_close_fund_v3(
     .0;
     if snapshot.certificate.key != expected_certificate
         || snapshot.source_state.lamports
-            < rent.minimum_balance(dclutch_source_contract::SOURCE_RESOLUTION_STATE_BYTES_V2)
+            < rent.minimum_balance(dclutch_source::SOURCE_RESOLUTION_STATE_BYTES_V2)
     {
         return Err(ResolutionCoreOperatorErrorV3::Terminal);
     }
@@ -2154,10 +2154,10 @@ pub fn build_resolution_direct_close_fund_v1(
     // changes only the execution boundary: the checked plan is sent directly
     // to Resolution instead of reconstructing it on both sides of a Core CPI.
     let planned = build_resolution_close_fund_v3(snapshot)?;
-    let role_offset = dclutch_market_core_codec::REQUEST_BYTES
-        .checked_add(dclutch_market_core_codec::CORE_EFFECT_ENVELOPE_BYTES_V1)
+    let role_offset = dclutch_market::REQUEST_BYTES
+        .checked_add(dclutch_market::CORE_EFFECT_ENVELOPE_BYTES_V1)
         .and_then(|value| {
-            value.checked_add(dclutch_market_core_codec::CAPABILITY_FUNDING_HEADER_BYTES_V2)
+            value.checked_add(dclutch_market::CAPABILITY_FUNDING_HEADER_BYTES_V2)
         })
         .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?;
     let role = ResolutionRoleRequestV2::decode(
@@ -3019,9 +3019,9 @@ fn validate_funding_frame(
             return Err(ResolutionCoreOperatorErrorV3::Frame);
         }
     }
-    let request_end = dclutch_market_core_codec::REQUEST_BYTES;
+    let request_end = dclutch_market::REQUEST_BYTES;
     let envelope_end = request_end
-        .checked_add(dclutch_market_core_codec::CORE_EFFECT_ENVELOPE_BYTES_V1)
+        .checked_add(dclutch_market::CORE_EFFECT_ENVELOPE_BYTES_V1)
         .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?;
     let request = Request::decode(
         instruction
@@ -3043,13 +3043,13 @@ fn validate_funding_frame(
         .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?;
     let header = CapabilityFundingHeaderV2::decode(
         role_bytes
-            .get(..dclutch_market_core_codec::CAPABILITY_FUNDING_HEADER_BYTES_V2)
+            .get(..dclutch_market::CAPABILITY_FUNDING_HEADER_BYTES_V2)
             .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?,
     )
     .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
     let role = ResolutionRoleRequestV2::decode(
         role_bytes
-            .get(dclutch_market_core_codec::CAPABILITY_FUNDING_HEADER_BYTES_V2..)
+            .get(dclutch_market::CAPABILITY_FUNDING_HEADER_BYTES_V2..)
             .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?,
     )
     .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
@@ -4026,8 +4026,8 @@ pub fn validate_resolution_create_fund_report_v3(
                 .instruction
                 .data
                 .get(
-                    dclutch_market_core_codec::REQUEST_BYTES
-                        + dclutch_market_core_codec::CORE_EFFECT_ENVELOPE_BYTES_V1..,
+                    dclutch_market::REQUEST_BYTES
+                        + dclutch_market::CORE_EFFECT_ENVELOPE_BYTES_V1..,
                 )
                 .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?,
         )
@@ -4074,8 +4074,8 @@ pub fn validate_resolution_verify_fund_ready_report_v3(
                 .instruction
                 .data
                 .get(
-                    dclutch_market_core_codec::REQUEST_BYTES
-                        + dclutch_market_core_codec::CORE_EFFECT_ENVELOPE_BYTES_V1..,
+                    dclutch_market::REQUEST_BYTES
+                        + dclutch_market::CORE_EFFECT_ENVELOPE_BYTES_V1..,
                 )
                 .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?,
         )
@@ -4124,9 +4124,9 @@ pub fn validate_resolution_admit_terminal_report_v3(
     {
         return Err(ResolutionCoreOperatorErrorV3::Frame);
     }
-    let request_end = dclutch_market_core_codec::REQUEST_BYTES;
+    let request_end = dclutch_market::REQUEST_BYTES;
     let envelope_end = request_end
-        .checked_add(dclutch_market_core_codec::CORE_EFFECT_ENVELOPE_BYTES_V1)
+        .checked_add(dclutch_market::CORE_EFFECT_ENVELOPE_BYTES_V1)
         .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?;
     let request = Request::decode(
         report
@@ -4150,7 +4150,7 @@ pub fn validate_resolution_admit_terminal_report_v3(
         .get(envelope_end..)
         .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?;
     let body = role_bytes
-        .get(dclutch_market_core_codec::CAPABILITY_FUNDING_HEADER_BYTES_V2..)
+        .get(dclutch_market::CAPABILITY_FUNDING_HEADER_BYTES_V2..)
         .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?;
     let resolution = ResolutionRoleRequestV2::decode(body)
         .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
@@ -4230,9 +4230,9 @@ pub fn validate_resolution_close_fund_report_v3(
             return Err(ResolutionCoreOperatorErrorV3::Frame);
         }
     }
-    let request_end = dclutch_market_core_codec::REQUEST_BYTES;
+    let request_end = dclutch_market::REQUEST_BYTES;
     let envelope_end = request_end
-        .checked_add(dclutch_market_core_codec::CORE_EFFECT_ENVELOPE_BYTES_V1)
+        .checked_add(dclutch_market::CORE_EFFECT_ENVELOPE_BYTES_V1)
         .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?;
     let request = Request::decode(
         report
@@ -4256,13 +4256,13 @@ pub fn validate_resolution_close_fund_report_v3(
         .get(envelope_end..)
         .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?;
     let header_bytes = role_bytes
-        .get(..dclutch_market_core_codec::CAPABILITY_FUNDING_HEADER_BYTES_V2)
+        .get(..dclutch_market::CAPABILITY_FUNDING_HEADER_BYTES_V2)
         .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?;
     let header = CapabilityFundingHeaderV2::decode(header_bytes)
         .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
     let role = ResolutionRoleRequestV2::decode(
         role_bytes
-            .get(dclutch_market_core_codec::CAPABILITY_FUNDING_HEADER_BYTES_V2..)
+            .get(dclutch_market::CAPABILITY_FUNDING_HEADER_BYTES_V2..)
             .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?,
     )
     .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
@@ -4348,11 +4348,11 @@ mod tests {
     #![allow(clippy::indexing_slicing)]
 
     use super::*;
-    use dclutch_capability_contract::{
+    use dclutch_market::capability_manifest::{
         ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1,
         FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
     };
-    use dclutch_market_core_codec::{MarketIdentity, StateBumpsV1};
+    use dclutch_market::{MarketIdentity, StateBumpsV1};
     use solana_program::{rent::Rent, sysvar::SysvarSerialize};
     use solana_sdk_ids::sysvar;
 
@@ -4360,10 +4360,10 @@ mod tests {
         Pubkey::new_from_array([value; 32])
     }
 
-    fn source_id(value: u8) -> dclutch_source_contract::ContentId {
+    fn source_id(value: u8) -> dclutch_source::ContentId {
         let mut bytes = [0_u8; 32];
         bytes[0] = value;
-        dclutch_source_contract::ContentId::new(bytes).expect("nonzero Source content ID")
+        dclutch_source::ContentId::new(bytes).expect("nonzero Source content ID")
     }
 
     fn capability_id(bytes: [u8; 32]) -> CapabilityContentId {
@@ -4629,7 +4629,7 @@ mod tests {
         let body = role_request.to_bytes().expect("role request");
         assert_eq!(
             body.len(),
-            dclutch_resolution_codec::RESOLUTION_CORE_ROLE_REQUEST_BYTES_V2
+            dclutch_source::resolution::RESOLUTION_CORE_ROLE_REQUEST_BYTES_V2
         );
         let header = CapabilityFundingHeaderV2::new(1, 3, 0b1110)
             .expect("header")
@@ -5144,7 +5144,7 @@ mod tests {
         assert_eq!(
             authenticate_role_semantic_release(
                 ExecutionRoleV1::Resolution,
-                dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V5,
+                dclutch_source::resolution::RESOLUTION_CONTROLLER_RELEASE_ID_V5,
             ),
             Err(ResolutionCoreOperatorErrorV3::Release)
         );

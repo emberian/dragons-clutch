@@ -4,7 +4,7 @@ use dclutch_rational_lifecycle_hot_v3::{
     RationalLifecycleHotInstructionV3, RationalLifecycleHotStateV3,
     RationalLifecycleSelectedSelectionV5, build_rational_lifecycle_selected_hot_instruction_v5,
 };
-use dclutch_rational_representation_v2_lifecycle_contract::{
+use dclutch_claims::rational_lifecycle::{
     LifecycleCoordinateV2, LifecycleHeaderV2, LifecycleRequestV2,
     hot_v3::RationalLifecycleHotRequestV3,
 };

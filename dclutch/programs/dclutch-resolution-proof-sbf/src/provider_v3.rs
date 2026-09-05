@@ -7,14 +7,14 @@
 //! V2, keeps the permissionless resolver distinct, maps through Product's sole
 //! result domain, and emits both the terminal certificate and a typed receipt.
 
-use dclutch_product_runtime_v2::ResultDomainV2;
-use dclutch_product_runtime_v2_svm_reader::AuthenticatedProductRuntimeV2;
-use dclutch_pyth_svm::{FullPriceUpdateV2, PythReleaseV1};
-use dclutch_resolution_codec::{
+use dclutch_product::ResultDomainV2;
+use dclutch_product::svm_reader::AuthenticatedProductRuntimeV2;
+use dclutch_source::pyth::{FullPriceUpdateV2, PythReleaseV1};
+use dclutch_source::resolution::{
     ProviderExecutionReceiptV3, ProviderExecutionRequestV3, ResolutionCertificateKindV2,
     ResolutionCertificateV2,
 };
-use dclutch_source_contract::{
+use dclutch_source::{
     ContentId as SourceContentId, ProviderReleaseV1, PythAdapterConfigV1,
     PythProviderAdapterObligationV2, RecoveryAttemptV2, RecoveryPolicyV2, SourceMaterialV3,
     SourceResolutionPhaseV1, SourceResolutionStateV2, SourceSpecV1, StatisticSpecV1, WindowSpecV1,
@@ -65,18 +65,18 @@ pub enum ProviderJoinErrorV3 {
 /// could not: the journey campaign paid a whole off-chain pre-evaluation to
 /// that collapse, re-deciding all three predicates itself before spending
 /// 1,070,265 CU finding out which one refused. That workaround retires here.
-const fn map_normalization_error(error: dclutch_source_contract::Error) -> ProviderJoinErrorV3 {
+const fn map_normalization_error(error: dclutch_source::Error) -> ProviderJoinErrorV3 {
     match error {
-        dclutch_source_contract::Error::InvalidObservationSchedule => {
+        dclutch_source::Error::InvalidObservationSchedule => {
             ProviderJoinErrorV3::ProviderWindow
         }
-        dclutch_source_contract::Error::InvalidPublicationTime => {
+        dclutch_source::Error::InvalidPublicationTime => {
             ProviderJoinErrorV3::ProviderFreshness
         }
-        dclutch_source_contract::Error::InvalidPythObservation => {
+        dclutch_source::Error::InvalidPythObservation => {
             ProviderJoinErrorV3::ProviderConfiguration
         }
-        dclutch_source_contract::Error::SourceScaleMismatch => ProviderJoinErrorV3::ProviderScale,
+        dclutch_source::Error::SourceScaleMismatch => ProviderJoinErrorV3::ProviderScale,
         _ => ProviderJoinErrorV3::Provider,
     }
 }
@@ -411,7 +411,7 @@ fn resolve_recovery_rung(
     atoms: i128,
     source_scale_exponent: i32,
     request: &ProviderExecutionRequestV3,
-) -> Result<dclutch_source_contract::SourceResolutionDecisionV2, ProviderJoinErrorV3> {
+) -> Result<dclutch_source::SourceResolutionDecisionV2, ProviderJoinErrorV3> {
     next_source
         .resolve_recovery_from_authenticated_domain(
             source_records.material_id,
@@ -577,14 +577,14 @@ fn authenticate_provider_release(
 mod tests {
     use std::vec;
 
-    use dclutch_product_runtime_v2::{
+    use dclutch_product::{
         ContentId as ProductContentId, ResultDomainInputV2, compile_result_domain_v2,
         result_domain_record_bytes,
     };
-    use dclutch_product_runtime_v2_svm_reader::{AuthenticatedRecordV2, ProductRecordBumpsV3};
-    use dclutch_pyth_svm::PythReleaseV1Input;
-    use dclutch_resolution_codec::ProviderCallerV3;
-    use dclutch_source_contract::{
+    use dclutch_product::svm_reader::{AuthenticatedRecordV2, ProductRecordBumpsV3};
+    use dclutch_source::pyth::PythReleaseV1Input;
+    use dclutch_source::resolution::ProviderCallerV3;
+    use dclutch_source::{
         CapacityEnvelope, RoundingBoundary, SOURCE_FAILURE_POLICY_RELEASE_ID_V2,
         SourceAccessProfile, SourceCapacityProfileV1, SourceResolutionPhaseV1, StatisticKind,
         WindowKind,

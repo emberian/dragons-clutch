@@ -11,8 +11,8 @@ extern crate alloc;
 
 use alloc::{vec, vec::Vec};
 
-use dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1;
-use dclutch_dealer_codec::{
+use dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1;
+use dclutch_trading::dealer::{
     config_v4::{DEALER_CONFIG_SCHEMA_PREIMAGE_V4, DealerConfigV4},
     root_admission_v1::DEALER_ROOT_OPEN_ADMISSIBLE_STATES_V1,
     root_tail::{ROOT_TAIL_BYTES, RootTail},

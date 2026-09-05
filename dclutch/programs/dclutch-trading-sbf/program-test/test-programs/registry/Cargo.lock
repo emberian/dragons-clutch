@@ -276,23 +276,7 @@ name = "dclutch-core-contract"
 version = "0.1.0"
 
 [[package]]
-name = "dclutch-registry-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-core-contract",
- "dclutch-release-set-contract",
-]
-
-[[package]]
-name = "dclutch-registry-svm"
-version = "0.1.0"
-dependencies = [
- "dclutch-core-contract",
- "dclutch-release-set-contract",
-]
-
-[[package]]
-name = "dclutch-release-set-contract"
+name = "dclutch-registry"
 version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
@@ -302,8 +286,7 @@ dependencies = [
 name = "dclutch-trading-registry-test-program"
 version = "0.1.0"
 dependencies = [
- "dclutch-registry-contract",
- "dclutch-registry-svm",
+ "dclutch-registry",
  "solana-program",
 ]
 

@@ -17,11 +17,10 @@ custom-heap = []
 custom-panic = []
 
 [dependencies]
-dclutch-capability-program-contract = { path = "../../../../crates/dclutch-capability-program-contract" }
+dclutch-market = { path = "../../../../crates/dclutch-market" }
 dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
-dclutch-execution-strategy-contract = { path = "../../../../crates/dclutch-execution-strategy-contract" }
 dclutch-refusal-registry = { path = "../../../../crates/dclutch-refusal-registry" }
-dclutch-release-set-contract = { path = "../../../../crates/dclutch-release-set-contract" }
+dclutch-registry = { path = "../../../../crates/dclutch-registry" }
 # The admitted CPI frame offsets are owned by the Trading composer. This
 # stand-in imports them rather than restating them: a local copy of the same
 # `8` is exactly the drift that closed this lane once already.

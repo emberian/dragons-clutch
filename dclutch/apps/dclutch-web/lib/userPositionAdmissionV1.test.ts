@@ -28,7 +28,7 @@ import {
  */
 describe('the admission planner reaches the browser as compiled Rust', () => {
   it('states the frame width and selector from the contract, not from here', () => {
-    // Both are emitted from `dclutch-user-position-admission-contract` and
+    // Both are emitted from `dclutch-claims::position_admission` and
     // pinned again inside the WASM crate with `const _: () = assert!(...)`.
     // If either moves, the Rust build fails before this test can be wrong.
     expect(USER_POSITION_ADMISSION_ACCOUNT_COUNT_V1).toBe(27);

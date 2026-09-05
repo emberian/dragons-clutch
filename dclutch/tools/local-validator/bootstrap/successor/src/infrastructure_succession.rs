@@ -72,9 +72,9 @@ use dclutch_operator::{
         build_core_infrastructure_succession_v1,
     },
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::ARTIFACT_RELEASE_SCHEMA_ID_V1;
-use dclutch_release_set_contract::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1;
+use dclutch_registry::release_set::{
     PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, ProtocolInfrastructureProfileV1,
     ProtocolInfrastructureProfileV2,
@@ -376,7 +376,7 @@ fn plan_for_values_v1(
     let mut keys = vec![
         fee_payer,
         Pubkey::find_program_address(
-            &[dclutch_release_set_contract::PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
+            &[dclutch_registry::release_set::PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
             &core,
         )
         .0,

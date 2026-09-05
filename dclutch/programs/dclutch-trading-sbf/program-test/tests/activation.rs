@@ -2,7 +2,7 @@
 
 use std::{path::PathBuf, vec::Vec};
 
-use dclutch_account_profile_contract::{
+use dclutch_vm::account_profile::{
     ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1,
     encode_v1::{
         AccountAliasInputV1, AccountEffectPermissionsV1, AccountOperationInputV1,
@@ -10,17 +10,17 @@ use dclutch_account_profile_contract::{
         encode_account_profile_v1_atomic,
     },
 };
-use dclutch_capability_activation_codec::{
+use dclutch_market::capability_activation::{
     ActivationBundleInputV1, ActivationTailFieldV1, build_activation_bundle_v1,
 };
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1,
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, CompartmentFundingV1, ContentId,
     FundingAmountsV1, FundingCompartment, FundingLedgerStatusV2, FundingLedgerV2, FundingQuoteV1,
     MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY, derive_funded_rent_rate_v2,
     funding_ledger_bytes_v2, funding_ledger_remaining_offset_v2,
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_PROGRAM_ACCOUNT_PROFILE_OFFSET, CAPABILITY_PROGRAM_CAPACITY_PROFILE_OFFSET,
     CAPABILITY_PROGRAM_CONFIG_SCHEMA_OFFSET, CAPABILITY_PROGRAM_DERIVATION_POLICY_OFFSET,
     CAPABILITY_PROGRAM_EFFECT_SCHEMA_OFFSET, CAPABILITY_PROGRAM_HEADER_BYTES_V1,
@@ -41,14 +41,14 @@ use dclutch_capability_program_contract::{
         encoded_program_set_bytes_v2,
     },
 };
-use dclutch_effect_kernel::v2::{
+use dclutch_vm::effect::v2::{
     SCHEMA_RELEASE_ID as EFFECT_PROGRAM_SCHEMA,
     encode::{
         EffectGeometryV2, EffectInstructionV2, effect_program_v2_bytes,
         encode_effect_program_v2_atomic,
     },
 };
-use dclutch_general_config_contract::{
+use dclutch_trading::general_config::{
     root::{
         GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_ROOT_ACTIVE_HEADER_WORD_V2, GENERAL_ROOT_BYTES_V2,
         GENERAL_ROOT_CONFIG_ID_OFFSET_V2, GENERAL_ROOT_GENERATION_OFFSET_V2,
@@ -59,28 +59,28 @@ use dclutch_general_config_contract::{
     },
     v3::{GeneralConfigV3, GeneralConfigV3Input},
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState, Identity, MarketCoreStateSeedsV2,
     MarketIdentity, Phase, Readiness, Role, StateBumpsV1,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
     ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
     initialize_activation_cache_v1,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, CapabilityExecutionSelectionV1, ExecutionReleaseSetV1,
     ExecutionRoleBindingV1, ExecutionRoleV1, ProgramIdentityV1,
 };
-use dclutch_rent_contract::{
+use dclutch_market::rent::{
     RefundAuthority,
     lifecycle_v2::{
         LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
     },
 };
-use dclutch_series_v3_kernel::{
+use dclutch_trading::series::{
     SERIES_ACTION_HEADER_SCHEMA_PREIMAGE_V3, SERIES_ROOT_SCHEMA_PREIMAGE_V3,
     SERIES_SUCCESSOR_KIND_PREIMAGE_V3, SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
     SERIES_TICKET_DERIVATION_PREIMAGE_V3, TemplateV3, generated as series_generated,
@@ -97,7 +97,7 @@ use dclutch_trading_sbf::series::{
     },
     release_v5::{SeriesActionArtifactIdsV5, encode_series_action_descriptor_v5},
 };
-use dclutch_transition_vm::v2::encode::{
+use dclutch_vm::v2::encode::{
     RegisterGeometryV2 as TransitionRegisterGeometryV2, TransitionInstructionV2,
     encode_transition_program_v2_atomic, transition_program_v2_bytes,
 };
@@ -558,7 +558,7 @@ fn close_account_profile(family: Family) -> Vec<u8> {
             effect_permissions: AccountEffectPermissionsV1::new(false, true, false),
             alias: AccountAliasInputV1::SelfRepresentative,
             data_length: u32::try_from(
-                dclutch_rent_contract::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2,
+                dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2,
             )
             .expect("credit width"),
         },
@@ -693,7 +693,7 @@ fn close_effect_program() -> Vec<u8> {
 /// Request writes that compose the family root tail, in tail order.
 ///
 /// For General every offset and both constant scalars come from
-/// `dclutch-general-config-contract`'s published creation coordinates, and the
+/// `dclutch-trading::general_config`'s published creation coordinates, and the
 /// Market, config and generation come from `activation_registers_v2`. Nothing
 /// about `GeneralRootV2`'s layout is restated here.
 fn tail_writes(campaign: Campaign) -> Vec<EffectInstructionV2> {
@@ -1550,8 +1550,8 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
     // manifest identity.
     let manifest_raw = Pubkey::find_program_address(
         &[
-            dclutch_record_contract::RAW_RECORD_PDA_SEED_V1,
-            &dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+            dclutch_registry::record::RAW_RECORD_PDA_SEED_V1,
+            &dclutch_market::capability_manifest::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
             &hash(&manifest).to_bytes(),
         ],
         &REGISTRY_PROGRAM_ID,
@@ -1567,7 +1567,7 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
 
     let mut role_request = selection.to_bytes().to_vec();
     role_request.extend_from_slice(
-        &dclutch_market_core_codec::CapabilityFundingHeaderV2::new(1, 1, 0b1)
+        &dclutch_market::CapabilityFundingHeaderV2::new(1, 1, 0b1)
             .expect("funding header")
             .encode(),
     );
@@ -1581,7 +1581,7 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
     }
     let role_digest = hash(&role_request).to_bytes();
     let context = [0x81; 32];
-    let authority_seeds = dclutch_release_set_contract::CallerAuthoritySeedsV1::from_bytes(
+    let authority_seeds = dclutch_registry::release_set::CallerAuthoritySeedsV1::from_bytes(
         release_set,
         market.to_bytes(),
         ExecutionRoleV1::Core,
@@ -1649,7 +1649,7 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
         |(close_descriptor_record, close_profile_record, close_effect_record)| {
             let mut close_role_request = selection.to_bytes().to_vec();
             close_role_request.extend_from_slice(
-                &dclutch_market_core_codec::CapabilityFundingHeaderV2::new(1, 1, 0b1)
+                &dclutch_market::CapabilityFundingHeaderV2::new(1, 1, 0b1)
                     .expect("funding header")
                     .encode(),
             );
@@ -1657,7 +1657,7 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
             let close_role_digest = hash(&close_role_request).to_bytes();
             let close_context = [0x82; 32];
             let close_authority_seeds =
-                dclutch_release_set_contract::CallerAuthoritySeedsV1::from_bytes(
+                dclutch_registry::release_set::CallerAuthoritySeedsV1::from_bytes(
                     release_set,
                     market.to_bytes(),
                     ExecutionRoleV1::Core,
@@ -2421,7 +2421,7 @@ fn the_public_encoders_reproduce_the_canonical_v2_artifact_bytes() {
 /// evidence about fixture bytes, because the only General activation artifacts
 /// that existed were the ones a few hundred lines up this file.
 ///
-/// `dclutch-general-adapter-contract::activation_bundle_v1` now builds them for
+/// `dclutch-trading::general::activation_bundle_v1` now builds them for
 /// a release to publish. This test is the join: the profile, the transition and
 /// the effect are BYTE-IDENTICAL, so the ELF result above is a result about the
 /// shippable records, not about their look-alikes. The descriptor differs at
@@ -2436,11 +2436,11 @@ fn the_public_encoders_reproduce_the_canonical_v2_artifact_bytes() {
 /// difference cannot change what the ELF did.
 #[test]
 fn the_shippable_general_bundle_is_the_triple_this_file_runs_on_the_real_elf() {
-    use dclutch_capability_program_contract::v4::{
+    use dclutch_market::capability_program::v4::{
         ArtifactReferenceV4, CapabilityArtifactsV4, CapabilityProgramV4,
         SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
     };
-    use dclutch_general_adapter_contract::activation_bundle_v1::{
+    use dclutch_trading::general::activation_bundle_v1::{
         GENERAL_ACTIVATION_REQUEST_SCHEMA_ID_V1, GeneralActivationBundleInputV1,
         build_general_activation_bundle_v1,
     };

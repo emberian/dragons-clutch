@@ -276,11 +276,11 @@ name = "dclutch-core-contract"
 version = "0.1.0"
 
 [[package]]
-name = "dclutch-custody-contract"
+name = "dclutch-custody"
 version = "0.1.0"
 dependencies = [
  "dclutch-market-core-codec",
- "dclutch-release-set-contract",
+ "dclutch-registry",
  "dclutch-sha256-adapter",
 ]
 
@@ -289,9 +289,9 @@ name = "dclutch-custody-test-caller-sbf"
 version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
- "dclutch-custody-contract",
+ "dclutch-custody",
  "dclutch-refusal-registry",
- "dclutch-release-set-contract",
+ "dclutch-registry",
  "solana-program",
 ]
 
@@ -299,7 +299,7 @@ dependencies = [
 name = "dclutch-market-core-codec"
 version = "0.1.0"
 dependencies = [
- "dclutch-release-set-contract",
+ "dclutch-registry",
  "dclutch-sha256-adapter",
 ]
 
@@ -308,7 +308,7 @@ name = "dclutch-refusal-registry"
 version = "0.1.0"
 
 [[package]]
-name = "dclutch-release-set-contract"
+name = "dclutch-registry"
 version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",

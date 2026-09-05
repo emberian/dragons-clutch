@@ -18,9 +18,9 @@
 //! commit-last evidence the continuation test asserts -- because that is the
 //! property that was broken and the only assertion a fix cannot fake.
 
-use dclutch_capability_program_contract::hot_v3::{HotExecutionAckV3, HotExecutionEnvelopeV3};
-use dclutch_custody_contract::CustodyReplayV1;
-use dclutch_token_svm::TokenAccount;
+use dclutch_market::capability_program::hot_v3::{HotExecutionAckV3, HotExecutionEnvelopeV3};
+use dclutch_custody::CustodyReplayV1;
+use dclutch_custody::token_svm::TokenAccount;
 use dclutch_trading_sbf::TradingSbfError;
 use solana_account::Account;
 use solana_program::hash::hash;

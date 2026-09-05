@@ -9,15 +9,15 @@
 //! names one in an optional 26th account. A 25-account frame still refunds
 //! every lamport, exactly as it always did.
 
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     Role, SeriesFoundingPermitSeedsV1, SeriesFoundingPermitV1, SeriesPermitExpiryRequestV1,
 };
-use dclutch_rent_contract::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
-use dclutch_series_v3_kernel::{
+use dclutch_market::rent::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
+use dclutch_trading::series::{
     SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3, SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
     SERIES_TICKET_SCHEMA_RELEASE_ID_V3, admit_occurrence_bytes, admit_ticket,
     replay::{
@@ -304,8 +304,8 @@ fn authenticate_series(
 
 fn authenticate_replay(
     frame: &ExpiryAccounts<'_, '_>,
-    occurrence: dclutch_series_v3_kernel::AdmittedOccurrenceV3,
-    ticket: dclutch_series_v3_kernel::AdmittedTicketV3,
+    occurrence: dclutch_trading::series::AdmittedOccurrenceV3,
+    ticket: dclutch_trading::series::AdmittedTicketV3,
     template_record: [u8; 32],
 ) -> Result<(), CoreSbfError> {
     if frame.root.owner != frame.trading_program.key

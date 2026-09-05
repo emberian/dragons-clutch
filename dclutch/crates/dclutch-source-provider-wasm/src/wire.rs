@@ -14,9 +14,9 @@ use dclutch_provider_transport_v3_operator::{
     derive_provider_submit_provider_release_coordinates_v3,
     derive_provider_submit_pyth_coordinates_v3, derive_provider_submit_pyth_release_coordinates_v3,
 };
-use dclutch_pyth_svm::{ProgramV3View, PythReleaseV1};
-use dclutch_record_contract::RAW_RECORD_PDA_SEED_V1;
-use dclutch_resolution_codec::{
+use dclutch_source::pyth::{ProgramV3View, PythReleaseV1};
+use dclutch_registry::record::RAW_RECORD_PDA_SEED_V1;
+use dclutch_source::resolution::{
     PROVIDER_SUBMIT_REQUEST_BYTES_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1, ProviderSubmitRequestV3,
     ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, ResolutionCertificateV2,
 };
@@ -56,7 +56,7 @@ pub(crate) const SUBMIT_POSTSTATE_INPUT_FORMAT_V1: &str =
 pub(crate) const SUBMIT_POSTSTATE_FORMAT_V1: &str = "dclutch-source-provider-submit-poststate-v1";
 #[allow(dead_code)]
 pub(crate) const SUBMIT_LIFECYCLE_BYTES_V1: usize =
-    dclutch_resolution_codec::PROVIDER_UPDATE_LIFECYCLE_BYTES_V3;
+    dclutch_source::resolution::PROVIDER_UPDATE_LIFECYCLE_BYTES_V3;
 const MAX_JSON_BYTES: usize = 24 * 1024 * 1024;
 const MAX_ACCOUNT_BYTES: usize = 8 * 1024 * 1024;
 
@@ -398,7 +398,7 @@ pub fn derive_provider_reclaim_coordinates_json_v1(source: &[u8]) -> Result<Stri
     }
     let expected = Pubkey::find_program_address(
         &[
-            dclutch_resolution_codec::PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
+            dclutch_source::resolution::PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
             &lifecycle.update_account,
         ],
         &resolution_program,
@@ -1286,7 +1286,7 @@ struct PriceOutputV1 {
 /// number -- 15,000 ticks, a $150 SOL, three months stale while SOL traded near
 /// $100 -- because the browser had no way to read a price and the only
 /// alternative was to restate Pyth's account layout in TypeScript. That layout
-/// already has one owner in this tree, `dclutch_pyth_svm::FullPriceUpdateV2`,
+/// already has one owner in this tree, `dclutch_source::pyth::FullPriceUpdateV2`,
 /// and it is the same decoder the resolution path grades against. So the wizard
 /// reads the feed through this boundary rather than growing a second reader,
 /// and the number it centres on is the one the founding will resolve against.
@@ -1313,7 +1313,7 @@ pub fn read_sponsored_price_update_json_v1(source: &[u8]) -> Result<String, Stri
         return Err("Source provider price update is executable".to_owned());
     }
     let data = exact_base64(&wire.price_update.data_base64, "price update data")?;
-    let update = dclutch_pyth_svm::FullPriceUpdateV2::parse(&data)
+    let update = dclutch_source::pyth::FullPriceUpdateV2::parse(&data)
         .map_err(|error| format!("Source provider price update: {error:?}"))?;
     serde_json::to_string(&PriceOutputV1 {
         format: PRICE_FORMAT_V1,

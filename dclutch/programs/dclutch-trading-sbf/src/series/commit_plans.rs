@@ -16,18 +16,18 @@
 //! and closure. A lifecycle policy that also claimed the Ticket's refund would
 //! be a second author for one lamport flow.
 
-use dclutch_capability_contract::{FundingStateV1, RealmCollateralCustodyV1};
-use dclutch_market_core_codec::{
+use dclutch_market::capability_manifest::{FundingStateV1, RealmCollateralCustodyV1};
+use dclutch_market::{
     Identity as CoreIdentity, SeriesCoreAckV1, SeriesCoreActionV1, SeriesCoreRequestV1,
 };
-use dclutch_series_v3_kernel::plan::{
+use dclutch_trading::series::plan::{
     ReplayCandidateV3, SeriesReplayActionV3, SeriesReplayWitnessV3, evaluate_replay_v3,
 };
-pub use dclutch_series_v3_kernel::terminal::{
+pub use dclutch_trading::series::terminal::{
     SeriesLifecycleRentSinkV3, SeriesRootClosurePlanV3 as ClosePlanV3, TicketNativeRemaindersV3,
     TicketRetirementPlanV3 as RetirePlanV3,
 };
-use dclutch_series_v3_kernel::terminal::{
+use dclutch_trading::series::terminal::{
     SeriesTerminalErrorV3, plan_series_root_closure_v3, plan_ticket_retirement_v3,
 };
 use solana_program::pubkey::Pubkey;

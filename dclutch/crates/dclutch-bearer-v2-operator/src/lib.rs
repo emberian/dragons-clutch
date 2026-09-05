@@ -39,7 +39,7 @@ mod test_open_fixture_v3;
 /// Re-exported because every public bundle-input struct here carries an `action`
 /// field of this type: without this line a caller cannot construct one without
 /// depending on a crate this API never mentions.
-pub use dclutch_rational_representation_v2_contract::RepresentationActionV2;
+pub use dclutch_claims::rational::RepresentationActionV2;
 pub use hot_account_profile_v3::{
     RATIONAL_TERMINAL_ACCOUNT_PROFILE_BYTES_V3, RationalTerminalAccountProfileInputV3,
     encode_rational_terminal_account_profile_v3,
@@ -114,14 +114,14 @@ pub use open_structured_v3::{
     validate_rational_open_structured_hot_bundle_v3,
 };
 
-use dclutch_bearer_v2_contract::{BearerBindingV2, BearerDescriptorV2};
-use dclutch_rational_representation_v2_kernel::{
+use dclutch_claims::bearer::{BearerBindingV2, BearerDescriptorV2};
+use dclutch_claims::rational_kernel::{
     DescriptorAdmissionV2, RepresentationDescriptorV2,
 };
 use dclutch_rational_representation_v2_operator::{
     ConstructedInstructionV2, RationalObservationV2, SelectedActionInputV2, TerminalObservationV2,
 };
-use dclutch_representation_composition_v3_kernel::{
+use dclutch_claims::composition::{
     CompositionExposureBundleV3, RecordAdmissionV3,
 };
 use solana_program::{hash::hash, pubkey::Pubkey};
@@ -132,21 +132,21 @@ pub enum Error {
     /// The chain-derived generic Rational operator refused the observation.
     ChainOperator(dclutch_rational_representation_v2_operator::Error),
     /// The safe Rational terminal Hot contract refused the projected message.
-    HotContract(dclutch_rational_representation_v2_contract::Error),
+    HotContract(dclutch_claims::rational::Error),
     /// The caller supplied a parent even though Hot owns that digest.
     NonCanonicalParent,
     /// Independent family specialization differed from the chain-derived child.
     HotChildMismatch,
     /// Typed terminal RequestProfile artifact encoding refused.
-    RequestProfileArtifact(dclutch_request_profile_contract::Error),
+    RequestProfileArtifact(dclutch_vm::request_profile::Error),
     /// Typed terminal TransitionVM artifact encoding refused.
-    TransitionArtifact(dclutch_transition_vm::v3::Error),
+    TransitionArtifact(dclutch_vm::v3::Error),
     /// Typed terminal EffectProgram artifact encoding refused.
-    EffectArtifact(dclutch_effect_kernel::v3::Error),
+    EffectArtifact(dclutch_vm::effect::v3::Error),
     /// Typed EffectProgram successor envelope encoding or decoding refused.
-    EffectArtifactV4(dclutch_effect_kernel::v4::ErrorV4),
+    EffectArtifactV4(dclutch_vm::effect::v4::ErrorV4),
     /// Typed terminal AccountProfile artifact encoding refused.
-    AccountProfileArtifact(dclutch_account_profile_contract::v2::Error),
+    AccountProfileArtifact(dclutch_vm::account_profile::v2::Error),
     /// Logical account observations differed from the declared frame.
     AccountProfileInput,
     /// Hostile decoding of the injected ProductBasisV3 artifact refused.
@@ -157,19 +157,19 @@ pub enum Error {
     /// basis and the codec already tells them whether it was width, magic,
     /// schema or a zero identity; they threw that away and left the reader
     /// unable to tell a malformed artifact from a miscounted frame.
-    ProductBasis(dclutch_product_payoff_v2_codec::runtime_v3::Error),
+    ProductBasis(dclutch_product::payoff::runtime_v3::Error),
     /// The canonical Token-2022 behavior selection was not exact.
-    TokenBehavior(dclutch_token_svm::Error),
+    TokenBehavior(dclutch_custody::token_svm::Error),
     /// A semantic coordinate or computed artifact digest was zero.
     ContentIdentity,
     /// Exact interpreted ExecutionStrategy construction or join refused.
-    ExecutionStrategy(dclutch_execution_strategy_contract::v2::Error),
+    ExecutionStrategy(dclutch_market::execution_strategy::v2::Error),
     /// CapabilityProgramV4 construction or hostile decoding refused.
-    CapabilityDescriptor(dclutch_capability_program_contract::Error),
+    CapabilityDescriptor(dclutch_market::capability_program::Error),
     /// Successor lifecycle artifact decoding or AccountProfile join refused.
-    LifecycleArtifact(dclutch_account_profile_contract::lifecycle_v3::Error),
+    LifecycleArtifact(dclutch_vm::account_profile::lifecycle_v3::Error),
     /// Schema-bound CapabilityProgramSetV2 construction or selection refused.
-    CapabilityProgramSet(dclutch_capability_program_contract::set_v2::ProgramSetErrorV2),
+    CapabilityProgramSet(dclutch_market::capability_program::set_v2::ProgramSetErrorV2),
     /// Independently decoded artifact banks did not have one exact geometry.
     ArtifactGeometry,
     /// The descriptor named more coordinates than the derived artifact ceiling
@@ -207,17 +207,17 @@ pub enum Error {
     HotInstruction,
     /// The common Hot ABI refused the envelope, and says which of its four
     /// causes it was: width, magic, profile, or a zero identity.
-    HotEnvelope(dclutch_capability_program_contract::hot_v3::HotExecutionErrorV3),
+    HotEnvelope(dclutch_market::capability_program::hot_v3::HotExecutionErrorV3),
     /// The finalized descriptor bytes or their graph join refused.
-    BearerDescriptor(dclutch_rational_representation_v2_kernel::Error),
+    BearerDescriptor(dclutch_claims::rational_kernel::Error),
     /// The finalized composition exposure bundle refused.
-    BearerExposure(dclutch_representation_composition_v3_kernel::Error),
+    BearerExposure(dclutch_claims::composition::Error),
     /// The descriptor IS a Bearer basis vector and the request named another
     /// coordinate. Carries the specialization's own refusal.
     ///
     /// It no longer fires for a descriptor that is not a basis vector at all:
     /// see [`authenticate_basis_bytes`].
-    NotBearer(dclutch_bearer_v2_contract::Error),
+    NotBearer(dclutch_claims::bearer::Error),
 }
 
 /// Result alias for operator construction.
@@ -325,7 +325,7 @@ fn authenticate_basis_bytes(
         .map_err(Error::BearerDescriptor)?;
     if selected_outcome >= descriptor.outcome_count() {
         return Err(Error::NotBearer(
-            dclutch_bearer_v2_contract::Error::BindingMismatch,
+            dclutch_claims::bearer::Error::BindingMismatch,
         ));
     }
     let binding = |outcome| BearerBindingV2 {
@@ -383,15 +383,15 @@ fn authenticate_basis_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_rational_representation_v2_contract::RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2;
-    use dclutch_rational_representation_v2_kernel::{
+    use dclutch_claims::rational::RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2;
+    use dclutch_claims::rational_kernel::{
         DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3,
     };
-    use dclutch_representation_composition_v3_kernel::{
+    use dclutch_claims::composition::{
         CompositionExposureInputV3, CompositionExposureRowInputV3, CompositionExposureTermV3,
         composition_exposure_bytes_v3, encode_composition_exposure_v3_atomic,
     };
-    use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
+    use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
 
     const WIDTH: u32 = 3;
     const SELECTED: u32 = 1;
@@ -531,13 +531,13 @@ mod tests {
         assert_eq!(
             authenticate_basis_bytes(&descriptor_bytes, &graph_bytes, authority, 0),
             Err(Error::NotBearer(
-                dclutch_bearer_v2_contract::Error::NotBasisVector
+                dclutch_claims::bearer::Error::NotBasisVector
             ))
         );
         assert_eq!(
             authenticate_basis_bytes(&descriptor_bytes, &graph_bytes, authority, WIDTH),
             Err(Error::NotBearer(
-                dclutch_bearer_v2_contract::Error::BindingMismatch
+                dclutch_claims::bearer::Error::BindingMismatch
             ))
         );
 

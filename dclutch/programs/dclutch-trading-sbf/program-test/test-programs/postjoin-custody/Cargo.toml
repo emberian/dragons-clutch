@@ -16,7 +16,7 @@ custom-heap = []
 custom-panic = []
 
 [dependencies]
-dclutch-custody-contract = { path = "../../../../../crates/dclutch-custody-contract" }
+dclutch-custody = { path = "../../../../../crates/dclutch-custody" }
 dclutch-custody-sbf = { path = "../../../..//dclutch-custody-sbf", features = ["no-entrypoint"] }
 solana-program = { version = "=3.0.0", default-features = false }
 

@@ -27,15 +27,15 @@
 
 use std::{env, fs, path::PathBuf, process::ExitCode};
 
-use dclutch_capability_program_contract::v4::CapabilityProgramV4;
-use dclutch_claims_svm::founding_v5::{ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5};
+use dclutch_market::capability_program::v4::CapabilityProgramV4;
+use dclutch_claims::founding_v5::{ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5};
 use dclutch_core_contract::ContentId;
 use dclutch_series_shadow_bundle_generator::{
     SERIES_SHADOW_FIXED_ACCOUNT_COUNT_V4, SeriesShadowBundleSourceV4,
     SeriesShadowDescriptorSemanticsV4, SeriesShadowReleaseSourcesV4,
     compile_series_shadow_source_manifest_v1, emit_series_shadow_generated_include_v1,
 };
-use dclutch_series_v3_kernel::replay::SERIES_TICKET_STATE_BYTES_V3;
+use dclutch_trading::series::replay::SERIES_TICKET_STATE_BYTES_V3;
 use dclutch_trading_sbf::series::{
     account_profile_v4::stamp_series_release_owned_widths_v4,
     artifacts_v3::{

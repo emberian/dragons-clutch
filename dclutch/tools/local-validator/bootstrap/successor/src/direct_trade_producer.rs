@@ -15,23 +15,23 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1;
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_manifest::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1;
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
     v4::SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, v4::CapabilityProgramV4,
 };
-use dclutch_capability_seal_contract::CAPABILITY_SEAL_PDA_DOMAIN_V1;
-use dclutch_claims_svm::{
+use dclutch_vm::capability_seal::CAPABILITY_SEAL_PDA_DOMAIN_V1;
+use dclutch_claims::{
     liability_basis_state_v2::{LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2},
     protocol_position_v2::ProtocolPositionSeedsV2,
 };
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CallerRoleV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1, CustodyReplayV1,
 };
-use dclutch_direct_codec::{
+use dclutch_trading::{
     execution_v3::DirectExecutionActionV3,
     intent_v2::CompactIntentV2,
     replay_setup_v1::DirectReplaySetupRequestV1,
@@ -43,19 +43,19 @@ use dclutch_direct_codec::{
         DirectTokenAccountRoleV1, DirectTokenAccountSeedsV1, DirectTokenSetupRequestV1,
     },
 };
-use dclutch_market_core_codec::{CoreState, Phase as CorePhase};
+use dclutch_market::{CoreState, Phase as CorePhase};
 use dclutch_operator::{
     direct_inline_route_v3::derive_direct_inline_child_authorities_v3,
     direct_inline_v3::{SignedDirectIntentV3, compile_direct_inline_request_v3},
 };
-use dclutch_product_payoff_v2_codec::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3;
-use dclutch_product_runtime_v2_admission::{
+use dclutch_product::payoff::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3;
+use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
 };
-use dclutch_realm_contract::REALM_SCHEMA_RELEASE_ID_V1;
-use dclutch_record_contract::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
-use dclutch_rent_contract::lifecycle_v2::LifecycleRentCreditV2;
-use dclutch_token_svm::{ACCOUNT_BYTES, AccountState, COption, TokenAccount};
+use dclutch_market::realm::REALM_SCHEMA_RELEASE_ID_V1;
+use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
+use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
+use dclutch_custody::token_svm::{ACCOUNT_BYTES, AccountState, COption, TokenAccount};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
@@ -501,8 +501,8 @@ pub(crate) struct DirectTradeTermsV1 {
 ///   destination that already exists cannot be set up again, ever.
 /// - [`Initialized`](Self::Initialized) is what the TRADE requires in order to
 ///   EXECUTE against the account. `project_tokens_v3` in
-///   `dclutch-direct-codec` refuses on owner, length, state, native profile,
-///   Mint and token-owner (`crates/dclutch-direct-codec/src/direct_finalization_v3.rs`),
+///   `dclutch-trading` refuses on owner, length, state, native profile,
+///   Mint and token-owner (`crates/dclutch-trading/src/direct_finalization_v3.rs`),
 ///   so a vacant destination cannot be paid.
 ///
 /// A market's FIRST trade sees `Vacant` and runs token setup. Every later trade
@@ -709,7 +709,7 @@ fn refusing_ticket_half_clauses_v1(
 /// the producer used to model it as a floor over the wrong number entirely. It
 /// tested `participant.collateral_quantity_atoms < required_buyer_collateral`
 /// -- one `<` against the admission REPORT -- while `validate_collateral` in
-/// `dclutch-direct-codec`, which is what the Trading program actually runs,
+/// `dclutch-trading`, which is what the Trading program actually runs,
 /// tests two different things about the finalized TOKEN ACCOUNT:
 ///
 /// - `balance < buyer_collateral_debit` refuses. A floor, as expected.
@@ -916,7 +916,7 @@ fn assemble_public_manifest_v1(
             refusing.join("; ")
         )));
     }
-    let context = dclutch_direct_codec::ordinary_v3::DirectOrdinaryAuthenticatedContextV3 {
+    let context = dclutch_trading::ordinary_v3::DirectOrdinaryAuthenticatedContextV3 {
         parent_request_digest: hash(
             &compile_direct_inline_request_v3(
                 seller_signed,
@@ -3175,7 +3175,7 @@ fn derive_capability_seal_v1(
 ///
 /// The seeds come from [`RecordKeyV1`] rather than being spelled here: a
 /// Registry record address is the Registry's fact, and this producer is not a
-/// second author of it. `crates/dclutch-record-contract` exports the
+/// second author of it. `crates/dclutch-registry` exports the
 /// constructor for exactly this, and `programs/dclutch-registry-sbf`'s own
 /// `derive_record_pda` reads the same three segments in the same order.
 fn record_address_v1(registry: &Pubkey, seeds: RecordPdaSeedsV1) -> Pubkey {
@@ -3261,14 +3261,14 @@ fn devnet_market_record_schema_v1(market_input: &MarketRunInput, label: &str) ->
         "direct_program_set_record" => CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
         "direct_ordinary_descriptor_record" => CAPABILITY_PROGRAM_SCHEMA_ID_V4,
         "direct_activation_account_profile_record" => {
-            dclutch_direct_codec::activation_bundle_v1::direct_activation_account_profile_schema_v1(
+            dclutch_trading::activation_bundle_v1::direct_activation_account_profile_schema_v1(
             )
         }
         "direct_activation_effect_record" => {
-            dclutch_direct_codec::activation_bundle_v1::direct_activation_effect_schema_v1()
+            dclutch_trading::activation_bundle_v1::direct_activation_effect_schema_v1()
         }
         "direct_activation_descriptor_record" => {
-            dclutch_direct_codec::activation_bundle_v1::direct_activation_descriptor_schema_v1()
+            dclutch_trading::activation_bundle_v1::direct_activation_descriptor_schema_v1()
         }
         "product_record" => PRODUCT_RECORD_SCHEMA_ID_V2,
         "result_domain_record" => RESULT_DOMAIN_SCHEMA_ID_V2,
@@ -3416,7 +3416,7 @@ fn authenticate_direct_execution_root_shape_v1(
     trading: Pubkey,
 ) -> Result<()> {
     let expected_bytes = CAPABILITY_ROOT_HEADER_BYTES_V1
-        .checked_add(dclutch_direct_codec::successor::DIRECT_ROOT_STATE_BYTES_V1)
+        .checked_add(dclutch_trading::successor::DIRECT_ROOT_STATE_BYTES_V1)
         .ok_or_else(|| refusal("Direct root width overflowed"))?;
     // ABSENCE IS EXCLUSIVE and is answered alone. Unlike the clauses below it
     // is not one fact among several that could be wrong together: when the
@@ -3521,7 +3521,7 @@ pub(crate) fn derived_direct_execution_root_v1(
     if sha256_hex(&manifest_body) != manifest_pair.content_sha256 {
         return Err(refusal("capability manifest body digest changed"));
     }
-    let manifest = dclutch_capability_contract::CapabilityManifestV1::decode(&manifest_body)
+    let manifest = dclutch_market::capability_manifest::CapabilityManifestV1::decode(&manifest_body)
         .map_err(|error| Error::new(format!("capability manifest: {error:?}")))?;
     let entry = manifest
         .entry(entry_index)
@@ -3534,7 +3534,7 @@ pub(crate) fn derived_direct_execution_root_v1(
             "Market identity selects another capability manifest",
         ));
     }
-    let selection = dclutch_release_set_contract::CapabilityExecutionSelectionV1::new(
+    let selection = dclutch_registry::release_set::CapabilityExecutionSelectionV1::new(
         entry_index,
         dclutch_core_contract::ContentId::new(hash(&manifest_body).to_bytes())
             .map_err(|_| refusal("manifest identity is zero"))?,
@@ -3543,7 +3543,7 @@ pub(crate) fn derived_direct_execution_root_v1(
         entry.config_id(),
     )
     .map_err(|error| Error::new(format!("execution selection: {error:?}")))?;
-    let header = dclutch_capability_program_contract::CapabilityRootHeaderV1::new(
+    let header = dclutch_market::capability_program::CapabilityRootHeaderV1::new(
         dclutch_core_contract::ContentId::new(
             market_state.identity.selected_release_set.to_bytes(),
         )
@@ -3551,7 +3551,7 @@ pub(crate) fn derived_direct_execution_root_v1(
         market.to_bytes(),
         market_state.identity.generation,
         selection,
-        dclutch_capability_program_contract::SelectedRecordBumpsV1::default(),
+        dclutch_market::capability_program::SelectedRecordBumpsV1::default(),
     )
     .map_err(|error| Error::new(format!("root header: {error:?}")))?;
     Ok(Pubkey::find_program_address(
@@ -4239,7 +4239,7 @@ mod tests {
         signature::{Keypair, Signer as _},
     };
 
-    use dclutch_token_svm::{TokenAccount, state::TokenAccountLayoutV1};
+    use dclutch_custody::token_svm::{TokenAccount, state::TokenAccountLayoutV1};
     use solana_sdk_ids::system_program;
 
     use crate::rpc::RpcAccount;
@@ -4270,7 +4270,7 @@ mod tests {
         direct_trade::AuthenticatedDevnetDirectSessionSourceV1,
         user_position_admission::FinalizedDirectParticipantEvidenceV1,
     };
-    use dclutch_direct_codec::intent_v2::CompactIntentV2;
+    use dclutch_trading::intent_v2::CompactIntentV2;
 
     #[test]
     fn exact_demo_arithmetic_is_named_and_integral() -> crate::Result<()> {
@@ -4344,8 +4344,8 @@ mod tests {
     fn an_occupied_direct_root_names_every_clause_that_failed() {
         let root = Pubkey::new_unique();
         let trading = Pubkey::new_unique();
-        let exact = dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1
-            + dclutch_direct_codec::successor::DIRECT_ROOT_STATE_BYTES_V1;
+        let exact = dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1
+            + dclutch_trading::successor::DIRECT_ROOT_STATE_BYTES_V1;
         // The width both halves of the old comparison were made of. It is a
         // pair of compile-time constants and no Market's outcome count reaches
         // either one.

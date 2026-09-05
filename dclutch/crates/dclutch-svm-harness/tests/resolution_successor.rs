@@ -9,49 +9,49 @@
 
 use std::{env, fs, path::PathBuf, str::FromStr};
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
     CapabilityEntryV1, CapabilityFundingDerivationV1, CapabilityManifestV1, CompartmentFundingV1,
     FUNDING_STATE_BYTES, FundingAmountsV1, FundingCustodyObservationV1, FundingQuoteV1,
     FundingStateV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
 };
 use dclutch_core_contract::ContentId as CoreContentId;
-use dclutch_market_core_codec::{
+use dclutch_market::{
     CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2,
     MarketIdentity as CoreMarketIdentity, Phase as CorePhase, Readiness as CoreReadiness,
     StateBumpsV1,
 };
-use dclutch_product_runtime_v2::{
+use dclutch_product::{
     ContentId as RuntimeProductContentId, PortfolioInputV2, ResultDomainInputV2,
     compile_portfolio_v2, compile_result_domain_v2, portfolio_record_bytes,
     result_domain_record_bytes,
 };
-use dclutch_product_runtime_v2_admission::{
+use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
     RESULT_DOMAIN_SCHEMA_ID_V2,
 };
-use dclutch_pyth_svm::{FullPriceUpdateV2, local_validator_release_v1};
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{
+use dclutch_source::pyth::{FullPriceUpdateV2, local_validator_release_v1};
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
     ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
     initialize_activation_cache_v1,
 };
-use dclutch_registry_svm::RegistryInstructionV1;
-use dclutch_release_set_contract::{
+use dclutch_registry::svm::RegistryInstructionV1;
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2,
     ProgramIdentityV1, ProtocolInfrastructureProfileV2,
 };
-use dclutch_resolution_codec::{
+use dclutch_source::resolution::{
     FundedTransitionActionV3, PRIMARY_CERTIFICATE_SEQUENCE_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
     RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
     RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
 use dclutch_resolution_proof_sbf::ResolutionError;
 use dclutch_resolution_receipt_test_caller_sbf::TestReceiptCallerError;
-use dclutch_source_contract::{
+use dclutch_source::{
     CapacityEnvelope, ContentId as SourceContentId, PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1,
     ProviderReleaseV1, PythAdapterConfigV1, RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryAttemptV2,
     RecoveryPolicyV2, RoundingBoundary, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,

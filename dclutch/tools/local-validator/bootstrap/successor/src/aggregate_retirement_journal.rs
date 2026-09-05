@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use dclutch_market_core_codec::{
+use dclutch_market::{
     AGGREGATE_RETIREMENT_CLOSE_REPLAY_MAGIC_V1, AGGREGATE_RETIREMENT_CLOSE_VAULT_MAGIC_V1,
     AGGREGATE_RETIREMENT_FINISH_MAGIC_V1, AGGREGATE_RETIREMENT_SUFFIX_REQUEST_BYTES_V1,
     AggregateRetirementCheckpointV1, AggregateRetirementPhaseV1,

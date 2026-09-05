@@ -8,14 +8,14 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use dclutch_claims_svm::protocol_position_v2::{
+use dclutch_claims::protocol_position_v2::{
     ProtocolPositionActionV2, ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2,
     ProtocolPositionRequestV2,
 };
-use dclutch_rational_representation_v2_lifecycle_contract::{
+use dclutch_claims::rational_lifecycle::{
     LIFECYCLE_RECEIPT_BYTES_V2, LifecycleActionV2, LifecycleReceiptV2, LifecycleRequestV2,
 };
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,

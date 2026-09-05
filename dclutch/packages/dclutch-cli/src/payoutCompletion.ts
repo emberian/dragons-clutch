@@ -124,7 +124,7 @@ const MAX_JOURNAL_BYTES = 786_432;
 const MAX_EVIDENCE_BYTES = 16 * 1024 * 1024;
 const MAX_PROJECTED_INPUT_BYTES = 32_768;
 const MAX_JSON_DEPTH = 64;
-// Consumer pins for `dclutch-custody-contract/src/generated.rs`'s canonical
+// Consumer pins for `dclutch-custody/src/generated.rs`'s canonical
 // CustodyReceiptV1 layout. The Rust contract remains the semantic owner; this
 // CLI hostile-decodes the finalized return bytes instead of treating a
 // successful transaction status as a receipt.

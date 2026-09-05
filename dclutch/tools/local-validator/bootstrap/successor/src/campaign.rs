@@ -75,17 +75,17 @@ use std::{
 };
 
 use base64::Engine as _;
-use dclutch_pyth_svm::devnet_release_v1;
-use dclutch_registry_contract::{
+use dclutch_source::pyth::devnet_release_v1;
+use dclutch_registry::{
     ACTIVATION_CACHE_BUMP_OFFSET_V1, ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1,
     ActivatedExecutionReleaseSetV1, ActivatedExecutionReleaseSetViewV1, ActivationCacheProgressV1,
     ArtifactReleaseV1, ArtifactUpgradePolicyV1, activation_cache_progress_v1,
 };
-use dclutch_registry_svm::{
+use dclutch_registry::svm::{
     LOADER_V3_PROGRAMDATA_METADATA_BYTES, ProgramDataMetadataV3View, ProgramDataV3View,
     ProgramV3View,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, EXECUTION_ROLE_ORDER_V1, ExecutionRoleBindingV1, ExecutionRoleV1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProtocolInfrastructureProfileV1,
@@ -1197,7 +1197,7 @@ fn authenticate_graduation_market_input_v1(input: &GraduationMarketInputV1) -> R
         || input.market.coefficients != [1, 0]
         || !input.market.recovery_policy_hex.is_empty()
         || input.market.failure_policy_release_id
-            != hex(&dclutch_source_contract::SOURCE_FAILURE_POLICY_RELEASE_ID_V2)
+            != hex(&dclutch_source::SOURCE_FAILURE_POLICY_RELEASE_ID_V2)
     {
         return Err(Error::new(
             "graduation wrapper substituted the fixed profile-v1 market geometry",
@@ -1212,12 +1212,12 @@ fn authenticate_graduation_market_input_v1(input: &GraduationMarketInputV1) -> R
             "graduation source_spec_digest does not name the inner source body",
         ));
     }
-    let source = dclutch_source_contract::SourceSpecV1::decode(&source_bytes)
+    let source = dclutch_source::SourceSpecV1::decode(&source_bytes)
         .map_err(|error| Error::new(format!("graduation SourceSpecV1: {error:?}")))?;
     if source.domain_id().to_bytes() != coordinate_domain
         || source.unit_id().to_bytes() != result_unit
         || source.access_profile()
-            != dclutch_source_contract::SourceAccessProfile::RelayedObservationRecord
+            != dclutch_source::SourceAccessProfile::RelayedObservationRecord
     {
         return Err(Error::new(
             "graduation source body is not the relayed profile-v1 Product source",
@@ -1225,10 +1225,10 @@ fn authenticate_graduation_market_input_v1(input: &GraduationMarketInputV1) -> R
     }
 
     let window_bytes = runtime::decode_hex(&input.market.window_spec_hex)?;
-    let window = dclutch_source_contract::WindowSpecV1::decode(&window_bytes)
+    let window = dclutch_source::WindowSpecV1::decode(&window_bytes)
         .map_err(|error| Error::new(format!("graduation WindowSpecV1: {error:?}")))?;
     if digest_hex(&window_bytes) != input.market.window_spec_id
-        || window.kind() != dclutch_source_contract::WindowKind::Terminal
+        || window.kind() != dclutch_source::WindowKind::Terminal
         || window.source_spec_id().to_bytes()
             != canonical_hex_32(&input.source_spec_digest, "source_spec_digest")?
         || window.start_unix_seconds() != input.window.start_unix_seconds
@@ -1252,7 +1252,7 @@ fn authenticate_graduation_market_input_v1(input: &GraduationMarketInputV1) -> R
         ));
     }
     let key_set_bytes = runtime::decode_hex(&input.relayer_key_set_hex)?;
-    let key_set = dclutch_relay_contract::release::RelayerKeySetV1::decode(&key_set_bytes)
+    let key_set = dclutch_source::relay::release::RelayerKeySetV1::decode(&key_set_bytes)
         .map_err(|error| Error::new(format!("graduation RelayerKeySetV1: {error:?}")))?;
     let canonical_key_set = key_set
         .to_bytes()
@@ -1272,7 +1272,7 @@ fn authenticate_graduation_market_input_v1(input: &GraduationMarketInputV1) -> R
     // wrapper. Recompile it from the wrapper's authenticated set and window,
     // then bind its digest through ProviderReleaseV1. This closes the otherwise
     // invisible account-set/config substitution seam.
-    let adapter = dclutch_relay_contract::release::RelayedAdapterConfigV1::new(
+    let adapter = dclutch_source::relay::release::RelayedAdapterConfigV1::new(
         account_set_id,
         0,
         0,
@@ -1290,13 +1290,13 @@ fn authenticate_graduation_market_input_v1(input: &GraduationMarketInputV1) -> R
     }
 
     let provider_bytes = runtime::decode_hex(&input.market.provider_release_hex)?;
-    let provider = dclutch_source_contract::ProviderReleaseV1::decode(&provider_bytes)
+    let provider = dclutch_source::ProviderReleaseV1::decode(&provider_bytes)
         .map_err(|error| Error::new(format!("graduation ProviderReleaseV1: {error:?}")))?;
     if provider.to_bytes().as_slice() != provider_bytes
         || provider.provider_family_id().to_bytes()
-            != dclutch_relay_contract::RELAYED_FAMILY_RELEASE_ID_V1
+            != dclutch_source::relay::RELAYED_FAMILY_RELEASE_ID_V1
         || provider.adapter_release_id().to_bytes()
-            != dclutch_source_contract::RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1
+            != dclutch_source::RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1
         || provider.provider_deployment_release_id().to_bytes()
             != canonical_hex_32(&input.relayer_key_set_digest, "relayer_key_set_digest")?
         || provider.decoding_rules_id().to_bytes()
@@ -1305,7 +1305,7 @@ fn authenticate_graduation_market_input_v1(input: &GraduationMarketInputV1) -> R
                 "relayed_adapter_config_digest",
             )?
         || provider.transport_profile_id().to_bytes()
-            != dclutch_relay_contract::RELAYED_RECORD_TRANSPORT_PROFILE_ID_V1
+            != dclutch_source::relay::RELAYED_RECORD_TRANSPORT_PROFILE_ID_V1
         || source.provider_release_id().to_bytes() != sha256_bytes(&provider_bytes)
     {
         return Err(Error::new(
@@ -1314,15 +1314,15 @@ fn authenticate_graduation_market_input_v1(input: &GraduationMarketInputV1) -> R
     }
 
     let venue_bytes = runtime::decode_hex(&input.market.pyth_adapter_config_hex)?;
-    let venue = dclutch_registry_contract::ArtifactReleaseV1::decode(&venue_bytes)
+    let venue = dclutch_registry::ArtifactReleaseV1::decode(&venue_bytes)
         .map_err(|error| Error::new(format!("graduation venue ArtifactReleaseV1: {error:?}")))?;
     if venue.to_bytes().as_slice() != venue_bytes
         || venue.loader_program().to_bytes()
-            != dclutch_relay_contract::identity::LOADER_V3_PROGRAM_ID
+            != dclutch_source::relay::identity::LOADER_V3_PROGRAM_ID
         || venue.semantic_release_id().to_bytes()
             != crate::market::demo_id("relayed/venue-semantic-release/meteora-dbc", &[])
         || venue.upgrade_policy()
-            != dclutch_registry_contract::ArtifactUpgradePolicyV1::ExactAuthority
+            != dclutch_registry::ArtifactUpgradePolicyV1::ExactAuthority
         || venue.upgrade_authority().is_none()
         || digest_hex(&venue_bytes) != input.venue_release_digest
         || source.adapter_config_id().to_bytes()
@@ -1341,19 +1341,19 @@ fn authenticate_graduation_market_input_v1(input: &GraduationMarketInputV1) -> R
     // while retaining the wrapper's 1/4-cap fields would make the disclosure
     // and the Market disagree.
     let capacity_bytes = runtime::decode_hex(&input.market.source_capacity_profile_hex)?;
-    let capacity = dclutch_source_contract::SourceCapacityProfileV1::decode(&capacity_bytes)
+    let capacity = dclutch_source::SourceCapacityProfileV1::decode(&capacity_bytes)
         .map_err(|error| Error::new(format!("graduation SourceCapacityProfileV1: {error:?}")))?;
-    let expected_capacity = dclutch_source_contract::SourceCapacityProfileV1::new(
-        dclutch_source_contract::CapacityEnvelope::Provisional,
+    let expected_capacity = dclutch_source::SourceCapacityProfileV1::new(
+        dclutch_source::CapacityEnvelope::Provisional,
         1,
         0,
-        dclutch_source_contract::ContentId::new(crate::market::demo_id(
+        dclutch_source::ContentId::new(crate::market::demo_id(
             "relayed/capacity/terminal-verifier",
             &[],
         ))
         .map_err(|error| Error::new(format!("graduation capacity verifier: {error:?}")))?,
-        dclutch_source_contract::ContentId::new(
-            dclutch_source_contract::PRINCIPAL_CAPACITY_LIFTING_PLAN_ID_V1,
+        dclutch_source::ContentId::new(
+            dclutch_source::PRINCIPAL_CAPACITY_LIFTING_PLAN_ID_V1,
         )
         .map_err(|error| Error::new(format!("graduation capacity lifting plan: {error:?}")))?,
         512,
@@ -1361,8 +1361,8 @@ fn authenticate_graduation_market_input_v1(input: &GraduationMarketInputV1) -> R
     )
     .map_err(|error| Error::new(format!("graduation source capacity: {error:?}")))?
     .bounding_principal(
-        dclutch_source_contract::CHAIN_STATE_DEFAULT_KAPPA_NUMERATOR_V1,
-        dclutch_source_contract::CHAIN_STATE_DEFAULT_KAPPA_DENOMINATOR_V1,
+        dclutch_source::CHAIN_STATE_DEFAULT_KAPPA_NUMERATOR_V1,
+        dclutch_source::CHAIN_STATE_DEFAULT_KAPPA_DENOMINATOR_V1,
     )
     .map_err(|error| Error::new(format!("graduation source kappa: {error:?}")))?;
     if capacity.to_bytes().as_slice() != capacity_bytes
@@ -1380,23 +1380,23 @@ fn authenticate_graduation_market_input_v1(input: &GraduationMarketInputV1) -> R
             "graduation Market omitted its exact bounded manipulation floor",
         ));
     }
-    let floor = dclutch_source_contract::ManipulationFloorV1::decode(&floor_bytes)
+    let floor = dclutch_source::ManipulationFloorV1::decode(&floor_bytes)
         .map_err(|error| Error::new(format!("graduation ManipulationFloorV1: {error:?}")))?;
-    let expected_floor = dclutch_source_contract::ManipulationFloorV1::new(
-        dclutch_source_contract::ManipulationFloorBasis::CurveDerived,
-        dclutch_source_contract::ContentId::new(sha256_bytes(&source_bytes))
+    let expected_floor = dclutch_source::ManipulationFloorV1::new(
+        dclutch_source::ManipulationFloorBasis::CurveDerived,
+        dclutch_source::ContentId::new(sha256_bytes(&source_bytes))
             .map_err(|error| Error::new(format!("graduation source identity: {error:?}")))?,
         source.adapter_config_id(),
-        dclutch_source_contract::ContentId::new(crate::market::demo_id(
+        dclutch_source::ContentId::new(crate::market::demo_id(
             "relayed/collateral-unit/realm-native-lamports",
             &[],
         ))
         .map_err(|error| Error::new(format!("graduation collateral unit: {error:?}")))?,
-        dclutch_source_contract::ContentId::new(
-            dclutch_source_contract::BONDING_CURVE_FLOOR_DERIVATION_ID_V1,
+        dclutch_source::ContentId::new(
+            dclutch_source::BONDING_CURVE_FLOOR_DERIVATION_ID_V1,
         )
         .map_err(|error| Error::new(format!("graduation floor derivation: {error:?}")))?,
-        dclutch_source_contract::BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1,
+        dclutch_source::BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1,
     );
     if floor.to_bytes().as_slice() != floor_bytes || floor != expected_floor {
         return Err(Error::new(
@@ -1410,9 +1410,9 @@ fn authenticate_graduation_market_input_v1(input: &GraduationMarketInputV1) -> R
         "admitted_principal_cap_atoms",
     )?;
     let expected_admitted = u128::from(input.market.initial_collateral_atoms / 2);
-    let expected_cap = u128::from(dclutch_source_contract::CHAIN_STATE_DEFAULT_KAPPA_NUMERATOR_V1)
-        * u128::from(dclutch_source_contract::BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1)
-        / u128::from(dclutch_source_contract::CHAIN_STATE_DEFAULT_KAPPA_DENOMINATOR_V1);
+    let expected_cap = u128::from(dclutch_source::CHAIN_STATE_DEFAULT_KAPPA_NUMERATOR_V1)
+        * u128::from(dclutch_source::BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1)
+        / u128::from(dclutch_source::CHAIN_STATE_DEFAULT_KAPPA_DENOMINATOR_V1);
     if input.walk_bounty_lamports != crate::relayed::WALK_BOUNTY_LAMPORTS
         || admitted != expected_admitted
         || cap != expected_cap
@@ -2558,7 +2558,7 @@ pub(crate) fn succession_state(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<St
     let digest = sha256_bytes(&body);
     let raw = Pubkey::find_program_address(
         &[
-            dclutch_record_contract::RAW_RECORD_PDA_SEED_V1,
+            dclutch_registry::record::RAW_RECORD_PDA_SEED_V1,
             &ARTIFACT_RELEASE_SCHEMA_ID_V1,
             &digest,
         ],
@@ -2567,7 +2567,7 @@ pub(crate) fn succession_state(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<St
     .0;
     let staging = Pubkey::find_program_address(
         &[
-            dclutch_record_contract::STAGING_CURSOR_PDA_SEED_V1,
+            dclutch_registry::record::STAGING_CURSOR_PDA_SEED_V1,
             &ARTIFACT_RELEASE_SCHEMA_ID_V1,
             &digest,
         ],
@@ -2692,7 +2692,7 @@ fn finalized_artifact_release_evidence_v1(
 ) -> Result<(ArtifactReleaseV1, Value)> {
     let raw = Pubkey::find_program_address(
         &[
-            dclutch_record_contract::RAW_RECORD_PDA_SEED_V1,
+            dclutch_registry::record::RAW_RECORD_PDA_SEED_V1,
             &ARTIFACT_RELEASE_SCHEMA_ID_V1,
             id.as_bytes(),
         ],
@@ -2701,7 +2701,7 @@ fn finalized_artifact_release_evidence_v1(
     .0;
     let staging = Pubkey::find_program_address(
         &[
-            dclutch_record_contract::STAGING_CURSOR_PDA_SEED_V1,
+            dclutch_registry::record::STAGING_CURSOR_PDA_SEED_V1,
             &ARTIFACT_RELEASE_SCHEMA_ID_V1,
             id.as_bytes(),
         ],
@@ -3299,7 +3299,7 @@ fn remaining_profile_rent(
 
 /// Authenticate the committed devnet Pyth release row against live accounts.
 ///
-/// The row (`dclutch_pyth_svm::devnet_release_v1`, minted by SMOKE-0 at
+/// The row (`dclutch_source::pyth::devnet_release_v1`, minted by SMOKE-0 at
 /// `11f249ff`) states five keys, two deployment slots, and a config digest as
 /// measured facts. This re-reads all eight off the cluster and compares — the
 /// same joins `provider_instruction_v3::authenticate_pyth_release` makes on
@@ -5336,12 +5336,12 @@ mod tests {
     }
 
     fn v2_bindings() -> (
-        dclutch_release_set_contract::ExecutionRoleBindingV1,
-        dclutch_release_set_contract::ExecutionRoleBindingV1,
+        dclutch_registry::release_set::ExecutionRoleBindingV1,
+        dclutch_registry::release_set::ExecutionRoleBindingV1,
     ) {
         let binding = |program: u8, artifact: u8| {
-            dclutch_release_set_contract::ExecutionRoleBindingV1::new(
-                dclutch_release_set_contract::ProgramIdentityV1::new([program; 32])
+            dclutch_registry::release_set::ExecutionRoleBindingV1::new(
+                dclutch_registry::release_set::ProgramIdentityV1::new([program; 32])
                     .expect("program identity"),
                 ArtifactReleaseIdV1::new([artifact; 32]).expect("artifact identity"),
             )
@@ -5428,11 +5428,11 @@ mod tests {
     }
 
     use dclutch_core_contract::ContentId;
-    use dclutch_registry_contract::{
+    use dclutch_registry::{
         ArtifactActivationInputV1, DeploymentObservationV1, ExecutionReleaseActivationInputsV1,
         activate_execution_release_set_v1,
     };
-    use dclutch_release_set_contract::{ExecutionReleaseSetV1, ProgramIdentityV1};
+    use dclutch_registry::release_set::{ExecutionReleaseSetV1, ProgramIdentityV1};
 
     fn activation_test_content(seed: u8) -> ContentId {
         ContentId::new([seed; 32]).expect("nonzero content identity")
@@ -5764,7 +5764,7 @@ mod tests {
             registry,
             relayer.to_bytes(),
             &window,
-            dclutch_relay_contract::decode::RelayedObservableV1::DbcMigrationProgressV1,
+            dclutch_source::relay::decode::RelayedObservableV1::DbcMigrationProgressV1,
             &venue,
             direct.compiler(),
         )
@@ -6070,11 +6070,11 @@ mod tests {
                 .expect("capacity hex"),
         )
         .expect("capacity bytes");
-        capacity[dclutch_source_contract::SOURCE_CAPACITY_PRINCIPAL_NUMERATOR_OFFSET_V1
-            ..dclutch_source_contract::SOURCE_CAPACITY_PRINCIPAL_NUMERATOR_OFFSET_V1 + 4]
+        capacity[dclutch_source::SOURCE_CAPACITY_PRINCIPAL_NUMERATOR_OFFSET_V1
+            ..dclutch_source::SOURCE_CAPACITY_PRINCIPAL_NUMERATOR_OFFSET_V1 + 4]
             .fill(0);
-        capacity[dclutch_source_contract::SOURCE_CAPACITY_PRINCIPAL_DENOMINATOR_OFFSET_V1
-            ..dclutch_source_contract::SOURCE_CAPACITY_PRINCIPAL_DENOMINATOR_OFFSET_V1 + 4]
+        capacity[dclutch_source::SOURCE_CAPACITY_PRINCIPAL_DENOMINATOR_OFFSET_V1
+            ..dclutch_source::SOURCE_CAPACITY_PRINCIPAL_DENOMINATOR_OFFSET_V1 + 4]
             .fill(0);
         unstated["market"]["source_capacity_profile_hex"] = json!(hex(&capacity));
         let refusal = load_market_input(&serde_json::to_vec(&unstated).expect("JSON"))
@@ -6089,11 +6089,11 @@ mod tests {
                 .expect("floor hex"),
         )
         .expect("floor bytes");
-        let floor = dclutch_source_contract::ManipulationFloorV1::decode(&floor_bytes)
+        let floor = dclutch_source::ManipulationFloorV1::decode(&floor_bytes)
             .expect("canonical floor");
-        let substituted_floor = dclutch_source_contract::ManipulationFloorV1::new(
+        let substituted_floor = dclutch_source::ManipulationFloorV1::new(
             floor.basis(),
-            dclutch_source_contract::ContentId::new([0x91; 32]).expect("hostile source"),
+            dclutch_source::ContentId::new([0x91; 32]).expect("hostile source"),
             floor.adapter_config_id(),
             floor.collateral_unit_id(),
             floor.derivation_release_id(),

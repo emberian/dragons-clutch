@@ -737,7 +737,7 @@ pub(crate) fn child_refused_v1(error: ProgramError) -> ProgramError {
 }
 
 use crate::admitted_composition_v3::ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4;
-use dclutch_capability_program_contract::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3;
+use dclutch_market::capability_program::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3;
 
 /// Bank pages the widest common heap profile carries.
 ///
@@ -745,7 +745,7 @@ use dclutch_capability_program_contract::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3;
 /// number as `entrypoint_adapter::ADAPTER_STACK_SLOTS_V1`, and named for the
 /// same reason: so the bound it feeds is a sum of things that can be checked
 /// one at a time. Each page carries
-/// `dclutch_execution_strategy_contract::generated_v2::ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2`
+/// `dclutch_market::execution_strategy::generated_v2::ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2`
 /// (880) bytes of accelerator input bank.
 pub const TRADING_MAX_HOT_BANK_PAGES_V3: usize = 10;
 
@@ -810,7 +810,7 @@ pub fn process_instruction(
     instruction_data: &[u8],
 ) -> ProgramResult {
     require_instruction_account_bound_v3(accounts.len())?;
-    if dclutch_user_position_admission_contract::is_user_position_admission_v1(instruction_data) {
+    if dclutch_claims::position_admission::is_user_position_admission_v1(instruction_data) {
         return user_position_admission_v1::process_user_position_admission_v1(
             program_id,
             accounts,
@@ -818,7 +818,7 @@ pub fn process_instruction(
         );
     }
     #[cfg(feature = "families")]
-    if dclutch_direct_codec::retirement_v1::is_direct_begin_retiring_v1(instruction_data) {
+    if dclutch_trading::retirement_v1::is_direct_begin_retiring_v1(instruction_data) {
         return direct_begin_retiring_v1::process_direct_begin_retiring_v1(
             program_id,
             accounts,
@@ -826,7 +826,7 @@ pub fn process_instruction(
         );
     }
     #[cfg(feature = "families")]
-    if dclutch_direct_codec::close_maker_v1::is_direct_close_maker_v1(instruction_data) {
+    if dclutch_trading::close_maker_v1::is_direct_close_maker_v1(instruction_data) {
         return direct_close_maker_v1::process_direct_close_maker_v1(
             program_id,
             accounts,
@@ -834,7 +834,7 @@ pub fn process_instruction(
         );
     }
     #[cfg(feature = "families")]
-    if dclutch_direct_codec::replay_setup_v1::is_direct_replay_setup_v1(instruction_data) {
+    if dclutch_trading::replay_setup_v1::is_direct_replay_setup_v1(instruction_data) {
         return direct_replay_setup_v1::process_direct_replay_setup_v1(
             program_id,
             accounts,
@@ -842,7 +842,7 @@ pub fn process_instruction(
         );
     }
     #[cfg(feature = "families")]
-    if dclutch_direct_codec::token_setup_v1::is_direct_token_setup_v1(instruction_data) {
+    if dclutch_trading::token_setup_v1::is_direct_token_setup_v1(instruction_data) {
         return direct_token_setup_v1::process_direct_token_setup_v1(
             program_id,
             accounts,
@@ -852,7 +852,7 @@ pub fn process_instruction(
     // The fee leg, in the transaction of its own that
     // `docs/design/FEE_SECOND_TRANSACTION_V1.md` moved it into.
     #[cfg(feature = "families")]
-    if dclutch_direct_codec::fee_settlement_v1::is_direct_fee_settlement_v1(instruction_data) {
+    if dclutch_trading::fee_settlement_v1::is_direct_fee_settlement_v1(instruction_data) {
         return direct_fee_settlement_v1::process_direct_fee_settlement_v1(
             program_id,
             accounts,
@@ -964,7 +964,7 @@ pub fn process_instruction(
     // once per (descriptor, action, Trading interpreter release, Registry).
     // It creates one PDA under this Program, signs nothing else, and can only
     // ever persist this executable's own verdict about immutable public bytes.
-    if dclutch_capability_seal_contract::is_capability_seal_request_v1(instruction_data) {
+    if dclutch_vm::capability_seal::is_capability_seal_request_v1(instruction_data) {
         return hot_v3::process_capability_seal_v1(program_id, accounts, instruction_data);
     }
     // Omission P-006. The other end of the seal's life: a seal the live release
@@ -973,7 +973,7 @@ pub fn process_instruction(
     // signs, keeps exactly the rent the close liberates, and races nobody --
     // the second attempt refuses by absence. It creates nothing, signs for
     // nothing, and touches exactly one account this Program owns.
-    if dclutch_capability_seal_contract::is_capability_seal_close_request_v1(instruction_data) {
+    if dclutch_vm::capability_seal::is_capability_seal_close_request_v1(instruction_data) {
         return hot_v3::process_capability_seal_close_v1(program_id, accounts, instruction_data);
     }
     if hot_v3::is_hot_execution_v3(instruction_data) {

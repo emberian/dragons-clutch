@@ -7,7 +7,7 @@
 //! CPI, or state-write authority; the projected outer and common Hot executor
 //! retain those physical responsibilities.
 
-use dclutch_account_profile_contract::{
+use dclutch_vm::account_profile::{
     lifecycle_v3::{
         CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5 as LIFECYCLE_SCHEMA_ID_V5, StateLifecyclePolicyV5,
     },
@@ -16,7 +16,7 @@ use dclutch_account_profile_contract::{
         SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2,
     },
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     set_v2::{CapabilityProgramSetV2, SelectorWidthV2},
     v4::{
         ArtifactReferenceV4, CapabilityProgramV4,
@@ -24,15 +24,15 @@ use dclutch_capability_program_contract::{
     },
 };
 use dclutch_core_contract::ContentId;
-use dclutch_execution_strategy_contract::v2::{
+use dclutch_market::execution_strategy::v2::{
     EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyProgramV2,
 };
-use dclutch_request_profile_contract::{ProjectionRegistersV1, RequestProfileV1, project_atomic};
-use dclutch_series_v3_kernel::{
+use dclutch_vm::request_profile::{ProjectionRegistersV1, RequestProfileV1, project_atomic};
+use dclutch_trading::series::{
     SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
     request::{SeriesActionRequestV3, SeriesActionV3},
 };
-use dclutch_transition_vm::{MAX_IDENTITIES, MAX_SCALARS, v3::ProgramV3 as TransitionProgramV3};
+use dclutch_vm::{MAX_IDENTITIES, MAX_SCALARS, v3::ProgramV3 as TransitionProgramV3};
 use solana_program::hash::hash;
 
 use crate::projected_market_v2::AuthenticatedFoundSpanV2;
@@ -248,7 +248,7 @@ pub fn authenticate_series_consume_artifacts_v4<'a>(
 
     require_artifact(
         descriptor.request_profile(),
-        dclutch_request_profile_contract::SCHEMA_RELEASE_ID,
+        dclutch_vm::request_profile::SCHEMA_RELEASE_ID,
         artifacts.request_profile,
         SeriesArtifactErrorV4::RequestProfile,
     )?;
@@ -276,7 +276,7 @@ pub fn authenticate_series_consume_artifacts_v4<'a>(
 
     require_artifact(
         descriptor.transition(),
-        dclutch_transition_vm::v3::SCHEMA_RELEASE_ID,
+        dclutch_vm::v3::SCHEMA_RELEASE_ID,
         artifacts.transition,
         SeriesArtifactErrorV4::Transition,
     )?;
@@ -285,7 +285,7 @@ pub fn authenticate_series_consume_artifacts_v4<'a>(
 
     require_artifact(
         descriptor.effect(),
-        dclutch_effect_kernel::v4::SCHEMA_RELEASE_ID_V4,
+        dclutch_vm::effect::v4::SCHEMA_RELEASE_ID_V4,
         artifacts.effect,
         SeriesArtifactErrorV4::Effect,
     )?;
@@ -399,13 +399,13 @@ fn validate_descriptor(descriptor: CapabilityProgramV4) -> Result<()> {
             != SERIES_STATE_BYTES_V3
         || descriptor.account_profile().schema().to_bytes() != ACCOUNT_PROFILE_SCHEMA_ID_V2
         || descriptor.request_profile().schema().to_bytes()
-            != dclutch_request_profile_contract::SCHEMA_RELEASE_ID
+            != dclutch_vm::request_profile::SCHEMA_RELEASE_ID
         || descriptor.lifecycle().schema().to_bytes() != LIFECYCLE_SCHEMA_ID_V5
         || descriptor.strategy().schema().to_bytes() != EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2
         || descriptor.transition().schema().to_bytes()
-            != dclutch_transition_vm::v3::SCHEMA_RELEASE_ID
+            != dclutch_vm::v3::SCHEMA_RELEASE_ID
         || descriptor.effect().schema().to_bytes()
-            != dclutch_effect_kernel::v4::SCHEMA_RELEASE_ID_V4
+            != dclutch_vm::effect::v4::SCHEMA_RELEASE_ID_V4
     {
         return Err(SeriesArtifactErrorV4::Descriptor);
     }
@@ -594,7 +594,7 @@ pub(super) mod tests {
     extern crate alloc;
 
     use alloc::vec;
-    use dclutch_capability_program_contract::v4::CapabilityArtifactsV4;
+    use dclutch_market::capability_program::v4::CapabilityArtifactsV4;
 
     use super::*;
     use crate::series::account_profile_v4::{
@@ -632,10 +632,10 @@ pub(super) mod tests {
             byte_id(9),
             CapabilityArtifactsV4 {
                 account_profile: reference(ACCOUNT_PROFILE_SCHEMA_ID_V2, 10),
-                request_profile: reference(dclutch_request_profile_contract::SCHEMA_RELEASE_ID, 11),
+                request_profile: reference(dclutch_vm::request_profile::SCHEMA_RELEASE_ID, 11),
                 lifecycle: reference(LIFECYCLE_SCHEMA_ID_V5, 12),
                 strategy: reference(EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, 13),
-                transition: reference(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID, 14),
+                transition: reference(dclutch_vm::v3::SCHEMA_RELEASE_ID, 14),
                 effect: reference(effect_schema, 15),
             },
             u32::try_from(SERIES_STATE_BYTES_V3).expect("Series state size fits in u32"),
@@ -646,11 +646,11 @@ pub(super) mod tests {
     #[test]
     fn descriptor_requires_every_successor_schema() {
         assert_eq!(
-            validate_descriptor(descriptor(dclutch_effect_kernel::v4::SCHEMA_RELEASE_ID_V4)),
+            validate_descriptor(descriptor(dclutch_vm::effect::v4::SCHEMA_RELEASE_ID_V4)),
             Ok(())
         );
         assert_eq!(
-            validate_descriptor(descriptor(dclutch_effect_kernel::v3::SCHEMA_RELEASE_ID)),
+            validate_descriptor(descriptor(dclutch_vm::effect::v3::SCHEMA_RELEASE_ID)),
             Err(SeriesArtifactErrorV4::Descriptor)
         );
     }
@@ -687,7 +687,7 @@ pub(super) mod tests {
         state: u16,
         rent_credit: Option<u16>,
     ) -> alloc::vec::Vec<u8> {
-        use dclutch_account_profile_contract::lifecycle_v3::{
+        use dclutch_vm::account_profile::lifecycle_v3::{
             ACTION_PLAN_BYTES, HEADER_BYTES, PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SEED_BYTES,
             encode::{
                 LifecycleAccountCoordinateV3, LifecycleGuardInputV3, LifecycleOperationInputV3,
@@ -883,7 +883,7 @@ pub(super) mod tests {
             Ok(())
         );
 
-        let insertion = dclutch_account_profile_contract::v2::DYNAMIC_FIXED_SPAN_HEADER_BYTES;
+        let insertion = dclutch_vm::account_profile::v2::DYNAMIC_FIXED_SPAN_HEADER_BYTES;
         bytes
             .get_mut(insertion..insertion + 2)
             .expect("dynamic span header offset in bounds")

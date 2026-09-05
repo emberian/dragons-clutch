@@ -1,6 +1,6 @@
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1};
-use dclutch_release_set_contract::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1};
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1, ExecutionReleaseSetV1,
     ExecutionRoleBindingV1,
 };
@@ -337,7 +337,7 @@ fn exact_checked_evidence_builds_existing_activation_and_deterministic_projectio
     for (role_plan, packet) in plan.activation.roles.iter().zip(plan.packets.iter()) {
         assert_eq!(
             role_plan.instruction.accounts.len(),
-            dclutch_registry_svm::REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1
+            dclutch_registry::svm::REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1
         );
         assert_eq!(packet.required_signatures, 1);
         assert!(packet.wire_bytes <= crate::versioned::PACKET_DATA_BYTES);

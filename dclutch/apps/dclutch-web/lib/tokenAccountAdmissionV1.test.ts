@@ -10,7 +10,7 @@ import { admitBaseOrImmutableOwnerTokenAccountV1 } from './tokenAccountAdmission
 /**
  * The hostile set is the Rust's own, case for case.
  *
- * `crates/dclutch-token-svm/src/state.rs`'s `immutable_owner_tests` names six
+ * `crates/dclutch-custody/src/token_svm/state.rs`'s `immutable_owner_tests` names six
  * other extension types at the same 170-byte width, a Mint's account-type
  * discriminant carrying `ImmutableOwner`'s bytes, a right-typed entry at the
  * wrong width, and a truncated base. This file is that list, so a TypeScript

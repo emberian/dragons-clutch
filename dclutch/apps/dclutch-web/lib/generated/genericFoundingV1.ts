@@ -3,9 +3,9 @@
 //
 // Sources, in the order the wire is assembled:
 //   programs/dclutch-trading-sbf/src/generic_market_founding_v1.rs  (the route)
-//   crates/dclutch-market-core-codec/src/generic_founding_v1.rs     (the request)
-//   crates/dclutch-custody-contract/src/projected.rs                (Lock, Realize)
-//   crates/dclutch-claims-svm/src/founding_v5.rs                    (Claims)
+//   crates/dclutch-market/src/generic_founding_v1.rs     (the request)
+//   crates/dclutch-custody/src/projected.rs                (Lock, Realize)
+//   crates/dclutch-claims/src/founding_v5.rs                    (Claims)
 //   tools/local-validator/bootstrap/successor/src/market.rs         (the frame width)
 
 /** Sole top-level DCLTGMF3 discriminator followed by five invocation-evidence bumps. */

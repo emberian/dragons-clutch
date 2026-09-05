@@ -26,7 +26,7 @@
 //! Market. The market-freedom is structural: there is no parameter here through
 //! which a Market could arrive.
 
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     set_v2::{
         CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, CapabilityProgramSetV2,
         SelectorWidthV2, encode_program_set_v2, encoded_program_set_bytes_v2,
@@ -34,11 +34,11 @@ use dclutch_capability_program_contract::{
     v4::SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_rational_representation_v2_lifecycle_contract::{
+use dclutch_claims::rational_lifecycle::{
     LifecycleActionV2, compact_hot_v4::RationalLifecycleCompactHotLayoutV4,
     hot_v3::RationalLifecycleHotLayoutV3,
 };
-use dclutch_token_svm::{TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TokenBehaviorSelectionV2};
+use dclutch_custody::token_svm::{TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TokenBehaviorSelectionV2};
 use solana_program::hash::hash;
 
 use crate::{
@@ -239,16 +239,16 @@ fn descriptor_reference(bytes: &[u8]) -> Result<CapabilityDescriptorReferenceV2>
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use dclutch_account_profile_contract::lifecycle_v3::{
+    use dclutch_vm::account_profile::lifecycle_v3::{
         HEADER_BYTES as LIFECYCLE_HEADER_BYTES, encode::encode_lifecycle_policy_v5_atomic,
     };
-    use dclutch_product_payoff_v2_codec::runtime_v3::{
+    use dclutch_product::payoff::runtime_v3::{
         BASIS_HEADER_BYTES_V3, BasisInputV3, BasisKindV3, compile_basis_v3,
     };
-    use dclutch_rational_representation_v2_lifecycle_contract::{
+    use dclutch_claims::rational_lifecycle::{
         LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2, RATIONAL_LIFECYCLE_CAPABILITY_KIND_ID_V1,
     };
-    use dclutch_token_svm::TOKEN_BEHAVIOR_SELECTION_BYTES_V2;
+    use dclutch_custody::token_svm::TOKEN_BEHAVIOR_SELECTION_BYTES_V2;
 
     use crate::{
         RationalLifecycleCompactArtifactInputV6, RationalLifecycleCompactBundleInputV6,
@@ -300,7 +300,7 @@ pub(crate) mod tests {
 
     /// Byte width the descriptor account will have for `COEFFICIENTS`.
     fn descriptor_width() -> usize {
-        dclutch_rational_representation_v2_kernel::DESCRIPTOR_HEADER_BYTES + COEFFICIENTS.len() * 8
+        dclutch_claims::rational_kernel::DESCRIPTOR_HEADER_BYTES + COEFFICIENTS.len() * 8
     }
 
     pub(crate) fn selection() -> TokenBehaviorSelectionV2 {
@@ -347,7 +347,7 @@ pub(crate) mod tests {
             .filter(|coefficient| **coefficient != 0)
             .count();
         let start = usize::from(crate::RATIONAL_LIFECYCLE_HOT_INJECTED_ACCOUNT_COUNT_V3)
-            + dclutch_rational_representation_v2_lifecycle_contract::LIFECYCLE_COMMON_ACCOUNT_COUNT_V2;
+            + dclutch_claims::rational_lifecycle::LIFECYCLE_COMMON_ACCOUNT_COUNT_V2;
         let mut lengths = vec![0_u32; start + support * LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2];
         *lengths.get_mut(1).expect("selection") =
             u32::try_from(TOKEN_BEHAVIOR_SELECTION_BYTES_V2).expect("selection width");

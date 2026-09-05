@@ -7,7 +7,7 @@
 //! no receipt, scalar, CPI, or state-write authority.  It only proves that one
 //! finalized generic Effect V4 artifact encodes the frozen Series topology.
 
-use dclutch_effect_kernel::{
+use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{ProgramV3, RouteKindV3, RouteReceiptDependencyV3},
     v4::{
@@ -16,8 +16,8 @@ use dclutch_effect_kernel::{
         encode_program_v4_atomic,
     },
 };
-use dclutch_series_v3_kernel::request::{SeriesActionRequestV3, SeriesActionV3};
-use dclutch_series_v3_kernel::series_proof_count_v3;
+use dclutch_trading::series::request::{SeriesActionRequestV3, SeriesActionV3};
+use dclutch_trading::series::series_proof_count_v3;
 
 use super::artifacts_v3::{
     SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3, SERIES_CLAIMS_RECEIPT_DEPENDENCIES_V3,
@@ -581,7 +581,7 @@ pub(super) mod tests {
 
     use alloc::{vec, vec::Vec};
     use dclutch_core_contract::ContentId;
-    use dclutch_effect_kernel::{
+    use dclutch_vm::effect::{
         v3::{
             HEADER_BYTES, RECEIPT_DEPENDENCY_BYTES, ROUTE_BYTES,
             encode::{EffectGeometryV3, RouteInputV3, encode_effect_program_v4_atomic},

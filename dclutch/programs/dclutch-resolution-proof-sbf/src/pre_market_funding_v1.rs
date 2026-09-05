@@ -2,16 +2,16 @@
 
 use alloc::{vec, vec::Vec};
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
     FundingLedgerV2, funding_ledger_bytes_v2,
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     PROJECT_FOUND_ACCOUNT_COUNT_V2, PROJECT_FOUND_RECEIPT_BYTES_V2, ProjectFoundReceiptV2,
 };
-use dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1;
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_resolution_codec::{
+use dclutch_registry::ActivatedExecutionReleaseSetViewV1;
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_source::resolution::{
     PRE_MARKET_FUNDING_REQUEST_BYTES_V2, PRE_MARKET_FUNDING_REQUEST_MAGIC_V2,
     PreMarketFundingReceiptV2, PreMarketFundingRequestV2, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
     pre_market_funding_prestate_digest_v1,
@@ -116,7 +116,7 @@ pub fn process_pre_market_funding_v2(
         *registry_program.key,
         manifest_raw,
         manifest_staging,
-        dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        dclutch_market::capability_manifest::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         request.manifest,
         &manifest_data,
         RecordKind::CapabilityManifest,
@@ -143,7 +143,7 @@ pub fn process_pre_market_funding_v2(
     // THE ONE PLACE THE RATE IS OBSERVED. Everything downstream -- activation,
     // admission, the terminal walk, the close -- reads the figure recorded here
     // instead of re-deriving it from a sysvar that can move under a live cohort.
-    let funded_rent_rate = dclutch_capability_contract::derive_funded_rent_rate_v2(
+    let funded_rent_rate = dclutch_market::capability_manifest::derive_funded_rent_rate_v2(
         rent.minimum_balance(0),
         width,
         rent.minimum_balance(width),
@@ -608,7 +608,7 @@ fn initialize_ledger<'info>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_market_core_codec::{Action, Identity, ProjectFoundRequestV2, Request};
+    use dclutch_market::{Action, Identity, ProjectFoundRequestV2, Request};
 
     #[test]
     fn request_detector_is_version_and_width_exact() {

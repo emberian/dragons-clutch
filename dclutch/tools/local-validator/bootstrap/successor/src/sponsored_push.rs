@@ -17,19 +17,19 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1;
-use dclutch_market_core_codec::CoreState;
+use dclutch_market::capability_manifest::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1;
+use dclutch_market::CoreState;
 use dclutch_operator::{Finality, Observation, ObservedAccount};
-use dclutch_product_runtime_v2_admission::{
+use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
 };
-use dclutch_pyth_svm::{
+use dclutch_source::pyth::{
     FULL_PRICE_UPDATE_V2_LEN, FullPriceUpdateV2, PYTH_SPONSORED_PUSH_RELEASE_SCHEMA_ID_V1,
     PythSponsoredPushReleaseV1, devnet_sponsored_sol_usd_release_v1,
 };
-use dclutch_registry_contract::ACTIVATION_PDA_DOMAIN_V1;
-use dclutch_release_set_contract::ExecutionRoleV1;
-use dclutch_resolution_codec::{
+use dclutch_registry::ACTIVATION_PDA_DOMAIN_V1;
+use dclutch_registry::release_set::ExecutionRoleV1;
+use dclutch_source::resolution::{
     RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
     SPONSORED_PUSH_CANDIDATE_PDA_DOMAIN_V1, SPONSORED_PUSH_HEAD_PDA_DOMAIN_V1,
     SPONSORED_PUSH_RECEIPT_PDA_DOMAIN_V1, SponsoredPushActionV1, SponsoredPushCandidateV1,
@@ -38,7 +38,7 @@ use dclutch_resolution_codec::{
 use dclutch_resolution_core_v3_operator::{
     ResolutionAdmitTerminalSnapshotV3, build_resolution_admit_terminal_v3,
 };
-use dclutch_source_contract::{
+use dclutch_source::{
     PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, ProviderReleaseV1,
     SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
     SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1, SourceAccessProfile,

@@ -94,7 +94,8 @@ market19 6WZXJ7jB was founded at 0 on 2026-08-30 and is permanently unfillable
 for that reason alone.
 
 The compute ceiling is real but it is a property of the FILL, not the rate.
-crates/dclutch-direct-aot-v3-contract/src/lib.rs computes
+The InlineOrdinary program (Lean-authored, emitted into
+crates/dclutch-trading/src/generated_ordinary_v3.rs) computes
 fee = mul_div_floor(gross, policy_fee_bps, 10_000), so at 50 bps every trade
 whose gross collateral is 1..=199 atoms has fee 0, sets seller_terminal,
 clears the fee routes, and makes ONE Custody CPI -- the branch measured at
@@ -160,7 +161,7 @@ done
 # expansion or empty string can reach the compiler as a silent zero.
 case "$FEE_BPS" in ''|*[!0-9]*) echo "--direct-fee-basis-points must be a plain decimal count" >&2; exit 2 ;; esac
 # This guard is no longer the only one. `DIRECT_MAX_FEE_BASIS_POINTS_V1`
-# (crates/dclutch-direct-codec/src/successor.rs) refuses the same rate at config
+# (crates/dclutch-trading/src/successor.rs) refuses the same rate at config
 # construction, and the authored transition refuses it again as a relation, so a
 # founding that avoids this script is bounded too. It stays because refusing at
 # the operator's own console is cheaper than refusing after a staged build.
@@ -175,7 +176,7 @@ fi
 # Market's finalized Direct config reads exactly
 # DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1 = 50
 # (programs/dclutch-trading-sbf/src/direct_token_setup_v1.rs:477,
-#  crates/dclutch-direct-codec/src/token_setup_v1.rs:25). The config is a
+#  crates/dclutch-trading/src/token_setup_v1.rs:25). The config is a
 # finalized Registry record, so the rate is sealed at founding and no later
 # artifact -- no release, no redeploy, no upgrade -- can change it.
 #

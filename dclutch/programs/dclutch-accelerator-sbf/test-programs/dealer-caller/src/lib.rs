@@ -41,24 +41,24 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use dclutch_capability_program_contract::hot_v3::{
+use dclutch_market::capability_program::hot_v3::{
     HOT_CONFIG_RAW_ACCOUNT_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_PORTFOLIO_RAW_ACCOUNT_V3,
     HOT_PRODUCT_RAW_ACCOUNT_V3,
 };
-use dclutch_capability_program_contract::hot_v3::{
+use dclutch_market::capability_program::hot_v3::{
     HOT_FIXED_ACCOUNT_COUNT_V3, HOT_ROOT_ACCOUNT_V3, HOT_RUNTIME_CONFIG_COORDINATE_V3,
     HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3, HOT_RUNTIME_LINKED_BASIS_COORDINATE_V3,
     HOT_RUNTIME_PORTFOLIO_COORDINATE_V3, HOT_RUNTIME_PRODUCT_COORDINATE_V3,
     HOT_RUNTIME_ROOT_COORDINATE_V3, HotExecutionEnvelopeV3,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_execution_strategy_contract::{
+use dclutch_market::execution_strategy::{
     shadow_digest_v3::{
         AcceleratorCallerKindV1, accelerator_caller_authority_digest_v1, family_request_digest_v3,
     },
     v2::{AcceleratorRequestV2, AdmittedAcceleratorRequestV2},
 };
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_trading_sbf::admitted_composition_v3::{
     ADMITTED_ACCELERATOR_RUNTIME_ACCOUNTS_START_V4, ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_START_V4,
 };

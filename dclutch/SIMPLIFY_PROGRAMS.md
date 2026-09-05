@@ -18,7 +18,7 @@ deletion is in the commit that made it.
 | `dclutch-dealer-accelerator-sbf` | **merged** → `dclutch-accelerator-sbf` (`src/dealer.rs`), refusals moved to sub-band 0xC100 | never on any chain (`blocked.json` out-of-release-set); its 12,062-line program-test is the only driver |
 | `dclutch-series-shadow-sbf` | **merged** → `dclutch-accelerator-sbf` (`src/series/`), refusals moved to sub-band 0xC200 | never on any chain; decision 0029 item 1 keeps the Series family, and the shadow is an evaluator with the accelerator's contract, not a program id |
 | `dclutch-direct-aot-sbf` | **deleted** | `SHIPPED_LINKS: false`, in no cohort; evaluates the superseded Direct V2 descriptor (DIRECT_HOT_AOT_MEASUREMENT 2026-08-31 §5: "retire or re-point"); no Cargo.toml outside its own tree and campaign depends on it |
-| `dclutch-product-runtime-v2-sbf` | **deleted** | `SHIPPED_LINKS: false`, in no cohort; its receipt had zero on-chain readers (Claims' optional recheck had one caller, passing `None`); Core and Claims re-derive its checks through `dclutch-product-runtime-v2-svm-reader` |
+| `dclutch-product-runtime-v2-sbf` | **deleted** | `SHIPPED_LINKS: false`, in no cohort; its receipt had zero on-chain readers (Claims' optional recheck had one caller, passing `None`); Core and Claims re-derive its checks through `dclutch-product::svm_reader` |
 | `dclutch-trading-sbf` | not mine | — |
 
 Refusal bands: 12 program bands → 8 (`RefusalBandsV1.lean` rows removed for 9,
@@ -92,7 +92,7 @@ of the infrastructure profile.** `ProtocolInfrastructureProfileV1/V2` bind
 `registry` and `rent` as two `ExecutionRoleBindingV1`s; the genesis ceremony
 (`infrastructure.rs`, local-validator witnessed) and the succession ceremony
 (`infrastructure_v2.rs`, `InfrastructureIdentityMoved`) refuse an aliased or
-Core-valued rent binding by name, and `dclutch-release-set-contract` refuses
+Core-valued rent binding by name, and `dclutch-registry::release_set` refuses
 "Registry and Rent named an aliased program". Removing the rent slot is a Lean
 ABI change (`EmitProtocolInfrastructureProfileAbiRust/Ts.lean`) on a wire the
 genesis route carries, which §2.5 of the map reserves from the Lean lane this
@@ -125,7 +125,7 @@ one; (6) cohort manifests drop the role.
   fact with a real divergence: Registry and Resolution refuse a staging PDA
   with nonzero lamports, Core/Claims/Series/the svm-reader accept dust (Core
   documents why). The zero-lamport form is griefable — anyone can dust a
-  staging PDA before activation. One author (`dclutch-product-runtime-v2-svm-reader`'s
+  staging PDA before activation. One author (`dclutch-product::svm_reader`'s
   private `authenticate_record`, made public) is the fix; it changes the
   Registry and Resolution ELFs on a witnessed route, so it is named here for
   the crates lane rather than done blind in the last hour of this branch.

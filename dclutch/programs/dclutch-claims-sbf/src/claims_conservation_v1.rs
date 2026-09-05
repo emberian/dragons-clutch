@@ -2,7 +2,7 @@
 //!
 //! Decision 0029 item 5 ruled BUILD: *"so a holder can reshape a position
 //! without a counterparty"*. This is the outer route
-//! `dclutch-claims-conservation-contract` was written for and named as absent
+//! `dclutch-claims::conservation` was written for and named as absent
 //! in its own words -- *"Nothing on chain dispatches
 //! `CLAIMS_CONSERVATION_REQUEST_MAGIC_V1`; no operator builds it; no client can
 //! send it. Split and merge remain UNIMPLEMENTED as user acts"*. The operator
@@ -57,27 +57,27 @@ extern crate alloc;
 
 use alloc::{boxed::Box, vec::Vec};
 
-use dclutch_claims_conservation_contract::{
+use dclutch_claims::conservation::{
     CLAIMS_CONSERVATION_REQUEST_BYTES_V1, ClaimsConservationDirectionV1,
     ClaimsConservationRequestV1,
 };
-use dclutch_claims_svm::{
+use dclutch_claims::{
     liability_basis_state_v2::{
         LiabilityBasisMarketViewV2 as MarketViewV2, LiabilityBasisPositionViewV2 as PositionViewV2,
     },
     protocol_position_v2::ProtocolPositionSeedsV2,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CustodyAuthoritySeedsV1, CustodyReplaySeedsV1, CustodyRequestV1, CustodyVaultSeedsV1,
 };
-use dclutch_economic_slice_kernel::{
+use dclutch_product::economic_slice::{
     BasketAction, BasketFrame, execute_basket, market_hoard, market_supply, position_native,
     position_revision,
 };
-use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV3};
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_source_contract::MarketPrincipalCapSetsV1;
+use dclutch_product::svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV3};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_source::MarketPrincipalCapSetsV1;
 use solana_program::{
     account_info::AccountInfo,
     hash::hash,
@@ -210,9 +210,9 @@ impl<'accounts, 'info> ConservationAccounts<'accounts, 'info> {
 pub fn is_claims_conservation_v1(instruction_data: &[u8]) -> bool {
     instruction_data.len() == CLAIMS_CONSERVATION_REQUEST_BYTES_V1
         && instruction_data
-            .get(..dclutch_claims_conservation_contract::CLAIMS_CONSERVATION_REQUEST_MAGIC_V1.len())
+            .get(..dclutch_claims::conservation::CLAIMS_CONSERVATION_REQUEST_MAGIC_V1.len())
             == Some(
-                dclutch_claims_conservation_contract::CLAIMS_CONSERVATION_REQUEST_MAGIC_V1
+                dclutch_claims::conservation::CLAIMS_CONSERVATION_REQUEST_MAGIC_V1
                     .as_slice(),
             )
 }
@@ -808,7 +808,7 @@ fn authenticate_custody_frame(
 /// The two token accounts Custody's Transfer frame names, IN ITS ORDER.
 ///
 /// Coordinate 10 is `TransferSource` and 11 is `TransferDestination`
-/// (`dclutch-custody-contract`'s `frame_spec_v1`), and which of the Hoard and
+/// (`dclutch-custody`'s `frame_spec_v1`), and which of the Hoard and
 /// the actor's own account stands at each depends on the DIRECTION. The
 /// terminal payout next door is always a Hoard-to-holder transfer and can
 /// therefore write the pair down; this route cannot, and writing it down
@@ -896,7 +896,7 @@ fn invoke_custody(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_claims_conservation_contract::{
+    use dclutch_claims::conservation::{
         CLAIMS_CONSERVATION_REQUEST_MAGIC_V1, Error as ConservationError,
     };
 

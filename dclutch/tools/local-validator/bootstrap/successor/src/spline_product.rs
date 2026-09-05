@@ -10,9 +10,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use dclutch_product_payoff_v2_codec::price_gate_v1::PRICE_GATE_REQUEST_BYTES_V1;
-use dclutch_product_runtime_v2::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
-use dclutch_product_runtime_v2_admission::{FinalizedRecordCoordinateV2, PRODUCT_RECORD_BYTES_V2};
+use dclutch_product::payoff::price_gate_v1::PRICE_GATE_REQUEST_BYTES_V1;
+use dclutch_product::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
+use dclutch_product::admission::{FinalizedRecordCoordinateV2, PRODUCT_RECORD_BYTES_V2};
 use dclutch_product_runtime_v2_operator::spline_basis_v3::{
     CompiledSplineProductRecordsV3, SplineProductCompilationInputV3,
     compile_spline_product_records_v3, spline_basis_output_bytes_v3,
@@ -749,7 +749,7 @@ fn hex<const N: usize>(bytes: [u8; N]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_product_payoff_v2_codec::price_gate_v1::{
+    use dclutch_product::payoff::price_gate_v1::{
         PRICE_GATE_ATOM_COUNT_OFFSET_V1, PRICE_GATE_DEGREE_OFFSET_V1,
         PRICE_GATE_DENOMINATORS_OFFSET_V1, PRICE_GATE_MAGIC_OFFSET_V1, PRICE_GATE_MAGIC_V1,
         PRICE_GATE_MASS_OFFSET_V1, PRICE_GATE_NUMERATORS_OFFSET_V1, PRICE_GATE_PRICES_OFFSET_V1,

@@ -50,11 +50,11 @@ use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use solana_sdk::{instruction::AccountMeta, pubkey::Pubkey, signature::Keypair, signer::Signer};
 
-use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
-use dclutch_capability_program_contract::set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2;
-use dclutch_capability_program_contract::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
+use dclutch_market::capability_manifest::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
+use dclutch_market::capability_program::set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2;
+use dclutch_market::capability_program::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
 use dclutch_core_contract::ContentId;
-use dclutch_direct_codec::{
+use dclutch_trading::{
     close_maker_bundle_v1::{
         direct_close_maker_account_profile_schema_v1, direct_close_maker_descriptor_schema_v1,
         direct_close_maker_effect_schema_v1,
@@ -69,14 +69,14 @@ use dclutch_direct_codec::{
         MakerReplaySeedsV1,
     },
 };
-use dclutch_market_core_codec::CoreState;
+use dclutch_market::CoreState;
 use dclutch_operator::direct_close_maker_v1::{
     DirectCloseMakerClusterV1, DirectCloseMakerPlanErrorV1, DirectCloseMakerPlanV1,
     DirectCloseMakerSnapshotV1, DirectCloseMakerSubmitV1, plan_direct_close_maker_v1,
 };
-use dclutch_record_contract::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
-use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
-use dclutch_release_set_contract::{CapabilityExecutionSelectionV1, ExecutionRoleV1};
+use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
+use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
+use dclutch_registry::release_set::{CapabilityExecutionSelectionV1, ExecutionRoleV1};
 
 use crate::campaign::{
     parse_campaign_terminal_evidence_with_expected_cluster_v1, read_keypair_file,
@@ -360,7 +360,7 @@ struct CoordinatesV1 {
     effect: RecordPairV1,
     rent_sysvar: Pubkey,
     maker_replay: Pubkey,
-    ordinary_witness: dclutch_direct_codec::ordinary_bundle_v4::DirectInlineOrdinaryHotBundleV4,
+    ordinary_witness: dclutch_trading::ordinary_bundle_v4::DirectInlineOrdinaryHotBundleV4,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -531,7 +531,7 @@ struct RecordPairV1 {
 
 /// One record address from the contract-owned seed material.
 ///
-/// The seed TUPLE is not spelled in this driver. `dclutch-record-contract` owns
+/// The seed TUPLE is not spelled in this driver. `dclutch-registry::record` owns
 /// both domains and exports the constructors that place them, so a second
 /// spelling here would be a second source of truth for an address the chain
 /// derives its own way (`DOMAIN_RAW_RESTATEMENT`).
@@ -884,7 +884,7 @@ fn observed_genesis(rpc: &mut Rpc) -> Result<[u8; 32]> {
 
 fn ordinary_witness(
     path: &Path,
-) -> Result<dclutch_direct_codec::ordinary_bundle_v4::DirectInlineOrdinaryHotBundleV4> {
+) -> Result<dclutch_trading::ordinary_bundle_v4::DirectInlineOrdinaryHotBundleV4> {
     let bytes =
         std::fs::read(path).map_err(|error| Error::new(format!("{}: {error}", path.display())))?;
     let input: MarketRunInput = serde_json::from_slice(&bytes)

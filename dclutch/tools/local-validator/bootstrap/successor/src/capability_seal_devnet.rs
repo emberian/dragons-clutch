@@ -32,7 +32,7 @@
 
 use std::path::{Path, PathBuf};
 
-use dclutch_capability_program_contract::hot_v3::{
+use dclutch_market::capability_program::hot_v3::{
     DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_CAPABILITY_SEAL_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
 };
 use dclutch_operator::capability_seal_v1::{

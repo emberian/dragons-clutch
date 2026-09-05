@@ -7,10 +7,10 @@
 //! baselines. The predicted receipt carries authenticated live balances, so a
 //! third-party donation cannot veto close or disappear during reclamation.
 
-use dclutch_capability_contract::funding::{
+use dclutch_market::capability_manifest::funding::{
     funded_rent_minimum_v2, funded_rent_persists_v1, funded_rent_rate_from_minimum_v1,
 };
-use dclutch_claims_svm::{
+use dclutch_claims::{
     liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
     },
@@ -23,15 +23,15 @@ use dclutch_claims_svm::{
         ProtocolPositionSeedsV2,
     },
 };
-use dclutch_registry_contract::{
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetViewV1,
 };
-use dclutch_registry_svm::ProgramV3View;
-use dclutch_relay_contract::SOLANA_DEVNET_GENESIS_HASH_V1;
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_rent_contract::lifecycle_v2::LifecycleRentCreditV2;
-use dclutch_user_position_admission_contract::{
+use dclutch_registry::svm::ProgramV3View;
+use dclutch_source::relay::SOLANA_DEVNET_GENESIS_HASH_V1;
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
+use dclutch_claims::position_admission::{
     USER_POSITION_CLOSE_ACCOUNT_COUNT_V1, UserPositionAdmissionRequestV1, UserPositionCloseFrameV1,
 };
 use solana_program::{
@@ -573,14 +573,14 @@ fn assemble_plan(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_claims_svm::{
+    use dclutch_claims::{
         liability_basis_state_v2::{
             LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, LiabilityBasisPositionInputV2,
             encode_liability_basis_position_into_v2, liability_basis_vector_width_v2,
         },
         protocol_position_v2::ProtocolPositionAdmissionEvidenceV2,
     };
-    use dclutch_user_position_admission_contract::{
+    use dclutch_claims::position_admission::{
         USER_POSITION_CLOSE_CLAIMS_CALLEE_ACCOUNT_V1, USER_POSITION_CLOSE_OWNER_ACCOUNT_V1,
     };
 

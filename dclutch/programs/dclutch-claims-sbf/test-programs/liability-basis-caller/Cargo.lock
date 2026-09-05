@@ -272,59 +272,28 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-account-profile-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-capability-seal-contract",
- "dclutch-effect-kernel",
- "dclutch-transition-vm",
-]
-
-[[package]]
-name = "dclutch-capability-contract"
+name = "dclutch-claims"
 version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
+ "dclutch-custody",
+ "dclutch-market",
+ "dclutch-product",
  "dclutch-sha256-adapter",
+ "dclutch-source",
+ "dclutch-vm",
+ "sha2",
 ]
-
-[[package]]
-name = "dclutch-capability-program-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-account-profile-contract",
- "dclutch-capability-contract",
- "dclutch-core-contract",
- "dclutch-release-set-contract",
- "dclutch-transition-vm",
-]
-
-[[package]]
-name = "dclutch-capability-seal-contract"
-version = "0.1.0"
 
 [[package]]
 name = "dclutch-claims-liability-basis-test-caller-sbf"
 version = "0.1.0"
 dependencies = [
+ "dclutch-claims",
  "dclutch-core-contract",
- "dclutch-fractional-claim-contract",
  "dclutch-refusal-registry",
- "dclutch-release-set-contract",
+ "dclutch-registry",
  "solana-program",
-]
-
-[[package]]
-name = "dclutch-claims-svm"
-version = "0.1.0"
-dependencies = [
- "dclutch-effect-kernel",
- "dclutch-product-payoff-v2-codec",
- "dclutch-rational-representation-v2-kernel",
- "dclutch-rational-representation-v2-lifecycle-contract",
- "dclutch-rational-representation-v2-request-contract",
- "dclutch-representation-composition-v3-kernel",
- "dclutch-sha256-adapter",
 ]
 
 [[package]]
@@ -332,79 +301,29 @@ name = "dclutch-core-contract"
 version = "0.1.0"
 
 [[package]]
-name = "dclutch-effect-kernel"
+name = "dclutch-custody"
 version = "0.1.0"
 dependencies = [
- "dclutch-capability-seal-contract",
-]
-
-[[package]]
-name = "dclutch-execution-strategy-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-capability-program-contract",
- "dclutch-core-contract",
- "dclutch-release-set-contract",
+ "dclutch-market",
+ "dclutch-registry",
  "dclutch-sha256-adapter",
 ]
 
 [[package]]
-name = "dclutch-fractional-claim-contract"
+name = "dclutch-market"
 version = "0.1.0"
 dependencies = [
- "dclutch-account-profile-contract",
- "dclutch-capability-program-contract",
- "dclutch-claims-svm",
  "dclutch-core-contract",
- "dclutch-effect-kernel",
- "dclutch-execution-strategy-contract",
- "dclutch-fractional-claim-kernel",
- "dclutch-request-profile-contract",
- "dclutch-token-svm",
- "dclutch-transition-vm",
- "sha2",
-]
-
-[[package]]
-name = "dclutch-fractional-claim-kernel"
-version = "0.1.0"
-dependencies = [
- "dclutch-representation-composition-v3-kernel",
-]
-
-[[package]]
-name = "dclutch-product-payoff-v2-codec"
-version = "0.1.0"
-dependencies = [
- "dclutch-product-runtime-v2",
+ "dclutch-registry",
  "dclutch-sha256-adapter",
+ "dclutch-vm",
 ]
 
 [[package]]
-name = "dclutch-product-runtime-v2"
-version = "0.1.0"
-
-[[package]]
-name = "dclutch-rational-representation-v2-kernel"
+name = "dclutch-product"
 version = "0.1.0"
 dependencies = [
- "dclutch-product-payoff-v2-codec",
- "dclutch-representation-composition-v3-kernel",
-]
-
-[[package]]
-name = "dclutch-rational-representation-v2-lifecycle-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-rational-representation-v2-kernel",
- "dclutch-token-svm",
-]
-
-[[package]]
-name = "dclutch-rational-representation-v2-request-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-token-svm",
+ "dclutch-sha256-adapter",
 ]
 
 [[package]]
@@ -412,21 +331,10 @@ name = "dclutch-refusal-registry"
 version = "0.1.0"
 
 [[package]]
-name = "dclutch-release-set-contract"
+name = "dclutch-registry"
 version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
-]
-
-[[package]]
-name = "dclutch-representation-composition-v3-kernel"
-version = "0.1.0"
-
-[[package]]
-name = "dclutch-request-profile-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-capability-seal-contract",
 ]
 
 [[package]]
@@ -438,15 +346,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-token-svm"
-version = "0.1.0"
-
-[[package]]
-name = "dclutch-transition-vm"
+name = "dclutch-source"
 version = "0.1.0"
 dependencies = [
- "dclutch-capability-seal-contract",
+ "dclutch-core-contract",
+ "dclutch-market",
+ "dclutch-product",
+ "dclutch-registry",
+ "dclutch-sha256-adapter",
 ]
+
+[[package]]
+name = "dclutch-vm"
+version = "0.1.0"
 
 [[package]]
 name = "der"

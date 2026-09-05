@@ -26,17 +26,17 @@
 use sha2::{Digest, Sha256};
 use solana_sdk::pubkey::Pubkey;
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
     CompartmentFundingV1, ContentId as CapabilityContentId, FundingAmountsV1, FundingQuoteV1,
     MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
 };
-use dclutch_product_runtime_v2::{portfolio_record_bytes, result_domain_record_bytes};
-use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
+use dclutch_product::{portfolio_record_bytes, result_domain_record_bytes};
+use dclutch_product::admission::PRODUCT_RECORD_BYTES_V2;
 use dclutch_product_runtime_v2_operator::ProductCompilationInputV2;
 use dclutch_product_runtime_v2_operator::compile_product_records_v2;
-use dclutch_registry_contract::{ArtifactReleaseV1, ArtifactUpgradePolicyV1};
-use dclutch_relay_contract::{
+use dclutch_registry::{ArtifactReleaseV1, ArtifactUpgradePolicyV1};
+use dclutch_source::relay::{
     RELAYED_FAMILY_RELEASE_ID_V1, RELAYED_RECORD_TRANSPORT_PROFILE_ID_V1,
     SOLANA_MAINNET_GENESIS_HASH_V1,
     decode::RelayedObservableV1,
@@ -46,8 +46,8 @@ use dclutch_relay_contract::{
         encode_account_set_id_preimage_v1,
     },
 };
-use dclutch_release_set_contract::ProgramIdentityV1;
-use dclutch_source_contract::{
+use dclutch_registry::release_set::ProgramIdentityV1;
+use dclutch_source::{
     BONDING_CURVE_FLOOR_DERIVATION_ID_V1, BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1,
     CHAIN_STATE_DEFAULT_KAPPA_DENOMINATOR_V1, CHAIN_STATE_DEFAULT_KAPPA_NUMERATOR_V1,
     CapacityEnvelope, ContentId as SourceContentId, ManipulationFloorBasis, ManipulationFloorV1,
@@ -752,8 +752,8 @@ pub(crate) fn relayed_market_input(
     })
 }
 
-fn product_content(bytes: [u8; 32]) -> Result<dclutch_product_runtime_v2::ContentId> {
-    dclutch_product_runtime_v2::ContentId::new(bytes)
+fn product_content(bytes: [u8; 32]) -> Result<dclutch_product::ContentId> {
+    dclutch_product::ContentId::new(bytes)
         .map_err(|error| Error::new(format!("product identity: {error:?}")))
 }
 
@@ -822,7 +822,7 @@ mod tests {
                     .expect("controller entry")
                     .release_id()
                     .to_bytes(),
-                dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V5,
+                dclutch_source::resolution::RESOLUTION_CONTROLLER_RELEASE_ID_V5,
             );
         }
     }

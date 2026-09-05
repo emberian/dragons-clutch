@@ -14,7 +14,7 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use dclutch_fractional_claim_contract::FractionalRetirementActionV3;
+use dclutch_claims::fractional::FractionalRetirementActionV3;
 use dclutch_fractional_claim_operator::{
     FractionalRetirementCoordinateSnapshotV3, FractionalRetirementDeploymentV3,
     FractionalRetirementNextPlanV3, FractionalRetirementRecordV3, FractionalRetirementSnapshotV3,

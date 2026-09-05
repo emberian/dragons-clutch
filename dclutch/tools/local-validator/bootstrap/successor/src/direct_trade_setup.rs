@@ -6,12 +6,12 @@
 //! poststates back to those plans.
 
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CUSTODY_POSTSTATE_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1, ContextV1,
     CustodyFrameRoleV1, CustodyFrameSpecV1, CustodyReplaySeedsV1, CustodyReplayV1,
     CustodyRequestV1, INITIALIZE_REPLAY_ACCOUNT_COUNT_V1, OperationV1,
 };
-use dclutch_direct_codec::{
+use dclutch_trading::{
     replay_setup_v1::{
         DIRECT_REPLAY_SETUP_RECEIPT_BYTES_V1, DIRECT_REPLAY_SETUP_REQUEST_BYTES_V1,
         DirectReplaySetupReceiptV1, DirectReplaySetupRequestV1,
@@ -19,8 +19,8 @@ use dclutch_direct_codec::{
     },
     successor::{DirectCoordinatesV1, MakerReplaySeedsV1},
 };
-use dclutch_market_core_codec::{CoreState, Phase as CorePhase, StateBumpsV1};
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_market::{CoreState, Phase as CorePhase, StateBumpsV1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     hash::{hash, hashv},
     rent::Rent,
@@ -609,7 +609,7 @@ fn refusal(message: impl Into<String>) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use dclutch_market_core_codec::{Identity, MarketIdentity, Readiness};
+    use dclutch_market::{Identity, MarketIdentity, Readiness};
 
     use super::*;
 
@@ -652,7 +652,7 @@ mod tests {
 
     fn replay_fixture() -> (
         [u8; DIRECT_REPLAY_SETUP_REQUEST_BYTES_V1],
-        [u8; dclutch_market_core_codec::STATE_BYTES],
+        [u8; dclutch_market::STATE_BYTES],
         DirectReplaySetupBuildInputV1<'static>,
     ) {
         let market = key(1);

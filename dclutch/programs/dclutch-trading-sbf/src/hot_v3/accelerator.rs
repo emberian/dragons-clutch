@@ -89,7 +89,7 @@ impl AuthenticatedAcceleratorCallerV4 {
     /// Rejoin the token to one immutable finalized release and live deployment.
     pub(crate) fn binds_immutable_deployment(
         self,
-        artifact_release: dclutch_release_set_contract::ArtifactReleaseIdV1,
+        artifact_release: dclutch_registry::release_set::ArtifactReleaseIdV1,
         release: ArtifactReleaseV1,
         program: &AccountInfo<'_>,
         programdata: &AccountInfo<'_>,
@@ -133,7 +133,7 @@ impl<'request, 'accounts, 'info> AuthenticatedAcceleratorInvocationV4<'request, 
     /// Borrow the complete family request from the authenticated top-level instruction.
     pub fn family_request(&self) -> &[u8] {
         self.hot_instruction
-            .get(dclutch_capability_program_contract::hot_v3::HOT_FAMILY_REQUEST_OFFSET_V3..)
+            .get(dclutch_market::capability_program::hot_v3::HOT_FAMILY_REQUEST_OFFSET_V3..)
             .unwrap_or(&[])
     }
 
@@ -166,7 +166,7 @@ impl<'request, 'accounts, 'info> AuthenticatedAcceleratorInvocationV4<'request, 
     /// Independently authenticated Product-linked basis record coordinate.
     pub const fn linked_basis_record(
         &self,
-    ) -> dclutch_product_runtime_v2_svm_reader::AuthenticatedRecordV2 {
+    ) -> dclutch_product::svm_reader::AuthenticatedRecordV2 {
         self.product_runtime.linked_basis_record
     }
 
@@ -1064,7 +1064,7 @@ pub(super) fn authenticate_accelerator_top_level_v4(
 /// # This is now the CONTINUATION arm's device only
 ///
 /// Decision 0017's option B moved the top-level arm onto
-/// `dclutch-registry-activation-auth-v1`'s
+/// `dclutch-registry::activation_auth_v1`'s
 /// `authenticate_activation_cache_identity_v1`, which is the same conjunction
 /// written once and shared with the Registry's own `Reauthenticate` handler. So
 /// the "no third way" rule still holds for both arms, with two producers rather
@@ -1084,7 +1084,7 @@ pub(super) struct ActivationCacheAuthenticatedV1(());
 ///
 /// # Why this is a SECOND spelling of a conjunction the crate owns, and stays
 ///
-/// `dclutch_registry_activation_auth_v1::authenticate_activation_cache_identity_v1`
+/// `dclutch_registry::activation_auth_v1::authenticate_activation_cache_identity_v1`
 /// checks exactly this -- Registry ownership, non-executability, the one exact
 /// width, and the address reproduced from the body's carried bump -- and the
 /// top-level arm takes it there since decision 0017's option B. This copy

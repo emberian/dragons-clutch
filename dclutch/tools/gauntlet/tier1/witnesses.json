@@ -84,7 +84,7 @@
       "kind": "evidence-jq",
       "query": ".accounts.collateral_mint.owner",
       "expect": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
-      "provenance": "The SPL Token-2022 program address, stated here independently of the tree and confirmed to agree with crates/dclutch-token-svm's TOKEN_2022_PROGRAM_ID_BASE58. The collateral Mint is created by a real submitted Token-2022 InitializeMint2, not injected as a fixture: 'real Agave account shapes' means the mint the protocol reads is one Token-2022 actually made."
+      "provenance": "The SPL Token-2022 program address, stated here independently of the tree and confirmed to agree with crates/dclutch-custody's TOKEN_2022_PROGRAM_ID_BASE58. The collateral Mint is created by a real submitted Token-2022 InitializeMint2, not injected as a fixture: 'real Agave account shapes' means the mint the protocol reads is one Token-2022 actually made."
     },
     {
       "id": "collateral-wallet-is-a-real-token-2022-account",

@@ -1,6 +1,6 @@
 # dclutch-rent-sbf
 
-Standalone successor SBF adapter for the SDK-free `dclutch-rent-contract`.
+Standalone successor SBF adapter for the SDK-free `dclutch-market::rent`.
 It owns SVM observations and physical effects, while the contract remains the
 sole instruction, account-role, PDA-seed, and exact-balance semantic owner.
 

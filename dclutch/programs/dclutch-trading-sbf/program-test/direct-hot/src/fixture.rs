@@ -6,13 +6,13 @@
 //! [`AccountProfileV2`]. The parent Registry harness supplies only release-waist
 //! accounts which it already owns.
 
-use dclutch_account_profile_contract::v2::AccountProfileV2;
-use dclutch_capability_contract::{
+use dclutch_vm::account_profile::v2::AccountProfileV2;
+use dclutch_market::capability_manifest::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
     CompartmentFundingV1, ContentId as CapabilityContentId, FundingAmountsV1, FundingQuoteV1,
     MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
     hot_v3::{
         HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
@@ -39,11 +39,11 @@ use dclutch_capability_program_contract::{
     set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
     v4::{CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4},
 };
-use dclutch_capability_seal_contract::{
+use dclutch_vm::capability_seal::{
     CAPABILITY_SEAL_BYTES_V1, CAPABILITY_SEAL_ROW_COUNT_V1, CapabilitySealKeyV1,
     SealedDescriptorClosureV1, SealedRecordRowV1, SealedRoleV1,
 };
-use dclutch_claims_svm::{
+use dclutch_claims::{
     CallerRole as ClaimsCallerRole,
     liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
@@ -56,14 +56,14 @@ use dclutch_claims_svm::{
     sparse_native_transfer_v1::{SparseNativeTransferInputV1, SparseNativeTransferV1},
 };
 use dclutch_core_contract::ContentId as CoreContentId;
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1,
     ContextV1, CustodyAuthoritySeedsV1, CustodyFrameRoleV1, CustodyFrameSpecV1,
     CustodyReplaySeedsV1, CustodyReplayV1, CustodyRequestLayoutV1, CustodyRequestV1,
     CustodyVaultSeedsV1, DELEGATED_CUSTODY_REQUEST_BYTES_V2, DelegatedCustodyRequestLayoutV2,
     DelegatedCustodyRequestV2, OperationV1,
 };
-use dclutch_direct_codec::{
+use dclutch_trading::{
     execution_v3::{
         DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3, DIRECT_REGISTRATION_REQUEST_BYTES_V3,
         DirectExecutionActionV3, DirectRegistrationRequestV3, DirectSignedParticipantV3,
@@ -102,37 +102,37 @@ use dclutch_direct_codec::{
 use dclutch_hot_bump_miner_v1::{
     HotBumpCorpusV1, hot_bump_hint_slot_name_v1, mine_hot_bump_hints_v1,
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity,
     PRODUCT_GRAPH_BUMP_COUNT, Phase, ProductGraphBumpsV1, Readiness, StateBumpsV1,
 };
-use dclutch_product_payoff_v2_codec::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3;
-use dclutch_product_payoff_v2_codec::runtime_v3::{
+use dclutch_product::payoff::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3;
+use dclutch_product::payoff::runtime_v3::{
     BasisInputV3, BasisKindV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, basis_record_bytes_v3,
     compile_basis_v3, semantic_basis_preimage_v3,
 };
-use dclutch_product_runtime_v2::{
+use dclutch_product::{
     ContentId as ProductContentId, portfolio_record_bytes, result_domain_record_bytes,
 };
-use dclutch_product_runtime_v2_admission::{
+use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2,
     RESULT_DOMAIN_SCHEMA_ID_V2,
 };
 use dclutch_product_runtime_v2_operator::{ProductCompilationInputV2, compile_product_records_v2};
-use dclutch_realm_contract::{
+use dclutch_market::realm::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_release_set_contract::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::release_set::{
     CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1, ExecutionRoleV1,
 };
-use dclutch_rent_contract::{
+use dclutch_market::rent::{
     RefundAuthority,
     lifecycle_v2::{
         LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
     },
 };
-use dclutch_token_svm::{LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES};
+use dclutch_custody::token_svm::{LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES};
 use solana_account::Account;
 use solana_program::{
     hash::{hash, hashv},
@@ -146,7 +146,7 @@ use solana_sdk_ids::bpf_loader_upgradeable;
 use solana_sdk_ids::{system_program, sysvar};
 use spl_token_interface::state::{Account as SplAccount, AccountState, Mint as SplMint};
 
-use dclutch_direct_codec::ordinary_geometry_v3::DirectOrdinaryGeometryV3;
+use dclutch_trading::ordinary_geometry_v3::DirectOrdinaryGeometryV3;
 
 use crate::{
     DIRECT_HOT_FIXTURE_CAPACITY_PROFILE_V5, DirectHotArtifactFixtureV5,
@@ -222,10 +222,10 @@ impl DirectTradeScenarioV1 {
     /// # Why the SIZE moves and the price does not
     ///
     /// The obvious way to buy a nonzero fee is a higher price, and the protocol
-    /// forbids it. `dclutch-direct-aot-v3-contract/src/lib.rs:163` requires
+    /// forbids it. The InlineOrdinary program requires
     /// `execution_price <= price_scale` -- the price is a FRACTION of scale,
     /// which is what a claim's price is -- so `gross = fill * price / scale` can
-    /// never exceed the fill, and `mul_div_EXACT` at :167 additionally requires
+    /// never exceed the fill, and its exact division additionally requires
     /// the product to divide the scale exactly. At 50 basis points a nonzero fee
     /// needs `gross >= 200`, so it needs `fill >= 200`, and there is no price
     /// anywhere in the admissible range that gets there on a fill of 10.
@@ -1055,7 +1055,7 @@ fn registered_root_poststate_bytes_v4(
         .ok_or(DirectHotChainFixtureErrorV5::Encoding)?;
     let mut output = Vec::with_capacity(
         CAPABILITY_ROOT_HEADER_BYTES_V1
-            + dclutch_direct_codec::successor::DIRECT_ROOT_STATE_BYTES_V1,
+            + dclutch_trading::successor::DIRECT_ROOT_STATE_BYTES_V1,
     );
     output.extend_from_slice(header);
     output.extend_from_slice(&state.encode());
@@ -1315,11 +1315,11 @@ fn registered_creation_common_lengths_v4(
         .ok()
         .and_then(|header| {
             header.checked_add(
-                u32::try_from(dclutch_direct_codec::successor::DIRECT_ROOT_STATE_BYTES_V1).ok()?,
+                u32::try_from(dclutch_trading::successor::DIRECT_ROOT_STATE_BYTES_V1).ok()?,
             )
         })
         .ok_or(DirectHotChainFixtureErrorV5::Input)?;
-    lengths[1] = u32::try_from(dclutch_direct_codec::successor::DIRECT_EXECUTION_CONFIG_BYTES_V1)
+    lengths[1] = u32::try_from(dclutch_trading::successor::DIRECT_EXECUTION_CONFIG_BYTES_V1)
         .map_err(|_| DirectHotChainFixtureErrorV5::Input)?;
     lengths[2] =
         u32::try_from(PRODUCT_RECORD_BYTES_V2).map_err(|_| DirectHotChainFixtureErrorV5::Input)?;
@@ -1327,11 +1327,11 @@ fn registered_creation_common_lengths_v4(
         .geometry
         .portfolio_record_bytes()
         .map_err(|_| DirectHotChainFixtureErrorV5::Input)?;
-    lengths[4] = u32::try_from(dclutch_product_payoff_v2_codec::runtime_v3::BASIS_HEADER_BYTES_V3)
+    lengths[4] = u32::try_from(dclutch_product::payoff::runtime_v3::BASIS_HEADER_BYTES_V3)
         .map_err(|_| DirectHotChainFixtureErrorV5::Input)?;
     lengths[5] = u32::try_from(DIRECT_MAKER_REPLAY_BYTES_V1)
         .map_err(|_| DirectHotChainFixtureErrorV5::Input)?;
-    lengths[7] = u32::try_from(dclutch_rent_contract::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2)
+    lengths[7] = u32::try_from(dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2)
         .map_err(|_| DirectHotChainFixtureErrorV5::Input)?;
     lengths[8] = u32::try_from(DIRECT_REGISTERED_RECORD_BYTES_V2)
         .map_err(|_| DirectHotChainFixtureErrorV5::Input)?;
@@ -1342,18 +1342,18 @@ fn registered_creation_buy_lengths_v4(
     input: DirectHotChainInputV5,
     mut lengths: [u32; 56],
 ) -> Result<[u32; 56], DirectHotChainFixtureErrorV5> {
-    let loader_bytes = u32::try_from(dclutch_registry_svm::LOADER_V3_PROGRAM_BYTES)
+    let loader_bytes = u32::try_from(dclutch_registry::svm::LOADER_V3_PROGRAM_BYTES)
         .map_err(|_| DirectHotChainFixtureErrorV5::Input)?;
     lengths[10] = loader_bytes;
-    lengths[13] = u32::try_from(dclutch_market_core_codec::STATE_BYTES)
+    lengths[13] = u32::try_from(dclutch_market::STATE_BYTES)
         .map_err(|_| DirectHotChainFixtureErrorV5::Input)?;
     lengths[14] =
-        u32::try_from(dclutch_registry_contract::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1)
+        u32::try_from(dclutch_registry::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1)
             .map_err(|_| DirectHotChainFixtureErrorV5::Input)?;
     lengths[15] = loader_bytes;
     lengths[16] = loader_bytes;
     lengths[17] = input.deployment_widths.trading_programdata_bytes;
-    lengths[18] = u32::try_from(dclutch_realm_contract::REALM_BYTES)
+    lengths[18] = u32::try_from(dclutch_market::realm::REALM_BYTES)
         .map_err(|_| DirectHotChainFixtureErrorV5::Input)?;
     lengths[23] = 17;
     lengths[33] =
@@ -2029,7 +2029,7 @@ fn capability_fixture(
     .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
     let mut root_bytes = Vec::with_capacity(
         CAPABILITY_ROOT_HEADER_BYTES_V1
-            + dclutch_direct_codec::successor::DIRECT_ROOT_STATE_BYTES_V1,
+            + dclutch_trading::successor::DIRECT_ROOT_STATE_BYTES_V1,
     );
     root_bytes.extend_from_slice(&header.to_bytes());
     root_bytes.extend_from_slice(&DirectRootStateV1::new().encode());
@@ -2110,7 +2110,7 @@ fn capability_manifest_selected(
     );
     let manifest_bumps = record_bumps_v1(
         input.registry_program,
-        dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        dclutch_market::capability_manifest::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         manifest_digest,
     );
     let config_bumps = record_bumps_v1(
@@ -2440,7 +2440,7 @@ fn registered_buy_child_requests_v4(
 
 fn realm_record(
     _collateral: [Pubkey; 3],
-) -> Result<[u8; dclutch_realm_contract::REALM_BYTES], DirectHotChainFixtureErrorV5> {
+) -> Result<[u8; dclutch_market::realm::REALM_BYTES], DirectHotChainFixtureErrorV5> {
     RealmV1::new(RealmV1Input {
         token_program: LEGACY_TOKEN_PROGRAM_ID,
         collateral_mint: key(0xa4).to_bytes(),
@@ -2546,7 +2546,7 @@ pub struct CustodyRouteAuthorityV3 {
 
 /// The exact registers the transition derives for the scenario this fixture
 /// runs, named rather than inlined so the arithmetic is auditable against
-/// `crates/dclutch-direct-codec/src/ordinary_v3.rs`.
+/// `crates/dclutch-trading/src/ordinary_v3.rs`.
 ///
 /// `gross = FILL * EXECUTION_PRICE / PRICE_SCALE`, `fee = gross * FEE_BPS /
 /// 10_000` (floor), `seller_net = gross - fee`, `buyer_debit = gross + fee`,
@@ -3109,7 +3109,7 @@ fn fixed_hot_accounts_selected(
             HOT_MANIFEST_STAGING_ACCOUNT_V3,
             finalized(
                 input.registry_program,
-                dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+                dclutch_market::capability_manifest::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
                 capability.manifest.clone(),
             ),
         ),
@@ -3276,7 +3276,7 @@ fn fixed_hot_accounts_selected(
         external_data(
             input.activation_cache,
             input.registry_program,
-            dclutch_registry_contract::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1,
+            dclutch_registry::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1,
             false,
             false,
         ),
@@ -3482,7 +3482,7 @@ fn logical_accounts(
         external_data(
             input.activation_cache,
             input.registry_program,
-            dclutch_registry_contract::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1,
+            dclutch_registry::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1,
             false,
             false,
         ),
@@ -3870,7 +3870,7 @@ fn registered_buy_custody_frame_accounts_v4(
             CustodyFrameRoleV1::ActivationCache => external_data(
                 input.activation_cache,
                 input.registry_program,
-                dclutch_registry_contract::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1,
+                dclutch_registry::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1,
                 false,
                 false,
             ),
@@ -4200,7 +4200,7 @@ fn core_content(value: [u8; 32]) -> Result<CoreContentId, DirectHotChainFixtureE
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
-    use dclutch_rent_contract::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
+    use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
 
     use super::*;
 
@@ -4398,7 +4398,7 @@ mod tests {
         assert_eq!(
             fixture.root_poststates[0].len(),
             CAPABILITY_ROOT_HEADER_BYTES_V1
-                + dclutch_direct_codec::successor::DIRECT_ROOT_STATE_BYTES_V1
+                + dclutch_trading::successor::DIRECT_ROOT_STATE_BYTES_V1
         );
         assert_eq!(
             fixture.root_poststates[0][..CAPABILITY_ROOT_HEADER_BYTES_V1],
@@ -4769,20 +4769,20 @@ mod tests {
     #[test]
     #[allow(clippy::indexing_slicing, clippy::too_many_lines)]
     fn both_registered_creation_profiles_project_a_real_frame() {
-        use dclutch_account_profile_contract::{
+        use dclutch_vm::account_profile::{
             AccountObservationV1,
             v2::{
                 PhysicalAccountDataGeometryV2, ProjectionRegistersV2, TrustedEnvironmentV2,
                 project_atomic,
             },
         };
-        use dclutch_capability_program_contract::hot_v3::HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3;
-        use dclutch_direct_codec::registered_creation_artifacts_v4::{
+        use dclutch_market::capability_program::hot_v3::HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3;
+        use dclutch_trading::registered_creation_artifacts_v4::{
             DIRECT_REGISTERED_CREATION_COMMON_IDENTITIES_V4,
             DIRECT_REGISTERED_CREATION_COMMON_SCALARS_V4, REGISTERED_IDENTITY_MINT_V4,
             REGISTERED_IDENTITY_TOKEN_PROGRAM_V4,
         };
-        use dclutch_realm_contract::RealmLayoutV1;
+        use dclutch_market::realm::RealmLayoutV1;
 
         let input = input();
         let rent = Rent::default();
@@ -4953,8 +4953,8 @@ mod tests {
             Some(&custody),
         )
         .expect("Buy logical accounts");
-        let cache_bytes = dclutch_registry_contract::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
-        let loader_bytes = dclutch_registry_svm::LOADER_V3_PROGRAM_BYTES;
+        let cache_bytes = dclutch_registry::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
+        let loader_bytes = dclutch_registry::svm::LOADER_V3_PROGRAM_BYTES;
         for (coordinate, bytes) in [
             (14_usize, cache_bytes),
             (27, cache_bytes),
@@ -5111,14 +5111,14 @@ pub mod via_builder {
             program_with_view, rent_sysvar_bytes, vacant,
         },
     };
-    use dclutch_direct_codec::native_evidence_v3::{
+    use dclutch_trading::native_evidence_v3::{
         DIRECT_NATIVE_EVIDENCE_BYTES_V3,
         encode_direct_headerless_registry_native_evidence_v4_atomic,
     };
-    use dclutch_product_runtime_v2_admission::{
+    use dclutch_product::admission::{
         PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
     };
-    use dclutch_realm_contract::REALM_SCHEMA_RELEASE_ID_V1;
+    use dclutch_market::realm::REALM_SCHEMA_RELEASE_ID_V1;
 
     use super::*;
 
@@ -5366,7 +5366,7 @@ pub mod via_builder {
                 external_with_view(
                     input.activation_cache,
                     input.registry_program,
-                    vec![0; dclutch_registry_contract::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1],
+                    vec![0; dclutch_registry::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1],
                 ),
             ),
             (25, program_with_deployed_view(input.registry_program)),

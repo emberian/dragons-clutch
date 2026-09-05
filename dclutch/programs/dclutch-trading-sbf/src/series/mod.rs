@@ -2,7 +2,7 @@
 //!
 //! Immutable record decoding, content identities, occurrence proofs, funding
 //! list semantics, and future-Market projection have one SDK-free owner in
-//! `dclutch-series-v3-kernel`. This module retains only Solana account access,
+//! `dclutch-trading::series`. This module retains only Solana account access,
 //! PDA derivation, Core request construction, replay persistence, and physical
 //! commit-last occurrence planning.
 
@@ -75,17 +75,17 @@ pub mod state;
 /// Terminal Ticket-retire/root-close differential execution oracle.
 pub mod terminal;
 
-pub use dclutch_series_v3_kernel::composition::{
+pub use dclutch_trading::series::composition::{
     SeriesConsumeCompositionErrorV3, SeriesConsumeCompositionV3, compose_series_consume_v3,
 };
-pub use dclutch_series_v3_kernel::escrow::{
+pub use dclutch_trading::series::escrow::{
     ConsumeSeriesEscrowPlanV3, PrepareSeriesEscrowPlanV3, SeriesEscrowEffectKindV3,
     SeriesEscrowEffectV3, TerminalSeriesEscrowPlanV3, consume_series_escrow_v3,
     expire_series_escrow_v3, prepare_series_escrow_v3,
 };
 #[cfg(test)]
-pub(crate) use dclutch_series_v3_kernel::generated;
-pub use dclutch_series_v3_kernel::{
+pub(crate) use dclutch_trading::series::generated;
+pub use dclutch_trading::series::{
     AccountKeyV3, AdmittedOccurrenceV3, AdmittedTicketV3, AuthenticatedProductProjectionV2,
     FoundingFundsV3, FutureMarketProjectionV3, OccurrenceV3, PrefoundingSeriesEscrowV3,
     SERIES_MAXIMUM_MERKLE_HEIGHT_V3, SERIES_OCCURRENCE_BYTES_V3, SERIES_TEMPLATE_BYTES_V3,

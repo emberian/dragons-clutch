@@ -20,10 +20,10 @@ import {
 } from './releaseLineage';
 
 const RUST_LINEAGE = fileURLToPath(
-  new URL('../../../crates/dclutch-registry-contract/src/lineage.rs', import.meta.url),
+  new URL('../../../crates/dclutch-registry/src/lineage.rs', import.meta.url),
 );
 const RUST_WALK = fileURLToPath(
-  new URL('../../../crates/dclutch-registry-contract/src/lineage_walk.rs', import.meta.url),
+  new URL('../../../crates/dclutch-registry/src/lineage_walk.rs', import.meta.url),
 );
 
 const MOVED_ROLES_OFFSET = 80;

@@ -10,7 +10,7 @@
 use std::{fmt, str};
 
 use dclutch_core_contract::ContentId;
-use dclutch_pyth_svm::{
+use dclutch_source::pyth::{
     LoaderV3Error, ProgramDataV3View, ProgramV3View, PythReleaseV1, PythReleaseV1Error,
 };
 use sha2::{Digest, Sha256};
@@ -194,7 +194,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum SemanticPreimageKindV1 {
     /// Capability-owned canonical preimage; the capability remains its decoder.
     Capability = 0,
-    /// Exact canonical [`PythReleaseV1`] preimage, decoded by `dclutch-pyth-svm`.
+    /// Exact canonical [`PythReleaseV1`] preimage, decoded by `dclutch-source::pyth`.
     PythReleaseV1 = 1,
     /// Exact preimage that **no** in-tree semantic contract decodes.
     ///

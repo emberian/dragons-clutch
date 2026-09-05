@@ -23,7 +23,7 @@
 //! holds both readings side by side so the parameter, and not the ledgers, is
 //! what a reader is pointed at.
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     CapabilityManifestV1, Error, FundingLedgerV2, manifest_entry_for_ledger_row_v2,
 };
 use solana_program::rent::Rent;

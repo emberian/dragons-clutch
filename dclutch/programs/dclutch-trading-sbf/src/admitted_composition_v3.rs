@@ -33,12 +33,12 @@ extern crate alloc;
 
 use alloc::{vec, vec::Vec};
 
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     hot_v3::{HOT_FIXED_ACCOUNT_COUNT_V3, hot_frame_uses_sealed_execution_aliases_v3},
     v4::SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_execution_strategy_contract::{
+use dclutch_market::execution_strategy::{
     admitted_v3::{
         ADMITTED_CALLER_AUTHORITY_ACCOUNT_V3, ADMITTED_HOT_FIXED_START_V3,
         ADMITTED_OUTPUT_PAGE_ACCOUNT_V3, ADMITTED_OUTPUT_PAGE_RUNTIME_ACCOUNTS_START_V3,
@@ -57,9 +57,9 @@ use dclutch_execution_strategy_contract::{
         accelerator_invocation_count_v2, register_bank_bytes_v2, resolve_execution_candidate_v2,
     },
 };
-use dclutch_record_contract::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
-use dclutch_registry_contract::ARTIFACT_RELEASE_SCHEMA_ID_V1;
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
+use dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1;
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
@@ -90,7 +90,7 @@ const ADMITTED_ACK_TRANSCRIPT_DOMAIN_V3: &[u8] = b"dclutch:hot-admitted-ack:v3";
 //
 // They are aliases now. `invoke_admitted_chunk` below is the single admitted CPI
 // site in the tree, so these constants and
-// `dclutch_execution_strategy_contract::admitted_v3` are the two ends of ONE
+// `dclutch_market::execution_strategy::admitted_v3` are the two ends of ONE
 // wire, and a ninth evidence account stops compiling at both ends instead of
 // shifting every runtime coordinate in one file.
 /// Caller authority in the authenticated accelerator V4 CPI frame.
@@ -1053,7 +1053,7 @@ fn record_address(registry: &Pubkey, seeds: RecordPdaSeedsV1, bump: Option<u8>) 
 /// **A record is keyed by schema/release AND digest, and both domains take the
 /// same pair.** This took a schema-less `identity` and a bare `domain` until
 /// 2026-08-29, deriving `[domain, identity]` where the Registry derives
-/// `[domain, schema, digest]` (`dclutch_record_contract::raw_record_pda_seeds`,
+/// `[domain, schema, digest]` (`dclutch_registry::record::raw_record_pda_seeds`,
 /// `programs/dclutch-registry-sbf/src/record_v1.rs:537-551`). Because Solana
 /// concatenates seed segments, a two-seed address commits 32 bytes of identity
 /// material where the Registry commits 64, so no record the Registry can create
@@ -1233,7 +1233,7 @@ fn content(bytes: &[u8]) -> Result<ContentId, ProgramError> {
 
 #[cfg(test)]
 mod tests {
-    use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+    use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 
     use super::*;
 
@@ -1339,7 +1339,7 @@ mod tests {
             [1; 32], [2; 32], [1; 32], [3; 32]
         ));
 
-        // The addresses below come from `dclutch_record_contract`, not from
+        // The addresses below come from `dclutch_registry::record`, not from
         // seeds re-spelled here. The previous version of this test derived its
         // own "canonical" address with the checker's own spelling and then
         // asserted the checker accepted it -- a tautology that held for any

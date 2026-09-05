@@ -25,28 +25,28 @@
 //! refuse a shortening when it does.
 
 use crate::market_admission_v1::CLAIMS_SETTLED_MARKET_ADMISSIBLE_PRESTATES_V1;
-use dclutch_claims_svm::claim_check_compaction_request_v1::CompactPositionToClaimCheckRequestV1;
-use dclutch_claims_svm::claim_check_conservation_v1::{
+use dclutch_claims::claim_check_compaction_request_v1::CompactPositionToClaimCheckRequestV1;
+use dclutch_claims::claim_check_conservation_v1::{
     ClaimCheckAccountObservationV1, ClaimCheckCompactionObservationV1, ClaimCheckCompactionPlanV1,
     ClaimCheckCompactionPostV1,
 };
-use dclutch_claims_svm::claim_check_request_v1::OpenClaimCheckEscrowRequestV1;
-use dclutch_claims_svm::claim_check_v1::{
+use dclutch_claims::claim_check_request_v1::OpenClaimCheckEscrowRequestV1;
+use dclutch_claims::claim_check_v1::{
     CLAIM_CHECK_BYTES_V1, CLAIM_CHECK_ESCROW_BYTES_V1, COMPACTION_CRANK_REWARD_LAMPORTS_V1,
     COMPACTION_DEADLINE_SLOTS_V1, ClaimCheckEscrowSeedsV1, ClaimCheckEscrowV1, ClaimCheckSeedsV1,
     ClaimCheckV1, ClaimCheckVaultSeedsV1,
 };
-use dclutch_claims_svm::liability_basis_state_v2::LIABILITY_BASIS_MARKET_SEED_V2;
-use dclutch_claims_svm::protocol_position_v2::{
+use dclutch_claims::liability_basis_state_v2::LIABILITY_BASIS_MARKET_SEED_V2;
+use dclutch_claims::protocol_position_v2::{
     ProtocolPositionAdmissionSeedsV2, ProtocolPositionAdmissionV2, ProtocolPositionOwnerKindV2,
 };
-use dclutch_claims_svm::terminal_settlement_v3::{
+use dclutch_claims::terminal_settlement_v3::{
     TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3, TERMINAL_SETTLEMENT_HOARD_ACCOUNT_V3,
     TERMINAL_SETTLEMENT_RECIPIENT_ACCOUNT_V3,
 };
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2};
-use dclutch_realm_contract::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2};
+use dclutch_market::realm::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,

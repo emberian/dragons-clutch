@@ -1,6 +1,6 @@
 //! One-route Claims EffectProgram for a descriptor/action-specific lifecycle.
 
-use dclutch_effect_kernel::{
+use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{
         HEADER_BYTES as EFFECT_HEADER_BYTES, OPERATION_BYTES as EFFECT_OPERATION_BYTES,
@@ -14,7 +14,7 @@ use dclutch_effect_kernel::{
         BorrowedRangePolicyV4, HEADER_BYTES_V4 as EFFECT_V4_HEADER_BYTES, encode_program_v4_atomic,
     },
 };
-use dclutch_rational_representation_v2_lifecycle_contract::{
+use dclutch_claims::rational_lifecycle::{
     LIFECYCLE_COMMON_ACCOUNT_COUNT_V2, LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2,
     LIFECYCLE_REQUEST_MAGIC_V2, LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2, LIFECYCLE_VERSION_V2,
     LifecycleActionV2,

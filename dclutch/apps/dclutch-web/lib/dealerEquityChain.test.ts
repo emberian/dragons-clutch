@@ -8,7 +8,7 @@ const REGISTRY = Keypair.fromSeed(new Uint8Array(32).fill(52)).publicKey.toBase5
 
 // Transcribed by hand from the publishing authority's own source, so this
 // vector is independent of the generator that emits the TS constant:
-// crates/dclutch-account-profile-contract/src/lifecycle_v3.rs:44-47,
+// crates/dclutch-vm/src/account_profile/lifecycle_v3.rs:44-47,
 // `pub const CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5`. That is the constant
 // crates/dclutch-rational-lifecycle-hot-v3/src/selected_bundle_v6.rs:5 imports
 // as LIFECYCLE_SCHEMA_ID_V5 and registers the dealer lifecycle artifact under

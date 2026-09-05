@@ -9,7 +9,7 @@
 //! under the REGISTRY program. Not one of those four inputs is an ELF digest and
 //! not one is a participant key:
 //!
-//! * the domains are `dclutch-record-contract` constants,
+//! * the domains are `dclutch-registry::record` constants,
 //! * `schema_release_id` is a schema constant,
 //! * `content_digest` is the hash of the record's own immutable bytes,
 //! * the Registry program id is fixed for a deployment.
@@ -43,18 +43,18 @@
 
 use solana_program::{hash::hash, pubkey::Pubkey};
 
-use dclutch_capability_seal_contract::CAPABILITY_SEAL_BUMP_OFFSET_V1;
+use dclutch_vm::capability_seal::CAPABILITY_SEAL_BUMP_OFFSET_V1;
 use dclutch_direct_hot_program_test_support::waist::{
     REGISTRY_PROGRAM_ID, add_release_waist, direct_case, elves, program_test_without_forced_budget,
     with_fixture_seed,
 };
-use dclutch_execution_strategy_contract::v2::EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2;
-use dclutch_product_payoff_v2_codec::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3;
-use dclutch_product_runtime_v2_admission::{
+use dclutch_market::execution_strategy::v2::EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2;
+use dclutch_product::payoff::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3;
+use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
 };
-use dclutch_realm_contract::REALM_SCHEMA_RELEASE_ID_V1;
-use dclutch_record_contract::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
+use dclutch_market::realm::REALM_SCHEMA_RELEASE_ID_V1;
+use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
 
 /// Attempts `find_program_address` makes to land on `bump`, at 1,500 CU each.
 use dclutch_program_test_evidence::pda_search::{ATTEMPT_COST_CU, attempts};
@@ -182,7 +182,7 @@ fn record_key_v1(schema: [u8; 32], digest: [u8; 32]) -> Option<RecordKeyV1> {
 /// One finalized record's address and bump, under this fixture's Registry.
 ///
 /// The seed tuple is NOT restated here, and that is the seam-audit rule this
-/// file used to break (`DOMAIN_RAW_RESTATEMENT`). `dclutch-record-contract`
+/// file used to break (`DOMAIN_RAW_RESTATEMENT`). `dclutch-registry::record`
 /// owns `RAW_RECORD_PDA_SEED_V1` and `STAGING_CURSOR_PDA_SEED_V1`; it also
 /// exports the constructors that place them, so a crate that merely READS these
 /// addresses takes the domain from `seeds.domain()` rather than naming it. A

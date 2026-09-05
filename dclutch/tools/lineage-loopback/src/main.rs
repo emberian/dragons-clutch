@@ -22,7 +22,7 @@
 //! can write into -- `plan.rs` says so about its own `Genesis` mode. Cut-day
 //! evidence still comes from devnet's real caches.
 //!
-//! Both caches are composed by `dclutch-registry-contract`'s own builders, so a
+//! Both caches are composed by `dclutch-registry`'s own builders, so a
 //! cache staged here is byte-identical to one the Registry would have written
 //! for the same release set.
 
@@ -30,13 +30,13 @@ use std::{env, fs, path::PathBuf, process::ExitCode};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use dclutch_core_contract::ContentId;
-use dclutch_registry_activation_auth_v1::activation_cache_address_v1;
-use dclutch_registry_contract::{
+use dclutch_registry::activation_auth_v1::activation_cache_address_v1;
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ArtifactActivationInputV1, ArtifactReleaseV1,
     ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
     initialize_activation_cache_v1, put_activation_cache_bump_v1,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, EXECUTION_ROLE_ORDER_V1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
     ProgramIdentityV1,
 };
@@ -268,7 +268,7 @@ fn build_cache(
     }
     let (address, bump) = Pubkey::find_program_address(
         &[
-            dclutch_registry_contract::ACTIVATION_PDA_DOMAIN_V1,
+            dclutch_registry::ACTIVATION_PDA_DOMAIN_V1,
             id.as_bytes(),
         ],
         &registry,

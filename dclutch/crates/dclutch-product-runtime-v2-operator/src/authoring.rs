@@ -31,7 +31,7 @@ use dclutch_product_compiler::partition_quality::{
     BandProfileV1, FoundingBandV1, FoundingBeliefV1, PartitionQualityReportV1, centred_cuts_v1,
     require_interesting_partition_v1,
 };
-use dclutch_product_runtime_v2::ContentId;
+use dclutch_product::ContentId;
 use solana_program::pubkey::Pubkey;
 
 use crate::{

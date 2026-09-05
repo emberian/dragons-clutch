@@ -18,9 +18,9 @@ use crate::{
     },
     observation::{FinalizedRecordProof, authenticate_finalized_record, decode_rent},
 };
-use dclutch_account_profile_contract::v2::{AccountProfileV2, PhysicalAccountDataGeometryV2};
-use dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1;
-use dclutch_capability_program_contract::hot_v3::{
+use dclutch_vm::account_profile::v2::{AccountProfileV2, PhysicalAccountDataGeometryV2};
+use dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1;
+use dclutch_market::capability_program::hot_v3::{
     HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
     HOT_ACTIVATION_CACHE_ACCOUNT_V3, HOT_CAPABILITY_SEAL_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3,
     HOT_CONFIG_STAGING_ACCOUNT_V3, HOT_CORE_PROGRAM_ACCOUNT_V3, HOT_CORE_PROGRAMDATA_ACCOUNT_V3,
@@ -39,27 +39,27 @@ use dclutch_capability_program_contract::hot_v3::{
     HOT_TRADING_PROGRAMDATA_ACCOUNT_V3, HOT_TRANSITION_RAW_ACCOUNT_V3,
     HOT_TRANSITION_STAGING_ACCOUNT_V3,
 };
-use dclutch_capability_program_contract::v4::{
+use dclutch_market::capability_program::v4::{
     CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
 };
-use dclutch_capability_seal_contract::{
+use dclutch_vm::capability_seal::{
     CAPABILITY_SEAL_BYTES_V1, CapabilitySealKeyV1, CapabilitySealRequestV1,
     SealedDescriptorClosureV1, SealedRecordRowV1, SealedRoleV1,
 };
-use dclutch_claims_svm::frame_spec_v1::{
+use dclutch_claims::frame_spec_v1::{
     ClaimsFrameRoleV1, SPARSE_NATIVE_TRANSFER_ACCOUNT_COUNT_V1, SparseNativeTransferFrameSpecV1,
 };
-use dclutch_claims_svm::{
+use dclutch_claims::{
     liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
     },
     protocol_position_v2::ProtocolPositionSeedsV2,
 };
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CallerRoleV1, CustodyAuthoritySeedsV1, CustodyFrameRoleV1, CustodyFrameSpecV1,
     CustodyReplaySeedsV1, CustodyReplayV1, OperationV1, TRANSFER_ACCOUNT_COUNT_V1,
 };
-use dclutch_direct_codec::{
+use dclutch_trading::{
     direct_finalization_v3::{
         DIRECT_INLINE_POSTSTATE_COUNT_V3, DirectFinalizationErrorV3, DirectInlineAccountPrestateV3,
         DirectInlineAccountPrestatesV3, DirectInlineFinalizationInputV3,
@@ -98,14 +98,14 @@ use dclutch_direct_codec::{
         MakerReplayObservationV1, MakerReplayRootV1, MakerReplaySeedsV1, MakerReplayVacancyV1,
     },
 };
-use dclutch_execution_strategy_contract::v2::{ExecutionStrategyProgramV2, StrategyDispositionV2};
-use dclutch_market_core_codec::CoreState;
-use dclutch_realm_contract::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
-use dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1;
-use dclutch_release_set_contract::{ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_market::execution_strategy::v2::{ExecutionStrategyProgramV2, StrategyDispositionV2};
+use dclutch_market::CoreState;
+use dclutch_market::realm::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
+use dclutch_registry::ActivatedExecutionReleaseSetViewV1;
+use dclutch_registry::release_set::{ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_release_tool::{CHECKED_MULTIPROGRAM_BYTES_V1, CheckedExecutionReleaseSetV1};
-use dclutch_rent_contract::lifecycle_v2::LifecycleRentCreditV2;
-use dclutch_token_svm::{AccountState, COption, Mint, TokenAccount};
+use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
+use dclutch_custody::token_svm::{AccountState, COption, Mint, TokenAccount};
 use solana_address_lookup_table_interface::{
     instruction::{create_lookup_table, extend_lookup_table, freeze_lookup_table},
     program as lookup_table_program,
@@ -1282,7 +1282,7 @@ pub const DIRECT_INLINE_DEVNET_ACCOUNT_LOCK_LIMIT_V3: usize = 64;
 /// The pairs themselves are the ABI's -- they are the same six for every family
 /// that submits the shape, and this crate spelled them a second time.
 pub const DIRECT_INLINE_SEALED_EXECUTION_ALIASES_V3: [(usize, usize); 6] =
-    dclutch_capability_program_contract::hot_v3::SEALED_EXECUTION_FIXED_ALIASES_V3;
+    dclutch_market::capability_program::hot_v3::SEALED_EXECUTION_FIXED_ALIASES_V3;
 
 /// Project the execution-only fixed aliases after the distinct named route has
 /// authenticated every real raw/staging pair. No account may be added, removed,
@@ -1453,7 +1453,7 @@ pub fn build_direct_inline_capability_seal_v3(
     let descriptor_digest = hash(&fixed.descriptor.raw.data).to_bytes();
     let descriptor = CapabilityProgramV4::decode(&fixed.descriptor.raw.data)
         .map_err(|_| DirectInlineRouteErrorV3::Seal)?;
-    let action = dclutch_direct_codec::execution_v3::DirectExecutionActionV3::InlineOrdinary as u32;
+    let action = dclutch_trading::execution_v3::DirectExecutionActionV3::InlineOrdinary as u32;
     let key = CapabilitySealKeyV1::new(
         CAPABILITY_PROGRAM_SCHEMA_ID_V4,
         descriptor_digest,
@@ -1646,7 +1646,7 @@ pub fn compile_direct_inline_capability_seal_routed_v0_v3(
             crate::direct_inline_v3::DIRECT_SEAL_COMPUTE_UNIT_LIMIT_V1,
         ),
         solana_compute_budget_interface::ComputeBudgetInstruction::request_heap_frame(
-            dclutch_capability_program_contract::hot_v3::DIRECT_HOT_HEAP_FRAME_BYTES_V1,
+            dclutch_market::capability_program::hot_v3::DIRECT_HOT_HEAP_FRAME_BYTES_V1,
         ),
         plan.instruction.clone(),
     ];
@@ -2309,7 +2309,7 @@ fn has_duplicate(keys: &[Pubkey]) -> bool {
 fn child_caller_hint_slots_v1(
     claims_authority_bump: u8,
     custody_authority_bumps: [u8; 4],
-    dispatch: dclutch_direct_codec::inline_candidate_v2::DirectInlineEffectDispatchV2,
+    dispatch: dclutch_trading::inline_candidate_v2::DirectInlineEffectDispatchV2,
 ) -> Result<([u8; 2], Option<u8>), DirectInlineRouteErrorV3> {
     let enabled = dispatch
         .custody_slots
@@ -2336,7 +2336,7 @@ fn derive_child_authorities(
     context: DirectOrdinaryAuthenticatedContextV3,
     family_request: [u8; crate::direct_inline_v3::DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3],
     _request: DirectInlineOrdinaryRequestV3,
-    projected: dclutch_direct_codec::ordinary_route_projection_v3::DirectInlineOrdinaryChildRequestsV3,
+    projected: dclutch_trading::ordinary_route_projection_v3::DirectInlineOrdinaryChildRequestsV3,
 ) -> Result<DirectInlineChildAuthoritiesV3, DirectInlineRouteErrorV3> {
     let release_set = dclutch_core_contract::ContentId::new(context.release_set)
         .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?;
@@ -2520,7 +2520,7 @@ pub fn project_direct_inline_sealed_execution_report_v3(
 /// by [`assemble_authenticated_direct_inline_ordinary_route_v3`]. This is a
 /// bridge, not a second settlement implementation: all candidate arithmetic,
 /// child receipt projection, acknowledgement bytes, and poststate digests are
-/// produced by `dclutch-direct-codec::direct_finalization_v3`.
+/// produced by `dclutch-trading::direct_finalization_v3`.
 pub fn prepare_direct_inline_hot_finalization_v3(
     named_route: DirectInlineOrdinaryRouteV3,
     outcome_count: u32,
@@ -2749,7 +2749,7 @@ pub fn prepare_direct_inline_hot_finalization_v3(
 /// candidate partition on the same inputs.
 ///
 /// `DirectFinalizationErrorV3::Candidate` is the next collapse down: six sites
-/// in `dclutch-direct-codec` share it, and the largest of them discards a whole
+/// in `dclutch-trading` share it, and the largest of them discards a whole
 /// nine-variant `DirectInlineCandidateErrorV2` through a `map_err`. That crate
 /// compiles into the Trading SBF program, where widening a refusal is a stack
 /// frame's worth of on-chain cost for a diagnosis nobody on chain can read, so
@@ -3320,7 +3320,7 @@ fn authenticate_report_route(
     payer: Pubkey,
 ) -> Result<(), DirectInlineRoutedTransactionErrorV3> {
     validate_direct_hot_instruction_sequence_v4(
-        dclutch_direct_codec::execution_v3::DirectExecutionActionV3::InlineOrdinary,
+        dclutch_trading::execution_v3::DirectExecutionActionV3::InlineOrdinary,
         report.outcome_count,
         &report.hot_instruction_data,
         &report.instructions,
@@ -3335,7 +3335,7 @@ fn authenticate_report_route(
         .iter()
         .chain(route.strategy_accounts.iter())
         .chain(route.runtime_accounts.iter().skip(
-            dclutch_capability_program_contract::hot_v3::HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3,
+            dclutch_market::capability_program::hot_v3::HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3,
         ))
         .map(|meta| AccountMeta {
             pubkey: meta.account.key,
@@ -3944,14 +3944,14 @@ fn insert_once<T>(
 mod tests {
     use std::borrow::Cow;
 
-    use dclutch_account_profile_contract::v2::{AccountProfileV2, PhysicalAccountDataGeometryV2};
-    use dclutch_capability_contract::{
+    use dclutch_vm::account_profile::v2::{AccountProfileV2, PhysicalAccountDataGeometryV2};
+    use dclutch_market::capability_manifest::{
         ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
         CompartmentFundingV1, FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES,
         MAX_DEPENDENCIES_PER_CAPABILITY,
     };
-    use dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1;
-    use dclutch_capability_program_contract::hot_v3::{
+    use dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1;
+    use dclutch_market::capability_program::hot_v3::{
         HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3,
         HOT_CONFIG_STAGING_ACCOUNT_V3, HOT_DESCRIPTOR_STAGING_ACCOUNT_V3,
         HOT_EFFECT_STAGING_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
@@ -3959,17 +3959,17 @@ mod tests {
         HOT_ROOT_ACCOUNT_V3, HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
         HotExecutionEnvelopeV3,
     };
-    use dclutch_capability_program_contract::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
-    use dclutch_claims_svm::liability_basis_state_v2::{
+    use dclutch_market::capability_program::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
+    use dclutch_claims::liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
         LiabilityBasisMarketInputV2, LiabilityBasisPositionInputV2,
         encode_liability_basis_market_into_v2, encode_liability_basis_position_into_v2,
     };
-    use dclutch_claims_svm::protocol_position_v2::ProtocolPositionSeedsV2;
+    use dclutch_claims::protocol_position_v2::ProtocolPositionSeedsV2;
     use dclutch_core_contract::ContentId as CoreContentId;
-    use dclutch_custody_contract::CustodyReplayLayoutV1;
-    use dclutch_custody_contract::{CallerRoleV1, CustodyReplaySeedsV1, CustodyReplayV1};
-    use dclutch_direct_codec::{
+    use dclutch_custody::CustodyReplayLayoutV1;
+    use dclutch_custody::{CallerRoleV1, CustodyReplaySeedsV1, CustodyReplayV1};
+    use dclutch_trading::{
         execution_v3::DirectExecutionActionV3,
         intent_v2::CompactIntentV2,
         native_evidence_v3::{
@@ -3992,39 +3992,39 @@ mod tests {
             DirectExecutionConfigV1, DirectRootStateV1,
         },
     };
-    use dclutch_market_core_codec::{
+    use dclutch_market::{
         CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
         STATE_BYTES as CORE_STATE_BYTES,
     };
-    use dclutch_product_payoff_v2_codec::{
+    use dclutch_product::payoff::{
         registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
         runtime_v3::{
             BASIS_WIDTH_OFFSET_V3, BasisInputV3, BasisKindV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
             basis_record_bytes_v3, compile_basis_v3, semantic_basis_preimage_v3,
         },
     };
-    use dclutch_product_runtime_v2::{
+    use dclutch_product::{
         ContentId as ProductContentId, PortfolioInputV2, ResultDomainInputV2, compile_portfolio_v2,
         compile_result_domain_v2, portfolio_record_bytes, result_domain_record_bytes,
     };
-    use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
-    use dclutch_product_runtime_v2_admission::{
+    use dclutch_product::admission::PRODUCT_RECORD_BYTES_V2;
+    use dclutch_product::admission::{
         PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
         RESULT_DOMAIN_SCHEMA_ID_V2,
     };
-    use dclutch_realm_contract::REALM_BYTES;
-    use dclutch_realm_contract::{
+    use dclutch_market::realm::REALM_BYTES;
+    use dclutch_market::realm::{
         FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1,
         RealmV1Input,
     };
-    use dclutch_registry_contract::{
+    use dclutch_registry::{
         ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
         ARTIFACT_RELEASE_BYTES_V1, ArtifactActivationInputV1, ArtifactReleaseV1,
         ArtifactUpgradePolicyV1, ExecutionReleaseActivationInputsV1,
         activate_execution_release_set_v1,
     };
-    use dclutch_registry_svm::LOADER_V3_PROGRAM_BYTES;
-    use dclutch_release_set_contract::{
+    use dclutch_registry::svm::LOADER_V3_PROGRAM_BYTES;
+    use dclutch_registry::release_set::{
         ArtifactReleaseIdV1, CapabilityExecutionSelectionV1, EXECUTION_RELEASE_SET_BYTES_V1,
         ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1, ProgramIdentityV1,
     };
@@ -4032,8 +4032,8 @@ mod tests {
         CHECKED_MULTIPROGRAM_BYTES_V1, CHECKED_MULTIPROGRAM_MAGIC_V1,
         CHECKED_MULTIPROGRAM_SCHEMA_V1, CheckedExecutionReleaseSetV1,
     };
-    use dclutch_rent_contract::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
-    use dclutch_token_svm::{AccountState, TokenAccount, state::TokenAccountLayoutV1};
+    use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
+    use dclutch_custody::token_svm::{AccountState, TokenAccount, state::TokenAccountLayoutV1};
     use solana_address_lookup_table_interface::state::{AddressLookupTable, LookupTableMeta};
     use solana_compute_budget_interface::ComputeBudgetInstruction;
     use solana_hash::Hash;
@@ -4076,10 +4076,10 @@ mod tests {
             compile_direct_inline_request_v3,
         },
     };
-    use dclutch_capability_program_contract::hot_v3::DIRECT_HOT_HEAP_FRAME_BYTES_V1;
-    use dclutch_direct_codec::direct_finalization_v3::DirectFinalizationErrorV3;
-    use dclutch_direct_codec::inline_candidate_v2::DirectInlineCandidateErrorV2;
-    use dclutch_market_core_codec::StateBumpsV1;
+    use dclutch_market::capability_program::hot_v3::DIRECT_HOT_HEAP_FRAME_BYTES_V1;
+    use dclutch_trading::direct_finalization_v3::DirectFinalizationErrorV3;
+    use dclutch_trading::inline_candidate_v2::DirectInlineCandidateErrorV2;
+    use dclutch_market::StateBumpsV1;
 
     fn key(byte: u8) -> Pubkey {
         Pubkey::new_from_array([byte; 32])
@@ -4250,12 +4250,12 @@ mod tests {
         rent_program: Pubkey,
     ) -> ObservedAccount {
         let mut account = profiled_account(profile, 7, key_value, rent_program);
-        let credit = dclutch_rent_contract::lifecycle_v2::LifecycleRentCreditV2::new(
-            dclutch_rent_contract::RefundAuthority::new(maker_rent_beneficiary().to_bytes())
+        let credit = dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2::new(
+            dclutch_market::rent::RefundAuthority::new(maker_rent_beneficiary().to_bytes())
                 .expect("refund wallet"),
-            dclutch_rent_contract::lifecycle_v2::LifecycleAccountIdV2::new([0x5b; 32])
+            dclutch_market::rent::lifecycle_v2::LifecycleAccountIdV2::new([0x5b; 32])
                 .expect("market"),
-            dclutch_rent_contract::lifecycle_v2::LifecycleAccountIdV2::new([0x5c; 32])
+            dclutch_market::rent::lifecycle_v2::LifecycleAccountIdV2::new([0x5c; 32])
                 .expect("release set"),
             7,
             255,
@@ -4522,15 +4522,15 @@ mod tests {
         output.to_vec()
     }
 
-    fn capability_id(bytes: [u8; 32]) -> dclutch_capability_contract::ContentId {
-        dclutch_capability_contract::ContentId::new(bytes).expect("capability identity")
+    fn capability_id(bytes: [u8; 32]) -> dclutch_market::capability_manifest::ContentId {
+        dclutch_market::capability_manifest::ContentId::new(bytes).expect("capability identity")
     }
 
     #[allow(clippy::too_many_lines)]
     fn install_exact_chain_fixture_v3(
         route: &mut DirectInlineOrdinaryRouteV3,
         authentication: &mut DirectInlineRouteAuthenticationV3,
-        ordinary: dclutch_direct_codec::ordinary_bundle_v4::DirectInlineOrdinaryHotBundleV4,
+        ordinary: dclutch_trading::ordinary_bundle_v4::DirectInlineOrdinaryHotBundleV4,
     ) {
         let rent = Rent::default();
         route.fixed.rent_sysvar.data = serialize_rent(&rent);
@@ -4686,7 +4686,7 @@ mod tests {
         )
         .expect("Funding amounts");
         let entry = CapabilityEntryV1::new(
-            capability_id(dclutch_direct_codec::execution_v3::DIRECT_SUCCESSOR_KIND_ID_V3),
+            capability_id(dclutch_trading::execution_v3::DIRECT_SUCCESSOR_KIND_ID_V3),
             capability_id(lifecycle.program_set_id),
             capability_id(config_digest),
             capability_id(capacity_profile),
@@ -4712,22 +4712,22 @@ mod tests {
         route.fixed.effect.raw.data = lifecycle.ordinary.effect.to_vec();
         route.fixed.lifecycle.raw.data = lifecycle.ordinary.lifecycle_policy.to_vec();
         route.fixed.strategy.raw.data = lifecycle.ordinary.strategy.to_vec();
-        let descriptor = dclutch_capability_program_contract::v4::CapabilityProgramV4::decode(
+        let descriptor = dclutch_market::capability_program::v4::CapabilityProgramV4::decode(
             &route.fixed.descriptor.raw.data,
         )
         .expect("ordinary descriptor");
         for (record, schema) in [
             (
                 &mut route.fixed.manifest,
-                dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+                dclutch_market::capability_manifest::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
             ),
             (
                 &mut route.fixed.program_set,
-                dclutch_capability_program_contract::set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+                dclutch_market::capability_program::set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
             ),
             (
                 &mut route.fixed.descriptor,
-                dclutch_capability_program_contract::v4::SCHEMA_RELEASE_ID,
+                dclutch_market::capability_program::v4::SCHEMA_RELEASE_ID,
             ),
             (&mut route.fixed.config, DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1),
             (
@@ -4797,7 +4797,7 @@ mod tests {
         let selection = CapabilityExecutionSelectionV1::new(
             0,
             capability_id(manifest_digest),
-            capability_id(dclutch_direct_codec::execution_v3::DIRECT_SUCCESSOR_KIND_ID_V3),
+            capability_id(dclutch_trading::execution_v3::DIRECT_SUCCESSOR_KIND_ID_V3),
             capability_id(lifecycle.program_set_id),
             capability_id(config_digest),
         )
@@ -4806,7 +4806,7 @@ mod tests {
             (
                 Pubkey::find_program_address(
                     &[
-                        dclutch_record_contract::RAW_RECORD_PDA_SEED_V1,
+                        dclutch_registry::record::RAW_RECORD_PDA_SEED_V1,
                         &schema,
                         &digest,
                     ],
@@ -4815,7 +4815,7 @@ mod tests {
                 .1,
                 Pubkey::find_program_address(
                     &[
-                        dclutch_record_contract::STAGING_CURSOR_PDA_SEED_V1,
+                        dclutch_registry::record::STAGING_CURSOR_PDA_SEED_V1,
                         &schema,
                         &digest,
                     ],
@@ -4825,11 +4825,11 @@ mod tests {
             )
         };
         let manifest_bumps = bumps(
-            dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+            dclutch_market::capability_manifest::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
             manifest_digest,
         );
         let set_bumps = bumps(
-            dclutch_capability_program_contract::set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+            dclutch_market::capability_program::set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
             lifecycle.program_set_id,
         );
         let config_bumps = bumps(DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, config_digest);
@@ -4864,7 +4864,7 @@ mod tests {
             intent.valid_from = 1;
             intent.valid_through = 100;
         }
-        let coordinates = dclutch_direct_codec::successor::DirectCoordinatesV1::new(
+        let coordinates = dclutch_trading::successor::DirectCoordinatesV1::new(
             market_key.to_bytes(),
             identity.generation,
         )
@@ -4873,7 +4873,7 @@ mod tests {
             (&mut route.seller_maker, authentication.seller.maker),
             (&mut route.buyer_maker, authentication.buyer.maker),
         ] {
-            let seeds = dclutch_direct_codec::successor::MakerReplaySeedsV1::new(
+            let seeds = dclutch_trading::successor::MakerReplaySeedsV1::new(
                 coordinates,
                 maker.to_bytes(),
             )
@@ -4887,7 +4887,7 @@ mod tests {
 
         let aggregate_key = Pubkey::find_program_address(
             &[
-                dclutch_claims_svm::liability_basis_state_v2::LIABILITY_BASIS_MARKET_SEED_V2,
+                dclutch_claims::liability_basis_state_v2::LIABILITY_BASIS_MARKET_SEED_V2,
                 market_key.as_ref(),
             ],
             &claims.program.key,
@@ -4953,7 +4953,7 @@ mod tests {
         }
 
         let custody_authority = Pubkey::find_program_address(
-            &dclutch_custody_contract::CustodyAuthoritySeedsV1::new(
+            &dclutch_custody::CustodyAuthoritySeedsV1::new(
                 market_key.to_bytes(),
                 release_set_digest,
             )
@@ -5035,7 +5035,7 @@ mod tests {
             seller_created: true,
             seller_bump_observation: 0,
             seller_bump: Pubkey::find_program_address(
-                &dclutch_direct_codec::successor::MakerReplaySeedsV1::new(
+                &dclutch_trading::successor::MakerReplaySeedsV1::new(
                     coordinates,
                     authentication.seller.maker.to_bytes(),
                 )
@@ -5049,7 +5049,7 @@ mod tests {
             buyer_created: true,
             buyer_bump_observation: 0,
             buyer_bump: Pubkey::find_program_address(
-                &dclutch_direct_codec::successor::MakerReplaySeedsV1::new(
+                &dclutch_trading::successor::MakerReplaySeedsV1::new(
                     coordinates,
                     authentication.buyer.maker.to_bytes(),
                 )
@@ -5255,18 +5255,18 @@ mod tests {
                 token_program,
             },
         };
-        let decoded = match dclutch_direct_codec::execution_v3::DirectExecutionRequestV3::decode(
+        let decoded = match dclutch_trading::execution_v3::DirectExecutionRequestV3::decode(
             &family_request,
             3,
         )
         .expect("decode family request")
         {
-            dclutch_direct_codec::execution_v3::DirectExecutionRequestV3::InlineOrdinary(value) => {
+            dclutch_trading::execution_v3::DirectExecutionRequestV3::InlineOrdinary(value) => {
                 value
             }
             _ => unreachable!("ordinary request"),
         };
-        dclutch_direct_codec::ordinary_route_projection_v3::project_direct_inline_ordinary_child_requests_v3(
+        dclutch_trading::ordinary_route_projection_v3::project_direct_inline_ordinary_child_requests_v3(
             decoded,
             context,
             &bundle.account_profile,
@@ -5548,7 +5548,7 @@ mod tests {
             ],
             hot_instruction_data,
             observation: observation(),
-            selected_program_schema: dclutch_capability_program_contract::v4::SCHEMA_RELEASE_ID,
+            selected_program_schema: dclutch_market::capability_program::v4::SCHEMA_RELEASE_ID,
             selected_program: [0x41; 32],
             outcome_count: 3,
             product_record: key(32).to_bytes(),
@@ -5746,7 +5746,7 @@ mod tests {
             ],
             hot_instruction_data,
             observation: observation(),
-            selected_program_schema: dclutch_capability_program_contract::v4::SCHEMA_RELEASE_ID,
+            selected_program_schema: dclutch_market::capability_program::v4::SCHEMA_RELEASE_ID,
             selected_program: [0x31; 32],
             outcome_count: 3,
             product_record: [0x32; 32],
@@ -5807,7 +5807,7 @@ mod tests {
         assert_eq!(hash(&record.raw.data).to_bytes(), digest);
         record.raw.key = Pubkey::find_program_address(
             &[
-                dclutch_record_contract::RAW_RECORD_PDA_SEED_V1,
+                dclutch_registry::record::RAW_RECORD_PDA_SEED_V1,
                 &schema,
                 &digest,
             ],
@@ -5819,7 +5819,7 @@ mod tests {
         record.raw.executable = false;
         record.staging.key = Pubkey::find_program_address(
             &[
-                dclutch_record_contract::STAGING_CURSOR_PDA_SEED_V1,
+                dclutch_registry::record::STAGING_CURSOR_PDA_SEED_V1,
                 &schema,
                 &digest,
             ],
@@ -5843,7 +5843,7 @@ mod tests {
         route.fixed.rent_sysvar.lamports = 1;
         let registry = route.fixed.registry_program.key;
         let descriptor_digest = hash(&route.fixed.descriptor.raw.data).to_bytes();
-        let descriptor = dclutch_capability_program_contract::v4::CapabilityProgramV4::decode(
+        let descriptor = dclutch_market::capability_program::v4::CapabilityProgramV4::decode(
             &route.fixed.descriptor.raw.data,
         )
         .expect("ordinary descriptor");
@@ -5851,7 +5851,7 @@ mod tests {
             &mut route.fixed.descriptor,
             registry,
             &rent,
-            dclutch_capability_program_contract::v4::SCHEMA_RELEASE_ID,
+            dclutch_market::capability_program::v4::SCHEMA_RELEASE_ID,
             descriptor_digest,
         );
         canonicalize_record(
@@ -5889,8 +5889,8 @@ mod tests {
             descriptor.effect().schema().to_bytes(),
             descriptor.effect().program().to_bytes(),
         );
-        let key = dclutch_capability_seal_contract::CapabilitySealKeyV1::new(
-            dclutch_capability_program_contract::v4::SCHEMA_RELEASE_ID,
+        let key = dclutch_vm::capability_seal::CapabilitySealKeyV1::new(
+            dclutch_market::capability_program::v4::SCHEMA_RELEASE_ID,
             descriptor_digest,
             DirectExecutionActionV3::InlineOrdinary as u32,
             CheckedExecutionReleaseSetV1::decode(
@@ -5960,7 +5960,7 @@ mod tests {
         assert_eq!(plan.seal, route.fixed.capability_seal.key);
         assert_eq!(
             plan.rent_minimum_lamports,
-            rent.minimum_balance(dclutch_capability_seal_contract::CAPABILITY_SEAL_BYTES_V1)
+            rent.minimum_balance(dclutch_vm::capability_seal::CAPABILITY_SEAL_BYTES_V1)
         );
         assert_eq!(plan.expected_final_lamports, plan.rent_minimum_lamports);
         assert_eq!(plan.instruction.program_id, route.fixed.trading_program.key);
@@ -5971,7 +5971,7 @@ mod tests {
         assert!(!plan.instruction.accounts[HOT_ROOT_ACCOUNT_V3].is_writable);
         assert!(
             plan.instruction.accounts
-                [dclutch_capability_program_contract::hot_v3::HOT_CAPABILITY_SEAL_ACCOUNT_V3]
+                [dclutch_market::capability_program::hot_v3::HOT_CAPABILITY_SEAL_ACCOUNT_V3]
                 .is_writable
         );
         let payer_meta = plan
@@ -5988,7 +5988,7 @@ mod tests {
             .expect("System meta");
         assert_eq!(system_meta.pubkey, system_program::ID);
         assert!(!system_meta.is_signer && !system_meta.is_writable);
-        let closure = dclutch_capability_seal_contract::SealedDescriptorClosureV1::decode(
+        let closure = dclutch_vm::capability_seal::SealedDescriptorClosureV1::decode(
             &plan.expected_body,
         )
         .expect("canonical expected seal");
@@ -6720,7 +6720,7 @@ mod tests {
         let bumps = [251_u8, 252, 253, 254];
         let claims = 250_u8;
         let dispatch = |slot: u8, count: u8| {
-            dclutch_direct_codec::inline_candidate_v2::DirectInlineEffectDispatchV2 {
+            dclutch_trading::inline_candidate_v2::DirectInlineEffectDispatchV2 {
                 custody_slots: [slot],
                 custody_count: count,
                 child_dispatch_writable: [false; 4],

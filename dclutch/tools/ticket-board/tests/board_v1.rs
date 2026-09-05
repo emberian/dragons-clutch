@@ -25,7 +25,7 @@
 
 use std::sync::Mutex;
 
-use dclutch_direct_codec::intent_v2::CompactIntentV2;
+use dclutch_trading::intent_v2::CompactIntentV2;
 use dclutch_direct_ticket::{
     encode_portable_direct_ticket_v1, parse_portable_direct_ticket_v1, sign_direct_intent_v1,
 };

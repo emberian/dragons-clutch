@@ -93,7 +93,7 @@ export {
  *
  * Every width, offset, magic and compartment coordinate below comes from
  * `lib/generated/capabilityManifestV1.ts`, emitted from the same Lean schema
- * `dclutch-capability-contract` compiles against, so this decoder refuses
+ * `dclutch-market::capability_manifest` compiles against, so this decoder refuses
  * exactly what the chain refuses.
  */
 
@@ -368,7 +368,7 @@ export type CapabilityRootEntryV1 = Pick<CapabilityManifestEntryV1, 'index' | 'k
 /**
  * The composite capability root one manifest entry activates into.
  *
- * `CapabilityRootSeedsV1::as_slices` in `dclutch-capability-program-contract`
+ * `CapabilityRootSeedsV1::as_slices` in `dclutch-market::capability_program`
  * is the chain's author of this order, and it builds the seeds out of the
  * root's OWN immutable header -- correct for a program already holding the
  * account, and useless to a reader trying to find one. This is the same eight
@@ -425,7 +425,7 @@ export function capabilityEntryLedgerMaskV2(index: number): number {
  * One controller-owned subset funding ledger.
  *
  * `CapabilityFundingLedgerDerivationV2::seed_components`
- * (`dclutch-capability-contract/src/funding.rs`) is the author: the domain,
+ * (`dclutch-market/src/funding.rs`) is the author: the domain,
  * the controlling program, the Market, its generation, the manifest identity,
  * and the u16 mask of the manifest entries this ledger holds a slot for. The
  * mask is the one seed a Market does not determine on its own, which is why

@@ -2,11 +2,11 @@
 
 #![allow(clippy::indexing_slicing, clippy::panic, clippy::unwrap_used)]
 
-use dclutch_fractional_claim_contract::{
+use dclutch_claims::fractional::{
     FractionalExposureActionV2, FractionalExposureRequestInputV2, FractionalExposureRequestV2,
     NO_EXPOSURE_COORDINATE_V2,
 };
-use dclutch_fractional_claim_kernel::{
+use dclutch_claims::fractional_kernel::{
     FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FractionalExposureTermsAdmissionV2,
     FractionalExposureTermsInputV2, FractionalExposureTermsV2, encode_fractional_exposure_terms_v2,
     fractional_exposure_terms_bytes_v2,
@@ -19,12 +19,12 @@ use dclutch_fractional_claim_operator::{
     plan_fractional_exposure_rent_close_v2, plan_fractional_exposure_retirement_v2,
     plan_fractional_exposure_token_effect_v2,
 };
-use dclutch_market_core_codec::{RetirementReceiptInputV1, RetirementReceiptV1};
-use dclutch_rent_contract::{
+use dclutch_market::{RetirementReceiptInputV1, RetirementReceiptV1};
+use dclutch_market::rent::{
     RefundAuthority,
     lifecycle_v2::{LifecycleAccountIdV2, LifecycleRentCreditV2},
 };
-use dclutch_token_svm::{
+use dclutch_custody::token_svm::{
     TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, TokenBehaviorSelectionV2,
 };
 use solana_program::pubkey::Pubkey;

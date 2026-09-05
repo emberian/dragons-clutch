@@ -9,14 +9,14 @@ extern crate alloc;
 
 use alloc::{vec, vec::Vec};
 
-use dclutch_account_profile_contract::{
+use dclutch_vm::account_profile::{
     lifecycle_v3::{CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5, StateLifecyclePolicyV5},
     v3::{
         AccountProfileV3, HEADER_BYTES_V3 as ACCOUNT_PROFILE_HEADER_BYTES_V3,
         SCHEMA_RELEASE_ID_V3 as ACCOUNT_PROFILE_SCHEMA_ID_V3, encode_account_profile_v3_atomic,
     },
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     set_v2::{
         CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, CapabilityProgramSetV2,
         SelectorWidthV2, encode_program_set_v2, encoded_program_set_bytes_v2,
@@ -27,24 +27,24 @@ use dclutch_capability_program_contract::{
     },
 };
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{ProjectedCustodyOperationV1, ProjectedCustodyRequestV1};
-use dclutch_effect_kernel::v5::{
+use dclutch_custody::{ProjectedCustodyOperationV1, ProjectedCustodyRequestV1};
+use dclutch_vm::effect::v5::{
     FundingOperationV5, HEADER_BYTES_V5 as EFFECT_HEADER_BYTES_V5, ProgramV5 as EffectProgramV5,
     encode_program_v5_atomic,
 };
-use dclutch_execution_strategy_contract::v2::{
+use dclutch_market::execution_strategy::v2::{
     ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_PROGRAM_BYTES_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
     ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
-use dclutch_market_core_codec::{SeriesCoreActionV1, SeriesCoreRequestV1};
-use dclutch_request_profile_contract::RequestProfileV1;
-use dclutch_series_v3_kernel::{
+use dclutch_market::{SeriesCoreActionV1, SeriesCoreRequestV1};
+use dclutch_vm::request_profile::RequestProfileV1;
+use dclutch_trading::series::{
     SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
     request::{SeriesActionRequestV3, SeriesActionV3},
 };
-use dclutch_transition_vm::v3::ProgramV3 as TransitionProgramV3;
+use dclutch_vm::v3::ProgramV3 as TransitionProgramV3;
 use solana_program::hash::hash;
 
 use super::{
@@ -714,7 +714,7 @@ fn encode_interpreted_strategy(
     let schema = |bytes| content(bytes).map_err(|_| SeriesReleaseErrorV5::Strategy);
     let strategy = ExecutionStrategyProgramV2::new(
         StrategyDispositionV2::Interpreted,
-        schema(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID)?,
+        schema(dclutch_vm::v3::SCHEMA_RELEASE_ID)?,
         transition_program,
         schema(EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2)?,
         None,
@@ -991,13 +991,13 @@ pub fn encode_series_action_descriptor_v5(
         CapabilityArtifactsV4 {
             account_profile: reference(ACCOUNT_PROFILE_SCHEMA_ID_V3, ids.account_profile)?,
             request_profile: reference(
-                dclutch_request_profile_contract::SCHEMA_RELEASE_ID,
+                dclutch_vm::request_profile::SCHEMA_RELEASE_ID,
                 ids.request_profile,
             )?,
             lifecycle: reference(CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5, ids.lifecycle)?,
             strategy: reference(EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ids.strategy)?,
-            transition: reference(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID, ids.transition)?,
-            effect: reference(dclutch_effect_kernel::v5::SCHEMA_RELEASE_ID_V5, ids.effect)?,
+            transition: reference(dclutch_vm::v3::SCHEMA_RELEASE_ID, ids.transition)?,
+            effect: reference(dclutch_vm::effect::v5::SCHEMA_RELEASE_ID_V5, ids.effect)?,
         },
         SERIES_STATE_BYTES_V3 as u32,
     )
@@ -1095,15 +1095,15 @@ const _: () = assert!(SERIES_CLOSE_FIXED_ACCOUNT_COUNT_V5 == 7);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_claims_svm::founding_v5::{ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5};
-    use dclutch_custody_contract::{CompartmentV1, ProjectedCallerRoleV1};
-    use dclutch_market_core_codec::{
+    use dclutch_claims::founding_v5::{ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5};
+    use dclutch_custody::{CompartmentV1, ProjectedCallerRoleV1};
+    use dclutch_market::{
         FoundingIntentV5, Identity, SeriesFoundingPermitV1, SeriesPermitExpiryRequestV1,
     };
-    use dclutch_series_v3_kernel::request::{
+    use dclutch_trading::series::request::{
         SERIES_ACTION_HEADER_BYTES_V3, encode_series_action_header_v3,
     };
-    use dclutch_series_v3_kernel::{series_action_request_bytes_v3, series_proof_count_v3};
+    use dclutch_trading::series::{series_action_request_bytes_v3, series_proof_count_v3};
 
     use crate::series::{
         artifacts_v3::{

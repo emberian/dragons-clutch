@@ -1,12 +1,12 @@
 //! Typed RequestProfile and TransitionVM artifacts.
 
 #[cfg(test)]
-use dclutch_rational_representation_v2_lifecycle_contract::hot_v3::{
+use dclutch_claims::rational_lifecycle::hot_v3::{
     RATIONAL_LIFECYCLE_HOT_COMMON_IDENTITIES_V3, RATIONAL_LIFECYCLE_HOT_COMMON_SCALARS_V3,
     RATIONAL_LIFECYCLE_HOT_ITEM_IDENTITIES_V3, RATIONAL_LIFECYCLE_HOT_ITEM_SCALARS_V3,
     RATIONAL_LIFECYCLE_SCALAR_COORDINATE_COUNT_V3,
 };
-use dclutch_rational_representation_v2_lifecycle_contract::{
+use dclutch_claims::rational_lifecycle::{
     LifecycleActionV2,
     hot_v3::{
         RATIONAL_LIFECYCLE_HOT_MAGIC_V3, RATIONAL_LIFECYCLE_HOT_VERSION_V3,
@@ -45,18 +45,18 @@ use dclutch_rational_representation_v2_lifecycle_contract::{
     },
 };
 #[cfg(test)]
-use dclutch_request_profile_contract::v4::{
+use dclutch_vm::request_profile::v4::{
     REQUEST_PROFILE_V4_HEADER_BYTES, REQUEST_PROFILE_V4_ROW_OPERATION_BYTES, RowInstructionV4,
     RowProgramGeometryV4, encode_request_profile_v4_atomic,
 };
-use dclutch_request_profile_contract::{
+use dclutch_vm::request_profile::{
     HEADER_BYTES as REQUEST_HEADER_BYTES, OPERATION_BYTES as REQUEST_OPERATION_BYTES,
     encode::{
         IdentityRegisterV1, RequestCoordinateV1, RequestGeometryV1, RequestInstructionV1,
         ScalarRegisterV1, encode_request_profile_v1_atomic,
     },
 };
-use dclutch_transition_vm::v3::{
+use dclutch_vm::v3::{
     HEADER_BYTES as TRANSITION_HEADER_BYTES, INSTRUCTION_BYTES as TRANSITION_INSTRUCTION_BYTES,
     IdentityRegisterV3, InstructionV3, ProgramGeometryV3, ScalarRegisterV3, encode_program_atomic,
 };
@@ -853,8 +853,8 @@ fn narrow_u32(value: usize) -> Result<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_request_profile_contract::RequestProfileV1;
-    use dclutch_transition_vm::v3::{
+    use dclutch_vm::request_profile::RequestProfileV1;
+    use dclutch_vm::v3::{
         ProgramV3, RegisterInput, RegisterOutput, execute_fold_atomic,
     };
 
@@ -862,7 +862,7 @@ mod tests {
         product_width: u64,
         representation_width: u64,
         outcome: u64,
-    ) -> dclutch_transition_vm::v3::Result<()> {
+    ) -> dclutch_vm::v3::Result<()> {
         let bytes =
             encode_rational_lifecycle_transition_v3(LifecycleActionV2::ActivateCoordinate, 1)
                 .expect("transition");
@@ -873,7 +873,7 @@ mod tests {
             .get_mut(RATIONAL_LIFECYCLE_SCALAR_OUTCOME_COUNT_V3)
             .expect("representation width register") = representation_width;
         *input
-            .get_mut(dclutch_rational_representation_v2_lifecycle_contract::hot_v3::RATIONAL_LIFECYCLE_SCALAR_PRODUCT_OUTCOME_COUNT_V3)
+            .get_mut(dclutch_claims::rational_lifecycle::hot_v3::RATIONAL_LIFECYCLE_SCALAR_PRODUCT_OUTCOME_COUNT_V3)
             .expect("Product width register") = product_width;
         *input
             .get_mut(

@@ -30,7 +30,7 @@ if ! (cd "$formal" && lake env lean --run EmitCustodyAbiRust.lean) \
   cat "$emit_stderr" >&2
   exit 1
 fi
-if ! diff -u "$repo_root/crates/dclutch-custody-contract/src/generated.rs" \
+if ! diff -u "$repo_root/crates/dclutch-custody/src/generated.rs" \
     "$emit_stdout"; then
   cat "$build_stdout" >&2
   cat "$build_stderr" >&2

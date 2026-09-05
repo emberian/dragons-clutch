@@ -20,7 +20,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use dclutch_direct_codec::intent_v2::CompactIntentV2;
+use dclutch_trading::intent_v2::CompactIntentV2;
 use serde::{Deserialize, Serialize};
 use solana_keypair::Keypair;
 use solana_program::pubkey::Pubkey;
@@ -246,9 +246,9 @@ pub fn author_with_keypair_path_v1(
         fee_basis_points: arguments.fee_basis_points,
         collateral_account: arguments.collateral_account.to_string(),
         signed_preimage_bytes:
-            dclutch_direct_codec::intent_v2::COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2,
+            dclutch_trading::intent_v2::COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2,
         signature_domain: String::from_utf8(
-            dclutch_direct_codec::intent_v2::COMPACT_INTENT_SIGNATURE_DOMAIN_PREIMAGE_V2.to_vec(),
+            dclutch_trading::intent_v2::COMPACT_INTENT_SIGNATURE_DOMAIN_PREIMAGE_V2.to_vec(),
         )
         .map_err(|_| refusal("the Direct signature domain preimage is not UTF-8"))?,
     })

@@ -95,7 +95,7 @@
 
 use std::{env, fs, path::PathBuf};
 
-use dclutch_claims_svm::{
+use dclutch_claims::{
     founding_v5::{
         CLAIMS_FOUNDING_ACCOUNT_COUNT_V6, CLAIMS_FOUNDING_RECEIPT_BYTES_V5,
         CLAIMS_FOUNDING_REQUEST_BYTES_V5, ClaimsFoundingAggregateSeedsV5, ClaimsFoundingReceiptV5,
@@ -110,7 +110,7 @@ use dclutch_claims_svm::{
         ProtocolPositionClaimsCapabilitySeedsV2, ProtocolPositionSeedsV2,
     },
 };
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CallerRoleV1, CompartmentV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1, CustodyReplayV1,
     CustodyVaultSeedsV1, PROJECTED_HOARD_CONTEXT_DOMAIN_V1, ProjectedCustodyLockReceiptV1,
     ProjectedCustodyReceiptV1,
@@ -125,19 +125,19 @@ use dclutch_fractional_atomic_program_test::{
         NarrowBasisInputV3, NarrowFixtureInputV2, NarrowFixtureV2, compile_narrow_fixture_v3,
     },
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     CoreState, FoundingIntentV5, Identity, Phase, Readiness, SeriesFoundingPermitV1,
 };
 use dclutch_program_test_evidence::TransactionEvidence;
-use dclutch_realm_contract::{
+use dclutch_market::realm::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
 };
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_rent_contract::RefundAuthority;
-use dclutch_rent_contract::lifecycle_v2::{
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_market::rent::RefundAuthority;
+use dclutch_market::rent::lifecycle_v2::{
     LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
 };
-use dclutch_token_svm::{PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID};
+use dclutch_custody::token_svm::{PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID};
 use solana_program::{
     clock::Clock,
     hash::{hash, hashv},
@@ -341,7 +341,7 @@ fn world(shape: FoundingShapeV1, hostile: HostileV1) -> (ProgramTest, FoundingWo
     });
     let activation_cache_key = Pubkey::find_program_address(
         &[
-            dclutch_registry_contract::ACTIVATION_PDA_DOMAIN_V1,
+            dclutch_registry::ACTIVATION_PDA_DOMAIN_V1,
             &release_set,
         ],
         &REGISTRY_PROGRAM_ID,
@@ -512,7 +512,7 @@ fn world(shape: FoundingShapeV1, hostile: HostileV1) -> (ProgramTest, FoundingWo
     .0;
     let (permit, permit_bump) = Pubkey::find_program_address(
         &[
-            &dclutch_market_core_codec::SERIES_FOUNDING_PERMIT_PDA_DOMAIN_V1[..],
+            &dclutch_market::SERIES_FOUNDING_PERMIT_PDA_DOMAIN_V1[..],
             &release_set,
             &shared.core_market.to_bytes(),
             &TICKET_CONTEXT,

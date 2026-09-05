@@ -11,12 +11,12 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use dclutch_core_contract::ContentId;
-use dclutch_effect_kernel::{
+use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{ProgramV3, ResolvedInvocationV3, RouteKindV3},
 };
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_resolution_codec::{
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_source::resolution::{
     PROVIDER_EXECUTION_REQUEST_BYTES_V3, PROVIDER_RESOLUTION_TRADING_ACCOUNT_COUNT_V3,
     PROVIDER_RESOLUTION_TRADING_TAIL_START_V3, PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3,
     PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3, ProviderCallerV3,
@@ -589,7 +589,7 @@ fn gather_invocation_accounts<'info>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_resolution_codec::ProviderSubmitRequestV3;
+    use dclutch_source::resolution::ProviderSubmitRequestV3;
 
     fn id(tag: u8) -> [u8; 32] {
         [tag; 32]

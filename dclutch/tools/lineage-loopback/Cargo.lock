@@ -321,9 +321,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "dclutch-core-contract",
- "dclutch-registry-activation-auth-v1",
- "dclutch-registry-contract",
- "dclutch-release-set-contract",
+ "dclutch-registry",
  "serde_json",
  "solana-program",
  "solana-sdk",
@@ -331,37 +329,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-registry-activation-auth-v1"
+name = "dclutch-registry"
 version = "0.1.0"
 dependencies = [
- "dclutch-registry-contract",
- "dclutch-registry-svm",
- "dclutch-release-set-contract",
+ "dclutch-core-contract",
  "solana-program",
  "solana-sdk-ids",
-]
-
-[[package]]
-name = "dclutch-registry-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-core-contract",
- "dclutch-release-set-contract",
-]
-
-[[package]]
-name = "dclutch-registry-svm"
-version = "0.1.0"
-dependencies = [
- "dclutch-core-contract",
- "dclutch-release-set-contract",
-]
-
-[[package]]
-name = "dclutch-release-set-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-core-contract",
 ]
 
 [[package]]

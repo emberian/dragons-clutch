@@ -16,7 +16,7 @@ custom-heap = []
 custom-panic = []
 
 [dependencies]
-dclutch-token-svm = { path = "../../../../../crates/dclutch-token-svm" }
+dclutch-custody = { path = "../../../../../crates/dclutch-custody" }
 solana-program = { version = "=3.0.0", default-features = false }
 
 [workspace]

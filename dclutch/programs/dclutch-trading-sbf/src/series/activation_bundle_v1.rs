@@ -16,7 +16,7 @@
 //!
 //! The initial tail is not written down. It is asked for, from the kernel's own
 //! creation oracle
-//! [`dclutch_series_v3_kernel::activation::series_activation_root_tail_v3`],
+//! [`dclutch_trading::series::activation::series_activation_root_tail_v3`],
 //! which is `SeriesStateV3::new(template.close_rent())` under the Template's own
 //! occurrence count and nothing else. Every byte of a Series tail is a function
 //! of the Template, and the release binds one exact Template (see
@@ -42,7 +42,7 @@
 //! A Template's `close_rent` is separately prepaid principal. The kernel's
 //! terminal contract reads it back out of the root and classifies it apart from
 //! root Rent and donation
-//! ([`dclutch_series_v3_kernel::terminal::plan_series_root_closure_v3`]), so the
+//! ([`dclutch_trading::series::terminal::plan_series_root_closure_v3`]), so the
 //! root must OPEN holding it. It reaches the root through the funding model's
 //! second native compartment, and through no family-shaped byte anywhere:
 //!
@@ -69,12 +69,12 @@ extern crate alloc;
 
 use alloc::{vec, vec::Vec};
 
-use dclutch_capability_activation_codec::{
+use dclutch_market::capability_activation::{
     ActivationBundleErrorV1, ActivationBundleInputV1, ActivationBundleV1, ActivationSeamImageV3,
     ActivationTailFieldV1, activation_descriptor_schema_v1, build_activation_bundle_v1,
     project_activation_root_tail_v3, validate_activation_bundle_v1,
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityProgramV1,
     activation_registers_v2::{ACTIVATION_COMMON_IDENTITIES_V2, ACTIVATION_COMMON_SCALARS_V2},
     set_v2::{
@@ -84,7 +84,7 @@ use dclutch_capability_program_contract::{
     v4::{CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID},
 };
 use dclutch_core_contract::ContentId;
-use dclutch_series_v3_kernel::{
+use dclutch_trading::series::{
     SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3, TemplateV3,
     activation::{
         SeriesActivationErrorV3, plan_series_root_activation_v3, series_activation_root_tail_v3,
@@ -118,7 +118,7 @@ pub const SERIES_ACTIVATION_REQUEST_BYTES_V1: usize = 16;
 /// Domain-separating activation selector-request magic.
 ///
 /// Distinct from the Series action header magic, so this request can never be
-/// mistaken for a [`dclutch_series_v3_kernel::request::SeriesActionRequestV3`].
+/// mistaken for a [`dclutch_trading::series::request::SeriesActionRequestV3`].
 pub const SERIES_ACTIVATION_REQUEST_MAGIC_V1: [u8; 8] = *b"DCSEACT1";
 
 /// Activation selector-request schema version.
@@ -581,10 +581,10 @@ fn put(output: &mut [u8], offset: usize, source: &[u8]) -> SeriesActivationResul
 
 #[cfg(test)]
 mod tests {
-    use dclutch_capability_program_contract::{
+    use dclutch_market::capability_program::{
         CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1, set_v2::ProgramSetErrorV2,
     };
-    use dclutch_series_v3_kernel::{
+    use dclutch_trading::series::{
         AccountKeyV3, generated,
         terminal::{SeriesLifecycleRentSinkV3, SeriesTerminalErrorV3, plan_series_root_closure_v3},
     };
@@ -650,7 +650,7 @@ mod tests {
     }
 
     fn sink(wallet: AccountKeyV3) -> SeriesLifecycleRentSinkV3 {
-        use dclutch_rent_contract::{
+        use dclutch_market::rent::{
             RefundAuthority,
             lifecycle_v2::{LifecycleAccountIdV2, LifecycleRentCreditV2},
         };

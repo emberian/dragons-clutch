@@ -28,12 +28,12 @@
 //! identity, which is what makes them foundable. A family compiler entering
 //! this seam owes exactly that property, in every identity the entry names.
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
     CompartmentFundingV1, ContentId as CapabilityContentId, FundingAmountsV1, FundingQuoteV1,
     MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
 };
-use dclutch_capability_program_contract::v4::CapabilityProgramV4;
+use dclutch_market::capability_program::v4::CapabilityProgramV4;
 use sha2::{Digest as _, Sha256};
 
 use crate::{Error, Result};
@@ -369,10 +369,10 @@ pub(crate) fn selected_capability_kind_v1(
 pub(crate) fn market_realm_identity_v1(
     collateral_mint: solana_sdk::pubkey::Pubkey,
 ) -> Result<[u8; 32]> {
-    use dclutch_realm_contract::{
+    use dclutch_market::realm::{
         FreezeAuthorityPolicy, MintAuthorityPolicy, RealmV1, RealmV1Input,
     };
-    use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
+    use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
 
     let realm = RealmV1::new(RealmV1Input {
         token_program: TOKEN_2022_PROGRAM_ID,

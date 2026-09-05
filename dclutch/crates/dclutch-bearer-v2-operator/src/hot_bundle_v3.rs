@@ -1,37 +1,37 @@
 //! Content-addressed CapabilityProgram bundle for terminal Bearer redemption.
 
-use dclutch_account_profile_contract::{
+use dclutch_vm::account_profile::{
     lifecycle_v3::{
         CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5 as LIFECYCLE_SCHEMA_ID_V5, StateLifecyclePolicyV5,
     },
     v2::{AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE},
 };
-use dclutch_capability_program_contract::v4::{
+use dclutch_market::capability_program::v4::{
     ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4, CapabilityProgramV4,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_effect_kernel::{
+use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{ProgramV3 as EffectProgramV3, RouteKindV3},
     v4::{ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4},
 };
-use dclutch_execution_strategy_contract::v2::{
+use dclutch_market::execution_strategy::v2::{
     ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_PROGRAM_BYTES_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
     ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
-use dclutch_rational_representation_v2_contract::{
+use dclutch_claims::rational::{
     AuthenticatedTokenBehaviorV2, RATIONAL_TERMINAL_HOT_COMMON_IDENTITIES_V3,
     RATIONAL_TERMINAL_HOT_COMMON_SCALARS_V3, RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3,
     RATIONAL_TERMINAL_HOT_REQUEST_SCHEMA_ID_V3,
 };
-use dclutch_request_profile_contract::RequestProfileV1;
-use dclutch_token_svm::{
+use dclutch_vm::request_profile::RequestProfileV1;
+use dclutch_custody::token_svm::{
     TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
     TokenBehaviorSelectionV2,
 };
-use dclutch_transition_vm::v3::ProgramV3 as TransitionProgramV3;
+use dclutch_vm::v3::ProgramV3 as TransitionProgramV3;
 use solana_program::hash::hash;
 
 use crate::{
@@ -182,7 +182,7 @@ fn build_terminal_bundle_inner(
     let transition_id = digest(&transition)?;
     let strategy_value = ExecutionStrategyProgramV2::new(
         StrategyDispositionV2::Interpreted,
-        content(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID)?,
+        content(dclutch_vm::v3::SCHEMA_RELEASE_ID)?,
         transition_id,
         content(EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2)?,
         None,
@@ -203,11 +203,11 @@ fn build_terminal_bundle_inner(
         content(capacity_profile)?,
         CapabilityArtifactsV4 {
             account_profile: artifact(
-                dclutch_account_profile_contract::v2::SCHEMA_RELEASE_ID,
+                dclutch_vm::account_profile::v2::SCHEMA_RELEASE_ID,
                 digest(&account_profile)?.to_bytes(),
             )?,
             request_profile: artifact(
-                dclutch_request_profile_contract::SCHEMA_RELEASE_ID,
+                dclutch_vm::request_profile::SCHEMA_RELEASE_ID,
                 digest(&request_profile)?.to_bytes(),
             )?,
             lifecycle: artifact(LIFECYCLE_SCHEMA_ID_V5, lifecycle_id.to_bytes())?,
@@ -216,7 +216,7 @@ fn build_terminal_bundle_inner(
                 digest(&strategy)?.to_bytes(),
             )?,
             transition: artifact(
-                dclutch_transition_vm::v3::SCHEMA_RELEASE_ID,
+                dclutch_vm::v3::SCHEMA_RELEASE_ID,
                 digest(&transition)?.to_bytes(),
             )?,
             effect: artifact(EFFECT_SCHEMA_ID_V4, digest(&effect)?.to_bytes())?,
@@ -277,12 +277,12 @@ pub fn validate_rational_terminal_hot_bundle_v3(
         || descriptor.derivation_policy() != lifecycle_id
         || descriptor.account_profile()
             != artifact(
-                dclutch_account_profile_contract::v2::SCHEMA_RELEASE_ID,
+                dclutch_vm::account_profile::v2::SCHEMA_RELEASE_ID,
                 digest(&bundle.account_profile)?.to_bytes(),
             )?
         || descriptor.request_profile()
             != artifact(
-                dclutch_request_profile_contract::SCHEMA_RELEASE_ID,
+                dclutch_vm::request_profile::SCHEMA_RELEASE_ID,
                 digest(&bundle.request_profile)?.to_bytes(),
             )?
         || descriptor.lifecycle() != artifact(LIFECYCLE_SCHEMA_ID_V5, lifecycle_id.to_bytes())?
@@ -293,7 +293,7 @@ pub fn validate_rational_terminal_hot_bundle_v3(
             )?
         || descriptor.transition()
             != artifact(
-                dclutch_transition_vm::v3::SCHEMA_RELEASE_ID,
+                dclutch_vm::v3::SCHEMA_RELEASE_ID,
                 digest(&bundle.transition)?.to_bytes(),
             )?
         || descriptor.effect() != artifact(EFFECT_SCHEMA_ID_V4, digest(&bundle.effect)?.to_bytes())?
@@ -390,7 +390,7 @@ fn artifact(schema: [u8; 32], program: [u8; 32]) -> Result<ArtifactReferenceV4> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_product_payoff_v2_codec::runtime_v3::{
+    use dclutch_product::payoff::runtime_v3::{
         BASIS_HEADER_BYTES_V3, BasisInputV3, BasisKindV3, compile_basis_v3,
     };
 

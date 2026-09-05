@@ -5,12 +5,12 @@
 //! ProgramData widths into the finalized Direct records selected by the
 //! manifest. It does not invent a family-level capacity label.
 
-use dclutch_capability_contract::CapabilityEntryV1;
+use dclutch_market::capability_manifest::CapabilityEntryV1;
 #[cfg(test)]
-use dclutch_capability_contract::CapabilityManifestV1;
-use dclutch_capability_program_contract::{CapabilityProgramV1, v4::CapabilityProgramV4};
-use dclutch_custody_contract::CustodyReplayLayoutV1;
-use dclutch_direct_codec::{
+use dclutch_market::capability_manifest::CapabilityManifestV1;
+use dclutch_market::capability_program::{CapabilityProgramV1, v4::CapabilityProgramV4};
+use dclutch_custody::CustodyReplayLayoutV1;
+use dclutch_trading::{
     activation_bundle_v1::DirectActivationBundleV1,
     begin_retiring_bundle_v1::DirectBeginRetiringBundleV1,
     close_maker_bundle_v1::DirectCloseMakerBundleV1,
@@ -35,16 +35,16 @@ use dclutch_direct_codec::{
         DirectExecutionConfigV1,
     },
 };
-use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
-use dclutch_registry_contract::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
-use dclutch_registry_svm::{
+use dclutch_product::admission::PRODUCT_RECORD_BYTES_V2;
+use dclutch_registry::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
+use dclutch_registry::svm::{
     LOADER_V3_PROGRAM_BYTES, LOADER_V3_PROGRAMDATA_METADATA_BYTES, ProgramDataV3View, ProgramV3View,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2,
     ProtocolInfrastructureProfileV1, ProtocolInfrastructureProfileV2,
 };
-use dclutch_rent_contract::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
+use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
 use dclutch_representation_composition_v3_operator::native_categorical_v1::{
     NativeCategoricalCompositionInputV1, compile_native_categorical_composition_v1,
 };
@@ -72,7 +72,7 @@ const TOKEN_ACCOUNT_BYTES: u32 = 165;
 /// Direct-owned tail. The devnet planner quotes Rent for this width, never for
 /// a detached caller number.
 pub(crate) const DIRECT_CAPABILITY_ROOT_BYTES_V1: usize =
-    dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1
+    dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1
         + DIRECT_ROOT_STATE_BYTES_V1;
 
 const _: () = assert!(DIRECT_CAPABILITY_ROOT_BYTES_V1 == 256);
@@ -259,7 +259,7 @@ fn authenticate_devnet_plan_v1<E: DirectPlanEvidenceV1>(
         ));
     }
     if decode_hex(&plan.trading.semantic_release_id)?
-        != dclutch_direct_codec::COMPILED_DIRECT_RELEASE_ID_V1
+        != dclutch_trading::COMPILED_DIRECT_RELEASE_ID_V1
     {
         return Err(Error::new(
             "Direct compiler requires the Trading COMPILED_DIRECT_RELEASE_ID_V1 semantic owner",
@@ -412,7 +412,7 @@ fn authenticate_local_plan_v1(plan: &SuccessorPlan, registry: Pubkey) -> Result<
         ));
     }
     if decode_hex(&plan.trading.semantic_release_id)?
-        != dclutch_direct_codec::COMPILED_DIRECT_RELEASE_ID_V1
+        != dclutch_trading::COMPILED_DIRECT_RELEASE_ID_V1
     {
         return Err(Error::new(
             "Direct compiler requires the Trading COMPILED_DIRECT_RELEASE_ID_V1 semantic owner",
@@ -1024,7 +1024,7 @@ impl DirectMarketCompilerOwnedV1 {
             deployment,
             fee: DirectFeeSelectionV1::explicit(Some(0), Some(registry))
                 .expect("test Direct fee policy"),
-            resolution_release: dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V7,
+            resolution_release: dclutch_source::resolution::RESOLUTION_CONTROLLER_RELEASE_ID_V7,
             activation_deadline_slot: u64::MAX,
             root_rent_minimum_lamports: Rent::default()
                 .minimum_balance(DIRECT_CAPABILITY_ROOT_BYTES_V1),
@@ -1062,7 +1062,7 @@ pub(crate) fn attach_direct_market_capability_v1(
     let capacity_bytes = decode_hex(&input.source_capacity_profile_hex)?;
     let capacity_profile: [u8; 32] = Sha256::digest(&capacity_bytes).into();
     let source_spec =
-        dclutch_source_contract::SourceSpecV1::decode(&decode_hex(&input.source_spec_hex)?)
+        dclutch_source::SourceSpecV1::decode(&decode_hex(&input.source_spec_hex)?)
             .map_err(|error| Error::new(format!("SourceSpecV1: {error:?}")))?;
     if source_spec.capacity_profile_id().to_bytes() != capacity_profile {
         return Err(Error::new(
@@ -1148,7 +1148,7 @@ pub(crate) fn validate_direct_market_capability_v1(input: &MarketRunInput) -> Re
     let capacity_bytes = decode_hex(&input.source_capacity_profile_hex)?;
     let capacity_profile: [u8; 32] = Sha256::digest(&capacity_bytes).into();
     let source_spec =
-        dclutch_source_contract::SourceSpecV1::decode(&decode_hex(&input.source_spec_hex)?)
+        dclutch_source::SourceSpecV1::decode(&decode_hex(&input.source_spec_hex)?)
             .map_err(|error| Error::new(format!("SourceSpecV1: {error:?}")))?;
     if source_spec.capacity_profile_id().to_bytes() != capacity_profile {
         return Err(Error::new(
@@ -1258,72 +1258,72 @@ pub(crate) fn direct_publication_records_v1(
         ),
         record(
             "direct_ordinary_descriptor_record",
-            dclutch_capability_program_contract::v4::SCHEMA_RELEASE_ID,
+            dclutch_market::capability_program::v4::SCHEMA_RELEASE_ID,
             &release.ordinary.descriptor,
         ),
         record(
             "direct_begin_retiring_account_profile_record",
-            dclutch_direct_codec::begin_retiring_bundle_v1::direct_begin_retiring_account_profile_schema_v1(),
+            dclutch_trading::begin_retiring_bundle_v1::direct_begin_retiring_account_profile_schema_v1(),
             &release.begin_retiring.account_profile,
         ),
         record(
             "direct_begin_retiring_effect_record",
-            dclutch_direct_codec::begin_retiring_bundle_v1::direct_begin_retiring_effect_schema_v1(),
+            dclutch_trading::begin_retiring_bundle_v1::direct_begin_retiring_effect_schema_v1(),
             &release.begin_retiring.effect,
         ),
         record(
             "direct_begin_retiring_descriptor_record",
-            dclutch_direct_codec::begin_retiring_bundle_v1::direct_begin_retiring_descriptor_schema_v1(),
+            dclutch_trading::begin_retiring_bundle_v1::direct_begin_retiring_descriptor_schema_v1(),
             &release.begin_retiring.descriptor,
         ),
         record(
             "direct_native_close_account_profile_record",
-            dclutch_direct_codec::native_close_bundle_v1::direct_native_close_account_profile_schema_v1(),
+            dclutch_trading::native_close_bundle_v1::direct_native_close_account_profile_schema_v1(),
             &release.native_close.account_profile,
         ),
         record(
             "direct_native_close_effect_record",
-            dclutch_direct_codec::native_close_bundle_v1::direct_native_close_effect_schema_v1(),
+            dclutch_trading::native_close_bundle_v1::direct_native_close_effect_schema_v1(),
             &release.native_close.effect,
         ),
         record(
             "direct_native_close_descriptor_record",
-            dclutch_direct_codec::native_close_bundle_v1::direct_native_close_descriptor_schema_v1(),
+            dclutch_trading::native_close_bundle_v1::direct_native_close_descriptor_schema_v1(),
             &release.native_close.descriptor,
         ),
         record(
             "direct_activation_account_profile_record",
-            dclutch_direct_codec::activation_bundle_v1::direct_activation_account_profile_schema_v1(),
+            dclutch_trading::activation_bundle_v1::direct_activation_account_profile_schema_v1(),
             &release.activation.account_profile,
         ),
         record(
             "direct_activation_effect_record",
-            dclutch_direct_codec::activation_bundle_v1::direct_activation_effect_schema_v1(),
+            dclutch_trading::activation_bundle_v1::direct_activation_effect_schema_v1(),
             &release.activation.effect,
         ),
         record(
             "direct_activation_descriptor_record",
-            dclutch_direct_codec::activation_bundle_v1::direct_activation_descriptor_schema_v1(),
+            dclutch_trading::activation_bundle_v1::direct_activation_descriptor_schema_v1(),
             &release.activation.descriptor,
         ),
         record(
             "direct_close_maker_account_profile_record",
-            dclutch_direct_codec::close_maker_bundle_v1::direct_close_maker_account_profile_schema_v1(),
+            dclutch_trading::close_maker_bundle_v1::direct_close_maker_account_profile_schema_v1(),
             &release.close_maker.account_profile,
         ),
         record(
             "direct_close_maker_effect_record",
-            dclutch_direct_codec::close_maker_bundle_v1::direct_close_maker_effect_schema_v1(),
+            dclutch_trading::close_maker_bundle_v1::direct_close_maker_effect_schema_v1(),
             &release.close_maker.effect,
         ),
         record(
             "direct_close_maker_descriptor_record",
-            dclutch_direct_codec::close_maker_bundle_v1::direct_close_maker_descriptor_schema_v1(),
+            dclutch_trading::close_maker_bundle_v1::direct_close_maker_descriptor_schema_v1(),
             &release.close_maker.descriptor,
         ),
         record(
             "direct_program_set_record",
-            dclutch_capability_program_contract::set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+            dclutch_market::capability_program::set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
             &release.program_set,
         ),
     ];
@@ -1502,27 +1502,27 @@ pub(crate) fn direct_logical_data_lengths_v1(
     put_width(
         &mut output,
         0,
-        dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1
-            .checked_add(dclutch_direct_codec::successor::DIRECT_ROOT_STATE_BYTES_V1)
+        dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1
+            .checked_add(dclutch_trading::successor::DIRECT_ROOT_STATE_BYTES_V1)
             .ok_or_else(|| Error::new("Direct root width overflow"))?,
     )?;
     put_width(
         &mut output,
         1,
-        dclutch_direct_codec::successor::DIRECT_EXECUTION_CONFIG_BYTES_V1,
+        dclutch_trading::successor::DIRECT_EXECUTION_CONFIG_BYTES_V1,
     )?;
     put_width(&mut output, 2, PRODUCT_RECORD_BYTES_V2)?;
     put_geometry_width(&mut output, 3, geometry.portfolio_record_bytes())?;
     put_width(
         &mut output,
         4,
-        dclutch_product_payoff_v2_codec::runtime_v3::BASIS_HEADER_BYTES_V3,
+        dclutch_product::payoff::runtime_v3::BASIS_HEADER_BYTES_V3,
     )?;
     for coordinate in [5_usize, 8] {
         put_width(
             &mut output,
             coordinate,
-            dclutch_direct_codec::successor::DIRECT_MAKER_REPLAY_BYTES_V1,
+            dclutch_trading::successor::DIRECT_MAKER_REPLAY_BYTES_V1,
         )?;
     }
     put_width(&mut output, 7, LIFECYCLE_RENT_CREDIT_BYTES_V2)?;
@@ -1533,7 +1533,7 @@ pub(crate) fn direct_logical_data_lengths_v1(
     put_geometry_width(&mut output, 18, geometry.result_domain_record_bytes())?;
     alias_width(&mut output, 20, 3)?;
     set_width(&mut output, 22, 17)?;
-    put_width(&mut output, 23, dclutch_market_core_codec::STATE_BYTES)?;
+    put_width(&mut output, 23, dclutch_market::STATE_BYTES)?;
     put_width(&mut output, 24, ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1)?;
     for coordinate in [25_usize, 26, 28, 30] {
         put_width(&mut output, coordinate, LOADER_V3_PROGRAM_BYTES)?;
@@ -1553,7 +1553,7 @@ pub(crate) fn direct_logical_data_lengths_v1(
     alias_width(&mut output, 37, 25)?;
     alias_width(&mut output, 38, 26)?;
     alias_width(&mut output, 39, 27)?;
-    put_width(&mut output, 40, dclutch_realm_contract::REALM_BYTES)?;
+    put_width(&mut output, 40, dclutch_market::realm::REALM_BYTES)?;
     put_width(&mut output, 42, CustodyReplayLayoutV1::BYTES)?;
     set_width(&mut output, 43, TOKEN_MINT_BYTES)?;
     set_width(&mut output, 44, TOKEN_ACCOUNT_BYTES)?;
@@ -1653,14 +1653,14 @@ mod tests {
     use super::*;
     use std::{cell::Cell, fs, path::PathBuf, rc::Rc};
 
-    use dclutch_capability_program_contract::set_v2::CapabilityProgramSetV2;
-    use dclutch_direct_codec::{
+    use dclutch_market::capability_program::set_v2::CapabilityProgramSetV2;
+    use dclutch_trading::{
         activation_bundle_v1::DIRECT_ACTIVATION_SELECTOR_V1,
         close_maker_v1::DIRECT_CLOSE_MAKER_SELECTOR_V1,
         native_close_bundle_v1::DIRECT_NATIVE_CLOSE_SELECTOR_V1,
         retirement_v1::DIRECT_BEGIN_RETIRING_SELECTOR_V1,
     };
-    use dclutch_release_set_contract::{ArtifactReleaseIdV1, ExecutionRoleBindingV1};
+    use dclutch_registry::release_set::{ArtifactReleaseIdV1, ExecutionRoleBindingV1};
 
     fn test_market() -> MarketRunInput {
         let registry = Pubkey::new_from_array([0x41; 32]);
@@ -1873,12 +1873,12 @@ mod tests {
             trading_program: Pubkey::new_from_array([4; 32]),
             trading_elf: trading_role.elf,
             trading_sha256: trading_role.sha256,
-            trading_semantic_release_id: hex(&dclutch_direct_codec::COMPILED_DIRECT_RELEASE_ID_V1),
+            trading_semantic_release_id: hex(&dclutch_trading::COMPILED_DIRECT_RELEASE_ID_V1),
             resolution_program: Pubkey::new_from_array([5; 32]),
             resolution_elf: resolution_role.elf,
             resolution_sha256: resolution_role.sha256,
             resolution_semantic_release_id: hex(
-                &dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V7,
+                &dclutch_source::resolution::RESOLUTION_CONTROLLER_RELEASE_ID_V7,
             ),
             custody_program: Pubkey::new_from_array([6; 32]),
             custody_elf: custody_role.elf,
@@ -2300,7 +2300,7 @@ mod tests {
         for profile in [
             ProtocolInfrastructureProfileV2::new(
                 ExecutionRoleBindingV1::new(
-                    dclutch_release_set_contract::ProgramIdentityV1::new([0xd2; 32])
+                    dclutch_registry::release_set::ProgramIdentityV1::new([0xd2; 32])
                         .expect("different Registry program"),
                     successor,
                 ),
@@ -2380,7 +2380,7 @@ mod tests {
         let compiler = loaded.compiler();
         assert_eq!(
             compiler.resolution_release,
-            dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V7
+            dclutch_source::resolution::RESOLUTION_CONTROLLER_RELEASE_ID_V7
         );
         assert_eq!(
             compiler.activation_deadline_slot,

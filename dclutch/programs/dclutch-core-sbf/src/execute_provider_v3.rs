@@ -8,13 +8,13 @@
 
 use alloc::{boxed::Box, vec::Vec};
 
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
-use dclutch_market_core_codec::{
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_market::{
     Action, CoreState, MarketAdmissionV1, Phase, Product, Readiness, Request, Role, STATE_BYTES,
 };
-use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV2};
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_resolution_codec::{
+use dclutch_product::svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV2};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_source::resolution::{
     PROVIDER_EXECUTION_RECEIPT_BYTES_V3, PROVIDER_EXECUTION_REQUEST_BYTES_V3,
     PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3, PROVIDER_RESOLUTION_CORE_TAIL_START_V3,
     PROVIDER_RESOLUTION_RECOVERY_TAIL_ACCOUNTS_V3, PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3,
@@ -23,7 +23,7 @@ use dclutch_resolution_codec::{
     ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
     ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
-use dclutch_source_contract::{
+use dclutch_source::{
     SOURCE_RESOLUTION_STATE_BYTES_V2, SourceResolutionPhaseV1, SourceResolutionRouteV1,
     SourceResolutionStateV2,
 };
@@ -68,7 +68,7 @@ pub const EXECUTE_PROVIDER_RECOVERY_ACCOUNT_COUNT_V3: usize =
     EXECUTE_PROVIDER_ACCOUNT_COUNT_V3 + PROVIDER_RESOLUTION_RECOVERY_TAIL_ACCOUNTS_V3;
 /// Fixed Core request plus fixed provider request before the borrowed provider body.
 pub const EXECUTE_PROVIDER_PREFIX_BYTES_V3: usize =
-    dclutch_market_core_codec::REQUEST_BYTES + PROVIDER_EXECUTION_REQUEST_BYTES_V3;
+    dclutch_market::REQUEST_BYTES + PROVIDER_EXECUTION_REQUEST_BYTES_V3;
 
 const CALLER_AUTHORITY: usize = 0;
 const RESOLVER: usize = 1;

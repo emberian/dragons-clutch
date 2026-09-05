@@ -3,9 +3,9 @@ import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 const root = new URL('../../../', import.meta.url);
 const sources = Object.freeze({
   route: readFileSync(new URL('programs/dclutch-trading-sbf/src/generic_market_founding_v1.rs', root), 'utf8'),
-  codec: readFileSync(new URL('crates/dclutch-market-core-codec/src/generic_founding_v1.rs', root), 'utf8'),
-  projected: readFileSync(new URL('crates/dclutch-custody-contract/src/projected.rs', root), 'utf8'),
-  claims: readFileSync(new URL('crates/dclutch-claims-svm/src/founding_v5.rs', root), 'utf8'),
+  codec: readFileSync(new URL('crates/dclutch-market/src/generic_founding_v1.rs', root), 'utf8'),
+  projected: readFileSync(new URL('crates/dclutch-custody/src/projected.rs', root), 'utf8'),
+  claims: readFileSync(new URL('crates/dclutch-claims/src/founding_v5.rs', root), 'utf8'),
   client: readFileSync(new URL('tools/local-validator/bootstrap/successor/src/market.rs', root), 'utf8'),
   clientRpc: readFileSync(new URL('tools/local-validator/bootstrap/successor/src/rpc.rs', root), 'utf8'),
   coreFrame: readFileSync(new URL('programs/dclutch-core-sbf/src/frame.rs', root), 'utf8'),
@@ -40,7 +40,7 @@ function scalar(source, name, seen = new Set()) {
       // A FULLY QUALIFIED CROSS-CRATE CONSTANT. One author for a number two
       // crates share is the point, not an accident, so the emitter follows the
       // path instead of refusing it: the host's writable-key census is
-      // `<its own base> + dclutch_claims_svm::...::CLAIMS_FOUNDING_ESCROW_ACCOUNT_COUNT_V6`
+      // `<its own base> + dclutch_claims::...::CLAIMS_FOUNDING_ESCROW_ACCOUNT_COUNT_V6`
       // precisely so the escrow's share of it is the PROGRAM'S declaration.
       // The trailing name must define in exactly one of the sources read
       // above; two definitions is an ambiguity this may not silently pick a
@@ -184,9 +184,9 @@ lines.push('// Regenerate with: npm run abi:generic-founding');
 lines.push('//');
 lines.push('// Sources, in the order the wire is assembled:');
 lines.push('//   programs/dclutch-trading-sbf/src/generic_market_founding_v1.rs  (the route)');
-lines.push('//   crates/dclutch-market-core-codec/src/generic_founding_v1.rs     (the request)');
-lines.push('//   crates/dclutch-custody-contract/src/projected.rs                (Lock, Realize)');
-lines.push('//   crates/dclutch-claims-svm/src/founding_v5.rs                    (Claims)');
+lines.push('//   crates/dclutch-market/src/generic_founding_v1.rs     (the request)');
+lines.push('//   crates/dclutch-custody/src/projected.rs                (Lock, Realize)');
+lines.push('//   crates/dclutch-claims/src/founding_v5.rs                    (Claims)');
 lines.push('//   tools/local-validator/bootstrap/successor/src/market.rs         (the frame width)');
 lines.push('');
 lines.push('/** Sole top-level DCLTGMF3 discriminator followed by five invocation-evidence bumps. */');

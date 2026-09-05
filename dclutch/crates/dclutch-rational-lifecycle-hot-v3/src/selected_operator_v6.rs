@@ -1,12 +1,12 @@
 //! Unsigned market-neutral V6 Hot operator.
 
-use dclutch_account_profile_contract::v2::AccountProfileV2;
-use dclutch_capability_program_contract::hot_v3::{
+use dclutch_vm::account_profile::v2::AccountProfileV2;
+use dclutch_market::capability_program::hot_v3::{
     HOT_FAMILY_REQUEST_OFFSET_V3, HotExecutionEnvelopeV3,
 };
-use dclutch_rational_representation_v2_contract::AuthenticatedTokenBehaviorV2;
-use dclutch_rational_representation_v2_kernel::RepresentationDescriptorV2;
-use dclutch_rational_representation_v2_lifecycle_contract::{
+use dclutch_claims::rational::AuthenticatedTokenBehaviorV2;
+use dclutch_claims::rational_kernel::RepresentationDescriptorV2;
+use dclutch_claims::rational_lifecycle::{
     LifecycleActionV2, LifecycleRequestV2, hot_v6::RationalLifecycleHotRequestV6,
 };
 use solana_program::{hash::hash, instruction::Instruction};

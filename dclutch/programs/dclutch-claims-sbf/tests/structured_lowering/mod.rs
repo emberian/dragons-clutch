@@ -43,12 +43,12 @@
 
 #![allow(dead_code)]
 
-use dclutch_fractional_claim_kernel::{
+use dclutch_claims::fractional_kernel::{
     FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FractionalExposureTermsAdmissionV2,
     FractionalExposureTermsInputV2, FractionalExposureTermsV2, encode_fractional_exposure_terms_v2,
     fractional_exposure_terms_bytes_v2,
 };
-use dclutch_representation_composition_v3_kernel::{
+use dclutch_claims::composition::{
     COMPOSITION_DESCRIPTOR_BYTES_V3, CanonicalTranslationInputV3, CompositionBundleV3,
     CompositionDescriptorInputV3, CompositionEdgeInputV3, CompositionExposureBundleV3,
     CompositionExposureInputV3, CompositionExposureRowInputV3, CompositionExposureTermV3,
@@ -58,7 +58,7 @@ use dclutch_representation_composition_v3_kernel::{
     encode_canonical_translation_v3_atomic, encode_composition_descriptor_v3_atomic,
     encode_composition_exposure_v3_atomic, encode_composition_graph_v3_atomic,
 };
-use dclutch_structured_v2_kernel::{
+use dclutch_claims::structured_kernel::{
     STRUCTURED_TERMS_SCHEMA_ID_V2, StructuredTermsAdmissionV2, StructuredTermsInputV2,
     StructuredTermsV2, encode_structured_terms_v2, structured_terms_bytes_v2,
 };
@@ -525,7 +525,7 @@ pub fn lower_against_root(
 /// descriptor-keyed PDA and the receipt Mint is not).
 pub fn decode_terms_with_receipt_aliasing_a_shard_mint(
     basis: &StructuredBasis,
-) -> core::result::Result<(), dclutch_structured_v2_kernel::Error> {
+) -> core::result::Result<(), dclutch_claims::structured_kernel::Error> {
     let mut aliased = basis.clone();
     aliased.receipt_mint = *basis.shard_mints.first().expect("shard Mint");
     let terms_source = terms_bytes(&aliased, &aliased.coefficients);

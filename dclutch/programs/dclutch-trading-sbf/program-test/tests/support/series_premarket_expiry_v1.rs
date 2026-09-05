@@ -6,7 +6,7 @@
 //! that selection against the actual physical instruction and accounts that
 //! the real ELFs receive.
 
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
     hot_v3::{
         HOT_CONFIG_RAW_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
@@ -17,15 +17,15 @@ use dclutch_capability_program_contract::{
         HOT_RUNTIME_ROOT_COORDINATE_V3, HotExecutionEnvelopeV3,
     },
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     Identity, SERIES_FOUNDING_PERMIT_BYTES_V1, SeriesFoundingPermitSeedsV1,
     SeriesUnallocatedPermitExpiryRequestV1,
 };
 use dclutch_operator::registry::hot_continuation_v1::{
     REGISTRY_HOT_CONTINUATION_PREFIX_ACCOUNTS_V1, TRADING_HOT_CONTINUATION_ADMISSION_ACCOUNT_V1,
 };
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_rent_contract::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_market::rent::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
 use dclutch_trading_sbf::series::expire_funding_artifacts_v5::SERIES_EXPIRE_PRECOMMIT_CALLER_COORDINATE_V5;
 use dclutch_trading_sbf::series::instruction::{SeriesActionRequestV3, SeriesActionV3};
 use dclutch_trading_sbf::series::release_v5::{

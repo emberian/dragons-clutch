@@ -8,7 +8,7 @@
 extern crate alloc;
 
 use alloc::{vec, vec::Vec};
-use dclutch_account_profile_contract::{
+use dclutch_vm::account_profile::{
     lifecycle_v3::StateLifecyclePolicyV5,
     v2::{
         AccountPrestateV2, AccountProfileV2, DYNAMIC_FIXED_SPAN_HEADER_BYTES, OPERATION_BYTES,
@@ -25,12 +25,12 @@ use dclutch_account_profile_contract::{
         HEADER_BYTES_V3, encode_account_profile_v3_atomic,
     },
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_GENERATION_OFFSET, CAPABILITY_ROOT_HEADER_BYTES_V1,
     CAPABILITY_ROOT_MARKET_OFFSET, CAPABILITY_ROOT_SELECTION_OFFSET,
     hot_v3::{HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3, HOT_RUNTIME_PORTFOLIO_COORDINATE_V3},
 };
-use dclutch_effect_kernel::{
+use dclutch_vm::effect::{
     v3::{
         HEADER_BYTES as EFFECT_HEADER_BYTES_V3, OPERATION_BYTES as EFFECT_OPERATION_BYTES_V3,
         encode::{
@@ -47,15 +47,15 @@ use dclutch_effect_kernel::{
         HEADER_BYTES_V5 as EFFECT_HEADER_BYTES_V5, ProgramV5, encode_program_v5_atomic,
     },
 };
-use dclutch_product_runtime_v2::{
+use dclutch_product::{
     PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_COEFFICIENT_COUNT_OFFSET, PORTFOLIO_HEADER_BYTES,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     CAPABILITY_EXECUTION_SELECTION_CONFIG_OFFSET,
     CAPABILITY_EXECUTION_SELECTION_ENTRY_INDEX_OFFSET, CAPABILITY_EXECUTION_SELECTION_KIND_OFFSET,
     CAPABILITY_EXECUTION_SELECTION_MANIFEST_OFFSET, CAPABILITY_EXECUTION_SELECTION_RELEASE_OFFSET,
 };
-use dclutch_request_profile_contract::{
+use dclutch_vm::request_profile::{
     HEADER_BYTES as REQUEST_HEADER_BYTES, OPERATION_BYTES as REQUEST_OPERATION_BYTES,
     RequestProfileV1,
     encode::{
@@ -63,7 +63,7 @@ use dclutch_request_profile_contract::{
         ScalarRegisterV1, encode_request_profile_v1_atomic,
     },
 };
-use dclutch_transition_vm::v3::{
+use dclutch_vm::v3::{
     HEADER_BYTES as TRANSITION_HEADER_BYTES, INSTRUCTION_BYTES as TRANSITION_INSTRUCTION_BYTES,
     IdentityRegisterV3, InstructionV3, ProgramGeometryV3, ProgramV3 as TransitionProgramV3,
     ScalarRegisterV3, encode_program_atomic,
@@ -252,7 +252,7 @@ fn emit_account_profile() -> Result<Vec<u8>> {
             },
             prestate: AccountPrestateV2::Exact,
         },
-        exact(dclutch_series_v3_kernel::SERIES_TEMPLATE_BYTES_V3 as u32, 0),
+        exact(dclutch_trading::series::SERIES_TEMPLATE_BYTES_V3 as u32, 0),
         exact(PRODUCT_RECORD_BYTES, 0),
         exact(
             PORTFOLIO_HEADER_BYTES as u32,
@@ -283,7 +283,7 @@ fn emit_account_profile() -> Result<Vec<u8>> {
                 privileges: writable(),
                 effect_permissions: no_effects(),
                 alias: AccountAliasInputV2::SelfCoordinate,
-                data_length: dclutch_rent_contract::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2
+                data_length: dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2
                     as u32,
                 data_item_stride: 0,
             },
@@ -436,7 +436,7 @@ fn profile_operations() -> Result<[AccountOperationInputV2; PROFILE_OPERATIONS]>
             destination: IdentityCoordinateV2::common(
                 SERIES_RETIRE_TEMPLATE_REFUND_OWNER_IDENTITY_V5,
             ),
-            data_offset: dclutch_series_v3_kernel::generated::SERIES_TEMPLATE_REFUND_OWNER_OFFSET_V3
+            data_offset: dclutch_trading::series::generated::SERIES_TEMPLATE_REFUND_OWNER_OFFSET_V3
                 as u32,
         },
         AccountOperationInputV2::ProjectDataIdentity {
@@ -701,7 +701,7 @@ mod tests {
         assert_eq!(representative.prestate(), AccountPrestateV2::LifecycleBound);
         assert_eq!(
             representative.alias_kind(),
-            dclutch_account_profile_contract::v2::AliasKindV2::SelfCoordinate
+            dclutch_vm::account_profile::v2::AliasKindV2::SelfCoordinate
         );
         let balance_alias = profile
             .base()
@@ -713,7 +713,7 @@ mod tests {
         );
         assert_eq!(
             balance_alias.alias_kind(),
-            dclutch_account_profile_contract::v2::AliasKindV2::Fixed
+            dclutch_vm::account_profile::v2::AliasKindV2::Fixed
         );
         assert_eq!(
             balance_alias.alias_index(),
@@ -792,7 +792,7 @@ mod tests {
         hostile[6..8].copy_from_slice(&2_u16.to_le_bytes());
         assert_eq!(
             ProgramV5::decode(&hostile),
-            Err(dclutch_effect_kernel::v5::ErrorV5::Wire)
+            Err(dclutch_vm::effect::v5::ErrorV5::Wire)
         );
     }
 
@@ -812,7 +812,7 @@ mod tests {
             );
             assert_eq!(
                 AccountProfileV3::decode(&hostile),
-                Err(dclutch_account_profile_contract::v3::ErrorV3::BaseProfile)
+                Err(dclutch_vm::account_profile::v3::ErrorV3::BaseProfile)
             );
         };
 

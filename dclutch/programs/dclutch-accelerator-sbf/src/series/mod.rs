@@ -15,21 +15,21 @@ pub mod release;
 
 use alloc::vec::Vec;
 
-use dclutch_account_profile_contract::{
+use dclutch_vm::account_profile::{
     AccountObservationV1,
     v2::{AccountPrestateV2, AccountProfileV2},
 };
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
-use dclutch_execution_strategy_contract::{
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_market::execution_strategy::{
     shadow_digest_v3::ShadowRuntimeObservationV3,
     shadow_v3::{ShadowAckV3, ShadowRequestV3},
 };
-use dclutch_product_runtime_v2_svm_reader::{
+use dclutch_product::svm_reader::{
     FinalizedRecordFrameV2, ProductRuntimeFrameV3,
     authenticate_content_addressed_product_runtime_v3,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_series_v3_kernel::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_trading::series::{
     AuthenticatedProductProjectionV2,
     generated::{
         SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3, SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
@@ -37,7 +37,7 @@ use dclutch_series_v3_kernel::{
     },
     request::{SERIES_ACTION_HEADER_BYTES_V3, SeriesActionRequestV3, SeriesActionV3},
 };
-use dclutch_shadow_accelerator_auth_v4::{
+use dclutch_trading::shadow_accelerator_auth::{
     AuthenticatedShadowAcceleratorInvocationV4, authenticate_shadow_accelerator_invocation_v4,
 };
 use solana_program::{
@@ -322,7 +322,7 @@ fn authenticate_product<'accounts, 'info>(
     runtime: &'accounts [AccountInfo<'info>],
     registry: &Pubkey,
 ) -> Result<
-    dclutch_product_runtime_v2_svm_reader::AuthenticatedProductRuntimeV3<'accounts, 'info>,
+    dclutch_product::svm_reader::AuthenticatedProductRuntimeV3<'accounts, 'info>,
     SeriesShadowSbfErrorV4,
 > {
     authenticate_content_addressed_product_runtime_v3(
@@ -479,7 +479,7 @@ mod tests {
             registry_program: content(4)?,
             trading_program: content(5)?,
             accelerator_program: content(6)?,
-            artifacts: dclutch_execution_strategy_contract::shadow_v3::ShadowArtifactTupleV3 {
+            artifacts: dclutch_market::execution_strategy::shadow_v3::ShadowArtifactTupleV3 {
                 capability_program: content(7)?,
                 account_profile: content(8)?,
                 request_profile: content(9)?,
@@ -489,13 +489,13 @@ mod tests {
                 certificate: content(13)?,
             },
             invocation_context: content(14)?,
-            digests: dclutch_execution_strategy_contract::shadow_v3::ShadowExecutionDigestsV3 {
+            digests: dclutch_market::execution_strategy::shadow_v3::ShadowExecutionDigestsV3 {
                 interpreted_candidate: content(15)?,
                 interpreted_effect: content(16)?,
                 runtime_observations: content(17)?,
                 family_request: content(18)?,
             },
-            shape: dclutch_execution_strategy_contract::shadow_v3::ShadowRuntimeShapeV3 {
+            shape: dclutch_market::execution_strategy::shadow_v3::ShadowRuntimeShapeV3 {
                 tail_count: 0,
                 account_count: 162,
                 scalar_count: 5,
@@ -505,7 +505,7 @@ mod tests {
         };
         assert_eq!(funding_count(request), Ok(1));
         let underflow = ShadowRequestV3 {
-            shape: dclutch_execution_strategy_contract::shadow_v3::ShadowRuntimeShapeV3 {
+            shape: dclutch_market::execution_strategy::shadow_v3::ShadowRuntimeShapeV3 {
                 account_count: 160,
                 ..request.shape
             },
@@ -516,7 +516,7 @@ mod tests {
             Err(SeriesShadowSbfErrorV4::Runtime)
         );
         let zero_funding = ShadowRequestV3 {
-            shape: dclutch_execution_strategy_contract::shadow_v3::ShadowRuntimeShapeV3 {
+            shape: dclutch_market::execution_strategy::shadow_v3::ShadowRuntimeShapeV3 {
                 account_count: 161,
                 ..request.shape
             },
@@ -527,7 +527,7 @@ mod tests {
             Err(SeriesShadowSbfErrorV4::Runtime)
         );
         let too_large = ShadowRequestV3 {
-            shape: dclutch_execution_strategy_contract::shadow_v3::ShadowRuntimeShapeV3 {
+            shape: dclutch_market::execution_strategy::shadow_v3::ShadowRuntimeShapeV3 {
                 account_count: 178,
                 ..request.shape
             },

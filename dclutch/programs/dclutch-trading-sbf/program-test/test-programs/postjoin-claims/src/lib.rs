@@ -7,7 +7,7 @@
 
 extern crate std;
 
-use dclutch_claims_svm::{
+use dclutch_claims::{
     liability_basis_state_v2::{LiabilityBasisMarketLayoutV2, LiabilityBasisMarketViewV2},
     sparse_native_transfer_v1::{SPARSE_NATIVE_TRANSFER_BYTES_V1, SparseNativeTransferV1},
 };

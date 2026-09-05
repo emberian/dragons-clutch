@@ -8,12 +8,12 @@
 //! refund the still-unallocated permit before Trading persists the candidates;
 //! any later Trading failure rolls the CPI and refund back with the transaction.
 
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
 };
-use dclutch_market_core_codec::SeriesUnallocatedPermitExpiryRequestV1;
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_series_v3_kernel::{
+use dclutch_market::SeriesUnallocatedPermitExpiryRequestV1;
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_trading::series::{
     SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3, SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
     SERIES_TICKET_SCHEMA_RELEASE_ID_V3, admit_occurrence_bytes, admit_ticket,
     plan::{ReplayCandidateV3, SeriesReplayActionV3, evaluate_replay_v3},
@@ -118,7 +118,7 @@ pub(crate) fn process(
         frame.trading_programdata,
         identity(profile.registry().program().to_bytes())?,
         admitted.template().release_set().to_bytes(),
-        dclutch_market_core_codec::Role::Trading,
+        dclutch_market::Role::Trading,
     )?;
 
     let (series_prestate, ticket_prestate, controller_market) = authenticate_prestate(
@@ -185,8 +185,8 @@ pub(crate) fn process(
 
 fn authenticate_prestate(
     frame: &ExpiryAccounts<'_, '_>,
-    admitted: dclutch_series_v3_kernel::AdmittedOccurrenceV3,
-    admitted_ticket: dclutch_series_v3_kernel::AdmittedTicketV3,
+    admitted: dclutch_trading::series::AdmittedOccurrenceV3,
+    admitted_ticket: dclutch_trading::series::AdmittedTicketV3,
     expected_series_revision: u64,
     expected_ticket_revision: u64,
     template_record: [u8; 32],
@@ -263,8 +263,8 @@ fn controller_and_future_markets_are_distinct(
 }
 
 fn recompute_candidates(
-    admitted: dclutch_series_v3_kernel::AdmittedOccurrenceV3,
-    admitted_ticket: dclutch_series_v3_kernel::AdmittedTicketV3,
+    admitted: dclutch_trading::series::AdmittedOccurrenceV3,
+    admitted_ticket: dclutch_trading::series::AdmittedTicketV3,
     series: SeriesStateV3,
     ticket: TicketStateV3,
     expected_series_revision: u64,
@@ -325,8 +325,8 @@ fn recompute_candidates(
 fn authenticate_caller(
     frame: &ExpiryAccounts<'_, '_>,
     caller: &AccountInfo<'_>,
-    admitted: dclutch_series_v3_kernel::AdmittedOccurrenceV3,
-    admitted_ticket: dclutch_series_v3_kernel::AdmittedTicketV3,
+    admitted: dclutch_trading::series::AdmittedOccurrenceV3,
+    admitted_ticket: dclutch_trading::series::AdmittedTicketV3,
     controller_market: [u8; 32],
     request_bytes: &[u8],
 ) -> Result<(), CoreSbfError> {
@@ -349,7 +349,7 @@ fn authenticate_caller(
 #[cfg(test)]
 mod tests {
     use dclutch_core_contract::ContentId;
-    use dclutch_series_v3_kernel::replay::{SeriesPhaseV3, TicketPhaseV3};
+    use dclutch_trading::series::replay::{SeriesPhaseV3, TicketPhaseV3};
 
     use super::*;
 

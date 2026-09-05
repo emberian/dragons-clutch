@@ -217,7 +217,7 @@ describe('PDA annotation by reproduction', () => {
     // seeds could not be recovered. The record is the thing that cannot be
     // recovered: `POSITION_MAGIC_V1` appears on exactly one line of Rust in
     // the whole tree, its own `#[allow(dead_code)]` declaration in
-    // `crates/dclutch-realm-contract/src/generated_abi.rs`, and the type it
+    // `crates/dclutch-market/src/realm/generated_abi.rs`, and the type it
     // described was banished with the DCLTCAT1 stratum. `decoders.test.ts`
     // has asserted the same thing about the same magic all along; the
     // explorer was the surface still holding a layout for it.

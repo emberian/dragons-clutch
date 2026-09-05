@@ -126,7 +126,7 @@ fn reauthenticate_top_level_root_roles_v3(
     // comparison instead of a million compute units and an unnamed abort.
     crate::entrypoint_adapter::require_declared_heap_ceiling_above_default_v1()?;
     // Owner, non-executability and the one exact width BEFORE a byte is read,
-    // which is the ordering `dclutch-registry-activation-auth-v1` documents and
+    // which is the ordering `dclutch-registry::activation_auth_v1` documents and
     // the reason a stranger's account can never contribute the bump seed the
     // identity check below reproduces the address from.
     require_cache_account(frame.registry.key, frame.activation_cache)
@@ -337,7 +337,7 @@ pub(super) fn decode_capability_program_boxed_v3(
 pub(super) fn authenticate_manifest_entry_boxed_v3(
     manifest_data: &[u8],
     context: &TradingFamilyContextV1,
-) -> Result<Box<dclutch_capability_contract::CapabilityEntryV1>, ProgramError> {
+) -> Result<Box<dclutch_market::capability_manifest::CapabilityEntryV1>, ProgramError> {
     let manifest =
         CapabilityManifestV1::decode(manifest_data).map_err(|_| TradingSbfError::Content)?;
     let entry = manifest
@@ -437,7 +437,7 @@ pub(super) fn authenticate_strategy_from_sealed_boxed_v3<'accounts, 'info>(
 pub(super) fn authenticate_descriptor_root_selection(
     descriptor: &CapabilityProgramV4,
     context: &TradingFamilyContextV1,
-    entry: &dclutch_capability_contract::CapabilityEntryV1,
+    entry: &dclutch_market::capability_manifest::CapabilityEntryV1,
 ) -> Result<(), ProgramError> {
     // The reason is PROPAGATED, not discarded. This was
     // `validate_selection(..).is_err() || width != ..` folded into one bare
@@ -702,7 +702,7 @@ pub(super) struct HotFrameV3<'accounts, 'info> {
 /// This was a private copy of the same six pairs. The executor and the
 /// producers have to agree exactly -- the gate compares with `!=` -- and two
 /// spellings of one table is how they stop agreeing.
-use dclutch_capability_program_contract::hot_v3::SEALED_EXECUTION_FIXED_ALIASES_V3;
+use dclutch_market::capability_program::hot_v3::SEALED_EXECUTION_FIXED_ALIASES_V3;
 
 fn is_sealed_execution_fixed_alias_v3(left: usize, right: usize) -> bool {
     SEALED_EXECUTION_FIXED_ALIASES_V3.contains(&(left, right))

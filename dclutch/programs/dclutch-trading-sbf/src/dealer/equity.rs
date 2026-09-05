@@ -526,7 +526,7 @@ mod tests {
     ///
     /// The ambiguity the red version named -- whether `obligations` is atom- or
     /// claim-denominated, which the type did not say -- is now settled by the
-    /// type, and settled the way `dclutch-dealer-scenario-kernel` already
+    /// type, and settled the way `dclutch-trading::dealer_scenario` already
     /// documented it: obligations are collateral atoms, collateral is atoms,
     /// and ONLY the Claims inventory is claim units. So the redescriptions
     /// below hold `obligations` fixed and move only the claim leg.

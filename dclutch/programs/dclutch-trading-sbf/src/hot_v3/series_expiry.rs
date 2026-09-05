@@ -5,25 +5,25 @@ use super::*;
 
 extern crate alloc;
 
-use dclutch_account_profile_contract::v3::SCHEMA_RELEASE_ID_V3 as ACCOUNT_PROFILE_SCHEMA_ID_V3;
-use dclutch_capability_program_contract::v4::{
+use dclutch_vm::account_profile::v3::SCHEMA_RELEASE_ID_V3 as ACCOUNT_PROFILE_SCHEMA_ID_V3;
+use dclutch_market::capability_program::v4::{
     CapabilityProgramV4, SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_effect_kernel::v5::SCHEMA_RELEASE_ID_V5 as EFFECT_SCHEMA_ID_V5;
-use dclutch_execution_strategy_contract::v2::EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2;
-use dclutch_request_profile_contract::SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1;
-use dclutch_series_v3_kernel::{
+use dclutch_vm::effect::v5::SCHEMA_RELEASE_ID_V5 as EFFECT_SCHEMA_ID_V5;
+use dclutch_market::execution_strategy::v2::EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2;
+use dclutch_vm::request_profile::SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1;
+use dclutch_trading::series::{
     generated::SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
     replay::SERIES_STATE_BYTES_V3,
     request::{SeriesActionRequestV3, SeriesActionV3},
 };
-use dclutch_transition_vm::v3::SCHEMA_RELEASE_ID as TRANSITION_SCHEMA_ID_V3;
+use dclutch_vm::v3::SCHEMA_RELEASE_ID as TRANSITION_SCHEMA_ID_V3;
 use solana_program::hash::hash;
 
 // The kernel, not `crate::series`: this route is compiled into links that do
 // not select the `series-family` feature, and `pub mod series` is gated on it.
-use dclutch_series_v3_kernel::{
+use dclutch_trading::series::{
     SERIES_ACTION_HEADER_SCHEMA_PREIMAGE_V3, SERIES_ROOT_SCHEMA_PREIMAGE_V3,
     SERIES_SUCCESSOR_KIND_PREIMAGE_V3, SERIES_TICKET_DERIVATION_PREIMAGE_V3,
 };
@@ -113,8 +113,8 @@ fn is_exact_series_expiry_descriptor_v1(descriptor: CapabilityProgramV4) -> bool
 mod tests {
     use alloc::vec::Vec;
 
-    use dclutch_capability_program_contract::v4::{ArtifactReferenceV4, CapabilityArtifactsV4};
-    use dclutch_series_v3_kernel::request::encode_series_action_header_v3;
+    use dclutch_market::capability_program::v4::{ArtifactReferenceV4, CapabilityArtifactsV4};
+    use dclutch_trading::series::request::encode_series_action_header_v3;
 
     use super::*;
 
@@ -226,7 +226,7 @@ mod tests {
         // Hostile-decode a different but individually valid account-profile
         // schema. It must not be enough that the descriptor is still V4.
         let replacement = [0x7a; 32];
-        let offset = dclutch_capability_program_contract::v4::CAPABILITY_PROGRAM_V4_ACCOUNT_PROFILE_SCHEMA_OFFSET;
+        let offset = dclutch_market::capability_program::v4::CAPABILITY_PROGRAM_V4_ACCOUNT_PROFILE_SCHEMA_OFFSET;
         bytes[offset..offset + 32].copy_from_slice(&replacement);
         descriptor = CapabilityProgramV4::decode(&bytes).expect("valid substituted descriptor");
         assert!(
@@ -609,7 +609,7 @@ fn derive_series_expiry_future_projection_from_records_v1(
     template_bytes: &[u8],
     occurrence_bytes: &[u8],
     product_runtime_v3: &AuthenticatedProductRuntimeV3<'_, '_>,
-) -> Result<dclutch_series_v3_kernel::FutureMarketProjectionV3, ProgramError> {
+) -> Result<dclutch_trading::series::FutureMarketProjectionV3, ProgramError> {
     let family =
         SeriesActionRequestV3::decode(family_request).map_err(|_| TradingSbfError::Content)?;
     let occurrence = admit_occurrence_bytes(template_bytes, occurrence_bytes, family.proof_bytes())
@@ -1034,7 +1034,7 @@ pub(super) fn series_expiry_local_replay_overlap_v1(
     effect: SelectedEffectProgramV4<'_>,
     route_index: u16,
     invocation_index: u32,
-    invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
+    invocation: dclutch_vm::effect::v3::ResolvedInvocationV3,
     tail_count: u32,
     scalars: &[u64],
     request_bank: &[u8],

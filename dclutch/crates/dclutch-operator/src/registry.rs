@@ -6,21 +6,21 @@
 //! returning an instruction. They never perform RPC, access keys, sign, or
 //! submit a transaction.
 
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
 use dclutch_core_contract::ContentId;
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_CACHE_BUMP_OFFSET_V1,
     ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetV1,
     ActivatedExecutionReleaseSetViewV1, ArtifactActivationInputV1, ArtifactReleaseV1,
     DeploymentObservationV1, ExecutionReleaseActivationInputsV1, activate_execution_release_set_v1,
     activation_cache_progress_v1,
 };
-use dclutch_registry_svm::{
+use dclutch_registry::svm::{
     ProgramDataV3View, ProgramV3View, REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1,
     RegistryInstructionV1,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1, ExecutionReleaseSetV1,
     ExecutionRoleBindingV1, ExecutionRoleV1,
 };

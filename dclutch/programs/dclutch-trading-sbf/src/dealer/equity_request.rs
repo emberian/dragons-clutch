@@ -11,20 +11,20 @@ extern crate alloc;
 #[cfg(not(target_os = "solana"))]
 use alloc::{vec, vec::Vec};
 
-use dclutch_capability_program_contract::set_v1::{CapabilityProgramSetV1, SelectorWidthV1};
-use dclutch_claims_svm::signed_delta_v3::{DeltaDirectionV3, SignedDeltaPlanV3};
+use dclutch_market::capability_program::set_v1::{CapabilityProgramSetV1, SelectorWidthV1};
+use dclutch_claims::signed_delta_v3::{DeltaDirectionV3, SignedDeltaPlanV3};
 use dclutch_core_contract::ContentId;
 #[cfg(not(target_os = "solana"))]
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CallerRoleV1, CompartmentV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1, CustodyVaultSeedsV1,
 };
-use dclutch_dealer_codec::scenario::ClaimsInventoryObservation;
+use dclutch_trading::dealer::scenario::ClaimsInventoryObservation;
 #[cfg(not(target_os = "solana"))]
-use dclutch_market_core_codec::{MarketCoreStateSeedsV2, MarketIdentity};
+use dclutch_market::{MarketCoreStateSeedsV2, MarketIdentity};
 #[cfg(not(target_os = "solana"))]
-use dclutch_realm_contract::REALM_SCHEMA_RELEASE_ID_V1;
+use dclutch_market::realm::REALM_SCHEMA_RELEASE_ID_V1;
 #[cfg(not(target_os = "solana"))]
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use solana_program::{hash::hash, hash::hashv, pubkey::Pubkey};
 
 use super::{
@@ -1282,7 +1282,7 @@ fn write_bytes(bytes: &mut [u8], offset: usize, value: &[u8]) -> Result<(), Equi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_market_core_codec::Identity;
+    use dclutch_market::Identity;
 
     fn header_with(bank: DealerEquityBumpBankV3) -> [u8; DEALER_EQUITY_HEADER_BYTES_V3] {
         let mut header = [0_u8; DEALER_EQUITY_HEADER_BYTES_V3];

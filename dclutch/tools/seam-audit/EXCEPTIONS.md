@@ -66,7 +66,7 @@ stands as cover for the next one. Its entry below is kept as history and marked.
 - `DOMAIN_BYTES_COLLIDE` · `CLAIMS_FOUNDING_AGGREGATE_SEED_V4` +
   `CLAIMS_FOUNDING_AGGREGATE_SEED_V5` + `LIABILITY_BASIS_MARKET_SEED_V2` +
   `CLAIMS_MARKET_SEED_V2` — four names, one byte string
-  `dclutch:lbv2:market`, across `crates/dclutch-claims-svm` and three
+  `dclutch:lbv2:market`, across `crates/dclutch-claims` and three
   fixtures. The sharp part is V4 beside V5: they are byte-identical, so the
   version bump lives in the *name* and not in the address, and both versions
   derive the same PDA. Their neighbouring constants do differ by version
@@ -106,7 +106,7 @@ it matched.
 **1 entry.** `STAGING_CURSOR_PDA_SEED_V1` carries `dclutch-record-stage-v1`.
 "staging" against "stage" is abbreviation, and "cursor" is genuinely absent
 from the literal, but the constant has one author
-(`crates/dclutch-record-contract`), a compile-time length guard, and 107
+(`crates/dclutch-registry`), a compile-time length guard, and 107
 consistent three-seed derivation sites. The name/bytes gap here is stylistic.
 
 ### debt-seed-guard
@@ -116,7 +116,7 @@ assert holding it there.
 
 Three of them are **assigned, not accepted**: `CLAIM_CHECK_SEED_V1`,
 `CLAIM_CHECK_ESCROW_SEED_V1` and `CLAIM_CHECK_VAULT_SEED_V1` in
-`crates/dclutch-claims-svm`, which arrived with the claim-check work and are the
+`crates/dclutch-claims`, which arrived with the claim-check work and are the
 ratchet's first live catch. They are one line each and they belong to whoever
 owns that crate. They are recorded rather than fixed here for a reason that is
 itself the subject of this tool: at the time, that file carried another lane's
@@ -672,7 +672,7 @@ it"*. For eleven of the wave's fifteen that is true and they are filed
 `inventory-guard-present`. For these four it is **false**, and filing them as
 that tag would put a false sentence in the register:
 
-- `crates/dclutch-product-payoff-v2-codec/src/spline_eval_v3.rs` — the match is
+- `crates/dclutch-product/src/payoff/spline_eval_v3.rs` — the match is
   `pub fn is_zero_at(&self, claim: usize) -> bool` over a `U256` B-spline weight
   numerator. It returns a `bool`, refuses nothing, and **`grep -c Pubkey` on the
   file is 0**: it is fixed-point spline arithmetic containing no address type.
@@ -705,7 +705,7 @@ untriaged and were verdicted here on 2026-09-03; each imports the domain from
 its owner and spells `&[DOMAIN]`, arity one, exactly as the six before them.
 
 The reader reports these restate "the 1-seed tuple for a domain owned by
-`crates/dclutch-release-set-contract`, which exports `CallerAuthoritySeedsV1`
+`crates/dclutch-registry`, which exports `CallerAuthoritySeedsV1`
 for exactly this". **The second half is wrong.** `CallerAuthoritySeedsV1` is a
 *six*-seed projection over a *different* domain,
 `CALLER_AUTHORITY_PDA_DOMAIN_V1`. For the infrastructure-profile domains the
@@ -722,7 +722,7 @@ become ordinary debt.
 
 ### benign-fixed-width-array-seed
 
-**1 entry.** `crates/dclutch-resolution-codec` · `PYTH_RELEASE_RECORD_SCHEMA_ID_V1`.
+**1 entry.** `crates/dclutch-source` · `PYTH_RELEASE_RECORD_SCHEMA_ID_V1`.
 
 Reported as "32 bytes, within the maximum today, but no `const _: () =
 assert!(… .len() <= 32)` holds it there". The constant is
@@ -1088,7 +1088,7 @@ by them), **1 UNREASONED → 0**, register **706 → 683 entries**, `untriaged`
 - **`AUTHORITY_CACHE_UNDERIVED` ×1** — `authenticate_market:787`. A reader
   defect, see below.
 - **`SEED_DOMAIN_UNASSERTED` ×2** —
-  `crates/dclutch-release-set-contract/src/generated_protocol_infrastructure.rs:44`
+  `crates/dclutch-registry/src/release_set/generated_protocol_infrastructure.rs:44`
   and `:48`. `a00fc7c9d` moved both infrastructure profile PDA domains into the
   Lean emission and deleted their `const _: () = assert!(..)`, on the argument
   that `pda_domains_are_admissible_single_seeds` carries the bound. It does —
@@ -1100,7 +1100,7 @@ by them), **1 UNREASONED → 0**, register **706 → 683 entries**, `untriaged`
   `cmp`-clean.
 - **`DOMAIN_BYTES_COLLIDE` ×1** — `dclutch:lbv2:market` under two names, the
   owner's `LIABILITY_BASIS_MARKET_SEED_V2`
-  (`crates/dclutch-claims-svm/src/generated_liability_basis_state_v2.rs:17`) and
+  (`crates/dclutch-claims/src/generated_liability_basis_state_v2.rs:17`) and
   a fixture-local `CLAIMS_MARKET_SEED_V2` in
   `program-test/affine-batch/src/fixture.rs:42`,
   `program-test/fractional-atomic/src/narrow_fixture.rs:59` and
@@ -1286,7 +1286,7 @@ fixed" should keep asking.
 
 `tools/ci/run.sh seam` PASS at `HEAD` from a detached worktree; the register
 carries **zero** `untriaged`. `cargo check` green for `dclutch-custody-sbf`,
-`dclutch-release-set-contract`, and the `affine-batch` and `fractional-atomic`
+`dclutch-registry::release_set`, and the `affine-batch` and `fractional-atomic`
 program-test workspaces in their own target directories. The seam-audit's 32
 machinery tests pass and both register tests, which were failing on the four
 `untriaged` rows, now pass.

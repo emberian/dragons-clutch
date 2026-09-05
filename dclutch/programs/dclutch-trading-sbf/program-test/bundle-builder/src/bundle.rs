@@ -1,11 +1,11 @@
 //! Bundle assembly: the fixed Hot frame, the adoption loop, and the final
 //! instruction and account set.
 
-use dclutch_account_profile_contract::{
+use dclutch_vm::account_profile::{
     v2::{AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V2},
     v3::{AccountProfileV3, SCHEMA_RELEASE_ID_V3 as ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V3},
 };
-use dclutch_capability_program_contract::hot_v3::{
+use dclutch_market::capability_program::hot_v3::{
     HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
     HOT_ACTIVATION_CACHE_ACCOUNT_V3, HOT_CAPABILITY_SEAL_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3,
     HOT_CONFIG_STAGING_ACCOUNT_V3, HOT_CORE_PROGRAM_ACCOUNT_V3, HOT_CORE_PROGRAMDATA_ACCOUNT_V3,
@@ -25,7 +25,7 @@ use dclutch_capability_program_contract::hot_v3::{
     HOT_TRADING_PROGRAMDATA_ACCOUNT_V3, HOT_TRANSITION_RAW_ACCOUNT_V3,
     HOT_TRANSITION_STAGING_ACCOUNT_V3, HotBumpHintsV1, HotExecutionEnvelopeV3,
 };
-use dclutch_capability_program_contract::v4::CapabilityProgramV4;
+use dclutch_market::capability_program::v4::CapabilityProgramV4;
 use dclutch_hot_bump_miner_v1::{HotBumpCorpusV1, mine_hot_bump_hints_v1};
 use sha2::{Digest, Sha256};
 use solana_account::Account;
@@ -52,7 +52,7 @@ use crate::{
     },
     routes::{DerivedAuthorityV1, derive_authority},
 };
-use dclutch_execution_strategy_contract::{
+use dclutch_market::execution_strategy::{
     admitted_v3::{AdmittedInvocationContextV3, admitted_invocation_context_digest_v3},
     encode_register_bank_into,
     shadow_digest_v3::{
@@ -63,7 +63,7 @@ use dclutch_execution_strategy_contract::{
         SCRATCH_PAGE_HEADER_BYTES_V2, ScratchPageKindV2,
     },
 };
-use dclutch_release_set_contract::ArtifactReleaseIdV1;
+use dclutch_registry::release_set::ArtifactReleaseIdV1;
 
 /// Fixed-frame corpus: the Market, the root, the four Product content records,
 /// and the external deployment identities the fixed Hot frame restates.
@@ -363,16 +363,16 @@ fn build_bundle_with_admitted_candidate(
             let declared = geometry.data();
             let observed = observation.data.len();
             let mismatch = match declared {
-                dclutch_account_profile_contract::v2::PhysicalAccountDataGeometryV2::Exact {
+                dclutch_vm::account_profile::v2::PhysicalAccountDataGeometryV2::Exact {
                     bytes,
                 } => observed != bytes,
-                dclutch_account_profile_contract::v2::PhysicalAccountDataGeometryV2::VacantOrExact {
+                dclutch_vm::account_profile::v2::PhysicalAccountDataGeometryV2::VacantOrExact {
                     live_bytes,
                 } => observed != 0 && observed != live_bytes,
-                dclutch_account_profile_contract::v2::PhysicalAccountDataGeometryV2::AdapterAuthenticatedVariable {
+                dclutch_vm::account_profile::v2::PhysicalAccountDataGeometryV2::AdapterAuthenticatedVariable {
                     minimum_bytes,
                 } => observed < minimum_bytes,
-                dclutch_account_profile_contract::v2::PhysicalAccountDataGeometryV2::Opaque => false,
+                dclutch_vm::account_profile::v2::PhysicalAccountDataGeometryV2::Opaque => false,
             };
             if mismatch {
                 std::eprintln!(
@@ -638,19 +638,19 @@ fn finish_admitted_bundle(
         invocation_context: invocation_context_digest,
         family_request_digest: invocation_context.family_request_digest,
         transport: if bundle.transport_span.is_some() {
-            dclutch_execution_strategy_contract::v2::RequestTransportV2::ScratchPages
+            dclutch_market::execution_strategy::v2::RequestTransportV2::ScratchPages
         } else {
-            dclutch_execution_strategy_contract::v2::RequestTransportV2::Inline
+            dclutch_market::execution_strategy::v2::RequestTransportV2::Inline
         },
         // Read out of the Strategy record this bundle installs, never chosen
         // here: the record is the only authority for which transport a route
         // is on, and a host that picked its own would build a frame no
         // deployed Strategy asks for.
-        profile: dclutch_execution_strategy_contract::v2::ExecutionStrategyProgramV2::decode(
+        profile: dclutch_market::execution_strategy::v2::ExecutionStrategyProgramV2::decode(
             &bundle.artifacts.strategy.bytes,
         )
         .and_then(
-            dclutch_execution_strategy_contract::v2::ExecutionStrategyProgramV2::transport_profile,
+            dclutch_market::execution_strategy::v2::ExecutionStrategyProgramV2::transport_profile,
         )
         .map_err(|_| BuilderError::Artifact)?,
         accelerator_program: evidence.accelerator_program.key,
@@ -1227,7 +1227,7 @@ fn fixed_hot_frame(
 
 #[cfg(test)]
 mod tests {
-    use dclutch_account_profile_contract::{
+    use dclutch_vm::account_profile::{
         v2::{
             AccountPrestateV2, HEADER_BYTES, OPERATION_BYTES, RULE_BYTES,
             encode::{

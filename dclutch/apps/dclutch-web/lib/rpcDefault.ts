@@ -19,7 +19,7 @@ export const DEFAULT_RPC_ENDPOINT_V1: string =
 /**
  * Cluster identity by genesis hash — the chain's OWN answer, never the URL's.
  *
- * The devnet hash is the one `dclutch_pyth_svm::devnet::DEVNET_CLUSTER_ID_V1`
+ * The devnet hash is the one `dclutch_source::pyth::devnet::DEVNET_CLUSTER_ID_V1`
  * binds and the campaign driver's acknowledgment names; mainnet-beta's is
  * listed so a mainnet chain is NAMED as itself rather than shown as merely
  * unrecognized.

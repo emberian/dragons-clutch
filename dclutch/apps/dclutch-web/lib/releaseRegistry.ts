@@ -18,7 +18,7 @@ export const ARTIFACT_RELEASE_BYTES = 216;
 export const ACTIVATION_CACHE_BYTES = 1_288;
 export const REGISTRY_INSTRUCTION_BYTES = 16;
 /// Exact account frame of one `ActivateRole` instruction, mirroring
-/// `REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1` in `dclutch-registry-svm`.
+/// `REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1` in `dclutch-registry::svm`.
 /// Activation admits ONE role per transaction: whole-ELF hashing costs about one
 /// compute unit per two bytes, so a five-role instruction exceeds the chain
 /// maximum outright, and `process_activate_role` refuses any other width before
@@ -29,7 +29,7 @@ export const REGISTRY_ACTIVATION_CACHE_ROLES_OFFSET = 48;
 /**
  * Byte 12 is the cache's OWN PDA BUMP, and it is not a reserved byte.
  *
- * `dclutch-registry-contract`'s `ACTIVATION_CACHE_BUMP_OFFSET_V1` puts it here:
+ * `dclutch-registry`'s `ACTIVATION_CACHE_BUMP_OFFSET_V1` puts it here:
  * six separate address searches per top-level Direct transaction land on this
  * account, every one of them already holds it, so the cheapest carrier for the
  * bump is the account itself. It took the first of what used to be four
@@ -98,7 +98,7 @@ export type RegistryRole = typeof REGISTRY_ROLES[number];
 
 /**
  * The two canonical upgrade policies an artifact release can bind, named the
- * way `dclutch_registry_contract::ArtifactUpgradePolicyV1` names them.
+ * way `dclutch_registry::ArtifactUpgradePolicyV1` names them.
  *
  * Decision 0012 (`docs/decisions/0012-devnet-iteration-substrate.md`) made this
  * a live distinction rather than a formality. Before it, only `immutable` was
@@ -135,7 +135,7 @@ export type ArtifactReleaseV1 = Readonly<{
  * Admit one artifact release onto the slot-pinned authentication path.
  *
  * The exact mirror of `require_slot_pinned_release_v1`
- * (`crates/dclutch-registry-contract/src/immutable_registry.rs`). Decision 0012
+ * (`crates/dclutch-registry/src/immutable_registry.rs`). Decision 0012
  * replaced "the release must be `Immutable`" with "the release must be one of
  * the two canonical pinned shapes", because the soundness a reader needs comes
  * from the slot and authority equalities, not from irrevocability:
@@ -167,7 +167,7 @@ export type SlotPinRefusalV1 = 'ReleaseSupersededByUpgrade' | 'DeploymentSlotMis
  * Name a slot mismatch: superseded by an upgrade, or plain staleness.
  *
  * The exact mirror of `ArtifactReleaseV1::slot_pin_refusal`
- * (`crates/dclutch-registry-contract/src/artifact.rs`). An `immutable` release
+ * (`crates/dclutch-registry/src/artifact.rs`). An `immutable` release
  * pins a slot nothing can move, so any mismatch is a substituted or
  * wrong-generation observation. An `exact-authority` release pins a slot the
  * named authority CAN move, and under Loader V3 only forward — so a strictly
@@ -490,7 +490,7 @@ function expectedCacheBytes(evidence: CheckedMultiprogramV1): Uint8Array {
 
 /// Which roles one observed activation cache already holds.
 ///
-/// Ports `activation_cache_progress_v1` from `dclutch-registry-contract`: the
+/// Ports `activation_cache_progress_v1` from `dclutch-registry`: the
 /// header and release-set selection must match the expected cache exactly, an
 /// unwritten role slot is exactly all zero, and any written slot that differs
 /// from the expected slot is a different release set masquerading as progress
@@ -557,7 +557,7 @@ function parseCache(bytes: Uint8Array, registryProgram: string, cacheAddress: st
   const artifacts: ArtifactReleaseV1[] = []; const artifactIds: string[] = [];
   for (let index = 0; index < REGISTRY_ROLES.length; index += 1) { const offset = REGISTRY_ACTIVATION_CACHE_ROLES_OFFSET + index * REGISTRY_ACTIVATED_ROLE_BYTES; const id = slice(bytes, offset, 32); requireNonzero(id, 'cached artifact release identity'); const artifact = decodeArtifactReleaseV1(slice(bytes, offset + 32, ARTIFACT_RELEASE_BYTES)); artifacts.push(artifact); artifactIds.push(hex(id)); }
   // The Core role's program is deliberately NOT compared to the Registry
-  // program. `initialize_activation_cache_v1` in `dclutch-registry-contract`
+  // program. `initialize_activation_cache_v1` in `dclutch-registry`
   // states the boundary: "Registry identity is an account-ownership boundary,
   // not a Core-selection input; the finalized release set binds Core when that
   // role is activated." Registry ownership of this account is authenticated by
@@ -688,7 +688,7 @@ function requireLoaderExecutable(account: RpcAccount, field: string): void {
 /// roles the observed cache already holds.
 ///
 /// The Core role's program is deliberately NOT required to equal the Registry
-/// program. `initialize_activation_cache_v1` in `dclutch-registry-contract`
+/// program. `initialize_activation_cache_v1` in `dclutch-registry`
 /// states the boundary directly: "Registry identity is an account-ownership
 /// boundary, not a Core-selection input; the finalized release set binds Core
 /// when that role is activated." Registry identity is authenticated here as an

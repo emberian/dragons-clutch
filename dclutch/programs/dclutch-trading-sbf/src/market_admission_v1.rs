@@ -27,7 +27,7 @@
 // local alias -- which the Dealer modules use, as `CorePhase` -- is
 // unreadable to a scan that cannot resolve types, so it reports the constant
 // as unclassified rather than guessing.
-use dclutch_market_core_codec::{MarketAdmissionV1, Phase};
+use dclutch_market::{MarketAdmissionV1, Phase};
 
 /// A Market open for trading.
 ///
@@ -49,7 +49,7 @@ pub const TRADING_RETIRING_MARKET_ADMISSIBLE_PRESTATES_V1: MarketAdmissionV1 =
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_market_core_codec::Readiness;
+    use dclutch_market::Readiness;
 
     const EVERY_PHASE: [Phase; 5] = [
         Phase::Founding,

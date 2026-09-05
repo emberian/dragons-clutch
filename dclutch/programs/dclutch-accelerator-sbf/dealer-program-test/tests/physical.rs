@@ -20,7 +20,7 @@
 
 use std::vec::Vec;
 
-use dclutch_capability_program_contract::hot_v3::{
+use dclutch_market::capability_program::hot_v3::{
     HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CORE_PROGRAM_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
     HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3,
     HOT_PORTFOLIO_RAW_ACCOUNT_V3, HOT_PRODUCT_RAW_ACCOUNT_V3, HOT_REGISTRY_PROGRAM_ACCOUNT_V3,
@@ -31,7 +31,7 @@ use dclutch_core_contract::ContentId;
 use dclutch_dealer_accelerator_test_caller_sbf::{
     DealerAcceleratorTestCallerErrorV1, dealer_accelerator_test_caller_authority_v1,
 };
-use dclutch_execution_strategy_contract::v2::{
+use dclutch_market::execution_strategy::v2::{
     ACCELERATOR_REQUEST_HEADER_BYTES_V2, AcceleratorRequestV2, RequestTransportV2,
 };
 use dclutch_refusal_registry::ACCELERATOR_REFUSAL_BASE;

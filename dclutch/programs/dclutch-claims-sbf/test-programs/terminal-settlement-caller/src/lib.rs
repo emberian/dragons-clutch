@@ -12,7 +12,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use dclutch_claims_svm::{
+use dclutch_claims::{
     CallerRole,
     terminal_settlement_v3::{
         TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3, TerminalSettlementReceiptV3,
@@ -20,7 +20,7 @@ use dclutch_claims_svm::{
     },
 };
 use dclutch_core_contract::ContentId;
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,

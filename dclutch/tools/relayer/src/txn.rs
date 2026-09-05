@@ -23,16 +23,16 @@
 //!   parser refuses by construction; the family uses one short seal message per
 //!   signer instead.
 
-use dclutch_relay_contract::frame::{RelayAccountNameV1, RelayFrameKindV1, relay_frame_roles_v1};
-use dclutch_relay_contract::instruction::{
+use dclutch_source::relay::frame::{RelayAccountNameV1, RelayFrameKindV1, relay_frame_roles_v1};
+use dclutch_source::relay::instruction::{
     APPEND_OBSERVATION_PREFIX_BYTES, AppendObservationInstructionV1, SEAL_RECORD_PREFIX_BYTES,
     SealRecordInstructionV1,
 };
-use dclutch_relay_contract::signature::{
+use dclutch_source::relay::signature::{
     ED25519_CURRENT_INSTRUCTION_INDEX, ED25519_ONE_SIGNATURE_INSTRUCTION_BYTES,
     ED25519_PROGRAM_ID_3_0,
 };
-use dclutch_relay_contract::{
+use dclutch_source::relay::{
     ED25519_DESCRIPTOR_BYTES_V1, ED25519_DESCRIPTOR_START_V1, ED25519_PUBLIC_KEY_BYTES_V1,
     ED25519_SIGNATURE_BYTES_V1, RELAYED_SEAL_BYTES,
 };
@@ -168,7 +168,7 @@ pub struct RelayFrameAddresses {
 /// Build the exact ordered account metas for one relay route.
 ///
 /// The order, count and privileges come from
-/// `dclutch_relay_contract::frame`, not from a table copied into this file, so
+/// `dclutch_source::relay::frame`, not from a table copied into this file, so
 /// this daemon cannot drift from the frame the program validates.
 pub fn frame_metas(
     kind: RelayFrameKindV1,
@@ -454,7 +454,7 @@ pub fn derive_record_address(
     let generation_le = generation.to_le_bytes();
     let observed_slot_le = observed_slot.to_le_bytes();
     let seeds: [&[u8]; 5] = [
-        dclutch_relay_contract::RELAYED_RECORD_PDA_DOMAIN_V1,
+        dclutch_source::relay::RELAYED_RECORD_PDA_DOMAIN_V1,
         &market,
         &generation_le,
         &account_set_id,
@@ -467,8 +467,8 @@ pub fn derive_record_address(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_relay_contract::instruction::RelayInstructionV1;
-    use dclutch_relay_contract::signature::{
+    use dclutch_source::relay::instruction::RelayInstructionV1;
+    use dclutch_source::relay::signature::{
         Ed25519InstructionViewV1, inspect_preceding_relay_signature_v1,
     };
 

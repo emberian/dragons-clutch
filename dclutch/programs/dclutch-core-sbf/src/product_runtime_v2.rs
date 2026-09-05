@@ -1,9 +1,9 @@
 //! The Core-side authentication of a Product Runtime V2 graph, at founding and
 //! on every later route that re-reads the selected Product.
 
-use dclutch_market_core_codec::Product;
-use dclutch_product_runtime_v2::ContentId;
-use dclutch_product_runtime_v2_svm_reader::{
+use dclutch_market::Product;
+use dclutch_product::ContentId;
+use dclutch_product::svm_reader::{
     AuthenticatedProductRuntimeV2, ProductRuntimeFrameV2,
     authenticate_content_addressed_product_runtime_v2,
     authenticate_product_runtime_v2 as authenticate_selected_product_runtime_v2,

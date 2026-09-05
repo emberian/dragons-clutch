@@ -149,9 +149,9 @@ echo
 # numbers), or a Receiver Config that is not a canonical 370-byte V2 body.
 echo "the Pyth provider release a sponsored market would pin"
 pinned_receiver_slot="$(sed -n 's/.*receiver_deployment_slot: \([0-9_]*\),.*/\1/p' \
-    crates/dclutch-pyth-svm/src/sponsored_push.rs | tr -d '_' | head -1)"
+    crates/dclutch-source/src/pyth/sponsored_push.rs | tr -d '_' | head -1)"
 pinned_push_slot="$(sed -n 's/.*push_oracle_deployment_slot: \([0-9_]*\),.*/\1/p' \
-    crates/dclutch-pyth-svm/src/sponsored_push.rs | tr -d '_' | head -1)"
+    crates/dclutch-source/src/pyth/sponsored_push.rs | tr -d '_' | head -1)"
 say "release DECLARES receiver slot" "${pinned_receiver_slot:-<not found>}"
 say "release DECLARES push oracle slot" "${pinned_push_slot:-<not found>}"
 if [ -n "$rpc_url" ]; then
@@ -201,7 +201,7 @@ print(len(raw), raw[:8].hex(), hashlib.sha256(raw).hexdigest())' 2>/dev/null)"
     set -- $config_state
     declared_config=$(python3 - <<'DECLARED_CONFIG'
 import re
-source = open("crates/dclutch-pyth-svm/src/sponsored_push.rs").read()
+source = open("crates/dclutch-source/src/pyth/sponsored_push.rs").read()
 # Scope to the CONSTANT, not the struct field of the same name declared above it.
 source = source.split("pub fn devnet_sponsored_sol_usd_release_v1", 1)[1]
 body = source.split("receiver_config_digest: [", 1)[1].split("],", 1)[0]

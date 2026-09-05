@@ -31,7 +31,7 @@
 
 use sha2::{Digest as _, Sha256};
 
-use dclutch_fractional_claim_kernel::{
+use dclutch_claims::fractional_kernel::{
     FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FRACTIONAL_SELECTION_CONFIG_SCHEMA_ID_V1,
     FractionalExposureTermsAdmissionV2, FractionalExposureTermsV2,
 };
@@ -200,11 +200,11 @@ pub(crate) fn fractional_selected_payload_v1(
 
 #[cfg(test)]
 mod tests {
-    use dclutch_fractional_claim_kernel::{
+    use dclutch_claims::fractional_kernel::{
         FractionalExposureTermsInputV2, encode_fractional_exposure_terms_v2,
         fractional_exposure_terms_bytes_v2,
     };
-    use dclutch_market_core_codec::{Identity, MarketCoreStateSeedsV2, MarketIdentity};
+    use dclutch_market::{Identity, MarketCoreStateSeedsV2, MarketIdentity};
     use solana_sdk::pubkey::Pubkey;
 
     use super::*;
@@ -301,7 +301,7 @@ mod tests {
         })
         .expect("seam entry");
         let base = {
-            use dclutch_capability_contract::{
+            use dclutch_market::capability_manifest::{
                 ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
                 CompartmentFundingV1, ContentId, FundingAmountsV1, FundingQuoteV1,
                 MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,

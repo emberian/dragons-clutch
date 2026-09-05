@@ -2,23 +2,23 @@
 
 #![allow(clippy::indexing_slicing)]
 
-use dclutch_account_profile_contract::lifecycle_v3::{
+use dclutch_vm::account_profile::lifecycle_v3::{
     HEADER_BYTES as LIFECYCLE_POLICY_BYTES_V5, encode::encode_lifecycle_policy_v5_atomic,
 };
-use dclutch_capability_program_contract::hot_v3::{
+use dclutch_market::capability_program::hot_v3::{
     HOT_CONFIG_RAW_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
     HOT_MARKET_ACCOUNT_V3, HOT_RENT_SYSVAR_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3,
     HOT_TRADING_PROGRAM_ACCOUNT_V3,
 };
-use dclutch_product_payoff_v2_codec::{
+use dclutch_product::payoff::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
     runtime_v3::{
         BasisInputV3, BasisKindV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, basis_record_bytes_v3,
         compile_basis_v3, semantic_basis_preimage_v3,
     },
 };
-use dclutch_product_runtime_v2::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
-use dclutch_product_runtime_v2_admission::{
+use dclutch_product::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
+use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2,
     RESULT_DOMAIN_SCHEMA_ID_V2,
 };
@@ -30,10 +30,10 @@ use dclutch_rational_lifecycle_hot_v3::{
     RationalLifecycleSelectedSelectionV6, build_rational_lifecycle_selected_bundle_v5,
     build_rational_lifecycle_selected_bundle_v6, lifecycle_logical_account_count_v3,
 };
-use dclutch_rational_representation_v2_contract::{
+use dclutch_claims::rational::{
     AuthenticatedTokenBehaviorV2, TokenBehaviorRecordAdmissionV2, authenticate_token_behavior_v2,
 };
-use dclutch_rational_representation_v2_kernel::{
+use dclutch_claims::rational_kernel::{
     DescriptorAdmissionV2, RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
     REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3, RepresentationDescriptorV2,
     descriptor_v3::{
@@ -41,11 +41,11 @@ use dclutch_rational_representation_v2_kernel::{
         representation_descriptor_bytes_v3,
     },
 };
-use dclutch_rational_representation_v2_lifecycle_contract::{
+use dclutch_claims::rational_lifecycle::{
     LIFECYCLE_COMMON_ACCOUNT_COUNT_V2, LifecycleActionV2, LifecycleHeaderV2,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_representation_composition_v3_kernel::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_claims::composition::{
     COMPOSITION_DESCRIPTOR_BYTES_V3, COMPOSITION_DESCRIPTOR_SCHEMA_ID_V3,
     COMPOSITION_EXPOSURE_HEADER_BYTES_V3, COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
     COMPOSITION_GRAPH_HEADER_BYTES_V3, COMPOSITION_GRAPH_SCHEMA_ID_V3, COMPOSITION_NODE_BYTES_V3,
@@ -68,7 +68,7 @@ use dclutch_representation_composition_v3_operator::{
     hot_v3::build_composition_lifecycle_hot_plan_v3,
     hot_v6::build_composition_lifecycle_hot_plan_v6, validate_publication_candidates_v3,
 };
-use dclutch_token_svm::{
+use dclutch_custody::token_svm::{
     TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_BYTES_V2,
     TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, TokenBehaviorSelectionV2,
 };
@@ -586,7 +586,7 @@ impl ChainFixture {
 }
 
 fn selected_token_behavior(
-    descriptor: dclutch_rational_representation_v2_kernel::RepresentationDescriptorV2<'_>,
+    descriptor: dclutch_claims::rational_kernel::RepresentationDescriptorV2<'_>,
 ) -> AuthenticatedTokenBehaviorV2 {
     let realm = id(94);
     let bytes = TokenBehaviorSelectionV2::new(realm, descriptor.release_set_id())

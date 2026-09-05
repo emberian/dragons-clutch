@@ -7,15 +7,15 @@
 //! authority, sign, submit, or treat the bounded Funding count as attested;
 //! current Core promotes that hint only through `SeriesCoreFoundAckV2`.
 
-use dclutch_account_profile_contract::v2::{AccountProfileV2, PhysicalAccountDataGeometryV2};
-use dclutch_capability_program_contract::hot_v3::{
+use dclutch_vm::account_profile::v2::{AccountProfileV2, PhysicalAccountDataGeometryV2};
+use dclutch_market::capability_program::hot_v3::{
     HOT_CONFIG_RAW_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
     HOT_MARKET_ACCOUNT_V3, HOT_PORTFOLIO_RAW_ACCOUNT_V3, HOT_PRODUCT_RAW_ACCOUNT_V3,
     HOT_ROOT_ACCOUNT_V3,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_effect_kernel::v2::FixedRole;
-use dclutch_series_v3_kernel::request::{
+use dclutch_vm::effect::v2::FixedRole;
+use dclutch_trading::series::request::{
     SERIES_ACTION_HEADER_BYTES_V3, SeriesActionRequestV3, SeriesActionV3,
 };
 use dclutch_trading_sbf::{
@@ -561,10 +561,10 @@ fn route_commitments(
 
 #[cfg(test)]
 mod tests {
-    use dclutch_account_profile_contract::v2::{AccountProfileV2, PhysicalAccountDataGeometryV2};
-    use dclutch_claims_svm::founding_v5::{ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5};
+    use dclutch_vm::account_profile::v2::{AccountProfileV2, PhysicalAccountDataGeometryV2};
+    use dclutch_claims::founding_v5::{ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5};
     use dclutch_core_contract::ContentId;
-    use dclutch_series_v3_kernel::request::encode_series_action_header_v3;
+    use dclutch_trading::series::request::encode_series_action_header_v3;
     use dclutch_trading_sbf::series::{
         account_profile_v4::{
             SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4, SeriesConsumeAccountProfileInputV4,

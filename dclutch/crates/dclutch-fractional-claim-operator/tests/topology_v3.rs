@@ -2,7 +2,7 @@
 
 #![allow(clippy::indexing_slicing, clippy::panic, clippy::unwrap_used)]
 
-use dclutch_fractional_claim_contract::FRACTIONAL_RETIREMENT_COORDINATE_ACCOUNT_COUNT_V3;
+use dclutch_claims::fractional::FRACTIONAL_RETIREMENT_COORDINATE_ACCOUNT_COUNT_V3;
 use dclutch_fractional_claim_operator::{FractionalFrameKindV3, fractional_frame_census_v3};
 use solana_hash::Hash;
 use solana_message::{AddressLookupTableAccount, v0};

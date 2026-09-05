@@ -8,17 +8,17 @@
 
 mod support;
 
-use dclutch_fractional_claim_kernel::{
+use dclutch_claims::fractional_kernel::{
     FractionalExposureTermsInputV2, encode_fractional_exposure_terms_v2,
     fractional_exposure_terms_bytes_v2,
 };
-use dclutch_rational_representation_v2_contract::{
+use dclutch_claims::rational::{
     CallerRoleV2, REQUEST_MAGIC_V2, RepresentationActionV2, RepresentationRequestV2,
     TokenEffectStyleV2,
 };
-use dclutch_rational_representation_v2_lifecycle_contract::LifecycleActionV2;
-use dclutch_structured_v2_contract::{StructuredActionV2, StructuredHotTokenKindV2};
-use dclutch_structured_v2_kernel::{
+use dclutch_claims::rational_lifecycle::LifecycleActionV2;
+use dclutch_claims::structured::{StructuredActionV2, StructuredHotTokenKindV2};
+use dclutch_claims::structured_kernel::{
     ShardMovementV2, StructuredTermsInputV2, StructuredTermsV2, encode_structured_terms_v2,
     structured_terms_bytes_v2,
 };
@@ -29,7 +29,7 @@ use dclutch_structured_v2_operator::{
     structured_child_effect_order_v2, structured_child_lifecycle_action_v2,
     structured_child_request_bytes_v2, structured_child_token_style_v2, structured_child_wire_v2,
 };
-use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
+use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
 
 use support::{digest, identity, shard_mints, shard_terms, structured_admission};
 

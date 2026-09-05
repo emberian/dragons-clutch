@@ -31,32 +31,32 @@
 //! keeps between a person and their collateral, and an operator crate is the
 //! wrong place to start making exceptions to that.
 
-use dclutch_claims_svm::claim_check_compaction_request_v1::CompactPositionToClaimCheckRequestV1;
-use dclutch_claims_svm::claim_check_conservation_v1::{
+use dclutch_claims::claim_check_compaction_request_v1::CompactPositionToClaimCheckRequestV1;
+use dclutch_claims::claim_check_conservation_v1::{
     ClaimCheckAccountObservationV1, ClaimCheckCompactionObservationV1, ClaimCheckCompactionPlanV1,
     ClaimCheckCompactionPostV1,
 };
-use dclutch_claims_svm::claim_check_request_v1::{
+use dclutch_claims::claim_check_request_v1::{
     CloseClaimCheckEscrowRequestV1, RedeemClaimCheckRequestV1,
 };
-use dclutch_claims_svm::claim_check_v1::{
+use dclutch_claims::claim_check_v1::{
     CLAIM_CHECK_BYTES_V1, CLAIM_CHECK_REDEMPTION_ACCOUNT_COUNT_V1,
     COMPACTION_CRANK_REWARD_LAMPORTS_V1, COMPACTION_DEADLINE_SLOTS_V1, ClaimCheckEscrowSeedsV1,
     ClaimCheckEscrowV1, ClaimCheckRedemptionRoleV1, ClaimCheckSeedsV1, ClaimCheckV1,
     ClaimCheckVaultSeedsV1,
 };
-use dclutch_claims_svm::fractional_claim_check_conservation_v1::{
+use dclutch_claims::fractional_claim_check_conservation_v1::{
     FractionalClaimCheckRedemptionObservationV1, FractionalClaimCheckRedemptionPlanV1,
 };
-use dclutch_claims_svm::fractional_claim_check_v1::{
+use dclutch_claims::fractional_claim_check_v1::{
     FRACTIONAL_CLAIM_CHECK_REDEMPTION_ACCOUNT_COUNT_V1, FractionalClaimCheckRedemptionRoleV1,
     FractionalClaimCheckSeedsV1, FractionalClaimCheckV1, FractionalRedeemClaimCheckRequestV1,
 };
-use dclutch_claims_svm::protocol_position_v2::{
+use dclutch_claims::protocol_position_v2::{
     ProtocolPositionAdmissionSeedsV2, ProtocolPositionAdmissionV2, ProtocolPositionOwnerKindV2,
 };
-use dclutch_claims_svm::terminal_settlement_v3::TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3;
-use dclutch_token_svm::TokenAccount;
+use dclutch_claims::terminal_settlement_v3::TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3;
+use dclutch_custody::token_svm::TokenAccount;
 use solana_address_lookup_table_interface::{
     program as lookup_table_program, state::AddressLookupTable,
 };
@@ -1155,7 +1155,7 @@ pub fn build_fractional_claim_check_redemption_v1(
     balances: FractionalClaimCheckBalancesV1,
     statement: FractionalClaimCheckStatementV1,
 ) -> Result<FractionalClaimCheckRedemptionReportV1, ClaimCheckOperatorErrorV1> {
-    if token_program.to_bytes() != dclutch_token_svm::TOKEN_2022_PROGRAM_ID {
+    if token_program.to_bytes() != dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID {
         return Err(ClaimCheckOperatorErrorV1::Binding);
     }
     let coordinates = statement.coordinates;
@@ -1321,7 +1321,7 @@ mod tests {
     use std::borrow::Cow;
 
     use super::*;
-    use dclutch_claims_svm::protocol_position_v2::{
+    use dclutch_claims::protocol_position_v2::{
         ProtocolPositionActionV2, ProtocolPositionAdmissionEvidenceV2, ProtocolPositionPresenceV2,
         ProtocolPositionRequestV2,
     };
@@ -2102,7 +2102,7 @@ mod tests {
         let holder = Pubkey::new_from_array([11; 32]);
         let holder_collateral = Pubkey::new_from_array([12; 32]);
         let holder_shards = Pubkey::new_from_array([13; 32]);
-        let token_program = Pubkey::new_from_array(dclutch_token_svm::TOKEN_2022_PROGRAM_ID);
+        let token_program = Pubkey::new_from_array(dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID);
         let report = build_fractional_claim_check_redemption_v1(
             &claims(),
             &token_program,
@@ -2155,7 +2155,7 @@ mod tests {
         let holder = Pubkey::new_from_array([11; 32]);
         let report = build_fractional_claim_check_redemption_v1(
             &claims(),
-            &Pubkey::new_from_array(dclutch_token_svm::TOKEN_2022_PROGRAM_ID),
+            &Pubkey::new_from_array(dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID),
             &holder,
             &Pubkey::new_from_array([12; 32]),
             &Pubkey::new_from_array([13; 32]),
@@ -2190,7 +2190,7 @@ mod tests {
         assert_eq!(
             build_fractional_claim_check_redemption_v1(
                 &claims(),
-                &Pubkey::new_from_array(dclutch_token_svm::TOKEN_2022_PROGRAM_ID),
+                &Pubkey::new_from_array(dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID),
                 &Pubkey::new_from_array([11; 32]),
                 &Pubkey::new_from_array([12; 32]),
                 &Pubkey::new_from_array([13; 32]),
@@ -2235,7 +2235,7 @@ mod tests {
         assert_eq!(
             build_fractional_claim_check_redemption_v1(
                 &claims(),
-                &Pubkey::new_from_array(dclutch_token_svm::TOKEN_2022_PROGRAM_ID),
+                &Pubkey::new_from_array(dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID),
                 &holder,
                 &holder,
                 &Pubkey::new_from_array([13; 32]),

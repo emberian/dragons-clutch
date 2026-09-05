@@ -41,7 +41,7 @@
 //!
 //! **General** reaches the real accelerator ELF. Every one of the seven
 //! authored settlement actions
-//! ([`dclutch_general_adapter_contract::release_v3::GENERAL_ACTIONS_V3`]) is
+//! ([`dclutch_trading::general::release_v3::GENERAL_ACTIONS_V3`]) is
 //! driven as one finalized localhost transaction whose top-level return data
 //! is a typed [`AcceleratorAckV2`]. That is the read-only evaluation half of
 //! the family: the accelerator owns no account, signs nothing, and performs no
@@ -68,13 +68,13 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use dclutch_capability_program_contract::hot_v3::HotExecutionEnvelopeV3;
+use dclutch_market::capability_program::hot_v3::HotExecutionEnvelopeV3;
 use dclutch_core_contract::ContentId;
-use dclutch_execution_strategy_contract::v2::{
+use dclutch_market::execution_strategy::v2::{
     ACCELERATOR_REQUEST_HEADER_BYTES_V2, AcceleratorAckV2, AcceleratorDispositionV2,
     AcceleratorRequestV2, RequestTransportV2,
 };
-use dclutch_general_adapter_contract::{
+use dclutch_trading::general::{
     account_rules_v3::general_account_profile_fixed_count_v3,
     hot_candidate_v3::{
         GENERAL_HOT_COMMON_IDENTITIES_V3, general_hot_candidate_bank_len_v3,
@@ -90,12 +90,12 @@ use dclutch_general_adapter_contract::{
     runtime_width::{VerifiedCandidateHeaderV2, VerifiedCandidateV2, verified_candidate_len},
     state_artifacts_v3::{GeneralReadonlyEvidenceKindV3, general_readonly_evidence_v3},
 };
-use dclutch_general_codec::{
+use dclutch_trading::general_codec::{
     Action, MAX_SELECTION_CRITERIA, SelectionCriterion, SelectionPolicyV1,
     successor_request_v2::ControllerRequestV2,
 };
-use dclutch_general_config_contract::v3::{GeneralConfigV3, GeneralConfigV3Input};
-use dclutch_series_v3_kernel::request::{
+use dclutch_trading::general_config::v3::{GeneralConfigV3, GeneralConfigV3Input};
+use dclutch_trading::series::request::{
     SERIES_ACTION_HEADER_BYTES_V3, SeriesActionRequestV3, SeriesActionV3,
     encode_series_action_header_v3,
 };
@@ -142,7 +142,7 @@ const GENERAL_ACCELERATOR_CALLER_AUTHORITY_SEED_V1: &[u8] = b"general-accelerato
 // that would have gone stale in silence. They are imported now, from the crate
 // this campaign already depends on, and that crate derives them from the
 // producer's own `HOT_*_ACCOUNT_V3` coordinates.
-use dclutch_execution_strategy_contract::admitted_v3::{
+use dclutch_market::execution_strategy::admitted_v3::{
     ADMITTED_CALLER_AUTHORITY_ACCOUNT_V3, ADMITTED_INSTRUCTIONS_ACCOUNT_V3,
     ADMITTED_RUNTIME_ACCOUNTS_START_V3, ADMITTED_TRADING_PROGRAM_ACCOUNT_V3,
 };

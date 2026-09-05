@@ -25,17 +25,17 @@
 //! outcome is reachable only along the deadline-driven walk, which is the one
 //! path allowed to select a failure selector.
 
-use dclutch_product_runtime_v2::ResultDomainV2;
-use dclutch_product_runtime_v2_svm_reader::AuthenticatedProductRuntimeV2;
-use dclutch_registry_contract::ArtifactReleaseV1;
-use dclutch_relay_contract::{
+use dclutch_product::ResultDomainV2;
+use dclutch_product::svm_reader::AuthenticatedProductRuntimeV2;
+use dclutch_registry::ArtifactReleaseV1;
+use dclutch_source::relay::{
     Error as RelayContractError,
     decode::{RelayedObservationOutcomeV1, interpret_sealed_record_v1},
     record::RelayedObservationRecordViewV1,
     release::{AccountSetEntryV1, RelayedAdapterConfigV1},
 };
-use dclutch_resolution_codec::{ResolutionCertificateKindV2, ResolutionCertificateV2};
-use dclutch_source_contract::{
+use dclutch_source::resolution::{ResolutionCertificateKindV2, ResolutionCertificateV2};
+use dclutch_source::{
     ContentId as SourceContentId, ProviderReleaseV1, SourceMaterialV3, SourceResolutionStateV2,
     SourceSpecV1, StatisticSpecV1, WindowKind, WindowSpecV1,
 };
@@ -427,7 +427,7 @@ pub fn plan_relayed_resolution_v1(
 
 #[cfg(test)]
 mod tests {
-    use dclutch_source_contract::ContentId as SourceContentId;
+    use dclutch_source::ContentId as SourceContentId;
 
     use super::*;
 

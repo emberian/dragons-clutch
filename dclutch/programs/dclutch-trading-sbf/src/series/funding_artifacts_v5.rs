@@ -11,7 +11,7 @@ extern crate alloc;
 
 use alloc::{vec, vec::Vec};
 
-use dclutch_account_profile_contract::{
+use dclutch_vm::account_profile::{
     v2::{
         AccountPrestateV2, AccountProfileV2, DYNAMIC_FIXED_SPAN_HEADER_BYTES,
         Error as AccountProfileErrorV2, OPERATION_BYTES, RULE_BYTES, TrustedBuiltinIdentityV2,
@@ -28,7 +28,7 @@ use dclutch_account_profile_contract::{
         encode_account_profile_v3_atomic,
     },
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_GENERATION_OFFSET, CAPABILITY_ROOT_HEADER_BYTES_V1,
     CAPABILITY_ROOT_MARKET_OFFSET, CAPABILITY_ROOT_SELECTION_OFFSET,
     hot_v3::{
@@ -36,7 +36,7 @@ use dclutch_capability_program_contract::{
         HOT_RUNTIME_PORTFOLIO_COORDINATE_V3,
     },
 };
-use dclutch_effect_kernel::{
+use dclutch_vm::effect::{
     v3::{
         HEADER_BYTES as EFFECT_HEADER_BYTES_V3, encode::EffectGeometryV3,
         encode::encode_effect_program_v4_atomic,
@@ -44,16 +44,16 @@ use dclutch_effect_kernel::{
     v4::{HEADER_BYTES_V4 as EFFECT_HEADER_BYTES_V4, ProgramV4, encode_program_v4_atomic},
     v5::{HEADER_BYTES_V5 as EFFECT_HEADER_BYTES_V5, ProgramV5, encode_program_v5_atomic},
 };
-use dclutch_product_runtime_v2::{
+use dclutch_product::{
     PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_COEFFICIENT_COUNT_OFFSET, PORTFOLIO_HEADER_BYTES,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     CAPABILITY_EXECUTION_SELECTION_CONFIG_OFFSET,
     CAPABILITY_EXECUTION_SELECTION_ENTRY_INDEX_OFFSET, CAPABILITY_EXECUTION_SELECTION_KIND_OFFSET,
     CAPABILITY_EXECUTION_SELECTION_MANIFEST_OFFSET, CAPABILITY_EXECUTION_SELECTION_RELEASE_OFFSET,
 };
-use dclutch_rent_contract::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
-use dclutch_request_profile_contract::{
+use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
+use dclutch_vm::request_profile::{
     HEADER_BYTES as REQUEST_HEADER_BYTES, OPERATION_BYTES as REQUEST_OPERATION_BYTES,
     RequestProfileV1,
     encode::{
@@ -61,7 +61,7 @@ use dclutch_request_profile_contract::{
         encode_request_profile_v1_atomic,
     },
 };
-use dclutch_transition_vm::v3::{
+use dclutch_vm::v3::{
     HEADER_BYTES as TRANSITION_HEADER_BYTES, INSTRUCTION_BYTES as TRANSITION_INSTRUCTION_BYTES,
     IdentityRegisterV3, InstructionV3, ProgramGeometryV3, ProgramV3 as TransitionProgramV3,
     ScalarRegisterV3, encode_program_atomic,
@@ -81,7 +81,7 @@ use super::{
         SERIES_CONSUME_STATE_LIFECYCLE_BYTES_V5, encode_series_close_state_lifecycle_v5_atomic,
     },
 };
-use dclutch_series_v3_kernel::SERIES_TEMPLATE_BYTES_V3;
+use dclutch_trading::series::SERIES_TEMPLATE_BYTES_V3;
 
 /// Exact terminal Close logical account count: five Hot accounts, RentCredit, Rent Program.
 pub const SERIES_CLOSE_FIXED_ACCOUNT_COUNT_V5: u16 = 7;
@@ -325,7 +325,7 @@ fn emit_close_account_profile_v5() -> Result<Vec<u8>> {
                 SERIES_CLOSE_TEMPLATE_REFUND_OWNER_IDENTITY_V5,
             ),
             data_offset: u32::try_from(
-                dclutch_series_v3_kernel::generated::SERIES_TEMPLATE_REFUND_OWNER_OFFSET_V3,
+                dclutch_trading::series::generated::SERIES_TEMPLATE_REFUND_OWNER_OFFSET_V3,
             )
             .map_err(|_| SeriesFundingArtifactErrorV5::Geometry)?,
         },
@@ -472,7 +472,7 @@ fn emit_close_effect_v5() -> Result<Vec<u8>> {
     let mut v4 = vec![0_u8; SERIES_CLOSE_EFFECT_V4_BYTES_V5];
     encode_program_v4_atomic(
         &base,
-        dclutch_effect_kernel::v4::BorrowedRangePolicyV4::DisjointExactCoverage,
+        dclutch_vm::effect::v4::BorrowedRangePolicyV4::DisjointExactCoverage,
         u32::try_from(SERIES_ACTION_HEADER_BYTES_V3)
             .map_err(|_| SeriesFundingArtifactErrorV5::Geometry)?,
         &[],
@@ -516,14 +516,14 @@ fn root_offset(left: usize, right: usize) -> Result<u32> {
 
 #[cfg(test)]
 mod tests {
-    use dclutch_account_profile_contract::{
+    use dclutch_vm::account_profile::{
         AccountObservationV1,
         lifecycle_v3::{LifecycleOperationV3, StateLifecyclePolicyV5},
         v2::{AccountPrestateV2, ProjectionRegistersV2, derive_effect_permissions, project_atomic},
         v3::AccountProfileV3,
     };
-    use dclutch_effect_kernel::v2::AccountPermission;
-    use dclutch_transition_vm::v3::{RegisterInput, RegisterOutput, execute_fold_atomic};
+    use dclutch_vm::effect::v2::AccountPermission;
+    use dclutch_vm::v3::{RegisterInput, RegisterOutput, execute_fold_atomic};
 
     use super::*;
 
@@ -610,7 +610,7 @@ mod tests {
         let refund_owner = [0x93; 32];
         let mut config = vec![0_u8; SERIES_TEMPLATE_BYTES_V3];
         let template_refund_offset =
-            dclutch_series_v3_kernel::generated::SERIES_TEMPLATE_REFUND_OWNER_OFFSET_V3;
+            dclutch_trading::series::generated::SERIES_TEMPLATE_REFUND_OWNER_OFFSET_V3;
         config[template_refund_offset..template_refund_offset + 32].copy_from_slice(&refund_owner);
         let product = vec![0_u8; usize::try_from(SERIES_PRODUCT_RECORD_BYTES_V5).expect("width")];
         let mut portfolio = vec![

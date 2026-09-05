@@ -71,7 +71,7 @@ async function rpc(method, params) {
 /**
  * The Market's own coordinates, read straight off the chain.
  *
- * Offsets cited to `crates/dclutch-market-core-codec/src/generated.rs`'s
+ * Offsets cited to `crates/dclutch-market/src/generated.rs`'s
  * `CoreState`: magic `DCLTCOR2` (STATE_MAGIC) at 0, schema at 8, phase at 10. Phase 0 is
  * Founding. Nothing here is imported from `apps/`.
  */

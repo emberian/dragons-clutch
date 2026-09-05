@@ -11,7 +11,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 base64 = "0.22.1"
-dclutch-rational-representation-v2-request-contract = { path = "../dclutch-rational-representation-v2-request-contract" }
+dclutch-claims = { path = "../dclutch-claims" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 solana-program = { version = "=3.0.0", default-features = false }
@@ -21,7 +21,7 @@ wasm-bindgen = "=0.2.127"
 getrandom = { version = "0.2.17", features = ["js"] }
 
 [dev-dependencies]
-dclutch-token-svm = { path = "../dclutch-token-svm" }
+dclutch-custody = { path = "../dclutch-custody" }
 
 [lints]
 workspace = true

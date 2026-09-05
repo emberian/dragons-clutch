@@ -20,19 +20,19 @@ fn decode_claims_composition_boxed_v3<'request>(
     parent: ClaimsCompositionParentV3,
 ) -> Result<HeapBoxV3<ClaimsCompositionV3<'request>>, ProgramError> {
     let external = if family_request.get(..8)
-        == Some(dclutch_fractional_claim_contract::FRACTIONAL_EXPOSURE_REQUEST_MAGIC_V2.as_slice())
+        == Some(dclutch_claims::fractional::FRACTIONAL_EXPOSURE_REQUEST_MAGIC_V2.as_slice())
     {
         let request =
-            dclutch_fractional_claim_contract::FractionalExposureRequestV2::decode(family_request)
+            dclutch_claims::fractional::FractionalExposureRequestV2::decode(family_request)
                 .map_err(|_| TradingSbfError::Content)?;
         let fixed_account_count = match request.action() {
-            dclutch_fractional_claim_contract::FractionalExposureActionV2::Wrap
-            | dclutch_fractional_claim_contract::FractionalExposureActionV2::WholeUnwrap => {
-                dclutch_fractional_claim_contract::FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3
+            dclutch_claims::fractional::FractionalExposureActionV2::Wrap
+            | dclutch_claims::fractional::FractionalExposureActionV2::WholeUnwrap => {
+                dclutch_claims::fractional::FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3
             }
-            dclutch_fractional_claim_contract::FractionalExposureActionV2::TerminalRedeem
-            | dclutch_fractional_claim_contract::FractionalExposureActionV2::TerminalZeroBurn => {
-                dclutch_fractional_claim_contract::FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3
+            dclutch_claims::fractional::FractionalExposureActionV2::TerminalRedeem
+            | dclutch_claims::fractional::FractionalExposureActionV2::TerminalZeroBurn => {
+                dclutch_claims::fractional::FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3
             }
             _ => return Err(TradingSbfError::Content.into()),
         };
@@ -51,7 +51,7 @@ fn decode_claims_composition_boxed_v3<'request>(
         )
     } else if family_request.get(..8)
         == Some(
-            dclutch_claims_svm::fractional_claim_check_v1::FRACTIONAL_CLAIM_CHECK_COMPACT_MAGIC_V1
+            dclutch_claims::fractional_claim_check_v1::FRACTIONAL_CLAIM_CHECK_COMPACT_MAGIC_V1
                 .as_slice(),
         )
     {
@@ -62,7 +62,7 @@ fn decode_claims_composition_boxed_v3<'request>(
         // verbatim, so `FractionalExposureRequestV2::decode` would refuse it,
         // and a shared arm would have to decode by shape rather than by magic.
         let request =
-            dclutch_claims_svm::fractional_claim_check_compaction_request_v1::FractionalCompactToClaimCheckRequestV1::decode(
+            dclutch_claims::fractional_claim_check_compaction_request_v1::FractionalCompactToClaimCheckRequestV1::decode(
                 family_request,
             )
             .map_err(|_| TradingSbfError::Content)?;
@@ -71,7 +71,7 @@ fn decode_claims_composition_boxed_v3<'request>(
         // has exactly one, declared beside the roles that occupy it, so a
         // further account changes the constant and this arm follows.
         let fixed_account_count =
-            dclutch_claims_svm::fractional_claim_check_v1::FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1;
+            dclutch_claims::fractional_claim_check_v1::FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1;
         // The same three bindings the exposure arm makes, and they are what
         // make admitting an external route safe at all: the caller has already
         // authenticated release/Market/parent facts, and these assert the bytes
@@ -1284,7 +1284,7 @@ fn fixed_role_tag_v3(role: FixedRole) -> u8 {
 
 #[allow(clippy::too_many_arguments)]
 fn child_receipt_provenance_v4(
-    invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
+    invocation: dclutch_vm::effect::v3::ResolvedInvocationV3,
     borrowed_ranges: BorrowedRouteRangesV4<'_, '_, '_>,
     role: FixedRole,
     route: u16,
@@ -1544,7 +1544,7 @@ pub(super) const fn committed_lamports_v3(
 }
 
 pub(super) fn record_child_reach_and_require_disjoint_from_local(
-    invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
+    invocation: dclutch_vm::effect::v3::ResolvedInvocationV3,
     aliases: &[usize],
     participation: &mut [CoordinateParticipationV3],
     allowed_local_overlap: AllowedLocalOverlapV3,
@@ -1631,19 +1631,19 @@ impl AllowedLocalOverlapV3 {
 /// bytes are re-authenticated unchanged after the verified child receipt and
 /// before the commit-last pass.
 pub(super) fn fractional_local_root_overlap_v3(
-    invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
+    invocation: dclutch_vm::effect::v3::ResolvedInvocationV3,
     request_bank: &[u8],
     family_request: &[u8],
     aliases: &[usize],
 ) -> Result<Option<usize>, ProgramError> {
-    use dclutch_fractional_claim_contract::{
+    use dclutch_claims::fractional::{
         FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3, FRACTIONAL_ATOMIC_ROOT_V3,
         FRACTIONAL_EXPOSURE_REQUEST_MAGIC_V2, FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3,
         FRACTIONAL_TERMINAL_ROOT_V3, FractionalExposureActionV2, FractionalExposureRequestV2,
     };
 
     if invocation.role != FixedRole::Claims
-        || invocation.kind != dclutch_effect_kernel::v3::RouteKindV3::Once
+        || invocation.kind != dclutch_vm::effect::v3::RouteKindV3::Once
         || invocation.borrowed_witness.is_some()
         || family_request.get(..8) != Some(FRACTIONAL_EXPOSURE_REQUEST_MAGIC_V2.as_slice())
     {
@@ -1704,7 +1704,7 @@ pub(super) fn require_fractional_root_prestate_v3(
     expected_prestate: [u8; 32],
 ) -> Result<(), ProgramError> {
     if family_request.get(..8)
-        == Some(dclutch_fractional_claim_contract::FRACTIONAL_EXPOSURE_REQUEST_MAGIC_V2.as_slice())
+        == Some(dclutch_claims::fractional::FRACTIONAL_EXPOSURE_REQUEST_MAGIC_V2.as_slice())
         && dclutch_sha256_adapter::digest(root) != expected_prestate
     {
         return Err(TradingSbfError::Commit.into());
@@ -1713,7 +1713,7 @@ pub(super) fn require_fractional_root_prestate_v3(
 }
 
 pub(super) fn require_no_common_projection_child_accounts_v3(
-    invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
+    invocation: dclutch_vm::effect::v3::ResolvedInvocationV3,
 ) -> Result<(), ProgramError> {
     const RESERVED_END: usize = 5;
     let fixed_start = usize::from(invocation.fixed_account_start);
@@ -1777,7 +1777,7 @@ pub(super) fn require_no_common_projection_child_accounts_v3(
 /// The refusal is not weakened: two DISTINCT representative coordinates both
 /// carrying the child program still refuse.
 pub(crate) fn invocation_accounts_contain_program(
-    invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
+    invocation: dclutch_vm::effect::v3::ResolvedInvocationV3,
     accounts: DowngradedEffectAccountsV3<'_, '_, '_>,
     aliases: &[usize],
     program: &Pubkey,
@@ -2103,7 +2103,7 @@ fn execute_claims_route_digest_v3<'info>(
     composition: ClaimsCompositionV3<'_>,
     route_index: u16,
     invocation_index: u32,
-    invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
+    invocation: dclutch_vm::effect::v3::ResolvedInvocationV3,
     effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     aliases: &[usize],
     request_bank: &[u8],

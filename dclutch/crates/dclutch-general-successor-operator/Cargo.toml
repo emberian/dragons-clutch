@@ -12,10 +12,9 @@ path = "src/lib.rs"
 [dependencies]
 base64 = "=0.22.1"
 bincode = "=1.3.3"
-dclutch-capability-program-contract = { path = "../dclutch-capability-program-contract" }
-dclutch-effect-kernel = { path = "../dclutch-effect-kernel" }
-dclutch-general-adapter-contract = { path = "../dclutch-general-adapter-contract" }
-dclutch-general-codec = { path = "../dclutch-general-codec" }
+dclutch-market = { path = "../dclutch-market" }
+dclutch-vm = { path = "../dclutch-vm" }
+dclutch-trading = { path = "../dclutch-trading" }
 dclutch-operator = { path = "../dclutch-operator" }
 dclutch-versioned-message-operator = { path = "../dclutch-versioned-message-operator" }
 serde = { version = "1.0", features = ["derive"] }

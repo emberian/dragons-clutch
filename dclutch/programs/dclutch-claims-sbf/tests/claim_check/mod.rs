@@ -12,8 +12,8 @@ use super::*;
 
 use solana_program_test::ProgramTestBanksClientExt;
 
-use dclutch_claims_svm::claim_check_request_v1::OpenClaimCheckEscrowRequestV1;
-use dclutch_claims_svm::claim_check_v1::{CLAIM_CHECK_ESCROW_BYTES_V1, ClaimCheckEscrowV1};
+use dclutch_claims::claim_check_request_v1::OpenClaimCheckEscrowRequestV1;
+use dclutch_claims::claim_check_v1::{CLAIM_CHECK_ESCROW_BYTES_V1, ClaimCheckEscrowV1};
 
 // The claim-check CLIENT: the redemption and escrow-close frames this campaign
 // drives, the coordinates it derives, and the closeability ruling it predicts
@@ -519,17 +519,17 @@ async fn the_open_admits_the_opener_and_no_other_signer() {
 
 // ---------------------------------------------------------------- compaction
 
-use dclutch_claims_svm::claim_check_compaction_request_v1::CompactPositionToClaimCheckRequestV1;
-use dclutch_claims_svm::claim_check_v1::{
+use dclutch_claims::claim_check_compaction_request_v1::CompactPositionToClaimCheckRequestV1;
+use dclutch_claims::claim_check_v1::{
     COMPACTION_CRANK_REWARD_LAMPORTS_V1, COMPACTION_DEADLINE_SLOTS_V1, ClaimCheckV1,
 };
-use dclutch_claims_svm::protocol_position_v2::{
+use dclutch_claims::protocol_position_v2::{
     PROTOCOL_POSITION_ADMISSION_BYTES_V2, ProtocolPositionActionV2,
     ProtocolPositionAdmissionEvidenceV2, ProtocolPositionAdmissionSeedsV2,
     ProtocolPositionAdmissionV2, ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2,
     ProtocolPositionRequestV2,
 };
-use dclutch_claims_svm::terminal_settlement_v3::{
+use dclutch_claims::terminal_settlement_v3::{
     TERMINAL_SETTLEMENT_CUSTODY_CALLER_ACCOUNT_V3, TERMINAL_SETTLEMENT_RECIPIENT_ACCOUNT_V3,
 };
 

@@ -2,7 +2,7 @@
 //!
 //! Four permissionless routes create, fill, seal and close one cross-cluster
 //! observation record. Everything they enforce lives in
-//! `dclutch-relay-contract`; this module is the account boundary: it
+//! `dclutch-source::relay`; this module is the account boundary: it
 //! authenticates the Core Market, the Registry-owned immutable records, the
 //! record PDA, the preceding native Ed25519 instruction, and the two clocks,
 //! then hands exact bytes to the contract.
@@ -57,21 +57,21 @@
 
 use alloc::{boxed::Box, vec::Vec};
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingLedgerDerivationV2,
     CapabilityManifestV1, ContentId as CapabilityContentId, FundingLedgerStatusV2, FundingLedgerV2,
 };
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2};
-use dclutch_product_runtime_v2::{ContentId as ProductContentId, ResultDomainV2};
-use dclutch_product_runtime_v2_svm_reader::{
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2};
+use dclutch_product::{ContentId as ProductContentId, ResultDomainV2};
+use dclutch_product::svm_reader::{
     AuthenticatedProductRuntimeV2, FinalizedRecordFrameV2, ProductRuntimeFrameV2,
     authenticate_product_runtime_v2,
 };
-use dclutch_registry_contract::{
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_BYTES_V1,
     ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1,
 };
-use dclutch_relay_contract::{
+use dclutch_source::relay::{
     Error as RelayContractError, MAX_RELAYED_ACCOUNTS_V1, RELAYED_ADAPTER_CONFIG_BYTES,
     RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_ID_V1, RELAYED_FAMILY_RELEASE_ID_V1,
     RELAYED_RECORD_PDA_DOMAIN_V1, RELAYED_RECORD_TRANSPORT_PROFILE_ID_V1, RELAYER_KEY_SET_BYTES,
@@ -100,12 +100,12 @@ use dclutch_relay_contract::{
     },
     wire::{AttestationMessageV1, ObservationSetSealV1},
 };
-use dclutch_release_set_contract::ExecutionRoleV1;
-use dclutch_resolution_codec::{
+use dclutch_registry::release_set::ExecutionRoleV1;
+use dclutch_source::resolution::{
     RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
     RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateKindV2,
 };
-use dclutch_source_contract::{
+use dclutch_source::{
     PROVIDER_RELEASE_BYTES, PROVIDER_RELEASE_SCHEMA_ID_V1, ProviderReleaseV1,
     RECOVERY_POLICY_BYTES_V2, RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryPolicyV2,
     SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_MATERIAL_V3_BYTES,
@@ -418,7 +418,7 @@ fn release_facts(
     let window = WindowSpecV1::decode(&window_data).map_err(|_| ResolutionError::SourceMaterial)?;
     window
         .validate_source(
-            dclutch_source_contract::ContentId::new(source_spec_id)
+            dclutch_source::ContentId::new(source_spec_id)
                 .map_err(|_| ResolutionError::SourceMaterial)?,
         )
         .map_err(|_| ResolutionError::SourceMaterial)?;
@@ -636,7 +636,7 @@ fn process_create_record(
         &signer,
     )?;
 
-    let mut seed_preimage = [0u8; dclutch_relay_contract::release::SET_DIGEST_SEED_PREIMAGE_BYTES];
+    let mut seed_preimage = [0u8; dclutch_source::relay::release::SET_DIGEST_SEED_PREIMAGE_BYTES];
     encode_set_digest_seed_preimage_v1(
         &mut seed_preimage,
         facts.account_set_id,
@@ -1545,7 +1545,7 @@ const fn map_funded_walk_error(error: FundedWalkErrorV1) -> ResolutionError {
 fn deadline_walk_source(
     registry: &Pubkey,
     accounts: &[AccountInfo<'_>],
-    material_id: dclutch_source_contract::ContentId,
+    material_id: dclutch_source::ContentId,
 ) -> Result<AuthenticatedWalkSourceV1, ProgramError> {
     let material_data = account(accounts, 6)?
         .try_borrow_data()
@@ -1940,7 +1940,7 @@ fn consume_source_records(
     drop(venue_data);
 
     let id = |value: [u8; 32]| {
-        dclutch_source_contract::ContentId::new(value).map_err(|_| ResolutionError::SourceMaterial)
+        dclutch_source::ContentId::new(value).map_err(|_| ResolutionError::SourceMaterial)
     };
     Ok(AuthenticatedRelaySourceRecordsV1 {
         material_id: id(material_id)?,
@@ -2251,7 +2251,7 @@ fn persisted_binding(
             .map_err(|_| ResolutionError::OutputState)?;
         let view = RelayedObservationRecordViewV1::decode(&data)
             .map_err(|_| ResolutionError::OutputState)?;
-        let field = |value: Result<[u8; 32], dclutch_relay_contract::Error>| {
+        let field = |value: Result<[u8; 32], dclutch_source::relay::Error>| {
             value.map_err(|_| ResolutionError::OutputState)
         };
         RelayedRecordBindingV1 {

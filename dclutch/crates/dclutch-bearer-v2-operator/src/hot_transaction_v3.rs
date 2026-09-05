@@ -1,7 +1,7 @@
 //! Unsigned chain-derived Hot instruction construction for terminal redemption.
 
-use dclutch_account_profile_contract::v2::{AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE};
-use dclutch_capability_program_contract::hot_v3::{
+use dclutch_vm::account_profile::v2::{AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE};
+use dclutch_market::capability_program::hot_v3::{
     HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CORE_PROGRAM_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3,
     HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
     HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_LINKED_BASIS_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3,
@@ -11,7 +11,7 @@ use dclutch_capability_program_contract::hot_v3::{
 use dclutch_hot_bump_miner_v1::{
     HotBumpCorpusV1, activated_custody_program_v1, mine_hot_bump_hints_v1,
 };
-use dclutch_rational_representation_v2_contract::{
+use dclutch_claims::rational::{
     AuthenticatedTokenBehaviorV2, RationalTerminalHotRequestV3, RepresentationActionV2,
     RepresentationCoordinateV2, RepresentationRequestV2,
 };
@@ -534,13 +534,13 @@ fn validate_fixed_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_rational_representation_v2_contract::{
+    use dclutch_claims::rational::{
         ABSENT_REVISION, ASSET_BYTES_V3, AssetV2, CallerRoleV2,
         RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3, RationalTerminalHotRequestV3,
         RepresentationActionV2, RepresentationRequestHeaderV2, RepresentationRequestV2,
     };
     use dclutch_rational_representation_v2_operator::ConstructedInstructionV2;
-    use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
+    use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
     use solana_sdk_ids::system_program;
 
     use crate::test_open_fixture_v3::{authenticated_token_behavior_v3, open_artifact_fixture_v3};

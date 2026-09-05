@@ -1,7 +1,7 @@
 use super::*;
 use dclutch_core_contract::ContentId;
-use dclutch_market_core_codec::{MarketCoreStateSeedsV2, MarketIdentity, SeriesCoreActionV1};
-use dclutch_rent_contract::{
+use dclutch_market::{MarketCoreStateSeedsV2, MarketIdentity, SeriesCoreActionV1};
+use dclutch_market::rent::{
     RefundAuthority,
     lifecycle_v2::{LifecycleAccountIdV2, LifecycleRentCreditV2},
 };
@@ -601,7 +601,7 @@ fn prepare_and_expire_commit_under_controller_without_fabricating_core() {
     let post_digest =
         core_identity(ContentId::new([88; 32]).expect("post digest")).expect("Core post digest");
     let core_program = core_pubkey_identity(fixture.core_program).expect("Core program");
-    let ack = dclutch_market_core_codec::SeriesCoreAckV1::new(
+    let ack = dclutch_market::SeriesCoreAckV1::new(
         request,
         core_program,
         request_digest,
@@ -715,7 +715,7 @@ fn checked_in_series_v3_constants_are_exact_lean_output() {
         std::string::String::from_utf8_lossy(&output.stderr)
     );
     let checked_in =
-        std::fs::read(manifest.join("../../crates/dclutch-series-v3-kernel/src/generated.rs"))
+        std::fs::read(manifest.join("../../crates/dclutch-trading/src/series/generated.rs"))
             .expect("read checked-in Series V3 constants");
     assert_eq!(output.stdout, checked_in, "regenerate Series V3 constants");
 }

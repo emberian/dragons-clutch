@@ -7,7 +7,7 @@ Direct boundary:
   transition program over deterministic boundary, mutation, and hostile states.
 - Safe Rust independently encodes/decodes the semantic values, classifies every
   single-byte mutation in the corpus, and executes the exact emitted transition
-  program with `dclutch-transition-vm`.
+  program with `dclutch-vm`.
 - The separately implemented safe-Rust Direct AOT evaluator executes every
   full Direct state in that same Lean-emitted corpus and must agree on exact
   acceptance/refusal and every accepted scalar/identity output. Refusal must

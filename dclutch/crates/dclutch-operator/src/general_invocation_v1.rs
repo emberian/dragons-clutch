@@ -7,10 +7,10 @@
 //! content-addressed intent. The wider GEN-SEVEN V3 request remains refused by
 //! the underlying artifact join until all seven new triples land together.
 
-use dclutch_capability_program_contract::hot_v3::{
+use dclutch_market::capability_program::hot_v3::{
     HOT_MARKET_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3, HotExecutionEnvelopeV3,
 };
-use dclutch_general_adapter_contract::{
+use dclutch_trading::general::{
     artifacts_v3::{GeneralArtifactBytesV3, GeneralArtifactSelectionV3, decode_general_request_v3},
     invocation_v1::{
         GENERAL_INVOCATION_ACCOUNT_METAS_DOMAIN_V1, GENERAL_INVOCATION_ARTIFACT_GRAPH_DOMAIN_V1,
@@ -19,7 +19,7 @@ use dclutch_general_adapter_contract::{
         GeneralInvocationFieldsV1, GeneralInvocationReplayV1, GeneralInvocationV1,
     },
 };
-use dclutch_general_codec::{Action, successor_request_v2::CONTROLLER_REQUEST_BYTES_V2};
+use dclutch_trading::general_codec::{Action, successor_request_v2::CONTROLLER_REQUEST_BYTES_V2};
 use solana_hash::Hash;
 use solana_program::{hash::hashv, instruction::AccountMeta, pubkey::Pubkey};
 

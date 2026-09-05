@@ -45,7 +45,7 @@ use solana_sdk::{
     signer::Signer,
 };
 
-use dclutch_capability_seal_contract::{
+use dclutch_vm::capability_seal::{
     CAPABILITY_SEAL_BYTES_V1, CAPABILITY_SEAL_CLOSE_NO_BUMP_CANDIDATE_V1,
     CapabilitySealCloseRequestV1,
 };

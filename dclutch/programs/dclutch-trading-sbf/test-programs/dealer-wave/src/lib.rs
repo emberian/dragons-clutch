@@ -10,7 +10,7 @@
 
 extern crate std;
 
-use dclutch_dealer_codec::{Action, CandidateView, Policy, Request, State, interpret_projected};
+use dclutch_trading::dealer::{Action, CandidateView, Policy, Request, State, interpret_projected};
 use solana_program::{
     account_info::AccountInfo, entrypoint::ProgramResult, program_error::ProgramError,
     pubkey::Pubkey,

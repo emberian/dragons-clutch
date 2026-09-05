@@ -11,7 +11,7 @@
 //!   and **no Hoard scalar at all**; Position magic `DCLLBP02`, header 128, one
 //!   balances vector. This is what `founding_v5` creates, at
 //!   `b"dclutch:lbv2:market"`, and what `ProtocolPositionSeedsV2` addresses.
-//! - `dclutch_economic_slice_kernel::{market_hoard, market_supply,
+//! - `dclutch_product::economic_slice::{market_hoard, market_supply,
 //!   position_native, position_revision, execute_basket}` — the economic-slice
 //!   family. Market magic `DCLTEMK2`, header 144, THREE vectors, a Hoard scalar
 //!   at offset 32; Position magic `DCLTEPS2`, header 96, two vectors. This is
@@ -71,16 +71,16 @@
 
 use std::{env, fs, path::PathBuf};
 
-use dclutch_claims_conservation_contract::{
+use dclutch_claims::conservation::{
     CLAIMS_CONSERVATION_REQUEST_BYTES_V1, ClaimsConservationDirectionV1,
     ClaimsConservationRequestV1,
 };
 use dclutch_claims_sbf::ClaimsSbfError;
-use dclutch_claims_svm::{
+use dclutch_claims::{
     liability_basis_state_v2::{LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2},
     protocol_position_v2::ProtocolPositionClaimsCapabilitySeedsV2,
 };
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1, CustodyAuthoritySeedsV1,
     CustodyReplaySeedsV1, CustodyVaultSeedsV1,
 };
@@ -96,11 +96,11 @@ use dclutch_fractional_atomic_program_test::{
     },
 };
 use dclutch_program_test_evidence::TransactionEvidence;
-use dclutch_realm_contract::{
+use dclutch_market::realm::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
 };
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_token_svm::{PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_custody::token_svm::{PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID};
 use solana_program::{
     clock::Clock,
     hash::hash,
@@ -252,7 +252,7 @@ fn world(body: AggregateBodyV1) -> (ProgramTest, World) {
     });
     let activation_cache_key = Pubkey::find_program_address(
         &[
-            dclutch_registry_contract::ACTIVATION_PDA_DOMAIN_V1,
+            dclutch_registry::ACTIVATION_PDA_DOMAIN_V1,
             &release_set,
         ],
         &REGISTRY_PROGRAM_ID,
@@ -504,7 +504,7 @@ fn escrow_owner_v1(core_market: Pubkey, failure_selector: u32) -> Pubkey {
 /// family's own initializer so it cannot be accused of being a hand-rolled
 /// straw man.
 fn economic_slice_aggregate_bytes(shared: &NarrowFixtureV2, release_set: [u8; 32]) -> Vec<u8> {
-    use dclutch_economic_slice_kernel::{
+    use dclutch_product::economic_slice::{
         MARKET_HEADER_BYTES, Phase, SCALAR_BYTES, initialize_market,
     };
     let count = usize::try_from(CLAIM_COUNT).expect("width");
@@ -810,7 +810,7 @@ async fn the_same_frame_with_an_economic_slice_aggregate_refuses_identity() {
 /// the two families' encodings, not a fact about this fixture.
 #[test]
 fn no_aggregate_bytes_satisfy_both_of_the_routes_readers() {
-    use dclutch_economic_slice_kernel::market_hoard;
+    use dclutch_product::economic_slice::market_hoard;
     let (_, world) = world(AggregateBodyV1::LiabilityBasisV2);
     let mut liability = world.shared.claims_market_bytes.clone();
     put_narrow_market_supplies_v2(
@@ -850,7 +850,7 @@ fn no_aggregate_bytes_satisfy_both_of_the_routes_readers() {
 /// `position_revision` / `execute_basket` read an economic-slice one.
 #[test]
 fn no_position_bytes_satisfy_both_of_the_routes_readers() {
-    use dclutch_economic_slice_kernel::{
+    use dclutch_product::economic_slice::{
         POSITION_HEADER_BYTES, SCALAR_BYTES, initialize_position, position_native,
     };
     let (_, world) = world(AggregateBodyV1::LiabilityBasisV2);

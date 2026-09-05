@@ -20,8 +20,8 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use dclutch_relay_contract::MAX_RELAYED_INLINE_BYTES_V1;
-use dclutch_relay_contract::release::AccountSetEntryV1;
+use dclutch_source::relay::MAX_RELAYED_INLINE_BYTES_V1;
+use dclutch_source::relay::release::AccountSetEntryV1;
 use serde::Deserialize;
 
 use crate::derive::derive_account_set_id;
@@ -866,9 +866,9 @@ inline_len = 40
 admitted_data_lens = [40]
 {extra}
 "#,
-            family = crate::id32::to_hex(&dclutch_relay_contract::RELAYED_FAMILY_RELEASE_ID_V1),
+            family = crate::id32::to_hex(&dclutch_source::relay::RELAYED_FAMILY_RELEASE_ID_V1),
             rules = crate::id32::to_hex(
-                &dclutch_relay_contract::RELAYED_DECODING_RULES_SCHEMA_RELEASE_ID_V1
+                &dclutch_source::relay::RELAYED_DECODING_RULES_SCHEMA_RELEASE_ID_V1
             ),
             extra = extra
         )
@@ -889,7 +889,7 @@ admitted_data_lens = [40]
         // Derivation, not configuration: the same positions under a different
         // observed cluster produce a different pin.
         let elsewhere = derive_account_set_id(
-            dclutch_relay_contract::SOLANA_DEVNET_GENESIS_HASH_V1,
+            dclutch_source::relay::SOLANA_DEVNET_GENESIS_HASH_V1,
             set.relay_family_id,
             &set.entries(),
         )
@@ -912,8 +912,8 @@ admitted_data_lens = [40]
             "{}\n[[account_sets]]\nname = \"x\"\nrelay_family_id = \"{}\"\n\
              decoding_rules_id = \"{}\"\naccount_set_id = \"{}\"\n",
             minimal(""),
-            crate::id32::to_hex(&dclutch_relay_contract::RELAYED_FAMILY_RELEASE_ID_V1),
-            crate::id32::to_hex(&dclutch_relay_contract::RELAYED_FAMILY_RELEASE_ID_V1),
+            crate::id32::to_hex(&dclutch_source::relay::RELAYED_FAMILY_RELEASE_ID_V1),
+            crate::id32::to_hex(&dclutch_source::relay::RELAYED_FAMILY_RELEASE_ID_V1),
             crate::id32::to_hex(&[9u8; 32]),
         );
         assert!(
@@ -1009,7 +1009,7 @@ admitted_data_lens = [40]
              market = \"11111111111111111111111111111113\"\ngeneration = 1\n\
              relayer_key_set = \"11111111111111111111111111111114\"\n\
              relayer_key_set_staging_vacancy = \"11111111111111111111111111111115\"\n",
-            devnet = base58(&dclutch_relay_contract::SOLANA_DEVNET_GENESIS_HASH_V1),
+            devnet = base58(&dclutch_source::relay::SOLANA_DEVNET_GENESIS_HASH_V1),
         )
     }
 
@@ -1025,7 +1025,7 @@ admitted_data_lens = [40]
         assert!(!submit.allow_public_submission);
         assert_eq!(
             submit.expected_genesis_hash,
-            dclutch_relay_contract::SOLANA_DEVNET_GENESIS_HASH_V1
+            dclutch_source::relay::SOLANA_DEVNET_GENESIS_HASH_V1
         );
     }
 
@@ -1141,7 +1141,7 @@ admitted_data_lens = [40]
 
     #[test]
     fn a_rehearsal_twin_moves_the_attested_identity_and_the_set_derivation() {
-        let devnet = base58(&dclutch_relay_contract::SOLANA_DEVNET_GENESIS_HASH_V1);
+        let devnet = base58(&dclutch_source::relay::SOLANA_DEVNET_GENESIS_HASH_V1);
         let plain = load(&minimal("")).expect("config");
         let text = minimal("").replace(
             "expected_genesis_hash = \"5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d\"",
@@ -1154,11 +1154,11 @@ admitted_data_lens = [40]
         let twin = load(&text).expect("rehearsal config");
         assert_eq!(
             twin.attested_cluster_id(),
-            dclutch_relay_contract::SOLANA_MAINNET_GENESIS_HASH_V1
+            dclutch_source::relay::SOLANA_MAINNET_GENESIS_HASH_V1
         );
         assert_eq!(
             twin.expected_genesis_hash,
-            dclutch_relay_contract::SOLANA_DEVNET_GENESIS_HASH_V1
+            dclutch_source::relay::SOLANA_DEVNET_GENESIS_HASH_V1
         );
         // The set identity binds the CLAIMED cluster, so the rehearsal derives
         // the same pin the honest mainnet observer would.
@@ -1187,7 +1187,7 @@ admitted_data_lens = [40]
                 "rpc_endpoints = [\"http://127.0.0.1:8899\"]",
                 "rpc_endpoints = [\"https://api.mainnet-beta.solana.com\"]",
             ),
-            base58(&dclutch_relay_contract::SOLANA_DEVNET_GENESIS_HASH_V1),
+            base58(&dclutch_source::relay::SOLANA_DEVNET_GENESIS_HASH_V1),
         );
         assert!(
             load(&text).is_err(),
@@ -1208,8 +1208,8 @@ admitted_data_lens = [40]
              relayer_key_set = \"11111111111111111111111111111114\"\n\
              relayer_key_set_staging_vacancy = \"11111111111111111111111111111115\"\n",
             minimal(""),
-            base58(&dclutch_relay_contract::SOLANA_DEVNET_GENESIS_HASH_V1),
-            base58(&dclutch_relay_contract::SOLANA_DEVNET_GENESIS_HASH_V1),
+            base58(&dclutch_source::relay::SOLANA_DEVNET_GENESIS_HASH_V1),
+            base58(&dclutch_source::relay::SOLANA_DEVNET_GENESIS_HASH_V1),
         );
         assert!(load(&text).is_err());
     }

@@ -15,9 +15,9 @@
 use std::vec::Vec;
 
 use dclutch_core_contract::ContentId;
-use dclutch_registry_contract::{ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1};
-use dclutch_registry_svm::batch_v2::{RoleBatchRequestV2, RoleDeploymentObservationV2};
-use dclutch_release_set_contract::ExecutionRoleV1;
+use dclutch_registry::{ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1};
+use dclutch_registry::svm::batch_v2::{RoleBatchRequestV2, RoleDeploymentObservationV2};
+use dclutch_registry::release_set::ExecutionRoleV1;
 use solana_program::{
     account_info::AccountInfo, entrypoint::ProgramResult, hash::hash, program_error::ProgramError,
     pubkey::Pubkey,
@@ -114,7 +114,7 @@ fn authenticate_role(
 fn encode_observation(
     role: ExecutionRoleV1,
     release: ArtifactReleaseV1,
-    artifact_release_id: dclutch_release_set_contract::ArtifactReleaseIdV1,
+    artifact_release_id: dclutch_registry::release_set::ArtifactReleaseIdV1,
 ) -> Result<RoleDeploymentObservationV2, ProgramError> {
     RoleDeploymentObservationV2::new(
         role,

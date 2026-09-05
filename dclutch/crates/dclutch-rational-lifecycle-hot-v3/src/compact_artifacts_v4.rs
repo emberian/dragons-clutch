@@ -6,7 +6,7 @@
 //! immutable effect artifact synthesizes the sole runtime-width
 //! `DCRRLC02` Claims child; no wallet-supplied coordinate DTO survives.
 
-use dclutch_account_profile_contract::{
+use dclutch_vm::account_profile::{
     lifecycle_v3::{
         CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5 as LIFECYCLE_SCHEMA_ID_V5, StateLifecyclePolicyV5,
     },
@@ -22,11 +22,11 @@ use dclutch_account_profile_contract::{
         },
     },
 };
-use dclutch_capability_program_contract::v4::{
+use dclutch_market::capability_program::v4::{
     ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4, CapabilityProgramV4,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_effect_kernel::{
+use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{
         HEADER_BYTES as EFFECT_HEADER_BYTES, OPERATION_BYTES as EFFECT_OPERATION_BYTES,
@@ -39,18 +39,18 @@ use dclutch_effect_kernel::{
         encode_program_v4_atomic,
     },
 };
-use dclutch_execution_strategy_contract::v2::{
+use dclutch_market::execution_strategy::v2::{
     ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_PROGRAM_BYTES_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
     ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
-use dclutch_product_payoff_v2_codec::runtime_v3::{BASIS_WIDTH_OFFSET_V3, ProductBasisV3};
-use dclutch_rational_representation_v2_contract::AuthenticatedTokenBehaviorV2;
-use dclutch_rational_representation_v2_kernel::{
+use dclutch_product::payoff::runtime_v3::{BASIS_WIDTH_OFFSET_V3, ProductBasisV3};
+use dclutch_claims::rational::AuthenticatedTokenBehaviorV2;
+use dclutch_claims::rational_kernel::{
     DESCRIPTOR_HEADER_BYTES, RepresentationDescriptorV2,
 };
-use dclutch_rational_representation_v2_lifecycle_contract::{
+use dclutch_claims::rational_lifecycle::{
     ABSENT_POSITION_REVISION_V2, LIFECYCLE_COMMON_ACCOUNT_COUNT_V2, LIFECYCLE_COORDINATE_BYTES_V2,
     LIFECYCLE_HEADER_BYTES_V2, LIFECYCLE_REQUEST_MAGIC_V2, LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2,
     LIFECYCLE_VERSION_V2, LifecycleActionV2,
@@ -83,7 +83,7 @@ use dclutch_rational_representation_v2_lifecycle_contract::{
         RationalLifecycleHotLayoutV3,
     },
 };
-use dclutch_request_profile_contract::{
+use dclutch_vm::request_profile::{
     HEADER_BYTES as REQUEST_HEADER_BYTES, OPERATION_BYTES as REQUEST_OPERATION_BYTES,
     RequestProfileV1,
     encode::{
@@ -91,11 +91,11 @@ use dclutch_request_profile_contract::{
         ScalarRegisterV1, encode_request_profile_v1_atomic,
     },
 };
-use dclutch_token_svm::{
+use dclutch_custody::token_svm::{
     TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
     TokenBehaviorSelectionV2,
 };
-use dclutch_transition_vm::v3::{
+use dclutch_vm::v3::{
     HEADER_BYTES as TRANSITION_HEADER_BYTES, INSTRUCTION_BYTES as TRANSITION_INSTRUCTION_BYTES,
     InstructionV3, ProgramGeometryV3, ScalarRegisterV3, encode_program_atomic,
 };
@@ -271,7 +271,7 @@ pub fn build_rational_lifecycle_compact_bundle_v4(
     let lifecycle_id = digest(&lifecycle_policy)?;
     let strategy_value = ExecutionStrategyProgramV2::new(
         StrategyDispositionV2::Interpreted,
-        content(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID)?,
+        content(dclutch_vm::v3::SCHEMA_RELEASE_ID)?,
         digest(&artifacts.transition)?,
         content(EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2)?,
         None,
@@ -297,11 +297,11 @@ pub fn build_rational_lifecycle_compact_bundle_v4(
         content(input.capacity_profile)?,
         CapabilityArtifactsV4 {
             account_profile: artifact(
-                dclutch_account_profile_contract::v2::SCHEMA_RELEASE_ID,
+                dclutch_vm::account_profile::v2::SCHEMA_RELEASE_ID,
                 digest(&artifacts.account_profile)?.to_bytes(),
             )?,
             request_profile: artifact(
-                dclutch_request_profile_contract::SCHEMA_RELEASE_ID,
+                dclutch_vm::request_profile::SCHEMA_RELEASE_ID,
                 digest(&artifacts.request_profile)?.to_bytes(),
             )?,
             lifecycle: artifact(LIFECYCLE_SCHEMA_ID_V5, lifecycle_id.to_bytes())?,
@@ -310,7 +310,7 @@ pub fn build_rational_lifecycle_compact_bundle_v4(
                 digest(&strategy)?.to_bytes(),
             )?,
             transition: artifact(
-                dclutch_transition_vm::v3::SCHEMA_RELEASE_ID,
+                dclutch_vm::v3::SCHEMA_RELEASE_ID,
                 digest(&artifacts.transition)?.to_bytes(),
             )?,
             effect: artifact(EFFECT_SCHEMA_ID_V4, digest(&artifacts.effect)?.to_bytes())?,
@@ -375,7 +375,7 @@ pub fn build_rational_lifecycle_compact_bundle_v6(
     let lifecycle_id = digest(&lifecycle_policy)?;
     let strategy = ExecutionStrategyProgramV2::new(
         StrategyDispositionV2::Interpreted,
-        content(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID)?,
+        content(dclutch_vm::v3::SCHEMA_RELEASE_ID)?,
         digest(&artifacts.transition)?,
         content(EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2)?,
         None,
@@ -395,11 +395,11 @@ pub fn build_rational_lifecycle_compact_bundle_v6(
         content(input.capacity_profile)?,
         CapabilityArtifactsV4 {
             account_profile: artifact(
-                dclutch_account_profile_contract::v2::SCHEMA_RELEASE_ID,
+                dclutch_vm::account_profile::v2::SCHEMA_RELEASE_ID,
                 digest(&artifacts.account_profile)?.to_bytes(),
             )?,
             request_profile: artifact(
-                dclutch_request_profile_contract::SCHEMA_RELEASE_ID,
+                dclutch_vm::request_profile::SCHEMA_RELEASE_ID,
                 digest(&artifacts.request_profile)?.to_bytes(),
             )?,
             lifecycle: artifact(LIFECYCLE_SCHEMA_ID_V5, lifecycle_id.to_bytes())?,
@@ -408,7 +408,7 @@ pub fn build_rational_lifecycle_compact_bundle_v6(
                 digest(&strategy)?.to_bytes(),
             )?,
             transition: artifact(
-                dclutch_transition_vm::v3::SCHEMA_RELEASE_ID,
+                dclutch_vm::v3::SCHEMA_RELEASE_ID,
                 digest(&artifacts.transition)?.to_bytes(),
             )?,
             effect: artifact(EFFECT_SCHEMA_ID_V4, digest(&artifacts.effect)?.to_bytes())?,
@@ -451,7 +451,7 @@ pub fn validate_rational_lifecycle_compact_bundle_v4(
         &bundle.request_profile,
     )
     .map_err(Error::RequestProfile)?;
-    let transition = dclutch_transition_vm::v3::ProgramV3::decode(&bundle.transition)
+    let transition = dclutch_vm::v3::ProgramV3::decode(&bundle.transition)
         .map_err(Error::Transition)?;
     let strategy = ExecutionStrategyProgramV2::decode(&bundle.strategy).map_err(Error::Strategy)?;
     let lifecycle_id = digest(&bundle.lifecycle_policy)?;
@@ -485,12 +485,12 @@ pub fn validate_rational_lifecycle_compact_bundle_v4(
         || descriptor.derivation_policy() != lifecycle_id
         || descriptor.account_profile()
             != artifact(
-                dclutch_account_profile_contract::v2::SCHEMA_RELEASE_ID,
+                dclutch_vm::account_profile::v2::SCHEMA_RELEASE_ID,
                 digest(&bundle.account_profile)?.to_bytes(),
             )?
         || descriptor.request_profile()
             != artifact(
-                dclutch_request_profile_contract::SCHEMA_RELEASE_ID,
+                dclutch_vm::request_profile::SCHEMA_RELEASE_ID,
                 digest(&bundle.request_profile)?.to_bytes(),
             )?
         || descriptor.lifecycle() != artifact(LIFECYCLE_SCHEMA_ID_V5, lifecycle_id.to_bytes())?
@@ -501,7 +501,7 @@ pub fn validate_rational_lifecycle_compact_bundle_v4(
             )?
         || descriptor.transition()
             != artifact(
-                dclutch_transition_vm::v3::SCHEMA_RELEASE_ID,
+                dclutch_vm::v3::SCHEMA_RELEASE_ID,
                 digest(&bundle.transition)?.to_bytes(),
             )?
         || descriptor.effect() != artifact(EFFECT_SCHEMA_ID_V4, digest(&bundle.effect)?.to_bytes())?
@@ -566,8 +566,8 @@ pub fn validate_rational_lifecycle_compact_bundle_for_authenticated_selection_v4
 fn geometry_matches(
     account: AccountProfileV2<'_>,
     request: RequestProfileV1<'_>,
-    transition: dclutch_transition_vm::v3::ProgramV3<'_>,
-    effect: dclutch_effect_kernel::v3::ProgramV3<'_>,
+    transition: dclutch_vm::v3::ProgramV3<'_>,
+    effect: dclutch_vm::effect::v3::ProgramV3<'_>,
     scalars: u16,
     identities: u16,
 ) -> bool {
@@ -692,7 +692,7 @@ fn encode_account_profile(
         let prestate = match index {
             4 => {
                 value.data_length =
-                    narrow_u32(dclutch_product_payoff_v2_codec::runtime_v3::BASIS_HEADER_BYTES_V3)?;
+                    narrow_u32(dclutch_product::payoff::runtime_v3::BASIS_HEADER_BYTES_V3)?;
                 AccountPrestateV2::AdapterAuthenticatedVariableData
             }
             14 => {
@@ -1254,21 +1254,21 @@ fn project_u64(offset: usize, register: usize) -> Result<RequestInstructionV1> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_account_profile_contract::{
+    use dclutch_vm::account_profile::{
         lifecycle_v3::{
             HEADER_BYTES as LIFECYCLE_HEADER_BYTES, encode::encode_lifecycle_policy_v5_atomic,
         },
         v2::{AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE},
     };
-    use dclutch_effect_kernel::v4::ProgramV4 as EffectProgramV4;
-    use dclutch_product_payoff_v2_codec::runtime_v3::{
+    use dclutch_vm::effect::v4::ProgramV4 as EffectProgramV4;
+    use dclutch_product::payoff::runtime_v3::{
         BASIS_HEADER_BYTES_V3, BasisInputV3, BasisKindV3, compile_basis_v3,
     };
-    use dclutch_rational_representation_v2_contract::RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2;
-    use dclutch_rational_representation_v2_contract::{
+    use dclutch_claims::rational::RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2;
+    use dclutch_claims::rational::{
         TokenBehaviorRecordAdmissionV2, authenticate_token_behavior_v2,
     };
-    use dclutch_rational_representation_v2_kernel::{
+    use dclutch_claims::rational_kernel::{
         DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_MAGIC_V3, DESCRIPTOR_SCHEMA_VERSION_V3,
         DescriptorAdmissionV2,
     };
@@ -1282,8 +1282,8 @@ mod tests {
     /// Market field. The surrounding fixture writes the same coordinate as a
     /// bare `112`.
     const FIXTURE_DESCRIPTOR_MARKET_OFFSET: usize = 112;
-    use dclutch_request_profile_contract::RequestProfileV1;
-    use dclutch_transition_vm::v3::{
+    use dclutch_vm::request_profile::RequestProfileV1;
+    use dclutch_vm::v3::{
         ProgramV3 as TransitionProgramV3, RegisterInput, RegisterOutput, execute_fold_atomic,
     };
 
@@ -1328,7 +1328,7 @@ mod tests {
             (112, id(14)),
             (144, id(15)),
             (176, id(16)),
-            (208, dclutch_token_svm::TOKEN_2022_PROGRAM_ID),
+            (208, dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID),
         ] {
             put(&mut output, offset, &value).expect("identity");
         }
@@ -1463,7 +1463,7 @@ mod tests {
         product_width: u64,
         representation_width: u64,
         outcomes: [u64; 3],
-    ) -> dclutch_transition_vm::v3::Result<()> {
+    ) -> dclutch_vm::v3::Result<()> {
         let layout = RationalLifecycleCompactHotRegisterLayoutV4::new(3);
         let rows = outcomes
             .into_iter()

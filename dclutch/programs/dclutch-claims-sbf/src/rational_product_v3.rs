@@ -8,22 +8,20 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 
-use dclutch_claims_svm::liability_basis_state_v2::{
+use dclutch_claims::liability_basis_state_v2::{
     LiabilityBasisMarketViewV2 as MarketViewV2, LiabilityBasisPositionViewV2 as PositionViewV2,
 };
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
-use dclutch_product_runtime_v2::ContentId;
-use dclutch_product_runtime_v2_svm_reader::{
-    FinalizedRecordFrameV2, ProductRuntimeFrameV3,
-    representation_v3::{
-        RepresentationRuntimeContextV3, RepresentationRuntimeFrameV3,
-        authenticate_product_representation_v3,
-    },
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
+use dclutch_product::ContentId;
+use dclutch_claims::product_representation_reader_v3::{
+    RepresentationRuntimeContextV3, RepresentationRuntimeFrameV3,
+    authenticate_product_representation_v3,
 };
-use dclutch_rational_representation_v2_contract::{
+use dclutch_product::svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV3};
+use dclutch_claims::rational::{
     RepresentationActionV2, RepresentationRequestV2,
 };
-use dclutch_rational_representation_v2_kernel::product_v3::RepresentationAdmissionV3;
+use dclutch_claims::rational_kernel::product_v3::RepresentationAdmissionV3;
 use solana_program::{account_info::AccountInfo, program_error::ProgramError, pubkey::Pubkey};
 
 use super::{

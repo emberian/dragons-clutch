@@ -148,7 +148,7 @@ dependencies = [
  "openssl",
  "solana-ed25519-program",
  "solana-keccak-hasher",
- "solana-message 4.6.0",
+ "solana-message 4.5.0",
  "solana-precompile-error",
  "solana-pubkey 4.3.0",
  "solana-sdk-ids",
@@ -215,14 +215,14 @@ checksum = "83adf0eb2a269e96090deb451df68e72ed03bc3005bd8222dd82bdf33f8fbd08"
 dependencies = [
  "bytes",
  "solana-hash 4.6.0",
- "solana-message 4.6.0",
- "solana-packet 4.3.0",
+ "solana-message 4.5.0",
+ "solana-packet",
  "solana-pubkey 4.3.0",
  "solana-sdk-ids",
  "solana-short-vec",
  "solana-signature",
  "solana-svm-transaction",
- "solana-transaction 4.3.0",
+ "solana-transaction 4.2.0",
 ]
 
 [[package]]
@@ -1516,431 +1516,55 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 
 [[package]]
-name = "dclutch-accelerator-sbf"
-version = "0.1.0"
-dependencies = [
- "dclutch-account-profile-contract",
- "dclutch-capability-contract",
- "dclutch-capability-program-contract",
- "dclutch-core-contract",
- "dclutch-effect-kernel",
- "dclutch-execution-strategy-contract",
- "dclutch-general-adapter-contract",
- "dclutch-general-codec",
- "dclutch-general-config-contract",
- "dclutch-market-core-codec",
- "dclutch-product-runtime-v2-svm-reader",
- "dclutch-record-contract",
- "dclutch-refusal-registry",
- "dclutch-request-profile-contract",
- "dclutch-sbf-bump-heap",
- "dclutch-series-v3-kernel",
- "dclutch-sha256-adapter",
- "dclutch-shadow-accelerator-auth-v4",
- "dclutch-trading-sbf",
- "dclutch-transition-vm",
- "solana-compute-budget-interface",
- "solana-instructions-sysvar 3.0.1",
- "solana-program",
- "solana-sdk-ids",
-]
-
-[[package]]
-name = "dclutch-accelerator-series-program-test"
-version = "0.1.0"
-dependencies = [
- "dclutch-accelerator-sbf",
- "dclutch-core-contract",
- "dclutch-series-shadow-bundle-generator",
- "sha2 0.10.9",
- "solana-account 4.6.0",
- "solana-program",
- "solana-program-test",
- "solana-sdk",
- "solana-sdk-ids",
-]
-
-[[package]]
-name = "dclutch-account-profile-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-capability-seal-contract",
- "dclutch-effect-kernel",
- "dclutch-transition-vm",
-]
-
-[[package]]
-name = "dclutch-capability-activation-codec"
-version = "0.1.0"
-dependencies = [
- "dclutch-account-profile-contract",
- "dclutch-capability-contract",
- "dclutch-capability-program-contract",
- "dclutch-core-contract",
- "dclutch-effect-kernel",
- "dclutch-sha256-adapter",
- "dclutch-transition-vm",
-]
-
-[[package]]
-name = "dclutch-capability-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-core-contract",
- "dclutch-sha256-adapter",
-]
-
-[[package]]
-name = "dclutch-capability-program-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-account-profile-contract",
- "dclutch-capability-contract",
- "dclutch-core-contract",
- "dclutch-release-set-contract",
- "dclutch-transition-vm",
-]
-
-[[package]]
-name = "dclutch-capability-seal-contract"
-version = "0.1.0"
-
-[[package]]
-name = "dclutch-claims-svm"
-version = "0.1.0"
-dependencies = [
- "dclutch-effect-kernel",
- "dclutch-product-payoff-v2-codec",
- "dclutch-rational-representation-v2-kernel",
- "dclutch-rational-representation-v2-lifecycle-contract",
- "dclutch-rational-representation-v2-request-contract",
- "dclutch-representation-composition-v3-kernel",
- "dclutch-sha256-adapter",
-]
-
-[[package]]
 name = "dclutch-core-contract"
 version = "0.1.0"
 
 [[package]]
-name = "dclutch-custody-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-market-core-codec",
- "dclutch-release-set-contract",
- "dclutch-sha256-adapter",
-]
-
-[[package]]
-name = "dclutch-dealer-codec"
-version = "0.1.0"
-dependencies = [
- "dclutch-dealer-scenario-kernel",
-]
-
-[[package]]
-name = "dclutch-dealer-scenario-kernel"
+name = "dclutch-direct-aot-contract"
 version = "0.1.0"
 
 [[package]]
-name = "dclutch-direct-codec"
+name = "dclutch-direct-relation-cu-harness"
 version = "0.1.0"
 dependencies = [
- "dclutch-account-profile-contract",
- "dclutch-capability-contract",
- "dclutch-capability-program-contract",
- "dclutch-claims-svm",
  "dclutch-core-contract",
- "dclutch-custody-contract",
- "dclutch-effect-kernel",
- "dclutch-execution-strategy-contract",
- "dclutch-market-core-codec",
- "dclutch-product-payoff-v2-codec",
- "dclutch-product-runtime-v2",
- "dclutch-product-runtime-v2-admission",
- "dclutch-protocol-parameters-contract",
- "dclutch-realm-contract",
- "dclutch-registry-contract",
- "dclutch-registry-svm",
- "dclutch-rent-contract",
- "dclutch-request-profile-contract",
- "dclutch-sha256-adapter",
- "dclutch-token-svm",
- "dclutch-transition-vm",
-]
-
-[[package]]
-name = "dclutch-economic-slice-kernel"
-version = "0.1.0"
-
-[[package]]
-name = "dclutch-effect-kernel"
-version = "0.1.0"
-dependencies = [
- "dclutch-capability-seal-contract",
-]
-
-[[package]]
-name = "dclutch-execution-strategy-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-capability-program-contract",
- "dclutch-core-contract",
- "dclutch-release-set-contract",
- "dclutch-sha256-adapter",
-]
-
-[[package]]
-name = "dclutch-fractional-claim-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-account-profile-contract",
- "dclutch-capability-program-contract",
- "dclutch-claims-svm",
- "dclutch-core-contract",
- "dclutch-effect-kernel",
- "dclutch-execution-strategy-contract",
- "dclutch-fractional-claim-kernel",
- "dclutch-request-profile-contract",
- "dclutch-token-svm",
- "dclutch-transition-vm",
- "sha2 0.10.9",
-]
-
-[[package]]
-name = "dclutch-fractional-claim-kernel"
-version = "0.1.0"
-dependencies = [
- "dclutch-representation-composition-v3-kernel",
-]
-
-[[package]]
-name = "dclutch-general-adapter-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-account-profile-contract",
- "dclutch-capability-activation-codec",
- "dclutch-capability-program-contract",
- "dclutch-claims-svm",
- "dclutch-core-contract",
- "dclutch-custody-contract",
- "dclutch-effect-kernel",
- "dclutch-execution-strategy-contract",
- "dclutch-general-codec",
- "dclutch-general-config-contract",
- "dclutch-product-runtime-v2",
- "dclutch-product-runtime-v2-admission",
- "dclutch-release-set-contract",
- "dclutch-request-profile-contract",
- "dclutch-sha256-adapter",
- "dclutch-transition-vm",
-]
-
-[[package]]
-name = "dclutch-general-codec"
-version = "0.1.0"
-
-[[package]]
-name = "dclutch-general-config-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-capability-contract",
- "dclutch-core-contract",
-]
-
-[[package]]
-name = "dclutch-market-core-codec"
-version = "0.1.0"
-dependencies = [
- "dclutch-release-set-contract",
- "dclutch-sha256-adapter",
-]
-
-[[package]]
-name = "dclutch-product-payoff-v2-codec"
-version = "0.1.0"
-dependencies = [
- "dclutch-product-runtime-v2",
- "dclutch-sha256-adapter",
-]
-
-[[package]]
-name = "dclutch-product-runtime-v2"
-version = "0.1.0"
-
-[[package]]
-name = "dclutch-product-runtime-v2-admission"
-version = "0.1.0"
-dependencies = [
- "dclutch-product-runtime-v2",
-]
-
-[[package]]
-name = "dclutch-product-runtime-v2-svm-reader"
-version = "0.1.0"
-dependencies = [
- "dclutch-capability-contract",
- "dclutch-product-payoff-v2-codec",
- "dclutch-product-runtime-v2",
- "dclutch-product-runtime-v2-admission",
- "dclutch-rational-representation-v2-kernel",
- "dclutch-record-contract",
- "dclutch-representation-composition-v3-kernel",
+ "dclutch-direct-aot-contract",
+ "dclutch-market",
+ "solana-hash 4.6.0",
+ "solana-message 4.5.0",
  "solana-program",
- "solana-sdk-ids",
+ "solana-program-test",
+ "solana-sdk",
+ "solana-transaction 4.2.0",
+ "tokio",
 ]
 
 [[package]]
-name = "dclutch-protocol-parameters-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-sha256-adapter",
-]
-
-[[package]]
-name = "dclutch-rational-representation-v2-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-claims-svm",
- "dclutch-custody-contract",
- "dclutch-rational-representation-v2-kernel",
- "dclutch-rational-representation-v2-request-contract",
- "dclutch-representation-composition-v3-kernel",
- "dclutch-token-svm",
-]
-
-[[package]]
-name = "dclutch-rational-representation-v2-kernel"
-version = "0.1.0"
-dependencies = [
- "dclutch-product-payoff-v2-codec",
- "dclutch-representation-composition-v3-kernel",
-]
-
-[[package]]
-name = "dclutch-rational-representation-v2-lifecycle-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-rational-representation-v2-kernel",
- "dclutch-token-svm",
-]
-
-[[package]]
-name = "dclutch-rational-representation-v2-request-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-token-svm",
-]
-
-[[package]]
-name = "dclutch-realm-contract"
-version = "0.1.0"
-
-[[package]]
-name = "dclutch-record-contract"
-version = "0.1.0"
-
-[[package]]
-name = "dclutch-refusal-registry"
-version = "0.1.0"
-
-[[package]]
-name = "dclutch-registry-activation-auth-v1"
-version = "0.1.0"
-dependencies = [
- "dclutch-registry-contract",
- "dclutch-registry-svm",
- "dclutch-release-set-contract",
- "solana-program",
- "solana-sdk-ids",
-]
-
-[[package]]
-name = "dclutch-registry-contract"
+name = "dclutch-direct-relation-twin"
 version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
- "dclutch-release-set-contract",
-]
-
-[[package]]
-name = "dclutch-registry-svm"
-version = "0.1.0"
-dependencies = [
- "dclutch-core-contract",
- "dclutch-release-set-contract",
-]
-
-[[package]]
-name = "dclutch-release-set-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-core-contract",
-]
-
-[[package]]
-name = "dclutch-rent-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-market-core-codec",
-]
-
-[[package]]
-name = "dclutch-representation-composition-v3-kernel"
-version = "0.1.0"
-
-[[package]]
-name = "dclutch-request-profile-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-capability-seal-contract",
-]
-
-[[package]]
-name = "dclutch-resolution-codec"
-version = "0.1.0"
-dependencies = [
- "dclutch-market-core-codec",
- "dclutch-sha256-adapter",
-]
-
-[[package]]
-name = "dclutch-sbf-bump-heap"
-version = "0.1.0"
-dependencies = [
+ "dclutch-direct-aot-contract",
+ "dclutch-market",
+ "dclutch-vm",
  "solana-program",
 ]
 
 [[package]]
-name = "dclutch-series-shadow-bundle-generator"
+name = "dclutch-market"
 version = "0.1.0"
 dependencies = [
- "dclutch-account-profile-contract",
- "dclutch-capability-program-contract",
- "dclutch-claims-svm",
  "dclutch-core-contract",
- "dclutch-custody-contract",
- "dclutch-effect-kernel",
- "dclutch-execution-strategy-contract",
- "dclutch-market-core-codec",
- "dclutch-product-runtime-v2",
- "dclutch-product-runtime-v2-admission",
- "dclutch-record-contract",
- "dclutch-request-profile-contract",
- "dclutch-series-v3-kernel",
- "dclutch-trading-sbf",
- "dclutch-transition-vm",
- "sha2 0.10.9",
+ "dclutch-registry",
+ "dclutch-sha256-adapter",
+ "dclutch-vm",
 ]
 
 [[package]]
-name = "dclutch-series-v3-kernel"
+name = "dclutch-registry"
 version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
- "dclutch-market-core-codec",
- "dclutch-rent-contract",
- "dclutch-sha256-adapter",
 ]
 
 [[package]]
@@ -1952,81 +1576,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-shadow-accelerator-auth-v4"
+name = "dclutch-vm"
 version = "0.1.0"
-dependencies = [
- "dclutch-core-contract",
- "dclutch-execution-strategy-contract",
- "dclutch-registry-contract",
- "dclutch-registry-svm",
- "dclutch-release-set-contract",
- "solana-program",
- "solana-sdk-ids",
-]
-
-[[package]]
-name = "dclutch-token-svm"
-version = "0.1.0"
-
-[[package]]
-name = "dclutch-trading-sbf"
-version = "0.1.0"
-dependencies = [
- "dclutch-account-profile-contract",
- "dclutch-capability-activation-codec",
- "dclutch-capability-contract",
- "dclutch-capability-program-contract",
- "dclutch-capability-seal-contract",
- "dclutch-claims-svm",
- "dclutch-core-contract",
- "dclutch-custody-contract",
- "dclutch-dealer-codec",
- "dclutch-direct-codec",
- "dclutch-economic-slice-kernel",
- "dclutch-effect-kernel",
- "dclutch-execution-strategy-contract",
- "dclutch-fractional-claim-contract",
- "dclutch-market-core-codec",
- "dclutch-product-runtime-v2",
- "dclutch-product-runtime-v2-svm-reader",
- "dclutch-rational-representation-v2-contract",
- "dclutch-rational-representation-v2-lifecycle-contract",
- "dclutch-realm-contract",
- "dclutch-record-contract",
- "dclutch-refusal-registry",
- "dclutch-registry-activation-auth-v1",
- "dclutch-registry-contract",
- "dclutch-registry-svm",
- "dclutch-release-set-contract",
- "dclutch-rent-contract",
- "dclutch-request-profile-contract",
- "dclutch-resolution-codec",
- "dclutch-sbf-bump-heap",
- "dclutch-series-v3-kernel",
- "dclutch-sha256-adapter",
- "dclutch-shadow-accelerator-auth-v4",
- "dclutch-token-svm",
- "dclutch-transition-vm",
- "dclutch-user-position-admission-contract",
- "solana-instructions-sysvar 3.0.1",
- "solana-program",
- "solana-sdk-ids",
- "solana-system-interface 2.0.0",
-]
-
-[[package]]
-name = "dclutch-transition-vm"
-version = "0.1.0"
-dependencies = [
- "dclutch-capability-seal-contract",
-]
-
-[[package]]
-name = "dclutch-user-position-admission-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-claims-svm",
-]
 
 [[package]]
 name = "defmt"
@@ -2856,9 +2407,9 @@ dependencies = [
 
 [[package]]
 name = "hyper"
-version = "1.11.0"
+version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d22053281f852e11534f5198498373cbb59295120a20771d90f7ed1897490a72"
+checksum = "27b501faa50e7a26c3d3560ca625132f4078a17771f4810baf70475ae48cbe43"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -3076,9 +2627,9 @@ dependencies = [
 
 [[package]]
 name = "indexmap"
-version = "2.14.0"
+version = "2.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d466e9454f08e4a911e14806c24e16fba1b4c121d1ea474396f396069cf949d9"
+checksum = "07aa2048142242915a31d35844fb311e0e53fcca590c3a0a40dcf1b841fa09eb"
 dependencies = [
  "equivalent",
  "hashbrown 0.17.1",
@@ -5009,7 +4560,7 @@ dependencies = [
  "solana-hash 4.6.0",
  "solana-lattice-hash",
  "solana-measure",
- "solana-message 4.6.0",
+ "solana-message 4.5.0",
  "solana-metrics",
  "solana-nohash-hasher",
  "solana-nonce",
@@ -5021,7 +4572,7 @@ dependencies = [
  "solana-system-interface 3.3.0",
  "solana-sysvar 4.3.0",
  "solana-time-utils",
- "solana-transaction 4.3.0",
+ "solana-transaction 4.2.0",
  "solana-transaction-context",
  "solana-transaction-error",
  "spl-generic-token",
@@ -5104,13 +4655,13 @@ dependencies = [
  "solana-clock",
  "solana-commitment-config",
  "solana-hash 4.6.0",
- "solana-message 4.6.0",
+ "solana-message 4.5.0",
  "solana-program-pack",
  "solana-pubkey 4.3.0",
  "solana-rent 4.4.0",
  "solana-signature",
  "solana-sysvar-id",
- "solana-transaction 4.3.0",
+ "solana-transaction 4.2.0",
  "solana-transaction-context",
  "solana-transaction-error",
  "tarpc",
@@ -5131,10 +4682,10 @@ dependencies = [
  "solana-clock",
  "solana-commitment-config",
  "solana-hash 4.6.0",
- "solana-message 4.6.0",
+ "solana-message 4.5.0",
  "solana-pubkey 4.3.0",
  "solana-signature",
- "solana-transaction 4.3.0",
+ "solana-transaction 4.2.0",
  "solana-transaction-context",
  "solana-transaction-error",
  "tarpc",
@@ -5153,13 +4704,13 @@ dependencies = [
  "solana-clock",
  "solana-commitment-config",
  "solana-hash 4.6.0",
- "solana-message 4.6.0",
+ "solana-message 4.5.0",
  "solana-pubkey 4.3.0",
  "solana-runtime",
  "solana-runtime-transaction",
  "solana-send-transaction-service",
  "solana-signature",
- "solana-transaction 4.3.0",
+ "solana-transaction 4.2.0",
  "solana-transaction-error",
  "tarpc",
  "tokio",
@@ -5285,7 +4836,7 @@ dependencies = [
  "solana-clock",
  "solana-instruction",
  "solana-loader-v3-interface",
- "solana-packet 4.3.0",
+ "solana-packet",
  "solana-program-runtime",
  "solana-pubkey 4.3.0",
  "solana-sbpf",
@@ -5362,12 +4913,12 @@ dependencies = [
  "solana-hash 4.6.0",
  "solana-instruction",
  "solana-keypair",
- "solana-message 4.6.0",
+ "solana-message 4.5.0",
  "solana-pubkey 4.3.0",
  "solana-signature",
  "solana-signer",
  "solana-system-interface 3.3.0",
- "solana-transaction 4.3.0",
+ "solana-transaction 4.2.0",
  "solana-transaction-error",
 ]
 
@@ -5485,7 +5036,7 @@ dependencies = [
  "solana-clock",
  "solana-compute-budget",
  "solana-metrics",
- "solana-packet 4.3.0",
+ "solana-packet",
  "solana-pubkey 4.3.0",
  "solana-runtime-transaction",
  "solana-sdk-ids",
@@ -5603,13 +5154,13 @@ dependencies = [
  "solana-hash 4.6.0",
  "solana-measure",
  "solana-merkle-tree",
- "solana-message 4.6.0",
- "solana-packet 4.3.0",
+ "solana-message 4.5.0",
+ "solana-packet",
  "solana-perf",
  "solana-runtime-transaction",
  "solana-sha256-hasher",
  "solana-signature",
- "solana-transaction 4.3.0",
+ "solana-transaction 4.2.0",
  "solana-transaction-error",
  "thiserror 2.0.20",
  "wincode",
@@ -6066,9 +5617,9 @@ dependencies = [
 
 [[package]]
 name = "solana-message"
-version = "4.6.0"
+version = "4.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef4b58f6d685adebefc945f28cf051cf3c11e295233e6dd3adfc0a71c3c6fb76"
+checksum = "188f4df6f4f4d5bd8b9d82aee0f053b6c37826dcd96933f7b59f684b406a7b3c"
 dependencies = [
  "blake3",
  "serde",
@@ -6183,27 +5734,18 @@ dependencies = [
 
 [[package]]
 name = "solana-offchain-message"
-version = "3.0.0"
+version = "3.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6e2a1141a673f72a05cf406b99e4b2b8a457792b7c01afa07b3f00d4e2de393"
+checksum = "cb8ab5c5d46f9e080176ac2987fd81c9923def4d24c1430d82ea67095a8df131"
 dependencies = [
  "num_enum",
- "solana-hash 3.1.0",
- "solana-packet 3.0.0",
- "solana-pubkey 3.0.0",
+ "solana-hash 4.6.0",
+ "solana-packet",
+ "solana-pubkey 4.3.0",
  "solana-sanitize",
  "solana-sha256-hasher",
  "solana-signature",
  "solana-signer",
-]
-
-[[package]]
-name = "solana-packet"
-version = "3.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6edf2f25743c95229ac0fdc32f8f5893ef738dbf332c669e9861d33ddb0f469d"
-dependencies = [
- "bitflags 2.13.1",
 ]
 
 [[package]]
@@ -6241,9 +5783,9 @@ dependencies = [
  "rayon",
  "serde",
  "solana-hash 4.6.0",
- "solana-message 4.6.0",
+ "solana-message 4.5.0",
  "solana-metrics",
- "solana-packet 4.3.0",
+ "solana-packet",
  "solana-pubkey 4.3.0",
  "solana-runtime-transaction",
  "solana-sdk-ids",
@@ -6487,7 +6029,7 @@ dependencies = [
  "solana-instruction",
  "solana-keypair",
  "solana-loader-v3-interface",
- "solana-message 4.6.0",
+ "solana-message 4.5.0",
  "solana-msg",
  "solana-native-token",
  "solana-poh-config",
@@ -6507,7 +6049,7 @@ dependencies = [
  "solana-system-interface 3.3.0",
  "solana-sysvar 4.3.0",
  "solana-sysvar-id",
- "solana-transaction 4.3.0",
+ "solana-transaction 4.2.0",
  "solana-transaction-context",
  "solana-transaction-error",
  "solana-vote-program",
@@ -6615,11 +6157,11 @@ dependencies = [
  "solana-feature-gate-interface",
  "solana-hash 4.6.0",
  "solana-instruction",
- "solana-message 4.6.0",
+ "solana-message 4.5.0",
  "solana-pubkey 4.3.0",
  "solana-rpc-client-api",
  "solana-signature",
- "solana-transaction 4.3.0",
+ "solana-transaction 4.2.0",
  "solana-transaction-error",
  "solana-transaction-status-client-types",
  "solana-version",
@@ -6666,7 +6208,7 @@ dependencies = [
  "solana-fee-calculator",
  "solana-inflation",
  "solana-reward-info",
- "solana-transaction 4.3.0",
+ "solana-transaction 4.2.0",
  "solana-transaction-error",
  "solana-transaction-status-client-types",
  "solana-version",
@@ -6750,12 +6292,12 @@ dependencies = [
  "solana-leader-schedule",
  "solana-loader-v3-interface",
  "solana-measure",
- "solana-message 4.6.0",
+ "solana-message 4.5.0",
  "solana-metrics",
  "solana-native-token",
  "solana-nonce",
  "solana-nonce-account",
- "solana-packet 4.3.0",
+ "solana-packet",
  "solana-poh-config",
  "solana-precompile-error",
  "solana-program-runtime",
@@ -6786,7 +6328,7 @@ dependencies = [
  "solana-sysvar 4.3.0",
  "solana-sysvar-id",
  "solana-time-utils",
- "solana-transaction 4.3.0",
+ "solana-transaction 4.2.0",
  "solana-transaction-context",
  "solana-transaction-error",
  "solana-transaction-status",
@@ -6816,13 +6358,13 @@ dependencies = [
  "solana-compute-budget",
  "solana-compute-budget-instruction",
  "solana-hash 4.6.0",
- "solana-message 4.6.0",
+ "solana-message 4.5.0",
  "solana-program-entrypoint",
  "solana-pubkey 4.3.0",
  "solana-sdk-ids",
  "solana-signature",
  "solana-svm-transaction",
- "solana-transaction 4.3.0",
+ "solana-transaction 4.2.0",
  "solana-transaction-context",
  "solana-transaction-error",
  "wincode",
@@ -7201,7 +6743,7 @@ dependencies = [
  "solana-measure",
  "solana-metrics",
  "solana-net-utils",
- "solana-packet 4.3.0",
+ "solana-packet",
  "solana-perf",
  "solana-pubkey 4.3.0",
  "solana-signer",
@@ -7232,7 +6774,7 @@ dependencies = [
  "solana-instructions-sysvar 4.0.0",
  "solana-loader-v3-interface",
  "solana-loader-v4-interface",
- "solana-message 4.6.0",
+ "solana-message 4.5.0",
  "solana-nonce",
  "solana-nonce-account",
  "solana-program-entrypoint",
@@ -7307,11 +6849,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0afde938e0d3f06e87853e6e189396d67256e3b600675d867a47d066f8cebadb"
 dependencies = [
  "solana-hash 4.6.0",
- "solana-message 4.6.0",
+ "solana-message 4.5.0",
  "solana-pubkey 4.3.0",
  "solana-sdk-ids",
  "solana-signature",
- "solana-transaction 4.3.0",
+ "solana-transaction 4.2.0",
 ]
 
 [[package]]
@@ -7411,7 +6953,7 @@ dependencies = [
  "solana-instruction",
  "solana-nonce",
  "solana-nonce-account",
- "solana-packet 4.3.0",
+ "solana-packet",
  "solana-program-runtime",
  "solana-pubkey 4.3.0",
  "solana-sdk-ids",
@@ -7429,11 +6971,11 @@ checksum = "63f5bfbf00b68749dec8facc7c6dfe48eb42d4834b21b3fd64cd10d81f55874d"
 dependencies = [
  "solana-hash 4.6.0",
  "solana-keypair",
- "solana-message 4.6.0",
+ "solana-message 4.5.0",
  "solana-pubkey 4.3.0",
  "solana-signer",
  "solana-system-interface 3.3.0",
- "solana-transaction 4.3.0",
+ "solana-transaction 4.2.0",
 ]
 
 [[package]]
@@ -7555,7 +7097,7 @@ dependencies = [
  "solana-leader-schedule",
  "solana-measure",
  "solana-metrics",
- "solana-packet 4.3.0",
+ "solana-packet",
  "solana-pubkey 4.3.0",
  "solana-rpc-client",
  "solana-rpc-client-api",
@@ -7591,9 +7133,9 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction"
-version = "4.3.0"
+version = "4.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "444a979f617ef7ed4e01aa228800df52d0af55f533e1840e8d48d468e607885f"
+checksum = "1e8eb7c4143b2e453af994fafd68ece93bccedab8975d42e6a0b081fb727d784"
 dependencies = [
  "serde",
  "serde_derive",
@@ -7601,7 +7143,7 @@ dependencies = [
  "solana-hash 4.6.0",
  "solana-instruction",
  "solana-instruction-error",
- "solana-message 4.6.0",
+ "solana-message 4.5.0",
  "solana-sanitize",
  "solana-sdk-ids",
  "solana-short-vec",
@@ -7662,7 +7204,7 @@ dependencies = [
  "solana-instruction",
  "solana-loader-v2-interface",
  "solana-loader-v3-interface",
- "solana-message 4.6.0",
+ "solana-message 4.5.0",
  "solana-program-option",
  "solana-pubkey 4.3.0",
  "solana-reward-info",
@@ -7670,7 +7212,7 @@ dependencies = [
  "solana-signature",
  "solana-stake-interface",
  "solana-system-interface 3.3.0",
- "solana-transaction 4.3.0",
+ "solana-transaction 4.2.0",
  "solana-transaction-error",
  "solana-transaction-status-client-types",
  "solana-vote-interface",
@@ -7699,10 +7241,10 @@ dependencies = [
  "solana-account-decoder-client-types",
  "solana-commitment-config",
  "solana-instruction",
- "solana-message 4.6.0",
+ "solana-message 4.5.0",
  "solana-reward-info",
  "solana-signature",
- "solana-transaction 4.3.0",
+ "solana-transaction 4.2.0",
  "solana-transaction-context",
  "solana-transaction-error",
  "thiserror 2.0.20",
@@ -7720,7 +7262,7 @@ dependencies = [
  "solana-hash 4.6.0",
  "solana-pubkey 4.3.0",
  "solana-runtime-transaction",
- "solana-transaction 4.3.0",
+ "solana-transaction 4.2.0",
  "static_assertions",
 ]
 
@@ -7754,14 +7296,14 @@ dependencies = [
  "solana-hash 4.6.0",
  "solana-instruction",
  "solana-keypair",
- "solana-packet 4.3.0",
+ "solana-packet",
  "solana-pubkey 4.3.0",
  "solana-sdk-ids",
  "solana-serialize-utils",
  "solana-signature",
  "solana-signer",
  "solana-svm-transaction",
- "solana-transaction 4.3.0",
+ "solana-transaction 4.2.0",
  "solana-vote-interface",
  "thiserror 2.0.20",
  "wincode",
@@ -7811,7 +7353,7 @@ dependencies = [
  "solana-epoch-schedule",
  "solana-hash 4.6.0",
  "solana-instruction",
- "solana-packet 4.3.0",
+ "solana-packet",
  "solana-program-runtime",
  "solana-pubkey 4.3.0",
  "solana-rent 4.4.0",

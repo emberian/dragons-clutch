@@ -39,13 +39,13 @@ typing it is unconstructible, and the loop is enforced in real code:
 
 1. `certificate_id = sha256(certificate record bytes)` and the strategy must
    name it — `dclutch-operator/src/series_hot_v3.rs:545`,
-   `dclutch-execution-strategy-contract/src/v2.rs:524`.
+   `dclutch-market/src/v2.rs:524`.
 2. The generated bundle's strategy embeds that identity
    (`generator/src/lib.rs:229`), and `src/evaluator.rs:451` refuses unless the
    embedded strategy's `certificate_program` equals the embedded
    `SERIES_SHADOW_CERTIFICATE_ID_V1`. So it is in the ELF's bytes.
 3. `ArtifactReleaseV1` carries `elf_digest`
-   (`dclutch-registry-contract/src/artifact.rs:78`), and
+   (`dclutch-registry/src/artifact.rs:78`), and
    `artifact_release = sha256(ArtifactReleaseV1 bytes)`
    (`series_hot_v3.rs:573`).
 4. `ExecutionStrategyCertificateV2::validate_artifact` requires the certificate

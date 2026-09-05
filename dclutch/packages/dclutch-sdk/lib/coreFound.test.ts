@@ -268,7 +268,7 @@ describe('Core Found37 browser kernel', () => {
      * record the market page needs to say when a market settles. One is
      * not, and is a routed finding rather than a sixth derivation:
      * `SourceSpecV1::decode` writes its capacity-profile coordinate as a
-     * bare `144` (crates/dclutch-source-contract/src/lib.rs:917), so there
+     * bare `144` (crates/dclutch-source/src/lib.rs:917), so there
      * is no named constant for the generator to emit and nothing this
      * browser could import instead of restating it.
      */

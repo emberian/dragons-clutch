@@ -3,26 +3,26 @@ import { fileURLToPath } from 'node:url';
 
 const root = new URL('../../../', import.meta.url);
 const sources = Object.freeze({
-  hot: readFileSync(new URL('crates/dclutch-capability-program-contract/src/hot_v3.rs', root), 'utf8'),
-  request: readFileSync(new URL('crates/dclutch-general-codec/src/successor_request_v2.rs', root), 'utf8'),
-  requestV3: readFileSync(new URL('crates/dclutch-general-codec/src/successor_request_v3.rs', root), 'utf8'),
-  requestV3Generated: readFileSync(new URL('crates/dclutch-general-codec/src/generated_general_controller_request_v3.rs', root), 'utf8'),
-  controller: readFileSync(new URL('crates/dclutch-general-codec/src/generated_general_controller.rs', root), 'utf8'),
-  local: readFileSync(new URL('crates/dclutch-general-adapter-contract/src/local_state_v3.rs', root), 'utf8'),
-  collection: readFileSync(new URL('crates/dclutch-general-adapter-contract/src/collection_v1.rs', root), 'utf8'),
-  candidate: readFileSync(new URL('crates/dclutch-general-adapter-contract/src/candidate_v1.rs', root), 'utf8'),
-  selection: readFileSync(new URL('crates/dclutch-general-adapter-contract/src/runtime_selection.rs', root), 'utf8'),
+  hot: readFileSync(new URL('crates/dclutch-market/src/capability_program/hot_v3.rs', root), 'utf8'),
+  request: readFileSync(new URL('crates/dclutch-trading/src/general_codec/successor_request_v2.rs', root), 'utf8'),
+  requestV3: readFileSync(new URL('crates/dclutch-trading/src/general_codec/successor_request_v3.rs', root), 'utf8'),
+  requestV3Generated: readFileSync(new URL('crates/dclutch-trading/src/general_codec/generated_general_controller_request_v3.rs', root), 'utf8'),
+  controller: readFileSync(new URL('crates/dclutch-trading/src/general_codec/generated_general_controller.rs', root), 'utf8'),
+  local: readFileSync(new URL('crates/dclutch-trading/src/general/local_state_v3.rs', root), 'utf8'),
+  collection: readFileSync(new URL('crates/dclutch-trading/src/general/collection_v1.rs', root), 'utf8'),
+  candidate: readFileSync(new URL('crates/dclutch-trading/src/general/candidate_v1.rs', root), 'utf8'),
+  selection: readFileSync(new URL('crates/dclutch-trading/src/general/runtime_selection.rs', root), 'utf8'),
   // The runtime wire's magics, versions and coordinates have ONE author:
   // `DClutchSemantics.GeneralRuntimeWireV2`, printed here. `runtime_selection.rs`
   // and `runtime_width.rs` used to spell them and now keep only aliases whose
   // right-hand sides are this file's names, so the readers below follow the
   // alias rather than restating a value the emission owns.
-  runtimeWire: readFileSync(new URL('crates/dclutch-general-adapter-contract/src/generated_runtime_wire_v2.rs', root), 'utf8'),
-  verifier: readFileSync(new URL('crates/dclutch-general-adapter-contract/src/runtime_verify.rs', root), 'utf8'),
-  runtime: readFileSync(new URL('crates/dclutch-general-adapter-contract/src/runtime_width.rs', root), 'utf8'),
-  state: readFileSync(new URL('crates/dclutch-general-adapter-contract/src/state_artifacts_v3.rs', root), 'utf8'),
-  custody: readFileSync(new URL('crates/dclutch-custody-contract/src/generated.rs', root), 'utf8'),
-  lib: readFileSync(new URL('crates/dclutch-general-adapter-contract/src/lib.rs', root), 'utf8'),
+  runtimeWire: readFileSync(new URL('crates/dclutch-trading/src/general/generated_runtime_wire_v2.rs', root), 'utf8'),
+  verifier: readFileSync(new URL('crates/dclutch-trading/src/general/runtime_verify.rs', root), 'utf8'),
+  runtime: readFileSync(new URL('crates/dclutch-trading/src/general/runtime_width.rs', root), 'utf8'),
+  state: readFileSync(new URL('crates/dclutch-trading/src/general/state_artifacts_v3.rs', root), 'utf8'),
+  custody: readFileSync(new URL('crates/dclutch-custody/src/generated.rs', root), 'utf8'),
+  lib: readFileSync(new URL('crates/dclutch-trading/src/general/mod.rs', root), 'utf8'),
   operator: readFileSync(new URL('crates/dclutch-operator/src/general_hot_v3.rs', root), 'utf8'),
   producer: readFileSync(new URL('crates/dclutch-general-successor-operator/src/lib.rs', root), 'utf8'),
 });

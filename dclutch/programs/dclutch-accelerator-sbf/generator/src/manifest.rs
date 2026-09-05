@@ -2,20 +2,20 @@
 
 use core::convert::TryInto;
 
-use dclutch_account_profile_contract::{
+use dclutch_vm::account_profile::{
     lifecycle_v3::StateLifecyclePolicyV5,
     v2::{AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V2},
 };
-use dclutch_capability_program_contract::v4::{CapabilityArtifactsV4, CapabilityProgramV4};
+use dclutch_market::capability_program::v4::{CapabilityArtifactsV4, CapabilityProgramV4};
 use dclutch_core_contract::ContentId;
-use dclutch_effect_kernel::v4::{ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4};
-use dclutch_execution_strategy_contract::{
+use dclutch_vm::effect::v4::{ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4};
+use dclutch_market::execution_strategy::{
     shadow_v3::{SHADOW_ACK_SCHEMA_ID_V3, SHADOW_REQUEST_SCHEMA_ID_V3},
     v2::{
         EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyProgramV2, StrategyDispositionV2,
     },
 };
-use dclutch_request_profile_contract::{RequestProfileV1, SCHEMA_RELEASE_ID as REQUEST_SCHEMA_ID};
+use dclutch_vm::request_profile::{RequestProfileV1, SCHEMA_RELEASE_ID as REQUEST_SCHEMA_ID};
 use dclutch_trading_sbf::series::{
     artifacts_v3::{
         SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3, SERIES_CONSUME_CORE_REQUEST_BYTES_V3,
@@ -33,7 +33,7 @@ use super::{
     SeriesShadowDescriptorSemanticsV4, SeriesShadowReleaseSourcesV4, bundle_digest,
     compile_series_shadow_bundle_v4, content, id, reference,
 };
-use dclutch_transition_vm::v3::{
+use dclutch_vm::v3::{
     ProgramV3 as TransitionProgramV3, SCHEMA_RELEASE_ID as TRANSITION_SCHEMA_ID,
 };
 
@@ -191,7 +191,7 @@ impl<'a> SeriesShadowSourceManifestV1<'a> {
         ];
         if lengths.first() != lengths.get(4)
             || lengths.get(1).copied()
-                != Some(dclutch_capability_program_contract::v4::CAPABILITY_PROGRAM_V4_BYTES)
+                != Some(dclutch_market::capability_program::v4::CAPABILITY_PROGRAM_V4_BYTES)
             || lengths.get(2).copied()
                 != Some(
                     dclutch_trading_sbf::series::account_profile_v4::SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4,
@@ -205,7 +205,7 @@ impl<'a> SeriesShadowSourceManifestV1<'a> {
                 )?))
             || lengths.get(7).copied()
                 != Some(
-                    dclutch_execution_strategy_contract::v2::EXECUTION_STRATEGY_PROGRAM_BYTES_V2,
+                    dclutch_market::execution_strategy::v2::EXECUTION_STRATEGY_PROGRAM_BYTES_V2,
                 )
         {
             return Err(SeriesShadowBundleCompileErrorV4::Manifest);
@@ -653,7 +653,7 @@ fn authenticate_generated_sections(
             )?,
             request_profile: reference(REQUEST_SCHEMA_ID, content(sections.request_profile)?)?,
             lifecycle: reference(
-                dclutch_account_profile_contract::lifecycle_v3::CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5,
+                dclutch_vm::account_profile::lifecycle_v3::CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5,
                 lifecycle_id,
             )?,
             strategy: reference(

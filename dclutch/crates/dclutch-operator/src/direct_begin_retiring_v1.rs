@@ -7,14 +7,14 @@
 //! instruction or reports that the exact Retiring/zero-maker poststate is
 //! already present.
 
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
-use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_market::capability_manifest::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
+use dclutch_market::capability_program::{
     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1, CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityProgramV1,
     CapabilityRootHeaderV1,
     set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
 };
-use dclutch_direct_codec::{
+use dclutch_trading::{
     begin_retiring_bundle_v1::{
         direct_begin_retiring_account_profile_schema_v1,
         direct_begin_retiring_descriptor_schema_v1, direct_begin_retiring_effect_schema_v1,
@@ -30,15 +30,15 @@ use dclutch_direct_codec::{
         DirectRootPhaseV1, DirectRootStateV1,
     },
 };
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, Phase, STATE_BYTES};
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2, Phase, STATE_BYTES};
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1, DeploymentObservationV1,
 };
-use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
-use dclutch_relay_contract::SOLANA_DEVNET_GENESIS_HASH_V1;
-use dclutch_release_set_contract::ExecutionRoleV1;
+use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
+use dclutch_source::relay::SOLANA_DEVNET_GENESIS_HASH_V1;
+use dclutch_registry::release_set::ExecutionRoleV1;
 use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},
@@ -983,9 +983,9 @@ fn assemble_plan(
 
 #[cfg(test)]
 mod tests {
-    use dclutch_capability_program_contract::SelectedRecordBumpsV1;
+    use dclutch_market::capability_program::SelectedRecordBumpsV1;
     use dclutch_core_contract::ContentId;
-    use dclutch_direct_codec::{
+    use dclutch_trading::{
         ordinary_account_artifacts_v3::DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3,
         ordinary_artifacts_v3::DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_V2_BYTES_V3,
         ordinary_bundle_v4::{
@@ -996,12 +996,12 @@ mod tests {
         state_artifacts_v3::DIRECT_INLINE_ORDINARY_LIFECYCLE_BYTES_V5,
         successor::DirectRootStateLayoutV1,
     };
-    use dclutch_market_core_codec::{Identity, MarketIdentity, Readiness};
-    use dclutch_release_set_contract::CapabilityExecutionSelectionV1;
+    use dclutch_market::{Identity, MarketIdentity, Readiness};
+    use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
     use solana_sdk_ids::system_program;
 
     use super::*;
-    use dclutch_market_core_codec::StateBumpsV1;
+    use dclutch_market::StateBumpsV1;
 
     const OBSERVATION: Observation = Observation {
         slot: 700,

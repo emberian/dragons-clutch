@@ -4,11 +4,11 @@
 //! stage prepaid FundingState PDAs, and expose one acknowledgement-gated final
 //! write. Core/Claims/Custody orchestration remains in the Core-owned route.
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     CapabilityFundingDerivationV1, CapabilityManifestV1, ContentId, FUNDING_STATE_BYTES,
 };
-use dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1;
-use dclutch_market_core_codec::{Identity as CoreIdentity, SeriesCoreAckV1};
+use dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1;
+use dclutch_market::{Identity as CoreIdentity, SeriesCoreAckV1};
 use solana_program::{
     account_info::AccountInfo, program::invoke_signed, program_error::ProgramError, pubkey::Pubkey,
 };
@@ -505,11 +505,11 @@ mod tests {
     use std::{boxed::Box, vec};
 
     use dclutch_core_contract::ContentId;
-    use dclutch_rent_contract::{
+    use dclutch_market::rent::{
         RefundAuthority,
         lifecycle_v2::{LifecycleAccountIdV2, LifecycleRentCreditV2},
     };
-    use dclutch_series_v3_kernel::{AccountKeyV3, TemplateV3, admit_ticket};
+    use dclutch_trading::series::{AccountKeyV3, TemplateV3, admit_ticket};
 
     use super::*;
     use crate::series::{

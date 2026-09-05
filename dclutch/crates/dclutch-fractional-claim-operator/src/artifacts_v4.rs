@@ -1,6 +1,6 @@
 //! Exact CapabilityV4/LifecycleV5/Profile13 artifacts for executable Fractional Claims actions.
 
-use dclutch_account_profile_contract::{
+use dclutch_vm::account_profile::{
     lifecycle_v3::{
         CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5 as LIFECYCLE_SCHEMA_ID_V5,
         HEADER_BYTES as LIFECYCLE_HEADER_BYTES, StateLifecyclePolicyV5,
@@ -19,11 +19,11 @@ use dclutch_account_profile_contract::{
         },
     },
 };
-use dclutch_capability_program_contract::v4::{
+use dclutch_market::capability_program::v4::{
     ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4, CapabilityProgramV4,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_effect_kernel::{
+use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{
         HEADER_BYTES as EFFECT_HEADER_BYTES, OPERATION_BYTES as EFFECT_OPERATION_BYTES,
@@ -39,13 +39,13 @@ use dclutch_effect_kernel::{
         encode_program_v4_atomic,
     },
 };
-use dclutch_execution_strategy_contract::v2::{
+use dclutch_market::execution_strategy::v2::{
     ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_PROGRAM_BYTES_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
     ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
-use dclutch_fractional_claim_contract::{
+use dclutch_claims::fractional::{
     FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3, FRACTIONAL_ATOMIC_ROOT_V3,
     FRACTIONAL_CAPABILITY_KIND_ID_V1, FRACTIONAL_CAPABILITY_ROOT_BYTES_V4,
     FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4, FRACTIONAL_EXPOSURE_REQUEST_ACTION_OFFSET_V2,
@@ -69,8 +69,8 @@ use dclutch_fractional_claim_contract::{
     FRACTIONAL_ROOT_SELECTION_CONFIG_OFFSET_V2, FRACTIONAL_ROOT_TERMS_OFFSET_V1,
     FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3, FRACTIONAL_TERMINAL_ROOT_V3, FractionalExposureActionV2,
 };
-use dclutch_fractional_claim_kernel::FRACTIONAL_SELECTION_CONFIG_SCHEMA_ID_V1;
-use dclutch_request_profile_contract::{
+use dclutch_claims::fractional_kernel::FRACTIONAL_SELECTION_CONFIG_SCHEMA_ID_V1;
+use dclutch_vm::request_profile::{
     HEADER_BYTES as REQUEST_HEADER_BYTES, OPERATION_BYTES as REQUEST_OPERATION_BYTES,
     RequestProfileV1,
     encode::{
@@ -78,7 +78,7 @@ use dclutch_request_profile_contract::{
         ScalarRegisterV1, encode_request_profile_v1_atomic,
     },
 };
-use dclutch_transition_vm::v3::{
+use dclutch_vm::v3::{
     HEADER_BYTES as TRANSITION_HEADER_BYTES, INSTRUCTION_BYTES as TRANSITION_INSTRUCTION_BYTES,
     IdentityRegisterV3, InstructionV3, ProgramGeometryV3, ProgramV3 as TransitionProgramV3,
     ScalarRegisterV3, encode_program_atomic,
@@ -287,7 +287,7 @@ fn build_fractional_selected_bundle_for_root_v4(
     let transition = encode_transition(flavor)?;
     let strategy_value = ExecutionStrategyProgramV2::new(
         StrategyDispositionV2::Interpreted,
-        content(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID)?,
+        content(dclutch_vm::v3::SCHEMA_RELEASE_ID)?,
         content(digest(&transition))?,
         content(EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2)?,
         None,
@@ -309,17 +309,17 @@ fn build_fractional_selected_bundle_for_root_v4(
         content(input.capacity_profile)?,
         CapabilityArtifactsV4 {
             account_profile: artifact(
-                dclutch_account_profile_contract::v2::SCHEMA_RELEASE_ID,
+                dclutch_vm::account_profile::v2::SCHEMA_RELEASE_ID,
                 digest(&account_profile),
             )?,
             request_profile: artifact(
-                dclutch_request_profile_contract::SCHEMA_RELEASE_ID,
+                dclutch_vm::request_profile::SCHEMA_RELEASE_ID,
                 digest(&request_profile),
             )?,
             lifecycle: artifact(LIFECYCLE_SCHEMA_ID_V5, lifecycle_id)?,
             strategy: artifact(EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, digest(&strategy))?,
             transition: artifact(
-                dclutch_transition_vm::v3::SCHEMA_RELEASE_ID,
+                dclutch_vm::v3::SCHEMA_RELEASE_ID,
                 digest(&transition),
             )?,
             effect: artifact(EFFECT_SCHEMA_ID_V4, digest(&effect))?,
@@ -421,12 +421,12 @@ fn validate_fractional_selected_bundle_for_root_v4(
                 .map_err(|_| FractionalSelectedArtifactErrorV4::InvalidInput)?
         || descriptor.account_profile()
             != artifact(
-                dclutch_account_profile_contract::v2::SCHEMA_RELEASE_ID,
+                dclutch_vm::account_profile::v2::SCHEMA_RELEASE_ID,
                 digest(&bundle.account_profile),
             )?
         || descriptor.request_profile()
             != artifact(
-                dclutch_request_profile_contract::SCHEMA_RELEASE_ID,
+                dclutch_vm::request_profile::SCHEMA_RELEASE_ID,
                 digest(&bundle.request_profile),
             )?
         || descriptor.lifecycle() != artifact(LIFECYCLE_SCHEMA_ID_V5, lifecycle_id)?
@@ -437,7 +437,7 @@ fn validate_fractional_selected_bundle_for_root_v4(
             )?
         || descriptor.transition()
             != artifact(
-                dclutch_transition_vm::v3::SCHEMA_RELEASE_ID,
+                dclutch_vm::v3::SCHEMA_RELEASE_ID,
                 digest(&bundle.transition),
             )?
         || descriptor.effect() != artifact(EFFECT_SCHEMA_ID_V4, digest(&bundle.effect))?
@@ -1039,7 +1039,7 @@ fn geometry_matches(
     account: AccountProfileV2<'_>,
     request: RequestProfileV1<'_>,
     transition: TransitionProgramV3<'_>,
-    effect: dclutch_effect_kernel::v3::ProgramV3<'_>,
+    effect: dclutch_vm::effect::v3::ProgramV3<'_>,
 ) -> bool {
     [
         account.common_scalar_count(),

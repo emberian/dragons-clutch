@@ -1,0 +1,904 @@
+//! Complete schema-bound Hot artifact bundle for inline ordinary Direct.
+//!
+//! This host-side emitter is the sole Direct-specific artifact builder. The
+//! runtime Trading program remains family-neutral: it authenticates these
+//! records, projects their shared interpreters, executes fixed Claims/Custody
+//! routes, and commits once.
+
+use dclutch_vm::account_profile::{
+    lifecycle_v3::StateLifecyclePolicyV5,
+    v2::{AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2},
+};
+use dclutch_market::capability_program::v4::{
+    ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4, CapabilityProgramV4,
+    SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
+};
+use dclutch_core_contract::ContentId;
+use dclutch_vm::effect::{
+    v3::ProgramV3 as EffectProgramV3,
+    v4::{ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4},
+};
+use dclutch_market::execution_strategy::v2::{
+    EXECUTION_STRATEGY_PROGRAM_BYTES_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
+    ExecutionStrategyProgramV2, StrategyDispositionV2,
+};
+use dclutch_vm::request_profile::v2::{
+    REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID, RequestProfileV2,
+};
+use dclutch_sha256_adapter::digest;
+use dclutch_vm::v3::ProgramV3 as TransitionProgramV3;
+
+use crate::{
+    execution_v3::{
+        DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3, DIRECT_SUCCESSOR_KIND_ID_V3, DirectExecutionActionV3,
+    },
+    ordinary_account_artifacts_v3::{
+        DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3, DirectInlineOrdinaryAccountProfileInputV3,
+        encode_direct_inline_ordinary_account_profile_v3_atomic,
+    },
+    ordinary_artifacts_v3::{
+        DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_V1_BYTES_V3,
+        DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_V2_BYTES_V3, direct_inline_ordinary_strategy_v3,
+        encode_inline_ordinary_request_profile_v3_atomic,
+    },
+    ordinary_effect_artifacts_v3::{
+        DIRECT_INLINE_ORDINARY_EFFECT_BYTES_V4, DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3,
+        encode_direct_inline_ordinary_effect_v4_atomic,
+    },
+    ordinary_v3::{
+        DIRECT_ORDINARY_COMMON_IDENTITIES_V3, DIRECT_ORDINARY_COMMON_SCALARS_V3,
+        DIRECT_ORDINARY_ITEM_IDENTITY_STRIDE_V3, DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3,
+        DIRECT_ORDINARY_TRANSITION_BYTES_V3, encode_direct_ordinary_transition_v3,
+    },
+    state_artifacts_v3::{
+        DIRECT_INLINE_ORDINARY_LIFECYCLE_BYTES_V5,
+        encode_direct_inline_ordinary_lifecycle_v5_atomic,
+    },
+    successor::{
+        DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, DIRECT_ROOT_SCHEMA_ID_V1, DIRECT_ROOT_STATE_BYTES_V1,
+    },
+};
+
+/// Exact interpreted ExecutionStrategy record width.
+pub const DIRECT_INLINE_ORDINARY_STRATEGY_BYTES_V3: usize = EXECUTION_STRATEGY_PROGRAM_BYTES_V2;
+/// Exact CapabilityProgram descriptor width.
+pub const DIRECT_INLINE_ORDINARY_DESCRIPTOR_BYTES_V4: usize = CAPABILITY_PROGRAM_V4_BYTES;
+/// SHA-256 identity of the exact runtime-polymorphic fixed-topology AccountProfile14.
+pub const DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_ID_V3: [u8; 32] = [
+    0x57, 0xc4, 0x4d, 0x0f, 0xc4, 0xab, 0x76, 0x25, 0xf4, 0x86, 0x23, 0xc2, 0x1e, 0x12, 0x77, 0x2f,
+    0x96, 0xea, 0xf0, 0x5f, 0x7d, 0x21, 0x87, 0x2a, 0xec, 0x4b, 0x42, 0xdc, 0xee, 0x20, 0xf7, 0xc2,
+];
+/// SHA-256 identity of the exact maker LifecycleV5 policy.
+pub const DIRECT_INLINE_ORDINARY_LIFECYCLE_ID_V5: [u8; 32] = [
+    0xe5, 0xdf, 0xb5, 0xbe, 0x57, 0xd5, 0xc0, 0x54, 0x27, 0xc9, 0xec, 0x83, 0xbd, 0xe0, 0xe8, 0x5a,
+    0x31, 0x4f, 0x14, 0x47, 0xd7, 0x3f, 0x2d, 0x92, 0x5d, 0x73, 0xaa, 0xb9, 0xdb, 0x85, 0x7e, 0x5c,
+];
+/// SHA-256 identity of the exact ordered EffectProgramV4.
+pub const DIRECT_INLINE_ORDINARY_EFFECT_ID_V4: [u8; 32] = [
+    0xe6, 0xa1, 0x00, 0xb7, 0xc9, 0xf8, 0x5c, 0xd5, 0x03, 0x33, 0x48, 0x1d, 0xd9, 0x27, 0x38, 0x76,
+    0x9f, 0x7f, 0x24, 0xb1, 0xbe, 0x13, 0xf1, 0xe2, 0x42, 0x6e, 0xa9, 0xe1, 0x7f, 0x31, 0x3c, 0xbc,
+];
+
+/// Chain-selected facts that are not owned by the Direct artifact family.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectInlineOrdinaryHotBundleInputV4<'a> {
+    /// Exact logical account observations used to validate runtime-width rules.
+    pub account_profile: DirectInlineOrdinaryAccountProfileInputV3<'a>,
+    /// Manifest-selected physical capacity profile content identity.
+    pub capacity_profile: [u8; 32],
+}
+
+/// Every finalized record selected by one ordinary CapabilityProgram.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectInlineOrdinaryHotBundleV4 {
+    /// Runtime-width fixed-topology AccountProfile14 bytes.
+    pub account_profile: [u8; DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3],
+    /// Maker AuthenticateOrCreate LifecycleV5 bytes.
+    pub lifecycle_policy: [u8; DIRECT_INLINE_ORDINARY_LIFECYCLE_BYTES_V5],
+    /// Signed RequestProfileV2 bytes.
+    pub request_profile: [u8; DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_V2_BYTES_V3],
+    /// TransitionVMV3 economic program bytes.
+    pub transition: [u8; DIRECT_ORDINARY_TRANSITION_BYTES_V3],
+    /// Interpreted strategy selecting the transition.
+    pub strategy: [u8; DIRECT_INLINE_ORDINARY_STRATEGY_BYTES_V3],
+    /// Ordered Sparse Claims plus delegated Custody EffectV4 bytes.
+    pub effect: [u8; DIRECT_INLINE_ORDINARY_EFFECT_BYTES_V4],
+    /// Descriptor joining every artifact above.
+    pub descriptor: [u8; DIRECT_INLINE_ORDINARY_DESCRIPTOR_BYTES_V4],
+}
+
+/// Stable bundle emission or hostile-validation refusal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectInlineOrdinaryHotBundleErrorV4 {
+    /// A nonzero finalized content identity or fixed width was invalid.
+    Content,
+    /// AccountProfile construction or decoding refused.
+    AccountProfile,
+    /// Lifecycle construction, decoding, or AccountProfile join refused.
+    Lifecycle,
+    /// RequestProfile construction or decoding refused.
+    RequestProfile,
+    /// Transition construction or decoding refused.
+    Transition,
+    /// Strategy construction or descriptor join refused.
+    Strategy,
+    /// Effect construction or decoding refused.
+    Effect,
+    /// Descriptor construction or exact content join refused.
+    Descriptor,
+    /// Artifact geometries did not agree exactly.
+    Geometry,
+}
+
+/// Emit and independently hostile-check one complete ordinary Hot bundle.
+pub fn build_direct_inline_ordinary_hot_bundle_v4(
+    input: DirectInlineOrdinaryHotBundleInputV4<'_>,
+) -> Result<DirectInlineOrdinaryHotBundleV4, DirectInlineOrdinaryHotBundleErrorV4> {
+    let mut account_scratch = [0_u8; DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3];
+    let mut account_profile = [0_u8; DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3];
+    encode_direct_inline_ordinary_account_profile_v3_atomic(
+        input.account_profile,
+        &mut account_scratch,
+        &mut account_profile,
+    )
+    .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::AccountProfile)?;
+
+    let mut lifecycle_scratch = [0_u8; DIRECT_INLINE_ORDINARY_LIFECYCLE_BYTES_V5];
+    let mut lifecycle_policy = [0_u8; DIRECT_INLINE_ORDINARY_LIFECYCLE_BYTES_V5];
+    encode_direct_inline_ordinary_lifecycle_v5_atomic(
+        &mut lifecycle_scratch,
+        &mut lifecycle_policy,
+    )
+    .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Lifecycle)?;
+
+    let mut request_v1_scratch = [0_u8; DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_V1_BYTES_V3];
+    let mut request_v1 = [0_u8; DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_V1_BYTES_V3];
+    let mut request_v2_scratch = [0_u8; DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_V2_BYTES_V3];
+    let mut request_profile = [0_u8; DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_V2_BYTES_V3];
+    encode_inline_ordinary_request_profile_v3_atomic(
+        &mut request_v1_scratch,
+        &mut request_v1,
+        &mut request_v2_scratch,
+        &mut request_profile,
+    )
+    .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::RequestProfile)?;
+
+    let mut transition_scratch = [0_u8; DIRECT_ORDINARY_TRANSITION_BYTES_V3];
+    let mut transition = [0_u8; DIRECT_ORDINARY_TRANSITION_BYTES_V3];
+    encode_direct_ordinary_transition_v3(&mut transition_scratch, &mut transition)
+        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Transition)?;
+    let strategy = direct_inline_ordinary_strategy_v3()
+        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Strategy)?;
+
+    let mut effect_scratch = [0_u8; DIRECT_INLINE_ORDINARY_EFFECT_BYTES_V4];
+    let mut effect = [0_u8; DIRECT_INLINE_ORDINARY_EFFECT_BYTES_V4];
+    encode_direct_inline_ordinary_effect_v4_atomic(&mut effect_scratch, &mut effect)
+        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Effect)?;
+
+    let account_id = digest(&account_profile);
+    let lifecycle_id = digest(&lifecycle_policy);
+    let request_id = digest(&request_profile);
+    let transition_id = digest(&transition);
+    let strategy_id = digest(&strategy);
+    let effect_id = digest(&effect);
+    let descriptor_value = CapabilityProgramV4::new(
+        content(DIRECT_SUCCESSOR_KIND_ID_V3)?,
+        content(DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1)?,
+        content(DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3)?,
+        content(DIRECT_ROOT_SCHEMA_ID_V1)?,
+        content(lifecycle_id)?,
+        content(input.capacity_profile)?,
+        CapabilityArtifactsV4 {
+            account_profile: artifact(ACCOUNT_PROFILE_SCHEMA_ID_V2, account_id)?,
+            request_profile: artifact(REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID, request_id)?,
+            lifecycle: artifact(SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5, lifecycle_id)?,
+            strategy: artifact(EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, strategy_id)?,
+            transition: artifact(dclutch_vm::v3::SCHEMA_RELEASE_ID, transition_id)?,
+            effect: artifact(EFFECT_SCHEMA_ID_V4, effect_id)?,
+        },
+        u32::try_from(DIRECT_ROOT_STATE_BYTES_V1)
+            .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Geometry)?,
+    )
+    .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Descriptor)?;
+    let bundle = DirectInlineOrdinaryHotBundleV4 {
+        account_profile,
+        lifecycle_policy,
+        request_profile,
+        transition,
+        strategy,
+        effect,
+        descriptor: descriptor_value.encode(),
+    };
+    validate_direct_inline_ordinary_hot_bundle_v4(&bundle, input.capacity_profile)?;
+    Ok(bundle)
+}
+
+/// Hostile-decode and join every artifact selected by one ordinary descriptor.
+pub fn validate_direct_inline_ordinary_hot_bundle_v4(
+    bundle: &DirectInlineOrdinaryHotBundleV4,
+    capacity_profile: [u8; 32],
+) -> Result<(), DirectInlineOrdinaryHotBundleErrorV4> {
+    let descriptor = CapabilityProgramV4::decode(&bundle.descriptor)
+        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Descriptor)?;
+    if descriptor.kind().to_bytes() != DIRECT_SUCCESSOR_KIND_ID_V3
+        || descriptor.config_schema().to_bytes() != DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1
+        || descriptor.request_schema().to_bytes() != DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3
+        || descriptor.root_schema().to_bytes() != DIRECT_ROOT_SCHEMA_ID_V1
+        || descriptor.derivation_policy().to_bytes() != digest(&bundle.lifecycle_policy)
+        || descriptor.capacity_profile().to_bytes() != capacity_profile
+        || descriptor.account_profile()
+            != artifact(
+                ACCOUNT_PROFILE_SCHEMA_ID_V2,
+                digest(&bundle.account_profile),
+            )?
+        || descriptor.request_profile()
+            != artifact(
+                REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID,
+                digest(&bundle.request_profile),
+            )?
+        || descriptor.lifecycle()
+            != artifact(
+                SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
+                digest(&bundle.lifecycle_policy),
+            )?
+        || descriptor.strategy()
+            != artifact(
+                EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
+                digest(&bundle.strategy),
+            )?
+        || descriptor.transition()
+            != artifact(
+                dclutch_vm::v3::SCHEMA_RELEASE_ID,
+                digest(&bundle.transition),
+            )?
+        || descriptor.effect() != artifact(EFFECT_SCHEMA_ID_V4, digest(&bundle.effect))?
+        || descriptor.root_state_bytes()
+            != u32::try_from(DIRECT_ROOT_STATE_BYTES_V1)
+                .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Geometry)?
+    {
+        return Err(DirectInlineOrdinaryHotBundleErrorV4::Descriptor);
+    }
+    let account = AccountProfileV2::decode(&bundle.account_profile)
+        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::AccountProfile)?;
+    let lifecycle_id = digest(&bundle.lifecycle_policy);
+    let lifecycle = StateLifecyclePolicyV5::decode_selected(
+        descriptor.lifecycle().program().to_bytes(),
+        lifecycle_id,
+        &bundle.lifecycle_policy,
+    )
+    .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Lifecycle)?;
+    lifecycle
+        .validate_account_profile(account)
+        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Lifecycle)?;
+    if lifecycle
+        .action_plan_count(DirectExecutionActionV3::InlineOrdinary as u32)
+        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Lifecycle)?
+        != 2
+    {
+        return Err(DirectInlineOrdinaryHotBundleErrorV4::Lifecycle);
+    }
+    let request_id = digest(&bundle.request_profile);
+    let request = RequestProfileV2::decode_selected(
+        descriptor.request_profile().program().to_bytes(),
+        request_id,
+        &bundle.request_profile,
+    )
+    .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::RequestProfile)?;
+    let transition = TransitionProgramV3::decode(&bundle.transition)
+        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Transition)?;
+    let strategy = ExecutionStrategyProgramV2::decode(&bundle.strategy)
+        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Strategy)?;
+    if strategy.disposition() != StrategyDispositionV2::Interpreted
+        || strategy.transition_schema() != descriptor.transition().schema()
+        || strategy.transition_program() != descriptor.transition().program()
+    {
+        return Err(DirectInlineOrdinaryHotBundleErrorV4::Strategy);
+    }
+    let effect = EffectProgramV4::decode(&bundle.effect)
+        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Effect)?;
+    if effect.span_count() != 0
+        || effect.range_count() != 0
+        || effect.semantic_prefix_bytes()
+            != u32::try_from(crate::execution_v3::DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3)
+                .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Geometry)?
+    {
+        return Err(DirectInlineOrdinaryHotBundleErrorV4::Effect);
+    }
+    validate_geometry(account, request, transition, effect.base())
+}
+
+fn validate_geometry(
+    account: AccountProfileV2<'_>,
+    request: RequestProfileV2<'_>,
+    transition: TransitionProgramV3<'_>,
+    effect: EffectProgramV3<'_>,
+) -> Result<(), DirectInlineOrdinaryHotBundleErrorV4> {
+    let request = request.request_profile();
+    let fixed_accounts = DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3;
+    let common_scalars = u16::try_from(DIRECT_ORDINARY_COMMON_SCALARS_V3)
+        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Geometry)?;
+    let common_identities = u16::try_from(DIRECT_ORDINARY_COMMON_IDENTITIES_V3)
+        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Geometry)?;
+    if account.fixed_account_count() != fixed_accounts
+        || account.item_account_stride() != 0
+        || account.common_scalar_count() != common_scalars
+        || account.item_scalar_stride() != DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3
+        || account.common_identity_count() != common_identities
+        || account.item_identity_stride() != DIRECT_ORDINARY_ITEM_IDENTITY_STRIDE_V3
+        || request.common_scalar_count() != common_scalars
+        || request.item_scalar_stride() != DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3
+        || request.common_identity_count() != common_identities
+        || request.item_identity_stride() != DIRECT_ORDINARY_ITEM_IDENTITY_STRIDE_V3
+        || transition.common_scalar_count() != common_scalars
+        || transition.item_scalar_stride() != DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3
+        || transition.common_identity_count() != common_identities
+        || transition.item_identity_stride() != DIRECT_ORDINARY_ITEM_IDENTITY_STRIDE_V3
+        || effect.fixed_account_count() != fixed_accounts
+        || effect.item_account_stride() != 0
+        || effect.common_scalar_count() != common_scalars
+        || effect.item_scalar_stride() != DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3
+        || effect.common_identity_count() != common_identities
+        || effect.item_identity_stride() != DIRECT_ORDINARY_ITEM_IDENTITY_STRIDE_V3
+    {
+        return Err(DirectInlineOrdinaryHotBundleErrorV4::Geometry);
+    }
+    Ok(())
+}
+
+fn content(bytes: [u8; 32]) -> Result<ContentId, DirectInlineOrdinaryHotBundleErrorV4> {
+    ContentId::new(bytes).map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Content)
+}
+
+fn artifact(
+    schema: [u8; 32],
+    program: [u8; 32],
+) -> Result<ArtifactReferenceV4, DirectInlineOrdinaryHotBundleErrorV4> {
+    Ok(ArtifactReferenceV4::new(
+        content(schema)?,
+        content(program)?,
+    ))
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    extern crate std;
+
+    use super::*;
+    use dclutch_vm::account_profile::lifecycle_v3::SUCCESSOR_SCHEMA_RELEASE_ID;
+    use dclutch_vm::account_profile::v2::{
+        ProjectionRegisterKindV2, ProjectionRegisterSpaceV2, ProjectionTargetV2,
+    };
+    use dclutch_vm::account_profile::{
+        EFFECT_PERMISSION_CREDIT_LAMPORTS, EFFECT_PERMISSION_DEBIT_LAMPORTS, lifecycle_v3,
+        v2::AccountPrestateV2,
+    };
+    use dclutch_market::capability_program::v4::CAPABILITY_PROGRAM_V4_LIFECYCLE_SCHEMA_OFFSET;
+    use dclutch_claims::liability_basis_state_v2::{
+        LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+    };
+    use dclutch_custody::CustodyReplayLayoutV1;
+    use dclutch_market::STATE_BYTES as CORE_STATE_BYTES;
+    use dclutch_product::payoff::runtime_v3::BASIS_WIDTH_OFFSET_V3;
+    use dclutch_product::{
+        DOMAIN_CUT_BYTES, DOMAIN_HEADER_BYTES, PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_HEADER_BYTES,
+    };
+    use dclutch_product::admission::PRODUCT_RECORD_BYTES_V2;
+    use dclutch_market::realm::REALM_BYTES;
+    use dclutch_registry::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
+    use dclutch_registry::svm::LOADER_V3_PROGRAM_BYTES;
+    use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
+    use dclutch_vm::request_profile::{
+        ProjectionRegisterKindV1, ProjectionRegisterSpaceV1, ProjectionTargetV1,
+        v2::RequestProfileV2,
+    };
+    use dclutch_vm::v3::{RegisterKindV3, RegisterSpaceV3, RegisterWriteTargetV3};
+
+    use crate::ordinary_v3::IDENTITY_PARENT_REQUEST_DIGEST_V3;
+    use crate::{
+        execution_v3::DirectExecutionActionV3,
+        ordinary_effect_artifacts_v3::DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3,
+        state_artifacts_v3::{
+            DIRECT_BUYER_MAKER_ACCOUNT_V3, DIRECT_LIFECYCLE_RENT_CREDIT_ACCOUNT_V3,
+            DIRECT_LIFECYCLE_RENT_PROGRAM_ACCOUNT_V3, DIRECT_MAKER_PAYER_ACCOUNT_V3,
+            DIRECT_MAKER_PAYER_ROUTE_ALIAS_ACCOUNT_V3, DIRECT_SELLER_MAKER_ACCOUNT_V3,
+        },
+    };
+    use std::{vec, vec::Vec};
+
+    fn logical_lengths(basis_bytes: u32) -> Vec<u32> {
+        let mut output = vec![0_u32; usize::from(DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3)];
+        let root = dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1
+            + DIRECT_ROOT_STATE_BYTES_V1;
+        *output.get_mut(0).expect("root") = u32::try_from(root).expect("root width");
+        *output.get_mut(1).expect("config") =
+            u32::try_from(crate::successor::DIRECT_EXECUTION_CONFIG_BYTES_V1).expect("config");
+        *output.get_mut(2).expect("Product") = u32::try_from(PRODUCT_RECORD_BYTES_V2).expect("p");
+        *output.get_mut(3).expect("portfolio") =
+            u32::try_from(PORTFOLIO_HEADER_BYTES + 3 * PORTFOLIO_COEFFICIENT_BYTES)
+                .expect("portfolio");
+        *output.get_mut(4).expect("basis") = basis_bytes;
+        for coordinate in [5_usize, 8] {
+            *output.get_mut(coordinate).expect("maker") =
+                u32::try_from(crate::successor::DIRECT_MAKER_REPLAY_BYTES_V1).expect("maker");
+        }
+        *output.get_mut(7).expect("lifecycle RentCredit") =
+            u32::try_from(LIFECYCLE_RENT_CREDIT_BYTES_V2).expect("RentCredit width");
+        *output.get_mut(10).expect("Rent program") =
+            u32::try_from(LOADER_V3_PROGRAM_BYTES).expect("Rent program width");
+        *output.get_mut(13).expect("claims aggregate") =
+            u32::try_from(LIABILITY_BASIS_MARKET_HEADER_BYTES_V2 + 3 * 8).expect("aggregate");
+        *output.get_mut(14).expect("basis alias") = basis_bytes;
+        *output.get_mut(16).expect("Product alias") =
+            u32::try_from(PRODUCT_RECORD_BYTES_V2).expect("p");
+        *output.get_mut(18).expect("domain") =
+            u32::try_from(DOMAIN_HEADER_BYTES - 2 * DOMAIN_CUT_BYTES + 3 * DOMAIN_CUT_BYTES)
+                .expect("domain");
+        *output.get_mut(20).expect("portfolio alias") = *output.get(3).expect("portfolio");
+        *output.get_mut(22).expect("registry") = 17;
+        *output.get_mut(23).expect("Core") =
+            u32::try_from(dclutch_market::STATE_BYTES).expect("Core");
+        *output.get_mut(24).expect("activation") =
+            u32::try_from(ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1).expect("activation");
+        *output.get_mut(25).expect("Registry program") =
+            u32::try_from(LOADER_V3_PROGRAM_BYTES).expect("Registry program");
+        *output.get_mut(26).expect("Trading program") =
+            u32::try_from(LOADER_V3_PROGRAM_BYTES).expect("Trading program");
+        *output.get_mut(27).expect("program data") = 1_024;
+        *output.get_mut(28).expect("Claims program") =
+            u32::try_from(LOADER_V3_PROGRAM_BYTES).expect("Claims program");
+        *output.get_mut(29).expect("source staging") = 1_024;
+        *output.get_mut(30).expect("Core program") =
+            u32::try_from(LOADER_V3_PROGRAM_BYTES).expect("Core program");
+        *output.get_mut(31).expect("destination staging") = 1_024;
+        let position =
+            u32::try_from(LIABILITY_BASIS_POSITION_HEADER_BYTES_V2 + 3 * 8).expect("position");
+        *output.get_mut(32).expect("source Position") = position;
+        *output.get_mut(33).expect("destination Position") = position;
+        *output.get_mut(35).expect("Core alias") = *output.get(23).expect("Core");
+        *output.get_mut(36).expect("activation alias") = *output.get(24).expect("activation");
+        *output.get_mut(37).expect("registry alias") = *output.get(25).expect("registry");
+        *output.get_mut(38).expect("program alias") = *output.get(26).expect("program");
+        *output.get_mut(39).expect("pdata alias") = *output.get(27).expect("pdata");
+        *output.get_mut(40).expect("Realm") = u32::try_from(REALM_BYTES).expect("Realm");
+        *output.get_mut(42).expect("replay") =
+            u32::try_from(CustodyReplayLayoutV1::BYTES).expect("replay");
+        *output.get_mut(43).expect("mint") = 82;
+        *output.get_mut(44).expect("buyer token") = 165;
+        *output.get_mut(45).expect("seller token") = 165;
+        *output.get_mut(47).expect("token program") = 36;
+        *output.get_mut(73).expect("fee token") = 165;
+        // Descriptive only: the Custody program rule is opaque, so no loader's
+        // record width is pinned here.
+        *output
+            .get_mut(usize::from(DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3))
+            .expect("Custody program") =
+            u32::try_from(LOADER_V3_PROGRAM_BYTES).expect("Custody program");
+        for (account, representative) in [
+            (49, 23),
+            (50, 24),
+            (51, 25),
+            (52, 26),
+            (53, 27),
+            (54, 40),
+            (55, 41),
+            (56, 42),
+            (57, 43),
+            (58, 44),
+            (59, 45),
+            (60, 46),
+            (61, 47),
+            (63, 23),
+            (64, 24),
+            (65, 25),
+            (66, 26),
+            (67, 27),
+            (68, 40),
+            (69, 41),
+            (70, 42),
+            (71, 43),
+            (72, 44),
+            (74, 46),
+            (75, 47),
+            (77, 23),
+            (78, 24),
+            (79, 25),
+            (80, 26),
+            (81, 27),
+            (82, 40),
+            (83, 41),
+            (84, 42),
+            (85, 43),
+            (86, 44),
+            (87, 73),
+            (88, 46),
+            (89, 47),
+        ] {
+            let value = *output.get(representative).expect("representative");
+            *output.get_mut(account).expect("alias") = value;
+        }
+        output
+    }
+
+    fn build(basis_bytes: u32) -> DirectInlineOrdinaryHotBundleV4 {
+        let lengths = logical_lengths(basis_bytes);
+        build_direct_inline_ordinary_hot_bundle_v4(DirectInlineOrdinaryHotBundleInputV4 {
+            account_profile: DirectInlineOrdinaryAccountProfileInputV3 {
+                logical_data_lengths: &lengths,
+            },
+            capacity_profile: [0x44; 32],
+        })
+        .expect("bundle")
+    }
+
+    pub(crate) fn canonical_bundle_for_cross_module_tests() -> DirectInlineOrdinaryHotBundleV4 {
+        build(u32::try_from(BASIS_WIDTH_OFFSET_V3 + 4).expect("basis"))
+    }
+
+    /// The same witness the registered family carries, on the live path.
+    ///
+    /// Registered's version found the Buy Effect writing two registers nothing
+    /// wrote into the Custody `rent_lamports` field, which would have refused
+    /// every registered Buy at its first CPI. That family had never executed;
+    /// this one has, so a read with no writer here would be a live defect and
+    /// not a latent one. Running it on both families is what makes the finding
+    /// a property of the artifact set rather than of one lane's attention.
+    ///
+    /// The reads are MEASURED: each common register is perturbed in isolation
+    /// and every fixed AND item effect is resolved against both banks, so a
+    /// register counts as read exactly when it moves some resolved effect. The
+    /// writers are the artifacts' own static declarations.
+    #[test]
+    fn every_common_register_the_effect_reads_has_a_declared_writer() {
+        const TAIL: u32 = 3;
+        const PROBE_SCALAR: u64 = 0x5a5a_5a5a_5a5a_5a5a;
+        const PROBE_IDENTITY: [u8; 32] = [0x5a; 32];
+        let bundle = build(u32::try_from(BASIS_WIDTH_OFFSET_V3 + 4).expect("basis"));
+        let effect = EffectProgramV4::decode(&bundle.effect).expect("effect");
+        let base = effect.base();
+
+        let scalar_width = DIRECT_ORDINARY_COMMON_SCALARS_V3
+            + TAIL as usize * usize::from(DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3);
+        let identity_width = DIRECT_ORDINARY_COMMON_IDENTITIES_V3
+            + TAIL as usize * usize::from(DIRECT_ORDINARY_ITEM_IDENTITY_STRIDE_V3);
+        let baseline_scalars = vec![0_u64; scalar_width];
+        let baseline_identities = vec![[0_u8; 32]; identity_width];
+        let resolve_all = |scalars: &[u64], identities: &[[u8; 32]]| {
+            let mut seen = Vec::new();
+            for index in 0..base.fixed_operation_count() {
+                seen.push(base.resolved_fixed_effect(index, TAIL, scalars, identities));
+            }
+            for item in 0..TAIL {
+                for index in 0..base.item_operation_count() {
+                    seen.push(base.resolved_item_effect(item, index, TAIL, scalars, identities));
+                }
+            }
+            seen
+        };
+        let baseline = resolve_all(&baseline_scalars, &baseline_identities);
+
+        let account = AccountProfileV2::decode(&bundle.account_profile).expect("profile");
+        let request_id = digest(&bundle.request_profile);
+        let request =
+            RequestProfileV2::decode_selected(request_id, request_id, &bundle.request_profile)
+                .expect("request profile");
+        let transition = TransitionProgramV3::decode(&bundle.transition).expect("transition");
+        let lifecycle_id = digest(&bundle.lifecycle_policy);
+        let lifecycle = lifecycle_v3::StateLifecyclePolicyV5::decode_selected(
+            lifecycle_id,
+            lifecycle_id,
+            &bundle.lifecycle_policy,
+        )
+        .expect("lifecycle");
+        let action = DirectExecutionActionV3::InlineOrdinary as u32;
+        let lifecycle_writes = |scalar: bool, index: u16| {
+            let kind = if scalar {
+                lifecycle_v3::LifecycleRegisterKindV3::Scalar
+            } else {
+                lifecycle_v3::LifecycleRegisterKindV3::Identity
+            };
+            let quoted = scalar
+                && (0..lifecycle.current_rent_quote_count()).any(|ordinal| {
+                    lifecycle
+                        .current_rent_quote(ordinal)
+                        .expect("quote")
+                        .scalar_destination()
+                        .index()
+                        == index
+                });
+            let protected = (0..lifecycle.action_plan_count(action).expect("plans")).any(|plan| {
+                let selected = lifecycle.action_plan(action, plan).expect("plan");
+                (0..selected.protected_output_count().expect("outputs")).any(|ordinal| {
+                    let target = selected
+                        .protected_output_target(ordinal)
+                        .expect("protected target");
+                    target.kind() == kind
+                        && target.scope() == lifecycle_v3::CoordinateScopeV3::Fixed
+                        && target.index() == index
+                })
+            });
+            quoted || protected
+        };
+
+        let mut unwritten = Vec::new();
+        let mut read = 0_usize;
+        for index in 0..DIRECT_ORDINARY_COMMON_SCALARS_V3 {
+            let mut probe = baseline_scalars.clone();
+            *probe.get_mut(index).expect("scalar") = PROBE_SCALAR;
+            if resolve_all(&probe, &baseline_identities) == baseline {
+                continue;
+            }
+            read += 1;
+            let index = u16::try_from(index).expect("scalar register");
+            let written = account
+                .writes_register(ProjectionTargetV2 {
+                    kind: ProjectionRegisterKindV2::Scalar,
+                    space: ProjectionRegisterSpaceV2::Common,
+                    index,
+                })
+                .expect("profile writes")
+                || request
+                    .writes_register(ProjectionTargetV1 {
+                        kind: ProjectionRegisterKindV1::Scalar,
+                        space: ProjectionRegisterSpaceV1::Common,
+                        index,
+                    })
+                    .expect("request writes")
+                || transition
+                    .writes_register(RegisterWriteTargetV3 {
+                        kind: RegisterKindV3::Scalar,
+                        space: RegisterSpaceV3::Common,
+                        index,
+                    })
+                    .expect("transition writes")
+                || lifecycle_writes(true, index);
+            if !written {
+                unwritten.push(std::format!("scalar {index}"));
+            }
+        }
+        for index in 0..DIRECT_ORDINARY_COMMON_IDENTITIES_V3 {
+            let mut probe = baseline_identities.clone();
+            *probe.get_mut(index).expect("identity") = PROBE_IDENTITY;
+            if resolve_all(&baseline_scalars, &probe) == baseline {
+                continue;
+            }
+            read += 1;
+            let index = u16::try_from(index).expect("identity register");
+            let written = account
+                .writes_register(ProjectionTargetV2 {
+                    kind: ProjectionRegisterKindV2::Identity,
+                    space: ProjectionRegisterSpaceV2::Common,
+                    index,
+                })
+                .expect("profile writes")
+                || request
+                    .writes_register(ProjectionTargetV1 {
+                        kind: ProjectionRegisterKindV1::Identity,
+                        space: ProjectionRegisterSpaceV1::Common,
+                        index,
+                    })
+                    .expect("request writes")
+                || transition
+                    .writes_register(RegisterWriteTargetV3 {
+                        kind: RegisterKindV3::Identity,
+                        space: RegisterSpaceV3::Common,
+                        index,
+                    })
+                    .expect("transition writes")
+                || lifecycle_writes(false, index)
+                // Seeded by common Hot before any family artifact runs: the one
+                // register with an executor author rather than an artifact one.
+                || usize::from(index) == IDENTITY_PARENT_REQUEST_DIGEST_V3;
+            if !written {
+                unwritten.push(std::format!("identity {index}"));
+            }
+        }
+        assert!(
+            unwritten.is_empty(),
+            "the inline-ordinary Effect reads registers no artifact writes: {unwritten:?}"
+        );
+        // Not vacuous: a resolver that errored on every bank would report no
+        // reads at all and pass. This Effect reads most of its own banks.
+        assert!(read >= 40, "only {read} registers measured as read");
+    }
+
+    /// The published AccountProfile identity is a function of the Lean-emitted
+    /// Market Core state width, and this is the row that says so.
+    ///
+    /// Coordinate 23 of the profile is that width
+    /// (`ordinary_account_artifacts_v3.rs`), the profile's SHA-256 is
+    /// `DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_ID_V3`, and that identity is
+    /// named by digest inside the Direct ordinary descriptor and its
+    /// ProgramSet. So a widening of `dclutch_market::STATE_BYTES`
+    /// silently restates three published identities.
+    ///
+    /// It has now happened twice: 352 to 360, and 360 to 368 in `e93fe5e9`,
+    /// which ran every byte-identity gate this repository has and moved this
+    /// pin anyway -- because the gates guard EMITTED FILES against their
+    /// emitter, and this is a hand-pinned digest OF an emitted constant, which
+    /// no emitter authors. The polymorphism test below does compare the same
+    /// digest, but it is named for basis polymorphism and reports a 32-byte
+    /// array diff; nobody changing an account layout finds it or reads it as
+    /// this. This one is named for the dependency and says which side moved.
+    #[test]
+    fn the_account_profile_identity_is_pinned_to_the_core_state_width_it_embeds() {
+        let profile =
+            build(u32::try_from(BASIS_WIDTH_OFFSET_V3 + 4).expect("basis")).account_profile;
+        let computed = digest(&profile);
+        assert_eq!(
+            computed,
+            DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_ID_V3,
+            "the Direct ordinary AccountProfile identity is stale.\n\
+             It embeds dclutch_market::STATE_BYTES ({core}) at \
+             coordinate 23, so any change to the Lean-emitted Market Core \
+             layout restates it.\n\
+             Recomputed: {computed:02x?}\n\
+             Three pinned identities move together and all three belong in \
+             one commit:\n\
+             - DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_ID_V3, in this file\n\
+             - DIRECT_HOT_FIXTURE_DESCRIPTOR_ID_V5 and \
+             DIRECT_HOT_FIXTURE_PROGRAM_SET_ID_V5, in \
+             programs/dclutch-trading-sbf/program-test/direct-hot/src/lib.rs, \
+             whose own tests report their recomputed values.",
+            core = CORE_STATE_BYTES,
+        );
+    }
+
+    #[test]
+    fn one_descriptor_is_polymorphic_across_categorical_and_graded_basis() {
+        let categorical = build(u32::try_from(BASIS_WIDTH_OFFSET_V3 + 4).expect("categorical"));
+        let graded = build(736);
+        assert_eq!(categorical, graded);
+        assert_eq!(
+            [
+                digest(&categorical.account_profile),
+                digest(&categorical.lifecycle_policy),
+                digest(&categorical.effect),
+            ],
+            [
+                DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_ID_V3,
+                DIRECT_INLINE_ORDINARY_LIFECYCLE_ID_V5,
+                DIRECT_INLINE_ORDINARY_EFFECT_ID_V4,
+            ]
+        );
+        validate_direct_inline_ordinary_hot_bundle_v4(&categorical, [0x44; 32]).expect("validate");
+    }
+
+    #[test]
+    fn capacity_or_effect_substitution_refuses_exactly() {
+        let bundle = build(256);
+        assert_eq!(
+            validate_direct_inline_ordinary_hot_bundle_v4(&bundle, [0x45; 32]),
+            Err(DirectInlineOrdinaryHotBundleErrorV4::Descriptor)
+        );
+        let mut hostile = bundle;
+        *hostile.effect.get_mut(128).expect("effect byte") ^= 1;
+        assert_eq!(
+            validate_direct_inline_ordinary_hot_bundle_v4(&hostile, [0x44; 32]),
+            Err(DirectInlineOrdinaryHotBundleErrorV4::Descriptor)
+        );
+    }
+
+    /// The two artifacts the adapter joins agree on which coordinate owns each
+    /// lifecycle authority, and each named coordinate is the semantic owner of
+    /// that authority rather than a route alias of it.
+    #[test]
+    fn every_lifecycle_plan_names_a_representative_carrying_its_effect_authority() {
+        let bundle = build(256);
+        let profile = AccountProfileV2::decode(&bundle.account_profile).expect("profile");
+        let policy_id = digest(&bundle.lifecycle_policy);
+        let policy =
+            StateLifecyclePolicyV5::decode_selected(policy_id, policy_id, &bundle.lifecycle_policy)
+                .expect("policy");
+        policy.validate_account_profile(profile).expect("join");
+        let action = DirectExecutionActionV3::InlineOrdinary as u32;
+        assert_eq!(policy.action_plan_count(action).expect("plans"), 2);
+        for (ordinal, state) in [
+            (0_u16, DIRECT_SELLER_MAKER_ACCOUNT_V3),
+            (1, DIRECT_BUYER_MAKER_ACCOUNT_V3),
+        ] {
+            let indices = policy
+                .action_plan(action, ordinal)
+                .expect("plan")
+                .project_account_indices(profile, 3, None)
+                .expect("indices");
+            assert_eq!(indices.state(), usize::from(state));
+            assert_eq!(
+                indices.payer(),
+                Some(usize::from(DIRECT_MAKER_PAYER_ACCOUNT_V3))
+            );
+            assert_eq!(
+                indices.rent_credit(),
+                Some(usize::from(DIRECT_LIFECYCLE_RENT_CREDIT_ACCOUNT_V3))
+            );
+        }
+        // Exactly the predicates `require_permissions` applies to the named
+        // coordinate's own rule, which never follows a route alias.
+        let payer = profile
+            .rule(false, DIRECT_MAKER_PAYER_ACCOUNT_V3)
+            .expect("payer");
+        assert_ne!(
+            payer.effect_permissions() & EFFECT_PERMISSION_DEBIT_LAMPORTS,
+            0
+        );
+        assert_ne!(payer.prestate(), AccountPrestateV2::AuthenticatedRouteAlias);
+        let credit = profile
+            .rule(false, DIRECT_LIFECYCLE_RENT_CREDIT_ACCOUNT_V3)
+            .expect("credit");
+        assert_ne!(
+            credit.effect_permissions() & EFFECT_PERMISSION_CREDIT_LAMPORTS,
+            0
+        );
+        assert_ne!(
+            credit.prestate(),
+            AccountPrestateV2::AuthenticatedRouteAlias
+        );
+    }
+
+    /// Reversion evidence for the payer defect: the buyer plan as it stood
+    /// before this repair named coordinate 9, the route alias of the sole
+    /// payer. `require_permissions` reads the named rule and never follows the
+    /// alias, so the alias's zero effect permissions were exactly the refusal
+    /// the adapter raised mid-preplan. The join now refuses it up front, and
+    /// refuses it on either funding field.
+    #[test]
+    fn a_plan_that_names_an_alias_coordinate_refuses_the_join() {
+        let bundle = build(256);
+        let profile = AccountProfileV2::decode(&bundle.account_profile).expect("profile");
+        assert_eq!(
+            profile
+                .rule(false, DIRECT_MAKER_PAYER_ROUTE_ALIAS_ACCOUNT_V3)
+                .expect("alias")
+                .effect_permissions(),
+            0
+        );
+        let plan_table = lifecycle_v3::HEADER_BYTES
+            + 2 * lifecycle_v3::RECIPE_BYTES
+            + 10 * lifecycle_v3::SEED_BYTES;
+        let buyer_plan = plan_table + lifecycle_v3::ACTION_PLAN_BYTES;
+        for field_offset in [8_usize, 12] {
+            let mut hostile = bundle.lifecycle_policy;
+            hostile
+                .get_mut(buyer_plan + field_offset + 2..buyer_plan + field_offset + 4)
+                .expect("coordinate index")
+                .copy_from_slice(&DIRECT_MAKER_PAYER_ROUTE_ALIAS_ACCOUNT_V3.to_le_bytes());
+            let hostile_id = digest(&hostile);
+            let policy = StateLifecyclePolicyV5::decode_selected(hostile_id, hostile_id, &hostile)
+                .expect("hostile policy remains decodable");
+            assert_eq!(
+                policy.validate_account_profile(profile),
+                Err(lifecycle_v3::Error::ProfileMismatch),
+                "funding field at plan offset {field_offset}"
+            );
+        }
+    }
+
+    /// The Rent program coordinate that replaced the second V1 credit carries
+    /// no lifecycle authority at all, so no plan can fund or close through it.
+    #[test]
+    fn the_rent_program_coordinate_carries_no_lifecycle_authority() {
+        let bundle = build(256);
+        let profile = AccountProfileV2::decode(&bundle.account_profile).expect("profile");
+        let rule = profile
+            .rule(false, DIRECT_LIFECYCLE_RENT_PROGRAM_ACCOUNT_V3)
+            .expect("Rent program");
+        assert_eq!(rule.effect_permissions(), 0);
+        assert!(rule.route_privileges().executable());
+        assert!(!rule.route_privileges().writable());
+        assert_eq!(
+            rule.prestate(),
+            AccountPrestateV2::AuthenticatedOpaqueReadonlyData
+        );
+    }
+
+    #[test]
+    fn lifecycle_v4_schema_substitution_has_no_successor_fallback() {
+        let mut hostile = build(256);
+        hostile.descriptor[CAPABILITY_PROGRAM_V4_LIFECYCLE_SCHEMA_OFFSET
+            ..CAPABILITY_PROGRAM_V4_LIFECYCLE_SCHEMA_OFFSET + 32]
+            .copy_from_slice(&SUCCESSOR_SCHEMA_RELEASE_ID);
+        assert_eq!(
+            validate_direct_inline_ordinary_hot_bundle_v4(&hostile, [0x44; 32]),
+            Err(DirectInlineOrdinaryHotBundleErrorV4::Descriptor)
+        );
+    }
+}

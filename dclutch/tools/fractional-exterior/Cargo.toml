@@ -11,25 +11,15 @@ publish = false
 [workspace]
 
 [dependencies]
-dclutch-capability-program-contract = { path = "../../crates/dclutch-capability-program-contract" }
-dclutch-claims-svm = { path = "../../crates/dclutch-claims-svm" }
+dclutch-market = { path = "../../crates/dclutch-market" }
+dclutch-claims = { path = "../../crates/dclutch-claims" }
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
-dclutch-custody-contract = { path = "../../crates/dclutch-custody-contract" }
-dclutch-fractional-claim-contract = { path = "../../crates/dclutch-fractional-claim-contract" }
-dclutch-fractional-claim-kernel = { path = "../../crates/dclutch-fractional-claim-kernel" }
+dclutch-custody = { path = "../../crates/dclutch-custody" }
 dclutch-fractional-cubic-life-evidence = { path = "../../crates/dclutch-fractional-cubic-life-evidence" }
-dclutch-market-core-codec = { path = "../../crates/dclutch-market-core-codec" }
-dclutch-product-payoff-v2-codec = { path = "../../crates/dclutch-product-payoff-v2-codec" }
-dclutch-product-runtime-v2 = { path = "../../crates/dclutch-product-runtime-v2" }
-dclutch-product-runtime-v2-admission = { path = "../../crates/dclutch-product-runtime-v2-admission" }
+dclutch-product = { path = "../../crates/dclutch-product" }
 dclutch-product-runtime-v2-operator = { path = "../../crates/dclutch-product-runtime-v2-operator" }
-dclutch-realm-contract = { path = "../../crates/dclutch-realm-contract" }
-dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }
-dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }
-dclutch-release-set-contract = { path = "../../crates/dclutch-release-set-contract" }
-dclutch-representation-composition-v3-kernel = { path = "../../crates/dclutch-representation-composition-v3-kernel" }
-dclutch-resolution-codec = { path = "../../crates/dclutch-resolution-codec" }
-dclutch-token-svm = { path = "../../crates/dclutch-token-svm" }
+dclutch-registry = { path = "../../crates/dclutch-registry" }
+dclutch-source = { path = "../../crates/dclutch-source" }
 base64 = "0.22"
 bincode = "1"
 serde = { version = "1", features = ["derive"] }

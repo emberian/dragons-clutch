@@ -13,7 +13,7 @@
 //! crate.** A relayer that cannot parse a pool cannot interpret one.  See
 //! `DEPENDENCY_CLOSURE.md`.
 //!
-//! Every encoded byte this service signs comes from `dclutch-relay-contract`.
+//! Every encoded byte this service signs comes from `dclutch-source::relay`.
 //! Nothing here reimplements an offset, a magic, a domain separator or a
 //! preimage.
 

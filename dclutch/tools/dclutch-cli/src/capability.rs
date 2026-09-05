@@ -6,10 +6,10 @@
 //! family tail. If that account does not exist, or its tail is Retiring, a
 //! trade refuses no matter how open the market looks. This command reads it.
 
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CAPABILITY_ROOT_MAGIC_V1, CapabilityRootHeaderV1,
 };
-use dclutch_direct_codec::successor::{DirectRootPhaseV1, DirectRootStateV1};
+use dclutch_trading::successor::{DirectRootPhaseV1, DirectRootStateV1};
 
 use crate::{Arguments, Error, Result, address, rpc};
 
@@ -222,11 +222,11 @@ fn render_json(
 #[cfg(test)]
 mod tests {
     use super::{decode, plain_reading, render, run};
-    use dclutch_capability_program_contract::{
+    use dclutch_market::capability_program::{
         CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
     };
-    use dclutch_direct_codec::successor::DirectRootStateV1;
-    use dclutch_release_set_contract::CapabilityExecutionSelectionV1;
+    use dclutch_trading::successor::DirectRootStateV1;
+    use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
 
     fn root_account() -> Vec<u8> {
         let content =

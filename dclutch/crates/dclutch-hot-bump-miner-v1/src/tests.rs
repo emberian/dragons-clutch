@@ -12,15 +12,15 @@
 //! `current_common_hot_executes_issue_and_selected_denominate_through_real_elves`
 //! reports the offset.
 
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CapabilityRootHeaderV1, SelectedRecordBumpsV1, hot_v3::HotBumpHintsV1,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::CustodyAuthoritySeedsV1;
-use dclutch_market_core_codec::{
+use dclutch_custody::CustodyAuthoritySeedsV1;
+use dclutch_market::{
     CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness, StateBumpsV1,
 };
-use dclutch_release_set_contract::CapabilityExecutionSelectionV1;
+use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
 use solana_program::pubkey::Pubkey;
 
 use super::{
@@ -237,7 +237,7 @@ fn an_undecodable_activation_cache_names_no_custody_deployment() {
 /// The slot names index the block they name, and nothing outside it.
 #[test]
 fn the_slot_names_cover_the_block_and_stop_at_its_edges() {
-    use dclutch_capability_program_contract::hot_v3::{
+    use dclutch_market::capability_program::hot_v3::{
         HOT_BUMP_HINT_COUNT_V1, HOT_BUMP_HINTS_OFFSET_V1, HOT_EXECUTION_ENVELOPE_BYTES_V3,
     };
     assert_eq!(HOT_BUMP_HINT_SLOT_NAMES_V1.len(), HOT_BUMP_HINT_COUNT_V1);

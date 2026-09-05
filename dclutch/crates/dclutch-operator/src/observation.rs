@@ -9,8 +9,8 @@
 //! were. A shared fact does not belong to the first module that happened to
 //! need it.
 
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
-use dclutch_record_contract::{
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_registry::record::{
     ContentDigest, RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1, SchemaReleaseId,
 };
 use solana_program::{
@@ -37,7 +37,7 @@ pub enum ObservationError {
     /// An existing immutable account held no lamports, so it is residue an
     /// earlier instruction drained and the runtime reaps at this transaction's
     /// end. Its rent-exemption at TODAY's rate is deliberately not asserted:
-    /// see `dclutch_capability_contract::funding::funded_rent_persists_v1`.
+    /// see `dclutch_market::capability_manifest::funding::funded_rent_persists_v1`.
     AccountDrained,
     /// A content digest or cross-record semantic link differed.
     ContentLinkMismatch,

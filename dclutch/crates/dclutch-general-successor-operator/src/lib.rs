@@ -19,12 +19,12 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use dclutch_capability_program_contract::hot_v3::{
+use dclutch_market::capability_program::hot_v3::{
     HOT_MARKET_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3, HotExecutionEnvelopeV3,
 };
-use dclutch_effect_kernel::v2::FixedRole;
-use dclutch_general_adapter_contract::artifacts_v3::GeneralArtifactSelectionV3;
-use dclutch_general_codec::Action;
+use dclutch_vm::effect::v2::FixedRole;
+use dclutch_trading::general::artifacts_v3::GeneralArtifactSelectionV3;
+use dclutch_trading::general_codec::Action;
 use dclutch_operator::general_hot_v3::{
     CheckedGeneralHotReleaseV3, GENERAL_HOT_HEAP_FRAME_BYTES_V3, GeneralHotArtifactDigestsV3,
     GeneralHotStateV3, GeneralObservedAccountMetaV3, GeneralSuccessorInstructionV5,
@@ -426,7 +426,7 @@ pub fn parse_route_v1(bytes: &[u8]) -> Result<GeneralSuccessorRouteV1> {
     }
     let fixed_accounts = parse_metas_v1(wire.fixed_accounts, "fixedAccounts", false)?;
     if fixed_accounts.len()
-        != dclutch_capability_program_contract::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3
+        != dclutch_market::capability_program::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3
     {
         return Err(Error::new(
             "General route must carry exactly the canonical Hot fixed frame",
@@ -1109,8 +1109,8 @@ fn temporary_plan_path_v5(parent: &Path, bytes: &[u8]) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_capability_program_contract::hot_v3::HOT_TRADING_PROGRAM_ACCOUNT_V3;
-    use dclutch_general_adapter_contract::artifacts_v3::{
+    use dclutch_market::capability_program::hot_v3::HOT_TRADING_PROGRAM_ACCOUNT_V3;
+    use dclutch_trading::general::artifacts_v3::{
         GeneralDecodedRequestV3, GeneralRequestWireV3,
     };
     use dclutch_operator::general_hot_v3::{

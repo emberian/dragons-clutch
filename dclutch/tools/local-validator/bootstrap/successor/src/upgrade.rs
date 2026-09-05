@@ -26,18 +26,18 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use dclutch_direct_codec::COMPILED_DIRECT_RELEASE_ID_V1;
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{
+use dclutch_trading::COMPILED_DIRECT_RELEASE_ID_V1;
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{
     ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1, DeploymentObservationV1,
     require_slot_pinned_release_v1,
 };
-use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
-use dclutch_release_set_contract::{
+use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
+use dclutch_registry::release_set::{
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, ProtocolInfrastructureProfileV1,
     SourceSemanticRoleV1, source_semantic_release_preimage_v1,
 };
-use dclutch_resolution_codec::{
+use dclutch_source::resolution::{
     RESOLUTION_CONTROLLER_RELEASE_ID_V7, RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V7,
 };
 use serde::{Deserialize, Serialize};
@@ -11698,9 +11698,9 @@ mod tests {
                     let (program_account, programdata_account) =
                         mixed_loader_accounts(programdata, authority, slot, &raw_elf);
                     let release = ArtifactReleaseV1::new(
-                        dclutch_release_set_contract::ProgramIdentityV1::new(program.to_bytes())
+                        dclutch_registry::release_set::ProgramIdentityV1::new(program.to_bytes())
                             .expect("program identity"),
-                        dclutch_release_set_contract::ProgramIdentityV1::new(
+                        dclutch_registry::release_set::ProgramIdentityV1::new(
                             bpf_loader_upgradeable::ID.to_bytes(),
                         )
                         .expect("loader identity"),
@@ -11708,7 +11708,7 @@ mod tests {
                         dclutch_core_contract::ContentId::new([30 + byte; 32]).expect("semantic"),
                         Sha256::digest(&raw_elf).into(),
                         slot,
-                        dclutch_registry_contract::ArtifactUpgradePolicyV1::ExactAuthority,
+                        dclutch_registry::ArtifactUpgradePolicyV1::ExactAuthority,
                         Some(authority.to_bytes()),
                     )
                     .expect("carry artifact");
@@ -11997,16 +11997,16 @@ mod tests {
             .0;
             let registry_raw_account = mixed_account(registry.0, false, registry.5.clone());
             let rent_raw_account = mixed_account(registry.0, false, rent.5.clone());
-            let registry_binding = dclutch_release_set_contract::ExecutionRoleBindingV1::new(
-                dclutch_release_set_contract::ProgramIdentityV1::new(registry.0.to_bytes())
+            let registry_binding = dclutch_registry::release_set::ExecutionRoleBindingV1::new(
+                dclutch_registry::release_set::ProgramIdentityV1::new(registry.0.to_bytes())
                     .expect("registry identity"),
-                dclutch_release_set_contract::ArtifactReleaseIdV1::decode(&registry.6)
+                dclutch_registry::release_set::ArtifactReleaseIdV1::decode(&registry.6)
                     .expect("registry artifact ID"),
             );
-            let rent_binding = dclutch_release_set_contract::ExecutionRoleBindingV1::new(
-                dclutch_release_set_contract::ProgramIdentityV1::new(rent.0.to_bytes())
+            let rent_binding = dclutch_registry::release_set::ExecutionRoleBindingV1::new(
+                dclutch_registry::release_set::ProgramIdentityV1::new(rent.0.to_bytes())
                     .expect("rent identity"),
-                dclutch_release_set_contract::ArtifactReleaseIdV1::decode(&rent.6)
+                dclutch_registry::release_set::ArtifactReleaseIdV1::decode(&rent.6)
                     .expect("rent artifact ID"),
             );
             let profile = ProtocolInfrastructureProfileV1::new(registry_binding, rent_binding)
@@ -13735,21 +13735,21 @@ mod tests {
         );
 
         let binding = |pin: &crate::model::ProgramPin| {
-            dclutch_release_set_contract::ExecutionRoleBindingV1::new(
-                dclutch_release_set_contract::ProgramIdentityV1::new(
+            dclutch_registry::release_set::ExecutionRoleBindingV1::new(
+                dclutch_registry::release_set::ProgramIdentityV1::new(
                     crate::plan::pubkey(&pin.program_id)
                         .expect("program")
                         .to_bytes(),
                 )
                 .expect("program identity"),
-                dclutch_release_set_contract::ArtifactReleaseIdV1::new(
+                dclutch_registry::release_set::ArtifactReleaseIdV1::new(
                     crate::plan::hex32(&pin.artifact_release_id).expect("artifact ID"),
                 )
                 .expect("artifact identity"),
             )
         };
         let mut substituted_profile = plan.clone();
-        let profile = dclutch_release_set_contract::ProtocolInfrastructureProfileV1::new(
+        let profile = dclutch_registry::release_set::ProtocolInfrastructureProfileV1::new(
             binding(&substituted_profile.core),
             binding(&substituted_profile.rent_credit),
         )

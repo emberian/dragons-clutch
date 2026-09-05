@@ -8,8 +8,8 @@
 //! report. This file executes that gap rather than describing it, then shows
 //! the gated entrance closing it, both against real record compilation.
 
-use dclutch_product_runtime_v2::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
-use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
+use dclutch_product::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
+use dclutch_product::admission::PRODUCT_RECORD_BYTES_V2;
 use dclutch_product_runtime_v2_operator::{
     BandProfileV1, Error, FoundingBandV1, FoundingBeliefV1, MAX_CELL_EX_ANTE_SHARE_BPS_V1,
     ProductCompilationInputV2, StatedPropositionV1, centred_cuts_v1,

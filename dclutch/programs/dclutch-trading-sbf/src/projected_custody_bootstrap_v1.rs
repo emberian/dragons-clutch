@@ -34,7 +34,7 @@ extern crate alloc;
 
 use alloc::{boxed::Box, vec, vec::Vec};
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     CONTROLLER_FUNDING_CHECKPOINT_BYTES_V1, CONTROLLER_FUNDING_CUSTODY_ABORT_ANCHOR_DOMAIN_V1,
     CONTROLLER_FUNDING_CUSTODY_LADDER_ACCOUNT_COUNT_V1,
     CONTROLLER_FUNDING_CUSTODY_LADDER_DIGEST_DOMAIN_V1, CapabilityFundingLedgerDerivationV2,
@@ -46,7 +46,7 @@ use dclutch_capability_contract::{
     controller_funding_ledger_account_digest_v1, funding_ledger_bytes_v2,
     validate_funding_ledger_masks_v2,
 };
-use dclutch_custody_contract::{
+use dclutch_custody::{
     FoundingPrestateStageV1, INITIALIZE_RESULTING_REVISION_V1, OPEN_HOARD_RESULTING_REVISION_V1,
     OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1, PROJECTED_CUSTODY_ABORT_SOURCE_ACCOUNT_COUNT_V1,
     PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V2, PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1,
@@ -55,14 +55,14 @@ use dclutch_custody_contract::{
     ProjectedCustodyCallerSeedsV1, ProjectedCustodyOperationV1, ProjectedCustodyPhaseV1,
     ProjectedCustodyReceiptV1, ProjectedCustodyRequestV1, ProjectedCustodyStateV2,
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     Action, FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3, GENERIC_FOUNDING_REQUEST_BYTES_V1,
     GenericFoundingRequestV1, GenericFoundingStageV1, Identity, PROJECT_FOUND_ACCOUNT_COUNT_V2,
     ProjectFoundRequestV2, Request, generic_founding_funding_list_id_v1,
 };
-use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_resolution_codec::{
+use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_source::resolution::{
     PRE_MARKET_FUNDING_ABORT_RECEIPT_BYTES_V1, PRE_MARKET_FUNDING_RECEIPT_BYTES_V2,
     PreMarketFundingAbortReceiptV1, PreMarketFundingAbortRequestV1, PreMarketFundingReceiptV2,
     PreMarketFundingRequestV2, pre_market_funding_ledger_account_digest_v1,
@@ -1887,7 +1887,7 @@ fn authenticate_prepared_checkpoint_v1(
 fn authenticate_prepared_request_digests_v1(
     lock: &ProjectedCustodyRequestV1,
     facts: &FoundingFundingFactsV1,
-    input: &dclutch_capability_contract::controller_funding_checkpoint::ControllerFundingCheckpointInputV1,
+    input: &dclutch_market::capability_manifest::controller_funding_checkpoint::ControllerFundingCheckpointInputV1,
 ) -> Result<(), ProgramError> {
     let lock_bytes = lock.encode().map_err(|_| TradingSbfError::Content)?;
     if input.lock_request_digest != hash(&lock_bytes).to_bytes() {
@@ -2167,7 +2167,7 @@ fn plan_funding_ledger_v2(
     // Record the rate this founding is paying, so every later exactness check
     // over this account asks what it was funded at rather than what the sysvar
     // says at the moment of the check.
-    let funded_rent_rate = dclutch_capability_contract::derive_funded_rent_rate_v2(
+    let funded_rent_rate = dclutch_market::capability_manifest::derive_funded_rent_rate_v2(
         rent.minimum_balance(0),
         width,
         rent.minimum_balance(width),
@@ -3042,10 +3042,10 @@ fn subslice<'accounts, 'info>(
 
 #[cfg(test)]
 mod tests {
-    use dclutch_custody_contract::{
+    use dclutch_custody::{
         CompartmentV1, PROJECTED_HOARD_CONTEXT_DOMAIN_V1, SOURCE_COMPARTMENT_REPLAY_REVISION_V1,
     };
-    use dclutch_market_core_codec::Identity;
+    use dclutch_market::Identity;
     use solana_program::hash::hashv;
 
     use super::*;
@@ -3092,7 +3092,7 @@ mod tests {
         let found = found();
         ProjectedCustodyRequestV1 {
             operation: ProjectedCustodyOperationV1::LockHoardAndCloseSource,
-            caller_role: dclutch_custody_contract::ProjectedCallerRoleV1::TradingCapability,
+            caller_role: dclutch_custody::ProjectedCallerRoleV1::TradingCapability,
             market: found.market().to_bytes(),
             generation: found.generation(),
             realm: [0x31; 32],
@@ -3290,7 +3290,7 @@ mod tests {
     }
 
     fn demo_manifest_with_foreign_entries(entries: usize, foreign: &[usize]) -> Vec<u8> {
-        use dclutch_capability_contract::{
+        use dclutch_market::capability_manifest::{
             ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1,
             FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES,
             MAX_DEPENDENCIES_PER_CAPABILITY,

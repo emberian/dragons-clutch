@@ -1,6 +1,6 @@
 //! The ticket on the wire: the type, the only writer, and the only reader.
 
-use dclutch_direct_codec::intent_v2::CompactIntentV2;
+use dclutch_trading::intent_v2::CompactIntentV2;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use solana_program::pubkey::Pubkey;

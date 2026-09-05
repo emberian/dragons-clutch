@@ -15,11 +15,11 @@
 
 use std::borrow::Cow;
 
-use dclutch_account_profile_contract::v2::encode::AccountAliasInputV2;
-use dclutch_account_profile_contract::v2::{
+use dclutch_vm::account_profile::v2::encode::AccountAliasInputV2;
+use dclutch_vm::account_profile::v2::{
     AccountProfileV2, PhysicalAccountDataGeometryV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID,
 };
-use dclutch_capability_program_contract::hot_v3::{
+use dclutch_market::capability_program::hot_v3::{
     HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACTIVATION_CACHE_ACCOUNT_V3,
     HOT_CAPABILITY_SEAL_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CORE_PROGRAM_ACCOUNT_V3,
     HOT_CORE_PROGRAMDATA_ACCOUNT_V3, HOT_DESCRIPTOR_RAW_ACCOUNT_V3, HOT_EFFECT_RAW_ACCOUNT_V3,
@@ -32,19 +32,19 @@ use dclutch_capability_program_contract::hot_v3::{
     HOT_TRADING_PROGRAM_ACCOUNT_V3, HOT_TRADING_PROGRAMDATA_ACCOUNT_V3,
     HOT_TRANSITION_RAW_ACCOUNT_V3, HotExecutionEnvelopeV3,
 };
-use dclutch_capability_program_contract::set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2;
-use dclutch_capability_program_contract::v4::{
+use dclutch_market::capability_program::set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2;
+use dclutch_market::capability_program::v4::{
     CapabilityProgramV4, CapabilityRootAccountV4,
     SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID,
     SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5, initialize_root_account_v4,
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
 };
 use dclutch_core_contract::ContentId as CoreContentId;
-use dclutch_effect_kernel::v3::SCHEMA_RELEASE_ID as EFFECT_PROGRAM_SCHEMA_ID;
-use dclutch_execution_strategy_contract::admitted_v3::ADMITTED_STRATEGY_EVIDENCE_COUNT_V3;
-use dclutch_execution_strategy_contract::v2::{
+use dclutch_vm::effect::v3::SCHEMA_RELEASE_ID as EFFECT_PROGRAM_SCHEMA_ID;
+use dclutch_market::execution_strategy::admitted_v3::ADMITTED_STRATEGY_EVIDENCE_COUNT_V3;
+use dclutch_market::execution_strategy::v2::{
     BankTransportV2, EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
     classify_bank_transport_v2,
@@ -52,39 +52,39 @@ use dclutch_execution_strategy_contract::v2::{
 use dclutch_accelerator_program_test::joined_artifacts::{
     JoinedGeneralArtifactInputV5, JoinedGeneralArtifactsV5, build_joined_general_artifacts_v5,
 };
-use dclutch_general_adapter_contract::account_rules_v3::{
+use dclutch_trading::general::account_rules_v3::{
     GeneralExternalAccountWidthsV3, general_account_profile_fixed_count_v3,
     general_account_profile_rule_v3,
 };
-use dclutch_general_adapter_contract::hot_candidate_v3::{
+use dclutch_trading::general::hot_candidate_v3::{
     GENERAL_HOT_COMMON_IDENTITIES_V3, general_hot_scalar_count_v3,
 };
-use dclutch_general_adapter_contract::local_state_v3::{
+use dclutch_trading::general::local_state_v3::{
     GeneralLocalStateHeaderV3, GeneralLocalStateKindV3, encode_general_local_state_v3_atomic,
     general_local_state_len_v3,
 };
-use dclutch_general_adapter_contract::release_v3::GENERAL_ACTIONS_V3;
-use dclutch_general_adapter_contract::runtime_selection::{
+use dclutch_trading::general::release_v3::GENERAL_ACTIONS_V3;
+use dclutch_trading::general::runtime_selection::{
     RUNTIME_SELECTION_CURSOR_BYTES_V2, consider_verified_candidate_v2,
 };
-use dclutch_general_adapter_contract::runtime_width::{
+use dclutch_trading::general::runtime_width::{
     SettlementCursorHeaderV2, SettlementCursorV2, SettlementPhaseV2, VerifiedCandidateHeaderV2,
     VerifiedCandidateV2, settlement_cursor_len, verified_candidate_len,
 };
-use dclutch_general_adapter_contract::state_artifacts_v3::{
+use dclutch_trading::general::state_artifacts_v3::{
     GeneralReadonlyEvidenceKindV3, general_child_account_start_v3, general_readonly_evidence_v3,
 };
-use dclutch_general_adapter_contract::state_seeds_v3::{
+use dclutch_trading::general::state_seeds_v3::{
     GeneralStateAddressSeedsV3, GeneralStateRecipeV3,
 };
-use dclutch_general_codec::{
+use dclutch_trading::general_codec::{
     Action, MAX_SELECTION_CRITERIA, SelectionCriterion, SelectionPolicyV1,
     successor_request_v2::{CONTROLLER_REQUEST_BYTES_V2, ControllerRequestV2},
 };
-use dclutch_general_config_contract::root::{GeneralRootV2, general_root_creation_tail_v2};
-use dclutch_general_config_contract::v3::GENERAL_CONFIG_SCHEMA_ID_V3;
-use dclutch_general_config_contract::{GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_ROOT_BYTES_V2};
-use dclutch_market_core_codec::{
+use dclutch_trading::general_config::root::{GeneralRootV2, general_root_creation_tail_v2};
+use dclutch_trading::general_config::v3::GENERAL_CONFIG_SCHEMA_ID_V3;
+use dclutch_trading::general_config::{GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_ROOT_BYTES_V2};
+use dclutch_market::{
     CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness, StateBumpsV1,
 };
 use dclutch_operator::general_hot_v3::{
@@ -95,18 +95,18 @@ use dclutch_operator::general_hot_v3::{
 };
 use dclutch_operator::versioned::PACKET_DATA_BYTES;
 use dclutch_operator::{Finality, Observation, ObservedAccount};
-use dclutch_product_runtime_v2::{
+use dclutch_product::{
     ContentId, PortfolioInputV2, ResultDomainInputV2, compile_portfolio_v2,
     compile_result_domain_v2, portfolio_record_bytes, result_domain_record_bytes,
 };
-use dclutch_product_runtime_v2_admission::{
+use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
     RESULT_DOMAIN_SCHEMA_ID_V2,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_release_set_contract::CapabilityExecutionSelectionV1;
-use dclutch_request_profile_contract::SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID;
-use dclutch_transition_vm::v3::SCHEMA_RELEASE_ID as TRANSITION_PROGRAM_SCHEMA_ID;
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
+use dclutch_vm::request_profile::SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID;
+use dclutch_vm::v3::SCHEMA_RELEASE_ID as TRANSITION_PROGRAM_SCHEMA_ID;
 use solana_address_lookup_table_interface::{
     program as lookup_table_program,
     state::{AddressLookupTable, LookupTableMeta},
@@ -209,7 +209,7 @@ struct GeneralChainFixtureV3 {
 // until a release compiler became a THIRD author of the same fact, at which
 // point "each copy checks itself" stops being a property of the system. The
 // literals and the order now live in
-// `dclutch_general_adapter_contract::state_seeds_v3`, which the policy encoder
+// `dclutch_trading::general::state_seeds_v3`, which the policy encoder
 // and this file both consume, exactly as line 267 below already consumes
 // `RAW_RECORD_PDA_SEED_V1` instead of retyping it.
 
@@ -1038,7 +1038,7 @@ fn build_fixture(action: Action) -> GeneralChainFixtureV3 {
 /// rather than accepts, so the generated runtime frame has to know where they
 /// are. Both come from General's own `state_artifacts_v3` coordinates.
 fn primary_state_index(action: Action, primary: bool) -> Option<usize> {
-    use dclutch_general_adapter_contract::state_artifacts_v3::{
+    use dclutch_trading::general::state_artifacts_v3::{
         GENERAL_PRIMARY_STATE_ACCOUNT_V3, GENERAL_TERMINAL_STATE_ACCOUNT_V3,
     };
     if primary {

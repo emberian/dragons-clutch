@@ -1,0 +1,33 @@
+[package]
+name = "dclutch-claims"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The single Claims economic owner and every representation over it: the child ABI, conservation, Fractional, Rational V2, composition, Bearer, Structured, and position admission"
+
+[features]
+svm = ["dep:solana-program", "dep:solana-sdk-ids", "dclutch-product/svm"]
+
+[dependencies]
+dclutch-product = { path = "../dclutch-product", features = ["svm"] }
+solana-program = { version = "=3.0.0", default-features = false, optional = true }
+solana-sdk-ids = { version = "=3.1.0", optional = true }
+dclutch-vm = { path = "../dclutch-vm" }
+dclutch-sha256-adapter = { path = "../dclutch-sha256-adapter" }
+dclutch-custody = { path = "../dclutch-custody" }
+dclutch-source = { path = "../dclutch-source" }
+dclutch-market = { path = "../dclutch-market" }
+dclutch-core-contract = { path = "../dclutch-core-contract" }
+sha2 = { version = "=0.10.9", default-features = false }
+
+[dev-dependencies]
+dclutch-custody = { path = "../dclutch-custody" }
+# The legacy economic slice kernel is a TEST subject, not a dependency of the
+# conservation semantics: `tests.rs` executes it to exhibit the two defects a
+# bare complete-set action has today. Nothing in `lib.rs` links it.
+dclutch-product = { path = "../dclutch-product" }
+sha2 = { version = "=0.10.9", default-features = false }
+
+[lints]
+workspace = true

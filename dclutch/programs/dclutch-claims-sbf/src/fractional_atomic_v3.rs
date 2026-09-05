@@ -10,13 +10,13 @@ extern crate alloc;
 
 use alloc::{boxed::Box, vec};
 
-use dclutch_claims_svm::{
+use dclutch_claims::{
     CallerRole,
     liability_basis_state_v2::{LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2},
     signed_delta_v3::{PositionDeltaV3, SignedDeltaReceiptV3, SignedDeltaV3},
 };
-use dclutch_custody_contract::CustodyReplayV1;
-use dclutch_fractional_claim_contract::{
+use dclutch_custody::CustodyReplayV1;
+use dclutch_claims::fractional::{
     FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3, FRACTIONAL_ATOMIC_ACTOR_V3,
     FRACTIONAL_ATOMIC_HOLDER_TOKEN_V3, FRACTIONAL_ATOMIC_ROOT_V3, FRACTIONAL_ATOMIC_SHARD_MINT_V3,
     FRACTIONAL_ATOMIC_SIGNED_DELTA_ACCOUNT_COUNT_V3, FRACTIONAL_ATOMIC_TERMS_RAW_V3,
@@ -31,18 +31,18 @@ use dclutch_fractional_claim_contract::{
     FractionalExposureActionV2, FractionalExposureRequestV2, FractionalTerminalAtomicReceiptV3,
     decode_fractional_capability_root_v4, plan_fractional_physical_v3,
 };
-use dclutch_fractional_claim_kernel::{
+use dclutch_claims::fractional_kernel::{
     FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FRACTIONAL_SELECTION_CONFIG_BYTES_V1,
     FractionalExposureTermsAdmissionV2, FractionalExposureTermsV2,
     encode_fractional_selection_config_v1, fractional_selection_config_from_terms_v1,
 };
-use dclutch_fractional_claims_kernel::{
+use dclutch_claims::fractional_lowering::{
     FractionalExposureSignedDeltaInputV2, PreparedFractionalExposureSignedDeltaV2,
     fractional_exposure_signed_delta_shape_v2, prepare_fractional_exposure_signed_delta_v2,
     validate_fractional_exposure_signed_delta_postcondition_v2,
 };
 use dclutch_sha256_adapter::{digest, digestv};
-use dclutch_token_svm::{
+use dclutch_custody::token_svm::{
     MINT_BYTES, Mint, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, Token2022BehaviorProfileV2,
     TokenBehaviorSelectionV2,
 };
@@ -392,18 +392,18 @@ fn prepare_open_mutation(
     let claim_count = usize::try_from(shape.claim_count()).map_err(|_| ClaimsSbfError::Economic)?;
     let mut aggregate_scratch = vec![
         SignedDeltaV3::new(
-            dclutch_claims_svm::signed_delta_v3::DeltaDirectionV3::Neutral,
+            dclutch_claims::signed_delta_v3::DeltaDirectionV3::Neutral,
             0
         )
         .map_err(|_| ClaimsSbfError::Economic)?;
         claim_count
     ];
     let placeholder = PositionDeltaV3::new(
-        dclutch_claims_svm::signed_delta_v3::PositionDeltaInputV3 {
+        dclutch_claims::signed_delta_v3::PositionDeltaInputV3 {
             position_index: 0,
             outcome: 0,
             delta: SignedDeltaV3::new(
-                dclutch_claims_svm::signed_delta_v3::DeltaDirectionV3::Credit,
+                dclutch_claims::signed_delta_v3::DeltaDirectionV3::Credit,
                 1,
             )
             .map_err(|_| ClaimsSbfError::Economic)?,
@@ -526,7 +526,7 @@ fn execute_prepared_open(
     )
     .map_err(|_| ClaimsSbfError::Token)?;
     let exact_holder =
-        dclutch_token_svm::TokenAccount::parse(&post_holder).map_err(|_| ClaimsSbfError::Token)?;
+        dclutch_custody::token_svm::TokenAccount::parse(&post_holder).map_err(|_| ClaimsSbfError::Token)?;
     if exact_holder.amount != expected_holder {
         return Err(ClaimsSbfError::Token.into());
     }
@@ -628,7 +628,7 @@ fn process_terminal(
     instruction_data: &[u8],
     request: &FractionalExposureRequestV2,
 ) -> Result<(), ProgramError> {
-    use dclutch_claims_svm::terminal_settlement_v3::{
+    use dclutch_claims::terminal_settlement_v3::{
         TERMINAL_SETTLEMENT_COLLATERAL_MINT_ACCOUNT_V3 as COLLATERAL_MINT,
         TERMINAL_SETTLEMENT_CUSTODY_PROGRAM_ACCOUNT_V3 as CUSTODY_PROGRAM,
         TERMINAL_SETTLEMENT_CUSTODY_REPLAY_ACCOUNT_V3 as CUSTODY_REPLAY,
@@ -922,7 +922,7 @@ fn process_terminal(
 
 #[inline(never)]
 fn terminal_request_digest(
-    request: &dclutch_claims_svm::terminal_settlement_v3::TerminalSettlementRequestV3,
+    request: &dclutch_claims::terminal_settlement_v3::TerminalSettlementRequestV3,
 ) -> [u8; 32] {
     digest(&request.to_bytes())
 }
@@ -931,11 +931,11 @@ fn terminal_request_digest(
 fn execute_terminal_boxed(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
-    request: dclutch_claims_svm::terminal_settlement_v3::TerminalSettlementRequestV3,
+    request: dclutch_claims::terminal_settlement_v3::TerminalSettlementRequestV3,
     outer_context: [u8; 32],
     outer_request_digest: [u8; 32],
 ) -> Result<
-    Box<dclutch_claims_svm::terminal_settlement_v3::TerminalSettlementReceiptV3>,
+    Box<dclutch_claims::terminal_settlement_v3::TerminalSettlementReceiptV3>,
     ProgramError,
 > {
     Ok(Box::new(execute_terminal_enclosing(
@@ -953,7 +953,7 @@ fn emit_terminal_receipt(
     action: FractionalExposureActionV2,
     request_digest: [u8; 32],
     terminal_request_digest: [u8; 32],
-    terminal_receipt: &dclutch_claims_svm::terminal_settlement_v3::TerminalSettlementReceiptV3,
+    terminal_receipt: &dclutch_claims::terminal_settlement_v3::TerminalSettlementReceiptV3,
     token_post_digest: [u8; 32],
     root: [u8; 32],
     post_mint_supply: u64,

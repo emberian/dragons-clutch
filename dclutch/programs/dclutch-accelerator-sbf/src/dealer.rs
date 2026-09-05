@@ -10,7 +10,7 @@
 use alloc::vec;
 
 use dclutch_core_contract::ContentId;
-use dclutch_execution_strategy_contract::v2::{
+use dclutch_market::execution_strategy::v2::{
     ACCELERATOR_ACK_HEADER_BYTES_V2, ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2,
     ACCELERATOR_OUTPUT_PAGE_ACK_BYTES_V3, AcceleratorAckV2, AcceleratorOutputPageAckV3,
     AdmittedAcceleratorRequestV2,
@@ -366,7 +366,7 @@ fn accepted_or_named_v4<T>(outcome: Result<T, &'static str>) -> bool {
     not(feature = "no-entrypoint")
 ))]
 fn lift_admitted_heap_frame_v4(accounts: &[AccountInfo<'_>]) -> ProgramResult {
-    use dclutch_capability_program_contract::hot_v3::HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3;
+    use dclutch_market::capability_program::hot_v3::HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3;
     use dclutch_trading_sbf::{
         admitted_composition_v3::ADMITTED_ACCELERATOR_HOT_FIXED_START_V4,
         entrypoint_adapter::admitted_heap_frame_bytes_v1,

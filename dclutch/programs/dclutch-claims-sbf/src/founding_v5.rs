@@ -11,7 +11,7 @@ extern crate alloc;
 use alloc::{boxed::Box, vec, vec::Vec};
 use core::convert::TryFrom;
 
-use dclutch_claims_svm::{
+use dclutch_claims::{
     founding_v5::{
         CLAIMS_FOUNDING_POST_RESOURCE_DIGEST_DOMAIN_V5, ClaimsFoundingAggregateSeedsV5,
         ClaimsFoundingReceiptV5, ClaimsFoundingRequestV5,
@@ -24,21 +24,21 @@ use dclutch_claims_svm::{
     },
     series_founding_transport_v1::SeriesClaimsFoundingTransportV1,
 };
-use dclutch_custody_contract::{CallerRoleV1, CustodyReplayV1};
-use dclutch_custody_contract::{
+use dclutch_custody::{CallerRoleV1, CustodyReplayV1};
+use dclutch_custody::{
     PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1, PROJECTED_CUSTODY_RECEIPT_BYTES_V1,
     PROJECTED_HOARD_CONTEXT_DOMAIN_V1, ProjectedCustodyLockReceiptV1, ProjectedCustodyReceiptV1,
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     CoreState, FoundingIntentV5, Identity, SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES,
     SeriesFoundingPermitV1, SeriesPermitJoinMismatchV1,
 };
-use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV3};
-use dclutch_registry_activation_auth_v1::ActivationAuthErrorV1;
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_rent_contract::lifecycle_v2::LifecycleRentCreditV2;
-use dclutch_source_contract::MarketPrincipalCapSetsV1;
-use dclutch_token_svm::{AccountState, TokenAccount, TokenProgram};
+use dclutch_product::svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV3};
+use dclutch_registry::activation_auth_v1::ActivationAuthErrorV1;
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
+use dclutch_source::MarketPrincipalCapSetsV1;
+use dclutch_custody::token_svm::{AccountState, TokenAccount, TokenProgram};
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
@@ -61,14 +61,14 @@ use crate::liability_basis_v2::{
     encode_liability_basis_market_v2, encode_liability_basis_position_v2, vector_width,
 };
 use crate::market_admission_v1::CLAIMS_FOUNDING_MARKET_ADMISSIBLE_PRESTATES_V1;
-use dclutch_claims_svm::liability_basis_state_v2::{
+use dclutch_claims::liability_basis_state_v2::{
     put_liability_basis_market_bump_v2, put_liability_basis_position_bump_v2,
 };
 
-pub use dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_ACCOUNT_COUNT_V6;
+pub use dclutch_claims::founding_v5::CLAIMS_FOUNDING_ACCOUNT_COUNT_V6;
 /// Exact request plus typed projected-Custody receipt instruction width.
 pub const CLAIMS_FOUNDING_INSTRUCTION_BYTES_V5: usize =
-    dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_REQUEST_BYTES_V5
+    dclutch_claims::founding_v5::CLAIMS_FOUNDING_REQUEST_BYTES_V5
         + PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1
         + PROJECTED_CUSTODY_RECEIPT_BYTES_V1;
 
@@ -553,18 +553,18 @@ fn decode_instruction(instruction_data: &[u8]) -> Result<DecodedFounding, Progra
         return Err(ClaimsFoundingSbfErrorV5::Instruction.into());
     }
     let request_bytes = instruction_data
-        .get(..dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_REQUEST_BYTES_V5)
+        .get(..dclutch_claims::founding_v5::CLAIMS_FOUNDING_REQUEST_BYTES_V5)
         .ok_or(ClaimsFoundingSbfErrorV5::Instruction)?;
     let projected_receipt_bytes = instruction_data
         .get(
-            dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_REQUEST_BYTES_V5
-                ..dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_REQUEST_BYTES_V5
+            dclutch_claims::founding_v5::CLAIMS_FOUNDING_REQUEST_BYTES_V5
+                ..dclutch_claims::founding_v5::CLAIMS_FOUNDING_REQUEST_BYTES_V5
                     + PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1,
         )
         .ok_or(ClaimsFoundingSbfErrorV5::Instruction)?;
     let realized_receipt_bytes = instruction_data
         .get(
-            dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_REQUEST_BYTES_V5
+            dclutch_claims::founding_v5::CLAIMS_FOUNDING_REQUEST_BYTES_V5
                 + PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1..,
         )
         .ok_or(ClaimsFoundingSbfErrorV5::Instruction)?;
@@ -593,7 +593,7 @@ fn build_receipt(
     request_digest: [u8; 32],
     candidates: &FoundingCandidates,
 ) -> Result<
-    Box<[u8; dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_RECEIPT_BYTES_V5]>,
+    Box<[u8; dclutch_claims::founding_v5::CLAIMS_FOUNDING_RECEIPT_BYTES_V5]>,
     ProgramError,
 > {
     let receipt = ClaimsFoundingReceiptV5::new(
@@ -675,7 +675,7 @@ fn decode_series_transport_instruction(
         return Err(ClaimsFoundingSbfErrorV5::Instruction.into());
     }
     let request_end =
-        dclutch_claims_svm::series_founding_transport_v1::SERIES_CLAIMS_FOUNDING_TRANSPORT_BYTES_V1;
+        dclutch_claims::series_founding_transport_v1::SERIES_CLAIMS_FOUNDING_TRANSPORT_BYTES_V1;
     let lock_end = request_end
         .checked_add(PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1)
         .ok_or(ClaimsFoundingSbfErrorV5::Instruction)?;
@@ -1352,7 +1352,7 @@ fn authenticate_releases(
         let receipt = match bump {
             None => {
                 let (receipt, witness) =
-                    dclutch_registry_activation_auth_v1::authenticate_activated_role_and_bump_v1(
+                    dclutch_registry::activation_auth_v1::authenticate_activated_role_and_bump_v1(
                         accounts.registry,
                         accounts.cache,
                         &request.release_set(),
@@ -1365,7 +1365,7 @@ fn authenticate_releases(
                 receipt
             }
             Some(witness) => {
-                dclutch_registry_activation_auth_v1::authenticate_activated_role_with_bump_v1(
+                dclutch_registry::activation_auth_v1::authenticate_activated_role_with_bump_v1(
                     accounts.registry,
                     accounts.cache,
                     &request.release_set(),
@@ -2226,7 +2226,7 @@ fn account<'accounts, 'info>(
 
 #[cfg(test)]
 mod tests {
-    use dclutch_claims_svm::founding_v5::ClaimsFoundingRequestInputV5;
+    use dclutch_claims::founding_v5::ClaimsFoundingRequestInputV5;
 
     use super::*;
 
@@ -2511,8 +2511,7 @@ mod tests {
             ProgramError::Custom(ClaimsFoundingSbfErrorV5::Custody as u32),
         );
         let mut obsolete = request.to_bytes();
-        obsolete[..8]
-            .copy_from_slice(&dclutch_claims_svm::founding_v4::CLAIMS_FOUNDING_REQUEST_MAGIC_V4);
+        obsolete[7] ^= 0xff;
         let mut instruction = Vec::from(obsolete);
         instruction.extend_from_slice(&lock.encode().expect("lock bytes"));
         instruction.extend_from_slice(&projected.encode().expect("projected bytes"));
@@ -2532,7 +2531,7 @@ mod tests {
         let count = 4;
         let quantity = 500_000_000;
         let failure =
-            u32::try_from(dclutch_economic_slice_kernel::refunding_failure_index(4).unwrap())
+            u32::try_from(dclutch_product::economic_slice::refunding_failure_index(4).unwrap())
                 .unwrap();
         assert_eq!(failure, 3, "the failure coordinate is the last one");
         let (founder, escrow) = refunding_founding_vectors_v1(quantity, count, failure).unwrap();
@@ -2557,7 +2556,7 @@ mod tests {
     fn the_founder_is_issued_no_failure_claim_at_all() {
         for count in 2_usize..8 {
             let failure = u32::try_from(
-                dclutch_economic_slice_kernel::refunding_failure_index(
+                dclutch_product::economic_slice::refunding_failure_index(
                     u32::try_from(count).unwrap(),
                 )
                 .unwrap(),
@@ -2594,7 +2593,7 @@ mod tests {
             .expect("escrow identity");
         assert_eq!(derived.failure_selector, 3);
         let seeds =
-            dclutch_claims_svm::protocol_position_v2::ProtocolPositionClaimsCapabilitySeedsV2::new(
+            dclutch_claims::protocol_position_v2::ProtocolPositionClaimsCapabilitySeedsV2::new(
                 market, 3,
             )
             .expect("capability seeds");

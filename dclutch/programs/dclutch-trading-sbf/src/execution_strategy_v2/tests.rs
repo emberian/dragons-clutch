@@ -2,7 +2,7 @@ extern crate std;
 
 use std::{boxed::Box, vec, vec::Vec};
 
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CapabilityRootHeaderV1, SelectedRecordBumpsV1,
     v4::{
         ArtifactReferenceV4, CapabilityArtifactsV4, CapabilityProgramV4,
@@ -11,19 +11,19 @@ use dclutch_capability_program_contract::{
     },
 };
 use dclutch_core_contract::ContentId;
-use dclutch_execution_strategy_contract::shadow_v3::{
+use dclutch_market::execution_strategy::shadow_v3::{
     SHADOW_ACK_SCHEMA_ID_V3, SHADOW_REQUEST_SCHEMA_ID_V3,
 };
-use dclutch_execution_strategy_contract::v2::{
+use dclutch_market::execution_strategy::v2::{
     ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyAdmissionV2,
     ExecutionStrategyCertificateV2, ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{ArtifactReleaseV1, ArtifactUpgradePolicyV1};
-use dclutch_registry_svm::{LOADER_V3_PROGRAM_BYTES, LOADER_V3_PROGRAMDATA_METADATA_BYTES};
-use dclutch_release_set_contract::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{ArtifactReleaseV1, ArtifactUpgradePolicyV1};
+use dclutch_registry::svm::{LOADER_V3_PROGRAM_BYTES, LOADER_V3_PROGRAMDATA_METADATA_BYTES};
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, CapabilityExecutionSelectionV1, ExecutionRoleV1, ProgramIdentityV1,
 };
 use solana_program::{
@@ -387,7 +387,7 @@ impl Fixture {
         let trading_program = Pubkey::new_from_array([203; 32]);
         let child_root =
             Pubkey::find_program_address(&root.seeds().as_slices(), &trading_program).0;
-        let receipt = dclutch_registry_svm::AuthenticatedRoleReceiptV1::new(
+        let receipt = dclutch_registry::svm::AuthenticatedRoleReceiptV1::new(
             ExecutionRoleV1::Trading,
             id(32),
             program_identity(trading_program),

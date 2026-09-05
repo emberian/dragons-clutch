@@ -1508,7 +1508,7 @@ fn run_graduation_market(arguments: Vec<String>) -> Result<()> {
         registry,
         relayer.to_bytes(),
         &window,
-        dclutch_relay_contract::decode::RelayedObservableV1::DbcMigrationProgressV1,
+        dclutch_source::relay::decode::RelayedObservableV1::DbcMigrationProgressV1,
         &venue,
         direct.compiler(),
     )?;

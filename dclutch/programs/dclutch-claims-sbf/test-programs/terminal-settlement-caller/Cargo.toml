@@ -16,10 +16,10 @@ custom-heap = []
 custom-panic = []
 
 [dependencies]
-dclutch-claims-svm = { path = "../../../../crates/dclutch-claims-svm" }
+dclutch-claims = { path = "../../../../crates/dclutch-claims" }
 dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
 dclutch-refusal-registry = { path = "../../../../crates/dclutch-refusal-registry" }
-dclutch-release-set-contract = { path = "../../../../crates/dclutch-release-set-contract" }
+dclutch-registry = { path = "../../../../crates/dclutch-registry" }
 solana-program = { version = "=3.0.0", default-features = false }
 
 [workspace]

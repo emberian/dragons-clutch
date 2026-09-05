@@ -2,7 +2,7 @@
 
 use alloc::{boxed::Box, vec::Vec};
 
-use dclutch_market_core_codec::{
+use dclutch_market::{
     Admission, CoreEffectAckV1, CoreEffectEnvelopeV1, CoreState, Identity, MarketCoreStateSeedsV2,
     Request, Role, STATE_BYTES,
 };
@@ -275,7 +275,7 @@ pub(crate) fn authenticate_fixed_role_ack(
     let role_len = u32::try_from(role_request.len()).map_err(|_| CoreSbfError::Arithmetic)?;
     let full_effect_digest = identity(
         hashv(&[
-            &dclutch_market_core_codec::CORE_EFFECT_DIGEST_DOMAIN_V1,
+            &dclutch_market::CORE_EFFECT_DIGEST_DOMAIN_V1,
             &envelope_len.to_le_bytes(),
             envelope_bytes,
             &role_len.to_le_bytes(),

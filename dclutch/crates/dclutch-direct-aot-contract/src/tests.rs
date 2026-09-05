@@ -2,7 +2,7 @@
 
 extern crate std;
 
-use dclutch_transition_vm::v2::{
+use dclutch_vm::v2::{
     ProgramV2, RegisterInput as VmInput, RegisterOutput as VmOutput, execute_atomic as execute_vm,
 };
 

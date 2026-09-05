@@ -1,6 +1,6 @@
 //! Exact logical AccountProfile for terminal Bearer redemption.
 
-use dclutch_account_profile_contract::v2::{
+use dclutch_vm::account_profile::v2::{
     AccountPrestateV2, DYNAMIC_FIXED_SPAN_HEADER_BYTES, OPERATION_BYTES as ACCOUNT_OPERATION_BYTES,
     RULE_BYTES as ACCOUNT_RULE_BYTES, TrustedBuiltinIdentityV2, TrustedEnvironmentV2,
     TrustedIdentityEnvironmentV2,
@@ -11,15 +11,15 @@ use dclutch_account_profile_contract::v2::{
         encode_account_profile_with_dynamic_fixed_span_v2_atomic,
     },
 };
-use dclutch_product_payoff_v2_codec::runtime_v3::{
+use dclutch_product::payoff::runtime_v3::{
     BASIS_HEADER_BYTES_V3, BASIS_WIDTH_OFFSET_V3, ProductBasisV3,
 };
-use dclutch_rational_representation_v2_contract::{
+use dclutch_claims::rational::{
     RATIONAL_TERMINAL_HOT_COMMON_IDENTITIES_V3, RATIONAL_TERMINAL_HOT_COMMON_SCALARS_V3,
     RATIONAL_TERMINAL_SCALAR_PRODUCT_OUTCOME_COUNT_V3, REPRESENTATION_FRAME_SPEC_V2,
     RepresentationCoordinateV2,
 };
-use dclutch_token_svm::TOKEN_BEHAVIOR_SELECTION_BYTES_V2;
+use dclutch_custody::token_svm::TOKEN_BEHAVIOR_SELECTION_BYTES_V2;
 
 use crate::{
     Error, RATIONAL_TERMINAL_HOT_INJECTED_ACCOUNT_COUNT_V3,
@@ -385,11 +385,11 @@ fn rule(index: usize, lengths: &[u32]) -> Result<AccountRuleWithPrestateInputV2>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_account_profile_contract::{
+    use dclutch_vm::account_profile::{
         AccountObservationV1,
         v2::{AccountProfileV2, ProjectionRegistersV2, project_tail_count_atomic},
     };
-    use dclutch_product_payoff_v2_codec::runtime_v3::{
+    use dclutch_product::payoff::runtime_v3::{
         BASIS_HEADER_BYTES_V3, BasisInputV3, BasisKindV3, Error as ProductBasisErrorV3,
         compile_basis_v3,
     };

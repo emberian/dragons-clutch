@@ -12,7 +12,7 @@
  *
  * So this generator does not scrape. It RUNS the contract:
  *
- *   cargo run -p dclutch-rational-representation-v2-lifecycle-contract \
+ *   cargo run -p dclutch-claims \
  *     --example compact_retire_child_v4
  *
  * The example builds one canonical child through the contract's own family,
@@ -31,7 +31,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const outputUrl = new URL('../fixtures/rational-retire-receipt-child-v4.json', import.meta.url);
-const CRATE = 'dclutch-rational-representation-v2-lifecycle-contract';
+const CRATE = 'dclutch-claims';
 const EXAMPLE = 'compact_retire_child_v4';
 
 const emitted = execFileSync('cargo', ['run', '--quiet', '-p', CRATE, '--example', EXAMPLE], {

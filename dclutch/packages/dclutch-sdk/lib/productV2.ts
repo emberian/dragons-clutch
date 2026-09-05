@@ -32,7 +32,7 @@ import {
  * actually publishes.
  *
  * Live Product admission is `programs/dclutch-product-runtime-v2-sbf` over
- * `dclutch-product-runtime-v2-admission`, a different wire (DCLTPRM2 / DCLTPRQ2 at
+ * `dclutch-product::admission`, a different wire (DCLTPRM2 / DCLTPRQ2 at
  * 112 bytes / DCLTPRA2). That surface now exists, as
  * `lib/productRuntimeV2Admission.ts` — built against the live decoder, with every
  * coordinate generated out of the two live source files, because DCLTPRQ2 names two

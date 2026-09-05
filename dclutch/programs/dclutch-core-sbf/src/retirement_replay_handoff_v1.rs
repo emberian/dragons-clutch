@@ -2,23 +2,23 @@
 
 use alloc::vec::Vec;
 
-use dclutch_claims_svm::liability_basis_state_v2::{
+use dclutch_claims::liability_basis_state_v2::{
     LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2,
 };
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CUSTODY_REPLAY_BYTES_V1, CompartmentV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1,
     CustodyReplayV1, CustodyVaultSeedsV1, RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1,
     RetirementReplayHandoffReceiptV1, RetirementReplayHandoffRequestV1,
     retirement_replay_handoff_accounts_v1::*,
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     CoreState, MarketAdmissionV1, MarketCoreStateSeedsV2, Phase, Role,
 };
-use dclutch_realm_contract::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_rent_contract::lifecycle_v2::LifecycleRentCreditV2;
-use dclutch_token_svm::{AccountState, COption, TokenAccount};
+use dclutch_market::realm::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
+use dclutch_custody::token_svm::{AccountState, COption, TokenAccount};
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,

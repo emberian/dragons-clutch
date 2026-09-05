@@ -51,8 +51,8 @@ use crate::{
     direct_inline_v3::{CheckedHotOuterReleaseV3, ObservedAccountMetaV3},
     observation::{FinalizedRecordProof, authenticate_finalized_record, decode_clock, decode_rent},
 };
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
     hot_v3::{
         HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACTIVATION_CACHE_ACCOUNT_V3,
@@ -70,7 +70,7 @@ use dclutch_capability_program_contract::{
     },
 };
 use dclutch_core_contract::ContentId;
-use dclutch_execution_strategy_contract::v2::{
+use dclutch_market::execution_strategy::v2::{
     AcceleratorTransportProfileV2, AuthenticatedInterpreterArtifactsV2,
     EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2, ExecutionStrategyCertificateV2,
     ExecutionStrategyProgramV2, StrategyDispositionV2,
@@ -78,10 +78,10 @@ use dclutch_execution_strategy_contract::v2::{
 use dclutch_hot_bump_miner_v1::{
     HotBumpCorpusV1, activated_custody_program_v1, mine_hot_bump_hints_v1,
 };
-use dclutch_market_core_codec::{Identity as CoreIdentity, SeriesFoundingPermitSeedsV1};
-use dclutch_registry_contract::{ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1};
-use dclutch_release_set_contract::{ArtifactReleaseIdV1, ExecutionRoleV1};
-use dclutch_series_v3_kernel::{
+use dclutch_market::{Identity as CoreIdentity, SeriesFoundingPermitSeedsV1};
+use dclutch_registry::{ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1};
+use dclutch_registry::release_set::{ArtifactReleaseIdV1, ExecutionRoleV1};
+use dclutch_trading::series::{
     SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3, SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
     SERIES_TICKET_SCHEMA_RELEASE_ID_V3, TemplateV3, admit_ticket,
     replay::{SERIES_STATE_BYTES_V3, SeriesStateV3, TicketStateSeedsV3, TicketStateV3},
@@ -286,7 +286,7 @@ fn build_series_occurrence_hot_v3(
         frame.header.release_set().to_bytes(),
     )?);
     let mut instruction_data = Vec::with_capacity(
-        dclutch_capability_program_contract::hot_v3::HOT_FAMILY_REQUEST_OFFSET_V3
+        dclutch_market::capability_program::hot_v3::HOT_FAMILY_REQUEST_OFFSET_V3
             .checked_add(request.as_bytes().len())
             .ok_or(SeriesHotOperatorErrorV3::Arithmetic)?,
     );
@@ -722,7 +722,7 @@ fn validate_injected_runtime(
         ),
         (
             HOT_RUNTIME_LINKED_BASIS_COORDINATE_V3,
-            dclutch_capability_program_contract::hot_v3::HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
+            dclutch_market::capability_program::hot_v3::HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
         ),
     ] {
         if state.runtime_accounts.get(runtime) != state.fixed_accounts.get(physical) {
@@ -1098,7 +1098,7 @@ fn build_selected_series_hot_v5(
         HOT_CONFIG_RAW_ACCOUNT_V3,
         HOT_PRODUCT_RAW_ACCOUNT_V3,
         HOT_PORTFOLIO_RAW_ACCOUNT_V3,
-        dclutch_capability_program_contract::hot_v3::HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
+        dclutch_market::capability_program::hot_v3::HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
     ];
     for (ordinal, physical) in injected.into_iter().enumerate() {
         if state.runtime_physical_accounts[ordinal] != state.fixed_accounts[physical] {
@@ -1487,8 +1487,8 @@ const _: () = assert!(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_market_core_codec::SERIES_FOUNDING_PERMIT_BYTES_V1;
-    use dclutch_series_v3_kernel::{generated, request::encode_series_action_header_v3};
+    use dclutch_market::SERIES_FOUNDING_PERMIT_BYTES_V1;
+    use dclutch_trading::series::{generated, request::encode_series_action_header_v3};
     use solana_program::{account_info::AccountInfo, rent::Rent, sysvar::SysvarSerialize};
 
     use dclutch_trading_sbf::series::release_v5::{
@@ -1527,7 +1527,7 @@ mod tests {
             )
             .expect("Expire request")
             .to_vec(),
-            descriptor: [0; dclutch_capability_program_contract::v4::CAPABILITY_PROGRAM_V4_BYTES],
+            descriptor: [0; dclutch_market::capability_program::v4::CAPABILITY_PROGRAM_V4_BYTES],
             artifact_ids: SeriesActionArtifactIdsV5 {
                 account_profile: [1; 32],
                 request_profile: [2; 32],
@@ -1564,7 +1564,7 @@ mod tests {
                 request_profile: Vec::new(),
                 lifecycle: Vec::new(),
                 strategy: [0;
-                    dclutch_execution_strategy_contract::v2::EXECUTION_STRATEGY_PROGRAM_BYTES_V2],
+                    dclutch_market::execution_strategy::v2::EXECUTION_STRATEGY_PROGRAM_BYTES_V2],
                 transition: Vec::new(),
                 effect: Vec::new(),
             },
@@ -1799,7 +1799,7 @@ mod tests {
 
     #[test]
     fn v5_planner_wait_until_needs_no_current_source_or_physical_frame() {
-        use dclutch_series_v3_kernel::{
+        use dclutch_trading::series::{
             admit_occurrence, admit_ticket, occurrence_content_id, template_content_id,
         };
         use solana_program::hash::hashv;
@@ -1901,7 +1901,7 @@ mod tests {
             Ok(())
         );
 
-        let selection = dclutch_release_set_contract::CapabilityExecutionSelectionV1::from_bytes(
+        let selection = dclutch_registry::release_set::CapabilityExecutionSelectionV1::from_bytes(
             0, [51; 32], [52; 32], [53; 32], [54; 32],
         )
         .expect("controller selection");
@@ -1910,7 +1910,7 @@ mod tests {
             controller.to_bytes(),
             9,
             selection,
-            dclutch_capability_program_contract::SelectedRecordBumpsV1::default(),
+            dclutch_market::capability_program::SelectedRecordBumpsV1::default(),
         )
         .expect("persistent controller header");
         let trading = Pubkey::new_from_array([56; 32]);

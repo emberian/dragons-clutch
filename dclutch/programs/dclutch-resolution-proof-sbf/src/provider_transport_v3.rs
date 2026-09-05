@@ -2,23 +2,23 @@
 
 use alloc::{boxed::Box, vec::Vec};
 
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2};
-use dclutch_pyth_svm::{
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2};
+use dclutch_source::pyth::{
     FullPriceUpdateV2, GuardianSetV1, PostUpdateParamsView, PythReleaseV1, ReceiverConfigV2View,
     VerifiedEncodedVaaV1,
 };
-use dclutch_registry_contract::{
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_BYTES_V1,
     ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1,
     require_slot_pinned_release_v1,
 };
-use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
-use dclutch_release_set_contract::{
+use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
+use dclutch_registry::release_set::{
     ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProtocolInfrastructureProfileV2,
 };
-use dclutch_resolution_codec::{
+use dclutch_source::resolution::{
     PROVIDER_ABANDON_REQUEST_BYTES_V3, PROVIDER_ABANDON_REQUEST_MAGIC_V3,
     PROVIDER_RECLAIM_REQUEST_BYTES_V3, PROVIDER_RECLAIM_REQUEST_MAGIC_V3,
     PROVIDER_SUBMIT_REQUEST_BYTES_V3, PROVIDER_SUBMIT_REQUEST_MAGIC_V3,
@@ -28,7 +28,7 @@ use dclutch_resolution_codec::{
     ProviderSubmitReceiptV3, ProviderSubmitRequestV3, ProviderUpdateLifecycleV3,
     ProviderUpdateStatusV3, RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateV2,
 };
-use dclutch_source_contract::{
+use dclutch_source::{
     PROVIDER_RELEASE_BYTES, PROVIDER_RELEASE_SCHEMA_ID_V1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
     SOURCE_MATERIAL_V3_BYTES, SOURCE_SPEC_BYTES, SOURCE_SPEC_SCHEMA_ID_V1, SourceAccessProfile,
     SourceMaterialV3, SourceResolutionPhaseV1, SourceResolutionStateV2, SourceSpecV1,
@@ -807,7 +807,7 @@ fn authenticate_submission_records(
         &provider_data,
         PROVIDER_RELEASE_BYTES,
     )?;
-    let provider = dclutch_source_contract::ProviderReleaseV1::decode(&provider_data)
+    let provider = dclutch_source::ProviderReleaseV1::decode(&provider_data)
         .map_err(|_| ResolutionError::SourceMaterial)?;
     drop(provider_data);
     let release_data = frame
@@ -821,7 +821,7 @@ fn authenticate_submission_records(
         PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
         request.provider_release,
         &release_data,
-        dclutch_pyth_svm::PYTH_RELEASE_V1_ENCODED_LEN,
+        dclutch_source::pyth::PYTH_RELEASE_V1_ENCODED_LEN,
     )?;
     let release =
         PythReleaseV1::decode(&release_data).map_err(|_| ResolutionError::ProviderRelease)?;
@@ -1286,7 +1286,7 @@ fn authenticate_reclaim_release(
         PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
         lifecycle.provider_release,
         &release_data,
-        dclutch_pyth_svm::PYTH_RELEASE_V1_ENCODED_LEN,
+        dclutch_source::pyth::PYTH_RELEASE_V1_ENCODED_LEN,
     )?;
     let release =
         PythReleaseV1::decode(&release_data).map_err(|_| ResolutionError::ProviderRelease)?;

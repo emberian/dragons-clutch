@@ -7,7 +7,7 @@
 
 use std::vec::Vec;
 
-use dclutch_account_profile_contract::v2::{AccountProfileV2, RouteAccountPrivilegesV2};
+use dclutch_vm::account_profile::v2::{AccountProfileV2, RouteAccountPrivilegesV2};
 use solana_program::{account_info::AccountInfo, program_error::ProgramError};
 
 use crate::TradingSbfError;
@@ -157,7 +157,7 @@ mod tests {
 
     use alloc::{boxed::Box, vec, vec::Vec};
 
-    use dclutch_account_profile_contract::v2::AccountProfileV2;
+    use dclutch_vm::account_profile::v2::AccountProfileV2;
     use solana_program::pubkey::Pubkey;
 
     use super::*;

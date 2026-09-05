@@ -2,12 +2,12 @@ extern crate std;
 
 use std::vec::Vec;
 
-use dclutch_account_profile_contract::AccountObservationV1;
+use dclutch_vm::account_profile::AccountObservationV1;
 use dclutch_core_contract::ContentId;
-use dclutch_execution_strategy_contract::shadow_v3::{
+use dclutch_market::execution_strategy::shadow_v3::{
     ShadowArtifactTupleV3, ShadowExecutionDigestsV3, ShadowRequestV3, ShadowRuntimeShapeV3,
 };
-use dclutch_series_v3_kernel::{
+use dclutch_trading::series::{
     AuthenticatedProductProjectionV2, OccurrenceV3, generated, occurrence_content_id,
     replay::{SeriesStateV3, TicketStateV3},
     request::{SeriesActionV3, encode_series_action_header_v3},
@@ -126,8 +126,8 @@ struct SemanticFixture {
     occurrence: [u8; generated::SERIES_OCCURRENCE_BYTES_V3],
     ticket: [u8; generated::SERIES_TICKET_BYTES_V3],
     request: Vec<u8>,
-    series_state: [u8; dclutch_series_v3_kernel::replay::SERIES_STATE_BYTES_V3],
-    ticket_state: [u8; dclutch_series_v3_kernel::replay::SERIES_TICKET_STATE_BYTES_V3],
+    series_state: [u8; dclutch_trading::series::replay::SERIES_STATE_BYTES_V3],
+    ticket_state: [u8; dclutch_trading::series::replay::SERIES_TICKET_STATE_BYTES_V3],
     clock: [u8; 40],
     product: AuthenticatedProductProjectionV2,
     market: [u8; 32],
@@ -184,7 +184,7 @@ impl SemanticFixture {
         request.extend_from_slice(&siblings[0]);
         request.extend_from_slice(&siblings[1]);
         let decoded_template =
-            dclutch_series_v3_kernel::TemplateV3::decode(&template).expect("Template");
+            dclutch_trading::series::TemplateV3::decode(&template).expect("Template");
         let occurrence_count = decoded_template.occurrence_count();
         let series_state = SeriesStateV3::new(decoded_template.close_rent())
             .prepare_ticket(0)
@@ -426,7 +426,7 @@ fn semantic_input_is_derived_from_the_authenticated_runtime_vector() {
     );
     let expected = evaluate_semantic_core_request(fixture.shadow(), &observations, fixture.facts())
         .expect("exact semantic Core request");
-    let decoded = dclutch_market_core_codec::SeriesCoreRequestV1::decode(&expected)
+    let decoded = dclutch_market::SeriesCoreRequestV1::decode(&expected)
         .expect("Core request hostile decode");
     assert_eq!(decoded.expected_series_revision(), 4);
     assert_eq!(decoded.expected_ticket_revision(), 0);

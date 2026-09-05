@@ -9,27 +9,27 @@ use sha2::{Digest as _, Sha256};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{Keypair, Signer};
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
     FundingLedgerStatusV2, FundingLedgerV2, derive_funded_rent_rate_v2, funding_ledger_bytes_v2,
 };
-use dclutch_market_core_codec::{CoreState, Phase};
-use dclutch_product_runtime_v2::ResultDomainV2;
-use dclutch_product_runtime_v2_admission::{
+use dclutch_market::{CoreState, Phase};
+use dclutch_product::ResultDomainV2;
+use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
 };
-use dclutch_registry_contract::ARTIFACT_RELEASE_SCHEMA_ID_V1;
-use dclutch_relay_contract::{
+use dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1;
+use dclutch_source::relay::{
     RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_ID_V1, RELAYED_FAMILY_RELEASE_ID_V1,
     RELAYER_KEY_SET_SCHEMA_RELEASE_ID_V1,
     record::{RelayedObservationRecordViewV1, RelayedRecordPhaseV1},
 };
-use dclutch_resolution_codec::{RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateKindV2};
+use dclutch_source::resolution::{RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateKindV2};
 use dclutch_resolution_core_v3_operator::{
     ObservedAccount, ResolutionAdmitTerminalSnapshotV3, build_resolution_admit_terminal_v3,
     validate_resolution_admit_terminal_report_v3,
 };
-use dclutch_source_contract::{
+use dclutch_source::{
     MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1, PROVIDER_RELEASE_SCHEMA_ID_V1,
     SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
     SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1, SourceMaterialV3,
@@ -375,7 +375,7 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
     // in more wallets than the founder's — the abort lane's refund wallet
     // held half the supply on the first executed walk).
     {
-        let token_program = Pubkey::new_from_array(dclutch_token_svm::TOKEN_2022_PROGRAM_ID);
+        let token_program = Pubkey::new_from_array(dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID);
         let recorded: Vec<(String, Pubkey)> = session
             .accounts
             .iter()
@@ -389,7 +389,7 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
                 continue;
             };
             let is_collateral = account.owner == token_program
-                && dclutch_token_svm::TokenAccount::parse(&account.data)
+                && dclutch_custody::token_svm::TokenAccount::parse(&account.data)
                     .map(|parsed| parsed.mint == mint.to_bytes())
                     .unwrap_or(false);
             if is_collateral {
@@ -460,7 +460,7 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
             attestation.pubkey(),
             hex(&facts.account_set_id),
             hex(&published_floor),
-            dclutch_source_contract::BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1,
+            dclutch_source::BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1,
             facts.admitted_principal_atoms,
             facts.admitted_principal_cap_atoms,
         ),
@@ -593,7 +593,7 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
     }
     let manifest_pair = RecordPairV1::derive(
         registry_program,
-        dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        dclutch_market::capability_manifest::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         market_state.identity.capability_manifest.to_bytes(),
     );
 
@@ -613,7 +613,7 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
     // founding defect this campaign reports rather than papers over.
     let readiness_activation_receipt = Pubkey::find_program_address(
         &[
-            dclutch_resolution_codec::FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
+            dclutch_source::resolution::FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
             market.as_ref(),
             &generation.to_le_bytes(),
         ],
@@ -872,10 +872,10 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
         "market": market.to_string(),
         "walk_bounty_lamports": WALK_BOUNTY_LAMPORTS,
         "founding_admission": {
-            "kappa_numerator": dclutch_source_contract::CHAIN_STATE_DEFAULT_KAPPA_NUMERATOR_V1,
-            "kappa_denominator": dclutch_source_contract::CHAIN_STATE_DEFAULT_KAPPA_DENOMINATOR_V1,
+            "kappa_numerator": dclutch_source::CHAIN_STATE_DEFAULT_KAPPA_NUMERATOR_V1,
+            "kappa_denominator": dclutch_source::CHAIN_STATE_DEFAULT_KAPPA_DENOMINATOR_V1,
             "manipulation_floor_lamports":
-                dclutch_source_contract::BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1,
+                dclutch_source::BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1,
             "manipulation_floor_record": hex(&published_floor),
             "principal_atoms": facts.admitted_principal_atoms.to_string(),
             "principal_cap_atoms": facts.admitted_principal_cap_atoms.to_string(),
@@ -1031,7 +1031,7 @@ fn success_walk(
     let append_probe = solana_program::instruction::Instruction {
         program_id: book.resolution_program,
         accounts: book.frame_metas(
-            dclutch_relay_contract::frame::RelayFrameKindV1::AppendObservation,
+            dclutch_source::relay::frame::RelayFrameKindV1::AppendObservation,
             None,
         )?,
         data: Vec::new(),

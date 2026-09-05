@@ -7,9 +7,7 @@ rust-version.workspace = true
 description = "Deterministic exact-integer compiler for runtime dClutch Product contracts"
 
 [dependencies]
-dclutch-product-contract = { path = "../dclutch-product-contract" }
-dclutch-product-payoff-v2-codec = { path = "../dclutch-product-payoff-v2-codec" }
-dclutch-product-runtime-v2 = { path = "../dclutch-product-runtime-v2" }
+dclutch-product = { path = "../dclutch-product" }
 sha2 = "=0.10.9"
 
 [lints]

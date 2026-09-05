@@ -3,16 +3,16 @@ extern crate std;
 use std::{boxed::Box, vec, vec::Vec};
 
 use dclutch_core_contract::ContentId;
-use dclutch_registry_contract::{
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetV1, ArtifactReleaseV1, ArtifactUpgradePolicyV1,
     initialize_activation_cache_v1,
 };
-use dclutch_registry_svm::{
+use dclutch_registry::svm::{
     AuthenticatedRoleReceiptV1, RegistryInstructionV1,
     batch_v2::{BatchErrorV2, ROLE_BATCH_REQUEST_MAGIC_V2, RoleBatchRequestV2},
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
     ProgramIdentityV1,
 };
@@ -118,7 +118,7 @@ fn finalized_record(
     let digest = hash(&data).to_bytes();
     let raw = Pubkey::find_program_address(
         &[
-            dclutch_record_contract::RAW_RECORD_PDA_SEED_V1,
+            dclutch_registry::record::RAW_RECORD_PDA_SEED_V1,
             &schema,
             &digest,
         ],
@@ -127,7 +127,7 @@ fn finalized_record(
     .0;
     let staging = Pubkey::find_program_address(
         &[
-            dclutch_record_contract::STAGING_CURSOR_PDA_SEED_V1,
+            dclutch_registry::record::STAGING_CURSOR_PDA_SEED_V1,
             &schema,
             &digest,
         ],
@@ -195,7 +195,7 @@ impl Fixture {
         .expect("artifact release");
         let (artifact_raw, artifact_staging, artifact_digest) = finalized_record(
             registry,
-            dclutch_registry_contract::ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1,
             release.to_bytes().to_vec(),
             &rent,
         );
@@ -205,7 +205,7 @@ impl Fixture {
             .expect("fully aliased release set");
         let (release_set_raw, release_set_staging, release_set_digest) = finalized_record(
             registry,
-            dclutch_release_set_contract::EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1,
+            dclutch_registry::release_set::EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1,
             release_set.to_bytes().to_vec(),
             &rent,
         );
@@ -251,7 +251,7 @@ impl Fixture {
         }
     }
 
-    fn activated(&self) -> dclutch_registry_contract::ActivatedExecutionReleaseSetV1 {
+    fn activated(&self) -> dclutch_registry::ActivatedExecutionReleaseSetV1 {
         let frame = self.role_frame();
         let mut output = [0_u8; ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1];
         initialize_activation_cache_v1(&mut output, self.release_set_id).expect("initialize cache");
@@ -341,7 +341,7 @@ impl Fixture {
         ];
         assert_eq!(
             accounts.len(),
-            dclutch_registry_svm::REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1
+            dclutch_registry::svm::REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1
         );
         accounts
     }
@@ -430,7 +430,7 @@ fn current_loader_observation_binds_fixed_elf_tail_and_slot() {
         .expect("well-shaped stale observation");
     assert_eq!(
         fixture.release.authenticate_deployment(stale),
-        Err(dclutch_registry_contract::Error::DeploymentSlotMismatch)
+        Err(dclutch_registry::Error::DeploymentSlotMismatch)
     );
 }
 
@@ -995,15 +995,15 @@ fn role_activation_refuses_a_substituted_deployment() {
 // Release-set lineage: `DeclareSuccessor`
 // ---------------------------------------------------------------------------
 
-use dclutch_registry_activation_auth_v1::{
+use dclutch_registry::activation_auth_v1::{
     release_lineage_address_and_bump_v1, release_lineage_address_v1,
 };
-use dclutch_registry_contract::{
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_MAGIC_V1, ACTIVATED_EXECUTION_RELEASE_SET_PROFILE_V1,
     ACTIVATED_EXECUTION_RELEASE_SET_SCHEMA_VERSION_V1, ACTIVATED_ROLE_BYTES_V1,
     RELEASE_LINEAGE_BYTES_V1, ReleaseLineageV1,
 };
-use dclutch_release_set_contract::{EXECUTION_ROLE_COUNT_V1, EXECUTION_ROLE_ORDER_V1};
+use dclutch_registry::release_set::{EXECUTION_ROLE_COUNT_V1, EXECUTION_ROLE_ORDER_V1};
 use solana_program::{entrypoint::ProgramResult, program_error::ProgramError};
 
 fn copied<T: Copy, const N: usize>(values: &[T; N], index: usize) -> T {
@@ -1012,7 +1012,7 @@ fn copied<T: Copy, const N: usize>(values: &[T; N], index: usize) -> T {
         .copied()
         .expect("fixture index is in range")
 }
-use dclutch_registry_svm::lineage_v1::{
+use dclutch_registry::svm::lineage_v1::{
     DECLARE_SUCCESSOR_ACCOUNT_COUNT_V1, DECLARE_SUCCESSOR_LINEAGE_ACCOUNT_V1,
     DECLARE_SUCCESSOR_MAGIC_V1, DECLARE_SUCCESSOR_PREDECESSOR_CACHE_ACCOUNT_V1,
     DECLARE_SUCCESSOR_SUCCESSOR_CACHE_ACCOUNT_V1, DeclareSuccessorV1,
@@ -1276,12 +1276,12 @@ impl LineageFixture {
             .expect("successor cache")
             .try_borrow_data()
             .expect("successor bytes");
-        let predecessor = dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1::decode(
+        let predecessor = dclutch_registry::ActivatedExecutionReleaseSetViewV1::decode(
             &predecessor_data,
         )
         .expect("predecessor cache decodes");
         let successor =
-            dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1::decode(&successor_data)
+            dclutch_registry::ActivatedExecutionReleaseSetViewV1::decode(&successor_data)
                 .expect("successor cache decodes");
         let slot_at = |role: ExecutionRoleV1| {
             accounts
@@ -1322,17 +1322,17 @@ fn declaration_wire_is_argument_free_and_hostile_decoded() {
 
     // The magic must not collide with any wire the dispatcher routes first.
     for other in [
-        dclutch_registry_svm::REGISTRY_INSTRUCTION_MAGIC_V1,
-        dclutch_registry_svm::continuation_v1::REGISTRY_CONTINUATION_REQUEST_MAGIC_V1,
+        dclutch_registry::svm::REGISTRY_INSTRUCTION_MAGIC_V1,
+        dclutch_registry::svm::continuation_v1::REGISTRY_CONTINUATION_REQUEST_MAGIC_V1,
     ] {
         assert_ne!(DECLARE_SUCCESSOR_MAGIC_V1, other);
     }
 
     for (offset, expected) in [
-        (0, dclutch_registry_svm::Error::InvalidMagic),
-        (8, dclutch_registry_svm::Error::UnsupportedSchema),
-        (10, dclutch_registry_svm::Error::NonCanonicalReservedBytes),
-        (15, dclutch_registry_svm::Error::NonCanonicalReservedBytes),
+        (0, dclutch_registry::svm::Error::InvalidMagic),
+        (8, dclutch_registry::svm::Error::UnsupportedSchema),
+        (10, dclutch_registry::svm::Error::NonCanonicalReservedBytes),
+        (15, dclutch_registry::svm::Error::NonCanonicalReservedBytes),
     ] {
         let mut hostile = encoded;
         let byte = hostile.get_mut(offset).expect("hostile offset");
@@ -1341,7 +1341,7 @@ fn declaration_wire_is_argument_free_and_hostile_decoded() {
     }
     assert_eq!(
         DeclareSuccessorV1::decode(&encoded[..15]),
-        Err(dclutch_registry_svm::Error::InvalidLength)
+        Err(dclutch_registry::svm::Error::InvalidLength)
     );
 }
 

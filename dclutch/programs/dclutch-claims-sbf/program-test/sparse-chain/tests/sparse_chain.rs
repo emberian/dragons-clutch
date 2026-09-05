@@ -1,6 +1,6 @@
 //! Real-ELF evidence for the composed Claims sparse-transfer chain.
 //!
-//! `crates/dclutch-claims-svm/src/composition_v3.rs` (commit `78bda05`) defines
+//! `crates/dclutch-claims/src/composition_v3.rs` (commit `78bda05`) defines
 //! one composition no live route can reach yet: admit the destination Position,
 //! carry its exact 512-byte typed receipt into a SparseNativeTransfer, and carry
 //! that transfer's exact 448-byte receipt into the Close of the drained source
@@ -30,7 +30,7 @@ use dclutch_claims_sbf::sparse_native_transfer_v1::SPARSE_NATIVE_TRANSFER_ACCOUN
 use dclutch_claims_sparse_chain_test_caller_sbf::{
     CLOSE_RENT_TAIL_BYTES, FLAG_FAIL_AFTER, FLAG_SUBSTITUTE_ADMISSION_OWNER, FLAG_WITH_CLOSE,
 };
-use dclutch_claims_svm::{
+use dclutch_claims::{
     CallerRole,
     liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
@@ -38,17 +38,17 @@ use dclutch_claims_svm::{
     sparse_native_transfer_v1::{SparseNativeTransferInputV1, SparseNativeTransferV1},
 };
 use dclutch_core_contract::ContentId;
-use dclutch_registry_contract::{
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
     ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
     initialize_activation_cache_v1,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
     ProgramIdentityV1,
 };
-use dclutch_rent_contract::{
+use dclutch_market::rent::{
     RefundAuthority,
     lifecycle_v2::{
         LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
@@ -578,7 +578,7 @@ fn transfer_request(f: &Fixture) -> SparseNativeTransferV1 {
 /// and it is what the on-chain decoder has to refuse.
 fn transfer_bytes_with_quantity(f: &Fixture, quantity: u64) -> Vec<u8> {
     let mut bytes = transfer_request(f).to_bytes().to_vec();
-    let offset = dclutch_claims_svm::sparse_native_transfer_v1::SparseNativeTransferLayoutV1::QUANTITY;
+    let offset = dclutch_claims::sparse_native_transfer_v1::SparseNativeTransferLayoutV1::QUANTITY;
     bytes
         .get_mut(offset..offset + 8)
         .expect("quantity field")
@@ -613,7 +613,7 @@ fn close_request(f: &Fixture) -> ProtocolPositionRequestV2 {
 
 fn authority(f: &Fixture, context: [u8; 32], digest: [u8; 32]) -> Pubkey {
     Pubkey::find_program_address(
-        &dclutch_release_set_contract::CallerAuthoritySeedsV1::new(
+        &dclutch_registry::release_set::CallerAuthoritySeedsV1::new(
             ContentId::new(f.release).expect("release set"),
             f.core_market.to_bytes(),
             ExecutionRoleV1::Trading,

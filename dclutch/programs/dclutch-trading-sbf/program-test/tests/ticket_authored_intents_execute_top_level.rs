@@ -29,7 +29,7 @@
 
 use std::fs;
 
-use dclutch_direct_codec::intent_v2::CompactIntentV2;
+use dclutch_trading::intent_v2::CompactIntentV2;
 use dclutch_direct_hot_program_test_support::waist::{
     COMPUTE_LIMIT, TRADING_PROGRAM_ID, add_lookup_table, add_release_waist,
     canonical_lookup_addresses, direct_case, direct_top_level_instructions_with_signatures, elves,
@@ -39,7 +39,7 @@ use dclutch_direct_hot_program_test_support::waist::{
 use dclutch_direct_ticket::{
     encode_portable_direct_ticket_v1, parse_portable_direct_ticket_v1, sign_direct_intent_v1,
 };
-use dclutch_token_svm::TokenAccount;
+use dclutch_custody::token_svm::TokenAccount;
 use solana_program::pubkey::Pubkey;
 use solana_program_test::ProgramTestContext;
 use solana_sdk::signature::Signer;

@@ -8,13 +8,13 @@
 
 #![allow(dead_code)]
 
-use dclutch_account_profile_contract::{v2::AccountPrestateV2, v3::AccountProfileV3};
-use dclutch_capability_contract::{
+use dclutch_vm::account_profile::{v2::AccountPrestateV2, v3::AccountProfileV3};
+use dclutch_market::capability_manifest::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
     CapabilityEntryV1, CapabilityManifestV1, CompartmentFundingV1, EMPTY_MANIFEST_BYTES,
     FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
     hot_v3::{HOT_FIXED_ACCOUNT_COUNT_V3, HOT_RENT_SYSVAR_ACCOUNT_V3},
     set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
@@ -29,7 +29,7 @@ use dclutch_chain_bundle_builder::{
         program_with_view, rent_sysvar_bytes, system_program_builtin, vacant,
     },
 };
-use dclutch_claims_svm::{
+use dclutch_claims::{
     founding_v5::{
         ClaimsFoundingAggregateSeedsV5, ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5,
     },
@@ -41,7 +41,7 @@ use dclutch_claims_svm::{
         ProtocolPositionSeedsV2,
     },
 };
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CUSTODY_POSTSTATE_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CUSTODY_REQUEST_BYTES_V1, CallerRoleV1,
     CompartmentV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1, CustodyReplayV1,
     CustodyVaultSeedsV1, PROJECTED_CUSTODY_STATE_BYTES_V2, PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
@@ -53,7 +53,7 @@ use dclutch_direct_hot_program_test_support::waist::{
     Elves, REGISTRY_PROGRAM_ID, Releases, fixture_substrate, programdata, programdata_v2,
     registry_hot_instruction, release_v2,
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     Action as CoreAction, CoreState, FoundingIntentV5, Identity, MarketCoreStateSeedsV2,
     MarketIdentity, PRODUCT_GRAPH_BUMP_COUNT, Phase, ProductGraphBumpsV1, ProjectFoundReceiptV2,
     Readiness, Request as CoreRequest, SERIES_FOUNDING_PERMIT_BYTES_V1, SeriesCoreActionV1,
@@ -69,38 +69,38 @@ use dclutch_operator::{
     },
     series_lifecycle_v3::{SeriesCurrentOccurrenceV3, SeriesLifecycleSnapshotV3},
 };
-use dclutch_product_payoff_v2_codec::{
+use dclutch_product::payoff::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
     runtime_v3::{
         BasisInputV3, BasisKindV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, basis_record_bytes_v3,
         compile_basis_v3, semantic_basis_preimage_v3,
     },
 };
-use dclutch_product_runtime_v2::{
+use dclutch_product::{
     ContentId as ProductContentId, PortfolioInputV2, ResultDomainInputV2, compile_portfolio_v2,
     compile_result_domain_v2, portfolio_record_bytes, result_domain_record_bytes,
 };
-use dclutch_product_runtime_v2_admission::{
+use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
     RESULT_DOMAIN_SCHEMA_ID_V2,
 };
-use dclutch_realm_contract::{
+use dclutch_market::realm::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1,
     ExecutionRoleBindingV1, ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProtocolInfrastructureProfileV2,
 };
-use dclutch_rent_contract::{
+use dclutch_market::rent::{
     RefundAuthority,
     lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleAccountIdV2, LifecycleRentCreditV2},
 };
-use dclutch_token_svm::{
+use dclutch_custody::token_svm::{
     ACCOUNT_BYTES, LEGACY_TOKEN_PROGRAM_ID, MINT_BYTES, Mint, PRODUCTION_ADAPTER_RELEASES,
     TokenAccount,
 };
@@ -1077,8 +1077,8 @@ fn record_bumps_v1(registry: Pubkey, schema: [u8; 32], digest: [u8; 32]) -> (u8,
 
 fn capability_content(
     bytes: [u8; 32],
-) -> Result<dclutch_capability_contract::ContentId, SeriesPremarketExpiryChainErrorV1> {
-    dclutch_capability_contract::ContentId::new(bytes)
+) -> Result<dclutch_market::capability_manifest::ContentId, SeriesPremarketExpiryChainErrorV1> {
+    dclutch_market::capability_manifest::ContentId::new(bytes)
         .map_err(|_| SeriesPremarketExpiryChainErrorV1::Identity)
 }
 
@@ -1328,11 +1328,11 @@ struct NormalCustodyCorpusV1 {
 
 #[derive(Clone)]
 struct ProjectedCustodyCorpusV1 {
-    prepare_initialize: [u8; dclutch_custody_contract::PROJECTED_CUSTODY_REQUEST_BYTES_V1],
-    prepare_open: [u8; dclutch_custody_contract::PROJECTED_CUSTODY_REQUEST_BYTES_V1],
-    consume_lock: [u8; dclutch_custody_contract::PROJECTED_CUSTODY_REQUEST_BYTES_V1],
-    consume_realize: [u8; dclutch_custody_contract::PROJECTED_CUSTODY_REQUEST_BYTES_V1],
-    expire_abort: [u8; dclutch_custody_contract::PROJECTED_CUSTODY_REQUEST_BYTES_V1],
+    prepare_initialize: [u8; dclutch_custody::PROJECTED_CUSTODY_REQUEST_BYTES_V1],
+    prepare_open: [u8; dclutch_custody::PROJECTED_CUSTODY_REQUEST_BYTES_V1],
+    consume_lock: [u8; dclutch_custody::PROJECTED_CUSTODY_REQUEST_BYTES_V1],
+    consume_realize: [u8; dclutch_custody::PROJECTED_CUSTODY_REQUEST_BYTES_V1],
+    expire_abort: [u8; dclutch_custody::PROJECTED_CUSTODY_REQUEST_BYTES_V1],
     state: Pubkey,
     hoard_vault: Pubkey,
     caller: Pubkey,
@@ -2925,8 +2925,8 @@ fn legacy_mint_bytes_v1(
     if parsed.supply != supply
         || parsed.decimals != 0
         || !parsed.is_initialized
-        || !matches!(parsed.mint_authority, dclutch_token_svm::COption::None)
-        || !matches!(parsed.freeze_authority, dclutch_token_svm::COption::None)
+        || !matches!(parsed.mint_authority, dclutch_custody::token_svm::COption::None)
+        || !matches!(parsed.freeze_authority, dclutch_custody::token_svm::COption::None)
     {
         return Err(SeriesPremarketExpiryChainErrorV1::Record);
     }
@@ -3225,8 +3225,8 @@ fn _abi_type_pins(account: Account, identity: Identity) -> (Account, Identity) {
 
 #[cfg(test)]
 mod native_tests {
-    use dclutch_custody_contract::{CustodyRequestV1, OperationV1};
-    use dclutch_series_v3_kernel::SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3;
+    use dclutch_custody::{CustodyRequestV1, OperationV1};
+    use dclutch_trading::series::SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3;
     use dclutch_trading_sbf::series::artifacts_v3::SeriesArtifactSelectionV3;
 
     use super::*;

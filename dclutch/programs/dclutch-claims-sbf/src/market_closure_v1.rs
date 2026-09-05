@@ -6,7 +6,7 @@
 //! lamports to the immutable RentCredit, and emits the receipt only after the
 //! aggregate is closed.
 
-use dclutch_claims_svm::{
+use dclutch_claims::{
     liability_basis_state_v2::{LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2},
     market_closure_v1::{
         CLAIMS_MARKET_CLOSURE_POST_RESOURCE_DIGEST_DOMAIN_V1,
@@ -20,16 +20,16 @@ use dclutch_claims_svm::{
     },
 };
 use dclutch_core_contract::ContentId;
-use dclutch_market_core_codec::{
+use dclutch_market::{
     AGGREGATE_RETIREMENT_CHECKPOINT_BYTES_V1, CoreState, MarketCoreStateSeedsV2, STATE_BYTES,
 };
-use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
-use dclutch_registry_svm::continuation_v1::{
+use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
+use dclutch_registry::svm::continuation_v1::{
     REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationAdmissionSeedsV1,
     RegistryContinuationRequestV1,
 };
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_rent_contract::lifecycle_v2::LifecycleRentCreditV2;
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,
@@ -163,18 +163,18 @@ fn split_continuation(
     instruction_data: &[u8],
 ) -> Result<(&[u8], Option<RegistryContinuationRequestV1>), ProgramError> {
     if instruction_data.len()
-        == dclutch_claims_svm::market_closure_v1::CLAIMS_MARKET_CLOSURE_REQUEST_BYTES_V1
+        == dclutch_claims::market_closure_v1::CLAIMS_MARKET_CLOSURE_REQUEST_BYTES_V1
     {
         return Ok((instruction_data, None));
     }
-    let expected = dclutch_claims_svm::market_closure_v1::CLAIMS_MARKET_CLOSURE_REQUEST_BYTES_V1
+    let expected = dclutch_claims::market_closure_v1::CLAIMS_MARKET_CLOSURE_REQUEST_BYTES_V1
         .checked_add(REGISTRY_CONTINUATION_REQUEST_BYTES_V1)
         .ok_or(ClaimsMarketClosureSbfErrorV1::Accounts)?;
     if instruction_data.len() != expected {
         return Err(ClaimsMarketClosureSbfErrorV1::Accounts.into());
     }
     let (request, continuation) = instruction_data
-        .split_at(dclutch_claims_svm::market_closure_v1::CLAIMS_MARKET_CLOSURE_REQUEST_BYTES_V1);
+        .split_at(dclutch_claims::market_closure_v1::CLAIMS_MARKET_CLOSURE_REQUEST_BYTES_V1);
     let continuation = RegistryContinuationRequestV1::decode(continuation)
         .map_err(|_| ClaimsMarketClosureSbfErrorV1::Authority)?;
     Ok((request, Some(continuation)))
@@ -380,7 +380,7 @@ fn authenticate_privileges(
 #[inline(never)]
 fn authenticate_authority(
     accounts: ClosureAccounts<'_, '_>,
-    request: dclutch_claims_svm::market_closure_v1::ClaimsMarketClosureRequestInputV1,
+    request: dclutch_claims::market_closure_v1::ClaimsMarketClosureRequestInputV1,
     request_digest: [u8; 32],
 ) -> ProgramResult {
     let seeds = CallerAuthoritySeedsV1::from_bytes(
@@ -550,7 +550,7 @@ fn selected_program_matches(
 #[inline(never)]
 fn authenticate_core(
     accounts: ClosureAccounts<'_, '_>,
-    request: dclutch_claims_svm::market_closure_v1::ClaimsMarketClosureRequestInputV1,
+    request: dclutch_claims::market_closure_v1::ClaimsMarketClosureRequestInputV1,
 ) -> Result<CoreState, ProgramError> {
     if request.core_program != accounts.core_program.key.to_bytes()
         || accounts.core_market.owner != accounts.core_program.key
@@ -622,7 +622,7 @@ fn authenticate_rent_credit(accounts: ClosureAccounts<'_, '_>, core: CoreState) 
 #[inline(never)]
 fn authenticate_empty_aggregate(
     accounts: ClosureAccounts<'_, '_>,
-    request: dclutch_claims_svm::market_closure_v1::ClaimsMarketClosureRequestInputV1,
+    request: dclutch_claims::market_closure_v1::ClaimsMarketClosureRequestInputV1,
 ) -> Result<([u8; 32], u64), ProgramError> {
     if accounts.aggregate.owner != accounts.claims_program.key
         || accounts.aggregate.key.to_bytes() != request.aggregate

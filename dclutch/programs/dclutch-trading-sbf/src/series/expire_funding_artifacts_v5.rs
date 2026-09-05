@@ -10,7 +10,7 @@ extern crate alloc;
 
 use alloc::{vec, vec::Vec};
 
-use dclutch_account_profile_contract::{
+use dclutch_vm::account_profile::{
     v2::{
         AccountPrestateV2, AccountProfileV2, DYNAMIC_FIXED_SPAN_HEADER_BYTES, OPERATION_BYTES,
         RULE_BYTES, TrustedBuiltinIdentityV2, TrustedEnvironmentV2, TrustedIdentityEnvironmentV2,
@@ -23,13 +23,13 @@ use dclutch_account_profile_contract::{
     },
     v3::{AccountProfileV3, HEADER_BYTES_V3, encode_account_profile_v3_atomic},
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_GENERATION_OFFSET, CAPABILITY_ROOT_HEADER_BYTES_V1,
     CAPABILITY_ROOT_MARKET_OFFSET, CAPABILITY_ROOT_SELECTION_OFFSET,
     hot_v3::{HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3, HOT_RUNTIME_PORTFOLIO_COORDINATE_V3},
 };
-use dclutch_custody_contract::ProjectedCustodyRequestLayoutV1;
-use dclutch_effect_kernel::{
+use dclutch_custody::ProjectedCustodyRequestLayoutV1;
+use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{
         HEADER_BYTES as EFFECT_HEADER_BYTES_V3, OPERATION_BYTES as EFFECT_OPERATION_BYTES_V3,
@@ -46,23 +46,23 @@ use dclutch_effect_kernel::{
     },
     v5::{HEADER_BYTES_V5 as EFFECT_HEADER_BYTES_V5, ProgramV5, encode_program_v5_atomic},
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     SERIES_UNALLOCATED_PERMIT_EXPIRY_EXPECTED_SERIES_REVISION_OFFSET_V1,
     SERIES_UNALLOCATED_PERMIT_EXPIRY_EXPECTED_TICKET_REVISION_OFFSET_V1,
     SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_BYTES_V1, SeriesCoreRequestV1,
     SeriesPermitExpiryRequestV1, SeriesUnallocatedPermitExpiryRequestV1,
 };
-use dclutch_product_runtime_v2::{
+use dclutch_product::{
     PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_COEFFICIENT_COUNT_OFFSET, PORTFOLIO_HEADER_BYTES,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     CAPABILITY_EXECUTION_SELECTION_CONFIG_OFFSET,
     CAPABILITY_EXECUTION_SELECTION_ENTRY_INDEX_OFFSET, CAPABILITY_EXECUTION_SELECTION_KIND_OFFSET,
     CAPABILITY_EXECUTION_SELECTION_MANIFEST_OFFSET, CAPABILITY_EXECUTION_SELECTION_RELEASE_OFFSET,
 };
-use dclutch_series_v3_kernel::{series_action_request_bytes_v3, series_proof_count_v3};
+use dclutch_trading::series::{series_action_request_bytes_v3, series_proof_count_v3};
 
-use dclutch_request_profile_contract::{
+use dclutch_vm::request_profile::{
     HEADER_BYTES as REQUEST_HEADER_BYTES, OPERATION_BYTES as REQUEST_OPERATION_BYTES,
     RequestProfileV1,
     encode::{
@@ -70,7 +70,7 @@ use dclutch_request_profile_contract::{
         ScalarRegisterV1, encode_request_profile_v1_atomic,
     },
 };
-use dclutch_transition_vm::v3::{
+use dclutch_vm::v3::{
     HEADER_BYTES as TRANSITION_HEADER_BYTES, INSTRUCTION_BYTES as TRANSITION_INSTRUCTION_BYTES,
     IdentityRegisterV3, InstructionV3, ProgramGeometryV3, ProgramV3 as TransitionProgramV3,
     ScalarRegisterV3, encode_program_atomic,
@@ -411,7 +411,7 @@ fn account_rule(
             AccountPrestateV2::Exact,
         ),
         1 => (
-            u32::try_from(dclutch_series_v3_kernel::SERIES_TEMPLATE_BYTES_V3)
+            u32::try_from(dclutch_trading::series::SERIES_TEMPLATE_BYTES_V3)
                 .map_err(|_| SeriesExpireFundingArtifactErrorV5::Geometry)?,
             0,
             AccountPrestateV2::Exact,
@@ -437,7 +437,7 @@ fn account_rule(
             AccountPrestateV2::Exact,
         ),
         SERIES_EXPIRE_RENT_CREDIT_COORDINATE_V5 => (
-            u32::try_from(dclutch_rent_contract::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2)
+            u32::try_from(dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2)
                 .map_err(|_| SeriesExpireFundingArtifactErrorV5::Geometry)?,
             0,
             AccountPrestateV2::Exact,
@@ -566,19 +566,19 @@ fn profile_operations() -> Result<[AccountOperationInputV2; PROFILE_OPERATIONS]>
         project_u32(
             1,
             SERIES_EXPIRE_OCCURRENCE_COUNT_SCALAR_V5,
-            dclutch_series_v3_kernel::generated::SERIES_TEMPLATE_OCCURRENCE_COUNT_OFFSET_V3 as u32,
+            dclutch_trading::series::generated::SERIES_TEMPLATE_OCCURRENCE_COUNT_OFFSET_V3 as u32,
         ),
         project_u32(
             73,
             SERIES_EXPIRE_OCCURRENCE_INDEX_SCALAR_V5,
-            dclutch_series_v3_kernel::generated::SERIES_OCCURRENCE_INDEX_OFFSET_V3 as u32,
+            dclutch_trading::series::generated::SERIES_OCCURRENCE_INDEX_OFFSET_V3 as u32,
         ),
         AccountOperationInputV2::ProjectDataIdentity {
             account: AccountCoordinateV2::fixed(1),
             destination: IdentityCoordinateV2::common(
                 SERIES_EXPIRE_TEMPLATE_REFUND_OWNER_IDENTITY_V5,
             ),
-            data_offset: dclutch_series_v3_kernel::generated::SERIES_TEMPLATE_REFUND_OWNER_OFFSET_V3
+            data_offset: dclutch_trading::series::generated::SERIES_TEMPLATE_REFUND_OWNER_OFFSET_V3
                 as u32,
         },
         AccountOperationInputV2::ProjectDataIdentity {
@@ -1032,10 +1032,10 @@ fn alias_representative(coordinate: u16) -> Option<u16> {
 
 #[cfg(test)]
 mod tests {
-    use dclutch_account_profile_contract::v2::AccountPrestateV2;
-    use dclutch_custody_contract::{CustodyFrameRoleV1, CustodyFrameSpecV1, OperationV1};
-    use dclutch_effect_kernel::v2::AccountPermission;
-    use dclutch_market_core_codec::{
+    use dclutch_vm::account_profile::v2::AccountPrestateV2;
+    use dclutch_custody::{CustodyFrameRoleV1, CustodyFrameSpecV1, OperationV1};
+    use dclutch_vm::effect::v2::AccountPermission;
+    use dclutch_market::{
         FoundingIntentV5, Identity, SeriesCoreActionV1, SeriesFoundingPermitV1,
     };
 
@@ -1043,7 +1043,7 @@ mod tests {
 
     fn profile() -> Vec<u8> {
         let mut lengths = [0; SERIES_EXPIRE_FIXED_ACCOUNT_COUNT_V5 as usize];
-        lengths[73] = dclutch_series_v3_kernel::SERIES_OCCURRENCE_BYTES_V3 as u32;
+        lengths[73] = dclutch_trading::series::SERIES_OCCURRENCE_BYTES_V3 as u32;
         emit_account_profile(SeriesExpireAccountProfileInputV5 {
             fixed_data_lengths: &lengths,
         })
@@ -1277,7 +1277,7 @@ mod tests {
         let profile = AccountProfileV3::decode(&bytes).expect("ProfileV3").base();
         let mut permissions =
             [AccountPermission::read_only(); SERIES_EXPIRE_FIXED_ACCOUNT_COUNT_V5 as usize];
-        dclutch_account_profile_contract::v2::derive_effect_permissions(
+        dclutch_vm::account_profile::v2::derive_effect_permissions(
             profile,
             2,
             &mut permissions,

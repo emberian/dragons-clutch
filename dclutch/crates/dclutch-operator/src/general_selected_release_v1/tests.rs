@@ -8,9 +8,9 @@
 
 use super::*;
 
-use dclutch_general_adapter_contract::activation_bundle_v1::build_general_activation_capable_program_set_v1;
-use dclutch_general_adapter_contract::artifacts_v3::authenticate_general_artifacts_v3;
-use dclutch_general_adapter_contract::release_v3::{
+use dclutch_trading::general::activation_bundle_v1::build_general_activation_capable_program_set_v1;
+use dclutch_trading::general::artifacts_v3::authenticate_general_artifacts_v3;
+use dclutch_trading::general::release_v3::{
     GENERAL_ACTIONS_V3, GENERAL_ACTIONS_V5, authenticate_general_program_set_v3,
 };
 
@@ -398,13 +398,13 @@ fn a_substituted_bundle_program_set_or_config_refuses() {
     let mut relifecycled = canonical.clone();
     let action = GENERAL_ACTIONS_V5[2];
     let bytes =
-        dclutch_general_adapter_contract::state_artifacts_v3::general_state_lifecycle_bytes_v5(
+        dclutch_trading::general::state_artifacts_v3::general_state_lifecycle_bytes_v5(
             action,
         )
         .expect("per-action width");
     let mut scratch = vec![0_u8; bytes];
     let mut per_action = vec![0_u8; bytes];
-    dclutch_general_adapter_contract::state_artifacts_v3::encode_general_state_lifecycle_v5_atomic(
+    dclutch_trading::general::state_artifacts_v3::encode_general_state_lifecycle_v5_atomic(
         action,
         Some(
             GeneralChildRentWidthsV5::new(input().outcome_count, input().token_account_bytes)
@@ -579,10 +579,10 @@ fn the_publication_record_list_names_every_record_under_a_derived_schema() {
 /// compile error.
 #[test]
 fn the_three_activation_records_close_the_triangle_the_seam_authenticates() {
-    use dclutch_capability_activation_codec::{
+    use dclutch_market::capability_activation::{
         activation_account_profile_schema_v1, activation_effect_schema_v1,
     };
-    use dclutch_capability_program_contract::CapabilityProgramV1;
+    use dclutch_market::capability_program::CapabilityProgramV1;
 
     let release = general_selected_release_v1(input()).expect("release");
     let records = release.publication_records().expect("records");
@@ -691,8 +691,8 @@ fn the_published_set_selects_the_activation_descriptor_and_no_action_does() {
 /// and to equal `GeneralRootV2::active`.
 #[test]
 fn the_published_activation_composes_a_real_general_root() {
-    use dclutch_general_adapter_contract::activation_bundle_v1::project_general_root_tail_v1;
-    use dclutch_general_config_contract::GeneralRootV2;
+    use dclutch_trading::general::activation_bundle_v1::project_general_root_tail_v1;
+    use dclutch_trading::general_config::GeneralRootV2;
 
     let release = general_selected_release_v1(input()).expect("release");
     let config_id = release.publication.config_id;
@@ -797,7 +797,7 @@ fn a_substituted_activation_record_refuses() {
 /// layers, each before a per-action entry could exist:
 ///
 /// 1. A manifest is KEYED BY `kind_id` and strictly ascending in it
-///    (`dclutch-capability-contract/src/lib.rs` `validate_manifest` and
+///    (`crates/dclutch-market/capability_manifest/src/lib.rs` `validate_manifest` and
 ///    `validate_entry_slice`). Fifteen entries all carrying
 ///    `GENERAL_CAPABILITY_KIND_ID_V1` do not encode at all --
 ///    `Error::NonCanonicalEntryOrder`, before any signature exists. Minting
@@ -923,16 +923,16 @@ fn every_action_descriptor_carries_the_one_family_derivation_policy() {
 /// that refuses everything.
 #[test]
 fn a_per_action_derivation_policy_in_the_entry_refuses_every_action() {
-    use dclutch_capability_contract::{
+    use dclutch_market::capability_manifest::{
         ActivationPolicy, CapabilityEntryV1, CompartmentFundingV1,
         ContentId as CapabilityContentId, FundingAmountsV1, FundingQuoteV1,
         MAX_DEPENDENCIES_PER_CAPABILITY,
     };
-    use dclutch_capability_program_contract::Error as CapabilityProgramError;
-    use dclutch_general_adapter_contract::state_artifacts_v3::{
+    use dclutch_market::capability_program::Error as CapabilityProgramError;
+    use dclutch_trading::general::state_artifacts_v3::{
         encode_general_state_lifecycle_v5_atomic, general_state_lifecycle_bytes_v5,
     };
-    use dclutch_release_set_contract::CapabilityExecutionSelectionV1;
+    use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
 
     let release = general_selected_release_v1(input()).expect("release");
     let program_set_id = hash(&release.program_set).to_bytes();
@@ -1031,7 +1031,7 @@ fn release_content(bytes: [u8; 32]) -> dclutch_core_contract::ContentId {
 /// gets written, never exercised, and believed.
 #[test]
 fn one_action_compiled_against_its_own_lifecycle_policy_refuses_the_release() {
-    use dclutch_general_adapter_contract::state_artifacts_v3::{
+    use dclutch_trading::general::state_artifacts_v3::{
         encode_general_state_lifecycle_v5_atomic, general_state_lifecycle_bytes_v5,
     };
 

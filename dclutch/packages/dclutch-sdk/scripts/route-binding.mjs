@@ -2,9 +2,9 @@
  * Route-binding gate: prove a generator scrapes the file the live route binds.
  *
  * The conviction this exists to prevent (ebebbd4d): `abi:direct-v3` scraped
- * `dclutch-effect-kernel/src/v3.rs`'s `SCHEMA_RELEASE_ID` and emitted it as the
+ * `dclutch-vm/src/v3.rs`'s `SCHEMA_RELEASE_ID` and emitted it as the
  * effect schema, while the live authenticator
- * (`dclutch-direct-codec/src/artifacts_v4.rs`) binds `v4.rs`'s
+ * (`dclutch-trading/src/artifacts_v4.rs`) binds `v4.rs`'s
  * `SCHEMA_RELEASE_ID_V4`. The `--check` byte gate stayed green the whole time:
  * it proves the output is fresh against whatever file the generator points at,
  * never that the pointed-at file is the route's author. The naming trap
@@ -230,8 +230,13 @@ export function followToDefinition(modulePath, currentCrate, readSource, hops = 
   let path = modulePath;
   let crate = currentCrate;
   for (let hop = 0; hop < hops; hop += 1) {
-    const located = modulePathToSource(path, crate);
-    const text = readSource(located.file);
+    let located = modulePathToSource(path, crate);
+    let text = readSource(located.file);
+    if (text === null && !located.file.endsWith('/lib.rs')) {
+      // a module that is a directory: `src/a/b/mod.rs` rather than `src/a/b.rs`
+      located = Object.freeze({ ...located, file: located.file.replace(/\.rs$/, '/mod.rs') });
+      text = readSource(located.file);
+    }
     if (text === null || text === undefined) {
       throw new Error(`cannot read ${located.file} while following ${modulePath}`);
     }
@@ -257,7 +262,11 @@ export function followToDefinition(modulePath, currentCrate, readSource, hops = 
     // `pub use sibling_module::X` inside a crate names a module of THIS crate,
     // not another crate. The file's own `mod` declaration says which.
     const head = next.split('::')[0];
-    path = declaresModule(text, head) ? `${located.crate}::${next}` : next;
+    // A module this file declares is a child of THIS file's module: `a/b/mod.rs`
+    // and `a/b.rs` both own `a::b::child`, and only `lib.rs` owns `child`.
+    const inside = located.file.slice(located.file.indexOf('/src/') + '/src/'.length);
+    const prefix = inside === 'lib.rs' ? '' : inside.replace(/\/mod\.rs$/, '').replace(/\.rs$/, '').replace(/\//g, '::');
+    path = declaresModule(text, head) ? `${located.crate}::${prefix ? `${prefix}::` : ''}${next}` : next;
     crate = located.crate;
   }
   throw new Error(`re-export chain from ${modulePath} is deeper than ${hops} hops`);
@@ -268,7 +277,7 @@ export function followToDefinition(modulePath, currentCrate, readSource, hops = 
  * binding walks to exactly the file and constant the generator scrapes.
  *
  * `binding.qualified` covers conjuncts that name a full path inline
- * (`dclutch_transition_vm::v3::SCHEMA_RELEASE_ID`) rather than through a use.
+ * (`dclutch_vm::v3::SCHEMA_RELEASE_ID`) rather than through a use.
  */
 export function requireGeneratorFollowsRoute({
   routeText, routeCrate, readSource, binding,

@@ -2,7 +2,7 @@
 
 include!("resolution_core_v3_lifecycle.rs");
 
-use dclutch_claims_svm::liability_basis_state_v2::{
+use dclutch_claims::liability_basis_state_v2::{
     LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
     LiabilityBasisMarketInputV2, encode_liability_basis_market_into_v2,
     liability_basis_vector_width_v2,
@@ -13,14 +13,14 @@ use dclutch_market_retirement_v1_operator::{
     MarketRetirementSnapshotV1, ResolutionRetirementReceiptFactsV3,
     build_checkpoint_market_retirement_v1, build_market_retirement_v1,
 };
-use dclutch_registry_svm::continuation_v1::{
+use dclutch_registry::svm::continuation_v1::{
     REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationAdmissionSeedsV1,
     RegistryContinuationRequestV1,
 };
 // `RefundAuthority` used to arrive through the `include!` above, on the back of
 // the V1 record's own import. That record is deleted; the wallet type is not.
-use dclutch_rent_contract::RefundAuthority;
-use dclutch_rent_contract::lifecycle_v2::{
+use dclutch_market::rent::RefundAuthority;
+use dclutch_market::rent::lifecycle_v2::{
     LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
 };
 use spl_token_interface::state::{Account as SplAccount, AccountState};

@@ -5,16 +5,16 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CUSTODY_BUMP_RELAY_BYTES_V1, CallerRoleV1, CompartmentV1, CustodyReceiptV1, CustodyRequestV1,
     DELEGATED_CUSTODY_REQUEST_MAGIC_V2, DelegatedCustodyReceiptV2, DelegatedCustodyRequestV2,
     delegated_custody_child_execution_digest_v3,
 };
-use dclutch_effect_kernel::{
+use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{ResolvedInvocationV3, RouteKindV3},
 };
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo, hash::hash, program_error::ProgramError, pubkey::Pubkey,
 };
@@ -556,7 +556,7 @@ fn gather_invocation_accounts<'info>(
 
 #[cfg(test)]
 mod tests {
-    use dclutch_custody_contract::{
+    use dclutch_custody::{
         ContextV1, DelegatedAllowanceObservationV2, OperationV1, ReceiptEvidenceV1,
         TRANSFER_ACCOUNT_COUNT_V1,
     };

@@ -40,15 +40,15 @@ nothing was taken from a suffix.
 
 | unit | generation / what it was | superseded by | non-test reverse deps | control |
 | --- | --- | --- | --- | --- |
-| `crates/dclutch-general-config-contract/src/activation.rs` (490) | General V2 activation request | `general-adapter-contract::activation_bundle_v1` (`DCGNACT1`, 2026-08-30) | none of 6 pub items | join; cargo check |
+| `crates/dclutch-trading/src/general_config/activation.rs` (490) | General V2 activation request | `general-adapter-contract::activation_bundle_v1` (`DCGNACT1`, 2026-08-30) | none of 6 pub items | join; cargo check |
 | `…/general-config-contract/src/root_v3.rs` (497) | `activate_general_owned_v3`, `plan_general_activation_v3` | `dclutch-operator::general_activation_v3` (decision 0006 §8.1); last callers removed by `06be6ed29` | none (one comment in a program-test) | join; git log -S |
 | `crates/dclutch-operator/src/direct_successor.rs` (165) | second producer of the `domain‖CompactIntentV2` signing message | `direct-codec::intent_v2::signed_preimage` (+ SDK `directInlineV3.ts:385`) | none | join |
 | `crates/dclutch-operator/src/capability_program_set_v2.rs` (126) | generic `build_capability_program_set_v2` | per-family set encoders (General, Rational v5/v6, Dealer v4) | none | join |
 | `programs/dclutch-trading-sbf/src/dispatch_v3.rs` (80) | CapabilityProgramV3 content dispatcher | `hot_v3::authenticate_descriptor_root_selection` → `CapabilityProgramV4::validate_selection` | none | join; cargo check |
 | `programs/dclutch-trading-sbf/src/dealer/v3_lifecycle.rs` (533) | Dealer activation/retirement staging, 4 pub fns | the common state-lifecycle executor + V4 releases | none | join; seam row removed |
-| `crates/dclutch-claims-svm/src/lbv2_terminal_v2.rs` (927) | `DCLBTR02`/`DCLBTE02` terminal wire | `product_basis_terminal_v3` (same day, emits `SignedDeltaPlanV3`) | none; no program decodes the magic | join; seam row removed |
-| `crates/dclutch-product-contract/src/terminal.rs` (322) | `TerminalResultV1` (`DCLTEND1`) | resolution's terminal facts in `dclutch-source-contract` V2 | none; magic appears nowhere else | join |
-| `crates/dclutch-fractional-claim-contract/src/artifacts.rs` (~600) | V1 artifact bundle, owed by `53d73d4ee` | V4 in the operator | `lib.rs` re-exports + own test only | join; the test's artifact section removed |
+| `crates/dclutch-claims/src/lbv2_terminal_v2.rs` (927) | `DCLBTR02`/`DCLBTE02` terminal wire | `product_basis_terminal_v3` (same day, emits `SignedDeltaPlanV3`) | none; no program decodes the magic | join; seam row removed |
+| `crates/dclutch-product/src/contract/terminal.rs` (322) | `TerminalResultV1` (`DCLTEND1`) | resolution's terminal facts in `dclutch-source` V2 | none; magic appears nowhere else | join |
+| `crates/dclutch-claims/src/fractional/artifacts.rs` (~600) | V1 artifact bundle, owed by `53d73d4ee` | V4 in the operator | `lib.rs` re-exports + own test only | join; the test's artifact section removed |
 | `tools/release/{lifecycle-chaos,private_validator_upgrade,devnet-flight}/`, `devnet-recycle.sh`, `devnet-observe.sh`, `devnet-demo-pulse.sh`(+test), `tools/sbf-footprint.py`, `tools/atomic-generate/` (5,613) | tools nothing runs | successor `observe`/cohort runbook; `sbf-frame-sizes.py`; `AGENTS.md`'s atomic-replace rule + each `check-generated.sh` | runner/code referrers: none beyond their own tests in `run.sh` | referrer census by category; `bash -n run.sh` |
 | `crates/dclutch-economic-kernel` (1,808), `crates/dclutch-resolution-policy-kernel` (895) | Lean refinement witness / old Pyth policy | (Lean module kept) / `source-contract` V2 policy | root member list + `capabilitySurfaceV1.ts` (regenerated) | cargo metadata + all-manifest grep; cargo check; **reverses two KEEP rulings** (board-archive :11172, ledger :2520) on the map's and coordinator's instruction — separate commit, one revert restores |
 | `programs/dclutch-direct-aot-sbf` (573), `tools/gauntlet/direct/`, `tools/gauntlet/aot-cu/`, `crates/dclutch-direct-aot-v3-contract` (2,104) | unshipped program (`SHIPPED_LINKS` false), its self-witness campaign, its CU twins, the V3 contract only the twins read | the live Direct route is `hot_v3` inline | v3-contract: aot-cu only; program: its campaign + registers | every register moved in the same commit; band 10 retired by theorem; registers re-emitted from built Lean |
@@ -87,7 +87,7 @@ captured).
 
 ## Deliberately left, with the invariant each teaches
 
-- **`crates/dclutch-general-adapter-contract/src/plan.rs` (1,016 + tests)** —
+- **`crates/dclutch-trading/src/general/plan.rs` (1,016 + tests)** —
   the V2 plan layer, dead by join and superseded per decision 0006 §5, but
   `MECHANISM_BATCH_SPINE` §(b) and §(d)(i) cite `plan.rs:453`
   (`require_certificate`) and `:414-430` as live enforcement sites. A note

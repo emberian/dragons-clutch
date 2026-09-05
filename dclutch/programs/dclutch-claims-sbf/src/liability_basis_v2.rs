@@ -39,17 +39,17 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::convert::TryFrom;
 
-use dclutch_claims_svm::liability_basis_state_v2::{
+use dclutch_claims::liability_basis_state_v2::{
     encode_liability_basis_market_into_v2, encode_liability_basis_position_into_v2,
     liability_basis_vector_width_v2, read_claim_v2,
 };
 
-pub use dclutch_claims_svm::liability_basis_state_v2::{
+pub use dclutch_claims::liability_basis_state_v2::{
     LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
     LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, LiabilityBasisMarketInputV2,
     LiabilityBasisPositionInputV2,
 };
-pub(crate) use dclutch_claims_svm::liability_basis_state_v2::{
+pub(crate) use dclutch_claims::liability_basis_state_v2::{
     LiabilityBasisMarketViewV2 as MarketViewV2, LiabilityBasisPositionViewV2 as PositionViewV2,
 };
 /// Stable LiabilityBasisV2 SBF refusal.

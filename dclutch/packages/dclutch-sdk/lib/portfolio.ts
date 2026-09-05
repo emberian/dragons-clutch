@@ -54,7 +54,7 @@ const RPC_ACCOUNT_BATCH = 32;
  * a zero, `:1099` copies it into `GenericProductFacts.basis_scale`, and `:1300`
  * refuses a founding request that states a different one. The conservation
  * contract says it outright — *"the conversion to atoms is `basis_scale`"*
- * (`crates/dclutch-claims-conservation-contract/src/lib.rs:60-61`).
+ * (`crates/dclutch-claims/src/conservation/mod.rs:60-61`).
  *
  * `null` is the state of a surface that has not read that record, and it is
  * deliberately NOT a default of 1. Every fixture in this tree happens to carry

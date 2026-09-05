@@ -198,9 +198,9 @@ of what it interprets and produces are:
 
 | what | owner |
 | --- | --- |
-| the Market Core account | `dclutch_market_core_codec::CoreState`, emitted from `formal/dclutch-semantics/EmitMarketCoreRust.lean` |
-| the activation header | `dclutch_capability_program_contract::CapabilityRootHeaderV1` |
-| the Direct family tail | `dclutch_direct_codec::successor::DirectRootStateV1` |
+| the Market Core account | `dclutch_market::CoreState`, emitted from `formal/dclutch-semantics/EmitMarketCoreRust.lean` |
+| the activation header | `dclutch_market::capability_program::CapabilityRootHeaderV1` |
+| the Direct family tail | `dclutch_trading::successor::DirectRootStateV1` |
 | General route, request, lifecycle, v0 compilation, and plan JSON | `dclutch_general_successor_operator` |
 | state-selected Fractional retirement discovery, request, instruction, and v0 compilation | `dclutch_fractional_claim_operator` |
 

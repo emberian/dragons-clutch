@@ -21,12 +21,12 @@
 #![deny(missing_docs)]
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use dclutch_claims_svm::protocol_position_v2::ProtocolPositionAdmissionV2;
+use dclutch_claims::protocol_position_v2::ProtocolPositionAdmissionV2;
 use dclutch_operator::user_position_admission_v1::{
     UserPositionAdmissionPlanV1, UserPositionAdmissionSnapshotV1, plan_user_position_admission_v1,
 };
 use dclutch_operator::{Finality, Observation, ObservedAccount};
-use dclutch_user_position_admission_contract::{
+use dclutch_claims::position_admission::{
     USER_POSITION_ADMISSION_ACCOUNT_COUNT_V1, USER_POSITION_ADMISSION_MAGIC_V1,
     USER_POSITION_ADMISSION_OWNER_ACCOUNT_V1,
 };

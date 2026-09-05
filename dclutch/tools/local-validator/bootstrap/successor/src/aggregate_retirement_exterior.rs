@@ -1212,7 +1212,7 @@ fn refusal(message: impl Into<String>) -> Error {
 #[cfg(test)]
 mod tests {
     use crate::aggregate_retirement_journal::AggregateRetirementInitialAccountV1;
-    use dclutch_market_core_codec::{
+    use dclutch_market::{
         AGGREGATE_RETIREMENT_CLOSE_REPLAY_MAGIC_V1, AGGREGATE_RETIREMENT_CLOSE_VAULT_MAGIC_V1,
         AGGREGATE_RETIREMENT_FINISH_MAGIC_V1, AggregateRetirementSuffixBindingV1,
         AggregateRetirementSuffixRequestV1,

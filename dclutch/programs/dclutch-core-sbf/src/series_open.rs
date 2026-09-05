@@ -2,20 +2,20 @@
 
 use alloc::boxed::Box;
 
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
 };
-use dclutch_claims_svm::founding_v5::ClaimsFoundingReceiptV5;
-use dclutch_market_core_codec::{
+use dclutch_claims::founding_v5::ClaimsFoundingReceiptV5;
+use dclutch_market::{
     CoreState, MarketAdmissionV1, MarketCoreStateSeedsV2, Phase, Readiness, Role,
     SERIES_OPEN_POST_RESOURCE_DIGEST_DOMAIN_V1, STATE_BYTES, SeriesCoreAckV1, SeriesCoreActionV1,
     SeriesCoreRequestV1, SeriesFoundingPermitV1,
 };
-use dclutch_product_runtime_v2_svm_reader::{
+use dclutch_product::svm_reader::{
     FinalizedRecordFrameV2, ProductRuntimeFrameV2, authenticate_product_runtime_v2,
 };
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_series_v3_kernel::{
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_trading::series::{
     AccountKeyV3, AuthenticatedProductProjectionV2, SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3,
     SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3, SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
     admit_occurrence_bytes, admit_ticket, future_market_projection,
@@ -518,7 +518,7 @@ fn authenticate_series(
     }
     let product = authenticate_product_runtime_v2(
         frame.registry_program.key,
-        dclutch_product_runtime_v2::ContentId::new(state.identity.product_record.to_bytes())
+        dclutch_product::ContentId::new(state.identity.product_record.to_bytes())
             .map_err(|_| CoreSbfError::Reference)?,
         ProductRuntimeFrameV2 {
             product: FinalizedRecordFrameV2 {
@@ -606,8 +606,8 @@ fn authenticate_series(
 fn authenticate_replay_candidates(
     frame: &SeriesOpenAccounts<'_, '_>,
     request: SeriesCoreRequestV1,
-    occurrence: dclutch_series_v3_kernel::AdmittedOccurrenceV3,
-    ticket: dclutch_series_v3_kernel::AdmittedTicketV3,
+    occurrence: dclutch_trading::series::AdmittedOccurrenceV3,
+    ticket: dclutch_trading::series::AdmittedTicketV3,
     ticket_context: [u8; 32],
     template_record: [u8; 32],
 ) -> Result<ReplayCandidates, CoreSbfError> {

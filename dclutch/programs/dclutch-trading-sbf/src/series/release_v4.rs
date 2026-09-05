@@ -62,11 +62,11 @@ extern crate alloc;
 use alloc::boxed::Box;
 use alloc::{vec, vec::Vec};
 
-use dclutch_account_profile_contract::{
+use dclutch_vm::account_profile::{
     lifecycle_v3::CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5,
     v2::SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2,
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     set_v2::{
         CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, SelectorWidthV2,
         encode_program_set_v2, encoded_program_set_bytes_v2,
@@ -77,7 +77,7 @@ use dclutch_capability_program_contract::{
     },
 };
 use dclutch_core_contract::ContentId;
-use dclutch_execution_strategy_contract::{
+use dclutch_market::execution_strategy::{
     shadow_v3::{SHADOW_ACK_SCHEMA_ID_V3, SHADOW_REQUEST_SCHEMA_ID_V3},
     v2::{
         EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
@@ -85,8 +85,8 @@ use dclutch_execution_strategy_contract::{
         ExecutionStrategyProgramV2, StrategyDispositionV2,
     },
 };
-use dclutch_series_v3_kernel::generated::SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3;
-use dclutch_series_v3_kernel::request::SeriesActionV3;
+use dclutch_trading::series::generated::SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3;
+use dclutch_trading::series::request::SeriesActionV3;
 use solana_program::hash::hash;
 
 use super::{
@@ -471,7 +471,7 @@ pub fn encode_series_consume_strategy_v4(
         |bytes: [u8; 32]| ContentId::new(bytes).map_err(|_| SeriesSelectedReleaseErrorV4::Strategy);
     Ok(ExecutionStrategyProgramV2::new(
         StrategyDispositionV2::ShadowAot,
-        schema(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID)?,
+        schema(dclutch_vm::v3::SCHEMA_RELEASE_ID)?,
         transition_program,
         schema(EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2)?,
         Some(shadow_certificate_program),
@@ -535,11 +535,11 @@ fn encode_series_consume_descriptor_framed_v4(
             effect,
             lifecycle,
             strategy,
-            effect_schema: dclutch_effect_kernel::v4::SCHEMA_RELEASE_ID_V4,
+            effect_schema: dclutch_vm::effect::v4::SCHEMA_RELEASE_ID_V4,
             strategy_schema: EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
             lifecycle_schema: CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5,
-            request_profile_schema: dclutch_request_profile_contract::SCHEMA_RELEASE_ID,
-            transition_schema: dclutch_transition_vm::v3::SCHEMA_RELEASE_ID,
+            request_profile_schema: dclutch_vm::request_profile::SCHEMA_RELEASE_ID,
+            transition_schema: dclutch_vm::v3::SCHEMA_RELEASE_ID,
             account_profile_schema: ACCOUNT_PROFILE_SCHEMA_ID_V2,
         },
         hash(SERIES_SUCCESSOR_KIND_PREIMAGE_V3).to_bytes(),
@@ -683,8 +683,8 @@ mod tests {
 
     use alloc::vec;
 
-    use dclutch_account_profile_contract::v2::AccountProfileV2;
-    use dclutch_request_profile_contract::RequestProfileV1;
+    use dclutch_vm::account_profile::v2::AccountProfileV2;
+    use dclutch_vm::request_profile::RequestProfileV1;
 
     use super::*;
     use crate::series::effect_v4::SERIES_CONSUME_LOGICAL_ACCOUNT_BASE_V4;
@@ -854,11 +854,11 @@ mod tests {
                 effect: &release.effect,
                 lifecycle,
                 strategy: &release.strategy,
-                effect_schema: dclutch_effect_kernel::v4::SCHEMA_RELEASE_ID_V4,
+                effect_schema: dclutch_vm::effect::v4::SCHEMA_RELEASE_ID_V4,
                 strategy_schema: EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
                 lifecycle_schema: CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5,
-                request_profile_schema: dclutch_request_profile_contract::SCHEMA_RELEASE_ID,
-                transition_schema: dclutch_transition_vm::v3::SCHEMA_RELEASE_ID,
+                request_profile_schema: dclutch_vm::request_profile::SCHEMA_RELEASE_ID,
+                transition_schema: dclutch_vm::v3::SCHEMA_RELEASE_ID,
                 account_profile_schema: ACCOUNT_PROFILE_SCHEMA_ID_V2,
             },
             hash(SERIES_SUCCESSOR_KIND_PREIMAGE_V3).to_bytes(),
@@ -976,7 +976,7 @@ mod tests {
     #[test]
     fn the_strategy_binds_the_emitted_transition_and_the_named_certificate() {
         let release = canonical_release();
-        let strategy = dclutch_execution_strategy_contract::v2::ExecutionStrategyProgramV2::decode(
+        let strategy = dclutch_market::execution_strategy::v2::ExecutionStrategyProgramV2::decode(
             &release.strategy,
         )
         .expect("strategy decodes");

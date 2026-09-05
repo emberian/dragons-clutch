@@ -23,13 +23,13 @@
 
 use core::convert::TryInto;
 
-use dclutch_claims_svm::claim_check_conservation_v1::{
+use dclutch_claims::claim_check_conservation_v1::{
     ClaimCheckRedemptionObservationV1, ClaimCheckRedemptionPlanV1, ClaimCheckRedemptionPostV1,
 };
-use dclutch_claims_svm::claim_check_request_v1::{
+use dclutch_claims::claim_check_request_v1::{
     CloseClaimCheckEscrowRequestV1, RedeemClaimCheckRequestV1,
 };
-use dclutch_claims_svm::claim_check_v1::{
+use dclutch_claims::claim_check_v1::{
     CLAIM_CHECK_REDEMPTION_ACCOUNT_COUNT_V1, ClaimCheckEscrowSeedsV1, ClaimCheckEscrowV1,
     ClaimCheckRedemptionRoleV1, ClaimCheckSeedsV1, ClaimCheckV1,
 };

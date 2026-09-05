@@ -6,17 +6,17 @@
 
 use alloc::boxed::Box;
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
     FundingLedgerStatusV2, FundingLedgerV2, funding::funded_rent_persists_v1,
     funding_ledger_bytes_v2, validate_funding_ledger_masks_v2,
 };
-use dclutch_capability_program_contract::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
-use dclutch_claims_svm::founding_v5::{
+use dclutch_market::capability_program::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
+use dclutch_claims::founding_v5::{
     CLAIMS_FOUNDING_POST_RESOURCE_DIGEST_DOMAIN_V5, ClaimsFoundingAggregateSeedsV5,
     ClaimsFoundingReceiptV5, ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5,
 };
-use dclutch_claims_svm::{
+use dclutch_claims::{
     liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
         liability_basis_vector_width_v2,
@@ -26,13 +26,13 @@ use dclutch_claims_svm::{
         ProtocolPositionSeedsV2,
     },
 };
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CustodyReplayV1,
     PROJECTED_CUSTODY_LOCKED_ADMISSIBLE_STATES_V1, PROJECTED_CUSTODY_STATE_BYTES_V2,
     PROJECTED_HOARD_CONTEXT_DOMAIN_V1, ProjectedCustodyLockReceiptV1, ProjectedCustodyOperationV1,
     ProjectedCustodyStateSeedsV2, ProjectedCustodyStateV2,
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     Action, Admission, ChildEffectObservation, CoreState, FoundingIntentV5,
     GENERIC_FOUNDING_FOUND_POST_RESOURCE_DOMAIN_V1, GENERIC_FOUNDING_MAX_FUNDING_STATES_V1,
     GENERIC_FOUNDING_OPEN_POST_RESOURCE_DOMAIN_V1, GenericFoundingAckV1, GenericFoundingRequestV1,
@@ -41,15 +41,15 @@ use dclutch_market_core_codec::{
     SeriesFoundingPermitV1, SeriesOpenObservation, generic_founding_funding_list_id_v1,
     open_series_market,
 };
-use dclutch_product_runtime_v2_svm_reader::{
+use dclutch_product::svm_reader::{
     FinalizedRecordFrameV2, authenticate_founding_product_basis_v3,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1, ExecutionRoleV1,
 };
-use dclutch_rent_contract::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
-use dclutch_source_contract::MarketPrincipalCapSetsV1;
-use dclutch_token_svm::{AccountState, TokenAccount, TokenProgram};
+use dclutch_market::rent::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
+use dclutch_source::MarketPrincipalCapSetsV1;
+use dclutch_custody::token_svm::{AccountState, TokenAccount, TokenProgram};
 use solana_program::{
     account_info::AccountInfo,
     clock::Clock,
@@ -69,7 +69,7 @@ use crate::{
     release::{RoleBatchAdmissions, RoleDeploymentAccounts, authenticate_roles},
 };
 
-pub use dclutch_market_core_codec::{
+pub use dclutch_market::{
     GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1,
     GENERIC_FOUNDING_FOUND_PRICE_GATE_SUFFIX_ACCOUNT_COUNT_V2,
     GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1, GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1,
@@ -998,8 +998,8 @@ fn authenticate_generic_funding_and_capability_root(
         authenticated
             .validate_recorded_native_custody(funding_account.lamports(), data.len(), false)
             .map_err(|error| match error {
-                dclutch_capability_contract::Error::FundedRentNotEvidenced
-                | dclutch_capability_contract::Error::FundedRentRateMissing => {
+                dclutch_market::capability_manifest::Error::FundedRentNotEvidenced
+                | dclutch_market::capability_manifest::Error::FundedRentRateMissing => {
                     CoreSbfError::FundedRent
                 }
                 _ => CoreSbfError::Funding,
@@ -1250,7 +1250,7 @@ fn decode_projected_state(bytes: &[u8]) -> Result<Box<ProjectedCustodyStateV2>, 
 
 #[inline(never)]
 fn digest_projected_request(
-    request: &dclutch_custody_contract::ProjectedCustodyRequestV1,
+    request: &dclutch_custody::ProjectedCustodyRequestV1,
 ) -> Result<[u8; 32], CoreSbfError> {
     Ok(hash(&request.encode().map_err(|_| CoreSbfError::ChildAck)?).to_bytes())
 }
@@ -1278,7 +1278,7 @@ fn digest_core_state(state: &CoreState) -> Result<[u8; 32], CoreSbfError> {
 #[inline(never)]
 fn finish_projected_facts(
     projected: &ProjectedCustodyStateV2,
-    realize: &dclutch_custody_contract::ProjectedCustodyRequestV1,
+    realize: &dclutch_custody::ProjectedCustodyRequestV1,
     realize_request_digest: [u8; 32],
     market: &CoreState,
     principal: u64,
@@ -1309,7 +1309,7 @@ fn finish_projected_facts(
 
 #[inline(never)]
 fn digest_projected_receipt(
-    receipt: &dclutch_custody_contract::ProjectedCustodyReceiptV1,
+    receipt: &dclutch_custody::ProjectedCustodyReceiptV1,
 ) -> Result<[u8; 32], CoreSbfError> {
     Ok(hash(&receipt.encode().map_err(|_| CoreSbfError::ChildAck)?).to_bytes())
 }
@@ -2069,8 +2069,8 @@ fn authenticate_claims_poststate(
 
 fn authenticate_custody_poststate(
     frame: &GenericFoundingOpenAccounts<'_, '_>,
-    request: dclutch_claims_svm::founding_v5::ClaimsFoundingRequestV5,
-    intent: dclutch_market_core_codec::FoundingIntentV5,
+    request: dclutch_claims::founding_v5::ClaimsFoundingRequestV5,
+    intent: dclutch_market::FoundingIntentV5,
 ) -> Result<(), CoreSbfError> {
     if frame.funding_source.owner != &system_program::ID
         || frame.funding_source.lamports() != 0
@@ -2111,7 +2111,7 @@ fn authenticate_custody_poststate(
     // restated: a restatement here is exactly what would have kept deriving the
     // role-less address after the seeds moved, silently, with everything green.
     let replay_expected = Pubkey::find_program_address(
-        &dclutch_custody_contract::CustodyReplaySeedsV1::new(
+        &dclutch_custody::CustodyReplaySeedsV1::new(
             request.market(),
             request.release_set(),
             CallerRoleV1::Trading,
@@ -2146,15 +2146,15 @@ fn complete_child_effect() -> ChildEffectObservation {
     }
 }
 
-fn identity(bytes: [u8; 32]) -> Result<dclutch_market_core_codec::Identity, CoreSbfError> {
-    dclutch_market_core_codec::Identity::new(bytes).map_err(|_| CoreSbfError::ChildAck)
+fn identity(bytes: [u8; 32]) -> Result<dclutch_market::Identity, CoreSbfError> {
+    dclutch_market::Identity::new(bytes).map_err(|_| CoreSbfError::ChildAck)
 }
 
 #[cfg(test)]
 mod tests {
     use alloc::{boxed::Box, vec::Vec};
 
-    use dclutch_capability_contract::{
+    use dclutch_market::capability_manifest::{
         ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1,
         FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
     };

@@ -6,8 +6,8 @@
 
 extern crate std;
 
-use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
-use dclutch_registry_svm::{AuthenticatedRoleReceiptV1, RegistryInstructionV1};
+use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
+use dclutch_registry::svm::{AuthenticatedRoleReceiptV1, RegistryInstructionV1};
 use solana_program::{
     account_info::AccountInfo, entrypoint::ProgramResult, program::set_return_data,
     program_error::ProgramError, pubkey::Pubkey,

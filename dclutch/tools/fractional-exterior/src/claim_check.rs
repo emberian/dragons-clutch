@@ -33,7 +33,7 @@ use solana_sdk::{
     transaction::Transaction,
 };
 
-use dclutch_claims_svm::{
+use dclutch_claims::{
     claim_check_request_v1::CloseClaimCheckEscrowRequestV1,
     claim_check_v1::{
         CLAIM_CHECK_ESCROW_BYTES_V1, ClaimCheckEscrowSeedsV1, ClaimCheckEscrowV1,

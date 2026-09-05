@@ -1,6 +1,6 @@
 //! Build one conservative complete-set act.
 //!
-//! `dclutch-claims-conservation-contract` owns the arithmetic and the shape of
+//! `dclutch-claims::conservation` owns the arithmetic and the shape of
 //! a split or a merge, and its own module documentation records that nothing
 //! reaches it: no dispatcher, no operator, no client. This is the operator half
 //! of that gap. It does not make the act reachable — the Claims-owned outer
@@ -27,12 +27,12 @@
 //! did not construct. This module is therefore not a witness for them, and does
 //! not pretend to be.
 
-use dclutch_claims_conservation_contract::{
+use dclutch_claims::conservation::{
     CLAIMS_CONSERVATION_REQUEST_BYTES_V1, ClaimsConservationDirectionV1,
     ClaimsConservationRequestV1, Error as ConservationError, collateral_atoms_v1,
 };
-use dclutch_claims_svm::{ClaimsAggregateSeedsV1, protocol_position_v2::ProtocolPositionSeedsV2};
-use dclutch_custody_contract::{CompartmentV1, CustodyVaultSeedsV1};
+use dclutch_claims::{ClaimsAggregateSeedsV1, protocol_position_v2::ProtocolPositionSeedsV2};
+use dclutch_custody::{CompartmentV1, CustodyVaultSeedsV1};
 use solana_program::pubkey::Pubkey;
 
 /// Stable refusal from conservation planning.

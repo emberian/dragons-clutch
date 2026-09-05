@@ -29,8 +29,8 @@ pub mod dealer;
 pub mod general;
 pub mod series;
 
-use dclutch_capability_program_contract::hot_v3::HotExecutionEnvelopeV3;
-use dclutch_execution_strategy_contract::{
+use dclutch_market::capability_program::hot_v3::HotExecutionEnvelopeV3;
+use dclutch_market::execution_strategy::{
     admitted_v3::ADMITTED_INSTRUCTIONS_ACCOUNT_V3, shadow_v3::SHADOW_REQUEST_MAGIC_V3,
 };
 use dclutch_trading_sbf::dealer::{
@@ -42,7 +42,7 @@ use solana_program::{account_info::AccountInfo, entrypoint::ProgramResult, pubke
 ///
 /// `solana_program::entrypoint!` elides its stock allocator exactly when the
 /// calling crate declares a feature named `custom-heap`, and then the crate
-/// owes an allocator of its own. [`dclutch_sbf_bump_heap::program_heap_v1`]
+/// owes an allocator of its own. [`dclutch_sbf_runtime::program_heap_v1`]
 /// is Trading's: it bumps UPWARD, so the ceiling is a comparison rather than
 /// an origin and can be raised mid-invocation, and it is a shared crate
 /// rather than a second copy so this one keeps `#![forbid(unsafe_code)]`.
@@ -64,8 +64,8 @@ use solana_program::{account_info::AccountInfo, entrypoint::ProgramResult, pubke
     not(feature = "no-entrypoint")
 ))]
 #[global_allocator]
-pub(crate) static PROGRAM_HEAP_V1: dclutch_sbf_bump_heap::BumpHeapV1 =
-    dclutch_sbf_bump_heap::program_heap_v1();
+pub(crate) static PROGRAM_HEAP_V1: dclutch_sbf_runtime::BumpHeapV1 =
+    dclutch_sbf_runtime::program_heap_v1();
 
 #[cfg(not(feature = "no-entrypoint"))]
 solana_program::entrypoint!(process_instruction);
@@ -163,7 +163,7 @@ fn read_u16(data: &[u8], at: usize) -> Option<u16> {
 mod tests {
     use alloc::vec::Vec;
 
-    use dclutch_capability_program_contract::hot_v3::HOT_EXECUTION_ENVELOPE_BYTES_V3;
+    use dclutch_market::capability_program::hot_v3::HOT_EXECUTION_ENVELOPE_BYTES_V3;
 
     use super::*;
 

@@ -73,14 +73,14 @@
 use std::{env, fs, path::PathBuf};
 
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CustodyReplayV1, DelegatedCustodyRequestV2, TRANSFER_ACCOUNT_COUNT_V1,
 };
 use dclutch_custody_sbf::CustodySbfError;
-use dclutch_direct_codec::fee_settlement_v1::{
+use dclutch_trading::fee_settlement_v1::{
     DirectFeeProjectionV1, project_direct_fee_request_v1,
 };
-use dclutch_direct_codec::ordinary_geometry_v3::DirectOrdinaryGeometryV3;
+use dclutch_trading::ordinary_geometry_v3::DirectOrdinaryGeometryV3;
 use dclutch_direct_hot_program_test_support::fixture::{
     DirectCustodyLegV1, DirectTradeScenarioV1, direct_hot_custody_legs_v1,
 };
@@ -90,8 +90,8 @@ use dclutch_direct_hot_program_test_support::waist::{
     direct_chain_input_v5, elves, fixture_substrate, program_test_without_forced_budget,
     start_with_substrate, submit_v0_observed, with_fixture_seed,
 };
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_token_svm::{COption, TokenAccount};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_custody::token_svm::{COption, TokenAccount};
 use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},

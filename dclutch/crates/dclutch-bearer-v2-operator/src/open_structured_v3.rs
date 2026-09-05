@@ -1,9 +1,9 @@
 //! Data-defined Hot artifacts for full-width Structured issue and unwrap.
 
-use dclutch_account_profile_contract::lifecycle_v3::{
+use dclutch_vm::account_profile::lifecycle_v3::{
     CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5 as LIFECYCLE_SCHEMA_ID_V5, StateLifecyclePolicyV5,
 };
-use dclutch_account_profile_contract::v2::{
+use dclutch_vm::account_profile::v2::{
     AccountPrestateV2, AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE,
     DYNAMIC_FIXED_SPAN_HEADER_BYTES, OPERATION_BYTES as ACCOUNT_OPERATION_BYTES,
     RULE_BYTES as ACCOUNT_RULE_BYTES, TrustedBuiltinIdentityV2, TrustedEnvironmentV2,
@@ -15,11 +15,11 @@ use dclutch_account_profile_contract::v2::{
         encode_account_profile_with_dynamic_fixed_span_v2_atomic,
     },
 };
-use dclutch_capability_program_contract::v4::{
+use dclutch_market::capability_program::v4::{
     ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4, CapabilityProgramV4,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_effect_kernel::{
+use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{
         HEADER_BYTES as EFFECT_HEADER_BYTES, OPERATION_BYTES as EFFECT_OPERATION_BYTES,
@@ -35,24 +35,24 @@ use dclutch_effect_kernel::{
         encode_program_v4_atomic,
     },
 };
-use dclutch_execution_strategy_contract::v2::{
+use dclutch_market::execution_strategy::v2::{
     ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_PROGRAM_BYTES_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
     ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
-use dclutch_product_payoff_v2_codec::runtime_v3::{
+use dclutch_product::payoff::runtime_v3::{
     BASIS_HEADER_BYTES_V3, BASIS_WIDTH_OFFSET_V3, ProductBasisV3,
 };
-use dclutch_rational_representation_v2_contract::{
+use dclutch_claims::rational::{
     ASSET_BYTES_V3, AuthenticatedTokenBehaviorV2, CallerRoleV2, OPEN_REPRESENTATION_HOT_MAGIC_V3,
     OPEN_REPRESENTATION_HOT_REQUEST_SCHEMA_ID_V3, OPEN_REPRESENTATION_HOT_VERSION_V3,
     PHYSICAL_ABI_VERSION_V3, REQUEST_MAGIC_V2, REQUEST_STRUCTURED_HEADER_BYTES_V3,
     RepresentationActionV2,
 };
-use dclutch_rational_representation_v2_kernel::RepresentationDescriptorV2;
-use dclutch_rational_representation_v2_request_contract::generated as wire;
-use dclutch_request_profile_contract::{
+use dclutch_claims::rational_kernel::RepresentationDescriptorV2;
+use dclutch_claims::rational_request::generated as wire;
+use dclutch_vm::request_profile::{
     HEADER_BYTES as REQUEST_PROFILE_HEADER_BYTES, MAX_BYTES as REQUEST_PROFILE_MAX_BYTES,
     OPERATION_BYTES as REQUEST_OPERATION_BYTES, RequestProfileV1,
     encode::{
@@ -60,11 +60,11 @@ use dclutch_request_profile_contract::{
         ScalarRegisterV1, encode_request_profile_v1_atomic,
     },
 };
-use dclutch_token_svm::{
+use dclutch_custody::token_svm::{
     TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
     TokenBehaviorSelectionV2,
 };
-use dclutch_transition_vm::v3::{
+use dclutch_vm::v3::{
     HEADER_BYTES as TRANSITION_HEADER_BYTES, INSTRUCTION_BYTES as TRANSITION_INSTRUCTION_BYTES,
     InstructionV3, ProgramGeometryV3, ProgramV3 as TransitionProgramV3, ScalarRegisterV3,
     encode_program_atomic,
@@ -414,7 +414,7 @@ fn build_structured_bundle_inner(
     let effect = encode_effect(input_action, representation_outcome_count)?;
     let strategy_value = ExecutionStrategyProgramV2::new(
         StrategyDispositionV2::Interpreted,
-        content(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID)?,
+        content(dclutch_vm::v3::SCHEMA_RELEASE_ID)?,
         digest(&transition)?,
         content(EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2)?,
         None,
@@ -436,11 +436,11 @@ fn build_structured_bundle_inner(
         content(capacity_profile)?,
         CapabilityArtifactsV4 {
             account_profile: artifact(
-                dclutch_account_profile_contract::v2::SCHEMA_RELEASE_ID,
+                dclutch_vm::account_profile::v2::SCHEMA_RELEASE_ID,
                 digest(&account_profile)?.to_bytes(),
             )?,
             request_profile: artifact(
-                dclutch_request_profile_contract::SCHEMA_RELEASE_ID,
+                dclutch_vm::request_profile::SCHEMA_RELEASE_ID,
                 digest(&request_profile)?.to_bytes(),
             )?,
             lifecycle: artifact(LIFECYCLE_SCHEMA_ID_V5, lifecycle_id.to_bytes())?,
@@ -449,7 +449,7 @@ fn build_structured_bundle_inner(
                 digest(&strategy)?.to_bytes(),
             )?,
             transition: artifact(
-                dclutch_transition_vm::v3::SCHEMA_RELEASE_ID,
+                dclutch_vm::v3::SCHEMA_RELEASE_ID,
                 digest(&transition)?.to_bytes(),
             )?,
             effect: artifact(EFFECT_SCHEMA_ID_V4, digest(&effect)?.to_bytes())?,
@@ -532,12 +532,12 @@ pub fn validate_rational_open_structured_hot_bundle_v3(
         || descriptor.derivation_policy() != lifecycle_id
         || descriptor.account_profile()
             != artifact(
-                dclutch_account_profile_contract::v2::SCHEMA_RELEASE_ID,
+                dclutch_vm::account_profile::v2::SCHEMA_RELEASE_ID,
                 digest(&bundle.account_profile)?.to_bytes(),
             )?
         || descriptor.request_profile()
             != artifact(
-                dclutch_request_profile_contract::SCHEMA_RELEASE_ID,
+                dclutch_vm::request_profile::SCHEMA_RELEASE_ID,
                 digest(&bundle.request_profile)?.to_bytes(),
             )?
         || descriptor.lifecycle() != artifact(LIFECYCLE_SCHEMA_ID_V5, lifecycle_id.to_bytes())?
@@ -548,7 +548,7 @@ pub fn validate_rational_open_structured_hot_bundle_v3(
             )?
         || descriptor.transition()
             != artifact(
-                dclutch_transition_vm::v3::SCHEMA_RELEASE_ID,
+                dclutch_vm::v3::SCHEMA_RELEASE_ID,
                 digest(&bundle.transition)?.to_bytes(),
             )?
         || descriptor.effect() != artifact(EFFECT_SCHEMA_ID_V4, digest(&bundle.effect)?.to_bytes())?
@@ -1305,17 +1305,17 @@ fn artifact(schema: [u8; 32], program: [u8; 32]) -> Result<ArtifactReferenceV4> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_claims_svm::composition_v3::{
+    use dclutch_claims::composition_v3::{
         ClaimsCompositionErrorV3, ClaimsCompositionParentV3, ClaimsCompositionV3,
     };
-    use dclutch_product_payoff_v2_codec::runtime_v3::{
+    use dclutch_product::payoff::runtime_v3::{
         BasisInputV3, BasisKindV3, compile_basis_v3,
     };
-    use dclutch_rational_representation_v2_contract::ABSENT_REVISION;
-    use dclutch_rational_representation_v2_contract::{
+    use dclutch_claims::rational::ABSENT_REVISION;
+    use dclutch_claims::rational::{
         AssetV2, RepresentationRequestHeaderV2, RepresentationRequestV2,
     };
-    use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
+    use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
 
     fn id(value: u8) -> [u8; 32] {
         [value; 32]
@@ -1574,7 +1574,7 @@ mod tests {
     /// THE CHECK THAT CROSSES THE BOUNDARY.
     ///
     /// This operator declares the Structured route's account geometry and
-    /// `dclutch-claims-svm`'s composition admits it, and until this test the
+    /// `dclutch-claims`'s composition admits it, and until this test the
     /// two had never been compared in one process. Every check confined to one
     /// side passed while they disagreed, and the disagreement surfaced on real
     /// ELFs as one `TradingSbfError::Content` out of thousands of sites.
@@ -1752,7 +1752,7 @@ mod tests {
     ///   deletion.
     #[test]
     fn the_row_coefficient_guard_admits_both_families_and_refuses_over_claiming() {
-        use dclutch_transition_vm::v3::{
+        use dclutch_vm::v3::{
             ProgramV3 as TransitionProgram, RegisterInput, RegisterOutput, execute_fold_atomic,
         };
 
@@ -1801,7 +1801,7 @@ mod tests {
         );
         assert_eq!(
             run(7, [8, 3, 5]),
-            Err(dclutch_transition_vm::v3::Error::CheckFailed),
+            Err(dclutch_vm::v3::Error::CheckFailed),
             "a coordinate may not claim more than one whole unit",
         );
     }

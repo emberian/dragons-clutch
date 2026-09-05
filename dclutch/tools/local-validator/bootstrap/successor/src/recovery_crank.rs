@@ -55,19 +55,19 @@ use solana_sdk::{
 use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::transfer;
 
-use dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1;
-use dclutch_relay_contract::{
+use dclutch_market::capability_manifest::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1;
+use dclutch_source::relay::{
     frame::{
         RelayAccountNameV1, RelayAccountPrivilegeV1, RelayFrameKindV1, relay_frame_roles_v1,
         validate_relay_frame_v1,
     },
     instruction::AdvanceRecoveryInstructionV1,
 };
-use dclutch_resolution_codec::{
+use dclutch_source::resolution::{
     RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
     ResolutionCertificateKindV2,
 };
-use dclutch_source_contract::{
+use dclutch_source::{
     RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryPolicyV2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
     SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SourceResolutionPhaseV1, SourceResolutionStateV2,
     WINDOW_SPEC_SCHEMA_ID_V1, WindowSpecV1,
@@ -434,7 +434,7 @@ fn plan(rpc: &mut Rpc, arguments: &ArgumentsV1, expected: ExpectedClusterV1) -> 
             market_account.owner
         )));
     }
-    let state = dclutch_market_core_codec::CoreState::decode(&market_account.data)
+    let state = dclutch_market::CoreState::decode(&market_account.data)
         .map_err(|error| Error::new(format!("Core Market: {error:?}")))?;
     let generation = state.identity.generation;
 
@@ -1027,7 +1027,7 @@ mod tests {
     /// entering that index advances the ladder or ends it.
     #[test]
     fn the_decision_walks_a_two_rung_ladder_and_then_ends_it() {
-        use dclutch_source_contract::{ContentId, RecoveryAttemptV2, WindowKind};
+        use dclutch_source::{ContentId, RecoveryAttemptV2, WindowKind};
 
         let id = |tag: u8| ContentId::new([tag; 32]).expect("nonzero");
         // The window's own source link is inert to this decision -- what the

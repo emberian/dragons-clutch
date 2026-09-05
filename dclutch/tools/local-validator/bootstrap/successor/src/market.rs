@@ -10,7 +10,7 @@ pub(crate) mod founding_submission_journal;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityEntryV1,
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
     FundingLedgerV2, MAX_DEPENDENCIES_PER_CAPABILITY,
@@ -22,7 +22,7 @@ use dclutch_capability_contract::{
     },
     derive_funded_rent_rate_v2, funding_ledger_bytes_v2,
 };
-use dclutch_claims_svm::{
+use dclutch_claims::{
     founding_v5::{
         ClaimsFoundingAggregateSeedsV5, ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5,
     },
@@ -35,7 +35,7 @@ use dclutch_claims_svm::{
         ProtocolPositionSeedsV2,
     },
 };
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1,
     CustodyReplaySeedsV1, CustodyReplayV1, CustodyVaultSeedsV1, FoundingPrestateStageV1,
     OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1, PROJECTED_CUSTODY_STATE_BYTES_V2,
@@ -43,10 +43,10 @@ use dclutch_custody_contract::{
     ProjectedCustodyOperationV1, ProjectedCustodyPhaseV1, ProjectedCustodyRequestV1,
     ProjectedCustodyStateV2, SOURCE_COMPARTMENT_REPLAY_REVISION_V1,
 };
-use dclutch_direct_codec::COMPILED_DIRECT_RELEASE_ID_V1;
+use dclutch_trading::COMPILED_DIRECT_RELEASE_ID_V1;
 #[cfg(test)]
-use dclutch_direct_codec::execution_v3::DIRECT_SUCCESSOR_KIND_ID_V3;
-use dclutch_market_core_codec::{
+use dclutch_trading::execution_v3::DIRECT_SUCCESSOR_KIND_ID_V3;
+use dclutch_market::{
     Action, CoreState, FOUND_ACCOUNT_COUNT_V3, FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3,
     FOUND_PRICE_GATE_ACCOUNT_COUNT_V3, FOUND_RENT_SYSVAR_INDEX_V3, FoundingIntentV5,
     GenericFoundingRequestV1, GenericFoundingStageV1, Identity, MarketCoreStateSeedsV2,
@@ -59,7 +59,7 @@ use dclutch_market_founding_v1_operator::{
     authenticate_generic_market_founding_artifact_v1, construct_generic_founding_root_selection_v1,
     construct_generic_market_founding_plan_v1,
 };
-use dclutch_product_payoff_v2_codec::{
+use dclutch_product::payoff::{
     price_gate_v1::verify_price_gate_v1,
     registry_v3::{GRADED_BASIS_RECORD_SCHEMA_ID_V3, PRICE_GATE_RECORD_SCHEMA_ID_V1},
     runtime_v3::{
@@ -67,10 +67,10 @@ use dclutch_product_payoff_v2_codec::{
         basis_record_bytes_v3, compile_basis_v3, semantic_basis_preimage_v3,
     },
 };
-use dclutch_product_runtime_v2::{
+use dclutch_product::{
     ContentId as ProductContentId, portfolio_record_bytes, result_domain_record_bytes,
 };
-use dclutch_product_runtime_v2_admission::{
+use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2,
     RESULT_DOMAIN_SCHEMA_ID_V2,
 };
@@ -85,25 +85,25 @@ use dclutch_product_runtime_v2_operator::{
     lifecycle_rent_v2::{LifecycleRentCreateStateV2, build_lifecycle_rent_create_v2},
     publication::{RecordPublicationContentV1, derive_record_addresses_v1},
 };
-use dclutch_pyth_svm::{PYTH_SPONSORED_PUSH_RELEASE_SCHEMA_ID_V1, PythSponsoredPushReleaseV1};
-use dclutch_realm_contract::{
+use dclutch_source::pyth::{PYTH_SPONSORED_PUSH_RELEASE_SCHEMA_ID_V1, PythSponsoredPushReleaseV1};
+use dclutch_market::realm::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_release_set_contract::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::release_set::{
     CallerAuthoritySeedsV1, ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V2,
     ProtocolInfrastructureProfileV1, ProtocolInfrastructureProfileV2,
 };
-use dclutch_rent_contract::lifecycle_v2::{
+use dclutch_market::rent::lifecycle_v2::{
     LIFECYCLE_RENT_CREDIT_BYTES_V2, LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleRentCreditV2,
 };
-use dclutch_resolution_codec::{
+use dclutch_source::resolution::{
     FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1, PreMarketFundingAbortRequestV1,
     PreMarketFundingRequestV2, pre_market_funding_ledger_account_digest_v1,
     pre_market_funding_prestate_digest_v1,
 };
-use dclutch_source_contract::{
+use dclutch_source::{
     ContentId as SourceContentId, MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1, ManipulationFloorV1,
     PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, ProviderReleaseV1,
     PythAdapterConfigV1, RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryAttemptV2, RecoveryPolicyV2,
@@ -112,7 +112,7 @@ use dclutch_source_contract::{
     SourceAccessProfile, SourceCapacityProfileV1, SourceMaterialV3, SourceSpecV1,
     WINDOW_SPEC_SCHEMA_ID_V1,
 };
-use dclutch_token_svm::{
+use dclutch_custody::token_svm::{
     ACCOUNT_BYTES, AccountState, MINT_BYTES, Mint, TOKEN_2022_PROGRAM_ID, TokenAccount,
 };
 use sha2::{Digest as _, Sha256};
@@ -2006,7 +2006,7 @@ fn authenticate_source_publication_v1(
                 ));
             }
             Ok(SourcePublicationContractV1 {
-                adapter_config_schema: dclutch_registry_contract::ARTIFACT_RELEASE_SCHEMA_ID_V1,
+                adapter_config_schema: dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1,
                 sponsored_release: None,
             })
         }
@@ -5308,7 +5308,7 @@ fn checked_successor_found_coordinates_v1(
     let registry_raw = Pubkey::find_program_address(
         &[
             RAW_RECORD_PDA_SEED_V1,
-            &dclutch_registry_contract::ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1,
             &registry_artifact_id,
         ],
         &registry,
@@ -5317,7 +5317,7 @@ fn checked_successor_found_coordinates_v1(
     let registry_staging = Pubkey::find_program_address(
         &[
             STAGING_CURSOR_PDA_SEED_V1,
-            &dclutch_registry_contract::ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1,
             &registry_artifact_id,
         ],
         &registry,
@@ -5344,7 +5344,7 @@ fn checked_successor_found_plan_v1(
     let expected_raw = Pubkey::find_program_address(
         &[
             RAW_RECORD_PDA_SEED_V1,
-            &dclutch_registry_contract::ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1,
             &coordinates.registry_artifact_id,
         ],
         &registry,
@@ -5353,7 +5353,7 @@ fn checked_successor_found_plan_v1(
     let expected_staging = Pubkey::find_program_address(
         &[
             STAGING_CURSOR_PDA_SEED_V1,
-            &dclutch_registry_contract::ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1,
             &coordinates.registry_artifact_id,
         ],
         &registry,
@@ -5386,7 +5386,7 @@ fn checked_successor_found_plan_v1(
         RecordPair {
             raw: coordinates.registry_raw.to_string(),
             staging: coordinates.registry_staging.to_string(),
-            schema_id: hex(&dclutch_registry_contract::ARTIFACT_RELEASE_SCHEMA_ID_V1),
+            schema_id: hex(&dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1),
             content_sha256: hex(&coordinates.registry_artifact_id),
             body_hex: hex(&registry_raw_account.data),
         },
@@ -9494,7 +9494,7 @@ const GENERIC_MARKET_FOUNDING_PHYSICAL_FUNDING_ACCOUNTS_V3: usize = 2;
 /// change moves this number by construction.
 const GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3: usize =
     GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_BEFORE_ESCROW_V3
-        + dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_ESCROW_ACCOUNT_COUNT_V6;
+        + dclutch_claims::founding_v5::CLAIMS_FOUNDING_ESCROW_ACCOUNT_COUNT_V6;
 
 /// Message keys no address-lookup table can move: the payer, the invoked
 /// program and the ComputeBudget program.
@@ -9890,7 +9890,7 @@ fn derive_founding_poststate_expectation_v1(
         .filter(|_| claim_count >= 2)
         .ok_or_else(|| Error::new("no failure escrow is derivable at this runtime width"))?;
     let escrow_owner = Pubkey::find_program_address(
-        &dclutch_claims_svm::protocol_position_v2::ProtocolPositionClaimsCapabilitySeedsV2::new(
+        &dclutch_claims::protocol_position_v2::ProtocolPositionClaimsCapabilitySeedsV2::new(
             coordinates.market.to_bytes(),
             escrow_failure_selector,
         )
@@ -13423,7 +13423,7 @@ pub(crate) fn demo_id(role: &str, parts: &[&[u8]]) -> [u8; 32] {
 /// cannot drift in graph shape — only in the facts this struct names.
 #[derive(Clone, Copy)]
 enum PythMarketProviderV1<'a> {
-    Pull(&'a dclutch_pyth_svm::PythReleaseV1),
+    Pull(&'a dclutch_source::pyth::PythReleaseV1),
     Sponsored(PythSponsoredPushReleaseV1),
 }
 
@@ -13480,7 +13480,7 @@ impl PythMarketProviderV1<'_> {
         }
     }
 
-    fn authenticate_price_update(self, update: &dclutch_pyth_svm::FullPriceUpdateV2) -> Result<()> {
+    fn authenticate_price_update(self, update: &dclutch_source::pyth::FullPriceUpdateV2) -> Result<()> {
         if let Self::Sponsored(release) = self
             && (update.write_authority() != release.price_account()
                 || update.feed_id() != release.feed_id()
@@ -13937,7 +13937,7 @@ pub(crate) fn demo_market_input_base_shaped(
     resolution_release: [u8; 32],
     shape: &LocalMarketShapeV1,
 ) -> Result<MarketRunInput> {
-    use dclutch_pyth_svm::{FullPriceUpdateV2, synthetic_fixture::local_validator_release_v1};
+    use dclutch_source::pyth::{FullPriceUpdateV2, synthetic_fixture::local_validator_release_v1};
 
     shape.validate()?;
 
@@ -14042,7 +14042,7 @@ pub(crate) fn devnet_market_input(
     direct: DirectMarketCompilerInputV1<'_>,
 ) -> Result<MarketRunInput> {
     let window_end = devnet_window_end_v1(&spec)?;
-    let release = dclutch_pyth_svm::devnet_release_v1()
+    let release = dclutch_source::pyth::devnet_release_v1()
         .map_err(|error| Error::new(format!("devnet Pyth release row: {error:?}")))?;
     pyth_market_input(
         PythMarketParamsV1 {
@@ -14196,13 +14196,13 @@ fn pyth_market_input_base(
     params: PythMarketParamsV1<'_>,
     resolution_release: [u8; 32],
 ) -> Result<MarketRunInput> {
-    use dclutch_capability_contract::{
+    use dclutch_market::capability_manifest::{
         ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1,
         ContentId as CapabilityContentId, FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES,
         MAX_DEPENDENCIES_PER_CAPABILITY,
     };
-    use dclutch_pyth_svm::FullPriceUpdateV2;
-    use dclutch_source_contract::{
+    use dclutch_source::pyth::FullPriceUpdateV2;
+    use dclutch_source::{
         CapacityEnvelope, ProviderReleaseV1, PythAdapterConfigV1, RoundingBoundary,
         SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SourceCapacityProfileV1, SourceSpecV1, StatisticKind,
         StatisticSpecV1, WindowKind, WindowSpecV1,
@@ -14257,7 +14257,7 @@ fn pyth_market_input_base(
     // IT HOLDS:
     //
     //   * `PythProviderAdapterObligationV1::from_material_view`
-    //     (dclutch-source-contract lib.rs) refuses anything that is not
+    //     (dclutch-source lib.rs) refuses anything that is not
     //     `PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1` -- the field is "which
     //     provider EXTENSION is this", a closed constant.
     //   * `authenticate_provider_release` (resolution-proof-sbf provider_v3.rs)
@@ -14809,8 +14809,8 @@ mod tests {
     use super::*;
 
     fn cubic_price_gate_v1()
-    -> [u8; dclutch_product_payoff_v2_codec::price_gate_v1::PRICE_GATE_REQUEST_BYTES_V1] {
-        use dclutch_product_payoff_v2_codec::price_gate_v1::*;
+    -> [u8; dclutch_product::payoff::price_gate_v1::PRICE_GATE_REQUEST_BYTES_V1] {
+        use dclutch_product::payoff::price_gate_v1::*;
 
         let mut gate = [0_u8; PRICE_GATE_REQUEST_BYTES_V1];
         gate[PRICE_GATE_MAGIC_OFFSET_V1..PRICE_GATE_MAGIC_OFFSET_V1 + 8]
@@ -15240,7 +15240,7 @@ mod tests {
         );
         let mut forged = input.clone();
         let mut forged_gate = gate;
-        forged_gate[dclutch_product_payoff_v2_codec::price_gate_v1::PRICE_GATE_PRICES_OFFSET_V1] ^=
+        forged_gate[dclutch_product::payoff::price_gate_v1::PRICE_GATE_PRICES_OFFSET_V1] ^=
             1;
         forged.price_gate_hex = hex(&forged_gate);
         assert!(
@@ -15275,7 +15275,7 @@ mod tests {
 
     fn found_infrastructure_fixture_v1() -> FoundInfrastructureFixtureV1 {
         use crate::model::InfrastructureSuccessionPinV1;
-        use dclutch_release_set_contract::{
+        use dclutch_registry::release_set::{
             ArtifactReleaseIdV1, ExecutionRoleBindingV1,
             PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
             PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1, ProgramIdentityV1,
@@ -15369,7 +15369,7 @@ mod tests {
     }
 
     fn genesis_found_fixture_v1() -> GenesisFoundFixtureV1 {
-        use dclutch_release_set_contract::{
+        use dclutch_registry::release_set::{
             ArtifactReleaseIdV1, ExecutionRoleBindingV1,
             PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
             PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1, ProgramIdentityV1,
@@ -15497,9 +15497,9 @@ mod tests {
             )
             .expect("V1 profile")
             .rent(),
-            dclutch_release_set_contract::ArtifactReleaseIdV1::new([0xe1; 32])
+            dclutch_registry::release_set::ArtifactReleaseIdV1::new([0xe1; 32])
                 .expect("real predecessor Registry"),
-            dclutch_release_set_contract::ArtifactReleaseIdV1::new([0xe2; 32])
+            dclutch_registry::release_set::ArtifactReleaseIdV1::new([0xe2; 32])
                 .expect("real predecessor Rent"),
         )
         .expect("succeeded profile");
@@ -15598,7 +15598,7 @@ mod tests {
 
     #[test]
     fn found_successor_profile_refuses_cross_generation_and_account_substitution() {
-        use dclutch_release_set_contract::{
+        use dclutch_registry::release_set::{
             ArtifactReleaseIdV1, ExecutionRoleBindingV1, ProgramIdentityV1,
         };
 
@@ -15810,7 +15810,7 @@ mod tests {
     }
 
     fn sponsored_price_update_for_test() -> Vec<u8> {
-        let release = dclutch_pyth_svm::devnet_sponsored_sol_usd_release_v1()
+        let release = dclutch_source::pyth::devnet_sponsored_sol_usd_release_v1()
             .expect("compiled sponsored release");
         let mut body = FIXTURE_PRICE_UPDATE.to_vec();
         body[8..40].copy_from_slice(&release.price_account());
@@ -15826,7 +15826,7 @@ mod tests {
                 .expect("test Direct deployment widths"),
         );
         let price = sponsored_price_update_for_test();
-        let update = dclutch_pyth_svm::FullPriceUpdateV2::parse(&price).expect("price update");
+        let update = dclutch_source::pyth::FullPriceUpdateV2::parse(&price).expect("price update");
         devnet_sponsored_market_input(
             DevnetPythMarketSpecV1 {
                 // The fixture states no ladder, which is the shape every
@@ -15850,7 +15850,7 @@ mod tests {
                 generation: 1,
             },
             direct.compiler(),
-            dclutch_pyth_svm::devnet_sponsored_sol_usd_release_v1()
+            dclutch_source::pyth::devnet_sponsored_sol_usd_release_v1()
                 .expect("the declared devnet sponsored release"),
         )
         .expect("sponsored market input")
@@ -16084,7 +16084,7 @@ mod tests {
         direct_index: Option<usize>,
         other_foreign: Option<usize>,
     ) -> Vec<u8> {
-        use dclutch_capability_contract::{
+        use dclutch_market::capability_manifest::{
             ActivationPolicy, CAPABILITY_ENTRY_BYTES, CompartmentFundingV1, FundingAmountsV1,
             FundingQuoteV1, MANIFEST_HEADER_BYTES,
         };
@@ -16160,7 +16160,7 @@ mod tests {
     /// another kind is refused symmetrically whichever kind is selected.
     #[test]
     fn founding_masks_weld_the_manifest_to_one_selected_capability() {
-        use dclutch_capability_contract::{
+        use dclutch_market::capability_manifest::{
             ActivationPolicy, CAPABILITY_ENTRY_BYTES, CompartmentFundingV1, FundingAmountsV1,
             FundingQuoteV1, MANIFEST_HEADER_BYTES,
         };
@@ -16234,7 +16234,7 @@ mod tests {
         let input = demo_market_input(registry, direct.compiler()).expect("demo market input");
         let bytes = decode_hex(&input.capability_manifest_hex).expect("manifest bytes");
         let manifest = CapabilityManifestV1::decode(&bytes).expect("manifest");
-        let expected = dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V7;
+        let expected = dclutch_source::resolution::RESOLUTION_CONTROLLER_RELEASE_ID_V7;
         assert!(
             selected_founding_controller_masks_v1(manifest, expected, DIRECT_SUCCESSOR_KIND_ID_V3)
                 .is_ok()
@@ -16242,7 +16242,7 @@ mod tests {
         assert!(
             selected_founding_controller_masks_v1(
                 manifest,
-                dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V5,
+                dclutch_source::resolution::RESOLUTION_CONTROLLER_RELEASE_ID_V5,
                 DIRECT_SUCCESSOR_KIND_ID_V3,
             )
             .is_err()

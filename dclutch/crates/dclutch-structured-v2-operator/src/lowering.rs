@@ -4,7 +4,7 @@
 //! checked [`StructuredTokenEffectPlanV2`] sequence into the exact borrowed
 //! candidate inputs that the onchain-safe contract independently revalidates.
 
-use dclutch_structured_v2_contract::{
+use dclutch_claims::structured::{
     STRUCTURED_ACCOUNT_RENT_CREDIT_V2, STRUCTURED_ACCOUNT_RENT_PROGRAM_V2,
     StructuredFrameEffectSlotsV2, StructuredFrameSpecV2, StructuredHotAccountRefV2,
     StructuredHotRentCloseV2, StructuredHotTokenEffectV2, structured_frame_effect_slots_v2,

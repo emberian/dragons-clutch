@@ -10,7 +10,7 @@
 
 use std::{collections::BTreeSet, env, fs, path::PathBuf};
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
     CONTROLLER_FUNDING_CUSTODY_ABORT_ANCHOR_DOMAIN_V1,
     CONTROLLER_FUNDING_CUSTODY_LADDER_ACCOUNT_COUNT_V1,
@@ -22,7 +22,7 @@ use dclutch_capability_contract::{
     derive_funded_rent_rate_v2, funding_ledger_bytes_v2,
 };
 use dclutch_core_contract::ContentId as CoreContentId;
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1,
     CustodyReplayV1, CustodyVaultSeedsV1, FoundingPrestateStageV1,
     OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1, PROJECTED_CUSTODY_STATE_BYTES_V2,
@@ -30,30 +30,30 @@ use dclutch_custody_contract::{
     ProjectedCustodyPhaseV1, ProjectedCustodyRequestV1, ProjectedCustodySourceReplaySeedsV1,
     ProjectedCustodyStateSeedsV2, ProjectedCustodyStateV2, SOURCE_COMPARTMENT_REPLAY_REVISION_V1,
 };
-use dclutch_market_core_codec::{Identity, generic_founding_funding_list_id_v1};
+use dclutch_market::{Identity, generic_founding_funding_list_id_v1};
 use dclutch_program_test_evidence::TransactionEvidence;
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ArtifactActivationInputV1,
     ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
     activate_execution_role_into_v1, initialize_activation_cache_v1,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
     ExecutionRoleV1, ProgramIdentityV1,
 };
-use dclutch_rent_contract::{
+use dclutch_market::rent::{
     RefundAuthority,
     lifecycle_v2::{
         LIFECYCLE_RENT_CREDIT_BYTES_V2, LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2,
         LifecycleRentCreditV2,
     },
 };
-use dclutch_resolution_codec::{
+use dclutch_source::resolution::{
     PreMarketFundingAbortRequestV1, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
     pre_market_funding_ledger_account_digest_v1,
 };
-use dclutch_token_svm::{ACCOUNT_BYTES, PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID};
+use dclutch_custody::token_svm::{ACCOUNT_BYTES, PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID};
 use solana_account::{Account, AccountSharedData};
 use solana_program::{
     clock::Clock,
@@ -1422,7 +1422,7 @@ async fn exercise_canonical_refund_order(trading_index: usize) {
     .expect("prefix decode");
     assert!(matches!(
         prefix_checkpoint.phase(),
-        dclutch_capability_contract::ControllerFundingCheckpointPhaseV1::PreparedFirstLedgerClosed
+        dclutch_market::capability_manifest::ControllerFundingCheckpointPhaseV1::PreparedFirstLedgerClosed
     ));
     let (remaining_key, remaining_account) = if fixture.trading_closes_first {
         (
@@ -1759,7 +1759,7 @@ async fn real_custody_source_abort_then_controller_suffix_is_exact_and_resumable
         )
         .expect("abort checkpoint")
         .phase(),
-        dclutch_capability_contract::ControllerFundingCheckpointPhaseV1::CustodyAborted
+        dclutch_market::capability_manifest::ControllerFundingCheckpointPhaseV1::CustodyAborted
     );
     assert!(after_abort.projected_state.is_none());
     assert!(after_abort.source_vault.is_none());
@@ -1822,7 +1822,7 @@ async fn real_custody_source_abort_then_controller_suffix_is_exact_and_resumable
         )
         .expect("first-close checkpoint")
         .phase(),
-        dclutch_capability_contract::ControllerFundingCheckpointPhaseV1::CustodyFirstLedgerClosed
+        dclutch_market::capability_manifest::ControllerFundingCheckpointPhaseV1::CustodyFirstLedgerClosed
     );
     assert_eq!(source_abort_lamport_total(&first_closed), initial_total);
 

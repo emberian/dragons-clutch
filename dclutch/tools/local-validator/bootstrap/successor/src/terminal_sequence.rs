@@ -16,18 +16,18 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, funded_rent_minimum_v2,
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1, set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
 };
-use dclutch_claims_svm::liability_basis_state_v2::LIABILITY_BASIS_MARKET_SEED_V2;
+use dclutch_claims::liability_basis_state_v2::LIABILITY_BASIS_MARKET_SEED_V2;
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CompartmentV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1, CustodyVaultSeedsV1,
 };
-use dclutch_direct_codec::{
+use dclutch_trading::{
     native_close_bundle_v1::{
         direct_native_close_account_profile_schema_v1, direct_native_close_effect_schema_v1,
     },
@@ -35,7 +35,7 @@ use dclutch_direct_codec::{
     retirement_v1::{DirectBeginRetiringRequestV1, direct_begin_retiring_context_v1},
     successor::DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1,
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     Action, Admission, Binding, CoreState, Identity, Phase, Readiness, ReleaseReceipt, ReleaseSet,
     Request, Role, begin_retiring,
 };
@@ -60,22 +60,22 @@ use dclutch_operator::{
         project_retirement_replay_handoff_coordinate_closure_v1,
     },
 };
-use dclutch_realm_contract::REALM_SCHEMA_RELEASE_ID_V1;
-use dclutch_registry_svm::continuation_v1::{
+use dclutch_market::realm::REALM_SCHEMA_RELEASE_ID_V1;
+use dclutch_registry::svm::continuation_v1::{
     RegistryContinuationAdmissionSeedsV1, RegistryContinuationRequestV1,
 };
-use dclutch_relay_contract::SOLANA_DEVNET_GENESIS_HASH_V1;
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_rent_contract::lifecycle_v2::{
+use dclutch_source::relay::SOLANA_DEVNET_GENESIS_HASH_V1;
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_market::rent::lifecycle_v2::{
     LifecycleAccountIdV2, LifecycleRentCoreCloseAuthoritySeedsV2, LifecycleRentCreditV2,
 };
-use dclutch_resolution_codec::{
+use dclutch_source::resolution::{
     SOURCE_CLOSURE_RECEIPT_BYTES_V3, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SourceClosureReceiptV3,
 };
 use dclutch_resolution_core_v3_operator::funded_rent_recovery_v1::{
     FundedRentReadingV2, recover_funded_rent_rate_v2,
 };
-use dclutch_source_contract::{
+use dclutch_source::{
     RECOVERY_POLICY_SCHEMA_ID_V2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
     SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SourceResolutionPhaseV1, SourceResolutionStateV2,
 };
@@ -12194,7 +12194,7 @@ mod tests {
         // Imported here rather than at the module head: the session no longer
         // derives a rate from a cluster reading at all, so this is the only
         // caller left and it is a fixture.
-        use dclutch_capability_contract::derive_funded_rent_rate_v2;
+        use dclutch_market::capability_manifest::derive_funded_rent_rate_v2;
         derive_funded_rent_rate_v2(
             Rent::default().minimum_balance(0),
             1,

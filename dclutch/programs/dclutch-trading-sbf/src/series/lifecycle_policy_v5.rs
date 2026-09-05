@@ -47,7 +47,7 @@
 //! join `TradingFamilyContextV1::authenticate` performs from the header
 //! directly.
 
-use dclutch_account_profile_contract::lifecycle_v3::{
+use dclutch_vm::account_profile::lifecycle_v3::{
     ACTION_PLAN_BYTES, HEADER_BYTES, PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SEED_BYTES,
     StateLifecyclePolicyV5,
     encode::{
@@ -56,10 +56,10 @@ use dclutch_account_profile_contract::lifecycle_v3::{
         LifecycleRegisterCoordinateV3, LifecycleSeedInputV3, encode_lifecycle_policy_v5_atomic,
     },
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CAPABILITY_ROOT_PDA_DOMAIN_V1,
 };
-use dclutch_series_v3_kernel::request::SeriesActionV3;
+use dclutch_trading::series::request::SeriesActionV3;
 
 use super::{
     account_profile_v4::{
@@ -107,7 +107,7 @@ pub enum SeriesLifecyclePolicyErrorV5 {
     /// A checked width overflowed or a buffer was not exact.
     Geometry,
     /// The generic lifecycle encoder or its own V5 decoder refused.
-    Lifecycle(dclutch_account_profile_contract::lifecycle_v3::Error),
+    Lifecycle(dclutch_vm::account_profile::lifecycle_v3::Error),
 }
 
 /// Result alias for Series lifecycle-policy emission.
@@ -269,7 +269,7 @@ mod tests {
 
     use alloc::vec;
 
-    use dclutch_account_profile_contract::v2::{
+    use dclutch_vm::account_profile::v2::{
         AccountProfileV2, ProjectionRegisterKindV2, ProjectionRegisterSpaceV2, ProjectionTargetV2,
     };
 
@@ -278,7 +278,7 @@ mod tests {
         SeriesConsumeAccountProfileInputV4, encode_series_consume_account_profile_v4_atomic,
     };
     use super::*;
-    use dclutch_account_profile_contract::lifecycle_v3::{
+    use dclutch_vm::account_profile::lifecycle_v3::{
         CoordinateScopeV3, LifecycleRegisterKindV3,
     };
 
@@ -343,7 +343,7 @@ mod tests {
             .expect("sole Close plan");
         assert_eq!(
             selected.operation(),
-            dclutch_account_profile_contract::lifecycle_v3::LifecycleOperationV3::Close
+            dclutch_vm::account_profile::lifecycle_v3::LifecycleOperationV3::Close
         );
         assert_eq!(
             policy.action_plan_count(SeriesActionV3::Close as u32),

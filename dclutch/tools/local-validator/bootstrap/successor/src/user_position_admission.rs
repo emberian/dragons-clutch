@@ -18,7 +18,7 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use dclutch_claims_svm::{
+use dclutch_claims::{
     liability_basis_state_v2::{
         LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, LiabilityBasisMarketViewV2,
         LiabilityBasisPositionInputV2, LiabilityBasisPositionViewV2,
@@ -26,8 +26,8 @@ use dclutch_claims_svm::{
     },
     protocol_position_v2::ProtocolPositionAdmissionV2,
 };
-use dclutch_custody_contract::CustodyAuthoritySeedsV1;
-use dclutch_market_core_codec::{CoreState, Phase as CorePhase, StateBumpsV1};
+use dclutch_custody::CustodyAuthoritySeedsV1;
+use dclutch_market::{CoreState, Phase as CorePhase, StateBumpsV1};
 use dclutch_operator::{
     Finality, Observation, ObservedAccount,
     user_position_admission_v1::{
@@ -35,23 +35,23 @@ use dclutch_operator::{
         plan_user_position_admission_v1,
     },
 };
-use dclutch_product_payoff_v2_codec::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3;
-use dclutch_product_runtime_v2_admission::{
+use dclutch_product::payoff::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3;
+use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
 };
-use dclutch_realm_contract::{
+use dclutch_market::realm::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1, DeploymentObservationV1,
     require_slot_pinned_release_v1, slot_pinned_release_elf_digest_v1,
 };
-use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
-use dclutch_relay_contract::SOLANA_DEVNET_GENESIS_HASH_V1;
-use dclutch_release_set_contract::ExecutionRoleV1;
-use dclutch_token_svm::{
+use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
+use dclutch_source::relay::SOLANA_DEVNET_GENESIS_HASH_V1;
+use dclutch_registry::release_set::ExecutionRoleV1;
+use dclutch_custody::token_svm::{
     ACCOUNT_BYTES, AccountState as TokenAccountState, COption, Mint, TOKEN_2022_PROGRAM_ID,
     TokenAccount,
     instruction::{InstructionSpec, approve_checked, initialize_account3, transfer_checked},
@@ -4508,13 +4508,13 @@ fn acquire_snapshot(
     }
 
     let claims = pubkey(&plan.claims.program_id)?;
-    let position_seeds = dclutch_claims_svm::protocol_position_v2::ProtocolPositionSeedsV2::new(
+    let position_seeds = dclutch_claims::protocol_position_v2::ProtocolPositionSeedsV2::new(
         coordinates.claims_market.to_bytes(),
         arguments.position_owner.to_bytes(),
     )
     .map_err(|error| Error::new(format!("Position seeds: {error:?}")))?;
     let admission_seeds =
-        dclutch_claims_svm::protocol_position_v2::ProtocolPositionAdmissionSeedsV2::new(
+        dclutch_claims::protocol_position_v2::ProtocolPositionAdmissionSeedsV2::new(
             coordinates.claims_market.to_bytes(),
             arguments.position_owner.to_bytes(),
         )
@@ -5607,21 +5607,21 @@ pub(crate) fn local_usage() -> &'static str {
 mod tests {
     use super::*;
     use crate::cluster::DEVNET_GENESIS_HASH;
-    use dclutch_claims_svm::protocol_position_v2::{
+    use dclutch_claims::protocol_position_v2::{
         ProtocolPositionActionV2, ProtocolPositionAdmissionEvidenceV2, ProtocolPositionOwnerKindV2,
         ProtocolPositionPresenceV2, ProtocolPositionRequestV2,
     };
     use dclutch_core_contract::ContentId;
-    use dclutch_market_core_codec::{Identity, MarketIdentity, Readiness};
-    use dclutch_realm_contract::RealmV1Input;
-    use dclutch_registry_contract::{
+    use dclutch_market::{Identity, MarketIdentity, Readiness};
+    use dclutch_market::realm::RealmV1Input;
+    use dclutch_registry::{
         ArtifactActivationInputV1, ArtifactUpgradePolicyV1, ExecutionReleaseActivationInputsV1,
         activate_execution_release_set_v1,
     };
-    use dclutch_release_set_contract::{
+    use dclutch_registry::release_set::{
         ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ProgramIdentityV1,
     };
-    use dclutch_token_svm::MINT_BYTES;
+    use dclutch_custody::token_svm::MINT_BYTES;
     use solana_program::hash::hash;
 
     fn base_args() -> Vec<String> {
@@ -6749,7 +6749,7 @@ mod tests {
         // production Token-2022 release, and a fixture that moved to the new
         // one would stop proving that the old one is still readable.
         let adapter_release: [u8; 32] = Sha256::digest(
-            dclutch_token_svm::CollateralAdapterReleaseV1::token_2022_zero_extension_exact_transfer()
+            dclutch_custody::token_svm::CollateralAdapterReleaseV1::token_2022_zero_extension_exact_transfer()
                 .to_bytes(),
         )
         .into();

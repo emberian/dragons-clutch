@@ -12,7 +12,7 @@ extern crate alloc;
 use alloc::{vec, vec::Vec};
 
 #[cfg(not(target_os = "solana"))]
-use dclutch_account_profile_contract::v2::{
+use dclutch_vm::account_profile::v2::{
     AccountPrestateV2, AccountProfileV2, TrustedBuiltinIdentityV2, TrustedEnvironmentV2,
     TrustedIdentityEnvironmentV2,
     encode::{
@@ -230,17 +230,17 @@ pub fn encode_dealer_equity_account_profile_v3(
         .map_err(|_| DealerEquityProfileErrorV3::Geometry)?,
         item_identity_stride: 0,
     };
-    let bytes = dclutch_account_profile_contract::v2::AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES
+    let bytes = dclutch_vm::account_profile::v2::AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES
         .checked_add(
             usize::from(account_count)
-                .checked_mul(dclutch_account_profile_contract::v2::RULE_BYTES)
+                .checked_mul(dclutch_vm::account_profile::v2::RULE_BYTES)
                 .ok_or(DealerEquityProfileErrorV3::Geometry)?,
         )
         .and_then(|value| {
             value.checked_add(
                 operations
                     .len()
-                    .checked_mul(dclutch_account_profile_contract::v2::OPERATION_BYTES)?,
+                    .checked_mul(dclutch_vm::account_profile::v2::OPERATION_BYTES)?,
             )
         })
         .ok_or(DealerEquityProfileErrorV3::Geometry)?;
@@ -524,7 +524,7 @@ fn custody_offset(
 #[cfg(all(test, not(target_os = "solana")))]
 mod tests {
     use super::*;
-    use dclutch_account_profile_contract::v2::{
+    use dclutch_vm::account_profile::v2::{
         AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE, AccountProfileV2,
         LIFECYCLE_PRESTATE_ARTIFACT_PROFILE,
     };

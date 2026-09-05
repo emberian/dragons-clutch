@@ -47,8 +47,8 @@ extern crate alloc;
 
 use alloc::{boxed::Box, vec, vec::Vec};
 
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
-use dclutch_claims_svm::{
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_claims::{
     CallerRole,
     liability_basis_state_v2::LiabilityBasisMarketViewV2,
     product_basis_terminal_v3::{
@@ -78,19 +78,19 @@ use dclutch_claims_svm::{
         TerminalSettlementReceiptInputV3, TerminalSettlementReceiptV3, TerminalSettlementRequestV3,
     },
 };
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1,
     CustodyReplaySeedsV1, CustodyReplayV1, CustodyVaultSeedsV1,
 };
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
-use dclutch_product_runtime_v2::ContentId as ProductContentId;
-use dclutch_product_runtime_v2_svm_reader::{
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
+use dclutch_product::ContentId as ProductContentId;
+use dclutch_product::svm_reader::{
     FinalizedRecordFrameV2, ProductRuntimeFrameV3, authenticate_product_runtime_v3,
 };
-use dclutch_realm_contract::REALM_SCHEMA_RELEASE_ID_V1;
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_representation_composition_v3_kernel::{
+use dclutch_market::realm::REALM_SCHEMA_RELEASE_ID_V1;
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_claims::composition::{
     COMPOSITION_EXPOSURE_SCHEMA_ID_V3, CompositionExposureBundleV3, RecordAdmissionV3,
 };
 use solana_program::{
@@ -327,7 +327,7 @@ fn authenticate_and_prepare(
         input.release_set,
         core,
         runtime.basis_kind,
-        dclutch_product_payoff_v2_codec::runtime_v3::categorical_refunds_on_failure_v3(
+        dclutch_product::payoff::runtime_v3::categorical_refunds_on_failure_v3(
             runtime.basis_kind,
             runtime.runtime.outcome_count,
             runtime.payout_scale,
@@ -370,7 +370,7 @@ fn authenticate_and_prepare(
         usize::try_from(runtime.runtime.outcome_count).map_err(|_| ClaimsSbfError::Economic)?;
     let claims_width = usize::try_from(market.claim_count).map_err(|_| ClaimsSbfError::Economic)?;
     let neutral = SignedDeltaV3::new(
-        dclutch_claims_svm::signed_delta_v3::DeltaDirectionV3::Neutral,
+        dclutch_claims::signed_delta_v3::DeltaDirectionV3::Neutral,
         0,
     )
     .map_err(|_| ClaimsSbfError::Economic)?;
@@ -571,7 +571,7 @@ fn emit_receipt(
 fn authenticate_extra_privileges(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
-    input: dclutch_claims_svm::terminal_settlement_v3::TerminalSettlementRequestInputV3,
+    input: dclutch_claims::terminal_settlement_v3::TerminalSettlementRequestInputV3,
     authority: ParentAuthorityV3,
 ) -> Result<(), ProgramError> {
     for index in [
@@ -642,7 +642,7 @@ fn authenticate_extra_privileges(
 
 /// Which proof coordinate 0 must carry for this request's execution role.
 const fn parent_authority(
-    input: dclutch_claims_svm::terminal_settlement_v3::TerminalSettlementRequestInputV3,
+    input: dclutch_claims::terminal_settlement_v3::TerminalSettlementRequestInputV3,
 ) -> ParentAuthorityV3 {
     match input.caller_role {
         CallerRole::Claims => ParentAuthorityV3::PositionOwner(input.owner),
@@ -686,11 +686,11 @@ fn authenticate_core(
 /// The exposure is the matrix that decides WHICH claim a terminal payout goes
 /// to. Until this check, the redeemer chose it. `exposure_id` and
 /// `exposure_digest` are ordinary instruction fields
-/// (`crates/dclutch-claims-svm/src/terminal_settlement_v3.rs:151-154`);
+/// (`crates/dclutch-claims/src/terminal_settlement_v3.rs:151-154`);
 /// [`authenticate_finalized_record`] proves only that some finalized record
 /// hashes to that digest -- it reads no Market and no Product; and
 /// `verify_execution_for`
-/// (`crates/dclutch-representation-composition-v3-kernel/src/exposure.rs:383-401`)
+/// (`crates/dclutch-claims/src/composition/exposure.rs:383-401`)
 /// joins five header fields the record's own author writes, plus two widths.
 /// Registry publication is permissionless
 /// (`programs/dclutch-registry-sbf/src/record_v1.rs:1`), and founding pins no
@@ -710,7 +710,7 @@ fn authenticate_core(
 /// different identities in this tree -- decision 0011's RECORDS-MIGRATE row.
 /// The Rational route is sound regardless, because it anchors the record's
 /// BYTES to an authenticated descriptor's `graph_digest`
-/// (`crates/dclutch-rational-representation-v2-kernel/src/product_v3.rs:530-533`);
+/// (`crates/dclutch-claims/src/rational_kernel/product_v3.rs:530-533`);
 /// that anchor is what does the work there, not the identity conjunct.
 ///
 /// # Why the identity, and why that is not a new policy
@@ -729,7 +729,7 @@ fn authenticate_core(
 /// - **At settlement.** This route passes the Product's OWN `runtime.basis_width`
 ///   into the admission (`:366`), and `validate_joins` then refuses with
 ///   `WidthMismatch` unless `market.claim_count == admission.basis_width()`
-///   (`crates/dclutch-claims-svm/src/product_basis_terminal_v3.rs:542-546`).
+///   (`crates/dclutch-claims/src/product_basis_terminal_v3.rs:542-546`).
 ///   `N == K` is therefore re-forced at redemption without trusting founding.
 ///
 /// A representation whose basis IS the Product's own liability basis, at equal
@@ -842,7 +842,7 @@ fn authenticate_finalized_record(
 #[inline(never)]
 fn authenticate_zero_custody_accounts(
     accounts: &[AccountInfo<'_>],
-    input: dclutch_claims_svm::terminal_settlement_v3::TerminalSettlementRequestInputV3,
+    input: dclutch_claims::terminal_settlement_v3::TerminalSettlementRequestInputV3,
     custody_context: [u8; 32],
 ) -> Result<(), ProgramError> {
     // The CLAIMS compartment of the Market's Custody namespace. The role is a
@@ -1017,7 +1017,7 @@ const fn record<'accounts, 'info>(
 mod exposure_identity_tests {
     use super::*;
 
-    use dclutch_representation_composition_v3_kernel::{
+    use dclutch_claims::composition::{
         CompositionExposureInputV3, CompositionExposureRowInputV3, CompositionExposureTermV3,
         composition_exposure_bytes_v3, encode_composition_exposure_v3_atomic,
     };

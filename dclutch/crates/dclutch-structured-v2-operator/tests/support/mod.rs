@@ -6,11 +6,11 @@
 
 #![allow(dead_code)]
 
-use dclutch_fractional_claim_kernel::{
+use dclutch_claims::fractional_kernel::{
     FractionalExposureTermsAdmissionV2, FractionalExposureTermsInputV2, FractionalExposureTermsV2,
     encode_fractional_exposure_terms_v2, fractional_exposure_terms_bytes_v2,
 };
-use dclutch_structured_v2_kernel::{
+use dclutch_claims::structured_kernel::{
     StructuredCoordinateObservationV2, StructuredPhaseV2, StructuredTermsAdmissionV2,
     StructuredTermsInputV2, StructuredTermsV2, encode_structured_projection_v2,
     encode_structured_terms_v2, structured_projection_bytes_v2, structured_terms_bytes_v2,
@@ -97,9 +97,9 @@ pub fn shard_terms(bytes: &[u8]) -> FractionalExposureTermsV2<'_> {
         bytes,
         FractionalExposureTermsAdmissionV2 {
             selected_schema_id:
-                dclutch_fractional_claim_kernel::FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
+                dclutch_claims::fractional_kernel::FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
             finalized_schema_id:
-                dclutch_fractional_claim_kernel::FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
+                dclutch_claims::fractional_kernel::FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
             selected_terms_id: content,
             finalized_terms_id: content,
             recomputed_terms_digest: content,
@@ -148,8 +148,8 @@ pub fn structured_terms_bytes_with(
 pub fn structured_admission(bytes: &[u8]) -> StructuredTermsAdmissionV2 {
     let content = digest(bytes);
     StructuredTermsAdmissionV2 {
-        selected_schema_id: dclutch_structured_v2_kernel::STRUCTURED_TERMS_SCHEMA_ID_V2,
-        finalized_schema_id: dclutch_structured_v2_kernel::STRUCTURED_TERMS_SCHEMA_ID_V2,
+        selected_schema_id: dclutch_claims::structured_kernel::STRUCTURED_TERMS_SCHEMA_ID_V2,
+        finalized_schema_id: dclutch_claims::structured_kernel::STRUCTURED_TERMS_SCHEMA_ID_V2,
         selected_terms_id: content,
         finalized_terms_id: content,
         recomputed_terms_digest: content,

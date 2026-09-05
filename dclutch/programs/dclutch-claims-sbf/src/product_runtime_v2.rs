@@ -1,7 +1,7 @@
 //! The Claims-side authentication of a Market-selected Product Runtime V2 graph.
 
-use dclutch_product_runtime_v2::ContentId;
-use dclutch_product_runtime_v2_svm_reader::{
+use dclutch_product::ContentId;
+use dclutch_product::svm_reader::{
     AuthenticatedProductRuntimeV2, ProductRuntimeFrameV2,
     authenticate_product_runtime_v2 as authenticate_graph,
 };

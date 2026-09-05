@@ -4,15 +4,15 @@ extern crate std;
 
 use std::{boxed::Box, vec, vec::Vec};
 
-use dclutch_market_core_codec::{
+use dclutch_market::{
     Action, CAPABILITY_FUNDING_HEADER_BYTES_V2, CORE_EFFECT_ENVELOPE_BYTES_V1,
     CapabilityFundingHeaderV1, CapabilityFundingHeaderV2, CoreEffectActionV1, CoreEffectEnvelopeV1,
     Identity, REQUEST_BYTES, Request, Role, SeriesCoreRequestV1,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     CAPABILITY_EXECUTION_SELECTION_BYTES_V1, CapabilityExecutionSelectionV1,
 };
-use dclutch_source_contract::{
+use dclutch_source::{
     ContentId, Error as SourceError, RecoveryAttemptV2, RecoveryPolicyV2, SourceMaterialV3,
     SourceResolutionPhaseV1, SourceResolutionStateV2, WindowKind, WindowSpecV1,
 };
@@ -400,7 +400,7 @@ fn a_recovery_bearing_market_now_has_the_terminal_the_weld_was_protecting_it_fro
 /// prestate would compile, pass every program test whose fixture never
 /// reaches that prestate, and fail here.
 mod admissible_prestates {
-    use dclutch_market_core_codec::{MarketAdmissionV1, Phase, Readiness};
+    use dclutch_market::{MarketAdmissionV1, Phase, Readiness};
 
     use crate::{
         execute_provider_v3::EXECUTE_PROVIDER_ADMISSIBLE_PRESTATES_V1,

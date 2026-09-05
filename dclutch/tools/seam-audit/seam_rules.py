@@ -116,7 +116,7 @@ def _identifier(segment: str) -> str:
     """The bare constant name a seed segment names, if it names one.
 
     Seed segments arrive path-qualified in every combination the tree uses --
-    ``FOO``, ``seeds::FOO``, ``dclutch_record_contract::FOO``,
+    ``FOO``, ``seeds::FOO``, ``dclutch_registry::FOO``,
     ``crate::seeds::FOO`` -- and all four are the same domain.
     """
 
@@ -233,7 +233,7 @@ def _classify_domains(
     `dclutch:` literals in this tree are over 32 bytes and every one of them is
     a legitimate *hash* domain, which has no length limit whatever.  The tree
     states the rule itself, at
-    ``crates/dclutch-structured-v2-contract/src/seeds.rs:120`` -- "this one is
+    ``crates/dclutch-claims/src/structured/seeds.rs:120`` -- "this one is
     hashed rather than seeded, so it is deliberately NOT length-bound."
     """
 
@@ -258,7 +258,7 @@ def _read_asserts(binary: str, root: pathlib.Path) -> dict[str, str]:
     `MAX_PDA_SEED_BYTES`, a cross-module path to one, a message or none, and --
     the dialect a plain `assert!(` grep misses entirely -- the *block* form,
     ``const _: () = { assert!(a); assert!(b); };``, under which
-    ``dclutch-custody-contract`` and ``dclutch-general-adapter-contract`` guard
+    ``dclutch-custody`` and ``dclutch-trading`` guard
     eleven domains the 2026-08-29 audit recorded as unguarded.
 
     Keyed by constant name across the whole tree, not per crate: a guard in a
@@ -895,7 +895,7 @@ def class_derivation(survey: Survey) -> list[Finding]:
 
 # Name is not polarity in this tree: ``distinct()`` returns true-is-good,
 # ``has_duplicate*()`` returns true-is-bad, and
-# ``dclutch-release-set-contract``'s ``validate_aliases`` forbids *inconsistent*
+# ``dclutch-registry``'s ``validate_aliases`` forbids *inconsistent*
 # aliasing rather than aliasing at all.  What matters here is only strictness:
 # a census that admits no repeat anywhere, versus one that carries an exemption.
 _BLANKET_CENSUS = re.compile(
@@ -1280,7 +1280,7 @@ _AUTHORITY_CACHE_READ = re.compile(r"ActivatedExecutionReleaseSetViewV1\s*::\s*d
 # The blessed crate's whole vocabulary, taken by measurement rather than
 # guessed: `authenticate_activated_role*` is the role-projection family and
 # `authenticate_activation_cache*` is the coordinate family Custody uses, both
-# in `dclutch-registry-activation-auth-v1` and both performing owner, width and
+# in `dclutch-registry` and both performing owner, width and
 # derived-address before a byte of role data is trusted.
 _AUTHORITY_DELEGATES = re.compile(r"authenticate_activat(?:ed|ion)_[a-z_0-9]*\s*\(")
 
@@ -1342,7 +1342,7 @@ def class_authority(survey: Survey) -> list[Finding]:
     role is where authority is most likely to go unexplained: the authentication
     happened once, in another program, and everything downstream reads the
     result.  The protocol's own settled shape for reading it is written down in
-    ``dclutch-registry-activation-auth-v1``: privilege frame, cache OWNERSHIP by
+    ``dclutch-registry``: privilege frame, cache OWNERSHIP by
     the Registry, cache ADDRESS derived from
     ``[ACTIVATION_PDA_DOMAIN_V1, execution_release_set_id]``, hostile decode,
     then the activated role's current deployment.  A function that decodes the

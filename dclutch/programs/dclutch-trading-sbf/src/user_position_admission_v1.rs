@@ -7,8 +7,8 @@
 //! is deliberately de-escalated before CPI because Claims' child ABI requires
 //! an immutable nonsigner owner-identity observation.
 
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_user_position_admission_contract::{
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_claims::position_admission::{
     ProtocolPositionActionV2, USER_POSITION_ADMISSION_ACCOUNT_COUNT_V1,
     USER_POSITION_ADMISSION_AUTHORITY_ACCOUNT_V1, USER_POSITION_ADMISSION_CHILD_ACCOUNT_COUNT_V1,
     USER_POSITION_ADMISSION_CHILD_ACCOUNT_OFFSET_V1,
@@ -229,7 +229,7 @@ fn authenticate_outer_frame_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_user_position_admission_contract::{
+    use dclutch_claims::position_admission::{
         ProtocolPositionActionV2, ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2,
         ProtocolPositionRequestV2,
     };

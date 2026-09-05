@@ -9,7 +9,7 @@
 //! is an ordinary keypair, not a PDA. What is under test is who Token-2022 will
 //! accept as an approver, not the derivation of the approver."* This program
 //! closes that gap. It derives the escrow from
-//! [`dclutch_claims_svm::claim_check_v1::ClaimCheckEscrowSeedsV1`] -- the exact
+//! [`dclutch_claims::claim_check_v1::ClaimCheckEscrowSeedsV1`] -- the exact
 //! recipe the shipped Claims escrow uses, bump included -- and signs with it,
 //! so what the Token program accepts is a signature this tree actually knows
 //! how to produce rather than one a test could always manufacture.
@@ -30,7 +30,7 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use dclutch_claims_svm::claim_check_v1::ClaimCheckEscrowSeedsV1;
+use dclutch_claims::claim_check_v1::ClaimCheckEscrowSeedsV1;
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,
@@ -56,7 +56,7 @@ pub const ESCROW_SIGNER_STRANGER_SEED: &[u8] = b"fraccheck2:stranger:v1";
 
 // Both domains above are `find_program_address` seeds, so both are held inside
 // Solana's per-seed maximum at compile time rather than by whoever next edits
-// the string. The limit has one author -- `dclutch-claims-svm`'s, which this
+// the string. The limit has one author -- `dclutch-claims`'s, which this
 // program already depends on -- because a test program restating "32" would be
 // a second place for the number to be wrong.
 //
@@ -65,12 +65,12 @@ pub const ESCROW_SIGNER_STRANGER_SEED: &[u8] = b"fraccheck2:stranger:v1";
 // nothing in the family stopped it.
 const _: () = assert!(
     ESCROW_SIGNER_ROOT_STAND_IN_SEED.len()
-        <= dclutch_claims_svm::fractional_claim_check_v1::MAX_PDA_SEED_BYTES_V1,
+        <= dclutch_claims::fractional_claim_check_v1::MAX_PDA_SEED_BYTES_V1,
     "the root stand-in domain must be a usable PDA seed"
 );
 const _: () = assert!(
     ESCROW_SIGNER_STRANGER_SEED.len()
-        <= dclutch_claims_svm::fractional_claim_check_v1::MAX_PDA_SEED_BYTES_V1,
+        <= dclutch_claims::fractional_claim_check_v1::MAX_PDA_SEED_BYTES_V1,
     "the stranger domain must be a usable PDA seed"
 );
 

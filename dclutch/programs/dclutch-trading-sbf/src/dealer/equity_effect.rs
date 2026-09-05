@@ -13,13 +13,13 @@ extern crate alloc;
 #[cfg(not(target_os = "solana"))]
 use alloc::{vec, vec::Vec};
 
-use dclutch_capability_program_contract::hot_v3::HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3;
-use dclutch_claims_svm::signed_delta_v3::SIGNED_DELTA_RECEIPT_BYTES_V3;
-use dclutch_custody_contract::{
+use dclutch_market::capability_program::hot_v3::HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3;
+use dclutch_claims::signed_delta_v3::SIGNED_DELTA_RECEIPT_BYTES_V3;
+use dclutch_custody::{
     CUSTODY_REQUEST_BYTES_V1, CallerRoleV1, CompartmentV1, CustodyRequestLayoutV1,
     DELEGATED_CUSTODY_REQUEST_BYTES_V2, DelegatedCustodyRequestLayoutV2, OperationV1,
 };
-use dclutch_effect_kernel::{
+use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{
         HEADER_BYTES, OPERATION_BYTES, RECEIPT_DEPENDENCY_BYTES, ROUTE_BYTES, RouteKindV3,
@@ -52,7 +52,7 @@ const _: () =
 pub const DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3: u16 = 14;
 /// Exact canonical SignedDelta frame before its Position tail.
 pub const DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3: u16 =
-    dclutch_claims_svm::frame_spec_v1::SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3;
+    dclutch_claims::frame_spec_v1::SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3;
 /// Trading-owned state accounts committed after all child routes.
 pub const DEALER_EQUITY_LOCAL_ACCOUNT_COUNT_V3: u16 = 2;
 /// The release-selected Custody program the Custody routes are invoked through.
@@ -1084,8 +1084,8 @@ pub const fn dealer_equity_witness_offset_v3() -> usize {
 #[cfg(all(test, not(target_os = "solana")))]
 mod tests {
     use super::*;
-    use dclutch_custody_contract::{ContextV1, CustodyRequestV1, DelegatedCustodyRequestV2};
-    use dclutch_effect_kernel::v3::ProgramV3;
+    use dclutch_custody::{ContextV1, CustodyRequestV1, DelegatedCustodyRequestV2};
+    use dclutch_vm::effect::v3::ProgramV3;
     use std::vec;
 
     fn transfer_template(
@@ -1252,7 +1252,7 @@ mod tests {
                     )
                     .expect("profile");
                 let profile =
-                    dclutch_account_profile_contract::v2::AccountProfileV2::decode(&profile_bytes)
+                    dclutch_vm::account_profile::v2::AccountProfileV2::decode(&profile_bytes)
                         .expect("profile decode");
                 assert_eq!(profile.fixed_account_count(), effect.fixed_account_count());
 

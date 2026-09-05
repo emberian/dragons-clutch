@@ -7,11 +7,9 @@ rust-version.workspace = true
 description = "The one host-side producer of the family-neutral HotBumpHintsV1 block"
 
 [dependencies]
-dclutch-capability-program-contract = { path = "../dclutch-capability-program-contract" }
-dclutch-custody-contract = { path = "../dclutch-custody-contract" }
-dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
-dclutch-registry-contract = { path = "../dclutch-registry-contract" }
-dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
+dclutch-market = { path = "../dclutch-market" }
+dclutch-custody = { path = "../dclutch-custody" }
+dclutch-registry = { path = "../dclutch-registry" }
 solana-program = { version = "=3.0.0", default-features = false }
 
 [dev-dependencies]

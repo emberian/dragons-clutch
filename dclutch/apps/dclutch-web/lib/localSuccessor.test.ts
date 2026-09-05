@@ -264,7 +264,7 @@ describe('Source and funding read through the derived decoder', () => {
  *
  * That arm was a 312-byte hand-written decoder over fourteen literal
  * coordinates, and `ResolutionCertificateV1` has no producer: every use of it
- * in `crates/dclutch-resolution-codec/src/lib.rs` sits inside the
+ * in `crates/dclutch-source/src/resolution/mod.rs` sits inside the
  * `#[cfg(test)] mod tests` that opens at line 2090, its only out-of-crate
  * consumer is the svm-harness `resolution-receipt-caller` test program, and
  * `programs/dclutch-resolution-proof-sbf/src/funded.rs:16-18` records that the
@@ -285,7 +285,7 @@ describe('Resolution certificates read through the derived V2 decoder', () => {
 
   it('reads the canonical V2 certificate its own Rust fixture pins', () => {
     // `RESOLUTION_CERTIFICATE_V2_WIDE_SUCCESS_EXAMPLE_HEX` is emitted from
-    // `crates/dclutch-resolution-codec/src/generated_v2.rs`, so this is the
+    // `crates/dclutch-source/src/resolution/generated_v2.rs`, so this is the
     // authority's own example read by the browser's own card.
     const certificate = parseSuccessorAccount('primary.certificate.success', certificateAccount(RESOLUTION_CERTIFICATE_V2_WIDE_SUCCESS_EXAMPLE_HEX));
     const facts = certificate.facts.map((entry) => [entry.label, entry.value]);

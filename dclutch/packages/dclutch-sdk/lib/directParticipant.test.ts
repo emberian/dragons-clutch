@@ -322,7 +322,7 @@ function crossing(participant: DirectParticipantReadinessV1, side: 'buy' | 'sell
 describe('Direct crossing participant admission', () => {
   /**
    * The delegation is a single-use authorization, so `validate_collateral` in
-   * `dclutch-direct-codec`'s `inline_candidate_v2.rs` requires
+   * `dclutch-trading`'s `inline_candidate_v2.rs` requires
    * `delegated_amount == debit` and refuses either direction. This fixture
    * holds 20,000 collateral atoms with 12,000 delegated, so exactly one debit
    * is admissible and both neighbours must refuse for their own stated reason.

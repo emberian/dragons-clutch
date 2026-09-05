@@ -4,13 +4,13 @@
 //! nonforgeable Fractional Token, Claims, and Rent plans into the exact borrowed
 //! candidate inputs independently revalidated by the onchain-safe contract.
 
-use dclutch_fractional_claim_contract::{
+use dclutch_claims::fractional::{
     FractionalExposureActionV2, FractionalExposureRequestV2, FractionalHotAccountRefV2,
     FractionalHotClaimsEffectV2, FractionalHotRentCloseV2, FractionalHotTokenEffectV2,
     FractionalHotTokenKindV2,
 };
-use dclutch_fractional_claim_kernel::FractionalExposureTermsV2;
-use dclutch_fractional_claims_kernel::PreparedFractionalExposureSignedDeltaV2;
+use dclutch_claims::fractional_kernel::FractionalExposureTermsV2;
+use dclutch_claims::fractional_lowering::PreparedFractionalExposureSignedDeltaV2;
 
 use crate::{
     Error, FractionalExposureRentClosePlanV2, FractionalExposureRetirementPlanV2,

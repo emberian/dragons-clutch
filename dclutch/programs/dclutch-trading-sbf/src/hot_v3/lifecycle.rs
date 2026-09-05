@@ -1044,7 +1044,7 @@ pub(super) fn prepare_lifecycle_v4<'a, 'region>(
 /// each binding against the preplan's and keeps nothing, so on the second pass
 /// this allocates zero.
 fn absorb_immutable_identity_bindings_v4(
-    selected: dclutch_account_profile_contract::lifecycle_v3::SelectedLifecycleV3<'_>,
+    selected: dclutch_vm::account_profile::lifecycle_v3::SelectedLifecycleV3<'_>,
     profile: AccountProfileV2<'_>,
     item: Option<u32>,
     identities: &[[u8; 32]],

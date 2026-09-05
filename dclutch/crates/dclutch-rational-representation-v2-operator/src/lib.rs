@@ -10,8 +10,8 @@
 //! seed contracts, and emits the exact child instruction. The onchain Claims
 //! adapter reauthenticates every observation.
 
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
-use dclutch_claims_svm::{
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_claims::{
     CallerRole, NO_POSITION_REVISION,
     liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
@@ -23,43 +23,41 @@ use dclutch_claims_svm::{
     protocol_position_v2::{ProtocolPositionClaimsCapabilitySeedsV2, ProtocolPositionSeedsV2},
     signed_delta_v3::{DeltaDirectionV3, SignedDeltaV3, plan_bytes},
 };
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CUSTODY_REPLAY_BYTES_V1, CallerRoleV1 as CustodyCallerRoleV1, CompartmentV1, ContextV1,
     CustodyAuthoritySeedsV1, CustodyReplaySeedsV1, CustodyReplayV1, CustodyRequestV1,
     CustodyVaultSeedsV1, OperationV1,
 };
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, Phase as CorePhase};
-use dclutch_product_payoff_v2_codec::runtime_v3::{BasisKindV3, ProductBasisV3};
-use dclutch_product_runtime_v2::ContentId as ProductContentId;
-use dclutch_product_runtime_v2_svm_reader::{
-    FinalizedRecordFrameV2, ProductRuntimeFrameV3,
-    representation_v3::{
-        RepresentationRuntimeContextV3, RepresentationRuntimeFrameV3,
-        authenticate_product_representation_v3,
-    },
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2, Phase as CorePhase};
+use dclutch_product::payoff::runtime_v3::{BasisKindV3, ProductBasisV3};
+use dclutch_product::ContentId as ProductContentId;
+use dclutch_claims::product_representation_reader_v3::{
+    RepresentationRuntimeContextV3, RepresentationRuntimeFrameV3,
+    authenticate_product_representation_v3,
 };
-use dclutch_rational_representation_v2_contract::{
+use dclutch_product::svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV3};
+use dclutch_claims::rational::{
     ABSENT_REVISION, ASSET_BYTES_V3, AssetV2, CallerRoleV2, RATIONAL_REPLAY_BYTES_V2,
     RATIONAL_REPLAY_SEED_V2, RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
     RATIONAL_SHARD_MINT_SEED_V2, RATIONAL_STRUCTURED_CUSTODY_SEED_V2, RationalReplayV2,
     RepresentationActionV2, RepresentationRequestHeaderV2, RepresentationRequestV2,
 };
-use dclutch_rational_representation_v2_kernel::{
+use dclutch_claims::rational_kernel::{
     DescriptorAdmissionV2, REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
     RepresentationDescriptorV2,
     product_v3::{RepresentationAdmissionV3, TerminalScenarioV3},
 };
-use dclutch_realm_contract::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_representation_composition_v3_kernel::{
+use dclutch_market::realm::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_claims::composition::{
     CompositionExposureBundleV3, CompositionExposureExecutionExpectedV3, RecordAdmissionV3,
 };
-use dclutch_resolution_codec::{
+use dclutch_source::resolution::{
     RESOLUTION_CERTIFICATE_BYTES_V2, ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
-use dclutch_token_svm::{
+use dclutch_custody::token_svm::{
     AccountState, COption, Mint, Token2022BehaviorProfileV2, TokenAccount, TokenProgram,
 };
 use solana_program::{
@@ -574,7 +572,7 @@ fn authenticate_common<'a>(
     authenticate_record(
         observation.graph,
         observation.registry_program,
-        dclutch_representation_composition_v3_kernel::COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
+        dclutch_claims::composition::COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
         descriptor.graph_digest(),
     )?;
     let exposure = CompositionExposureBundleV3::decode(

@@ -2,7 +2,7 @@
 
 #[cfg(test)]
 mod tests {
-    use dclutch_dealer_codec::{
+    use dclutch_trading::dealer::{
         Action, CANDIDATE_BYTES, CandidateInput, CurveBand, CurveInput, MAX_OUTCOMES,
         NowDisciplineV1, Phase, Policy, Request, Side, State, encode_candidate,
     };

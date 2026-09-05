@@ -786,7 +786,7 @@ export function compileLifecycleRentCreateTransactionV2(input: Readonly<{
  * instruction is a Core request, and this byte narrows the eleven routes that
  * magic selects -- narrows, not resolves, since `Action::Retire` alone reaches
  * four of them. The magic reaches the browser generated; this
- * coordinate does not, because `dclutch-market-core-codec`'s
+ * coordinate does not, because `dclutch-market`'s
  * `REQUEST_ACTION_OFFSET` is crate-private and `generate-core-found.mjs` emits
  * no Core counterpart to `LIFECYCLE_RENT_INSTRUCTION_ACTION_OFFSET_V2`. It was
  * a bare `output[10]` in the encoder below; naming it is not the fix, it is
@@ -976,7 +976,7 @@ export type CoreFoundDerivedRecordsV2 = Readonly<{
  *
  * The FIFTH derivable address is not here. The capacity profile a source spec
  * selects sits at a coordinate `SourceSpecV1::decode` and `to_bytes` write as
- * a bare `144` (crates/dclutch-source-contract/src/lib.rs:911,927), with no
+ * a bare `144` (crates/dclutch-source/src/lib.rs:911,927), with no
  * named constant for the ABI generator to emit. Deriving it would mean this
  * browser restating a wire coordinate in its own words, which is the drift
  * `abi-coverage.mjs` exists to refuse. It stays typed, and the missing Rust

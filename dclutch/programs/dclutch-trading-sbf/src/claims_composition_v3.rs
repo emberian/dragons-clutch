@@ -10,8 +10,8 @@ extern crate alloc;
 
 use alloc::{boxed::Box, vec::Vec};
 
-use dclutch_capability_program_contract::CapabilityRootSeedsV1;
-use dclutch_claims_svm::{
+use dclutch_market::capability_program::CapabilityRootSeedsV1;
+use dclutch_claims::{
     affine_batch_v2::{AFFINE_BATCH_PLAN_MAGIC_V2, AffineBatchPlanV2, AffineBatchReceiptV2},
     composition_v3::ClaimsCompositionV3,
     founding_v5::{
@@ -40,11 +40,11 @@ use dclutch_claims_svm::{
     },
 };
 use dclutch_core_contract::ContentId;
-use dclutch_effect_kernel::{
+use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{ResolvedInvocationV3, RouteKindV3},
 };
-use dclutch_fractional_claim_contract::{
+use dclutch_claims::fractional::{
     FRACTIONAL_ATOMIC_RECEIPT_BYTES_V3, FRACTIONAL_ATOMIC_ROOT_V3,
     FRACTIONAL_EXPOSURE_REQUEST_MAGIC_V2, FRACTIONAL_RETIREMENT_COORDINATE_RECEIPT_BYTES_V3,
     FRACTIONAL_RETIREMENT_COORDINATE_ROOT_V3, FRACTIONAL_RETIREMENT_REQUEST_MAGIC_V3,
@@ -53,16 +53,16 @@ use dclutch_fractional_claim_contract::{
     FractionalRetirementCoordinateReceiptV3, FractionalRetirementRequestV3,
     FractionalTerminalAtomicReceiptV3, decode_fractional_capability_root_v4,
 };
-use dclutch_rational_representation_v2_contract::{
+use dclutch_claims::rational::{
     CallerRoleV2, RECEIPT_BYTES_V2 as REPRESENTATION_RECEIPT_BYTES_V2,
     REQUEST_MAGIC_V2 as REPRESENTATION_REQUEST_MAGIC_V2, RepresentationReceiptV2,
     RepresentationRequestV2,
 };
-use dclutch_rational_representation_v2_lifecycle_contract::{
+use dclutch_claims::rational_lifecycle::{
     LIFECYCLE_REQUEST_MAGIC_V2, LifecycleReceiptV2, LifecycleRequestV2,
     hot_v3::verify_rational_lifecycle_hot_receipt_v3,
 };
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
@@ -631,7 +631,7 @@ fn route_authority(
         let request =
             SparseNativeTransferV1::decode(request).map_err(|_| TradingSbfError::Content)?;
         let input = request.input();
-        if input.caller_role != dclutch_claims_svm::CallerRole::Trading {
+        if input.caller_role != dclutch_claims::CallerRole::Trading {
             return Err(TradingSbfError::Content.into());
         }
         let seeds = CallerAuthoritySeedsV1::new(
@@ -1227,7 +1227,7 @@ fn fractional_root_signer(
     // digest because "storing their digest in the root would recreate the
     // manifest fixed point V2 removes", and the terms "are joined against
     // `selection_config` AT EXECUTION"
-    // (`dclutch-fractional-claim-contract/src/root.rs:138-141`). Execution is
+    // (`crates/dclutch-claims/fractional/src/root.rs:138-141`). Execution is
     // Claims, and Claims does it on all four kinds that reach here, deriving the
     // config from the AUTHENTICATED terms record rather than from a digest:
     // `fractional_atomic_v3.rs:253` and `:736`, `fractional_retirement_v3.rs:614`,
@@ -1670,7 +1670,7 @@ fn founding_post_resource_digests(
 mod tests {
     use alloc::boxed::Box;
 
-    use dclutch_claims_svm::{
+    use dclutch_claims::{
         CallerRole,
         affine_batch_v2::{
             AffineBatchPlanInputV2, AffineBatchPositionV2, AffineBatchRowInputV2, AffineBatchRowV2,
@@ -1690,12 +1690,12 @@ mod tests {
             SparseNativeTransferV1,
         },
     };
-    use dclutch_rational_representation_v2_contract::{
+    use dclutch_claims::rational::{
         ABSENT_REVISION, ASSET_BYTES_V3, AssetV2, RepresentationActionV2,
         RepresentationRequestHeaderV2,
     };
-    use dclutch_rational_representation_v2_request_contract::generated as representation_wire;
-    use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
+    use dclutch_claims::rational_request::generated as representation_wire;
+    use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
 
     use super::*;
 
@@ -1742,12 +1742,12 @@ mod tests {
         revision: u64,
         writable: bool,
     ) -> (AccountInfo<'static>, u8) {
-        use dclutch_capability_program_contract::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
-        use dclutch_fractional_claim_contract::{
+        use dclutch_market::capability_program::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
+        use dclutch_claims::fractional::{
             FRACTIONAL_CAPABILITY_ROOT_BYTES_V4, FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4,
             FractionalRootInputV1, FractionalRootV1,
         };
-        use dclutch_release_set_contract::CapabilityExecutionSelectionV1;
+        use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
 
         let selection = CapabilityExecutionSelectionV1::new(
             0,
@@ -2027,7 +2027,7 @@ mod tests {
     fn fractional_bytes() -> Vec<u8> {
         FractionalExposureRequestV2::new(
             FractionalExposureActionV2::Wrap,
-            dclutch_fractional_claim_contract::FractionalExposureRequestInputV2 {
+            dclutch_claims::fractional::FractionalExposureRequestInputV2 {
                 release_set: id(1),
                 market: id(2),
                 product_record: id(30),
@@ -2053,7 +2053,7 @@ mod tests {
     fn fractional_terminal_bytes(action: FractionalExposureActionV2) -> Vec<u8> {
         FractionalExposureRequestV2::new(
             action,
-            dclutch_fractional_claim_contract::FractionalExposureRequestInputV2 {
+            dclutch_claims::fractional::FractionalExposureRequestInputV2 {
                 release_set: id(1),
                 market: id(2),
                 product_record: id(30),
@@ -2078,8 +2078,8 @@ mod tests {
 
     fn fractional_retirement_bytes(root: [u8; 32]) -> Vec<u8> {
         FractionalRetirementRequestV3::new(
-            dclutch_fractional_claim_contract::FractionalRetirementActionV3::RetireCoordinate,
-            dclutch_fractional_claim_contract::FractionalRetirementRequestInputV3 {
+            dclutch_claims::fractional::FractionalRetirementActionV3::RetireCoordinate,
+            dclutch_claims::fractional::FractionalRetirementRequestInputV3 {
                 release_set: id(1),
                 market: id(2),
                 terms: id(32),
@@ -2439,7 +2439,7 @@ mod tests {
         let trading = Pubkey::new_from_array(id(21));
         let (root_info, bump) = fractional_root_info(decoded, trading);
         let mut accounts: Vec<_> = (0
-            ..dclutch_fractional_claim_contract::FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3)
+            ..dclutch_claims::fractional::FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3)
             .map(|_| account_info(false, false))
             .collect();
         accounts[FRACTIONAL_ATOMIC_ROOT_V3] = root_info;
@@ -2521,7 +2521,7 @@ mod tests {
             let trading = Pubkey::new_from_array(id(21));
             let (root_info, _bump) = fractional_root_info(decoded, trading);
             let mut accounts: Vec<_> = (0
-                ..dclutch_fractional_claim_contract::FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3)
+                ..dclutch_claims::fractional::FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3)
                 .map(|_| account_info(false, false))
                 .collect();
             accounts[FRACTIONAL_TERMINAL_ROOT_V3] = root_info;
@@ -2600,7 +2600,7 @@ mod tests {
         );
 
         let mut accounts: Vec<_> = (0
-            ..dclutch_fractional_claim_contract::FRACTIONAL_RETIREMENT_COORDINATE_ACCOUNT_COUNT_V3)
+            ..dclutch_claims::fractional::FRACTIONAL_RETIREMENT_COORDINATE_ACCOUNT_COUNT_V3)
             .map(|_| account_info(false, false))
             .collect();
         accounts[FRACTIONAL_RETIREMENT_COORDINATE_ROOT_V3] = root_info;
@@ -2624,7 +2624,7 @@ mod tests {
     }
 
     fn fractional_compaction_bytes(root: [u8; 32]) -> Vec<u8> {
-        use dclutch_claims_svm::terminal_settlement_v3::{
+        use dclutch_claims::terminal_settlement_v3::{
             TerminalSettlementRequestInputV3, TerminalSettlementRequestV3,
         };
         let settlement = TerminalSettlementRequestV3::new(TerminalSettlementRequestInputV3 {
@@ -2659,7 +2659,7 @@ mod tests {
         })
         .expect("settlement");
         FractionalCompactToClaimCheckRequestV1::new(
-            dclutch_claims_svm::fractional_claim_check_compaction_request_v1::FractionalCompactionCoordinatesV1 {
+            dclutch_claims::fractional_claim_check_compaction_request_v1::FractionalCompactionCoordinatesV1 {
                 terms: id(32),
                 token_behavior: id(33),
                 expected_root_revision: 11,
@@ -2751,7 +2751,7 @@ mod tests {
             .index()
             .expect("the root is admitted to its own frame");
         let mut accounts: Vec<_> = (0
-            ..dclutch_claims_svm::fractional_claim_check_v1::FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1)
+            ..dclutch_claims::fractional_claim_check_v1::FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1)
             .map(|_| account_info(false, false))
             .collect();
         accounts[root_index] = root_info;

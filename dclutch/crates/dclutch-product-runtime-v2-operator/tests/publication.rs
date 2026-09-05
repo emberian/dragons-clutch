@@ -1,7 +1,7 @@
 //! Generic Registry publication and Product graph join tests.
 
-use dclutch_product_runtime_v2::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
-use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
+use dclutch_product::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
+use dclutch_product::admission::PRODUCT_RECORD_BYTES_V2;
 use dclutch_product_runtime_v2_operator::{
     AccountObservationV2, ProductCompilationInputV2, compile_product_records_v2,
     publication::{
@@ -11,7 +11,7 @@ use dclutch_product_runtime_v2_operator::{
         derive_record_addresses_v1, product_publication_content_v2,
     },
 };
-use dclutch_record_contract::{
+use dclutch_registry::record::{
     AccountId, AppendPageV1, BeginRecordV1, CANONICAL_RECORD_DEPLOYMENT_PROFILE_V1,
     RecordAdapterV1, STAGING_CURSOR_BYTES_V1, StagingCursorV1, StagingLivenessPolicyV1,
     prepare_append_page_v1, prepare_begin_v1,
@@ -163,7 +163,7 @@ fn publication_accepts_real_agave_system_metadata_and_refuses_authority_substitu
 struct AcceptAdapter;
 
 impl RecordAdapterV1 for AcceptAdapter {
-    fn validate_page_envelope(&self, envelope: &dclutch_record_contract::PageEnvelopeV1) -> bool {
+    fn validate_page_envelope(&self, envelope: &dclutch_registry::record::PageEnvelopeV1) -> bool {
         CANONICAL_RECORD_DEPLOYMENT_PROFILE_V1.validates_page_envelope(*envelope)
     }
 
@@ -173,14 +173,14 @@ impl RecordAdapterV1 for AcceptAdapter {
 
     fn validate_canonical_addresses(
         &self,
-        _: &dclutch_record_contract::AddressDerivationObligationV1,
+        _: &dclutch_registry::record::AddressDerivationObligationV1,
     ) -> bool {
         true
     }
 
     fn validate_raw_record(
         &self,
-        _: &dclutch_record_contract::RawRecordValidationObligationV1<'_>,
+        _: &dclutch_registry::record::RawRecordValidationObligationV1<'_>,
     ) -> bool {
         true
     }

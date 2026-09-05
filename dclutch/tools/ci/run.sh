@@ -242,7 +242,7 @@ tier_census() {
 # WHY A BASELINE AT ALL, since "run rustfmt" is a complete fix and a strange
 # thing to defer. Until rustfmt.toml existed this tree had TWO formatters that
 # disagreed -- `cargo fmt` passes each crate's declared edition, `lane.sh fmt`
-# hardcodes --edition 2024, and dclutch-dealer-codec declares 2021 -- so the
+# hardcodes --edition 2024, and dclutch-trading declares 2021 -- so the
 # same file was reformatted back and forth by lanes who were each running the
 # tool correctly. 50 files had drifted. 874e6c34 canonicalised the 31 nobody
 # was holding; the other 19 are live-lane files, and reformatting a file
@@ -1671,7 +1671,7 @@ tier_root-targets() {
 # STILL EXCLUDED, BY REASON, and named here so the exclusion is a decision
 # rather than an oversight:
 #
-#   * `crates/dclutch-token-svm/program-test` -- cheap, but it needs a runner
+#   * `crates/dclutch-custody/token_svm/program-test` -- cheap, but it needs a runner
 #     WRITTEN first. Wiring a bare `cargo test` here would put this file back in
 #     the business of restating other lanes' prerequisites, which is exactly
 #     what `PROGRAM_MANIFESTS` got wrong.
@@ -2115,7 +2115,7 @@ tier_workspaces() {
 # green on the host while `cargo build-sbf` on the same crate produced 176
 # errors, every one of them in that crate's own `src/registered.rs`. The cause
 # was one `#[cfg(not(target_os = "solana"))]` in
-# `crates/dclutch-direct-codec/src/registered_fill_artifacts_v4.rs` hiding the
+# `crates/dclutch-trading/src/registered_fill_artifacts_v4.rs` hiding the
 # generated register schema on the only target that ships. Host-green,
 # SBF-impossible, and no gate anywhere disagreed.
 #

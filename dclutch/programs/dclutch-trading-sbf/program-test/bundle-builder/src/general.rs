@@ -33,9 +33,9 @@
 //! [`BuilderError::UnsupportedRoute`] at a named line rather than being built
 //! wrong.
 
-use dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1;
-use dclutch_execution_strategy_contract::{decode_register_bank_into, encode_register_bank_into};
-use dclutch_general_adapter_contract::{
+use dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1;
+use dclutch_market::execution_strategy::{decode_register_bank_into, encode_register_bank_into};
+use dclutch_trading::general::{
     artifacts_v3::{GeneralDecodedRequestV3, GeneralRequestWireV3, decode_general_request_v3},
     candidate_v1::GeneralCandidateV1,
     candidate_v1::{CandidateVerifyRowViewV1, candidate_verifier_len_v1},
@@ -72,8 +72,8 @@ use dclutch_general_adapter_contract::{
     runtime_width::{CandidateV2, SettlementCursorV2, VerifiedCandidateV2, settlement_cursor_len},
     state_seeds_v3::{GeneralStateAddressSeedsV3, GeneralStateRecipeV3},
 };
-use dclutch_general_codec::{Action, SelectionPolicyV1};
-use dclutch_general_config_contract::{GeneralRootV2, v3::GeneralConfigV3};
+use dclutch_trading::general_codec::{Action, SelectionPolicyV1};
+use dclutch_trading::general_config::{GeneralRootV2, v3::GeneralConfigV3};
 use solana_program::pubkey::Pubkey;
 
 use crate::{
@@ -179,7 +179,7 @@ pub struct GeneralRequestV1 {
     /// Its canonical bump, zero where there is no result state.
     pub result_state_bump: u8,
     /// Exact canonical 64-byte V3 request.
-    pub request: [u8; dclutch_general_codec::successor_request_v3::CONTROLLER_REQUEST_BYTES_V3],
+    pub request: [u8; dclutch_trading::general_codec::successor_request_v3::CONTROLLER_REQUEST_BYTES_V3],
 }
 
 /// Decode one live General state account and check it is the kind expected.

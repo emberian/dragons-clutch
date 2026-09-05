@@ -68,36 +68,36 @@
 
 use std::path::PathBuf;
 
-use dclutch_capability_activation_codec::{
+use dclutch_market::capability_activation::{
     activation_account_profile_schema_v1, activation_effect_schema_v1,
 };
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1, FundingLedgerStatusV2,
     FundingLedgerV2, capability_dependency_closure_mask_v1,
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityProgramV1, CapabilityRootHeaderV1,
     SelectedRecordBumpsV1, set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_general_adapter_contract::{
+use dclutch_trading::general::{
     activation_bundle_v1::{
         general_activation_descriptor_schema_v1, general_activation_request_v1,
     },
     release_v3::{GeneralReleaseProfileV1, authenticate_general_program_set_v3},
 };
-use dclutch_general_config_contract::{
+use dclutch_trading::general_config::{
     GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_ROOT_BYTES_V2, GeneralRootV2,
     root::general_root_creation_tail_v2, v3::GeneralConfigV3,
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     Action, CapabilityFundingHeaderV2, CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState,
     Identity, Phase as CorePhase, Request, Role,
 };
 use dclutch_operator::general_activation_v3::general_capability_root_address_v3;
-use dclutch_realm_contract::REALM_SCHEMA_RELEASE_ID_V1;
-use dclutch_record_contract::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_market::realm::REALM_SCHEMA_RELEASE_ID_V1;
+use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
 use solana_program::{hash::hash, pubkey::Pubkey};
@@ -241,7 +241,7 @@ struct RecordCoordinateV1 {
 
 /// Bind one schema/identity pair to its two record coordinates.
 ///
-/// The two seed domains are NOT spelled here. `dclutch-record-contract` owns
+/// The two seed domains are NOT spelled here. `dclutch-registry::record` owns
 /// `RAW_RECORD_PDA_SEED_V1` and `STAGING_CURSOR_PDA_SEED_V1` and also exports
 /// the constructors that place them, so a module that merely READS these
 /// addresses takes each domain from `seeds.domain()`. A second spelling is a
@@ -580,7 +580,7 @@ fn run_with_cluster_v1(arguments: Vec<String>, expected: ExpectedClusterV1) -> R
     )?;
     let descriptor = CapabilityProgramV1::decode(&descriptor_body)
         .map_err(|error| Error::new(format!("General activation descriptor: {error:?}")))?;
-    let selection = dclutch_release_set_contract::CapabilityExecutionSelectionV1::new(
+    let selection = dclutch_registry::release_set::CapabilityExecutionSelectionV1::new(
         entry_index,
         ContentId::new(manifest_id).map_err(|_| Error::new("manifest identity".to_string()))?,
         entry.kind_id(),
@@ -1180,7 +1180,7 @@ mod tests {
         assert_eq!(&request[..8], b"DCGNACT1");
         assert_ne!(
             request.as_slice(),
-            dclutch_direct_codec::activation_bundle_v1::direct_activation_request_v1().as_slice(),
+            dclutch_trading::activation_bundle_v1::direct_activation_request_v1().as_slice(),
             "two families must not present the same activation request bytes"
         );
     }

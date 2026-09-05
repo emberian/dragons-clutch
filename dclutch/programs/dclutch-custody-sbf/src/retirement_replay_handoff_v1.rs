@@ -3,23 +3,23 @@
 use alloc::boxed::Box;
 use core::convert::TryFrom;
 
-use dclutch_claims_svm::liability_basis_state_v2::{
+use dclutch_claims::liability_basis_state_v2::{
     LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2,
 };
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CUSTODY_REPLAY_BYTES_V1, CompartmentV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1,
     CustodyReplayV1, CustodyVaultSeedsV1, RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1,
     RetirementReplayHandoffObservationV1, RetirementReplayHandoffPlanV1,
     RetirementReplayHandoffRequestV1, retirement_replay_handoff_accounts_v1::*,
 };
-use dclutch_market_core_codec::{CoreState, MarketAdmissionV1, MarketCoreStateSeedsV2, Phase};
-use dclutch_realm_contract::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_activation_auth_v1::authenticate_activated_role_v1;
-use dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1;
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_rent_contract::lifecycle_v2::LifecycleRentCreditV2;
-use dclutch_token_svm::{AccountState, COption};
+use dclutch_market::{CoreState, MarketAdmissionV1, MarketCoreStateSeedsV2, Phase};
+use dclutch_market::realm::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::activation_auth_v1::authenticate_activated_role_v1;
+use dclutch_registry::ActivatedExecutionReleaseSetViewV1;
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
+use dclutch_custody::token_svm::{AccountState, COption};
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,
@@ -595,7 +595,7 @@ fn close_trading_replay(
 fn verify_poststate(
     accounts: &[AccountInfo<'_>; RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1],
     request: RetirementReplayHandoffRequestV1,
-    receipt: dclutch_custody_contract::RetirementReplayHandoffReceiptV1,
+    receipt: dclutch_custody::RetirementReplayHandoffReceiptV1,
     core_digest: [u8; 32],
 ) -> ProgramResult {
     let core_data = accounts[CORE_REPLAY]
@@ -628,7 +628,7 @@ fn verify_poststate(
 
 #[cfg(test)]
 mod admissible_prestates {
-    use dclutch_market_core_codec::{Phase, Readiness};
+    use dclutch_market::{Phase, Readiness};
 
     use super::CUSTODY_RETIREMENT_REPLAY_HANDOFF_ADMISSIBLE_PRESTATES_V1;
 

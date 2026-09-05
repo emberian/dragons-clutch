@@ -781,7 +781,7 @@ struct SignedObservationSet {
     signer: [u8; ID_BYTES],
     /// `(set_index, exact message bytes, signature)`, in set order.
     attestations: Vec<(u16, Vec<u8>, [u8; 64])>,
-    seal_bytes: [u8; dclutch_relay_contract::RELAYED_SEAL_BYTES],
+    seal_bytes: [u8; dclutch_source::relay::RELAYED_SEAL_BYTES],
     seal_signature: [u8; 64],
 }
 
@@ -821,7 +821,7 @@ impl SignedObservationSet {
                      {expected_index}, found {set_index}"
                 )));
             }
-            let message = dclutch_relay_contract::wire::AttestationMessageV1::decode(message_bytes)
+            let message = dclutch_source::relay::wire::AttestationMessageV1::decode(message_bytes)
                 .map_err(|error| RelayerError::wire("delivery attestation", error))?;
             if message.observed_cluster_id() != submitter.observed_cluster_id
                 || message.account_set_id() != self.account_set_id
@@ -840,7 +840,7 @@ impl SignedObservationSet {
                 .map_err(|error| RelayerError::wire("delivery body", error))?;
             bodies.push(encoded);
         }
-        let seal = dclutch_relay_contract::wire::ObservationSetSealV1::decode(&self.seal_bytes)
+        let seal = dclutch_source::relay::wire::ObservationSetSealV1::decode(&self.seal_bytes)
             .map_err(|error| RelayerError::wire("delivery seal", error))?;
         if seal.observed_cluster_id() != submitter.observed_cluster_id
             || seal.account_set_id() != self.account_set_id
@@ -1232,7 +1232,7 @@ async fn submit_artifacts(args: &SubmitArtifactsArgs) -> Result<()> {
                  on chain"
             )));
         }
-        let decoded = dclutch_relay_contract::wire::AttestationMessageV1::decode(&message_bytes)
+        let decoded = dclutch_source::relay::wire::AttestationMessageV1::decode(&message_bytes)
             .map_err(|error| RelayerError::wire("recorded attestation", error))?;
         if decoded.account_set_id() != account_set_id
             || decoded.observed_slot() != observed_slot
@@ -1250,7 +1250,7 @@ async fn submit_artifacts(args: &SubmitArtifactsArgs) -> Result<()> {
     let seal_path = args.slot_dir.join("seal.bin");
     let seal_bytes_vec =
         std::fs::read(&seal_path).map_err(|source| RelayerError::io(&seal_path, source))?;
-    let seal_bytes: [u8; dclutch_relay_contract::RELAYED_SEAL_BYTES] = seal_bytes_vec
+    let seal_bytes: [u8; dclutch_source::relay::RELAYED_SEAL_BYTES] = seal_bytes_vec
         .as_slice()
         .try_into()
         .map_err(|_| RelayerError::config("seal.bin is not exactly the seal width"))?;
@@ -1266,7 +1266,7 @@ async fn submit_artifacts(args: &SubmitArtifactsArgs) -> Result<()> {
             "the recorded seal signature does not verify against the recorded seal and signer",
         ));
     }
-    let decoded_seal = dclutch_relay_contract::wire::ObservationSetSealV1::decode(&seal_bytes)
+    let decoded_seal = dclutch_source::relay::wire::ObservationSetSealV1::decode(&seal_bytes)
         .map_err(|error| RelayerError::wire("recorded seal", error))?;
     if decoded_seal.account_set_id() != account_set_id
         || decoded_seal.observed_slot() != observed_slot

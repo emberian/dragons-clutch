@@ -41,7 +41,7 @@
 //!   sequence with an evolving cursor, not five independent shots, and a caller
 //!   that treated it as five would be refused at the second one.
 
-use dclutch_general_adapter_contract::{
+use dclutch_trading::general::{
     candidate_v1::{
         CandidateVerifyRowBuffersV1, CandidateVerifyRowViewV1, GeneralCandidateOpeningV1,
         GeneralCandidateV1, authenticate_candidate_identity_v1, general_candidate_identity_v1,
@@ -66,7 +66,7 @@ use dclutch_general_adapter_contract::{
         verified_candidate_len,
     },
 };
-use dclutch_general_config_contract::root::GeneralRootV2;
+use dclutch_trading::general_config::root::GeneralRootV2;
 
 use crate::{Error, Result};
 
@@ -728,7 +728,7 @@ mod tests {
 #[cfg(test)]
 mod frozen_selection_tests {
     use super::*;
-    use dclutch_general_adapter_contract::{
+    use dclutch_trading::general::{
         runtime_selection::{RuntimeSelectionCursorV2, RuntimeSelectionPhaseV2},
         runtime_width::VerifiedCandidateV2,
     };

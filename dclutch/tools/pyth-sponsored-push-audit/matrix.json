@@ -21,7 +21,7 @@
       "owner": "Pyth deployment release plus the caller's checked cluster admission",
       "attack": "Cross-cluster release or account substitution",
       "status": "closed-existing",
-      "evidencePath": "crates/dclutch-pyth-svm/src/devnet.rs",
+      "evidencePath": "crates/dclutch-source/src/pyth/devnet.rs",
       "requiredChange": "Reuse the existing explicit genesis bind; never infer cluster identity from a URL or program address."
     },
     {
@@ -31,7 +31,7 @@
       "owner": "A new immutable sponsored-push deployment release selected by Source",
       "attack": "DTO substitution or silently changing the meaning of PythReleaseV1",
       "status": "required-new-owner",
-      "evidencePath": "crates/dclutch-pyth-svm/src/release.rs",
+      "evidencePath": "crates/dclutch-source/src/pyth/release.rs",
       "requiredChange": "Add one distinct release/profile identity carrying every legacy deployment pin; leave the upgraded pull release meaning unchanged."
     },
     {
@@ -41,7 +41,7 @@
       "owner": "PythAdapterConfigV1 selected by authenticated Source records",
       "attack": "A genuine fully verified update for another Pyth feed",
       "status": "closed-existing",
-      "evidencePath": "crates/dclutch-source-contract/src/lib.rs",
+      "evidencePath": "crates/dclutch-source/src/lib.rs",
       "requiredChange": "Reuse PythAdapterConfigV1 feed equality unchanged; do not add a caller-supplied feed truth."
     },
     {
@@ -61,7 +61,7 @@
       "owner": "The sponsored Resolution physical outer",
       "attack": "System-owned, attacker-owned, or executable account with forged PriceUpdateV2 bytes",
       "status": "required-new-owner",
-      "evidencePath": "crates/dclutch-pyth-svm/src/price_update.rs",
+      "evidencePath": "crates/dclutch-source/src/pyth/price_update.rs",
       "requiredChange": "Authenticate AccountInfo owner and executable state before parsing; FullPriceUpdateV2 deliberately does not own this check."
     },
     {
@@ -91,7 +91,7 @@
       "owner": "FullPriceUpdateV2",
       "attack": "Partial, unknown, truncated, extended, or noncanonical verification representation",
       "status": "closed-existing",
-      "evidencePath": "crates/dclutch-pyth-svm/src/price_update.rs",
+      "evidencePath": "crates/dclutch-source/src/pyth/price_update.rs",
       "requiredChange": "Reuse FullPriceUpdateV2 unchanged; never lower to the SDK's configurable Partial verification."
     },
     {
@@ -101,7 +101,7 @@
       "owner": "The sponsored Resolution physical outer after the exact parser",
       "attack": "A Receiver-owned account controlled by a user or a different PDA",
       "status": "required-new-owner",
-      "evidencePath": "crates/dclutch-pyth-svm/src/cluster_observation.rs",
+      "evidencePath": "crates/dclutch-source/src/pyth/cluster_observation.rs",
       "requiredChange": "Compare writer, account and rederived push PDA by exact equality in the onchain frame."
     },
     {
@@ -121,7 +121,7 @@
       "owner": "PythProviderAdapterObligationV2 over authenticated Source records",
       "attack": "A genuine price from before the Market opened or after its question closed",
       "status": "closed-existing",
-      "evidencePath": "crates/dclutch-source-contract/src/provider_join_v2.rs",
+      "evidencePath": "crates/dclutch-source/src/provider_join_v2.rs",
       "requiredChange": "Call the existing normalization owner; do not duplicate window logic in the sponsored adapter."
     },
     {
@@ -131,7 +131,7 @@
       "owner": "PythProviderAdapterObligationV2 over authenticated Clock",
       "attack": "Stale replay or future-dated signed update",
       "status": "closed-existing",
-      "evidencePath": "crates/dclutch-source-contract/src/provider_join_v2.rs",
+      "evidencePath": "crates/dclutch-source/src/provider_join_v2.rs",
       "requiredChange": "Reuse the existing freshness owner and its distinct ProviderFreshness refusal."
     },
     {
@@ -141,7 +141,7 @@
       "owner": "PythAdapterConfigV1",
       "attack": "A fully verified but too-uncertain Pyth observation",
       "status": "closed-existing",
-      "evidencePath": "crates/dclutch-source-contract/src/lib.rs",
+      "evidencePath": "crates/dclutch-source/src/lib.rs",
       "requiredChange": "Reuse the existing inclusive checked inequality; no adapter-side approximation or float is admitted."
     },
     {
@@ -151,7 +151,7 @@
       "owner": "PythAdapterConfigV1 and the Product's result-domain integer cuts",
       "attack": "Unit substitution, decimal drift, unchecked power-of-ten scaling, or a second rounding boundary",
       "status": "closed-existing",
-      "evidencePath": "crates/dclutch-source-contract/src/lib.rs",
+      "evidencePath": "crates/dclutch-source/src/lib.rs",
       "requiredChange": "Reuse identity normalization; Product cuts must be compiled in the same raw exponent unit."
     },
     {
@@ -161,7 +161,7 @@
       "owner": "A new sponsored snapshot request and sealed-record schema",
       "attack": "A legitimate sponsor update between client preflight and landing makes the request unusable or invites an alternate offchain byte truth",
       "status": "must-refuse",
-      "evidencePath": "crates/dclutch-resolution-codec/src/provider_v3.rs",
+      "evidencePath": "crates/dclutch-source/src/resolution/provider_v3.rs",
       "requiredChange": "Do not reuse expected_update_digest, post_params_body_digest, provider_submitter or ProviderUpdateLifecycleV3 in snapshot admission."
     },
     {
@@ -171,7 +171,7 @@
       "owner": "One new fixed-layout sponsored-observation record contract",
       "attack": "Two bodies collide, one body is sealed twice under different names, or a caller supplies parallel observation identity",
       "status": "required-new-owner",
-      "evidencePath": "crates/dclutch-pyth-svm/src/price_update.rs",
+      "evidencePath": "crates/dclutch-source/src/pyth/price_update.rs",
       "requiredChange": "Make the body digest part of the PDA and stored canonical preimage; same body converges, distinct bodies cannot alias."
     },
     {
@@ -181,7 +181,7 @@
       "owner": "The sponsored snapshot physical outer calling existing Source normalization",
       "attack": "RPC preflight becomes authority, a price is sealed after it is stale/out of window, or account bytes change between checks",
       "status": "required-new-owner",
-      "evidencePath": "crates/dclutch-source-contract/src/provider_join_v2.rs",
+      "evidencePath": "crates/dclutch-source/src/provider_join_v2.rs",
       "requiredChange": "Perform every check, candidate creation and head advancement atomically onchain; RPC/watchers only trigger the attempt."
     },
     {
@@ -191,7 +191,7 @@
       "owner": "The sponsored-observation record contract",
       "attack": "Sealed evidence is edited, replaced, or given a second consumed-state truth",
       "status": "required-new-owner",
-      "evidencePath": "crates/dclutch-resolution-codec/src/provider_v3.rs",
+      "evidencePath": "crates/dclutch-source/src/resolution/provider_v3.rs",
       "requiredChange": "Use fixed layout and one-write initialization; Source phase/certificate remains the sole terminal-consumption truth."
     },
     {
@@ -231,7 +231,7 @@
       "owner": "The sponsored record identities and consume frame",
       "attack": "Cross-market replay bypasses a different window, Product or release selection",
       "status": "must-refuse",
-      "evidencePath": "crates/dclutch-source-contract/src/lib.rs",
+      "evidencePath": "crates/dclutch-source/src/lib.rs",
       "requiredChange": "Keep candidates per Market/generation. Shared observations remain a separately founded SourceAccessProfile, not an optimization here."
     },
     {
@@ -251,7 +251,7 @@
       "owner": "The sponsored-head finalization instruction, existing freshness policy and, only for early closure, the accepted push semantic release",
       "attack": "Consumption occurs while a later in-window candidate can still appear or be posted",
       "status": "required-new-owner",
-      "evidencePath": "crates/dclutch-source-contract/src/provider_join_v2.rs",
+      "evidencePath": "crates/dclutch-source/src/provider_join_v2.rs",
       "requiredChange": "Always implement the Clock-deadline closure with checked arithmetic. Gate the optional earlier upstream-advancement closure on exact push ProgramData/ELF-to-source binding and a rewind hostile."
     },
     {
@@ -271,7 +271,7 @@
       "owner": "The immutable Clock deadline, with the pinned push monotonicity invariant as an optional early-closure owner",
       "attack": "Delayed delivery adds a better valid candidate after the supposedly final head",
       "status": "must-refuse",
-      "evidencePath": "crates/dclutch-source-contract/src/provider_join_v2.rs",
+      "evidencePath": "crates/dclutch-source/src/provider_join_v2.rs",
       "requiredChange": "Test the exact deadline boundary and the push rewind counterexample independently. Failure to prove push monotonicity disables only early closure, never the deadline closure."
     },
     {
@@ -301,7 +301,7 @@
       "owner": "The sponsored snapshot physical outer, then the sealed candidate contract",
       "attack": "Push authority closes or reallocates the account before snapshot, or terminal consumption is incorrectly coupled back to mutable upstream availability",
       "status": "must-refuse",
-      "evidencePath": "crates/dclutch-pyth-svm/src/price_update.rs",
+      "evidencePath": "crates/dclutch-source/src/pyth/price_update.rs",
       "requiredChange": "Authenticate live AccountInfo state at snapshot and refuse absent/reallocated upstream state; never require it again after an admissible immutable candidate exists."
     },
     {
@@ -341,7 +341,7 @@
       "owner": "A future separately founded SourceAccessProfile",
       "attack": "The mutable latest-value account silently bypasses candidate ordering, set closure or the Market's selected transport",
       "status": "must-refuse",
-      "evidencePath": "crates/dclutch-source-contract/src/lib.rs",
+      "evidencePath": "crates/dclutch-source/src/lib.rs",
       "requiredChange": "Park this path unless it has a caller and full hostile suite. The flagship profile must snapshot, order and consume sealed evidence."
     },
     {
@@ -351,7 +351,7 @@
       "owner": "The immutable Source-selected sponsored release/profile",
       "attack": "Parallel provider/account truth changes the proposition after liabilities exist",
       "status": "must-refuse",
-      "evidencePath": "crates/dclutch-source-contract/src/lib.rs",
+      "evidencePath": "crates/dclutch-source/src/lib.rs",
       "requiredChange": "Keep one exact legacy account/release per Market; any future alternative is a separately founded capability."
     },
     {

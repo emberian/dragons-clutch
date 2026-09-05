@@ -5,7 +5,7 @@
 //! understate Solana's account-lock ceiling. Address lookup tables reduce wire
 //! bytes only; these counts remain the lock admission fact.
 
-use dclutch_fractional_claim_contract::{
+use dclutch_claims::fractional::{
     FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3, FRACTIONAL_EXPOSURE_REQUEST_BYTES_V2,
     FRACTIONAL_RETIREMENT_COORDINATE_ACCOUNT_COUNT_V3, FRACTIONAL_RETIREMENT_REQUEST_BYTES_V3,
     FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3,

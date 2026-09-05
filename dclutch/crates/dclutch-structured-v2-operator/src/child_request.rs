@@ -38,14 +38,14 @@
 //! It does not derive a PDA, sign, or submit, for the reason the crate root
 //! gives: `find_program_address` belongs to the physical adapter.
 
-use dclutch_rational_representation_v2_contract::{
+use dclutch_claims::rational::{
     ABSENT_REVISION, ASSET_BYTES_V3, AssetV2, CallerRoleV2, REQUEST_STRUCTURED_HEADER_BYTES_V3,
     RepresentationActionV2, RepresentationRequestHeaderV2, RepresentationRequestV2,
     TokenEffectStyleV2,
 };
-use dclutch_rational_representation_v2_lifecycle_contract::LifecycleActionV2;
-use dclutch_structured_v2_contract::{StructuredActionV2, StructuredHotTokenKindV2};
-use dclutch_structured_v2_kernel::{ShardMovementV2, StructuredTermsV2};
+use dclutch_claims::rational_lifecycle::LifecycleActionV2;
+use dclutch_claims::structured::{StructuredActionV2, StructuredHotTokenKindV2};
+use dclutch_claims::structured_kernel::{ShardMovementV2, StructuredTermsV2};
 
 use crate::{Error, Result};
 

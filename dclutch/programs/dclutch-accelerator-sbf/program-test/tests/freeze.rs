@@ -2,22 +2,22 @@
 
 use std::{vec, vec::Vec};
 
-use dclutch_capability_program_contract::hot_v3::{
+use dclutch_market::capability_program::hot_v3::{
     DIRECT_HOT_HEAP_FRAME_BYTES_V1, HotExecutionEnvelopeV3,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_execution_strategy_contract::admitted_v3::{
+use dclutch_market::execution_strategy::admitted_v3::{
     ADMITTED_INSTRUCTIONS_ACCOUNT_V3, ADMITTED_RUNTIME_ACCOUNTS_START_V3,
     ADMITTED_TRADING_PROGRAM_ACCOUNT_V3,
 };
-use dclutch_execution_strategy_contract::v2::{
+use dclutch_market::execution_strategy::v2::{
     ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2, ACCELERATOR_REQUEST_HEADER_BYTES_V2, AcceleratorAckV2,
     AcceleratorDispositionV2, AcceleratorRequestV2, AuthenticatedScratchPageV2, RequestTransportV2,
     SCRATCH_PAGE_HEADER_BYTES_V2, ScratchPageKindV2,
 };
 use dclutch_accelerator_sbf::general::GeneralAcceleratorSbfErrorV3;
 use dclutch_general_accelerator_test_caller_sbf::GENERAL_ACCELERATOR_TEST_CALLER_AUTHORITY_SEED_V1;
-use dclutch_general_adapter_contract::{
+use dclutch_trading::general::{
     account_rules_v3::general_account_profile_fixed_count_v3,
     collection_v1::{GeneralBatchOpeningV1, GeneralBatchV1},
     hot_candidate_v3::{
@@ -34,11 +34,11 @@ use dclutch_general_adapter_contract::{
     runtime_width::{VerifiedCandidateHeaderV2, VerifiedCandidateV2, verified_candidate_len},
     state_artifacts_v3::general_readonly_evidence_start_v3,
 };
-use dclutch_general_codec::{
+use dclutch_trading::general_codec::{
     Action, MAX_SELECTION_CRITERIA, SelectionCriterion, SelectionPolicyV1,
     successor_request_v2::ControllerRequestV2,
 };
-use dclutch_general_config_contract::{
+use dclutch_trading::general_config::{
     root::GeneralRootV2,
     v3::{GeneralConfigV3, GeneralConfigV3Input},
 };

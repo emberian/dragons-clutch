@@ -93,7 +93,7 @@ saying it.
   shares the identical 424-byte body. The Lean-authored decoding rules name
   BOTH discriminators, and `read_dbc_graduation` refuses the transfer-hook
   discriminator **explicitly** (`VenueDiscriminatorMismatch`,
-  `crates/dclutch-relay-contract/src/decode.rs`) — a decision, not an
+  `crates/dclutch-source/src/relay/decode.rs`) — a decision, not an
   accident, executed in the wire crate's own corpus. Admitting transfer-hook
   pools would be a new decoding-rules row, i.e. a release decision, not a bug
   fix.

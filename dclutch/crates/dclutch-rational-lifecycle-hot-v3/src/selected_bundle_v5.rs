@@ -1,34 +1,34 @@
 //! CapabilityV4/LifecycleV5 bundles for fixed-cardinality lifecycle actions.
 
-use dclutch_account_profile_contract::{
+use dclutch_vm::account_profile::{
     lifecycle_v3::{
         CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5 as LIFECYCLE_SCHEMA_ID_V5, StateLifecyclePolicyV5,
     },
     v2::{AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE},
 };
-use dclutch_capability_program_contract::v4::{
+use dclutch_market::capability_program::v4::{
     ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4, CapabilityProgramV4,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_effect_kernel::{
+use dclutch_vm::effect::{
     v2::FixedRole,
     v3::RouteKindV3,
     v4::{ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4},
 };
-use dclutch_execution_strategy_contract::v2::{
+use dclutch_market::execution_strategy::v2::{
     ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_PROGRAM_BYTES_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
     ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
-use dclutch_rational_representation_v2_contract::AuthenticatedTokenBehaviorV2;
-use dclutch_rational_representation_v2_kernel::RepresentationDescriptorV2;
-use dclutch_rational_representation_v2_lifecycle_contract::{
+use dclutch_claims::rational::AuthenticatedTokenBehaviorV2;
+use dclutch_claims::rational_kernel::RepresentationDescriptorV2;
+use dclutch_claims::rational_lifecycle::{
     LifecycleActionV2,
     hot_v3::{RATIONAL_LIFECYCLE_HOT_SCHEMA_RELEASE_ID_V3, RationalLifecycleHotLayoutV3},
 };
-use dclutch_request_profile_contract::RequestProfileV1;
-use dclutch_token_svm::{
+use dclutch_vm::request_profile::RequestProfileV1;
+use dclutch_custody::token_svm::{
     TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
     TokenBehaviorSelectionV2,
 };
@@ -137,7 +137,7 @@ pub fn build_rational_lifecycle_selected_bundle_v5(
     let lifecycle_id = digest(&lifecycle_policy)?;
     let strategy_value = ExecutionStrategyProgramV2::new(
         StrategyDispositionV2::Interpreted,
-        content(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID)?,
+        content(dclutch_vm::v3::SCHEMA_RELEASE_ID)?,
         digest(&transition)?,
         content(EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2)?,
         None,
@@ -163,11 +163,11 @@ pub fn build_rational_lifecycle_selected_bundle_v5(
         content(input.capacity_profile)?,
         CapabilityArtifactsV4 {
             account_profile: artifact(
-                dclutch_account_profile_contract::v2::SCHEMA_RELEASE_ID,
+                dclutch_vm::account_profile::v2::SCHEMA_RELEASE_ID,
                 hash(&account_profile).to_bytes(),
             )?,
             request_profile: artifact(
-                dclutch_request_profile_contract::SCHEMA_RELEASE_ID,
+                dclutch_vm::request_profile::SCHEMA_RELEASE_ID,
                 hash(&request_profile).to_bytes(),
             )?,
             lifecycle: artifact(LIFECYCLE_SCHEMA_ID_V5, lifecycle_id.to_bytes())?,
@@ -176,7 +176,7 @@ pub fn build_rational_lifecycle_selected_bundle_v5(
                 hash(&strategy).to_bytes(),
             )?,
             transition: artifact(
-                dclutch_transition_vm::v3::SCHEMA_RELEASE_ID,
+                dclutch_vm::v3::SCHEMA_RELEASE_ID,
                 hash(&transition).to_bytes(),
             )?,
             effect: artifact(EFFECT_SCHEMA_ID_V4, hash(&effect).to_bytes())?,
@@ -231,7 +231,7 @@ pub fn validate_rational_lifecycle_selected_bundle_v5(
         &bundle.request_profile,
     )
     .map_err(Error::RequestProfile)?;
-    let transition = dclutch_transition_vm::v3::ProgramV3::decode(&bundle.transition)
+    let transition = dclutch_vm::v3::ProgramV3::decode(&bundle.transition)
         .map_err(Error::Transition)?;
     let strategy = ExecutionStrategyProgramV2::decode(&bundle.strategy).map_err(Error::Strategy)?;
     let lifecycle_id = digest(&bundle.lifecycle_policy)?;
@@ -246,7 +246,7 @@ pub fn validate_rational_lifecycle_selected_bundle_v5(
         .map_err(Error::LifecycleArtifact)?;
     let effect = EffectProgramV4::decode(&bundle.effect).map_err(Error::EffectV4)?;
     let base = effect.base();
-    let registers = dclutch_rational_representation_v2_lifecycle_contract::hot_v3::RationalLifecycleHotRegisterLayoutV3::new(coordinates);
+    let registers = dclutch_claims::rational_lifecycle::hot_v3::RationalLifecycleHotRegisterLayoutV3::new(coordinates);
     let scalars = u16::try_from(registers.scalar_count().ok_or(Error::InvalidLength)?)
         .map_err(|_| Error::InvalidLength)?;
     let identities = u16::try_from(registers.identity_count().ok_or(Error::InvalidLength)?)
@@ -258,12 +258,12 @@ pub fn validate_rational_lifecycle_selected_bundle_v5(
         || descriptor.request_schema().to_bytes() != RATIONAL_LIFECYCLE_HOT_SCHEMA_RELEASE_ID_V3
         || descriptor.account_profile()
             != artifact(
-                dclutch_account_profile_contract::v2::SCHEMA_RELEASE_ID,
+                dclutch_vm::account_profile::v2::SCHEMA_RELEASE_ID,
                 hash(&bundle.account_profile).to_bytes(),
             )?
         || descriptor.request_profile()
             != artifact(
-                dclutch_request_profile_contract::SCHEMA_RELEASE_ID,
+                dclutch_vm::request_profile::SCHEMA_RELEASE_ID,
                 hash(&bundle.request_profile).to_bytes(),
             )?
         || descriptor.lifecycle() != artifact(LIFECYCLE_SCHEMA_ID_V5, lifecycle_id.to_bytes())?
@@ -274,7 +274,7 @@ pub fn validate_rational_lifecycle_selected_bundle_v5(
             )?
         || descriptor.transition()
             != artifact(
-                dclutch_transition_vm::v3::SCHEMA_RELEASE_ID,
+                dclutch_vm::v3::SCHEMA_RELEASE_ID,
                 hash(&bundle.transition).to_bytes(),
             )?
         || descriptor.effect() != artifact(EFFECT_SCHEMA_ID_V4, hash(&bundle.effect).to_bytes())?
@@ -339,8 +339,8 @@ fn coordinate_count(action: LifecycleActionV2) -> Result<u32> {
 fn geometry_matches(
     account: AccountProfileV2<'_>,
     request: RequestProfileV1<'_>,
-    transition: dclutch_transition_vm::v3::ProgramV3<'_>,
-    effect: dclutch_effect_kernel::v3::ProgramV3<'_>,
+    transition: dclutch_vm::v3::ProgramV3<'_>,
+    effect: dclutch_vm::effect::v3::ProgramV3<'_>,
     scalars: u16,
     identities: u16,
 ) -> bool {
@@ -380,17 +380,17 @@ fn artifact(schema: [u8; 32], program: [u8; 32]) -> Result<ArtifactReferenceV4> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_account_profile_contract::lifecycle_v3::{
+    use dclutch_vm::account_profile::lifecycle_v3::{
         HEADER_BYTES as LIFECYCLE_HEADER_BYTES, encode::encode_lifecycle_policy_v5_atomic,
     };
-    use dclutch_account_profile_contract::v2::AccountPrestateV2;
-    use dclutch_product_payoff_v2_codec::runtime_v3::{
+    use dclutch_vm::account_profile::v2::AccountPrestateV2;
+    use dclutch_product::payoff::runtime_v3::{
         BASIS_HEADER_BYTES_V3, BasisInputV3, BasisKindV3, compile_basis_v3,
     };
-    use dclutch_rational_representation_v2_contract::{
+    use dclutch_claims::rational::{
         TokenBehaviorRecordAdmissionV2, authenticate_token_behavior_v2,
     };
-    use dclutch_rational_representation_v2_kernel::{
+    use dclutch_claims::rational_kernel::{
         DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3,
         DESCRIPTOR_SCHEMA_VERSION_V3, DescriptorAdmissionV2,
     };
@@ -443,7 +443,7 @@ mod tests {
             (112, id(14)),
             (144, id(15)),
             (176, id(16)),
-            (208, dclutch_token_svm::TOKEN_2022_PROGRAM_ID),
+            (208, dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID),
         ] {
             put(&mut output, offset, &value);
         }

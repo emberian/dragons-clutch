@@ -363,7 +363,7 @@ def draw_recorded(name: str, distribution: Distribution, rng: random.Random) -> 
 
 # THE BASIS SHAPES, AND THE ONE THAT CAN ACTUALLY BE FOUNDED TODAY.
 #
-# `BasisKindV3` (crates/dclutch-product-payoff-v2-codec/src/runtime_v3.rs:122)
+# `BasisKindV3` (crates/dclutch-product/src/payoff/runtime_v3.rs:122)
 # admits `CategoricalQ1` -- the runtime-width indicator basis, degree 0 -- and
 # `GradedExactComplement`, whose term shapes are `Constant`, `RampUp`,
 # `RampDown` and `Tent` (:177-203). Degrees 0 and 1 are exempt from the price

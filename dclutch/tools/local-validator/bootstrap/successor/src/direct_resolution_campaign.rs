@@ -14,7 +14,7 @@ use std::{
     str::FromStr as _,
 };
 
-use dclutch_resolution_codec::SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3;
+use dclutch_source::resolution::SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3;
 use serde::Serialize;
 use solana_program::pubkey::Pubkey;
 

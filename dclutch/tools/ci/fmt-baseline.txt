@@ -26,20 +26,20 @@
 # now and this is a handoff, not an exemption.
 
 # --- Structured lane -------------------------------------------------------
-crates/dclutch-product-payoff-v2-codec/tests/basis_corpus_v3.rs
+crates/dclutch-product/tests/payoff__basis_corpus_v3.rs
 crates/dclutch-rational-lifecycle-hot-v3/src/compact_operator_v4.rs
 crates/dclutch-rational-lifecycle-hot-v3/src/lifecycle_policy_v5.rs
 crates/dclutch-rational-lifecycle-hot-v3/src/release_v1.rs
 crates/dclutch-rational-open-wasm/src/wire.rs
 
 # --- Dealer lane -----------------------------------------------------------
-# dclutch-dealer-codec is the ONE package that declares edition 2021, so these
+# dclutch-trading is the ONE package that declares edition 2021, so these
 # are the files the two formatters disagreed about most sharply. They are now
 # 2024-style everywhere; these four just have not been run through it yet.
-crates/dclutch-dealer-codec/src/root_tail.rs
-crates/dclutch-dealer-codec/src/scenario.rs
-crates/dclutch-dealer-codec/src/scenario_custody_reservation_v1.rs
-crates/dclutch-dealer-codec/src/trading_request.rs
+crates/dclutch-trading/src/dealer/root_tail.rs
+crates/dclutch-trading/src/dealer/scenario.rs
+crates/dclutch-trading/src/dealer/scenario_custody_reservation_v1.rs
+crates/dclutch-trading/src/dealer/trading_request.rs
 
 # --- Direct lane -----------------------------------------------------------
 

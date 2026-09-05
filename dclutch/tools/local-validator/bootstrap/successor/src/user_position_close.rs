@@ -12,7 +12,7 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use dclutch_claims_svm::{
+use dclutch_claims::{
     liability_basis_state_v2::LiabilityBasisMarketViewV2,
     protocol_position_v2::{
         ProtocolPositionAdmissionSeedsV2, ProtocolPositionAdmissionV2,
@@ -25,9 +25,9 @@ use dclutch_operator::{
         UserPositionClosePlanV1, UserPositionCloseSnapshotV1, plan_user_position_close_v1,
     },
 };
-use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
-use dclutch_relay_contract::SOLANA_DEVNET_GENESIS_HASH_V1;
-use dclutch_release_set_contract::ExecutionRoleV1;
+use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
+use dclutch_source::relay::SOLANA_DEVNET_GENESIS_HASH_V1;
+use dclutch_registry::release_set::ExecutionRoleV1;
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
 use solana_sdk::{
@@ -446,7 +446,7 @@ fn derive_position_identity(
         ProtocolPositionAdmissionSeedsV2::new(claims_market.to_bytes(), owner.to_bytes())
             .map_err(|error| Error::new(format!("admission seeds: {error:?}")))?;
     let admission = Pubkey::find_program_address(&admission_seeds.as_slices(), &claims_program).0;
-    let position_seeds = dclutch_claims_svm::protocol_position_v2::ProtocolPositionSeedsV2::new(
+    let position_seeds = dclutch_claims::protocol_position_v2::ProtocolPositionSeedsV2::new(
         claims_market.to_bytes(),
         owner.to_bytes(),
     )

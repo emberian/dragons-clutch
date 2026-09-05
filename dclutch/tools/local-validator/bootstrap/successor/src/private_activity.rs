@@ -17,7 +17,7 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use dclutch_direct_codec::fee_settlement_v1::DirectFeeSettlementReceiptV1;
+use dclutch_trading::fee_settlement_v1::DirectFeeSettlementReceiptV1;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};

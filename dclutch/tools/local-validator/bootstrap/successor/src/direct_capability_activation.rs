@@ -40,23 +40,23 @@
 
 use std::path::PathBuf;
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     CapabilityManifestV1, FundingLedgerStatusV2, FundingLedgerV2,
     capability_dependency_closure_mask_v1,
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_direct_codec::{
+use dclutch_trading::{
     activation_bundle_v1::direct_activation_request_v1,
     successor::{DIRECT_ROOT_STATE_BYTES_V1, DirectRootStateV1},
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     Action, CapabilityFundingHeaderV2, CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState,
     Identity, Phase as CorePhase, Request, Role,
 };
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
 use solana_program::{hash::hash, pubkey::Pubkey};
@@ -302,7 +302,7 @@ fn meta_pair(pair: &RecordPair) -> Result<[AccountMeta; 2]> {
 /// creates and the address the terminal sequence means.
 pub(crate) struct DirectExecutionRootV1 {
     pub(crate) root: Pubkey,
-    pub(crate) selection: dclutch_release_set_contract::CapabilityExecutionSelectionV1,
+    pub(crate) selection: dclutch_registry::release_set::CapabilityExecutionSelectionV1,
 }
 
 /// Derive the Direct execution capability root from its authors alone.
@@ -325,7 +325,7 @@ pub(crate) fn direct_execution_root_v1(
     let entry = manifest
         .entry(entry_index)
         .map_err(|error| Error::new(format!("manifest entry {entry_index}: {error:?}")))?;
-    let selection = dclutch_release_set_contract::CapabilityExecutionSelectionV1::new(
+    let selection = dclutch_registry::release_set::CapabilityExecutionSelectionV1::new(
         entry_index,
         ContentId::new(<[u8; 32]>::from(Sha256::digest(manifest_body)))
             .map_err(|_| Error::new("manifest identity".to_string()))?,

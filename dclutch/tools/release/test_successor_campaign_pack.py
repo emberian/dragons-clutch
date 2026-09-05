@@ -213,7 +213,7 @@ class SuccessorCampaignPackTests(unittest.TestCase):
     def test_resolution_identity_is_derived_from_source_preimage(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
-            source = root / "source/crates/dclutch-resolution-codec/src"
+            source = root / "source/crates/dclutch-source/resolution/src"
             source.mkdir(parents=True)
             source.joinpath("lib.rs").write_text(
                 'pub const RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V4: &[u8] =\n'

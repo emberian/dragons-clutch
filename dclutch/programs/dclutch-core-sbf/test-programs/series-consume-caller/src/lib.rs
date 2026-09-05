@@ -8,14 +8,14 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use dclutch_claims_svm::founding_v5::{
+use dclutch_claims::founding_v5::{
     CLAIMS_FOUNDING_RECEIPT_BYTES_V5, CLAIMS_FOUNDING_RECEIPT_MAGIC_V5,
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     SERIES_CORE_REQUEST_BYTES_V1, SeriesCoreActionV1, SeriesCoreRequestV1,
 };
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_series_v3_kernel::ticket_content_id;
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_trading::series::ticket_content_id;
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,

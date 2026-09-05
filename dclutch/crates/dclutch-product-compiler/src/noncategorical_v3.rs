@@ -9,16 +9,16 @@
 
 use core::convert::TryFrom;
 
-pub use dclutch_product_payoff_v2_codec::registry_v3::{
+pub use dclutch_product::payoff::registry_v3::{
     APPROXIMATION_CERTIFICATE_BYTES_V3, APPROXIMATION_CERTIFICATE_MAGIC_V3,
     APPROXIMATION_CERTIFICATE_SCHEMA_V3, CategoricalApproximationCertificateV3,
     CategoricalProjectionBoundaryV3,
 };
-use dclutch_product_payoff_v2_codec::runtime_v3::{
+use dclutch_product::payoff::runtime_v3::{
     BasisKindV3, LINKED_BASIS_CONTENT_DOMAIN_V3, ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
     semantic_basis_preimage_v3,
 };
-use dclutch_product_runtime_v2::{ContentId, RESULT_DOMAIN_CONTENT_DOMAIN_V2, ResultDomainV2};
+use dclutch_product::{ContentId, RESULT_DOMAIN_CONTENT_DOMAIN_V2, ResultDomainV2};
 use sha2::{Digest, Sha256};
 
 /// Projection matrix content-hash domain.
@@ -371,10 +371,10 @@ fn nonzero_digest(value: [u8; 32]) -> Result<[u8; 32]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_product_payoff_v2_codec::runtime_v3::{
+    use dclutch_product::payoff::runtime_v3::{
         BasisInputV3, BasisShapeV3, BasisTermV3, basis_record_bytes_v3, compile_basis_v3,
     };
-    use dclutch_product_runtime_v2::{
+    use dclutch_product::{
         ResultDomainInputV2, compile_result_domain_v2, result_domain_record_bytes,
     };
 

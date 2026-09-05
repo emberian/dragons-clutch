@@ -8,26 +8,12 @@ description = "Chain-derived operator for the executable Fractional Claims famil
 publish = false
 
 [dependencies]
-dclutch-account-profile-contract = { path = "../dclutch-account-profile-contract" }
-dclutch-capability-activation-codec = { path = "../dclutch-capability-activation-codec" }
-dclutch-capability-program-contract = { path = "../dclutch-capability-program-contract" }
-dclutch-claims-svm = { path = "../dclutch-claims-svm" }
+dclutch-vm = { path = "../dclutch-vm" }
+dclutch-market = { path = "../dclutch-market" }
+dclutch-claims = { path = "../dclutch-claims" }
 dclutch-core-contract = { path = "../dclutch-core-contract" }
-dclutch-effect-kernel = { path = "../dclutch-effect-kernel" }
-dclutch-execution-strategy-contract = { path = "../dclutch-execution-strategy-contract" }
-dclutch-fractional-claim-contract = { path = "../dclutch-fractional-claim-contract" }
-dclutch-fractional-claim-kernel = { path = "../dclutch-fractional-claim-kernel" }
-dclutch-fractional-claims-kernel = { path = "../dclutch-fractional-claims-kernel" }
-dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
-dclutch-record-contract = { path = "../dclutch-record-contract" }
-dclutch-registry-contract = { path = "../dclutch-registry-contract" }
-dclutch-registry-svm = { path = "../dclutch-registry-svm" }
-dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
-dclutch-representation-composition-v3-kernel = { path = "../dclutch-representation-composition-v3-kernel" }
-dclutch-rent-contract = { path = "../dclutch-rent-contract" }
-dclutch-request-profile-contract = { path = "../dclutch-request-profile-contract" }
-dclutch-token-svm = { path = "../dclutch-token-svm" }
-dclutch-transition-vm = { path = "../dclutch-transition-vm" }
+dclutch-registry = { path = "../dclutch-registry" }
+dclutch-custody = { path = "../dclutch-custody" }
 dclutch-versioned-message-operator = { path = "../dclutch-versioned-message-operator" }
 sha2 = "=0.10.9"
 solana-hash = "=4.6.0"

@@ -4,7 +4,7 @@
 //! only when an independently pinned `cargo kani` toolchain injects `cfg(kani)`
 //! and the `kani` crate.
 
-use dclutch_direct_codec::{
+use dclutch_trading::{
     COMPACT_INTENT_BYTES, CompactIntentV1, ControllerInstructionV1, Error,
     REGISTERED_CREATE_INSTRUCTION_BYTES, REGISTERED_TERMINAL_INSTRUCTION_BYTES,
     RegisteredCreateInstructionV1, RegisteredTerminalAction, RegisteredTerminalInstructionV1,

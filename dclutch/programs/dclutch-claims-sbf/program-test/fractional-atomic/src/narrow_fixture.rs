@@ -14,13 +14,13 @@
 //! Core state, and the LBV2 aggregate and Positions -- only with the outcome
 //! count lifted into a parameter.
 
-use dclutch_claims_svm::protocol_position_v2::ProtocolPositionSeedsV2;
-use dclutch_market_core_codec::{
+use dclutch_claims::protocol_position_v2::ProtocolPositionSeedsV2;
+use dclutch_market::{
     CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, ProductGraphBumpsV1,
     Readiness, STATE_BYTES, StateBumpsV1,
 };
 
-use dclutch_product_payoff_v2_codec::{
+use dclutch_product::payoff::{
     price_gate_v1::verify_price_gate_v1,
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
     runtime_v3::{
@@ -28,14 +28,14 @@ use dclutch_product_payoff_v2_codec::{
         basis_record_bytes_v3, compile_basis_v3, semantic_basis_preimage_v3,
     },
 };
-use dclutch_product_runtime_v2::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
-use dclutch_product_runtime_v2_admission::{
+use dclutch_product::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
+use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2,
     RESULT_DOMAIN_SCHEMA_ID_V2,
 };
 use dclutch_product_runtime_v2_operator::{ProductCompilationInputV2, compile_product_records_v2};
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_representation_composition_v3_kernel::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_claims::composition::{
     COMPOSITION_EXPOSURE_SCHEMA_ID_V3, CompositionExposureInputV3, CompositionExposureRowInputV3,
     CompositionExposureTermV3, composition_exposure_bytes_v3,
     encode_composition_exposure_v3_atomic,
@@ -60,7 +60,7 @@ const CLAIMS_POSITION_HEADER_BYTES_V2: usize = 128;
 // are one address's identity and a second declaration of them is a second
 // author: `dclutch:lbv2:market` stood under two names -- this one and the
 // owner's -- until the seam register's DOMAIN_BYTES_COLLIDE said so.
-use dclutch_claims_svm::liability_basis_state_v2::LIABILITY_BASIS_MARKET_SEED_V2;
+use dclutch_claims::liability_basis_state_v2::LIABILITY_BASIS_MARKET_SEED_V2;
 /// Product coordinate-domain identity this fixture compiles against.
 pub const COORDINATE_DOMAIN_ID: [u8; 32] = [0x43; 32];
 /// Product result-unit identity this fixture compiles against.

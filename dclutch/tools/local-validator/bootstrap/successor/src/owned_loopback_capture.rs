@@ -8,7 +8,7 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use dclutch_pyth_svm::{ProgramDataV3View, ProgramV3View};
+use dclutch_source::pyth::{ProgramDataV3View, ProgramV3View};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};

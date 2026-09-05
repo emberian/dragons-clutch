@@ -10,7 +10,7 @@
 
 use std::{io::Write, path::PathBuf};
 
-use dclutch_market_core_codec::CoreState;
+use dclutch_market::CoreState;
 use dclutch_operator::ObservedAccount;
 use dclutch_wallet_terminal_input_operator::{
     ProtocolCoordinatesV1, RoutedRecordV1, TerminalPayoutRequestV1, TerminalRecordRoutingV1,
@@ -587,12 +587,12 @@ pub(crate) fn owned_loopback_usage() -> &'static str {
 mod tests {
     use std::collections::BTreeMap;
 
-    use dclutch_claims_svm::liability_basis_state_v2::{
+    use dclutch_claims::liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
         LiabilityBasisMarketInputV2, encode_liability_basis_market_into_v2,
         liability_basis_vector_width_v2,
     };
-    use dclutch_market_core_codec::{Identity, MarketIdentity, Phase, Readiness, StateBumpsV1};
+    use dclutch_market::{Identity, MarketIdentity, Phase, Readiness, StateBumpsV1};
     use dclutch_operator::{Finality, Observation, ObservedAccount};
     use serde_json::Value;
     use solana_sdk::signature::{Keypair, Signer as _};

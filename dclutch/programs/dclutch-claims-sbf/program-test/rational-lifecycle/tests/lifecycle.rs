@@ -10,47 +10,47 @@ use dclutch_claims_sbf::rational_lifecycle_v2::{
     RATIONAL_LIFECYCLE_COMMON_ACCOUNT_COUNT_V2, RATIONAL_LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2,
     RATIONAL_LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2, RationalLifecycleSbfErrorV2,
 };
-use dclutch_claims_svm::liability_basis_state_v2::LIABILITY_BASIS_POSITION_HEADER_BYTES_V2;
-use dclutch_claims_svm::protocol_position_v2::{
+use dclutch_claims::liability_basis_state_v2::LIABILITY_BASIS_POSITION_HEADER_BYTES_V2;
+use dclutch_claims::protocol_position_v2::{
     PROTOCOL_POSITION_ADMISSION_BYTES_V2, ProtocolPositionActionV2,
     ProtocolPositionAdmissionSeedsV2, ProtocolPositionClaimsCapabilitySeedsV2,
     ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2, ProtocolPositionRequestV2,
     ProtocolPositionSeedsV2,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_market_core_codec::{CoreState, Identity, Phase};
+use dclutch_market::{CoreState, Identity, Phase};
 use dclutch_program_test_evidence::TransactionEvidence;
-use dclutch_rational_representation_v2_contract::{
+use dclutch_claims::rational::{
     RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2, RATIONAL_SHARD_MINT_SEED_V2,
     RATIONAL_STRUCTURED_CUSTODY_SEED_V2, RationalReceiptMintSeedsV2,
 };
-use dclutch_rational_representation_v2_kernel::{
+use dclutch_claims::rational_kernel::{
     DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3,
     REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
 };
-use dclutch_rational_representation_v2_lifecycle_contract::{
+use dclutch_claims::rational_lifecycle::{
     ABSENT_POSITION_REVISION_V2, LIFECYCLE_COORDINATE_BYTES_V2, LIFECYCLE_HEADER_BYTES_V2,
     LIFECYCLE_RECEIPT_BYTES_V2, LifecycleActionV2, LifecycleCoordinateV2, LifecycleHeaderV2,
     LifecycleReceiptV2, LifecycleRequestV2,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
     ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
     initialize_activation_cache_v1,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
     ExecutionRoleV1, ProgramIdentityV1,
 };
-use dclutch_rent_contract::{
+use dclutch_market::rent::{
     RefundAuthority,
     lifecycle_v2::{
         LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
     },
 };
-use dclutch_token_svm::{
+use dclutch_custody::token_svm::{
     ACCOUNT_BYTES, InertMetadataV2, TOKEN_2022_CLOSEABLE_MINT_BYTES_V2, TOKEN_2022_PROGRAM_ID,
     Token2022BehaviorProfileV2, Token2022CloseableMintProfileV2, TokenAccount,
 };

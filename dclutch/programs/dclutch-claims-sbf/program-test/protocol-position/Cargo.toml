@@ -9,18 +9,13 @@ rust-version = "1.89"
 dclutch-program-test-evidence = { path = "../../../../tools/gauntlet/program-test-evidence" }
 dclutch-claims-affine-batch-program-test = { path = "../affine-batch" }
 dclutch-claims-sbf = { path = "../.." }
-dclutch-claims-svm = { path = "../../../../crates/dclutch-claims-svm" }
-dclutch-capability-program-contract = { path = "../../../../crates/dclutch-capability-program-contract" }
+dclutch-claims = { path = "../../../../crates/dclutch-claims" }
+dclutch-market = { path = "../../../../crates/dclutch-market" }
 dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
-dclutch-fractional-claim-contract = { path = "../../../../crates/dclutch-fractional-claim-contract" }
-dclutch-fractional-claim-kernel = { path = "../../../../crates/dclutch-fractional-claim-kernel" }
 dclutch-fractional-claim-operator = { path = "../../../../crates/dclutch-fractional-claim-operator" }
-dclutch-market-core-codec = { path = "../../../../crates/dclutch-market-core-codec" }
-dclutch-rent-contract = { path = "../../../../crates/dclutch-rent-contract" }
-dclutch-registry-contract = { path = "../../../../crates/dclutch-registry-contract" }
-dclutch-release-set-contract = { path = "../../../../crates/dclutch-release-set-contract" }
+dclutch-registry = { path = "../../../../crates/dclutch-registry" }
 dclutch-resolution-core-v3-operator = { path = "../../../../crates/dclutch-resolution-core-v3-operator" }
-dclutch-token-svm = { path = "../../../../crates/dclutch-token-svm" }
+dclutch-custody = { path = "../../../../crates/dclutch-custody" }
 solana-account = "=4.6.0"
 solana-address-lookup-table-interface = { version = "=3.2.0", features = ["bincode", "bytemuck"] }
 solana-message = "=4.5.0"
@@ -30,7 +25,6 @@ solana-sdk = "=3.0.0"
 solana-sdk-ids = "=3.1.0"
 solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
 solana-transaction = "=4.2.0"
-dclutch-record-contract = { path = "../../../../crates/dclutch-record-contract" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [workspace]

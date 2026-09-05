@@ -1,8 +1,8 @@
-use dclutch_registry_contract::{
+use dclutch_registry::{
     ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
     ArtifactUpgradePolicyV1,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1, ExecutionReleaseSetV1,
     ExecutionRoleBindingV1, ExecutionRoleV1, ProgramIdentityV1,
 };
@@ -310,7 +310,7 @@ fn existing_cache_requires_exact_bytes_and_reports_repeat() {
 /// different address.
 #[test]
 fn a_registry_written_cache_carrying_its_own_bump_reports_repeat() {
-    use dclutch_registry_contract::{
+    use dclutch_registry::{
         ACTIVATION_CACHE_BUMP_OFFSET_V1, ACTIVATION_PDA_DOMAIN_V1, put_activation_cache_bump_v1,
     };
 

@@ -3,7 +3,7 @@
 //!
 //! WHAT THIS USED TO BE. Until the author became callable this module was a
 //! REFUSAL: a Direct inline fill settles two independently signed intents, the
-//! signed message is owned by `dclutch_direct_codec::intent_v2::CompactIntentV2`
+//! signed message is owned by `dclutch_trading::intent_v2::CompactIntentV2`
 //! emitted from `formal/dclutch-semantics/EmitDirectIntentV2Rust.lean`, and
 //! there is exactly one author of a ticket per language because a second
 //! implementation of a signing preimage is a signature that verifies nowhere,

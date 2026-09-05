@@ -7,24 +7,24 @@
 //! not persist authority, accept caller-authored release truth, sign, or send.
 
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CUSTODY_REQUEST_BYTES_V1, CallerRoleV1, CustodyAuthoritySeedsV1, CustodyFrameSpecV1,
     CustodyReplaySeedsV1, CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
 };
-use dclutch_market_core_codec::{Action, REQUEST_BYTES, Request};
-use dclutch_realm_contract::REALM_SCHEMA_RELEASE_ID_V1;
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{
+use dclutch_market::{Action, REQUEST_BYTES, Request};
+use dclutch_market::realm::REALM_SCHEMA_RELEASE_ID_V1;
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{
     ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1, DeploymentObservationV1,
 };
-use dclutch_registry_svm::{
+use dclutch_registry::svm::{
     ProgramDataV3View, ProgramV3View,
     continuation_v1::{
         REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationAdmissionSeedsV1,
         RegistryContinuationRequestV1,
     },
 };
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_resolution_core_v3_operator::{Finality, Observation, ObservedAccount};
 use solana_program::{
     hash::hash,

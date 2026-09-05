@@ -12,7 +12,7 @@ extern crate alloc;
 #[cfg(not(target_os = "solana"))]
 use alloc::{vec, vec::Vec};
 
-use dclutch_claims_svm::{
+use dclutch_claims::{
     CallerRole,
     signed_delta_v3::{
         DeltaDirectionV3, PositionDeltaInputV3, PositionDeltaV3, SignedDeltaPlanInputV3,

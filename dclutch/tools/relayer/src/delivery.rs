@@ -11,7 +11,7 @@ use std::fs::OpenOptions;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use dclutch_relay_contract::record::{RelayedObservationRecordViewV1, RelayedRecordPhaseV1};
+use dclutch_source::relay::record::{RelayedObservationRecordViewV1, RelayedRecordPhaseV1};
 
 use crate::chain::{
     ADDRESS_LOOKUP_TABLE_PROGRAM_ID, LOADER_V3_PROGRAM_ID, lookup_table_facts,
@@ -283,7 +283,7 @@ pub fn reconcile_finalized_record(
     }
 }
 
-fn record_wire(error: dclutch_relay_contract::Error) -> RelayerError {
+fn record_wire(error: dclutch_source::relay::Error) -> RelayerError {
     RelayerError::wire("finalized record acknowledgement", error)
 }
 
@@ -455,12 +455,12 @@ fn entry_path(dir: &Path, sequence: u64) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_relay_contract::record::{
+    use dclutch_source::relay::record::{
         RelayedRecordBindingV1, append_relayed_observation_in_place_v1,
         create_relayed_observation_record_into_v1, relayed_observation_record_bytes_v1,
         seal_relayed_observation_in_place_v1,
     };
-    use dclutch_relay_contract::wire::{
+    use dclutch_source::relay::wire::{
         AccountObservationV1, AttestationMessageV1, ObservationSetSealV1,
     };
 
@@ -576,7 +576,7 @@ mod tests {
             2,
             &inline,
             false,
-            dclutch_relay_contract::SHA256_EMPTY_DIGEST,
+            dclutch_source::relay::SHA256_EMPTY_DIGEST,
         )
         .expect("body");
         let mut encoded = vec![0u8; observation.encoded_len()];

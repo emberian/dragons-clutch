@@ -55,7 +55,7 @@ pub mod routes;
 /// a campaign. A non-spans profile is refused a nonempty width vector, exactly
 /// as `hot_v3::expand_runtime_accounts_v3` refuses one.
 pub mod profile_ops {
-    use dclutch_account_profile_contract::v2::{AccountProfileV2, PhysicalAccountGeometryV2};
+    use dclutch_vm::account_profile::v2::{AccountProfileV2, PhysicalAccountGeometryV2};
 
     use crate::BuilderError;
 

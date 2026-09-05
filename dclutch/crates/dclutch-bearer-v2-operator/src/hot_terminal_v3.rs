@@ -1,6 +1,6 @@
 //! Exact Hot V3 family projection for terminal Bearer redemption.
 
-use dclutch_rational_representation_v2_contract::{
+use dclutch_claims::rational::{
     RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3, RationalTerminalHotRequestV3, RepresentationRequestV2,
 };
 use dclutch_rational_representation_v2_operator::{

@@ -99,7 +99,7 @@ function vector(name: string): Uint8Array {
 }
 
 describe('GenericFoundingRequestV1 against the first-party Rust encoder', () => {
-  it('is byte-identical to dclutch-market-core-codec for every emitted vector', () => {
+  it('is byte-identical to dclutch-market for every emitted vector', () => {
     expect(vectors.schema).toBe('dclutch-web-generic-founding-vectors-v1');
     expect(hex(encodeGenericFoundingRequestV1(canonical('FoundAndPermit')))).toBe(vectors.requests[0].bytes);
     expect(hex(encodeGenericFoundingRequestV1(canonical('Open')))).toBe(vectors.requests[1].bytes);

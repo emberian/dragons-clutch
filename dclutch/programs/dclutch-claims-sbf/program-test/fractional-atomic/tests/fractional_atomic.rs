@@ -9,13 +9,13 @@
 //!
 //! Everything here is a real built `.so`: Claims, Registry, Core, Token-2022,
 //! and the test caller. The 31-account frame is the exact production frame from
-//! `dclutch-fractional-claim-contract`, not a convenient subset.
+//! `dclutch-claims::fractional`, not a convenient subset.
 
 #![allow(clippy::indexing_slicing, clippy::panic, clippy::unwrap_used)]
 
 use std::{env, fs, path::PathBuf};
 
-use dclutch_capability_program_contract::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
+use dclutch_market::capability_program::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
 use dclutch_core_contract::ContentId;
 use dclutch_fractional_atomic_program_test::campaign_support::{
     ReleaseSetInputV1, activation_cache as shared_activation_cache, add_account, add_finalized,
@@ -28,20 +28,20 @@ use dclutch_fractional_atomic_program_test::narrow_fixture::{
     NarrowFixtureV2, NarrowRecordV2, NarrowTerminalInputV2, compile_narrow_fixture_v2,
 };
 use dclutch_fractional_atomic_test_caller_sbf::FRACTIONAL_ATOMIC_TEST_WRAPPER_BYTES;
-use dclutch_fractional_claim_contract::{
+use dclutch_claims::fractional::{
     FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3, FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4,
     FractionalExposureActionV2, FractionalExposureRequestInputV2, FractionalExposureRequestV2,
     FractionalRootInputV1, FractionalRootV1,
 };
-use dclutch_fractional_claim_kernel::{
+use dclutch_claims::fractional_kernel::{
     FractionalExposureTermsInputV2, encode_fractional_exposure_terms_v2,
     fractional_exposure_terms_bytes_v2,
 };
-use dclutch_registry_contract::ACTIVATION_PDA_DOMAIN_V1;
-use dclutch_release_set_contract::{
+use dclutch_registry::ACTIVATION_PDA_DOMAIN_V1;
+use dclutch_registry::release_set::{
     CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1, ExecutionRoleV1,
 };
-use dclutch_token_svm::{
+use dclutch_custody::token_svm::{
     TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, TokenBehaviorSelectionV2,
 };
 use solana_account::Account;
@@ -95,7 +95,7 @@ const EXPOSURE_ID: [u8; 32] = [0x7a; 32];
 /// project to -- so the campaign exercises the shape the chain will actually
 /// present instead of one only a planted root can have.
 fn selection_config_digest(terms_bytes: &[u8]) -> [u8; 32] {
-    use dclutch_fractional_claim_kernel::{
+    use dclutch_claims::fractional_kernel::{
         FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FRACTIONAL_SELECTION_CONFIG_BYTES_V1,
         FractionalExposureTermsAdmissionV2, FractionalExposureTermsV2,
         encode_fractional_selection_config_v1, fractional_selection_config_from_terms_v1,
@@ -333,14 +333,14 @@ fn fixture() -> (ProgramTest, Fixture) {
     .expect("exact Fractional exposure terms");
     let terms_record = finalized(
         REGISTRY_PROGRAM_ID,
-        dclutch_fractional_claim_kernel::FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
+        dclutch_claims::fractional_kernel::FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
         terms_bytes,
     );
 
     let selection = CapabilityExecutionSelectionV1::new(
         0,
         ContentId::new([0x81; 32]).expect("manifest"),
-        ContentId::new(dclutch_fractional_claim_contract::FRACTIONAL_CAPABILITY_KIND_ID_V1)
+        ContentId::new(dclutch_claims::fractional::FRACTIONAL_CAPABILITY_KIND_ID_V1)
             .expect("kind"),
         ContentId::new([0x83; 32]).expect("capability release"),
         ContentId::new(selection_config_digest(&terms_record.bytes)).expect("config"),
@@ -868,8 +868,8 @@ async fn wrap_then_whole_unwrap_restores_the_exact_opening_state() {
 /// quietly forwarded into Claims.
 #[tokio::test]
 async fn a_transfer_is_refused_by_the_family_caller_and_routed_direct_to_token_2022() {
-    use dclutch_fractional_claim_contract::{FractionalChildRouteV3, plan_fractional_physical_v3};
-    use dclutch_fractional_claim_kernel::{
+    use dclutch_claims::fractional::{FractionalChildRouteV3, plan_fractional_physical_v3};
+    use dclutch_claims::fractional_kernel::{
         FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FractionalExposureTermsAdmissionV2,
         FractionalExposureTermsV2,
     };
@@ -1004,15 +1004,15 @@ fn the_fractional_representation_width_bound_is_exactly_256() {
 // frame the Rational campaign drives, so the Custody composition below is a
 // port of that staging rather than a second invention.
 
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1,
     CustodyReplaySeedsV1, CustodyReplayV1, CustodyVaultSeedsV1,
 };
-use dclutch_realm_contract::{
+use dclutch_market::realm::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
 };
-use dclutch_resolution_codec::{ResolutionCertificateKindV2, ResolutionCertificateV2};
-use dclutch_token_svm::PRODUCTION_ADAPTER_RELEASES;
+use dclutch_source::resolution::{ResolutionCertificateKindV2, ResolutionCertificateV2};
+use dclutch_custody::token_svm::PRODUCTION_ADAPTER_RELEASES;
 
 const CUSTODY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xa4; 32]);
 const COLLATERAL_MINT: Pubkey = Pubkey::new_from_array([0x74; 32]);
@@ -1340,14 +1340,14 @@ fn terminal_fixture(
     .expect("exact Fractional exposure terms");
     let terms_record = finalized(
         REGISTRY_PROGRAM_ID,
-        dclutch_fractional_claim_kernel::FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
+        dclutch_claims::fractional_kernel::FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
         terms_bytes,
     );
 
     let selection = CapabilityExecutionSelectionV1::new(
         0,
         ContentId::new([0x81; 32]).expect("manifest"),
-        ContentId::new(dclutch_fractional_claim_contract::FRACTIONAL_CAPABILITY_KIND_ID_V1)
+        ContentId::new(dclutch_claims::fractional::FRACTIONAL_CAPABILITY_KIND_ID_V1)
             .expect("kind"),
         ContentId::new([0x83; 32]).expect("capability release"),
         ContentId::new(selection_config_digest(&terms_record.bytes)).expect("config"),
@@ -1652,8 +1652,8 @@ fn terminal_instruction(
 /// evidence of nothing. The campaign creates it the way a redeemer would.
 async fn create_custody_replay(context: &mut ProgramTestContext, fixture: &TerminalFixture) {
     use dclutch_claims_sbf::custody_replay_v1::expected_request_v1;
-    use dclutch_claims_svm::custody_replay_v1::ClaimsCustodyReplayRequestV1;
-    use dclutch_claims_svm::liability_basis_state_v2::LiabilityBasisMarketViewV2;
+    use dclutch_claims::custody_replay_v1::ClaimsCustodyReplayRequestV1;
+    use dclutch_claims::liability_basis_state_v2::LiabilityBasisMarketViewV2;
 
     let aggregate = LiabilityBasisMarketViewV2::decode(&fixture.shared.claims_market_bytes)
         .expect("aggregate decode");
@@ -2120,7 +2120,7 @@ async fn a_paying_redemption_refuses_the_zero_payout_custody_caller() {
 /// So the only way to name this account is to evaluate the terminal settlement
 /// host-side exactly as Claims will, against the same authenticated bytes.
 fn paying_custody_caller(fixture: &TerminalFixture, winner: u32) -> Pubkey {
-    use dclutch_claims_svm::{
+    use dclutch_claims::{
         CallerRole,
         liability_basis_state_v2::LiabilityBasisMarketViewV2,
         product_basis_terminal_v3::{
@@ -2133,9 +2133,9 @@ fn paying_custody_caller(fixture: &TerminalFixture, winner: u32) -> Pubkey {
             TerminalSettlementRequestV3,
         },
     };
-    use dclutch_custody_contract::{ContextV1, CustodyRequestV1, OperationV1};
-    use dclutch_rational_representation_v2_kernel::product_v3::TerminalScenarioV3;
-    use dclutch_representation_composition_v3_kernel::RecordAdmissionV3;
+    use dclutch_custody::{ContextV1, CustodyRequestV1, OperationV1};
+    use dclutch_claims::rational_kernel::product_v3::TerminalScenarioV3;
+    use dclutch_claims::composition::RecordAdmissionV3;
     use solana_program::hash::hashv;
 
     let shared = &fixture.shared;
@@ -2198,7 +2198,7 @@ fn paying_custody_caller(fixture: &TerminalFixture, winner: u32) -> Pubkey {
     let mut aggregate_scratch = vec![neutral; width];
     let mut packet = vec![
         0_u8;
-        dclutch_claims_svm::signed_delta_v3::plan_bytes(market.claim_count, 1, 1)
+        dclutch_claims::signed_delta_v3::plan_bytes(market.claim_count, 1, 1)
             .expect("packet width")
     ];
     let payout = encode_product_claims_terminal_signed_delta_v3(

@@ -23,24 +23,24 @@ extern crate std;
 
 use core::convert::TryFrom;
 
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
 use dclutch_core_contract::ContentId;
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_activation_auth_v1::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::activation_auth_v1::{
     authenticate_activated_role_in_cache_v1, cached_role_deployment_observation_v1,
     require_readonly_frame,
 };
-use dclutch_registry_contract::{
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_BYTES_V1,
     ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1, ArtifactActivationInputV1,
     ArtifactReleaseV1, DeploymentObservationV1, activate_execution_role_into_v1,
     initialize_activation_cache_v1, put_activation_cache_bump_v1,
 };
-use dclutch_registry_svm::{
+use dclutch_registry::svm::{
     ProgramDataV3View, ProgramV3View, REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1,
     RegistryInstructionV1,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     EXECUTION_RELEASE_SET_BYTES_V1, EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1,
     ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
 };
@@ -221,10 +221,10 @@ dclutch_refusal_registry::pin_refusal_band!(
 /// Decision 0012: a moved deployment slot means the substrate was upgraded and
 /// this release generation is finished. The remedy is a re-release, not an
 /// investigation, so it does not fold into the generic Deployment refusal.
-impl From<dclutch_registry_activation_auth_v1::ActivationAuthErrorV1> for RegistryError {
-    fn from(value: dclutch_registry_activation_auth_v1::ActivationAuthErrorV1) -> Self {
+impl From<dclutch_registry::activation_auth_v1::ActivationAuthErrorV1> for RegistryError {
+    fn from(value: dclutch_registry::activation_auth_v1::ActivationAuthErrorV1) -> Self {
         match value {
-            dclutch_registry_activation_auth_v1::ActivationAuthErrorV1::ReleaseSuperseded => {
+            dclutch_registry::activation_auth_v1::ActivationAuthErrorV1::ReleaseSuperseded => {
                 Self::ReleaseSuperseded
             }
             _ => Self::Deployment,
@@ -245,8 +245,8 @@ solana_program::entrypoint!(process_instruction);
 
 // ------- the shared `DCLTRIX1` discriminant, bound at compile time
 //
-// `dclutch_record_contract::RECORD_INSTRUCTION_MAGIC_V1` and
-// `dclutch_registry_svm::REGISTRY_INSTRUCTION_MAGIC_V1` are the SAME eight
+// `dclutch_registry::record::RECORD_INSTRUCTION_MAGIC_V1` and
+// `dclutch_registry::svm::REGISTRY_INSTRUCTION_MAGIC_V1` are the SAME eight
 // bytes, and this program is the only place both are dispatched. What separates
 // them is the action byte at offset 10, split by range. This is the file where
 // the two halves meet, so this is where the split stops being prose.
@@ -259,8 +259,8 @@ solana_program::entrypoint!(process_instruction);
 // family, so the failure mode was one family's good instruction executing as
 // the other's -- not a decode error anybody would see.
 const _: () = assert!(
-    dclutch_registry_svm::REGISTRY_ACTION_CEILING_V1
-        < dclutch_record_contract::RECORD_FIRST_ACTION_V1,
+    dclutch_registry::svm::REGISTRY_ACTION_CEILING_V1
+        < dclutch_registry::record::RECORD_FIRST_ACTION_V1,
     "the Registry and record action ranges overlap: one instruction magic cannot select two \
      families whose action bytes collide"
 );
@@ -268,8 +268,8 @@ const _: () = assert!(
 // clause is no longer load-bearing, but it still fires, and it would become
 // load-bearing again the moment these widths converged.
 const _: () = assert!(
-    dclutch_record_contract::BEGIN_RECORD_BYTES_V1
-        != dclutch_registry_svm::REGISTRY_INSTRUCTION_BYTES_V1,
+    dclutch_registry::record::BEGIN_RECORD_BYTES_V1
+        != dclutch_registry::svm::REGISTRY_INSTRUCTION_BYTES_V1,
     "a Begin request the width of a Registry instruction would defeat the length half of the \
      dispatch guard; the action-range split above must then carry it alone"
 );
@@ -282,30 +282,30 @@ pub fn process_instruction(
     instruction_data: &[u8],
 ) -> ProgramResult {
     if instruction_data.get(..8)
-        == Some(dclutch_capability_program_contract::hot_v3::HOT_EXECUTION_MAGIC_V3.as_slice())
+        == Some(dclutch_market::capability_program::hot_v3::HOT_EXECUTION_MAGIC_V3.as_slice())
     {
         return hot_continuation_v2::process(program_id, accounts, instruction_data);
     }
     if instruction_data.get(..8)
-        == Some(dclutch_record_contract::RECORD_INSTRUCTION_MAGIC_V1.as_slice())
+        == Some(dclutch_registry::record::RECORD_INSTRUCTION_MAGIC_V1.as_slice())
         && (instruction_data
             .get(10)
             .copied()
-            .is_some_and(|action| action >= dclutch_record_contract::RECORD_FIRST_ACTION_V1)
-            || instruction_data.len() != dclutch_registry_svm::REGISTRY_INSTRUCTION_BYTES_V1)
+            .is_some_and(|action| action >= dclutch_registry::record::RECORD_FIRST_ACTION_V1)
+            || instruction_data.len() != dclutch_registry::svm::REGISTRY_INSTRUCTION_BYTES_V1)
     {
         return record_v1::dispatch(program_id, accounts, instruction_data);
     }
     if instruction_data.get(..8)
         == Some(
-            dclutch_registry_svm::continuation_v1::REGISTRY_CONTINUATION_REQUEST_MAGIC_V1
+            dclutch_registry::svm::continuation_v1::REGISTRY_CONTINUATION_REQUEST_MAGIC_V1
                 .as_slice(),
         )
     {
         return continuation_v1::process(program_id, accounts, instruction_data);
     }
     if instruction_data.get(..8)
-        == Some(dclutch_registry_svm::lineage_v1::DECLARE_SUCCESSOR_MAGIC_V1.as_slice())
+        == Some(dclutch_registry::svm::lineage_v1::DECLARE_SUCCESSOR_MAGIC_V1.as_slice())
     {
         return lineage_v1::process(program_id, accounts, instruction_data);
     }
@@ -505,7 +505,7 @@ fn authenticate_artifact_role(
 /// guarantee and keeps the full current-ELF hash. Identity, link, ownership,
 /// executability, deployment slot, and authority are rechecked either way by
 /// `authenticate_deployment`.
-/// The single implementation lives in `dclutch-registry-activation-auth-v1`,
+/// The single implementation lives in `dclutch-registry::activation_auth_v1`,
 /// because the same observation is now made by every role adapter reading the
 /// cache directly. This wrapper only remaps its refusal onto Registry's own.
 fn cached_role_deployment_observation(

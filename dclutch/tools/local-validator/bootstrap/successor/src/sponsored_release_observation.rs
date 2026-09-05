@@ -9,7 +9,7 @@
 //! path, so Loader-v3's monotonic slot is the proxy and any deployment movement
 //! fails closed as `ResolutionError::ReleaseSuperseded`.
 //!
-//! `dclutch_pyth_svm::devnet_sponsored_sol_usd_release_v1` is a CONSTANT, read
+//! `dclutch_source::pyth::devnet_sponsored_sol_usd_release_v1` is a CONSTANT, read
 //! with finalized commitment on 2026-08-28. Pyth redeployed their devnet
 //! Receiver at slot 491,006,444 and changed their Receiver `Config` body some
 //! time after that reading. Cohort-13 was founded 4.36 days after the redeploy
@@ -47,7 +47,7 @@
 //! **There is no in-place supersession of a provider release, and the chain
 //! does not admit forward slot movement.** `authenticate_provider_program_pin`
 //! is exact equality in both directions, and `ArtifactReleaseV1::slot_pin_refusal`
-//! (`crates/dclutch-registry-contract/src/artifact.rs:272`) turns a strictly
+//! (`crates/dclutch-registry/src/artifact.rs:272`) turns a strictly
 //! later slot into `ReleaseSupersededByUpgrade` rather than into an admission.
 //! The one "forward movement admits" rule in this tree
 //! (`campaign::ObservedRoleV1::pin_conflicts_allowing_forward_slot`) is scoped
@@ -72,11 +72,11 @@
 //! commitment above a floor slot. Five separate reads could observe a redeploy
 //! in progress and mint a release no single chain state ever held.
 
-use dclutch_pyth_svm::{
+use dclutch_source::pyth::{
     PythSponsoredPushReleaseV1, PythSponsoredPushReleaseV1Input, RECEIVER_CONFIG_V2_LEN,
     ReceiverConfigV2View, devnet_sponsored_sol_usd_release_v1,
 };
-use dclutch_registry_svm::{LOADER_V3_PROGRAM_BYTES, ProgramDataV3View, ProgramV3View};
+use dclutch_registry::svm::{LOADER_V3_PROGRAM_BYTES, ProgramDataV3View, ProgramV3View};
 use sha2::{Digest as _, Sha256};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk_ids::bpf_loader_upgradeable;

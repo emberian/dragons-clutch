@@ -16,8 +16,8 @@ custom-heap = []
 custom-panic = []
 
 [dependencies]
-dclutch-custody-contract = { path = "../../../../../crates/dclutch-custody-contract" }
-dclutch-release-set-contract = { path = "../../../../../crates/dclutch-release-set-contract" }
+dclutch-custody = { path = "../../../../../crates/dclutch-custody" }
+dclutch-registry = { path = "../../../../../crates/dclutch-registry" }
 solana-program = { version = "=3.0.0", default-features = false }
 
 [workspace]

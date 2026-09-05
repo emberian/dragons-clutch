@@ -7,7 +7,7 @@
 //! snapshot. Close authority remains exclusively inside Core; this module only
 //! validates the typed Rent acknowledgement returned to that outer workflow.
 
-use dclutch_rent_contract::{
+use dclutch_market::rent::{
     RefundAuthority,
     lifecycle_v2::{
         CREATE_LIFECYCLE_RENT_CREDIT_BYTES_V2, CreateLifecycleRentCreditV2,
@@ -394,7 +394,7 @@ fn decode_rent(account: AccountObservationV2<'_>) -> Result<Rent, LifecycleRentO
 
 #[cfg(test)]
 mod tests {
-    use dclutch_rent_contract::lifecycle_v2::LifecycleRentCloseReceiptInputV2;
+    use dclutch_market::rent::lifecycle_v2::LifecycleRentCloseReceiptInputV2;
     use solana_program::rent::Rent;
 
     use super::*;

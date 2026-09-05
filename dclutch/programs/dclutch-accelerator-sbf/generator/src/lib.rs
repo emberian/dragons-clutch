@@ -9,16 +9,16 @@
 //! module. It does not choose release identities, synthesize child requests,
 //! sign, submit, or publish an ArtifactRelease.
 
-use dclutch_account_profile_contract::{
+use dclutch_vm::account_profile::{
     lifecycle_v3::{CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5, StateLifecyclePolicyV5},
     v2::{AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V2},
 };
-use dclutch_capability_program_contract::v4::{
+use dclutch_market::capability_program::v4::{
     ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4, CapabilityProgramV4,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_effect_kernel::v4::{ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4};
-use dclutch_execution_strategy_contract::{
+use dclutch_vm::effect::v4::{ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4};
+use dclutch_market::execution_strategy::{
     shadow_v3::{SHADOW_ACK_SCHEMA_ID_V3, SHADOW_REQUEST_SCHEMA_ID_V3},
     v2::{
         EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
@@ -26,7 +26,7 @@ use dclutch_execution_strategy_contract::{
         ExecutionStrategyProgramV2, StrategyDispositionV2,
     },
 };
-use dclutch_request_profile_contract::{RequestProfileV1, SCHEMA_RELEASE_ID as REQUEST_SCHEMA_ID};
+use dclutch_vm::request_profile::{RequestProfileV1, SCHEMA_RELEASE_ID as REQUEST_SCHEMA_ID};
 use dclutch_trading_sbf::series::{
     account_profile_v4::{
         SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4, SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4,
@@ -40,7 +40,7 @@ use dclutch_trading_sbf::series::{
         encode_series_consume_transition_v4_atomic,
     },
 };
-use dclutch_transition_vm::v3::{
+use dclutch_vm::v3::{
     ProgramV3 as TransitionProgramV3, SCHEMA_RELEASE_ID as TRANSITION_SCHEMA_ID,
 };
 use sha2::{Digest, Sha256};

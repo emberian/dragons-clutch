@@ -7,13 +7,13 @@ use dclutch_direct_aot_contract::{
     DIRECT_PROGRAM_V2_IDENTITIES, DIRECT_PROGRAM_V2_SCALARS, RegisterInput as AotInput,
     RegisterOutput as AotOutput, execute_atomic as execute_aot,
 };
-use dclutch_direct_codec::{
+use dclutch_trading::{
     COMPACT_INTENT_BYTES, CONTROLLER_INSTRUCTION_BYTES, CompactIntentV1, ControllerInstructionV1,
     REGISTERED_CLAIM_TERMINAL_BYTES, REGISTERED_CREATE_INSTRUCTION_BYTES,
     REGISTERED_TERMINAL_INSTRUCTION_BYTES, RegisteredCreateInstructionV1, RegisteredTerminalAction,
     RegisteredTerminalInstructionV1, registered_claim_terminal_instruction,
 };
-use dclutch_transition_vm::{Registers, execute};
+use dclutch_vm::{Registers, execute};
 
 #[cfg(kani)]
 mod kani_proofs;

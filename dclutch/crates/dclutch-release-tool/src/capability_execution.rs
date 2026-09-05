@@ -9,19 +9,19 @@
 //! It performs no RPC, publication, signing, deployment, or runtime admission;
 //! Registry-owned records remain onchain authority.
 
-use dclutch_capability_program_contract::v4::{CAPABILITY_PROGRAM_V4_BYTES, CapabilityProgramV4};
+use dclutch_market::capability_program::v4::{CAPABILITY_PROGRAM_V4_BYTES, CapabilityProgramV4};
 use dclutch_core_contract::ContentId;
-use dclutch_execution_strategy_contract::v2::{
+use dclutch_market::execution_strategy::v2::{
     AuthenticatedInterpreterArtifactsV2, EXECUTION_STRATEGY_ADMISSION_BYTES_V2,
     EXECUTION_STRATEGY_CERTIFICATE_BYTES_V2, EXECUTION_STRATEGY_PROGRAM_BYTES_V2,
     EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyAdmissionV2,
     ExecutionStrategyCertificateV2, ExecutionStrategyProgramV2, StrategyDispositionV2,
     validate_admitted_aot_v4,
 };
-use dclutch_registry_contract::{
+use dclutch_registry::{
     ARTIFACT_RELEASE_BYTES_V1, ArtifactReleaseV1, ArtifactUpgradePolicyV1,
 };
-use dclutch_release_set_contract::ArtifactReleaseIdV1;
+use dclutch_registry::release_set::ArtifactReleaseIdV1;
 
 use crate::{CheckedReleaseV1, Error, Result, artifact_release_from_checked, encode_hex, sha256};
 
@@ -321,7 +321,7 @@ impl CheckedCapabilityExecutionV1 {
         // Decision 0012: the admissible shapes, not the irrevocable one. The
         // strictness this check used to carry now lives in `evidence_class`,
         // where a reader can act on it — see that method.
-        dclutch_registry_contract::require_slot_pinned_release_v1(self.artifact)
+        dclutch_registry::require_slot_pinned_release_v1(self.artifact)
             .map_err(|_| Error::CapabilityAcceleratorMustBeImmutable)?;
         let descriptor_strategy = self.descriptor.strategy();
         if descriptor_strategy.schema().to_bytes() != EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2
@@ -490,10 +490,10 @@ fn push_line(output: &mut String, key: &str, value: &str) {
 
 #[cfg(test)]
 mod tests {
-    use dclutch_capability_program_contract::v4::{
+    use dclutch_market::capability_program::v4::{
         ArtifactReferenceV4, CapabilityArtifactsV4, SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
     };
-    use dclutch_execution_strategy_contract::{
+    use dclutch_market::execution_strategy::{
         shadow_v3::{SHADOW_ACK_SCHEMA_ID_V3, SHADOW_REQUEST_SCHEMA_ID_V3},
         v2::{
             ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,

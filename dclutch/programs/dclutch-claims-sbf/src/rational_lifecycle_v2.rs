@@ -10,30 +10,30 @@ extern crate alloc;
 use alloc::{vec, vec::Vec};
 use core::convert::TryFrom;
 
-use dclutch_claims_svm::protocol_position_v2::{
+use dclutch_claims::protocol_position_v2::{
     PROTOCOL_POSITION_ADMISSION_BYTES_V2, PROTOCOL_POSITION_CLOSE_RECEIPT_BYTES_V2,
     PROTOCOL_POSITION_REQUEST_BYTES_V2, ProtocolPositionActionV2, ProtocolPositionAdmissionSeedsV2,
     ProtocolPositionAdmissionV2, ProtocolPositionClaimsCapabilitySeedsV2,
     ProtocolPositionCloseReceiptV2, ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2,
     ProtocolPositionRequestV2, ProtocolPositionSeedsV2,
 };
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2};
-use dclutch_rational_representation_v2_contract::{
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2};
+use dclutch_claims::rational::{
     RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2, RATIONAL_SHARD_MINT_SEED_V2,
     RATIONAL_STRUCTURED_CUSTODY_SEED_V2, RationalReceiptMintSeedsV2,
 };
-use dclutch_rational_representation_v2_kernel::{
+use dclutch_claims::rational_kernel::{
     DescriptorAdmissionV2, REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
     RepresentationDescriptorV2,
 };
-use dclutch_rational_representation_v2_lifecycle_contract::{
+use dclutch_claims::rational_lifecycle::{
     LIFECYCLE_COMMON_ACCOUNT_COUNT_V2, LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2,
     LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2, LifecycleActionV2, LifecycleCompletionEvidenceV2,
     LifecycleCoordinateV2, LifecycleRequestV2, finalize, prepare,
 };
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_rent_contract::lifecycle_v2::LifecycleRentCreditV2;
-use dclutch_token_svm::{
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
+use dclutch_custody::token_svm::{
     ACCOUNT_BYTES, AccountState, TOKEN_2022_CLOSEABLE_MINT_BYTES_V2, TOKEN_2022_PROGRAM_ID,
     Token2022CloseableMintProfileV2, TokenAccount,
 };
@@ -124,9 +124,9 @@ const VACANCY_ADMISSION: usize = 4;
 /// may carry.
 ///
 /// THE PARTITION IS NOT INVENTED HERE. `ClaimsFrameDataV1`
-/// (`crates/dclutch-claims-svm/src/frame_spec_v1.rs`) already draws it for
+/// (`crates/dclutch-claims/src/frame_spec_v1.rs`) already draws it for
 /// every data-defined Claims frame, and `claims_data_rule`
-/// (`crates/dclutch-general-adapter-contract/src/account_rules_v3.rs`) is
+/// (`crates/dclutch-trading/src/general/account_rules_v3.rs`) is
 /// where it becomes two different rules: `Exact(bytes)` -- "including
 /// canonical vacant accounts at zero" -- carries a width and a prestate, while
 /// `PositionOwnerIdentity` carries `opaque_rule(privileges)`, which is
@@ -1503,7 +1503,7 @@ mod tests {
         assert_eq!(RATIONAL_LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2, 34);
         assert_eq!(RATIONAL_LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2, 5);
         assert_eq!(
-            dclutch_rational_representation_v2_lifecycle_contract::LIFECYCLE_COORDINATE_BYTES_V2,
+            dclutch_claims::rational_lifecycle::LIFECYCLE_COORDINATE_BYTES_V2,
             272
         );
     }
@@ -1613,7 +1613,7 @@ mod tests {
     /// two orders ever diverge again, the projection reads the wrong account.
     #[test]
     fn the_vacancy_account_group_matches_the_coordinate_group() {
-        use dclutch_rational_representation_v2_lifecycle_contract::{
+        use dclutch_claims::rational_lifecycle::{
             compact_hot_v4::{
                 RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITIES_V4,
                 RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_ADMISSION_V4,

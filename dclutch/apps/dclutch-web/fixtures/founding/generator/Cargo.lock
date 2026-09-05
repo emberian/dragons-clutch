@@ -41,23 +41,24 @@ name = "dclutch-core-contract"
 version = "0.1.0"
 
 [[package]]
-name = "dclutch-market-core-codec"
+name = "dclutch-market"
 version = "0.1.0"
 dependencies = [
- "dclutch-release-set-contract",
+ "dclutch-core-contract",
+ "dclutch-registry",
+ "dclutch-sha256-adapter",
+ "dclutch-vm",
+]
+
+[[package]]
+name = "dclutch-product"
+version = "0.1.0"
+dependencies = [
  "dclutch-sha256-adapter",
 ]
 
 [[package]]
-name = "dclutch-product-contract"
-version = "0.1.0"
-
-[[package]]
-name = "dclutch-product-runtime-v2"
-version = "0.1.0"
-
-[[package]]
-name = "dclutch-release-set-contract"
+name = "dclutch-registry"
 version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
@@ -72,19 +73,26 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-source-contract"
+name = "dclutch-source"
 version = "0.1.0"
 dependencies = [
- "dclutch-product-contract",
- "dclutch-product-runtime-v2",
+ "dclutch-core-contract",
+ "dclutch-market",
+ "dclutch-product",
+ "dclutch-registry",
+ "dclutch-sha256-adapter",
 ]
+
+[[package]]
+name = "dclutch-vm"
+version = "0.1.0"
 
 [[package]]
 name = "dclutch-web-founding-vector-generator"
 version = "0.1.0"
 dependencies = [
- "dclutch-market-core-codec",
- "dclutch-source-contract",
+ "dclutch-market",
+ "dclutch-source",
 ]
 
 [[package]]

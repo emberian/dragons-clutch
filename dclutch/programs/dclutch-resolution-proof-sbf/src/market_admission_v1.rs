@@ -25,8 +25,8 @@
 // own enum, and a local alias -- which the rest of this program uses, as
 // `CorePhase`/`CoreReadiness` -- is unreadable to a scan that cannot resolve
 // types, so it reports the constant as unclassified rather than guessing.
-use dclutch_market_core_codec::{MarketAdmissionV1, Phase, Readiness};
-use dclutch_source_contract::{SourceAdmissionV1, SourceResolutionPhaseV1};
+use dclutch_market::{MarketAdmissionV1, Phase, Readiness};
+use dclutch_source::{SourceAdmissionV1, SourceResolutionPhaseV1};
 
 /// A Market that has opened and consumed its founding readiness.
 ///

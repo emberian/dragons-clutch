@@ -40,13 +40,13 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_execution_strategy_contract::shadow_v3::ShadowRequestV3;
-use dclutch_market_core_codec::CoreState;
-use dclutch_market_core_codec::{SeriesCoreRequestV1, SeriesPermitExpiryRequestV1};
+use dclutch_market::execution_strategy::shadow_v3::ShadowRequestV3;
+use dclutch_market::CoreState;
+use dclutch_market::{SeriesCoreRequestV1, SeriesPermitExpiryRequestV1};
 use dclutch_market_retirement_v1_operator::{
     MarketRetirementSnapshotV1, build_checkpoint_market_retirement_v1,
 };
@@ -67,7 +67,7 @@ use dclutch_operator::{
     },
 };
 use dclutch_operator::{Observation, series_hot_v3::SeriesSelectedHotReportV5};
-use dclutch_series_v3_kernel::{
+use dclutch_trading::series::{
     TemplateV3,
     replay::{SERIES_STATE_BYTES_V3, SeriesStateV3, TicketStateV3},
     request::{SeriesActionRequestV3, SeriesActionV3},
@@ -1094,7 +1094,7 @@ fn acquire_current_series_selected_v1(
     let lifecycle = inspect_series_lifecycle_v3(lifecycle_snapshot)
         .map_err(|error| refusal(format!("Series lifecycle planner: {error:?}")))?;
     if source.prepare_ticket_rent_lamports
-        != rent.minimum_balance(dclutch_series_v3_kernel::replay::SERIES_TICKET_STATE_BYTES_V3)
+        != rent.minimum_balance(dclutch_trading::series::replay::SERIES_TICKET_STATE_BYTES_V3)
     {
         return Err(refusal(
             "Series current-source Ticket rent differed from same-slot Rent",

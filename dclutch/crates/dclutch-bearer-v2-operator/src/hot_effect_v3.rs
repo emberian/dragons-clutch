@@ -1,6 +1,6 @@
 //! Generic Hot EffectProgram specialization for terminal Bearer redemption.
 
-use dclutch_effect_kernel::{
+use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{
         HEADER_BYTES as EFFECT_HEADER_BYTES, OPERATION_BYTES as EFFECT_OPERATION_BYTES,
@@ -14,7 +14,7 @@ use dclutch_effect_kernel::{
         BorrowedRangePolicyV4, HEADER_BYTES_V4 as EFFECT_V4_HEADER_BYTES, encode_program_v4_atomic,
     },
 };
-use dclutch_rational_representation_v2_contract::{
+use dclutch_claims::rational::{
     CallerRoleV2, PHYSICAL_ABI_VERSION_V3, RATIONAL_TERMINAL_HOT_ACTION_OFFSET_V3,
     RATIONAL_TERMINAL_HOT_ACTOR_OFFSET_V3,
     RATIONAL_TERMINAL_HOT_ASSET_ACTOR_SHARD_ACCOUNT_OFFSET_V3,
@@ -145,10 +145,10 @@ pub fn encode_rational_terminal_effect_v3() -> Result<[u8; RATIONAL_TERMINAL_EFF
         fixed_accounts: RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3,
         item_account_stride: 0,
         common_scalars: u16::try_from(RATIONAL_TERMINAL_HOT_COMMON_SCALARS_V3)
-            .map_err(|_| Error::EffectArtifact(dclutch_effect_kernel::v3::Error::InvalidLength))?,
+            .map_err(|_| Error::EffectArtifact(dclutch_vm::effect::v3::Error::InvalidLength))?,
         item_scalar_stride: 0,
         common_identities: u16::try_from(RATIONAL_TERMINAL_HOT_COMMON_IDENTITIES_V3)
-            .map_err(|_| Error::EffectArtifact(dclutch_effect_kernel::v3::Error::InvalidLength))?,
+            .map_err(|_| Error::EffectArtifact(dclutch_vm::effect::v3::Error::InvalidLength))?,
         item_identity_stride: 0,
     };
     let mut scratch = [0_u8; RATIONAL_TERMINAL_EFFECT_BASE_BYTES_V3];
@@ -333,22 +333,22 @@ fn write_u32(offset: usize, register: usize) -> Result<EffectInstructionV3> {
 
 fn narrow_u16(value: usize) -> Result<u16> {
     u16::try_from(value)
-        .map_err(|_| Error::EffectArtifact(dclutch_effect_kernel::v3::Error::InvalidLength))
+        .map_err(|_| Error::EffectArtifact(dclutch_vm::effect::v3::Error::InvalidLength))
 }
 
 fn narrow_u32(value: usize) -> Result<u32> {
     u32::try_from(value)
-        .map_err(|_| Error::EffectArtifact(dclutch_effect_kernel::v3::Error::InvalidLength))
+        .map_err(|_| Error::EffectArtifact(dclutch_vm::effect::v3::Error::InvalidLength))
 }
 
 fn put(output: &mut [u8], offset: usize, value: &[u8]) -> Result<()> {
     let end = offset
         .checked_add(value.len())
         .ok_or(Error::EffectArtifact(
-            dclutch_effect_kernel::v3::Error::InvalidLength,
+            dclutch_vm::effect::v3::Error::InvalidLength,
         ))?;
     let destination = output.get_mut(offset..end).ok_or(Error::EffectArtifact(
-        dclutch_effect_kernel::v3::Error::InvalidLength,
+        dclutch_vm::effect::v3::Error::InvalidLength,
     ))?;
     destination.copy_from_slice(value);
     Ok(())
@@ -357,15 +357,15 @@ fn put(output: &mut [u8], offset: usize, value: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_effect_kernel::{
+    use dclutch_vm::effect::{
         v2::{AccountInput, AccountPermission},
         v3::{ProjectionV3, project_atomic},
         v4::ProgramV4,
     };
-    use dclutch_rational_representation_v2_contract::{
+    use dclutch_claims::rational::{
         RATIONAL_TERMINAL_SCALAR_PRODUCT_OUTCOME_COUNT_V3, RepresentationRequestV2,
     };
-    use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
+    use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
 
     fn id(value: u8) -> [u8; 32] {
         [value; 32]

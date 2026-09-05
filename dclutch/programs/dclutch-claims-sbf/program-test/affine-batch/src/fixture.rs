@@ -10,25 +10,25 @@
 //! Core-owned `LinkedBasisRecordV2` fixture; that expectation was deleted
 //! when Claims converged onto `authenticate_product_basis_v3`.
 
-use dclutch_claims_svm::protocol_position_v2::ProtocolPositionSeedsV2;
-use dclutch_market_core_codec::{
+use dclutch_claims::protocol_position_v2::ProtocolPositionSeedsV2;
+use dclutch_market::{
     CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness, STATE_BYTES,
     StateBumpsV1,
 };
-use dclutch_product_payoff_v2_codec::{
+use dclutch_product::payoff::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
     runtime_v3::{
         BasisInputV3, BasisKindV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, basis_record_bytes_v3,
         compile_basis_v3, semantic_basis_preimage_v3,
     },
 };
-use dclutch_product_runtime_v2::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
-use dclutch_product_runtime_v2_admission::{
+use dclutch_product::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
+use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2,
     RESULT_DOMAIN_SCHEMA_ID_V2,
 };
 use dclutch_product_runtime_v2_operator::{ProductCompilationInputV2, compile_product_records_v2};
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use solana_program::{
     hash::{hash, hashv},
     pubkey::Pubkey,
@@ -43,7 +43,7 @@ const CLAIMS_POSITION_HEADER_BYTES_V2: usize = 128;
 // are one address's identity and a second declaration of them is a second
 // author: `dclutch:lbv2:market` stood under two names -- this one and the
 // owner's -- until the seam register's DOMAIN_BYTES_COLLIDE said so.
-use dclutch_claims_svm::liability_basis_state_v2::LIABILITY_BASIS_MARKET_SEED_V2;
+use dclutch_claims::liability_basis_state_v2::LIABILITY_BASIS_MARKET_SEED_V2;
 const OUTCOME_COUNT_V2: usize = 258;
 const COORDINATE_DOMAIN_ID: [u8; 32] = [0x43; 32];
 const RESULT_UNIT_ID: [u8; 32] = [0x44; 32];

@@ -41,7 +41,7 @@
 
 use std::{env, fs, path::PathBuf};
 
-use dclutch_token_svm::{ACCOUNT_BYTES, MINT_BYTES, Mint, TokenAccount};
+use dclutch_custody::token_svm::{ACCOUNT_BYTES, MINT_BYTES, Mint, TokenAccount};
 use solana_program::{hash::hash, instruction::Instruction, pubkey::Pubkey, rent::Rent};
 use solana_program_test::{ProgramTest, ProgramTestContext};
 use solana_sdk::{
@@ -59,7 +59,7 @@ use spl_token_2022_interface::{
 
 /// Token-2022, at the address the whole tree pins it to.
 fn token_program_id() -> Pubkey {
-    Pubkey::new_from_array(dclutch_token_svm::TOKEN_2022_PROGRAM_ID)
+    Pubkey::new_from_array(dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID)
 }
 
 const DECIMALS: u8 = 0;

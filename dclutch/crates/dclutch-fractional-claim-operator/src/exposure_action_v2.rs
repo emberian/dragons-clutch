@@ -5,7 +5,7 @@
 //! terminal request/receipt; it does not introduce a Fractional payout input or
 //! a second Claims/Custody wire authority.
 
-use dclutch_claims_svm::{
+use dclutch_claims::{
     CallerRole,
     product_basis_terminal_v3::{
         ProductBasisTerminalInputV3, encode_product_basis_terminal_signed_delta_v3,
@@ -19,20 +19,20 @@ use dclutch_claims_svm::{
         TerminalSettlementRequestInputV3, TerminalSettlementRequestV3,
     },
 };
-use dclutch_fractional_claim_contract::{FractionalExposureActionV2, FractionalExposureRequestV2};
-use dclutch_fractional_claim_kernel::{
+use dclutch_claims::fractional::{FractionalExposureActionV2, FractionalExposureRequestV2};
+use dclutch_claims::fractional_kernel::{
     ExposureShardDivisionV2, FractionalExposureTermsV2, check_fractional_exposure_bundle_v2,
     divide_exposure_shards_v2,
 };
-use dclutch_market_core_codec::RetirementReceiptV1;
-use dclutch_rent_contract::lifecycle_v2::{
+use dclutch_market::RetirementReceiptV1;
+use dclutch_market::rent::lifecycle_v2::{
     CloseLifecycleRentCreditV2, LifecycleAccountIdV2, LifecycleClosePlanV2,
     LifecycleRentCloseReceiptV2, LifecycleRentCreditV2,
 };
-use dclutch_representation_composition_v3_kernel::{
+use dclutch_claims::composition::{
     CompositionExposureBundleV3, RecordAdmissionV3,
 };
-use dclutch_token_svm::{
+use dclutch_custody::token_svm::{
     TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, Token2022BehaviorProfileV2, TokenAccount,
     TokenBehaviorSelectionV2,
 };
@@ -841,7 +841,7 @@ pub fn plan_fractional_exposure_terminal_candidate_v2(
     let claims_width = usize::try_from(terms.representation_width()).map_err(|_| Error::Claims)?;
     let product_width = usize::try_from(terms.product_width()).map_err(|_| Error::Claims)?;
     let neutral = SignedDeltaV3::new(
-        dclutch_claims_svm::signed_delta_v3::DeltaDirectionV3::Neutral,
+        dclutch_claims::signed_delta_v3::DeltaDirectionV3::Neutral,
         0,
     )
     .map_err(|_| Error::Claims)?;
@@ -960,7 +960,7 @@ fn digestv(parts: &[&[u8]]) -> [u8; 32] {
 #[allow(clippy::items_after_test_module)]
 mod terminal_postcondition_tests {
     use super::*;
-    use dclutch_fractional_claim_kernel::ExposureShardInstrumentV2;
+    use dclutch_claims::fractional_kernel::ExposureShardInstrumentV2;
     use solana_program::instruction::Instruction;
 
     fn id(value: u8) -> [u8; 32] {
@@ -1066,7 +1066,7 @@ mod terminal_postcondition_tests {
     fn receipt(
         candidate: &FractionalExposureTerminalCandidateV2,
         observed: FractionalExposureTerminalPostObservationV2,
-    ) -> [u8; dclutch_claims_svm::terminal_settlement_v3::TERMINAL_SETTLEMENT_RECEIPT_BYTES_V3]
+    ) -> [u8; dclutch_claims::terminal_settlement_v3::TERMINAL_SETTLEMENT_RECEIPT_BYTES_V3]
     {
         TerminalSettlementReceiptV3::new(
             candidate.settlement_request,

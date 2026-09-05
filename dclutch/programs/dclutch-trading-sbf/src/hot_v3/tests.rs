@@ -1,14 +1,14 @@
 use alloc::boxed::Box;
 
-use dclutch_execution_strategy_contract::v2::AcceleratorRequestV2;
+use dclutch_market::execution_strategy::v2::AcceleratorRequestV2;
 
 use super::*;
-use dclutch_capability_program_contract::hot_v3::SEALED_EXECUTION_FIXED_ALIASES_V3;
+use dclutch_market::capability_program::hot_v3::SEALED_EXECUTION_FIXED_ALIASES_V3;
 
-use dclutch_account_profile_contract::lifecycle_v3::{
+use dclutch_vm::account_profile::lifecycle_v3::{
     AuthenticateStatePlanV3, CloseStatePlanV3, CreateStatePlanV3,
 };
-use dclutch_account_profile_contract::v2::{
+use dclutch_vm::account_profile::v2::{
     AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES, AccountPrestateV2, DYNAMIC_FIXED_SPAN_HEADER_BYTES,
     HEADER_BYTES as ACCOUNT_PROFILE_HEADER_BYTES,
     OPERATION_BYTES as ACCOUNT_PROFILE_OPERATION_BYTES,
@@ -23,13 +23,13 @@ use dclutch_account_profile_contract::v2::{
         encode_account_profile_with_dynamic_fixed_span_v2_atomic,
     },
 };
-use dclutch_transition_vm::v3::{
+use dclutch_vm::v3::{
     HEADER_BYTES as TRANSITION_HEADER_BYTES_V3,
     INSTRUCTION_BYTES as TRANSITION_INSTRUCTION_BYTES_V3, InstructionV3, ProgramGeometryV3,
     ScalarRegisterV3, encode_program_atomic,
 };
 
-use dclutch_market_core_codec::{
+use dclutch_market::{
     Identity, MarketIdentity, Phase as CorePhase, Readiness as CoreReadiness, StateBumpsV1,
 };
 
@@ -190,9 +190,9 @@ fn accelerator_caller_token_binds_request_context_and_immutable_deployment() {
         .copy_from_slice(&deployment_slot.to_le_bytes());
     let metadata = ProgramDataMetadataV3View::parse(&metadata_bytes).expect("metadata");
     let release = ArtifactReleaseV1::new(
-        dclutch_release_set_contract::ProgramIdentityV1::new(accelerator_program.to_bytes())
+        dclutch_registry::release_set::ProgramIdentityV1::new(accelerator_program.to_bytes())
             .expect("program"),
-        dclutch_release_set_contract::ProgramIdentityV1::new(loader_program.to_bytes())
+        dclutch_registry::release_set::ProgramIdentityV1::new(loader_program.to_bytes())
             .expect("loader"),
         accelerator_programdata.to_bytes(),
         ContentId::new([0x33; 32]).expect("semantic release"),
@@ -204,7 +204,7 @@ fn accelerator_caller_token_binds_request_context_and_immutable_deployment() {
     .expect("artifact release");
     let artifact_release_digest = hash(&release.to_bytes()).to_bytes();
     let artifact_release =
-        dclutch_release_set_contract::ArtifactReleaseIdV1::decode(&artifact_release_digest)
+        dclutch_registry::release_set::ArtifactReleaseIdV1::decode(&artifact_release_digest)
             .expect("artifact release identity");
     let token = authenticate_accelerator_caller_authority_v4(
         &trading_program,
@@ -423,7 +423,7 @@ fn alias_fixed_slot(accounts: &mut [AccountInfo<'static>], raw: usize, staging: 
 }
 
 fn fractional_wrap_request() -> Vec<u8> {
-    use dclutch_fractional_claim_contract::{
+    use dclutch_claims::fractional::{
         FractionalExposureActionV2, FractionalExposureRequestInputV2,
         FractionalExposureRequestV2,
     };
@@ -455,14 +455,14 @@ fn fractional_wrap_request() -> Vec<u8> {
 
 fn fractional_wrap_invocation(
     request_len: usize,
-) -> dclutch_effect_kernel::v3::ResolvedInvocationV3 {
-    dclutch_effect_kernel::v3::ResolvedInvocationV3 {
+) -> dclutch_vm::effect::v3::ResolvedInvocationV3 {
+    dclutch_vm::effect::v3::ResolvedInvocationV3 {
         role: FixedRole::Claims,
-        kind: dclutch_effect_kernel::v3::RouteKindV3::Once,
+        kind: dclutch_vm::effect::v3::RouteKindV3::Once,
         item: None,
         fixed_account_start: 5,
         fixed_account_count: u16::try_from(
-            dclutch_fractional_claim_contract::FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3,
+            dclutch_claims::fractional::FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3,
         )
         .expect("Fractional account count"),
         item_account_start: 0,
@@ -472,7 +472,7 @@ fn fractional_wrap_invocation(
         request_offset: 0,
         request_len,
         borrowed_witness: None,
-        receipt_dependencies: dclutch_effect_kernel::v3::ResolvedReceiptDependenciesV3::empty(),
+        receipt_dependencies: dclutch_vm::effect::v3::ResolvedReceiptDependenciesV3::empty(),
         receipt_dependency: None,
     }
 }
@@ -485,7 +485,7 @@ fn only_exact_fractional_root_alias_may_cross_local_child_boundary() {
         + usize::from(invocation.fixed_account_count);
     let mut aliases = (0..logical_count).collect::<Vec<_>>();
     let root = usize::from(invocation.fixed_account_start)
-        + dclutch_fractional_claim_contract::FRACTIONAL_ATOMIC_ROOT_V3;
+        + dclutch_claims::fractional::FRACTIONAL_ATOMIC_ROOT_V3;
     aliases[root] = 0;
     let mut participation = vec![CoordinateParticipationV3::default(); logical_count];
     participation[0].mark_local_mutation();
@@ -550,9 +550,9 @@ fn fractional_child_must_leave_sole_root_prestate_unchanged() {
 
 #[test]
 fn series_expiry_overlap_is_exactly_root_and_ticket_never_a_subset_or_superset() {
-    let invocation = dclutch_effect_kernel::v3::ResolvedInvocationV3 {
+    let invocation = dclutch_vm::effect::v3::ResolvedInvocationV3 {
         role: FixedRole::Core,
-        kind: dclutch_effect_kernel::v3::RouteKindV3::Once,
+        kind: dclutch_vm::effect::v3::RouteKindV3::Once,
         item: None,
         fixed_account_start: u16::try_from(series_expiry::SERIES_EXPIRE_CORE_ROUTE_START_V1)
             .expect("route start"),
@@ -565,7 +565,7 @@ fn series_expiry_overlap_is_exactly_root_and_ticket_never_a_subset_or_superset()
         request_offset: 0,
         request_len: 976,
         borrowed_witness: None,
-        receipt_dependencies: dclutch_effect_kernel::v3::ResolvedReceiptDependenciesV3::empty(),
+        receipt_dependencies: dclutch_vm::effect::v3::ResolvedReceiptDependenciesV3::empty(),
         receipt_dependency: None,
     };
     let mut aliases =
@@ -767,7 +767,7 @@ fn series_expiry_future_market_is_route_local_distinct_and_system_vacant() {
 
 #[test]
 fn series_expiry_permit_requires_exact_prefunded_writable_system_vacancy() {
-    use dclutch_market_core_codec::SERIES_FOUNDING_PERMIT_BYTES_V1;
+    use dclutch_market::SERIES_FOUNDING_PERMIT_BYTES_V1;
 
     let rent = Rent::default();
     let key = Pubkey::new_unique();
@@ -907,7 +907,7 @@ fn sealed_execution_fixed_alias_set_is_all_or_nothing_and_exact() {
 
 #[test]
 fn lifecycle_rent_credit_v2_binds_expected_key_market_release_and_generation() {
-    use dclutch_rent_contract::{
+    use dclutch_market::rent::{
         RefundAuthority,
         lifecycle_v2::{
             LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
@@ -1165,7 +1165,7 @@ fn lifecycle_rent_credit_v2_binds_expected_key_market_release_and_generation() {
 
 #[test]
 fn effect_v4_schema_and_zero_extension_envelope_are_exact() {
-    use dclutch_effect_kernel::{
+    use dclutch_vm::effect::{
         v3::{
             HEADER_BYTES,
             encode::{EffectGeometryV3, encode_effect_program_v3_atomic},
@@ -1214,10 +1214,10 @@ fn effect_v4_schema_and_zero_extension_envelope_are_exact() {
 }
 
 fn borrowed_range_effect_v4(
-    policy: dclutch_effect_kernel::v4::BorrowedRangePolicyV4,
-    ranges: &[dclutch_effect_kernel::v4::BorrowedRangeV4],
+    policy: dclutch_vm::effect::v4::BorrowedRangePolicyV4,
+    ranges: &[dclutch_vm::effect::v4::BorrowedRangeV4],
 ) -> Vec<u8> {
-    use dclutch_effect_kernel::{
+    use dclutch_vm::effect::{
         v2::FixedRole,
         v3::{
             HEADER_BYTES, ROUTE_BYTES, RouteKindV3,
@@ -1330,7 +1330,7 @@ fn child_request_digest_helpers_pin_zero_range_and_range_topology() {
 
 #[test]
 fn borrowed_ranges_append_exactly_and_refuse_overlap_oob_without_mutation() {
-    use dclutch_effect_kernel::v4::{
+    use dclutch_vm::effect::v4::{
         BorrowedRangePolicyV4, BorrowedRangeV4, ProgramV4, RequestCoordinateV4,
     };
 
@@ -1369,7 +1369,7 @@ fn borrowed_ranges_append_exactly_and_refuse_overlap_oob_without_mutation() {
     let overlap_program = ProgramV4::decode(&overlap_bytes).expect("shape-decodable overlap");
     assert_eq!(
         overlap_program.validate_request_coverage(family_request.len(), 0, &[0], &[]),
-        Err(dclutch_effect_kernel::v4::ErrorV4::RequestCoverage)
+        Err(dclutch_vm::effect::v4::ErrorV4::RequestCoverage)
     );
 
     let oob = [BorrowedRangeV4::new(
@@ -1382,7 +1382,7 @@ fn borrowed_ranges_append_exactly_and_refuse_overlap_oob_without_mutation() {
     let oob_program = ProgramV4::decode(&oob_bytes).expect("shape-decodable oob");
     assert_eq!(
         oob_program.validate_request_coverage(family_request.len(), 0, &[0], &[]),
-        Err(dclutch_effect_kernel::v4::ErrorV4::RequestCoverage)
+        Err(dclutch_vm::effect::v4::ErrorV4::RequestCoverage)
     );
     let hostile = BorrowedRouteRangesV4::new(oob_program, 0, 0, &[0], family_request);
     let mut unchanged = b"sentinel".to_vec();
@@ -1690,7 +1690,7 @@ fn selector_is_exact_and_does_not_shadow_activation() {
 
 #[test]
 fn registry_continuation_authenticates_admission_and_market_union() {
-    use dclutch_registry_svm::continuation_v1::RegistryContinuationAdmissionSeedsV1;
+    use dclutch_registry::svm::continuation_v1::RegistryContinuationAdmissionSeedsV1;
     use solana_instructions_sysvar::construct_instructions_data;
     use solana_program::sysvar::instructions::{BorrowedAccountMeta, BorrowedInstruction};
 
@@ -1912,7 +1912,7 @@ fn registry_continuation_authenticates_admission_and_market_union() {
 
 #[test]
 fn lifecycle_v5_quotes_are_derived_only_from_current_rent() {
-    use dclutch_account_profile_contract::lifecycle_v3::{
+    use dclutch_vm::account_profile::lifecycle_v3::{
         ACTION_PLAN_BYTES, CURRENT_RENT_QUOTE_BYTES_V5, HEADER_BYTES, PROTECTED_OUTPUT_BYTES,
         RECIPE_BYTES, SEED_BYTES,
         encode::{
@@ -2048,7 +2048,7 @@ fn profile13_zero_spans_expand_aliases_and_downgrade_child_privileges() {
     let profile = AccountProfileV2::decode(&bytes).expect("decode profile13");
     assert_eq!(
         profile.artifact_profile(),
-        dclutch_account_profile_contract::v2::DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+        dclutch_vm::account_profile::v2::DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
     );
     assert_eq!(profile.dynamic_fixed_span_count(), 0);
 
@@ -2362,7 +2362,7 @@ fn profile13_trailing_transport_span_selects_exact_scratch_pages() {
     }];
     let width = DYNAMIC_FIXED_SPAN_HEADER_BYTES
         + ACCOUNT_PROFILE_RULE_BYTES * (fixed_rules.len() + 1)
-        + dclutch_account_profile_contract::v2::DYNAMIC_FIXED_SPAN_ENTRY_BYTES;
+        + dclutch_vm::account_profile::v2::DYNAMIC_FIXED_SPAN_ENTRY_BYTES;
     let mut scratch = vec![0_u8; width];
     let mut bytes = vec![0_u8; width];
     encode_account_profile_with_dynamic_fixed_span_v2_atomic(
@@ -2676,7 +2676,7 @@ struct CommitLastFixtureV1 {
 }
 
 fn commit_last_fixture_v1() -> CommitLastFixtureV1 {
-    use dclutch_effect_kernel::{
+    use dclutch_vm::effect::{
         v3::{
             HEADER_BYTES, OPERATION_BYTES,
             encode::{
@@ -2810,7 +2810,7 @@ fn an_admitted_bank_must_be_the_width_its_account_frame_was_carved_for() {
 /// submitted. This names all thirteen.
 #[test]
 fn wall_a_still_stands_for_every_registered_action_without_a_planner() {
-    use dclutch_direct_codec::execution_v3::DirectExecutionActionV3 as Action;
+    use dclutch_trading::execution_v3::DirectExecutionActionV3 as Action;
 
     for action in [
         Action::InlineOrdinary,
@@ -3884,9 +3884,9 @@ fn common_projection_bindings_and_child_reservations_are_exact() {
         );
     }
 
-    let invocation = dclutch_effect_kernel::v3::ResolvedInvocationV3 {
+    let invocation = dclutch_vm::effect::v3::ResolvedInvocationV3 {
         role: FixedRole::Custody,
-        kind: dclutch_effect_kernel::v3::RouteKindV3::Once,
+        kind: dclutch_vm::effect::v3::RouteKindV3::Once,
         item: None,
         fixed_account_start: 1,
         fixed_account_count: 1,
@@ -3897,7 +3897,7 @@ fn common_projection_bindings_and_child_reservations_are_exact() {
         request_offset: 0,
         request_len: 1,
         borrowed_witness: None,
-        receipt_dependencies: dclutch_effect_kernel::v3::ResolvedReceiptDependenciesV3::empty(),
+        receipt_dependencies: dclutch_vm::effect::v3::ResolvedReceiptDependenciesV3::empty(),
         receipt_dependency: None,
     };
     assert_eq!(
@@ -3906,7 +3906,7 @@ fn common_projection_bindings_and_child_reservations_are_exact() {
     );
     assert_eq!(
         require_no_common_projection_child_accounts_v3(
-            dclutch_effect_kernel::v3::ResolvedInvocationV3 {
+            dclutch_vm::effect::v3::ResolvedInvocationV3 {
                 fixed_account_start: 5,
                 ..invocation
             }
@@ -4342,12 +4342,12 @@ fn both_admitted_observation_walks_key_an_alias_by_its_representative() {
     feature = "dealer-family"
 ))]
 fn witness_coverage_effect_v4(
-    role: dclutch_effect_kernel::v2::FixedRole,
+    role: dclutch_vm::effect::v2::FixedRole,
     legacy_bit: bool,
     semantic_prefix_bytes: u32,
-    ranges: &[dclutch_effect_kernel::v4::BorrowedRangeV4],
+    ranges: &[dclutch_vm::effect::v4::BorrowedRangeV4],
 ) -> Vec<u8> {
-    use dclutch_effect_kernel::{
+    use dclutch_vm::effect::{
         v3::{
             HEADER_BYTES, ROUTE_BYTES,
             encode::{EffectGeometryV3, RouteInputV3, encode_effect_program_v3_atomic},
@@ -4360,7 +4360,7 @@ fn witness_coverage_effect_v4(
 
     let route = RouteInputV3 {
         role,
-        kind: dclutch_effect_kernel::v3::RouteKindV3::Once,
+        kind: dclutch_vm::effect::v3::RouteKindV3::Once,
         enable_common_scalar: None,
         witness_range_common_scalar: legacy_bit.then_some(0),
         receipt_dependency: None,
@@ -4412,7 +4412,7 @@ fn witness_coverage_effect_v4(
     feature = "dealer-family"
 ))]
 fn borrowed_witness_profile_bytes(minimum: u32, maximum: u32) -> Vec<u8> {
-    use dclutch_request_profile_contract::{
+    use dclutch_vm::request_profile::{
         encode::{
             RequestCoordinateV1, RequestGeometryV1, RequestInstructionV1, ScalarRegisterV1,
             encode_request_profile_v1_atomic,
@@ -4430,8 +4430,8 @@ fn borrowed_witness_profile_bytes(minimum: u32, maximum: u32) -> Vec<u8> {
             ScalarRegisterV1::common(0),
         ),
     ];
-    let embedded_bytes = dclutch_request_profile_contract::HEADER_BYTES
-        + 2 * dclutch_request_profile_contract::OPERATION_BYTES;
+    let embedded_bytes = dclutch_vm::request_profile::HEADER_BYTES
+        + 2 * dclutch_vm::request_profile::OPERATION_BYTES;
     let mut embedded_scratch = vec![0_u8; embedded_bytes];
     let mut embedded = vec![0_u8; embedded_bytes];
     encode_request_profile_v1_atomic(
@@ -4484,11 +4484,11 @@ fn borrowed_witness_profile_bytes(minimum: u32, maximum: u32) -> Vec<u8> {
     feature = "dealer-family"
 ))]
 fn a_borrowed_witness_has_one_spelling_and_every_other_shape_refuses_by_name() {
-    use dclutch_effect_kernel::{
+    use dclutch_vm::effect::{
         v2::FixedRole,
         v4::{BorrowedRangeV4, RequestCoordinateV4},
     };
-    use dclutch_request_profile_contract::v3::RequestProfileV3;
+    use dclutch_vm::request_profile::v3::RequestProfileV3;
 
     const FAMILY: &[u8] = b"PREFIX03\x00\x00\x00\x00\x00\x00\x00\x00CHILD003";
     let scalars = [16_u64, 8];
@@ -4556,14 +4556,14 @@ fn a_borrowed_witness_has_one_spelling_and_every_other_shape_refuses_by_name() {
     let mut legacy_bit = witness_coverage_effect_v4(FixedRole::Claims, false, 16, &suffix);
     let honest = legacy_bit.clone();
     let base_offset = legacy_bit.len() - honest_base_len(&honest);
-    let route_offset = base_offset + dclutch_effect_kernel::v3::HEADER_BYTES;
+    let route_offset = base_offset + dclutch_vm::effect::v3::HEADER_BYTES;
     // `RouteInputV3`'s witness flag is byte 3 of the route record, the same
     // coordinate `borrowed_witness_is_an_exact_authenticated_suffix` sets.
     legacy_bit[route_offset + 3] = 1;
     assert_ne!(legacy_bit, honest, "the hostile flipped exactly one bit");
     assert_eq!(
         EffectProgramV4::decode(&legacy_bit).err(),
-        Some(dclutch_effect_kernel::v4::ErrorV4::RangeTable),
+        Some(dclutch_vm::effect::v4::ErrorV4::RangeTable),
         "no Effect V4 may carry the retired V3 route bit"
     );
 }

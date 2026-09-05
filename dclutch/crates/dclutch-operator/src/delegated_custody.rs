@@ -1,10 +1,10 @@
 //! Chain-derived CPI construction for the delegated-allowance Custody successor.
 
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CustodyReplaySeedsV1, DelegatedCustodyRequestV2,
 };
-use dclutch_registry_contract::ACTIVATION_PDA_DOMAIN_V1;
-use dclutch_release_set_contract::CallerAuthoritySeedsV1;
+use dclutch_registry::ACTIVATION_PDA_DOMAIN_V1;
+use dclutch_registry::release_set::CallerAuthoritySeedsV1;
 use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},
@@ -141,10 +141,10 @@ pub fn delegated_custody_transfer_cpi_v2(
 
 #[cfg(test)]
 mod tests {
-    use dclutch_custody_contract::{
+    use dclutch_custody::{
         CompartmentV1, ContextV1, CustodyRequestV1, DELEGATED_CUSTODY_REQUEST_BYTES_V2, OperationV1,
     };
-    use dclutch_release_set_contract::ExecutionRoleV1;
+    use dclutch_registry::release_set::ExecutionRoleV1;
 
     use super::*;
 

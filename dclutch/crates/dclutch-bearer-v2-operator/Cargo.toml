@@ -7,32 +7,24 @@ rust-version = "1.89"
 description = "Chain-derived Rational Representation V2 specialization gate for Bearer claims"
 
 [dependencies]
-dclutch-account-profile-contract = { path = "../dclutch-account-profile-contract" }
-dclutch-bearer-v2-contract = { path = "../dclutch-bearer-v2-contract" }
-dclutch-capability-program-contract = { path = "../dclutch-capability-program-contract" }
+dclutch-vm = { path = "../dclutch-vm" }
+dclutch-claims = { path = "../dclutch-claims" }
+dclutch-market = { path = "../dclutch-market" }
 dclutch-core-contract = { path = "../dclutch-core-contract" }
-dclutch-effect-kernel = { path = "../dclutch-effect-kernel" }
-dclutch-execution-strategy-contract = { path = "../dclutch-execution-strategy-contract" }
 dclutch-hot-bump-miner-v1 = { path = "../dclutch-hot-bump-miner-v1" }
-dclutch-product-payoff-v2-codec = { path = "../dclutch-product-payoff-v2-codec" }
-dclutch-rational-representation-v2-contract = { path = "../dclutch-rational-representation-v2-contract" }
-dclutch-rational-representation-v2-kernel = { path = "../dclutch-rational-representation-v2-kernel" }
+dclutch-product = { path = "../dclutch-product" }
 dclutch-rational-representation-v2-operator = { path = "../dclutch-rational-representation-v2-operator" }
-dclutch-rational-representation-v2-request-contract = { path = "../dclutch-rational-representation-v2-request-contract" }
-dclutch-representation-composition-v3-kernel = { path = "../dclutch-representation-composition-v3-kernel" }
-dclutch-request-profile-contract = { path = "../dclutch-request-profile-contract" }
-dclutch-transition-vm = { path = "../dclutch-transition-vm" }
-dclutch-token-svm = { path = "../dclutch-token-svm" }
+dclutch-custody = { path = "../dclutch-custody" }
 solana-program = { version = "=3.0.0", default-features = false }
 solana-sdk-ids = "=3.1.0"
 
 # Test-only, and the reason is the defect this edge exists to catch. The
 # Structured route's account geometry has two authors -- this operator declares
-# it and `dclutch-claims-svm`'s composition admits it -- and every check
+# it and `dclutch-claims`'s composition admits it -- and every check
 # confined to one side passed while the two disagreed. A dependency that
 # crosses the boundary is the only instrument that can compare them.
 [dev-dependencies]
-dclutch-claims-svm = { path = "../dclutch-claims-svm" }
+dclutch-claims = { path = "../dclutch-claims" }
 
 [lints]
 workspace = true

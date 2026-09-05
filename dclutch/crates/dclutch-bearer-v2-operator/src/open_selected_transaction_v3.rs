@@ -1,6 +1,6 @@
 //! Chain-derived Hot family and unsigned transaction construction for selected opens.
 
-use dclutch_rational_representation_v2_contract::{
+use dclutch_claims::rational::{
     AuthenticatedTokenBehaviorV2, OpenRepresentationHotRequestV3, REPRESENTATION_FRAME_SPEC_V2,
     RepresentationActionV2, RepresentationRequestV2,
 };
@@ -206,17 +206,17 @@ fn validate_selected_child(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_capability_program_contract::hot_v3::{
+    use dclutch_market::capability_program::hot_v3::{
         HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
         HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3, HOT_PORTFOLIO_RAW_ACCOUNT_V3,
         HOT_PRODUCT_RAW_ACCOUNT_V3, HOT_RENT_SYSVAR_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3,
         HOT_TRADING_PROGRAM_ACCOUNT_V3, HotExecutionEnvelopeV3,
     };
-    use dclutch_rational_representation_v2_contract::{
+    use dclutch_claims::rational::{
         ABSENT_REVISION, ASSET_BYTES_V3, AssetV2, CallerRoleV2, REQUEST_SELECTED_HEADER_BYTES_V3,
         RepresentationRequestHeaderV2,
     };
-    use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
+    use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
     use solana_program::instruction::AccountMeta;
     use solana_sdk_ids::sysvar;
 

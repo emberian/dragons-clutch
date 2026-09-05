@@ -22,18 +22,18 @@
 
 use core::fmt;
 
-use dclutch_product_contract::capacity::{CapacityProfileId, CapacityProfileV1};
-use dclutch_product_contract::claim::{CategoricalUnitV1, CategoricalUnitV1Input};
-use dclutch_product_contract::portfolio::{
+use dclutch_product::contract::capacity::{CapacityProfileId, CapacityProfileV1};
+use dclutch_product::contract::claim::{CategoricalUnitV1, CategoricalUnitV1Input};
+use dclutch_product::contract::portfolio::{
     PORTFOLIO_TEMPLATE_CONTENT_DOMAIN_V1, PortfolioTemplateV1,
 };
-use dclutch_product_contract::product::{
+use dclutch_product::contract::product::{
     InstanceV1, InstanceV1Input, OccurrenceV1, OccurrenceV1Input, TermsV1, TermsV1Input,
 };
-use dclutch_product_contract::result_domain::{
+use dclutch_product::contract::result_domain::{
     FINITE_RESULT_DOMAIN_BYTES, FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1, FiniteResultDomainV1,
 };
-use dclutch_product_contract::{ContentId, Error as ContractError};
+use dclutch_product::contract::{ContentId, Error as ContractError};
 use sha2::{Digest, Sha256};
 
 /// Explicit categorical projection of graded user payoffs.
@@ -857,7 +857,7 @@ fn portfolio_decode_error(error: ContractError) -> CompileError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_product_contract::capacity::{CapacityEnvelope, CapacityProfileV1Input};
+    use dclutch_product::contract::capacity::{CapacityEnvelope, CapacityProfileV1Input};
 
     fn id(fill: u8) -> ContentId {
         ContentId::new([fill; 32]).expect("nonzero fixture")

@@ -1,17 +1,17 @@
 //! Runtime-width Core Found construction and hostile substitution tests.
 
-use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, EMPTY_MANIFEST_BYTES};
+use dclutch_market::capability_manifest::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, EMPTY_MANIFEST_BYTES};
 use dclutch_core_contract::ContentId as CoreContentId;
-use dclutch_market_core_codec::{Identity, MarketCoreStateSeedsV2, MarketIdentity};
-use dclutch_product_payoff_v2_codec::{
+use dclutch_market::{Identity, MarketCoreStateSeedsV2, MarketIdentity};
+use dclutch_product::payoff::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
     runtime_v3::{
         BasisInputV3, BasisKindV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, basis_record_bytes_v3,
         compile_basis_v3, semantic_basis_preimage_v3,
     },
 };
-use dclutch_product_runtime_v2::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
-use dclutch_product_runtime_v2_admission::{FinalizedRecordCoordinateV2, PRODUCT_RECORD_BYTES_V2};
+use dclutch_product::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
+use dclutch_product::admission::{FinalizedRecordCoordinateV2, PRODUCT_RECORD_BYTES_V2};
 use dclutch_product_runtime_v2_operator::{
     AccountObservationV2, CompiledProductRecordsV2, Error, FinalizedRecordObservationV2,
     ProductCompilationInputV2, compile_product_records_v2,
@@ -23,28 +23,28 @@ use dclutch_product_runtime_v2_operator::{
         LifecycleRentCreateStateV2, LifecycleRentOperatorErrorV2, build_lifecycle_rent_create_v2,
     },
 };
-use dclutch_realm_contract::{
+use dclutch_market::realm::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactActivationInputV1, ArtifactReleaseV1,
     ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
     initialize_activation_cache_v1,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1, ExecutionReleaseSetV1,
     ExecutionRoleBindingV1, ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2,
     ProgramIdentityV1, ProtocolInfrastructureProfileV2,
 };
-use dclutch_rent_contract::{
+use dclutch_market::rent::{
     RefundAuthority,
     lifecycle_v2::{
         LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
     },
 };
-use dclutch_source_contract::{
+use dclutch_source::{
     CapacityEnvelope, ContentId as SourceContentId, MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
     SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
     SOURCE_SPEC_SCHEMA_ID_V1, SourceAccessProfile, SourceCapacityProfileV1, SourceMaterialV3,
@@ -741,7 +741,7 @@ fn valid_found37_exports_runtime_width_instruction() {
     assert_eq!(
         plan.instruction
             .accounts
-            .get(dclutch_market_core_codec::FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3)
+            .get(dclutch_market::FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3)
             .expect("capability-manifest raw meta")
             .pubkey,
         fixture.manifest.raw,

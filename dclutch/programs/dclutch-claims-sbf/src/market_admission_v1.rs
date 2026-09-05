@@ -34,7 +34,7 @@
 // types, so it reports the constant as unclassified rather than guessing --
 // which is how this module's first draft, written `Phase as CorePhase`, left
 // four constants out of the census while every test stayed green.
-use dclutch_market_core_codec::{MarketAdmissionV1, Phase};
+use dclutch_market::{MarketAdmissionV1, Phase};
 
 /// A Market open for trading: the live-supply routes.
 ///
@@ -65,7 +65,7 @@ pub(crate) const CLAIMS_FOUNDING_MARKET_ADMISSIBLE_PRESTATES_V1: MarketAdmission
 /// Two-phase tolerance is the documented intent rather than a relaxation. The
 /// transition's own codec doc reads "Begin retiring while retaining
 /// permissionless redemption"
-/// (`crates/dclutch-market-core-codec/src/generated.rs:1030`), it moves `phase`
+/// (`crates/dclutch-market/src/generated.rs:1030`), it moves `phase`
 /// and nothing else -- `terminal_winner` and `terminal_receipt` both survive
 /// it (`:1041-1047`) -- and `phases_join` already admits
 /// `(Phase::Retiring, EconomicPhase::Retiring(w))`
@@ -95,7 +95,7 @@ pub(crate) const CLAIMS_RETIRING_MARKET_ADMISSIBLE_PRESTATES_V1: MarketAdmission
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_market_core_codec::Readiness;
+    use dclutch_market::Readiness;
 
     const EVERY_PHASE: [Phase; 5] = [
         Phase::Founding,
@@ -175,11 +175,11 @@ mod tests {
         // leaving redemption admitting a phase the model no longer joins.
         for phase in EVERY_PHASE {
             let joins_a_winner_bearing_claims_phase =
-                crate::phases_join(phase, 7, dclutch_economic_slice_kernel::Phase::Terminal(7))
+                crate::phases_join(phase, 7, dclutch_product::economic_slice::Phase::Terminal(7))
                     || crate::phases_join(
                         phase,
                         7,
-                        dclutch_economic_slice_kernel::Phase::Retiring(7),
+                        dclutch_product::economic_slice::Phase::Retiring(7),
                     );
             assert_eq!(
                 CLAIMS_SETTLED_MARKET_ADMISSIBLE_PRESTATES_V1.admits_phase(phase),

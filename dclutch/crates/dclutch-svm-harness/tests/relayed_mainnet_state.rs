@@ -28,7 +28,7 @@
 
 use std::{env, fs, path::PathBuf};
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
     CapabilityEntryV1, CapabilityFundingLedgerDerivationV2, CapabilityManifestV1,
     CompartmentFundingV1, ContentId as CapabilityContentId, FUNDING_LEDGER_HEADER_BYTES_V2,
@@ -37,21 +37,21 @@ use dclutch_capability_contract::{
     derive_funded_rent_rate_v2, funding_ledger_bytes_v2,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_market_core_codec::{
+use dclutch_market::{
     CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
     StateBumpsV1,
 };
-use dclutch_product_runtime_v2::{
+use dclutch_product::{
     ContentId as ProductContentId, PortfolioInputV2, ResultDomainInputV2, compile_portfolio_v2,
     compile_result_domain_v2, portfolio_record_bytes, result_domain_record_bytes,
 };
-use dclutch_product_runtime_v2_admission::{
+use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
     RESULT_DOMAIN_SCHEMA_ID_V2,
 };
 use dclutch_program_test_evidence::TransactionEvidence;
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1,
     ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
@@ -67,7 +67,7 @@ use dclutch_registry_contract::{
 // deployed IDL and a live mainnet pool account, and the 424-byte inline width is
 // that discriminator plus `PoolState::INIT_SPACE` for a program with no
 // `realloc`, so the admitted length set is the singleton `{424}`.
-use dclutch_relay_contract::{
+use dclutch_source::relay::{
     DBC_FINISH_CURVE_TIMESTAMP_OFFSET_V1, DBC_IS_MIGRATED_OFFSET_V1,
     DBC_MIGRATION_PROGRESS_OFFSET_V1, DBC_VENUE_INLINE_BYTES_V1, DBC_VIRTUAL_POOL_DISCRIMINATOR_V1,
     MIGRATION_PROGRESS_CREATED_POOL_V1, RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_ID_V1,
@@ -91,16 +91,16 @@ use dclutch_relay_contract::{
     signature::ED25519_PROGRAM_ID_3_0,
     wire::{AccountObservationV1, AttestationMessageV1, ObservationSetSealV1},
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
     ProgramIdentityV1,
 };
-use dclutch_resolution_codec::{
+use dclutch_source::resolution::{
     RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
     RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
 use dclutch_resolution_proof_sbf::ResolutionError;
-use dclutch_source_contract::{
+use dclutch_source::{
     CapacityEnvelope as SourceCapacityEnvelope, ContentId as SourceContentId,
     PROVIDER_RELEASE_SCHEMA_ID_V1, ProviderReleaseV1, RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1,
     RoundingBoundary, SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
@@ -1412,7 +1412,7 @@ fn fixture_full(
     // this Market, generation and material.
     let (source_state, source_bump) = Pubkey::find_program_address(
         &[
-            dclutch_source_contract::SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
+            dclutch_source::SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
             market.as_ref(),
             &GENERATION.to_le_bytes(),
         ],

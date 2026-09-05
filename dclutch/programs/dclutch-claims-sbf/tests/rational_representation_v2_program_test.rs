@@ -21,7 +21,7 @@ use dclutch_claims_sbf::liability_basis_v2::{
     encode_liability_basis_market_v2, encode_liability_basis_position_v2,
 };
 use dclutch_claims_sbf::signed_delta_v3::SignedDeltaSbfErrorV3;
-use dclutch_claims_svm::{
+use dclutch_claims::{
     CallerRole,
     custody_replay_v1::ClaimsCustodyReplayRequestV1,
     liability_basis_state_v2::{
@@ -41,12 +41,12 @@ use dclutch_claims_svm::{
     },
 };
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CUSTODY_REPLAY_BYTES_V1, CallerRoleV1 as CustodyCallerRoleV1, CompartmentV1, ContextV1,
     CustodyAuthoritySeedsV1, CustodyReplaySeedsV1, CustodyReplayV1, CustodyRequestV1,
     CustodyVaultSeedsV1, OperationV1, PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     Action, CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase as CorePhase,
     Readiness, Request, StateBumpsV1,
 };
@@ -57,7 +57,7 @@ use dclutch_operator::{
         WalletTerminalPayoutRouteV3, build_wallet_terminal_payout_v3,
     },
 };
-use dclutch_product_payoff_v2_codec::{
+use dclutch_product::payoff::{
     price_gate_v1::{
         PRICE_GATE_ATOM_COUNT_OFFSET_V1, PRICE_GATE_DEGREE_OFFSET_V1,
         PRICE_GATE_DENOMINATORS_OFFSET_V1, PRICE_GATE_MAGIC_OFFSET_V1, PRICE_GATE_MAGIC_V1,
@@ -72,16 +72,16 @@ use dclutch_product_payoff_v2_codec::{
         basis_record_bytes_v3, compile_basis_v3, semantic_basis_preimage_v3,
     },
 };
-use dclutch_product_runtime_v2::{
+use dclutch_product::{
     ContentId as RuntimeContentId, PortfolioInputV2, ResultDomainInputV2, compile_portfolio_v2,
     compile_result_domain_v2, portfolio_record_bytes, result_domain_record_bytes,
 };
-use dclutch_product_runtime_v2_admission::{
+use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
     RESULT_DOMAIN_SCHEMA_ID_V2,
 };
 use dclutch_program_test_evidence::TransactionEvidence;
-use dclutch_rational_representation_v2_contract::{
+use dclutch_claims::rational::{
     ABSENT_REVISION, ASSET_BYTES_V3, AssetV2, CallerRoleV2, RATIONAL_ASSET_ACCOUNT_COUNT_V2,
     RATIONAL_BASE_ACCOUNT_COUNT_V2, RATIONAL_REPLAY_BYTES_V2, RATIONAL_REPLAY_MAGIC_V2,
     RATIONAL_REPLAY_SEED_V2, RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
@@ -90,7 +90,7 @@ use dclutch_rational_representation_v2_contract::{
     REQUEST_STRUCTURED_HEADER_BYTES_V3, REQUEST_TERMINAL_HEADER_BYTES_V3, RepresentationActionV2,
     RepresentationRequestHeaderV2, RepresentationRequestV2,
 };
-use dclutch_rational_representation_v2_kernel::{
+use dclutch_claims::rational_kernel::{
     ContentAdmissionV2, DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES,
     DescriptorAdmissionV2, REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
     product_v3::{
@@ -98,25 +98,25 @@ use dclutch_rational_representation_v2_kernel::{
         TerminalScenarioV3, admit_product_representation_v3,
     },
 };
-use dclutch_realm_contract::{
+use dclutch_market::realm::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
 };
-use dclutch_record_contract::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
-use dclutch_registry_contract::{
+use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
     ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
     initialize_activation_cache_v1,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
     ExecutionRoleV1, ProgramIdentityV1,
 };
-use dclutch_representation_composition_v3_kernel::{
+use dclutch_claims::composition::{
     COMPOSITION_EXPOSURE_SCHEMA_ID_V3, RecordAdmissionV3,
 };
-use dclutch_resolution_codec::{ResolutionCertificateKindV2, ResolutionCertificateV2};
-use dclutch_token_svm::{
+use dclutch_source::resolution::{ResolutionCertificateKindV2, ResolutionCertificateV2};
+use dclutch_custody::token_svm::{
     ACCOUNT_BYTES, CollateralAdapterReleaseV1, IMMUTABLE_OWNER_ACCOUNT_BYTES,
     IMMUTABLE_OWNER_ACCOUNT_SUFFIX, PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID,
     TokenAccount,
@@ -143,7 +143,7 @@ use solana_transaction::{Transaction, versioned::VersionedTransaction};
 use spl_associated_token_account_interface::address::get_associated_token_address_with_program_id;
 use spl_token_interface::state::{Account as SplAccount, AccountState, Mint as SplMint};
 
-use dclutch_rational_representation_v2_request_contract::{
+use dclutch_claims::rational_request::{
     Error as RationalRequestError, generated::ASSET_COEFFICIENT_OFFSET_V3,
 };
 use dclutch_structured_v2_operator::Error as StructuredOperatorError;
@@ -595,7 +595,7 @@ struct Submission {
 
 mod common_hot_open {
     use super::*;
-    use dclutch_account_profile_contract::v2::AccountProfileV2;
+    use dclutch_vm::account_profile::v2::AccountProfileV2;
     use dclutch_bearer_v2_operator::{
         CheckedRationalHotOuterReleaseV3, ConstructedHotOpenSelectedV3,
         ConstructedHotOpenStructuredV3, ConstructedHotTerminalV3,
@@ -614,12 +614,12 @@ mod common_hot_open {
         construct_chain_hot_denominate_v3, construct_chain_hot_issue_structured_v3,
         construct_chain_hot_redeem_terminal_v3, encode_open_capability_lifecycle_policy_v5,
     };
-    use dclutch_capability_contract::{
+    use dclutch_market::capability_manifest::{
         ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
         FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
         funding::{CompartmentFundingV1, FundingAmountsV1},
     };
-    use dclutch_capability_program_contract::{
+    use dclutch_market::capability_program::{
         SelectedRecordBumpsV1, set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
         v4::CapabilityProgramV4,
     };
@@ -630,7 +630,7 @@ mod common_hot_open {
         frame::BuiltAccountV1,
     };
     use dclutch_hot_bump_miner_v1::hot_bump_hint_slot_name_v1;
-    use dclutch_rational_representation_v2_contract::{
+    use dclutch_claims::rational::{
         RepresentationCoordinateV2, TokenBehaviorRecordAdmissionV2, authenticate_token_behavior_v2,
     };
     use dclutch_rational_representation_v2_operator::{
@@ -638,12 +638,12 @@ mod common_hot_open {
         ProductEvidenceObservationV2, RationalObservationV2, ReplayObservationV2,
         SelectedActionInputV2, StructuredActionInputV2, TerminalObservationV2,
     };
-    use dclutch_release_set_contract::CapabilityExecutionSelectionV1;
-    use dclutch_structured_v2_kernel::{
+    use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
+    use dclutch_claims::structured_kernel::{
         STRUCTURED_CAPABILITY_KIND_ID_V2, STRUCTURED_CAPACITY_PROFILE_ID_V2,
         STRUCTURED_ROOT_BYTES_V2, STRUCTURED_ROOT_SCHEMA_ID_V2,
     };
-    use dclutch_token_svm::{TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TokenBehaviorSelectionV2};
+    use dclutch_custody::token_svm::{TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TokenBehaviorSelectionV2};
 
     pub(super) struct ManifestSelection {
         pub(super) bytes: Vec<u8>,
@@ -703,16 +703,16 @@ mod common_hot_open {
         )
         .expect("funding compartments");
         let entry = CapabilityEntryV1::new(
-            dclutch_capability_contract::ContentId::new(descriptor.kind().to_bytes())
+            dclutch_market::capability_manifest::ContentId::new(descriptor.kind().to_bytes())
                 .expect("kind"),
-            dclutch_capability_contract::ContentId::new(set.program_set_id).expect("ProgramSet"),
-            dclutch_capability_contract::ContentId::new(set.token_behavior_selection_id)
+            dclutch_market::capability_manifest::ContentId::new(set.program_set_id).expect("ProgramSet"),
+            dclutch_market::capability_manifest::ContentId::new(set.token_behavior_selection_id)
                 .expect("config"),
-            dclutch_capability_contract::ContentId::new(descriptor.capacity_profile().to_bytes())
+            dclutch_market::capability_manifest::ContentId::new(descriptor.capacity_profile().to_bytes())
                 .expect("capacity"),
-            dclutch_capability_contract::ContentId::new(descriptor.root_schema().to_bytes())
+            dclutch_market::capability_manifest::ContentId::new(descriptor.root_schema().to_bytes())
                 .expect("root schema"),
-            dclutch_capability_contract::ContentId::new(descriptor.derivation_policy().to_bytes())
+            dclutch_market::capability_manifest::ContentId::new(descriptor.derivation_policy().to_bytes())
                 .expect("lifecycle"),
             ActivationPolicy::PrepaidLazy,
             100,
@@ -725,7 +725,7 @@ mod common_hot_open {
         CapabilityManifestV1::encode_into(&[entry], &mut bytes).expect("manifest");
         let manifest_digest = hash(&bytes).to_bytes();
         let manifest_bumps = record_bumps(
-            dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+            dclutch_market::capability_manifest::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
             manifest_digest,
         );
         let config_bumps = record_bumps(
@@ -787,23 +787,23 @@ mod common_hot_open {
         // walks it: the capability root, the Product record and the Portfolio
         // record.
         selected_lengths[0] = u32::try_from(
-            dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1
-                + dclutch_structured_v2_kernel::STRUCTURED_ROOT_BYTES_V2,
+            dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1
+                + dclutch_claims::structured_kernel::STRUCTURED_ROOT_BYTES_V2,
         )
         .expect("capability root width");
         selected_lengths[2] = u32::try_from(PRODUCT_RECORD_BYTES_V2).expect("Product record width");
         selected_lengths[3] = u32::try_from(
-            dclutch_product_runtime_v2::portfolio_record_bytes(COEFFICIENTS.len())
+            dclutch_product::portfolio_record_bytes(COEFFICIENTS.len())
                 .expect("Portfolio record width"),
         )
         .expect("Portfolio record width");
         selected_lengths[10] = u32::try_from(
-            dclutch_rational_representation_v2_kernel::descriptor_v3::representation_descriptor_bytes_v3(K)
+            dclutch_claims::rational_kernel::descriptor_v3::representation_descriptor_bytes_v3(K)
                 .expect("Rational descriptor width"),
         )
         .expect("Rational descriptor width");
         selected_lengths[12] = u32::try_from(
-            dclutch_representation_composition_v3_kernel::composition_exposure_bytes_v3(
+            dclutch_claims::composition::composition_exposure_bytes_v3(
                 OUTCOME_COUNT,
                 OUTCOME_COUNT,
             )
@@ -816,26 +816,26 @@ mod common_hot_open {
         selected_lengths[16] =
             u32::try_from(RATIONAL_REPLAY_BYTES_V2).expect("representation replay width");
         selected_lengths[17] = u32::try_from(
-            dclutch_claims_svm::liability_basis_state_v2::LIABILITY_BASIS_MARKET_HEADER_BYTES_V2
+            dclutch_claims::liability_basis_state_v2::LIABILITY_BASIS_MARKET_HEADER_BYTES_V2
                 + K * 8,
         )
         .expect("Claims aggregate width");
         selected_lengths[18] =
             u32::try_from(ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1).expect("activation width");
         selected_lengths[22] =
-            u32::try_from(dclutch_market_core_codec::STATE_BYTES).expect("Core market width");
+            u32::try_from(dclutch_market::STATE_BYTES).expect("Core market width");
         // The actor's Position and the selected coordinate's custody Position
         // are the same shape; the selected actions are the only ones that carry
         // a live actor Position at all, which is why neither appears above.
         let position_width = u32::try_from(
-            dclutch_claims_svm::liability_basis_state_v2::LIABILITY_BASIS_POSITION_HEADER_BYTES_V2
+            dclutch_claims::liability_basis_state_v2::LIABILITY_BASIS_POSITION_HEADER_BYTES_V2
                 + K * 8,
         )
         .expect("Claims Position width");
         selected_lengths[28] = position_width;
         selected_lengths[37] = position_width;
         selected_lengths[33] = u32::try_from(
-            dclutch_product_runtime_v2::result_domain_record_bytes(
+            dclutch_product::result_domain_record_bytes(
                 K.checked_sub(2).expect("K >= 2"),
             )
             .expect("ResultDomain record width"),
@@ -847,19 +847,19 @@ mod common_hot_open {
         // The widths that ARE knowable when a release is authored, each taken
         // from the constant that owns it rather than typed.
         structured_lengths[0] = u32::try_from(
-            dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1
-                + dclutch_structured_v2_kernel::STRUCTURED_ROOT_BYTES_V2,
+            dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1
+                + dclutch_claims::structured_kernel::STRUCTURED_ROOT_BYTES_V2,
         )
         .expect("capability root width");
         structured_lengths[17] = u32::try_from(
-            dclutch_claims_svm::liability_basis_state_v2::LIABILITY_BASIS_MARKET_HEADER_BYTES_V2
+            dclutch_claims::liability_basis_state_v2::LIABILITY_BASIS_MARKET_HEADER_BYTES_V2
                 + K * 8,
         )
         .expect("Claims aggregate width");
         structured_lengths[18] =
             u32::try_from(ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1).expect("activation width");
         structured_lengths[22] =
-            u32::try_from(dclutch_market_core_codec::STATE_BYTES).expect("Core market width");
+            u32::try_from(dclutch_market::STATE_BYTES).expect("Core market width");
         // The five finalized-record coordinates and the Rent sysvar, each from
         // the constant or the byte function that owns it. `d4cd3b27` declared
         // the four widths a release can know off its own artifacts and stopped
@@ -873,17 +873,17 @@ mod common_hot_open {
         structured_lengths[2] =
             u32::try_from(PRODUCT_RECORD_BYTES_V2).expect("Product record width");
         structured_lengths[3] = u32::try_from(
-            dclutch_product_runtime_v2::portfolio_record_bytes(COEFFICIENTS.len())
+            dclutch_product::portfolio_record_bytes(COEFFICIENTS.len())
                 .expect("Portfolio record width"),
         )
         .expect("Portfolio record width");
         structured_lengths[10] = u32::try_from(
-            dclutch_rational_representation_v2_kernel::descriptor_v3::representation_descriptor_bytes_v3(K)
+            dclutch_claims::rational_kernel::descriptor_v3::representation_descriptor_bytes_v3(K)
                 .expect("Rational descriptor width"),
         )
         .expect("Rational descriptor width");
         structured_lengths[12] = u32::try_from(
-            dclutch_representation_composition_v3_kernel::composition_exposure_bytes_v3(
+            dclutch_claims::composition::composition_exposure_bytes_v3(
                 OUTCOME_COUNT,
                 OUTCOME_COUNT,
             )
@@ -894,7 +894,7 @@ mod common_hot_open {
             u32::try_from(<Rent as solana_sdk::sysvar::SysvarSerialize>::size_of())
                 .expect("Rent sysvar width");
         structured_lengths[33] = u32::try_from(
-            dclutch_product_runtime_v2::result_domain_record_bytes(
+            dclutch_product::result_domain_record_bytes(
                 K.checked_sub(2).expect("K >= 2"),
             )
             .expect("ResultDomain record width"),
@@ -942,7 +942,7 @@ mod common_hot_open {
                     fixed_data_lengths: &structured_lengths,
                     item_data_lengths: [
                         u32::try_from(
-                            dclutch_claims_svm::liability_basis_state_v2::LIABILITY_BASIS_POSITION_HEADER_BYTES_V2
+                            dclutch_claims::liability_basis_state_v2::LIABILITY_BASIS_POSITION_HEADER_BYTES_V2
                                 + K * 8,
                         )
                         .expect("custody Position width"),
@@ -1056,7 +1056,7 @@ mod common_hot_open {
         } else {
             1
         };
-        dclutch_rational_representation_v2_contract::REPRESENTATION_FRAME_SPEC_V2.coordinate(
+        dclutch_claims::rational::REPRESENTATION_FRAME_SPEC_V2.coordinate(
             child_index,
             assets,
             action == RepresentationActionV2::RedeemTerminal,
@@ -1356,10 +1356,10 @@ mod common_hot_open {
     pub(super) async fn token_behavior(
         context: &mut ProgramTestContext,
         fixture: &Fixture,
-    ) -> dclutch_rational_representation_v2_contract::AuthenticatedTokenBehaviorV2 {
+    ) -> dclutch_claims::rational::AuthenticatedTokenBehaviorV2 {
         let descriptor = account(context, fixture.descriptor_raw).await;
         let admitted =
-            dclutch_rational_representation_v2_kernel::RepresentationDescriptorV2::decode(
+            dclutch_claims::rational_kernel::RepresentationDescriptorV2::decode(
                 &descriptor.data,
                 DescriptorAdmissionV2 {
                     selected_descriptor_id: fixture.descriptor_id,
@@ -1378,8 +1378,8 @@ mod common_hot_open {
             fixture.realm_id,
             &release.set.token_behavior_selection,
             TokenBehaviorRecordAdmissionV2 {
-                selected_schema_id: dclutch_token_svm::TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
-                finalized_schema_id: dclutch_token_svm::TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
+                selected_schema_id: dclutch_custody::token_svm::TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
+                finalized_schema_id: dclutch_custody::token_svm::TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
                 selected_content_digest: release.set.token_behavior_selection_id,
                 finalized_content_digest: release.set.token_behavior_selection_id,
                 recomputed_content_digest: hash(&release.set.token_behavior_selection).to_bytes(),
@@ -1462,7 +1462,7 @@ mod common_hot_open {
             0
         };
         let profile =
-            dclutch_account_profile_contract::v2::AccountProfileV2::decode(set.account_profile)
+            dclutch_vm::account_profile::v2::AccountProfileV2::decode(set.account_profile)
                 .expect("AccountProfile");
         let staging_cursors = [
             fixture.descriptor_staging,
@@ -1748,7 +1748,7 @@ mod common_hot_open {
         let fixed = built
             .hot_instruction
             .accounts
-            .get(..dclutch_capability_program_contract::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3)
+            .get(..dclutch_market::capability_program::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3)
             .expect("Hot fixed prefix");
         let state: RationalOpenStructuredHotStateV3<'_> =
             hot_state(fixture, &root.data, &market.data, &activation.data, fixed);
@@ -1778,7 +1778,7 @@ mod common_hot_open {
         let fixed = built
             .hot_instruction
             .accounts
-            .get(..dclutch_capability_program_contract::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3)
+            .get(..dclutch_market::capability_program::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3)
             .expect("Hot fixed prefix");
         let state = hot_state(fixture, &root.data, &market.data, &activation.data, fixed);
         let behavior = token_behavior(context, fixture).await;
@@ -1807,7 +1807,7 @@ mod common_hot_open {
         let fixed = built
             .hot_instruction
             .accounts
-            .get(..dclutch_capability_program_contract::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3)
+            .get(..dclutch_market::capability_program::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3)
             .expect("Hot fixed prefix");
         let state: RationalOpenSelectedHotStateV3<'_> =
             hot_state(fixture, &root.data, &market.data, &activation.data, fixed);
@@ -3843,7 +3843,7 @@ fn fixture_with_basis_and_trading(
         "the Custody namespace and the representation parent context are different facts"
     );
     let capability_root = hot_release.as_ref().map(|release| {
-        let header = dclutch_capability_program_contract::CapabilityRootHeaderV1::new(
+        let header = dclutch_market::capability_program::CapabilityRootHeaderV1::new(
             ContentId::new(release_set).expect("release set"),
             market.to_bytes(),
             GENERATION,
@@ -3854,16 +3854,16 @@ fn fixture_with_basis_and_trading(
         let (root, root_bump) =
             Pubkey::find_program_address(&header.seeds().as_slices(), &TRADING_PROGRAM_ID);
         let mut bytes = header.to_bytes().to_vec();
-        let root_tail = dclutch_structured_v2_contract::StructuredRootV2::new(
-            dclutch_structured_v2_contract::StructuredRootInputV2 {
+        let root_tail = dclutch_claims::structured::StructuredRootV2::new(
+            dclutch_claims::structured::StructuredRootInputV2 {
                 bump: root_bump,
                 terms: descriptor_id,
                 market: market.to_bytes(),
                 rent_beneficiary: market_rent_credit().to_bytes(),
                 revision: 0,
                 historical_rent_principal: Rent::default().minimum_balance(
-                    dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1
-                        + dclutch_structured_v2_kernel::STRUCTURED_ROOT_BYTES_V2,
+                    dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1
+                        + dclutch_claims::structured_kernel::STRUCTURED_ROOT_BYTES_V2,
                 ),
             },
         )
@@ -4528,7 +4528,7 @@ async fn submit_v0_with_heap(
     label: &str,
 ) -> Result<Submission, BanksClientError> {
     let heap = solana_compute_budget_interface::ComputeBudgetInstruction::request_heap_frame(
-        dclutch_capability_program_contract::hot_v3::DIRECT_HOT_HEAP_FRAME_BYTES_V1,
+        dclutch_market::capability_program::hot_v3::DIRECT_HOT_HEAP_FRAME_BYTES_V1,
     );
     submit_v0_instructions(
         context,
@@ -5332,7 +5332,7 @@ async fn real_sbf_open_actions_are_exact_and_conserved() {
 #[tokio::test]
 async fn a_spent_replay_cursor_closes_to_its_actor_and_strands_no_rent() {
     use dclutch_claims_sbf::rational_representation_v2::RationalReplayCloseSbfErrorV1;
-    use dclutch_rational_representation_v2_contract::{
+    use dclutch_claims::rational::{
         RATIONAL_REPLAY_CLOSE_ACCOUNT_COUNT_V1, RationalReplayCloseRequestV1,
     };
 
@@ -5957,7 +5957,7 @@ async fn current_common_hot_terminal_redemption_executes_through_real_elves() {
     // `InvalidAction`, then `InvalidTerminal("custody-replay-no-open-vault")`.
     let plan = common_hot_open::plan_redeem(&mut context, &fixture).await;
 
-    let profile = dclutch_account_profile_contract::v2::AccountProfileV2::decode(
+    let profile = dclutch_vm::account_profile::v2::AccountProfileV2::decode(
         &fixture
             .hot_release
             .as_ref()
@@ -6458,7 +6458,7 @@ async fn the_structured_family_hostiles_refuse_through_the_real_wire() {
     // shard Mint cannot produce terms at all.
     assert_eq!(
         structured_lowering::decode_terms_with_receipt_aliasing_a_shard_mint(&fixture.basis).err(),
-        Some(dclutch_structured_v2_kernel::Error::DuplicateIdentity),
+        Some(dclutch_claims::structured_kernel::Error::DuplicateIdentity),
         "a receipt Mint that aliases a shard Mint must not survive bind_shard_terms"
     );
 
@@ -8708,7 +8708,7 @@ async fn a_conventional_170_byte_associated_token_account_is_refused_by_custody_
     assert_eq!(planted.data.len(), IMMUTABLE_OWNER_ACCOUNT_BYTES);
     assert_eq!(
         TokenAccount::parse(&planted.data),
-        Err(dclutch_token_svm::Error::InvalidLength),
+        Err(dclutch_custody::token_svm::Error::InvalidLength),
         "this is exactly the account the base parser refuses",
     );
     assert!(
@@ -8839,7 +8839,7 @@ async fn a_conventional_170_byte_associated_token_account_commits_under_the_thir
     assert_eq!(planted.data.len(), IMMUTABLE_OWNER_ACCOUNT_BYTES);
     assert_eq!(
         TokenAccount::parse(&planted.data),
-        Err(dclutch_token_svm::Error::InvalidLength),
+        Err(dclutch_custody::token_svm::Error::InvalidLength),
         "the base parser still refuses it; nothing was relaxed",
     );
 
@@ -9078,7 +9078,7 @@ async fn a_stranger_begins_retiring(context: &mut ProgramTestContext, fixture: &
 /// (`programs/dclutch-core-sbf/src/begin_retiring.rs:57`), and the transition's
 /// own codec doc says what that permissionlessness is for: "Begin retiring
 /// while retaining permissionless redemption"
-/// (`crates/dclutch-market-core-codec/src/generated.rs:1030`). Every
+/// (`crates/dclutch-market/src/generated.rs:1030`). Every
 /// holder-redemption route nonetheless gated the Core phase on exact equality
 /// with `Phase::Terminal`, so an arbitrary actor holding no role and named
 /// nowhere in this market could, for one transaction fee, end every holder's

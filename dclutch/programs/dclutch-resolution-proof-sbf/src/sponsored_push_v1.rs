@@ -8,17 +8,17 @@
 
 use alloc::boxed::Box;
 
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
-use dclutch_product_runtime_v2::{ContentId as ProductContentId, ResultDomainV2};
-use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV2};
-use dclutch_pyth_svm::{
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_product::{ContentId as ProductContentId, ResultDomainV2};
+use dclutch_product::svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV2};
+use dclutch_source::pyth::{
     DEVNET_CLUSTER_ID_V1, FULL_PRICE_UPDATE_V2_LEN, FullPriceUpdateV2,
     PYTH_SPONSORED_PUSH_RELEASE_SCHEMA_ID_V1, PYTH_SPONSORED_PUSH_RELEASE_V1_ENCODED_LEN,
     PythSponsoredPushReleaseV1, RECEIVER_CONFIG_V2_LEN,
 };
-use dclutch_registry_svm::ProgramDataV3View;
-use dclutch_relay_contract::frame::RelayFrameKindV1;
-use dclutch_resolution_codec::{
+use dclutch_registry::svm::ProgramDataV3View;
+use dclutch_source::relay::frame::RelayFrameKindV1;
+use dclutch_source::resolution::{
     RESOLUTION_CERTIFICATE_BYTES_V2, ResolutionCertificateKindV2, ResolutionCertificateV2,
     SPONSORED_PUSH_CANDIDATE_BYTES_V1, SPONSORED_PUSH_CANDIDATE_PDA_DOMAIN_V1,
     SPONSORED_PUSH_CAPTURE_ACCOUNT_COUNT_V1, SPONSORED_PUSH_CLOSE_CANDIDATE_ACCOUNT_COUNT_V1,
@@ -29,7 +29,7 @@ use dclutch_resolution_codec::{
     SponsoredPushActionV1, SponsoredPushCandidateV1, SponsoredPushHeadV1,
     SponsoredPushInstructionV1, SponsoredPushReceiptV1,
 };
-use dclutch_source_contract::{
+use dclutch_source::{
     ContentId as SourceContentId, PROVIDER_RELEASE_BYTES, PROVIDER_RELEASE_SCHEMA_ID_V1,
     PYTH_ADAPTER_CONFIG_BYTES, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, ProviderReleaseV1,
     PythAdapterConfigV1, PythProviderAdapterObligationV2, SOURCE_FAILURE_POLICY_RELEASE_ID_V2,
@@ -562,13 +562,13 @@ fn authenticate_live_update(
         )
     })
     .map_err(|error| match error {
-        dclutch_source_contract::Error::InvalidObservationSchedule => {
+        dclutch_source::Error::InvalidObservationSchedule => {
             ResolutionError::ProviderWindow
         }
-        dclutch_source_contract::Error::InvalidPublicationTime => {
+        dclutch_source::Error::InvalidPublicationTime => {
             ResolutionError::ProviderFreshness
         }
-        dclutch_source_contract::Error::InvalidPythObservation => {
+        dclutch_source::Error::InvalidPythObservation => {
             ResolutionError::ProviderConfiguration
         }
         _ => ResolutionError::ProviderObservation,
@@ -1127,13 +1127,13 @@ fn sponsored_normalized_observation(
     })
     .map(|normalized| normalized.atoms())
     .map_err(|error| match error {
-        dclutch_source_contract::Error::InvalidObservationSchedule => {
+        dclutch_source::Error::InvalidObservationSchedule => {
             ResolutionError::ProviderWindow.into()
         }
-        dclutch_source_contract::Error::InvalidPublicationTime => {
+        dclutch_source::Error::InvalidPublicationTime => {
             ResolutionError::ProviderFreshness.into()
         }
-        dclutch_source_contract::Error::InvalidPythObservation => {
+        dclutch_source::Error::InvalidPythObservation => {
             ResolutionError::ProviderConfiguration.into()
         }
         _ => ResolutionError::ProviderObservation.into(),
@@ -1189,7 +1189,7 @@ fn boxed_settlement_decision(
     clock: &SettlementClockV1,
 ) -> Result<Box<SponsoredSettlementDecisionV1>, ProgramError> {
     let provider_evidence = hashv(&[
-        dclutch_resolution_codec::SPONSORED_PUSH_EVIDENCE_DOMAIN_V1,
+        dclutch_source::resolution::SPONSORED_PUSH_EVIDENCE_DOMAIN_V1,
         &[0],
         &keys.candidate,
         &sealed.candidate_digest,

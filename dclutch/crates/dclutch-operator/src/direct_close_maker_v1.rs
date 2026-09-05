@@ -50,14 +50,14 @@
 //! beneficiary gets [`DirectCloseMakerPlanErrorV1::InvalidRentOwner`], not a
 //! redirected refund.
 
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
-use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_market::capability_manifest::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
+use dclutch_market::capability_program::{
     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1, CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityProgramV1,
     CapabilityRootHeaderV1,
     set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
 };
-use dclutch_direct_codec::{
+use dclutch_trading::{
     close_maker_bundle_v1::{
         direct_close_maker_account_profile_schema_v1, direct_close_maker_descriptor_schema_v1,
         direct_close_maker_effect_schema_v1,
@@ -77,15 +77,15 @@ use dclutch_direct_codec::{
         MakerReplaySeedsV1, SuccessorError, close_maker_replay_v2,
     },
 };
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, Phase, STATE_BYTES};
-use dclutch_record_contract::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
-use dclutch_registry_contract::{
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2, Phase, STATE_BYTES};
+use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1, DeploymentObservationV1,
 };
-use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
-use dclutch_relay_contract::{SOLANA_DEVNET_GENESIS_HASH_V1, SOLANA_MAINNET_GENESIS_HASH_V1};
-use dclutch_release_set_contract::ExecutionRoleV1;
+use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
+use dclutch_source::relay::{SOLANA_DEVNET_GENESIS_HASH_V1, SOLANA_MAINNET_GENESIS_HASH_V1};
+use dclutch_registry::release_set::ExecutionRoleV1;
 use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},
@@ -391,7 +391,7 @@ pub fn derive_direct_close_maker_meta_closure_v1(
 
 /// One record's canonical identity, or a refusal if either half is zero.
 ///
-/// The seed TUPLE is not spelled here. `dclutch-record-contract` owns both
+/// The seed TUPLE is not spelled here. `dclutch-registry::record` owns both
 /// domains and exports the constructors that place them, so a second spelling
 /// in this crate would be a second source of truth for an address the chain
 /// derives its own way (`DOMAIN_RAW_RESTATEMENT`).
@@ -1303,12 +1303,12 @@ fn assemble_plan(
 mod tests {
     use solana_program::rent::Rent;
 
-    use dclutch_capability_program_contract::SelectedRecordBumpsV1;
+    use dclutch_market::capability_program::SelectedRecordBumpsV1;
     use dclutch_core_contract::ContentId;
-    use dclutch_direct_codec::successor::{
+    use dclutch_trading::successor::{
         DirectMakerReplayLayoutV1 as MakerLayout, DirectRootStateLayoutV1 as RootLayout,
     };
-    use dclutch_direct_codec::{
+    use dclutch_trading::{
         ordinary_account_artifacts_v3::DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3,
         ordinary_artifacts_v3::DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_V2_BYTES_V3,
         ordinary_bundle_v4::{
@@ -1318,8 +1318,8 @@ mod tests {
         ordinary_v3::DIRECT_ORDINARY_TRANSITION_BYTES_V3,
         state_artifacts_v3::DIRECT_INLINE_ORDINARY_LIFECYCLE_BYTES_V5,
     };
-    use dclutch_market_core_codec::{Identity, MarketIdentity, Readiness, StateBumpsV1};
-    use dclutch_release_set_contract::CapabilityExecutionSelectionV1;
+    use dclutch_market::{Identity, MarketIdentity, Readiness, StateBumpsV1};
+    use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
 
     use super::*;
 

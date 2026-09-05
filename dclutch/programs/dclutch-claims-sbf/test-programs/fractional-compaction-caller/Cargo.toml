@@ -15,10 +15,9 @@ custom-heap = []
 custom-panic = []
 
 [dependencies]
-dclutch-capability-program-contract = { path = "../../../../crates/dclutch-capability-program-contract" }
-dclutch-claims-svm = { path = "../../../../crates/dclutch-claims-svm" }
+dclutch-market = { path = "../../../../crates/dclutch-market" }
+dclutch-claims = { path = "../../../../crates/dclutch-claims" }
 dclutch-fractional-atomic-test-caller-sbf = { path = "../fractional-atomic-caller", features = ["no-entrypoint"] }
-dclutch-fractional-claim-contract = { path = "../../../../crates/dclutch-fractional-claim-contract" }
 dclutch-refusal-registry = { path = "../../../../crates/dclutch-refusal-registry" }
 solana-program = { version = "=3.0.0", default-features = false }
 

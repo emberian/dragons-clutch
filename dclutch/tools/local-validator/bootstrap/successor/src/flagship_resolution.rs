@@ -12,8 +12,8 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1;
-use dclutch_claims_svm::{
+use dclutch_market::capability_manifest::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1;
+use dclutch_claims::{
     founding_v5::ClaimsFoundingAggregateSeedsV5,
     liability_basis_state_v2::{LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2},
     protocol_position_v2::{
@@ -21,7 +21,7 @@ use dclutch_claims_svm::{
         ProtocolPositionSeedsV2,
     },
 };
-use dclutch_market_core_codec::{CoreState, Identity, Phase as CorePhase, Readiness};
+use dclutch_market::{CoreState, Identity, Phase as CorePhase, Readiness};
 use dclutch_operator::{
     Finality, Observation, ObservedAccount,
     provider_transport_v3::{
@@ -37,17 +37,17 @@ use dclutch_operator::{
         build_resolution_admit_terminal_v3,
     },
 };
-use dclutch_product_runtime_v2_admission::{
+use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
 };
-use dclutch_pyth_svm::{
+use dclutch_source::pyth::{
     FullPriceUpdateV2, GuardianSetV1, PostUpdateParamsView, ProgramDataV3View, ProgramV3View,
     PythReleaseV1, ReceiverConfigV2View, VerifiedEncodedVaaV1, devnet_release_v1,
     local_validator_release_v1,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_release_set_contract::ExecutionRoleV1;
-use dclutch_resolution_codec::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::release_set::ExecutionRoleV1;
+use dclutch_source::resolution::{
     PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
     ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_BYTES_V2,
     RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, ResolutionCertificateKindV2, ResolutionCertificateV2,
@@ -59,11 +59,11 @@ use dclutch_resolution_core_v3_operator::provider_finalized_projection_v3::{
     project_finalized_provider_execute_v3, project_finalized_provider_reclaim_v3,
     project_finalized_provider_submit_v3,
 };
-use dclutch_source_contract::{
+use dclutch_source::{
     PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, RECOVERY_POLICY_SCHEMA_ID_V2,
     SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1, WINDOW_SPEC_SCHEMA_ID_V1,
 };
-use dclutch_source_contract::{
+use dclutch_source::{
     ProviderReleaseV1, PythAdapterConfigV1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
     SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SourceResolutionPhaseV1, SourceResolutionRouteV1,
     SourceResolutionStateV2, WindowSpecV1,
@@ -5512,7 +5512,7 @@ fn canonical_stage_semantics(
         StageV1::Submit => {
             let report = provider_submit_report(selected, snapshot)?;
             let lifecycle_rent = rpc.minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V3)?;
-            let update_rent = rpc.minimum_balance(dclutch_pyth_svm::FULL_PRICE_UPDATE_V2_LEN)?;
+            let update_rent = rpc.minimum_balance(dclutch_source::pyth::FULL_PRICE_UPDATE_V2_LEN)?;
             let config = ReceiverConfigV2View::parse(
                 &snapshot
                     .account(selected.account("receiver_config")?, "Receiver Config")?
@@ -8520,11 +8520,11 @@ mod tests {
 
     #[test]
     fn fake_rpc_stale_wrong_feed_and_wide_confidence_refuse_before_execute() {
-        let source = dclutch_source_contract::ContentId::new([1; 32]).expect("source identity");
-        let schedule = dclutch_source_contract::ContentId::new([2; 32]).expect("schedule identity");
+        let source = dclutch_source::ContentId::new([1; 32]).expect("source identity");
+        let schedule = dclutch_source::ContentId::new([2; 32]).expect("schedule identity");
         let window = WindowSpecV1::new(
             source,
-            dclutch_source_contract::WindowKind::Terminal,
+            dclutch_source::WindowKind::Terminal,
             90,
             110,
             20,

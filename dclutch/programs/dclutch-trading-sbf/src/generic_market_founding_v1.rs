@@ -18,26 +18,26 @@ extern crate alloc;
 
 use alloc::{boxed::Box, vec::Vec};
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     CONTROLLER_FUNDING_CHECKPOINT_BYTES_V1, CONTROLLER_FUNDING_CUSTODY_LADDER_ACCOUNT_COUNT_V1,
     CONTROLLER_FUNDING_CUSTODY_LADDER_DIGEST_DOMAIN_V1, ControllerFundingCheckpointDerivationV1,
     ControllerFundingCheckpointPhaseV1, ControllerFundingCheckpointV1,
 };
 
-use dclutch_claims_svm::founding_v5::{
+use dclutch_claims::founding_v5::{
     CLAIMS_FOUNDING_ACCOUNT_COUNT_V6, CLAIMS_FOUNDING_POST_RESOURCE_DIGEST_DOMAIN_V5,
     CLAIMS_FOUNDING_RECEIPT_BYTES_V5, CLAIMS_FOUNDING_REQUEST_BYTES_V5, ClaimsFoundingReceiptV5,
     ClaimsFoundingRequestV5,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{
+use dclutch_custody::{
     PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1,
     PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_RECEIPT_BYTES_V1,
     PROJECTED_CUSTODY_REQUEST_BYTES_V1, PROJECTED_HOARD_CONTEXT_DOMAIN_V1, ProjectedCallerRoleV1,
     ProjectedCustodyCallerSeedsV1, ProjectedCustodyLockReceiptV1, ProjectedCustodyOperationV1,
     ProjectedCustodyReceiptV1, ProjectedCustodyRequestV1,
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     Action, GENERIC_FOUNDING_ACK_BYTES_V1, GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1,
     GENERIC_FOUNDING_FOUND_POST_RESOURCE_DOMAIN_V1,
     GENERIC_FOUNDING_FOUND_PRICE_GATE_SUFFIX_ACCOUNT_COUNT_V2,
@@ -46,7 +46,7 @@ use dclutch_market_core_codec::{
     GenericFoundingAckV1, GenericFoundingRequestV1, GenericFoundingStageV1, ProjectFoundRequestV2,
     Request,
 };
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
@@ -1403,7 +1403,7 @@ pub(crate) fn subslice<'accounts, 'info>(
 
 #[cfg(test)]
 mod tests {
-    use dclutch_market_core_codec::{GenericFoundingStageV1, Identity};
+    use dclutch_market::{GenericFoundingStageV1, Identity};
 
     use super::*;
 
@@ -1560,7 +1560,7 @@ mod tests {
             hoard_vault: found.hoard().to_bytes(),
             funding_source_vault: found.funding_source().to_bytes(),
             funding_source_context: found.context().to_bytes(),
-            funding_source_compartment: dclutch_custody_contract::CompartmentV1::SeriesEscrow,
+            funding_source_compartment: dclutch_custody::CompartmentV1::SeriesEscrow,
             mint: [0x39; 32],
             token_program: [0x3a; 32],
             collateral_release: [0x3b; 32],
@@ -1588,7 +1588,7 @@ mod tests {
         lock: &ProjectedCustodyRequestV1,
         lock_raw: &[u8],
     ) -> ClaimsFoundingRequestV5 {
-        use dclutch_claims_svm::founding_v5::ClaimsFoundingRequestInputV5;
+        use dclutch_claims::founding_v5::ClaimsFoundingRequestInputV5;
         let found = found();
         let collateral = found.hoard_principal().expect("principal");
         ClaimsFoundingRequestV5::new(ClaimsFoundingRequestInputV5 {
@@ -1665,7 +1665,7 @@ mod tests {
             mutate(&mut input);
             ClaimsFoundingRequestV5::new(input).expect("substituted claims request")
         };
-        use dclutch_claims_svm::founding_v5::ClaimsFoundingRequestInputV5;
+        use dclutch_claims::founding_v5::ClaimsFoundingRequestInputV5;
         for mutate in [
             &|input: &mut ClaimsFoundingRequestInputV5| input.market = [0x71; 32],
             &|input: &mut ClaimsFoundingRequestInputV5| input.founder = [0x72; 32],

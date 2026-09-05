@@ -3,11 +3,11 @@
 
 #![allow(clippy::indexing_slicing, clippy::panic, clippy::unwrap_used)]
 
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     set_v2::{CapabilityProgramSetV2, SelectorWidthV2},
     v4::CapabilityProgramV4,
 };
-use dclutch_claims_svm::{
+use dclutch_claims::{
     frame_spec_v1::SignedDeltaFrameSpecV3,
     terminal_settlement_v3::{
         TERMINAL_SETTLEMENT_CUSTODY_PROGRAM_ACCOUNT_V3,
@@ -17,7 +17,7 @@ use dclutch_claims_svm::{
         TERMINAL_SETTLEMENT_TOKEN_PROGRAM_ACCOUNT_V3,
     },
 };
-use dclutch_fractional_claim_contract::{
+use dclutch_claims::fractional::{
     FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3, FRACTIONAL_ATOMIC_ACTOR_V3,
     FRACTIONAL_ATOMIC_HOLDER_TOKEN_V3, FRACTIONAL_ATOMIC_ROOT_V3, FRACTIONAL_ATOMIC_SHARD_MINT_V3,
     FRACTIONAL_ATOMIC_TERMS_STAGING_V3, FRACTIONAL_ATOMIC_TOKEN_PROGRAM_V3,
@@ -28,7 +28,7 @@ use dclutch_fractional_claim_contract::{
     FRACTIONAL_TERMINAL_TERMS_STAGING_V3, FRACTIONAL_TERMINAL_TOKEN_BEHAVIOR_RAW_V3,
     FRACTIONAL_TERMINAL_TOKEN_BEHAVIOR_STAGING_V3, FractionalExposureActionV2,
 };
-use dclutch_fractional_claim_kernel::{
+use dclutch_claims::fractional_kernel::{
     Error as KernelError, FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
     FRACTIONAL_SELECTION_CONFIG_BYTES_V1, FRACTIONAL_SELECTION_CONFIG_SCHEMA_ID_V1,
     FRACTIONAL_SELECTION_CONFIG_SCHEMA_PREIMAGE_V1, FractionalExposureTermsAdmissionV2,
@@ -46,7 +46,7 @@ use dclutch_fractional_claim_operator::{
     fractional_current_release_v4, fractional_selected_release_v4,
     validate_fractional_current_release_v4, validate_fractional_selected_release_v4,
 };
-use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
+use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
 
 const RELEASE: [u8; 32] = [1; 32];
 const MARKET: [u8; 32] = [2; 32];

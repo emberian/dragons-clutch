@@ -57,7 +57,7 @@
 //! plan goes, and the Series precedent (a root-header-projecting profile, so
 //! the policy's seeds have an honest single author) is the shape to follow.
 
-use dclutch_account_profile_contract::lifecycle_v3::{
+use dclutch_vm::account_profile::lifecycle_v3::{
     HEADER_BYTES as LIFECYCLE_HEADER_BYTES, encode::encode_lifecycle_policy_v5_atomic,
 };
 
@@ -96,7 +96,7 @@ pub fn encode_rational_lifecycle_policy_v5() -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_account_profile_contract::lifecycle_v3::StateLifecyclePolicyV5;
+    use dclutch_vm::account_profile::lifecycle_v3::StateLifecyclePolicyV5;
     use solana_program::hash::hash;
 
     /// The emitted policy really is empty, and says so when decoded.

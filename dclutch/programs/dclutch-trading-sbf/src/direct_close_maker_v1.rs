@@ -53,17 +53,17 @@ extern crate alloc;
 
 use alloc::vec;
 
-use dclutch_account_profile_contract::{
+use dclutch_vm::account_profile::{
     ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1, AccountObservationV1, AccountProfileV1,
     ProjectionRegistersV2, derive_effect_permissions, project_atomic,
 };
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_market::capability_program::{
     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1, CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityProgramV1,
     CapabilityRegistersV2, CapabilityRootHeaderV1,
     set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
 };
-use dclutch_direct_codec::{
+use dclutch_trading::{
     close_maker_v1,
     close_maker_v1::{
         DIRECT_CLOSE_MAKER_IDENTITY_COUNT_V1, DIRECT_CLOSE_MAKER_REQUEST_SCHEMA_ID_V1,
@@ -78,20 +78,20 @@ use dclutch_direct_codec::{
         MakerReplayRootV1, MakerReplaySeedsV1, SuccessorError, close_maker_replay_v2,
     },
 };
-use dclutch_effect_kernel::v2::{
+use dclutch_vm::effect::v2::{
     AccountInput, AccountPermission, ProgramV2 as EffectProgramV2, ResolvedEffect,
     SCHEMA_RELEASE_ID as EFFECT_SCHEMA_RELEASE_ID_V2, project_with_aliases_and_requests_atomic,
 };
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_activation_auth_v1::{
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::activation_auth_v1::{
     authenticate_activated_role_in_frame_v1, authenticate_activation_cache_identity_v1,
     require_cache_account,
 };
-use dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1;
-use dclutch_registry_svm::AuthenticatedRoleReceiptV1;
-use dclutch_release_set_contract::ExecutionRoleV1;
-use dclutch_transition_vm::v2::{RegisterInput, RegisterOutput};
+use dclutch_registry::ActivatedExecutionReleaseSetViewV1;
+use dclutch_registry::svm::AuthenticatedRoleReceiptV1;
+use dclutch_registry::release_set::ExecutionRoleV1;
+use dclutch_vm::v2::{RegisterInput, RegisterOutput};
 use solana_program::{
     account_info::AccountInfo, hash::hash, program::set_return_data, program_error::ProgramError,
     pubkey::Pubkey,
@@ -101,7 +101,7 @@ use solana_sdk_ids::{system_program, sysvar};
 use crate::{TradingSbfError, dispatch::TradingFamilyContextV1};
 
 use crate::market_admission_v1::TRADING_RETIRING_MARKET_ADMISSIBLE_PRESTATES_V1;
-pub use dclutch_direct_codec::close_maker_v1::DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1;
+pub use dclutch_trading::close_maker_v1::DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1;
 
 struct Accounts<'accounts, 'info> {
     root: &'accounts AccountInfo<'info>,
@@ -309,7 +309,7 @@ pub fn process_direct_close_maker_v1(
     authenticate_persisted_raw(
         accounts.registry.key,
         accounts.manifest_raw,
-        dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        dclutch_market::capability_manifest::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         context.selection().manifest().to_bytes(),
         header.record_bumps().manifest_raw(),
         &manifest_data,

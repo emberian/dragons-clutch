@@ -15,16 +15,13 @@ base64 = "=0.22.1"
 bincode = "=1.3.3"
 # The published AccountProfile the General route's runtime-suffix privileges
 # are READ OFF, rather than typed into the route producer by hand.
-dclutch-account-profile-contract = { path = "../../../../crates/dclutch-account-profile-contract" }
-dclutch-capability-activation-codec = { path = "../../../../crates/dclutch-capability-activation-codec" }
+dclutch-vm = { path = "../../../../crates/dclutch-vm" }
+dclutch-market = { path = "../../../../crates/dclutch-market" }
 dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
-dclutch-capability-contract = { path = "../../../../crates/dclutch-capability-contract" }
-dclutch-capability-program-contract = { path = "../../../../crates/dclutch-capability-program-contract" }
-dclutch-capability-seal-contract = { path = "../../../../crates/dclutch-capability-seal-contract" }
 dclutch-claims-sbf = { path = "../../../../programs/dclutch-claims-sbf", features = ["no-entrypoint"] }
-dclutch-claims-svm = { path = "../../../../crates/dclutch-claims-svm" }
-dclutch-custody-contract = { path = "../../../../crates/dclutch-custody-contract" }
-dclutch-direct-codec = { path = "../../../../crates/dclutch-direct-codec" }
+dclutch-claims = { path = "../../../../crates/dclutch-claims" }
+dclutch-custody = { path = "../../../../crates/dclutch-custody" }
+dclutch-trading = { path = "../../../../crates/dclutch-trading" }
 # The Direct intent ticket author, which used to be `pub(crate)` in THIS crate
 # and is now shared with the released `dclutch` CLI. `direct_ticket.rs` is the
 # adapter that keeps this binary's subcommand and error type over it.
@@ -40,40 +37,19 @@ dclutch-wallet-terminal-payout-operator = { path = "../../../../crates/dclutch-w
 # cluster-origin policy.
 dclutch-wallet-terminal-input-operator = { path = "../../../../crates/dclutch-wallet-terminal-input-operator" }
 
-dclutch-execution-strategy-contract = { path = "../../../../crates/dclutch-execution-strategy-contract" }
-dclutch-fractional-claim-kernel = { path = "../../../../crates/dclutch-fractional-claim-kernel" }
 dclutch-fractional-claim-operator = { path = "../../../../crates/dclutch-fractional-claim-operator" }
-dclutch-general-adapter-contract = { path = "../../../../crates/dclutch-general-adapter-contract" }
-dclutch-general-codec = { path = "../../../../crates/dclutch-general-codec" }
-dclutch-general-config-contract = { path = "../../../../crates/dclutch-general-config-contract" }
 dclutch-general-successor-operator = { path = "../../../../crates/dclutch-general-successor-operator" }
-dclutch-market-core-codec = { path = "../../../../crates/dclutch-market-core-codec" }
 dclutch-market-founding-v1-operator = { path = "../../../../crates/dclutch-market-founding-v1-operator" }
 dclutch-market-retirement-v1-operator = { path = "../../../../crates/dclutch-market-retirement-v1-operator" }
 dclutch-operator = { path = "../../../../crates/dclutch-operator" }
-dclutch-product-runtime-v2 = { path = "../../../../crates/dclutch-product-runtime-v2" }
-dclutch-product-payoff-v2-codec = { path = "../../../../crates/dclutch-product-payoff-v2-codec" }
-dclutch-product-runtime-v2-admission = { path = "../../../../crates/dclutch-product-runtime-v2-admission" }
+dclutch-product = { path = "../../../../crates/dclutch-product" }
 dclutch-product-runtime-v2-operator = { path = "../../../../crates/dclutch-product-runtime-v2-operator" }
-dclutch-pyth-svm = { path = "../../../../crates/dclutch-pyth-svm", features = ["synthetic-local-fixture"] }
-dclutch-realm-contract = { path = "../../../../crates/dclutch-realm-contract" }
-dclutch-record-contract = { path = "../../../../crates/dclutch-record-contract" }
-dclutch-registry-contract = { path = "../../../../crates/dclutch-registry-contract" }
-dclutch-registry-activation-auth-v1 = { path = "../../../../crates/dclutch-registry-activation-auth-v1" }
-dclutch-registry-svm = { path = "../../../../crates/dclutch-registry-svm" }
-dclutch-representation-composition-v3-kernel = { path = "../../../../crates/dclutch-representation-composition-v3-kernel" }
+dclutch-source = { path = "../../../../crates/dclutch-source", features = ["synthetic-local-fixture"] }
+dclutch-registry = { path = "../../../../crates/dclutch-registry", features = ["svm"] }
 dclutch-representation-composition-v3-operator = { path = "../../../../crates/dclutch-representation-composition-v3-operator" }
-dclutch-relay-contract = { path = "../../../../crates/dclutch-relay-contract" }
-dclutch-release-set-contract = { path = "../../../../crates/dclutch-release-set-contract" }
 dclutch-release-tool = { path = "../../../../crates/dclutch-release-tool" }
-dclutch-rational-representation-v2-kernel = { path = "../../../../crates/dclutch-rational-representation-v2-kernel" }
-dclutch-rent-contract = { path = "../../../../crates/dclutch-rent-contract" }
-dclutch-resolution-codec = { path = "../../../../crates/dclutch-resolution-codec" }
 dclutch-resolution-core-v3-operator = { path = "../../../../crates/dclutch-resolution-core-v3-operator" }
-dclutch-series-v3-kernel = { path = "../../../../crates/dclutch-series-v3-kernel" }
-dclutch-source-contract = { path = "../../../../crates/dclutch-source-contract" }
 dclutch-source-readiness-operator = { path = "../../../../crates/dclutch-source-readiness-operator" }
-dclutch-token-svm = { path = "../../../../crates/dclutch-token-svm" }
 dclutch-trading-sbf = { path = "../../../../programs/dclutch-trading-sbf", default-features = false, features = ["no-entrypoint", "series-family"] }
 dclutch-versioned-message-operator = { path = "../../../../crates/dclutch-versioned-message-operator" }
 reqwest = { version = "=0.12.28", default-features = false, features = ["blocking", "json", "rustls-tls"] }

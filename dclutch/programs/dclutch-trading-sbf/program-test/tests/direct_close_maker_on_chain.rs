@@ -26,21 +26,21 @@
 //!   registered live intents refuses `CloseMakerLiveIntents`; a substituted
 //!   rent destination refuses `CloseMakerFrame` before anything moves.
 
-use dclutch_account_profile_contract::ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1;
-use dclutch_capability_contract::{
+use dclutch_vm::account_profile::ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1;
+use dclutch_market::capability_manifest::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
     CapabilityEntryV1, CapabilityManifestV1, CompartmentFundingV1,
     ContentId as CapabilityContentId, FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES,
     MAX_DEPENDENCIES_PER_CAPABILITY,
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
     activation_registers_v2::{ACTIVATION_ACTION_SCALAR_V2, ACTIVATION_FIRST_FAMILY_SCALAR_V2},
     set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
     v4::CapabilityProgramV4,
 };
 use dclutch_core_contract::ContentId as CoreContentId;
-use dclutch_direct_codec::{
+use dclutch_trading::{
     begin_retiring_bundle_v1::{
         direct_begin_retiring_account_profile_schema_v1,
         direct_begin_retiring_descriptor_schema_v1, direct_begin_retiring_effect_schema_v1,
@@ -80,9 +80,9 @@ use dclutch_direct_hot_program_test_support::{
         programdata_v2, start_with_substrate, submit_v0_observed,
     },
 };
-use dclutch_effect_kernel::v2::SCHEMA_RELEASE_ID as EFFECT_SCHEMA_RELEASE_ID_V2;
-use dclutch_market_core_codec::CoreEffectActionV1;
-use dclutch_market_core_codec::{
+use dclutch_vm::effect::v2::SCHEMA_RELEASE_ID as EFFECT_SCHEMA_RELEASE_ID_V2;
+use dclutch_market::CoreEffectActionV1;
+use dclutch_market::{
     CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
     STATE_BYTES, StateBumpsV1,
 };
@@ -93,9 +93,9 @@ use dclutch_operator::{
         DirectCloseMakerSnapshotV1, plan_direct_close_maker_v1,
     },
 };
-use dclutch_record_contract::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
+use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
 use dclutch_trading_sbf::TradingSbfError;
-use dclutch_transition_vm::v2::{
+use dclutch_vm::v2::{
     ProgramV2 as TransitionProgramV2, RegisterInput, RegisterOutput, execute_atomic,
 };
 use solana_account::Account;
@@ -245,7 +245,7 @@ fn install_replay(
         MakerReplaySeedsV1::new(coordinates, maker.to_bytes()).expect("nonzero maker seeds");
     let (address, bump) = Pubkey::find_program_address(&seeds.as_slices(), &TRADING_PROGRAM_ID);
     let rent_principal = Rent::default()
-        .minimum_balance(dclutch_direct_codec::successor::DIRECT_MAKER_REPLAY_BYTES_V1);
+        .minimum_balance(dclutch_trading::successor::DIRECT_MAKER_REPLAY_BYTES_V1);
     let intent = AuthenticatedIntentReplayV2::from_signed_intent(
         maker.to_bytes(),
         CompactIntentV2 {
@@ -509,7 +509,7 @@ fn build_case(test: &mut ProgramTest, releases: Releases, artifacts: &Elves) -> 
         manifest,
     );
 
-    let selection = dclutch_release_set_contract::CapabilityExecutionSelectionV1::new(
+    let selection = dclutch_registry::release_set::CapabilityExecutionSelectionV1::new(
         ENTRY_INDEX,
         content(manifest_record.digest),
         content(ordinary.kind().to_bytes()),

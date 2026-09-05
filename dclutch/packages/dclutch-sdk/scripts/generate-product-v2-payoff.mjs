@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 // that publishes V4. The dead half is deleted; what remains is authored data.
 const root = new URL('../../../', import.meta.url);
 const sources = Object.freeze({
-  codec: readFileSync(new URL('crates/dclutch-product-payoff-v2-codec/src/lib.rs', root), 'utf8'),
+  codec: readFileSync(new URL('crates/dclutch-product/src/payoff/mod.rs', root), 'utf8'),
 });
 const outputUrl = new URL('../lib/generated/productV2Payoff.ts', import.meta.url);
 

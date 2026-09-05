@@ -1,6 +1,6 @@
 //! Typed RequestProfile and TransitionVM artifacts for terminal Bearer redemption.
 
-use dclutch_rational_representation_v2_contract::{
+use dclutch_claims::rational::{
     CallerRoleV2, RATIONAL_TERMINAL_HOT_ACTION_OFFSET_V3, RATIONAL_TERMINAL_HOT_ACTOR_OFFSET_V3,
     RATIONAL_TERMINAL_HOT_ASSET_ACTOR_SHARD_ACCOUNT_OFFSET_V3,
     RATIONAL_TERMINAL_HOT_ASSET_COEFFICIENT_OFFSET_V3,
@@ -43,14 +43,14 @@ use dclutch_rational_representation_v2_contract::{
     RATIONAL_TERMINAL_SCALAR_SELECTED_OUTCOME_V3, RATIONAL_TERMINAL_SCALAR_SHARD_SUPPLY_V3,
     RATIONAL_TERMINAL_SCALAR_STRUCTURED_SHARDS_V3, RepresentationActionV2,
 };
-use dclutch_request_profile_contract::{
+use dclutch_vm::request_profile::{
     HEADER_BYTES as REQUEST_PROFILE_HEADER_BYTES, OPERATION_BYTES as REQUEST_OPERATION_BYTES,
     encode::{
         IdentityRegisterV1, RequestCoordinateV1, RequestGeometryV1, RequestInstructionV1,
         ScalarRegisterV1, encode_request_profile_v1_atomic,
     },
 };
-use dclutch_transition_vm::v3::{
+use dclutch_vm::v3::{
     HEADER_BYTES as TRANSITION_HEADER_BYTES, INSTRUCTION_BYTES as TRANSITION_INSTRUCTION_BYTES,
     InstructionV3, ProgramGeometryV3, ScalarRegisterV3, encode_program_atomic,
 };
@@ -219,15 +219,15 @@ pub fn encode_rational_terminal_request_profile_v3()
     ];
     let geometry = RequestGeometryV1::new(
         u32::try_from(RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3).map_err(|_| {
-            Error::RequestProfileArtifact(dclutch_request_profile_contract::Error::InvalidLength)
+            Error::RequestProfileArtifact(dclutch_vm::request_profile::Error::InvalidLength)
         })?,
         0,
         u16::try_from(RATIONAL_TERMINAL_HOT_COMMON_SCALARS_V3).map_err(|_| {
-            Error::RequestProfileArtifact(dclutch_request_profile_contract::Error::InvalidLength)
+            Error::RequestProfileArtifact(dclutch_vm::request_profile::Error::InvalidLength)
         })?,
         0,
         u16::try_from(RATIONAL_TERMINAL_HOT_COMMON_IDENTITIES_V3).map_err(|_| {
-            Error::RequestProfileArtifact(dclutch_request_profile_contract::Error::InvalidLength)
+            Error::RequestProfileArtifact(dclutch_vm::request_profile::Error::InvalidLength)
         })?,
         0,
     );
@@ -251,7 +251,7 @@ pub fn encode_rational_terminal_transition_v3()
         u16::try_from(index)
             .map(ScalarRegisterV3::common)
             .map_err(|_| {
-                Error::TransitionArtifact(dclutch_transition_vm::v3::Error::InvalidRegister)
+                Error::TransitionArtifact(dclutch_vm::v3::Error::InvalidRegister)
             })
     };
     let prelude: [InstructionV3; TRANSITION_INSTRUCTION_COUNT] = [
@@ -286,11 +286,11 @@ pub fn encode_rational_terminal_transition_v3()
     ];
     let geometry = ProgramGeometryV3 {
         common_scalars: u16::try_from(RATIONAL_TERMINAL_HOT_COMMON_SCALARS_V3).map_err(|_| {
-            Error::TransitionArtifact(dclutch_transition_vm::v3::Error::InvalidRegister)
+            Error::TransitionArtifact(dclutch_vm::v3::Error::InvalidRegister)
         })?,
         item_scalar_stride: 0,
         common_identities: u16::try_from(RATIONAL_TERMINAL_HOT_COMMON_IDENTITIES_V3).map_err(
-            |_| Error::TransitionArtifact(dclutch_transition_vm::v3::Error::InvalidRegister),
+            |_| Error::TransitionArtifact(dclutch_vm::v3::Error::InvalidRegister),
         )?,
         item_identity_stride: 0,
     };
@@ -305,7 +305,7 @@ fn request(offset: usize) -> Result<RequestCoordinateV1> {
     u32::try_from(offset)
         .map(RequestCoordinateV1::fixed)
         .map_err(|_| {
-            Error::RequestProfileArtifact(dclutch_request_profile_contract::Error::InvalidLength)
+            Error::RequestProfileArtifact(dclutch_vm::request_profile::Error::InvalidLength)
         })
 }
 
@@ -313,7 +313,7 @@ fn identity(index: usize) -> Result<IdentityRegisterV1> {
     u16::try_from(index)
         .map(IdentityRegisterV1::common)
         .map_err(|_| {
-            Error::RequestProfileArtifact(dclutch_request_profile_contract::Error::InvalidLength)
+            Error::RequestProfileArtifact(dclutch_vm::request_profile::Error::InvalidLength)
         })
 }
 
@@ -321,7 +321,7 @@ fn scalar(index: usize) -> Result<ScalarRegisterV1> {
     u16::try_from(index)
         .map(ScalarRegisterV1::common)
         .map_err(|_| {
-            Error::RequestProfileArtifact(dclutch_request_profile_contract::Error::InvalidLength)
+            Error::RequestProfileArtifact(dclutch_vm::request_profile::Error::InvalidLength)
         })
 }
 
@@ -349,16 +349,16 @@ fn project_u32(offset: usize, register: usize) -> Result<RequestInstructionV1> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_rational_representation_v2_contract::{
+    use dclutch_claims::rational::{
         ABSENT_REVISION, ASSET_BYTES_V3, AssetV2, RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3,
         RATIONAL_TERMINAL_SCALAR_PRODUCT_OUTCOME_COUNT_V3, RationalTerminalHotRequestV3,
         RepresentationRequestHeaderV2, RepresentationRequestV2,
     };
-    use dclutch_request_profile_contract::{
+    use dclutch_vm::request_profile::{
         ProjectionRegistersV1, RequestProfileV1, project_atomic,
     };
-    use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
-    use dclutch_transition_vm::v3::{
+    use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
+    use dclutch_vm::v3::{
         ProgramV3, RegisterInput, RegisterOutput, execute_fold_atomic,
     };
 

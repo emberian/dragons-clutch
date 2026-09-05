@@ -1,7 +1,7 @@
 # dclutch-core-sbf
 
 This is the isolated Solana adapter for the sparse Market Core. The generated
-`dclutch-market-core-codec` transition functions remain the lifecycle semantic
+`dclutch-market` transition functions remain the lifecycle semantic
 owner; this program authenticates physical accounts, current Registry-selected
 programs, child CPI return data, and commit-last state writes.
 

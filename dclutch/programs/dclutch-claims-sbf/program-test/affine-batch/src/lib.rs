@@ -12,7 +12,7 @@
 /// Shared canonical Product Runtime V3/LBV2 real-SBF fixture compiler.
 pub mod fixture;
 
-use dclutch_claims_svm::{
+use dclutch_claims::{
     CallerRole,
     affine_batch_v2::{
         AffineBatchPlanInputV2, AffineBatchPlanV2, AffineBatchPositionV2, AffineBatchRowInputV2,
@@ -20,21 +20,21 @@ use dclutch_claims_svm::{
     },
     protocol_position_v2::ProtocolPositionSeedsV2,
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, STATE_BYTES,
 };
-use dclutch_product_payoff_v2_codec::{
+use dclutch_product::payoff::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
     runtime_v3::{ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, semantic_basis_preimage_v3},
 };
-use dclutch_product_runtime_v2::{ContentId, ProductJoinV2, ResultDomainV2};
-use dclutch_product_runtime_v2_admission::{
+use dclutch_product::{ContentId, ProductJoinV2, ResultDomainV2};
+use dclutch_product::admission::{
     AdmissionReceiptV2, FinalizedRecordCoordinateV2, PORTFOLIO_SCHEMA_ID_V2,
     PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2, admit_authenticated_records_v2,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     hash::{hash, hashv},
     instruction::{AccountMeta, Instruction},
@@ -52,7 +52,7 @@ const LIABILITY_BASIS_POSITION_HEADER_BYTES_V2: usize = 128;
 // are one address's identity and a second declaration of them is a second
 // author: `dclutch:lbv2:market` stood under two names -- this one and the
 // owner's -- until the seam register's DOMAIN_BYTES_COLLIDE said so.
-use dclutch_claims_svm::liability_basis_state_v2::LIABILITY_BASIS_MARKET_SEED_V2;
+use dclutch_claims::liability_basis_state_v2::LIABILITY_BASIS_MARKET_SEED_V2;
 const MARKET_CLAIM_COUNT_OFFSET: usize = 12;
 const MARKET_REVISION_OFFSET: usize = 16;
 const MARKET_LOGICAL_ID_OFFSET: usize = 24;
@@ -483,7 +483,7 @@ fn authenticate_market(
 fn authenticate_product(
     observation: AffineBatchObservationV2<'_>,
     expected_digest: [u8; 32],
-) -> Result<dclutch_product_runtime_v2_admission::AdmissionProjectionV2> {
+) -> Result<dclutch_product::admission::AdmissionProjectionV2> {
     let product = authenticate_record(
         observation.product.product,
         observation.registry_program,
@@ -492,7 +492,7 @@ fn authenticate_product(
         observation.rent,
         Error::InvalidProduct,
     )?;
-    let product_record = dclutch_product_runtime_v2_admission::ProductRecordV2::decode(
+    let product_record = dclutch_product::admission::ProductRecordV2::decode(
         observation.product.product.raw.data,
     )
     .map_err(|_| Error::InvalidProduct)?;

@@ -9,7 +9,7 @@ extern crate alloc;
 
 use alloc::{boxed::Box, vec, vec::Vec};
 
-use dclutch_claims_svm::{
+use dclutch_claims::{
     CallerRole,
     product_basis_terminal_v3::{
         Error as ProductBasisTerminalError, ProductBasisTerminalInputV3,
@@ -19,19 +19,19 @@ use dclutch_claims_svm::{
     signed_delta_v3::{SignedDeltaReceiptV3, SignedDeltaV3, plan_bytes},
 };
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CUSTODY_RECEIPT_BYTES_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1, ContextV1,
     CustodyAuthoritySeedsV1, CustodyReceiptV1, CustodyReplaySeedsV1, CustodyReplayV1,
     CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
 };
-use dclutch_rational_representation_v2_contract::{
+use dclutch_claims::rational::{
     ABSENT_REVISION, CallerRoleV2, RepresentationRequestV2,
 };
-use dclutch_realm_contract::REALM_SCHEMA_RELEASE_ID_V1;
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_representation_composition_v3_kernel::RecordAdmissionV3;
-use dclutch_token_svm::TokenAccount;
+use dclutch_market::realm::REALM_SCHEMA_RELEASE_ID_V1;
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_claims::composition::RecordAdmissionV3;
+use dclutch_custody::token_svm::TokenAccount;
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
@@ -153,7 +153,7 @@ pub(crate) fn execute_rational_terminal_v3<'accounts, 'info>(
         header.release_set,
         authenticated.core,
         authenticated.admission.basis_kind(),
-        dclutch_product_payoff_v2_codec::runtime_v3::categorical_refunds_on_failure_v3(
+        dclutch_product::payoff::runtime_v3::categorical_refunds_on_failure_v3(
             authenticated.admission.basis_kind(),
             authenticated.admission.basis_width(),
             authenticated.admission.payout_scale(),
@@ -171,7 +171,7 @@ pub(crate) fn execute_rational_terminal_v3<'accounts, 'info>(
     let product_width = usize::try_from(authenticated.result_outcome_count)
         .map_err(|_| ClaimsSbfError::Economic)?;
     let neutral = SignedDeltaV3::new(
-        dclutch_claims_svm::signed_delta_v3::DeltaDirectionV3::Neutral,
+        dclutch_claims::signed_delta_v3::DeltaDirectionV3::Neutral,
         0,
     )
     .map_err(|_| ClaimsSbfError::Economic)?;
@@ -629,7 +629,7 @@ fn authenticate_custody_accounts(
 /// `ImmutableOwner` only removes the token program's ability to change the
 /// owner this function just authenticated, so admitting it strengthens the
 /// check rather than weakening it. Every other extension stays refused, in
-/// `dclutch-token-svm`, by width and by type.
+/// `dclutch-custody::token_svm`, by width and by type.
 pub(crate) fn token_amount(
     account: &AccountInfo<'_>,
     token_program: &AccountInfo<'_>,

@@ -16,7 +16,7 @@ custom-heap = []
 custom-panic = []
 
 [dependencies]
-dclutch-market-core-codec = { path = "../../../../../crates/dclutch-market-core-codec" }
+dclutch-market = { path = "../../../../../crates/dclutch-market" }
 solana-program = { version = "=3.0.0", default-features = false }
 
 [workspace]

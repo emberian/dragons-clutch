@@ -2,23 +2,23 @@
 
 use alloc::{boxed::Box, vec::Vec};
 
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CUSTODY_POSTSTATE_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CUSTODY_REQUEST_BYTES_V1, CallerRoleV1,
     CompartmentV1, CustodyAuthoritySeedsV1, CustodyReceiptV1, CustodyReplaySeedsV1,
     CustodyReplayV1, CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     Action, ChildEffectObservation, CollateralObservation, CoreState, MarketAdmissionV1, Phase,
     Readiness, Realm, Request, Role, VacantAccount, open_market,
 };
-use dclutch_realm_contract::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
-use dclutch_registry_svm::continuation_v1::{
+use dclutch_market::realm::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
+use dclutch_registry::svm::continuation_v1::{
     REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationRequestV1,
 };
-use dclutch_release_set_contract::CallerAuthoritySeedsV1;
-use dclutch_token_svm::PRODUCTION_ADAPTER_RELEASES;
+use dclutch_registry::release_set::CallerAuthoritySeedsV1;
+use dclutch_custody::token_svm::PRODUCTION_ADAPTER_RELEASES;
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
@@ -51,7 +51,7 @@ pub const OPEN_MARKET_ADMISSIBLE_PRESTATES_V1: MarketAdmissionV1 =
 
 /// Exact top-level instruction width for one canonical Custody creation effect.
 pub const OPEN_MARKET_INSTRUCTION_BYTES_V1: usize =
-    dclutch_market_core_codec::REQUEST_BYTES + CUSTODY_REQUEST_BYTES_V1;
+    dclutch_market::REQUEST_BYTES + CUSTODY_REQUEST_BYTES_V1;
 /// Exact outer count for prerequisite replay initialization.
 pub const INITIALIZE_REPLAY_OUTER_ACCOUNT_COUNT_V1: usize = 16;
 /// Exact outer count for vault creation and Market opening.
@@ -74,8 +74,8 @@ const OPEN_RENT: usize = 17;
 
 struct AuthenticatedOpenV1 {
     state: Box<CoreState>,
-    state_bytes: Box<[u8; dclutch_market_core_codec::STATE_BYTES]>,
-    custody_admission: Box<dclutch_market_core_codec::Admission>,
+    state_bytes: Box<[u8; dclutch_market::STATE_BYTES]>,
+    custody_admission: Box<dclutch_market::Admission>,
     realm: RealmV1,
     rent: Rent,
     continuation: RegistryContinuationRequestV1,
@@ -92,7 +92,7 @@ pub(crate) fn process(
 ) -> Result<(), ProgramError> {
     if request.action != Action::OpenMarket
         || custody_bytes.len() != CUSTODY_REQUEST_BYTES_V1
-        || request_bytes.len() != dclutch_market_core_codec::REQUEST_BYTES
+        || request_bytes.len() != dclutch_market::REQUEST_BYTES
     {
         return Err(CoreSbfError::Instruction.into());
     }
@@ -337,7 +337,7 @@ fn authenticate_request_shape(
                 || request.expected_revision != 1
                 || request.resulting_revision != 2
                 || request.amount != 0
-                || request.rent_lamports != rent.minimum_balance(dclutch_token_svm::ACCOUNT_BYTES)
+                || request.rent_lamports != rent.minimum_balance(dclutch_custody::token_svm::ACCOUNT_BYTES)
                 || account(accounts, OPEN_MINT)?.key.to_bytes() != request.mint
                 || account(accounts, OPEN_VAULT)?.key != &expected_vault
                 || account(accounts, OPEN_AUTHORITY)?.key != &expected_authority
@@ -606,7 +606,7 @@ fn authenticate_vault_poststate(
     let authority = account(accounts, OPEN_AUTHORITY)?;
     if token_program.key.to_bytes() != profile.program_id()
         || vault.owner != token_program.key
-        || vault.lamports() != rent.minimum_balance(dclutch_token_svm::ACCOUNT_BYTES)
+        || vault.lamports() != rent.minimum_balance(dclutch_custody::token_svm::ACCOUNT_BYTES)
     {
         return Err(CoreSbfError::ChildAck);
     }
@@ -760,7 +760,7 @@ fn validate_outer_frame(
 
 fn require_market_unchanged(
     frame: &FixedRoleAccountsV1<'_, '_>,
-    expected: &[u8; dclutch_market_core_codec::STATE_BYTES],
+    expected: &[u8; dclutch_market::STATE_BYTES],
 ) -> Result<(), CoreSbfError> {
     let observed = frame
         .market()

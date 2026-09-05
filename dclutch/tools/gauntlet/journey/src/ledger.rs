@@ -64,12 +64,12 @@
 
 use std::collections::BTreeMap;
 
-use dclutch_claims_svm::liability_basis_state_v2::{
+use dclutch_claims::liability_basis_state_v2::{
     LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
 };
-use dclutch_custody_contract::{CompartmentV1, CustodyVaultSeedsV1};
-use dclutch_market_core_codec::{CoreState, Phase as CorePhase};
-use dclutch_token_svm::{MINT_BYTES, Mint, TokenAccount};
+use dclutch_custody::{CompartmentV1, CustodyVaultSeedsV1};
+use dclutch_market::{CoreState, Phase as CorePhase};
+use dclutch_custody::token_svm::{MINT_BYTES, Mint, TokenAccount};
 use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
 

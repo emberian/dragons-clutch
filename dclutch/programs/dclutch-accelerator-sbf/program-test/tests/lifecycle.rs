@@ -2,17 +2,17 @@
 
 use std::{collections::BTreeMap, vec, vec::Vec};
 
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1,
     hot_v3::{DIRECT_HOT_HEAP_FRAME_BYTES_V1, HotExecutionEnvelopeV3},
 };
 use dclutch_core_contract::ContentId;
-use dclutch_execution_strategy_contract::admitted_v3::{
+use dclutch_market::execution_strategy::admitted_v3::{
     ADMITTED_CALLER_AUTHORITY_ACCOUNT_V3, ADMITTED_INSTRUCTIONS_ACCOUNT_V3,
     ADMITTED_OUTPUT_PAGE_ACCOUNT_V3, ADMITTED_RUNTIME_ACCOUNTS_START_V3,
     ADMITTED_TRADING_PROGRAM_ACCOUNT_V3, admitted_runtime_accounts_start_v3,
 };
-use dclutch_execution_strategy_contract::v2::{
+use dclutch_market::execution_strategy::v2::{
     ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2, ACCELERATOR_OUTPUT_PAGE_ACK_BYTES_V3,
     ACCELERATOR_REQUEST_HEADER_BYTES_V2, AcceleratorAckV2, AcceleratorDispositionV2,
     AcceleratorOutputPageAckV3, AcceleratorOutputPageRequestV3, AcceleratorRequestV2,
@@ -21,7 +21,7 @@ use dclutch_execution_strategy_contract::v2::{
 };
 use dclutch_accelerator_sbf::general::GeneralAcceleratorSbfErrorV3;
 use dclutch_general_accelerator_test_caller_sbf::GENERAL_ACCELERATOR_TEST_CALLER_AUTHORITY_SEED_V1;
-use dclutch_general_adapter_contract::{
+use dclutch_trading::general::{
     account_rules_v3::general_account_profile_fixed_count_v3,
     artifacts_v3::decode_general_request_v3,
     candidate_v1::{
@@ -78,12 +78,12 @@ use dclutch_general_adapter_contract::{
         GeneralReadonlyEvidenceKindV3, general_readonly_evidence_v3,
     },
 };
-use dclutch_general_codec::{
+use dclutch_trading::general_codec::{
     Action, MAX_SELECTION_CRITERIA, SelectionCriterion, SelectionPolicyV1,
     successor_request_v2::ControllerRequestV2,
     successor_request_v3::{ControllerActionV3, ControllerRequestV3},
 };
-use dclutch_general_config_contract::{
+use dclutch_trading::general_config::{
     GENERAL_ROOT_BYTES_V2,
     root::GeneralRootV2,
     v3::{GeneralConfigV3, GeneralConfigV3Input},
@@ -928,7 +928,7 @@ fn verify_candidate_bank(
         (scalar::CLAIMS_AFFINE_ACTIVE, u64::from(row_index)),
         (
             scalar::ROOT_LIFECYCLE_OBSERVATION,
-            u64::from(dclutch_general_config_contract::root::GeneralLifecycleV2::Active.tag()),
+            u64::from(dclutch_trading::general_config::root::GeneralLifecycleV2::Active.tag()),
         ),
         (scalar::PRIMARY_PRINCIPAL_OBSERVATION, principal),
         (
@@ -974,7 +974,7 @@ fn close_candidate_bank(
         (scalar::CURRENT_SLOT, current_slot),
         (
             scalar::ROOT_LIFECYCLE_OBSERVATION,
-            u64::from(dclutch_general_config_contract::root::GeneralLifecycleV2::Active.tag()),
+            u64::from(dclutch_trading::general_config::root::GeneralLifecycleV2::Active.tag()),
         ),
         (
             scalar::CANDIDATE_STATUS_OBSERVATION,
@@ -2683,8 +2683,8 @@ fn assert_execution_evidence(evidence: ExecutionEvidence, action: Action, outcom
     //
     // Every term below is already a fact this test holds, so nothing is
     // asserted twice from two places: two leading accounts, the fixed runtime
-    // start owned by `dclutch-execution-strategy-contract`, the per-action
-    // profile width owned by `dclutch-general-adapter-contract`, and the page
+    // start owned by `dclutch-market::execution_strategy`, the per-action
+    // profile width owned by `dclutch-trading::general`, and the page
     // span the run actually measured. A frame that drifts by one now fails
     // here, at the ELF, naming both numbers -- which is the only place that can
     // notice before the evidence document goes stale again.

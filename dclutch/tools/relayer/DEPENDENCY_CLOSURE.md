@@ -50,7 +50,7 @@ What *is* present, and why it is not an interpretation surface:
 - `serde_json` — JSON-RPC. Note that the daemon decodes `getMultipleAccounts`
   *envelopes*: `lamports`, `owner`, `executable`, `space`, and a base64 blob it
   never looks inside.
-- `dclutch-relay-contract` and its `dclutch-*` dependencies — the wire codec,
+- `dclutch-source::relay` and its `dclutch-*` dependencies — the wire codec,
   which is `no_std` and hashes nothing.
 
 The only account layouts named anywhere in this crate are the Loader V3
@@ -64,7 +64,7 @@ purposes `src/chain.rs` documents.
 would not catch a venue layout hand-transcribed into this crate's own source,
 which is why `src/chain.rs` carries the second half of the argument in prose and
 why the observation path builds every signed byte through
-`dclutch_relay_contract::wire`.
+`dclutch_source::relay::wire`.
 
 ## Full `cargo tree -e normal`
 
@@ -105,16 +105,16 @@ dclutch-relayer v0.1.0 (/Users/ember/dev/dclutch/tools/relayer)
 │       ├── proc-macro2 v1.0.107 (*)
 │       ├── quote v1.0.47 (*)
 │       └── syn v3.0.4 (*)
-├── dclutch-relay-contract v0.1.0 (/Users/ember/dev/dclutch/crates/dclutch-relay-contract)
+├── dclutch-source v0.1.0 (/Users/ember/dev/dclutch/crates/dclutch-source)
 │   ├── dclutch-core-contract v0.1.0 (/Users/ember/dev/dclutch/crates/dclutch-core-contract)
-│   ├── dclutch-registry-contract v0.1.0 (/Users/ember/dev/dclutch/crates/dclutch-registry-contract)
+│   ├── dclutch-registry v0.1.0 (/Users/ember/dev/dclutch/crates/dclutch-registry)
 │   │   ├── dclutch-core-contract v0.1.0 (/Users/ember/dev/dclutch/crates/dclutch-core-contract)
-│   │   └── dclutch-release-set-contract v0.1.0 (/Users/ember/dev/dclutch/crates/dclutch-release-set-contract)
+│   │   └── dclutch-registry v0.1.0 (/Users/ember/dev/dclutch/crates/dclutch-registry)
 │   │       └── dclutch-core-contract v0.1.0 (/Users/ember/dev/dclutch/crates/dclutch-core-contract)
-│   ├── dclutch-registry-svm v0.1.0 (/Users/ember/dev/dclutch/crates/dclutch-registry-svm)
+│   ├── dclutch-registry v0.1.0 (/Users/ember/dev/dclutch/crates/dclutch-registry)
 │   │   ├── dclutch-core-contract v0.1.0 (/Users/ember/dev/dclutch/crates/dclutch-core-contract)
-│   │   └── dclutch-release-set-contract v0.1.0 (/Users/ember/dev/dclutch/crates/dclutch-release-set-contract) (*)
-│   └── dclutch-release-set-contract v0.1.0 (/Users/ember/dev/dclutch/crates/dclutch-release-set-contract) (*)
+│   │   └── dclutch-registry v0.1.0 (/Users/ember/dev/dclutch/crates/dclutch-registry) (*)
+│   └── dclutch-registry v0.1.0 (/Users/ember/dev/dclutch/crates/dclutch-registry) (*)
 ├── ed25519-dalek v2.2.0
 │   ├── curve25519-dalek v4.1.3
 │   │   ├── cfg-if v1.0.4

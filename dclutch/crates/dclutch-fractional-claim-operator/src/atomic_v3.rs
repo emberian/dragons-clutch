@@ -5,7 +5,7 @@
 //! program's two `invoke_signed` seed sets. It is not a directly submittable
 //! wallet instruction.
 
-use dclutch_claims_svm::{
+use dclutch_claims::{
     frame_spec_v1::SignedDeltaFrameSpecV3,
     liability_basis_state_v2::LIABILITY_BASIS_MARKET_SEED_V2,
     protocol_position_v2::ProtocolPositionSeedsV2,
@@ -23,7 +23,7 @@ use dclutch_claims_svm::{
         TERMINAL_SETTLEMENT_TOKEN_PROGRAM_ACCOUNT_V3,
     },
 };
-use dclutch_fractional_claim_contract::{
+use dclutch_claims::fractional::{
     FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3, FRACTIONAL_ATOMIC_ACTOR_V3,
     FRACTIONAL_ATOMIC_HOLDER_TOKEN_V3, FRACTIONAL_ATOMIC_ROOT_V3, FRACTIONAL_ATOMIC_SHARD_MINT_V3,
     FRACTIONAL_ATOMIC_TERMS_RAW_V3, FRACTIONAL_ATOMIC_TERMS_STAGING_V3,
@@ -35,18 +35,18 @@ use dclutch_fractional_claim_contract::{
     FRACTIONAL_TERMINAL_TOKEN_BEHAVIOR_STAGING_V3, FractionalCapabilityRootV4,
     FractionalExposureActionV2, FractionalExposureRequestV2,
 };
-use dclutch_fractional_claim_kernel::{
+use dclutch_claims::fractional_kernel::{
     FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FRACTIONAL_SELECTION_CONFIG_BYTES_V1,
     FractionalExposureTermsV2, encode_fractional_selection_config_v1,
     fractional_selection_config_from_terms_v1,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_representation_composition_v3_kernel::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_claims::composition::{
     COMPOSITION_EXPOSURE_SCHEMA_ID_V3, CompositionExposureBundleV3,
     CompositionExposureExecutionExpectedV3, RecordAdmissionV3,
 };
-use dclutch_token_svm::TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2;
+use dclutch_custody::token_svm::TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2;
 use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},
@@ -103,10 +103,10 @@ pub fn build_fractional_atomic_claims_instruction_v3(
     let (expected_root, expected_bump) =
         Pubkey::find_program_address(&header.seeds().as_slices(), &trading_program);
     let root_identity_matches = match root_state {
-        dclutch_fractional_claim_contract::FractionalRootStateV2::V1(root) => {
+        dclutch_claims::fractional::FractionalRootStateV2::V1(root) => {
             root.input().terms == input.terms
         }
-        dclutch_fractional_claim_contract::FractionalRootStateV2::V2(root) => {
+        dclutch_claims::fractional::FractionalRootStateV2::V2(root) => {
             root.input().selection_config == selection_config
         }
     };
@@ -294,10 +294,10 @@ pub fn build_fractional_terminal_atomic_claims_instruction_v3(
     )
     .0;
     let root_identity_matches = match root_state {
-        dclutch_fractional_claim_contract::FractionalRootStateV2::V1(root) => {
+        dclutch_claims::fractional::FractionalRootStateV2::V1(root) => {
             root.input().terms == input.terms
         }
-        dclutch_fractional_claim_contract::FractionalRootStateV2::V2(root) => {
+        dclutch_claims::fractional::FractionalRootStateV2::V2(root) => {
             root.input().selection_config == selection_config
         }
     };
@@ -478,23 +478,23 @@ fn require_privilege(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_capability_program_contract::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
+    use dclutch_market::capability_program::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
     use dclutch_core_contract::ContentId;
-    use dclutch_fractional_claim_contract::{
+    use dclutch_claims::fractional::{
         FRACTIONAL_CAPABILITY_ROOT_BYTES_V4, FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4,
         FractionalExposureRequestInputV2, FractionalRootInputV1, FractionalRootV1,
         decode_fractional_capability_root_v4,
     };
-    use dclutch_fractional_claim_kernel::{
+    use dclutch_claims::fractional_kernel::{
         FractionalExposureTermsAdmissionV2, FractionalExposureTermsInputV2,
         encode_fractional_exposure_terms_v2, fractional_exposure_terms_bytes_v2,
     };
-    use dclutch_release_set_contract::CapabilityExecutionSelectionV1;
-    use dclutch_representation_composition_v3_kernel::{
+    use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
+    use dclutch_claims::composition::{
         CompositionExposureInputV3, CompositionExposureRowInputV3, CompositionExposureTermV3,
         composition_exposure_bytes_v3, encode_composition_exposure_v3_atomic,
     };
-    use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
+    use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
 
     fn id(value: u8) -> [u8; 32] {
         [value; 32]

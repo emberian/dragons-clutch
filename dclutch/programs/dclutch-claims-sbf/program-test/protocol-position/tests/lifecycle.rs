@@ -7,7 +7,7 @@
 use dclutch_program_test_evidence::TransactionEvidence;
 use std::{env, fs, path::PathBuf, vec::Vec};
 
-use dclutch_capability_program_contract::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
+use dclutch_market::capability_program::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
 use dclutch_claims_affine_batch_program_test::fixture::{
     FinalizedRecordFixtureV2, ProductLbv2FixtureInputV2, compile_product_lbv2_fixture_v2,
 };
@@ -20,7 +20,7 @@ use dclutch_claims_sbf::protocol_position_v2::{
     ProtocolPositionSbfErrorV2, ProtocolPositionSeedsV2,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_fractional_claim_contract::{
+use dclutch_claims::fractional::{
     FRACTIONAL_CAPABILITY_ROOT_BYTES_V4, FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4,
     FRACTIONAL_RETIREMENT_BEGIN_ACCOUNT_COUNT_V3, FRACTIONAL_RETIREMENT_CURSOR_BYTES_V3,
     FRACTIONAL_RETIREMENT_CURSOR_PDA_SEED_V3, FRACTIONAL_RETIREMENT_FINISH_ACCOUNT_COUNT_V3,
@@ -29,7 +29,7 @@ use dclutch_fractional_claim_contract::{
     FractionalRetirementRequestV3, FractionalRootInputV1, FractionalRootV1,
     NO_RETIREMENT_COORDINATE_V3,
 };
-use dclutch_fractional_claim_kernel::{
+use dclutch_claims::fractional_kernel::{
     FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FRACTIONAL_SELECTION_CONFIG_BYTES_V1,
     FractionalExposureTermsAdmissionV2, FractionalExposureTermsInputV2, FractionalExposureTermsV2,
     encode_fractional_exposure_terms_v2, encode_fractional_selection_config_v1,
@@ -40,26 +40,26 @@ use dclutch_fractional_claim_operator::{
     FractionalRetirementRecordV3, FractionalRetirementSnapshotV3,
     plan_fractional_retirement_instruction_v3,
 };
-use dclutch_market_core_codec::{CoreState, Identity, Phase as CorePhase};
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{
+use dclutch_market::{CoreState, Identity, Phase as CorePhase};
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
     ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
     initialize_activation_cache_v1,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1,
     ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1, ProgramIdentityV1,
 };
-use dclutch_rent_contract::{
+use dclutch_market::rent::{
     RefundAuthority,
     lifecycle_v2::{
         LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
     },
 };
 use dclutch_resolution_core_v3_operator::{Finality, Observation, ObservedAccount};
-use dclutch_token_svm::{
+use dclutch_custody::token_svm::{
     TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, Token2022BehaviorProfileV2,
     TokenBehaviorSelectionV2,
 };

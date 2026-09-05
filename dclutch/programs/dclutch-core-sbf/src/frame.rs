@@ -6,7 +6,7 @@ use solana_sdk_ids::{system_program, sysvar};
 use crate::CoreSbfError;
 
 /// Exact ordinary mutating Found V3 and readonly ProjectFound V2 account counts.
-pub use dclutch_market_core_codec::{
+pub use dclutch_market::{
     FOUND_ACCOUNT_COUNT_V3, FOUND_PRICE_GATE_ACCOUNT_COUNT_V3, PROJECT_FOUND_ACCOUNT_COUNT_V2,
     PROJECT_FOUND_PRICE_GATE_ACCOUNT_COUNT_V2,
 };
@@ -136,7 +136,7 @@ impl<'accounts, 'info> FoundAccounts<'accounts, 'info> {
         }
         let ordinary = |index: usize| {
             let physical =
-                if rent_elided && index > dclutch_market_core_codec::FOUND_RENT_SYSVAR_INDEX_V3 {
+                if rent_elided && index > dclutch_market::FOUND_RENT_SYSVAR_INDEX_V3 {
                     index - 1
                 } else {
                     index
@@ -175,7 +175,7 @@ impl<'accounts, 'info> FoundAccounts<'accounts, 'info> {
             None
         } else {
             Some(ordinary(
-                dclutch_market_core_codec::FOUND_RENT_SYSVAR_INDEX_V3,
+                dclutch_market::FOUND_RENT_SYSVAR_INDEX_V3,
             )?)
         };
         let system = ordinary(29)?;
@@ -188,15 +188,15 @@ impl<'accounts, 'info> FoundAccounts<'accounts, 'info> {
         let rent_programdata = ordinary(36)?;
         let price_gate = if price_gate_offered {
             Some((
-                ordinary(dclutch_market_core_codec::FOUND_PRICE_GATE_RAW_INDEX_V3)?,
-                ordinary(dclutch_market_core_codec::FOUND_PRICE_GATE_STAGING_INDEX_V3)?,
+                ordinary(dclutch_market::FOUND_PRICE_GATE_RAW_INDEX_V3)?,
+                ordinary(dclutch_market::FOUND_PRICE_GATE_STAGING_INDEX_V3)?,
             ))
         } else {
             None
         };
         debug_assert_eq!(
             accounts
-                .get(dclutch_market_core_codec::FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3)
+                .get(dclutch_market::FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3)
                 .map(|account| account.key),
             Some(manifest_raw.key),
         );

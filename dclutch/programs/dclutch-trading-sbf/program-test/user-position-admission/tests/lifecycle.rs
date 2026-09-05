@@ -6,7 +6,7 @@ use std::{env, fs, path::PathBuf, vec::Vec};
 use dclutch_claims_affine_batch_program_test::fixture::{
     FinalizedRecordFixtureV2, ProductLbv2FixtureInputV2, compile_product_lbv2_fixture_v2,
 };
-use dclutch_claims_svm::{
+use dclutch_claims::{
     liability_basis_state_v2::LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
     protocol_position_v2::{
         PROTOCOL_POSITION_ADMISSION_BYTES_V2, ProtocolPositionAdmissionSeedsV2,
@@ -14,23 +14,23 @@ use dclutch_claims_svm::{
     },
 };
 use dclutch_core_contract::ContentId;
-use dclutch_registry_contract::{
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
     ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
     initialize_activation_cache_v1,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
     ExecutionRoleV1, ProgramIdentityV1,
 };
-use dclutch_rent_contract::{
+use dclutch_market::rent::{
     RefundAuthority,
     lifecycle_v2::{
         LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
     },
 };
-use dclutch_user_position_admission_contract::{
+use dclutch_claims::position_admission::{
     ProtocolPositionActionV2, ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2,
     ProtocolPositionRequestV2, USER_POSITION_ADMISSION_ACCOUNT_COUNT_V1,
     USER_POSITION_ADMISSION_OWNER_ACCOUNT_V1, UserPositionAdmissionRequestV1,

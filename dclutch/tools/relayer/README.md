@@ -9,7 +9,7 @@ thresholded or named here: every layout fact — discriminators, admitted length
 sets, field offsets, sentinels, fixed-point scale, rounding boundary — lives in
 the `decoding_rules_id` record and is applied by the on-devnet adapter (§4.1).
 
-Every byte it signs is encoded by `dclutch-relay-contract`. This crate
+Every byte it signs is encoded by `dclutch-source::relay`. This crate
 reimplements no offset, magic, domain separator or preimage.
 
 ## Why this is its own cargo workspace
@@ -26,7 +26,7 @@ tree there would collide with that work for no benefit. Promoting this crate
 into the protocol workspace is a separate integration decision, not a side
 effect of writing it.
 
-It depends on the wire crate by path (`../../crates/dclutch-relay-contract`), so
+It depends on the wire crate by path (`../../crates/dclutch-source`), so
 there is exactly one copy of the ABI.
 
 ## What it will not do
@@ -153,7 +153,7 @@ default is exactly the quiet wrong this family exists to prevent.
 
 `account_set_id` **cannot be configured.** It is derived from the ordered
 positions via
-`dclutch_relay_contract::release::encode_account_set_id_preimage_v1` and
+`dclutch_source::relay::release::encode_account_set_id_preimage_v1` and
 SHA-256, and printed by `show-config`. A config that could state it would be a
 second authority for which accounts may be attested.
 
@@ -353,7 +353,7 @@ relay instruction by construction. The signed message sits at a fixed offset in
 the relay instruction's data (`APPEND_OBSERVATION_PREFIX_BYTES = 40`,
 `SEAL_RECORD_PREFIX_BYTES = 32`), and the descriptor's `message_data_offset` is
 that constant — which is what lets the on-chain adapter compare it rather than
-trust it. Account frames come from `dclutch_relay_contract::frame`, not from a
+trust it. Account frames come from `dclutch_source::relay::frame`, not from a
 table copied into this crate, so the daemon cannot drift from the frame the
 program validates.
 

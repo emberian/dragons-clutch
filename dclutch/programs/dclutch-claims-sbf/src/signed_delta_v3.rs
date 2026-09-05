@@ -14,7 +14,7 @@ use core::{
 };
 
 use crate::claims_cu_checkpoint;
-use dclutch_claims_svm::{
+use dclutch_claims::{
     CallerRole,
     frame_spec_v1::{
         ClaimsFrameRoleV1,
@@ -29,10 +29,10 @@ use dclutch_claims_svm::{
     },
 };
 use dclutch_core_contract::ContentId;
-use dclutch_registry_activation_auth_v1::authenticate_activation_cache_identity_v1;
-use dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1;
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_source_contract::MarketPrincipalCapSetsV1;
+use dclutch_registry::activation_auth_v1::authenticate_activation_cache_identity_v1;
+use dclutch_registry::ActivatedExecutionReleaseSetViewV1;
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_source::MarketPrincipalCapSetsV1;
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
@@ -48,10 +48,10 @@ use crate::liability_basis_v2::{
     LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, MarketViewV2, PositionViewV2,
 };
 use crate::market_admission_v1::CLAIMS_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1;
-use dclutch_claims_svm::liability_basis_state_v2::{
+use dclutch_claims::liability_basis_state_v2::{
     LIABILITY_BASIS_MARKET_BUMP_OFFSET_V2, LIABILITY_BASIS_POSITION_BUMP_OFFSET_V2,
 };
-use dclutch_market_core_codec::MarketAdmissionV1;
+use dclutch_market::MarketAdmissionV1;
 
 /// Exact fixed account count before the runtime Position tail.
 pub const SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3: usize =
@@ -818,7 +818,7 @@ fn authenticate_failure_escrow_deltas(
     // A width that can seat no escrow has no failure coordinate to defend, so
     // this gate is INERT there rather than a refusal. Founding will not create
     // such a market any more; one founded before the seating still trades.
-    let Ok(failure) = dclutch_economic_slice_kernel::refunding_failure_index(market.claim_count)
+    let Ok(failure) = dclutch_product::economic_slice::refunding_failure_index(market.claim_count)
     else {
         return Ok(());
     };
@@ -837,7 +837,7 @@ fn authenticate_failure_escrow_deltas(
         .try_borrow_data()
         .map_err(|_| SignedDeltaSbfErrorV3::Accounts)?;
     let refunding =
-        dclutch_product_payoff_v2_codec::runtime_v3::ProductBasisV3::decode(&basis_bytes)
+        dclutch_product::payoff::runtime_v3::ProductBasisV3::decode(&basis_bytes)
             .map_err(|_| SignedDeltaSbfErrorV3::ProductBasis)?
             .refunds_on_failure();
     drop(basis_bytes);
@@ -1241,7 +1241,7 @@ fn put_u64(bytes: &mut [u8], offset: usize, value: u64) -> Result<(), ProgramErr
 mod tests {
     use super::*;
     use alloc::vec;
-    use dclutch_claims_svm::signed_delta_v3::{
+    use dclutch_claims::signed_delta_v3::{
         DeltaDirectionV3, PositionDeltaInputV3, PositionDeltaV3, SIGNED_DELTA_PLAN_MAGIC_V3,
         SignedDeltaPlanInputV3, SignedDeltaPositionV3, SignedDeltaV3, plan_bytes,
     };

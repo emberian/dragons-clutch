@@ -10,9 +10,9 @@
 //! the register bank, a window-gated bank carries `Clock::get().slot`, and an
 //! address that moves every slot cannot be named in a signed account list.
 
-use dclutch_capability_program_contract::v4::CapabilityProgramV4;
+use dclutch_market::capability_program::v4::CapabilityProgramV4;
 use dclutch_core_contract::ContentId;
-use dclutch_execution_strategy_contract::{
+use dclutch_market::execution_strategy::{
     encode_register_bank_into,
     shadow_digest_v3::{AcceleratorCallerKindV1, accelerator_caller_authority_digest_v1},
     v2::{
@@ -24,12 +24,12 @@ use dclutch_execution_strategy_contract::{
         validate_admitted_aot_v4,
     },
 };
-use dclutch_registry_contract::{
+use dclutch_registry::{
     ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1, DeploymentObservationV1,
     require_slot_pinned_release_v1,
 };
-use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
-use dclutch_release_set_contract::{ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
+use dclutch_registry::release_set::{ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionRoleV1};
 use sha2::{Digest, Sha256};
 use solana_program::{hash::hash, pubkey::Pubkey};
 use solana_sdk_ids::bpf_loader_upgradeable;
@@ -452,15 +452,15 @@ fn authenticate_deployment(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_capability_program_contract::v4::{
+    use dclutch_market::capability_program::v4::{
         ArtifactReferenceV4, CapabilityArtifactsV4, SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
     };
-    use dclutch_execution_strategy_contract::v2::{
+    use dclutch_market::execution_strategy::v2::{
         ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
         EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, StrategyDispositionV2,
     };
-    use dclutch_registry_contract::ArtifactUpgradePolicyV1;
-    use dclutch_release_set_contract::ProgramIdentityV1;
+    use dclutch_registry::ArtifactUpgradePolicyV1;
+    use dclutch_registry::release_set::ProgramIdentityV1;
     use solana_account::Account;
 
     fn id(value: u8) -> ContentId {
@@ -482,7 +482,7 @@ mod tests {
     }
 
     fn loader_program_bytes(programdata: Pubkey) -> Vec<u8> {
-        let mut bytes = vec![0_u8; dclutch_registry_svm::LOADER_V3_PROGRAM_BYTES];
+        let mut bytes = vec![0_u8; dclutch_registry::svm::LOADER_V3_PROGRAM_BYTES];
         bytes
             .get_mut(0..4)
             .expect("variant")
@@ -496,7 +496,7 @@ mod tests {
 
     fn loader_programdata_bytes(slot: u64, elf: &[u8]) -> Vec<u8> {
         let mut bytes =
-            vec![0_u8; dclutch_registry_svm::LOADER_V3_PROGRAMDATA_METADATA_BYTES + elf.len()];
+            vec![0_u8; dclutch_registry::svm::LOADER_V3_PROGRAMDATA_METADATA_BYTES + elf.len()];
         bytes
             .get_mut(0..4)
             .expect("variant")
@@ -506,7 +506,7 @@ mod tests {
             .expect("slot")
             .copy_from_slice(&slot.to_le_bytes());
         bytes
-            .get_mut(dclutch_registry_svm::LOADER_V3_PROGRAMDATA_METADATA_BYTES..)
+            .get_mut(dclutch_registry::svm::LOADER_V3_PROGRAMDATA_METADATA_BYTES..)
             .expect("elf")
             .copy_from_slice(elf);
         bytes

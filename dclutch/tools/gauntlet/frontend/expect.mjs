@@ -161,9 +161,9 @@ const witness = {
     completeSetsAtoms: position.completeSetsAtoms,
   },
   seedDomains: {
-    corePosition: 'dclutch/position/v1 under the Core program (dclutch-realm-contract::POSITION_PDA_DOMAIN) — the Direct family Position',
-    claimsAggregate: 'dclutch:lbv2:market under the Claims program (dclutch-claims-svm::CLAIMS_FOUNDING_AGGREGATE_SEED_V5)',
-    claimsPosition: 'dclutch:lbv2:position under the Claims program, keyed by the aggregate (dclutch-claims-svm::PROTOCOL_POSITION_STATE_SEED_V2)',
+    corePosition: 'dclutch/position/v1 under the Core program (dclutch-market::realm::POSITION_PDA_DOMAIN) — the Direct family Position',
+    claimsAggregate: 'dclutch:lbv2:market under the Claims program (dclutch-claims::CLAIMS_FOUNDING_AGGREGATE_SEED_V5)',
+    claimsPosition: 'dclutch:lbv2:position under the Claims program, keyed by the aggregate (dclutch-claims::PROTOCOL_POSITION_STATE_SEED_V2)',
   },
 };
 

@@ -60,17 +60,17 @@ use solana_sdk::{
 use solana_sdk_ids::{system_program, sysvar};
 
 use dclutch_claims_sbf::custody_replay_v1::expected_request_v1;
-use dclutch_claims_svm::{
+use dclutch_claims::{
     custody_replay_v1::ClaimsCustodyReplayRequestV1,
     liability_basis_state_v2::{LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2},
 };
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CustodyReplaySeedsV1, CustodyReplayV1,
 };
-use dclutch_market_core_codec::CoreState;
-use dclutch_realm_contract::REALM_SCHEMA_RELEASE_ID_V1;
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_market::CoreState;
+use dclutch_market::realm::REALM_SCHEMA_RELEASE_ID_V1;
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::hash::hash;
 
 use crate::campaign::{

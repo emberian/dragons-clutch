@@ -7,27 +7,27 @@ use dclutch_claims_affine_batch_program_test::fixture::{
     compile_product_lbv2_fixture_v2,
 };
 use dclutch_claims_sbf::signed_delta_v3::SignedDeltaSbfErrorV3;
-use dclutch_claims_svm::signed_delta_v3::{
+use dclutch_claims::signed_delta_v3::{
     DeltaDirectionV3, PositionDeltaInputV3, PositionDeltaV3, SignedDeltaPlanV3, SignedDeltaV3,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_fractional_claim_contract::{
+use dclutch_claims::fractional::{
     FractionalActionV1, FractionalFamilyRequestInputV1, FractionalFamilyRequestV1,
     NO_TERMINAL_OUTCOME_V1,
 };
-use dclutch_fractional_claims_kernel::{
+use dclutch_claims::fractional_lowering::{
     FractionalSignedDeltaInputV1, FractionalSignedDeltaLoweringV1,
     fractional_signed_delta_shape_v1, lower_fractional_signed_delta_v1,
 };
 use dclutch_fractional_signed_delta_test_caller_sbf::FRACTIONAL_SIGNED_DELTA_TEST_WRAPPER_BYTES;
 use dclutch_program_test_evidence::TransactionEvidence;
-use dclutch_registry_contract::{
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
     ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
     initialize_activation_cache_v1,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
     ExecutionRoleV1, ProgramIdentityV1,
 };

@@ -1,0 +1,23 @@
+[package]
+name = "dclutch-custody"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Collateral custody: the canonical custody contract and the exact SDK-free Token-2022 wire views it settles through"
+
+[dependencies]
+dclutch-market = { path = "../dclutch-market" }
+dclutch-registry = { path = "../dclutch-registry" }
+dclutch-sha256-adapter = { path = "../dclutch-sha256-adapter" }
+
+[dev-dependencies]
+sha2 = { version = "=0.10.9", default-features = false }
+solana-address = "=2.7.0"
+solana-nullable = "=1.3.0"
+solana-program-option = "=3.1.0"
+spl-token-2022-interface = { version = "=3.1.1", default-features = false }
+spl-token-metadata-interface = "=1.0.1"
+
+[lints]
+workspace = true

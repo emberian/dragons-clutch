@@ -2,17 +2,17 @@
 
 use std::{env, fs, path::PathBuf, vec, vec::Vec};
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
     CapabilityEntryV1, CapabilityFundingDerivationV1, CapabilityManifestV1, CompartmentFundingV1,
     ContentId as CapabilityContentId, FUNDING_STATE_BYTES, FundingAmountsV1,
     FundingCustodyObservationV1, FundingQuoteV1, FundingStateV1, MANIFEST_HEADER_BYTES,
     MAX_DEPENDENCIES_PER_CAPABILITY,
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
 };
-use dclutch_claims_svm::{
+use dclutch_claims::{
     founding_v5::ClaimsFoundingAggregateSeedsV5,
     liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
@@ -24,51 +24,51 @@ use dclutch_claims_svm::{
     },
 };
 use dclutch_core_contract::ContentId as CoreContentId;
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CompartmentV1, PROJECTED_CUSTODY_STATE_BYTES_V2, PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
     ProjectedCallerRoleV1, ProjectedCustodyLockReceiptV1, ProjectedCustodyOperationV1,
     ProjectedCustodyPhaseV1, ProjectedCustodyRequestV1, ProjectedCustodyStateSeedsV2,
     ProjectedCustodyStateV2,
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     Action, CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase,
     ProjectFoundRequestV2, Readiness, Request, SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES,
     SeriesFoundingPermitSeedsV1, SeriesFoundingPermitV1, SeriesPermitExpiryRequestV1,
 };
-use dclutch_product_payoff_v2_codec::{
+use dclutch_product::payoff::{
     registry_v3::{GRADED_BASIS_RECORD_SCHEMA_ID_V3, PRICE_GATE_RECORD_SCHEMA_ID_V1},
     runtime_v3::{
         BasisInputV3, BasisKindV3, ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
         basis_record_bytes_v3, compile_basis_v3, semantic_basis_preimage_v3,
     },
 };
-use dclutch_product_runtime_v2::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
-use dclutch_product_runtime_v2_admission::{FinalizedRecordCoordinateV2, PRODUCT_RECORD_BYTES_V2};
+use dclutch_product::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
+use dclutch_product::admission::{FinalizedRecordCoordinateV2, PRODUCT_RECORD_BYTES_V2};
 use dclutch_product_runtime_v2_operator::{ProductCompilationInputV2, compile_product_records_v2};
-use dclutch_realm_contract::{
+use dclutch_market::realm::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactActivationInputV1, ArtifactReleaseV1,
     ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
     initialize_activation_cache_v1,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1,
     EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
     ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProgramIdentityV1,
     ProtocolInfrastructureProfileV1, ProtocolInfrastructureProfileV2,
 };
-use dclutch_rent_contract::{
+use dclutch_market::rent::{
     RefundAuthority,
     lifecycle_v2::{
         LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
     },
 };
-use dclutch_series_v3_kernel::{
+use dclutch_trading::series::{
     AccountKeyV3, AuthenticatedProductProjectionV2, SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3,
     SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3, SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
     admit_occurrence_bytes, admit_ticket, funding_list_id, future_market_projection,
@@ -96,7 +96,7 @@ use dclutch_series_v3_kernel::{
     replay::{SeriesStateV3, TicketPhaseV3, TicketStateSeedsV3, TicketStateV3},
     series_core_consume_request, template_content_id, ticket_content_id,
 };
-use dclutch_source_contract::{
+use dclutch_source::{
     CapacityEnvelope, ContentId as SourceContentId, MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
     ManipulationFloorBasis, ManipulationFloorV1, SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1,
     SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_SPEC_SCHEMA_ID_V1, SourceAccessProfile,
@@ -135,7 +135,7 @@ const TRADING_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc4; 32]);
 const CLAIMS_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc5; 32]);
 const CUSTODY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc6; 32]);
 const RESOLUTION_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc7; 32]);
-const TOKEN_PROGRAM_ID: Pubkey = Pubkey::new_from_array(dclutch_token_svm::LEGACY_TOKEN_PROGRAM_ID);
+const TOKEN_PROGRAM_ID: Pubkey = Pubkey::new_from_array(dclutch_custody::token_svm::LEGACY_TOKEN_PROGRAM_ID);
 const COLLATERAL_MINT: Pubkey = Pubkey::new_from_array([0xb2; 32]);
 const LOOKUP_TABLE: Pubkey = Pubkey::new_from_array([0xb8; 32]);
 const GENERATION: u64 = 1;
@@ -311,8 +311,8 @@ struct SeriesFixture {
     position: Pubkey,
     admission: Pubkey,
     claims_programdata_meta: Pubkey,
-    lock_receipt: [u8; dclutch_custody_contract::PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1],
-    request: [u8; dclutch_market_core_codec::SERIES_CORE_REQUEST_BYTES_V1],
+    lock_receipt: [u8; dclutch_custody::PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1],
+    request: [u8; dclutch_market::SERIES_CORE_REQUEST_BYTES_V1],
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1656,7 +1656,7 @@ fn fixture_with(
             (product, domain, portfolio, basis, None, outcomes, id)
         };
     let realm_value = RealmV1::new(RealmV1Input {
-        token_program: dclutch_token_svm::LEGACY_TOKEN_PROGRAM_ID,
+        token_program: dclutch_custody::token_svm::LEGACY_TOKEN_PROGRAM_ID,
         collateral_mint: [0xb2; 32],
         collateral_adapter_release_id: [0xb3; 32],
         mint_authority_policy: MintAuthorityPolicy::RequireAbsent,
@@ -2019,10 +2019,10 @@ fn project_found_instruction(fixture: &Fixture, swap_artifacts: bool) -> Instruc
         AccountMeta::new_readonly(fixture.market, false);
     instruction
         .accounts
-        .remove(dclutch_market_core_codec::FOUND_RENT_SYSVAR_INDEX_V3);
+        .remove(dclutch_market::FOUND_RENT_SYSVAR_INDEX_V3);
     assert_eq!(
         instruction.accounts.len(),
-        dclutch_market_core_codec::PROJECT_FOUND_ACCOUNT_COUNT_V2
+        dclutch_market::PROJECT_FOUND_ACCOUNT_COUNT_V2
     );
     let found = Request::administrative(
         Action::Found,
@@ -2891,12 +2891,12 @@ async fn superseded_project_found37_frame_refuses_without_market_mutation() {
     let fixture = fixture(false);
     let mut instruction = project_found_instruction(&fixture, false);
     instruction.accounts.insert(
-        dclutch_market_core_codec::FOUND_RENT_SYSVAR_INDEX_V3,
+        dclutch_market::FOUND_RENT_SYSVAR_INDEX_V3,
         AccountMeta::new_readonly(sysvar::rent::ID, false),
     );
     assert_eq!(
         instruction.accounts.len(),
-        dclutch_market_core_codec::FOUND_ACCOUNT_COUNT_V3
+        dclutch_market::FOUND_ACCOUNT_COUNT_V3
     );
     let (fixture, context, accepted) = execute_project(fixture, instruction).await;
     assert!(!accepted);
@@ -3366,7 +3366,7 @@ async fn series_permit_expiry_uses_only_the_authenticated_successor_profile() {
             ExpiryProfileV1::SealedPredecessor => {
                 assert_eq!(
                     presented.data.len(),
-                    dclutch_release_set_contract::PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1
+                    dclutch_registry::release_set::PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1
                 );
                 ProtocolInfrastructureProfileV1::decode(&presented.data)
                     .expect("the sealed predecessor remains canonical V1");
@@ -4016,7 +4016,7 @@ async fn a_degree_two_market_founds_with_a_valid_price_gate_certificate() {
     let instruction = found_instruction(&fixture, false);
     assert_eq!(
         instruction.accounts.len(),
-        dclutch_market_core_codec::FOUND_PRICE_GATE_ACCOUNT_COUNT_V3,
+        dclutch_market::FOUND_PRICE_GATE_ACCOUNT_COUNT_V3,
         "the extended frame is the canonical one plus the certificate pair"
     );
 
@@ -4052,7 +4052,7 @@ async fn a_degree_two_market_without_its_certificate_refuses_by_name() {
     let instruction = found_instruction(&fixture, false);
     assert_eq!(
         instruction.accounts.len(),
-        dclutch_market_core_codec::FOUND_ACCOUNT_COUNT_V3,
+        dclutch_market::FOUND_ACCOUNT_COUNT_V3,
         "the canonical frame, exactly as a graded founding builds it"
     );
 

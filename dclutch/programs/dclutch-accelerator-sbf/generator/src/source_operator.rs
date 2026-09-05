@@ -8,24 +8,24 @@
 
 use core::fmt::Write as _;
 
-use dclutch_account_profile_contract::lifecycle_v3::{
+use dclutch_vm::account_profile::lifecycle_v3::{
     CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5, StateLifecyclePolicyV5,
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
     v4::{CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V4},
 };
-use dclutch_claims_svm::founding_v5::ClaimsFoundingRequestV5;
+use dclutch_claims::founding_v5::ClaimsFoundingRequestV5;
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{ProjectedCustodyOperationV1, ProjectedCustodyRequestV1};
-use dclutch_market_core_codec::SeriesCoreRequestV1;
-use dclutch_product_runtime_v2::{PortfolioV2, ResultDomainV2, join_product_v2};
-use dclutch_product_runtime_v2_admission::{
+use dclutch_custody::{ProjectedCustodyOperationV1, ProjectedCustodyRequestV1};
+use dclutch_market::SeriesCoreRequestV1;
+use dclutch_product::{PortfolioV2, ResultDomainV2, join_product_v2};
+use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
     RESULT_DOMAIN_SCHEMA_ID_V2,
 };
-use dclutch_record_contract::AuthenticatedRawRecordV1;
-use dclutch_series_v3_kernel::{
+use dclutch_registry::record::AuthenticatedRawRecordV1;
+use dclutch_trading::series::{
     AccountKeyV3, AuthenticatedProductProjectionV2,
     generated::{
         SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3, SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
@@ -460,8 +460,8 @@ fn authenticate_product(
 
 fn require_child_requests(
     requests: SeriesConsumeChildRequestsV4<'_>,
-    occurrence: dclutch_series_v3_kernel::AdmittedOccurrenceV3,
-    ticket: dclutch_series_v3_kernel::AdmittedTicketV3,
+    occurrence: dclutch_trading::series::AdmittedOccurrenceV3,
+    ticket: dclutch_trading::series::AdmittedTicketV3,
     product: AuthenticatedProductProjectionV2,
 ) -> SourceOperatorResult<()> {
     let lock = ProjectedCustodyRequestV1::decode(requests.lock)
@@ -624,8 +624,8 @@ fn core_id(bytes: [u8; 32]) -> SourceOperatorResult<ContentId> {
     ContentId::new(bytes).map_err(|_| SeriesShadowSourceOperatorErrorV1::Source)
 }
 
-fn product_id(value: ContentId) -> SourceOperatorResult<dclutch_product_runtime_v2::ContentId> {
-    dclutch_product_runtime_v2::ContentId::new(value.to_bytes())
+fn product_id(value: ContentId) -> SourceOperatorResult<dclutch_product::ContentId> {
+    dclutch_product::ContentId::new(value.to_bytes())
         .map_err(|_| SeriesShadowSourceOperatorErrorV1::Product)
 }
 

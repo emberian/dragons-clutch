@@ -6,10 +6,10 @@
 //! them. It performs no RPC, signing, deployment, or account mutation.
 
 use dclutch_core_contract::ContentId;
-use dclutch_registry_contract::{
+use dclutch_registry::{
     ARTIFACT_RELEASE_BYTES_V1, ArtifactReleaseV1, ArtifactUpgradePolicyV1,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, EXECUTION_RELEASE_SET_BYTES_V1, EXECUTION_ROLE_COUNT_V1,
     ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1, ProgramIdentityV1,
 };

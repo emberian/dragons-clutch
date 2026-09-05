@@ -41,8 +41,8 @@ const wasmOwner = join(root, 'crates/dclutch-wallet-terminal-input-wasm/src/lib.
 // "Claims does not expose a usize LIABILITY_BASIS_MARKET_HEADER_BYTES_V2"
 // ever since -- a browser surface with no authority behind it, reported as a
 // scraper crash rather than as a drift. Read the generated owner.
-const claims = join(root, 'crates/dclutch-claims-svm/src/generated_liability_basis_state_v2.rs');
-const core = join(root, 'crates/dclutch-market-core-codec/src/generated.rs');
+const claims = join(root, 'crates/dclutch-claims/src/generated_liability_basis_state_v2.rs');
+const core = join(root, 'crates/dclutch-market/src/generated.rs');
 const crate = 'dclutch-wallet-terminal-input-wasm';
 const output = join(app, 'lib/generated/walletTerminalInputWasm');
 const facts = join(app, 'lib/generated/walletTerminalInputWasmV1.ts');

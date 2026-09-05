@@ -33,41 +33,41 @@
 //! that reached the burn without having done the re-point fails for a reason
 //! that is worth telling apart from a frame error.
 
-use dclutch_claims_svm::claim_check_conservation_v1::ClaimCheckCompactionObservationV1;
-use dclutch_claims_svm::claim_check_v1::{
+use dclutch_claims::claim_check_conservation_v1::ClaimCheckCompactionObservationV1;
+use dclutch_claims::claim_check_v1::{
     COMPACTION_CRANK_REWARD_LAMPORTS_V1, COMPACTION_DEADLINE_SLOTS_V1, ClaimCheckEscrowSeedsV1,
     ClaimCheckEscrowV1, ClaimCheckVaultSeedsV1,
 };
-use dclutch_claims_svm::fractional_claim_check_compaction_receipt_v1::{
+use dclutch_claims::fractional_claim_check_compaction_receipt_v1::{
     FractionalClaimCheckCompactionReceiptInputV1, FractionalClaimCheckCompactionReceiptV1,
 };
-use dclutch_claims_svm::fractional_claim_check_compaction_request_v1::FractionalCompactToClaimCheckRequestV1;
-use dclutch_claims_svm::fractional_claim_check_conservation_v1::{
+use dclutch_claims::fractional_claim_check_compaction_request_v1::FractionalCompactToClaimCheckRequestV1;
+use dclutch_claims::fractional_claim_check_conservation_v1::{
     FractionalClaimCheckCompactionObservationV1, FractionalClaimCheckCompactionPlanV1,
     FractionalClaimCheckConservationErrorV1, FractionalClaimCheckRedemptionObservationV1,
     FractionalClaimCheckRedemptionPlanV1, FractionalClaimCheckRedemptionPostV1,
 };
-use dclutch_claims_svm::fractional_claim_check_v1::{
+use dclutch_claims::fractional_claim_check_v1::{
     FRACTIONAL_CLAIM_CHECK_BYTES_V1, FRACTIONAL_CLAIM_CHECK_REDEMPTION_ACCOUNT_COUNT_V1,
     FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1, FRACTIONAL_COMPACT_TERMINAL_FRAME_V1,
     FractionalClaimCheckRedemptionRoleV1, FractionalClaimCheckSeedsV1, FractionalClaimCheckV1,
     FractionalCompactionRoleV1, FractionalPayDownV1, FractionalRedeemClaimCheckRequestV1,
 };
-use dclutch_claims_svm::protocol_position_v2::{
+use dclutch_claims::protocol_position_v2::{
     ProtocolPositionAdmissionSeedsV2, ProtocolPositionAdmissionV2, ProtocolPositionOwnerKindV2,
 };
-use dclutch_claims_svm::terminal_settlement_v3::{
+use dclutch_claims::terminal_settlement_v3::{
     TERMINAL_SETTLEMENT_HOARD_ACCOUNT_V3, TERMINAL_SETTLEMENT_RECIPIENT_ACCOUNT_V3,
 };
-use dclutch_fractional_claim_contract::decode_fractional_capability_root_v4;
-use dclutch_fractional_claim_kernel::{
+use dclutch_claims::fractional::decode_fractional_capability_root_v4;
+use dclutch_claims::fractional_kernel::{
     FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FRACTIONAL_SELECTION_CONFIG_BYTES_V1,
     FractionalExposureTermsAdmissionV2, FractionalExposureTermsV2,
     encode_fractional_selection_config_v1, fractional_selection_config_from_terms_v1,
 };
-use dclutch_market_core_codec::{CoreState, STATE_BYTES as CORE_STATE_BYTES};
+use dclutch_market::{CoreState, STATE_BYTES as CORE_STATE_BYTES};
 use dclutch_sha256_adapter::digest;
-use dclutch_token_svm::{
+use dclutch_custody::token_svm::{
     TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, Token2022BehaviorProfileV2, TokenBehaviorSelectionV2,
 };
 use solana_program::{
@@ -424,7 +424,7 @@ pub fn process_fractional_redemption(
         || shard_mint.owner != token_program.key
         || holder_shards.owner != token_program.key
         || !token_program.executable
-        || token_program.key.to_bytes() != dclutch_token_svm::TOKEN_2022_PROGRAM_ID
+        || token_program.key.to_bytes() != dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID
     {
         return Err(FractionalClaimCheckRedemptionSbfErrorV1::Accounts.into());
     }
@@ -652,7 +652,7 @@ fn checked_token_account_balance(
     let data = account
         .try_borrow_data()
         .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Accounts)?;
-    dclutch_token_svm::Token2022BehaviorProfileV2::check_account(
+    dclutch_custody::token_svm::Token2022BehaviorProfileV2::check_account(
         token_program,
         &data,
         mint,
@@ -671,18 +671,18 @@ fn compacted_shard_mint_facts(
     let data = mint
         .try_borrow_data()
         .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Accounts)?;
-    let base = dclutch_token_svm::Mint::parse(
-        data.get(..dclutch_token_svm::MINT_BYTES)
+    let base = dclutch_custody::token_svm::Mint::parse(
+        data.get(..dclutch_custody::token_svm::MINT_BYTES)
             .ok_or(FractionalClaimCheckRedemptionSbfErrorV1::Accounts)?,
     )
     .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Accounts)?;
     let controller = match base.mint_authority {
-        dclutch_token_svm::COption::Some(controller) => controller,
-        dclutch_token_svm::COption::None => {
+        dclutch_custody::token_svm::COption::Some(controller) => controller,
+        dclutch_custody::token_svm::COption::None => {
             return Err(FractionalClaimCheckRedemptionSbfErrorV1::Authority.into());
         }
     };
-    let facts = dclutch_token_svm::Token2022BehaviorProfileV2::read_compacted_shard_mint(
+    let facts = dclutch_custody::token_svm::Token2022BehaviorProfileV2::read_compacted_shard_mint(
         token_program.key.to_bytes(),
         mint.key.to_bytes(),
         &data,
@@ -697,8 +697,8 @@ fn checked_mint_decimals(mint: &AccountInfo<'_>) -> Result<u8, ProgramError> {
     let data = mint
         .try_borrow_data()
         .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Accounts)?;
-    let base = dclutch_token_svm::Mint::parse(
-        data.get(..dclutch_token_svm::MINT_BYTES)
+    let base = dclutch_custody::token_svm::Mint::parse(
+        data.get(..dclutch_custody::token_svm::MINT_BYTES)
             .ok_or(FractionalClaimCheckRedemptionSbfErrorV1::Accounts)?,
     )
     .map_err(|_| FractionalClaimCheckRedemptionSbfErrorV1::Accounts)?;
@@ -795,7 +795,7 @@ pub const fn owner_kind_may_open_a_fractional_claim_check(
 /// [`crate::terminal_settlement_v3`] and are never re-enumerated here -- the
 /// frame declaration says so and the payout derivation is *called* for the same
 /// reason. These four are the accounts this route reads for its own purposes,
-/// named because `dclutch-claims-svm` exports constants for the collateral
+/// named because `dclutch-claims` exports constants for the collateral
 /// coordinates (hoard, recipient) and not for these. The Position's index has
 /// one author in [`crate::claim_check_compaction_v1`] and is imported from
 /// there rather than restated.
@@ -1625,7 +1625,7 @@ fn commit_fractional_compaction(
         );
 
     plan.validate_post(
-        dclutch_claims_svm::claim_check_conservation_v1::ClaimCheckCompactionPostV1 {
+        dclutch_claims::claim_check_conservation_v1::ClaimCheckCompactionPostV1 {
             position_lamports: position_account.lamports(),
             admission_lamports: admission_account.lamports(),
             claim_check_lamports: record_account.lamports(),
@@ -1721,10 +1721,10 @@ mod tests {
     use super::*;
     use crate::claim_check_compaction_v1::ClaimCheckCompactionSbfErrorV1;
     use crate::claim_check_redemption_v1::ClaimCheckRedemptionSbfErrorV1;
-    use dclutch_claims_svm::claim_check_v1::{
+    use dclutch_claims::claim_check_v1::{
         CLAIM_CHECK_ESCROW_SEED_V1, CLAIM_CHECK_SEED_V1, CLAIM_CHECK_VAULT_SEED_V1,
     };
-    use dclutch_claims_svm::fractional_claim_check_v1::{
+    use dclutch_claims::fractional_claim_check_v1::{
         FRACTIONAL_CLAIM_CHECK_SEED_V1, FractionalClaimCheckSeedsV1, MAX_PDA_SEED_BYTES_V1,
     };
     use solana_program::pubkey::{Pubkey, PubkeyError};
@@ -1751,12 +1751,12 @@ mod tests {
     /// leave the other to luck.
     #[test]
     fn no_claim_check_family_magic_shadows_another_in_the_dispatcher() {
-        use dclutch_claims_svm::claim_check_v1::{
+        use dclutch_claims::claim_check_v1::{
             CLAIM_CHECK_COMPACT_MAGIC_V1, CLAIM_CHECK_ESCROW_MAGIC_V1, CLAIM_CHECK_OPEN_MAGIC_V1,
             CLAIM_CHECK_RECORD_MAGIC_V1, CLAIM_CHECK_REDEEM_MAGIC_V1,
         };
-        use dclutch_claims_svm::fractional_claim_check_compaction_receipt_v1::FRACTIONAL_CLAIM_CHECK_COMPACT_RECEIPT_MAGIC_V1;
-        use dclutch_claims_svm::fractional_claim_check_v1::{
+        use dclutch_claims::fractional_claim_check_compaction_receipt_v1::FRACTIONAL_CLAIM_CHECK_COMPACT_RECEIPT_MAGIC_V1;
+        use dclutch_claims::fractional_claim_check_v1::{
             FRACTIONAL_CLAIM_CHECK_COMPACT_MAGIC_V1, FRACTIONAL_CLAIM_CHECK_RECORD_MAGIC_V1,
             FRACTIONAL_CLAIM_CHECK_REDEEM_MAGIC_V1,
         };
@@ -2095,7 +2095,7 @@ mod tests {
     /// `MaxSeedLengthExceeded` for all 255 bumps, `find_program_address` found
     /// none, and every route naming this record would have **panicked** rather
     /// than refused. Nothing caught it because nothing had ever derived it:
-    /// `dclutch-claims-svm` is `no_std` with no SDK dependency, so its own tests
+    /// `dclutch-claims` is `no_std` with no SDK dependency, so its own tests
     /// cannot call this. This crate can, and does.
     ///
     /// **The test discriminates**, which is the part that matters: the same call
@@ -2180,11 +2180,11 @@ mod tests {
 #[cfg(test)]
 mod frame_guard_tests {
     use super::*;
-    use dclutch_claims_svm::CallerRole;
-    use dclutch_claims_svm::fractional_claim_check_compaction_request_v1::{
+    use dclutch_claims::CallerRole;
+    use dclutch_claims::fractional_claim_check_compaction_request_v1::{
         FRACTIONAL_COMPACT_TO_CLAIM_CHECK_BYTES_V1, FractionalCompactionCoordinatesV1,
     };
-    use dclutch_claims_svm::terminal_settlement_v3::{
+    use dclutch_claims::terminal_settlement_v3::{
         TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3, TerminalSettlementRequestInputV3,
         TerminalSettlementRequestV3,
     };
@@ -2578,7 +2578,7 @@ mod frame_guard_tests {
         // the account cannot return by being forgotten about.
         assert_eq!(
             FractionalCompactionRoleV1::TradingCallerAuthority.admission(),
-            dclutch_claims_svm::fractional_claim_check_v1::FractionalCompactionAdmissionV1::RefusedTakesNoParentAuthority
+            dclutch_claims::fractional_claim_check_v1::FractionalCompactionAdmissionV1::RefusedTakesNoParentAuthority
         );
     }
 

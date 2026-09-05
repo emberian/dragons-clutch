@@ -24,32 +24,32 @@ use crate::{
         build_direct_hot_chain_fixture_v5,
     },
 };
-use dclutch_capability_program_contract::hot_v3::{
+use dclutch_market::capability_program::hot_v3::{
     DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_FIXED_ACCOUNT_COUNT_V3, SEALED_EXECUTION_FIXED_ALIASES_V3,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_direct_codec::native_evidence_v3::{
+use dclutch_trading::native_evidence_v3::{
     DIRECT_NATIVE_EVIDENCE_BYTES_V3, encode_direct_headerless_registry_native_evidence_v4_atomic,
 };
-use dclutch_direct_codec::ordinary_geometry_v3::DirectOrdinaryGeometryV3;
+use dclutch_trading::ordinary_geometry_v3::DirectOrdinaryGeometryV3;
 use dclutch_hot_bump_miner_v1::hot_bump_hint_slot_name_v1;
-use dclutch_registry_contract::{
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
     ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
     initialize_activation_cache_v1, put_activation_cache_bump_v1,
 };
-use dclutch_registry_svm::continuation_v1::{
+use dclutch_registry::svm::continuation_v1::{
     REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationRequestV1,
 };
-use dclutch_registry_svm::continuation_v2::{
+use dclutch_registry::svm::continuation_v2::{
     TransparentHotAdmissionSeedsV2, TransparentHotContinuationV2,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
     ProgramIdentityV1,
 };
-use dclutch_token_svm::TokenAccount;
+use dclutch_custody::token_svm::TokenAccount;
 use solana_account::Account;
 use solana_address_lookup_table_interface::state::{AddressLookupTable, LookupTableMeta};
 use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};

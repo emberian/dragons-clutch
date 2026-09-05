@@ -16,7 +16,7 @@ addresses, signatures, RPC observations, or claims of devnet execution.
 
 ## Authority boundaries
 
-The tool imports `DIRECT_FEE_DENOMINATOR_V1` from `dclutch-direct-codec`; it
+The tool imports `DIRECT_FEE_DENOMINATOR_V1` from `dclutch-trading`; it
 does not establish another fee denominator. It independently recomputes the
 named quote boundary and the two side floors with checked `u128` intermediates.
 The Product payout vectors are scenario inputs whose exact partition is checked;

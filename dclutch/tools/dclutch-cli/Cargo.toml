@@ -41,9 +41,8 @@ lto = "thin"
 # of these; this crate lays out nothing and parses no wire format of its own.
 # `CoreState` and `DirectRootStateV1` are emitted from the Lean semantics, so
 # the tool cannot drift from the programs without the emitter drifting first.
-dclutch-market-core-codec = { path = "../../crates/dclutch-market-core-codec" }
-dclutch-capability-program-contract = { path = "../../crates/dclutch-capability-program-contract" }
-dclutch-direct-codec = { path = "../../crates/dclutch-direct-codec" }
+dclutch-market = { path = "../../crates/dclutch-market" }
+dclutch-trading = { path = "../../crates/dclutch-trading" }
 # The one Rust author of a Direct intent ticket, shared with the operator
 # binary that settles a pair of them. This crate contributes no byte of a
 # ticket and no argument check of its own; `src/ticket.rs` names the invocation
@@ -54,7 +53,7 @@ dclutch-direct-ticket = { path = "../../crates/dclutch-direct-ticket" }
 # v0 compilation and plan serialization have one semantic owner shared with
 # the reproducible local campaign. This CLI supplies only finalized RPC reads.
 dclutch-general-successor-operator = { path = "../../crates/dclutch-general-successor-operator" }
-dclutch-fractional-claim-contract = { path = "../../crates/dclutch-fractional-claim-contract" }
+dclutch-claims = { path = "../../crates/dclutch-claims" }
 dclutch-fractional-claim-operator = { path = "../../crates/dclutch-fractional-claim-operator" }
 dclutch-versioned-message-operator = { path = "../../crates/dclutch-versioned-message-operator" }
 
@@ -75,7 +74,7 @@ solana-sdk = "=3.0.0"
 [dev-dependencies]
 # Only the tests construct accounts to decode; the binary never builds one.
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
-dclutch-release-set-contract = { path = "../../crates/dclutch-release-set-contract" }
+dclutch-registry = { path = "../../crates/dclutch-registry" }
 
 [lints.rust]
 missing_docs = "deny"

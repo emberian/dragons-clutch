@@ -392,7 +392,7 @@ pub(super) fn lifecycle_semantic_prefix_width_v3(
 
 fn require_trailing_account_profile_only_span_v3(
     profile: AccountProfileV2<'_>,
-    span: dclutch_account_profile_contract::v2::DynamicFixedSpanV2,
+    span: dclutch_vm::account_profile::v2::DynamicFixedSpanV2,
 ) -> Result<(), ProgramError> {
     if span.insertion_coordinate() != profile.fixed_account_count() {
         Err(TradingSbfError::Content.into())
@@ -607,7 +607,7 @@ impl<'a, 'accounts, 'info> DowngradedEffectAccountsV3<'a, 'accounts, 'info> {
     pub fn reserve_invocation_frame(
         self,
         output: &mut Vec<AccountInfo<'info>>,
-        invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
+        invocation: dclutch_vm::effect::v3::ResolvedInvocationV3,
     ) -> Result<(), ProgramError> {
         let items = usize::try_from(invocation.repeated_item_count)
             .map_err(|_| TradingSbfError::Content)?
@@ -1210,7 +1210,7 @@ pub(super) fn require_borrowed_witness_coverage_v3<'a>(
             .invocation_count(route_index, tail_count, scalars, identities)
             .map_err(|_| TradingSbfError::Content)?;
         let shape = u64::from(route.role() != expected_role)
-            | (u64::from(route.kind() != dclutch_effect_kernel::v3::RouteKindV3::Once) << 1)
+            | (u64::from(route.kind() != dclutch_vm::effect::v3::RouteKindV3::Once) << 1)
             | (u64::from(route.fixed_request_bytes() != 0) << 2)
             | (u64::from(route.item_request_bytes() != 0) << 3)
             | (u64::from(invocations != 1) << 4)

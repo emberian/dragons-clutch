@@ -1,7 +1,7 @@
 //! Exact finalized-record authentication shared by Core actions.
 
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use solana_program::{account_info::AccountInfo, hash::hash, pubkey::Pubkey};
 use solana_sdk_ids::system_program;
 

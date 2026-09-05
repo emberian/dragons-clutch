@@ -21,7 +21,7 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use dclutch_pyth_svm::{
+use dclutch_source::pyth::{
     ENCODED_VAA_DISCRIMINATOR_V1, ENCODED_VAA_HEADER_BYTES_V1, ENCODED_VAA_VERIFIED_STATUS_V1,
     GuardianSetV1, PostUpdateParamsView, ProgramDataV3View, ProgramV3View, ReceiverConfigV2View,
     VerifiedEncodedVaaV1, devnet_release_v1,
@@ -1500,7 +1500,7 @@ fn authenticate_message(
 fn authenticate_prestate_shape(
     intent: &IntentV1,
     arguments: &ArgumentsV1,
-    release: &dclutch_pyth_svm::PythReleaseV1,
+    release: &dclutch_source::pyth::PythReleaseV1,
 ) -> Result<()> {
     let expected = BTreeMap::from([
         (

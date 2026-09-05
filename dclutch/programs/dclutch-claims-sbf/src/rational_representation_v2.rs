@@ -6,32 +6,32 @@
 //! only one per-descriptor/actor replay revision and commits it after every
 //! Claims, Token, and Custody postcondition has passed.
 
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
-use dclutch_claims_svm::{
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_claims::{
     affine_batch_v2::{AffineBatchPlanV2, AffineBatchReceiptV2},
     protocol_position_v2::{ProtocolPositionClaimsCapabilitySeedsV2, ProtocolPositionSeedsV2},
     signed_delta_v3::{SignedDeltaPlanV3, SignedDeltaReceiptV3},
 };
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{CustodyReceiptV1, CustodyRequestV1};
-use dclutch_rational_representation_v2_contract::{
+use dclutch_custody::{CustodyReceiptV1, CustodyRequestV1};
+use dclutch_claims::rational::{
     AffineBatchContextV2, CompletionEvidenceV2, CoordinateIdentitiesV3, PreparedRepresentationV2,
     RATIONAL_ASSET_ACCOUNT_COUNT_V2, RATIONAL_BASE_ACCOUNT_COUNT_V2,
     RATIONAL_TERMINAL_ACCOUNT_COUNT_V2, RationalReplayV2, RepresentationActionV2,
     RepresentationRequestV2, ResolvedRequestV2, TokenEffectStyleV2, finalize, prepare,
 };
-use dclutch_rational_representation_v2_kernel::{
+use dclutch_claims::rational_kernel::{
     CoordinateObservation, DescriptorAdmissionV2, RepresentationDescriptorV2, SCALAR_BYTES,
     STRUCTURED_HEADER_BYTES, STRUCTURED_VECTOR_COUNT, StructuredProjectionHeaderV2,
     StructuredProjectionV2,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_svm::batch_v2::RoleBatchRequestV2;
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_representation_composition_v3_kernel::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::svm::batch_v2::RoleBatchRequestV2;
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_claims::composition::{
     CompositionExposureBundleV3, RecordAdmissionV3,
 };
-use dclutch_token_svm::{
+use dclutch_custody::token_svm::{
     TOKEN_2022_PROGRAM_ID, Token2022BehaviorAccountFactsV2, Token2022BehaviorMintFactsV2,
     Token2022BehaviorProfileV2,
 };
@@ -64,7 +64,7 @@ use crate::{
     rational_terminal_v3::{RationalTerminalFrameV3, execute_rational_terminal_v3},
 };
 
-pub use dclutch_rational_representation_v2_contract::{
+pub use dclutch_claims::rational::{
     RATIONAL_REPLAY_BYTES_V2, RATIONAL_REPLAY_CLOSE_ACCOUNT_COUNT_V1,
     RATIONAL_REPLAY_CLOSE_ACTOR_ACCOUNT_V1, RATIONAL_REPLAY_CLOSE_CURSOR_ACCOUNT_V1,
     RATIONAL_REPLAY_CLOSE_MAGIC_V1, RATIONAL_REPLAY_CLOSE_REQUEST_BYTES_V1,
@@ -1115,7 +1115,7 @@ fn authenticate_asset_identities(
     descriptor: [u8; 32],
     action: RepresentationActionV2,
     outcome: u32,
-    requested: Option<dclutch_rational_representation_v2_contract::AssetRowV2>,
+    requested: Option<dclutch_claims::rational::AssetRowV2>,
     accounts: AssetAccounts<'_, '_>,
 ) -> Result<CoordinateIdentities, ProgramError> {
     // THE RANK RULE, STATED IN THE ACCOUNT FRAME: a receipt is never backed by
@@ -2049,7 +2049,7 @@ fn parse_behavior_token_account(
 }
 
 fn require_effect_accounts(
-    effect: dclutch_rational_representation_v2_contract::TokenEffectV2,
+    effect: dclutch_claims::rational::TokenEffectV2,
     mint: &AccountInfo<'_>,
     source: &AccountInfo<'_>,
     destination: &AccountInfo<'_>,
@@ -2091,10 +2091,10 @@ fn account<'accounts, 'info>(
         .ok_or_else(|| ClaimsSbfError::Accounts.into())
 }
 
-fn caller_role(role: dclutch_rational_representation_v2_contract::CallerRoleV2) -> ExecutionRoleV1 {
+fn caller_role(role: dclutch_claims::rational::CallerRoleV2) -> ExecutionRoleV1 {
     match role {
-        dclutch_rational_representation_v2_contract::CallerRoleV2::Core => ExecutionRoleV1::Core,
-        dclutch_rational_representation_v2_contract::CallerRoleV2::Trading => {
+        dclutch_claims::rational::CallerRoleV2::Core => ExecutionRoleV1::Core,
+        dclutch_claims::rational::CallerRoleV2::Trading => {
             ExecutionRoleV1::Trading
         }
     }

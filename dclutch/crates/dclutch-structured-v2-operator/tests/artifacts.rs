@@ -21,7 +21,7 @@
 
 mod support;
 
-use dclutch_account_profile_contract::lifecycle_v3::{
+use dclutch_vm::account_profile::lifecycle_v3::{
     ACTION_PLAN_BYTES, HEADER_BYTES as LIFECYCLE_HEADER_BYTES, PROTECTED_OUTPUT_BYTES,
     RECIPE_BYTES, SEED_BYTES,
     encode::{
@@ -47,32 +47,32 @@ use dclutch_bearer_v2_operator::{
     validate_rational_open_structured_hot_bundle_for_authenticated_selection_v3,
     validate_rational_open_structured_hot_bundle_v3,
 };
-use dclutch_product_payoff_v2_codec::runtime_v3::{
+use dclutch_product::payoff::runtime_v3::{
     BASIS_HEADER_BYTES_V3, BasisInputV3, BasisKindV3, compile_basis_v3,
 };
-use dclutch_rational_representation_v2_contract::{
+use dclutch_claims::rational::{
     AuthenticatedTokenBehaviorV2, RepresentationActionV2, TokenBehaviorRecordAdmissionV2,
     authenticate_token_behavior_v2,
 };
-use dclutch_rational_representation_v2_kernel::{
+use dclutch_claims::rational_kernel::{
     DescriptorAdmissionV2, RepresentationDescriptorV2,
     descriptor_v3::{
         RepresentationDescriptorInputV3, encode_representation_descriptor_v3_atomic,
         representation_descriptor_bytes_v3,
     },
 };
-use dclutch_request_profile_contract::{
+use dclutch_vm::request_profile::{
     HEADER_BYTES as REQUEST_PROFILE_HEADER_BYTES, MAX_BYTES as REQUEST_PROFILE_MAX_BYTES,
     OPERATION_BYTES as REQUEST_PROFILE_OPERATION_BYTES, RequestProfileV1,
 };
-use dclutch_structured_v2_kernel::{
+use dclutch_claims::structured_kernel::{
     STRUCTURED_CAPABILITY_KIND_ID_V2, STRUCTURED_CAPACITY_PROFILE_ID_V2,
 };
 use dclutch_structured_v2_operator::{
     STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2, StructuredDescriptorAuthorityV2,
     StructuredRepresentationDescriptorV2, decode_derived_structured_descriptor_v2,
 };
-use dclutch_token_svm::{
+use dclutch_custody::token_svm::{
     TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_BYTES_V2,
     TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, TokenBehaviorSelectionV2,
 };

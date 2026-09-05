@@ -187,13 +187,13 @@ function decodeLoader(name: string, bytes: Uint8Array, expected: ExpectedAccount
  * has a producer, measured rather than assumed:
  *
  *   * `SourceResolutionStateV1::to_bytes`
- *     (`crates/dclutch-source-contract/src/lib.rs:3589`) is called only from
+ *     (`crates/dclutch-source/src/lib.rs:3589`) is called only from
  *     that file's own `#[cfg(test)] mod tests`, which opens at line 6025.
  *     Outside the crate the type survives in one program-test caller and one
  *     `tests.rs`. Every program, and the successor bootstrap's own founding,
  *     writes `SourceResolutionStateV2`.
  *   * `FundingStateV1::to_bytes`
- *     (`crates/dclutch-capability-contract/src/funding.rs:1089`) has exactly
+ *     (`crates/dclutch-market/src/capability_manifest/funding.rs:1089`) has exactly
  *     one allocator anywhere, `stage_pending_funding`
  *     (`programs/dclutch-trading-sbf/src/series/accounts.rs:224`), and that
  *     function HAS NO CALLER -- the same measurement
@@ -222,7 +222,7 @@ function decodeLoader(name: string, bytes: Uint8Array, expected: ExpectedAccount
  * with no owner and hand-writing them again would recreate the defect the
  * deletion was for. They are back, from
  * `generated/sourceResolutionStateV2.ts` -- scraped from
- * `crates/dclutch-source-contract/src/generated_source_resolution_state_v2.rs`,
+ * `crates/dclutch-source/src/generated_source_resolution_state_v2.rs`,
  * which Lean emits -- so the card names the same fields and this file states
  * none of their coordinates. `terminal route` prints its wire number rather
  * than a name: the route names were a four-element array written here, and no
@@ -291,7 +291,7 @@ function sourceResolutionFieldsV2(bytes: Uint8Array) {
  * field map at 8/10/11/16/240/248/252/256/260/264/272/280/296/304, and its own
  * five-element kind vocabulary. `ResolutionCertificateV1` has no producer,
  * measured rather than assumed: every use of it in
- * `crates/dclutch-resolution-codec/src/lib.rs` sits at or below line 2112,
+ * `crates/dclutch-source/src/resolution/mod.rs` sits at or below line 2112,
  * inside the `#[cfg(test)] mod tests` that opens at line 2090, and the only
  * consumer outside the crate is the svm-harness `resolution-receipt-caller`
  * test program. `programs/dclutch-resolution-proof-sbf/src/funded.rs:16-18`

@@ -13,7 +13,7 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use dclutch_claims_svm::{
+use dclutch_claims::{
     liability_basis_state_v2::LiabilityBasisPositionViewV2,
     signed_delta_v3::{
         DeltaDirectionV3, PositionDeltaInputV3, PositionDeltaV3,
@@ -22,14 +22,14 @@ use dclutch_claims_svm::{
     },
 };
 use dclutch_core_contract::ContentId;
-use dclutch_fractional_claim_contract::{
+use dclutch_claims::fractional::{
     FRACTIONAL_FAMILY_REQUEST_BYTES_V1, FractionalActionV1, FractionalFamilyRequestV1,
 };
-use dclutch_fractional_claims_kernel::{
+use dclutch_claims::fractional_lowering::{
     FractionalSignedDeltaInputV1, fractional_signed_delta_shape_v1,
     prepare_fractional_signed_delta_v1, validate_prepared_fractional_signed_delta_postcondition_v1,
 };
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,

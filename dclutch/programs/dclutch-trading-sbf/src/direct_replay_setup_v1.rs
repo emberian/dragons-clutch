@@ -10,20 +10,20 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CUSTODY_RECEIPT_BYTES_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1, ContextV1,
     CustodyFrameSpecV1, CustodyReceiptV1, CustodyReplaySeedsV1, CustodyReplayV1, CustodyRequestV1,
     OperationV1,
 };
-use dclutch_direct_codec::{
+use dclutch_trading::{
     replay_setup_v1::{
         DirectReplaySetupReceiptV1, DirectReplaySetupRequestV1,
         direct_replay_setup_parent_digest_v1,
     },
     successor::{DirectCoordinatesV1, MakerReplaySeedsV1},
 };
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,
@@ -57,7 +57,7 @@ const RENT_REFUND: usize = 12;
 const CUSTODY_PROGRAM: usize = 13;
 
 const _: () = assert!(
-    dclutch_custody_contract::INITIALIZE_REPLAY_ACCOUNT_COUNT_V1 as usize + 1
+    dclutch_custody::INITIALIZE_REPLAY_ACCOUNT_COUNT_V1 as usize + 1
         == DIRECT_REPLAY_SETUP_ACCOUNT_COUNT_V1
 );
 
@@ -475,7 +475,7 @@ fn invoke_custody(
     request: &CustodyRequestV1,
     request_digest: [u8; 32],
 ) -> ProgramResult {
-    let frame_count = dclutch_custody_contract::INITIALIZE_REPLAY_ACCOUNT_COUNT_V1 as usize;
+    let frame_count = dclutch_custody::INITIALIZE_REPLAY_ACCOUNT_COUNT_V1 as usize;
     let frame = accounts
         .get(..frame_count)
         .ok_or(TradingSbfError::Content)?;
@@ -570,11 +570,11 @@ fn account<'accounts, 'info>(
 
 #[cfg(test)]
 mod tests {
-    use dclutch_market_core_codec::Phase;
-    use dclutch_market_core_codec::{Identity, MarketIdentity, Readiness};
+    use dclutch_market::Phase;
+    use dclutch_market::{Identity, MarketIdentity, Readiness};
 
     use super::*;
-    use dclutch_market_core_codec::StateBumpsV1;
+    use dclutch_market::StateBumpsV1;
 
     fn identity(tag: u8) -> Identity {
         Identity::new([tag; 32]).expect("identity")

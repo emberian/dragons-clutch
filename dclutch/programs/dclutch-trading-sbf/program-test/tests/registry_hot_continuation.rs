@@ -88,7 +88,7 @@
 
 use std::{env, fs, path::PathBuf};
 
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1,
     hot_v3::{
         DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
@@ -97,7 +97,7 @@ use dclutch_capability_program_contract::{
         HotExecutionEnvelopeV3,
     },
 };
-use dclutch_capability_seal_contract::{
+use dclutch_vm::capability_seal::{
     CAPABILITY_SEAL_ACTION_OFFSET_V1, CAPABILITY_SEAL_DESCRIPTOR_DIGEST_OFFSET_V1,
     CAPABILITY_SEAL_HEADER_BYTES_V1, CAPABILITY_SEAL_MAGIC_OFFSET_V1,
     CAPABILITY_SEAL_REGISTRY_OFFSET_V1, CAPABILITY_SEAL_ROW_BYTES_V1,
@@ -105,14 +105,14 @@ use dclutch_capability_seal_contract::{
     CAPABILITY_SEAL_TRADING_RELEASE_OFFSET_V1, CAPABILITY_SEAL_VERDICTS_OFFSET_V1,
     CapabilitySealRequestV1,
 };
-use dclutch_custody_contract::CustodyReplayV1;
+use dclutch_custody::CustodyReplayV1;
 use dclutch_custody_sbf::CustodySbfError;
-use dclutch_direct_codec::execution_v3::DirectExecutionActionV3;
-use dclutch_direct_codec::ordinary_geometry_v3::DirectOrdinaryGeometryV3;
-use dclutch_direct_codec::successor::{DirectMakerReplayLayoutV1, DirectRootStateLayoutV1};
+use dclutch_trading::execution_v3::DirectExecutionActionV3;
+use dclutch_trading::ordinary_geometry_v3::DirectOrdinaryGeometryV3;
+use dclutch_trading::successor::{DirectMakerReplayLayoutV1, DirectRootStateLayoutV1};
 use dclutch_registry_sbf::RegistryError;
-use dclutch_token_svm::state::{MintLayoutV1, TokenAccountLayoutV1};
-use dclutch_token_svm::{LEGACY_TOKEN_PROGRAM_ID, TokenAccount};
+use dclutch_custody::token_svm::state::{MintLayoutV1, TokenAccountLayoutV1};
+use dclutch_custody::token_svm::{LEGACY_TOKEN_PROGRAM_ID, TokenAccount};
 use dclutch_trading_sbf::TradingSbfError;
 use solana_account::{Account, AccountSharedData};
 use solana_compute_budget_interface::ComputeBudgetInstruction;
@@ -1226,7 +1226,7 @@ async fn the_widest_geometry_the_shipped_hot_path_can_trade() {
 /// red on its own depth assertions rather than on its rollback claim.
 ///
 /// `410320ac` added `project_tokens_v3`
-/// (`crates/dclutch-direct-codec/src/direct_finalization_v3.rs`), the typed
+/// (`crates/dclutch-trading/src/direct_finalization_v3.rs`), the typed
 /// candidate precompute Trading runs at `prepare_direct_inline_hot_crosscheck_v3`
 /// BEFORE the first child CPI. Its conjunct `seller.state !=
 /// AccountState::Initialized` catches exactly this fixture's byte, so Trading
@@ -1245,7 +1245,7 @@ async fn the_widest_geometry_the_shipped_hot_path_can_trade() {
 /// address, the exact owner and the exact balance. Custody's profile
 /// deliberately admits a destination's own delegate and close authority
 /// ("those facts do not affect the amount credited by this transfer",
-/// `crates/dclutch-token-svm/src/profile.rs`), so corrupting THOSE refuses
+/// `crates/dclutch-custody/src/token_svm/profile.rs`), so corrupting THOSE refuses
 /// nowhere at all -- the candidate is projected from the observed prestate, so
 /// the poststate still matches and the trade succeeds. There is no byte of the
 /// destination account that reaches a late Custody refusal any more.
@@ -2083,7 +2083,7 @@ fn assert_no_family_reaches_the_registry_by_cpi() {
          continuation the Registry sits at CPI depth one, so invoking it from a \
          child is ReentrancyNotAllowed and costs the whole transaction -- \
          decision 0017, and the wall the five families were converted off. Read \
-         the activation cache with dclutch-registry-activation-auth-v1 instead. \
+         the activation cache with dclutch-registry instead. \
          Offending lines:\n{}",
         offences.join("\n"),
     );
@@ -2111,7 +2111,7 @@ fn assert_no_family_reaches_the_registry_by_cpi() {
 /// # What this asserts instead, and why it is what makes one route enough
 ///
 /// Not "the wall is up" -- the FUNNEL. Every Claims source that names a role
-/// authentication entry point of `dclutch-registry-activation-auth-v1` is one
+/// authentication entry point of `dclutch-registry::activation_auth_v1` is one
 /// of three, each named here with the reason, and each is pinned to the exact
 /// entry points it may name:
 ///

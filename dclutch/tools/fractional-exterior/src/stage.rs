@@ -9,20 +9,20 @@
 
 use solana_program::{hash::hash, pubkey::Pubkey};
 
-use dclutch_capability_program_contract::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
+use dclutch_market::capability_program::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
 use dclutch_core_contract::ContentId;
-use dclutch_fractional_claim_contract::{
+use dclutch_claims::fractional::{
     FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4, FractionalExposureActionV2,
     FractionalExposureRequestInputV2, FractionalExposureRequestV2, FractionalRootInputV1,
     FractionalRootV1,
 };
-use dclutch_fractional_claim_kernel::{
+use dclutch_claims::fractional_kernel::{
     FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FRACTIONAL_SELECTION_CONFIG_BYTES_V1,
     FractionalExposureTermsAdmissionV2, FractionalExposureTermsInputV2, FractionalExposureTermsV2,
     encode_fractional_exposure_terms_v2, encode_fractional_selection_config_v1,
     fractional_exposure_terms_bytes_v2, fractional_selection_config_from_terms_v1,
 };
-use dclutch_product_payoff_v2_codec::price_gate_v1::{
+use dclutch_product::payoff::price_gate_v1::{
     PRICE_GATE_ATOM_COUNT_OFFSET_V1, PRICE_GATE_DEGREE_OFFSET_V1,
     PRICE_GATE_DENOMINATORS_OFFSET_V1, PRICE_GATE_MAGIC_OFFSET_V1, PRICE_GATE_MAGIC_V1,
     PRICE_GATE_MASS_OFFSET_V1, PRICE_GATE_NUMERATORS_OFFSET_V1, PRICE_GATE_PRICES_OFFSET_V1,
@@ -30,20 +30,20 @@ use dclutch_product_payoff_v2_codec::price_gate_v1::{
     PRICE_GATE_SCALE_OFFSET_V1, PRICE_GATE_SCHEMA_VERSION_V1, PRICE_GATE_VERSION_OFFSET_V1,
     PRICE_GATE_WEIGHTS_OFFSET_V1, PRICE_GATE_WIDTH_OFFSET_V1,
 };
-use dclutch_realm_contract::{
+use dclutch_market::realm::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
 };
-use dclutch_registry_contract::{
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
     ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
     initialize_activation_cache_v1,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1,
     ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1, ProgramIdentityV1,
 };
-use dclutch_token_svm::{
+use dclutch_custody::token_svm::{
     PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
     TokenBehaviorSelectionV2,
 };
@@ -450,7 +450,7 @@ pub fn stage(elves: &Elves<'_>, actor: Pubkey, sleeper_owner: Pubkey) -> Staged 
     let selection = CapabilityExecutionSelectionV1::new(
         0,
         ContentId::new([0x81; 32]).expect("manifest"),
-        ContentId::new(dclutch_fractional_claim_contract::FRACTIONAL_CAPABILITY_KIND_ID_V1)
+        ContentId::new(dclutch_claims::fractional::FRACTIONAL_CAPABILITY_KIND_ID_V1)
             .expect("kind"),
         ContentId::new([0x83; 32]).expect("capability release"),
         ContentId::new(selection_config_digest(&terms)).expect("config"),

@@ -71,12 +71,12 @@ use solana_program::{instruction::InstructionError, pubkey::Pubkey};
 use solana_program_test::BanksClientError;
 use solana_sdk::{signature::Signer, transaction::TransactionError};
 
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{CallerRoleV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1};
-use dclutch_direct_codec::successor::{DirectCoordinatesV1, MakerReplaySeedsV1};
+use dclutch_custody::{CallerRoleV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1};
+use dclutch_trading::successor::{DirectCoordinatesV1, MakerReplaySeedsV1};
 use dclutch_direct_hot_program_test_support::waist::{
     CORE_PROGRAM_ID, CUSTODY_PROGRAM_ID, DirectCase, REGISTRY_PROGRAM_ID, RefusedExecution,
     Releases, TRADING_PROGRAM_ID, add_lookup_table, add_release_waist, canonical_lookup_addresses,
@@ -84,10 +84,10 @@ use dclutch_direct_hot_program_test_support::waist::{
     program_test_without_forced_budget, start_with_substrate, submit_v0_observed,
     with_fixture_seed,
 };
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2};
-use dclutch_realm_contract::REALM_SCHEMA_RELEASE_ID_V1;
-use dclutch_record_contract::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2};
+use dclutch_market::realm::REALM_SCHEMA_RELEASE_ID_V1;
+use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_trading_sbf::TradingSbfError;
 
 /// Fixture seeds swept by the gate.
@@ -309,9 +309,9 @@ const KEY_VARYING_SEARCH_SITES_V1: u64 = 7;
 /// only `tools/gauntlet`; and NO `Cargo.lock` changed in either merge range, so
 /// it is not dependency drift. What remains is the set merged at `ab428f63`,
 /// of which only these touch non-test code this route can reach --
-/// `d38aadae` (`dclutch-claims-svm`, and the Claims caller authority is one of
-/// the seven sites), `aac98afd` (`dclutch-product-payoff-v2-codec`),
-/// `f3f47640` (`dclutch-token-svm`). Per-commit attribution is queued; the
+/// `d38aadae` (`dclutch-claims`, and the Claims caller authority is one of
+/// the seven sites), `aac98afd` (`dclutch-product::payoff`),
+/// `f3f47640` (`dclutch-custody::token_svm`). Per-commit attribution is queued; the
 /// honest statement today is 51 CU, measured, from that set.
 ///
 /// **The 1,500 is deliberate slack and it is the actual lesson here.** A pin set
@@ -369,7 +369,7 @@ const KEY_VARYING_SEARCH_SITES_V1: u64 = 7;
 /// `invocation.fixed_account_count`, not from that frame constant.
 ///
 /// **What it actually is**: `authenticate_product_basis_v3` in
-/// `dclutch-product-runtime-v2-svm-reader`. Split against its own merge base
+/// `dclutch-product::svm_reader`. Split against its own merge base
 /// `2ebeb798` (1,263,174, which is the pin's value to within 2 CU, the two
 /// branches having diverged there):
 ///
@@ -461,7 +461,7 @@ const KEY_VARYING_SEARCH_SITES_V1: u64 = 7;
 /// public trade on **32 of 32 seeds** with `Custom(16387)`
 /// (`TradingSbfError::Content`) -- `48d1f449`, `fd5d20ea`, `7ef13bd4`,
 /// `a82316a8`, `5fbe0bd8`, `4f3d275e`, `7fe577e2`, `e0ece22e` -- and two do not
-/// compile at all (`89bd7df2`, `E0432` in `dclutch-direct-codec`; `2d871068`
+/// compile at all (`89bd7df2`, `E0432` in `dclutch-trading`; `2d871068`
 /// and its two neighbours will not build the program-test harness). The route
 /// executes again only at `371409f4`. So for most of the wave the public Direct
 /// trade was not expensive, it was BROKEN, and this gate's silence over that
@@ -794,7 +794,7 @@ struct CarriedBumpsV1 {
 /// One finalized record's canonical bump under this fixture's Registry.
 ///
 /// The seed tuple is NOT restated here, which is the seam-audit rule
-/// (`DOMAIN_RAW_RESTATEMENT`): `dclutch-record-contract` owns these domains and
+/// (`DOMAIN_RAW_RESTATEMENT`): `dclutch-registry::record` owns these domains and
 /// exports the constructors that place them, so a crate that only READS the
 /// address takes the domain from `seeds.domain()` instead of naming it. Two
 /// spellings are two sources of truth, and the audit exists because the last

@@ -6,7 +6,7 @@
 //! describe the same release set. Only then does it return the existing
 //! Registry activation instruction and packet plan.
 
-use dclutch_release_set_contract::{EXECUTION_ROLE_COUNT_V1, ExecutionRoleV1};
+use dclutch_registry::release_set::{EXECUTION_ROLE_COUNT_V1, ExecutionRoleV1};
 use dclutch_release_tool::{
     CheckedExecutionReleaseSetV1, CheckedReleaseV1, build_checked_execution_release_set,
 };

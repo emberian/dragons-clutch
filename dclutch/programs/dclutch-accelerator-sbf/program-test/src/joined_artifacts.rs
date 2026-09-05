@@ -4,7 +4,7 @@
 //! not cache generated identities: every content edge is re-derived from the
 //! exact bytes which ProgramTest installs as finalized Registry records.
 
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     set_v2::{
         CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, SelectorWidthV2,
         encode_program_set_v2, encoded_program_set_bytes_v2,
@@ -16,13 +16,13 @@ use dclutch_capability_program_contract::{
     },
 };
 use dclutch_core_contract::ContentId;
-use dclutch_execution_strategy_contract::v2::{
+use dclutch_market::execution_strategy::v2::{
     ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyAdmissionV2,
     ExecutionStrategyCertificateV2, ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
-use dclutch_general_adapter_contract::{
+use dclutch_trading::general::{
     account_rules_v3::{
         GeneralExternalAccountWidthsV3, encode_general_account_profile_v3_atomic,
         general_account_profile_bytes_v3,
@@ -46,15 +46,15 @@ use dclutch_general_adapter_contract::{
         general_transition_instruction_count_v3, general_transition_program_bytes_v3,
     },
 };
-use dclutch_general_codec::{
+use dclutch_trading::general_codec::{
     Action,
     successor_request_v2::{CONTROLLER_REQUEST_BYTES_V2, ControllerRequestV2},
 };
-use dclutch_general_config_contract::v3::{
+use dclutch_trading::general_config::v3::{
     GENERAL_CONFIG_SCHEMA_ID_V3, GeneralConfigV3, GeneralConfigV3Input,
 };
-use dclutch_general_config_contract::{GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_ROOT_SCHEMA_ID_V2};
-use dclutch_release_set_contract::ArtifactReleaseIdV1;
+use dclutch_trading::general_config::{GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_ROOT_SCHEMA_ID_V2};
+use dclutch_registry::release_set::ArtifactReleaseIdV1;
 use solana_program::hash::hash;
 
 /// Immutable inputs which are common to all seven generated action bundles.
@@ -244,15 +244,15 @@ fn action_artifacts(
     let account_profile = account_profile(input.external_widths, action)?;
     let lifecycle_policy = lifecycle(input)?;
     let request_profile =
-        dclutch_general_adapter_contract::specialization::general_request_profile_bytes_v1(action)
+        dclutch_trading::general::specialization::general_request_profile_bytes_v1(action)
             .to_vec();
     let transition = transition(action)?;
     let effect = effect(action)?;
     let certificate = ExecutionStrategyCertificateV2::new(
         content(digest(&account_profile))?,
-        content(dclutch_request_profile_contract::SCHEMA_RELEASE_ID)?,
+        content(dclutch_vm::request_profile::SCHEMA_RELEASE_ID)?,
         content(digest(&request_profile))?,
-        content(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID)?,
+        content(dclutch_vm::v3::SCHEMA_RELEASE_ID)?,
         content(digest(&transition))?,
         content(digest(&effect))?,
         ArtifactReleaseIdV1::new(input.accelerator_artifact_release)
@@ -268,7 +268,7 @@ fn action_artifacts(
         .to_vec();
     let strategy = ExecutionStrategyProgramV2::new(
         StrategyDispositionV2::AdmittedAot,
-        content(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID)?,
+        content(dclutch_vm::v3::SCHEMA_RELEASE_ID)?,
         content(digest(&transition))?,
         content(EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2)?,
         Some(content(digest(&certificate))?),
@@ -289,11 +289,11 @@ fn action_artifacts(
         content(input.capacity_profile)?,
         CapabilityArtifactsV4 {
             account_profile: ArtifactReferenceV4::new(
-                content(dclutch_account_profile_contract::v2::SCHEMA_RELEASE_ID)?,
+                content(dclutch_vm::account_profile::v2::SCHEMA_RELEASE_ID)?,
                 content(digest(&account_profile))?,
             ),
             request_profile: ArtifactReferenceV4::new(
-                content(dclutch_request_profile_contract::SCHEMA_RELEASE_ID)?,
+                content(dclutch_vm::request_profile::SCHEMA_RELEASE_ID)?,
                 content(digest(&request_profile))?,
             ),
             lifecycle: ArtifactReferenceV4::new(
@@ -305,15 +305,15 @@ fn action_artifacts(
                 content(digest(&strategy))?,
             ),
             transition: ArtifactReferenceV4::new(
-                content(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID)?,
+                content(dclutch_vm::v3::SCHEMA_RELEASE_ID)?,
                 content(digest(&transition))?,
             ),
             effect: ArtifactReferenceV4::new(
-                content(dclutch_effect_kernel::v4::SCHEMA_RELEASE_ID_V4)?,
+                content(dclutch_vm::effect::v4::SCHEMA_RELEASE_ID_V4)?,
                 content(digest(&effect))?,
             ),
         },
-        u32::try_from(dclutch_general_config_contract::GENERAL_ROOT_BYTES_V2)
+        u32::try_from(dclutch_trading::general_config::GENERAL_ROOT_BYTES_V2)
             .map_err(|_| JoinedGeneralArtifactErrorV5::Input)?,
     )
     .map_err(|_| JoinedGeneralArtifactErrorV5::Encoding)?
@@ -464,8 +464,8 @@ fn digest(bytes: &[u8]) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_custody_contract::OperationV1;
-    use dclutch_general_adapter_contract::effect_artifacts_v3::{
+    use dclutch_custody::OperationV1;
+    use dclutch_trading::general::effect_artifacts_v3::{
         GeneralChildFrameV3, general_effect_route_count_v3, general_effect_route_frame_v3,
     };
 

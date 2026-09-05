@@ -5,7 +5,7 @@
 //! Dealer `CapabilityProgramSetV2` returns the exact descriptor schema/content
 //! pair rather than an untyped descriptor content identity.
 
-use dclutch_capability_program_contract::set_v2::{
+use dclutch_market::capability_program::set_v2::{
     CapabilityDescriptorReferenceV2, CapabilityProgramSetV2, SelectorWidthV2,
 };
 
@@ -93,7 +93,7 @@ fn build(
 
 #[cfg(test)]
 mod tests {
-    use dclutch_capability_program_contract::set_v2::{
+    use dclutch_market::capability_program::set_v2::{
         CapabilityProgramSetEntryV2, encode_program_set_v2, encoded_program_set_bytes_v2,
     };
     use dclutch_core_contract::ContentId;

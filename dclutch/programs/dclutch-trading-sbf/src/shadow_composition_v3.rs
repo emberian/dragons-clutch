@@ -10,14 +10,14 @@ extern crate alloc;
 
 use alloc::{vec, vec::Vec};
 
-use dclutch_execution_strategy_contract::shadow_digest_v3::{
+use dclutch_market::execution_strategy::shadow_digest_v3::{
     AcceleratorCallerKindV1, accelerator_caller_authority_digest_v1, family_request_digest_v3,
 };
-use dclutch_execution_strategy_contract::shadow_v3::{
+use dclutch_market::execution_strategy::shadow_v3::{
     SHADOW_ACK_BYTES_V3, SHADOW_CALLER_AUTHORITY_INDEX_V1, SHADOW_RUNTIME_ACCOUNTS_START_V3,
     ShadowAckV3, ShadowDispositionV3, ShadowRequestV3,
 };
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
@@ -222,7 +222,7 @@ fn runtime_keys_alias_authority<'a>(
 mod tests {
     use super::*;
     use dclutch_core_contract::ContentId;
-    use dclutch_execution_strategy_contract::shadow_v3::{
+    use dclutch_market::execution_strategy::shadow_v3::{
         ShadowArtifactTupleV3, ShadowExecutionDigestsV3, ShadowRuntimeShapeV3,
     };
 

@@ -51,20 +51,20 @@
 //!
 //! Four rounds total for a redemption, where the CLI took two plus two files.
 
-use dclutch_claims_svm::{
+use dclutch_claims::{
     liability_basis_state_v2::LiabilityBasisMarketViewV2,
     protocol_position_v2::{ProtocolPositionAdmissionSeedsV2, ProtocolPositionAdmissionV2},
 };
-use dclutch_market_core_codec::CoreState;
-use dclutch_product_payoff_v2_codec::{
+use dclutch_market::CoreState;
+use dclutch_product::payoff::{
     registry_v3::{GRADED_BASIS_RECORD_SCHEMA_ID_V3, PRICE_GATE_RECORD_SCHEMA_ID_V1},
     runtime_v3::ProductBasisV3,
 };
-use dclutch_product_runtime_v2_admission::{
+use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
     RESULT_DOMAIN_SCHEMA_ID_V2,
 };
-use dclutch_realm_contract::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
+use dclutch_market::realm::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
 use dclutch_representation_composition_v3_operator::native_categorical_v1::{
     NativeBasisCompositionInputV1, compile_native_basis_composition_v1,
 };

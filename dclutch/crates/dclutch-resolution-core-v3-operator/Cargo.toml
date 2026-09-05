@@ -9,16 +9,10 @@ rust-version.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
-dclutch-capability-contract = { path = "../dclutch-capability-contract" }
-dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
-dclutch-product-runtime-v2 = { path = "../dclutch-product-runtime-v2" }
-dclutch-product-runtime-v2-admission = { path = "../dclutch-product-runtime-v2-admission" }
-dclutch-record-contract = { path = "../dclutch-record-contract" }
-dclutch-registry-contract = { path = "../dclutch-registry-contract" }
-dclutch-registry-svm = { path = "../dclutch-registry-svm" }
-dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
-dclutch-resolution-codec = { path = "../dclutch-resolution-codec" }
-dclutch-source-contract = { path = "../dclutch-source-contract" }
+dclutch-market = { path = "../dclutch-market" }
+dclutch-product = { path = "../dclutch-product" }
+dclutch-registry = { path = "../dclutch-registry" }
+dclutch-source = { path = "../dclutch-source" }
 solana-program = { version = "=3.0.0", default-features = false }
 solana-sdk-ids = "=3.1.0"
 

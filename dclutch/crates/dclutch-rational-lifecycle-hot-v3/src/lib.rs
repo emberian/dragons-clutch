@@ -91,7 +91,7 @@ pub use selected_set_v6::{
     validate_rational_lifecycle_program_set_v6,
 };
 
-use dclutch_rational_representation_v2_lifecycle_contract::LifecycleActionV2;
+use dclutch_claims::rational_lifecycle::LifecycleActionV2;
 
 /// Stable lifecycle Hot artifact/operator refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -101,33 +101,33 @@ pub enum Error {
     /// Arithmetic or integer narrowing could not represent an exact artifact.
     InvalidLength,
     /// Typed RequestProfile encoding or hostile decoding refused.
-    RequestProfile(dclutch_request_profile_contract::Error),
+    RequestProfile(dclutch_vm::request_profile::Error),
     /// Compact repeated-row RequestProfile V4 encoding or hostile decoding refused.
-    RequestProfileV4(dclutch_request_profile_contract::v4::Error),
+    RequestProfileV4(dclutch_vm::request_profile::v4::Error),
     /// Typed TransitionVM encoding or hostile decoding refused.
-    Transition(dclutch_transition_vm::v3::Error),
+    Transition(dclutch_vm::v3::Error),
     /// Typed AccountProfile encoding or hostile decoding refused.
-    AccountProfile(dclutch_account_profile_contract::v2::Error),
+    AccountProfile(dclutch_vm::account_profile::v2::Error),
     /// ProductBasisV3 or exact logical account observations differed.
     AccountObservation,
     /// Typed EffectProgram encoding or hostile decoding refused.
-    Effect(dclutch_effect_kernel::v3::Error),
+    Effect(dclutch_vm::effect::v3::Error),
     /// Typed EffectProgram successor encoding or hostile decoding refused.
-    EffectV4(dclutch_effect_kernel::v4::ErrorV4),
+    EffectV4(dclutch_vm::effect::v4::ErrorV4),
     /// A content-addressed semantic coordinate was zero.
     ContentIdentity,
     /// Interpreted execution-strategy construction or join refused.
-    Strategy(dclutch_execution_strategy_contract::v2::Error),
+    Strategy(dclutch_market::execution_strategy::v2::Error),
     /// CapabilityProgram construction or hostile decoding refused.
-    Descriptor(dclutch_capability_program_contract::Error),
+    Descriptor(dclutch_market::capability_program::Error),
     /// Successor lifecycle artifact decoding or AccountProfile join refused.
-    LifecycleArtifact(dclutch_account_profile_contract::lifecycle_v3::Error),
+    LifecycleArtifact(dclutch_vm::account_profile::lifecycle_v3::Error),
     /// Canonical Token behavior selection failed hostile decoding.
-    TokenBehavior(dclutch_token_svm::Error),
+    TokenBehavior(dclutch_custody::token_svm::Error),
     /// Finalized bundle parts did not share one exact geometry.
     ArtifactGeometry,
     /// Exact family/Claims child specialization or receipt contract refused.
-    Lifecycle(dclutch_rational_representation_v2_lifecycle_contract::Error),
+    Lifecycle(dclutch_claims::rational_lifecycle::Error),
     /// Checked release, physical account frame, or unsigned instruction refused.
     Operator,
 }

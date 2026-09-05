@@ -29,7 +29,7 @@ use dclutch_direct_hot_program_test_support::waist::{
     REGISTRY_PROGRAM_ID, add_release_waist, elves, program_test_without_forced_budget,
     with_fixture_seed,
 };
-use dclutch_registry_contract::ACTIVATION_PDA_DOMAIN_V1;
+use dclutch_registry::ACTIVATION_PDA_DOMAIN_V1;
 
 /// Attempts `find_program_address` makes to land on `bump`, at 1,500 CU each.
 use dclutch_program_test_evidence::pda_search::{ATTEMPT_COST_CU, attempts};

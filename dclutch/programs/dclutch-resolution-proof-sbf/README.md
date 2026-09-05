@@ -7,7 +7,7 @@ the final funded exhaustion transition, and explicit Product-owned failure.
 
 **The program does not verify a provider signature, and must never be described
 as doing so.** There is no ed25519, secp256k1 or keccak in this program or in
-`dclutch-pyth-svm`; `FullPriceUpdateV2::parse` reads a `VerificationLevel` tag
+`dclutch-source::pyth`; `FullPriceUpdateV2::parse` reads a `VerificationLevel` tag
 byte and nothing more. Soundness is DELEGATED: the update account must be owned
 by the Receiver program named in a Registry-finalized `PythReleaseV1` reached
 from the Market's own `identity.resolution_policy`, pinned by ProgramData,
@@ -56,7 +56,7 @@ account and no standalone result-domain record. Those would duplicate the
 CoreState/Registry/Product authority join and are rejected by the exact frame.
 
 It delegates normalization, timing, confidence, exact Product mapping, and
-Source lifecycle mutation to `dclutch-source-contract`. Funded transitions
+Source lifecycle mutation to `dclutch-source`. Funded transitions
 also authenticate the Market-selected finalized capability manifest and its
 program-owned canonical `FundingStateV1` PDA. The immutable entry's complete
 positive native-lamport Bounty quote is the work charge; no instruction amount

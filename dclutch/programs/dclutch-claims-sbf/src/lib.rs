@@ -4,24 +4,24 @@
 
 //! Authenticated SBF adapter for the one canonical Claims economic owner.
 
-use dclutch_claims_svm::{
+use dclutch_claims::{
     CallerRole, ClaimsAction, ClaimsAggregateSeedsV1, ClaimsPlanV1, ClaimsPositionSeedsV1,
     ClaimsReceiptV1, NO_POSITION_REVISION,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_economic_slice_kernel::{
+use dclutch_product::economic_slice::{
     BasketAction, BasketFrame, Phase as EconomicPhase, execute_basket, market_hoard,
     market_identity, market_outcome_count, market_phase, market_registry_program,
     market_release_set_id, market_revision, market_supply, position_market_id, position_native,
     position_owner, position_revision, refunding_failure_index,
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, STATE_BYTES,
 };
-use dclutch_registry_activation_auth_v1::authenticate_activated_role_v1;
-use dclutch_registry_svm::AuthenticatedRoleReceiptV1;
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_source_contract::MarketPrincipalCapSetsV1;
+use dclutch_registry::activation_auth_v1::authenticate_activated_role_v1;
+use dclutch_registry::svm::AuthenticatedRoleReceiptV1;
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_source::MarketPrincipalCapSetsV1;
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,
@@ -77,13 +77,13 @@ mod terminal_settlement_v3;
 /// This doc used to end "if a third program needs one, that is the moment to
 /// extract the pair, not before." `dclutch-custody-sbf` is the third program,
 /// so the pair is extracted: the syscalls and the `#[inline(never)]` that
-/// guards them now live once, in `dclutch-cu-checkpoint`. The FEATURE and the
+/// guards them now live once, in `dclutch-sbf-runtime::cu_checkpoint`. The FEATURE and the
 /// DOMAIN PREFIX stay here, because the feature name is what a build line names
 /// and the prefix is what a log reader greps.
 #[cfg(feature = "claims-cu-profile")]
 macro_rules! claims_cu_checkpoint {
     ($phase:literal) => {
-        dclutch_cu_checkpoint::cu_checkpoint(concat!("dclutch-claims-cu:", $phase))
+        dclutch_sbf_runtime::cu_checkpoint::cu_checkpoint(concat!("dclutch-claims-cu:", $phase))
     };
 }
 
@@ -371,10 +371,10 @@ dclutch_refusal_registry::pin_refusal_band!(
 /// Decision 0012: a moved deployment slot means the substrate was upgraded and
 /// this release generation is finished. The remedy is a re-release, not an
 /// investigation, so it does not fold into the generic Release refusal.
-impl From<dclutch_registry_activation_auth_v1::ActivationAuthErrorV1> for ClaimsSbfError {
-    fn from(value: dclutch_registry_activation_auth_v1::ActivationAuthErrorV1) -> Self {
+impl From<dclutch_registry::activation_auth_v1::ActivationAuthErrorV1> for ClaimsSbfError {
+    fn from(value: dclutch_registry::activation_auth_v1::ActivationAuthErrorV1) -> Self {
         match value {
-            dclutch_registry_activation_auth_v1::ActivationAuthErrorV1::ReleaseSuperseded => {
+            dclutch_registry::activation_auth_v1::ActivationAuthErrorV1::ReleaseSuperseded => {
                 Self::ReleaseSuperseded
             }
             _ => Self::Release,
@@ -389,9 +389,9 @@ pub fn process_instruction(
     instruction_data: &[u8],
 ) -> ProgramResult {
     if instruction_data.get(
-        ..dclutch_claims_svm::retirement_checkpoint_handoff_v1::CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_REQUEST_MAGIC_V1.len(),
+        ..dclutch_claims::retirement_checkpoint_handoff_v1::CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_REQUEST_MAGIC_V1.len(),
     ) == Some(
-        dclutch_claims_svm::retirement_checkpoint_handoff_v1::CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_REQUEST_MAGIC_V1.as_slice(),
+        dclutch_claims::retirement_checkpoint_handoff_v1::CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_REQUEST_MAGIC_V1.as_slice(),
     ) {
         return market_closure_v1::process_checkpoint_handoff(
             program_id,
@@ -400,16 +400,16 @@ pub fn process_instruction(
         );
     }
     if instruction_data
-        .get(..dclutch_fractional_claim_contract::FRACTIONAL_RETIREMENT_REQUEST_MAGIC_V3.len())
+        .get(..dclutch_claims::fractional::FRACTIONAL_RETIREMENT_REQUEST_MAGIC_V3.len())
         == Some(
-            dclutch_fractional_claim_contract::FRACTIONAL_RETIREMENT_REQUEST_MAGIC_V3.as_slice(),
+            dclutch_claims::fractional::FRACTIONAL_RETIREMENT_REQUEST_MAGIC_V3.as_slice(),
         )
     {
         return fractional_retirement_v3::process(program_id, accounts, instruction_data);
     }
     if instruction_data
-        .get(..dclutch_fractional_claim_contract::FRACTIONAL_EXPOSURE_REQUEST_MAGIC_V2.len())
-        == Some(dclutch_fractional_claim_contract::FRACTIONAL_EXPOSURE_REQUEST_MAGIC_V2.as_slice())
+        .get(..dclutch_claims::fractional::FRACTIONAL_EXPOSURE_REQUEST_MAGIC_V2.len())
+        == Some(dclutch_claims::fractional::FRACTIONAL_EXPOSURE_REQUEST_MAGIC_V2.as_slice())
     {
         return fractional_atomic_v3::process(program_id, accounts, instruction_data);
     }
@@ -424,28 +424,28 @@ pub fn process_non_fractional_instruction(
     instruction_data: &[u8],
 ) -> ProgramResult {
     if instruction_data
-        .get(..dclutch_claims_svm::market_closure_v1::CLAIMS_MARKET_CLOSURE_REQUEST_MAGIC_V1.len())
+        .get(..dclutch_claims::market_closure_v1::CLAIMS_MARKET_CLOSURE_REQUEST_MAGIC_V1.len())
         == Some(
-            dclutch_claims_svm::market_closure_v1::CLAIMS_MARKET_CLOSURE_REQUEST_MAGIC_V1
+            dclutch_claims::market_closure_v1::CLAIMS_MARKET_CLOSURE_REQUEST_MAGIC_V1
                 .as_slice(),
         )
     {
         return market_closure_v1::process(program_id, accounts, instruction_data);
     }
-    if instruction_data.get(..dclutch_claims_svm::affine_batch_v2::AFFINE_BATCH_PLAN_MAGIC_V2.len())
-        == Some(dclutch_claims_svm::affine_batch_v2::AFFINE_BATCH_PLAN_MAGIC_V2.as_slice())
+    if instruction_data.get(..dclutch_claims::affine_batch_v2::AFFINE_BATCH_PLAN_MAGIC_V2.len())
+        == Some(dclutch_claims::affine_batch_v2::AFFINE_BATCH_PLAN_MAGIC_V2.as_slice())
     {
         return affine_batch_v2::process(program_id, accounts, instruction_data);
     }
-    if instruction_data.get(..dclutch_claims_svm::signed_delta_v3::SIGNED_DELTA_PLAN_MAGIC_V3.len())
-        == Some(dclutch_claims_svm::signed_delta_v3::SIGNED_DELTA_PLAN_MAGIC_V3.as_slice())
+    if instruction_data.get(..dclutch_claims::signed_delta_v3::SIGNED_DELTA_PLAN_MAGIC_V3.len())
+        == Some(dclutch_claims::signed_delta_v3::SIGNED_DELTA_PLAN_MAGIC_V3.as_slice())
     {
         return signed_delta_v3::process(program_id, accounts, instruction_data);
     }
     if instruction_data.get(
-        ..dclutch_claims_svm::terminal_settlement_v3::TERMINAL_SETTLEMENT_REQUEST_MAGIC_V3.len(),
+        ..dclutch_claims::terminal_settlement_v3::TERMINAL_SETTLEMENT_REQUEST_MAGIC_V3.len(),
     ) == Some(
-        dclutch_claims_svm::terminal_settlement_v3::TERMINAL_SETTLEMENT_REQUEST_MAGIC_V3.as_slice(),
+        dclutch_claims::terminal_settlement_v3::TERMINAL_SETTLEMENT_REQUEST_MAGIC_V3.as_slice(),
     ) {
         return terminal_settlement_v3::process(program_id, accounts, instruction_data);
     }
@@ -459,9 +459,9 @@ fn process_remaining_instruction(
     instruction_data: &[u8],
 ) -> ProgramResult {
     if instruction_data
-        .get(..dclutch_claims_svm::sparse_native_transfer_v1::SPARSE_NATIVE_TRANSFER_MAGIC_V1.len())
+        .get(..dclutch_claims::sparse_native_transfer_v1::SPARSE_NATIVE_TRANSFER_MAGIC_V1.len())
         == Some(
-            dclutch_claims_svm::sparse_native_transfer_v1::SPARSE_NATIVE_TRANSFER_MAGIC_V1
+            dclutch_claims::sparse_native_transfer_v1::SPARSE_NATIVE_TRANSFER_MAGIC_V1
                 .as_slice(),
         )
     {
@@ -469,26 +469,26 @@ fn process_remaining_instruction(
     }
     if instruction_data
         .get(
-            ..dclutch_claims_svm::series_founding_transport_v1::SERIES_CLAIMS_FOUNDING_TRANSPORT_MAGIC_V1
+            ..dclutch_claims::series_founding_transport_v1::SERIES_CLAIMS_FOUNDING_TRANSPORT_MAGIC_V1
                 .len(),
         )
         == Some(
-            dclutch_claims_svm::series_founding_transport_v1::SERIES_CLAIMS_FOUNDING_TRANSPORT_MAGIC_V1
+            dclutch_claims::series_founding_transport_v1::SERIES_CLAIMS_FOUNDING_TRANSPORT_MAGIC_V1
                 .as_slice(),
         )
     {
         return series_founding_transport_v1::process(program_id, accounts, instruction_data);
     }
     if instruction_data
-        .get(..dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_REQUEST_MAGIC_V5.len())
-        == Some(dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_REQUEST_MAGIC_V5.as_slice())
+        .get(..dclutch_claims::founding_v5::CLAIMS_FOUNDING_REQUEST_MAGIC_V5.len())
+        == Some(dclutch_claims::founding_v5::CLAIMS_FOUNDING_REQUEST_MAGIC_V5.as_slice())
     {
         return founding_v5::process(program_id, accounts, instruction_data);
     }
     if instruction_data
-        .get(..dclutch_claims_svm::custody_replay_v1::CLAIMS_CUSTODY_REPLAY_REQUEST_MAGIC_V1.len())
+        .get(..dclutch_claims::custody_replay_v1::CLAIMS_CUSTODY_REPLAY_REQUEST_MAGIC_V1.len())
         == Some(
-            dclutch_claims_svm::custody_replay_v1::CLAIMS_CUSTODY_REPLAY_REQUEST_MAGIC_V1
+            dclutch_claims::custody_replay_v1::CLAIMS_CUSTODY_REPLAY_REQUEST_MAGIC_V1
                 .as_slice(),
         )
     {
@@ -499,15 +499,15 @@ fn process_remaining_instruction(
     {
         return protocol_position_v2::process(program_id, accounts, instruction_data);
     }
-    if instruction_data.get(..dclutch_rational_representation_v2_contract::REQUEST_MAGIC_V2.len())
-        == Some(dclutch_rational_representation_v2_contract::REQUEST_MAGIC_V2.as_slice())
+    if instruction_data.get(..dclutch_claims::rational::REQUEST_MAGIC_V2.len())
+        == Some(dclutch_claims::rational::REQUEST_MAGIC_V2.as_slice())
     {
         return rational_representation_v2::process(program_id, accounts, instruction_data);
     }
     if instruction_data
-        .get(..dclutch_rational_representation_v2_contract::RATIONAL_REPLAY_CLOSE_MAGIC_V1.len())
+        .get(..dclutch_claims::rational::RATIONAL_REPLAY_CLOSE_MAGIC_V1.len())
         == Some(
-            dclutch_rational_representation_v2_contract::RATIONAL_REPLAY_CLOSE_MAGIC_V1.as_slice(),
+            dclutch_claims::rational::RATIONAL_REPLAY_CLOSE_MAGIC_V1.as_slice(),
         )
     {
         return rational_representation_v2::process_replay_close(
@@ -517,9 +517,9 @@ fn process_remaining_instruction(
         );
     }
     if instruction_data.get(
-        ..dclutch_rational_representation_v2_lifecycle_contract::LIFECYCLE_REQUEST_MAGIC_V2.len(),
+        ..dclutch_claims::rational_lifecycle::LIFECYCLE_REQUEST_MAGIC_V2.len(),
     ) == Some(
-        dclutch_rational_representation_v2_lifecycle_contract::LIFECYCLE_REQUEST_MAGIC_V2
+        dclutch_claims::rational_lifecycle::LIFECYCLE_REQUEST_MAGIC_V2
             .as_slice(),
     ) {
         return rational_lifecycle_v2::process(program_id, accounts, instruction_data);
@@ -527,8 +527,8 @@ fn process_remaining_instruction(
     // The claim-check family. Its magics are matched before the generic plan
     // fallthrough because that fallthrough decodes by shape rather than by
     // magic, and a route reached by shape is a route nobody named.
-    if instruction_data.get(..dclutch_claims_svm::claim_check_v1::CLAIM_CHECK_OPEN_MAGIC_V1.len())
-        == Some(dclutch_claims_svm::claim_check_v1::CLAIM_CHECK_OPEN_MAGIC_V1.as_slice())
+    if instruction_data.get(..dclutch_claims::claim_check_v1::CLAIM_CHECK_OPEN_MAGIC_V1.len())
+        == Some(dclutch_claims::claim_check_v1::CLAIM_CHECK_OPEN_MAGIC_V1.as_slice())
     {
         return claim_check_compaction_v1::process_open_escrow(
             program_id,
@@ -537,8 +537,8 @@ fn process_remaining_instruction(
         );
     }
     if instruction_data
-        .get(..dclutch_claims_svm::claim_check_v1::CLAIM_CHECK_COMPACT_MAGIC_V1.len())
-        == Some(dclutch_claims_svm::claim_check_v1::CLAIM_CHECK_COMPACT_MAGIC_V1.as_slice())
+        .get(..dclutch_claims::claim_check_v1::CLAIM_CHECK_COMPACT_MAGIC_V1.len())
+        == Some(dclutch_claims::claim_check_v1::CLAIM_CHECK_COMPACT_MAGIC_V1.as_slice())
     {
         return claim_check_compaction_v1::process_compaction(
             program_id,
@@ -555,10 +555,10 @@ fn process_remaining_instruction(
     // Fractional exposure and retirement magics stay where they are because they
     // are different families, not because dispatch order is load-bearing.
     if instruction_data.get(
-        ..dclutch_claims_svm::fractional_claim_check_v1::FRACTIONAL_CLAIM_CHECK_COMPACT_MAGIC_V1
+        ..dclutch_claims::fractional_claim_check_v1::FRACTIONAL_CLAIM_CHECK_COMPACT_MAGIC_V1
             .len(),
     ) == Some(
-        dclutch_claims_svm::fractional_claim_check_v1::FRACTIONAL_CLAIM_CHECK_COMPACT_MAGIC_V1
+        dclutch_claims::fractional_claim_check_v1::FRACTIONAL_CLAIM_CHECK_COMPACT_MAGIC_V1
             .as_slice(),
     ) {
         return fractional_claim_check_v1::process_fractional_compaction(
@@ -568,10 +568,10 @@ fn process_remaining_instruction(
         );
     }
     if instruction_data.get(
-        ..dclutch_claims_svm::fractional_claim_check_v1::FRACTIONAL_CLAIM_CHECK_REDEEM_MAGIC_V1
+        ..dclutch_claims::fractional_claim_check_v1::FRACTIONAL_CLAIM_CHECK_REDEEM_MAGIC_V1
             .len(),
     ) == Some(
-        dclutch_claims_svm::fractional_claim_check_v1::FRACTIONAL_CLAIM_CHECK_REDEEM_MAGIC_V1
+        dclutch_claims::fractional_claim_check_v1::FRACTIONAL_CLAIM_CHECK_REDEEM_MAGIC_V1
             .as_slice(),
     ) {
         return fractional_claim_check_v1::process_fractional_redemption(
@@ -582,13 +582,13 @@ fn process_remaining_instruction(
     }
     // Redemption and escrow close share one magic and separate by action, so
     // the dispatcher reads the action rather than the magic alone.
-    if instruction_data.get(..dclutch_claims_svm::claim_check_v1::CLAIM_CHECK_REDEEM_MAGIC_V1.len())
-        == Some(dclutch_claims_svm::claim_check_v1::CLAIM_CHECK_REDEEM_MAGIC_V1.as_slice())
+    if instruction_data.get(..dclutch_claims::claim_check_v1::CLAIM_CHECK_REDEEM_MAGIC_V1.len())
+        == Some(dclutch_claims::claim_check_v1::CLAIM_CHECK_REDEEM_MAGIC_V1.as_slice())
     {
-        return match dclutch_claims_svm::claim_check_request_v1::claim_check_action_of(
+        return match dclutch_claims::claim_check_request_v1::claim_check_action_of(
             instruction_data,
         ) {
-            Ok(dclutch_claims_svm::claim_check_request_v1::ClaimCheckActionV1::CloseEscrow) => {
+            Ok(dclutch_claims::claim_check_request_v1::ClaimCheckActionV1::CloseEscrow) => {
                 claim_check_redemption_v1::process_escrow_close(
                     program_id,
                     accounts,
@@ -613,7 +613,7 @@ fn process_remaining_instruction(
 
     // ECONOMIC_SLICE_MIGRATION_ONLY: this generic ClaimsPlanV1 route remains
     // reachable solely for the current Trading General child-packet builder
-    // (`dclutch-general-adapter-contract/src/child_packets.rs`) and the Dealer
+    // (`crates/dclutch-trading/general/src/child_packets.rs`) and the Dealer
     // physical composer (the deleted `dclutch-dealer-sbf`). New families use
     // LBV2 affine/signed plans; deleting those consumers permits deleting this
     // route. The comment named a third, `dclutch-trading-sbf/src/dealer/
@@ -925,7 +925,7 @@ fn authenticate_releases(
 /// There is no fallback path and there must not be one. The fact the Registry
 /// would have returned is written in a Registry-OWNED account at a
 /// Registry-DERIVED address that this frame already carries, and
-/// `dclutch-registry-activation-auth-v1` is literally the code the Registry's
+/// `dclutch-registry::activation_auth_v1` is literally the code the Registry's
 /// own handler runs on it. `release_set_id` is the activation generation this
 /// action executes under; the cache address is derived from it, so a cache
 /// belonging to another release set -- another Market's, included -- is refused
@@ -1251,14 +1251,14 @@ fn resource_digest(
 mod tests {
     use std::{boxed::Box, vec::Vec};
 
-    use dclutch_economic_slice_kernel::{
+    use dclutch_product::economic_slice::{
         MARKET_HEADER_BYTES, POSITION_HEADER_BYTES, Phase, SCALAR_BYTES, initialize_market,
         initialize_position,
     };
-    use dclutch_market_core_codec::{MarketIdentity, Readiness};
+    use dclutch_market::{MarketIdentity, Readiness};
 
     use super::*;
-    use dclutch_market_core_codec::StateBumpsV1;
+    use dclutch_market::StateBumpsV1;
 
     /// The escrow owner this program derives, pinned to ONE literal that the
     /// browser asserts too.

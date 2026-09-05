@@ -9,19 +9,13 @@ rust-version.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
-dclutch-claims-svm = { path = "../dclutch-claims-svm" }
+dclutch-claims = { path = "../dclutch-claims" }
 dclutch-core-contract = { path = "../dclutch-core-contract" }
-dclutch-custody-contract = { path = "../dclutch-custody-contract" }
-dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
-dclutch-realm-contract = { path = "../dclutch-realm-contract" }
-dclutch-record-contract = { path = "../dclutch-record-contract" }
-dclutch-registry-contract = { path = "../dclutch-registry-contract" }
-dclutch-registry-svm = { path = "../dclutch-registry-svm" }
-dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
-dclutch-rent-contract = { path = "../dclutch-rent-contract" }
-dclutch-resolution-codec = { path = "../dclutch-resolution-codec" }
+dclutch-custody = { path = "../dclutch-custody" }
+dclutch-market = { path = "../dclutch-market" }
+dclutch-registry = { path = "../dclutch-registry" }
+dclutch-source = { path = "../dclutch-source" }
 dclutch-resolution-core-v3-operator = { path = "../dclutch-resolution-core-v3-operator" }
-dclutch-token-svm = { path = "../dclutch-token-svm" }
 solana-program = { version = "=3.0.0", default-features = false }
 solana-program-option = "=3.1.0"
 solana-program-pack = "=3.1.0"

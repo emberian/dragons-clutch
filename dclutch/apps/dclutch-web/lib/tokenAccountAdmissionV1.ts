@@ -8,7 +8,7 @@ import {
  * The one width admission a browser applies to a Token-2022 account.
  *
  * THE CONTRADICTION THIS RESOLVES, restated on the client side.
- * `TokenAccount::parse` (crates/dclutch-token-svm/src/state.rs) refuses every
+ * `TokenAccount::parse` (crates/dclutch-custody/src/token_svm/state.rs) refuses every
  * extension suffix by design, and under Token-2022 the Associated Token
  * Account program ALWAYS appends `ImmutableOwner` — it is not optional and no
  * caller chooses it — so a stranger's wallet's own token account is 170 bytes.

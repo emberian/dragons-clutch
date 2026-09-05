@@ -64,7 +64,7 @@
 //! would go at the five REAL action tags, which is precisely what the fixture's
 //! `u32::MAX` plan never did.
 
-use dclutch_account_profile_contract::lifecycle_v3::{
+use dclutch_vm::account_profile::lifecycle_v3::{
     HEADER_BYTES as LIFECYCLE_HEADER_BYTES, encode::encode_lifecycle_policy_v5_atomic,
 };
 
@@ -94,8 +94,8 @@ pub fn encode_open_capability_lifecycle_policy_v5() -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_account_profile_contract::lifecycle_v3::StateLifecyclePolicyV5;
-    use dclutch_rational_representation_v2_contract::RepresentationActionV2;
+    use dclutch_vm::account_profile::lifecycle_v3::StateLifecyclePolicyV5;
+    use dclutch_claims::rational::RepresentationActionV2;
     use solana_program::hash::hash;
 
     fn decoded(policy: &[u8]) -> StateLifecyclePolicyV5<'_> {
@@ -142,7 +142,7 @@ mod tests {
     /// ever grows a wildcard tag, this test goes red and names the assumption.
     #[test]
     fn the_fixture_policys_only_plan_is_unreachable_from_every_real_action() {
-        use dclutch_account_profile_contract::lifecycle_v3::{
+        use dclutch_vm::account_profile::lifecycle_v3::{
             ACTION_PLAN_BYTES, PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SEED_BYTES,
             encode::{
                 LifecycleAccountCoordinateV3, LifecycleGuardInputV3, LifecycleOperationInputV3,

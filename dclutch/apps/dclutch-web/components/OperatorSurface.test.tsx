@@ -69,7 +69,7 @@ describe('operator surface presentation', () => {
     expect(html).toContain('acts this browser builds');
     expect(html).toContain('acts with no venue and a named wall');
     expect(html).toContain('Known wall');
-    expect(html).toContain('crates/dclutch-dealer-scenario-kernel');
+    expect(html).toContain('crates/dclutch-trading');
     expect(html).toContain('WAVE.md');
     // The vocabulary of a roadmap, in every spelling this surface has used.
     for (const word of ['awaiting production', 'coming soon', 'unavailable', 'greyed-out', 'rust unsigned']) {

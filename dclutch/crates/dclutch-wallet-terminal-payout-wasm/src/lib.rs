@@ -20,7 +20,7 @@
 #![deny(missing_docs)]
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use dclutch_claims_svm::terminal_settlement_v3::{
+use dclutch_claims::terminal_settlement_v3::{
     TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3, TERMINAL_SETTLEMENT_CANDIDATE_DOMAIN_V3,
     TERMINAL_SETTLEMENT_REQUEST_BYTES_V3,
 };

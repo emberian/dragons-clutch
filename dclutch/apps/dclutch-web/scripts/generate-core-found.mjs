@@ -3,30 +3,30 @@ import { fileURLToPath } from 'node:url';
 
 const root = new URL('../../../', import.meta.url);
 const sources = Object.freeze({
-  core: readFileSync(new URL('crates/dclutch-market-core-codec/src/generated.rs', root), 'utf8'),
-  foundFrame: readFileSync(new URL('crates/dclutch-market-core-codec/src/generated_found_frame_v3.rs', root), 'utf8'),
-  physical: readFileSync(new URL('crates/dclutch-market-core-codec/src/generated_physical.rs', root), 'utf8'),
-  product: readFileSync(new URL('crates/dclutch-product-runtime-v2-admission/src/generated_admission_v2.rs', root), 'utf8'),
-  realm: readFileSync(new URL('crates/dclutch-realm-contract/src/lib.rs', root), 'utf8'),
-  realmAbi: readFileSync(new URL('crates/dclutch-realm-contract/src/generated_abi.rs', root), 'utf8'),
-  source: readFileSync(new URL('crates/dclutch-source-contract/src/generated_source_material_v3.rs', root), 'utf8'),
-  sourceJoin: readFileSync(new URL('crates/dclutch-source-contract/src/provider_join_v2.rs', root), 'utf8'),
-  sourceContract: readFileSync(new URL('crates/dclutch-source-contract/src/lib.rs', root), 'utf8'),
-  windowSpec: readFileSync(new URL('crates/dclutch-source-contract/src/generated_window_spec_v1.rs', root), 'utf8'),
-  statisticSpec: readFileSync(new URL('crates/dclutch-source-contract/src/generated_statistic_spec_v1.rs', root), 'utf8'),
-  sourceCapacity: readFileSync(new URL('crates/dclutch-source-contract/src/generated_principal_capacity_v1.rs', root), 'utf8'),
-  payoff: readFileSync(new URL('crates/dclutch-product-payoff-v2-codec/src/generated_admission_v3.rs', root), 'utf8'),
-  capability: readFileSync(new URL('crates/dclutch-capability-contract/src/lib.rs', root), 'utf8'),
-  capabilityAbi: readFileSync(new URL('crates/dclutch-capability-contract/src/generated_abi.rs', root), 'utf8'),
-  releaseSet: readFileSync(new URL('crates/dclutch-release-set-contract/src/lib.rs', root), 'utf8'),
-  releaseSetAbi: readFileSync(new URL('crates/dclutch-release-set-contract/src/generated_capability_execution.rs', root), 'utf8'),
-  registry: readFileSync(new URL('crates/dclutch-registry-contract/src/artifact.rs', root), 'utf8'),
-  rent: readFileSync(new URL('crates/dclutch-rent-contract/src/lib.rs', root), 'utf8'),
-  lifecycleRent: readFileSync(new URL('crates/dclutch-rent-contract/src/generated_lifecycle_v2.rs', root), 'utf8'),
+  core: readFileSync(new URL('crates/dclutch-market/src/generated.rs', root), 'utf8'),
+  foundFrame: readFileSync(new URL('crates/dclutch-market/src/generated_found_frame_v3.rs', root), 'utf8'),
+  physical: readFileSync(new URL('crates/dclutch-market/src/generated_physical.rs', root), 'utf8'),
+  product: readFileSync(new URL('crates/dclutch-product/src/admission/generated_admission_v2.rs', root), 'utf8'),
+  realm: readFileSync(new URL('crates/dclutch-market/src/realm/mod.rs', root), 'utf8'),
+  realmAbi: readFileSync(new URL('crates/dclutch-market/src/realm/generated_abi.rs', root), 'utf8'),
+  source: readFileSync(new URL('crates/dclutch-source/src/generated_source_material_v3.rs', root), 'utf8'),
+  sourceJoin: readFileSync(new URL('crates/dclutch-source/src/provider_join_v2.rs', root), 'utf8'),
+  sourceContract: readFileSync(new URL('crates/dclutch-source/src/lib.rs', root), 'utf8'),
+  windowSpec: readFileSync(new URL('crates/dclutch-source/src/generated_window_spec_v1.rs', root), 'utf8'),
+  statisticSpec: readFileSync(new URL('crates/dclutch-source/src/generated_statistic_spec_v1.rs', root), 'utf8'),
+  sourceCapacity: readFileSync(new URL('crates/dclutch-source/src/generated_principal_capacity_v1.rs', root), 'utf8'),
+  payoff: readFileSync(new URL('crates/dclutch-product/src/payoff/generated_admission_v3.rs', root), 'utf8'),
+  capability: readFileSync(new URL('crates/dclutch-market/src/capability_manifest/mod.rs', root), 'utf8'),
+  capabilityAbi: readFileSync(new URL('crates/dclutch-market/src/capability_manifest/generated_abi.rs', root), 'utf8'),
+  releaseSet: readFileSync(new URL('crates/dclutch-registry/src/release_set/mod.rs', root), 'utf8'),
+  releaseSetAbi: readFileSync(new URL('crates/dclutch-registry/src/release_set/generated_capability_execution.rs', root), 'utf8'),
+  registry: readFileSync(new URL('crates/dclutch-registry/src/artifact.rs', root), 'utf8'),
+  rent: readFileSync(new URL('crates/dclutch-market/src/rent/mod.rs', root), 'utf8'),
+  lifecycleRent: readFileSync(new URL('crates/dclutch-market/src/rent/generated_lifecycle_v2.rs', root), 'utf8'),
   operator: readFileSync(new URL('crates/dclutch-product-runtime-v2-operator/src/found.rs', root), 'utf8'),
   splineAuthoring: readFileSync(new URL('tools/local-validator/bootstrap/successor/src/spline_product.rs', root), 'utf8'),
-  claimsState: readFileSync(new URL('crates/dclutch-claims-svm/src/generated_liability_basis_state_v2.rs', root), 'utf8'),
-  custody: readFileSync(new URL('crates/dclutch-custody-contract/src/generated.rs', root), 'utf8'),
+  claimsState: readFileSync(new URL('crates/dclutch-claims/src/generated_liability_basis_state_v2.rs', root), 'utf8'),
+  custody: readFileSync(new URL('crates/dclutch-custody/src/generated.rs', root), 'utf8'),
 });
 const outputUrl = new URL('../lib/generated/coreFound.ts', import.meta.url);
 
@@ -296,7 +296,7 @@ for (const [source, name] of [
 // renamed. There is a FIFTH such address -- the capacity profile the source
 // spec selects -- and it is deliberately absent: `SourceSpecV1::decode` and
 // `to_bytes` write that coordinate as a bare `144`
-// (crates/dclutch-source-contract/src/lib.rs:911,927), so there is no named
+// (crates/dclutch-source/src/lib.rs:911,927), so there is no named
 // constant to emit and nothing the browser could import instead of restating
 // it. Restating it is what this file exists to refuse, so that address stays
 // typed and the missing constant is a routed finding.
@@ -384,7 +384,7 @@ output += `export const LIFECYCLE_RENT_INSTRUCTION_ACTION_OFFSET_V2 = ${scalar('
 output += `export const LIFECYCLE_RENT_ACTION_CREATE_V2 = ${scalar('lifecycleRent', 'LIFECYCLE_RENT_ACTION_CREATE_V2')} as const;\n`;
 
 // ------------------------------------------------ the LIVE Core Market state
-// `crates/dclutch-market-core-codec/src/generated.rs` is itself emitted by
+// `crates/dclutch-market/src/generated.rs` is itself emitted by
 // `formal/dclutch-semantics/EmitMarketCoreRust.lean`, so these coordinates
 // reach the browser from the Lean semantics through exactly one intermediate
 // artifact and are never retyped by hand. Everything the discovery, detail and

@@ -8,15 +8,15 @@
 use alloc::boxed::Box;
 use core::cmp::min;
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     CapabilityFundingDerivationV1, CapabilityManifestV1, ContentId as CapabilityContentId,
     FUNDING_STATE_BYTES, FundingCustodyObservationV1, FundingStateV1, FundingStatus,
     funding::funded_rent_persists_v1,
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
 };
-use dclutch_claims_svm::{
+use dclutch_claims::{
     founding_v5::ClaimsFoundingAggregateSeedsV5,
     liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
@@ -28,22 +28,22 @@ use dclutch_claims_svm::{
     },
 };
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{
+use dclutch_custody::{
     PROJECTED_CUSTODY_LOCKED_ADMISSIBLE_STATES_V1, PROJECTED_CUSTODY_STATE_BYTES_V2,
     PROJECTED_HOARD_CONTEXT_DOMAIN_V1, ProjectedCustodyLockReceiptV1, ProjectedCustodyOperationV1,
     ProjectedCustodyStateSeedsV2, ProjectedCustodyStateV2,
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     Action, Request, Role, SERIES_FOUND_POST_RESOURCE_DIGEST_DOMAIN_V1,
     SERIES_FOUNDING_PERMIT_BYTES_V1, SeriesCoreActionV1, SeriesCoreFoundAckV2, SeriesCoreRequestV1,
     SeriesFoundingPermitSeedsV1,
 };
-use dclutch_product_runtime_v2_svm_reader::{
+use dclutch_product::svm_reader::{
     FinalizedRecordFrameV2, authenticate_founding_product_basis_v3,
 };
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_rent_contract::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
-use dclutch_series_v3_kernel::{
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_market::rent::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
+use dclutch_trading::series::{
     AccountKeyV3, AuthenticatedProductProjectionV2, SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3,
     SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3, SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
     admit_occurrence_bytes, admit_ticket, funding_list_id, future_market_projection,
@@ -53,7 +53,7 @@ use dclutch_series_v3_kernel::{
     },
     template_content_id, ticket_content_id,
 };
-use dclutch_token_svm::{AccountState, TokenAccount, TokenProgram};
+use dclutch_custody::token_svm::{AccountState, TokenAccount, TokenProgram};
 use solana_program::{
     account_info::AccountInfo,
     clock::Clock,
@@ -253,8 +253,8 @@ impl<'accounts, 'info> SeriesConsumeAccounts<'accounts, 'info> {
 
 #[derive(Clone, Copy)]
 struct AdmittedSeries {
-    occurrence: dclutch_series_v3_kernel::AdmittedOccurrenceV3,
-    ticket: dclutch_series_v3_kernel::AdmittedTicketV3,
+    occurrence: dclutch_trading::series::AdmittedOccurrenceV3,
+    ticket: dclutch_trading::series::AdmittedTicketV3,
     product: AuthenticatedProductProjectionV2,
     /// Registry record digest of the Template record admitted above.
     ///
@@ -1171,7 +1171,7 @@ fn authenticate_projected_state(
 
 fn canonical_realize_request(
     projected: &ProjectedCustodyStateV2,
-) -> Result<dclutch_custody_contract::ProjectedCustodyRequestV1, CoreSbfError> {
+) -> Result<dclutch_custody::ProjectedCustodyRequestV1, CoreSbfError> {
     let mut request = projected.request;
     request.operation = ProjectedCustodyOperationV1::RealizeAndClose;
     request.expected_revision = projected.next_revision;
@@ -1197,7 +1197,7 @@ fn realize_request_digest(projected: &ProjectedCustodyStateV2) -> Result<[u8; 32
 fn realize_receipt_facts(
     projected: &ProjectedCustodyStateV2,
     request_digest: [u8; 32],
-    market: dclutch_market_core_codec::CoreState,
+    market: dclutch_market::CoreState,
     hoard_amount: u64,
     rent_credit: [u8; 32],
 ) -> Result<([u8; 32], u64), CoreSbfError> {

@@ -1,15 +1,15 @@
 //! Chain-derived CPI for a Resolution-owned subset ledger before Market creation.
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
     FundingLedgerV2, funding_ledger_bytes_v2,
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     PROJECT_FOUND_ACCOUNT_COUNT_V2, ProjectFoundReceiptV2, ProjectFoundRequestV2,
 };
-use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_resolution_codec::{
+use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_source::resolution::{
     PreMarketFundingReceiptV2, PreMarketFundingRequestV2, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
     pre_market_funding_prestate_digest_v1,
 };
@@ -110,7 +110,7 @@ pub fn build_pre_market_funding_v2(
     // construction; a divergence here is a divergence the receipt catches.
     let creation_rent =
         decode_rent(&snapshot.rent).map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
-    let funded_rent_rate = dclutch_capability_contract::derive_funded_rent_rate_v2(
+    let funded_rent_rate = dclutch_market::capability_manifest::derive_funded_rent_rate_v2(
         creation_rent.minimum_balance(0),
         width,
         creation_rent.minimum_balance(width),
@@ -485,8 +485,8 @@ mod receipt_tests {
     use super::*;
     use crate::Observation;
     use dclutch_core_contract::ContentId;
-    use dclutch_registry_contract::{ArtifactReleaseV1, ArtifactUpgradePolicyV1};
-    use dclutch_release_set_contract::ProgramIdentityV1;
+    use dclutch_registry::{ArtifactReleaseV1, ArtifactUpgradePolicyV1};
+    use dclutch_registry::release_set::ProgramIdentityV1;
     use solana_sdk_ids::bpf_loader_upgradeable;
 
     fn receipt() -> PreMarketFundingReceiptV2 {

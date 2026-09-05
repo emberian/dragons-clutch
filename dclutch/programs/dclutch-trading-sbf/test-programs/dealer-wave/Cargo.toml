@@ -18,7 +18,7 @@ custom-heap = []
 custom-panic = []
 
 [dependencies]
-dclutch-dealer-codec = { path = "../../../../crates/dclutch-dealer-codec" }
+dclutch-trading = { path = "../../../../crates/dclutch-trading" }
 solana-program = { version = "=3.0.0", default-features = false }
 
 [lints.rust]

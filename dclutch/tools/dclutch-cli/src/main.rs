@@ -36,11 +36,11 @@
 //! SINGLE AUTHORSHIP, which is why this file is short. Protocol crates own every
 //! byte interpreted here:
 //!
-//! - `dclutch_market_core_codec::CoreState` — the Market Core account, emitted
+//! - `dclutch_market::CoreState` — the Market Core account, emitted
 //!   from `formal/dclutch-semantics/EmitMarketCoreRust.lean`.
-//! - `dclutch_capability_program_contract::CapabilityRootHeaderV1` — the
+//! - `dclutch_market::capability_program::CapabilityRootHeaderV1` — the
 //!   immutable activation projection at the front of a Trading root account.
-//! - `dclutch_direct_codec::successor::DirectRootStateV1` — the Direct family
+//! - `dclutch_trading::successor::DirectRootStateV1` — the Direct family
 //!   tail behind that header.
 //! - `dclutch_fractional_claim_operator` — authenticated state selection and
 //!   unsigned construction for the next ordered Fractional retirement act.

@@ -6,18 +6,18 @@
 //! this module's header named; both blockers are closed, and the two tests now
 //! pin the premises the fixes rest on.
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1,
     CapabilityFundingLedgerDerivationV2, CompartmentFundingV1, FundingAmountsV1,
     FundingLedgerStatusV2, FundingLedgerV2, FundingQuoteV1, MANIFEST_HEADER_BYTES,
     MAX_DEPENDENCIES_PER_CAPABILITY, derive_funded_rent_rate_v2, funding_ledger_bytes_v2,
 };
-use dclutch_capability_program_contract::set_v2::{
+use dclutch_market::capability_program::set_v2::{
     CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, SelectorWidthV2,
     encode_program_set_v2, encoded_program_set_bytes_v2,
 };
-use dclutch_capability_program_contract::v4::SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID;
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::v4::SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID;
+use dclutch_market::capability_program::{
     CAPABILITY_PROGRAM_ACCOUNT_PROFILE_OFFSET, CAPABILITY_PROGRAM_CAPACITY_PROFILE_OFFSET,
     CAPABILITY_PROGRAM_CONFIG_SCHEMA_OFFSET, CAPABILITY_PROGRAM_DERIVATION_POLICY_OFFSET,
     CAPABILITY_PROGRAM_EFFECT_SCHEMA_OFFSET, CAPABILITY_PROGRAM_HEADER_BYTES_V1,
@@ -26,8 +26,8 @@ use dclutch_capability_program_contract::{
     CAPABILITY_PROGRAM_ROOT_SCHEMA_OFFSET, CAPABILITY_PROGRAM_ROOT_STATE_BYTES_OFFSET,
     CapabilityProgramV1, initialize_root_account_v1,
 };
-use dclutch_general_config_contract::v3::GeneralConfigV3Input;
-use dclutch_market_core_codec::{Identity, MarketIdentity, Readiness, StateBumpsV1};
+use dclutch_trading::general_config::v3::GeneralConfigV3Input;
+use dclutch_market::{Identity, MarketIdentity, Readiness, StateBumpsV1};
 use solana_program::rent::Rent;
 
 use super::*;
@@ -273,7 +273,7 @@ fn fixture(phase: Phase, entries: &[CapabilityEntryV1]) -> Fixture {
         market_key.to_bytes(),
         GENERATION,
         selection,
-        dclutch_capability_program_contract::SelectedRecordBumpsV1::default(),
+        dclutch_market::capability_program::SelectedRecordBumpsV1::default(),
     )
     .expect("header");
     let root_key = general_capability_root_address_v3(header, &TRADING_PROGRAM).0;

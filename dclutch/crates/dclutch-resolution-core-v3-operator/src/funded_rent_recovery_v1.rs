@@ -34,7 +34,7 @@
 //! is exactly what a cohort-16 founding writes there itself, and a cohort-15
 //! account still holds the zeros it was created with.
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     CapabilityManifestV1, ContentId as CapabilityContentId, Error as CapabilityError,
     FundingLedgerV2,
     funding::{ACCOUNT_STORAGE_OVERHEAD_BYTES, funded_rent_minimum_v2},

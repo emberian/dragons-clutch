@@ -27,7 +27,7 @@
 #![deny(missing_docs)]
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use dclutch_product_payoff_v2_codec::{
+use dclutch_product::payoff::{
     ABI_BYTES_V2, MAGIC_V2, MAX_KNOTS_V2, MAX_TERMS_V2, ProductPayoffV2, VERSION_V2,
 };
 use serde::{Deserialize, Serialize};

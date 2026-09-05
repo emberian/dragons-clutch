@@ -10,8 +10,8 @@
 #[path = "../../../local-validator/bootstrap/successor/src/relayed.rs"]
 mod relayed;
 
-use dclutch_relay_contract::decode::RelayedObservableV1;
-use dclutch_relay_contract::release::AccountSetEntryV1;
+use dclutch_source::relay::decode::RelayedObservableV1;
+use dclutch_source::relay::release::AccountSetEntryV1;
 use solana_sdk::pubkey::Pubkey;
 
 use relayed::RelayedVenueFactsV1;

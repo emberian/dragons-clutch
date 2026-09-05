@@ -5,40 +5,40 @@
 //! emits the exact unsigned 31-account Core Found instruction. It performs no
 //! RPC, signing, submission, funding, or account mutation.
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1,
     funding::funded_rent_persists_v1,
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     Action, FOUND_ACCOUNT_ROLES_V3, FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3,
     FOUND_PRICE_GATE_RAW_INDEX_V3, Identity, MarketCoreStateSeedsV2, MarketIdentity, REQUEST_BYTES,
     Request, STATE_BYTES,
 };
-use dclutch_product_payoff_v2_codec::{
+use dclutch_product::payoff::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
     runtime_v3::{ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, semantic_basis_preimage_v3},
 };
-use dclutch_product_runtime_v2::ResultDomainV2;
-use dclutch_product_runtime_v2_admission::{
+use dclutch_product::ResultDomainV2;
+use dclutch_product::admission::{
     AdmissionProjectionV2, AdmissionReceiptV2, FinalizedRecordCoordinateV2, PORTFOLIO_SCHEMA_ID_V2,
     PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2, admit_authenticated_records_v2,
 };
-use dclutch_realm_contract::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{
+use dclutch_market::realm::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{
     ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1,
     ArtifactReleaseV1, DeploymentObservationV1, require_slot_pinned_release_v1,
 };
-use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
-use dclutch_release_set_contract::{
+use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, ExecutionRoleBindingV1, ExecutionRoleV1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2,
     ProtocolInfrastructureProfileV2,
 };
-use dclutch_rent_contract::lifecycle_v2::{
+use dclutch_market::rent::lifecycle_v2::{
     LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleRentCreditV2,
 };
-use dclutch_source_contract::{
+use dclutch_source::{
     ContentId as SourceContentId, MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1, ManipulationFloorV1,
     SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
     SOURCE_SPEC_SCHEMA_ID_V1, SourceCapacityProfileV1, SourceMaterialV3, SourcePrincipalPolicyV1,
@@ -59,7 +59,7 @@ use crate::{
 };
 
 /// Exact number of accounts in the Runtime V2 ordinary Core Found V3 frame.
-pub use dclutch_market_core_codec::{FOUND_ACCOUNT_COUNT_V3, FOUND_PRICE_GATE_ACCOUNT_COUNT_V3};
+pub use dclutch_market::{FOUND_ACCOUNT_COUNT_V3, FOUND_PRICE_GATE_ACCOUNT_COUNT_V3};
 
 /// One non-Product finalized raw/staging record observation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -599,7 +599,7 @@ fn authenticate_reference(
     registry: Pubkey,
     reference: FinalizedReferenceObservationV2<'_>,
     expected_schema: [u8; 32],
-) -> Result<dclutch_product_runtime_v2::ContentId> {
+) -> Result<dclutch_product::ContentId> {
     if reference.schema_id != expected_schema {
         return Err(Error::AccountAuthority);
     }
@@ -643,7 +643,7 @@ fn authenticate_absent_optional_reference(
 
 fn authenticate_activation(
     state: FoundProjectionStateV2<'_>,
-) -> Result<dclutch_product_runtime_v2::ContentId> {
+) -> Result<dclutch_product::ContentId> {
     let activated = ActivatedExecutionReleaseSetViewV1::decode(state.activation_cache.data)
         .map_err(|_| Error::InvalidRecord)?;
     let release_set_digest = activated
@@ -678,7 +678,7 @@ fn authenticate_activation(
         return Err(Error::CrossRecordMismatch);
     }
     authenticate_current_deployment(state.core_program, state.core_programdata, release)?;
-    dclutch_product_runtime_v2::ContentId::new(release_set_digest).map_err(|_| Error::InvalidRecord)
+    dclutch_product::ContentId::new(release_set_digest).map_err(|_| Error::InvalidRecord)
 }
 
 fn authenticate_infrastructure(state: FoundProjectionStateV2<'_>) -> Result<()> {

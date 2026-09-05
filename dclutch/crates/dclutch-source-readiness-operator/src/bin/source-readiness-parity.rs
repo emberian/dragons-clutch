@@ -3,7 +3,7 @@
 use std::io::{self, Read};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use dclutch_market_core_codec::{
+use dclutch_market::{
     CoreState, Identity, MarketIdentity, Phase, Readiness, StateBumpsV1,
 };
 use dclutch_source_readiness_operator::{

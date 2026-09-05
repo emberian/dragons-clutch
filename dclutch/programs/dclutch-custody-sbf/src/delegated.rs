@@ -2,7 +2,7 @@
 
 use super::*;
 
-use dclutch_custody_contract::{
+use dclutch_custody::{
     DELEGATED_CUSTODY_RECEIPT_BYTES_V2, DelegatedAllowanceObservationV2,
     DelegatedCustodyPoststateFactsV2, DelegatedCustodyReceiptV2, DelegatedCustodyRequestV2,
 };

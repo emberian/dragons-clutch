@@ -8,15 +8,11 @@ description = "Chain-derived unsigned operator for Product-to-representation com
 publish = false
 
 [dependencies]
-dclutch-capability-contract = { path = "../dclutch-capability-contract" }
-dclutch-product-payoff-v2-codec = { path = "../dclutch-product-payoff-v2-codec" }
-dclutch-product-runtime-v2 = { path = "../dclutch-product-runtime-v2" }
-dclutch-product-runtime-v2-admission = { path = "../dclutch-product-runtime-v2-admission" }
-dclutch-rational-representation-v2-lifecycle-contract = { path = "../dclutch-rational-representation-v2-lifecycle-contract" }
-dclutch-rational-representation-v2-kernel = { path = "../dclutch-rational-representation-v2-kernel" }
+dclutch-market = { path = "../dclutch-market" }
+dclutch-product = { path = "../dclutch-product" }
+dclutch-claims = { path = "../dclutch-claims" }
 dclutch-rational-lifecycle-hot-v3 = { path = "../dclutch-rational-lifecycle-hot-v3" }
-dclutch-record-contract = { path = "../dclutch-record-contract" }
-dclutch-representation-composition-v3-kernel = { path = "../dclutch-representation-composition-v3-kernel" }
+dclutch-registry = { path = "../dclutch-registry" }
 dclutch-versioned-message-operator = { path = "../dclutch-versioned-message-operator" }
 solana-compute-budget-interface = "=3.1.0"
 solana-hash = "=4.6.0"
@@ -24,11 +20,11 @@ solana-program = { version = "=3.0.0", default-features = false }
 solana-sdk-ids = "=3.1.0"
 
 [dev-dependencies]
-dclutch-account-profile-contract = { path = "../dclutch-account-profile-contract" }
-dclutch-capability-program-contract = { path = "../dclutch-capability-program-contract" }
+dclutch-vm = { path = "../dclutch-vm" }
+dclutch-market = { path = "../dclutch-market" }
 dclutch-product-runtime-v2-operator = { path = "../dclutch-product-runtime-v2-operator" }
-dclutch-rational-representation-v2-contract = { path = "../dclutch-rational-representation-v2-contract" }
-dclutch-token-svm = { path = "../dclutch-token-svm" }
+dclutch-claims = { path = "../dclutch-claims" }
+dclutch-custody = { path = "../dclutch-custody" }
 solana-address-lookup-table-interface = { version = "=3.2.0", features = ["bincode"] }
 solana-message = { version = "=3.1.0", features = ["bincode"] }
 

@@ -18,31 +18,31 @@ pub mod hot_v6;
 /// Canonical Product-native categorical composition publication.
 pub mod native_categorical_v1;
 
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
-use dclutch_product_payoff_v2_codec::{
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_product::payoff::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
     runtime_v3::{ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, semantic_basis_preimage_v3},
 };
-use dclutch_product_runtime_v2::ContentId;
-use dclutch_product_runtime_v2_admission::{
+use dclutch_product::ContentId;
+use dclutch_product::admission::{
     AdmissionProjectionV2, AdmissionReceiptV2, FinalizedRecordCoordinateV2, PORTFOLIO_SCHEMA_ID_V2,
     PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2, admit_authenticated_records_v2,
 };
-use dclutch_rational_representation_v2_kernel::{
+use dclutch_claims::rational_kernel::{
     DescriptorAdmissionV2, RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
     REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3, RepresentationDescriptorV2,
 };
-use dclutch_rational_representation_v2_lifecycle_contract::{
+use dclutch_claims::rational_lifecycle::{
     LIFECYCLE_COMMON_ACCOUNT_COUNT_V2, LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2,
     LIFECYCLE_COORDINATE_BYTES_V2, LIFECYCLE_HEADER_BYTES_V2, LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2,
     LifecycleActionV2, LifecycleCoordinateV2, LifecycleHeaderV2, LifecycleRequestV2, prepare,
 };
-use dclutch_record_contract::{
+use dclutch_registry::record::{
     APPEND_PAGE_HEADER_BYTES_V1, AppendPageV1, BeginRecordV1,
     CANONICAL_RECORD_DEPLOYMENT_PROFILE_V1, ContentDigest, FinalizeRecordV1, RecordKeyV1,
     SchemaReleaseId,
 };
-use dclutch_representation_composition_v3_kernel::{
+use dclutch_claims::composition::{
     COMPOSITION_DESCRIPTOR_SCHEMA_ID_V3, COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
     COMPOSITION_GRAPH_SCHEMA_ID_V3, COMPOSITION_TRANSLATION_SCHEMA_ID_V3, CompositionBundleV3,
     CompositionDescriptorV3, CompositionExposureBundleV3, CompositionExposureExpectedV3,
@@ -985,7 +985,7 @@ fn authenticate_record<'a>(
     let digest = hash(&observed.raw.data).to_bytes();
     let raw_account = Pubkey::find_program_address(
         &[
-            dclutch_record_contract::RAW_RECORD_PDA_SEED_V1,
+            dclutch_registry::record::RAW_RECORD_PDA_SEED_V1,
             &expected_schema,
             &digest,
         ],
@@ -994,7 +994,7 @@ fn authenticate_record<'a>(
     .0;
     let staging_account = Pubkey::find_program_address(
         &[
-            dclutch_record_contract::STAGING_CURSOR_PDA_SEED_V1,
+            dclutch_registry::record::STAGING_CURSOR_PDA_SEED_V1,
             &expected_schema,
             &digest,
         ],

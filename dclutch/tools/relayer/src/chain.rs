@@ -109,7 +109,7 @@ pub fn program_programdata_link(bytes: &[u8]) -> Option<[u8; ID_BYTES]> {
 pub fn is_loader_v3_programdata(expected_owner: &[u8; ID_BYTES], inline_len: u16) -> bool {
     *expected_owner == LOADER_V3_PROGRAM_ID
         && usize::from(inline_len)
-            == dclutch_relay_contract::LOADER_V3_PROGRAMDATA_METADATA_BYTES_V1
+            == dclutch_source::relay::LOADER_V3_PROGRAMDATA_METADATA_BYTES_V1
 }
 
 /// The address-lookup-table program, whose table accounts route the two
@@ -236,11 +236,11 @@ mod tests {
     #[test]
     fn the_metadata_prefix_width_is_the_wire_crates_pinned_width() {
         assert_eq!(
-            dclutch_relay_contract::LOADER_V3_PROGRAMDATA_METADATA_BYTES_V1,
+            dclutch_source::relay::LOADER_V3_PROGRAMDATA_METADATA_BYTES_V1,
             45
         );
         assert_eq!(
-            dclutch_relay_contract::MAINNET_CLOCK_SYSVAR_BYTES_V1,
+            dclutch_source::relay::MAINNET_CLOCK_SYSVAR_BYTES_V1,
             CLOCK_ACCOUNT_BYTES
         );
     }
@@ -260,7 +260,7 @@ mod tests {
         // spellings must be the same 32 bytes or the precompile this daemon
         // builds would be addressed to nothing.
         assert_eq!(
-            base58(&dclutch_relay_contract::signature::ED25519_PROGRAM_ID_3_0),
+            base58(&dclutch_source::relay::signature::ED25519_PROGRAM_ID_3_0),
             "Ed25519SigVerify111111111111111111111111111"
         );
     }

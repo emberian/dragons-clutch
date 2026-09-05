@@ -15,12 +15,12 @@ use alloc::vec::Vec;
 use core::convert::TryInto;
 
 use dclutch_core_contract::ContentId;
-use dclutch_fractional_claim_contract::{
+use dclutch_claims::fractional::{
     FRACTIONAL_RETIREMENT_COORDINATE_ROOT_V3, FRACTIONAL_RETIREMENT_REQUEST_BYTES_V3,
     FRACTIONAL_RETIREMENT_REQUEST_MAGIC_V3, FractionalRetirementRequestV3,
     decode_fractional_capability_root_v4,
 };
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,

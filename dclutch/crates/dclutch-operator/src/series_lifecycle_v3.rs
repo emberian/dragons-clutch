@@ -14,7 +14,7 @@
 //! still needed without pretending that an unavailable act was refused by the
 //! program. No RPC, signing, submission, or offchain workflow state lives here.
 
-use dclutch_series_v3_kernel::{
+use dclutch_trading::series::{
     AccountKeyV3, TemplateV3, admit_occurrence, admit_ticket,
     replay::{SeriesPhaseV3, SeriesStateV3, TicketStateV3},
     terminal::SeriesLifecycleRentSinkV3,
@@ -383,11 +383,11 @@ pub fn series_account_key_v3(bytes: [u8; 32]) -> Result<AccountKeyV3, SeriesOper
 #[cfg(test)]
 mod tests {
     use dclutch_core_contract::ContentId;
-    use dclutch_rent_contract::{
+    use dclutch_market::rent::{
         RefundAuthority,
         lifecycle_v2::{LifecycleAccountIdV2, LifecycleRentCreditV2},
     };
-    use dclutch_series_v3_kernel::{
+    use dclutch_trading::series::{
         SERIES_OCCURRENCE_BYTES_V3, SERIES_TEMPLATE_BYTES_V3, SERIES_TICKET_BYTES_V3, generated,
         occurrence_content_id, template_content_id,
     };
@@ -666,7 +666,7 @@ mod tests {
         );
 
         let ticket_state = TicketStateV3::prepared(fixture.ticket_id)
-            .settle(0, dclutch_series_v3_kernel::replay::TicketPhaseV3::Consumed)
+            .settle(0, dclutch_trading::series::replay::TicketPhaseV3::Consumed)
             .expect("terminal Ticket");
         let refund = admit_ticket(&fixture.ticket)
             .expect("Ticket")

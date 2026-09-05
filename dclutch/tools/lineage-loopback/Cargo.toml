@@ -12,9 +12,7 @@ publish = false
 
 [dependencies]
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
-dclutch-registry-activation-auth-v1 = { path = "../../crates/dclutch-registry-activation-auth-v1" }
-dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }
-dclutch-release-set-contract = { path = "../../crates/dclutch-release-set-contract" }
+dclutch-registry = { path = "../../crates/dclutch-registry", features = ["svm"] }
 base64 = "0.22"
 serde_json = "1"
 solana-program = { version = "=3.0.0", default-features = false }

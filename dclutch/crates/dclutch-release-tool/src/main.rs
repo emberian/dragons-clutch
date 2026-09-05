@@ -12,8 +12,8 @@ use std::{
     process::ExitCode,
 };
 
-use dclutch_capability_seal_contract::CAPABILITY_SEAL_BYTES_V1;
-use dclutch_release_set_contract::{
+use dclutch_vm::capability_seal::CAPABILITY_SEAL_BYTES_V1;
+use dclutch_registry::release_set::{
     ExecutionReleaseSetV1, ProtocolInfrastructureProfileV1, ProtocolInfrastructureProfileV2,
 };
 use dclutch_release_tool::{
@@ -640,7 +640,7 @@ const fn yes_no(value: bool) -> &'static str {
 }
 
 /// Render one seal-contract conjunct, naming its refusal when it refused.
-fn conjunct(result: Result<(), dclutch_capability_seal_contract::Error>) -> String {
+fn conjunct(result: Result<(), dclutch_vm::capability_seal::Error>) -> String {
     match result {
         Ok(()) => "ok".to_owned(),
         Err(error) => format!("refused:{error:?}"),

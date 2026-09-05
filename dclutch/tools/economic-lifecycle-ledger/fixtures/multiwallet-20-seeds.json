@@ -2,8 +2,8 @@
   "schema": "dclutch-model-based-multiwallet-seed-contract-v1",
   "sourceAuthority": [
     "tools/release/private-validator-lifecycle/run.py::named_seed",
-    "crates/dclutch-direct-codec/src/successor.rs::consume_nonce_v2",
-    "crates/dclutch-direct-codec/src/successor.rs::settle_inline_ordinary_v2",
+    "crates/dclutch-trading/src/successor.rs::consume_nonce_v2",
+    "crates/dclutch-trading/src/successor.rs::settle_inline_ordinary_v2",
     "tools/economic-lifecycle-ledger/ledger.py"
   ],
   "sourceFixtures": [

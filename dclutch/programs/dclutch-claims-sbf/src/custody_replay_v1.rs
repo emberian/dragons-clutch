@@ -75,18 +75,18 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use dclutch_claims_svm::{
+use dclutch_claims::{
     custody_replay_v1::ClaimsCustodyReplayRequestV1,
     liability_basis_state_v2::{LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2},
 };
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CUSTODY_RECEIPT_BYTES_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1, ContextV1,
     CustodyReceiptV1, CustodyReplaySeedsV1, CustodyReplayV1, CustodyRequestV1, OperationV1,
 };
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
-use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_market::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
+use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,
@@ -148,7 +148,7 @@ pub const AGGREGATE: usize = 14;
 
 /// The exact width of the Custody frame this route forwards, unchanged.
 const CUSTODY_FRAME_ACCOUNT_COUNT: usize =
-    dclutch_custody_contract::INITIALIZE_REPLAY_ACCOUNT_COUNT_V1 as usize;
+    dclutch_custody::INITIALIZE_REPLAY_ACCOUNT_COUNT_V1 as usize;
 
 const _: () = assert!(
     CUSTODY_FRAME_ACCOUNT_COUNT == CUSTODY_PROGRAM,

@@ -1233,7 +1233,7 @@ pub(super) struct TrustedEnvironmentObservationV3 {
 /// **That seed is fixed, so this is not the thing standing between the pairing
 /// and the wall**, and the doc says so rather than implying otherwise. Both
 /// accelerator dispositions and the Shadow callback authenticator in
-/// `dclutch-shadow-accelerator-auth-v4` now derive from
+/// `dclutch-trading::shadow_accelerator_auth` now derive from
 /// `family_request_digest_v3`, which is a function of the signed instruction
 /// alone. What this refusal buys is that the FIRST family to want the pairing
 /// arrives here, by name, instead of arriving at whatever the untested
@@ -1399,11 +1399,11 @@ fn shadow_routes_v3(
                     FixedRole::Custody => ShadowRouteRoleV3::Custody,
                 },
                 kind: match invocation.kind {
-                    dclutch_effect_kernel::v3::RouteKindV3::Once => ShadowRouteKindV3::Once,
-                    dclutch_effect_kernel::v3::RouteKindV3::AffineOnce => {
+                    dclutch_vm::effect::v3::RouteKindV3::Once => ShadowRouteKindV3::Once,
+                    dclutch_vm::effect::v3::RouteKindV3::AffineOnce => {
                         ShadowRouteKindV3::AffineOnce
                     }
-                    dclutch_effect_kernel::v3::RouteKindV3::Each => ShadowRouteKindV3::Each,
+                    dclutch_vm::effect::v3::RouteKindV3::Each => ShadowRouteKindV3::Each,
                 },
                 item: invocation.item,
                 fixed_account_start: invocation.fixed_account_start,

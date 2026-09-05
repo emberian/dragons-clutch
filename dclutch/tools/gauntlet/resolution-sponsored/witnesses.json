@@ -41,7 +41,7 @@
       "kind": "evidence-jq",
       "query": "[.transactions[] | select(.error == null) | .label | split(\"/\")[0]] | unique | sort | join(\" + \")",
       "expect": "Capture + CloseCandidate + CloseHead + CommitFailure + Settle",
-      "provenance": "SponsoredPushActionV1 has exactly five variants (crates/dclutch-resolution-codec/src/sponsored_push_v1.rs), and process_sponsored_push_v1 dispatches one arm per variant. This asserts that every one of the five is observed EXECUTING, not merely refusing -- a family whose actions are only ever seen red is a family with no evidence that it works."
+      "provenance": "SponsoredPushActionV1 has exactly five variants (crates/dclutch-source/src/resolution/sponsored_push_v1.rs), and process_sponsored_push_v1 dispatches one arm per variant. This asserts that every one of the five is observed EXECUTING, not merely refusing -- a family whose actions are only ever seen red is a family with no evidence that it works."
     },
     {
       "id": "sponsored-hostiles-raise-five-distinct-codes",

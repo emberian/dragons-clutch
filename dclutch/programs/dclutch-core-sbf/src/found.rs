@@ -1,23 +1,23 @@
 //! Exact finalized-record Found transition and prepaid Market creation.
 
 use alloc::boxed::Box;
-use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
-use dclutch_market_core_codec::{
+use dclutch_market::capability_manifest::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
+use dclutch_market::{
     Action, Admission, CoreState, FoundingAccounts, FoundingFrame, FoundingQuote,
     MarketCoreStateSeedsV2, MarketIdentity, PRODUCT_GRAPH_BUMP_COUNT, Product, ProductGraphBumpsV1,
     ProjectFoundReceiptV2, Realm, Request, Role, STATE_BYTES, StateBumpsV1, VacantAccount, found,
 };
-use dclutch_product_runtime_v2_svm_reader::{
+use dclutch_product::svm_reader::{
     AuthenticatedProductRuntimeV2, Error as ProductRuntimeReaderError, FinalizedRecordFrameV2,
     ProductRuntimeFrameV2, authenticate_founding_product_basis_v3,
 };
-use dclutch_realm_contract::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
-use dclutch_rent_contract::lifecycle_v2::{
+use dclutch_market::realm::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
+use dclutch_market::rent::lifecycle_v2::{
     LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleRentCreditV2,
 };
-use dclutch_source_contract::{
+use dclutch_source::{
     ContentId as SourceContentId, MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
     MANIPULATION_FLOOR_V1_BYTES, ManipulationFloorV1, SOURCE_CAPACITY_PROFILE_BYTES,
     SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
@@ -415,7 +415,7 @@ fn plan_found(
     frame: &FoundCommonAccounts<'_, '_>,
     request: Request,
     references: References,
-    admission: dclutch_market_core_codec::Admission,
+    admission: dclutch_market::Admission,
     rent: &Rent,
 ) -> Result<CreationPlan, solana_program::program_error::ProgramError> {
     let market_identity = MarketIdentity {

@@ -185,7 +185,7 @@ PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS = 100_000_000
 # What the admission's `--collateral-quantity-atoms` sets is something else: it
 # is simultaneously the balance moved into the buyer's collateral account and
 # the DELEGATED ALLOWANCE granted to the Custody authority over it. And
-# `validate_collateral` in `dclutch-direct-codec`, which is what the Trading
+# `validate_collateral` in `dclutch-trading`, which is what the Trading
 # program runs, tests the allowance as an EQUALITY against the trade's debit,
 # not as a floor -- the delegation is a single-use authorization spent to zero
 # by the Custody effect, so an allowance LARGER than the debit is not generous,

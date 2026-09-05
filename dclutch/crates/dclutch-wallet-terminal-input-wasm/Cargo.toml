@@ -10,8 +10,8 @@ path = "src/lib.rs"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-dclutch-claims-svm = { path = "../dclutch-claims-svm" }
-dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
+dclutch-claims = { path = "../dclutch-claims" }
+dclutch-market = { path = "../dclutch-market" }
 dclutch-wallet-terminal-input-operator = { path = "../dclutch-wallet-terminal-input-operator" }
 # For the ONE snapshot decoder both boundaries share, and stage two's wire
 # types the input is expressed in.

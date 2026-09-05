@@ -125,7 +125,7 @@ pub enum RelayerError {
         /// Where the refusal happened.
         context: String,
         /// The exact codec refusal.
-        error: dclutch_relay_contract::Error,
+        error: dclutch_source::relay::Error,
     },
 
     /// The observation was refused, and the named set stops being attested.
@@ -167,7 +167,7 @@ pub enum RelayerError {
 
 impl RelayerError {
     /// Wrap a wire-codec refusal with the site that produced it.
-    pub fn wire(context: &str, error: dclutch_relay_contract::Error) -> Self {
+    pub fn wire(context: &str, error: dclutch_source::relay::Error) -> Self {
         Self::Wire {
             context: context.to_owned(),
             error,

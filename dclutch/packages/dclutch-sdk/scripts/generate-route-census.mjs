@@ -205,8 +205,8 @@ function functionBody(source, name) {
 function predicateCandidates(functionPath, programPackage) {
   const parts = functionPath.split('::');
   const moduleHint = parts.length > 1 ? parts[parts.length - 2] : null;
-  // `dclutch_direct_codec::token_setup_v1::is_x` names a crate then a module;
-  // `dclutch_user_position_admission_contract::is_x` names a crate and its
+  // `dclutch_trading::token_setup_v1::is_x` names a crate then a module;
+  // `dclutch_claims::position_admission::is_x` names a crate and its
   // root. Both spellings appear, so the crate is whichever leading segment
   // carries the prefix rather than a fixed position.
   const crateHint = parts.length > 1 && parts[0].startsWith('dclutch_')

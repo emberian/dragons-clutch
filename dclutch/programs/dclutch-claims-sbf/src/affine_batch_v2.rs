@@ -14,7 +14,7 @@ use core::{
     convert::{TryFrom, TryInto},
 };
 
-use dclutch_claims_svm::{
+use dclutch_claims::{
     CallerRole,
     affine_batch_v2::{
         AffineBatchPlanV2, AffineBatchReceiptV2, DeltaDirectionV2, SignedMagnitudeV2,
@@ -23,15 +23,15 @@ use dclutch_claims_svm::{
     protocol_position_v2::ProtocolPositionSeedsV2,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_market_core_codec::{
+use dclutch_market::{
     CoreState, MarketAdmissionV1, MarketCoreStateSeedsV2, STATE_BYTES,
 };
-use dclutch_product_runtime_v2_svm_reader::{
+use dclutch_product::svm_reader::{
     FinalizedRecordFrameV2, ProductRuntimeFrameV2, ProductRuntimeFrameV3,
     authenticate_product_basis_v3,
 };
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_source_contract::MarketPrincipalCapSetsV1;
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_source::MarketPrincipalCapSetsV1;
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
@@ -50,7 +50,7 @@ use crate::market_admission_v1::CLAIMS_OPEN_MARKET_ADMISSIBLE_PRESTATES_V1;
 
 /// Exact fixed affine-batch account count before the runtime Position tail.
 pub const AFFINE_BATCH_FIXED_ACCOUNT_COUNT_V2: usize =
-    dclutch_claims_svm::frame_spec_v1::AFFINE_FIXED_ACCOUNT_COUNT_V1 as usize;
+    dclutch_claims::frame_spec_v1::AFFINE_FIXED_ACCOUNT_COUNT_V1 as usize;
 
 /// Exact already-authenticated parent request joined to one nested affine plan.
 ///
@@ -660,7 +660,7 @@ pub(crate) fn authenticate_runtime_product_basis_core_with_rent_v3(
         // own doc asks a mirror-holding consumer to do, and what the two
         // settlement call sites already do.
         refunds_on_failure:
-            dclutch_product_payoff_v2_codec::runtime_v3::categorical_refunds_on_failure_v3(
+            dclutch_product::payoff::runtime_v3::categorical_refunds_on_failure_v3(
                 product.basis_kind,
                 product.basis_width,
                 product.payout_scale,
@@ -942,7 +942,7 @@ fn put_u64(bytes: &mut [u8], offset: usize, value: u64) -> Result<(), ProgramErr
 mod tests {
     use alloc::vec;
 
-    use dclutch_claims_svm::affine_batch_v2::{
+    use dclutch_claims::affine_batch_v2::{
         AFFINE_BATCH_PLAN_HEADER_BYTES_V2, AFFINE_BATCH_PLAN_MAGIC_V2, AffineBatchPlanInputV2,
         AffineBatchPositionV2, AffineBatchRowInputV2, AffineBatchRowV2, DeltaDirectionV2,
         SignedMagnitudeV2, plan_bytes,

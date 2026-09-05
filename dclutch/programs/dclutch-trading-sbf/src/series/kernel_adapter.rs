@@ -2,13 +2,13 @@
 //!
 //! This is a deliberately small runtime boundary: immutable decoding,
 //! content IDs, proof verification, schedule, funding-list identity, and the
-//! future-Market seed projection remain owned by `dclutch-series-v3-kernel`.
+//! future-Market seed projection remain owned by `dclutch-trading::series`.
 
 use dclutch_core_contract::ContentId;
 #[cfg(test)]
-use dclutch_market_core_codec::Identity as CoreIdentity;
-use dclutch_market_core_codec::{SeriesCoreActionV1, SeriesCoreRequestV1};
-use dclutch_series_v3_kernel::{
+use dclutch_market::Identity as CoreIdentity;
+use dclutch_market::{SeriesCoreActionV1, SeriesCoreRequestV1};
+use dclutch_trading::series::{
     AccountKeyV3, AdmittedOccurrenceV3, AdmittedTicketV3, AuthenticatedProductProjectionV2,
     OccurrenceV3, SeriesV3Error, funding_list_id as kernel_funding_list_id,
     future_market_projection, series_core_consume_request,

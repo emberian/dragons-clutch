@@ -145,24 +145,24 @@
 //! Six ELFs, not five: `elves()` reads the five release roles and this campaign
 //! reads the Rent deployment beside them.
 
-use dclutch_capability_program_contract::hot_v3::{
+use dclutch_market::capability_program::hot_v3::{
     DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_EXECUTION_ENVELOPE_BYTES_V3, HotExecutionAckV3,
     HotExecutionEnvelopeV3,
 };
-use dclutch_custody_contract::CustodyReplayV1;
-use dclutch_direct_codec::execution_v3::{
+use dclutch_custody::CustodyReplayV1;
+use dclutch_trading::execution_v3::{
     DIRECT_REGISTRATION_REQUEST_BYTES_V3, DirectExecutionActionV3, native_signature_slice_v3,
 };
-use dclutch_direct_codec::native_evidence_v3::{
+use dclutch_trading::native_evidence_v3::{
     DirectNativeEvidenceContainerV3, direct_native_evidence_bytes_v3,
     encode_direct_native_evidence_many_v3_atomic,
 };
-use dclutch_direct_codec::ordinary_geometry_v3::DirectOrdinaryGeometryV3;
-use dclutch_direct_codec::registered_state_artifacts_v4::{
+use dclutch_trading::ordinary_geometry_v3::DirectOrdinaryGeometryV3;
+use dclutch_trading::registered_state_artifacts_v4::{
     DIRECT_REGISTER_BUY_LIFECYCLE_BYTES_V5, DIRECT_REGISTER_SELL_LIFECYCLE_BYTES_V5,
     DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5,
 };
-use dclutch_direct_codec::successor::{
+use dclutch_trading::successor::{
     DIRECT_MAKER_REPLAY_BYTES_V1, DIRECT_REGISTERED_RECORD_BYTES_V2,
 };
 use dclutch_direct_hot_program_test_support::chain::install_direct_hot_chain_accounts_v5;
@@ -176,8 +176,8 @@ use dclutch_direct_hot_program_test_support::waist::{
     add_release_waist, canonical_lookup_addresses, direct_chain_input_v5, elves, fixture_substrate,
     program_test_without_forced_budget, start_with_substrate, submit_v0_observed,
 };
-use dclutch_rent_contract::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
-use dclutch_token_svm::TokenAccount;
+use dclutch_market::rent::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
+use dclutch_custody::token_svm::TokenAccount;
 use dclutch_trading_sbf::TradingSbfError;
 use solana_account::Account;
 use solana_program::hash::hash;

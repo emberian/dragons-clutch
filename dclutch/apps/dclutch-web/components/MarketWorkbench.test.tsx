@@ -80,7 +80,7 @@ describe('market lifecycle workbench', () => {
     // An act with no venue names its wall here too, in the same words and
     // with the same citation the census uses.
     expect(html).toContain('Known wall');
-    expect(html).toContain('crates/dclutch-dealer-scenario-kernel');
+    expect(html).toContain('crates/dclutch-trading');
     expect(html).not.toContain('25,000');
     expect(html).not.toContain('Awaiting local chain');
   });

@@ -38,10 +38,10 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-use dclutch_claims_svm::liability_basis_state_v2::{
+use dclutch_claims::liability_basis_state_v2::{
     LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
 };
-use dclutch_market_core_codec::CoreState;
+use dclutch_market::CoreState;
 use dclutch_operator::ObservedAccount;
 use dclutch_wallet_terminal_payout_operator::{
     Error, Result, hex,
@@ -655,11 +655,11 @@ fn stable_parent_context_v1(
 
 #[cfg(test)]
 mod tests {
-    use dclutch_claims_svm::liability_basis_state_v2::{
+    use dclutch_claims::liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LiabilityBasisMarketInputV2,
         encode_liability_basis_market_into_v2, liability_basis_vector_width_v2,
     };
-    use dclutch_market_core_codec::{Identity, MarketIdentity, Phase, Readiness, StateBumpsV1};
+    use dclutch_market::{Identity, MarketIdentity, Phase, Readiness, StateBumpsV1};
     use dclutch_operator::{Finality, Observation};
     use dclutch_wallet_terminal_payout_operator::{hex32, pubkey, wire::RecordPairV1};
     use solana_sdk_ids::system_program;

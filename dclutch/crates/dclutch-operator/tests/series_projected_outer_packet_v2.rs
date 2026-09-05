@@ -10,7 +10,7 @@ use dclutch_operator::series_projected_v2::{
     SERIES_PROJECTED_HOT_PREFIX_ACCOUNT_COUNT_V2,
     SERIES_PROJECTED_INJECTED_RUNTIME_ACCOUNT_COUNT_V2, build_series_projected_consume_v2,
 };
-use dclutch_series_v3_kernel::request::{SeriesActionV3, encode_series_action_header_v3};
+use dclutch_trading::series::request::{SeriesActionV3, encode_series_action_header_v3};
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_hash::Hash;
 use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};

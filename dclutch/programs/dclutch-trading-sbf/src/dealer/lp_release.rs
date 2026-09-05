@@ -10,7 +10,7 @@ extern crate alloc;
 
 use alloc::vec;
 
-use dclutch_account_profile_contract::{
+use dclutch_vm::account_profile::{
     lifecycle_v3::{
         ACTION_PLAN_BYTES, CURRENT_RENT_QUOTE_BYTES_V5, CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5,
         Error as LifecycleErrorV3, HEADER_BYTES, IMMUTABLE_IDENTITY_BINDING_BYTES,
@@ -25,26 +25,26 @@ use dclutch_account_profile_contract::{
     },
     v2::{AccountPrestateV2, AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2},
 };
-use dclutch_capability_program_contract::CAPABILITY_ROOT_DERIVATION_RELEASE_ID_V1;
-use dclutch_capability_program_contract::v4::{
+use dclutch_market::capability_program::CAPABILITY_ROOT_DERIVATION_RELEASE_ID_V1;
+use dclutch_market::capability_program::v4::{
     ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4, CapabilityProgramV4,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_dealer_codec::config_v4::DEALER_CONFIG_SCHEMA_PREIMAGE_V4;
-use dclutch_effect_kernel::{
+use dclutch_trading::dealer::config_v4::DEALER_CONFIG_SCHEMA_PREIMAGE_V4;
+use dclutch_vm::effect::{
     v3::ProgramV3 as EffectProgramV3,
     v4::{
         BorrowedRangePolicyV4, HEADER_BYTES_V4 as EFFECT_V4_HEADER_BYTES, ProgramV4,
         SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4, encode_program_v4_atomic,
     },
 };
-use dclutch_execution_strategy_contract::v2::{
+use dclutch_market::execution_strategy::v2::{
     EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
-use dclutch_request_profile_contract::{
+use dclutch_vm::request_profile::{
     RequestProfileV1, SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1,
 };
-use dclutch_transition_vm::v3::{ProgramV3 as TransitionProgramV3, SCHEMA_RELEASE_ID};
+use dclutch_vm::v3::{ProgramV3 as TransitionProgramV3, SCHEMA_RELEASE_ID};
 use solana_program::hash::hash;
 
 use super::{
@@ -321,7 +321,7 @@ pub fn finalize_dealer_lp_descriptor_v4(
             transition: reference(SCHEMA_RELEASE_ID, artifacts.transition)?,
             effect: reference(EFFECT_SCHEMA_ID_V4, artifacts.effect)?,
         },
-        u32::try_from(dclutch_dealer_codec::root_tail::ROOT_TAIL_BYTES)
+        u32::try_from(dclutch_trading::dealer::root_tail::ROOT_TAIL_BYTES)
             .map_err(|_| DealerLpReleaseErrorV4::Geometry)?,
     )
     .map_err(|_| DealerLpReleaseErrorV4::Descriptor)?;
@@ -455,11 +455,11 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
-    use dclutch_execution_strategy_contract::v2::{
+    use dclutch_market::execution_strategy::v2::{
         ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
         EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
     };
-    use dclutch_rent_contract::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
+    use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
 
     use super::*;
     use crate::dealer::lp_artifacts::{

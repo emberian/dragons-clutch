@@ -11,7 +11,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 base64 = "0.22.1"
-dclutch-claims-svm = { path = "../dclutch-claims-svm" }
+dclutch-claims = { path = "../dclutch-claims" }
 dclutch-wallet-terminal-payout-operator = { path = "../dclutch-wallet-terminal-payout-operator" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

@@ -7,7 +7,7 @@
 
 extern crate std;
 
-use dclutch_custody_contract::{CustodyReplayLayoutV1, CustodyReplayV1};
+use dclutch_custody::{CustodyReplayLayoutV1, CustodyReplayV1};
 use solana_program::{
     account_info::AccountInfo, entrypoint::ProgramResult, program_error::ProgramError,
     pubkey::Pubkey,

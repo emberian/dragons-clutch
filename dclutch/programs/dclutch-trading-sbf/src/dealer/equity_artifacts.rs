@@ -7,17 +7,17 @@
 //! witness geometry. Scenario-basket equity remains owned by the admitted
 //! semantic executor and is never re-encoded in these artifacts.
 
-use dclutch_claims_svm::signed_delta_v3::{
+use dclutch_claims::signed_delta_v3::{
     SIGNED_DELTA_PLAN_MAGIC_V3, SIGNED_DELTA_RECEIPT_BYTES_V3, SIGNED_DELTA_RECEIPT_MAGIC_V3,
     plan_bytes as signed_delta_plan_bytes,
 };
-use dclutch_custody_contract::{CUSTODY_REQUEST_BYTES_V1, DELEGATED_CUSTODY_REQUEST_BYTES_V2};
-use dclutch_dealer_codec::MAX_OUTCOMES;
-use dclutch_effect_kernel::{
+use dclutch_custody::{CUSTODY_REQUEST_BYTES_V1, DELEGATED_CUSTODY_REQUEST_BYTES_V2};
+use dclutch_trading::dealer::MAX_OUTCOMES;
+use dclutch_vm::effect::{
     v2::FixedRole,
     v3::{ProgramV3 as EffectProgramV3, RouteKindV3},
 };
-use dclutch_request_profile_contract::{
+use dclutch_vm::request_profile::{
     RequestProfileV1,
     encode::{
         RequestCoordinateV1, RequestGeometryV1, RequestInstructionV1, ScalarRegisterV1,
@@ -28,7 +28,7 @@ use dclutch_request_profile_contract::{
         RequestProfileV3, encode_request_profile_v3_atomic,
     },
 };
-use dclutch_transition_vm::v3::{
+use dclutch_vm::v3::{
     InstructionV3, ProgramGeometryV3, ProgramV3 as TransitionProgramV3, ScalarRegisterV3,
     encode_program_atomic,
 };
@@ -52,8 +52,8 @@ use super::{
 
 const FIXED_PROFILE_OPERATIONS_V3: usize = 5;
 const P0_PROFILE_OPERATIONS_V3: usize = 6;
-const REQUEST_PROFILE_OPERATION_BYTES_V3: usize = dclutch_request_profile_contract::OPERATION_BYTES;
-const REQUEST_PROFILE_HEADER_BYTES_V3: usize = dclutch_request_profile_contract::HEADER_BYTES;
+const REQUEST_PROFILE_OPERATION_BYTES_V3: usize = dclutch_vm::request_profile::OPERATION_BYTES;
+const REQUEST_PROFILE_HEADER_BYTES_V3: usize = dclutch_vm::request_profile::HEADER_BYTES;
 const DEALER_EQUITY_V1_PROFILE_BYTES_V3: usize = REQUEST_PROFILE_HEADER_BYTES_V3
     + FIXED_PROFILE_OPERATIONS_V3 * REQUEST_PROFILE_OPERATION_BYTES_V3;
 const DEALER_EQUITY_P0_PROFILE_BYTES_V3: usize =
@@ -66,8 +66,8 @@ const DEALER_EQUITY_TRANSITION_WITNESS_OPERATIONS_V3: usize = 3;
 /// Largest exact RequestProfile artifact emitted by this family.
 pub const DEALER_EQUITY_REQUEST_PROFILE_MAX_BYTES_V3: usize = DEALER_EQUITY_V3_PROFILE_BYTES_V3;
 /// Largest exact TransitionVM artifact emitted by this family.
-pub const DEALER_EQUITY_TRANSITION_MAX_BYTES_V3: usize = dclutch_transition_vm::v3::HEADER_BYTES
-    + DEALER_EQUITY_TRANSITION_WITNESS_OPERATIONS_V3 * dclutch_transition_vm::v3::INSTRUCTION_BYTES;
+pub const DEALER_EQUITY_TRANSITION_MAX_BYTES_V3: usize = dclutch_vm::v3::HEADER_BYTES
+    + DEALER_EQUITY_TRANSITION_WITNESS_OPERATIONS_V3 * dclutch_vm::v3::INSTRUCTION_BYTES;
 
 /// Stable construction or cross-artifact refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -138,8 +138,8 @@ pub const fn dealer_equity_transition_bytes_v3(
         1 | 2 => DEALER_EQUITY_TRANSITION_WITNESS_OPERATIONS_V3,
         _ => return Err(DealerEquityArtifactsErrorV3::Shape),
     };
-    Ok(dclutch_transition_vm::v3::HEADER_BYTES
-        + operations * dclutch_transition_vm::v3::INSTRUCTION_BYTES)
+    Ok(dclutch_vm::v3::HEADER_BYTES
+        + operations * dclutch_vm::v3::INSTRUCTION_BYTES)
 }
 
 /// Inclusive canonical SignedDelta packet bounds for a P1/P2 shape.
@@ -587,8 +587,8 @@ const fn equity_request_action(action: MultiLpActionV3) -> EquityRequestActionV3
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_request_profile_contract::{ProjectionRegistersV1, project_atomic};
-    use dclutch_transition_vm::v3::{RegisterInput, RegisterOutput, execute_fold_atomic};
+    use dclutch_vm::request_profile::{ProjectionRegistersV1, project_atomic};
+    use dclutch_vm::v3::{RegisterInput, RegisterOutput, execute_fold_atomic};
     use std::vec;
 
     #[test]

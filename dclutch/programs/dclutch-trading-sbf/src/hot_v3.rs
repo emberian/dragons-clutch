@@ -11,7 +11,7 @@ extern crate alloc;
 
 use alloc::{boxed::Box, vec, vec::Vec};
 
-use dclutch_account_profile_contract::{
+use dclutch_vm::account_profile::{
     AccountObservationV1,
     lifecycle_v3::{
         AuthenticatedRentCreditV3, AuthenticatedRentMinimumV3, AuthenticatedRentQuoteV5,
@@ -29,9 +29,9 @@ use dclutch_account_profile_contract::{
     },
     v3::{AccountProfileV3, SCHEMA_RELEASE_ID_V3 as ACCOUNT_PROFILE_SCHEMA_ID_V3},
 };
-use dclutch_capability_contract::funding::funded_rent_persists_v1;
-use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_market::capability_manifest::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, Error as CapabilityProgramError,
     hot_v3::{
         HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
@@ -63,18 +63,18 @@ use dclutch_capability_program_contract::{
         SCHEMA_RELEASE_ID as PROGRAM_SCHEMA_ID_V4, SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
     },
 };
-use dclutch_capability_seal_contract::{
+use dclutch_vm::capability_seal::{
     SealedArtifactV1, SealedDescriptorClosureV1, SealedRoleV1, SealedStaticOwnershipV1,
 };
-use dclutch_claims_svm::frame_spec_v1::{
+use dclutch_claims::frame_spec_v1::{
     ClaimsFrameRoleV1, SPARSE_NATIVE_TRANSFER_ACCOUNT_COUNT_V1, SparseNativeTransferFrameSpecV1,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CUSTODY_BUMP_RELAY_BYTES_V1, CUSTODY_REPLAY_BYTES_V1, CustodyFrameRoleV1, CustodyFrameSpecV1,
     OperationV1, TRANSFER_ACCOUNT_COUNT_V1,
 };
-use dclutch_direct_codec::{
+use dclutch_trading::{
     direct_finalization_v3::{
         DIRECT_INLINE_POSTSTATE_COUNT_V3, DirectInlineAccountPrestateV3,
         DirectInlineAccountPrestatesV3, DirectInlineFinalizationInputV3,
@@ -109,7 +109,7 @@ use dclutch_direct_codec::{
         RegisteredRecordFirstUseV2, register_intent_v2,
     },
 };
-use dclutch_effect_kernel::{
+use dclutch_vm::effect::{
     v2::{AccountInput, AccountPermission, FixedRole},
     v3::{ProgramV3 as EffectProgramV3, ProjectionV3, ResolvedEffectV3, RouteKindV3},
     v4::{
@@ -122,7 +122,7 @@ use dclutch_effect_kernel::{
         SCHEMA_RELEASE_ID_V5 as EFFECT_SCHEMA_ID_V5,
     },
 };
-use dclutch_execution_strategy_contract::{
+use dclutch_market::execution_strategy::{
     admitted_v3::{
         AdmittedInvocationContextV3, AdmittedPreludeWitnessV1,
         admitted_invocation_context_digest_v3, admitted_prelude_witness_bytes_v1,
@@ -147,33 +147,33 @@ use dclutch_execution_strategy_contract::{
         register_bank_bytes_v2,
     },
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity,
     SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_BYTES_V1, STATE_BYTES, SeriesFoundingPermitSeedsV1,
     SeriesUnallocatedPermitExpiryRequestV1,
 };
-use dclutch_product_runtime_v2::ContentId as ProductContentId;
-use dclutch_product_runtime_v2_svm_reader::{
+use dclutch_product::ContentId as ProductContentId;
+use dclutch_product::svm_reader::{
     AuthenticatedProductRuntimeV3, FinalizedRecordFrameV2 as ProductRecordFrameV2,
     ProductRecordBumpsV3, ProductRuntimeFrameV3, authenticate_product_runtime_v3_hinted,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_activation_auth_v1::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::activation_auth_v1::{
     authenticate_activated_role_in_frame_v1, authenticate_activation_cache_identity_v1,
     require_cache_account,
 };
-use dclutch_registry_contract::{
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_CACHE_BUMP_OFFSET_V1,
     ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1,
     ArtifactUpgradePolicyV1,
 };
-use dclutch_registry_svm::{
+use dclutch_registry::svm::{
     AuthenticatedRoleReceiptV1, ProgramDataMetadataV3View,
     continuation_v1::{RegistryContinuationAdmissionSeedsV1, RegistryContinuationRequestV1},
 };
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_rent_contract::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
-use dclutch_request_profile_contract::{
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_market::rent::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
+use dclutch_vm::request_profile::{
     ProjectionRegisterKindV1, ProjectionRegisterSpaceV1, ProjectionRegistersV1, ProjectionTargetV1,
     RequestProfileV1, SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1,
     project_atomic as project_request_atomic,
@@ -184,7 +184,7 @@ use dclutch_request_profile_contract::{
     },
     v4::{ProjectionRegistersV4, REQUEST_PROFILE_V4_SCHEMA_RELEASE_ID, RequestProfileV4},
 };
-use dclutch_series_v3_kernel::{
+use dclutch_trading::series::{
     AccountKeyV3, AuthenticatedProductProjectionV2, SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3,
     SERIES_TICKET_SCHEMA_RELEASE_ID_V3, admit_occurrence_bytes, future_market_projection,
     plan::{ReplayCandidateV3, SeriesReplayActionV3, evaluate_replay_v3},
@@ -192,8 +192,8 @@ use dclutch_series_v3_kernel::{
     request::admit_series_action_v3,
     ticket_admission_v1::SERIES_TICKET_PREPARED_ADMISSIBLE_STATES_V1,
 };
-use dclutch_token_svm::{COption as TokenCOption, TokenAccount};
-use dclutch_transition_vm::v3::{
+use dclutch_custody::token_svm::{COption as TokenCOption, TokenAccount};
+use dclutch_vm::v3::{
     ProgramV3 as TransitionProgramV3, RegisterInput, RegisterKindV3, RegisterOutput,
     RegisterSpaceV3, RegisterWriteTargetV3, SCHEMA_RELEASE_ID as TRANSITION_SCHEMA_ID_V3,
     execute_fold_atomic,
@@ -349,7 +349,7 @@ impl<'effect, 'registers, 'request> BorrowedRouteRangesV4<'effect, 'registers, '
     pub(crate) fn resolved_range(
         self,
         ordinal: u16,
-    ) -> Result<dclutch_effect_kernel::v4::ResolvedBorrowedRangeV4, ProgramError> {
+    ) -> Result<dclutch_vm::effect::v4::ResolvedBorrowedRangeV4, ProgramError> {
         self.effect
             .resolved_borrowed_range_for_tail(self.route, ordinal, self.tail_count, self.scalars)
             .map_err(|_| TradingSbfError::Content.into())
@@ -378,7 +378,7 @@ impl<'a> SelectedEffectProgramV4<'a> {
         tail_count: u32,
         scalars: &[u64],
         identities: &[[u8; 32]],
-    ) -> Result<dclutch_effect_kernel::v3::ResolvedInvocationV3, TradingSbfError> {
+    ) -> Result<dclutch_vm::effect::v3::ResolvedInvocationV3, TradingSbfError> {
         self.successor
             .resolved_invocation(route, invocation, tail_count, scalars, identities)
             .map(|resolved| resolved.invocation)
@@ -440,7 +440,7 @@ use crate::{
     feature = "series-family",
     feature = "dealer-family"
 ))]
-use dclutch_claims_svm::composition_v3::{
+use dclutch_claims::composition_v3::{
     ClaimsCompositionErrorV3, ClaimsCompositionParentV3, ClaimsCompositionV3, ClaimsExternalOnceV3,
 };
 // These are SBF-heap profile bounds, not semantic/product limits. The lifting
@@ -768,7 +768,7 @@ macro_rules! hot_cu_data_length_disagreement {
 #[cfg(feature = "hot-cu-profile")]
 #[inline(never)]
 fn log_sealed_ownership_range_v1(
-    verdict: &dclutch_capability_seal_contract::SealedStaticOwnershipV1<'_>,
+    verdict: &dclutch_vm::capability_seal::SealedStaticOwnershipV1<'_>,
     action: u32,
     index: usize,
     seen: &[u8],

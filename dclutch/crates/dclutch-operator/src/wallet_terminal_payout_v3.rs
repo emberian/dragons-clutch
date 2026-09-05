@@ -3,11 +3,11 @@
 //! This module moves the production caller boundary out of the ProgramTest
 //! campaign without creating a second payout implementation. Product payout,
 //! exposure translation, and the SignedDelta packet remain owned by
-//! `dclutch-claims-svm`; this host-only operator supplies the wallet request,
+//! `dclutch-claims`; this host-only operator supplies the wallet request,
 //! exact 36-account frame, Custody caller PDA, sole canonical lookup sequence,
 //! unsigned v0 message, and independently checked postcondition.
 
-use dclutch_claims_svm::{
+use dclutch_claims::{
     CallerRole,
     liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketLayoutV2, LiabilityBasisMarketViewV2,
@@ -29,16 +29,16 @@ use dclutch_claims_svm::{
     },
 };
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_POSTSTATE_DOMAIN_V1,
     CallerRoleV1 as CustodyCallerRoleV1, CompartmentV1, ContextV1, CustodyReceiptV1,
     CustodyReplaySeedsV1, CustodyReplayV1, CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
     ReceiptEvidenceV1,
 };
-use dclutch_product_payoff_v2_codec::runtime_v3::ProductBasisV3;
-use dclutch_rational_representation_v2_kernel::product_v3::TerminalScenarioV3;
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_token_svm::{AccountState, TokenAccount, TokenProgram};
+use dclutch_product::payoff::runtime_v3::ProductBasisV3;
+use dclutch_claims::rational_kernel::product_v3::TerminalScenarioV3;
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_custody::token_svm::{AccountState, TokenAccount, TokenProgram};
 use solana_address_lookup_table_interface::{
     program as lookup_table_program, state::AddressLookupTable,
 };
@@ -146,7 +146,7 @@ pub struct WalletTerminalPayoutInputV3<'a> {
     pub composition_exposure_bytes: &'a [u8],
     /// Finalized exposure record admission.
     pub composition_exposure_admission:
-        dclutch_representation_composition_v3_kernel::RecordAdmissionV3,
+        dclutch_claims::composition::RecordAdmissionV3,
     /// Finalized Product root digest.
     pub product_record_digest: [u8; 32],
     /// Exact Claims aggregate prestate bytes.
@@ -658,7 +658,7 @@ pub fn project_wallet_terminal_payout_postcondition_v3(
     .to_bytes();
     let receipt_bytes = TerminalSettlementReceiptV3::new(
         report.request,
-        dclutch_claims_svm::terminal_settlement_v3::TerminalSettlementReceiptInputV3 {
+        dclutch_claims::terminal_settlement_v3::TerminalSettlementReceiptInputV3 {
             request_digest: report.request_digest,
             signed_packet_digest: report.signed_packet_digest,
             signed_table_digest: report.signed_table_digest,
@@ -1097,7 +1097,7 @@ pub(crate) mod tests {
     use std::borrow::Cow;
 
     use super::*;
-    use dclutch_claims_svm::{
+    use dclutch_claims::{
         liability_basis_state_v2::{
             LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
             LiabilityBasisMarketInputV2, LiabilityBasisPositionInputV2,
@@ -1106,10 +1106,10 @@ pub(crate) mod tests {
         },
         terminal_settlement_v3::TERMINAL_SETTLEMENT_REQUEST_BYTES_V3,
     };
-    use dclutch_product_payoff_v2_codec::runtime_v3::{
+    use dclutch_product::payoff::runtime_v3::{
         BasisInputV3, BasisKindV3, basis_record_bytes_v3, compile_basis_v3,
     };
-    use dclutch_representation_composition_v3_kernel::{
+    use dclutch_claims::composition::{
         CompositionExposureInputV3, CompositionExposureRowInputV3, CompositionExposureTermV3,
         RecordAdmissionV3, composition_exposure_bytes_v3, encode_composition_exposure_v3_atomic,
     };
@@ -1245,7 +1245,7 @@ pub(crate) mod tests {
             hoard,
             recipient: key(66),
             custody_authority,
-            token_program: Pubkey::new_from_array(dclutch_token_svm::LEGACY_TOKEN_PROGRAM_ID),
+            token_program: Pubkey::new_from_array(dclutch_custody::token_svm::LEGACY_TOKEN_PROGRAM_ID),
         };
 
         let basis_bytes =

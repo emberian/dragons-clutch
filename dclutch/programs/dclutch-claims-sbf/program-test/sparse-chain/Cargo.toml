@@ -9,12 +9,11 @@ rust-version = "1.89"
 dclutch-program-test-evidence = { path = "../../../../tools/gauntlet/program-test-evidence" }
 dclutch-claims-affine-batch-program-test = { path = "../affine-batch" }
 dclutch-claims-sbf = { path = "../.." }
-dclutch-claims-svm = { path = "../../../../crates/dclutch-claims-svm" }
+dclutch-claims = { path = "../../../../crates/dclutch-claims" }
 dclutch-claims-sparse-chain-test-caller-sbf = { path = "../../test-programs/sparse-chain-caller", default-features = false, features = ["no-entrypoint"] }
 dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
-dclutch-rent-contract = { path = "../../../../crates/dclutch-rent-contract" }
-dclutch-registry-contract = { path = "../../../../crates/dclutch-registry-contract" }
-dclutch-release-set-contract = { path = "../../../../crates/dclutch-release-set-contract" }
+dclutch-market = { path = "../../../../crates/dclutch-market" }
+dclutch-registry = { path = "../../../../crates/dclutch-registry" }
 solana-account = "=4.3.2"
 solana-address-lookup-table-interface = { version = "=3.1.0", features = ["bincode", "bytemuck"] }
 solana-message = "=4.4.1"

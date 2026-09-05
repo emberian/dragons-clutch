@@ -48,17 +48,17 @@ use solana_program_test::ProgramTest;
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
 
 use dclutch_core_contract::ContentId;
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{
+use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ActivatedExecutionReleaseSetV1,
     ArtifactActivationInputV1, ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
     activate_execution_role_into_v1, initialize_activation_cache_v1,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
     ProgramIdentityV1,
 };
-use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
+use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
 
 use crate::narrow_fixture::NarrowRecordV2;
 

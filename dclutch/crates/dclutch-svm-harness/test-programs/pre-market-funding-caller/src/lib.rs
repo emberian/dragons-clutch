@@ -13,9 +13,9 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1;
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_resolution_codec::{
+use dclutch_registry::ActivatedExecutionReleaseSetViewV1;
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_source::resolution::{
     PRE_MARKET_FUNDING_ABORT_RECEIPT_BYTES_V1, PRE_MARKET_FUNDING_RECEIPT_BYTES_V2,
     PreMarketFundingAbortReceiptV1, PreMarketFundingAbortRequestV1, PreMarketFundingReceiptV2,
     PreMarketFundingRequestV2,

@@ -1,6 +1,6 @@
 //! Capture exact Direct controller traces with qedsvm's pinned Agave/Mollusk dependency.
 
-use dclutch_direct_codec::{
+use dclutch_trading::{
     CompactIntentV1, RegisteredIntentStateV1, RegisteredTerminalAction,
     RegisteredTerminalInstructionV1,
 };

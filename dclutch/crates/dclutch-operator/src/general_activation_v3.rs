@@ -34,24 +34,24 @@
 //! those bytes -- it is now one of two independent authorities that produce the
 //! same ones, which is a considerably stronger position than it had.
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     ActivationPolicy, CapabilityEntryV1, CapabilityFundingLedgerDerivationV2, CapabilityManifestV1,
     ContentId, FUNDING_LEDGER_ACTIVE_ADMISSIBLE_STATES_V2,
     FUNDING_LEDGER_PENDING_ADMISSIBLE_STATES_V2, FundingLedgerV2, manifest_entry_for_ledger_row_v2,
     validate_funding_ledger_masks_v2,
 };
-use dclutch_capability_program_contract::{
+use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
 };
-use dclutch_general_config_contract::{
+use dclutch_trading::general_config::{
     GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_ROOT_BYTES_V2, GENERAL_ROOT_SCHEMA_ID_V2,
     GeneralActivationDispositionV2, GeneralLifecycleV2, GeneralRootV2,
     v3::{GENERAL_CONFIG_BYTES_V3, GeneralConfigV3},
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     CapabilityFundingHeaderV2, CoreState, MarketCoreStateSeedsV2, Phase, STATE_BYTES,
 };
-use dclutch_release_set_contract::CapabilityExecutionSelectionV1;
+use dclutch_registry::release_set::CapabilityExecutionSelectionV1;
 use solana_program::{hash::hash, pubkey::Pubkey};
 use solana_sdk_ids::system_program;
 
@@ -142,7 +142,7 @@ pub enum GeneralActivationErrorV3 {
     /// Market phase did not admit the entry's immutable activation policy.
     Phase,
     /// The General activation contract refused.
-    Activation(dclutch_general_config_contract::RootError),
+    Activation(dclutch_trading::general_config::RootError),
     /// Checked arithmetic or an encoding width overflowed.
     Arithmetic,
 }
@@ -290,7 +290,7 @@ pub fn general_capability_root_address_v3(
 /// Select the unique General manifest entry for one config identity.
 ///
 /// This is the operator's projection of the same conjunction
-/// `dclutch_general_config_contract` evaluates, and it is never authority: an
+/// `dclutch_trading::general_config` evaluates, and it is never authority: an
 /// ambiguous or absent entry refuses here exactly as it refuses on chain.
 fn select_general_entry(
     manifest: CapabilityManifestV1<'_>,

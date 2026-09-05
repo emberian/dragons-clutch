@@ -60,7 +60,7 @@
 //! [`crate::relay_v1`]. This module takes values the outer authenticated and
 //! returns a plan.
 
-use dclutch_capability_contract::{
+use dclutch_market::capability_manifest::{
     CapabilityManifestV1, ContentId as CapabilityContentId,
     FUNDING_LEDGER_ACTIVE_ADMISSIBLE_STATES_V2, FUNDING_LEDGER_HEADER_BYTES_V2,
     FUNDING_LEDGER_SLOT_BYTES_V2, FundingAssetClassV1, FundingCompartment, FundingLedgerV2,
@@ -69,12 +69,12 @@ use dclutch_capability_contract::{
 /// Exact width of the three-row Resolution controller subset ledger.
 pub(crate) const RESOLUTION_FUNDING_LEDGER_BYTES_V2: usize =
     FUNDING_LEDGER_HEADER_BYTES_V2 + 3 * FUNDING_LEDGER_SLOT_BYTES_V2;
-use dclutch_product_runtime_v2::ResultDomainV2;
-use dclutch_product_runtime_v2_svm_reader::AuthenticatedProductRuntimeV2;
-use dclutch_resolution_codec::{
+use dclutch_product::ResultDomainV2;
+use dclutch_product::svm_reader::AuthenticatedProductRuntimeV2;
+use dclutch_source::resolution::{
     RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
-use dclutch_source_contract::{
+use dclutch_source::{
     ContentId as SourceContentId, RecoveryCrankV2, RecoveryPolicyV2, SourceMaterialV3,
     SourceResolutionPhaseV1, SourceResolutionStateV2, WindowSpecV1,
 };

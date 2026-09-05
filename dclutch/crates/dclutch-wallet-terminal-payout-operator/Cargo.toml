@@ -19,26 +19,18 @@ base64 = "0.22.1"
 # Decoding the Rent sysvar, which is a pure decode of observed bytes.
 bincode = "=1.3.3"
 # Used by the shared fixture module, which compiles under `test-fixtures`.
-dclutch-capability-contract = { path = "../dclutch-capability-contract" }
-dclutch-claims-svm = { path = "../dclutch-claims-svm" }
-dclutch-custody-contract = { path = "../dclutch-custody-contract" }
-dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
+dclutch-market = { path = "../dclutch-market" }
+dclutch-claims = { path = "../dclutch-claims" }
+dclutch-custody = { path = "../dclutch-custody" }
 # `default-features = false` drops `dealer-series`, and with it the Trading
 # PROGRAM, whose 64-bit `size_of` layout assertions cannot hold on a 32-bit
 # target. Those assertions are right; this derivation simply does not need the
 # program. The payout builder it does need already lives here.
 dclutch-operator = { path = "../dclutch-operator", default-features = false }
-dclutch-product-payoff-v2-codec = { path = "../dclutch-product-payoff-v2-codec" }
-dclutch-product-runtime-v2-admission = { path = "../dclutch-product-runtime-v2-admission" }
-dclutch-rational-representation-v2-kernel = { path = "../dclutch-rational-representation-v2-kernel" }
-dclutch-realm-contract = { path = "../dclutch-realm-contract" }
-dclutch-record-contract = { path = "../dclutch-record-contract" }
-dclutch-registry-activation-auth-v1 = { path = "../dclutch-registry-activation-auth-v1" }
-dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
-dclutch-representation-composition-v3-kernel = { path = "../dclutch-representation-composition-v3-kernel" }
+dclutch-product = { path = "../dclutch-product" }
+dclutch-registry = { path = "../dclutch-registry", features = ["svm"] }
 dclutch-representation-composition-v3-operator = { path = "../dclutch-representation-composition-v3-operator" }
-dclutch-resolution-codec = { path = "../dclutch-resolution-codec" }
-dclutch-token-svm = { path = "../dclutch-token-svm" }
+dclutch-source = { path = "../dclutch-source" }
 dclutch-versioned-message-operator = { path = "../dclutch-versioned-message-operator" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

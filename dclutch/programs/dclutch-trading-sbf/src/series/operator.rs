@@ -6,8 +6,8 @@
 //! from authenticated state. This module signs and submits nothing.
 
 use dclutch_core_contract::ContentId;
-use dclutch_series_v3_kernel::plan::{SeriesReplayActionV3, evaluate_replay_v3};
-use dclutch_series_v3_kernel::terminal::{
+use dclutch_trading::series::plan::{SeriesReplayActionV3, evaluate_replay_v3};
+use dclutch_trading::series::terminal::{
     SeriesLifecycleRentSinkV3, SeriesTerminalErrorV3, plan_series_root_closure_v3,
     plan_ticket_retirement_v3,
 };
@@ -404,7 +404,7 @@ fn build(
 
 #[cfg(test)]
 mod tests {
-    use dclutch_rent_contract::{
+    use dclutch_market::rent::{
         RefundAuthority,
         lifecycle_v2::{LifecycleAccountIdV2, LifecycleRentCreditV2},
     };
@@ -416,7 +416,7 @@ mod tests {
         occurrence_content_id,
         state::{TicketPhaseV3, TicketStateV3},
     };
-    use dclutch_series_v3_kernel::AccountKeyV3;
+    use dclutch_trading::series::AccountKeyV3;
 
     const HASH_SEPARATOR: [u8; 1] = [0];
 

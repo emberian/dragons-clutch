@@ -1,4 +1,4 @@
-import { readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { requireGeneratorFollowsRoute } from './route-binding.mjs';
@@ -6,7 +6,7 @@ import { requireGeneratorFollowsRoute } from './route-binding.mjs';
 // TWO live sources scraped, and only live ones -- plus one read to prove they
 // are the right ones.
 //
-//   crates/dclutch-product-runtime-v2-admission/src/lib.rs
+//   crates/dclutch-product/src/admission/mod.rs
 //     the wire: DCLTPRQ2 request, DCLTPRM2 Product record, DCLTPRA2 receipt,
 //     their exact widths, their reserved spans, and the three schema IDs the
 //     receipt decoder pins.
@@ -14,7 +14,7 @@ import { requireGeneratorFollowsRoute } from './route-binding.mjs';
 //     the frame: the exact executable account count and the refusal band the
 //     adapter raises from. NOT the authority for any schema ID below -- it
 //     binds none of them, which is exactly why the gate reads a third file.
-//   crates/dclutch-product-runtime-v2-svm-reader/src/lib.rs
+//   crates/dclutch-product/src/svm_reader/mod.rs
 //     the route: read, never scraped. It is where the three schema IDs
 //     actually key Registry records, so it is what the binding gate follows.
 //
@@ -34,8 +34,10 @@ import { requireGeneratorFollowsRoute } from './route-binding.mjs';
 // generator reads source text, and a private constant is still the crate's
 // single statement of where a field sits.
 const root = new URL('../../../', import.meta.url);
-const ADMISSION_FILE = 'crates/dclutch-product-runtime-v2-admission/src/generated_admission_v2.rs';
-const readCrateFile = (file) => readFileSync(new URL(file, root), 'utf8');
+const ADMISSION_FILE = 'crates/dclutch-product/src/admission/generated_admission_v2.rs';
+// null for a file that is not there: the route walker tries `a/b.rs` and then
+// `a/b/mod.rs`, and only a null lets it take the second step.
+const readCrateFile = (file) => (existsSync(new URL(file, root)) ? readFileSync(new URL(file, root), 'utf8') : null);
 const sources = Object.freeze({
   admission: readCrateFile(ADMISSION_FILE),
   adapter: readCrateFile('programs/dclutch-product-runtime-v2-sbf/src/lib.rs'),
@@ -50,8 +52,8 @@ const sources = Object.freeze({
 // been read as this generator's route proves nothing about these values. The
 // actual binder is the SVM reader, where each ID keys a Registry record
 // against a digest. That is the file this gate follows.
-const ROUTE_FILE = 'crates/dclutch-product-runtime-v2-svm-reader/src/lib.rs';
-const ROUTE_CRATE = 'dclutch_product_runtime_v2_svm_reader';
+const ROUTE_FILE = 'crates/dclutch-product/src/svm_reader/mod.rs';
+const ROUTE_CRATE = 'dclutch_product';
 const routeText = readCrateFile(ROUTE_FILE);
 for (const [constant, conjunct] of [
   ['PRODUCT_RECORD_SCHEMA_ID_V2', 'PRODUCT_RECORD_SCHEMA_ID_V2, expected_product_digest,'],

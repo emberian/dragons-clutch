@@ -74,7 +74,7 @@ class SeedSegments(unittest.TestCase):
         for spelling in (
             "RAW_RECORD_PDA_SEED_V1",
             "seeds::RAW_RECORD_PDA_SEED_V1",
-            "dclutch_record_contract::RAW_RECORD_PDA_SEED_V1",
+            "dclutch_registry::RAW_RECORD_PDA_SEED_V1",
             "&crate::seeds::RAW_RECORD_PDA_SEED_V1",
         ):
             self.assertEqual(_identifier(spelling), "RAW_RECORD_PDA_SEED_V1")
@@ -181,8 +181,8 @@ mod tests {
 class Ownership(unittest.TestCase):
     def test_a_crate_owns_every_module_under_it(self):
         self.assertEqual(
-            crate_of("crates/dclutch-record-contract/src/lib.rs"),
-            "crates/dclutch-record-contract",
+            crate_of("crates/dclutch-registry/src/record/mod.rs"),
+            "crates/dclutch-registry",
         )
         self.assertEqual(
             crate_of("programs/dclutch-core-sbf/src/capability.rs"),

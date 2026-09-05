@@ -61,8 +61,8 @@ use dclutch_operator::general_selected_release_v1::{
     GeneralConfigWindowsV1, GeneralDeploymentFactsV1, GeneralSelectedReleaseInputV1,
     general_external_account_widths_v3,
 };
-use dclutch_registry_contract::ArtifactReleaseV1;
-use dclutch_registry_svm::{LOADER_V3_PROGRAM_BYTES, ProgramDataV3View, ProgramV3View};
+use dclutch_registry::ArtifactReleaseV1;
+use dclutch_registry::svm::{LOADER_V3_PROGRAM_BYTES, ProgramDataV3View, ProgramV3View};
 use dclutch_release_tool::{
     CHECKED_TRANSLATION_VALIDATION_BYTES_V1, CheckedTranslationValidationV1,
 };
@@ -202,7 +202,7 @@ pub(crate) struct ObservedAcceleratorDeploymentV1 {
 /// and `upgrade_authority` are hostile-decoded out of the finalized ProgramData
 /// image by exactly the parse the on-chain authenticator runs, and `elf_digest`
 /// is the SHA-256 of the observed tail — the same digest
-/// `dclutch_shadow_accelerator_auth_v4::deployment` computes and the same one
+/// `dclutch_trading::shadow_accelerator_auth::deployment` computes and the same one
 /// the Registry compares at finalization. What IS supplied is which program,
 /// which built ELF the deployment must be carrying, which semantic release it
 /// is, and which authority the observation is checked against — so an
@@ -551,7 +551,7 @@ pub(crate) fn devnet_general_market_input(
     registry: Pubkey,
     spec: crate::market::DevnetPythMarketSpecV1<'_>,
     arguments: &GeneralDevnetCompilerArgumentsV1,
-    sponsored_release: dclutch_pyth_svm::PythSponsoredPushReleaseV1,
+    sponsored_release: dclutch_source::pyth::PythSponsoredPushReleaseV1,
 ) -> Result<crate::model::MarketRunInput> {
     let (plan, mut rpc, observation) = crate::direct_market::observe_devnet_market_policy_v1(
         plan_path,
@@ -920,7 +920,7 @@ mod tests {
     fn devnet_spec<'a>(
         registry: Pubkey,
         price: &'a [u8],
-        update: &dclutch_pyth_svm::FullPriceUpdateV2,
+        update: &dclutch_source::pyth::FullPriceUpdateV2,
     ) -> crate::market::DevnetPythMarketSpecV1<'a> {
         crate::market::DevnetPythMarketSpecV1 {
             // The General devnet market buys no ladder; a caller that wants
@@ -953,20 +953,20 @@ mod tests {
     /// a lab one.
     #[test]
     fn the_devnet_compiler_founds_a_general_market_over_the_real_accelerator_release() {
-        use dclutch_capability_contract::CapabilityManifestV1;
-        use dclutch_general_config_contract::GENERAL_CAPABILITY_KIND_ID_V1;
+        use dclutch_market::capability_manifest::CapabilityManifestV1;
+        use dclutch_trading::general_config::GENERAL_CAPABILITY_KIND_ID_V1;
 
         let registry = Pubkey::new_from_array([0x41; 32]);
         let release =
-            dclutch_pyth_svm::devnet_sponsored_sol_usd_release_v1().expect("sponsored release row");
+            dclutch_source::pyth::devnet_sponsored_sol_usd_release_v1().expect("sponsored release row");
         let mut price = crate::market::FIXTURE_PRICE_UPDATE.to_vec();
         price[8..40].copy_from_slice(&release.price_account());
         price[41..73].copy_from_slice(&release.feed_id());
-        let update = dclutch_pyth_svm::FullPriceUpdateV2::parse(&price).expect("price update");
+        let update = dclutch_source::pyth::FullPriceUpdateV2::parse(&price).expect("price update");
 
         let mut input = crate::market::devnet_sponsored_market_input_base(
             devnet_spec(registry, &price, &update),
-            dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V7,
+            dclutch_source::resolution::RESOLUTION_CONTROLLER_RELEASE_ID_V7,
             release,
         )
         .expect("the capability-free devnet flagship graph");
@@ -1017,7 +1017,7 @@ mod tests {
         other[0] ^= 0x01;
         let mut rival = crate::market::devnet_sponsored_market_input_base(
             devnet_spec(registry, &price, &update),
-            dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V7,
+            dclutch_source::resolution::RESOLUTION_CONTROLLER_RELEASE_ID_V7,
             release,
         )
         .expect("a second capability-free graph");

@@ -16,8 +16,7 @@ custom-heap = []
 custom-panic = []
 
 [dependencies]
-dclutch-registry-contract = { path = "../../../../../crates/dclutch-registry-contract" }
-dclutch-registry-svm = { path = "../../../../../crates/dclutch-registry-svm" }
+dclutch-registry = { path = "../../../../../crates/dclutch-registry" }
 solana-program = { version = "=3.0.0", default-features = false }
 
 [workspace]

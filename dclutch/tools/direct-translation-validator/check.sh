@@ -64,9 +64,9 @@ if [ -n "$evidence_dir" ]; then
     "$evidence_dir/lean_direct_corpus_emitter.bin"
   cp "$repository_dir/formal/dclutch-semantics/EmitRegisteredCreationTranslationCorpus.lean" \
     "$evidence_dir/lean_registered_creation_corpus_emitter.bin"
-  cp "$repository_dir/crates/dclutch-direct-codec/src/lib.rs" \
+  cp "$repository_dir/crates/dclutch-trading/src/lib.rs" \
     "$evidence_dir/rust_direct_codec.bin"
-  cp "$repository_dir/crates/dclutch-transition-vm/src/lib.rs" \
+  cp "$repository_dir/crates/dclutch-vm/src/lib.rs" \
     "$evidence_dir/rust_transition_vm.bin"
   cp "$repository_dir/crates/dclutch-direct-aot-contract/src/lib.rs" \
     "$evidence_dir/rust_direct_aot.bin"
@@ -102,9 +102,9 @@ printf 'lean_creation_corpus_emitter_sha256=%s\n' \
 printf 'lean_direct_corpus_emitter_sha256=%s\n' \
   "$(sha256_file "$repository_dir/formal/dclutch-semantics/EmitDirectTranslationCorpus.lean")"
 printf 'rust_codec_sha256=%s\n' \
-  "$(sha256_file "$repository_dir/crates/dclutch-direct-codec/src/lib.rs")"
+  "$(sha256_file "$repository_dir/crates/dclutch-trading/src/lib.rs")"
 printf 'rust_vm_sha256=%s\n' \
-  "$(sha256_file "$repository_dir/crates/dclutch-transition-vm/src/lib.rs")"
+  "$(sha256_file "$repository_dir/crates/dclutch-vm/src/lib.rs")"
 printf 'rust_direct_aot_sha256=%s\n' \
   "$(sha256_file "$repository_dir/crates/dclutch-direct-aot-contract/src/lib.rs")"
 printf 'rust_direct_aot_generated_sha256=%s\n' \

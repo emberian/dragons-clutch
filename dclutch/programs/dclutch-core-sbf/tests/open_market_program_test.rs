@@ -3,11 +3,11 @@
 use std::{env, fs, path::PathBuf, vec, vec::Vec};
 
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{
+use dclutch_custody::{
     CallerRoleV1, CompartmentV1, ContextV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1,
     CustodyReplayV1, CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     Action, CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase,
     Readiness, Request, StateBumpsV1,
 };
@@ -15,31 +15,31 @@ use dclutch_market_open_v1_operator::{
     REGISTRY_OPEN_MARKET_CONTINUATION_PREFIX_ACCOUNTS_V1, RegistryOpenMarketContinuationStateV1,
     build_registry_open_market_continuation_v1,
 };
-use dclutch_realm_contract::{
+use dclutch_market::realm::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
 };
-use dclutch_record_contract::{
+use dclutch_registry::record::{
     BeginRecordV1, CANONICAL_RECORD_DEPLOYMENT_PROFILE_V1, ContentDigest, RAW_RECORD_PDA_SEED_V1,
     RecordKeyV1, STAGING_CURSOR_BYTES_V1, STAGING_CURSOR_PDA_SEED_V1, SchemaReleaseId,
 };
-use dclutch_registry_contract::{
+use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
     ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
     initialize_activation_cache_v1,
 };
-use dclutch_release_set_contract::{
+use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
     ExecutionRoleV1, ProgramIdentityV1,
 };
-use dclutch_rent_contract::{
+use dclutch_market::rent::{
     RefundAuthority,
     lifecycle_v2::{
         LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
     },
 };
 use dclutch_resolution_core_v3_operator::{Finality, Observation, ObservedAccount};
-use dclutch_token_svm::{LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES};
+use dclutch_custody::token_svm::{LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES};
 use solana_account::Account;
 use solana_program::{
     clock::Clock,
@@ -502,7 +502,7 @@ fn custody_request(
         resulting_revision: 1,
         amount: 0,
         rent_lamports: Rent::default()
-            .minimum_balance(dclutch_custody_contract::CUSTODY_REPLAY_BYTES_V1),
+            .minimum_balance(dclutch_custody::CUSTODY_REPLAY_BYTES_V1),
     };
     if operation == OperationV1::OpenVault {
         request.operation = operation;
@@ -512,7 +512,7 @@ fn custody_request(
         request.token_program = LEGACY_TOKEN_PROGRAM_ID;
         request.expected_revision = 1;
         request.resulting_revision = 2;
-        request.rent_lamports = Rent::default().minimum_balance(dclutch_token_svm::ACCOUNT_BYTES);
+        request.rent_lamports = Rent::default().minimum_balance(dclutch_custody::token_svm::ACCOUNT_BYTES);
         request.destination = Pubkey::find_program_address(
             &CustodyVaultSeedsV1::from_request(request, false).as_slices(),
             &CUSTODY_PROGRAM_ID,
@@ -879,8 +879,8 @@ async fn real_core_opens_exact_registry_realm_custody_and_commits_last() {
     assert_eq!(
         payer_before.checked_sub(payer_after),
         Some(
-            Rent::default().minimum_balance(dclutch_custody_contract::CUSTODY_REPLAY_BYTES_V1)
-                + Rent::default().minimum_balance(dclutch_token_svm::ACCOUNT_BYTES)
+            Rent::default().minimum_balance(dclutch_custody::CUSTODY_REPLAY_BYTES_V1)
+                + Rent::default().minimum_balance(dclutch_custody::token_svm::ACCOUNT_BYTES)
         )
     );
 }

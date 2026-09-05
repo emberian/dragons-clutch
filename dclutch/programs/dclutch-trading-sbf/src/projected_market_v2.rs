@@ -7,11 +7,11 @@
 //! projected values are cross-checked against the authenticated Custody state
 //! and retained only for the duration of the instruction.
 
-use dclutch_custody_contract::{
+use dclutch_custody::{
     PROJECTED_CUSTODY_HOARD_OPEN_ADMISSIBLE_STATES_V1, ProjectedCustodyOperationV1,
     ProjectedCustodyRequestV1, ProjectedCustodyStateV2,
 };
-use dclutch_market_core_codec::{
+use dclutch_market::{
     Action, Identity, ProjectFoundReceiptV2, Request, SeriesCoreFoundAckV2, SeriesCoreRequestV1,
 };
 use solana_program::hash::hash;
@@ -391,7 +391,7 @@ mod tests {
     extern crate alloc;
 
     use alloc::vec;
-    use dclutch_custody_contract::{CompartmentV1, ProjectedCallerRoleV1, ProjectedCustodyPhaseV1};
+    use dclutch_custody::{CompartmentV1, ProjectedCallerRoleV1, ProjectedCustodyPhaseV1};
 
     use super::*;
 
@@ -474,7 +474,7 @@ mod tests {
 
     fn core_request() -> SeriesCoreRequestV1 {
         SeriesCoreRequestV1::occurrence(
-            dclutch_market_core_codec::SeriesCoreActionV1::Consume,
+            dclutch_market::SeriesCoreActionV1::Consume,
             identity_ack(id(30)).expect("release"),
             identity_ack(id(31)).expect("Template"),
             identity_ack(id(32)).expect("Ticket"),

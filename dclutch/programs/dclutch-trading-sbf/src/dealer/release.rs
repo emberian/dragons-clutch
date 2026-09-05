@@ -4,8 +4,8 @@
 //! junior equity occupies 1..=6, LP lifecycle 7..=8, and scenario exact-fill
 //! 9. The ProgramSet encoder owns that ordering and never admits legacy aliases.
 
-use dclutch_account_profile_contract::v2::AccountProfileV2;
-use dclutch_capability_program_contract::{
+use dclutch_vm::account_profile::v2::AccountProfileV2;
+use dclutch_market::capability_program::{
     set_v1::{
         CAPABILITY_PROGRAM_SET_ARTIFACT_PROFILE_V1, CAPABILITY_PROGRAM_SET_ENTRY_BYTES_V1,
         CAPABILITY_PROGRAM_SET_HEADER_BYTES_V1, CAPABILITY_PROGRAM_SET_MAGIC_V1,
@@ -14,11 +14,11 @@ use dclutch_capability_program_contract::{
     v3::{CAPABILITY_PROGRAM_V3_BYTES, CapabilityProgramV3},
 };
 use dclutch_core_contract::ContentId;
-use dclutch_dealer_codec::config_v4::DEALER_CONFIG_SCHEMA_PREIMAGE_V4;
-use dclutch_execution_strategy_contract::v2::{
+use dclutch_trading::dealer::config_v4::DEALER_CONFIG_SCHEMA_PREIMAGE_V4;
+use dclutch_market::execution_strategy::v2::{
     EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
-use dclutch_request_profile_contract::v3::REQUEST_PROFILE_V3_SCHEMA_RELEASE_ID;
+use dclutch_vm::request_profile::v3::REQUEST_PROFILE_V3_SCHEMA_RELEASE_ID;
 use solana_program::hash::hash;
 
 use super::{
@@ -41,16 +41,16 @@ extern crate alloc;
 use alloc::vec;
 
 #[cfg(not(target_os = "solana"))]
-use dclutch_account_profile_contract::{
+use dclutch_vm::account_profile::{
     lifecycle_v3::{Error as LifecycleErrorV3, StateLifecyclePolicyV4},
     v2::{AccountPrestateV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE},
 };
 #[cfg(not(target_os = "solana"))]
-use dclutch_effect_kernel::v3::ProgramV3 as EffectProgramV3;
+use dclutch_vm::effect::v3::ProgramV3 as EffectProgramV3;
 #[cfg(not(target_os = "solana"))]
-use dclutch_request_profile_contract::RequestProfileV1;
+use dclutch_vm::request_profile::RequestProfileV1;
 #[cfg(not(target_os = "solana"))]
-use dclutch_transition_vm::v3::ProgramV3 as TransitionProgramV3;
+use dclutch_vm::v3::ProgramV3 as TransitionProgramV3;
 
 #[cfg(not(target_os = "solana"))]
 use super::{
@@ -232,13 +232,13 @@ pub fn finalize_dealer_equity_descriptor_v3(
     let strategy = ExecutionStrategyProgramV2::decode(artifacts.execution_strategy)
         .map_err(|_| DealerReleaseErrorV3::Strategy)?;
     if strategy.disposition() != StrategyDispositionV2::AdmittedAot
-        || strategy.transition_schema().to_bytes() != dclutch_transition_vm::v3::SCHEMA_RELEASE_ID
+        || strategy.transition_schema().to_bytes() != dclutch_vm::v3::SCHEMA_RELEASE_ID
         || strategy.transition_program().to_bytes() != hash(artifacts.transition).to_bytes()
     {
         return Err(DealerReleaseErrorV3::Strategy);
     }
     let request_profile_schema = if artifacts.signed_position_count == 0 {
-        content_id(dclutch_request_profile_contract::SCHEMA_RELEASE_ID)?
+        content_id(dclutch_vm::request_profile::SCHEMA_RELEASE_ID)?
     } else {
         content_id(REQUEST_PROFILE_V3_SCHEMA_RELEASE_ID)?
     };
@@ -255,7 +255,7 @@ pub fn finalize_dealer_equity_descriptor_v3(
         content_id(hash(artifacts.request_profile).to_bytes())?,
         content_id(EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2)?,
         content_id(hash(artifacts.execution_strategy).to_bytes())?,
-        u32::try_from(dclutch_dealer_codec::root_tail::ROOT_TAIL_BYTES)
+        u32::try_from(dclutch_trading::dealer::root_tail::ROOT_TAIL_BYTES)
             .map_err(|_| DealerReleaseErrorV3::Geometry)?,
     )
     .map_err(|_| DealerReleaseErrorV3::Descriptor)?;
@@ -403,7 +403,7 @@ pub fn finalize_dealer_lp_descriptor_v3(
     let strategy = ExecutionStrategyProgramV2::decode(artifacts.execution_strategy)
         .map_err(|_| DealerReleaseErrorV3::Strategy)?;
     if strategy.disposition() != StrategyDispositionV2::AdmittedAot
-        || strategy.transition_schema().to_bytes() != dclutch_transition_vm::v3::SCHEMA_RELEASE_ID
+        || strategy.transition_schema().to_bytes() != dclutch_vm::v3::SCHEMA_RELEASE_ID
         || strategy.transition_program().to_bytes() != hash(artifacts.transition).to_bytes()
     {
         return Err(DealerReleaseErrorV3::Strategy);
@@ -417,11 +417,11 @@ pub fn finalize_dealer_lp_descriptor_v3(
         content_id(hash(artifacts.derivation_policy).to_bytes())?,
         content_id(hash(artifacts.capacity_profile).to_bytes())?,
         content_id(hash(artifacts.effect_program).to_bytes())?,
-        content_id(dclutch_request_profile_contract::SCHEMA_RELEASE_ID)?,
+        content_id(dclutch_vm::request_profile::SCHEMA_RELEASE_ID)?,
         content_id(hash(artifacts.request_profile).to_bytes())?,
         content_id(EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2)?,
         content_id(hash(artifacts.execution_strategy).to_bytes())?,
-        u32::try_from(dclutch_dealer_codec::root_tail::ROOT_TAIL_BYTES)
+        u32::try_from(dclutch_trading::dealer::root_tail::ROOT_TAIL_BYTES)
             .map_err(|_| DealerReleaseErrorV3::Geometry)?,
     )
     .map_err(|_| DealerReleaseErrorV3::Descriptor)?;
@@ -558,12 +558,12 @@ mod tests {
     use super::*;
     use alloc::vec::Vec;
 
-    use dclutch_execution_strategy_contract::v2::{
+    use dclutch_market::execution_strategy::v2::{
         ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
         EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
     };
 
-    use dclutch_account_profile_contract::lifecycle_v3::{
+    use dclutch_vm::account_profile::lifecycle_v3::{
         ACTION_PLAN_BYTES as LIFECYCLE_ACTION_PLAN_BYTES, HEADER_BYTES as LIFECYCLE_HEADER_BYTES,
         PROTECTED_OUTPUT_BYTES as LIFECYCLE_PROTECTED_OUTPUT_BYTES,
         RECIPE_BYTES as LIFECYCLE_RECIPE_BYTES, SEED_BYTES as LIFECYCLE_SEED_BYTES,
@@ -596,7 +596,7 @@ mod tests {
             id(6),
             id(EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2[0]),
             id(8),
-            u32::try_from(dclutch_dealer_codec::root_tail::ROOT_TAIL_BYTES).expect("root bytes"),
+            u32::try_from(dclutch_trading::dealer::root_tail::ROOT_TAIL_BYTES).expect("root bytes"),
         )
         .expect("descriptor")
         .encode()
@@ -605,7 +605,7 @@ mod tests {
     fn admitted_strategy(transition: &[u8]) -> Vec<u8> {
         ExecutionStrategyProgramV2::new(
             StrategyDispositionV2::AdmittedAot,
-            content_id(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID).expect("transition schema"),
+            content_id(dclutch_vm::v3::SCHEMA_RELEASE_ID).expect("transition schema"),
             content_id(hash(transition).to_bytes()).expect("transition program"),
             content_id(EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2).expect("certificate schema"),
             Some(id(0x71)),

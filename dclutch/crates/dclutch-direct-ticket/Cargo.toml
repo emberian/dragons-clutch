@@ -35,7 +35,7 @@ author = ["dep:solana-keypair", "dep:solana-signer"]
 # The signed message is owned here, emitted from
 # `formal/dclutch-semantics/EmitDirectIntentV2Rust.lean`. This crate calls
 # `CompactIntentV2::signed_preimage()` and lays out no byte of its own.
-dclutch-direct-codec = { path = "../dclutch-direct-codec" }
+dclutch-trading = { path = "../dclutch-trading" }
 
 # NOT `=` PINNED, and this is the one crate in the tree where that is correct.
 #
