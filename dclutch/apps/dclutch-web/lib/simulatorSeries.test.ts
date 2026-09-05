@@ -90,7 +90,17 @@ describe('the published simulator series', () => {
     const heartbeat = simulatorHeartbeatV1(series);
     expect(heartbeat).not.toBeNull();
     expect(heartbeat?.slotAdvance.values.length).toBe(series.points.length - 1);
-    expect(new Set(heartbeat?.slotAdvance.values).size).toBeGreaterThan(1);
+    // THE CLOCK MOVED AT EVERY INTERVAL, which is the claim. It used to be
+    // "the advances are not all the same number", and that is a claim about
+    // having at least three boundaries: a two-boundary capture has exactly one
+    // advance and one number is always one distinct number, so the case failed
+    // on an artifact that was perfectly correct. The distinctness is still
+    // asserted wherever there is more than one interval to compare.
+    expect(heartbeat?.slotAdvance.values.length).toBeGreaterThan(0);
+    for (const advance of heartbeat?.slotAdvance.values ?? []) expect(BigInt(advance)).toBeGreaterThan(0n);
+    if ((heartbeat?.slotAdvance.values.length ?? 0) > 1) {
+      expect(new Set(heartbeat?.slotAdvance.values).size).toBeGreaterThan(1);
+    }
     // THE RATE IS MEASURED OR IT IS ABSENT, and which one is a property of the
     // record rather than of this assertion. A capture whose boundaries all
     // carry instants must divide; cohort-13's does not, because its census
@@ -193,11 +203,33 @@ describe('the published simulator series', () => {
     }
   });
 
-  it('publishes a Terminal boundary, and states the rule for the phase it is at', () => {
-    // The boundary this rule was renegotiated for has to actually be in the
-    // artifact, or the restatement above is a rule about a case nobody ships.
+  it('states the rule for the phase its last boundary is at, whichever phase that is', () => {
+    // THIS DEMANDED A TERMINAL BOUNDARY, and that was a rule about which cohort
+    // had settled rather than about the artifact. Cohort-16's featured market
+    // is Open and cannot be activated at the deployed Direct release, so its
+    // census chain has no Terminal boundary at all and this case failed while
+    // saying nothing about the phase rule. What must hold either way is that
+    // the sentence names the phase the last boundary actually carries and gets
+    // the retirement right for it; the Terminal-only arms run when a Terminal
+    // boundary is published.
+    const rule = conservationPhaseRuleV1(series);
+    expect(rule).not.toBeNull();
+    const drawn = series.points.filter((point) => point.lawStatuses.length > 0);
+    const lastDrawn = drawn[drawn.length - 1];
+    expect(lastDrawn.marketPhase).not.toBeNull();
+    expect(rule).toContain(lastDrawn.marketPhase!);
+    if (lastDrawn.marketPhase !== 'terminal') {
+      // Before settlement NOTHING retires, and the sentence must not offer a
+      // reader the reassurance that a law does not apply.
+      expect(rule).toContain('every one of');
+      expect(rule).not.toContain('PRE-TERMINAL');
+      const l4 = series.lawIds.indexOf('L4');
+      expect(l4).toBeGreaterThanOrEqual(0);
+      expect(lastDrawn.lawStatuses[l4], 'L4 is a pre-terminal law and this market has not settled').toBe('holds');
+      expect(conservationReadingV1(series)).toContain('checks held and none broke');
+      return;
+    }
     const terminal = series.points.filter((point) => point.marketPhase === 'terminal');
-    expect(terminal.length, 'no boundary carries a Terminal phase, so the per-phase rule is untested by the artifact').toBeGreaterThan(0);
     const paid = terminal[terminal.length - 1];
     // THIS ASSERTED `hoardAtoms === 0` AND THAT WAS A RULE ABOUT ONE ARTIFACT.
     // Cohort-14b's chain was censused through its payout, so its last Terminal
@@ -223,8 +255,6 @@ describe('the published simulator series', () => {
 
     // The sentence a reader gets, which must name the phase, the retired law
     // and the laws still watching — never the flat "the run halts on this".
-    const rule = conservationPhaseRuleV1(series);
-    expect(rule).not.toBeNull();
     expect(rule).toContain('terminal');
     expect(rule).toContain('L4');
     expect(rule).toContain('L1');

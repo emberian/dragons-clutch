@@ -3,6 +3,8 @@
 //
 //   node scripts/simulator-series.mjs [--work <dir>] [--census <file>] \
 //                                      [--points <n>] [--check]
+//   node scripts/simulator-series.mjs --no-status --census <file> \
+//                                      --cluster devnet --market <address>
 //
 // `--census` NAMES THE OBSERVATION ARRAY INSTEAD OF FINDING IT. The default is
 // the newest `<work>/census/cycle-NNN.json`, which is right for a poller that
@@ -88,21 +90,32 @@ const DEFAULT_POINTS = 240;
 
 function usage(message) {
   console.error(`simulator-series: ${message}`);
-  console.error('usage: node scripts/simulator-series.mjs [--work <dir>] [--points <n>] [--check]');
+  console.error('usage: node scripts/simulator-series.mjs [--work <dir>] [--census <file>] [--points <n>] [--check]');
+  console.error('       node scripts/simulator-series.mjs --no-status --census <file> --cluster devnet --market <address> [--points <n>] [--check]');
   process.exit(2);
 }
 
 function args(argv) {
-  const out = { work: DEFAULT_WORK, census: null, points: DEFAULT_POINTS, check: false };
+  const out = { work: DEFAULT_WORK, census: null, points: DEFAULT_POINTS, check: false, noStatus: false, cluster: null, market: null };
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
     if (flag === '--check') out.check = true;
+    else if (flag === '--no-status') out.noStatus = true;
     else if (flag === '--work') out.work = argv[i += 1] ?? usage('--work needs a directory');
     else if (flag === '--census') out.census = argv[i += 1] ?? usage('--census needs a file');
+    else if (flag === '--cluster') out.cluster = argv[i += 1] ?? usage('--cluster needs local or devnet');
+    else if (flag === '--market') out.market = argv[i += 1] ?? usage('--market needs an address');
     else if (flag === '--points') out.points = Number(argv[i += 1]);
     else usage(`unknown argument ${flag}`);
   }
   if (!Number.isSafeInteger(out.points) || out.points < 1) usage('--points needs a positive whole number');
+  if (out.noStatus) {
+    if (out.census === null) usage('--no-status needs --census: with no status artifact there is no work directory to find a census in');
+    if (out.cluster !== 'local' && out.cluster !== 'devnet') usage('--no-status needs --cluster local|devnet, which the status artifact would otherwise have said');
+    if (out.market === null) usage('--no-status needs --market: a census observation does not record which Market it was bound to');
+  } else if (out.cluster !== null || out.market !== null) {
+    usage('--cluster and --market are for --no-status only; a status artifact is the author of both');
+  }
   return out;
 }
 
@@ -159,13 +172,29 @@ function journalInstants(workDir) {
 }
 
 function main() {
-  const { work, census, points: keep, check } = args(process.argv.slice(2));
+  const { work, census, points: keep, check, noStatus, cluster: clusterFlag, market: marketFlag } = args(process.argv.slice(2));
 
+  /**
+   * A CENSUS CHAIN NOBODY POLLED HAS NO STATUS, and pretending otherwise is how
+   * /pulse published a dead market.
+   *
+   * `--census` already admits that the observation array may come from
+   * `ledger-census` run at boundaries no poller drove. The status requirement
+   * was the half of that admission nobody finished: with no simulator there is
+   * no `status.json`, and the nearest one belongs to a run against a DIFFERENT
+   * cohort's market. Copying it through would have put a closed cohort's
+   * address in `series.market` and a halted run's heartbeat on the page.
+   *
+   * So `--no-status` writes the series ALONE and takes the two fields the
+   * status supplied as arguments. The third, `mode`, is not an argument: a
+   * census chain is `finite` by construction — it has exactly the boundaries
+   * somebody took — and there is no run to keep going.
+   */
   const statusPath = path.join(work, 'status.json');
-  if (!fs.existsSync(statusPath)) throw new Error(`no status artifact at ${statusPath}`);
-  const statusBytes = fs.readFileSync(statusPath);
-  const status = JSON.parse(statusBytes.toString('utf8'));
-  if (status.schema !== STATUS_SCHEMA) throw new Error(`status artifact has another schema: ${status.schema}`);
+  if (!noStatus && !fs.existsSync(statusPath)) throw new Error(`no status artifact at ${statusPath}`);
+  const statusBytes = noStatus ? null : fs.readFileSync(statusPath);
+  const status = noStatus ? null : JSON.parse(statusBytes.toString('utf8'));
+  if (status !== null && status.schema !== STATUS_SCHEMA) throw new Error(`status artifact has another schema: ${status.schema}`);
 
   // A named census must still be a census: the flag chooses which file, never
   // what shape it has to be, and the array check below is the same one.
@@ -175,7 +204,7 @@ function main() {
   if (!Array.isArray(observations) || observations.length === 0) {
     throw new Error(`${censusPath} is not a non-empty observation array`);
   }
-  const instants = journalInstants(work);
+  const instants = noStatus ? new Map() : journalInstants(work);
 
   // The law names come from the NEWEST observation and every other cycle is
   // held to them. A cycle that recorded a different set is a cycle whose
@@ -259,7 +288,7 @@ function main() {
   // The run's own count of itself, when it is at least what the census still
   // holds. A windowed census can only ever UNDERSTATE how many cycles ran, so
   // the larger of the two is the honest number and never an invented one.
-  const cyclesRun = typeof status.cycles?.run === 'number' && Number.isSafeInteger(status.cycles.run)
+  const cyclesRun = typeof status?.cycles?.run === 'number' && Number.isSafeInteger(status.cycles.run)
     ? Math.max(status.cycles.run, all.length)
     : all.length;
 
@@ -349,9 +378,9 @@ function main() {
     })),
     positions,
     collateral_holders: collateralHolders,
-    cluster: status.cluster?.label ?? null,
-    market: status.market?.address ?? null,
-    mode: status.mode,
+    cluster: noStatus ? clusterFlag : status.cluster?.label ?? null,
+    market: noStatus ? marketFlag : status.market?.address ?? null,
+    mode: noStatus ? 'finite' : status.mode,
     outcome_count: outcomeCount,
     cycles_recorded: cyclesRun,
     points_omitted_before: omittedBefore,
@@ -364,7 +393,10 @@ function main() {
     // The status artifact is copied through UNCHANGED. It already redacts its
     // own endpoint credential (tools/load-simulator/simcore.py redact_endpoint),
     // and a copy that edits it would be a second author of someone else's file.
-    { file: path.join(APP, 'public', 'simulator-status.json'), body: statusBytes.toString('utf8') },
+    // Under `--no-status` there is no such file to be the second author of, and
+    // this producer does not write one: an absent status is what /pulse renders
+    // as "nothing is running", which is the true answer when nothing is.
+    ...(noStatus ? [] : [{ file: path.join(APP, 'public', 'simulator-status.json'), body: statusBytes.toString('utf8') }]),
   ];
 
   // Defense in depth. publish.sh refuses a subtree carrying the live endpoint
@@ -413,7 +445,7 @@ function main() {
   const first = kept[0];
   const last = kept[kept.length - 1];
   console.log(`simulator-series: ${kept.length} of ${cyclesRun} boundaries kept, ${first.stage ?? `cycle ${first.cycle}`} to ${last.stage ?? `cycle ${last.cycle}`}`);
-  console.log(`simulator-series: slot ${first.slot} to ${last.slot}, ${outcomeCount} outcomes, ${status.trades?.landed ?? '?'} trades landed`);
+  console.log(`simulator-series: slot ${first.slot} to ${last.slot}, ${outcomeCount} outcomes, ${status === null ? 'no status artifact, so no trade count' : `${status.trades?.landed ?? '?'} trades landed`}`);
   const moved = ['slot', 'hoard_atoms', 'tracked_collateral', 'mint_supply', 'payer_lamports']
     .filter((field) => new Set(kept.map((point) => point[field])).size > 1);
   console.log(`simulator-series: fields that actually move across these cycles: ${moved.join(', ') || 'none but the supply vector, if that'}`);

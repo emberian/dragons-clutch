@@ -393,6 +393,22 @@ describe('outageDisclosureV1', () => {
     expect(disclosure!.refundsOnFailure).toBeNull();
     expect(disclosure!.payee).toContain(founder);
     expect(disclosure!.payee).toContain('has not read this market\u2019s payout scale');
+    // AND THE HEADLINE MUST NOT ANSWER WHAT THE PAYEE SENTENCE JUST SAID IT
+    // COULD NOT. Caught on the live cohort-16 market page: `payee` said the
+    // scale had not been read and the headline directly above it asserted the
+    // legacy outcome as fact -- on a market founded to refund. The unread
+    // headline names both answers and commits to neither.
+    expect(disclosure!.headline).toContain('has not read it');
+    expect(disclosure!.headline).toContain('legacy scale');
+    expect(disclosure!.headline).toContain('refunding scale');
+    const decided = outageDisclosureV1({
+      ...cohort13,
+      failureEscrowOwner: witnessEscrow,
+      positions: [{ owner: founder, balances: ['499999800', '500000000', '500000000', '500000000'] }],
+      refundsOnFailure: false,
+    });
+    expect(decided!.headline).toContain('the whole collateral is paid to whoever holds that claim');
+    expect(decided!.headline).not.toContain('has not read it');
   });
 
   it('reports a partly seated escrow as the partial fact it is', () => {

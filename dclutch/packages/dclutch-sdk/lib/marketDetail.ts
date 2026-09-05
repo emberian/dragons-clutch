@@ -357,9 +357,19 @@ export function outageDisclosureV1(
     escrowSeated,
     refundsOnFailure,
     columnNote,
+    // THREE ARMS, LIKE `payee`, AND IT USED TO HAVE TWO. `refundsOnFailure` is
+    // `null` when the caller has not read this market's payout scale, and the
+    // two-armed version answered a null by stating the LEGACY outcome as fact:
+    // a reader of a refunding market was told, in the page's own derived voice
+    // and directly beside a `payee` sentence saying the scale had not been
+    // read, that the whole collateral goes to whoever holds the failure claim.
+    // That is the one sentence on this page a buyer cannot afford to have
+    // wrong, and an unread fact must read as unread.
     headline: refundsOnFailure === true
       ? `If the data source never reports, this market settles on outcome ${failureOutcome} \u2014 its failure outcome \u2014 and HOLDERS ARE REFUNDED: the collateral goes back to whoever holds an ordinary outcome, whichever of them would have been right. The failure claim is paid nothing.`
-      : `If the data source never reports, this market settles on outcome ${failureOutcome} \u2014 its failure outcome \u2014 and the whole collateral is paid to whoever holds that claim. Everyone holding one of the other outcomes is paid nothing, whichever of them would have been right.`,
+      : refundsOnFailure === false
+        ? `If the data source never reports, this market settles on outcome ${failureOutcome} \u2014 its failure outcome \u2014 and the whole collateral is paid to whoever holds that claim. Everyone holding one of the other outcomes is paid nothing, whichever of them would have been right.`
+        : `If the data source never reports, this market settles on outcome ${failureOutcome} \u2014 its failure outcome. WHO THAT PAYS DEPENDS ON THIS MARKET'S PAYOUT SCALE, and this page has not read it: at the legacy scale the whole collateral goes to whoever holds the failure claim, and at the refunding scale the failure claim is paid nothing and the collateral goes back to the ordinary holders. Read the market's own basis record before trading on either answer.`,
     payee,
   });
 }

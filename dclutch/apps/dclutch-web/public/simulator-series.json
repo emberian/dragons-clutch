@@ -1,6 +1,6 @@
 {
   "schema": "dclutch-simulator-series-v2",
-  "captured_at": "2026-09-04T09:14:58+00:00",
+  "captured_at": "2026-09-05T19:54:27+00:00",
   "law_ids": [
     "L1",
     "L2",
@@ -15,27 +15,27 @@
     {
       "id": "L1",
       "status": "holds",
-      "detail": "tracked 1000000000 atoms across 3 accounts == Mint supply 1000000000"
+      "detail": "tracked 1000000002 atoms across 4 accounts == Mint supply 1000000002"
     },
     {
       "id": "L2",
       "status": "holds",
-      "detail": "the Hoard moved 0 atoms since `cohort15b-pre-settle`, exactly as declared; it holds 500000000"
+      "detail": "the Hoard moved 0 atoms since `cohort16-founded`, exactly as declared; it holds 500000001"
     },
     {
       "id": "L3",
       "status": "holds",
-      "detail": "3 Positions sum to the aggregate supply vector [500000000, 500000000, 500000000, 500000000]"
+      "detail": "2 Positions sum to the aggregate supply vector [166666667, 166666667, 166666667, 166666667]"
     },
     {
       "id": "L4",
-      "status": "inapplicable",
-      "detail": "the Market is terminal: settlement DISCHARGED the liability this law is stated about, so `Hoard 500000000 >= worst outcome 500000000 x unit 1` is a question about a Market that still owes and this one does not. L4 is a PRE-TERMINAL invariant and retires by name here rather than reading VIOLATED against a protocol that did exactly what it should. L1, L3 and L7 go on watching this boundary unweakened."
+      "status": "holds",
+      "detail": "Hoard 500000001 >= worst outcome 166666667 x unit 1 = 166666667"
     },
     {
       "id": "L5",
       "status": "holds",
-      "detail": "tracked collateral moved 0 atoms since `cohort15b-pre-settle`, exactly as declared"
+      "detail": "tracked collateral moved 0 atoms since `cohort16-founded`, exactly as declared"
     },
     {
       "id": "L6",
@@ -44,100 +44,93 @@
     },
     {
       "id": "L8",
-      "status": "inapplicable",
-      "detail": "external census: the transactions between boundaries were not driven by this ledger, and it refuses to guess which compartments they crossed. A caller that drove them states them with --declared-class-delta LABEL=ATOMS, after which every unnamed class is a declaration of zero."
+      "status": "holds",
+      "detail": "every compartment moved exactly as declared since `cohort16-founded`: unclassified +0"
     },
     {
       "id": "L7",
-      "status": "inapplicable",
-      "detail": "this boundary admitted 1 account(s) the previous census did not watch (settle_receipt), so their balances have no predecessor to difference against; L7 resumes at the next boundary"
+      "status": "holds",
+      "detail": "the payer moved 0 lamports since `cohort16-founded`, its transactions paid 0 in fees, watched accounts gained 0, and 0 went to nothing unwatched; debit == credit + fee"
     }
   ],
   "positions": [
     {
       "label": "founder",
-      "address": "5pEh7Poj98oTzDXC9vcXnFSqi82TkJsWwtbqEFcpuheL",
-      "lamports": "1823904",
+      "address": "FKmP4E8LSHy45RJRx2b6GBBPuuS5u1tzHR34414VZpXY",
+      "lamports": "1463040",
       "claims": [
-        "500000000",
-        "500000000",
-        "500000000",
-        "500000000"
-      ],
-      "total_claims": "2000000000"
-    },
-    {
-      "label": "participant-1",
-      "address": "NKdAYFXgMi4PquGMwiZJWb2wgCTuYmimWs517GpkJDm",
-      "lamports": "1823904",
-      "claims": [
-        "0",
-        "0",
-        "0",
+        "166666667",
+        "166666667",
+        "166666667",
         "0"
       ],
-      "total_claims": "0"
+      "total_claims": "500000001"
     },
     {
-      "label": "participant-2",
-      "address": "C2qSFaZb1qRRGueEtmHdBscuBCyPLfuKkF1NBoCCx72G",
-      "lamports": "1823904",
+      "label": "failure-escrow",
+      "address": "Dg4G5PGCra8Uwmwj5kKkXcHDDeYoViiMG5vpkE57RVBq",
+      "lamports": "1463040",
       "claims": [
         "0",
         "0",
         "0",
-        "0"
+        "166666667"
       ],
-      "total_claims": "0"
+      "total_claims": "166666667"
     }
   ],
   "collateral_holders": [
     {
+      "label": "collateral-wallet",
+      "address": "7k8fCWKVereJX2kCPRQvcQy4HbCZyULswUfSSb8kwKPB",
+      "atoms": "500000001"
+    },
+    {
       "label": "hoard",
-      "address": "B8dmPQGkqoFsgXmCpRTY3LxqVyARvJaBJxt2LAf2FWbj",
-      "atoms": "500000000"
+      "address": "5RNTt1Fsd813PPqUZNEUvMZ55bDte4zwRRunvQ1d8HLD",
+      "atoms": "500000001"
     },
     {
-      "label": "founder_collateral_wallet",
-      "address": "2388f4ha6J1da74z53LbVJH1haWqV2SQrpK7s3cZmL6g",
-      "atoms": "499999799"
+      "label": "source-funder",
+      "address": "Cq9rk9T1pUs5TLXKxC4kB9fXx36nXghnu3z4kyGnjB2i",
+      "atoms": "0"
     },
     {
-      "label": "buyer_delegated_collateral",
-      "address": "HkZpRaZEtvRw7UqxZFVxXhfja6wM8UHfhMr7NWz5uM1k",
-      "atoms": "201"
+      "label": "source-vault",
+      "address": "61akeWCRFSSKTFtFKSyr2n7z2iit2wsgaKWVykXbND6B",
+      "atoms": "0"
     }
   ],
   "cluster": "devnet",
-  "market": "3QytL1bBMtCvRoXWR5h7MgutRBZqtv7emUVubEo5a4T2",
+  "market": "GyD95eyERwRfwj8fSFNhWjKF2eaDg5XcREidPKex65zY",
   "mode": "finite",
   "outcome_count": 4,
-  "cycles_recorded": 4,
+  "cycles_recorded": 2,
   "points_omitted_before": 0,
-  "census_file": "cohort15b-post-settle-complete.json",
+  "census_file": "cohort16-founded-observed.json",
   "points": [
     {
       "law_statuses": "hihhiiii",
-      "stage": "cohort15-pre-capture",
-      "slot": "492768388",
+      "stage": "cohort16-founded",
+      "slot": "493701192",
       "recorded_at": null,
       "supply": [
-        "500000000",
-        "500000000",
-        "500000000",
-        "500000000"
+        "166666667",
+        "166666667",
+        "166666667",
+        "166666667"
       ],
       "position_totals": [
-        "500000000",
-        "500000000",
-        "500000000",
-        "500000000"
+        "166666667",
+        "166666667",
+        "166666667",
+        "166666667"
       ],
       "market_phase": "open",
-      "hoard_atoms": "500000000",
-      "tracked_collateral": "1000000000",
-      "mint_supply": "1000000000",
-      "payer_lamports": "1586688452",
+      "hoard_atoms": "500000001",
+      "tracked_collateral": "1000000002",
+      "mint_supply": "1000000002",
+      "payer_lamports": "1522431062",
       "checks_held": 3,
       "checks_broken": 0,
       "checks_inapplicable": 5,
@@ -145,84 +138,30 @@
     },
     {
       "law_statuses": "hhhhhhhh",
-      "stage": "cohort15-post-capture-complete",
-      "slot": "492775918",
+      "stage": "cohort16-founded-observed",
+      "slot": "493701374",
       "recorded_at": null,
       "supply": [
-        "500000000",
-        "500000000",
-        "500000000",
-        "500000000"
+        "166666667",
+        "166666667",
+        "166666667",
+        "166666667"
       ],
       "position_totals": [
-        "500000000",
-        "500000000",
-        "500000000",
-        "500000000"
+        "166666667",
+        "166666667",
+        "166666667",
+        "166666667"
       ],
       "market_phase": "open",
-      "hoard_atoms": "500000000",
-      "tracked_collateral": "1000000000",
-      "mint_supply": "1000000000",
-      "payer_lamports": "1580128460",
+      "hoard_atoms": "500000001",
+      "tracked_collateral": "1000000002",
+      "mint_supply": "1000000002",
+      "payer_lamports": "1522431062",
       "checks_held": 8,
       "checks_broken": 0,
       "checks_inapplicable": 0,
       "cycle": 2
-    },
-    {
-      "law_statuses": "hhhhhhii",
-      "stage": "cohort15b-pre-settle",
-      "slot": "492817320",
-      "recorded_at": null,
-      "supply": [
-        "500000000",
-        "500000000",
-        "500000000",
-        "500000000"
-      ],
-      "position_totals": [
-        "500000000",
-        "500000000",
-        "500000000",
-        "500000000"
-      ],
-      "market_phase": "open",
-      "hoard_atoms": "500000000",
-      "tracked_collateral": "1000000000",
-      "mint_supply": "1000000000",
-      "payer_lamports": "628283565",
-      "checks_held": 6,
-      "checks_broken": 0,
-      "checks_inapplicable": 2,
-      "cycle": 3
-    },
-    {
-      "law_statuses": "hhhihhii",
-      "stage": "cohort15b-post-settle-complete",
-      "slot": "492830342",
-      "recorded_at": null,
-      "supply": [
-        "500000000",
-        "500000000",
-        "500000000",
-        "500000000"
-      ],
-      "position_totals": [
-        "500000000",
-        "500000000",
-        "500000000",
-        "500000000"
-      ],
-      "market_phase": "terminal",
-      "hoard_atoms": "500000000",
-      "tracked_collateral": "1000000000",
-      "mint_supply": "1000000000",
-      "payer_lamports": "624384429",
-      "checks_held": 5,
-      "checks_broken": 0,
-      "checks_inapplicable": 3,
-      "cycle": 4
     }
   ]
 }
