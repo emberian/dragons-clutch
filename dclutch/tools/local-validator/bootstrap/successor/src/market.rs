@@ -6172,6 +6172,26 @@ fn lower_hex_v1(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+/// Whether the SELECTED ledger comes first in a two-ledger funding slice.
+///
+/// `validate_funding_ledger_masks_v2` orders ledger masks by their lowest
+/// selected entry index, and the two masks a founded market carries are the
+/// selected bit `1 << entry_index` and its complement. So the selected ledger
+/// leads exactly when the selected entry is index zero, and the Resolution
+/// complement leads otherwise.
+///
+/// THIS IS DERIVED BECAUSE THE REAL MARKETS DISAGREE WITH THE FIXTURES. The
+/// entry's position is kind-digest order over the four capability kinds, and
+/// the devnet Direct market's own manifest puts the selected entry at index
+/// ZERO with the Resolution complement `0b1110` -- which is the shape
+/// `DCLTPCB2` authenticates on every founding and the shape
+/// `dclutch-resolution-core-v3-operator` builds its `(1, 3, 0b1110)` header
+/// for. A frame that hard-coded the Resolution ledger first would be right
+/// only for a market nobody has founded.
+pub(crate) const fn selected_funding_ledger_leads_v1(entry_index: u16) -> bool {
+    entry_index == 0
+}
+
 pub(crate) fn manifest_required_union_v1(entry_count: u16) -> Result<u16> {
     if entry_count == 0 || entry_count > u16::BITS as u16 {
         return Err(Error::new(
@@ -18178,6 +18198,50 @@ mod tests {
     }
 
     #[test]
+    /// The funding slice's order is the founded market's, not a fixture's.
+    ///
+    /// Cohort-16's Direct market, founded on devnet 2026-09-05, records
+    /// `direct_selected_manifest_entry_index: 0`, and its two `FundingLedgerV2`
+    /// accounts read back `selected_mask` `0x0001` (Trading, at
+    /// `GJwPzPdz5ppCD8sz3ymaZvcabsmeBSKNy5f7GFX2mqeh`) and `0x000e`
+    /// (Resolution, at `DtvxF2xgFvnNuCgn7uDuKcErWfVHvJatvusm9ZDRShrd`). Ordered
+    /// by lowest selected index that is Trading FIRST -- the opposite of the
+    /// `0b0111`/`0b1000` pair `terminal_retirement_v1.rs` names, which is a
+    /// four-entry fixture in which the selected entry sorts last. The manifest
+    /// position is kind-digest order, so neither is wrong in general and a
+    /// hard-coded order is wrong for one of them.
+    #[test]
+    fn the_funding_slice_order_is_derived_from_the_selected_entry_index() {
+        use dclutch_market::capability_manifest::validate_funding_ledger_masks_v2;
+
+        for entry_index in 0..4_u16 {
+            let union = manifest_required_union_v1(4).expect("union");
+            let selected = 1_u16 << entry_index;
+            let dependency = union ^ selected;
+            let ordered = if selected_funding_ledger_leads_v1(entry_index) {
+                [selected, dependency]
+            } else {
+                [dependency, selected]
+            };
+            validate_funding_ledger_masks_v2(4, union, &ordered).unwrap_or_else(|error| {
+                panic!("entry {entry_index} ordered {ordered:?}: {error:?}")
+            });
+            // The other order is refused, which is what makes this a choice.
+            let reversed = [ordered[1], ordered[0]];
+            assert!(
+                validate_funding_ledger_masks_v2(4, union, &reversed).is_err(),
+                "entry {entry_index} accepted the reversed slice {reversed:?}"
+            );
+        }
+
+        // The founded market's own numbers.
+        assert!(selected_funding_ledger_leads_v1(0));
+        assert_eq!(
+            manifest_required_union_v1(4).expect("union") ^ 0x0001,
+            0x000e
+        );
+    }
+
     /// THE PIN AND THE CENSUS ARE ONE NUMBER, and this is what says so.
     ///
     /// `FoundingSubmissionOperationV1::exact_unique_accounts` carried its own

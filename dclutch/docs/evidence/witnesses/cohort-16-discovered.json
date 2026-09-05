@@ -1,0 +1,2670 @@
+{
+  "schema": "dclutch-devnet-route-witness-v1",
+  "cohort": "16",
+  "cluster": "devnet",
+  "note": "Built by tools/gauntlet/devnet-witness/tools/gate witness --discover from the signatures in campaign-open.json, log-08-administration-execute.txt, log-15-found-direct-1-cohort16b.txt, then corroborated against devnet. No route claim in this file was authored: each comes from the eight bytes the chain shows the transaction sent, resolved against the census route that dispatches on them, and kept only when the route's program is the program the instruction was sent to. Where those eight bytes name a request FAMILY rather than one route, the `action` field records the byte the decoder itself reads to pick the arm -- its offset constant, its tag and the variant that tag names -- and `--check` re-reads that byte from the chain. Every `slot`, `compute_units`, `programs_invoked`, `routes_corroborated` and `not_corroborated` field is written by the tool from the chain's own reply. WHAT THIS DOES NOT SAY: a devnet witness corroborates the PROGRAM, the OUTER MAGIC and any wire discriminant the dispatch selects on. It does not corroborate which internal branch a program took below that, and it is not a proof about every input -- the same boundary `dclutch-route-census observe` draws for the localhost campaigns.",
+  "evidence_documents": [
+    "/Users/ember/jobs/dclutch-cohort16-20260905/market/campaign-open.json",
+    "/Users/ember/jobs/dclutch-cohort16-20260905/logs/log-08-administration-execute.txt",
+    "/Users/ember/jobs/dclutch-cohort16-20260905/logs/log-15-found-direct-1-cohort16b.txt"
+  ],
+  "programs": {
+    "registry": "6gRRiB9BtQFN6AquyLXXjuiX1GYN2xyW8nqCTc3xJzkV",
+    "rent": "42xN9ULoMpULmeDbdGCtyAo82FRJved6sojUun6NSKdt",
+    "custody": "8UkoNCPD4JuWBiHWdc7WaM3j7Fj9jbf8Fe926Q1CDceo",
+    "resolution": "jrjXw2Rph15VyJB3ztbRgoHUPJrcvMSHV6svRUYtUw3",
+    "claims": "8JfHfBBGaoUP1yV6VzXcvWwhQSZNV8eQmDAiYmCpNQJk",
+    "trading": "ESQhDyV7obS4oNp7abjn7sSYChxtGrHru4TzvPuybJi3",
+    "core": "4wv7JxoAad6JMQi2vHJyByLXasWS8RzJSTdvEEmpCjpe",
+    "accelerator": "6v1c2Go2h1rxkTN2EmzC5xGC35MTbaHPCHrKF6kTvg4y"
+  },
+  "skipped": [
+    {
+      "signature": "8SuzU16k6KA87Baxk5uaoLePaXoEpiTkoarxFhFZ7QMKfzEDs5Y3pTwMBh5APcnFEH9AEpz9PWFb12EtWt65e2H",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "3eKLyYhqrUiFNfAk6MvoCpEYyjNFiHE7mNZCGWygdmsegx8D6p8xgZFg1SRmrw48UceGNifZak5NnJopTRBnRxGQ",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "2JY9CsTHw2qSBq1GyebTougWA8mmsaDTP5NKa9foLXgpCEh1SwAix5STz13gTiBSw8ynQ3xMB7JSvY6jTZSK1kn5",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "5m4yWjczMcxoybayMqDbNsJ6AcxqkJPRZ9wYtSA98dpTUSS5fTizzp1D5a8dCRnVyMC8KRn2EWs6iDGdx4aaFu83",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "3junQ1DwDvuQnZLDMs9NJp2bqoM4XvF2eRqqNFBB7vjSQr4zgovHo8df6ECASLXpWB6cUWsCLuzeqnVras4EcFq9",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "4Mn2c1yU2vgXUjhLmj1wPXnVSNzmbLyJdNTsU2ofgcPjfi46qdwXwVJ6urbhK6aFj9PDnfM4vxMBeNsW1JrG5uFN",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "XYLjYU5aWTVgNPvmcwsuPprWrVYvBWYkewxir3bwMG1jAgoQqXhnkpZCszGBx17188B8Fq9TSZm6ZJY9eJVCP82",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "UrqSkiE7QhS1K2U4fYfGthjqUxbzfvPmbDEB3kJo7PhH4o7tRmvPRsoduLoxfnd4Ph1WU5uL1XfyTrxGUwxH9E7",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "2NAxpXXMEFo9DkomtKHieW2UmvQ1DFGsrUCBVtjLNyt5jo4HGeegDZb27Kvs8vW6c6UHcANzxtWPW5r1qdkr9Lmx",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "xDd1zZ4ZFvDwKVb2Ly9yNDBbReZoiio3aVrmdGtzKiB7v7TBzKLhEE6hZxgXugyCN4yY4SFj2BF33YJfKZ7z3uu",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "4J75Y6DcmHk98yQV3bYrfqq5Hr3W6xaHP4HBXpF1H42Xjn1sFXZHQkYFUDoqrWRt7dXcSwqBamAWjaZ8UrmkR5DN",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "1268qvivBynsn5KvHMkjivsetyJuGYKkVkYQZXXmQMTC4fw7BYxAffgqJZB3RnJuppephuUuok8m7DH7hNEHQm9F",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "4voBJdjs78WaNtN3v8A7p1FXEcN2uLJCfzNZfLQG2YWtENb9CqRZsn1tAbUYUmJimSXdBqUaQGNdKsBx3WUspYPQ",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "1PG8QLyinsjWpTpDS2LHo4hvRnCK7KBcSsaTtfy1aXFG4vYq9VaEjed9x9yfktuMDwCMN6UDaxdAouWQV886hUz",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "4riif7cdXDjmBZKrWcdv1X94ojQQ8qrXoGp3NRFwspeAJpMNvZVqX7kPN51uyMrWUKCJsa6rhmxh3vihXSg4QALH",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "2LR7rpetKGhjQnm7FWfmhk6DPziiDbaPqwjGwHRGUYoMixVgtrWxCoDcXSjga7ujYGj4A2BkCPB4bWj892sFzTzn",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "4W8QKjTPE5UQGo5KABQpQVenaspAYxA2LsMhNWyGpRFy6DARSQAoa6QLVsqNmK7cKmtUWvAFsUZ4QEUDh91gbWYp",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "QbAF6L3sMcsL6agzmB5kQz3Ek4WJkUyqhTVrbqgJMsWVaeECCXnkGyiwXyWfMBtdVDHZG1ByzhV8z1k7QWSes4N",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "41hMqNQQ32Pi95inmeyoVQqLu4F4vJjKHa2MGQRNu15MasaoVt17DZbrWziggT4X3L3sXPgP5hTtLQaJyyxVT56h",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "4XxBWn9t11N5DLqPEsLf7P5WJm15wUYbZQcy4MczVk5avUJxtFNMTEcN3NHieLRvbQDEhQDvRy7aPJzPwWWMXdMU",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "DwhAfcstvnBjGGBjQhrhBbZxZtqSoPk7RvqJ9Lx2ftXkPEEJV7XowqREGea6WVPyiDWubhpvMHo9nN5t1yytv3n",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "3JqynUfedYXQ1vuyponMyQDc3ww6HZVWNH7en959VtbgLdWsMHPMkVdK4npQs3Hhskac85PGPbZvCR82ZfZtdQiu",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "4JZBnftmUcMidepB9KjM9fMQNQZ97YxCXwF5Aua8K5BqK9bMrxMWPZhEsXGXkCSS1XqvYiuzLBCqad3awRGgZyV1",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "2unUDE2vqtbRP7JEcmbeG2Acz9QT36u44SBhTZ2eY8SdAC6QPR8FTJQxLr31VkbxgJER7sQJuYvbnTTrexrePqtY",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "44FF7UTroPTNu5SAw69TnK5XotZWLo7JCao8tgF32vp96NfFJ9wNE5evNnipQCwqwfpEu5RqQhx4nZVVYZGYk693",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "38g5HcC4rsPwz4LZDSJTDsxSf81RuTkGt6RE7PDgrHKBFvEbLwsv5SpCaMzB6RKWqtq218VNVtpjw17C5ZD55kjM",
+      "reason": "finalized, but no top-level instruction goes to a program in this cohort's map with an eight-byte ASCII magic"
+    },
+    {
+      "signature": "4E8XR31S4LiFKh2vVcQxGK9gDF2rtMbkujg65vu9Gi8zkduh1y46WiyFKCKnPwpdPHKYi1QdswTXN6zkgXQus3Fh",
+      "reason": "DCLTIIN1 to core resolves to no core route (0 route(s) elsewhere)"
+    }
+  ],
+  "records": [
+    {
+      "stage": "dcltrix1-493676977",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "5BTNhUm3xVyAd6uqKSjJFVFkKq9m6tvyMHnzJBZEUTmZtso68DLH1hipYqtoGqqS9chJ12KcB288zbzoReYMCmAp",
+      "instruction_data_len": 176,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493676977,
+      "compute_units": 30195,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493677018",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "3uw7KoxXFrVdWNneEH7VJCXmXms7XnTt8tS7eqBQQyCCrCwx3E5PTArp1KdW8A7QK1cTed8pkZZ6Kh8UepnToUmE",
+      "instruction_data_len": 152,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493677018,
+      "compute_units": 14517,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493677060",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "refused",
+      "signature": "3kEgzpU1Eq6SQjiguPNqrr1M31gBTjBcPULyVXmzVv2U1A5U3nLzPTzXp9xRrRn8D8kABjfLawcXXC8Ls8SmvDbz",
+      "instruction_data_len": 16,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493677060,
+      "compute_units": 12367,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493677099",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "5n9aQdxDRjHA4eNtdhEmdTTfLchsrCJQVTBAs5ssFzYpJ1kqGKZ5FYyRRsrunJELzWjgtvfPHubgHzT6aBUEUmXk",
+      "instruction_data_len": 16,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493677099,
+      "compute_units": 23327,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493677165",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "3WwQbPCvgxcn7cuG7gM5NFj8nW3a537ETortRpV8mSX62q6iXRoy3EFc29YEh9nhDpZy7aFjCVgFAMJZ1f3vbFCs",
+      "instruction_data_len": 176,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493677165,
+      "compute_units": 21193,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493677208",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "4rizcgB5Tr4HetxvmcpgWYxWGxGEEcdv1oemwkrVvJucARjvZ6uGvy3WzVXn8KQ7RMh1khN7xk94UhRHtaRGxVDL",
+      "instruction_data_len": 280,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493677208,
+      "compute_units": 10013,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493677250",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "29EKHEuQn1qxNwbKgUiRxkUeJuGWTo7Das3Zq5J9hFG7ezksd5R24H9ReemM9g7cP8tc4eMSdLvHEFHWgxwkbbFL",
+      "instruction_data_len": 16,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493677250,
+      "compute_units": 14453,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493677459",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "1zMB8kjmeTS5YJYjA2PeUDc2bCzUBJsiRQXrunVzmHJDjG1Big5CQbDQrHvwZZxZ3gSHbcFaLJ5XeirA8LiBME7",
+      "instruction_data_len": 176,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493677459,
+      "compute_units": 18193,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493677501",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "5fkuL8tMv3vwpoyixDjPRQarbgpGB3U2D1y8Gvati6qcRjDXeb3FwaHz6xpPZZnTEZY3T1t4aMA1wbLYEC4X5uA9",
+      "instruction_data_len": 408,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493677501,
+      "compute_units": 8513,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493677542",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "4dwxbMz3AcYhgHsbuNNnQC9su9fRCgKZoEHo2M9KvXnbj4urCA2s8qtLyf6BaM1o11kyL1bHGoHXXqRFYXtm8CWo",
+      "instruction_data_len": 16,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493677542,
+      "compute_units": 11581,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493677590",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "3Tj3GRbZ1C8kAypoucb67tEnNjBz2TLhFnj46G7jvtpJt4aSp6QiRuwyYBiCGHKCWEARHbat65Q2t2LNu1yH2YCE",
+      "instruction_data_len": 176,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493677590,
+      "compute_units": 30193,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493677632",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "5cHVhqXzY7bXMiemYzEHAcoycRn66rJfhfRCXuKhnxndU2MacpNcaj9eWBzPrRBSRMP729UkyEtoaPHBggzTU6ME",
+      "instruction_data_len": 808,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493677632,
+      "compute_units": 14515,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493677674",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "4oSAXqBkYGC6Je7HShYXHKRABPDwfAFwzpti8mZP4vPCSkqj1eNv2MuC3qJs3BPsqQf16SBfj7jG7U3eaj6H3x4i",
+      "instruction_data_len": 104,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493677674,
+      "compute_units": 14513,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493677716",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "5qRK5sXwDcWL94gxLZA4RSxfgfouLVKhYfagazhZu2chqSoH26s5BYoNcv7EYMBTnioF9wiThpscxXX59UT8oExP",
+      "instruction_data_len": 16,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493677716,
+      "compute_units": 24045,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493677765",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "UWQJD1gtU3JX5znhLnBxWqJyo2oz9GSX2vtcP91sL8asYp24AYHBHQG9JzcEZhM7jU1KEDbVxPSzpUske5sHNrT",
+      "instruction_data_len": 176,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493677765,
+      "compute_units": 30191,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493677806",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "4J8ZuQxHr3PYq7kPrxdoxFMKZR7kotnhNurFUb8Zzbh83wr5NR5Rd8mz3iigm2zuoheekVh5Sgnj6Cq8c5cBrkUz",
+      "instruction_data_len": 232,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493677806,
+      "compute_units": 14511,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493677848",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "2SwrYRGhNZJ2GmGvGzU323xYZLQkgyQKqhM6ot2ApyajjqNDbiKCxwnMxnavY3gWokmJLjyfH5KVkvg1mcyPNYZ2",
+      "instruction_data_len": 16,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493677848,
+      "compute_units": 23402,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493677898",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "3kbK7KcfDnsotEpzni28xN5YKM6XXf8N7e8x8vPcyvGMfHRUcatZNZV8a5xppNhyL1B7b2T8puEGejWNGaFGmM9P",
+      "instruction_data_len": 176,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493677898,
+      "compute_units": 21193,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493677940",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "5XTmedozo34Hf3SwcTmmdNECZHTJtZdaSrH7thL17RnjFbnxc7RBNUdrNyTgWPQsUfc9MJhZnroJ8eVQ5E6ZY4VJ",
+      "instruction_data_len": 632,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493677940,
+      "compute_units": 10013,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493677982",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "28rHewFeHevtBuobm6Q7ZJpRVwPqNmi3Yy9ekq7Syx8MApqKbA9kz49oYhY5JKY7jz5zRvbBZeuNpNDWZgibHAyP",
+      "instruction_data_len": 16,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493677982,
+      "compute_units": 14805,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493678031",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "35WDQFfHfLfaRNzXzL5mmzVjcgH6xFVfzMnch7NitRpYTUAuWJ9hLYNqixFRD8bHN3AzGfdUwRBiBddAmGUo5sq8",
+      "instruction_data_len": 176,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493678031,
+      "compute_units": 30193,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493678073",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "2odaJLJBs1uuJm5sv8vk2H5TYwo3jRqSs2WCULNQC689dqm6r6mRPaaUe7pRqRU3oQFjHzzwzPhj9TAyXp6ZZ7i4",
+      "instruction_data_len": 808,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493678073,
+      "compute_units": 14515,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493678115",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "QC2TmFdZr4pmFe5aGNH7KXx7hcYbptVM2uy29VcM7dm6BkfupF87zc8o6eBQbu65AKEZoTh9ca61oyYcSBihwxo",
+      "instruction_data_len": 808,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493678115,
+      "compute_units": 14515,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493678164",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "61cw2nQvbUNAzd7ry5sbuVz2tHtd9x4LUCUr3AxBQzVmJ231JqekHFTFyp3pCKPm4Mo4B1gXQ5BgoM8K2wDDZzSa",
+      "instruction_data_len": 632,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493678164,
+      "compute_units": 14513,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493678206",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "4N5qy9bUS9U35oYydXXq2sETEy5oEEPHpfEufg3dx3YMuJE1rBnSwtvezaYrAkDSZJRyf4cLcbVaasmq2etY7GsX",
+      "instruction_data_len": 16,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493678206,
+      "compute_units": 25341,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493678270",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "2xBJPFCRxJqYHryKvLYSfFiSvq1gRuN3k9Vksc1TKwh1Aif88G2cRapwpsgGC72bk4W4x5XTSC6h43qwdEySjjD3",
+      "instruction_data_len": 176,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493678270,
+      "compute_units": 24191,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493678310",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "BesANGPSJAfDxyLHTgorziADgBmiVGfSwYJRpxeMksSRbdSbBx41hASDCBjFC6hpx8VuvwQW1g8TEXeqV6JVmnP",
+      "instruction_data_len": 152,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493678310,
+      "compute_units": 11511,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493678352",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "5tWhop7hGi7XeBDqJeQ9H6XL4NjZQZRQfCSucZQnMZQgFtdik2Uyb6FYvTn9cyBCA6K7uZu8hU47BQqmEZ2iERNr",
+      "instruction_data_len": 16,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493678352,
+      "compute_units": 17322,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dclrnci2-493678459",
+      "magic": "DCLRNCI2",
+      "program": "rent",
+      "outcome": "executed",
+      "signature": "5m7nirNgXwj4EdnTT9zc9TwtzGvo5N4pDKsyf9Dsma8es22NcQ9uC2aUgSSXfXnK9wcVzpsWKkhqy5wznYiCgLjr",
+      "instruction_data_len": 128,
+      "routes": [
+        "rent/process_close_v2#Close",
+        "rent/process_create_v2#Create",
+        "rent/process_instruction",
+        "rent/process_sweep_v2#Sweep"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to rent begins with DCLRNCI2, and the tree dispatches rent/process_close_v2#Close, rent/process_create_v2#Create, rent/process_sweep_v2#Sweep on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493678459,
+      "compute_units": 9999,
+      "programs_invoked": [
+        "rent"
+      ],
+      "routes_corroborated": [
+        "rent/process_close_v2#Close",
+        "rent/process_create_v2#Create",
+        "rent/process_instruction",
+        "rent/process_sweep_v2#Sweep"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltcrq2-found-493678687",
+      "magic": "DCLTCRQ2",
+      "program": "core",
+      "outcome": "refused",
+      "signature": "5AKNo5WRUmQ38xtFUWSoZgoDKLk8rTKkzLm6VXk7SD7AnVQFv8okbb1Kc4nDDYm6oiz9CTrX14eBy8G1mKKdyEGN",
+      "instruction_data_len": 72,
+      "routes": [
+        "core/found::process#Found",
+        "core/process_instruction"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to core begins with DCLTCRQ2, which names a request family rather than one route, and the byte at offset 10 (`REQUEST_ACTION_OFFSET`, read by the decoder in crates/dclutch-market/src/generated.rs) is 0 = `Action::Found`, which selects core/found::process#Found. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "action": {
+        "enum": "Action",
+        "variant": "Found",
+        "tag": 0,
+        "offset": 10,
+        "offset_constant": "REQUEST_ACTION_OFFSET",
+        "source": "crates/dclutch-market/src/generated.rs"
+      },
+      "routes_not_selected": [
+        {
+          "route": "core/begin_retiring::process#BeginRetiring",
+          "reason": "the payload's Action tag is 0 = `Action::Found` at offset 10; this route dispatches on `Action::BeginRetiring`"
+        },
+        {
+          "route": "core/capability::process#CloseCapability",
+          "reason": "the payload's Action tag is 0 = `Action::Found` at offset 10; this route dispatches on `Action::ActivateCapability`, `Action::CloseCapability`"
+        },
+        {
+          "route": "core/execute_provider_v3::process#ExecuteProvider",
+          "reason": "the payload's Action tag is 0 = `Action::Found` at offset 10; this route dispatches on `Action::ExecuteProvider`"
+        },
+        {
+          "route": "core/open_market::process#OpenMarket",
+          "reason": "the payload's Action tag is 0 = `Action::Found` at offset 10; this route dispatches on `Action::OpenMarket`"
+        },
+        {
+          "route": "core/process_instruction#CloseCapability",
+          "reason": "the payload's Action tag is 0 = `Action::Found` at offset 10; this route dispatches on `Action::ActivateCapability`, `Action::CloseCapability`"
+        },
+        {
+          "route": "core/process_instruction#Retire",
+          "reason": "the payload's Action tag is 0 = `Action::Found` at offset 10; this route dispatches on `Action::Retire`"
+        },
+        {
+          "route": "core/process_instruction#else",
+          "reason": "the payload's Action tag is 0 = `Action::Found` at offset 10; this route dispatches on the fallthrough arm"
+        },
+        {
+          "route": "core/resolution::process#Retire",
+          "reason": "the payload's Action tag is 0 = `Action::Found` at offset 10; this route dispatches on `Action::AdmitTerminal`, `Action::Retire`, `Action::VerifyReadiness`"
+        },
+        {
+          "route": "core/retire_v1::process#Retire",
+          "reason": "the payload's Action tag is 0 = `Action::Found` at offset 10; this route dispatches on `Action::Retire`"
+        },
+        {
+          "route": "core/retire_v1::process_checkpoint_prepare#Retire",
+          "reason": "the payload's Action tag is 0 = `Action::Found` at offset 10; this route dispatches on `Action::Retire`"
+        }
+      ],
+      "slot": 493678687,
+      "compute_units": 8320,
+      "programs_invoked": [
+        "core"
+      ],
+      "routes_corroborated": [
+        "core/found::process#Found",
+        "core/process_instruction"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltcrq2-found-493678730",
+      "magic": "DCLTCRQ2",
+      "program": "core",
+      "outcome": "refused",
+      "signature": "Ty3MvFJpgHeSwcUKVxtsQksgKvyCsG2BwcLcCabjhoBynLVX4AmJLP4VW2ibpTALQZ8YhBrwemcNfwoRKqQWqkP",
+      "instruction_data_len": 72,
+      "routes": [
+        "core/found::process#Found",
+        "core/process_instruction"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to core begins with DCLTCRQ2, which names a request family rather than one route, and the byte at offset 10 (`REQUEST_ACTION_OFFSET`, read by the decoder in crates/dclutch-market/src/generated.rs) is 0 = `Action::Found`, which selects core/found::process#Found. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "action": {
+        "enum": "Action",
+        "variant": "Found",
+        "tag": 0,
+        "offset": 10,
+        "offset_constant": "REQUEST_ACTION_OFFSET",
+        "source": "crates/dclutch-market/src/generated.rs"
+      },
+      "routes_not_selected": [
+        {
+          "route": "core/begin_retiring::process#BeginRetiring",
+          "reason": "the payload's Action tag is 0 = `Action::Found` at offset 10; this route dispatches on `Action::BeginRetiring`"
+        },
+        {
+          "route": "core/capability::process#CloseCapability",
+          "reason": "the payload's Action tag is 0 = `Action::Found` at offset 10; this route dispatches on `Action::ActivateCapability`, `Action::CloseCapability`"
+        },
+        {
+          "route": "core/execute_provider_v3::process#ExecuteProvider",
+          "reason": "the payload's Action tag is 0 = `Action::Found` at offset 10; this route dispatches on `Action::ExecuteProvider`"
+        },
+        {
+          "route": "core/open_market::process#OpenMarket",
+          "reason": "the payload's Action tag is 0 = `Action::Found` at offset 10; this route dispatches on `Action::OpenMarket`"
+        },
+        {
+          "route": "core/process_instruction#CloseCapability",
+          "reason": "the payload's Action tag is 0 = `Action::Found` at offset 10; this route dispatches on `Action::ActivateCapability`, `Action::CloseCapability`"
+        },
+        {
+          "route": "core/process_instruction#Retire",
+          "reason": "the payload's Action tag is 0 = `Action::Found` at offset 10; this route dispatches on `Action::Retire`"
+        },
+        {
+          "route": "core/process_instruction#else",
+          "reason": "the payload's Action tag is 0 = `Action::Found` at offset 10; this route dispatches on the fallthrough arm"
+        },
+        {
+          "route": "core/resolution::process#Retire",
+          "reason": "the payload's Action tag is 0 = `Action::Found` at offset 10; this route dispatches on `Action::AdmitTerminal`, `Action::Retire`, `Action::VerifyReadiness`"
+        },
+        {
+          "route": "core/retire_v1::process#Retire",
+          "reason": "the payload's Action tag is 0 = `Action::Found` at offset 10; this route dispatches on `Action::Retire`"
+        },
+        {
+          "route": "core/retire_v1::process_checkpoint_prepare#Retire",
+          "reason": "the payload's Action tag is 0 = `Action::Found` at offset 10; this route dispatches on `Action::Retire`"
+        }
+      ],
+      "slot": 493678730,
+      "compute_units": 160951,
+      "programs_invoked": [
+        "core"
+      ],
+      "routes_corroborated": [
+        "core/found::process#Found",
+        "core/process_instruction"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltcrq2-found-493678774",
+      "magic": "DCLTCRQ2",
+      "program": "core",
+      "outcome": "executed",
+      "signature": "Yf6yuYdfSUCQFanqM8Pk4EZ7EpurZ1Dm52xtzc76VazUJrESMLwPVedD4JiWfd3BXXPZSiY9VVTMvgTYv971Zwt",
+      "instruction_data_len": 72,
+      "routes": [
+        "core/found::process#Found",
+        "core/process_instruction"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to core begins with DCLTCRQ2, which names a request family rather than one route, and the byte at offset 10 (`REQUEST_ACTION_OFFSET`, read by the decoder in crates/dclutch-market/src/generated.rs) is 0 = `Action::Found`, which selects core/found::process#Found. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "action": {
+        "enum": "Action",
+        "variant": "Found",
+        "tag": 0,
+        "offset": 10,
+        "offset_constant": "REQUEST_ACTION_OFFSET",
+        "source": "crates/dclutch-market/src/generated.rs"
+      },
+      "routes_not_selected": [
+        {
+          "route": "core/begin_retiring::process#BeginRetiring",
+          "reason": "the payload's Action tag is 0 = `Action::Found` at offset 10; this route dispatches on `Action::BeginRetiring`"
+        },
+        {
+          "route": "core/capability::process#CloseCapability",
+          "reason": "the payload's Action tag is 0 = `Action::Found` at offset 10; this route dispatches on `Action::ActivateCapability`, `Action::CloseCapability`"
+        },
+        {
+          "route": "core/execute_provider_v3::process#ExecuteProvider",
+          "reason": "the payload's Action tag is 0 = `Action::Found` at offset 10; this route dispatches on `Action::ExecuteProvider`"
+        },
+        {
+          "route": "core/open_market::process#OpenMarket",
+          "reason": "the payload's Action tag is 0 = `Action::Found` at offset 10; this route dispatches on `Action::OpenMarket`"
+        },
+        {
+          "route": "core/process_instruction#CloseCapability",
+          "reason": "the payload's Action tag is 0 = `Action::Found` at offset 10; this route dispatches on `Action::ActivateCapability`, `Action::CloseCapability`"
+        },
+        {
+          "route": "core/process_instruction#Retire",
+          "reason": "the payload's Action tag is 0 = `Action::Found` at offset 10; this route dispatches on `Action::Retire`"
+        },
+        {
+          "route": "core/process_instruction#else",
+          "reason": "the payload's Action tag is 0 = `Action::Found` at offset 10; this route dispatches on the fallthrough arm"
+        },
+        {
+          "route": "core/resolution::process#Retire",
+          "reason": "the payload's Action tag is 0 = `Action::Found` at offset 10; this route dispatches on `Action::AdmitTerminal`, `Action::Retire`, `Action::VerifyReadiness`"
+        },
+        {
+          "route": "core/retire_v1::process#Retire",
+          "reason": "the payload's Action tag is 0 = `Action::Found` at offset 10; this route dispatches on `Action::Retire`"
+        },
+        {
+          "route": "core/retire_v1::process_checkpoint_prepare#Retire",
+          "reason": "the payload's Action tag is 0 = `Action::Found` at offset 10; this route dispatches on `Action::Retire`"
+        }
+      ],
+      "slot": 493678774,
+      "compute_units": 189854,
+      "programs_invoked": [
+        "core"
+      ],
+      "routes_corroborated": [
+        "core/found::process#Found",
+        "core/process_instruction"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dclrnci2-493678975",
+      "magic": "DCLRNCI2",
+      "program": "rent",
+      "outcome": "executed",
+      "signature": "22B3R2pL5AxusqT1Vah2R9pwmdtP5h98rNxE7wo2C88fzQGbYU4UX8grM5ECeE2CTEKiN9EsxbohEDXk6QUKMv1y",
+      "instruction_data_len": 128,
+      "routes": [
+        "rent/process_close_v2#Close",
+        "rent/process_create_v2#Create",
+        "rent/process_instruction",
+        "rent/process_sweep_v2#Sweep"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to rent begins with DCLRNCI2, and the tree dispatches rent/process_close_v2#Close, rent/process_create_v2#Create, rent/process_sweep_v2#Sweep on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493678975,
+      "compute_units": 9999,
+      "programs_invoked": [
+        "rent"
+      ],
+      "routes_corroborated": [
+        "rent/process_close_v2#Close",
+        "rent/process_create_v2#Create",
+        "rent/process_instruction",
+        "rent/process_sweep_v2#Sweep"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493679019",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "2GRSPBciG4vw8TCyLbiskxQtcVdoZeD8ihgpzEGTursVZj6y9DkL23ePmqALmLrCxDWtmRY3w64Hy1bSQriMvwCD",
+      "instruction_data_len": 176,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493679019,
+      "compute_units": 24193,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493679060",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "5WbUVUrWE6GDAVWdV5GeUabPUhnZ25mv38xrTRf1sNUZaECnXiB443A2F79G6hBjeEM8QdW4t3f8emRuFaGavFYP",
+      "instruction_data_len": 440,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493679060,
+      "compute_units": 11513,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493679100",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "2QNxBUPoVs8WhA3y97DoP8zCA847Dh3wE3X9KQ16VY2XUcFbzpczqmkKiEZdh8bshoUzc1U6HCsCsdHxRnNBQKgG",
+      "instruction_data_len": 16,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493679100,
+      "compute_units": 17613,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493679152",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "4GKZQWfSBva1R6cNaC6fjR6BJVX45o9bkb5ZRpWyfYF2r14RT2iJZp7o7FmsgM7k4HbQioqYGnZf8UohLJDRCtnx",
+      "instruction_data_len": 176,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493679152,
+      "compute_units": 30193,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493679192",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "3Fkw8avRDMgUGsxm7gn9rvAHBwR16gauCowwbZX3eERUwy7EHSkL6P1ZYAmKgfexvEAuscCoWxVkemLs9QGFm7ZN",
+      "instruction_data_len": 808,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493679192,
+      "compute_units": 14515,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493679233",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "3DTVuQs5YZ1WGs9W6gx3b8zfcp9HKJwWLV2EeC2TwsBRP47SxpZTuSSGYfYjdrrgt6c4CL8m2gMYQG6hbkDLe5nL",
+      "instruction_data_len": 16,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493679233,
+      "compute_units": 23982,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493679284",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "65rbHvaLLBiZGwf8daYetDinoqX8Kevan4wYCWwUSTv8B6o9w7wbhTBQLNb6VcoJnE3KcBx7jP41sy7SqNUBhzcF",
+      "instruction_data_len": 176,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493679284,
+      "compute_units": 36193,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493679325",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "5hFmuCGDSLrGBZrxF75JapF1WEP19rE98kGeBQxbXfWdDQV9KFHhRrRoJCPsXfPApgo1jH2ogaWS8AdAb4CJ1M3Q",
+      "instruction_data_len": 808,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493679325,
+      "compute_units": 17515,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493679366",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "oxLRjarUS1pKGcRTSexTzfqVFz44ekHQNhQcriK4TnXrYGAZdwqfETdxMQDtFQQnaSwvvm4VEL6gxq1NBSjE4L2",
+      "instruction_data_len": 16,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493679366,
+      "compute_units": 29982,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltcfq1-493679672",
+      "magic": "DCLTCFQ1",
+      "program": "trading",
+      "outcome": "executed",
+      "signature": "4okD9M7dt5ouPvJ8k2FNRSoFs1Hr5hep8pvH59dsu2zm3duFFMixe7nY86Qkptm2vmXSmJLNj6DmqLebwxbkWsX4",
+      "instruction_data_len": 8,
+      "routes": [
+        "core/process_instruction",
+        "resolution/process_instruction",
+        "trading/process_instruction",
+        "trading/projected_custody_bootstrap_v1::process_controller_funding_prepare_v1"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to trading begins with DCLTCFQ1, and the tree dispatches trading/projected_custody_bootstrap_v1::process_controller_funding_prepare_v1 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493679672,
+      "compute_units": 508302,
+      "programs_invoked": [
+        "core",
+        "resolution",
+        "trading"
+      ],
+      "routes_corroborated": [
+        "core/process_instruction",
+        "resolution/process_instruction",
+        "trading/process_instruction",
+        "trading/projected_custody_bootstrap_v1::process_controller_funding_prepare_v1"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltcf1a-493679870",
+      "magic": "DCLTCF1A",
+      "program": "trading",
+      "outcome": "refused",
+      "signature": "afVdfEvUuyAKyhnyvbSJC6r4rkj1mMMbQZPRTZPT3T3FVAuG6ph2UB4Rw3joomwyP1947jt3NNdW9xCpcZaqKp4",
+      "instruction_data_len": 8,
+      "routes": [
+        "trading/process_instruction",
+        "trading/projected_custody_bootstrap_v1::process_controller_funding_cleanup_step1_v1"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to trading begins with DCLTCF1A, and the tree dispatches trading/projected_custody_bootstrap_v1::process_controller_funding_cleanup_step1_v1 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493679870,
+      "compute_units": 8441,
+      "programs_invoked": [
+        "trading"
+      ],
+      "routes_corroborated": [
+        "trading/process_instruction",
+        "trading/projected_custody_bootstrap_v1::process_controller_funding_cleanup_step1_v1"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltpcb2-493680136",
+      "magic": "DCLTPCB2",
+      "program": "trading",
+      "outcome": "refused",
+      "signature": "Ah6FJamv3SNTvHujqUsiqxW9ExEBByqba2jS66KZgJV4PNobmfEVFyHo1kugLfgi8WgdZYm3CbGEPwwQted5UzH",
+      "instruction_data_len": 8,
+      "routes": [
+        "trading/process_instruction",
+        "trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to trading begins with DCLTPCB2, and the tree dispatches trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493680136,
+      "compute_units": 24694,
+      "programs_invoked": [
+        "trading"
+      ],
+      "routes_corroborated": [
+        "trading/process_instruction",
+        "trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltpcb2-493680188",
+      "magic": "DCLTPCB2",
+      "program": "trading",
+      "outcome": "refused",
+      "signature": "2PxBBsupksvkom5s4nDmCKYQNNnxatiT8BizFWQdQyFngkSEdrbC6hgHRVpYgzjv1ReiMKz5YAJihXSmSWaviJCE",
+      "instruction_data_len": 8,
+      "routes": [
+        "trading/process_instruction",
+        "trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to trading begins with DCLTPCB2, and the tree dispatches trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493680188,
+      "compute_units": 43155,
+      "programs_invoked": [
+        "trading"
+      ],
+      "routes_corroborated": [
+        "trading/process_instruction",
+        "trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltpcb2-493680300",
+      "magic": "DCLTPCB2",
+      "program": "trading",
+      "outcome": "executed",
+      "signature": "5mFH17NLYaJnD3Si8GdUwvAHbP8DytXDvRshMi9iXxKUoLnx6pcqQTJiRijCeSGK4GVqJ3aMAwjhiRJamiacYgxr",
+      "instruction_data_len": 8,
+      "routes": [
+        "core/process_instruction",
+        "custody/process_instruction",
+        "trading/process_instruction",
+        "trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to trading begins with DCLTPCB2, and the tree dispatches trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493680300,
+      "compute_units": 645840,
+      "programs_invoked": [
+        "core",
+        "custody",
+        "trading"
+      ],
+      "routes_corroborated": [
+        "core/process_instruction",
+        "custody/process_instruction",
+        "trading/process_instruction",
+        "trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493680481",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "4qjUgMR1nLGz87jjVJRn3Nco1EwSCEEvPSMUs7baCm4G9qGHh8kTUkAMnmprnxqyssDu3BYpiwzRMAgnJsjdrgiM",
+      "instruction_data_len": 176,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493680481,
+      "compute_units": 24191,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493680522",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "2MTA3JdaEbq6zz2FGq74SSY9Y2VxCVMtHXQiWqWo8RNpzHkZtbmrz1PWYZJ9tUM5mADXcew3K1HCq26pMEZAxeZp",
+      "instruction_data_len": 808,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493680522,
+      "compute_units": 11513,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493680563",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "fqbNrzqmaTYhDPMNEgCFjmaVtXFLeJAyhyeyLK7JPNb3mrW53Ko45Yv3G5bEF6A1UeWwAYb94vZtjokjvQ7yDCU",
+      "instruction_data_len": 16,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493680563,
+      "compute_units": 17980,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493680612",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "38wNRmt6mGncyszyWJpq5tjQn8LqfKgCdttQZ5d6r4zxqRvNwdEW9RFTep4K8at6crpxUgTEAv8yQPyyhA4CkBci",
+      "instruction_data_len": 176,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493680612,
+      "compute_units": 27193,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493680652",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "2uMDZyA946EADvoWut3G1HzEpWsbwE8bK2N1fmqYoCTtYNRErLm2XycGCRwQjbbxxE3MsvFEUnkrFVa2mpftZH1K",
+      "instruction_data_len": 808,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493680652,
+      "compute_units": 13015,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493680693",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "2eaR1HzRTV5piG8GAxiyznjpN1HMwueAQmP2utvZ4bZjK22KzmTXq3uPfLds5KPkSoiaUurpcNjPvZNra8iQkzqT",
+      "instruction_data_len": 104,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493680693,
+      "compute_units": 13013,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493680734",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "9R65pNa7Z1hXCopvcj1BDYtMMTe6hv5PKy1rfNC5TENpM52SuuCTex5vGXPhtLnGF1oqwJPr3vnUA4Fg1qExTBp",
+      "instruction_data_len": 16,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493680734,
+      "compute_units": 21045,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493680783",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "3FHVovwZ1rMSrfG472pSzuLeCjWBNfD28d6o4dX4zW7EJGeodsqd77Ge9Myu36Qsfh4p7xLfkMRVC7MKnB3EUYFv",
+      "instruction_data_len": 176,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493680783,
+      "compute_units": 21193,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493680824",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "uhA9grj9PkUgRvrgERxxRyLjyaK4SnoxJKhKWMUoWP4DT5sBmfKiRiyKo55a3VYu7kpr8dPhxwq6AZqnwbLbfzA",
+      "instruction_data_len": 808,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493680824,
+      "compute_units": 10015,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493680865",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "3694mzg76kKgqoZLD4TcboEBosnKzL3GXuU6EYZMK851qpbZvZvnTrqkVmpYWPkMeBgi7Cs6YjBBzvi8un64goJL",
+      "instruction_data_len": 104,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493680865,
+      "compute_units": 10013,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493680907",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "47beoFfCXsCyX8QbqSnPA8spicAECjiY2mnJeNW8cXDtaSjxGsZmHiSjwDFp1JjDQJEk6MwqhRv2hwbjBzJaDYNQ",
+      "instruction_data_len": 16,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493680907,
+      "compute_units": 15045,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltgmf3-493681210",
+      "magic": "DCLTGMF3",
+      "program": "trading",
+      "outcome": "refused",
+      "signature": "3kFkHGgn38MuNmQzUqUKpUSbXNgPEYfMuHcpyF9CReykVXm23Yy2sZ6dZzdoEZbtjjSwZdPiaq7836PUFEUZB2rQ",
+      "instruction_data_len": 13,
+      "routes": [
+        "trading/generic_market_founding_v1::process_generic_market_founding_v3",
+        "trading/process_instruction"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to trading begins with DCLTGMF3, and the tree dispatches trading/generic_market_founding_v1::process_generic_market_founding_v3 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493681210,
+      "compute_units": 31420,
+      "programs_invoked": [
+        "trading"
+      ],
+      "routes_corroborated": [
+        "trading/generic_market_founding_v1::process_generic_market_founding_v3",
+        "trading/process_instruction"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltgmf3-493681311",
+      "magic": "DCLTGMF3",
+      "program": "trading",
+      "outcome": "executed",
+      "signature": "2yMFjuXDF3yXyey6edFGJJ1MHPmioMqCKVDZxT4pS2rdZNWuK3A5ZLageKQzeKZQUXc9V4RM1MixousBPrFtmtSh",
+      "instruction_data_len": 13,
+      "routes": [
+        "claims/process_instruction",
+        "core/process_instruction",
+        "custody/process_instruction",
+        "trading/generic_market_founding_v1::process_generic_market_founding_v3",
+        "trading/process_instruction"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to trading begins with DCLTGMF3, and the tree dispatches trading/generic_market_founding_v1::process_generic_market_founding_v3 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493681311,
+      "compute_units": 861480,
+      "programs_invoked": [
+        "claims",
+        "core",
+        "custody",
+        "trading"
+      ],
+      "routes_corroborated": [
+        "claims/process_instruction",
+        "core/process_instruction",
+        "custody/process_instruction",
+        "trading/generic_market_founding_v1::process_generic_market_founding_v3",
+        "trading/process_instruction"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltcrq2-verifyreadiness-493681425",
+      "magic": "DCLTCRQ2",
+      "program": "core",
+      "outcome": "executed",
+      "signature": "5wGKewfXkdE54brokhU6hbmeTdM2Aeg4TMvryEETbxC1FYQ7gJ1zUPF2DFW99v1J7JPMQmq8MbkPdsMrLQyWVvPj",
+      "instruction_data_len": 592,
+      "routes": [
+        "core/process_instruction",
+        "core/resolution::process#Retire",
+        "resolution/process_instruction"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to core begins with DCLTCRQ2, which names a request family rather than one route, and the byte at offset 10 (`REQUEST_ACTION_OFFSET`, read by the decoder in crates/dclutch-market/src/generated.rs) is 1 = `Action::VerifyReadiness`, which selects core/resolution::process#Retire. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "action": {
+        "enum": "Action",
+        "variant": "VerifyReadiness",
+        "tag": 1,
+        "offset": 10,
+        "offset_constant": "REQUEST_ACTION_OFFSET",
+        "source": "crates/dclutch-market/src/generated.rs"
+      },
+      "routes_not_selected": [
+        {
+          "route": "core/begin_retiring::process#BeginRetiring",
+          "reason": "the payload's Action tag is 1 = `Action::VerifyReadiness` at offset 10; this route dispatches on `Action::BeginRetiring`"
+        },
+        {
+          "route": "core/capability::process#CloseCapability",
+          "reason": "the payload's Action tag is 1 = `Action::VerifyReadiness` at offset 10; this route dispatches on `Action::ActivateCapability`, `Action::CloseCapability`"
+        },
+        {
+          "route": "core/execute_provider_v3::process#ExecuteProvider",
+          "reason": "the payload's Action tag is 1 = `Action::VerifyReadiness` at offset 10; this route dispatches on `Action::ExecuteProvider`"
+        },
+        {
+          "route": "core/found::process#Found",
+          "reason": "the payload's Action tag is 1 = `Action::VerifyReadiness` at offset 10; this route dispatches on `Action::Found`"
+        },
+        {
+          "route": "core/open_market::process#OpenMarket",
+          "reason": "the payload's Action tag is 1 = `Action::VerifyReadiness` at offset 10; this route dispatches on `Action::OpenMarket`"
+        },
+        {
+          "route": "core/process_instruction#CloseCapability",
+          "reason": "the payload's Action tag is 1 = `Action::VerifyReadiness` at offset 10; this route dispatches on `Action::ActivateCapability`, `Action::CloseCapability`"
+        },
+        {
+          "route": "core/process_instruction#Retire",
+          "reason": "the payload's Action tag is 1 = `Action::VerifyReadiness` at offset 10; this route dispatches on `Action::Retire`"
+        },
+        {
+          "route": "core/process_instruction#else",
+          "reason": "the payload's Action tag is 1 = `Action::VerifyReadiness` at offset 10; this route dispatches on the fallthrough arm"
+        },
+        {
+          "route": "core/retire_v1::process#Retire",
+          "reason": "the payload's Action tag is 1 = `Action::VerifyReadiness` at offset 10; this route dispatches on `Action::Retire`"
+        },
+        {
+          "route": "core/retire_v1::process_checkpoint_prepare#Retire",
+          "reason": "the payload's Action tag is 1 = `Action::VerifyReadiness` at offset 10; this route dispatches on `Action::Retire`"
+        }
+      ],
+      "slot": 493681425,
+      "compute_units": 331010,
+      "programs_invoked": [
+        "core",
+        "resolution"
+      ],
+      "routes_corroborated": [
+        "core/process_instruction",
+        "core/resolution::process#Retire",
+        "resolution/process_instruction"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dclrfaq1-493681504",
+      "magic": "DCLRFAQ1",
+      "program": "resolution",
+      "outcome": "executed",
+      "signature": "bWD7dXzwG4VnivKFnzJUBCvFFTJxGaZSZs2YASDQZo2pCM4686TJG9hgFqUJMqLJt3NQPTMe9ovForZfSrFhscR",
+      "instruction_data_len": 440,
+      "routes": [
+        "resolution/core_effect::process_direct_funding_activation_v1",
+        "resolution/process_instruction"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to resolution begins with DCLRFAQ1, and the tree dispatches resolution/core_effect::process_direct_funding_activation_v1 on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493681504,
+      "compute_units": 284380,
+      "programs_invoked": [
+        "resolution"
+      ],
+      "routes_corroborated": [
+        "resolution/core_effect::process_direct_funding_activation_v1",
+        "resolution/process_instruction"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltcrq2-verifyreadiness-493681577",
+      "magic": "DCLTCRQ2",
+      "program": "core",
+      "outcome": "executed",
+      "signature": "66bEApPRariwfR8WrpnFdY9sdpvGxZqHkxYHtMQCsTdpEdGqJLuCh1Nir77oTjSehL65rGiPSvbbzzoytf7mDqq5",
+      "instruction_data_len": 592,
+      "routes": [
+        "core/process_instruction",
+        "core/resolution::process#Retire"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to core begins with DCLTCRQ2, which names a request family rather than one route, and the byte at offset 10 (`REQUEST_ACTION_OFFSET`, read by the decoder in crates/dclutch-market/src/generated.rs) is 1 = `Action::VerifyReadiness`, which selects core/resolution::process#Retire. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "action": {
+        "enum": "Action",
+        "variant": "VerifyReadiness",
+        "tag": 1,
+        "offset": 10,
+        "offset_constant": "REQUEST_ACTION_OFFSET",
+        "source": "crates/dclutch-market/src/generated.rs"
+      },
+      "routes_not_selected": [
+        {
+          "route": "core/begin_retiring::process#BeginRetiring",
+          "reason": "the payload's Action tag is 1 = `Action::VerifyReadiness` at offset 10; this route dispatches on `Action::BeginRetiring`"
+        },
+        {
+          "route": "core/capability::process#CloseCapability",
+          "reason": "the payload's Action tag is 1 = `Action::VerifyReadiness` at offset 10; this route dispatches on `Action::ActivateCapability`, `Action::CloseCapability`"
+        },
+        {
+          "route": "core/execute_provider_v3::process#ExecuteProvider",
+          "reason": "the payload's Action tag is 1 = `Action::VerifyReadiness` at offset 10; this route dispatches on `Action::ExecuteProvider`"
+        },
+        {
+          "route": "core/found::process#Found",
+          "reason": "the payload's Action tag is 1 = `Action::VerifyReadiness` at offset 10; this route dispatches on `Action::Found`"
+        },
+        {
+          "route": "core/open_market::process#OpenMarket",
+          "reason": "the payload's Action tag is 1 = `Action::VerifyReadiness` at offset 10; this route dispatches on `Action::OpenMarket`"
+        },
+        {
+          "route": "core/process_instruction#CloseCapability",
+          "reason": "the payload's Action tag is 1 = `Action::VerifyReadiness` at offset 10; this route dispatches on `Action::ActivateCapability`, `Action::CloseCapability`"
+        },
+        {
+          "route": "core/process_instruction#Retire",
+          "reason": "the payload's Action tag is 1 = `Action::VerifyReadiness` at offset 10; this route dispatches on `Action::Retire`"
+        },
+        {
+          "route": "core/process_instruction#else",
+          "reason": "the payload's Action tag is 1 = `Action::VerifyReadiness` at offset 10; this route dispatches on the fallthrough arm"
+        },
+        {
+          "route": "core/retire_v1::process#Retire",
+          "reason": "the payload's Action tag is 1 = `Action::VerifyReadiness` at offset 10; this route dispatches on `Action::Retire`"
+        },
+        {
+          "route": "core/retire_v1::process_checkpoint_prepare#Retire",
+          "reason": "the payload's Action tag is 1 = `Action::VerifyReadiness` at offset 10; this route dispatches on `Action::Retire`"
+        }
+      ],
+      "slot": 493681577,
+      "compute_units": 195577,
+      "programs_invoked": [
+        "core"
+      ],
+      "routes_corroborated": [
+        "core/process_instruction",
+        "core/resolution::process#Retire"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493642596",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "4X7UNbALoBowBgXsVas2Vtq1XvSph7BMDUATYZaJCB535t69QqcrDT1SBpKQPnZ6EFBz2zg5ZUBpx7HhXYiHpZ8w",
+      "instruction_data_len": 176,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493642596,
+      "compute_units": 21195,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493642637",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "3oaSnoiJfC5HKPsQHWp6ynEETDRBvGpP6Jvun5rcTiZhfx7vGDadXbaHAm3TgennNcAgb9KXsJ9fXGzRNdCAr4cP",
+      "instruction_data_len": 256,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493642637,
+      "compute_units": 10014,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493642679",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "5NmS1YZdn4au9GkFLJdZYNRS6hD2XQqzuFBQ3KVyfcC7ubegNDUc7ywYU1bazfQLkg49Aq8dh7oPkPLBju1E1aM5",
+      "instruction_data_len": 16,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493642679,
+      "compute_units": 727413,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493642732",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "5qZhNDKHaKMf3jFUbS3enMsezEEGzY13eGFK4b2iisCPwcs3SgCKGNCBT4AcDN7kcojtwX2izGzRcH6Prqyfv1gH",
+      "instruction_data_len": 176,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493642732,
+      "compute_units": 24195,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493642774",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "29CCKrvJ1dt1aeBXuJW2x86y8eXJHZFj8i3qzFNWPUS48CYPGeytdwJAq3Z2ZPUdMusveWiDc2fnLqiFvABNE8HN",
+      "instruction_data_len": 256,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493642774,
+      "compute_units": 11514,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493642816",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "3SVWpYVyNS5nKt3rzGNnwf2m8ScGVZ1Wf1ysXKaAWicdpg9pv59WUNLAexruCJSM7GSyQqfEvtLdcC5Mm2ENCuL1",
+      "instruction_data_len": 16,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493642816,
+      "compute_units": 612697,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493642867",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "4QfvVRV9CU5xbx6G14qWRrWgcmMVFtkbe5HfWa6wYAgZAEpbvqspJLX1awVJKVicr1TKc24aYy4w2PtxEG5dAjpL",
+      "instruction_data_len": 176,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493642867,
+      "compute_units": 27195,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493642909",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "4qhFkTM6WkbahT5QY9acVE34naPEezpqN1D7PBfEPNuwLLMExVbyUiZvonqpEd8KwTUX5FTbHE9aDYbzUpP3QJXf",
+      "instruction_data_len": 256,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493642909,
+      "compute_units": 13014,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493642951",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "62kt9Vyr9iEzFH4f14mb399Gc3eWpLvTLyRZSWpxK4mKX8EWRQyQtJcdrNiyjtXsLhwJpCCS7xu6sK7mUjGV7BMG",
+      "instruction_data_len": 16,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493642951,
+      "compute_units": 238125,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493643005",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "4zL6DV69p9RXS41Eq612o2muPDemsoXm9aTiqAr63Yge2RH5R9TcGoGYtfzDPBRi7mvJ9v11DEh13KBBkv24pYk3",
+      "instruction_data_len": 176,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493643005,
+      "compute_units": 21195,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493643048",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "3Vw7b2FHp28BMwWEniD9em6qYfPoUCs4vAznZQ2DqVr3zwFMivtHFhn5y4ejvZS7RNE1BsbNqxtP6VsHcAAK9Spd",
+      "instruction_data_len": 376,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493643048,
+      "compute_units": 10014,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493643088",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "ZWbepLCvHK1AEAfcBq4hpxtx49nijzNd4YUQZUi2CjLBZAhohZRgAtGLzXr8m4N1A95pFRpY3XjndvZ3Ce7az86",
+      "instruction_data_len": 16,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493643088,
+      "compute_units": 14550,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493643142",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "4mzsFQuABpMRPPDBthrQ69dTequY1YQY6CvYqimVM5556JeMkmS5XWHBdpfcZi2wCi279nt5dpzbtu2vGXJ9ZSe5",
+      "instruction_data_len": 176,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493643142,
+      "compute_units": 24195,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493643184",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "2XittFWcNjEQRJiEVCpcN4hkgSbnHvPvk35VZY2rdLLsUePUo5yMnmjbc8cj6bJsCjitDF8K3K7Pb12GN7jaZZn1",
+      "instruction_data_len": 256,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493643184,
+      "compute_units": 11514,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493643227",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "54X19FicJMwVL7H1FAUJujHxG8QcqZqzg3XZH5bdLCh4UZsBvKCJAbLgNRg4FqiJykWShdqAn6DpudFn6HLwBYdy",
+      "instruction_data_len": 16,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493643227,
+      "compute_units": 387505,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493643281",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "4eu7ohJdeo5ihAMM1TFCfJf5eYtcJYpdBUH8xsNf1Xik4dLgTLwoDiDcSCfcwy4HQuKZrQetN1zg2fw963QD2wzx",
+      "instruction_data_len": 176,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493643281,
+      "compute_units": 24195,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493643322",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "4tBEwbetYQGzuYm7Ho79htCudqzxzx9YrEUA5vvCHRBw8A88GKQoSZrjzJchPwdGuLgyEzJui3bMs1bYAmjoMJ4w",
+      "instruction_data_len": 480,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493643322,
+      "compute_units": 11514,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493643362",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "27q9T9HmQmFnqRmrjtpWk4Uxtexqd3EVsEgNejx3PrJGX6DjEZ2iaLuoXQHXUk142zSLy7zB5ZvbnNriP1pJCQCZ",
+      "instruction_data_len": 16,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493643362,
+      "compute_units": 17654,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493643416",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "321o4PhMJVNYydXxUotJSghf2PjotyZAv279cvcWXeJhxPNq8E3SnpK4aipV7P6GcR5mshxuyBWmkt5XSLUw2B5B",
+      "instruction_data_len": 176,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493643416,
+      "compute_units": 18195,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493643457",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "5kDdxScCTuVMVK4g53fiAH6bA6txvCt1DafdK6XeXKfzcur8scpbqmBo8o48za7aNVRzatqzjm3dVf9bdXaDSUBt",
+      "instruction_data_len": 256,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493643457,
+      "compute_units": 8514,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493643500",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "5SueLyWvHyVoS1j9YCwYSnPR2KN68pHpNAuuHs4F3xGvumNx8DrpaFF5rbPRxfKp2QTBLYidUSD9ABdVL1969R3k",
+      "instruction_data_len": 16,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493643500,
+      "compute_units": 132325,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493643553",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "3tdWWRaCQ6D79FiyXUNKq5qmjehreJZkhpsgstJh9ZkssMep1Ajxz8CqmaTCCQvTJASEd4TcHHcngW7mAz5MoM3H",
+      "instruction_data_len": 176,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493643553,
+      "compute_units": 18195,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493643595",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "2gFLExqgajdKS6xyc1oQaLrymgXpJGJXvsiFKkXNb2gBmpjSjuyvxt272qVwVod5sKg1Hx3hzodA8t33wFULg1BU",
+      "instruction_data_len": 256,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493643595,
+      "compute_units": 8514,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493643637",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "2mUBK28rEAu4X7bSCnxw89GwdnAHx6seubcSmGsHDeuPQ5tqERS2c7oZJkrSRCZawFtDr9NoP2uSLXoENvq2bkDY",
+      "instruction_data_len": 16,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493643637,
+      "compute_units": 85053,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493643691",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "4oCKuCh2cSFzv7PHKbTwrV6CY8eH829frtVwqdrveuoX21RNHzkScA5nNK9pVSo3mgBq11DaUZ6MasEMwMi3QwPR",
+      "instruction_data_len": 176,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493643691,
+      "compute_units": 21195,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493643733",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "29xyjAEoaMCNoBn33uMRyUQuKihbTKTWnm1XJTiY8phbbhp9TRGqucKoUhxLwornSVaUiX28M6ioiPUPiZfRUebi",
+      "instruction_data_len": 256,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493643733,
+      "compute_units": 10014,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493643775",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "2JUYW8qqo3LWuXgBnXaJPRXF6hTSR5Qhoyi9QsxEsVYF5EX2cjzPWmzujBNKaPj1PvCXkBHm7LpgJQsAqKiWqZPQ",
+      "instruction_data_len": 16,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493643775,
+      "compute_units": 439804,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493643830",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "65pyFWu3NaEGLtTBrCyEq818YmCpemcFf5vZBG1wM6h4EnbBgLV2dSrtMh7SF9WKeVaQ79TYYbj8RvquSuUtXZ2J",
+      "instruction_data_len": 176,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493643830,
+      "compute_units": 21195,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493643870",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "4iH4Tuh1K83gVvcVK1vMhVQz84Y8v8ecA94swpMwnBjLmofzjn7Vb5K3kuDWJbu6UQwQ2KaWPq756yawe74fHJpy",
+      "instruction_data_len": 256,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493643870,
+      "compute_units": 10014,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493643911",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "4mfU95PvY6cazRWimPTThyy9cd1cJuJcKEwRLs9QxVVCACshfnxn2PxCWqQoUS3Qx2NyCryAv7xU7CXSwGozhgQ4",
+      "instruction_data_len": 16,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493643911,
+      "compute_units": 1106385,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493644002",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "2T273HLZTcuDU1JKJb7Yc2t1hW9v9Wda2awsSYoRwLVUE7vgqrSa6QWgQvp8sASUcTydbnBy2yzBk8twav2XuuZX",
+      "instruction_data_len": 16,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493644002,
+      "compute_units": 642285,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493644044",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "4Fs9bLsNKJs3hCDdT7BnDUYzZwv7C9SHLFyGfzA5qW2wsreFfDhip3nmTBgxTsG4wuT3f6aYLJ5TMXQYK2FNsE5f",
+      "instruction_data_len": 16,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493644044,
+      "compute_units": 745566,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493644084",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "42BsG2bz89nD9SMk1azpTHjnJoTBabntpauNxR7uUxa5hyvymXkBLvzVL8FqHaoMhSbzfnRScpU2roKRRohsQE5G",
+      "instruction_data_len": 16,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493644084,
+      "compute_units": 1126376,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493644124",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "iRkbtVDdGeWphvruwwfT4kfXpz1ytMjiFTxM9EzSW4npaDthxGbDiVdQadyM5Xw5rCfjwPHSedVTc3P5Xv9F2aZ",
+      "instruction_data_len": 16,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493644124,
+      "compute_units": 455642,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    },
+    {
+      "stage": "dcltrix1-493644163",
+      "magic": "DCLTRIX1",
+      "program": "registry",
+      "outcome": "executed",
+      "signature": "562Z4SZ4jUW2XoSWZE15QgUQG61ykPEZgiNuE2vLe9bZMGDvq76F2VwR1myyf4VKYnYPRiRBD68qngc7P1PXE4TF",
+      "instruction_data_len": 16,
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "route_provenance": "resolved from the chain: the outer instruction to registry begins with DCLTRIX1, and the tree dispatches registry/record_v1::dispatch on those eight bytes. The sibling `*/process_instruction` entries are the entrypoints of the programs this transaction's own logs show invoked.",
+      "slot": 493644163,
+      "compute_units": 257155,
+      "programs_invoked": [
+        "registry"
+      ],
+      "routes_corroborated": [
+        "registry/process_instruction",
+        "registry/record_v1::dispatch"
+      ],
+      "not_corroborated": []
+    }
+  ],
+  "corroborated_route_count": 18
+}

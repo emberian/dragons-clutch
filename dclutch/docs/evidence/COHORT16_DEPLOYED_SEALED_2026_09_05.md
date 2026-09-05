@@ -337,3 +337,161 @@ The three things the next lane needs, in the order they block each other:
 3. **`tools/gate witness --discover` against this cohort**, which is what
    re-anchors the register's 42 devnet witnesses to binaries the tree produces.
    The cohort exists now; the discovery pass does not.
+
+---
+
+## Addendum, 2026-09-05, lane COHORT-16B: the first market is founded, and blocker 2 is not a founding input
+
+**Devnet execution evidence.** Written after §8's blockers 1 and 2 were
+attempted. §8 stands as written; two of its three items now read differently and
+this addendum says how. Nothing above is edited.
+
+### The first cohort-16 market is Open
+
+    Open Market        GyD95eyERwRfwj8fSFNhWjKF2eaDg5XcREidPKex65zY
+    Found31 Market     82na8PkLLvcMq9R5kFquForANHRmv7t8G14Lp4TwUmag
+    collateral mint    CAjMoVjvZmgToqVFK63iDDhvWBdDvHGi9cuyCPqwJA6j
+    realm record       3asCuLzysFGxv1qnn79tpPhUYgrwTDwPYHrEN1wyeGYW
+    manifest record    iTNLkxiStkthYLruRCYCxcJJ7XMy4Gw6FSAxs1RJyCa
+    basis record       GbQGoztaDGN5uAnU41be8WDzLQX9vkhEHM6UxyUSNHLS
+    Trading ledger     GJwPzPdz5ppCD8sz3ymaZvcabsmeBSKNy5f7GFX2mqeh   mask 0x0001
+    Resolution ledger  DtvxF2xgFvnNuCgn7uDuKcErWfVHvJatvusm9ZDRShrd   mask 0x000e
+    driver             d76b13158 (the 582e46531 build cannot found this cohort)
+
+Read back off devnet at finalized commitment:
+
+- The Open Market's `selected_release_set` at offset 208 is
+  `85defd75b236b191de00b48e673cdc4a4bcc2408b2248c4504895815b04cc69f`, equal to
+  the sealed plan's `release_set_id`. That is `found-direct`'s own verifier,
+  read off the chain and never pasted from `prepare`.
+- The authenticated `ProductBasisV3` carries kind `1`
+  (`BASIS_CATEGORICAL_KIND_V3`), `basis_width 4` and `payout_scale 3` at
+  `BASIS_PAYOUT_SCALE_OFFSET_V3`, so `categorical_refunds_on_failure_v3` is true
+  of it. **`refund-scale` is green on a founded market**: an oracle outage on
+  this market refunds every ordinary claim.
+- `initial_collateral_atoms` is **1,000,000,002**, not the 1,000,000,000 every
+  prior cohort typed.
+
+### Blocker 1 is closed, and the reserve is a stated input
+
+The founding compiler derives the reserve against the scale the width derives
+and prints one line before anything is authorized:
+
+    founding-reserve-terms-v1: reserve 1000000002 atoms; founding budget
+    500000001 atoms (the lower half); basis width 4; derived payout scale 3;
+    complete sets 166666667 = budget / scale, exact; reserve provenance derived:
+    the smallest reserve at or above the intended 1000000000 atoms whose budget
+    this scale divides exactly
+
+The line is rendered *through* `founding_quantity_v1`, the guard itself, so it
+cannot be printed for a reserve the founding would refuse. The staging script
+refuses to stage a founding that states no such line and quotes it verbatim into
+`market-open-staging.json`. Landed at `fe86bac5b`; the guard is untouched.
+
+### The dependency edges are on a chain, and they are the derived set
+
+The manifest record at `iTNLkxiSt…`, owned by the cohort-16 Registry, decodes to:
+
+| entry | `dependency_count` | dependencies | tail zero |
+| ---: | ---: | --- | --- |
+| **0 (selected Direct)** | **3** | **[1, 2, 3]** | yes |
+| 1 (Resolution companion) | 0 | — | yes |
+| 2 (Resolution companion) | 0 | — | yes |
+| 3 (Resolution companion) | 0 | — | yes |
+
+**The selected entry is at index 0, not 3.** `campaign-open.json` records
+`direct_selected_manifest_entry_index: 0` and the two funding ledgers read back
+`0x0001` (Trading) and `0x000e` (Resolution). The manifest position is
+kind-digest order over the four capability kinds, and this is where the real
+market puts it. `terminal_retirement_v1.rs:120-123` names the opposite pair —
+`0b0111` preserved, `0b1000` closed — and `:816-822` requires
+`entry_index == 3`. That is a four-entry fixture, not this market.
+
+### Blocker 2 is NOT a founding input, and this is the finding
+
+With the edges in place the selected entry's closure is `0b1111`, which is what
+stage four's funding header needs. It is also what **every** route that consults
+the closure needs, and activation is one of them. Core's
+`validate_funding_header` requires `selected_mask == closure` and
+`validate_funding_ledger_masks_v2` requires the frame's ledger masks to
+partition it, so an activation frame must carry both ledgers. The drivers were
+repaired to do exactly that — 36 accounts instead of 35, the slice ordered by
+each ledger's lowest selected index — and the preflight planned cleanly.
+
+The execution refused, in the deployed Trading program:
+
+    Program ESQhDyV7obS4oNp7abjn7sSYChxtGrHru4TzvPuybJi3 invoke [2]
+    consumed 108180 of 1168949 compute units
+    failed: custom program error: 0x4003
+
+`0x4003` is `TradingSbfError::Content` — *"Manifest, selected entry, descriptor,
+or config content refused"* (`programs/dclutch-trading-sbf/src/lib.rs:143`), a
+coarse code over many conjuncts. The conjunct is named by the activation
+bundle's own declaration:
+
+- `crates/dclutch-trading/src/activation_bundle_v1.rs:355` —
+  `/// The root being created and the sole selected funding ledger.`
+  `const ACTIVATION_ACCOUNT_COUNT: u16 = 2;`
+- the profile and effect index their accounts as `ACTIVATION_ROOT_ACCOUNT_V2 = 0`
+  and `ACTIVATION_FIRST_FUNDING_ACCOUNT_V2 = 1`
+  (`crates/dclutch-market/src/capability_program/mod.rs:147,149`)
+- `programs/dclutch-trading-sbf/src/outer.rs:2076-2096` —
+  `require_activation_local_effects` computes
+  `first_nonfunding = 1 + funding_count` and refuses `Content` for any effect
+  write below it.
+
+**A wider funding slice moves the frame under a bundle whose account indices are
+published records.** Those records — the activation descriptor, effect and
+account profile — are named by the manifest entry, and the manifest digest is a
+Market-PDA seed, so they cannot be re-indexed for a market that already exists.
+
+So the two requirements are in conflict at cohort-16's deployed artifacts:
+**retirement needs the edges; activation at this release forbids them.** That is
+not a founding input and not a driver repair. It is a Direct release change —
+`ACTIVATION_ACCOUNT_COUNT` and the bundle's indices must express the dependency
+ledger — which moves the Direct release id, the manifest entry and the Market
+address, and which changes a crate compiled into the Trading SBF link. This lane
+holds no program authority and stopped here.
+
+`GyD95ey…` is therefore a market that is Open, refunding, and carries correct
+dependency edges, and that cannot be activated at this release. It is the
+positive control for the conflict, not a market to trade.
+
+### One more mirror, caught by a real founding
+
+The founding refused twice before it landed, and the second refusal was a defect
+older than this lane:
+
+    DCLTGMF3 resolved account count changed: expected 58, observed 60
+    (market does not carry a recovery policy)
+
+Seating the failure escrow at founding (decision 0025 item 2) moved the composed
+founding frame from 58 keys to 60 — the escrow's Position and its admission. It
+moved `GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3`, the census fixture derived
+from it, the census test that pins `60/14/43`, and the live check every real
+founding runs. It did not move
+`FoundingSubmissionOperationV1::exact_unique_accounts`, which is consulted only
+when a real founding compiles its real message — so every offline suite was
+green and the frame refused three transactions from Open. A test in the same
+table asserted `58` and `60` as literals and was a third author agreeing with
+the stale pin. The pin now reads the frame's width; the literals are gone; a new
+test welds them. Landed at `248654d9f`. This is the second time that one table
+has been a stale mirror, and its own doc comment records the first.
+
+### The cost, and what the payer holds
+
+Three founding attempts. The first refused before any market state existed
+(`the founding has STARTED on this chain … no compatible durable DCLTPCB2
+checkpoint`) because the refused zero-edge attempt had already consumed the
+collateral mint; the collateral mint and wallet keypairs were rotated for each
+attempt and the old ones kept. The campaign payer went 1.877 → 1.684 → ~1.3 SOL.
+The deployer is untouched at 29.74.
+
+### What §8's list reads as now
+
+1. **Closed.** The reserve is derived, stated and on a chain.
+2. **Reshaped.** The edges are derived, on a chain, and correct; the wall moved
+   to the Direct activation bundle's two-account frame, and it is a release
+   change with program authority attached.
+3. **Untouched.** `tools/gate witness --discover` against this cohort has not
+   been run.

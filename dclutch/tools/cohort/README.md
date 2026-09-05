@@ -586,6 +586,24 @@ Cohort-15 and cohort-16 both founded `dependency_count 0` at every entry; their
 markets can be filled, settled, captured, paid out and taken to Terminal, and
 none of them can ever be Retired.
 
+**This row is blocked on a release change, measured 2026-09-05.** The edges make
+the selected entry's closure every bit, so every route that consults the closure
+needs a two-ledger frame — activation included. The Direct activation bundle
+declares `ACTIVATION_ACCOUNT_COUNT = 2`, *"the root being created and the sole
+selected funding ledger"*, and `require_activation_local_effects` widens its
+forbidden window by `funding_count`; a market founded with edges therefore
+refuses activation in the deployed Trading program at `TradingSbfError::Content`
+(`0x4003`). Those account indices live in published records the manifest entry
+names, and the manifest digest is a Market-PDA seed, so no founding input and no
+driver repair reaches them. Until the Direct release's activation bundle carries
+the dependency ledger, a cohort choosing this row founds markets that are Open
+and unactivatable, and a cohort declining it founds markets that can never be
+Retired. Cohort-16 has one of each.
+
+Measured in the same run: the selected entry sits at manifest index **0** on a
+real market, not the four-entry fixture's 3, so the funding slice's order is
+derived from the entry index and never typed.
+
 Adding this row renumbers the emitted scripts after `seal`. That is expected: a
 cohort that gains a row renumbers, the stage names and their `GREEN` markers do
 not move, and a job directory carrying the old numbering must be regenerated

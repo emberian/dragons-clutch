@@ -852,6 +852,19 @@ fn run_with_cluster_v1(arguments: Vec<String>, expected: ExpectedClusterV1) -> R
     let profile_metas = profile_record.metas();
     let effect_metas = effect_record.metas();
     let descriptor_metas = descriptor_record.metas();
+    // The funding slice in the order `validate_funding_ledger_masks_v2`
+    // requires: by each ledger's lowest selected entry index.
+    let funding_slice = if crate::market::selected_funding_ledger_leads_v1(entry_index) {
+        [
+            AccountMeta::new(funding_ledger, false),
+            AccountMeta::new_readonly(resolution_funding_ledger, false),
+        ]
+    } else {
+        [
+            AccountMeta::new_readonly(resolution_funding_ledger, false),
+            AccountMeta::new(funding_ledger, false),
+        ]
+    };
     let accounts = vec![
         AccountMeta::new(market, false),
         realm_metas[0].clone(),
@@ -859,10 +872,13 @@ fn run_with_cluster_v1(arguments: Vec<String>, expected: ExpectedClusterV1) -> R
         manifest_metas[0].clone(),
         manifest_metas[1].clone(),
         // The funding slice, ordered by each ledger's lowest selected entry
-        // index. The dependency ledger is read-only: Core requires it
-        // byte-identical after the child returns.
-        AccountMeta::new_readonly(resolution_funding_ledger, false),
-        AccountMeta::new(funding_ledger, false),
+        // index, exactly as `validate_funding_ledger_masks_v2` requires -- and
+        // the order is DERIVED, because the selected entry's manifest position
+        // is kind-digest order and the real devnet market puts it at index
+        // zero. The dependency ledger is read-only either way: Core requires
+        // it byte-identical after the child returns.
+        funding_slice[0].clone(),
+        funding_slice[1].clone(),
         AccountMeta::new(root, false),
         AccountMeta::new_readonly(activation_cache, false),
         AccountMeta::new_readonly(core, false),
