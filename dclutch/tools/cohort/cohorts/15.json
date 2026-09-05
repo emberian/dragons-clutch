@@ -4,8 +4,22 @@
   "prior_cohort": 14,
   "job_dir": "/Users/ember/jobs/dclutch-cohort15-20260903",
   "deploy_commit": "1cae26fd61defbefd20bcd52acc449b6e94e64ed",
-  "roles": ["registry", "rent", "custody", "resolution", "claims", "trading", "core"],
-  "owned_roles": ["custody", "resolution", "claims", "trading", "core"],
+  "roles": [
+    "registry",
+    "rent",
+    "custody",
+    "resolution",
+    "claims",
+    "trading",
+    "core"
+  ],
+  "owned_roles": [
+    "custody",
+    "resolution",
+    "claims",
+    "trading",
+    "core"
+  ],
   "cluster": {
     "genesis_hash": "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
     "public_url": "https://api.devnet.solana.com",
@@ -15,14 +29,20 @@
   "host": {
     "solana_cli_env": "DCLUTCH_SOLANA_CLI",
     "deployer_keypair_env": "DCLUTCH_DEPLOYER_KEYPAIR",
-    "repo_env": "DCLUTCH_REPO"
+    "repo_env": "DCLUTCH_REPO",
+    "builder": "local",
+    "node_env": "DCLUTCH_NODE",
+    "node_archive_env": "DCLUTCH_NODE_ARCHIVE"
   },
   "upgrade_authority": "4zrxtw5c4oPLpuTQbLYjRCXFUudvFCNNjzR9LqVQvEwP",
   "payer": {
     "campaign_payer_keypair": "keys/campaign-payer.json",
     "founder_keypair": "keys/founder.json",
     "substituted_founder_keypair": "keys/substituted.json",
-    "participant_keypairs": ["keys/participant-1.json", "keys/participant-2.json"]
+    "participant_keypairs": [
+      "keys/participant-1.json",
+      "keys/participant-2.json"
+    ]
   },
   "plan": {
     "sealed": "plan-seal.json",
@@ -50,7 +70,46 @@
       "aggregate": "GRzD2Mkb89k8fsMXPdvrQsuvMFhg41pHJT6tvsHmruyK",
       "work_dir": "market",
       "collateral_mint_keypair": "keys/collateral-mint.json",
-      "collateral_wallet_keypair": "keys/collateral-wallet.json"
+      "collateral_wallet_keypair": "keys/collateral-wallet.json",
+      "cuts": "10200,10600",
+      "coefficients": "1,0,1,0",
+      "cut_denominator": "100",
+      "band_anchor": "10395",
+      "band_volatility_bps": "200",
+      "band_window_slots": "10000",
+      "band_plausible_half_widths": "3",
+      "band_max_cell_share_bps": "9000",
+      "window_lead_seconds": "2400",
+      "lookup_table": "9bGZbNZxyWwejpyiXwX3Hs5QW5XB1b3LV9qULKEwzLdt",
+      "source_receipt": "BYbLHeWUQn5UBhbyPdfVmWWbrZTgqLmqWWeM8RvAm7j1",
+      "generation": "1",
+      "census": {
+        "tokens": [
+          "founder_collateral_wallet=2388f4ha6J1da74z53LbVJH1haWqV2SQrpK7s3cZmL6g",
+          "buyer_delegated_collateral=HkZpRaZEtvRw7UqxZFVxXhfja6wM8UHfhMr7NWz5uM1k"
+        ],
+        "positions": [
+          "founder=5pEh7Poj98oTzDXC9vcXnFSqi82TkJsWwtbqEFcpuheL",
+          "participant-1=NKdAYFXgMi4PquGMwiZJWb2wgCTuYmimWs517GpkJDm",
+          "participant-2=C2qSFaZb1qRRGueEtmHdBscuBCyPLfuKkF1NBoCCx72G"
+        ],
+        "watches": [
+          "participant-1-owner=5Sqp8onyzFSKWQ2kje235ns2UfNQRwSpBZuGYGBMmoJj",
+          "participant-2-owner=92RrSCo9B3yEka47ZWV7dyJ2hpw11GdsduAhA21qh6dd"
+        ]
+      },
+      "payout": {
+        "owner_keypair": "keys/founder.json",
+        "recipient": "5ieuXMUGy472Fx97nhnquQUXD4iYrnj1VjdVsVKeLYLi",
+        "claim_index": "0"
+      },
+      "fill": {
+        "outcome": "1",
+        "seller_collateral_account": "6JSZSmfoq2dSTBc3YmWTvJ9RyR73CRVNK87MzmKM66YB",
+        "buyer_collateral_account": "78BT2zDigNyGegoLsYC54Zix8n1sALsqVAYtF4yPKSJe",
+        "buyer_participant_report": "sim/admissions/participant-2.json",
+        "debtor_keypair": "keys/participant-2.json"
+      }
     },
     {
       "label": "3",
@@ -59,7 +118,51 @@
       "window_record": "APAqeQu3dZ22F1pwbs1ddtLcfrCdSF8DrbbeV3uABNdb",
       "work_dir": "market-c",
       "collateral_mint_keypair": "keys/collateral-mint-c.json",
-      "collateral_wallet_keypair": "keys/collateral-wallet-c.json"
+      "collateral_wallet_keypair": "keys/collateral-wallet-c.json",
+      "cuts": "10200,10600",
+      "coefficients": "1,0,1,0",
+      "cut_denominator": "100",
+      "band_anchor": "10395",
+      "band_volatility_bps": "200",
+      "band_window_slots": "10000",
+      "band_plausible_half_widths": "3",
+      "band_max_cell_share_bps": "9000",
+      "window_lead_seconds": "2100",
+      "lookup_table": "8mcPQNt5eCid5wr8f34yofWty2sx55q5kZoeg6fF6iQ8",
+      "generation": "1",
+      "mint": "GZE37P8vKK8kvQMq6AKAUEvUhLoug13ejq3eHU2RYvY",
+      "hoard": "DL88yhc1KHJ5ioqw6TFupMWYFpXoGxLNSCiELcaGexEC",
+      "aggregate": "7idrFHE2q6Mcm775tnqK3JptAAt5Cp4TreAtWBA7cJNe",
+      "census": {
+        "tokens": [
+          "founder_collateral_wallet=6JSZSmfoq2dSTBc3YmWTvJ9RyR73CRVNK87MzmKM66YB",
+          "buyer_delegated_collateral=78BT2zDigNyGegoLsYC54Zix8n1sALsqVAYtF4yPKSJe",
+          "seller_direct_token=7imXqzwBBGQq6bbZAf8Y6g5nRV9hT4bG59SXYmynXdYV",
+          "venue_fee=GoEvhmG4K2dRUufppzrLjNiaNf1UHGPFA1i2h8npdjfp",
+          "stranger_payout_ata=EorpstZuhLHkXXraUHm32zN8kzP8YedEfnVuXG4it9ew",
+          "founder_payout_ata=5ieuXMUGy472Fx97nhnquQUXD4iYrnj1VjdVsVKeLYLi"
+        ],
+        "positions": [
+          "founder=5zJAeL5kUanJXJj9f5marrMSuWN1tMqcXbP4xoCsT6EU",
+          "participant-2=FSUxksBxHWAk2dkPp8JHfNnembYjQmQdn5VXexiRuQ9y"
+        ],
+        "watches": [
+          "participant-2-owner=92RrSCo9B3yEka47ZWV7dyJ2hpw11GdsduAhA21qh6dd",
+          "founder=5wjmqJALbwVNsrsVtYH6L7hjoDQCgHmdFbUNUsG7vedi"
+        ]
+      },
+      "payout": {
+        "owner_keypair": "keys/participant-2.json",
+        "recipient": "EorpstZuhLHkXXraUHm32zN8kzP8YedEfnVuXG4it9ew",
+        "claim_index": "1"
+      },
+      "fill": {
+        "outcome": "1",
+        "seller_collateral_account": "6JSZSmfoq2dSTBc3YmWTvJ9RyR73CRVNK87MzmKM66YB",
+        "buyer_collateral_account": "78BT2zDigNyGegoLsYC54Zix8n1sALsqVAYtF4yPKSJe",
+        "buyer_participant_report": "sim/admissions/participant-2.json",
+        "debtor_keypair": "keys/participant-2.json"
+      }
     },
     {
       "label": "G",
@@ -67,7 +170,22 @@
       "address": "6aqy89GhhXFtDbawC5ors4HLkGvzdHC4R26TXTaaXRKj",
       "work_dir": "general",
       "collateral_mint_keypair": "keys/collateral-mint-general.json",
-      "collateral_wallet_keypair": "keys/collateral-wallet-general.json"
+      "collateral_wallet_keypair": "keys/collateral-wallet-general.json",
+      "window_lead_seconds": "2400",
+      "lookup_table": "GTZD8BonxAiUFx8D3cx7pnJbFG4UpUWRT7WJhxHDP5YV",
+      "seal_routing_table": "FEdxo6sMN4gHVSTzdiGdsttnStP9nYP1QMC5UeC9QYAQ",
+      "cuts": "10200,10600",
+      "coefficients": "1,0,1,0",
+      "cut_denominator": "100",
+      "band_anchor": "10395",
+      "band_volatility_bps": "200",
+      "band_window_slots": "10000",
+      "band_plausible_half_widths": "3",
+      "band_max_cell_share_bps": "9000",
+      "result_domain_record": "8aqkKLNGqzaBkr1rU6WfEEEskpM5eYr2upb3F7a98AYA",
+      "portfolio_record": "2yGx2PJn2H8m8iqFhuifF8pvUPFoyF5AHNnjg4PxqDx4",
+      "linked_basis_record": "D7CBjC9f2m7GpTWGZF7UwbZbKv3idzE26JBFNXFnnptT",
+      "rent_credit": "64mXYRdxPFUCjCVBXgsdopQ2rZZwwPWw5Ne3hqEWVucD"
     }
   ],
   "general_accelerator": {
@@ -76,16 +194,38 @@
     "elf_sha256": "61b2d73d44f2470051b40e39cda1d31a5f67679429eacd5448d5e5ac583b74ae",
     "semantic_release_id": "932bc2ca37b976061ed4e0b91ab9fec0c801fbd42fb4ede1ac517dc208008760",
     "registry_pin_source": "programs/dclutch-registry-sbf/src/record_v1.rs",
-    "registry_pin_text": "DEPLOYMENT_SLOT: u64 = 491_959_038"
+    "registry_pin_text": "DEPLOYMENT_SLOT: u64 = 491_959_038",
+    "elf": "accelerator/general-accelerator.so"
   },
-  "general": {"rent_credit_width": "128", "policy_schema": "dclutch-general-devnet-policy-v2"},
+  "general": {
+    "rent_credit_width": "128",
+    "policy_schema": "dclutch-general-devnet-policy-v2"
+  },
   "required_commits": {
-    "inline-input-transport": {"rev": "a517d27c", "why": "Trading's inline CPI input transport; OpenBatch cannot run without it"},
-    "artifact-deployment-observation": {"rev": "90a8563f", "why": "the Registry observes an artifact deployment at finalization"},
-    "immutable-owner-destination": {"rev": "e7ecfb2e", "why": "Claims admits the ImmutableOwner destination"},
-    "third-collateral-adapter": {"rev": "d218b963", "why": "the third collateral adapter release, which a realm founds under"},
-    "caller-authority-seed": {"rev": "1cae26fd6", "why": "the caller-authority seed change the General route needs; step 03 on chain is its only proof"},
-    "statistic-source-scale": {"rev": "4cd2b9cb5", "why": "StatisticSpecV1 carries source_scale_exponent, so cuts in dollars mean what they say"}
+    "inline-input-transport": {
+      "rev": "a517d27c",
+      "why": "Trading's inline CPI input transport; OpenBatch cannot run without it"
+    },
+    "artifact-deployment-observation": {
+      "rev": "90a8563f",
+      "why": "the Registry observes an artifact deployment at finalization"
+    },
+    "immutable-owner-destination": {
+      "rev": "e7ecfb2e",
+      "why": "Claims admits the ImmutableOwner destination"
+    },
+    "third-collateral-adapter": {
+      "rev": "d218b963",
+      "why": "the third collateral adapter release, which a realm founds under"
+    },
+    "caller-authority-seed": {
+      "rev": "1cae26fd6",
+      "why": "the caller-authority seed change the General route needs; step 03 on chain is its only proof"
+    },
+    "statistic-source-scale": {
+      "rev": "4cd2b9cb5",
+      "why": "StatisticSpecV1 carries source_scale_exponent, so cuts in dollars mean what they say"
+    }
   },
   "collateral_release": {
     "founded": "430369ce72f5e1dcfa19dcee63d5e15f9fbf2d6c9950c5caab53d5c028ae0a2d",
@@ -103,16 +243,6 @@
     "config_bytes": "370",
     "config_discriminator": "9b0caae01efacc82"
   },
-  "market_shape": {
-    "cuts": "10200,10600",
-    "coefficients": "1,0,1,0",
-    "cut_denominator": "100",
-    "band_anchor": "10395",
-    "band_volatility_bps": "200",
-    "band_window_slots": "10000",
-    "band_plausible_half_widths": "3",
-    "band_max_cell_share_bps": "9000"
-  },
   "economics": {
     "direct_fee_basis_points": "50",
     "fill_gross_atoms": "200",
@@ -121,7 +251,18 @@
     "openbatch_n": "2",
     "participant_count": "2",
     "participant_count_word": "two",
-    "settle_certificate_bytes": "312"
+    "settle_certificate_bytes": "312",
+    "payer_capital_sol": "2",
+    "participant_capital_sol": "0.05",
+    "ticket_valid_slots": "3000",
+    "crank_max_wait_seconds": "2000",
+    "checked_roles": [
+      "core",
+      "claims",
+      "trading",
+      "resolution",
+      "custody"
+    ]
   },
   "relay_replay": {
     "window": "1788369759,1788371559,7200,0",

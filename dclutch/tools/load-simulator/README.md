@@ -172,17 +172,15 @@ deliberately.
 
 ## Local proof (held validator)
 
-1. Stand up the held probe (~16–18 min; work dir must not exist):
-   ```
-   cd <clean clone at the gate commit> && python3 tools/release/private-validator-lifecycle/run.py \
-     --repo <that clone> --release-root <gate dir> \
-     --expected-release-gate-sha256 <gate sha> \
-     --validator <solana-test-validator> --solana <solana> \
-     --work /private/tmp/dclutch-sim-hold-NN \
-     --through participant --seeds 1 --hold-after-participant
-   ```
-   At the hold it writes `runs/seed-01/participant-handoff.json` and SIGSTOPs
-   itself; the validator stays alive.
+1. Stand up a held validator with a founded market and an admitted participant.
+   **The producer of that probe is owed.** It was
+   `tools/release/private-validator-lifecycle/run.py --hold-after-participant`,
+   deleted on 2026-09-04 because no mode of it reached a founded market
+   (`docs/runbooks/COLD_MACHINE_2026_09_03.md` §6, §8) while the gauntlet tier
+   (`tools/gauntlet/run.sh --mode full`) founds and opens one. Until
+   `build_config_from_probe.py` reads the tier's evidence instead of the
+   runner's `participant-handoff.json`, step 2 has no input; the shape it needs
+   is in that adapter's docstring.
 2. Build the config and run:
    ```
    python3 tools/load-simulator/build_config_from_probe.py \
@@ -224,15 +222,16 @@ deliberately.
    It executes ONE journaled action per invocation, so call it until the facts
    document appears (eight actions plus one reauthenticating pass), then pass
    the document to the adapter with `--pyth-facts`.
-4. Teardown: `kill -CONT <run.py pid>` (the supervisor is in state T); it
-   authenticates the handoff and tears the validator group down itself.
-   Never kill the validator directly.
+4. Teardown: stop the validator through the launcher that started it
+   (`dclutch-successor-validator stop`), never by killing the validator
+   directly.
 
 **A long run needs its history.** Every driver here re-verifies its earlier
 stages from transaction history, and the Direct trade and the flagship
 resolution advance one durable action per invocation with minutes between them.
-`run.py` launches the validator with `--limit-ledger-size` for exactly that
-reason: under the validator's own default those roots are purged in
+Whatever launches the held validator must pass `--limit-ledger-size` (the
+deleted lifecycle runner did; `dclutch-successor-validator` is where it belongs
+now) for exactly that reason: under the validator's own default those roots are purged in
 multi-thousand-slot chunks, and a purge landing between two stages strands the
 journal permanently — the later stage can no longer authenticate the earlier
 one, and no retry recovers it.

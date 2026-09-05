@@ -4,8 +4,22 @@
   "prior_cohort": 13,
   "job_dir": "/Users/ember/jobs/dclutch-cohort14-20260902",
   "deploy_commit": "8e96ec3f8cd4438040d9287d2489ea84587ebd5c",
-  "roles": ["registry", "rent", "custody", "resolution", "claims", "trading", "core"],
-  "owned_roles": ["custody", "resolution", "claims", "trading", "core"],
+  "roles": [
+    "registry",
+    "rent",
+    "custody",
+    "resolution",
+    "claims",
+    "trading",
+    "core"
+  ],
+  "owned_roles": [
+    "custody",
+    "resolution",
+    "claims",
+    "trading",
+    "core"
+  ],
   "cluster": {
     "genesis_hash": "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
     "public_url": "https://api.devnet.solana.com",
@@ -15,14 +29,20 @@
   "host": {
     "solana_cli_env": "DCLUTCH_SOLANA_CLI",
     "deployer_keypair_env": "DCLUTCH_DEPLOYER_KEYPAIR",
-    "repo_env": "DCLUTCH_REPO"
+    "repo_env": "DCLUTCH_REPO",
+    "builder": "local",
+    "node_env": "DCLUTCH_NODE",
+    "node_archive_env": "DCLUTCH_NODE_ARCHIVE"
   },
   "upgrade_authority": "4zrxtw5c4oPLpuTQbLYjRCXFUudvFCNNjzR9LqVQvEwP",
   "payer": {
     "campaign_payer_keypair": "keys/campaign-payer.json",
     "founder_keypair": "keys/founder.json",
     "substituted_founder_keypair": "keys/substituted.json",
-    "participant_keypairs": ["keys/participant-1.json", "keys/participant-2.json"]
+    "participant_keypairs": [
+      "keys/participant-1.json",
+      "keys/participant-2.json"
+    ]
   },
   "plan": {
     "sealed": "plan-seal.json",
@@ -39,22 +59,46 @@
     "core": "9JW1qqJVeFo9ZRvzzVzNvqrwzt7QvyHpGafTJmj2hBFB"
   },
   "markets": [
-    {"label": "A", "kind": "direct", "window_record": "AsZ21zAXkPFD6KKT7i5chSPavDUXcZtMVygDUvzNjuZZ"},
-    {"label": "B", "kind": "direct", "window_record": "Bqgn3wJU8GLU9SZAsnoqMgCHdHUrab1c721cpGJXAtMy"}
+    {
+      "label": "A",
+      "kind": "direct",
+      "window_record": "AsZ21zAXkPFD6KKT7i5chSPavDUXcZtMVygDUvzNjuZZ"
+    },
+    {
+      "label": "B",
+      "kind": "direct",
+      "window_record": "Bqgn3wJU8GLU9SZAsnoqMgCHdHUrab1c721cpGJXAtMy"
+    }
   ],
   "general_accelerator": {
     "program_id": "8pgnyNvgdue7Jc8aw75BGWoghsKGevWJvFom8omUWvQY",
     "deployment_slot": "491959038",
     "elf_sha256": "61b2d73d44f2470051b40e39cda1d31a5f67679429eacd5448d5e5ac583b74ae",
     "registry_pin_source": "programs/dclutch-registry-sbf/src/record_v1.rs",
-    "registry_pin_text": "DEPLOYMENT_SLOT: u64 = 491_959_038"
+    "registry_pin_text": "DEPLOYMENT_SLOT: u64 = 491_959_038",
+    "elf": "accelerator/general-accelerator.so",
+    "semantic_release_id": "932bc2ca37b976061ed4e0b91ab9fec0c801fbd42fb4ede1ac517dc208008760"
   },
-  "general": {"rent_credit_width": "128"},
+  "general": {
+    "rent_credit_width": "128"
+  },
   "required_commits": {
-    "inline-input-transport": {"rev": "a517d27c", "why": "Trading's inline CPI input transport; OpenBatch cannot run without it"},
-    "artifact-deployment-observation": {"rev": "90a8563f", "why": "the Registry observes an artifact deployment at finalization"},
-    "immutable-owner-destination": {"rev": "e7ecfb2e", "why": "Claims admits the ImmutableOwner destination"},
-    "third-collateral-adapter": {"rev": "d218b963", "why": "the third collateral adapter release, which a realm founds under"}
+    "inline-input-transport": {
+      "rev": "a517d27c",
+      "why": "Trading's inline CPI input transport; OpenBatch cannot run without it"
+    },
+    "artifact-deployment-observation": {
+      "rev": "90a8563f",
+      "why": "the Registry observes an artifact deployment at finalization"
+    },
+    "immutable-owner-destination": {
+      "rev": "e7ecfb2e",
+      "why": "Claims admits the ImmutableOwner destination"
+    },
+    "third-collateral-adapter": {
+      "rev": "d218b963",
+      "why": "the third collateral adapter release, which a realm founds under"
+    }
   },
   "collateral_release": {
     "founded": "430369ce72f5e1dcfa19dcee63d5e15f9fbf2d6c9950c5caab53d5c028ae0a2d",
@@ -80,7 +124,18 @@
     "openbatch_n": "2",
     "participant_count": "2",
     "participant_count_word": "two",
-    "settle_certificate_bytes": "312"
+    "settle_certificate_bytes": "312",
+    "payer_capital_sol": "2",
+    "participant_capital_sol": "0.05",
+    "ticket_valid_slots": "3000",
+    "crank_max_wait_seconds": "2000",
+    "checked_roles": [
+      "core",
+      "claims",
+      "trading",
+      "resolution",
+      "custody"
+    ]
   },
   "relay_replay": {
     "window": "1788369759,1788371559,7200,0",

@@ -7,13 +7,18 @@ copy of nineteen rows that then drift apart.
 ```
 cohorts/15.json      the cohort: deploy commit, program ids, markets, payer,
                      the relay window, the accelerator, the money
-steps.tsv            every row any cohort has ever run, each carrying `since`
-                     and `until`; {field} resolves against the manifest
+steps.tsv            every row any cohort has ever run, each carrying `since`,
+                     `until`, its `shape` and its `args`; {field} resolves
+                     against the manifest, {market.field} against each market
 check-steps.py       the gate. --cohort N selects; --delta shows what this
                      cohort is the first to run; --prove-frozen shows the union
                      lost nothing
 preflight.sh         everything checkable before a lamport moves, for any cohort
-generate-stage-scripts.py   the job directory's stage scripts, one family
+generate-stage-scripts.py   the job directory's stage scripts, one family, from
+                     the shape and args columns — no hand-written script
+frozen/              the exact tables cohort-14 and cohort-15 ran from, as
+                     fixtures; --prove-frozen proves this file still reproduces
+                     them
 test.sh              the gate's own red proofs
 ```
 
@@ -34,6 +39,37 @@ keeps its own placeholder is a row with no author. `{role_count}` and
 `{role_count_word}` derive from the manifest's `roles` list, so the sentence an
 operator reads and the loop the generator emits cannot disagree.
 
+## shape and args: the 33 hand scripts become two columns
+
+Cohort-15 ran from 33 hand-written stage scripts naming 82 absolute paths and
+**134 flags the rows did not carry**, in four structural shapes. All of that is
+now data:
+
+- **`args`** is the row's invocations, ` ;; ` between them, each starting with
+  its driver — `bootstrap` (the job's own successor binary, keyed endpoint),
+  `bootstrap-public`, `bootstrap-offline`, `solana`, `script <repo path>`,
+  `simulator`, `sh`. The 134 flags live here now, and a flag naming a fact is a
+  `{field}` that resolves against the manifest — never a literal.
+- **`shape`** is the four structural shapes the hand scripts open-coded, named:
+  `once`, `per-role`, `attempts` (the plan-then-sign loop with a fresh output
+  per attempt), `wait:capture` / `wait:settle` (the bounded wait against the
+  market's own schedule, the guard that EXITS), `journal` (rerun one durable
+  action per pass until the file it names exists), `commit`, and `-` for a row
+  whose args are not captured yet.
+- **`blocks`** was peer-chaining — a script grepping another's log for
+  `SETTLE_LANDED`. Now every emitted script refuses at its first line until each
+  row that blocks it has left a `GREEN` marker, and writes its own only when its
+  last invocation exited zero.
+
+Inside `args`, `@roles` / `@owned_roles` / `@participants` repeat an invocation,
+`?` skips one whose output exists, `*` marks the looped act, `{market.x}` binds
+each market, `{pubkey:keys/x.json}` becomes the key's address at run time, and
+`{stage:key}` is another row's output directory. A row that names `{market.x}`
+is emitted **once per market** of the kind its stage implies; a market fact the
+manifest does not carry is refused BY NAME with nothing left on disk, so an
+operator records it and regenerates. The generator emits **0 absolute paths and
+0 credentials** and refuses to leave a job directory that would carry either.
+
 ## since, until, replaces
 
 `since` is the first cohort a row applies to and `until` the last. A row that
@@ -44,16 +80,19 @@ the replacement **forward**, so cohort-14's "`activate-general` blocks
 `openbatch`" still means something under cohort-15, where `openbatch` was
 replaced by `openbatch-refounded`.
 
-## The two frozen runbooks
+## The two frozen tables
 
-`tools/cohort14/` and `tools/cohort15/` are **frozen and superseded by this
-directory**. They stay until the live cohort-15 lane closes, and while they
-stay, `check-steps.py --prove-frozen` is the statement that the union lost
-nothing: the cohort-14 view reproduces `tools/cohort14/steps.tsv` and the
-cohort-15 **delta** view reproduces `tools/cohort15/steps.tsv`, byte for byte
-in their six-column form. Their READMEs hold prose this one does not repeat —
-the hazard stories behind most of these rows — and that prose is why they are
-frozen rather than deleted.
+`tools/cohort14/` and `tools/cohort15/` are **gone**: their `steps.tsv` files
+are kept as fixtures under `frozen/cohort-14.tsv` and `frozen/cohort-15.tsv`,
+and `check-steps.py --prove-frozen` is the standing proof that this directory
+still reproduces exactly what those two cohorts ran — the cohort-14 view
+reproduces `frozen/cohort-14.tsv` and the cohort-15 **delta** view reproduces
+`frozen/cohort-15.tsv`, byte for byte in the six-column form the hand scripts
+were driven from. That proof is why the `shape` and `args` columns could be
+added and the two directories deleted in the same breath: adding a column, or a
+`since 16` row, is proved to have changed nothing about what already ran. The
+hazard stories those READMEs held are now the `### key` prose below, one author
+per row.
 
 ## What no preflight can answer
 
@@ -413,3 +452,70 @@ reproduce. Host-side, key-free, moves no lamports. The verifier is not that
 set now pins, each role's `checked_candidate_elf_sha256` must equal the
 ProgramData ELF digest **read off chain**, and the produce command must reach
 its ticket checks from a job directory naming no path under the deleted scratch.
+
+## The cohort-16 rows: prepare moves before the ladder
+
+Cohort-16 is a full redeploy that founds a refunding market, buys a second
+source, and retires the first. Five rows are new and two of the old founding
+rows are replaced, and the change is one of ORDER: on a genesis cohort the
+checked candidate is installed directly, so `prepare` can run before the ladder
+rather than as a step of it. `--prove-frozen` proves cohort-14 and cohort-15 are
+untouched by any of it.
+
+### deploy-roles
+
+`redeploy`'s content as an emitted stage: one `solana program deploy` per role
+from the candidate's `elf/`, each image dumped back and compared **before the
+next deploy starts** — a sequence that spends money stops at the first failure.
+Replaces cohort-15's ladder-embedded deploy.
+
+### prepare
+
+`accelerator-release`'s successor, moved ahead of the ladder. Observe every
+deployed role's ProgramData and the accelerator's, then `prepare` with the role
+groups and the accelerator group, deriving the seven semantic release ids from
+the ELFs rather than typing them. The Registry finalizes the accelerator record
+during the ladder, which is the deployment observation — so `prepare` names it
+and `administration` proves it.
+
+### fund-payer
+
+Capitalize the campaign payer — a DISTINCT keypair from the deployer, because
+the founding's fee payer is writable while the consenting authority is readonly
+— before the ladder runs on it.
+
+### administration
+
+`ladder`'s successor: `campaign --through activation` from `plan.json`, the
+payer funded first. A second preflight that READS THE CLUSTER is the verifier,
+never the driver's exit code.
+
+### checked-execution-release
+
+The five-role checked execution release, minted from the sealed plan **before
+any fill**: the produce command and the fee settlement both require it, and a
+cohort that founds without it is reachable by neither.
+
+### seal-general
+
+`devnet-capability-seal-v1` from the General session's frame report, over a v0
+routing table with the extended heap the `DCLTSEL1` profile admits. The builder
+derives the seal address from the four seeds and refuses a frame naming a
+different one; the address it lands at must equal the coordinate-38 address the
+session stated in advance — two authors, one address, neither told by the other.
+
+### refund-scale-seated
+
+*Cohort-17.* `refund-scale`'s successor: from this cohort the founding SEATS the
+failure column rather than issuing it, so the founder pre-funds the escrow
+Position and its admission at the derived addresses. The page must print that the
+failure column is seated in the market's escrow, not held by the founder.
+
+### escrow-seated
+
+*Cohort-17.* For every refunding market this cohort founded, derive the failure
+escrow — the ClaimsCapability PDA at `(market, claim_count − 1)`, then the
+`ProtocolPositionV2` under that owner and the aggregate — and prove the two
+Positions sum to the aggregate supply at every coordinate with the founder
+issued no failure claim (decision 0025 item 2), read off chain rather than off
+the founding's own receipt.

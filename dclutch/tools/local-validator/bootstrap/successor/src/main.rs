@@ -56,8 +56,6 @@ mod ledger;
 mod market;
 mod model;
 mod plan;
-mod private_activity;
-mod private_lifecycle;
 mod pyth_vaa_provisioning;
 mod rational_market;
 mod recovery_crank;
@@ -372,39 +370,6 @@ fn run() -> Result<()> {
         }
         Some("local-private-validator-pyth-provider-closure-v1") => {
             terminal_exterior_pyth::run_provider_closure(arguments.collect())
-        }
-        Some(command) if command == private_activity::STAGE_COMMAND_V1 => {
-            let parsed = private_activity::parse_stage_args(arguments.collect::<Vec<_>>())?;
-            let value = private_activity::run_stage(parsed)?;
-            stdout_json_value_v1(&value)
-        }
-        Some(command) if command == private_activity::MANIFEST_COMMAND_V1 => {
-            let parsed = private_activity::parse_manifest_args(arguments.collect::<Vec<_>>())?;
-            let value = private_activity::run_manifest(parsed)?;
-            stdout_json_value_v1(&value)
-        }
-        Some(command) if command == private_activity::CAPTURE_COMMAND_V1 => {
-            let parsed = private_activity::parse_capture_args(arguments.collect::<Vec<_>>())?;
-            let value = private_activity::run_capture(parsed)?;
-            stdout_json_value_v1(&value)
-        }
-        Some(command) if command == private_activity::LIFECYCLE_SESSION_COMMAND_V1 => {
-            let parsed =
-                private_activity::parse_lifecycle_session_args(arguments.collect::<Vec<_>>())?;
-            let value = private_activity::run_lifecycle_session(parsed)?;
-            stdout_json_value_v1(&value)
-        }
-        Some(command) if command == private_lifecycle::COMMAND_V1 => {
-            let parsed = private_lifecycle::parse_args(arguments.collect::<Vec<_>>())?;
-            let value = private_lifecycle::run(parsed)?;
-            stdout_json_value_v1(&value)
-        }
-        Some(command) if command == private_lifecycle::DIRECT_PAYOUT_SCHEDULE_COMMAND_V1 => {
-            let parsed = private_lifecycle::parse_direct_payout_schedule_args(
-                arguments.collect::<Vec<_>>(),
-            )?;
-            let value = private_lifecycle::run_direct_payout_schedule(parsed)?;
-            stdout_json_value_v1(&value)
         }
         Some("local-mutable-prepare-v1") => local_mutable::run_prepare(arguments.collect()),
         Some("local-mutable-plan-authenticate-v1") => {
@@ -2361,9 +2326,6 @@ fn usage() {
          --local-validator-profile ABSOLUTE_JSON \
          --finalized-capture ABSOLUTE_JSON --output ABSOLUTE_NEW_JSON\n"
     );
-    println!("{}", private_activity::usage());
-    println!("{}", private_lifecycle::usage());
-    println!("{}", private_lifecycle::direct_payout_schedule_usage());
     println!("{}", claims_custody_replay::usage());
     println!("{}", claims_custody_replay::devnet_usage());
     println!("{}", direct_fee_settlement::usage());

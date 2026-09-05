@@ -6,7 +6,7 @@ There is one `steps.tsv` and one manifest per cohort. A new cohort is a file in
 `cohorts/` and nothing else -- no forked table, no forked checker, because a
 forked checker is a checker that stops being run.
 
-What it checks, which is cohort-14's three plus what a parameterized table adds:
+What it checks:
 
   1. Every selected row appears in `README.md` under its KEY, and every key the
      README claims exists in the table. A step described in one and not the
@@ -20,16 +20,21 @@ What it checks, which is cohort-14's three plus what a parameterized table adds:
      dangling.
   4. Every `{field}` in a selected row RESOLVES against the manifest. An
      unresolved field is refused rather than rendered as itself: a row that
-     silently keeps its own placeholder is a row with no author.
+     silently keeps its own placeholder is a row with no author. In `args` the
+     generator's own placeholders (`{market.x}`, `{role}`, `{pubkey:..}`, ...)
+     are checked for shape here and resolved at emission, per market.
   5. `replaces` and `until` agree -- a replaced row's `until` is the
      replacement's `since` minus one -- so the two ways of retiring a row
      cannot drift apart.
+  6. Every row's `shape` is one the generator has, and every invocation in
+     `args` starts with a driver the generator can emit. A `*` act is only
+     legal under a shape that loops, and a looping shape needs one.
 
 `--prove-frozen` is the migration's own gate: the cohort-14 view must reproduce
-`tools/cohort14/steps.tsv` and the cohort-15 delta view
-`tools/cohort15/steps.tsv`, byte for byte in their six-column form. Those two
-files stay until the live cohort-15 lane closes, and until then this is what
-says the union lost nothing.
+`frozen/cohort-14.tsv` and the cohort-15 delta view `frozen/cohort-15.tsv`, byte
+for byte in their six-column form. Those two files are the tables cohort-14 and
+cohort-15 actually ran from, kept as fixtures so that adding a column or a
+since-16 row can be proved to have changed nothing about what already ran.
 
 It reads files and exits. No cargo, no chain, no keys.
 """
@@ -43,24 +48,38 @@ import re
 import sys
 
 HERE = pathlib.Path(__file__).resolve().parent
-REPO = HERE.parent.parent
 STEPS = HERE / "steps.tsv"
 README = HERE / "README.md"
 COHORTS = HERE / "cohorts"
+FROZEN = HERE / "frozen"
 
-FIELDS = ("key", "stage", "since", "until", "replaces",
-          "driver", "command", "verifier", "cost", "blocks")
+FIELDS = ("key", "stage", "since", "until", "replaces", "shape",
+          "command", "args", "verifier", "cost", "blocks")
 LEGACY = ("id", "stage", "command", "verifier", "cost", "blocks")
 
 # Phrases that are an exit code wearing a verifier's clothes.
 HOLLOW = ("it succeeds", "it succeeded", "exit code", "exits zero",
           "no error", "reports success")
 
-# The programs a row may name. A driver outside this vocabulary is a row the
+# The shapes the generator has. A shape outside this vocabulary is a row the
 # generator cannot emit, which is the same as a row nobody can run.
-DRIVER_KINDS = ("bootstrap", "solana-cli", "script", "simulator", "commit")
+SHAPES = ("once", "per-role", "attempts", "wait:capture", "wait:settle",
+          "journal", "commit", "-")
+LOOPING = ("attempts", "wait:capture", "wait:settle", "journal")
+
+# The programs an invocation may name.
+DRIVER_KINDS = ("bootstrap", "bootstrap-public", "bootstrap-offline", "solana",
+                "script", "simulator", "sh")
+LOOP_PREFIXES = ("@roles", "@owned_roles", "@participants")
 
 PLACEHOLDER = re.compile(r"\{([a-z0-9_]+(?:[.-][a-z0-9_-]+)*)\}")
+# The placeholders the GENERATOR resolves, per market or per loop, and so are
+# not the manifest's to answer. Their shape is checked here; their value is not.
+EMIT_TIME = re.compile(
+    r"\{(?:market\.[a-z0-9_.]+|role|role_flag|participant|item|prior\.[a-z0-9_]+"
+    r"|pubkey:[^{}]+|execute(?::[^{}]*)?|mode|attempt|stage:[a-z0-9-]+)\}")
+INLINE_LOOP = re.compile(r"@(?:roles|owned_roles|list:[a-z0-9_.]+)\{")
+ACT = re.compile(r"^\*(?:\[[^\]]*\])?\s*")
 
 
 class Refusal(Exception):
@@ -92,7 +111,7 @@ def manifest(name: str) -> dict:
 
 
 def lookup(document: dict, dotted: str):
-    """Resolve `group.field`, and the two counts derived from `roles`.
+    """Resolve `group.field`, and the counts derived from `roles`.
 
     The word forms exist because the rows are prose an operator reads at 3am,
     and "seven solana program deploy" is what that sentence has always said.
@@ -118,8 +137,11 @@ def lookup(document: dict, dotted: str):
     return node
 
 
-def resolve(text: str, document: dict, where: str, problems: list[str]) -> str:
+def resolve(text: str, document: dict, where: str, problems: list[str],
+            emit_time_ok: bool = False) -> str:
     def one(match):
+        if emit_time_ok and EMIT_TIME.fullmatch(match.group(0)):
+            return match.group(0)
         dotted = match.group(1)
         value = lookup(document, dotted)
         if value is None:
@@ -146,6 +168,25 @@ def select(table: list[dict], cohort: int, delta: bool) -> list[dict]:
         if since <= cohort and (until is None or until >= cohort):
             chosen.append(row)
     return chosen
+
+
+def invocations(args: str) -> list[str]:
+    return [piece.strip() for piece in args.split(" ;; ")] if args != "-" else []
+
+
+def invocation_parts(text: str) -> tuple[str | None, bool, bool, str]:
+    """(loop prefix, is-act, skip-if-output-exists, rest starting at the driver)."""
+    loop = None
+    for prefix in LOOP_PREFIXES:
+        if text.startswith(prefix + " "):
+            loop, text = prefix, text[len(prefix) + 1:]
+            break
+    act = bool(ACT.match(text))
+    text = ACT.sub("", text, count=1)
+    skip = text.startswith("?")
+    if skip:
+        text = text[1:]
+    return loop, act, skip, text
 
 
 def render(table: list[dict], chosen: list[dict], document: dict,
@@ -179,6 +220,9 @@ def render(table: list[dict], chosen: list[dict], document: dict,
                 if position[target] <= index:
                     problems.append(f"{where} blocks {target}, which does not come after it")
                 blocks.append(f"{position[target]:02d}")
+        # The args are validated for SHAPE against this manifest: a manifest
+        # field they name must exist; the generator's own placeholders pass.
+        resolve(row["args"], document, where + " args", problems, emit_time_ok=True)
         out.append({
             "id": f"{index:02d}",
             "stage": resolve(row["stage"], document, where, problems),
@@ -207,9 +251,29 @@ def structural(table: list[dict], problems: list[str]) -> None:
                 problems.append(
                     f"{row['key']} arrives at {row['since']} but {replaced['key']} runs until "
                     f"{replaced['until']}; a cohort would run both or neither")
-        kind = row["driver"].split(":", 1)[0]
-        if row["driver"] != "-" and kind not in DRIVER_KINDS:
-            problems.append(f"{row['key']} names driver kind {kind!r}, which the generator cannot emit")
+        shape = row["shape"]
+        if shape not in SHAPES:
+            problems.append(f"{row['key']} names shape {shape!r}, which the generator does not have")
+        acts = 0
+        for text in invocations(row["args"]):
+            loop, act, _skip, rest = invocation_parts(text)
+            acts += act
+            kind = rest.split(" ", 1)[0]
+            if kind not in DRIVER_KINDS:
+                problems.append(f"{row['key']} names driver {kind!r}, which the generator cannot emit")
+            if loop and shape == "per-role":
+                problems.append(f"{row['key']} is per-role and also loops {loop}; one loop per row")
+            for match in re.finditer(r"\{stage:([a-z0-9-]+)\}", rest):
+                if match.group(1) not in known:
+                    problems.append(f"{row['key']} names {{stage:{match.group(1)}}}, which is not a row")
+        if shape in LOOPING and acts == 0:
+            problems.append(f"{row['key']} has shape {shape} and no `*` act to loop")
+        if shape not in LOOPING and acts:
+            problems.append(f"{row['key']} marks a `*` act under shape {shape}, which does not loop")
+        if shape == "commit" and row["args"] != "-":
+            problems.append(f"{row['key']} is a commit and carries args; a commit has nothing to run")
+        if shape == "-" and row["args"] != "-":
+            problems.append(f"{row['key']} carries args under shape `-`; name the shape")
 
 
 def verifiers(view: list[dict], problems: list[str]) -> None:
@@ -244,21 +308,15 @@ def frozen_text(path: pathlib.Path) -> str:
     return "".join(line + "\n" for line in keep)
 
 
-def prove_frozen(frozen_root: pathlib.Path) -> int:
+def prove_frozen() -> int:
     table = rows()
     structural(table, problems := [])
-    checks = [
-        ("14", False, frozen_root / "tools/cohort14/steps.tsv"),
-        ("15", True, frozen_root / "tools/cohort15/steps.tsv"),
-    ]
+    checks = [("14", False, FROZEN / "cohort-14.tsv"),
+              ("15", True, FROZEN / "cohort-15.tsv")]
     failures = 0
     for name, delta, path in checks:
-        # A missing frozen file is a refusal with a sentence, never a traceback.
-        # This runs from copies -- that is how the red proofs work -- so the
-        # frozen runbooks are an EXTERNAL input to the proof and are named as
-        # one rather than guessed from this file's own grandparent.
         if not path.exists():
-            print(f"  no frozen runbook at {path}; pass --frozen-root")
+            print(f"  no frozen table at {path}")
             failures += 1
             continue
         document = manifest(name)
@@ -266,10 +324,10 @@ def prove_frozen(frozen_root: pathlib.Path) -> int:
         ours, theirs = legacy_text(view), frozen_text(path)
         label = f"cohort-{name}{' delta' if delta else ''}"
         if ours == theirs:
-            print(f"  {label}: {len(view)} rows reproduce {path} exactly")
+            print(f"  {label}: {len(view)} rows reproduce {path.name} exactly")
             continue
         failures += 1
-        print(f"  {label}: DOES NOT reproduce {path}")
+        print(f"  {label}: DOES NOT reproduce {path.name}")
         import difflib
         for line in list(difflib.unified_diff(theirs.splitlines(), ours.splitlines(),
                                               "frozen", "unified", lineterm=""))[:40]:
@@ -286,17 +344,15 @@ def main() -> int:
     parser.add_argument("--delta", action="store_true",
                         help="only the rows this cohort is the first to run")
     parser.add_argument("--emit-legacy", action="store_true",
-                        help="print the six-column form the frozen runbooks use")
+                        help="print the six-column form the frozen tables use")
     parser.add_argument("--prove-frozen", action="store_true",
-                        help="prove the union reproduces both frozen runbooks")
-    parser.add_argument("--frozen-root", default=str(REPO),
-                        help="the tree holding tools/cohort14 and tools/cohort15")
+                        help="prove the union reproduces both frozen tables under frozen/")
     arguments = parser.parse_args()
 
     try:
         if arguments.prove_frozen:
             print("cohort runbook: reproducing the frozen tables")
-            return prove_frozen(pathlib.Path(arguments.frozen_root))
+            return prove_frozen()
         if not arguments.cohort:
             parser.error("--cohort is required (a number, or a path to a manifest)")
         document = manifest(arguments.cohort)
@@ -323,8 +379,11 @@ def main() -> int:
         for problem in problems:
             print(f"  {problem}")
         return 1
+    unemitted = [row["key"] for row in chosen if row["shape"] not in ("commit",) and row["args"] == "-"]
     print(f"{label} runbook: {len(view)} steps, each documented, each naming a "
-          f"verifier, every field resolved from {document['schema']}.")
+          f"verifier, every field resolved from {document['schema']}; "
+          f"{len(chosen) - len(unemitted)} carry their args, {len(unemitted)} do not"
+          + (f" ({', '.join(unemitted)})" if unemitted else "") + ".")
     return 0
 
 

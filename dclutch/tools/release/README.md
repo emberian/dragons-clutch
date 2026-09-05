@@ -207,8 +207,7 @@ two are frame-gate-only, so the present summary reports TWELVE links.
 **Do not restate that number anywhere.** `e6b7bf1a` deleted `dclutch-dealer-sbf`
 on 2026-09-02 and took the set from thirteen to twelve; the runner derives its
 count from `programs/` and stayed green, and four consumers that had written the
-literal 13 went silently red -- including `run.py`, which is the whole
-private-validator lifecycle. `artifact_provenance.SHIPPED_LINKS` is the one
+literal 13 went silently red. `artifact_provenance.SHIPPED_LINKS` is the one
 owner; count it from there.
 
 Each per-link log is truncated and stamped with a new run identifier and the
