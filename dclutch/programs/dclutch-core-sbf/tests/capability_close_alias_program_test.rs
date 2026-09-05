@@ -139,6 +139,35 @@ const RENT_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc5; 32]);
 const GENERATION: u64 = 9;
 const CAPACITY_PROFILE: [u8; 32] = [0x44; 32];
 
+/// Where the selected Direct entry sits in the market being closed.
+///
+/// The four-entry fixture this file was written against put it LAST, so the
+/// Resolution-owned dependency ledger led the funding slice and the Trading one
+/// was written. Devnet `GyD95eyE…` puts it FIRST, and the frame is the mirror
+/// image. Both are real; neither is a position anything may type.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CloseShape {
+    /// Selected entry at index 3, masks `0b0111` / `0b1000`.
+    SelectedLast,
+    /// Selected entry at index 0, masks `0x0001` / `0x000e` -- the real market.
+    SelectedFirst,
+}
+
+impl CloseShape {
+    const fn selected_entry_index(self) -> u16 {
+        match self {
+            Self::SelectedLast => 3,
+            Self::SelectedFirst => 0,
+        }
+    }
+
+    /// Whether the selected row's own ledger leads the funding slice, which is
+    /// true exactly when its mask's lowest selected index is the lower one.
+    const fn selected_leads(self) -> bool {
+        matches!(self, Self::SelectedFirst)
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Fault {
     None,
@@ -458,6 +487,10 @@ fn ordinary_lengths() -> [u32; DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3 as usize
 }
 
 fn build_fixture(fault: Fault) -> (ProgramTest, Fixture) {
+    build_fixture_for(CloseShape::SelectedLast, fault)
+}
+
+fn build_fixture_for(shape: CloseShape, fault: Fault) -> (ProgramTest, Fixture) {
     let artifacts = artifacts();
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
@@ -539,11 +572,22 @@ fn build_fixture(fault: Fault) -> (ProgramTest, Fixture) {
         CompartmentFundingV1::not_applicable(),
     )
     .expect("funding amounts");
+    let selected_entry_index = shape.selected_entry_index();
+    let selected_bit = 1_u16 << selected_entry_index;
+    let dependency_mask = 0b1111_u16 & !selected_bit;
+    // Every OTHER manifest index, ascending: the edge set a Direct founding
+    // derives, whichever position the sort gives the selected entry.
     let mut direct_dependencies = [0_u8; MAX_DEPENDENCIES_PER_CAPABILITY];
-    direct_dependencies
-        .get_mut(..3)
-        .expect("Direct dependency prefix")
-        .copy_from_slice(&[0, 1, 2]);
+    {
+        let mut position = 0_usize;
+        for index in 0_u8..4 {
+            if u16::from(index) == selected_entry_index {
+                continue;
+            }
+            direct_dependencies[position] = index;
+            position += 1;
+        }
+    }
     let direct_entry = CapabilityEntryV1::new(
         content(ordinary_descriptor.kind().to_bytes()),
         content(release.program_set_id),
@@ -558,7 +602,15 @@ fn build_fixture(fault: Fault) -> (ProgramTest, Fixture) {
         FundingQuoteV1::new(amounts, None).expect("funding quote"),
     )
     .expect("Direct manifest entry");
-    let dependency_entries = [0x10_u8, 0x11, 0x12].map(|kind| {
+    // Companion kinds sort BELOW the Direct kind for the last-index shape and
+    // above it for the first-index one, because manifest order is kind-digest
+    // order and the position is what the shape is about.
+    let companion_kinds = if shape.selected_leads() {
+        [0xfd_u8, 0xfe, 0xff]
+    } else {
+        [0x10_u8, 0x11, 0x12]
+    };
+    let dependency_entries = companion_kinds.map(|kind| {
         CapabilityEntryV1::new(
             content([kind; 32]),
             content([kind.wrapping_add(0x10); 32]),
@@ -574,12 +626,26 @@ fn build_fixture(fault: Fault) -> (ProgramTest, Fixture) {
         )
         .expect("Resolution dependency entry")
     });
-    let entries = [
-        dependency_entries[0],
-        dependency_entries[1],
-        dependency_entries[2],
-        direct_entry,
-    ];
+    assert_eq!(
+        ordinary_descriptor.kind().to_bytes() < [companion_kinds[0]; 32],
+        shape.selected_leads(),
+        "the companion kinds must place the selected entry where the shape says",
+    );
+    let entries = if shape.selected_leads() {
+        [
+            direct_entry,
+            dependency_entries[0],
+            dependency_entries[1],
+            dependency_entries[2],
+        ]
+    } else {
+        [
+            dependency_entries[0],
+            dependency_entries[1],
+            dependency_entries[2],
+            direct_entry,
+        ]
+    };
     let mut manifest = vec![0; MANIFEST_HEADER_BYTES + 4 * CAPABILITY_ENTRY_BYTES];
     CapabilityManifestV1::encode_into(&entries, &mut manifest).expect("manifest");
     let manifest_digest = hash(&manifest).to_bytes();
@@ -631,7 +697,7 @@ fn build_fixture(fault: Fault) -> (ProgramTest, Fixture) {
     );
 
     let wire_selection = CapabilityExecutionSelectionV1::new(
-        3,
+        selected_entry_index,
         manifest_id,
         content(ordinary_descriptor.kind().to_bytes()),
         content(release.program_set_id),
@@ -729,11 +795,14 @@ fn build_fixture(fault: Fault) -> (ProgramTest, Fixture) {
         &mut dependency_funding_data,
         manifest_id,
         decoded_manifest,
-        0b0111,
+        dependency_mask,
         dependency_funding_rate,
     )
     .expect("dependency funding initialize");
-    for entry_index in 0_u16..3 {
+    for entry_index in 0_u16..4 {
+        if dependency_mask & (1_u16 << entry_index) == 0 {
+            continue;
+        }
         FundingLedgerV2::activate_in_place(
             &mut dependency_funding_data,
             manifest_id,
@@ -778,12 +847,18 @@ fn build_fixture(fault: Fault) -> (ProgramTest, Fixture) {
         &mut funding_data,
         manifest_id,
         decoded_manifest,
-        0b1000,
+        selected_bit,
         funding_rate,
     )
     .expect("funding initialize");
-    FundingLedgerV2::activate_in_place(&mut funding_data, manifest_id, decoded_manifest, 3, 4)
-        .expect("funding activate");
+    FundingLedgerV2::activate_in_place(
+        &mut funding_data,
+        manifest_id,
+        decoded_manifest,
+        selected_entry_index,
+        4,
+    )
+    .expect("funding activate");
     let funding_derivation = CapabilityFundingLedgerDerivationV2::new(
         TRADING_PROGRAM_ID.to_bytes(),
         market.to_bytes(),
@@ -853,8 +928,17 @@ fn build_fixture(fault: Fault) -> (ProgramTest, Fixture) {
         AccountMeta::new_readonly(realm_staging, false),
         AccountMeta::new_readonly(manifest_raw, false),
         AccountMeta::new_readonly(manifest_staging, false),
-        AccountMeta::new_readonly(dependency_funding, false),
-        AccountMeta::new(funding, false),
+    ];
+    // The funding slice in canonical mask order, which is the SHAPE's order and
+    // not a controller's position.
+    if shape.selected_leads() {
+        accounts.push(AccountMeta::new(funding, false));
+        accounts.push(AccountMeta::new_readonly(dependency_funding, false));
+    } else {
+        accounts.push(AccountMeta::new_readonly(dependency_funding, false));
+        accounts.push(AccountMeta::new(funding, false));
+    }
+    accounts.extend([
         AccountMeta::new(root, false),
         AccountMeta::new_readonly(cache, false),
         AccountMeta::new_readonly(CORE_PROGRAM_ID, false),
@@ -886,7 +970,7 @@ fn build_fixture(fault: Fault) -> (ProgramTest, Fixture) {
         AccountMeta::new_readonly(descriptor_staging, false),
         AccountMeta::new_readonly(RENT_PROGRAM_ID, false),
         AccountMeta::new(rent_credit, false),
-    ];
+    ]);
     let layout = close_layout();
     // The first of the seven exact close aliases: the Registry activation
     // cache, carried once for Core and once again inside the Direct child
@@ -1280,6 +1364,92 @@ async fn canonical_high_selector_closes_through_real_core_and_trading() {
     );
 }
 
+/// Retirement's stage four on the shape a REAL market has.
+///
+/// `DirectCloseCapability` takes `outstanding_capabilities` to zero on a market
+/// whose selected Direct entry is manifest index **0** -- devnet `GyD95eyE…`'s
+/// position -- so the funding slice is Trading `0x0001` first and written,
+/// Resolution `0x000e` second and preserved. That is the mirror image of the
+/// fixture above, and it is the order `terminal_retirement_v1` used to have
+/// written down as two fields named after controllers.
+///
+/// The point is not that a second order works. It is that the SAME projection
+/// produces both, and the market this file could actually retire is the one it
+/// was not testing.
+#[tokio::test]
+async fn the_high_selector_closes_a_market_whose_selected_entry_is_index_zero() {
+    let (test, fixture) = build_fixture_for(CloseShape::SelectedFirst, Fault::None);
+    let mut context = test.start_with_context().await;
+    let credit_before = account(&mut context, fixture.rent_credit)
+        .await
+        .expect("RentCredit");
+    let dependency_before = account(&mut context, fixture.dependency_funding)
+        .await
+        .expect("Resolution dependency ledger");
+    assert_eq!(dependency_before.data, fixture.dependency_funding_data);
+    let processed = context
+        .banks_client
+        .process_transaction_with_metadata(Transaction::new_signed_with_payer(
+            &[
+                ComputeBudgetInstruction::set_compute_unit_limit(1_400_000),
+                fixture.instruction.clone(),
+            ],
+            Some(&context.payer.pubkey()),
+            &[&context.payer],
+            context
+                .banks_client
+                .get_latest_blockhash()
+                .await
+                .expect("blockhash"),
+        ))
+        .await
+        .expect("Banks RPC");
+    assert!(
+        processed.result.is_ok(),
+        "the index-0 close refused: {:?}",
+        processed.result
+    );
+    println!(
+        "direct close capability, selected entry index 0: {} CU top level",
+        processed
+            .metadata
+            .expect("transaction metadata")
+            .compute_units_consumed
+    );
+    for closed in [fixture.root, fixture.funding] {
+        if let Some(account) = account(&mut context, closed).await {
+            assert_eq!(account.lamports, 0);
+            assert_eq!(account.owner, system_program::ID);
+            assert!(account.data.is_empty());
+        }
+    }
+    let market = account(&mut context, fixture.market).await.expect("Market");
+    assert_eq!(
+        CoreState::decode(&market.data)
+            .expect("Core poststate")
+            .outstanding_capabilities,
+        0
+    );
+    assert_eq!(
+        account(&mut context, fixture.dependency_funding)
+            .await
+            .expect("preserved Resolution dependency ledger"),
+        dependency_before,
+        "the close covers the preserved compartments and moves none of them",
+    );
+    let credit = account(&mut context, fixture.rent_credit)
+        .await
+        .expect("RentCredit poststate");
+    assert_eq!(
+        credit.lamports,
+        credit_before
+            .lamports
+            .checked_add(fixture.root_lamports)
+            .and_then(|value| value.checked_add(fixture.funding_lamports))
+            .expect("classified close refund")
+    );
+}
+
 #[tokio::test]
 async fn shifted_substituted_and_extra_aliases_refuse_with_rollback() {
     // A dropped alias, a shifted one and a spurious one are all frame
@@ -1513,8 +1683,63 @@ async fn begin_direct_retiring_m61_twenty_seed_real_sbf_campaign() {
 /// carries only the Trading ledger it is about, and its child tail has no
 /// Rent program and no rent credit, because a root being CREATED has no rent
 /// to refund.
-fn activation_layout() -> CapabilityRouteLayoutV1 {
-    CapabilityRouteLayoutV1::new(1, 18).expect("activation route layout")
+fn activation_layout(funding_count: u8) -> CapabilityRouteLayoutV1 {
+    CapabilityRouteLayoutV1::new(funding_count, 18).expect("activation route layout")
+}
+
+/// `TradingSbfError::ActivationLedgerCount`, derived and never typed.
+const TRADING_ACTIVATION_LEDGER_COUNT: u32 =
+    dclutch_trading_sbf::TradingSbfError::ActivationLedgerCount as u32;
+
+/// Which market shape an activation fixture founds under.
+///
+/// The two-ledger shapes are the REAL market's: devnet `GyD95eyE…` founded on
+/// 2026-09-05 with the selected Direct entry at manifest index 0, dependency
+/// edges `[1, 2, 3]`, and the two funding ledgers `0x0001` (Trading, selected)
+/// and `0x000e` (Resolution, preserved) its closure requires. The zero-edge
+/// shape is every cohort before it, and is here as the control: the same
+/// release, the same artifacts, the same bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ActivationShape {
+    /// One entry, no edges, one ledger.
+    ZeroEdge,
+    /// Four entries, selected at index 0, two ledgers.
+    TwoLedger,
+    /// The two-ledger market with the dependency ledger withheld.
+    MissingDependencyLedger,
+    /// The two-ledger market with a third ledger overlapping the dependency's
+    /// rows, which is "more ledgers than the closure has".
+    OverlappingDependencyLedger,
+}
+
+impl ActivationShape {
+    /// Manifest entries this shape founds under.
+    const fn entry_count(self) -> u16 {
+        match self {
+            Self::ZeroEdge => 1,
+            _ => 4,
+        }
+    }
+
+    /// The selected entry's own manifest index.
+    const fn selected_entry_index(self) -> u16 {
+        0
+    }
+
+    /// Whether the market seats a foreign dependency ledger at all.
+    const fn has_dependency_ledger(self) -> bool {
+        !matches!(self, Self::ZeroEdge)
+    }
+
+    /// Physical ledgers the instruction PRESENTS, which is what the funding
+    /// header declares and what the hostiles move.
+    const fn presented_ledgers(self) -> u8 {
+        match self {
+            Self::ZeroEdge | Self::MissingDependencyLedger => 1,
+            Self::TwoLedger => 2,
+            Self::OverlappingDependencyLedger => 3,
+        }
+    }
 }
 
 struct ActivationFixture {
@@ -1527,6 +1752,10 @@ struct ActivationFixture {
     expected_root: Vec<u8>,
     manifest: Vec<u8>,
     manifest_id: ContentId,
+    selected_entry_index: u16,
+    dependency_funding: Option<Pubkey>,
+    dependency_funding_data: Vec<u8>,
+    dependency_funding_lamports: u64,
 }
 
 /// The founding of a Direct capability root, on real Core and Trading ELFs.
@@ -1542,7 +1771,7 @@ struct ActivationFixture {
 /// selection's own header seeds, the closure mask from the manifest, and the
 /// role request as selection bytes, `CapabilityFundingHeaderV2::new(1, 1, mask)`
 /// and `direct_activation_request_v1()` concatenated.
-fn build_activation_fixture() -> (ProgramTest, ActivationFixture) {
+fn build_activation_fixture(shape: ActivationShape) -> (ProgramTest, ActivationFixture) {
     let artifacts = artifacts();
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
@@ -1622,6 +1851,14 @@ fn build_activation_fixture() -> (ProgramTest, ActivationFixture) {
         CompartmentFundingV1::not_applicable(),
     )
     .expect("funding amounts");
+    // The selected entry names EVERY other manifest index, which is the edge
+    // set a Direct founding derives and the only one whose closure the close
+    // frame's two ledger masks can partition.
+    let mut direct_dependencies = [0_u8; MAX_DEPENDENCIES_PER_CAPABILITY];
+    let dependency_count = u8::try_from(shape.entry_count() - 1).expect("dependency count");
+    for position in 0..usize::from(dependency_count) {
+        direct_dependencies[position] = u8::try_from(position + 1).expect("dependency index");
+    }
     let direct_entry = CapabilityEntryV1::new(
         content(ordinary_descriptor.kind().to_bytes()),
         content(release.program_set_id),
@@ -1631,22 +1868,62 @@ fn build_activation_fixture() -> (ProgramTest, ActivationFixture) {
         content(ordinary_descriptor.derivation_policy().to_bytes()),
         ActivationPolicy::PrepaidLazy,
         u64::MAX,
-        0,
-        [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+        dependency_count,
+        direct_dependencies,
         FundingQuoteV1::new(amounts, None).expect("funding quote"),
     )
     .expect("Direct manifest entry");
-    let entries = [direct_entry];
-    let mut manifest = vec![0; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
+    // Manifest order is kind-digest order, and the real market's selected entry
+    // sits FIRST. The companions are given kinds above the Direct kind so this
+    // fixture reproduces that position rather than the four-entry fixture's
+    // index 3 -- and the assertion is what says the digest did not land above
+    // them, rather than a comment hoping it did not.
+    let companion_kinds = [0xfd_u8, 0xfe, 0xff];
+    assert!(
+        ordinary_descriptor.kind().to_bytes() < [companion_kinds[0]; 32],
+        "the Direct kind must sort below the companions for the selected entry to be index 0",
+    );
+    let mut entries = vec![direct_entry];
+    if shape.entry_count() > 1 {
+        for kind in companion_kinds {
+            entries.push(
+                CapabilityEntryV1::new(
+                    content([kind; 32]),
+                    content([kind.wrapping_sub(0x10); 32]),
+                    content([kind.wrapping_sub(0x20); 32]),
+                    content([kind.wrapping_sub(0x30); 32]),
+                    content([kind.wrapping_sub(0x40); 32]),
+                    content([kind.wrapping_sub(0x50); 32]),
+                    ActivationPolicy::RequiredAtFounding,
+                    0,
+                    0,
+                    [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+                    FundingQuoteV1::new(amounts, None).expect("dependency funding quote"),
+                )
+                .expect("Resolution dependency entry"),
+            );
+        }
+    }
+    let mut manifest = vec![0; MANIFEST_HEADER_BYTES + entries.len() * CAPABILITY_ENTRY_BYTES];
     CapabilityManifestV1::encode_into(&entries, &mut manifest).expect("manifest");
     let manifest_digest = hash(&manifest).to_bytes();
     let manifest_id = content(manifest_digest);
     let decoded_manifest = CapabilityManifestV1::decode(&manifest).expect("decoded manifest");
-    // Discovered, not chosen: this driver carries exactly the one selected
-    // Trading ledger, and it may do so only when the entry closes over itself.
+    let selected_entry_index = shape.selected_entry_index();
+    // Discovered, not chosen: the closure is what the funding header must
+    // declare and what the presented ledgers must partition.
     let closure_mask =
-        capability_dependency_closure_mask_v1(decoded_manifest, 0).expect("dependency closure");
-    assert_eq!(closure_mask, 0b0001);
+        capability_dependency_closure_mask_v1(decoded_manifest, selected_entry_index)
+            .expect("dependency closure");
+    assert_eq!(
+        closure_mask,
+        match shape.entry_count() {
+            1 => 0b0001,
+            _ => 0b1111,
+        }
+    );
+    let selected_bit = 1_u16 << selected_entry_index;
+    let dependency_mask = closure_mask & !selected_bit;
 
     let adapter = PRODUCTION_ADAPTER_RELEASES[0];
     let realm_data = RealmV1::new(RealmV1Input {
@@ -1694,7 +1971,7 @@ fn build_activation_fixture() -> (ProgramTest, ActivationFixture) {
     );
 
     let wire_selection = CapabilityExecutionSelectionV1::new(
-        0,
+        selected_entry_index,
         manifest_id,
         content(ordinary_descriptor.kind().to_bytes()),
         content(release.program_set_id),
@@ -1762,7 +2039,7 @@ fn build_activation_fixture() -> (ProgramTest, ActivationFixture) {
         &mut funding_data,
         manifest_id,
         decoded_manifest,
-        0b0001,
+        selected_bit,
         funding_rate,
     )
     .expect("funding initialize");
@@ -1785,9 +2062,100 @@ fn build_activation_fixture() -> (ProgramTest, ActivationFixture) {
         funding_lamports + root_lamports,
     );
 
+    // The foreign controller's ledger: every dependency row, already Active,
+    // Resolution-owned, and read-only in the frame. The activation must not
+    // move one byte or lamport of it.
+    let mut dependency_funding_data = Vec::new();
+    let mut dependency_funding_lamports = 0_u64;
+    let dependency_funding = if shape.has_dependency_ledger() {
+        let slot_count = u16::try_from(dependency_mask.count_ones()).expect("dependency rows");
+        dependency_funding_data = vec![0; funding_ledger_bytes_v2(slot_count).expect("width")];
+        let rate = funded_rent_rate(dependency_funding_data.len());
+        FundingLedgerV2::initialize(
+            &mut dependency_funding_data,
+            manifest_id,
+            decoded_manifest,
+            dependency_mask,
+            rate,
+        )
+        .expect("dependency funding initialize");
+        for entry_index in 0..decoded_manifest.entry_count() {
+            if dependency_mask & (1_u16 << entry_index) == 0 {
+                continue;
+            }
+            FundingLedgerV2::activate_in_place(
+                &mut dependency_funding_data,
+                manifest_id,
+                decoded_manifest,
+                entry_index,
+                u64::from(entry_index) + 1,
+            )
+            .expect("dependency funding activate");
+        }
+        let derivation = CapabilityFundingLedgerDerivationV2::new(
+            RESOLUTION_PROGRAM_ID.to_bytes(),
+            market.to_bytes(),
+            GENERATION,
+            manifest_id,
+            FundingLedgerV2::decode(&dependency_funding_data).expect("dependency ledger"),
+        )
+        .expect("dependency funding derivation");
+        let key =
+            Pubkey::find_program_address(&derivation.seed_components(), &RESOLUTION_PROGRAM_ID).0;
+        dependency_funding_lamports =
+            Rent::default().minimum_balance(dependency_funding_data.len());
+        add_account_with_lamports(
+            &mut test,
+            key,
+            RESOLUTION_PROGRAM_ID,
+            dependency_funding_data.clone(),
+            dependency_funding_lamports,
+        );
+        Some(key)
+    } else {
+        None
+    };
+
+    // "More ledgers than the closure has": a real, distinct, Resolution-owned
+    // ledger whose rows the dependency ledger already covers.
+    let overlapping_funding = if shape == ActivationShape::OverlappingDependencyLedger {
+        let overlap_mask = 1_u16 << 1;
+        let mut bytes = vec![0; funding_ledger_bytes_v2(1).expect("overlap width")];
+        let rate = funded_rent_rate(bytes.len());
+        FundingLedgerV2::initialize(
+            &mut bytes,
+            manifest_id,
+            decoded_manifest,
+            overlap_mask,
+            rate,
+        )
+        .expect("overlap funding initialize");
+        FundingLedgerV2::activate_in_place(&mut bytes, manifest_id, decoded_manifest, 1, 1)
+            .expect("overlap funding activate");
+        let derivation = CapabilityFundingLedgerDerivationV2::new(
+            RESOLUTION_PROGRAM_ID.to_bytes(),
+            market.to_bytes(),
+            GENERATION,
+            manifest_id,
+            FundingLedgerV2::decode(&bytes).expect("overlap ledger"),
+        )
+        .expect("overlap funding derivation");
+        let key =
+            Pubkey::find_program_address(&derivation.seed_components(), &RESOLUTION_PROGRAM_ID).0;
+        let lamports = Rent::default().minimum_balance(bytes.len());
+        add_account_with_lamports(&mut test, key, RESOLUTION_PROGRAM_ID, bytes, lamports);
+        Some(key)
+    } else {
+        None
+    };
+
     let family_request = direct_activation_request_v1();
-    let funding_header =
-        CapabilityFundingHeaderV2::new(1, 1, closure_mask).expect("funding header");
+    let funding_header = CapabilityFundingHeaderV2::new(
+        shape.presented_ledgers(),
+        u8::try_from(closure_mask.count_ones()).expect("logical count"),
+        closure_mask,
+    )
+    .expect("funding header");
     let mut role_request = wire_selection.to_bytes().to_vec();
     role_request.extend_from_slice(&funding_header.encode());
     role_request.extend_from_slice(&family_request);
@@ -1828,13 +2196,28 @@ fn build_activation_fixture() -> (ProgramTest, ActivationFixture) {
     data.extend_from_slice(&envelope.encode().expect("Core envelope bytes"));
     data.extend_from_slice(&role_request);
 
-    let accounts = vec![
+    let mut accounts = vec![
         AccountMeta::new(market, false),
         AccountMeta::new_readonly(realm_raw, false),
         AccountMeta::new_readonly(realm_staging, false),
         AccountMeta::new_readonly(manifest_raw, false),
         AccountMeta::new_readonly(manifest_staging, false),
-        AccountMeta::new(funding, false),
+    ];
+    // The physical funding slice, in the order
+    // `validate_funding_ledger_masks_v2` requires: by each ledger's lowest
+    // selected manifest index. The selected entry is index 0 here, so the
+    // Trading ledger LEADS -- which is the real market's order and the reverse
+    // of the four-entry close fixture's.
+    accounts.push(AccountMeta::new(funding, false));
+    if let Some(extra) = overlapping_funding {
+        accounts.push(AccountMeta::new_readonly(extra, false));
+    }
+    if shape != ActivationShape::MissingDependencyLedger {
+        if let Some(dependency) = dependency_funding {
+            accounts.push(AccountMeta::new_readonly(dependency, false));
+        }
+    }
+    accounts.extend([
         AccountMeta::new(root, false),
         AccountMeta::new_readonly(cache, false),
         AccountMeta::new_readonly(CORE_PROGRAM_ID, false),
@@ -1864,8 +2247,11 @@ fn build_activation_fixture() -> (ProgramTest, ActivationFixture) {
         AccountMeta::new_readonly(system_program::ID, false),
         AccountMeta::new_readonly(descriptor_raw, false),
         AccountMeta::new_readonly(descriptor_staging, false),
-    ];
-    assert_eq!(accounts.len(), activation_layout().account_count());
+    ]);
+    assert_eq!(
+        accounts.len(),
+        activation_layout(shape.presented_ledgers()).account_count()
+    );
     (
         test,
         ActivationFixture {
@@ -1882,6 +2268,10 @@ fn build_activation_fixture() -> (ProgramTest, ActivationFixture) {
             expected_root,
             manifest,
             manifest_id,
+            selected_entry_index,
+            dependency_funding,
+            dependency_funding_data,
+            dependency_funding_lamports,
         },
     )
 }
@@ -1897,7 +2287,7 @@ fn build_activation_fixture() -> (ProgramTest, ActivationFixture) {
 /// Registry activation was ever in front of it.
 #[tokio::test]
 async fn canonical_activation_creates_the_direct_root_through_real_core_and_trading() {
-    let (test, fixture) = build_activation_fixture();
+    let (test, fixture) = build_activation_fixture(ActivationShape::ZeroEdge);
     let mut context = test.start_with_context().await;
     assert!(
         account(&mut context, fixture.root).await.is_none(),
@@ -1949,7 +2339,9 @@ async fn canonical_activation_creates_the_direct_root_through_real_core_and_trad
         .expect("funding poststate")
         .authenticate(fixture.manifest_id, manifest)
         .expect("authenticated funding poststate");
-    let slot = authenticated.slot(0).expect("selected slot");
+    let slot = authenticated
+        .slot(fixture.selected_entry_index)
+        .expect("selected slot");
     assert_eq!(slot.status(), FundingLedgerStatusV2::Active);
     assert!(slot.activation_slot() > 0);
     assert_eq!(slot.remaining().rent().amount(), 0);
@@ -1999,4 +2391,156 @@ async fn canonical_activation_creates_the_direct_root_through_real_core_and_trad
         .expect("the root after the replay");
     assert_eq!(after.data, fixture.expected_root);
     assert_eq!(after.lamports, fixture.root_lamports);
+}
+
+/// The wall cohort-16 met, on real ELFs: a market whose selected entry names
+/// its dependency edges, funded by the two ledgers its closure requires.
+///
+/// This is devnet market `GyD95eyE…`'s shape. At the deployed release it
+/// refused `Content 0x4003` at 108,180 CU, and the reading at the time was that
+/// the Direct activation bundle had to declare three accounts. It cannot:
+/// `AccountProfileV1` refuses `UnanchoredAccount` for a rule no requirement
+/// operation names, and no seam-seeded identity names a foreign controller. So
+/// the interpreted frame is the root and the SELECTED ledger, exactly as the
+/// native close already built it, and the dependency ledger is authenticated
+/// outside it. The artifacts are byte-identical to the zero-edge release's --
+/// the release id, the manifest entry and the Market address do not move.
+#[tokio::test]
+async fn canonical_activation_admits_the_selected_entrys_two_ledger_closure() {
+    let (test, fixture) = build_activation_fixture(ActivationShape::TwoLedger);
+    let dependency = fixture
+        .dependency_funding
+        .expect("the two-ledger shape seats a dependency ledger");
+    let mut context = test.start_with_context().await;
+    assert!(
+        account(&mut context, fixture.root).await.is_none(),
+        "the root coordinate must be vacant before the founding",
+    );
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    let transaction = Transaction::new_signed_with_payer(
+        &[
+            ComputeBudgetInstruction::set_compute_unit_limit(1_400_000),
+            fixture.instruction.clone(),
+        ],
+        Some(&context.payer.pubkey()),
+        &[&context.payer],
+        blockhash,
+    );
+    let processed = context
+        .banks_client
+        .process_transaction_with_metadata(transaction)
+        .await
+        .expect("Banks RPC");
+    assert!(
+        processed.result.is_ok(),
+        "the two-ledger founding refused: {:?}",
+        processed.result
+    );
+    let units = processed
+        .metadata
+        .expect("transaction metadata")
+        .compute_units_consumed;
+    println!("direct capability activation, F=2: {units} CU top level");
+
+    let root = account(&mut context, fixture.root)
+        .await
+        .expect("the founding created the root");
+    assert_eq!(root.owner, TRADING_PROGRAM_ID);
+    assert_eq!(root.data, fixture.expected_root);
+    assert_eq!(root.lamports, fixture.root_lamports);
+
+    let funding = account(&mut context, fixture.funding)
+        .await
+        .expect("the selected ledger survives its own spend");
+    assert_eq!(funding.lamports, fixture.funding_lamports);
+    let manifest = CapabilityManifestV1::decode(&fixture.manifest).expect("manifest");
+    let slot = FundingLedgerV2::decode(&funding.data)
+        .expect("funding poststate")
+        .authenticate(fixture.manifest_id, manifest)
+        .expect("authenticated funding poststate")
+        .slot(fixture.selected_entry_index)
+        .expect("selected slot");
+    assert_eq!(slot.status(), FundingLedgerStatusV2::Active);
+    assert!(slot.activation_slot() > 0);
+    assert_eq!(slot.remaining().rent().amount(), 0);
+
+    // The whole point of admitting it: it is authenticated and it is UNTOUCHED.
+    let preserved = account(&mut context, dependency)
+        .await
+        .expect("the dependency ledger");
+    assert_eq!(preserved.data, fixture.dependency_funding_data);
+    assert_eq!(preserved.lamports, fixture.dependency_funding_lamports);
+    assert_eq!(preserved.owner, RESOLUTION_PROGRAM_ID);
+
+    let market = account(&mut context, fixture.market)
+        .await
+        .expect("Market state");
+    assert_eq!(
+        CoreState::decode(&market.data)
+            .expect("Core poststate")
+            .outstanding_capabilities,
+        1,
+    );
+}
+
+/// A ledger SET that is not the selected entry's closure refuses by name, at
+/// CORE, before the CPI.
+///
+/// Both directions of the one accusation: a dependency ledger withheld, and one
+/// presented twice. Both are `CoreSbfError::Funding`, which is where the
+/// partition is owned -- `capability.rs`'s `validate_funding_header` requires
+/// the header's mask to EQUAL the selected entry's dependency closure and
+/// `validate_funding_ledger_masks_v2` requires the presented ledgers to
+/// partition it.
+///
+/// MEASURED, and it is why `TradingSbfError::ActivationLedgerCount` is
+/// documented as unreached: Trading restates the same partition for a caller it
+/// does not trust, and a Core-routed frame cannot get past Core to exercise it.
+/// Naming Core's code here rather than Trading's is the difference between a
+/// test that says what happened and one that assumes.
+#[tokio::test]
+async fn an_activation_whose_ledgers_are_not_the_closure_refuses_by_name() {
+    for shape in [
+        ActivationShape::MissingDependencyLedger,
+        ActivationShape::OverlappingDependencyLedger,
+    ] {
+        let (test, fixture) = build_activation_fixture(shape);
+        let mut context = test.start_with_context().await;
+        let blockhash = context
+            .banks_client
+            .get_latest_blockhash()
+            .await
+            .expect("blockhash");
+        let transaction = Transaction::new_signed_with_payer(
+            &[
+                ComputeBudgetInstruction::set_compute_unit_limit(1_400_000),
+                fixture.instruction.clone(),
+            ],
+            Some(&context.payer.pubkey()),
+            &[&context.payer],
+            blockhash,
+        );
+        let refused = context
+            .banks_client
+            .process_transaction_with_metadata(transaction)
+            .await
+            .expect("Banks RPC");
+        assert_eq!(
+            transaction_refusal(refused.result),
+            Some(CORE_FUNDING),
+            "{shape:?} must refuse at the funding-partition conjunct",
+        );
+        assert_ne!(
+            CORE_FUNDING, TRADING_ACTIVATION_LEDGER_COUNT,
+            "the two sides of the CPI own separate discriminants",
+        );
+        assert!(
+            account(&mut context, fixture.root).await.is_none(),
+            "{shape:?} must not have created a root",
+        );
+    }
 }

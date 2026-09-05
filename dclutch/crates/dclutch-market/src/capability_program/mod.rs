@@ -148,6 +148,37 @@ pub mod activation_registers_v2 {
     /// FundingState accounts follow the root, in role-request order.
     pub const ACTIVATION_FIRST_FUNDING_ACCOUNT_V2: u16 = 1;
 
+    /// Funding accounts a descriptor-owned runtime frame carries: the selected
+    /// row's ledger, alone.
+    ///
+    /// Not a policy choice and not a width that grows with a market's physical
+    /// ledger count. `AccountProfileV1` refuses `UnanchoredAccount` for any
+    /// self-representative rule no requirement operation names, and the only
+    /// identities an activation artifact can require against are the ones this
+    /// module seeds -- Trading, Core, Registry, the root. A foreign
+    /// controller's dependency ledger has no identity here and therefore cannot
+    /// appear in a released profile at any width, so the seam authenticates it
+    /// OUTSIDE the interpreted frame and never grants it a descriptor-owned
+    /// permission. `outer.rs::RuntimeFrameV2::new` is that frame, for both the
+    /// activation and the native-close route.
+    pub const ACTIVATION_RUNTIME_FUNDING_ACCOUNTS_V2: u16 = 1;
+
+    /// Exact activation account-frame width for one physical funding count.
+    ///
+    /// The seam's own rule, published here for the same reason the coordinates
+    /// above are. `outer.rs::RuntimeFrameV2::new` composes the frame as the root
+    /// followed by the role request's physical funding slice, and
+    /// `require_activation_local_effects` reads `1 + funding_count` back to
+    /// bound the window in which no effect may write. An artifact author who
+    /// cannot name that width writes it down a second time -- which is exactly
+    /// what a literal `2` was, and what refused every activation of a market
+    /// whose selected entry names dependencies.
+    ///
+    /// `None` only on overflow of the sixteen-entry physical ABI's successor.
+    pub const fn activation_account_count_v2(funding_count: u16) -> Option<u16> {
+        ACTIVATION_FIRST_FUNDING_ACCOUNT_V2.checked_add(funding_count)
+    }
+
     /// Widest scalar bank the activation seam will run.
     ///
     /// Published for the same reason the coordinates above are: an artifact

@@ -117,10 +117,21 @@ pub struct DirectNativeCloseCoordinateInputV1 {
     pub realm: TerminalRecordCoordinatesV1,
     /// Capability-manifest raw/staging coordinates.
     pub manifest: TerminalRecordCoordinatesV1,
-    /// Resolution-owned `0b0111` dependency ledger.
-    pub resolution_funding: Pubkey,
-    /// Trading-owned `0b1000` selected ledger.
-    pub trading_funding: Pubkey,
+    /// The two physical funding ledgers, in canonical mask order.
+    ///
+    /// Ordered by each ledger's lowest selected manifest index, which is what
+    /// `validate_funding_ledger_masks_v2` requires of the partition and
+    /// therefore what the founding seats. Which of the two is Trading-owned is
+    /// a fact about the SELECTED ENTRY INDEX and never a position typed here:
+    /// on devnet market `GyD95eyE…` the selected Direct entry is index 0 and
+    /// the order is Trading `0x0001` then Resolution `0x000e`; the four-entry
+    /// fixture this file was written against had the selected entry at index 3
+    /// and the opposite order.
+    pub funding_ledgers: [Pubkey; DIRECT_NATIVE_CLOSE_FUNDING_LEDGERS_V1],
+    /// Position within `funding_ledgers` of the selected row's own ledger.
+    ///
+    /// The close writes exactly this one and preserves the other.
+    pub selected_funding_position: usize,
     /// Direct root.
     pub root: Pubkey,
     /// Registry activation cache.
@@ -523,6 +534,31 @@ pub enum TerminalRetirementErrorV1 {
     Token(dclutch_custody::token_svm::Error),
 }
 
+/// Physical funding ledgers the production Direct close frame carries.
+///
+/// `CapabilityRouteLayoutV1::new(2, 20)` is the route this closure emits, and
+/// the two are the selected row's own ledger and the one foreign controller's.
+pub const DIRECT_NATIVE_CLOSE_FUNDING_LEDGERS_V1: usize = 2;
+
+/// One funding-ledger meta, writable exactly when it is the selected row's.
+fn funding_meta(
+    input: &DirectNativeCloseCoordinateInputV1,
+    position: usize,
+) -> Result<AccountMeta, TerminalRetirementErrorV1> {
+    if input.selected_funding_position >= DIRECT_NATIVE_CLOSE_FUNDING_LEDGERS_V1 {
+        return Err(TerminalRetirementErrorV1::Frame);
+    }
+    let key = *input
+        .funding_ledgers
+        .get(position)
+        .ok_or(TerminalRetirementErrorV1::Frame)?;
+    if position == input.selected_funding_position {
+        Ok(AccountMeta::new(key, false))
+    } else {
+        Ok(AccountMeta::new_readonly(key, false))
+    }
+}
+
 /// Derive the exact production `F=2` Direct-close account-meta closure.
 ///
 /// This projection consumes coordinates and the immutable role-request
@@ -546,8 +582,8 @@ pub fn project_direct_native_close_coordinate_closure_v1(
         AccountMeta::new_readonly(input.realm.staging, false),
         AccountMeta::new_readonly(input.manifest.raw, false),
         AccountMeta::new_readonly(input.manifest.staging, false),
-        AccountMeta::new_readonly(input.resolution_funding, false),
-        AccountMeta::new(input.trading_funding, false),
+        funding_meta(input, 0)?,
+        funding_meta(input, 1)?,
         AccountMeta::new(input.root, false),
         AccountMeta::new_readonly(input.activation_cache, false),
         AccountMeta::new_readonly(input.core.program, false),
@@ -813,11 +849,15 @@ pub fn build_direct_native_close_v1(
         .ok_or(TerminalRetirementErrorV1::Projection)?;
     let required_union = capability_dependency_closure_mask_v1(manifest, entry_index)
         .map_err(TerminalRetirementErrorV1::Capability)?;
-    if manifest.entry_count() != 4
-        || entry_index != 3
-        || required_union != 0b1111
-        || snapshot.funding_ledgers.len() != 2
-    {
+    // Only the frame width is fixed. The entry index, the manifest width and
+    // the required union are the MANIFEST'S, read off the market being closed:
+    // `authenticate_close_funding` below requires the two ledger masks to be a
+    // canonical disjoint partition of `required_union`, and
+    // `CapabilityFundingHeaderV2::new` requires the physical count not to
+    // exceed the logical one -- which is the whole of what a four-entry fixture
+    // was standing in for. It stood in wrongly: the real market's selected
+    // entry is index 0, not 3.
+    if snapshot.funding_ledgers.len() != DIRECT_NATIVE_CLOSE_FUNDING_LEDGERS_V1 {
         return Err(TerminalRetirementErrorV1::Projection);
     }
     let funding =
@@ -904,16 +944,21 @@ pub fn build_direct_native_close_v1(
             .map_err(TerminalRetirementErrorV1::MarketCore)?,
     );
     data.extend_from_slice(&role_request);
-    let resolution_funding = snapshot
-        .funding_ledgers
-        .first()
-        .ok_or(TerminalRetirementErrorV1::Frame)?
-        .key;
-    let trading_funding = snapshot
-        .funding_ledgers
-        .get(1)
-        .ok_or(TerminalRetirementErrorV1::Frame)?
-        .key;
+    // The frame's order is the snapshot's, which `authenticate_close_funding`
+    // has just proved is the canonical mask order; the selected position is the
+    // one it discovered by reading `selected_mask`, never a controller guess.
+    let funding_ledgers = [
+        snapshot
+            .funding_ledgers
+            .first()
+            .ok_or(TerminalRetirementErrorV1::Frame)?
+            .key,
+        snapshot
+            .funding_ledgers
+            .get(1)
+            .ok_or(TerminalRetirementErrorV1::Frame)?
+            .key,
+    ];
     let coordinate_closure =
         project_direct_native_close_coordinate_closure_v1(&DirectNativeCloseCoordinateInputV1 {
             release_set: market.identity.selected_release_set.to_bytes(),
@@ -927,8 +972,8 @@ pub fn build_direct_native_close_v1(
                 raw: snapshot.manifest.key,
                 staging: snapshot.manifest_staging.key,
             },
-            resolution_funding,
-            trading_funding,
+            funding_ledgers,
+            selected_funding_position: funding.selected_index,
             root: snapshot.root.key,
             activation_cache: snapshot.activation_cache.key,
             core: TerminalDeploymentCoordinatesV1 {
@@ -2235,8 +2280,16 @@ mod tests {
                 raw: snapshot.manifest.key,
                 staging: snapshot.manifest_staging.key,
             },
-            resolution_funding: snapshot.funding_ledgers[0].key,
-            trading_funding: snapshot.funding_ledgers[1].key,
+            funding_ledgers: [
+                snapshot.funding_ledgers[0].key,
+                snapshot.funding_ledgers[1].key,
+            ],
+            // The fixture's own ledgers: index 0 is the Resolution-owned
+            // dependency and index 1 the Trading-owned selected row, which is
+            // the order a selected entry at a NON-zero index produces. A real
+            // market with the selected entry at index 0 produces the other one,
+            // and the builder derives it rather than reading this.
+            selected_funding_position: 1,
             root: snapshot.root.key,
             activation_cache: snapshot.activation_cache.key,
             core: TerminalDeploymentCoordinatesV1 {
@@ -2277,6 +2330,40 @@ mod tests {
             rent_program: snapshot.rent_program.key,
             rent_credit: snapshot.rent_credit.key,
         }
+    }
+
+    /// Which funding meta the close WRITES is derived from the selected entry's
+    /// manifest position, not from a controller named in a field.
+    ///
+    /// The fixture below seats the selected entry at index 3, so the foreign
+    /// ledger leads and the Trading one is written. A real market puts the
+    /// selected Direct entry at index 0 -- devnet `GyD95eyE…`, ledgers `0x0001`
+    /// and `0x000e` -- and the frame is the mirror image. Both orders come out
+    /// of the same projection, and neither is typed.
+    #[test]
+    fn the_written_funding_meta_follows_the_selected_position_not_a_controller() {
+        let snapshot = close_snapshot();
+        let mut input = close_coordinates(&snapshot);
+        assert_eq!(input.selected_funding_position, 1);
+        let fixture = project_direct_native_close_coordinate_closure_v1(&input)
+            .expect("the four-entry fixture's close frame");
+        assert!(!fixture.accounts[5].is_writable && fixture.accounts[6].is_writable);
+
+        // The real market's order: the selected row's ledger leads.
+        input.selected_funding_position = 0;
+        let real = project_direct_native_close_coordinate_closure_v1(&input)
+            .expect("a selected entry at index 0");
+        assert!(real.accounts[5].is_writable && !real.accounts[6].is_writable);
+        assert_eq!(real.accounts[5].pubkey, fixture.accounts[5].pubkey);
+        assert_eq!(real.accounts[6].pubkey, fixture.accounts[6].pubkey);
+
+        // A position outside the frame is a frame refusal, not a silent
+        // read-only slice.
+        input.selected_funding_position = DIRECT_NATIVE_CLOSE_FUNDING_LEDGERS_V1;
+        assert_eq!(
+            project_direct_native_close_coordinate_closure_v1(&input),
+            Err(TerminalRetirementErrorV1::Frame)
+        );
     }
 
     fn handoff_coordinates(

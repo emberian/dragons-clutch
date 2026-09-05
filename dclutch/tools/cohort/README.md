@@ -586,19 +586,30 @@ Cohort-15 and cohort-16 both founded `dependency_count 0` at every entry; their
 markets can be filled, settled, captured, paid out and taken to Terminal, and
 none of them can ever be Retired.
 
-**This row is blocked on a release change, measured 2026-09-05.** The edges make
-the selected entry's closure every bit, so every route that consults the closure
-needs a two-ledger frame — activation included. The Direct activation bundle
-declares `ACTIVATION_ACCOUNT_COUNT = 2`, *"the root being created and the sole
-selected funding ledger"*, and `require_activation_local_effects` widens its
-forbidden window by `funding_count`; a market founded with edges therefore
-refuses activation in the deployed Trading program at `TradingSbfError::Content`
-(`0x4003`). Those account indices live in published records the manifest entry
-names, and the manifest digest is a Market-PDA seed, so no founding input and no
-driver repair reaches them. Until the Direct release's activation bundle carries
-the dependency ledger, a cohort choosing this row founds markets that are Open
-and unactivatable, and a cohort declining it founds markets that can never be
-Retired. Cohort-16 has one of each.
+**This row was blocked on a release change, and the release change has landed.**
+Cohort-16 measured the block on 2026-09-05: the edges make the selected entry's
+closure every bit, every route that consults the closure needs a two-ledger
+frame, and a market founded with edges refused activation in the deployed
+Trading program at `TradingSbfError::Content` (`0x4003`), 108,180 CU. The
+reading at the time was that the Direct activation bundle had to declare three
+accounts and that the release id, the manifest entry and the Market address
+would move with it. **That reading is reversed**
+(`docs/evidence/COHORT16_DEPLOYED_SEALED_2026_09_05.md`, second addendum): a
+three-account activation profile cannot be encoded at all — `AccountProfileV1`
+refuses `UnanchoredAccount` for a rule no seam-seeded identity can anchor, and
+none names a foreign controller. The defect was in the Trading outer, which
+composed its interpreted frame out of every physical ledger; it now composes the
+root and the selected ledger, exactly as the native-close route already did, and
+authenticates dependency ledgers outside that frame.
+
+**So this row needs a Trading link carrying that fix, and nothing else.** No
+artifact byte moves: the Direct release id, the manifest entry and the Market
+address are unchanged, and a market already founded with the edges — devnet
+`GyD95eyE…` — activates at the new link without re-founding. A cohort whose
+Trading link predates the fix still founds markets that are Open and
+unactivatable if it takes this row, and markets that can never be Retired if it
+declines. Cohort-16 has one of each, and only the Trading link stands between
+its edged market and activation.
 
 Measured in the same run: the selected entry sits at manifest index **0** on a
 real market, not the four-entry fixture's 3, so the funding slice's order is

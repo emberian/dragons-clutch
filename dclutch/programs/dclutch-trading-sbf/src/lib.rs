@@ -552,6 +552,38 @@ pub enum TradingSbfError {
     /// operations would send zeros, and a Series root with an unallocated
     /// permit to expire is never at revision zero.
     SeriesExpireCoreTemplate = 0x402A,
+    /// The physical funding ledgers are not the selected entry's closure.
+    ///
+    /// Split from `Content` on 2026-09-05. The ledgers a capability route
+    /// presents must be a canonical disjoint partition of
+    /// `capability_dependency_closure_mask_v1(manifest, selected_entry)` --
+    /// ordered by each mask's lowest selected index, covering the union
+    /// exactly, with the selected row alone in its own Trading-owned ledger.
+    /// Fewer ledgers than the closure names, more than it has, an overlap, the
+    /// wrong order, two ledgers both claiming the selected bit, or none
+    /// claiming it, all reached the wire as `Content 0x4003`, which this
+    /// program publishes from over two thousand sites.
+    ///
+    /// MEASURED, on devnet market `GyD95eyE…` 2026-09-05: the first market
+    /// founded with capability-manifest dependency edges presented the two
+    /// ledgers `0x0001` and `0x000e` its closure requires, and activation
+    /// refused `Content` at 108,180 CU. The cause was not the caller's frame at
+    /// all -- it was this program composing its interpreted runtime view out of
+    /// every physical ledger, which no `AccountProfileV1` can describe, since
+    /// a rule for a foreign controller's ledger is `UnanchoredAccount` at any
+    /// width. The frame is now the root and the selected ledger alone, exactly
+    /// as the native-close route already built it.
+    ///
+    /// **It has never fired, and cannot from a Core-routed frame.** Core owns
+    /// this partition and refuses `CoreSbfError::Funding` (`0x3008`) before the
+    /// CPI; `an_activation_whose_ledgers_are_not_the_closure_refuses_by_name`
+    /// measures exactly that and names Core's code, not this one. What this
+    /// code is for is the restatement Trading must make anyway because it does
+    /// not trust its caller -- and which published `Content` from a site
+    /// indistinguishable from two thousand others until now. It forbids nothing
+    /// that has ever executed, on the same terms as
+    /// [`TradingSbfError::ShadowTrustedEnvironment`].
+    ActivationLedgerCount = 0x402B,
 }
 
 impl TradingSbfError {
@@ -561,7 +593,7 @@ impl TradingSbfError {
     /// [`TradingSbfError::ordinal`], whose match is exhaustive: a variant added
     /// to the enum does not compile until its author writes an arm there, and
     /// the only arm that satisfies the assertions is its own index here.
-    pub const ALL: [Self; 43] = [
+    pub const ALL: [Self; 44] = [
         Self::UnsupportedContent,
         Self::Release,
         Self::Root,
@@ -605,6 +637,7 @@ impl TradingSbfError {
         Self::ShadowTrustedEnvironment,
         Self::FundedRent,
         Self::SeriesExpireCoreTemplate,
+        Self::ActivationLedgerCount,
     ];
 
     /// This refusal's position in [`TradingSbfError::ALL`].
@@ -657,6 +690,7 @@ impl TradingSbfError {
             Self::ShadowTrustedEnvironment => 40,
             Self::FundedRent => 41,
             Self::SeriesExpireCoreTemplate => 42,
+            Self::ActivationLedgerCount => 43,
         }
     }
 }

@@ -1,6 +1,6 @@
 {
   "bound_bytes": 4096,
-  "commit": "582e465316788a41c602e140838700ae7881fe4b",
+  "commit": "b653fecc955b09effc493af9b2fe24b67e11bde6",
   "link_count": 8,
   "links": [
     {
@@ -5809,7 +5809,7 @@
       "package": "dclutch-resolution-proof-sbf"
     },
     {
-      "frame_count": 765,
+      "frame_count": 766,
       "functions": [
         {
           "frames_bytes": [
@@ -5862,6 +5862,7 @@
         {
           "frames_bytes": [
             64,
+            0,
             0
           ],
           "symbol": "_ZN111_$LT$alloc..vec..Vec$LT$T$GT$$u20$as$u20$alloc..vec..spec_from_iter_nested..SpecFromIterNested$LT$T$C$I$GT$$GT$9from_iter17h<hash>E"
@@ -7475,15 +7476,9 @@
         },
         {
           "frames_bytes": [
-            64
+            192
           ],
           "symbol": "_ZN19dclutch_trading_sbf5outer14RuntimeFrameV23new17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            128
-          ],
-          "symbol": "_ZN19dclutch_trading_sbf5outer14RuntimeFrameV29new_close17h<hash>E"
         },
         {
           "frames_bytes": [
@@ -9942,6 +9937,7 @@
             64,
             64,
             64,
+            0,
             0,
             0,
             0,

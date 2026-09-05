@@ -495,3 +495,134 @@ The deployer is untouched at 29.74.
    change with program authority attached.
 3. **Untouched.** `tools/gate witness --discover` against this cohort has not
    been run.
+
+---
+
+## Addendum, 2026-09-05, lane PROGRAMS-17A: the conflict was not real, and the release identity does not move
+
+**Offline program-test evidence on real ELFs.** Written after the first addendum's
+finding was taken to the Trading program. Nothing above is edited; this reverses
+one verdict in it and says how it was measured.
+
+### What the first addendum concluded, and what is wrong with it
+
+It concluded: *"It is a Direct release change — `ACTIVATION_ACCOUNT_COUNT` and
+the bundle's indices must express the dependency ledger — which moves the Direct
+release id, the manifest entry and the Market address."*
+
+**The first half is right and the second half is false.** It is a Trading
+release change. It is not a change to the Direct activation bundle, and it moves
+no artifact byte, no release id, no manifest entry and no Market address.
+
+**A three-account activation profile cannot be encoded at all.** Measured
+2026-09-05 against `encode_account_profile_v1_atomic` with the exact three rules
+the first addendum's reading calls for:
+
+    RESULT: Err(UnanchoredAccount)
+
+`AccountProfileV1::validate_structure` requires every self-representative rule to
+be named by at least one REQUIREMENT operation
+(`crates/dclutch-vm/src/account_profile/mod.rs:744-765`), and the requirement
+operations an activation artifact can write compare against the seam-seeded
+identity bank — Trading, Core, Registry, and the root
+(`activation_registers_v2`). No coordinate there names a foreign controller, so
+a rule for a Resolution-owned dependency ledger is unanchored at any width. The
+bundle could not have been widened; extending the seam's identity bank to make
+it possible would have been a new ABI, and would have moved every founded
+market's address for nothing.
+
+### What actually refused, and the repair
+
+`outer.rs::RuntimeFrameV2::new` composed the interpreted runtime frame out of
+the root PLUS EVERY PHYSICAL LEDGER. The profile the release publishes declares
+two accounts, the frame presented three, and `project_accounts` refused
+`Content`. The native-close route on the same page had already answered this,
+deliberately and with its reason written down: `new_close` projected through
+*"only root, selected Trading ledger, and RentCredit … a foreign dependency can
+never acquire a descriptor-owned runtime permission"*, while keeping every
+physical ledger for authentication and poststate.
+
+The two constructors are now one. The activation frame is the root and the
+selected ledger; dependency ledgers are authenticated exactly as before —
+manifest binding, PDA derivation, funded-rent custody, per-row Active status,
+and the canonical mask partition — outside the interpreted frame, and their
+lamports are checked against their own balances rather than against a projection
+that can no longer name them.
+
+### On real ELFs, built on hbox under `swarm-build`
+
+`programs/dclutch-core-sbf/tests/capability_close_alias_program_test.rs`, which
+is the only offline harness that reaches `process_activation` through real Core,
+Trading and Registry. Its activation fixture is now parameterised by market
+shape, and the two-ledger shape is **devnet market `GyD95eyE…`'s**: four
+entries, the selected Direct entry at index 0 with edges `[1, 2, 3]`, funded by
+`0x0001` (Trading, selected, written) and `0x000e` (Resolution, preserved).
+
+| campaign | result | CU, top level |
+| --- | --- | ---: |
+| `canonical_activation_creates_the_direct_root_through_real_core_and_trading` (zero-edge, the control) | root created | **298,598** |
+| `canonical_activation_admits_the_selected_entrys_two_ledger_closure` | root created, dependency ledger byte-identical and lamports unmoved | **521,780** |
+| `canonical_high_selector_closes_through_real_core_and_trading` (`DirectCloseCapability`, `outstanding_capabilities` → 0) | unchanged | — |
+| `begin_direct_retiring_m61_twenty_seed_real_sbf_campaign` | 20/20, mean 94,559 | — |
+
+The 223,182-CU delta between the two shapes is the dependency ledger's price:
+one more `find_program_address`, one more `authenticate`, and three
+manifest-row status reads instead of none. It is paid once, at activation.
+
+**The artifacts did not move.** `dclutch-trading`'s sealed activation tests —
+`exact_activation_bundle_inherits_release_and_binds_root_width`,
+`the_real_effect_kernel_composes_the_exact_initial_root_tail`,
+`the_family_neutral_template_reproduces_this_sealed_bundle_byte_for_byte` — are
+green unchanged, and the two-account template's width is now READ from
+`activation_account_count_v2(ACTIVATION_RUNTIME_FUNDING_ACCOUNTS_V2)` rather
+than written down twice.
+
+### What this means for `GyD95eyE…`
+
+It is Open, refunding, carries correct dependency edges, and **its release id,
+manifest entry and Market address are exactly what they were.** A Trading link
+built from this commit activates it as it stands. Whether COHORT-16C reaches it
+by upgrading cohort-16's Trading in place — which supersedes the release
+generation under decision 0012 and needs a re-release before any open market
+executes — or by a fresh full-cohort redeploy that re-founds everything, is
+COHORT-16C's decision and not this lane's. The fact this lane owns is that
+re-founding is no longer *required* by the activation frame.
+
+### The ledger-set refusal now has a name, and it has never fired
+
+`TradingSbfError::ActivationLedgerCount` (`0x402B`) is Trading's own statement
+that the physical ledgers presented are the canonical disjoint partition of the
+selected entry's dependency closure. **Core owns that partition and refuses
+first**: both hostiles — a dependency ledger withheld, and a third ledger
+overlapping the dependency's rows — refuse `CoreSbfError::Funding` (`0x3008`)
+before the CPI, which
+`an_activation_whose_ledgers_are_not_the_closure_refuses_by_name` measures and
+names. The Trading code is the restatement a program that does not trust its
+caller must make anyway, and it forbids nothing that has ever executed, on the
+same terms as `ShadowTrustedEnvironment`.
+
+### The retirement close frame stopped being a four-entry fixture
+
+`crates/dclutch-operator/src/terminal_retirement_v1.rs` required
+`entry_count == 4 && entry_index == 3 && required_union == 0b1111`, and named its
+two funding coordinates `resolution_funding` and `trading_funding` — a
+controller per position. On the real market the selected entry is index **0**
+and the order is the mirror image. The gate is gone: only the `F=2` frame width
+is fixed, the entry index and the union are the manifest's, and the frame's
+writable meta follows `selected_funding_position`, which
+`authenticate_close_funding` discovers by reading `selected_mask` off the
+ledgers. `the_written_funding_meta_follows_the_selected_position_not_a_controller`
+runs both orders through the one projection.
+
+### What is still owed
+
+- **The complete retirement walk has not run in any harness.** Its stages have
+  real-ELF coverage one at a time — found, activate, Core and Direct
+  begin-retiring, `ResolutionCloseFund`, `DirectCloseCapability`, the replay
+  handoff, the four checkpoint instructions to Retired — in five different test
+  binaries with five different fixtures, and nothing joins them. Per-stage CU
+  therefore exists only where each harness prints it, and this lane adds
+  activation's two numbers and nothing else.
+- **`terminal_sequence.rs`'s six-stage walker is still fixture-only**, and its
+  own note that *"the three stages after `ResolutionCloseFund` have never been
+  reached"* stands.

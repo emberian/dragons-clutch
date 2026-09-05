@@ -119,7 +119,13 @@ const _: () = assert!(
         < 0x1_0000
 );
 /// The root being created and the sole selected funding ledger.
-const ACTIVATION_ACCOUNT_COUNT: u16 = 2;
+///
+/// The family-neutral template's width, not a second copy of it. A dependency
+/// ledger is authenticated by the seam and never enters a released profile:
+/// `AccountProfileV1` would refuse `UnanchoredAccount`, since no seam-seeded
+/// identity names a foreign controller for a requirement to compare against.
+const ACTIVATION_ACCOUNT_COUNT: u16 =
+    dclutch_market::capability_activation::ACTIVATION_ACCOUNT_COUNT_V1;
 /// The founding provisions exactly one Rent compartment row in the ledger.
 const FUNDING_LEDGER_SLOT_COUNT: u16 = 1;
 

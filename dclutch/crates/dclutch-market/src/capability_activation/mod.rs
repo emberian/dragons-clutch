@@ -94,7 +94,8 @@ use crate::capability_program::{
         ACTIVATION_FIRST_FAMILY_SCALAR_V2, ACTIVATION_FIRST_FUNDING_ACCOUNT_V2,
         ACTIVATION_MAX_ROLE_REQUEST_BYTES_V2, ACTIVATION_MAX_RUNTIME_IDENTITIES_V2,
         ACTIVATION_MAX_RUNTIME_SCALARS_V2, ACTIVATION_ROOT_ACCOUNT_V2, ACTIVATION_ROOT_IDENTITY_V2,
-        ACTIVATION_TRADING_PROGRAM_IDENTITY_V2,
+        ACTIVATION_RUNTIME_FUNDING_ACCOUNTS_V2, ACTIVATION_TRADING_PROGRAM_IDENTITY_V2,
+        activation_account_count_v2,
     },
     activation_registers_v3::{
         ACTIVATION_COMMON_IDENTITIES_V3, ACTIVATION_COMMON_SCALARS_V3,
@@ -134,12 +135,22 @@ use dclutch_vm::v2::{
 
 /// The vacant composite root and the one selected Trading `FundingLedgerV2`.
 ///
-/// The seam requires `effect.account_count() == 1 + funding_count`, so this
-/// template is the single-selected-ledger shape every founding provisions
-/// today. A release whose activation must debit two ledgers needs its own
-/// template rather than a wider parameter here: "which ledger holds the root
-/// quote" would stop being derivable from the profile alone.
-pub const ACTIVATION_ACCOUNT_COUNT_V1: u16 = 2;
+/// Read from the seam's own author rather than written down: the frame is the
+/// root followed by [`ACTIVATION_RUNTIME_FUNDING_ACCOUNTS_V2`] ledgers, and
+/// `outer.rs::RuntimeFrameV2::new` composes exactly that for every
+/// descriptor-owned route.
+///
+/// It does not widen with a market's physical ledger count, and that is a fact
+/// about `AccountProfileV1` rather than a template decision: a dependency
+/// ledger's rule would be `UnanchoredAccount`, because the requirement
+/// operations available here compare against the seam-seeded identity bank and
+/// it publishes no foreign controller. The seam authenticates dependency
+/// ledgers outside the interpreted frame instead.
+pub const ACTIVATION_ACCOUNT_COUNT_V1: u16 =
+    match activation_account_count_v2(ACTIVATION_RUNTIME_FUNDING_ACCOUNTS_V2) {
+        Some(count) => count,
+        None => panic!("the descriptor-owned activation frame is in bounds"),
+    };
 
 /// Scalar holding the rent quote projected out of the funding ledger.
 ///

@@ -36,12 +36,14 @@ use dclutch_market::capability_program::{
         ACTIVATION_COMMON_SCALARS_V2, ACTIVATION_CONFIG_IDENTITY_V2,
         ACTIVATION_CONTEXT_IDENTITY_V2, ACTIVATION_CORE_PROGRAM_IDENTITY_V2,
         ACTIVATION_EFFECT_SCHEMA_IDENTITY_V2, ACTIVATION_ENTRY_INDEX_SCALAR_V2,
-        ACTIVATION_FUNDING_COUNT_SCALAR_V2, ACTIVATION_GENERATION_SCALAR_V2,
-        ACTIVATION_MANIFEST_IDENTITY_V2, ACTIVATION_MARKET_IDENTITY_V2,
-        ACTIVATION_REGISTRY_PROGRAM_IDENTITY_V2, ACTIVATION_RELEASE_SET_IDENTITY_V2,
-        ACTIVATION_RESOURCE_A_REVISION_SCALAR_V2, ACTIVATION_RESOURCE_B_REVISION_SCALAR_V2,
-        ACTIVATION_ROLE_REQUEST_BYTES_SCALAR_V2, ACTIVATION_ROOT_IDENTITY_V2,
-        ACTIVATION_ROOT_STATE_BYTES_SCALAR_V2, ACTIVATION_TRADING_PROGRAM_IDENTITY_V2,
+        ACTIVATION_FIRST_FUNDING_ACCOUNT_V2, ACTIVATION_FUNDING_COUNT_SCALAR_V2,
+        ACTIVATION_GENERATION_SCALAR_V2, ACTIVATION_MANIFEST_IDENTITY_V2,
+        ACTIVATION_MARKET_IDENTITY_V2, ACTIVATION_REGISTRY_PROGRAM_IDENTITY_V2,
+        ACTIVATION_RELEASE_SET_IDENTITY_V2, ACTIVATION_RESOURCE_A_REVISION_SCALAR_V2,
+        ACTIVATION_RESOURCE_B_REVISION_SCALAR_V2, ACTIVATION_ROLE_REQUEST_BYTES_SCALAR_V2,
+        ACTIVATION_ROOT_IDENTITY_V2, ACTIVATION_ROOT_STATE_BYTES_SCALAR_V2,
+        ACTIVATION_RUNTIME_FUNDING_ACCOUNTS_V2, ACTIVATION_TRADING_PROGRAM_IDENTITY_V2,
+        activation_account_count_v2,
     },
     activation_registers_v3::{ACTIVATION_COMMON_SCALARS_V3, ACTIVATION_ROOT_BUMP_SCALAR_V3},
     initialize_root_account_v1,
@@ -437,7 +439,11 @@ pub fn process_activation(
     )
     .map_err(|_| TradingSbfError::Content)?;
 
-    let runtime = RuntimeFrameV2::new(&framed, suffix.effect_accounts)?;
+    let runtime = RuntimeFrameV2::new(
+        &framed,
+        suffix.effect_accounts,
+        request.selection().entry_index(),
+    )?;
     let mut input_scalars = vec![0_u64; usize::from(profile.scalar_count())];
     let mut input_identities = vec![[0_u8; 32]; usize::from(profile.identity_count())];
     seed_common_registers(
@@ -710,7 +716,7 @@ pub fn process_close(
         .effect_accounts
         .get(CLOSE_RENT_CREDIT..)
         .ok_or(TradingSbfError::Content)?;
-    let runtime = RuntimeFrameV2::new_close(
+    let runtime = RuntimeFrameV2::new(
         &framed,
         close_runtime_accounts,
         request.selection().entry_index(),
@@ -1297,37 +1303,30 @@ fn authenticate_finalized_record(
 struct RuntimeFrameV2<'accounts, 'info> {
     accounts: Vec<&'accounts AccountInfo<'info>>,
     funding: Vec<&'accounts AccountInfo<'info>>,
-    close_selected_funding_index: Option<usize>,
+    selected_funding_index: usize,
 }
 
 impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
+    /// Project a descriptor-owned route through the root, the ONE selected
+    /// Trading ledger, and the route's own effect accounts.
+    ///
+    /// Both routes that reach an interpreted artifact -- activation and native
+    /// close -- have exactly this runtime view, and this is the one constructor
+    /// for it. All physical ledgers remain in `funding` for complete dependency
+    /// authentication and poststate commitments, but a foreign dependency never
+    /// acquires a descriptor-owned runtime permission and never appears in a
+    /// released `AccountProfileV1`.
+    ///
+    /// **Why it cannot appear there**, which is the fact that decides this
+    /// shape rather than a preference: `AccountProfileV1`'s own decoder refuses
+    /// `UnanchoredAccount` for any self-representative rule that no requirement
+    /// operation names, and the requirement operations available to an
+    /// activation artifact compare against the seam-seeded identity bank
+    /// (`activation_registers_v2`), which publishes the Trading, Core and
+    /// Registry programs and the root -- and no foreign controller. A profile
+    /// carrying a Resolution-owned dependency ledger therefore cannot be
+    /// ENCODED, at any width. Measured 2026-09-05.
     fn new(
-        framed: &TradingActivationAccountsV2<'accounts, 'info>,
-        effect_accounts: &'accounts [AccountInfo<'info>],
-    ) -> Result<Self, ProgramError> {
-        let count = 1_usize
-            .checked_add(framed.funding().len())
-            .and_then(|value| value.checked_add(effect_accounts.len()))
-            .ok_or(TradingSbfError::Content)?;
-        if count == 0 || count > MAX_RUNTIME_ACCOUNTS_V2 {
-            return Err(TradingSbfError::Content.into());
-        }
-        let mut accounts = Vec::with_capacity(count);
-        accounts.push(framed.child_root());
-        accounts.extend(framed.funding().iter());
-        accounts.extend(effect_accounts.iter());
-        Ok(Self {
-            accounts,
-            funding: framed.funding().iter().collect(),
-            close_selected_funding_index: None,
-        })
-    }
-
-    /// Project a native close through only root, selected Trading ledger, and
-    /// RentCredit. All physical ledgers remain in `funding` for complete
-    /// dependency authentication and poststate commitments, but a foreign
-    /// dependency can never acquire a descriptor-owned runtime permission.
-    fn new_close(
         framed: &TradingActivationAccountsV2<'accounts, 'info>,
         effect_accounts: &'accounts [AccountInfo<'info>],
         selected_entry_index: u16,
@@ -1344,13 +1343,21 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
             if ledger.selected_mask() & selected_bit != 0
                 && selected.replace((index, account)).is_some()
             {
-                return Err(TradingSbfError::Content.into());
+                return Err(TradingSbfError::ActivationLedgerCount.into());
             }
         }
-        let (selected_index, selected_account) = selected.ok_or(TradingSbfError::Content)?;
-        let count = 2_usize
-            .checked_add(effect_accounts.len())
-            .ok_or(TradingSbfError::Content)?;
+        let (selected_index, selected_account) =
+            selected.ok_or(TradingSbfError::ActivationLedgerCount)?;
+        // The width is the seam's own published rule and not a sum spelled out
+        // here: `activation_account_count_v2` is what an artifact author reads
+        // to declare a profile, and reading it back is what keeps the two
+        // authorities one.
+        let count = usize::from(
+            activation_account_count_v2(ACTIVATION_RUNTIME_FUNDING_ACCOUNTS_V2)
+                .ok_or(TradingSbfError::Width)?,
+        )
+        .checked_add(effect_accounts.len())
+        .ok_or(TradingSbfError::Content)?;
         if count > MAX_RUNTIME_ACCOUNTS_V2 {
             return Err(TradingSbfError::Content.into());
         }
@@ -1361,7 +1368,7 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
         Ok(Self {
             accounts,
             funding: framed.funding().iter().collect(),
-            close_selected_funding_index: Some(selected_index),
+            selected_funding_index: selected_index,
         })
     }
 
@@ -1501,7 +1508,15 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
         // reach by accident nor tell apart from the twenty upstream `Content`
         // sites -- so it gets its own discriminant.
         .map_err(|_| TradingSbfError::ActivationEffect)?;
-        require_activation_local_effects(effect, scalars, identities, self.funding.len())?;
+        // The window is the FRAME's funding slice, which is the selected ledger
+        // alone, and not the market's physical ledger count: a dependency
+        // ledger is not an account this effect can name.
+        require_activation_local_effects(
+            effect,
+            scalars,
+            identities,
+            usize::from(ACTIVATION_RUNTIME_FUNDING_ACCOUNTS_V2),
+        )?;
 
         let manifest =
             CapabilityManifestV1::decode(manifest_bytes).map_err(|_| TradingSbfError::Content)?;
@@ -1516,9 +1531,7 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
         let mut selected_funding_index = None;
         let mut activation_debit = None;
         for (physical_index, account) in self.funding.iter().enumerate() {
-            let index = physical_index
-                .checked_add(1)
-                .ok_or(TradingSbfError::Content)?;
+            let in_frame = physical_index == self.selected_funding_index;
             let pre_bytes = account
                 .try_borrow_data()
                 .map_err(|_| TradingSbfError::Content)?;
@@ -1528,12 +1541,17 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
                 .authenticate(manifest_id, manifest)
                 .map_err(|_| TradingSbfError::Content)?;
             let selected_mask = ledger.selected_mask();
-            let writes_data = profile
-                .rule(u16::try_from(index).map_err(|_| TradingSbfError::Content)?)
-                .map_err(|_| TradingSbfError::Content)?
-                .effect_permissions()
-                & EFFECT_PERMISSION_WRITE_DATA
-                != 0;
+            // Only the frame's own ledger has a profile rule to read. A
+            // dependency has none by construction -- it is not in the runtime
+            // view -- so it cannot have been granted write-data by any release,
+            // which is the fact the non-selected branch below asserts.
+            let writes_data = in_frame
+                && profile
+                    .rule(ACTIVATION_FIRST_FUNDING_ACCOUNT_V2)
+                    .map_err(|_| TradingSbfError::Content)?
+                    .effect_permissions()
+                    & EFFECT_PERMISSION_WRITE_DATA
+                    != 0;
             if require_funding_ledger_access(
                 program_id,
                 account.owner,
@@ -1541,9 +1559,12 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
                 writes_data,
                 selected_mask,
                 selected_bit,
-            )? {
-                selected_funding_index =
-                    Some(index.checked_sub(1).ok_or(TradingSbfError::Content)?);
+            )? != in_frame
+            {
+                return Err(TradingSbfError::ActivationLedgerCount.into());
+            }
+            if in_frame {
+                selected_funding_index = Some(physical_index);
             }
             let derivation = CapabilityFundingLedgerDerivationV2::new(
                 account.owner.to_bytes(),
@@ -1622,19 +1643,38 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
                         .map_err(|_| TradingSbfError::Content)?,
                 )
                 .ok_or(TradingSbfError::Content)?;
-            if output_lamports.get(index).copied() != Some(expected_lamports) {
+            // The selected ledger's balance is what the effect kernel projected
+            // for it; a dependency's is its OWN, unmoved, because nothing in the
+            // runtime frame can name it. The check is the same statement either
+            // way -- this ledger holds exactly its funded rent plus the
+            // principal its poststate records -- and the two sources are what
+            // makes the second one a real claim rather than a tautology.
+            let observed = if in_frame {
+                output_lamports
+                    .get(usize::from(ACTIVATION_FIRST_FUNDING_ACCOUNT_V2))
+                    .copied()
+            } else {
+                Some(account.lamports())
+            };
+            if observed != Some(expected_lamports) {
                 return Err(TradingSbfError::Content.into());
             }
             funding_after.push(ledger_post);
         }
+        // The ledgers presented must be the canonical disjoint partition of the
+        // selected entry's dependency closure, which the role request's header
+        // carries and Core has already required to EQUAL that closure. Fewer
+        // ledgers than the closure names, more than it has, an overlap, or the
+        // wrong order all land here -- and they landed on `Content`, which has
+        // over two thousand sites and said nothing about the funding frame.
         validate_funding_ledger_masks_v2(
             manifest.entry_count(),
             request.funding().selected_mask(),
             &ledger_masks,
         )
-        .map_err(|_| TradingSbfError::Content)?;
+        .map_err(|_| TradingSbfError::ActivationLedgerCount)?;
         if !selected_present {
-            return Err(TradingSbfError::Content.into());
+            return Err(TradingSbfError::ActivationLedgerCount.into());
         }
         let selected_funding_index = selected_funding_index.ok_or(TradingSbfError::Content)?;
         // The root's opening balance is the manifest's own activation debit, and
@@ -1813,7 +1853,7 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
             let carries_selected = selected_mask & selected_bit != 0;
             let writes_data = if carries_selected {
                 profile
-                    .rule(1)
+                    .rule(ACTIVATION_FIRST_FUNDING_ACCOUNT_V2)
                     .map_err(|_| TradingSbfError::Content)?
                     .effect_permissions()
                     & EFFECT_PERMISSION_WRITE_DATA
@@ -1914,7 +1954,7 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
         )
         .map_err(|_| TradingSbfError::Content)?;
         let selected_funding_index = selected_funding_index.ok_or(TradingSbfError::Content)?;
-        if self.close_selected_funding_index != Some(selected_funding_index) {
+        if self.selected_funding_index != selected_funding_index {
             return Err(TradingSbfError::Content.into());
         }
         let close = selected_close.ok_or(TradingSbfError::Content)?;
@@ -2079,9 +2119,15 @@ fn require_activation_local_effects(
     identities: &[[u8; 32]],
     funding_count: usize,
 ) -> Result<(), ProgramError> {
-    let first_nonfunding = 1_usize
-        .checked_add(funding_count)
-        .ok_or(TradingSbfError::Content)?;
+    // `1 + funding_count`, read from the seam's own author rather than spelled
+    // again: a released activation profile declares exactly this width, and the
+    // window in which no effect may write is the same number.
+    let first_nonfunding = usize::from(
+        activation_account_count_v2(
+            u16::try_from(funding_count).map_err(|_| TradingSbfError::Width)?,
+        )
+        .ok_or(TradingSbfError::Width)?,
+    );
     let mut index = 0_u16;
     while index < effect.instruction_count() {
         match effect
