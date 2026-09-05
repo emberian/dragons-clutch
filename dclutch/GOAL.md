@@ -5092,3 +5092,12 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   undocumented 08-28 commits) — the measured cause of an 826-line rpc.ts fork.** Owed to others: an emitter with no
   consumer (FORMAL), two magics with two declarers, 433 literal offsets in 20 SDK files that want emitters, four magics with
   no author but the client, the wrapper's clients.yml may name deleted script paths.
+- SIMPLIFY-GATES closed (branch `simplify/gates` at `8e9ebe280`, six commits; SIMPLIFY_GATES.md): **`tools/gate` — one CLI,
+  eleven instruments and fourteen tiers, `--list` the one table, `--commit REV` one archive helper, every gate printing its
+  seconds**; the 2,840-line run.sh (60% prose) + frameguard + emission-guard + doc-commands + genref's shell + the witness
+  tool → `tools/gates/*.py` with tests; the census crate's six scanners → one `Sources` (enumeration 19.3 s → 5.9 s); a
+  pre-push hook that never fired (no remote) and a board-staleness script with no caller deleted; **the reference generator
+  had been regexing lib.rs for constants that moved on 09-02 and SHIPPING AN EMPTY BAND TABLE — the inventory now carries
+  the bands (26 rows again)**; every output byte-identical to the old tools' (inventory, fmt findings, emission counts,
+  coverage). Deviation from the map: Python not Rust, because the wrapper's cheap lane runs with no Rust toolchain. Two
+  three-line shims kept for the wrapper's workflows; convergence deletes them once the wrapper calls `tools/gate`.
