@@ -1,18 +1,13 @@
 import DClutchSemantics.StructuredV2Abi
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (emitBytes emitSlice)
 
 /-! Emit only the Lean-owned Structured V2 physical layout constants. -/
 
 open DClutch
 open DClutch.AbiSchema
 open DClutch.StructuredV2Abi
-
-def rustByte (byte : UInt8) : String := s!"0x{Codec.byteHex byte}"
-
-def emitBytes (name : String) (value : List UInt8) : IO Unit :=
-  IO.println s!"pub const {name}: [u8; {value.length}] = [{String.intercalate ", " (value.map rustByte)}];"
-
-def emitSlice (name : String) (value : List UInt8) : IO Unit :=
-  IO.println s!"pub const {name}: &[u8] = &[{String.intercalate ", " (value.map rustByte)}];"
 
 def emitOffset (name : String) (offset : Nat) : IO Unit :=
   IO.println s!"pub const {name}: usize = {offset};"

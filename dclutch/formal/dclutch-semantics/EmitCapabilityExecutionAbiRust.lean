@@ -1,20 +1,14 @@
 import DClutchSemantics.CapabilityExecutionAbi
 import DClutchSemantics.Codec
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (schemaByte emitBytes)
 
 /-! Emit the Lean-owned fixed-role capability execution-selection layout. -/
 
 open DClutch
 open DClutch.AbiSchema
 open DClutch.CapabilityExecutionAbi
-
-def rustByte (byte : UInt8) : String := s!"0x{Codec.byteHex byte}"
-
-def emitBytes (name : String) (value : List UInt8) : IO Unit := do
-  IO.println s!"pub const {name}: [u8; {value.length}] = ["
-  IO.println s!"    {String.intercalate ", " (value.map rustByte)},"
-  IO.println "];"
-
-def schemaByte (byte : UInt8) : String := s!"0x{DClutch.Codec.byteHex byte}"
 
 def emitSchemaIdentity (preimageName idName preimage : String)
     (digest : List UInt8) : IO Unit := do

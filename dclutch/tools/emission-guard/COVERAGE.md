@@ -3,7 +3,7 @@
 
 Which generated files a byte-identity guard actually re-runs and compares, and which are generated with nothing watching them. Regenerate with `tools/emission-guard/emission_guard.py --write`; byte-gate with `--verify`. This census is cheap — it reads first lines, shell scripts, `package.json` scripts and Rust integration tests, and never runs Lean.
 
-**101 generated files from 95 emitters. 101 guarded (95 emitters), 0 unguarded (0 emitters).**
+**101 generated files from 88 emitters. 101 guarded (88 emitters), 0 unguarded (0 emitters).**
 
 An unguarded row is not a bug in itself — it is a file that can be hand-edited, or drift behind the Lean source it claims to come from, with nothing in the repository noticing. The number above is the thing to drive down, and this file being byte-gated is what stops it drifting up unremarked: a new emission with no check script changes this census and reds `--verify` until someone decides, on purpose, which it is going to be.
 
@@ -13,85 +13,85 @@ An unguarded row is not a bug in itself — it is a file that can be hand-edited
 
 An inventory of guards that exist, not a record of guards that passed — each of these re-runs its emitter and compares the output against the committed bytes WHEN SOMEBODY RUNS IT. All of them need `lake`, which is why they are not on a cheap CI tier. A guard is a comparison, never a build: three kinds qualify — a `check*.sh` script, a `package.json` script passing `--check`, and a Rust integration test that reads the committed artifact back and asserts equality.
 
-**Normalises** says whether the guard runs `rustfmt --edition 2024` over the emission before comparing. It decides whether the guard can survive somebody formatting the committed file — which `cargo fmt` will not do (every generated module is behind `#[rustfmt::skip]` or an `include!`) but `tools/lane.sh fmt <path>` will, because a direct rustfmt never sees that attribute: of the 66 guards over Rust emissions, 55 do and 11 compare raw emitter stdout — green only while the emission is already a rustfmt fixpoint. `n/a` is the TypeScript half, which rustfmt does not format. `tools/emission-guard/fixpoint-debt.tsv` is the list of files where the raw comparison is not safe, and `--fixpoint` is the gate that keeps it honest.
+**Normalises** says whether the guard runs `rustfmt --edition 2024` over the emission before comparing. It decides whether the guard can survive somebody formatting the committed file — which `cargo fmt` will not do (every generated module is behind `#[rustfmt::skip]` or an `include!`) but `tools/lane.sh fmt <path>` will, because a direct rustfmt never sees that attribute: of the 66 guards over Rust emissions, 65 do and 1 compare raw emitter stdout — green only while the emission is already a rustfmt fixpoint. `n/a` is the TypeScript half, which rustfmt does not format. `tools/emission-guard/fixpoint-debt.tsv` is the list of files where the raw comparison is not safe, and `--fixpoint` is the gate that keeps it honest.
 
 | Guard | Kind | Normalises | Emitters re-run |
 |---|---|---|---|
-| `apps/dclutch-web: lean-emit EmitCapabilityManifestV1AbiTs.lean` | lean-emit | n/a | `EmitCapabilityManifestV1AbiTs.lean` |
-| `apps/dclutch-web: lean-emit EmitProtocolInfrastructureTs.lean` | lean-emit | n/a | `EmitProtocolInfrastructureTs.lean` |
-| `apps/dclutch-web: lean-emit EmitRationalTerminalHotV3Ts.lean` | lean-emit | n/a | `EmitRationalTerminalHotV3Ts.lean` |
-| `apps/dclutch-web: lean-emit EmitRealmPositionAbiTs.lean` | lean-emit | n/a | `EmitRealmPositionAbiTs.lean` |
-| `apps/dclutch-web: lean-emit EmitRefusalBandsV1Ts.lean` | lean-emit | n/a | `EmitRefusalBandsV1Ts.lean` |
-| `apps/dclutch-web: lean-emit EmitRegisteredDirectTs.lean` | lean-emit | n/a | `EmitRegisteredDirectTs.lean` |
-| `crates/dclutch-claims/check-generated-fractional-kernel.sh` | shell | raw | `EmitFractionalClaimV1AbiRust.lean` |
-| `crates/dclutch-claims/check-generated-structured-kernel.sh` | shell | yes | `EmitStructuredV2AbiRust.lean` |
-| `crates/dclutch-claims/check-generated.sh` | shell | yes | `EmitClaimsLiabilityBasisStateV2Rust.lean`, `EmitClaimsMarketClosureV1Rust.lean` |
-| `crates/dclutch-claims/tests/composition__lean_exposure_fresh.rs` | cargo-test | yes | `EmitProductRepresentationExposureV3AbiRust.lean` |
-| `crates/dclutch-claims/tests/composition__lean_generator_fresh.rs` | cargo-test | yes | `EmitRepresentationCompositionV3AbiRust.lean` |
-| `crates/dclutch-claims/tests/rational__hot_v3_generator_fresh.rs` | cargo-test | raw | `EmitRationalTerminalHotV3Rust.lean` |
-| `crates/dclutch-claims/tests/rational__rational_cross_domain_v3_lean_generator_fresh.rs` | cargo-test | yes | `EmitRationalCrossDomainV3Rust.lean` |
-| `crates/dclutch-claims/tests/rational_kernel__generator_fresh.rs` | cargo-test | raw | `EmitRationalRepresentationV2DescriptorRust.lean` |
-| `crates/dclutch-claims/tests/rational_kernel__product_v3_generator_fresh.rs` | cargo-test | raw | `EmitProductRepresentationV3AbiRust.lean` |
-| `crates/dclutch-claims/tests/rational_request__generator_fresh.rs` | cargo-test | raw | `EmitRationalRepresentationV2PhysicalAbiRust.lean` |
-| `crates/dclutch-claims/tests/structured_kernel__lean_generator_fresh.rs` | cargo-test | yes | `EmitStructuredV2AbiRust.lean` |
-| `crates/dclutch-custody/check-generated.sh` | shell | yes | `EmitProjectedCustodyStateV2Rust.lean` |
+| `apps/dclutch-web: lean-emit EmitCapabilityManifestV1Abi.lean` | lean-emit | n/a | `EmitCapabilityManifestV1Abi.lean` |
+| `apps/dclutch-web: lean-emit EmitProtocolInfrastructureProfileAbi.lean` | lean-emit | n/a | `EmitProtocolInfrastructureProfileAbi.lean` |
+| `apps/dclutch-web: lean-emit EmitRationalTerminalHotV3.lean` | lean-emit | n/a | `EmitRationalTerminalHotV3.lean` |
+| `apps/dclutch-web: lean-emit EmitRealmPositionAbi.lean` | lean-emit | n/a | `EmitRealmPositionAbi.lean` |
+| `apps/dclutch-web: lean-emit EmitRefusalBandsV1.lean` | lean-emit | n/a | `EmitRefusalBandsV1.lean` |
+| `apps/dclutch-web: lean-emit EmitRegisteredDirect.lean` | lean-emit | n/a | `EmitRegisteredDirect.lean` |
+| `crates/dclutch-account-profile-contract/check-generated.sh` | shell | yes | `EmitAccountProfileAbiRust.lean` |
+| `crates/dclutch-account-profile-contract/tests/lifecycle_v5_generator_fresh.rs` | cargo-test | yes | `EmitStateLifecyclePolicyV5AbiRust.lean` |
+| `crates/dclutch-account-profile-contract/tests/profile14_generator_fresh.rs` | cargo-test | yes | `EmitAccountProfileV2Profile14Rust.lean` |
+| `crates/dclutch-account-profile-contract/tests/v2_abi_generator_fresh.rs` | cargo-test | yes | `EmitAccountProfileV2AbiRust.lean` |
+| `crates/dclutch-capability-contract/check-generated.sh` | shell | yes | `EmitCapabilityManifestV1AbiRust.lean` |
+| `crates/dclutch-capability-contract/tests/funding_activation_corpus_generator_fresh.rs` | cargo-test | yes | `EmitCapabilityFundingActivationCorpusRust.lean` |
+| `crates/dclutch-capability-program-contract/check-generated.sh` | shell | yes | `EmitCapabilityProgramAbiRust.lean` |
+| `crates/dclutch-capability-program-contract/tests/set_v1_generator_fresh.rs` | cargo-test | yes | `EmitCapabilityProgramSetV1Rust.lean` |
+| `crates/dclutch-capability-program-contract/tests/set_v2_generator_fresh.rs` | cargo-test | yes | `EmitCapabilityProgramSetV2Rust.lean` |
+| `crates/dclutch-capability-program-contract/tests/v3_generator_fresh.rs` | cargo-test | yes | `EmitCapabilityProgramV3AbiRust.lean` |
+| `crates/dclutch-capability-program-contract/tests/v4_generator_fresh.rs` | cargo-test | yes | `EmitCapabilityProgramV4AbiRust.lean` |
+| `crates/dclutch-claims-svm/check-generated.sh` | shell | yes | `EmitClaimsLiabilityBasisStateV2Rust.lean`, `EmitClaimsMarketClosureV1Rust.lean` |
+| `crates/dclutch-custody-contract/check-generated.sh` | shell | yes | `EmitProjectedCustodyStateV2Rust.lean` |
+| `crates/dclutch-dealer-codec/tests/generator_fresh.rs` | cargo-test | yes | `EmitDealerLiquidityAbiRust.lean`, `EmitDealerScenarioCheckpointV1Rust.lean`, `EmitDealerScenarioReservationStateV1Rust.lean`, `EmitDealerScenarioTradeV4Rust.lean`, `EmitDealerTradingProfileRust.lean` |
+| `crates/dclutch-dealer-scenario-kernel/tests/netting_corpus_generator_fresh.rs` | cargo-test | yes | `EmitDealerScenarioNettingCorpusRust.lean` |
 | `crates/dclutch-direct-aot-contract/check-generated.sh` | shell | yes | `EmitDirectProgramV2Rust.lean` |
+| `crates/dclutch-direct-codec/check-generated.sh` | shell | yes | `EmitDirectCodecRust.lean`, `EmitRegisteredDirect.lean` |
+| `crates/dclutch-direct-codec/check-successor-generated.sh` | shell | yes | `EmitDirectIntentV2Rust.lean`, `EmitDirectOrdinaryV3Rust.lean`, `EmitDirectRegisteredFillV4Rust.lean`, `EmitDirectSuccessorAbiRust.lean` |
+| `crates/dclutch-effect-kernel/tests/effect_v4_lean_generator_fresh.rs` | cargo-test | yes | `EmitEffectProgramV4AbiRust.lean` |
+| `crates/dclutch-execution-strategy-contract/tests/v2_generator_fresh.rs` | cargo-test | yes | `EmitExecutionStrategyV2AbiRust.lean` |
+| `crates/dclutch-fractional-claim-kernel/check-generated.sh` | shell | yes | `EmitFractionalClaimV1AbiRust.lean` |
+| `crates/dclutch-general-adapter-contract/tests/request_profiles_generator_fresh.rs` | cargo-test | yes | `EmitGeneralRequestProfilesV1Rust.lean` |
+| `crates/dclutch-general-adapter-contract/tests/runtime_wire_v2_generator_fresh.rs` | cargo-test | yes | `EmitGeneralRuntimeWireV2Rust.lean` |
+| `crates/dclutch-general-adapter-contract/tests/selection_decision_corpus_generator_fresh.rs` | cargo-test | yes | `EmitGeneralSelectionDecisionCorpusRust.lean` |
+| `crates/dclutch-general-adapter-contract/tests/transition_programs_generator_fresh.rs` | cargo-test | yes | `EmitGeneralTransitionV3Rust.lean` |
+| `crates/dclutch-general-codec/tests/generator_fresh.rs` | cargo-test | yes | `EmitGeneralControllerAbiRust.lean` |
+| `crates/dclutch-general-codec/tests/request_v3_generator_fresh.rs` | cargo-test | yes | `EmitGeneralControllerRequestV3Rust.lean` |
+| `crates/dclutch-general-config-contract/tests/generator_fresh.rs` | cargo-test | yes | `EmitGeneralConfigAbiRust.lean` |
+| `crates/dclutch-general-config-contract/tests/generator_v3_fresh.rs` | cargo-test | yes | `EmitGeneralConfigV3AbiRust.lean` |
 | `crates/dclutch-liability-basis-v2-kernel/check-generated-price-gate.sh` | shell | yes | `EmitLiabilityBasisV2PriceGateRust.lean` |
 | `crates/dclutch-liability-basis-v2-kernel/check-generated-spline.sh` | shell | yes | `EmitLiabilityBasisV2SplineRust.lean` |
 | `crates/dclutch-liability-basis-v2-kernel/check-generated.sh` | shell | yes | `EmitLiabilityBasisV2Rust.lean` |
-| `crates/dclutch-market/check-generated-capability-manifest.sh` | shell | yes | `EmitCapabilityManifestV1AbiRust.lean` |
-| `crates/dclutch-market/check-generated-capability-program.sh` | shell | yes | `EmitCapabilityProgramAbiRust.lean` |
-| `crates/dclutch-market/check-generated-protocol-parameters.sh` | shell | raw | `EmitProtocolParametersV1Rust.lean` |
-| `crates/dclutch-market/check-generated-realm.sh` | shell | yes | `EmitRealmPositionAbiRust.lean` |
-| `crates/dclutch-market/check-generated-rent.sh` | shell | yes | `EmitLifecycleRentV2Rust.lean` |
-| `crates/dclutch-market/check.sh` | shell | yes | `EmitCoreFoundFrameV3Rust.lean`, `EmitMarketCorePhysicalRust.lean`, `EmitMarketCoreRust.lean`, `EmitMarketRetirementV1Rust.lean` |
-| `crates/dclutch-market/tests/capability_funding_header_v2.rs` | cargo-test | raw | `EmitCapabilityFundingHeaderV2Rust.lean` |
-| `crates/dclutch-market/tests/capability_manifest__funding_activation_corpus_generator_fresh.rs` | cargo-test | yes | `EmitCapabilityFundingActivationCorpusRust.lean` |
-| `crates/dclutch-market/tests/capability_program__set_v1_generator_fresh.rs` | cargo-test | yes | `EmitCapabilityProgramSetV1Rust.lean` |
-| `crates/dclutch-market/tests/capability_program__set_v2_generator_fresh.rs` | cargo-test | yes | `EmitCapabilityProgramSetV2Rust.lean` |
-| `crates/dclutch-market/tests/capability_program__v3_generator_fresh.rs` | cargo-test | yes | `EmitCapabilityProgramV3AbiRust.lean` |
-| `crates/dclutch-market/tests/capability_program__v4_generator_fresh.rs` | cargo-test | yes | `EmitCapabilityProgramV4AbiRust.lean` |
-| `crates/dclutch-market/tests/execution_strategy__v2_generator_fresh.rs` | cargo-test | yes | `EmitExecutionStrategyV2AbiRust.lean` |
-| `crates/dclutch-market/tests/series_found_ack_v2_generator_fresh.rs` | cargo-test | yes | `EmitSeriesCoreFoundAckV2Rust.lean` |
-| `crates/dclutch-product/check-generated-admission.sh` | shell | yes | `EmitProductAdmissionV2Rust.lean` |
-| `crates/dclutch-product/check-generated-basis-corpus-v3-payoff.sh` | shell | yes | `EmitProductBasisV3CorpusRust.lean` |
-| `crates/dclutch-product/check-generated-price-gate-v1-payoff.sh` | shell | yes | `EmitProductPriceGateV1AbiRust.lean` |
-| `crates/dclutch-product/check-generated-runtime-v3-payoff.sh` | shell | yes | `EmitProductBasisV3AbiRust.lean` |
-| `crates/dclutch-product/check-generated-v3-payoff.sh` | shell | yes | `EmitProductGradedBasisAdmissionV3AbiRust.lean` |
-| `crates/dclutch-product/check-generated.sh` | shell | yes | `EmitProductRuntimeV2Rust.lean` |
-| `crates/dclutch-refusal-registry/check-generated.sh` | shell | yes | `EmitRefusalBandsV1Rust.lean` |
-| `crates/dclutch-registry/check-generated-release-set.sh` | shell | yes | `EmitCapabilityExecutionAbiRust.lean`, `EmitProtocolInfrastructureProfileAbiRust.lean` |
-| `crates/dclutch-source/check-generated-relay.sh` | shell | yes | `EmitRelayedMainnetStateV1AbiRust.lean`, `EmitRelayedVenueDecodingRulesV1Rust.lean` |
-| `crates/dclutch-source/check-generated-resolution.sh` | shell | yes | `EmitSourceResolutionControllerAbiRust.lean`, `EmitSourceResolutionTerminalV2AbiRust.lean` |
-| `crates/dclutch-source/check-generated.sh` | shell | yes | `EmitSourceMaterialV2AbiRust.lean`, `EmitSourceMaterialV3AbiRust.lean`, `EmitSourcePrincipalCapacityV1Rust.lean`, `EmitSourceRecoveryPolicyV2AbiRust.lean`, `EmitSourceResolutionStateV2AbiRust.lean`, `EmitSourceScheduledMedianV1Rust.lean`, `EmitSourceStatisticSpecV1Rust.lean`, `EmitSourceWindowSpecV1Rust.lean` |
-| `crates/dclutch-trading/check-generated-series.sh` | shell | yes | `EmitSeriesOccurrenceV3Rust.lean`, `EmitSeriesTicketStateV3Rust.lean` |
-| `crates/dclutch-trading/check-generated.sh` | shell | yes | `EmitDirectCodecRust.lean`, `EmitDirectLifecycleAbiRust.lean`, `EmitRegisteredControllerAbiRust.lean` |
-| `crates/dclutch-trading/check-successor-generated.sh` | shell | yes | `EmitDirectIntentV2Rust.lean`, `EmitDirectOrdinaryV3Rust.lean`, `EmitDirectRegisteredFillV4Rust.lean`, `EmitDirectSuccessorAbiRust.lean` |
-| `crates/dclutch-trading/tests/dealer__generator_fresh.rs` | cargo-test | yes | `EmitDealerLiquidityAbiRust.lean`, `EmitDealerScenarioCheckpointV1Rust.lean`, `EmitDealerScenarioReservationStateV1Rust.lean`, `EmitDealerScenarioTradeV4Rust.lean`, `EmitDealerTradingProfileRust.lean` |
-| `crates/dclutch-trading/tests/dealer_scenario__netting_corpus_generator_fresh.rs` | cargo-test | yes | `EmitDealerScenarioNettingCorpusRust.lean` |
-| `crates/dclutch-trading/tests/general__request_profiles_generator_fresh.rs` | cargo-test | yes | `EmitGeneralRequestProfilesV1Rust.lean` |
-| `crates/dclutch-trading/tests/general__runtime_wire_v2_generator_fresh.rs` | cargo-test | yes | `EmitGeneralRuntimeWireV2Rust.lean` |
-| `crates/dclutch-trading/tests/general__selection_decision_corpus_generator_fresh.rs` | cargo-test | yes | `EmitGeneralSelectionDecisionCorpusRust.lean` |
-| `crates/dclutch-trading/tests/general__transition_programs_generator_fresh.rs` | cargo-test | yes | `EmitGeneralTransitionV3Rust.lean` |
-| `crates/dclutch-trading/tests/general_codec__generator_fresh.rs` | cargo-test | yes | `EmitGeneralControllerAbiRust.lean` |
-| `crates/dclutch-trading/tests/general_codec__request_v3_generator_fresh.rs` | cargo-test | yes | `EmitGeneralControllerRequestV3Rust.lean` |
-| `crates/dclutch-trading/tests/general_config__generator_fresh.rs` | cargo-test | raw | `EmitGeneralConfigAbiRust.lean` |
-| `crates/dclutch-trading/tests/general_config__generator_v3_fresh.rs` | cargo-test | raw | `EmitGeneralConfigV3AbiRust.lean` |
-| `crates/dclutch-vm/check-generated-account-profile.sh` | shell | yes | `EmitAccountProfileAbiRust.lean` |
-| `crates/dclutch-vm/check-generated-request-profile.sh` | shell | yes | `EmitRequestProfileAbiRust.lean`, `EmitRequestProfileV4AbiRust.lean` |
-| `crates/dclutch-vm/check-v2-generated.sh` | shell | yes | `EmitTransitionVMV2Rust.lean` |
-| `crates/dclutch-vm/tests/account_profile__lifecycle_v5_generator_fresh.rs` | cargo-test | yes | `EmitStateLifecyclePolicyV5AbiRust.lean` |
-| `crates/dclutch-vm/tests/account_profile__profile14_generator_fresh.rs` | cargo-test | yes | `EmitAccountProfileV2Profile14Rust.lean` |
-| `crates/dclutch-vm/tests/account_profile__v2_abi_generator_fresh.rs` | cargo-test | yes | `EmitAccountProfileV2AbiRust.lean` |
-| `crates/dclutch-vm/tests/effect__effect_v4_lean_generator_fresh.rs` | cargo-test | yes | `EmitEffectProgramV4AbiRust.lean` |
-| `packages/dclutch-sdk: lean-emit EmitCapabilityManifestV1AbiTs.lean` | lean-emit | n/a | `EmitCapabilityManifestV1AbiTs.lean` |
-| `packages/dclutch-sdk: lean-emit EmitProtocolInfrastructureTs.lean` | lean-emit | n/a | `EmitProtocolInfrastructureTs.lean` |
-| `packages/dclutch-sdk: lean-emit EmitRationalTerminalHotV3Ts.lean` | lean-emit | n/a | `EmitRationalTerminalHotV3Ts.lean` |
-| `packages/dclutch-sdk: lean-emit EmitRealmPositionAbiTs.lean` | lean-emit | n/a | `EmitRealmPositionAbiTs.lean` |
-| `packages/dclutch-sdk: lean-emit EmitRefusalBandsV1Ts.lean` | lean-emit | n/a | `EmitRefusalBandsV1Ts.lean` |
-| `packages/dclutch-sdk: lean-emit EmitRegisteredDirectTs.lean` | lean-emit | n/a | `EmitRegisteredDirectTs.lean` |
+| `crates/dclutch-market-core-codec/check.sh` | shell | yes | `EmitCoreFoundFrameV3Rust.lean`, `EmitMarketCorePhysicalRust.lean`, `EmitMarketCoreRust.lean`, `EmitMarketRetirementV1Rust.lean` |
+| `crates/dclutch-market-core-codec/tests/capability_funding_header_v2.rs` | cargo-test | yes | `EmitCapabilityFundingHeaderV2Rust.lean` |
+| `crates/dclutch-market-core-codec/tests/series_found_ack_v2_generator_fresh.rs` | cargo-test | yes | `EmitSeriesCoreFoundAckV2Rust.lean` |
+| `crates/dclutch-product-payoff-v2-codec/check-generated-basis-corpus-v3.sh` | shell | yes | `EmitProductBasisV3CorpusRust.lean` |
+| `crates/dclutch-product-payoff-v2-codec/check-generated-price-gate-v1.sh` | shell | yes | `EmitProductPriceGateV1AbiRust.lean` |
+| `crates/dclutch-product-payoff-v2-codec/check-generated-runtime-v3.sh` | shell | yes | `EmitProductBasisV3AbiRust.lean` |
+| `crates/dclutch-product-payoff-v2-codec/check-generated-v3.sh` | shell | yes | `EmitProductGradedBasisAdmissionV3AbiRust.lean` |
+| `crates/dclutch-product-runtime-v2-admission/check-generated.sh` | shell | yes | `EmitProductAdmissionV2Rust.lean` |
+| `crates/dclutch-product-runtime-v2/check-generated.sh` | shell | yes | `EmitProductRuntimeV2Rust.lean` |
+| `crates/dclutch-protocol-parameters-contract/check-generated.sh` | shell | yes | `EmitProtocolParametersV1Rust.lean` |
+| `crates/dclutch-rational-representation-v2-contract/tests/hot_v3_generator_fresh.rs` | cargo-test | yes | `EmitRationalTerminalHotV3.lean` |
+| `crates/dclutch-rational-representation-v2-contract/tests/rational_cross_domain_v3_lean_generator_fresh.rs` | cargo-test | yes | `EmitRationalCrossDomainV3Rust.lean` |
+| `crates/dclutch-rational-representation-v2-kernel/tests/generator_fresh.rs` | cargo-test | yes | `EmitRationalRepresentationV2DescriptorRust.lean` |
+| `crates/dclutch-rational-representation-v2-kernel/tests/product_v3_generator_fresh.rs` | cargo-test | yes | `EmitProductRepresentationV3AbiRust.lean` |
+| `crates/dclutch-rational-representation-v2-request-contract/tests/generator_fresh.rs` | cargo-test | yes | `EmitRationalRepresentationV2PhysicalAbiRust.lean` |
+| `crates/dclutch-realm-contract/check-generated.sh` | shell | yes | `EmitRealmPositionAbi.lean` |
+| `crates/dclutch-refusal-registry/check-generated.sh` | shell | yes | `EmitRefusalBandsV1.lean` |
+| `crates/dclutch-relay-contract/check-generated.sh` | shell | yes | `EmitRelayedMainnetStateV1AbiRust.lean`, `EmitRelayedVenueDecodingRulesV1Rust.lean` |
+| `crates/dclutch-release-set-contract/check-generated.sh` | shell | yes | `EmitCapabilityExecutionAbiRust.lean`, `EmitProtocolInfrastructureProfileAbi.lean` |
+| `crates/dclutch-rent-contract/check-generated.sh` | shell | yes | `EmitLifecycleRentV2Rust.lean` |
+| `crates/dclutch-representation-composition-v3-kernel/tests/lean_exposure_fresh.rs` | cargo-test | yes | `EmitProductRepresentationExposureV3AbiRust.lean` |
+| `crates/dclutch-representation-composition-v3-kernel/tests/lean_generator_fresh.rs` | cargo-test | yes | `EmitRepresentationCompositionV3AbiRust.lean` |
+| `crates/dclutch-request-profile-contract/check-generated.sh` | shell | yes | `EmitRequestProfileAbiRust.lean`, `EmitRequestProfileV4AbiRust.lean` |
+| `crates/dclutch-resolution-codec/check-generated.sh` | shell | yes | `EmitSourceResolutionControllerAbiRust.lean`, `EmitSourceResolutionTerminalV2AbiRust.lean` |
+| `crates/dclutch-series-v3-kernel/check-generated.sh` | shell | yes | `EmitSeriesOccurrenceV3Rust.lean`, `EmitSeriesTicketStateV3Rust.lean` |
+| `crates/dclutch-source-contract/check-generated.sh` | shell | yes | `EmitSourceMaterialV2AbiRust.lean`, `EmitSourceMaterialV3AbiRust.lean`, `EmitSourcePrincipalCapacityV1Rust.lean`, `EmitSourceRecoveryPolicyV2AbiRust.lean`, `EmitSourceResolutionStateV2AbiRust.lean`, `EmitSourceScheduledMedianV1Rust.lean`, `EmitSourceStatisticSpecV1Rust.lean`, `EmitSourceWindowSpecV1Rust.lean` |
+| `crates/dclutch-structured-v2-kernel/check-generated.sh` | shell | yes | `EmitStructuredV2AbiRust.lean` |
+| `crates/dclutch-structured-v2-kernel/tests/lean_generator_fresh.rs` | cargo-test | yes | `EmitStructuredV2AbiRust.lean` |
+| `crates/dclutch-transition-vm/check-v2-generated.sh` | shell | yes | `EmitTransitionVMV2Rust.lean` |
+| `packages/dclutch-sdk: lean-emit EmitCapabilityManifestV1Abi.lean` | lean-emit | n/a | `EmitCapabilityManifestV1Abi.lean` |
+| `packages/dclutch-sdk: lean-emit EmitProtocolInfrastructureProfileAbi.lean` | lean-emit | n/a | `EmitProtocolInfrastructureProfileAbi.lean` |
+| `packages/dclutch-sdk: lean-emit EmitRationalTerminalHotV3.lean` | lean-emit | n/a | `EmitRationalTerminalHotV3.lean` |
+| `packages/dclutch-sdk: lean-emit EmitRealmPositionAbi.lean` | lean-emit | n/a | `EmitRealmPositionAbi.lean` |
+| `packages/dclutch-sdk: lean-emit EmitRefusalBandsV1.lean` | lean-emit | n/a | `EmitRefusalBandsV1.lean` |
+| `packages/dclutch-sdk: lean-emit EmitRegisteredDirect.lean` | lean-emit | n/a | `EmitRegisteredDirect.lean` |
 | `programs/dclutch-core-sbf/tests/slot_pin_corpus_generator_fresh.rs` | cargo-test | yes | `EmitProtocolInfrastructurePinCorpusRust.lean` |
-| `programs/dclutch-custody-sbf/check-generated.sh` | shell | raw | `EmitCustodyAbiRust.lean` |
+| `programs/dclutch-custody-sbf/check-generated.sh` | shell | yes | `EmitCustodyAbiRust.lean` |
 | `programs/dclutch-registry-sbf/tests/release_finalization_corpus_generator_fresh.rs` | cargo-test | yes | `EmitArtifactReleaseFinalizationCorpusRust.lean` |
 | `tools/direct-translation-validator/check-generated.sh` | shell | yes | `EmitDirectProgramRust.lean` |
 | `tools/direct-translation-validator/check.sh` | shell | raw | `EmitDirectTranslationCorpus.lean`, `EmitRegisteredCreationTranslationCorpus.lean` |
@@ -100,104 +100,104 @@ An inventory of guards that exist, not a record of guards that passed — each o
 
 | File | Emitter |
 |---|---|
-| `apps/dclutch-web/lib/generated/capabilityManifestV1.ts` | `EmitCapabilityManifestV1AbiTs.lean` |
-| `apps/dclutch-web/lib/generated/protocolInfrastructure.ts` | `EmitProtocolInfrastructureTs.lean` |
-| `apps/dclutch-web/lib/generated/rationalTerminalHotV3.ts` | `EmitRationalTerminalHotV3Ts.lean` |
-| `apps/dclutch-web/lib/generated/realmPositionV1.ts` | `EmitRealmPositionAbiTs.lean` |
-| `apps/dclutch-web/lib/generated/refusalBandsV1.ts` | `EmitRefusalBandsV1Ts.lean` |
-| `apps/dclutch-web/lib/generated/registeredDirect.ts` | `EmitRegisteredDirectTs.lean` |
-| `crates/dclutch-claims/src/composition/generated_abi.rs` | `EmitRepresentationCompositionV3AbiRust.lean` |
-| `crates/dclutch-claims/src/composition/generated_exposure_abi.rs` | `EmitProductRepresentationExposureV3AbiRust.lean` |
-| `crates/dclutch-claims/src/fractional_kernel/generated_abi.rs` | `EmitFractionalClaimV1AbiRust.lean` |
-| `crates/dclutch-claims/src/generated_liability_basis_state_v2.rs` | `EmitClaimsLiabilityBasisStateV2Rust.lean` |
-| `crates/dclutch-claims/src/generated_market_closure_v1.rs` | `EmitClaimsMarketClosureV1Rust.lean` |
-| `crates/dclutch-claims/src/rational/generated_hot_v3.rs` | `EmitRationalTerminalHotV3Rust.lean` |
-| `crates/dclutch-claims/src/rational_kernel/generated_descriptor.rs` | `EmitRationalRepresentationV2DescriptorRust.lean` |
-| `crates/dclutch-claims/src/rational_kernel/generated_product_v3.rs` | `EmitProductRepresentationV3AbiRust.lean` |
-| `crates/dclutch-claims/src/rational_request/generated.rs` | `EmitRationalRepresentationV2PhysicalAbiRust.lean` |
-| `crates/dclutch-claims/src/structured_kernel/generated_abi.rs` | `EmitStructuredV2AbiRust.lean` |
-| `crates/dclutch-claims/tests/rational__support/generated_rational_cross_domain_v3.rs` | `EmitRationalCrossDomainV3Rust.lean` |
-| `crates/dclutch-custody/src/generated.rs` | `EmitCustodyAbiRust.lean` |
-| `crates/dclutch-custody/src/generated_projected_state_v2.rs` | `EmitProjectedCustodyStateV2Rust.lean` |
+| `apps/dclutch-web/lib/generated/capabilityManifestV1.ts` | `EmitCapabilityManifestV1Abi.lean` |
+| `apps/dclutch-web/lib/generated/protocolInfrastructure.ts` | `EmitProtocolInfrastructureProfileAbi.lean` |
+| `apps/dclutch-web/lib/generated/rationalTerminalHotV3.ts` | `EmitRationalTerminalHotV3.lean` |
+| `apps/dclutch-web/lib/generated/realmPositionV1.ts` | `EmitRealmPositionAbi.lean` |
+| `apps/dclutch-web/lib/generated/refusalBandsV1.ts` | `EmitRefusalBandsV1.lean` |
+| `apps/dclutch-web/lib/generated/registeredDirect.ts` | `EmitRegisteredDirect.lean` |
+| `crates/dclutch-account-profile-contract/src/generated.rs` | `EmitAccountProfileAbiRust.lean` |
+| `crates/dclutch-account-profile-contract/src/lifecycle_v3/generated_v5.rs` | `EmitStateLifecyclePolicyV5AbiRust.lean` |
+| `crates/dclutch-account-profile-contract/src/v2/generated_abi.rs` | `EmitAccountProfileV2AbiRust.lean` |
+| `crates/dclutch-account-profile-contract/src/v2/generated_profile14.rs` | `EmitAccountProfileV2Profile14Rust.lean` |
+| `crates/dclutch-capability-contract/src/generated_abi.rs` | `EmitCapabilityManifestV1Abi.lean` |
+| `crates/dclutch-capability-contract/src/generated_funding_activation_corpus.rs` | `EmitCapabilityFundingActivationCorpusRust.lean` |
+| `crates/dclutch-capability-program-contract/src/generated.rs` | `EmitCapabilityProgramAbiRust.lean` |
+| `crates/dclutch-capability-program-contract/src/generated_set_v1.rs` | `EmitCapabilityProgramSetV1Rust.lean` |
+| `crates/dclutch-capability-program-contract/src/generated_set_v2.rs` | `EmitCapabilityProgramSetV2Rust.lean` |
+| `crates/dclutch-capability-program-contract/src/generated_v3.rs` | `EmitCapabilityProgramV3AbiRust.lean` |
+| `crates/dclutch-capability-program-contract/src/generated_v4.rs` | `EmitCapabilityProgramV4AbiRust.lean` |
+| `crates/dclutch-claims-svm/src/generated_liability_basis_state_v2.rs` | `EmitClaimsLiabilityBasisStateV2Rust.lean` |
+| `crates/dclutch-claims-svm/src/generated_market_closure_v1.rs` | `EmitClaimsMarketClosureV1Rust.lean` |
+| `crates/dclutch-custody-contract/src/generated.rs` | `EmitCustodyAbiRust.lean` |
+| `crates/dclutch-custody-contract/src/generated_projected_state_v2.rs` | `EmitProjectedCustodyStateV2Rust.lean` |
+| `crates/dclutch-dealer-codec/src/generated_dealer_liquidity.rs` | `EmitDealerLiquidityAbiRust.lean` |
+| `crates/dclutch-dealer-codec/src/generated_dealer_trading_profile.rs` | `EmitDealerTradingProfileRust.lean` |
+| `crates/dclutch-dealer-codec/src/generated_scenario_checkpoint_v1.rs` | `EmitDealerScenarioCheckpointV1Rust.lean` |
+| `crates/dclutch-dealer-codec/src/generated_scenario_reservation_state_v1.rs` | `EmitDealerScenarioReservationStateV1Rust.lean` |
+| `crates/dclutch-dealer-codec/src/generated_scenario_trade_v4.rs` | `EmitDealerScenarioTradeV4Rust.lean` |
+| `crates/dclutch-dealer-scenario-kernel/src/generated_netting_corpus.rs` | `EmitDealerScenarioNettingCorpusRust.lean` |
 | `crates/dclutch-direct-aot-contract/src/generated.rs` | `EmitDirectProgramV2Rust.lean` |
+| `crates/dclutch-direct-codec/src/generated_intent_v2.rs` | `EmitDirectIntentV2Rust.lean` |
+| `crates/dclutch-direct-codec/src/generated_layout.rs` | `EmitDirectCodecRust.lean` |
+| `crates/dclutch-direct-codec/src/generated_lifecycle.rs` | `EmitRegisteredDirect.lean` |
+| `crates/dclutch-direct-codec/src/generated_ordinary_v3.rs` | `EmitDirectOrdinaryV3Rust.lean` |
+| `crates/dclutch-direct-codec/src/generated_registered_controller.rs` | `EmitRegisteredDirect.lean` |
+| `crates/dclutch-direct-codec/src/generated_registered_fill_v4.rs` | `EmitDirectRegisteredFillV4Rust.lean` |
+| `crates/dclutch-direct-codec/src/generated_successor.rs` | `EmitDirectSuccessorAbiRust.lean` |
+| `crates/dclutch-effect-kernel/src/generated_v4_abi.rs` | `EmitEffectProgramV4AbiRust.lean` |
+| `crates/dclutch-execution-strategy-contract/src/generated_v2.rs` | `EmitExecutionStrategyV2AbiRust.lean` |
+| `crates/dclutch-fractional-claim-kernel/src/generated_abi.rs` | `EmitFractionalClaimV1AbiRust.lean` |
+| `crates/dclutch-general-adapter-contract/src/generated_request_profiles_v1.rs` | `EmitGeneralRequestProfilesV1Rust.lean` |
+| `crates/dclutch-general-adapter-contract/src/generated_runtime_wire_v2.rs` | `EmitGeneralRuntimeWireV2Rust.lean` |
+| `crates/dclutch-general-adapter-contract/src/generated_transition_programs_v3.rs` | `EmitGeneralTransitionV3Rust.lean` |
+| `crates/dclutch-general-adapter-contract/tests/generated/selection_decision_corpus_v1.rs` | `EmitGeneralSelectionDecisionCorpusRust.lean` |
+| `crates/dclutch-general-codec/src/generated_general_controller.rs` | `EmitGeneralControllerAbiRust.lean` |
+| `crates/dclutch-general-codec/src/generated_general_controller_request_v3.rs` | `EmitGeneralControllerRequestV3Rust.lean` |
+| `crates/dclutch-general-config-contract/src/generated.rs` | `EmitGeneralConfigAbiRust.lean` |
+| `crates/dclutch-general-config-contract/src/generated_v3.rs` | `EmitGeneralConfigV3AbiRust.lean` |
 | `crates/dclutch-liability-basis-v2-kernel/src/generated.rs` | `EmitLiabilityBasisV2Rust.lean` |
 | `crates/dclutch-liability-basis-v2-kernel/src/generated_price_gate.rs` | `EmitLiabilityBasisV2PriceGateRust.lean` |
 | `crates/dclutch-liability-basis-v2-kernel/src/generated_spline.rs` | `EmitLiabilityBasisV2SplineRust.lean` |
-| `crates/dclutch-market/src/capability_manifest/generated_abi.rs` | `EmitCapabilityManifestV1AbiRust.lean` |
-| `crates/dclutch-market/src/capability_manifest/generated_funding_activation_corpus.rs` | `EmitCapabilityFundingActivationCorpusRust.lean` |
-| `crates/dclutch-market/src/capability_program/generated.rs` | `EmitCapabilityProgramAbiRust.lean` |
-| `crates/dclutch-market/src/capability_program/generated_set_v1.rs` | `EmitCapabilityProgramSetV1Rust.lean` |
-| `crates/dclutch-market/src/capability_program/generated_set_v2.rs` | `EmitCapabilityProgramSetV2Rust.lean` |
-| `crates/dclutch-market/src/capability_program/generated_v3.rs` | `EmitCapabilityProgramV3AbiRust.lean` |
-| `crates/dclutch-market/src/capability_program/generated_v4.rs` | `EmitCapabilityProgramV4AbiRust.lean` |
-| `crates/dclutch-market/src/execution_strategy/generated_v2.rs` | `EmitExecutionStrategyV2AbiRust.lean` |
-| `crates/dclutch-market/src/generated.rs` | `EmitMarketCoreRust.lean` |
-| `crates/dclutch-market/src/generated_capability_funding_header_v2.rs` | `EmitCapabilityFundingHeaderV2Rust.lean` |
-| `crates/dclutch-market/src/generated_found_frame_v3.rs` | `EmitCoreFoundFrameV3Rust.lean` |
-| `crates/dclutch-market/src/generated_physical.rs` | `EmitMarketCorePhysicalRust.lean` |
-| `crates/dclutch-market/src/generated_retirement_v1.rs` | `EmitMarketRetirementV1Rust.lean` |
-| `crates/dclutch-market/src/generated_series_found_ack_v2.rs` | `EmitSeriesCoreFoundAckV2Rust.lean` |
-| `crates/dclutch-market/src/protocol_parameters/generated.rs` | `EmitProtocolParametersV1Rust.lean` |
-| `crates/dclutch-market/src/realm/generated_abi.rs` | `EmitRealmPositionAbiRust.lean` |
-| `crates/dclutch-market/src/rent/generated_lifecycle_v2.rs` | `EmitLifecycleRentV2Rust.lean` |
-| `crates/dclutch-product/src/admission/generated_admission_v2.rs` | `EmitProductAdmissionV2Rust.lean` |
-| `crates/dclutch-product/src/generated.rs` | `EmitProductRuntimeV2Rust.lean` |
-| `crates/dclutch-product/src/payoff/generated_admission_v3.rs` | `EmitProductGradedBasisAdmissionV3AbiRust.lean` |
-| `crates/dclutch-product/src/payoff/generated_price_gate_v1.rs` | `EmitProductPriceGateV1AbiRust.lean` |
-| `crates/dclutch-product/src/payoff/generated_runtime_v3.rs` | `EmitProductBasisV3AbiRust.lean` |
-| `crates/dclutch-product/tests/payoff__generated/basis_corpus_v3.rs` | `EmitProductBasisV3CorpusRust.lean` |
-| `crates/dclutch-refusal-registry/src/generated_bands.rs` | `EmitRefusalBandsV1Rust.lean` |
-| `crates/dclutch-registry/src/release_set/generated_capability_execution.rs` | `EmitCapabilityExecutionAbiRust.lean` |
-| `crates/dclutch-registry/src/release_set/generated_protocol_infrastructure.rs` | `EmitProtocolInfrastructureProfileAbiRust.lean` |
-| `crates/dclutch-source/src/generated_principal_capacity_v1.rs` | `EmitSourcePrincipalCapacityV1Rust.lean` |
-| `crates/dclutch-source/src/generated_scheduled_median_v1.rs` | `EmitSourceScheduledMedianV1Rust.lean` |
-| `crates/dclutch-source/src/generated_source_material_v2.rs` | `EmitSourceMaterialV2AbiRust.lean` |
-| `crates/dclutch-source/src/generated_source_material_v3.rs` | `EmitSourceMaterialV3AbiRust.lean` |
-| `crates/dclutch-source/src/generated_source_recovery_policy_v2.rs` | `EmitSourceRecoveryPolicyV2AbiRust.lean` |
-| `crates/dclutch-source/src/generated_source_resolution_state_v2.rs` | `EmitSourceResolutionStateV2AbiRust.lean` |
-| `crates/dclutch-source/src/generated_statistic_spec_v1.rs` | `EmitSourceStatisticSpecV1Rust.lean` |
-| `crates/dclutch-source/src/generated_window_spec_v1.rs` | `EmitSourceWindowSpecV1Rust.lean` |
-| `crates/dclutch-source/src/relay/generated_relayed_abi.rs` | `EmitRelayedMainnetStateV1AbiRust.lean` |
-| `crates/dclutch-source/src/relay/generated_venue_rules.rs` | `EmitRelayedVenueDecodingRulesV1Rust.lean` |
-| `crates/dclutch-source/src/resolution/generated_source_resolution.rs` | `EmitSourceResolutionControllerAbiRust.lean` |
-| `crates/dclutch-source/src/resolution/generated_v2.rs` | `EmitSourceResolutionTerminalV2AbiRust.lean` |
-| `crates/dclutch-trading/src/dealer/generated_dealer_liquidity.rs` | `EmitDealerLiquidityAbiRust.lean` |
-| `crates/dclutch-trading/src/dealer/generated_dealer_trading_profile.rs` | `EmitDealerTradingProfileRust.lean` |
-| `crates/dclutch-trading/src/dealer/generated_scenario_checkpoint_v1.rs` | `EmitDealerScenarioCheckpointV1Rust.lean` |
-| `crates/dclutch-trading/src/dealer/generated_scenario_reservation_state_v1.rs` | `EmitDealerScenarioReservationStateV1Rust.lean` |
-| `crates/dclutch-trading/src/dealer/generated_scenario_trade_v4.rs` | `EmitDealerScenarioTradeV4Rust.lean` |
-| `crates/dclutch-trading/src/dealer_scenario/generated_netting_corpus.rs` | `EmitDealerScenarioNettingCorpusRust.lean` |
-| `crates/dclutch-trading/src/general/generated_request_profiles_v1.rs` | `EmitGeneralRequestProfilesV1Rust.lean` |
-| `crates/dclutch-trading/src/general/generated_runtime_wire_v2.rs` | `EmitGeneralRuntimeWireV2Rust.lean` |
-| `crates/dclutch-trading/src/general/generated_transition_programs_v3.rs` | `EmitGeneralTransitionV3Rust.lean` |
-| `crates/dclutch-trading/src/general_codec/generated_general_controller.rs` | `EmitGeneralControllerAbiRust.lean` |
-| `crates/dclutch-trading/src/general_codec/generated_general_controller_request_v3.rs` | `EmitGeneralControllerRequestV3Rust.lean` |
-| `crates/dclutch-trading/src/general_config/generated.rs` | `EmitGeneralConfigAbiRust.lean` |
-| `crates/dclutch-trading/src/general_config/generated_v3.rs` | `EmitGeneralConfigV3AbiRust.lean` |
-| `crates/dclutch-trading/src/generated_intent_v2.rs` | `EmitDirectIntentV2Rust.lean` |
-| `crates/dclutch-trading/src/generated_layout.rs` | `EmitDirectCodecRust.lean` |
-| `crates/dclutch-trading/src/generated_lifecycle.rs` | `EmitDirectLifecycleAbiRust.lean` |
-| `crates/dclutch-trading/src/generated_ordinary_v3.rs` | `EmitDirectOrdinaryV3Rust.lean` |
-| `crates/dclutch-trading/src/generated_registered_controller.rs` | `EmitRegisteredControllerAbiRust.lean` |
-| `crates/dclutch-trading/src/generated_registered_fill_v4.rs` | `EmitDirectRegisteredFillV4Rust.lean` |
-| `crates/dclutch-trading/src/generated_successor.rs` | `EmitDirectSuccessorAbiRust.lean` |
-| `crates/dclutch-trading/src/series/generated.rs` | `EmitSeriesOccurrenceV3Rust.lean` |
-| `crates/dclutch-trading/src/series/generated_ticket_state_v3.rs` | `EmitSeriesTicketStateV3Rust.lean` |
-| `crates/dclutch-trading/tests/general__generated/selection_decision_corpus_v1.rs` | `EmitGeneralSelectionDecisionCorpusRust.lean` |
-| `crates/dclutch-vm/src/account_profile/generated.rs` | `EmitAccountProfileAbiRust.lean` |
-| `crates/dclutch-vm/src/account_profile/lifecycle_v3/generated_v5.rs` | `EmitStateLifecyclePolicyV5AbiRust.lean` |
-| `crates/dclutch-vm/src/account_profile/v2/generated_abi.rs` | `EmitAccountProfileV2AbiRust.lean` |
-| `crates/dclutch-vm/src/account_profile/v2/generated_profile14.rs` | `EmitAccountProfileV2Profile14Rust.lean` |
-| `crates/dclutch-vm/src/effect/generated_v4_abi.rs` | `EmitEffectProgramV4AbiRust.lean` |
-| `crates/dclutch-vm/src/request_profile/generated.rs` | `EmitRequestProfileAbiRust.lean` |
-| `crates/dclutch-vm/src/request_profile/generated_v4.rs` | `EmitRequestProfileV4AbiRust.lean` |
-| `crates/dclutch-vm/src/v2/generated.rs` | `EmitTransitionVMV2Rust.lean` |
-| `packages/dclutch-sdk/lib/generated/capabilityManifestV1.ts` | `EmitCapabilityManifestV1AbiTs.lean` |
-| `packages/dclutch-sdk/lib/generated/protocolInfrastructure.ts` | `EmitProtocolInfrastructureTs.lean` |
-| `packages/dclutch-sdk/lib/generated/rationalTerminalHotV3.ts` | `EmitRationalTerminalHotV3Ts.lean` |
-| `packages/dclutch-sdk/lib/generated/realmPositionV1.ts` | `EmitRealmPositionAbiTs.lean` |
-| `packages/dclutch-sdk/lib/generated/refusalBandsV1.ts` | `EmitRefusalBandsV1Ts.lean` |
-| `packages/dclutch-sdk/lib/generated/registeredDirect.ts` | `EmitRegisteredDirectTs.lean` |
+| `crates/dclutch-market-core-codec/src/generated.rs` | `EmitMarketCoreRust.lean` |
+| `crates/dclutch-market-core-codec/src/generated_capability_funding_header_v2.rs` | `EmitCapabilityFundingHeaderV2Rust.lean` |
+| `crates/dclutch-market-core-codec/src/generated_found_frame_v3.rs` | `EmitCoreFoundFrameV3Rust.lean` |
+| `crates/dclutch-market-core-codec/src/generated_physical.rs` | `EmitMarketCorePhysicalRust.lean` |
+| `crates/dclutch-market-core-codec/src/generated_retirement_v1.rs` | `EmitMarketRetirementV1Rust.lean` |
+| `crates/dclutch-market-core-codec/src/generated_series_found_ack_v2.rs` | `EmitSeriesCoreFoundAckV2Rust.lean` |
+| `crates/dclutch-product-payoff-v2-codec/src/generated_admission_v3.rs` | `EmitProductGradedBasisAdmissionV3AbiRust.lean` |
+| `crates/dclutch-product-payoff-v2-codec/src/generated_price_gate_v1.rs` | `EmitProductPriceGateV1AbiRust.lean` |
+| `crates/dclutch-product-payoff-v2-codec/src/generated_runtime_v3.rs` | `EmitProductBasisV3AbiRust.lean` |
+| `crates/dclutch-product-payoff-v2-codec/tests/generated/basis_corpus_v3.rs` | `EmitProductBasisV3CorpusRust.lean` |
+| `crates/dclutch-product-runtime-v2-admission/src/generated_admission_v2.rs` | `EmitProductAdmissionV2Rust.lean` |
+| `crates/dclutch-product-runtime-v2/src/generated.rs` | `EmitProductRuntimeV2Rust.lean` |
+| `crates/dclutch-protocol-parameters-contract/src/generated.rs` | `EmitProtocolParametersV1Rust.lean` |
+| `crates/dclutch-rational-representation-v2-contract/src/generated_hot_v3.rs` | `EmitRationalTerminalHotV3.lean` |
+| `crates/dclutch-rational-representation-v2-contract/tests/support/generated_rational_cross_domain_v3.rs` | `EmitRationalCrossDomainV3Rust.lean` |
+| `crates/dclutch-rational-representation-v2-kernel/src/generated_descriptor.rs` | `EmitRationalRepresentationV2DescriptorRust.lean` |
+| `crates/dclutch-rational-representation-v2-kernel/src/generated_product_v3.rs` | `EmitProductRepresentationV3AbiRust.lean` |
+| `crates/dclutch-rational-representation-v2-request-contract/src/generated.rs` | `EmitRationalRepresentationV2PhysicalAbiRust.lean` |
+| `crates/dclutch-realm-contract/src/generated_abi.rs` | `EmitRealmPositionAbi.lean` |
+| `crates/dclutch-refusal-registry/src/generated_bands.rs` | `EmitRefusalBandsV1.lean` |
+| `crates/dclutch-relay-contract/src/generated_relayed_abi.rs` | `EmitRelayedMainnetStateV1AbiRust.lean` |
+| `crates/dclutch-relay-contract/src/generated_venue_rules.rs` | `EmitRelayedVenueDecodingRulesV1Rust.lean` |
+| `crates/dclutch-release-set-contract/src/generated_capability_execution.rs` | `EmitCapabilityExecutionAbiRust.lean` |
+| `crates/dclutch-release-set-contract/src/generated_protocol_infrastructure.rs` | `EmitProtocolInfrastructureProfileAbi.lean` |
+| `crates/dclutch-rent-contract/src/generated_lifecycle_v2.rs` | `EmitLifecycleRentV2Rust.lean` |
+| `crates/dclutch-representation-composition-v3-kernel/src/generated_abi.rs` | `EmitRepresentationCompositionV3AbiRust.lean` |
+| `crates/dclutch-representation-composition-v3-kernel/src/generated_exposure_abi.rs` | `EmitProductRepresentationExposureV3AbiRust.lean` |
+| `crates/dclutch-request-profile-contract/src/generated.rs` | `EmitRequestProfileAbiRust.lean` |
+| `crates/dclutch-request-profile-contract/src/generated_v4.rs` | `EmitRequestProfileV4AbiRust.lean` |
+| `crates/dclutch-resolution-codec/src/generated_source_resolution.rs` | `EmitSourceResolutionControllerAbiRust.lean` |
+| `crates/dclutch-resolution-codec/src/generated_v2.rs` | `EmitSourceResolutionTerminalV2AbiRust.lean` |
+| `crates/dclutch-series-v3-kernel/src/generated.rs` | `EmitSeriesOccurrenceV3Rust.lean` |
+| `crates/dclutch-series-v3-kernel/src/generated_ticket_state_v3.rs` | `EmitSeriesTicketStateV3Rust.lean` |
+| `crates/dclutch-source-contract/src/generated_principal_capacity_v1.rs` | `EmitSourcePrincipalCapacityV1Rust.lean` |
+| `crates/dclutch-source-contract/src/generated_scheduled_median_v1.rs` | `EmitSourceScheduledMedianV1Rust.lean` |
+| `crates/dclutch-source-contract/src/generated_source_material_v2.rs` | `EmitSourceMaterialV2AbiRust.lean` |
+| `crates/dclutch-source-contract/src/generated_source_material_v3.rs` | `EmitSourceMaterialV3AbiRust.lean` |
+| `crates/dclutch-source-contract/src/generated_source_recovery_policy_v2.rs` | `EmitSourceRecoveryPolicyV2AbiRust.lean` |
+| `crates/dclutch-source-contract/src/generated_source_resolution_state_v2.rs` | `EmitSourceResolutionStateV2AbiRust.lean` |
+| `crates/dclutch-source-contract/src/generated_statistic_spec_v1.rs` | `EmitSourceStatisticSpecV1Rust.lean` |
+| `crates/dclutch-source-contract/src/generated_window_spec_v1.rs` | `EmitSourceWindowSpecV1Rust.lean` |
+| `crates/dclutch-structured-v2-kernel/src/generated_abi.rs` | `EmitStructuredV2AbiRust.lean` |
+| `crates/dclutch-transition-vm/src/v2/generated.rs` | `EmitTransitionVMV2Rust.lean` |
+| `packages/dclutch-sdk/lib/generated/capabilityManifestV1.ts` | `EmitCapabilityManifestV1Abi.lean` |
+| `packages/dclutch-sdk/lib/generated/protocolInfrastructure.ts` | `EmitProtocolInfrastructureProfileAbi.lean` |
+| `packages/dclutch-sdk/lib/generated/rationalTerminalHotV3.ts` | `EmitRationalTerminalHotV3.lean` |
+| `packages/dclutch-sdk/lib/generated/realmPositionV1.ts` | `EmitRealmPositionAbi.lean` |
+| `packages/dclutch-sdk/lib/generated/refusalBandsV1.ts` | `EmitRefusalBandsV1.lean` |
+| `packages/dclutch-sdk/lib/generated/registeredDirect.ts` | `EmitRegisteredDirect.lean` |
 | `programs/dclutch-core-sbf/src/generated_slot_pin_corpus.rs` | `EmitProtocolInfrastructurePinCorpusRust.lean` |
 | `programs/dclutch-registry-sbf/src/generated_release_finalization_corpus.rs` | `EmitArtifactReleaseFinalizationCorpusRust.lean` |
 | `tools/direct-translation-validator/src/generated_direct_program.rs` | `EmitDirectProgramRust.lean` |

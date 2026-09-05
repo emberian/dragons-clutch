@@ -478,8 +478,6 @@
       "crates/dclutch-trading\tDIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1": "debt-seed-guard",
       "crates/dclutch-trading\tDIRECT_TOKEN_ACCOUNT_PDA_DOMAIN_V1": "debt-seed-guard",
       "crates/dclutch-trading\tSERIES_TICKET_STATE_PDA_DOMAIN_V3": "debt-seed-guard",
-      "formal/qedsvm-direct-v12\tCONTROLLER_SEED": "debt-seed-guard",
-      "formal/qedsvm-direct-v12\tREGISTERED_SEED": "debt-seed-guard",
       "programs/dclutch-general-accelerator-sbf\tGENERAL_ACCELERATOR_TEST_CALLER_AUTHORITY_SEED_V1": "debt-seed-guard",
       "tools/local-validator/bootstrap\tDIRECT_COLLATERAL_SEED_DOMAIN_V1": "debt-seed-guard",
       "tools/local-validator/bootstrap\tGENERAL_ACCELERATOR_CALLER_AUTHORITY_SEED_V1": "debt-seed-guard"

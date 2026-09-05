@@ -1,22 +1,9 @@
 import DClutchSemantics.RelayedMainnetStateV1Abi
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (rustByte emitBytesRows emitSliceSkip)
 
 open DClutch DClutch.RelayedMainnetStateV1Abi
-
-def rustByte (byte : UInt8) : String := s!"0x{Codec.byteHex byte}"
-
-def emitBytes (visibility name : String) (value : List UInt8) : IO Unit := do
-  IO.println "#[rustfmt::skip]"
-  IO.println s!"{visibility} const {name}: [u8; {value.length}] = ["
-  for line in List.range ((value.length + 15) / 16) do
-    let chunk := (value.drop (line * 16)).take 16
-    IO.println s!"    {String.intercalate ", " (chunk.map rustByte)},"
-  IO.println "];"
-
-def emitSlice (name : String) (value : List UInt8) : IO Unit := do
-  IO.println "#[rustfmt::skip]"
-  IO.println s!"pub const {name}: &[u8] = &["
-  IO.println s!"    {String.intercalate ", " (value.map rustByte)},"
-  IO.println "];"
 
 def emitCorpus (name : String) (width : Nat) (corpus : List (List UInt8)) : IO Unit := do
   IO.println "#[cfg(test)]"
@@ -50,43 +37,43 @@ def main : IO Unit := do
   IO.println s!"pub const SOLANA_PACKET_DATA_SIZE_V1: usize = {packetDataSize};"
   IO.println s!"pub const RELAYED_PROVISIONAL_MESSAGE_BUDGET_V1: usize = {provisionalMessageBudget};"
 
-  emitSlice "RELAYED_FAMILY_RELEASE_PREIMAGE_V1" familyReleasePreimage
-  emitBytes "pub" "RELAYED_FAMILY_RELEASE_ID_V1" familyReleaseId
-  emitSlice "RELAYED_RECORD_TRANSPORT_PROFILE_PREIMAGE_V1" recordTransportProfilePreimage
-  emitBytes "pub" "RELAYED_RECORD_TRANSPORT_PROFILE_ID_V1" recordTransportProfileId
-  emitSlice "RELAYED_ONE_TRANSACTION_TRANSPORT_PROFILE_PREIMAGE_V1" oneTransactionTransportProfilePreimage
-  emitBytes "pub" "RELAYED_ONE_TRANSACTION_TRANSPORT_PROFILE_ID_V1" oneTransactionTransportProfileId
-  emitSlice "RELAYER_KEY_SET_SCHEMA_RELEASE_PREIMAGE_V1" keySetSchemaReleasePreimage
-  emitBytes "pub" "RELAYER_KEY_SET_SCHEMA_RELEASE_ID_V1" keySetSchemaReleaseId
-  emitSlice "RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_PREIMAGE_V1" adapterConfigSchemaReleasePreimage
-  emitBytes "pub" "RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_ID_V1" adapterConfigSchemaReleaseId
-  emitSlice "RELAYED_DECODING_RULES_SCHEMA_RELEASE_PREIMAGE_V1" decodingRulesSchemaReleasePreimage
-  emitBytes "pub" "RELAYED_DECODING_RULES_SCHEMA_RELEASE_ID_V1" decodingRulesSchemaReleaseId
-  emitSlice "RELAYED_RECORD_SCHEMA_RELEASE_PREIMAGE_V1" recordSchemaReleasePreimage
-  emitBytes "pub" "RELAYED_RECORD_SCHEMA_RELEASE_ID_V1" recordSchemaReleaseId
-  emitSlice "RELAYED_RECORD_DERIVATION_RELEASE_PREIMAGE_V1" recordDerivationReleasePreimage
-  emitBytes "pub" "RELAYED_RECORD_DERIVATION_RELEASE_ID_V1" recordDerivationReleaseId
-  emitSlice "RELAYED_ATTESTATION_WIRE_RELEASE_PREIMAGE_V1" attestationWireReleasePreimage
-  emitBytes "pub" "RELAYED_ATTESTATION_WIRE_RELEASE_ID_V1" attestationWireReleaseId
+  emitSliceSkip "RELAYED_FAMILY_RELEASE_PREIMAGE_V1" familyReleasePreimage
+  emitBytesRows "pub" "RELAYED_FAMILY_RELEASE_ID_V1" familyReleaseId
+  emitSliceSkip "RELAYED_RECORD_TRANSPORT_PROFILE_PREIMAGE_V1" recordTransportProfilePreimage
+  emitBytesRows "pub" "RELAYED_RECORD_TRANSPORT_PROFILE_ID_V1" recordTransportProfileId
+  emitSliceSkip "RELAYED_ONE_TRANSACTION_TRANSPORT_PROFILE_PREIMAGE_V1" oneTransactionTransportProfilePreimage
+  emitBytesRows "pub" "RELAYED_ONE_TRANSACTION_TRANSPORT_PROFILE_ID_V1" oneTransactionTransportProfileId
+  emitSliceSkip "RELAYER_KEY_SET_SCHEMA_RELEASE_PREIMAGE_V1" keySetSchemaReleasePreimage
+  emitBytesRows "pub" "RELAYER_KEY_SET_SCHEMA_RELEASE_ID_V1" keySetSchemaReleaseId
+  emitSliceSkip "RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_PREIMAGE_V1" adapterConfigSchemaReleasePreimage
+  emitBytesRows "pub" "RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_ID_V1" adapterConfigSchemaReleaseId
+  emitSliceSkip "RELAYED_DECODING_RULES_SCHEMA_RELEASE_PREIMAGE_V1" decodingRulesSchemaReleasePreimage
+  emitBytesRows "pub" "RELAYED_DECODING_RULES_SCHEMA_RELEASE_ID_V1" decodingRulesSchemaReleaseId
+  emitSliceSkip "RELAYED_RECORD_SCHEMA_RELEASE_PREIMAGE_V1" recordSchemaReleasePreimage
+  emitBytesRows "pub" "RELAYED_RECORD_SCHEMA_RELEASE_ID_V1" recordSchemaReleaseId
+  emitSliceSkip "RELAYED_RECORD_DERIVATION_RELEASE_PREIMAGE_V1" recordDerivationReleasePreimage
+  emitBytesRows "pub" "RELAYED_RECORD_DERIVATION_RELEASE_ID_V1" recordDerivationReleaseId
+  emitSliceSkip "RELAYED_ATTESTATION_WIRE_RELEASE_PREIMAGE_V1" attestationWireReleasePreimage
+  emitBytesRows "pub" "RELAYED_ATTESTATION_WIRE_RELEASE_ID_V1" attestationWireReleaseId
 
-  emitSlice "RELAYED_RECORD_PDA_DOMAIN_V1" recordPdaDomain
-  emitSlice "RELAYED_ACCOUNT_SET_DOMAIN_V1" accountSetDomain
-  emitSlice "RELAYED_SET_DIGEST_DOMAIN_V1" setDigestDomain
+  emitSliceSkip "RELAYED_RECORD_PDA_DOMAIN_V1" recordPdaDomain
+  emitSliceSkip "RELAYED_ACCOUNT_SET_DOMAIN_V1" accountSetDomain
+  emitSliceSkip "RELAYED_SET_DIGEST_DOMAIN_V1" setDigestDomain
 
-  emitBytes "pub" "SOLANA_MAINNET_GENESIS_HASH_V1" mainnetGenesisHash
-  emitBytes "pub" "SOLANA_DEVNET_GENESIS_HASH_V1" devnetGenesisHash
-  emitBytes "pub" "SHA256_EMPTY_DIGEST" emptyTailDigest
+  emitBytesRows "pub" "SOLANA_MAINNET_GENESIS_HASH_V1" mainnetGenesisHash
+  emitBytesRows "pub" "SOLANA_DEVNET_GENESIS_HASH_V1" devnetGenesisHash
+  emitBytesRows "pub" "SHA256_EMPTY_DIGEST" emptyTailDigest
 
   IO.println s!"pub const RELAYED_OBSERVATION_HEAD_BYTES: usize = {Observation.headBytes};"
-  emitBytes "pub" "RELAYED_ATTESTATION_MAGIC" Attestation.magic
+  emitBytesRows "pub" "RELAYED_ATTESTATION_MAGIC" Attestation.magic
   IO.println s!"pub const RELAYED_ATTESTATION_HEAD_BYTES: usize = {Attestation.headBytes};"
-  emitBytes "pub" "RELAYED_SEAL_MAGIC" Seal.magic
+  emitBytesRows "pub" "RELAYED_SEAL_MAGIC" Seal.magic
   IO.println s!"pub const RELAYED_SEAL_BYTES: usize = {Seal.bytes};"
-  emitBytes "pub" "RELAYER_KEY_SET_MAGIC" KeySet.magic
+  emitBytesRows "pub" "RELAYER_KEY_SET_MAGIC" KeySet.magic
   IO.println s!"pub const RELAYER_KEY_SET_BYTES: usize = {KeySet.bytes};"
-  emitBytes "pub" "RELAYED_ADAPTER_CONFIG_MAGIC" AdapterConfig.magic
+  emitBytesRows "pub" "RELAYED_ADAPTER_CONFIG_MAGIC" AdapterConfig.magic
   IO.println s!"pub const RELAYED_ADAPTER_CONFIG_BYTES: usize = {AdapterConfig.bytes};"
-  emitBytes "pub" "RELAYED_RECORD_MAGIC" Record.magic
+  emitBytesRows "pub" "RELAYED_RECORD_MAGIC" Record.magic
   IO.println s!"pub const RELAYED_RECORD_HEADER_BYTES: usize = {Record.headerBytes};"
   IO.println s!"pub const RELAYED_RECORD_SLOT_BYTES: usize = {Record.slotBytes};"
   IO.println s!"pub const RELAYED_RECORD_MAX_BYTES: usize = {Record.recordBytes maxAccounts};"
@@ -105,17 +92,17 @@ def main : IO Unit := do
     IO.println s!"pub const {Record.Field.rustName field.spec.name}: usize = {field.offset};"
 
   IO.println "#[cfg(test)]"
-  emitBytes "pub(crate)" "RELAYED_ATTESTATION_EXAMPLE" (Attestation.encode Attestation.exampleMessage)
+  emitBytesRows "pub(crate)" "RELAYED_ATTESTATION_EXAMPLE" (Attestation.encode Attestation.exampleMessage)
   emitCorpus "RELAYED_ATTESTATION_REFUSAL_CORPUS"
     (Attestation.encode Attestation.exampleMessage).length Attestation.refusalCorpus
   IO.println "#[cfg(test)]"
-  emitBytes "pub(crate)" "RELAYED_SEAL_EXAMPLE" (Seal.encode Seal.exampleMessage)
+  emitBytesRows "pub(crate)" "RELAYED_SEAL_EXAMPLE" (Seal.encode Seal.exampleMessage)
   emitCorpus "RELAYED_SEAL_REFUSAL_CORPUS" Seal.bytes Seal.refusalCorpus
   IO.println "#[cfg(test)]"
-  emitBytes "pub(crate)" "RELAYER_KEY_SET_EXAMPLE" (KeySet.encode KeySet.exampleSet)
+  emitBytesRows "pub(crate)" "RELAYER_KEY_SET_EXAMPLE" (KeySet.encode KeySet.exampleSet)
   IO.println "#[cfg(test)]"
-  emitBytes "pub(crate)" "RELAYER_KEY_SET_SINGLETON_EXAMPLE" (KeySet.encode KeySet.singletonSet)
+  emitBytesRows "pub(crate)" "RELAYER_KEY_SET_SINGLETON_EXAMPLE" (KeySet.encode KeySet.singletonSet)
   emitCorpus "RELAYER_KEY_SET_REFUSAL_CORPUS" KeySet.bytes KeySet.refusalCorpus
   IO.println "#[cfg(test)]"
-  emitBytes "pub(crate)" "RELAYED_ADAPTER_CONFIG_EXAMPLE" (AdapterConfig.encode AdapterConfig.exampleConfig)
+  emitBytesRows "pub(crate)" "RELAYED_ADAPTER_CONFIG_EXAMPLE" (AdapterConfig.encode AdapterConfig.exampleConfig)
   emitCorpus "RELAYED_ADAPTER_CONFIG_REFUSAL_CORPUS" AdapterConfig.bytes AdapterConfig.refusalCorpus

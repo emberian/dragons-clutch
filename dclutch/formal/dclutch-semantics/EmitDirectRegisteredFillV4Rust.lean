@@ -1,14 +1,10 @@
 import DClutchSemantics.DirectRegisteredFillV4
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (rustByte byteHex)
 
 open DClutch
 open DClutch.DirectRegisteredFillV4
-
-private def hexByte (byte : UInt8) : String :=
-  let digits := "0123456789abcdef".toList
-  let value := byte.toNat
-  String.ofList [digits[value / 16]!, digits[value % 16]!]
-
-private def rustByte (byte : UInt8) : String := s!"0x{hexByte byte}"
 
 private def emitConst (doc name «type» value : String) : IO Unit := do
   IO.println s!"/// {doc}"
@@ -20,7 +16,7 @@ Rust `InstructionV3` array produced at the commit this module replaced. -/
 def main (args : List String) : IO Unit := do
   if args.contains "--transcription" then
     let bytes := TransitionVMV3.Codec.encodeProgram transcribedProgram
-    IO.println (String.join (bytes.map hexByte))
+    IO.println (String.join (bytes.map byteHex))
     return
   let bytes := TransitionVMV3.Codec.encodeProgram program
   IO.println

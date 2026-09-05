@@ -1,5 +1,8 @@
 import DClutchSemantics.LifecycleRentV2Abi
 import DClutchSemantics.Codec
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (rustByte)
 
 /-! Emit the lifecycle rent V2 ABI as Rust.
 
@@ -8,8 +11,6 @@ alphabet, none of which had an author outside the crate that used them. -/
 
 open DClutch
 open DClutch.LifecycleRentV2Abi
-
-def rustByte (byte : UInt8) : String := s!"0x{Codec.byteHex byte}"
 
 def emitMagic (name doc : String) (value : List UInt8) : IO Unit := do
   IO.println s!"/// {doc}"

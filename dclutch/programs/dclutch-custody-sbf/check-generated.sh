@@ -30,6 +30,10 @@ if ! (cd "$formal" && lake env lean --run EmitCustodyAbiRust.lean) \
   cat "$emit_stderr" >&2
   exit 1
 fi
+# Normalise before comparing, as the other guards do: the committed file is
+# rustfmt's fixpoint, and a raw compare would red the first time anyone ran
+# `tools/lane.sh fmt` over it.
+rustfmt --edition 2024 "$emit_stdout"
 if ! diff -u "$repo_root/crates/dclutch-custody/src/generated.rs" \
     "$emit_stdout"; then
   cat "$build_stdout" >&2

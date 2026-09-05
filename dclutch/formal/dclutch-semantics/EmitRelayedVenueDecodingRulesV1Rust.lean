@@ -1,8 +1,9 @@
 import DClutchSemantics.RelayedVenueDecodingRulesV1
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (rustByte)
 
 open DClutch DClutch.RelayedVenueDecodingRulesV1
-
-def rustByte (byte : UInt8) : String := s!"0x{Codec.byteHex byte}"
 
 def emitBytes (visibility name : String) (value : List UInt8) : IO Unit := do
   IO.println "#[rustfmt::skip]"

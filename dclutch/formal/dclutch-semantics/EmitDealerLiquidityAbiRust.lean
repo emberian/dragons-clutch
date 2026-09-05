@@ -1,8 +1,9 @@
 import DClutchSemantics.DealerLiquidityAbi
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (rustByte)
 
 open DClutch DClutch.Dealer.Abi
-
-def rustByte (byte : UInt8) : String := s!"0x{Codec.byteHex byte}"
 
 def emitBytes (name : String) (bytes : List UInt8) : IO Unit := do
   IO.println s!"pub(crate) const {name}: [u8; {bytes.length}] = ["

@@ -1,13 +1,14 @@
 import DClutchSemantics.ExecutionStrategyV2Abi
 import DClutchSemantics.Codec
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (rustByte)
 
 /-! Emit the Lean-owned Execution Strategy V2 fixed layouts. -/
 
 open DClutch
 open DClutch.AbiSchema
 open DClutch.ExecutionStrategyV2Abi
-
-def rustByte (byte : UInt8) : String := s!"0x{Codec.byteHex byte}"
 
 def emitMagic (name : String) (magic : List UInt8) : IO Unit := do
   IO.println s!"pub const {name}: [u8; {magic.length}] = ["

@@ -1,14 +1,10 @@
 import DClutchSemantics.DirectOrdinaryV3
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (rustByte)
 
 open DClutch
 open DClutch.DirectOrdinaryV3
-
-private def hexByte (byte : UInt8) : String :=
-  let digits := "0123456789abcdef".toList
-  let value := byte.toNat
-  String.ofList [digits[value / 16]!, digits[value % 16]!]
-
-private def rustByte (byte : UInt8) : String := s!"0x{hexByte byte}"
 
 private def emitConst (doc name «type» value : String) : IO Unit := do
   IO.println s!"/// {doc}"

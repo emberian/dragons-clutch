@@ -1,8 +1,9 @@
 import DClutchSemantics.GeneralConfigAbi
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (rustByte)
 
 open DClutch DClutch.General.ConfigAbi
-
-def rustByte (byte : UInt8) : String := s!"0x{Codec.byteHex byte}"
 
 def emitRustBytes (visibility name : String) (bytes : List UInt8) : IO Unit := do
   IO.println "#[rustfmt::skip]"

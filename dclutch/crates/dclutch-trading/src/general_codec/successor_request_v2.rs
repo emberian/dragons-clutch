@@ -6,20 +6,27 @@
 //! permits one reusable lifecycle artifact across every Market.
 
 use super::{Action, Error, Result};
+use crate::general_codec::generated_general_controller_request_v3::{
+    REQUEST_V2_ABI_VERSION, REQUEST_V2_ACTION_OFFSET, REQUEST_V2_BYTES,
+    REQUEST_V2_CANDIDATE_ID_OFFSET, REQUEST_V2_EXECUTION_INDEX_OFFSET,
+    REQUEST_V2_EXPECTED_REVISION_OFFSET, REQUEST_V2_MAGIC, REQUEST_V2_MANIFEST_ORDER_OFFSET,
+    REQUEST_V2_PAGE_INDEX_OFFSET, REQUEST_V2_RESERVED_A_BYTES, REQUEST_V2_RESERVED_A_OFFSET,
+    REQUEST_V2_RESERVED_B_OFFSET, REQUEST_V2_STATE_BUMP_OFFSET, REQUEST_V2_TERMINAL_BUMP_OFFSET,
+};
 
 /// Exact successor controller request width.
-pub const CONTROLLER_REQUEST_BYTES_V2: usize = 64;
+pub const CONTROLLER_REQUEST_BYTES_V2: usize = REQUEST_V2_BYTES;
 /// Action selector offset consumed by CapabilityProgramSet.
-pub const CONTROLLER_REQUEST_ACTION_OFFSET_V2: usize = 10;
+pub const CONTROLLER_REQUEST_ACTION_OFFSET_V2: usize = REQUEST_V2_ACTION_OFFSET;
 /// Verifier-emitted row ordinal inside the selected settlement manifest.
-pub const CONTROLLER_REQUEST_MANIFEST_ORDER_OFFSET_V2: usize = 11;
+pub const CONTROLLER_REQUEST_MANIFEST_ORDER_OFFSET_V2: usize = REQUEST_V2_MANIFEST_ORDER_OFFSET;
 /// Primary action-state PDA bump offset.
-pub const CONTROLLER_REQUEST_STATE_BUMP_OFFSET_V2: usize = 61;
+pub const CONTROLLER_REQUEST_STATE_BUMP_OFFSET_V2: usize = REQUEST_V2_STATE_BUMP_OFFSET;
 /// Optional terminal-record PDA bump offset.
-pub const CONTROLLER_REQUEST_TERMINAL_BUMP_OFFSET_V2: usize = 62;
+pub const CONTROLLER_REQUEST_TERMINAL_BUMP_OFFSET_V2: usize = REQUEST_V2_TERMINAL_BUMP_OFFSET;
 
-const MAGIC: [u8; 8] = *b"DCGREQ02";
-const VERSION: u16 = 2;
+const MAGIC: [u8; 8] = REQUEST_V2_MAGIC;
+const VERSION: u16 = REQUEST_V2_ABI_VERSION;
 
 /// Exact runtime-width General successor request.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -54,21 +61,26 @@ impl ControllerRequestV2 {
         if read_u16(input, 8)? != VERSION {
             return Err(Error::UnsupportedVersion);
         }
-        if !zero_range(input, 12, 4)? || byte(input, 63)? != 0 {
+        if !zero_range(
+            input,
+            REQUEST_V2_RESERVED_A_OFFSET,
+            REQUEST_V2_RESERVED_A_BYTES,
+        )? || byte(input, REQUEST_V2_RESERVED_B_OFFSET)? != 0
+        {
             return Err(Error::NonCanonicalPadding);
         }
-        let raw_candidate = read_array32(input, 24)?;
+        let raw_candidate = read_array32(input, REQUEST_V2_CANDIDATE_ID_OFFSET)?;
         let value = Self {
             action: Action::decode(byte(input, CONTROLLER_REQUEST_ACTION_OFFSET_V2)?)?,
             manifest_order_index: byte(input, CONTROLLER_REQUEST_MANIFEST_ORDER_OFFSET_V2)?,
-            expected_revision: read_u64(input, 16)?,
+            expected_revision: read_u64(input, REQUEST_V2_EXPECTED_REVISION_OFFSET)?,
             candidate_id: if raw_candidate == [0; 32] {
                 None
             } else {
                 Some(raw_candidate)
             },
-            page_index: read_u32(input, 56)?,
-            execution_index: byte(input, 60)?,
+            page_index: read_u32(input, REQUEST_V2_PAGE_INDEX_OFFSET)?,
+            execution_index: byte(input, REQUEST_V2_EXECUTION_INDEX_OFFSET)?,
             state_bump: byte(input, CONTROLLER_REQUEST_STATE_BUMP_OFFSET_V2)?,
             terminal_record_bump: byte(input, CONTROLLER_REQUEST_TERMINAL_BUMP_OFFSET_V2)?,
         };
@@ -92,12 +104,24 @@ impl ControllerRequestV2 {
             CONTROLLER_REQUEST_MANIFEST_ORDER_OFFSET_V2,
             self.manifest_order_index,
         )?;
-        put(&mut output, 16, &self.expected_revision.to_le_bytes())?;
+        put(
+            &mut output,
+            REQUEST_V2_EXPECTED_REVISION_OFFSET,
+            &self.expected_revision.to_le_bytes(),
+        )?;
         if let Some(candidate) = self.candidate_id {
-            put(&mut output, 24, &candidate)?;
+            put(&mut output, REQUEST_V2_CANDIDATE_ID_OFFSET, &candidate)?;
         }
-        put(&mut output, 56, &self.page_index.to_le_bytes())?;
-        put_byte(&mut output, 60, self.execution_index)?;
+        put(
+            &mut output,
+            REQUEST_V2_PAGE_INDEX_OFFSET,
+            &self.page_index.to_le_bytes(),
+        )?;
+        put_byte(
+            &mut output,
+            REQUEST_V2_EXECUTION_INDEX_OFFSET,
+            self.execution_index,
+        )?;
         put_byte(
             &mut output,
             CONTROLLER_REQUEST_STATE_BUMP_OFFSET_V2,

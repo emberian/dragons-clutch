@@ -1,4 +1,5 @@
 import DClutchSemantics.AbiSchema
+import DClutchSemantics.GeneralControllerRequestV2
 
 /-!
 # Width-preserving General controller request V3
@@ -53,11 +54,20 @@ theorem request_coordinates_are_canonical : coordinates requestLayout = [
     (.primaryStateBump, 61, 1), (.secondaryStateBump, 62, 1),
     (.resultStateBump, 63, 1)] := by native_decide
 
+/-- The wire break preserves every settlement coordinate: each of these fields
+sits where V2 put it, stated against V2's own layout rather than against the
+numbers both happen to be. -/
 theorem selector_and_settlement_prefix_match_v2 :
-    fieldOffset requestLayout .action = 10 ∧
-    fieldOffset requestLayout .manifestOrderIndex = 11 ∧
-    fieldOffset requestLayout .expectedRevision = 16 ∧
-    fieldOffset requestLayout .pageIndex = 56 ∧
-    fieldOffset requestLayout .executionIndex = 60 := by native_decide
+    fieldOffset requestLayout .action =
+      fieldOffset ControllerRequestV2.requestLayout .action ∧
+    fieldOffset requestLayout .manifestOrderIndex =
+      fieldOffset ControllerRequestV2.requestLayout .manifestOrderIndex ∧
+    fieldOffset requestLayout .expectedRevision =
+      fieldOffset ControllerRequestV2.requestLayout .expectedRevision ∧
+    fieldOffset requestLayout .pageIndex =
+      fieldOffset ControllerRequestV2.requestLayout .pageIndex ∧
+    fieldOffset requestLayout .executionIndex =
+      fieldOffset ControllerRequestV2.requestLayout .executionIndex ∧
+    requestBytes = ControllerRequestV2.requestBytes := by native_decide
 
 end DClutch.General.ControllerRequestV3

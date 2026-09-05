@@ -1,14 +1,12 @@
 import DClutchSemantics.FractionalClaimV1
 import DClutchSemantics.Codec
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (rustBytes emitRustBytes)
 
 /-! Emit only the Lean-owned Fractional V1 physical layout constants. -/
 
 open DClutch.FractionalClaimV1.PhysicalAbi
-
-def rustByte (byte : UInt8) : String := s!"0x{DClutch.Codec.byteHex byte}"
-
-def rustBytes (bytes : List UInt8) : String :=
-  s!"[{String.intercalate ", " (bytes.map rustByte)}]"
 
 /-- Emit one byte-array constant behind `#[rustfmt::skip]`.
 

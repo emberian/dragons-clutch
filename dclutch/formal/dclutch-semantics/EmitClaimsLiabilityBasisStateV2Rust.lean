@@ -1,5 +1,8 @@
 import DClutchSemantics.ClaimsLiabilityBasisStateV2Abi
 import DClutchSemantics.Codec
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (rustByte)
 
 /-! Emit the Claims LiabilityBasisV2 state ABI as Rust.
 
@@ -10,8 +13,6 @@ below is a placement now. -/
 
 open DClutch
 open DClutch.ClaimsLiabilityBasisStateV2Abi
-
-def rustByte (byte : UInt8) : String := s!"0x{Codec.byteHex byte}"
 
 def emitMagic (name doc : String) (value : List UInt8) : IO Unit := do
   IO.println s!"/// {doc}"

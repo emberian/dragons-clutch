@@ -1,5 +1,8 @@
 import DClutchSemantics.LiabilityBasisV2PriceGateAbi
 import DClutchSemantics.Codec
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (rustBytes)
 
 /-!
 Emit the exact degree-`≥ 2` price-gate ABI constants plus two finite corpora:
@@ -16,11 +19,6 @@ open DClutch.LiabilityBasisV2
 open DClutch.LiabilityBasisV2.Spline
 open DClutch.LiabilityBasisV2.PriceGate
 open DClutch.LiabilityBasisV2.PriceGate.PhysicalAbi
-
-def rustByte (byte : UInt8) : String := s!"0x{DClutch.Codec.byteHex byte}"
-
-def rustBytes (bytes : List UInt8) : String :=
-  s!"[{String.intercalate ", " (bytes.map rustByte)}]"
 
 def rustNatList (width : Nat) (values : List Nat) : String :=
   let padded := values ++ List.replicate (width - values.length) 0

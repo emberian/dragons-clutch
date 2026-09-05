@@ -1,5 +1,8 @@
 import DClutchSemantics.SourceScheduledMedianV1
 import DClutchSemantics.Codec
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (emitBytesRows emitSliceSkip)
 
 /-!
 Emit the cadence tolerance's wire coordinate inside `WindowSpecV1`'s reserved
@@ -14,23 +17,7 @@ control flow.
 open DClutch.SourceScheduledMedianV1
 open DClutch.AbiSchema
 
-def rustByte (byte : UInt8) : String := s!"0x{DClutch.Codec.byteHex byte}"
-
 def maxSamples : Nat := 7
-
-def emitBytes (visibility name : String) (value : List UInt8) : IO Unit := do
-  IO.println "#[rustfmt::skip]"
-  IO.println s!"{visibility} const {name}: [u8; {value.length}] = ["
-  for line in List.range ((value.length + 15) / 16) do
-    let chunk := (value.drop (line * 16)).take 16
-    IO.println s!"    {String.intercalate ", " (chunk.map rustByte)},"
-  IO.println "];"
-
-def emitSlice (name : String) (value : List UInt8) : IO Unit := do
-  IO.println "#[rustfmt::skip]"
-  IO.println s!"pub const {name}: &[u8] = &["
-  IO.println s!"    {String.intercalate ", " (value.map rustByte)},"
-  IO.println "];"
 
 def padded (values : List Int) : List Int :=
   values ++ List.replicate (maxSamples - values.length) 0
@@ -74,8 +61,8 @@ def main : IO Unit := do
   for field in tailLayout do
     IO.println s!"pub const {TailField.rustName field.spec.name}: usize = {field.offset};"
   IO.println s!"pub const WINDOW_SPEC_CADENCE_TOLERANCE_TAIL_RESERVED_BYTES_V1: usize = {_root_.DClutch.SourceWindowSpecV1Abi.Field.width .tailReserved};"
-  emitSlice "CADENCE_TOLERANCE_LIFTING_PLAN_PREIMAGE_V1" liftingPlanPreimage
-  emitBytes "pub" "CADENCE_TOLERANCE_LIFTING_PLAN_ID_V1" liftingPlanId
+  emitSliceSkip "CADENCE_TOLERANCE_LIFTING_PLAN_PREIMAGE_V1" liftingPlanPreimage
+  emitBytesRows "pub" "CADENCE_TOLERANCE_LIFTING_PLAN_ID_V1" liftingPlanId
   IO.println s!"pub const SCHEDULED_MEDIAN_CORPUS_MAX_SAMPLES_V1: usize = {maxSamples};"
   IO.println s!"pub const SCHEDULE_CASES_V1: [ScheduleCaseV1; {scheduleCases.length}] = ["
   for indexed in scheduleCases.zipIdx do

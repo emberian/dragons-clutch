@@ -1,22 +1,13 @@
 import DClutchSemantics.AccountProfileV2Abi
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (emitBytes emitSlice)
 
 /-! Emit the Lean-owned AccountProfile V2 fixed ABI: identity, artifact
 profiles, header cut points, record layouts, opcodes and tag vocabularies. -/
 
 open DClutch
 open DClutch.AccountProfileV2Abi
-
-def rustByte (byte : UInt8) : String := s!"0x{Codec.byteHex byte}"
-
-def emitBytes (name : String) (value : List UInt8) : IO Unit := do
-  IO.println s!"pub const {name}: [u8; {value.length}] = ["
-  IO.println s!"    {String.intercalate ", " (value.map rustByte)},"
-  IO.println "];"
-
-def emitSlice (name : String) (value : List UInt8) : IO Unit := do
-  IO.println s!"pub const {name}: &[u8] = &["
-  IO.println s!"    {String.intercalate ", " (value.map rustByte)},"
-  IO.println "];"
 
 def emitUsize (name : String) (value : Nat) : IO Unit :=
   IO.println s!"pub const {name}: usize = {value};"

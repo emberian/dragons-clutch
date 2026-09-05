@@ -1,14 +1,12 @@
 import DClutchSemantics.RationalRepresentationV2PhysicalAbi
 import DClutchSemantics.Codec
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (emitBytes)
 
 open DClutch
 open DClutch.AbiSchema
 open DClutch.RationalRepresentationV2PhysicalAbi
-
-def rustByte (byte : UInt8) : String := s!"0x{Codec.byteHex byte}"
-
-def emitBytes (name : String) (bytes : List UInt8) : IO Unit := do
-  IO.println s!"pub const {name}: [u8; {bytes.length}] = [{String.intercalate ", " (bytes.map rustByte)}];"
 
 /-- Physical ABI revision three names every request and asset constant it
 moved.  A constant whose value changed keeps no old name, so a consumer that

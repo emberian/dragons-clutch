@@ -1,22 +1,13 @@
 import DClutchSemantics.CapabilityProgramSetV1
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (rustByte emitBytes emitSlice)
 
 /-! Emit the Lean-owned Capability Program Set V1 ABI and hostile corpus. -/
 
 open DClutch
 open DClutch.AbiSchema
 open DClutch.CapabilityProgramSetV1
-
-def rustByte (byte : UInt8) : String := s!"0x{Codec.byteHex byte}"
-
-def emitBytes (name : String) (bytes : List UInt8) : IO Unit := do
-  IO.println s!"pub const {name}: [u8; {bytes.length}] = ["
-  IO.println s!"    {String.intercalate ", " (bytes.map rustByte)},"
-  IO.println "];"
-
-def emitSlice (name : String) (bytes : List UInt8) : IO Unit := do
-  IO.println s!"pub const {name}: &[u8] = &["
-  IO.println s!"    {String.intercalate ", " (bytes.map rustByte)},"
-  IO.println "];"
 
 def emitHostileCorpus : IO Unit := do
   IO.println "#[cfg(test)]"

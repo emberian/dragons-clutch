@@ -1,5 +1,8 @@
 import DClutchSemantics.SourceWindowSpecV1Abi
 import DClutchSemantics.Codec
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (rustByte emitConst)
 
 /-! Emit the WindowSpecV1 preimage layout as Rust.
 
@@ -16,12 +19,6 @@ constant rather than one author and two. -/
 
 open DClutch
 open DClutch.SourceWindowSpecV1Abi
-
-def rustByte (byte : UInt8) : String := s!"0x{Codec.byteHex byte}"
-
-def emitConst (name kind value doc : String) : IO Unit := do
-  IO.println s!"/// {doc}"
-  IO.println s!"pub const {name}: {kind} = {value};"
 
 /-- Every field except the two the scheduled median's emitter owns. -/
 def headFields : List Field :=

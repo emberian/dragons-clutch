@@ -1,13 +1,14 @@
 import DClutchSemantics.CapabilityFundingHeaderV2Abi
 import DClutchSemantics.Codec
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (rustByte)
 
 /-! Emit the Lean-owned Capability Funding Header V2 fixed ABI. -/
 
 open DClutch
 open DClutch.AbiSchema
 open DClutch.CapabilityFundingHeaderV2Abi
-
-def rustByte (byte : UInt8) : String := s!"0x{Codec.byteHex byte}"
 
 def emitBytes (name : String) (value : List UInt8) : IO Unit := do
   IO.println s!"pub(crate) const {name}: [u8; {value.length}] ="

@@ -1,4 +1,7 @@
 import DClutchSemantics.SeriesOccurrenceV3Abi
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (rustBytes)
 
 /-!
 Emit only the fixed Series V3 record constants and one exact semantic agreement
@@ -9,11 +12,6 @@ physicalization; it does not own a second schedule or occurrence ontology.
 open DClutch
 open DClutch.SeriesOccurrenceV3
 open DClutch.SeriesOccurrenceV3.Abi
-
-def rustByte (byte : UInt8) : String := s!"0x{Codec.byteHex byte}"
-
-def rustBytes (bytes : List UInt8) : String :=
-  s!"[{String.intercalate ", " (bytes.map rustByte)}]"
 
 def emitOffset (name : String) (value : Nat) : IO Unit :=
   IO.println s!"pub const {name}: usize = {value};"

@@ -1,11 +1,15 @@
 import DClutchSemantics.ProductRepresentationV3Abi
 import DClutchSemantics.Codec
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (rustByte)
 
 open DClutch
 open DClutch.ProductRepresentationV3Abi
 
-def rustByte (byte : UInt8) : String := s!"0x{Codec.byteHex byte}"
-
+/- Kept local on purpose: this magic line is 108 columns, and rustfmt leaves an
+over-width single-line array alone while it reflows the three-line form
+`RustEmit.emitBytes` prints, so the two are not the same committed bytes. -/
 def emitBytes (name : String) (value : List UInt8) : IO Unit :=
   IO.println s!"pub const {name}: [u8; {value.length}] = [{String.intercalate ", " (value.map rustByte)}];"
 

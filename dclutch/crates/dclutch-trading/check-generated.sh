@@ -44,17 +44,17 @@ verify EmitDirectCodecRust.lean generated_layout.rs 80
 (
   cd "$formal_dir"
   lake build DClutchSemantics.DirectLifecycleAbi >/dev/null
-  lake env lean --run EmitDirectLifecycleAbiRust.lean >"$candidate"
+  lake env lean --run EmitRegisteredDirect.lean lifecycle >"$candidate"
 )
 grep -q '^pub(crate) const REGISTERED_STATE_BYTES_VALUE: usize = 232;$' "$candidate"
-verify EmitDirectLifecycleAbiRust.lean generated_lifecycle.rs 80
+verify EmitRegisteredDirect.lean generated_lifecycle.rs 80
 
 (
   cd "$formal_dir"
   lake build DClutchSemantics.RegisteredControllerAbi >/dev/null
-  lake env lean --run EmitRegisteredControllerAbiRust.lean >"$candidate"
+  lake env lean --run EmitRegisteredDirect.lean controller >"$candidate"
 )
 grep -q '^pub(crate) const REGISTERED_CONTROLLER_BYTES_VALUE: usize = 32;$' "$candidate"
 grep -q '^pub(crate) const REGISTERED_CREATE_BYTES_VALUE: usize = 152;$' "$candidate"
 grep -q '^pub(crate) const REGISTERED_TERMINAL_BYTES_VALUE: usize = 24;$' "$candidate"
-verify EmitRegisteredControllerAbiRust.lean generated_registered_controller.rs 80
+verify EmitRegisteredDirect.lean generated_registered_controller.rs 80

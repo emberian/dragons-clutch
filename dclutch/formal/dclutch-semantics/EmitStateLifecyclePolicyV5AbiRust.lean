@@ -1,21 +1,12 @@
 import DClutchSemantics.StateLifecyclePolicyV5Abi
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (rustByte emitBytes emitSlice)
 
 /-! Emit only the Lean-owned Lifecycle V5 fixed ABI constants and corpus. -/
 
 open DClutch
 open DClutch.StateLifecyclePolicyV5Abi
-
-def rustByte (byte : UInt8) : String := s!"0x{Codec.byteHex byte}"
-
-def emitBytes (name : String) (value : List UInt8) : IO Unit := do
-  IO.println s!"pub const {name}: [u8; {value.length}] = ["
-  IO.println s!"    {String.intercalate ", " (value.map rustByte)},"
-  IO.println "];"
-
-def emitSlice (name : String) (value : List UInt8) : IO Unit := do
-  IO.println s!"pub const {name}: &[u8] = &["
-  IO.println s!"    {String.intercalate ", " (value.map rustByte)},"
-  IO.println "];"
 
 def emitCorpus (name : String) (corpus : List (List UInt8)) : IO Unit := do
   IO.println s!"pub const {name}: [&[u8]; {corpus.length}] = ["

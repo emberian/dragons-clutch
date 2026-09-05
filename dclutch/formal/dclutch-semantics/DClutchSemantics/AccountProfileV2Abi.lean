@@ -21,8 +21,8 @@ precede it. Those depend on the register geometry of the profile being
 decoded and on the order of earlier operations, so they are not a relation
 over two small finite sets. That is the unit after this one.
 
-`AccountProfileV2Profile13` and `AccountProfileV2Profile14` are instances over
-this vocabulary, not definitions of it; neither defines an operation opcode.
+`AccountProfileV2Profile14` is an instance over this vocabulary, not a
+definition of it; it defines no operation opcode.
 Note that `AccountProfileAbi.OperationKind` is the V1 vocabulary and is NOT
 this one: it names seven of these operations and tags them one through seven,
 where V2 tags the same seven zero through six.

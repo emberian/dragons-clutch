@@ -1,9 +1,10 @@
 import DClutchSemantics.ProtocolParametersV1
 import DClutchSemantics.Codec
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (rustByte)
 
 open DClutch DClutch.ProtocolParametersV1
-
-def rustByte (byte : UInt8) : String := s!"0x{Codec.byteHex byte}"
 
 def emitMagic (name : String) (value : List UInt8) : IO Unit :=
   IO.println

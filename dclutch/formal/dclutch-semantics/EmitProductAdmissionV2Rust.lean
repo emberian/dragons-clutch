@@ -1,5 +1,8 @@
 import DClutchSemantics.ProductAdmissionV2Abi
 import DClutchSemantics.Codec
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (rustByte emitConst)
 
 /-! Emit the Product V2 admission layouts as Rust.
 
@@ -10,12 +13,6 @@ as seventeen bare constants, six of which were not constants at all but
 
 open DClutch
 open DClutch.ProductAdmissionV2Abi
-
-def rustByte (byte : UInt8) : String := s!"0x{Codec.byteHex byte}"
-
-def emitConst (name kind value doc : String) : IO Unit := do
-  IO.println s!"/// {doc}"
-  IO.println s!"pub const {name}: {kind} = {value};"
 
 def emitDigest (name doc : String) (value : List UInt8) : IO Unit := do
   IO.println s!"/// {doc}"

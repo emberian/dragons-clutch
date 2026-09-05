@@ -1,4 +1,7 @@
 import DClutchSemantics.ProductBasisV3
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (rustByte)
 
 open DClutch DClutch.ProductBasisV3Abi DClutch.ProductBasisV3
 
@@ -15,8 +18,6 @@ The corpus lives under `tests/` on purpose. It is several kilobytes of record
 bytes, and the crate it checks is linked into two deployed cdylibs on a route
 with four figures of CU headroom; test data has no business in that ELF.
 -/
-
-def rustByte (byte : UInt8) : String := s!"0x{Codec.byteHex byte}"
 
 def rustByteSlice (bytes : List UInt8) : String :=
   s!"&[{String.intercalate ", " (bytes.map rustByte)}]"

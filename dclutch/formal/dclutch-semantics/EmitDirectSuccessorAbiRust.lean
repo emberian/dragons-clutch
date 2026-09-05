@@ -1,12 +1,13 @@
 import DClutchSemantics.Codec
 import DClutchSemantics.DirectSuccessorAbi
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (rustByte)
 
 /-! Emit the Lean-owned Direct successor config and replay/record layouts. -/
 
 open DClutch
 open DClutch.DirectSuccessorAbi
-
-def rustByte (byte : UInt8) : String := s!"0x{Codec.byteHex byte}"
 
 def emitBytes (name : String) (value : List UInt8) : IO Unit := do
   IO.println s!"pub(crate) const {name}: [u8; {value.length}] = ["

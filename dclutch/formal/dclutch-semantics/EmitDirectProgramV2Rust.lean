@@ -1,13 +1,9 @@
 import DClutchSemantics.DirectProgramV2
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (rustByte)
 
 open DClutch
-
-private def hexByte (byte : UInt8) : String :=
-  let digits := "0123456789abcdef".toList
-  let value := byte.toNat
-  String.ofList [digits[value / 16]!, digits[value % 16]!]
-
-private def rustByte (byte : UInt8) : String := s!"0x{hexByte byte}"
 
 def main : IO Unit := do
   let bytes := TransitionVMV2.Codec.encodeProgram DirectProgramV2.program

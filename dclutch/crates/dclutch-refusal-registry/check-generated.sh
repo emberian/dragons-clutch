@@ -38,10 +38,10 @@ verify() {
 (
   cd "$formal_dir"
   lake build DClutchSemantics.RefusalBandsV1 >/dev/null
-  lake env lean --run EmitRefusalBandsV1Rust.lean >"$candidate"
+  lake env lean --run EmitRefusalBandsV1.lean rust >"$candidate"
 )
 grep -q '^pub const BAND_SPAN: u32 = 0x0000_1000;$' "$candidate"
 grep -q '^pub const BAND_SHIFT: u32 = 12;$' "$candidate"
 grep -q '^pub const BAND_COUNT: usize = 25;$' "$candidate"
 grep -q '^pub const CORE_REFUSAL_BASE: u32 = 0x0000_3000;$' "$candidate"
-verify EmitRefusalBandsV1Rust.lean generated_bands.rs 200
+verify EmitRefusalBandsV1.lean generated_bands.rs 200

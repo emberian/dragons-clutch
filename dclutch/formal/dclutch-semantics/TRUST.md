@@ -15,11 +15,8 @@ For an `Admissible` inline ordinary Direct frame, Lean 4 checks that:
 - a refused frame exposes the unchanged pre-state.
 
 Lean also checks the general encoded length equations for V1 headers, effect
-records, and plans, plus the exact 120-byte semantic-plan and 72-byte physical
-claim-plan encodings of the Direct example. It checks the concrete account
-offsets, privilege words, replay/Position state tags, instruction length, and four effect
-tags emitted for the exact-account claim executor. That concrete check assumes
-the named loader-v1 serialization formula.
+records, and plans, plus the exact 120-byte semantic-plan encoding of the
+Direct example.
 Lean also checks that the multiprogram physical plan's four replay/claim effects
 and two indivisible custody transfers execute to projections that join to the
 same Direct post-state, and that the custody projection conserves collateral.

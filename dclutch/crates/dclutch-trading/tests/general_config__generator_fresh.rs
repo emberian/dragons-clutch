@@ -33,5 +33,28 @@ fn checked_in_rust_is_exact_lean_generator_output() {
     );
     let checked_in = std::fs::read(manifest.join("src/general_config/generated.rs"))
         .unwrap_or_else(|error| panic!("read generated Rust: {error}"));
-    assert_eq!(generated.stdout, checked_in);
+    // Normalise before comparing, as the other guards in this tree do: a raw
+    // compare holds `committed == emission` and reds the first time anyone runs
+    // `tools/lane.sh fmt` on a `do not edit` file, because a direct rustfmt never
+    // sees the `#[rustfmt::skip]` that lives in the sibling module.
+    let temporary = std::env::temp_dir().join(format!(
+        "dclutch-{}-{}.rs",
+        env!("CARGO_PKG_NAME"),
+        std::process::id()
+    ));
+    std::fs::write(&temporary, &generated.stdout).expect("write generated Rust");
+    let formatted = Command::new("rustfmt")
+        .args(["--edition", "2024"])
+        .arg(&temporary)
+        .output()
+        .expect("launch rustfmt");
+    assert!(
+        formatted.status.success(),
+        "rustfmt failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&formatted.stdout),
+        String::from_utf8_lossy(&formatted.stderr)
+    );
+    let formatted = std::fs::read(&temporary).expect("read formatted generated Rust");
+    std::fs::remove_file(&temporary).expect("remove generated Rust");
+    assert_eq!(formatted, checked_in);
 }

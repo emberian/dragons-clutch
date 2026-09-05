@@ -1,18 +1,14 @@
 import DClutchSemantics.MarketCoreAbi
 import DClutchSemantics.Codec
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (emitBytes)
 
 /-! Emit the safe fixed-memory Rust interpreter for the Lean-owned Market Core ABI. -/
 
 open DClutch
 open DClutch.AbiSchema
 open DClutch.MarketCoreAbi
-
-def rustByte (byte : UInt8) : String := s!"0x{Codec.byteHex byte}"
-
-def emitBytes (name : String) (bytes : List UInt8) : IO Unit := do
-  IO.println s!"pub const {name}: [u8; {bytes.length}] = ["
-  IO.println s!"    {String.intercalate ", " (bytes.map rustByte)},"
-  IO.println "];"
 
 def interpreter : String := r#"
 /// Width of one opaque nonzero content or account identity.

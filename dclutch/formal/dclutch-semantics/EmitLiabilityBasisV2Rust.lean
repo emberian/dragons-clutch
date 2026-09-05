@@ -1,5 +1,8 @@
 import DClutchSemantics.LiabilityBasisV2
 import DClutchSemantics.Codec
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (rustBytes)
 
 /-!
 Emit the exact provisional ramp ABI constants plus three finite corpora: a
@@ -14,11 +17,6 @@ emit Rust transition logic.
 open DClutch.LiabilityBasisV2
 open DClutch.LiabilityBasisV2.PhysicalAbi
 open DClutch.LiabilityBasisV2.PhysicalPlanner
-
-def rustByte (byte : UInt8) : String := s!"0x{DClutch.Codec.byteHex byte}"
-
-def rustBytes (bytes : List UInt8) : String :=
-  s!"[{String.intercalate ", " (bytes.map rustByte)}]"
 
 def request
     (scale knotDenominator : Nat) (left right coordinate : Int)

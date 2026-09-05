@@ -130,12 +130,6 @@ theorem agreement_is_canonical : canonicalTable agreement = true := by native_de
 theorem hostile_corpus_refuses :
     refusalCorpus.all (fun hostile => canonicalTable hostile = false) := by native_decide
 
-theorem profile_coordinates_are_exact :
-    artifactProfile = 14 ∧ headerBytes = 48 ∧ dynamicSpanEntryBytes = 20 ∧
-      predicateBytes = 16 ∧ dynamicSpanCountOffset = 40 ∧
-      predicateCountOffset = 42 ∧ headerReservedOffset = 44 := by
-  native_decide
-
 theorem profile_identity_has_exact_width :
     profilePreimage.length = 70 ∧ profileId.length = 32 := by native_decide
 

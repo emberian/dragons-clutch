@@ -1,5 +1,8 @@
 import DClutchSemantics.LiabilityBasisV2SplineAbi
 import DClutchSemantics.Codec
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (rustBytes)
 
 /-!
 Emit the exact B-spline profile ABI constants plus two finite corpora: a
@@ -12,11 +15,6 @@ evaluator itself, so a Rust kernel that disagrees on any listed case fails.
 
 open DClutch.LiabilityBasisV2.Spline
 open DClutch.LiabilityBasisV2.Spline.PhysicalAbi
-
-def rustByte (byte : UInt8) : String := s!"0x{DClutch.Codec.byteHex byte}"
-
-def rustBytes (bytes : List UInt8) : String :=
-  s!"[{String.intercalate ", " (bytes.map rustByte)}]"
 
 def rustNatList (width : Nat) (values : List Nat) : String :=
   let padded := values ++ List.replicate (width - values.length) 0

@@ -1,5 +1,8 @@
 import DClutchSemantics.CustodyAbi
 import DClutchSemantics.Codec
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (rustByte)
 
 open DClutch DClutch.CustodyAbi
 
@@ -8,8 +11,6 @@ def emitOffset {Name : Type} [DecidableEq Name]
     (name : String) (field : Name) : IO Unit :=
   let offset := ((AbiSchema.coordinate? field layout).getD (0, 0)).1
   IO.println s!"pub(crate) const {rustPrefix}_{name}_OFFSET: usize = {offset};"
-
-def rustByte (byte : UInt8) : String := s!"0x{Codec.byteHex byte}"
 
 def emitMagic (name : String) (value : List UInt8) : IO Unit :=
   IO.println

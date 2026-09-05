@@ -1,15 +1,9 @@
 import DClutchSemantics.GeneralControllerAbi
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (emitRustBytes)
 
 open DClutch DClutch.General.ControllerAbi
-
-def rustByte (byte : UInt8) : String := s!"0x{Codec.byteHex byte}"
-
-def emitRustBytes (visibility name : String) (bytes : List UInt8) : IO Unit := do
-  IO.println s!"{visibility} const {name}: [u8; {bytes.length}] = ["
-  for line in List.range ((bytes.length + 15) / 16) do
-    let chunk := (bytes.drop (line * 16)).take 16
-    IO.println s!"    {String.intercalate ", " (chunk.map rustByte)},"
-  IO.println "];"
 
 def emitOffset {Name : Type} [DecidableEq Name]
     (rustPrefix name : String) (layout : List (AbiSchema.PlacedField Name))

@@ -1,4 +1,5 @@
 import DClutchSemantics.Direct
+import DClutchSemantics.RustEmit
 
 /-!
 # Canonical Effect IR wire encoding
@@ -229,16 +230,11 @@ theorem hostile_plan_decodings_refuse :
       ] = none := by
   native_decide
 
-def hexDigit (value : Nat) : Char :=
-  match value with
-  | 0 => '0' | 1 => '1' | 2 => '2' | 3 => '3'
-  | 4 => '4' | 5 => '5' | 6 => '6' | 7 => '7'
-  | 8 => '8' | 9 => '9' | 10 => 'a' | 11 => 'b'
-  | 12 => 'c' | 13 => 'd' | 14 => 'e' | _ => 'f'
+/-- The hexadecimal rendering of a byte has one author, `RustEmit`; these two
+names are kept for the eighty modules that spell it `Codec.byteHex`. -/
+def hexDigit (value : Nat) : Char := RustEmit.hexDigit value
 
-def byteHex (byte : UInt8) : String :=
-  let value := byte.toNat
-  String.ofList [hexDigit (value / 16), hexDigit (value % 16)]
+def byteHex (byte : UInt8) : String := RustEmit.byteHex byte
 
 def hex (bytes : List UInt8) : String :=
   String.join (bytes.map byteHex)

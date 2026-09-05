@@ -1,5 +1,8 @@
 import DClutchSemantics.SourcePrincipalCapacityV1
 import DClutchSemantics.Codec
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (rustByte emitBytesRows emitSliceSkip)
 
 /-!
 Emit the `ManipulationFloorV1` ABI, κ's two coordinates inside the existing
@@ -14,22 +17,6 @@ control flow. The complete-set projection cases are evaluated by Lean from
 
 open DClutch.SourcePrincipalCapacityV1
 open DClutch.AbiSchema
-
-def rustByte (byte : UInt8) : String := s!"0x{DClutch.Codec.byteHex byte}"
-
-def emitBytes (visibility name : String) (value : List UInt8) : IO Unit := do
-  IO.println "#[rustfmt::skip]"
-  IO.println s!"{visibility} const {name}: [u8; {value.length}] = ["
-  for line in List.range ((value.length + 15) / 16) do
-    let chunk := (value.drop (line * 16)).take 16
-    IO.println s!"    {String.intercalate ", " (chunk.map rustByte)},"
-  IO.println "];"
-
-def emitSlice (name : String) (value : List UInt8) : IO Unit := do
-  IO.println "#[rustfmt::skip]"
-  IO.println s!"pub const {name}: &[u8] = &["
-  IO.println s!"    {String.intercalate ", " (value.map rustByte)},"
-  IO.println "];"
 
 def emitAdmission (case : Nat × Nat × Nat × Nat) : IO Unit := do
   let kappa : Kappa := { numerator := case.1, denominator := case.2.1 }
@@ -72,13 +59,13 @@ def main : IO Unit := do
   IO.println "use super::{PrincipalAdmissionCaseV1, PrincipalCapProjectionCaseV1};"
   IO.println s!"pub const MANIPULATION_FLOOR_V1_BYTES: usize = {bytes};"
   IO.println s!"pub const MANIPULATION_FLOOR_V1_SCHEMA_VERSION: u16 = {schemaVersion};"
-  emitBytes "pub" "MANIPULATION_FLOOR_V1_MAGIC" magic
-  emitSlice "MANIPULATION_FLOOR_SCHEMA_RELEASE_PREIMAGE_V1" schemaReleasePreimage
-  emitBytes "pub" "MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1" schemaReleaseId
-  emitSlice "PRINCIPAL_CAPACITY_LIFTING_PLAN_PREIMAGE_V1" liftingPlanPreimage
-  emitBytes "pub" "PRINCIPAL_CAPACITY_LIFTING_PLAN_ID_V1" liftingPlanId
-  emitSlice "BONDING_CURVE_FLOOR_DERIVATION_PREIMAGE_V1" curveDerivationReleasePreimage
-  emitBytes "pub" "BONDING_CURVE_FLOOR_DERIVATION_ID_V1" curveDerivationReleaseId
+  emitBytesRows "pub" "MANIPULATION_FLOOR_V1_MAGIC" magic
+  emitSliceSkip "MANIPULATION_FLOOR_SCHEMA_RELEASE_PREIMAGE_V1" schemaReleasePreimage
+  emitBytesRows "pub" "MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1" schemaReleaseId
+  emitSliceSkip "PRINCIPAL_CAPACITY_LIFTING_PLAN_PREIMAGE_V1" liftingPlanPreimage
+  emitBytesRows "pub" "PRINCIPAL_CAPACITY_LIFTING_PLAN_ID_V1" liftingPlanId
+  emitSliceSkip "BONDING_CURVE_FLOOR_DERIVATION_PREIMAGE_V1" curveDerivationReleasePreimage
+  emitBytesRows "pub" "BONDING_CURVE_FLOOR_DERIVATION_ID_V1" curveDerivationReleaseId
   for field in layout do
     IO.println s!"pub const {Field.rustName field.spec.name}: usize = {field.offset};"
   IO.println s!"pub const MANIPULATION_FLOOR_V1_RESERVED_BYTES: usize = 5;"
@@ -123,4 +110,4 @@ def main : IO Unit := do
     emitRefusal indexed.2 indexed.1
   IO.println "];"
   IO.println "#[cfg(test)]"
-  emitBytes "pub(crate)" "MANIPULATION_FLOOR_V1_EXAMPLE" (encode exampleFloor)
+  emitBytesRows "pub(crate)" "MANIPULATION_FLOOR_V1_EXAMPLE" (encode exampleFloor)

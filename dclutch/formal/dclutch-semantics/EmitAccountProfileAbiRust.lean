@@ -1,21 +1,12 @@
 import DClutchSemantics.AccountProfileAbi
+import DClutchSemantics.RustEmit
+
+open DClutch.RustEmit (rustByte emitBytes emitSlice)
 
 /-! Emit the account-profile ABI constants and generated agreement/refusal corpus. -/
 
 open DClutch
 open DClutch.AccountProfileAbi
-
-def rustByte (byte : UInt8) : String := s!"0x{Codec.byteHex byte}"
-
-def emitBytes (name : String) (value : List UInt8) : IO Unit := do
-  IO.println s!"pub const {name}: [u8; {value.length}] = ["
-  IO.println s!"    {String.intercalate ", " (value.map rustByte)},"
-  IO.println "];"
-
-def emitSlice (name : String) (value : List UInt8) : IO Unit := do
-  IO.println s!"pub const {name}: &[u8] = &["
-  IO.println s!"    {String.intercalate ", " (value.map rustByte)},"
-  IO.println "];"
 
 def emitCorpus (name : String) (corpus : List (List UInt8)) : IO Unit := do
   let width := (corpus.head?).map (·.length) |>.getD 0
