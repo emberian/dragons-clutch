@@ -9,13 +9,13 @@
 
 use std::{io::Write, path::PathBuf};
 
-use dclutch_wallet_terminal_payout_operator::ObservedAccountValueV1;
+use dclutch_operator::wallet_terminal_payout::ObservedAccountValueV1;
 
 // Every item the derivation used to define here is re-exported at its old
 // path, so `crate::wallet_terminal::X` still resolves for the modules that
 // were reaching it. The move changed where the code lives, not what this
 // binary's own modules may call it.
-pub(crate) use dclutch_wallet_terminal_payout_operator::wire::*;
+pub(crate) use dclutch_operator::wallet_terminal_payout::wire::*;
 use serde::Serialize;
 
 use crate::{

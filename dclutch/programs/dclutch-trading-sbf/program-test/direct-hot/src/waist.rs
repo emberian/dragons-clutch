@@ -32,7 +32,7 @@ use dclutch_trading::native_evidence_v3::{
     DIRECT_NATIVE_EVIDENCE_BYTES_V3, encode_direct_headerless_registry_native_evidence_v4_atomic,
 };
 use dclutch_trading::ordinary_geometry_v3::DirectOrdinaryGeometryV3;
-use dclutch_hot_bump_miner_v1::hot_bump_hint_slot_name_v1;
+use dclutch_operator::hot_bump_miner::hot_bump_hint_slot_name_v1;
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,

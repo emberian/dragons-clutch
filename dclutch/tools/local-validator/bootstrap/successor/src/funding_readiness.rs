@@ -6,11 +6,11 @@
 //! reports remain the semantic owners of instruction and economic facts.
 
 use dclutch_resolution_core_v3_operator::{Finality, Observation, ObservedAccount};
-pub(crate) use dclutch_source_readiness_operator::{
+pub(crate) use dclutch_operator::source_readiness::{
     FundingReadinessCoordinatesV1, FundingReadinessInstructionPlanV1, FundingReadinessPlanV1,
     FundingReadinessPrepayV1, FundingReadinessRecordCoordinatesV1,
 };
-use dclutch_source_readiness_operator::{
+use dclutch_operator::source_readiness::{
     FundingReadinessFrameV1, funding_readiness_observation_addresses_v1, plan_funding_readiness_v1,
 };
 use solana_address_lookup_table_interface::{

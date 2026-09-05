@@ -101,7 +101,7 @@ SUCCESSOR = "tools/local-validator/bootstrap/successor/src"
 # of files this module reads, and a path spelled twice is a path that goes stale
 # on one side -- which is how the reader below came to be pointed at a file the
 # gate had left.
-ZERO_CLAIMS_OWNER = "crates/dclutch-wallet-terminal-input-operator/src/lib.rs"
+ZERO_CLAIMS_OWNER = "crates/dclutch-operator/src/wallet_terminal_input.rs"
 
 
 EXPOSURES: tuple[CommandExposure, ...] = (
@@ -449,7 +449,7 @@ SCHEMA_OWNERS: tuple[tuple[str, str], ...] = (
     # `PlanInputV1` off disk) and names it only inside a usage blurb, which a
     # substring check accepted for as long as the blurb existed. The wire crate
     # below is where it is declared.
-    ("PAYOUT_INPUT_SCHEMA", "crates/dclutch-wallet-terminal-payout-operator/src/wire.rs"),
+    ("PAYOUT_INPUT_SCHEMA", "crates/dclutch-operator/src/wallet_terminal_payout/wire.rs"),
     ("PAYOUT_EVIDENCE_SCHEMA", f"{SUCCESSOR}/wallet_terminal_payout_exterior.rs"),
     ("TERMINAL_SESSION_SCHEMA", f"{SUCCESSOR}/terminal_sequence.rs"),
     ("TERMINAL_JOURNAL_SCHEMA", f"{SUCCESSOR}/terminal_sequence.rs"),

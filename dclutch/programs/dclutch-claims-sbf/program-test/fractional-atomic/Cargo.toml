@@ -31,6 +31,7 @@ solana-account = "=4.6.0"
 solana-program-test = { version = "=4.3.0-beta.2", features = ["agave-unstable-api"] }
 
 [dev-dependencies]
+dclutch-operator = { path = "../../../../crates/dclutch-operator" }
 base64 = "0.22"
 # The conservation campaign's two subjects. The contract owns the `DCLCNS01`
 # wire the campaign submits; the economic-slice kernel is the OTHER account
@@ -46,7 +47,6 @@ dclutch-claims-founding-test-caller-sbf = { path = "../../test-programs/founding
 # is set, so this campaign stays an ordinary `cargo test` and additionally emits
 # the evidence `dclutch-route-census observe` corroborates a binding against.
 dclutch-program-test-evidence = { path = "../../../../tools/gauntlet/program-test-evidence" }
-dclutch-fractional-cubic-life-evidence = { path = "../../../../crates/dclutch-fractional-cubic-life-evidence" }
 solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
 spl-token-2022-interface = { version = "=3.1.1", default-features = false }
 solana-sdk = "=3.0.0"

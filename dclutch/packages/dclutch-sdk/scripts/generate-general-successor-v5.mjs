@@ -24,7 +24,7 @@ const sources = Object.freeze({
   custody: readFileSync(new URL('crates/dclutch-custody/src/generated.rs', root), 'utf8'),
   lib: readFileSync(new URL('crates/dclutch-trading/src/general/mod.rs', root), 'utf8'),
   operator: readFileSync(new URL('crates/dclutch-operator/src/general_hot_v3.rs', root), 'utf8'),
-  producer: readFileSync(new URL('crates/dclutch-general-successor-operator/src/lib.rs', root), 'utf8'),
+  producer: readFileSync(new URL('crates/dclutch-operator/src/general_successor.rs', root), 'utf8'),
 });
 const outputUrl = new URL('../lib/generated/generalSuccessorV5.ts', import.meta.url);
 const check = process.argv.includes('--check');

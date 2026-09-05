@@ -151,8 +151,8 @@ impl StdError for Error {}
 /// `terminal_lifecycle` and `wallet_terminal` propagate the payout operator's
 /// error with `?`, so this binary owes the same conversion the producer's own
 /// `main.rs` declares. Linking a module means owing its error boundary too.
-impl From<dclutch_wallet_terminal_payout_operator::Error> for Error {
-    fn from(error: dclutch_wallet_terminal_payout_operator::Error) -> Self {
+impl From<dclutch_operator::wallet_terminal_payout::Error> for Error {
+    fn from(error: dclutch_operator::wallet_terminal_payout::Error) -> Self {
         Self(error.to_string())
     }
 }

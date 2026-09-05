@@ -6,13 +6,13 @@ license = "AGPL-3.0-or-later"
 publish = false
 
 [dependencies]
+dclutch-operator = { path = "../../../../crates/dclutch-operator" }
 dclutch-vm = { path = "../../../../crates/dclutch-vm" }
 dclutch-market = { path = "../../../../crates/dclutch-market", features = ["alloc"] }
 dclutch-claims = { path = "../../../../crates/dclutch-claims" }
 dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
 dclutch-custody = { path = "../../../../crates/dclutch-custody" }
 dclutch-trading = { path = "../../../../crates/dclutch-trading" }
-dclutch-hot-bump-miner-v1 = { path = "../../../../crates/dclutch-hot-bump-miner-v1" }
 dclutch-registry = { path = "../../../../crates/dclutch-registry" }
 sha2 = { version = "=0.10.9", default-features = false }
 solana-account = "=4.6.0"

@@ -12,7 +12,7 @@ use std::{io::Write, path::PathBuf};
 
 use dclutch_market::CoreState;
 use dclutch_operator::ObservedAccount;
-use dclutch_wallet_terminal_input_operator::{
+use dclutch_operator::wallet_terminal_input::{
     ProtocolCoordinatesV1, RoutedRecordV1, TerminalPayoutRequestV1, TerminalRecordRoutingV1,
     TerminalRoutingTableV1, complete_terminal_payout_input_v1, decode_routed_market_v1,
     route_terminal_payout_frame_v1, terminal_payout_round_one_addresses_v1,
@@ -24,7 +24,7 @@ use solana_program::pubkey::Pubkey;
 // every item this binary's other modules were reaching is re-exported at its
 // old path. `terminal_sequence` and `aggregate_retirement_exterior` call these
 // unchanged; the move changed where the code lives, not what may call it.
-pub(crate) use dclutch_wallet_terminal_input_operator::authenticate_zero_claims_v1 as authenticate_zero_claims;
+pub(crate) use dclutch_operator::wallet_terminal_input::authenticate_zero_claims_v1 as authenticate_zero_claims;
 
 use crate::wallet_terminal::snapshot_from_rpc;
 use crate::{

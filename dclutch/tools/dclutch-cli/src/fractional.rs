@@ -15,7 +15,7 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use dclutch_claims::fractional::FractionalRetirementActionV3;
-use dclutch_fractional_claim_operator::{
+use dclutch_operator::fractional::{
     FractionalRetirementCoordinateSnapshotV3, FractionalRetirementDeploymentV3,
     FractionalRetirementNextPlanV3, FractionalRetirementRecordV3, FractionalRetirementSnapshotV3,
     discover_fractional_retirement_next_v3, plan_fractional_retirement_next_v3,
@@ -116,7 +116,7 @@ pub fn run(arguments: Vec<String>) -> Result<()> {
     Ok(())
 }
 
-fn lift(error: dclutch_fractional_claim_operator::Error) -> Error {
+fn lift(error: dclutch_operator::fractional::Error) -> Error {
     Error::new(format!("Fractional retirement operator refused: {error:?}"))
 }
 

@@ -10,7 +10,7 @@ path = "src/lib.rs"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-dclutch-source-readiness-operator = { path = "../dclutch-source-readiness-operator" }
+dclutch-operator = { path = "../dclutch-operator", default-features = false }
 wasm-bindgen = "=0.2.127"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

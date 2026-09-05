@@ -1,7 +1,7 @@
 //! Thin browser ABI over the extracted wallet-terminal payout derivation.
 //!
 //! This crate owns no layout, routing, PDA, or authority decision. It carries
-//! strict JSON in, calls `dclutch_wallet_terminal_payout_operator`, and carries
+//! strict JSON in, calls `dclutch_operator::wallet_terminal_payout`, and carries
 //! that derivation's own answer back out. Every coordinate in the
 //! thirty-six-account settlement frame, the lookup table geometry, and the
 //! authenticated report are the operator's; nothing here recomputes one.
@@ -24,7 +24,7 @@ use dclutch_claims::terminal_settlement_v3::{
     TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3, TERMINAL_SETTLEMENT_CANDIDATE_DOMAIN_V3,
     TERMINAL_SETTLEMENT_REQUEST_BYTES_V3,
 };
-use dclutch_wallet_terminal_payout_operator::{
+use dclutch_operator::wallet_terminal_payout::{
     snapshot_wire::parse_observed_snapshot_v1,
     wire::{INPUT_FORMAT, LookupTableRequirementV1, PlanInputV1, SelectedInputV1, build_manifest},
 };
@@ -152,7 +152,7 @@ mod tests {
         // snapshot stitched from two reads, and the derivation must never be
         // handed one.
         let input =
-            serde_json::to_string(&dclutch_wallet_terminal_payout_operator::wire::tests::input())
+            serde_json::to_string(&dclutch_operator::wallet_terminal_payout::wire::tests::input())
                 .expect("fixture serializes");
         let snapshot = format!(
             r#"{{"format":"{SNAPSHOT_FORMAT_V1}","slot":"9","unixTimestamp":"1","accounts":[null],"keys":[]}}"#
@@ -167,7 +167,7 @@ mod tests {
         // The one corruption a snapshot can suffer that still decodes cleanly
         // and still authenticates -- against the wrong account.
         let input =
-            serde_json::to_string(&dclutch_wallet_terminal_payout_operator::wire::tests::input())
+            serde_json::to_string(&dclutch_operator::wallet_terminal_payout::wire::tests::input())
                 .expect("fixture serializes");
         let snapshot = format!(
             r#"{{"format":"{SNAPSHOT_FORMAT_V1}","slot":"9","unixTimestamp":"1","keys":["11111111111111111111111111111112"],"accounts":[{{"key":"11111111111111111111111111111113","owner":"11111111111111111111111111111111","lamports":"1","executable":false,"dataBase64":""}}]}}"#
@@ -193,7 +193,7 @@ mod tests {
     fn hands_back_the_derivations_own_address_list() {
         // The browser reads exactly this and never assembles its own.
         let input =
-            serde_json::to_string(&dclutch_wallet_terminal_payout_operator::wire::tests::input())
+            serde_json::to_string(&dclutch_operator::wallet_terminal_payout::wire::tests::input())
                 .expect("fixture serializes");
         let addresses =
             wallet_terminal_payout_addresses_json_v1(&input).expect("the fixture input routes");

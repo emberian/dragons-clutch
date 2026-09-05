@@ -45,7 +45,7 @@ use dclutch_registry::release_set::{
     ProtocolInfrastructureProfileV1, ProtocolInfrastructureProfileV2,
 };
 use dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
-use dclutch_representation_composition_v3_operator::native_categorical_v1::{
+use dclutch_operator::representation_composition::native_categorical_v1::{
     NativeCategoricalCompositionInputV1, compile_native_categorical_composition_v1,
 };
 use sha2::{Digest as _, Sha256};

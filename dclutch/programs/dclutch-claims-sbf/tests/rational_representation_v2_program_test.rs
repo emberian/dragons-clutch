@@ -146,8 +146,8 @@ use spl_token_interface::state::{Account as SplAccount, AccountState, Mint as Sp
 use dclutch_claims::rational_request::{
     Error as RationalRequestError, generated::ASSET_COEFFICIENT_OFFSET_V3,
 };
-use dclutch_structured_v2_operator::Error as StructuredOperatorError;
-use dclutch_structured_v2_operator::STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2;
+use dclutch_operator::structured::Error as StructuredOperatorError;
+use dclutch_operator::structured::STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2;
 use structured_lowering::StructuredBasis;
 
 const CLAIMS_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xe1; 32]);
@@ -596,7 +596,7 @@ struct Submission {
 mod common_hot_open {
     use super::*;
     use dclutch_vm::account_profile::v2::AccountProfileV2;
-    use dclutch_bearer_v2_operator::{
+    use dclutch_operator::bearer::{
         CheckedRationalHotOuterReleaseV3, ConstructedHotOpenSelectedV3,
         ConstructedHotOpenStructuredV3, ConstructedHotTerminalV3,
         RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3, RATIONAL_OPEN_STRUCTURED_FIXED_ACCOUNTS_V3,
@@ -629,11 +629,11 @@ mod common_hot_open {
         bundle::{BuiltBundleV1, BundleInputV1, FixedCorpusV1, ScenarioV1, build_bundle},
         frame::BuiltAccountV1,
     };
-    use dclutch_hot_bump_miner_v1::hot_bump_hint_slot_name_v1;
+    use dclutch_operator::hot_bump_miner::hot_bump_hint_slot_name_v1;
     use dclutch_claims::rational::{
         RepresentationCoordinateV2, TokenBehaviorRecordAdmissionV2, authenticate_token_behavior_v2,
     };
-    use dclutch_rational_representation_v2_operator::{
+    use dclutch_operator::rational_representation::{
         AssetObservationV2, FinalizedRecordObservationV2, ObservedAccountV2,
         ProductEvidenceObservationV2, RationalObservationV2, ReplayObservationV2,
         SelectedActionInputV2, StructuredActionInputV2, TerminalObservationV2,
@@ -1317,7 +1317,7 @@ mod common_hot_open {
     pub(super) enum HotPlanV3 {
         Structured(ConstructedHotOpenStructuredV3),
         Selected(ConstructedHotOpenSelectedV3),
-        Terminal(Result<ConstructedHotTerminalV3, dclutch_bearer_v2_operator::Error>),
+        Terminal(Result<ConstructedHotTerminalV3, dclutch_operator::bearer::Error>),
     }
 
     pub(super) async fn plan_issue(
@@ -1452,7 +1452,7 @@ mod common_hot_open {
         fixture: &Fixture,
         action: RepresentationActionV2,
         family_request: &[u8],
-        claims_child: &dclutch_rational_representation_v2_operator::ConstructedInstructionV2,
+        claims_child: &dclutch_operator::rational_representation::ConstructedInstructionV2,
     ) -> BuiltBundleV1 {
         let release = fixture.hot_release.as_ref().expect("Hot release");
         let set = artifact_set(release, action);
@@ -1629,10 +1629,10 @@ mod common_hot_open {
         market_data: &'a [u8],
         activation_cache_data: &'a [u8],
         fixed_accounts: &'a [AccountMeta],
-    ) -> dclutch_bearer_v2_operator::RationalTerminalHotStateV3<'a> {
+    ) -> dclutch_operator::bearer::RationalTerminalHotStateV3<'a> {
         let trading = trading_artifact();
         let release = super::release(TRADING_PROGRAM_ID, 0x44, &trading);
-        dclutch_bearer_v2_operator::RationalTerminalHotStateV3 {
+        dclutch_operator::bearer::RationalTerminalHotStateV3 {
             fixed_accounts,
             strategy_accounts: &[],
             root_data,
@@ -1674,7 +1674,7 @@ mod common_hot_open {
     ///
     /// So: report the first disagreement in the terms of the thing that
     /// disagreed -- a meta index, or a list of byte offsets with both values,
-    /// with the hint slot NAMED from `dclutch_hot_bump_miner_v1`'s own list
+    /// with the hint slot NAMED from `dclutch_operator::hot_bump_miner`'s own list
     /// when the offset lands in that block.
     ///
     /// # Why the comparison is evidence at all
@@ -5833,7 +5833,7 @@ async fn current_common_hot_executes_issue_and_selected_denominate_through_real_
     // descriptors that can be founded, denominated, reconstituted and redeemed
     // and never issued or unwrapped by any wallet.
     let artifact_ceiling_k = usize::try_from(
-        dclutch_bearer_v2_operator::RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3,
+        dclutch_operator::bearer::RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3,
     )
     .expect("artifact ceiling");
     let child_ceiling_k =
@@ -5977,7 +5977,7 @@ async fn current_common_hot_terminal_redemption_executes_through_real_elves() {
             RATIONAL_BASE_ACCOUNT_COUNT_V2
                 + RATIONAL_ASSET_ACCOUNT_COUNT_V2
                 + RATIONAL_TERMINAL_ACCOUNT_COUNT_V2,
-            dclutch_bearer_v2_operator::RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3 as usize,
+            dclutch_operator::bearer::RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3 as usize,
         ),
         "the terminal Claims child and its release profile are the frame the request contract specifies",
     );
@@ -6224,7 +6224,7 @@ fn the_full_width_structured_frame_now_fits_a_packet_at_k_three() {
     // own account frame on top of it, and nothing had measured that." Nothing
     // had applied it to the STRUCTURED ceiling either.
     let artifact_ceiling_k = usize::try_from(
-        dclutch_bearer_v2_operator::RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3,
+        dclutch_operator::bearer::RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3,
     )
     .expect("artifact ceiling");
     let child_ceiling_k =

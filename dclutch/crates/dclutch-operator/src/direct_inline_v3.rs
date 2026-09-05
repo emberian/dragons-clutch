@@ -68,7 +68,7 @@ use dclutch_trading::{
     },
     successor::{DirectCoordinatesV1, MakerReplaySeedsV1},
 };
-use dclutch_hot_bump_miner_v1::{
+use crate::hot_bump_miner::{
     HotBumpCorpusV1, activated_custody_program_v1, mine_hot_bump_hints_v1,
 };
 use dclutch_market::{CoreState, MarketCoreStateSeedsV2, Phase, STATE_BYTES};
@@ -107,7 +107,7 @@ pub use dclutch_trading::execution_v3::DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3;
 /// reproduces each address with `create_program_address` and refuses unless it
 /// reproduces the account it was handed. See `HotBumpHintsV1`.
 ///
-/// The DERIVATION is `dclutch_hot_bump_miner_v1`'s and not this file's, because
+/// The DERIVATION is `crate::hot_bump_miner`'s and not this file's, because
 /// it is the same walk the Dealer LP builder, the campaign's bundle builder and
 /// the Rational public outer builders all make. What this function owns is the
 /// CORPUS: which coordinate of the Direct hot frame is the Market, which is the

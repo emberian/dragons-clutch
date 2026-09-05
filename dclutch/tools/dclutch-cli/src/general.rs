@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use dclutch_general_successor_operator as producer;
+use dclutch_operator::general_successor as producer;
 
 use crate::{DEFAULT_RPC_URL_V1, Error, RPC_URL_ENV_V1, Result, rpc};
 

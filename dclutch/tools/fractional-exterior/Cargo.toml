@@ -11,11 +11,11 @@ publish = false
 [workspace]
 
 [dependencies]
+dclutch-operator = { path = "../../crates/dclutch-operator" }
 dclutch-market = { path = "../../crates/dclutch-market" }
 dclutch-claims = { path = "../../crates/dclutch-claims" }
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
 dclutch-custody = { path = "../../crates/dclutch-custody" }
-dclutch-fractional-cubic-life-evidence = { path = "../../crates/dclutch-fractional-cubic-life-evidence" }
 dclutch-product = { path = "../../crates/dclutch-product" }
 dclutch-product-runtime-v2-operator = { path = "../../crates/dclutch-product-runtime-v2-operator" }
 dclutch-registry = { path = "../../crates/dclutch-registry" }

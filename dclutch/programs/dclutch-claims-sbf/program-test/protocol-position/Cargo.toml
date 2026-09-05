@@ -6,13 +6,13 @@ publish = false
 rust-version = "1.89"
 
 [dependencies]
+dclutch-operator = { path = "../../../../crates/dclutch-operator" }
 dclutch-program-test-evidence = { path = "../../../../tools/gauntlet/program-test-evidence" }
 dclutch-claims-affine-batch-program-test = { path = "../affine-batch" }
 dclutch-claims-sbf = { path = "../.." }
 dclutch-claims = { path = "../../../../crates/dclutch-claims" }
 dclutch-market = { path = "../../../../crates/dclutch-market" }
 dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
-dclutch-fractional-claim-operator = { path = "../../../../crates/dclutch-fractional-claim-operator" }
 dclutch-registry = { path = "../../../../crates/dclutch-registry" }
 dclutch-resolution-core-v3-operator = { path = "../../../../crates/dclutch-resolution-core-v3-operator" }
 dclutch-custody = { path = "../../../../crates/dclutch-custody" }

@@ -136,7 +136,7 @@ use dclutch_trading::general_config::{
     root::GeneralRootV2,
     v3::GeneralConfigV3,
 };
-use dclutch_general_successor_operator::{self as successor, ROUTE_FORMAT_V1};
+use dclutch_operator::general_successor::{self as successor, ROUTE_FORMAT_V1};
 use dclutch_market::{CoreState, Phase as CorePhase};
 use dclutch_operator::resolution_core_v3::product_graph_observation_v3::{
     FinalizedProductGraphAccountsV3, authenticate_product_graph_observation_v3,

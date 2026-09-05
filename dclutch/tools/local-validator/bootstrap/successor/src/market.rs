@@ -55,7 +55,7 @@ use dclutch_market::{
     ProjectFoundRequestV2, Readiness, Request, SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES,
     SeriesFoundingPermitSeedsV1, StateBumpsV1, generic_founding_funding_list_id_v1,
 };
-use dclutch_market_founding_v1_operator::{
+use dclutch_operator::market_founding::{
     authenticate_generic_market_founding_artifact_v1, construct_generic_founding_root_selection_v1,
     construct_generic_market_founding_plan_v1,
 };
@@ -4364,7 +4364,7 @@ fn publish_market_records(
         )?)
     };
     let mut direct: BTreeMap<String, PublishedRecord> = BTreeMap::new();
-    let native_composition = dclutch_representation_composition_v3_operator::native_categorical_v1::NativeBasisCompositionInputV1 {
+    let native_composition = dclutch_operator::representation_composition::native_categorical_v1::NativeBasisCompositionInputV1 {
         market: terminal_market.to_bytes(),
         release_set,
         product_record_bytes: &product_body,
@@ -4393,7 +4393,7 @@ fn publish_market_records(
                 ));
             }
         }
-        let native = dclutch_representation_composition_v3_operator::native_categorical_v1::compile_native_basis_composition_v1(native_composition)
+        let native = dclutch_operator::representation_composition::native_categorical_v1::compile_native_basis_composition_v1(native_composition)
             .map_err(|error| Error::new(format!("native basis composition: {error:?}")))?;
         for (label, target) in [
             "terminal_composition_descriptor_record",
@@ -4420,7 +4420,7 @@ fn publish_market_records(
             }
         }
     } else {
-        let categorical_composition = dclutch_representation_composition_v3_operator::native_categorical_v1::NativeCategoricalCompositionInputV1 {
+        let categorical_composition = dclutch_operator::representation_composition::native_categorical_v1::NativeCategoricalCompositionInputV1 {
             market: native_composition.market,
             release_set: native_composition.release_set,
             product_record_bytes: native_composition.product_record_bytes,

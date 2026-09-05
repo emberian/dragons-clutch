@@ -27,9 +27,9 @@
 
 # --- Structured lane -------------------------------------------------------
 crates/dclutch-product/tests/payoff__basis_corpus_v3.rs
-crates/dclutch-rational-lifecycle-hot-v3/src/compact_operator_v4.rs
-crates/dclutch-rational-lifecycle-hot-v3/src/lifecycle_policy_v5.rs
-crates/dclutch-rational-lifecycle-hot-v3/src/release_v1.rs
+crates/dclutch-operator/src/rational_lifecycle_hot/compact_operator_v4.rs
+crates/dclutch-operator/src/rational_lifecycle_hot/lifecycle_policy_v5.rs
+crates/dclutch-operator/src/rational_lifecycle_hot/release_v1.rs
 crates/dclutch-rational-open-wasm/src/wire.rs
 
 # --- Dealer lane -----------------------------------------------------------
@@ -44,4 +44,4 @@ crates/dclutch-trading/src/dealer/trading_request.rs
 # --- Direct lane -----------------------------------------------------------
 
 # --- Redemption lane -------------------------------------------------------
-crates/dclutch-wallet-terminal-payout-operator/src/wire.rs
+crates/dclutch-operator/src/wallet_terminal_payout/wire.rs

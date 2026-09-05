@@ -18,7 +18,7 @@ import {
  * thirty-six-account settlement frame, a lookup table geometry, and an
  * authenticated report reimplemented in TypeScript is the mirror this
  * application keeps convicting. The derivation was extracted VERBATIM into
- * `crates/dclutch-wallet-terminal-payout-operator` — the binary kept only its
+ * `crates/dclutch-operator` — the binary kept only its
  * shell — and compiled to wasm32, so what runs here is the same code the
  * operator toolchain runs.
  *

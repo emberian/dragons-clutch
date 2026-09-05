@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use dclutch_general_successor_operator as shared;
+use dclutch_operator::general_successor as shared;
 
 use crate::{
     Error, Result,

@@ -7,7 +7,7 @@
 //! owns a CORPUS -- which coordinate of its own hot frame is the Market, which
 //! is the root, which account names the Custody deployment, and which program
 //! key each is derived under. The DERIVATION is shared
-//! (`dclutch_hot_bump_miner_v1`) and has its own tests; the corpus is the part
+//! (`crate::hot_bump_miner`) and has its own tests; the corpus is the part
 //! that is per-family and that nothing tested until 2026-09-03.
 //!
 //! A wrong corpus is not a hazard -- the reader rebuilds every address with

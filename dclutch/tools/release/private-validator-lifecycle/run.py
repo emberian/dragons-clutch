@@ -314,7 +314,7 @@ class Refusal(RuntimeError):
 # cross-checked because a path is stable; the version-suffixed string is not
 # restated at all, because it is not.
 SUCCESSOR_SRC = "tools/local-validator/bootstrap/successor/src"
-WALLET_TERMINAL_PAYOUT_OPERATOR_SRC = "crates/dclutch-wallet-terminal-payout-operator/src"
+WALLET_TERMINAL_PAYOUT_OPERATOR_SRC = "crates/dclutch-operator/src"
 
 
 # The derivation itself is not written here, and that is the same argument one

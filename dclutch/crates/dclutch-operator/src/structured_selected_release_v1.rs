@@ -48,8 +48,8 @@
 //! capability manifest names as `release_id`, and whose manifest digest is a
 //! SEED of the Market PDA -- is fixed before the Market address exists.
 
-use dclutch_bearer_v2_operator::RationalOpenCapabilityProgramSetInputV6;
-use dclutch_bearer_v2_operator::{
+use crate::bearer::RationalOpenCapabilityProgramSetInputV6;
+use crate::bearer::{
     OPEN_CAPABILITY_SELECTED_ACTION_COUNT_V1, OpenCapabilityActionArtifactBytesV1,
     OpenCapabilityArtifactReleaseBytesV1, OpenCapabilityArtifactSelectionV1,
     RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3, RATIONAL_OPEN_STRUCTURED_FIXED_ACCOUNTS_V3,
@@ -296,8 +296,8 @@ pub enum StructuredSelectedReleaseErrorV1 {
     Publication,
     /// `dclutch_custody::token_svm` refused; the cause is its own.
     Token(dclutch_custody::token_svm::Error),
-    /// `dclutch_bearer_v2_operator` refused; the cause is its own.
-    Bearer(dclutch_bearer_v2_operator::Error),
+    /// `crate::bearer` refused; the cause is its own.
+    Bearer(crate::bearer::Error),
     /// `dclutch_market::capability_program` refused; the cause is its own.
     ProgramSetContract(dclutch_market::capability_program::set_v2::ProgramSetErrorV2),
     /// `dclutch_market::capability_program` refused; the cause is its own.
@@ -918,7 +918,7 @@ mod tests {
     /// bundles. The day that stops being true, this test names it.
     #[test]
     fn the_three_dead_item_rows_really_are_dead() {
-        use dclutch_bearer_v2_operator::build_rational_open_structured_selected_bundle_v6;
+        use crate::bearer::build_rational_open_structured_selected_bundle_v6;
 
         let basis = basis();
         let policy = encode_open_capability_lifecycle_policy_v5().expect("policy");

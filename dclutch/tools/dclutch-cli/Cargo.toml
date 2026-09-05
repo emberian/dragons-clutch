@@ -37,6 +37,7 @@ inherits = "release"
 lto = "thin"
 
 [dependencies]
+dclutch-operator = { path = "../../crates/dclutch-operator" }
 # The three decoders. Every byte this binary interprets is interpreted by one
 # of these; this crate lays out nothing and parses no wire format of its own.
 # `CoreState` and `DirectRootStateV1` are emitted from the Lean semantics, so
@@ -52,9 +53,7 @@ dclutch-direct-ticket = { path = "../../crates/dclutch-direct-ticket" }
 # General route parsing, authenticated state derivation, lifecycle projection,
 # v0 compilation and plan serialization have one semantic owner shared with
 # the reproducible local campaign. This CLI supplies only finalized RPC reads.
-dclutch-general-successor-operator = { path = "../../crates/dclutch-general-successor-operator" }
 dclutch-claims = { path = "../../crates/dclutch-claims" }
-dclutch-fractional-claim-operator = { path = "../../crates/dclutch-fractional-claim-operator" }
 dclutch-versioned-message-operator = { path = "../../crates/dclutch-versioned-message-operator" }
 
 base64 = "=0.22.1"

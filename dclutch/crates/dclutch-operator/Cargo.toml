@@ -9,7 +9,7 @@ rust-version.workspace = true
 path = "src/lib.rs"
 
 [features]
-default = ["dealer-series"]
+default = ["dealer-series", "successor"]
 # The Dealer and Series planners, and the only reason this crate links the
 # Trading PROGRAM. `dclutch-trading-sbf` is built for a 64-bit target and pins
 # its layouts with `const _: [(); N] = [(); size_of::<T>()]`, so on a 32-bit
@@ -20,13 +20,24 @@ default = ["dealer-series"]
 # not need a program -- the User Position admission planner among them -- and
 # it is default-on, so every existing consumer is unaffected.
 dealer-series = ["dep:dclutch-trading-sbf"]
+# The General successor-plan reader: a route document, `solana-sdk` and a
+# bincode plan file. Off for a browser consumer.
+successor = ["dep:solana-sdk"]
+# The wallet-terminal payout fixtures a program-test builds its scenario from.
+test-fixtures = []
 
 [dependencies]
+base64 = "=0.22.1"
+bincode = "=1.3.3"
+dclutch-sha256-adapter = { path = "../dclutch-sha256-adapter" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "=0.10.9"
+solana-sdk = { version = "=3.0.0", optional = true }
+spl-associated-token-account-interface = { version = "=2.0.0", default-features = false }
 dclutch-vm = { path = "../dclutch-vm" }
 dclutch-market = { path = "../dclutch-market" }
-dclutch-bearer-v2-operator = { path = "../dclutch-bearer-v2-operator" }
-dclutch-hot-bump-miner-v1 = { path = "../dclutch-hot-bump-miner-v1" }
-dclutch-claims = { path = "../dclutch-claims" }
+dclutch-claims = { path = "../dclutch-claims", features = ["svm"] }
 dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-custody = { path = "../dclutch-custody" }
 dclutch-trading = { path = "../dclutch-trading" }
@@ -39,7 +50,6 @@ dclutch-market-open-v1-operator = { path = "../dclutch-market-open-v1-operator" 
 dclutch-product-runtime-v2-operator = { path = "../dclutch-product-runtime-v2-operator" }
 dclutch-provider-transport-v3-operator = { path = "../dclutch-provider-transport-v3-operator" }
 dclutch-registry = { path = "../dclutch-registry", features = ["svm"] }
-dclutch-rational-lifecycle-hot-v3 = { path = "../dclutch-rational-lifecycle-hot-v3" }
 dclutch-source = { path = "../dclutch-source" }
 dclutch-resolution-core-v3-operator = { path = "../dclutch-resolution-core-v3-operator" }
 dclutch-release-tool = { path = "../dclutch-release-tool" }
@@ -53,6 +63,11 @@ solana-message = { version = "=3.1.0", features = ["bincode"] }
 solana-sdk-ids = "=3.1.0"
 solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
 spl-token-2022-interface = { version = "=3.1.1", default-features = false }
+
+[dev-dependencies]
+solana-program-option = "=3.1.0"
+solana-program-pack = "=3.1.0"
+spl-token-interface = "=3.0.0"
 
 [lints]
 workspace = true

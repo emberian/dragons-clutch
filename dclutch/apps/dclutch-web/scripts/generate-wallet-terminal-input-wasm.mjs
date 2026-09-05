@@ -9,7 +9,7 @@
  * grow a second one in TypeScript.
  *
  * The three pure phases were extracted into
- * `crates/dclutch-wallet-terminal-input-operator` and the binary kept its shell
+ * `crates/dclutch-operator` and the binary kept its shell
  * (arguments, two files, RPC, cluster policy), so what this builds is the SAME
  * code the operator toolchain runs.
  *

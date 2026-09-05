@@ -8,7 +8,7 @@
  * twice already: compile the derivation rather than grow a second one here.
  *
  * The derivation was extracted verbatim into
- * `crates/dclutch-wallet-terminal-payout-operator` and the binary kept its
+ * `crates/dclutch-operator` and the binary kept its
  * shell, so what this builds is the SAME code the operator toolchain runs.
  *
  * Everything emitted comes from Rust: the two JSON schema names are read out
@@ -34,7 +34,7 @@ const app = resolve(here, '..');
 const root = resolve(app, '../..');
 const wasmOwner = join(root, 'crates/dclutch-wallet-terminal-payout-wasm/src/lib.rs');
 const claims = join(root, 'crates/dclutch-claims/src/terminal_settlement_v3.rs');
-const operator = join(root, 'crates/dclutch-wallet-terminal-payout-operator/src/wire.rs');
+const operator = join(root, 'crates/dclutch-operator/src/wallet_terminal_payout/wire.rs');
 const crate = 'dclutch-wallet-terminal-payout-wasm';
 const output = join(app, 'lib/generated/walletTerminalPayoutWasm');
 const facts = join(app, 'lib/generated/walletTerminalPayoutWasmV1.ts');

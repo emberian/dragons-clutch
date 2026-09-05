@@ -1,7 +1,7 @@
 //! Thin browser ABI over the extracted wallet-terminal payout INPUT derivation.
 //!
 //! This crate owns no layout, routing, PDA, or authority decision. It carries
-//! strict JSON in, calls `dclutch_wallet_terminal_input_operator`, and carries
+//! strict JSON in, calls `dclutch_operator::wallet_terminal_input`, and carries
 //! that derivation's own answer back out. The two addresses round one observes,
 //! the frame round two observes, and the payout input itself are all the
 //! operator's; nothing here recomputes one.
@@ -31,7 +31,7 @@ use dclutch_claims::liability_basis_state_v2::{
     LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
 };
 use dclutch_market::STATE_BYTES;
-use dclutch_wallet_terminal_input_operator::{
+use dclutch_operator::wallet_terminal_input::{
     ProtocolCoordinatesV1, RoutedRecordV1, TerminalPayoutRequestV1, TerminalRecordRoutingV1,
     TerminalRoutingTableV1,
     address_book::{
@@ -41,7 +41,7 @@ use dclutch_wallet_terminal_input_operator::{
     associated_token_account_program_v1, associated_token_account_v1,
     complete_terminal_payout_input_v1, market_release_set_v1, route_terminal_payout_frame_v1,
 };
-use dclutch_wallet_terminal_payout_operator::{
+use dclutch_operator::wallet_terminal_payout::{
     hex32, pubkey, snapshot_wire::parse_observed_snapshot_v1, wire::FinalizedSnapshotV1,
 };
 use serde::Deserialize;
@@ -529,7 +529,7 @@ pub fn derive_wallet_terminal_input_request_json_v1(
 fn routing_wire_v1(routing: &TerminalRoutingTableV1) -> serde_json::Value {
     let row = |routed: &RoutedRecordV1| {
         serde_json::json!({
-            "digest": dclutch_wallet_terminal_payout_operator::hex(&routed.digest),
+            "digest": dclutch_operator::wallet_terminal_payout::hex(&routed.digest),
             "address": routed.address.to_string(),
         })
     };
@@ -648,14 +648,14 @@ pub fn liability_basis_position_header_bytes_v2() -> usize {
 
 #[cfg(test)]
 mod tests {
-    use dclutch_wallet_terminal_payout_operator::{hex, wire::PlanInputV1};
+    use dclutch_operator::wallet_terminal_payout::{hex, wire::PlanInputV1};
 
     use super::*;
 
     fn request_wire(input: &PlanInputV1) -> String {
-        let selected = dclutch_wallet_terminal_payout_operator::wire::SelectedInputV1::parse(
+        let selected = dclutch_operator::wallet_terminal_payout::wire::SelectedInputV1::parse(
             input,
-            dclutch_wallet_terminal_payout_operator::wire::LookupTableRequirementV1::Present,
+            dclutch_operator::wallet_terminal_payout::wire::LookupTableRequirementV1::Present,
         )
         .expect("fixture routes");
         let record = |digest: &str, address: Pubkey| serde_json::json!({ "digest": digest, "address": address.to_string() });
@@ -713,7 +713,7 @@ mod tests {
     /// still ONE round: all three are addressable before any read.
     #[test]
     fn round_one_hands_back_the_derivations_own_three_addresses() {
-        let input = dclutch_wallet_terminal_payout_operator::wire::tests::input();
+        let input = dclutch_operator::wallet_terminal_payout::wire::tests::input();
         let listed = wallet_terminal_input_round_one_addresses_json_v1(&request_wire(&input))
             .expect("the fixture request routes");
         assert!(listed.contains(ADDRESSES_FORMAT_V1));
@@ -735,7 +735,7 @@ mod tests {
     /// A routing table for another Market is refused before any read.
     #[test]
     fn a_request_whose_address_book_names_another_market_is_refused() {
-        let input = dclutch_wallet_terminal_payout_operator::wire::tests::input();
+        let input = dclutch_operator::wallet_terminal_payout::wire::tests::input();
         let mut wire: serde_json::Value =
             serde_json::from_str(&request_wire(&input)).expect("request is JSON");
         wire["routing"]["foundingMarket"] = serde_json::json!(input.recipient);
@@ -751,7 +751,7 @@ mod tests {
     /// loudly rather than being planned around.
     #[test]
     fn refuses_a_request_carrying_an_unknown_coordinate() {
-        let input = dclutch_wallet_terminal_payout_operator::wire::tests::input();
+        let input = dclutch_operator::wallet_terminal_payout::wire::tests::input();
         let mut wire: serde_json::Value =
             serde_json::from_str(&request_wire(&input)).expect("request is JSON");
         wire["lookupTable"] = serde_json::json!(input.market);
@@ -763,7 +763,7 @@ mod tests {
     /// The shared snapshot decoder still refuses a mispaired observation here.
     #[test]
     fn refuses_an_observation_paired_with_another_address_slot() {
-        let input = dclutch_wallet_terminal_payout_operator::wire::tests::input();
+        let input = dclutch_operator::wallet_terminal_payout::wire::tests::input();
         let round_one = format!(
             r#"{{"format":"{SNAPSHOT_FORMAT_V1}","slot":"9","unixTimestamp":"1","keys":["11111111111111111111111111111112"],"accounts":[{{"key":"11111111111111111111111111111113","owner":"11111111111111111111111111111111","lamports":"1","executable":false,"dataBase64":""}}]}}"#
         );
@@ -776,7 +776,7 @@ mod tests {
     /// A round-one snapshot offered as round two is refused by format name.
     #[test]
     fn refuses_a_snapshot_that_names_another_format() {
-        let input = dclutch_wallet_terminal_payout_operator::wire::tests::input();
+        let input = dclutch_operator::wallet_terminal_payout::wire::tests::input();
         let error = wallet_terminal_input_frame_addresses_json_v1(
             &request_wire(&input),
             &format!(
@@ -791,7 +791,7 @@ mod tests {
     /// payout into a placeholder.
     #[test]
     fn a_request_with_no_recipient_refuses_before_it_can_route() {
-        let input = dclutch_wallet_terminal_payout_operator::wire::tests::input();
+        let input = dclutch_operator::wallet_terminal_payout::wire::tests::input();
         let mut wire: serde_json::Value =
             serde_json::from_str(&request_wire(&input)).expect("request is JSON");
         wire["request"]["recipient"] = serde_json::Value::Null;

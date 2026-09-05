@@ -1,6 +1,6 @@
 //! Packet-safe unsigned Rational terminal Bearer redemption construction.
 
-use dclutch_bearer_v2_operator::RationalTerminalHotInstructionV3;
+use crate::bearer::RationalTerminalHotInstructionV3;
 use solana_hash::Hash;
 use solana_program::pubkey::Pubkey;
 

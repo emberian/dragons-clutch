@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const app = resolve(here, '..');
 const root = resolve(app, '../..');
-const wire = join(root, 'crates/dclutch-source-readiness-operator/src/wire.rs');
+const wire = join(root, 'crates/dclutch-operator/src/source_readiness/wire.rs');
 const crate = 'dclutch-source-readiness-wasm';
 const output = join(app, 'lib/generated/sourceReadinessWasm');
 const facts = join(app, 'lib/generated/sourceReadinessWasmV1.ts');

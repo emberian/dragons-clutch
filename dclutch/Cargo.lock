@@ -1537,22 +1537,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-bearer-v2-operator"
-version = "0.1.0"
-dependencies = [
- "dclutch-claims",
- "dclutch-core-contract",
- "dclutch-custody",
- "dclutch-hot-bump-miner-v1",
- "dclutch-market",
- "dclutch-product",
- "dclutch-rational-representation-v2-operator",
- "dclutch-vm",
- "solana-program",
- "solana-sdk-ids",
-]
-
-[[package]]
 name = "dclutch-chain-bundle-builder"
 version = "0.1.0"
 dependencies = [
@@ -1560,8 +1544,8 @@ dependencies = [
  "dclutch-core-contract",
  "dclutch-custody",
  "dclutch-direct-hot-program-test-support",
- "dclutch-hot-bump-miner-v1",
  "dclutch-market",
+ "dclutch-operator",
  "dclutch-registry",
  "dclutch-trading",
  "dclutch-vm",
@@ -1591,23 +1575,19 @@ dependencies = [
 name = "dclutch-claims-sbf"
 version = "0.1.0"
 dependencies = [
- "dclutch-bearer-v2-operator",
  "dclutch-chain-bundle-builder",
  "dclutch-claims",
  "dclutch-core-contract",
  "dclutch-custody",
- "dclutch-hot-bump-miner-v1",
  "dclutch-market",
  "dclutch-operator",
  "dclutch-product",
  "dclutch-program-test-evidence",
- "dclutch-rational-representation-v2-operator",
  "dclutch-refusal-registry",
  "dclutch-registry",
  "dclutch-sbf-runtime",
  "dclutch-sha256-adapter",
  "dclutch-source",
- "dclutch-structured-v2-operator",
  "dclutch-trading-sbf",
  "dclutch-vm",
  "solana-account 4.6.0",
@@ -1728,7 +1708,6 @@ dependencies = [
  "dclutch-claims",
  "dclutch-core-contract",
  "dclutch-custody",
- "dclutch-hot-bump-miner-v1",
  "dclutch-market",
  "dclutch-operator",
  "dclutch-product",
@@ -1766,63 +1745,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-fractional-claim-operator"
-version = "0.1.0"
-dependencies = [
- "dclutch-claims",
- "dclutch-core-contract",
- "dclutch-custody",
- "dclutch-market",
- "dclutch-registry",
- "dclutch-versioned-message-operator",
- "dclutch-vm",
- "sha2 0.10.9",
- "solana-hash 4.6.0",
- "solana-message 3.1.0",
- "solana-program",
- "solana-sdk-ids",
- "spl-token-2022-interface",
-]
-
-[[package]]
-name = "dclutch-fractional-cubic-life-evidence"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "sha2 0.10.9",
-]
-
-[[package]]
-name = "dclutch-general-successor-operator"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "bincode",
- "dclutch-market",
- "dclutch-operator",
- "dclutch-trading",
- "dclutch-versioned-message-operator",
- "dclutch-vm",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "solana-compute-budget-interface",
- "solana-sdk",
-]
-
-[[package]]
-name = "dclutch-hot-bump-miner-v1"
-version = "0.1.0"
-dependencies = [
- "dclutch-core-contract",
- "dclutch-custody",
- "dclutch-market",
- "dclutch-registry",
- "solana-program",
-]
-
-[[package]]
 name = "dclutch-liability-basis-v2-kernel"
 version = "0.1.0"
 
@@ -1836,16 +1758,6 @@ dependencies = [
  "dclutch-sha256-adapter",
  "dclutch-vm",
  "sha2 0.10.9",
-]
-
-[[package]]
-name = "dclutch-market-founding-v1-operator"
-version = "0.1.0"
-dependencies = [
- "dclutch-core-contract",
- "dclutch-market",
- "dclutch-registry",
- "solana-program",
 ]
 
 [[package]]
@@ -1883,34 +1795,42 @@ dependencies = [
 name = "dclutch-operator"
 version = "0.1.0"
 dependencies = [
- "dclutch-bearer-v2-operator",
+ "base64 0.22.1",
+ "bincode",
  "dclutch-claims",
  "dclutch-core-contract",
  "dclutch-custody",
  "dclutch-direct-ticket",
- "dclutch-hot-bump-miner-v1",
  "dclutch-market",
  "dclutch-market-open-v1-operator",
  "dclutch-product",
  "dclutch-product-runtime-v2-operator",
  "dclutch-provider-transport-v3-operator",
- "dclutch-rational-lifecycle-hot-v3",
  "dclutch-registry",
  "dclutch-release-tool",
  "dclutch-resolution-core-v3-operator",
+ "dclutch-sha256-adapter",
  "dclutch-source",
  "dclutch-trading",
  "dclutch-trading-sbf",
  "dclutch-versioned-message-operator",
  "dclutch-vm",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
  "solana-address-lookup-table-interface",
  "solana-compute-budget-interface",
  "solana-hash 4.6.0",
  "solana-message 3.1.0",
  "solana-program",
+ "solana-program-option",
+ "solana-program-pack",
+ "solana-sdk",
  "solana-sdk-ids",
  "solana-system-interface 2.0.0",
+ "spl-associated-token-account-interface",
  "spl-token-2022-interface",
+ "spl-token-interface",
 ]
 
 [[package]]
@@ -1991,22 +1911,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-rational-lifecycle-hot-v3"
-version = "0.1.0"
-dependencies = [
- "dclutch-claims",
- "dclutch-core-contract",
- "dclutch-custody",
- "dclutch-hot-bump-miner-v1",
- "dclutch-market",
- "dclutch-product",
- "dclutch-registry",
- "dclutch-vm",
- "solana-program",
- "solana-sdk-ids",
-]
-
-[[package]]
 name = "dclutch-rational-open-wasm"
 version = "0.1.0"
 dependencies = [
@@ -2018,26 +1922,6 @@ dependencies = [
  "serde_json",
  "solana-program",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "dclutch-rational-representation-v2-operator"
-version = "0.1.0"
-dependencies = [
- "dclutch-claims",
- "dclutch-core-contract",
- "dclutch-custody",
- "dclutch-market",
- "dclutch-product",
- "dclutch-registry",
- "dclutch-source",
- "solana-program",
- "solana-program-option",
- "solana-program-pack",
- "solana-sdk-ids",
- "spl-associated-token-account-interface",
- "spl-token-2022-interface",
- "spl-token-interface",
 ]
 
 [[package]]
@@ -2099,27 +1983,6 @@ dependencies = [
  "solana-program",
  "solana-sdk-ids",
  "solana-system-interface 2.0.0",
-]
-
-[[package]]
-name = "dclutch-representation-composition-v3-operator"
-version = "0.1.0"
-dependencies = [
- "dclutch-claims",
- "dclutch-custody",
- "dclutch-market",
- "dclutch-product",
- "dclutch-product-runtime-v2-operator",
- "dclutch-rational-lifecycle-hot-v3",
- "dclutch-registry",
- "dclutch-versioned-message-operator",
- "dclutch-vm",
- "solana-address-lookup-table-interface",
- "solana-compute-budget-interface",
- "solana-hash 4.6.0",
- "solana-message 3.1.0",
- "solana-program",
- "solana-sdk-ids",
 ]
 
 [[package]]
@@ -2196,38 +2059,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-source-readiness-operator"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "dclutch-market",
- "dclutch-resolution-core-v3-operator",
- "serde",
- "serde_json",
- "solana-program",
- "solana-sdk-ids",
-]
-
-[[package]]
 name = "dclutch-source-readiness-wasm"
 version = "0.1.0"
 dependencies = [
- "dclutch-source-readiness-operator",
+ "dclutch-operator",
  "getrandom 0.2.17",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "dclutch-structured-v2-operator"
-version = "0.1.0"
-dependencies = [
- "dclutch-bearer-v2-operator",
- "dclutch-claims",
- "dclutch-custody",
- "dclutch-product",
- "dclutch-sha256-adapter",
- "dclutch-vm",
- "sha2 0.10.9",
 ]
 
 [[package]]
@@ -2305,31 +2142,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-wallet-terminal-input-operator"
-version = "0.1.0"
-dependencies = [
- "dclutch-claims",
- "dclutch-market",
- "dclutch-operator",
- "dclutch-product",
- "dclutch-representation-composition-v3-operator",
- "dclutch-wallet-terminal-payout-operator",
- "getrandom 0.2.17",
- "getrandom 0.4.3",
- "sha2 0.10.9",
- "solana-program",
- "solana-sdk-ids",
- "spl-associated-token-account-interface",
-]
-
-[[package]]
 name = "dclutch-wallet-terminal-input-wasm"
 version = "0.1.0"
 dependencies = [
  "dclutch-claims",
  "dclutch-market",
- "dclutch-wallet-terminal-input-operator",
- "dclutch-wallet-terminal-payout-operator",
+ "dclutch-operator",
  "getrandom 0.2.17",
  "getrandom 0.4.3",
  "serde",
@@ -2339,38 +2157,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-wallet-terminal-payout-operator"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "bincode",
- "dclutch-claims",
- "dclutch-custody",
- "dclutch-market",
- "dclutch-operator",
- "dclutch-product",
- "dclutch-registry",
- "dclutch-representation-composition-v3-operator",
- "dclutch-source",
- "dclutch-versioned-message-operator",
- "getrandom 0.2.17",
- "getrandom 0.4.3",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "solana-address-lookup-table-interface",
- "solana-hash 4.6.0",
- "solana-program",
- "solana-sdk-ids",
-]
-
-[[package]]
 name = "dclutch-wallet-terminal-payout-wasm"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "dclutch-claims",
- "dclutch-wallet-terminal-payout-operator",
+ "dclutch-operator",
  "getrandom 0.2.17",
  "getrandom 0.4.3",
  "serde",

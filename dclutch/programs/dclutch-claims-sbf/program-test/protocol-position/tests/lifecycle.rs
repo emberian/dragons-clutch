@@ -35,7 +35,7 @@ use dclutch_claims::fractional_kernel::{
     encode_fractional_exposure_terms_v2, encode_fractional_selection_config_v1,
     fractional_exposure_terms_bytes_v2, fractional_selection_config_from_terms_v1,
 };
-use dclutch_fractional_claim_operator::{
+use dclutch_operator::fractional::{
     FractionalRetirementCoordinateSnapshotV3, FractionalRetirementDeploymentV3,
     FractionalRetirementRecordV3, FractionalRetirementSnapshotV3,
     plan_fractional_retirement_instruction_v3,

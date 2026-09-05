@@ -41,7 +41,7 @@
 //! capability manifest names as `release_id`, and whose manifest digest is a
 //! seed of the Market PDA -- is fixed before the Market address exists.
 
-use dclutch_rational_lifecycle_hot_v3::{
+use crate::rational_lifecycle_hot::{
     RationalActionArtifactBytesV1, RationalArtifactReleaseBytesV1, RationalArtifactSelectionV1,
     RationalLifecycleCompactArtifactInputV6, RationalLifecycleCompactBundleInputV6,
     RationalLifecycleCompactBundleV4, RationalLifecycleProgramSetInputV6,
@@ -271,8 +271,8 @@ pub enum RationalSelectedReleaseErrorV1 {
     Publication,
     /// `dclutch_custody::token_svm` refused; the cause is its own.
     Token(dclutch_custody::token_svm::Error),
-    /// `dclutch_rational_lifecycle_hot_v3` refused; the cause is its own.
-    RationalLifecycleHot(dclutch_rational_lifecycle_hot_v3::Error),
+    /// `crate::rational_lifecycle_hot` refused; the cause is its own.
+    RationalLifecycleHot(crate::rational_lifecycle_hot::Error),
     /// `dclutch_market::capability_program` refused; the cause is its own.
     ProgramSetContract(dclutch_market::capability_program::set_v2::ProgramSetErrorV2),
     /// `dclutch_market::capability_program` refused; the cause is its own.
@@ -593,7 +593,7 @@ fn compact_lengths(input: RationalSelectedReleaseInputV1<'_>) -> Result<Vec<u32>
         .filter(|coefficient| **coefficient != 0)
         .count();
     let start = usize::from(
-        dclutch_rational_lifecycle_hot_v3::RATIONAL_LIFECYCLE_HOT_INJECTED_ACCOUNT_COUNT_V3,
+        crate::rational_lifecycle_hot::RATIONAL_LIFECYCLE_HOT_INJECTED_ACCOUNT_COUNT_V3,
     )
     .checked_add(LIFECYCLE_COMMON_ACCOUNT_COUNT_V2)
     .ok_or(RationalSelectedReleaseErrorV1::Input)?;
@@ -734,7 +734,7 @@ mod tests {
         let basis = basis();
         let release = rational_selected_release_v1(input(&basis)).expect("release");
         let bytes = release.artifact_bytes().expect("bytes");
-        let joined = dclutch_rational_lifecycle_hot_v3::authenticate_rational_release_v1(
+        let joined = crate::rational_lifecycle_hot::authenticate_rational_release_v1(
             release.selection(),
             bytes,
         )

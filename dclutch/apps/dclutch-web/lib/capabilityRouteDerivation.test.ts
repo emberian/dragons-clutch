@@ -328,8 +328,8 @@ describe('what one magic cannot decide alone, and the coordinate that decides it
 /** The acts whose instruction bytes are authored outside this browser. */
 const PLANNER_AUTHORED_V1: Readonly<Record<string, string>> = Object.freeze({
   'market.join': 'crates/dclutch-user-position-admission-wasm',
-  'source.create-fund': 'crates/dclutch-source-readiness-operator',
-  'source.ready': 'crates/dclutch-source-readiness-operator',
+  'source.create-fund': 'crates/dclutch-operator/src/source_readiness.rs',
+  'source.ready': 'crates/dclutch-operator/src/source_readiness.rs',
   'source.provider': 'crates/dclutch-provider-transport-v3-operator',
   'source.admit-terminal': 'crates/dclutch-resolution-core-v3-operator',
   'source.close-fund': 'crates/dclutch-resolution-core-v3-operator',

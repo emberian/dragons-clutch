@@ -369,7 +369,7 @@ export async function inspectDealerEquityRouteV3(
   // schema field), so this key cannot be derived from chain the way
   // requestProfile and strategy are just above -- it must name the schema the
   // PUBLISHER registered under. That publisher is
-  // `crates/dclutch-rational-lifecycle-hot-v3/src/selected_bundle_v6.rs:149`:
+  // `crates/dclutch-operator/src/rational_lifecycle_hot/selected_bundle_v6.rs:149`:
   // `lifecycle: artifact(LIFECYCLE_SCHEMA_ID_V5, lifecycle_id.to_bytes())`,
   // where `LIFECYCLE_SCHEMA_ID_V5 = CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5`,
   // re-validated at :242. The V3 `LIFECYCLE_SCHEMA_RELEASE_ID` this line used

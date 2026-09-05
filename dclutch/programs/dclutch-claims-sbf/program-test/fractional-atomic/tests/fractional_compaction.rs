@@ -105,7 +105,7 @@ use dclutch_claims::fractional_kernel::{
     FractionalExposureTermsInputV2, encode_fractional_exposure_terms_v2,
     fractional_exposure_terms_bytes_v2,
 };
-use dclutch_fractional_cubic_life_evidence::{
+use dclutch_operator::fractional_cubic_life_evidence::{
     AccountImageV1, COMPACTION_SCHEMA_V1, CompactionBridgeV1, PreterminalBridgeV1, canonical_bytes,
     digest as bridge_digest, read_preterminal, write_atomic,
 };

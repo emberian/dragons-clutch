@@ -17,11 +17,11 @@ const wasmPath = fileURLToPath(new URL('./generated/sourceReadinessWasm/source_r
 describe('Source readiness native/WASM parity', () => {
   it('returns byte-for-byte identical Rust-owned coordinates for one exact Market', async () => {
     const fixture = execFileSync('cargo', [
-      'run', '--quiet', '-p', 'dclutch-source-readiness-operator',
+      'run', '--quiet', '-p', 'dclutch-operator', '--bin', 'source-readiness-parity',
       '--bin', 'source-readiness-parity', '--', 'fixture-base',
     ], { cwd: root, encoding: 'utf8' });
     const native = execFileSync('cargo', [
-      'run', '--quiet', '-p', 'dclutch-source-readiness-operator',
+      'run', '--quiet', '-p', 'dclutch-operator', '--bin', 'source-readiness-parity',
       '--bin', 'source-readiness-parity', '--', 'base',
     ], { cwd: root, input: fixture, encoding: 'utf8' });
     await initWasm({ module_or_path: readFileSync(wasmPath) });
@@ -40,11 +40,11 @@ describe('Source readiness native/WASM parity', () => {
 
   it('returns byte-for-byte identical terminal coordinates natively and in WASM', async () => {
     const fixture = execFileSync('cargo', [
-      'run', '--quiet', '-p', 'dclutch-source-readiness-operator',
+      'run', '--quiet', '-p', 'dclutch-operator', '--bin', 'source-readiness-parity',
       '--bin', 'source-readiness-parity', '--', 'fixture-terminal-base',
     ], { cwd: root, encoding: 'utf8' });
     const native = execFileSync('cargo', [
-      'run', '--quiet', '-p', 'dclutch-source-readiness-operator',
+      'run', '--quiet', '-p', 'dclutch-operator', '--bin', 'source-readiness-parity',
       '--bin', 'source-readiness-parity', '--', 'terminal-base',
     ], { cwd: root, input: fixture, encoding: 'utf8' });
     await initWasm({ module_or_path: readFileSync(wasmPath) });
@@ -53,11 +53,11 @@ describe('Source readiness native/WASM parity', () => {
 
   it('returns byte-for-byte identical Source close coordinates natively and in WASM', async () => {
     const fixture = execFileSync('cargo', [
-      'run', '--quiet', '-p', 'dclutch-source-readiness-operator',
+      'run', '--quiet', '-p', 'dclutch-operator', '--bin', 'source-readiness-parity',
       '--bin', 'source-readiness-parity', '--', 'fixture-close-detail',
     ], { cwd: root, encoding: 'utf8' });
     const native = execFileSync('cargo', [
-      'run', '--quiet', '-p', 'dclutch-source-readiness-operator',
+      'run', '--quiet', '-p', 'dclutch-operator', '--bin', 'source-readiness-parity',
       '--bin', 'source-readiness-parity', '--', 'close-detail',
     ], { cwd: root, input: fixture, encoding: 'utf8' });
     await initWasm({ module_or_path: readFileSync(wasmPath) });

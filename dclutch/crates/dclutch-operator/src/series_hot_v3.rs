@@ -75,7 +75,7 @@ use dclutch_market::execution_strategy::v2::{
     EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2, ExecutionStrategyCertificateV2,
     ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
-use dclutch_hot_bump_miner_v1::{
+use crate::hot_bump_miner::{
     HotBumpCorpusV1, activated_custody_program_v1, mine_hot_bump_hints_v1,
 };
 use dclutch_market::{Identity as CoreIdentity, SeriesFoundingPermitSeedsV1};
@@ -806,7 +806,7 @@ fn require_runtime_account_once<'a>(
 
 /// Mine the bumps this family's readers would otherwise search for on chain.
 ///
-/// The DERIVATION is `dclutch_hot_bump_miner_v1`'s, shared with the Direct
+/// The DERIVATION is `crate::hot_bump_miner`'s, shared with the Direct
 /// builder, the Dealer LP builder, the Rational public outer builders and the
 /// campaign's bundle builder. This function owns only the CORPUS -- which
 /// coordinate of the Series occurrence Hot frame is the Market, which is the root, and which account
@@ -1211,7 +1211,7 @@ fn build_selected_series_hot_v5(
 
 /// Mine the bumps this family's readers would otherwise search for on chain.
 ///
-/// The DERIVATION is `dclutch_hot_bump_miner_v1`'s, shared with the Direct
+/// The DERIVATION is `crate::hot_bump_miner`'s, shared with the Direct
 /// builder, the Dealer LP builder, the Rational public outer builders and the
 /// campaign's bundle builder. This function owns only the CORPUS -- which
 /// coordinate of the selected Series Hot frame is the Market, which is the root, and which account

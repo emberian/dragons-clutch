@@ -10,7 +10,7 @@ const REGISTRY = Keypair.fromSeed(new Uint8Array(32).fill(52)).publicKey.toBase5
 // vector is independent of the generator that emits the TS constant:
 // crates/dclutch-vm/src/account_profile/lifecycle_v3.rs:44-47,
 // `pub const CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5`. That is the constant
-// crates/dclutch-rational-lifecycle-hot-v3/src/selected_bundle_v6.rs:5 imports
+// crates/dclutch-operator/src/rational_lifecycle_hot/selected_bundle_v6.rs:5 imports
 // as LIFECYCLE_SCHEMA_ID_V5 and registers the dealer lifecycle artifact under
 // at :149, re-validating it at :242. If this reds, the Rust authority moved
 // and a human must re-read it -- the generated constant alone cannot say so.

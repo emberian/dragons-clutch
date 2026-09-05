@@ -99,7 +99,7 @@ use dclutch_trading::{
         RegisteredIntentSeedsV2, RegisteredRecordFirstUseV2, register_intent_v2,
     },
 };
-use dclutch_hot_bump_miner_v1::{
+use dclutch_operator::hot_bump_miner::{
     HotBumpCorpusV1, hot_bump_hint_slot_name_v1, mine_hot_bump_hints_v1,
 };
 use dclutch_market::{
@@ -895,7 +895,7 @@ pub fn build_direct_registered_creation_chain_fixture_v4(
 /// # Why this assertion exists
 ///
 /// The operator's registered path -- `build_direct_hot_request_v4` -- mines
-/// `market` and `root` through `dclutch_hot_bump_miner_v1` from the account
+/// `market` and `root` through `dclutch_operator::hot_bump_miner` from the account
 /// BODIES its fixed frame supplies. This fixture, which is what the registered
 /// campaign actually submits to a real ELF, wrote the all-zero block until
 /// today: the same class `8a691ee57` and `e503d5e2a` each repaired one file

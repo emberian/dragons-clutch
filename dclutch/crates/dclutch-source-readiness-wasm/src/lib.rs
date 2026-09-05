@@ -7,7 +7,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-use dclutch_source_readiness_operator::{
+use dclutch_operator::source_readiness::{
     derive_source_close_detail_json_v1, derive_source_readiness_base_json_v1,
     derive_source_readiness_detail_json_v1, derive_source_readiness_recovery_json_v1,
     derive_source_terminal_base_json_v1, derive_source_terminal_detail_json_v1,

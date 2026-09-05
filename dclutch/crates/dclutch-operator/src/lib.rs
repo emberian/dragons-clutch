@@ -15,6 +15,34 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+/// Bearer specialization of the Rational Representation V2 actions.
+pub mod bearer;
+/// Fractional Claims family construction, lowering and retirement planning.
+pub mod fractional;
+/// Read-only General V5 successor-plan production over a route document.
+#[cfg(feature = "successor")]
+pub mod general_successor;
+/// Artifact-derived construction for generic Market founding.
+pub mod market_founding;
+/// Unsigned instruction construction for exact Rational Representation V2 actions.
+pub mod rational_representation;
+/// Product-to-representation composition and its unsigned workflows.
+pub mod representation_composition;
+/// One chain-authenticated selector for the Source funding-readiness walk.
+pub mod source_readiness;
+/// Effect planning for shard-backed Structured receipts.
+pub mod structured;
+/// Wallet-terminal payout input derivation, callable from a browser.
+pub mod wallet_terminal_input;
+/// Wallet-terminal payout derivation, callable from a browser.
+pub mod wallet_terminal_payout;
+/// Rational lifecycle Hot request, selected-set and bundle construction.
+pub mod rational_lifecycle_hot;
+/// Bump-hint mining over the decodable Hot corpus.
+pub mod hot_bump_miner;
+/// Evidence bridge for the Fractional cubic-life campaign.
+pub mod fractional_cubic_life_evidence;
+
 pub use dclutch_resolution_core_v3_operator::{Finality, Observation, ObservedAccount};
 
 /// What a holder needs to find and redeem a claim-check.

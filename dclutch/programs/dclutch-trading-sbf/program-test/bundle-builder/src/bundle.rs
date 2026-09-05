@@ -26,7 +26,7 @@ use dclutch_market::capability_program::hot_v3::{
     HOT_TRANSITION_STAGING_ACCOUNT_V3, HotBumpHintsV1, HotExecutionEnvelopeV3,
 };
 use dclutch_market::capability_program::v4::CapabilityProgramV4;
-use dclutch_hot_bump_miner_v1::{HotBumpCorpusV1, mine_hot_bump_hints_v1};
+use dclutch_operator::hot_bump_miner::{HotBumpCorpusV1, mine_hot_bump_hints_v1};
 use sha2::{Digest, Sha256};
 use solana_account::Account;
 use solana_program::{
@@ -192,7 +192,7 @@ fn digest32(bytes: &[u8]) -> [u8; 32] {
 
 /// Mine the bumps this bundle's readers would otherwise search for on chain.
 ///
-/// The derivation is `dclutch_hot_bump_miner_v1`'s, not this file's, and that
+/// The derivation is `dclutch_operator::hot_bump_miner`'s, not this file's, and that
 /// is the point: this builder, the Rational public outer builders,
 /// `direct_inline_v3` and `dealer_lp_hot_v4` all fill the same three
 /// family-neutral slots from the same three chain facts, and for a while they

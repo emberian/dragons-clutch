@@ -62,7 +62,7 @@ use dclutch_claims::structured_kernel::{
     STRUCTURED_TERMS_SCHEMA_ID_V2, StructuredTermsAdmissionV2, StructuredTermsInputV2,
     StructuredTermsV2, encode_structured_terms_v2, structured_terms_bytes_v2,
 };
-use dclutch_structured_v2_operator::{
+use dclutch_operator::structured::{
     StructuredRepresentationDescriptorV2, derive_structured_representation_descriptor_v2,
 };
 use solana_program::hash::hash;
@@ -499,7 +499,7 @@ pub fn lower(basis: &StructuredBasis) -> StructuredLowering {
 pub fn lower_against_root(
     basis: &StructuredBasis,
     root_numerators: &[u64],
-) -> core::result::Result<StructuredRepresentationDescriptorV2, dclutch_structured_v2_operator::Error>
+) -> core::result::Result<StructuredRepresentationDescriptorV2, dclutch_operator::structured::Error>
 {
     let composition = composition(basis, root_numerators, basis.denominator);
     let exposure = exposure_bytes(basis, &vec![1; basis.coefficients.len()]);

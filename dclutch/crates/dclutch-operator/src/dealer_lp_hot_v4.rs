@@ -48,7 +48,7 @@ use dclutch_market::execution_strategy::v2::{
     AcceleratorTransportProfileV2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
     ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
-use dclutch_hot_bump_miner_v1::{
+use crate::hot_bump_miner::{
     HotBumpCorpusV1, activated_custody_program_v1, mine_hot_bump_hints_v1,
 };
 use dclutch_vm::request_profile::SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1;
@@ -229,7 +229,7 @@ pub fn build_dealer_lp_hot_instruction_v4(
 /// byte derives a different address and refuses at an equality that was already
 /// there. No conjunct moves.
 ///
-/// The DERIVATION is `dclutch_hot_bump_miner_v1`'s, shared with the Direct
+/// The DERIVATION is `crate::hot_bump_miner`'s, shared with the Direct
 /// builder, the campaign bundle builder and the Rational public outer builders.
 /// This function owns the CORPUS -- which coordinate of the LP hot frame is the
 /// Market, which is the root, and which account names the Custody deployment.

@@ -20,7 +20,7 @@ import {
  * aggregate PDA, a Core routing authentication, nine raw-record addresses and a
  * parent-context pre-image reimplemented in TypeScript is the mirror this
  * application keeps convicting. The three pure phases were extracted into
- * `crates/dclutch-wallet-terminal-input-operator` — the binary kept its shell,
+ * `crates/dclutch-operator` — the binary kept its shell,
  * two file reads, an RPC and a cluster policy — and compiled to wasm32, so what
  * runs here is the same code the operator toolchain runs.
  *

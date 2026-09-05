@@ -93,7 +93,7 @@ import {
  * comment saying the slots are roles in any hot execution and never Direct
  * accounts, so a Rational or Dealer reader shown one of those names was being
  * told something false about the route in front of it. The producer,
- * `dclutch-hot-bump-miner-v1`, names them `lifecycle[0]` and the rest, and it
+ * `dclutch-operator::hot_bump_miner`, names them `lifecycle[0]` and the rest, and it
  * is the authority for every host-side and browser-side miner there is.
  *
  * Re-exported rather than imported-and-forwarded by hand so nothing that reads

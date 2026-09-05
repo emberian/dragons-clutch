@@ -35,7 +35,7 @@ use dclutch_claims::fractional_kernel::{
     FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FRACTIONAL_SELECTION_CONFIG_SCHEMA_ID_V1,
     FractionalExposureTermsAdmissionV2, FractionalExposureTermsV2,
 };
-use dclutch_fractional_claim_operator::{
+use dclutch_operator::fractional::{
     FractionalFrameWidthsV4, FractionalSelectedReleaseInputV4, fractional_selected_release_v4,
 };
 

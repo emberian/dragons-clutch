@@ -42,7 +42,7 @@
 //!   immutable activation projection at the front of a Trading root account.
 //! - `dclutch_trading::successor::DirectRootStateV1` — the Direct family
 //!   tail behind that header.
-//! - `dclutch_fractional_claim_operator` — authenticated state selection and
+//! - `dclutch_operator::fractional` — authenticated state selection and
 //!   unsigned construction for the next ordered Fractional retirement act.
 //!
 //! This crate calls `decode` on each of them and prints what comes back. It

@@ -83,7 +83,7 @@ const SOURCE_FILES = Object.freeze({
   // `effect-program-v5-...`. Both are emitted, under names that say which
   // generation they are, because the two are not interchangeable: every current
   // authenticator binds V4 (`dclutch-trading/src/artifacts_v4.rs`,
-  // `dclutch-rational-lifecycle-hot-v3/src/selected_bundle_v6.rs`), and V3 is
+  // `dclutch-operator/src/rational_lifecycle_hot/selected_bundle_v6.rs`), and V3 is
   // kept only so the explorer can still name records published before cohort-8.
   // Which of the two the route binds is no longer a comment's word: the gate
   // below walks the route's own use-tree to the defining file.

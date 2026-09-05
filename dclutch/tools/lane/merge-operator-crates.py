@@ -1,24 +1,33 @@
 #!/usr/bin/env python3
-"""Absorb the sixteen *-operator crates (and three host helpers) into dclutch-operator.
+"""Absorb thirteen of the sixteen *-operator crates (and three host helpers) into dclutch-operator.
 Usage: merge.py ROOT [--apply]. Mechanical: git mv, path rewrites, manifest rewrites."""
 import os, re, sys, subprocess, shutil, collections
 ROOT = sys.argv[1]; APPLY = "--apply" in sys.argv
 OP = "crates/dclutch-operator"
+# SIX STAY THEIR OWN CRATES, and the reason is a measured dependency cluster,
+# not taste. `crates/dclutch-svm-harness` and
+# `programs/dclutch-claims-sbf/program-test/affine-batch` are held on
+# solana-program-test =4.2.1 (their manifests name the runtime panic the bump
+# to 4.3.0-beta.2 buys), and that cluster cannot resolve `dclutch-operator`'s
+# own pins -- the address-table interface at =3.2.0, and beneath it
+# solana-instruction / solana-signature / solana-instruction-error -- so a
+# crate those workspaces link cannot live inside it. The five planners they
+# consume (market-open, market-retirement, resolution-core, product-runtime,
+# provider-transport) stay out, and so does versioned-message, which
+# provider-transport reaches under its `transaction-planning` feature: inside
+# `dclutch-operator` it would make provider-transport depend on the crate that
+# depends on it. Measured at the 2026-09-04 convergence, `cargo metadata
+# --offline` on both workspaces, with the full nineteen absorbed and then with
+# each dependency made optional in turn.
 ABSORB = collections.OrderedDict([
     ("dclutch-bearer-v2-operator", "bearer"),
     ("dclutch-fractional-claim-operator", "fractional"),
     ("dclutch-general-successor-operator", "general_successor"),
     ("dclutch-market-founding-v1-operator", "market_founding"),
-    ("dclutch-market-open-v1-operator", "market_open"),
-    ("dclutch-market-retirement-v1-operator", "market_retirement"),
-    ("dclutch-product-runtime-v2-operator", "product_runtime"),
-    ("dclutch-provider-transport-v3-operator", "provider_transport"),
     ("dclutch-rational-representation-v2-operator", "rational_representation"),
     ("dclutch-representation-composition-v3-operator", "representation_composition"),
-    ("dclutch-resolution-core-v3-operator", "resolution_core"),
     ("dclutch-source-readiness-operator", "source_readiness"),
     ("dclutch-structured-v2-operator", "structured"),
-    ("dclutch-versioned-message-operator", "versioned_message"),
     ("dclutch-wallet-terminal-input-operator", "wallet_terminal_input"),
     ("dclutch-wallet-terminal-payout-operator", "wallet_terminal_payout"),
     ("dclutch-rational-lifecycle-hot-v3", "rational_lifecycle_hot"),
