@@ -133,8 +133,10 @@ fn the_planner_recovers_the_founding_rate_from_the_ledgers_own_bytes() {
 /// rate reproduces, and the recovery refuses rather than picking the nearest.
 #[test]
 fn one_donated_lamport_refuses_the_recovery_in_either_direction() {
-    for delta in [1_i64, -1] {
-        let lamports = OBSERVED_LEDGER_LAMPORTS.wrapping_add(delta as u64);
+    for (delta, lamports) in [
+        (1_i64, OBSERVED_LEDGER_LAMPORTS.wrapping_add(1)),
+        (-1, OBSERVED_LEDGER_LAMPORTS.wrapping_sub(1)),
+    ] {
         assert_eq!(
             ledger_with_funded_rent_rate_v2(
                 MARKET_3_LEDGER,

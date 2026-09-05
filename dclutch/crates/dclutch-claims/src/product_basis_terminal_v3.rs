@@ -1045,7 +1045,7 @@ mod tests {
         let escrow = state(&supplies, &[0, 0, 0, SETS], SEMANTIC_BASIS);
         let stranger = state(&supplies, &[STRANGER, 0, 0, 0], SEMANTIC_BASIS);
 
-        let mut settle = |state: &State, claim_index: u32, quantity: u64| {
+        let settle = |state: &State, claim_index: u32, quantity: u64| {
             let mut payouts = [0_u64; 4];
             let mut translation = [0_u64; 4];
             let mut claims_payouts = [0_u64; 4];

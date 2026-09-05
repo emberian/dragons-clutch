@@ -1232,6 +1232,7 @@ mod tests {
     use std::{boxed::Box, vec::Vec};
 
     use dclutch_market::{MarketIdentity, Readiness};
+    use dclutch_market::Identity;
     use dclutch_product::economic_slice::{
         MARKET_HEADER_BYTES, POSITION_HEADER_BYTES, Phase, SCALAR_BYTES, initialize_market,
         initialize_position,
@@ -1490,8 +1491,12 @@ mod tests {
         .map_err(|_| ClaimsSbfError::Instruction.into())
     }
 
+    fn identity(bytes: [u8; 32]) -> Result<Identity, ProgramError> {
+        Identity::new(bytes).map_err(|_| ClaimsSbfError::Identity.into())
+    }
+
     fn semantic_id(byte: u8) -> Result<Identity, ProgramError> {
-        Identity::new([byte; 32]).map_err(|_| ClaimsSbfError::Identity.into())
+        identity([byte; 32])
     }
 
     #[test]

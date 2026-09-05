@@ -4945,7 +4945,6 @@ mod tests {
         assert!(!distinct_funding_entries([3, 1, 3]));
     }
 
-    #[test]
     /// THE MASK SAYS WHICH THREE ENTRIES; THE MATERIAL SAYS WHAT EACH IS FOR.
     ///
     /// `funding_entries_from_mask` walks the selected mask's ascending bits and
@@ -4998,6 +4997,7 @@ mod tests {
         assert_eq!(roles[2], by_mask[1]);
     }
 
+    #[test]
     fn public_funding_coordinates_bind_market_owner_programs_and_exact_records() {
         let material_id = hash(&readiness_material()).to_bytes();
         let entries = [
