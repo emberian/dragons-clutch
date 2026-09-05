@@ -96,7 +96,8 @@ the tail; the pre-2026-09-01 ledger starts at line 289), and before it
 | 2026-09-04 | after the limit: General derives and projects; the Lean log bounds; recovery's ladder; Claims founding v6; Series' eighteen phases | [GOAL L4925](docs/ledger/GOAL_2026-08-31_to_2026-09-04.md#L4925) | the commits named there |
 | 2026-09-04 | the simplification swarm: eleven makers, one branch each, rip and tear and converge later | [2026-09-04 L4](docs/ledger/2026-09-04.md#L4) | `docs/design/SIMPLIFICATION_MAP_2026_09_04.md`; each maker's `SIMPLIFY_<DOMAIN>.md` on its branch |
 | 2026-09-04 | the second wall and the resume; every branch reports; crates 94 → 46; all eleven final | [2026-09-04 L44](docs/ledger/2026-09-04.md#L44) | the same reports |
-| 2026-09-04 | the convergence: eleven branches merged in the map's order, one build-and-gate pass, the ELF table | — | `docs/evidence/SIMPLIFICATION_CONVERGENCE_2026_09_04.md` |
+| 2026-09-04 | the convergence: eleven branches merged in the map's order, one build-and-gate pass, the ELF table | [2026-09-04 L165](docs/ledger/2026-09-04.md#L165) | `docs/evidence/SIMPLIFICATION_CONVERGENCE_2026_09_04.md` |
+| 2026-09-05 | the convergence closed: the gates re-measured, the gauntlet run with controls, the frames function by function, twelve repairs | [2026-09-04 L175](docs/ledger/2026-09-04.md#L175) | `docs/evidence/SIMPLIFICATION_CONVERGENCE_2026_09_04.md` §7–8 |
 
 A new delta is one new row here and one entry in the store it names. The
 GOAL ledger file is closed; the entries main appended during the swarm are

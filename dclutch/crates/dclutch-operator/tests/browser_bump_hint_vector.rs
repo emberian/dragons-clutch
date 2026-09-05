@@ -91,7 +91,7 @@ const SELECTION_ENTRY_INDEX: u16 = 3;
 
 fn vector_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../apps/dclutch-web/fixtures/direct-hot-bump-hints.json")
+        .join("../../packages/dclutch-sdk/fixtures/direct-hot-bump-hints.json")
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -278,12 +278,6 @@ fn browser_bump_hint_vector_matches_the_live_seed_constructors() {
     let path = vector_path();
     if env::var_os("DCLUTCH_WRITE_WIRE_VECTOR").is_some() {
         fs::write(&path, &rendered).expect("write bump hint vector");
-        fs::write(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../packages/dclutch-sdk/fixtures/direct-hot-bump-hints.json"),
-            &rendered,
-        )
-        .expect("write SDK bump hint vector");
         // WRITING IS NOT PASSING. This branch exists so a deliberate move can
         // land, and it used to `return` -- which made one environment variable
         // enough to turn "the wire moved and nobody noticed" into a green run

@@ -49,7 +49,7 @@ const NOTE: &str = "Two-sided wire vector for the LIVE Product Runtime V2 admiss
 
 fn vector_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../apps/dclutch-web/fixtures/product-runtime-v2-admission-wire.json")
+        .join("../../packages/dclutch-sdk/fixtures/product-runtime-v2-admission-wire.json")
 }
 
 fn id(schema: [u8; 32]) -> ContentId {

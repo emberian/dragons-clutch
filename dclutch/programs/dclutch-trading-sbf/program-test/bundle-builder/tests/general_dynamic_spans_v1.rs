@@ -408,7 +408,7 @@ fn the_general_effect_artifact_is_current_v4_and_drives_span_geometry() {
                 OUTCOME_COUNT
             )
             .expect("current effect drives span geometry"),
-            Vec::new(),
+            Vec::<u32>::new(),
             "{action:?}"
         );
     }
