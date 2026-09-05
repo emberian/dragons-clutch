@@ -68,6 +68,7 @@
 
 use std::path::PathBuf;
 
+use dclutch_core_contract::ContentId;
 use dclutch_market::capability_activation::{
     activation_account_profile_schema_v1, activation_effect_schema_v1,
 };
@@ -79,7 +80,14 @@ use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityProgramV1, CapabilityRootHeaderV1,
     SelectedRecordBumpsV1, set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
 };
-use dclutch_core_contract::ContentId;
+use dclutch_market::realm::REALM_SCHEMA_RELEASE_ID_V1;
+use dclutch_market::{
+    Action, CapabilityFundingHeaderV2, CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState,
+    Identity, Phase as CorePhase, Request, Role,
+};
+use dclutch_operator::general_activation_v3::general_capability_root_address_v3;
+use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_trading::general::{
     activation_bundle_v1::{
         general_activation_descriptor_schema_v1, general_activation_request_v1,
@@ -90,14 +98,6 @@ use dclutch_trading::general_config::{
     GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_ROOT_BYTES_V2, GeneralRootV2,
     root::general_root_creation_tail_v2, v3::GeneralConfigV3,
 };
-use dclutch_market::{
-    Action, CapabilityFundingHeaderV2, CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState,
-    Identity, Phase as CorePhase, Request, Role,
-};
-use dclutch_operator::general_activation_v3::general_capability_root_address_v3;
-use dclutch_market::realm::REALM_SCHEMA_RELEASE_ID_V1;
-use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
-use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
 use solana_program::{hash::hash, pubkey::Pubkey};
@@ -419,6 +419,24 @@ fn run_with_cluster_v1(arguments: Vec<String>, expected: ExpectedClusterV1) -> R
                 "campaign omitted the Trading funding ledger",
             )
         })?;
+    // THE DEPENDENCY LEDGER, carried READ-ONLY. A selected entry declares its
+    // three Resolution companions, so its closure is every entry and the
+    // frame's ledger masks must partition every bit; the Resolution-owned
+    // `0b0111` ledger is the only thing that covers the companions. See the
+    // Direct sibling for the whole derivation -- the seam is capability
+    // neutral and so is this.
+    let resolution_funding_ledger = evidence
+        .accounts
+        .get("resolution_funding_ledger")
+        .map(|row| pubkey(&row.address))
+        .transpose()?
+        .ok_or_else(|| {
+            refusal(
+                "activation/campaign-dependency-ledger",
+                "campaign omitted resolution_funding_ledger, which a selected entry's dependency \
+                 closure requires in the activation frame",
+            )
+        })?;
 
     let core = pubkey(&plan.core.program_id)?;
     let trading = pubkey(&plan.trading.program_id)?;
@@ -497,14 +515,18 @@ fn run_with_cluster_v1(arguments: Vec<String>, expected: ExpectedClusterV1) -> R
     }
     let closure_mask = capability_dependency_closure_mask_v1(manifest, entry_index)
         .map_err(|error| Error::new(format!("dependency closure: {error:?}")))?;
-    let expected_mask = 1_u16
-        .checked_shl(u32::from(entry_index))
-        .ok_or_else(|| Error::new("entry index shift".to_string()))?;
-    if closure_mask != expected_mask {
+    // The frame carries the Resolution dependency ledger beside the selected
+    // one, so the admissible closure is every entry. This used to demand the
+    // singleton and say so, which is exactly why a market founded with edges
+    // could not be activated.
+    let required_union = crate::market::manifest_required_union_v1(manifest.entry_count())?;
+    if closure_mask != required_union {
         return Err(refusal(
             "activation/dependency-closure",
             format!(
-                "entry {entry_index} closes over mask {closure_mask:#018b}; this driver carries exactly the one selected Trading ledger"
+                "entry {entry_index} closes over mask {closure_mask:#018b}; this driver carries \
+                 the Resolution dependency ledger and the selected Trading ledger, which \
+                 partition {required_union:#018b}"
             ),
         ));
     }
@@ -749,9 +771,16 @@ fn run_with_cluster_v1(arguments: Vec<String>, expected: ExpectedClusterV1) -> R
         let mut bytes = Vec::with_capacity(176);
         bytes.extend_from_slice(&selection.to_bytes());
         bytes.extend_from_slice(
-            &CapabilityFundingHeaderV2::new(1, 1, closure_mask)
-                .map_err(|error| Error::new(format!("funding header: {error:?}")))?
-                .encode(),
+            // Two physical ledgers covering every logical entry, in
+            // lowest-selected-index order; see the frame below.
+            &CapabilityFundingHeaderV2::new(
+                2,
+                u8::try_from(closure_mask.count_ones())
+                    .map_err(|_| Error::new("funding logical count overflow".to_string()))?,
+                closure_mask,
+            )
+            .map_err(|error| Error::new(format!("funding header: {error:?}")))?
+            .encode(),
         );
         bytes.extend_from_slice(
             &general_activation_request_v1()
@@ -829,6 +858,10 @@ fn run_with_cluster_v1(arguments: Vec<String>, expected: ExpectedClusterV1) -> R
         realm_metas[1].clone(),
         manifest_metas[0].clone(),
         manifest_metas[1].clone(),
+        // The funding slice, ordered by each ledger's lowest selected entry
+        // index. The dependency ledger is read-only: Core requires it
+        // byte-identical after the child returns.
+        AccountMeta::new_readonly(resolution_funding_ledger, false),
         AccountMeta::new(funding_ledger, false),
         AccountMeta::new(root, false),
         AccountMeta::new_readonly(activation_cache, false),

@@ -1125,6 +1125,12 @@ fn run_devnet_pyth_market(arguments: Vec<String>, family: DevnetMarketFamilyV1) 
             market::devnet_market_input(spec, direct.compiler())?
         }
     };
+    // THE TERMS SURFACE. The compiled document is the market; this is the one
+    // sentence about it an operator must read before authorizing a founding,
+    // and it is rendered by the guard that will accept or refuse the reserve
+    // rather than by a second arithmetic. stdout stays the document alone, so
+    // the caller's `> market.json` is unaffected.
+    eprintln!("{}", market::founding_reserve_disclosure_v1(&input)?);
     let mut stdout = std::io::stdout();
     stdout.write_all(&serde_json::to_vec_pretty(&input)?)?;
     stdout.write_all(b"\n")?;

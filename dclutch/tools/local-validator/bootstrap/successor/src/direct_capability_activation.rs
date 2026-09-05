@@ -10,7 +10,7 @@
 //! state, generation, manifest body), and the codec's own activation bundle
 //! (`direct_activation_request_v1`). Nothing here restates a layout.
 //!
-//! The route needs an address lookup table (the 35-account frame exceeds a
+//! The route needs an address lookup table (the 36-account frame exceeds a
 //! packet uncompressed); the founding's own `publish_routing_table` author
 //! builds it. Idempotence: a live Trading-owned root at the derived coordinate
 //! reports `already-active` and exits cleanly, so a rerun after any
@@ -40,6 +40,7 @@
 
 use std::path::PathBuf;
 
+use dclutch_core_contract::ContentId;
 use dclutch_market::capability_manifest::{
     CapabilityManifestV1, FundingLedgerStatusV2, FundingLedgerV2,
     capability_dependency_closure_mask_v1,
@@ -47,16 +48,15 @@ use dclutch_market::capability_manifest::{
 use dclutch_market::capability_program::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
 };
-use dclutch_core_contract::ContentId;
-use dclutch_trading::{
-    activation_bundle_v1::direct_activation_request_v1,
-    successor::{DIRECT_ROOT_STATE_BYTES_V1, DirectRootStateV1},
-};
 use dclutch_market::{
     Action, CapabilityFundingHeaderV2, CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState,
     Identity, Phase as CorePhase, Request, Role,
 };
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_trading::{
+    activation_bundle_v1::direct_activation_request_v1,
+    successor::{DIRECT_ROOT_STATE_BYTES_V1, DirectRootStateV1},
+};
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
 use solana_program::{hash::hash, pubkey::Pubkey};
@@ -425,6 +425,31 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
                 "campaign omitted direct_trading_funding_ledger",
             )
         })?;
+    // THE DEPENDENCY LEDGER, carried READ-ONLY and never mutated.
+    //
+    // A selected entry declares its three Resolution companions as dependency
+    // edges (`selected_capability::selected_entry_dependencies_v1`), so its
+    // closure is every entry and the funding header's required union is every
+    // bit. `validate_funding_ledger_masks_v2` then requires the frame's ledger
+    // masks to partition that union exactly, which one ledger cannot do: the
+    // Resolution-owned `0b0111` dependency ledger must be present alongside
+    // the Trading-owned `0b1000` selected one, lowest-selected-index first.
+    // Core reads it, requires its slots Active, and
+    // `require_unselected_slots_unchanged` requires it byte-identical
+    // afterwards (`dclutch-core-sbf/src/capability.rs:531-586`), which is why
+    // it is `new_readonly`.
+    let resolution_funding_ledger = evidence
+        .accounts
+        .get("resolution_funding_ledger")
+        .map(|row| pubkey(&row.address))
+        .transpose()?
+        .ok_or_else(|| {
+            refusal(
+                "activation/campaign-dependency-ledger",
+                "campaign omitted resolution_funding_ledger, which a selected entry's dependency \
+                 closure requires in the activation frame",
+            )
+        })?;
     // The founding checkpoint's `direct_capability_root` is the FOUNDING-PERMIT
     // namespace address (its selection config is the generic-founding preimage
     // digest, decision 0004). No account can ever exist there: both the
@@ -546,15 +571,25 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
     }
     let closure_mask = capability_dependency_closure_mask_v1(manifest, entry_index)
         .map_err(|error| Error::new(format!("dependency closure: {error:?}")))?;
-    if closure_mask
-        != 1_u16
-            .checked_shl(u32::from(entry_index))
-            .ok_or_else(|| Error::new("entry index shift".to_string()))?
-    {
+    // THE FRAME THIS DRIVER CARRIES, stated as the closure it admits.
+    //
+    // It used to demand `closure_mask == 1 << entry_index` and say so in its
+    // own words -- "this driver carries exactly the one selected Trading
+    // ledger" -- which was true and is the reason a market founded with
+    // dependency edges could not be activated at all. The frame now carries
+    // the Resolution dependency ledger beside the selected one, so the
+    // admissible closure is EVERY entry: the selected bit plus the three
+    // companions the Resolution ledger covers. Both shapes cannot be admitted
+    // at once, because the header's physical count is a fact about the frame
+    // and the frame is fixed here.
+    let required_union = crate::market::manifest_required_union_v1(manifest.entry_count())?;
+    if closure_mask != required_union {
         return Err(refusal(
             "activation/dependency-closure",
             format!(
-                "entry {entry_index} closes over mask {closure_mask:#06b}; this driver carries exactly the one selected Trading ledger"
+                "entry {entry_index} closes over mask {closure_mask:#06b}; this driver carries the \
+                 Resolution dependency ledger and the selected Trading ledger, which partition \
+                 {required_union:#06b}"
             ),
         ));
     }
@@ -638,9 +673,17 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
         let mut bytes = Vec::with_capacity(176);
         bytes.extend_from_slice(&selection.to_bytes());
         bytes.extend_from_slice(
-            &CapabilityFundingHeaderV2::new(1, 1, closure_mask)
-                .map_err(|error| Error::new(format!("funding header: {error:?}")))?
-                .encode(),
+            // Two physical ledgers covering every logical entry: the frame
+            // below carries the Resolution dependency ledger and the selected
+            // Trading one, in lowest-selected-index order.
+            &CapabilityFundingHeaderV2::new(
+                2,
+                u8::try_from(closure_mask.count_ones())
+                    .map_err(|_| Error::new("funding logical count overflow".to_string()))?,
+                closure_mask,
+            )
+            .map_err(|error| Error::new(format!("funding header: {error:?}")))?
+            .encode(),
         );
         bytes.extend_from_slice(&direct_activation_request_v1());
         bytes
@@ -718,6 +761,11 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
         realm_metas[1].clone(),
         manifest_metas[0].clone(),
         manifest_metas[1].clone(),
+        // The funding slice, ordered by each ledger's lowest selected entry
+        // index, exactly as `validate_funding_ledger_masks_v2` requires. The
+        // dependency ledger is read-only: Core requires it byte-identical
+        // after the child returns.
+        AccountMeta::new_readonly(resolution_funding_ledger, false),
         AccountMeta::new(funding_ledger, false),
         AccountMeta::new(root, false),
         AccountMeta::new_readonly(activation_cache, false),

@@ -10,18 +10,6 @@ pub(crate) mod founding_submission_journal;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
-use dclutch_market::capability_manifest::{
-    CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityEntryV1,
-    CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
-    FundingLedgerV2, MAX_DEPENDENCIES_PER_CAPABILITY,
-    controller_funding_checkpoint::{
-        CONTROLLER_FUNDING_CHECKPOINT_BYTES_V1, CONTROLLER_FUNDING_CUSTODY_ABORT_ANCHOR_DOMAIN_V1,
-        CONTROLLER_FUNDING_CUSTODY_LADDER_DIGEST_DOMAIN_V1,
-        ControllerFundingCheckpointDerivationV1, ControllerFundingCheckpointPhaseV1,
-        ControllerFundingCheckpointV1, ControllerFundingControllerV1,
-    },
-    derive_funded_rent_rate_v2, funding_ledger_bytes_v2,
-};
 use dclutch_claims::{
     founding_v5::{
         ClaimsFoundingAggregateSeedsV5, ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5,
@@ -35,6 +23,9 @@ use dclutch_claims::{
         ProtocolPositionSeedsV2,
     },
 };
+use dclutch_custody::token_svm::{
+    ACCOUNT_BYTES, AccountState, MINT_BYTES, Mint, TOKEN_2022_PROGRAM_ID, TokenAccount,
+};
 use dclutch_custody::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1,
     CustodyReplaySeedsV1, CustodyReplayV1, CustodyVaultSeedsV1, FoundingPrestateStageV1,
@@ -43,9 +34,24 @@ use dclutch_custody::{
     ProjectedCustodyOperationV1, ProjectedCustodyPhaseV1, ProjectedCustodyRequestV1,
     ProjectedCustodyStateV2, SOURCE_COMPARTMENT_REPLAY_REVISION_V1,
 };
-use dclutch_trading::COMPILED_DIRECT_RELEASE_ID_V1;
-#[cfg(test)]
-use dclutch_trading::execution_v3::DIRECT_SUCCESSOR_KIND_ID_V3;
+use dclutch_market::capability_manifest::{
+    CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityEntryV1,
+    CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
+    FundingLedgerV2, MAX_DEPENDENCIES_PER_CAPABILITY,
+    controller_funding_checkpoint::{
+        CONTROLLER_FUNDING_CHECKPOINT_BYTES_V1, CONTROLLER_FUNDING_CUSTODY_ABORT_ANCHOR_DOMAIN_V1,
+        CONTROLLER_FUNDING_CUSTODY_LADDER_DIGEST_DOMAIN_V1,
+        ControllerFundingCheckpointDerivationV1, ControllerFundingCheckpointPhaseV1,
+        ControllerFundingCheckpointV1, ControllerFundingControllerV1,
+    },
+    derive_funded_rent_rate_v2, funding_ledger_bytes_v2,
+};
+use dclutch_market::realm::{
+    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
+};
+use dclutch_market::rent::lifecycle_v2::{
+    LIFECYCLE_RENT_CREDIT_BYTES_V2, LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleRentCreditV2,
+};
 use dclutch_market::{
     Action, CoreState, FOUND_ACCOUNT_COUNT_V3, FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3,
     FOUND_PRICE_GATE_ACCOUNT_COUNT_V3, FOUND_RENT_SYSVAR_INDEX_V3, FoundingIntentV5,
@@ -59,6 +65,10 @@ use dclutch_operator::market_founding::{
     authenticate_generic_market_founding_artifact_v1, construct_generic_founding_root_selection_v1,
     construct_generic_market_founding_plan_v1,
 };
+use dclutch_product::admission::{
+    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2,
+    RESULT_DOMAIN_SCHEMA_ID_V2,
+};
 use dclutch_product::payoff::{
     price_gate_v1::verify_price_gate_v1,
     registry_v3::{GRADED_BASIS_RECORD_SCHEMA_ID_V3, PRICE_GATE_RECORD_SCHEMA_ID_V1},
@@ -71,10 +81,6 @@ use dclutch_product::payoff::{
 use dclutch_product::{
     ContentId as ProductContentId, portfolio_record_bytes, result_domain_record_bytes,
 };
-use dclutch_product::admission::{
-    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2,
-    RESULT_DOMAIN_SCHEMA_ID_V2,
-};
 use dclutch_product_runtime_v2_operator::{
     AccountObservationV2, CompiledProductRecordsV2, FinalizedRecordObservationV2, FoundingBandV1,
     FoundingBeliefV1, ProductCompilationInputV2, StatedPropositionV1,
@@ -86,19 +92,13 @@ use dclutch_product_runtime_v2_operator::{
     lifecycle_rent_v2::{LifecycleRentCreateStateV2, build_lifecycle_rent_create_v2},
     publication::{RecordPublicationContentV1, derive_record_addresses_v1},
 };
-use dclutch_source::pyth::{PYTH_SPONSORED_PUSH_RELEASE_SCHEMA_ID_V1, PythSponsoredPushReleaseV1};
-use dclutch_market::realm::{
-    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
-};
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry::release_set::{
     CallerAuthoritySeedsV1, ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V2,
     ProtocolInfrastructureProfileV1, ProtocolInfrastructureProfileV2,
 };
-use dclutch_market::rent::lifecycle_v2::{
-    LIFECYCLE_RENT_CREDIT_BYTES_V2, LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleRentCreditV2,
-};
+use dclutch_source::pyth::{PYTH_SPONSORED_PUSH_RELEASE_SCHEMA_ID_V1, PythSponsoredPushReleaseV1};
 use dclutch_source::resolution::{
     FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1, PreMarketFundingAbortRequestV1,
     PreMarketFundingRequestV2, pre_market_funding_ledger_account_digest_v1,
@@ -113,9 +113,9 @@ use dclutch_source::{
     SourceAccessProfile, SourceCapacityProfileV1, SourceMaterialV3, SourceSpecV1,
     WINDOW_SPEC_SCHEMA_ID_V1,
 };
-use dclutch_custody::token_svm::{
-    ACCOUNT_BYTES, AccountState, MINT_BYTES, Mint, TOKEN_2022_PROGRAM_ID, TokenAccount,
-};
+use dclutch_trading::COMPILED_DIRECT_RELEASE_ID_V1;
+#[cfg(test)]
+use dclutch_trading::execution_v3::DIRECT_SUCCESSOR_KIND_ID_V3;
 use sha2::{Digest as _, Sha256};
 use solana_address_lookup_table_interface::state::AddressLookupTable;
 use solana_sdk::{
@@ -2454,6 +2454,127 @@ pub(crate) fn semantic_basis_identity_v3(bytes: &[u8]) -> Result<[u8; 32]> {
     Ok(hasher.finalize().into())
 }
 
+/// The payout scale a categorical founding of this width compiles into its
+/// `ProductBasisV3`, and therefore the divisor the founding budget must be an
+/// exact multiple of.
+///
+/// **ONE AUTHOR.** `compile_linked_basis_v3` writes this number into the
+/// record, Core's founding binds `basis_scale` to it, and
+/// [`derived_founding_reserve_atoms_v1`] chooses the reserve against it. A
+/// second spelling of `basis_width - 1` is a rule that will eventually
+/// disagree with itself about how much collateral a market was founded with.
+/// `dclutch_product::payoff::runtime_v3::categorical_refunds_on_failure_v3`
+/// remains the authority for the RULE; this is the founding side of it, and
+/// `founding_payout_scale_satisfies_the_refunding_predicate` holds the two
+/// together.
+pub(crate) const fn categorical_founding_payout_scale_v3(basis_width: u32) -> u64 {
+    if basis_width >= CATEGORICAL_REFUND_MINIMUM_WIDTH_V3 {
+        (basis_width - 1) as u64
+    } else {
+        1
+    }
+}
+
+/// The smallest founding collateral reserve at or above `intended_atoms` whose
+/// founding budget -- the lower half, which is the only thing
+/// [`founding_quantity_v1`] ever divides -- is an exact multiple of
+/// `payout_scale`.
+///
+/// **This is the repair side of decision 0025's named rounding boundary, and it
+/// is an INPUT.** The guard houses no remainder and must never learn a floor:
+/// "there is no remainder, because a remainder is refused at founding rather
+/// than housed" (`docs/decisions/0025-...`, §6). So the choice moves to
+/// whoever chooses the reserve. A fixture or flagship that states an INTENDED
+/// reserve gets the nearest reserve above it that the guard admits, and says
+/// which number it founded with; a caller who STATES a reserve is never
+/// rounded here and is held to the guard, which is what
+/// `--initial-collateral-atoms` means.
+///
+/// `None` is the reserve that cannot be derived at all: a zero scale, a zero
+/// budget, or a rounding that leaves `u64`. Every one of them is a refusal at
+/// the point the reserve is chosen rather than 140 transactions later.
+pub(crate) const fn derived_founding_reserve_atoms_v1(
+    intended_atoms: u64,
+    payout_scale: u64,
+) -> Option<u64> {
+    if payout_scale == 0 {
+        return None;
+    }
+    // The guard floors before it divides, so the budget this must land on is
+    // the floored half and not a half of the caller's own arithmetic.
+    let intended_budget = intended_atoms / 2;
+    if intended_budget == 0 {
+        return None;
+    }
+    let remainder = intended_budget % payout_scale;
+    let budget = if remainder == 0 {
+        intended_budget
+    } else {
+        match intended_budget.checked_add(payout_scale - remainder) {
+            Some(value) => value,
+            None => return None,
+        }
+    };
+    budget.checked_mul(2)
+}
+
+/// The collateral reserve every dClutch fixture and devnet flagship has
+/// INTENDED to found with since there was a founding: one billion atoms, half
+/// of it the founding budget.
+///
+/// It is the intention and no longer always the number: at a refunding scale
+/// the reserve the founding actually commits is
+/// [`derived_founding_reserve_atoms_v1`] of this, which is this number at
+/// every width whose scale divides 500,000,000 and one, two or a few atoms
+/// above it elsewhere.
+pub(crate) const INTENDED_FOUNDING_RESERVE_ATOMS_V1: u64 = 1_000_000_000;
+
+/// The marker every founding-terms line carries, so a surface that shows this
+/// sentence to an operator selects it by name rather than by position.
+pub(crate) const FOUNDING_RESERVE_TERMS_MARKER_V1: &str = "founding-reserve-terms-v1:";
+
+/// The founding's own sentence about the reserve it committed, rendered from
+/// the COMPILED input by the same two functions the founding itself uses: the
+/// scale author above and [`founding_quantity_v1`], which is the guard.
+///
+/// Rendering it through the guard is deliberate. A disclosure that recomputed
+/// the division would be a second arithmetic, free to agree with the operator
+/// and disagree with the chain; this one cannot be printed at all for a
+/// reserve the founding would refuse, which is exactly the property an
+/// operator reading a terms surface before authorizing needs it to have.
+pub(crate) fn founding_reserve_disclosure_v1(input: &MarketRunInput) -> Result<String> {
+    let basis_width = u32::try_from(input.coefficients.len())
+        .map_err(|_| Error::new("Product outcome width overflow"))?;
+    let payout_scale = categorical_founding_payout_scale_v3(basis_width);
+    let reserve = input.initial_collateral_atoms;
+    let quantity = founding_quantity_v1(reserve, payout_scale)?;
+    let budget = quantity
+        .checked_mul(payout_scale)
+        .ok_or_else(|| Error::new("founding budget overflowed"))?;
+    // The provenance clause is only true of a reserve this compiler DERIVED.
+    // A stated reserve that happens to divide is admissible and is not the
+    // smallest anything, and saying so would be the disclosure lying about
+    // where its own number came from.
+    let provenance =
+        if derived_founding_reserve_atoms_v1(INTENDED_FOUNDING_RESERVE_ATOMS_V1, payout_scale)
+            == Some(reserve)
+        {
+            format!(
+                "derived: the smallest reserve at or above the intended \
+                 {INTENDED_FOUNDING_RESERVE_ATOMS_V1} atoms whose budget this scale divides \
+                 exactly (decision 0025's rounding boundary is refused at the input, never \
+                 floored at the guard)"
+            )
+        } else {
+            "stated by the caller and admitted by the founding guard unrounded".to_owned()
+        };
+    Ok(format!(
+        "{FOUNDING_RESERVE_TERMS_MARKER_V1} reserve {reserve} atoms; founding budget {budget} \
+         atoms (the lower half); basis width {basis_width}; derived payout scale {payout_scale}; \
+         complete sets {quantity} = budget / scale, exact; reserve provenance {provenance}."
+    ))
+}
+
 /// Compile the exact categorical liability basis one Product outcome vector
 /// determines.
 ///
@@ -2489,11 +2610,7 @@ pub(crate) fn compile_linked_basis_v3(
         u32::try_from(outcome_count).map_err(|_| Error::new("Product outcome width overflow"))?;
     let width = basis_record_bytes_v3(BasisKindV3::CategoricalQ1, outcome_count, 0, 0)
         .map_err(|error| Error::new(format!("ProductBasisV3 width: {error:?}")))?;
-    let payout_scale = if basis_width >= CATEGORICAL_REFUND_MINIMUM_WIDTH_V3 {
-        u64::from(basis_width - 1)
-    } else {
-        1
-    };
+    let payout_scale = categorical_founding_payout_scale_v3(basis_width);
     let mut bytes = vec![0_u8; width];
     compile_basis_v3(
         BasisInputV3 {
@@ -6055,7 +6172,7 @@ fn lower_hex_v1(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn manifest_required_union_v1(entry_count: u16) -> Result<u16> {
+pub(crate) fn manifest_required_union_v1(entry_count: u16) -> Result<u16> {
     if entry_count == 0 || entry_count > u16::BITS as u16 {
         return Err(Error::new(
             "capability manifest entry mask width is invalid",
@@ -13524,7 +13641,10 @@ impl PythMarketProviderV1<'_> {
         }
     }
 
-    fn authenticate_price_update(self, update: &dclutch_source::pyth::FullPriceUpdateV2) -> Result<()> {
+    fn authenticate_price_update(
+        self,
+        update: &dclutch_source::pyth::FullPriceUpdateV2,
+    ) -> Result<()> {
         if let Self::Sponsored(release) = self
             && (update.write_authority() != release.price_account()
                 || update.feed_id() != release.feed_id()
@@ -13874,6 +13994,27 @@ fn authored_relative_ladder_v1(
     Ok(Some(authored))
 }
 
+/// The default local shape's own width: two interior cuts, the two open tails,
+/// and the explicit failure outcome.
+const DEFAULT_LOCAL_OUTCOME_COUNT_V1: u32 = 4;
+
+/// The reserve `LocalMarketShapeV1::default()` founds with, derived at compile
+/// time from the default width's own payout scale.
+///
+/// Deriving it here rather than typing `1_000_000_000` is the whole repair for
+/// the default shape: at the refunding scale 3 a budget of 500,000,000 is not
+/// a multiple of the scale, so the shape every lab fixture takes was a shape
+/// whose founding could not be executed. `None` is unreachable for a positive
+/// scale and a positive intention, and const evaluation is where that is
+/// proved rather than asserted.
+const DEFAULT_LOCAL_FOUNDING_RESERVE_ATOMS_V1: u64 = match derived_founding_reserve_atoms_v1(
+    INTENDED_FOUNDING_RESERVE_ATOMS_V1,
+    categorical_founding_payout_scale_v3(DEFAULT_LOCAL_OUTCOME_COUNT_V1),
+) {
+    Some(value) => value,
+    None => panic!("the default local shape has no admissible founding reserve"),
+};
+
 impl Default for LocalMarketShapeV1 {
     /// A market that asks a question, and a band that says which question.
     ///
@@ -13897,7 +14038,7 @@ impl Default for LocalMarketShapeV1 {
             cut_denominator: 100,
             cuts: vec![14_800, 15_200],
             coefficients: vec![1, 0, 1, 0],
-            initial_collateral_atoms: 1_000_000_000,
+            initial_collateral_atoms: DEFAULT_LOCAL_FOUNDING_RESERVE_ATOMS_V1,
             terminal_window_width_seconds: TERMINAL_WINDOW_WIDTH_SECONDS,
             generation: 1,
             // The lab's stated belief about its own fixture: 200 bp of a
@@ -14118,11 +14259,37 @@ pub(crate) struct DevnetPythMarketSpecV1<'a> {
 /// Four measured 313-second cadences, the §12.3 guidance floor.
 pub(crate) const DEVNET_MINIMUM_WINDOW_WIDTH_SECONDS: u32 = 1_252;
 
+/// The reserve a devnet flagship founds with: the intended reserve raised to
+/// the smallest reserve this market's own derived payout scale admits.
+///
+/// The width is the coefficient vector's, which is exactly the width
+/// `compile_linked_basis_v3` compiles the basis at (`outcome_count =
+/// coefficients.len()`), so the scale rounded against here is the scale the
+/// published record carries and the one Core binds `basis_scale` to. A devnet
+/// flagship has no `--initial-collateral-atoms`: it states an intention and
+/// the compiler derives the number, which is why this is a founding input and
+/// not a weakened guard.
+fn devnet_founding_reserve_atoms_v1(coefficients: &[u64]) -> Result<u64> {
+    let basis_width = u32::try_from(coefficients.len())
+        .map_err(|_| Error::new("Product outcome width overflow"))?;
+    let payout_scale = categorical_founding_payout_scale_v3(basis_width);
+    derived_founding_reserve_atoms_v1(INTENDED_FOUNDING_RESERVE_ATOMS_V1, payout_scale).ok_or_else(
+        || {
+            Error::new(format!(
+                "no founding collateral reserve at or above {INTENDED_FOUNDING_RESERVE_ATOMS_V1} \
+                 atoms has a founding budget that is an exact multiple of the derived payout \
+                 scale {payout_scale}"
+            ))
+        },
+    )
+}
+
 pub(crate) fn devnet_market_input(
     spec: DevnetPythMarketSpecV1<'_>,
     direct: DirectMarketCompilerInputV1<'_>,
 ) -> Result<MarketRunInput> {
     let window_end = devnet_window_end_v1(&spec)?;
+    let founding_reserve_atoms = devnet_founding_reserve_atoms_v1(&spec.coefficients)?;
     let release = dclutch_source::pyth::devnet_release_v1()
         .map_err(|error| Error::new(format!("devnet Pyth release row: {error:?}")))?;
     pyth_market_input(
@@ -14158,9 +14325,14 @@ pub(crate) fn devnet_market_input(
             cuts: spec.cuts,
             coefficients: spec.coefficients,
             generation: spec.generation,
-            // The devnet flagships state the collateral the lab always used;
-            // widening it is a local-fixture affordance and not a devnet one.
-            initial_collateral_atoms: 1_000_000_000,
+            // The devnet flagships state the collateral the lab always
+            // INTENDED; widening it is a local-fixture affordance and not a
+            // devnet one. Since cohort 16 the intention and the number are not
+            // always the same: `devnet_founding_reserve_atoms_v1` raises it to
+            // the smallest reserve this width's derived payout scale admits,
+            // because the budget's divisibility by that scale is a founding
+            // input and the guard that checks it houses no remainder.
+            initial_collateral_atoms: founding_reserve_atoms,
             local_participant_fixture_liquidity_atoms: 0,
         },
         direct,
@@ -14205,6 +14377,7 @@ pub(crate) fn devnet_sponsored_market_input_base(
     release: PythSponsoredPushReleaseV1,
 ) -> Result<MarketRunInput> {
     let window_end = devnet_window_end_v1(&spec)?;
+    let founding_reserve_atoms = devnet_founding_reserve_atoms_v1(&spec.coefficients)?;
     pyth_market_input_base(
         PythMarketParamsV1 {
             founding_band: spec.founding_band.clone(),
@@ -14233,9 +14406,14 @@ pub(crate) fn devnet_sponsored_market_input_base(
             cuts: spec.cuts,
             coefficients: spec.coefficients,
             generation: spec.generation,
-            // The devnet flagships state the collateral the lab always used;
-            // widening it is a local-fixture affordance and not a devnet one.
-            initial_collateral_atoms: 1_000_000_000,
+            // The devnet flagships state the collateral the lab always
+            // INTENDED; widening it is a local-fixture affordance and not a
+            // devnet one. Since cohort 16 the intention and the number are not
+            // always the same: `devnet_founding_reserve_atoms_v1` raises it to
+            // the smallest reserve this width's derived payout scale admits,
+            // because the budget's divisibility by that scale is a founding
+            // input and the guard that checks it houses no remainder.
+            initial_collateral_atoms: founding_reserve_atoms,
             local_participant_fixture_liquidity_atoms: 0,
         },
         resolution_release,
@@ -15260,6 +15438,155 @@ mod tests {
         );
     }
 
+    /// The reserve is the INPUT, and the guard is untouched.
+    ///
+    /// Cohort-16's first founding refused after 140 published transactions with
+    /// "founding collateral reserve is not exactly divisible by basis scale" --
+    /// decision 0025's named rounding boundary firing for the first time on a
+    /// real founding, because the four-outcome flagship's derived scale is 3
+    /// and 1,000,000,000 halves to 500,000,000, which is not a multiple of 3.
+    /// The repair chooses the reserve; it does not teach the guard a floor. So
+    /// this asserts both halves: the derived reserve ADMITS, and a reserve one
+    /// step off it still REFUSES with the same words.
+    #[test]
+    fn a_derived_founding_reserve_admits_and_a_reserve_one_step_off_still_refuses() {
+        const INDIVISIBLE: &str = "founding collateral reserve is not exactly divisible by basis \
+                                   scale";
+        let scale = categorical_founding_payout_scale_v3(4);
+        assert_eq!(scale, 3);
+
+        // The intended reserve, unrounded, is exactly what cohort-16 refused on.
+        assert_eq!(
+            founding_quantity_v1(INTENDED_FOUNDING_RESERVE_ATOMS_V1, scale)
+                .expect_err("the reserve cohort-16 refused on")
+                .to_string(),
+            INDIVISIBLE
+        );
+
+        let derived = derived_founding_reserve_atoms_v1(INTENDED_FOUNDING_RESERVE_ATOMS_V1, scale)
+            .expect("a four-outcome reserve is derivable");
+        assert_eq!(derived, 1_000_000_002);
+        // SMALLEST at or above the intention, not merely some multiple.
+        assert!(derived >= INTENDED_FOUNDING_RESERVE_ATOMS_V1);
+        assert!(derived - INTENDED_FOUNDING_RESERVE_ATOMS_V1 < 2 * scale);
+        let quantity = founding_quantity_v1(derived, scale).expect("the derived reserve admits");
+        assert_eq!(quantity, 166_666_667);
+        assert_eq!(quantity * scale, derived / 2);
+
+        // ONE STEP OFF, in both directions, still refuses. The guard floors
+        // before it divides, so a step is two atoms of reserve.
+        for off in [derived - 2, derived + 2, derived - 1, derived + 1] {
+            if off / 2 == derived / 2 {
+                // An odd neighbour floors onto the same admissible budget; the
+                // guard is about the BUDGET and this states that rather than
+                // pretending the neighbour refuses.
+                assert!(founding_quantity_v1(off, scale).is_ok());
+                continue;
+            }
+            assert_eq!(
+                founding_quantity_v1(off, scale)
+                    .expect_err("one step off the derived reserve")
+                    .to_string(),
+                INDIVISIBLE
+            );
+        }
+
+        // The devnet flagship's own coefficient vector, through the function
+        // the two devnet compilers actually call.
+        assert_eq!(
+            devnet_founding_reserve_atoms_v1(&[1, 0, 1, 0]).expect("flagship reserve"),
+            derived
+        );
+
+        // THE CONTROL. At a width whose scale is the legacy 1 nothing moved:
+        // the reserve is the number every prior cohort founded with.
+        assert_eq!(categorical_founding_payout_scale_v3(2), 1);
+        assert_eq!(
+            devnet_founding_reserve_atoms_v1(&[1, 0]).expect("two-outcome reserve"),
+            INTENDED_FOUNDING_RESERVE_ATOMS_V1
+        );
+    }
+
+    /// The terms surface says which number was committed and where it came
+    /// from, and it cannot say "derived" of a number the compiler did not
+    /// derive.
+    #[test]
+    fn the_terms_surface_states_the_reserve_and_its_provenance() {
+        let registry = Pubkey::new_from_array([0x33; 32]);
+        let input =
+            demo_market_input_base(registry, [0x44; 32]).expect("the demo graph compiles offline");
+        let line = founding_reserve_disclosure_v1(&input).expect("a foundable input discloses");
+        assert!(line.starts_with(FOUNDING_RESERVE_TERMS_MARKER_V1), "{line}");
+        assert!(
+            line.contains(&format!(
+                "reserve {DEFAULT_LOCAL_FOUNDING_RESERVE_ATOMS_V1} atoms"
+            )),
+            "{line}"
+        );
+        assert!(line.contains("founding budget 500000001 atoms"), "{line}");
+        assert!(line.contains("derived payout scale 3"), "{line}");
+        assert!(line.contains("complete sets 166666667"), "{line}");
+        assert!(line.contains("reserve provenance derived:"), "{line}");
+
+        // A reserve the caller states is admissible and is not called derived.
+        let mut stated = input.clone();
+        stated.initial_collateral_atoms = 600;
+        let stated_line = founding_reserve_disclosure_v1(&stated).expect("600 divides at scale 3");
+        assert!(
+            stated_line.contains("reserve provenance stated by the caller"),
+            "{stated_line}"
+        );
+
+        // AND THE SURFACE CANNOT PRINT A REFUSED RESERVE. It is rendered by
+        // the guard, so a market whose founding would refuse has no terms line
+        // at all rather than a reassuring one.
+        let mut refused = input.clone();
+        refused.initial_collateral_atoms = INTENDED_FOUNDING_RESERVE_ATOMS_V1;
+        assert_eq!(
+            founding_reserve_disclosure_v1(&refused)
+                .expect_err("the reserve cohort-16 refused on has no terms line")
+                .to_string(),
+            "founding collateral reserve is not exactly divisible by basis scale"
+        );
+    }
+
+    /// The founding scale this driver derives is the scale the protocol's own
+    /// rule calls refunding, at every width, and the default local shape's
+    /// width is the one its reserve was derived against.
+    #[test]
+    fn founding_payout_scale_satisfies_the_refunding_predicate() {
+        use dclutch_product::payoff::runtime_v3::categorical_refunds_on_failure_v3;
+
+        for width in 3_u32..=64 {
+            assert!(
+                categorical_refunds_on_failure_v3(
+                    BasisKindV3::CategoricalQ1,
+                    width,
+                    categorical_founding_payout_scale_v3(width),
+                ),
+                "width {width} must found refunding"
+            );
+        }
+        for width in 1_u32..CATEGORICAL_REFUND_MINIMUM_WIDTH_V3 {
+            assert_eq!(categorical_founding_payout_scale_v3(width), 1);
+        }
+
+        let shape = LocalMarketShapeV1::default();
+        assert_eq!(
+            shape.outcome_count(),
+            DEFAULT_LOCAL_OUTCOME_COUNT_V1 as usize
+        );
+        assert_eq!(
+            shape.initial_collateral_atoms,
+            DEFAULT_LOCAL_FOUNDING_RESERVE_ATOMS_V1
+        );
+        founding_quantity_v1(
+            shape.initial_collateral_atoms,
+            categorical_founding_payout_scale_v3(DEFAULT_LOCAL_OUTCOME_COUNT_V1),
+        )
+        .expect("the default local shape must be foundable");
+    }
+
     #[test]
     fn cubic_market_basis_owns_scale_gate_and_product_links() {
         use dclutch_product_runtime_v2_operator::spline_basis_v3::{
@@ -15330,8 +15657,7 @@ mod tests {
         );
         let mut forged = input.clone();
         let mut forged_gate = gate;
-        forged_gate[dclutch_product::payoff::price_gate_v1::PRICE_GATE_PRICES_OFFSET_V1] ^=
-            1;
+        forged_gate[dclutch_product::payoff::price_gate_v1::PRICE_GATE_PRICES_OFFSET_V1] ^= 1;
         forged.price_gate_hex = hex(&forged_gate);
         assert!(
             authenticate_market_basis_v1(&forged, semantic_product_id, domain_digest, 4).is_err()
@@ -16392,7 +16718,9 @@ mod tests {
             .saturating_sub(GENERIC_MARKET_FOUNDING_CENSUS_STATIC_KEYS_V3);
         let distinct = (0..loaded)
             .map(|index| {
-                Pubkey::new_from_array([u8::try_from(index).unwrap_or(u8::MAX).saturating_add(1); 32])
+                Pubkey::new_from_array(
+                    [u8::try_from(index).unwrap_or(u8::MAX).saturating_add(1); 32],
+                )
             })
             .collect::<Vec<_>>();
         let mut accounts = distinct

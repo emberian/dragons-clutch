@@ -285,6 +285,15 @@ BOOT_BIN="${CARGO_TARGET_DIR:-$REPO/target}/debug/dclutch-local-successor-bootst
 
 # The compiler is the semantic owner of the sponsored provider release, four
 # outcomes, range partition, permanent program-plan checks, and Direct graph.
+#
+# ITS STDERR IS CAPTURED AND THEN SHOWN, never swallowed. The compiler prints
+# the founding-terms line -- the reserve it committed, the budget, the derived
+# payout scale and the exact complete-set count -- and the staging manifest
+# below quotes that line VERBATIM rather than restating the derivation, so the
+# scale rule keeps the one author it has in the compiler. A failed compile
+# still reaches the operator's terminal because the capture is replayed before
+# the status is honoured.
+set +e
 "$BOOT_BIN" devnet-sponsored-market \
     --registry-program-id "$REGISTRY" \
     --plan "$PLAN" \
@@ -301,7 +310,21 @@ BOOT_BIN="${CARGO_TARGET_DIR:-$REPO/target}/debug/dclutch-local-successor-bootst
     --coefficients "$COEFFICIENTS" \
     --cut-denominator "$CUT_DENOMINATOR" \
     $BAND_FLAGS \
-    > "$WORK/market.json"
+    > "$WORK/market.json" 2> "$WORK/compile.stderr"
+COMPILE_STATUS=$?
+set -e
+cat "$WORK/compile.stderr" >&2
+[ "$COMPILE_STATUS" -eq 0 ] || exit "$COMPILE_STATUS"
+
+# The founding-terms line, selected by its own marker rather than by position.
+# Its absence is a refusal: a market staged by a compiler that did not state
+# what reserve it committed is a market whose terms surface would be silent
+# about the one number decision 0025's rounding boundary is about.
+FOUNDING_TERMS="$(grep -m1 -e 'founding-reserve-terms-v1:' "$WORK/compile.stderr" || true)"
+if [ -z "$FOUNDING_TERMS" ]; then
+    echo 'the market compiler stated no founding-reserve-terms-v1 line; refusing to stage a founding whose reserve nothing discloses' >&2
+    exit 2
+fi
 
 # THE ENDPOINT IS NOT WRITTEN TO DISK WHEN IT CARRIES A CREDENTIAL. A keyed RPC
 # endpoint holds its credential in the query string (or in userinfo), and this
@@ -462,9 +485,9 @@ then
     exit 2
 fi
 
-python3 - "$WORK/market-open-staging.json" "$WORK/market.json" "$PLAN" "$REGISTRY" "$FEE_RECIPIENT" "$DEVNET_RPC" "$DEVNET_GENESIS" "$PRICE_ACCOUNT" "$FEE_BPS" <<'PY'
+python3 - "$WORK/market-open-staging.json" "$WORK/market.json" "$PLAN" "$REGISTRY" "$FEE_RECIPIENT" "$DEVNET_RPC" "$DEVNET_GENESIS" "$PRICE_ACCOUNT" "$FEE_BPS" "$FOUNDING_TERMS" <<'PY'
 import json, sys
-out, market_path, plan, registry, recipient, rpc, genesis, price_account, fee_bps = sys.argv[1:]
+out, market_path, plan, registry, recipient, rpc, genesis, price_account, fee_bps, founding_terms = sys.argv[1:]
 
 
 def redact_origin(url):
@@ -503,6 +526,15 @@ document = {
     'cuts': [str(cut) for cut in market['cuts']],
     'directFeeBasisPointsPerSide': int(fee_bps),
     'directFeeRecipient': recipient,
+    # THE FOUNDING RESERVE, read off the compiled input, and the compiler's own
+    # sentence about where that number came from quoted verbatim. Cohort-16's
+    # first founding refused after 140 published transactions because the
+    # reserve's lower half was not an exact multiple of the market's derived
+    # payout scale, and no surface an operator read before authorizing said
+    # what either number was. The rule stays authored once, in the compiler;
+    # this only shows it.
+    'foundingCollateralReserveAtoms': int(market['initial_collateral_atoms']),
+    'foundingReserveTerms': founding_terms,
     'marketInputPath': market_path,
     'feeRateIsIrreversible': True,
     # Whether a fill can be SET UP at all, which is prior to whether it fits.
@@ -532,5 +564,6 @@ with open(out, 'x', encoding='utf-8') as handle:
     handle.write('\n')
 PY
 
+printf '%s\n' "$FOUNDING_TERMS"
 printf 'staged sponsored devnet flagship MarketRunInput at %s/market.json\n' "$WORK"
 printf 'no transaction was submitted; the canonical post-open capture will be %s/campaign-open.json\n' "$WORK"

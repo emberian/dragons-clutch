@@ -16,15 +16,15 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use dclutch_source::pyth::local_validator_release_v1;
-use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_registry::release_set::{SourceSemanticRoleV1, source_semantic_release_preimage_v1};
+use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_release_tool::{
     CHECKED_MULTIPROGRAM_BYTES_V1, CheckedReleaseV1, RedeployedReleaseEvidenceV1,
     SemanticPreimageKindV1, artifact_release_from_checked, build_checked_execution_release_set,
     build_redeployed_checked_release, derive_execution_release_set,
     verify_checked_execution_release_set,
 };
+use dclutch_source::pyth::local_validator_release_v1;
 use dclutch_source::resolution::RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V7;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -1732,6 +1732,29 @@ fn market_shape_from_arguments_v1(
                 .map_err(|_| Error::new(format!("{label} must be a decimal u64"))),
         }
     };
+    // THE ABSENT RESERVE IS DERIVED FROM THIS MARKET'S OWN WIDTH, not carried
+    // over from the default shape's. `default.initial_collateral_atoms` is the
+    // reserve the four-outcome default founds with; a caller who states five
+    // cuts and no reserve founds a seven-outcome market at payout scale 6, and
+    // the default's number is not a multiple of that. Stating the reserve
+    // still means stating it: `--initial-collateral-atoms` is never rounded
+    // here, and an indivisible one is held to the founding guard by name.
+    let derived_reserve_atoms = {
+        let basis_width = u32::try_from(coefficients.len())
+            .map_err(|_| Error::new("Product outcome width overflow"))?;
+        let payout_scale = crate::market::categorical_founding_payout_scale_v3(basis_width);
+        crate::market::derived_founding_reserve_atoms_v1(
+            crate::market::INTENDED_FOUNDING_RESERVE_ATOMS_V1,
+            payout_scale,
+        )
+        .ok_or_else(|| {
+            Error::new(format!(
+                "no founding collateral reserve at or above {} atoms has a founding budget that \
+                 is an exact multiple of the derived payout scale {payout_scale}",
+                crate::market::INTENDED_FOUNDING_RESERVE_ATOMS_V1
+            ))
+        })?
+    };
     let shape = crate::market::LocalMarketShapeV1 {
         // The one field that must fall back like all the others, and did not.
         //
@@ -1755,7 +1778,7 @@ fn market_shape_from_arguments_v1(
         initial_collateral_atoms: scalar(
             initial_collateral_atoms,
             "--initial-collateral-atoms",
-            default.initial_collateral_atoms,
+            derived_reserve_atoms,
         )?,
         // ABSENT IS THE FIXTURE'S OWN DECLARED SHELF LIFE, unchanged, so every
         // command line written before this flag existed compiles the market it
@@ -1765,9 +1788,10 @@ fn market_shape_from_arguments_v1(
         // constant it replaces.
         terminal_max_age_seconds: match terminal_max_age_seconds {
             None => default.terminal_max_age_seconds,
-            Some(raw) => Some(raw.parse::<u32>().map_err(|_| {
-                Error::new("--terminal-max-age-seconds must be a decimal u32")
-            })?),
+            Some(raw) => Some(
+                raw.parse::<u32>()
+                    .map_err(|_| Error::new("--terminal-max-age-seconds must be a decimal u32"))?,
+            ),
         },
         terminal_window_width_seconds: match terminal_window_width_seconds {
             None => default.terminal_window_width_seconds,
@@ -1906,11 +1930,13 @@ mod tests {
         let shape =
             market_shape_from_arguments_v1(None, None, None, None, None, None, None, None, None)
                 .expect("no flags is the fixture's own shape");
-        let inherited = shape
+        let inherited = shape.founding_band.as_ref().expect(
+            "the fixture's author states a band, and a caller who states nothing inherits it",
+        );
+        let stated = default
             .founding_band
             .as_ref()
-            .expect("the fixture's author states a band, and a caller who states nothing inherits it");
-        let stated = default.founding_band.as_ref().expect("the default states its band");
+            .expect("the default states its band");
         assert_eq!(format!("{inherited:?}"), format!("{stated:?}"));
         assert_eq!(shape.cuts, default.cuts);
         assert_eq!(shape.coefficients, default.coefficients);

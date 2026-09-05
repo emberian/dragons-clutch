@@ -120,6 +120,97 @@ pub(crate) fn selected_manifest_entry_v1(
     .map_err(|error| Error::new(format!("selected manifest entry: {error:?}")))
 }
 
+/// The dependency edges a selected trade entry carries: every OTHER manifest
+/// index, ascending.
+///
+/// **DERIVED FROM THE CLOSE FRAME, NOT CHOSEN.** Retirement's stage four is
+/// the production `F=2` Direct close: the frame carries two physical
+/// `FundingLedgerV2` accounts — the Resolution-owned dependency ledger at
+/// route coordinate 5, PRESERVED (`AccountMeta::new_readonly`), and the
+/// Trading-owned selected ledger at 6, closed
+/// (`dclutch-operator/src/terminal_retirement_v1.rs:120-123`, `:543-582`,
+/// `:584`). `validate_funding_ledger_masks_v2`
+/// (`dclutch-market/src/capability_manifest/funding.rs:1554-1587`) requires
+/// those two masks to be a DISJOINT PARTITION of the header's required union,
+/// and the union is `capability_dependency_closure_mask_v1(manifest,
+/// selected_index)`. The Resolution ledger's mask is the three companions and
+/// the Trading ledger's is the selected bit, so the union can only be every
+/// entry — and a closure reaches every entry only if the selected entry names
+/// the other three. There is no second admissible edge set: the closure
+/// follows edges out of the selected entry alone.
+///
+/// The manifest digest is a Market-PDA seed, so this is not a configuration
+/// that can be corrected later. A market founded with `dependency_count 0`
+/// — every market cohort-15 and cohort-16 founded — reaches Terminal and can
+/// never be Retired, because stage four's `CapabilityFundingHeaderV2::new`
+/// refuses `physical_count 2 > logical_count 1` before any account is read.
+pub(crate) fn selected_entry_dependencies_v1(
+    entry_count: u16,
+    selected_index: u16,
+) -> Result<(u8, [u8; MAX_DEPENDENCIES_PER_CAPABILITY])> {
+    if selected_index >= entry_count {
+        return Err(Error::new(
+            "the selected manifest index is outside its own manifest",
+        ));
+    }
+    let count = usize::from(entry_count)
+        .checked_sub(1)
+        .ok_or_else(|| Error::new("a manifest with no entries selects nothing"))?;
+    if count > MAX_DEPENDENCIES_PER_CAPABILITY {
+        return Err(Error::new(
+            "the selected entry depends on more entries than the dependency array admits",
+        ));
+    }
+    let mut dependencies = [0_u8; MAX_DEPENDENCIES_PER_CAPABILITY];
+    let mut position = 0_usize;
+    for index in 0..entry_count {
+        if index == selected_index {
+            continue;
+        }
+        let slot = dependencies
+            .get_mut(position)
+            .ok_or_else(|| Error::new("dependency array overflow"))?;
+        *slot = u8::try_from(index)
+            .map_err(|_| Error::new("a manifest index outside the dependency array's domain"))?;
+        position += 1;
+    }
+    debug_assert_eq!(position, count);
+    let count =
+        u8::try_from(count).map_err(|_| Error::new("dependency count outside its own domain"))?;
+    Ok((count, dependencies))
+}
+
+/// The selected entry as it is FOUNDED: identical to the closure's own entry
+/// in every identity, carrying the dependency edges its manifest position
+/// determines.
+///
+/// One author for both sides of the seam — `merge_selected_manifest_v1`
+/// encodes this entry and `validate_selected_manifest_v1` re-derives it — so
+/// the manifest a founding publishes and the entry a founding authenticates
+/// cannot disagree about the edges.
+pub(crate) fn selected_entry_with_dependencies_v1(
+    entry: CapabilityEntryV1,
+    entry_count: u16,
+    selected_index: u16,
+) -> Result<CapabilityEntryV1> {
+    let (dependency_count, dependencies) =
+        selected_entry_dependencies_v1(entry_count, selected_index)?;
+    CapabilityEntryV1::new(
+        entry.kind_id(),
+        entry.release_id(),
+        entry.config_id(),
+        entry.capacity_profile_id(),
+        entry.child_schema_id(),
+        entry.child_derivation_id(),
+        entry.activation_policy(),
+        entry.activation_deadline_slot(),
+        dependency_count,
+        dependencies,
+        entry.funding_quote(),
+    )
+    .map_err(|error| Error::new(format!("selected manifest entry dependencies: {error:?}")))
+}
+
 /// Merge one selected entry into the canonical three-entry Resolution base.
 ///
 /// The base must be canonical, carry exactly three same-release companions,
@@ -162,6 +253,20 @@ pub(crate) fn merge_selected_manifest_v1(
         .position(|entry| entry.kind_id().to_bytes() == selected_kind)
         .and_then(|index| u16::try_from(index).ok())
         .ok_or_else(|| Error::new("canonical manifest omitted its selected entry"))?;
+    // THE EDGES ARE ASSIGNED AFTER THE SORT, because a dependency is a manifest
+    // INDEX and no index exists until kind order is settled. Rewriting the
+    // entry cannot move it: `sort_by_key` reads only `kind_id`, which this
+    // does not touch.
+    let entry_count = u16::try_from(entries.len())
+        .map_err(|_| Error::new("selected-capable manifest entry count overflow"))?;
+    let selected_slot = entries
+        .get_mut(usize::from(selected_manifest_entry_index))
+        .ok_or_else(|| Error::new("canonical manifest omitted its selected entry"))?;
+    *selected_slot = selected_entry_with_dependencies_v1(
+        *selected_slot,
+        entry_count,
+        selected_manifest_entry_index,
+    )?;
     let mut manifest = vec![0_u8; MANIFEST_HEADER_BYTES + entries.len() * CAPABILITY_ENTRY_BYTES];
     CapabilityManifestV1::encode_into(&entries, &mut manifest)
         .map_err(|error| Error::new(format!("selected-capable manifest: {error:?}")))?;
@@ -189,6 +294,14 @@ pub(crate) fn validate_selected_manifest_v1(
     let selected = manifest
         .entry(selected_manifest_entry_index)
         .map_err(|error| Error::new(format!("selected manifest entry: {error:?}")))?;
+    // The typed closure authors every identity; its manifest POSITION authors
+    // the edges, and this re-derives them from the position rather than
+    // accepting whatever the published bytes carry.
+    let expected = selected_entry_with_dependencies_v1(
+        expected,
+        manifest.entry_count(),
+        selected_manifest_entry_index,
+    )?;
     if selected != expected {
         return Err(Error::new(
             "selected manifest entry did not equal the typed capability closure",
@@ -369,10 +482,10 @@ pub(crate) fn selected_capability_kind_v1(
 pub(crate) fn market_realm_identity_v1(
     collateral_mint: solana_sdk::pubkey::Pubkey,
 ) -> Result<[u8; 32]> {
+    use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
     use dclutch_market::realm::{
         FreezeAuthorityPolicy, MintAuthorityPolicy, RealmV1, RealmV1Input,
     };
-    use dclutch_custody::token_svm::TOKEN_2022_PROGRAM_ID;
 
     let realm = RealmV1::new(RealmV1Input {
         token_program: TOKEN_2022_PROGRAM_ID,
@@ -443,6 +556,126 @@ mod tests {
         // 0x51 sorts after 0x11/0x12/0x13: the selected entry is last.
         assert_eq!(index, 3);
         validate_selected_manifest_v1(&manifest, selected, index).expect("validate");
+    }
+
+    /// STAGE FOUR'S CLOSURE COVERS WHAT THE CLOSE FRAME PRESERVES.
+    ///
+    /// The production `F=2` Direct close carries two physical funding ledgers:
+    /// the Resolution-owned dependency ledger at route coordinate 5, preserved,
+    /// and the Trading-owned selected ledger at 6, closed
+    /// (`dclutch-operator/src/terminal_retirement_v1.rs:120-123`, `:543-582`).
+    /// Their masks must be a disjoint partition of the funding header's
+    /// required union, and the union is the selected entry's dependency
+    /// closure. This asserts the founded manifest makes that true, through the
+    /// same three functions the deployed programs run.
+    #[test]
+    fn the_founded_closure_covers_the_close_frame_preserved_set() {
+        use dclutch_market::CapabilityFundingHeaderV2;
+        use dclutch_market::capability_manifest::{
+            capability_dependency_closure_mask_v1, validate_funding_ledger_masks_v2,
+        };
+
+        let selected = entry(SELECTED_KIND, [0x61; 32], [0x62; 32]);
+        let (bytes, index) = merge_selected_manifest_v1(&base(), selected).expect("merge");
+        let manifest = CapabilityManifestV1::decode(&bytes).expect("manifest");
+        assert_eq!(manifest.entry_count(), 4);
+        // `build_direct_native_close_v1` requires the selected entry at index 3.
+        assert_eq!(index, 3);
+
+        let entry_at = manifest.entry(index).expect("selected entry");
+        assert_eq!(entry_at.dependency_count(), 3);
+        assert_eq!(
+            [
+                entry_at.dependency(0).expect("edge 0"),
+                entry_at.dependency(1).expect("edge 1"),
+                entry_at.dependency(2).expect("edge 2"),
+            ],
+            [0, 1, 2]
+        );
+        assert!(
+            entry_at.dependency(3).is_err(),
+            "the array tail is inactive"
+        );
+
+        let closure = capability_dependency_closure_mask_v1(manifest, index).expect("closure");
+        assert_eq!(closure, 0b1111);
+        assert_eq!(
+            closure,
+            crate::market::manifest_required_union_v1(manifest.entry_count()).expect("union")
+        );
+
+        // The close frame's own two masks, in the order the frame carries them.
+        const RESOLUTION_DEPENDENCY_MASK: u16 = 0b0111;
+        const TRADING_SELECTED_MASK: u16 = 0b1000;
+        validate_funding_ledger_masks_v2(
+            manifest.entry_count(),
+            closure,
+            &[RESOLUTION_DEPENDENCY_MASK, TRADING_SELECTED_MASK],
+        )
+        .expect("the close frame's ledgers partition the closure exactly");
+        assert_eq!(RESOLUTION_DEPENDENCY_MASK | TRADING_SELECTED_MASK, closure);
+        assert_eq!(RESOLUTION_DEPENDENCY_MASK & TRADING_SELECTED_MASK, 0);
+        CapabilityFundingHeaderV2::new(
+            2,
+            u8::try_from(closure.count_ones()).expect("logical count"),
+            closure,
+        )
+        .expect("stage four's funding header");
+
+        // The activation frame is the same two ledgers, so the same header is
+        // what this driver now builds at ActivateCapability.
+        validate_selected_manifest_v1(&bytes, selected, index).expect("validate");
+    }
+
+    /// THE HOSTILE: a zero-edge manifest is what cohort-15 and cohort-16
+    /// founded, and it still refuses, by discriminant.
+    ///
+    /// Stage four builds `CapabilityFundingHeaderV2::new(physical_count 2,
+    /// logical_count 1, mask 0b1000)` and the constructor refuses
+    /// `physical_count > logical_count` before any account is read. That is the
+    /// wall: a market founded without the edges reaches Terminal and can never
+    /// be Retired, and no later transaction can repair it, because the manifest
+    /// digest is a Market-PDA seed.
+    #[test]
+    fn a_zero_edge_manifest_still_refuses_stage_four_by_name() {
+        use dclutch_market::capability_manifest::{
+            capability_dependency_closure_mask_v1, validate_funding_ledger_masks_v2,
+        };
+        use dclutch_market::{CapabilityFundingHeaderV2, Error as FundingHeaderError};
+
+        // Exactly what the founding compiler emitted before this change: the
+        // four canonical entries, every one of them with no edges.
+        let legacy = encode(&[
+            entry([0x11; 32], COMPANION_RELEASE, [0x21; 32]),
+            entry([0x12; 32], COMPANION_RELEASE, [0x22; 32]),
+            entry([0x13; 32], COMPANION_RELEASE, [0x23; 32]),
+            entry(SELECTED_KIND, [0x61; 32], [0x62; 32]),
+        ]);
+        let manifest = CapabilityManifestV1::decode(&legacy).expect("manifest");
+        assert_eq!(manifest.entry_count(), 4);
+        assert_eq!(manifest.entry(3).expect("selected").dependency_count(), 0);
+
+        let closure = capability_dependency_closure_mask_v1(manifest, 3).expect("closure");
+        assert_eq!(
+            closure, 0b1000,
+            "a zero-edge entry closes over itself alone"
+        );
+
+        assert_eq!(
+            CapabilityFundingHeaderV2::new(
+                2,
+                u8::try_from(closure.count_ones()).expect("logical count"),
+                closure,
+            )
+            .expect_err("physical_count 2 > logical_count 1"),
+            FundingHeaderError::InvalidLength
+        );
+        // And even at physical_count 1 the frame's own ledgers cannot cover it:
+        // the Resolution ledger's three bits are outside the union entirely.
+        assert!(
+            validate_funding_ledger_masks_v2(manifest.entry_count(), closure, &[0b0111, 0b1000])
+                .is_err()
+        );
     }
 
     #[test]

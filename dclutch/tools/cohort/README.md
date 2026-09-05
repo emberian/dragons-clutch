@@ -563,6 +563,36 @@ failure column rather than issuing it, so the founder pre-funds the escrow
 Position and its admission at the derived addresses. The page must print that the
 failure column is seated in the market's escrow, not held by the founder.
 
+### manifest-edges
+
+Author the selected trade capability's manifest **dependency edges**, and commit
+them before any founding. The selected entry names every other manifest index,
+ascending — three edges in a four-entry manifest.
+
+The edge set is derived, not chosen. Retirement's stage four is the production
+`F=2` Direct close, and its frame carries two physical funding ledgers: the
+Resolution-owned `0b0111` dependency ledger, preserved, beside the Trading-owned
+`0b1000` selected one, closed. `validate_funding_ledger_masks_v2` requires those
+two masks to be a disjoint partition of the funding header's required union, and
+the union is the selected entry's dependency closure — so the union can only be
+every bit, and a closure reaches every bit only when the selected entry names the
+other three.
+
+It is source rather than a flag for the same reason `refund-scale` is, and it is
+stricter than any other founding input: the capability-manifest digest is a
+Market-PDA seed. A wrong array does not misconfigure a market, it founds a
+different one, and nothing later can repair a market founded without the edges.
+Cohort-15 and cohort-16 both founded `dependency_count 0` at every entry; their
+markets can be filled, settled, captured, paid out and taken to Terminal, and
+none of them can ever be Retired.
+
+Adding this row renumbers the emitted scripts after `seal`. That is expected: a
+cohort that gains a row renumbers, the stage names and their `GREEN` markers do
+not move, and a job directory carrying the old numbering must be regenerated
+before it is used — which a cohort founding under this row must do anyway,
+because the driver that authors the edges is newer than any driver copied in
+before it.
+
 ### escrow-seated
 
 *Cohort-17.* For every refunding market this cohort founded, derive the failure
