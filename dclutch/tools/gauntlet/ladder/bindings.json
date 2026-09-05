@@ -1,0 +1,27 @@
+{
+  "campaign": "ladder",
+  "note": "The ladder's OWN transactions. This file deliberately does not restate the 183 labels the administration and founding campaign submits before them: those belong to `campaign --founding-only` and are bound where that campaign is bound, and a second copy here would be the numbered-directory race one level down. A `census observe` of this tier's evidence therefore needs the campaign's bindings merged in front of these, exactly as the journey merges tier 1's at run time -- and that merge is OWED, not done. What is here is what this tier is FOR: the two cranks, each folded from a finalized transaction whose logs the census can cross-check against the chain's own invoke lines.",
+  "bindings": [
+    {
+      "label": "ladder: fund the stranger who cranks",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "An airdrop. It drives no protocol route, and says so rather than being left unbound."
+    },
+    {
+      "label": "Recovery ladder crank: advance",
+      "routes": ["resolution/process_advance_recovery#AdvanceRecovery"],
+      "program": "resolution",
+      "outcome": "executed",
+      "note": "The market's primary window closed unobserved and a STRANGER advanced the ladder onto the funded alternative it had paid for. The permissionless crank, one second after the leg's deadline, over the relay contract's own 18-account frame; the Source reads back phase Recovery, active attempt 0, and the certificate seat is the RecoveryAdvanced kind. The same driver refused this same crank by name 761 seconds earlier with no key open."
+    },
+    {
+      "label": "Recovery ladder crank: exhaust",
+      "routes": ["resolution/process_advance_recovery#AdvanceRecovery"],
+      "program": "resolution",
+      "outcome": "executed",
+      "note": "The rung's own committed deadline passed unobserved too, and the SAME transition that advanced the ladder now ends it: there is no attempt after this one, so the crank writes the Exhausted certificate kind instead of RecoveryAdvanced and the Source reads back Exhausted. One route, two arms, and the whole of the difference between them is whether the policy funds the index being entered."
+    }
+  ]
+}

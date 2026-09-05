@@ -13,12 +13,12 @@ reachable inside an entry route's request.
 
 | program | package | refusal band | entry routes | action routes | refusal codes | entrypoint |
 | --- | --- | --- | --- | --- | --- | --- |
-| `claims` | `dclutch-claims-sbf` | 0x5 | 4 | 29 | 145 | `process_instruction` (programs/dclutch-claims-sbf/src/lib.rs:105) |
+| `claims` | `dclutch-claims-sbf` | 0x5 | 4 | 30 | 145 | `process_instruction` (programs/dclutch-claims-sbf/src/lib.rs:106) |
 | `core` | `dclutch-core-sbf` | 0x3 | 21 | 15 | 30 | `process_instruction` (programs/dclutch-core-sbf/src/lib.rs:393) |
 | `custody` | `dclutch-custody-sbf` | 0x6 | 5 | 9 | 18 | `process_instruction` (programs/dclutch-custody-sbf/src/lib.rs:338) |
 | `dealer-accelerator` | `dclutch-dealer-accelerator-sbf` | 0xD | 3 | 0 | 11 | `program_entrypoint` (programs/dclutch-dealer-accelerator-sbf/src/lib.rs:224) |
 | `direct-aot` | `dclutch-direct-aot-sbf` | 0xA | 1 | 0 | 4 | `program_entrypoint` (programs/dclutch-direct-aot-sbf/src/lib.rs:138) |
-| `general-accelerator` | `dclutch-general-accelerator-sbf` | 0xC | 1 | 0 | 23 | `program_entrypoint` (programs/dclutch-general-accelerator-sbf/src/lib.rs:559) |
+| `general-accelerator` | `dclutch-general-accelerator-sbf` | 0xC | 1 | 0 | 23 | `program_entrypoint` (programs/dclutch-general-accelerator-sbf/src/lib.rs:563) |
 | `product-runtime-v2` | `dclutch-product-runtime-v2-sbf` | 0x9 | 1 | 0 | 9 | `process_instruction` (programs/dclutch-product-runtime-v2-sbf/src/lib.rs:149) |
 | `registry` | `dclutch-registry-sbf` | 0x1 | 7 | 4 | 22 | `process_instruction` (programs/dclutch-registry-sbf/src/lib.rs:330) |
 | `rent` | `dclutch-rent-sbf` | 0x2 | 4 | 0 | 12 | `process_instruction` (programs/dclutch-rent-sbf/src/lib.rs:203) |

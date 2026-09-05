@@ -20,12 +20,13 @@ export interface RoutePhaseGateV1 {
 }
 
 /** Routes enumerated by the census, gated or not. */
-export const ROUTE_COUNT_V1 = 164 as const;
+export const ROUTE_COUNT_V1 = 165 as const;
 
 export const ROUTE_PHASE_GATES_V1: ReadonlyArray<RoutePhaseGateV1> = [
   { route: "claims/affine_batch_v2::process", phases: ["Open"], prestates: [] },
   { route: "claims/claim_check_compaction_v1::process_compaction", phases: ["Terminal", "Retiring"], prestates: [] },
   { route: "claims/claim_check_compaction_v1::process_open_escrow", phases: ["Terminal", "Retiring"], prestates: [] },
+  { route: "claims/claims_conservation_v1::process", phases: ["Open"], prestates: [] },
   { route: "claims/founding_v5::process", phases: ["Founding"], prestates: [] },
   { route: "claims/fractional_claim_check_v1::process_fractional_compaction", phases: ["Terminal", "Retiring"], prestates: [] },
   { route: "claims/market_closure_v1::process", phases: ["Retiring"], prestates: [] },
