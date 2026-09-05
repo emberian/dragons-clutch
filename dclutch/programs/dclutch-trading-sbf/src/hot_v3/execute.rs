@@ -649,6 +649,31 @@ pub(super) struct AuthenticatedHotExecutionV3<'a, 'accounts, 'info, 'artifact> {
     authenticated_series_expiry_rent_credit: [u8; 32],
 }
 
+/// The four logical-projection keys, boxed in a frame of their own.
+///
+/// A `Box::new` of a 128-byte struct literal builds the struct in the caller's
+/// frame and copies it out, and in `execute_authenticated_hot_v3` those bytes
+/// were the difference between the `hot-cu-profile` measurement of the link
+/// fitting under the 4,096-byte bound and five "overwrites values in the frame"
+/// diagnostics the strict release gate refuses (3,840 bytes plain, 3,904
+/// profiled). The same `_boxed` stage the strategy and Claims decoders use.
+#[inline(never)]
+fn logical_projection_keys_boxed_v3(
+    context: &TradingFamilyContextV1,
+    product_runtime_v3: &AuthenticatedProductRuntimeV3<'_, '_>,
+) -> Box<LogicalProjectionKeysV3> {
+    let product_runtime = &product_runtime_v3.runtime;
+    Box::new(LogicalProjectionKeysV3 {
+        selected_config: context.selection().config().to_bytes(),
+        product_root: product_runtime.product_record.content_digest.to_bytes(),
+        portfolio: product_runtime.portfolio_record.content_digest.to_bytes(),
+        linked_basis: product_runtime_v3
+            .linked_basis_record
+            .content_digest
+            .to_bytes(),
+    })
+}
+
 /// Run the ten execution phases over artifacts that are already authenticated.
 #[inline(never)]
 pub(super) fn execute_authenticated_hot_v3(
@@ -805,15 +830,7 @@ pub(super) fn execute_authenticated_hot_v3(
         runtime_accounts.len(),
     )?;
     hot_heap_mark!("aliases");
-    let projected_keys = Box::new(LogicalProjectionKeysV3 {
-        selected_config: context.selection().config().to_bytes(),
-        product_root: product_runtime.product_record.content_digest.to_bytes(),
-        portfolio: product_runtime.portfolio_record.content_digest.to_bytes(),
-        linked_basis: product_runtime_v3
-            .linked_basis_record
-            .content_digest
-            .to_bytes(),
-    });
+    let projected_keys = logical_projection_keys_boxed_v3(context, product_runtime_v3);
     let selected_config_is_variable = projected_account_uses_variable_marker_v3(
         account_profile,
         HOT_SELECTED_CONFIG_LOGICAL_ACCOUNT_V3,

@@ -709,6 +709,7 @@ macro_rules! hot_heap_mark {
 /// so the coordinate is one loop away from the refusal that already happened.
 /// Diagnostic-only: nothing here runs in a production ELF.
 #[cfg(feature = "hot-cu-profile")]
+#[inline(never)]
 fn log_first_data_length_disagreement_v1(
     profile: AccountProfileV2<'_>,
     tail_count: u32,
@@ -751,39 +752,58 @@ macro_rules! hot_cu_data_length_disagreement {
     ($profile:expr, $tail:expr, $observations:expr) => {};
 }
 
-/// Log which of the static-ownership verdict's four ranges strayed.
+/// Log one of the static-ownership verdict's four ranges if it strayed.
 ///
 /// `Error::TokenRangeMismatch` is one code over four artifacts, and the
 /// distinction is pointer identity, which no equality test recovers after the
 /// fact. Diagnostic-only.
+///
+/// ONE RANGE PER CALL, NOT AN ARRAY OF FOUR. The closure this is logged from is
+/// inlined into `execute_authenticated_hot_v3`, so a `[&[u8]; 4]` built for the
+/// call is sixty-four bytes of that function's frame -- exactly the sixty-four
+/// that put the profiled link over the bound (3,840 measured plain, 3,904 under
+/// the profile, five "overwrites values in the frame" diagnostics) while the
+/// shipped link sat at zero. Four calls of five words each ride in registers
+/// and the measurement stops moving the frame it measures.
 #[cfg(feature = "hot-cu-profile")]
-fn log_sealed_ownership_ranges_v1(
-    verdict: dclutch_capability_seal_contract::SealedStaticOwnershipV1<'_>,
+#[inline(never)]
+fn log_sealed_ownership_range_v1(
+    verdict: &dclutch_capability_seal_contract::SealedStaticOwnershipV1<'_>,
     action: u32,
-    observed: [&[u8]; 4],
+    index: usize,
+    seen: &[u8],
 ) {
-    solana_program::log::sol_log("dclutch-hot-why:sealed-ownership action proved/observed");
-    solana_program::log::sol_log_64(u64::from(verdict.action()), u64::from(action), 0, 0, 0);
-    for (index, (proved, seen)) in verdict.proved_ranges().iter().zip(observed).enumerate() {
-        if core::ptr::eq(proved.as_ptr(), seen.as_ptr()) && proved.len() == seen.len() {
-            continue;
-        }
-        solana_program::log::sol_log("dclutch-hot-why:sealed-ownership role/proved-len/seen-len");
-        solana_program::log::sol_log_64(
-            index as u64,
-            proved.len() as u64,
-            seen.len() as u64,
-            proved.as_ptr() as u64,
-            seen.as_ptr() as u64,
-        );
+    if index == 0 {
+        solana_program::log::sol_log("dclutch-hot-why:sealed-ownership action proved/observed");
+        solana_program::log::sol_log_64(u64::from(verdict.action()), u64::from(action), 0, 0, 0);
     }
+    let proved_ranges = verdict.proved_ranges();
+    let Some(proved) = proved_ranges.get(index) else {
+        return;
+    };
+    if core::ptr::eq(proved.as_ptr(), seen.as_ptr()) && proved.len() == seen.len() {
+        return;
+    }
+    solana_program::log::sol_log("dclutch-hot-why:sealed-ownership role/proved-len/seen-len");
+    solana_program::log::sol_log_64(
+        index as u64,
+        proved.len() as u64,
+        seen.len() as u64,
+        proved.as_ptr() as u64,
+        seen.as_ptr() as u64,
+    );
 }
 
 #[cfg(feature = "hot-cu-profile")]
 macro_rules! hot_cu_sealed_ownership_ranges {
-    ($verdict:expr, $action:expr, $observed:expr) => {
-        crate::hot_v3::log_sealed_ownership_ranges_v1($verdict, $action, $observed)
-    };
+    ($verdict:expr, $action:expr, [$($seen:expr),+ $(,)?]) => {{
+        let mut index = 0usize;
+        $(
+            crate::hot_v3::log_sealed_ownership_range_v1(&$verdict, $action, index, $seen);
+            index += 1;
+        )+
+        let _ = index;
+    }};
 }
 
 #[cfg(not(feature = "hot-cu-profile"))]
@@ -850,10 +870,26 @@ macro_rules! hot_cu_custody_prepare {
 
 pub(crate) use hot_cu_custody_prepare as hot_cu_custody_prepare_macro;
 
+/// The `Debug` formatting of a refused cause, kept out of the caller's frame.
+///
+/// `msg!` with a `{:?}` argument expands to `format!` at the call site, and a
+/// closure passed to `map_err` is inlined into the function it sits in -- so
+/// the formatting machinery landed in `execute_authenticated_hot_v3`'s own
+/// frame and pushed it past the 4,096-byte bound under the profile feature,
+/// five diagnostics the strict release gate refuses. Generic and
+/// `#[inline(never)]` for the same reason `hot_checkpoint` is: the
+/// measurement must not change the frame it measures.
+#[cfg(feature = "hot-cu-profile")]
+#[inline(never)]
+pub(crate) fn hot_reason<E: core::fmt::Debug>(label: &str, error: &E) {
+    solana_program::log::sol_log(label);
+    solana_program::msg!("{:?}", error);
+}
+
 #[cfg(feature = "hot-cu-profile")]
 macro_rules! hot_cu_reason {
     ($label:literal, $error:expr) => {{
-        solana_program::msg!(concat!("dclutch-hot-why:", $label, " {:?}"), $error);
+        crate::hot_v3::hot_reason(concat!("dclutch-hot-why:", $label), &$error)
     }};
 }
 
