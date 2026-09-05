@@ -1436,7 +1436,7 @@ async fn real_token_2022_lifecycle_refuses_ata_substitution_and_rolls_back_every
         "the hostile must leave the retirement's prestate exactly as it found it"
     );
 
-    let (accepted, _, returned, retire_coordinate_cu) = submit(
+    let (accepted, logs, returned, retire_coordinate_cu) = submit(
         &mut context,
         retire_coordinate,
         table,
@@ -1445,7 +1445,23 @@ async fn real_token_2022_lifecycle_refuses_ata_substitution_and_rolls_back_every
     )
     .await
     .expect("retire coordinate");
-    assert!(accepted);
+    // A NAMED WALL, not a bare boolean. THIS ROW IS NONDETERMINISTIC: the same
+    // binary against the same `dclutch_claims_sbf.so` passes 4 of 8 draws at
+    // HEAD and 3 of 8 at 330bbfaba, so a single run of this suite -- including
+    // the one `tools/gate suites` performs -- decides nothing. When it fails,
+    // the honest `RetireCoordinate` refuses `RationalLifecycleSbfErrorV2::Token`
+    // (0x5216) at 79,632 CU with no Token-2022 invocation in the transaction.
+    // The nondeterminism is unexplained; the first suspect is ProgramTest's
+    // per-run random payer keypair, the only input that differs between two
+    // runs of one binary. Anything measured here needs N draws and a rate.
+    // docs/evidence/CLAIMS_LIFECYCLE_LAYOUT_WALL_2026_09_05.md, and above all
+    // its addendum, carries the draws and what is owed.
+    assert!(
+        accepted,
+        "the honest RetireCoordinate must commit after the hostile that precedes it; \
+         see docs/evidence/CLAIMS_LIFECYCLE_LAYOUT_WALL_2026_09_05.md. Logs:\n{}",
+        logs.join("\n")
+    );
     let receipt = assert_lifecycle_receipt(
         returned,
         &retire_coordinate_bytes,

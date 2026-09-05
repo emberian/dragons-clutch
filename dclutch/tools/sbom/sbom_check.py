@@ -475,8 +475,12 @@ def discover_cargo_specs(
     """Every *workspace-root* manifest (its own ``[workspace]`` table), each
     paired with its own committed lock.
 
-    This repository deliberately has multiple independent workspaces. Every
-    other tracked ``Cargo.toml`` is a *member*, adopted by the nearest ancestor
+    Since 2026-09-05 that is one manifest: the 54 nested ``[workspace]`` tables
+    were folded into the root, and the closure lost 144 unique package versions
+    that only the drifted nested locks had resolved. The discovery below is
+    unchanged and deliberately so -- it finds workspace roots rather than
+    assuming one, so a re-introduced workspace is covered without an edit here.
+    Every other tracked ``Cargo.toml`` is a *member*, adopted by the nearest ancestor
     that declares ``[workspace]`` (Cargo's own directory-walk rule --
     membership in that ancestor's ``members`` list is not required for the
     adoption, only exclusion from it prevents it) even when it is not named in
