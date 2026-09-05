@@ -626,3 +626,49 @@ runs both orders through the one projection.
 - **`terminal_sequence.rs`'s six-stage walker is still fixture-only**, and its
   own note that *"the three stages after `ResolutionCloseFund` have never been
   reached"* stands.
+
+### One link moves, and it is Trading
+
+Built on hbox under `swarm-build`, from a `git archive` of `57e4b9b27` — the
+commit before this lane — and from the checked release candidate at
+`87eec1c3a`:
+
+| link | `57e4b9b27` | candidate `87eec1c3a` | cohort-16 deployed |
+| --- | --- | --- | --- |
+| core | `29200c855bfe9376cf813ea38aadd126212667945e86ed10f80637aafeb4d192` | **same** | `f637e5df9ef9…` |
+| trading | `69292c3391924d628f574a17397460c805cabcf8e52d041dc6a588b7c59e88c7` | `e7f8e476006ce1248994ae065bffd7ea0039c8681f85fed141368790e021931b` | `69292c339192…` |
+
+Three things are stated by that table and none of them is inferred. **This
+lane's change reaches Trading alone**: the two constants it added to
+`dclutch-market` are compiled into Core as well, and Core comes out byte for
+byte identical, so they emit nothing. **The pre-lane Trading link is what is
+deployed on devnet right now** — `69292c339192…` is cohort-16's own row. And
+**core's move away from cohort-16's `f637e5df9ef9…` predates this lane**; it
+happened between `f2ae6bf75` and `57e4b9b27` and belongs to COHORT-16B.
+
+Accelerator, claims, custody, registry, rent and resolution are byte-identical
+to cohort-16's deployed set. A cohort that wants this repair needs the Trading
+link; whether it also wants COHORT-16B's Core is that cohort's question.
+
+### The candidate, whole
+
+`tools/release/checked-release-candidate.sh` at `87eec1c3a`, genesis, on hbox
+under `swarm-build`, 433s, exit 0.
+
+| line | value |
+| --- | --- |
+| `release_builder` | `true`, `release_builder_artifact_host=Linux/x86_64` |
+| `source_revision` | `87eec1c3a6bf954a4350931af62ce8d4fcc48da2` |
+| `source_digest` | `408d3f5a94e6d3c1d23cb429b8ba16f42cacce595ece5fbb394e8d6d4cf0a42e` |
+| `sbf_build_diagnostics_total` | **0** |
+| `cargo_lock_immutability` | `passed` |
+| `spline_product_handoff` | `passed` |
+| `reproducible_release_gate_sha256` | `ba0205ccd3537c1f9c67b0ffcb431defe96f70a6f209fa2738157e96abe5ce40` |
+| `checked_upgrade_gate_sha256` | `32568317b901c1d9d7451c7988c6150ac51a18a24d37384194582f94297c4ffc` |
+| successor campaign release pack | `3d1d1f46d62fcf9a4d0f1eee0746ae4959a253c6f1385ce02c822a84b5ab556e` |
+
+**It is one candidate on one host and it is not a cross-host reproduction.**
+The earlier candidate at `c38b26054` REFUSED at this same product handoff, which
+is how the sequencer's stale close-coordinate fields were found; the run above
+is the first at this revision, so the build-path control cohort-16 ran — two
+absolute `--work` roots on the same builder — has not been run here.

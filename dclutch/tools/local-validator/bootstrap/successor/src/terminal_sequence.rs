@@ -16,24 +16,20 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use dclutch_claims::liability_basis_state_v2::LIABILITY_BASIS_MARKET_SEED_V2;
+use dclutch_core_contract::ContentId;
+use dclutch_custody::{
+    CompartmentV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1, CustodyVaultSeedsV1,
+};
 use dclutch_market::capability_manifest::{
     CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, funded_rent_minimum_v2,
 };
 use dclutch_market::capability_program::{
     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1, set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
 };
-use dclutch_claims::liability_basis_state_v2::LIABILITY_BASIS_MARKET_SEED_V2;
-use dclutch_core_contract::ContentId;
-use dclutch_custody::{
-    CompartmentV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1, CustodyVaultSeedsV1,
-};
-use dclutch_trading::{
-    native_close_bundle_v1::{
-        direct_native_close_account_profile_schema_v1, direct_native_close_effect_schema_v1,
-    },
-    ordinary_bundle_v4::DirectInlineOrdinaryHotBundleV4,
-    retirement_v1::{DirectBeginRetiringRequestV1, direct_begin_retiring_context_v1},
-    successor::DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1,
+use dclutch_market::realm::REALM_SCHEMA_RELEASE_ID_V1;
+use dclutch_market::rent::lifecycle_v2::{
+    LifecycleAccountIdV2, LifecycleRentCoreCloseAuthoritySeedsV2, LifecycleRentCreditV2,
 };
 use dclutch_market::{
     Action, Admission, Binding, CoreState, Identity, Phase, Readiness, ReleaseReceipt, ReleaseSet,
@@ -51,33 +47,38 @@ use dclutch_operator::{
     },
     resolution_core_v3::{ResolutionCloseFundSnapshotV3, build_resolution_direct_close_fund_v1},
     terminal_retirement_v1::{
-        DirectNativeCloseCoordinateInputV1, DirectNativeCloseSnapshotV1,
-        RetirementReplayHandoffCoordinateInputV1, RetirementReplayHandoffSnapshotV1,
-        TerminalDeploymentCoordinatesV1, TerminalMetaClassV1, TerminalRecordCoordinatesV1,
-        build_direct_native_close_v1, build_retirement_replay_handoff_v1,
-        preflight_direct_native_close_caller_v1, preflight_retirement_replay_handoff_caller_v1,
+        DIRECT_NATIVE_CLOSE_FUNDING_LEDGERS_V1, DirectNativeCloseCoordinateInputV1,
+        DirectNativeCloseSnapshotV1, RetirementReplayHandoffCoordinateInputV1,
+        RetirementReplayHandoffSnapshotV1, TerminalDeploymentCoordinatesV1, TerminalMetaClassV1,
+        TerminalRecordCoordinatesV1, build_direct_native_close_v1,
+        build_retirement_replay_handoff_v1, preflight_direct_native_close_caller_v1,
+        preflight_retirement_replay_handoff_caller_v1,
         project_direct_native_close_coordinate_closure_v1,
         project_retirement_replay_handoff_coordinate_closure_v1,
     },
 };
-use dclutch_market::realm::REALM_SCHEMA_RELEASE_ID_V1;
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_registry::svm::continuation_v1::{
     RegistryContinuationAdmissionSeedsV1, RegistryContinuationRequestV1,
-};
-use dclutch_source::relay::SOLANA_DEVNET_GENESIS_HASH_V1;
-use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_market::rent::lifecycle_v2::{
-    LifecycleAccountIdV2, LifecycleRentCoreCloseAuthoritySeedsV2, LifecycleRentCreditV2,
-};
-use dclutch_source::resolution::{
-    SOURCE_CLOSURE_RECEIPT_BYTES_V3, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SourceClosureReceiptV3,
 };
 use dclutch_resolution_core_v3_operator::funded_rent_recovery_v1::{
     FundedRentReadingV2, recover_funded_rent_rate_v2,
 };
+use dclutch_source::relay::SOLANA_DEVNET_GENESIS_HASH_V1;
+use dclutch_source::resolution::{
+    SOURCE_CLOSURE_RECEIPT_BYTES_V3, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SourceClosureReceiptV3,
+};
 use dclutch_source::{
     RECOVERY_POLICY_SCHEMA_ID_V2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
     SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SourceResolutionPhaseV1, SourceResolutionStateV2,
+};
+use dclutch_trading::{
+    native_close_bundle_v1::{
+        direct_native_close_account_profile_schema_v1, direct_native_close_effect_schema_v1,
+    },
+    ordinary_bundle_v4::DirectInlineOrdinaryHotBundleV4,
+    retirement_v1::{DirectBeginRetiringRequestV1, direct_begin_retiring_context_v1},
+    successor::DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1,
 };
 use dclutch_versioned_message_operator::{
     EXTEND_ADDRESSES_PER_TRANSACTION_V1, LookupTableCreationPlanV1, PACKET_DATA_BYTES,
@@ -6889,14 +6890,25 @@ pub(crate) fn project_terminal_lookup_closures_from_chain_v1(
     };
     let resolution_funding = evidence_pubkey(evidence, "resolution_funding_ledger")?;
     let trading_funding = evidence_pubkey(evidence, "direct_trading_funding_ledger")?;
+    // Canonical mask order, which is a fact about the selected entry's manifest
+    // POSITION and never about which controller owns which ledger.
+    // `selected_funding_ledger_leads_v1` is the one author of that rule.
+    let (funding_ledgers, selected_funding_position) =
+        if crate::market::selected_funding_ledger_leads_v1(
+            evidence.direct_selected_manifest_entry_index,
+        ) {
+            ([trading_funding, resolution_funding], 0)
+        } else {
+            ([resolution_funding, trading_funding], 1)
+        };
     let close = direct_native_close_meta_closure_v1(&DirectNativeCloseCoordinateInputV1 {
         release_set,
         role_request_digest: [4; 32],
         market,
         realm: record(&realm),
         manifest: record(&manifest),
-        resolution_funding,
-        trading_funding,
+        funding_ledgers,
+        selected_funding_position,
         root,
         activation_cache: activation,
         core: deployment(&plan.core)?,
@@ -7083,19 +7095,27 @@ fn direct_native_close_closure_from_discovery_v1(
         program,
         programdata,
     };
-    if snapshot.funding_ledgers.len() != 2 {
+    if snapshot.funding_ledgers.len() != DIRECT_NATIVE_CLOSE_FUNDING_LEDGERS_V1 {
         return Err(refusal(
             "Direct close discovery did not contain exact F=2 funding ledgers",
         ));
     }
+    // Discovery already ordered the slice canonically; which of the two the
+    // close WRITES follows the selected entry's position, not a controller.
+    let selected_funding_position = usize::from(!crate::market::selected_funding_ledger_leads_v1(
+        evidence.direct_selected_manifest_entry_index,
+    ));
     direct_native_close_meta_closure_v1(&DirectNativeCloseCoordinateInputV1 {
         release_set: hex32(&plan.release_set_id)?,
         role_request_digest: request_digest,
         market: snapshot.market.key,
         realm: records(snapshot.realm.key, snapshot.realm_staging.key),
         manifest: records(snapshot.manifest.key, snapshot.manifest_staging.key),
-        resolution_funding: snapshot.funding_ledgers[0].key,
-        trading_funding: snapshot.funding_ledgers[1].key,
+        funding_ledgers: [
+            snapshot.funding_ledgers[0].key,
+            snapshot.funding_ledgers[1].key,
+        ],
+        selected_funding_position,
         root: snapshot.root.key,
         activation_cache: snapshot.activation_cache.key,
         core: deployments(snapshot.core_program.key, snapshot.core_programdata.key),

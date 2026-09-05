@@ -611,6 +611,18 @@ unactivatable if it takes this row, and markets that can never be Retired if it
 declines. Cohort-16 has one of each, and only the Trading link stands between
 its edged market and activation.
 
+**Which cohort carries it is a real choice with a cost either way, and the
+runbook does not make it.** A full redeploy with fresh identities — cohort
+**17** — is what the standing devnet authorization admits without further
+argument, and it re-founds everything, so `GyD95eyE…`'s survival buys nothing.
+A Trading-only upgrade in place — **16.1** — keeps that market's address and is
+the only way to reach the market that already carries the edges, but upgrading
+a program moves its Loader slot, which supersedes the release generation under
+decision 0012: every open market on cohort-16 refuses `ReleaseSuperseded`
+(`0x4007`) until a re-release re-pins the slot, and the re-release has to come
+before any execution. The row is satisfied by either; the operator states which
+and why in the cohort's own evidence.
+
 Measured in the same run: the selected entry sits at manifest index **0** on a
 real market, not the four-entry fixture's 3, so the funding slice's order is
 derived from the entry index and never typed.
