@@ -152,6 +152,20 @@ pub enum DealerEquityHotOperatorErrorV3 {
     RuntimeGeometry,
     /// Checked arithmetic or envelope encoding failed.
     Arithmetic,
+    /// `dclutch_trading_sbf` refused; the cause is its own.
+    EquityOperator(dclutch_trading_sbf::dealer::equity_request::EquityOperatorErrorV3),
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    ProgramSet(dclutch_market::capability_program::set_v1::ProgramSetErrorV1),
+    /// `dclutch_trading_sbf` refused; the cause is its own.
+    DealerEquityArtifact(dclutch_trading_sbf::dealer::equity_effect::DealerEquityArtifactErrorV3),
+    /// `dclutch_trading_sbf` refused; the cause is its own.
+    DealerEquityArtifacts(dclutch_trading_sbf::dealer::equity_artifacts::DealerEquityArtifactsErrorV3),
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    HotExecution(dclutch_market::capability_program::hot_v3::HotExecutionErrorV3),
+    /// `dclutch_market::execution_strategy` refused; the cause is its own.
+    ExecutionStrategy(dclutch_market::execution_strategy::v2::Error),
+    /// `dclutch_vm::account_profile` refused; the cause is its own.
+    AccountProfile(dclutch_vm::account_profile::v2::Error),
 }
 
 /// Build a complete unsigned Dealer contribution or redemption Hot instruction.
@@ -175,11 +189,11 @@ pub fn build_dealer_equity_hot_instruction_v3(
     }
     let observation = validate_fixed_frame(state, outer)?;
     let request = DealerEquityRequestV3::decode(family_request)
-        .map_err(|_| DealerEquityHotOperatorErrorV3::Request)?;
+        .map_err(DealerEquityHotOperatorErrorV3::EquityOperator)?;
     let action = action(request.action());
     let position_count = request
         .claims_plan()
-        .map_err(|_| DealerEquityHotOperatorErrorV3::Request)?
+        .map_err(DealerEquityHotOperatorErrorV3::EquityOperator)?
         .map_or(0, |plan| plan.position_count());
     if position_count > 2 {
         return Err(DealerEquityHotOperatorErrorV3::Request);
@@ -188,7 +202,7 @@ pub fn build_dealer_equity_hot_instruction_v3(
 
     let set =
         CapabilityProgramSetV1::decode(&fixed(state, HOT_PROGRAM_SET_RAW_ACCOUNT_V3)?.account.data)
-            .map_err(|_| DealerEquityHotOperatorErrorV3::Artifact)?;
+            .map_err(DealerEquityHotOperatorErrorV3::ProgramSet)?;
     if set.selector_offset() != DEALER_EQUITY_SELECTOR_OFFSET_V3
         || set.selector_width() != SelectorWidthV1::U16
     {
@@ -196,15 +210,15 @@ pub fn build_dealer_equity_hot_instruction_v3(
     }
     let selected_program = set
         .select(family_request)
-        .map_err(|_| DealerEquityHotOperatorErrorV3::Artifact)?;
+        .map_err(DealerEquityHotOperatorErrorV3::ProgramSet)?;
     if selected_program.to_bytes() != hash(&fixed(state, 6)?.account.data).to_bytes() {
         return Err(DealerEquityHotOperatorErrorV3::Artifact);
     }
 
     let scalar_count = dealer_equity_scalar_count_v3(action)
-        .map_err(|_| DealerEquityHotOperatorErrorV3::Artifact)?;
+        .map_err(DealerEquityHotOperatorErrorV3::DealerEquityArtifact)?;
     let identity_count = dealer_equity_identity_count_v3(action)
-        .map_err(|_| DealerEquityHotOperatorErrorV3::Artifact)?;
+        .map_err(DealerEquityHotOperatorErrorV3::DealerEquityArtifact)?;
     let mut scalar_scratch = vec![0_u64; scalar_count];
     let mut identity_scratch = vec![[0_u8; 32]; identity_count];
     let bundle = authenticate_dealer_equity_artifacts_v3(
@@ -216,7 +230,7 @@ pub fn build_dealer_equity_hot_instruction_v3(
         &mut scalar_scratch,
         &mut identity_scratch,
     )
-    .map_err(|_| DealerEquityHotOperatorErrorV3::Artifact)?;
+    .map_err(DealerEquityHotOperatorErrorV3::DealerEquityArtifacts)?;
     validate_strategy_geometry(state, scalar_count, identity_count)?;
     validate_runtime_geometry(state, bundle, action, position_count)?;
 
@@ -229,7 +243,7 @@ pub fn build_dealer_equity_hot_instruction_v3(
         state.generation,
         hash(&root.account.data).to_bytes(),
     )
-    .map_err(|_| DealerEquityHotOperatorErrorV3::Arithmetic)?
+    .map_err(DealerEquityHotOperatorErrorV3::HotExecution)?
     .with_bump_hints(dealer_equity_hot_bump_hints_v3(
         state,
         &outer.trading_program,
@@ -379,10 +393,10 @@ fn validate_strategy_geometry(
     let strategy = ExecutionStrategyProgramV2::decode(
         &fixed(state, HOT_STRATEGY_RAW_ACCOUNT_V3)?.account.data,
     )
-    .map_err(|_| DealerEquityHotOperatorErrorV3::StrategyGeometry)?;
+    .map_err(DealerEquityHotOperatorErrorV3::ExecutionStrategy)?;
     let profile = strategy
         .transport_profile()
-        .map_err(|_| DealerEquityHotOperatorErrorV3::StrategyGeometry)?;
+        .map_err(DealerEquityHotOperatorErrorV3::ExecutionStrategy)?;
     let pages = match profile {
         AcceleratorTransportProfileV2::ChunkedBankV2 => 0,
         AcceleratorTransportProfileV2::OutputPageV3 => 1,
@@ -436,7 +450,7 @@ fn validate_runtime_geometry(
             .account
             .data,
     )
-    .map_err(|_| DealerEquityHotOperatorErrorV3::RuntimeGeometry)?;
+    .map_err(DealerEquityHotOperatorErrorV3::AccountProfile)?;
     let expected_runtime = usize::from(profile.fixed_account_count());
     let expected_effect = usize::from(bundle.effect.fixed_account_count());
     let expected_from_frames = dealer_runtime_account_count(action, position_count)?;
@@ -448,10 +462,10 @@ fn validate_runtime_geometry(
             != expected_runtime - usize::from(DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3)
         || profile.common_scalar_count() as usize
             != dealer_equity_scalar_count_v3(action)
-                .map_err(|_| DealerEquityHotOperatorErrorV3::RuntimeGeometry)?
+                .map_err(DealerEquityHotOperatorErrorV3::DealerEquityArtifact)?
         || profile.common_identity_count() as usize
             != dealer_equity_identity_count_v3(action)
-                .map_err(|_| DealerEquityHotOperatorErrorV3::RuntimeGeometry)?
+                .map_err(DealerEquityHotOperatorErrorV3::DealerEquityArtifact)?
         || profile.trusted_current_slot_scalar() != dealer_current_slot_scalar_register_v3(action)
     {
         return Err(DealerEquityHotOperatorErrorV3::RuntimeGeometry);
@@ -483,7 +497,7 @@ fn validate_runtime_geometry(
                 u16::try_from(coordinate)
                     .map_err(|_| DealerEquityHotOperatorErrorV3::Arithmetic)?,
             )
-            .map_err(|_| DealerEquityHotOperatorErrorV3::RuntimeGeometry)?;
+            .map_err(DealerEquityHotOperatorErrorV3::AccountProfile)?;
         let privileges = rule.privileges();
         let expected_data = usize::try_from(rule.data_length())
             .map_err(|_| DealerEquityHotOperatorErrorV3::Arithmetic)?;
@@ -498,7 +512,7 @@ fn validate_runtime_geometry(
         }
         let representative = profile
             .representative(0, coordinate)
-            .map_err(|_| DealerEquityHotOperatorErrorV3::RuntimeGeometry)?;
+            .map_err(DealerEquityHotOperatorErrorV3::AccountProfile)?;
         let canonical = if representative < injected.len() {
             fixed(
                 state,

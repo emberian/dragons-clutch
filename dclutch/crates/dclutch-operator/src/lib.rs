@@ -44,8 +44,6 @@ pub mod direct_inline_v3;
 pub mod general_activation_v3;
 /// Chain-derived General V3 Hot execution and packet construction.
 pub mod general_hot_v3;
-/// Durable content-addressed caller construction over executable General V3.
-pub mod general_invocation_v1;
 /// Compile the seven General actions into one publishable, selectable release.
 pub mod general_selected_release_v1;
 /// Chain-derived inspection of immutable Core/Registry/Rent infrastructure.
@@ -54,10 +52,6 @@ pub mod infrastructure;
 pub mod infrastructure_succession_v1;
 /// Shared authentication of Rent, Clock, and finalized-record observations.
 pub mod observation;
-/// Lifecycle-scoped RentCredit creation, sweeping, and close evidence.
-pub mod lifecycle_rent_v2 {
-    pub use dclutch_product_runtime_v2_operator::lifecycle_rent_v2::*;
-}
 mod product_graph_observation_v3 {
     pub(crate) use dclutch_resolution_core_v3_operator::product_graph_observation_v3::{
         AuthenticatedProductGraphObservationV3, FinalizedProductGraphAccountsV3,
@@ -90,9 +84,6 @@ pub mod series_hot_v3;
 /// Chain-derived selection of the next recurring-Series lifecycle act.
 #[cfg(feature = "dealer-series")]
 pub mod series_lifecycle_v3;
-/// Compact projected-Market Series Consume instruction-data construction.
-#[cfg(feature = "dealer-series")]
-pub mod series_projected_v2;
 /// Chain-derived Direct close and retirement replay-handoff construction.
 pub mod terminal_retirement_v1;
 /// Wallet-authorized Claims terminal payout and exact v0 routing construction.

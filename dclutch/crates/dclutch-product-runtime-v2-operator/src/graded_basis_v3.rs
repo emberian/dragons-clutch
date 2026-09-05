@@ -1,5 +1,9 @@
 //! Chain-derived Product V3 graded-basis Registry records.
 //!
+//! No host driver constructs a graded (degree-2/3) basis yet; decision 0029
+//! item 2 keeps curvature, so this reader waits for its producer rather than
+//! being deleted.
+//!
 //! This host-only adapter derives raw/staging PDAs from exact bytes and schema
 //! IDs. It independently reruns the categorical projection before publishing
 //! certificate or admission bytes. It never signs, uploads, finalizes, or
@@ -66,10 +70,10 @@ pub fn compile_graded_basis_admission_v3(
     {
         return Err(Error::OutputLength);
     }
-    let domain = ResultDomainV2::decode(result_domain_bytes).map_err(|_| Error::RuntimeProduct)?;
+    let domain = ResultDomainV2::decode(result_domain_bytes).map_err(Error::ProductRuntime)?;
     let approximation =
         certify_categorical_approximation_v3(result_domain_bytes, linked_basis_bytes, boundary)
-            .map_err(|_| Error::Admission)?;
+            .map_err(Error::ProductCompiler)?;
     let certificate_bytes = approximation.certificate.to_bytes();
     recheck_categorical_approximation_v3(
         result_domain_bytes,
@@ -78,7 +82,7 @@ pub fn compile_graded_basis_admission_v3(
         &approximation.payouts,
         &approximation.component_error_bounds,
     )
-    .map_err(|_| Error::Admission)?;
+    .map_err(Error::ProductCompiler)?;
     let binding = derive_graded_basis_admission_v3(
         result_domain_bytes,
         linked_basis_bytes,
@@ -86,7 +90,7 @@ pub fn compile_graded_basis_admission_v3(
         compiler.compiler_release_id.to_bytes(),
         compiler.toolchain_id.to_bytes(),
     )
-    .map_err(|_| Error::Admission)?;
+    .map_err(Error::ProductBasisRegistry)?;
     let admission_bytes = binding.to_bytes();
     admit_authenticated_graded_basis_v3(
         result_domain_bytes,
@@ -94,7 +98,7 @@ pub fn compile_graded_basis_admission_v3(
         &certificate_bytes,
         &admission_bytes,
     )
-    .map_err(|_| Error::Admission)?;
+    .map_err(Error::ProductBasisRegistry)?;
     let result_domain_digest = raw_record_digest_v3(result_domain_bytes);
     if result_domain_digest != binding.result_domain_id()
         || domain.product_id().to_bytes() != binding.product_id()
@@ -184,7 +188,7 @@ pub fn validate_finalized_graded_basis_admission_v3(
         state.certificate.raw.data,
         state.admission.raw.data,
     )
-    .map_err(|_| Error::Admission)?;
+    .map_err(Error::ProductBasisRegistry)?;
     if binding != compiled.binding {
         return Err(Error::CrossRecordMismatch);
     }

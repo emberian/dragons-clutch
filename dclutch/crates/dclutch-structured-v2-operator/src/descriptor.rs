@@ -149,12 +149,13 @@ pub fn derive_structured_representation_descriptor_v2(
     let mut coefficients = Vec::with_capacity(width);
     let mut coordinate = 0_u32;
     while coordinate < outcome_count {
-        coefficients.push(terms.coefficient(coordinate).map_err(|_| Error::Terms)?);
+        coefficients.push(terms.coefficient(coordinate).map_err(Error::Structured)?);
         coordinate = coordinate.checked_add(1).ok_or(Error::ChildWidth)?;
     }
     require_coefficients_are_the_composition_root(terms, bundle, &coefficients)?;
 
-    let bytes = representation_descriptor_bytes_v3(width).map_err(|_| Error::ChildWidth)?;
+    let bytes =
+        representation_descriptor_bytes_v3(width).map_err(Error::RationalRepresentationKernel)?;
     let mut scratch = vec![0_u8; bytes];
     let mut preimage = vec![0_u8; bytes];
     encode_representation_descriptor_v3_atomic(
@@ -172,7 +173,7 @@ pub fn derive_structured_representation_descriptor_v2(
         &mut scratch,
         &mut preimage,
     )
-    .map_err(|_| Error::ChildIdentity)?;
+    .map_err(Error::RationalRepresentationKernel)?;
 
     let descriptor_id = dclutch_sha256_adapter::digest(&preimage);
     Ok(StructuredRepresentationDescriptorV2 {
@@ -216,13 +217,21 @@ fn require_coefficients_are_the_composition_root(
     coefficients: &[u64],
 ) -> Result<()> {
     let graph = bundle.graph();
-    let root_denominator = u128::from(graph.root_denominator().map_err(|_| Error::ChildIdentity)?);
+    let root_denominator = u128::from(
+        graph
+            .root_denominator()
+            .map_err(Error::RepresentationComposition)?,
+    );
     let denominator = u128::from(terms.denominator());
     let mut numerators = vec![0_u128; coefficients.len()];
-    let term_count = graph.root_term_count().map_err(|_| Error::ChildIdentity)?;
+    let term_count = graph
+        .root_term_count()
+        .map_err(Error::RepresentationComposition)?;
     let mut index = 0_u32;
     while index < term_count {
-        let term = graph.root_term(index).map_err(|_| Error::ChildIdentity)?;
+        let term = graph
+            .root_term(index)
+            .map_err(Error::RepresentationComposition)?;
         let slot = usize::try_from(term.outcome).map_err(|_| Error::ChildWidth)?;
         *numerators.get_mut(slot).ok_or(Error::ChildWidth)? = u128::from(term.numerator);
         index = index.checked_add(1).ok_or(Error::ChildWidth)?;
@@ -289,7 +298,7 @@ pub fn decode_derived_structured_descriptor_v2<'a>(
             authority_derivation_authenticated: true,
         },
     )
-    .map_err(|_| Error::ChildIdentity)
+    .map_err(Error::RationalRepresentationKernel)
 }
 
 /// Build the child-wire descriptor coordinates from a derived descriptor.

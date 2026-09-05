@@ -367,7 +367,9 @@ fn activation_refuses_stale_loader_substitution_and_record_owner() {
     }
     assert_eq!(
         build_registry_activation_v1(stale.registry, &stale.state),
-        Err(Error::InvalidDeployment)
+        Err(Error::Registry(
+            dclutch_registry::Error::DeploymentSlotMismatch
+        ))
     );
 
     let mut substituted = Fixture::new();
@@ -386,7 +388,9 @@ fn activation_refuses_stale_loader_substitution_and_record_owner() {
     }
     assert_eq!(
         build_registry_activation_v1(substituted.registry, &substituted.state),
-        Err(Error::InvalidDeployment)
+        Err(Error::Registry(
+            dclutch_registry::Error::ElfDigestMismatch
+        ))
     );
 
     let mut changed_upgrade_policy = Fixture::new();
@@ -413,7 +417,9 @@ fn activation_refuses_stale_loader_substitution_and_record_owner() {
             changed_upgrade_policy.registry,
             &changed_upgrade_policy.state
         ),
-        Err(Error::InvalidDeployment)
+        Err(Error::Registry(
+            dclutch_registry::Error::UpgradeAuthorityMismatch
+        ))
     );
 
     let mut wrong_owner = Fixture::new();
@@ -501,7 +507,9 @@ fn reauthentication_derives_three_readonly_accounts_and_rechecks_deployment() {
         .copy_from_slice(&79_u64.to_le_bytes());
     assert_eq!(
         build_registry_reauthentication_v1(&stale, ExecutionRoleV1::Resolution),
-        Err(Error::InvalidDeployment)
+        Err(Error::Registry(
+            dclutch_registry::Error::DeploymentSlotMismatch
+        ))
     );
 }
 

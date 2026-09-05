@@ -69,7 +69,9 @@ pub fn build_fractional_atomic_claims_instruction_v3(
     root: FractionalCapabilityRootV4,
     accounts: &[AccountMeta],
 ) -> Result<Instruction> {
-    request.bind_terms(terms).map_err(|_| Error::Claims)?;
+    request
+        .bind_terms(terms)
+        .map_err(Error::FractionalExposureRequest)?;
     if !matches!(
         request.action(),
         FractionalExposureActionV2::Wrap | FractionalExposureActionV2::WholeUnwrap
@@ -80,7 +82,9 @@ pub fn build_fractional_atomic_claims_instruction_v3(
     let claims_program = meta(accounts, CLAIMS_PROGRAM)?.pubkey;
     let trading_program = meta(accounts, TRADING_PROGRAM)?.pubkey;
     let registry = meta(accounts, REGISTRY)?.pubkey;
-    let bytes = request.to_bytes().map_err(|_| Error::Claims)?;
+    let bytes = request
+        .to_bytes()
+        .map_err(Error::FractionalExposureRequest)?;
     let request_digest = hash(&bytes).to_bytes();
     let input = request.input();
     let caller = CallerAuthoritySeedsV1::from_bytes(
@@ -90,7 +94,7 @@ pub fn build_fractional_atomic_claims_instruction_v3(
         input.terms,
         request_digest,
     )
-    .map_err(|_| Error::Claims)?;
+    .map_err(Error::ReleaseSet)?;
     let expected_authority = Pubkey::find_program_address(&caller.as_slices(), &trading_program).0;
     let expected_market = Pubkey::find_program_address(
         &[LIABILITY_BASIS_MARKET_SEED_V2, input.market.as_slice()],
@@ -129,7 +133,7 @@ pub fn build_fractional_atomic_claims_instruction_v3(
             .to_bytes()
             != terms
                 .shard_mint(input.representation_coordinate)
-                .map_err(|_| Error::Claims)?
+                .map_err(Error::FractionalClaim)?
         || meta(accounts, FRACTIONAL_ATOMIC_HOLDER_TOKEN_V3)?
             .pubkey
             .to_bytes()
@@ -163,9 +167,9 @@ pub fn build_fractional_atomic_claims_instruction_v3(
         input.token_behavior,
     )?;
 
-    let spec = SignedDeltaFrameSpecV3::new(2).map_err(|_| Error::Claims)?;
-    for index in 0..spec.account_count().map_err(|_| Error::Claims)? {
-        let expected = spec.account(index).map_err(|_| Error::Claims)?.privileges();
+    let spec = SignedDeltaFrameSpecV3::new(2).map_err(Error::FrameSpec)?;
+    for index in 0..spec.account_count().map_err(Error::FrameSpec)? {
+        let expected = spec.account(index).map_err(Error::FrameSpec)?.privileges();
         let observed = meta(accounts, usize::from(index))?;
         if observed.is_signer != expected.signer() || observed.is_writable != expected.writable() {
             return Err(Error::Claims);
@@ -173,14 +177,14 @@ pub fn build_fractional_atomic_claims_instruction_v3(
     }
     let actor_position = Pubkey::find_program_address(
         &ProtocolPositionSeedsV2::new(expected_market.to_bytes(), input.owner)
-            .map_err(|_| Error::Claims)?
+            .map_err(Error::ProtocolPosition)?
             .as_slices(),
         &claims_program,
     )
     .0;
     let reserve_position = Pubkey::find_program_address(
         &ProtocolPositionSeedsV2::new(expected_market.to_bytes(), expected_root.to_bytes())
-            .map_err(|_| Error::Claims)?
+            .map_err(Error::ProtocolPosition)?
             .as_slices(),
         &claims_program,
     )
@@ -229,7 +233,9 @@ pub fn build_fractional_terminal_atomic_claims_instruction_v3(
     composition_exposure_bytes: &[u8],
     accounts: &[AccountMeta],
 ) -> Result<Instruction> {
-    request.bind_terms(terms).map_err(|_| Error::Claims)?;
+    request
+        .bind_terms(terms)
+        .map_err(Error::FractionalExposureRequest)?;
     if !matches!(
         request.action(),
         FractionalExposureActionV2::TerminalRedeem | FractionalExposureActionV2::TerminalZeroBurn
@@ -237,7 +243,9 @@ pub fn build_fractional_terminal_atomic_claims_instruction_v3(
     {
         return Err(Error::Claims);
     }
-    let bytes = request.to_bytes().map_err(|_| Error::Claims)?;
+    let bytes = request
+        .to_bytes()
+        .map_err(Error::FractionalExposureRequest)?;
     let request_digest = hash(&bytes).to_bytes();
     let input = request.input();
     let exposure_digest = hash(composition_exposure_bytes).to_bytes();
@@ -262,7 +270,7 @@ pub fn build_fractional_terminal_atomic_claims_instruction_v3(
             representation_width: terms.representation_width(),
         })
     })
-    .map_err(|_| Error::Claims)?;
+    .map_err(Error::RepresentationComposition)?;
 
     let claims_program = meta(accounts, CLAIMS_PROGRAM)?.pubkey;
     let trading_program = meta(accounts, TRADING_PROGRAM)?.pubkey;
@@ -274,7 +282,7 @@ pub fn build_fractional_terminal_atomic_claims_instruction_v3(
         input.terms,
         request_digest,
     )
-    .map_err(|_| Error::Claims)?;
+    .map_err(Error::ReleaseSet)?;
     let expected_authority = Pubkey::find_program_address(&caller.as_slices(), &trading_program).0;
     let expected_market = Pubkey::find_program_address(
         &[LIABILITY_BASIS_MARKET_SEED_V2, input.market.as_slice()],
@@ -288,7 +296,7 @@ pub fn build_fractional_terminal_atomic_claims_instruction_v3(
         Pubkey::find_program_address(&header.seeds().as_slices(), &trading_program);
     let reserve_position = Pubkey::find_program_address(
         &ProtocolPositionSeedsV2::new(expected_market.to_bytes(), expected_root.to_bytes())
-            .map_err(|_| Error::Claims)?
+            .map_err(Error::ProtocolPosition)?
             .as_slices(),
         &claims_program,
     )
@@ -321,7 +329,7 @@ pub fn build_fractional_terminal_atomic_claims_instruction_v3(
             .to_bytes()
             != terms
                 .shard_mint(input.representation_coordinate)
-                .map_err(|_| Error::Claims)?
+                .map_err(Error::FractionalClaim)?
         || meta(accounts, FRACTIONAL_TERMINAL_SOURCE_TOKEN_V3)?
             .pubkey
             .to_bytes()
@@ -361,9 +369,9 @@ pub fn build_fractional_terminal_atomic_claims_instruction_v3(
         require_record_pair(accounts, registry, raw, staging, schema, digest)?;
     }
 
-    let spec = SignedDeltaFrameSpecV3::new(1).map_err(|_| Error::Claims)?;
-    for index in 0..spec.account_count().map_err(|_| Error::Claims)? {
-        let expected = spec.account(index).map_err(|_| Error::Claims)?.privileges();
+    let spec = SignedDeltaFrameSpecV3::new(1).map_err(Error::FrameSpec)?;
+    for index in 0..spec.account_count().map_err(Error::FrameSpec)? {
+        let expected = spec.account(index).map_err(Error::FrameSpec)?.privileges();
         require_privilege(
             accounts,
             usize::from(index),
@@ -453,7 +461,7 @@ fn selection_config_id(terms: FractionalExposureTermsV2<'_>) -> Result<[u8; 32]>
         fractional_selection_config_from_terms_v1(terms),
         &mut bytes,
     )
-    .map_err(|_| Error::Claims)?;
+    .map_err(Error::FractionalClaim)?;
     Ok(hash(&bytes).to_bytes())
 }
 

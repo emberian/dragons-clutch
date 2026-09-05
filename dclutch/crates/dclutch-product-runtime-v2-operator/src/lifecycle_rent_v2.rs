@@ -47,6 +47,10 @@ pub enum LifecycleRentOperatorErrorV2 {
     BalanceMismatch,
     /// A close receipt was malformed or did not close the expected lifecycle.
     InvalidCloseReceipt,
+    /// `dclutch_market::rent` refused; the cause is its own.
+    Rent(dclutch_market::rent::Error),
+    /// `dclutch_market::rent` refused; the cause is its own.
+    LifecycleRent(dclutch_market::rent::lifecycle_v2::LifecycleRentErrorV2),
 }
 
 /// Finalized accounts needed to create the credit selected by one Found plan.
@@ -159,12 +163,12 @@ pub fn build_lifecycle_rent_create_v2(
     }
     let rent = decode_rent(state.rent)?;
     let refund = RefundAuthority::new(state.refund_wallet.key.to_bytes())
-        .map_err(|_| LifecycleRentOperatorErrorV2::AccountAuthority)?;
+        .map_err(LifecycleRentOperatorErrorV2::Rent)?;
     let market = LifecycleAccountIdV2::new(found.market_address.to_bytes())
-        .map_err(|_| LifecycleRentOperatorErrorV2::InvalidCredit)?;
+        .map_err(LifecycleRentOperatorErrorV2::LifecycleRent)?;
     let release_set =
         LifecycleAccountIdV2::new(found.market_identity.selected_release_set.to_bytes())
-            .map_err(|_| LifecycleRentOperatorErrorV2::InvalidCredit)?;
+            .map_err(LifecycleRentOperatorErrorV2::LifecycleRent)?;
     let generation = found.market_identity.generation;
     let (credit, bump) = Pubkey::find_program_address(
         &[
@@ -178,7 +182,7 @@ pub fn build_lifecycle_rent_create_v2(
         return Err(LifecycleRentOperatorErrorV2::InvalidCredit);
     }
     let credit_state = LifecycleRentCreditV2::new(refund, market, release_set, generation, bump)
-        .map_err(|_| LifecycleRentOperatorErrorV2::InvalidCredit)?;
+        .map_err(LifecycleRentOperatorErrorV2::LifecycleRent)?;
     let rent_debit = rent.minimum_balance(LIFECYCLE_RENT_CREDIT_BYTES_V2);
     if state.payer.lamports < rent_debit {
         return Err(LifecycleRentOperatorErrorV2::BalanceMismatch);
@@ -238,14 +242,14 @@ pub fn build_lifecycle_rent_sweep_all_v2(
         .filter(|amount| *amount > 0)
         .ok_or(LifecycleRentOperatorErrorV2::NoSweepableSurplus)?;
     let request = SweepLifecycleRentCreditV2::new(amount)
-        .map_err(|_| LifecycleRentOperatorErrorV2::NoSweepableSurplus)?;
+        .map_err(LifecycleRentOperatorErrorV2::LifecycleRent)?;
     let balances = LifecycleSweepPlanV2::new(
         state.credit.lamports,
         state.refund_wallet.lamports,
         rent_minimum,
         request,
     )
-    .map_err(|_| LifecycleRentOperatorErrorV2::BalanceMismatch)?;
+    .map_err(LifecycleRentOperatorErrorV2::LifecycleRent)?;
     Ok(LifecycleRentSweepPlanV2 {
         instruction: Instruction {
             program_id: state.rent_program.key,
@@ -307,7 +311,7 @@ pub fn validate_lifecycle_rent_close_receipt_v2(
         return Err(LifecycleRentOperatorErrorV2::InvalidCloseReceipt);
     }
     let receipt = LifecycleRentCloseReceiptV2::decode(return_data)
-        .map_err(|_| LifecycleRentOperatorErrorV2::InvalidCloseReceipt)?;
+        .map_err(LifecycleRentOperatorErrorV2::LifecycleRent)?;
     let input = receipt.input();
     let expected_wallet_after = expectation
         .wallet_before
@@ -339,7 +343,7 @@ fn authenticate_credit(
         return Err(LifecycleRentOperatorErrorV2::AccountAuthority);
     }
     let state = LifecycleRentCreditV2::decode(credit.data)
-        .map_err(|_| LifecycleRentOperatorErrorV2::InvalidCredit)?;
+        .map_err(LifecycleRentOperatorErrorV2::LifecycleRent)?;
     let seeds = state.pda_seeds();
     let market = seeds.market().to_bytes();
     let generation = seeds.generation();

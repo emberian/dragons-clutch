@@ -328,13 +328,14 @@ pub enum Error {
     AlreadySucceeded,
     /// The payer could not cover the exact profile rent debit.
     InsufficientPayer,
-    /// The composed V2 profile refused its own aliasing check.
-    ///
-    /// A belt: both aliasings it refuses on the successor side are already
-    /// impossible under conjunct 3 and the V1 profile's own decode.
-    ProfileIncoherent,
     /// Frame composition did not produce the exact account count.
     Encoding,
+    /// `dclutch_registry::release_set` refused; the cause is its own.
+    ReleaseSet(dclutch_registry::release_set::Error),
+    /// `dclutch_registry::svm` refused; the cause is its own.
+    RegistrySvm(dclutch_registry::svm::Error),
+    /// `dclutch_registry` refused; the cause is its own.
+    Registry(dclutch_registry::Error),
 }
 
 /// Build the exact twenty-one-account Core succession ceremony.
@@ -439,7 +440,7 @@ pub fn build_core_infrastructure_succession_v1(
         predecessor.registry().artifact_release(),
         predecessor.rent().artifact_release(),
     )
-    .map_err(|_| Error::ProfileIncoherent)?;
+    .map_err(Error::ReleaseSet)?;
 
     // Conjunct 6: the address, and the ONE SUCCESSION PER DOMAIN that forbids a
     // second ceremony. Not one V2 per domain -- see `profile_standing`.
@@ -528,7 +529,7 @@ fn moved(
         return Err(Error::InvalidSuccessorRecord);
     }
     let digest = ArtifactReleaseIdV1::new(hash(&successor_raw.data).to_bytes())
-        .map_err(|_| Error::InvalidSuccessorRecord)?;
+        .map_err(Error::ReleaseSet)?;
     Ok(digest != predecessor_binding.artifact_release())
 }
 
@@ -551,8 +552,7 @@ fn authenticate_core_upgrade_authority(
     {
         return Err(Error::InvalidCoreUpgradeAuthority);
     }
-    let view = ProgramDataV3View::parse(&programdata.data)
-        .map_err(|_| Error::InvalidCoreUpgradeAuthority)?;
+    let view = ProgramDataV3View::parse(&programdata.data).map_err(Error::RegistrySvm)?;
     if view.upgrade_authority() != Some(authority.key.to_bytes()) {
         return Err(Error::InvalidCoreUpgradeAuthority);
     }
@@ -583,8 +583,7 @@ fn authenticate_predecessor_profile(
     {
         return Err(Error::PredecessorProfileAbsent);
     }
-    ProtocolInfrastructureProfileV1::decode(&predecessor_profile.data)
-        .map_err(|_| Error::PredecessorProfileAbsent)
+    ProtocolInfrastructureProfileV1::decode(&predecessor_profile.data).map_err(Error::ReleaseSet)
 }
 
 /// What the V2 domain holds when a succession is composed against it.
@@ -650,7 +649,7 @@ fn authenticate_successor_record(
     if release.program().to_bytes() != program.key.to_bytes() {
         return Err(Error::InvalidSuccessorRecord);
     }
-    require_slot_pinned_release_v1(release).map_err(|_| Error::InvalidSuccessorRecord)?;
+    require_slot_pinned_release_v1(release).map_err(Error::Registry)?;
     authenticate_deployment(release, program, programdata)?;
     Ok((
         ExecutionRoleBindingV1::new(release.program(), artifact),
@@ -732,9 +731,9 @@ fn authenticate_deployment(
     {
         return Err(Error::InvalidDeployment);
     }
-    let program_view = ProgramV3View::parse(&program.data).map_err(|_| Error::InvalidDeployment)?;
+    let program_view = ProgramV3View::parse(&program.data).map_err(Error::RegistrySvm)?;
     let programdata_view =
-        ProgramDataV3View::parse(&programdata.data).map_err(|_| Error::InvalidDeployment)?;
+        ProgramDataV3View::parse(&programdata.data).map_err(Error::RegistrySvm)?;
     let derived =
         Pubkey::find_program_address(&[program.key.as_ref()], &bpf_loader_upgradeable::ID).0;
     if program_view.programdata() != programdata.key.to_bytes() || programdata.key != derived {
@@ -753,10 +752,10 @@ fn authenticate_deployment(
         hash(programdata_view.elf()).to_bytes(),
         programdata_view.upgrade_authority(),
     )
-    .map_err(|_| Error::InvalidDeployment)?;
+    .map_err(Error::Registry)?;
     release
         .authenticate_deployment(observation)
-        .map_err(|_| Error::InvalidDeployment)
+        .map_err(Error::Registry)
 }
 
 /// Conjuncts 4 and 5 for one binding, projected from the records alone.
@@ -804,8 +803,7 @@ fn compose_arm(
     {
         return Err(Error::InvalidPredecessorRecord);
     }
-    require_slot_pinned_release_v1(predecessor_release)
-        .map_err(|_| Error::InvalidPredecessorRecord)?;
+    require_slot_pinned_release_v1(predecessor_release).map_err(Error::Registry)?;
     // Conjunct 4: under Loader V3 a ProgramData slot only moves forward, so
     // strictly greater is exactly "was upgraded after".
     if successor_release.deployment_slot() <= predecessor_release.deployment_slot() {
@@ -1586,7 +1584,12 @@ mod tests {
             4,
             &999_u64.to_le_bytes(),
         );
-        assert_eq!(fixture.build(), Err(Error::InvalidDeployment));
+        assert_eq!(
+            fixture.build(),
+            Err(Error::Registry(
+                dclutch_registry::Error::DeploymentSlotMismatch
+            ))
+        );
     }
 
     /// Conjunct 1's aliasing arm: the reader may not select itself.
@@ -1610,7 +1613,12 @@ mod tests {
 
         let mut fixture = Fixture::new();
         put(&mut fixture.state.predecessor_profile.data, 0, &[0xff]);
-        assert_eq!(fixture.build(), Err(Error::PredecessorProfileAbsent));
+        assert_eq!(
+            fixture.build(),
+            Err(Error::ReleaseSet(
+                dclutch_registry::release_set::Error::InvalidMagic
+            ))
+        );
     }
 
     #[test]

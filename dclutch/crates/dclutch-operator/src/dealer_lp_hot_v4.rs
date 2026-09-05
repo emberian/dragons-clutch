@@ -5,6 +5,12 @@
 //! schema-bound descriptor from the sole Dealer `CapabilityProgramSetV2`,
 //! rejoins every descriptor artifact, validates exact Profile2 geometry, and
 //! emits one unsigned Trading instruction. It never signs or submits.
+//!
+//! No caller reaches [`build_dealer_lp_hot_instruction_v4`] today: the LP
+//! Open/Close campaign executes the route through the program-test bundle
+//! builder, which can never submit. This is the host authority for that wire,
+//! kept for the successor driver that will call it; deleting it would leave
+//! the test builder as the wire's last author.
 
 use crate::{
     Finality, Observation,
@@ -129,6 +135,20 @@ pub enum DealerLpHotOperatorErrorV4 {
     RuntimeGeometry,
     /// Checked count or instruction-data arithmetic overflowed.
     Arithmetic,
+    /// `dclutch_trading_sbf` refused; the cause is its own.
+    MultiLpOperator(dclutch_trading_sbf::dealer::lp_request::MultiLpOperatorErrorV3),
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    CapabilityProgram(dclutch_market::capability_program::Error),
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    HotExecution(dclutch_market::capability_program::hot_v3::HotExecutionErrorV3),
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    ProgramSet(dclutch_market::capability_program::set_v2::ProgramSetErrorV2),
+    /// `dclutch_trading_sbf` refused; the cause is its own.
+    DealerRelease(dclutch_trading_sbf::dealer::release::DealerReleaseErrorV3),
+    /// `dclutch_market::execution_strategy` refused; the cause is its own.
+    ExecutionStrategy(dclutch_market::execution_strategy::v2::Error),
+    /// `dclutch_vm::account_profile` refused; the cause is its own.
+    AccountProfile(dclutch_vm::account_profile::v2::Error),
 }
 
 /// Build one complete unsigned Dealer LP Open or Close Hot instruction.
@@ -147,13 +167,13 @@ pub fn build_dealer_lp_hot_instruction_v4(
     }
     let observation = validate_fixed_frame(state, outer)?;
     let request = DealerMultiLpRequestV3::decode(family_request)
-        .map_err(|_| DealerLpHotOperatorErrorV4::Request)?;
+        .map_err(DealerLpHotOperatorErrorV4::MultiLpOperator)?;
     validate_request_coordinates(state, outer, request)?;
 
     let descriptor_reference = select_lp_descriptor(state, family_request)?;
     let descriptor_bytes = &fixed(state, HOT_DESCRIPTOR_RAW_ACCOUNT_V3)?.account.data;
     let descriptor = CapabilityProgramV4::decode(descriptor_bytes)
-        .map_err(|_| DealerLpHotOperatorErrorV4::Artifact)?;
+        .map_err(DealerLpHotOperatorErrorV4::CapabilityProgram)?;
     validate_root_and_artifacts(state, request, descriptor)?;
     validate_strategy_geometry(state, descriptor)?;
     validate_runtime_geometry(state, request.action)?;
@@ -166,7 +186,7 @@ pub fn build_dealer_lp_hot_instruction_v4(
         state.generation,
         hash(&root.account.data).to_bytes(),
     )
-    .map_err(|_| DealerLpHotOperatorErrorV4::Arithmetic)?
+    .map_err(DealerLpHotOperatorErrorV4::HotExecution)?
     .with_bump_hints(dealer_lp_hot_bump_hints_v4(state, &outer.trading_program)?);
     let mut data = Vec::with_capacity(
         HOT_FAMILY_REQUEST_OFFSET_V3
@@ -340,7 +360,7 @@ fn select_lp_descriptor(
 ) -> Result<CapabilityDescriptorReferenceV2, DealerLpHotOperatorErrorV4> {
     let set =
         CapabilityProgramSetV2::decode(&fixed(state, HOT_PROGRAM_SET_RAW_ACCOUNT_V3)?.account.data)
-            .map_err(|_| DealerLpHotOperatorErrorV4::Artifact)?;
+            .map_err(DealerLpHotOperatorErrorV4::ProgramSet)?;
     if set.selector_offset() != DEALER_MULTI_LP_ACTION_SELECTOR_OFFSET_V3
         || set.selector_width() != SelectorWidthV2::U16
     {
@@ -348,7 +368,7 @@ fn select_lp_descriptor(
     }
     let selected = set
         .select_descriptor(family_request)
-        .map_err(|_| DealerLpHotOperatorErrorV4::Artifact)?;
+        .map_err(DealerLpHotOperatorErrorV4::ProgramSet)?;
     let descriptor = &fixed(state, HOT_DESCRIPTOR_RAW_ACCOUNT_V3)?.account.data;
     if selected.schema().to_bytes() != CAPABILITY_PROGRAM_SCHEMA_ID_V4
         || selected.program().to_bytes() != hash(descriptor).to_bytes()
@@ -367,7 +387,7 @@ fn validate_root_and_artifacts(
         &fixed(state, HOT_ROOT_ACCOUNT_V3)?.account.data,
         descriptor,
     )
-    .map_err(|_| DealerLpHotOperatorErrorV4::Artifact)?;
+    .map_err(DealerLpHotOperatorErrorV4::CapabilityProgram)?;
     let header = root.header();
     if header.release_set().to_bytes() != state.release_set
         || header.market() != request.market
@@ -378,13 +398,13 @@ fn validate_root_and_artifacts(
             != hash(&fixed(state, HOT_CONFIG_RAW_ACCOUNT_V3)?.account.data).to_bytes()
         || descriptor.request_schema()
             != dealer_request_schema_v3(request.action.selector())
-                .map_err(|_| DealerLpHotOperatorErrorV4::Artifact)?
+                .map_err(DealerLpHotOperatorErrorV4::DealerRelease)?
     {
         return Err(DealerLpHotOperatorErrorV4::Artifact);
     }
     descriptor
         .validate_persisted_selection(header.selection())
-        .map_err(|_| DealerLpHotOperatorErrorV4::Artifact)?;
+        .map_err(DealerLpHotOperatorErrorV4::CapabilityProgram)?;
     let reference = |schema: [u8; 32], index: usize| {
         Ok::<_, DealerLpHotOperatorErrorV4>(ArtifactReferenceV4::new(
             ContentId::new(schema).map_err(|_| DealerLpHotOperatorErrorV4::Artifact)?,
@@ -416,7 +436,7 @@ fn validate_root_and_artifacts(
             )?,
             effect: reference(EFFECT_SCHEMA_ID_V4, HOT_EFFECT_RAW_ACCOUNT_V3)?,
         })
-        .map_err(|_| DealerLpHotOperatorErrorV4::Artifact)
+        .map_err(DealerLpHotOperatorErrorV4::CapabilityProgram)
 }
 
 fn validate_strategy_geometry(
@@ -429,11 +449,11 @@ fn validate_strategy_geometry(
     let strategy = ExecutionStrategyProgramV2::decode(
         &fixed(state, HOT_STRATEGY_RAW_ACCOUNT_V3)?.account.data,
     )
-    .map_err(|_| DealerLpHotOperatorErrorV4::StrategyGeometry)?;
+    .map_err(DealerLpHotOperatorErrorV4::ExecutionStrategy)?;
     let callers = admitted_caller_authority_count_v3(
         strategy
             .transport_profile()
-            .map_err(|_| DealerLpHotOperatorErrorV4::StrategyGeometry)?,
+            .map_err(DealerLpHotOperatorErrorV4::ExecutionStrategy)?,
         u32::from(DEALER_LP_SCALAR_COUNT_V3),
         u32::from(DEALER_LP_IDENTITY_COUNT_V3),
     )
@@ -462,7 +482,7 @@ fn validate_strategy_geometry(
             descriptor.strategy(),
             ArtifactReferenceV4::new(strategy.transition_schema(), strategy.transition_program()),
         )
-        .map_err(|_| DealerLpHotOperatorErrorV4::StrategyGeometry)
+        .map_err(DealerLpHotOperatorErrorV4::CapabilityProgram)
 }
 
 fn validate_runtime_geometry(
@@ -474,7 +494,7 @@ fn validate_runtime_geometry(
             .account
             .data,
     )
-    .map_err(|_| DealerLpHotOperatorErrorV4::RuntimeGeometry)?;
+    .map_err(DealerLpHotOperatorErrorV4::AccountProfile)?;
     let expected = usize::from(dealer_lp_account_count_v3(action));
     if profile.fixed_account_count() != dealer_lp_account_count_v3(action)
         || profile.item_account_stride() != 0
@@ -484,7 +504,7 @@ fn validate_runtime_geometry(
         || profile.common_identity_count() != DEALER_LP_IDENTITY_COUNT_V3
         || profile
             .physical_account_count_with_dynamic_spans(0, &[])
-            .map_err(|_| DealerLpHotOperatorErrorV4::RuntimeGeometry)?
+            .map_err(DealerLpHotOperatorErrorV4::AccountProfile)?
             != expected
     {
         return Err(DealerLpHotOperatorErrorV4::RuntimeGeometry);
@@ -503,7 +523,7 @@ fn validate_runtime_geometry(
                 false,
                 u16::try_from(coordinate).map_err(|_| DealerLpHotOperatorErrorV4::Arithmetic)?,
             )
-            .map_err(|_| DealerLpHotOperatorErrorV4::RuntimeGeometry)?;
+            .map_err(DealerLpHotOperatorErrorV4::AccountProfile)?;
         let privileges = rule.privileges();
         let expected_data = usize::try_from(rule.data_length())
             .map_err(|_| DealerLpHotOperatorErrorV4::Arithmetic)?;
@@ -518,7 +538,7 @@ fn validate_runtime_geometry(
         }
         let representative = profile
             .representative(0, coordinate)
-            .map_err(|_| DealerLpHotOperatorErrorV4::RuntimeGeometry)?;
+            .map_err(DealerLpHotOperatorErrorV4::AccountProfile)?;
         if account.account.key
             != runtime_account(state, &injected, representative)?
                 .account

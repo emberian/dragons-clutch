@@ -42,8 +42,7 @@
 //! seed of the Market PDA -- is fixed before the Market address exists.
 
 use dclutch_rational_lifecycle_hot_v3::{
-    RATIONAL_LIFECYCLE_SELECTED_ACTIONS_V6, RationalActionArtifactBytesV1,
-    RationalArtifactReleaseBytesV1, RationalArtifactSelectionV1,
+    RationalActionArtifactBytesV1, RationalArtifactReleaseBytesV1, RationalArtifactSelectionV1,
     RationalLifecycleCompactArtifactInputV6, RationalLifecycleCompactBundleInputV6,
     RationalLifecycleCompactBundleV4, RationalLifecycleProgramSetInputV6,
     RationalLifecycleSelectedAccountProfileInputV5, RationalLifecycleSelectedBundleInputV6,
@@ -270,6 +269,14 @@ pub enum RationalSelectedReleaseErrorV1 {
     Release,
     /// Publication identities or scalars were not exact.
     Publication,
+    /// `dclutch_custody::token_svm` refused; the cause is its own.
+    Token(dclutch_custody::token_svm::Error),
+    /// `dclutch_rational_lifecycle_hot_v3` refused; the cause is its own.
+    RationalLifecycleHot(dclutch_rational_lifecycle_hot_v3::Error),
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    ProgramSetContract(dclutch_market::capability_program::set_v2::ProgramSetErrorV2),
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    CapabilityProgram(dclutch_market::capability_program::Error),
 }
 
 /// Result alias for Rational release compilation.
@@ -281,9 +288,9 @@ pub fn rational_selected_release_v1(
 ) -> Result<RationalSelectedReleaseV1> {
     validate_input(input)?;
     let selection = TokenBehaviorSelectionV2::new(input.realm, input.release_set)
-        .map_err(|_| RationalSelectedReleaseErrorV1::Input)?;
+        .map_err(RationalSelectedReleaseErrorV1::Token)?;
     let lifecycle = encode_rational_lifecycle_policy_v5()
-        .map_err(|_| RationalSelectedReleaseErrorV1::Encoding)?;
+        .map_err(RationalSelectedReleaseErrorV1::RationalLifecycleHot)?;
 
     let mut fixed = Vec::with_capacity(3);
     for action in [
@@ -308,7 +315,7 @@ pub fn rational_selected_release_v1(
             .ok_or(RationalSelectedReleaseErrorV1::Release)?,
         retire_receipt: &compact,
     })
-    .map_err(|_| RationalSelectedReleaseErrorV1::ProgramSet)?;
+    .map_err(RationalSelectedReleaseErrorV1::RationalLifecycleHot)?;
 
     let release = RationalSelectedReleaseV1 {
         fixed,
@@ -402,7 +409,7 @@ impl RationalSelectedReleaseV1 {
             v4::CapabilityProgramV4,
         };
         let set = CapabilityProgramSetV2::decode(&self.program_set)
-            .map_err(|_| RationalSelectedReleaseErrorV1::ProgramSet)?;
+            .map_err(RationalSelectedReleaseErrorV1::ProgramSetContract)?;
         let bytes = self
             .artifact_bytes()
             .ok_or(RationalSelectedReleaseErrorV1::Release)?;
@@ -413,7 +420,7 @@ impl RationalSelectedReleaseV1 {
                 .ok_or(RationalSelectedReleaseErrorV1::Release)?
                 .descriptor,
         )
-        .map_err(|_| RationalSelectedReleaseErrorV1::Release)?;
+        .map_err(RationalSelectedReleaseErrorV1::CapabilityProgram)?;
 
         let mut records = Vec::new();
         records.push(RationalPublicationRecordV1 {
@@ -432,9 +439,9 @@ impl RationalSelectedReleaseV1 {
                     u16::try_from(ordinal)
                         .map_err(|_| RationalSelectedReleaseErrorV1::ProgramSet)?,
                 )
-                .map_err(|_| RationalSelectedReleaseErrorV1::ProgramSet)?;
+                .map_err(RationalSelectedReleaseErrorV1::ProgramSetContract)?;
             let descriptor = CapabilityProgramV4::decode(supplied.descriptor)
-                .map_err(|_| RationalSelectedReleaseErrorV1::Release)?;
+                .map_err(RationalSelectedReleaseErrorV1::CapabilityProgram)?;
             let artifacts = descriptor.artifacts();
             for (label, schema, body) in [
                 (
@@ -499,9 +506,9 @@ fn publish(
         .artifact_bytes()
         .ok_or(RationalSelectedReleaseErrorV1::Release)?;
     let joined = authenticate_rational_release_v1(release.selection(), bytes)
-        .map_err(|_| RationalSelectedReleaseErrorV1::Release)?;
+        .map_err(RationalSelectedReleaseErrorV1::RationalLifecycleHot)?;
     let set = CapabilityProgramSetV2::decode(&release.program_set)
-        .map_err(|_| RationalSelectedReleaseErrorV1::ProgramSet)?;
+        .map_err(RationalSelectedReleaseErrorV1::ProgramSetContract)?;
     let support_count = u32::try_from(
         input
             .coefficients
@@ -573,7 +580,7 @@ fn fixed_lengths(
     let coordinate_count = u32::from(action != LifecycleActionV2::ActivateReceipt);
     let count = usize::from(
         lifecycle_logical_account_count_v3(action, coordinate_count)
-            .map_err(|_| RationalSelectedReleaseErrorV1::Encoding)?,
+            .map_err(RationalSelectedReleaseErrorV1::RationalLifecycleHot)?,
     );
     lengths(input, count)
 }
@@ -642,7 +649,7 @@ fn compile_fixed(
         capacity_profile: input.capacity_profile,
         root_state_bytes: input.root_state_bytes,
     })
-    .map_err(|_| RationalSelectedReleaseErrorV1::Encoding)
+    .map_err(RationalSelectedReleaseErrorV1::RationalLifecycleHot)
 }
 
 fn compile_compact(
@@ -664,13 +671,7 @@ fn compile_compact(
         capacity_profile: input.capacity_profile,
         root_state_bytes: input.root_state_bytes,
     })
-    .map_err(|_| RationalSelectedReleaseErrorV1::Encoding)
-}
-
-/// The canonical action order this release publishes.
-#[must_use]
-pub fn rational_selected_actions_v1() -> [LifecycleActionV2; RATIONAL_SELECTED_ACTION_COUNT_V1] {
-    RATIONAL_LIFECYCLE_SELECTED_ACTIONS_V6
+    .map_err(RationalSelectedReleaseErrorV1::RationalLifecycleHot)
 }
 
 #[cfg(test)]

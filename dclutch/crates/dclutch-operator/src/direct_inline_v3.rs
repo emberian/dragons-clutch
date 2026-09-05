@@ -154,12 +154,12 @@ fn direct_inline_hot_bump_hints_v1(
 ) -> Result<HotBumpHintsV1, Error> {
     let market_account = &fixed_account(state, HOT_MARKET_ACCOUNT_V3)?.account;
     let coordinates = DirectCoordinatesV1::new(market_account.key.to_bytes(), state.generation)
-        .map_err(|_| Error::ArtifactMismatch)?;
+        .map_err(Error::Successor)?;
     let mut lifecycle = [0_u8; 2];
     let mut buyer_maker_root = Pubkey::default();
     for (slot, maker) in lifecycle.iter_mut().zip([seller.maker, buyer.maker]) {
-        let seeds = MakerReplaySeedsV1::new(coordinates, maker.to_bytes())
-            .map_err(|_| Error::ArtifactMismatch)?;
+        let seeds =
+            MakerReplaySeedsV1::new(coordinates, maker.to_bytes()).map_err(Error::Successor)?;
         let (address, bump) = Pubkey::find_program_address(&seeds.as_slices(), trading_program);
         *slot = bump;
         buyer_maker_root = address;
@@ -424,6 +424,8 @@ pub enum DirectInlineTransactionErrorV3 {
     InstructionSequence,
     /// Lookup-table activation, message compilation, or packet sizing refused.
     Routing(crate::versioned::Error),
+    /// `dclutch_trading` refused; the cause is its own.
+    DirectNativeEvidence(dclutch_trading::native_evidence_v3::DirectNativeEvidenceErrorV3),
 }
 
 /// Stable refusal from stale authority, malformed signatures, artifact joins,
@@ -450,6 +452,42 @@ pub enum Error {
     EconomicMismatch,
     /// Checked arithmetic or instruction encoding failed.
     Arithmetic,
+    /// `dclutch_trading` refused; the cause is its own.
+    Successor(dclutch_trading::successor::SuccessorError),
+    /// `dclutch_trading` refused; the cause is its own.
+    DirectExecutionRequest(dclutch_trading::execution_v3::DirectExecutionRequestErrorV3),
+    /// `dclutch_trading` refused; the cause is its own.
+    Direct(dclutch_trading::Error),
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    HotExecution(dclutch_market::capability_program::hot_v3::HotExecutionErrorV3),
+    /// `dclutch_trading` refused; the cause is its own.
+    DirectRegisteredRequest(dclutch_trading::registered_requests_v4::DirectRegisteredRequestErrorV4),
+    /// `dclutch_market` refused; the cause is its own.
+    MarketCore(dclutch_market::Error),
+    /// `dclutch_product::payoff` refused; the cause is its own.
+    ProductBasis(dclutch_product::payoff::runtime_v3::Error),
+    /// `dclutch_product` refused; the cause is its own.
+    ProductRuntime(dclutch_product::Error),
+    /// `dclutch_registry` refused; the cause is its own.
+    Registry(dclutch_registry::Error),
+    /// `dclutch_registry::svm` refused; the cause is its own.
+    RegistrySvm(dclutch_registry::svm::Error),
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    CapabilityProgram(dclutch_market::capability_program::Error),
+    /// `dclutch_market::capability_manifest` refused; the cause is its own.
+    Capability(dclutch_market::capability_manifest::Error),
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    ProgramSet(dclutch_market::capability_program::set_v2::ProgramSetErrorV2),
+    /// `dclutch_trading` refused; the cause is its own.
+    DirectArtifact(dclutch_trading::artifacts_v4::DirectArtifactErrorV4),
+    /// `dclutch_operator` refused; the cause is its own.
+    Observation(crate::observation::ObservationError),
+    /// `dclutch_resolution_core_v3_operator` refused; the cause is its own.
+    ProductGraphObservation(dclutch_resolution_core_v3_operator::product_graph_observation_v3::ProductGraphObservationErrorV3),
+    /// `dclutch_vm::account_profile` refused; the cause is its own.
+    AccountProfile(dclutch_vm::account_profile::v2::Error),
+    /// `dclutch_trading` refused; the cause is its own.
+    DirectNativeEvidence(dclutch_trading::native_evidence_v3::DirectNativeEvidenceErrorV3),
 }
 
 /// Encode the sole canonical Direct V3 InlineOrdinary family request.
@@ -471,15 +509,9 @@ pub fn compile_direct_inline_request_v3(
     }
     let mut output = [0_u8; DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3];
     let body = encode_header_v3(DirectExecutionActionV3::InlineOrdinary, &mut output)
-        .map_err(|_| Error::Arithmetic)?;
-    let seller_message = seller
-        .intent
-        .signed_preimage()
-        .map_err(|_| Error::EconomicMismatch)?;
-    let buyer_message = buyer
-        .intent
-        .signed_preimage()
-        .map_err(|_| Error::EconomicMismatch)?;
+        .map_err(Error::DirectExecutionRequest)?;
+    let seller_message = seller.intent.signed_preimage().map_err(Error::Direct)?;
+    let buyer_message = buyer.intent.signed_preimage().map_err(Error::Direct)?;
     put(body, 0, seller.maker.as_ref())?;
     put(body, 32, &seller_message)?;
     put(
@@ -502,7 +534,7 @@ pub fn compile_direct_inline_request_v3(
         2 * DIRECT_SIGNED_PARTICIPANT_BYTES_V3 + 8,
         &execution_price.to_le_bytes(),
     )?;
-    DirectExecutionRequestV3::decode(&output, u32::MAX).map_err(|_| Error::EconomicMismatch)?;
+    DirectExecutionRequestV3::decode(&output, u32::MAX).map_err(Error::DirectExecutionRequest)?;
     Ok(output)
 }
 
@@ -573,7 +605,7 @@ pub fn build_direct_inline_hot_v4(
         state.generation,
         hash(&root.data).to_bytes(),
     )
-    .map_err(|_| Error::FixedFrameMismatch)?
+    .map_err(Error::HotExecution)?
     .with_bump_hints(HotBumpHintsV1 {
         child_caller,
         ..direct_inline_hot_bump_hints_v1(state, &checked.trading_program, seller, buyer)?
@@ -657,7 +689,7 @@ pub fn build_direct_hot_request_v4(
     let observation = validate_frame(state, checked)?;
     let product = authenticate_product_graph(state)?;
     let decoded = DirectExecutionRequestV3::decode(request, product.outcome_count)
-        .map_err(|_| Error::EconomicMismatch)?;
+        .map_err(Error::DirectExecutionRequest)?;
     let bundle = authenticate_chain_artifacts_v4(state, request, product.outcome_count)?;
     if bundle.action != decoded.action()
         || bundle.request_profile.requires_native_signature() != !signatures.is_empty()
@@ -678,7 +710,7 @@ pub fn build_direct_hot_request_v4(
         state.generation,
         hash(&root.data).to_bytes(),
     )
-    .map_err(|_| Error::FixedFrameMismatch)?
+    .map_err(Error::HotExecution)?
     // Family-neutral: the Market and the capability root are read by every hot
     // action. Family-specific slots stay zero here and search, which is what a
     // builder that does not know the action's lifecycle should do.
@@ -768,7 +800,7 @@ pub fn build_direct_registration_hot_v4(
     }
     let mut encoded = [0_u8; DIRECT_REGISTRATION_REQUEST_BYTES_V3];
     encode_direct_registration_request_v3_atomic(action, request, &mut encoded)
-        .map_err(|_| Error::EconomicMismatch)?;
+        .map_err(Error::DirectRegisteredRequest)?;
     build_direct_hot_request_v4(state, &encoded, core::slice::from_ref(&signature))
 }
 
@@ -789,7 +821,7 @@ pub fn build_direct_registered_cancel_hot_v4(
     let outcome_count = authenticate_product_graph(state)?.outcome_count;
     let mut encoded = [0_u8; DIRECT_REGISTERED_CANCEL_REQUEST_BYTES_V3];
     encode_direct_registered_cancel_request_v3_atomic(request, outcome_count, &mut encoded)
-        .map_err(|_| Error::EconomicMismatch)?;
+        .map_err(Error::DirectRegisteredRequest)?;
     build_direct_hot_request_v4(state, &encoded, core::slice::from_ref(&signature))
 }
 
@@ -809,7 +841,7 @@ pub fn build_direct_registered_expire_hot_v4(
         outcome_count,
         &mut encoded,
     )
-    .map_err(|_| Error::EconomicMismatch)?;
+    .map_err(Error::DirectRegisteredRequest)?;
     build_direct_hot_request_v4(state, &encoded, &[])
 }
 
@@ -872,13 +904,13 @@ pub fn authenticate_direct_hot_chain_v4(
     let product = authenticate_product_graph(state)?;
     let market_state =
         CoreState::decode(&fixed_account(state, HOT_MARKET_ACCOUNT_V3)?.account.data)
-            .map_err(|_| Error::ProductGraphMismatch)?;
+            .map_err(Error::MarketCore)?;
     if market_state.identity.product_record.to_bytes() != product.product_record {
         return Err(Error::ProductGraphMismatch);
     }
     let linked_basis = authenticate_direct_linked_basis_v4(state, product)?;
     let decoded = DirectExecutionRequestV3::decode(request, product.outcome_count)
-        .map_err(|_| Error::EconomicMismatch)?;
+        .map_err(Error::DirectExecutionRequest)?;
     let bundle = authenticate_chain_artifacts_v4(state, request, product.outcome_count)?;
     if bundle.action != decoded.action() {
         return Err(Error::ArtifactMismatch);
@@ -926,14 +958,14 @@ fn authenticate_direct_linked_basis_v4(
         )
         .to_bytes(),
     )?;
-    let basis = ProductBasisV3::decode(linked).map_err(|_| Error::ProductGraphMismatch)?;
+    let basis = ProductBasisV3::decode(linked).map_err(Error::ProductBasis)?;
     let domain = ResultDomainV2::decode(
         &fixed_account(state, HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3)?
             .account
             .data,
     )
-    .map_err(|_| Error::ProductGraphMismatch)?;
-    let semantic = semantic_basis_preimage_v3(linked).map_err(|_| Error::ProductGraphMismatch)?;
+    .map_err(Error::ProductRuntime)?;
+    let semantic = semantic_basis_preimage_v3(linked).map_err(Error::ProductBasis)?;
     let semantic_id = hashv(&[
         SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
         semantic.prefix(),
@@ -976,17 +1008,13 @@ fn authenticate_direct_market_release_v4(
     {
         return Err(Error::FixedFrameMismatch);
     }
-    let market = CoreState::decode(&market_account.data).map_err(|_| Error::ArtifactMismatch)?;
+    let market = CoreState::decode(&market_account.data).map_err(Error::MarketCore)?;
     let expected_market = Pubkey::find_program_address(
         &MarketCoreStateSeedsV2::new(market.identity).as_slices(),
         &core_program.key,
     )
     .0;
-    if market
-        .encode()
-        .map_err(|_| Error::ArtifactMismatch)?
-        .as_slice()
-        != market_account.data
+    if market.encode().map_err(Error::MarketCore)?.as_slice() != market_account.data
         || market.phase != Phase::Open
         || market_account.key != expected_market
         || market.identity.market_id.to_bytes() != market_account.key.to_bytes()
@@ -1008,12 +1036,12 @@ fn authenticate_direct_market_release_v4(
         &registry_program.key,
     )
     .0;
-    let activated = ActivatedExecutionReleaseSetViewV1::decode(&activation.data)
-        .map_err(|_| Error::ArtifactMismatch)?;
+    let activated =
+        ActivatedExecutionReleaseSetViewV1::decode(&activation.data).map_err(Error::Registry)?;
     if activation.key != expected_cache
         || activated
             .execution_release_set_id()
-            .map_err(|_| Error::ArtifactMismatch)?
+            .map_err(Error::Registry)?
             .to_bytes()
             != state.release_set
     {
@@ -1049,11 +1077,11 @@ pub(crate) fn authenticate_direct_role_deployment_v4(
     program: &ObservedAccount,
     programdata: &ObservedAccount,
 ) -> Result<dclutch_registry::ActivatedRoleV1, Error> {
-    let selected = activated.role(role).map_err(|_| Error::ArtifactMismatch)?;
+    let selected = activated.role(role).map_err(Error::Registry)?;
     let observation = direct_deployment_observation_v4(program, programdata, selected.release())?;
     selected
         .authenticate_current_deployment(observation)
-        .map_err(|_| Error::ArtifactMismatch)?;
+        .map_err(Error::Registry)?;
     Ok(selected)
 }
 
@@ -1072,13 +1100,13 @@ pub(crate) fn direct_deployment_observation_v4(
     {
         return Err(Error::ArtifactMismatch);
     }
-    let program_view = ProgramV3View::parse(&program.data).map_err(|_| Error::ArtifactMismatch)?;
+    let program_view = ProgramV3View::parse(&program.data).map_err(Error::RegistrySvm)?;
     let expected =
         Pubkey::find_program_address(&[program.key.as_ref()], &bpf_loader_upgradeable::ID).0;
     if program_view.programdata() != programdata.key.to_bytes() || programdata.key != expected {
         return Err(Error::ArtifactMismatch);
     }
-    let data = ProgramDataV3View::parse(&programdata.data).map_err(|_| Error::ArtifactMismatch)?;
+    let data = ProgramDataV3View::parse(&programdata.data).map_err(Error::RegistrySvm)?;
     DeploymentObservationV1::new(
         program.key.to_bytes(),
         program.owner.to_bytes(),
@@ -1092,7 +1120,7 @@ pub(crate) fn direct_deployment_observation_v4(
         hash(data.elf()).to_bytes(),
         data.upgrade_authority(),
     )
-    .map_err(|_| Error::ArtifactMismatch)
+    .map_err(Error::Registry)
 }
 
 fn authenticate_chain_artifacts_v4<'a>(
@@ -1109,7 +1137,7 @@ fn authenticate_chain_artifacts_v4<'a>(
             .get(..CAPABILITY_ROOT_HEADER_BYTES_V1)
             .ok_or(Error::ArtifactMismatch)?,
     )
-    .map_err(|_| Error::ArtifactMismatch)?;
+    .map_err(Error::CapabilityProgram)?;
     let trading = fixed_account(state, HOT_TRADING_PROGRAM_ACCOUNT_V3)?
         .account
         .key;
@@ -1134,11 +1162,10 @@ fn authenticate_chain_artifacts_v4<'a>(
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         selection.manifest().to_bytes(),
     )?;
-    let manifest =
-        CapabilityManifestV1::decode(manifest_data).map_err(|_| Error::ArtifactMismatch)?;
+    let manifest = CapabilityManifestV1::decode(manifest_data).map_err(Error::Capability)?;
     let entry = manifest
         .entry(selection.entry_index())
-        .map_err(|_| Error::ArtifactMismatch)?;
+        .map_err(Error::Capability)?;
 
     let program_set_data = finalized_record(
         state,
@@ -1153,10 +1180,10 @@ fn authenticate_chain_artifacts_v4<'a>(
         hash(program_set_data).to_bytes(),
         program_set_data,
     )
-    .map_err(|_| Error::ArtifactMismatch)?;
+    .map_err(Error::ProgramSet)?;
     let descriptor_reference = program_set
         .select_descriptor(request)
-        .map_err(|_| Error::ArtifactMismatch)?;
+        .map_err(Error::ProgramSet)?;
     if descriptor_reference.schema().to_bytes() != CAPABILITY_PROGRAM_SCHEMA_ID_V4 {
         return Err(Error::ArtifactMismatch);
     }
@@ -1169,10 +1196,10 @@ fn authenticate_chain_artifacts_v4<'a>(
         descriptor_reference.program().to_bytes(),
     )?;
     let descriptor =
-        CapabilityProgramV4::decode(descriptor_data).map_err(|_| Error::ArtifactMismatch)?;
+        CapabilityProgramV4::decode(descriptor_data).map_err(Error::CapabilityProgram)?;
     descriptor
         .validate_selection(selection, entry)
-        .map_err(|_| Error::ArtifactMismatch)?;
+        .map_err(Error::CapabilityProgram)?;
     let expected_root_bytes = CAPABILITY_ROOT_HEADER_BYTES_V1
         .checked_add(usize::try_from(descriptor.root_state_bytes()).map_err(|_| Error::Arithmetic)?)
         .ok_or(Error::Arithmetic)?;
@@ -1249,7 +1276,7 @@ fn authenticate_chain_artifacts_v4<'a>(
         request,
         outcome_count,
     )
-    .map_err(|_| Error::ArtifactMismatch)
+    .map_err(Error::DirectArtifact)
 }
 
 fn finalized_artifact<'a>(
@@ -1288,7 +1315,7 @@ fn finalized_record<'a>(
             staging_cursor: staging.clone(),
         },
     )
-    .map_err(|_| Error::ArtifactMismatch)?;
+    .map_err(Error::Observation)?;
     if hash(&raw.data).to_bytes() != expected_content {
         return Err(Error::ArtifactMismatch);
     }
@@ -1491,7 +1518,7 @@ pub(crate) fn validate_direct_hot_instruction_sequence_v4(
         return Err(DirectInlineTransactionErrorV3::InstructionSequence);
     }
     let bytes = direct_native_evidence_bytes_v3(action, tail_count)
-        .map_err(|_| DirectInlineTransactionErrorV3::InstructionSequence)?;
+        .map_err(DirectInlineTransactionErrorV3::DirectNativeEvidence)?;
     let header = 2_usize
         .checked_add(
             count
@@ -1528,7 +1555,7 @@ pub(crate) fn validate_direct_hot_instruction_sequence_v4(
         &mut scratch,
         &mut expected,
     )
-    .map_err(|_| DirectInlineTransactionErrorV3::InstructionSequence)?;
+    .map_err(DirectInlineTransactionErrorV3::DirectNativeEvidence)?;
     if native.data != expected {
         return Err(DirectInlineTransactionErrorV3::InstructionSequence);
     }
@@ -1631,7 +1658,7 @@ fn authenticate_product_graph(
         portfolio_raw: account(HOT_PORTFOLIO_RAW_ACCOUNT_V3)?,
         portfolio_staging: account(HOT_PORTFOLIO_RAW_ACCOUNT_V3 + 1)?,
     })
-    .map_err(|_| Error::ProductGraphMismatch)
+    .map_err(Error::ProductGraphObservation)
 }
 
 fn validate_runtime_profile(
@@ -1642,7 +1669,7 @@ fn validate_runtime_profile(
     let profile = bundle.account_profile;
     let expected = profile
         .physical_account_count_with_dynamic_spans(outcome_count, &[])
-        .map_err(|_| Error::RuntimeProfileMismatch)?;
+        .map_err(Error::AccountProfile)?;
     if expected < HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3 || state.runtime_accounts.len() != expected
     {
         return Err(Error::RuntimeProfileMismatch);
@@ -1650,7 +1677,7 @@ fn validate_runtime_profile(
     for (physical_ordinal, account) in state.runtime_accounts.iter().enumerate() {
         let geometry = profile
             .physical_account_geometry_with_dynamic_spans(outcome_count, &[], physical_ordinal)
-            .map_err(|_| Error::RuntimeProfileMismatch)?;
+            .map_err(Error::AccountProfile)?;
         let privileges = geometry.privileges();
         let data_matches = match geometry.data() {
             PhysicalAccountDataGeometryV2::Exact { bytes } => account.account.data.len() == bytes,
@@ -1786,7 +1813,7 @@ fn headerless_registry_native_ed25519_instruction_many(
     signatures: &[[u8; 64]],
 ) -> Result<Instruction, Error> {
     let bytes =
-        direct_native_evidence_bytes_v3(action, tail_count).map_err(|_| Error::ArtifactMismatch)?;
+        direct_native_evidence_bytes_v3(action, tail_count).map_err(Error::DirectNativeEvidence)?;
     let mut scratch = vec![0_u8; bytes];
     let mut data = vec![0_u8; bytes];
     encode_direct_headerless_registry_native_evidence_many_v4_atomic(
@@ -1797,7 +1824,7 @@ fn headerless_registry_native_ed25519_instruction_many(
         &mut scratch,
         &mut data,
     )
-    .map_err(|_| Error::ArtifactMismatch)?;
+    .map_err(Error::DirectNativeEvidence)?;
     Ok(Instruction {
         program_id: ed25519_program::ID,
         accounts: Vec::new(),
@@ -1819,7 +1846,7 @@ fn native_ed25519_instruction(
         signatures,
         &mut data,
     )
-    .map_err(|_| Error::ArtifactMismatch)?;
+    .map_err(Error::DirectNativeEvidence)?;
     Ok(Instruction {
         program_id: ed25519_program::ID,
         accounts: Vec::new(),
@@ -1836,7 +1863,7 @@ fn native_ed25519_instruction_many(
     signatures: &[[u8; 64]],
 ) -> Result<Instruction, Error> {
     let bytes =
-        direct_native_evidence_bytes_v3(action, tail_count).map_err(|_| Error::ArtifactMismatch)?;
+        direct_native_evidence_bytes_v3(action, tail_count).map_err(Error::DirectNativeEvidence)?;
     let mut scratch = vec![0_u8; bytes];
     let mut data = vec![0_u8; bytes];
     encode_direct_native_evidence_many_v3_atomic(
@@ -1848,7 +1875,7 @@ fn native_ed25519_instruction_many(
         &mut scratch,
         &mut data,
     )
-    .map_err(|_| Error::ArtifactMismatch)?;
+    .map_err(Error::DirectNativeEvidence)?;
     Ok(Instruction {
         program_id: ed25519_program::ID,
         accounts: Vec::new(),
@@ -2618,7 +2645,9 @@ mod tests {
             .data = vec![1];
         assert_eq!(
             authenticate_chain_artifacts_v4(&live_staging, &request, 70_001),
-            Err(Error::ArtifactMismatch)
+            Err(Error::Observation(
+                crate::observation::ObservationError::AddressMismatch
+            ))
         );
 
         let mut substituted_descriptor = state;
@@ -2632,7 +2661,9 @@ mod tests {
             .expect("descriptor kind") ^= 1;
         assert_eq!(
             authenticate_chain_artifacts_v4(&substituted_descriptor, &request, 70_001),
-            Err(Error::ArtifactMismatch)
+            Err(Error::Observation(
+                crate::observation::ObservationError::AddressMismatch
+            ))
         );
     }
 
@@ -2767,7 +2798,7 @@ mod tests {
                 70_001,
                 &[],
             ),
-            Err(Error::ArtifactMismatch)
+            Err(Error::DirectNativeEvidence(dclutch_trading::native_evidence_v3::DirectNativeEvidenceErrorV3::SignatureCount))
         );
         assert_eq!(registered_sequence, unchanged);
     }
@@ -2823,7 +2854,7 @@ mod tests {
                 registration,
                 seller.signature,
             ),
-            Err(Error::EconomicMismatch)
+            Err(Error::DirectRegisteredRequest(dclutch_trading::registered_requests_v4::DirectRegisteredRequestErrorV4::InvalidAction))
         );
     }
 
@@ -2884,7 +2915,7 @@ mod tests {
                 70_001,
                 core::slice::from_ref(&seller.signature),
             ),
-            Err(Error::ArtifactMismatch)
+            Err(Error::DirectNativeEvidence(dclutch_trading::native_evidence_v3::DirectNativeEvidenceErrorV3::InvalidCurrentInstruction))
         );
 
         let mut expire = [0_u8; DIRECT_EMPTY_ACTION_REQUEST_BYTES_V3];
@@ -2956,11 +2987,11 @@ mod tests {
         // before either can borrow its otherwise valid InlineOrdinary family.
         assert_eq!(
             build_direct_registered_cancel_hot_v4(&state, terminal, seller.signature),
-            Err(Error::ProductGraphMismatch)
+            Err(Error::ProductGraphObservation(dclutch_resolution_core_v3_operator::product_graph_observation_v3::ProductGraphObservationErrorV3::InvalidRecord))
         );
         assert_eq!(
             build_direct_registered_expire_hot_v4(&state),
-            Err(Error::ProductGraphMismatch)
+            Err(Error::ProductGraphObservation(dclutch_resolution_core_v3_operator::product_graph_observation_v3::ProductGraphObservationErrorV3::InvalidRecord))
         );
     }
 

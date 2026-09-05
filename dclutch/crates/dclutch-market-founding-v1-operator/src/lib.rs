@@ -36,10 +36,16 @@ pub enum GenericMarketFoundingOperatorErrorV1 {
     ArtifactEncoding,
     /// A derived digest, signer seed, or PDA coordinate refused.
     Derivation,
-    /// The supplied capability selection coordinates refused.
-    Selection,
     /// The supplied Market-selected capability manifest refused.
     Manifest,
+    /// `dclutch_market::capability_manifest` refused; the cause is its own.
+    Capability(dclutch_market::capability_manifest::Error),
+    /// `dclutch_market` refused; the cause is its own.
+    MarketCore(dclutch_market::Error),
+    /// `dclutch_registry::release_set` refused; the cause is its own.
+    ReleaseSet(dclutch_registry::release_set::Error),
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    CapabilityProgram(dclutch_market::capability_program::Error),
 }
 
 /// Authenticated artifact whose private fields cannot be caller-authored.
@@ -133,14 +139,14 @@ pub fn construct_generic_founding_root_selection_v1(
     manifest_bytes: &[u8],
 ) -> Result<GenericFoundingRootSelectionV1, GenericMarketFoundingOperatorErrorV1> {
     let manifest = CapabilityManifestV1::decode(manifest_bytes)
-        .map_err(|_| GenericMarketFoundingOperatorErrorV1::Manifest)?;
+        .map_err(GenericMarketFoundingOperatorErrorV1::Capability)?;
     let entry_index = template.capability_entry_index();
     let entry = manifest
         .entry(entry_index)
-        .map_err(|_| GenericMarketFoundingOperatorErrorV1::Manifest)?;
+        .map_err(GenericMarketFoundingOperatorErrorV1::Capability)?;
     let config = template
         .selection_config_id()
-        .map_err(|_| GenericMarketFoundingOperatorErrorV1::ArtifactEncoding)?;
+        .map_err(GenericMarketFoundingOperatorErrorV1::MarketCore)?;
     let selection = CapabilityExecutionSelectionV1::from_bytes(
         entry_index,
         hash(manifest_bytes).to_bytes(),
@@ -148,7 +154,7 @@ pub fn construct_generic_founding_root_selection_v1(
         entry.release_id().to_bytes(),
         config.to_bytes(),
     )
-    .map_err(|_| GenericMarketFoundingOperatorErrorV1::Selection)?;
+    .map_err(GenericMarketFoundingOperatorErrorV1::ReleaseSet)?;
     let header = CapabilityRootHeaderV1::new(
         content(template.release_set().to_bytes())?,
         template.market().to_bytes(),
@@ -159,11 +165,11 @@ pub fn construct_generic_founding_root_selection_v1(
         // not among them.
         SelectedRecordBumpsV1::default(),
     )
-    .map_err(|_| GenericMarketFoundingOperatorErrorV1::Selection)?;
+    .map_err(GenericMarketFoundingOperatorErrorV1::CapabilityProgram)?;
     let capability_root =
         Pubkey::find_program_address(&header.seeds().as_slices(), &trading_program).0;
     let root_identity = Identity::new(capability_root.to_bytes())
-        .map_err(|_| GenericMarketFoundingOperatorErrorV1::Derivation)?;
+        .map_err(GenericMarketFoundingOperatorErrorV1::MarketCore)?;
     let request = GenericFoundingRequestV1::new(
         GenericFoundingStageV1::FoundAndPermit,
         template.funding_count(),
@@ -186,10 +192,10 @@ pub fn construct_generic_founding_root_selection_v1(
         template.projected_resulting_revision(),
         entry_index,
     )
-    .map_err(|_| GenericMarketFoundingOperatorErrorV1::ArtifactEncoding)?;
+    .map_err(GenericMarketFoundingOperatorErrorV1::MarketCore)?;
     if request
         .selection_config_id()
-        .map_err(|_| GenericMarketFoundingOperatorErrorV1::ArtifactEncoding)?
+        .map_err(GenericMarketFoundingOperatorErrorV1::MarketCore)?
         != config
     {
         return Err(GenericMarketFoundingOperatorErrorV1::Derivation);
@@ -215,7 +221,7 @@ pub fn authenticate_generic_market_founding_artifact_v1(
         .try_into()
         .map_err(|_| GenericMarketFoundingOperatorErrorV1::ArtifactEncoding)?;
     let request = GenericFoundingRequestV1::decode(&exact)
-        .map_err(|_| GenericMarketFoundingOperatorErrorV1::ArtifactEncoding)?;
+        .map_err(GenericMarketFoundingOperatorErrorV1::MarketCore)?;
     if request.stage() != GenericFoundingStageV1::FoundAndPermit {
         return Err(GenericMarketFoundingOperatorErrorV1::ArtifactEncoding);
     }
@@ -238,11 +244,11 @@ pub fn construct_generic_market_founding_plan_v1(
     let found = selected.request;
     let open = found
         .with_stage(GenericFoundingStageV1::Open)
-        .map_err(|_| GenericMarketFoundingOperatorErrorV1::ArtifactEncoding)?;
+        .map_err(GenericMarketFoundingOperatorErrorV1::MarketCore)?;
     let found_request = selected.raw;
     let open_request = open
         .encode()
-        .map_err(|_| GenericMarketFoundingOperatorErrorV1::ArtifactEncoding)?;
+        .map_err(GenericMarketFoundingOperatorErrorV1::MarketCore)?;
     let found_request_digest = content(hash(&found_request).to_bytes())?;
     let open_request_digest = content(hash(&open_request).to_bytes())?;
     let (found_authority, found_authority_bump) =
@@ -284,7 +290,7 @@ fn authority(
         request.context().to_bytes(),
         request_digest.to_bytes(),
     )
-    .map_err(|_| GenericMarketFoundingOperatorErrorV1::Derivation)?;
+    .map_err(GenericMarketFoundingOperatorErrorV1::ReleaseSet)?;
     Ok(Pubkey::find_program_address(
         &seeds.as_slices(),
         &trading_program,
@@ -599,7 +605,9 @@ mod tests {
             .expect("wide template");
             assert_eq!(
                 construct_generic_founding_root_selection_v1(trading, wide, &manifest_bytes),
-                Err(GenericMarketFoundingOperatorErrorV1::Manifest),
+                Err(GenericMarketFoundingOperatorErrorV1::Capability(
+                    dclutch_market::capability_manifest::Error::InvalidDependency
+                )),
                 "entry index {index} is outside the manifest"
             );
         }
@@ -645,7 +653,9 @@ mod tests {
                     .get(..manifest_bytes.len() - 1)
                     .expect("truncated manifest"),
             ),
-            Err(GenericMarketFoundingOperatorErrorV1::Manifest)
+            Err(GenericMarketFoundingOperatorErrorV1::Capability(
+                dclutch_market::capability_manifest::Error::InvalidLength
+            ))
         );
     }
 

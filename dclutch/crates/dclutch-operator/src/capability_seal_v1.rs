@@ -60,6 +60,8 @@ pub enum CapabilitySealBuilderErrorV1 {
     SealCoordinate,
     /// The payer is one of the fixed frame's own accounts.
     AliasedPayer,
+    /// `dclutch_vm::capability_seal` refused; the cause is its own.
+    CapabilitySeal(dclutch_vm::capability_seal::Error),
 }
 
 /// Everything one seal instruction needs that cannot be derived from the rest.
@@ -110,7 +112,7 @@ pub fn capability_seal_instruction_v1(
         input.trading_semantic_release,
         input.registry_program.to_bytes(),
     )
-    .map_err(|_| CapabilitySealBuilderErrorV1::ZeroIdentity)?;
+    .map_err(CapabilitySealBuilderErrorV1::CapabilitySeal)?;
     let (seal, bump) =
         Pubkey::find_program_address(&key.seeds().as_slices(), &input.trading_program);
     let stated = input
@@ -143,7 +145,7 @@ pub fn capability_seal_instruction_v1(
         false,
     ));
     let request = CapabilitySealRequestV1::new(input.action, input.descriptor_digest)
-        .map_err(|_| CapabilitySealBuilderErrorV1::ZeroIdentity)?;
+        .map_err(CapabilitySealBuilderErrorV1::CapabilitySeal)?;
     Ok(CapabilitySealInstructionV1 {
         seal,
         bump,
@@ -279,14 +281,18 @@ mod tests {
                 descriptor_digest: [0; 32],
                 ..input(&fixed, payer)
             }),
-            Err(CapabilitySealBuilderErrorV1::ZeroIdentity)
+            Err(CapabilitySealBuilderErrorV1::CapabilitySeal(
+                dclutch_vm::capability_seal::Error::ZeroIdentity
+            ))
         );
         assert_eq!(
             capability_seal_instruction_v1(CapabilitySealInstructionInputV1 {
                 trading_semantic_release: [0; 32],
                 ..input(&fixed, payer)
             }),
-            Err(CapabilitySealBuilderErrorV1::ZeroIdentity)
+            Err(CapabilitySealBuilderErrorV1::CapabilitySeal(
+                dclutch_vm::capability_seal::Error::ZeroIdentity
+            ))
         );
         assert_eq!(
             capability_seal_instruction_v1(input(&fixed, fixed[0])),

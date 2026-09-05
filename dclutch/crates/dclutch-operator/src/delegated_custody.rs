@@ -14,10 +14,12 @@ use solana_program::{
 /// Host-side refusal while deriving one exact delegated Custody CPI.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DelegatedCustodyOperatorErrorV2 {
-    /// The successor request or one of its nested V1 facts refused.
-    Request,
     /// A supplied program/account identity was zero or aliased unsafely.
     Identity,
+    /// `dclutch_custody` refused; the cause is its own.
+    DelegatedCustody(dclutch_custody::DelegatedCustodyErrorV2),
+    /// `dclutch_registry::release_set` refused; the cause is its own.
+    ReleaseSet(dclutch_registry::release_set::Error),
 }
 
 /// External infrastructure identities not already owned by the exact request.
@@ -53,10 +55,10 @@ pub fn delegated_custody_transfer_cpi_v2(
 ) -> Result<Instruction, DelegatedCustodyOperatorErrorV2> {
     request
         .validate()
-        .map_err(|_| DelegatedCustodyOperatorErrorV2::Request)?;
+        .map_err(DelegatedCustodyOperatorErrorV2::DelegatedCustody)?;
     let data = request
         .encode()
-        .map_err(|_| DelegatedCustodyOperatorErrorV2::Request)?;
+        .map_err(DelegatedCustodyOperatorErrorV2::DelegatedCustody)?;
     let custody = request.custody;
     let caller_program = Pubkey::new_from_array(custody.caller_program);
     let market = Pubkey::new_from_array(custody.market);
@@ -94,7 +96,7 @@ pub fn delegated_custody_transfer_cpi_v2(
         custody.context,
         request_digest,
     )
-    .map_err(|_| DelegatedCustodyOperatorErrorV2::Identity)?;
+    .map_err(DelegatedCustodyOperatorErrorV2::ReleaseSet)?;
     let caller_authority =
         Pubkey::find_program_address(&caller_seeds.as_slices(), &caller_program).0;
     let activation = Pubkey::find_program_address(

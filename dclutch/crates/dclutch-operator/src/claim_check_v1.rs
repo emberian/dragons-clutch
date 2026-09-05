@@ -84,14 +84,16 @@ use crate::{
 pub enum ClaimCheckOperatorErrorV1 {
     /// A coordinate was zero, or two that must differ aliased.
     Coordinate,
-    /// Persisted record bytes did not decode.
-    Record,
     /// The record does not live at the address these coordinates derive.
     Address,
     /// The record, escrow, and vault did not describe one market.
     Binding,
     /// The requested burn cannot conserve the observed shards or collateral.
     Conservation,
+    /// `dclutch_claims` refused; the cause is its own.
+    ClaimCheck(dclutch_claims::claim_check_v1::ClaimCheckErrorV1),
+    /// `dclutch_claims` refused; the cause is its own.
+    FractionalClaimCheckConservation(dclutch_claims::fractional_claim_check_conservation_v1::FractionalClaimCheckConservationErrorV1),
 }
 
 /// Where a holder's claim-check and its escrow live.
@@ -124,11 +126,11 @@ pub fn project_claim_check_coordinates_v1(
     owner: &Pubkey,
 ) -> Result<ClaimCheckCoordinatesV1, ClaimCheckOperatorErrorV1> {
     let record_seeds = ClaimCheckSeedsV1::new(aggregate.to_bytes(), owner.to_bytes())
-        .map_err(|_| ClaimCheckOperatorErrorV1::Coordinate)?;
+        .map_err(ClaimCheckOperatorErrorV1::ClaimCheck)?;
     let escrow_seeds = ClaimCheckEscrowSeedsV1::new(aggregate.to_bytes())
-        .map_err(|_| ClaimCheckOperatorErrorV1::Coordinate)?;
+        .map_err(ClaimCheckOperatorErrorV1::ClaimCheck)?;
     let vault_seeds = ClaimCheckVaultSeedsV1::new(aggregate.to_bytes())
-        .map_err(|_| ClaimCheckOperatorErrorV1::Coordinate)?;
+        .map_err(ClaimCheckOperatorErrorV1::ClaimCheck)?;
     Ok(ClaimCheckCoordinatesV1 {
         aggregate: *aggregate,
         owner: *owner,
@@ -167,7 +169,7 @@ pub fn read_claim_check_statement_v1(
     record_lamports: u64,
 ) -> Result<ClaimCheckStatementV1, ClaimCheckOperatorErrorV1> {
     let record =
-        ClaimCheckV1::decode(record_bytes).map_err(|_| ClaimCheckOperatorErrorV1::Record)?;
+        ClaimCheckV1::decode(record_bytes).map_err(ClaimCheckOperatorErrorV1::ClaimCheck)?;
     let coordinates = project_claim_check_coordinates_v1(
         claims_program,
         &Pubkey::new_from_array(record.aggregate),
@@ -223,7 +225,7 @@ pub fn build_claim_check_redemption_v1(
         owner: coordinates.owner.to_bytes(),
     }
     .new()
-    .map_err(|_| ClaimCheckOperatorErrorV1::Coordinate)?;
+    .map_err(ClaimCheckOperatorErrorV1::ClaimCheck)?;
     let addresses = [
         coordinates.owner,
         coordinates.record,
@@ -254,7 +256,7 @@ pub fn build_claim_check_redemption_v1(
             accounts,
             data: request
                 .to_bytes()
-                .map_err(|_| ClaimCheckOperatorErrorV1::Coordinate)?
+                .map_err(ClaimCheckOperatorErrorV1::ClaimCheck)?
                 .to_vec(),
         },
         statement,
@@ -270,23 +272,12 @@ pub fn build_claim_check_redemption_v1(
 /// `wallet_terminal_payout_v3`; the six-account suffix is escrow, claim-check,
 /// admission, RentCredit, opener, and System Program.
 pub const CLAIM_CHECK_COMPACTION_ACCOUNT_COUNT_V1: usize = TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3 + 6;
-/// Escrow suffix coordinate in the compaction frame.
-pub const CLAIM_CHECK_COMPACTION_ESCROW_ACCOUNT_V1: usize = TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3;
-/// Claim-check suffix coordinate in the compaction frame.
-pub const CLAIM_CHECK_COMPACTION_RECORD_ACCOUNT_V1: usize =
-    TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3 + 1;
-/// Position-admission suffix coordinate in the compaction frame.
-pub const CLAIM_CHECK_COMPACTION_ADMISSION_ACCOUNT_V1: usize =
-    TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3 + 2;
 /// RentCredit suffix coordinate in the compaction frame.
 pub const CLAIM_CHECK_COMPACTION_RENT_CREDIT_ACCOUNT_V1: usize =
     TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3 + 3;
 /// Escrow-opener suffix coordinate in the compaction frame.
 pub const CLAIM_CHECK_COMPACTION_OPENER_ACCOUNT_V1: usize =
     TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3 + 4;
-/// System Program suffix coordinate in the compaction frame.
-pub const CLAIM_CHECK_COMPACTION_SYSTEM_ACCOUNT_V1: usize =
-    TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3 + 5;
 
 /// Finalized public state required to turn one sleeping wallet Position into a
 /// durable claim-check.
@@ -334,20 +325,30 @@ pub enum ClaimCheckCompactionOperatorErrorV1 {
     Payout,
     /// A program, PDA, owner, or immutable cross-record join disagreed.
     Binding,
-    /// The escrow record or Position admission refused hostile decoding.
-    Record,
     /// The release-fixed holder grace period has not elapsed.
     Deadline,
     /// The Position owner cannot sign a later claim-check redemption.
     Scope,
-    /// Token, lamport, or rent movement could not conserve.
-    Conservation,
     /// The finalized lookup table was stale, reordered, or not canonical.
     LookupTable,
     /// Versioned-message compilation refused.
     Routing(crate::versioned::Error),
     /// Exact projected poststate could not be produced.
     Postcondition,
+    /// `dclutch_claims` refused; the cause is its own.
+    ClaimCheck(dclutch_claims::claim_check_v1::ClaimCheckErrorV1),
+    /// `dclutch_operator` refused; the cause is its own.
+    ObservationError(crate::observation::ObservationError),
+    /// `dclutch_operator` refused; the cause is its own.
+    ClaimCheckOperator(crate::claim_check_v1::ClaimCheckOperatorErrorV1),
+    /// `dclutch_custody::token_svm` refused; the cause is its own.
+    Token(dclutch_custody::token_svm::Error),
+    /// `dclutch_claims` refused; the cause is its own.
+    ClaimCheckConservation(
+        dclutch_claims::claim_check_conservation_v1::ClaimCheckConservationErrorV1,
+    ),
+    /// `dclutch_claims` refused; the cause is its own.
+    ProtocolPosition(dclutch_claims::protocol_position_v2::ProtocolPositionErrorV2),
 }
 
 /// Slot-independent fields of the claim-check that an accepted crank will
@@ -401,7 +402,7 @@ impl ClaimCheckCompactionExpectedRecordV1 {
             bump: self.bump,
         }
         .new()
-        .map_err(|_| ClaimCheckCompactionOperatorErrorV1::Postcondition)
+        .map_err(ClaimCheckCompactionOperatorErrorV1::ClaimCheck)
     }
 }
 
@@ -437,21 +438,21 @@ pub fn build_claim_check_compaction_v1(
 ) -> Result<ClaimCheckCompactionReportV1, ClaimCheckCompactionOperatorErrorV1> {
     let observation = same_compaction_observation(&snapshot)?;
     let rent = decode_rent(snapshot.rent_sysvar)
-        .map_err(|_| ClaimCheckCompactionOperatorErrorV1::Binding)?;
+        .map_err(ClaimCheckCompactionOperatorErrorV1::ObservationError)?;
     authenticate_compaction_infrastructure(&snapshot)?;
     authenticate_payout_report(snapshot.payout, &snapshot)?;
 
     let request = CompactPositionToClaimCheckRequestV1::new(snapshot.payout.request)
-        .map_err(|_| ClaimCheckCompactionOperatorErrorV1::Payout)?;
+        .map_err(ClaimCheckCompactionOperatorErrorV1::ClaimCheck)?;
     let input = request.input();
     let escrow = ClaimCheckEscrowV1::decode(&snapshot.escrow.data)
-        .map_err(|_| ClaimCheckCompactionOperatorErrorV1::Record)?;
+        .map_err(ClaimCheckCompactionOperatorErrorV1::ClaimCheck)?;
     let coordinates = project_claim_check_coordinates_v1(
         &snapshot.payout.route.claims_program,
         &snapshot.aggregate.key,
         &snapshot.payout.owner,
     )
-    .map_err(|_| ClaimCheckCompactionOperatorErrorV1::Binding)?;
+    .map_err(ClaimCheckCompactionOperatorErrorV1::ClaimCheckOperator)?;
     authenticate_compaction_records(&snapshot, escrow, coordinates)?;
 
     let deadline = escrow
@@ -465,13 +466,13 @@ pub fn build_claim_check_compaction_v1(
     let expected_payout = project_wallet_terminal_payout_postcondition_v3(snapshot.payout)
         .map_err(|_| ClaimCheckCompactionOperatorErrorV1::Postcondition)?;
     let hoard_before = TokenAccount::parse(&snapshot.hoard.data)
-        .map_err(|_| ClaimCheckCompactionOperatorErrorV1::Binding)?;
+        .map_err(ClaimCheckCompactionOperatorErrorV1::Token)?;
     let hoard_after = TokenAccount::parse(&expected_payout.hoard_token_bytes)
-        .map_err(|_| ClaimCheckCompactionOperatorErrorV1::Postcondition)?;
+        .map_err(ClaimCheckCompactionOperatorErrorV1::Token)?;
     let vault_before = TokenAccount::parse(&snapshot.vault.data)
-        .map_err(|_| ClaimCheckCompactionOperatorErrorV1::Binding)?;
+        .map_err(ClaimCheckCompactionOperatorErrorV1::Token)?;
     let vault_after = TokenAccount::parse(&expected_payout.recipient_token_bytes)
-        .map_err(|_| ClaimCheckCompactionOperatorErrorV1::Postcondition)?;
+        .map_err(ClaimCheckCompactionOperatorErrorV1::Token)?;
     let mints_record = vault_after.amount > vault_before.amount;
     let claim_check_rent = if mints_record {
         rent.minimum_balance(CLAIM_CHECK_BYTES_V1)
@@ -494,7 +495,7 @@ pub fn build_claim_check_compaction_v1(
         opener_debt: escrow.opener_outlay,
         crank_reward_cap: COMPACTION_CRANK_REWARD_LAMPORTS_V1,
     })
-    .map_err(|_| ClaimCheckCompactionOperatorErrorV1::Conservation)?;
+    .map_err(ClaimCheckCompactionOperatorErrorV1::ClaimCheckConservation)?;
 
     let mut expected_escrow = ClaimCheckEscrowV1 {
         opener_outlay: conservation.opener_debt_after(),
@@ -503,11 +504,11 @@ pub fn build_claim_check_compaction_v1(
     if conservation.mints_claim_check() {
         expected_escrow = expected_escrow
             .admit_claim_check()
-            .map_err(|_| ClaimCheckCompactionOperatorErrorV1::Postcondition)?;
+            .map_err(ClaimCheckCompactionOperatorErrorV1::ClaimCheck)?;
     }
     let expected_record = if conservation.mints_claim_check() {
         let seeds = ClaimCheckSeedsV1::new(snapshot.aggregate.key.to_bytes(), input.owner)
-            .map_err(|_| ClaimCheckCompactionOperatorErrorV1::Binding)?;
+            .map_err(ClaimCheckCompactionOperatorErrorV1::ClaimCheck)?;
         let (_, bump) =
             Pubkey::find_program_address(&seeds.as_slices(), &snapshot.payout.route.claims_program);
         Some(ClaimCheckCompactionExpectedRecordV1 {
@@ -545,7 +546,7 @@ pub fn build_claim_check_compaction_v1(
             accounts,
             data: request
                 .to_bytes()
-                .map_err(|_| ClaimCheckCompactionOperatorErrorV1::Payout)?
+                .map_err(ClaimCheckCompactionOperatorErrorV1::ClaimCheck)?
                 .to_vec(),
         },
         observation,
@@ -556,7 +557,7 @@ pub fn build_claim_check_compaction_v1(
         conservation,
         expected_escrow_bytes: expected_escrow
             .to_bytes()
-            .map_err(|_| ClaimCheckCompactionOperatorErrorV1::Postcondition)?
+            .map_err(ClaimCheckCompactionOperatorErrorV1::ClaimCheck)?
             .to_vec(),
         expected_record,
         expected_vacant: [snapshot.position.key, snapshot.admission.key],
@@ -754,7 +755,7 @@ pub fn verify_claim_check_compaction_postcondition_v1(
             let bytes = expected
                 .at_slot(post.accepted_slot)?
                 .to_bytes()
-                .map_err(|_| ClaimCheckCompactionOperatorErrorV1::Postcondition)?;
+                .map_err(ClaimCheckCompactionOperatorErrorV1::ClaimCheck)?;
             if post.claim_check.owner != report.payout.route.claims_program
                 || post.claim_check.executable
                 || post.claim_check.data != bytes
@@ -772,9 +773,9 @@ pub fn verify_claim_check_compaction_postcondition_v1(
         }
     }
     let hoard = TokenAccount::parse(post.hoard_token_bytes)
-        .map_err(|_| ClaimCheckCompactionOperatorErrorV1::Postcondition)?;
+        .map_err(ClaimCheckCompactionOperatorErrorV1::Token)?;
     let vault = TokenAccount::parse(post.vault_token_bytes)
-        .map_err(|_| ClaimCheckCompactionOperatorErrorV1::Postcondition)?;
+        .map_err(ClaimCheckCompactionOperatorErrorV1::Token)?;
     report
         .conservation
         .validate_post(ClaimCheckCompactionPostV1 {
@@ -787,7 +788,7 @@ pub fn verify_claim_check_compaction_postcondition_v1(
             hoard_lamports_of_collateral: hoard.amount,
             vault_lamports_of_collateral: vault.amount,
         })
-        .map_err(|_| ClaimCheckCompactionOperatorErrorV1::Postcondition)
+        .map_err(ClaimCheckCompactionOperatorErrorV1::ClaimCheckConservation)
 }
 
 fn same_compaction_observation(
@@ -893,22 +894,22 @@ fn authenticate_compaction_records(
     let report = snapshot.payout;
     let request = report.request.input();
     let admission = ProtocolPositionAdmissionV2::decode(&snapshot.admission.data)
-        .map_err(|_| ClaimCheckCompactionOperatorErrorV1::Record)?;
+        .map_err(ClaimCheckCompactionOperatorErrorV1::ProtocolPosition)?;
     let admission_seeds =
         ProtocolPositionAdmissionSeedsV2::new(snapshot.aggregate.key.to_bytes(), request.owner)
-            .map_err(|_| ClaimCheckCompactionOperatorErrorV1::Binding)?;
+            .map_err(ClaimCheckCompactionOperatorErrorV1::ProtocolPosition)?;
     let expected_admission =
         Pubkey::find_program_address(&admission_seeds.as_slices(), &report.route.claims_program).0;
     let escrow_bump = Pubkey::find_program_address(
         &ClaimCheckEscrowSeedsV1::new(snapshot.aggregate.key.to_bytes())
-            .map_err(|_| ClaimCheckCompactionOperatorErrorV1::Binding)?
+            .map_err(ClaimCheckCompactionOperatorErrorV1::ClaimCheck)?
             .as_slices(),
         &report.route.claims_program,
     );
     let vault = TokenAccount::parse(&snapshot.vault.data)
-        .map_err(|_| ClaimCheckCompactionOperatorErrorV1::Binding)?;
+        .map_err(ClaimCheckCompactionOperatorErrorV1::Token)?;
     let hoard = TokenAccount::parse(&snapshot.hoard.data)
-        .map_err(|_| ClaimCheckCompactionOperatorErrorV1::Binding)?;
+        .map_err(ClaimCheckCompactionOperatorErrorV1::Token)?;
     if snapshot.aggregate.owner != report.route.claims_program
         || snapshot.aggregate.executable
         || snapshot.aggregate.data.is_empty()
@@ -994,11 +995,11 @@ pub fn project_fractional_claim_check_coordinates_v1(
 ) -> Result<FractionalClaimCheckCoordinatesV1, ClaimCheckOperatorErrorV1> {
     let record_seeds =
         FractionalClaimCheckSeedsV1::new(aggregate.to_bytes(), shard_mint.to_bytes())
-            .map_err(|_| ClaimCheckOperatorErrorV1::Coordinate)?;
+            .map_err(ClaimCheckOperatorErrorV1::ClaimCheck)?;
     let escrow_seeds = ClaimCheckEscrowSeedsV1::new(aggregate.to_bytes())
-        .map_err(|_| ClaimCheckOperatorErrorV1::Coordinate)?;
+        .map_err(ClaimCheckOperatorErrorV1::ClaimCheck)?;
     let vault_seeds = ClaimCheckVaultSeedsV1::new(aggregate.to_bytes())
-        .map_err(|_| ClaimCheckOperatorErrorV1::Coordinate)?;
+        .map_err(ClaimCheckOperatorErrorV1::ClaimCheck)?;
     Ok(FractionalClaimCheckCoordinatesV1 {
         aggregate: *aggregate,
         shard_mint: *shard_mint,
@@ -1054,9 +1055,9 @@ pub fn read_fractional_claim_check_statement_v1(
     escrow_bytes: &[u8],
 ) -> Result<FractionalClaimCheckStatementV1, ClaimCheckOperatorErrorV1> {
     let record = FractionalClaimCheckV1::decode(record_bytes)
-        .map_err(|_| ClaimCheckOperatorErrorV1::Record)?;
+        .map_err(ClaimCheckOperatorErrorV1::ClaimCheck)?;
     let escrow =
-        ClaimCheckEscrowV1::decode(escrow_bytes).map_err(|_| ClaimCheckOperatorErrorV1::Record)?;
+        ClaimCheckEscrowV1::decode(escrow_bytes).map_err(ClaimCheckOperatorErrorV1::ClaimCheck)?;
     let coordinates = project_fractional_claim_check_coordinates_v1(
         claims_program,
         &Pubkey::new_from_array(record.aggregate),
@@ -1170,14 +1171,14 @@ pub fn build_fractional_claim_check_redemption_v1(
             record_lamports: statement.recoverable_lamports,
             holder_lamports_before: balances.holder_lamports,
         })
-        .map_err(|_| ClaimCheckOperatorErrorV1::Conservation)?;
+        .map_err(ClaimCheckOperatorErrorV1::FractionalClaimCheckConservation)?;
     let request = FractionalRedeemClaimCheckRequestV1 {
         aggregate: coordinates.aggregate.to_bytes(),
         shard_mint: coordinates.shard_mint.to_bytes(),
         requested_shard_atoms,
     }
     .new()
-    .map_err(|_| ClaimCheckOperatorErrorV1::Coordinate)?;
+    .map_err(ClaimCheckOperatorErrorV1::ClaimCheck)?;
     let addresses = [
         *holder,
         coordinates.record,
@@ -1231,7 +1232,7 @@ pub fn build_fractional_claim_check_redemption_v1(
             accounts,
             data: request
                 .to_bytes()
-                .map_err(|_| ClaimCheckOperatorErrorV1::Coordinate)?
+                .map_err(ClaimCheckOperatorErrorV1::ClaimCheck)?
                 .to_vec(),
         },
         statement,
@@ -1257,7 +1258,7 @@ pub fn build_fractional_claim_check_redemption_v1(
 /// intended: the claim survives, so the collateral has to be somewhere.
 pub fn escrow_is_closeable_v1(escrow_bytes: &[u8]) -> Result<bool, ClaimCheckOperatorErrorV1> {
     Ok(ClaimCheckEscrowV1::decode(escrow_bytes)
-        .map_err(|_| ClaimCheckOperatorErrorV1::Record)?
+        .map_err(ClaimCheckOperatorErrorV1::ClaimCheck)?
         .is_settled())
 }
 
@@ -1274,7 +1275,7 @@ pub fn build_claim_check_escrow_close_v1(
         aggregate: coordinates.aggregate.to_bytes(),
     }
     .new()
-    .map_err(|_| ClaimCheckOperatorErrorV1::Coordinate)?;
+    .map_err(ClaimCheckOperatorErrorV1::ClaimCheck)?;
     Ok(Instruction {
         program_id: *claims_program,
         accounts: Vec::from([
@@ -1311,7 +1312,7 @@ pub fn build_claim_check_escrow_close_v1(
         ]),
         data: request
             .to_bytes()
-            .map_err(|_| ClaimCheckOperatorErrorV1::Coordinate)?
+            .map_err(ClaimCheckOperatorErrorV1::ClaimCheck)?
             .to_vec(),
     })
 }
@@ -2204,7 +2205,7 @@ mod tests {
                 },
                 statement,
             ),
-            Err(ClaimCheckOperatorErrorV1::Conservation)
+            Err(ClaimCheckOperatorErrorV1::FractionalClaimCheckConservation(dclutch_claims::fractional_claim_check_conservation_v1::FractionalClaimCheckConservationErrorV1::NoWholeClaim))
         );
     }
 

@@ -1516,38 +1516,65 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 
 [[package]]
+name = "dclutch-accelerator-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-market",
+ "dclutch-product",
+ "dclutch-refusal-registry",
+ "dclutch-registry",
+ "dclutch-sbf-runtime",
+ "dclutch-sha256-adapter",
+ "dclutch-trading",
+ "dclutch-trading-sbf",
+ "dclutch-vm",
+ "solana-compute-budget-interface",
+ "solana-instructions-sysvar 3.0.1",
+ "solana-program",
+ "solana-sdk-ids",
+]
+
+[[package]]
+name = "dclutch-accelerator-series-program-test"
+version = "0.1.0"
+dependencies = [
+ "dclutch-accelerator-sbf",
+ "dclutch-core-contract",
+ "dclutch-series-shadow-bundle-generator",
+ "sha2 0.10.9",
+ "solana-account 4.6.0",
+ "solana-program",
+ "solana-program-test",
+ "solana-sdk",
+ "solana-sdk-ids",
+]
+
+[[package]]
+name = "dclutch-claims"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-custody",
+ "dclutch-market",
+ "dclutch-product",
+ "dclutch-sha256-adapter",
+ "dclutch-source",
+ "dclutch-vm",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "dclutch-core-contract"
 version = "0.1.0"
 
 [[package]]
-name = "dclutch-direct-aot-contract"
-version = "0.1.0"
-
-[[package]]
-name = "dclutch-direct-relation-cu-harness"
+name = "dclutch-custody"
 version = "0.1.0"
 dependencies = [
- "dclutch-core-contract",
- "dclutch-direct-aot-contract",
  "dclutch-market",
- "solana-hash 4.6.0",
- "solana-message 4.5.0",
- "solana-program",
- "solana-program-test",
- "solana-sdk",
- "solana-transaction 4.2.0",
- "tokio",
-]
-
-[[package]]
-name = "dclutch-direct-relation-twin"
-version = "0.1.0"
-dependencies = [
- "dclutch-core-contract",
- "dclutch-direct-aot-contract",
- "dclutch-market",
- "dclutch-vm",
- "solana-program",
+ "dclutch-registry",
+ "dclutch-sha256-adapter",
 ]
 
 [[package]]
@@ -1561,10 +1588,50 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-product"
+version = "0.1.0"
+dependencies = [
+ "dclutch-market",
+ "dclutch-registry",
+ "dclutch-sha256-adapter",
+ "solana-program",
+ "solana-sdk-ids",
+]
+
+[[package]]
+name = "dclutch-refusal-registry"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-registry"
 version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
+ "solana-program",
+ "solana-sdk-ids",
+]
+
+[[package]]
+name = "dclutch-sbf-runtime"
+version = "0.1.0"
+dependencies = [
+ "solana-program",
+]
+
+[[package]]
+name = "dclutch-series-shadow-bundle-generator"
+version = "0.1.0"
+dependencies = [
+ "dclutch-claims",
+ "dclutch-core-contract",
+ "dclutch-custody",
+ "dclutch-market",
+ "dclutch-product",
+ "dclutch-registry",
+ "dclutch-trading",
+ "dclutch-trading-sbf",
+ "dclutch-vm",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -1573,6 +1640,55 @@ version = "0.1.0"
 dependencies = [
  "sha2 0.10.9",
  "solana-sha256-hasher",
+]
+
+[[package]]
+name = "dclutch-source"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-market",
+ "dclutch-product",
+ "dclutch-registry",
+ "dclutch-sha256-adapter",
+]
+
+[[package]]
+name = "dclutch-trading"
+version = "0.1.0"
+dependencies = [
+ "dclutch-claims",
+ "dclutch-core-contract",
+ "dclutch-custody",
+ "dclutch-market",
+ "dclutch-product",
+ "dclutch-registry",
+ "dclutch-sha256-adapter",
+ "dclutch-vm",
+ "solana-program",
+ "solana-sdk-ids",
+]
+
+[[package]]
+name = "dclutch-trading-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-claims",
+ "dclutch-core-contract",
+ "dclutch-custody",
+ "dclutch-market",
+ "dclutch-product",
+ "dclutch-refusal-registry",
+ "dclutch-registry",
+ "dclutch-sbf-runtime",
+ "dclutch-sha256-adapter",
+ "dclutch-source",
+ "dclutch-trading",
+ "dclutch-vm",
+ "solana-instructions-sysvar 3.0.1",
+ "solana-program",
+ "solana-sdk-ids",
+ "solana-system-interface 2.0.0",
 ]
 
 [[package]]

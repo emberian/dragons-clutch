@@ -96,7 +96,7 @@ pub struct CompiledSplineProductRecordsV3 {
 pub fn spline_basis_output_bytes_v3(input: SplineProductCompilationInputV3<'_>) -> Result<usize> {
     let basis_width = input.failure_payouts.len();
     basis_record_bytes_v3(kind(input), basis_width, input.knots.len(), 0)
-        .map_err(|_| Error::SplineBasis)
+        .map_err(Error::ProductBasis)
 }
 
 /// Compile the Product graph, spline basis, and admitted price-gate pair.
@@ -135,8 +135,8 @@ pub fn compile_spline_product_records_v3(
     };
 
     let mut provisional_basis = vec![0_u8; expected_basis_bytes];
-    compile_basis_v3(basis_input, &mut provisional_basis).map_err(|_| Error::SplineBasis)?;
-    let provisional = ProductBasisV3::decode(&provisional_basis).map_err(|_| Error::SplineBasis)?;
+    compile_basis_v3(basis_input, &mut provisional_basis).map_err(Error::ProductBasis)?;
+    let provisional = ProductBasisV3::decode(&provisional_basis).map_err(Error::ProductBasis)?;
     let verified_price_gate = verify_price_gate_v1(
         &provisional,
         input.knot_denominator,
@@ -145,7 +145,7 @@ pub fn compile_spline_product_records_v3(
         basis_width,
         input.price_gate_certificate,
     )
-    .map_err(|_| Error::PriceGate)?;
+    .map_err(Error::ProductBasis)?;
     let semantic_basis_id = derive_semantic_basis_id(&provisional_basis)?;
 
     let mut candidate_product = vec![0_u8; product_output.len()];
@@ -179,8 +179,8 @@ pub fn compile_spline_product_records_v3(
         },
         &mut candidate_basis,
     )
-    .map_err(|_| Error::SplineBasis)?;
-    let linked = ProductBasisV3::decode(&candidate_basis).map_err(|_| Error::SplineBasis)?;
+    .map_err(Error::ProductBasis)?;
+    let linked = ProductBasisV3::decode(&candidate_basis).map_err(Error::ProductBasis)?;
     if linked.product_id() != input.product_id.to_bytes()
         || linked.result_domain_id() != product.receipt.result_domain.content_digest.to_bytes()
         || linked.coordinate_domain_id() != input.coordinate_domain_id.to_bytes()
@@ -198,7 +198,7 @@ pub fn compile_spline_product_records_v3(
         basis_width,
         input.price_gate_certificate,
     )
-    .map_err(|_| Error::PriceGate)?;
+    .map_err(Error::ProductBasis)?;
 
     let linked_basis = coordinate(
         registry_program,
@@ -232,7 +232,7 @@ fn kind(input: SplineProductCompilationInputV3<'_>) -> BasisKindV3 {
 }
 
 fn derive_semantic_basis_id(bytes: &[u8]) -> Result<ContentId> {
-    let semantic = semantic_basis_preimage_v3(bytes).map_err(|_| Error::SplineBasis)?;
+    let semantic = semantic_basis_preimage_v3(bytes).map_err(Error::ProductBasis)?;
     ContentId::new(
         hashv(&[
             SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
@@ -241,7 +241,7 @@ fn derive_semantic_basis_id(bytes: &[u8]) -> Result<ContentId> {
         ])
         .to_bytes(),
     )
-    .map_err(|_| Error::SplineBasis)
+    .map_err(Error::ProductRuntime)
 }
 
 #[cfg(test)]
@@ -398,7 +398,9 @@ mod tests {
                 &mut portfolio,
                 &mut basis,
             ),
-            Err(Error::PriceGate)
+            Err(Error::ProductBasis(
+                dclutch_product::payoff::runtime_v3::Error::PriceGatePriceNotPartition
+            ))
         );
         assert_eq!((product, domain, portfolio, basis), before);
     }
@@ -423,7 +425,9 @@ mod tests {
                 &mut portfolio,
                 &mut basis,
             ),
-            Err(Error::SplineBasis)
+            Err(Error::ProductBasis(
+                dclutch_product::payoff::runtime_v3::Error::SplineWidthDerivationMismatch
+            ))
         );
         assert_eq!((product, domain, portfolio, basis), before);
     }

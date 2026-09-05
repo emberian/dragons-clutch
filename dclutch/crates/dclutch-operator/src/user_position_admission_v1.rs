@@ -176,6 +176,30 @@ pub enum UserPositionAdmissionPlanErrorV1 {
     InsufficientOwnerLamports,
     /// Canonical child/outer request or caller-authority construction refused.
     InvalidRequest,
+    /// `dclutch_operator` refused; the cause is its own.
+    Observation(crate::observation::ObservationError),
+    /// `dclutch_registry` refused; the cause is its own.
+    Registry(dclutch_registry::Error),
+    /// `dclutch_registry::svm` refused; the cause is its own.
+    RegistrySvm(dclutch_registry::svm::Error),
+    /// `dclutch_claims` refused; the cause is its own.
+    LiabilityBasisState(dclutch_claims::liability_basis_state_v2::LiabilityBasisStateErrorV2),
+    /// `dclutch_product::admission` refused; the cause is its own.
+    ProductRuntimeAdmission(dclutch_product::admission::Error),
+    /// `dclutch_product` refused; the cause is its own.
+    ProductRuntime(dclutch_product::Error),
+    /// `dclutch_product::payoff` refused; the cause is its own.
+    ProductBasis(dclutch_product::payoff::runtime_v3::Error),
+    /// `dclutch_market` refused; the cause is its own.
+    MarketCore(dclutch_market::Error),
+    /// `dclutch_market::rent` refused; the cause is its own.
+    LifecycleRent(dclutch_market::rent::lifecycle_v2::LifecycleRentErrorV2),
+    /// `dclutch_claims` refused; the cause is its own.
+    ProtocolPosition(dclutch_claims::protocol_position_v2::ProtocolPositionErrorV2),
+    /// `dclutch_claims::position_admission` refused; the cause is its own.
+    UserPositionAdmission(dclutch_claims::position_admission::UserPositionAdmissionErrorV1),
+    /// `dclutch_registry::release_set` refused; the cause is its own.
+    ReleaseSet(dclutch_registry::release_set::Error),
 }
 
 #[derive(Clone, Copy)]
@@ -196,7 +220,7 @@ pub fn plan_user_position_admission_v1(
     }
     let observation = same_finalized_observation(snapshot)?;
     let rent = decode_rent(&snapshot.rent_sysvar)
-        .map_err(|_| UserPositionAdmissionPlanErrorV1::InvalidInfrastructure)?;
+        .map_err(UserPositionAdmissionPlanErrorV1::Observation)?;
     authenticate_infrastructure(snapshot)?;
     let activated = authenticate_release_cache(snapshot)?;
     for (role, program, programdata) in [
@@ -310,10 +334,10 @@ fn authenticate_release_cache<'a>(
         return Err(UserPositionAdmissionPlanErrorV1::InvalidRelease);
     }
     let activated = ActivatedExecutionReleaseSetViewV1::decode(&cache.data)
-        .map_err(|_| UserPositionAdmissionPlanErrorV1::InvalidRelease)?;
+        .map_err(UserPositionAdmissionPlanErrorV1::Registry)?;
     let release_set = activated
         .execution_release_set_id()
-        .map_err(|_| UserPositionAdmissionPlanErrorV1::InvalidRelease)?;
+        .map_err(UserPositionAdmissionPlanErrorV1::Registry)?;
     let expected = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, release_set.as_bytes()],
         &snapshot.registry_program.key,
@@ -333,11 +357,11 @@ pub(crate) fn authenticate_role_deployment(
 ) -> Result<(), UserPositionAdmissionPlanErrorV1> {
     let selected = activated
         .role(role)
-        .map_err(|_| UserPositionAdmissionPlanErrorV1::InvalidRelease)?;
+        .map_err(UserPositionAdmissionPlanErrorV1::Registry)?;
     let observation = deployment_observation(program, programdata, selected.release())?;
     selected
         .authenticate_current_deployment(observation)
-        .map_err(|_| UserPositionAdmissionPlanErrorV1::InvalidRelease)
+        .map_err(UserPositionAdmissionPlanErrorV1::Registry)
 }
 
 pub(crate) fn deployment_observation(
@@ -356,14 +380,14 @@ pub(crate) fn deployment_observation(
         return Err(UserPositionAdmissionPlanErrorV1::InvalidRelease);
     }
     let program_view = ProgramV3View::parse(&program.data)
-        .map_err(|_| UserPositionAdmissionPlanErrorV1::InvalidRelease)?;
+        .map_err(UserPositionAdmissionPlanErrorV1::RegistrySvm)?;
     let derived =
         Pubkey::find_program_address(&[program.key.as_ref()], &bpf_loader_upgradeable::ID).0;
     if program_view.programdata() != programdata.key.to_bytes() || programdata.key != derived {
         return Err(UserPositionAdmissionPlanErrorV1::InvalidRelease);
     }
     let data = ProgramDataV3View::parse(&programdata.data)
-        .map_err(|_| UserPositionAdmissionPlanErrorV1::InvalidRelease)?;
+        .map_err(UserPositionAdmissionPlanErrorV1::RegistrySvm)?;
     DeploymentObservationV1::new(
         program.key.to_bytes(),
         program.owner.to_bytes(),
@@ -377,7 +401,7 @@ pub(crate) fn deployment_observation(
         hash(data.elf()).to_bytes(),
         data.upgrade_authority(),
     )
-    .map_err(|_| UserPositionAdmissionPlanErrorV1::InvalidRelease)
+    .map_err(UserPositionAdmissionPlanErrorV1::Registry)
 }
 
 fn authenticate_claims_market(
@@ -392,7 +416,7 @@ fn authenticate_claims_market(
         return Err(UserPositionAdmissionPlanErrorV1::InvalidClaimsMarket);
     }
     let market = LiabilityBasisMarketViewV2::decode(&account.data)
-        .map_err(|_| UserPositionAdmissionPlanErrorV1::InvalidClaimsMarket)?;
+        .map_err(UserPositionAdmissionPlanErrorV1::LiabilityBasisState)?;
     let expected = Pubkey::find_program_address(
         &[
             LIABILITY_BASIS_MARKET_SEED_V2,
@@ -403,7 +427,7 @@ fn authenticate_claims_market(
     .0;
     let release_set = activated
         .execution_release_set_id()
-        .map_err(|_| UserPositionAdmissionPlanErrorV1::InvalidRelease)?;
+        .map_err(UserPositionAdmissionPlanErrorV1::Registry)?;
     if account.key != expected
         || market.registry_program != snapshot.registry_program.key.to_bytes()
         || market.release_set != release_set.to_bytes()
@@ -446,7 +470,7 @@ fn authenticate_product_graph(
                 staging_cursor: staging.clone(),
             },
         )
-        .map_err(|_| UserPositionAdmissionPlanErrorV1::InvalidProductGraph)?;
+        .map_err(UserPositionAdmissionPlanErrorV1::Observation)?;
     }
 
     let receipt = AdmissionReceiptV2 {
@@ -463,13 +487,13 @@ fn authenticate_product_graph(
         &snapshot.result_domain_raw.data,
         &snapshot.portfolio_raw.data,
     )
-    .map_err(|_| UserPositionAdmissionPlanErrorV1::InvalidProductGraph)?;
+    .map_err(UserPositionAdmissionPlanErrorV1::ProductRuntimeAdmission)?;
     let domain = ResultDomainV2::decode(&snapshot.result_domain_raw.data)
-        .map_err(|_| UserPositionAdmissionPlanErrorV1::InvalidProductGraph)?;
+        .map_err(UserPositionAdmissionPlanErrorV1::ProductRuntime)?;
     let basis = ProductBasisV3::decode(&snapshot.linked_basis_raw.data)
-        .map_err(|_| UserPositionAdmissionPlanErrorV1::InvalidProductGraph)?;
+        .map_err(UserPositionAdmissionPlanErrorV1::ProductBasis)?;
     let semantic = semantic_basis_preimage_v3(&snapshot.linked_basis_raw.data)
-        .map_err(|_| UserPositionAdmissionPlanErrorV1::InvalidProductGraph)?;
+        .map_err(UserPositionAdmissionPlanErrorV1::ProductBasis)?;
     let semantic_basis_id = hashv(&[
         SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
         semantic.prefix(),
@@ -517,7 +541,7 @@ fn finalized_coordinate(
             .0
             .to_bytes(),
         )
-        .map_err(|_| UserPositionAdmissionPlanErrorV1::InvalidProductGraph)?,
+        .map_err(UserPositionAdmissionPlanErrorV1::ProductRuntime)?,
     })
 }
 
@@ -533,8 +557,8 @@ fn authenticate_core_market(
     {
         return Err(UserPositionAdmissionPlanErrorV1::InvalidCoreMarket);
     }
-    let core = CoreState::decode(&account.data)
-        .map_err(|_| UserPositionAdmissionPlanErrorV1::InvalidCoreMarket)?;
+    let core =
+        CoreState::decode(&account.data).map_err(UserPositionAdmissionPlanErrorV1::MarketCore)?;
     let expected = Pubkey::find_program_address(
         &MarketCoreStateSeedsV2::new(core.identity).as_slices(),
         &snapshot.core_program.key,
@@ -565,7 +589,7 @@ fn authenticate_rent_credit(
     market: LiabilityBasisMarketViewV2,
 ) -> Result<(), UserPositionAdmissionPlanErrorV1> {
     let credit = LifecycleRentCreditV2::decode(&snapshot.rent_credit.data)
-        .map_err(|_| UserPositionAdmissionPlanErrorV1::InvalidRentCredit)?;
+        .map_err(UserPositionAdmissionPlanErrorV1::LifecycleRent)?;
     if snapshot.rent_credit.owner != snapshot.rent_program.key
         || snapshot.rent_credit.executable
         || !funded_rent_persists_v1(snapshot.rent_credit.lamports)
@@ -602,12 +626,12 @@ fn authenticate_vacancy(
         snapshot.claims_market.key.to_bytes(),
         snapshot.owner.key.to_bytes(),
     )
-    .map_err(|_| UserPositionAdmissionPlanErrorV1::InvalidVacancy)?;
+    .map_err(UserPositionAdmissionPlanErrorV1::ProtocolPosition)?;
     let admission_seeds = ProtocolPositionAdmissionSeedsV2::new(
         snapshot.claims_market.key.to_bytes(),
         snapshot.owner.key.to_bytes(),
     )
-    .map_err(|_| UserPositionAdmissionPlanErrorV1::InvalidVacancy)?;
+    .map_err(UserPositionAdmissionPlanErrorV1::ProtocolPosition)?;
     let expected_position =
         Pubkey::find_program_address(&position_seeds.as_slices(), &snapshot.claims_program.key).0;
     let expected_admission =
@@ -695,12 +719,12 @@ fn assemble_plan(
         capability_descriptor: [0; 32],
         capability_outcome: 0,
     })
-    .map_err(|_| UserPositionAdmissionPlanErrorV1::InvalidRequest)?;
+    .map_err(UserPositionAdmissionPlanErrorV1::ProtocolPosition)?;
     let outer = UserPositionAdmissionRequestV1::new(claims_request)
-        .map_err(|_| UserPositionAdmissionPlanErrorV1::InvalidRequest)?;
+        .map_err(UserPositionAdmissionPlanErrorV1::UserPositionAdmission)?;
     let child = outer
         .claims_request_bytes()
-        .map_err(|_| UserPositionAdmissionPlanErrorV1::InvalidRequest)?;
+        .map_err(UserPositionAdmissionPlanErrorV1::UserPositionAdmission)?;
     let claims_request_digest = hash(&child).to_bytes();
     let authority_seeds = CallerAuthoritySeedsV1::from_bytes(
         market.release_set,
@@ -709,7 +733,7 @@ fn assemble_plan(
         snapshot.owner.key.to_bytes(),
         claims_request_digest,
     )
-    .map_err(|_| UserPositionAdmissionPlanErrorV1::InvalidRequest)?;
+    .map_err(UserPositionAdmissionPlanErrorV1::ReleaseSet)?;
     let caller_authority =
         Pubkey::find_program_address(&authority_seeds.as_slices(), &snapshot.trading_program.key).0;
     let frame_keys = [
@@ -749,7 +773,7 @@ fn assemble_plan(
     for (index, key) in frame_keys.into_iter().enumerate() {
         let privileges = frame
             .privileges(index)
-            .map_err(|_| UserPositionAdmissionPlanErrorV1::InvalidRequest)?;
+            .map_err(UserPositionAdmissionPlanErrorV1::UserPositionAdmission)?;
         accounts.push(if privileges.writable() {
             AccountMeta::new(key, privileges.signer())
         } else {
@@ -758,7 +782,7 @@ fn assemble_plan(
     }
     let outer_data = outer
         .to_bytes()
-        .map_err(|_| UserPositionAdmissionPlanErrorV1::InvalidRequest)?;
+        .map_err(UserPositionAdmissionPlanErrorV1::UserPositionAdmission)?;
     let trading_instruction = Instruction {
         program_id: snapshot.trading_program.key,
         accounts,
@@ -795,7 +819,7 @@ fn assemble_plan(
         },
     )
     .and_then(ProtocolPositionAdmissionV2::to_receipt_bytes)
-    .map_err(|_| UserPositionAdmissionPlanErrorV1::InvalidRequest)?;
+    .map_err(UserPositionAdmissionPlanErrorV1::ProtocolPosition)?;
     Ok(UserPositionAdmissionPlanV1 {
         instructions,
         required_signer: snapshot.owner.key,

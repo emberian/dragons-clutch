@@ -532,7 +532,7 @@ impl GeneralSelectedReleaseV1 {
     /// _record`).
     pub fn publication_records(&self) -> Result<Vec<GeneralPublicationRecordV1<'_>>> {
         let set = CapabilityProgramSetV2::decode(&self.program_set)
-            .map_err(|_| GeneralSelectedReleaseErrorV1::ProgramSet)?;
+            .map_err(GeneralSelectedReleaseErrorV1::ProgramSetContract)?;
         let first = CapabilityProgramV4::decode(
             &self
                 .bundles
@@ -540,7 +540,7 @@ impl GeneralSelectedReleaseV1 {
                 .ok_or(GeneralSelectedReleaseErrorV1::Release)?
                 .descriptor,
         )
-        .map_err(|_| GeneralSelectedReleaseErrorV1::Release)?;
+        .map_err(GeneralSelectedReleaseErrorV1::CapabilityProgram)?;
 
         let mut records = Vec::new();
         records.push(GeneralPublicationRecordV1 {
@@ -557,11 +557,11 @@ impl GeneralSelectedReleaseV1 {
         for (index, bundle) in self.bundles.iter().enumerate() {
             let entry = set
                 .entry(u16::try_from(index).map_err(|_| GeneralSelectedReleaseErrorV1::ProgramSet)?)
-                .map_err(|_| GeneralSelectedReleaseErrorV1::ProgramSet)?;
+                .map_err(GeneralSelectedReleaseErrorV1::ProgramSetContract)?;
             let descriptor = CapabilityProgramV4::decode(&bundle.descriptor)
-                .map_err(|_| GeneralSelectedReleaseErrorV1::Release)?;
+                .map_err(GeneralSelectedReleaseErrorV1::CapabilityProgram)?;
             let strategy = ExecutionStrategyProgramV2::decode(&bundle.strategy)
-                .map_err(|_| GeneralSelectedReleaseErrorV1::Release)?;
+                .map_err(GeneralSelectedReleaseErrorV1::ExecutionStrategy)?;
             let artifacts = descriptor.artifacts();
             for (label, schema, body) in [
                 (
@@ -626,7 +626,7 @@ impl GeneralSelectedReleaseV1 {
         // authenticates both under constants of its own.
         let activation_entry = set
             .entry(activation_entry_index()?)
-            .map_err(|_| GeneralSelectedReleaseErrorV1::ProgramSet)?;
+            .map_err(GeneralSelectedReleaseErrorV1::ProgramSetContract)?;
         for (label, schema, body) in [
             (
                 "activation-account-profile",
@@ -692,6 +692,38 @@ pub enum GeneralSelectedReleaseErrorV1 {
     Activation,
     /// Publication identities or scalars were not exact.
     Publication,
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    ProgramSetContract(dclutch_market::capability_program::set_v2::ProgramSetErrorV2),
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    CapabilityProgram(dclutch_market::capability_program::Error),
+    /// `dclutch_market::execution_strategy` refused; the cause is its own.
+    ExecutionStrategy(dclutch_market::execution_strategy::v2::Error),
+    /// `dclutch_trading::general` refused; the cause is its own.
+    GeneralActivationBundle(
+        dclutch_trading::general::activation_bundle_v1::GeneralActivationBundleErrorV1,
+    ),
+    /// `dclutch_trading::general_config` refused; the cause is its own.
+    GeneralConfig(dclutch_trading::general_config::v3::GeneralConfigErrorV3),
+    /// `dclutch_registry::release_set` refused; the cause is its own.
+    ReleaseSet(dclutch_registry::release_set::Error),
+    /// `dclutch_trading::general` refused; the cause is its own.
+    GeneralAccountRule(
+        dclutch_trading::general::account_rules_v3::GeneralAccountRuleErrorV3,
+    ),
+    /// `dclutch_trading::general` refused; the cause is its own.
+    GeneralStateArtifact(
+        dclutch_trading::general::state_artifacts_v3::GeneralStateArtifactErrorV3,
+    ),
+    /// `dclutch_trading::general` refused; the cause is its own.
+    GeneralTransitionArtifact(
+        dclutch_trading::general::transition_artifacts_v3::GeneralTransitionArtifactErrorV3,
+    ),
+    /// `dclutch_trading::general` refused; the cause is its own.
+    GeneralEffectArtifact(
+        dclutch_trading::general::effect_artifacts_v3::GeneralEffectArtifactErrorV3,
+    ),
+    /// `dclutch_trading::general_codec` refused; the cause is its own.
+    General(dclutch_trading::general_codec::Error),
 }
 
 /// Result alias for General release compilation.
@@ -809,7 +841,7 @@ pub fn validate_general_selected_release_v1(
             funding_ledger_slot_count: GENERAL_SELECTED_FUNDING_LEDGER_SLOTS_V1,
         },
     )
-    .map_err(|_| GeneralSelectedReleaseErrorV1::Activation)?;
+    .map_err(GeneralSelectedReleaseErrorV1::GeneralActivationBundle)?;
 
     if release.program_set != encode_program_set(&descriptors, release.activation.descriptor_id)?
         || release.config != encode_config(input, digest(&release.program_set))?
@@ -821,7 +853,7 @@ pub fn validate_general_selected_release_v1(
     // the published table is one a live controller request actually routes
     // through rather than one that merely encoded.
     let set = CapabilityProgramSetV2::decode(&release.program_set)
-        .map_err(|_| GeneralSelectedReleaseErrorV1::ProgramSet)?;
+        .map_err(GeneralSelectedReleaseErrorV1::ProgramSetContract)?;
     if set.selector_offset() != GENERAL_CONTROLLER_ACTION_SELECTOR_OFFSET_V3
         || set.selector_width() != SelectorWidthV2::U8
         || usize::from(set.entry_count()) != GENERAL_SELECTED_ENTRY_COUNT_V1
@@ -835,9 +867,9 @@ pub fn validate_general_selected_release_v1(
     let activation_selected = set
         .select_descriptor(
             &general_activation_request_v1()
-                .map_err(|_| GeneralSelectedReleaseErrorV1::Activation)?,
+                .map_err(GeneralSelectedReleaseErrorV1::GeneralActivationBundle)?,
         )
-        .map_err(|_| GeneralSelectedReleaseErrorV1::ProgramSet)?;
+        .map_err(GeneralSelectedReleaseErrorV1::ProgramSetContract)?;
     if activation_selected.program().to_bytes() != release.activation.descriptor_id
         || activation_selected.schema().to_bytes() != general_activation_descriptor_schema_v1()
     {
@@ -847,7 +879,7 @@ pub fn validate_general_selected_release_v1(
         let probe = action_selector_probe(action)?;
         let selected = set
             .select_descriptor(&probe)
-            .map_err(|_| GeneralSelectedReleaseErrorV1::ProgramSet)?;
+            .map_err(GeneralSelectedReleaseErrorV1::ProgramSetContract)?;
         let expected = *descriptors
             .get(index)
             .ok_or(GeneralSelectedReleaseErrorV1::ProgramSet)?;
@@ -1028,7 +1060,7 @@ fn encode_program_set(
         previous = Some(selector);
     }
     build_general_activation_capable_program_set_v2(descriptors, activation_descriptor_id)
-        .map_err(|_| GeneralSelectedReleaseErrorV1::ProgramSet)
+        .map_err(GeneralSelectedReleaseErrorV1::GeneralActivationBundle)
 }
 
 /// The ONE descriptor every entry-authored coordinate may be read from.
@@ -1056,10 +1088,10 @@ pub fn general_selected_entry_descriptor_v1(release: &GeneralSelectedReleaseV1) 
         .first()
         .ok_or(GeneralSelectedReleaseErrorV1::Release)?;
     let decoded = CapabilityProgramV4::decode(&first.descriptor)
-        .map_err(|_| GeneralSelectedReleaseErrorV1::Release)?;
+        .map_err(GeneralSelectedReleaseErrorV1::CapabilityProgram)?;
     for bundle in &release.bundles {
         let other = CapabilityProgramV4::decode(&bundle.descriptor)
-            .map_err(|_| GeneralSelectedReleaseErrorV1::Release)?;
+            .map_err(GeneralSelectedReleaseErrorV1::CapabilityProgram)?;
         if other.kind() != decoded.kind()
             || other.capacity_profile() != decoded.capacity_profile()
             || other.root_schema() != decoded.root_schema()
@@ -1097,7 +1129,7 @@ fn compile_activation(bundles: &[GeneralSelectedBundleV1]) -> Result<ActivationB
         action_descriptor: &first_action_descriptor(bundles)?,
         funding_ledger_slot_count: GENERAL_SELECTED_FUNDING_LEDGER_SLOTS_V1,
     })
-    .map_err(|_| GeneralSelectedReleaseErrorV1::Activation)
+    .map_err(GeneralSelectedReleaseErrorV1::GeneralActivationBundle)
 }
 
 /// The set index of the activation coordinate: after every action entry.
@@ -1125,7 +1157,7 @@ fn encode_config(
         selection_policy_id: input.selection_policy,
         quote_surplus_beneficiary: input.quote_surplus_beneficiary,
     })
-    .map_err(|_| GeneralSelectedReleaseErrorV1::Encoding)?
+    .map_err(GeneralSelectedReleaseErrorV1::GeneralConfig)?
     .to_bytes()
     .to_vec())
 }
@@ -1149,7 +1181,7 @@ fn compile_bundle(
         content(digest(&transition))?,
         content(digest(&effect))?,
         ArtifactReleaseIdV1::new(input.deployment.accelerator_artifact_release)
-            .map_err(|_| GeneralSelectedReleaseErrorV1::Input)?,
+            .map_err(GeneralSelectedReleaseErrorV1::ReleaseSet)?,
         content(input.deployment.compiler_release)?,
         content(input.deployment.toolchain)?,
         content(input.deployment.translation_validation)?,
@@ -1173,7 +1205,7 @@ fn compile_bundle(
         content(ACCELERATOR_REQUEST_SCHEMA_ID_V2)?,
         content(ACCELERATOR_ACK_SCHEMA_ID_V2)?,
     )
-    .map_err(|_| GeneralSelectedReleaseErrorV1::Encoding)?
+    .map_err(GeneralSelectedReleaseErrorV1::ExecutionStrategy)?
     .to_bytes()
     .to_vec();
 
@@ -1212,7 +1244,7 @@ fn compile_bundle(
         },
         u32::try_from(GENERAL_ROOT_BYTES_V2).map_err(|_| GeneralSelectedReleaseErrorV1::Input)?,
     )
-    .map_err(|_| GeneralSelectedReleaseErrorV1::Encoding)?
+    .map_err(GeneralSelectedReleaseErrorV1::CapabilityProgram)?
     .encode()
     .to_vec();
 
@@ -1235,11 +1267,11 @@ fn encode_account_profile(
     action: Action,
 ) -> Result<Vec<u8>> {
     let bytes = general_account_profile_bytes_v3(action)
-        .map_err(|_| GeneralSelectedReleaseErrorV1::Encoding)?;
+        .map_err(GeneralSelectedReleaseErrorV1::GeneralAccountRule)?;
     let mut scratch = vec![0_u8; bytes];
     let mut output = vec![0_u8; bytes];
     encode_general_account_profile_v3_atomic(action, widths, &mut scratch, &mut output)
-        .map_err(|_| GeneralSelectedReleaseErrorV1::Encoding)?;
+        .map_err(GeneralSelectedReleaseErrorV1::GeneralAccountRule)?;
     Ok(output)
 }
 
@@ -1264,9 +1296,9 @@ fn encode_lifecycle(input: GeneralSelectedReleaseInputV1) -> Result<Vec<u8>> {
     let mut output = vec![0_u8; bytes];
     let child_widths =
         GeneralChildRentWidthsV5::new(input.outcome_count, input.token_account_bytes)
-            .map_err(|_| GeneralSelectedReleaseErrorV1::Encoding)?;
+            .map_err(GeneralSelectedReleaseErrorV1::GeneralStateArtifact)?;
     encode_general_family_state_lifecycle_v5_atomic(child_widths, &mut scratch, &mut output)
-        .map_err(|_| GeneralSelectedReleaseErrorV1::Encoding)?;
+        .map_err(GeneralSelectedReleaseErrorV1::GeneralStateArtifact)?;
     Ok(output)
 }
 
@@ -1278,7 +1310,7 @@ fn encode_transition(action: Action) -> Result<Vec<u8>> {
         .ok_or(GeneralSelectedReleaseErrorV1::Encoding)?;
     let mut instructions = vec![GENERAL_TRANSITION_INSTRUCTION_PLACEHOLDER_V3; count];
     let bytes = general_transition_program_bytes_v3(action)
-        .map_err(|_| GeneralSelectedReleaseErrorV1::Encoding)?;
+        .map_err(GeneralSelectedReleaseErrorV1::GeneralTransitionArtifact)?;
     let mut scratch = vec![0_u8; bytes];
     let mut output = vec![0_u8; bytes];
     encode_general_transition_program_v3_atomic(
@@ -1287,7 +1319,7 @@ fn encode_transition(action: Action) -> Result<Vec<u8>> {
         &mut scratch,
         &mut output,
     )
-    .map_err(|_| GeneralSelectedReleaseErrorV1::Encoding)?;
+    .map_err(GeneralSelectedReleaseErrorV1::GeneralTransitionArtifact)?;
     Ok(output)
 }
 
@@ -1304,11 +1336,11 @@ fn encode_effect(action: Action) -> Result<Vec<u8>> {
     let mut instructions = vec![GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3; count];
     let mut templates = vec![0_u8; general_effect_template_bytes_v3(action)];
     let base = general_effect_program_bytes_v3(action)
-        .map_err(|_| GeneralSelectedReleaseErrorV1::Encoding)?;
+        .map_err(GeneralSelectedReleaseErrorV1::GeneralEffectArtifact)?;
     let mut base_scratch = vec![0_u8; base];
     let mut base_output = vec![0_u8; base];
     let bytes = general_effect_program_bytes_v4(action)
-        .map_err(|_| GeneralSelectedReleaseErrorV1::Encoding)?;
+        .map_err(GeneralSelectedReleaseErrorV1::GeneralEffectArtifact)?;
     let mut scratch = vec![0_u8; bytes];
     let mut output = vec![0_u8; bytes];
     encode_general_effect_program_v4_atomic(
@@ -1320,7 +1352,7 @@ fn encode_effect(action: Action) -> Result<Vec<u8>> {
         &mut scratch,
         &mut output,
     )
-    .map_err(|_| GeneralSelectedReleaseErrorV1::Encoding)?;
+    .map_err(GeneralSelectedReleaseErrorV1::GeneralEffectArtifact)?;
     Ok(output)
 }
 
@@ -1341,7 +1373,7 @@ fn canonical_request(action: Action) -> Result<[u8; CONTROLLER_REQUEST_BYTES_V2]
             terminal_record_bump: 0,
         }
         .to_bytes()
-        .map_err(|_| GeneralSelectedReleaseErrorV1::Encoding);
+        .map_err(GeneralSelectedReleaseErrorV1::General);
     }
 
     ControllerRequestV3 {
@@ -1356,7 +1388,7 @@ fn canonical_request(action: Action) -> Result<[u8; CONTROLLER_REQUEST_BYTES_V2]
         result_state_bump: 0,
     }
     .to_bytes()
-    .map_err(|_| GeneralSelectedReleaseErrorV1::Encoding)
+    .map_err(GeneralSelectedReleaseErrorV1::General)
 }
 
 /// A minimal request carrying only the action byte, for set-selection rejoin.

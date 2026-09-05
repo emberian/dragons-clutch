@@ -98,15 +98,6 @@ use crate::{
     observation::{FinalizedRecordProof, authenticate_finalized_record},
 };
 
-/// Canonical persisted evidence label for the close-maker descriptor.
-pub const DIRECT_CLOSE_MAKER_DESCRIPTOR_RECORD_LABEL_V1: &str =
-    "direct_close_maker_descriptor_record";
-/// Canonical persisted evidence label for the close-maker AccountProfile.
-pub const DIRECT_CLOSE_MAKER_PROFILE_RECORD_LABEL_V1: &str =
-    "direct_close_maker_account_profile_record";
-/// Canonical persisted evidence label for the close-maker EffectProgram.
-pub const DIRECT_CLOSE_MAKER_EFFECT_RECORD_LABEL_V1: &str = "direct_close_maker_effect_record";
-
 /// ProgramSet entry index of the maker-replay close.
 ///
 /// The five-entry Direct lifecycle set is ordered by ascending `u32` selector:
@@ -268,6 +259,10 @@ pub enum DirectCloseMakerCoordinateErrorV1 {
     InvalidIdentity,
     /// Two logical coordinates aliased one physical account.
     AliasedCoordinate,
+    /// `dclutch_trading` refused; the cause is its own.
+    DirectCloseMaker(dclutch_trading::close_maker_v1::DirectCloseMakerErrorV1),
+    /// `dclutch_registry::record` refused; the cause is its own.
+    Record(dclutch_registry::record::Error),
 }
 
 /// Derive the exact non-finalized ordered metas from immutable identities only.
@@ -281,7 +276,7 @@ pub fn derive_direct_close_maker_meta_closure_v1(
     let request = input
         .request
         .new()
-        .map_err(|_| DirectCloseMakerCoordinateErrorV1::InvalidIdentity)?;
+        .map_err(DirectCloseMakerCoordinateErrorV1::DirectCloseMaker)?;
     if [
         input.descriptor,
         input.account_profile,
@@ -400,10 +395,8 @@ fn record_key(
     digest: [u8; 32],
 ) -> Result<RecordKeyV1, DirectCloseMakerCoordinateErrorV1> {
     Ok(RecordKeyV1::new(
-        SchemaReleaseId::new(schema)
-            .map_err(|_| DirectCloseMakerCoordinateErrorV1::InvalidIdentity)?,
-        ContentDigest::new(digest)
-            .map_err(|_| DirectCloseMakerCoordinateErrorV1::InvalidIdentity)?,
+        SchemaReleaseId::new(schema).map_err(DirectCloseMakerCoordinateErrorV1::Record)?,
+        ContentDigest::new(digest).map_err(DirectCloseMakerCoordinateErrorV1::Record)?,
     ))
 }
 
@@ -619,6 +612,28 @@ pub enum DirectCloseMakerPlanErrorV1 {
     LiveIntents,
     /// Canonical request, receipt, or exact account-frame construction refused.
     InvalidPlan,
+    /// `dclutch_market` refused; the cause is its own.
+    MarketCore(dclutch_market::Error),
+    /// `dclutch_registry` refused; the cause is its own.
+    Registry(dclutch_registry::Error),
+    /// `dclutch_registry::svm` refused; the cause is its own.
+    RegistrySvm(dclutch_registry::svm::Error),
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    CapabilityProgram(dclutch_market::capability_program::Error),
+    /// `dclutch_trading` refused; the cause is its own.
+    Successor(dclutch_trading::successor::SuccessorError),
+    /// `dclutch_market::capability_manifest` refused; the cause is its own.
+    Capability(dclutch_market::capability_manifest::Error),
+    /// `dclutch_operator` refused; the cause is its own.
+    Observation(crate::observation::ObservationError),
+    /// `dclutch_trading` refused; the cause is its own.
+    DirectProgramSet(dclutch_trading::program_set_v4::DirectProgramSetErrorV4),
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    ProgramSet(dclutch_market::capability_program::set_v2::ProgramSetErrorV2),
+    /// `dclutch_operator` refused; the cause is its own.
+    DirectCloseMakerCoordinate(crate::direct_close_maker_v1::DirectCloseMakerCoordinateErrorV1),
+    /// `dclutch_trading` refused; the cause is its own.
+    DirectCloseMaker(dclutch_trading::close_maker_v1::DirectCloseMakerErrorV1),
 }
 
 struct AuthenticatedCloseV1 {
@@ -734,7 +749,7 @@ fn authenticate_market_and_release(
         return Err(DirectCloseMakerPlanErrorV1::InvalidMarket);
     }
     let market = CoreState::decode(&snapshot.market.data)
-        .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidMarket)?;
+        .map_err(DirectCloseMakerPlanErrorV1::MarketCore)?;
     let expected_market = Pubkey::find_program_address(
         &MarketCoreStateSeedsV2::new(market.identity).as_slices(),
         &snapshot.core_program.key,
@@ -742,7 +757,7 @@ fn authenticate_market_and_release(
     .0;
     if market
         .encode()
-        .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidMarket)?
+        .map_err(DirectCloseMakerPlanErrorV1::MarketCore)?
         .as_slice()
         != snapshot.market.data
         || market.phase != Phase::Retiring
@@ -767,11 +782,11 @@ fn authenticate_market_and_release(
     )
     .0;
     let activated = ActivatedExecutionReleaseSetViewV1::decode(&snapshot.activation_cache.data)
-        .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidRelease)?;
+        .map_err(DirectCloseMakerPlanErrorV1::Registry)?;
     if snapshot.activation_cache.key != expected_cache
         || activated
             .execution_release_set_id()
-            .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidRelease)?
+            .map_err(DirectCloseMakerPlanErrorV1::Registry)?
             .to_bytes()
             != release_set
     {
@@ -802,11 +817,11 @@ fn authenticate_role_deployment(
 ) -> Result<(), DirectCloseMakerPlanErrorV1> {
     let selected = activated
         .role(role)
-        .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidRelease)?;
+        .map_err(DirectCloseMakerPlanErrorV1::Registry)?;
     let observation = deployment_observation(program, programdata, selected.release())?;
     selected
         .authenticate_current_deployment(observation)
-        .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidRelease)
+        .map_err(DirectCloseMakerPlanErrorV1::Registry)
 }
 
 fn deployment_observation(
@@ -824,8 +839,8 @@ fn deployment_observation(
     {
         return Err(DirectCloseMakerPlanErrorV1::InvalidRelease);
     }
-    let program_view = ProgramV3View::parse(&program.data)
-        .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidRelease)?;
+    let program_view =
+        ProgramV3View::parse(&program.data).map_err(DirectCloseMakerPlanErrorV1::RegistrySvm)?;
     let expected_programdata =
         Pubkey::find_program_address(&[program.key.as_ref()], &bpf_loader_upgradeable::ID).0;
     if program_view.programdata() != programdata.key.to_bytes()
@@ -834,7 +849,7 @@ fn deployment_observation(
         return Err(DirectCloseMakerPlanErrorV1::InvalidRelease);
     }
     let data = ProgramDataV3View::parse(&programdata.data)
-        .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidRelease)?;
+        .map_err(DirectCloseMakerPlanErrorV1::RegistrySvm)?;
     DeploymentObservationV1::new(
         program.key.to_bytes(),
         program.owner.to_bytes(),
@@ -848,7 +863,7 @@ fn deployment_observation(
         hash(data.elf()).to_bytes(),
         data.upgrade_authority(),
     )
-    .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidRelease)
+    .map_err(DirectCloseMakerPlanErrorV1::Registry)
 }
 
 fn authenticate_root_and_artifacts(
@@ -870,7 +885,7 @@ fn authenticate_root_and_artifacts(
         .get(..CAPABILITY_ROOT_HEADER_BYTES_V1)
         .ok_or(DirectCloseMakerPlanErrorV1::InvalidRoot)?;
     let header = CapabilityRootHeaderV1::decode(header_bytes)
-        .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidRoot)?;
+        .map_err(DirectCloseMakerPlanErrorV1::CapabilityProgram)?;
     let root_seeds = header.seeds();
     let expected_root =
         Pubkey::find_program_address(&root_seeds.as_slices(), &snapshot.trading_program.key).0;
@@ -892,7 +907,7 @@ fn authenticate_root_and_artifacts(
             .get(CAPABILITY_ROOT_HEADER_BYTES_V1..)
             .ok_or(DirectCloseMakerPlanErrorV1::InvalidRoot)?,
     )
-    .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidRootState)?;
+    .map_err(DirectCloseMakerPlanErrorV1::Successor)?;
 
     let selection = header.selection();
     authenticate_persisted_raw(
@@ -903,10 +918,10 @@ fn authenticate_root_and_artifacts(
         header.record_bumps().manifest_raw(),
     )?;
     let manifest = CapabilityManifestV1::decode(&snapshot.capability_manifest.data)
-        .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidManifest)?;
+        .map_err(DirectCloseMakerPlanErrorV1::Capability)?;
     let entry = manifest
         .entry(selection.entry_index())
-        .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidManifest)?;
+        .map_err(DirectCloseMakerPlanErrorV1::Capability)?;
     if entry.kind_id() != selection.kind()
         || entry.release_id() != selection.capability_release()
         || entry.config_id() != selection.config()
@@ -949,7 +964,7 @@ fn authenticate_root_and_artifacts(
                 staging_cursor: staging.clone(),
             },
         )
-        .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidRecord)?;
+        .map_err(DirectCloseMakerPlanErrorV1::Observation)?;
     }
     require_persisted_pair_bumps(
         snapshot.registry_program.key,
@@ -974,7 +989,7 @@ fn authenticate_root_and_artifacts(
         snapshot.ordinary_release_witness,
         entry.capacity_profile_id().to_bytes(),
     )
-    .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidLifecycleRelease)?;
+    .map_err(DirectCloseMakerPlanErrorV1::DirectProgramSet)?;
     if release.program_set_id != selection.capability_release().to_bytes()
         || snapshot.program_set.data != release.program_set
         || snapshot.descriptor.data != release.close_maker.descriptor
@@ -988,10 +1003,10 @@ fn authenticate_root_and_artifacts(
         hash(&snapshot.program_set.data).to_bytes(),
         &snapshot.program_set.data,
     )
-    .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidLifecycleRelease)?;
+    .map_err(DirectCloseMakerPlanErrorV1::ProgramSet)?;
     let descriptor_reference = set
         .entry(DIRECT_CLOSE_MAKER_PROGRAM_SET_ENTRY_V1)
-        .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidLifecycleRelease)?
+        .map_err(DirectCloseMakerPlanErrorV1::ProgramSet)?
         .descriptor();
     if descriptor_reference.schema().to_bytes() != CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1
         || descriptor_reference.program().to_bytes() != hash(&snapshot.descriptor.data).to_bytes()
@@ -999,16 +1014,16 @@ fn authenticate_root_and_artifacts(
         return Err(DirectCloseMakerPlanErrorV1::InvalidLifecycleRelease);
     }
     let descriptor = CapabilityProgramV1::decode(&snapshot.descriptor.data)
-        .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidLifecycleRelease)?;
+        .map_err(DirectCloseMakerPlanErrorV1::CapabilityProgram)?;
     descriptor
         .validate_selection(selection, entry)
-        .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidLifecycleRelease)?;
+        .map_err(DirectCloseMakerPlanErrorV1::CapabilityProgram)?;
     DirectExecutionConfigV1::decode_selected(
         selection.config().to_bytes(),
         hash(&snapshot.config.data).to_bytes(),
         &snapshot.config.data,
     )
-    .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidRecord)?;
+    .map_err(DirectCloseMakerPlanErrorV1::Successor)?;
     Ok((header, root_state))
 }
 
@@ -1038,7 +1053,8 @@ fn authenticate_persisted_raw(
     digest: [u8; 32],
     bump: u8,
 ) -> Result<(), DirectCloseMakerPlanErrorV1> {
-    let key = record_key(schema, digest).map_err(|_| DirectCloseMakerPlanErrorV1::InvalidRecord)?;
+    let key = record_key(schema, digest)
+        .map_err(DirectCloseMakerPlanErrorV1::DirectCloseMakerCoordinate)?;
     let expected = record_address_at_bump(key.raw_record_pda_seeds(), registry, bump)?;
     if account.key != expected
         || account.owner != registry
@@ -1060,7 +1076,8 @@ fn require_persisted_pair_bumps(
     raw_bump: u8,
     staging_bump: u8,
 ) -> Result<(), DirectCloseMakerPlanErrorV1> {
-    let key = record_key(schema, digest).map_err(|_| DirectCloseMakerPlanErrorV1::InvalidRecord)?;
+    let key = record_key(schema, digest)
+        .map_err(DirectCloseMakerPlanErrorV1::DirectCloseMakerCoordinate)?;
     let expected_raw = record_address_at_bump(key.raw_record_pda_seeds(), registry, raw_bump)?;
     let expected_staging =
         record_address_at_bump(key.staging_cursor_pda_seeds(), registry, staging_bump)?;
@@ -1131,11 +1148,11 @@ fn assemble_plan(
     // The replay stands. Authenticate it exactly as the chain does: its own
     // recorded bump must reproduce its own address under the Trading program.
     let maker_root = MakerReplayRootV1::decode(&snapshot.maker_replay.data)
-        .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidReplay)?;
+        .map_err(DirectCloseMakerPlanErrorV1::Successor)?;
     let coordinates = DirectCoordinatesV1::new(market_key.to_bytes(), generation)
-        .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidReplay)?;
+        .map_err(DirectCloseMakerPlanErrorV1::Successor)?;
     let seeds = MakerReplaySeedsV1::new(coordinates, maker_root.maker())
-        .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidReplay)?;
+        .map_err(DirectCloseMakerPlanErrorV1::Successor)?;
     let [domain, market_seed, generation_seed, maker_seed] = seeds.as_slices();
     let bump = [maker_root.bump()];
     let expected_replay = Pubkey::create_program_address(
@@ -1199,10 +1216,10 @@ fn assemble_plan(
         generation,
     }
     .new()
-    .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidPlan)?;
+    .map_err(DirectCloseMakerPlanErrorV1::DirectCloseMaker)?;
     let request_body = request
         .to_bytes()
-        .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidPlan)?;
+        .map_err(DirectCloseMakerPlanErrorV1::DirectCloseMaker)?;
     let request_digest = hash(&request_body).to_bytes();
 
     let expected_receipt = DirectCloseMakerReceiptV1 {
@@ -1219,10 +1236,10 @@ fn assemble_plan(
         remaining_open_maker_roots: closed.root.open_maker_root_count(),
     }
     .new()
-    .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidPlan)?;
+    .map_err(DirectCloseMakerPlanErrorV1::DirectCloseMaker)?;
     let expected_receipt_body = expected_receipt
         .to_bytes()
-        .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidPlan)?;
+        .map_err(DirectCloseMakerPlanErrorV1::DirectCloseMaker)?;
 
     let meta_closure =
         derive_direct_close_maker_meta_closure_v1(DirectCloseMakerCoordinateInputV1 {
@@ -1243,7 +1260,7 @@ fn assemble_plan(
             maker_replay: snapshot.maker_replay.key,
             rent_owner: snapshot.rent_owner.key,
         })
-        .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidPlan)?;
+        .map_err(DirectCloseMakerPlanErrorV1::DirectCloseMakerCoordinate)?;
 
     if frame_accounts(snapshot)
         .iter()

@@ -53,8 +53,6 @@ pub enum Error {
     Terms,
     /// The pure kernel refused the requested exact transition.
     Kernel,
-    /// The canonical family request could not be built for this action.
-    Request,
     /// A Token-owned pre-state contradicted the exact derived effect.
     Token,
     /// A profile coordinate omitted or substituted a selected account.
@@ -67,6 +65,22 @@ pub enum Error {
     ChildIdentity,
     /// A child request width was zero, mismatched, or above the executable ceiling.
     ChildWidth,
+    /// `dclutch_claims::structured_kernel` refused; the cause is its own.
+    Structured(dclutch_claims::structured_kernel::Error),
+    /// `dclutch_claims::structured` refused; the cause is its own.
+    StructuredRequest(dclutch_claims::structured::StructuredRequestErrorV2),
+    /// `dclutch_claims::fractional_kernel` refused; the cause is its own.
+    FractionalClaim(dclutch_claims::fractional_kernel::Error),
+    /// `dclutch_claims::rational` refused; the cause is its own.
+    RationalRepresentation(dclutch_claims::rational::Error),
+    /// `dclutch_claims::rational_kernel` refused; the cause is its own.
+    RationalRepresentationKernel(dclutch_claims::rational_kernel::Error),
+    /// `dclutch_claims::composition` refused; the cause is its own.
+    RepresentationComposition(dclutch_claims::composition::Error),
+    /// `dclutch_claims::structured` refused; the cause is its own.
+    StructuredHot(dclutch_claims::structured::StructuredHotErrorV2),
+    /// `dclutch_claims::structured` refused; the cause is its own.
+    StructuredFrame(dclutch_claims::structured::StructuredFrameErrorV2),
 }
 
 /// Result alias.

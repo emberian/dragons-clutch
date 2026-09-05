@@ -501,13 +501,15 @@ pub fn encode_structured_child_representation_v2(
             actor_shard_account: observed.actor_shard_account,
             structured_custody_account: observed.structured_custody_account,
             claims_custody_owner: observed.claims_custody_owner,
-            coefficient: terms.coefficient(coordinate).map_err(|_| Error::Terms)?,
+            coefficient: terms.coefficient(coordinate).map_err(Error::Structured)?,
             expected_shard_supply: observed.expected_shard_supply,
             expected_actor_shards: observed.expected_actor_shards,
             expected_structured_shards,
         };
         let mut row = [0_u8; ASSET_BYTES_V3];
-        asset.encode_into(&mut row).map_err(|_| Error::ChildWire)?;
+        asset
+            .encode_into(&mut row)
+            .map_err(Error::RationalRepresentation)?;
         assets.extend_from_slice(&row);
         coordinate = coordinate.checked_add(1).ok_or(Error::ChildWidth)?;
     }
@@ -544,10 +546,11 @@ pub fn encode_structured_child_representation_v2(
         selected_outcome: u32::MAX,
         asset_count: width,
     };
-    let request = RepresentationRequestV2::new(header, &assets).map_err(|_| Error::ChildWire)?;
+    let request =
+        RepresentationRequestV2::new(header, &assets).map_err(Error::RationalRepresentation)?;
     let mut output = vec![0_u8; structured_child_request_bytes_v2(width)?];
     request
         .encode_into(&mut output)
-        .map_err(|_| Error::ChildWire)?;
+        .map_err(Error::RationalRepresentation)?;
     Ok(output)
 }

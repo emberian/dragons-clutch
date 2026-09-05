@@ -154,6 +154,26 @@ pub enum SeriesCurrentAcquisitionErrorV5 {
     Role,
     /// Consume Shadow Certificate, deployment, request, or caller differed.
     Strategy,
+    /// `dclutch_trading_sbf` refused; the cause is its own.
+    SeriesOperator(dclutch_trading_sbf::series::operator::SeriesOperatorErrorV3),
+    /// `dclutch_market::execution_strategy` refused; the cause is its own.
+    ExecutionStrategy(dclutch_market::execution_strategy::v2::Error),
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    CapabilityProgram(dclutch_market::capability_program::Error),
+    /// `dclutch_operator` refused; the cause is its own.
+    ObservationError(crate::observation::ObservationError),
+    /// `dclutch_vm::account_profile` refused; the cause is its own.
+    AccountProfileV3(dclutch_vm::account_profile::v3::ErrorV3),
+    /// `dclutch_vm::account_profile` refused; the cause is its own.
+    AccountProfile(dclutch_vm::account_profile::v2::Error),
+    /// `dclutch_registry::release_set` refused; the cause is its own.
+    ReleaseSet(dclutch_registry::release_set::Error),
+    /// `dclutch_registry` refused; the cause is its own.
+    Registry(dclutch_registry::Error),
+    /// `dclutch_market::execution_strategy` refused; the cause is its own.
+    ShadowDigest(dclutch_market::execution_strategy::shadow_digest_v3::ShadowDigestErrorV3),
+    /// `dclutch_operator` refused; the cause is its own.
+    SeriesHotOperator(crate::series_hot_v3::SeriesHotOperatorErrorV3),
 }
 
 /// Assemble current live RPC observations into the existing Series V5 state.
@@ -215,7 +235,7 @@ fn require_selected_lifecycle(
     lifecycle: SeriesLifecycleSnapshotV3<'_>,
 ) -> Result<(), SeriesCurrentAcquisitionErrorV5> {
     match inspect_series_lifecycle_v3(lifecycle)
-        .map_err(|_| SeriesCurrentAcquisitionErrorV5::Lifecycle)?
+        .map_err(SeriesCurrentAcquisitionErrorV5::SeriesOperator)?
         .next()
     {
         SeriesNextActV3::Ready(plan) if plan.action() == action => Ok(()),
@@ -242,7 +262,7 @@ fn require_artifact_view(
         return Err(SeriesCurrentAcquisitionErrorV5::Artifact);
     }
     let strategy = ExecutionStrategyProgramV2::decode(&selected.artifacts.strategy)
-        .map_err(|_| SeriesCurrentAcquisitionErrorV5::Artifact)?;
+        .map_err(SeriesCurrentAcquisitionErrorV5::ExecutionStrategy)?;
     let expected = if selected.action == SeriesActionV3::Consume {
         StrategyDispositionV2::ShadowAot
     } else {
@@ -424,7 +444,7 @@ fn authenticate_fixed_release(
             .get(..CAPABILITY_ROOT_HEADER_BYTES_V1)
             .ok_or(SeriesCurrentAcquisitionErrorV5::FixedFrame)?,
     )
-    .map_err(|_| SeriesCurrentAcquisitionErrorV5::FixedFrame)?;
+    .map_err(SeriesCurrentAcquisitionErrorV5::CapabilityProgram)?;
     if header.market() != fixed.market.key.to_bytes()
         || header.selection().manifest().to_bytes() != hash(&fixed.manifest.raw.data).to_bytes()
         || header.selection().capability_release().to_bytes()
@@ -507,7 +527,7 @@ fn authenticate_record(
             staging_cursor: record.staging.clone(),
         },
     )
-    .map_err(|_| SeriesCurrentAcquisitionErrorV5::FinalizedRecord)
+    .map_err(SeriesCurrentAcquisitionErrorV5::ObservationError)
 }
 
 fn pack_runtime_accounts(
@@ -524,15 +544,15 @@ fn pack_runtime_accounts(
         return Err(SeriesCurrentAcquisitionErrorV5::RuntimeProfile);
     }
     let profile = AccountProfileV3::decode(account_profile)
-        .map_err(|_| SeriesCurrentAcquisitionErrorV5::Artifact)?;
+        .map_err(SeriesCurrentAcquisitionErrorV5::AccountProfileV3)?;
     let spans = dynamic_fixed_span_counts;
     let base = profile.base();
     let logical_count = base
         .logical_account_count_with_dynamic_spans(0, spans)
-        .map_err(|_| SeriesCurrentAcquisitionErrorV5::RuntimeProfile)?;
+        .map_err(SeriesCurrentAcquisitionErrorV5::AccountProfile)?;
     let physical_count = base
         .physical_account_count_with_dynamic_spans(0, spans)
-        .map_err(|_| SeriesCurrentAcquisitionErrorV5::RuntimeProfile)?;
+        .map_err(SeriesCurrentAcquisitionErrorV5::AccountProfile)?;
     if logical_count != logical.len() || physical_count != selected.geometry.physical_accounts {
         return Err(SeriesCurrentAcquisitionErrorV5::RuntimeProfile);
     }
@@ -544,10 +564,10 @@ fn pack_runtime_accounts(
         }
         let representative = base
             .representative_with_dynamic_spans(0, spans, coordinate)
-            .map_err(|_| SeriesCurrentAcquisitionErrorV5::RuntimeProfile)?;
+            .map_err(SeriesCurrentAcquisitionErrorV5::AccountProfile)?;
         let ordinal = base
             .physical_account_ordinal_with_dynamic_spans(0, spans, coordinate)
-            .map_err(|_| SeriesCurrentAcquisitionErrorV5::RuntimeProfile)?;
+            .map_err(SeriesCurrentAcquisitionErrorV5::AccountProfile)?;
         if selected.account_bindings.get(coordinate).map(|binding| {
             (
                 binding.logical,
@@ -580,7 +600,7 @@ fn pack_runtime_accounts(
     for (ordinal, account) in packed.into_iter().enumerate() {
         let geometry = base
             .physical_account_geometry_with_dynamic_spans(0, spans, ordinal)
-            .map_err(|_| SeriesCurrentAcquisitionErrorV5::RuntimeProfile)?;
+            .map_err(SeriesCurrentAcquisitionErrorV5::AccountProfile)?;
         let privileges = geometry.privileges();
         let width_ok = match geometry.data() {
             PhysicalAccountDataGeometryV2::Exact { bytes } => account.data.len() == bytes,
@@ -684,9 +704,9 @@ fn assemble_strategy_accounts(
         SeriesCurrentAcquisitionErrorV5::Strategy,
     )?;
     let strategy = ExecutionStrategyProgramV2::decode(&selected.artifacts.strategy)
-        .map_err(|_| SeriesCurrentAcquisitionErrorV5::Strategy)?;
+        .map_err(SeriesCurrentAcquisitionErrorV5::ExecutionStrategy)?;
     let descriptor = CapabilityProgramV4::decode(&selected.descriptor)
-        .map_err(|_| SeriesCurrentAcquisitionErrorV5::Strategy)?;
+        .map_err(SeriesCurrentAcquisitionErrorV5::CapabilityProgram)?;
     let strategy_id = content(&selected.artifacts.strategy)?;
     let certificate_id = content(&shadow.certificate.raw.data)?;
     if strategy.disposition() != StrategyDispositionV2::ShadowAot
@@ -699,10 +719,9 @@ fn assemble_strategy_accounts(
         shadow.certificate,
         EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
         certificate_id.to_bytes(),
-    )
-    .map_err(|_| SeriesCurrentAcquisitionErrorV5::Strategy)?;
+    )?;
     let certificate = ExecutionStrategyCertificateV2::decode(&shadow.certificate.raw.data)
-        .map_err(|_| SeriesCurrentAcquisitionErrorV5::Strategy)?;
+        .map_err(SeriesCurrentAcquisitionErrorV5::ExecutionStrategy)?;
     certificate
         .validate_v4(
             certificate_id,
@@ -718,7 +737,7 @@ fn assemble_strategy_accounts(
                 effect_program: content(&selected.artifacts.effect)?,
             },
         )
-        .map_err(|_| SeriesCurrentAcquisitionErrorV5::Strategy)?;
+        .map_err(SeriesCurrentAcquisitionErrorV5::ExecutionStrategy)?;
     let artifact_digest = hash(&shadow.artifact.raw.data).to_bytes();
     if shadow.checked.artifact_release != artifact_digest
         || shadow.checked.artifact_release == [0; 32]
@@ -731,15 +750,14 @@ fn assemble_strategy_accounts(
         shadow.artifact,
         ARTIFACT_RELEASE_SCHEMA_ID_V1,
         artifact_digest,
-    )
-    .map_err(|_| SeriesCurrentAcquisitionErrorV5::Strategy)?;
+    )?;
     let artifact_id = ArtifactReleaseIdV1::new(artifact_digest)
-        .map_err(|_| SeriesCurrentAcquisitionErrorV5::Strategy)?;
+        .map_err(SeriesCurrentAcquisitionErrorV5::ReleaseSet)?;
     certificate
         .validate_artifact(artifact_id)
-        .map_err(|_| SeriesCurrentAcquisitionErrorV5::Strategy)?;
+        .map_err(SeriesCurrentAcquisitionErrorV5::ExecutionStrategy)?;
     let artifact = ArtifactReleaseV1::decode(&shadow.artifact.raw.data)
-        .map_err(|_| SeriesCurrentAcquisitionErrorV5::Strategy)?;
+        .map_err(SeriesCurrentAcquisitionErrorV5::Registry)?;
     if shadow.accelerator_program.key != shadow.checked.accelerator_program
         || shadow.accelerator_programdata.key != shadow.checked.accelerator_programdata
         || artifact.program().to_bytes() != shadow.accelerator_program.key.to_bytes()
@@ -785,7 +803,7 @@ fn require_shadow_request(
             .get(..CAPABILITY_ROOT_HEADER_BYTES_V1)
             .ok_or(SeriesCurrentAcquisitionErrorV5::Strategy)?,
     )
-    .map_err(|_| SeriesCurrentAcquisitionErrorV5::Strategy)?;
+    .map_err(SeriesCurrentAcquisitionErrorV5::CapabilityProgram)?;
     let expected_artifacts = ShadowArtifactTupleV3 {
         capability_program: content(&selected.descriptor)?,
         account_profile: descriptor.account_profile().program(),
@@ -824,13 +842,13 @@ fn require_shadow_request(
         accelerator_caller_authority_digest_v1(
             AcceleratorCallerKindV1::Shadow,
             family_request_digest_v3(request.family_request)
-                .map_err(|_| SeriesCurrentAcquisitionErrorV5::Strategy)?,
+                .map_err(SeriesCurrentAcquisitionErrorV5::ShadowDigest)?,
             SHADOW_CALLER_AUTHORITY_INDEX_V1,
         )
-        .map_err(|_| SeriesCurrentAcquisitionErrorV5::Strategy)?
+        .map_err(SeriesCurrentAcquisitionErrorV5::ShadowDigest)?
         .to_bytes(),
     )
-    .map_err(|_| SeriesCurrentAcquisitionErrorV5::Strategy)?;
+    .map_err(SeriesCurrentAcquisitionErrorV5::ReleaseSet)?;
     if Pubkey::find_program_address(&seeds.as_slices(), &fixed.trading_program.key).0
         != shadow.caller_authority.key
         || shadow.caller_authority.executable
@@ -938,7 +956,7 @@ fn authenticate_selected_records(
             .get(..CAPABILITY_ROOT_HEADER_BYTES_V1)
             .ok_or(SeriesCurrentAcquisitionErrorV5::FixedFrame)?,
     )
-    .map_err(|_| SeriesCurrentAcquisitionErrorV5::FixedFrame)?;
+    .map_err(SeriesCurrentAcquisitionErrorV5::CapabilityProgram)?;
     let (future_market, expire_authority) = match selected.authority {
         SeriesOccurrenceAuthorityV5::Prepare {
             market,
@@ -1016,7 +1034,7 @@ fn authenticate_selected_records(
                 observed,
                 physical,
             )
-            .map_err(|_| SeriesCurrentAcquisitionErrorV5::Role)?;
+            .map_err(SeriesCurrentAcquisitionErrorV5::SeriesHotOperator)?;
             Some(observed.clone())
         }
         (None, None) => None,
@@ -2090,7 +2108,9 @@ mod tests {
                     &fixture.permit,
                 )
                 .err(),
-            Some(SeriesCurrentAcquisitionErrorV5::Role)
+            Some(SeriesCurrentAcquisitionErrorV5::SeriesHotOperator(
+                crate::series_hot_v3::SeriesHotOperatorErrorV3::ActionMismatch
+            ))
         );
         let mut occurrence_proof = fixture.occurrence_record.clone();
         occurrence_proof.staging.key = Pubkey::new_unique();
@@ -2105,7 +2125,9 @@ mod tests {
                     &fixture.permit,
                 )
                 .err(),
-            Some(SeriesCurrentAcquisitionErrorV5::FinalizedRecord)
+            Some(SeriesCurrentAcquisitionErrorV5::ObservationError(
+                crate::observation::ObservationError::AddressMismatch
+            ))
         );
         let mut ticket_proof = fixture.ticket_record.clone();
         ticket_proof.staging.key = Pubkey::new_unique();
@@ -2120,7 +2142,9 @@ mod tests {
                     &fixture.permit,
                 )
                 .err(),
-            Some(SeriesCurrentAcquisitionErrorV5::FinalizedRecord)
+            Some(SeriesCurrentAcquisitionErrorV5::ObservationError(
+                crate::observation::ObservationError::AddressMismatch
+            ))
         );
         let mut wrong_credit = fixture.rent_credit.clone();
         wrong_credit.key = Pubkey::new_unique();

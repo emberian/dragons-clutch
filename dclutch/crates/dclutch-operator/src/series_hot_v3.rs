@@ -205,8 +205,6 @@ pub enum SeriesHotOperatorErrorV3 {
     RecordMismatch,
     /// Root or Ticket replay state/PDA refused.
     ReplayMismatch,
-    /// Action-selected generic artifacts refused.
-    ArtifactMismatch,
     /// Strategy disposition, extras, Certificate, or deployment identities differed.
     StrategySelectionMismatch,
     /// Runtime AccountProfile width, alias, or privileges differed.
@@ -215,6 +213,34 @@ pub enum SeriesHotOperatorErrorV3 {
     ActionMismatch,
     /// Checked arithmetic or instruction encoding failed.
     Arithmetic,
+    /// `dclutch_trading_sbf` refused; the cause is its own.
+    SeriesArtifact(dclutch_trading_sbf::series::artifacts_v3::SeriesArtifactErrorV3),
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    HotExecution(dclutch_market::capability_program::hot_v3::HotExecutionErrorV3),
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    CapabilityProgram(dclutch_market::capability_program::Error),
+    /// `dclutch_trading::series` refused; the cause is its own.
+    Series(dclutch_trading::series::SeriesV3Error),
+    /// `dclutch_trading::series` refused; the cause is its own.
+    SeriesState(dclutch_trading::series::replay::SeriesStateError),
+    /// `dclutch_operator` refused; the cause is its own.
+    Observation(crate::observation::ObservationError),
+    /// `dclutch_trading_sbf` refused; the cause is its own.
+    SeriesOperator(dclutch_trading_sbf::series::operator::SeriesOperatorErrorV3),
+    /// `dclutch_vm::account_profile` refused; the cause is its own.
+    AccountProfile(dclutch_vm::account_profile::v2::Error),
+    /// `dclutch_market::execution_strategy` refused; the cause is its own.
+    ExecutionStrategy(dclutch_market::execution_strategy::v2::Error),
+    /// `dclutch_registry::release_set` refused; the cause is its own.
+    ReleaseSet(dclutch_registry::release_set::Error),
+    /// `dclutch_registry` refused; the cause is its own.
+    Registry(dclutch_registry::Error),
+    /// `dclutch_trading_sbf` refused; the cause is its own.
+    SeriesRelease(dclutch_trading_sbf::series::release_v5::SeriesReleaseErrorV5),
+    /// `dclutch_trading::series` refused; the cause is its own.
+    SeriesInstruction(dclutch_trading::series::request::SeriesInstructionErrorV3),
+    /// `dclutch_market` refused; the cause is its own.
+    MarketCore(dclutch_market::Error),
 }
 
 /// Build a dust-tolerant pre-founding Ticket Prepare instruction.
@@ -261,9 +287,9 @@ fn build_series_occurrence_hot_v3(
         frame.header.selection().capability_release().to_bytes(),
         frame.config_record,
     )
-    .map_err(|_| SeriesHotOperatorErrorV3::ArtifactMismatch)?;
+    .map_err(SeriesHotOperatorErrorV3::SeriesArtifact)?;
     let bundle = authenticate_series_artifacts_v3(selection, artifacts, request.as_bytes())
-        .map_err(|_| SeriesHotOperatorErrorV3::ArtifactMismatch)?;
+        .map_err(SeriesHotOperatorErrorV3::SeriesArtifact)?;
     if bundle.request.action() != action {
         return Err(SeriesHotOperatorErrorV3::ActionMismatch);
     }
@@ -279,7 +305,7 @@ fn build_series_occurrence_hot_v3(
         frame.header.generation(),
         hash(&frame.root.data).to_bytes(),
     )
-    .map_err(|_| SeriesHotOperatorErrorV3::FixedFrameMismatch)?
+    .map_err(SeriesHotOperatorErrorV3::HotExecution)?
     .with_bump_hints(series_occurrence_hot_bump_hints_v3(
         state,
         &outer.trading_program,
@@ -382,7 +408,7 @@ fn authenticate_frame<'a>(
             .get(..CAPABILITY_ROOT_HEADER_BYTES_V1)
             .ok_or(SeriesHotOperatorErrorV3::FixedFrameMismatch)?,
     )
-    .map_err(|_| SeriesHotOperatorErrorV3::FixedFrameMismatch)?;
+    .map_err(SeriesHotOperatorErrorV3::CapabilityProgram)?;
     let root_seeds = header.seeds();
     if header.market() != market.account.key.to_bytes()
         || header.selection().executor_role() != ExecutionRoleV1::Trading
@@ -407,8 +433,7 @@ fn authenticate_frame<'a>(
     if header.selection().config().to_bytes() != hash(config_record).to_bytes() {
         return Err(SeriesHotOperatorErrorV3::RecordMismatch);
     }
-    let template =
-        TemplateV3::decode(config_record).map_err(|_| SeriesHotOperatorErrorV3::RecordMismatch)?;
+    let template = TemplateV3::decode(config_record).map_err(SeriesHotOperatorErrorV3::Series)?;
     let series = SeriesStateV3::decode(
         root_meta
             .account
@@ -417,8 +442,8 @@ fn authenticate_frame<'a>(
             .ok_or(SeriesHotOperatorErrorV3::ReplayMismatch)?,
         template.occurrence_count(),
     )
-    .map_err(|_| SeriesHotOperatorErrorV3::ReplayMismatch)?;
-    let clock = decode_clock(&state.clock).map_err(|_| SeriesHotOperatorErrorV3::ActionMismatch)?;
+    .map_err(SeriesHotOperatorErrorV3::SeriesState)?;
+    let clock = decode_clock(&state.clock).map_err(SeriesHotOperatorErrorV3::Observation)?;
     require_runtime_account_once(state, &state.clock)?;
     Ok(AuthenticatedFrameV3 {
         observation,
@@ -442,7 +467,7 @@ fn authenticate_occurrence_records(
         staging_cursor: template_staging.account.clone(),
     };
     authenticate_finalized_record(registry_program, &template.account, &template_finalization)
-        .map_err(|_| SeriesHotOperatorErrorV3::RecordMismatch)?;
+        .map_err(SeriesHotOperatorErrorV3::Observation)?;
     for (record, schema) in [
         (&state.occurrence, SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3),
         (&state.ticket, SERIES_TICKET_SCHEMA_RELEASE_ID_V3),
@@ -451,7 +476,7 @@ fn authenticate_occurrence_records(
             return Err(SeriesHotOperatorErrorV3::RecordMismatch);
         }
         authenticate_finalized_record(registry_program, &record.raw, &record.finalization)
-            .map_err(|_| SeriesHotOperatorErrorV3::RecordMismatch)?;
+            .map_err(SeriesHotOperatorErrorV3::Observation)?;
         require_runtime_account_once(state, &record.raw)?;
         require_runtime_account_once(state, &record.finalization.staging_cursor)?;
     }
@@ -465,8 +490,7 @@ fn build_family_request(
     now_slot: u64,
     outer: CheckedHotOuterReleaseV3,
 ) -> Result<UnsignedSeriesActionV3, SeriesHotOperatorErrorV3> {
-    let ticket = admit_ticket(&state.ticket.raw.data)
-        .map_err(|_| SeriesHotOperatorErrorV3::RecordMismatch)?;
+    let ticket = admit_ticket(&state.ticket.raw.data).map_err(SeriesHotOperatorErrorV3::Series)?;
     let seeds = TicketStateSeedsV3::new(
         fixed(state, HOT_ROOT_ACCOUNT_V3)?.account.key.to_bytes(),
         ticket.content_id(),
@@ -495,7 +519,7 @@ fn build_family_request(
             }
             Some(
                 TicketStateV3::decode(&state.ticket_replay.data)
-                    .map_err(|_| SeriesHotOperatorErrorV3::ReplayMismatch)?,
+                    .map_err(SeriesHotOperatorErrorV3::SeriesState)?,
             )
         }
         SeriesActionV3::Retire | SeriesActionV3::Close => {
@@ -519,7 +543,7 @@ fn build_family_request(
             return Err(SeriesHotOperatorErrorV3::ActionMismatch);
         }
     }
-    .map_err(|_| SeriesHotOperatorErrorV3::ActionMismatch)
+    .map_err(SeriesHotOperatorErrorV3::SeriesOperator)
 }
 
 fn artifacts_from_frame(
@@ -555,7 +579,7 @@ fn validate_runtime_profile(
                 false,
                 u16::try_from(coordinate).map_err(|_| SeriesHotOperatorErrorV3::Arithmetic)?,
             )
-            .map_err(|_| SeriesHotOperatorErrorV3::RuntimeProfileMismatch)?;
+            .map_err(SeriesHotOperatorErrorV3::AccountProfile)?;
         let privileges = rule.privileges();
         if account.is_signer != (privileges & 1 != 0)
             || account.is_writable != (privileges & 2 != 0)
@@ -622,12 +646,12 @@ fn validate_strategy_selection(
                 staging_cursor: staging.clone(),
             },
         )
-        .map_err(|_| SeriesHotOperatorErrorV3::StrategySelectionMismatch)?;
+        .map_err(SeriesHotOperatorErrorV3::Observation)?;
     }
     let certificate_id = content_id(&certificate_raw.account.data)?;
     let strategy_id = content_id(&fixed(state, HOT_STRATEGY_RAW_ACCOUNT_V3)?.account.data)?;
     let certificate = ExecutionStrategyCertificateV2::decode(&certificate_raw.account.data)
-        .map_err(|_| SeriesHotOperatorErrorV3::StrategySelectionMismatch)?;
+        .map_err(SeriesHotOperatorErrorV3::ExecutionStrategy)?;
     certificate
         .validate_v3(
             certificate_id,
@@ -643,17 +667,17 @@ fn validate_strategy_selection(
                 effect_program: bundle.descriptor.effect_program(),
             },
         )
-        .map_err(|_| SeriesHotOperatorErrorV3::StrategySelectionMismatch)?;
+        .map_err(SeriesHotOperatorErrorV3::ExecutionStrategy)?;
     let artifact_id = ArtifactReleaseIdV1::new(checked.artifact_release)
-        .map_err(|_| SeriesHotOperatorErrorV3::StrategySelectionMismatch)?;
+        .map_err(SeriesHotOperatorErrorV3::ReleaseSet)?;
     certificate
         .validate_artifact(artifact_id)
-        .map_err(|_| SeriesHotOperatorErrorV3::StrategySelectionMismatch)?;
+        .map_err(SeriesHotOperatorErrorV3::ExecutionStrategy)?;
     if hash(&artifact_raw.account.data).to_bytes() != checked.artifact_release {
         return Err(SeriesHotOperatorErrorV3::StrategySelectionMismatch);
     }
     let artifact = ArtifactReleaseV1::decode(&artifact_raw.account.data)
-        .map_err(|_| SeriesHotOperatorErrorV3::StrategySelectionMismatch)?;
+        .map_err(SeriesHotOperatorErrorV3::Registry)?;
     let program = strategy(state, SHADOW_ACCELERATOR_PROGRAM_V3)?;
     let programdata = strategy(state, SHADOW_ACCELERATOR_PROGRAMDATA_V3)?;
     let caller = strategy(state, SHADOW_CALLER_AUTHORITY_V3)?;
@@ -957,7 +981,7 @@ fn select_current_series_plan_v5(
     lifecycle: SeriesLifecycleSnapshotV3<'_>,
 ) -> Result<SeriesNextActV3, SeriesHotOperatorErrorV3> {
     Ok(inspect_series_lifecycle_v3(lifecycle)
-        .map_err(|_| SeriesHotOperatorErrorV3::ActionMismatch)?
+        .map_err(SeriesHotOperatorErrorV3::SeriesOperator)?
         .next())
 }
 
@@ -967,20 +991,20 @@ fn build_current_series_hot_v5_ready(
     plan: crate::series_lifecycle_v3::PlannedSeriesActV3,
 ) -> Result<SeriesCurrentHotPlanV5, SeriesHotOperatorErrorV3> {
     let source = emit_current_series_release_source_v5(current_source)
-        .map_err(|_| SeriesHotOperatorErrorV3::ArtifactMismatch)?;
+        .map_err(SeriesHotOperatorErrorV3::SeriesRelease)?;
     let release = compile_series_release_v5(source.as_source())
-        .map_err(|_| SeriesHotOperatorErrorV3::ArtifactMismatch)?;
+        .map_err(SeriesHotOperatorErrorV3::SeriesRelease)?;
     let selected = authenticate_series_selected_action_v5(
         &release,
         source.as_source(),
         plan.request().as_bytes(),
     )
-    .map_err(|_| SeriesHotOperatorErrorV3::ArtifactMismatch)?;
+    .map_err(SeriesHotOperatorErrorV3::SeriesRelease)?;
     if selected.action != plan.action() {
         return Err(SeriesHotOperatorErrorV3::ActionMismatch);
     }
     let strategy = ExecutionStrategyProgramV2::decode(&selected.artifacts.strategy)
-        .map_err(|_| SeriesHotOperatorErrorV3::StrategySelectionMismatch)?;
+        .map_err(SeriesHotOperatorErrorV3::ExecutionStrategy)?;
     let expected = if selected.action == SeriesActionV3::Consume {
         StrategyDispositionV2::ShadowAot
     } else {
@@ -1055,7 +1079,7 @@ fn build_selected_series_hot_v5(
             .get(..CAPABILITY_ROOT_HEADER_BYTES_V1)
             .ok_or(SeriesHotOperatorErrorV3::FixedFrameMismatch)?,
     )
-    .map_err(|_| SeriesHotOperatorErrorV3::FixedFrameMismatch)?;
+    .map_err(SeriesHotOperatorErrorV3::CapabilityProgram)?;
     if header.generation() == 0 || header.selection().executor_role() != ExecutionRoleV1::Trading {
         return Err(SeriesHotOperatorErrorV3::FixedFrameMismatch);
     }
@@ -1115,7 +1139,7 @@ fn build_selected_series_hot_v5(
         header.generation(),
         hash(&root.account.data).to_bytes(),
     )
-    .map_err(|_| SeriesHotOperatorErrorV3::FixedFrameMismatch)?
+    .map_err(SeriesHotOperatorErrorV3::HotExecution)?
     .with_bump_hints(series_selected_hot_bump_hints_v5(
         state,
         &trading.account.key,
@@ -1348,22 +1372,21 @@ pub(crate) fn authenticate_expire_permit_v5(
         return Err(SeriesHotOperatorErrorV3::ActionMismatch);
     };
     let request = SeriesActionRequestV3::decode(&selected.request_bytes)
-        .map_err(|_| SeriesHotOperatorErrorV3::ActionMismatch)?;
+        .map_err(SeriesHotOperatorErrorV3::SeriesInstruction)?;
     let ticket = request
         .ticket()
         .ok_or(SeriesHotOperatorErrorV3::ActionMismatch)?;
     let seeds = SeriesFoundingPermitSeedsV1::new(
-        CoreIdentity::new(release_set).map_err(|_| SeriesHotOperatorErrorV3::ActionMismatch)?,
-        CoreIdentity::new(market).map_err(|_| SeriesHotOperatorErrorV3::ActionMismatch)?,
-        CoreIdentity::new(ticket.to_bytes())
-            .map_err(|_| SeriesHotOperatorErrorV3::ActionMismatch)?,
+        CoreIdentity::new(release_set).map_err(SeriesHotOperatorErrorV3::MarketCore)?,
+        CoreIdentity::new(market).map_err(SeriesHotOperatorErrorV3::MarketCore)?,
+        CoreIdentity::new(ticket.to_bytes()).map_err(SeriesHotOperatorErrorV3::MarketCore)?,
     );
     // The Rent sysvar is still AUTHENTICATED here -- key, owner, executable bit,
     // exact width, canonical body -- even though nothing prices a floor against
     // it any more. Dropping the decode with the floor would silently stop
     // checking the coordinate, which is the debt `a4b2cbb17` named at
     // `authenticate_execution_strategy_v2` and this does not repeat.
-    decode_rent(rent_account).map_err(|_| SeriesHotOperatorErrorV3::ActionMismatch)?;
+    decode_rent(rent_account).map_err(SeriesHotOperatorErrorV3::Observation)?;
     let expected = Pubkey::find_program_address(&seeds.as_slices(), &core.account.key).0;
     let mut matches = physical.iter().filter(|value| value.account == *observed);
     let permit_meta = matches

@@ -140,10 +140,26 @@ pub enum ProviderTransportOperatorErrorV3 {
     Provider,
     /// A deterministic address or exact frame account differed.
     Address,
-    /// Submission intent was invalid or contradicted observed state.
-    Intent,
     /// Lifecycle was not an exact consumed reclaim candidate.
     Lifecycle,
+    /// `dclutch_resolution_core_v3_operator` refused; the cause is its own.
+    ResolutionCoreOperator(dclutch_resolution_core_v3_operator::ResolutionCoreOperatorErrorV3),
+    /// `dclutch_market` refused; the cause is its own.
+    MarketCore(dclutch_market::Error),
+    /// `dclutch_source` refused; the cause is its own.
+    Source(dclutch_source::Error),
+    /// `dclutch_registry::release_set` refused; the cause is its own.
+    ReleaseSet(dclutch_registry::release_set::Error),
+    /// `dclutch_source::pyth` refused; the cause is its own.
+    PythRelease(dclutch_source::pyth::PythReleaseV1Error),
+    /// `dclutch_source::pyth` refused; the cause is its own.
+    RouterAccount(dclutch_source::pyth::RouterAccountErrorV1),
+    /// `dclutch_source::pyth` refused; the cause is its own.
+    PostUpdateParams(dclutch_source::pyth::PostUpdateParamsError),
+    /// `dclutch_source::resolution` refused; the cause is its own.
+    Resolution(dclutch_source::resolution::Error),
+    /// `dclutch_product::admission` refused; the cause is its own.
+    ProductRuntimeAdmission(dclutch_product::admission::Error),
 }
 
 /// Derive the Market-owned starting coordinates for one provider submission.
@@ -165,7 +181,7 @@ pub fn derive_provider_submit_base_coordinates_v3(
         registry_program,
         resolution_program,
     )
-    .map_err(|_| ProviderTransportOperatorErrorV3::State)?;
+    .map_err(ProviderTransportOperatorErrorV3::ResolutionCoreOperator)?;
     Ok(ProviderSubmitBaseCoordinatesV3 {
         source_state: base.source_state,
         source_material: base.source_material,
@@ -192,7 +208,7 @@ pub fn derive_provider_submit_material_coordinates_v3(
         return Err(ProviderTransportOperatorErrorV3::State);
     }
     let state =
-        CoreState::decode(&market.data).map_err(|_| ProviderTransportOperatorErrorV3::State)?;
+        CoreState::decode(&market.data).map_err(ProviderTransportOperatorErrorV3::MarketCore)?;
     let registry = Pubkey::new_from_array(state.identity.registry_program.to_bytes());
     authenticate_raw(
         registry,
@@ -201,7 +217,7 @@ pub fn derive_provider_submit_material_coordinates_v3(
         state.identity.resolution_policy.to_bytes(),
     )?;
     let material = SourceMaterialV3::decode(&source_material.data)
-        .map_err(|_| ProviderTransportOperatorErrorV3::Record)?;
+        .map_err(ProviderTransportOperatorErrorV3::Source)?;
     let expected_infrastructure = Pubkey::find_program_address(
         &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
         &market.owner,
@@ -215,7 +231,7 @@ pub fn derive_provider_submit_material_coordinates_v3(
         return Err(ProviderTransportOperatorErrorV3::Address);
     }
     let profile = ProtocolInfrastructureProfileV2::decode(&infrastructure.data)
-        .map_err(|_| ProviderTransportOperatorErrorV3::Record)?;
+        .map_err(ProviderTransportOperatorErrorV3::ReleaseSet)?;
     if profile.registry().program().to_bytes() != registry.to_bytes() {
         return Err(ProviderTransportOperatorErrorV3::Record);
     }
@@ -259,7 +275,7 @@ pub fn derive_provider_submit_provider_release_coordinates_v3(
         hash(&source_spec.data).to_bytes(),
     )?;
     let source = SourceSpecV1::decode(&source_spec.data)
-        .map_err(|_| ProviderTransportOperatorErrorV3::Record)?;
+        .map_err(ProviderTransportOperatorErrorV3::Source)?;
     Ok(record_pair(
         registry,
         PROVIDER_RELEASE_SCHEMA_ID_V1,
@@ -282,7 +298,7 @@ pub fn derive_provider_submit_pyth_release_coordinates_v3(
         hash(&provider_release.data).to_bytes(),
     )?;
     let provider = dclutch_source::ProviderReleaseV1::decode(&provider_release.data)
-        .map_err(|_| ProviderTransportOperatorErrorV3::Record)?;
+        .map_err(ProviderTransportOperatorErrorV3::Source)?;
     Ok(record_pair(
         registry,
         PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
@@ -304,13 +320,13 @@ pub fn derive_provider_submit_pyth_coordinates_v3(
         hash(&pyth_release.data).to_bytes(),
     )?;
     let pyth = PythReleaseV1::decode(&pyth_release.data)
-        .map_err(|_| ProviderTransportOperatorErrorV3::Provider)?;
+        .map_err(ProviderTransportOperatorErrorV3::PythRelease)?;
     let router_program = Pubkey::new_from_array(pyth.router_program());
     if encoded_vaa.owner != router_program || encoded_vaa.executable {
         return Err(ProviderTransportOperatorErrorV3::Provider);
     }
     let encoded = VerifiedEncodedVaaV1::parse(&encoded_vaa.data)
-        .map_err(|_| ProviderTransportOperatorErrorV3::Provider)?;
+        .map_err(ProviderTransportOperatorErrorV3::RouterAccount)?;
     Ok(ProviderSubmitPythCoordinatesV3 {
         receiver_program: Pubkey::new_from_array(pyth.receiver_program()),
         receiver_programdata: Pubkey::new_from_array(pyth.receiver_programdata()),
@@ -541,6 +557,12 @@ pub enum ProviderTransportTransactionErrorV3 {
     Frame,
     /// Finalized lookup-table selection or signed packet geometry refused.
     Routing(dclutch_versioned_message_operator::Error),
+    /// `dclutch_source::resolution` refused; the cause is its own.
+    Resolution(dclutch_source::resolution::Error),
+    /// `dclutch_market` refused; the cause is its own.
+    MarketCore(dclutch_market::Error),
+    /// `dclutch_registry::release_set` refused; the cause is its own.
+    ReleaseSet(dclutch_registry::release_set::Error),
 }
 
 /// Compile one exact provider submission with its required lifecycle prepay.
@@ -624,11 +646,11 @@ pub fn build_provider_submit_v3(
         &snapshot.encoded_vaa,
     ])?;
     PostUpdateParamsView::parse(&intent.post_update_body)
-        .map_err(|_| ProviderTransportOperatorErrorV3::Intent)?;
+        .map_err(ProviderTransportOperatorErrorV3::PostUpdateParams)?;
     let market = CoreState::decode(&snapshot.market.data)
-        .map_err(|_| ProviderTransportOperatorErrorV3::State)?;
+        .map_err(ProviderTransportOperatorErrorV3::MarketCore)?;
     let source = SourceResolutionStateV2::decode(&snapshot.source_state.data)
-        .map_err(|_| ProviderTransportOperatorErrorV3::State)?;
+        .map_err(ProviderTransportOperatorErrorV3::Source)?;
     // Either state in which this market can still be answered honestly. A
     // market standing on a funded rung is one of them.
     if !matches!(
@@ -650,7 +672,7 @@ pub fn build_provider_submit_v3(
         source.material_id().to_bytes(),
     )?;
     let material = SourceMaterialV3::decode(&snapshot.source_material.data)
-        .map_err(|_| ProviderTransportOperatorErrorV3::Record)?;
+        .map_err(ProviderTransportOperatorErrorV3::Source)?;
     authenticate_raw(
         registry,
         &snapshot.source_spec,
@@ -658,7 +680,7 @@ pub fn build_provider_submit_v3(
         material.primary_source_spec().to_bytes(),
     )?;
     let source_spec = SourceSpecV1::decode(&snapshot.source_spec.data)
-        .map_err(|_| ProviderTransportOperatorErrorV3::Record)?;
+        .map_err(ProviderTransportOperatorErrorV3::Source)?;
     authenticate_raw(
         registry,
         &snapshot.source_provider_release,
@@ -667,7 +689,7 @@ pub fn build_provider_submit_v3(
     )?;
     let provider =
         dclutch_source::ProviderReleaseV1::decode(&snapshot.source_provider_release.data)
-            .map_err(|_| ProviderTransportOperatorErrorV3::Record)?;
+            .map_err(ProviderTransportOperatorErrorV3::Source)?;
     let pyth_id = provider.provider_deployment_release_id().to_bytes();
     authenticate_raw(
         registry,
@@ -676,7 +698,7 @@ pub fn build_provider_submit_v3(
         pyth_id,
     )?;
     let pyth = PythReleaseV1::decode(&snapshot.pyth_release.data)
-        .map_err(|_| ProviderTransportOperatorErrorV3::Provider)?;
+        .map_err(ProviderTransportOperatorErrorV3::PythRelease)?;
     authenticate_raw(
         registry,
         &snapshot.window,
@@ -684,7 +706,7 @@ pub fn build_provider_submit_v3(
         material.window_spec().to_bytes(),
     )?;
     let window = WindowSpecV1::decode(&snapshot.window.data)
-        .map_err(|_| ProviderTransportOperatorErrorV3::Record)?;
+        .map_err(ProviderTransportOperatorErrorV3::Source)?;
     if window.source_spec_id() != material.primary_source_spec()
         || intent.reclaim_after_unix_seconds < window.end_unix_seconds()
         || snapshot.encoded_vaa.owner != Pubkey::new_from_array(pyth.router_program())
@@ -692,7 +714,7 @@ pub fn build_provider_submit_v3(
         return Err(ProviderTransportOperatorErrorV3::Provider);
     }
     let encoded = VerifiedEncodedVaaV1::parse(&snapshot.encoded_vaa.data)
-        .map_err(|_| ProviderTransportOperatorErrorV3::Provider)?;
+        .map_err(ProviderTransportOperatorErrorV3::RouterAccount)?;
     if encoded.write_authority() != intent.submitter.to_bytes() {
         return Err(ProviderTransportOperatorErrorV3::Provider);
     }
@@ -732,7 +754,7 @@ pub fn build_provider_submit_v3(
     };
     let mut data = request
         .to_bytes()
-        .map_err(|_| ProviderTransportOperatorErrorV3::Intent)?
+        .map_err(ProviderTransportOperatorErrorV3::Resolution)?
         .to_vec();
     data.extend_from_slice(&intent.post_update_body);
     let activation =
@@ -850,7 +872,7 @@ pub fn provider_execute_caller_authority_v3(
     let core_request = Request::administrative(Action::ExecuteProvider, generation, market_id);
     let core_bytes = core_request
         .encode()
-        .map_err(|_| ProviderTransportOperatorErrorV3::Intent)?;
+        .map_err(ProviderTransportOperatorErrorV3::MarketCore)?;
     let parent_request_digest = hash(&core_bytes).to_bytes();
     let caller_seeds = CallerAuthoritySeedsV1::from_bytes(
         release_set,
@@ -859,7 +881,7 @@ pub fn provider_execute_caller_authority_v3(
         source_state.to_bytes(),
         parent_request_digest,
     )
-    .map_err(|_| ProviderTransportOperatorErrorV3::Address)?;
+    .map_err(ProviderTransportOperatorErrorV3::ReleaseSet)?;
     Ok((
         core_bytes.to_vec(),
         Pubkey::find_program_address(&caller_seeds.as_slices(), &core_program).0,
@@ -894,13 +916,13 @@ pub fn build_provider_execute_v3(
         &snapshot.portfolio,
     ])?;
     PostUpdateParamsView::parse(&intent.post_update_body)
-        .map_err(|_| ProviderTransportOperatorErrorV3::Intent)?;
+        .map_err(ProviderTransportOperatorErrorV3::PostUpdateParams)?;
     let market = CoreState::decode(&snapshot.market.data)
-        .map_err(|_| ProviderTransportOperatorErrorV3::State)?;
+        .map_err(ProviderTransportOperatorErrorV3::MarketCore)?;
     let source = SourceResolutionStateV2::decode(&snapshot.source_state.data)
-        .map_err(|_| ProviderTransportOperatorErrorV3::State)?;
+        .map_err(ProviderTransportOperatorErrorV3::Source)?;
     let lifecycle = ProviderUpdateLifecycleV3::decode(&snapshot.lifecycle.data)
-        .map_err(|_| ProviderTransportOperatorErrorV3::Lifecycle)?;
+        .map_err(ProviderTransportOperatorErrorV3::Resolution)?;
     if market.phase != CorePhase::Open
         || market.readiness != Readiness::Consumed
         || !matches!(
@@ -934,7 +956,7 @@ pub fn build_provider_execute_v3(
         source.material_id().to_bytes(),
     )?;
     let material = SourceMaterialV3::decode(&snapshot.source_material.data)
-        .map_err(|_| ProviderTransportOperatorErrorV3::Record)?;
+        .map_err(ProviderTransportOperatorErrorV3::Source)?;
     // WHICH SOURCE THIS CAPTURE ANSWERS ON, decided by the market rather than
     // by the caller. The ladder's position is the Source state's own, so the
     // builder derives both the request's `source_index` and its source-spec
@@ -954,10 +976,10 @@ pub fn build_provider_execute_v3(
                 policy_id.to_bytes(),
             )?;
             let policy = RecoveryPolicyV2::decode(&ladder.policy.data)
-                .map_err(|_| ProviderTransportOperatorErrorV3::Record)?;
+                .map_err(ProviderTransportOperatorErrorV3::Source)?;
             let attempt = policy
                 .attempt(source.active_attempt())
-                .map_err(|_| ProviderTransportOperatorErrorV3::Record)?;
+                .map_err(ProviderTransportOperatorErrorV3::Source)?;
             let rung = source
                 .active_attempt()
                 .checked_add(1)
@@ -973,7 +995,7 @@ pub fn build_provider_execute_v3(
         expected_source_spec.to_bytes(),
     )?;
     let source_spec = SourceSpecV1::decode(&snapshot.source_spec.data)
-        .map_err(|_| ProviderTransportOperatorErrorV3::Record)?;
+        .map_err(ProviderTransportOperatorErrorV3::Source)?;
     authenticate_raw(
         registry,
         &snapshot.source_provider_release,
@@ -982,7 +1004,7 @@ pub fn build_provider_execute_v3(
     )?;
     let source_provider =
         dclutch_source::ProviderReleaseV1::decode(&snapshot.source_provider_release.data)
-            .map_err(|_| ProviderTransportOperatorErrorV3::Record)?;
+            .map_err(ProviderTransportOperatorErrorV3::Source)?;
     authenticate_raw(
         registry,
         &snapshot.adapter_config,
@@ -1009,7 +1031,7 @@ pub fn build_provider_execute_v3(
         pyth_id,
     )?;
     let pyth = PythReleaseV1::decode(&snapshot.pyth_release.data)
-        .map_err(|_| ProviderTransportOperatorErrorV3::Provider)?;
+        .map_err(ProviderTransportOperatorErrorV3::PythRelease)?;
     if lifecycle.provider_release != pyth_id
         || snapshot.update.owner != Pubkey::new_from_array(pyth.receiver_program())
         || deployment.receiver_config != Pubkey::new_from_array(pyth.receiver_config())
@@ -1024,7 +1046,7 @@ pub fn build_provider_execute_v3(
         market.identity.product_record.to_bytes(),
     )?;
     let product = ProductRecordV2::decode(&snapshot.product.data)
-        .map_err(|_| ProviderTransportOperatorErrorV3::Record)?;
+        .map_err(ProviderTransportOperatorErrorV3::ProductRuntimeAdmission)?;
     if product.product_id().to_bytes() != market.identity.product_id.to_bytes() {
         return Err(ProviderTransportOperatorErrorV3::Record);
     }
@@ -1111,7 +1133,7 @@ pub fn build_provider_execute_v3(
     data.extend_from_slice(
         &provider_request
             .to_bytes()
-            .map_err(|_| ProviderTransportOperatorErrorV3::Intent)?,
+            .map_err(ProviderTransportOperatorErrorV3::Resolution)?,
     );
     data.extend_from_slice(&intent.post_update_body);
 
@@ -1257,7 +1279,7 @@ pub fn build_provider_reclaim_v3(
 ) -> Result<ProviderTransportReportV3, ProviderTransportOperatorErrorV3> {
     let observation = require_same_finalized_observation(&[lifecycle_account, pyth_release])?;
     let lifecycle = ProviderUpdateLifecycleV3::decode(&lifecycle_account.data)
-        .map_err(|_| ProviderTransportOperatorErrorV3::Lifecycle)?;
+        .map_err(ProviderTransportOperatorErrorV3::Resolution)?;
     if lifecycle.status != ProviderUpdateStatusV3::Consumed
         || lifecycle_account.owner != deployment.resolution_program
     {
@@ -1271,7 +1293,7 @@ pub fn build_provider_reclaim_v3(
         lifecycle.provider_release,
     )?;
     let release = PythReleaseV1::decode(&pyth_release.data)
-        .map_err(|_| ProviderTransportOperatorErrorV3::Provider)?;
+        .map_err(ProviderTransportOperatorErrorV3::PythRelease)?;
     let request = ProviderReclaimRequestV3 {
         generation: lifecycle.generation,
         terminal_sequence: lifecycle.terminal_sequence,
@@ -1286,7 +1308,7 @@ pub fn build_provider_reclaim_v3(
     };
     let data = request
         .to_bytes()
-        .map_err(|_| ProviderTransportOperatorErrorV3::Lifecycle)?
+        .map_err(ProviderTransportOperatorErrorV3::Resolution)?
         .to_vec();
     let activation = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, &lifecycle.release_set],
@@ -1361,7 +1383,7 @@ pub fn build_provider_abandon_v3(
     let observation =
         require_same_finalized_observation(&[lifecycle_account, source_state, pyth_release])?;
     let lifecycle = ProviderUpdateLifecycleV3::decode(&lifecycle_account.data)
-        .map_err(|_| ProviderTransportOperatorErrorV3::Lifecycle)?;
+        .map_err(ProviderTransportOperatorErrorV3::Resolution)?;
     if lifecycle.status != ProviderUpdateStatusV3::Submitted
         || lifecycle.terminal_sequence != 0
         || lifecycle.certificate != [0; 32]
@@ -1383,7 +1405,7 @@ pub fn build_provider_abandon_v3(
         lifecycle.provider_release,
     )?;
     let release = PythReleaseV1::decode(&pyth_release.data)
-        .map_err(|_| ProviderTransportOperatorErrorV3::Provider)?;
+        .map_err(ProviderTransportOperatorErrorV3::PythRelease)?;
     let request = ProviderAbandonRequestV3 {
         generation: lifecycle.generation,
         market: lifecycle.market,
@@ -1396,7 +1418,7 @@ pub fn build_provider_abandon_v3(
     };
     let data = request
         .to_bytes()
-        .map_err(|_| ProviderTransportOperatorErrorV3::Lifecycle)?
+        .map_err(ProviderTransportOperatorErrorV3::Resolution)?
         .to_vec();
     let activation = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, &lifecycle.release_set],
@@ -1468,7 +1490,7 @@ fn source_is_past_primary(
         return Err(ProviderTransportOperatorErrorV3::State);
     }
     let state = SourceResolutionStateV2::decode(&source_state.data)
-        .map_err(|_| ProviderTransportOperatorErrorV3::State)?;
+        .map_err(ProviderTransportOperatorErrorV3::Source)?;
     if state.market() != lifecycle.market || state.generation() != lifecycle.generation {
         return Err(ProviderTransportOperatorErrorV3::State);
     }
@@ -1626,7 +1648,7 @@ fn validate_submit_report(
         .get(..PROVIDER_SUBMIT_REQUEST_BYTES_V3)
         .ok_or(ProviderTransportTransactionErrorV3::Frame)?;
     let request = ProviderSubmitRequestV3::decode(prefix)
-        .map_err(|_| ProviderTransportTransactionErrorV3::Frame)?;
+        .map_err(ProviderTransportTransactionErrorV3::Resolution)?;
     let body = report
         .instruction
         .data
@@ -1660,7 +1682,7 @@ fn validate_reclaim_report(
 ) -> Result<ProviderReclaimRequestV3, ProviderTransportTransactionErrorV3> {
     let accounts = &report.instruction.accounts;
     let request = ProviderReclaimRequestV3::decode(&report.instruction.data)
-        .map_err(|_| ProviderTransportTransactionErrorV3::Frame)?;
+        .map_err(ProviderTransportTransactionErrorV3::Resolution)?;
     if report.instruction.data.len() != PROVIDER_RECLAIM_REQUEST_BYTES_V3
         || accounts.len() != PROVIDER_RECLAIM_ACCOUNT_COUNT_V3
         || report.instruction.program_id != account_key(accounts, 9)?
@@ -1694,14 +1716,14 @@ fn validate_execute_report(
         .get(..core_end)
         .ok_or(ProviderTransportTransactionErrorV3::Frame)?;
     let core_request =
-        Request::decode(core_bytes).map_err(|_| ProviderTransportTransactionErrorV3::Frame)?;
+        Request::decode(core_bytes).map_err(ProviderTransportTransactionErrorV3::MarketCore)?;
     let provider_bytes = report
         .instruction
         .data
         .get(core_end..provider_end)
         .ok_or(ProviderTransportTransactionErrorV3::Frame)?;
     let request = ProviderExecutionRequestV3::decode(provider_bytes)
-        .map_err(|_| ProviderTransportTransactionErrorV3::Frame)?;
+        .map_err(ProviderTransportTransactionErrorV3::Resolution)?;
     let body = report
         .instruction
         .data
@@ -1725,7 +1747,7 @@ fn validate_execute_report(
                     request.source_state,
                     request.parent_request_digest,
                 )
-                .map_err(|_| ProviderTransportTransactionErrorV3::Frame)?
+                .map_err(ProviderTransportTransactionErrorV3::ReleaseSet)?
                 .as_slices(),
                 &report.instruction.program_id,
             )

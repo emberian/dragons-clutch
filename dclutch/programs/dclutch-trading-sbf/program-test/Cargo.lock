@@ -1589,7 +1589,6 @@ dependencies = [
  "dclutch-market",
  "dclutch-refusal-registry",
  "dclutch-registry",
- "dclutch-trading",
  "solana-program",
  "solana-sdk-ids",
  "solana-system-interface 2.0.0",

@@ -88,6 +88,24 @@ pub enum Error {
     HotAdapter,
     /// Checked size, offset, slot, or count arithmetic overflowed.
     Arithmetic,
+    /// `dclutch_rational_lifecycle_hot_v3` refused; the cause is its own.
+    RationalLifecycleHot(dclutch_rational_lifecycle_hot_v3::Error),
+    /// `dclutch_claims::rational_lifecycle` refused; the cause is its own.
+    RationalRepresentationLifecycle(dclutch_claims::rational_lifecycle::Error),
+    /// `dclutch_claims::rational_kernel` refused; the cause is its own.
+    RationalRepresentation(dclutch_claims::rational_kernel::Error),
+    /// `dclutch_product::admission` refused; the cause is its own.
+    ProductRuntimeAdmission(dclutch_product::admission::Error),
+    /// `dclutch_product::payoff` refused; the cause is its own.
+    ProductPayoffRuntimeCodec(dclutch_product::payoff::runtime_v3::Error),
+    /// `dclutch_claims::composition` refused; the cause is its own.
+    RepresentationComposition(dclutch_claims::composition::Error),
+    /// `dclutch_registry::record` refused; the cause is its own.
+    Record(dclutch_registry::record::Error),
+    /// `dclutch_versioned_message_operator` refused; the cause is its own.
+    VersionedMessage(dclutch_versioned_message_operator::Error),
+    /// `dclutch_product` refused; the cause is its own.
+    ProductRuntime(dclutch_product::Error),
 }
 
 /// Result alias for operator construction.
@@ -406,10 +424,10 @@ pub fn authenticate_composition_v3(
             authority_derivation_authenticated: true,
         },
     )
-    .map_err(|_| Error::Composition)?;
+    .map_err(Error::RationalRepresentation)?;
     execution_descriptor
         .authenticate_exposure(exposure)
-        .map_err(|_| Error::CrossRecord)?;
+        .map_err(Error::RationalRepresentation)?;
     if execution_descriptor.market_id() != descriptor.market()
         || execution_descriptor.release_set_id() != descriptor.release_set()
         || execution_descriptor.outcome_count() != descriptor.outcome_count()
@@ -462,9 +480,9 @@ pub fn authenticate_composition_only_v3(
         result_domain_record.bytes,
         portfolio_record.bytes,
     )
-    .map_err(|_| Error::Product)?;
-    let product_basis =
-        ProductBasisV3::decode(product_basis_record.bytes).map_err(|_| Error::ProductBasis)?;
+    .map_err(Error::ProductRuntimeAdmission)?;
+    let product_basis = ProductBasisV3::decode(product_basis_record.bytes)
+        .map_err(Error::ProductPayoffRuntimeCodec)?;
     if product_basis.product_id() != product.join.product_id.to_bytes()
         || product_basis.result_domain_id() != result_domain_record.coordinate.content_digest
         || product_basis.basis_width() != product.join.outcome_count
@@ -482,7 +500,7 @@ pub fn authenticate_composition_only_v3(
         descriptor_record.coordinate.content_digest,
     );
     let descriptor = CompositionDescriptorV3::decode(descriptor_record.bytes, descriptor_admission)
-        .map_err(|_| Error::Composition)?;
+        .map_err(Error::RepresentationComposition)?;
     let graph_record = authenticate_record(
         registry,
         observed.composition.graph,
@@ -507,7 +525,7 @@ pub fn authenticate_composition_only_v3(
             translation_record.coordinate.content_digest,
         ),
     )
-    .map_err(|_| Error::Composition)?;
+    .map_err(Error::RepresentationComposition)?;
     let exposure_record = authenticate_record(
         registry,
         observed.composition.exposure,
@@ -563,10 +581,10 @@ pub fn validate_publication_candidates_v3<'a>(
     let translation_digest = hash(translation_bytes).to_bytes();
     let exposure_digest = hash(exposure_bytes).to_bytes();
     let product_basis =
-        ProductBasisV3::decode(product_basis_bytes).map_err(|_| Error::ProductBasis)?;
+        ProductBasisV3::decode(product_basis_bytes).map_err(Error::ProductPayoffRuntimeCodec)?;
     let descriptor_admission = admission(descriptor_digest, descriptor_digest);
     let descriptor = CompositionDescriptorV3::decode(descriptor_bytes, descriptor_admission)
-        .map_err(|_| Error::Composition)?;
+        .map_err(Error::RepresentationComposition)?;
     let composition = decode_composition_bundle_v3(
         descriptor_bytes,
         descriptor_admission,
@@ -575,7 +593,7 @@ pub fn validate_publication_candidates_v3<'a>(
         translation_bytes,
         admission(descriptor.translation_id(), translation_digest),
     )
-    .map_err(|_| Error::Composition)?;
+    .map_err(Error::RepresentationComposition)?;
     let semantic_basis = semantic_basis_id(product_basis_bytes)?;
     if descriptor.result_domain() != product_basis.result_domain_id()
         || descriptor.native_basis() != semantic_basis
@@ -629,7 +647,7 @@ fn decode_and_join_exposure<'a>(
         })
     })
     .and_then(|exposure| exposure.verify_composition_graph(composition.graph()))
-    .map_err(|_| Error::Composition)
+    .map_err(Error::RepresentationComposition)
 }
 
 /// Immutable bytes selected for canonical Record publication.
@@ -683,9 +701,9 @@ pub fn build_publication_plan_v3(
     {
         return Err(Error::Publication);
     }
-    let schema = SchemaReleaseId::new(target.schema_id).map_err(|_| Error::Publication)?;
+    let schema = SchemaReleaseId::new(target.schema_id).map_err(Error::Record)?;
     let digest = hash(target.bytes).to_bytes();
-    let content = ContentDigest::new(digest).map_err(|_| Error::Publication)?;
+    let content = ContentDigest::new(digest).map_err(Error::Record)?;
     let key = RecordKeyV1::new(schema, content);
     let raw_seeds = key.raw_record_pda_seeds();
     let raw_schema = raw_seeds.schema_release_id();
@@ -718,16 +736,16 @@ pub fn build_publication_plan_v3(
         .ok_or(Error::Arithmetic)?;
     let policy = profile
         .staging_liveness_policy(context.cursor_rent_principal)
-        .map_err(|_| Error::Publication)?;
+        .map_err(Error::Record)?;
     let begin = BeginRecordV1::new(
         key,
         u64::try_from(target.bytes.len()).map_err(|_| Error::Arithmetic)?,
-        profile.page_envelope().map_err(|_| Error::Publication)?,
+        profile.page_envelope().map_err(Error::Record)?,
         policy.policy_id(),
         expiry,
         context.cursor_rent_principal,
     )
-    .map_err(|_| Error::Publication)?;
+    .map_err(Error::Record)?;
     let page_bytes = usize::try_from(profile.page_bytes()).map_err(|_| Error::Arithmetic)?;
     let page_count = target
         .bytes
@@ -754,9 +772,9 @@ pub fn build_publication_plan_v3(
         let offset = page_index
             .checked_mul(u64::try_from(page_bytes).map_err(|_| Error::Arithmetic)?)
             .ok_or(Error::Arithmetic)?;
-        let append = AppendPageV1::new(page_index, offset, page).map_err(|_| Error::Publication)?;
+        let append = AppendPageV1::new(page_index, offset, page).map_err(Error::Record)?;
         let mut data = vec![0; APPEND_PAGE_HEADER_BYTES_V1 + page.len()];
-        append.encode(&mut data).map_err(|_| Error::Publication)?;
+        append.encode(&mut data).map_err(Error::Record)?;
         instructions.push(Instruction {
             program_id: context.record_program,
             accounts: vec![
@@ -829,15 +847,17 @@ pub fn build_claims_lifecycle_plan_v3(
             .ok_or(Error::Arithmetic)?;
         coordinate
             .encode_into(rows.get_mut(start..end).ok_or(Error::Arithmetic)?)
-            .map_err(|_| Error::ClaimsLifecycle)?;
+            .map_err(Error::RationalRepresentationLifecycle)?;
     }
-    let request = LifecycleRequestV2::new(header, &rows).map_err(|_| Error::ClaimsLifecycle)?;
+    let request =
+        LifecycleRequestV2::new(header, &rows).map_err(Error::RationalRepresentationLifecycle)?;
     let mut wire = vec![0_u8; LIFECYCLE_HEADER_BYTES_V2 + rows.len()];
     request
         .encode_into(&mut wire)
-        .map_err(|_| Error::ClaimsLifecycle)?;
-    let decoded = LifecycleRequestV2::decode(&wire).map_err(|_| Error::ClaimsLifecycle)?;
-    prepare(decoded, descriptor).map_err(|_| Error::ClaimsLifecycle)?;
+        .map_err(Error::RationalRepresentationLifecycle)?;
+    let decoded =
+        LifecycleRequestV2::decode(&wire).map_err(Error::RationalRepresentationLifecycle)?;
+    prepare(decoded, descriptor).map_err(Error::RationalRepresentationLifecycle)?;
     let account_count = match header.action {
         LifecycleActionV2::ActivateReceipt => LIFECYCLE_COMMON_ACCOUNT_COUNT_V2,
         LifecycleActionV2::ActivateCoordinate | LifecycleActionV2::RetireCoordinate => {
@@ -891,7 +911,7 @@ pub fn compile_unsigned_packet_v0(
         observation,
         lookup_tables,
     )
-    .map_err(|_| Error::Packet)
+    .map_err(Error::VersionedMessage)
 }
 
 fn common_observation(observed: CompositionChainObservationV3<'_>) -> Result<Observation> {
@@ -1026,7 +1046,7 @@ fn product_coordinate(value: FinalizedCoordinateV3) -> Result<FinalizedRecordCoo
 }
 
 fn semantic_basis_id(bytes: &[u8]) -> Result<[u8; 32]> {
-    let semantic = semantic_basis_preimage_v3(bytes).map_err(|_| Error::ProductBasis)?;
+    let semantic = semantic_basis_preimage_v3(bytes).map_err(Error::ProductPayoffRuntimeCodec)?;
     Ok(hashv(&[
         SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
         semantic.prefix(),

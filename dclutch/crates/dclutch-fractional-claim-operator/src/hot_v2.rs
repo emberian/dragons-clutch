@@ -42,7 +42,7 @@ impl<'a> FractionalHotProfileV2<'a> {
         if self.ordered_keys.get(usize::from(coordinate)) != Some(&expected_key) {
             return Err(Error::AccountFrame);
         }
-        FractionalHotAccountRefV2::new(coordinate, expected_key).map_err(|_| Error::AccountFrame)
+        FractionalHotAccountRefV2::new(coordinate, expected_key).map_err(Error::FractionalHot)
     }
 
     /// Exact number of expanded profile coordinates.
@@ -102,7 +102,9 @@ pub fn lower_fractional_hot_token_effect_v2(
     plan: &FractionalExposureTokenPlanV2,
     coordinates: FractionalHotTokenCoordinatesV2,
 ) -> Result<FractionalHotTokenEffectV2> {
-    let request = request.bind_terms(terms).map_err(|_| Error::Token)?;
+    let request = request
+        .bind_terms(terms)
+        .map_err(Error::FractionalExposureRequest)?;
     let input = request.input();
     let (kind, expected_authority) = match (request.action(), plan.effect()) {
         (FractionalExposureActionV2::Wrap, FractionalExposureTokenEffectV2::Mint(_)) => {
@@ -121,7 +123,7 @@ pub fn lower_fractional_hot_token_effect_v2(
     };
     let mint = terms
         .shard_mint(input.representation_coordinate)
-        .map_err(|_| Error::Token)?;
+        .map_err(Error::FractionalClaim)?;
     let source = checked_optional_account(profile, coordinates.source, input.source_token_account)?;
     let destination = checked_optional_account(
         profile,
@@ -155,7 +157,9 @@ pub fn lower_fractional_hot_retirement_effects_v2(
     coordinates: FractionalHotRetirementCoordinatesV2<'_>,
     output: &mut [FractionalHotTokenEffectV2],
 ) -> Result<()> {
-    let request = request.bind_terms(terms).map_err(|_| Error::Rent)?;
+    let request = request
+        .bind_terms(terms)
+        .map_err(Error::FractionalExposureRequest)?;
     let width = usize::try_from(terms.representation_width()).map_err(|_| Error::Rent)?;
     if request.action() != FractionalExposureActionV2::ZeroSupplyRetire
         || retirement.market() != terms.market()
@@ -203,7 +207,9 @@ fn lower_retirement_with_instruction_root(
         profile.account(coordinates.rent_credit, retirement.rent_credit().to_bytes())?;
     for (index, slot) in output.iter_mut().enumerate() {
         let coordinate = u32::try_from(index).map_err(|_| Error::Rent)?;
-        let mint_key = terms.shard_mint(coordinate).map_err(|_| Error::Rent)?;
+        let mint_key = terms
+            .shard_mint(coordinate)
+            .map_err(Error::FractionalClaim)?;
         let instruction = retirement.instructions().get(index).ok_or(Error::Rent)?;
         if instruction.program_id.to_bytes() != terms.token_program()
             || instruction_key(instruction, 0)? != mint_key
@@ -242,7 +248,9 @@ pub fn lower_fractional_hot_signed_delta_v2<'a>(
     packet: &'a [u8],
     coordinates: FractionalHotChildCoordinatesV2,
 ) -> Result<FractionalHotClaimsEffectV2<'a>> {
-    prepared.table_bytes(packet).map_err(|_| Error::Claims)?;
+    prepared
+        .table_bytes(packet)
+        .map_err(Error::FractionalClaims)?;
     Ok(FractionalHotClaimsEffectV2::SignedDelta {
         claims_program: profile.account(coordinates.program, prepared.claims_program())?,
         route_base: coordinates.route_base,

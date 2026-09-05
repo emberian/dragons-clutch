@@ -49,6 +49,10 @@ pub enum PublicationErrorV1 {
     SponsorUnderfunded,
     /// Product/domain/portfolio bytes did not match the compiled graph.
     ProductGraphMismatch,
+    /// `dclutch_registry::record` refused; the cause is its own.
+    RecordContract(dclutch_registry::record::Error),
+    /// `dclutch_registry` refused; the cause is its own.
+    Registry(dclutch_registry::Error),
 }
 
 /// One immutable schema/content pair to publish under the selected Registry.
@@ -345,18 +349,18 @@ fn build_begin(
         .ok_or(PublicationErrorV1::ArithmeticOverflow)?;
     let liveness = profile
         .staging_liveness_policy(cursor_rent)
-        .map_err(|_| PublicationErrorV1::Record)?;
+        .map_err(PublicationErrorV1::RecordContract)?;
     let request = BeginRecordV1::new(
         key,
         u64::try_from(content.content.len()).map_err(|_| PublicationErrorV1::ArithmeticOverflow)?,
         profile
             .page_envelope()
-            .map_err(|_| PublicationErrorV1::Record)?,
+            .map_err(PublicationErrorV1::RecordContract)?,
         liveness.policy_id(),
         expiry,
         cursor_rent,
     )
-    .map_err(|_| PublicationErrorV1::Record)?;
+    .map_err(PublicationErrorV1::RecordContract)?;
     Ok(plan(
         RecordPublicationActionV1::Begin,
         Some(Instruction {
@@ -400,7 +404,7 @@ fn build_live(
         return Err(PublicationErrorV1::AccountAuthority);
     }
     let cursor = StagingCursorV1::decode(state.staging_cursor.data)
-        .map_err(|_| PublicationErrorV1::Record)?;
+        .map_err(PublicationErrorV1::RecordContract)?;
     if cursor.to_bytes().as_slice() != state.staging_cursor.data
         || cursor.key() != key
         || cursor.raw_record_account().to_bytes() != state.raw_record.key.to_bytes()
@@ -435,8 +439,8 @@ fn build_live(
             AccountMeta::new(state.sponsor.key, false),
         ];
         if content.schema_release_id == ARTIFACT_RELEASE_SCHEMA_ID_V1 {
-            let release = ArtifactReleaseV1::decode(content.content)
-                .map_err(|_| PublicationErrorV1::Record)?;
+            let release =
+                ArtifactReleaseV1::decode(content.content).map_err(PublicationErrorV1::Registry)?;
             accounts.push(AccountMeta::new_readonly(
                 Pubkey::new_from_array(release.program().to_bytes()),
                 false,
@@ -479,19 +483,19 @@ fn build_live(
         .get(start..end)
         .ok_or(PublicationErrorV1::Record)?;
     let request = AppendPageV1::new(cursor.next_page(), cursor.next_offset(), page)
-        .map_err(|_| PublicationErrorV1::Record)?;
+        .map_err(PublicationErrorV1::RecordContract)?;
     let mut data = vec![
         0;
         request
             .encoded_len()
-            .map_err(|_| PublicationErrorV1::ArithmeticOverflow)?
+            .map_err(PublicationErrorV1::RecordContract)?
     ];
     if data.len() != APPEND_PAGE_HEADER_BYTES_V1 + page.len() {
         return Err(PublicationErrorV1::ArithmeticOverflow);
     }
     request
         .encode(&mut data)
-        .map_err(|_| PublicationErrorV1::Record)?;
+        .map_err(PublicationErrorV1::RecordContract)?;
     Ok(plan(
         RecordPublicationActionV1::Append,
         Some(Instruction {
@@ -608,9 +612,10 @@ fn record_key(content: RecordPublicationContentV1<'_>) -> Result<RecordKeyV1, Pu
         return Err(PublicationErrorV1::Record);
     }
     Ok(RecordKeyV1::new(
-        SchemaReleaseId::new(content.schema_release_id).map_err(|_| PublicationErrorV1::Record)?,
+        SchemaReleaseId::new(content.schema_release_id)
+            .map_err(PublicationErrorV1::RecordContract)?,
         ContentDigest::new(hash(content.content).to_bytes())
-            .map_err(|_| PublicationErrorV1::Record)?,
+            .map_err(PublicationErrorV1::RecordContract)?,
     ))
 }
 

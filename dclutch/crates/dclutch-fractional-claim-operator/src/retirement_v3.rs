@@ -219,7 +219,7 @@ pub fn discover_fractional_retirement_next_v3(
                 snapshot.claims_market.key.to_bytes(),
                 common.root_key.to_bytes(),
             )
-            .map_err(|_| Error::Claims)?
+            .map_err(Error::ProtocolPosition)?
             .as_slices(),
             &snapshot.claims.program.key,
         )
@@ -229,7 +229,7 @@ pub fn discover_fractional_retirement_next_v3(
                 snapshot.claims_market.key.to_bytes(),
                 common.root_key.to_bytes(),
             )
-            .map_err(|_| Error::Claims)?
+            .map_err(Error::ProtocolPosition)?
             .as_slices(),
             &snapshot.claims.program.key,
         )
@@ -238,7 +238,7 @@ pub fn discover_fractional_retirement_next_v3(
             common
                 .terms
                 .shard_mint(coordinate)
-                .map_err(|_| Error::Token)?,
+                .map_err(Error::FractionalClaim)?,
         );
         (Some(position), Some(admission), Some(shard_mint))
     } else {
@@ -278,7 +278,7 @@ pub fn plan_fractional_retirement_next_v3(
         instruction_plan.observation,
         lookup_tables,
     )
-    .map_err(|_| Error::Message)?;
+    .map_err(Error::VersionedMessage)?;
     Ok(FractionalRetirementNextPlanV3 {
         instruction_plan,
         message,
@@ -321,7 +321,7 @@ pub fn plan_fractional_retirement_instruction_v3(
         },
     )
     .and_then(|request| request.bind_terms(common.terms))
-    .map_err(|_| Error::Rent)?;
+    .map_err(Error::FractionalRetirement)?;
     let instruction = match (action, cursor_kind) {
         (FractionalRetirementActionV3::Begin, CursorKindV3::Vacant) => {
             if snapshot.coordinate.is_some() {
@@ -340,7 +340,7 @@ pub fn plan_fractional_retirement_instruction_v3(
         }
         _ => return Err(Error::Rent),
     };
-    let request_bytes = request.to_bytes().map_err(|_| Error::Rent)?;
+    let request_bytes = request.to_bytes().map_err(Error::FractionalRetirement)?;
     if instruction.data.ends_with(&request_bytes) == false {
         return Err(Error::AccountFrame);
     }
@@ -401,7 +401,9 @@ fn select_retirement_act_v3(
                 action: FractionalRetirementActionV3::RetireCoordinate,
                 coordinate: Some(cursor.next_coordinate()),
                 expected_revision: cursor.revision(),
-                root_revision_anchor: cursor.root_revision_anchor().map_err(|_| Error::Rent)?,
+                root_revision_anchor: cursor
+                    .root_revision_anchor()
+                    .map_err(Error::FractionalRetirement)?,
             }
         }
         CursorKindV3::Live(cursor) if cursor.next_coordinate() == cursor.representation_width() => {
@@ -409,7 +411,9 @@ fn select_retirement_act_v3(
                 action: FractionalRetirementActionV3::Finish,
                 coordinate: None,
                 expected_revision: cursor.revision(),
-                root_revision_anchor: cursor.root_revision_anchor().map_err(|_| Error::Rent)?,
+                root_revision_anchor: cursor
+                    .root_revision_anchor()
+                    .map_err(Error::FractionalRetirement)?,
             }
         }
         CursorKindV3::Live(_) => return Err(Error::Rent),
@@ -499,10 +503,10 @@ fn authenticate_common(snapshot: &FractionalRetirementSnapshotV3) -> Result<Comm
     let release_set = header.release_set().to_bytes();
     authenticate_release(snapshot, release_set)?;
     let claims_market = LiabilityBasisMarketViewV2::decode(&snapshot.claims_market.data)
-        .map_err(|_| Error::Claims)?;
+        .map_err(Error::LiabilityBasisState)?;
     let expected_claims_market = Pubkey::find_program_address(
         &LiabilityBasisMarketSeedsV2::new(header.market())
-            .map_err(|_| Error::Claims)?
+            .map_err(Error::LiabilityBasisState)?
             .as_slices(),
         &snapshot.claims.program.key,
     )
@@ -516,7 +520,7 @@ fn authenticate_common(snapshot: &FractionalRetirementSnapshotV3) -> Result<Comm
     {
         return Err(Error::Claims);
     }
-    let core = CoreState::decode(&snapshot.core_market.data).map_err(|_| Error::Claims)?;
+    let core = CoreState::decode(&snapshot.core_market.data).map_err(Error::MarketCore)?;
     let expected_core = Pubkey::find_program_address(
         &MarketCoreStateSeedsV2::new(core.identity).as_slices(),
         &snapshot.core.program.key,
@@ -555,7 +559,7 @@ fn authenticate_common(snapshot: &FractionalRetirementSnapshotV3) -> Result<Comm
             record_authenticated: true,
         },
     )
-    .map_err(|_| Error::Projection)?;
+    .map_err(Error::FractionalClaim)?;
     if terms.market() != header.market()
         || terms.release_set() != release_set
         || terms.terms_id() != root_input.terms
@@ -567,7 +571,7 @@ fn authenticate_common(snapshot: &FractionalRetirementSnapshotV3) -> Result<Comm
         fractional_selection_config_from_terms_v1(terms),
         &mut selection,
     )
-    .map_err(|_| Error::Projection)?;
+    .map_err(Error::FractionalClaim)?;
     if hash(&selection).to_bytes() != header.selection().config().to_bytes() {
         return Err(Error::Projection);
     }
@@ -592,7 +596,7 @@ fn authenticate_common(snapshot: &FractionalRetirementSnapshotV3) -> Result<Comm
         },
     )?;
     let credit =
-        LifecycleRentCreditV2::decode(&snapshot.rent_credit.data).map_err(|_| Error::Rent)?;
+        LifecycleRentCreditV2::decode(&snapshot.rent_credit.data).map_err(Error::LifecycleRent)?;
     if snapshot.rent_credit.owner != snapshot.rent.program.key
         || snapshot.rent_credit.executable
         || credit.market().to_bytes() != header.market()
@@ -641,10 +645,8 @@ fn authenticate_release(
         return Err(Error::ChainArtifacts);
     }
     let view = ActivatedExecutionReleaseSetViewV1::decode(&snapshot.activation_cache.data)
-        .map_err(|_| Error::ChainArtifacts)?;
-    let selected = view
-        .execution_release_set_id()
-        .map_err(|_| Error::ChainArtifacts)?;
+        .map_err(Error::Registry)?;
+    let selected = view.execution_release_set_id().map_err(Error::Registry)?;
     let expected = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, selected.as_bytes()],
         &snapshot.registry_program.key,
@@ -669,12 +671,12 @@ fn authenticate_deployment(
     role: ExecutionRoleV1,
     deployment: &FractionalRetirementDeploymentV3,
 ) -> Result<()> {
-    let activated = view.role(role).map_err(|_| Error::ChainArtifacts)?;
+    let activated = view.role(role).map_err(Error::Registry)?;
     let release = activated.release();
     let observation = deployment_observation(deployment, release)?;
     activated
         .authenticate_current_deployment(observation)
-        .map_err(|_| Error::ChainArtifacts)
+        .map_err(Error::Registry)
 }
 
 fn deployment_observation(
@@ -693,8 +695,8 @@ fn deployment_observation(
     {
         return Err(Error::ChainArtifacts);
     }
-    let program_view = ProgramV3View::parse(&program.data).map_err(|_| Error::ChainArtifacts)?;
-    let data = ProgramDataV3View::parse(&programdata.data).map_err(|_| Error::ChainArtifacts)?;
+    let program_view = ProgramV3View::parse(&program.data).map_err(Error::RegistrySvm)?;
+    let data = ProgramDataV3View::parse(&programdata.data).map_err(Error::RegistrySvm)?;
     let expected =
         Pubkey::find_program_address(&[program.key.as_ref()], &bpf_loader_upgradeable::ID).0;
     if program_view.programdata() != programdata.key.to_bytes() || programdata.key != expected {
@@ -713,7 +715,7 @@ fn deployment_observation(
         hash(data.elf()).to_bytes(),
         data.upgrade_authority(),
     )
-    .map_err(|_| Error::ChainArtifacts)
+    .map_err(Error::Registry)
 }
 
 fn authenticate_record(
@@ -759,8 +761,8 @@ fn authenticate_cursor(
     {
         return Err(Error::Rent);
     }
-    let cursor =
-        FractionalRetirementCursorV3::decode(&snapshot.cursor.data).map_err(|_| Error::Rent)?;
+    let cursor = FractionalRetirementCursorV3::decode(&snapshot.cursor.data)
+        .map_err(Error::FractionalRetirement)?;
     let bump = [cursor.bump()];
     let recreated = Pubkey::create_program_address(
         &[
@@ -805,7 +807,10 @@ fn build_begin(
     Ok(Instruction {
         program_id: snapshot.claims.program.key,
         accounts,
-        data: request.to_bytes().map_err(|_| Error::Rent)?.to_vec(),
+        data: request
+            .to_bytes()
+            .map_err(Error::FractionalRetirement)?
+            .to_vec(),
     })
 }
 
@@ -822,7 +827,7 @@ fn build_coordinate(
             snapshot.claims_market.key.to_bytes(),
             snapshot.root.key.to_bytes(),
         )
-        .map_err(|_| Error::Claims)?
+        .map_err(Error::ProtocolPosition)?
         .as_slices(),
         &snapshot.claims.program.key,
     )
@@ -832,18 +837,18 @@ fn build_coordinate(
             snapshot.claims_market.key.to_bytes(),
             snapshot.root.key.to_bytes(),
         )
-        .map_err(|_| Error::Claims)?
+        .map_err(Error::ProtocolPosition)?
         .as_slices(),
         &snapshot.claims.program.key,
     )
     .0;
     let position = LiabilityBasisPositionViewV2::decode(&coordinate.position.data)
-        .map_err(|_| Error::Claims)?;
+        .map_err(Error::LiabilityBasisState)?;
     let reserve = position
         .balance(&coordinate.position.data, selected)
-        .map_err(|_| Error::Claims)?;
+        .map_err(Error::LiabilityBasisState)?;
     let admission = ProtocolPositionAdmissionV2::decode(&coordinate.admission.data)
-        .map_err(|_| Error::Claims)?;
+        .map_err(Error::ProtocolPosition)?;
     if coordinate.position.key != expected_position
         || coordinate.position.owner != snapshot.claims.program.key
         || coordinate.position.executable
@@ -866,7 +871,7 @@ fn build_coordinate(
     let mint = common
         .terms
         .shard_mint(selected)
-        .map_err(|_| Error::Token)?;
+        .map_err(Error::FractionalClaim)?;
     if coordinate.shard_mint.key.to_bytes() != mint
         || coordinate.shard_mint.owner != snapshot.token_program.key
         || coordinate.shard_mint.executable
@@ -880,7 +885,7 @@ fn build_coordinate(
         snapshot.root.key.to_bytes(),
         0,
     )
-    .map_err(|_| Error::Token)?;
+    .map_err(Error::TokenSvm)?;
     cursor
         .advance(
             common.terms,
@@ -893,8 +898,8 @@ fn build_coordinate(
                 reserve_authenticated: true,
             },
         )
-        .map_err(|_| Error::Rent)?;
-    let request_bytes = request.to_bytes().map_err(|_| Error::Rent)?;
+        .map_err(Error::FractionalRetirement)?;
+    let request_bytes = request.to_bytes().map_err(Error::FractionalRetirement)?;
     let caller = CallerAuthoritySeedsV1::from_bytes(
         common.release_set,
         common.market,
@@ -902,7 +907,7 @@ fn build_coordinate(
         common.terms_id,
         hash(&request_bytes).to_bytes(),
     )
-    .map_err(|_| Error::AccountFrame)?;
+    .map_err(Error::ReleaseSet)?;
     let authority =
         Pubkey::find_program_address(&caller.as_slices(), &snapshot.trading.program.key).0;
     let forwarded = vec![
@@ -971,7 +976,10 @@ fn build_finish(
     Ok(Instruction {
         program_id: snapshot.claims.program.key,
         accounts,
-        data: request.to_bytes().map_err(|_| Error::Rent)?.to_vec(),
+        data: request
+            .to_bytes()
+            .map_err(Error::FractionalRetirement)?
+            .to_vec(),
     })
 }
 

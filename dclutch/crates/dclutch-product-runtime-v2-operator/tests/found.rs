@@ -948,7 +948,9 @@ fn same_width_domain_and_portfolio_substitution_refuse() {
                 ..fixture.state()
             }
         ),
-        Err(Error::InvalidRecord)
+        Err(Error::ProductRuntimeAdmission(
+            dclutch_product::admission::Error::ProductMismatch
+        ))
     );
 
     let original_cuts: Vec<i128> = (-128_i128..128).collect();
@@ -965,7 +967,9 @@ fn same_width_domain_and_portfolio_substitution_refuse() {
                 ..fixture.state()
             }
         ),
-        Err(Error::InvalidRecord)
+        Err(Error::ProductRuntimeAdmission(
+            dclutch_product::admission::Error::ProductMismatch
+        ))
     );
 }
 
@@ -1154,7 +1158,9 @@ fn substituted_profile_and_mutable_infrastructure_refuse() {
                 ..fixture.state()
             }
         ),
-        Err(Error::CrossRecordMismatch)
+        Err(Error::Registry(
+            dclutch_registry::Error::UpgradeAuthorityMismatch
+        ))
     );
 }
 
@@ -1176,7 +1182,9 @@ fn stale_registry_elf_refuses_before_transaction_export() {
                 ..state
             }
         ),
-        Err(Error::CrossRecordMismatch)
+        Err(Error::Registry(
+            dclutch_registry::Error::ElfDigestMismatch
+        ))
     );
 }
 

@@ -354,7 +354,7 @@ pub fn derive_resolution_funding_base_coordinates_v3(
     resolution_program: Pubkey,
 ) -> Result<ResolutionFundingBaseCoordinatesV3, ResolutionCoreOperatorErrorV3> {
     let market =
-        CoreState::decode(market_bytes).map_err(|_| ResolutionCoreOperatorErrorV3::Market)?;
+        CoreState::decode(market_bytes).map_err(ResolutionCoreOperatorErrorV3::MarketCore)?;
     if market_owner != core_program
         || market_executable
         || market_key.to_bytes() != market.identity.market_id.to_bytes()
@@ -444,7 +444,7 @@ pub fn derive_resolution_admit_terminal_base_coordinates_v3(
         resolution_program,
     )?;
     let market =
-        CoreState::decode(market_bytes).map_err(|_| ResolutionCoreOperatorErrorV3::Market)?;
+        CoreState::decode(market_bytes).map_err(ResolutionCoreOperatorErrorV3::MarketCore)?;
     let (product_raw, product_staging) = finalized_record_coordinates_v3(
         registry_program,
         PRODUCT_RECORD_SCHEMA_ID_V2,
@@ -477,7 +477,7 @@ pub fn derive_resolution_admit_terminal_detail_coordinates_v3(
         product_raw_bytes,
     )?;
     let market =
-        CoreState::decode(market_bytes).map_err(|_| ResolutionCoreOperatorErrorV3::Market)?;
+        CoreState::decode(market_bytes).map_err(ResolutionCoreOperatorErrorV3::MarketCore)?;
     if market_key.to_bytes() != market.identity.market_id.to_bytes()
         || registry_program.to_bytes() != market.identity.registry_program.to_bytes()
         || hash(product_raw_bytes).to_bytes() != market.identity.product_record.to_bytes()
@@ -485,20 +485,20 @@ pub fn derive_resolution_admit_terminal_detail_coordinates_v3(
         return Err(ResolutionCoreOperatorErrorV3::Record);
     }
     let product = ProductRecordV2::decode(product_raw_bytes)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+        .map_err(ResolutionCoreOperatorErrorV3::ProductRuntimeV2Admission)?;
     if hash(result_domain_raw_bytes).to_bytes() != product.result_domain_digest().to_bytes() {
         return Err(ResolutionCoreOperatorErrorV3::Record);
     }
     let result_domain = ResultDomainV2::decode(result_domain_raw_bytes)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+        .map_err(ResolutionCoreOperatorErrorV3::ProductRuntimeV2)?;
     if result_domain.product_id() != product.product_id() {
         return Err(ResolutionCoreOperatorErrorV3::Record);
     }
     let outcome_count = result_domain
         .outcome_count()
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+        .map_err(ResolutionCoreOperatorErrorV3::ProductRuntimeV2)?;
     let source = SourceResolutionStateV2::decode(source_state_bytes)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Terminal)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Source)?;
     let expected_source_state = Pubkey::find_program_address(
         &[
             SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
@@ -518,7 +518,7 @@ pub fn derive_resolution_admit_terminal_detail_coordinates_v3(
     }
     let decision = source
         .decision(outcome_count)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Terminal)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Source)?;
     let kind_tag = match source.phase() {
         SourceResolutionPhaseV1::Resolved => 1_u8,
         SourceResolutionPhaseV1::FailureCommitted => 4_u8,
@@ -556,7 +556,7 @@ pub fn derive_resolution_close_fund_coordinates_v1(
     source_state_bytes: &[u8],
 ) -> Result<ResolutionCloseFundCoordinatesV1, ResolutionCoreOperatorErrorV3> {
     let market =
-        CoreState::decode(market_bytes).map_err(|_| ResolutionCoreOperatorErrorV3::Market)?;
+        CoreState::decode(market_bytes).map_err(ResolutionCoreOperatorErrorV3::MarketCore)?;
     let expected_source_state = Pubkey::find_program_address(
         &[
             SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
@@ -574,7 +574,7 @@ pub fn derive_resolution_close_fund_coordinates_v1(
         return Err(ResolutionCoreOperatorErrorV3::Market);
     }
     let source = SourceResolutionStateV2::decode(source_state_bytes)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Terminal)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Source)?;
     if source.market() != market_key.to_bytes()
         || source.generation() != market.identity.generation
         || source.material_id().to_bytes() != market.identity.resolution_policy.to_bytes()
@@ -584,7 +584,7 @@ pub fn derive_resolution_close_fund_coordinates_v1(
     }
     let terminal = source
         .terminal_projection()
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Terminal)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Source)?;
     if terminal.selector() != market.terminal_winner {
         return Err(ResolutionCoreOperatorErrorV3::Terminal);
     }
@@ -639,7 +639,7 @@ pub fn derive_resolution_admit_terminal_product_coordinates_v3(
     product_raw_bytes: &[u8],
 ) -> Result<ResolutionAdmitTerminalProductCoordinatesV3, ResolutionCoreOperatorErrorV3> {
     let market =
-        CoreState::decode(market_bytes).map_err(|_| ResolutionCoreOperatorErrorV3::Market)?;
+        CoreState::decode(market_bytes).map_err(ResolutionCoreOperatorErrorV3::MarketCore)?;
     if market_key.to_bytes() != market.identity.market_id.to_bytes()
         || registry_program.to_bytes() != market.identity.registry_program.to_bytes()
         || hash(product_raw_bytes).to_bytes() != market.identity.product_record.to_bytes()
@@ -647,7 +647,7 @@ pub fn derive_resolution_admit_terminal_product_coordinates_v3(
         return Err(ResolutionCoreOperatorErrorV3::Record);
     }
     let product = ProductRecordV2::decode(product_raw_bytes)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+        .map_err(ResolutionCoreOperatorErrorV3::ProductRuntimeV2Admission)?;
     let (result_domain_raw, result_domain_staging) = finalized_record_coordinates_v3(
         registry_program,
         RESULT_DOMAIN_SCHEMA_ID_V2,
@@ -681,7 +681,7 @@ pub fn derive_resolution_funding_detail_coordinates_v3(
     recovery_policy_bytes: Option<&[u8]>,
 ) -> Result<ResolutionFundingDetailCoordinatesV3, ResolutionCoreOperatorErrorV3> {
     let market =
-        CoreState::decode(market_bytes).map_err(|_| ResolutionCoreOperatorErrorV3::Market)?;
+        CoreState::decode(market_bytes).map_err(ResolutionCoreOperatorErrorV3::MarketCore)?;
     if market_key.to_bytes() != market.identity.market_id.to_bytes()
         || registry_program.to_bytes() != market.identity.registry_program.to_bytes()
         || hash(source_material_bytes).to_bytes() != market.identity.resolution_policy.to_bytes()
@@ -691,17 +691,17 @@ pub fn derive_resolution_funding_detail_coordinates_v3(
         return Err(ResolutionCoreOperatorErrorV3::Record);
     }
     let material = SourceMaterialV3::decode(source_material_bytes)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Source)?;
     if material.product_record_digest().to_bytes() != market.identity.product_record.to_bytes() {
         return Err(ResolutionCoreOperatorErrorV3::Record);
     }
     let manifest = CapabilityManifestV1::decode(capability_manifest_bytes)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Capability)?;
     let policy = match (material.recovery_policy(), recovery_policy_bytes) {
         (None, None) => None,
-        (Some(expected), Some(bytes)) if hash(bytes).to_bytes() == expected.to_bytes() => Some(
-            RecoveryPolicyV2::decode(bytes).map_err(|_| ResolutionCoreOperatorErrorV3::Record)?,
-        ),
+        (Some(expected), Some(bytes)) if hash(bytes).to_bytes() == expected.to_bytes() => {
+            Some(RecoveryPolicyV2::decode(bytes).map_err(ResolutionCoreOperatorErrorV3::Source)?)
+        }
         _ => return Err(ResolutionCoreOperatorErrorV3::Record),
     };
     let funding_entry_indices = select_resolution_funding_entries(material, policy, manifest)?;
@@ -747,14 +747,14 @@ pub fn derive_resolution_recovery_policy_coordinates_v3(
     source_material_bytes: &[u8],
 ) -> Result<Option<(Pubkey, Pubkey)>, ResolutionCoreOperatorErrorV3> {
     let market =
-        CoreState::decode(market_bytes).map_err(|_| ResolutionCoreOperatorErrorV3::Market)?;
+        CoreState::decode(market_bytes).map_err(ResolutionCoreOperatorErrorV3::MarketCore)?;
     if registry_program.to_bytes() != market.identity.registry_program.to_bytes()
         || hash(source_material_bytes).to_bytes() != market.identity.resolution_policy.to_bytes()
     {
         return Err(ResolutionCoreOperatorErrorV3::Record);
     }
     let material = SourceMaterialV3::decode(source_material_bytes)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Source)?;
     if material.product_record_digest().to_bytes() != market.identity.product_record.to_bytes() {
         return Err(ResolutionCoreOperatorErrorV3::Record);
     }
@@ -1073,6 +1073,28 @@ pub enum ResolutionCoreOperatorErrorV3 {
     /// escrow. Building the instruction anyway would only move the refusal to
     /// the validator.
     RecoveryExceedsFundedCompartments,
+    /// `dclutch_market` refused; the cause is its own.
+    MarketCore(dclutch_market::Error),
+    /// `dclutch_product::admission` refused; the cause is its own.
+    ProductRuntimeV2Admission(dclutch_product::admission::Error),
+    /// `dclutch_product` refused; the cause is its own.
+    ProductRuntimeV2(dclutch_product::Error),
+    /// `dclutch_source` refused; the cause is its own.
+    Source(dclutch_source::Error),
+    /// `dclutch_market::capability_manifest` refused; the cause is its own.
+    Capability(dclutch_market::capability_manifest::Error),
+    /// `dclutch_source::resolution` refused; the cause is its own.
+    Resolution(dclutch_source::resolution::Error),
+    /// `dclutch_resolution_core_v3_operator` refused; the cause is its own.
+    ProductGraphObservationV3(crate::product_graph_observation_v3::ProductGraphObservationErrorV3),
+    /// `dclutch_registry::release_set` refused; the cause is its own.
+    ReleaseSet(dclutch_registry::release_set::Error),
+    /// `dclutch_registry::svm` refused; the cause is its own.
+    RegistrySvm(dclutch_registry::svm::Error),
+    /// `dclutch_registry` refused; the cause is its own.
+    Registry(dclutch_registry::Error),
+    /// `dclutch_market` refused; the cause is its own.
+    ProjectFound(dclutch_market::ProjectFoundError),
 }
 
 /// Construct the canonical Core `CreateFund` effect from finalized chain state.
@@ -1085,7 +1107,7 @@ pub fn build_resolution_create_fund_v3(
 ) -> Result<ResolutionCreateFundReportV3, ResolutionCoreOperatorErrorV3> {
     let observation = same_finalized_create_observation(snapshot)?;
     let market = CoreState::decode(&snapshot.market.data)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Market)?;
+        .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?;
     authenticate_founding_market(
         &snapshot.market,
         &snapshot.registry_program,
@@ -1116,7 +1138,7 @@ pub fn build_resolution_create_fund_v3(
         &rent,
     )?;
     let manifest = CapabilityManifestV1::decode(&snapshot.capability_manifest.data)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Capability)?;
     let manifest_id = CapabilityContentId::new(market.identity.capability_manifest.to_bytes())
         .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
 
@@ -1159,7 +1181,7 @@ pub fn build_resolution_create_fund_v3(
             while rung < policy.attempt_count() {
                 let attempt = policy
                     .attempt(rung)
-                    .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+                    .map_err(ResolutionCoreOperatorErrorV3::Source)?;
                 let index = entries[0]
                     .checked_add(u16::from(rung))
                     .ok_or(ResolutionCoreOperatorErrorV3::RecoveryExceedsFundedCompartments)?;
@@ -1236,7 +1258,7 @@ pub fn build_resolution_verify_fund_ready_v3(
 ) -> Result<ResolutionVerifyFundReadyReportV3, ResolutionCoreOperatorErrorV3> {
     let observation = same_finalized_verify_observation(snapshot)?;
     let market = CoreState::decode(&snapshot.market.data)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Market)?;
+        .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?;
     authenticate_accept_market(
         &snapshot.market,
         &snapshot.registry_program,
@@ -1275,7 +1297,7 @@ pub fn build_resolution_verify_fund_ready_v3(
     let verify_has_recovery_policy = verify_material.recovery_policy().is_some();
     authenticate_primary_source(snapshot, market, &rent)?;
     let manifest = CapabilityManifestV1::decode(&snapshot.capability_manifest.data)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Capability)?;
     let manifest_id = CapabilityContentId::new(market.identity.capability_manifest.to_bytes())
         .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
     let active_entries = authenticate_active_funding_ledger(
@@ -1329,7 +1351,7 @@ pub fn build_resolution_verify_fund_ready_v3(
         return Err(ResolutionCoreOperatorErrorV3::Funding);
     }
     let receipt = FundingActivationReceiptV1::decode(&snapshot.activation_receipt.data)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Resolution)?;
     let market_state_digest = activation_receipt_market_digest(market, &snapshot.market.data)?;
     let source_state_digest = hash(&snapshot.source_state.data).to_bytes();
     let active_ledger_digest = funding_lifecycle_account_digest_v1(
@@ -1351,7 +1373,7 @@ pub fn build_resolution_verify_fund_ready_v3(
     if receipt.request_digest
         != activation_request
             .digest()
-            .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?
+            .map_err(ResolutionCoreOperatorErrorV3::Resolution)?
         || receipt.release_set != market.identity.selected_release_set.to_bytes()
         || receipt.resolution_release != RESOLUTION_CONTROLLER_RELEASE_ID_V7
         || receipt.market != snapshot.market.key.to_bytes()
@@ -1413,7 +1435,7 @@ pub fn build_resolution_activate_fund_v1(
         return Err(ResolutionCoreOperatorErrorV3::Snapshot);
     }
     let market = CoreState::decode(&pending.market.data)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Market)?;
+        .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?;
     authenticate_founding_market(
         &pending.market,
         &pending.registry_program,
@@ -1453,7 +1475,7 @@ pub fn build_resolution_activate_fund_v1(
     )?;
     authenticate_primary_source(pending, market, &rent)?;
     let manifest = CapabilityManifestV1::decode(&pending.capability_manifest.data)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Capability)?;
     let manifest_id = CapabilityContentId::new(market.identity.capability_manifest.to_bytes())
         .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
     let role = funding_role_request(
@@ -1500,7 +1522,7 @@ pub fn build_resolution_activate_fund_v1(
                 entry_index,
                 clock.slot,
             )
-            .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+            .map_err(ResolutionCoreOperatorErrorV3::Capability)?;
             beneficiary_credit = beneficiary_credit
                 .checked_add(debit.rent_lamports())
                 .and_then(|value| value.checked_add(debit.creation_lamports()))
@@ -1533,7 +1555,7 @@ pub fn build_resolution_activate_fund_v1(
             false,
         )?;
         let receipt = FundingActivationReceiptV1::decode(&pending.activation_receipt.data)
-            .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+            .map_err(ResolutionCoreOperatorErrorV3::Resolution)?;
         let active_digest = funding_lifecycle_account_digest_v1(
             pending.funding_ledger.owner.to_bytes(),
             pending.funding_ledger.key.to_bytes(),
@@ -1586,7 +1608,7 @@ pub fn build_resolution_activate_fund_v1(
     };
     let data = request
         .encode()
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?
+        .map_err(ResolutionCoreOperatorErrorV3::Resolution)?
         .to_vec();
     let mut accounts = vec![
         AccountMeta::new_readonly(pending.market.key, false),
@@ -1637,7 +1659,7 @@ pub fn build_resolution_activate_fund_v1(
     }
     let request_digest = request
         .digest()
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Resolution)?;
     if completed_request_digest.is_some_and(|observed| observed != request_digest) {
         return Err(ResolutionCoreOperatorErrorV3::Funding);
     }
@@ -1664,7 +1686,7 @@ pub fn build_resolution_admit_terminal_v3(
 ) -> Result<ResolutionAdmitTerminalReportV3, ResolutionCoreOperatorErrorV3> {
     let observation = same_finalized_observation(snapshot)?;
     let market = CoreState::decode(&snapshot.market.data)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Market)?;
+        .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?;
     if snapshot.market.owner != snapshot.core_program.key
         || snapshot.market.executable
         || snapshot.market.key.to_bytes() != market.identity.market_id.to_bytes()
@@ -1702,17 +1724,17 @@ pub fn build_resolution_admit_terminal_v3(
         portfolio_raw: &snapshot.portfolio_raw,
         portfolio_staging: &snapshot.portfolio_staging,
     })
-    .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+    .map_err(ResolutionCoreOperatorErrorV3::ProductGraphObservationV3)?;
     if product.product_record != market.identity.product_record.to_bytes() {
         return Err(ResolutionCoreOperatorErrorV3::Record);
     }
 
     let source = SourceResolutionStateV2::decode(&snapshot.source_state.data)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Terminal)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Source)?;
     authenticate_source(snapshot, market, source)?;
     let decision = source
         .decision(product.outcome_count)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Terminal)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Source)?;
     let (receipt_kind, certificate_kind, kind_tag) = match source.phase() {
         SourceResolutionPhaseV1::Resolved => (
             ResolutionCoreReceiptKindV1::TerminalSuccess,
@@ -1727,7 +1749,7 @@ pub fn build_resolution_admit_terminal_v3(
         _ => return Err(ResolutionCoreOperatorErrorV3::Terminal),
     };
     let certificate = ResolutionCertificateV2::decode(&snapshot.certificate.data)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Terminal)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Resolution)?;
     if snapshot.certificate.owner != snapshot.resolution_program.key
         || snapshot.certificate.executable
         || snapshot.certificate.data.len() != RESOLUTION_CERTIFICATE_BYTES_V2
@@ -1785,15 +1807,15 @@ pub fn build_resolution_admit_terminal_v3(
     };
     let role_body = role_request
         .to_bytes()
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Resolution)?;
     let header = CapabilityFundingHeaderV2::new(
         1,
         3,
         role_request
             .funding_entry_mask()
-            .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?,
+            .map_err(ResolutionCoreOperatorErrorV3::Resolution)?,
     )
-    .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?
+    .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?
     .encode();
     let mut role_bytes = Vec::with_capacity(header.len() + role_body.len());
     role_bytes.extend_from_slice(&header);
@@ -1806,7 +1828,7 @@ pub fn build_resolution_admit_terminal_v3(
         snapshot.source_state.key.to_bytes(),
         role_request_digest,
     )
-    .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
+    .map_err(ResolutionCoreOperatorErrorV3::ReleaseSet)?;
     let caller_authority =
         Pubkey::find_program_address(&seeds.as_slices(), &snapshot.core_program.key).0;
     let envelope = CoreEffectEnvelopeV1::new(
@@ -1824,7 +1846,7 @@ pub fn build_resolution_admit_terminal_v3(
         1,
         u32::try_from(role_bytes.len()).map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?,
     )
-    .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
+    .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?;
     let request = Request::administrative(
         Action::AdmitTerminal,
         market.identity.generation,
@@ -1834,12 +1856,12 @@ pub fn build_resolution_admit_terminal_v3(
     data.extend_from_slice(
         &request
             .encode()
-            .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?,
+            .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?,
     );
     data.extend_from_slice(
         &envelope
             .encode()
-            .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?,
+            .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?,
     );
     data.extend_from_slice(&role_bytes);
     let accounts = admit_accounts(snapshot, caller_authority);
@@ -1867,7 +1889,7 @@ pub fn build_resolution_close_fund_v3(
 ) -> Result<ResolutionCloseFundReportV3, ResolutionCoreOperatorErrorV3> {
     let observation = same_finalized_close_observation(snapshot)?;
     let market = CoreState::decode(&snapshot.market.data)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Market)?;
+        .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?;
     if snapshot.market.owner != snapshot.core_program.key
         || snapshot.market.executable
         || snapshot.market.key.to_bytes() != market.identity.market_id.to_bytes()
@@ -1908,7 +1930,7 @@ pub fn build_resolution_close_fund_v3(
         &rent,
     )?;
     let material = SourceMaterialV3::decode(&snapshot.source_material.data)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Source)?;
     let recovery_policy = authenticate_optional_recovery_policy(
         snapshot.registry_program.key,
         material,
@@ -1920,11 +1942,11 @@ pub fn build_resolution_close_fund_v3(
     )?;
 
     let source = SourceResolutionStateV2::decode(&snapshot.source_state.data)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Terminal)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Source)?;
     authenticate_close_source(snapshot, market, source)?;
     let terminal = source
         .terminal_projection()
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Terminal)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Source)?;
     if terminal.selector() != market.terminal_winner
         || source.rent_beneficiary() != market.rent_beneficiary.to_bytes()
     {
@@ -1933,13 +1955,13 @@ pub fn build_resolution_close_fund_v3(
     let mut retired = source;
     retired
         .retire(market.identity.generation, clock.unix_timestamp, 1, 1)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Terminal)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Source)?;
     let terminal_sequence = terminal.terminal_sequence();
     let closure_sequence = terminal_sequence
         .checked_add(1)
         .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?;
     let certificate = ResolutionCertificateV2::decode(&snapshot.certificate.data)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Terminal)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Resolution)?;
     if snapshot.certificate.owner != snapshot.resolution_program.key
         || snapshot.certificate.executable
         || snapshot.certificate.data.len() != RESOLUTION_CERTIFICATE_BYTES_V2
@@ -2057,15 +2079,15 @@ pub fn build_resolution_close_fund_v3(
     };
     let role_body = role_request
         .to_bytes()
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Resolution)?;
     let header = CapabilityFundingHeaderV2::new(
         1,
         3,
         role_request
             .funding_entry_mask()
-            .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?,
+            .map_err(ResolutionCoreOperatorErrorV3::Resolution)?,
     )
-    .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?
+    .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?
     .encode();
     let mut role_bytes = Vec::with_capacity(header.len() + role_body.len());
     role_bytes.extend_from_slice(&header);
@@ -2078,7 +2100,7 @@ pub fn build_resolution_close_fund_v3(
         snapshot.source_state.key.to_bytes(),
         role_request_digest,
     )
-    .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
+    .map_err(ResolutionCoreOperatorErrorV3::ReleaseSet)?;
     let caller_authority =
         Pubkey::find_program_address(&seeds.as_slices(), &snapshot.core_program.key).0;
     let envelope = CoreEffectEnvelopeV1::new(
@@ -2096,7 +2118,7 @@ pub fn build_resolution_close_fund_v3(
         1,
         u32::try_from(role_bytes.len()).map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?,
     )
-    .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
+    .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?;
     let request = Request::administrative(
         Action::Retire,
         market.identity.generation,
@@ -2106,12 +2128,12 @@ pub fn build_resolution_close_fund_v3(
     data.extend_from_slice(
         &request
             .encode()
-            .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?,
+            .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?,
     );
     data.extend_from_slice(
         &envelope
             .encode()
-            .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?,
+            .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?,
     );
     data.extend_from_slice(&role_bytes);
     let accounts = close_accounts(
@@ -2167,9 +2189,9 @@ pub fn build_resolution_direct_close_fund_v1(
             .get(role_offset..)
             .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?,
     )
-    .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
+    .map_err(ResolutionCoreOperatorErrorV3::Resolution)?;
     let market = CoreState::decode(&snapshot.market.data)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Market)?;
+        .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?;
     let request = DirectFundingCloseRequestV1 {
         release_set: market.identity.selected_release_set.to_bytes(),
         market: snapshot.market.key.to_bytes(),
@@ -2193,13 +2215,13 @@ pub fn build_resolution_direct_close_fund_v1(
     };
     let data = request
         .encode()
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?
+        .map_err(ResolutionCoreOperatorErrorV3::Resolution)?
         .to_vec();
     if data.len() != DIRECT_FUNDING_CLOSE_REQUEST_BYTES_V1 {
         return Err(ResolutionCoreOperatorErrorV3::Encoding);
     }
     let material = SourceMaterialV3::decode(&snapshot.source_material.data)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Source)?;
     let mut accounts = vec![
         AccountMeta::new_readonly(snapshot.market.key, false),
         AccountMeta::new_readonly(snapshot.activation_cache.key, false),
@@ -2258,7 +2280,7 @@ pub fn build_resolution_direct_close_fund_v1(
         closure_receipt: planned.closure_receipt,
         request_digest: request
             .digest()
-            .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?,
+            .map_err(ResolutionCoreOperatorErrorV3::Resolution)?,
         expected_retirement_facts: planned.expected_retirement_facts,
     })
 }
@@ -2283,7 +2305,7 @@ pub fn authenticate_resolution_retirement_receipt_v3(
         return Err(ResolutionCoreOperatorErrorV3::Funding);
     }
     let decoded = SourceClosureReceiptV3::decode(&receipt.data)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Terminal)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Resolution)?;
     let closure_sequence = decoded
         .terminal_sequence
         .checked_add(1)
@@ -2397,7 +2419,7 @@ fn activation_receipt_market_digest(
         return Ok(hash(
             &predecessor
                 .encode()
-                .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?,
+                .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?,
         )
         .to_bytes());
     }
@@ -2440,7 +2462,7 @@ fn authenticate_founding_records(
         rent,
     )?;
     let material = SourceMaterialV3::decode(&source_material.data)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Source)?;
     if material.product_record_digest().to_bytes() != market.identity.product_record.to_bytes() {
         return Err(ResolutionCoreOperatorErrorV3::Record);
     }
@@ -2454,7 +2476,7 @@ fn authenticate_founding_records(
         rent,
     )?;
     let manifest = CapabilityManifestV1::decode(&capability_manifest.data)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Capability)?;
     let entries = select_resolution_funding_entries(material, policy, manifest)?;
     Ok((material, policy, entries))
 }
@@ -2495,7 +2517,7 @@ fn authenticate_optional_recovery_policy(
         return Err(ResolutionCoreOperatorErrorV3::Record);
     }
     let policy = RecoveryPolicyV2::decode(&recovery_policy.data)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Source)?;
     if policy.attempt_count() != 1 {
         return Err(ResolutionCoreOperatorErrorV3::Record);
     }
@@ -2512,7 +2534,7 @@ fn select_resolution_funding_entries(
             let expected = [
                 policy
                     .attempt(0)
-                    .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?
+                    .map_err(ResolutionCoreOperatorErrorV3::Source)?
                     .funding_allocation_id()
                     .to_bytes(),
                 recovery_policy.to_bytes(),
@@ -2523,7 +2545,7 @@ fn select_resolution_funding_entries(
             while entry_index < manifest.entry_count() {
                 let entry = manifest
                     .entry(entry_index)
-                    .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+                    .map_err(ResolutionCoreOperatorErrorV3::Capability)?;
                 for (slot, expected_config) in expected.iter().enumerate() {
                     if entry.config_id().to_bytes() == *expected_config
                         && entry.release_id().to_bytes() == RESOLUTION_CONTROLLER_RELEASE_ID_V7
@@ -2566,7 +2588,7 @@ fn select_resolution_funding_entries(
             while entry_index < manifest.entry_count() {
                 let entry = manifest
                     .entry(entry_index)
-                    .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+                    .map_err(ResolutionCoreOperatorErrorV3::Capability)?;
                 if entry.release_id().to_bytes() == RESOLUTION_CONTROLLER_RELEASE_ID_V7 {
                     if entry.config_id().to_bytes() == material_id {
                         if failure.replace(entry_index).is_some() {
@@ -2680,7 +2702,7 @@ fn authenticate_pending_funding(
                 u16::try_from(selected_mask.count_ones())
                     .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?,
             )
-            .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?
+            .map_err(ResolutionCoreOperatorErrorV3::Capability)?
     {
         return Err(ResolutionCoreOperatorErrorV3::Funding);
     }
@@ -2696,19 +2718,19 @@ fn authenticate_pending_funding(
         &[],
     )?;
     let ledger = FundingLedgerV2::decode(&priced.bytes)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Capability)?;
     if ledger.selected_mask() != selected_mask {
         return Err(ResolutionCoreOperatorErrorV3::Funding);
     }
     let authenticated = ledger
         .authenticate(manifest_id, manifest)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Capability)?;
     for entry_index in 0_u16..manifest.entry_count() {
         if selected_mask & (1_u16 << entry_index) != 0
             && !FUNDING_LEDGER_PENDING_ADMISSIBLE_STATES_V2.admits(
                 authenticated
                     .slot(entry_index)
-                    .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?
+                    .map_err(ResolutionCoreOperatorErrorV3::Capability)?
                     .status(),
             )
         {
@@ -2717,7 +2739,7 @@ fn authenticate_pending_funding(
     }
     authenticated
         .validate_recorded_native_custody(account.lamports, account.data.len(), false)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Capability)?;
     let derivation = CapabilityFundingLedgerDerivationV2::new(
         resolution_program.to_bytes(),
         market.to_bytes(),
@@ -2725,7 +2747,7 @@ fn authenticate_pending_funding(
         manifest_id,
         ledger,
     )
-    .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+    .map_err(ResolutionCoreOperatorErrorV3::Capability)?;
     if Pubkey::find_program_address(&derivation.seed_components(), &resolution_program).0
         != account.key
     {
@@ -2750,7 +2772,7 @@ fn authenticate_primary_source(
         return Err(ResolutionCoreOperatorErrorV3::Funding);
     }
     let source = SourceResolutionStateV2::decode(&snapshot.source_state.data)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Source)?;
     let seeds = source.pda_seeds();
     let bump = [seeds.bump()];
     let expected = Pubkey::create_program_address(
@@ -2803,15 +2825,15 @@ fn encode_funding_role_request(
 ) -> Result<(Vec<u8>, [u8; 32]), ResolutionCoreOperatorErrorV3> {
     let body = request
         .to_bytes()
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Resolution)?;
     let header = CapabilityFundingHeaderV2::new(
         1,
         3,
         request
             .funding_entry_mask()
-            .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?,
+            .map_err(ResolutionCoreOperatorErrorV3::Resolution)?,
     )
-    .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?
+    .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?
     .encode();
     let mut role_bytes = Vec::with_capacity(header.len() + body.len());
     role_bytes.extend_from_slice(&header);
@@ -2833,7 +2855,7 @@ fn core_caller_authority(
         source_state.to_bytes(),
         request_digest,
     )
-    .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
+    .map_err(ResolutionCoreOperatorErrorV3::ReleaseSet)?;
     Ok(Pubkey::find_program_address(&seeds.as_slices(), &core_program).0)
 }
 
@@ -2869,7 +2891,7 @@ fn assemble_funding_instruction(
         0,
         u32::try_from(role_bytes.len()).map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?,
     )
-    .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
+    .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?;
     let request = Request::administrative(
         Action::VerifyReadiness,
         market.identity.generation,
@@ -2879,12 +2901,12 @@ fn assemble_funding_instruction(
     data.extend_from_slice(
         &request
             .encode()
-            .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?,
+            .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?,
     );
     data.extend_from_slice(
         &envelope
             .encode()
-            .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?,
+            .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?,
     );
     data.extend_from_slice(&role_bytes);
     Ok(Instruction {
@@ -3029,14 +3051,14 @@ fn validate_funding_frame(
             .get(..request_end)
             .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?,
     )
-    .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
+    .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?;
     let envelope = CoreEffectEnvelopeV1::decode(
         instruction
             .data
             .get(request_end..envelope_end)
             .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?,
     )
-    .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
+    .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?;
     let role_bytes = instruction
         .data
         .get(envelope_end..)
@@ -3046,13 +3068,13 @@ fn validate_funding_frame(
             .get(..dclutch_market::CAPABILITY_FUNDING_HEADER_BYTES_V2)
             .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?,
     )
-    .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
+    .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?;
     let role = ResolutionRoleRequestV2::decode(
         role_bytes
             .get(dclutch_market::CAPABILITY_FUNDING_HEADER_BYTES_V2..)
             .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?,
     )
-    .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
+    .map_err(ResolutionCoreOperatorErrorV3::Resolution)?;
     let effect = match action {
         ResolutionCoreActionV1::CreateFund => CoreEffectActionV1::CreateFund,
         ResolutionCoreActionV1::VerifyFundReady => CoreEffectActionV1::VerifyFundReady,
@@ -3064,7 +3086,7 @@ fn validate_funding_frame(
         || header.selected_mask()
             != role
                 .funding_entry_mask()
-                .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?
+                .map_err(ResolutionCoreOperatorErrorV3::Resolution)?
         || request.action != Action::VerifyReadiness
         || request.market.to_bytes()
             != accounts
@@ -3105,7 +3127,7 @@ fn validate_funding_frame(
     let expected_authority = Pubkey::find_program_address(
         &envelope
             .caller_authority_seeds()
-            .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?
+            .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?
             .as_slices(),
         &instruction.program_id,
     )
@@ -3165,12 +3187,12 @@ fn authenticate_release_coordinates(
         return Err(ResolutionCoreOperatorErrorV3::Release);
     }
     ProgramV3View::parse(&registry_program.data)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Release)?;
+        .map_err(ResolutionCoreOperatorErrorV3::RegistrySvm)?;
     let view = ActivatedExecutionReleaseSetViewV1::decode(&activation_cache.data)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Release)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Registry)?;
     let release_set = view
         .execution_release_set_id()
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Release)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Registry)?;
     let expected_cache = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, release_set.as_bytes()],
         &registry_program.key,
@@ -3198,13 +3220,13 @@ fn authenticate_role_deployment(
 ) -> Result<(), ResolutionCoreOperatorErrorV3> {
     let activated = view
         .role(role)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Release)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Registry)?;
     let release = activated.release();
     authenticate_role_semantic_release(role, release.semantic_release_id().to_bytes())?;
     let observation = deployment_observation(program, programdata, release)?;
     activated
         .authenticate_current_deployment(observation)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Release)
+        .map_err(ResolutionCoreOperatorErrorV3::Registry)
 }
 
 fn authenticate_role_semantic_release(
@@ -3235,14 +3257,14 @@ fn deployment_observation(
         return Err(ResolutionCoreOperatorErrorV3::Release);
     }
     let program_view =
-        ProgramV3View::parse(&program.data).map_err(|_| ResolutionCoreOperatorErrorV3::Release)?;
+        ProgramV3View::parse(&program.data).map_err(ResolutionCoreOperatorErrorV3::RegistrySvm)?;
     let derived =
         Pubkey::find_program_address(&[program.key.as_ref()], &bpf_loader_upgradeable::ID).0;
     if program_view.programdata() != programdata.key.to_bytes() || programdata.key != derived {
         return Err(ResolutionCoreOperatorErrorV3::Release);
     }
     let data = ProgramDataV3View::parse(&programdata.data)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Release)?;
+        .map_err(ResolutionCoreOperatorErrorV3::RegistrySvm)?;
     DeploymentObservationV1::new(
         program.key.to_bytes(),
         program.owner.to_bytes(),
@@ -3256,7 +3278,7 @@ fn deployment_observation(
         hash(data.elf()).to_bytes(),
         data.upgrade_authority(),
     )
-    .map_err(|_| ResolutionCoreOperatorErrorV3::Release)
+    .map_err(ResolutionCoreOperatorErrorV3::Registry)
 }
 
 fn authenticate_source(
@@ -3627,7 +3649,7 @@ fn authenticate_active_funding_ledger(
         manifest_id,
         ledger,
     )
-    .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+    .map_err(ResolutionCoreOperatorErrorV3::Capability)?;
     if Pubkey::find_program_address(&derivation.seed_components(), &resolution_program).0
         != account.key
     {
@@ -3992,7 +4014,7 @@ fn decode_clock(account: &ObservedAccount) -> Result<Clock, ()> {
 }
 
 fn identity(bytes: [u8; 32]) -> Result<Identity, ResolutionCoreOperatorErrorV3> {
-    Identity::new(bytes).map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)
+    Identity::new(bytes).map_err(ResolutionCoreOperatorErrorV3::MarketCore)
 }
 
 /// Revalidate an assembled CreateFund report before composing its top-ups.
@@ -4135,7 +4157,7 @@ pub fn validate_resolution_admit_terminal_report_v3(
             .get(..request_end)
             .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?,
     )
-    .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
+    .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?;
     let envelope = CoreEffectEnvelopeV1::decode(
         report
             .instruction
@@ -4143,7 +4165,7 @@ pub fn validate_resolution_admit_terminal_report_v3(
             .get(request_end..envelope_end)
             .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?,
     )
-    .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
+    .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?;
     let role_bytes = report
         .instruction
         .data
@@ -4152,8 +4174,8 @@ pub fn validate_resolution_admit_terminal_report_v3(
     let body = role_bytes
         .get(dclutch_market::CAPABILITY_FUNDING_HEADER_BYTES_V2..)
         .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?;
-    let resolution = ResolutionRoleRequestV2::decode(body)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
+    let resolution =
+        ResolutionRoleRequestV2::decode(body).map_err(ResolutionCoreOperatorErrorV3::Resolution)?;
     let observed_digest = hash(role_bytes).to_bytes();
     if request.action != Action::AdmitTerminal
         || envelope.action() != CoreEffectActionV1::AdmitTerminal
@@ -4184,7 +4206,7 @@ pub fn validate_resolution_admit_terminal_report_v3(
     let expected_authority = Pubkey::find_program_address(
         &envelope
             .caller_authority_seeds()
-            .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?
+            .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?
             .as_slices(),
         &report.instruction.program_id,
     )
@@ -4241,7 +4263,7 @@ pub fn validate_resolution_close_fund_report_v3(
             .get(..request_end)
             .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?,
     )
-    .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
+    .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?;
     let envelope = CoreEffectEnvelopeV1::decode(
         report
             .instruction
@@ -4249,7 +4271,7 @@ pub fn validate_resolution_close_fund_report_v3(
             .get(request_end..envelope_end)
             .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?,
     )
-    .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
+    .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?;
     let role_bytes = report
         .instruction
         .data
@@ -4259,13 +4281,13 @@ pub fn validate_resolution_close_fund_report_v3(
         .get(..dclutch_market::CAPABILITY_FUNDING_HEADER_BYTES_V2)
         .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?;
     let header = CapabilityFundingHeaderV2::decode(header_bytes)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
+        .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?;
     let role = ResolutionRoleRequestV2::decode(
         role_bytes
             .get(dclutch_market::CAPABILITY_FUNDING_HEADER_BYTES_V2..)
             .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?,
     )
-    .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
+    .map_err(ResolutionCoreOperatorErrorV3::Resolution)?;
     let digest = hash(role_bytes).to_bytes();
     let facts = report.expected_retirement_facts;
     let classified_total = report
@@ -4278,7 +4300,7 @@ pub fn validate_resolution_close_fund_report_v3(
         || header.selected_mask()
             != role
                 .funding_entry_mask()
-                .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?
+                .map_err(ResolutionCoreOperatorErrorV3::Resolution)?
         || request.action != Action::Retire
         || request.market.to_bytes() != facts.market
         || request.generation != facts.generation
@@ -4332,7 +4354,7 @@ pub fn validate_resolution_close_fund_report_v3(
     let expected_authority = Pubkey::find_program_address(
         &envelope
             .caller_authority_seeds()
-            .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?
+            .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?
             .as_slices(),
         &report.instruction.program_id,
     )

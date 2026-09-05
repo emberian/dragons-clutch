@@ -98,7 +98,9 @@ fn late_portfolio_refusal_preserves_all_three_caller_buffers() {
             &mut domain,
             &mut portfolio,
         ),
-        Err(Error::RuntimeProduct)
+        Err(Error::ProductRuntime(
+            dclutch_product::Error::ZeroDenominator
+        ))
     );
     assert_eq!(product, product_before);
     assert_eq!(domain, domain_before);

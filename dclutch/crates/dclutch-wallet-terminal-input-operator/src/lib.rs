@@ -61,12 +61,6 @@ pub mod address_book;
 
 const PARENT_CONTEXT_DOMAIN_V1: &[u8] = b"dclutch/wallet-terminal-parent-context/v1";
 
-/// The exact input format stage one emits and stage two consumes.
-///
-/// Re-exported from the payout operator rather than restated, so the two stages
-/// cannot disagree about the name of the artifact that joins them.
-pub const TERMINAL_PAYOUT_INPUT_FORMAT_V1: &str = INPUT_FORMAT;
-
 /// The six protocol coordinates the derivation takes from a deployment.
 ///
 /// Enumerated rather than assumed: every `plan.*` access in the producer was

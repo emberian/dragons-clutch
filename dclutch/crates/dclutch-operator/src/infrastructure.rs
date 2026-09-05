@@ -163,8 +163,6 @@ pub enum InfrastructureInspectionErrorV1 {
     ObservationMismatch,
     /// Named roles were improperly aliased.
     AliasedAccount,
-    /// Rent sysvar bytes or identity refused.
-    InvalidRentSysvar,
     /// Profile bytes, Core ownership, PDA, or rent reserve refused.
     InvalidProfile,
     /// Activation-cache bytes, ownership, PDA, or release-set projection refused.
@@ -179,6 +177,12 @@ pub enum InfrastructureInspectionErrorV1 {
     BindingMismatch,
     /// Supplied checked-infrastructure manifest was malformed or did not match.
     CheckedManifestMismatch,
+    /// `dclutch_registry::release_set` refused; the cause is its own.
+    ReleaseSet(dclutch_registry::release_set::Error),
+    /// `dclutch_registry` refused; the cause is its own.
+    Registry(dclutch_registry::Error),
+    /// `dclutch_registry::svm` refused; the cause is its own.
+    RegistrySvm(dclutch_registry::svm::Error),
 }
 
 /// Which substrate class an infrastructure inspection admits.
@@ -241,7 +245,7 @@ fn inspect_infrastructure_under_class(
     require_distinct_keys(state)?;
 
     let profile = ProtocolInfrastructureProfileV2::decode(&state.profile.data)
-        .map_err(|_| InfrastructureInspectionErrorV1::InvalidProfile)?;
+        .map_err(InfrastructureInspectionErrorV1::ReleaseSet)?;
     let profile_digest = ContentId::new(hash(&state.profile.data).to_bytes())
         .map_err(|_| InfrastructureInspectionErrorV1::InvalidProfile)?;
 
@@ -267,7 +271,7 @@ fn inspect_infrastructure_under_class(
     let activated = authenticate_activation_cache(state, profile, state.registry_program.key)?;
     let core_role = activated
         .role(ExecutionRoleV1::Core)
-        .map_err(|_| InfrastructureInspectionErrorV1::InvalidActivationCache)?;
+        .map_err(InfrastructureInspectionErrorV1::Registry)?;
     let core_release = core_role.release();
     require_admissible_release(core_release, class)?;
     let core = authenticate_deployment(
@@ -286,7 +290,7 @@ fn inspect_infrastructure_under_class(
 
     let execution_release_set_id = activated
         .execution_release_set_id()
-        .map_err(|_| InfrastructureInspectionErrorV1::InvalidActivationCache)?;
+        .map_err(InfrastructureInspectionErrorV1::Registry)?;
     let recognition = recognize_checked_manifest(
         checked_manifest,
         state,
@@ -344,10 +348,10 @@ fn authenticate_activation_cache<'a>(
         return Err(InfrastructureInspectionErrorV1::InvalidActivationCache);
     }
     let activated = ActivatedExecutionReleaseSetViewV1::decode(&state.activation_cache.data)
-        .map_err(|_| InfrastructureInspectionErrorV1::InvalidActivationCache)?;
+        .map_err(InfrastructureInspectionErrorV1::Registry)?;
     let release_set_id = activated
         .execution_release_set_id()
-        .map_err(|_| InfrastructureInspectionErrorV1::InvalidActivationCache)?;
+        .map_err(InfrastructureInspectionErrorV1::Registry)?;
     let expected = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, release_set_id.as_bytes()],
         &registry_program,
@@ -369,10 +373,10 @@ fn authenticate_artifact_component(
 ) -> Result<(ArtifactReleaseV1, InfrastructureComponentEvidenceV1), InfrastructureInspectionErrorV1>
 {
     let release = ArtifactReleaseV1::decode(&record.record.data)
-        .map_err(|_| InfrastructureInspectionErrorV1::InvalidArtifactRecord)?;
+        .map_err(InfrastructureInspectionErrorV1::Registry)?;
     let digest = hash(&record.record.data).to_bytes();
-    let artifact_release_id = ArtifactReleaseIdV1::new(digest)
-        .map_err(|_| InfrastructureInspectionErrorV1::InvalidArtifactRecord)?;
+    let artifact_release_id =
+        ArtifactReleaseIdV1::new(digest).map_err(InfrastructureInspectionErrorV1::ReleaseSet)?;
     if expected != ExecutionRoleBindingV1::new(release.program(), artifact_release_id) {
         return Err(InfrastructureInspectionErrorV1::BindingMismatch);
     }
@@ -428,9 +432,9 @@ fn authenticate_deployment(
         return Err(InfrastructureInspectionErrorV1::InvalidDeployment);
     }
     let program_view = ProgramV3View::parse(&program.data)
-        .map_err(|_| InfrastructureInspectionErrorV1::InvalidDeployment)?;
+        .map_err(InfrastructureInspectionErrorV1::RegistrySvm)?;
     let programdata_view = ProgramDataV3View::parse(&programdata.data)
-        .map_err(|_| InfrastructureInspectionErrorV1::InvalidDeployment)?;
+        .map_err(InfrastructureInspectionErrorV1::RegistrySvm)?;
     let derived =
         Pubkey::find_program_address(&[program.key.as_ref()], &bpf_loader_upgradeable::ID).0;
     if program_view.programdata() != programdata.key.to_bytes() || programdata.key != derived {
@@ -449,10 +453,10 @@ fn authenticate_deployment(
         hash(programdata_view.elf()).to_bytes(),
         programdata_view.upgrade_authority(),
     )
-    .map_err(|_| InfrastructureInspectionErrorV1::InvalidDeployment)?;
+    .map_err(InfrastructureInspectionErrorV1::Registry)?;
     release
         .authenticate_deployment(deployment)
-        .map_err(|_| InfrastructureInspectionErrorV1::InvalidDeployment)?;
+        .map_err(InfrastructureInspectionErrorV1::Registry)?;
     Ok(InfrastructureComponentEvidenceV1 {
         program: program.key,
         programdata: programdata.key,
@@ -482,7 +486,7 @@ fn require_admissible_release(
             Ok(())
         }
         SubstrateClassV1::SlotPinned => require_slot_pinned_release_v1(release)
-            .map_err(|_| InfrastructureInspectionErrorV1::InfrastructureMustBeImmutable),
+            .map_err(InfrastructureInspectionErrorV1::Registry),
     }
 }
 
@@ -506,14 +510,14 @@ fn recognize_checked_manifest(
         || checked.execution().release_set()
             != activated
                 .release_set_projection()
-                .map_err(|_| InfrastructureInspectionErrorV1::InvalidActivationCache)?
+                .map_err(InfrastructureInspectionErrorV1::Registry)?
         || checked
             .execution()
             .execution_release_set_id()
             .map_err(|_| InfrastructureInspectionErrorV1::CheckedManifestMismatch)?
             != activated
                 .execution_release_set_id()
-                .map_err(|_| InfrastructureInspectionErrorV1::InvalidActivationCache)?
+                .map_err(InfrastructureInspectionErrorV1::Registry)?
     {
         return Err(InfrastructureInspectionErrorV1::CheckedManifestMismatch);
     }
@@ -527,7 +531,7 @@ fn recognize_checked_manifest(
     for (role, checked_artifact) in roles.into_iter().zip(checked.execution().artifacts()) {
         let observed = activated
             .role(role)
-            .map_err(|_| InfrastructureInspectionErrorV1::InvalidActivationCache)?;
+            .map_err(InfrastructureInspectionErrorV1::Registry)?;
         if observed.release() != checked_artifact
             || observed.artifact_release_id()
                 != checked
@@ -1088,7 +1092,9 @@ mod tests {
         );
         assert_eq!(
             inspect_protocol_infrastructure_v1(&stale.state, None),
-            Err(InfrastructureInspectionErrorV1::InvalidDeployment),
+            Err(InfrastructureInspectionErrorV1::Registry(
+                dclutch_registry::Error::DeploymentSlotMismatch
+            )),
         );
 
         let mut substituted = Fixture::new(11);

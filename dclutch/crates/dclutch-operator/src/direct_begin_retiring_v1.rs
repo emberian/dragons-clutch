@@ -51,18 +51,6 @@ use crate::{
     observation::{FinalizedRecordProof, authenticate_finalized_record},
 };
 
-/// Canonical persisted evidence label for the three-selector ProgramSet.
-pub const DIRECT_PROGRAM_SET_RECORD_LABEL_V1: &str = "direct_program_set_record";
-/// Canonical persisted evidence label for the begin-retiring descriptor.
-pub const DIRECT_BEGIN_RETIRING_DESCRIPTOR_RECORD_LABEL_V1: &str =
-    "direct_begin_retiring_descriptor_record";
-/// Canonical persisted evidence label for the begin-retiring AccountProfile.
-pub const DIRECT_BEGIN_RETIRING_PROFILE_RECORD_LABEL_V1: &str =
-    "direct_begin_retiring_account_profile_record";
-/// Canonical persisted evidence label for the begin-retiring EffectProgram.
-pub const DIRECT_BEGIN_RETIRING_EFFECT_RECORD_LABEL_V1: &str =
-    "direct_begin_retiring_effect_record";
-
 /// Immutable inputs sufficient to derive the stage's ordered account metas.
 ///
 /// This value is deliberately not finalized evidence. It contains no account
@@ -150,6 +138,8 @@ pub enum DirectBeginRetiringCoordinateErrorV1 {
     InvalidIdentity,
     /// Two logical coordinates aliased one physical account.
     AliasedCoordinate,
+    /// `dclutch_trading` refused; the cause is its own.
+    DirectBeginRetiring(dclutch_trading::retirement_v1::DirectBeginRetiringErrorV1),
 }
 
 /// Derive the exact non-finalized ordered metas from immutable identities only.
@@ -159,7 +149,7 @@ pub fn derive_direct_begin_retiring_meta_closure_v1(
     let request = input
         .request
         .new()
-        .map_err(|_| DirectBeginRetiringCoordinateErrorV1::InvalidIdentity)?;
+        .map_err(DirectBeginRetiringCoordinateErrorV1::DirectBeginRetiring)?;
     if [input.descriptor, input.account_profile, input.effect]
         .iter()
         .any(|identity| identity.iter().all(|byte| *byte == 0))
@@ -392,10 +382,32 @@ pub enum DirectBeginRetiringPlanErrorV1 {
     InvalidRecord,
     /// The release did not equal the canonical three-selector Direct build.
     InvalidLifecycleRelease,
-    /// The Direct root was not Open/zero or Retiring/zero.
-    InvalidRootState,
     /// Canonical request, receipt, or exact account-frame construction refused.
     InvalidPlan,
+    /// `dclutch_market` refused; the cause is its own.
+    MarketCore(dclutch_market::Error),
+    /// `dclutch_registry` refused; the cause is its own.
+    Registry(dclutch_registry::Error),
+    /// `dclutch_registry::svm` refused; the cause is its own.
+    RegistrySvm(dclutch_registry::svm::Error),
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    CapabilityProgram(dclutch_market::capability_program::Error),
+    /// `dclutch_trading` refused; the cause is its own.
+    Successor(dclutch_trading::successor::SuccessorError),
+    /// `dclutch_market::capability_manifest` refused; the cause is its own.
+    Capability(dclutch_market::capability_manifest::Error),
+    /// `dclutch_operator` refused; the cause is its own.
+    Observation(crate::observation::ObservationError),
+    /// `dclutch_trading` refused; the cause is its own.
+    DirectProgramSet(dclutch_trading::program_set_v4::DirectProgramSetErrorV4),
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    ProgramSet(dclutch_market::capability_program::set_v2::ProgramSetErrorV2),
+    /// `dclutch_trading` refused; the cause is its own.
+    DirectBeginRetiring(dclutch_trading::retirement_v1::DirectBeginRetiringErrorV1),
+    /// `dclutch_operator` refused; the cause is its own.
+    DirectBeginRetiringCoordinate(
+        crate::direct_begin_retiring_v1::DirectBeginRetiringCoordinateErrorV1,
+    ),
 }
 
 struct AuthenticatedLifecycleV1 {
@@ -510,7 +522,7 @@ fn authenticate_market_and_release(
         return Err(DirectBeginRetiringPlanErrorV1::InvalidMarket);
     }
     let market = CoreState::decode(&snapshot.market.data)
-        .map_err(|_| DirectBeginRetiringPlanErrorV1::InvalidMarket)?;
+        .map_err(DirectBeginRetiringPlanErrorV1::MarketCore)?;
     let expected_market = Pubkey::find_program_address(
         &MarketCoreStateSeedsV2::new(market.identity).as_slices(),
         &snapshot.core_program.key,
@@ -518,7 +530,7 @@ fn authenticate_market_and_release(
     .0;
     if market
         .encode()
-        .map_err(|_| DirectBeginRetiringPlanErrorV1::InvalidMarket)?
+        .map_err(DirectBeginRetiringPlanErrorV1::MarketCore)?
         .as_slice()
         != snapshot.market.data
         || market.phase != Phase::Retiring
@@ -543,11 +555,11 @@ fn authenticate_market_and_release(
     )
     .0;
     let activated = ActivatedExecutionReleaseSetViewV1::decode(&snapshot.activation_cache.data)
-        .map_err(|_| DirectBeginRetiringPlanErrorV1::InvalidRelease)?;
+        .map_err(DirectBeginRetiringPlanErrorV1::Registry)?;
     if snapshot.activation_cache.key != expected_cache
         || activated
             .execution_release_set_id()
-            .map_err(|_| DirectBeginRetiringPlanErrorV1::InvalidRelease)?
+            .map_err(DirectBeginRetiringPlanErrorV1::Registry)?
             .to_bytes()
             != release_set
     {
@@ -578,11 +590,11 @@ fn authenticate_role_deployment(
 ) -> Result<(), DirectBeginRetiringPlanErrorV1> {
     let selected = activated
         .role(role)
-        .map_err(|_| DirectBeginRetiringPlanErrorV1::InvalidRelease)?;
+        .map_err(DirectBeginRetiringPlanErrorV1::Registry)?;
     let observation = deployment_observation(program, programdata, selected.release())?;
     selected
         .authenticate_current_deployment(observation)
-        .map_err(|_| DirectBeginRetiringPlanErrorV1::InvalidRelease)
+        .map_err(DirectBeginRetiringPlanErrorV1::Registry)
 }
 
 fn deployment_observation(
@@ -600,8 +612,8 @@ fn deployment_observation(
     {
         return Err(DirectBeginRetiringPlanErrorV1::InvalidRelease);
     }
-    let program_view = ProgramV3View::parse(&program.data)
-        .map_err(|_| DirectBeginRetiringPlanErrorV1::InvalidRelease)?;
+    let program_view =
+        ProgramV3View::parse(&program.data).map_err(DirectBeginRetiringPlanErrorV1::RegistrySvm)?;
     let expected_programdata =
         Pubkey::find_program_address(&[program.key.as_ref()], &bpf_loader_upgradeable::ID).0;
     if program_view.programdata() != programdata.key.to_bytes()
@@ -610,7 +622,7 @@ fn deployment_observation(
         return Err(DirectBeginRetiringPlanErrorV1::InvalidRelease);
     }
     let data = ProgramDataV3View::parse(&programdata.data)
-        .map_err(|_| DirectBeginRetiringPlanErrorV1::InvalidRelease)?;
+        .map_err(DirectBeginRetiringPlanErrorV1::RegistrySvm)?;
     DeploymentObservationV1::new(
         program.key.to_bytes(),
         program.owner.to_bytes(),
@@ -624,7 +636,7 @@ fn deployment_observation(
         hash(data.elf()).to_bytes(),
         data.upgrade_authority(),
     )
-    .map_err(|_| DirectBeginRetiringPlanErrorV1::InvalidRelease)
+    .map_err(DirectBeginRetiringPlanErrorV1::Registry)
 }
 
 fn authenticate_root_and_artifacts(
@@ -647,7 +659,7 @@ fn authenticate_root_and_artifacts(
             .get(..CAPABILITY_ROOT_HEADER_BYTES_V1)
             .ok_or(DirectBeginRetiringPlanErrorV1::InvalidRoot)?,
     )
-    .map_err(|_| DirectBeginRetiringPlanErrorV1::InvalidRoot)?;
+    .map_err(DirectBeginRetiringPlanErrorV1::CapabilityProgram)?;
     let root_seeds = header.seeds();
     let expected_root =
         Pubkey::find_program_address(&root_seeds.as_slices(), &snapshot.trading_program.key).0;
@@ -674,7 +686,7 @@ fn authenticate_root_and_artifacts(
             .get(CAPABILITY_ROOT_HEADER_BYTES_V1..)
             .ok_or(DirectBeginRetiringPlanErrorV1::InvalidRoot)?,
     )
-    .map_err(|_| DirectBeginRetiringPlanErrorV1::InvalidRootState)?;
+    .map_err(DirectBeginRetiringPlanErrorV1::Successor)?;
     // Deliberately NO open-maker-root-count gate (cohort-9 review item 1,
     // amendment 1): maker roots wind down inside Retiring; the count gate
     // stays at the physical-close sites.
@@ -688,10 +700,10 @@ fn authenticate_root_and_artifacts(
         header.record_bumps().manifest_raw(),
     )?;
     let manifest = CapabilityManifestV1::decode(&snapshot.capability_manifest.data)
-        .map_err(|_| DirectBeginRetiringPlanErrorV1::InvalidManifest)?;
+        .map_err(DirectBeginRetiringPlanErrorV1::Capability)?;
     let entry = manifest
         .entry(selection.entry_index())
-        .map_err(|_| DirectBeginRetiringPlanErrorV1::InvalidManifest)?;
+        .map_err(DirectBeginRetiringPlanErrorV1::Capability)?;
     if entry.kind_id() != selection.kind()
         || entry.release_id() != selection.capability_release()
         || entry.config_id() != selection.config()
@@ -734,7 +746,7 @@ fn authenticate_root_and_artifacts(
                 staging_cursor: staging.clone(),
             },
         )
-        .map_err(|_| DirectBeginRetiringPlanErrorV1::InvalidRecord)?;
+        .map_err(DirectBeginRetiringPlanErrorV1::Observation)?;
     }
     require_persisted_pair_bumps(
         snapshot.registry_program.key,
@@ -759,7 +771,7 @@ fn authenticate_root_and_artifacts(
         snapshot.ordinary_release_witness,
         entry.capacity_profile_id().to_bytes(),
     )
-    .map_err(|_| DirectBeginRetiringPlanErrorV1::InvalidLifecycleRelease)?;
+    .map_err(DirectBeginRetiringPlanErrorV1::DirectProgramSet)?;
     if release.program_set_id != selection.capability_release().to_bytes()
         || snapshot.program_set.data != release.program_set
         || snapshot.descriptor.data != release.begin_retiring.descriptor
@@ -773,10 +785,10 @@ fn authenticate_root_and_artifacts(
         hash(&snapshot.program_set.data).to_bytes(),
         &snapshot.program_set.data,
     )
-    .map_err(|_| DirectBeginRetiringPlanErrorV1::InvalidLifecycleRelease)?;
+    .map_err(DirectBeginRetiringPlanErrorV1::ProgramSet)?;
     let descriptor_reference = set
         .entry(1)
-        .map_err(|_| DirectBeginRetiringPlanErrorV1::InvalidLifecycleRelease)?
+        .map_err(DirectBeginRetiringPlanErrorV1::ProgramSet)?
         .descriptor();
     if descriptor_reference.schema().to_bytes() != CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1
         || descriptor_reference.program().to_bytes() != hash(&snapshot.descriptor.data).to_bytes()
@@ -784,16 +796,16 @@ fn authenticate_root_and_artifacts(
         return Err(DirectBeginRetiringPlanErrorV1::InvalidLifecycleRelease);
     }
     let descriptor = CapabilityProgramV1::decode(&snapshot.descriptor.data)
-        .map_err(|_| DirectBeginRetiringPlanErrorV1::InvalidLifecycleRelease)?;
+        .map_err(DirectBeginRetiringPlanErrorV1::CapabilityProgram)?;
     descriptor
         .validate_selection(selection, entry)
-        .map_err(|_| DirectBeginRetiringPlanErrorV1::InvalidLifecycleRelease)?;
+        .map_err(DirectBeginRetiringPlanErrorV1::CapabilityProgram)?;
     DirectExecutionConfigV1::decode_selected(
         selection.config().to_bytes(),
         hash(&snapshot.config.data).to_bytes(),
         &snapshot.config.data,
     )
-    .map_err(|_| DirectBeginRetiringPlanErrorV1::InvalidRecord)?;
+    .map_err(DirectBeginRetiringPlanErrorV1::Successor)?;
     Ok((header, root_state))
 }
 
@@ -875,7 +887,7 @@ fn assemble_plan(
             let retiring = authenticated
                 .root_state
                 .begin_retiring()
-                .map_err(|_| DirectBeginRetiringPlanErrorV1::InvalidRootState)?;
+                .map_err(DirectBeginRetiringPlanErrorV1::Successor)?;
             let mut post_root = authenticated.header.to_bytes().to_vec();
             post_root.extend_from_slice(&retiring.encode());
             let post_root_digest = hash(&post_root).to_bytes();
@@ -911,10 +923,10 @@ fn assemble_plan(
                 entry_index,
             }
             .new()
-            .map_err(|_| DirectBeginRetiringPlanErrorV1::InvalidPlan)?;
+            .map_err(DirectBeginRetiringPlanErrorV1::DirectBeginRetiring)?;
             let request_body = request
                 .to_bytes()
-                .map_err(|_| DirectBeginRetiringPlanErrorV1::InvalidPlan)?;
+                .map_err(DirectBeginRetiringPlanErrorV1::DirectBeginRetiring)?;
             let request_digest = hash(&request_body).to_bytes();
             let expected_receipt = DirectBeginRetiringReceiptV1::new(
                 request,
@@ -922,10 +934,10 @@ fn assemble_plan(
                 post_root_digest,
                 snapshot.trading_program.key.to_bytes(),
             )
-            .map_err(|_| DirectBeginRetiringPlanErrorV1::InvalidPlan)?;
+            .map_err(DirectBeginRetiringPlanErrorV1::DirectBeginRetiring)?;
             let expected_receipt_body = expected_receipt
                 .to_bytes()
-                .map_err(|_| DirectBeginRetiringPlanErrorV1::InvalidPlan)?;
+                .map_err(DirectBeginRetiringPlanErrorV1::DirectBeginRetiring)?;
             let meta_closure = derive_direct_begin_retiring_meta_closure_v1(
                 DirectBeginRetiringCoordinateInputV1 {
                     request,
@@ -939,7 +951,7 @@ fn assemble_plan(
                     trading_programdata: snapshot.trading_programdata.key,
                 },
             )
-            .map_err(|_| DirectBeginRetiringPlanErrorV1::InvalidPlan)?;
+            .map_err(DirectBeginRetiringPlanErrorV1::DirectBeginRetiringCoordinate)?;
             if frame_accounts(snapshot)
                 .iter()
                 .zip(meta_closure.accounts.iter())

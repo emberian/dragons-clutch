@@ -80,6 +80,10 @@ pub enum RegistryHotContinuationErrorV1 {
     Identity,
     /// Admission derivation or checked account geometry refused.
     Admission,
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    HotExecution(dclutch_market::capability_program::hot_v3::HotExecutionErrorV3),
+    /// `dclutch_registry::svm` refused; the cause is its own.
+    Batch(dclutch_registry::svm::batch_v2::BatchErrorV2),
 }
 
 impl From<RegistryError> for RegistryHotContinuationErrorV1 {
@@ -121,7 +125,7 @@ pub fn build_registry_hot_continuation_v1(
     }
 
     let (envelope, _) = HotExecutionEnvelopeV3::split_instruction(&hot_instruction.data)
-        .map_err(|_| RegistryHotContinuationErrorV1::InvalidHotInstruction)?;
+        .map_err(RegistryHotContinuationErrorV1::HotExecution)?;
     if hot_instruction.program_id != state.trading_program.key
         || envelope.release_set() != core.execution_release_set_id.to_bytes()
         || hot_instruction.accounts.len() < HOT_FIXED_ACCOUNT_COUNT_V3
@@ -160,10 +164,10 @@ pub fn build_registry_hot_continuation_v1(
         hot_instruction_digest,
         hot_instruction_len,
     )
-    .map_err(|_| RegistryHotContinuationErrorV1::Identity)?;
+    .map_err(RegistryHotContinuationErrorV1::Batch)?;
     let batch = continuation
         .role_batch_request()
-        .map_err(|_| RegistryHotContinuationErrorV1::Admission)?;
+        .map_err(RegistryHotContinuationErrorV1::Batch)?;
     let batch_digest = ContentId::new(hash(&batch.to_bytes()).to_bytes())
         .map_err(|_| RegistryHotContinuationErrorV1::Admission)?;
     let seeds = RegistryContinuationAdmissionSeedsV1::new(
@@ -171,7 +175,7 @@ pub fn build_registry_hot_continuation_v1(
         state.activation_cache.key.to_bytes(),
         batch_digest,
     )
-    .map_err(|_| RegistryHotContinuationErrorV1::Admission)?;
+    .map_err(RegistryHotContinuationErrorV1::Batch)?;
     let release = seeds.release_set();
     let cache = seeds.activation_cache();
     let batch_request_digest = seeds.batch_request_digest();

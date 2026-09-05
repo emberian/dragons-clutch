@@ -74,7 +74,7 @@ pub fn build_composition_lifecycle_hot_plan_v3(
         data: lifecycle.request.clone(),
     };
     let hot = build_rational_lifecycle_selected_hot_instruction_v5(state, &child, selection)
-        .map_err(|_| Error::HotAdapter)?;
+        .map_err(Error::RationalLifecycleHot)?;
     if !hot.required_wallet_signers.is_empty()
         || hot.finalized_slot != admitted.observation().slot
         || hot.instruction.program_id == Pubkey::default()
@@ -98,10 +98,11 @@ fn derive_hot_parent_and_build_lifecycle(
 ) -> Result<ClaimsLifecyclePlanV3> {
     header.parent_context = [1; 32];
     let provisional = build_claims_lifecycle_plan_v3(admitted, header, coordinates)?;
-    let child = LifecycleRequestV2::decode(&provisional.request).map_err(|_| Error::HotAdapter)?;
+    let child = LifecycleRequestV2::decode(&provisional.request)
+        .map_err(Error::RationalRepresentationLifecycle)?;
     let mut family_bytes = vec![0_u8; provisional.request.len()];
     let family = RationalLifecycleHotRequestV3::from_child_into(child, &mut family_bytes)
-        .map_err(|_| Error::HotAdapter)?;
+        .map_err(Error::RationalRepresentationLifecycle)?;
     header.parent_context = hash(family.as_bytes()).to_bytes();
     build_claims_lifecycle_plan_v3(admitted, header, coordinates)
 }

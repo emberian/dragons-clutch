@@ -137,6 +137,24 @@ pub enum UserPositionClosePlanErrorV1 {
     InvalidRent,
     /// Canonical child/outer request, authority, or receipt construction refused.
     InvalidRequest,
+    /// `dclutch_operator` refused; the cause is its own.
+    Observation(crate::observation::ObservationError),
+    /// `dclutch_operator` refused; the cause is its own.
+    UserPositionAdmissionPlan(crate::user_position_admission_v1::UserPositionAdmissionPlanErrorV1),
+    /// `dclutch_registry` refused; the cause is its own.
+    Registry(dclutch_registry::Error),
+    /// `dclutch_claims` refused; the cause is its own.
+    LiabilityBasisState(dclutch_claims::liability_basis_state_v2::LiabilityBasisStateErrorV2),
+    /// `dclutch_claims` refused; the cause is its own.
+    ProtocolPosition(dclutch_claims::protocol_position_v2::ProtocolPositionErrorV2),
+    /// `dclutch_market::capability_manifest` refused; the cause is its own.
+    Capability(dclutch_market::capability_manifest::Error),
+    /// `dclutch_market::rent` refused; the cause is its own.
+    LifecycleRent(dclutch_market::rent::lifecycle_v2::LifecycleRentErrorV2),
+    /// `dclutch_claims::position_admission` refused; the cause is its own.
+    UserPositionAdmission(dclutch_claims::position_admission::UserPositionAdmissionErrorV1),
+    /// `dclutch_registry::release_set` refused; the cause is its own.
+    ReleaseSet(dclutch_registry::release_set::Error),
 }
 
 /// Reauthenticate one exact finalized snapshot and build its unsigned close.
@@ -152,8 +170,7 @@ pub fn plan_user_position_close_v1(
     // it any more. Dropping the decode with the floor would silently stop
     // checking the coordinate, which is the debt `a4b2cbb17` named at
     // `authenticate_execution_strategy_v2` and this does not repeat.
-    decode_rent(&snapshot.rent_sysvar)
-        .map_err(|_| UserPositionClosePlanErrorV1::InvalidInfrastructure)?;
+    decode_rent(&snapshot.rent_sysvar).map_err(UserPositionClosePlanErrorV1::Observation)?;
     authenticate_infrastructure(snapshot)?;
     let activated = authenticate_release_cache(snapshot)?;
     for (role, program, programdata) in [
@@ -169,7 +186,7 @@ pub fn plan_user_position_close_v1(
         ),
     ] {
         authenticate_role_deployment(activated, role, program, programdata)
-            .map_err(|_| UserPositionClosePlanErrorV1::InvalidRelease)?;
+            .map_err(UserPositionClosePlanErrorV1::UserPositionAdmissionPlan)?;
     }
     let market = authenticate_claims_market(snapshot, activated)?;
     let admission = authenticate_position(snapshot, market)?;
@@ -249,10 +266,10 @@ fn authenticate_release_cache<'a>(
         return Err(UserPositionClosePlanErrorV1::InvalidRelease);
     }
     let activated = ActivatedExecutionReleaseSetViewV1::decode(&cache.data)
-        .map_err(|_| UserPositionClosePlanErrorV1::InvalidRelease)?;
+        .map_err(UserPositionClosePlanErrorV1::Registry)?;
     let release_set = activated
         .execution_release_set_id()
-        .map_err(|_| UserPositionClosePlanErrorV1::InvalidRelease)?;
+        .map_err(UserPositionClosePlanErrorV1::Registry)?;
     let expected = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, release_set.as_bytes()],
         &snapshot.registry_program.key,
@@ -276,7 +293,7 @@ fn authenticate_claims_market(
         return Err(UserPositionClosePlanErrorV1::InvalidClaimsMarket);
     }
     let market = LiabilityBasisMarketViewV2::decode(&account.data)
-        .map_err(|_| UserPositionClosePlanErrorV1::InvalidClaimsMarket)?;
+        .map_err(UserPositionClosePlanErrorV1::LiabilityBasisState)?;
     let expected = Pubkey::find_program_address(
         &[
             LIABILITY_BASIS_MARKET_SEED_V2,
@@ -287,7 +304,7 @@ fn authenticate_claims_market(
     .0;
     let release_set = activated
         .execution_release_set_id()
-        .map_err(|_| UserPositionClosePlanErrorV1::InvalidRelease)?;
+        .map_err(UserPositionClosePlanErrorV1::Registry)?;
     if account.key != expected
         || market.registry_program != snapshot.registry_program.key.to_bytes()
         || market.release_set != release_set.to_bytes()
@@ -305,12 +322,12 @@ fn authenticate_position(
         snapshot.claims_market.key.to_bytes(),
         snapshot.owner.key.to_bytes(),
     )
-    .map_err(|_| UserPositionClosePlanErrorV1::InvalidPosition)?;
+    .map_err(UserPositionClosePlanErrorV1::ProtocolPosition)?;
     let admission_seeds = ProtocolPositionAdmissionSeedsV2::new(
         snapshot.claims_market.key.to_bytes(),
         snapshot.owner.key.to_bytes(),
     )
-    .map_err(|_| UserPositionClosePlanErrorV1::InvalidPosition)?;
+    .map_err(UserPositionClosePlanErrorV1::ProtocolPosition)?;
     let expected_position =
         Pubkey::find_program_address(&position_seeds.as_slices(), &snapshot.claims_program.key).0;
     let expected_admission =
@@ -328,7 +345,7 @@ fn authenticate_position(
         return Err(UserPositionClosePlanErrorV1::InvalidPosition);
     }
     let position = LiabilityBasisPositionViewV2::decode(&snapshot.position.data)
-        .map_err(|_| UserPositionClosePlanErrorV1::InvalidPosition)?;
+        .map_err(UserPositionClosePlanErrorV1::LiabilityBasisState)?;
     if position.market_account != snapshot.claims_market.key.to_bytes()
         || position.owner != snapshot.owner.key.to_bytes()
         || position.basis_id != market.basis_id
@@ -339,14 +356,14 @@ fn authenticate_position(
     for claim in 0..position.claim_count {
         if position
             .balance(&snapshot.position.data, claim)
-            .map_err(|_| UserPositionClosePlanErrorV1::InvalidPosition)?
+            .map_err(UserPositionClosePlanErrorV1::LiabilityBasisState)?
             != 0
         {
             return Err(UserPositionClosePlanErrorV1::InvalidPosition);
         }
     }
     let admission = ProtocolPositionAdmissionV2::decode(&snapshot.admission.data)
-        .map_err(|_| UserPositionClosePlanErrorV1::InvalidPosition)?;
+        .map_err(UserPositionClosePlanErrorV1::ProtocolPosition)?;
     if admission.owner_kind() != ProtocolPositionOwnerKindV2::User
         || admission.release_set() != market.release_set
         || admission.market() != market.logical_market
@@ -380,9 +397,9 @@ fn authenticate_position(
         admission.admission_rent_principal(),
         PROTOCOL_POSITION_ADMISSION_BYTES_V2,
     )
-    .map_err(|_| UserPositionClosePlanErrorV1::InvalidRent)?;
+    .map_err(UserPositionClosePlanErrorV1::Capability)?;
     if funded_rent_minimum_v2(funded_rate, snapshot.position.data.len())
-        .map_err(|_| UserPositionClosePlanErrorV1::InvalidRent)?
+        .map_err(UserPositionClosePlanErrorV1::Capability)?
         != admission.position_rent_principal()
     {
         return Err(UserPositionClosePlanErrorV1::InvalidRent);
@@ -401,7 +418,7 @@ fn authenticate_rent_credit(
         return Err(UserPositionClosePlanErrorV1::InvalidRentCredit);
     }
     let credit = LifecycleRentCreditV2::decode(&snapshot.rent_credit.data)
-        .map_err(|_| UserPositionClosePlanErrorV1::InvalidRentCredit)?;
+        .map_err(UserPositionClosePlanErrorV1::LifecycleRent)?;
     if credit.market().to_bytes() != market.logical_market
         || credit.release_set().to_bytes() != market.release_set
         || credit.generation() != market.generation
@@ -447,7 +464,7 @@ fn assemble_plan(
         generation: market.generation,
         expected_market_revision: market.revision,
         expected_position_revision: LiabilityBasisPositionViewV2::decode(&snapshot.position.data)
-            .map_err(|_| UserPositionClosePlanErrorV1::InvalidPosition)?
+            .map_err(UserPositionClosePlanErrorV1::LiabilityBasisState)?
             .revision,
         observed_position_lamports: admission.position_lamports(),
         observed_admission_lamports: admission.admission_lamports(),
@@ -456,12 +473,12 @@ fn assemble_plan(
         capability_descriptor: [0; 32],
         capability_outcome: 0,
     })
-    .map_err(|_| UserPositionClosePlanErrorV1::InvalidRequest)?;
+    .map_err(UserPositionClosePlanErrorV1::ProtocolPosition)?;
     let outer = UserPositionAdmissionRequestV1::new(claims_request)
-        .map_err(|_| UserPositionClosePlanErrorV1::InvalidRequest)?;
+        .map_err(UserPositionClosePlanErrorV1::UserPositionAdmission)?;
     let child = outer
         .claims_request_bytes()
-        .map_err(|_| UserPositionClosePlanErrorV1::InvalidRequest)?;
+        .map_err(UserPositionClosePlanErrorV1::UserPositionAdmission)?;
     let claims_request_digest = hash(&child).to_bytes();
     let authority_seeds = CallerAuthoritySeedsV1::from_bytes(
         market.release_set,
@@ -470,7 +487,7 @@ fn assemble_plan(
         snapshot.owner.key.to_bytes(),
         claims_request_digest,
     )
-    .map_err(|_| UserPositionClosePlanErrorV1::InvalidRequest)?;
+    .map_err(UserPositionClosePlanErrorV1::ReleaseSet)?;
     let caller_authority =
         Pubkey::find_program_address(&authority_seeds.as_slices(), &snapshot.trading_program.key).0;
     let frame_keys = [
@@ -499,7 +516,7 @@ fn assemble_plan(
     for (index, key) in frame_keys.into_iter().enumerate() {
         let privileges = frame
             .privileges(index)
-            .map_err(|_| UserPositionClosePlanErrorV1::InvalidRequest)?;
+            .map_err(UserPositionClosePlanErrorV1::UserPositionAdmission)?;
         accounts.push(if privileges.writable() {
             AccountMeta::new(key, privileges.signer())
         } else {
@@ -508,7 +525,7 @@ fn assemble_plan(
     }
     let outer_data = outer
         .to_bytes()
-        .map_err(|_| UserPositionClosePlanErrorV1::InvalidRequest)?;
+        .map_err(UserPositionClosePlanErrorV1::UserPositionAdmission)?;
     let instruction = Instruction {
         program_id: snapshot.trading_program.key,
         accounts,
@@ -549,7 +566,7 @@ fn assemble_plan(
         },
     )
     .and_then(ProtocolPositionCloseReceiptV2::to_bytes)
-    .map_err(|_| UserPositionClosePlanErrorV1::InvalidRequest)?;
+    .map_err(UserPositionClosePlanErrorV1::ProtocolPosition)?;
 
     Ok(UserPositionClosePlanV1 {
         instruction,
@@ -812,7 +829,9 @@ mod tests {
         let (donated, market, _) = fixture(width_principal, admission_principal + 1);
         assert_eq!(
             authenticate_position(&donated, market),
-            Err(UserPositionClosePlanErrorV1::InvalidRent),
+            Err(UserPositionClosePlanErrorV1::Capability(
+                dclutch_market::capability_manifest::Error::UnrepresentableRentRate
+            )),
             "a principal one lamport off the affine line is no rate's minimum"
         );
         // A zero principal never reaches this check: `ProtocolPositionRequestV2`

@@ -308,7 +308,7 @@ fn release_meta_digest_and_admission_substitutions_refuse_or_rederive() {
     assert_eq!(
         build_registry_hot_continuation_v1(&stale, &fixture.hot),
         Err(RegistryHotContinuationErrorV1::Registry(
-            RegistryError::InvalidDeployment
+            RegistryError::Registry(dclutch_registry::Error::ElfDigestMismatch)
         ))
     );
 }

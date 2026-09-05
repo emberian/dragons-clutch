@@ -1218,7 +1218,7 @@ fn every_builder_refuses_the_82_byte_mint_shape_the_old_reader_required() {
             StructuredActionInputV2 { quantity: 2 },
         )
         .expect_err("82-byte receipt Mint"),
-        Error::InvalidToken
+        Error::Token(dclutch_custody::token_svm::Error::InvalidLength)
     );
 
     let mut shard = Fixture::new(false);
@@ -1241,7 +1241,7 @@ fn every_builder_refuses_the_82_byte_mint_shape_the_old_reader_required() {
             },
         )
         .expect_err("82-byte shard Mint"),
-        Error::InvalidToken
+        Error::Token(dclutch_custody::token_svm::Error::InvalidLength)
     );
 }
 
@@ -1369,11 +1369,21 @@ fn nonzero_display_decimals_still_refuse_every_mint_authentication_failure() {
     let assets = fixture.asset_observations();
     let mut wrong_owner = fixture.observation(&assets, Mode::Structured);
     wrong_owner.receipt_mint.owner = CLAIMS;
-    assert_eq!(issue(wrong_owner), Error::InvalidRepresentation);
+    assert_eq!(
+        issue(wrong_owner),
+        Error::ProductRuntimeReader(
+            dclutch_product::svm_reader::Error::RepresentationComposition
+        )
+    );
 
     let mut wrong_key = fixture.observation(&assets, Mode::Structured);
     wrong_key.receipt_mint.key = Pubkey::new_from_array([0x5a; 32]);
-    assert_eq!(issue(wrong_key), Error::InvalidRepresentation);
+    assert_eq!(
+        issue(wrong_key),
+        Error::ProductRuntimeReader(
+            dclutch_product::svm_reader::Error::RepresentationComposition
+        )
+    );
 
     // Executability is carried by no record, so this one is `authenticate_mint`
     // speaking for itself.
@@ -1390,7 +1400,7 @@ fn nonzero_display_decimals_still_refuse_every_mint_authentication_failure() {
     let truncated_assets = truncated.asset_observations();
     assert_eq!(
         issue(truncated.observation(&truncated_assets, Mode::Structured)),
-        Error::InvalidToken
+        Error::Token(dclutch_custody::token_svm::Error::InvalidLength)
     );
 
     let mut foreign_authority = scaled();
@@ -1402,7 +1412,7 @@ fn nonzero_display_decimals_still_refuse_every_mint_authentication_failure() {
     let foreign_assets = foreign_authority.asset_observations();
     assert_eq!(
         issue(foreign_authority.observation(&foreign_assets, Mode::Structured)),
-        Error::InvalidToken
+        Error::Token(dclutch_custody::token_svm::Error::AuthorityMismatch)
     );
 
     // The shard Mint reaches the same function through `resolve_assets`, so the
@@ -1461,7 +1471,7 @@ fn nonzero_display_decimals_still_refuse_every_mint_authentication_failure() {
             shard_truncated_assets.get(1..2).expect("selected asset"),
             Mode::Selected
         )),
-        Error::InvalidToken
+        Error::Token(dclutch_custody::token_svm::Error::InvalidLength)
     );
 
     let mut shard_authority = scaled();
@@ -1480,7 +1490,7 @@ fn nonzero_display_decimals_still_refuse_every_mint_authentication_failure() {
             shard_authority_assets.get(1..2).expect("selected asset"),
             Mode::Selected
         )),
-        Error::InvalidToken
+        Error::Token(dclutch_custody::token_svm::Error::AuthorityMismatch)
     );
 }
 
@@ -2064,7 +2074,9 @@ fn obsolete_economic_slice_market_wire_and_pda_refuse() {
                 quantity: 1,
             },
         ),
-        Err(Error::InvalidClaims)
+        Err(Error::LiabilityBasisState(
+            dclutch_claims::liability_basis_state_v2::LiabilityBasisStateErrorV2::InvalidLength
+        ))
     );
 
     let mut legacy_pda = Fixture::new(false);

@@ -88,6 +88,32 @@ pub enum Error {
     /// partition is exhaustive, disjoint, ordered, canonical — and always
     /// resolves the same way.
     DegenerateOutcomePartition,
+    /// `dclutch_market` refused; the cause is its own.
+    MarketCore(dclutch_market::Error),
+    /// `dclutch_market::realm` refused; the cause is its own.
+    Realm(dclutch_market::realm::Error),
+    /// `dclutch_product::admission` refused; the cause is its own.
+    ProductRuntimeAdmission(dclutch_product::admission::Error),
+    /// `dclutch_product::payoff` refused; the cause is its own.
+    ProductBasis(dclutch_product::payoff::runtime_v3::Error),
+    /// `dclutch_product` refused; the cause is its own.
+    ProductRuntime(dclutch_product::Error),
+    /// `dclutch_source` refused; the cause is its own.
+    Source(dclutch_source::Error),
+    /// `dclutch_market::capability_manifest` refused; the cause is its own.
+    Capability(dclutch_market::capability_manifest::Error),
+    /// `dclutch_registry` refused; the cause is its own.
+    Registry(dclutch_registry::Error),
+    /// `dclutch_registry::release_set` refused; the cause is its own.
+    ReleaseSet(dclutch_registry::release_set::Error),
+    /// `dclutch_registry::svm` refused; the cause is its own.
+    RegistrySvm(dclutch_registry::svm::Error),
+    /// `dclutch_market::rent` refused; the cause is its own.
+    LifecycleRent(dclutch_market::rent::lifecycle_v2::LifecycleRentErrorV2),
+    /// `dclutch_product_compiler` refused; the cause is its own.
+    ProductCompiler(dclutch_product_compiler::noncategorical_v3::Error),
+    /// `dclutch_product::payoff` refused; the cause is its own.
+    ProductBasisRegistry(dclutch_product::payoff::registry_v3::Error),
 }
 
 /// Operator result alias.
@@ -149,9 +175,9 @@ pub fn compile_product_records_v2(
         .checked_add(2)
         .ok_or(Error::WidthMismatch)?;
     let expected_domain_bytes =
-        result_domain_record_bytes(input.cuts.len()).map_err(|_| Error::RuntimeProduct)?;
+        result_domain_record_bytes(input.cuts.len()).map_err(Error::ProductRuntime)?;
     let expected_portfolio_bytes =
-        portfolio_record_bytes(input.coefficients.len()).map_err(|_| Error::RuntimeProduct)?;
+        portfolio_record_bytes(input.coefficients.len()).map_err(Error::ProductRuntime)?;
     if input.coefficients.len() != expected_outcomes
         || product_output.len() != PRODUCT_RECORD_BYTES_V2
         || domain_output.len() != expected_domain_bytes
@@ -175,7 +201,7 @@ pub fn compile_product_records_v2(
         },
         &mut candidate_domain,
     )
-    .map_err(|_| Error::RuntimeProduct)?;
+    .map_err(Error::ProductRuntime)?;
     let domain_digest = digest(&candidate_domain)?;
     compile_portfolio_v2(
         PortfolioInputV2 {
@@ -189,11 +215,11 @@ pub fn compile_product_records_v2(
         },
         &mut candidate_portfolio,
     )
-    .map_err(|_| Error::RuntimeProduct)?;
+    .map_err(Error::ProductRuntime)?;
     let portfolio_digest = digest(&candidate_portfolio)?;
     ProductRecordV2::new(input.product_id, domain_digest, portfolio_digest)
         .encode_into(&mut candidate_product)
-        .map_err(|_| Error::Admission)?;
+        .map_err(Error::ProductRuntimeAdmission)?;
     let product_digest = digest(&candidate_product)?;
     let product = coordinate(
         registry_program,
@@ -400,12 +426,12 @@ pub fn build_admission_instruction_v2(
     compiled
         .request
         .encode_into(&mut data)
-        .map_err(|_| Error::Admission)?;
+        .map_err(Error::ProductRuntimeAdmission)?;
     let mut receipt_bytes = [0_u8; ADMISSION_RECEIPT_BYTES_V2];
     compiled
         .receipt
         .encode_into(&mut receipt_bytes)
-        .map_err(|_| Error::Admission)?;
+        .map_err(Error::ProductRuntimeAdmission)?;
     Ok(AdmissionInstructionPlanV2 {
         instruction: Instruction {
             program_id: admission_program,

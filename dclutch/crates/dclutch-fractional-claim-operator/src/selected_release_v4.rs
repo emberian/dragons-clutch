@@ -451,6 +451,18 @@ pub enum FractionalSelectedReleaseErrorV4 {
     Publication,
     /// The append-only current activation descriptor/profile/effect refused.
     Activation,
+    /// `dclutch_fractional_claim_operator` refused; the cause is its own.
+    FractionalSelectedArtifact(crate::FractionalSelectedArtifactErrorV4),
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    ProgramSetContract(dclutch_market::capability_program::set_v2::ProgramSetErrorV2),
+    /// `dclutch_fractional_claim_operator` refused; the cause is its own.
+    FractionalActivationBundle(crate::selected_release_v4::FractionalActivationBundleErrorV1),
+    /// `dclutch_claims::fractional_kernel` refused; the cause is its own.
+    FractionalClaim(dclutch_claims::fractional_kernel::Error),
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    CapabilityProgram(dclutch_market::capability_program::Error),
+    /// `dclutch_claims` refused; the cause is its own.
+    FrameSpec(dclutch_claims::frame_spec_v1::FrameSpecErrorV1),
 }
 
 /// Complete input for the current activation-capable Fractional release.
@@ -467,8 +479,6 @@ pub struct FractionalActivationBundleInputV1<'a> {
 /// Stable Fractional activation construction or validation refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FractionalActivationBundleErrorV1 {
-    /// The supplied action descriptor did not decode as CapabilityProgramV4.
-    ActionDescriptor,
     /// The action did not name the current Fractional V2 root schema and width.
     ForeignRoot,
     /// The family creation oracle or its declared seam coverage refused.
@@ -477,6 +487,8 @@ pub enum FractionalActivationBundleErrorV1 {
     Request,
     /// The generic activation codec refused the derived template.
     Template(ActivationBundleErrorV1),
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    CapabilityProgram(dclutch_market::capability_program::Error),
 }
 
 /// Encode the sole canonical Fractional activation selector request.
@@ -563,7 +575,7 @@ fn fractional_activation_template_v1(
     FractionalActivationBundleErrorV1,
 > {
     let action = CapabilityProgramV4::decode(input.action_descriptor)
-        .map_err(|_| FractionalActivationBundleErrorV1::ActionDescriptor)?;
+        .map_err(FractionalActivationBundleErrorV1::CapabilityProgram)?;
     if action.kind().to_bytes() != FRACTIONAL_CAPABILITY_KIND_ID_V1
         || action.config_schema().to_bytes() != FRACTIONAL_SELECTION_CONFIG_SCHEMA_ID_V1
         || action.root_schema().to_bytes() != FRACTIONAL_ROOT_SCHEMA_ID_V2
@@ -670,13 +682,13 @@ pub fn fractional_selected_release_v4(
             profile,
             claims_frame: &frame,
         })
-        .map_err(|_| FractionalSelectedReleaseErrorV4::Bundle)?;
+        .map_err(FractionalSelectedReleaseErrorV4::FractionalSelectedArtifact)?;
         *slot = digest(&bundle.descriptor);
         bundles.push(bundle);
     }
     let entries = program_set_entries(&descriptors)?;
     let width = encoded_program_set_bytes_v2(entries.len())
-        .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?;
+        .map_err(FractionalSelectedReleaseErrorV4::ProgramSetContract)?;
     let mut program_set = vec![0_u8; width];
     encode_program_set_v2(
         u32::try_from(FRACTIONAL_EXPOSURE_REQUEST_ACTION_OFFSET_V2)
@@ -685,7 +697,7 @@ pub fn fractional_selected_release_v4(
         &entries,
         &mut program_set,
     )
-    .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?;
+    .map_err(FractionalSelectedReleaseErrorV4::ProgramSetContract)?;
     let program_set_id = digest(&program_set);
     let selection_config = selection_config_bytes(input.terms)?;
     let selection_config_id = digest(&selection_config);
@@ -754,7 +766,7 @@ pub fn fractional_current_release_v4(
             profile: widths.profile(),
             claims_frame: &frame,
         })
-        .map_err(|_| FractionalSelectedReleaseErrorV4::Bundle)?;
+        .map_err(FractionalSelectedReleaseErrorV4::FractionalSelectedArtifact)?;
         *slot = digest(&bundle.descriptor);
         bundles.push(bundle);
     }
@@ -764,10 +776,10 @@ pub fn fractional_current_release_v4(
     let activation = build_fractional_activation_bundle_v1(FractionalActivationBundleInputV1 {
         action_descriptor: &first.descriptor,
     })
-    .map_err(|_| FractionalSelectedReleaseErrorV4::Activation)?;
+    .map_err(FractionalSelectedReleaseErrorV4::FractionalActivationBundle)?;
     let entries = current_program_set_entries(&descriptors, activation.descriptor_id)?;
     let width = encoded_program_set_bytes_v2(entries.len())
-        .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?;
+        .map_err(FractionalSelectedReleaseErrorV4::ProgramSetContract)?;
     let mut program_set = vec![0_u8; width];
     encode_program_set_v2(
         u32::try_from(FRACTIONAL_EXPOSURE_REQUEST_ACTION_OFFSET_V2)
@@ -776,7 +788,7 @@ pub fn fractional_current_release_v4(
         &entries,
         &mut program_set,
     )
-    .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?;
+    .map_err(FractionalSelectedReleaseErrorV4::ProgramSetContract)?;
     let selection_config = selection_config_bytes(input.terms)?;
     let release = FractionalCurrentReleaseV4 {
         program_set_id: digest(&program_set),
@@ -804,10 +816,10 @@ pub fn validate_fractional_current_release_v4(
     }
     join_fractional_selection_config_v1(
         FractionalSelectionConfigV1::decode(&release.selection_config)
-            .map_err(|_| FractionalSelectedReleaseErrorV4::SelectionConfig)?,
+            .map_err(FractionalSelectedReleaseErrorV4::FractionalClaim)?,
         input.terms,
     )
-    .map_err(|_| FractionalSelectedReleaseErrorV4::SelectionConfig)?;
+    .map_err(FractionalSelectedReleaseErrorV4::FractionalClaim)?;
     if release.bundles.len() != FRACTIONAL_SELECTED_ACTION_COUNT_V4 {
         return Err(FractionalSelectedReleaseErrorV4::Bundle);
     }
@@ -821,12 +833,12 @@ pub fn validate_fractional_current_release_v4(
             action_descriptor: &first.descriptor,
         },
     )
-    .map_err(|_| FractionalSelectedReleaseErrorV4::Activation)?;
+    .map_err(FractionalSelectedReleaseErrorV4::FractionalActivationBundle)?;
     if release.program_set_id != digest(&release.program_set) {
         return Err(FractionalSelectedReleaseErrorV4::ProgramSet);
     }
     let set = CapabilityProgramSetV2::decode(&release.program_set)
-        .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?;
+        .map_err(FractionalSelectedReleaseErrorV4::ProgramSetContract)?;
     let mut descriptors = [[0_u8; 32]; FRACTIONAL_SELECTED_ACTION_COUNT_V4];
     for ((slot, action), bundle) in descriptors
         .iter_mut()
@@ -840,7 +852,7 @@ pub fn validate_fractional_current_release_v4(
             return Err(FractionalSelectedReleaseErrorV4::Bundle);
         }
         validate_fractional_current_selected_bundle_v4(bundle, input.capacity_profile, accounts)
-            .map_err(|_| FractionalSelectedReleaseErrorV4::Bundle)?;
+            .map_err(FractionalSelectedReleaseErrorV4::FractionalSelectedArtifact)?;
         *slot = digest(&bundle.descriptor);
     }
     let expected = current_program_set_entries(&descriptors, release.activation.descriptor_id)?;
@@ -850,7 +862,7 @@ pub fn validate_fractional_current_release_v4(
     for (index, entry) in expected.iter().copied().enumerate() {
         if set
             .entry(u16::try_from(index).map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?)
-            .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?
+            .map_err(FractionalSelectedReleaseErrorV4::ProgramSetContract)?
             != entry
         {
             return Err(FractionalSelectedReleaseErrorV4::ProgramSet);
@@ -858,7 +870,7 @@ pub fn validate_fractional_current_release_v4(
     }
     let selected = set
         .select_descriptor(&fractional_activation_request_v1())
-        .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?;
+        .map_err(FractionalSelectedReleaseErrorV4::ProgramSetContract)?;
     if selected.schema().to_bytes() != activation_descriptor_schema_v1()
         || selected.program().to_bytes() != release.activation.descriptor_id
     {
@@ -901,14 +913,14 @@ pub fn validate_fractional_selected_release_v4(
         let claims_accounts =
             u16::try_from(frame.len()).map_err(|_| FractionalSelectedReleaseErrorV4::Frame)?;
         validate_fractional_selected_bundle_v4(bundle, input.capacity_profile, claims_accounts)
-            .map_err(|_| FractionalSelectedReleaseErrorV4::Bundle)?;
+            .map_err(FractionalSelectedReleaseErrorV4::FractionalSelectedArtifact)?;
         let expected = build_fractional_selected_bundle_v4(FractionalSelectedBundleInputV4 {
             action,
             capacity_profile: input.capacity_profile,
             profile: widths.profile(),
             claims_frame: &frame,
         })
-        .map_err(|_| FractionalSelectedReleaseErrorV4::Bundle)?;
+        .map_err(FractionalSelectedReleaseErrorV4::FractionalSelectedArtifact)?;
         if expected != *bundle {
             return Err(FractionalSelectedReleaseErrorV4::Bundle);
         }
@@ -916,7 +928,7 @@ pub fn validate_fractional_selected_release_v4(
     }
     let expected_entries = program_set_entries(&descriptors)?;
     let set = CapabilityProgramSetV2::decode(&release.program_set)
-        .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?;
+        .map_err(FractionalSelectedReleaseErrorV4::ProgramSetContract)?;
     if usize::try_from(set.selector_offset()).ok()
         != Some(FRACTIONAL_EXPOSURE_REQUEST_ACTION_OFFSET_V2)
         || set.selector_width() != SelectorWidthV2::U8
@@ -929,14 +941,14 @@ pub fn validate_fractional_selected_release_v4(
             u16::try_from(index).map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?;
         if set
             .entry(position)
-            .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?
+            .map_err(FractionalSelectedReleaseErrorV4::ProgramSetContract)?
             != entry
         {
             return Err(FractionalSelectedReleaseErrorV4::ProgramSet);
         }
         let selected = set
             .select_descriptor(&action_selector_probe(entry.selector())?)
-            .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?;
+            .map_err(FractionalSelectedReleaseErrorV4::ProgramSetContract)?;
         if selected != entry.descriptor() {
             return Err(FractionalSelectedReleaseErrorV4::ProgramSet);
         }
@@ -952,9 +964,9 @@ pub fn validate_fractional_selected_release_v4(
         return Err(FractionalSelectedReleaseErrorV4::SelectionConfig);
     }
     let decoded = FractionalSelectionConfigV1::decode(&release.selection_config)
-        .map_err(|_| FractionalSelectedReleaseErrorV4::SelectionConfig)?;
+        .map_err(FractionalSelectedReleaseErrorV4::FractionalClaim)?;
     join_fractional_selection_config_v1(decoded, input.terms)
-        .map_err(|_| FractionalSelectedReleaseErrorV4::SelectionConfig)?;
+        .map_err(FractionalSelectedReleaseErrorV4::FractionalClaim)?;
     let expected_publication = FractionalSelectedPublicationV4 {
         release_set: input.terms.release_set(),
         market: input.terms.market(),
@@ -992,7 +1004,7 @@ fn selection_config_bytes(
         fractional_selection_config_from_terms_v1(terms),
         &mut bytes,
     )
-    .map_err(|_| FractionalSelectedReleaseErrorV4::SelectionConfig)?;
+    .map_err(FractionalSelectedReleaseErrorV4::FractionalClaim)?;
     Ok(bytes)
 }
 
@@ -1033,7 +1045,7 @@ impl FractionalSelectedReleaseV4 {
         &self,
     ) -> Result<Vec<FractionalPublicationRecordV1<'_>>, FractionalSelectedReleaseErrorV4> {
         let set = CapabilityProgramSetV2::decode(&self.program_set)
-            .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?;
+            .map_err(FractionalSelectedReleaseErrorV4::ProgramSetContract)?;
         let first = CapabilityProgramV4::decode(
             &self
                 .bundles
@@ -1041,7 +1053,7 @@ impl FractionalSelectedReleaseV4 {
                 .ok_or(FractionalSelectedReleaseErrorV4::Bundle)?
                 .descriptor,
         )
-        .map_err(|_| FractionalSelectedReleaseErrorV4::Bundle)?;
+        .map_err(FractionalSelectedReleaseErrorV4::CapabilityProgram)?;
 
         let mut records = Vec::with_capacity(2 + FRACTIONAL_SELECTED_ACTION_COUNT_V4 * 7);
         records.push(FractionalPublicationRecordV1 {
@@ -1061,9 +1073,9 @@ impl FractionalSelectedReleaseV4 {
                     u16::try_from(index)
                         .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?,
                 )
-                .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?;
+                .map_err(FractionalSelectedReleaseErrorV4::ProgramSetContract)?;
             let descriptor = CapabilityProgramV4::decode(&bundle.descriptor)
-                .map_err(|_| FractionalSelectedReleaseErrorV4::Bundle)?;
+                .map_err(FractionalSelectedReleaseErrorV4::CapabilityProgram)?;
             let artifacts = descriptor.artifacts();
             for (label, schema, body) in [
                 (
@@ -1123,7 +1135,7 @@ impl FractionalCurrentReleaseV4 {
         &self,
     ) -> Result<Vec<FractionalPublicationRecordV1<'_>>, FractionalSelectedReleaseErrorV4> {
         let set = CapabilityProgramSetV2::decode(&self.program_set)
-            .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?;
+            .map_err(FractionalSelectedReleaseErrorV4::ProgramSetContract)?;
         let first = CapabilityProgramV4::decode(
             &self
                 .bundles
@@ -1131,7 +1143,7 @@ impl FractionalCurrentReleaseV4 {
                 .ok_or(FractionalSelectedReleaseErrorV4::Bundle)?
                 .descriptor,
         )
-        .map_err(|_| FractionalSelectedReleaseErrorV4::Bundle)?;
+        .map_err(FractionalSelectedReleaseErrorV4::CapabilityProgram)?;
         let mut records = Vec::with_capacity(5 + FRACTIONAL_SELECTED_ACTION_COUNT_V4 * 7);
         records.push(FractionalPublicationRecordV1 {
             label: "program-set",
@@ -1149,9 +1161,9 @@ impl FractionalCurrentReleaseV4 {
                     u16::try_from(index)
                         .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?,
                 )
-                .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?;
+                .map_err(FractionalSelectedReleaseErrorV4::ProgramSetContract)?;
             let descriptor = CapabilityProgramV4::decode(&bundle.descriptor)
-                .map_err(|_| FractionalSelectedReleaseErrorV4::Bundle)?;
+                .map_err(FractionalSelectedReleaseErrorV4::CapabilityProgram)?;
             let artifacts = descriptor.artifacts();
             for (label, schema, body) in [
                 (
@@ -1202,7 +1214,7 @@ impl FractionalCurrentReleaseV4 {
                 u16::try_from(FRACTIONAL_SELECTED_ACTION_COUNT_V4)
                     .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?,
             )
-            .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?;
+            .map_err(FractionalSelectedReleaseErrorV4::ProgramSetContract)?;
         for (label, schema, body) in [
             (
                 "activation-account-profile",
@@ -1555,10 +1567,10 @@ fn signed_delta_prefix(
     widths: FractionalFrameWidthsV4,
 ) -> Result<Vec<FractionalClaimsAccountRuleV1>, FractionalSelectedReleaseErrorV4> {
     let spec = SignedDeltaFrameSpecV3::new(position_count)
-        .map_err(|_| FractionalSelectedReleaseErrorV4::Frame)?;
+        .map_err(FractionalSelectedReleaseErrorV4::FrameSpec)?;
     let count = spec
         .account_count()
-        .map_err(|_| FractionalSelectedReleaseErrorV4::Frame)?;
+        .map_err(FractionalSelectedReleaseErrorV4::FrameSpec)?;
     if usize::from(count) != expected {
         return Err(FractionalSelectedReleaseErrorV4::Frame);
     }
@@ -1566,11 +1578,11 @@ fn signed_delta_prefix(
     for index in 0..count {
         let account = spec
             .account(index)
-            .map_err(|_| FractionalSelectedReleaseErrorV4::Frame)?;
+            .map_err(FractionalSelectedReleaseErrorV4::FrameSpec)?;
         let privileges = account.privileges();
         let data = resolve_width(
             spec.data(index)
-                .map_err(|_| FractionalSelectedReleaseErrorV4::Frame)?,
+                .map_err(FractionalSelectedReleaseErrorV4::FrameSpec)?,
             terms,
             widths,
         )?;

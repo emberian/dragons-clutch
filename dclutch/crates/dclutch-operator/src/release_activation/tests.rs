@@ -479,7 +479,9 @@ fn stale_loader_and_oversized_packet_budget_preserve_registry_refusals() {
     }
     assert_eq!(
         stale.build(),
-        Err(Error::Registry(RegistryError::InvalidDeployment))
+        Err(Error::Registry(RegistryError::Registry(
+            dclutch_registry::Error::DeploymentSlotMismatch
+        )))
     );
 
     let fixture = Fixture::new(41, 71);

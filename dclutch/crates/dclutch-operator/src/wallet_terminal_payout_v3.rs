@@ -234,12 +234,8 @@ pub enum WalletTerminalPayoutErrorV3 {
     Snapshot,
     /// Route identities, PDAs, or immutable joins disagreed.
     Route,
-    /// Claims aggregate or Position bytes refused.
-    Claims,
     /// Custody replay, Vault, authority, or token prestate refused.
     Custody,
-    /// Product/exposure evaluation or request construction refused.
-    Economic,
     /// Checked arithmetic overflowed.
     Arithmetic,
     /// The observed lookup table was not the sole canonical sequence.
@@ -248,6 +244,24 @@ pub enum WalletTerminalPayoutErrorV3 {
     Routing(crate::versioned::Error),
     /// A claimed accepted poststate disagreed with the exact plan.
     Postcondition,
+    /// `dclutch_claims` refused; the cause is its own.
+    LiabilityBasisState(dclutch_claims::liability_basis_state_v2::LiabilityBasisStateErrorV2),
+    /// `dclutch_claims` refused; the cause is its own.
+    TerminalSettlement(dclutch_claims::terminal_settlement_v3::TerminalSettlementErrorV3),
+    /// `dclutch_product::payoff` refused; the cause is its own.
+    ProductBasis(dclutch_product::payoff::runtime_v3::Error),
+    /// `dclutch_claims` refused; the cause is its own.
+    SignedDelta(dclutch_claims::signed_delta_v3::SignedDeltaErrorV3),
+    /// `dclutch_custody::token_svm` refused; the cause is its own.
+    Token(dclutch_custody::token_svm::Error),
+    /// `dclutch_claims` refused; the cause is its own.
+    ClaimsProductBasisTerminalSvm(dclutch_claims::product_basis_terminal_v3::Error),
+    /// `dclutch_custody` refused; the cause is its own.
+    CustodyContract(dclutch_custody::Error),
+    /// `dclutch_claims` refused; the cause is its own.
+    ProtocolPosition(dclutch_claims::protocol_position_v2::ProtocolPositionErrorV2),
+    /// `dclutch_registry::release_set` refused; the cause is its own.
+    ReleaseSet(dclutch_registry::release_set::Error),
 }
 
 /// Build one wallet-authorized terminal payout from exact public prestate.
@@ -257,9 +271,9 @@ pub fn build_wallet_terminal_payout_v3(
     validate_snapshot(input.observation)?;
     let route = input.route;
     let market = LiabilityBasisMarketViewV2::decode(input.aggregate_bytes)
-        .map_err(|_| WalletTerminalPayoutErrorV3::Claims)?;
+        .map_err(WalletTerminalPayoutErrorV3::LiabilityBasisState)?;
     let position = LiabilityBasisPositionViewV2::decode(input.position_bytes)
-        .map_err(|_| WalletTerminalPayoutErrorV3::Claims)?;
+        .map_err(WalletTerminalPayoutErrorV3::LiabilityBasisState)?;
     validate_claims_route(input, market, position)?;
     let replay = validate_custody_route(input, market)?;
 
@@ -291,19 +305,19 @@ pub fn build_wallet_terminal_payout_v3(
         claim_index: input.claim_index,
         transfer_index: input.transfer_index,
     })
-    .map_err(|_| WalletTerminalPayoutErrorV3::Economic)?;
+    .map_err(WalletTerminalPayoutErrorV3::TerminalSettlement)?;
     let request_bytes = request.to_bytes();
     let request_digest = hash(&request_bytes).to_bytes();
     let product_width = usize::try_from(
         ProductBasisV3::decode(input.product_basis_bytes)
-            .map_err(|_| WalletTerminalPayoutErrorV3::Economic)?
+            .map_err(WalletTerminalPayoutErrorV3::ProductBasis)?
             .basis_width(),
     )
     .map_err(|_| WalletTerminalPayoutErrorV3::Arithmetic)?;
     let claims_width =
         usize::try_from(market.claim_count).map_err(|_| WalletTerminalPayoutErrorV3::Arithmetic)?;
     let neutral = SignedDeltaV3::new(DeltaDirectionV3::Neutral, 0)
-        .map_err(|_| WalletTerminalPayoutErrorV3::Economic)?;
+        .map_err(WalletTerminalPayoutErrorV3::SignedDelta)?;
     let mut product_payouts = vec![0_u64; product_width];
     let mut translation = vec![0_u64; claims_width];
     let mut claims_payouts = vec![0_u64; claims_width];
@@ -311,10 +325,10 @@ pub fn build_wallet_terminal_payout_v3(
     let mut signed_packet = vec![
         0_u8;
         plan_bytes(market.claim_count, 1, 1)
-            .map_err(|_| WalletTerminalPayoutErrorV3::Arithmetic)?
+            .map_err(WalletTerminalPayoutErrorV3::SignedDelta)?
     ];
-    let hoard = TokenAccount::parse(input.hoard_token_bytes)
-        .map_err(|_| WalletTerminalPayoutErrorV3::Custody)?;
+    let hoard =
+        TokenAccount::parse(input.hoard_token_bytes).map_err(WalletTerminalPayoutErrorV3::Token)?;
     let payout = encode_product_claims_terminal_signed_delta_v3(
         ProductClaimsTerminalInputV3 {
             product_basis_bytes: input.product_basis_bytes,
@@ -342,10 +356,10 @@ pub fn build_wallet_terminal_payout_v3(
         &mut aggregate_deltas,
         &mut signed_packet,
     )
-    .map_err(|_| WalletTerminalPayoutErrorV3::Economic)?;
+    .map_err(WalletTerminalPayoutErrorV3::ClaimsProductBasisTerminalSvm)?;
     let signed_packet_digest = hash(&signed_packet).to_bytes();
     let plan = SignedDeltaPlanV3::decode(&signed_packet)
-        .map_err(|_| WalletTerminalPayoutErrorV3::Economic)?;
+        .map_err(WalletTerminalPayoutErrorV3::SignedDelta)?;
     let (positions, aggregates, deltas) = plan.table_bytes();
     let signed_table_digest = hashv(&[
         SIGNED_DELTA_TABLE_DIGEST_DOMAIN_V3,
@@ -550,21 +564,21 @@ pub fn project_wallet_terminal_payout_postcondition_v3(
         request.quantity,
     )?;
     LiabilityBasisMarketViewV2::decode(&aggregate_bytes)
-        .map_err(|_| WalletTerminalPayoutErrorV3::Postcondition)?;
+        .map_err(WalletTerminalPayoutErrorV3::LiabilityBasisState)?;
     LiabilityBasisPositionViewV2::decode(&position_bytes)
-        .map_err(|_| WalletTerminalPayoutErrorV3::Postcondition)?;
+        .map_err(WalletTerminalPayoutErrorV3::LiabilityBasisState)?;
 
     let before_replay = CustodyReplayV1::decode(&report.pre_custody_replay_bytes)
-        .map_err(|_| WalletTerminalPayoutErrorV3::Postcondition)?;
+        .map_err(WalletTerminalPayoutErrorV3::CustodyContract)?;
     let post_custody_revision = before_replay
         .next_revision
         .checked_add(u64::from(report.payout != 0))
         .ok_or(WalletTerminalPayoutErrorV3::Arithmetic)?;
     let before_hoard = TokenAccount::parse(&report.pre_hoard_token_bytes)
-        .map_err(|_| WalletTerminalPayoutErrorV3::Postcondition)?;
+        .map_err(WalletTerminalPayoutErrorV3::Token)?;
     let before_recipient =
         TokenAccount::parse_base_or_immutable_owner(&report.pre_recipient_token_bytes)
-            .map_err(|_| WalletTerminalPayoutErrorV3::Postcondition)?;
+            .map_err(WalletTerminalPayoutErrorV3::Token)?;
     let after_hoard_amount = before_hoard
         .amount
         .checked_sub(report.payout)
@@ -601,7 +615,7 @@ pub fn project_wallet_terminal_payout_postcondition_v3(
             ..before_replay
         }
         .to_bytes()
-        .map_err(|_| WalletTerminalPayoutErrorV3::Postcondition)?
+        .map_err(WalletTerminalPayoutErrorV3::CustodyContract)?
         .to_vec()
     };
 
@@ -613,7 +627,7 @@ pub fn project_wallet_terminal_payout_postcondition_v3(
             .ok_or(WalletTerminalPayoutErrorV3::Postcondition)?;
         let replay_state_digest = hash(&custody_replay_bytes).to_bytes();
         let replay = CustodyReplayV1::decode(&custody_replay_bytes)
-            .map_err(|_| WalletTerminalPayoutErrorV3::Postcondition)?;
+            .map_err(WalletTerminalPayoutErrorV3::CustodyContract)?;
         let receipt = CustodyReceiptV1::new(
             request,
             report.custody_request_digest,
@@ -626,11 +640,11 @@ pub fn project_wallet_terminal_payout_postcondition_v3(
                 replay_state_digest,
             },
         )
-        .map_err(|_| WalletTerminalPayoutErrorV3::Postcondition)?;
+        .map_err(WalletTerminalPayoutErrorV3::CustodyContract)?;
         hash(
             &receipt
                 .to_bytes()
-                .map_err(|_| WalletTerminalPayoutErrorV3::Postcondition)?,
+                .map_err(WalletTerminalPayoutErrorV3::CustodyContract)?,
         )
         .to_bytes()
     };
@@ -683,7 +697,7 @@ pub fn project_wallet_terminal_payout_postcondition_v3(
             post_custody_revision,
         },
     )
-    .map_err(|_| WalletTerminalPayoutErrorV3::Postcondition)?
+    .map_err(WalletTerminalPayoutErrorV3::TerminalSettlement)?
     .to_bytes()
     .to_vec();
     Ok(WalletTerminalPayoutExpectedPoststateV3 {
@@ -736,7 +750,7 @@ fn validate_claims_route(
     )
     .0;
     let position_seeds = ProtocolPositionSeedsV2::new(route.aggregate.to_bytes(), input.owner)
-        .map_err(|_| WalletTerminalPayoutErrorV3::Claims)?;
+        .map_err(WalletTerminalPayoutErrorV3::ProtocolPosition)?;
     let expected_position =
         Pubkey::find_program_address(&position_seeds.as_slices(), &route.claims_program).0;
     let required_route_addresses = [
@@ -783,11 +797,11 @@ fn validate_claims_route(
         || input.quantity == 0
         || position
             .balance(input.position_bytes, input.claim_index)
-            .map_err(|_| WalletTerminalPayoutErrorV3::Claims)?
+            .map_err(WalletTerminalPayoutErrorV3::LiabilityBasisState)?
             < input.quantity
         || market
             .supply(input.aggregate_bytes, input.claim_index)
-            .map_err(|_| WalletTerminalPayoutErrorV3::Claims)?
+            .map_err(WalletTerminalPayoutErrorV3::LiabilityBasisState)?
             < input.quantity
         || route.claims_program == Pubkey::default()
         || route.claims_programdata == Pubkey::default()
@@ -811,7 +825,7 @@ fn validate_custody_route(
 ) -> Result<CustodyReplayV1, WalletTerminalPayoutErrorV3> {
     let route = input.route;
     let replay = CustodyReplayV1::decode(input.custody_replay_bytes)
-        .map_err(|_| WalletTerminalPayoutErrorV3::Custody)?;
+        .map_err(WalletTerminalPayoutErrorV3::CustodyContract)?;
     let expected_replay = Pubkey::find_program_address(
         &CustodyReplaySeedsV1::new(
             market.logical_market,
@@ -839,8 +853,8 @@ fn validate_custody_route(
         CompartmentV1::HoardPrincipal,
     );
     let expected_hoard = Pubkey::find_program_address(&vault.as_slices(), &route.custody_program).0;
-    let hoard = TokenAccount::parse(input.hoard_token_bytes)
-        .map_err(|_| WalletTerminalPayoutErrorV3::Custody)?;
+    let hoard =
+        TokenAccount::parse(input.hoard_token_bytes).map_err(WalletTerminalPayoutErrorV3::Token)?;
     // The DESTINATION, and the one account in this route a stranger owns. Every
     // ordinary wallet's is 170 bytes under Token-2022 -- the ATA program adds
     // `ImmutableOwner` and gives no one a choice -- so refusing that suffix here
@@ -848,7 +862,7 @@ fn validate_custody_route(
     // hand-created 165-byte account instead. The Claims program parses the same
     // account with the same rule; see `rational_terminal_v3::token_amount`.
     let recipient = TokenAccount::parse_base_or_immutable_owner(input.recipient_token_bytes)
-        .map_err(|_| WalletTerminalPayoutErrorV3::Custody)?;
+        .map_err(WalletTerminalPayoutErrorV3::Token)?;
     if route.custody_replay != expected_replay
         || route.custody_authority != expected_authority
         || route.hoard != expected_hoard
@@ -939,7 +953,7 @@ fn custody_caller(
     };
     let custody_bytes = custody
         .to_bytes()
-        .map_err(|_| WalletTerminalPayoutErrorV3::Custody)?;
+        .map_err(WalletTerminalPayoutErrorV3::CustodyContract)?;
     let custody_request_digest = hash(&custody_bytes).to_bytes();
     let seeds = CallerAuthoritySeedsV1::new(
         ContentId::new(input.release_set).map_err(|_| WalletTerminalPayoutErrorV3::Route)?,
@@ -948,7 +962,7 @@ fn custody_caller(
         market.custody_context,
         custody_request_digest,
     )
-    .map_err(|_| WalletTerminalPayoutErrorV3::Route)?;
+    .map_err(WalletTerminalPayoutErrorV3::ReleaseSet)?;
     Ok((
         Pubkey::find_program_address(&seeds.as_slices(), &route.claims_program).0,
         custody_request_digest,
@@ -1088,7 +1102,7 @@ fn token_amount_bytes(
     let mut poststate = prestate.to_vec();
     write_u64(&mut poststate, 64, amount)?;
     TokenAccount::parse_base_or_immutable_owner(&poststate)
-        .map_err(|_| WalletTerminalPayoutErrorV3::Postcondition)?;
+        .map_err(WalletTerminalPayoutErrorV3::Token)?;
     Ok(poststate)
 }
 

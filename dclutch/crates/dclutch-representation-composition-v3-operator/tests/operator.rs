@@ -1083,7 +1083,9 @@ fn substitution_cycle_rank_release_and_slot_refuse() {
             &release,
         )
         .err(),
-        Some(Error::Composition)
+        Some(Error::RepresentationComposition(
+            dclutch_claims::composition::Error::ContentAdmission
+        ))
     );
 
     let mut node_substitution = canonical.exposure.clone();
@@ -1105,7 +1107,9 @@ fn substitution_cycle_rank_release_and_slot_refuse() {
             &node_substitution,
         )
         .err(),
-        Some(Error::Composition)
+        Some(Error::RepresentationComposition(
+            dclutch_claims::composition::Error::CompositionMismatch
+        ))
     );
 
     let mut rank = canonical.exposure.clone();
@@ -1122,7 +1126,9 @@ fn substitution_cycle_rank_release_and_slot_refuse() {
             &rank,
         )
         .err(),
-        Some(Error::Composition)
+        Some(Error::RepresentationComposition(
+            dclutch_claims::composition::Error::InvalidNode
+        ))
     );
 
     let mut cycle_graph = canonical.graph.clone();
@@ -1145,7 +1151,9 @@ fn substitution_cycle_rank_release_and_slot_refuse() {
             &canonical.exposure,
         )
         .err(),
-        Some(Error::Composition)
+        Some(Error::RepresentationComposition(
+            dclutch_claims::composition::Error::InvalidEdge
+        ))
     );
 
     let mut fixture = ChainFixture::n258();
@@ -1264,7 +1272,9 @@ fn publication_lifecycle_and_packet_geometry_are_exact() {
             1,
         )
         .err(),
-        Some(Error::Packet)
+        Some(Error::VersionedMessage(
+            dclutch_versioned_message_operator::Error::PacketTooLarge
+        ))
     );
 
     let oversized = Instruction {
@@ -1283,7 +1293,9 @@ fn publication_lifecycle_and_packet_geometry_are_exact() {
             1,
         )
         .err(),
-        Some(Error::Packet)
+        Some(Error::VersionedMessage(
+            dclutch_versioned_message_operator::Error::PacketTooLarge
+        ))
     );
 }
 

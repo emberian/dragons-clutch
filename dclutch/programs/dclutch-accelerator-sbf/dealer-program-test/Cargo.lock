@@ -1516,6 +1516,44 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 
 [[package]]
+name = "dclutch-accelerator-dealer-program-test"
+version = "0.1.0"
+dependencies = [
+ "dclutch-chain-bundle-builder",
+ "dclutch-claims",
+ "dclutch-core-contract",
+ "dclutch-custody",
+ "dclutch-dealer-accelerator-test-caller-sbf",
+ "dclutch-fractional-atomic-program-test",
+ "dclutch-market",
+ "dclutch-operator",
+ "dclutch-product",
+ "dclutch-program-test-evidence",
+ "dclutch-refusal-registry",
+ "dclutch-registry",
+ "dclutch-resolution-core-v3-operator",
+ "dclutch-trading",
+ "dclutch-trading-sbf",
+ "dclutch-versioned-message-operator",
+ "dclutch-vm",
+ "solana-account 4.6.0",
+ "solana-address-lookup-table-interface",
+ "solana-clock",
+ "solana-compute-budget-interface",
+ "solana-message 3.1.0",
+ "solana-message 4.5.0",
+ "solana-program",
+ "solana-program-option",
+ "solana-program-pack",
+ "solana-program-test",
+ "solana-sdk",
+ "solana-sdk-ids",
+ "solana-transaction 4.2.0",
+ "spl-token-interface",
+ "tokio",
+]
+
+[[package]]
 name = "dclutch-bearer-v2-operator"
 version = "0.1.0"
 dependencies = [
@@ -1620,44 +1658,6 @@ dependencies = [
  "dclutch-market",
  "dclutch-registry",
  "dclutch-sha256-adapter",
-]
-
-[[package]]
-name = "dclutch-dealer-accelerator-program-test"
-version = "0.1.0"
-dependencies = [
- "dclutch-chain-bundle-builder",
- "dclutch-claims",
- "dclutch-core-contract",
- "dclutch-custody",
- "dclutch-dealer-accelerator-test-caller-sbf",
- "dclutch-fractional-atomic-program-test",
- "dclutch-market",
- "dclutch-operator",
- "dclutch-product",
- "dclutch-program-test-evidence",
- "dclutch-refusal-registry",
- "dclutch-registry",
- "dclutch-resolution-core-v3-operator",
- "dclutch-trading",
- "dclutch-trading-sbf",
- "dclutch-versioned-message-operator",
- "dclutch-vm",
- "solana-account 4.6.0",
- "solana-address-lookup-table-interface",
- "solana-clock",
- "solana-compute-budget-interface",
- "solana-message 3.1.0",
- "solana-message 4.5.0",
- "solana-program",
- "solana-program-option",
- "solana-program-pack",
- "solana-program-test",
- "solana-sdk",
- "solana-sdk-ids",
- "solana-transaction 4.2.0",
- "spl-token-interface",
- "tokio",
 ]
 
 [[package]]

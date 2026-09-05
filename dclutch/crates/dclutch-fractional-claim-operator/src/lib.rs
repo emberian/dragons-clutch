@@ -95,6 +95,46 @@ pub enum Error {
     Token,
     /// Canonical producer-subtree retirement or lifecycle RentV2 closure refused.
     Rent,
+    /// `dclutch_claims::fractional` refused; the cause is its own.
+    FractionalExposureRequest(dclutch_claims::fractional::FractionalExposureRequestErrorV2),
+    /// `dclutch_registry::release_set` refused; the cause is its own.
+    ReleaseSet(dclutch_registry::release_set::Error),
+    /// `dclutch_claims::fractional_kernel` refused; the cause is its own.
+    FractionalClaim(dclutch_claims::fractional_kernel::Error),
+    /// `dclutch_claims` refused; the cause is its own.
+    FrameSpec(dclutch_claims::frame_spec_v1::FrameSpecErrorV1),
+    /// `dclutch_claims` refused; the cause is its own.
+    ProtocolPosition(dclutch_claims::protocol_position_v2::ProtocolPositionErrorV2),
+    /// `dclutch_claims::composition` refused; the cause is its own.
+    RepresentationComposition(dclutch_claims::composition::Error),
+    /// `dclutch_custody::token_svm` refused; the cause is its own.
+    TokenSvm(dclutch_custody::token_svm::Error),
+    /// `dclutch_market::rent` refused; the cause is its own.
+    LifecycleRent(dclutch_market::rent::lifecycle_v2::LifecycleRentErrorV2),
+    /// `dclutch_market` refused; the cause is its own.
+    Retirement(dclutch_market::RetirementErrorV1),
+    /// `dclutch_claims` refused; the cause is its own.
+    TerminalSettlement(dclutch_claims::terminal_settlement_v3::TerminalSettlementErrorV3),
+    /// `dclutch_claims` refused; the cause is its own.
+    SignedDelta(dclutch_claims::signed_delta_v3::SignedDeltaErrorV3),
+    /// `dclutch_claims` refused; the cause is its own.
+    ClaimsProductBasisTerminalSvm(dclutch_claims::product_basis_terminal_v3::Error),
+    /// `dclutch_claims::fractional` refused; the cause is its own.
+    FractionalHot(dclutch_claims::fractional::FractionalHotErrorV2),
+    /// `dclutch_claims::fractional_lowering` refused; the cause is its own.
+    FractionalClaims(dclutch_claims::fractional_lowering::Error),
+    /// `dclutch_versioned_message_operator` refused; the cause is its own.
+    VersionedMessage(dclutch_versioned_message_operator::Error),
+    /// `dclutch_claims::fractional` refused; the cause is its own.
+    FractionalRetirement(dclutch_claims::fractional::FractionalRetirementErrorV3),
+    /// `dclutch_claims` refused; the cause is its own.
+    LiabilityBasisState(dclutch_claims::liability_basis_state_v2::LiabilityBasisStateErrorV2),
+    /// `dclutch_market` refused; the cause is its own.
+    MarketCore(dclutch_market::Error),
+    /// `dclutch_registry` refused; the cause is its own.
+    Registry(dclutch_registry::Error),
+    /// `dclutch_registry::svm` refused; the cause is its own.
+    RegistrySvm(dclutch_registry::svm::Error),
 }
 
 /// Result alias.

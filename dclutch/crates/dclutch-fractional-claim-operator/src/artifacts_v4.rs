@@ -199,22 +199,24 @@ pub struct FractionalSelectedBundleV4 {
 pub enum FractionalSelectedArtifactErrorV4 {
     /// Action, identity, account width, or frame shape was not executable.
     InvalidInput,
-    /// Profile13 construction or hostile decoding refused.
-    AccountProfile,
-    /// LifecycleV5 construction or hostile decoding refused.
-    Lifecycle,
-    /// RequestProfile construction or hostile decoding refused.
-    RequestProfile,
-    /// TransitionVM construction or hostile decoding refused.
-    Transition,
-    /// ExecutionStrategy construction or join refused.
-    Strategy,
-    /// EffectV4 construction or hostile decoding refused.
-    Effect,
-    /// CapabilityV4 construction or join refused.
-    Descriptor,
     /// Independently decoded artifact geometry differed.
     Validation,
+    /// `dclutch_market::execution_strategy` refused; the cause is its own.
+    ExecutionStrategy(dclutch_market::execution_strategy::v2::Error),
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    CapabilityProgram(dclutch_market::capability_program::Error),
+    /// `dclutch_vm::account_profile` refused; the cause is its own.
+    AccountProfile(dclutch_vm::account_profile::v2::Error),
+    /// `dclutch_vm::account_profile` refused; the cause is its own.
+    LifecycleProfile(dclutch_vm::account_profile::lifecycle_v3::Error),
+    /// `dclutch_vm::request_profile` refused; the cause is its own.
+    RequestProfile(dclutch_vm::request_profile::Error),
+    /// `dclutch_vm` refused; the cause is its own.
+    Transition(dclutch_vm::v3::Error),
+    /// `dclutch_vm::effect` refused; the cause is its own.
+    EffectV4(dclutch_vm::effect::v4::ErrorV4),
+    /// `dclutch_vm::effect` refused; the cause is its own.
+    Effect(dclutch_vm::effect::v3::Error),
 }
 
 #[derive(Clone, Copy)]
@@ -296,7 +298,7 @@ fn build_fractional_selected_bundle_for_root_v4(
         content(ACCELERATOR_REQUEST_SCHEMA_ID_V2)?,
         content(ACCELERATOR_ACK_SCHEMA_ID_V2)?,
     )
-    .map_err(|_| FractionalSelectedArtifactErrorV4::Strategy)?;
+    .map_err(FractionalSelectedArtifactErrorV4::ExecutionStrategy)?;
     let strategy = strategy_value.to_bytes();
     let effect = encode_effect(input.action, claims_accounts)?;
     let lifecycle_id = digest(&lifecycle_policy);
@@ -327,7 +329,7 @@ fn build_fractional_selected_bundle_for_root_v4(
         u32::try_from(FRACTIONAL_ROOT_BYTES_V1)
             .map_err(|_| FractionalSelectedArtifactErrorV4::InvalidInput)?,
     )
-    .map_err(|_| FractionalSelectedArtifactErrorV4::Descriptor)?;
+    .map_err(FractionalSelectedArtifactErrorV4::CapabilityProgram)?;
     let bundle = FractionalSelectedBundleV4 {
         action: input.action,
         account_profile,
@@ -382,31 +384,31 @@ fn validate_fractional_selected_bundle_for_root_v4(
     flavor: RootSchemaFlavorV1,
 ) -> Result<(), FractionalSelectedArtifactErrorV4> {
     let descriptor = CapabilityProgramV4::decode(&bundle.descriptor)
-        .map_err(|_| FractionalSelectedArtifactErrorV4::Descriptor)?;
+        .map_err(FractionalSelectedArtifactErrorV4::CapabilityProgram)?;
     let account = AccountProfileV2::decode(&bundle.account_profile)
-        .map_err(|_| FractionalSelectedArtifactErrorV4::AccountProfile)?;
+        .map_err(FractionalSelectedArtifactErrorV4::AccountProfile)?;
     let lifecycle_id = digest(&bundle.lifecycle_policy);
     let lifecycle = StateLifecyclePolicyV5::decode_selected(
         descriptor.lifecycle().program().to_bytes(),
         lifecycle_id,
         &bundle.lifecycle_policy,
     )
-    .map_err(|_| FractionalSelectedArtifactErrorV4::Lifecycle)?;
+    .map_err(FractionalSelectedArtifactErrorV4::LifecycleProfile)?;
     lifecycle
         .validate_account_profile(account)
-        .map_err(|_| FractionalSelectedArtifactErrorV4::Lifecycle)?;
+        .map_err(FractionalSelectedArtifactErrorV4::LifecycleProfile)?;
     let request = RequestProfileV1::decode_selected(
         descriptor.request_profile().program().to_bytes(),
         digest(&bundle.request_profile),
         &bundle.request_profile,
     )
-    .map_err(|_| FractionalSelectedArtifactErrorV4::RequestProfile)?;
+    .map_err(FractionalSelectedArtifactErrorV4::RequestProfile)?;
     let transition = TransitionProgramV3::decode(&bundle.transition)
-        .map_err(|_| FractionalSelectedArtifactErrorV4::Transition)?;
+        .map_err(FractionalSelectedArtifactErrorV4::Transition)?;
     let strategy = ExecutionStrategyProgramV2::decode(&bundle.strategy)
-        .map_err(|_| FractionalSelectedArtifactErrorV4::Strategy)?;
+        .map_err(FractionalSelectedArtifactErrorV4::ExecutionStrategy)?;
     let effect = EffectProgramV4::decode(&bundle.effect)
-        .map_err(|_| FractionalSelectedArtifactErrorV4::Effect)?;
+        .map_err(FractionalSelectedArtifactErrorV4::EffectV4)?;
     let base = effect.base();
     let expected_accounts = FRACTIONAL_HOT_INJECTED_ACCOUNT_COUNT_V4
         .checked_add(claims_accounts)
@@ -463,7 +465,7 @@ fn validate_fractional_selected_bundle_for_root_v4(
     }
     let route = base
         .route(0)
-        .map_err(|_| FractionalSelectedArtifactErrorV4::Effect)?;
+        .map_err(FractionalSelectedArtifactErrorV4::Effect)?;
     if base.route_count() != 1
         || base.receipt_dependency_count() != 0
         || route.role() != FixedRole::Claims
@@ -652,7 +654,7 @@ fn encode_account_profile(
         &mut scratch,
         &mut output,
     )
-    .map_err(|_| FractionalSelectedArtifactErrorV4::AccountProfile)?;
+    .map_err(FractionalSelectedArtifactErrorV4::AccountProfile)?;
     Ok(output)
 }
 
@@ -660,7 +662,7 @@ fn encode_empty_lifecycle() -> Result<Vec<u8>, FractionalSelectedArtifactErrorV4
     let mut scratch = vec![0_u8; LIFECYCLE_HEADER_BYTES];
     let mut output = vec![0_u8; LIFECYCLE_HEADER_BYTES];
     encode_lifecycle_policy_v5_atomic(&[], &[], &[], &[], &[], &[], &mut scratch, &mut output)
-        .map_err(|_| FractionalSelectedArtifactErrorV4::Lifecycle)?;
+        .map_err(FractionalSelectedArtifactErrorV4::LifecycleProfile)?;
     Ok(output)
 }
 
@@ -778,7 +780,7 @@ fn encode_request_profile(
         &mut scratch,
         &mut output,
     )
-    .map_err(|_| FractionalSelectedArtifactErrorV4::RequestProfile)?;
+    .map_err(FractionalSelectedArtifactErrorV4::RequestProfile)?;
     Ok(output)
 }
 
@@ -837,7 +839,7 @@ fn encode_transition(
         &mut scratch,
         &mut output,
     )
-    .map_err(|_| FractionalSelectedArtifactErrorV4::Transition)?;
+    .map_err(FractionalSelectedArtifactErrorV4::Transition)?;
     Ok(output)
 }
 
@@ -966,7 +968,7 @@ fn encode_effect(
         &mut base_scratch,
         &mut base,
     )
-    .map_err(|_| FractionalSelectedArtifactErrorV4::Effect)?;
+    .map_err(FractionalSelectedArtifactErrorV4::Effect)?;
     let bytes = EFFECT_V4_HEADER_BYTES
         .checked_add(base.len())
         .ok_or(FractionalSelectedArtifactErrorV4::InvalidInput)?;
@@ -982,7 +984,7 @@ fn encode_effect(
         &mut scratch,
         &mut output,
     )
-    .map_err(|_| FractionalSelectedArtifactErrorV4::Effect)?;
+    .map_err(FractionalSelectedArtifactErrorV4::EffectV4)?;
     Ok(output)
 }
 

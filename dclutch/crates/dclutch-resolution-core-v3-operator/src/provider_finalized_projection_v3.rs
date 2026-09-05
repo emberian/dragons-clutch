@@ -59,6 +59,16 @@ pub enum ProviderFinalizedProjectionErrorV3 {
     Transition,
     /// Checked balance or time arithmetic overflowed.
     Arithmetic,
+    /// `dclutch_source::resolution` refused; the cause is its own.
+    Resolution(dclutch_source::resolution::Error),
+    /// `dclutch_market` refused; the cause is its own.
+    MarketCore(dclutch_market::Error),
+    /// `dclutch_registry::release_set` refused; the cause is its own.
+    ReleaseSet(dclutch_registry::release_set::Error),
+    /// `dclutch_source` refused; the cause is its own.
+    Source(dclutch_source::Error),
+    /// `dclutch_product` refused; the cause is its own.
+    ProductRuntimeV2(dclutch_product::Error),
 }
 
 /// Exact canonical account state projected for one writable protocol account.
@@ -291,7 +301,7 @@ pub fn project_finalized_provider_submit_v3(
         .filter(|body| !body.is_empty())
         .ok_or(ProviderFinalizedProjectionErrorV3::Instruction)?;
     let request = ProviderSubmitRequestV3::decode(prefix)
-        .map_err(|_| ProviderFinalizedProjectionErrorV3::Instruction)?;
+        .map_err(ProviderFinalizedProjectionErrorV3::Resolution)?;
     let expected_authority = Pubkey::find_program_address(
         &[
             PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3,
@@ -306,7 +316,7 @@ pub fn project_finalized_provider_submit_v3(
         Pubkey::find_program_address(&[b"treasury", &[0]], &key_at(instruction, 27)?).0;
     if request
         .to_bytes()
-        .map_err(|_| ProviderFinalizedProjectionErrorV3::Instruction)?
+        .map_err(ProviderFinalizedProjectionErrorV3::Resolution)?
         .as_slice()
         != prefix
         || request.post_body_digest != hash(body).to_bytes()
@@ -370,11 +380,11 @@ pub fn project_finalized_provider_submit_v3(
         return Err(ProviderFinalizedProjectionErrorV3::Prestate);
     }
     let receipt = ProviderSubmitReceiptV3::decode(input.return_data)
-        .map_err(|_| ProviderFinalizedProjectionErrorV3::ReturnData)?;
+        .map_err(ProviderFinalizedProjectionErrorV3::Resolution)?;
     if input.return_data_program != instruction.program_id
         || receipt
             .to_bytes()
-            .map_err(|_| ProviderFinalizedProjectionErrorV3::ReturnData)?
+            .map_err(ProviderFinalizedProjectionErrorV3::Resolution)?
             .as_slice()
             != input.return_data
         || receipt.request_digest != hash(prefix).to_bytes()
@@ -421,10 +431,10 @@ pub fn project_finalized_provider_submit_v3(
         receipt.update_rent_lamports,
         receipt.provider_fee_lamports,
     )
-    .map_err(|_| ProviderFinalizedProjectionErrorV3::Transition)?;
+    .map_err(ProviderFinalizedProjectionErrorV3::Resolution)?;
     let lifecycle_data = lifecycle
         .to_bytes()
-        .map_err(|_| ProviderFinalizedProjectionErrorV3::Transition)?
+        .map_err(ProviderFinalizedProjectionErrorV3::Resolution)?
         .to_vec();
     let expected_submitter_lamports = w
         .submitter_before
@@ -504,9 +514,9 @@ pub fn project_finalized_provider_execute_v3(
         .filter(|body| !body.is_empty())
         .ok_or(ProviderFinalizedProjectionErrorV3::Instruction)?;
     let core_request =
-        Request::decode(core_bytes).map_err(|_| ProviderFinalizedProjectionErrorV3::Instruction)?;
+        Request::decode(core_bytes).map_err(ProviderFinalizedProjectionErrorV3::MarketCore)?;
     let request = ProviderExecutionRequestV3::decode(provider_bytes)
-        .map_err(|_| ProviderFinalizedProjectionErrorV3::Instruction)?;
+        .map_err(ProviderFinalizedProjectionErrorV3::Resolution)?;
     let authority = CallerAuthoritySeedsV1::from_bytes(
         request.release_set,
         request.market,
@@ -514,16 +524,16 @@ pub fn project_finalized_provider_execute_v3(
         request.source_state,
         request.parent_request_digest,
     )
-    .map_err(|_| ProviderFinalizedProjectionErrorV3::Instruction)?;
+    .map_err(ProviderFinalizedProjectionErrorV3::ReleaseSet)?;
     if core_request.action != Action::ExecuteProvider
         || core_request
             .encode()
-            .map_err(|_| ProviderFinalizedProjectionErrorV3::Instruction)?
+            .map_err(ProviderFinalizedProjectionErrorV3::MarketCore)?
             .as_slice()
             != core_bytes
         || request
             .to_bytes()
-            .map_err(|_| ProviderFinalizedProjectionErrorV3::Instruction)?
+            .map_err(ProviderFinalizedProjectionErrorV3::Resolution)?
             .as_slice()
             != provider_bytes
         || request.caller != ProviderCallerV3::Core
@@ -601,7 +611,7 @@ pub fn project_finalized_provider_execute_v3(
     }
     let resolution_program = key_at(instruction, 15)?;
     let receipt = ProviderExecutionReceiptV3::decode(input.return_data)
-        .map_err(|_| ProviderFinalizedProjectionErrorV3::ReturnData)?;
+        .map_err(ProviderFinalizedProjectionErrorV3::Resolution)?;
     let expected_evidence = hashv(&[
         PROVIDER_EVIDENCE_DOMAIN_V3,
         &[0],
@@ -615,7 +625,7 @@ pub fn project_finalized_provider_execute_v3(
     if input.return_data_program != resolution_program
         || receipt
             .to_bytes()
-            .map_err(|_| ProviderFinalizedProjectionErrorV3::ReturnData)?
+            .map_err(ProviderFinalizedProjectionErrorV3::Resolution)?
             .as_slice()
             != input.return_data
         || receipt.caller != request.caller
@@ -646,16 +656,16 @@ pub fn project_finalized_provider_execute_v3(
         return Err(ProviderFinalizedProjectionErrorV3::ReturnData);
     }
     let mut source = SourceResolutionStateV2::decode(&w.source_before.data)
-        .map_err(|_| ProviderFinalizedProjectionErrorV3::Prestate)?;
+        .map_err(ProviderFinalizedProjectionErrorV3::Source)?;
     let material = SourceMaterialV3::decode(&input.source_material.data)
-        .map_err(|_| ProviderFinalizedProjectionErrorV3::Prestate)?;
+        .map_err(ProviderFinalizedProjectionErrorV3::Source)?;
     let domain = ResultDomainV2::decode(&input.result_domain.data)
-        .map_err(|_| ProviderFinalizedProjectionErrorV3::Prestate)?;
+        .map_err(ProviderFinalizedProjectionErrorV3::ProductRuntimeV2)?;
     if hash(&input.statistic.data).to_bytes() != material.statistic_spec().to_bytes() {
         return Err(ProviderFinalizedProjectionErrorV3::Prestate);
     }
     let statistic = StatisticSpecV1::decode(&input.statistic.data)
-        .map_err(|_| ProviderFinalizedProjectionErrorV3::Prestate)?;
+        .map_err(ProviderFinalizedProjectionErrorV3::Source)?;
     let source_seeds = source.pda_seeds();
     let source_bump = [source_seeds.bump()];
     let expected_source = Pubkey::create_program_address(
@@ -695,7 +705,7 @@ pub fn project_finalized_provider_execute_v3(
             input.execution_unix_timestamp,
             request.terminal_sequence,
         )
-        .map_err(|_| ProviderFinalizedProjectionErrorV3::Transition)?;
+        .map_err(ProviderFinalizedProjectionErrorV3::Source)?;
     if decision.route() != SourceResolutionRouteV1::Primary
         || decision.selector() != receipt.selector
         || decision.outcome_count() != receipt.outcome_count
@@ -724,10 +734,10 @@ pub fn project_finalized_provider_execute_v3(
     };
     certificate
         .validate_terminal_product(request.product_record, receipt.outcome_count)
-        .map_err(|_| ProviderFinalizedProjectionErrorV3::Transition)?;
+        .map_err(ProviderFinalizedProjectionErrorV3::Resolution)?;
     let certificate_data = certificate
         .to_bytes()
-        .map_err(|_| ProviderFinalizedProjectionErrorV3::Transition)?
+        .map_err(ProviderFinalizedProjectionErrorV3::Resolution)?
         .to_vec();
     let (expected_certificate, _) = Pubkey::find_program_address(
         &[
@@ -742,7 +752,7 @@ pub fn project_finalized_provider_execute_v3(
         return Err(ProviderFinalizedProjectionErrorV3::Instruction);
     }
     let mut lifecycle = ProviderUpdateLifecycleV3::decode(&w.lifecycle_before.data)
-        .map_err(|_| ProviderFinalizedProjectionErrorV3::Prestate)?;
+        .map_err(ProviderFinalizedProjectionErrorV3::Resolution)?;
     let expected_lifecycle_bump = Pubkey::find_program_address(
         &[
             PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
@@ -791,13 +801,13 @@ pub fn project_finalized_provider_execute_v3(
             expected_evidence,
             request.certificate_account,
         )
-        .map_err(|_| ProviderFinalizedProjectionErrorV3::Transition)?;
+        .map_err(ProviderFinalizedProjectionErrorV3::Resolution)?;
     let lifecycle_data = lifecycle
         .to_bytes()
-        .map_err(|_| ProviderFinalizedProjectionErrorV3::Transition)?
+        .map_err(ProviderFinalizedProjectionErrorV3::Resolution)?
         .to_vec();
     let market = CoreState::decode(&w.market_before.data)
-        .map_err(|_| ProviderFinalizedProjectionErrorV3::Prestate)?;
+        .map_err(ProviderFinalizedProjectionErrorV3::MarketCore)?;
     if w.market_before.owner != instruction.program_id
         || w.market_before.executable
         || market.phase != Phase::Open
@@ -874,10 +884,10 @@ pub fn project_finalized_provider_reclaim_v3(
         return Err(ProviderFinalizedProjectionErrorV3::Instruction);
     }
     let request = ProviderReclaimRequestV3::decode(&instruction.data)
-        .map_err(|_| ProviderFinalizedProjectionErrorV3::Instruction)?;
+        .map_err(ProviderFinalizedProjectionErrorV3::Resolution)?;
     if request
         .to_bytes()
-        .map_err(|_| ProviderFinalizedProjectionErrorV3::Instruction)?
+        .map_err(ProviderFinalizedProjectionErrorV3::Resolution)?
         .as_slice()
         != instruction.data
         || key_at(instruction, 0)?.to_bytes() != request.resolver
@@ -920,7 +930,7 @@ pub fn project_finalized_provider_reclaim_v3(
         input.finalized_slot,
     )?;
     let lifecycle = ProviderUpdateLifecycleV3::decode(&w.lifecycle_before.data)
-        .map_err(|_| ProviderFinalizedProjectionErrorV3::Prestate)?;
+        .map_err(ProviderFinalizedProjectionErrorV3::Resolution)?;
     let (expected_lifecycle, expected_lifecycle_bump) = Pubkey::find_program_address(
         &[
             PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
@@ -968,7 +978,7 @@ pub fn project_finalized_provider_reclaim_v3(
         return Err(ProviderFinalizedProjectionErrorV3::Prestate);
     }
     let certificate = ResolutionCertificateV2::decode(&input.certificate.data)
-        .map_err(|_| ProviderFinalizedProjectionErrorV3::Prestate)?;
+        .map_err(ProviderFinalizedProjectionErrorV3::Resolution)?;
     if input.certificate.key != key_at(instruction, 5)?
         || input.certificate.owner != instruction.program_id
         || input.certificate.executable
@@ -981,11 +991,11 @@ pub fn project_finalized_provider_reclaim_v3(
         return Err(ProviderFinalizedProjectionErrorV3::Prestate);
     }
     let receipt = ProviderReclaimReceiptV3::decode(input.return_data)
-        .map_err(|_| ProviderFinalizedProjectionErrorV3::ReturnData)?;
+        .map_err(ProviderFinalizedProjectionErrorV3::Resolution)?;
     if input.return_data_program != instruction.program_id
         || receipt
             .to_bytes()
-            .map_err(|_| ProviderFinalizedProjectionErrorV3::ReturnData)?
+            .map_err(ProviderFinalizedProjectionErrorV3::Resolution)?
             .as_slice()
             != input.return_data
         || receipt.request_digest != hash(&instruction.data).to_bytes()

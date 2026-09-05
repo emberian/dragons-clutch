@@ -289,7 +289,13 @@ fn the_current_release_appends_activation_without_moving_legacy_action_bytes() {
     hostile.activation.effect[0] ^= 1;
     assert_eq!(
         validate_fractional_current_release_v4(&hostile, input(&bytes)),
-        Err(FractionalSelectedReleaseErrorV4::Activation)
+        Err(
+            FractionalSelectedReleaseErrorV4::FractionalActivationBundle(
+                dclutch_fractional_claim_operator::FractionalActivationBundleErrorV1::Template(
+                    dclutch_market::capability_activation::ActivationBundleErrorV1::Descriptor
+                )
+            )
+        )
     );
     let mut hostile = current.clone();
     hostile.selection_config[0] ^= 1;
@@ -543,14 +549,22 @@ fn substituted_bundles_program_set_bytes_and_publication_identities_refuse() {
     assert_eq!(
         validate_fractional_selected_release_v4(&substituted_descriptor, input(&bytes))
             .unwrap_err(),
-        FractionalSelectedReleaseErrorV4::Bundle
+        FractionalSelectedReleaseErrorV4::FractionalSelectedArtifact(
+            dclutch_fractional_claim_operator::FractionalSelectedArtifactErrorV4::CapabilityProgram(
+                dclutch_market::capability_program::Error::InvalidMagic
+            )
+        )
     );
 
     let mut substituted_effect = release.clone();
     substituted_effect.bundles[0].effect[0] ^= 1;
     assert_eq!(
         validate_fractional_selected_release_v4(&substituted_effect, input(&bytes)).unwrap_err(),
-        FractionalSelectedReleaseErrorV4::Bundle
+        FractionalSelectedReleaseErrorV4::FractionalSelectedArtifact(
+            dclutch_fractional_claim_operator::FractionalSelectedArtifactErrorV4::EffectV4(
+                dclutch_vm::effect::v4::ErrorV4::Wire
+            )
+        )
     );
 
     let mut substituted_market = release.clone();

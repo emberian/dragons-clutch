@@ -43,8 +43,6 @@ use crate::{Finality, Observation, ObservedAccount, versioned::PACKET_DATA_BYTES
 pub mod declare_successor_v1;
 /// Chain-derived Core+Trading Registry continuation construction.
 pub mod hot_continuation_v1;
-/// Headerless chain-derived Core+Trading Registry continuation construction.
-pub mod hot_continuation_v2;
 /// Chain-derived Core+Custody market-open Registry continuation construction.
 pub mod open_market_continuation_v1 {
     pub use dclutch_market_open_v1_operator::*;
@@ -58,8 +56,6 @@ pub const REGISTRY_ACTIVATION_ROLE_ORDER_V1: [ExecutionRoleV1; 5] = [
     ExecutionRoleV1::Resolution,
     ExecutionRoleV1::Custody,
 ];
-/// Exact number of accounts consumed by one role reauthentication.
-pub const REGISTRY_REAUTHENTICATE_ACCOUNT_COUNT_V1: usize = 3;
 /// Current chain-profile transaction compute-unit ceiling.
 ///
 /// This is transaction plumbing, not a protocol-semantic bound.
@@ -357,8 +353,12 @@ pub enum Error {
     LineageNotForward,
     /// A moved role's release binds no upgrade authority to ask consent of.
     LineageAuthorityMissing,
-    /// The composed lineage record refused its own coherence check.
-    LineageIncoherent,
+    /// `dclutch_registry` refused; the cause is its own.
+    Registry(dclutch_registry::Error),
+    /// `dclutch_registry::svm` refused; the cause is its own.
+    RegistrySvm(dclutch_registry::svm::Error),
+    /// `dclutch_registry::release_set` refused; the cause is its own.
+    ReleaseSet(dclutch_registry::release_set::Error),
 }
 
 /// Build the exact permissionless 26-account Registry activation instruction.
@@ -410,7 +410,7 @@ pub fn build_registry_activation_v1(
             custody.input,
         ),
     )
-    .map_err(|_| Error::InvalidReleaseSet)?;
+    .map_err(Error::Registry)?;
     let (cache, cache_bump) = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, release_set_id.as_bytes()],
         &registry_program,
@@ -429,7 +429,7 @@ pub fn build_registry_activation_v1(
         RegistryActivationModeV1::Create => None,
         RegistryActivationModeV1::Partial { .. } | RegistryActivationModeV1::Repeat => Some(
             activation_cache_progress_v1(&state.cache.data, expected_cache)
-                .map_err(|_| Error::InvalidActivationCache)?,
+                .map_err(Error::Registry)?,
         ),
     };
 
@@ -521,19 +521,17 @@ pub fn build_registry_reauthentication_v1(
     authenticate_registry_program(&state.registry_program)?;
     let registry_program = state.registry_program.key;
     let activated = authenticate_cache_identity(registry_program, &state.cache)?;
-    let activated_role = activated
-        .role(role)
-        .map_err(|_| Error::InvalidActivationCache)?;
+    let activated_role = activated.role(role).map_err(Error::Registry)?;
     let release = activated_role.release();
     let deployment = deployment_observation(&state.role_program, &state.role_programdata, release)?;
     activated_role
         .authenticate_current_deployment(deployment)
-        .map_err(|_| Error::InvalidDeployment)?;
+        .map_err(Error::Registry)?;
     let execution_release_set_id = activated
         .execution_release_set_id()
-        .map_err(|_| Error::InvalidActivationCache)?;
+        .map_err(Error::Registry)?;
     let elf_bytes_hashed = ProgramDataV3View::parse(&state.role_programdata.data)
-        .map_err(|_| Error::InvalidDeployment)?
+        .map_err(Error::RegistrySvm)?
         .elf()
         .len();
     Ok(RegistryReauthenticationReport {
@@ -618,7 +616,7 @@ fn authenticate_release_set(
         state,
     )?;
     let release_set =
-        ExecutionReleaseSetV1::decode(&state.record.data).map_err(|_| Error::InvalidReleaseSet)?;
+        ExecutionReleaseSetV1::decode(&state.record.data).map_err(Error::ReleaseSet)?;
     let release_set_id = ContentId::new(digest).map_err(|_| Error::InvalidReleaseSet)?;
     Ok((release_set_id, release_set))
 }
@@ -635,17 +633,17 @@ fn authenticate_role(
         Some(expected_digest),
         &state.artifact_release,
     )?;
-    let release = ArtifactReleaseV1::decode(&state.artifact_release.record.data)
-        .map_err(|_| Error::InvalidArtifactRelease)?;
+    let release =
+        ArtifactReleaseV1::decode(&state.artifact_release.record.data).map_err(Error::Registry)?;
     if release.program() != expected.program() {
         return Err(Error::InvalidArtifactRelease);
     }
     let deployment = deployment_observation(&state.program, &state.programdata, release)?;
     release
         .authenticate_deployment(deployment)
-        .map_err(|_| Error::InvalidDeployment)?;
+        .map_err(Error::Registry)?;
     let elf_bytes = ProgramDataV3View::parse(&state.programdata.data)
-        .map_err(|_| Error::InvalidDeployment)?
+        .map_err(Error::RegistrySvm)?
         .elf()
         .len();
     Ok(AuthenticatedRoleInput {
@@ -707,14 +705,14 @@ fn deployment_observation(
     {
         return Err(Error::InvalidDeployment);
     }
-    let program_view = ProgramV3View::parse(&program.data).map_err(|_| Error::InvalidDeployment)?;
+    let program_view = ProgramV3View::parse(&program.data).map_err(Error::RegistrySvm)?;
     let derived =
         Pubkey::find_program_address(&[program.key.as_ref()], &bpf_loader_upgradeable::ID).0;
     if program_view.programdata() != programdata.key.to_bytes() || programdata.key != derived {
         return Err(Error::InvalidDeployment);
     }
     let programdata_view =
-        ProgramDataV3View::parse(&programdata.data).map_err(|_| Error::InvalidDeployment)?;
+        ProgramDataV3View::parse(&programdata.data).map_err(Error::RegistrySvm)?;
     DeploymentObservationV1::new(
         program.key.to_bytes(),
         program.owner.to_bytes(),
@@ -728,7 +726,7 @@ fn deployment_observation(
         hash(programdata_view.elf()).to_bytes(),
         programdata_view.upgrade_authority(),
     )
-    .map_err(|_| Error::InvalidDeployment)
+    .map_err(Error::Registry)
 }
 
 /// Classify one observed activation cache against the release set it must hold.
@@ -815,11 +813,11 @@ fn authenticate_cache_identity<'a>(
     {
         return Err(Error::InvalidActivationCache);
     }
-    let activated = ActivatedExecutionReleaseSetViewV1::decode(&cache.data)
-        .map_err(|_| Error::InvalidActivationCache)?;
+    let activated =
+        ActivatedExecutionReleaseSetViewV1::decode(&cache.data).map_err(Error::Registry)?;
     let release_set_id = activated
         .execution_release_set_id()
-        .map_err(|_| Error::InvalidActivationCache)?;
+        .map_err(Error::Registry)?;
     let expected = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, release_set_id.as_bytes()],
         &registry_program,
@@ -837,7 +835,7 @@ fn authenticate_registry_program(program: &ObservedAccount) -> Result<(), Error>
     }
     ProgramV3View::parse(&program.data)
         .map(|_| ())
-        .map_err(|_| Error::InvalidDeployment)
+        .map_err(Error::RegistrySvm)
 }
 
 fn authenticate_payer(payer: &ObservedAccount) -> Result<(), Error> {

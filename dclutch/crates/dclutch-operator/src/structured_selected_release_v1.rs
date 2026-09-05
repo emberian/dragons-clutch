@@ -50,14 +50,14 @@
 
 use dclutch_bearer_v2_operator::RationalOpenCapabilityProgramSetInputV6;
 use dclutch_bearer_v2_operator::{
-    OPEN_CAPABILITY_SELECTED_ACTION_COUNT_V1, OPEN_CAPABILITY_SELECTED_ACTIONS_V1,
-    OpenCapabilityActionArtifactBytesV1, OpenCapabilityArtifactReleaseBytesV1,
-    OpenCapabilityArtifactSelectionV1, RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3,
-    RATIONAL_OPEN_STRUCTURED_FIXED_ACCOUNTS_V3, RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3,
-    RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3, RationalOpenSelectedBundleInputV6,
-    RationalOpenSelectedHotBundleV3, RationalOpenStructuredHotBundleV3,
-    RationalOpenStructuredSelectedBundleInputV6, RationalTerminalAccountProfileInputV3,
-    RationalTerminalHotBundleV3, RationalTerminalSelectedBundleInputV6, RepresentationActionV2,
+    OPEN_CAPABILITY_SELECTED_ACTION_COUNT_V1, OpenCapabilityActionArtifactBytesV1,
+    OpenCapabilityArtifactReleaseBytesV1, OpenCapabilityArtifactSelectionV1,
+    RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3, RATIONAL_OPEN_STRUCTURED_FIXED_ACCOUNTS_V3,
+    RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3, RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3,
+    RationalOpenSelectedBundleInputV6, RationalOpenSelectedHotBundleV3,
+    RationalOpenStructuredHotBundleV3, RationalOpenStructuredSelectedBundleInputV6,
+    RationalTerminalAccountProfileInputV3, RationalTerminalHotBundleV3,
+    RationalTerminalSelectedBundleInputV6, RepresentationActionV2,
     authenticate_open_capability_release_v1, build_rational_open_capability_program_set_v6,
     build_rational_open_selected_bundle_v6, build_rational_open_structured_selected_bundle_v6,
     build_rational_terminal_selected_bundle_v6, encode_open_capability_lifecycle_policy_v5,
@@ -294,6 +294,16 @@ pub enum StructuredSelectedReleaseErrorV1 {
     Release,
     /// Publication identities or scalars were not exact.
     Publication,
+    /// `dclutch_custody::token_svm` refused; the cause is its own.
+    Token(dclutch_custody::token_svm::Error),
+    /// `dclutch_bearer_v2_operator` refused; the cause is its own.
+    Bearer(dclutch_bearer_v2_operator::Error),
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    ProgramSetContract(dclutch_market::capability_program::set_v2::ProgramSetErrorV2),
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    CapabilityProgram(dclutch_market::capability_program::Error),
+    /// `dclutch_product::payoff` refused; the cause is its own.
+    ProductBasis(dclutch_product::payoff::runtime_v3::Error),
 }
 
 /// Result alias for Structured release compilation.
@@ -305,9 +315,9 @@ pub fn structured_selected_release_v1(
 ) -> Result<StructuredSelectedReleaseV1> {
     validate_input(input)?;
     let selection = TokenBehaviorSelectionV2::new(input.realm, input.release_set)
-        .map_err(|_| StructuredSelectedReleaseErrorV1::Input)?;
+        .map_err(StructuredSelectedReleaseErrorV1::Token)?;
     let lifecycle = encode_open_capability_lifecycle_policy_v5()
-        .map_err(|_| StructuredSelectedReleaseErrorV1::Encoding)?;
+        .map_err(StructuredSelectedReleaseErrorV1::Bearer)?;
 
     let mut selected = Vec::with_capacity(2);
     for action in [
@@ -342,7 +352,7 @@ pub fn structured_selected_release_v1(
                 .ok_or(StructuredSelectedReleaseErrorV1::Release)?,
             redeem_terminal: &terminal,
         })
-        .map_err(|_| StructuredSelectedReleaseErrorV1::ProgramSet)?;
+        .map_err(StructuredSelectedReleaseErrorV1::Bearer)?;
 
     let release = StructuredSelectedReleaseV1 {
         selected,
@@ -456,7 +466,7 @@ impl StructuredSelectedReleaseV1 {
             v4::CapabilityProgramV4,
         };
         let set = CapabilityProgramSetV2::decode(&self.program_set)
-            .map_err(|_| StructuredSelectedReleaseErrorV1::ProgramSet)?;
+            .map_err(StructuredSelectedReleaseErrorV1::ProgramSetContract)?;
         let bytes = self
             .artifact_bytes()
             .ok_or(StructuredSelectedReleaseErrorV1::Release)?;
@@ -467,7 +477,7 @@ impl StructuredSelectedReleaseV1 {
                 .ok_or(StructuredSelectedReleaseErrorV1::Release)?
                 .descriptor,
         )
-        .map_err(|_| StructuredSelectedReleaseErrorV1::Release)?;
+        .map_err(StructuredSelectedReleaseErrorV1::CapabilityProgram)?;
 
         let mut records = Vec::new();
         records.push(StructuredPublicationRecordV1 {
@@ -486,9 +496,9 @@ impl StructuredSelectedReleaseV1 {
                     u16::try_from(ordinal)
                         .map_err(|_| StructuredSelectedReleaseErrorV1::ProgramSet)?,
                 )
-                .map_err(|_| StructuredSelectedReleaseErrorV1::ProgramSet)?;
+                .map_err(StructuredSelectedReleaseErrorV1::ProgramSetContract)?;
             let descriptor = CapabilityProgramV4::decode(supplied.descriptor)
-                .map_err(|_| StructuredSelectedReleaseErrorV1::Release)?;
+                .map_err(StructuredSelectedReleaseErrorV1::CapabilityProgram)?;
             let artifacts = descriptor.artifacts();
             for (label, schema, body) in [
                 (
@@ -554,14 +564,14 @@ fn publish(
         .artifact_bytes()
         .ok_or(StructuredSelectedReleaseErrorV1::Release)?;
     let joined = authenticate_open_capability_release_v1(release.selection(), bytes)
-        .map_err(|_| StructuredSelectedReleaseErrorV1::Release)?;
+        .map_err(StructuredSelectedReleaseErrorV1::Bearer)?;
     let set = CapabilityProgramSetV2::decode(&release.program_set)
-        .map_err(|_| StructuredSelectedReleaseErrorV1::ProgramSet)?;
+        .map_err(StructuredSelectedReleaseErrorV1::ProgramSetContract)?;
     // The Product width is read off the basis the release actually names, not
     // taken as a scalar beside it: a publication stating a width the basis
     // contradicts would be a second author for the payoff geometry.
     let basis = ProductBasisV3::decode(input.product_basis)
-        .map_err(|_| StructuredSelectedReleaseErrorV1::Input)?;
+        .map_err(StructuredSelectedReleaseErrorV1::ProductBasis)?;
     let publication = StructuredSelectedPublicationV1 {
         kind_id: joined.kind,
         program_set_id: hash(&release.program_set).to_bytes(),
@@ -695,7 +705,7 @@ fn compile_selected(
         capacity_profile: STRUCTURED_CAPACITY_PROFILE_ID_V2,
         root_state_bytes: input.root_state_bytes,
     })
-    .map_err(|_| StructuredSelectedReleaseErrorV1::Encoding)
+    .map_err(StructuredSelectedReleaseErrorV1::Bearer)
 }
 
 fn compile_structured(
@@ -718,7 +728,7 @@ fn compile_structured(
         capacity_profile: STRUCTURED_CAPACITY_PROFILE_ID_V2,
         root_state_bytes: input.root_state_bytes,
     })
-    .map_err(|_| StructuredSelectedReleaseErrorV1::Encoding)
+    .map_err(StructuredSelectedReleaseErrorV1::Bearer)
 }
 
 fn compile_terminal(
@@ -739,14 +749,7 @@ fn compile_terminal(
         capacity_profile: STRUCTURED_CAPACITY_PROFILE_ID_V2,
         root_state_bytes: input.root_state_bytes,
     })
-    .map_err(|_| StructuredSelectedReleaseErrorV1::Encoding)
-}
-
-/// The canonical action order this release publishes.
-#[must_use]
-pub fn structured_selected_actions_v1()
--> [RepresentationActionV2; STRUCTURED_SELECTED_ACTION_COUNT_V1] {
-    OPEN_CAPABILITY_SELECTED_ACTIONS_V1
+    .map_err(StructuredSelectedReleaseErrorV1::Bearer)
 }
 
 #[cfg(test)]

@@ -289,7 +289,7 @@ pub fn build_found_instruction_v2(
         projection.market_identity.market_id,
     )
     .encode()
-    .map_err(|_| Error::InvalidRecord)?;
+    .map_err(Error::MarketCore)?;
     if request.len() != REQUEST_BYTES {
         return Err(Error::InvalidRecord);
     }
@@ -335,7 +335,7 @@ pub fn project_found_v2(
         state.realm,
         REALM_SCHEMA_RELEASE_ID_V1,
     )?;
-    let realm = RealmV1::decode(state.realm.record.raw.data).map_err(|_| Error::InvalidRecord)?;
+    let realm = RealmV1::decode(state.realm.record.raw.data).map_err(Error::Realm)?;
     if realm.to_bytes().as_slice() != state.realm.record.raw.data {
         return Err(Error::InvalidRecord);
     }
@@ -366,19 +366,18 @@ pub fn project_found_v2(
         state.result_domain.raw.data,
         state.portfolio.raw.data,
     )
-    .map_err(|_| Error::InvalidRecord)?;
+    .map_err(Error::ProductRuntimeAdmission)?;
 
     let linked_basis_digest = authenticate_product_record(
         state.registry_program.key,
         GRADED_BASIS_RECORD_SCHEMA_ID_V3,
         state.linked_basis,
     )?;
-    let basis =
-        ProductBasisV3::decode(state.linked_basis.raw.data).map_err(|_| Error::InvalidRecord)?;
+    let basis = ProductBasisV3::decode(state.linked_basis.raw.data).map_err(Error::ProductBasis)?;
     let domain =
-        ResultDomainV2::decode(state.result_domain.raw.data).map_err(|_| Error::InvalidRecord)?;
-    let semantic = semantic_basis_preimage_v3(state.linked_basis.raw.data)
-        .map_err(|_| Error::InvalidRecord)?;
+        ResultDomainV2::decode(state.result_domain.raw.data).map_err(Error::ProductRuntime)?;
+    let semantic =
+        semantic_basis_preimage_v3(state.linked_basis.raw.data).map_err(Error::ProductBasis)?;
     let semantic_basis_id = hashv(&[
         SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
         semantic.prefix(),
@@ -401,8 +400,8 @@ pub fn project_found_v2(
         state.source_material,
         SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
     )?;
-    let material = SourceMaterialV3::decode(state.source_material.record.raw.data)
-        .map_err(|_| Error::InvalidRecord)?;
+    let material =
+        SourceMaterialV3::decode(state.source_material.record.raw.data).map_err(Error::Source)?;
     material
         .authenticate_product_record(
             SourceContentId::new(product.product_record_digest.to_bytes())
@@ -414,15 +413,15 @@ pub fn project_found_v2(
         state.source_spec,
         SOURCE_SPEC_SCHEMA_ID_V1,
     )?;
-    let source_spec = SourceSpecV1::decode(state.source_spec.record.raw.data)
-        .map_err(|_| Error::InvalidRecord)?;
+    let source_spec =
+        SourceSpecV1::decode(state.source_spec.record.raw.data).map_err(Error::Source)?;
     let capacity_profile_digest = authenticate_reference(
         state.registry_program.key,
         state.capacity_profile,
         SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1,
     )?;
     let capacity_profile = SourceCapacityProfileV1::decode(state.capacity_profile.record.raw.data)
-        .map_err(|_| Error::InvalidRecord)?;
+        .map_err(Error::Source)?;
     let manipulation_floor = match material.principal_policy() {
         SourcePrincipalPolicyV1::ExplicitlyUnbounded => {
             authenticate_absent_optional_reference(
@@ -439,7 +438,7 @@ pub fn project_found_v2(
                 MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
             )?;
             let floor = ManipulationFloorV1::decode(state.manipulation_floor.record.raw.data)
-                .map_err(|_| Error::InvalidRecord)?;
+                .map_err(Error::Source)?;
             Some((
                 SourceContentId::new(floor_digest.to_bytes()).map_err(|_| Error::InvalidRecord)?,
                 floor,
@@ -470,7 +469,7 @@ pub fn project_found_v2(
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
     )?;
     CapabilityManifestV1::decode(state.capability_manifest.record.raw.data)
-        .map_err(|_| Error::InvalidRecord)?;
+        .map_err(Error::Capability)?;
 
     let release_set_digest = authenticate_activation(state)?;
     authenticate_infrastructure(state)?;
@@ -645,10 +644,10 @@ fn authenticate_activation(
     state: FoundProjectionStateV2<'_>,
 ) -> Result<dclutch_product::ContentId> {
     let activated = ActivatedExecutionReleaseSetViewV1::decode(state.activation_cache.data)
-        .map_err(|_| Error::InvalidRecord)?;
+        .map_err(Error::Registry)?;
     let release_set_digest = activated
         .execution_release_set_id()
-        .map_err(|_| Error::InvalidRecord)?
+        .map_err(Error::Registry)?
         .to_bytes();
     let expected_cache = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, &release_set_digest],
@@ -662,10 +661,10 @@ fn authenticate_activation(
     }
     let release_set = activated
         .release_set_projection()
-        .map_err(|_| Error::InvalidRecord)?;
+        .map_err(Error::Registry)?;
     let core = activated
         .role(ExecutionRoleV1::Core)
-        .map_err(|_| Error::InvalidRecord)?;
+        .map_err(Error::Registry)?;
     let release = core.release();
     let binding = release_set.binding(ExecutionRoleV1::Core);
     if core.artifact_release_id() != binding.artifact_release()
@@ -693,7 +692,7 @@ fn authenticate_infrastructure(state: FoundProjectionStateV2<'_>) -> Result<()> 
         return Err(Error::AccountAuthority);
     }
     let profile = ProtocolInfrastructureProfileV2::decode(state.infrastructure_profile.data)
-        .map_err(|_| Error::InvalidRecord)?;
+        .map_err(Error::ReleaseSet)?;
     if profile.registry().program().to_bytes() != state.registry_program.key.to_bytes()
         || profile.rent().program().to_bytes() != state.rent_program.key.to_bytes()
     {
@@ -725,14 +724,13 @@ fn authenticate_artifact(
 ) -> Result<ExecutionRoleBindingV1> {
     let coordinate =
         authenticate_product_record(registry, ARTIFACT_RELEASE_SCHEMA_ID_V1, observation)?;
-    let release =
-        ArtifactReleaseV1::decode(observation.raw.data).map_err(|_| Error::InvalidRecord)?;
+    let release = ArtifactReleaseV1::decode(observation.raw.data).map_err(Error::Registry)?;
     if release.program().to_bytes() != program.key.to_bytes() {
         return Err(Error::CrossRecordMismatch);
     }
     authenticate_current_deployment(program, programdata, release)?;
     let artifact_release = ArtifactReleaseIdV1::new(coordinate.content_digest.to_bytes())
-        .map_err(|_| Error::InvalidRecord)?;
+        .map_err(Error::ReleaseSet)?;
     Ok(ExecutionRoleBindingV1::new(
         release.program(),
         artifact_release,
@@ -751,7 +749,7 @@ fn authenticate_current_deployment(
     programdata: AccountObservationV2<'_>,
     release: ArtifactReleaseV1,
 ) -> Result<()> {
-    require_slot_pinned_release_v1(release).map_err(|_| Error::AccountAuthority)?;
+    require_slot_pinned_release_v1(release).map_err(Error::Registry)?;
     if release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
         || release.program().to_bytes() != program.key.to_bytes()
         || release.programdata() != programdata.key.to_bytes()
@@ -762,7 +760,7 @@ fn authenticate_current_deployment(
     {
         return Err(Error::AccountAuthority);
     }
-    let program_view = ProgramV3View::parse(program.data).map_err(|_| Error::InvalidRecord)?;
+    let program_view = ProgramV3View::parse(program.data).map_err(Error::RegistrySvm)?;
     let expected_programdata =
         Pubkey::find_program_address(&[program.key.as_ref()], &bpf_loader_upgradeable::ID).0;
     if program_view.programdata() != release.programdata()
@@ -771,7 +769,7 @@ fn authenticate_current_deployment(
         return Err(Error::CrossRecordMismatch);
     }
     let programdata_view =
-        ProgramDataV3View::parse(programdata.data).map_err(|_| Error::InvalidRecord)?;
+        ProgramDataV3View::parse(programdata.data).map_err(Error::RegistrySvm)?;
     let deployment = DeploymentObservationV1::new(
         program.key.to_bytes(),
         program.owner.to_bytes(),
@@ -785,10 +783,10 @@ fn authenticate_current_deployment(
         hash(programdata_view.elf()).to_bytes(),
         programdata_view.upgrade_authority(),
     )
-    .map_err(|_| Error::InvalidRecord)?;
+    .map_err(Error::Registry)?;
     release
         .authenticate_deployment(deployment)
-        .map_err(|_| Error::CrossRecordMismatch)
+        .map_err(Error::Registry)
 }
 
 fn authenticate_rent_credit(
@@ -801,8 +799,7 @@ fn authenticate_rent_credit(
     if rent_credit.owner != rent_program.key || rent_credit.executable {
         return Err(Error::AccountAuthority);
     }
-    let credit =
-        LifecycleRentCreditV2::decode(rent_credit.data).map_err(|_| Error::InvalidRecord)?;
+    let credit = LifecycleRentCreditV2::decode(rent_credit.data).map_err(Error::LifecycleRent)?;
     if credit.market().to_bytes() != market_address.to_bytes()
         || credit.release_set().to_bytes() != release_set
         || credit.generation() != generation
@@ -994,5 +991,5 @@ fn projection_accounts(
 }
 
 fn identity(bytes: [u8; 32]) -> Result<Identity> {
-    Identity::new(bytes).map_err(|_| Error::InvalidRecord)
+    Identity::new(bytes).map_err(Error::MarketCore)
 }

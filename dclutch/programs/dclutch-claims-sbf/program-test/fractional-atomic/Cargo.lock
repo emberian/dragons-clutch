@@ -1537,6 +1537,8 @@ dependencies = [
  "dclutch-source",
  "dclutch-vm",
  "sha2 0.10.9",
+ "solana-program",
+ "solana-sdk-ids",
 ]
 
 [[package]]
@@ -1554,6 +1556,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-claims-founding-test-caller-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-claims",
+ "dclutch-core-contract",
+ "dclutch-registry",
+ "solana-program",
+]
+
+[[package]]
 name = "dclutch-claims-sbf"
 version = "0.1.0"
 dependencies = [
@@ -1562,7 +1574,6 @@ dependencies = [
  "dclutch-custody",
  "dclutch-market",
  "dclutch-product",
- "dclutch-product-runtime-v2-svm-reader",
  "dclutch-refusal-registry",
  "dclutch-registry",
  "dclutch-sha256-adapter",
@@ -1595,6 +1606,7 @@ dependencies = [
  "dclutch-claim-check-escrow-signer-test-sbf",
  "dclutch-claims",
  "dclutch-claims-affine-batch-program-test",
+ "dclutch-claims-founding-test-caller-sbf",
  "dclutch-claims-sbf",
  "dclutch-core-contract",
  "dclutch-custody",
@@ -1605,6 +1617,7 @@ dependencies = [
  "dclutch-product",
  "dclutch-product-runtime-v2-operator",
  "dclutch-program-test-evidence",
+ "dclutch-refusal-registry",
  "dclutch-registry",
  "dclutch-source",
  "solana-account 4.6.0",
@@ -1663,7 +1676,11 @@ dependencies = [
 name = "dclutch-product"
 version = "0.1.0"
 dependencies = [
+ "dclutch-market",
+ "dclutch-registry",
  "dclutch-sha256-adapter",
+ "solana-program",
+ "solana-sdk-ids",
 ]
 
 [[package]]
@@ -1683,18 +1700,6 @@ dependencies = [
  "dclutch-product-compiler",
  "dclutch-registry",
  "dclutch-source",
- "solana-program",
- "solana-sdk-ids",
-]
-
-[[package]]
-name = "dclutch-product-runtime-v2-svm-reader"
-version = "0.1.0"
-dependencies = [
- "dclutch-claims",
- "dclutch-market",
- "dclutch-product",
- "dclutch-registry",
  "solana-program",
  "solana-sdk-ids",
 ]

@@ -286,10 +286,10 @@ fn compose_hop(
 > {
     let before_id = predecessor
         .execution_release_set_id()
-        .map_err(|_| Error::InvalidActivationCache)?;
+        .map_err(Error::Registry)?;
     let after_id = successor
         .execution_release_set_id()
-        .map_err(|_| Error::InvalidActivationCache)?;
+        .map_err(Error::Registry)?;
 
     // Conjunct 3.
     if before_id == after_id {
@@ -299,12 +299,8 @@ fn compose_hop(
     let mut projected = [None; EXECUTION_ROLE_COUNT_V1];
     let mut consent = [None; EXECUTION_ROLE_COUNT_V1];
     for role in EXECUTION_ROLE_ORDER_V1 {
-        let before = predecessor
-            .role(role)
-            .map_err(|_| Error::InvalidActivationCache)?;
-        let after = successor
-            .role(role)
-            .map_err(|_| Error::InvalidActivationCache)?;
+        let before = predecessor.role(role).map_err(Error::Registry)?;
+        let after = successor.role(role).map_err(Error::Registry)?;
         let index = role.role_index();
 
         // Conjunct 4. A hop may move a role's bytes, never its identity.
@@ -353,8 +349,7 @@ fn compose_hop(
     let projected: [DeclareSuccessorRoleConsentV1; EXECUTION_ROLE_COUNT_V1] =
         ordered.try_into().map_err(|_| Error::Encoding)?;
 
-    let record = ReleaseLineageV1::new(before_id, after_id, consent)
-        .map_err(|_| Error::LineageIncoherent)?;
+    let record = ReleaseLineageV1::new(before_id, after_id, consent).map_err(Error::Registry)?;
     Ok((record, projected))
 }
 

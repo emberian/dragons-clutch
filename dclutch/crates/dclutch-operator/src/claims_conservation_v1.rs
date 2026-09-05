@@ -40,10 +40,12 @@ use solana_program::pubkey::Pubkey;
 pub enum ClaimsConservationOperatorErrorV1 {
     /// A coordinate the caller supplied was zero or self-aliased.
     Identity,
-    /// A seed helper refused the coordinates.
-    Seeds,
     /// The conservation contract refused the assembled request.
     Contract(ConservationError),
+    /// `dclutch_claims` refused; the cause is its own.
+    Claims(dclutch_claims::Error),
+    /// `dclutch_claims` refused; the cause is its own.
+    ProtocolPosition(dclutch_claims::protocol_position_v2::ProtocolPositionErrorV2),
 }
 
 /// Everything an operator must authenticate before it may plan a split or merge.
@@ -130,14 +132,14 @@ pub fn plan_claims_conservation_v1(
 
     let aggregate = Pubkey::find_program_address(
         &ClaimsAggregateSeedsV1::new(input.market.to_bytes())
-            .map_err(|_| ClaimsConservationOperatorErrorV1::Seeds)?
+            .map_err(ClaimsConservationOperatorErrorV1::Claims)?
             .as_slices(),
         &input.claims_program,
     )
     .0;
     let position = Pubkey::find_program_address(
         &ProtocolPositionSeedsV2::new(aggregate.to_bytes(), input.owner.to_bytes())
-            .map_err(|_| ClaimsConservationOperatorErrorV1::Seeds)?
+            .map_err(ClaimsConservationOperatorErrorV1::ProtocolPosition)?
             .as_slices(),
         &input.claims_program,
     )

@@ -487,6 +487,40 @@ pub enum TerminalRetirementErrorV1 {
     Projection,
     /// Exact account privilege/order geometry refused.
     Frame,
+    /// `dclutch_registry::release_set` refused; the cause is its own.
+    ReleaseSet(dclutch_registry::release_set::Error),
+    /// `dclutch_market` refused; the cause is its own.
+    MarketCore(dclutch_market::Error),
+    /// `dclutch_market::capability_manifest` refused; the cause is its own.
+    Capability(dclutch_market::capability_manifest::Error),
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    CapabilityProgram(dclutch_market::capability_program::Error),
+    /// `dclutch_operator` refused; the cause is its own.
+    Observation(crate::observation::ObservationError),
+    /// `dclutch_registry::svm` refused; the cause is its own.
+    RegistrySvm(dclutch_registry::svm::Error),
+    /// `dclutch_registry` refused; the cause is its own.
+    Registry(dclutch_registry::Error),
+    /// `dclutch_trading` refused; the cause is its own.
+    Successor(dclutch_trading::successor::SuccessorError),
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    ProgramSet(dclutch_market::capability_program::set_v2::ProgramSetErrorV2),
+    /// `dclutch_vm::account_profile` refused; the cause is its own.
+    AccountProfile(dclutch_vm::account_profile::Error),
+    /// `dclutch_vm::effect` refused; the cause is its own.
+    EffectV2(dclutch_vm::effect::v2::Error),
+    /// `dclutch_market::rent` refused; the cause is its own.
+    LifecycleRent(dclutch_market::rent::lifecycle_v2::LifecycleRentErrorV2),
+    /// `dclutch_custody` refused; the cause is its own.
+    RetirementReplayHandoff(dclutch_custody::RetirementReplayHandoffErrorV1),
+    /// `dclutch_custody` refused; the cause is its own.
+    CustodyContract(dclutch_custody::Error),
+    /// `dclutch_claims` refused; the cause is its own.
+    LiabilityBasisState(dclutch_claims::liability_basis_state_v2::LiabilityBasisStateErrorV2),
+    /// `dclutch_market::realm` refused; the cause is its own.
+    Realm(dclutch_market::realm::Error),
+    /// `dclutch_custody::token_svm` refused; the cause is its own.
+    Token(dclutch_custody::token_svm::Error),
 }
 
 /// Derive the exact production `F=2` Direct-close account-meta closure.
@@ -504,7 +538,7 @@ pub fn project_direct_native_close_coordinate_closure_v1(
         input.root.to_bytes(),
         input.role_request_digest,
     )
-    .map_err(|_| TerminalRetirementErrorV1::Frame)?;
+    .map_err(TerminalRetirementErrorV1::ReleaseSet)?;
     let caller = Pubkey::find_program_address(&caller_seeds.as_slices(), &input.core.program).0;
     let accounts = vec![
         AccountMeta::new(input.market, false),
@@ -547,7 +581,7 @@ pub fn project_direct_native_close_coordinate_closure_v1(
         AccountMeta::new(input.rent_credit, false),
     ];
     let layout =
-        CapabilityRouteLayoutV1::new(2, 20).map_err(|_| TerminalRetirementErrorV1::Frame)?;
+        CapabilityRouteLayoutV1::new(2, 20).map_err(TerminalRetirementErrorV1::MarketCore)?;
     if accounts.len() != layout.account_count() || !exact_close_aliases(&accounts, layout) {
         return Err(TerminalRetirementErrorV1::Frame);
     }
@@ -582,7 +616,7 @@ pub fn project_retirement_replay_handoff_coordinate_closure_v1(
         input.context,
         input.request_digest,
     )
-    .map_err(|_| TerminalRetirementErrorV1::Frame)?;
+    .map_err(TerminalRetirementErrorV1::ReleaseSet)?;
     let caller = Pubkey::find_program_address(&caller_seeds.as_slices(), &input.core.program).0;
     let coordinates = [
         input.payer,
@@ -667,20 +701,20 @@ pub fn preflight_direct_native_close_caller_v1(
     }
     let observation = close_preflight_observation(snapshot)?;
     let market =
-        CoreState::decode(&snapshot.market.data).map_err(|_| TerminalRetirementErrorV1::Market)?;
+        CoreState::decode(&snapshot.market.data).map_err(TerminalRetirementErrorV1::MarketCore)?;
     let manifest = CapabilityManifestV1::decode(&snapshot.manifest.data)
-        .map_err(|_| TerminalRetirementErrorV1::Record)?;
+        .map_err(TerminalRetirementErrorV1::Capability)?;
     let header_bytes = snapshot
         .root
         .data
         .get(..CAPABILITY_ROOT_HEADER_BYTES_V1)
         .ok_or(TerminalRetirementErrorV1::Record)?;
     let header = CapabilityRootHeaderV1::decode(header_bytes)
-        .map_err(|_| TerminalRetirementErrorV1::Record)?;
+        .map_err(TerminalRetirementErrorV1::CapabilityProgram)?;
     let selection = header.selection();
     let entry_index = selection.entry_index();
     let required_union = capability_dependency_closure_mask_v1(manifest, entry_index)
-        .map_err(|_| TerminalRetirementErrorV1::Projection)?;
+        .map_err(TerminalRetirementErrorV1::Capability)?;
     let wire_selection = CapabilityExecutionSelectionV1::new(
         entry_index,
         selection.manifest(),
@@ -688,7 +722,7 @@ pub fn preflight_direct_native_close_caller_v1(
         selection.capability_release(),
         selection.config(),
     )
-    .map_err(|_| TerminalRetirementErrorV1::Projection)?;
+    .map_err(TerminalRetirementErrorV1::ReleaseSet)?;
     let funding_header = CapabilityFundingHeaderV2::new(
         u8::try_from(snapshot.funding_ledgers.len())
             .map_err(|_| TerminalRetirementErrorV1::Projection)?,
@@ -696,7 +730,7 @@ pub fn preflight_direct_native_close_caller_v1(
             .map_err(|_| TerminalRetirementErrorV1::Projection)?,
         required_union,
     )
-    .map_err(|_| TerminalRetirementErrorV1::Projection)?;
+    .map_err(TerminalRetirementErrorV1::MarketCore)?;
     let mut role_request = wire_selection.to_bytes().to_vec();
     role_request.extend_from_slice(&funding_header.encode());
     role_request.extend_from_slice(&direct_native_close_request_v1());
@@ -708,7 +742,7 @@ pub fn preflight_direct_native_close_caller_v1(
         snapshot.root.key.to_bytes(),
         request_digest,
     )
-    .map_err(|_| TerminalRetirementErrorV1::Projection)?;
+    .map_err(TerminalRetirementErrorV1::ReleaseSet)?;
     let caller_authority =
         Pubkey::find_program_address(&seeds.as_slices(), &snapshot.core_program.key).0;
     let mut complete = snapshot.clone();
@@ -739,7 +773,7 @@ pub fn build_direct_native_close_v1(
     // it any more. Dropping the decode with the floor would silently stop
     // checking the coordinate, which is the debt `a4b2cbb17` named at
     // `authenticate_execution_strategy_v2` and this does not repeat.
-    decode_rent(&snapshot.rent_sysvar).map_err(|_| TerminalRetirementErrorV1::Record)?;
+    decode_rent(&snapshot.rent_sysvar).map_err(TerminalRetirementErrorV1::Observation)?;
     authenticate_close_system(snapshot)?;
     authenticate_finalized_record(
         snapshot.registry_program.key,
@@ -749,7 +783,7 @@ pub fn build_direct_native_close_v1(
             staging_cursor: snapshot.realm_staging.clone(),
         },
     )
-    .map_err(|_| TerminalRetirementErrorV1::Record)?;
+    .map_err(TerminalRetirementErrorV1::Observation)?;
     authenticate_finalized_record(
         snapshot.registry_program.key,
         &snapshot.manifest,
@@ -758,7 +792,7 @@ pub fn build_direct_native_close_v1(
             staging_cursor: snapshot.manifest_staging.clone(),
         },
     )
-    .map_err(|_| TerminalRetirementErrorV1::Record)?;
+    .map_err(TerminalRetirementErrorV1::Observation)?;
     if hash(&snapshot.realm.data).to_bytes() != market.identity.realm_id.to_bytes()
         || hash(&snapshot.manifest.data).to_bytes()
             != market.identity.capability_manifest.to_bytes()
@@ -766,19 +800,19 @@ pub fn build_direct_native_close_v1(
         return Err(TerminalRetirementErrorV1::Record);
     }
     let manifest = CapabilityManifestV1::decode(&snapshot.manifest.data)
-        .map_err(|_| TerminalRetirementErrorV1::Record)?;
+        .map_err(TerminalRetirementErrorV1::Capability)?;
     let (root_header, root_state) = authenticate_close_root(snapshot, market, manifest)?;
     authenticate_close_records(snapshot, root_header, manifest)?;
     let selection = root_header.selection();
     let entry_index = selection.entry_index();
     let entry = manifest
         .entry(entry_index)
-        .map_err(|_| TerminalRetirementErrorV1::Record)?;
+        .map_err(TerminalRetirementErrorV1::Capability)?;
     let selected_bit = 1_u16
         .checked_shl(u32::from(entry_index))
         .ok_or(TerminalRetirementErrorV1::Projection)?;
     let required_union = capability_dependency_closure_mask_v1(manifest, entry_index)
-        .map_err(|_| TerminalRetirementErrorV1::Projection)?;
+        .map_err(TerminalRetirementErrorV1::Capability)?;
     if manifest.entry_count() != 4
         || entry_index != 3
         || required_union != 0b1111
@@ -799,14 +833,14 @@ pub fn build_direct_native_close_v1(
         selection.capability_release(),
         selection.config(),
     )
-    .map_err(|_| TerminalRetirementErrorV1::Projection)?;
+    .map_err(TerminalRetirementErrorV1::ReleaseSet)?;
     let physical_count = u8::try_from(snapshot.funding_ledgers.len())
         .map_err(|_| TerminalRetirementErrorV1::Projection)?;
     let logical_count = u8::try_from(required_union.count_ones())
         .map_err(|_| TerminalRetirementErrorV1::Projection)?;
     let funding_header =
         CapabilityFundingHeaderV2::new(physical_count, logical_count, required_union)
-            .map_err(|_| TerminalRetirementErrorV1::Projection)?;
+            .map_err(TerminalRetirementErrorV1::MarketCore)?;
     let family_request = direct_native_close_request_v1();
     let mut role_request = wire_selection.to_bytes().to_vec();
     role_request.extend_from_slice(&funding_header.encode());
@@ -820,7 +854,7 @@ pub fn build_direct_native_close_v1(
         context,
         role_request_digest,
     )
-    .map_err(|_| TerminalRetirementErrorV1::Projection)?;
+    .map_err(TerminalRetirementErrorV1::ReleaseSet)?;
     let caller_authority =
         Pubkey::find_program_address(&seeds.as_slices(), &snapshot.core_program.key).0;
     let observed_caller = snapshot
@@ -839,23 +873,23 @@ pub fn build_direct_native_close_v1(
         CoreEffectActionV1::CloseCapability,
         Role::Trading,
         dclutch_market::Identity::new(snapshot.core_program.key.to_bytes())
-            .map_err(|_| TerminalRetirementErrorV1::Projection)?,
+            .map_err(TerminalRetirementErrorV1::MarketCore)?,
         dclutch_market::Identity::new(caller_authority.to_bytes())
-            .map_err(|_| TerminalRetirementErrorV1::Projection)?,
+            .map_err(TerminalRetirementErrorV1::MarketCore)?,
         market.identity.selected_release_set,
         market.identity.market_id,
         dclutch_market::Identity::new(context)
-            .map_err(|_| TerminalRetirementErrorV1::Projection)?,
+            .map_err(TerminalRetirementErrorV1::MarketCore)?,
         dclutch_market::Identity::new(hash(&snapshot.market.data).to_bytes())
-            .map_err(|_| TerminalRetirementErrorV1::Projection)?,
+            .map_err(TerminalRetirementErrorV1::MarketCore)?,
         dclutch_market::Identity::new(role_request_digest)
-            .map_err(|_| TerminalRetirementErrorV1::Projection)?,
+            .map_err(TerminalRetirementErrorV1::MarketCore)?,
         market.identity.generation,
         0,
         0,
         u32::try_from(role_request.len()).map_err(|_| TerminalRetirementErrorV1::Projection)?,
     )
-    .map_err(|_| TerminalRetirementErrorV1::Projection)?;
+    .map_err(TerminalRetirementErrorV1::MarketCore)?;
     let request = Request::administrative(
         Action::CloseCapability,
         market.identity.generation,
@@ -863,12 +897,12 @@ pub fn build_direct_native_close_v1(
     );
     let mut data = request
         .encode()
-        .map_err(|_| TerminalRetirementErrorV1::Projection)?
+        .map_err(TerminalRetirementErrorV1::MarketCore)?
         .to_vec();
     data.extend_from_slice(
         &envelope
             .encode()
-            .map_err(|_| TerminalRetirementErrorV1::Projection)?,
+            .map_err(TerminalRetirementErrorV1::MarketCore)?,
     );
     data.extend_from_slice(&role_request);
     let resolution_funding = snapshot
@@ -941,7 +975,7 @@ pub fn build_direct_native_close_v1(
             .accounts
             .get(
                 CapabilityRouteLayoutV1::new(2, 20)
-                    .map_err(|_| TerminalRetirementErrorV1::Frame)?
+                    .map_err(TerminalRetirementErrorV1::MarketCore)?
                     .caller_authority(),
             )
             .is_none_or(|meta| meta.pubkey != caller_authority)
@@ -956,7 +990,7 @@ pub fn build_direct_native_close_v1(
         .ok_or(TerminalRetirementErrorV1::Projection)?;
     let expected_market_data = post_market
         .encode()
-        .map_err(|_| TerminalRetirementErrorV1::Projection)?
+        .map_err(TerminalRetirementErrorV1::MarketCore)?
         .to_vec();
     let selected_funding = snapshot
         .funding_ledgers
@@ -1025,7 +1059,7 @@ fn authenticate_close_market(
     snapshot: &DirectNativeCloseSnapshotV1,
 ) -> Result<CoreState, TerminalRetirementErrorV1> {
     let state =
-        CoreState::decode(&snapshot.market.data).map_err(|_| TerminalRetirementErrorV1::Market)?;
+        CoreState::decode(&snapshot.market.data).map_err(TerminalRetirementErrorV1::MarketCore)?;
     let expected = Pubkey::find_program_address(
         &MarketCoreStateSeedsV2::new(state.identity).as_slices(),
         &snapshot.core_program.key,
@@ -1058,12 +1092,12 @@ fn authenticate_close_releases(
         return Err(TerminalRetirementErrorV1::Release);
     }
     ProgramV3View::parse(&snapshot.registry_program.data)
-        .map_err(|_| TerminalRetirementErrorV1::Release)?;
+        .map_err(TerminalRetirementErrorV1::RegistrySvm)?;
     let view = ActivatedExecutionReleaseSetViewV1::decode(&snapshot.activation_cache.data)
-        .map_err(|_| TerminalRetirementErrorV1::Release)?;
+        .map_err(TerminalRetirementErrorV1::Registry)?;
     let release_set = view
         .execution_release_set_id()
-        .map_err(|_| TerminalRetirementErrorV1::Release)?;
+        .map_err(TerminalRetirementErrorV1::Registry)?;
     let expected = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, release_set.as_bytes()],
         &snapshot.registry_program.key,
@@ -1107,16 +1141,16 @@ fn authenticate_close_root(
         .split_at_checked(CAPABILITY_ROOT_HEADER_BYTES_V1)
         .ok_or(TerminalRetirementErrorV1::Record)?;
     let header = CapabilityRootHeaderV1::decode(header_bytes)
-        .map_err(|_| TerminalRetirementErrorV1::Record)?;
+        .map_err(TerminalRetirementErrorV1::CapabilityProgram)?;
     let state =
-        DirectRootStateV1::decode(state_bytes).map_err(|_| TerminalRetirementErrorV1::Record)?;
+        DirectRootStateV1::decode(state_bytes).map_err(TerminalRetirementErrorV1::Successor)?;
     state
         .require_closable()
-        .map_err(|_| TerminalRetirementErrorV1::Record)?;
+        .map_err(TerminalRetirementErrorV1::Successor)?;
     let selection = header.selection();
     let entry = manifest
         .entry(selection.entry_index())
-        .map_err(|_| TerminalRetirementErrorV1::Record)?;
+        .map_err(TerminalRetirementErrorV1::Capability)?;
     let expected =
         Pubkey::find_program_address(&header.seeds().as_slices(), &snapshot.trading_program.key).0;
     if snapshot.root.key != expected
@@ -1155,10 +1189,10 @@ fn authenticate_close_records(
         hash(&snapshot.program_set.data).to_bytes(),
         &snapshot.program_set.data,
     )
-    .map_err(|_| TerminalRetirementErrorV1::Record)?;
+    .map_err(TerminalRetirementErrorV1::ProgramSet)?;
     let selected = set
         .select_descriptor(&direct_native_close_request_v1())
-        .map_err(|_| TerminalRetirementErrorV1::Record)?;
+        .map_err(TerminalRetirementErrorV1::ProgramSet)?;
     authenticate_record(
         snapshot,
         &snapshot.close_descriptor,
@@ -1170,10 +1204,10 @@ fn authenticate_close_records(
         return Err(TerminalRetirementErrorV1::Record);
     }
     let descriptor = CapabilityProgramV1::decode(&snapshot.close_descriptor.data)
-        .map_err(|_| TerminalRetirementErrorV1::Record)?;
+        .map_err(TerminalRetirementErrorV1::CapabilityProgram)?;
     let entry = manifest
         .entry(selection.entry_index())
-        .map_err(|_| TerminalRetirementErrorV1::Record)?;
+        .map_err(TerminalRetirementErrorV1::Capability)?;
     authenticate_record(
         snapshot,
         &snapshot.config,
@@ -1200,9 +1234,9 @@ fn authenticate_close_records(
         hash(&snapshot.close_profile.data).to_bytes(),
         &snapshot.close_profile.data,
     )
-    .map_err(|_| TerminalRetirementErrorV1::Record)?;
+    .map_err(TerminalRetirementErrorV1::AccountProfile)?;
     EffectProgramV2::decode(&snapshot.close_effect.data)
-        .map_err(|_| TerminalRetirementErrorV1::Record)?;
+        .map_err(TerminalRetirementErrorV1::EffectV2)?;
     if descriptor.kind() != entry.kind_id()
         || descriptor.config_schema().to_bytes() == [0; 32]
         || descriptor.request_schema().to_bytes()
@@ -1234,7 +1268,7 @@ fn authenticate_record(
             staging_cursor: staging.clone(),
         },
     )
-    .map_err(|_| TerminalRetirementErrorV1::Record)?;
+    .map_err(TerminalRetirementErrorV1::Observation)?;
     if hash(&record.data).to_bytes() != expected_digest {
         return Err(TerminalRetirementErrorV1::Record);
     }
@@ -1262,10 +1296,10 @@ fn authenticate_close_funding(
     let mut preserved_dependencies = Vec::new();
     for (index, account) in snapshot.funding_ledgers.iter().enumerate() {
         let ledger = FundingLedgerV2::decode(&account.data)
-            .map_err(|_| TerminalRetirementErrorV1::Projection)?;
+            .map_err(TerminalRetirementErrorV1::Capability)?;
         let authenticated = ledger
             .authenticate(manifest_id, manifest)
-            .map_err(|_| TerminalRetirementErrorV1::Projection)?;
+            .map_err(TerminalRetirementErrorV1::Capability)?;
         let mask = ledger.selected_mask();
         let selected = mask & selected_bit != 0;
         let controller = if selected {
@@ -1283,11 +1317,11 @@ fn authenticate_close_funding(
             manifest_id,
             ledger,
         )
-        .map_err(|_| TerminalRetirementErrorV1::Projection)?;
+        .map_err(TerminalRetirementErrorV1::Capability)?;
         let expected = Pubkey::find_program_address(&derivation.seed_components(), &controller).0;
         let exact_rent = authenticated
             .funded_rent_minimum(account.data.len())
-            .map_err(|_| TerminalRetirementErrorV1::Projection)?;
+            .map_err(TerminalRetirementErrorV1::Capability)?;
         if account.key != expected
             || account.owner != controller
             || account.executable
@@ -1297,14 +1331,14 @@ fn authenticate_close_funding(
         }
         authenticated
             .validate_native_custody(account.lamports, exact_rent, selected)
-            .map_err(|_| TerminalRetirementErrorV1::Projection)?;
+            .map_err(TerminalRetirementErrorV1::Capability)?;
         let mut row_index = 0_u16;
         while row_index < ledger.slot_count() {
             let entry_index = manifest_entry_for_ledger_row_v2(mask, row_index)
-                .map_err(|_| TerminalRetirementErrorV1::Projection)?;
+                .map_err(TerminalRetirementErrorV1::Capability)?;
             let slot = authenticated
                 .slot(entry_index)
-                .map_err(|_| TerminalRetirementErrorV1::Projection)?;
+                .map_err(TerminalRetirementErrorV1::Capability)?;
             if !FUNDING_LEDGER_ACTIVE_ADMISSIBLE_STATES_V2.admits(slot.status()) {
                 return Err(TerminalRetirementErrorV1::Projection);
             }
@@ -1324,9 +1358,9 @@ fn authenticate_close_funding(
                     exact_rent,
                     snapshot.rent_credit.key.to_bytes(),
                 )
-                .map_err(|_| TerminalRetirementErrorV1::Projection)?,
+                .map_err(TerminalRetirementErrorV1::Capability)?,
             )
-            .map_err(|_| TerminalRetirementErrorV1::Projection)?;
+            .map_err(TerminalRetirementErrorV1::Capability)?;
             if !close.ledger_can_close()
                 || close.expected_post_ledger_lamports() != 0
                 || close.remaining_realm_collateral() != 0
@@ -1346,7 +1380,7 @@ fn authenticate_close_funding(
         masks.push(mask);
     }
     validate_funding_ledger_masks_v2(manifest.entry_count(), required_union, &masks)
-        .map_err(|_| TerminalRetirementErrorV1::Projection)?;
+        .map_err(TerminalRetirementErrorV1::Capability)?;
     let selected_index = selected_index.ok_or(TerminalRetirementErrorV1::Projection)?;
     if masks.get(selected_index).copied() != Some(selected_bit) {
         return Err(TerminalRetirementErrorV1::Projection);
@@ -1362,7 +1396,7 @@ fn authenticate_close_rent_credit(
     market: CoreState,
 ) -> Result<(), TerminalRetirementErrorV1> {
     let credit = LifecycleRentCreditV2::decode(&snapshot.rent_credit.data)
-        .map_err(|_| TerminalRetirementErrorV1::Projection)?;
+        .map_err(TerminalRetirementErrorV1::LifecycleRent)?;
     let seeds = credit.pda_seeds();
     let bump = [seeds.bump()];
     let expected = Pubkey::create_program_address(
@@ -1506,14 +1540,14 @@ pub fn build_retirement_replay_handoff_v1(
     let activation = authenticate_handoff_releases(snapshot, market)?;
     let claims_program = activation
         .role(ExecutionRoleV1::Claims)
-        .map_err(|_| TerminalRetirementErrorV1::Release)?
+        .map_err(TerminalRetirementErrorV1::Registry)?
         .release()
         .program()
         .to_bytes();
     let context = authenticate_handoff_records(snapshot, market, claims_program)?;
     let replay = authenticate_handoff_custody(snapshot, market, context)?;
     let rent =
-        decode_rent(&snapshot.rent_sysvar).map_err(|_| TerminalRetirementErrorV1::Custody)?;
+        decode_rent(&snapshot.rent_sysvar).map_err(TerminalRetirementErrorV1::Observation)?;
     let core_rent = rent.minimum_balance(CUSTODY_REPLAY_BYTES_V1);
     let request = RetirementReplayHandoffRequestV1::new(
         snapshot.market.key.to_bytes(),
@@ -1528,7 +1562,7 @@ pub fn build_retirement_replay_handoff_v1(
         snapshot.rent_credit.lamports,
         snapshot.payer.lamports,
     )
-    .map_err(|_| TerminalRetirementErrorV1::Projection)?;
+    .map_err(TerminalRetirementErrorV1::RetirementReplayHandoff)?;
     let request_body = request.to_bytes();
     let request_digest = hash(&request_body).to_bytes();
     let seeds = CallerAuthoritySeedsV1::from_bytes(
@@ -1538,7 +1572,7 @@ pub fn build_retirement_replay_handoff_v1(
         context,
         request_digest,
     )
-    .map_err(|_| TerminalRetirementErrorV1::Projection)?;
+    .map_err(TerminalRetirementErrorV1::ReleaseSet)?;
     let caller_authority =
         Pubkey::find_program_address(&seeds.as_slices(), &snapshot.core_program.key).0;
     let observed_caller = snapshot
@@ -1560,7 +1594,7 @@ pub fn build_retirement_replay_handoff_v1(
     };
     let expected_core_replay_data = projected
         .to_bytes()
-        .map_err(|_| TerminalRetirementErrorV1::Projection)?
+        .map_err(TerminalRetirementErrorV1::CustodyContract)?
         .to_vec();
     let expected_core_replay_digest = hash(&expected_core_replay_data).to_bytes();
     let plan = RetirementReplayHandoffPlanV1::new(
@@ -1584,7 +1618,7 @@ pub fn build_retirement_replay_handoff_v1(
         },
         expected_core_replay_digest,
     )
-    .map_err(|_| TerminalRetirementErrorV1::Projection)?;
+    .map_err(TerminalRetirementErrorV1::RetirementReplayHandoff)?;
     let expected_receipt = plan.receipt();
     let coordinate_closure = project_retirement_replay_handoff_coordinate_closure_v1(
         &RetirementReplayHandoffCoordinateInputV1 {
@@ -1682,14 +1716,14 @@ pub fn preflight_retirement_replay_handoff_caller_v1(
     }
     let observation = handoff_preflight_observation(snapshot)?;
     let market =
-        CoreState::decode(&snapshot.market.data).map_err(|_| TerminalRetirementErrorV1::Market)?;
+        CoreState::decode(&snapshot.market.data).map_err(TerminalRetirementErrorV1::MarketCore)?;
     let aggregate = LiabilityBasisMarketViewV2::decode(&snapshot.claims_aggregate.data)
-        .map_err(|_| TerminalRetirementErrorV1::Record)?;
+        .map_err(TerminalRetirementErrorV1::LiabilityBasisState)?;
     let context = aggregate.custody_context;
     let replay = CustodyReplayV1::decode(&snapshot.trading_replay.data)
-        .map_err(|_| TerminalRetirementErrorV1::Custody)?;
+        .map_err(TerminalRetirementErrorV1::CustodyContract)?;
     let rent =
-        decode_rent(&snapshot.rent_sysvar).map_err(|_| TerminalRetirementErrorV1::Custody)?;
+        decode_rent(&snapshot.rent_sysvar).map_err(TerminalRetirementErrorV1::Observation)?;
     let request = RetirementReplayHandoffRequestV1::new(
         snapshot.market.key.to_bytes(),
         context,
@@ -1703,7 +1737,7 @@ pub fn preflight_retirement_replay_handoff_caller_v1(
         snapshot.rent_credit.lamports,
         snapshot.payer.lamports,
     )
-    .map_err(|_| TerminalRetirementErrorV1::Projection)?;
+    .map_err(TerminalRetirementErrorV1::RetirementReplayHandoff)?;
     let request_digest = hash(&request.to_bytes()).to_bytes();
     let seeds = CallerAuthoritySeedsV1::from_bytes(
         market.identity.selected_release_set.to_bytes(),
@@ -1712,7 +1746,7 @@ pub fn preflight_retirement_replay_handoff_caller_v1(
         context,
         request_digest,
     )
-    .map_err(|_| TerminalRetirementErrorV1::Projection)?;
+    .map_err(TerminalRetirementErrorV1::ReleaseSet)?;
     let caller_authority =
         Pubkey::find_program_address(&seeds.as_slices(), &snapshot.core_program.key).0;
     let mut complete = snapshot.clone();
@@ -1746,7 +1780,7 @@ fn authenticate_handoff_market(
     snapshot: &RetirementReplayHandoffSnapshotV1,
 ) -> Result<CoreState, TerminalRetirementErrorV1> {
     let state =
-        CoreState::decode(&snapshot.market.data).map_err(|_| TerminalRetirementErrorV1::Market)?;
+        CoreState::decode(&snapshot.market.data).map_err(TerminalRetirementErrorV1::MarketCore)?;
     let expected = Pubkey::find_program_address(
         &MarketCoreStateSeedsV2::new(state.identity).as_slices(),
         &snapshot.core_program.key,
@@ -1777,12 +1811,12 @@ fn authenticate_handoff_releases<'a>(
         return Err(TerminalRetirementErrorV1::Release);
     }
     ProgramV3View::parse(&snapshot.registry_program.data)
-        .map_err(|_| TerminalRetirementErrorV1::Release)?;
+        .map_err(TerminalRetirementErrorV1::RegistrySvm)?;
     let view = ActivatedExecutionReleaseSetViewV1::decode(&snapshot.activation_cache.data)
-        .map_err(|_| TerminalRetirementErrorV1::Release)?;
+        .map_err(TerminalRetirementErrorV1::Registry)?;
     let release_set = view
         .execution_release_set_id()
-        .map_err(|_| TerminalRetirementErrorV1::Release)?;
+        .map_err(TerminalRetirementErrorV1::Registry)?;
     let expected = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, release_set.as_bytes()],
         &snapshot.registry_program.key,
@@ -1822,7 +1856,7 @@ fn authenticate_handoff_records(
 ) -> Result<[u8; 32], TerminalRetirementErrorV1> {
     let claims_program = Pubkey::new_from_array(claims_program);
     let aggregate = LiabilityBasisMarketViewV2::decode(&snapshot.claims_aggregate.data)
-        .map_err(|_| TerminalRetirementErrorV1::Record)?;
+        .map_err(TerminalRetirementErrorV1::LiabilityBasisState)?;
     let expected = Pubkey::find_program_address(
         &[LIABILITY_BASIS_MARKET_SEED_V2, snapshot.market.key.as_ref()],
         &claims_program,
@@ -1848,7 +1882,7 @@ fn authenticate_handoff_records(
             staging_cursor: snapshot.realm_staging.clone(),
         },
     )
-    .map_err(|_| TerminalRetirementErrorV1::Record)?;
+    .map_err(TerminalRetirementErrorV1::Observation)?;
     if hash(&snapshot.realm.data).to_bytes() != market.identity.realm_id.to_bytes() {
         return Err(TerminalRetirementErrorV1::Record);
     }
@@ -1914,7 +1948,7 @@ fn authenticate_handoff_custody(
         return Err(TerminalRetirementErrorV1::Custody);
     }
     let replay = CustodyReplayV1::decode(&snapshot.trading_replay.data)
-        .map_err(|_| TerminalRetirementErrorV1::Custody)?;
+        .map_err(TerminalRetirementErrorV1::CustodyContract)?;
     if replay.caller_role != ExecutionRoleV1::Trading
         || replay.release_set != release
         || replay.market != snapshot.market.key.to_bytes()
@@ -1928,7 +1962,7 @@ fn authenticate_handoff_custody(
         return Err(TerminalRetirementErrorV1::Custody);
     }
     let credit = LifecycleRentCreditV2::decode(&snapshot.rent_credit.data)
-        .map_err(|_| TerminalRetirementErrorV1::Custody)?;
+        .map_err(TerminalRetirementErrorV1::LifecycleRent)?;
     let credit_seeds = credit.pda_seeds();
     let bump = [credit_seeds.bump()];
     let expected_credit = Pubkey::create_program_address(
@@ -1950,10 +1984,9 @@ fn authenticate_handoff_custody(
     {
         return Err(TerminalRetirementErrorV1::Custody);
     }
-    let realm =
-        RealmV1::decode(&snapshot.realm.data).map_err(|_| TerminalRetirementErrorV1::Custody)?;
-    let token = TokenAccount::parse(&snapshot.hoard.data)
-        .map_err(|_| TerminalRetirementErrorV1::Custody)?;
+    let realm = RealmV1::decode(&snapshot.realm.data).map_err(TerminalRetirementErrorV1::Realm)?;
+    let token =
+        TokenAccount::parse(&snapshot.hoard.data).map_err(TerminalRetirementErrorV1::Token)?;
     if snapshot.token_program.key.to_bytes() != *realm.token_program()
         || !snapshot.token_program.executable
         || snapshot.mint.key.to_bytes() != *realm.collateral_mint()
@@ -1983,12 +2016,12 @@ fn authenticate_deployment(
 ) -> Result<(), TerminalRetirementErrorV1> {
     let activated = view
         .role(role)
-        .map_err(|_| TerminalRetirementErrorV1::Release)?;
+        .map_err(TerminalRetirementErrorV1::Registry)?;
     let release = activated.release();
     let observation = deployment_observation(program, programdata, release)?;
     activated
         .authenticate_current_deployment(observation)
-        .map_err(|_| TerminalRetirementErrorV1::Release)
+        .map_err(TerminalRetirementErrorV1::Registry)
 }
 
 fn deployment_observation(
@@ -2007,9 +2040,9 @@ fn deployment_observation(
         return Err(TerminalRetirementErrorV1::Release);
     }
     let program_view =
-        ProgramV3View::parse(&program.data).map_err(|_| TerminalRetirementErrorV1::Release)?;
+        ProgramV3View::parse(&program.data).map_err(TerminalRetirementErrorV1::RegistrySvm)?;
     let data = ProgramDataV3View::parse(&programdata.data)
-        .map_err(|_| TerminalRetirementErrorV1::Release)?;
+        .map_err(TerminalRetirementErrorV1::RegistrySvm)?;
     let derived =
         Pubkey::find_program_address(&[program.key.as_ref()], &bpf_loader_upgradeable::ID).0;
     if program_view.programdata() != programdata.key.to_bytes() || programdata.key != derived {
@@ -2028,7 +2061,7 @@ fn deployment_observation(
         hash(data.elf()).to_bytes(),
         data.upgrade_authority(),
     )
-    .map_err(|_| TerminalRetirementErrorV1::Release)
+    .map_err(TerminalRetirementErrorV1::Registry)
 }
 
 fn handoff_observation(
@@ -2461,7 +2494,9 @@ mod tests {
         );
         assert_eq!(
             preflight_direct_native_close_caller_v1(&close),
-            Err(TerminalRetirementErrorV1::Market)
+            Err(TerminalRetirementErrorV1::MarketCore(
+                dclutch_market::Error::InvalidLength
+            ))
         );
 
         let mut handoff = handoff_snapshot();
@@ -2476,7 +2511,9 @@ mod tests {
         );
         assert_eq!(
             preflight_retirement_replay_handoff_caller_v1(&handoff),
-            Err(TerminalRetirementErrorV1::Market)
+            Err(TerminalRetirementErrorV1::MarketCore(
+                dclutch_market::Error::InvalidLength
+            ))
         );
     }
 

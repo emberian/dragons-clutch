@@ -434,7 +434,9 @@ fn nonfinal_or_changed_current_deployment_refuses() {
     assert_eq!(
         build_registry_open_market_continuation_v1(&changed, &fixture.instruction),
         Err(RegistryOpenMarketContinuationErrorV1::Registry(
-            RegistryOpenMarketObservationErrorV1::InvalidDeployment
+            RegistryOpenMarketObservationErrorV1::Registry(
+                dclutch_registry::Error::ElfDigestMismatch
+            )
         ))
     );
 }

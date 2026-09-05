@@ -327,6 +327,44 @@ pub enum DirectInlineRouteErrorV3 {
     /// The exact ordinary Direct finalizer or complete poststate projection
     /// refused, at the named clause.
     Finalization(DirectInlineFinalizationRefusalV3),
+    /// `dclutch_operator` refused; the cause is its own.
+    DirectInline(crate::direct_inline_v3::Error),
+    /// `dclutch_trading` refused; the cause is its own.
+    DirectExecutionRequest(dclutch_trading::execution_v3::DirectExecutionRequestErrorV3),
+    /// `dclutch_trading` refused; the cause is its own.
+    DirectInlineOrdinaryChildProjection(dclutch_trading::ordinary_route_projection_v3::DirectInlineOrdinaryChildProjectionErrorV3),
+    /// `dclutch_registry` refused; the cause is its own.
+    Registry(dclutch_registry::Error),
+    /// `dclutch_registry::release_set` refused; the cause is its own.
+    ReleaseSet(dclutch_registry::release_set::Error),
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    CapabilityProgram(dclutch_market::capability_program::Error),
+    /// `dclutch_vm::capability_seal` refused; the cause is its own.
+    CapabilitySeal(dclutch_vm::capability_seal::Error),
+    /// `dclutch_operator` refused; the cause is its own.
+    ObservationError(crate::observation::ObservationError),
+    /// `dclutch_trading` refused; the cause is its own.
+    Successor(dclutch_trading::successor::SuccessorError),
+    /// `dclutch_market` refused; the cause is its own.
+    MarketCore(dclutch_market::Error),
+    /// `dclutch_market::realm` refused; the cause is its own.
+    Realm(dclutch_market::realm::Error),
+    /// `dclutch_market::rent` refused; the cause is its own.
+    LifecycleRent(dclutch_market::rent::lifecycle_v2::LifecycleRentErrorV2),
+    /// `dclutch_claims` refused; the cause is its own.
+    LiabilityBasisState(dclutch_claims::liability_basis_state_v2::LiabilityBasisStateErrorV2),
+    /// `dclutch_custody` refused; the cause is its own.
+    Custody(dclutch_custody::Error),
+    /// `dclutch_custody::token_svm` refused; the cause is its own.
+    Token(dclutch_custody::token_svm::Error),
+    /// `dclutch_claims` refused; the cause is its own.
+    ProtocolPosition(dclutch_claims::protocol_position_v2::ProtocolPositionErrorV2),
+    /// `dclutch_vm::account_profile` refused; the cause is its own.
+    AccountProfile(dclutch_vm::account_profile::v2::Error),
+    /// `dclutch_claims` refused; the cause is its own.
+    FrameSpec(dclutch_claims::frame_spec_v1::FrameSpecErrorV1),
+    /// `dclutch_custody` refused; the cause is its own.
+    CustodyFrameSpec(dclutch_custody::CustodyFrameSpecErrorV1),
 }
 
 impl fmt::Display for DirectInlineRouteErrorV3 {
@@ -344,6 +382,8 @@ impl fmt::Display for DirectInlineRouteErrorV3 {
                 f.write_str("the canonical write-once capability seal closure refused")
             }
             Self::Finalization(refusal) => write!(f, "{refusal}"),
+            // Every carrying variant prints the cause its authority named.
+            cause => write!(f, "{cause:?}"),
         }
     }
 }
@@ -422,6 +462,7 @@ impl DirectInlineSealedReportProjectionRefusalV3 {
             DirectInlineRoutedTransactionErrorV3::Signer => Self::Signer,
             DirectInlineRoutedTransactionErrorV3::AccountLocks => Self::AccountLocks,
             DirectInlineRoutedTransactionErrorV3::Routing(_) => Self::Routing,
+            DirectInlineRoutedTransactionErrorV3::DirectInlineTransaction(_) => Self::Instruction,
         }
     }
 }
@@ -944,6 +985,8 @@ pub enum DirectInlineRoutedTransactionErrorV3 {
     AccountLocks,
     /// Versioned-message construction or packet admission refused.
     Routing(crate::versioned::Error),
+    /// `dclutch_operator` refused; the cause is its own.
+    DirectInlineTransaction(crate::direct_inline_v3::DirectInlineTransactionErrorV3),
 }
 
 /// Exact child-route authorities derived from Transition/Effect output.
@@ -1159,7 +1202,7 @@ pub fn derive_direct_inline_child_authorities_v3(
     effect_bytes: &[u8],
 ) -> Result<DirectInlineChildAuthoritiesV3, DirectInlineRouteErrorV3> {
     let family_request = compile_direct_inline_request_v3(seller, buyer, fill, execution_price)
-        .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?;
+        .map_err(DirectInlineRouteErrorV3::DirectInline)?;
     let parent_digest = hash(&family_request).to_bytes();
     if context.parent_request_digest != parent_digest
         || context.release_set == [0; 32]
@@ -1169,7 +1212,7 @@ pub fn derive_direct_inline_child_authorities_v3(
         return Err(DirectInlineRouteErrorV3::ChildFrame);
     }
     let request = match DirectExecutionRequestV3::decode(&family_request, context.outcome_count)
-        .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?
+        .map_err(DirectInlineRouteErrorV3::DirectExecutionRequest)?
     {
         DirectExecutionRequestV3::InlineOrdinary(request) => request,
         _ => return Err(DirectInlineRouteErrorV3::ChildFrame),
@@ -1181,7 +1224,7 @@ pub fn derive_direct_inline_child_authorities_v3(
         transition_bytes,
         effect_bytes,
     )
-    .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?;
+    .map_err(DirectInlineRouteErrorV3::DirectInlineOrdinaryChildProjection)?;
     derive_child_authorities(context, family_request, request, projected)
 }
 
@@ -1250,7 +1293,7 @@ pub fn assemble_authenticated_direct_inline_ordinary_route_v3(
         },
         &child_authorities.family_request,
     )
-    .map_err(|_| DirectInlineRouteErrorV3::Seal)?;
+    .map_err(DirectInlineRouteErrorV3::DirectInline)?;
     if chain.release_set != authentication.context.release_set
         || chain.market.to_bytes() != authentication.context.market
         || chain.registry_program != authentication.programs.registry_program
@@ -1392,7 +1435,7 @@ fn authenticate_checked_direct_release_v3(
         return Err(DirectInlineRouteErrorV3::ChildFrame);
     }
     let cache = ActivatedExecutionReleaseSetViewV1::decode(&route.fixed.activation_cache.data)
-        .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?;
+        .map_err(DirectInlineRouteErrorV3::Registry)?;
     let artifacts = checked.artifacts();
     for (role, artifact) in [
         ExecutionRoleV1::Core,
@@ -1406,7 +1449,7 @@ fn authenticate_checked_direct_release_v3(
     {
         let selected = cache
             .role(role)
-            .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?;
+            .map_err(DirectInlineRouteErrorV3::Registry)?;
         if selected.release().to_bytes() != artifact.to_bytes() {
             return Err(DirectInlineRouteErrorV3::ChildFrame);
         }
@@ -1420,7 +1463,7 @@ fn authenticate_checked_direct_release_v3(
         return Err(DirectInlineRouteErrorV3::ChildFrame);
     }
     let trading_artifact_release = ArtifactReleaseIdV1::new(hash(&trading.to_bytes()).to_bytes())
-        .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?
+        .map_err(DirectInlineRouteErrorV3::ReleaseSet)?
         .to_bytes();
     let checked_manifest_digest = checked
         .checked_execution_release_set_id()
@@ -1452,7 +1495,7 @@ pub fn build_direct_inline_capability_seal_v3(
     let fixed = &route.fixed;
     let descriptor_digest = hash(&fixed.descriptor.raw.data).to_bytes();
     let descriptor = CapabilityProgramV4::decode(&fixed.descriptor.raw.data)
-        .map_err(|_| DirectInlineRouteErrorV3::Seal)?;
+        .map_err(DirectInlineRouteErrorV3::CapabilityProgram)?;
     let action = dclutch_trading::execution_v3::DirectExecutionActionV3::InlineOrdinary as u32;
     let key = CapabilitySealKeyV1::new(
         CAPABILITY_PROGRAM_SCHEMA_ID_V4,
@@ -1461,7 +1504,7 @@ pub fn build_direct_inline_capability_seal_v3(
         authenticated.chain.trading_semantic_release,
         fixed.registry_program.key.to_bytes(),
     )
-    .map_err(|_| DirectInlineRouteErrorV3::Seal)?;
+    .map_err(DirectInlineRouteErrorV3::CapabilitySeal)?;
     let (seal, seal_bump) = Pubkey::find_program_address(
         &key.seeds().as_slices(),
         &authentication.programs.trading_program,
@@ -1470,7 +1513,8 @@ pub fn build_direct_inline_capability_seal_v3(
         return Err(DirectInlineRouteErrorV3::Seal);
     }
 
-    let rent = decode_rent(&fixed.rent_sysvar).map_err(|_| DirectInlineRouteErrorV3::Seal)?;
+    let rent =
+        decode_rent(&fixed.rent_sysvar).map_err(DirectInlineRouteErrorV3::ObservationError)?;
     let rows = [
         seal_row(
             SealedRoleV1::Descriptor,
@@ -1517,7 +1561,7 @@ pub fn build_direct_inline_capability_seal_v3(
     ];
     let mut expected_body = vec![0_u8; CAPABILITY_SEAL_BYTES_V1];
     SealedDescriptorClosureV1::encode(key, rows, seal_bump, &mut expected_body)
-        .map_err(|_| DirectInlineRouteErrorV3::Seal)?;
+        .map_err(DirectInlineRouteErrorV3::CapabilitySeal)?;
 
     let mut accounts = authenticated
         .physical
@@ -1549,7 +1593,7 @@ pub fn build_direct_inline_capability_seal_v3(
         return Err(DirectInlineRouteErrorV3::Seal);
     }
     let request = CapabilitySealRequestV1::new(action, descriptor_digest)
-        .map_err(|_| DirectInlineRouteErrorV3::Seal)?;
+        .map_err(DirectInlineRouteErrorV3::CapabilitySeal)?;
     let rent_minimum_lamports = rent.minimum_balance(CAPABILITY_SEAL_BYTES_V1);
     let initial_lamports = fixed.capability_seal.lamports;
     let vacant = fixed.capability_seal.owner == solana_sdk_ids::system_program::ID
@@ -1691,10 +1735,10 @@ pub fn verify_direct_inline_capability_seal_v3(
         return Err(DirectInlineRouteErrorV3::Seal);
     }
     let closure = SealedDescriptorClosureV1::decode(&observed.data)
-        .map_err(|_| DirectInlineRouteErrorV3::Seal)?;
+        .map_err(DirectInlineRouteErrorV3::CapabilitySeal)?;
     closure
         .require_key(plan.key)
-        .map_err(|_| DirectInlineRouteErrorV3::Seal)
+        .map_err(DirectInlineRouteErrorV3::CapabilitySeal)
 }
 
 fn seal_row(
@@ -1717,7 +1761,7 @@ fn seal_row(
             staging_cursor: record.staging.clone(),
         },
     )
-    .map_err(|_| DirectInlineRouteErrorV3::Seal)?;
+    .map_err(DirectInlineRouteErrorV3::ObservationError)?;
     SealedRecordRowV1::new(
         role,
         u32::try_from(record.raw.data.len()).map_err(|_| DirectInlineRouteErrorV3::Seal)?,
@@ -1726,7 +1770,7 @@ fn seal_row(
         record.raw.key.to_bytes(),
         record.staging.key.to_bytes(),
     )
-    .map_err(|_| DirectInlineRouteErrorV3::Seal)
+    .map_err(DirectInlineRouteErrorV3::CapabilitySeal)
 }
 
 fn authenticate_named_route_v3(
@@ -1900,10 +1944,10 @@ fn authenticate_direct_child_releases_v3(
     authentication: DirectInlineRouteAuthenticationV3,
 ) -> Result<(), DirectInlineRouteErrorV3> {
     let cache = ActivatedExecutionReleaseSetViewV1::decode(&route.fixed.activation_cache.data)
-        .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?;
+        .map_err(DirectInlineRouteErrorV3::Registry)?;
     if cache
         .execution_release_set_id()
-        .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?
+        .map_err(DirectInlineRouteErrorV3::Registry)?
         .to_bytes()
         != authentication.context.release_set
     {
@@ -1915,14 +1959,14 @@ fn authenticate_direct_child_releases_v3(
         &route.claims.claims_program,
         &route.claims.claims_programdata,
     )
-    .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?;
+    .map_err(DirectInlineRouteErrorV3::DirectInline)?;
     let custody = crate::direct_inline_v3::authenticate_direct_role_deployment_v4(
         cache,
         ExecutionRoleV1::Custody,
         &route.custody.custody_program,
         &route.custody.custody_programdata,
     )
-    .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?;
+    .map_err(DirectInlineRouteErrorV3::DirectInline)?;
     if claims.release().program().to_bytes() != authentication.programs.claims_program.to_bytes()
         || custody.release().program().to_bytes()
             != authentication.programs.custody_program.to_bytes()
@@ -1978,9 +2022,9 @@ fn authenticate_direct_maker_route_v3(
     rent: &solana_program::rent::Rent,
 ) -> Result<DirectMakerRouteFactsV3, DirectInlineRouteErrorV3> {
     let coordinates = DirectCoordinatesV1::new(market, generation)
-        .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?;
+        .map_err(DirectInlineRouteErrorV3::Successor)?;
     let seeds = MakerReplaySeedsV1::new(coordinates, maker.to_bytes())
-        .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?;
+        .map_err(DirectInlineRouteErrorV3::Successor)?;
     let (expected, bump) = Pubkey::find_program_address(&seeds.as_slices(), &trading);
     if account.key != expected || account.executable {
         return Err(DirectInlineRouteErrorV3::ChildFrame);
@@ -2000,8 +2044,8 @@ fn authenticate_direct_maker_route_v3(
     if account.owner != trading {
         return Err(DirectInlineRouteErrorV3::ChildFrame);
     }
-    let replay = MakerReplayRootV1::decode(&account.data)
-        .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?;
+    let replay =
+        MakerReplayRootV1::decode(&account.data).map_err(DirectInlineRouteErrorV3::Successor)?;
     if replay.market() != market
         || replay.generation() != generation
         || replay.maker() != maker.to_bytes()
@@ -2028,16 +2072,17 @@ fn authenticate_direct_ordinary_context_v3(
     chain: AuthenticatedDirectHotChainV4,
 ) -> Result<(), DirectInlineRouteErrorV3> {
     let fixed = &route.fixed;
-    let rent = decode_rent(&fixed.rent_sysvar).map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?;
+    let rent =
+        decode_rent(&fixed.rent_sysvar).map_err(DirectInlineRouteErrorV3::ObservationError)?;
     let config_digest = hash(&fixed.config.raw.data).to_bytes();
     let config = DirectExecutionConfigV1::decode_selected(
         config_digest,
         config_digest,
         &fixed.config.raw.data,
     )
-    .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?;
+    .map_err(DirectInlineRouteErrorV3::Successor)?;
     let core =
-        CoreState::decode(&fixed.market.data).map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?;
+        CoreState::decode(&fixed.market.data).map_err(DirectInlineRouteErrorV3::MarketCore)?;
     if core.identity.product_id.to_bytes() != chain.product_id {
         return Err(DirectInlineRouteErrorV3::ChildFrame);
     }
@@ -2050,9 +2095,9 @@ fn authenticate_direct_ordinary_context_v3(
             staging_cursor: route.custody.realm.staging.clone(),
         },
     )
-    .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?;
-    let realm = RealmV1::decode(&route.custody.realm.raw.data)
-        .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?;
+    .map_err(DirectInlineRouteErrorV3::ObservationError)?;
+    let realm =
+        RealmV1::decode(&route.custody.realm.raw.data).map_err(DirectInlineRouteErrorV3::Realm)?;
     if realm_digest != core.identity.realm_id.to_bytes()
         || realm.collateral_mint() != &route.custody.mint.key.to_bytes()
         || realm.token_program() != &route.custody.token_program.key.to_bytes()
@@ -2066,7 +2111,7 @@ fn authenticate_direct_ordinary_context_v3(
     // account is owned by the route's rent program.
     let maker_rent_beneficiary = Pubkey::new_from_array(
         LifecycleRentCreditV2::decode(&route.lifecycle_rent_credit.data)
-            .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?
+            .map_err(DirectInlineRouteErrorV3::LifecycleRent)?
             .refund_wallet()
             .to_bytes(),
     );
@@ -2090,7 +2135,7 @@ fn authenticate_direct_ordinary_context_v3(
     )?;
 
     let aggregate = LiabilityBasisMarketViewV2::decode(&route.claims.aggregate.data)
-        .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?;
+        .map_err(DirectInlineRouteErrorV3::LiabilityBasisState)?;
     let aggregate_key = Pubkey::find_program_address(
         &[LIABILITY_BASIS_MARKET_SEED_V2, fixed.market.key.as_ref()],
         &route.claims.claims_program.key,
@@ -2124,7 +2169,7 @@ fn authenticate_direct_ordinary_context_v3(
     )?;
 
     let replay = CustodyReplayV1::decode(&route.custody.replay.data)
-        .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?;
+        .map_err(DirectInlineRouteErrorV3::Custody)?;
     let replay_seeds = CustodyReplaySeedsV1::new(
         fixed.market.key.to_bytes(),
         chain.release_set,
@@ -2157,14 +2202,13 @@ fn authenticate_direct_ordinary_context_v3(
         return Err(DirectInlineRouteErrorV3::ChildFrame);
     }
 
-    let mint =
-        Mint::parse(&route.custody.mint.data).map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?;
+    let mint = Mint::parse(&route.custody.mint.data).map_err(DirectInlineRouteErrorV3::Token)?;
     let buyer_token = TokenAccount::parse(&route.custody.buyer_token.data)
-        .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?;
+        .map_err(DirectInlineRouteErrorV3::Token)?;
     let seller_token = TokenAccount::parse(&route.custody.seller_token.data)
-        .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?;
+        .map_err(DirectInlineRouteErrorV3::Token)?;
     let fee_token = TokenAccount::parse(&route.custody.fee_token.data)
-        .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?;
+        .map_err(DirectInlineRouteErrorV3::Token)?;
     if !mint.is_initialized
         || buyer_token.mint != route.custody.mint.key.to_bytes()
         || seller_token.mint != route.custody.mint.key.to_bytes()
@@ -2188,8 +2232,7 @@ fn authenticate_direct_ordinary_context_v3(
         .data
         .get(CAPABILITY_ROOT_HEADER_BYTES_V1..)
         .ok_or(DirectInlineRouteErrorV3::ChildFrame)?;
-    let root =
-        DirectRootStateV1::decode(root_tail).map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?;
+    let root = DirectRootStateV1::decode(root_tail).map_err(DirectInlineRouteErrorV3::Successor)?;
     let root_phase = match root.phase() {
         DirectRootPhaseV1::Open => 0,
         DirectRootPhaseV1::Retiring => 1,
@@ -2202,7 +2245,7 @@ fn authenticate_direct_ordinary_context_v3(
                 authentication.fill,
                 authentication.execution_price,
             )
-            .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?,
+            .map_err(DirectInlineRouteErrorV3::DirectInline)?,
         )
         .to_bytes(),
         config_content_id: config_digest,
@@ -2265,10 +2308,10 @@ fn authenticate_direct_position_v3(
     market: LiabilityBasisMarketViewV2,
 ) -> Result<LiabilityBasisPositionViewV2, DirectInlineRouteErrorV3> {
     let seeds = ProtocolPositionSeedsV2::new(aggregate.to_bytes(), owner.to_bytes())
-        .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?;
+        .map_err(DirectInlineRouteErrorV3::ProtocolPosition)?;
     let expected = Pubkey::find_program_address(&seeds.as_slices(), &claims_program).0;
     let position = LiabilityBasisPositionViewV2::decode(&account.data)
-        .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?;
+        .map_err(DirectInlineRouteErrorV3::LiabilityBasisState)?;
     if account.key != expected
         || account.owner != claims_program
         || account.executable
@@ -2349,7 +2392,7 @@ fn derive_child_authorities(
         context.parent_request_digest,
         claims_request_digest,
     )
-    .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?;
+    .map_err(DirectInlineRouteErrorV3::ReleaseSet)?;
     let (claims_authority, claims_authority_bump) =
         Pubkey::find_program_address(&claims_seeds.as_slices(), &trading);
     let mut custody_request_digests = [[0_u8; 32]; 4];
@@ -2364,7 +2407,7 @@ fn derive_child_authorities(
             context.buyer_maker_root,
             digest,
         )
-        .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?;
+        .map_err(DirectInlineRouteErrorV3::ReleaseSet)?;
         *custody_request_digests
             .get_mut(index)
             .ok_or(DirectInlineRouteErrorV3::ChildFrame)? = digest;
@@ -2414,7 +2457,7 @@ pub fn assemble_direct_inline_ordinary_route_v3(
     let observation = route.fixed.market.observation;
     let (fixed_accounts, fixed_classes) = fixed_accounts(&route.fixed, observation)?;
     let profile = AccountProfileV2::decode(&route.fixed.account_profile.raw.data)
-        .map_err(|_| DirectInlineRouteErrorV3::Profile)?;
+        .map_err(DirectInlineRouteErrorV3::AccountProfile)?;
     let logical = logical_accounts(&route, observation)?;
     let (runtime_accounts, runtime_classes) = pack_runtime(profile, outcome_count, &logical)?;
     if runtime_accounts.first() != fixed_accounts.get(HOT_ROOT_ACCOUNT_V3)
@@ -3325,7 +3368,7 @@ fn authenticate_report_route(
         &report.hot_instruction_data,
         &report.instructions,
     )
-    .map_err(|_| DirectInlineRoutedTransactionErrorV3::Instruction)?;
+    .map_err(DirectInlineRoutedTransactionErrorV3::DirectInlineTransaction)?;
     let [_compute, _heap, _native, trading] = &report.instructions;
     if trading.data != report.hot_instruction_data {
         return Err(DirectInlineRoutedTransactionErrorV3::Instruction);
@@ -3647,7 +3690,7 @@ fn logical_accounts(
     for local in 0..SPARSE_NATIVE_TRANSFER_ACCOUNT_COUNT_V1 {
         let role = claims
             .account(local)
-            .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?
+            .map_err(DirectInlineRouteErrorV3::FrameSpec)?
             .role();
         let (account, class) = claims_account(route, role)?;
         put(
@@ -3670,7 +3713,7 @@ fn logical_accounts(
         for local in 0..TRANSFER_ACCOUNT_COUNT_V1 {
             let role = custody
                 .account(local)
-                .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?
+                .map_err(DirectInlineRouteErrorV3::CustodyFrameSpec)?
                 .role();
             let (account, class) = custody_account(route, route_index, role)?;
             put(usize::from(start + local), account, class)?;
@@ -3859,18 +3902,18 @@ fn pack_runtime(
     if logical.len()
         != profile
             .logical_account_count(outcome_count)
-            .map_err(|_| DirectInlineRouteErrorV3::Profile)?
+            .map_err(DirectInlineRouteErrorV3::AccountProfile)?
     {
         return Err(DirectInlineRouteErrorV3::Profile);
     }
     let physical_count = profile
         .physical_account_count_with_dynamic_spans(outcome_count, &[])
-        .map_err(|_| DirectInlineRouteErrorV3::Profile)?;
+        .map_err(DirectInlineRouteErrorV3::AccountProfile)?;
     let mut physical: Vec<Option<ClassifiedAccountV3>> = vec![None; physical_count];
     for (logical_coordinate, account) in logical.iter().enumerate() {
         let ordinal = profile
             .physical_account_ordinal_with_dynamic_spans(outcome_count, &[], logical_coordinate)
-            .map_err(|_| DirectInlineRouteErrorV3::Profile)?;
+            .map_err(DirectInlineRouteErrorV3::AccountProfile)?;
         let slot = physical
             .get_mut(ordinal)
             .ok_or(DirectInlineRouteErrorV3::Profile)?;
@@ -3889,7 +3932,7 @@ fn pack_runtime(
             let account = classified.account;
             let geometry = profile
                 .physical_account_geometry_with_dynamic_spans(outcome_count, &[], ordinal)
-                .map_err(|_| DirectInlineRouteErrorV3::Profile)?;
+                .map_err(DirectInlineRouteErrorV3::AccountProfile)?;
             let privileges = geometry.privileges();
             let data_matches = match geometry.data() {
                 PhysicalAccountDataGeometryV2::Exact { bytes } => account.data.len() == bytes,
@@ -6131,13 +6174,21 @@ mod tests {
         route.fixed.descriptor.raw.key = key(223);
         assert_eq!(
             build_direct_inline_capability_seal_v3(route, 3, authentication),
-            Err(DirectInlineRouteErrorV3::Seal)
+            Err(DirectInlineRouteErrorV3::DirectInline(
+                crate::direct_inline_v3::Error::Observation(
+                    crate::observation::ObservationError::AddressMismatch
+                )
+            ))
         );
         let (mut route, authentication, _) = seal_fixture();
         route.fixed.lifecycle.staging.data.push(1);
         assert_eq!(
             build_direct_inline_capability_seal_v3(route, 3, authentication),
-            Err(DirectInlineRouteErrorV3::Seal)
+            Err(DirectInlineRouteErrorV3::DirectInline(
+                crate::direct_inline_v3::Error::Observation(
+                    crate::observation::ObservationError::AddressMismatch
+                )
+            ))
         );
         let (route, mut authentication, _) = seal_fixture();
         authentication.programs.checked_execution_release_set[0] ^= 1;
@@ -6618,8 +6669,22 @@ mod tests {
             // snapshot renders for a MISSING account: AccountProfile geometry.
             (truncated_root, DirectInlineRouteErrorV3::Profile),
             // Artifact bytes the sealed descriptor closure does not cover.
-            (grown_strategy, DirectInlineRouteErrorV3::Seal),
-            (grown_descriptor, DirectInlineRouteErrorV3::Seal),
+            (
+                grown_strategy,
+                DirectInlineRouteErrorV3::DirectInline(
+                    crate::direct_inline_v3::Error::Observation(
+                        crate::observation::ObservationError::AddressMismatch,
+                    ),
+                ),
+            ),
+            (
+                grown_descriptor,
+                DirectInlineRouteErrorV3::DirectInline(
+                    crate::direct_inline_v3::Error::Observation(
+                        crate::observation::ObservationError::AddressMismatch,
+                    ),
+                ),
+            ),
             // A maker replay of the wrong width.
             (grown_replay, DirectInlineRouteErrorV3::ChildFrame),
         ] {

@@ -118,7 +118,7 @@ pub fn authenticate_fractional_token_behavior_v2(
         market_realm,
         terms.release_set(),
     )
-    .map_err(|_| Error::Token)?;
+    .map_err(Error::TokenSvm)?;
     if selection.token_program() != terms.token_program() {
         return Err(Error::Token);
     }
@@ -320,7 +320,9 @@ pub fn plan_fractional_exposure_token_effect_v2(
     behavior: CheckedFractionalTokenBehaviorV2,
     observed: FractionalExposureTokenObservationV2<'_>,
 ) -> Result<FractionalExposureTokenPlanV2> {
-    let request = request.bind_terms(terms).map_err(|_| Error::Token)?;
+    let request = request
+        .bind_terms(terms)
+        .map_err(Error::FractionalExposureRequest)?;
     if behavior.content_digest() != terms.token_behavior()
         || behavior.selection().token_program() != terms.token_program()
     {
@@ -357,7 +359,7 @@ pub fn plan_fractional_exposure_token_effect_v2(
     let mint = observed.mint.ok_or(Error::Token)?;
     let expected_mint = terms
         .shard_mint(input.representation_coordinate)
-        .map_err(|_| Error::Token)?;
+        .map_err(Error::FractionalClaim)?;
     if mint.key.to_bytes() != expected_mint
         || mint.program_owner.to_bytes() != terms.token_program()
         || observed.root_controller == Pubkey::default()
@@ -372,7 +374,7 @@ pub fn plan_fractional_exposure_token_effect_v2(
         observed.root_controller.to_bytes(),
         observed.pre_supply,
     )
-    .map_err(|_| Error::Token)?;
+    .map_err(Error::TokenSvm)?;
     let decimals = mint_facts.display_decimals();
     let (division, consumed_shards, change_shards) = match action {
         FractionalExposureActionV2::Wrap => (
@@ -389,7 +391,7 @@ pub fn plan_fractional_exposure_token_effect_v2(
         | FractionalExposureActionV2::TerminalZeroBurn => {
             let division =
                 divide_exposure_shards_v2(terms, input.representation_coordinate, input.quantity)
-                    .map_err(|_| Error::Token)?;
+                    .map_err(Error::FractionalClaim)?;
             (
                 Some(division),
                 division.consumed.shard_atoms,
@@ -545,7 +547,9 @@ pub fn plan_fractional_exposure_retirement_v2(
     context: FractionalExposureRetirementContextV2,
     mints: &[FractionalExposureMintSnapshotV2<'_>],
 ) -> Result<FractionalExposureRetirementPlanV2> {
-    let request = request.bind_terms(terms).map_err(|_| Error::Token)?;
+    let request = request
+        .bind_terms(terms)
+        .map_err(Error::FractionalExposureRequest)?;
     if request.action() != FractionalExposureActionV2::ZeroSupplyRetire
         || behavior.content_digest() != terms.token_behavior()
         || behavior.selection().token_program() != terms.token_program()
@@ -561,7 +565,9 @@ pub fn plan_fractional_exposure_retirement_v2(
     let mut instructions = Vec::with_capacity(mints.len());
     for (index, observed) in mints.iter().enumerate() {
         let coordinate = u32::try_from(index).map_err(|_| Error::Token)?;
-        let expected_mint = terms.shard_mint(coordinate).map_err(|_| Error::Token)?;
+        let expected_mint = terms
+            .shard_mint(coordinate)
+            .map_err(Error::FractionalClaim)?;
         if observed.representation_coordinate != coordinate
             || observed.mint.key.to_bytes() != expected_mint
             || observed.mint.program_owner != token_program
@@ -575,7 +581,7 @@ pub fn plan_fractional_exposure_retirement_v2(
             context.root_controller.to_bytes(),
             0,
         )
-        .map_err(|_| Error::Token)?;
+        .map_err(Error::TokenSvm)?;
         instructions.push(
             token_instruction::close_account(
                 &token_program,
@@ -609,19 +615,20 @@ pub fn plan_fractional_exposure_rent_close_v2(
     if observed.credit_key != retirement.rent_credit || retirement.instructions.is_empty() {
         return Err(Error::Rent);
     }
-    let credit = LifecycleRentCreditV2::decode(observed.credit_bytes).map_err(|_| Error::Rent)?;
+    let credit =
+        LifecycleRentCreditV2::decode(observed.credit_bytes).map_err(Error::LifecycleRent)?;
     if credit.market().to_bytes() != retirement.market
         || credit.release_set().to_bytes() != retirement.release_set
     {
         return Err(Error::Rent);
     }
     let core_receipt =
-        RetirementReceiptV1::decode(observed.core_receipt_bytes).map_err(|_| Error::Rent)?;
+        RetirementReceiptV1::decode(observed.core_receipt_bytes).map_err(Error::Retirement)?;
     let request = CloseLifecycleRentCreditV2::new(core_receipt);
     let credit_id =
-        LifecycleAccountIdV2::new(observed.credit_key.to_bytes()).map_err(|_| Error::Rent)?;
+        LifecycleAccountIdV2::new(observed.credit_key.to_bytes()).map_err(Error::LifecycleRent)?;
     let core_id = LifecycleAccountIdV2::new(retirement.current_core_program.to_bytes())
-        .map_err(|_| Error::Rent)?;
+        .map_err(Error::LifecycleRent)?;
     let plan = LifecycleClosePlanV2::new(
         credit,
         credit_id,
@@ -631,8 +638,10 @@ pub fn plan_fractional_exposure_rent_close_v2(
         observed.wallet_lamports,
         request,
     )
-    .map_err(|_| Error::Rent)?;
-    let receipt = plan.receipt(credit, credit_id).map_err(|_| Error::Rent)?;
+    .map_err(Error::LifecycleRent)?;
+    let receipt = plan
+        .receipt(credit, credit_id)
+        .map_err(Error::LifecycleRent)?;
     Ok(FractionalExposureRentClosePlanV2 {
         request,
         plan,
@@ -762,7 +771,9 @@ pub fn plan_fractional_exposure_terminal_candidate_v2(
     request: FractionalExposureRequestV2,
     terminal: FractionalExposureTerminalInputV2<'_>,
 ) -> Result<FractionalExposureTerminalCandidateV2> {
-    let request = request.bind_terms(terms).map_err(|_| Error::Claims)?;
+    let request = request
+        .bind_terms(terms)
+        .map_err(Error::FractionalExposureRequest)?;
     if !matches!(
         request.action(),
         FractionalExposureActionV2::TerminalRedeem | FractionalExposureActionV2::TerminalZeroBurn
@@ -776,8 +787,8 @@ pub fn plan_fractional_exposure_terminal_candidate_v2(
         terminal.claims.composition_exposure_bytes,
         terminal.claims.composition_exposure_admission,
     )
-    .map_err(|_| Error::Claims)?;
-    check_fractional_exposure_bundle_v2(terms, exposure).map_err(|_| Error::Claims)?;
+    .map_err(Error::RepresentationComposition)?;
+    check_fractional_exposure_bundle_v2(terms, exposure).map_err(Error::FractionalClaim)?;
     if terminal.claims.product_record_digest != input.product_record
         || terminal.fractional_root == [0; 32]
         || terminal.fractional_root == input.owner
@@ -798,13 +809,15 @@ pub fn plan_fractional_exposure_terminal_candidate_v2(
     }
     let division =
         divide_exposure_shards_v2(terms, input.representation_coordinate, input.quantity)
-            .map_err(|_| Error::Claims)?;
-    let request_bytes = request.to_bytes().map_err(|_| Error::Claims)?;
+            .map_err(Error::FractionalClaim)?;
+    let request_bytes = request
+        .to_bytes()
+        .map_err(Error::FractionalExposureRequest)?;
     let fractional_request_digest: [u8; 32] = Sha256::digest(request_bytes).into();
     let claims_program = Pubkey::new_from_array(terminal.claims_program);
     let position_seeds =
         ProtocolPositionSeedsV2::new(terminal.claims.market_account, terminal.fractional_root)
-            .map_err(|_| Error::Claims)?;
+            .map_err(Error::ProtocolPosition)?;
     let position = Pubkey::find_program_address(&position_seeds.as_slices(), &claims_program)
         .0
         .to_bytes();
@@ -836,7 +849,7 @@ pub fn plan_fractional_exposure_terminal_candidate_v2(
         claim_index: input.representation_coordinate,
         transfer_index: terminal.transfer_index,
     })
-    .map_err(|_| Error::Claims)?;
+    .map_err(Error::TerminalSettlement)?;
     let settlement_request_digest: [u8; 32] = Sha256::digest(settlement_request.to_bytes()).into();
     let claims_width = usize::try_from(terms.representation_width()).map_err(|_| Error::Claims)?;
     let product_width = usize::try_from(terms.product_width()).map_err(|_| Error::Claims)?;
@@ -844,13 +857,13 @@ pub fn plan_fractional_exposure_terminal_candidate_v2(
         dclutch_claims::signed_delta_v3::DeltaDirectionV3::Neutral,
         0,
     )
-    .map_err(|_| Error::Claims)?;
+    .map_err(Error::SignedDelta)?;
     let mut product_payout_scratch = vec![0_u64; product_width];
     let mut translation_scratch = vec![0_u64; claims_width];
     let mut claims_payout_scratch = vec![0_u64; claims_width];
     let mut aggregate_delta_scratch = vec![neutral; claims_width];
     let mut packet =
-        vec![0_u8; plan_bytes(terms.representation_width(), 1, 1).map_err(|_| Error::Claims)?];
+        vec![0_u8; plan_bytes(terms.representation_width(), 1, 1).map_err(Error::SignedDelta)?];
     let mut claims = terminal.claims;
     claims.request_id = settlement_request_digest;
     claims.claim_index = input.representation_coordinate;
@@ -863,14 +876,14 @@ pub fn plan_fractional_exposure_terminal_candidate_v2(
         &mut aggregate_delta_scratch,
         &mut packet,
     )
-    .map_err(|_| Error::Claims)?;
+    .map_err(Error::ClaimsProductBasisTerminalSvm)?;
     if (request.action() == FractionalExposureActionV2::TerminalRedeem && collateral_atoms == 0)
         || (request.action() == FractionalExposureActionV2::TerminalZeroBurn
             && collateral_atoms != 0)
     {
         return Err(Error::Claims);
     }
-    let signed_plan = SignedDeltaPlanV3::decode(&packet).map_err(|_| Error::Claims)?;
+    let signed_plan = SignedDeltaPlanV3::decode(&packet).map_err(Error::SignedDelta)?;
     if signed_plan.request_id() != settlement_request_digest {
         return Err(Error::Claims);
     }
@@ -945,7 +958,7 @@ pub fn validate_fractional_exposure_terminal_postcondition_v2(
     };
     TerminalSettlementReceiptV3::decode(receipt_bytes)
         .and_then(|receipt| receipt.verify_for(request, evidence))
-        .map_err(|_| Error::Claims)
+        .map_err(Error::TerminalSettlement)
 }
 
 fn digestv(parts: &[&[u8]]) -> [u8; 32] {
@@ -1126,7 +1139,7 @@ mod terminal_postcondition_tests {
                 &receipt,
                 changed_post,
             ),
-            Err(Error::Claims)
+            Err(Error::TerminalSettlement(dclutch_claims::terminal_settlement_v3::TerminalSettlementErrorV3::ReceiptMismatch))
         );
 
         let mut changed_receipt = receipt;
@@ -1138,7 +1151,9 @@ mod terminal_postcondition_tests {
                 &changed_receipt,
                 observed,
             ),
-            Err(Error::Claims)
+            Err(Error::TerminalSettlement(
+                dclutch_claims::terminal_settlement_v3::TerminalSettlementErrorV3::ReceiptMismatch
+            ))
         );
 
         let mut changed_token = token();
@@ -1176,7 +1191,7 @@ fn checked_holder_v2<'a>(
         expected_owner,
         expected_amount,
     )
-    .map_err(|_| Error::Token)?;
+    .map_err(Error::TokenSvm)?;
     Ok(account)
 }
 
@@ -1188,7 +1203,7 @@ fn checked_holder_any_owner_v2<'a>(
     expected_amount: u64,
 ) -> Result<FractionalTokenAccountSnapshotV1<'a>> {
     let account = account.ok_or(Error::Token)?;
-    let parsed = TokenAccount::parse(account.data).map_err(|_| Error::Token)?;
+    let parsed = TokenAccount::parse(account.data).map_err(Error::TokenSvm)?;
     if parsed.owner == [0; 32] {
         return Err(Error::Token);
     }

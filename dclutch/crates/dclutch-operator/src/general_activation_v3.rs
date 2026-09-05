@@ -145,6 +145,16 @@ pub enum GeneralActivationErrorV3 {
     Activation(dclutch_trading::general_config::RootError),
     /// Checked arithmetic or an encoding width overflowed.
     Arithmetic,
+    /// `dclutch_market::capability_manifest` refused; the cause is its own.
+    Capability(dclutch_market::capability_manifest::Error),
+    /// `dclutch_trading::general_config` refused; the cause is its own.
+    GeneralConfig(dclutch_trading::general_config::v3::GeneralConfigErrorV3),
+    /// `dclutch_registry::release_set` refused; the cause is its own.
+    ReleaseSet(dclutch_registry::release_set::Error),
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    CapabilityProgram(dclutch_market::capability_program::Error),
+    /// `dclutch_market` refused; the cause is its own.
+    MarketCore(dclutch_market::Error),
 }
 
 /// Plan one General V3 capability activation from one finalized snapshot.
@@ -158,13 +168,13 @@ pub fn plan_general_capability_activation_v3(
         return Err(GeneralActivationErrorV3::Manifest);
     }
     let manifest = CapabilityManifestV1::decode(&state.manifest_record.data)
-        .map_err(|_| GeneralActivationErrorV3::Manifest)?;
+        .map_err(GeneralActivationErrorV3::Capability)?;
 
     if state.config_record.data.len() != GENERAL_CONFIG_BYTES_V3 {
         return Err(GeneralActivationErrorV3::Config);
     }
     let config = GeneralConfigV3::decode(&state.config_record.data)
-        .map_err(|_| GeneralActivationErrorV3::Config)?;
+        .map_err(GeneralActivationErrorV3::GeneralConfig)?;
     let config_id = content(hash(&state.config_record.data).to_bytes())?;
 
     let (entry_index, entry) = select_general_entry(manifest, config_id)?;
@@ -180,7 +190,7 @@ pub fn plan_general_capability_activation_v3(
         entry.release_id(),
         config_id,
     )
-    .map_err(|_| GeneralActivationErrorV3::Entry)?;
+    .map_err(GeneralActivationErrorV3::ReleaseSet)?;
     let root_header = CapabilityRootHeaderV1::new(
         content(core.identity.selected_release_set.to_bytes())?,
         market_key,
@@ -193,7 +203,7 @@ pub fn plan_general_capability_activation_v3(
         // this planner computes.
         SelectedRecordBumpsV1::default(),
     )
-    .map_err(|_| GeneralActivationErrorV3::Root)?;
+    .map_err(GeneralActivationErrorV3::CapabilityProgram)?;
     let (root, root_bump) =
         Pubkey::find_program_address(&root_header.seeds().as_slices(), &state.trading_program);
     if root != state.capability_root.key {
@@ -303,7 +313,7 @@ fn select_general_entry(
     while index < manifest.entry_count() {
         let entry = manifest
             .entry(index)
-            .map_err(|_| GeneralActivationErrorV3::Entry)?;
+            .map_err(GeneralActivationErrorV3::Capability)?;
         if entry.kind_id() == kind && entry.config_id() == config_id {
             if selected.is_some() {
                 return Err(GeneralActivationErrorV3::Entry);
@@ -372,10 +382,10 @@ fn authenticate_market(
         return Err(GeneralActivationErrorV3::Market);
     }
     let core =
-        CoreState::decode(&state.market.data).map_err(|_| GeneralActivationErrorV3::Market)?;
+        CoreState::decode(&state.market.data).map_err(GeneralActivationErrorV3::MarketCore)?;
     let canonical = core
         .encode()
-        .map_err(|_| GeneralActivationErrorV3::Market)?;
+        .map_err(GeneralActivationErrorV3::MarketCore)?;
     let seeds = MarketCoreStateSeedsV2::new(core.identity);
     let expected = Pubkey::find_program_address(&seeds.as_slices(), &state.core_program).0;
     if canonical.as_slice() != state.market.data.as_slice()
@@ -404,7 +414,7 @@ fn authenticate_funding_ledgers(
             return Err(GeneralActivationErrorV3::Funding);
         }
         let ledger = FundingLedgerV2::decode(&input.account.data)
-            .map_err(|_| GeneralActivationErrorV3::Funding)?;
+            .map_err(GeneralActivationErrorV3::Capability)?;
         let selected_bit = 1_u16
             .checked_shl(u32::from(root_header.selection().entry_index()))
             .ok_or(GeneralActivationErrorV3::Arithmetic)?;
@@ -416,7 +426,7 @@ fn authenticate_funding_ledgers(
         }
         let authenticated = ledger
             .authenticate(manifest_id, manifest)
-            .map_err(|_| GeneralActivationErrorV3::Funding)?;
+            .map_err(GeneralActivationErrorV3::Capability)?;
         let derivation = CapabilityFundingLedgerDerivationV2::new(
             state.trading_program.to_bytes(),
             root_header.market(),
@@ -424,7 +434,7 @@ fn authenticate_funding_ledgers(
             manifest_id,
             ledger,
         )
-        .map_err(|_| GeneralActivationErrorV3::Funding)?;
+        .map_err(GeneralActivationErrorV3::Capability)?;
         let expected =
             Pubkey::find_program_address(&derivation.seed_components(), &state.trading_program).0;
         if expected != input.account.key {
@@ -432,14 +442,14 @@ fn authenticate_funding_ledgers(
         }
         authenticated
             .validate_native_custody(input.account.lamports, input.exact_rent_lamports, false)
-            .map_err(|_| GeneralActivationErrorV3::Funding)?;
+            .map_err(GeneralActivationErrorV3::Capability)?;
         let mut row_index = 0_u16;
         while row_index < ledger.slot_count() {
             let entry_index = manifest_entry_for_ledger_row_v2(ledger.selected_mask(), row_index)
-                .map_err(|_| GeneralActivationErrorV3::Funding)?;
+                .map_err(GeneralActivationErrorV3::Capability)?;
             if manifest
                 .entry(entry_index)
-                .map_err(|_| GeneralActivationErrorV3::Funding)?
+                .map_err(GeneralActivationErrorV3::Capability)?
                 .funding_quote()
                 .realm_collateral()
                 .is_some()
@@ -454,13 +464,13 @@ fn authenticate_funding_ledgers(
         bytes.push(input.account.data.clone());
     }
     validate_funding_ledger_masks_v2(manifest.entry_count(), required_mask, &masks)
-        .map_err(|_| GeneralActivationErrorV3::Funding)?;
+        .map_err(GeneralActivationErrorV3::Capability)?;
     let physical_count =
         u8::try_from(bytes.len()).map_err(|_| GeneralActivationErrorV3::Funding)?;
     let logical_count =
         u8::try_from(required_mask.count_ones()).map_err(|_| GeneralActivationErrorV3::Funding)?;
     let header = CapabilityFundingHeaderV2::new(physical_count, logical_count, required_mask)
-        .map_err(|_| GeneralActivationErrorV3::Funding)?;
+        .map_err(GeneralActivationErrorV3::MarketCore)?;
     Ok((header, bytes))
 }
 
@@ -482,12 +492,12 @@ fn dependency_closure_mask(
             if closure & entry_bit != 0 {
                 let entry = manifest
                     .entry(entry_index)
-                    .map_err(|_| GeneralActivationErrorV3::Entry)?;
+                    .map_err(GeneralActivationErrorV3::Capability)?;
                 let mut position = 0_usize;
                 while position < usize::from(entry.dependency_count()) {
                     let dependency = entry
                         .dependency(position)
-                        .map_err(|_| GeneralActivationErrorV3::Entry)?;
+                        .map_err(GeneralActivationErrorV3::Capability)?;
                     closure |= 1_u16
                         .checked_shl(u32::from(dependency))
                         .ok_or(GeneralActivationErrorV3::Arithmetic)?;
@@ -516,7 +526,7 @@ fn activate_funding_ledgers(
     let mut selected_debit = None;
     for bytes in &mut ledgers {
         let ledger =
-            FundingLedgerV2::decode(bytes).map_err(|_| GeneralActivationErrorV3::Funding)?;
+            FundingLedgerV2::decode(bytes).map_err(GeneralActivationErrorV3::Capability)?;
         let selected_bit = 1_u16
             .checked_shl(u32::from(selected_entry_index))
             .ok_or(GeneralActivationErrorV3::Arithmetic)?;
@@ -528,7 +538,7 @@ fn activate_funding_ledgers(
                 selected_entry_index,
                 current_slot,
             )
-            .map_err(|_| GeneralActivationErrorV3::Funding)?;
+            .map_err(GeneralActivationErrorV3::Capability)?;
             if selected_debit.is_some() {
                 return Err(GeneralActivationErrorV3::Funding);
             }
@@ -550,15 +560,15 @@ fn require_funding_ledger_states(
     for bytes in ledgers {
         let authenticated = FundingLedgerV2::decode(bytes)
             .and_then(|ledger| ledger.authenticate(manifest_id, manifest))
-            .map_err(|_| GeneralActivationErrorV3::Funding)?;
+            .map_err(GeneralActivationErrorV3::Capability)?;
         let ledger = authenticated.ledger();
         let mut row_index = 0_u16;
         while row_index < ledger.slot_count() {
             let entry_index = manifest_entry_for_ledger_row_v2(ledger.selected_mask(), row_index)
-                .map_err(|_| GeneralActivationErrorV3::Funding)?;
+                .map_err(GeneralActivationErrorV3::Capability)?;
             let slot = authenticated
                 .slot(entry_index)
-                .map_err(|_| GeneralActivationErrorV3::Funding)?;
+                .map_err(GeneralActivationErrorV3::Capability)?;
             let is_selected = entry_index == selected_entry_index;
             if is_selected {
                 if observed_selected

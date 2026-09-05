@@ -39,8 +39,8 @@ pub enum ObservationError {
     /// end. Its rent-exemption at TODAY's rate is deliberately not asserted:
     /// see `dclutch_market::capability_manifest::funding::funded_rent_persists_v1`.
     AccountDrained,
-    /// A content digest or cross-record semantic link differed.
-    ContentLinkMismatch,
+    /// `dclutch_registry::record` refused; the cause is its own.
+    Record(dclutch_registry::record::Error),
 }
 
 /// Chain-observed finalization proof paired with one immutable raw record.
@@ -72,10 +72,9 @@ pub fn authenticate_finalized_record(
         return Err(ObservationError::InvalidOwner);
     }
     require_funded_rent_persists(account)?;
-    let schema = SchemaReleaseId::new(proof.schema_release_id)
-        .map_err(|_| ObservationError::AddressMismatch)?;
-    let digest = ContentDigest::new(hash(&account.data).to_bytes())
-        .map_err(|_| ObservationError::ContentLinkMismatch)?;
+    let schema = SchemaReleaseId::new(proof.schema_release_id).map_err(ObservationError::Record)?;
+    let digest =
+        ContentDigest::new(hash(&account.data).to_bytes()).map_err(ObservationError::Record)?;
     let schema_bytes = schema.to_bytes();
     let digest_bytes = digest.to_bytes();
     let (expected_raw, _) = Pubkey::find_program_address(

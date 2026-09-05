@@ -36,7 +36,7 @@ impl<'a> StructuredHotProfileV2<'a> {
         if self.ordered_keys.get(usize::from(coordinate)) != Some(&expected_key) {
             return Err(Error::AccountFrame);
         }
-        StructuredHotAccountRefV2::new(coordinate, expected_key).map_err(|_| Error::AccountFrame)
+        StructuredHotAccountRefV2::new(coordinate, expected_key).map_err(Error::StructuredHot)
     }
 
     /// Exact number of expanded profile coordinates.
@@ -64,14 +64,14 @@ pub fn lower_structured_hot_effects_v2(
     frame: StructuredFrameSpecV2,
     output: &mut [StructuredHotTokenEffectV2],
 ) -> Result<()> {
-    let effects = frame.effect_count().map_err(|_| Error::AccountFrame)?;
+    let effects = frame.effect_count().map_err(Error::StructuredFrame)?;
     if effects != plan.effects.len() || output.len() != plan.effects.len() {
         return Err(Error::AccountFrame);
     }
     let action = plan.request.action();
     for (index, effect) in plan.effects.iter().enumerate() {
         let selected = structured_frame_effect_slots_v2(frame, action, index)
-            .map_err(|_| Error::AccountFrame)?;
+            .map_err(Error::StructuredFrame)?;
         *output.get_mut(index).ok_or(Error::AccountFrame)? =
             lower_one_effect(profile, *effect, selected)?;
     }

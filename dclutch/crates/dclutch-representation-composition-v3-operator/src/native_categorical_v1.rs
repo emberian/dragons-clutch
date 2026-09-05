@@ -256,8 +256,8 @@ fn translation_id(domain: &[u8], graph_id: [u8; 32], root_id: [u8; 32]) -> [u8; 
 pub fn compile_native_categorical_composition_v1(
     input: NativeCategoricalCompositionInputV1<'_>,
 ) -> Result<NativeCategoricalCompositionRecordsV1> {
-    let product_basis =
-        ProductBasisV3::decode(input.product_basis_bytes).map_err(|_| Error::ProductBasis)?;
+    let product_basis = ProductBasisV3::decode(input.product_basis_bytes)
+        .map_err(Error::ProductPayoffRuntimeCodec)?;
     // A categorical basis carries exactly two admissible payout scales -- the
     // legacy `1` and the refunding ordinary-region count -- and the record's
     // own decoder is the authority on which it is. Restating "scale must be 1"
@@ -293,11 +293,11 @@ pub fn compile_native_basis_composition_v1(
         return Err(Error::CrossRecord);
     }
 
-    let product =
-        ProductRecordV2::decode(input.product_record_bytes).map_err(|_| Error::Product)?;
+    let product = ProductRecordV2::decode(input.product_record_bytes)
+        .map_err(Error::ProductRuntimeAdmission)?;
     let result_domain =
-        ResultDomainV2::decode(input.result_domain_bytes).map_err(|_| Error::Product)?;
-    let portfolio = PortfolioV2::decode(input.portfolio_bytes).map_err(|_| Error::Product)?;
+        ResultDomainV2::decode(input.result_domain_bytes).map_err(Error::ProductRuntime)?;
+    let portfolio = PortfolioV2::decode(input.portfolio_bytes).map_err(Error::ProductRuntime)?;
     let result_domain_digest = hash(input.result_domain_bytes).to_bytes();
     let portfolio_digest = hash(input.portfolio_bytes).to_bytes();
     if product.result_domain_digest().to_bytes() != result_domain_digest
@@ -313,16 +313,16 @@ pub fn compile_native_basis_composition_v1(
         result_domain,
         portfolio,
     )
-    .map_err(|_| Error::Product)?;
+    .map_err(Error::ProductRuntime)?;
     if joined.product_id != product.product_id() {
         return Err(Error::Product);
     }
 
-    let product_basis =
-        ProductBasisV3::decode(input.product_basis_bytes).map_err(|_| Error::ProductBasis)?;
+    let product_basis = ProductBasisV3::decode(input.product_basis_bytes)
+        .map_err(Error::ProductPayoffRuntimeCodec)?;
     product_basis
         .admit_selection_v3()
-        .map_err(|_| Error::ProductBasis)?;
+        .map_err(Error::ProductPayoffRuntimeCodec)?;
     let price_gate_digest = product_basis.price_gate_certificate_digest_v3();
     match (price_gate_digest == [0; 32], input.price_gate_bytes) {
         (true, None) => {}
@@ -344,12 +344,12 @@ pub fn compile_native_basis_composition_v1(
                 product_basis.basis_width(),
                 price_gate,
             )
-            .map_err(|_| Error::ProductBasis)?;
+            .map_err(Error::ProductPayoffRuntimeCodec)?;
         }
     }
     let product_basis_digest = hash(input.product_basis_bytes).to_bytes();
-    let semantic =
-        semantic_basis_preimage_v3(input.product_basis_bytes).map_err(|_| Error::ProductBasis)?;
+    let semantic = semantic_basis_preimage_v3(input.product_basis_bytes)
+        .map_err(Error::ProductPayoffRuntimeCodec)?;
     let representation_basis = hashv(&[
         SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
         semantic.prefix(),
@@ -469,7 +469,7 @@ pub fn compile_native_basis_composition_v1(
     }
 
     let graph_bytes = composition_graph_bytes_v3(node_count, width, term_count)
-        .map_err(|_| Error::Composition)?;
+        .map_err(Error::RepresentationComposition)?;
     let mut graph_scratch = vec![0; graph_bytes];
     let mut graph = vec![0; graph_bytes];
     encode_composition_graph_v3_atomic(
@@ -484,11 +484,11 @@ pub fn compile_native_basis_composition_v1(
         &mut graph_scratch,
         &mut graph,
     )
-    .map_err(|_| Error::Composition)?;
+    .map_err(Error::RepresentationComposition)?;
 
     let root_terms = terms.get(root_term_start..).ok_or(Error::Arithmetic)?;
     let translation_bytes =
-        composition_translation_bytes_v3(width).map_err(|_| Error::Composition)?;
+        composition_translation_bytes_v3(width).map_err(Error::RepresentationComposition)?;
     let mut translation_scratch = vec![0; translation_bytes];
     let mut translation = vec![0; translation_bytes];
     encode_canonical_translation_v3_atomic(
@@ -502,7 +502,7 @@ pub fn compile_native_basis_composition_v1(
         &mut translation_scratch,
         &mut translation,
     )
-    .map_err(|_| Error::Composition)?;
+    .map_err(Error::RepresentationComposition)?;
 
     let mut descriptor_scratch = [0; COMPOSITION_DESCRIPTOR_BYTES_V3];
     let mut descriptor = [0; COMPOSITION_DESCRIPTOR_BYTES_V3];
@@ -526,7 +526,7 @@ pub fn compile_native_basis_composition_v1(
         &mut descriptor_scratch,
         &mut descriptor,
     )
-    .map_err(|_| Error::Composition)?;
+    .map_err(Error::RepresentationComposition)?;
 
     let row_terms = (0..width)
         .map(|coordinate| {
@@ -547,7 +547,7 @@ pub fn compile_native_basis_composition_v1(
         })
         .collect::<Vec<_>>();
     let exposure_bytes =
-        composition_exposure_bytes_v3(width, width).map_err(|_| Error::Composition)?;
+        composition_exposure_bytes_v3(width, width).map_err(Error::RepresentationComposition)?;
     let mut exposure_scratch = vec![0; exposure_bytes];
     let mut exposure = vec![0; exposure_bytes];
     encode_composition_exposure_v3_atomic(
@@ -564,7 +564,7 @@ pub fn compile_native_basis_composition_v1(
         &mut exposure_scratch,
         &mut exposure,
     )
-    .map_err(|_| Error::Composition)?;
+    .map_err(Error::RepresentationComposition)?;
 
     validate_publication_candidates_v3(
         input.product_basis_bytes,
@@ -1045,7 +1045,9 @@ mod tests {
         substituted.result_domain_bytes = &bad_domain;
         assert_eq!(
             compile_native_categorical_composition_v1(substituted).err(),
-            Some(Error::Product)
+            Some(Error::ProductRuntime(
+                dclutch_product::Error::InvalidMagic
+            ))
         );
 
         let mut scaled_basis = fixture.basis.clone();
@@ -1054,12 +1056,16 @@ mod tests {
         scaled.product_basis_bytes = &scaled_basis;
         assert_eq!(
             compile_native_categorical_composition_v1(scaled).err(),
-            Some(Error::ProductBasis)
+            Some(Error::ProductPayoffRuntimeCodec(
+                dclutch_product::payoff::runtime_v3::Error::NonCanonicalReserved
+            ))
         );
         let too_wide = Fixture::new(32, 1);
         assert_eq!(
             compile_native_categorical_composition_v1(too_wide.input()).err(),
-            Some(Error::Composition)
+            Some(Error::RepresentationComposition(
+                dclutch_claims::composition::Error::CapacityExceeded
+            ))
         );
 
         let mut graph = output.graph().to_vec();
@@ -1080,7 +1086,9 @@ mod tests {
                 output.exposure(),
             )
             .err(),
-            Some(Error::Composition)
+            Some(Error::RepresentationComposition(
+                dclutch_claims::composition::Error::NonCanonical
+            ))
         );
     }
 }

@@ -157,8 +157,8 @@ pub fn plan_structured_action_v2(
     observed: StructuredActionObservationV2<'_>,
 ) -> Result<StructuredActionPlanV2> {
     validate_context(terms, shard_terms, context, observed)?;
-    let projection_bytes = structured_projection_bytes_v2(terms.representation_width())
-        .map_err(|_| Error::ChainObservation)?;
+    let projection_bytes =
+        structured_projection_bytes_v2(terms.representation_width()).map_err(Error::Structured)?;
     let mut scratch = vec![0_u8; projection_bytes];
     let mut encoded = vec![0_u8; projection_bytes];
     encode_structured_projection_v2(
@@ -170,9 +170,8 @@ pub fn plan_structured_action_v2(
         &mut scratch,
         &mut encoded,
     )
-    .map_err(|_| Error::ChainObservation)?;
-    let projection =
-        StructuredProjectionV2::decode(&encoded, terms).map_err(|_| Error::ChainObservation)?;
+    .map_err(Error::Structured)?;
+    let projection = StructuredProjectionV2::decode(&encoded, terms).map_err(Error::Structured)?;
     let request = StructuredRequestV2::new(
         intent.action,
         StructuredRequestInputV2 {
@@ -192,9 +191,9 @@ pub fn plan_structured_action_v2(
             quantity: intent.receipt_atoms,
         },
     )
-    .map_err(|_| Error::Request)?
+    .map_err(Error::StructuredRequest)?
     .bind_terms(terms)
-    .map_err(|_| Error::Request)?;
+    .map_err(Error::StructuredRequest)?;
     let width = usize::try_from(terms.representation_width()).map_err(|_| Error::Terms)?;
     let mut movements = vec![ShardMovementV2::default(); width];
     let mut settlement = Vec::new();
@@ -208,7 +207,7 @@ pub fn plan_structured_action_v2(
                 observed.actor_receipts,
                 &mut movements,
             )
-            .map_err(|_| Error::Kernel)?;
+            .map_err(Error::Structured)?;
             let effects = build_supply_effects(
                 terms,
                 &movements,
@@ -237,7 +236,7 @@ pub fn plan_structured_action_v2(
                 observed.actor_receipts,
                 &mut movements,
             )
-            .map_err(|_| Error::Kernel)?;
+            .map_err(Error::Structured)?;
             let effects = build_supply_effects(
                 terms,
                 &movements,
@@ -268,7 +267,7 @@ pub fn plan_structured_action_v2(
                 &mut movements,
                 &mut settlement,
             )
-            .map_err(|_| Error::Kernel)?;
+            .map_err(Error::Structured)?;
             let effects = build_supply_effects(
                 terms,
                 &movements,
@@ -289,7 +288,7 @@ pub fn plan_structured_action_v2(
             })
         }
         StructuredActionV2::ZeroSupplyRetire => {
-            plan_structured_retire_v2(terms, shard_terms, projection).map_err(|_| Error::Kernel)?;
+            plan_structured_retire_v2(terms, shard_terms, projection).map_err(Error::Structured)?;
             let effects = build_retirement_effects(terms, shard_terms, observed)?;
             Ok(StructuredActionPlanV2 {
                 request,
@@ -365,7 +364,7 @@ fn build_supply_effects(
     let mut backed = 0_usize;
     let mut coordinate = 0_u32;
     while coordinate < terms.representation_width() {
-        if terms.coefficient(coordinate).map_err(|_| Error::Terms)? != 0 {
+        if terms.coefficient(coordinate).map_err(Error::Structured)? != 0 {
             let index = usize::try_from(coordinate).map_err(|_| Error::Terms)?;
             let movement = *movements.get(index).ok_or(Error::Kernel)?;
             if movement.representation_coordinate != coordinate {
@@ -428,7 +427,7 @@ fn build_retirement_effects(
     let mut backed = 0_usize;
     let mut coordinate = 0_u32;
     while coordinate < terms.representation_width() {
-        if terms.coefficient(coordinate).map_err(|_| Error::Terms)? != 0 {
+        if terms.coefficient(coordinate).map_err(Error::Structured)? != 0 {
             let custody = shard_account(observed.custody_shard_accounts, backed, coordinate)?;
             if custody.amount != 0 {
                 return Err(Error::Token);
@@ -439,7 +438,7 @@ fn build_retirement_effects(
                 token_program: observed.token_program,
                 mint: shard_terms
                     .shard_mint(coordinate)
-                    .map_err(|_| Error::Terms)?,
+                    .map_err(Error::FractionalClaim)?,
                 source: Some(custody.account),
                 destination: Some(observed.rent_credit),
                 authority: observed.root,
@@ -502,7 +501,7 @@ fn validate_context(
 ) -> Result<()> {
     terms
         .bind_shard_terms(shard_terms)
-        .map_err(|_| Error::Terms)?;
+        .map_err(Error::Structured)?;
     if context.market != terms.market()
         || context.product_record != terms.product_record()
         || context.result_domain != terms.result_domain()

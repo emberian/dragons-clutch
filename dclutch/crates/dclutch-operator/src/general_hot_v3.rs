@@ -507,6 +507,50 @@ pub enum GeneralHotOperatorErrorV3 {
     Routing(crate::versioned::Error),
     /// Checked arithmetic or encoding overflowed.
     Arithmetic,
+    /// `dclutch_trading::general` refused; the cause is its own.
+    GeneralArtifact(dclutch_trading::general::artifacts_v3::GeneralArtifactErrorV3),
+    /// `dclutch_trading::general_codec` refused; the cause is its own.
+    General(dclutch_trading::general_codec::Error),
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    HotExecution(dclutch_market::capability_program::hot_v3::HotExecutionErrorV3),
+    /// `dclutch_trading::general_config` refused; the cause is its own.
+    GeneralConfig(dclutch_trading::general_config::v3::GeneralConfigErrorV3),
+    /// `dclutch_trading::general` refused; the cause is its own.
+    GeneralCollection(dclutch_trading::general::collection_v1::GeneralCollectionErrorV1),
+    /// `dclutch_market::capability_program` refused; the cause is its own.
+    CapabilityProgram(dclutch_market::capability_program::Error),
+    /// `dclutch_trading::general_config` refused; the cause is its own.
+    Root(dclutch_trading::general_config::RootError),
+    /// `dclutch_trading::general` refused; the cause is its own.
+    GeneralCandidate(dclutch_trading::general::candidate_v1::GeneralCandidateErrorV1),
+    /// `dclutch_trading::general` refused; the cause is its own.
+    RuntimeWidth(dclutch_trading::general::runtime_width::RuntimeWidthErrorV2),
+    /// `dclutch_trading::general` refused; the cause is its own.
+    RuntimeVerify(dclutch_trading::general::runtime_verify::RuntimeVerifyErrorV2),
+    /// `dclutch_trading::general` refused; the cause is its own.
+    RuntimeManifest(dclutch_trading::general::runtime_manifest::RuntimeManifestErrorV2),
+    /// `dclutch_trading::general` refused; the cause is its own.
+    RuntimeSelection(dclutch_trading::general::runtime_selection::RuntimeSelectionErrorV2),
+    /// `dclutch_trading::general` refused; the cause is its own.
+    GeneralAdmittedAccelerator(dclutch_trading::general::admitted_accelerator_v3::GeneralAdmittedAcceleratorErrorV3),
+    /// `dclutch_trading::general` refused; the cause is its own.
+    RuntimeSettlement(dclutch_trading::general::runtime_settlement::RuntimeSettlementErrorV2),
+    /// `dclutch_trading::general` refused; the cause is its own.
+    GeneralLocalState(dclutch_trading::general::local_state_v3::GeneralLocalStateErrorV3),
+    /// `dclutch_trading::general` refused; the cause is its own.
+    GeneralStateArtifact(dclutch_trading::general::state_artifacts_v3::GeneralStateArtifactErrorV3),
+    /// `dclutch_vm::effect` refused; the cause is its own.
+    Effect(dclutch_vm::effect::v3::Error),
+    /// `dclutch_trading::general` refused; the cause is its own.
+    GeneralEffectArtifact(dclutch_trading::general::effect_artifacts_v3::GeneralEffectArtifactErrorV3),
+    /// `dclutch_resolution_core_v3_operator` refused; the cause is its own.
+    ProductGraphObservation(dclutch_resolution_core_v3_operator::product_graph_observation_v3::ProductGraphObservationErrorV3),
+    /// `dclutch_market::execution_strategy` refused; the cause is its own.
+    ExecutionStrategy(dclutch_market::execution_strategy::v2::Error),
+    /// `dclutch_vm::account_profile` refused; the cause is its own.
+    AccountProfile(dclutch_vm::account_profile::v2::Error),
+    /// `dclutch_vm::account_profile` refused; the cause is its own.
+    LifecycleProfile(dclutch_vm::account_profile::lifecycle_v3::Error),
 }
 
 /// Build one transaction-complete General successor instruction from chain state.
@@ -549,17 +593,17 @@ pub fn build_general_successor_instruction_v5(
             .get(HOT_FAMILY_REQUEST_OFFSET_V3..)
             .ok_or(GeneralHotOperatorErrorV3::Artifact)?,
     )
-    .map_err(|_| GeneralHotOperatorErrorV3::Artifact)?;
+    .map_err(GeneralHotOperatorErrorV3::GeneralArtifact)?;
     let request_bytes = request
         .to_bytes()
-        .map_err(|_| GeneralHotOperatorErrorV3::Artifact)?;
+        .map_err(GeneralHotOperatorErrorV3::GeneralArtifact)?;
     let bundle = authenticate_general_artifacts_v3(
         artifact_selection,
         artifact_bytes,
         &request_bytes,
         product.outcome_count,
     )
-    .map_err(|_| GeneralHotOperatorErrorV3::Artifact)?;
+    .map_err(GeneralHotOperatorErrorV3::GeneralArtifact)?;
     let admitted_invocation_count = selected_admitted_invocation_count_v3(bundle)?;
     let child_routes = project_child_routes_v5(bundle)?;
     Ok(GeneralSuccessorInstructionV5 {
@@ -608,9 +652,9 @@ pub fn build_general_hot_instruction_v3(
 ) -> Result<GeneralHotInstructionV3, GeneralHotOperatorErrorV3> {
     let request_bytes = request
         .to_bytes()
-        .map_err(|_| GeneralHotOperatorErrorV3::Artifact)?;
+        .map_err(GeneralHotOperatorErrorV3::General)?;
     let request = decode_general_request_v3(&request_bytes)
-        .map_err(|_| GeneralHotOperatorErrorV3::Artifact)?;
+        .map_err(GeneralHotOperatorErrorV3::GeneralArtifact)?;
     build_general_hot_instruction_decoded_v3(state, artifact_selection, artifact_bytes, request)
 }
 
@@ -641,7 +685,7 @@ pub fn build_general_hot_instruction_decoded_v3(
     };
     let provisional_request_bytes = canonical_request
         .to_bytes()
-        .map_err(|_| GeneralHotOperatorErrorV3::Artifact)?;
+        .map_err(GeneralHotOperatorErrorV3::GeneralArtifact)?;
     if provisional_request_bytes.len() != CONTROLLER_REQUEST_BYTES_V2 {
         return Err(GeneralHotOperatorErrorV3::Arithmetic);
     }
@@ -651,11 +695,11 @@ pub fn build_general_hot_instruction_decoded_v3(
         &provisional_request_bytes,
         product.outcome_count,
     )
-    .map_err(|_| GeneralHotOperatorErrorV3::Artifact)?;
+    .map_err(GeneralHotOperatorErrorV3::GeneralArtifact)?;
     if provisional_bundle
         .request
         .to_bytes()
-        .map_err(|_| GeneralHotOperatorErrorV3::Artifact)?
+        .map_err(GeneralHotOperatorErrorV3::GeneralArtifact)?
         != provisional_request_bytes
     {
         return Err(GeneralHotOperatorErrorV3::Artifact);
@@ -677,18 +721,18 @@ pub fn build_general_hot_instruction_decoded_v3(
         .unwrap_or_default();
     let request_bytes = canonical_request
         .to_bytes()
-        .map_err(|_| GeneralHotOperatorErrorV3::Artifact)?;
+        .map_err(GeneralHotOperatorErrorV3::GeneralArtifact)?;
     let bundle = authenticate_general_artifacts_v3(
         artifact_selection,
         artifact_bytes,
         &request_bytes,
         product.outcome_count,
     )
-    .map_err(|_| GeneralHotOperatorErrorV3::Artifact)?;
+    .map_err(GeneralHotOperatorErrorV3::GeneralArtifact)?;
     if bundle
         .request
         .to_bytes()
-        .map_err(|_| GeneralHotOperatorErrorV3::Artifact)?
+        .map_err(GeneralHotOperatorErrorV3::GeneralArtifact)?
         != request_bytes
     {
         return Err(GeneralHotOperatorErrorV3::Artifact);
@@ -718,7 +762,7 @@ pub fn build_general_hot_instruction_decoded_v3(
         state.generation,
         hash(&root.account.data).to_bytes(),
     )
-    .map_err(|_| GeneralHotOperatorErrorV3::FixedFrame)?
+    .map_err(GeneralHotOperatorErrorV3::HotExecution)?
     .with_bump_hints(general_hot_bump_hints_v3(state, &checked.trading_program)?);
     let mut data = Vec::with_capacity(
         HOT_FAMILY_REQUEST_OFFSET_V3
@@ -894,7 +938,7 @@ fn derive_general_request_v5(
         return Err(GeneralHotOperatorErrorV3::ContentIdentity);
     }
     let config = GeneralConfigV3::decode(artifacts.config)
-        .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+        .map_err(GeneralHotOperatorErrorV3::GeneralConfig)?;
     if config.program_set_id() != selection.program_set {
         return Err(GeneralHotOperatorErrorV3::ContentIdentity);
     }
@@ -993,7 +1037,7 @@ fn derive_open_request_from_root_v5(
         settlement_close_slot: 0,
         max_orders: config.max_orders_per_candidate(),
     })
-    .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+    .map_err(GeneralHotOperatorErrorV3::GeneralCollection)?;
     canonical_front_request_v5(
         Action::OpenBatch,
         occurrence.occurrence_id(),
@@ -1006,8 +1050,8 @@ fn decoded_v2_request(
 ) -> Result<GeneralDecodedRequestV3, GeneralHotOperatorErrorV3> {
     let bytes = request
         .to_bytes()
-        .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
-    decode_general_request_v3(&bytes).map_err(|_| GeneralHotOperatorErrorV3::ChainState)
+        .map_err(GeneralHotOperatorErrorV3::General)?;
+    decode_general_request_v3(&bytes).map_err(GeneralHotOperatorErrorV3::GeneralArtifact)
 }
 
 fn derive_front_request_v5(
@@ -1028,15 +1072,14 @@ fn authenticated_active_root_v5(
     config_id: [u8; 32],
 ) -> Result<GeneralRootV2, GeneralHotOperatorErrorV3> {
     let descriptor = CapabilityProgramV4::decode(artifacts.descriptor)
-        .map_err(|_| GeneralHotOperatorErrorV3::Artifact)?;
+        .map_err(GeneralHotOperatorErrorV3::CapabilityProgram)?;
     let root_account = state
         .fixed_accounts
         .get(HOT_ROOT_ACCOUNT_V3)
         .ok_or(GeneralHotOperatorErrorV3::FixedFrame)?;
     let composite = CapabilityRootAccountV4::decode(&root_account.account.data, descriptor)
-        .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
-    let root = GeneralRootV2::decode(composite.state())
-        .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+        .map_err(GeneralHotOperatorErrorV3::CapabilityProgram)?;
+    let root = GeneralRootV2::decode(composite.state()).map_err(GeneralHotOperatorErrorV3::Root)?;
     let market = state
         .fixed_accounts
         .get(HOT_MARKET_ACCOUNT_V3)
@@ -1065,8 +1108,8 @@ fn derive_front_request_from_root_v5(
         Action::CloseBatch => {
             let body = primary_state_body_v5(state, GeneralLocalStateKindV3::Batch)?
                 .ok_or(GeneralHotOperatorErrorV3::ChainState)?;
-            let batch =
-                GeneralBatchV1::decode(body).map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+            let batch = GeneralBatchV1::decode(body)
+                .map_err(GeneralHotOperatorErrorV3::GeneralCollection)?;
             authenticate_operator_batch_v5(batch, root, outcome_count, config_id)?;
             if batch.state().status != BatchStatusV1::Collecting {
                 return Err(GeneralHotOperatorErrorV3::ChainState);
@@ -1076,8 +1119,8 @@ fn derive_front_request_from_root_v5(
         Action::PlaceOrder => {
             let body = primary_state_body_v5(state, GeneralLocalStateKindV3::Batch)?
                 .ok_or(GeneralHotOperatorErrorV3::ChainState)?;
-            let batch =
-                GeneralBatchV1::decode(body).map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+            let batch = GeneralBatchV1::decode(body)
+                .map_err(GeneralHotOperatorErrorV3::GeneralCollection)?;
             authenticate_operator_batch_v5(batch, root, outcome_count, config_id)?;
             if batch.state().status != BatchStatusV1::Collecting {
                 return Err(GeneralHotOperatorErrorV3::ChainState);
@@ -1088,7 +1131,7 @@ fn derive_front_request_from_root_v5(
                 GeneralReadonlyEvidenceKindV3::OrderTerms,
             )?;
             let terms = GeneralSignedOrderTermsV1::decode(&evidence.account.data)
-                .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+                .map_err(GeneralHotOperatorErrorV3::GeneralCollection)?;
             let header = terms.header();
             if header.outcome_count != outcome_count
                 || header.market != root.market()
@@ -1103,12 +1146,12 @@ fn derive_front_request_from_root_v5(
             let batch_body = primary_state_body_v5(state, GeneralLocalStateKindV3::Batch)?
                 .ok_or(GeneralHotOperatorErrorV3::ChainState)?;
             let batch = GeneralBatchV1::decode(batch_body)
-                .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+                .map_err(GeneralHotOperatorErrorV3::GeneralCollection)?;
             authenticate_operator_batch_v5(batch, root, outcome_count, config_id)?;
             let order_body = secondary_state_body_v5(state, GeneralLocalStateKindV3::Order)?
                 .ok_or(GeneralHotOperatorErrorV3::ChainState)?;
             let order = GeneralOrderV1::decode(order_body)
-                .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+                .map_err(GeneralHotOperatorErrorV3::GeneralCollection)?;
             authenticate_operator_order_v5(order, root, outcome_count, Some(batch.batch_id()))?;
             if batch.state().status != BatchStatusV1::Collecting
                 || order.state().phase != GeneralOrderPhaseV1::Placed
@@ -1120,8 +1163,8 @@ fn derive_front_request_from_root_v5(
         Action::ReleaseOrder => {
             let body = primary_state_body_v5(state, GeneralLocalStateKindV3::Order)?
                 .ok_or(GeneralHotOperatorErrorV3::ChainState)?;
-            let order =
-                GeneralOrderV1::decode(body).map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+            let order = GeneralOrderV1::decode(body)
+                .map_err(GeneralHotOperatorErrorV3::GeneralCollection)?;
             authenticate_operator_order_v5(order, root, outcome_count, None)?;
             if order.state().phase != GeneralOrderPhaseV1::Placed {
                 return Err(GeneralHotOperatorErrorV3::ChainState);
@@ -1132,7 +1175,7 @@ fn derive_front_request_from_root_v5(
             let body = primary_state_body_v5(state, GeneralLocalStateKindV3::Candidate)?
                 .ok_or(GeneralHotOperatorErrorV3::ChainState)?;
             let candidate = GeneralCandidateV1::decode(body)
-                .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+                .map_err(GeneralHotOperatorErrorV3::GeneralCandidate)?;
             let opening = candidate.opening();
             if opening.outcome_count != outcome_count {
                 return Err(GeneralHotOperatorErrorV3::ChainState);
@@ -1144,7 +1187,7 @@ fn derive_front_request_from_root_v5(
                 GeneralLocalStateKindV3::Batch,
             )?;
             let batch = GeneralBatchV1::decode(batch_body)
-                .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+                .map_err(GeneralHotOperatorErrorV3::GeneralCollection)?;
             authenticate_operator_batch_v5(batch, root, outcome_count, config_id)?;
             let payer =
                 logical_runtime_account(state, usize::from(GENERAL_PRIMARY_PAYER_ACCOUNT_V3))?;
@@ -1198,9 +1241,9 @@ fn canonical_front_request_v5(
     };
     let bytes = request
         .to_bytes()
-        .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+        .map_err(GeneralHotOperatorErrorV3::GeneralArtifact)?;
     let decoded =
-        decode_general_request_v3(&bytes).map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+        decode_general_request_v3(&bytes).map_err(GeneralHotOperatorErrorV3::GeneralArtifact)?;
     if decoded != request {
         return Err(GeneralHotOperatorErrorV3::ChainState);
     }
@@ -1244,7 +1287,7 @@ fn derive_submit_request_from_root_v5(
         GeneralLocalStateKindV3::Batch,
     )?;
     let batch =
-        GeneralBatchV1::decode(batch_body).map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+        GeneralBatchV1::decode(batch_body).map_err(GeneralHotOperatorErrorV3::GeneralCollection)?;
     authenticate_operator_batch_v5(batch, root, outcome_count, config_id)?;
     let batch_opening = batch.opening();
     let settlement_duration = config
@@ -1271,9 +1314,9 @@ fn derive_submit_request_from_root_v5(
         GeneralReadonlyEvidenceKindV3::CandidateImage,
     )?;
     let candidate = CandidateV2::decode(&candidate_account.account.data)
-        .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+        .map_err(GeneralHotOperatorErrorV3::RuntimeWidth)?;
     authenticate_candidate_identity_v1(candidate)
-        .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+        .map_err(GeneralHotOperatorErrorV3::GeneralCandidate)?;
     let candidate_header = candidate.header();
     if candidate_header.outcome_count != outcome_count
         || candidate_header.product_id != product_record
@@ -1289,7 +1332,7 @@ fn derive_submit_request_from_root_v5(
         GeneralReadonlyEvidenceKindV3::SubmittedCandidate,
     )?;
     let submitted = GeneralCandidateV1::decode(&submitted_account.account.data)
-        .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+        .map_err(GeneralHotOperatorErrorV3::GeneralCandidate)?;
     let opening = submitted.opening();
     let expected = GeneralCandidateV1::submit(
         batch,
@@ -1300,10 +1343,10 @@ fn derive_submit_request_from_root_v5(
         opening.solver_id,
         opening
             .work_capacity()
-            .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?,
+            .map_err(GeneralHotOperatorErrorV3::GeneralCandidate)?,
         opening.submitted_slot,
     )
-    .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+    .map_err(GeneralHotOperatorErrorV3::GeneralCandidate)?;
     if expected != submitted || opening.candidate_id != candidate_header.candidate_id {
         return Err(GeneralHotOperatorErrorV3::ChainState);
     }
@@ -1326,8 +1369,8 @@ fn derive_submit_request_from_root_v5(
     };
     let bytes = request
         .to_bytes()
-        .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
-    if decode_general_request_v3(&bytes).map_err(|_| GeneralHotOperatorErrorV3::ChainState)?
+        .map_err(GeneralHotOperatorErrorV3::GeneralArtifact)?;
+    if decode_general_request_v3(&bytes).map_err(GeneralHotOperatorErrorV3::GeneralArtifact)?
         != request
     {
         return Err(GeneralHotOperatorErrorV3::ChainState);
@@ -1356,7 +1399,7 @@ fn derive_verify_request_from_root_v5(
     let submission_body = primary_state_body_v5(state, GeneralLocalStateKindV3::Candidate)?
         .ok_or(GeneralHotOperatorErrorV3::ChainState)?;
     let submission = GeneralCandidateV1::decode(submission_body)
-        .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+        .map_err(GeneralHotOperatorErrorV3::GeneralCandidate)?;
     let opening = submission.opening();
 
     let batch_body = readonly_local_state_body_v5(
@@ -1366,7 +1409,7 @@ fn derive_verify_request_from_root_v5(
         GeneralLocalStateKindV3::Batch,
     )?;
     let batch =
-        GeneralBatchV1::decode(batch_body).map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+        GeneralBatchV1::decode(batch_body).map_err(GeneralHotOperatorErrorV3::GeneralCollection)?;
     authenticate_operator_batch_v5(batch, root, outcome_count, config_id)?;
     if batch.opening().product_id != product_record
         || opening.batch_id != batch.batch_id()
@@ -1395,10 +1438,10 @@ fn derive_verify_request_from_root_v5(
         Action::VerifyCandidateRow,
         GeneralReadonlyEvidenceKindV3::SettlementManifest,
     )?;
-    let verifier_len =
-        candidate_verifier_len_v1(submission).map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+    let verifier_len = candidate_verifier_len_v1(submission)
+        .map_err(GeneralHotOperatorErrorV3::GeneralCandidate)?;
     let certificate_len = candidate_certificate_len_v1(submission)
-        .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+        .map_err(GeneralHotOperatorErrorV3::GeneralCandidate)?;
     let vacant_cursor = vec![0_u8; verifier_len];
     let persisted_cursor = secondary_state_body_v5(state, GeneralLocalStateKindV3::Verifier)?;
     let cursor_before = persisted_cursor.unwrap_or(&vacant_cursor);
@@ -1407,7 +1450,7 @@ fn derive_verify_request_from_root_v5(
         (0, 0, 0)
     } else {
         let header = RuntimeCandidateVerifierV2::decode(cursor_before)
-            .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?
+            .map_err(GeneralHotOperatorErrorV3::RuntimeVerify)?
             .header();
         (
             header.next_page_index,
@@ -1434,9 +1477,9 @@ fn derive_verify_request_from_root_v5(
         expected_revision,
     };
     let manifest_order_count = candidate_verify_manifest_orders_v1(&view)
-        .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+        .map_err(GeneralHotOperatorErrorV3::GeneralCandidate)?;
     let manifest_len = settlement_manifest_len_v2(outcome_count, manifest_order_count)
-        .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+        .map_err(GeneralHotOperatorErrorV3::RuntimeManifest)?;
     let mut cursor_scratch = vec![0_u8; verifier_len];
     let mut cursor_output = vec![0_u8; verifier_len];
     let mut verified_scratch = vec![0_u8; certificate_len];
@@ -1454,7 +1497,7 @@ fn derive_verify_request_from_root_v5(
             manifest_output: &mut manifest_output,
         },
     )
-    .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+    .map_err(GeneralHotOperatorErrorV3::GeneralCandidate)?;
     if manifest_output != manifest.account.data {
         return Err(GeneralHotOperatorErrorV3::ChainState);
     }
@@ -1474,8 +1517,8 @@ fn derive_verify_request_from_root_v5(
     };
     let bytes = request
         .to_bytes()
-        .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
-    if decode_general_request_v3(&bytes).map_err(|_| GeneralHotOperatorErrorV3::ChainState)?
+        .map_err(GeneralHotOperatorErrorV3::GeneralArtifact)?;
+    if decode_general_request_v3(&bytes).map_err(GeneralHotOperatorErrorV3::GeneralArtifact)?
         != request
     {
         return Err(GeneralHotOperatorErrorV3::ChainState);
@@ -1534,9 +1577,9 @@ fn derive_consider_request_v5(
         GeneralReadonlyEvidenceKindV3::SubmittedVerifiedCandidate,
     )?;
     let policy = SelectionPolicyV1::decode(&policy_account.account.data)
-        .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+        .map_err(GeneralHotOperatorErrorV3::General)?;
     let submitted = VerifiedCandidateV2::decode(&submitted_account.account.data)
-        .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+        .map_err(GeneralHotOperatorErrorV3::RuntimeWidth)?;
     let submitted_header = submitted.header();
     if policy.policy_id != config.selection_policy_id()
         || submitted_header.outcome_count != outcome_count
@@ -1552,7 +1595,7 @@ fn derive_consider_request_v5(
         0
     } else {
         let current = RuntimeSelectionCursorV2::decode(selection_before)
-            .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+            .map_err(GeneralHotOperatorErrorV3::RuntimeSelection)?;
         let header = current.header();
         if header.outcome_count != outcome_count
             || header.policy_id != policy.policy_id
@@ -1574,7 +1617,7 @@ fn derive_consider_request_v5(
         &mut scratch,
         &mut output,
     )
-    .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+    .map_err(GeneralHotOperatorErrorV3::RuntimeSelection)?;
     Ok(ControllerRequestV2 {
         action: Action::Consider,
         expected_revision,
@@ -1596,7 +1639,7 @@ fn derive_freeze_request_v5(
     let selection_before = primary_state_body_v5(state, GeneralLocalStateKindV3::Selection)?
         .ok_or(GeneralHotOperatorErrorV3::ChainState)?;
     let selection = RuntimeSelectionCursorV2::decode(selection_before)
-        .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+        .map_err(GeneralHotOperatorErrorV3::RuntimeSelection)?;
     let selection_header = selection.header();
     if selection_header.outcome_count != outcome_count
         || selection_header.product_id != product_record
@@ -1614,7 +1657,7 @@ fn derive_freeze_request_v5(
         &mut scratch,
         &mut output,
     )
-    .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+    .map_err(GeneralHotOperatorErrorV3::RuntimeSelection)?;
     Ok(ControllerRequestV2 {
         action: Action::Freeze,
         expected_revision,
@@ -1652,7 +1695,7 @@ fn derive_initialize_request_v5(
         GeneralReadonlyEvidenceKindV3::SelectedVerifiedCandidate,
     )?;
     let verified = VerifiedCandidateV2::decode(&verified_account.account.data)
-        .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+        .map_err(GeneralHotOperatorErrorV3::RuntimeWidth)?;
     let verified_header = verified.header();
     if verified_header.product_id != product_record
         || verified_header.price_scale != config.price_scale()
@@ -1668,9 +1711,9 @@ fn derive_initialize_request_v5(
         &frozen.account.data,
         verified.as_bytes(),
     )
-    .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+    .map_err(GeneralHotOperatorErrorV3::GeneralAdmittedAccelerator)?;
     let verifier = RuntimeCandidateVerifierV2::decode(&verifier_account.account.data)
-        .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+        .map_err(GeneralHotOperatorErrorV3::RuntimeVerify)?;
     if !verifier.is_complete()
         || verifier.header().outcome_count != outcome_count
         || verifier.header().candidate_id != verified_header.candidate_id
@@ -1680,7 +1723,7 @@ fn derive_initialize_request_v5(
     let mut cursor = vec![
         0_u8;
         settlement_cursor_len(outcome_count)
-            .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?
+            .map_err(GeneralHotOperatorErrorV3::RuntimeWidth)?
     ];
     initialize_runtime_settlement_in_place_v2(
         &verifier_account.account.data,
@@ -1688,7 +1731,7 @@ fn derive_initialize_request_v5(
         0,
         &mut cursor,
     )
-    .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+    .map_err(GeneralHotOperatorErrorV3::RuntimeSettlement)?;
     Ok(ControllerRequestV2 {
         action: Action::InitializeSettlement,
         expected_revision: 0,
@@ -1711,7 +1754,7 @@ fn derive_settlement_request_v5(
     let cursor_bytes = primary_state_body_v5(state, GeneralLocalStateKindV3::Settlement)?
         .ok_or(GeneralHotOperatorErrorV3::ChainState)?;
     let cursor = SettlementCursorV2::decode(cursor_bytes)
-        .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+        .map_err(GeneralHotOperatorErrorV3::RuntimeWidth)?;
     let cursor_header = cursor.header();
     let verified_account = readonly_evidence_account_v5(
         state,
@@ -1719,7 +1762,7 @@ fn derive_settlement_request_v5(
         GeneralReadonlyEvidenceKindV3::SelectedVerifiedCandidate,
     )?;
     let verified = VerifiedCandidateV2::decode(&verified_account.account.data)
-        .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+        .map_err(GeneralHotOperatorErrorV3::RuntimeWidth)?;
     let verified_header = verified.header();
     if cursor_header.outcome_count != outcome_count
         || verified_header.outcome_count != outcome_count
@@ -1756,7 +1799,7 @@ fn derive_settlement_request_v5(
                 GeneralReadonlyEvidenceKindV3::SettlementManifest,
             )?;
             let manifest = SettlementManifestV2::decode(&account.account.data)
-                .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+                .map_err(GeneralHotOperatorErrorV3::RuntimeManifest)?;
             let header = manifest.header();
             if header.outcome_count != outcome_count
                 || header.candidate_id != verified_header.candidate_id
@@ -1772,7 +1815,7 @@ fn derive_settlement_request_v5(
             for ordinal in 0..header.order_count {
                 if manifest
                     .order(ordinal)
-                    .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?
+                    .map_err(GeneralHotOperatorErrorV3::RuntimeManifest)?
                     .header()
                     .order_coordinate
                     == expected_order
@@ -1784,7 +1827,7 @@ fn derive_settlement_request_v5(
             let selected = selected.ok_or(GeneralHotOperatorErrorV3::ChainState)?;
             let selected_order = manifest
                 .order(selected)
-                .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+                .map_err(GeneralHotOperatorErrorV3::RuntimeManifest)?;
             let selected_header = selected_order.header();
             let execution_index = u8::try_from(selected_header.source_execution_index)
                 .map_err(|_| GeneralHotOperatorErrorV3::Arithmetic)?;
@@ -1808,7 +1851,7 @@ fn derive_settlement_request_v5(
     let mut effect_workspace = vec![
         0_u8;
         runtime_settlement_effect_len_v2(outcome_count)
-            .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?
+            .map_err(GeneralHotOperatorErrorV3::RuntimeSettlement)?
     ];
     evaluate_runtime_settlement_in_place_v2(
         RuntimeSettlementViewV2 {
@@ -1828,7 +1871,7 @@ fn derive_settlement_request_v5(
         &mut inventory_workspace,
         &mut effect_workspace,
     )
-    .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+    .map_err(GeneralHotOperatorErrorV3::RuntimeSettlement)?;
     Ok(ControllerRequestV2 {
         action,
         expected_revision: cursor_header.revision,
@@ -1873,7 +1916,7 @@ fn local_state_body_v5(
         return Ok(None);
     }
     let decoded = GeneralLocalStateV3::decode(&account.account.data)
-        .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+        .map_err(GeneralHotOperatorErrorV3::GeneralLocalState)?;
     if decoded.header().kind != expected_kind {
         return Err(GeneralHotOperatorErrorV3::ChainState);
     }
@@ -1888,7 +1931,7 @@ fn readonly_evidence_account_v5(
     let mut index = 0_u16;
     while index < general_readonly_evidence_count_v3(action) {
         let evidence = general_readonly_evidence_v3(action, index)
-            .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+            .map_err(GeneralHotOperatorErrorV3::GeneralStateArtifact)?;
         if evidence.kind == expected_kind {
             let account = logical_runtime_account(state, usize::from(evidence.coordinate))?;
             if account.is_signer || account.is_writable || account.account.executable {
@@ -1911,7 +1954,7 @@ fn readonly_local_state_body_v5(
 ) -> Result<&[u8], GeneralHotOperatorErrorV3> {
     let account = readonly_evidence_account_v5(state, action, evidence_kind)?;
     let local = GeneralLocalStateV3::decode(&account.account.data)
-        .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?;
+        .map_err(GeneralHotOperatorErrorV3::GeneralLocalState)?;
     if local.header().kind != state_kind {
         return Err(GeneralHotOperatorErrorV3::ChainState);
     }
@@ -1926,9 +1969,9 @@ fn project_child_routes_v5(
         let route = bundle
             .effect
             .route(route_index)
-            .map_err(|_| GeneralHotOperatorErrorV3::Artifact)?;
+            .map_err(GeneralHotOperatorErrorV3::Effect)?;
         let selected = general_effect_route_frame_v3(bundle.request.action, route_index)
-            .map_err(|_| GeneralHotOperatorErrorV3::Artifact)?;
+            .map_err(GeneralHotOperatorErrorV3::GeneralEffectArtifact)?;
         let expected_role = match selected.frame {
             GeneralChildFrameV3::ClaimsProtocolPosition(_)
             | GeneralChildFrameV3::ClaimsAffine { .. } => FixedRole::Claims,
@@ -1943,7 +1986,7 @@ fn project_child_routes_v5(
             let dependency = bundle
                 .effect
                 .route_receipt_dependency(route_index, dependency_index)
-                .map_err(|_| GeneralHotOperatorErrorV3::Artifact)?;
+                .map_err(GeneralHotOperatorErrorV3::Effect)?;
             receipt_dependencies.push(GeneralReceiptDependencyV5 {
                 producer_role: dependency.producer_role(),
                 producer_route: dependency.producer_route(),
@@ -1957,7 +2000,7 @@ fn project_child_routes_v5(
             account_count: selected
                 .frame
                 .account_count()
-                .map_err(|_| GeneralHotOperatorErrorV3::Artifact)?,
+                .map_err(GeneralHotOperatorErrorV3::GeneralEffectArtifact)?,
             receipt_dependencies,
         });
     }
@@ -2072,7 +2115,7 @@ fn authenticate_product_graph(
         portfolio_raw: account(HOT_PORTFOLIO_RAW_ACCOUNT_V3)?,
         portfolio_staging: account(HOT_PORTFOLIO_RAW_ACCOUNT_V3 + 1)?,
     })
-    .map_err(|_| GeneralHotOperatorErrorV3::Product)
+    .map_err(GeneralHotOperatorErrorV3::ProductGraphObservation)
 }
 
 fn validate_strategy_geometry(
@@ -2105,16 +2148,16 @@ fn selected_admitted_invocation_count_v3(
     let scalar_count = bundle
         .effect
         .scalar_count(bundle.tail_count)
-        .map_err(|_| GeneralHotOperatorErrorV3::StrategyGeometry)?;
+        .map_err(GeneralHotOperatorErrorV3::Effect)?;
     let identity_count = bundle
         .effect
         .identity_count(bundle.tail_count)
-        .map_err(|_| GeneralHotOperatorErrorV3::StrategyGeometry)?;
+        .map_err(GeneralHotOperatorErrorV3::Effect)?;
     match classify_bank_transport_v2(
         u32::try_from(scalar_count).map_err(|_| GeneralHotOperatorErrorV3::Arithmetic)?,
         u32::try_from(identity_count).map_err(|_| GeneralHotOperatorErrorV3::Arithmetic)?,
     )
-    .map_err(|_| GeneralHotOperatorErrorV3::StrategyGeometry)?
+    .map_err(GeneralHotOperatorErrorV3::ExecutionStrategy)?
     {
         BankTransportV2::InlineReturnData { bank_bytes } if bank_bytes != 0 => Ok(1),
         BankTransportV2::AuthenticatedScratchPages { page_count, .. } if page_count != 0 => {
@@ -2148,10 +2191,10 @@ fn validate_runtime_geometry(
     let span_counts: [u32; 0] = [];
     let logical_count = profile
         .logical_account_count_with_dynamic_spans(bundle.tail_count, &span_counts)
-        .map_err(|_| GeneralHotOperatorErrorV3::RuntimeGeometry)?;
+        .map_err(GeneralHotOperatorErrorV3::AccountProfile)?;
     let physical_count = profile
         .physical_account_count_with_dynamic_spans(bundle.tail_count, &span_counts)
-        .map_err(|_| GeneralHotOperatorErrorV3::RuntimeGeometry)?;
+        .map_err(GeneralHotOperatorErrorV3::AccountProfile)?;
     if logical_count < HOT_RUNTIME_LOGICAL_PREFIX_V3
         || physical_count < HOT_RUNTIME_LOGICAL_PREFIX_V3
         || state.runtime_suffix_accounts.len()
@@ -2166,7 +2209,7 @@ fn validate_runtime_geometry(
         let account = physical_runtime_account(state, ordinal)?;
         let geometry = profile
             .physical_account_geometry_with_dynamic_spans(bundle.tail_count, &span_counts, ordinal)
-            .map_err(|_| GeneralHotOperatorErrorV3::RuntimeGeometry)?;
+            .map_err(GeneralHotOperatorErrorV3::AccountProfile)?;
         let privileges = geometry.privileges();
         if account.is_signer != privileges.signer()
             || account.is_writable != privileges.writable()
@@ -2270,7 +2313,7 @@ fn project_general_lifecycle_v5(
     let mut canonical = vec![0_u8; policy_bytes];
     let child_widths = selected_child_rent_widths_v5(bundle)?;
     encode_general_family_state_lifecycle_v5_atomic(child_widths, &mut scratch, &mut canonical)
-        .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
+        .map_err(GeneralHotOperatorErrorV3::GeneralStateArtifact)?;
     if bundle.lifecycle_policy.bytes() != canonical.as_slice() {
         return Err(GeneralHotOperatorErrorV3::Lifecycle);
     }
@@ -2278,7 +2321,7 @@ fn project_general_lifecycle_v5(
     let plan_count = bundle
         .lifecycle_policy
         .action_plan_count(request.action as u32)
-        .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
+        .map_err(GeneralHotOperatorErrorV3::LifecycleProfile)?;
     let verify = request.action == Action::VerifyCandidateRow;
     let two_state = matches!(
         request.action,
@@ -2344,11 +2387,11 @@ fn project_general_lifecycle_v5(
     let join = bundle
         .lifecycle_policy
         .validate_account_profile_join_for_action(bundle.account_profile, request.action as u32)
-        .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
+        .map_err(GeneralHotOperatorErrorV3::LifecycleProfile)?;
     let primary_plan = bundle
         .lifecycle_policy
         .action_plan(request.action as u32, 0)
-        .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?
+        .map_err(GeneralHotOperatorErrorV3::LifecycleProfile)?
         .with_validated_join(join);
     let primary_close = matches!(request.action, Action::Close | Action::CloseCandidate);
     let primary_expected_operation = if verify {
@@ -2394,7 +2437,7 @@ fn project_general_lifecycle_v5(
         let plan = bundle
             .lifecycle_policy
             .action_plan(request.action as u32, 2)
-            .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?
+            .map_err(GeneralHotOperatorErrorV3::LifecycleProfile)?
             .with_validated_join(join);
         Some(derive_lifecycle_state_v3(
             state,
@@ -2413,7 +2456,7 @@ fn project_general_lifecycle_v5(
         let plan = bundle
             .lifecycle_policy
             .action_plan(request.action as u32, 1)
-            .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?
+            .map_err(GeneralHotOperatorErrorV3::LifecycleProfile)?
             .with_validated_join(join);
         let terminal = derive_lifecycle_state_v3(
             state,
@@ -2440,7 +2483,7 @@ fn project_general_lifecycle_v5(
         let plan = bundle
             .lifecycle_policy
             .action_plan(request.action as u32, 1)
-            .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?
+            .map_err(GeneralHotOperatorErrorV3::LifecycleProfile)?
             .with_validated_join(join);
         Some(derive_lifecycle_state_v3(
             state,
@@ -2498,7 +2541,7 @@ fn project_general_lifecycle_v5(
     let child_account_start = general_child_account_start_v3(request.action);
     if general_effect_route_count_v3(request.action) != 0 {
         let first = general_effect_route_frame_v3(request.action, 0)
-            .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
+            .map_err(GeneralHotOperatorErrorV3::GeneralEffectArtifact)?;
         if first.account_start != child_account_start {
             return Err(GeneralHotOperatorErrorV3::Lifecycle);
         }
@@ -2555,7 +2598,7 @@ fn project_general_lifecycle_seed_identities_v5(
                 let body = primary_state_body_v5(state, GeneralLocalStateKindV3::Batch)?
                     .ok_or(GeneralHotOperatorErrorV3::Lifecycle)?;
                 GeneralBatchV1::decode(body)
-                    .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?
+                    .map_err(GeneralHotOperatorErrorV3::GeneralCollection)?
                     .batch_id()
             };
             set_identity(identities, general_identity::SELECTION_BATCH, batch_id)?;
@@ -2617,14 +2660,14 @@ fn selection_batch_identity_v5(
             .account
             .data,
         )
-        .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?
+        .map_err(GeneralHotOperatorErrorV3::RuntimeWidth)?
         .header()
         .batch_id),
         Action::Freeze => Ok(RuntimeSelectionCursorV2::decode(
             primary_state_body_v5(state, GeneralLocalStateKindV3::Selection)?
                 .ok_or(GeneralHotOperatorErrorV3::ChainState)?,
         )
-        .map_err(|_| GeneralHotOperatorErrorV3::ChainState)?
+        .map_err(GeneralHotOperatorErrorV3::RuntimeSelection)?
         .header()
         .batch_id),
         // `primary_for_action` maps exactly these two onto the selection
@@ -2681,7 +2724,7 @@ fn selected_child_rent_widths_v5(
         let quote = bundle
             .lifecycle_policy
             .current_rent_quote(ordinal)
-            .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
+            .map_err(GeneralHotOperatorErrorV3::LifecycleProfile)?;
         let destination = quote.scalar_destination();
         if destination.kind() != LifecycleRegisterKindV3::Scalar
             || destination.scope() != CoordinateScopeV3::Fixed
@@ -2699,7 +2742,7 @@ fn selected_child_rent_widths_v5(
         bundle.tail_count,
         vault_width.ok_or(GeneralHotOperatorErrorV3::Lifecycle)?,
     )
-    .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)
+    .map_err(GeneralHotOperatorErrorV3::GeneralStateArtifact)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2740,13 +2783,13 @@ fn derive_lifecycle_state_v3(
         || selected.invocation_item(tail_count, 0).ok() != Some(None)
         || !selected
             .uses_canonical_bump()
-            .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?
+            .map_err(GeneralHotOperatorErrorV3::LifecycleProfile)?
     {
         return Err(GeneralHotOperatorErrorV3::Lifecycle);
     }
     let indices = selected
         .project_account_indices(profile, tail_count, None)
-        .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
+        .map_err(GeneralHotOperatorErrorV3::LifecycleProfile)?;
     if indices.state() != expected_state
         || indices.payer() != expected_payer
         || indices.rent_credit() != expected_rent_credit
@@ -2755,7 +2798,7 @@ fn derive_lifecycle_state_v3(
     }
     let seed_count = selected
         .seed_count()
-        .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
+        .map_err(GeneralHotOperatorErrorV3::LifecycleProfile)?;
     let mut seed_values = Vec::with_capacity(
         usize::from(seed_count)
             .checked_sub(1)
@@ -2765,7 +2808,7 @@ fn derive_lifecycle_state_v3(
     for ordinal in 0..seed_count {
         match selected
             .materialize_seed_input(profile, tail_count, None, registers, ordinal)
-            .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?
+            .map_err(GeneralHotOperatorErrorV3::LifecycleProfile)?
         {
             LifecycleSeedInputValueV3::Bytes(value) if !saw_bump && !value.is_empty() => {
                 seed_values.push(value.as_slice().to_vec());
@@ -2797,7 +2840,7 @@ fn derive_lifecycle_state_v3(
     let data_bytes = usize::try_from(
         selected
             .target_data_bytes(tail_count)
-            .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?,
+            .map_err(GeneralHotOperatorErrorV3::LifecycleProfile)?,
     )
     .map_err(|_| GeneralHotOperatorErrorV3::Arithmetic)?;
     let live = state_account.account.owner == trading_program
@@ -2815,7 +2858,7 @@ fn derive_lifecycle_state_v3(
     if live {
         let state_kind = state_kind.ok_or(GeneralHotOperatorErrorV3::Lifecycle)?;
         let decoded = GeneralLocalStateV3::decode(&state_account.account.data)
-            .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
+            .map_err(GeneralHotOperatorErrorV3::GeneralLocalState)?;
         if decoded.header().bump != bump || decoded.header().kind != state_kind {
             return Err(GeneralHotOperatorErrorV3::Lifecycle);
         }
@@ -4264,7 +4307,7 @@ mod tests {
         unwrapped_batch.runtime_suffix_accounts[3].account.data = fixture.batch.to_bytes().to_vec();
         assert_eq!(
             derive(&unwrapped_batch, config),
-            Err(GeneralHotOperatorErrorV3::ChainState)
+            Err(GeneralHotOperatorErrorV3::GeneralLocalState(dclutch_trading::general::local_state_v3::GeneralLocalStateErrorV3::InvalidEncoding))
         );
 
         let mut substituted_candidate = state.clone();
@@ -4275,7 +4318,7 @@ mod tests {
             .expect("candidate byte") ^= 1;
         assert_eq!(
             derive(&substituted_candidate, config),
-            Err(GeneralHotOperatorErrorV3::ChainState)
+            Err(GeneralHotOperatorErrorV3::RuntimeWidth(dclutch_trading::general::runtime_width::RuntimeWidthErrorV2::InvalidSimplex))
         );
 
         assert_eq!(
@@ -4362,7 +4405,7 @@ mod tests {
         substituted_page.runtime_suffix_accounts[7].account.data[24] ^= 1;
         assert_eq!(
             derive(&substituted_page),
-            Err(GeneralHotOperatorErrorV3::ChainState)
+            Err(GeneralHotOperatorErrorV3::GeneralCandidate(dclutch_trading::general::candidate_v1::GeneralCandidateErrorV1::Substitution))
         );
 
         assert_eq!(

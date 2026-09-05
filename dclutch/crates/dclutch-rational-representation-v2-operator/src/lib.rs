@@ -110,6 +110,28 @@ pub enum Error {
     InvalidRequest,
     /// A checked allocation or revision arithmetic overflowed.
     ArithmeticOverflow,
+    /// `dclutch_claims::rational_kernel` refused; the cause is its own.
+    RationalRepresentation(dclutch_claims::rational_kernel::Error),
+    /// `dclutch_claims::composition` refused; the cause is its own.
+    RepresentationComposition(dclutch_claims::composition::Error),
+    /// `dclutch_claims` refused; the cause is its own.
+    LiabilityBasisState(dclutch_claims::liability_basis_state_v2::LiabilityBasisStateErrorV2),
+    /// `dclutch_product::svm_reader` refused; the cause is its own.
+    ProductRuntimeReader(dclutch_product::svm_reader::Error),
+    /// `dclutch_registry` refused; the cause is its own.
+    Registry(dclutch_registry::Error),
+    /// `dclutch_market` refused; the cause is its own.
+    MarketCore(dclutch_market::Error),
+    /// `dclutch_claims` refused; the cause is its own.
+    ProtocolPosition(dclutch_claims::protocol_position_v2::ProtocolPositionErrorV2),
+    /// `dclutch_custody::token_svm` refused; the cause is its own.
+    Token(dclutch_custody::token_svm::Error),
+    /// `dclutch_claims::rational` refused; the cause is its own.
+    RationalRepresentationContract(dclutch_claims::rational::Error),
+    /// `dclutch_product::payoff` refused; the cause is its own.
+    ProductBasis(dclutch_product::payoff::runtime_v3::Error),
+    /// `dclutch_registry::release_set` refused; the cause is its own.
+    ReleaseSet(dclutch_registry::release_set::Error),
 }
 
 /// Result alias for unsigned operator construction.
@@ -568,7 +590,7 @@ fn authenticate_common<'a>(
             authority_derivation_authenticated: true,
         },
     )
-    .map_err(|_| Error::InvalidRepresentation)?;
+    .map_err(Error::RationalRepresentation)?;
     authenticate_record(
         observation.graph,
         observation.registry_program,
@@ -585,10 +607,10 @@ fn authenticate_common<'a>(
             record_authenticated: true,
         },
     )
-    .map_err(|_| Error::InvalidRepresentation)?;
+    .map_err(Error::RepresentationComposition)?;
     descriptor
         .authenticate_exposure(exposure)
-        .map_err(|_| Error::InvalidRepresentation)?;
+        .map_err(Error::RationalRepresentation)?;
     for record in [
         observation.product_evidence.linked_basis,
         observation.product_evidence.product,
@@ -609,7 +631,7 @@ fn authenticate_common<'a>(
     )
     .0;
     let claims_market = LiabilityBasisMarketViewV2::decode(observation.claims_aggregate.data)
-        .map_err(|_| Error::InvalidClaims)?;
+        .map_err(Error::LiabilityBasisState)?;
     if observation.claims_aggregate.key != claims_aggregate
         || observation.claims_aggregate.owner != roles.claims
         || observation.claims_aggregate.executable
@@ -812,7 +834,7 @@ fn authenticate_product_representation_observation_v3(
             },
         },
     )
-    .map_err(|_| Error::InvalidRepresentation)?;
+    .map_err(Error::ProductRuntimeReader)?;
     Ok(AuthenticatedProductObservationV3 {
         product_record_digest: authenticated.product_record_digest.to_bytes(),
         result_outcome_count: authenticated.result_outcome_count,
@@ -822,11 +844,11 @@ fn authenticate_product_representation_observation_v3(
 
 fn activated_claims_program(observation: RationalObservationV2<'_>) -> Result<Pubkey> {
     let cache = ActivatedExecutionReleaseSetViewV1::decode(observation.activation_cache.data)
-        .map_err(|_| Error::InvalidActivation)?;
+        .map_err(Error::Registry)?;
     Ok(Pubkey::new_from_array(
         cache
             .role(ExecutionRoleV1::Claims)
-            .map_err(|_| Error::InvalidActivation)?
+            .map_err(Error::Registry)?
             .release()
             .program()
             .to_bytes(),
@@ -843,10 +865,8 @@ fn authenticate_activation(
         return Err(Error::InvalidActivation);
     }
     let cache = ActivatedExecutionReleaseSetViewV1::decode(observation.activation_cache.data)
-        .map_err(|_| Error::InvalidActivation)?;
-    let release = cache
-        .execution_release_set_id()
-        .map_err(|_| Error::InvalidActivation)?;
+        .map_err(Error::Registry)?;
+    let release = cache.execution_release_set_id().map_err(Error::Registry)?;
     if release.to_bytes() != descriptor.release_set_id() {
         return Err(Error::InvalidActivation);
     }
@@ -862,25 +882,22 @@ fn authenticate_activation(
         CallerRoleV2::Core => ExecutionRoleV1::Core,
         CallerRoleV2::Trading => ExecutionRoleV1::Trading,
     };
-    let caller = cache
-        .role(role)
-        .map_err(|_| Error::InvalidActivation)?
-        .release();
+    let caller = cache.role(role).map_err(Error::Registry)?.release();
     let claims = cache
         .role(ExecutionRoleV1::Claims)
-        .map_err(|_| Error::InvalidActivation)?
+        .map_err(Error::Registry)?
         .release();
     let core = cache
         .role(ExecutionRoleV1::Core)
-        .map_err(|_| Error::InvalidActivation)?
+        .map_err(Error::Registry)?
         .release();
     let custody = cache
         .role(ExecutionRoleV1::Custody)
-        .map_err(|_| Error::InvalidActivation)?
+        .map_err(Error::Registry)?
         .release();
     let resolution = cache
         .role(ExecutionRoleV1::Resolution)
-        .map_err(|_| Error::InvalidActivation)?
+        .map_err(Error::Registry)?
         .release();
     Ok((
         RoleProgramsV2 {
@@ -911,8 +928,7 @@ fn authenticate_core(
     {
         return Err(Error::InvalidCoreMarket);
     }
-    let core =
-        CoreState::decode(observation.core_market.data).map_err(|_| Error::InvalidCoreMarket)?;
+    let core = CoreState::decode(observation.core_market.data).map_err(Error::MarketCore)?;
     let derived = Pubkey::find_program_address(
         &MarketCoreStateSeedsV2::new(core.identity).as_slices(),
         &core_program,
@@ -1007,7 +1023,7 @@ fn authenticate_assets(
             common.descriptor.descriptor_id(),
             outcome,
         )
-        .map_err(|_| Error::InvalidClaims)?;
+        .map_err(Error::ProtocolPosition)?;
         let custody_owner =
             Pubkey::find_program_address(&custody_owner_seeds.as_slices(), &common.roles.claims).0;
         let custody_position = Pubkey::find_program_address(
@@ -1015,7 +1031,7 @@ fn authenticate_assets(
                 common.claims_aggregate.to_bytes(),
                 custody_owner.to_bytes(),
             )
-            .map_err(|_| Error::InvalidClaims)?
+            .map_err(Error::ProtocolPosition)?
             .as_slices(),
             &common.roles.claims,
         )
@@ -1036,7 +1052,7 @@ fn authenticate_assets(
         .0;
         let position =
             LiabilityBasisPositionViewV2::decode(observation.claims_custody_position.data)
-                .map_err(|_| Error::InvalidClaims)?;
+                .map_err(Error::LiabilityBasisState)?;
         if observation.claims_custody_position.key != custody_position
             || observation.claims_custody_position.owner != common.roles.claims
             || observation.claims_custody_position.executable
@@ -1080,7 +1096,7 @@ fn authenticate_assets(
             coefficient: common
                 .descriptor
                 .coefficient(outcome)
-                .map_err(|_| Error::InvalidRepresentation)?,
+                .map_err(Error::RationalRepresentation)?,
             shard_supply: mint.supply,
             actor_shards: actor.amount,
             structured_shards: structured_account.amount,
@@ -1100,13 +1116,13 @@ fn authenticate_actor_position(common: CommonV2<'_>) -> Result<u64> {
             common.claims_aggregate.to_bytes(),
             common.observation.actor.to_bytes(),
         )
-        .map_err(|_| Error::InvalidClaims)?
+        .map_err(Error::ProtocolPosition)?
         .as_slices(),
         &common.roles.claims,
     )
     .0;
     let position =
-        LiabilityBasisPositionViewV2::decode(observed.data).map_err(|_| Error::InvalidClaims)?;
+        LiabilityBasisPositionViewV2::decode(observed.data).map_err(Error::LiabilityBasisState)?;
     if observed.key != expected
         || observed.owner != common.roles.claims
         || observed.executable
@@ -1199,7 +1215,7 @@ fn authenticate_mint(
         observed.data,
         authority.to_bytes(),
     )
-    .map_err(|_| Error::InvalidToken)?
+    .map_err(Error::Token)?
     .mint();
     Ok(mint)
 }
@@ -1214,7 +1230,7 @@ fn authenticate_token_account(
     if observed.key != expected_key || observed.owner != token_program || observed.executable {
         return Err(Error::InvalidToken);
     }
-    let token = TokenAccount::parse(observed.data).map_err(|_| Error::InvalidToken)?;
+    let token = TokenAccount::parse(observed.data).map_err(Error::Token)?;
     if token.mint != mint.to_bytes()
         || token.owner != owner.to_bytes()
         || token.state != AccountState::Initialized
@@ -1327,15 +1343,22 @@ fn encode_request(
             expected_structured_shards: asset.structured_shards,
         }
         .encode_into(rows.get_mut(start..end).ok_or(Error::InvalidWidth)?)
-        .map_err(|_| Error::InvalidRequest)?;
+        .map_err(Error::RationalRepresentationContract)?;
     }
-    let request = RepresentationRequestV2::new(header, &rows).map_err(|_| Error::InvalidRequest)?;
+    let request = RepresentationRequestV2::new(header, &rows)
+        .map_err(Error::RationalRepresentationContract)?;
     // The header width is a function of the action's class in physical ABI v3.
-    let mut output = vec![0; request.wire_len().map_err(|_| Error::InvalidRequest)?];
+    let mut output = vec![
+        0;
+        request
+            .wire_len()
+            .map_err(Error::RationalRepresentationContract)?
+    ];
     request
         .encode_into(&mut output)
-        .map_err(|_| Error::InvalidRequest)?;
-    let decoded = RepresentationRequestV2::decode(&output).map_err(|_| Error::InvalidRequest)?;
+        .map_err(Error::RationalRepresentationContract)?;
+    let decoded =
+        RepresentationRequestV2::decode(&output).map_err(Error::RationalRepresentationContract)?;
     if decoded.header() != header || decoded.asset_bytes() != rows {
         return Err(Error::InvalidRequest);
     }
@@ -1506,7 +1529,7 @@ fn evaluate_terminal_payout(
     quantity: u64,
 ) -> Result<u64> {
     let basis = ProductBasisV3::decode(common.observation.product_evidence.linked_basis.raw.data)
-        .map_err(|_| Error::InvalidRepresentation)?;
+        .map_err(Error::ProductBasis)?;
     let product_width = usize::try_from(basis.basis_width()).map_err(|_| Error::InvalidWidth)?;
     let claims_width = usize::try_from(common.representation_admission.basis_width())
         .map_err(|_| Error::InvalidWidth)?;
@@ -1531,7 +1554,7 @@ fn evaluate_terminal_payout(
             &mut translation_scratch,
             &mut claims_payouts,
         )
-        .map_err(|_| Error::InvalidRepresentation)?;
+        .map_err(Error::RepresentationComposition)?;
     let selected = usize::try_from(outcome).map_err(|_| Error::InvalidWidth)?;
     claims_payouts
         .get(selected)
@@ -1567,7 +1590,7 @@ fn authenticate_operator_exposure<'a>(
             representation_width: admission.basis_width(),
         })
     })
-    .map_err(|_| Error::InvalidRepresentation)
+    .map_err(Error::RepresentationComposition)
 }
 
 fn authenticate_positive_custody_replay(
@@ -1707,7 +1730,7 @@ fn derive_terminal_after_request(
         0
     } else {
         RepresentationRequestV2::decode(request_data)
-            .map_err(|_| Error::InvalidRequest)?
+            .map_err(Error::RationalRepresentationContract)?
             .header()
             .expected_custody_replay_revision
     };
@@ -1851,7 +1874,7 @@ fn finish_instruction(
             header.parent_context,
             request_digest,
         )
-        .map_err(|_| Error::InvalidRequest)?
+        .map_err(Error::ReleaseSet)?
         .as_slices(),
         &common.roles.caller,
     )
@@ -1862,7 +1885,7 @@ fn finish_instruction(
     );
     let physical_account_count = RepresentationRequestV2::decode(&data)
         .and_then(RepresentationRequestV2::physical_account_count)
-        .map_err(|_| Error::InvalidRequest)?;
+        .map_err(Error::RationalRepresentationContract)?;
     let mut metas = Vec::with_capacity(physical_account_count);
     metas.extend([
         AccountMeta::new_readonly(caller, true),
@@ -2046,7 +2069,7 @@ fn authenticate_replay(
     if observation.account.owner == claims_program {
         let replay = RationalReplayV2::decode(observation.account.data)
             .and_then(|value| value.authenticate(descriptor, actor))
-            .map_err(|_| Error::InvalidReplay)?;
+            .map_err(Error::RationalRepresentationContract)?;
         if replay.revision() == u64::MAX {
             return Err(Error::InvalidReplay);
         }

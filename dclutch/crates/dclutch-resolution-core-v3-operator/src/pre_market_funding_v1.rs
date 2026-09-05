@@ -98,7 +98,7 @@ pub fn build_pre_market_funding_v2(
         .get(FOUND_MANIFEST_RAW)
         .ok_or(ResolutionCoreOperatorErrorV3::Frame)?;
     let manifest = CapabilityManifestV1::decode(&manifest_account.data)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Capability)?;
     let manifest_digest = hash(&manifest_account.data).to_bytes();
     let manifest_id = CapabilityContentId::new(manifest_digest)
         .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
@@ -115,7 +115,7 @@ pub fn build_pre_market_funding_v2(
         width,
         creation_rent.minimum_balance(width),
     )
-    .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+    .map_err(ResolutionCoreOperatorErrorV3::Capability)?;
     FundingLedgerV2::initialize(
         &mut ledger_bytes,
         manifest_id,
@@ -123,18 +123,18 @@ pub fn build_pre_market_funding_v2(
         selected_mask,
         funded_rent_rate,
     )
-    .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+    .map_err(ResolutionCoreOperatorErrorV3::Capability)?;
     let authenticated = FundingLedgerV2::decode(&ledger_bytes)
         .and_then(|ledger| ledger.authenticate(manifest_id, manifest))
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Capability)?;
     let exact_native_principal = authenticated
         .remaining_native_lamports_total()
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Capability)?;
     for entry_index in 0_u16..manifest.entry_count() {
         if selected_mask & (1_u16 << entry_index) != 0
             && manifest
                 .entry(entry_index)
-                .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?
+                .map_err(ResolutionCoreOperatorErrorV3::Capability)?
                 .funding_quote()
                 .realm_collateral()
                 .is_some()
@@ -150,9 +150,9 @@ pub fn build_pre_market_funding_v2(
         generation,
         manifest_id,
         FundingLedgerV2::decode(&ledger_bytes)
-            .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?,
+            .map_err(ResolutionCoreOperatorErrorV3::Capability)?,
     )
-    .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+    .map_err(ResolutionCoreOperatorErrorV3::Capability)?;
     if Pubkey::find_program_address(
         &derivation.seed_components(),
         &snapshot.resolution_program.key,
@@ -166,12 +166,12 @@ pub fn build_pre_market_funding_v2(
         &project_found
             .found
             .encode()
-            .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?,
+            .map_err(ResolutionCoreOperatorErrorV3::MarketCore)?,
     )
     .to_bytes();
     expected_project_found
         .verify_found_request(found_request_digest)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+        .map_err(ResolutionCoreOperatorErrorV3::ProjectFound)?;
     if expected_project_found.market.to_bytes() != market.to_bytes()
         || expected_project_found.generation != generation
     {
@@ -180,7 +180,7 @@ pub fn build_pre_market_funding_v2(
     let expected_project_found_receipt_digest = hash(
         &expected_project_found
             .encode()
-            .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?,
+            .map_err(ResolutionCoreOperatorErrorV3::ProjectFound)?,
     )
     .to_bytes();
     let request = PreMarketFundingRequestV2 {
@@ -194,7 +194,7 @@ pub fn build_pre_market_funding_v2(
     };
     let request_bytes = request
         .encode()
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Resolution)?;
     let cache = found
         .get(FOUND_ACTIVATION_CACHE)
         .ok_or(ResolutionCoreOperatorErrorV3::Frame)?;
@@ -202,16 +202,16 @@ pub fn build_pre_market_funding_v2(
         .get(FOUND_REGISTRY_PROGRAM)
         .ok_or(ResolutionCoreOperatorErrorV3::Frame)?;
     let activation = ActivatedExecutionReleaseSetViewV1::decode(&cache.data)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Registry)?;
     let release_set = activation
         .execution_release_set_id()
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Registry)?;
     let trading = activation
         .role(ExecutionRoleV1::Trading)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Registry)?;
     let resolution = activation
         .role(ExecutionRoleV1::Resolution)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Registry)?;
     if cache.owner != registry.key
         || Pubkey::find_program_address(
             &[ACTIVATION_PDA_DOMAIN_V1, release_set.as_bytes()],
@@ -231,14 +231,14 @@ pub fn build_pre_market_funding_v2(
             &snapshot.caller_programdata,
             trading.release(),
         )?)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Release)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Registry)?;
     resolution
         .authenticate_current_deployment(deployment_observation(
             &snapshot.resolution_program,
             &snapshot.resolution_programdata,
             resolution.release(),
         )?)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Release)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Registry)?;
     let authority_seeds = CallerAuthoritySeedsV1::new(
         release_set,
         market.to_bytes(),
@@ -246,7 +246,7 @@ pub fn build_pre_market_funding_v2(
         manifest_digest,
         hash(&request_bytes).to_bytes(),
     )
-    .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
+    .map_err(ResolutionCoreOperatorErrorV3::ReleaseSet)?;
     let caller_authority =
         Pubkey::find_program_address(&authority_seeds.as_slices(), &snapshot.caller_program.key).0;
     if caller_authority == snapshot.caller_program.key
@@ -347,7 +347,7 @@ pub fn authenticate_pre_market_funding_receipt_v2(
     expected: PreMarketFundingReceiptV2,
 ) -> Result<PreMarketFundingReceiptV2, ResolutionCoreOperatorErrorV3> {
     let observed = PreMarketFundingReceiptV2::decode(receipt_data)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
+        .map_err(ResolutionCoreOperatorErrorV3::Resolution)?;
     if observed != expected {
         return Err(ResolutionCoreOperatorErrorV3::Funding);
     }
@@ -445,7 +445,7 @@ fn resolution_mask(
     for entry_index in 0_u16..manifest.entry_count() {
         if manifest
             .entry(entry_index)
-            .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?
+            .map_err(ResolutionCoreOperatorErrorV3::Capability)?
             .release_id()
             .to_bytes()
             == RESOLUTION_CONTROLLER_RELEASE_ID_V7

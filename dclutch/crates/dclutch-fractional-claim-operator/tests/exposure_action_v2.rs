@@ -208,7 +208,9 @@ fn token_behavior_record_is_terms_and_market_selected() {
             &selection,
             behavior_admission(),
         ),
-        Err(Error::Token)
+        Err(Error::TokenSvm(
+            dclutch_custody::token_svm::Error::InvalidAdapterRelease
+        ))
     );
 }
 
@@ -444,7 +446,9 @@ fn retirement_closes_all_k_mints_in_terms_order_only_at_zero_supply() {
             context,
             &hostile,
         ),
-        Err(Error::Token)
+        Err(Error::TokenSvm(
+            dclutch_custody::token_svm::Error::MintSupplyMismatch
+        ))
     );
 
     let credit = LifecycleRentCreditV2::new(
@@ -501,6 +505,8 @@ fn retirement_closes_all_k_mints_in_terms_order_only_at_zero_supply() {
                 ..observed
             },
         ),
-        Err(Error::Rent)
+        Err(Error::LifecycleRent(
+            dclutch_market::rent::lifecycle_v2::LifecycleRentErrorV2::RetirementMismatch
+        ))
     );
 }

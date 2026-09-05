@@ -49,8 +49,8 @@ pub struct FinalizedProductGraphAccountsV3<'a> {
 pub enum ProductGraphObservationErrorV3 {
     /// At least one raw/staging coordinate was not finalized and canonical.
     InvalidRecord,
-    /// The three independently authenticated records did not form one graph.
-    InvalidGraph,
+    /// `dclutch_product::admission` refused; the cause is its own.
+    ProductRuntimeV2Admission(dclutch_product::admission::Error),
 }
 
 /// Reauthenticate one exact finalized Product graph without trusting a client DTO.
@@ -85,7 +85,7 @@ pub fn authenticate_product_graph_observation_v3(
         &accounts.domain_raw.data,
         &accounts.portfolio_raw.data,
     )
-    .map_err(|_| ProductGraphObservationErrorV3::InvalidGraph)?;
+    .map_err(ProductGraphObservationErrorV3::ProductRuntimeV2Admission)?;
     Ok(AuthenticatedProductGraphObservationV3 {
         outcome_count: admitted.join.outcome_count,
         product_record: admitted.product_record_digest.to_bytes(),

@@ -163,6 +163,8 @@ pub enum Error {
     Registry(RegistryError),
     /// Checked evidence and finalized Registry/Loader authority were not exact.
     IdentityMismatch,
+    /// `dclutch_registry` refused; the cause is its own.
+    RegistryContract(dclutch_registry::Error),
 }
 
 /// Join checked multiprogram evidence to one packet-safe Registry activation.
@@ -192,7 +194,7 @@ pub fn build_checked_registry_activation_packet_v1(
     let activated_release_set = activation
         .expected_cache
         .release_set_projection()
-        .map_err(|_| Error::IdentityMismatch)?;
+        .map_err(Error::RegistryContract)?;
     if activated_release_set != checked_release_set.release_set()
         || activation.execution_release_set_id
             != checked_release_set
