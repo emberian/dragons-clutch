@@ -2,7 +2,7 @@
 
 Status: **CONFIRMED (ember, 2026-09-04 15:50 EDT, in conversation; reversible on request).** Previously: PROVISIONAL — ruled by the orchestrator on 2026-09-03 under ember's**
 standing goal, landed the same morning, and reversible by ember at the cost §7
-states**. The ruling is `GOAL.md:3874-3877`, carrying the standing formula
+states**. The ruling is `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3874-3877`, carrying the standing formula
 *"RULING (under the standing goal; ember may reverse)"*. Landed at `3a8ac205d`
 (2026-09-03 07:28); the design note is
 `docs/design/GENERAL_CALLER_AUTHORITY_SLOT_BINDING_2026_09_03.md` (`75215937f`).
@@ -12,7 +12,7 @@ It is a Trading change, so it rides to chain with cohort-15.
 
 The read-only `devnet-general-session` driver (`d2d342573`) attributed all 55
 top-level accounts of a General execution to an author, and found four that had
-none. `GOAL.md:3866-3872`:
+none. `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3866-3872`:
 
 > the four caller authorities, which are **unstateable**: seeded from
 > `sha256(request header ‖ inline bank)` while the bank carries `CURRENT_SLOT`
@@ -39,7 +39,7 @@ ADDRESS"* (`shadow_digest_v3.rs:82-87`).
 > slot** — `role_request_digest` becomes a slot-free digest
 > (`sha256(parent_request_digest ‖ chunk_index)`); no trusted-environment scalar
 > enters any address seed.
-> — `GOAL.md:3874-3877`
+> — `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3874-3877`
 
 ## 3. What it changed in the trust model
 
@@ -83,7 +83,7 @@ it."* The unenforced pairing later got a refusal of its own,
 Not CU — **statability**. Before the change General could not execute on a real
 chain at all: the account list is fixed at signing and the address moved with the
 slot, so the family refused `0x4001` at its entrance. After it, the ladder runs
-N=2 at 603,939 CU, N=13 at 609,097, N=258 at 619,393 (`GOAL.md:3921-3923`).
+N=2 at 603,939 CU, N=13 at 609,097, N=258 at 619,393 (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3921-3923`).
 
 ## 5. The hostiles that guard it
 
@@ -115,7 +115,7 @@ one for another chunk ordinal — all refusing `TradingSbfError::Release`. In
 appending one byte to the request moved the address — is replaced, *"that
 property WAS the wall"*.
 
-The proof went green at HEAD (`GOAL.md:3921-3923`, slots 1 and 48, 603,939 CU
+The proof went green at HEAD (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3921-3923`, slots 1 and 48, 603,939 CU
 both) only after a separate defect was convicted: the admitted CPI loop paid for
 `StableInstruction::from(instruction.clone())` once per chunk and exhausted the
 heap with eight bytes of the 65,536 grant left. And the proof had previously
@@ -145,7 +145,7 @@ The latent Shadow instance returns and re-arms the moment any family pairs
 
 ## Evidence pointers
 
-`GOAL.md:3866-3878`, `:3903-3905`, `:3921-3923`; commits `3a8ac205d`,
+`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3866-3878`, `:3903-3905`, `:3921-3923`; commits `3a8ac205d`,
 `75215937f`, `d2d342573`, `7a18a2272`;
 `crates/dclutch-execution-strategy-contract/src/shadow_digest_v3.rs:28`,
 `:66-106`, `:107`;

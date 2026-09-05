@@ -35,7 +35,7 @@ file, so it reprinted itself on every regeneration.
 
 ## Why this exists
 
-GITSCAN-2's G-4 (`docs/ASPIRATION_LEDGER.md`): gen-1 (`dragons-clutch`,
+GITSCAN-2's G-4 (`docs/evidence/ASPIRATION_LEDGER_2026_08_27.md`): gen-1 (`dragons-clutch`,
 `scripts/dependency_license_check.py`) ran a real dependency/license closure
 — 36 manifests, 2,129 rows, PASS, a committed catalog byte-gated against
 drift — and left three dependency families for a human to review. Gen-3 (this

@@ -395,14 +395,14 @@ Neither the ~4,940 nor the ~12,900 has a commit behind it. Both were introduced 
 which the profile is not exercisable, plus docs and a TS mirror, are excluded. The family
 figure is coincidentally close by a different measurement and hides that 23% of it is
 Lean-emitted from 1,820 lines of Lean the census does not count. Like for like a profile
-is **59–60%** of a family, not 38%. **`GOAL.md:1820`'s "~13,000 lines for Switchboard"
+is **59–60%** of a family, not 38%. **`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:1820`'s "~13,000 lines for Switchboard"
 inherits every exclusion and should be read as a floor; 15,000–17,000 is the honest
 number on the relayed precedent — and that is for the *wrong shape*, per the target move
 above.**
 
 ### The generic-header refactor — **DECIDED, and its headline justification is stale**
 
-`GOAL.md:1826-1828` says `provider_v3.rs:372` pins the provider-neutral
+`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:1826-1828` says `provider_v3.rs:372` pins the provider-neutral
 `transport_profile_id` to a Wormhole router ABI id. **At HEAD it does not.**
 `programs/dclutch-resolution-proof-sbf/src/provider_v3.rs:372` reads
 `source_release.transport_profile_id().to_bytes() != pyth.transport_profile_id()` —
@@ -544,7 +544,7 @@ Two comments in the same program contradict each other, and the ruling was taken
 stale one.
 
 Supporting arithmetic: the continuation route, which never made those CPIs, peaks at
-**29,895 of 32,768 bytes — 2,873 spare** (`docs/ASPIRATION_LEDGER.md:1068-1070`); CPI
+**29,895 of 32,768 bytes — 2,873 spare** (`docs/evidence/ASPIRATION_LEDGER_2026_08_27.md:1068-1070`); CPI
 instruction clones on this allocator measure **2,322 bytes for two child CPIs**
 (`entrypoint_adapter.rs:1394-1396`). The top-level route at HEAD now differs from the
 continuation by *less* than when the declaration was written.
@@ -600,7 +600,7 @@ second program: `programs/dclutch-general-accelerator-sbf/src/lib.rs:440-459` sc
 `request_heap_frame`, sets a variable named `heap_granted`, and refuses
 `HeapFrameNotGranted` — the value is the *request*. Harmless there (that program cannot
 use an extended heap), but the same name-promises-what-it-cannot-observe defect.
-(2) `entrypoint_adapter.rs:287` declares `HEAP_HEADER_BYTES = 24` while `WAVE.md:3632-3634`
+(2) `entrypoint_adapter.rs:287` declares `HEAP_HEADER_BYTES = 24` while `docs/ledger/WAVE_2026-08-26_to_2026-09-02.md:3632-3634`
 explains the 776-byte fault offset as *"the bump heap reserves 776 bytes at its floor"* —
 those disagree by 752, and since the scratch bumps *down from the ceiling*, a fault at
 `ceiling − 776` is more simply the first scratch block being 776 bytes wide. The
@@ -797,7 +797,7 @@ coefficients *are* the numerators; together `D == 1`; but `D <= 1` refuses
 
 **The order is not a matter of taste, because WAVE already recorded the dependency:**
 `Content`/`Route` is *"the live frontier, **and upstream of the coefficient question**"*
-(`WAVE.md:4737`). A guard you cannot reach cannot be shown repaired. Combined with the
+(`docs/ledger/WAVE_2026-08-26_to_2026-09-02.md:4737`). A guard you cannot reach cannot be shown repaired. Combined with the
 asymmetry the lane correctly refused to ignore — deleting a never-*refusing* tautology is
 free, deleting a never-*admitting* guard **lets through what was blocked** — the order
 follows:
@@ -979,7 +979,7 @@ does not fire here.
 
 ### What is genuinely lost, and it is a decision rather than a deletion
 
-`docs/ASPIRATION_LEDGER.md:2481-2487` (**N-11**) records that the hybrid representation —
+`docs/evidence/ASPIRATION_LEDGER_2026_08_27.md:2481-2487` (**N-11**) records that the hybrid representation —
 internal Position plus optional Materialize/Dematerialize — *"is built and shipped three
 generations deep… and the reject-criterion was never evaluated."* `:1168` (**M-52**) is
 external venue routing for materialized claims, whose stated rationale for the hybrid was
@@ -1371,7 +1371,7 @@ new places:
     `heap_granted` and sets it from the ComputeBudget **request** — a fourth instance of
     the class, harmless in that program but the same defect.
 11. `programs/dclutch-trading-sbf/src/entrypoint_adapter.rs:287` (`HEAP_HEADER_BYTES = 24`)
-    disagrees by 752 with `WAVE.md:3632-3634`'s *"the bump heap reserves 776 bytes at its
+    disagrees by 752 with `docs/ledger/WAVE_2026-08-26_to_2026-09-02.md:3632-3634`'s *"the bump heap reserves 776 bytes at its
     floor."* Since the scratch bumps **down from the ceiling**, a fault at `ceiling − 776`
     is more simply the first scratch block being 776 bytes wide. The observation stands;
     the attribution looks wrong.
@@ -1394,7 +1394,7 @@ new places:
     `crates/dclutch-structured-v2-operator/src/child_request.rs:80` and
     `crates/dclutch-bearer-v2-operator/src/open_structured_v3.rs:109`, plus
     `docs/decisions/0011-structured-v2-physical-route.md:630-633`.
-15. `docs/LETTER_TO_CLAUDE_2026_09_01.md:672` conditions a standing instruction on the
+15. `docs/ledger/LETTER_TO_CLAUDE_2026_09_01.md:672` conditions a standing instruction on the
     stale figure — *"If K=3 `IssueStructured` remains at its measured 1,357 bytes, keep
     that browser act blocked; use a proven K=2 route…"*. Both halves are now wrong: the
     figure is 1,397, and **no K = 2 route exists at HEAD** (it existed at `2f02316`
@@ -1440,3 +1440,18 @@ live cluster (§A2 — I verified only that none can be created now); and a buil
 confirmation of §B4's 1,241-byte K = 2 figure under the house builder, which is derived
 from the serialization rather than measured — though the same arithmetic reproduces the
 1,397 and the 1,061 exactly, which is the positive control for the model.
+
+## Addendum, 2026-09-04 — two verdicts, re-read against what was built
+
+- **§C2's premise was inverted by the lane sent to build the repair** (the
+  orchestrator's correction of 2026-09-01,
+  `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md#L2446`): the Structured
+  operator's route geometry was right and `claims_composition_v3.rs` was
+  wrong — it refused any representation route that is not `Once`, and
+  `AffineOnce` would bind K == N, which the family exists to deny. The four
+  facts §C2 verified held; the inference drawn from them did not. The repair
+  order §C2 ruled (Content/Route first, the coefficient guard last, with a
+  control) was followed.
+- **§B4 stands and was ruled**: decision 0029 item 4 refuses the bare width-2
+  spot band and admits a stated proposition with a prior in its place;
+  `docs/design/PACKET_LIMIT_2026_09_01.md` (head) records K=2 dissolved twice.

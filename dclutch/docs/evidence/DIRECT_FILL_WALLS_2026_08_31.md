@@ -196,7 +196,7 @@ the seal reuses whole.
 buyer debit is 50,250,000. By wall 5, the probe therefore admits **exactly twice
 what its own trade debits**, and no Direct fill can ever land from it.
 
-`docs/VALIDATION_BACKLOG.md` still asks the next convergence gate to "require the
+`docs/ledger/VALIDATION_BACKLOG_2026-08-31.md` still asks the next convergence gate to "require the
 explicit partition of 1,000,000,000 founding atoms plus 100,000,000 participant
 atoms" — the same number, written down as a requirement.
 

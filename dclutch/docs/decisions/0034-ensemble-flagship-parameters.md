@@ -8,7 +8,7 @@ until 15:50 EDT, when ember read the docket and accepted it in conversation
 without amending it; the confirmation line below is the whole of what was said.
 The questions are
 `docs/design/MECHANISM_ENSEMBLE_RESOLUTION_2026_09_04.md:499-538`; the design
-and its sorry-free Lean landed at `ff4f3b142` (`GOAL.md:4764-4781`). Direction
+and its sorry-free Lean landed at `ff4f3b142` (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4764-4781`). Direction
 4 of the mechanism agenda, decision 0031.
 
 **Confirmed, 2026-09-04 15:50 EDT.** Ember, after reading the docket and the
@@ -248,4 +248,4 @@ refund reached only by a path nobody will walk is not a pathway. It saves
 `docs/decisions/0027-recovery-is-one-funded-ordered-ladder.md` §3;
 `docs/decisions/0030-rent-is-fixed-when-an-account-is-funded.md`;
 `docs/decisions/0031-the-mechanism-agenda.md`;
-`GOAL.md:4764-4781`; commits `ff4f3b142`, `12a9b13a5`.
+`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4764-4781`; commits `ff4f3b142`, `12a9b13a5`.

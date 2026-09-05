@@ -9,7 +9,7 @@ conversation without amending it; the confirmation line below is the whole of
 what was said. The question is
 `docs/design/MECHANISM_FOUNDER_BOND_2026_09_04.md:456-473`; the design and its
 34 sorry-free theorems landed at `86d38a203` and `9365be226`
-(`GOAL.md:4756-4763`). Direction 5 of the mechanism agenda, decision 0031.
+(`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4756-4763`). Direction 5 of the mechanism agenda, decision 0031.
 
 **Confirmed, 2026-09-04 15:50 EDT.** Ember, after reading the docket and the
 mechanism cohort page:
@@ -201,4 +201,4 @@ items 3 and 5; `docs/decisions/0025-an-outage-refunds-rather-than-paying-the-fou
 `docs/decisions/0030-rent-is-fixed-when-an-account-is-funded.md`;
 `docs/decisions/0031-the-mechanism-agenda.md`;
 `docs/MASTER_COMPLETION_CONTRACT.md:96`;
-`GOAL.md:4756-4763`; commits `86d38a203`, `9365be226`.
+`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4756-4763`; commits `86d38a203`, `9365be226`.

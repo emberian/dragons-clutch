@@ -366,15 +366,15 @@ text at all, and a reader who greps this file for `scratch`, `output page` or
 
 ### What the tree treats as given
 
-`GOAL.md:3004-3006` and `:3059` both attribute the output-page transport's
+`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3004-3006` and `:3059` both attribute the output-page transport's
 current disposition to this record:
 
 > the output-page transport is built for both accelerators, **inert until a
 > Strategy record names it** (ember's 0003 ruling)
-> — `GOAL.md:3005-3006`
+> — `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3005-3006`
 
 > End state: inline input + the output page (ember's 0003).
-> — `GOAL.md:3059`
+> — `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3059`
 
 Built and inert is the whole of it. Commits `93bd4f603` (contract only),
 `4f30d4ce8` (dealer), `0f53b668a` and `a4c5add46` (General), all 2026-09-02.
@@ -404,7 +404,7 @@ account, invokes a child, or owns protocol state"* (dealer `lib.rs:12`, General
 
 ### The open question — docket D6, ember's
 
-Put to ember at `GOAL.md:2863-2867`, and put identically by the design note at
+Put to ember at `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:2863-2867`, and put identically by the design note at
 `ACCELERATOR_OUTPUT_CHANNEL_2026_09_02.md:273-279`, which calls it *"the only
 judgment call in the design; the rest is measured or derived"*:
 
@@ -413,7 +413,7 @@ judgment call in the design; the rest is measured or derived"*:
 > in that window, never read by any route — still the "stateless accelerator"
 > 0003 admits, or does 0003 need an amendment saying so?
 
-**That question is OPEN.** The recommendation `GOAL.md:2866` made was *"amend
+**That question is OPEN.** The recommendation `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:2866` made was *"amend
 0003 to say so"*, and no such amendment exists in this file — which is the
 condition this note records, not repairs. A ruling on it is a real amendment to
 §Decision, made by ember, and it is the precondition for the transport being
@@ -423,7 +423,7 @@ What is measured and not in question, for whoever rules it: General OpenBatch
 N=2 runs its whole bank in ONE CPI at 51,404 CU against four chunks of which one
 was 50,201; the Dealer equity Add runs its whole route in one CPI at 455,790 and
 exceeds the budget in the tail with 3,773 left — *"the route's own weight, not
-the transport"* (`GOAL.md:3006-3009`). The census gets **stronger**, not weaker:
+the transport"* (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3006-3009`). The census gets **stronger**, not weaker:
 every runtime observation unchanged, plus page bytes equal to the digest
 preimage (`ACCELERATOR_OUTPUT_CHANNEL_2026_09_02.md:93-95`). The page is
 client-provisioned by a plain `SystemProgram::CreateAccount`, rent paid once and

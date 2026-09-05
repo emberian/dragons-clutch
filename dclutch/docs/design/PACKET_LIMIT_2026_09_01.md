@@ -1,3 +1,46 @@
+# The legacy packet, protocol-wide
+
+**Head current at `330bbfaba` (2026-09-04), tree root `/Users/ember/dev/dclutch`; campaign-serializer and validator measurements, not mainnet evidence.**
+The body below `## History` is the 2026-09-01 reading at `10e44feae` with its 2026-09-04 addendum (§10), verbatim; this head states only what survives.
+
+## What is true now
+
+- **Two fix classes, and they do not overlap.** Every route over 1,232 bytes as a
+  legacy message is closed by v0 over an address lookup table — a *client*
+  change, since tables are routing data and never protocol authority
+  (`crates/dclutch-versioned-message-operator`), and already applied on most
+  of them. Exactly one family is over *with the table applied*: Structured
+  full-width `IssueStructured`/`UnwrapStructured` and Hot-route `Denominate`,
+  whose only legal lever is commit-don't-inline as a Lean-emitted ABI
+  revision (drop the three re-derived per-coordinate PDAs; K rises to 5).
+  Splitting issuance is not legal: a complete set per instruction is the
+  "exhaustive before it mints" rule.
+- **The width-2 question was ruled**, not fixed by a packet change: decision
+  0029 item 4 refuses the bare width-2 spot band and admits a stated
+  proposition with a prior in its place (the options are §7 below).
+- **A route property found after the reading: `DCLTPCA1`**, the expired-source
+  abort, serialises to 1,237 bytes inline against 1,232 — it misses by five and
+  cannot be submitted as a legacy transaction by anyone. The successor
+  bootstrap already compiles it as v0 over a table; no lane has yet submitted
+  that frame to a validator, so the table is asserted on this route, not
+  exercised (§10a).
+- **§2b overstated tier 1**: `registry/process_reauthenticate` had never been
+  submitted anywhere and `registry/process_abort#4` had no host builder; both
+  execute on tier 1 since `c42da8fef` (2026-09-04). Their extent is still not
+  recorded — `expected_wire_bytes` is computed and never published (§10b).
+- **Four of §2c's silent routes now have a stated reason** in
+  `tools/gauntlet/blocked.json` (§10c).
+- **The instrument point stands**: ProgramTest submits no packet and cannot
+  refuse for size, so a campaign figure is measured, never enforced; only a
+  validator enforces the limit. Every number in the body says which transport
+  it measured.
+- One ALT builder was written and abandoned (`compile_direct_hot_v0`, zero
+  callers); its action-neutral report is the seam the registered Direct
+  operator builder needs, and decision 0031's batch-spine design proposes
+  deleting the registered branch instead.
+
+## History
+
 # The legacy packet, protocol-wide — 2026-09-01
 
 Tree `/Users/ember/dev/dclutch`, HEAD `10e44feae5751b1e37ed1605501d3f57a785ddd6`.
@@ -63,13 +106,13 @@ a ten-lane dirty tree, and not done here.
 
 ## 2. Route table
 
-Owner column: lane map `GOAL.md:2267-2272,2444,2457-2471,2537`. S3 Direct owns
-`hot_v3.rs` (469 lines in flight, `WAVE.md:6775`) and the `direct_*` tests;
+Owner column: lane map `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:2267-2272,2444,2457-2471,2537`. S3 Direct owns
+`hot_v3.rs` (469 lines in flight, `docs/ledger/WAVE_2026-08-26_to_2026-09-02.md:6775`) and the `direct_*` tests;
 S7 Structured owns `bearer-v2-operator` and `rational_representation_v2_program_test.rs`;
 S4 General; S5 Dealer; C-10 Witness owns the retirement chain and the
 Claims/Custody/claim-check gauntlets; COHORT-10 owns `market.rs`/`plan.rs` and
 the founding chain; REDEMPTION owns the wallet-terminal path. C-09 and NON-PRICE
-are **closed** (`GOAL.md:2457,2531`); the resolution routes have no live lane,
+are **closed** (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:2457,2531`); the resolution routes have no live lane,
 and `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs` is dirty
 in the working tree under a lane the map does not name.
 
@@ -107,7 +150,7 @@ keys from the frame; **split** = two instructions; **none** = fits.
 | `core/series_consume::process` | core | routed v0 **1,037** on the local validator (`tools/local-validator/bootstrap/evidence/series-consume-replay-2026-08-31.json:24`); legacy impossible — 61 unique keys = 1,952 B of addresses (`docs/evidence/GENERAL_AND_SERIES_EXECUTED_CAMPAIGNS_2026_08_29.md:154-155`) | 61 unique | n/a | ALT (in place) | none (C-07) |
 | `core/found::process#Found` (Found31) | core | **1,242** legacy (`tools/gauntlet/tier1/witnesses.json:59`); executes v0 on tier 1 | 31 | **+10** | ALT (in place since `4e1c4db`) | COHORT-10 |
 | `trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2` (DCLTPCB2) | trading | 517 B signed v0 (`docs/evidence/FOUND_COMPACT_2026_08_28.md:62-66`) | 90 refs → 62 keys | fits; **2 keys from the 64-lock wall** | none for bytes; the wall is locks, which no packet fix moves | COHORT-10 |
-| `registry/continuation_v1::process` | registry | 1,206 legacy (`docs/evidence/CONTINUATION_ROUTE_FIX_OR_RETIRE_2026_08_30.md:95`) | — | fits by 26 | none; harness-only (`GOAL.md:114`) | — |
+| `registry/continuation_v1::process` | registry | 1,206 legacy (`docs/evidence/CONTINUATION_ROUTE_FIX_OR_RETIRE_2026_08_30.md:95`) | — | fits by 26 | none; harness-only (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:114`) | — |
 | `direct-aot/process_instruction` | direct-aot | 169–755 legacy (`docs/evidence/DIRECT_FAMILY_CAMPAIGN_2026_08_27.md:139`) | 0; 584-B request | fits | none | S3 Direct |
 | `general-accelerator/process_instruction`, N=1 | general-acc | 745–868 legacy (`docs/evidence/GENERAL_ACCELERATOR_CAMPAIGN_2026_08_27.md:380-388`, `bb4e83ca`) | 31–90 | fits | none | S4 General |
 | same, N=258 | general-acc | Consider 1,273 · Freeze 1,207 · InitializeSettlement 1,330 · Collect 1,310 · Materialize 1,276 · Distribute 1,310 · Close 1,295 legacy (`:392-400`) | 45–104 | +41 / fits / +98 / +78 / +44 / +78 / +63 | ALT — the Trading-Hot form of the same seven compiles to 660–918 over one table per action (`docs/evidence/GENERAL_ALT_PACKET_WITNESS_2026_08_27.md:80-98`) | S4 |
@@ -127,8 +170,8 @@ keys from the frame; **split** = two instructions; **none** = fits.
 
 | route | program | transport / assertion | instrument that would record it | owner |
 | --- | --- | --- | --- | --- |
-| `trading/hot_v3…` — **Direct registered Sell / Buy** (Buy 1,144,079 CU, three Custody children, `WAVE.md:6783-6784`) | trading | v0 over the waist's table; `assert!(wire <= 1_232)` on every submission (`programs/dclutch-trading-sbf/program-test/direct-hot/src/waist.rs:1237-1250`) — the value prints only on overflow | print/record `wire` at `waist.rs:1237` through `program-test-evidence` | S3 |
-| `trading/hot_v3…` — **General OpenBatch** N=2 (heap wall at 708,284 CU, `WAVE.md:6734`) | trading | v0 over the waist's table (`programs/dclutch-trading-sbf/program-test/general-hot/tests/open_batch.rs:697-698`); `accounts.len() <= 100` (`:662`); no wire measurement | same as above | S4 |
+| `trading/hot_v3…` — **Direct registered Sell / Buy** (Buy 1,144,079 CU, three Custody children, `docs/ledger/WAVE_2026-08-26_to_2026-09-02.md:6783-6784`) | trading | v0 over the waist's table; `assert!(wire <= 1_232)` on every submission (`programs/dclutch-trading-sbf/program-test/direct-hot/src/waist.rs:1237-1250`) — the value prints only on overflow | print/record `wire` at `waist.rs:1237` through `program-test-evidence` | S3 |
+| `trading/hot_v3…` — **General OpenBatch** N=2 (heap wall at 708,284 CU, `docs/ledger/WAVE_2026-08-26_to_2026-09-02.md:6734`) | trading | v0 over the waist's table (`programs/dclutch-trading-sbf/program-test/general-hot/tests/open_batch.rs:697-698`); `accounts.len() <= 100` (`:662`); no wire measurement | same as above | S4 |
 | `claims/affine_batch_v2`, `signed_delta_v3`, `rational_lifecycle_v2`, `protocol_position_v2`, `sparse_native_transfer_v1`, `custody_replay_v1`, `terminal_settlement_v3` | claims | v0 over a live table; witness asserts max ≤ 1,232 and zero unmeasured | the maxima are in each fold; no tracked doc states them | C-10 / S7 |
 | `trading/user_position_admission_v1` (+ Admit/Close) | trading | v0 over a table, `wire_extent <= PACKET_DATA_BYTES` (`…/user-position-admission/tests/lifecycle.rs:580`); successor journals `wire_bytes` (`…/successor/src/user_position_admission.rs:241,1226`) | the journal, once a run is kept | — |
 | `dealer/process_dealer_family_instruction` | dealer | legacy family campaign, ≤ 35 accounts, records `wire_bytes` (`programs/dclutch-dealer-sbf/program-test/tests/family.rs`); "submits no packet" (`tools/gauntlet/dealer/README.md:93-100`) | the fold | S5 |
@@ -165,7 +208,7 @@ admit, `CreateFund`, `direct_funding_close_v1`, `Settle`, `Capture`. By
 (`tools/gauntlet/resolution-sponsored/witnesses.json:28`, expect `8`), core-v3
 3 (`resolution-core-v3/witnesses.json:21`, three labels), pre-market 3
 (initializer + two hostiles, `resolution-pre-market-funding/README.md:48-52`).
-`acf890e5` says thirteen and `GOAL.md:2532` says "thirteen routes"; neither
+`acf890e5` says thirteen and `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:2532` says "thirteen routes"; neither
 number reproduces from what is tracked, and the on-disk ledger holds only the
 Dealer fold. Re-run the three runners and take
 `[.transactions[] | select(.wire_bytes > 1232)] | length` over the folds to
@@ -207,7 +250,7 @@ settle it. The conclusion does not move: six routes, all key-heavy, all ALT.
 | ALT | untouched: the instruction bytes and the account set are identical; the table is "transaction-routing data, never protocol authority" (`versioned-message-operator/src/lib.rs:3-5`), validated as finalized bytes before use | untouched: one instruction | **legal everywhere**, with three obligations: a frozen table per market is an operator lifecycle act the client must precommit (`terminal_sequence.rs:5919-5937` plans it; the Pyth caller refuses a mutable or substituted table, `PYTH_CREDENTIAL_FREE_DEVNET_2026_08_29.md:205-207`); routes that must run when nobody cooperated stay table-free (liveness walk 991, abort 1,002, claim-check ≤ 1,050, handoff 1,209 — all asserted by witnesses); and the twins must build the same message (§5) |
 | ABI (drop re-derived keys) | preserved: the program already derives and requires equality; removing the wire copy removes a redundant check. The request is the digest preimage for the Claims caller-authority PDA (`programs/dclutch-trading-sbf/src/claims_composition_v3.rs:551-558`), so the preimage changes — a Lean-emitted schema revision (`generated.rs` is emitted by `EmitRationalRepresentationV2PhysicalAbiRust.lean`), not a semantic change | preserved | **legal**; cost is a regeneration and every twin that states the width |
 | CDI (digest in the instruction, body in an account) | preserved iff the account's bytes are authenticated by the digest at execution — the pattern Series (root + height-32 proofs), Dealer pages, and the relay's chunked records already use | preserved for the executing instruction; the *staging* transactions move no liability | **legal** where a staging record exists; it is a new record type per route |
-| split | — | **reopens it**: Issue/Unwrap require `asset_count == outcome_count` (`crates/dclutch-rational-representation-v2-request-contract/src/request.rs:477`), which is AGENTS.md's "exhaustive, disjoint … before it can mint liabilities" | **not legal** without a staged escrow that holds the full set before the mint — General's `Prepared → CustodyStaged → Open-or-abort` shape, weeks-class (`GOAL.md:802`) |
+| split | — | **reopens it**: Issue/Unwrap require `asset_count == outcome_count` (`crates/dclutch-rational-representation-v2-request-contract/src/request.rs:477`), which is AGENTS.md's "exhaustive, disjoint … before it can mint liabilities" | **not legal** without a staged escrow that holds the full set before the mint — General's `Prepared → CustodyStaged → Open-or-abort` shape, weeks-class (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:802`) |
 
 ## 5. v0+ALT: protocol change or client change
 
@@ -311,7 +354,7 @@ facts at HEAD, each independent:
    founding path matches on the kind
    (`tools/local-validator/bootstrap/successor/src/market.rs:3119-3160`). A
    width-2 market founded on a **stated prior** passes when the prior is under
-   the ceiling — the non-price lane's closure (`GOAL.md:2457`,
+   the ceiling — the non-price lane's closure (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:2457`,
    `NON_PRICE_RESOLUTION_DESIGN_2026_09_01.md:353-355`). A width-2 **spot
    band** still refuses by arithmetic: one ordinary cell is 10,000 bps against
    a ceiling ≤ `MAX_CELL_EX_ANTE_SHARE_BPS_V1`, and `centred_cuts_v1` refuses

@@ -318,7 +318,7 @@ structural (first admission can only hash deployed bytes).
    8→9. Under this ruling Resolution flips to MOVED in 8→9 (its consent
    slot becomes authority-signed); Custody is the expected sole unmoved
    role. Final arms come from measured ELF digests at the cut — the
-   basis-closure pricing (`BASIS_ABI_UNIFICATION_V1.md:900-907`)
+   basis-closure pricing (`BASIS_ABI_UNIFICATION_V1.md:929-936`)
    disagrees with the symbol analysis, and only an ELF diff settles
    `AlreadyCurrent` claims (TRADE-5's evidence kind).
 6. Activate cohort-9's set; hop open markets; refound; gate 9's

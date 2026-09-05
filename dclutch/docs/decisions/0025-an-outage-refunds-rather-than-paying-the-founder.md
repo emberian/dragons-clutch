@@ -6,7 +6,7 @@ goal, amended by ember at 10:15 EDT to require that the pathways be explained
 and robust, and reversible at the cost §7 states**. It was PROVISIONAL from the
 ruling until 15:50 EDT, when ember read the docket and accepted it in
 conversation without amending it; the confirmation line below is the whole of
-what was said. Docket item D2. Ember's amendment is at `GOAL.md:4653-4654`.
+what was said. Docket item D2. Ember's amendment is at `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4653-4654`.
 **The payout arm landed the same morning at `f9d40b615` (lane ESCROW),
 hostile-first, and §5 records what it turns on; the founding change that seats
 the failure coordinate in an escrow Position is owed and rides cohort-16.**
@@ -53,7 +53,7 @@ founder's hands.
 
 **It executed, and the census held to the atom through it.** Phase `0 → 4`
 `FailureCommitted`, `selector = 3`, the payout ran at 353,233 CU
-(`COHORT13:1443-1445`, `:1723-1755`, `:1890`; `GOAL.md:3509-3510`). The evidence
+(`COHORT13:1443-1445`, `:1723-1755`, `:1890`; `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3509-3510`). The evidence
 document's own reading (`COHORT13:1476-1480`): *"The protocol did what it says
 it does. Whether a venue should* sell *that shape to strangers is a product
 question this cohort has now made concrete rather than hypothetical … the honest
@@ -102,7 +102,7 @@ option the tree did not have.
 
 ## 3. Ember's amendment
 
-Recorded at `GOAL.md:4653-4654`:
+Recorded at `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4653-4654`:
 
 > D2 — wants the failure/recovery pathways explained, robust
 
@@ -120,7 +120,7 @@ Two obligations, and they are not the same one:
 
 ## 4. The lane implementing it
 
-**ESCROW** (`GOAL.md:4657-4658`), paired with **RECOVERY** (decision 0027). The
+**ESCROW** (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4657-4658`), paired with **RECOVERY** (decision 0027). The
 conservation law is stated in Lean before any Rust is written. The disclosure
 half is a web and terms surface (`apps/dclutch-web`), not a program change, and
 is not blocked on the founding change.
@@ -213,7 +213,7 @@ that exists the ruling is a design, and the record says so.
 failure coordinate to an escrow changes what founding does, so no market already
 on a chain can adopt it. Every existing market keeps the old shape until it is
 re-founded, which the disposability regime permits on devnet and which mainnet
-would not (`GOAL.md:1443-1450`). Cohort-16 carries it.
+would not (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:1443-1450`). Cohort-16 carries it.
 
 **The founder loses a hedge they may have priced in.** A founder who held the
 failure coordinate held insurance against their own oracle going quiet. After
@@ -290,7 +290,7 @@ whoever triggered it.
 ## Amendment, 2026-09-04 12:30 EDT: merge is redefined over the ordinary coordinates
 
 **PROVISIONAL, ruled by the orchestrator under ember's standing goal**, recorded
-at `GOAL.md:4782-4785`, and reversible by ember to the second shape at the cost
+at `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4782-4785`, and reversible by ember to the second shape at the cost
 this section states.
 
 **The question this answers is the one §6 left open.** The ESCROW lane stopped
@@ -376,7 +376,7 @@ the seating is a founding fact.
 `crates/dclutch-product-runtime-v2/src/lib.rs:204-213`;
 `crates/dclutch-source-contract/src/source_resolution_v2.rs:449-451`, `:525`;
 `programs/dclutch-resolution-proof-sbf/src/funded.rs:4-5`, `:348`;
-`GOAL.md:3507-3514`, `:4653-4658`, `:4739-4750`, `:4782-4785`;
+`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3507-3514`, `:4653-4658`, `:4739-4750`, `:4782-4785`;
 `formal/dclutch-semantics/DClutchSemantics/EconomicKernel.lean` (the refunding
 split and merge, `e37116b03`);
 `crates/dclutch-claims-svm/src/signed_delta_v3.rs`;

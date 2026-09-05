@@ -59,7 +59,7 @@ keep them open as the honest public record of the wall the project hit?**
 it is the sealed founding-input artifact for `7Mcu1ZT9…`
 (`docs/evidence/TRADE_DIRECT_ACTIVATION_WALL_2026_08_29.md:40`). `market18` is
 `9JwhTHyx…`, and it is the market that **can** trade — it holds the first
-capability root any dClutch market has had (`GOAL.md:139-145`). The dead set is
+capability root any dClutch market has had (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:139-145`). The dead set is
 `7Mcu1ZT9…` and `CasyDFow…`.
 
 **`custody_context` is not why, and the market it *is* about is not on devnet.**
@@ -202,7 +202,7 @@ Stated plainly, so the ruling is not mistaken for "everything is fine":
   `generation` is a *seed* (`physical.rs:652`), so re-founding makes a different
   PDA with no link back. Q1A's lineage design re-points a market's *release
   set*, names the capability manifest as the orthogonal degree of freedom
-  (`docs/design/RELEASE_LINEAGE_MIGRATION_V1.md:231`), and forbids changing role
+  (`docs/design/RELEASE_LINEAGE_MIGRATION_V1.md:272`), and forbids changing role
   program ids (`:35`) — so it neither rescues nor links these.
 - **A market that can reach neither trading nor resolution would strand
   everything.** If a market's *resolution* authority were also unreachable, the
@@ -211,13 +211,13 @@ Stated plainly, so the ruling is not mistaken for "everything is fine":
   names two flow classes as terminal, *"no route can ever return them"*
   (`tools/lamport-ledger/README.md:162-167`), against a measured 121 accounts
   per founded market with 78% of the rent bill in registry records
-  (`GOAL.md:406-415`). **No market is in that condition today.** The class is
+  (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:406-415`). **No market is in that condition today.** The class is
   currently empty, and that is worth writing down as a fact rather than assuming
   it is a guarantee.
 
 **Q3C's compaction does not bear on any of this**, and the answer to "does it
 change when compaction lands?" is no. Compaction runs in `Terminal` and
-`Retiring` only (`docs/design/CLAIM_CHECK_COMPACTION_V1.md:332-340`) and cannot
+`Retiring` only (`docs/design/CLAIM_CHECK_COMPACTION_V1.md:372-380`) and cannot
 run in `Open`, because the crank calls redemption's own payout derivation while
 `CoreState::valid_static` makes `Open` structurally require
 `terminal_receipt.is_none()` (`generated.rs:375-379`; refusal `0x5604`). It is

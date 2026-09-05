@@ -1,13 +1,12 @@
 # dClutch architecture
 
-> **Supersession notice (2026-08-27):** this document still narrates the
-> pre-`DCLTCOR2` `MarketRoot` era (`compact MarketRoot that persists as the
-> terminal replay authority`, below) — STRATUM's 2026-08-27 decision made
-> `DCLTCOR2` the one live Market representation, and `MarketRoot` now survives
-> with exactly two read-only consumers, neither of them a writer. This banner
-> is the only edit; the rest of the document is unchanged and may narrate
-> other superseded decisions too. See `WAVE.md` for current architecture and
-> `docs/ASPIRATION_LEDGER.md` (M-21) for the full staleness accounting.
+> **Superseded, kept as the 2026-08 baseline.** This narrates the pre-`DCLTCOR3`
+> `MarketRoot` era; the live Market representation is the Lean-emitted Core
+> state (`DCLTCOR3`, 368 bytes, `packages/dclutch-sdk/lib/generated/coreFound.ts`).
+> Current architecture is the decision records (`docs/decisions/`, indexed at
+> `docs/reference/decisions.md`) and the heads of the design notes under
+> `docs/design/`; the generated reference (`docs/reference/`) carries every
+> program, route, code and layout. Nothing below is edited.
 
 Status: architectural baseline for the new repository. It is not a deployment
 or completeness claim.

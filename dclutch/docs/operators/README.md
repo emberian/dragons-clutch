@@ -59,6 +59,6 @@ Planned, not yet written:
 
 None of this is mainnet. The commands here run against a local chain you
 start and tear down, or against no chain at all. Seven programs are deployed
-on Solana devnet and one market on it is open for trading, with a devnet
-test token as collateral, so there is nothing to buy with money and no value
-at risk. Nothing here is an audit, and nothing here is a release.
+on Solana devnet as a redeployed cohort, with a devnet test token as every
+market's collateral, so there is nothing to buy with money and no value at
+risk. Nothing here is an audit, and nothing here is a release.

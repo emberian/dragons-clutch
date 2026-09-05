@@ -464,7 +464,7 @@ claims changed hands before terminal.
 
 | route | disposition | reason |
 |---|---|---|
-| `series-shadow/process_instruction` | DELETE | a Series occurrence is a Market carrying a General capability; there is no Series-specific selection to evaluate. Composition with decision 0029 item 1 (BUILD A): the SERIES lane's dispatch should select a General capability per occurrence, at which point the shadow ELF and its unhashed compiler release-id preimage (the `GOAL.md:2655-2662` defect) have nothing to do |
+| `series-shadow/process_instruction` | DELETE | a Series occurrence is a Market carrying a General capability; there is no Series-specific selection to evaluate. Composition with decision 0029 item 1 (BUILD A): the SERIES lane's dispatch should select a General capability per occurrence, at which point the shadow ELF and its unhashed compiler release-id preimage (the `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:2655-2662` defect) have nothing to do |
 | `series-shadow/entrypoint::evaluate_selected_and_publish#accepted` | DELETE | same |
 
 **trading** (30)
@@ -581,10 +581,10 @@ the page and order geometry from the generated ABI — 32 executions per page,
 64 pages per candidate — and the figures below from the evidence lines cited.
 
 **Inputs.** `OpenBatch` through Trading Hot with the family policy: **674,333 /
-666,011 / 680,789 CU at N = 2 / 13 / 258** (`GOAL.md:4563`, PROGRAMS-16B) —
+666,011 / 680,789 CU at N = 2 / 13 / 258** (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4563`, PROGRAMS-16B) —
 flat in N because the batch actions declare a zero item stride. The
 accelerator's whole N = 2 bank in one CPI: **51,404**; one of the four chunks
-it replaces: **50,201** (`GOAL.md:3006`). Accelerator-side cost per settlement
+it replaces: **50,201** (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3006`). Accelerator-side cost per settlement
 action at N = 1 and N = 258 (`GENERAL_ACCELERATOR_CAMPAIGN_2026_08_27.md:380-400`):
 Consider 36,113 / 74,877; Freeze 32,659 / 65,070; InitializeSettlement 61,753 /
 164,970; Collect ~57,787 / ~147,496; Materialize 53,171 / 141,402; Distribute
@@ -592,7 +592,7 @@ Consider 36,113 / 74,877; Freeze 32,659 / 65,070; InitializeSettlement 61,753 /
 Hot: **182,386**, the Direct fill's implied fee leg, reproduced to the CU
 across two ELF sets (`DIRECT_HOT_FEE_BEARING_CU_2026_08_30.md:212`). A Claims
 child move has no isolated figure; the devnet custody replay at 91,911
-(`GOAL.md:4547`) stands in, **provisional**.
+(`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4547`) stands in, **provisional**.
 
 **Derived.** Trading's own share of a Hot action — the floor every transaction
 pays before any family evaluation — is `674,333 − 4 × 50,201 = 473,529` CU.

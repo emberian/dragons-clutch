@@ -8,7 +8,7 @@ cost §7 states**. It was PROVISIONAL from the ruling until 15:50 EDT, when
 ember read the docket and accepted it in conversation without amending it; the
 confirmation line below is the whole of what was said. The six designs all
 exist and no program has moved; the entry that opened the agenda is
-`GOAL.md:4670-4679`, and the closes are `:4689-4699`, `:4715-4726`,
+`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4670-4679`, and the closes are `:4689-4699`, `:4715-4726`,
 `:4756-4780` and `:4786-4794`.
 
 **Confirmed, 2026-09-04 15:50 EDT.** Ember, after reading the docket and the
@@ -29,7 +29,7 @@ reversible on request at the cost §7 states.
 ## 1. The question
 
 On 2026-09-04 the orchestrator put six mechanism directions to ember, ranked by
-property per unit of change (`GOAL.md:4671-4679`):
+property per unit of change (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4671-4679`):
 
 1. the frequent batch auction as the clearing spine of every family;
 2. joint clearing of all outcomes with complete-set minting inside the batch;
@@ -98,7 +98,7 @@ Ember, to the orchestrator on 2026-09-04, on the six-direction agenda:
 > honest :)
 
 The tree's narrative carries the short form in the entry's own heading —
-*"we need to explore all these directions"* (`GOAL.md:4670`) — and this record
+*"we need to explore all these directions"* (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4670`) — and this record
 carries the sentence.
 
 Two obligations come out of it, and they are not the same one:
@@ -117,8 +117,8 @@ Two obligations come out of it, and they are not the same one:
 Six design lanes, all opened and closed on 2026-09-04, none of them touching a
 program:
 
-- **Wave one** (`GOAL.md:4680-4682`): BATCH-SPINE, JOINT-CLEARING, SCORING-DEALER.
-- **Wave two** (`GOAL.md:4751-4755`), started once the clearing rule was stated:
+- **Wave one** (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4680-4682`): BATCH-SPINE, JOINT-CLEARING, SCORING-DEALER.
+- **Wave two** (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4751-4755`), started once the clearing rule was stated:
   ENSEMBLE, BOND, CONDITIONAL.
 
 No implementation lane is chartered by this record. The three rulings the
@@ -238,7 +238,7 @@ Dealer's dependency on the clearing rule's order record is real.
 
 ## Evidence pointers
 
-`GOAL.md:4670-4699`, `:4714-4738`, `:4751-4780`, `:4786-4799`;
+`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4670-4699`, `:4714-4738`, `:4751-4780`, `:4786-4799`;
 `docs/design/MECHANISM_BATCH_SPINE_2026_09_04.md` (esp. `§3.1`, `§3.2`, `§4`, `§5`);
 `docs/design/MECHANISM_JOINT_CLEARING_2026_09_04.md` (esp. `§1.3`, `§1.5`, `§2`, `§3.3`, `§4.4`, `§5`);
 `docs/design/MECHANISM_SCORING_DEALER_2026_09_04.md` (esp. `§1.2`, `§3`, `§6`, `§8`);

@@ -160,7 +160,7 @@ between the tree and a zero-fee or diverse-rate demo.
 
 **The shape question is already recorded; this is the rate question.**
 `docs/design/FEE_GEOMETRY.md` §4.1 confirmed flat `fee_basis_points` as the
-deliberate V1 placeholder and closed ledger N-1, ratified at `WAVE.md:940-947`
+deliberate V1 placeholder and closed ledger N-1, ratified at `docs/ledger/WAVE_2026-08-26_to_2026-09-02.md:940-947`
 — *"rates still open, still ember's."*
 
 **One correction to how this question is usually framed.** L7 is not a
@@ -270,7 +270,7 @@ revisable, not a reason to delay this ruling.
 
 - **D1 ruled** → one paragraph in `README.md` and `docs/guides/trader.md`
   stating who receives fees. Ledger M-26 closes with a decision record instead
-  of a fourth silent generation (`ASPIRATION_LEDGER.md` GITSCAN-2 §D.1 item 5:
+  of a fourth silent generation (`docs/evidence/ASPIRATION_LEDGER_2026_08_27.md` GITSCAN-2 §D.1 item 5:
   selected in gen-1, built in gen-2, discarded in gen-3, no record).
 - **D2 ruled** → one lane, protocol-tier: one const, one refusal discriminant,
   the Lean bound and its two boundary theorems, a refusal-census regeneration,

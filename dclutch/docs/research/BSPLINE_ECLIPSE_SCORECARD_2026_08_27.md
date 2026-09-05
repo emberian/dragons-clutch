@@ -7,7 +7,7 @@ it does not close `O-013`.
 
 ## Why this document exists
 
-`docs/ASPIRATION_LEDGER.md` M-4 is the sharpest finding in that audit: a named
+`docs/evidence/ASPIRATION_LEDGER_2026_08_27.md` M-4 is the sharpest finding in that audit: a named
 ember requirement — *"it was vital to me to be able to do these properly
 shaped dynamics"* — that was dropped, restored on his personal intervention,
 and dropped again by the rewrite. Frontier 2 answered it with certified
@@ -127,7 +127,7 @@ globally nonnegative payoff `(3x-1)^2` and price `-S`).
 sound-but-incomplete gate, or do the per-span Hausdorff witness generation one
 designed and never built." Both halves of that sentence were wrong**, and the
 reason is that this document compared generation one to generation three and
-never looked at **generation two**. `ASPIRATION_LEDGER.md` `G-1` caught it the
+never looked at **generation two**. `docs/evidence/ASPIRATION_LEDGER_2026_08_27.md` `G-1` caught it the
 same afternoon.
 
 Generation two built the gate independently, over integers, and it is not in
@@ -268,7 +268,7 @@ way, in `dragons-clutch` working tree on `main`-equivalent content:
 | It refuses generation one's pinned false acceptance, and the arbitrage costs `-S` | `tests/adversarial.rs:262`, asserting `v1b_degree_two_accepts` *and* `Err(QuadraticMomentOutsideCone { span: 0 })` *and* `cost == -12` |
 | It also fixes generation one's over-refusal | `tests/adversarial.rs:281` |
 | The `u64` mass-denominator completeness residual, failing closed via `OutOfProfile` | `docs/design/PRICE_MEASURE_WITNESS_V2.md:188`, `:271`, `:354` |
-| `G-1` says the ledger itself could not judge soundness — this document now does | `ASPIRATION_LEDGER.md:1285`, *"Whether the quantized checker is sound, complete, or cheap is not something this sweep can say"* |
+| `G-1` says the ledger itself could not judge soundness — this document now does | `docs/evidence/ASPIRATION_LEDGER_2026_08_27.md:1285`, *"Whether the quantized checker is sound, complete, or cheap is not something this sweep can say"* |
 
 One further fact from that reading belongs here, because it is the closest
 thing to a tie in this comparison. Generation one's own `BSpline.lean` header

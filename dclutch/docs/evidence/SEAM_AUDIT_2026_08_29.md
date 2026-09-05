@@ -556,7 +556,7 @@ $ git diff --stat 0617380b..HEAD -- docs/reference/
 regenerate restores it. **The gate that would have caught this is wired
 nowhere:** `tools/genref/generate.sh --check` has exactly one caller, the
 manually-invoked `tools/release/final-generated-convergence.py:220-224` — no
-workflow, no hook, no gauntlet stage. `docs/ASPIRATION_LEDGER.md:1886` already
+workflow, no hook, no gauntlet stage. `docs/evidence/ASPIRATION_LEDGER_2026_08_27.md:1886` already
 knows. Two further generated surfaces are stale by the same commit
 (`refusalRegistryV1`, `routeCensus`, the latter feeding `docs/reference/routes.md`).
 
@@ -698,7 +698,7 @@ stub is strictly more permissive than real Core in exactly the dimension that
 breaks.
 
 The repo half-knew: `docs/evidence/GENERIC_FOUNDING_REACHABILITY_2026_08_26.md:2084-2086`
-records the route as "undriven", and `docs/board-archive-2026-08-27.md:8358-8360`
+records the route as "undriven", and `docs/ledger/board-archive-2026-08-27.md:8358-8360`
 warns that `require_distinct` is global — without noticing the seven existing
 aliases already collide. **The route is not undriven for want of a builder; it
 cannot be driven.**

@@ -6,7 +6,7 @@ exists, the one missing owner-step, the size, and where it goes. Land the ones
 that are genuinely under an hour and unfenced. Measure before believing.
 
 Inputs: `docs/evidence/ASPIRATION_ARCHAEOLOGY_2026_08_30.md` (§B.12, §B.13),
-`docs/research/EXPANSION_FRONTIER_2026_08_25.md`, `docs/ASPIRATION_LEDGER.md`
+`docs/research/EXPANSION_FRONTIER_2026_08_25.md`, `docs/evidence/ASPIRATION_LEDGER_2026_08_27.md`
 (M-4, M-9, M-10, U-013), `docs/OMISSION_INDEX.md`, `WAVE.md` cycle-3 charter.
 
 ## The finding that reframes the rest
@@ -472,11 +472,11 @@ fix is days if v1 survives, zero if it does not.**
 
 ### 3.9 The plan carries a transport candidate the design already ruled out
 
-> **EXISTS.** Both statements. `WAVE.md:463` names Wormhole Queries as
+> **EXISTS.** Both statements. `docs/ledger/WAVE_2026-08-26_to_2026-09-02.md:463` names Wormhole Queries as
 > *"Candidate permissionless upgrade to verify."* `MAINNET_STATE_RELAY.md` §3
 > concluded it is *"not a candidate for v1 and not a near-term upgrade path"*,
 > and §3.2 gives the reason (on devnet the guardian set is one test key);
-> `MAINNET_STATE_RELAY.md:64` marks the row **"not available."**
+> `MAINNET_STATE_RELAY.md:102` marks the row **"not available."**
 > **MISSING OWNER-STEP.** Deleting or annotating one line in `WAVE.md`.
 > **SIZE.** One paragraph. Minutes.
 > **TARGET.** Whoever next edits `WAVE.md`. **I did not take it**: `WAVE.md` is
@@ -542,7 +542,7 @@ fix is days if v1 survives, zero if it does not.**
 > answer to candidate withholding and proposer bonds.
 > **MISSING OWNER-STEP.** A record of why it was dropped, or a design pass to
 > restore it. Verified today: `commit/reveal` has **zero** occurrences in any
-> `.rs` in gen-3 (only `ASPIRATION_LEDGER.md` and the archaeology doc mention
+> `.rs` in gen-3 (only `docs/evidence/ASPIRATION_LEDGER_2026_08_27.md` and the archaeology doc mention
 > it). General ships Consider→Freeze without the subdivision and no record says
 > why. **A solver who withholds the best candidate faces no bond and no
 > detection.**
@@ -666,7 +666,7 @@ excluding each crate's own manifest):
 **So it is one kernel, not four.** The headline should be retired.
 
 **STATUS: LANDED — `711b8959` (FRONTIER-2, 2026-08-30).** The headline is
-retired at all three sites that carried it: `ASPIRATION_LEDGER.md`'s summary
+retired at all three sites that carried it: `docs/evidence/ASPIRATION_LEDGER_2026_08_27.md`'s summary
 line, M-9's dated amendment (with the full re-measurement table), and the
 archaeology's A.4 row that re-inherited it. Two things the re-measurement
 found that this section's table does not say:
@@ -735,7 +735,7 @@ decreasing rank.
 *Consumer:* 17 crates including `programs/dclutch-claims-sbf`. Frontier 5 is
 the one frontier the ledger already marked **CARRIED**.
 *Disposition:* **remove from the orphan list.** Its *operator* (the 9,448-LOC
-island at `WAVE.md:500`) is a separate and still-open question; the kernel is
+island at `docs/ledger/WAVE_2026-08-26_to_2026-09-02.md:500`) is a separate and still-open question; the kernel is
 not.
 
 ### 4.5 The other frontiers, for completeness
@@ -769,7 +769,7 @@ case, believe a safety precondition was unmet when it is met.
    missing from the wire.
 3. **Two broken citation paths** (dig §B.13.13b).
    `ADOPTED_2026-08-20.md` lives only at
-   `dragons-clutch/archive/gen1/docs/decisions/`. `ASPIRATION_LEDGER.md` cited
+   `dragons-clutch/archive/gen1/docs/decisions/`. `docs/evidence/ASPIRATION_LEDGER_2026_08_27.md` cited
    it as `docs/decisions/…` (no such file) and `FEE_GEOMETRY.md` as
    `dragons-clutch/docs/decisions/…` (missing `archive/gen1/`). Both corrected;
    the fee-shape decision record is now reachable from the repo that cites it.

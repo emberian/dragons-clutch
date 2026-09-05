@@ -2,7 +2,7 @@
 
 Status: **CONFIRMED (ember, 2026-09-04 15:50 EDT, in conversation; reversible on request).** Previously: PROVISIONAL — ruled by the orchestrator on 2026-09-02 under ember's**
 standing goal, landed the same morning, and reversible by ember at the cost §7
-states**. The ruling is `GOAL.md:2996-2999`, carrying the standing formula
+states**. The ruling is `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:2996-2999`, carrying the standing formula
 *"RULING (under the standing goal; ember may reverse)"*. It amends decision
 0012 by one paragraph (`docs/decisions/0012-devnet-iteration-substrate.md:124-157`)
 rather than replacing it. Landed at `8e1f98507` (2026-09-02 06:09), evidence
@@ -36,7 +36,7 @@ discipline, so the constant could not even seal itself.
 > the journal's per-row chain re-read as the safety and an explicit refusal when
 > plan and chain disagree; decision 0012 amended by one paragraph; the Lean
 > admission model verified not to name the constant first.
-> — `GOAL.md:2996-2999`
+> — `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:2996-2999`
 
 ## 3. What it changed in the trust model
 
@@ -64,9 +64,9 @@ verification, not a formal change.
 ## 4. What it saved, measured
 
 It unblocked the thing that had never happened. **Cohort-12 sealed at zero SOL**
-the same evening (`GOAL.md:3106-3107`); cohort-13 sealed and founded
+the same evening (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3106-3107`); cohort-13 sealed and founded
 (`docs/evidence/COHORT13_SEALED_FOUNDED_2026_09_02.md`); cohort-14 deployed,
-sealed and **filled** (`GOAL.md:3885-3892`,
+sealed and **filled** (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3885-3892`,
 `docs/evidence/COHORT14_SEALED_FOUNDED_FILLED_2026_09_03.md`). The saving is not
 a CU figure; it is the existence of C-04's chain evidence at all.
 
@@ -107,7 +107,7 @@ have to be relaxed in the same act, because the two cannot both hold.
 
 ## Evidence pointers
 
-`GOAL.md:2992-2999`, `:3106-3107`;
+`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:2992-2999`, `:3106-3107`;
 `docs/decisions/0012-devnet-iteration-substrate.md:124-157`;
 `tools/local-validator/bootstrap/successor/src/upgrade.rs:146`, `:157-161`,
 `:257`, `:9941-9948`; commits `8e1f98507`, `615c243f8`;

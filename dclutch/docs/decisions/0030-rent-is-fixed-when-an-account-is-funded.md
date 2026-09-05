@@ -7,7 +7,7 @@ goal, put to ember on the docket as D8 the same morning, not objected to at the
 It was RULED from the morning of 2026-09-04 until 15:50 EDT, when ember read
 the docket and accepted it in conversation without amending it; the
 confirmation line below is the whole of what was said. The ruling is
-`GOAL.md:4471-4475`, carrying the standing formula *"RULING (under the standing
+`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4471-4475`, carrying the standing formula *"RULING (under the standing
 goal; ember may reverse)"*. Landed at `c0a1586b1`, `4137ec0d3`, `8a0d3f893`,
 `315c1df2e` (lane PROGRAMS-16) with the cohort-15 host recovery at `afab02c25`
 and `ec373d90d` (lane COHORT-15F). It is the only one of the eight docket
@@ -38,7 +38,7 @@ Every exact-rent check on the terminal path compares an account's lamports
 against **the live sysvar's** minimum plus principal, with equality. So every
 account the cohort funded refuses by exactly the rent difference: **491,176
 lamports on a 264-byte ledger** — the surplus is the difference to the lamport
-(`GOAL.md:4461-4466`). The operator reads the live sysvar, and
+(`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4461-4466`). The operator reads the live sysvar, and
 `resolution.rs:1270` makes the same call, so no host-side change lands the
 payout. Widening the comparison to `≥` would admit a donation as custody, which
 the conservation laws forbid.
@@ -61,11 +61,11 @@ and the accounts carry the old rate.
 > it was funded at, never the sysvar of the moment** — persisted in the
 > account's own record (Lean-first), the live sysvar read only for accounts
 > created now.
-> — `GOAL.md:4471-4475`
+> — `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4471-4475`
 
 Ember read the docket at 10:15 EDT the same morning and did not object; D8 was
 the one item put as *"needs you · ruled provisionally"*, and the amendments
-recorded at `GOAL.md:4652-4656` touch D1, D2, D4, D5, D6, D7 and
+recorded at `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4652-4656` touch D1, D2, D4, D5, D6, D7 and
 `supported_builders`, and not this. Silence is never a ruling
 (`docs/MASTER_COMPLETION_CONTRACT.md:180`), so this record stays the
 orchestrator's until ember says otherwise — the difference between an unopposed
@@ -104,14 +104,14 @@ reading a fact rather than fitting one. The session records the recovered rate
 **A correction to the evidence, landed with it:** addendum E said Core runs the
 conjunct on `AdmitTerminal`. It does not — **CreateFund only**. The wall
 cohort-15 actually hit is the operator's planner, a host
-(`GOAL.md:4512-4514`).
+(`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4512-4514`).
 
 ## 4. What it saved
 
 The stranger's payout and the retirement path. Cohort-15's first stranger was
-paid on an honest selector the same morning (`GOAL.md:4541`), and the first
+paid on an honest selector the same morning (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4541`), and the first
 `ResolutionCloseFund` on any chain was certified at 08:25
-(`890b58886`; `GOAL.md:4645-4649`). Neither was reachable while every account
+(`890b58886`; `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4645-4649`). Neither was reachable while every account
 the cohort funded refused by the rent difference.
 
 It also converted a whole class of latent breakage into a censused one. The
@@ -189,7 +189,7 @@ this ruling found it.
 
 ## Evidence pointers
 
-`GOAL.md:4460-4476`, `:4505-4519`, `:4541`, `:4600-4612`, `:4645-4649`;
+`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4460-4476`, `:4505-4519`, `:4541`, `:4600-4612`, `:4645-4649`;
 commits `c0a1586b1`, `4137ec0d3`, `8a0d3f893`, `315c1df2e`, `afab02c25`,
 `ec373d90d`, `890b58886`, `1fd3e3c3f`, `ace5d24e9`;
 `formal/dclutch-semantics/DClutchSemantics/CapabilityManifestV1Abi.lean:326`,

@@ -278,7 +278,7 @@ bash tools/release/test-checked-release-freshness.sh
 Replayed 2026-09-03 on hbox from an empty `CARGO_HOME`/`RUSTUP_HOME` and a fresh
 clone; every line below is one that campaign actually ran, and the whole setup
 took 51 seconds. Nothing in this tree said any of it before that replay, so a
-cold machine had to reconstruct the toolchain from `docs/board-archive-2026-08-27.md`.
+cold machine had to reconstruct the toolchain from `docs/ledger/board-archive-2026-08-27.md`.
 
 ```sh
 # Isolate everything a cold run creates, so the host's own caches are not inputs.

@@ -6,7 +6,7 @@ goal, amended by ember at 10:15 EDT to require robust failure pathways, and
 reversible at the cost §7 states**. It was PROVISIONAL from the ruling until
 15:50 EDT, when ember read the docket and accepted it in conversation without
 amending it; the confirmation line below is the whole of what was said. Docket
-item D5. Ember's amendment is at `GOAL.md:4654`. This record answers the
+item D5. Ember's amendment is at `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4654`. This record answers the
 contract's `Recovery ontology: keep or cut` register row
 (`docs/MASTER_COMPLETION_CONTRACT.md:187`), and it is the companion half of
 decision 0025: the ladder is the pathway in, the escrow is the pathway out.
@@ -100,7 +100,7 @@ for it.
 
 ## 3. Ember's amendment
 
-Recorded at `GOAL.md:4654`:
+Recorded at `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4654`:
 
 > D5 — robust failure pathways (keep recovery)
 
@@ -118,7 +118,7 @@ receiver under every market's release pin.
 
 ## 4. The lane implementing it
 
-**RECOVERY** (`GOAL.md:4657-4658`), paired with **ESCROW** (decision 0025). The
+**RECOVERY** (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4657-4658`), paired with **ESCROW** (decision 0025). The
 properties are stated in Lean before any Rust. It is a founding change, so it
 rides cohort-16 with the escrow.
 
@@ -139,7 +139,7 @@ The standing instruments that already apply: the funded walk's headline property
 — *"a silent provider cannot make a market unresolvable, only drive it to a
 pre-disclosed outcome, along a bounded, prepaid, permissionless path that pays
 whoever walks it"* (`funded.rs:3-6`) — every clause of which is a check in that
-module; and `MAINNET_STATE_RELAY.md:1077`, *"`CommitFailure` commits the
+module; and `MAINNET_STATE_RELAY.md:1115`, *"`CommitFailure` commits the
 **Product's own** failure selector out of `FiniteResultMapV1`. A caller never
 selects a result."*
 
@@ -308,7 +308,7 @@ cutting recovery removes the strongest reason decision 0029 keeps Series.
 
 ## Evidence pointers
 
-`docs/MASTER_COMPLETION_CONTRACT.md:187`; `GOAL.md:807`, `:4654-4658`;
+`docs/MASTER_COMPLETION_CONTRACT.md:187`; `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:807`, `:4654-4658`;
 `programs/dclutch-resolution-proof-sbf/src/funded.rs:3-12`, `:14-34`, `:36-52`,
 `:348`;
 `crates/dclutch-source-contract/src/source_recovery_policy_v2.rs:25`, `:32`,
@@ -316,6 +316,6 @@ cutting recovery removes the strongest reason decision 0029 keeps Series.
 `crates/dclutch-source-contract/src/source_resolution_v2.rs:449-451`, `:525`;
 `crates/dclutch-resolution-codec/src/lib.rs:284`, `:294`, `:305`, `:786`;
 `crates/dclutch-source-contract/src/lib.rs:217`, `:4747`, `:4767`;
-`docs/design/MAINNET_STATE_RELAY.md:1077`;
+`docs/design/MAINNET_STATE_RELAY.md:1115`;
 `docs/decisions/0025-an-outage-refunds-rather-than-paying-the-founder.md`;
 `docs/design/FUNDED_CRANK_V1.md` §3.

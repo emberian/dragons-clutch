@@ -7,7 +7,7 @@ orchestrator had not asked for, and reversible at the cost §7 states**. It was
 PROVISIONAL from the ruling until 15:50 EDT, when ember read the docket and
 accepted it in conversation without amending it; the confirmation line below is
 the whole of what was said. The rulings are docket item D1; ember's amendment
-is recorded at `GOAL.md:4652-4653`. This is C-11's row
+is recorded at `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4652-4653`. This is C-11's row
 (`docs/MASTER_COMPLETION_CONTRACT.md:96`), the only row in the contract that
 names a precondition on ember before code may be written. Item 5 landed the
 same morning at `8ed7f242f` (lane ECONOMICS); the rest is the ECONOMICS lane's
@@ -74,7 +74,7 @@ upkeep vault only, which has zero code.
    multi-crank markets repay the opener progressively through `opener_debt`
    (`:99-100`, `:181-183`, carry-forward `:199-203`), single-crank markets never
    repay them at all, and the market's terms say so. This answers the ruling put
-   at `WAVE.md:1499-1504`.
+   at `docs/ledger/WAVE_2026-08-26_to_2026-09-02.md:1499-1504`.
 4. **The upkeep vault is chartered**, exactly as
    `docs/design/UPKEEP_VAULT_V0.md` sketches it and no wider: one protocol-owned
    lamport PDA with **no authority** (`:10-11`), no involuntary inflow (`:19-23`),
@@ -90,7 +90,7 @@ upkeep vault only, which has zero code.
    funded-crank floor.** `DIRECT_CLOSE_MAKER_CLOSER_REWARD_V1` moves off zero,
    and the carve may touch only the `unclassified_donation` half of the observed
    balance — never principal, never the immutably recorded `rent_owner`'s
-   entitlement (`docs/design/COHORT9_CLOSEMAKER_RULINGS_2026_08_31.md:43-62`).
+   entitlement (`docs/ledger/COHORT9_CLOSEMAKER_RULINGS_2026_08_31.md:43-62`).
    The cap is the funded-crank floor, which is **derived from the Rent sysvar
    and never written as a source literal**
    (`docs/design/FUNDED_CRANK_V1.md` §3 — *"the ruling with the widest blast
@@ -101,12 +101,12 @@ upkeep vault only, which has zero code.
 6. **The lamport sweep closes `HoardPrincipal → FeeVault`.** The atom census had
    recorded honestly that the pair was one of sixty-four shape-admissible
    ordered pairs on the Custody Transfer wire and that *"nothing pins"* it
-   (`WAVE.md:2900-2936`) — an invariant holding only because nobody had written
+   (`docs/ledger/WAVE_2026-08-26_to_2026-09-02.md:2900-2936`) — an invariant holding only because nobody had written
    the violating caller.
 
 ## 3. Ember's amendment
 
-Ember, on the docket at 10:15 EDT 2026-09-04, recorded at `GOAL.md:4652-4653`:
+Ember, on the docket at 10:15 EDT 2026-09-04, recorded at `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4652-4653`:
 
 > D1 — the upkeep vault is wanted; crank-first fine but measure the first
 > crank; **a governable parameter surface so we are not stuck (prototype the
@@ -139,7 +139,7 @@ a ruled value becomes a record field with a delay and an event, not a literal.
 ## 4. The lanes implementing it
 
 **ECONOMICS**, amended with the vault charter, the crank-cost measurement and
-the governable record (`GOAL.md:4657-4659`). Item 6 is already landed by that
+the governable record (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4657-4659`). Item 6 is already landed by that
 lane at `8ed7f242f`. The adversarial model comes first for each ruled value, then
 the one-constant changes; the parameter record makes "one-constant" mean one
 record field. RECOVERY (decision 0027) shares the funded-crank floor, because the
@@ -208,7 +208,7 @@ convenient.
 lives in the per-market **immutable** config, refused at zero
 (`successor.rs:78-82`, `:336-350`). Introducing a protocol beneficiary is not a
 constant change; markets carrying the old config cannot adopt it, so it is a
-**re-found**, at the disposability regime's price (`GOAL.md:1443-1450`).
+**re-found**, at the disposability regime's price (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:1443-1450`).
 
 **Item 3.** Reversing to opener-first re-creates the arithmetic the contract's
 own docstring refutes: the first crank pays itself nothing, so it is not turned,
@@ -238,11 +238,11 @@ amendment was made to avoid.
 
 ## Evidence pointers
 
-`docs/MASTER_COMPLETION_CONTRACT.md:96`, `:186`; `GOAL.md:4652-4659`;
+`docs/MASTER_COMPLETION_CONTRACT.md:96`, `:186`; `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4652-4659`;
 `docs/decisions/0014-the-fee-rate.md` (whole, esp. `:7-13`, `:134-137`);
 `docs/design/UPKEEP_VAULT_V0.md:3`, `:10-11`, `:19-34`, `:38-48`, `:52-62`,
 `:95-103`, `:112-119`;
-`docs/design/COHORT9_CLOSEMAKER_RULINGS_2026_08_31.md:43-62`;
+`docs/ledger/COHORT9_CLOSEMAKER_RULINGS_2026_08_31.md:43-62`;
 `docs/design/FUNDED_CRANK_V1.md` §0 items 2-3, §3;
 `docs/design/FEE_SECOND_TRANSACTION_V1.md:40`, `:44`, `:50`, `:226`;
 `crates/dclutch-claims-svm/src/claim_check_conservation_v1.rs:99-100`,
@@ -254,5 +254,5 @@ amendment was made to avoid.
 `formal/dclutch-semantics/DClutchSemantics/CustodyAbi.lean`,
 `programs/dclutch-custody-sbf/src/lib.rs` at `8ed7f242f`;
 `tools/gauntlet/journey/src/ledger.rs:1004-1012`;
-`WAVE.md:1499-1504`, `:2900-2936`;
+`docs/ledger/WAVE_2026-08-26_to_2026-09-02.md:1499-1504`, `:2900-2936`;
 `docs/evidence/COHORT14_SEALED_FOUNDED_FILLED_2026_09_03.md:763`.

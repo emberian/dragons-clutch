@@ -466,13 +466,13 @@ Measured at HEAD of `main`:
 - **No code exists for either symbol.** `RationalCapabilityRoot`,
   `StructuredCapabilityRoot`, and the magics `DCRNCRT1` / `DCSTCRT1` have
   **zero hits tree-wide under `--type rust`**. They occur only in this file and
-  in `SESSION_STATE.md:579`. There is no struct, no offset constant, no size
+  in `docs/ledger/SESSION_STATE_2026-08-31.md:579`. There is no struct, no offset constant, no size
   constant, no decoder — nothing to wire in, so the question of whether it is
   wired in does not arise.
 - **Both commits are doc-only.** `ec530892` (2026-08-30 22:56, *"design: the
   two capability-root tails Rational and Structured never had"*) touches this
   file and nothing else, +474 lines; `97d0f435` (22:57) touches
-  `SESSION_STATE.md` and nothing else. Both are ancestors of `main`. A pickaxe
+  `docs/ledger/SESSION_STATE_2026-08-31.md` and nothing else. Both are ancestors of `main`. A pickaxe
   on `DCRNCRT1` across all refs returns `ec530892` alone.
 - **The §9b negative control did not move.** §9b step 6 predicted that landing
   the Rational emitter would take the emission census from 59 guarded / 15

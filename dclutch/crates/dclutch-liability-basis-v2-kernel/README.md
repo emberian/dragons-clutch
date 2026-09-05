@@ -172,7 +172,7 @@ every representation needs a larger common denominator is refused. That is a
 sufficient inner certificate and it fails closed. Generation two carried the same
 residual and named it; nothing here closes it. See
 `docs/research/BSPLINE_ECLIPSE_SCORECARD_2026_08_27.md`,
-`docs/compost/PRICE_GATE_HULL_2026_08_27.md`, and `ASPIRATION_LEDGER.md` `G-1`.
+`docs/compost/PRICE_GATE_HULL_2026_08_27.md`, and `docs/evidence/ASPIRATION_LEDGER_2026_08_27.md` `G-1`.
 
 The crate is a canonical workspace member. Capability admission and Market
 migration remain separately gated work.

@@ -29,7 +29,7 @@ tree binds **three** identities, each with exactly one author.
 
 **Layer 1 — SOURCE: `semantic_release_id`.** Source-derived, and the stable
 fixed point: *"set-id moves every rebuild; Trading/Resolution held one semantic
-id across four cohorts while ELFs/slots moved, test-pinned"* (`GOAL.md:420-423`,
+id across four cohorts while ELFs/slots moved, test-pinned"* (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:420-423`,
 the ERA lane). Clients select frames by on-chain release identity keyed on the
 per-role semantic id and follow the chain to the current activation cache, with
 incoherence a hard refusal. It is enforced on-chain by
@@ -39,7 +39,7 @@ incoherence a hard refusal. It is enforced on-chain by
 **Layer 2 — ARTIFACT: the ELF digest.** Bound in the `ArtifactReleaseV1`
 record, written at `ELF_DIGEST_OFFSET` alongside the semantic id
 (`crates/dclutch-registry-contract/src/artifact.rs:160-182`). The 2026-08-29
-ruling deliberately kept these two apart (`WAVE.md:1166-1174`):
+ruling deliberately kept these two apart (`docs/ledger/WAVE_2026-08-26_to_2026-09-02.md:1166-1174`):
 
 > the certificate binds `semantic_release_id` (source-derived, the identity ERA
 > proved stable across cohorts and that `authenticate_role_semantic_release`
@@ -51,7 +51,7 @@ ruling deliberately kept these two apart (`WAVE.md:1166-1174`):
 That ruling has a measured cause: a certificate binding its own ELF digest is
 **unconstructible**, because its identity is compiled into the ELF whose digest
 it must contain — proven by two builds differing only in the certificate, with
-the dead-code-elimination escape ruled out by byte count (`GOAL.md:344-351`).
+the dead-code-elimination escape ruled out by byte count (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:344-351`).
 
 **Layer 3 — ACCOUNT: a policy the observation must satisfy.** Decision 0012.
 `ArtifactReleaseV1::to_bytes` writes the `upgrade_policy` byte, the
@@ -141,4 +141,4 @@ it is the last piece of the 0012 veto window nobody closed.
 - The release-tool strict-gate ruling closes decision 0012's veto window.
 - One debt stays named and is not discharged by this record: `deployments.ts`
   still carries a stale constant, non-load-bearing since the ERA lane made
-  clients follow the chain, and it wants a publish-time owner (`GOAL.md:424-427`).
+  clients follow the chain, and it wants a publish-time owner (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:424-427`).

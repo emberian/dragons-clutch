@@ -6,11 +6,12 @@ admin keys, you cannot change its rules, and you are not the referee:
 everything that happens next is either open to everyone or refused for
 everyone. This guide walks through the decisions that are yours.
 
-Seven protocol programs are deployed at permanent addresses on Solana
-devnet, but the first open market is not live yet. Today you rehearse market
-creation against a local test chain and use the public app to inspect the
-devnet deployment. Exact costs, routes, and codes live in the
-[reference](../reference/README.md).
+Seven protocol programs are deployed on Solana devnet as a cohort (fresh ids
+each redeploy; the addresses are not permanent), and markets have been
+founded, traded, resolved and paid on them. You rehearse market creation
+against a local test chain first ([the walkthrough](../operators/found-a-market.md))
+and use the public app to inspect the live cohort. Exact costs, routes, and
+codes live in the [reference](../reference/README.md).
 
 ## What you fix at creation, forever
 
@@ -53,12 +54,10 @@ ordered stages:
    market can only open on the terms the first stage committed, and the escrow
    carries a refund path so nothing strands between the two transactions.
 
-This is the current source-tree route targeted for the next devnet program
-update. It has passed the compiled-message lock census, but it has not opened a
-market on devnet yet. Its predecessor exceeded 90% of Solana's per-transaction
-compute limit; the replacement's compute cost must be remeasured before it is
-installed. The current measurements and their evidence level are in
-[the compact-founding record](../evidence/FOUND_COMPACT_2026_08_28.md) and
+Both routes have opened markets on devnet. The composed founding, `DCLTGMF3`,
+measured 1,069,561 compute units on a local validator — 76% of Solana's
+1,400,000 per-transaction maximum, with no headroom to buy — which is why the
+split route exists. The current measurements and their evidence level are in
 [the budgets reference](../reference/budgets.md).
 
 ## Funding named obligations

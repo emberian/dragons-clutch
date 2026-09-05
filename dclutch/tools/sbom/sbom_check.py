@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Offline dependency/license SBOM for the dClutch repository.
 
-GITSCAN-2's G-4 (docs/ASPIRATION_LEDGER.md): gen-1 (dragons-clutch) ran a real
+GITSCAN-2's G-4 (docs/evidence/ASPIRATION_LEDGER_2026_08_27.md): gen-1 (dragons-clutch) ran a real
 SBOM/license closure -- `scripts/dependency_license_check.py`, 36 manifests,
 2,129 unique rows, 0 failures, PASS, with a committed catalog byte-gated
 against drift -- and left three dependency families for a human to review

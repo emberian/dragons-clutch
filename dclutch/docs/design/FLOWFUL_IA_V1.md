@@ -64,7 +64,7 @@ These were measured, not assumed. They are load-bearing for §7 especially.
 | Collateral display decimals are chain-read | `MarketHoardV1.mintDisplayDecimals` (`marketDiscovery.ts:199`), the mint's own `decimals` byte, `number \| null` |
 | The collateral token has **no** name anywhere | No symbol, no Metaplex metadata read, nothing in `fixtures/market-registry.devnet.json`. It is identified only by mint address + decimals |
 | Price is a fraction, provably | `previewDirectInlineV3` refuses `executionPrice > route.priceScale` (`lib/directInlineV3.ts:743`), and `gross = fill × price / priceScale`. So `price / priceScale ∈ (0, 1]` always |
-| The browser is the only ticket author in the repo | `SESSION_STATE.md` (TRADE-3): "the only Direct-ticket AUTHOR in the repo is the browser trade panel"; a tools-side ticket author is queued and does not exist |
+| The browser is the only ticket author in the repo | `docs/ledger/SESSION_STATE_2026-08-31.md` (TRADE-3): "the only Direct-ticket AUTHOR in the repo is the browser trade panel"; a tools-side ticket author is queued and does not exist |
 | The on-chain resting-order record set already exists | `crates/dclutch-direct-codec/src/registered_*.rs` (7 modules) + `generated_registered_controller.rs` + `generated_registered_fill_v4.rs`; decoded and labelled in `lib/explorer/accountRecords.ts:1208-1290` |
 
 ---
@@ -523,7 +523,7 @@ by a stranger, and paste it into a textarea. Every other step in this flow is
 something the site can help with. This one is homework.
 
 And the homework is currently **impossible for almost everyone**, which the
-inventory makes explicit: `SESSION_STATE.md` records that *the only Direct-ticket
+inventory makes explicit: `docs/ledger/SESSION_STATE_2026-08-31.md` records that *the only Direct-ticket
 author in the entire repo is this browser panel*, and a tools-side ticket author
 is queued but does not exist. So the paste box asks the reader to obtain an
 artifact that essentially nobody can produce.

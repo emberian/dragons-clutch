@@ -1,5 +1,43 @@
 # Mainnet state on devnet: trust roots, transports, and the v1 relayer
 
+**Head current at `330bbfaba` (2026-09-04), tree root `/Users/ember/dev/dclutch`; devnet evidence for the relayed route, not mainnet evidence.**
+The body below `## History` is the 2026-08-27 design (§0–§9) with the four build-lane amendments the same day (§10–§13), verbatim, several of which supersede passages above them; this head states only the survivors.
+
+## What is true now
+
+- **Majors need no cross-cluster transport**: Pyth's devnet deployment carries
+  mainnet-derived prices under the existing adapter. The devnet feed's cadence
+  was re-measured over 7.1 days: p50 313 s, **maximum gap 4,784 s** (one
+  discrete outage); the operator guide's window arithmetic derives from it.
+- **`RelayedMainnetStateV1` exists and has run end to end on devnet**: a
+  disclosed proof-of-authority relayer (`tools/relayer`, its own workspace)
+  signs *observations* of mainnet account bytes and never interpretations;
+  every layout fact lives in the `decoding_rules_id` record and is applied by
+  the adapter, which lives in the Resolution role
+  (`programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs`, §11),
+  with the consumer of §12. Cohort-14's market C was relayed end to end on
+  2026-09-03 (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md#L3961`), and the
+  relay routes are witnessed in `docs/reference/routes.md`.
+- **The trust root is swappable without moving semantics**, and the statement
+  is an executed test: `decoding_rules_id` is byte-identical across disjoint
+  relayer key sets.
+- **Amended by the build** (§10): the venue account is 424 bytes, not 416, and
+  is `VirtualPool`, not `PoolState`; `RelayedAdapterConfigV1` is 80 bytes and
+  is named by `decoding_rules_id`, not `adapter_config_id`;
+  `RelayedObservationSetV1` (`DCLTRMS1`) is not implemented, because the only
+  venue does not qualify and an acceptance path with no consumer is the
+  parallel-authority shape `AGENTS.md` forbids; the record is runtime-width
+  (2,552 bytes for the four-account set); the window-versus-skew rule runs at
+  record creation and freshness at resolution.
+- **The recovery leg is decided** (§13): v1 degrades direct-to-failure by
+  design, and the funded recovery ladder that later replaced the V1 `FailNext`
+  walk is decision 0027, not this note.
+- This note is not an ADR and closes no omission row.
+
+## History
+
+# Mainnet state on devnet: trust roots, transports, and the v1 relayer
+
 Status: design and verified research for the cross-cluster capability named in
 `WAVE.md` ("the demo is the completed dClutch"). It specifies one new provider
 family and decides which product classes need it. It is not an ADR, not a

@@ -7,16 +7,13 @@ is the same failure: your money was somewhere a stranger could touch it.
 dClutch is a claims protocol built so there is no such place. This page
 tells you what you'd actually be holding, why the payout can't be walked
 back, and how an open market can fund a bounty for the person who closes its
-failure case. There is no bounty to collect on devnet today: the one market
-open there was founded with no recovery policy, so it funds none, and the
-public submission caller is not built either.
+failure case.
 
 First, the disclaimer you actually care about: **seven protocol programs are
-deployed on Solana devnet, one market on it is open for trading, and its
-collateral is a devnet test token — so there is nothing to buy with money.**
-The complete market and trading rehearsals still run on local test validators.
-You're early — nothing has traded on that market yet, and this page is so you
-know what it is before something does.
+deployed on Solana devnet, markets on them have been traded, resolved and
+paid, and every market's collateral is a devnet test token — so there is
+nothing to buy with money.** You're early: the trades so far were strangers
+in a test cohort, and this page is so you know what the thing is.
 
 ## What a claim is
 
@@ -91,11 +88,10 @@ redeems their collateral back out. And **you get paid the bounty for
 sending it** — escrowed by the market at founding, so it's already there,
 not a promise.
 
-That is the design, and the bounty really is escrowed. **You cannot collect
-one today**: the one market open on devnet was founded with no recovery
-policy, so it escrowed no bounty, and the command below previews the
-transaction without submitting it. The rest of this section is what the walk
-will look like on a market that funds one.
+That is the design, and the bounty really is escrowed. The walk has run on
+devnet — a market whose feed could not answer took its failure outcome by it
+— from the operator tooling. **The public command below only previews the
+transaction**; it does not submit.
 
 ```sh
 dclutch-terminal walk --book walk-book.json --generation 1 --terminal-sequence 1 \
@@ -111,25 +107,25 @@ certificate and bounty afterward.
 
 Once that caller exists and an open market reaches its deadline, any wallet can
 be the walker: you pay one transaction fee and the market pays the bounty its
-creator funded. The archived demo input disclosed 250,000 lamports, but that
-input did not open on devnet, so the number is not a current offer or
-collectible bounty. The mechanism is implemented; the public submission caller
-is the part still closed.
+creator funded. The mechanism is implemented and has run; the public
+submission caller is the part still closed.
 
 ## The honest part
 
-- Seven programs are live on devnet, and one market on it is open for
-  trading. Its collateral is a devnet test token, not a token you can buy.
-- A winning-position payout has not completed end to end from a user's
-  wallet on devnet yet. [The CLI](../../packages/dclutch-cli/README.md)
-  tells you exactly which checks and submission steps it can perform.
+- Seven programs are live on devnet, redeployed as a fresh cohort each time.
+  Every market's collateral is a devnet test token, not a token you can buy.
+- Winning claims, a stranger's included, have been paid into ordinary wallet
+  token accounts on devnet — by the operator tooling. From the public CLI,
+  `redeem` runs under a durable journal against a resolved market;
+  [the CLI](../../packages/dclutch-cli/README.md) tells you exactly which
+  checks and submission steps it can perform.
 - Where something isn't finished, the tools say so to your face instead of
   spinning. That's the house style: the chain refuses loudly, and no
   partial state survives a refused transaction.
 
-When the first market opens, the promise will be the same one this page just
-made: the money is where you can see it, the math is fixed before you enter,
-and even the disaster case pays somebody — might as well be you.
+The promise is the one this page just made: the money is where you can see
+it, the math is fixed before you enter, and even the disaster case pays
+somebody — might as well be you.
 
 The numbers behind everything here — payouts, fees, every refusal code —
 are in the [reference](../reference/README.md), and the

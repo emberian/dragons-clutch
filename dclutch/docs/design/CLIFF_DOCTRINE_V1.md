@@ -1,5 +1,41 @@
 # The cliff doctrine, v1
 
+**Head current at `330bbfaba` (2026-09-04), tree root `/Users/ember/dev/dclutch`.** The body below `## History` is the doctrine as measured at `7e3cac9e` (2026-08-31) with the LIFT-1312 corrections, verbatim; this head states the doctrine and the corrected claims.
+
+## What is true now
+
+Every fixed bound is exactly one of **PHYSICS** (derived from a chain
+constant, which must be named), **PURCHASABLE** (buyable at a written price:
+a page, a second transaction, an ALT, a wider record plus rent, a schema bump
+plus the lineage migration, a wider Lean proof plus corpus), or
+**SESSION-SPLITTABLE** (an artifact of doing something in one shot; a staged
+design dissolves it, and ember has pre-ruled multi-transaction lifecycles
+acceptable). Almost nothing in the tree is physics: three genuine walls
+(packet, CU, account locks), a small set of bounds derived from them, and two
+habits — one Lean literal (`1312`) and a house habit of writing `16`.
+
+Corrected by the chartered lift that was investigated and deliberately not
+taken (`3be5072c`):
+
+- **The binding cliff is the 1,232-byte packet, not the 1312 record bound.**
+  Structured full-width issuance at K=3 is over the packet with the ALT already
+  spent; raising 1312 admits descriptors that publish but can never issue. The
+  real lift is session-splitting issuance, queued.
+- The 42-instruction cap divides by 24 (the `TransitionVMV2` stride), not 16.
+- `CAPABILITY_PROGRAM_SET_MAX_BYTES_V2` is 2336, not 1312.
+- `1312` has four independent Lean authors, each now naming the others, with
+  the derivation beside them; nothing physical selects it.
+- `RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3` is solved from the formula,
+  and the wall ordering is a checked assertion in the packet test.
+
+**Maintenance rule.** A new fixed bound enters the tree only with its class
+and, for PURCHASABLE, its price in the defining comment.
+`docs/OMISSION_INDEX.md`'s P-rows cite their class here.
+
+## History
+
+# The cliff doctrine, v1
+
 Status: reference, measured at HEAD 7e3cac9e (2026-08-31). Answers ember's
 twice-dropped question — "why do we have all these shitty bounds?" — by
 classifying every fixed bound in the protocol, and closes with the

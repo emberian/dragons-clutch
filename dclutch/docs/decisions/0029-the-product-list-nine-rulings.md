@@ -8,7 +8,7 @@ conditional layer's flagship child market — stays OPEN and is ember's**. It wa
 PROVISIONAL from the ruling until 15:50 EDT, when ember read the docket and
 accepted it in conversation without amending it; the confirmation line below is
 the whole of what was said. Docket item D7. Ember's amendment is at
-`GOAL.md:4655-4656`. These are the queued product questions the tree had been
+`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4655-4656`. These are the queued product questions the tree had been
 carrying, several of them for weeks; each was tabled with options and a cost,
 and none was an engineering blocker — the ruling decides which lane exists. **A
 tenth item — the conditional layer's flagship child market — arrived on
@@ -44,21 +44,21 @@ refused.
 
 | # | item | ruling | where the tree states the options |
 | --- | --- | --- | --- |
-| 1 | **The Series family: A or B** | **BUILD (A).** `crate::series` in Trading (28 files) gets its dispatch and shadow derivation and a C-row, rather than being cut | `GOAL.md:2655-2662` |
-| 2 | **Basis ABI: is curvature out of scope permanently?** | **KEEP.** Curvature stays in scope; the basis kernel is not retired | `docs/design/BASIS_ABI_UNIFICATION_V1.md:536-543`; `docs/OMISSION_INDEX.md:53` |
+| 1 | **The Series family: A or B** | **BUILD (A).** `crate::series` in Trading (28 files) gets its dispatch and shadow derivation and a C-row, rather than being cut | `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:2655-2662` |
+| 2 | **Basis ABI: is curvature out of scope permanently?** | **KEEP.** Curvature stays in scope; the basis kernel is not retired | `docs/design/BASIS_ABI_UNIFICATION_V1.md:565-572`; `docs/OMISSION_INDEX.md:34` |
 | 3 | **May a Custody reservation carry the Dealer accelerator's candidate as authenticated first-party state?** | **YES**, under the same rule as decision 0022, since the candidate is sealed and PDA-signed | `docs/design/DEALER_PARTIAL_REMOVE_COMPUTE_2026_09_02.md:320-342` |
-| 4 | **Width-2 spot band, or a stated proposition?** | **The bare width-2 band is REFUSED.** A proposition with a stated prior is admitted in its place | `docs/design/PACKET_LIMIT_2026_09_01.md:319-330` |
-| 5 | **Claims split/merge as user acts** | **BUILD.** The outer route lands; `claims.conserve`/`DCLCNS01` stops being the tree's one orphan magic and `CustodyRequired 0x5006` stops being dead | `GOAL.md:1751-1753`, `:1391-1397` |
-| 6 | **Materialize / Dematerialize: delete or drive** | **DELETE.** 1,444 lines of supply-moving codec with zero dependents; C-08's clause is already carried by Reconstitute/UnwrapStructured, so nothing is lost | `GOAL.md:1754-1758` |
-| 7 | **Is a K = 2 structured product useful?** | **NO.** K = 3 is the product — and it is **packet-bounded**, see the correction below | `GOAL.md:1759-1760` |
-| 8 | **The two binaries named `dclutch`** | **RENAME the TypeScript one.** Near-misses are lethal: `market show` against `markets show`, `--keypair` normal in one and refused by name in the other, env vars differing by one character | `GOAL.md:1764-1767`, `:1500-1502`; correction `:2171-2173` |
-| 9 | **Provider breadth** | **ENOUGH this generation.** Pyth plus relayed; no third family. The generic-header refactor is authorized either way | `GOAL.md:1812-1830` |
+| 4 | **Width-2 spot band, or a stated proposition?** | **The bare width-2 band is REFUSED.** A proposition with a stated prior is admitted in its place | `docs/design/PACKET_LIMIT_2026_09_01.md:362-373` |
+| 5 | **Claims split/merge as user acts** | **BUILD.** The outer route lands; `claims.conserve`/`DCLCNS01` stops being the tree's one orphan magic and `CustodyRequired 0x5006` stops being dead | `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:1751-1753`, `:1391-1397` |
+| 6 | **Materialize / Dematerialize: delete or drive** | **DELETE.** 1,444 lines of supply-moving codec with zero dependents; C-08's clause is already carried by Reconstitute/UnwrapStructured, so nothing is lost | `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:1754-1758` |
+| 7 | **Is a K = 2 structured product useful?** | **NO.** K = 3 is the product — and it is **packet-bounded**, see the correction below | `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:1759-1760` |
+| 8 | **The two binaries named `dclutch`** | **RENAME the TypeScript one.** Near-misses are lethal: `market show` against `markets show`, `--keypair` normal in one and refused by name in the other, env vars differing by one character | `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:1764-1767`, `:1500-1502`; correction `:2171-2173` |
+| 9 | **Provider breadth** | **ENOUGH this generation.** Pyth plus relayed; no third family. The generic-header refactor is authorized either way | `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:1812-1830` |
 
 **A correction this record carries, because the docket got it wrong.** The
 docket's D7 line said *"K=3 with the packet wall gone"*. That is false and the
 STRUCTURED lane proved it the same day: **only K = 3 exists on the shipping
 route, the first K that does not fit is 4, and the wall is the PACKET on common
-Hot — 1,269 bytes against 1,232, over by 37** (`GOAL.md:4084-4086`). The wall is
+Hot — 1,269 bytes against 1,232, over by 37** (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4084-4086`). The wall is
 not the RequestProfile (which admits 6), not the Claims-direct frame, and not the
 1.4 M CU ceiling (max 770,422 at K=3, unreachable by construction on this
 route). `STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2 = 3` is now an asserted ceiling
@@ -69,7 +69,7 @@ is owed for the same reason.
 
 ## 3. Ember's amendment
 
-Recorded at `GOAL.md:4655-4656`:
+Recorded at `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4655-4656`:
 
 > D7 — build; wants to understand what is refused, underdesigned, and how the
 > product becomes the coherently extrapolated vision of itself
@@ -137,7 +137,7 @@ set, and because three of the nine rulings only make sense against them.
 
 ## 4. The lanes implementing it
 
-**SERIES** carries item 1 (`GOAL.md:4657-4658`). Item 3 is the DEALER family's,
+**SERIES** carries item 1 (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4657-4658`). Item 3 is the DEALER family's,
 unblocking the two-transaction Remove. Items 5, 6 and 8 are Claims-route, cut
 and CLI work respectively, each small and none blocking. Items 2, 4, 7 and 9 are
 rulings that create no lane: they hold a position rather than schedule work —
@@ -280,16 +280,16 @@ a design already written, which is the state §3 of this record calls
 
 ## Evidence pointers
 
-`GOAL.md:1391-1397`, `:1500-1502`, `:1751-1767`, `:1812-1830`, `:2171-2174`,
+`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:1391-1397`, `:1500-1502`, `:1751-1767`, `:1812-1830`, `:2171-2174`,
 `:2655-2662`, `:4084-4086`, `:4655-4656`;
-`docs/design/BASIS_ABI_UNIFICATION_V1.md:536-543`; `docs/OMISSION_INDEX.md:53`;
+`docs/design/BASIS_ABI_UNIFICATION_V1.md:565-572`; `docs/OMISSION_INDEX.md:34`;
 `docs/design/DEALER_PARTIAL_REMOVE_COMPUTE_2026_09_02.md:320-342`;
-`docs/design/PACKET_LIMIT_2026_09_01.md:319-330`;
+`docs/design/PACKET_LIMIT_2026_09_01.md:362-373`;
 `docs/decisions/0011-structured-v2-physical-route.md` §3b (amendment owed);
 `docs/decisions/0022-pda-signed-caller-facts.md`;
 `docs/INTENT.md` §4; `tools/gauntlet/journey/src/ledger.rs:1004-1012`;
 `docs/design/MECHANISM_CONDITIONAL_MARKETS_2026_09_04.md` §8, §9;
 `docs/decisions/0031-the-mechanism-agenda.md`;
 `docs/decisions/0033-the-founder-bond-is-mandatory.md`;
-`GOAL.md:4786-4794`; commit `4b15cf69a`;
+`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4786-4794`; commit `4b15cf69a`;
 `docs/evidence/C16_ENTRY_LIST_2026_09_01.md:418`.

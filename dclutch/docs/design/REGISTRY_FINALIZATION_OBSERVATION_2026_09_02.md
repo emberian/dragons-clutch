@@ -1,5 +1,46 @@
 # Observing finalization without locking 24 vacant PDAs
 
+**Head current at `330bbfaba` (2026-09-04), tree root `/Users/ember/dev/dclutch`; real-ELF program-test measurements, not devnet and not mainnet evidence.**
+The body below `## History` is the Dealer lane's 2026-09-02 note and its three appended re-measurements, verbatim; the first section's proposal was superseded by the second the same day, and this head states only the survivors.
+
+## What is true now
+
+- **The wall**: the Dealer equity Add's frame carried 70 unique locks against
+  the runtime's 64, twenty-four of them vacant staging-cursor PDAs present only
+  to be observed absent — "finalized" means the cursor does not exist, and a
+  program cannot observe non-existence without the account in its frame.
+- **The frame move is not the fix.** Moving the six per-action coordinates out
+  of `HOT_FIXED_ACCOUNT_COUNT_V3` (209 references, every family's layout, both
+  TypeScript trees) is not required and should not be done for this reason.
+  The mechanism already exists: the sealed-execution alias shape, in which each
+  staging coordinate carries its own raw record again, so the transaction
+  locks one account per record. Direct ordinary execution has always submitted
+  it. Measured on real ELFs: LP-hot 54 → 48, equity Add 70 → **64** (exactly
+  the devnet ceiling), partial Remove 71 → 65.
+- **The shape has one declaration**: `SEALED_EXECUTION_FIXED_ALIASES_V3` and
+  `SEALED_EXECUTION_ALIAS_FAMILIES_V3` in
+  `crates/dclutch-capability-program-contract/src/hot_v3.rs`; the executor, the
+  operator, every builder and both Direct-hot test helpers read them (five
+  private copies retired). Both on-chain blockers are gone.
+- **The Dealer row is still not landed** — the families table has one row,
+  Direct `InlineOrdinary`. Its price is three producers outside the programs:
+  the browser's `dealerEquityChain.ts` (and the SDK twin) throws on an aliased
+  coordinate; `dclutch-operator`'s Dealer route neither requires nor forbids
+  the alias and has no caller, so its repair proves nothing on its own; the
+  alias hostile covers Direct only. The row is an **atomic flip**: the executor
+  compares with `!=`, so every Dealer hot transaction refuses until builder,
+  browser and SDK all produce the aliased shape — one series, never four
+  commits.
+- **The Remove is compute-bound, not lock-bound** (the borrowed-witness wall
+  closed and the route runs to the 1.4M-CU ceiling, priced in
+  `DEALER_PARTIAL_REMOVE_COMPUTE_2026_09_02.md`); the Add is the case the row
+  is for. The selector-9 seam stays structurally blocked on the unsplit
+  topology (121 locks against 64).
+
+## History
+
+# Observing finalization without locking 24 vacant PDAs
+
 *2026-09-02. Written by the Dealer lane against the 70-unique-lock wall on the
 equity Add (selector 1), measured at `83f9e6e6`.*
 

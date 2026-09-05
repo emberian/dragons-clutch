@@ -4,7 +4,7 @@ Status: **CONFIRMED (ember, 2026-09-04 15:50 EDT, in conversation; reversible on
 same day by the lane it was given to, re-made as the declaration below, and
 reversible by ember at the cost §8 states**. Both the first ruling and its
 refutation carry the standing formula *"RULING (under the standing goal; ember
-may reverse)"* and are on the record at `GOAL.md:3252-3256` and `:3286-3298`.
+may reverse)"* and are on the record at `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3252-3256` and `:3286-3298`.
 The declaration landed at `d190297d6`, `648fad0a0`, `5fc108bd5`, `c60f853be`
 with frame rows `fa6fa4828`, `7e8f6448d`, all 2026-09-02.
 
@@ -20,7 +20,7 @@ equal the position's owner (operation 12, `identity_eq(18, 5)`), and the kernel
 made every created state's beneficiary the RentCredit's refund wallet — one
 immutable wallet per (domain, market, generation). *"It passed for as long as
 the campaign staged that credit with the LP owner's own key, and refused the
-first honest second owner"* (`d190297d6`; `GOAL.md:3247-3250`).
+first honest second owner"* (`d190297d6`; `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3247-3250`).
 
 The question was found only because decision 0020 cleared the compute budget far
 enough for the campaign to reach a stage no run in its history had reached
@@ -28,14 +28,14 @@ enough for the campaign to reach a stage no run in its history had reached
 
 ## 2. The first ruling, and its refutation
 
-**First ruling** (`GOAL.md:3252-3256`, 2026-09-03 03:45):
+**First ruling** (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3252-3256`, 2026-09-03 03:45):
 
 > **RULING (under the standing goal; ember may reverse): the refund follows the
 > debit** — the beneficiary derives from the funding source (the credit's when
 > the credit funds, the payer's when a payer is debited), one rule for every
 > lifecycle-rent family; Lean first if the rule is emitted.
 
-**Refuted by the lane it was given to** (`GOAL.md:3286-3288`):
+**Refuted by the lane it was given to** (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3286-3288`):
 
 > **The rent RULING above is REFUTED and corrected:** "the refund follows the
 > debit" unconditionally is a **theft vector** — a maker replay root is a shared
@@ -60,7 +60,7 @@ names both type cases and cites the incident by date.
 
 **The obvious patch was refuted too.** A `payer_debit > 0` conditional *"adds a
 griefing vector (one donated lamport refuses an owner's Open forever)"*
-(`GOAL.md:3288-3289`). So the corrected answer is not a cleverer global rule; it
+(`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3288-3289`). So the corrected answer is not a cleverer global rule; it
 is that there is no global rule to be had.
 
 ## 3. The ruling as re-made, verbatim
@@ -69,7 +69,7 @@ is that there is no global rule to be had.
 > five `REFUND_SOURCE_CREDIT = 0 / PAYER = 1` (zero keeps every prior policy's
 > bytes) — the kernel proves the named party is one the plan's funding admits;
 > Direct requires `Credit` at both plan readers; Dealer LP declares `Payer`.
-> — `GOAL.md:3289-3294`
+> — `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3289-3294`
 
 ## 4. What it changed in the trust model
 
@@ -104,7 +104,7 @@ a real authentication of payer == owner instead of a check that the market's
 sponsor happened to be the one admitted owner"* (`d190297d6`). Every other plan
 declares `Credit`, which is what it already meant.
 
-**Landing it found two more authors of the old law** (`GOAL.md:3293-3294`):
+**Landing it found two more authors of the old law** (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3293-3294`):
 
 - `apply_lifecycle_closes_v3` re-ran the credit-equality at the mutation
   boundary — a rule that boundary cannot derive for a payer-funded state,
@@ -122,7 +122,7 @@ declares `Credit`, which is what it already meant.
   all 60 pre-existing contract tests pass unmoved"* (`d190297d6`).
 - **The multi-LP family stops admitting one owner.** *"LP Open #1 → hostile Add →
   honest Add → LP Open #2 (671,787 CU, second owner) → second Add all COMMIT"*
-  with a real sponsor (`GOAL.md:3294-3296`). Campaign 30/1.
+  with a real sponsor (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3294-3296`). Campaign 30/1.
 - **Frames:** three frames moved and every one of them is smaller (`7e8f6448d`);
   the declaration itself moved none (`fa6fa4828`).
 
@@ -147,7 +147,7 @@ for a `Credit` plan"* (`c60f853be`).
 
 ## 7. Named debt carried
 
-Recorded here rather than left to be found (`GOAL.md:3283-3285`):
+Recorded here rather than left to be found (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3283-3285`):
 
 - **The rule is not in Lean.** `StateLifecyclePolicyV5Abi` is layout only.
 - Six fixtures encoded the old law.
@@ -170,7 +170,7 @@ confused:
 
 ## Evidence pointers
 
-`GOAL.md:3247-3256`, `:3283-3298`; commits `d190297d6`, `648fad0a0`,
+`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3247-3256`, `:3283-3298`; commits `d190297d6`, `648fad0a0`,
 `5fc108bd5`, `c60f853be`, `fa6fa4828`, `7e8f6448d`;
 `crates/dclutch-account-profile-contract/src/lifecycle_v3.rs:138-139`,
 `:470-488`, `:2195`, `:2235`, `:3395`;

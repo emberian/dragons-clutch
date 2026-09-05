@@ -300,10 +300,10 @@ N=2 at 674,333 CU" is `K=2`.
 
 | quantity | value | authority |
 |---|---|---|
-| General `OpenBatch` through Hot, family policy, `K = 2 / 13 / 258` | 674,333 / 666,011 / 680,789 CU | measured, `ae026955d` (`GOAL.md:4563`); K-flat because `OpenBatch`'s item stride is 0 (`hot_candidate_v3.rs:73-113`) |
-| the same, one accelerator CPI under the output page vs four chunks | 51,404 vs 4 × ~50,201 | measured (`docs/decisions/0003:421-424`, `GOAL.md:3006`) |
+| General `OpenBatch` through Hot, family policy, `K = 2 / 13 / 258` | 674,333 / 666,011 / 680,789 CU | measured, `ae026955d` (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4563`); K-flat because `OpenBatch`'s item stride is 0 (`hot_candidate_v3.rs:73-113`) |
+| the same, one accelerator CPI under the output page vs four chunks | 51,404 vs 4 × ~50,201 | measured (`docs/decisions/0003:421-424`, `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3006`) |
 | Trading's own work per Hot transaction, derived | ≈ 474,000 | 674,333 − 4 × 50,201; K-flat to within the ladder's 15 k |
-| accelerator `Consider`, standalone, `K = 1 → 258` | 36,113 → 74,877 (≈ 151 CU/outcome) | measured (`PACKET_LIMIT_2026_09_01.md:286`) |
+| accelerator `Consider`, standalone, `K = 1 → 258` | 36,113 → 74,877 (≈ 151 CU/outcome) | measured (`PACKET_LIMIT_2026_09_01.md:329`) |
 | accelerator `InitializeSettlement`, `K = 1 → 258` | 61,753 → 164,970 (≈ 402 CU/outcome) | measured (same) |
 | accelerator `Collect`, `K = 258`, one page | 146,909 / 147,336 / 148,130 | measured (decision 0010 §2a) |
 | `VerifyCandidateRow` per row through Hot | **unmeasured**; taken as 45,000 + 400·K per invocation | provisional, extrapolated from the two slopes above; PROGRAMS-16C's four-action run replaces it |
@@ -489,5 +489,5 @@ takes the per-transaction figure from 0.67 M to 0.53 M.
 `docs/decisions/0003:421-424`, `0009` §1, `0010` §1-2, `0028`, `0029` items
 5 and 7; `docs/design/ACCELERATOR_OUTPUT_CHANNEL_2026_09_02.md:28-45`;
 `docs/design/GENERAL_INPUT_TRANSPORT_2026_09_02.md`;
-`docs/design/PACKET_LIMIT_2026_09_01.md:112-113, 197, 286`;
-`docs/INTENT.md` §1, §4; `GOAL.md:3006, 4563`; commit `ae026955d`.
+`docs/design/PACKET_LIMIT_2026_09_01.md:155-156, 197, 286`;
+`docs/INTENT.md` §1, §4; `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3006, 4563`; commit `ae026955d`.

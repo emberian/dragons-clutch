@@ -10,7 +10,7 @@ the whole of what was said. **It was originally OPEN** because ember asked at 10
 2026-09-04 for the best architectural course rather than for a switch, so this
 record carries a READ as well as a ruling, and decision 0003 is not amended yet
 — the addendum states the amendment option (a) carries. Docket item D6. Ember's
-words are at `GOAL.md:4655`. The question itself is stated in
+words are at `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4655`. The question itself is stated in
 `docs/decisions/0003-fixed-role-capability-execution.md` under *"The open
 question — docket D6, ember's"*, added by the amendment note of 2026-09-03;
 this record does not close it and does not amend 0003. **The fifth condition §3
@@ -37,7 +37,7 @@ reversible on request at the cost §6 states.
 
 ## 1. The question
 
-Put to ember at `GOAL.md:2863-2867`, and put identically by the design note at
+Put to ember at `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:2863-2867`, and put identically by the design note at
 `docs/design/ACCELERATOR_OUTPUT_CHANNEL_2026_09_02.md:273-279`, which calls it
 *"the only judgment call in the design; the rest is measured or derived"*:
 
@@ -56,11 +56,11 @@ four chunks.
 
 **The transport is built for both accelerators and inert.** Nothing flips until
 a Strategy record names it (`93bd4f603`, `4f30d4ce8`, `0f53b668a`, `a4c5add46`;
-`GOAL.md:3004-3006`).
+`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3004-3006`).
 
 ## 2. Ember's disposition — why this is not a ruling
 
-Recorded at `GOAL.md:4655`:
+Recorded at `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4655`:
 
 > D6 — wants the best architectural course understood, not a switch
 
@@ -130,7 +130,7 @@ AGENTS.md's standing full-redeploy grant does not already abandon"*
 bank in ONE CPI at 51,404 CU against four chunks of which one was 50,201; the
 Dealer equity Add runs its whole route in one CPI at 455,790 and exceeds the
 budget in the tail with 3,773 left — *"the route's own weight, not the
-transport"* (`GOAL.md:3006-3009`). Packet and frame: one page coordinate
+transport"* (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3006-3009`). Packet and frame: one page coordinate
 appended after `ADMITTED_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3`
 (`admitted_v3.rs:106-108`), the account count going *minus (chunks − 1) caller
 authorities, plus one ALT-eligible page*, and the ALT identity
@@ -198,7 +198,7 @@ for the choice.
 
 A ruling by ember, recorded here and as a real amendment to 0003's §Decision —
 which `0003`'s own note says is *"the precondition for the transport being
-switched on"*. Until then this record's status is OPEN, and `GOAL.md:3006` and
+switched on"*. Until then this record's status is OPEN, and `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3006` and
 `:3059`, which both refer to *"ember's 0003 ruling"* as already given, are
 referring to the question having been **put**, not answered.
 
@@ -208,7 +208,7 @@ referring to the question having been **put**, not answered.
 what is being done about the one thing §3 says *"could change the read."*
 
 **§3's fifth condition is now a lane.** CHUNK-REMEASURE was started at 13:20 EDT
-(`GOAL.md:4818-4820`) to measure the chunk cost **on the post-0023 routes**, three
+(`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4818-4820`) to measure the chunk cost **on the post-0023 routes**, three
 draws each. The read's case for the page is August's -- Dealer equity Add chunk 0
 at 445,816 CU, *"of which 328,702 (74%) is authentication that is byte-identical
 between chunks"* -- and decision 0023's slot-free caller-authority seed plus the
@@ -302,7 +302,7 @@ those the page changes its coefficient from 2 to 1.
 2026-09-04 remeasurement at `faacc7ba8`);
 `docs/decisions/0003-fixed-role-capability-execution.md:10-16` and its 2026-09-03
 amendment note; `docs/decisions/0023-slot-free-caller-authority-seed.md`;
-`GOAL.md:2863-2867`, `:3004-3011`, `:3059`, `:4655`, `:4818-4820`;
+`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:2863-2867`, `:3004-3011`, `:3059`, `:4655`, `:4818-4820`;
 `docs/design/MECHANISM_JOINT_CLEARING_2026_09_04.md:358-389`;
 `docs/decisions/0032-joint-clearing-residual-tie-break-and-seal.md`;
 `crates/dclutch-execution-strategy-contract/src/v2.rs:130`, `:139-146`,

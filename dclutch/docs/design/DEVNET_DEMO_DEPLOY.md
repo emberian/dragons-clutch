@@ -1,5 +1,31 @@
 # Devnet demo deploy — the runbook
 
+**Head current at `330bbfaba` (2026-09-04), tree root `/Users/ember/dev/dclutch`.** The body below `## History` is the 2026-08-27 runbook, verbatim, including its "PREPARATION ONLY" status and its §7 blocker list; that status was true when written and is not true now.
+
+## What is true now
+
+- **It was executed.** DEPLOY-1 put the substrate on devnet on 2026-08-27/28
+  following this runbook (`docs/evidence/DEPLOY_1.md`, `DEVNET_SMOKE_0.md`,
+  `DEVNET_DRIVER_2026_08_27.md`); its §7 blockers A–D were each closed or
+  recorded in the decisions that superseded them (0012 for the substrate,
+  0016 for the checked release identity).
+- **It is superseded as an operating procedure.** Devnet is disposable
+  (decision 0012 as amended 2026-09-02, 0019, 0020): a cohort is a full
+  redeploy from one named commit with fresh ids, the previous cohort
+  abandoned in place and closed, and the seven roles are a caller-declared
+  authenticated input, not a fixed table. The runbook that runs today is
+  `tools/cohort/` (one manifest per cohort, one steps table, one preflight),
+  and each cohort's evidence is a dated document under `docs/evidence/`
+  (cohort-15 is the current one).
+- What the body is still cited for: the Loader-v3 buffer → deploy → verify →
+  revoke sequence and its Agave measurements (§2), the rent arithmetic against
+  the 45 SOL budget (§4), the devnet Pyth wiring (§5), and the dry-run gate
+  (§6). Code comments that cite it by section mean those sections.
+
+## History
+
+# Devnet demo deploy — the runbook
+
 **Status: PREPARATION ONLY. Nothing here has been executed against devnet.**
 
 This document is written to be followed on a day that has not happened yet. It

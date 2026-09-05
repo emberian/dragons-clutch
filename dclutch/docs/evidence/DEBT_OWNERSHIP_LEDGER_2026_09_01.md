@@ -1,7 +1,7 @@
 # Debt deletion/ownership ledger — lane S11, 2026-09-01
 
 Status: census output and ruling register. Not release evidence.
-Owner: lane S11 (`docs/LETTER_TO_CLAUDE_2026_09_01.md:827-867`), against
+Owner: lane S11 (`docs/ledger/LETTER_TO_CLAUDE_2026_09_01.md:827-867`), against
 `docs/MASTER_COMPLETION_CONTRACT.md` row **C-00** and rows C-15, C-16.
 
 **What this row terminates in:** `docs/evidence/C16_ENTRY_LIST_2026_09_01.md` —
@@ -527,10 +527,10 @@ The tree's idiom is not `TODO`. It is the five classification words of
 
 **Denominator: 825 distinct matching lines** across 20 marker patterns
 (excluding `target/`, `.claude/worktrees/`, `node_modules/`, `Cargo.lock`,
-`docs/board-archive-2026-08-27.md`, `docs/compost/`, `docs/recovered/`).
+`docs/ledger/board-archive-2026-08-27.md`, `docs/compost/`, `docs/recovered/`).
 
 Classification: **~700 cosmetic, ~120 tracked, 11 orphan-material.**
-`ASPIRATION_LEDGER.md:1283-1285`'s claim that the repo carries zero real
+`docs/evidence/ASPIRATION_LEDGER_2026_08_27.md:1283-1285`'s claim that the repo carries zero real
 `TODO`/`FIXME`/`HACK`/`unimplemented!`/`todo!()` **verifies true at HEAD** — all
 10 such hits are meta-references to the counting itself. All 52 `unreachable!()`
 are `#[cfg(test)]` bounded-match arms; none is on an on-chain path.
@@ -576,7 +576,7 @@ moved and the status column did not:
 
 ## 4. Contradictory current guides
 
-**Denominator: 82 in-scope guide files** — 6 top-level, `docs/START_HERE_2026_09_01.md`,
+**Denominator: 82 in-scope guide files** — 6 top-level, `docs/ledger/START_HERE_2026_09_01.md`,
 11 `docs/guides/`, 3 `docs/operators/`, 6 `docs/reference/*.md`, 55 READMEs under
 `tools|apps|packages|programs`. 22 audited claim-by-claim, all 82 swept for dead
 paths and unparsed flags; **~240 checkable claims** extracted (~60 paths, ~90
@@ -626,7 +626,7 @@ own subject throughout rather than in one line.
 (`crates/dclutch-refusal-registry`, `tools/lane.sh`, `tools/lane/README.md`,
 `rustup run 1.97.1` against `rust-toolchain.toml`, `npm run abi:coverage`,
 `run-postjoin-hostiles.sh`, `--check-unique` at `run.sh:421`);
-`docs/START_HERE_2026_09_01.md` (every named file and line anchor resolves);
+`docs/ledger/START_HERE_2026_09_01.md` (every named file and line anchor resolves);
 `docs/operators/found-a-market.md` and `author-a-ticket.md` (every flag,
 subcommand, env var, magic, refusal string and route verified);
 `docs/guides/operator.md`'s four founding magics and eight `CompartmentV1`
@@ -759,7 +759,7 @@ requires, for every family:
 | Dealer, Fractional, Bearer, Rational | declare no `Create`/`Close` lifecycle plan at all | n/a | **not affected** |
 
 **Result: no second casualty.** The reach of `73ffb010` is exactly as wide as
-`GOAL.md:1357-1359` feared, and the only family it cost anything is the one
+`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:1357-1359` feared, and the only family it cost anything is the one
 already recorded. Every other plan-producing family granted the three
 permissions before the check existed. The debt this leaves is not a broken
 family; it is that `TicketAuthorship`'s payer and RentCredit arms are now
@@ -773,23 +773,23 @@ does not re-discover it as an orphan. → §10 row R-7.
 
 > **SUPERSEDED 2026-09-01 12:47 — HISTORICAL FRAMING.** Ember ruled: the
 > privacy/FHE/MPC/energy objective is **ruled OUT** of this Clutch
-> (`GOAL.md:2071`, commit `5a371810`; record
+> (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:2071`, commit `5a371810`; record
 > [`decisions/0018-privacy-horizon-not-this-clutch.md`](../decisions/0018-privacy-horizon-not-this-clutch.md)).
 > This section describes the question as it stood before that, and is retained
 > as the evidence the ruling was made on. **It is not an open charter, and
-> nothing here may be reported as deferred or future work** (`GOAL.md:2093`).
+> nothing here may be reported as deferred or future work** (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:2093`).
 > One thing it must NOT be read as licensing: closing `O-019`. The ruling makes
 > that row load-bearing — see `docs/OMISSION_INDEX.md:59`.
 
 Framed for a one-line ruling, as the letter requires. **I do not rule on this.**
 
-**What exists in code: nothing.** `ASPIRATION_LEDGER.md:162` records the
+**What exists in code: nothing.** `docs/evidence/ASPIRATION_LEDGER_2026_08_27.md:162` records the
 verification — `dark`, `FHE`, `shielded`, `Shielded`, `DrEX`, `zkML` have zero
 hits outside prose — and it still verifies. There is no crate, module, kernel or
 type serving this ambition.
 
 **What ruling exists, and why it is not the ruling C-15 wants.** There is a
-dated Ember ruling, `ASPIRATION_LEDGER.md:3-7` and `docs/INTENT.md:109`:
+dated Ember ruling, `docs/evidence/ASPIRATION_LEDGER_2026_08_27.md:3-7` and `docs/INTENT.md:109`:
 
 > "dark-FHE is NOT a near/medium-term ambition for dragons-clutch — its Tier-0
 > rows are DROPPED-BY-DECISION for this horizon." — ember, 2026-08-27
@@ -888,13 +888,13 @@ One line each. These are the rows this lane cannot close by engineering.
 | id | ruling needed | owner if ruled "build it" |
 | --- | --- | --- |
 | ~~**R-1**~~ | **CLOSED by S7.** The guard landed at `fractional_claim_check_v1.rs:1196-1209` behind a shared `CorePhaseGateV3` both routes now read; `0x5644` left the dead list between this file's two measurements. | done |
-| ~~**R-2**~~ | **CLOSED (`32fc79d5`) — it was never a ruling, it was a fact nobody had established.** The question "gone or reserved?" is answerable from the tree: `docs/ASPIRATION_LEDGER.md` D-6 records `DCLLBX02` as *"ANSWERED AND EXECUTED: deleted"*, dead on both ends, `WAVE.md:569` struck, and `docs/design/BASIS_ABI_UNIFICATION_V1.md:185` finds *"Producers of `DCLLBX02`: **none.**"* Gone. So the ten codes go with it, and the append-only objection does not apply: the route had no producer in the tree and no `DCLTLNK2` record was ever finalized on chain, so **not one of the ten was ever raised anywhere** and no historical log can resolve against them. `0x5101..=0x510A` withdrawn, never reused; `ClaimsState` renumbered to the sub-band base. | done |
+| ~~**R-2**~~ | **CLOSED (`32fc79d5`) — it was never a ruling, it was a fact nobody had established.** The question "gone or reserved?" is answerable from the tree: `docs/evidence/ASPIRATION_LEDGER_2026_08_27.md` D-6 records `DCLLBX02` as *"ANSWERED AND EXECUTED: deleted"*, dead on both ends, `docs/ledger/WAVE_2026-08-26_to_2026-09-02.md:569` struck, and `docs/design/BASIS_ABI_UNIFICATION_V1.md:214` finds *"Producers of `DCLLBX02`: **none.**"* Gone. So the ten codes go with it, and the append-only objection does not apply: the route had no producer in the tree and no `DCLTLNK2` record was ever finalized on chain, so **not one of the ten was ever raised anywhere** and no historical log can resolve against them. `0x5101..=0x510A` withdrawn, never reused; `ClaimsState` renumbered to the sub-band base. | done |
 | **R-3** | Claims split/merge as user acts (`claims.conserve`, `DCLCNS01`, `0x5006`) — a designed, tested, semantically-owned capability with no route, no dispatcher, no client. **Build the outer route, or rule it out with a date.** | Claims |
 | **R-4** | **PARTLY DISCHARGED, `96ddf38f`.** Register repaired 65 → **55** and 12 stale binding refs → 0 (§2.2). What remains is not a ruling: (i) three passing campaigns must emit `record()` evidence before they can be bound — S7 for `fractional-atomic`, the Trading lane for `user-position-admission`, plus `general-hot`; (ii) `routes.md` must consult the evidence ledger, or cross-check its own two tables, so *bound* stops reading identically to *corroborated* (§2.3). | S11/gauntlet holds (ii); S7 and Trading hold (i) |
 | **R-5** | **Withdrawn as a ruling — it is engineering with a working precedent.** Claims already solved this class inside this repo: 1,489 raise sites over 141 codes, 15.2% maximum, via the decision-0007 sub-band convention, against Trading's 2,086 on one code at 25.0%. A policy whose template is already in the tree and already load-bearing does not need Ember to choose it; it needs a lane to apply it and a census predicate to hold it. Re-routed. | protocol-wide lane + decision 0007 |
 | **R-6** | U-001's "explicit deletion/non-authoritative-AOT ruling for standalone family artifacts" — Ember owns whether standalone family AOT artifacts are authoritative. Separately, V3 AOT has never compiled for `target_os = "solana"` and needs an owner. | Direct / AOT |
 | **R-7** | `TicketAuthorship`'s payer and RentCredit arms are unreachable defense-in-depth after `73ffb010`. Document in place, or fold? *(small; listed so it is not re-discovered)* | Series |
-| ~~**R-8**~~ | **CLOSED — RULED OUT 2026-09-01 by ember**, the second branch of this row's own disjunction (`GOAL.md:2071`, commit `5a371810`; record [`docs/decisions/0018-privacy-horizon-not-this-clutch.md`](../decisions/0018-privacy-horizon-not-this-clutch.md)). Verbatim: *"privacy/FHE is a 'not yet' for sure for sure, that would be a much later version of Clutch, solana isn't ready for that kinda awesomeness onchain yet (we'd want to use minidregg, which isn't ready yet)."* The dated ruling exists and the contradictory claims are removed in the same commit as the record. §8 of this file (`:772-829`, which now carries the same marker) is therefore **historical framing**, superseded: it describes the state of the question before 2026-09-01 12:47 and must not be read as an open charter. `O-019` is NOT closed by this — the ruling makes it load-bearing (`docs/OMISSION_INDEX.md:59`). | done |
+| ~~**R-8**~~ | **CLOSED — RULED OUT 2026-09-01 by ember**, the second branch of this row's own disjunction (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:2071`, commit `5a371810`; record [`docs/decisions/0018-privacy-horizon-not-this-clutch.md`](../decisions/0018-privacy-horizon-not-this-clutch.md)). Verbatim: *"privacy/FHE is a 'not yet' for sure for sure, that would be a much later version of Clutch, solana isn't ready for that kinda awesomeness onchain yet (we'd want to use minidregg, which isn't ready yet)."* The dated ruling exists and the contradictory claims are removed in the same commit as the record. §8 of this file (`:772-829`, which now carries the same marker) is therefore **historical framing**, superseded: it describes the state of the question before 2026-09-01 12:47 and must not be read as an open charter. `O-019` is NOT closed by this — the ruling makes it load-bearing (`docs/OMISSION_INDEX.md:59`). | done |
 | ~~**R-9**~~ | **DONE (`eaa4a1fa`) — it was transcription, not a ruling.** `docs/OMISSION_INDEX.md` **O-019**: widening the batch relation toward a general encrypted-exchange computer is now a named `hard invariant, narrowly stated`, carrying Ember's own reason verbatim and `INTENT.md:118-120`'s consequence — a door that closes permanently. Explicitly independent of C-15: if the ambition is retained it is a prerequisite, and if it is ruled out the row is what stops the option being lost on the way. | done |
 | **R-11** | **Eight magic collisions remain, gate red (`7bf75057`).** Ten found; `DCLTDRS1` fixed at `b64ecbb5`, `DCLTRIX1` promoted to R-13. The other eight are cross-ELF or non-dispatch — real wire-reading ambiguity, no mis-dispatch path. Adjudicate each: fixtures import the canonical constant; genuine sharers renumber under a decision record while the deploy window makes it free. **Do not re-letter to make the gate green.** | Claims fixtures, Dealer/Direct codecs, Registry/Record/Relay |
 | ~~**R-13**~~ | **CLOSED (`a19d93b1`), both halves, before the cohort deploys.** `RecordActionV1::Begin` moved `1` → `5`, so the documented partition is true by construction; `RECORD_FIRST_ACTION_V1` and `REGISTRY_ACTION_CEILING_V1` are published and bound disjoint by `const _: () = assert!` in `programs/dclutch-registry-sbf/src/lib.rs`, alongside a second assertion pinning the two widths distinct so the length clause cannot quietly become load-bearing again. The dispatcher's bare literal `2` now derives from the constant, and `record_v1.rs`'s `Some(1)` arm is `Some(5)`. `crates/dclutch-registry-svm/src/tests.rs` proves the ceiling is what `decode` actually admits, over all 256 action bytes. **Proved red first:** setting the ceiling to `2` fails the build with *"the Registry and record action ranges overlap"*. | done |
@@ -994,7 +994,7 @@ instance of §1's class anyone has found: `primary_instruction` and
 The campaign body was unreachable for six days **while the README quoted its
 ten-row compute table as evidence** — two attributes and six unset environment
 variables standing exactly where the execution used to be. Found and remediated
-by the resolution lane; the README now states it at `:97-109`, and `WAVE.md:2329-2342`
+by the resolution lane; the README now states it at `:97-109`, and `docs/ledger/WAVE_2026-08-26_to_2026-09-02.md:2329-2342`
 carries the accounting. Recorded here because it is the purest form of the
 defect this lane exists to find: **not a missing test, but a present one that
 had been hollowed out while its own documentation went on citing it.**

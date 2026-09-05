@@ -82,7 +82,7 @@ first-execution territory.
 > there. And **a capability has since been activated on a public cluster**: the
 > first capability root in the protocol's history is live on devnet under
 > market18, with both participants admitted and funded
-> (`SESSION_STATE.md`, "THE ONE THING THAT MATTERS"). What remains
+> (`docs/ledger/SESSION_STATE_2026-08-31.md`, "THE ONE THING THAT MATTERS"). What remains
 > first-execution territory is the eighth stage — the trade itself — and, for
 > General, a founding that still refuses at `0x5182` before any root is created
 > (`docs/evidence/GENERAL_PUBLICATION_CLOSURE_2026_08_30.md`).
@@ -241,7 +241,7 @@ Two consequences, both the opposite of what was assumed going in:
 > maker keys for their CU draw and labelling them "selected for CU" rigs the
 > demo and labels the rig; the standing test is *does it make the DEMO work, or
 > the PRODUCT work?* — and a stranger draws their keys once and does not get to
-> draw again (`SESSION_STATE.md`, "THE ORCHESTRATOR'S OWN ERROR, RECORDED").
+> draw again (`docs/ledger/SESSION_STATE_2026-08-31.md`, "THE ORCHESTRATOR'S OWN ERROR, RECORDED").
 > The band this section manages **no longer exists**: ALLKEYS
 > (`308c3dff`..`e7805d62`) carried every key-varying bump, so every key costs
 > the same 1,336,742 CU and the refusal tail is exactly 0. The first trade uses

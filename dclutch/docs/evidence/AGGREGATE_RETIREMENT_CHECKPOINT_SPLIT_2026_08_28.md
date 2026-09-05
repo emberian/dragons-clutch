@@ -150,4 +150,4 @@ This slice does not replace the existing monolithic builder or its codec. That
 route remains useful as a refusal/control fixture but is not executable on the
 network. Full pre-genesis lifecycle, chaos, M-61, all-program release,
 private-validator, and caller-journal convergence obligations are tracked in
-`docs/VALIDATION_BACKLOG.md`.
+`docs/ledger/VALIDATION_BACKLOG_2026-08-31.md`.

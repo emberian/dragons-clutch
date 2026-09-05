@@ -11,32 +11,43 @@ Every claim is backed by collateral locked in the market's vault (its
 liquidation, no margin call, and no way for a market to owe more than it
 holds. The most you can ever lose is what you paid.
 
-The seven programs are live on Solana devnet, and there is an open Market on
-them:
-[`6WZXJ7jBPPA3eFZPc8hQmmNsf3R4zAZN4DRZzfhcV7a4`](https://clutch.dregg.pro/market?address=6WZXJ7jBPPA3eFZPc8hQmmNsf3R4zAZN4DRZzfhcV7a4),
-zero-fee on both sides, with its trading capability activated. Nothing on it
-is worth money: devnet is a public test network whose tokens have no real
-value, and that Market's collateral is a devnet test token. The programs were
-updated in place, keeping the same addresses; the original deployment is
-recorded byte-for-byte in
-[the deployment record](docs/evidence/DEPLOY_1.md). Everything below also runs
-on a local test chain you can run yourself.
+The seven programs run on Solana devnet as a **cohort**: each cohort is a
+full redeploy from one named commit with fresh program ids, and the previous
+cohort is abandoned in place and closed. The ids are not permanent. The live
+cohort, its commit and its markets are read off the chain by the site
+([clutch.dregg.pro](https://clutch.dregg.pro)) and by the SDK's deployment
+manifest (`packages/dclutch-sdk/lib/deployments.ts`); each cohort's evidence
+is a dated document under [`docs/evidence/`](docs/evidence). Nothing on
+devnet is worth money: it is a public test network, and every market's
+collateral is a devnet test token. Everything below also runs on a local
+test chain you can run yourself.
 
 ## What works today
 
-- On a local test validator, a market is created, funded, opened, and a
-  participant is admitted to it, on chain. Resolving that market and paying
-  it out are not part of the run that is accepted today.
-- Resolution itself runs through the same Pyth and Wormhole programs that
-  are deployed on mainnet, and they really do check the signatures — but
-  the price they check is a recorded one signed by a test key, not a live
-  Pyth publication, and that check runs in a test harness rather than on a
-  chain.
-- Trading between two counterparties, moving claims between holders, and
-  paying out a winning claim run against those same programs in a test
-  harness, at the real compute and memory limits. None of the three has
-  been driven on a validator yet, and winding a market all the way down
-  to retired has not run anywhere yet.
+Evidence levels are distinct and the list says which one each item has:
+*devnet* means a finalized public-chain transaction named in a cohort
+document; *real ELF* means the deployed program bytes executed in a test
+bank at the real compute and memory limits; nothing here is mainnet evidence.
+
+- **Founding, on devnet** — a market is projected, funded, founded and opened,
+  by the composed transaction or by the two-stage permit route below.
+- **Trading, on devnet** — strangers are admitted, a stranger's fee-bearing
+  Direct fill has crossed, and the fee leg was settled permissionlessly by a
+  third party in its own transaction.
+- **Resolution, on devnet** — the sponsored Pyth SOL/USD feed was captured
+  inside a market's window and the market settled on an honest certificate;
+  a market whose source went silent took its disclosed fallback by the
+  failure walk; a market with a funded recovery ladder is answered on its
+  second rung (real ELF).
+- **Payout, on devnet** — winning claims, a stranger's included, were paid
+  into ordinary wallet token accounts, with the ledger census holding every
+  conservation law across each crossing. A market has begun retiring; the
+  last retirement step has not completed on any chain.
+- **General, Dealer, Series and Structured** — the General market is founded,
+  activated and sealed on devnet and its first candidate batch is the current
+  wall; the Dealer campaign is 31 of 31 on real ELFs and no Dealer market has
+  existed on a chain; Series and Structured/Fractional run their lifecycles on
+  real ELFs.
 - Once the setup transactions have finalized, founding locks the collateral,
   creates the market, and opens it for trading. There are two routes to that
   outcome. The composed route does all of it in a single transaction that
@@ -51,26 +62,30 @@ on a local test chain you can run yourself.
 - Range and tail protection ("pays out if SOL ends below X") is just a
   bundle of cell claims, so its price is exactly the sum of the cell
   prices. No extra machinery, nothing to liquidate.
-- The web app ([`apps/dclutch-web`](apps/dclutch-web)) performs a bounded scan
-  for compatible Markets and reads claim supplies and portfolios from the
-  chain when they exist. It does not publish authoritative prices or enable
-  devnet trading today; there is no independent indexer.
-- A TypeScript SDK ([`packages/dclutch-sdk`](packages/dclutch-sdk)) and a
-  command-line client ([`packages/dclutch-cli`](packages/dclutch-cli))
-  build and check the same flows from code and from a terminal. The CLI
-  founds a market and joins one; its `buy` and `sell` refuse, and its
-  failure walk previews without submitting.
+- The web app ([`apps/dclutch-web`](apps/dclutch-web)) reads markets,
+  supplies and portfolios from the chain, and its trade page signs and
+  submits a Direct fill from a browser wallet. It publishes no authoritative
+  prices; there is no independent indexer.
+- A TypeScript SDK ([`packages/dclutch-sdk`](packages/dclutch-sdk)) and two
+  command-line clients build and check the same flows
+  ([two clients](docs/guides/two-clients.md)): `dclutch` reads and authors
+  tickets and never submits; `dclutch-terminal` founds, joins and redeems
+  under a durable journal, while its `buy`, `sell` and failure-walk
+  submission still refuse by design.
 
-Not done yet: the Structured product family is still being built, the
-General and Dealer trading paths have not run their first live trades, and
-there is no independent market discovery index. Trading is also expensive — it runs
-close to Solana's per-transaction compute limit, and cutting that cost is
-active work.
+Not done yet: General's first candidate batch on a chain, any Dealer market on
+a chain, a market retired all the way, and an independent market discovery
+index. Trading runs close to Solana's per-transaction compute limit, and
+cutting that cost is active work. The completion contract
+([`docs/MASTER_COMPLETION_CONTRACT.md`](docs/MASTER_COMPLETION_CONTRACT.md))
+is the full list, and the two hostile walks of it
+([2026-09-03](docs/evidence/C16_REHEARSAL_2026_09_03.md),
+[2026-09-04](docs/evidence/C16_REHEARSAL_2026_09_04.md)) are the honest
+distance from done.
 
 ## How a market works
 
-This is the design, end to end. Steps 1 and 2 run today; steps 3 and 4 are
-built and tested but not yet open to anyone.
+This is the design, end to end. All four steps have run on devnet.
 
 1. **Someone creates it.** The creator fixes everything up front: the
    collateral token, the question and its cells, the price source, the
@@ -87,9 +102,9 @@ built and tested but not yet open to anyone.
    the collateral that was there the whole time.
 
 If the source never publishes inside the window, the market takes the
-fallback outcome the creator disclosed before it opened. Once markets are
-open and that step can be submitted, anyone will be able to trigger it for
-a pre-funded bounty; today the command previews the transaction and stops.
+fallback outcome the creator disclosed before it opened — the **failure
+walk**, which anyone may submit. The public CLI still only previews that
+transaction; the operator tooling has submitted it on devnet.
 
 A transaction that doesn't check out exactly — wrong account, wrong
 authority, stale state, a window that isn't open — is **refused**: the
@@ -181,7 +196,7 @@ python3 tools/release/private-validator-lifecycle/run.py \
     --validator "$(command -v solana-test-validator)" \
     --solana "$(command -v solana)" \
     --work /absolute/scratch/outside/the/repo \
-    --through participant
+    --through participant --seeds 1
 
 # the web app's test suite:
 cd apps/dclutch-web && npm test
@@ -206,21 +221,20 @@ above all — delete `apps/dclutch-web/node_modules/.vite` before trusting what
 cohort redeploy serves the browser a *dead* cohort's program ids, which the site
 then reports as an honest refusal on a market that is perfectly healthy.
 
-Working on the code itself? Read [`AGENTS.md`](AGENTS.md) and
-[`WAVE.md`](WAVE.md) first — they carry the working agreements this
-repository runs on.
+Working on the code itself? Read [`AGENTS.md`](AGENTS.md) first — it carries
+the rules this repository runs on — and [`GOAL.md`](GOAL.md), the index of
+what the project is, the standing goal and every dated delta.
 
 ## Where this is going
 
-The first markets have lived whole lives on devnet: on 2026-09-02 a SOL/USD
-Market took two stranger admissions and a fee-bearing fill with the ledger
-census holding every law across the crossing, on 2026-09-03 a second
-Market observed its price inside its own window, resolved on the honest
-certificate, and paid its winner into an ordinary wallet's token account, and
-on 2026-09-04 a stranger who bought the right answer was paid for it, with
-the chain's selector and the reading naming the same cell. The next milestone
-is a Market asking a question about the state of Solana mainnet, and the
-General family executing on a real chain. Pyth's devnet feeds carry the
-major prices directly, and a disclosed relayer carries everything else.
-dClutch grew out of Dragon's Clutch; the first generation lives in the
-neighboring `dragons-clutch` repository as an archive.
+The dated milestones — the first devnet fill, the first honest resolution, the
+first stranger paid — are rows in [`GOAL.md`](GOAL.md), each linking to the
+cohort document that carries the signatures. The mechanism agenda
+([decision 0031](docs/decisions/0031-the-mechanism-agenda.md)) is the design
+layer under construction: the frequent batch as every family's clearing
+spine, joint clearing across outcomes, a bounded-loss scoring-rule Dealer,
+ensemble resolution, the founder bond, and conditional markets. Pyth's devnet
+feeds carry the major prices directly, and a disclosed relayer
+(`tools/relayer`) carries mainnet account state for everything else. dClutch
+grew out of Dragon's Clutch; the first generation lives in the neighboring
+`dragons-clutch` repository as an archive.

@@ -6,6 +6,14 @@ mainnet, and no mainnet act is authorized.
 Tree root `/Users/ember/dev/dclutch`. Every deployed byte is built from
 `1cae26fd61defbefd20bcd52acc449b6e94e64ed`.
 
+**The machine-readable witness is the authority for every number below.**
+`docs/evidence/witnesses/cohort-15-discovered.json` carries the
+signatures, slots, accounts and compute units read back from devnet, and the
+job directory `~/jobs/dclutch-cohort15-20260903/` holds the plans, journals and
+poststates they were folded from. The prose copies numbers from those files
+by hand and is kept for its findings; where a number here and the witness
+disagree, the witness is right and this sentence is the correction.
+
 ## Headline: the digests a reader looks for first
 
 | | |

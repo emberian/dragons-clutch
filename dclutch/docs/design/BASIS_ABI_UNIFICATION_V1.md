@@ -1,12 +1,41 @@
 # Basis ABI unification, v1 — one wire format, one author, and the road to curvature
 
+**Head current at `330bbfaba` (2026-09-04), tree root `/Users/ember/dev/dclutch`.** The body below `## History` is the FRONTIER-2 design of 2026-08-30 with its 2026-08-31 correction, verbatim; this head states what was ruled and what survives.
+
+## What is true now
+
+- **Ruled.** Decision 0029 item 2 (CONFIRMED by ember 2026-09-04): curvature
+  stays in scope and the basis kernel is not retired — option C is refused,
+  option D (transfer the assurance, not the code) is the recommendation that
+  stands. `docs/OMISSION_INDEX.md` O-013 carries the one-line consequence.
+- **The two evaluators are still two.** The live `ProductBasisV3` (handwritten,
+  load-bearing on chain in two programs) has no Lean ABI owner and no emitted
+  conformance corpus; `dclutch-liability-basis-v2-kernel` has both and no
+  caller. Degree-0 and degree-1 shapes are live on the wire under a certified
+  categorical projection; degrees 2 and 3 — curvature — are the unreached
+  capability, and the price-gate certificate is fully implemented and
+  unreachable (no instruction accepts one).
+- **The "zero CU" claim was falsified by measurement** (2026-08-31): the
+  unconditional `admit_selection_v3` on the shared join and the rewritten
+  `ProductBasisV3::decode` with its price-gate probe run on every trade, and the
+  shared function runs twice per transaction, so the Direct hot path paid about
+  +5,013 CU of the +6,876 the margin gates absorbed at the 2026-08-31 re-pin.
+  The cheap recovery — hoist the admission call and digest probe to the
+  founding caller — is unchartered.
+- The `M-4` correction stands: ember's "5 fixed bands is not good enough" was
+  recorded as dropped and is partly delivered under another name.
+
+## History
+
+# Basis ABI unification, v1 — one wire format, one author, and the road to curvature
+
 Status: **design, awaiting a ruling.** Not release evidence, not deployment
 evidence, and explicitly not a claim that any of it is scheduled. It targets a
 cohort later than the one in flight and says exactly which, and why.
 
 Provenance: FRONTIER-2, 2026-08-30. Every measurement below was taken at HEAD
 in `~/dev/dclutch` on that date. Where it contradicts
-`docs/design/ORPHAN_DESIGNS_TRIAGE_2026_08_30.md` — which chartered it — the
+`docs/evidence/ORPHAN_DESIGNS_TRIAGE_2026_08_30.md` — which chartered it — the
 contradiction is called out in §0.3 rather than quietly corrected, because
 that document is three hours old and its errors are instructive.
 
@@ -446,7 +475,7 @@ requires one. That is the true statement the triage doc was reaching for.
 
 ### 2.3 What ships today — the `M-4` correction, restated because the ruling depends on it
 
-`ASPIRATION_LEDGER.md` `M-4` recorded ember's *"'5 fixed bands' is really not
+`docs/evidence/ASPIRATION_LEDGER_2026_08_27.md` `M-4` recorded ember's *"'5 fixed bands' is really not
 good enough"* as a **dropped** requirement. It is not dropped. `BasisKindV3`
 (`runtime_v3.rs:105`) admits `GradedExactComplement` alongside `CategoricalQ1`,
 and `BasisShapeV3` (`:131`) carries `Constant`, `RampUp`, `RampDown` and `Tent`
@@ -773,7 +802,7 @@ that — it is a new refusal reason inside routes that already exist.
 Two allocation hazards, both measured:
 
 - **Do not take `0x5600`–`0x560A` or `0x5620`–`0x5625`.** They are soft-reserved
-  by `docs/design/CLAIM_CHECK_COMPACTION_V1.md:925,941` for an unlanded design,
+  by `docs/design/CLAIM_CHECK_COMPACTION_V1.md:965,941` for an unlanded design,
   and **nothing enforces that reservation** — the census checks uniqueness among
   codes that exist, not among codes a design doc has spoken for.
 - **`0x4008` is claimed in the working tree** (an uncommitted
@@ -975,7 +1004,7 @@ already partly ships would waste his answer.** The real question:
 
 Two adjacent questions that belong in the same conversation, because all three
 are "ember chooses a posture" and none is unblockable by engineering:
-`ORPHAN_DESIGNS_TRIAGE_2026_08_30.md` §3.2 (does v1 ship one-attempt markets
+`docs/evidence/ORPHAN_DESIGNS_TRIAGE_2026_08_30.md` §3.2 (does v1 ship one-attempt markets
 forever?) and §3.3 with `M-26` (the fee rate).
 
 ### 11.2 Left to the implementer
@@ -1010,10 +1039,10 @@ forever?) and §3.3 with `M-26` (the fee rate).
 
 ---
 
-*Cross-references: `docs/design/ORPHAN_DESIGNS_TRIAGE_2026_08_30.md` §2 and
+*Cross-references: `docs/evidence/ORPHAN_DESIGNS_TRIAGE_2026_08_30.md` §2 and
 §4.1 (the measurement this document was chartered from);
 `docs/OMISSION_INDEX.md` `O-013`, `U-013`, `O-005`, `O-002`;
-`docs/ASPIRATION_LEDGER.md` `M-4`, `M-9`;
+`docs/evidence/ASPIRATION_LEDGER_2026_08_27.md` `M-4`, `M-9`;
 `docs/decisions/0007-namespaced-refusal-codes.md`;
 `docs/research/EXPANSION_FRONTIER_2026_08_25.md` §"Slice two";
 `docs/research/BSPLINE_ECLIPSE_SCORECARD_2026_08_27.md` (three gen-1 deficits —

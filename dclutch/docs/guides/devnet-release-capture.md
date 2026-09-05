@@ -12,16 +12,25 @@ Run this immediately before you start the first Upgrade role:
 dclutch-local-successor-bootstrap devnet-permanent-substrate-capture-v1 \
   --rpc-url https://api.devnet.solana.com \
   --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \
+  --expected-registry-program REGISTRY_PROGRAM \
+  --expected-rent-program RENT_PROGRAM \
+  --expected-core-program CORE_PROGRAM \
+  --expected-custody-program CUSTODY_PROGRAM \
+  --expected-resolution-program RESOLUTION_PROGRAM \
+  --expected-claims-program CLAIMS_PROGRAM \
+  --expected-trading-program TRADING_PROGRAM \
   --expected-upgrade-authority RETAINED_AUTHORITY \
   --fee-payer FEE_PAYER \
   --minimum-context-slot FINALIZED_FLOOR \
   --output /absolute/new/permanent-substrate-snapshot.json
 ```
 
-You do not supply program addresses. The command owns the fixed decision-0012
-table of seven permanent Program/ProgramData pairs and reads all fourteen
-Loader accounts plus the explicit fee payer in one finalized
-`getMultipleAccounts` context. It verifies every Loader owner, privilege,
+You declare all seven role programs (decision 0012, amended 2026-09-02: the
+roles are a caller-declared, authenticated input, not a fixed table — a fixed
+table is what made every full-redeploy cohort unsealable). The command derives
+every ProgramData coordinate from its Program and reads all fourteen Loader
+accounts plus the explicit fee payer in one finalized `getMultipleAccounts`
+context. It verifies every Loader owner, privilege,
 derived ProgramData coordinate, Program link, nonzero deployment slot,
 retained authority, rent-exempt balance, full ProgramData digest, and live ELF
 digest. It reports the exact Program and ProgramData lamport totals and the fee

@@ -6,6 +6,14 @@ mainnet, and no mainnet act is authorized.
 Tree root `/Users/ember/dev/dclutch`. Every deployed byte is built from
 `8e96ec3f8cd4438040d9287d2489ea84587ebd5c`.
 
+**The machine-readable witness is the authority for every number below.**
+`docs/evidence/witnesses/cohort-14-discovered.json` carries the
+signatures, slots, accounts and compute units read back from devnet, and the
+job directory `~/jobs/dclutch-cohort14-20260902/` holds the plans, journals and
+poststates they were folded from. The prose copies numbers from those files
+by hand and is kept for its findings; where a number here and the witness
+disagree, the witness is right and this sentence is the correction.
+
 ## Headline: the two digests a reader looks for first
 
 | | |
@@ -1109,7 +1117,7 @@ producer-missing shape rather than a configuration problem:
   `process_hot_execution_v3` writing the capability root and returning a
   `DCLTHAK3` ack -- additionally requires a founded Market whose capability
   manifest selects General, and no driver in this tree founds one."*
-* `ASPIRATION_LEDGER.md` M-40 records `build_general_hot_instruction_v3` as
+* `docs/evidence/ASPIRATION_LEDGER_2026_08_27.md` M-40 records `build_general_hot_instruction_v3` as
   having zero callers; its only exercise is
   `programs/dclutch-general-accelerator-sbf/program-test/tests/hot_instruction_v3.rs`.
 

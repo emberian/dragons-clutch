@@ -1,7 +1,7 @@
 # Decision 0009: General's collection half is three more capability actions, and the executor still gets no branch
 
 Status: accepted on 2026-08-27 as the resolution of `M-12` in
-`docs/ASPIRATION_LEDGER.md` — *"General's collection half has no route, and the
+`docs/evidence/ASPIRATION_LEDGER_2026_08_27.md` — *"General's collection half has no route, and the
 root carries counters for it."* This is an ownership and flow decision. It is
 not release evidence, and it does not claim that any collection action executes
 today: the records and the pure transitions landed with this record (`751d702`),

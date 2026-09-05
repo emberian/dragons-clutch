@@ -4,7 +4,7 @@
 > tree; several of the "current safe profiles" and prototype choices named
 > below have since moved (some lifted, some superseded, some deleted). This
 > banner is the only edit. Cross-check any specific claim against `WAVE.md`
-> before relying on it, and see `docs/ASPIRATION_LEDGER.md` (M-21) for the
+> before relying on it, and see `docs/evidence/ASPIRATION_LEDGER_2026_08_27.md` (M-21) for the
 > full staleness accounting.
 
 Status: active product/theory and implementation direction. This document
@@ -151,7 +151,7 @@ must not be assumed by a later lane.
   certificate that refutes generation one's moment cone in both directions and
   needs nothing from a basis but a deterministic integer evaluator — which is
   exactly what `Basis` is. It has no Lean, which is the part worth adding here.
-  See `ASPIRATION_LEDGER.md` `G-1` and the eclipse scorecard's correction
+  See `docs/evidence/ASPIRATION_LEDGER_2026_08_27.md` `G-1` and the eclipse scorecard's correction
   section. A transplant needs a `docs/compost/` manifest.
 
   **CORRECTED 2026-08-30 (FRONTIER): the Lean now exists; the trigger's
@@ -175,7 +175,7 @@ must not be assumed by a later lane.
   member list. Note carefully that this is a statement about the *kernel
   crate*, not about the *capability*: shaped payoffs at degree ≤ 1 ship on the
   live wire through `BasisKindV3::GradedExactComplement`, by a separate
-  implementation. See `docs/design/ORPHAN_DESIGNS_TRIAGE_2026_08_30.md` §2.
+  implementation. See `docs/evidence/ORPHAN_DESIGNS_TRIAGE_2026_08_30.md` §2.
 
 `docs/research/BSPLINE_ECLIPSE_SCORECARD_2026_08_27.md` compares the result
 against generation one axis by axis, including where generation one is still

@@ -194,5 +194,5 @@ test result: ok. 41 passed; 0 failed
 
 Design: `docs/design/CLAIM_CHECK_COMPACTION_V1.md`, including §15 (the six
 amendments implementation earned) and §16 (what shipped, reconciled against what
-was planned). Ruling: `WAVE.md:1183-1186`. Thirteen commits, `a2ad25ed`
+was planned). Ruling: `docs/ledger/WAVE_2026-08-26_to_2026-09-02.md:1183-1186`. Thirteen commits, `a2ad25ed`
 through `dff38069`.

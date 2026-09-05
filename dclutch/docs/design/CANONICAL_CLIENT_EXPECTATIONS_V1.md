@@ -243,7 +243,7 @@ siblings the same mirror already imported. The chain carried 2.
   hand-add a TS twin, which would create the S1 class with an extra step.
 
 **Sweep results** (full table:
-`docs/design/LITERAL_SWEEP_CONVICTIONS_2026_08_31.md`). The CONVICTED set
+`docs/evidence/LITERAL_SWEEP_CONVICTIONS_2026_08_31.md`). The CONVICTED set
 is being fixed by the LITERALS Opus lane in parallel; headline items and the
 one adjudication that was NOT mechanical:
 

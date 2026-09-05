@@ -8,7 +8,7 @@ byte-for-byte from the recovered message.
 
 ## Why this exists
 
-`docs/ASPIRATION_LEDGER.md` M-8 calls this *"the highest-value unlanded
+`docs/evidence/ASPIRATION_LEDGER_2026_08_27.md` M-8 calls this *"the highest-value unlanded
 artifact"* in the project's history: a complete, implementation-ready
 product-flow brief that `WAVE.md` cites as cycle-1 input (*"the recovered
 product-flow brief"*) while the brief itself was in no repository — it lived
@@ -26,7 +26,7 @@ produced it.
   sub-agent, not a context fork of the root).
 - **Sub-agent thread**: `01a0363b-b9af-7b31-8493-2f9aca50cf8b`, path
   `/root/trading_ui_flow_brief` — this is the *"lane session 01a0363b under
-  root 01a02ad0"* `docs/ASPIRATION_LEDGER.md` M-8 names.
+  root 01a02ad0"* `docs/evidence/ASPIRATION_LEDGER_2026_08_27.md` M-8 names.
 - **The payload below**: a `response_item` of type `agent_message`,
   `author: "/root/trading_ui_flow_brief"`, `recipient: "/root"`,
   `id: "amsg_01a03640-8609-7852-bd03-b2a263753600"`, timestamped
@@ -42,7 +42,7 @@ produced it.
   encrypted, but task_names, commits, goal text and exec output are
   recoverable." Recovered by grepping
   `~/.codex/sessions/**/*.jsonl` for `trading_ui_flow_brief`, matching the
-  three hits against `docs/ASPIRATION_LEDGER.md`'s cited ids/timestamp, then
+  three hits against `docs/evidence/ASPIRATION_LEDGER_2026_08_27.md`'s cited ids/timestamp, then
   extracting the `content[0].text` field of the matching `agent_message` by
   its `ordinal`.
 

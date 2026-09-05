@@ -162,7 +162,7 @@ recovery leg already states (`resolve_recovery_from_authenticated_domain`,
 `source_resolution_v2.rs:748`, `LinkageMismatch`). **This is the owed
 recovery-capture producer** (`LIVENESS_CENSUS_2026_08_29.md:96` R2, "the
 honest recovery CAPTURE has a contract transition and no provider outer";
-`GOAL.md:4738`): a capture route indexed by attempt slot is the same route
+`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4738`): a capture route indexed by attempt slot is the same route
 whether the slot is a member or the active rung.
 
 The push family's head is already per-source: its PDA is seeded by the
@@ -566,5 +566,5 @@ ladder, twelve theorems); `SourceRecoveryPolicyV2Abi.lean:109, 132, 142`;
 `DEALER_PARTIAL_REMOVE_COMPUTE_2026_09_02.md:55`;
 `docs/evidence/COHORT15_DEPLOYED_SEALED_FOUNDED_CAPTURED_2026_09_04.md:366,
 892, 1362, 1392, 1729, 2150`; `LIVENESS_CENSUS_2026_08_29.md:96`;
-`GOAL.md:4673-4678, 4738`; commits `4cd2b9cb5`, `485f5cb9f`, `12a9b13a5`,
+`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4673-4678, 4738`; commits `4cd2b9cb5`, `485f5cb9f`, `12a9b13a5`,
 `332b432e6`, `be8cac7b0`, `0b5e862ea`.

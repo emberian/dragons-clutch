@@ -119,7 +119,7 @@ series is the forecast* and a forecast nobody can read is not a product
 transport.** The only transport the note names for sealed orders is the FHE/MPC
 target, and **decision 0018 rules that horizon out of THIS Clutch** — ember's
 own ruling, dated, with the prerequisite named, and terminal rather than
-deferred. `GOAL.md:2093` forbids reporting the privacy horizon as deferred,
+deferred. `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:2093` forbids reporting the privacy horizon as deferred,
 future work or in-progress, and this record does not do so: **cohort-17 ships the
 visible book.**
 
@@ -130,7 +130,7 @@ for the clearing rule, and it is a real obligation rather than a decoration:
   words, and *"every theorem here survives it"* (`:284-286`). This ruling makes
   that a requirement on the design rather than an observation about it.
 - **The batch relation must stay narrow enough that it remains true.** That is
-  `O-019` (`docs/OMISSION_INDEX.md:59`), which decision 0018 made load-bearing
+  `O-019` (`docs/OMISSION_INDEX.md:40`), which decision 0018 made load-bearing
   precisely so a later Clutch is still reachable: *"narrowing further is free;
   widening spends an option nothing else in the tree records."* Any conjunct
   added to the clearing rule that reads a *published* order in a way a committed
@@ -153,7 +153,7 @@ version of Clutch"* on a substrate that can carry it.
 ## 4. The lanes
 
 None is chartered by this record. JOINT-CLEARING closed at `554a29119`
-(`GOAL.md:4715-4721`), and **cohort-17** is where the order record, the verifier
+(`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4715-4721`), and **cohort-17** is where the order record, the verifier
 conjuncts and the selection policy's two new criteria land together with their
 Lean emission (`JOINT_CLEARING:456-466`).
 
@@ -259,7 +259,7 @@ reverse and the one most likely to be revisited once a real book exists.
 property of the venue rather than a defect. It costs nothing to build and it
 spends the option `O-019` exists to hold: the batch relation would be free to
 widen, and `docs/INTENT.md:118-120` states the consequence — *a door closes
-permanently*. Per `docs/OMISSION_INDEX.md:59`, that reversal is not the
+permanently*. Per `docs/OMISSION_INDEX.md:40`, that reversal is not the
 orchestrator's to make; it needs a new dated ruling from ember that explicitly
 permits the door to shut.
 
@@ -279,6 +279,6 @@ permits the door to shut.
 `docs/decisions/0024-sustainable-economics-and-a-governable-parameter-surface.md`
 item 2; `docs/decisions/0010-general-candidate-escrow-and-the-set-relaxation.md` §1;
 `docs/decisions/0031-the-mechanism-agenda.md`;
-`docs/OMISSION_INDEX.md:59`; `docs/INTENT.md:114-120`;
-`GOAL.md:2071-2094`, `:4715-4721`;
+`docs/OMISSION_INDEX.md:40`; `docs/INTENT.md:114-120`;
+`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:2071-2094`, `:4715-4721`;
 commits `554a29119`, `e37116b03`.

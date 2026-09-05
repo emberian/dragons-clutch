@@ -8,7 +8,7 @@
 >
 > Written 2026-08-30 by the INTENT lane. It exists because these intentions are
 > recoverable only from `cv` transcripts, which age out, and because
-> `docs/ASPIRATION_LEDGER.md` found that *"ember's own words"* were the one
+> `docs/evidence/ASPIRATION_LEDGER_2026_08_27.md` found that *"ember's own words"* were the one
 > class of intention no document in either repository held (ledger, "The
 > verdict", item 3).
 
@@ -213,8 +213,9 @@ handle, introduced as *"here's the share-back version"*:
 
 Gen-1's form adds the clause that is easiest to erode and hardest to notice:
 *"Hoard principal pays claims, never fees, bounties, rent, or operating
-costs."* **[R1]** (requirement 2). Live as `README.md:10` and
-`docs/guides/trader.md:32` **[DOC]**.
+costs."* **[R1]** (requirement 2). Live as `docs/guides/trader.md` ("it does
+nothing but pay claim holders") and `docs/guides/operator.md`'s compartment
+table (`HoardPrincipal` — "pays claim holders, never anything else") **[DOC]**.
 
 **Everything authenticated; no discretionary resolver.**
 
@@ -639,7 +640,7 @@ intent changes. If it is wrong, the correction is worth more than the file.
 | Source | What it gave |
 |---|---|
 | A bounded `cv` sweep, 2026-08-30 — 49,203 user-channel messages across 1,941 sessions in `joshibot`, `dragons-clutch`, `joshi`, `breadstuffs`, `dregg-posters`, deduped to 9,386 | every quote carrying a second-precision timestamp, checked against the raw session file; the **[TP]** authorship findings; and the four documented not-founds |
-| `docs/ASPIRATION_LEDGER.md` (2026-08-27) | M-1 through M-7, M-26, D-18, D-19 — the quotes carrying only a minute or a date |
+| `docs/evidence/ASPIRATION_LEDGER_2026_08_27.md` (2026-08-27) | M-1 through M-7, M-26, D-18, D-19 — the quotes carrying only a minute or a date |
 | `docs/evidence/ASPIRATION_ARCHAEOLOGY_2026_08_30.md` | B.4, B.8, B.10 (with B.4 item 2 corrected in §5) |
 | `archive/gen1/docs/reviews/PROJECT_INTENT_ARCHAEOLOGY_2026-08-22.md` (in `~/dev/dragons-clutch`) | all fourteen **[R1]** requirements |
 | `AGENTS.md`, `PROJECT_METHOD.md`, `WAVE.md`, `README.md`, `docs/OMISSION_INDEX.md`, `docs/guides/` | every **[DOC]** citation |

@@ -43,7 +43,7 @@ already at depth one. It was found by execution, not by reading:
 
 > with the heap and CU ceilings artificially lifted, phase 8+ now reaches the
 > FIRST CHILD CPI and dies on `ReentrancyNotAllowed`, not on heap and not on
-> CU. — `docs/board-archive-2026-08-27.md:8199`
+> CU. — `docs/ledger/board-archive-2026-08-27.md:8199`
 
 The measured shape is carried into the shipped source, which is the best kind
 of evidence — `programs/dclutch-claims-sbf/src/lib.rs:1058-1062`:
@@ -57,7 +57,7 @@ of evidence — `programs/dclutch-claims-sbf/src/lib.rs:1058-1062`:
 **This was not one route.** `authenticate_releases` made three Registry CPIs,
 and the Direct route the gate drives was one of six Claims routes calling it —
 so every child of a Registry-entered continuation was unreachable, for every
-family (`docs/board-archive-2026-08-27.md:8763-8783`).
+family (`docs/ledger/board-archive-2026-08-27.md:8763-8783`).
 
 ## 3. What the tree does now
 
@@ -108,7 +108,7 @@ discriminant, not a refusal.
 ## 4. Decision or accident? Neither, exactly
 
 The lane that found the wall **declined to decide it** and yielded it properly
-(`docs/board-archive-2026-08-27.md:8785-8800`):
+(`docs/ledger/board-archive-2026-08-27.md:8785-8800`):
 
 > **Recommended: the children should read the activation cache instead of
 > invoking the Registry.** … The alternative — stop entering through the
@@ -129,7 +129,7 @@ Trading-owned capability seal — and it cites the activation cache twice as
 settled precedent (*"exactly as the Registry activation cache already is"*,
 `docs/decisions/0005-per-market-authentication-cache.md:283-288`) without ever
 giving or referencing the reentrancy reason; the word does not appear in the
-file. `WAVE.md:629` records the *wall as down* in a list of "walls found by
+file. `docs/ledger/WAVE_2026-08-26_to_2026-09-02.md:629` records the *wall as down* in a list of "walls found by
 execution, eleven down" — a status line, no authority, no rationale.
 
 ## 5. Is it load-bearing? Yes, and reverting is not a cost tradeoff
@@ -138,7 +138,7 @@ Nineteen direct on-chain call sites of the crate's five entry points, and
 ~39 release-set read sites across seven programs
 (`docs/evidence/RELEASE_SET_READ_SITE_CENSUS_2026_08_30.md:24`); counting the
 program-local wrappers, Claims alone has 14 and Dealer 5. Families converted:
-claims, custody, core, dealer, rent (`docs/board-archive-2026-08-27.md:9363-9369`).
+claims, custody, core, dealer, rent (`docs/ledger/board-archive-2026-08-27.md:9363-9369`).
 
 Reintroducing a Registry CPI from a child route is **a hard Solana runtime
 error, not slower code** — `ReentrancyNotAllowed`, unconditional under a

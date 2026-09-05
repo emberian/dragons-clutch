@@ -97,7 +97,7 @@ upgrade the Registry at all.
   spans exactly the five execution roles
   (`crates/dclutch-release-set-contract/src/lib.rs:580-586`); Registry and
   Rent "cannot move with a set"
-  (`docs/design/RELEASE_LINEAGE_MIGRATION_V1.md:803-804`). The profile is
+  (`docs/design/RELEASE_LINEAGE_MIGRATION_V1.md:844-845`). The profile is
   the single account in the system whose address carries no release, no
   generation, and no succession pointer
   (`crates/dclutch-release-set-contract/src/protocol_infrastructure.rs:34`,
@@ -176,7 +176,7 @@ Two facts the map surfaced that change the problem's shape:
   cohort-9 or a later ceremony is the steward's cut-scope call, no longer
   a structural impossibility.
 
-A digest caveat carried from the map: `BASIS_ABI_UNIFICATION_V1.md:900-907`
+A digest caveat carried from the map: `BASIS_ABI_UNIFICATION_V1.md:929-936`
 prices the basis wire change by reverse-dependency closure as "eight of
 ten releasable programs take a new ELF digest," custody and resolution
 included; the symbol-level analysis says both survive byte-identical. Only
@@ -366,7 +366,7 @@ historical record — still on chain, still content-walkable from V2's
 predecessor ids, never again an authority.
 
 Forced ordering inside the cut (extends §7 of
-`COHORT9_PLAN_REVIEW_2026_08_31.md`):
+`docs/ledger/COHORT9_PLAN_REVIEW_2026_08_31.md`):
 
 1. Pre-upgrade sweep (gate 6 first half) — settle `fee_owed`, drain
    redeemable value from markets 21/22, archive life tables. Any market

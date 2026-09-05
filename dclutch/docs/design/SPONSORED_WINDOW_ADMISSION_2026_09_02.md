@@ -41,7 +41,7 @@ nothing.** That is the documented property of `exhaust_after_primary_deadline` (
 failure selector 3, the founder holding the entire 500,000,000-atom failure supply, participant-2 paid `0` for their 200 atoms of outcome 0.
 
 **The disposition is a decision, not a lane's, and it is pending.** It is docket item **D2, "the failure selector pays the founder"**
-(`GOAL.md:3946-3952`), published for ember with the rest of the docket on 2026-09-03. Nothing here proposes a program change; the two
+(`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3946-3952`), published for ember with the rest of the docket on 2026-09-03. Nothing here proposes a program change; the two
 consequences this note records — that a market with no recovery policy prices its oracle risk entirely into the failure claims, and that
 the founder's incentive under an outage is not neutral — are disclosure surfaces in `apps/dclutch-web` unless and until D2 says otherwise.
 

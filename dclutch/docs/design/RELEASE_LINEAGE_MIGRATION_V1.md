@@ -1,5 +1,46 @@
 # Release-set lineage and market migration, v1
 
+**Head current at `330bbfaba` (2026-09-04), tree root `/Users/ember/dev/dclutch`.** The body below `## History` is the 2026-08-30 design (§0–§13) and its implementation amendments (§14), verbatim; §14 corrects five passages of the design, and this head states only the survivors.
+
+## What is true now
+
+- **Landed**: the lineage record — a release set names its predecessor in one
+  record keyed by the predecessor, authored by the roles' upgrade authority
+  (`registry/lineage_v1::process`, `DCLRLND1`, executed on tier 1 and the
+  lineage-loopback campaign); the walk that turns links into a chain
+  (`crates/dclutch-registry-contract/src/lineage_walk.rs`, mirrored by
+  `packages/dclutch-sdk/lib/releaseLineage.ts`), with its own gap refusal and
+  a hop bound that refuses only when a further hop is offered; the Registry
+  refusal codes. Retroactive authoring is admitted and asserted in both
+  languages: a hop encodes to the same bytes whenever it is declared.
+- **Not landed**: Core's `active_release_set` field and the migration route
+  (§5–§6). Devnet is disposable by ruling (decision 0012 as amended, 0019):
+  each cohort is a full redeploy with fresh ids and the previous one is
+  abandoned in place, so no market has been migrated and none needs to be
+  before assurance. The design stays the specification for a non-disposable
+  deployment, and a lane picking it up reads the current Core width from
+  `generated.rs` and the Lean theorem, never from §5.2 (368 at HEAD, and it
+  has widened twice while the design sat).
+- **Corrected by implementation** (§14): the lifecycle rent credit's stored
+  `release_set` is the seed of the activation-cache address at both close
+  branches, so migration as designed would unbrick the market and leave the
+  credit bricked — ruled that the close reads *through the lineage* to the
+  live cache (no second author, no deadline), which makes it an ordering
+  prerequisite for closing superseded caches; a market whose seals are absent
+  refuses hard, so a Trading upgrade is an outage of the hot route until the
+  re-mint, not a degradation; M1 needs a third category (a stored founding id
+  consumed at an active site); commit 5 is ~39 adapter sites across seven
+  programs, not five.
+- **The finding that blocked the rest**: the 32-byte release-set ids of
+  cohort-7 and cohort-8 were never recorded in the repository; their recovery
+  route and the recorded ids are `docs/evidence/RELEASE_SET_COHORT_LINEAGE_2026_08_31.md`.
+- Cite by symbol, never by line: this document's citations decayed within
+  hours of being written.
+
+## History
+
+# Release-set lineage and market migration, v1
+
 Status: **design, chartered by ember 2026-08-30 as the fix for liveness-census
 R1 / queue Q1.** Not an ADR, not a release manifest, not deployment evidence.
 It closes no `docs/OMISSION_INDEX.md` row by itself; it specifies the work that
@@ -1135,7 +1176,7 @@ judgment-bearing ones.
 
 - **Commit 8 touches `upgrade.rs`**, which is 14,011 lines and whose Reaffirm
   work is *approved and deferred to a window when it is quiet*
-  (`WAVE.md:288-303`). Both changes bump the journal schema. **Land Reaffirm
+  (`docs/ledger/WAVE_2026-08-26_to_2026-09-02.md:288-303`). Both changes bump the journal schema. **Land Reaffirm
   first, or land them together** — landing lineage first means two schema bumps
   through the same file.
 - **Commits 1–7 do not touch `upgrade.rs` at all**, so the protocol half can
@@ -1385,8 +1426,8 @@ followable across one, and a declaration authored after the fact does that.
 
 **The finding, and it blocks the rest.** The full 32-byte release-set ids of
 **cohort-7 and cohort-8 are not recorded anywhere in this repository** — they
-exist only as eight-character truncations in `SESSION_STATE.md:14,665` and
-`GOAL.md:280`. A truncation authors nothing: the lineage PDA seeds on all 32
+exist only as eight-character truncations in `docs/ledger/SESSION_STATE_2026-08-31.md:14,665` and
+`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:280`. A truncation authors nothing: the lineage PDA seeds on all 32
 bytes and both endpoints are derived from activation-cache accounts rather than
 supplied. So the declarations that would make market22 followable cannot be
 built from the tree as it stands, and this is a hard prerequisite rather than

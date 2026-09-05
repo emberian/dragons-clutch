@@ -8,7 +8,7 @@
 #                                                 [--work DIR] [--keep-source]
 #
 # WHY --at EXISTS. Until 2026-09-04 this campaign was run by hand out of
-# `docs/LETTER_TO_CLAUDE_2026_09_01.md`, from the SHARED working tree. That tree
+# `docs/ledger/LETTER_TO_CLAUDE_2026_09_01.md`, from the SHARED working tree. That tree
 # is dirty on purpose and continuously: on the morning this script was written it
 # held in-flight edits to `programs/dclutch-claims-sbf/src/lib.rs`,
 # `programs/dclutch-trading-sbf/src/hot_v3.rs` and `src/lib.rs` belonging to three

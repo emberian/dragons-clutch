@@ -3,7 +3,7 @@
 Status: **CONFIRMED (ember, 2026-09-04 15:50 EDT, in conversation; reversible on request).** Previously: PROVISIONAL — ruled by the orchestrator on 2026-09-02 under ember's**
 standing goal, spent the same day in Claims, Custody and the accelerator
 prelude, and reversible by ember at the cost §7 states**. The ruling is
-`GOAL.md:3678-3681`, carrying the standing formula *"RULING (under the standing
+`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3678-3681`, carrying the standing formula *"RULING (under the standing
 goal; ember may reverse)"*, and is explicitly *"decision 0012's argument one
 level down"*. Landed at `0aa70478e` (Claims), `9b5de611e` (Custody),
 `742d7b7be` (the prelude move), with `30d02f5c0`, `93120acfc` and frame rows
@@ -14,13 +14,13 @@ level down"*. Landed at `0aa70478e` (Claims), `9b5de611e` (Custody),
 A completing SignedDelta child spent **149,107 of 173,680 CU — 85.9% —
 re-authenticating what Trading authenticated in the same instruction**, and 662
 CU (0.4%) applying the deltas it exists to apply (`b97ef3e4a`, quoted at
-`GOAL.md:3866-3869`). *"The Remove's child has never executed a single delta"* —
+`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3866-3869`). *"The Remove's child has never executed a single delta"* —
 two days of a route being called compute-bound while its whole budget went to a
 second opinion about facts its caller had already established.
 
 Custody measured the same shape independently: **77–81% of an invocation is
 caller re-authentication**, against a Token-2022 CPI that costs 105 CU
-(`GOAL.md:3691-3693`).
+(`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3691-3693`).
 
 ## 2. The ruling, verbatim
 
@@ -29,7 +29,7 @@ caller re-authentication**, against a Token-2022 CPI that costs 105 CU
 > established** — the release set, the role activation, the sealed records —
 > verifying only the signer's derivation; the unpinned-caller history stays as a
 > hostile. Decision 0012's argument one level down.
-> — `GOAL.md:3678-3681`
+> — `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3678-3681`
 
 ## 3. What it changed in the trust model — both halves, stated
 
@@ -77,9 +77,9 @@ different key draws (`0aa70478e`):
 **The Remove's Claims route now executes and commits.** The partial equity
 Remove's SignedDelta child entered with 94,423 CU, applied its deltas, wrote its
 candidates, set return data and handed 12,210 CU back — and the transaction
-reached Custody's second route for the first time (`GOAL.md:3684-3685`).
+reached Custody's second route for the first time (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3684-3685`).
 
-**The lane split the saving against its own ruling** (`GOAL.md:3685-3686`):
+**The lane split the saving against its own ruling** (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3685-3686`):
 *"45k was a redundant triple hostile-decode of one immutable account needing no
 ruling, 38k is the ruling's."* `authenticate_releases` had called
 `authenticate_activated_role` three times, each running the complete five-role
@@ -87,7 +87,7 @@ projection to answer one question. The commit states the standard: *"a
 measurement that lets a ruling take credit for a redundancy is not evidence for
 the ruling"*. A later claim was corrected the same way: *"93% of Custody's
 `cf-accounts` was the DECODER, the ruling already spent at `9b5de611e`"*
-(`GOAL.md:3803`).
+(`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3803`).
 
 Six frame coordinates stopped being bound — the input to an eight-derivation
 Product runtime walk that is gone — which is the parse saving; they stay in
@@ -114,13 +114,13 @@ assertion on it alone would prove nothing about where the refusal happened:
   ruling rests on"*. **`0x5201`** (`:132`), from the frame spec's readonly
   SIGNER pin.
 
-`GOAL.md:3687-3688` records why they are two codes and not one: *"hostiles
+`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3687-3688` records why they are two codes and not one: *"hostiles
 0x5201/0x5202 each proven to reach their subject (a shared code would have proved
 nothing)"*. The ruling's own text retains the unpinned-caller history as a
-hostile (`GOAL.md:3680`).
+hostile (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3680`).
 
 **A control that caught itself:** a suite that read 48 FAILED *"had not run (a
-wrong Token-2022 build refused by the fixture digest)"* (`GOAL.md:3688-3689`).
+wrong Token-2022 build refused by the fixture digest)"* (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3688-3689`).
 
 ## 6. What was given up, named as debt
 
@@ -143,7 +143,7 @@ on its own.
 
 ## Evidence pointers
 
-`GOAL.md:3678-3693`, `:3803`, `:3866-3869`; commits `0aa70478e`, `9b5de611e`,
+`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3678-3693`, `:3803`, `:3866-3869`; commits `0aa70478e`, `9b5de611e`,
 `742d7b7be`, `30d02f5c0`, `93120acfc`, `fa00e8f28`, `b97ef3e4a`;
 `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:132`, `:134`, `:414`;
 `crates/dclutch-cu-checkpoint`;

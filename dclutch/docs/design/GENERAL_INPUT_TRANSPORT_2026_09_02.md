@@ -31,7 +31,7 @@ but "stop requiring one".
 
 ## What was believed
 
-`GOAL.md:3009`, from the channel lane: *"INPUT scratch pages have no live
+`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3009`, from the channel lane: *"INPUT scratch pages have no live
 producer — General cannot execute on a real chain today."* That is true.
 `AuthenticatedScratchPageV2::encode_into` is called from five places and none of
 them is inside an SBF program: the contract's own unit tests, the host bundle

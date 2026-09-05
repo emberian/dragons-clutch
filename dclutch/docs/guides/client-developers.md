@@ -58,10 +58,12 @@ A card decodes fully or comes back as `refused` with a reason. A refusal
 here means the account did not match the layout exactly — treat it as "not
 a market I can use", not as an error to retry.
 
-The scan lists current 360-byte `DCLTCOR3` Markets separately from exact
-historical 352-byte `DCLTCOR2` accounts. It never decodes the historical bytes
-as current state. Read `incompatibleMarketAccounts` when you need to explain
-why an older address is absent from the current list.
+The scan lists current `DCLTCOR3` Markets (`CORE_STATE_BYTES` in
+`lib/generated/coreFound.ts`, 368 bytes at this generation) separately from
+the exact historical widths `SUPERSEDED_CORE_STATE_WIDTHS` names — the
+352-byte `DCLTCOR2` and the 360-byte first `DCLTCOR3`. It never decodes
+historical bytes as current state. Read `incompatibleMarketAccounts` when
+you need to explain why an older address is absent from the current list.
 
 Each read starts from a finalized floor. A multi-account response is
 internally consistent at its returned slot, which may be later than that
@@ -171,13 +173,9 @@ poststates from finalized history.
 
 ## Redeeming
 
-Payout is not open. There is no devnet Market that can use this route, and
-the accepted local run stops after admitting a participant, so there is no
-chain you can execute this against today either. Read what follows as the
-shape the flow will have, not as a path you can run — the constructor and
-finalizer below are real and tested, and what is missing is a resolved
-market to point them at. The full flow has three
-separately finalized parts: create the market's
+Payouts have run on devnet: winning claims were paid into ordinary wallet
+token accounts on resolved cohort markets, through the constructor and
+finalizer below. The full flow has three separately finalized parts: create the market's
 payment record if it does not exist, publish and freeze the payout lookup
 table, then sign the payout itself. Do not combine those steps into one
 optimistic submit loop.
@@ -232,8 +230,8 @@ floor at or above the transaction slot; the response may be at a later
 slot. The SDK finalizer performs those checks and refuses altered wire
 bytes, signatures, fees, return data, account order, or payout poststate.
 The `dclutch-terminal redeem` command adds a durable filesystem journal and is the
-reference for local/custom-deployment crash recovery. Its presence does not
-mean a devnet payout is currently available.
+reference for crash recovery; whether a given market has a redeemable
+position is a fact read from the chain, never assumed from this page.
 
 ## Founding a market
 

@@ -2,7 +2,7 @@
 
 Status: **CONFIRMED (ember, 2026-09-04 15:50 EDT, in conversation; reversible on request).** Previously: PROVISIONAL — ruled by the orchestrator on 2026-09-02 under ember's**
 standing goal, landed the same morning in two halves, and reversible by ember at
-the cost §7 states**. The ruling is `GOAL.md:3103-3105`, carrying the standing
+the cost §7 states**. The ruling is `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3103-3105`, carrying the standing
 formula *"RULING (under the standing goal; ember may reverse)"*. It is decision
 0012's argument spent, not extended. Landed at `90a8563f2` (registry half) and
 `271ce0edb` (hot half), both 2026-09-02 07:03, with `85017c63a` (07:37) giving
@@ -25,14 +25,14 @@ So every hot reader made up the difference by **hashing the complete observed
 ELF on every action**: 370,983 CU of a 1,399,700 budget, over the Dealer
 accelerator's 744,840 bytes, inside a strategy authentication that cost 419,775
 CU — 30% of a whole transaction — *"to re-learn a fact that cannot change"*
-(`90a8563f2`, `GOAL.md:3099-3102`).
+(`90a8563f2`, `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3099-3102`).
 
 ## 2. The ruling, verbatim
 
 > **RULING (under the standing goal; ember may reverse): decision 0012 governs —
 > `ArtifactRelease` finalization records a `DeploymentObservationV1` (one hash
 > once), the hot path authenticates accelerator deployments by the slot pin.**
-> — `GOAL.md:3103-3105`
+> — `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3103-3105`
 
 ## 3. What it changed in the trust model
 
@@ -98,7 +98,7 @@ differently"* (`90a8563f2`), all in `programs/dclutch-registry-sbf/src/lib.rs`:
 `85017c63a` adds `DeploymentSlotMismatch` **0x4022**
 (`programs/dclutch-trading-sbf/src/lib.rs:434`) *"with the
 flipped-bytes-and-moved-slot hostile at the boundary that owns the law"*
-(`GOAL.md:3253-3254`) — the slot pin acquires a name of its own rather than
+(`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3253-3254`) — the slot pin acquires a name of its own rather than
 borrowing one.
 
 **The rule is Lean-owned, not restated in Rust.**
@@ -132,7 +132,7 @@ corpus — and four refusal discriminants withdrawn from an append-only band.
 
 ## Evidence pointers
 
-`GOAL.md:3099-3105`, `:3238`, `:3253-3254`; commits `90a8563f2`, `271ce0edb`,
+`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3099-3105`, `:3238`, `:3253-3254`; commits `90a8563f2`, `271ce0edb`,
 `85017c63a`; `programs/dclutch-registry-sbf/src/lib.rs:114`, `:156`, `:170`,
 `:186`; `programs/dclutch-trading-sbf/src/execution_strategy_v2.rs:243`;
 `programs/dclutch-trading-sbf/src/lib.rs:434`;

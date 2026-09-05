@@ -6,7 +6,7 @@ goal, confirmed by ember at 10:15 EDT and again at 15:50 EDT, and reversible at
 the cost §7 states**. It was PROVISIONAL from the ruling until 15:50 EDT, when
 ember read the docket and accepted it in conversation without amending it; the
 confirmation line below is the whole of what was said. Docket item D4. Ember's
-amendment is at `GOAL.md:4654`. This record closes the contract's `Mainnet act`
+amendment is at `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4654`. This record closes the contract's `Mainnet act`
 register row (`docs/MASTER_COMPLETION_CONTRACT.md:184`) and settles what C-14
 closes on. It authorizes nothing: mainnet remains a separately authorized
 external act, and `AGENTS.md` still forbids it by name.
@@ -49,7 +49,7 @@ permanently burned rent, an `immutable-release-set` manifest over observed
 accounts, a cross-host builder pair that has never been run, a clean SBOM from a
 clean tree, a decided lifetime for the Core ephemeral authority, and seven
 program keypairs nothing in the tree has ever minted
-(`docs/design/DEVNET_DEMO_DEPLOY.md:78-127`, `:469-572`, `:1038-1097`;
+(`docs/design/DEVNET_DEMO_DEPLOY.md:104-153`, `:469-572`, `:1038-1097`;
 `tools/release-tool/DESIGN.md:87-91`). Every tool refuses mainnet by genesis
 hash today.
 
@@ -65,7 +65,7 @@ real gate rather than a formality performed after the money is gone.
 
 ## 3. Ember's amendment
 
-Recorded at `GOAL.md:4654`:
+Recorded at `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4654`:
 
 > D4 — mainnet is far, after assurance
 
@@ -78,7 +78,7 @@ and the SBOM, both of which are local.
 
 ## 4. The lanes implementing it, and what `supported_builders` means
 
-**REPRO** (`GOAL.md:4658-4659`), which owns cross-host bytes. It also owes the
+**REPRO** (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4658-4659`), which owns cross-host bytes. It also owes the
 definition this record deliberately does *not* make:
 
 **`supported_builders` is a definition to be produced by REPRO, not a decision.**
@@ -88,7 +88,7 @@ a ruling, only by a definition plus a measurement. The reader's own statement of
 what it will mean: *the builder whose bytes are the release, and the set of
 others that reproduce them*. The measurement that makes it urgent: today nine of
 ten roles differ between our two machines, because a prebuilt toolchain embeds
-its own build path. Ember's disposition, `GOAL.md:4656`: **converge by
+its own build path. Ember's disposition, `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4656`: **converge by
 swarmcycles** — the definition is reached by iterating the lane, not by ruling
 on it now.
 
@@ -180,8 +180,8 @@ everything C-16 requires would have been done anyway.
 ## Evidence pointers
 
 `docs/MASTER_COMPLETION_CONTRACT.md:99`, `:101`, `:184`;
-`GOAL.md:4654-4659`;
-`docs/design/DEVNET_DEMO_DEPLOY.md:78-127`, `:469-572`, `:1038-1097`;
+`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:4654-4659`;
+`docs/design/DEVNET_DEMO_DEPLOY.md:104-153`, `:469-572`, `:1038-1097`;
 `tools/release-tool/DESIGN.md:87-91`;
 `docs/decisions/0012-devnet-iteration-substrate.md`;
 `docs/decisions/0016-checked-release-identity.md`;

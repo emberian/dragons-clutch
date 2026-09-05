@@ -7,7 +7,7 @@ LINEAGE-DEVNET lane's devnet recovery, 2026-08-31, which **closes §2's two
 missing rows and corrects what they were looking for**.
 
 Written by the MIGRATE lane, 2026-08-31, as the standing record behind
-`COHORT9_PLAN_REVIEW_2026_08_31.md` cut gate 6 (*"the cohort-8→9 predecessor
+`docs/ledger/COHORT9_PLAN_REVIEW_2026_08_31.md` cut gate 6 (*"the cohort-8→9 predecessor
 mapping recorded durably"*) and as the input list for the retroactive lineage
 declarations of `RELEASE_LINEAGE_MIGRATION_V1.md` §4.5.
 
@@ -59,7 +59,7 @@ finding them would not have helped:
 
 > The two truncations were greped tree-wide across every `.md`, `.ts`, `.json`,
 > `.rs`, `.sh` and `.py` file outside `node_modules`, `target` and the lane
-> worktrees. `d202e1f4` has two hits, both in `SESSION_STATE.md`. `97d49888` has
+> worktrees. `d202e1f4` has two hits, both in `docs/ledger/SESSION_STATE_2026-08-31.md`. `97d49888` has
 > one, in `GOAL.md`. There is no deployment manifest, no cut JSON, no evidence
 > file and no test fixture carrying either full id or either cache address.
 
@@ -97,7 +97,7 @@ cohort-8 markets are already named in the site's editorial registry
 (`apps/dclutch-web/components/MarketDetailWorkspace.tsx:351`). One
 `getAccountInfo` per market yields cohort-8's id with its proof attached.
 
-Cohort-7's id comes the same way from any cohort-7 market. `SESSION_STATE.md:663-679`
+Cohort-7's id comes the same way from any cohort-7 market. `docs/ledger/SESSION_STATE_2026-08-31.md:663-679`
 names market19 and records that the three older markets are 360-byte accounts
 the current Core refuses on length — **a length refusal is not a read failure**:
 the bytes are still there and `selected_release_set` is still at its offset.
@@ -214,7 +214,7 @@ the same pass — core 490849793, claims 490826560, trading 490830840, resolutio
 role, which is exactly the state `openReleaseBoundSessionV1` refuses on.
 
 Note that cohort-8's resolution slot (490693331) is **cohort-7's** resolution
-slot: that role did not move across the 7→8 hop. This is GOAL.md:288's
+slot: that role did not move across the 7→8 hop. This is docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:288's
 "resolution AlreadyCurrent", visible in the bytes.
 
 ### 6.1 The address-derivation proof
@@ -273,7 +273,7 @@ upgrade plan*, an off-chain artifact of the release pipeline:
 The `execution_release_set_id` a market pins is a different hash of a different
 thing, and the two were never equal for any cohort — DEPLOY-1, cohort-5 and
 cohort-6 all have both, and §2's three recorded rows are execution ids while
-SESSION_STATE.md and GOAL.md were quoting plan digests.
+docs/ledger/SESSION_STATE_2026-08-31.md and GOAL.md were quoting plan digests.
 
 **So §2's "not recoverable from this repository at all" was true, and its
 diagnosis was wrong.** The ids were unrecoverable from the repo because a plan

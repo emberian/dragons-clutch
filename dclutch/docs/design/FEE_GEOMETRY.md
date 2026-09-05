@@ -9,7 +9,7 @@ actual structure; (3) recommends what v1-devnet ships, what the smoke can
 demo, and the post-smoke implementation shape with its Lean obligations.
 
 **This document is also the N-1 reconciliation** the aspiration ledger asked
-for (`docs/ASPIRATION_LEDGER.md:2120-2126`): it records, in §4.1, that
+for (`docs/evidence/ASPIRATION_LEDGER_2026_08_27.md:2120-2126`): it records, in §4.1, that
 `fee_basis_points` is the deliberate V1 placeholder and the gen-1 composite
 remains the selected target shape — the closure N-1 said was "cheap and
 honest" and that silence was not.

@@ -1,5 +1,45 @@
 # Claim-check compaction — the perpetual claim without the perpetual market
 
+**Head current at `330bbfaba` (2026-09-04), tree root `/Users/ember/dev/dclutch`; real-ELF campaign evidence, not devnet and not mainnet evidence.**
+The body below `## History` is the design (§1–§14), its six ratified amendments (§15), the implementation record (§16) and the fractional half (§17), verbatim; several later sections correct earlier ones, and this head states only the survivors.
+
+## What is true now
+
+- **The native half is built, C0 through C10** (`crates/dclutch-claims-svm/src/claim_check_*.rs`,
+  `programs/dclutch-claims-sbf/src/claim_check_{compaction,redemption}_v1.rs`):
+  the `begin_retiring` weld (C0), the funded permissionless crank, the payout,
+  the supply debit, the close and the split, `RedeemClaimCheck`,
+  `CloseClaimCheckEscrow`, the end-to-end campaign and the holder's operator
+  surface. A terminal market's unredeemed native positions become fixed-width,
+  permanently redeemable claim-checks whose payout is already resolved in
+  collateral atoms.
+- **All six amendments shipped as written**: a zero-atom claim-check is refused
+  at the constructor, across the wire and in conservation (`claim_check_rent ==
+  0` iff `entitlement == 0`); the crank is paid before the opener (rent → crank
+  → opener → residue — under the design's order the first crank paid itself
+  nothing); aliased sinks fold by identity; the fee tolerance is confirmed
+  unreachable and left in; C0 keeps its better shape; compaction embeds the
+  terminal header verbatim. Two departures: the vault is a Claims-derived PDA,
+  not an ATA; C5 and C6 landed as one commit.
+- **§4.7's owner-kind precondition was wrong and the shipped route refused one
+  of two kinds** (§17.1): `TradingRecord` — the Fractional reserve Position —
+  was admitted though a PDA can never sign the redemption. Corrected by the
+  fractional half.
+- **The fractional half is built and ran** (§17.2–§17.10): a second record for
+  mint-held claimants, the burn executed rather than argued, the frame measured
+  at fifty accounts with the Rent program pinned from the reserve Position's
+  admission and its own refusal `0x564D Rent`, the route at 579,240 CU against
+  a ~928k projection, and the ruled fiftieth account read off the chain.
+- **R3 is narrowed, not closed**: closed for native positions, and the
+  fractional route is what closes it for mint-held ones. Owed: §6.2's
+  dust-tolerant close receipt (the settlement's own receipt is the evidence
+  today), a real `protocol_position_v2::Admit` caller in the campaign, and a web
+  surface for the holder's path.
+
+## History
+
+# Claim-check compaction — the perpetual claim without the perpetual market
+
 Status: **PARTLY IMPLEMENTED — read §15 before acting on §4.7 or §6.2, and
 §17 before acting on §4.7's owner-kind precondition or §10's sizing.** The
 contract layer has landed and carries six ratified amendments, recorded in §15
@@ -16,7 +56,7 @@ available, this document makes it and says why the alternative was rejected.
 Every factual claim carries a `file:line` and was read at the route, not taken
 from a doc.
 
-Charter item: **3 — permissionless completion universalized** (`GOAL.md:39`).
+Charter item: **3 — permissionless completion universalized** (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:39`).
 Census row **R3**, with **R13** partly subsumed, **Q6** folded in, and **one new
 RED finding** (§2) that the census did not have.
 
@@ -256,7 +296,7 @@ on the gate, but today redemption is *not* possible during `Retiring`.
 
 ## 3. Ruled constraints
 
-Ember's ruling, verbatim (`WAVE.md:1183-1186`):
+Ember's ruling, verbatim (`docs/ledger/WAVE_2026-08-26_to_2026-09-02.md:1183-1186`):
 
 > Q3: option (c) ratified — perpetual CLAIM, not perpetual account:
 > post-deadline compaction to a durable claim-check; market accounts close;
@@ -268,7 +308,7 @@ And the rationale as given to this lane:
 > liveness issues aren't ok, we can't be allowing random arbitrary actors to
 > insert arbitrary delays into our own operations.
 
-And on the follow-on (`WAVE.md:1186-1187`):
+And on the follow-on (`docs/ledger/WAVE_2026-08-26_to_2026-09-02.md:1186-1187`):
 
 > Q6: CloseReplay gated on the terminal receipt, shaped by Q3(c).
 
@@ -577,7 +617,7 @@ expiry/cleanup route that pays a caller is slot-based (record staging
 `scenario_checkpoint_v1.rs:146-149`; founding permit `series_permit.rs:76`),
 while unix seconds appear only where an off-chain proposition or a cross-cluster
 observation is being timed. The one written ruling agrees
-(`docs/design/MAINNET_STATE_RELAY.md:989-1006`): *"They are liveness deadlines,
+(`docs/design/MAINNET_STATE_RELAY.md:1027-1044`): *"They are liveness deadlines,
 not claim semantics, and devnet time is the right clock for 'has this market
 waited long enough.'"* This is a liveness deadline.
 
@@ -1174,8 +1214,8 @@ If an implementer finds themselves editing a second crate, one of those three
 decisions has been dropped — go back and find which.
 
 **Cohort: the first cut after cohort-7.** claims-sbf is cohort-critical
-(`GOAL.md:482`) and the wave's freeze policy rides everything after the first
-probe-green revision to the next cohort (`GOAL.md:361-362`). Not on the devnet
+(`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:482`) and the wave's freeze policy rides everything after the first
+probe-green revision to the next cohort (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:361-362`). Not on the devnet
 cut's critical path and must not be forced onto it — nothing on devnet is waiting
 on a market retiring past a sleeping holder.
 

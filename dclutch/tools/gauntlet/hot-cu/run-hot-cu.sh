@@ -16,7 +16,7 @@
 # See README.md before quoting anything it prints.
 #
 # ============================================================================
-# THE REPORTING RULE (ledger M-61, docs/ASPIRATION_LEDGER.md)
+# THE REPORTING RULE (ledger M-61, docs/evidence/ASPIRATION_LEDGER_2026_08_27.md)
 # ============================================================================
 #
 # The per-seed CU figure is a BUMP-SEARCH LOTTERY. Report the PASS COUNT and the

@@ -172,11 +172,11 @@ outstanding claim is redeemed against pays somebody's revenue.
 
 **The measured worst case, before 2026-09-04.** Unbounded in principle and zero
 in fact. The Custody Transfer wire admitted **64 of 81 ordered compartment
-pairs** and `HoardPrincipal -> FeeVault` was among them (`WAVE.md:2900-2913`);
+pairs** and `HoardPrincipal -> FeeVault` was among them (`docs/ledger/WAVE_2026-08-26_to_2026-09-02.md:2900-2913`);
 the contract *"does not enforce that and was never the place it lived"* — every
 compartment rule lived in a calling program. The caller census found the
 invariant true by enumeration: *"Nothing pins `HoardPrincipal -> FeeVault` —
-both FeeVault-funding sites take `TradingPrincipal`"* (`WAVE.md:2927-2929`),
+both FeeVault-funding sites take `TradingPrincipal`"* (`docs/ledger/WAVE_2026-08-26_to_2026-09-02.md:2927-2929`),
 re-run at HEAD and still true, with `External` as the only other source and
 every `HoardPrincipal` source paired with `External`, which is redemption.
 
@@ -254,7 +254,7 @@ That is not an argument against the carve — the shape has to exist before a
 donation can find a home, and refusing donations was rejected for good reason
 (anyone can transfer one lamport into a Trading-owned PDA, so a refusal lets a
 griefer strand any replay and the market behind it, permanently, for nothing —
-`docs/design/COHORT9_CLOSEMAKER_RULINGS_2026_08_31.md:43-62`). It is an argument
+`docs/ledger/COHORT9_CLOSEMAKER_RULINGS_2026_08_31.md:43-62`). It is an argument
 that **the carve is not a liveness mechanism**, because a mechanism whose
 funding source has never carried a lamport cannot be relied on to make a crank
 turn. Whatever pays the closer in practice has to come from somewhere the
@@ -294,7 +294,7 @@ The lane denominator is **0.230228002 SOL**, cohort-14 market C's whole cost for
 a founded, activated, filled and armed market (`COHORT14:1741-1750`).
 
 **Cohort-9's recorded figure reproduces.** That ruling recorded 1,348,376
-lamports (`WAVE.md:1499-1504`); re-derived at HEAD's widths and the kernel's
+lamports (`docs/ledger/WAVE_2026-08-26_to_2026-09-02.md:1499-1504`); re-derived at HEAD's widths and the kernel's
 reference rate it is 1,348,400 — **within 24 lamports**, so the number the
 ruling was made on is the number the code still computes.
 

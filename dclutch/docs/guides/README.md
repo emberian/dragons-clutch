@@ -22,7 +22,9 @@ Two generated reference pages back these guides up:
 generated reference — routes, costs, decisions — lives in the
 [repository](../reference/README.md).
 
-The seven dClutch programs are deployed on Solana devnet, and one market on it
-is open for trading. That market's collateral is a devnet test token, so there
-is nothing to buy with money and no value at risk. These guides describe the
-devnet preview and the local test-chain workflows; neither is mainnet evidence.
+The seven dClutch programs are deployed on Solana devnet as a cohort — a full
+redeploy with fresh ids each time, the previous cohort abandoned in place — and
+the live cohort's markets are read off the chain by the site. Every market's
+collateral is a devnet test token, so there is nothing to buy with money and
+no value at risk. These guides describe the devnet preview and the local
+test-chain workflows; neither is mainnet evidence.

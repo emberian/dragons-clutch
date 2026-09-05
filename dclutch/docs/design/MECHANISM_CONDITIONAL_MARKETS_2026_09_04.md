@@ -576,11 +576,11 @@ extrapolated on the measured slope of ≈ 8.2k per outcome between `K = 5` and
 
 | step | today, measured | the child | delta |
 |---|---:|---|---:|
-| Resolution `accept` (the certificate's author) | Pyth `Execute` **323,836** (`GOAL.md:870`); relayed consumption **154,766** in `ProgramTest` (`MAINNET_STATE_RELAY.md:1727`) | the derived `accept`: no feed, no attestation; two 312-byte certificate reads, each one PDA derivation (`create_program_address`, ≈ 1.5k) + decode + the five comparisons of `authenticate_terminal_certificate` ≈ 3–4k each | **≈ +8k over a route with no provider decode; ≈ 150k ± 20k total**, *provisional* |
+| Resolution `accept` (the certificate's author) | Pyth `Execute` **323,836** (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:870`); relayed consumption **154,766** in `ProgramTest` (`MAINNET_STATE_RELAY.md:1765`) | the derived `accept`: no feed, no attestation; two 312-byte certificate reads, each one PDA derivation (`create_program_address`, ≈ 1.5k) + decode + the five comparisons of `authenticate_terminal_certificate` ≈ 3–4k each | **≈ +8k over a route with no provider decode; ≈ 150k ± 20k total**, *provisional* |
 | the same, conditional off-condition branch | — | one certificate read | ≈ +4k |
 | Core `AdmitTerminal` | **95,854** (cohort-13 `:1857`), **95,762** (cohort-14 `:1413`) | unchanged: reads the child's own certificate at frame index 14 | 0 |
-| wallet terminal payout | **353,233** (cohort-13 `:1865`), **356,395** on both banks (`GOAL.md:3147`) | unchanged: account 25 is the child's certificate | 0 |
-| provider frame accounts | 47 (Core role), 51 (Trading role) (`provider_v3.rs:37-40`) | the provider's evidence accounts leave, two certificate accounts enter: net ≈ +1, under the 64-lock wall (`PACKET_LIMIT_2026_09_01.md:197`), on the v0 transport the provider route already uses | +1 key |
+| wallet terminal payout | **353,233** (cohort-13 `:1865`), **356,395** on both banks (`docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:3147`) | unchanged: account 25 is the child's certificate | 0 |
+| provider frame accounts | 47 (Core role), 51 (Trading role) (`provider_v3.rs:37-40`) | the provider's evidence accounts leave, two certificate accounts enter: net ≈ +1, under the 64-lock wall (`PACKET_LIMIT_2026_09_01.md:240`), on the v0 transport the provider route already uses | +1 key |
 
 Owed: the terminal payout's K-dependence at `K = 26` — the measured 353k is at
 width 4, and the per-Position `SignedDeltaV3` carries `K` coordinates; bounded
@@ -701,8 +701,8 @@ devnet, and the first conditional read that is a chain fact.
 `docs/design/MECHANISM_FOUNDER_BOND_2026_09_04.md` (in flight) §3;
 `docs/design/MAINNET_STATE_RELAY.md` §4.1-4.2, §6.2, §12.1, §12.6-12.7, :1727;
 `docs/design/ITEM_OUTCOME_REGISTER_2026_09_02.md:50`;
-`docs/design/PACKET_LIMIT_2026_09_01.md:197`;
-`docs/decisions/0025`, `0027`, `0029` item 7; `GOAL.md:870, 3147`;
+`docs/design/PACKET_LIMIT_2026_09_01.md:240`;
+`docs/decisions/0025`, `0027`, `0029` item 7; `docs/ledger/GOAL_2026-08-31_to_2026-09-04.md:870, 3147`;
 `docs/evidence/COHORT13_SEALED_FOUNDED_2026_09_02.md:1857, 1865`;
 `docs/evidence/COHORT14_SEALED_FOUNDED_FILLED_2026_09_03.md:1413`;
 commit `a621d2af6`.

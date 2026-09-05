@@ -54,7 +54,7 @@ Three consequences worth reading off that table:
 |---|---|---|
 | `tools/gauntlet/hot-cu/README.md` | "the Hot tail's compute" — no route named | **Header added**: this tier drives the *demoted* Registry Hot continuation; every figure it has ever printed is **+35,127 CU** high (the same integer on all 13 comparable seeds). Use `direct_hot_top_level_margin_gate.rs` for a public-trade figure. `CONTINUATION_ROUTE_FIX_OR_RETIRE_2026_08_30.md` (`8bf6ad40`); `DECISION_PACKET` §4 |
 | `tools/gauntlet/README.md`, `tools/gauntlet/TIERS.md` | the tier "answers *does the Hot tail fit under 1,400,000 CU*" | same correction, with the founding-continuation carve-out stated so nobody sweeps it |
-| `docs/evidence/TRADE_DIRECT_ACTIVATION_WALL_2026_08_29.md` §"selected keys" | maker keys would be **SELECTED** for their CU draw and labelled as chosen | **Marked REVERSED, do-not-execute.** Ember's standing test — *does it make the DEMO work, or the PRODUCT work?* — and the band it manages no longer exists: ALLKEYS made every key cost 1,336,742 CU with a tail of exactly 0. `SESSION_STATE.md` "THE ORCHESTRATOR'S OWN ERROR, RECORDED"; `308c3dff`..`e7805d62` |
+| `docs/evidence/TRADE_DIRECT_ACTIVATION_WALL_2026_08_29.md` §"selected keys" | maker keys would be **SELECTED** for their CU draw and labelled as chosen | **Marked REVERSED, do-not-execute.** Ember's standing test — *does it make the DEMO work, or the PRODUCT work?* — and the band it manages no longer exists: ALLKEYS made every key cost 1,336,742 CU with a tail of exactly 0. `docs/ledger/SESSION_STATE_2026-08-31.md` "THE ORCHESTRATOR'S OWN ERROR, RECORDED"; `308c3dff`..`e7805d62` |
 | same file, "eighth entry / no capability ever activated" | quotes an `OMISSION_INDEX` line that no longer stands, and says no capability of any family has been activated anywhere | WALL22 landed the eighth `CapabilityProgramSetV2` entry and the exactly-seven relaxation (`2f21911e`/`c2cfa4db`/`9012499c`); **the first capability root in the protocol's history is live on devnet** under market18 |
 | same file, the tail figure | `P ≈ 0.032%`, one trade in 3,100 | fixture artifact (real pre-lane Markets were 1-in-34.9M) → FIXBUMPS 1-in-1.10-billion (`30574297`) → **ALLKEYS: exactly 0** |
 | `docs/evidence/DIRECT_HOT_CU_VARIANCE_CENSUS_2026-08-30.md` | §4's variance table, seven surviving sites | **zero** surviving key-varying searches; the *method* survives, the table does not |
@@ -70,7 +70,7 @@ Three consequences worth reading off that table:
 
 ## 2. Open — needs an owner
 
-Cross-checked against `SESSION_STATE.md`'s lane queue and today's commits.
+Cross-checked against `docs/ledger/SESSION_STATE_2026-08-31.md`'s lane queue and today's commits.
 Sizes are the source document's own.
 
 ### 2.1 Owed by a ruling that has now been made
@@ -88,7 +88,7 @@ Sizes are the source document's own.
 ### 2.2 Named today, carried nowhere
 
 Each of these was named by a lane in its yield and appears in no queue outside
-`SESSION_STATE.md`, which is rewritten at each compact.
+`docs/ledger/SESSION_STATE_2026-08-31.md`, which is rewritten at each compact.
 
 | item | named by | size |
 |---|---|---|
@@ -125,7 +125,7 @@ refusals regeneration, not discovered afterwards.
 
 ### 2.4 The gate list nothing points at
 
-`docs/VALIDATION_BACKLOG.md` is 453 lines of release prerequisites — nine
+`docs/ledger/VALIDATION_BACKLOG_2026-08-31.md` is 453 lines of release prerequisites — nine
 numbered convergence gates, a seven-row deployment disposition, twenty named
 seeds — and **`WAVE.md`, `GOAL.md`, `README.md`, `AGENTS.md` and
 `docs/INTENT.md` reference it zero times.** `ASPIRATION_ARCHAEOLOGY` flagged
@@ -149,13 +149,13 @@ These need more than a sentence, or belong to an owner who must make a call.
 | `README.md` (dclutch) | 35-36 | "winding a market all the way down to retired has not run anywhere yet" | contradicted by FRACLIFE (`FRACTIONAL_RETIREMENT_LIFECYCLE_2026_08_30.md`, four real transactions, Begin → walk → Finish). The honest rewrite has to distinguish *harness* from *validator* and *fractional* from *the flagship*, which is a judgment about launch-surface copy, not a mechanical fix |
 | `README.md` (dclutch) | 149 | advertises a relay publication log at `portal.dregg.studio/relay/publication_log.jsonl` | `ORPHAN_DESIGNS_TRIAGE` §3.13a sized this at **hours** and called the claim unsupportable. RELAY-3 has since executed the public-submission proof end to end, so the premise may have changed — **needs one check of whether the log is actually served**, then delete the claim or keep it |
 | `ARCHITECTURE.md` | 19-21 | "within-cell graded ramps and tents do not [compile exactly]" | degree-0 and degree-1 shaped payoffs ship today under a certified categorical projection (`OMISSION_INDEX` U-013). Already covered by the file's supersession banner; named here for the queued REPRESENTATION MAP lane |
-| `SESSION_STATE.md` | 10-11, 21-22 | "The public Direct Hot route does not fit under the 1,400,000 CU ceiling for arbitrary keys" / "worst seed 1,393,616 … 6,384 CU of margin" | the single most-read stale sentence in the corpus, and **false after ALLKEYS**. Left alone: `SESSION_STATE.md` is the orchestrator's own pre-compact handoff and is rewritten wholesale each compact; a sweep lane editing it races the next write |
-| `SESSION_STATE.md` | 136-167 | "PENDING EMBER DECISIONS" lists all four ADRs as pending | same reason; §1.1 above is the durable record |
+| `docs/ledger/SESSION_STATE_2026-08-31.md` | 10-11, 21-22 | "The public Direct Hot route does not fit under the 1,400,000 CU ceiling for arbitrary keys" / "worst seed 1,393,616 … 6,384 CU of margin" | the single most-read stale sentence in the corpus, and **false after ALLKEYS**. Left alone: `docs/ledger/SESSION_STATE_2026-08-31.md` is the orchestrator's own pre-compact handoff and is rewritten wholesale each compact; a sweep lane editing it races the next write |
+| `docs/ledger/SESSION_STATE_2026-08-31.md` | 136-167 | "PENDING EMBER DECISIONS" lists all four ADRs as pending | same reason; §1.1 above is the durable record |
 | `docs/design/BASIS_ABI_UNIFICATION_V1.md` | 483-484, 701-703, 739 | budgets a hull check against "8,006 CU of headroom" and "1,225 B of 1,232" — both **continuation** figures | the design's conclusions may survive the correction (top-level is cheaper and the wire is 1,167 B), but re-deciding them is the basis lane's call, not a sweep's |
 | `docs/design/TRUST_RATCHET_V1.md` | 432-434 | uses the continuation's 1,225 B packet as the frame budget for a seal on the public route | same |
 | `docs/evidence/PROTOCOL_CU_TOPOLOGY_2026_08_28.md` | 619-621 | "≥30,000 CU of 20-seed mean headroom" against a `hot-cu` mean | acceptance basis is a continuation mean; re-basing it is a CU-owner decision |
 | `docs/decisions/0005-per-market-authentication-cache.md` | 335, 432-433 | "about 12,000 CU of headroom"; the canonical continuation packet at 1,225 B | a ratified decision record; superseding numbers belong in an amendment its owner writes |
-| `docs/VALIDATION_BACKLOG.md` | 307-309, 325-329 | the release M-61 sweep as the compute gate | see §2.4 — the whole file needs an owner before its rows are individually corrected |
+| `docs/ledger/VALIDATION_BACKLOG_2026-08-31.md` | 307-309, 325-329 | the release M-61 sweep as the compute gate | see §2.4 — the whole file needs an owner before its rows are individually corrected |
 | `tools/devnet-scenarios/`, `tools/activity-properties/`, `tools/economic-lifecycle-ledger/` READMEs | various | fixtures and property suites built on a 50-bps fee | these are *fixture* descriptions, not founding advice, and the fee-bearing shape is legitimately exercised in a harness. Flagged so nobody reads them as a founding precedent |
 | `docs/design/FEE_GEOMETRY.md` | 469-470, 481-488 | demo markets at 25 / 0 / 100 bps "at zero new code" | correct arithmetic, impossible today: any nonzero rate founds a market that cannot trade until the second-transaction fee leg ships. The doc's own §4 sequencing is the fix |
 
@@ -187,7 +187,7 @@ from silence.
 
 - **`~/dev/dragons-clutch/archive/`** — gen-1, already swept by the Aspiration
   Ledger. Not re-dug.
-- **`docs/ASPIRATION_LEDGER.md` and `docs/board-archive-2026-08-27.md`** —
+- **`docs/evidence/ASPIRATION_LEDGER_2026_08_27.md` and `docs/ledger/board-archive-2026-08-27.md`** —
   excluded as archives. The ledger is itself a sweep artifact and the board is
   explicitly not authority. Their M-numbers were used as citations, not audited.
 - **`docs/compost/`** and `COMPOST.md` — the compost rules are their own
@@ -216,8 +216,8 @@ from silence.
   invariant (`DEALER_EXIT_AFFORDABILITY_V1.md:275`, `LIVENESS_CENSUS:401,425`);
   the Q1 ruling must precede the refcount which must precede
   `CloseActivation` (`LIVENESS_CENSUS:408`,
-  `RELEASE_LINEAGE_MIGRATION_V1.md:1305-1312`); and Reaffirm lands before or
-  with lineage commit 8 (`RELEASE_LINEAGE_MIGRATION_V1.md:1126-1131`). They
+  `RELEASE_LINEAGE_MIGRATION_V1.md:1346-1353`); and Reaffirm lands before or
+  with lineage commit 8 (`RELEASE_LINEAGE_MIGRATION_V1.md:1167-1172`). They
   are recorded here so a lane taking any one of them finds the other two.
 
 ---
@@ -237,7 +237,7 @@ from silence.
    `TRADE_DIRECT_ACTIVATION_WALL_2026_08_29.md` described selecting maker keys
    for their CU draw and publishing them as "selected for CU" — rigging the
    demo and labelling the rig. The reversal was recorded in
-   `SESSION_STATE.md`, which is rewritten every compact; the plan was recorded
+   `docs/ledger/SESSION_STATE_2026-08-31.md`, which is rewritten every compact; the plan was recorded
    in an evidence file, which is not. The durable copy said the wrong thing.
 
 3. **A ruled fee band that nothing enforces.** `MAX_FEE_BPS = 500` is in four
