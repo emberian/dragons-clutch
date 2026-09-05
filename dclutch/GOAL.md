@@ -5144,3 +5144,10 @@ Goal re-issued by ember with cut + redeploy + cleanup authorization. Cut `88e44a
   saved); **HEAD's strict release gate cannot be built — 5 diagnostics in hot_v3 from SERIES-3's commits.**
 - CONVERGE **`(spawned, Fable)`** on the ten landed branches in the map's order; the crates branch when its maker reports.
 - Cuts: `d23d9a56c`, `0cd6a7e09`, `03eeea3c1`.
+- SIMPLIFY-CRATES closed (branch `simplify/crates` at `2eed5ef31`, sixteen commits; SIMPLIFY_CRATES.md): **crates 94 → 46**
+  (this domain 77 → 29; root members 106 → 58) by a spec-driven, replayable `tools/simplify/merge_crates.py` — one crate
+  per authority: sbf-runtime, custody, registry (5 → 1), vm (5 → 1), market (8 → 1), product (6 → 1), source (4 → 1),
+  claims (14 → 1), trading (8 → 1); three crates and three modules deleted with census controls (−7,143); deviations from
+  the map cycle- or layer-forced and recorded; every workspace lock regenerated offline; emission census 101/101, fixpoint
+  PASS; seam gate green (109 merge-created restatement rows under the existing debt verdict); the frame baseline left
+  pre-merge so the recapture shows renames only. **All eleven branches are final; the convergence has them all.**
