@@ -1,0 +1,339 @@
+# Cohort-16 on devnet: the eight, the eighth for the first time, and what the run found
+
+Status: **devnet execution evidence.** Owner: lane COHORT-16. Written
+2026-09-05 at `/Users/ember/dev/dclutch` (the live tree). The job directory is
+`~/jobs/dclutch-cohort16-20260905/` and it is self-contained: the driver binary,
+its digest and its provenance, the checked candidate's whole evidence chain, and
+every stage log and report live there. Every number below was read back off
+devnet at finalized commitment or off an artifact in that directory; nothing is
+relayed from a prior document.
+
+Deploy commit `f2ae6bf75deb1f71465e1ff06a05abe80d4d22a4`. Manifest
+`tools/cohort/cohorts/16.json`. Prior cohort 15.
+
+## 0. What is new about this cohort
+
+**The eighth link had never been deployed to any chain.** The simplification
+swarm folded `dclutch-general-accelerator-sbf`, `dclutch-dealer-accelerator-sbf`
+and `dclutch-series-shadow-sbf` into one `dclutch-accelerator-sbf`, and
+C-05's `OpenBatch`, C-06's first Dealer market and C-07's whole Series family
+all became dependent on a program nothing had put on a chain. It is on devnet
+now, at `6v1c2Go2h1rxkTN2EmzC5xGC35MTbaHPCHrKF6kTvg4y`, deployment slot
+493,639,473.
+
+**Every devnet witness in the register attested to binaries the tree could not
+produce.** Cohort-15 deployed from `1cae26fd6`, before the swarm base; the
+convergence's own ELF table says no link is byte-identical and that cohort-16
+carries every redeploy. It does.
+
+**The runbook had no row that deploys the accelerator, and nothing said so.**
+Through cohort-15 a separate one-off job deployed it and `prepare` merely
+OBSERVED it. That was invisible while the accelerator was unchanged for three
+cohorts. §4.
+
+## 1. The candidate
+
+Built on **hbox through `swarm-build`** — the named release builder artifact,
+platform-tools v1.53 on Linux/x86_64 — from a clean `git archive` of the deploy
+commit. A native macOS build of the same commit differs in nine of ten roles and
+is refused, so the laptop drove the cohort and never built its release.
+
+| line | value |
+| --- | --- |
+| `release_builder` | `true`, `release_builder_artifact_host=Linux/x86_64`, `builder_scheduler=swarm-build` |
+| `source_revision` | `f2ae6bf75deb1f71465e1ff06a05abe80d4d22a4` |
+| `source_digest` | `d408556a67b22ab2f9121446ed8e2c437ce47dc43af26add94de638d27f40f62` |
+| `sbf_build_diagnostics_total` | **0**, and 0 on each of the eight links by name |
+| `cargo_lock_immutability` | `passed` |
+| `spline_product_handoff` | `passed` |
+| `reproducible_release_gate_sha256` | `e3bf68529e633a40dcd6954bdfd0565ef37794df2229fa361844eb2287d01433` |
+
+**The reproduction control.** The same commit was built twice on the named
+builder into two different absolute `--work` roots — once directly and once
+through the runbook's own emitted `02-redeploy-named-builder.sh`. All eight ELFs
+are byte-identical across the pair and the reproducible release gate digest is
+identical; `checked_upgrade_gate_sha256` differs because it carries a per-run
+build id. That is the build-path control the row's verifier asks for, and it is
+not a cross-host reproduction, which the row is explicit about.
+
+### The ELF table, against the convergence's §6
+
+`SIMPLIFICATION_CONVERGENCE_2026_09_04.md:152-175` published the converged
+eight at `018ea525f`, built on the **laptop**. Cohort-16's are the **named
+builder's** at `f2ae6bf75`, 200-odd commits later. Both facts move the bytes, so
+none of the eight is equal to that table and the delta is stated rather than
+implied.
+
+| link | convergence §6 (laptop, `018ea525f`) | cohort-16 (hbox, `f2ae6bf75`) | bytes |
+| --- | --- | --- | ---: |
+| accelerator | `a8cb8c8ab35f…` | `587181d9536d19f4ed40ddebb01ebac1d3e3544d28110c3d7e1ca04b4e4c87ab` | 736,056 |
+| claims | `38196b22d71d…` | `33e453e62186e3426d9ede8d090afd95fed34af2ff1ec1a685daa0e74347675d` | 1,421,856 |
+| core | `236e92ae9345…` | `f637e5df9ef9a16521d58aee080b951f6950f2661abbf2ff573cf7bc98d5665e` | 1,186,440 |
+| custody | `fd3b123a938e…` | `2600db72b383fc750bc8a975dfe19233b78012a4d53c21c680089bd42bcf7410` | 431,296 |
+| registry | `98a1b45308d0…` | `8eb3ccc0e9d0f895521be92b48f5ce6ac912fdca17c79018148581056150fc54` | 237,696 |
+| rent | `2f145149ae57…` | `100f211918acc5764fd797b4e2070bc0dd7b1b6ce095351c2494ac6355653143` | 143,152 |
+| resolution | `f8bfca35ab8e…` | `7be8a398be52342546a953cccc04b7276411041eca0081990d1e43be5ed7c34b` | 846,656 |
+| trading | `46757cedce83…` | `69292c3391924d628f574a17397460c805cabcf8e52d041dc6a588b7c59e88c7` | 2,179,816 |
+
+**An incidental control worth keeping.** The first candidate ran at
+`e311d29367f68eded5b2d0150a0d17dacb337174` and the shipped one at `f2ae6bf75`,
+eleven commits later. **Seven of the eight links are byte-identical across that
+pair** and only `claims` moved — 1,421,800 → 1,421,856 bytes, `e20643ec…` →
+`33e453e6…` — which is exactly where the window's source moved
+(`programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs`, and a lock change
+that removed 89 packages). A window of eleven commits touching a program moved
+one link and no other.
+
+## 2. The ledger, to the lamport
+
+Devnet moved its rent rate from **6,333 to 5,080** lamports per byte at the
+epoch-1141 boundary, mid-cohort-15. Everything below is priced at 5,080, read
+off the cluster (`solana rent 0` is 0.00065024 SOL, which is 128 x 5,080), and
+that is why `steps.tsv`'s `-42.26` is cohort-15's price and not today's.
+
+| act | SOL | running |
+| --- | ---: | ---: |
+| deployer before anything (finalized slot 493,627,133) | | **23.890559434** |
+| `close-prior`: seven ProgramData closes | **+42.505848399** | |
+| seven 5,000-lamport fees | −0.000035 | **66.396372833** |
+| `close-prior-accelerator`: the superseded `8pgnyNvg…` | **+1.915282857** | |
+| one fee | −0.000005 | **68.311650690** |
+| eight deploys, rent | **−36.496508160** | |
+| eight deploys, fees | −0.042329960 | **31.772812570** |
+| `fund-payer`: the campaign payer, a distinct key | −2.000005 | **29.772807570** |
+
+The projection is not a rounding: **every one of the eight ProgramData balances
+equals `(128 + 45 + elf_bytes) × 5,080` exactly**, and every ProgramData
+`Data Length` equals its candidate ELF's byte length exactly.
+
+| role | program id | ProgramData | slot | bytes | rent SOL |
+| --- | --- | --- | ---: | ---: | ---: |
+| registry | `6gRRiB9BtQFN6AquyLXXjuiX1GYN2xyW8nqCTc3xJzkV` | `68Jh5pD42XWmYq5ViWoX3MKHMeENCRbgdxdGb8B7UY6k` | 493,638,685 | 237,696 | 1.20837452 |
+| rent | `42xN9ULoMpULmeDbdGCtyAo82FRJved6sojUun6NSKdt` | `8KG9NGFoMRCh4dngeAGNkP7kCmtQ68KthSbk8V883x5v` | 493,638,731 | 143,152 | 0.72809100 |
+| custody | `8UkoNCPD4JuWBiHWdc7WaM3j7Fj9jbf8Fe926Q1CDceo` | `AjYb8Ss7E3ruHppSCDcqxJLErwGhHikTcHQymKZu6BG1` | 493,638,796 | 431,296 | 2.19186252 |
+| resolution | `jrjXw2Rph15VyJB3ztbRgoHUPJrcvMSHV6svRUYtUw3` | `PpzTFUiPbyj4MKbLoUzCxh4cAeLrZ52PBdvN8byxR1n` | 493,638,882 | 846,656 | 4.30189132 |
+| claims | `8JfHfBBGaoUP1yV6VzXcvWwhQSZNV8eQmDAiYmCpNQJk` | `14EYxVmGJuSKX9iizPaLQQRj8ae3XiJJqWHdnAnCcv33` | 493,639,017 | 1,421,856 | 7.22390732 |
+| trading | `ESQhDyV7obS4oNp7abjn7sSYChxtGrHru4TzvPuybJi3` | `7RxAyfAUd3hEENzog4Faq4tqpzFfA6riM1jnYVLEgSwx` | 493,639,190 | 2,179,816 | 11.07434412 |
+| core | `4wv7JxoAad6JMQi2vHJyByLXasWS8RzJSTdvEEmpCjpe` | `BbyZZAwbz37VwLR6zMQMm2bJAhfqbJVFAxr9HbFRQ5AU` | 493,639,301 | 1,186,440 | 6.02799404 |
+| **accelerator** | `6v1c2Go2h1rxkTN2EmzC5xGC35MTbaHPCHrKF6kTvg4y` | `DfJLGB1W12cUYGpw3doG2DmMDe6ubR2UkmrrUsqosa9g` | 493,639,473 | 736,056 | 3.74004332 |
+
+Each live image was **dumped back and compared to its candidate ELF over the
+ELF's whole length before the next role spent**, which is what `deploy-roles`
+means by stopping a sequence at its first failure rather than after it.
+
+## 3. The ladder, the seal, and what they cost
+
+`administration` (`campaign --through activation`) ran **36 transactions**, every
+one `error: null`, at 75,000 lamports each. The verifier is not the exit code: a
+second preflight that READS THE CLUSTER reports **substrate, publication,
+initialize, succession and activation all `complete`**, and the accelerator's
+`ArtifactRelease` record is among the records the ladder finalized -- which is
+the cohort's own observation of the accelerator's deployment, and the thing a
+General-manifest market needs before it can be founded.
+
+`seal` is key-free and read-only and moved **0 SOL**, before any founding, which
+is the ordering cohort-12 got wrong and stranded a market on. All five owned
+roles preflight `equal: true` against a fresh finalized observation --
+`checked_candidate_elf_sha256` equal to `live_elf_sha256` for custody,
+resolution, claims, trading and core -- and `plan-seal.json` carries
+`checked_upgrade_set_final_sha256`
+`8a5c8a29d780017f470053c67c8200012c9e33dcafc65b964345151cec7025fc` over the same
+release set id `prepare` produced,
+`85defd75b236b191de00b48e673cdc4a4bcc2408b2248c4504895815b04cc69f`.
+
+## 4. What running the runbook found, and it is four things
+
+Every one of these is a defect that only a RUN could produce: each is a row that
+reads correctly and refuses when executed. All four are repaired in this window
+and the repairs are commits, not edits to a job directory.
+
+**(a) No row deployed the accelerator, and the accelerator had changed.**
+`prepare` has always OBSERVED an accelerator and published its `ArtifactRelease`;
+through cohort-15 a separate one-off job deployed it, and the runbook carried no
+row for that. Invisible for three cohorts because the artifact did not move. The
+fold moved it, renamed it, and made three families depend on it, so the cohort
+that first ships the fold has to be the cohort that deploys it. `deploy-accelerator`
+is that row. It is NOT an eighth `roles` entry, because the deployment-set
+journal owns exactly the seven checked roles and names no accelerator -- the
+driver's own `prepare` usage says so, and `roles` would emit an
+`--accelerator-program-id` flag that does not exist.
+
+**(b) A literal count in `checked-release-candidate.sh` refused every candidate
+at HEAD, for the second time.** `SHIPPED_LINK_COUNT=12` against a shipped set of
+8. The file's own comment predicted this: the POPULATION lane hit the identical
+defect on 2026-09-02 when the set went 13 to 12, named the honest repair, and
+deferred it. Behind the count sat a second defect it was hiding -- the shipped
+set is compared POSITIONALLY, and the fold's rename of
+`dclutch-general-accelerator-sbf` to `dclutch-accelerator-sbf` moved the package
+to the front of the `programs/*` enumeration while its `SHIPPED_LINKS` entry
+stayed where the deleted dealer accelerator had been. The count agreed and the
+order did not, which is exactly what counting cannot catch.
+
+**(c) The campaign release pack named a `Cargo.lock` the one-workspace fold
+deleted.** The candidate passed every gate -- eight links, zero frame
+diagnostics, both gates emitted -- and then refused at the pack for a missing
+`tools/local-validator/bootstrap/successor/Cargo.lock`. Three call sites named
+it; the lock that resolves that producer's dependencies is now the root lock.
+
+**(d) Two emitted-stage defects, and both reported the wrong thing.** The
+`programdata` helper called `solana program show`, which demands a default
+signer to perform a read and refuses in a job directory that deliberately holds
+no key -- inside a command substitution, so the address came back empty and the
+NEXT command failed naming a missing argument. And `prepare`'s row omitted
+`--{role}-semantic-release-id` entirely while its own command text said the ids
+are derived from the ELFs; cohort-15 supplied them from a job-directory script
+that had no home in the tree. Both repaired, and the derivation now lives at
+`tools/cohort/semantic-release-ids.py`.
+
+**(e) The `seal` row named a producer that does not exist.**
+`devnet-deployment-set-journal-v2 --init` is not a mode any driver implements.
+What ran for cohort-14 and cohort-15 was a hand-written python script inside
+each job directory. `tools/cohort/deployment-set-journal.py` is that producer
+with its paths taken as arguments. **This is the producer-missing pattern inside
+the runbook itself**: the row was written from the intended shape rather than
+from what ran, and nothing in the tree contradicted it because the thing that
+ran was not in the tree.
+
+## 5. The refunding basis, and the wall the walk still has
+
+**`refund-scale` landed as a founding change, not a program change.** Decision
+0025 is explicit that the payout arm needs a founded RECORD and not a founded
+program: Core founding derives `basis_scale` from the Product
+(`generic_founding_v1.rs:1104`) and Claims binds the permit's scale to the
+request's, so a market founded on a refunding record funds its Hoard at
+`quantity x ordinary_region_count` with no founding *code* change at all. What
+was missing was the record. `compile_linked_basis_v3` hard-wired
+`payout_scale: 1` -- the shape that paid cohort-13's founder the whole failure
+column while the two strangers who traded got nothing -- and it now DERIVES the
+scale from the width: `basis_width - 1` whenever the width can carry the
+distinction, the legacy `1` below `CATEGORICAL_REFUND_MINIMUM_WIDTH_V3` where
+the two numbers are equal and the record could not say which shape it is. The
+byte-identity test that asserted the literal `1` was a second author for a rule
+`categorical_refunds_on_failure_v3` owns; it now decodes the compiled record and
+checks that `refunds_on_failure` is true of it.
+
+**The retirement walk's wall is a founding input and it is still standing.**
+`docs/HANDOFF_2026_09_05.md:114` says the capability manifest's dependency edges
+were *"fixed for cohort-16"*. **That is false at HEAD, and it is false in the
+direction that matters.** The founding compiler builds every manifest entry with
+`dependency_count` 0 and an all-zero dependency array --
+`tools/local-validator/bootstrap/successor/src/market.rs:14678-14680`, inside
+the four-entry manifest a Direct market founds under (three Resolution
+compartments plus the selected Direct entry, `selected_capability.rs`'s
+`validate_selected_manifest_v1` requires exactly four). `git log -S
+'dependency_count'` on that file returns one commit and it is not in this window.
+
+So `capability_dependency_closure_mask_v1(manifest, selected)` still returns a
+SINGLETON for the Direct entry, and stage four of retirement --
+`DirectCloseCapability`, the packet that takes `outstanding_capabilities` to
+zero -- still refuses at
+`crates/dclutch-operator/src/terminal_retirement_v1.rs:699` with
+`CapabilityFundingHeaderV2::new(physical_count 2, logical_count 1)`, because a
+header counts physical ledgers whose disjoint subsets COVER the logical entries
+and a singleton closure cannot cover the two Resolution compartments the close
+frame preserves.
+
+**This lane did not guess the edge set.** The manifest entry is a seed of the
+Market PDA, so a wrong dependency array does not found the same market
+misconfigured -- it founds a DIFFERENT market. Naming which of the three
+Resolution entries the Direct entry depends on is a decision with a hostile test
+attached, and it is the next lane's, not a 3am inference with a deploy half
+done. It is bounded and it is named: the two prepaid companions that `CloseFund`
+refunds are the candidates, the exhaustion and recovery entries; the
+source-material entry is the one the funded deadline walk consumes.
+
+**What that costs.** Cohort-16's Direct market can be filled, settled, captured,
+paid out and taken to Terminal; it cannot be Retired. A re-founding on this same
+cohort costs 0.34 SOL once the edges land, and devnet markets are disposable, so
+the cohort is not spent by this -- but "one market Open to Retired" is still
+open, for the same reason it was open yesterday, and one artifact in the tree
+said otherwise.
+
+## 6. What a reviewer should distrust in this file
+
+- **The reproduction is same-host, and the row says so.** Two absolute `--work`
+  roots on the named builder is the BUILD-PATH control; it proves the path is
+  not an input and proves nothing about a second machine. `supported_builders`
+  narrowed to one named artifact on 2026-09-04 and a second host running it was
+  not part of this cohort.
+- **Six of the eight ELF digests here have never been compared to a second
+  host's**, and the two that have (`persvati` vs hbox, 2026-09-04) were at a
+  different commit.
+- **The chain reads are finalized and narrow.** A ProgramData balance equalling
+  a formula says the CLI allocated what the rate implies; it does not say the
+  program does what the ELF says. The `cmp` after each deploy is the byte
+  claim, and it covers the ELF's length and not the account's padding.
+- **`prepare`'s semantic release ids are an operator statement**, re-derived and
+  refused on mismatch for the five artifact-derived roles and compared against
+  constants for two. **The accelerator's eighth is checked for nonzero and
+  non-collision and nothing else** -- no protocol-owned derivation exists for a
+  role outside the seven, which is debt this cohort inherits and does not close.
+- **The runbook's own `--prove-frozen` is the only thing standing between the
+  five rows added here and a claim that cohort-14 and cohort-15 ran differently
+  than they did.** It is green: 19 rows and 6 rows byte-identical.
+- **Two rows of this cohort are recorded green by the operator and not by a
+  script**: `record-core-digest` and `refund-scale` are source commits whose
+  emitted scripts exit 64 saying so, and their GREEN markers were written after
+  checking the commits by hand. Each marker carries the commit beside it.
+
+## 7. The founding refused, and the refusal is decision 0025's own rounding boundary
+
+`found-direct` staged its `MarketRunInput`, re-minted the sponsored Pyth release
+against finalized slot 493,646,104 (two chain-owned facts moved and are pinned
+at their OBSERVED values, which is the design), and drove **140 founding
+transactions** including Found37's hostile controls -- *"refuses substituted
+lifecycle credit"*, *"refuses a substituted Market coordinate and rolls the
+transaction back"* -- and then stopped:
+
+    Error: Error("founding collateral reserve is not exactly divisible by basis scale")
+
+**This is the guard decision 0025 designed, firing for the first time on a real
+founding.** `founding_quantity_v1`
+(`tools/local-validator/bootstrap/successor/src/market.rs:6137-6152`) takes the
+lower half of the minted collateral as the founding budget and requires it to be
+an exact multiple of the basis scale, *"accepting another floor here would create
+a second rounding boundary and an unclassified remainder"* -- which is 0025 §6's
+answer in as many words: **there is no remainder, because a remainder is refused
+at founding rather than housed.** At the legacy scale `1` every budget divides.
+At the refunding scale `3` -- this market is four outcomes wide, three ordinary
+regions and the explicit failure coordinate -- the fixture's collateral atom
+count does not.
+
+**The refusal is correct and the repair is a founding INPUT, not a weakening.**
+The reserve has to be chosen as a multiple of the scale the width derives; the
+guard must not learn a floor. What this cohort did not have was a producer that
+picks the reserve from the scale rather than from a constant that happened to
+divide by one. That is the next lane's, it is small, and it has a hostile test
+attached: a reserve one atom off must still refuse.
+
+**What is on chain from the attempt.** The realm record, the Product graph, the
+capability manifest and the Found31 market coordinate
+`4Pm8Mfg2P1sVGwrpQ7uC1GQh2TND5DqyXU5cDsuaGEXq` were published and the campaign's
+own journal in `market/campaign-open.json` names every target it derived,
+including the Open Market coordinate `A9u1SFn5Xkqp2UVdADJk3SaeRwVzmNrFU7yQAs1Ut6Ra`
+it did not reach. The campaign payer went 2 SOL to 1.877 across the attempt. No
+market of cohort-16's reached `Open`; the General and two-source markets were
+not attempted.
+
+**So `refund-scale` is half a row.** The record side is authored and the ELF
+side needs nothing, exactly as 0025 says -- and the founding cannot produce a
+reserve the record admits. The row's verifier reads a founded market's
+authenticated basis off chain, and there is no founded market to read.
+
+## 8. Where the cohort stands
+
+Deployed, sealed, and unfounded. Everything a market needs is on the chain and
+current: eight programs from one commit and one named builder, a finalized
+release set, an accelerator whose `ArtifactRelease` the Registry finalized, a
+sealed plan, and a campaign payer with money in it. The runbook is five rows
+better than it was this morning and each of those rows was written by a refusal.
+
+The three things the next lane needs, in the order they block each other:
+
+1. **A founding collateral reserve that is a multiple of the derived basis
+   scale.** Nothing else can be attempted until a market exists.
+2. **The capability manifest's dependency edges** (§5). Without them a market
+   founded on this cohort can reach Terminal and cannot be Retired.
+3. **`tools/gate witness --discover` against this cohort**, which is what
+   re-anchors the register's 42 devnet witnesses to binaries the tree produces.
+   The cohort exists now; the discovery pass does not.
