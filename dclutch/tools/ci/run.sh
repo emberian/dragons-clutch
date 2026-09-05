@@ -2413,7 +2413,6 @@ tier_release() {
   local scripts=(
     test-checked-release-freshness.sh
     test-devnet-activity.sh
-    test-devnet-demo-pulse.sh
     test-stage-devnet-sponsored-market-open.sh
   )
   local present=() missing=() name
@@ -2445,9 +2444,6 @@ tier_release() {
   local py_suites=(
     private-validator-lifecycle/test_preflight.py
     private-validator-lifecycle/test_chaos.py
-    private_validator_upgrade/test_rehearsal.py
-    devnet-flight/test_devnet_flight.py
-    lifecycle-chaos/test_lifecycle_chaos.py
     test_usage_parity.py
     # The nine that were still running NOWHERE after the 2026-09-01 sweep above
     # added `test_usage_parity.py` and stopped. `test_successor_campaign_pack.py`

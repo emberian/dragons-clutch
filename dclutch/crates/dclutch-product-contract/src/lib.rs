@@ -32,8 +32,6 @@ pub mod portfolio;
 pub mod product;
 /// Product-owned finite source-result partition and failure coordinate.
 pub mod result_domain;
-/// Compact provider-neutral terminal result contract.
-pub mod terminal;
 
 /// Exact byte width of an opaque content identity.
 pub const CONTENT_ID_BYTES: usize = 32;

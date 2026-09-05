@@ -90,14 +90,6 @@
       "reproducible": true
     },
     {
-      "campaign": "direct-aot-programtest",
-      "substrate": "program-test",
-      "runner": "tools/gauntlet/direct/run-direct.sh",
-      "producer": "tools/gauntlet/direct/producer",
-      "note": "Ahead-of-time compiled Direct entry.",
-      "reproducible": true
-    },
-    {
       "campaign": "direct-begin-retiring-programtest",
       "substrate": "program-test",
       "runner": "tools/gauntlet/direct-begin-retiring/run-direct-begin-retiring.sh",

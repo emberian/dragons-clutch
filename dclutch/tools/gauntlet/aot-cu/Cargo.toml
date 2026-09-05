@@ -1,3 +1,0 @@
-[workspace]
-members = ["twin", "twin-v3", "harness"]
-resolver = "3"

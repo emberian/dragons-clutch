@@ -282,7 +282,6 @@ const SHIPPED_LINKS: &[(&str, &str, bool)] = &[
     ("core", "dclutch-core-sbf", true),
     ("custody", "dclutch-custody-sbf", true),
     ("dealer-accelerator", "dclutch-dealer-accelerator-sbf", true),
-    ("dclutch-direct-aot-sbf", "dclutch-direct-aot-sbf", false),
     (
         "general-accelerator",
         "dclutch-general-accelerator-sbf",

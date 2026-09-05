@@ -77,7 +77,6 @@ SHIPPED_LINKS = (
     ("core", "dclutch-core-sbf", True),
     ("custody", "dclutch-custody-sbf", True),
     ("dealer-accelerator", "dclutch-dealer-accelerator-sbf", True),
-    ("dclutch-direct-aot-sbf", "dclutch-direct-aot-sbf", False),
     ("general-accelerator", "dclutch-general-accelerator-sbf", True),
     ("dclutch-product-runtime-v2-sbf", "dclutch-product-runtime-v2-sbf", False),
     ("registry", "dclutch-registry-sbf", True),

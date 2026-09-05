@@ -22,7 +22,6 @@ pub mod fractional_claim_check_compaction_request_v1;
 pub mod fractional_claim_check_conservation_v1;
 pub mod fractional_claim_check_v1;
 pub mod frame_spec_v1;
-pub mod lbv2_terminal_v2;
 pub mod liability_basis_state_v2;
 pub mod market_closure_v1;
 pub mod product_basis_terminal_v3;

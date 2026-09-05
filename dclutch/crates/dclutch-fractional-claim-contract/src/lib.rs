@@ -9,7 +9,6 @@
 //! independently finalized generic interpreter artifacts and defines the
 //! family request/root wire formats used by a future thin SBF adapter.
 
-mod artifacts;
 mod atomic_v3;
 mod hot_v2;
 mod physical_v3;
@@ -18,12 +17,6 @@ mod request_v2;
 mod retirement_v3;
 mod root;
 
-pub use artifacts::{
-    ArtifactAdmissionV1, FractionalArtifactAdmissionsV1, FractionalArtifactBundleV1,
-    FractionalArtifactBytesV1, FractionalArtifactErrorV1, FractionalArtifactSelectionV1,
-    FractionalChildProgramsV1, Result as ArtifactResult,
-    authenticate_fractional_artifact_bundle_v1,
-};
 pub use atomic_v3::{
     FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3, FRACTIONAL_ATOMIC_ACTOR_V3,
     FRACTIONAL_ATOMIC_HOLDER_TOKEN_V3, FRACTIONAL_ATOMIC_RECEIPT_BYTES_V3,

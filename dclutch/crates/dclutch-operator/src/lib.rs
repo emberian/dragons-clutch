@@ -17,8 +17,6 @@
 
 pub use dclutch_resolution_core_v3_operator::{Finality, Observation, ObservedAccount};
 
-/// Canonical schema-bound CapabilityProgramSetV2 artifact construction.
-pub mod capability_program_set_v2;
 /// What a holder needs to find and redeem a claim-check.
 pub mod claim_check_v1;
 
@@ -48,8 +46,6 @@ pub mod direct_close_maker_v1;
 pub mod direct_inline_route_v3;
 /// Chain-derived action-selected Direct V3 inline execution construction.
 pub mod direct_inline_v3;
-/// Exact unsigned signing material for the Direct V2 successor.
-pub mod direct_successor;
 /// Chain-derived General V3 capability activation planning.
 pub mod general_activation_v3;
 /// Chain-derived General V3 Hot execution and packet construction.

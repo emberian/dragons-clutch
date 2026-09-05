@@ -74,8 +74,6 @@ pub mod direct_replay_setup_v1;
 pub mod direct_token_setup_v1;
 /// Manifest-, root-, release-, and descriptor-authenticated generic dispatch.
 pub mod dispatch;
-/// V3 descriptor joins for independently finalized runtime-tail artifacts.
-pub mod dispatch_v3;
 /// Profile13 physical representative expansion shared by prefix and continuation.
 mod dynamic_accounts_v4;
 /// The named machine boundary: SBF entrypoint, input deserialization, heap.

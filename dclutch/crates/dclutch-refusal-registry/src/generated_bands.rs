@@ -24,10 +24,10 @@ pub const FIRST_TEST_BAND: u32 = 0x0000_0100;
 ///
 /// Lean-authored, so a table that gained or lost an entry cannot pass a
 /// count written down beside it by hand.
-pub const BAND_COUNT: usize = 26;
+pub const BAND_COUNT: usize = 25;
 
 /// Number of allocated on-chain protocol bands.
-pub const PROGRAM_BAND_COUNT: usize = 12;
+pub const PROGRAM_BAND_COUNT: usize = 11;
 
 /// Number of allocated test-only caller bands.
 pub const TEST_CALLER_BAND_COUNT: usize = 14;
@@ -48,8 +48,6 @@ pub const CUSTODY_REFUSAL_BASE: u32 = 0x0000_6000;
 pub const RESOLUTION_REFUSAL_BASE: u32 = 0x0000_8000;
 /// Band 9 -- `dclutch-product-runtime-v2-sbf`.
 pub const PRODUCT_RUNTIME_V2_REFUSAL_BASE: u32 = 0x0000_9000;
-/// Band 10 -- `dclutch-direct-aot-sbf`.
-pub const DIRECT_AOT_REFUSAL_BASE: u32 = 0x0000_A000;
 /// Band 11 -- `dclutch-series-shadow-sbf`.
 pub const SERIES_SHADOW_REFUSAL_BASE: u32 = 0x0000_B000;
 /// Band 12 -- `dclutch-general-accelerator-sbf`.
@@ -143,13 +141,6 @@ pub const BANDS: &[RefusalBand] = &[
         label: "product-runtime-v2",
         package: "dclutch-product-runtime-v2-sbf",
         base: PRODUCT_RUNTIME_V2_REFUSAL_BASE,
-        span: BAND_SPAN,
-        tier: BandTier::Program,
-    },
-    RefusalBand {
-        label: "direct-aot",
-        package: "dclutch-direct-aot-sbf",
-        base: DIRECT_AOT_REFUSAL_BASE,
         span: BAND_SPAN,
         tier: BandTier::Program,
     },

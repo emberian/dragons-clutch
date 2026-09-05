@@ -1861,31 +1861,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-direct-aot-sbf"
-version = "0.1.0"
-dependencies = [
- "dclutch-core-contract",
- "dclutch-direct-aot-contract",
- "dclutch-execution-strategy-contract",
- "dclutch-refusal-registry",
- "solana-hash 4.6.0",
- "solana-message 4.5.0",
- "solana-program",
- "solana-program-test",
- "solana-sdk",
- "solana-transaction 4.2.0",
- "tokio",
-]
-
-[[package]]
-name = "dclutch-direct-aot-v3-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-direct-codec",
- "dclutch-transition-vm",
-]
-
-[[package]]
 name = "dclutch-direct-codec"
 version = "0.1.0"
 dependencies = [
@@ -1969,10 +1944,6 @@ dependencies = [
  "solana-signature",
  "solana-signer",
 ]
-
-[[package]]
-name = "dclutch-economic-kernel"
-version = "0.1.0"
 
 [[package]]
 name = "dclutch-economic-slice-kernel"
@@ -2730,10 +2701,6 @@ dependencies = [
  "solana-program",
  "solana-sdk-ids",
 ]
-
-[[package]]
-name = "dclutch-resolution-policy-kernel"
-version = "0.1.0"
 
 [[package]]
 name = "dclutch-resolution-proof-sbf"

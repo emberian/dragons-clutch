@@ -152,25 +152,22 @@ def write_workspace_inventory(path: pathlib.Path, workspaces: list[Workspace]) -
 # Workspaces whose members REFUSE to compile without an explicit feature
 # selection, and the selections that satisfy them.
 #
-# This is not a skip list and it must never become one. A bare `cargo check`
-# on `tools/gauntlet/aot-cu` fails with `select exactly one evaluator:
-# --features aot | interpreted | null` -- a deliberate `compile_error!` in
-# `dclutch-direct-relation-twin`, which exists so that nobody links an
-# evaluator by accident. Refusing a default is the RIGHT behaviour for a crate
-# whose whole point is three mutually exclusive evaluators, so the checker
-# makes the choice the crate demands rather than the crate acquiring a default
-# to keep a gate quiet.
+# This is not a skip list and it must never become one. The one entry it
+# ever held was `tools/gauntlet/aot-cu`, whose twin crate refused a bare check
+# with `select exactly one evaluator: --features aot | interpreted | null` --
+# a deliberate `compile_error!` so that nobody links an evaluator by accident.
+# Refusing a default is the RIGHT behaviour for a crate whose whole point is
+# mutually exclusive evaluators, so the checker makes the choice the crate
+# demands rather than the crate acquiring a default to keep a gate quiet. That
+# workspace left with the direct-aot program on 2026-09-04; the table is empty
+# and stays a table, because the rule outlives its first instance.
 #
-# Every listed selection is checked, not just the first: for this workspace the
-# three evaluators are the thing under test, and checking one of them would
-# leave the other two uncompiled while the row read PASS. Measured 2026-09-01,
-# all three compile clean.
+# Every listed selection is checked, not just the first: checking one
+# evaluator would leave the others uncompiled while the row read PASS.
 #
 # A workspace that lands here without a stated reason is a workspace someone
 # quieted. Keep the reason with the entry.
-FEATURE_SELECTIONS: dict[str, tuple[str, ...]] = {
-    "tools/gauntlet/aot-cu/Cargo.toml": ("null", "interpreted", "aot"),
-}
+FEATURE_SELECTIONS: dict[str, tuple[str, ...]] = {}
 
 
 def run_checks(

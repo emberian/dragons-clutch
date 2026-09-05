@@ -1,7 +1,7 @@
 {
   "bound_bytes": 4096,
   "commit": "3616e5e59d7fc9a119556cbb33c22da4e0329511",
-  "link_count": 12,
+  "link_count": 11,
   "links": [
     {
       "frame_count": 292,
@@ -4262,72 +4262,6 @@
         }
       ],
       "package": "dclutch-dealer-accelerator-sbf"
-    },
-    {
-      "frame_count": 10,
-      "functions": [
-        {
-          "frames_bytes": [
-            0
-          ],
-          "symbol": "_RNvCs<hash>_7___rustc12___rust_alloc"
-        },
-        {
-          "frames_bytes": [
-            0
-          ],
-          "symbol": "_RNvCs<hash>_7___rustc14___rust_dealloc"
-        },
-        {
-          "frames_bytes": [
-            0
-          ],
-          "symbol": "_RNvCs<hash>_7___rustc14___rust_realloc"
-        },
-        {
-          "frames_bytes": [
-            0
-          ],
-          "symbol": "_RNvCs<hash>_7___rustc19___rust_alloc_zeroed"
-        },
-        {
-          "frames_bytes": [
-            640
-          ],
-          "symbol": "_ZN22dclutch_direct_aot_sbf10entrypoint12call_program17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            2560
-          ],
-          "symbol": "_ZN22dclutch_direct_aot_sbf13evaluate_into17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            256
-          ],
-          "symbol": "_ZN22dclutch_direct_aot_sbf14content_digest17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            640
-          ],
-          "symbol": "_ZN22dclutch_direct_aot_sbf19process_instruction17h<hash>E"
-        },
-        {
-          "frames_bytes": [
-            0
-          ],
-          "symbol": "custom_panic"
-        },
-        {
-          "frames_bytes": [
-            3136
-          ],
-          "symbol": "entrypoint"
-        }
-      ],
-      "package": "dclutch-direct-aot-sbf"
     },
     {
       "frame_count": 28,

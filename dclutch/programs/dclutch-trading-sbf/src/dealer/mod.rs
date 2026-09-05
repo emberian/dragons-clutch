@@ -44,8 +44,6 @@ pub mod v3_equity_claims;
 pub mod v3_equity_operator;
 /// Reproducible typed Hot EffectProgram artifact for junior equity.
 pub mod v3_hot_artifact;
-/// Canonical Claims Position plus Trading obligation activation and retirement.
-pub mod v3_lifecycle;
 /// Canonical LP Open/Close Profile6 and lifecycle artifacts.
 pub mod v3_lp_artifacts;
 /// Scenario-solvent, custody-backed multi-LP capital under canonical Trading.

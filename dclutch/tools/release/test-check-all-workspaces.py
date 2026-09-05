@@ -71,10 +71,6 @@ class WorkspaceDiscoveryTests(unittest.TestCase):
 class FeatureSelectionTests(unittest.TestCase):
     """The feature table is a CHOICE the crate demands, never a skip list."""
 
-    def test_the_aot_workspace_declares_all_three_evaluators(self) -> None:
-        selections = MODULE.FEATURE_SELECTIONS["tools/gauntlet/aot-cu/Cargo.toml"]
-        self.assertEqual(set(selections), {"null", "interpreted", "aot"})
-
     def test_every_listed_selection_is_named_not_just_the_first(self) -> None:
         """Checking one evaluator would leave two uncompiled under a PASS."""
         for manifest, selections in MODULE.FEATURE_SELECTIONS.items():
@@ -87,9 +83,7 @@ class FeatureSelectionTests(unittest.TestCase):
         If this table ever grows an entry for a workspace that compiles fine
         without features, it has stopped being a choice and become a skip.
         """
-        self.assertEqual(
-            set(MODULE.FEATURE_SELECTIONS), {"tools/gauntlet/aot-cu/Cargo.toml"}
-        )
+        self.assertEqual(set(MODULE.FEATURE_SELECTIONS), set())
 
 
 if __name__ == "__main__":

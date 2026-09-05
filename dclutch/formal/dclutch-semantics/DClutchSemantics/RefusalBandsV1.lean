@@ -88,9 +88,6 @@ def bands : List Band := [
   { label := "product-runtime-v2", package := "dclutch-product-runtime-v2-sbf",
     rustName := "PRODUCT_RUNTIME_V2_REFUSAL_BASE", index := 9,
     tier := .program },
-  { label := "direct-aot", package := "dclutch-direct-aot-sbf",
-    rustName := "DIRECT_AOT_REFUSAL_BASE", index := 10,
-    tier := .program },
   { label := "series-shadow", package := "dclutch-series-shadow-sbf",
     rustName := "SERIES_SHADOW_REFUSAL_BASE", index := 11,
     tier := .program },
@@ -148,11 +145,11 @@ def bands : List Band := [
 
 theorem band_span_is_two_to_the_shift : bandSpan = 2 ^ bandShift := by native_decide
 
-/-- Twenty-six allocations: twelve on-chain programs and fourteen test-only
+/-- Twenty-five allocations: eleven on-chain programs and fourteen test-only
 callers. -/
 theorem band_population_is_exact :
-    bands.length = 26 ∧
-      (bands.filter (fun band => band.tier == .program)).length = 12 ∧
+    bands.length = 25 ∧
+      (bands.filter (fun band => band.tier == .program)).length = 11 ∧
       (bands.filter (fun band => band.tier == .testCaller)).length = 14 := by
   native_decide
 
@@ -202,13 +199,14 @@ theorem labels_and_packages_are_unique :
   native_decide
 
 /-- The gaps are real and they are checkable. Band 7 is RETIRED --
-`dclutch-dealer-sbf`, deleted 2026-09-02 -- and bands 14, 15 and 16 were
+`dclutch-dealer-sbf`, deleted 2026-09-02 -- as is band 10 --
+`dclutch-direct-aot-sbf`, deleted 2026-09-04 -- and bands 14, 15 and 16 were
 drafted for the three banished DCLTCAT1 proof programs and never allocated.
 Bands are append-only: a spent band is a gap, never a reuse. This was prose in
 a Rust comment; ascent alone does not say it, because ascent permits filling a
 gap later. -/
 theorem retired_and_unallocated_indices_stay_absent :
-    ([7, 14, 15, 16].all (fun index =>
+    ([7, 10, 14, 15, 16].all (fun index =>
       !(bands.any (fun band => band.index == index)))) = true := by
   native_decide
 

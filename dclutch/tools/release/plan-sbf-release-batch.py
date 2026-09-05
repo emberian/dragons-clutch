@@ -49,7 +49,6 @@ ARTIFACT_ROLES = {
     "series-shadow": ("dclutch-series-shadow-sbf", "dclutch_series_shadow_sbf"),
 }
 FRAME_GATE_ONLY_PACKAGES = (
-    "dclutch-direct-aot-sbf",
     "dclutch-product-runtime-v2-sbf",
 )
 EXPECTED_LINK_COUNT = len(ARTIFACT_ROLES) + len(FRAME_GATE_ONLY_PACKAGES)
